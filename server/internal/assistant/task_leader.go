@@ -215,7 +215,7 @@ func (s *Service) runtimeLeaderTools(ctx context.Context, machine, session strin
 			return nil
 		}
 	}
-	return leaderToolList()
+	return localizedMCPTools(leaderToolList(), s.toolLanguage(ctx))
 }
 
 // leaderTools are the tools only a task leader's agent gets, on top of any agent's: none for any other agent.
@@ -224,7 +224,7 @@ func (s *Service) leaderTools(ctx context.Context, machine, session string) []pr
 		return nil
 	}
 	if _, _, ok := s.leaderTask(ctx, machine, session); ok {
-		return leaderToolList()
+		return localizedMCPTools(leaderToolList(), s.toolLanguage(ctx))
 	}
 	if revision, _ := ctx.Value(revisionDiscoveryKey{}).(bool); revision {
 		return nil // a revision-aware peer recovers through its cursor, never through the legacy startup wait
@@ -241,7 +241,7 @@ func (s *Service) leaderTools(ctx context.Context, machine, session string) []pr
 		case <-time.After(100 * time.Millisecond):
 		}
 		if _, _, ok := s.leaderTask(ctx, machine, session); ok {
-			return leaderToolList()
+			return localizedMCPTools(leaderToolList(), s.toolLanguage(ctx))
 		}
 	}
 	return nil
@@ -271,11 +271,12 @@ type leaderScope struct {
 	agent TodoAgent
 }
 
-// leaderTaskIn is a worker task as a task leader may plan it: nothing else (no todo_id, role, attachments, project,
-// user_requested…) is read, an unknown field is refused.
+// leaderTaskIn is a worker task as a task leader may plan it: nothing else (no todo_id, attachments, project,
+// user_requested…) is read, an unknown field is refused. Every new worker declares role "worker".
 type leaderTaskIn struct {
 	Title         string   `json:"title"`
 	Prompt        string   `json:"prompt"`
+	Role          string   `json:"role"`
 	Machine       string   `json:"machine"`
 	MachinePolicy string   `json:"machine_policy"`
 	Cwd           string   `json:"cwd"`
@@ -300,12 +301,12 @@ func (l *leaderScope) workerTasks(args json.RawMessage) ([]PlanTask, error) {
 	dec := json.NewDecoder(bytes.NewReader(args))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
-		return nil, fmt.Errorf("a task leader's task_plan takes only the fields its schema lists; todo_id, role, attachments and "+
+		return nil, fmt.Errorf("a task leader's task_plan takes only the fields its schema lists; todo_id, attachments and "+
 			"any other are refused, and workers can only be new tasks beneath your own task (%v)", err)
 	}
 	out := make([]PlanTask, 0, len(in.Tasks))
 	for _, t := range in.Tasks {
-		pt := PlanTask{Title: t.Title, Prompt: t.Prompt, Machine: t.Machine, MachinePolicy: t.MachinePolicy, Cwd: t.Cwd,
+		pt := PlanTask{Title: t.Title, Prompt: t.Prompt, Role: t.Role, Machine: t.Machine, MachinePolicy: t.MachinePolicy, Cwd: t.Cwd,
 			Launcher: t.Launcher, Model: t.Model, Tier: t.Tier, Effort: t.Effort, Speed: t.Speed, Permission: t.Permission, Readonly: t.Readonly,
 			DoneWhen: t.DoneWhen, Goal: t.Goal, ExpectMinutes: t.ExpectMinutes, Why: t.Why, Parent: l.task.ID, Project: l.task.Project}
 		if strings.TrimSpace(pt.Machine) == "" {
@@ -744,7 +745,7 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	b := &s.supervise
 	b.mu.Lock()
 	b.init()
-	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigOrphaned, sigEstimateDue} {
+	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigTimedOut, sigOrphaned, sigEstimateDue} {
 		delete(b.pending, t.ID+"|"+k) // reviewed: what waited is answered
 	}
 	b.mu.Unlock()

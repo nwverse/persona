@@ -53,6 +53,9 @@ type Launcher struct {
 	// Pi: a Persona-managed provider pi can use on this computer too (ManagedLauncher.PiAPI, docs/integrations/pi.md
 	// "Persona's model providers").
 	Pi bool `json:"pi,omitempty"`
+	// BuiltinCompanion: this runtime launcher is backed by the node's own built-in Antigravity companion (wrapping the
+	// local `agy` CLI), not an external runtime. Set only by the node when the verified built-in companion registers.
+	BuiltinCompanion bool `json:"builtin_companion,omitempty"`
 }
 
 // StartInstead is what a new session's start asked for and does not run with, as an engine runtime that runs only its

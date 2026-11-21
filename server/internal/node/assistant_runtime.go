@@ -145,6 +145,9 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		if pickedEffort != "" {
 			startParams["effort"] = pickedEffort
 		}
+		if mode != "" {
+			startParams["permission_mode"] = mode
+		}
 		if supportsPolicy && policy != "" {
 			startParams["supervision_instructions"] = policy
 		}

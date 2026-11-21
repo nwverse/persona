@@ -49,7 +49,8 @@ type Manifest struct {
 	// An extension pack (docs "Extension packs"): installing it installs these. A pack has no runtime and no contributes
 	// of its own.
 	ExtensionPack []PackMember `json:"extension_pack,omitempty"`
-	// The configuration's JSON Schema, in the subset every app draws as a form (docs "Configuration: the form subset").
+	// The configuration's JSON Schema, in the settings-form subset (docs "Configuration: the form subset"). Capable
+	// clients draw declared entry lists after opting in; other clients receive compatibility projections.
 	Configuration json.RawMessage `json:"configuration,omitempty"`
 	Secrets       []SecretSpec    `json:"secrets,omitempty"`
 	// The program checks a change of its settings or secrets before the hub saves it (settings.check).
@@ -272,6 +273,7 @@ type Contributes struct {
 	Browser             []NamedItem              `json:"browser,omitempty"`
 	Iphone              []NamedItem              `json:"iphone,omitempty"`
 	Quota               []QuotaItem              `json:"quota,omitempty"`
+	Usage               []UsageItem              `json:"usage,omitempty"`
 	Providers           []ProviderItem           `json:"providers,omitempty"`
 	API                 []APIItem                `json:"api,omitempty"`
 	Assistant           []AssistantItem          `json:"assistant,omitempty"`
@@ -303,7 +305,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -335,7 +337,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging":
+		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -588,7 +590,18 @@ type RepositoryProviderItem struct {
 	// What it calls the link kinds it names (each at most once; the others keep their usual words). Only relabels: the
 	// kinds stay issue and pull_request.
 	LinkKinds []RepositoryLinkLabel `json:"link_kinds,omitempty"`
+	// What else the program answers (#11584): pr_status, the state of a pull request for delivery checks
+	// (repo.pr_status). Without it the manager reads repo.describe's state. Each at most once.
+	Capabilities []string `json:"capabilities,omitempty"`
 }
+
+// RepositoryCapability: A repository provider's optional answer: pr_status (repo.pr_status).
+const (
+	RepositoryCapabilityPrStatus = "pr_status"
+)
+
+// RepositoryCapabilities are the values of RepositoryCapability, in order.
+var RepositoryCapabilities = []string{"pr_status"}
 
 // RepositoryLinkLabel: the word a repository provider shows for one kind of its links (MR for a pull_request).
 type RepositoryLinkLabel struct {
@@ -671,6 +684,12 @@ type NamedItem struct {
 }
 
 type QuotaItem struct {
+	ID    string   `json:"id"`
+	Name  string   `json:"name"`
+	Hosts []string `json:"hosts,omitempty"`
+}
+
+type UsageItem struct {
 	ID    string   `json:"id"`
 	Name  string   `json:"name"`
 	Hosts []string `json:"hosts,omitempty"`
@@ -784,16 +803,19 @@ type ChannelItem struct {
 }
 
 type ChannelCapabilities struct {
-	ImagesIn bool   `json:"images_in,omitempty"`
-	FilesIn  bool   `json:"files_in,omitempty"`
-	VoiceIn  bool   `json:"voice_in,omitempty"`
-	Format   string `json:"format,omitempty"`
-	MaxText  int    `json:"max_text,omitempty"`
-	Asks     string `json:"asks,omitempty"`
-	Push     bool   `json:"push,omitempty"`
-	Typing   bool   `json:"typing,omitempty"`
-	Progress bool   `json:"progress,omitempty"`
-	Threads  bool   `json:"threads,omitempty"`
+	ImagesIn bool `json:"images_in,omitempty"`
+	// It can send pictures: the hub puts an answer's pictures in channel.send's images instead of leaving them as
+	// Markdown in the text.
+	ImagesOut bool   `json:"images_out,omitempty"`
+	FilesIn   bool   `json:"files_in,omitempty"`
+	VoiceIn   bool   `json:"voice_in,omitempty"`
+	Format    string `json:"format,omitempty"`
+	MaxText   int    `json:"max_text,omitempty"`
+	Asks      string `json:"asks,omitempty"`
+	Push      bool   `json:"push,omitempty"`
+	Typing    bool   `json:"typing,omitempty"`
+	Progress  bool   `json:"progress,omitempty"`
+	Threads   bool   `json:"threads,omitempty"`
 }
 
 type EventsItem struct {
@@ -4602,6 +4624,9 @@ type ChannelSendParams struct {
 	Kind         string `json:"kind"`
 	// The owner's message it answers (ChannelMessage.id).
 	ReplyTo string `json:"reply_to,omitempty"`
+	// Pictures to send after text, in order, to a channel with capabilities.images_out only: JPEG or PNG of at most 3 MB
+	// each. text may then be empty. They belong to this ref: sent once with it, like the text.
+	Images []ChannelBlob `json:"images,omitempty"`
 }
 
 // ChannelSendResult: channel.send's answer: the chat app's id of what was sent, for channel.edit.
@@ -5604,6 +5629,17 @@ type StorageClaimResult struct {
 	Job *StorageJob `json:"job,omitempty"`
 }
 
+// StorageRenewParams: extend only the current run's unexpired lease on this exact key, job and token. The host sets
+// lease_until to the later of its current value and renewal time plus lease_seconds; job state and attempts do not
+// change.
+type StorageRenewParams struct {
+	RequestID    string `json:"request_id"`
+	Key          string `json:"key"`
+	ID           string `json:"id"`
+	Lease        string `json:"lease"`
+	LeaseSeconds int    `json:"lease_seconds"`
+}
+
 type StorageSettleParams struct {
 	RequestID string `json:"request_id"`
 	Key       string `json:"key"`
@@ -6246,6 +6282,35 @@ type RepoDescribeResult struct {
 	State string `json:"state,omitempty"`
 }
 
+// RepoPRStatusParams: repo.pr_status (optional; capabilities pr_status, #11584): where a pull request the manager has
+// stored stands, for delivery checks and the status sweep, by its canonical address. Asked about pull_request links
+// only, at most about once a minute each. Answer with the program's own credentials; nothing of the answer reaches a
+// model but its state.
+type RepoPRStatusParams struct {
+	// The repository_providers item's id.
+	Contribution string `json:"contribution"`
+	// The link's canonical_url as repo.link answered it.
+	CanonicalURL string `json:"canonical_url"`
+}
+
+// RepoPRStatusResult: the pull request's state; the rest when the source says it. A value that breaks its rule is
+// dropped, a state outside the enum fails the answer.
+type RepoPRStatusResult struct {
+	State string `json:"state"`
+	// The commit its merge made (merged only).
+	MergeCommit string `json:"merge_commit,omitempty"`
+	// Its head commit.
+	HeadSha string `json:"head_sha,omitempty"`
+	// Its source branch.
+	HeadRef string `json:"head_ref,omitempty"`
+	// Its target branch.
+	BaseRef string `json:"base_ref,omitempty"`
+	// Who opened it, as the source names accounts.
+	Author string `json:"author,omitempty"`
+	// Whether the account the program uses opened it; left out when it cannot tell.
+	ViewerIsAuthor *bool `json:"viewer_is_author,omitempty"`
+}
+
 // requiredJSONComponent preserves required fields only inside stream payloads.
 type requiredJSONComponent Component
 
@@ -6553,6 +6618,7 @@ var newDef = map[string]func() any{
 	"ConnectorItem":                 func() any { return new(ConnectorItem) },
 	"NamedItem":                     func() any { return new(NamedItem) },
 	"QuotaItem":                     func() any { return new(QuotaItem) },
+	"UsageItem":                     func() any { return new(UsageItem) },
 	"ProviderItem":                  func() any { return new(ProviderItem) },
 	"ProviderModel":                 func() any { return new(ProviderModel) },
 	"APIItem":                       func() any { return new(APIItem) },
@@ -6931,6 +6997,7 @@ var newDef = map[string]func() any{
 	"StorageJobResult":              func() any { return new(StorageJobResult) },
 	"StorageClaimParams":            func() any { return new(StorageClaimParams) },
 	"StorageClaimResult":            func() any { return new(StorageClaimResult) },
+	"StorageRenewParams":            func() any { return new(StorageRenewParams) },
 	"StorageSettleParams":           func() any { return new(StorageSettleParams) },
 	"StorageRetryParams":            func() any { return new(StorageRetryParams) },
 	"StorageDeleteResult":           func() any { return new(StorageDeleteResult) },
@@ -6971,6 +7038,8 @@ var newDef = map[string]func() any{
 	"RepoLinkResult":                func() any { return new(RepoLinkResult) },
 	"RepoDescribeParams":            func() any { return new(RepoDescribeParams) },
 	"RepoDescribeResult":            func() any { return new(RepoDescribeResult) },
+	"RepoPRStatusParams":            func() any { return new(RepoPRStatusParams) },
+	"RepoPRStatusResult":            func() any { return new(RepoPRStatusResult) },
 }
 
 // Call is one call or event of an extension point's protocol (the schemas' x-methods and x-events): who
@@ -7058,6 +7127,7 @@ var Calls = map[string]Call{
 	"storage.queue.list":             {Name: "storage.queue.list", From: "program", Params: "StorageQueueListParams", Result: "StorageQueueListResult"},
 	"storage.queue.enqueue":          {Name: "storage.queue.enqueue", From: "program", Params: "StorageEnqueueParams", Result: "StorageJobResult"},
 	"storage.queue.claim":            {Name: "storage.queue.claim", From: "program", Params: "StorageClaimParams", Result: "StorageClaimResult"},
+	"storage.queue.renew":            {Name: "storage.queue.renew", From: "program", Params: "StorageRenewParams", Result: "StorageJobResult"},
 	"storage.queue.ack":              {Name: "storage.queue.ack", From: "program", Params: "StorageSettleParams", Result: "StorageJobResult"},
 	"storage.queue.forget":           {Name: "storage.queue.forget", From: "program", Params: "StorageSettleParams", Result: "StorageDeleteResult"},
 	"storage.queue.retry":            {Name: "storage.queue.retry", From: "program", Params: "StorageRetryParams", Result: "StorageJobResult"},
@@ -7074,4 +7144,5 @@ var Calls = map[string]Call{
 	"repo.check":                     {Name: "repo.check", From: "hub", Params: "RepoCheckParams", Result: "Empty"},
 	"repo.link":                      {Name: "repo.link", From: "hub", Params: "RepoLinkParams", Result: "RepoLinkResult"},
 	"repo.describe":                  {Name: "repo.describe", From: "hub", Params: "RepoDescribeParams", Result: "RepoDescribeResult"},
+	"repo.pr_status":                 {Name: "repo.pr_status", From: "hub", Params: "RepoPRStatusParams", Result: "RepoPRStatusResult"},
 }

@@ -3,6 +3,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { Peer, SUBPROTOCOL } from '../../runtime-sdk/index.js'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { parseConfig } from '../lib/config.js'
 import { createManagedAgentsRuntime } from '../lib/runtime.js'
@@ -28,6 +29,48 @@ async function fixture(t, { ma: maOpts = {}, profile = {}, node: nodeOpts = {} }
   const rows = () => node.last('runtime.sessions')?.sessions ?? []
   const items = (sid) => node.all('session.items').filter((b) => b.session_id === sid).flatMap((b) => b.items ?? [])
   return { ma, node, rt, logs, rows, items }
+}
+
+async function launcherProfiles(t) {
+  const mas = await Promise.all([startFakeMA({ list: false }), startFakeMA({ list: false })])
+  for (const ma of mas) t.after(() => ma.close())
+  assert.notEqual(mas[0].url, mas[1].url)
+  const config = parseConfig({ profiles: mas.map((ma, i) => ({
+    id: `profile-${i + 1}`, mode: 'self', base_url: ma.url, api_key: `env:MA_${i + 1}_KEY`,
+    start: { agent: `agent-${i + 1}`, environment_id: `env-${i + 1}` }, poll_seconds: 1,
+  })) })
+  assert.deepEqual(config.problems, [])
+  const env = Object.fromEntries(mas.map((ma, i) => [`MA_${i + 1}_KEY`, ma.key]))
+  const statePath = join(await mkdtemp(join(tmpdir(), 'ma-launcher-')), 'state.json')
+  return { mas, config, env, statePath }
+}
+
+// The node's end of a daemon connection, with its launcher rewritten by daemons.json.
+function dialDaemonNode(url, token) {
+  const ws = new WebSocket(url, { protocols: [SUBPROTOCOL], headers: { authorization: `Bearer ${token}` } })
+  const handlers = { data: [], close: [], error: [] }
+  const socket = {
+    setEncoding() {},
+    on(ev, fn) { (handlers[ev] ??= []).push(fn) },
+    write(s) { ws.send(s.endsWith('\n') ? s.slice(0, -1) : s) },
+    destroy() { ws.close() },
+  }
+  const node = { ws, hello: undefined }
+  ws.onmessage = (e) => handlers.data.forEach((fn) => fn(String(e.data) + '\n'))
+  ws.onclose = () => handlers.close.forEach((fn) => fn())
+  ws.onerror = () => {}
+  node.peer = new Peer(socket, {
+    prefix: 'n',
+    onRequest: async (method, params) => {
+      if (method === 'runtime.hello') {
+        node.hello = params
+        return { protocol: 1, node_version: 'test', hub: true, features: ['prefer_running'] }
+      }
+      throw new Error(`unexpected ${method}`)
+    },
+    onEvent: () => {},
+  })
+  return node
 }
 
 test('hello names the runtime and its launcher; sessions are listed grouped by agent', async (t) => {
@@ -219,6 +262,42 @@ test('starts a session from the launcher, with its first message, and keeps list
   await until('the reply', () => items(session.session_id).some((i) => i.text === 'echo: plan a trip'), 5000)
   await rt.refresh()
   await until('still listed', () => rows().some((r) => r.session_id === session.session_id && r.started_by_persona), 3000)
+})
+
+test('an unknown launcher creates no session and sends no prompt to either endpoint', async (t) => {
+  const { mas, config, env, statePath } = await launcherProfiles(t)
+  const node = await startFakeNode(t, { strict: true })
+  const rt = createManagedAgentsRuntime({ config, env, statePath, pollScale: 0.05,
+    runtimeOptions: { socketPath: node.path, retryMs: 50, pushDelayMs: 10 } })
+  t.after(() => rt.stop())
+  await rt.start()
+  await node.ready
+  const err = await node.peer.call('session.start', { launcher: 'stale-launcher', cwd: '/tmp', prompt: 'must not be routed', client_msg_id: 'unknown' })
+    .then(() => undefined, (e) => e)
+  assert.deepEqual(mas.map((ma) => ma.requests.filter((r) => r.method === 'POST').map((r) => r.path)), [[], []])
+  assert.equal(err?.code, 'launcher_missing')
+  for (const ma of mas) assert.equal(ma.sessions.size, 0)
+})
+
+test('a daemon alias still starts the first profile and sends its prompt only there', async (t) => {
+  const { mas, config, env, statePath } = await launcherProfiles(t)
+  const token = 'test-daemon-token'
+  const rt = createManagedAgentsRuntime({ config, env, statePath, pollScale: 0.05,
+    runtimeOptions: { listen: { port: 0, token }, pushDelayMs: 10 } })
+  t.after(() => rt.stop())
+  const addr = await rt.start()
+  const node = dialDaemonNode(`ws://127.0.0.1:${addr.port}/persona/runtime`, token)
+  t.after(() => node.ws.close())
+  await until('daemon hello', () => node.hello)
+  const { session } = await node.peer.call('session.start', { launcher: 'daemon-alias', cwd: '/tmp', prompt: 'daemon prompt', client_msg_id: 'daemon' })
+  assert.match(session.session_id, /^profile-1\.sesn-/)
+  assert.equal(mas[0].sessions.size, 1)
+  const created = mas[0].requests.find((r) => r.method === 'POST' && r.path === '/api/v3/sessions')
+  assert.deepEqual(JSON.parse(created.body), { agent: 'agent-1', environment_id: 'env-1', title: 'daemon prompt' })
+  const sent = mas[0].requests.find((r) => r.method === 'POST' && r.path.endsWith('/events'))
+  assert.deepEqual(JSON.parse(sent.body), { events: [{ type: 'user.message', content: [{ type: 'text', text: 'daemon prompt' }] }] })
+  assert.equal(mas[1].sessions.size, 0)
+  assert.deepEqual(mas[1].requests.filter((r) => r.method === 'POST'), [])
 })
 
 test('interrupt sends user.interrupt and settles once the turn ended', async (t) => {

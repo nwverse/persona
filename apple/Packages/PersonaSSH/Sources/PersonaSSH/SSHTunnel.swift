@@ -251,6 +251,7 @@ public final class SSHTunnel: @unchecked Sendable {
         let over = LoopFlag()
         result.futureResult.whenComplete { _ in over.value = true }
         let timeout = loop.scheduleTask(in: .milliseconds(Int64(timings.open * 1000))) {
+            trace("ssh channel open timed out after \(self.timings.open) seconds; closing its session")
             result.fail(SSHTunnelError.timedOut)
             session.close(promise: nil)
         }

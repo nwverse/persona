@@ -45,6 +45,7 @@ type agyBridge struct {
 	cancel     context.CancelFunc
 	done       chan struct{}
 	instance   string
+	bin        string
 	wakeCh     chan struct{}
 	yieldGrace time.Duration
 	takeover   sync.Mutex
@@ -54,6 +55,16 @@ func (rh *RuntimeHost) builtinAgyInstance() string {
 	rh.agy.mu.Lock()
 	defer rh.agy.mu.Unlock()
 	return rh.agy.instance
+}
+
+func (rh *RuntimeHost) builtinAgyExecutable() string {
+	rh.agy.mu.Lock()
+	bin := rh.agy.bin
+	rh.agy.mu.Unlock()
+	if bin != "" {
+		return bin
+	}
+	return findAgyExecutable()
 }
 
 func (rh *RuntimeHost) wakeAgyBridge() {
@@ -263,11 +274,13 @@ func (rh *RuntimeHost) runAgyBridge(ctx context.Context, agyBin string, wake <-c
 	instance := fmt.Sprintf("builtin-agy-%d-%d", os.Getpid(), agyInstanceSeq.Add(1))
 	rh.agy.mu.Lock()
 	rh.agy.instance = instance
+	rh.agy.bin = agyBin
 	rh.agy.mu.Unlock()
 	defer func() {
 		rh.agy.mu.Lock()
 		if rh.agy.instance == instance {
 			rh.agy.instance = ""
+			rh.agy.bin = ""
 		}
 		rh.agy.mu.Unlock()
 	}()

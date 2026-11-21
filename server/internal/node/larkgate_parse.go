@@ -89,6 +89,84 @@ func larkLoneGateCall(cmd string, gates []proto.CommandGate) bool {
 	return true
 }
 
+// larkReadFormattingPipeline proves the narrow command an Inbox default conversation may allow (#11991):
+// one literal configured GET/HEAD under an optional timeout, then only the fixed output filters below. The AST must
+// be one pipeline, so an appended command, substitution, assignment or file redirect is not formatting. Interpreters
+// are not filters: even apparently inert Python may evaluate a string through a standard-library API. The caller
+// separately requires one classified, rule-allowed read; this helper never executes it.
+func larkReadFormattingPipeline(cmd string, gates []proto.CommandGate) bool {
+	tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
+	if err != nil || len(tree.Stmts) != 1 {
+		return false
+	}
+	var statements []*syntax.Stmt
+	var walk func(*syntax.Stmt) bool
+	walk = func(st *syntax.Stmt) bool {
+		if st.Background || st.Coprocess || st.Negated {
+			return false
+		}
+		switch c := st.Cmd.(type) {
+		case *syntax.CallExpr:
+			statements = append(statements, st)
+			return true
+		case *syntax.BinaryCmd:
+			return (c.Op == syntax.Pipe || c.Op == syntax.PipeAll) && walk(c.X) && walk(c.Y)
+		}
+		return false
+	}
+	if !walk(tree.Stmts[0]) || len(statements) < 2 {
+		return false
+	}
+	for i, st := range statements {
+		call := st.Cmd.(*syntax.CallExpr)
+		if len(call.Assigns) != 0 || len(call.Args) == 0 {
+			return false
+		}
+		for _, redirect := range st.Redirs {
+			// Only stdout/stderr duplication such as 2>&1 is inert. An inherited descriptor may name a file or socket,
+			// so neither an arbitrary target (>&3) nor an inherited input (<&3) belongs in this exception.
+			if redirect.Op != syntax.DplOut || redirect.Word == nil {
+				return false
+			}
+			fd, dynamic := executionWord(redirect.Word)
+			if dynamic || fd != "1" && fd != "2" {
+				return false
+			}
+			if redirect.N != nil && redirect.N.Value != "1" && redirect.N.Value != "2" {
+				return false
+			}
+		}
+		words := make([]string, len(call.Args))
+		for j, arg := range call.Args {
+			var dynamic bool
+			if words[j], dynamic = executionWord(arg); dynamic {
+				return false
+			}
+		}
+		if i > 0 {
+			// Do not inherit larkFilters: sort/uniq have output paths, and this exception never includes interpreters or
+			// general-purpose print commands. Only these fixed stdin/stdout filters qualify.
+			switch words[0] {
+			case "jq", "head", "tail", "grep", "cut", "tr", "wc", "column":
+				continue
+			default:
+				return false
+			}
+		}
+		if words[0] == "timeout" {
+			if len(words) <= 2 || !timeoutArg.MatchString(words[1]) {
+				return false
+			}
+			words = words[2:]
+		}
+		if len(words) != 3 || gateOf(gates, words[0]) < 0 || words[1] != "GET" && words[1] != "HEAD" ||
+			!strings.HasPrefix(words[2], "/") {
+			return false
+		}
+	}
+	return true
+}
+
 func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk larkRisk, depth int) larkVerdict {
 	return classifyLarkAt(cmd, gates, cwd, risk, depth, false)
 }

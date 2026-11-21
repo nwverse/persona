@@ -72,3 +72,6 @@ type CodexTakeover struct {
 
 // CanModes is a Modes value.
 func CanModes(on bool) *bool { return &on }
+
+// Bool returns a pointer to on for optional capability flags.
+func Bool(on bool) *bool { return &on }

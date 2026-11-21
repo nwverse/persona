@@ -567,7 +567,12 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
             // A Workflow call whose run the session lists draws the run's card (#3435); otherwise the row it always was.
             if (call.name == "Workflow") LocalChatWorkflows.current?.let { workflows ->
                 call.use.item.toolUseId?.let(workflows.runs::get)?.let { run ->
-                    JWorkflowCallCard(run, folds = workflows.folds, onOpenAgent = workflows.open)
+                    Column {
+                        JWorkflowCallCard(run, folds = workflows.folds, onOpenAgent = workflows.open)
+                        workflows.openBackground?.let { open ->
+                            JTextButton(stringResource(R.string.chat_background_open_workflow), onClick = { open(run) })
+                        }
+                    }
                     return
                 }
             }

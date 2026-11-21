@@ -127,10 +127,11 @@ type Meta struct {
 	// VersionAt is when the line that said Version was written (zero when it had no timestamp).
 	VersionAt      time.Time
 	PermissionMode string
-	// ModeAt / Effort / EffortAt: when the permission mode was last seen, and the effort level of the latest reply.
+	// ModeAt / Effort / EffortAt / ModelAt: when the permission mode was last seen, and when the latest reply or turn_context named Effort or Model.
 	ModeAt   time.Time
 	Effort   string
 	EffortAt time.Time
+	ModelAt  time.Time
 	// Ultracode is independent of effort: nil means the transcript has no dated evidence. Since, when set by a
 	// caller, ignores observations from before the current Claude process (resume resets the session-only switch).
 	Ultracode        *bool
@@ -316,6 +317,7 @@ func (m *Meta) ObserveNamingMetadata(line []byte) {
 		} `json:"message"`
 		Payload struct {
 			Type   string `json:"type"`
+			Model  string `json:"model"`
 			Effort string `json:"effort"`
 			Info   *struct {
 				Total struct {
@@ -329,6 +331,9 @@ func (m *Meta) ObserveNamingMetadata(line []byte) {
 	}
 	switch e.Type {
 	case "turn_context":
+		if e.Payload.Model != "" && !e.Timestamp.Before(m.ModelAt) {
+			m.Model, m.ModelAt = e.Payload.Model, e.Timestamp
+		}
 		if e.Payload.Effort != "" && !e.Timestamp.Before(m.EffortAt) {
 			m.Effort, m.EffortAt = e.Payload.Effort, e.Timestamp
 		}
@@ -893,6 +898,9 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		}
 		if model != "" {
 			meta.Model = model
+			if !e.IsSidechain && !meta.Updated.IsZero() {
+				meta.ModelAt = meta.Updated
+			}
 			meta.observeReplyModel(model)
 		}
 		var blocks []block

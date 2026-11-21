@@ -287,8 +287,16 @@ private fun ChatPage(
     val statusSheetState = remember { mutableStateOf(false) }
     var statusSheet by statusSheetState
     // The loop and background work's sheet, from the header's pill (Glass, #4339 C8).
-    val activitySheetState = remember { mutableStateOf(false) }
+    val activitySheetState = remember(key) { mutableStateOf<BackgroundPanelRequest?>(null) }
     var activitySheet by activitySheetState
+    val backgroundOwner = session?.takeIf {
+        !it.assistant && !it.isSubagent && '@' !in it.sessionId &&
+            renderStyle == ChatRenderStyle.Agent && child == null && workflowAgent == null
+    }
+    val openBackground: ((BackgroundDestination) -> Unit)? = backgroundOwner?.let { owner ->
+        { destination -> activitySheet = BackgroundPanelRequest(owner.key, owner.manager, destination) }
+    }
+    val openBackgroundList = openBackground?.let { open -> { open(BackgroundDestination.List) } }
     // The shell presents transient notices once; persistent sync errors stay inline.
     val feedback = persona.core.designsystem.LocalAppFeedback.current
     val deliveryActions = remember(sender) { ChatDeliveryActions(sender) }
@@ -374,7 +382,7 @@ private fun ChatPage(
     val chatList = pageHeaderFold.chatList
     val search = pageHeaderFold.search
     val foldsHeader = pageHeaderFold.foldsHeader
-    val activityInHeader = pageHeaderFold.activityInHeader
+    val activityInHeader = pageHeaderFold.activityInHeader && openBackgroundList != null
     val reduceMotion = pageHeaderFold.reduceMotion
     val headerFold = pageHeaderFold.headerFold
     val headerScroll = pageHeaderFold.headerScroll
@@ -671,7 +679,7 @@ private fun ChatPage(
         }) else null
     // The session's subagents by the call that started them, done ones too: what their task cards say (Glass), and the
     // conversations "View sub-agent" opens under Task / Agent steps in Brief and Board.
-    val pageSubagents = rememberChatPageSubagents(key, chrome, readOnly, session)
+    val pageSubagents = rememberChatPageSubagents(key, chrome, readOnly, session, openBackground)
     val subagentLinks = pageSubagents.subagentLinks
     val subagentFolds = pageSubagents.subagentFolds
     LaunchedEffect(chrome.childSessionId, subagentFolds) {
@@ -681,6 +689,10 @@ private fun ChatPage(
     val viewerState = remember { mutableStateOf<ViewerRequest?>(null) }
     var viewer by viewerState
     val photos = remember(chrome.files, key, session?.cwd) { chrome.files?.let { AttachedPhotos(it, key.machineId, session?.cwd.orEmpty()) } }
+    val localCacheDir = androidx.compose.ui.platform.LocalContext.current.cacheDir
+    val localImages = remember(chrome.files, chrome.hubScope, key.machineId, session?.cwd, localCacheDir) {
+        chrome.files?.let { LocalMarkdownImages(it, chrome.hubScope, key.machineId, session?.cwd.orEmpty(), localCacheDir) }
+    }
     // A "Continue" already on its way counts as working: the card offers no second one.
     // A turn that failed on the refusal fallback's missing model (#2528): "Continue" would go to the same model.
     // Every model of a main or leader conversation's recovery chain failed (#7824): the turn's last error card names
@@ -702,7 +714,7 @@ private fun ChatPage(
     val imageDescription = stringResource(R.string.chat_content_image)
     val replyImages = remember(key, repository) { (repository as? ChatLocalStorage)?.replyImages(key) }
         ?.collectAsStateWithLifecycle(initialValue = null)?.value
-    val rowActions = remember(key, repository, replyImages, photos, retryId, exhausted, chrome.onOpenPath != null, pathPresence, chrome.files, session?.cwd) {
+    val rowActions = remember(key, repository, replyImages, localImages, photos, retryId, exhausted, chrome.onOpenPath != null, pathPresence, chrome.files, session?.cwd) {
         ChatRowActions(key, fullText = { item -> repository.fullText(key, item.id) },
             openPath = if (chrome.onOpenPath != null) ({ path, line -> currentOpenPath?.invoke(path, line) }) else null,
             paths = pathPresence,
@@ -712,7 +724,8 @@ private fun ChatPage(
             thumbnails = chrome.files?.let { files ->
                 val cwd = session?.cwd.orEmpty().ifBlank { "~" }
                 ({ path -> "${key.machineId}\n$cwd\n$path" to { pixels: Int -> files.thumbnail(key.machineId, cwd, path, pixels) } })
-            }, viewerImage = { item, description -> chatViewerImage(key, item, repository, description) }, exhausted = exhausted, replyImages = replyImages)
+            }, viewerImage = { item, description -> chatViewerImage(key, item, repository, description) }, exhausted = exhausted,
+            replyImages = replyImages, localImages = localImages)
     }
     val currentMarkdownPaths by rememberUpdatedState(rowActions.paths?.takeIf { rowActions.openPath != null })
     LaunchedEffect(liveItems) {
@@ -790,7 +803,7 @@ private fun ChatPage(
     val turnFix = if (renderStyle == ChatRenderStyle.Assistant) TurnErrorFix.of(session?.turnErrorCode) else null
     val fixModel = chrome.onFixModel?.let { open -> { action: persona.core.designsystem.ReadinessActionId -> open(action, session?.launcher, session?.manager) } }
     // Nothing is up over the page: the header may fold by itself (iOS waits while a sheet or menu is presented).
-    val pageCovered = chrome.covered || overlay || linkVisible || statusSheet || activitySheet || terminalHelp ||
+    val pageCovered = chrome.covered || overlay || linkVisible || statusSheet || activitySheet != null || terminalHelp ||
         taskPageVisible || fullText != null || search.visible || pushedDetail != null
     val headerBusy by rememberUpdatedState(pageCovered || chromeOverlay)
     LaunchedEffect(headerFold, foldsHeader, reduceMotion) {
@@ -947,8 +960,9 @@ private fun ChatPage(
                 } else emptyList()
                 // Glass: a loop and background work are a pill at the end of the tabs' row (iOS ActivityChips, #4339 C8),
                 // a row of its own without tabs; the other styles keep their chips above the composer.
-                val activityPill: (@Composable () -> Unit)? = session
-                    ?.takeIf { activityInHeader && ChatActivity.shown(it) }?.let { s -> { ChatActivityPill(s) { activitySheet = true } } }
+                val activityPill: (@Composable () -> Unit)? =
+                    if (activityInHeader && openBackgroundList != null && backgroundOwner != null && ChatActivity.shown(backgroundOwner))
+                        ({ ChatActivityPill(backgroundOwner, openBackgroundList) }) else null
                 val tabs = session != null && onOpenSibling != null && siblingSessions.size > 1
                 JPage(
                     title = session?.displayTitle ?: stringResource(R.string.chat_screen_untitled),
@@ -962,6 +976,7 @@ private fun ChatPage(
                                         chrome.onOpenSession, chrome.onConnectionDetails, onOverlay = { headerOverlay = it },
                                         onFiles = chrome.onFiles, onGit = chrome.onGit, gitLabel = chrome.gitLabel,
                                         statusState = status, onDetails = { statusSheet = true },
+                                        onBackgroundTasks = openBackgroundList,
                                         onOpenTodo = chrome.onOpenTodo, agentShares = chrome.agentShares, worktrees = chrome.worktrees,
                                         onSearch = { search.open(chatList) { timeline.freeze(currentItems()); timelineVersion++ } },
                                         onTerminal = agentTerminal, onTerminalHelp = if (hasTerminal && terminal == null) ({ terminalHelp = true }) else null,
@@ -1110,6 +1125,7 @@ private fun ChatPage(
                                     service = composerService, uploadDestination = if (healthChat || session?.isHealth == true) "health" else null,
                                     upload = composerUpload,
                                     onSend = { send() }, onCommand = { send(it) }, onNotice = { notice = it },
+                                    onWorkflows = openBackground?.let { open -> { open(BackgroundDestination.LatestWorkflow) } },
                                     extraContent = linkContexts.isNotEmpty(),
                                     assistantChat = assistantChat,
                                     useShellSurface = compactGlassAgent, covered = pageCovered,
@@ -1226,7 +1242,8 @@ private fun ChatPage(
                 onNotice = { notice = it }, onFork = onFork, rewindMenu = rewindMenu,
                 onDelete = { target -> messages.firstOrNull { it.clientMessageId == target.id }?.let { message ->
                     deliveryAction(message, if (message.state.allows(DeliveryAction.Cancel)) DeliveryAction.Cancel else DeliveryAction.Delete)
-                } }, viewerState, chatList)
+                } }, viewerState, chatList, backgroundActions = chrome.actions,
+                backgroundConnection = chrome.connection, backgroundFiles = chrome.files)
         }
     }
 }

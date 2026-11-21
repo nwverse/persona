@@ -222,26 +222,27 @@ func (n *Node) mayCall(cwd, tool string) bool {
 	return slices.ContainsFunc(n.signedInConnectors(cwd), func(id string) bool { return strings.HasPrefix(tool, id+"_") })
 }
 
-// cliCall runs a scoped task_spawn as the Agent's, or a connector call as the assistant's. No Agent-side exception
-// grants connector access.
+// cliCall runs one of an Agent's own tools (callerTools) as the Agent its pane or Codex thread names, or a connector
+// call as the assistant's. The Agent's tools go to the hub as an Agent's call (assistant false), as `personad mcp`
+// sends them for the same pane (hooks.go mcpCaller): the hub decides each one for that session (a task leader's
+// task_plan, the decisions of the Agent's own to-do, …). A call that names no known Agent session gets the assistant's
+// check below, unchanged; no Agent-side exception grants connector access.
 func (n *Node) cliCall(ctx context.Context, c net.Conn, req sockRequest) proto.ToolResult {
-	if req.Name == "task_spawn" {
-		session := n.paneCaller(req.Pane)
-		if req.CodexThreadID != "" {
-			session = n.taskCodexCaller(req.CodexThreadID)
+	if slices.Contains(callerTools, req.Name) {
+		if session := n.cliAgentCaller(req); session != "" {
+			if n.peer == nil {
+				return proto.ErrorResult(proto.ToolErrorUnavailable, "Persona hub error: not connected", 0)
+			}
+			var res proto.ToolResult
+			if err := n.peer.Call(ctx, "mcp.call", map[string]any{"name": req.Name, "args": req.Args, "session_id": session,
+				"assistant": false, "guest": n.guestOf(session) != nil}, &res); err != nil {
+				return proto.ErrorResult(proto.ToolErrorUnavailable, "Persona hub error: "+err.Error(), 0)
+			}
+			return res
 		}
-		if session == "" {
+		if req.Name == "task_spawn" {
 			return proto.ErrorResult(proto.ToolErrorUnavailable, "task_spawn is not available: no Agent session is known for this pane or Codex thread", 0)
 		}
-		if n.peer == nil {
-			return proto.ErrorResult(proto.ToolErrorUnavailable, "Persona hub error: not connected", 0)
-		}
-		var res proto.ToolResult
-		if err := n.peer.Call(ctx, "mcp.call", map[string]any{"name": req.Name, "args": req.Args, "session_id": session,
-			"assistant": false, "guest": n.guestOf(session) != nil}, &res); err != nil {
-			return proto.ErrorResult(proto.ToolErrorUnavailable, "Persona hub error: "+err.Error(), 0)
-		}
-		return res
 	}
 	session, ok := n.assistantCaller(c)
 	if !ok {
@@ -282,6 +283,16 @@ func (n *Node) cliCall(ctx context.Context, c net.Conn, req sockRequest) proto.T
 		return proto.ErrorResult(proto.ToolErrorUnavailable, "Persona hub error: "+err.Error(), 0)
 	}
 	return res
+}
+
+// cliAgentCaller is the Agent session a command line's call of an Agent's own tool comes from: the one its Codex
+// thread names when it names one, else the one in its pane (paneCaller); "" when none is known. The request's own
+// session and assistant fields are never read: the node, not the caller, says whose call it is.
+func (n *Node) cliAgentCaller(req sockRequest) string {
+	if req.CodexThreadID != "" {
+		return n.taskCodexCaller(req.CodexThreadID)
+	}
+	return n.paneCaller(req.Pane)
 }
 
 // Codex's shared daemon can inherit a different pane's environment. A tool's per-turn thread id takes precedence;

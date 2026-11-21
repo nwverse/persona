@@ -16,7 +16,7 @@ import (
 // otherwise.
 func relayedPlan(over map[string]any) string {
 	task := map[string]any{"title": "Fix the export", "prompt": "The export drops the old format: fix it and add a test",
-		"machine": "box", "cwd": "/code/app", "readonly": false, "permission": "bypassPermissions", "user_requested": true,
+		"role": "worker", "machine": "box", "cwd": "/code/app", "readonly": false, "permission": "bypassPermissions", "user_requested": true,
 		"why": "the repository is on box", "done_when": []string{"the export keeps the old format"}, "expect_minutes": 30}
 	for k, v := range over {
 		task[k] = v

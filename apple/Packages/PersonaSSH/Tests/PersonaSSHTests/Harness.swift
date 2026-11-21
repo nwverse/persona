@@ -199,18 +199,3 @@ enum FreePort {
         }
     }
 }
-
-/// With PERSONA_SSH_TRACE=<file>: what the fixtures do, line by line (swift test only prints when it is done).
-private let traceLock = NSLock()
-
-func trace(_ s: String) {
-    guard let path = ProcessInfo.processInfo.environment["PERSONA_SSH_TRACE"] else { return }
-    // The cancellation cases run concurrently. One append at a time preserves all their stage markers.
-    traceLock.withLock {
-        if !FileManager.default.fileExists(atPath: path) { FileManager.default.createFile(atPath: path, contents: nil) }
-        guard let h = FileHandle(forWritingAtPath: path) else { return }
-        h.seekToEndOfFile()
-        h.write(Data((s + "\n").utf8))
-        try? h.close()
-    }
-}

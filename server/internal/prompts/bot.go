@@ -21,7 +21,7 @@ type BotTodo struct {
 }
 
 type BotQuote struct {
-	Who, Text string
+	ID, Who, Text string
 }
 
 func RenderBotMessage(m BotMessage) string { return render("bot/message", m) }

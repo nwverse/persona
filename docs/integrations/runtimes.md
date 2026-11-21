@@ -113,7 +113,7 @@ viewer subscribes. Call it whenever the generated segment ends, including while 
 
 What the SDK handles (no runtime needs to write it again): connect / reconnect / `runtime.hello` (with this process's `instance`: if another process uses the same runtime id, node refuses the connection; the SDK logs one line and retries every 30 seconds, without taking over), list pushes, watch backfill and continuity (marking honestly when `from_seq` / `to_seq` don't line up,
 so the phone fills the gap), byte-by-byte streaming, the session turning "Needs you" while asking the phone, asking again with the same id for the same interaction when node restarts or its hub link drops (`interactionId(...)`; it waits up to 2 minutes from when the node or hub went away, however long the card was up before, #8128; a card under an id the runtime gives is resumable on the hub, so the phone keeps the card meanwhile and an answer given then is not lost),
-withdrawing retracted interactions from the phone, handing the same `client_msg_id` to the driver only once (retries get the first result; failed ones can be resent), the "who answers first" policy (when node says there's no hub, always the local UI first, `rt.hubConnected`), and reconnecting quickly after a drop (one attempt per second while the socket file exists).
+withdrawing retracted interactions from the phone, handing the same `client_msg_id` to the driver only once for ten minutes (retries get the first result; a refusal with `delivered: 'none'` or an ordinary error can be resent at once, while `delivered: 'unknown'` stays cached so a reconnect cannot send it twice), the "who answers first" policy (when node says there's no hub, always the local UI first, `rt.hubConnected`), and reconnecting quickly after a drop (one attempt per second while the socket file exists). After the owner approves Retry and the node proves the original attempt `known_unseen`, `session.send_unseen` supersedes only that completed ambiguous attempt: a pending or acknowledged attempt keeps its outcome. An older SDK refuses the method as `unsupported` rather than risking a second send.
 
 Things shared across runtimes but not part of the protocol are in the SDK too, for runtimes to use directly:
 
@@ -418,6 +418,10 @@ Lark tokens and gates. node drives it with calls the protocol already has:
 | `session.send {session_id, text, images, client_msg_id, assistant: true, context, mode, memory_dir, supervision_instructions?}` | `context`: a `<persona-context>` block given to the model before the user's text (the live snapshot; the first message of a new chat also has memory and Lark notes), not shown in the chat, and left out of a message that is only a slash command (`/compact`, one line, no picture) so the runtime can run it: the snapshot goes with the next message, and after `/compact` in full; `mode`: Persona's permission mode (`default` / `acceptEdits` / `auto` / `plan` / `bypassPermissions`); `memory_dir`: the memory directory; `client_msg_id`: the id the message came with (the App's, a channel's), absent when it came without one: put it on the message's item, or leave the item without one, never another (`docs/protocol/protocol.md` "Matching pending messages"); `supervision_instructions`: sent only when the runtime declared `caps.supervision_policy` (always present, including explicit `""` to clear a prior role on demotion) |
 | `session.interrupt` | Stop on the phone; closing the assistant chat = stopping the running turn, the chat stays in the runtime |
 
+Antigravity sends `context` as an ACP embedded text resource before the separate user text block. Plain text blocks
+are subject to native slash-command expansion, so auxiliary context must not use that channel, even in its own block.
+An explicit standalone command still uses a plain text block without context.
+
 For sessions it starts, the node restores persisted ownership and launcher metadata before publishing runtime rows.
 The original assistant or health directory identifies the conversation after rediscovery and reconnects. Runtime
 status, model, permissions and capabilities continue to describe the running session.
@@ -462,7 +466,7 @@ end to end in `integrations/dsh/e2e/assistant.mjs`.
 | DSH (`dsh`, configurable) | `integrations/dsh`: a Cordis plugin for `dsh web`; companion process `companion.mjs` (`dsh-files`) for when DSH isn't running | `docs/integrations/dsh.md` |
 | pi (`pi-<pid>`, `pi-web`, `pi-files`) | `integrations/pi`: pi extension (one connection per pi process) + pi-web companion process | `docs/integrations/pi.md` |
 | omp (`omp-<pid>`) | `integrations/omp`: the pi host under omp's identity (agent and name `omp`); no companion and no auto-update | `docs/integrations/omp.md` |
-| opencode (`opencode-<pid>`) | `integrations/opencode`: opencode plugin (one connection per opencode server process; list and chats read from opencode.db, live updates over the event stream, control through the plugin API) | `docs/integrations/opencode.md` |
+| opencode (`opencode` / `opencode-<pid>`) | `integrations/opencode`: standalone ACP companion (`companion.mjs`, `start`, `models`, `modes`, `assistant: true` with loopback HTTP MCP proxy, reads 1.x & 2.x `opencode.db`) and opencode server plugin (`index.js`, one connection per `opencode serve` process, merges with herdr TUI panes) | `docs/integrations/opencode.md` |
 | Grok CLI (`grok-chat`) | `integrations/grok/companion.mjs`: optional standalone ACP companion with assistant tools, permission hooks, native renaming and restart recovery; also lists conversations started in a terminal (read-only while the terminal holds them) | `integrations/grok/README.md` |
 | Antigravity CLI (`antigravity`) | `integrations/antigravity/companion.mjs`: companion process; reads CLI transcripts and runs terminal-less Agent and assistant sessions through `agy acp` | "Antigravity CLI" below |
 | Managed Agents (`managed-agents`, configurable) | `integrations/managed-agents/companion.mjs`: standalone companion for Volcengine Ark Managed Agents and compatible endpoints (cloud or self-hosted, the user's own key); reads sessions over the REST API, sends, interrupts, starts, and answers tool confirmations and question / plan tools on the phone; `--listen` makes it a daemon | `docs/integrations/managed-agents.md` |
@@ -488,6 +492,16 @@ The session's `last_text` preview contains assistant response text after the lat
 input clears the previous reply preview, including input with no visible text. Thinking and tool records leave it empty
 until the assistant writes response text. This keeps user-authored questions out of awaiting-reply detection while
 preserving genuine assistant questions. User messages and tool records remain available in the conversation items.
+
+A session is listed `unknown` when the evidence cannot say working, idle or done (`transcriptState` in
+`integrations/antigravity/lib/map.js`). It is never guessed as idle: an idle native summary closes a turn only when its
+step count covers the last exported step. The companion logs why, as reason counts, each time the tally across listed
+sessions changes (`agy unknown status: no_summary 1, summary_behind 2`, then `none` once it clears, #12003):
+`read_failed` (the native summary database could not be read), `no_summary`, `summary_not_idle`, `summary_behind` (the
+summary's step count does not cover the last exported step), `no_step_index`, and `no_relevant_step` (no user input,
+response, tool result or error has been exported). A failed summary read is logged when it starts or its cause changes,
+with SQLite's result-code text only, and once more when reads recover, with the number of failures. The lines carry no
+session IDs, message text or paths; under `personad node` they appear in the node log after `agy runtime:`.
 
 CLI companion sessions and herdr panes show images from exported tool results. Conversation pages carry only image
 references; Persona loads the bytes when an image is shown. It accepts PNG, JPEG, GIF and WebP up to 1,152 KiB from
@@ -603,6 +617,15 @@ their existing poll. Unwatch, disconnection and shutdown release the watched pol
 existing step carry a stable content revision in the history token, so a response completed at the same sequence
 replaces retained content. Ordinary appends preserve that revision and continue through incremental item batches.
 
+Until the native export catches up, a Persona-owned prompt's steps come from ACP: the sent message, thinking, tool
+calls and results, and the settled reply; a background wake's steps the same way. While they only grow they keep the
+conversation's history token, so a send and every live update arrive as appends and clients keep their page (#12014).
+Their item IDs are not the export's, so the token changes once when the export replaces them, or when an interrupt
+drops some (a send that takes over a running wake included). The token that follows is written to the conversation's
+`.persona-history-epoch` file before the first such step shows, so a restarted companion never reports the token
+clients hold those steps under, and an idle conversation keeps its token across restarts. Where that file cannot be
+written, the token changes as soon as such steps appear.
+
 Session inventory, watch cursors, item pages and live item pushes read `transcript_full.jsonl` when available.
 Antigravity Agent and Assistant sessions publish waiting messages in `Session.queued`, using an empty string for a
 photo-only message. Send Now cancels only the active prompt and starts the next queued message when it settles.
@@ -634,9 +657,17 @@ For an agent without local token records, call `rt.usage({session_id, ts, model,
 
 The node advertises `usage` in hello features. The SDK returns false while disconnected, without a hub or with an older node; it does not queue or replay reports. A true result means the event was written, not acknowledged or durably saved. Reports can be lost during a reconnect, node restart or storage failure; there is no backfill. Upgrade the Hub storage support before using the new node feature.
 
-Only currently listed, owned sessions count. The row's agent must match the runtime's registered default agent or an advertised launcher agent. The node supplies the recorded launcher name. Claude Code, Codex, traex, pi, omp and opencode remain metered from their local records, including when hosted in Paseo. For other agents, a nonempty request ID deduplicates within one runtime connection and session for 30 minutes. Without an ID each report counts. The cache retains at most 65,536 request IDs and evicts its oldest entry when full. Reports outside the last 26 hours of minute buckets, more than a minute in the future, or with any token count over 1,000,000,000 are rejected. The file meter's 10-second tick sends the buffered per-minute totals. The manager restores persisted runtime minute buckets at startup.
+Only currently listed, owned sessions count. The row's agent must match the runtime's registered default agent or an advertised launcher agent. The node supplies the recorded launcher name. Claude Code, Codex, TRAE CLI, pi, omp and opencode remain metered from their local records, including when hosted in Paseo. For other agents, a nonempty request ID deduplicates within one runtime connection and session for 30 minutes. Without an ID each report counts. The cache retains at most 65,536 request IDs and evicts its oldest entry when full. Reports outside the last 26 hours of minute buckets, more than a minute in the future, or with any token count over 1,000,000,000 are rejected. The file meter's 10-second tick sends the buffered per-minute totals. The manager restores persisted runtime minute buckets at startup.
 
 Daemon links allow the same event and prefix its session ID as usual. Runtime usage goes to the same token totals and agent buckets as file usage. It is added, rather than replacing a minute's total, and full file scans preserve these unreconstructable buckets.
+
+### Runtime subscription usage windows
+
+A runtime with read-only access to a subscription's rate-limit windows calls `rt.usageWindows({provider, name, plan?, sampled_at, windows})`. Each window is `{label, window_minutes, used_percent, resets_at?, model?}`; timestamps are RFC3339, lengths are positive safe-integer minutes, percentages are finite numbers from 0 through 100, and one report has at most 32 windows. This is the same account shape that `docs/server/usage-windows.md` defines; it is separate from the per-request token counts above.
+
+The node advertises `usage_windows` only to runtimes on the local socket, not to daemons (their accounts must not be attributed to the node's machine). The SDK returns false while disconnected or with an older node and does not queue reports. A connected hub is not required because the node stores the snapshot locally. Reports replace the source named by the runtime id, so a companion restart does not duplicate its account. An older sample cannot replace a newer one; a valid empty `windows` array explicitly clears the source. The machine's existing `usage_windows` off switch rejects these reports too.
+
+Antigravity implements this source with its ACP process's native `RetrieveUserQuotaSummary` method and `forceRefresh: false`. It does not read the status-line command's account fields, invoke an account API itself, or start a model request.
 
 ### Shared runtime behavior
 

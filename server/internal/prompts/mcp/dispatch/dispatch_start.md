@@ -1,6 +1,6 @@
 Hand a subtask to a new agent on another of the user's connected computers, through Persona, and get its session id back at once. Use it when the work needs that computer (the repository or data is there, it needs that system or hardware, or this computer is busy); work this computer can do belongs to your own in-session subagents. Call dispatch_read with no arguments first to see the computers and their home directories. The new agent starts with only your prompt, not your conversation: write everything it needs (the goal, the repository and paths on that computer, what to return, what not to touch). It runs as an ordinary agent session the user can watch and answer in the apps. Read its result with dispatch_read. An agent that is itself a dispatched task cannot dispatch, and only a few dispatched tasks may be working at a time; the answer says so when it refuses.
 
-Give `worktree.branch` when the work needs a branch and checkout of its own on that computer: Persona makes the worktree through that computer's engine and starts the agent in it. Do not tell the agent to run `git worktree add` itself.
+Give `worktree.branch` when the work needs a branch and checkout of its own on that computer: Persona makes the worktree through that computer's engine and starts the agent in it. Do not tell the agent to run `git worktree add` itself.{{template "shared/mcp_language" .}}
 
 ```json
 {

@@ -400,10 +400,10 @@ def wait_transcript(path, marker, schema, pane, unit, timeout, accepted_stall=Fa
                     raise
         agents = command("agent", "list", timeout=20).get("agents", [])
         agent = next((item for item in agents if item.get("pane_id") == pane), None)
-        if agent and agent.get("agent_status") == "blocked" and accepted_stall:
-            accepted_stall = False
-        elif agent and agent.get("agent_status") == "blocked":
+        blocked = agent and agent.get("agent_status") == "blocked"
+        if blocked and not accepted_stall:
             raise RuntimeError("interactive reviewer requested an unexpected interaction")
+        accepted_stall = False
         if not scope_running(unit):
             if path.is_file():
                 return transcript_result(path, marker, schema)
@@ -471,20 +471,28 @@ def agent_state(pane):
 
 
 def prompt_started(pane, transcript, marker, schema, unit):
-    """Retain accepted work, including a fast return to idle or a blocked turn."""
-    agent = agent_state(pane)
-    if agent is None:
-        return False
-    status = agent.get("agent_status")
-    if status in ("working", "blocked"):
-        return True
-    if status in ("idle", "done"):
-        try:
-            transcript_result(transcript, marker, schema)
-        except RuntimeError:
+    """Allow a delayed lifecycle update, never a resubmission or an idle pass."""
+    grace = int(_config.get("startup_grace_seconds", 30))
+    if not 1 <= grace <= 120:
+        raise RuntimeError("reviewer startup grace must be between 1 and 120 seconds")
+    deadline = time.monotonic() + grace
+    while True:
+        if not scope_running(unit):
+            raise RuntimeError("interactive reviewer scope exited during prompt startup")
+        agent = agent_state(pane)
+        status = agent and agent.get("agent_status")
+        if status in ("working", "blocked"):
+            return True
+        if status in ("idle", "done"):
+            try:
+                transcript_result(transcript, marker, schema)
+            except RuntimeError:
+                pass
+            else:
+                return True
+        if time.monotonic() >= deadline:
             return False
-        return True
-    return False
+        time.sleep(min(1, max(0, deadline - time.monotonic())))
 
 
 def submit_prompt(pane, prompt, transcript, marker, schema, unit):

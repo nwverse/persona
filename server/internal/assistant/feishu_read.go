@@ -2,12 +2,12 @@ package assistant
 
 import (
 	"context"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -43,7 +43,7 @@ const (
 )
 
 // readDirName keeps a message id usable as a directory name in a shell command unquoted.
-var readDirName = regexp.MustCompile(`[^A-Za-z0-9_-]`)
+var readDirName = lazyre.New(`[^A-Za-z0-9_-]`)
 
 // readRun says a run answers a /read: its answer goes under the message in that group, quietly.
 func readRun(ext map[string]string) bool { return ext[readChatKey] != "" }

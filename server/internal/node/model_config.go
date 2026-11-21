@@ -38,7 +38,7 @@ type modelExecution struct {
 	StartupContext context.Context `json:"-"`
 	IsMain         bool            `json:",omitempty"`
 	// FollowsSetting: a leader/background supervisor conversation the manager sends with the main chat's model
-	// setting (#7824). With IsMain it identifies the protected conversations whose recovery is visible and reversible;
+	// setting (#7824). With IsMain it identifies conversations that must keep their configured model;
 	// worker Agent conversations have neither flag.
 	FollowsSetting bool   `json:",omitempty"`
 	ConfigDir      string `json:"-"` // a conversation's directory, not its model; retained across process restarts
@@ -198,4 +198,9 @@ func (n *Node) assistantModelDecision(ctx context.Context, id string) (string, m
 		return "", modelExecution{}, false
 	}
 	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: n.externalRuntime(id, res.Launcher, res.Runtime), IsMain: res.IsMain, MainCompactWindow: res.MainCompact, External: res.External, Origin: res.Origin, OriginKnown: res.OriginKnown, Interactive: res.ClaudeInteractive}).withSupervision(res.SupervisionInstructions), true
+}
+
+// strictProtectedExecution identifies owner-facing conversations without changing worker/task retry policy.
+func strictProtectedExecution(m modelExecution) bool {
+	return m.IsMain || m.FollowsSetting
 }

@@ -83,10 +83,12 @@ const (
 
 // Capabilities are what a channel can do (docs/extensions/channels.md "Capabilities"). Taking text is a given.
 type Capabilities struct {
-	ImagesIn bool   `json:"images_in,omitempty"`
-	FilesIn  bool   `json:"files_in,omitempty"`
-	VoiceIn  bool   `json:"voice_in,omitempty"`
-	Format   Format `json:"format,omitempty"`
+	ImagesIn bool `json:"images_in,omitempty"`
+	// ImagesOut: it can send pictures; an answer's pictures go in SendParams.Images (at most ImagesMost of ImageMost).
+	ImagesOut bool   `json:"images_out,omitempty"`
+	FilesIn   bool   `json:"files_in,omitempty"`
+	VoiceIn   bool   `json:"voice_in,omitempty"`
+	Format    Format `json:"format,omitempty"`
 	// MaxText is how many characters one message holds (0: no limit): the hub splits an answer to fit.
 	MaxText int  `json:"max_text,omitempty"`
 	Asks    Asks `json:"asks,omitempty"`
@@ -405,6 +407,8 @@ type (
 		Text    string `json:"text"`
 		Kind    string `json:"kind"`
 		ReplyTo string `json:"reply_to,omitempty"`
+		// Images are sent after Text, only to a channel with ImagesOut.
+		Images []Blob `json:"images,omitempty"`
 	}
 	SendResult struct {
 		MessageID string `json:"message_id,omitempty"`

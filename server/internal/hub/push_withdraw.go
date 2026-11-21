@@ -75,10 +75,10 @@ func (p *Pusher) sendCard(manager string, policy pushPolicy, build localized, id
 	}
 	policy.manager = manager
 	if policy.level != assistantwire.LevelP0 {
-		// Extract before applyLn's mode check too: enabling ln mode between checks must not hold a source-less card.
+		// Extract before applyPushGrading's mode check too: enabling push grading between checks must not hold a source-less card.
 		policy = pushPolicyWithSource(policy, build(i18n.Default))
 	}
-	if allow, _ := p.applyLn(policy); !allow {
+	if allow, _ := p.applyPushGrading(policy); !allow {
 		return
 	}
 	p.sendFromTo(manager, build, cardCollapseID(manager, id), wants, rule, only, func(d Device) {

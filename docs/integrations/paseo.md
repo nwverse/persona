@@ -72,6 +72,9 @@ refresh replaces it, including removals. There is no new setting or model depend
   Resuming a retained Codex Agent requires its original provider to remain enabled; it never imports that thread through a different provider.
   - A message to one goes to the Agent: Paseo takes it back from the archive first, keeping its labels, and it goes on under the same ID. `session.start` with `resume` set
     to that ID does the same through `import_agent` (see "Take over").
+  - Past those limits node still keeps its record of an Agent Persona started (launcher, folder and `engine_runtime`, written when Paseo answers the start and kept by the hub, #10941): an
+    extension's resume of it, which the hub hands to the computer once it is not listed, is checked against that folder and goes on through `import_agent` as
+    the owner's does (`docs/extensions/extensions.md` "Resuming a chat"). An Agent started in Paseo's App, or before that record, has none: only the owner resumes it then.
   - While it is archived, interrupting and closing it do nothing, and its permission mode, effort and model cannot be changed, nor can it be rewound (Paseo changes them only on an Agent it has loaded).
     Its row offers none of them (#8133): `capabilities` says `rewind`, `rewind_code`, `modes` and `model` false whatever the record it was archived with
     could do, and it lists no `efforts`; node narrows the row's capabilities by them (`docs/integrations/runtimes.md`).

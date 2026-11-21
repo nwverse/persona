@@ -85,12 +85,13 @@ extension Interaction {
         return String(localized: "The approved scope remains allowed in this conversation")
     }
 
-    /// The agent's name on a card not from Claude Code: one the node read off a Codex / TRAEX TUI, or an agent
+    /// The agent's name on a card not from Claude Code: one the node read off a Codex / TRAE CLI TUI, or an agent
     /// runtime's own ("DSH", the hub's agent_label; docs/integrations/runtimes.md). Nil for Claude's.
     var agentName: String? {
         switch agent {
         case "codex": "Codex"
-        case "traex": "TRAEX"
+        case "traex", "traecli", "trae-cli": Session.traeCLIName
+        case MachineEngine.paseo.rawValue where agentLabelHint.map(Session.isTraeCLIName) == true: Session.traeCLIName
         case nil, "", "claude": nil
         default: agentLabelHint ?? agent
         }
@@ -1143,6 +1144,10 @@ struct InteractionMarkdown: View {
     }
 }
 
+private func ownerApprovalReplyLabel(_ phrase: String) -> String {
+    String(localized: "Reply “\(phrase)” Once")
+}
+
 struct PermissionForm: View {
     @Environment(AppModel.self) private var model
     var interaction: Interaction
@@ -1186,6 +1191,18 @@ struct PermissionForm: View {
             .themedButton(prominent: true)
         }
         .controlSize(.large)
+        if let phrase = interaction.ownerApprovalPhrase {
+            Button {
+                Task { await model.resolve(interaction, Resolution(allow: true, ownerApprovalPhrase: phrase)) }
+            } label: {
+                Text(ownerApprovalReplyLabel(phrase))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(maxWidth: .infinity)
+            }
+            .themedButton()
+            .accessibilityIdentifier("owner-approval-exact-reply")
+        }
         if interaction.offersAlways {
             Button("Always Allow in Session") {
                 Task { await model.resolve(interaction, Resolution(allow: true, always: true)) }
@@ -1206,7 +1223,7 @@ struct PermissionForm: View {
     }
 }
 
-/// A Codex / TRAEX approval read off its TUI (docs/integrations/codex.md「Questions and approvals」): the command or the edits in full, the agent's
+/// A Codex / TRAE CLI approval read off its TUI (docs/integrations/codex.md「Questions and approvals」): the command or the edits in full, the agent's
 /// reason, Deny / Approve, Always Approve naming what it would allow (only when the TUI offers it), and Deny and Explain: the reason
 /// stops the turn and goes to the agent as its next message.
 struct AgentPermissionForm: View {
@@ -2304,6 +2321,9 @@ struct BUIPermissionForm: View {
             return c
         }
         var c = [ApprovalQuestion.Choice(String(localized: "Allow [Notification Actions ce7ef2]"))]
+        if let phrase = interaction.ownerApprovalPhrase {
+            c.append(ApprovalQuestion.Choice(ownerApprovalReplyLabel(phrase)))
+        }
         if interaction.offersAlways { c.append(ApprovalQuestion.Choice(String(localized: "Always Allow in Session"), detail: interaction.alwaysScopeDetail)) }
         c.append(ApprovalQuestion.Choice(String(localized: "Deny")))
         return c
@@ -2319,7 +2339,7 @@ struct BUIPermissionForm: View {
                      // Capped, the card scrolls what it asks over Send, which stays in view (#6605).
                      options: .panel(maxHeight: formCap.isFinite && formCap > 0 ? formCap : nil)) { answers in
             Haptics.tap()
-            Task { await model.resolve(interaction, Self.resolution(answers, choices: choices)) }
+            Task { await model.resolve(interaction, Self.resolution(answers, choices: choices, interaction: interaction)) }
         } context: { _ in
             if interaction.agentName != nil, let reason = interaction.reason, !reason.isEmpty {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -2358,9 +2378,13 @@ struct BUIPermissionForm: View {
     /// The command's lines before Show All: a few, over the card's choices and its field (Send stays in view under them).
     private static let commandLines = 4
 
-    static func resolution(_ a: ApprovalAnswers, choices: [ApprovalQuestion.Choice]) -> Resolution {
+    static func resolution(_ a: ApprovalAnswers, choices: [ApprovalQuestion.Choice], interaction: Interaction? = nil) -> Resolution {
         let reason = (a.custom[0] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !reason.isEmpty { return Resolution(allow: false, message: reason) }
+        if let phrase = interaction?.ownerApprovalPhrase,
+           a.picks[0]?.first.map({ choices[$0].label }) == ownerApprovalReplyLabel(phrase) {
+            return Resolution(allow: true, ownerApprovalPhrase: phrase)
+        }
         // The labels are localized: compare with the same localized words the choices were built from.
         switch a.picks[0]?.first.map({ choices[$0].label }) {
         case String(localized: "Allow [Notification Actions ce7ef2]"), String(localized: "Approve [Interaction Views 905819]"): return Resolution(allow: true)

@@ -343,7 +343,7 @@ func (f *File) rememberLine(seq int, ref lineRef) {
 	f.refs[seq] = ref
 }
 
-// ErrSourceChanged means the original record behind a positional item is no longer at its cached offset.
+// ErrSourceChanged means a positional item is absent or its record no longer matches the cached item.
 var ErrSourceChanged = errors.New("original transcript item no longer present")
 
 // Full returns an item whole: all of its text and its image data (pages and pushes carry a light copy). The line it
@@ -352,14 +352,21 @@ var ErrSourceChanged = errors.New("original transcript item no longer present")
 func (f *File) Full(id string) (proto.Item, error) {
 	f.mu.Lock()
 	it, found := f.item(id)
+	var err error
 	if !found { // an item in lines not parsed yet: parse back to it (window.go)
-		it, found = f.findOlder(id)
+		it, found, err = f.findOlder(id)
 	}
 	ref, reread := f.refs[it.Seq]
 	scratch := Meta{Sidechain: f.meta.Sidechain, Codex: f.meta.Codex,
 		agentCalls: maps.Clone(f.meta.agentCalls), taskCalls: maps.Clone(f.meta.taskCalls)}
 	f.mu.Unlock()
 	if !found {
+		if proto.PositionalItemID(id) {
+			if err != nil {
+				return it, err
+			}
+			return it, ErrSourceChanged
+		}
 		return it, fmt.Errorf("no item %s", id)
 	}
 	if !reread {
@@ -368,7 +375,11 @@ func (f *File) Full(id string) (proto.Item, error) {
 		}
 		return it, nil
 	}
-	full, ok := f.reparse(it.Seq, ref, &scratch)[id]
+	parsed, err := f.reparse(it.Seq, ref, &scratch)
+	if it.SourceFingerprint != "" && err != nil && !errors.Is(err, io.EOF) {
+		return it, err
+	}
+	full, ok := parsed[id]
 	if it.SourceFingerprint != "" && (!ok || full.SourceFingerprint != it.SourceFingerprint) {
 		return it, ErrSourceChanged
 	}
@@ -405,7 +416,7 @@ func (f *File) WithImages(items []proto.Item) []proto.Item {
 			continue
 		}
 		if parsed[it.Seq] == nil {
-			parsed[it.Seq] = f.reparse(it.Seq, ref, &scratch)
+			parsed[it.Seq], _ = f.reparse(it.Seq, ref, &scratch)
 		}
 		if full, ok := parsed[it.Seq][it.ID]; ok && full.Image != nil {
 			if out == nil {
@@ -420,22 +431,22 @@ func (f *File) WithImages(items []proto.Item) []proto.Item {
 	return out
 }
 
-// reparse reads line seq again and returns its items by id (none if the file changed under it).
-func (f *File) reparse(seq int, ref lineRef, scratch *Meta) map[string]proto.Item {
+// reparse reads line seq again and returns its items by id.
+func (f *File) reparse(seq int, ref lineRef, scratch *Meta) (map[string]proto.Item, error) {
 	fh, err := os.Open(f.Path)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer fh.Close()
 	line := make([]byte, ref.n)
 	if _, err := fh.ReadAt(line, ref.off); err != nil {
-		return nil
+		return nil, err
 	}
 	out := map[string]proto.Item{}
 	for _, it := range ParseLine(seq, line, scratch) {
 		out[it.ID] = it
 	}
-	return out
+	return out, nil
 }
 
 // After returns items with seq > afterSeq, oldest first: at least limit of them unless fewer exist, and never part of

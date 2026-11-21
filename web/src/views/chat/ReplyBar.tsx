@@ -24,7 +24,7 @@ import { TurnUsage } from "./TurnUsage";
 import type { ReplyTranslation } from "../../lib/reply-translation";
 import { ReplyTranslationButton } from "./ReplyTranslationButton";
 import { useChatActions, type ChatActions } from "./chat-actions";
-import { starrable, useCanStar, useStarMark, type StarOrigin, type StarSource } from "../../lib/starred-rows";
+import { starrable, useCanStar, useStarAccess, useStarMark, type StarOrigin, type StarSource } from "../../lib/starred-rows";
 import { addStar, removeStar } from "../../lib/starred";
 import { starUserText } from "./star-user-text";
 import type { RewindRestore } from "../../lib/rewind";
@@ -134,6 +134,12 @@ function starSource(origin: StarOrigin | undefined, chat: ChatActions | null): S
     conversation: chat.assistant ? "assistant" : "agent",
     source_fingerprint: origin.fingerprint,
   };
+}
+
+export function StarAvailability({ origin, chat, report }: { origin: StarOrigin; chat: ChatActions | null; report: (available: "read" | "write" | null) => void }) {
+  const available = useStarAccess();
+  useEffect(() => { report(available && chat && starrable(origin) ? available : null); }, [available, chat, origin, report]);
+  return null;
 }
 
 export function StarBadge({ origin }: { origin: StarOrigin }) {

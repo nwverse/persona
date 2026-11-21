@@ -46,7 +46,8 @@ export interface Manifest {
    */
   extension_pack?: PackMember[];
   /**
-   * The configuration's JSON Schema, in the subset every app draws as a form (docs "Configuration: the form subset").
+   * The configuration's JSON Schema, in the settings-form subset (docs "Configuration: the form subset"). Capable
+   * clients draw declared entry lists after opting in; other clients receive compatibility projections.
    */
   configuration?: unknown;
   secrets?: SecretSpec[];
@@ -321,6 +322,7 @@ export interface Contributes {
   browser?: NamedItem[];
   iphone?: NamedItem[];
   quota?: QuotaItem[];
+  usage?: UsageItem[];
   providers?: ProviderItem[];
   api?: APIItem[];
   assistant?: AssistantItem[];
@@ -574,7 +576,18 @@ export interface RepositoryProviderItem {
    * kinds stay issue and pull_request.
    */
   link_kinds?: RepositoryLinkLabel[];
+  /**
+   * What else the program answers (#11584): pr_status, the state of a pull request for delivery checks
+   * (repo.pr_status). Without it the manager reads repo.describe's state. Each at most once.
+   */
+  capabilities?: RepositoryCapability[];
 }
+
+/**
+ * A repository provider's optional answer: pr_status (repo.pr_status).
+ */
+export type RepositoryCapability = "pr_status" | (string & {});
+export const REPOSITORY_CAPABILITIES = ["pr_status"] as const;
 
 /**
  * The word a repository provider shows for one kind of its links (MR for a pull_request).
@@ -674,6 +687,12 @@ export interface NamedItem {
 }
 
 export interface QuotaItem {
+  id: string;
+  name: string;
+  hosts?: string[];
+}
+
+export interface UsageItem {
   id: string;
   name: string;
   hosts?: string[];
@@ -800,6 +819,11 @@ export interface ChannelItem {
 
 export interface ChannelCapabilities {
   images_in?: boolean;
+  /**
+   * It can send pictures: the hub puts an answer's pictures in channel.send's images instead of leaving them as
+   * Markdown in the text.
+   */
+  images_out?: boolean;
   files_in?: boolean;
   voice_in?: boolean;
   format?: string;

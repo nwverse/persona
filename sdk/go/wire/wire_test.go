@@ -105,6 +105,24 @@ func TestValidateMaxPropertiesAndUniqueItems(t *testing.T) {
 	}
 }
 
+func TestValidateConfiguredNetworkEntryPaths(t *testing.T) {
+	for _, value := range []string{
+		"config:base_url", "config:base_url:http", "config:accounts[].address", "config:accounts[].address:http", "notes.example.com",
+	} {
+		if err := Validate("NetworkEntry", value); err != nil {
+			t.Errorf("%q: %v", value, err)
+		}
+	}
+	for _, value := range []string{
+		"config:accounts[0].address", "config:accounts[].address.extra", "config:accounts[].address:ftp",
+		"config:accounts[].address:http:extra", "config:[].address", "config:accounts[]", "config:accounts[].",
+	} {
+		if err := Validate("NetworkEntry", value); err == nil {
+			t.Errorf("%q: malformed configured network path accepted", value)
+		}
+	}
+}
+
 func TestKBUpdateStatus(t *testing.T) {
 	for _, status := range []string{"", "active", "ignored", "self"} {
 		t.Run(status, func(t *testing.T) {
