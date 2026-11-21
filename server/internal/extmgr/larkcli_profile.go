@@ -34,19 +34,32 @@ type larkCLIProfileView struct {
 // otherwise a bot app gets the managed profile and no bot falls back to the
 // CLI's default profile.
 func (h *Manager) effectiveLarkCLIProfile(ctx context.Context) string {
+	profile, _ := h.resolveLarkCLIProfile(ctx)
+	return profile
+}
+
+// resolveLarkCLIProfile distinguishes a known default profile from unread settings.
+// The manager.json override already identifies the account and remains available during a store outage.
+func (h *Manager) resolveLarkCLIProfile(ctx context.Context) (string, error) {
 	if h == nil || h.cfg == nil || h.cfg.Lark.CLI == nil {
-		return ""
+		return "", nil
 	}
 	if profile := strings.TrimSpace(h.cfg.Lark.CLI.Profile); profile != "" {
-		return profile
+		return profile, nil
 	}
-	if profile := h.larkCLIProfileChoice(ctx); profile != "" {
-		return profile
+	b := &h.bots
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := h.loadBotsLocked(ctx); err != nil {
+		return "", err
 	}
-	if h.botAppCredentialsID(ctx) != "" {
-		return managedLarkCLIProfile
+	if profile := strings.TrimSpace(b.set.LarkCLIProfile); profile != "" {
+		return profile, nil
 	}
-	return ""
+	if b.set.AppID != "" && b.set.SecretEnc != "" || h.cfg.Bots.Feishu.AppID != "" && h.cfg.Bots.Feishu.AppSecret != "" {
+		return managedLarkCLIProfile, nil
+	}
+	return "", nil
 }
 
 // larkCLIProfileChoice is the app's setting. It lives with the bot settings
@@ -91,7 +104,9 @@ func (h *Manager) botAppCredentials(ctx context.Context) (appID, secret, domain 
 	b := &h.bots
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	h.loadBotsLocked(ctx)
+	if err := h.loadBotsLocked(ctx); err != nil {
+		return "", "", ""
+	}
 	appID, secret, domain, _, err := h.botCredentialsLocked()
 	if err != nil {
 		// The app id is still safe and authoritative for profile selection even
@@ -111,6 +126,9 @@ func (h *Manager) botAppCredentialsID(ctx context.Context) string {
 // putting the app secret in argv or a returned error. It is intentionally a
 // no-op for an explicit profile and for a manager without bot credentials.
 func (h *Manager) syncLarkCLIProfile(ctx context.Context) error {
+	if _, err := h.resolveLarkCLIProfile(ctx); err != nil {
+		return err
+	}
 	if h == nil || h.cfg == nil || h.cfg.Lark.CLI == nil || h.configuredLarkCLIProfile() != "" || h.larkCLIProfileChoice(ctx) != "" {
 		return nil
 	}
@@ -148,7 +166,11 @@ func (h *Manager) validateLarkCLIProfile(ctx context.Context, choice string) err
 		return fmt.Errorf("lark-cli is not configured")
 	}
 	cli := h.cfg.Lark.CLI
-	r := larkcliadapter.New(larkcliadapter.Config{Bin: cli.Bin, Profile: h.effectiveLarkCLIProfile(ctx), Timeout: 5 * time.Second})
+	profile, err := h.resolveLarkCLIProfile(ctx)
+	if err != nil {
+		return err
+	}
+	r := larkcliadapter.New(larkcliadapter.Config{Bin: cli.Bin, Profile: profile, Timeout: 5 * time.Second, ResolveProfile: h.resolveLarkCLIProfile})
 	profiles, err := r.Profiles(ctx)
 	if err != nil {
 		return err
@@ -168,7 +190,10 @@ func (h *Manager) setLarkCLIProfile(ctx context.Context, choice string) error {
 	choice = strings.TrimSpace(choice)
 	b := &h.bots
 	b.mu.Lock()
-	h.loadBotsLocked(ctx)
+	if err := h.loadBotsLocked(ctx); err != nil {
+		b.mu.Unlock()
+		return err
+	}
 	if b.set.LarkCLIProfile == choice {
 		b.mu.Unlock()
 		return nil
@@ -198,7 +223,19 @@ func larkCLIBrand(domain string) string {
 func (h *Manager) newLarkCLIConnector(profile string) *larkcliconnector.Connector {
 	cli := h.cfg.Lark.CLI
 	lc := larkcliconnector.New(larkcliadapter.Config{Bin: cli.Bin, Profile: profile,
-		InboxPoll: cli.InboxPoll(), InboxPageLimit: cli.InboxPageLimit})
+		InboxPoll: cli.InboxPoll(), InboxPageLimit: cli.InboxPageLimit,
+		ResolveProfile: func(ctx context.Context) (string, error) {
+			current, err := h.resolveLarkCLIProfile(ctx)
+			if err != nil {
+				return "", err
+			}
+			if current != profile {
+				// Retained callers must not use the old connector's Inbox cursor
+				// and caches for the recovered account. The replacement owns them.
+				return "", errBotSettingsUnread
+			}
+			return current, nil
+		}})
 	lc.SetStateStore(h.store)
 	lc.SetInboxSource(h.cfg.Lark.Prefer, func(ctx context.Context) bool {
 		gateway := h.connectors.Get(connector.Lark)
@@ -217,14 +254,35 @@ func (h *Manager) refreshLarkCLIConnector(ctx context.Context) {
 	if h == nil || h.cfg == nil || h.cfg.Lark.CLI == nil || h.connectors == nil {
 		return
 	}
-	profile := h.effectiveLarkCLIProfile(ctx)
-	if existing := h.connectors.Get(larkcliconnector.ID); existing != nil {
-		if c, ok := existing.(*larkcliconnector.Connector); ok && c.Profile() == profile {
+	h.larkCLIRefreshMu.Lock()
+	defer h.larkCLIRefreshMu.Unlock()
+	if ctx.Err() != nil {
+		return
+	}
+	profile, err := h.resolveLarkCLIProfile(ctx)
+	if err != nil {
+		return
+	}
+	existing := h.connectors.Get(larkcliconnector.ID)
+	if existing == nil {
+		return // registerConnectors installs the placeholder before restoring switches
+	}
+	if c, ok := existing.(*larkcliconnector.Connector); ok && c.Profile() == profile {
+		return
+	}
+	if err := h.syncLarkCLIProfile(ctx); err != nil {
+		h.logf("larkcli profile sync: %v", err)
+		return
+	}
+	next := h.newLarkCLIConnector(profile)
+	if options, ok := connector.As[connector.Options](existing); ok {
+		if err := next.SetOptions(options.Options()); err != nil {
+			h.logf("larkcli connector settings: %v", err)
 			return
 		}
-		h.connectors.Remove(larkcliconnector.ID)
 	}
-	if err := h.addConnector(h.newLarkCLIConnector(profile)); err != nil {
+	h.connectors.Remove(larkcliconnector.ID)
+	if err := h.addConnector(next); err != nil {
 		h.logf("larkcli connector: %v", err)
 	}
 }
@@ -236,11 +294,14 @@ func (h *Manager) larkCLIView(ctx context.Context, botAppID string) *larkCLIBotV
 	if h == nil || h.cfg == nil || h.cfg.Lark.CLI == nil {
 		return nil
 	}
-	profile := h.effectiveLarkCLIProfile(ctx)
+	profile, err := h.resolveLarkCLIProfile(ctx)
+	if err != nil {
+		return nil
+	}
 	choice := h.larkCLIProfileChoice(ctx)
 	appID := ""
 	cli := h.cfg.Lark.CLI
-	r := larkcliadapter.New(larkcliadapter.Config{Bin: cli.Bin, Profile: profile, Timeout: 5 * time.Second})
+	r := larkcliadapter.New(larkcliadapter.Config{Bin: cli.Bin, Profile: profile, Timeout: 5 * time.Second, ResolveProfile: h.resolveLarkCLIProfile})
 	if auth, err := r.AuthStatus(ctx); err == nil {
 		appID = auth.AppID
 	}

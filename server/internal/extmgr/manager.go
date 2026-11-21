@@ -135,6 +135,7 @@ type Manager struct {
 
 	mail               Mail
 	connectors         *connector.Registry
+	larkCLIRefreshMu   sync.Mutex
 	imessageSettingsMu imessageContextLock
 	imessageArchive    imessageArchiveFence
 	imessageAIPending  atomic.Bool
