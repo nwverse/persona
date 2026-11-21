@@ -396,6 +396,13 @@ group and action, plus the optional inspector and timeline fields `started_at`, 
 (`GraphNodeLink`, a `{title, url}` pair). The hub's `downgrade10` (`server/internal/extension/ui_v10.go`) draws an older app one indented row per
 visible node in reading order; a native stream's source may draw a graph too (`UIStreamItem` lists it), but its client
 never gets one, at 10 included: the hub draws it as those rows. Its examples are `examples/View.v10-*.json`.
+UI version 11 (#12544) adds one component, `scene` (`SceneComponent`: `alt`, `caption`, `poster`, `camera`, `shapes`,
+`labels`, `pins`): a small 3D model of simple shapes (`SceneShape`, told apart by `kind`: `SceneBox`, `SceneCylinder`,
+`ScenePrism`, each with a `SceneColor` and a `SceneMaterial`), quiet floor names (`SceneLabel`) and devices (`ScenePin`, with
+an optional `SceneLight`). Numbers where 0 means something (`bottom`, `top`, `yaw`, `round`, heights, the camera's) are
+`x-go-pointer`. The hub's `downgrade11` (`server/internal/extension/ui_v11.go`) draws an older app the poster as an `image`, or
+without one a row per pin; a native stream's source may draw a scene too (`UIStreamItem` lists it), but its client never gets
+one: the hub draws it the same way. Its example is `examples/View.v11-scene-flat.json`.
 
 ## Adding a call
 
