@@ -2175,6 +2175,14 @@ its empty, correctable state, `keyboard` refuses the first single-choice save so
 a document without groups, `unsupported` shows an unknown kind and a newer schema version, and the failure scenarios show
 only the module they happen in. The page is never built.
 
+## Extension entry-list settings (#9504)
+
+`web/src/views/settings/Extensions.tsx` renders a declared extension entry list inside the existing extension settings page, not through the generic configuration-Document form above. `EntryListControl` uses the existing settings surfaces, field rows, buttons and shared secret/removal dialogs. Saved entry `_id` metadata keys each React entry but is not an input; an unsaved entry carries an enumerable symbol that object spreading preserves across immutable edits and `JSON.stringify` omits. Arrays are atomic when a dirty draft rebases onto a fresh detail, avoiding index-wise merges of different entries.
+
+`web/src/lib/extensions.ts` adds `entry_lists=1` to every detail read and detail-returning extension write, including lifecycle and secret responses. Without it the hub supplies the legacy projection, so a response to a write must not accidentally remove the editor on the next render. Immediate fixed-field saves (the machine switches) add `preserve_entries=1`: a stale page cannot turn its old entry array into removals or secret-clearing rebinds, and the response still contains the capable form. Entry add/edit/remove changes only the raw nested configuration draft; secret values stay exclusively in the existing write-only dialog and API. New entries cannot open that dialog until the hub has saved them and minted an ID. Dynamic secret rows are rendered in their entries, not duplicated in the fixed Secrets group. A required entry list keeps an explicit empty array through compaction, dirty tracking and draft rebasing; an optional one compacts back to absent. The shared helpers cover numeric paths, indexed validation errors (`accounts[0].address`), entry identity and the maximum-entry bound.
+
+The server contract, legacy preservation, egress/consent and fixed-slot migration are in `docs/extensions/extensions.md` ("Entry lists and per-entry secrets") and `docs/protocol/protocol.md` ("Extension entry-list settings"). The interaction rules and accessibility acceptance are in `docs/design/DESIGN_SYSTEM.md` ("Extension entry lists").
+
 ## Labs
 
 Settings › Labs (#9877; `web/src/views/settings/Labs.tsx`) is the one place for trial features and for choosing between a

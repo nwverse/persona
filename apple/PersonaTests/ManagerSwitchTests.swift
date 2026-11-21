@@ -230,7 +230,7 @@ struct ManagerSwitchTests {
     // MARK: whose page it is
 
     /// The screenshot banner (#9508) names the page as the top bar does (#12243): with one assistant the current one
-    /// ("助手", as the sidebar's head and the bar say it), not the persona's name, which the banner drew before; with
+    /// (the localized assistant name in the sidebar's head and the bar), not the persona's name, which the banner drew before; with
     /// several the picked one; without a roster the persona's. The composer, calls and voice keep `assistantShownName`.
     @Test func theScreenshotBannerSaysTheTopBarsName() throws {
         let model = try model(FakeHub(), roster: try Self.roster(Self.oneManager))
