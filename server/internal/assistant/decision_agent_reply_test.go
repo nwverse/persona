@@ -305,3 +305,44 @@ func TestSideConversationUserSpokeTextDoesNotWithdrawDecision(t *testing.T) {
 		return got != nil && got.AgentReply != nil && !got.DueAt.IsZero()
 	})
 }
+
+// A multi-hop relay reaching the Agent is another conversation's input, never the owner
+// answering its pending decision: neither the text path nor the hook transcript backstop may
+// settle or withdraw the card (issue #12369).
+func TestRelayMessageDoesNotWithdrawDecision(t *testing.T) {
+	relay := prompts.RenderRelay(prompts.Relay{FromID: "conv-other", FromTitle: "Direction",
+		Tool: "conversation_send", Hop: 1, MaxHops: 3, Text: "take this follow-up"})
+	t.Run("authenticated user_spoke text", func(t *testing.T) {
+		s, f, todo := decisionAgentReplyService(t)
+		a := askOf(s, todo.ID)
+		s.userSpokeText(context.Background(), SessionRef{MachineID: a.MachineID, SessionID: a.SessionID}, relay)
+		if got := askOf(s, todo.ID); got == nil || got.AgentReply != nil || !got.DueAt.IsZero() || got.Chosen != "" {
+			t.Fatalf("relay text changed the pending decision: %+v", got)
+		}
+		if signalled(s, f, todo.ID, sigDecisionReply, "task_decided") {
+			t.Fatal("relay text emitted a decision_reply signal")
+		}
+	})
+	t.Run("older node hook reported as user", func(t *testing.T) {
+		s, f, todo := decisionAgentReplyService(t)
+		a := askOf(s, todo.ID)
+		f.items = []proto.Item{
+			{Seq: 1, Role: "user", Kind: proto.KindText, Text: relay},
+			{Seq: 2, Role: "assistant", Kind: proto.KindText, Text: "On it."},
+		}
+		params, _ := json.Marshal(map[string]any{"session_id": a.SessionID, "event": "UserPromptSubmit", "prompt_source": "user"})
+		if !s.NodeEvent(a.MachineID, "hook.event", params) {
+			t.Fatal("hook event was not accepted")
+		}
+		time.Sleep(4 * shortSuperviseTimings.gather)
+		if got := askOf(s, todo.ID); got == nil || got.AgentReply != nil || got.Chosen != "" {
+			t.Fatalf("the relay hook changed the pending decision: %+v", got)
+		}
+		if signalled(s, f, todo.ID, sigDecisionReply, "task_decided") {
+			t.Fatal("the relay hook emitted a decision_reply signal")
+		}
+		if todoNow(s, todo.ID).Supervision.State != reviewNeedsUser {
+			t.Fatal("the pending decision left needs_user")
+		}
+	})
+}
