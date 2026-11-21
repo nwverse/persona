@@ -211,6 +211,15 @@ describe("where the numbers came from (#2595)", () => {
       await initI18n("zh-Hans");
     }
   });
+  it("shows agy quota windows instead of its missing-data row", () => {
+    const live = [account("agy", 25, 75, { provider: "agy", name: "Antigravity", local: true })];
+    const unconnected = unconnectedUsageProviders([{ name: "agy", agent: "agy" }], live);
+    expect(unconnected).toEqual([]);
+    const strip = renderToStaticMarkup(<UsageBars accounts={live} unconnected={unconnected} now={NOW} />);
+    expect(strip).toContain("Antigravity");
+    expect(strip).toContain("75%");
+    expect(strip).not.toContain("未接额度数据");
+  });
   it("lists active providers without usage data and hands setup off to the assistant on click", () => {
     const live = [account("c", 40, 75, { provider: "codex", name: "Codex Pro", local: true })];
     const unconnected = unconnectedUsageProviders(

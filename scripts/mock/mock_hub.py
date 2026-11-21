@@ -15107,8 +15107,11 @@ def auto_named(b):
 def machine_launchers(mid=""):
     """GET /api/v1/machines/{mid}/launchers's launchers: claude, sonnetcc and codex ("Create from the phone"; not on the
     Mac Studio under MOCK_NEW_AGENT_PANEL), under MOCK_PROVIDERS the managed providers Agents can start, each with its
-    display name, and under MOCK_DESKTOP_APPS the MacBook's claude-desktop and codex-app."""
+    display name, under MOCK_DESKTOP_APPS the MacBook's claude-desktop and codex-app, and under MOCK_TRAEX its discovered
+    Traex launcher."""
     out = [{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"}, codex_launcher()]
+    if os.environ.get("MOCK_TRAEX") and mid == "server":
+        out.append({"name": "traex", "model": "默认", "agent": "traex", "source": "zshrc"})
     if os.environ.get("MOCK_MODEL_PANEL_USAGE"):
         out += [{"name": "cc_main", "model": "opus"}, {"name": "cc_team", "model": "example-pro"}]
     if NEW_AGENT_PANEL and mid == "studio":
@@ -18933,13 +18936,15 @@ def paged_sessions(query):
                 counts[key][value] = counts[key].get(value, 0) + 1
         return counts, 200
     since = query.get("since", [None])[0]
-    removed = []
+    removed, created = [], set()
     if since:
         if since not in LIST_JOURNAL:
             return {"error": "Fixture changed; reload the list", "code": "revision_expired"}, 409
+        known = {LIST_TUPLE(s) for s in LIST_JOURNAL[since].values()}
         before = {LIST_TUPLE(s): s for s in matching(list(LIST_JOURNAL[since].values()))}
         now = {LIST_TUPLE(s) for s in rows}
         removed = sorted(k for k in before if k not in now)
+        created = now - known
         total = len(rows)
         rows = [s for s in rows if json.dumps(before.get(LIST_TUPLE(s)), sort_keys=True) != json.dumps(s, sort_keys=True)]
     cursor = query.get("cursor", [revision + ":0"])[0]
@@ -18966,6 +18971,7 @@ def paged_sessions(query):
     if not since: total = len(rows)
     result = {"sessions": selected, "remove": [k for kind, k in page if kind == "remove"], "has_more": more,
               "revision": revision, "total": total}
+    result["added"] = [LIST_TUPLE(s) for s in selected if LIST_TUPLE(s) in created]
     if more:
         result["next_cursor"] = revision + ":" + str(offset + limit)
     return result, 200

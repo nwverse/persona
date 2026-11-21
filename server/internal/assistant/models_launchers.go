@@ -147,6 +147,11 @@ type LauncherView struct {
 	Definitions map[string]string `json:"definitions,omitempty"`
 	// Details per machine (zshrc launchers, detail only): what the launcher really sets when run (node/launcherprobe.go).
 	Details map[string]proto.LauncherDetail `json:"details,omitempty"`
+	// Internal provenance for model.run admission (never serialized): whether this view came from a verified built-in
+	// Antigravity companion, and which machines in Machines have a model.run-compatible entry (non-nil when built from
+	// machine snapshots).
+	builtinCompanion bool
+	modelRunMachines []string
 }
 
 // launcherView is a managed launcher for the app: never the key or the headers.

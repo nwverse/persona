@@ -85,7 +85,12 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 		}
 	}
 
-	repoPRs, repoIssues := s.todoLinkedDeliveryRefs(ctx, t.ID)
+	repoPRs, repoIssues, err := s.todoLinkedDeliveryRefs(ctx, t.ID)
+	if err != nil {
+		s.logf("task %s: linked repository delivery status temporarily unverifiable: %v", t.ID, err)
+		return "", fmt.Errorf("%s", i18n.T(s.lang(ctx), "assistant-reports.delivery_verification_unavailable",
+			i18n.Args{"task": t.ID, "pr": cmp.Or(pr, t.ID), "reason": fmt.Sprint(err)}))
+	}
 	prs := make([]string, 0, 1+len(repoPRs))
 	seenPR := map[string]bool{}
 	addPR := func(u string) {
@@ -126,7 +131,7 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 	}
 
 	for _, issueURL := range repoIssues {
-		n, err := s.checkIssueDelivery(ctx, t, issueURL)
+		n, err := s.checkIssueDelivery(ctx, t, issueURL, gate)
 		if err != nil {
 			return "", err
 		}
@@ -231,7 +236,7 @@ func (s *Service) tryForgetNonPR(ctx context.Context, t Todo, pr, repo string, n
 }
 
 // checkIssueDelivery verifies that a linked repository issue is closed before closing the task.
-func (s *Service) checkIssueDelivery(ctx context.Context, t Todo, issueURL string) (string, error) {
+func (s *Service) checkIssueDelivery(ctx context.Context, t Todo, issueURL, gate string) (string, error) {
 	if m := ciIssueURL.FindStringSubmatch(issueURL); m != nil {
 		f, ok := s.forge().(issueStateForge)
 		if !ok {
@@ -242,7 +247,7 @@ func (s *Service) checkIssueDelivery(ctx context.Context, t Todo, issueURL strin
 		state, err := f.IssueState(cctx, m[1], number)
 		cancel()
 		if err != nil {
-			if errors.Is(err, errGitHubUnconfigured) {
+			if gate == deliveryGateMerged && errors.Is(err, errGitHubUnconfigured) {
 				s.logf("task %s: linked issue %s not checked: GitHub is not connected (%v)", t.ID, issueURL, err)
 				return i18n.T(s.lang(ctx), "assistant-reports.delivery_host_not_connected", i18n.Args{"pr": issueURL, "host": "github.com"}), nil
 			}
@@ -292,10 +297,13 @@ func (s *Service) otherHostIssueDelivery(ctx context.Context, t Todo, issueURL s
 }
 
 // todoLinkedDeliveryRefs reads saved repository pull_request and issue links for task id.
-func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id string) (prs, issues []string) {
+func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id string) (prs, issues []string, err error) {
+	if _, ok := s.store().(todoRepositoryStore); !ok {
+		return nil, nil, nil
+	}
 	set, err := s.savedTodoRepositories(ctx, id)
 	if err != nil {
-		return nil, nil
+		return nil, nil, err
 	}
 	seenIssue := map[string]bool{}
 	for _, row := range set.Repositories {
@@ -316,7 +324,7 @@ func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id string) (prs, i
 			}
 		}
 	}
-	return prs, issues
+	return prs, issues, nil
 }
 
 // taskIsReadonly reports whether task t was planned as a read-only task.

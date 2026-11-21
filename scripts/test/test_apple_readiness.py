@@ -22,6 +22,8 @@ FAKE_XCODE = textwrap.dedent('''\
     root = Path(os.environ["FAKE"])
     with (root / "xcode-calls.jsonl").open("a") as log:
         log.write(json.dumps(args) + "\\n")
+    with (root / "xcode-env.jsonl").open("a") as log:
+        log.write(json.dumps({key: os.environ[key] for key in ("TEST_RUNNER_PERSONA_SHOTS",) if key in os.environ}) + "\\n")
     if "-only-testing:PersonaTests/AboutVersionRegularVisualTests" in args:
         assert "-only-testing:PersonaTests/AboutVersionRegularVisualTests" in args, args
         assert os.environ["TEST_RUNNER_PERSONA_SHOTS"].endswith("/regular-shots")
@@ -259,6 +261,25 @@ IOS_COMMON=(xcodebuild)
             "iOS regular-width About visual test on real iPad|600",
             "Inspect test results (ios-about-regular)|120",
         ])
+        self.assertIn("TEST_RUNNER_PERSONA_SHOTS",
+                      (self.root / "xcode-env.jsonl").read_text())
+
+    def test_compact_visual_output_directory_is_run_specific_and_not_a_skip(self):
+        result, calls = self.run_preparation()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        expected = str(self.output / "shots")
+        environments = [json.loads(line) for line in (self.root / "xcode-env.jsonl").read_text().splitlines()]
+        self.assertEqual(environments[:2], [{}, {}])
+        self.assertEqual(environments[2:], [{"TEST_RUNNER_PERSONA_SHOTS": expected},
+                                           {"TEST_RUNNER_PERSONA_SHOTS": str(self.output / "regular-shots")}])
+        for call in calls:
+            self.assertFalse(any(argument.startswith("PERSONA_SHOTS=") for argument in call))
+        support = (ROOT / "apple/PersonaTests/AboutVersionRefractTests.swift").read_text()
+        self.assertIn('try #require(ProcessInfo.processInfo.environment["PERSONA_SHOTS"])', support)
+        self.assertIn("native.pixels == shared.pixels", support)
+        self.assertIn("try FileManager.default.createDirectory(at: root", support)
+        self.assertNotIn('IOS_UNIT_SELECTION+=(-skip-testing:PersonaTests/AboutVersionCompactVisualTests)',
+                         SCRIPT.read_text()[SCRIPT.read_text().index('if [ "$LANE" != packages ]; then'):SCRIPT.read_text().index('if [ "$LANE" = ios18 ]; then', SCRIPT.read_text().index('IOS_FAILED=0'))])
 
     def test_cleanup_removes_both_owned_destinations_including_an_unparsed_ipad(self):
         source = SCRIPT.read_text()

@@ -556,6 +556,7 @@ type mainHandoff struct {
 	// A cleared external choice reserves this ID before its start, so retries cannot create another conversation.
 	For     string `json:"for,omitempty"`
 	Summary string `json:"summary,omitempty"`
+	Partial bool   `json:"partial,omitempty"`
 	Recent  []struct {
 		Role string `json:"role"`
 		Text string `json:"text"`
@@ -729,7 +730,7 @@ func (s *Service) newMain(ctx context.Context, carry bool, expect string) (strin
 	now := time.Now().UTC()
 	handoff := mainHandoff{From: old, MachineID: machine, Until: now}
 	carried := false
-	if carry && found {
+	if carry && (found || s.historyKnown(ctx, machine, old)) {
 		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		err := s.call(cctx, machine, DeviceAssistantHandoff, map[string]any{"session_id": old}, &handoff)
 		cancel()
@@ -962,6 +963,10 @@ func (s *Service) startRoutes() {
 		}
 		if in.Space != "" && in.Space != SpaceHealth {
 			apierr.Write(w, http.StatusBadRequest, fmt.Errorf("space %q: health or none", in.Space))
+			return
+		}
+		if in.Space == SpaceHealth && r.Header.Get(RoleHeader) == roleExtension {
+			apierr.WriteCode(w, http.StatusForbidden, "permission_denied", i18n.Err("apierr-apierr.health_start_forbidden"))
 			return
 		}
 		if in.Model = strings.TrimSpace(in.Model); checkModelID(in.Model) != nil {
@@ -1391,18 +1396,27 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 			return err
 		}
 	} else {
-		prevMode, hadMode := p["permission_mode"]
-		if err := s.applyModel(ctx, purpose, p); err != nil {
+		if err := preservePermissionMode(p, func() error { return s.applyModel(ctx, purpose, p) }); err != nil {
 			return err
-		}
-		if hadMode {
-			p["permission_mode"] = prevMode
-		} else {
-			delete(p, "permission_mode")
 		}
 	}
 	_, err := s.finishMainChatModel(ctx, machine, purpose, p, pickedLauncher)
 	return err
+}
+
+// preservePermissionMode runs fn against an existing conversation's send params without letting a purpose's
+// configured permission_mode be injected into or overwrite the session's active permission mode.
+func preservePermissionMode(p map[string]any, fn func() error) error {
+	prevMode, hadMode := p["permission_mode"]
+	if err := fn(); err != nil {
+		return err
+	}
+	if hadMode {
+		p["permission_mode"] = prevMode
+	} else {
+		delete(p, "permission_mode")
+	}
+	return nil
 }
 
 // sendOnPick puts conversation sid's pick into p (sendModel): its launcher, model and effort (an effort sent with the
@@ -1421,7 +1435,7 @@ func (s *Service) sendOnPick(ctx context.Context, machine, sid string, p map[str
 	if err := s.otherKindPick(ctx, machine, sid, pick.Launcher); err != nil {
 		return err
 	}
-	return s.applyPick(ctx, p, pick)
+	return preservePermissionMode(p, func() error { return s.applyPick(ctx, p, pick) })
 }
 
 // startedByTask: sid is a conversation a scheduled task started (origin task), also once it is no task's current

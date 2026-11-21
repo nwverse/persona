@@ -26,6 +26,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -598,6 +599,7 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 		MoreAfter  bool         `json:"more_after,omitempty"`
 		More       bool         `json:"more,omitempty"` // a fold's lines go on after these
 		StrictRead bool         `json:"strict_read,omitempty"`
+		Partial    bool         `json:"partial,omitempty"`
 		itemSpan
 	}
 	if err := m.call(ctx, "session.items", params, &res); err != nil {
@@ -885,8 +887,9 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		scopedPermissionDenied(w, extwire.ScopeAgentsPermissionMode)
 		return
 	}
-	if pr.Role == roleScoped && p.ResumeSessionID != "" && !h.scopedPublicSession(p.MachineID, p.ResumeSessionID) {
-		writeErr(w, http.StatusNotFound, errDeleteUnknown)
+	m := h.localMachine(p.MachineID)
+	if m == nil {
+		writeErr(w, http.StatusNotFound, i18n.Err("devices-api.unknown_machine"))
 		return
 	}
 	if pr.Role == roleExtension && p.ResumeSessionID != "" && p.PermissionMode != "" {
@@ -895,10 +898,15 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	m := h.localMachine(p.MachineID)
-	if m == nil {
-		writeErr(w, http.StatusNotFound, i18n.Err("devices-api.unknown_machine"))
-		return
+	if restrictedAgentData(r) {
+		if p.ResumeSessionID != "" && !h.publicSessionForControl(m, p.ResumeSessionID) {
+			writeErr(w, http.StatusNotFound, errDeleteUnknown)
+			return
+		}
+		if identity.InHealthSpace(startCwd(m, p.Cwd)) {
+			writeErrCode(w, http.StatusForbidden, "permission_denied", i18n.Err("apierr-apierr.health_start_forbidden"))
+			return
+		}
 	}
 	if h.machineUntrusted(m.cfg.ID) { // not confirmed yet (machine_trust.go)
 		writeErrCode(w, http.StatusConflict, "machine_pending", i18n.Err("hub-machine_trust.start_pending"))
@@ -1736,6 +1744,7 @@ func (h *Hub) sendBacklog(ctx context.Context, c *client, m *Machine, sid string
 			Items     []proto.Item `json:"items"`
 			HasMore   bool         `json:"has_more"`
 			MoreAfter bool         `json:"more_after"`
+			Partial   bool         `json:"partial,omitempty"`
 			itemSpan
 		}
 		if err := m.call(ctx, "session.items", params, &res); err != nil {
@@ -1751,6 +1760,9 @@ func (h *Hub) sendBacklog(ctx context.Context, c *client, m *Machine, sid string
 			res.Items = proto.WithoutImageData(res.Items)
 		}
 		out := res.itemSpan.into(map[string]any{"type": "items", "machine_id": m.cfg.ID, "session_id": sid, "items": res.Items, "backlog": true})
+		if res.Partial {
+			out["partial"] = true
+		}
 		if since == 0 {
 			// Only a page counted back from the end knows whether older items exist. A catch-up after since_seq does
 			// not: sending false there told the app the history was complete, and scrolling up stopped at its oldest.
