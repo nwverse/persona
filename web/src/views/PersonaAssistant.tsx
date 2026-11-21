@@ -236,7 +236,7 @@ function Starter({ main, cleared, onToggleSidebar }: { main?: boolean; cleared?:
   const assistant = useStore((s) => s.assistant);
   const manager = useShownManager();
   const selectedLauncher = usePickedLauncher(NEW_CONVERSATION);
-  const mention = useMemo<MentionSource>(() => ({ self: "persona-new", files: () => [], workspaces: true,
+  const mention = useMemo<MentionSource>(() => ({ self: "persona-new", files: () => [], workspaces: true, repositories: manager,
     skills: { manager, launcher: selectedLauncher, environment: assistant?.launcher ?? "" },
   }), [manager, selectedLauncher, assistant?.launcher]);
   const persona = usePersona();

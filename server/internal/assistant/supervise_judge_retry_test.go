@@ -71,6 +71,9 @@ func TestSupervisedJudgeRetryUsesLatestReply(t *testing.T) {
 	row := turnRow(proto.StatusDone, 4, "the latest reply")
 	f.setItems(turnPage("turn-1", "the latest reply", true)...)
 	f.setSessions("box", row)
+	s.tasks.mu.Lock()
+	s.tasks.working[todo.ID] = time.Now() // a start heard while the retry was pending: judge that stretch, not e.Work
+	s.tasks.mu.Unlock()
 	time.Sleep(2 * time.Millisecond)
 	s.watchTurn(context.Background(), todo, []proto.Session{row})
 	turnsQuiet(t, s, todo.ID)

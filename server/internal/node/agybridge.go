@@ -77,9 +77,9 @@ func (rh *RuntimeHost) wakeAgyBridge() {
 	}
 }
 
-// EnableAutoCompanions turns on automatic supervision of built-in CLI companions (Antigravity `agy`) once Listen runs.
-// Production nodes (`personad node --attach` and `personad node --stdio`) enable this; unit test fixtures leave it off
-// so the host machine's installed CLIs never join synthetic runtime tests.
+// EnableAutoCompanions turns on automatic supervision of built-in CLI companions (Antigravity `agy` and `opencode`)
+// once Listen runs. Production nodes (`personad node --attach` and `personad node --stdio`) enable this; unit test
+// fixtures leave it off so the host machine's installed CLIs never join synthetic runtime tests.
 func (rh *RuntimeHost) EnableAutoCompanions() {
 	rh.autoCompanions = true
 }
