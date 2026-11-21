@@ -31,7 +31,8 @@ GUARD_SUITES = ("test_doc_paths.py", "test_doc_go_paths.py", "test_doc_sections.
 FAKE_PYTHON = '#!/bin/sh\nprintf "%s|%s\\n" "$PWD" "$*" >> "$FAKE_PYTHON_LOG"\n'
 # check-fast.sh, the per-path table it reads its plan from (#11535) and the helper that names a failure's rerun and
 # compares it with the merge base (#12733): what a throwaway repository needs to plan and report.
-CHECK_FAST_FILES = ("scripts/test/check-fast.sh", "scripts/ci/check_fast_map.py", "scripts/ci/check_fast_compare.py")
+CHECK_FAST_FILES = ("scripts/test/check-fast.sh", "scripts/ci/check_fast_map.py", "scripts/ci/check_fast_compare.py",
+                    "scripts/test/go_test_partitioned.py", "scripts/test/go_partitions.py")
 # A go for the --compare-main tests: TestRed fails everywhere, TestMine only outside the merge base's checkout, where
 # go also hangs when FAKE_GO_HANG names a pid file; the repo-wide guards pass. Each call is logged with its directory.
 FAKE_GO_COMPARE = r"""#!/bin/sh

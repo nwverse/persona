@@ -1,10 +1,13 @@
 """go_partitions: internal/node's and internal/assistant's tests split into exact, disjoint -run patterns (CI shards,
 release build, test-server.sh)."""
+from pathlib import Path
 import re
 import unittest
 from unittest import mock
 
 import go_partitions as gp
+
+SERVER = Path(__file__).resolve().parents[2] / "server"
 
 LISTING = """TestAlpha
 TestBeta
@@ -70,6 +73,17 @@ class PartitionTests(unittest.TestCase):
                 self.assertEqual(len(gp.list_patterns("/server", package)), partitions)
             self.assertEqual(listed.call_args.args[0], ["go", "test", "-list", ".*", package])
             self.assertEqual(listed.call_args.kwargs["cwd"], "/server")
+
+    def test_a_package_that_splits_itself_is_partitioned_and_still_has_its_own_split(self):
+        # go_test_partitioned.py leaves these to their own TestMain under a <dir>/... argument: a package that lost its
+        # split would then run serially there, so the claim is checked against the package's tests.
+        self.assertTrue(gp.SPLITS_ITSELF)
+        for package in gp.SPLITS_ITSELF:
+            with self.subTest(package=package):
+                self.assertIn(package, gp.PACKAGES)
+                sources = "".join(path.read_text() for path in sorted((SERVER / package).glob("*_test.go")))
+                self.assertIn("func runPartitioned(", sources)
+                self.assertRegex(sources, r"(?ms)^func TestMain\(.*?\brunPartitioned\(\)")  # its TestMain calls it
 
 
 if __name__ == "__main__":
