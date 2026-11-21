@@ -365,6 +365,8 @@ struct InteractionPanel: View {
     @Environment(\.cardSources) private var sources
     /// Its container lets the user size it (#12306): the grabber on its top edge.
     @Environment(\.cardResize) private var resize
+    /// The question's Skip, drawn in the title row (#12306).
+    @State private var headerSkip: HeaderSkip?
 
     /// The form's cap while the keyboard is up (`cardFits`): the area less the card's header and margins; at least a tap
     /// target, so a sliver of a form never shows (a small iPhone with the shell's composer leaves the cards little more).
@@ -418,6 +420,7 @@ struct InteractionPanel: View {
                 if ownsScroll {
                     // These forms own their one scroll area and keep their answers outside it (#4839, #6605).
                     form.environment(\.cardFormCap, formCap)
+                        .environment(\.cardHeaderTakesSkip, !headerAway)
                         .transition(.opacity)
                 } else {
                     ScrollView {
@@ -456,6 +459,7 @@ struct InteractionPanel: View {
             .accessibilityHidden(collapsed)
         }
         .onPreferenceChange(QuestionsLeft.self) { questionsLeft = $0 }
+        .onPreferenceChange(HeaderSkipKey.self) { headerSkip = $0 }
         .padding(.horizontal, Theme.Space.l)
         // The grabber's strip takes the top margin's place, and a little more (#12306).
         .padding(.top, grabber == nil ? Theme.Space.m : Theme.Space.flush)
@@ -500,6 +504,14 @@ struct InteractionPanel: View {
                     .font(Theme.Font.captionMedium)
                     .foregroundStyle(Theme.accent)
                     .accessibilityIdentifier("interaction-source")
+                }
+                // Skip, a word beside View in Chat (#12306): it had a row of its own under the options.
+                if !collapsed, let skip = headerSkip {
+                    // In flight it stays, disabled, beside the sending mark, as it did under the options.
+                    if skip.skipping { SendingMark() }
+                    QuestionSkipButton(inHeader: true) { skip.action() }
+                        .fixedSize()
+                        .disabled(skip.sending)
                 }
                 if interaction.kind == .plan && !collapsed {
                     Button { showFullPlan = true } label: {
@@ -607,7 +619,10 @@ struct InteractionPanel: View {
 }
 
 /// Close a supported question without answering. A text action with a finger-sized target, not the card's fold mark.
+/// `inHeader`: in the card's title row (#12306), beside View in Chat, ⋯ and the fold: the target stays a finger's size
+/// and reaches over the row's margins, so the row is no taller than its fold.
 struct QuestionSkipButton: View {
+    var inHeader = false
     var action: () -> Void
 
     var body: some View {
@@ -623,7 +638,29 @@ struct QuestionSkipButton: View {
         .font(Theme.Font.captionMedium)
         .foregroundStyle(Theme.accent)
         .accessibilityIdentifier("question-skip")
+        .padding(.vertical, inHeader ? -(Theme.Size.tapTarget - Theme.Size.wellXS) / 2 : Theme.Space.flush)
     }
+}
+
+/// A question's Skip for its card's title row (#12306): the form owns what Skip does (its sending state, the field's
+/// focus), the panel draws it in its header. Before, Skip stood alone on a row under the options, about 60 pt for one word.
+struct HeaderSkip: Equatable {
+    var id: String
+    var sending: Bool
+    var skipping: Bool
+    var action: @MainActor () -> Void
+    static func == (a: Self, b: Self) -> Bool { a.id == b.id && a.sending == b.sending && a.skipping == b.skipping }
+}
+
+struct HeaderSkipKey: PreferenceKey {
+    static var defaultValue: HeaderSkip? { nil }
+    static func reduce(value: inout HeaderSkip?, nextValue: () -> HeaderSkip?) { value = value ?? nextValue() }
+}
+
+extension EnvironmentValues {
+    /// The card's title row shows and takes the question's Skip (`HeaderSkip`, #12306); false while it steps aside for
+    /// the keyboard (`InteractionPanel.headerAway`), when Skip goes back under the options.
+    @Entry var cardHeaderTakesSkip = false
 }
 
 /// AskUserQuestion, iOS-list style: the question, its options in one grouped box (numbered like the terminal, a
@@ -658,6 +695,9 @@ struct QuestionForm: View {
     private var failure: String? { model.answerFailure(interaction.uid) }
     /// Skip cancels the question: nothing a stopped Agent's work card sends (`cardLocalOnly`).
     private var canSkip: Bool { interaction.canCancel == true && !localOnly }
+    @Environment(\.cardHeaderTakesSkip) private var headerTakesSkip
+    /// Skip is drawn in the card's title row (#12306), not under the options.
+    private var skipInHeader: Bool { canSkip && headerTakesSkip }
 
     var body: some View {
         if AppStyle.current.usesBeautifulUI { BUIQuestionForm(interaction: interaction) } else { plainLayout }
@@ -678,7 +718,7 @@ struct QuestionForm: View {
             if showsReviewFooter {
                 ScreenReviewFooter(rows: QuestionSteps.rows(questions, answers: shownAnswers), sending: isSending ? "submit" : nil,
                                    back: { withAnimation(Theme.Motion.standard) { reviewing = false } }, submit: { send() }, answer: nil,
-                                   skip: canSkip ? { skip() } : nil)
+                                   skip: canSkip && !skipInHeader ? { skip() } : nil)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
             } else if showsFooter {
                 footer.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
@@ -686,9 +726,11 @@ struct QuestionForm: View {
         }
         .deliberateTap($dragged)
         .preference(key: QuestionsLeft.self, value: questions.filter { answer($0) == nil }.count)
+        .preference(key: HeaderSkipKey.self,
+                    value: skipInHeader ? HeaderSkip(id: interaction.uid, sending: isSending, skipping: skipping) { skip() } : nil)
     }
 
-    private var showsFooter: Bool { (needsFooter || canSkip) && !(stepped && reviewing) }
+    private var showsFooter: Bool { (needsFooter || (canSkip && !skipInHeader)) && !(stepped && reviewing) }
     private var showsReviewFooter: Bool { stepped && reviewing }
 
     private var contentCap: CGFloat? {
@@ -852,7 +894,7 @@ struct QuestionForm: View {
 
     private var footer: some View {
         HStack(spacing: Theme.Space.m) {
-            if canSkip {
+            if canSkip && !skipInHeader {
                 QuestionSkipButton { skip() }
                     .disabled(isSending)
             }
@@ -871,7 +913,7 @@ struct QuestionForm: View {
                 }
                 .themedButton(prominent: true)
                 .disabled(!canAdvance || isSending)
-            } else if skipping {
+            } else if skipping && !skipInHeader {
                 SendingMark()
             }
         }

@@ -6,7 +6,8 @@ import XCTest
 /// - the card's title row and fold are on the page, under the top bar, with conversation over it;
 /// - the conversation scrolls with the card open, and folded;
 /// - the card folds to one line (a question of several says how many are left, and keeps its page) and unfolds;
-/// - View in Chat brings the message the card is about into view and folds the card.
+/// - View in Chat brings the message the card is about into view and folds the card;
+/// - Skip is in the card's title row, with no row of its own under the options (#12306).
 /// Mock hubs (any free ports), each named by its environment variable (TEST_RUNNER_ prefix for xcodebuild):
 ///   PERSONA_CARD_HUB:  MOCK_AGENTS=1 MOCK_ASK_LONG=source  MOCK_CARD_SOURCE=1
 ///   PERSONA_CARD2_HUB: MOCK_AGENTS=1 MOCK_ASK_LONG=source2 MOCK_CARD_SOURCE=1
@@ -182,6 +183,7 @@ final class QuestionCardFoldTests: XCTestCase {
             settle(2)
             shot("main-open-\(look)")
             assertInPage(cards, "main, open (\(look))")
+            assertSkipInTitleRow(cards, "main, open (\(look))")
             assertConversationScrolls(above: cards, "main, open (\(look))")
 
             cards.buttons["interaction-fold"].firstMatch.tap()
@@ -371,6 +373,22 @@ final class QuestionCardFoldTests: XCTestCase {
     @MainActor private func showsWhole(_ task: XCUIElement) -> Bool {
         let last = text("等这一版发布以后再补")
         return last.exists && task.frame.contains(last.frame)
+    }
+
+    /// Skip is a word in the card's title row, beside its fold (#12306), still a finger's size, and nothing is left under
+    /// the options but the card's margin: Skip had a row of its own there, about 60 pt for one word.
+    @MainActor private func assertSkipInTitleRow(_ card: XCUIElement, _ step: String, file: StaticString = #filePath, line: UInt = #line) {
+        let skip = card.buttons["question-skip"].firstMatch
+        let fold = card.buttons["interaction-fold"].firstMatch
+        XCTAssertTrue(skip.exists && skip.isHittable, "\(step): no Skip", file: file, line: line)
+        XCTAssertEqual(skip.frame.midY, fold.frame.midY, accuracy: 4, "\(step): Skip (\(skip.frame)) is not in the title row (\(fold.frame))",
+                       file: file, line: line)
+        XCTAssertGreaterThanOrEqual(skip.frame.height, 44, "\(step): Skip is \(skip.frame.height) pt tall to a finger", file: file, line: line)
+        let other = card.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "其他回答")).firstMatch
+        XCTAssertTrue(other.exists, "\(step): no Other row", file: file, line: line)
+        XCTAssertLessThan(card.frame.maxY - other.frame.maxY, 44,
+                          "\(step): \(card.frame.maxY - other.frame.maxY) pt under the Other row (\(other.frame)) to the card's end (\(card.frame))",
+                          file: file, line: line)
     }
 
     /// Drags the grabber by `dy` (up is negative) and lets the card settle.
