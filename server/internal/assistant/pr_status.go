@@ -509,14 +509,16 @@ func parkPRsResolved(t Todo, r *TaskReview, observed string) bool {
 	return parkWaitsOnPR(r, terminal...)
 }
 
-// parkWaitsOnPR uses the recorded merge source for typed waits. Only legacy parks without evidence use prose or
-// bare "#N" references; a different typed source or kind must never fall back to the reason.
+// parkWaitsOnPR uses the exact source of a typed review or an automatically admitted passive PR wait.
+// Only legacy parks without evidence use prose or bare "#N"; manual external-event binding is separate.
 func parkWaitsOnPR(r *TaskReview, urls ...string) bool {
 	if r == nil || r.WaitingOn != parkExternalEvent && r.WaitingOn != parkSomeoneElse {
 		return false
 	}
 	if e := r.Evidence; e != nil {
-		if e.Kind != "merge_review" || !e.Ready || r.WaitingOn != parkSomeoneElse {
+		review := e.Kind == "merge_review" && e.Ready && r.WaitingOn == parkSomeoneElse
+		automatic := r.Automatic != nil && e.Kind == "external_event" && r.WaitingOn == parkExternalEvent
+		if !review && !automatic {
 			return false
 		}
 		source := triageNormalizePRURL(e.URL)

@@ -914,6 +914,82 @@ The existing ready `merge_review` path still gates terminal wakes on the task's 
 - **Contact and provenance**: show a last request only when its contact is complete, `status: "sent"`, its URL is a non-root HTTP(S) source without credentials, and `sent_at` is no later than now (`sentWaitContact` in `web/src/lib/task-wait.ts`; display projection `taskWait` in `web/src/lib/task-wait-info.ts`). Review evidence also requires `ready: true` and a PR/MR object URL. `recorded_by` identifies the recording conversation, not the contact or sender. Evidence is the supervisor's source-backed account; the hub does not fetch or independently verify that source. A legacy park with no evidence has unknown contact, source and wake; an implicit PR wait keeps its known PR link but has unknown contact, wake and start time. Do not invent missing values. Only waits that can record a sent request say when none is recorded (`person_reply`, `merge_review`, a legacy park, an implicit PR wait); `external_event` and `date` evidence never carries a contact, so their display shows the target, source, wake and fallback time with no request line (#10527). A target that describes a prompt to the owner is shown as written: it is not read as a sent request, a pending owner decision or consent. Only the optional, hub-verified `interaction_id` on `external_event` evidence links an existing owner request. While that exact card remains pending, the web shows it once under Needs you through its normal interaction route, not as a contact receipt or a second decision card; explicit defer and its schedule stay on the interaction. After resolution, or when no valid link was recorded, the task keeps its ordinary external-event presentation and fallback (`web/src/lib/assistant-entries.ts`, `web/src/lib/todos.ts`, and the manager's `todo/projection`).
 - **Due and reminder draft**: a passed `until` or a valid last contact older than 24 hours (`person_reply`) or 72 hours (`merge_review`) reads as due for follow-up. Only the last-contact threshold enables the editable reminder draft; Copy copies it locally and Open channel follows the recorded contact. Successful copy dismisses the editor; failed copying or an edit made while clipboard permission is pending keeps the draft. No external message is sent, no event is watched, no park is automatically ended, and no round is incremented. A minute clock refreshes displayed age/due text only. At `until`, `parked_due` is for the supervisor and the task remains parked until the supervisor acts.
 
+### Automatic closeout admission
+
+(#9914, `assistant/park_closeout.go`.) Before routing an idle, stalled, orphaned or all-stopped
+signal, the manager can park one reachable, stopped current Agent from its final external-wait closeout.
+A `done`, `not_done` or `blocked` turn may still wait on external delivery: read its `waiting`
+line, or the current delivery line's gate when delivery is held and `unblock` is `other`.
+A legacy delivery line without a structured closeout can supply the same explicit gate; a malformed
+closeout cannot fall back to it. A PR URL without an external blocker is insufficient.
+The wait must satisfy the same `readPark` admission as `task_review parked`.
+This changes neither acceptance nor deployment, and needs no new feature switch.
+Missing or conflicting evidence, owner decisions, working/queued/errored Agents, interactions,
+independent reviews, multi-Agent ambiguity and existing scheduled wakes retain ordinary supervision.
+
+- A dated wait may name an RFC 3339 timestamp, or an ISO calendar date in the hub's time zone
+  (midnight at that date). The existing one-minute to 30-day deadline bounds apply.
+- A deployment/release/natural-event wait may name its exact HTTP(S) source in `waiting`, or name
+  the object's final path component and supply that URL as a `build` or `url` artifact.
+  An unrelated artifact or a PR link alone is insufficient for a deployment object.
+  Unbound "wait for a system message" stays idle.
+- An explicit upstream merge/review wait can name one exact PR/MR in the last closeout's
+  `waiting` field or artifacts. For example, a maintainer re-review wait need not repeat its
+  `artifact: pr` URL in `waiting`. A link found only outside that closeout is not binding evidence;
+  legacy delivery-only replies still use their final reply. Admit it only when it is bound to the task and has fresh, open, non-draft,
+  non-conflicting facts with a known head, no requested changes and no failing checks.
+  Multiple distinct PR links remain ambiguous. This is a passive `external_event` object,
+  not a claim that a reviewer was contacted; it creates no contact or supervisor-inspection receipt.
+  The wait must positively name an outside actor, such as upstream, a maintainer or a reviewer.
+  Generic "pending" or "waiting for review" alone does not establish that dependency.
+  First-person unfinished review or merge work stays actionable even beside a valid PR or receipt.
+- For a sent person/review request, or an external object that cannot be identified from that text,
+  the final closeout may add one `park: {"waiting_on":"...","until":"...","evidence":{...}}` line.
+  This uses the evidence fields above, not a new receipt format; `waiting` must name the evidence
+  target. Sent contact fields cannot be inferred from a PR URL. A review also requires an existing,
+  fresh, open, non-draft, non-conflicting task PR observation without requested changes.
+  Alternatively, the exact source and the same wait kind can reuse the last review's inspected
+  evidence: "waiting for upstream review" need not repeat an already recorded reviewer's name.
+  Declared contact evidence is still a source-referenced account, not an independently fetched
+  provider receipt. The review's `by` is `closeout`; its evidence never claims a supervisor inspection.
+- Automatic passive PR waits reuse the existing exact-source terminal-PR and dated
+  changes-request observers, including their freshness, retry, replacement and multi-PR gates.
+  They wake review, never accept the task. This binding requires automatic provenance:
+  manually recorded external-event PR waits remain in the independently owned #9775 scope.
+  Existing named-person reply, owner-decision and deadline observers still apply. Other deployment/event
+  sources get the existing deadline fallback, not a new generic event watcher; ordinary PR comments
+  without a supported status transition likewise retain the deadline fallback.
+- The unchanged dependency and stopped-turn identity persist in the existing review JSON.
+  The first two distinct stopped turns can park silently; the third unchanged attempt goes to
+  the supervisor instead. Replaying a stopped turn spends no attempt; merely running the Agent
+  again does not reset this automatic streak. A new source/contact/date or an intervening manual
+  review starts a new streak. Rewording a wait about the same source does not reset it.
+- On startup, the supervision sweep also reconciles open tasks whose sole current Agent stopped
+  before this manager started, even if their idle receipt was already told. Each ready task is
+  inspected once per manager start, at most four per supervision sweep, through the same admission and safety gates. Missing session
+  inventory, work state or fresh facts for the wait's bound PR defer inspection until available.
+  Unrelated task PRs do not gate a deployment/date wait or a different evidenced PR. A repeated
+  startup never spends another unchanged attempt for the same durable stopped-turn identity.
+- At the first supervision sweep at or after 09:00 hub-local time, starting the next calendar day,
+  still-current, unexpired automatic parks enter one ordinary batched digest per supervisor.
+  The summary is informational and does not ask to resume unchanged work. Existing effective
+  supervisor routing, queueing and durable deduplication apply; a task is listed at most once per
+  supervisor/calendar day, including after a restart or replacement park. Failed sends remain
+  retryable. Task-bound summary fingerprints are pruned on closure, including older summary
+  receipts whose exact key still identifies the task. Expired parks use the actionable `parked_due` path instead.
+
+For example, `waiting: deployment rollout-42` with
+`artifact: build https://example.org/deployments/rollout-42` records that deployment object and the
+default 24-hour deadline. A complete review wait can instead supply:
+
+```text
+waiting: reviewer-a responds to the requested review
+park: {"waiting_on":"someone_else","until":"3d","evidence":{"kind":"merge_review","target":"reviewer-a","url":"https://github.com/example/project/pull/42","wake":"The requested review or merge changes","ready":true,"contact":{"channel":"project discussion","url":"https://example.org/messages/request-42","sender":"requester-a","sent_at":"2026-11-17T08:00:00Z","request":"Please review the ready change","status":"sent"}}}
+```
+
+The example is a schema illustration, not evidence of a real sent request. The source must be
+checkable and the request must actually have been sent; drafts and unknown sends cannot justify silence.
+
 ## Decision deadlines
 
 (#3127, `assistant/decision_deadline.go`.) A decision that waits for the owner can carry a recommended default and a deadline, so work does not stop just because nobody answered. Without a deadline nothing changes.

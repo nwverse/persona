@@ -479,6 +479,16 @@ card but never reached the supervisor, and a retry that failed with the first tr
 A new signal kind whose key names one event, rather than moving with every turn, belongs in `keyIsNews`; test it with
 the agent's words unchanged, which is the case that hides the drop (the task's agent is usually stopped while it waits).
 
+## New closeout admission needs startup reconciliation (#9914)
+
+Screening a new idle signal does not revisit a stop whose receipt was already told before rollout.
+Reconcile old stopped tasks from the existing supervision sweep, before producing new idle signals,
+with the same current-turn, owner, queue, scheduled-wake and source-freshness checks. Bound transcript
+reads per sweep and remember completed inspections; do not consume an inspection while inventory
+or PR facts are missing, or when the ledger write fails. Persist the stopped-turn identity so a
+restart neither spends another automatic attempt nor hides an already-delivered wake.
+Bind a passive review wait to its final closeout's PR/MR artifact, not a link in an earlier closeout.
+
 ## A card the chat waits on must be in the chat (#4883)
 
 A Persona conversation's first Bash waited three and a half minutes for approval while its card was only inside the
