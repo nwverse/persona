@@ -161,10 +161,13 @@ func TestA2AAmbiguousSendIsReconciledWithoutReplay(t *testing.T) {
 	marked := prompts.RelayMessageText("A2A request", nil, a2aDeliveryID(tk.ID, 1))
 	h.setItems(proto.Item{Role: "user", Text: marked}, proto.Item{Role: "assistant", Kind: proto.KindText, Text: "Result."},
 		proto.Item{Role: "user", Text: "An unrelated new prompt."}, proto.Item{Role: "assistant", Kind: proto.KindText, Text: "Unrelated."})
-	a2aProcessOne(t, s, st, cfg, tk.ID)
 	tk = a2aProcessOne(t, s, st, cfg, tk.ID)
 	if len(h.sends) != 1 || tk.State != a2aWorking || tk.Events[0].Delivery != a2aDelivered {
-		t.Fatalf("uncertain send or unrelated answer: %+v", tk.Events)
+		t.Fatalf("late delivery was not confirmed: %+v", tk.Events)
+	}
+	tk = a2aProcessOne(t, s, st, cfg, tk.ID)
+	if len(h.sends) != 1 || tk.State != a2aFailed {
+		t.Fatalf("unrelated turn was accepted as a result or the input was replayed: %+v", tk.Events)
 	}
 }
 
