@@ -359,6 +359,16 @@ test('companion assistant mode wires HTTP MCP end-to-end, hides context, enforce
       ],
     })
     assert.deepEqual(gated, { outcome: { outcome: 'selected', optionId: 'reject' } })
+    n.setHub(false)
+    await until('hub disconnected during native permission', () => !companion.runtime.hubConnected)
+    const disconnected = await client.onPermissionRequest({
+      sessionId,
+      toolCall: { toolCallId: 'tc_offline', kind: 'execute', title: 'bash', rawInput: { command: 'pwd' } },
+      options: [{ optionId: 'once', kind: 'allow_once', name: 'Allow' }, { optionId: 'reject', kind: 'reject_once', name: 'Reject' }],
+    })
+    assert.deepEqual(disconnected, { outcome: { outcome: 'selected', optionId: 'reject' } })
+    n.setHub(true)
+    await until('hub reconnected during native permission', () => companion.runtime.hubConnected)
 
     // Memory write auto-allows without asking phone.
     const mem = await client.onPermissionRequest({
