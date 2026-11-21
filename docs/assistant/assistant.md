@@ -1279,6 +1279,21 @@ The web advertises this editor through the `task_execution` feature and shows ru
 entry. Native clients can continue editing legacy fields without clearing execution choices; their task-specific
 execution controls are not added here. Acceptance uses isolated RPC/CLI and browser fixtures, with no real model call.
 
+### Files and skills in scheduled prompts
+
+In the Web task editor, type `@` to choose a file or skill, or `/` to choose a skill or reusable prompt.
+The editor uses Assistant's composer and keyboard menus. Selections appear as removable chips. Save writes
+the text and its leading context tags together and marks the task as containing selections. Reopening the task restores both. Plain text uses the existing
+task format, including when an older hub supplies the editor.
+
+The task's effective computer, launcher and working directory determine the available references. When the
+selected computer needs an update for file and skill selections, the editor shows a message. Text and reusable
+prompts still work there. A changed
+execution environment can require choosing a reference again. At save time the selected node checks the
+references. At run time the headless send checks them again. File references identify files in the working
+directory, and skill references identify entries in the active catalog. A scheduled run and **Run now** use
+the current resources and the task's usual permissions. A selection does not store a copy of a file or skill.
+
 ### Push after running (#2396)
 
 Every run completes a turn in a chat; hub pushes "Finished" for every turn (`notifyFinished` in `assistant/fleet_push.go`). Tasks like morning briefings always have results to read, so that's fine;
