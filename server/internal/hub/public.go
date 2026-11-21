@@ -237,7 +237,7 @@ func (h *Hub) serveHTTP(ctx context.Context) error {
 	injected := h.public.testPlaintext
 	if injected != nil {
 		// Register the injected listener now so every later startup failure closes it. Clear the hook after taking
-		// ownership: the wrapped listener below is the sole close for this socket on the normal serving path.
+		// ownership; serveHTTP uses this same listener below instead of binding its address again.
 		listeners = append(listeners, injected)
 		h.public.testPlaintext = nil
 	}
