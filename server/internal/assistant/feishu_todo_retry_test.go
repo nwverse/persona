@@ -7,15 +7,18 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // All calls terminate at fakeHub. Accepted cards are indexed by the transport UUID, independently of whether the
-// caller receives their receipt, to model Feishu's deduplication of an ambiguous send.
+// caller receives their receipt. This synthetic at-most-once set does not establish provider receipt semantics;
+// tests that receive old IDs below describe that fake response, not a promise made by the platform.
 type todoRetryPosts struct {
 	mu       sync.Mutex
 	posts    []map[string]any
@@ -267,6 +270,171 @@ func TestFeishuTodoReminderStopsObsoleteOccurrence(t *testing.T) {
 				synctest.Wait()
 				if posts, _ := capture.snapshot(); len(posts) != 1 {
 					t.Fatalf("obsolete reminder sent %d attempts", len(posts))
+				}
+			})
+		})
+	}
+}
+
+type todoRetrySourceHub struct {
+	*fakeHub
+	down atomic.Bool
+}
+
+func (h *todoRetrySourceHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Method == DeviceSessionGet && h.down.Load() {
+		return nil, errors.New("synthetic source node disconnected")
+	}
+	return h.fakeHub.DeviceCall(ctx, p)
+}
+
+// These controls concern authorization and privacy, not the provider's response to a duplicate UUID.
+func TestFeishuTodoReminderRetryAuthority(t *testing.T) {
+	for _, change := range []string{"owner", "generation", "health disconnected", "unknown source", "known ordinary", "companion after bot", "companion after unknown first", "route refusal", "initial companion"} {
+		t.Run(change, func(t *testing.T) {
+			f, s, _ := todoReminderHub(t)
+			source := &todoRetrySourceHub{fakeHub: f}
+			s.hub = source
+			s.workbenchOn(FeishuFeatures{Workbench: true}, true) // unrelated standing-card loop stays outside the virtual clock
+			synctest.Test(t, func(t *testing.T) {
+				changed := false
+				var capture todoRetryPosts
+				f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
+					owner, paired := "ou_a", time.Unix(100, 0)
+					if changed && change == "owner" {
+						owner = "ou_b"
+					}
+					if changed && change == "generation" {
+						paired = paired.Add(time.Second)
+					}
+					return FeishuStatus{Ready: true, Owner: owner, PairedAt: paired, Features: FeishuFeatures{Pushes: true, Workbench: true}}, nil
+				})
+				companion := func() {
+					s.fbot.mu.Lock()
+					s.loadBotLocked(context.Background())
+					s.fbot.st.Companions = []CompanionBot{{Kind: CompanionNotify, Name: "Synthetic", AppID: "cli_synthetic"}}
+					s.fbot.mu.Unlock()
+					s.companions.mu.Lock()
+					s.companions.polled = time.Now()
+					s.companions.mu.Unlock()
+				}
+				f.answerAppBlocking(AppFeishu, FeishuPost, func(raw json.RawMessage) (any, error) {
+					n, mid := capture.record(raw, change != "route refusal")
+					fail := n == 1
+					if change == "companion after bot" {
+						fail = n == 2
+					}
+					if fail {
+						changed = true
+						if change == "health disconnected" {
+							source.down.Store(true)
+						}
+						if change == "companion after bot" || change == "companion after unknown first" {
+							companion()
+						}
+						if change == "route refusal" {
+							return nil, &rpc.Error{Code: CodeChatDenied, Message: "original pairing unavailable"}
+						}
+						return nil, context.DeadlineExceeded
+					}
+					return map[string]any{"message_id": mid}, nil
+				})
+				at := time.Now().Add(-time.Minute)
+				todo := Todo{ID: "todo_authority", Title: "Private synthetic title", Notes: "Private synthetic notes", RemindAt: &at}
+				if change == "health disconnected" {
+					todo.Origin = "health1"
+				}
+				if change == "unknown source" {
+					todo.Origin = "missing"
+				}
+				if change == "known ordinary" {
+					todo.Origin = "m1"
+				}
+				if change == "companion after bot" || change == "companion after unknown first" {
+					todo.Notes = strings.Repeat("Synthetic paragraph.\n\n", 900)
+				}
+				installRetryTodo(s, todo)
+				if change == "initial companion" {
+					companion()
+				}
+				s.feishuTodoReminder("server", "m1", todo.Title, todo.Notes, todo)
+				posts, _ := capture.snapshot()
+				s.companions.mu.Lock()
+				notices := len(s.companions.list)
+				s.companions.mu.Unlock()
+				switch change {
+				case "owner", "generation", "route refusal":
+					if len(posts) != 1 {
+						t.Fatalf("old pairing retried %d posts", len(posts))
+					}
+				case "health disconnected", "unknown source":
+					if len(posts) != 2 {
+						t.Fatalf("posts=%d, want retry", len(posts))
+					}
+					for _, p := range posts {
+						card := p["card"].(string)
+						if strings.Contains(card, todo.Title) || strings.Contains(card, todo.Notes) {
+							t.Fatal("health reminder exposed original notes after disconnect")
+						}
+					}
+					if change == "health disconnected" && posts[0]["card"] != posts[1]["card"] {
+						t.Fatal("health retry changed the generic card")
+					}
+				case "known ordinary":
+					if len(posts) != 2 || !strings.Contains(posts[1]["card"].(string), todo.Notes) {
+						t.Fatal("known ordinary source lost original notes")
+					}
+				case "companion after bot", "companion after unknown first":
+					if notices != 0 || len(posts) < 4 {
+						t.Fatalf("bot route moved to companion: posts=%d notices=%d", len(posts), notices)
+					}
+				case "initial companion":
+					if len(posts) != 0 || notices == 0 {
+						t.Fatalf("initial companion lost: posts=%d notices=%d", len(posts), notices)
+					}
+				}
+				for _, p := range posts {
+					binding, ok := p["todo_reminder_pairing"].(map[string]any)
+					if !ok || binding["owner"] != "ou_a" || binding["paired_at"] == nil {
+						t.Fatal("bot post lost original pairing constraint")
+					}
+				}
+			})
+		})
+	}
+}
+
+// The fake never promises an old message ID for duplicate UUIDs. Acceptance and a usable receipt are separate.
+func TestFeishuTodoReminderUnknownDuplicateReceipt(t *testing.T) {
+	for _, paused := range []bool{false, true} {
+		t.Run(fmt.Sprint(paused), func(t *testing.T) {
+			f, s, _ := todoReminderHub(t)
+			synctest.Test(t, func(t *testing.T) {
+				var capture todoRetryPosts
+				f.answerAppBlocking(AppFeishu, FeishuPost, func(raw json.RawMessage) (any, error) {
+					capture.record(raw, true)
+					if paused {
+						time.Sleep(time.Hour) // sleep-ok: advance only a stalled synctest attempt beyond UUID retention
+						return nil, context.DeadlineExceeded
+					}
+					return map[string]any{}, nil
+				})
+				at := time.Now().Add(-time.Minute)
+				todo := Todo{ID: "todo_unknown_receipt", Title: "Reminder", RemindAt: &at}
+				installRetryTodo(s, todo)
+				s.feishuTodoReminder("server", "m1", todo.Title, "Notes", todo)
+				posts, accepted := capture.snapshot()
+				want := 1 + feishuMirrorRetries
+				if paused {
+					want = 1
+				}
+				if len(posts) != want || accepted != 1 {
+					t.Fatalf("unknown receipt: attempts=%d accepted=%d want=%d/1", len(posts), accepted, want)
+				}
+				for _, p := range posts {
+					if p["uuid"] == "" || p["uuid"] != posts[0]["uuid"] {
+						t.Fatal("unknown receipt changed identity")
+					}
 				}
 			})
 		})
