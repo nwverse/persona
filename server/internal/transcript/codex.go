@@ -267,6 +267,7 @@ func parseCodexLine(seq int, line []byte, meta *Meta) []proto.Item {
 			}
 		}
 		meta.codexWorked(out)
+		meta.observeItemsContext(out)
 		return meta.codexModel(out)
 	}
 	var p codexPayload
@@ -356,6 +357,10 @@ func parseCodexLine(seq int, line []byte, meta *Meta) []proto.Item {
 		return []proto.Item{it}
 	case "thread_goal_updated":
 		return meta.codexGoalUpdated(p.Goal, l.Timestamp, func() proto.Item { return mk(0, "", "system", proto.KindNotice) })
+	case "context_compacted", "compacted":
+		meta.ContextTokens, meta.ContextCompacted = 0, true
+		meta.ContextStats.ResetCompacted()
+		return nil
 	case "item_completed":
 	default:
 		return nil
@@ -365,6 +370,7 @@ func parseCodexLine(seq int, line []byte, meta *Meta) []proto.Item {
 	}
 	out := codexItemLines(seq, l.Timestamp, p.Item, meta)
 	meta.codexWorked(out)
+	meta.observeItemsContext(out)
 	return meta.codexModel(out)
 }
 
@@ -582,6 +588,8 @@ func codexItemLines(seq int, ts time.Time, it *codexItem, meta *Meta) []proto.It
 		return codexCollabCall(mk, it)
 	case "ContextCompaction":
 		meta.Compactions++
+		meta.ContextTokens, meta.ContextCompacted = 0, true
+		meta.ContextStats.ResetCompacted()
 		n := mk(0, it.ID, "system", proto.KindNotice)
 		n.Text = CompactedNotice
 		return []proto.Item{n}
