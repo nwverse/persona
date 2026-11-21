@@ -20,6 +20,8 @@ type ConversationHistory struct {
 	Revision                      int64
 	Coverage                      []conversationlog.Range
 	TailSeq                       *int
+	Summary                       string
+	SummaryKnown                  bool
 }
 
 // ConversationPage is an unfolded source page. ExpectedHistory is a compare-and-swap
@@ -35,15 +37,17 @@ type ConversationPage struct {
 func (d *DB) ConversationHistory(ctx context.Context, machine, session string) (*ConversationHistory, error) {
 	var h ConversationHistory
 	var coverage []byte
-	err := d.pool.QueryRow(ctx, `SELECT machine_id,session_id,history,revision,coverage,tail_seq
+	var summary []byte
+	err := d.pool.QueryRow(ctx, `SELECT machine_id,session_id,history,revision,coverage,tail_seq,summary,summary_known
 		FROM conversation_histories WHERE machine_id=$1 AND session_id=$2`, machine, session).
-		Scan(&h.MachineID, &h.SessionID, &h.History, &h.Revision, &coverage, &h.TailSeq)
+		Scan(&h.MachineID, &h.SessionID, &h.History, &h.Revision, &coverage, &h.TailSeq, &summary, &h.SummaryKnown)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	h.Summary = string(summary)
 	err = json.Unmarshal(coverage, &h.Coverage)
 	return &h, err
 }
@@ -98,6 +102,9 @@ func (d *DB) PutConversationPage(ctx context.Context, p ConversationPage) error 
 				return err
 			}
 			ranges, tail = nil, nil
+			if _, err := tx.Exec(ctx, `UPDATE conversation_histories SET summary='',summary_known=false WHERE machine_id=$1 AND session_id=$2`, p.MachineID, p.SessionID); err != nil {
+				return err
+			}
 		} else if p.Revision != 0 && revision != 0 && p.Revision < revision {
 			return ErrConversationHistoryChanged
 		}
@@ -113,6 +120,12 @@ func (d *DB) PutConversationPage(ctx context.Context, p ConversationPage) error 
 			tail = &end
 		}
 		b := &pgx.Batch{}
+		for _, row := range bounded {
+			if row.Item.Compact != nil {
+				b.Queue(`UPDATE conversation_histories SET summary='',summary_known=false WHERE machine_id=$1 AND session_id=$2`, p.MachineID, p.SessionID)
+				break
+			}
+		}
 		positions := map[int]int{}
 		for _, row := range bounded {
 			raw, err := json.Marshal(row.Item)
@@ -145,13 +158,15 @@ type ConversationHistoryStats struct {
 	Items         int64 `json:"items"`
 	PayloadBytes  int64 `json:"payload_bytes"`
 	Incomplete    int64 `json:"incomplete"`
+	SummaryBytes  int64 `json:"summary_bytes"`
 }
 
 func (d *DB) ConversationHistoryStats(ctx context.Context) (ConversationHistoryStats, error) {
 	var out ConversationHistoryStats
 	err := d.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM conversation_histories),count(*),
-		coalesce(sum(octet_length(payload)),0),count(*) FILTER (WHERE NOT complete) FROM conversation_items`).
-		Scan(&out.Conversations, &out.Items, &out.PayloadBytes, &out.Incomplete)
+		coalesce(sum(octet_length(payload)),0),count(*) FILTER (WHERE NOT complete),
+		(SELECT coalesce(sum(octet_length(summary)),0) FROM conversation_histories) FROM conversation_items`).
+		Scan(&out.Conversations, &out.Items, &out.PayloadBytes, &out.Incomplete, &out.SummaryBytes)
 	return out, err
 }
 
@@ -206,4 +221,40 @@ func (d *DB) ConversationItems(ctx context.Context, machine, session, history st
 func dropConversationHistoryTx(ctx context.Context, tx pgx.Tx, machine, session string) error {
 	_, err := tx.Exec(ctx, `DELETE FROM conversation_histories WHERE machine_id=$1 AND session_id=$2`, machine, session)
 	return err
+}
+
+// PutConversationSummary checkpoints the source engine's compaction result, without
+// calling a model. Both generation and revision must still match the source read.
+func (d *DB) PutConversationSummary(ctx context.Context, machine, session, history string, revision int64, summary string) error {
+	if len(summary) > conversationlog.MaxItemBytes {
+		return errors.New("conversation summary exceeds item limit")
+	}
+	return pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
+		if err := conversationAvailableTx(ctx, tx, machine, session); err != nil {
+			return err
+		}
+		tag, err := tx.Exec(ctx, `UPDATE conversation_histories SET summary=$5,summary_known=true
+			WHERE machine_id=$1 AND session_id=$2 AND history=$3 AND revision=$4`, machine, session, history, revision, []byte(summary))
+		if err == nil && tag.RowsAffected() != 1 {
+			return ErrConversationHistoryChanged
+		}
+		return err
+	})
+}
+
+func (d *DB) ConversationItem(ctx context.Context, machine, session, history, id string) (*conversationlog.Item, error) {
+	var row conversationlog.Item
+	var raw []byte
+	err := d.pool.QueryRow(ctx, `SELECT i.payload,i.complete,i.source_bytes FROM conversation_items i
+		JOIN conversation_histories h USING(machine_id,session_id)
+		WHERE i.machine_id=$1 AND i.session_id=$2 AND h.history=$3 AND i.item_id=$4`, machine, session, history, id).
+		Scan(&raw, &row.Complete, &row.SourceBytes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	err = json.Unmarshal(raw, &row.Item)
+	return &row, err
 }
