@@ -15,6 +15,8 @@ export interface PersonalOutgoingStore {
   readonly name: string;
   readonly key: string | null;
   readonly owner: string;
+  /** Every id this mount has held. A stored entry outside it belongs to another tab and is kept on write. */
+  readonly seen: Set<string>;
 }
 
 interface StoredOutgoing {
@@ -29,7 +31,7 @@ const sameEntries = (a: Outgoing[], b: Outgoing[]) => a.length === b.length && a
 export function personalOutgoingStore(id: string): PersonalOutgoingStore {
   const name = `${STORAGE_NAME}:${encodeURIComponent(id)}`;
   const scope = feedCacheScope();
-  return { name, key: scopedKey(scope, name), owner: credentialOwner() };
+  return { name, key: scopedKey(scope, name), owner: credentialOwner(), seen: new Set() };
 }
 
 export function personalOutgoingStoreCurrent(store: PersonalOutgoingStore): boolean {
@@ -98,16 +100,20 @@ function pruneSent(entries: Outgoing[]): Outgoing[] {
 /** Persist before the matching state update returns to the composer. Existing discard tombstones always win. */
 export function savePersonalOutgoing(store: PersonalOutgoingStore, entries: Outgoing[]): Outgoing[] {
   if (!personalOutgoingStoreCurrent(store)) return [];
-  const { discarded } = readOutgoing(store);
-  const kept = entries.filter((x) => !discarded[x.clientId]);
+  const saved = readOutgoing(store);
+  const kept = entries.filter((x) => !saved.discarded[x.clientId]);
+  for (const x of entries) store.seen.add(x.clientId);
   const next = pruneSent(kept);
-  writeOutgoing(store, next, discarded);
+  // Another tab's unconfirmed or failed input stays stored for its reload; this mount neither shows nor settles it.
+  const foreign = saved.entries.filter((x) => !store.seen.has(x.clientId));
+  writeOutgoing(store, foreign.length ? pruneSent([...next, ...foreign]) : next, saved.discarded);
   return next;
 }
 
 /** Restore locally without resending. A page that closed during POST exposes an explicit same-id Retry instead. */
 export function restorePersonalOutgoing(store: PersonalOutgoingStore, now = Date.now()): Outgoing[] {
   const saved = readOutgoing(store);
+  for (const x of saved.entries) store.seen.add(x.clientId);
   let changed = false;
   const entries = saved.entries.map((entry) => {
     if (entry.status !== "sending") return entry;
@@ -124,7 +130,8 @@ export function discardPersonalOutgoing(store: PersonalOutgoingStore, entries: O
   const saved = readOutgoing(store);
   const discarded = discardedOf({ ...saved.discarded, [clientId]: now });
   const next = entries.filter((x) => x.clientId !== clientId);
-  writeOutgoing(store, next, discarded);
+  const foreign = saved.entries.filter((x) => !store.seen.has(x.clientId) && x.clientId !== clientId);
+  writeOutgoing(store, [...next, ...foreign], discarded);
   return next;
 }
 

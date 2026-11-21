@@ -256,3 +256,41 @@ it("keeps an explicit discard deleted across metadata reconciliation and remount
   expect(button(t("agents-agentsview.retry"))).toBeUndefined();
   expect(vi.mocked(state.send)).toHaveBeenCalledTimes(1);
 });
+
+it("keeps a failed send in its own conversation when the view switches to another Agent without a remount", async () => {
+  const other = { ...agent, id: "lark:other", sessionKey: "other", title: "Other Agent" };
+  state.list = { ...state.list, sessions: [agent, other] };
+  state.send = vi.fn(async () => { throw new Error("Synthetic refusal"); });
+  await mount();
+  await submit();
+  const clientId = vi.mocked(state.send).mock.calls[0][1];
+
+  // the same root re-renders with another id, as the router does when the owner picks another Agent
+  await mount(other.id);
+  expect(host.textContent).not.toContain(TEXT);
+  expect(button(t("agents-agentsview.retry"))).toBeUndefined();
+
+  await mount();
+  expect(host.textContent).toContain(TEXT);
+  await act(async () => button(t("agents-agentsview.retry"))!.click());
+  expect(vi.mocked(state.send).mock.calls.at(-1)).toEqual([AGENT_ID, clientId, TEXT]);
+  expect(vi.mocked(state.send).mock.calls.every(([id]) => id === AGENT_ID)).toBe(true);
+});
+
+it("does not erase another tab's failed send when this tab saves its own", async () => {
+  const { personalOutgoingStore, restorePersonalOutgoing, savePersonalOutgoing } = await import("../../lib/agent-outgoing");
+  const tabA = personalOutgoingStore(AGENT_ID);
+  const tabB = personalOutgoingStore(AGENT_ID);
+  expect(restorePersonalOutgoing(tabA)).toEqual([]);
+  expect(restorePersonalOutgoing(tabB)).toEqual([]);
+  const at = Date.now();
+  savePersonalOutgoing(tabB, [{ clientId: "from-b", text: "tab B text", at, updatedAt: at, status: "failed", error: "x" }]);
+  savePersonalOutgoing(tabA, [{ clientId: "from-a", text: "tab A text", at, updatedAt: at, status: "sending" }]);
+
+  expect(savedEntry("from-b")).toMatchObject({ text: "tab B text", status: "failed" });
+  expect(savedEntry("from-a")).toMatchObject({ text: "tab A text", status: "sending" });
+  // what tab A settles itself still goes away
+  savePersonalOutgoing(tabA, []);
+  expect(savedEntry("from-a")).toBeUndefined();
+  expect(savedEntry("from-b")).toBeDefined();
+});
