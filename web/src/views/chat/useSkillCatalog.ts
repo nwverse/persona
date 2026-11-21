@@ -21,7 +21,10 @@ export function useSkillCatalog(source: SkillSource | undefined, machine: string
     if (source.session) query.set("session_id", source.session);
     if (source.launcher) query.set("launcher", source.launcher);
     const path = source.agent ? `/sessions/${enc(machine)}/${enc(source.session ?? "")}/skills` : `/assistant/skills?${query}`;
-    api<SkillCatalog>(path, { signal: ac.signal, headers: { [MANAGER_HEADER]: source.manager } })
+    const fetchCatalog = source.catalog
+      ? source.catalog(ac.signal)
+      : api<SkillCatalog>(path, { signal: ac.signal, headers: { [MANAGER_HEADER]: source.manager } });
+    fetchCatalog
       .then((catalog) => {
         if (ac.signal.aborted) return;
         if (catalog.catalog_version !== 1) throw new Error("Unsupported skill catalog");
