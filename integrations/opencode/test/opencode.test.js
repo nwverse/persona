@@ -818,7 +818,7 @@ test('assistant mode registers loopback MCP, hides context snapshots, enforces m
   assert.equal(ctx.calls.at(-1)[1].decision, 'once')
 })
 
-test('plugin routes multi-assistant sessions dynamically, releases route on forget, rejects relative AGENTS.md write, and supports effort-only modes and acceptEdits', async (t) => {
+test('plugin refuses ambiguous assistant ownership and never retargets a cached MCP token; permissions and modes stay enforced', async (t) => {
   const n = await startFakeNode(t, {
     tools: [
       { name: 'todo_list', description: 'List todos', input_schema: { type: 'object', properties: {} } },
@@ -873,16 +873,17 @@ test('plugin routes multi-assistant sessions dynamically, releases route on forg
   assert.equal(s2.session.session_id, 'ses_asst_multi_2')
   assert.equal(mcpAdded.length, 1, 'directory route is wired once')
 
-  // Tool call on the shared directory route must attribute to session 2 (the currently active session), not session 1!
+  // A directory-scoped token cannot distinguish the two native sessions.
   const call1 = await fetch(mcpAdded[0].config.url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...mcpAdded[0].config.headers },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'todo_list', arguments: {} } }),
   }).then((r) => r.json())
-  assert.equal(call1.result.isError, false)
-  assert.equal(n.toolCalls.at(-1).session_id, 'ses_asst_multi_2')
+  assert.equal(call1.result.isError, true)
+  assert.match(call1.result.content[0].text, /ambiguous/)
+  assert.equal(n.toolCalls.length, 0)
 
-  // Sending on session 1 switches activeAssistantByDir back to session 1.
+  // A new message does not establish the identity of a later MCP call.
   await n.peer.call('session.send', {
     session_id: 'ses_asst_multi_1',
     text: 'back to s1',
@@ -895,7 +896,7 @@ test('plugin routes multi-assistant sessions dynamically, releases route on forg
     headers: { 'Content-Type': 'application/json', ...mcpAdded[0].config.headers },
     body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'todo_list', arguments: {} } }),
   }).then((r) => r.json())
-  assert.equal(n.toolCalls.at(-1).session_id, 'ses_asst_multi_1')
+  assert.equal(n.toolCalls.length, 0)
 
   // Relative AGENTS.md resolves against cwd (~/.persona/assistant), NOT memory_dir, so it must NOT auto-allow!
   n.resolve = () => ({ allow: false, message: 'denied' })
@@ -940,13 +941,19 @@ test('plugin routes multi-assistant sessions dynamically, releases route on forg
   )
   assert.equal(host.sessions.get('ses_no_model_effort')?.effort, undefined)
 
-  // Deleting the active assistant session (s1) while sibling s2 is still alive re-points activeAssistantByDir to s2!
+  // Forgetting the owner revokes its old URL; it never gains the sibling's identity.
   ctx.emit('session.deleted', { sessionID: 'ses_asst_multi_1' })
   await until('s1 forgotten', () => !host.assistants.has('ses_asst_multi_1'))
-  const siblingCall = await fetch(mcpAdded[0].config.url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...mcpAdded[0].config.headers },
+  await until('old owner token revoked', async () => (await fetch(mcpAdded[0].config.url, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...mcpAdded[0].config.headers },
     body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'todo_list', arguments: {} } }),
+  })).status === 404)
+  assert.equal(n.toolCalls.length, 0)
+  await n.peer.call('session.send', { session_id: 'ses_asst_multi_2', text: 'continue', assistant: true, client_msg_id: 'new-route' })
+  assert.equal(mcpAdded.length, 2)
+  const siblingCall = await fetch(mcpAdded[1].config.url, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...mcpAdded[1].config.headers },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'todo_list', arguments: {} } }),
   }).then((r) => r.json())
   assert.equal(siblingCall.result.isError, false)
   assert.equal(n.toolCalls.at(-1).session_id, 'ses_asst_multi_2')
@@ -954,9 +961,9 @@ test('plugin routes multi-assistant sessions dynamically, releases route on forg
   // Deleting the final surviving assistant session releases the MCP route (404).
   ctx.emit('session.deleted', { sessionID: 'ses_asst_multi_2' })
   await until('mcp route released', async () => {
-    const r = await fetch(mcpAdded[0].config.url, {
+    const r = await fetch(mcpAdded[1].config.url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...mcpAdded[0].config.headers },
+      headers: { 'Content-Type': 'application/json', ...mcpAdded[1].config.headers },
       body: JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'ping' }),
     })
     return r.status === 404
