@@ -141,7 +141,9 @@ final class DirectionScreensUITests: XCTestCase {
         // Down the list first, then back up: the drawer keeps where it was scrolled.
         for round in 0..<rounds * 2 {
             if element.exists && element.isHittable { return true }
-            if round < rounds { sidebarList.swipeUp(velocity: .slow) } else { sidebarList.swipeDown(velocity: .slow) }
+            let list = sidebarList
+            guard list.exists else { return false } // no list to scroll (a swipe at nothing fails the walk)
+            if round < rounds { list.swipeUp(velocity: .slow) } else { list.swipeDown(velocity: .slow) }
             usleep(400_000)
         }
         return element.exists && element.isHittable
@@ -151,6 +153,9 @@ final class DirectionScreensUITests: XCTestCase {
     @MainActor private var sidebarList: XCUIElement {
         let byID = app.collectionViews.matching(identifier: "assistant-sidebar").firstMatch
         if byID.exists { return byID }
+        // In the Sidebar layout the drawer's host carries it and is no list (`SidebarLayoutPhoneTests.reach`).
+        let host = app.descendants(matching: .any).matching(identifier: "assistant-sidebar").firstMatch
+        if host.exists { return host }
         // Never the direction page's list, which draws the sidebar's own to-do and Agent rows (`sidebar-direction-…`).
         return app.collectionViews.containing(NSPredicate(format: "identifier BEGINSWITH 'sidebar-'"))
             .matching(NSPredicate(format: "identifier != 'direction-page'")).firstMatch
@@ -187,15 +192,25 @@ final class DirectionScreensUITests: XCTestCase {
     /// The conversation's title menu: Assistant tapped again on a phone (docs/design/DESIGN_SYSTEM.md 3.5); beside a sidebar
     /// column (an iPad, either layout) the title pill at the top of the conversation's column.
     @MainActor private func openTitleMenu() {
+        // The phone's switch, else the title pill at the top of the detail column beside a sidebar on screen. A menu's
+        // label is a button in a button, which XCUITest may not call hittable (the switch at the largest size, the
+        // main chat's pill on an iPad): it is tapped where it is drawn.
         let shell = app.buttons["shell-assistant"].firstMatch
-        if shell.exists && shell.isHittable { return shell.tap() }
-        let left = sidebarList.exists ? sidebarList.frame.maxX : 0
-        let center = (left + app.frame.width) / 2
-        let pill = app.buttons.allElementsBoundByIndex
-            .filter { $0.frame.minY < 220 && $0.frame.width > 60 && abs($0.frame.midX - center) < 60 && $0.isHittable }
-            .min { $0.frame.minY < $1.frame.minY }
-        XCTAssertNotNil(pill, "no title menu:\n\(app.debugDescription)")
-        pill?.tap()
+        var target: XCUIElement? = shell.waitForExistence(timeout: 5) ? shell : nil
+        if target == nil {
+            // The column beside the page: the Sidebar layout's (`unified-sidebar`), else the Persona list's.
+            let column = app.descendants(matching: .any).matching(identifier: "unified-sidebar").firstMatch
+            let list = sidebarList
+            let left = column.exists && column.frame.minX >= 0 && column.frame.width < app.frame.width ? column.frame.maxX
+                : list.exists && list.isHittable ? list.frame.maxX : 0
+            let center = (left + app.frame.width) / 2
+            target = app.buttons.allElementsBoundByIndex
+                .filter { $0.exists && $0.frame.minY < 220 && $0.frame.width > 60 && abs($0.frame.midX - center) < 60 }
+                .min { $0.frame.minY < $1.frame.minY }
+        }
+        guard let target else { return XCTFail("no title menu:\n\(app.debugDescription)") }
+        sleep(1) // a drawer that was just closed has gone
+        target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     }
 
     /// A conversation row by the start of its title, scrolled into view.
@@ -536,15 +551,23 @@ final class DirectionScreensUITests: XCTestCase {
         if off != "none" && off != "manager" { _ = chat("基础设施") }
         sleep(2)
         shot("off-sidebar-\(off)")
-        // Every case has a conversation's menu to compare: 工作 has a chat of its own (scripts/mock/direction_sessions_mock.py).
-        let row = off == "manager" ? chat("整理出差报销单") : chat("帮我约周五")
+        // Every case has a conversation's menu to compare. 工作's own conversation (scripts/mock/direction_sessions_mock.py)
+        // does not reach its page, on main's build and this one alike: there it is the page's one conversation row, Main Chat.
+        let row = off == "manager" ? app.buttons["sidebar-main"].firstMatch : chat("帮我约周五")
         XCTAssertTrue(row.waitForExistence(timeout: 10), "no conversation to long-press:\n\(app.debugDescription)")
         row.press(forDuration: 1.2)
         sleep(1)
         shot("off-chat-menu-\(off)")
         dismissMenu()
         let lead = chat("Persona 产品")
-        if lead.exists { lead.tap() } else if app.buttons["sidebar-main"].exists { app.buttons["sidebar-main"].firstMatch.tap() } else { chat("整理出差报销单").tap() }
+        if lead.exists {
+            lead.tap()
+        } else {
+            // No lead here (no directions, another manager's page): the main chat. Dismissing a menu that never
+            // opened (Main Chat's, on 工作's page) can have closed the drawer.
+            if !app.buttons["sidebar-main"].firstMatch.exists { openSidebar() }
+            app.buttons["sidebar-main"].firstMatch.tap()
+        }
         sleep(2)
         openTitleMenu()
         sleep(1)
