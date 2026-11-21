@@ -25,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -44,6 +45,7 @@ import persona.core.designsystem.JButton
 import persona.core.designsystem.JButtonKind
 import persona.core.designsystem.JButtonSize
 import persona.core.designsystem.JChip
+import persona.core.designsystem.JCodeBlock
 import persona.core.designsystem.JDialog
 import persona.core.designsystem.JEmptyState
 import persona.core.designsystem.JGroupItem
@@ -53,6 +55,7 @@ import persona.core.designsystem.JRow
 import persona.core.designsystem.JSectionHeader
 import persona.core.designsystem.JSheet
 import persona.core.designsystem.JStatusDot
+import persona.core.designsystem.JTextButton
 import persona.core.designsystem.JTextField
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Status
@@ -60,6 +63,7 @@ import persona.core.designsystem.Tokens
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.core.designsystem.pagePadding
+import persona.core.designsystem.startFailureCodeLine
 import persona.core.designsystem.text
 import persona.core.domain.answer.askLine
 import persona.core.domain.answer.askingLine
@@ -216,10 +220,24 @@ private fun ColumnScope.TaskDetail(
     LatestReport(todo, Modifier.padding(bottom = Tokens.Space.m))
     Spacer(Modifier.height(gap))
     val failure = todo.startFailure
+    val codedFailure = if (failure == null) null else startFailureCodeLine(failedTask?.errorCode, failedTask?.errorArgs)
+    var failureDetails by remember(todo.id, failure, failedTask?.errorCode) { mutableStateOf(false) }
     when {
         shown != null -> AgentSummary(shown, host, routeTo = todo.id, onDismiss = onDismiss)
-        failure != null -> JEmptyState(stringResource(R.string.chat_task_detail_failed), failure.trim(), icon = PhIcons.WarningCircle, action = {
+        failure != null -> JEmptyState(stringResource(R.string.chat_task_detail_failed), codedFailure ?: failure.trim(), icon = PhIcons.WarningCircle, action = {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                if (codedFailure != null) {
+                    // Plain words lead; the hub's codes, paths and exit status stay behind the existing disclosure.
+                    Column(Modifier.padding(bottom = Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+                        JTextButton(
+                            stringResource(if (failureDetails) persona.core.designsystem.R.string.designsystem_details_collapse
+                            else persona.core.designsystem.R.string.designsystem_details_expand),
+                            { failureDetails = !failureDetails },
+                            modifier = Modifier.testTag("assistant-task-start-failure-details"),
+                        )
+                        if (failureDetails) JCodeBlock(failure.trim(), small = true)
+                    }
+                }
                 if (state == TaskState.Failed) TaskShellQuestion(
                     todo, failedTask, host.tasks, Modifier.padding(bottom = Tokens.Space.m),
                 )

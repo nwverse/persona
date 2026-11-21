@@ -22,6 +22,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -74,6 +75,9 @@ class TodoStartRemediesShotsTest {
     private val features = setOf(TASK_RETRY_LAUNCHER_FEATURE, TODO_START_ANSWER_FEATURE)
     private val rawFailure = "synthetic launcher exited 127: executable was not found\n" +
         "second line remains visible: /opt/persona/synthetic-agent"
+    private val codedRawFailure = "launcher_missing: claude could not start in the terminal\n" +
+        "missing=/opt/persona/bin/claude\nexit=127"
+    private val codedShort = "claude can't start in this computer's terminal"
     private val questionLine = "[oh-my-zsh] Would you like to update? [Y/n]"
     private val handedOff = mutableListOf<Todo>()
     private val errors = mutableListOf<String>()
@@ -188,8 +192,23 @@ class TodoStartRemediesShotsTest {
         ),
     )
 
-    private fun remedyApi(featureSet: Set<String> = features) = Api(
-        listOf(failedTodo()), featureSet, FeedResponse(plans = mapOf("takeover-plan" to remedyPlan())),
+    private fun codedRemedyPlan() = remedyPlan().let { plan ->
+        plan.copy(tasks = plan.tasks.map {
+            it.copy(errorCode = "launcher_missing", errorArgs = mapOf(
+                "where" to "terminal", "launcher" to "claude", "missing" to "/opt/persona/bin/claude",
+            ))
+        })
+    }
+
+    private fun remedyApi(
+        featureSet: Set<String> = features,
+        todo: Todo = failedTodo(),
+        plan: TaskPlan = remedyPlan(),
+    ) = Api(listOf(todo), featureSet, FeedResponse(plans = mapOf(plan.id to plan)))
+
+    private fun codedRemedyApi() = remedyApi(
+        todo = failedTodo().copy(startError = codedRawFailure),
+        plan = codedRemedyPlan(),
     )
 
     private fun open(
@@ -238,6 +257,13 @@ class TodoStartRemediesShotsTest {
         rule.onNodeWithText(questionLine, substring = true).assertExists()
     }
 
+    private fun assertCodedStartFailureCollapsed() {
+        rule.onNodeWithText("Couldn't start: $codedShort").assertIsDisplayed()
+        rule.onNodeWithText(codedRawFailure, useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithTag("todo-start-failure-details").assertIsDisplayed()
+        rule.onNodeWithTag("shell-question").assertDoesNotExist()
+    }
+
     @Test fun failedStartWithDoneAtChecksOpenAndCompletes() {
         val failed = failedTodo()
         val api = Api(listOf(failed), emptySet())
@@ -264,6 +290,8 @@ class TodoStartRemediesShotsTest {
 
         assertNull(failed.planId)
         rule.onNodeWithText("Couldn't start: $rawFailure").assertIsDisplayed()
+        rule.onNodeWithTag("todo-start-failure-details").assertDoesNotExist()
+        rule.onNodeWithText("Couldn't start: $codedShort").assertDoesNotExist()
         rule.onNodeWithTag("todo-retry-launcher").assertDoesNotExist()
         rule.onNodeWithTag("todo-retry").performClick()
         rule.waitForIdle()
@@ -271,6 +299,16 @@ class TodoStartRemediesShotsTest {
         assertEquals(listOf(failed.id), api.retries)
         assertTrue(api.launcherRetries.isEmpty())
         assertTrue(errors.isEmpty())
+    }
+
+    @Test fun codedStartFailureUsesShortLineAndHidesRawUntilDetails() {
+        open(codedRemedyApi())
+
+        assertCodedStartFailureCollapsed()
+        rule.onNodeWithTag("todo-start-failure-details").performClick()
+        rule.onNodeWithText(codedRawFailure, useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Couldn't start: $codedShort").assertExists()
+        rule.onNodeWithText("Hide details").assertExists()
     }
 
     @Test fun firstSuggestedLauncherPrecedesRetryAndSendsItsExactName() {
@@ -367,19 +405,24 @@ class TodoStartRemediesShotsTest {
 
     @Test fun failedStartScreenshotsLargeText() = screenshotMatrix(largeText = true)
 
-    private fun screenshotMatrix(largeText: Boolean) {
+    @Test fun codedStartFailureScreenshotsDefaultText() = screenshotMatrix(largeText = false, coded = true)
+
+    @Test fun codedStartFailureScreenshotsLargeText() = screenshotMatrix(largeText = true, coded = true)
+
+    private fun screenshotMatrix(largeText: Boolean, coded: Boolean = false) {
         var appearance by mutableStateOf(AppStyle.Glass to false)
-        open(remedyApi(), largeText = largeText, appearance = { appearance })
+        open(if (coded) codedRemedyApi() else remedyApi(), largeText = largeText, appearance = { appearance })
         val out = File(System.getProperty("persona.shots") ?: "build/todo-start-remedies-shots").also { it.mkdirs() }
         for (style in AppStyle.entries) for (dark in listOf(false, true)) {
             rule.runOnIdle { appearance = style to dark }
             rule.waitForIdle()
-            assertFailedStartRemedies()
+            if (coded) assertCodedStartFailureCollapsed() else assertFailedStartRemedies()
             val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
             assertTrue(bitmap.width > 0 && bitmap.height > 0)
             val size = if (largeText) "large" else "default"
             val theme = if (dark) "dark" else "light"
-            val image = File(out, "todo-start-remedies-$size-${style.name.lowercase()}-$theme.png")
+            val prefix = if (coded) "todo-start-remedies-coded" else "todo-start-remedies"
+            val image = File(out, "$prefix-$size-${style.name.lowercase()}-$theme.png")
             image.outputStream().use { assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
         }
     }

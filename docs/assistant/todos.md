@@ -444,8 +444,9 @@ Since #10365 (`assistant/start_retry_launcher.go`):
   workspace left in the way (`worktree_path_taken`), the hub's whole sentence under the details. Their buttons are
   **Use <launcher> instead** (when the hub suggests one and lists the feature), **Retry** and **Remove**; Retry no longer
   needs the to-do's `plan_id`. Android uses the same order on the failed Needs-you row, shared task detail and standalone
-  to-do action bar, looks up the to-do's own plan first and then a non-dismissed plan by `todo_id`, and sends only
-  `{"launcher":"…"}` on the launcher action. Ordinary Retry still sends `{}`. Apple still offers Retry and Remove only.
+  to-do action bar, reads the code first on both detail surfaces and keeps the raw failure behind Details, looks up the
+  to-do's own plan first and then a non-dismissed plan by `todo_id`, and sends only `{"launcher":"…"}` on the launcher
+  action. Ordinary Retry still sends `{}`. Apple still offers Retry and Remove only.
 
 ### Answering a failed start's question
 
