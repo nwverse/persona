@@ -916,13 +916,11 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   // the todos puts every agent under No to-do for a moment, then moves them under their todos (#2812); the chat list's
   // rows are drawn at once
   const todosPending = !chatList && shownGrouping === "todo" && !todosLoaded;
-  // what the list says in place of its groups while it has none to show (audit items 4 and 36): the hub out of reach
-  // since the page opened, the complete list's read failed (why, and Retry), or By to-do waiting for its to-dos; before,
-  // the first two left "Loading…" or nothing at all under the controls for good. An older hub's rows come with the
-  // socket's pushes, before GET /sessions answers, so they are drawn without waiting for it (#2812)
+  // Keep showing progress until the grouping inputs and session list are ready. On an older hub the socket's rows
+  // can already be shown while the first GET /sessions is still in flight (#2812).
   const listNote = hubUnreachable ? <p className="px-2 py-1 text-xs leading-normal text-ink-3">{t("sidebar.agents_offline")}</p>
     : !loaded && listError ? <ListError text={agentsReadFailed(listError)} onRetry={retryFullAgentSessions} />
-    : todosPending ? <p className="px-2 py-1 text-[12px] text-ink-3">{t("sidebar.loading")}</p>
+    : todosPending || (!loaded && every.length === 0) ? <p className="px-2 py-1 text-[12px] text-ink-3">{t("sidebar.loading")}</p>
     : null;
   // Only inputs the tree reads rebuild it; unchanged nodes keep their objects so their rows' memo holds.
   const lastTodoTree = useRef<TodoTree | undefined>(undefined);

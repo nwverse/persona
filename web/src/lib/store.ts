@@ -737,6 +737,7 @@ let authenticatedSocket: WebSocket | null = null;
 let socketToken = "";
 let retry = 0;
 let retryTimer: number | undefined;
+let sidebarTimer: ReturnType<typeof setTimeout> | undefined;
 let lastMessage = 0;
 let lastPing = 0;
 let stopped = true;
@@ -776,12 +777,23 @@ export function sayHello() {
 
 export function connect() {
   setCompatibilityFeatures([]);
+  const cold = stopped && !state.loaded;
   stopped = false;
   clearTimeout(retryTimer);
   ws?.close();
   socketChanged(false);
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   socketToken = getToken();
+  if (cold && socketToken) {
+    const owner = credentialOwner();
+    // Give a fast hello the only read. If it takes longer, show the REST snapshots while waiting for the socket.
+    // The normal hello refresh still covers changes between these snapshots and the start of the event stream.
+    sidebarTimer = setTimeout(() => {
+      if (owner !== credentialOwner()) return;
+      void refreshAssistant().catch(() => {});
+      void refreshTodos();
+    }, 250);
+  }
   directionTreeAwaitsHello(true); // its hello reads the direction tree: the screens wait for that read
   const sock = new WebSocket(`${proto}//${location.host}${BASE}/api/v1/ws?${wsQuery(socketToken, cursor, [SESSIONS_LIST_FEATURE, SESSIONS_LIST_CHANGES_FEATURE, SESSIONS_DELTA_FEATURE, SESSION_LIVE_FEATURE, "extension_ui_stream_v1", "persona_contracts_v1"])}`);
   ws = sock;
@@ -887,6 +899,7 @@ export function disconnect() {
   stopped = true;
   // a reconnect scheduled after a drop would otherwise fire connect(), which clears stopped (signed out: an empty token)
   clearTimeout(retryTimer);
+  clearTimeout(sidebarTimer);
   back();
   ws?.close();
   ws = null;
@@ -956,6 +969,7 @@ function onMessage(msg: Record<string, unknown>) {
   cursor = msg.type === "hello" ? afterHello(cursor, msg) : afterEvent(cursor, msg);
   switch (msg.type) {
     case "hello": {
+      clearTimeout(sidebarTimer);
       receiptOwner = msg.message_send_state === 1 ? credentialOwner() : undefined;
       setCompatibilityFeatures(Array.isArray(msg.features) ? msg.features as string[] : []);
       const mesh = (msg.mesh as { hubs?: MeshHub[] } | undefined)?.hubs;
@@ -1478,10 +1492,11 @@ function numbered<T>(path: string) {
   return {
     ask() {
       const n = ++asked;
+      const owner = credentialOwner();
       const answer = api<T>(path);
       /** Whether this answer may be applied (no later request's answer is in place); if so it is the one in place now. */
       const fresh = () => {
-        if (n < applied) return false;
+        if (n < applied || owner !== credentialOwner()) return false;
         applied = n;
         return true;
       };
@@ -1520,16 +1535,11 @@ export async function refresh() {
   // the answers count only if this page changes nothing while they are on their way, and had no change out when they left
   const mutesAt = mutesSaves.out ? -1 : mutesSaves.rev;
   const pinsAt = pinsSaves.out ? -1 : pinsSaves.rev;
-  const asked = todosAsked.ask();
   // The main conversation must not wait for the slowest sidebar request. refreshAssistant also guards
   // against an earlier login or manager's answer and invalidates a superseded cached main conversation.
   const assistantDone = refreshAssistant().catch(() => {});
-  // the todos go in as soon as they answer: By to-do (the default, #2812) waits for them, not for /sessions, which can
-  // take seconds on a busy hub while the socket has pushed the sessions already
-  const todosDone = asked.answer.then(
-    (res) => applyTodos({ status: "fulfilled", value: res }, asked.fresh),
-    (reason: unknown) => applyTodos({ status: "rejected", reason }, asked.fresh),
-  );
+  // By to-do (the default, #2812) can use the to-dos as soon as they answer.
+  const todosDone = refreshTodos();
   const [sessions, interactions, machines, mutes, pins] = await Promise.allSettled([
     state.features.includes(SESSIONS_LIST_FEATURE)
       ? runtimeSessions.load().then(() => null)
@@ -1870,6 +1880,7 @@ export function reset() {
     todosError: null,
     spacesSupported: true,
     loaded: false,
+    features: [],
     conn: "connecting",
     link: { ...NO_LINK, networkUp: networkUp() },
   });
