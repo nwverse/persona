@@ -1,5 +1,5 @@
 {
-  "name_assistant": "Main chat",
+  "name_assistant": "Conversation defaults",
   "name_agent_new": "Agents",
   "name_kb": "Processing",
   "name_inbox_triage": "Sorting",
@@ -28,7 +28,7 @@
   "name_assistant_supervise": "Background supervisor",
   "name_meeting_room": "In-meeting conversation",
   "name_meeting_minutes": "Meeting minutes",
-  "desc_assistant": "Talks with you, splits work into tasks and hands them out. The one conversation you wait on for a reply.",
+  "desc_assistant": "Defaults for new conversations and other Assistant uses unless they have their own settings.",
   "desc_agent_new": "The agents that do the tasks on your computers. A task can still be given its own model when it starts.",
   "desc_kb": "Text work nobody waits on: translation, reply drafts, titles and organizing the knowledge base.",
   "desc_inbox_triage": "Sorts and summarizes what comes into the Inbox and judges its importance. The same model reads why an agent stopped and judges what the AI twin takes up. Many small calls.",
@@ -150,5 +150,7 @@
   "candidate_not_direct": "{provider} cannot be called directly",
   "candidate_provider_gone": "the provider {provider} is gone or cannot be called directly",
   "err_permission_mode_launcher_only": "Permission mode can only be set on launcher-backed model uses",
-  "err_permission_mode_unsupported": "This launcher does not support the selected permission mode"
+  "err_permission_mode_unsupported": "This launcher does not support the selected permission mode",
+  "name_assistant_main": "Main chat",
+  "desc_assistant_main": "Talks with you and hands out tasks. These settings apply only to the main conversation; new conversations keep their defaults."
 }
