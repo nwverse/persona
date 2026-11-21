@@ -492,9 +492,10 @@ fun PersonaModelPill(
     LaunchedEffect(management) {
         try { config = management?.config() } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
     }
-    val isMain = session != null && config?.main == session.sessionId
+    val loadedConfig = config
+    val isMain = session != null && loadedConfig?.main == session.sessionId
     fun readCatalog(refresh: Boolean = false) {
-        if (session != null && config == null) return // Wait until the conversation's role is known.
+        if (session != null && loadedConfig == null) return // Wait until the conversation's role is known.
         val api = management ?: return
         if (machineId.isNotBlank()) lists.readAssistantCatalog(machineId, main = isMain) {
             if (isMain) api.mainAssistantLauncherList(machineId, refresh) else api.assistantLauncherList(machineId, refresh)
