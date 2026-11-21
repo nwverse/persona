@@ -319,6 +319,9 @@ export interface Session {
    *  once its turn is over, resuming the same conversation (#6476, node/mode_restart.go); `permission_mode` is the mode
    *  it still runs in until then. */
   bypass_pending?: boolean;
+  /** On a botmux session whose botmux instance does not advertise ownerActor, sends go through the untrusted
+   *  external-event trigger; the composer shows a one-line notice. */
+  botmux_external_trigger?: boolean;
   /** What the model saw in the latest reply and the model's window, in tokens (#2430); omitted while the node cannot tell. */
   context_tokens?: number;
   context_window?: number;
@@ -686,6 +689,24 @@ export interface TokenUsage {
   fast?: boolean;
 }
 
+/** proto.Botmux: a BotMux-wrapped item's own words and the facts shown as tags. */
+export interface Botmux {
+  kind: "message" | "trigger" | "reply";
+  text: string;
+  sender?: string;
+  sender_type?: string;
+  quoted?: boolean;
+  topic_context?: boolean;
+  thread?: boolean;
+  attachments?: number;
+  attachment_meta?: { kind: string; name?: string; mime_type?: string }[];
+  mentions?: string[];
+  source?: string;
+  final?: boolean;
+  voice?: boolean;
+  truncated?: boolean;
+}
+
 export interface Item {
   id: string;
   seq: number;
@@ -707,13 +728,16 @@ export interface Item {
   narration?: boolean;
   codex_heartbeat_quiet?: boolean;
   task?: TaskNote;
-  fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item; supervision_user?: boolean; changes?: FoldChange[] | null; usage?: TokenUsage[]; sources?: FoldSource[] };
+  fold?: { items: number; tools: number; thoughts: number; until?: string; through_seq: number; through_id?: string; images?: FoldImage[]; tasks?: FoldTaskSnapshot[]; latest_thinking?: Item; supervision_user?: boolean; changes?: FoldChange[] | null; usage?: TokenUsage[]; sources?: FoldSource[]; botmux?: Botmux[] };
   image?: { mime: string; data?: string; lazy?: boolean; size?: number; width?: number; height?: number };
   /** A Codex visualize marker (kind "visualization"): a self-contained HTML fragment on the node, fetched through the
    *  session visualization route. `mode` is "wide" or absent; the bytes are never carried here. */
   visualization?: { path: string; mode?: string; title?: string };
   /** Sent by another Claude session (cross-session messaging), not typed by you: its name. */
   from?: string;
+  /** What a BotMux-wrapped message or `botmux send` call says without BotMux's blocks (docs/protocol/protocol.md
+   *  "BotMux messages"); `text` stays the original. Absent from older nodes. */
+  botmux?: Botmux;
   /** The client_msg_id of the message this came from, as the hub tied it (every item of it: the text, its images, a
    *  queued copy, or the notice it became); older hubs never send it (lib/echo.ts). */
   client_msg_id?: string;

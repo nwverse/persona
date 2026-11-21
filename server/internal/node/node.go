@@ -2292,10 +2292,11 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		}
 		if p.ThroughSeq > 0 { // a fold being opened: the lines it stands for
 			page, more := f.Range(p.FromSeq, p.ThroughSeq, 1000)
-			return map[string]any{"items": items(page), "more": more}, nil
+			return map[string]any{"items": items(n.applyBotmuxTurns(ctx, p.SessionID, f, page, false)), "more": more}, nil
 		}
 		// Pages counted back from the end fold the agent's work for callers that ask (transcript.FoldWork).
 		fold := func(page []proto.Item) []proto.Item {
+			page = n.applyBotmuxTurns(ctx, p.SessionID, f, page, false)
 			if p.FoldWork {
 				if p.BeforeSeq == 0 {
 					return transcript.FoldWorkLatest(page)
@@ -2307,7 +2308,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if p.AfterSeq != nil {
 			// more_after: the 500 cap cut it short; the caller asks again after the last seq (or takes the latest page).
 			page, more, span := f.After(*p.AfterSeq, 500)
-			return withSpan(map[string]any{"items": items(page), "has_more": false, "more_after": more}, span, true), nil
+			return withSpan(map[string]any{"items": items(n.applyBotmuxTurns(ctx, p.SessionID, f, page, true)), "has_more": false, "more_after": more}, span, true), nil
 		}
 		if p.Turns > 0 { // the phone pages by exchanges (user prompt + answer), not by rows
 			page, more, span := f.PageTurns(p.BeforeSeq, min(p.Turns, 10), 2000)

@@ -241,6 +241,10 @@ type Session struct {
 	// apply to it, and a launcher switch to Launcher itself brings it back there. Beside EffortChangeFailed, in its
 	// padding: a Session stays in its allocation size class.
 	OffLauncher bool `json:"off_launcher,omitempty"`
+	// BotmuxExternalTrigger: on a botmux session whose botmux instance was probed and does not advertise ownerActor
+	// (an older botmux without GET /api/sessions/:id/turns or without actor:"owner"), sends go through the untrusted
+	// external-event trigger; clients show a one-line notice in the composer. False/omitted on all other sessions.
+	BotmuxExternalTrigger bool `json:"botmux_external_trigger,omitempty"`
 	// Ultracode is Claude Code's independent session-only workflow switch: nil means unknown.
 	// UltracodePending (beside AsksRead) means a requested change waits for an idle input box; LostAt asks the client
 	// to offer reopening after a resumed process reset an enabled switch. Reopening or dismissing the notice clears

@@ -101,7 +101,14 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			seen[id] = true
 			continue
 		}
-		viaBotmux := host.ParsePane(a.PaneID).Kind == host.Botmux
+		pane := host.ParsePane(a.PaneID)
+		viaBotmux := pane.Kind == host.Botmux
+		if viaBotmux {
+			if h, ok := n.hosts.Get(host.Botmux).(*botmuxHost); ok {
+				s.BotmuxExternalTrigger = h.externalTriggerNotice()
+				h.refreshCapsAsync(pane.ID)
+			}
+		}
 		switch {
 		case viaBotmux && (a.Agent == "codex" || a.Agent == traexAgent):
 			// The thread's name, else botmux's title of the topic; messages go through botmux, neither route.

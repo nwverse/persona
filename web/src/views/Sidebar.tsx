@@ -1,4 +1,5 @@
-import { useBotmuxHidden } from "../lib/agents-display";
+import { useAgentsDisplay, useBotmuxHidden } from "../lib/agents-display";
+import { useBotmuxMode } from "../lib/botmux-mode";
 import { SectionAdd } from "./SectionAdd";
 import { AgentsAdd } from "./agents/AgentsAdd";
 import { isSidebarAgent } from "../lib/sidebar-agent";
@@ -91,6 +92,7 @@ const HubNoticeLine = memo(HubNoticeLineContent);
 const NodePrompt = memo(NodePromptContent);
 const SidebarUsage = memo(SidebarUsageContent);
 const LinkTodoDialog = memo(lazyDialog(() => import("./LinkTodoDialog").then((m) => m.LinkTodoDialog)));
+const BotmuxModeChip = lazy(() => import("./BotmuxModeChip"));
 // Menus and edit controls load on intent; the ordinary sidebar keeps its first-screen budget (#12017).
 const ConversationRowMenu = lazy(() => import("./ConversationRowMenu"));
 const SidebarConversationArrange = lazy(() => import("./assistant/SidebarConversationArrange"));
@@ -1218,10 +1220,14 @@ const GroupingBar = memo(function GroupingBar({ groupings, selection, onChoose }
 /** Quick filters describe the visible inventory; an empty Lark filter is never offered. */
 const FilterBar = memo(function FilterBar({ selection, counts, onChoose }: { selection: AgentFilter; counts: FilterCounts; onChoose: (f: AgentFilter) => void }) {
   const keys = shownFilters(selection, counts);
-  if (keys.length < 2) return null;
+  const format = useBotmuxMode();
+  const { value, saving } = useAgentsDisplay();
+  const botmuxMode = value?.show_botmux !== true ? "hide" : format;
+  const showBotmuxChip = counts.feishu > 0 || value?.show_botmux === false;
+  if (keys.length < 2 && !showBotmuxChip) return null;
   return (
     <div className="mt-1.5 flex flex-wrap gap-0.5 px-1">
-      <div role="radiogroup" aria-label={t("sidebar.quick_filters")} className="contents">
+      {keys.length > 1 && <div role="radiogroup" aria-label={t("sidebar.quick_filters")} className="contents">
       {keys.map((k) => {
         const f = AGENT_FILTERS.find((x) => x.key === k)!;
         const on = k === selection;
@@ -1245,7 +1251,8 @@ const FilterBar = memo(function FilterBar({ selection, counts, onChoose }: { sel
           </button>
         );
       })}
-      </div>
+      </div>}
+      {showBotmuxChip && <Suspense fallback={null}><BotmuxModeChip mode={botmuxMode} disabled={!value || saving} /></Suspense>}
     </div>
   );
 });

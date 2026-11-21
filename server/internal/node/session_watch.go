@@ -179,10 +179,13 @@ func (n *Node) pushItems(id string, items []proto.Item, span transcript.Span) {
 	}
 	n.mu.Lock()
 	f := n.files[id]
+	w := n.watches[id]
 	n.mu.Unlock()
+	items = n.applyBotmuxTurnsCached(id, f, items)
 	agentUsage(f, items) // finished subagents' results carry what they used (agent_usage.go)
 	items = n.echoed(id, f, items)
 	_ = n.peer.Notify("session.items", withSpan(map[string]any{"session_id": id, "items": nonNil(items)}, span, true))
+	n.refreshWatchedBotmux(w)
 	n.liveRecheck(id) // the words these items brought replace their live copy, right after them (livereply.go)
 }
 
@@ -300,6 +303,9 @@ func (n *Node) pumpWatch(w *watch, live int) {
 	// The path is cached: a lookup and a stat, a search at most every 30 s. A file being read (Changed says true without
 	// waiting for it) is followed in the goroutine that reads it, so the pump never waits for another's parse.
 	follow := w.ticks%followEvery == 0
+	if follow {
+		n.refreshWatchedBotmux(w)
+	}
 	// TRAE database changes and a Codex rollout disappearing can both require a new projection.
 	refreshHistory := follow && w.dbHistory
 	if !w.f.Changed() && !refreshHistory {

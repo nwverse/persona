@@ -492,6 +492,13 @@ func (f *File) End() Span {
 	return Span{History: f.history(), To: f.lines}
 }
 
+// LoadedItems returns the items already read from the current history without opening older pages.
+func (f *File) LoadedItems() ([]proto.Item, string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]proto.Item(nil), f.items...), f.history()
+}
+
 // CoversClosedTurnAfter reports whether the checked end still covers every line after seq in history and the latest
 // turn ended after the send. An open turn or a closing record on a discarded branch cannot establish that.
 func (f *File) CoversClosedTurnAfter(end Span, history string, seq int, sentAt time.Time) bool {

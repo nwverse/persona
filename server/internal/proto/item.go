@@ -49,6 +49,9 @@ type Fold struct {
 	// Images: the images the run's calls looked at, in order (FoldImage): a chat shows its turn's under the answer
 	// without opening the run.
 	Images []FoldImage `json:"images,omitempty"`
+	// Botmux: the `botmux send` replies folded into the run (Item.Botmux), in order, so a chat that shows BotMux
+	// sessions as in Lark shows them without opening the run.
+	Botmux []Botmux `json:"botmux,omitempty"`
 	// LatestThinking is a bounded preview of the run's newest thought with words. The original item stays in the fold.
 	LatestThinking *Item `json:"latest_thinking,omitempty"`
 	// SupervisionUser preserves an explicit user-visible action hidden inside this work range.
@@ -251,9 +254,19 @@ type Item struct {
 	// nodes. A chat sums a turn's items (folds' Fold.Usage included) into the turn's usage
 	// (docs/protocol/protocol.md "Token usage on items").
 	Usage []TokenUsage `json:"usage,omitempty"`
+	// Botmux is what this item says without the wrapper BotMux put around it (docs/integrations/engines.md "botmux"):
+	// a Lark message BotMux handed the agent, a message sent through BotMux's trigger, or the agent's `botmux send`
+	// reply. Text keeps the transcript's words, for the apps to show the original. Set by the node; absent for
+	// anything else, for text it cannot read, and from older nodes.
+	Botmux *Botmux `json:"botmux,omitempty"`
 	// Visualization is set on KindVisualization items: a Codex visualize marker's reference to an HTML fragment on
 	// the node. The bytes are not carried here; the session visualization route serves them after path checks.
 	Visualization *Visualization `json:"visualization,omitempty"`
+	// RawTextSHA256 and RawTextTrimmedSHA256 hold the SHA-256 hex digest of the untruncated user Text (and its
+	// \r\n-trimmed form when different), populated before light/clip truncation for local node-side matching
+	// (e.g. BotMux structured turn anchors). Never serialized over the wire.
+	RawTextSHA256        string `json:"-"`
+	RawTextTrimmedSHA256 string `json:"-"`
 }
 
 type StoredItem struct {
@@ -273,6 +286,45 @@ type Visualization struct {
 	Mode  string `json:"mode,omitempty"`
 	Title string `json:"title,omitempty"`
 }
+
+// Botmux is a BotMux-wrapped item's own words and the facts the apps show as tags (docs/protocol/protocol.md
+// "BotMux messages"). Only display names leave the node: never a Lark open_id, email or message id.
+type Botmux struct {
+	Kind string `json:"kind"` // BotmuxMessage | BotmuxTrigger | BotmuxReply
+	Text string `json:"text"`
+	// Sender is the Lark sender's display name and SenderType its kind ("user", "bot"…), when BotMux named one.
+	Sender     string `json:"sender,omitempty"`
+	SenderType string `json:"sender_type,omitempty"`
+	// Quoted: the message quoted another one; TopicContext: the topic had messages before the agent joined it.
+	Quoted       bool `json:"quoted,omitempty"`
+	TopicContext bool `json:"topic_context,omitempty"`
+	// Thread: the message was posted in a topic (BotMux's placement "thread"), not to the chat itself.
+	Thread         bool               `json:"thread,omitempty"`
+	Attachments    int                `json:"attachments,omitempty"`
+	AttachmentMeta []BotmuxAttachment `json:"attachment_meta,omitempty"`
+	Mentions       []string           `json:"mentions,omitempty"`
+	// Source names who handed a trigger turn to BotMux (its sourceName, "Persona" for the apps' own sends).
+	Source string `json:"source,omitempty"`
+	// Final and Voice describe a reply: BotMux's --response-kind final, and a voice message.
+	Final bool `json:"final,omitempty"`
+	Voice bool `json:"voice,omitempty"`
+	// Truncated: the item's text was clipped inside the wrapper, so Text is only its start.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// BotmuxAttachment is safe attachment metadata from BotMux's structured turn record (never a local path or Lark id).
+type BotmuxAttachment struct {
+	Kind     string `json:"kind"`
+	Name     string `json:"name,omitempty"`
+	MimeType string `json:"mime_type,omitempty"`
+}
+
+// Botmux kinds.
+const (
+	BotmuxMessage = "message"
+	BotmuxTrigger = "trigger"
+	BotmuxReply   = "reply"
+)
 
 // TokenUsage is what model requests used, as the transcript records it (#5426): tokens by kind, the way the usage
 // meter counts them (UsageBucket: Input excludes the cache). Model is the model the transcript names (never Claude

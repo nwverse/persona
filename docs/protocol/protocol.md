@@ -5901,6 +5901,63 @@ The new Assistant view field `workspace_naming_version` advertises manager
 support; an unavailable computer or unsupported method never falls back to an
 Engine naming path.
 
+## BotMux messages
+
+A botmux session's transcript (`docs/integrations/engines.md` "botmux") holds what botmux handed the agent, wrapped in blocks for the model, and the
+agent's replies as `botmux send` shell calls. The node sets `botmux` on each decoded item in two layers — **structured turns first, wrapper parsing as
+per-turn fallback** — while `text` always keeps the transcript's words so clients can show the original:
+
+1. **Structured turns (`botmux.session-turns.v1`)**: when the local botmux dashboard serves `GET /api/sessions/:id/turns` (schema
+   `botmux.session-turns.v1`, `server/internal/node/hostbotmux_turns.go`, `server/internal/transcript/botmux_turns.go`), the node reads turns
+   incrementally by `seq` cursor and matches each turn to its transcript entry by `anchor.cliEntryId` or `anchor.inputSha256`. Matched turns populate
+   `botmux` from the structured record: inbound text, sender display name and type, attachment count and safe `attachment_meta`, placement (`thread`),
+   mentioned display names, and the full text of replies (including `--content-file` and `--card-file` replies whose body is not on the command line).
+   Only display names leave the node; `openId` and `messageId` are never forwarded.
+2. **Wrapper parsing fallback (`server/internal/transcript/botmux.go`)**: used whenever `GET /api/sessions/:id/turns` returns `404` (older botmux) or a
+   specific turn has no structured record (e.g., turns recorded before a botmux upgrade). Cases for both layers live in `spec/fixtures/botmux/cases.json`.
+
+```json
+{"role":"user","kind":"text","text":"<botmux_reminder>…</botmux_reminder>\n\n<user_message>\nship it\n</user_message>\n\n<sender … />",
+ "botmux":{"kind":"message","text":"ship it","sender":"Alex Chen","sender_type":"user","thread":true}}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `kind` | `message`: a Lark or `owner_actor` message; `trigger`: a turn handed to botmux's `/api/trigger` as an external event (`source` names who); `reply`: the agent's `botmux send` (on a `tool_use` item) |
+| `text` | The words without botmux's blocks and hint lines |
+| `sender`, `sender_type` | The Lark sender's display name and kind; never its `open_id` or email |
+| `quoted`, `topic_context` | The message quoted another one; the topic had messages before the agent joined it (botmux's hint lines, Chinese or English) |
+| `thread`, `attachments`, `attachment_meta`, `mentions` | Posted in a topic (`placement.kind: "thread"` / `<message_location placement="thread">`); attachment count and safe `{kind, name?, mime_type?}` metadata (no local paths or IDs); mentioned display names |
+| `final`, `voice` | A reply sent with `--response-kind final` (`responseKind: "final"`); as voice |
+| `truncated` | The item was clipped inside the words: `text` is their start |
+
+A fold that hides `botmux send` calls lists their replies in `fold.botmux`, in order (structured turns are applied before `FoldWork`, so file/card
+replies also appear in `fold.botmux`).
+
+**Version probe and sending (`botmux_external_trigger`).** The node probes capabilities through the read-only `GET /api/sessions/:id/turns` endpoint
+and caches the result per botmux instance (invalidated on dashboard restart, token rotation, or CLI binary upgrade). Session listing starts a
+background probe when capabilities are unknown or expired, keeping the last known result for that instance until the probe succeeds. It never probes with a real
+message and never retries a delivered turn. When `capabilities` includes `ownerActor`, `POST /api/trigger` sends top-level `actor: "owner"` with
+`target.kind: "turn"`, `botId`, and `sessionId` (omitting `envelope.payload` and `envelope.rawText`), and verifies the echoed `actor: "owner"` in the
+response. On older botmux instances (below 3.59.23, `404` or `ownerActor` absent), sends use the external-event trigger and the session row sets
+`botmux_external_trigger: true` so clients show a one-line upgrade notice (`3.59.23+`) in the composer.
+
+**Wrapper fallback rules** (checked against botmux 3.59.6 through 3.59.20):
+
+- A message is read from a `<user_message>` with only top-level blocks around it (each block ends at the closing tag of its own name, so nested
+  blocks such as `<identity>` are fine; facts come only from the top-level `<sender />`, `<mentions>`, `<attachments>` and `<message_location />`),
+  a trigger turn with a top-level `<botmux_task trusted="true">` (including the hook-mode prefix), or bare words followed by `<botmux_formatting>`.
+  A task tag inside `<user_message>` is message text. Trigger source attribution comes only from the top-level task block.
+- A reply is a single `botmux send` whose words are its arguments, or a here-document (also behind a lone `-`). Flags follow botmux's own table
+  (`src/cli/send-invocation.ts`): switches take no value, `--urgent` / `--attention` only `=value`, the others the next word or `=value`. A flag botmux
+  does not know, a missing value, `--`, `--help`, `--dry-run`, and a body from `--content-file`, `--card-file` or `--card-json` give no `botmux` in
+  wrapper-only mode, since botmux would refuse the send or its words are not in the command. Each `--image(s)`, `--file(s)` and `--video(s)` counts as one attachment.
+- Anything else, botmux 1.x's plain preamble, hook-mode lines (already bare), a reply read from a file or a pipe without a structured turn record, and
+  items from older nodes carry no `botmux`: clients show them as before.
+
+Web can show the raw transcript or decode it (the default): a message shows `botmux.text` with its facts as tags, a reply shows as the
+agent's message sent to Lark, and each can be opened to its original. Session visibility follows the shared Agents display setting.
+
 ## Backend task workspace RPC
 
 The optional Node capability `task_workspace_v1` supports engine-independent preparation. Manager

@@ -456,7 +456,7 @@ func codexItemLines(seq int, ts time.Time, it *codexItem, meta *Meta) []proto.It
 			return nil
 		}
 		u := mk(0, it.ID, "user", proto.KindText)
-		u.Text = clip(text)
+		clipUserText(&u, text)
 		if meta.codexUserID == "" {
 			meta.codexUserID = u.ID
 		}
