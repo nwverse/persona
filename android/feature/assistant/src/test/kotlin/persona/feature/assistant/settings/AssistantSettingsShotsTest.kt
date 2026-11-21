@@ -18,6 +18,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isPopup
@@ -27,6 +28,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -287,9 +289,13 @@ class AssistantSettingsShotsTest {
         }
         var replyTitle = ""
         var persistentTitle = ""
+        var saveTitle = ""
+        var zoneTitle = ""
         rule.setContent {
             replyTitle = stringResource(R.string.assistant_settings_owner_approval)
             persistentTitle = stringResource(R.string.assistant_settings_owner_approval_persistent)
+            saveTitle = stringResource(R.string.assistant_settings_owner_approval_save_phrases)
+            zoneTitle = stringResource(R.string.assistant_settings_zone_follow)
             val density = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
                 PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
@@ -305,6 +311,10 @@ class AssistantSettingsShotsTest {
         for (s in AppStyle.entries) for (d in listOf(false, true)) for (scale in listOf(1f, 2f)) {
             style = s; dark = d; fontScale = scale
             rule.waitForIdle()
+            rule.onNode(hasScrollToNodeAction()).performScrollToNode(hasText(replyTitle))
+            rule.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("发\n同意"))
+            rule.onNode(hasScrollToNodeAction()).performScrollToNode(hasText(saveTitle))
+            rule.onNode(hasScrollToNodeAction()).performScrollToNode(hasText(zoneTitle))
             rule.onNode(hasText(replyTitle) and isToggleable()).assertIsOff()
             rule.onNode(hasText(persistentTitle) and isToggleable()).assertIsOff()
             rule.onNodeWithText("发\n同意").assertExists()
