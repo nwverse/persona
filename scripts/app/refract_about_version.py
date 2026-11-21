@@ -205,18 +205,60 @@ def build_cli(work: Path, lock: dict) -> Path:
     return cli
 
 
-def run(cli: Path, mode: str, android_out: Path, harmony_out: Path) -> None:
+def run(cli: Path, mode: str, android_out: Path, harmony_out: Path, sources=(SOURCE,)) -> None:
     version = subprocess.run([str(cli), "--version"], cwd=ROOT, capture_output=True, text=True, timeout=30)
     if version.returncode != 0:
         fail("CLI does not expose the required `--version` source identity; rebuild the exact pinned public source")
     expected = f"refract 0.1.0 ({EXPECTED['commit']})"
     if version.stdout.strip() != expected:
         fail(f"CLI identity mismatch: expected `{expected}`, got `{version.stdout.strip()}`; rebuild the pinned source")
-    subprocess.run(
-        [str(cli), mode, "--input", str(SOURCE), "--mapping", str(MAPPING),
-         "--android-out", str(android_out), "--harmony-out", str(harmony_out)],
-        check=True, cwd=ROOT, timeout=90,
-    )
+    arguments = [str(cli), mode]
+    for source in sources:
+        arguments += ["--input", str(source)]
+    arguments += ["--mapping", str(MAPPING), "--android-out", str(android_out), "--harmony-out", str(harmony_out)]
+    subprocess.run(arguments, check=True, cwd=ROOT, capture_output=True, text=True, timeout=90,
+                   errors="replace")
+
+
+def report_process_failure(error: subprocess.CalledProcessError) -> None:
+    """Preserve a failed CLI's own diagnostic instead of printing only its process status."""
+    diagnostics = error.stderr or error.stdout or ""
+    if diagnostics:
+        sys.stderr.write(diagnostics)
+        if not diagnostics.endswith("\n"):
+            sys.stderr.write("\n")
+
+
+def check_unsupported_input(cli: Path, work: Path) -> None:
+    """A valid sibling must not be published when another input has no native-component mapping."""
+    unsupported = work / "UnsupportedAboutControl.swift"
+    work.mkdir()
+    unsupported.write_text("""import SwiftUI
+
+struct UnsupportedAboutControl: View {
+    var body: some View {
+        UnsupportedAboutControlHost(value: \"fixture\")
+    }
+}
+""", encoding="utf-8")
+    before = GENERATED.read_bytes()
+    for mode in ("check", "generate"):
+        android_out = work / mode / "android"
+        harmony_out = work / mode / "harmony"
+        try:
+            run(cli, mode, android_out, harmony_out, sources=(SOURCE, unsupported))
+        except subprocess.CalledProcessError as error:
+            diagnostics = error.stderr or error.stdout
+        else:
+            fail(f"Unsupported component was accepted in {mode} mode")
+        for fragment in ("UnsupportedAboutControl.swift:5:9", "[missingComponentMapping]",
+                         "UnsupportedAboutControlHost", "Suggestion: Declare its typed target"):
+            if fragment not in diagnostics:
+                fail(f"Unsupported component lacked a source-located diagnostic in {mode} mode: {diagnostics}")
+        if android_out.exists() or harmony_out.exists():
+            fail(f"Unsupported component published partial output in {mode} mode")
+        if GENERATED.read_bytes() != before:
+            fail(f"Rejected {mode} changed the reviewed generated Kotlin")
 
 
 def main() -> int:
@@ -249,6 +291,10 @@ def main() -> int:
         with tempfile.TemporaryDirectory(prefix="persona-refract-about-") as temporary:
             work = Path(temporary)
             cli = args.cli.resolve() if args.cli is not None else build_cli(work, lock)
+            before = GENERATED.read_bytes()
+            check_unsupported_input(cli, work / "rejected")
+            if GENERATED.read_bytes() != before:
+                fail("Rejected input changed the reviewed generated Kotlin")
             if args.mode == "generate":
                 # The mapping's own output.directory is not used: this command is run only from Persona's root.
                 # Its second backend is schema validation only and never published as a Persona destination.
@@ -283,11 +329,14 @@ def main() -> int:
                 before = GENERATED.read_bytes()
                 run(cli, "generate", GENERATED.parent, work / "schema-only")
                 if GENERATED.read_bytes() != before:
-                    fail("Pinned generation is not deterministic")
+                    GENERATED.write_bytes(before)
+                    fail("Pinned generation is not deterministic; the reviewed Kotlin was restored")
                 print(f"Generated {GENERATED.relative_to(ROOT)} with pinned source {lock['commit']}")
             print(f"Refract About Version {args.mode}: PASSED ({lock['commit']}); Android-only, no runtime")
     except (ValueError, OSError, subprocess.SubprocessError, json.JSONDecodeError, tarfile.TarError,
             urllib.error.URLError) as error:
+        if isinstance(error, subprocess.CalledProcessError):
+            report_process_failure(error)
         print(f"Refract About Version: FAILED: {error}", file=sys.stderr)
         return 1
     return 0

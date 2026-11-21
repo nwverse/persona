@@ -59,6 +59,13 @@ is repeated for byte-identical output. `scripts/ci/android.sh` explicitly select
 check in its lint/build lane; a missing Swift toolchain, download failure or source mismatch fails the check rather
 than silently skipping it. An ordinary Gradle build does not fetch or run the generator.
 
+Before either mode's valid-source invocation, the same pinned CLI must reject the unchanged About row alongside a
+synthetic component with no native mapping. Both `check` and `generate` must return nonzero with the input's source
+location, component name and mapping suggestion, create neither output directory and leave the reviewed Kotlin
+unchanged. `scripts/app/test_refract_about_version.py` covers that fail-closed boundary with mocked failures; it runs
+in the lint/build lane without a CLI, network or Swift. This bounded CLI evidence does not accept a generator release
+or satisfy Gate A's remaining readiness items.
+
 Generated `android/feature/settings/src/test/kotlin/persona/feature/settings/generated/AboutVersionRow.kt` imports
 only Compose and Persona code. Both it and `AboutVersionSnapshot.kt` live only in `:feature:settings`'s test source
 set; ordinary debug/release production source sets contain neither the generated row nor its adapter. Its model is
