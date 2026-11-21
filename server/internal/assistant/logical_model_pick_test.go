@@ -70,3 +70,13 @@ func TestOrdinaryModelPickCannotCrossRuntimeConnectionsOfTheSameKind(t *testing.
 		})
 	}
 }
+
+func TestUnknownRuntimeSourceCannotChangeLauncher(t *testing.T) {
+	s, f := pickFixture(t)
+	f.setSessions("server", proto.Session{SessionID: "main", Assistant: true, Agent: "unknown", Launcher: "hosted-one", SourceKind: proto.SourceRuntime, SourceInstanceID: "runtime-one"})
+	_, err := send(t, s, "main", map[string]any{"launcher": "claude"})
+	var refusal *rpc.Error
+	if !errors.As(err, &refusal) || !strings.Contains(string(refusal.Data), `"delivered":"none"`) {
+		t.Fatalf("unidentified runtime source changed execution: %v", err)
+	}
+}
