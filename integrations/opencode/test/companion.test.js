@@ -292,6 +292,26 @@ test('companion advertises launchers/models/assistant without supervision_policy
   assert.ok(acp.calls.some((c) => c[0] === 'closeSession' && c[1].sessionId === sid))
 })
 
+test('the ACP companion exposes A2A tools and forwards calls from its own Agent session', async (t) => {
+  const n = await startFakeNode(t, { tools: [{ name: 'a2a_report', description: 'Report a task result' }] })
+  const acp = new FakeAcpClient()
+  let endpoint
+  acp.onNewSession = ({ mcpServers }) => { [endpoint] = mcpServers }
+  const companion = createTestCompanion({ socketPath: n.path, openDb: fakeV1Db().openDb, acp })
+  t.after(() => companion.stop())
+  await companion.start()
+  await n.ready
+  const { session } = await n.peer.call('session.start', { cwd: '/w/app' })
+  const headers = { 'Content-Type': 'application/json', ...Object.fromEntries(endpoint.headers.map(({ name, value }) => [name, value])) }
+  const mcp = (method, params) => fetch(endpoint.url, {
+    method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+  }).then((res) => res.json())
+  assert.deepEqual((await mcp('tools/list', {})).result.tools.map(({ name }) => name), ['a2a_report'])
+  const args = { task_id: 'task', message_id: 'report', state: 'completed', text: 'Done' }
+  assert.equal((await mcp('tools/call', { name: 'a2a_report', arguments: args })).result.content[0].text, 'a2a_report ran')
+  assert.deepEqual(n.toolCalls, [{ name: 'a2a_report', args, session_id: session.session_id }])
+})
+
 test('companion assistant mode wires HTTP MCP end-to-end, hides context, enforces memory_dir, plan readonly_unsupported, command gates, and rejects supervision_instructions', async (t) => {
   const n = await startFakeNode(t, {
     tools: [

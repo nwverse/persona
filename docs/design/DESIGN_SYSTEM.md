@@ -3842,3 +3842,12 @@ This requested interaction change adds no component, theme or motion pattern.
 Audience: people choosing the model for their main Assistant conversation. Reuse the existing model-configuration purpose row and editor, with **Conversation defaults** as the category and **Main chat** directly beneath it as its independently editable use. Do not add another primary settings page or put runtime implementation details in the chat flow. Show the inherited effective value and existing reset action; changing Main chat must not modify a new side conversation's defaults.
 
 The existing main model pill and empty main starter read the main purpose's effective launcher/model/effort. A new side-conversation starter reads the shared default. An explicit conversation pick continues to win. Cross-engine changes use the existing explicit switch confirmation; saving a default does not silently start a second execution or optimistically rename the current engine. English, Simplified Chinese and Japanese purpose names and descriptions ship together.
+
+Native main-chat model defaults (#11936): Apple AssistantModelSheet/composer and
+Android ChatModelPill retain the shared eligible-launcher catalog but read the
+independent `assistant.main` default for the main conversation. Its launcher,
+model and next-message effort apply below an explicit conversation pick. Main
+and ordinary-new-chat caches are distinct; no main read writes shared defaults.
+An older hub with no main purpose retains shared defaults; a transient main read
+failure keeps the last good main value. Reuse the existing capsule, panel and
+feedback, without a new control or polling loop.

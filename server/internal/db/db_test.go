@@ -1896,6 +1896,23 @@ func TestSentEcho(t *testing.T) {
 	}
 }
 
+func TestA2AEchoRestoresWithoutAppSend(t *testing.T) {
+	d, ctx := open(t), t.Context()
+	id := proto.A2ADeliveryPrefix + "task-1"
+	receipt := func(line string) json.RawMessage {
+		return json.RawMessage(fmt.Sprintf(`{"session_id":"child","client_msg_id":%q,"line":%q,"source":{"kind":"conversation","conversation_id":"parent"}}`, id, line))
+	}
+	for _, entry := range []json.RawMessage{receipt(""), receipt("first"), receipt("")} {
+		if err := d.RecordEcho(ctx, id, "box", entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	restored, err := d.Echoes(ctx, "box")
+	if err != nil || len(restored) != 1 || !strings.Contains(string(restored[0]), `"line": "first"`) || !strings.Contains(string(restored[0]), `"conversation_id": "parent"`) {
+		t.Fatalf("restored A2A receipts: %s %v", restored, err)
+	}
+}
+
 // A connector's secret: stored sealed by the hub, replaced, read back, deleted; another connector has none.
 func TestConnectorSecrets(t *testing.T) {
 	d, ctx := open(t), context.Background()

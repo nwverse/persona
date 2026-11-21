@@ -141,10 +141,31 @@ func (s *Service) logicalCall(ctx context.Context, machine, method string, raw j
 		s.logical.mu.Unlock()
 	}
 	var out json.RawMessage
-	err = st.WithConversationEpoch(ctx, machine, id, c.Epoch, func(current *db.LogicalConversation) error {
+	withEpoch := st.WithConversationEpoch
+	var a2aMachine string
+	if a2aDeliveryMethod(method) {
+		a2aMachine = active.MachineID
+		if !s.a2aMachineAllowed(ctx, s.a2aConfig(ctx), a2aMachine) {
+			return nil, true, logicalRefusal(ctx, "unavailable")
+		}
+		// The epoch lock holds a database connection across the node call.
+		// Leave room in the pool for callbacks and regular conversation traffic.
+		select {
+		case s.a2aLogicalWrites <- struct{}{}:
+			defer func() { <-s.a2aLogicalWrites }()
+		default:
+			return nil, true, logicalRefusal(ctx, "busy")
+		}
+		withEpoch = st.WithDrainedConversationEpoch
+	}
+	dispatched := false
+	err = withEpoch(ctx, machine, id, c.Epoch, func(current *db.LogicalConversation) error {
 		active, ok = current.Active()
 		if !ok {
 			return logicalRefusal(ctx, "unavailable")
+		}
+		if a2aMachine != "" && active.MachineID != a2aMachine {
+			return logicalRefusal(ctx, "busy")
 		}
 		if current.Switch != nil && (method == "session.modes" || method == "session.switch" || method == "session.resume" || method == DeviceAssistantWarm) {
 			return logicalRefusal(ctx, "busy")
@@ -240,6 +261,7 @@ func (s *Service) logicalCall(ctx context.Context, machine, method string, raw j
 			physical["history"] = active.SourceHistory
 		}
 		var e error
+		dispatched = true
 		out, e = s.logicalPhysical(ctx, active.MachineID, method, physical)
 		if e == nil && method == "session.modes" {
 			if modes, ok := s.store().(logicalModesStore); ok {
@@ -260,6 +282,9 @@ func (s *Service) logicalCall(ctx context.Context, machine, method string, raw j
 		return nil, true, logicalRefusal(ctx, "busy")
 	}
 	if err != nil {
+		if a2aMachine != "" && !dispatched {
+			return nil, true, logicalRefusal(ctx, "busy")
+		}
 		return nil, true, err
 	}
 	if method == "session.fork" {
