@@ -5172,8 +5172,8 @@ unaudited write.
 
 | Method | Path | Behavior |
 | --- | --- | --- |
-| GET | `/api/v1/assistant/outbound-messages` | `{identity: "bot" \| "user"}`; default `bot`, for Lark via lark-cli only. |
-| POST | `/api/v1/assistant/outbound-messages` | `{identity}` requests a default-sender change; `{revision, scope: {channel: "larkcli", target, scenario: "inbox_reply" \| "assistant_message", identity}}` requests a new reversible `send` standing authorization. Empty `target` explicitly means all chats in this channel. Approval names the scope and sender; only the owner's own permission resolution applies the change. `{result}` is descriptive, not proof of activation: read the settings/registry back. Existing standing-authorizations GET/DELETE remains the inspect/revoke API. |
+| GET | `/api/v1/assistant/outbound-messages` | `{identity: "bot" \| "user", approval_id?}`; default `bot`, for Lark via lark-cli only. An optional `approval_id` identifies the latest pending request. With query `approval=<id>`, returns `{status: "pending" \| "approved" \| "declined" \| "failed"}` for that card. |
+| POST | `/api/v1/assistant/outbound-messages` | `{identity}` requests a default-sender change; `{revision, scope: {channel: "larkcli", target, scenario: "inbox_reply" \| "assistant_message", identity}}` requests a reversible `send` standing authorization. Empty `target` means all chats in this channel. Returns HTTP 202 with `{approval_id, status: "pending"}` after saving the card, or `{status: "unchanged"}` if the sender is already selected. An authenticated owner decision within 24 hours commits the exact change and card outcome together. The card survives a restart; a change to the original setting or registry revision needs a fresh card. Existing standing-authorizations GET/DELETE remains the inspect/revoke API. |
 
 `app.call` AppInbox adds `inbox.message_policy {}` ->
 `{sender_identity: true}`. `inbox.reply` accepts optional outer

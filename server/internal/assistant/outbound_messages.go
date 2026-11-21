@@ -6,12 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -309,60 +307,4 @@ func (s *Service) toolMessageSend(ctx context.Context, machine, session string, 
 		return "", i18n.Err("assistant-outbound.already_delivered")
 	}
 	return `{"sent":true}`, nil
-}
-
-func (s *Service) outboundMessageRoutes() {
-	s.handle("GET /api/v1/assistant/outbound-messages", func(w http.ResponseWriter, r *http.Request) {
-		if !fullRole(r) {
-			apierr.Write(w, http.StatusForbidden, i18n.Err("assistant-standing_authorizations.full_access"))
-			return
-		}
-		identity, err := s.outboundIdentity(r.Context())
-		if err != nil {
-			apierr.Write(w, http.StatusServiceUnavailable, err)
-			return
-		}
-		apierr.WriteJSON(w, map[string]string{"identity": identity})
-	})
-	s.handle("POST /api/v1/assistant/outbound-messages", func(w http.ResponseWriter, r *http.Request) {
-		if !fullRole(r) {
-			apierr.Write(w, http.StatusForbidden, i18n.Err("assistant-standing_authorizations.full_access"))
-			return
-		}
-		var in struct {
-			Identity string                `json:"identity"`
-			Revision int64                 `json:"revision"`
-			Scope    *MessageAuthorization `json:"scope"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-			apierr.Write(w, http.StatusBadRequest, err)
-			return
-		}
-		key, value := outboundIdentityKey, json.RawMessage(nil)
-		if in.Scope == nil {
-			value, _ = json.Marshal(in.Identity)
-		} else {
-			key = standingAuthorizationsKey
-			list, err := s.standingAuthorizations(r.Context())
-			if err != nil || list.Revision != in.Revision {
-				apierr.Write(w, http.StatusConflict, errStandingConflict)
-				return
-			}
-			scope, _ := json.Marshal(in.Scope)
-			list.Authorizations = append(list.Authorizations, StandingAuthorization{Actions: []string{"send"}, Conditions: []string{},
-				Quote: "Allow automatic messages within this exact scope: " + string(scope), Source: "settings", Reversible: true, Messages: in.Scope})
-			value, _ = json.Marshal(list)
-		}
-		for _, setting := range s.ownSettings() {
-			if setting.Key == key {
-				result, err := s.ownSettingAction(r.Context(), ToolCall{}, setting, "set", value)
-				if err != nil {
-					apierr.Write(w, http.StatusBadRequest, err)
-					return
-				}
-				apierr.WriteJSON(w, map[string]string{"result": result})
-				return
-			}
-		}
-	})
 }

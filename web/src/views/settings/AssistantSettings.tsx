@@ -2,7 +2,7 @@
 // AssistantMemoryView, Android's assistant settings): what Persona does on its own (a line into "Scheduled tasks"), what it knows about you
 // ("About me" = `notes`, saved on "Save" or when leaving; "Memory" = its memory files: read, edit the whole file, delete), and where
 // it runs (read-only here). Its model is Settings › Models › Main chat, not here (#1291).
-import { Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../../i18n";
 import { BASE } from "../../lib/base";
 import { settingsHref } from "./nav";
@@ -122,6 +122,7 @@ export function AssistantSettings({ bare }: { /** Without its header (the profil
 
 function AssistantSettingsForManager({ manager, owner, bare }: { manager: string; owner: string; bare?: boolean }) {
   const [outboundRevision, setOutboundRevision] = useState(0);
+  const outboundChanged = useCallback(() => setOutboundRevision(n => n + 1), []);
   const [notesSaves] = useState(() => aboutMeSaves(manager, owner));
   const scopedApi: typeof api = (path, init) => api(path, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), [MANAGER_HEADER]: manager } });
   const [directionNotes] = useState(() => directionNotesDeps(scopedApi));
@@ -569,7 +570,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
 
       <PageBoundary page="outbound-messages">
         <Suspense fallback={<Loading />}>
-          <OutboundMessages manager={manager} changed={() => setOutboundRevision(n => n + 1)} />
+          <OutboundMessages manager={manager} changed={outboundChanged} />
         </Suspense>
       </PageBoundary>
       {typeof info?.owner_reply_approval === "boolean" && typeof info.persistent_owner_action_cards === "boolean" && Array.isArray(info.owner_reply_approval_phrases) && (

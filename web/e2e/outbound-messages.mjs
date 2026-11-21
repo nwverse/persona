@@ -24,15 +24,20 @@ try {
         localStorage.setItem("persona.theme", theme);
         localStorage.setItem("persona.language", lang);
       }, { theme, lang });
-      let grants = [], pending, requested;
+      let grants = [], status, requested;
       const errors = [];
       await context.route("**/*", route => new URL(route.request().url()).origin === base.origin ? route.continue() : route.abort());
       await context.route("**/api/v1/**", async route => {
         const req = route.request(), path = new URL(req.url()).pathname.replace(/^\/api\/v1/, "");
         if (path === "/assistant/outbound-messages") {
           assert.equal(req.headers()["x-persona-manager"], "assistant");
-          if (req.method() === "POST") { requested = req.postDataJSON(); pending = route; return; }
-          return route.fulfill({ json: { identity: "bot" } });
+          if (req.method() === "POST") {
+            requested = req.postDataJSON();
+            status = "pending";
+            return route.fulfill({ status: 202, json: { approval_id: "ix_example", status } });
+          }
+          if (new URL(req.url()).searchParams.get("approval")) return route.fulfill({ json: { status } });
+          return route.fulfill({ json: { identity: "bot", approval_id: status === "pending" ? "ix_example" : undefined } });
         }
         if (path.startsWith("/assistant/standing-authorizations")) {
           if (req.method() === "DELETE") { grants = []; return route.fulfill({ json: { ok: true, revision: 2 } }); }
@@ -66,13 +71,16 @@ try {
       await group.getByText(strings.pending, { exact: true }).waitFor();
       assert.deepEqual(requested, { revision: 0, scope: { channel: "larkcli", target: "oc_example_group", scenario: "assistant_message", identity: "bot" } });
       assert.equal(grants.length, 0, "No grant before synthetic owner approval");
+      await page.reload();
+      await group.getByText(strings.pending, { exact: true }).waitFor();
+      await group.scrollIntoViewIfNeeded();
       await page.screenshot({ path: join(output, `${theme}-${lang}-${width}-pending.png`) });
       grants = [{
         id: "sa_example", machine_id: "", directory: "", actions: ["send"], conditions: [],
         quote: "Automatic messages in the example group.", source: "settings", granted_at: "2026-11-17T00:00:00Z",
         reversible: true, messages: requested.scope,
       }];
-      await pending.fulfill({ json: { result: "approved" } });
+      status = "approved";
       const registry = page.locator('[data-settings-group="standing-authorizations"]');
       await registry.locator("article").waitFor();
       await registry.scrollIntoViewIfNeeded();

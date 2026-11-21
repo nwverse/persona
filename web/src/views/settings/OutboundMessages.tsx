@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { t } from "../../i18n";
-import { api } from "../../lib/api";
+import { api, ApiError } from "../../lib/api";
 import { MANAGER_HEADER } from "../../lib/manager-choice";
 import { Button, Loading } from "../../ui/atoms";
 import { Group, SettingsHint } from "./SettingsParts";
@@ -8,6 +8,8 @@ import { Group, SettingsHint } from "./SettingsParts";
 type Identity = "bot" | "user";
 type Scope = { channel: "larkcli"; target: string; scenario: "inbox_reply" | "assistant_message"; identity: Identity };
 type Registry = { revision: number; authorizations: { id: string; messages?: Scope }[] };
+type OutboundState = { identity: Identity; approval_id?: string };
+type Approval = { approval_id?: string; status: "pending" | "approved" | "declined" | "failed" | "unchanged" };
 const path = "/assistant/outbound-messages";
 const selectClass = "min-h-11 w-full min-w-0 rounded-control bg-field px-3 py-2 text-meta text-ink shadow-inset-field";
 
@@ -18,7 +20,9 @@ export function OutboundMessages({ manager, changed }: { manager: string; change
   const [target, setTarget] = useState("");
   const [all, setAll] = useState(false);
   const [scenario, setScenario] = useState<Scope["scenario"]>("inbox_reply");
-  const [busy, setBusy] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [approvalID, setApprovalID] = useState("");
+  const busy = submitting || approvalID !== "";
   const [notice, setNotice] = useState("");
   const [reload, setReload] = useState(0);
   useEffect(() => {
@@ -26,43 +30,81 @@ export function OutboundMessages({ manager, changed }: { manager: string; change
     const options = { headers: { [MANAGER_HEADER]: manager }, signal: controller.signal };
     setIdentity(null);
     setRegistry(null);
-    Promise.all([api<{ identity: Identity }>(path, options), api<Registry>("/assistant/standing-authorizations", options)]).then(
+    Promise.all([api<OutboundState>(path, options), api<Registry>("/assistant/standing-authorizations", options)]).then(
       ([current, grants]) => {
         if (controller.signal.aborted) return;
         if (!["bot", "user"].includes(current.identity) || !Array.isArray(grants.authorizations)) throw new Error("Invalid settings");
         setIdentity(current.identity);
         setChoice(current.identity);
         setRegistry(grants);
+        if (current.approval_id) {
+          setApprovalID(current.approval_id);
+          setNotice(t("settings-outbound.pending"));
+        }
       },
     ).catch(() => { if (!controller.signal.aborted) setNotice(t("settings-outbound.failed")); });
     return () => controller.abort();
   }, [manager, reload]);
 
+  useEffect(() => {
+    if (!approvalID) return;
+    const controller = new AbortController();
+    const options = { headers: { [MANAGER_HEADER]: manager }, signal: controller.signal };
+    let timer: ReturnType<typeof setTimeout>;
+    const check = async () => {
+      try {
+        const { status } = await api<Approval>(`${path}?approval=${encodeURIComponent(approvalID)}`, options);
+        if (controller.signal.aborted) return;
+        if (status !== "pending") {
+          const [current, grants] = await Promise.all([
+            api<OutboundState>(path, options), api<Registry>("/assistant/standing-authorizations", options),
+          ]);
+          if (controller.signal.aborted) return;
+          setIdentity(current.identity);
+          setChoice(current.identity);
+          setRegistry(grants);
+          setApprovalID("");
+          setNotice(t(status === "approved" ? "settings-outbound.saved" :
+            status === "declined" ? "settings-outbound.declined" : "settings-outbound.failed"));
+          if (status === "approved") changed();
+          return;
+        }
+      } catch (err) {
+        if (!controller.signal.aborted && err instanceof ApiError && err.status === 404) {
+          setApprovalID("");
+          setNotice(t("settings-outbound.failed"));
+          return;
+        }
+        // A hub or manager may be reconnecting. The stored approval is still authoritative.
+      }
+      if (!controller.signal.aborted) timer = setTimeout(check, 2000);
+    };
+    void check();
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [approvalID, manager, changed]);
+
   const request = async (scope?: Scope) => {
     if (busy || !registry) return;
-    setBusy(true);
+    setSubmitting(true);
     setNotice(t("settings-outbound.pending"));
     try {
-      await api(path, {
+      const approval = await api<Approval>(path, {
         method: "POST", headers: { [MANAGER_HEADER]: manager },
         body: JSON.stringify(scope ? { revision: registry.revision, scope } : { identity: choice }),
       });
-      const options = { headers: { [MANAGER_HEADER]: manager } };
-      const current = await api<{ identity: Identity }>(path, options);
-      const grants = await api<Registry>("/assistant/standing-authorizations", options);
-      const approved = scope
-        ? grants.authorizations.some(g => g.messages && g.messages.channel === scope.channel && g.messages.target === scope.target &&
-          g.messages.scenario === scope.scenario && g.messages.identity === scope.identity && !registry.authorizations.some(old => old.id === g.id))
-        : current.identity === choice;
-      setIdentity(current.identity);
-      setChoice(current.identity);
-      setRegistry(grants);
-      setNotice(t(approved ? "settings-outbound.saved" : "settings-outbound.declined"));
-      if (approved) changed();
+      if (approval.status === "pending" && approval.approval_id) {
+        setApprovalID(approval.approval_id);
+      } else if (approval.status === "unchanged") {
+        setNotice("");
+        setReload(n => n + 1);
+      } else {
+        throw new Error("Invalid approval receipt");
+      }
     } catch {
       setNotice(t("settings-outbound.failed"));
+      setReload(n => n + 1);
     } finally {
-      setBusy(false);
+      setSubmitting(false);
     }
   };
   const scope: Scope = { channel: "larkcli", target: all ? "" : target.trim(), scenario, identity: identity ?? "bot" };

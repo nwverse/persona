@@ -17,7 +17,9 @@ To enable automatic sending:
    channel. Choose **Suggested Inbox replies** or **Assistant-authored messages**.
 3. Request approval. The permission card names channel, target, scenario, sender,
    audit, and revocation. Nothing takes effect until the owner's own approval.
-4. Verify the new grant under **Standing authorizations**. Revoke it there at any
+4. The settings page shows that the request is waiting for approval. The card
+   stays available for 24 hours, across a page reload or a hub restart. Once
+   approved, the page refreshes **Standing authorizations**. Revoke it there at any
    time. Revocation stops future sends, not an already started transport call.
 
 The same configuration is available through `persona_settings`:
