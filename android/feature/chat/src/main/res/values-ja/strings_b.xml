@@ -153,6 +153,12 @@
     <string name="chat_request_secret_run_note">1回だけ使い、保存しません。アシスタントにも見えません。</string>
     <string name="chat_request_secret_run_run">実行</string>
     <string name="chat_request_secret_run_decline">拒否</string>
+    <string name="chat_secret_handoff_always">常に許可</string>
+    <string name="chat_secret_handoff_lead">%2$s の「%1$s」が今回の実行だけ受け取ります：</string>
+    <string name="chat_secret_handoff_lead_unnamed">%1$s の Agent が今回の実行だけ受け取ります：</string>
+    <string name="chat_secret_handoff_lead_bare">Agent が今回の実行だけ受け取ります：</string>
+    <string name="chat_secret_handoff_note">Persona とアシスタントは値を見ません。</string>
+    <string name="chat_secret_handoff_always_scope">常に許可：%1$s。</string>
     <string name="chat_plan_approve_edits">編集を承認</string>
     <string name="chat_plan_reject">差し戻し</string>
     <string name="chat_plan_approve_all">承認して自動実行</string>

@@ -64,6 +64,8 @@ class GroupRoutingTest {
         // So are alert ids (#5614): the same id from two hubs replaces nothing on the other's.
         assertEquals("p1~g0a1b2c3d", (other.event(NotifyEvent("alert", "", "", id = "p1")) as NotifyEvent).id)
         assertEquals("i1", GroupKeys.raw(interaction.id))
+        assertEquals(Interaction("i1", "macbook", "s1"), other.rawInteraction(interaction))
+        assertSame(interaction, primary.rawInteraction(interaction))
         val events: List<ServerEvent> = listOf(ItemsEvent("m", "s"), SessionsEvent("m", listOf(Session("m", "s"))),
             MachinesEvent(listOf(Machine("m"))), RevsEvent("m"), InteractionEvent(Interaction("i", "m", "s")),
             NotifyEvent("done", "m", "s"), DeltaEvent("m", "s"), ScreenEvent("m", "s"), HookEvent("m", "s"),
