@@ -49,7 +49,8 @@ struct SettingsView: View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("SettingsView")
         #endif
-        // By value, every page: in the split (iPhone Duo open) they open beside the list, not inside its column.
+        // By value, every page: in the split (the iPad's sheet) they open beside the list, not inside its column, through
+        // `settingsPath` (`SettingsListLink`, #12035).
         SplitNavigation(path: Bindable(model).settingsPath, destinations: SettingsDestinations()) {
             List {
                 if search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -59,7 +60,7 @@ struct SettingsView: View {
                 } else {
                     Section {
                         ForEach(searchResults) { entry in
-                            NavigationLink(value: entry.page) {
+                            SettingsListLink(value: entry.page) {
                                 SettingsRow(title: entry.title, symbol: entry.symbol, tint: Theme.accent)
                             }
                             .settingsListRow(entry.page)
@@ -133,6 +134,11 @@ struct SettingsView: View {
             #endif
         } empty: {
             SplitPlaceholder(symbol: Theme.Icon.settings, title: String(localized: "Settings"), message: String(localized: "Choose an item on the left."))
+                #if os(iOS)
+                // Under the pages the list opens (#12035): they keep their large titles, as on the phone, unless a page
+                // asks for an inline one.
+                .navigationBarTitleDisplayMode(.large)
+                #endif
                 #if os(macOS)
                 // As System Settings: the window opens on the first page, not on an empty pane.
                 .onAppear { if model.settingsPath.isEmpty && search.isEmpty { model.settingsPath.append(SettingsPage.appearance) } }
@@ -164,7 +170,7 @@ struct SettingsView: View {
                              value: MeetingAttendees.offered(model) ? MeetingAttendees.defaultRole(model).title : "")
                 #endif
                 settingsLink(.agents, "Agent", Theme.Icon.options, id: "settings-agents")
-                NavigationLink(value: MachineListRoute()) { MachinesSettingsRow() }
+                SettingsListLink(value: MachineListRoute()) { MachinesSettingsRow() }
                     .settingsListRow(MachineListRoute())
                     .accessibilityIdentifier("settings-machines")
             }
@@ -202,7 +208,7 @@ struct SettingsView: View {
                 settingsLink(.storage, "Storage", Theme.Icon.storage, id: "settings-storage", value: storage?.storageText ?? "")
                 #if os(iOS)
                 settingsLink(.health, "Health", Theme.Icon.health, id: "settings-health")
-                NavigationLink(value: SettingsPage.phoneData) {
+                SettingsListLink(value: SettingsPage.phoneData) {
                     SettingsRow(title: ConnectorText.device, symbol: Theme.Icon.thisDevice, tint: Theme.accent)
                 }
                 .settingsListRow(SettingsPage.phoneData)
@@ -248,7 +254,7 @@ struct SettingsView: View {
     }
 
     private func settingsLink(_ page: SettingsPage, _ title: LocalizedStringResource, _ symbol: String, id: String, value: String = "") -> some View {
-        NavigationLink(value: page) {
+        SettingsListLink(value: page) {
             SettingsRow(title: String(localized: title), symbol: symbol, tint: Theme.accent, value: value, look: .oneLine)
         }
         .settingsListRow(page)
@@ -1604,6 +1610,40 @@ extension View {
         modifier(MacSettingsRowSelection(value: value))
         #else
         self
+        #endif
+    }
+}
+
+/// A row of Settings' own list that opens the page `value` (#12035). In one stack (an iPhone, an iPad window at compact
+/// width) a `NavigationLink(value:)`, which pushes the page. In the split (the iPad's Settings sheet), where the list is a
+/// column beside the page, a button that opens the page through `settingsPath` (`splitOpen`), as the Agents list's rows
+/// do: a value link there showed its page by the split's own selection, outside the path, and no row on that page
+/// opened anything; a `List(selection:)` instead cleared the paths links and launch switches set.
+struct SettingsListLink<Value: Hashable, Label: View>: View {
+    #if os(iOS)
+    @Environment(\.splitOpen) private var splitOpen
+    #endif
+    let value: Value
+    let label: Label
+
+    init(value: Value, @ViewBuilder label: () -> Label) {
+        self.value = value
+        self.label = label()
+    }
+
+    var body: some View {
+        #if os(iOS)
+        if let splitOpen {
+            // The label as a link draws it, and the whole width of the row to tap.
+            Button { splitOpen.open(value) } label: {
+                label.frame(maxWidth: .infinity, alignment: .leading).contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+        } else {
+            NavigationLink(value: value) { label }
+        }
+        #else
+        NavigationLink(value: value) { label }
         #endif
     }
 }
