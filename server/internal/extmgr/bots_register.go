@@ -173,7 +173,7 @@ func (h *Manager) pollFeishuRegistration(ctx context.Context, credentials func(s
 	b.mu.Unlock()
 	if !live {
 		if v := h.botView(ctx); v.HasSecret {
-			return h.bindFeishuStep(ctx, "", nil)
+			return h.bindFeishuStep(ctx, "", nil, false)
 		}
 		return credentials(""), nil
 	}

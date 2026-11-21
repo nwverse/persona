@@ -220,14 +220,64 @@ func TestBotRegistrationSettingsPUTValidationOrdersOldBind(t *testing.T) {
 	awaitRegistration(t, waiting.waiting)
 	// Neither the lifecycle gate nor the remote validation holds bots.mu or blocks independent switches.
 	enabled := startBotRequest(w, context.Background(), http.MethodPut, "/api/v1/bots/feishu", `{"enabled":false}`)
-	registrationPrompt(t, enabled)
+	if p := registrationPrompt(t, enabled); p["enabled"] != false {
+		t.Fatalf("disable PUT did not report disabled: %v", p)
+	}
 	close(release)
-	registrationPrompt(t, put)
-	if p := registrationPrompt(t, bind); p["step"] != "pair" {
+	if p := registrationPrompt(t, put); p["enabled"] != false {
+		t.Fatalf("credential PUT undid the disable: %v", p)
+	}
+	if p := registrationPrompt(t, bind); p["step"] != "credentials" {
 		t.Fatalf("queued old bind finished over new credentials: %v", p)
 	}
 	_, view := w.do(t, http.MethodGet, "/api/v1/bots/feishu", "")
-	if view["app_id"] != "cli_new" || view["owner"] != nil {
+	if view["app_id"] != "cli_new" || view["owner"] != nil || view["enabled"] != false {
 		t.Fatalf("queued old bind changed the new app: %v", view)
+	}
+	var saved FeishuBotSettings
+	if ok, err := w.h.store.Setting(w.ctx, botSettingsKey, &saved); !ok || err != nil || saved.Enabled {
+		t.Fatal("queued old poll persisted enabled=true")
+	}
+}
+
+func TestBotRegistrationRetiredPollKeepsDisabledBotOff(t *testing.T) {
+	for _, resume := range []string{"bind", "settings"} {
+		t.Run(resume, func(t *testing.T) {
+			w, acc, _ := confirmedRegistrationWorld(t)
+			body := fmt.Sprintf(`{"app_id":"cli_new","app_secret":"new-secret","domain":%q,"enabled":false}`, w.api.srv.URL)
+			if code, p := w.do(t, http.MethodPut, "/api/v1/bots/feishu", body); code != http.StatusOK || p["enabled"] != false {
+				t.Fatalf("replace and disable: %d %v", code, p)
+			}
+			store := &registrationSettingsStore{Store: w.h.store}
+			w.h.store = store
+			for range 2 {
+				if p := w.bind(t, stepRegister); p["step"] != "credentials" || p["done"] == true {
+					t.Fatalf("retired poll did not stop passively: %v", p)
+				}
+			}
+			var saved FeishuBotSettings
+			if ok, err := store.Setting(w.ctx, botSettingsKey, &saved); !ok || err != nil || saved.Enabled || saved.Pairing != nil || saved.Registration != nil || saved.AppID != "cli_new" {
+				t.Fatal("retired poll changed the disabled settings")
+			}
+			store.mu.Lock()
+			writes := len(store.writes)
+			store.mu.Unlock()
+			if writes != 0 || len(acc.asked) != 2 {
+				t.Fatal("retired poll wrote settings or called the registrar")
+			}
+			step := ""
+			if resume == "settings" {
+				if code, p := w.do(t, http.MethodPut, "/api/v1/bots/feishu", `{"enabled":true}`); code != http.StatusOK || p["enabled"] != true {
+					t.Fatalf("explicit enable: %d %v", code, p)
+				}
+				step = stepRegister
+			}
+			if p := w.bind(t, step); p["step"] != "pair" {
+				t.Fatalf("explicit resume did not use configured pairing: %v", p)
+			}
+			if ok, err := store.Setting(w.ctx, botSettingsKey, &saved); !ok || err != nil || !saved.Enabled || saved.AppID != "cli_new" {
+				t.Fatal("explicit resume did not retain the chosen app and enable it")
+			}
+		})
 	}
 }

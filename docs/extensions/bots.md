@@ -64,6 +64,7 @@ The two complement each other and have separate switches.
   When the accounts site cannot be reached, or the deployment is private, the step is the credentials form.
   Typing the App ID and App Secret of an existing app stays available on the Lark bot's settings page, folded under Advanced.
   Changing credentials through binding or the bot settings page retires the previous registration in the same settings commit, after validation succeeds; a failed validation or save keeps it. These updates share the binding lifecycle gate, while switch-only and feature-only settings remain independent and keep the registration.
+  Polls from a retired registration do not re-enable a bot the user turned off; they stop at the credentials prompt until the user explicitly binds or enables it again.
   The web Lark bot page starts the same registration itself when there is no app (#5818): its first group is **Create the bot**, one
   **Scan to create with Lark** button that sends the channel's bind step (`POST /api/v1/channels/feishu/bind`) and draws the QR step
   Settings › Channels draws, so both places run one flow. The credentials form and the manual steps sit under a folded

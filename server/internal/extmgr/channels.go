@@ -467,11 +467,12 @@ func (h *Manager) bindFeishu(ctx context.Context, step string, values map[string
 		return connector.Prompt{}, err
 	}
 	defer release()
-	return h.bindFeishuStep(ctx, step, values)
+	return h.bindFeishuStep(ctx, step, values, true)
 }
 
-// bindFeishuStep runs with the bind gate held, including when a stale register poll resumes a configured bot.
-func (h *Manager) bindFeishuStep(ctx context.Context, step string, values map[string]string) (connector.Prompt, error) {
+// bindFeishuStep runs with the bind gate held. Only an explicit bind may enable the bot; a stale registration poll
+// resumes the configured pairing flow passively and stops at the credentials prompt if the user has disabled it.
+func (h *Manager) bindFeishuStep(ctx context.Context, step string, values map[string]string, activate bool) (connector.Prompt, error) {
 	l := h.botLang(ctx)
 	fields := []connector.Field{
 		{Name: "app_id", Label: "App ID", Placeholder: "cli_…"},
@@ -540,6 +541,9 @@ func (h *Manager) bindFeishuStep(ctx context.Context, step string, values map[st
 		return credentials(""), nil
 	}
 	if !v.Enabled {
+		if !activate {
+			return credentials(""), nil
+		}
 		on := true
 		if err := h.updateBot(ctx, &on, nil, nil, nil, nil); err != nil {
 			return connector.Prompt{}, err
@@ -551,6 +555,11 @@ func (h *Manager) bindFeishuStep(ctx context.Context, step string, values map[st
 	b := &h.bots
 	b.mu.Lock()
 	h.loadBotsLocked(ctx)
+	// A switch-only PUT may have disabled the bot since botView was read.
+	if !activate && !b.set.Enabled {
+		b.mu.Unlock()
+		return credentials(""), nil
+	}
 	p := b.set.Pairing
 	issued := false
 	if p == nil || !b.clock().Before(p.Expires) || step == "" && values != nil {
