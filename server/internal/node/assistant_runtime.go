@@ -67,13 +67,28 @@ func (n *Node) runtimeAssistant(id string) bool {
 // runtime's are its own (DSH: session-<uuid>).
 func runtimeSessionID(id string) bool { return id != "" && !validID(id) && runtimeIDRe.MatchString(id) }
 
+func (n *Node) runtimeAssistantCwd(id, cwd string, st sessionState) string {
+	if cwd != "" {
+		return cwd
+	}
+	if st.Cwd != "" {
+		return st.Cwd
+	}
+	if id != "" {
+		if row, _, ok := n.runtimes.rowOf(id); ok && row.Cwd != "" {
+			return row.Cwd
+		}
+	}
+	return identity.AssistantDir(n.home)
+}
+
 // assistantSendRuntime is assistantSend on a runtime (h, nil when it is not connected): a new conversation is started
 // there (session.start with assistant), then the message goes with the snapshot as its context unless public is true,
 // the conversation's permission mode and its memory directory; a new conversation's first message also carries the
 // instructions only a runtime needs (memory, Feishu). Runtimes that advertise caps.supervision_policy receive manager-owned
 // supervision_instructions as an explicit protocol field on session.start and session.send; non-capable runtimes keep
 // the runtimePolicyDropped boundary (refusing supervision deliveries, dropping policy for owner messages).
-func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd, launcher, text string, images []proto.Image, mode string, public, strict bool, modelEffortPolicy ...string) (string, error) {
+func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd, launcher, text string, images []proto.Image, mode string, public, strict bool, selected []assistantskills.Entry, modelEffortPolicy ...string) (string, error) {
 	hasInput := strings.TrimSpace(text) != "" || len(images) != 0
 	if id != "" && hasInput && n.runtimes.compacting(id) {
 		return "", runtimeCompactingRefusal(ctx)
@@ -89,12 +104,7 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		policy = modelEffortPolicy[2]
 	}
 	st, known := n.state.get(id)
-	if cwd == "" {
-		cwd = st.Cwd
-	}
-	if cwd == "" {
-		cwd = identity.AssistantDir(n.home)
-	}
+	cwd = n.runtimeAssistantCwd(id, cwd, st)
 	if launcher == "" {
 		launcher = st.Launcher
 	}
@@ -192,6 +202,14 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		}
 		if st.AwaitingFirstMessage {
 			live = strings.TrimSpace(n.runtimeInstructions(cwd, memDir) + "\n" + live)
+		}
+	}
+	if len(selected) > 0 {
+		skillBlock := selectedSkillInstructions(selected)
+		if live != "" {
+			live = strings.TrimSpace(live + "\n" + skillBlock)
+		} else {
+			live = skillBlock
 		}
 	}
 	params := map[string]any{"session_id": id, "text": text, "images": images}

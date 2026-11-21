@@ -506,21 +506,23 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		if startTier != "" {
 			return "", serviceTierRefusal(ctx, "assistant_service_tier_unsupported")
 		}
-		if refs, err := assistantskills.References(text); err != nil || len(refs) != 0 {
-			return "", skillSelectionError(assistantskills.ErrReference)
-		}
 		if execution.ConfigDir != "" {
 			return "", errors.New(assistantwire.ConfigDirClaudeOnly)
 		}
 		if id != "" && (onRuntime == nil || !runs) && !(runs && launcher == "") { // another kind of agent than its own
 			return "", errors.New("换到另一种 Agent 需要新建对话")
 		}
+		skillCwd := n.runtimeAssistantCwd(id, cwd, st)
+		selected, err := n.selectedSkills(ctx, id, skillCwd, rl, text, execution)
+		if err != nil {
+			return "", err
+		}
 		eff := effort
 		if eff == "" {
 			eff = execution.Effort
 		}
 		superviseRoundFrom(ctx).set(roundKept, roundWhyUnsupported) // a runtime keeps its own context (assistant_round.go)
-		return n.assistantSendRuntime(ctx, onRuntime, id, cwd, rl, text, images, mode, execution.Public, execution.Strict, execution.Model, eff, policy)
+		return n.assistantSendRuntime(ctx, onRuntime, id, cwd, rl, text, images, mode, execution.Public, execution.Strict, selected, execution.Model, eff, policy)
 	}
 	if len(options) == 0 || (execution.Fingerprint == "" && execution.Model == "") {
 		if launcher == "" || launcher == st.Launcher {
