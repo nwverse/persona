@@ -9,7 +9,7 @@ import type { FeishuBotStatus } from "../../lib/feishu-bot";
 
 type Call = { resolve: (s: FeishuBotStatus) => void; reject?: (error: Error) => void };
 const calls = vi.hoisted(() => ({ status: [] as Call[], update: [] as (Call & { body: unknown })[] }));
-const connectorList = vi.hoisted(() => ({ value: [] as HubConnector[], calls: 0 }));
+const connectorList = vi.hoisted(() => ({ value: [] as HubConnector[], calls: 0, pending: null as Promise<HubConnector[]> | null }));
 const connectorLogin = vi.hoisted(() => vi.fn());
 const setConnector = vi.hoisted(() => vi.fn());
 const bindChannel = vi.hoisted(() => vi.fn());
@@ -20,7 +20,7 @@ vi.mock("../../lib/channels", async (original) => ({
 }));
 vi.mock("../../lib/feishu-bot", async (original) => ({
   ...(await original<typeof import("../../lib/feishu-bot")>()),
-  botStatus: () => new Promise<FeishuBotStatus>((resolve) => calls.status.push({ resolve })),
+  botStatus: () => new Promise<FeishuBotStatus>((resolve, reject) => calls.status.push({ resolve, reject })),
   updateBot: (body: unknown) => new Promise<FeishuBotStatus>((resolve, reject) => calls.update.push({ resolve, reject, body })),
   pairBot: () => new Promise<FeishuBotStatus>(() => {}),
 }));
@@ -28,7 +28,7 @@ vi.mock("../../lib/connectors", async (original) => ({
   ...(await original<typeof import("../../lib/connectors")>()),
   listConnectors: () => {
     connectorList.calls++;
-    return Promise.resolve(connectorList.value);
+    return connectorList.pending ?? Promise.resolve(connectorList.value);
   },
   connectorLogin: (...args: unknown[]) => connectorLogin(...args),
   setConnector: (...args: unknown[]) => setConnector(...args),
@@ -87,6 +87,7 @@ beforeEach(() => {
   calls.update.length = 0;
   connectorList.value = [];
   connectorList.calls = 0;
+  connectorList.pending = null;
   connectorLogin.mockReset();
   setConnector.mockReset();
   bindChannel.mockReset();
@@ -268,6 +269,69 @@ describe("Feishu bot dialog", () => {
     expect(dialog.textContent).not.toContain(t("settings-feishubot.read_needs_app"));
     expect(connectorLogin).toHaveBeenCalledWith("larkcli", "", {});
     expect(dialog.textContent).toContain("ABC123");
+  });
+
+  it.each(["before", "after"])("shows the paired bot when the connector list returns 503 %s the bot status", async (order) => {
+    vi.useFakeTimers();
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark", status: "not_signed_in", capabilities: ["login"] };
+    act(() => root.render(<FeishuBot larkcli={larkcli} />));
+    await act(async () => calls.status[0].resolve(saved({ app_id: "", has_secret: false, connected: false })));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+    bindChannel.mockResolvedValueOnce({ step: "register", kind: "qr", interval: 5, qr: { size: 2, rows: ["10", "01"] } });
+    bindChannel.mockResolvedValueOnce({ done: true, account: "Example owner" });
+    const dialog = document.querySelector<HTMLElement>("[role=dialog]")!;
+    const start = [...dialog.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === t("settings-feishubot.create_start"))!;
+    await act(async () => start.click());
+    expect(dialog.querySelector("svg[role=img]")).not.toBeNull();
+    let failConnectors!: (error: Error) => void;
+    connectorList.pending = new Promise((_, reject) => { failConnectors = reject; });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    const paired = saved({ owner: { name: "Example owner", paired_at: 1 } });
+    if (order === "before") await act(async () => failConnectors(new Error("503 Service Unavailable")));
+    await act(async () => calls.status[1].resolve(paired));
+    if (order === "after") await act(async () => failConnectors(new Error("503 Service Unavailable")));
+
+    expect(dialog.textContent).toContain("Example owner");
+    expect(dialog.textContent).not.toContain(t("settings-feishubot.create_start"));
+    expect(host.textContent).toContain("cli_saved");
+    expect(connectorLogin).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+    expect(bindChannel).toHaveBeenCalledTimes(2);
+
+    // The bot's existing recheck still works without binding or authorizing again.
+    await act(async () => dialog.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings-feishubot.recheck")}"]`)!.click());
+    await act(async () => calls.status[2].resolve(paired));
+    expect(dialog.textContent).toContain("Example owner");
+    expect(bindChannel).toHaveBeenCalledTimes(2);
+    expect(connectorLogin).not.toHaveBeenCalled();
+
+    // Recovery remains explicit: the existing authorize action can start a single device flow.
+    connectorList.pending = null;
+    connectorList.value = [larkcli];
+    connectorLogin.mockResolvedValueOnce({ step: "device", kind: "device_code", user_code: "ABC123", url: "https://example.test/authorize" });
+    const authorize = [...dialog.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === t("settings-feishubot.read_authorize"))!;
+    await act(async () => authorize.click());
+    expect(connectorLogin).toHaveBeenCalledTimes(1);
+    await act(async () => calls.status[3].resolve(paired));
+    expect(dialog.textContent).toContain("ABC123");
+    expect(bindChannel).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the create step and does not authorize when the bot status read fails after binding", async () => {
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark", status: "not_signed_in", capabilities: ["login"] };
+    connectorList.value = [larkcli];
+    act(() => root.render(<FeishuBot larkcli={larkcli} />));
+    await act(async () => calls.status[0].resolve(saved({ app_id: "", has_secret: false, connected: false })));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+    bindChannel.mockResolvedValueOnce({ done: true, account: "Example owner" });
+    const dialog = document.querySelector<HTMLElement>("[role=dialog]")!;
+    const start = [...dialog.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === t("settings-feishubot.create_start"))!;
+    await act(async () => start.click());
+    await act(async () => calls.status[1].reject!(new Error("Synthetic bot status failure")));
+    expect(dialog.textContent).toContain(t("settings-feishubot.create_start"));
+    expect(dialog.textContent).not.toContain(t("settings-feishubot.paired"));
+    expect(connectorLogin).not.toHaveBeenCalled();
+    expect(bindChannel).toHaveBeenCalledTimes(1);
   });
 
   it("opens the permission URL when lark-cli scopes are missing", async () => {

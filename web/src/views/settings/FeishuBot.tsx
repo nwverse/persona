@@ -212,8 +212,9 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
   };
 
   const reloadAll = useCallback(async () => {
-    const [next] = await Promise.all([botStatus(), fetchLarkcli()]);
-    adopt(next);
+    // A connector outage must not discard a successful bot binding. Still reject the refresh on either failure:
+    // creation only starts authorization after both reads succeed, rather than using stale connector state.
+    await Promise.all([botStatus().then((next) => adopt(next)), fetchLarkcli()]);
   }, [fetchLarkcli, changed]);
   useEffect(() => {
     if (status && (!editedRef.current || !changed)) setForm(credentialsOf(status));
