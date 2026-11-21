@@ -160,14 +160,13 @@ nonisolated enum AssistantEntries {
         return status.rank
     }
 
-    /// Whether a task belongs in the recent-finished tray. Closed/accepted work is immediately Done on the to-do page
-    /// (#5732); this separate projection keeps it visible for 24 hours until opened (web `showsJustFinished`, #8237).
+    /// Whether a Finished row is new. Seen clears that marker without filing a delivery that still awaits review (#5732).
     static func showsJustFinished(_ todo: TodoItem, _ triage: TodoTriage, now: Date) -> Bool {
-        if triage.section == .justDone { return true }
         let completedAt: Date?
         switch triage.rule {
         case .closed: completedAt = todo.doneAt
         case .accepted: completedAt = todo.supervision?.latestReview?.at
+        case .finishedUnseen: completedAt = TodoTriageLogic.finishedAt(todo, triage)
         default: completedAt = nil
         }
         guard let completedAt else { return false }

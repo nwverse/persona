@@ -848,6 +848,17 @@ class TodoTriageTest {
     }
 
     @Test
+    fun seenAwaitingReviewStaysOpenButIsNotNewInFinished() {
+        val unseen = todo("live", delivery = TodoDelivery(state = "live", at = hoursAgo(2)))
+        assertTrue(unseen.showsJustFinished(at(unseen), now))
+
+        val seen = unseen.copy(seenAt = hoursAgo(1))
+        val placed = at(seen)
+        assertEquals(TriageSection.JustDone to TriageRule.FinishedUnseen, placed.section to placed.rule)
+        assertFalse(seen.showsJustFinished(placed, now))
+    }
+
+    @Test
     fun aFinishedTurnSeenSinceItLastMovedIsDoneUnlessItsPrIsOpen() {
         // the unseen session last moved an hour ago
         val seen = at(todo("t", agents = listOf(agent("unseen"))).copy(seenAt = minutesAgo(30)))

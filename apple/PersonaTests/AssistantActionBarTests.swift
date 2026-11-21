@@ -192,6 +192,20 @@ struct AssistantActionBarTests {
         #expect(split([newer], [session("b", "idle")], conversation: "side").finished.isEmpty)
     }
 
+    /// Seeing an unaccepted delivery clears only Finished's new marker; it stays open and awaiting review (#5732).
+    @Test func seenAwaitingReviewStaysOpenButIsNotNewInFinished() {
+        var delivered = todo("delivered")
+        delivered.delivery = .init(state: "live", at: now - 2 * 3600)
+        let unseen = TodoTriageLogic.triage(delivered, lookup: nil, now: now)
+        #expect(unseen.section == .justDone && unseen.rule == .finishedUnseen)
+        #expect(AssistantEntries.showsJustFinished(delivered, unseen, now: now))
+
+        delivered.seenAt = now
+        let seen = TodoTriageLogic.triage(delivered, lookup: nil, now: now)
+        #expect(seen.section == .justDone && seen.rule == .finishedUnseen)
+        #expect(!AssistantEntries.showsJustFinished(delivered, seen, now: now))
+    }
+
     /// Interruptions keep their own urgency even on an accepted or review-pending task; usage limits remain at rest for
     /// acceptance, but do not masquerade as an ordinary awaiting-review follow-up (#5732).
     @Test func activeErrorsKeepTheirRankAcrossReviewStates() {

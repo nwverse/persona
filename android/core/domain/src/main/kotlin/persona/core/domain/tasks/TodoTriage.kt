@@ -206,13 +206,12 @@ fun Todo.triage(
     return at(TriageSection.Other, TriageRule.Rest)
 }
 
-/** Whether a task belongs in the assistant's recent-finished tray. Closed/accepted work is immediately Done on the
- * to-do page (#5732), but this separate projection keeps it visible for 24 hours until opened (#8237). */
+/** Whether a Finished row is new. Seen clears that marker without filing a delivery that still awaits review (#5732). */
 fun Todo.showsJustFinished(t: Triage, now: Long): Boolean {
-    if (t.section == TriageSection.JustDone) return true
     val completedAt = when (t.rule) {
         TriageRule.Closed -> ms(doneAt)
         TriageRule.Accepted -> ms(supervision?.latestReview?.at)
+        TriageRule.FinishedUnseen -> finishedAt(t)
         else -> 0
     }
     val seenAt = ms(this.seenAt)
