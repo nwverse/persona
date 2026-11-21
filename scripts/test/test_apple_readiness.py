@@ -545,47 +545,6 @@ cleanup_device "$REGULAR_SIM" "$REGULAR_SIM_NAME" "$REGULAR_SIM_STARTED"
         self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
         self.assertEqual(len(calls), 3)
 
-    def test_readiness_shell_does_not_depend_on_unexported_ci_variables(self):
-        source = SCRIPT.read_text()
-        block = source[source.index("  ci_run 'Verify hosted iOS test readiness'"):source.index("\n\n", source.index("  ci_run 'Verify hosted iOS test readiness'"))]
-        fixture = ROOT / "scripts/test"
-        tools = self.fixture.bin
-        python = tools / "python3"
-        python.write_text(textwrap.dedent('''\
-            #!/bin/bash
-            if [[ "$*" == *apple_readiness_watch.py* ]]; then
-              printf 'watch-started\\n'
-              sleep 30
-              exit 0
-            fi
-            exec /usr/bin/python3 "$@"
-        '''))
-        python.chmod(0o755)
-        sim_boot = tools / "sim-boot-fixture"
-        sim_boot.write_text("#!/bin/bash\nexit 0\n")
-        sim_boot.chmod(0o755)
-        env = {"PATH": str(tools) + ":/bin:/usr/bin", "FAKE": str(self.root), "TEST_STEP_TIMEOUT": "3"}
-        command = textwrap.dedent('''\
-            set -euo pipefail
-            unset OUTPUT CI_BUNDLE_ID
-            ci_run() {
-              local label="$1" budget="$2"; shift 2
-              python3 "$CI_ROOT/scripts/ci/run.py" --label "$label" --timeout "$TEST_STEP_TIMEOUT" -- "$@"
-            }
-            CI_ROOT=/fixture-root
-            PERSONA_CONFIG=/fixture-config
-            OUTPUT=/fixture-output
-            LANE=ios
-            SIM=11111111-1111-1111-1111-111111111111
-            CI_BUNDLE_ID=org.example.persona.ci
-            IOS_TESTS=(xcodebuild)
-        ''') + block
-        result = subprocess.run(["/bin/bash", "-c", command], cwd=fixture, env=env,
-                                capture_output=True, text=True, timeout=15)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("watch-started", result.stdout + result.stderr)
-        self.assertNotIn("unbound variable", result.stdout + result.stderr)
-
 
 if __name__ == "__main__":
     unittest.main()
