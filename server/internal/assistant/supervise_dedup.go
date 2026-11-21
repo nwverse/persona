@@ -82,7 +82,7 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 // words stay the same.
 func keyIsNews(kind string) bool {
 	switch kind {
-	case sigParkedDue, sigParkDecided, sigInbox, sigOwnerCannot, sigRecheck, sigUndecidable, sigFailed, sigStarted, sigAllStopped, sigDecisionReply, sigHandoffResult, sigEstimateDue, sigOverdue, sigTimedOut,
+	case sigParkedDue, sigParkDecided, sigInbox, sigOwnerCannot, sigRecheck, sigUndecidable, sigFailed, sigStarted, sigAllStopped, sigDecisionReply, sigHandoffResult, sigEstimateDue, sigOverdue, sigTimedOut, sigCardlessWait,
 		sigCheck: // a check's run, or the owner's answer to its decision: an Agent that only runs tools says the same all along
 		return true
 	}
