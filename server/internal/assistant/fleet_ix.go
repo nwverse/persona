@@ -478,12 +478,14 @@ func (s *Service) await(ctx context.Context, p *pending) (proto.Resolution, erro
 		p.resolved = make(chan struct{})
 	}
 	resolved := p.resolved
-	s.fleet.mu.Unlock()
 	id := p.ix.ID
+	expiresAt := p.ix.ExpiresAt
+	persistent := persistentOwnerProposal(p.ix)
+	s.fleet.mu.Unlock()
 	var timer *time.Timer
 	var timeout <-chan time.Time
-	if !p.ix.ExpiresAt.IsZero() && !persistentOwnerProposal(p.ix) {
-		timer = time.NewTimer(time.Until(p.ix.ExpiresAt))
+	if !expiresAt.IsZero() && !persistent {
+		timer = time.NewTimer(time.Until(expiresAt))
 		timeout = timer.C
 		defer timer.Stop()
 	}

@@ -113,6 +113,8 @@ type fakeHub struct {
 	liveEvents     []map[string]any // the meeting_live events as sent
 	snaps          []Snapshot
 
+	sessionsContextCheck bool // sessions.list rejects an expired caller context, as a real RPC does
+
 	// Agents a task starts (session.start a1, a2…) and what was sent to them; a machine offline, a node refusing.
 	starts       []map[string]any
 	agentSent    []map[string]any
@@ -131,6 +133,7 @@ type fakeHub struct {
 	judged       int                       // the done judge's calls to the model
 	judge        string                    // what they answer ("": an error)
 	judgeFails   int                       // the done judge's next calls that fail before f.judge answers
+	judgeDelay   time.Duration             // how long the done judge waits before answering (its caller can time out)
 	judgeAsked   []string                  // what the done judge was given (its input)
 	judgeBy      func(input string) string // when set, what the done judge answers to its input (instead of f.judge)
 	outcome      string                    // what the outcome model answers (todo_outcome.go; "": an error)
@@ -265,6 +268,14 @@ func listHooked(ctx context.Context) context.Context {
 }
 
 func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Method == DeviceSessionsList {
+		f.mu.Lock()
+		check := f.sessionsContextCheck
+		f.mu.Unlock()
+		if check && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+	}
 	if p.Method == DeviceSessionGet {
 		f.mu.Lock()
 		hook := f.beforeSessionGet
@@ -1518,7 +1529,7 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 		case strings.HasSuffix(strings.TrimSpace(in.System), jsonOnly):
 			f.judged++
 			f.judgeAsked = append(f.judgeAsked, user)
-			reply, fail = f.judge, f.judge == ""
+			reply, fail, delay = f.judge, f.judge == "", f.judgeDelay
 			if f.judgeBy != nil {
 				reply = f.judgeBy(user)
 				fail = reply == ""

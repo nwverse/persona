@@ -75,8 +75,7 @@ final class MessageMenu {
         let session = session()
         return ShareMessage(text: text, isUser: isUser, source: source(), date: date,
                             agent: session?.agentLabel ?? "Claude", showsTerminalMark: session?.isTraex == true,
-                            prefersLetterMark: AgentKind.prefersLetterMark(for: session))
-    }
+                            prefersLetterMark: AgentKind.prefersLetterMark(for: session))    }
 
     #if os(iOS) || os(visionOS)
     func pressChanged(_ state: UIGestureRecognizer.State) {

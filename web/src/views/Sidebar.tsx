@@ -715,10 +715,24 @@ const NO_COUNTS: FilterCounts = { needs: 0, unread: 0, working: 0, bg_waiting: 0
 /** The paged list's section kind for each grouping it draws (#6662): By project is the space (`group`). */
 const PAGED_DIMENSION: Record<Exclude<AgentGrouping, "repo">, GroupDimension> = { todo: "todo", machine: "machine", space: "group", state: "state" };
 
+const NO_EXCLUDED_IDS: ReadonlySet<string> = new Set();
+
 function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, add = true, grouping, todosUnread = false, chooseGrouping }: AgentsBlockProps & { grouping: Exclude<AgentGrouping, "repo">; /** By to-do shown by status: its to-dos cannot be read */ todosUnread?: boolean; chooseGrouping: (g: AgentGrouping) => void }) {
   const machines = useStore(selectSidebarMachines);
   const allLaunches = useStore((s) => s.launches);
   const launches = useMemo(() => Object.values(allLaunches).filter((launch) => launch.phase !== "ready"), [allLaunches]);
+  // Keep actively starting/sending launches out of the paged list and its groups until handoff completes so a newly
+  // created session does not render in both Starting and its group at once.
+  const inFlightLaunchIds = useMemo(() => {
+    let ids: Set<string> | undefined;
+    for (const launch of launches) {
+      if (isInFlightLaunch(launch) && launch.session) {
+        ids ??= new Set();
+        ids.add(runtimeIdentity(launch.session));
+      }
+    }
+    return ids ?? NO_EXCLUDED_IDS;
+  }, [launches]);
   const [launchesFolded, toggleLaunches] = useFolded("agents-launching", false, { holds: launches.some((l) => activeKey === `s:${l.machineId}/${l.id}`), scope: AGENTS_FOLD });
   const catalog = useStore((s) => s.features.includes(SESSIONS_CATALOG_FEATURE));
   const justFinished = useStore((s) => s.features.includes(SESSIONS_JUST_FINISHED_FEATURE));
@@ -797,7 +811,7 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
     {launches.length > 0 && <Section title={t("sidebar.launching")} folded={launchesFolded} onToggle={toggleLaunches} right={<GroupCount n={launches.length} label={t("sidebar.launching_count", { count: launches.length })} />}>
       {launches.map((launch) => <NavRow key={launch.id} k={`s:${launch.machineId}/${launch.id}`} reg={reg} hover={hover} active={activeKey === `s:${launch.machineId}/${launch.id}`} to={{ name: "session", mid: launch.machineId, sid: launch.id }} go={go} icon={launch.phase === "failed" ? "retry" : "agent"} agent={launch.phase === "failed" ? undefined : launchDisplayEngine(launch)} label={launch.text || baseName(launch.cwd) || t("sidebar.launch_untitled")} hint={launch.phase === "failed" ? t("sidebar.launch_failed") : t("sidebar.launch_background")} />)}
     </Section>}
-    <PagedSessionList root={runtimeAgents} path={RUNTIME_AGENTS_PATH} identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval} parentOf={sideFold ? undefined : runtimeParentIdentity} event="sessions_list" grouping={pagedGrouping}
+    <PagedSessionList root={runtimeAgents} path={RUNTIME_AGENTS_PATH} identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval} parentOf={sideFold ? undefined : runtimeParentIdentity} excludeIdentities={inFlightLaunchIds} event="sessions_list" grouping={pagedGrouping}
       activeAt={runtimeActiveAt} needsYou={runtimeNeedsYou} isOpen={(s) => activeKey === `s:${s.machine_id}/${s.session_id}`}
       catalog={catalog} justFinished={justFinished} placeOf={runtimePlace} failureText={agentsReadFailed}
       machineOrder={machineOrder} label={(dimension, id) => dimension === "machine" ? machineWithHub(id, machines) : id}
@@ -843,7 +857,8 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   }, [ownIds, sidebarMachines]);
   const rowOrder = useMemo(() => machineSessionOrder(machines), [machines]);
   const { sessions: every, loaded, error: listError } = useFullAgentSessions();
-  const launches = useStore((s) => Object.values(s.launches).filter((launch) => launch.phase !== "ready"));
+  const allLaunches = useStore((s) => s.launches);
+  const launches = useMemo(() => Object.values(allLaunches).filter((launch) => launch.phase !== "ready"), [allLaunches]);
   // A session whose launch is still actively starting/sending is already listed under "Starting": keep it out of the
   // regular groups until handoff completes so it moves cleanly from Starting to Working without duplicating (#12380).
   const inFlightLaunchKeys = useMemo(() => {
