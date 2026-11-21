@@ -57,10 +57,25 @@ func (h *threadAdmissionHub) DeviceCall(ctx context.Context, p DeviceCall) (json
 	return raw, err
 }
 
-func TestChannelReceiveConcurrentFirstThreadMessages(t *testing.T) {
-	s, f, _ := threadsChannelService(t, true)
+func admissionChannelService(t *testing.T, threads bool, store Store) (*Service, *fakeHub, *threadAdmissionHub) {
+	t.Helper()
+	f := newFakeHub().withMachine()
+	f.settings = &Settings{MachineID: "server", Main: "m1"}
+	f.setSessions("server", proto.Session{SessionID: "m1", MachineID: "server", Assistant: true})
+	f.answerApp(AppChannels, ChannelsList, func(json.RawMessage) (any, error) {
+		return map[string]any{"channels": []channel.View{{ID: "examplechat", Name: "Example Chat", Kind: channel.KindIM, Source: channel.SourcePlugin, Installed: true, State: channel.StateConnected, Capabilities: channel.Capabilities{MaxText: 4000, Threads: threads, Asks: channel.AsksNone}}}}, nil
+	})
+	f.answerApp(AppChannels, ChannelsSend, func(json.RawMessage) (any, error) { return map[string]any{}, nil })
 	h := &threadAdmissionHub{fakeHub: f, entered: make(chan struct{}), release: make(chan struct{}), second: make(chan struct{})}
-	s.hub = h
+	if store == nil {
+		store = &memStore{}
+	}
+	s := withSettings(t, f, New(Options{Hub: h, Store: func() Store { return store }, Logf: testLogf(t)}))
+	return s, f, h
+}
+
+func TestChannelReceiveConcurrentFirstThreadMessages(t *testing.T) {
+	s, f, h := admissionChannelService(t, true, nil)
 	var release sync.Once
 	defer release.Do(func() { close(h.release) })
 	receive := func(id string) {
@@ -107,9 +122,7 @@ func waitAdmissionDrained(t *testing.T, s *Service) {
 }
 
 func TestChannelReceiveThreadNewFollowsInFlightStart(t *testing.T) {
-	s, f, _ := threadsChannelService(t, true)
-	h := &threadAdmissionHub{fakeHub: f, entered: make(chan struct{}), release: make(chan struct{}), second: make(chan struct{})}
-	s.hub = h
+	s, f, h := admissionChannelService(t, true, nil)
 	var release sync.Once
 	defer release.Do(func() { close(h.release) })
 	receiveAdmissionMessage(t, s, "first", "first request", "topic")
@@ -134,9 +147,7 @@ func TestChannelReceiveThreadNewFollowsInFlightStart(t *testing.T) {
 }
 
 func TestChannelReceiveOtherThreadDoesNotWait(t *testing.T) {
-	s, f, _ := threadsChannelService(t, true)
-	h := &threadAdmissionHub{fakeHub: f, entered: make(chan struct{}), release: make(chan struct{}), second: make(chan struct{})}
-	s.hub = h
+	s, f, h := admissionChannelService(t, true, nil)
 	var release sync.Once
 	defer release.Do(func() { close(h.release) })
 	receiveAdmissionMessage(t, s, "first", "first request", "topic-a")
@@ -162,9 +173,8 @@ func TestChannelReceiveOtherThreadDoesNotWait(t *testing.T) {
 }
 
 func TestChannelReceiveThreadStartFailureReleasesNext(t *testing.T) {
-	s, f, _ := threadsChannelService(t, true)
-	h := &threadAdmissionHub{fakeHub: f, entered: make(chan struct{}), release: make(chan struct{}), second: make(chan struct{}), failFirst: true}
-	s.hub = h
+	s, f, h := admissionChannelService(t, true, nil)
+	h.failFirst = true
 	var release sync.Once
 	defer release.Do(func() { close(h.release) })
 	receiveAdmissionMessage(t, s, "failed", "failed request", "topic")
@@ -211,9 +221,7 @@ func TestChannelReceiveThreadRoutingCompatibility(t *testing.T) {
 }
 
 func TestChannelReceiveUnbindDiscardsQueuedThreadMessage(t *testing.T) {
-	s, f, _ := threadsChannelService(t, true)
-	h := &threadAdmissionHub{fakeHub: f, entered: make(chan struct{}), release: make(chan struct{}), second: make(chan struct{})}
-	s.hub = h
+	s, f, h := admissionChannelService(t, true, nil)
 	var release sync.Once
 	defer release.Do(func() { close(h.release) })
 	receiveAdmissionMessage(t, s, "first", "in flight", "topic")
@@ -236,7 +244,7 @@ func TestChannelReceiveUnbindDiscardsQueuedThreadMessage(t *testing.T) {
 }
 
 func TestChannelReceiveSameThreadKeyInOtherChannelDoesNotWait(t *testing.T) {
-	s, f, _ := threadsChannelService(t, true)
+	s, f, h := admissionChannelService(t, true, nil)
 	f.answerApp(AppChannels, ChannelsList, func(json.RawMessage) (any, error) {
 		var views []channel.View
 		for _, id := range []string{"examplechat", "otherchat"} {
@@ -245,8 +253,6 @@ func TestChannelReceiveSameThreadKeyInOtherChannelDoesNotWait(t *testing.T) {
 		return map[string]any{"channels": views}, nil
 	})
 	s.forgetChannelList()
-	h := &threadAdmissionHub{fakeHub: f, entered: make(chan struct{}), release: make(chan struct{}), second: make(chan struct{})}
-	s.hub = h
 	var release sync.Once
 	defer release.Do(func() { close(h.release) })
 	receiveAdmissionMessage(t, s, "first", "first channel request", "same-key")
@@ -293,14 +299,9 @@ func (st *admissionClaimStore) PutSetting(ctx context.Context, key string, value
 }
 
 func TestChannelReceiveClaimReservesBeforePersistence(t *testing.T) {
-	s, f, _ := threadsChannelService(t, true)
-	s.chans.mu.Lock()
-	s.loadChannelStateLocked(context.Background())
-	s.chans.mu.Unlock()
-	st := &admissionClaimStore{Store: s.store(), observed: make(chan bool, 1), release: make(chan struct{}), s: s}
-	s.store = func() Store { return st }
-	h := &threadAdmissionHub{fakeHub: f, entered: make(chan struct{}), release: make(chan struct{}), second: make(chan struct{})}
-	s.hub = h
+	st := &admissionClaimStore{Store: &memStore{}, observed: make(chan bool, 1), release: make(chan struct{})}
+	s, _, h := admissionChannelService(t, true, st)
+	st.s = s
 	var claimRelease, startRelease sync.Once
 	defer claimRelease.Do(func() { close(st.release) })
 	defer startRelease.Do(func() { close(h.release) })
@@ -377,7 +378,7 @@ func TestChannelReceiveFailedClaimCanBeRedelivered(t *testing.T) {
 func TestChannelReceiveOldStartCannotBindNewGeneration(t *testing.T) {
 	for _, threads := range []bool{true, false} {
 		t.Run(fmt.Sprintf("threads=%v", threads), func(t *testing.T) {
-			s, f, _ := threadsChannelService(t, threads)
+			s, _, h := admissionChannelService(t, threads, nil)
 			if !threads {
 				s.chans.mu.Lock()
 				s.loadChannelsLocked(context.Background())
@@ -385,8 +386,6 @@ func TestChannelReceiveOldStartCannotBindNewGeneration(t *testing.T) {
 				s.saveChannelsLocked()
 				s.chans.mu.Unlock()
 			}
-			h := &threadAdmissionHub{fakeHub: f, entered: make(chan struct{}), release: make(chan struct{}), second: make(chan struct{})}
-			s.hub = h
 			var release sync.Once
 			defer release.Do(func() { close(h.release) })
 			receiveAdmissionMessage(t, s, "old", "old account request", "same-key")
