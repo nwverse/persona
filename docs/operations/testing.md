@@ -9,6 +9,7 @@ cd apple && xcodegen generate -q && xcodebuild -project Persona.xcodeproj -schem
   -destination "id=$SIM" test   # iOS unit tests (ChatStore, ScreenParser, phone tool registry)
 ./scripts/app/sim.sh [--with-watch] [-openSession <machine>/<id>]     # run in simulator, pair automatically to the real hub ("Development builds")
 cd apple/Packages/PersonaKit && swift test                             # PersonaKit unit tests: directly on Mac, no App build or simulator
+cd apple/Packages/PersonaWire && swift test -Xswiftc -warnings-as-errors # PersonaWire unit tests, warnings as errors as CI runs them
 python3 -B scripts/test/test_sim_boot.py                               # sim-boot.sh (fake xcrun / simslim, no simulator)
 n=0 failed=""; for f in $(find scripts -name 'test_*.py' -not -path '*/node_modules/*' | sort); do grep -q unittest "$f" || continue; n=$((n + 1)); (cd "$(dirname "$f")" && python3 -B -m unittest -q "$(basename "$f" .py)") || failed="$failed $f"; done; echo "$n suites, failed:${failed:- none}"; [ -z "$failed" ]   # all Python suites in scripts/, like CI (it skips files that never mention unittest); any failure exits nonzero
 ```
@@ -380,6 +381,8 @@ Runs only relevant second-scale checks based on git changes, with independent ch
 ./scripts/check-fast.sh --dry-run        # print the plan (queued checks, SKIP and INFO notes) and run nothing
 ./scripts/check-fast.sh --dry-run --changed-from <file|->         # plan the listed paths instead of the diff
 ./scripts/check-fast.sh --dry-run --changed-from <file|-> --each  # plan each listed path on its own
+./scripts/check-fast.sh --compare-main   # after a failure, rerun only what failed at the merge base and say whose it is
+./scripts/check-fast.sh --compare-tip    # --compare-main, and what the base fails too also at the base ref's tip
 ```
 
 After the plan, an `INFO` line names the CI lanes the change selects that check-fast runs no part of (for example `android`, `core`, `desktop`, or `apple` for a shared fixture), read from `python3 scripts/ci/paths.py --lanes-for`, the selection CI and the PR watcher use; run `bash scripts/ci/<lane>.sh` for one of them before pushing. See "What a change affects" below for how the three selections are kept in step.
@@ -413,7 +416,7 @@ Path mapping (a new mapping is a rule in check-fast's per-path table, `scripts/c
 | `schema/wire/**`, `spec/fixtures/**`, `scripts/gen/extension_schema.py`, `scripts/test/test_extension_schema.py` | Also `scripts/test/test_wire_schema.py`: every sample the shared fixtures keep for a wire schema holds to it at any depth, and the generated wire types are current (it imports the extension test's validator). CI's guards step always runs it |
 | `spec/fixtures/todo-detail/**`, `spec/fixtures/todo-layout/**`, `spec/fixtures/todo-view/README.md`, `spec/fixtures/agent-names/**`, `schema/wire/todo-view.schema.json`, `server/internal/assistant/todos.go`, `server/internal/assistant/todo_ask.go`, `scripts/test/test_wire_schema.py`, `scripts/test/test_extension_schema.py` | Also `scripts/test/test_todo_fixtures.py`: the to-do page and window fixtures hold to their READMEs' rules, the view schema, the todo-view line keys, the agent names and the fields the hub writes on a listed to-do (it imports the wire and extension schema tests) |
 | `scripts/test/test_external_service_refs.py`, `scripts/{gen,test}/sdk_bundle*` | The scripts' own tests |
-| `scripts/**` | Select second-scale privacy / PR / schema / refs / bundle / i18n checks by path; when uncertain run PR and schema. Also run changed `scripts/<subdirectory>/test_*.py`, and `test_<name>.py` for changed `<name>.py` / `<name>.sh` scripts (`-`→`_`; `.sh` also checks `test_<name>_sh.py`), from the test directory like CI (#3968). `scripts/hooks/**` also runs `scripts/test/test_privacy_check.py` and `scripts/test/test_check_deno_adapter_sh.py` (they run the hooks in their temp repositories; the latter also for `scripts/gen/deno_adapter.sh`); `scripts/privacy_check.py` also runs `scripts/release/test_check_bundle_privacy.py` (it imports `privacy_check`) and `scripts/test/test_merge_pr_sh.py`; `scripts/operations/pr_watch_merge.py`, `scripts/ci/changed_ratchets.py`, `scripts/ci/sleep_ratchet.py` and `scripts/ci/web_font_ratchet.py` also run `scripts/test/test_merge_pr_sh.py` (it copies the scripts into its temp repositories, where `merge-pr.sh` runs them, and checks the watcher's merge lock), and the two ratchets `scripts/ci/test_changed_ratchets.py` (it imports them); `scripts/test/go_trimpath.sh` also runs `scripts/ci/test_ci.py` and `scripts/test/test_check_fast_inputs.py` (they run `scripts/ci/server.sh` and `scripts/test/check-fast.sh`, whose `GOFLAGS` it composes); `scripts/heavy_slot.py` also runs `scripts/test/test_check_fast_inputs.py` and `scripts/test/test_android_sh.py` (they run `check-fast.sh` and `android.sh` with it); `check-fast.sh` and `scripts/test/test_check_fast.py` also run `scripts/test/test_check_fast_guards.py` and `scripts/test/test_check_fast_inputs.py` (check-fast's tests are three files, split so each stays well under the per-suite limit; the other two import `test_check_fast.py`'s fixtures); `scripts/release/debug_switches.txt`, `scripts/release/debug_switches.py` and `scripts/release/release.sh` also run `scripts/release/test_debug_switches.py`, `scripts/release/test_release_debug_guard.py` and `scripts/test/test_apple_release_switch_names.py`; `scripts/ci/paths.py` also runs `scripts/ci/test_ci.py`, `scripts/test/test_check_fast_inputs.py` and `scripts/ci/test_affected_drift.py`, `scripts/test/check-fast.sh` and `scripts/operations/pr_watch_verify.py` also `scripts/ci/test_affected_drift.py`, and each `scripts/operations/pr_watch_*.py` also `scripts/operations/test_pr_watch.py`. A changed `scripts/**/<name>.py` also runs every `scripts/**/test_*.py` that imports it (`import <name>` or `from <name> import` at the start of a line) from its own directory or from a directory it names, found at run time with `git grep`; a suite a dedicated check runs (refs, bundle, extension schema, four Android checker suites) schedules that check instead |
+| `scripts/**` | Select second-scale privacy / PR / schema / refs / bundle / i18n checks by path; when uncertain run PR and schema. Also run changed `scripts/<subdirectory>/test_*.py`, and `test_<name>.py` for changed `<name>.py` / `<name>.sh` scripts (`-`→`_`; `.sh` also checks `test_<name>_sh.py`), from the test directory like CI (#3968). `scripts/hooks/**` also runs `scripts/test/test_privacy_check.py` and `scripts/test/test_check_deno_adapter_sh.py` (they run the hooks in their temp repositories; the latter also for `scripts/gen/deno_adapter.sh`); `scripts/privacy_check.py` also runs `scripts/release/test_check_bundle_privacy.py` (it imports `privacy_check`) and `scripts/test/test_merge_pr_sh.py`; `scripts/operations/pr_watch_merge.py`, `scripts/ci/changed_ratchets.py`, `scripts/ci/sleep_ratchet.py` and `scripts/ci/web_font_ratchet.py` also run `scripts/test/test_merge_pr_sh.py` (it copies the scripts into its temp repositories, where `merge-pr.sh` runs them, and checks the watcher's merge lock), and the two ratchets `scripts/ci/test_changed_ratchets.py` (it imports them); `scripts/test/go_trimpath.sh` also runs `scripts/ci/test_ci.py` and `scripts/test/test_check_fast_inputs.py` (they run `scripts/ci/server.sh` and `scripts/test/check-fast.sh`, whose `GOFLAGS` it composes); `scripts/heavy_slot.py` also runs `scripts/test/test_check_fast_inputs.py` and `scripts/test/test_android_sh.py` (they run `check-fast.sh` and `android.sh` with it); `check-fast.sh` and `scripts/test/test_check_fast.py` also run `scripts/test/test_check_fast_guards.py` and `scripts/test/test_check_fast_inputs.py` (check-fast's tests are three files, split so each stays well under the per-suite limit; the other two import `test_check_fast.py`'s fixtures), and `scripts/ci/check_fast_compare.py` all three (they copy it into their temp repositories); `scripts/release/debug_switches.txt`, `scripts/release/debug_switches.py` and `scripts/release/release.sh` also run `scripts/release/test_debug_switches.py`, `scripts/release/test_release_debug_guard.py` and `scripts/test/test_apple_release_switch_names.py`; `scripts/ci/paths.py` also runs `scripts/ci/test_ci.py`, `scripts/test/test_check_fast_inputs.py` and `scripts/ci/test_affected_drift.py`, `scripts/test/check-fast.sh` and `scripts/operations/pr_watch_verify.py` also `scripts/ci/test_affected_drift.py`, and each `scripts/operations/pr_watch_*.py` also `scripts/operations/test_pr_watch.py`. A changed `scripts/**/<name>.py` also runs every `scripts/**/test_*.py` that imports it (`import <name>` or `from <name> import` at the start of a line) from its own directory or from a directory it names, found at run time with `git grep`; a suite a dedicated check runs (refs, bundle, extension schema, four Android checker suites) schedules that check instead |
 | `spec/tokens/**`, `apple/Shared/Design/**`, `android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt` | `scripts/assets/test_gen_tokens.py`: the token sources against the iOS values and the committed Android `Tokens.kt` |
 | `spec/icons/**`, `apple/Shared/Design/Icons.swift`, `android/core/designsystem/src/main/kotlin/persona/core/designsystem/icons/**` | `scripts/assets/test_gen_icon_meanings.py`: the icon meanings against `Theme.Icon`, the Phosphor glyphs and `PersonaIcons.kt` |
 | `docs/**`, any `*.md` | `scripts/test/test_doc_paths.py`, `scripts/test/test_doc_go_paths.py` (quoted paths and CLAUDE.md documentation index; test_doc_paths.py also fails a table that a blank line splits), `scripts/test/test_doc_sections.py` (section names quoted after a doc path match a heading, a **bold** label, an `<a id>` or a list item's opening phrase of that doc; `scripts/test/doc_sections_known.txt` lists the ones left for now and only shrinks), `scripts/test/test_doc_wire.py` (protocol.md and extensions.md list every WebSocket type, feature flag, extension point and manifest field the code has) |
@@ -429,6 +432,18 @@ Path mapping (a new mapping is a rule in check-fast's per-path table, `scripts/c
 A search the plan depends on (the `git grep` runs above) that fails, rather than finding nothing, stops check-fast with exit 2 before anything runs: the checks it would have found would otherwise be left out without a word (#11250). So does a diff without `python3` or the table, or a table that fails or names a check the script does not know (#11535).
 
 Any changes always run `scripts/privacy_check.py` first: local-only, no network, a few seconds. Every check has a timeout (npm ci 600 s, vitest 300 s, one go test group 300 s, others 120 s; override with `CHECK_FAST_TIMEOUT_NPM_CI` / `CHECK_FAST_TIMEOUT_WEB_TEST` / `CHECK_FAST_TIMEOUT_GO_TEST` / `CHECK_FAST_TIMEOUT_OTHER`). The go and vitest steps first wait for a heavy build slot, outside their timeout ("Heavy build slots" above). Success/failure/timeout each prints a result and duration; the final summary lists passed/skipped (with reasons)/failed/timed-out checks and log directory. Exit: 0 if all pass or none needed; 1 for failure; 124 for timeout without failures (timeouts aren't passes; run full checks to confirm). Ctrl-C, SIGTERM and SIGHUP, sent to the script or to its whole process group (a closed terminal or tmux pane), stop every running check (and its child processes) before exiting with 130, 143 or 129, and keep the log directory. Missing toolchains skip relevant checks with reasons by default; under `--all`, missing core tools (node ≥ 22, go, python3) fail; bun is always optional. Requires GNU `timeout` (coreutils on macOS).
+
+**Rerun lines and `--compare-main`** (#12733). Each failed or timed-out check in the summary ends with a `rerun:` line per failure, the command that reruns just that: the failing Go tests of each package (`(cd server && go test -count=1 -run '^(TestA|TestB)$' ./internal/assistant)`), the failing unittest ids (`(cd scripts/test && python3 -B -m unittest -q test_x.T.test_y)`), or the step's own command for anything else, such as the privacy scan or a ratchet. A timed-out check reruns whole.
+
+With `--compare-main`, a run that failed then reruns only those failures at the merge base, in a detached worktree under its log directory (`<log dir>/compare/base`, removed afterwards by that path, also when the run is interrupted), and prints one line per failing test, suite or command:
+
+- `ALREADY`: also fails at the merge base. Main has it, so it is not this change's (on any change under `internal/assistant` while #12596 was red, for example). Like the watcher's, the comparison is by name: the same test fails there, not necessarily the same way.
+- `NEW`: passes at the merge base and fails again when rerun here on its own, so likely caused by this change.
+- `FLAKY`: passes at the merge base and when rerun here on its own: it failed only in the full run (under load, a timing test, or after another test), so the change is not shown to cause it. A failure that passes at the base is always rerun here once before it is called `NEW`.
+- `EDITED`: not attributable, because the change edits that test's files: a `_test.go` or `testdata/` file of its package, the suite or a test module it imports, or a file the command names. The base runs the old test, which says nothing about the new one.
+- `UNKNOWN`: not compared, and why: no named test failed (a build failure), a web step needs its own `npm ci` at the base, the rerun timed out, or the base has no such test.
+
+`--compare-tip` also reruns the `ALREADY` ones at the base ref's tip: `TIP-PASS` means main fixed it after the merge base (merge it), `TIP-FAIL` that it still fails, `TIP-?` that the tip gave no answer (a timeout, no such test there). The rules are the PR watcher's (only named tests are compared; no attribution when the change edits the test), kept in `scripts/ci/check_fast_compare.py`, which does not import the watcher. A guard command is compared by its exit code, and its line names the output lines the base's run does not have, since a change can add to a failure main already has. Go tests rerun with `-count=1` in a go slot, each rerun under its check's timeout. Nothing is decided from hosted CI, whose main runs are hours old. The exit code stays the run's: a failure main already has is still a failure, and the verdict is what to say about it in the PR. `--all --compare-main` finds the merge base and the changed files as diff mode does.
 
 **Web tests a change reaches** (#10619). In diff mode the web check runs `npx vitest related --run` from the changed files, so a change to one view runs the tests whose imports reach it (about 56 for `web/src/views/chat/ChatView.tsx`) instead of all ~1,360 test files. `python3 scripts/ci/paths.py --web-plan` makes the plan from one scan of `web/src` and every web test, done at run time, nothing listed by hand:
 
@@ -452,6 +467,12 @@ it isn't in `PersonaTests`; the Apple CI script runs its SwiftPM tests separatel
 - Assertions needing App types (views, `FilePaths`) stay in `PersonaTests`, also adding `import PersonaKit`.
 - Package code must build with Foundation only: no SwiftUI / UIKit imports, App `Theme` or `AppModel`. Design-system source checks (`TokenRatchetTests`, etc.) don't scan it.
 - The package declares macOS 15, so its test bundle also loads on a macOS 15 host without a target override. To check that deployment target from a newer Apple-silicon Mac, use a separate build folder: `swift test --scratch-path /tmp/personakit-macos15 -Xswiftc -target -Xswiftc arm64-apple-macosx15.0` (use `x86_64-apple-macosx15.0` on Intel). `scripts/test/test_apple_ci.py` guards the macOS floors of all tracked local Swift packages.
+
+**PersonaWire** (`apple/Packages/PersonaWire`, #7895): the Foundation-only wire layer every app target links, the watch,
+widgets and extensions included. Its tests run with `xcrun swift test --package-path apple/Packages/PersonaWire -Xswiftc
+-warnings-as-errors`, as the `packages` lane of `scripts/ci/apple.sh` runs them (#12734). The flag on the command line also
+applies to a package's dependencies, so PersonaWire must build without warnings for any package that depends on it to pass
+the same flag; a file inside the package never imports `PersonaWire` itself.
 
 **PersonaCore** (`apple/Packages/PersonaCore`, #6871): the iOS-only binding of the shared Rust continuity core. Run
 `native/app-core/scripts/build-apple.sh` before XcodeGen / package resolution, then `xcrun swift test --package-path
@@ -831,6 +852,44 @@ the state and start-attempt count. With the switch off, existing mock screens do
 the names it took in that test's `MOVED`: a branch from before the move that kept the old block when it resolved its conflict
 then fails there, with the module to edit instead
 (`docs/lessons/testing.md`, "A moved file or block needs a test that fails when the old copy comes back").
+
+**No new switch in `mock_hub.py` (#12737).** Most of what `mock_hub.py` gains comes with a new `MOCK_*` switch (89 of the 195
+commits that changed it from 2026-11-14 to 2026-11-22 added one, with 72% of its net added lines), so its switch names are
+frozen. It may read only the names in `scripts/mock/mock_hub_switches.txt`: the ones it read when the freeze landed, then the
+ones the PRs open that day were adding, each with its PR. Both parts are written on the day the freeze lands, after
+`origin/main` is merged in, by `python3 scripts/mock/mock_hub_switches.py pending --write`: the names `origin/main` reads,
+including a pending one whose PR has merged by then, and the names open PRs add, keeping a listed one while its PR is open.
+Once the list is on `main` the command writes nothing, so it is not how a later PR gets a name on the list.
+`scripts/mock/test_mock_hub.py` parses the file and fails on any other
+`MOCK_*` name it reads through `os.environ.get`, `os.environ[...]`, `os.getenv` or `in os.environ`, or has as a whole string
+anywhere (a copy of the environment read later, a helper given the name), and on an environment read whose name is not a
+literal; a listed name the file no longer reads is a notice. Check-fast runs the test for every change to `mock_hub.py`.
+
+A new switch is therefore a domain module, and so is **a new value on an existing switch**: `MOCK_INBOX=rules` next to
+`MOCK_INBOX=empty` is as new as `MOCK_INBOX_RULES` would be. The domain module reads the switch itself, registers its routes
+only for that value, and answers there first; a handler that returns `False` for a request it leaves alone hands it on to
+`mock_hub.py`, which keeps serving the switch's other values:
+
+```python
+# scripts/mock/inbox_rules_mock.py, with one line in DOMAINS
+import os
+
+RULES = os.environ.get("MOCK_INBOX") == "rules"
+
+
+def register(d):
+    d.help("MOCK_INBOX=rules  the Inbox with filing rules (#<issue>)")
+    if not RULES:
+        return  # any other value: mock_hub.py answers as before
+    d.route("GET", "/api/v1/inbox/policies", policies)  # policies(h, req): h.send_json({...})
+    d.route("GET", "/api/v1/inbox", page)               # page(h, req): False for a request it does not change
+```
+
+(`policies` and `page` are the module's own functions.)
+
+Editing an existing switch's code in `mock_hub.py` is fine; the freeze is on names, not lines. A block that moves into a
+domain module takes its names off the list in the same change (the notice says which). A line ceiling is worth another look
+only if the file keeps growing by more than about 150 lines a week without new switches.
 
 ### Readiness scenarios (`MOCK_READINESS`, #287)
 
