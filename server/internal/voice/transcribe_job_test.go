@@ -549,19 +549,41 @@ func TestTranscriptionFastReplies(t *testing.T) {
 
 // The instructions are in the recording's language when it is Chinese, English or Japanese (the language the model
 // hears), else in the hub's (the caller's).
+// 每个用例使用独立上游；TFReady 不等待第三个会话，延迟到下一用例的启动不得混入其断言。
 func TestTranscriptionInstructionsLanguage(t *testing.T) {
 	trFast(t)
-	_, srv, _, live := trLive(t, voicetest.Script{Sentences: trScript})
 	opening := map[string]string{"zh-Hans": "你是", "en": "You are", "ja": "あなたは"}
+	var previous *voicetest.Live
+	var releasePrevious func()
 	for _, tt := range []struct{ tag, hub, want string }{
-		{"en-US", "zh-Hans", "en"},
 		{"ja-JP", "en", "ja"},
 		{"zh-TW", "en", "zh-Hans"},
+		{"en-US", "zh-Hans", "en"},
 		{"yue-HK", "en", "zh-Hans"},
 		{"ko-KR", "ja", "ja"},
 		{"", "en", "en"},
 	} {
+		var gate chan struct{}
+		release := func() {}
+		if tt.tag == "ja-JP" {
+			gate = make(chan struct{})
+			var once sync.Once
+			release = func() { once.Do(func() { close(gate) }) }
+			t.Cleanup(release)
+		}
+		_, srv, _, live := trLive(t, voicetest.Script{Sentences: trScript, SecondVerbatimStartGate: gate})
 		asked := len(live.Starts())
+		if releasePrevious != nil {
+			releasePrevious()
+			deadline := time.Now().Add(time.Second)
+			for len(previous.Starts()) < 3 && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if len(previous.Starts()) < 3 {
+				t.Fatal("the delayed start was not recorded")
+			}
+			previous, releasePrevious = nil, nil
+		}
 		tc, _, err := dialTr(t, srv, TranscriptionContribution, http.Header{extwire.HeaderRole: {roleFull}, extwire.HeaderLang: {tt.hub}})
 		if err != nil {
 			t.Fatal(err)
@@ -578,6 +600,9 @@ func TestTranscriptionInstructionsLanguage(t *testing.T) {
 			if ins, _ := s["instructions"].(string); !strings.HasPrefix(ins, opening[tt.want]) {
 				t.Errorf("%q (hub %s): instructions not in %s:\n%s", tt.tag, tt.hub, tt.want, ins)
 			}
+		}
+		if gate != nil {
+			previous, releasePrevious = live, release
 		}
 	}
 }
