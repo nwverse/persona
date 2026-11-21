@@ -43,6 +43,9 @@ type UsageConfig struct {
 	// PollMinutes is how often each gateway is asked (default 5, at most a day).
 	PollMinutes int                 `json:"poll_minutes,omitempty"`
 	Sources     []UsageSourceConfig `json:"sources,omitempty"`
+	// HiddenProviders are providers ("codex", "claude"…) the usage bars leave out (#11753). Display only: nodes and
+	// gateways are still read and the scheduler's capacity view still counts them.
+	HiddenProviders []string `json:"hidden_providers,omitempty"`
 }
 
 // UsageSourceConfig is one gateway.
@@ -138,6 +141,7 @@ func (g *usageGateways) setConfig(cfg UsageConfig) {
 
 func (g *usageGateways) setLocked(cfg UsageConfig) {
 	cfg.Sources = slices.Clone(cfg.Sources)
+	cfg.HiddenProviders = slices.Clone(cfg.HiddenProviders)
 	g.cfg = cfg
 	if g.state == nil {
 		g.state = map[string]*gatewayState{}
@@ -161,6 +165,7 @@ func (g *usageGateways) config() UsageConfig {
 	defer g.mu.Unlock()
 	c := g.cfg
 	c.Sources = slices.Clone(c.Sources)
+	c.HiddenProviders = slices.Clone(c.HiddenProviders)
 	return c
 }
 
