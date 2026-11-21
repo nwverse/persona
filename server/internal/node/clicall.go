@@ -152,8 +152,9 @@ func (n *Node) mcpSession(c net.Conn, req sockRequest) (string, bool) {
 // Any other caller is not the assistant.
 func (n *Node) mcpAssistantOf(pid int, err error, parent func(int) (int, error), session string) (string, bool) {
 	if errors.Is(err, errNoPeer) {
-		if n.assistantSession(session) {
-			return session, true
+		canonical := n.canonicalAssistantSession(session)
+		if n.assistantSession(canonical) {
+			return canonical, true
 		}
 		if h, _, _ := n.runtimes.belongs(session); n.runtimeAssistantChat(h, session) {
 			return session, true

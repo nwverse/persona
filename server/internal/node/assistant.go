@@ -241,7 +241,7 @@ func (n *Node) isAssistantSessionIn(id string, pass *codexListPass) bool {
 	_, ok := n.procs[id]
 	a := n.agents[id]
 	n.mu.Unlock()
-	if ok || n.externalStarts.has(id) {
+	if ok || n.externalStarts.has(id) || n.isRoundFork(id) {
 		return true
 	}
 	// A real host pane is stronger evidence than a working directory: users may resume a terminal session there.
@@ -1167,15 +1167,16 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 		}
 		p.printed()
 		var ev struct {
-			Type     string                   `json:"type"`
-			Subtype  string                   `json:"subtype"`
-			Tasks    json.RawMessage          `json:"tasks"`
-			Tools    []string                 `json:"tools"`
-			Version  string                   `json:"claude_code_version"`
-			Response assistantControlResponse `json:"response"`
-			Command  string                   `json:"command_uuid"` // command_lifecycle: the user message it is about
-			State    string                   `json:"state"`        // and what became of it (assistant_queue.go)
-			Event    struct {
+			Type      string                   `json:"type"`
+			Subtype   string                   `json:"subtype"`
+			SessionID string                   `json:"session_id"`
+			Tasks     json.RawMessage          `json:"tasks"`
+			Tools     []string                 `json:"tools"`
+			Version   string                   `json:"claude_code_version"`
+			Response  assistantControlResponse `json:"response"`
+			Command   string                   `json:"command_uuid"` // command_lifecycle: the user message it is about
+			State     string                   `json:"state"`        // and what became of it (assistant_queue.go)
+			Event     struct {
 				Type  string `json:"type"`
 				Delta struct {
 					Type string `json:"type"`
@@ -1202,6 +1203,9 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 		if json.Unmarshal(line, &ev) != nil {
 			p.invalidateUpdateTasks()
 			continue
+		}
+		if p.round && ev.SessionID != "" && ev.SessionID != p.id && validID(ev.SessionID) {
+			n.noteRoundFork(ev.SessionID, p.id)
 		}
 		switch {
 		case p.round:

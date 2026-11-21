@@ -214,6 +214,9 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		var res map[string]any
 		// The assistant's only when the node says so too (clicall.go mcpSession).
 		session, assistant := n.mcpSession(c, req)
+		if assistant {
+			session = n.canonicalAssistantSession(session)
+		}
 		if session == "" && !assistant {
 			session = n.paneCaller(req.Pane) // an agent's: the hub tells a task leader's tools from any other's by it
 		}
@@ -239,6 +242,9 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	case "mcp.call":
 		var res proto.ToolResult
 		session, assistant := n.mcpSession(c, req)
+		if assistant {
+			session = n.canonicalAssistantSession(session)
+		}
 		sid := n.mcpCaller(req.Name, session, req.Pane, assistant)
 		if req.Name == toolMailSaveAttachment { // writes on this machine (mailattachment.go)
 			resp = n.saveMailAttachment(ctx, req.Args, sid, assistant, req.Guest || n.guestOf(sid) != nil)
