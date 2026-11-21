@@ -75,12 +75,22 @@ serve)
     id=$(printf '%s' "$line" | sed 's/.*"id":"\([^"]*\)".*/\1/')
     op=$(printf '%s' "$line" | sed 's/.*"op":"\([^"]*\)".*/\1/')
     echo "$op" >> "$FAKE_SERVE_LOG"
+    # FAKE_SERVE_PIDLOG: each request as "<serve pid> <op>", to tell one link's requests from the next one's.
+    if [ -n "$FAKE_SERVE_PIDLOG" ]; then echo "$$ $op" >> "$FAKE_SERVE_PIDLOG"; fi
     if [ -n "$FAKE_SERVE_REQUESTS" ]; then echo "$line" >> "$FAKE_SERVE_REQUESTS"; fi
     if [ "$op" = "drop" ]; then
       echo '{"event":"disconnected","reason":"wifi lost"}'
       exit 1
     fi
     if [ "$op" = "mount_ddi" ]; then
+      # FAKE_MOUNT_FAIL=<file>: while the file is there, mount_ddi fails with the code it holds (locked, ddi_missing, …).
+      # Read once: a file removed between a check and the read would give an answer without a code.
+      code=""
+      if [ -n "$FAKE_MOUNT_FAIL" ]; then code=$(cat "$FAKE_MOUNT_FAIL" 2>/dev/null); fi
+      if [ -n "$code" ]; then
+        echo '{"v":1,"id":"'"$id"'","ok":false,"op":"mount_ddi","error":{"code":"'"$code"'","message":"not now"}}'
+        continue
+      fi
       mounted=true
       echo '{"v":1,"id":"'"$id"'","ok":true,"op":"mount_ddi","result":{"mounted":true,"already":false,"image":"x.dmg","ticket":"apple","services_refreshed":true}}'
       continue
@@ -519,6 +529,91 @@ func TestPrepareMountsAndThenAgainByItself(t *testing.T) {
 	}
 	if err := m.StartPrepare("00000000-NOTPAIRED"); err == nil {
 		t.Fatal("preparing a phone that isn't paired")
+	}
+}
+
+// TestAutoPrepareTriesAgainWhileLocked: a link that comes up without the image while the phone is locked tries to
+// mount it again at its next health checks, and stops once it is mounted; a failure that needs someone (no image on
+// this computer) is tried once per link, however many checks follow (#12556).
+func TestAutoPrepareTriesAgainWhileLocked(t *testing.T) {
+	m, log := bridgeManager(t)
+	// Both restored by fastTiming. The fake answers slowly, and a check that times out would end the link: every new
+	// link tries to mount once anyway, so the counts below are per link.
+	healthEvery, healthTimeout = 20*time.Millisecond, 2*time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := m.Pair(ctx, testUDID, nil); err != nil {
+		t.Fatal(err)
+	}
+	_ = m.SetAddress(testUDID, "192.0.2.7")
+	rec, err := m.store.Load(testUDID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.AutoPrepare = true // the owner prepared it once
+	if err := m.store.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+	ops := func() string { b, _ := os.ReadFile(log); return strings.Join(strings.Fields(string(b)), ",") }
+	mounts := func() int { return strings.Count(ops(), "mount_ddi") }
+	links := filepath.Join(t.TempDir(), "links")
+	t.Setenv("FAKE_SERVE_PIDLOG", links)
+	// mostOnOneLink: the most mount_ddi requests any one serve process (one link) got.
+	mostOnOneLink := func() int {
+		b, _ := os.ReadFile(links)
+		per, most := map[string]int{}, 0
+		for _, l := range strings.Split(string(b), "\n") {
+			if pid, op, ok := strings.Cut(l, " "); ok && op == "mount_ddi" {
+				per[pid]++
+				most = max(most, per[pid])
+			}
+		}
+		return most
+	}
+	mounted := func() bool {
+		d := m.Devices(ctx)
+		return len(d) == 1 && bytes.Contains(d[0].Info, []byte(`"ddi_mounted":true`))
+	}
+	fail := filepath.Join(t.TempDir(), "mount-fail")
+	t.Setenv("FAKE_DDI_UNMOUNTED", "1")
+	t.Setenv("FAKE_MOUNT_FAIL", fail)
+
+	// No image on this computer: once on this link, however many checks follow.
+	if err := os.WriteFile(fail, []byte("ddi_missing"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Call(ctx, testUDID, "screenshot", nil); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return mounts() >= 1 })
+	time.Sleep(15 * healthEvery)
+	if n := mostOnOneLink(); n != 1 {
+		t.Fatalf("ddi_missing tried %d times on one link: %s", n, ops())
+	}
+
+	// A new link while the phone is locked: tried again at the next checks, on that same link. Locked first: the
+	// supervisor may bring the new link up at once.
+	if err := os.WriteFile(fail, []byte("locked"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.disconnect(testUDID)
+	if _, err := m.Call(ctx, testUDID, "screenshot", nil); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return mostOnOneLink() >= 3 })
+	if mounted() {
+		t.Fatal("mounted while locked")
+	}
+
+	// Unlocked: the next try mounts it, and then the checks leave it alone.
+	if err := os.Remove(fail); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, mounted)
+	n := mounts()
+	time.Sleep(15 * healthEvery)
+	if got := mounts(); got != n {
+		t.Fatalf("mounted %d more times after it was mounted: %s", got-n, ops())
 	}
 }
 

@@ -390,32 +390,26 @@ impl Device {
         let level = level.and_then(|v| v.as_unsigned_integer());
         let charging = charging.and_then(|v| v.as_boolean());
         // The developer services are listed only while the disk image is mounted, and a session reads the directory
-        // when it connects. One mounted since (by Xcode, or by another session's mount_ddi) needs a fresh read. A
-        // cryptex install resets the phone's service directory connections (seen on iOS 27.2.1: Xcode's was torn down
-        // when this bridge installed the image), and a directory that can't be read again, or still doesn't list the
-        // services although the phone has the image, means this session can't reach them: connect again.
+        // when it connects. One mounted since (by Xcode, or by another session's mount_ddi) needs a fresh read, and
+        // that can't be relied on: on iOS 27.2.1 a second read in the same tunnel failed even with nothing mounted
+        // since. So the session is done only when the phone has the image (cryptexd or the image mounter says so) and
+        // this session still can't list its services: connect again. A phone without the image keeps its session; a
+        // failed read alone used to end it at every health check (#12556).
         if developer_mode != Some(false)
             && !self.lists_developer_services()
             && self.services_checked.elapsed() >= SERVICES_FRESH
+            && !(self.read_services_again().await && self.lists_developer_services())
+            && matches!(
+                tokio::time::timeout(CRYPTEXD_TIMEOUT, crate::ddi::Mounter::mounted(self)).await,
+                Ok(Ok(true))
+            )
         {
-            let reason = if !self.read_services_again().await {
-                Some("the phone's service directory can't be read again (a disk image mounted since resets it)")
-            } else if !self.lists_developer_services()
-                && matches!(
-                    tokio::time::timeout(CRYPTEXD_TIMEOUT, crate::ddi::Mounter::mounted(self)).await,
-                    Ok(Ok(true))
-                )
-            {
-                Some(
-                    "the developer disk image was mounted after this session connected and its services aren't listed here",
-                )
-            } else {
-                None
-            };
-            if let Some(reason) = reason {
-                self.stale = true;
-                return Err(BridgeError::new(Code::Disconnected, format!("{reason}: connect again")));
-            }
+            self.stale = true;
+            return Err(BridgeError::new(
+                Code::Disconnected,
+                "the developer disk image was mounted after this session connected and its services aren't listed \
+                 here: connect again",
+            ));
         }
         let orientation = self.orientation().await;
         let screen = self.screen().await.ok();
