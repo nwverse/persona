@@ -2450,6 +2450,8 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			return nil, err
 		}
 		return n.readFileChunk(chunk)
+	case proto.MethodMachineFilesRoots, proto.MethodMachineFilesList, proto.MethodMachineFilesPreview, proto.MethodMachineFilesTail, proto.MethodMachineFilesChunk:
+		return n.handleMachineFiles(ctx, method, params)
 	case methodGitBlob:
 		var b proto.GitBlobRequest
 		if err := json.Unmarshal(params, &b); err != nil {
