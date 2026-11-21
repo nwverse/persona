@@ -544,7 +544,7 @@ describe("explicit logical conversation switch", () => {
     expect(panel.props!.providers.find((p) => p.id === "codex")?.unavailable).toBeUndefined();
     expect(await act(() => panel.props!.onPick({ provider: "codex", model: "gpt-standard", effort: "high" }))).toBe(false);
     expect(panel.props!.held).toBe(true);
-    expect(calls.some((c) => c.url.includes("/segments?") || c.url.endsWith("/switch"))).toBe(false);
+    expect(calls.some((c) => c.url.endsWith("/switch"))).toBe(false);
     const cancel = [...document.querySelectorAll<HTMLButtonElement>("[role=dialog] button")].find((b) => b.textContent === t("common.cancel"))!;
     await act(() => cancel.click());
     expect(sent("PUT")).toEqual([]);
@@ -567,7 +567,7 @@ describe("explicit logical conversation switch", () => {
     await act(async () => confirm().click());
     await flush();
     expect(calls.filter((c) => c.url.endsWith("/switch")).map((c) => c.body)).toEqual([first.body, first.body]);
-    expect(calls.filter((c) => c.url.includes("/segments?"))).toHaveLength(1);
+    expect(calls.filter((c) => c.url.includes("/segments?"))).toHaveLength(2);
     expect(sent("PUT")).toEqual([]);
   });
 });

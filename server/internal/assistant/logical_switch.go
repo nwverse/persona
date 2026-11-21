@@ -134,7 +134,12 @@ func (s *Service) logicalSwitchRoutes() {
 				operation = map[string]any{"operation_id": c.Switch.OperationID, "phase": c.Switch.Phase}
 			}
 		}
-		apierr.WriteJSON(w, map[string]any{"enabled": s.segmentsEnabled(ctx), "epoch": epoch, "switch": operation})
+		role, err := s.logicalRoleRequired(ctx, machine, id)
+		if err != nil {
+			apierr.Call(w, err)
+			return
+		}
+		apierr.WriteJSON(w, map[string]any{"enabled": s.segmentsEnabled(ctx), "epoch": epoch, "switch": operation, "supervision_required": role})
 	})
 	s.handle("POST /api/v1/assistant/conversations/{id}/switch", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
@@ -179,6 +184,15 @@ func (s *Service) logicalSwitchRoutes() {
 		}
 		apierr.WriteJSON(w, map[string]any{"operation_id": op.OperationID, "phase": op.Phase, "expected_epoch": op.ExpectedEpoch, "error": op.Error})
 	})
+}
+
+func (s *Service) logicalRoleRequired(ctx context.Context, machine, id string) (bool, error) {
+	policy, err := s.supervisionInstructions(ctx, machine, id)
+	if err != nil {
+		return false, err
+	}
+	cfg := s.settings(ctx)
+	return policy != "" || slices.Contains(cfg.Leaders, id) || id == cfg.BackgroundSupervisor || id == cfg.Main && cfg.MainSupervisesOwnTasks != nil && *cfg.MainSupervisesOwnTasks, nil
 }
 
 func (s *Service) beginLogicalSwitch(ctx context.Context, machine, id string, p logicalSwitchRequest) (any, error) {
@@ -227,12 +241,10 @@ func (s *Service) beginLogicalSwitch(ctx context.Context, machine, id string, p 
 	if err != nil {
 		return nil, err
 	}
-	policy, err := s.supervisionInstructions(ctx, machine, id)
+	role, err := s.logicalRoleRequired(ctx, machine, id)
 	if err != nil {
 		return nil, err
 	}
-	cfg := s.settings(ctx)
-	role := policy != "" || slices.Contains(cfg.Leaders, id) || id == cfg.BackgroundSupervisor || id == cfg.Main && cfg.MainSupervisesOwnTasks != nil && *cfg.MainSupervisesOwnTasks
 	if role && !target.SupervisionPolicy {
 		return nil, logicalRefusal(ctx, "unsupported_policy")
 	}

@@ -22,5 +22,6 @@
   "switch_confirm": "切换连接",
   "switch_requested": "已请求切换，可在此对话中继续。",
   "switch_unavailable": "暂时无法切换连接，请刷新对话后重试。",
-  "switch_unconfirmed": "尚未确认切换结果。重试会使用同一请求，不会再次发起切换。{error}"
+  "switch_unconfirmed": "尚未确认切换结果。重试会使用同一请求，不会再次发起切换。{error}",
+  "supervision_unavailable": "此连接无法接收独立的任务跟进指令。"
 }

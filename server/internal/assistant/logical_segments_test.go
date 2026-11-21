@@ -902,17 +902,19 @@ func TestLogicalInputIdentityDoesNotIncludeAutomaticRole(t *testing.T) {
 
 func TestSegmentReadExposesEpochWithoutPhysicalIdsOrStartingAnything(t *testing.T) {
 	s, f, d, _ := logicalPair(t, "codex")
+	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"side-chat"} })
 	r := request(s, "GET", "/api/v1/assistant/conversations/side-chat/segments?machine_id=server", "")
 	if r.Code != 200 {
 		t.Fatalf("snapshot: %d %s", r.Code, r.Body.String())
 	}
 	var state struct {
-		Epoch  int64 `json:"epoch"`
-		Switch struct {
+		SupervisionRequired bool  `json:"supervision_required"`
+		Epoch               int64 `json:"epoch"`
+		Switch              struct {
 			OperationID string `json:"operation_id"`
 		} `json:"switch"`
 	}
-	if json.Unmarshal(r.Body.Bytes(), &state) != nil || state.Epoch != 1 || state.Switch.OperationID != "operation" || strings.Contains(r.Body.String(), "target-chat") {
+	if json.Unmarshal(r.Body.Bytes(), &state) != nil || state.Epoch != 1 || !state.SupervisionRequired || state.Switch.OperationID != "operation" || strings.Contains(r.Body.String(), "target-chat") {
 		t.Fatalf("snapshot leaked physical identity: %s", r.Body.String())
 	}
 	activatePair(t, d)

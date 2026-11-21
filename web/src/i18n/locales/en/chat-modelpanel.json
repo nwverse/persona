@@ -22,5 +22,6 @@
   "switch_confirm": "Switch connection",
   "switch_requested": "Switch requested. You can continue in this conversation.",
   "switch_unavailable": "Switching connections is unavailable. Refresh the conversation and try again.",
-  "switch_unconfirmed": "The switch result is unconfirmed. Retrying uses the same request; it will not start another switch. {error}"
+  "switch_unconfirmed": "The switch result is unconfirmed. Retrying uses the same request; it will not start another switch. {error}",
+  "supervision_unavailable": "This connection cannot receive separate task follow-up instructions."
 }

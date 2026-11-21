@@ -22,5 +22,6 @@
   "switch_confirm": "接続を切り替える",
   "switch_requested": "切り替えをリクエストしました。このチャットで続けられます。",
   "switch_unavailable": "接続を切り替えられません。チャットを更新して再試行してください。",
-  "switch_unconfirmed": "切り替え結果を確認できません。再試行では同じリクエストを使い、新たな切り替えは開始しません。{error}"
+  "switch_unconfirmed": "切り替え結果を確認できません。再試行では同じリクエストを使い、新たな切り替えは開始しません。{error}",
+  "supervision_unavailable": "この接続は独立したタスクのフォローアップ指示を受け取れません。"
 }

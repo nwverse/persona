@@ -5,7 +5,7 @@
 // message, on every device), drawn at once and put back with the hub's words if it says no; following the default again
 // is a DELETE. An older hub: the pick lasts for this page and goes with each message, as before. The new-conversation
 // page: the pick goes with the conversation's start.
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { api, ApiError, errorText, sessionPath } from "../../lib/api";
 import { assistantPickKey, assistantSetup, ASSISTANT_START_SERVICE_TIER_FEATURE, type AssistantChat, type AssistantSetup } from "../../lib/assistant-models";
@@ -24,7 +24,7 @@ import { getSession, hubHas, refreshAssistant, upsertSession, useStore } from ".
 import type { ModelPick, Session } from "../../lib/types";
 import { Button, Dialog, toast } from "../../ui/atoms";
 import { ModelPanel } from "../../ui/model-panel/ModelPanel";
-import { ASSISTANT_SEGMENTS_FEATURE, assistantSwitchNeeded, prepareConversationSwitch, submitConversationSwitch, type ConversationSwitchRequest } from "../../lib/conversation-switch";
+import { ASSISTANT_SEGMENTS_FEATURE, assistantSwitchNeeded, conversationSwitchState, prepareConversationSwitch, submitConversationSwitch, type ConversationSwitchRequest } from "../../lib/conversation-switch";
 import { setServiceTier } from "./SessionDialogs";
 
 /** PUT …/model {launcher, model?, effort?, machine_id}: kept for the conversation. Drawn at once; put back, with the hub's
@@ -95,14 +95,25 @@ export function AssistantModelPanel({ chat, mid, anchor, onClose }: { chat: Assi
   const { info } = assistantLaunchers(mid);
   const setup = assistantSetup(chat, info);
   const engine = chat.session?.agent || "claude";
+  const [supervisionRequired, setSupervisionRequired] = useState(false);
+  const roleMachine = chat.session?.machine_id;
+  const roleSession = chat.session?.session_id;
+  useEffect(() => {
+    let current = true;
+    if (!canSwitch || !roleMachine || !roleSession) return;
+    void conversationSwitchState({ machine_id: roleMachine, session_id: roleSession }).then((snapshot) => {
+      if (current) setSupervisionRequired(Boolean(snapshot.supervision_required));
+    }).catch(() => {});
+    return () => { current = false; };
+  }, [canSwitch, roleMachine, roleSession]);
   // a chat that runs keeps its engine; one whose agent isn't known is refused nothing on a guess, as on the hub
   const running = Boolean(chat.session?.agent);
   const fast = Boolean(chat.session?.service_tiers?.some((x) => x.id === "priority"));
   const fastOn = Boolean(setup.fast);
   const { providers, state } = useMemo(
-    () => assistantPanel(setup, info, (name) => modelList(mid, name, "assistant"), { typed, engine, running, switching: Boolean(canSwitch && chat.kept && chat.session), starting: !chat.session && startServiceTier, fast, fastOn }),
+    () => assistantPanel(setup, info, (name) => modelList(mid, name, "assistant"), { typed, engine, running, switching: Boolean(canSwitch && chat.kept && chat.session), supervision: supervisionRequired, starting: !chat.session && startServiceTier, fast, fastOn }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `version` stands for what was read
-    [setup.provider, setup.model, setup.effort, setup.fast, info, mid, typed, engine, running, fast, fastOn, startServiceTier, canSwitch, version],
+    [setup.provider, setup.model, setup.effort, setup.fast, info, mid, typed, engine, running, fast, fastOn, startServiceTier, canSwitch, supervisionRequired, version],
   );
   const latest = () => (chat.session ? (getSession(chat.session.machine_id, chat.session.session_id) ?? chat.session) : undefined);
   const key = assistantPickKey(chat);

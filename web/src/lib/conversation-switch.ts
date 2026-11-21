@@ -17,9 +17,11 @@ export interface ConversationSwitchRequest {
   effort?: string;
   permission_mode?: string;
 }
-const path = (session: Session) => `/assistant/conversations/${encodeURIComponent(session.session_id)}`;
+const path = (session: Pick<Session, "machine_id" | "session_id">) => `/assistant/conversations/${encodeURIComponent(session.session_id)}`;
+export interface ConversationSwitchState { enabled: boolean; epoch: number; supervision_required?: boolean }
+export const conversationSwitchState = (session: Pick<Session, "machine_id" | "session_id">): Promise<ConversationSwitchState> => api(`${path(session)}/segments?machine_id=${encodeURIComponent(session.machine_id)}`);
 export async function prepareConversationSwitch(session: Session, pick: ModelPick): Promise<ConversationSwitchRequest> {
-  const state = await api<{ enabled: boolean; epoch: number }>(`${path(session)}/segments?machine_id=${encodeURIComponent(session.machine_id)}`);
+  const state = await conversationSwitchState(session);
   if (!state.enabled || !Number.isSafeInteger(state.epoch) || state.epoch < 1) throw new Error(t("chat-modelpanel.switch_unavailable"));
   return { ...pick, source_machine_id: session.machine_id, machine_id: session.machine_id,
     operation_id: crypto.randomUUID(), expected_epoch: state.epoch, permission_mode: session.permission_mode };
