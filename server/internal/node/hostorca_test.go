@@ -81,6 +81,10 @@ func TestMain(m *testing.M) {
 	os.Setenv("PASEO_HOME", "/tmp/persona-test-no-paseo")
 	// Nor the user's Cindy: its home points nowhere (a test that wants one sets its own).
 	os.Setenv("CINDY_HOME", "/tmp/persona-test-no-cindy")
+	// Nor the user's T3 Code: its home points nowhere and its command line is not found (a test that wants one sets
+	// its own).
+	os.Setenv("T3CODE_HOME", "/tmp/persona-test-no-t3code")
+	t3codeBin = func() string { return "" }
 	// Nor the user's Claude config directory (claude under a profile, or these tests run from inside a Claude Code
 	// session): the node's own default is then ~/.claude of the test's home (#2140; a test that wants one sets its own).
 	os.Unsetenv("CLAUDE_CONFIG_DIR")
@@ -307,55 +311,59 @@ func TestOrcaSendChecksForADialogThenPrompts(t *testing.T) {
 	}
 }
 
-func TestOrcaSendsToForegroundTraex(t *testing.T) {
-	n, _, o, procs, home := orcaNode(t)
-	const pane = "tab1:leaf1"
-	const command = "/opt/bin/traex"
-	pid := os.Getpid() // the writer lock must name a live process owned by this user
-	writeTraexOwner(t, home, threadMain, pid)
-	traexCache.Lock()
-	previous, present := traexCache.panes[pid]
-	traexCache.panes[pid] = "orca:" + pane
-	traexCache.Unlock()
-	t.Cleanup(func() {
-		traexCache.Lock()
-		defer traexCache.Unlock()
-		if present {
-			traexCache.panes[pid] = previous
-		} else {
-			delete(traexCache.panes, pid)
-		}
-	})
-	o.SetTerminals(orcaTerm("term_1", "tab1", "leaf1", traexAgent))
-	o.SetScreen("term_1", "› Ask Codex to do anything\n")
-	setProcess := func(state string) {
-		args := fmt.Sprintf("%d %s 01:00 %s", pid, state, command)
-		env := fmt.Sprintf("%d %s ORCA_PANE_KEY=%s", pid, command, pane)
-		procs.set(pane, parseOrcaPSEnv(env, parseOrcaPSArgs(args, time.Now()), nil)[pane]...)
-	}
-	setProcess("S+")
-	if s := byID(listSessions(t, n))[threadMain]; s.Agent != traexAgent || s.PaneID != "orca:"+pane {
-		t.Fatalf("TraeX conversation is not bound to its terminal: %+v", s)
-	}
-	o.Reset()
+func TestOrcaSendsToForegroundTraeCLI(t *testing.T) {
+	for _, executable := range []string{"traecli", "traex"} {
+		t.Run(executable, func(t *testing.T) {
+			n, _, o, procs, home := orcaNode(t)
+			const pane = "tab1:leaf1"
+			command := "/opt/bin/" + executable
+			pid := os.Getpid() // the writer lock must name a live process owned by this user
+			writeTraexOwner(t, home, threadMain, pid)
+			traexCache.Lock()
+			previous, present := traexCache.panes[pid]
+			traexCache.panes[pid] = "orca:" + pane
+			traexCache.Unlock()
+			t.Cleanup(func() {
+				traexCache.Lock()
+				defer traexCache.Unlock()
+				if present {
+					traexCache.panes[pid] = previous
+				} else {
+					delete(traexCache.panes, pid)
+				}
+			})
+			o.SetTerminals(orcaTerm("term_1", "tab1", "leaf1", traexAgent))
+			o.SetScreen("term_1", "› Ask Codex to do anything\n")
+			setProcess := func(state string) {
+				args := fmt.Sprintf("%d %s 01:00 %s", pid, state, command)
+				env := fmt.Sprintf("%d %s ORCA_PANE_KEY=%s", pid, command, pane)
+				procs.set(pane, parseOrcaPSEnv(env, parseOrcaPSArgs(args, time.Now()), nil)[pane]...)
+			}
+			setProcess("S+")
+			if s := byID(listSessions(t, n))[threadMain]; s.Agent != traexAgent || s.PaneID != "orca:"+pane {
+				t.Fatalf("TRAE CLI conversation is not bound to its terminal: %+v", s)
+			}
+			o.Reset()
 
-	req := map[string]any{"session_id": threadMain, "text": "hello"}
-	if _, err := request(t, n, "session.send", req); err != nil {
-		t.Fatalf("send to foreground TraeX: %v", err)
-	}
-	if writes := o.Writes(); len(writes) != 2 || writes[0].Text != "\x1b[200~hello\x1b[201~" || writes[1].Text != "\r" {
-		t.Fatalf("expected a bracketed paste and a separate submit, got %+v", writes)
-	}
+			req := map[string]any{"session_id": threadMain, "text": "hello"}
+			if _, err := request(t, n, "session.send", req); err != nil {
+				t.Fatalf("send to foreground TRAE CLI: %v", err)
+			}
+			if writes := o.Writes(); len(writes) != 2 || writes[0].Text != "\x1b[200~hello\x1b[201~" || writes[1].Text != "\r" {
+				t.Fatalf("expected a bracketed paste and a separate submit, got %+v", writes)
+			}
 
-	o.Reset()
-	setProcess("S") // the same process and pane still exist, but TraeX no longer owns the foreground group
-	if _, err := request(t, n, "session.send", req); err == nil {
-		t.Fatal("the background TraeX process accepted a send")
-	} else if code, data := refusalOf(t, err); code != "not_delivered" || data["delivered"] != "none" {
-		t.Fatalf("expected a refusal before typing, got %v", err)
-	}
-	if writes := o.Writes(); len(writes) != 0 {
-		t.Fatalf("wrote into the terminal without TraeX in front: %+v", writes)
+			o.Reset()
+			setProcess("S") // the same process and pane still exist, but TRAE CLI no longer owns the foreground group
+			if _, err := request(t, n, "session.send", req); err == nil {
+				t.Fatal("the background TRAE CLI process accepted a send")
+			} else if code, data := refusalOf(t, err); code != "not_delivered" || data["delivered"] != "none" {
+				t.Fatalf("expected a refusal before typing, got %v", err)
+			}
+			if writes := o.Writes(); len(writes) != 0 {
+				t.Fatalf("wrote into the terminal without TRAE CLI in front: %+v", writes)
+			}
+		})
 	}
 }
 

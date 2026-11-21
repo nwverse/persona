@@ -25,6 +25,7 @@ import {
   agentCatalogScope, assistantCatalogScope, assistantLaunchers, machineLauncherList, modelList, pendingView, pillView, readAgentLauncherNames, readAssistantLaunchers, readForPanel, readModels, readSuperviseDefault, sessionModelHost, sessionSwitches, superviseDefault, useModelLists, currentModelRow, type PillSetup,
 } from "../../lib/session-models";
 import { turnErrorFix, type TurnFix } from "../../lib/readiness";
+import { launchModelForSession } from "../../lib/new-agent";
 import { getSession, hubHas, useStore } from "../../lib/store";
 import { CODEX_ULTRA, ultracodeOn } from "../../lib/ultracode";
 import type { AssistantInfo, Session } from "../../lib/types";
@@ -192,8 +193,10 @@ export const AgentModelPill = memo(function AgentModelPill({ session }: { sessio
   const mid = session.machine_id;
   const own = sessionLauncher(session);
   const ownHost = sessionModelHost(session);
-  const switches = sessionSwitches(session);
-  const view = pillView(session, modelList(mid, own, undefined, ownHost));
+  const launchModel = useStore((s) => launchModelForSession(s.launches, session));
+  const effectiveSession = launchModel ? { ...session, model: launchModel } : session;
+  const switches = sessionSwitches(effectiveSession);
+  const view = pillView(effectiveSession, modelList(mid, own, undefined, ownHost));
   const opens = switches.model || switches.effort || view.engine === "codex";
   useEffect(() => {
     if (opens) void readModels(mid, own, { first: true, host: ownHost });
@@ -241,7 +244,7 @@ export const AgentModelPill = memo(function AgentModelPill({ session }: { sessio
         workflow={workflow}
         buttonRef={button}
       />
-      {shown && anchor && <SessionModelPanel session={session} anchor={anchor} onClose={close} />}
+      {shown && anchor && <SessionModelPanel session={effectiveSession} anchor={anchor} onClose={close} />}
     </>
   );
 });

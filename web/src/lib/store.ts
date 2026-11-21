@@ -27,6 +27,7 @@ import { NO_PINS, pinsOf, type AgentPins } from "./pins";
 import type { AssistantInfo, Interaction, Item, Machine, MeshHub, Session } from "./types";
 import type { Resolution } from "./answered";
 import { answersIn, type DelegatedAnswer, type Reanswer } from "./delegate";
+import { nextLaunchExpiry, registerLaunchRowObserver, settledLaunches } from "./launch-handoff";
 import type { AgentLaunch } from "./new-agent";
 import { isSpacesSupported, makeSessionLookup, type SessionLookup, type Todo } from "./todos";
 import { releaseAttachments } from "./attachments";
@@ -171,10 +172,42 @@ function set(patch: Partial<State>) {
     if (patch.assistant?.conversations.every(availableConversation) === false) next.assistant = { ...patch.assistant, conversations: patch.assistant.conversations.filter(availableConversation) };
   }
   state = holdSeen(next, patch);
+  state = settleLaunchState(state, patch);
   if (viewed.size && ("sessions" in patch || "sessionSummaries" in patch || "assistant" in patch)) seeViewed(false);
   if (pushing) notifySoon();
   else notify();
 }
+
+let handoffTimer: ReturnType<typeof setTimeout> | undefined;
+
+function scheduleLaunchExpiry(launches: Record<string, AgentLaunch>, now: number) {
+  clearTimeout(handoffTimer);
+  handoffTimer = undefined;
+  const delay = nextLaunchExpiry(launches, now);
+  if (delay === undefined) return;
+  handoffTimer = setTimeout(() => {
+    handoffTimer = undefined;
+    const rows = [...Object.values(state.sessions).flat(), ...state.sessionSummaries];
+    const next = settledLaunches(state.launches, rows, Date.now());
+    if (next !== state.launches) set({ launches: next });
+  }, delay + 10);
+}
+
+/** Settles ready launch handoffs once hub session rows confirm working / terminal state or the handoff window expires (#12380). */
+function settleLaunchState(next: State, patch: Partial<State>): State {
+  if (!Object.keys(next.launches).length || !("sessions" in patch || "sessionSummaries" in patch || "launches" in patch)) return next;
+  const now = Date.now();
+  const rows = [...Object.values(next.sessions).flat(), ...next.sessionSummaries];
+  const launches = settledLaunches(next.launches, rows, now);
+  scheduleLaunchExpiry(launches, now);
+  return launches === next.launches ? next : { ...next, launches };
+}
+
+registerLaunchRowObserver((rows) => {
+  if (!Object.keys(state.launches).length) return;
+  const launches = settledLaunches(state.launches, rows, Date.now());
+  if (launches !== state.launches) set({ launches });
+});
 
 /** Rows whose seen mark still waits for the hub are shown seen, whichever way they came in (a push, a page of the
  *  list, an HTTP answer); marks the hub's rows show recorded, or no longer about this turn, go (lib/seen-outbox.ts). */
@@ -1856,6 +1889,8 @@ export function reset() {
   clearMemoryPages();
   clearTimeout(seenTimer);
   seenTimer = undefined;
+  clearTimeout(handoffTimer);
+  handoffTimer = undefined;
   Object.values(state.launches).forEach((launch) => releaseAttachments(launch.attachments));
   set({
     machines: [],

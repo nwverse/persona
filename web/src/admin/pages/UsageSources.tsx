@@ -12,6 +12,7 @@ import type { UsageSource, UsageSourceType, UsageTestResult } from "../types";
 import { hubWords, keyRequired, needsKeyAgain, POLL_CHOICES, sourceStatus, testText, typeLabel, validUrl } from "../usage-sources";
 import { Card, ConfirmButton, EmptyState, ErrorBox, Field, Line, Loader, PageHeader, Segmented, Tag, useLoad } from "../parts";
 
+const providerName = (p: string) => p.charAt(0).toUpperCase() + p.slice(1);
 const message = (e: unknown) => hubWords(e) ?? errorText(e);
 
 export function UsageSourcesPage() {
@@ -28,7 +29,7 @@ export function UsageSourcesPage() {
   }, [data, opened]);
 
   const [busy, setBusy] = useState(false);
-  const settings = async (patch: { enabled?: boolean; poll_minutes?: number }) => {
+  const settings = async (patch: { enabled?: boolean; poll_minutes?: number; hidden_providers?: string[] }) => {
     setBusy(true);
     try {
       set(await saveUsageSettings(patch));
@@ -70,6 +71,24 @@ export function UsageSourcesPage() {
               />
             </Line>
           </Card>
+          {data.providers && data.providers.length > 0 && (
+            <Card title={t("admin-pages-usage.providers_title")} footer={t("admin-pages-usage.providers_footer")}>
+              {data.providers.map((p) => {
+                const hidden = data.hidden_providers ?? [];
+                const shown = !hidden.includes(p);
+                return (
+                  <Line key={p} label={providerName(p)}>
+                    <Switch
+                      on={shown}
+                      disabled={busy}
+                      onChange={(on) => void settings({ hidden_providers: on ? hidden.filter((h) => h !== p) : [...hidden, p] })}
+                      label={t("admin-pages-usage.provider_show", { name: providerName(p) })}
+                    />
+                  </Line>
+                );
+              })}
+            </Card>
+          )}
           <Card title={t("admin-pages-usage.sources", { count: data.sources.length })} footer={t("admin-pages-usage.footer")}>
             {data.sources.length === 0 ? (
               <EmptyState icon="pulse" title={t("admin-pages-usage.empty_title")} action={<Button onClick={() => setDialog("add")}>{t("admin-pages-usage.add")}</Button>}>
