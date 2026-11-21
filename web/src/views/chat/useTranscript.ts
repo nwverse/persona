@@ -54,6 +54,8 @@ export interface Transcript {
   items: Item[];
   /** Identity of the currently loaded history, independent of how many earlier pages are visible. */
   history?: string;
+  /** Monotonic counter bumped whenever a full-page replacement commits (e.g. history rewrite or gap-fill fallback). */
+  replaceEpoch?: number;
   loading: boolean;
   /** The hub's first page came or failed: until then a cached page says nothing about what went in since. */
   firstRead: boolean;
@@ -114,6 +116,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
   }, []);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [earlierPage, setEarlierPage] = useState<symbol>();
+  const [replaceEpoch, setReplaceEpoch] = useState(0);
   const [streaming, setStreaming] = useState("");
   const [streamEnded, setStreamEnded] = useState(false);
   const reread = useRef<() => void>(() => {});
@@ -489,6 +492,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       const replace = replacing.current || changed || !batch.length || (!active && skipsCached(batch));
       const gap = active && !replace && batch[0].seq > covered.current + 1;
       if (replace) disownReads();
+      if (replacing.current || changed) setReplaceEpoch((n) => n + 1);
       const pushes = changed && !replacing.current && pendingHistory !== p.history ? [] : pendingItems;
       const refreshed = (have: Item[], page: Item[]) => mergeItems(mergeItems(replace ? [] : withoutFolded(have, page), page), withoutFolded(pushes, page));
       const visible = active ? keepExpanded(batch) : batch;
@@ -659,5 +663,5 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     [mid, sid, apply],
   );
 
-  return { items, history: history.current, loading, firstRead, error, hasMore, loadingEarlier, earlierPage, loadEarlier, expandFold, streaming, streamEnded, notLive, reload: () => reread.current() };
+  return { items, history: history.current, replaceEpoch, loading, firstRead, error, hasMore, loadingEarlier, earlierPage, loadEarlier, expandFold, streaming, streamEnded, notLive, reload: () => reread.current() };
 }

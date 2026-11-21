@@ -9,6 +9,7 @@ cd apple && xcodegen generate -q && xcodebuild -project Persona.xcodeproj -schem
   -destination "id=$SIM" test   # iOS unit tests (ChatStore, ScreenParser, phone tool registry)
 ./scripts/app/sim.sh [--with-watch] [-openSession <machine>/<id>]     # run in simulator, pair automatically to the real hub ("Development builds")
 cd apple/Packages/PersonaKit && swift test                             # PersonaKit unit tests: directly on Mac, no App build or simulator
+cd apple/Packages/PersonaWire && swift test -Xswiftc -warnings-as-errors # PersonaWire unit tests, warnings as errors as CI runs them
 python3 -B scripts/test/test_sim_boot.py                               # sim-boot.sh (fake xcrun / simslim, no simulator)
 n=0 failed=""; for f in $(find scripts -name 'test_*.py' -not -path '*/node_modules/*' | sort); do grep -q unittest "$f" || continue; n=$((n + 1)); (cd "$(dirname "$f")" && python3 -B -m unittest -q "$(basename "$f" .py)") || failed="$failed $f"; done; echo "$n suites, failed:${failed:- none}"; [ -z "$failed" ]   # all Python suites in scripts/, like CI (it skips files that never mention unittest); any failure exits nonzero
 ```
@@ -453,6 +454,12 @@ it isn't in `PersonaTests`; the Apple CI script runs its SwiftPM tests separatel
 - Package code must build with Foundation only: no SwiftUI / UIKit imports, App `Theme` or `AppModel`. Design-system source checks (`TokenRatchetTests`, etc.) don't scan it.
 - The package declares macOS 15, so its test bundle also loads on a macOS 15 host without a target override. To check that deployment target from a newer Apple-silicon Mac, use a separate build folder: `swift test --scratch-path /tmp/personakit-macos15 -Xswiftc -target -Xswiftc arm64-apple-macosx15.0` (use `x86_64-apple-macosx15.0` on Intel). `scripts/test/test_apple_ci.py` guards the macOS floors of all tracked local Swift packages.
 
+**PersonaWire** (`apple/Packages/PersonaWire`, #7895): the Foundation-only wire layer every app target links, the watch,
+widgets and extensions included. Its tests run with `xcrun swift test --package-path apple/Packages/PersonaWire -Xswiftc
+-warnings-as-errors`, as the `packages` lane of `scripts/ci/apple.sh` runs them (#12734). The flag on the command line also
+applies to a package's dependencies, so PersonaWire must build without warnings for any package that depends on it to pass
+the same flag; a file inside the package never imports `PersonaWire` itself.
+
 **PersonaCore** (`apple/Packages/PersonaCore`, #6871): the iOS-only binding of the shared Rust continuity core. Run
 `native/app-core/scripts/build-apple.sh` before XcodeGen / package resolution, then `xcrun swift test --package-path
 apple/Packages/PersonaCore -Xswiftc -warnings-as-errors` (after `sim.sh`, whose `--simulator` build has no macOS slice,
@@ -831,6 +838,44 @@ the state and start-attempt count. With the switch off, existing mock screens do
 the names it took in that test's `MOVED`: a branch from before the move that kept the old block when it resolved its conflict
 then fails there, with the module to edit instead
 (`docs/lessons/testing.md`, "A moved file or block needs a test that fails when the old copy comes back").
+
+**No new switch in `mock_hub.py` (#12737).** Most of what `mock_hub.py` gains comes with a new `MOCK_*` switch (89 of the 195
+commits that changed it from 2026-11-14 to 2026-11-22 added one, with 72% of its net added lines), so its switch names are
+frozen. It may read only the names in `scripts/mock/mock_hub_switches.txt`: the ones it read when the freeze landed, then the
+ones the PRs open that day were adding, each with its PR. Both parts are written on the day the freeze lands, after
+`origin/main` is merged in, by `python3 scripts/mock/mock_hub_switches.py pending --write`: the names `origin/main` reads,
+including a pending one whose PR has merged by then, and the names open PRs add, keeping a listed one while its PR is open.
+Once the list is on `main` the command writes nothing, so it is not how a later PR gets a name on the list.
+`scripts/mock/test_mock_hub.py` parses the file and fails on any other
+`MOCK_*` name it reads through `os.environ.get`, `os.environ[...]`, `os.getenv` or `in os.environ`, or has as a whole string
+anywhere (a copy of the environment read later, a helper given the name), and on an environment read whose name is not a
+literal; a listed name the file no longer reads is a notice. Check-fast runs the test for every change to `mock_hub.py`.
+
+A new switch is therefore a domain module, and so is **a new value on an existing switch**: `MOCK_INBOX=rules` next to
+`MOCK_INBOX=empty` is as new as `MOCK_INBOX_RULES` would be. The domain module reads the switch itself, registers its routes
+only for that value, and answers there first; a handler that returns `False` for a request it leaves alone hands it on to
+`mock_hub.py`, which keeps serving the switch's other values:
+
+```python
+# scripts/mock/inbox_rules_mock.py, with one line in DOMAINS
+import os
+
+RULES = os.environ.get("MOCK_INBOX") == "rules"
+
+
+def register(d):
+    d.help("MOCK_INBOX=rules  the Inbox with filing rules (#<issue>)")
+    if not RULES:
+        return  # any other value: mock_hub.py answers as before
+    d.route("GET", "/api/v1/inbox/policies", policies)  # policies(h, req): h.send_json({...})
+    d.route("GET", "/api/v1/inbox", page)               # page(h, req): False for a request it does not change
+```
+
+(`policies` and `page` are the module's own functions.)
+
+Editing an existing switch's code in `mock_hub.py` is fine; the freeze is on names, not lines. A block that moves into a
+domain module takes its names off the list in the same change (the notice says which). A line ceiling is worth another look
+only if the file keeps growing by more than about 150 lines a week without new switches.
 
 ### Readiness scenarios (`MOCK_READINESS`, #287)
 
