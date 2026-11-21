@@ -193,3 +193,170 @@ func TestFoldWorkPreservesTTFTMS(t *testing.T) {
 		t.Fatalf("historical fold must not fabricate TTFTMS: %v", *foldedNoTTFT[1].TTFTMS)
 	}
 }
+
+func TestCodexRolloutContextBreakdownCountsUnclippedLongContent(t *testing.T) {
+	// Exceed maxTextLen (1 MiB) so clip() and clipJSON() actively truncate display items.
+	longPrompt := strings.Repeat("p", maxTextLen+200_000) // ~1.25 MB -> ~312k tokens
+	longOutput := strings.Repeat("o", maxTextLen+200_000) // ~1.25 MB -> ~312k tokens
+	longReply := strings.Repeat("r", maxTextLen+100_000)  // ~1.15 MB -> ~287k tokens
+
+	lines := []string{
+		`{"timestamp":"2026-11-21T10:00:00Z","type":"session_meta","payload":{"cwd":"/work","cli_version":"0.170","originator":"codex_cli_rs"}}`,
+		`{"timestamp":"2026-11-21T10:00:01Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"u1","content":[{"type":"text","text":"` + longPrompt + `"}]}}}`,
+		// Duplicate item_completed for u1 must not be double-counted.
+		`{"timestamp":"2026-11-21T10:00:01Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"u1","content":[{"type":"text","text":"` + longPrompt + `"}]}}}`,
+		`{"timestamp":"2026-11-21T10:00:02Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"c1","command":["go","test","-v","./..."],"aggregated_output":"` + longOutput + `","status":"completed"}}}`,
+		`{"timestamp":"2026-11-21T10:00:03Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"a1","content":[{"type":"text","text":"` + longReply + `"}]}}}`,
+		`{"timestamp":"2026-11-21T10:00:04Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"output_tokens":10000,"total_tokens":960000},"last_token_usage":{"input_tokens":950000,"output_tokens":10000},"model_context_window":1000000}}}`,
+	}
+
+	var m Meta
+	m.Codex = true
+	var userItems, cmdItems, replyItems []proto.Item
+	for i, line := range lines {
+		got := ParseLine(i+1, []byte(line), &m)
+		switch i {
+		case 1:
+			userItems = got
+		case 3:
+			cmdItems = got
+		case 4:
+			replyItems = got
+		}
+	}
+
+	// Display items themselves must remain clipped by maxTextLen.
+	if len(userItems) != 1 || len(userItems[0].Text) >= len(longPrompt) {
+		t.Fatalf("expected display UserMessage to be clipped, got len=%d vs orig=%d", len(userItems[0].Text), len(longPrompt))
+	}
+	if len(cmdItems) != 2 || len(cmdItems[1].Text) >= len(longOutput) {
+		t.Fatalf("expected display CommandExecution output to be clipped, got len=%d vs orig=%d", len(cmdItems[1].Text), len(longOutput))
+	}
+	if len(replyItems) != 1 || len(replyItems[0].Text) >= len(longReply) {
+		t.Fatalf("expected display AgentMessage to be clipped, got len=%d vs orig=%d", len(replyItems[0].Text), len(longReply))
+	}
+
+	// ContextStats must reflect unclipped sizes (not clipped display text) and no duplicate counting.
+	wantConv := int64(len(longPrompt) + len(longReply))
+	if m.ContextStats.ConversationBytes < wantConv-100 || m.ContextStats.ConversationBytes > wantConv+500 {
+		t.Fatalf("ConversationBytes = %d, want ~%d", m.ContextStats.ConversationBytes, wantConv)
+	}
+	wantToolMin := int64(len(longOutput))
+	if m.ContextStats.ToolOutputBytes < wantToolMin {
+		t.Fatalf("ToolOutputBytes = %d, want >= %d", m.ContextStats.ToolOutputBytes, wantToolMin)
+	}
+
+	bd := BuildContextBreakdown(m.ContextStats, m.ContextTokens, m.ContextWindow, 0, true)
+	if bd == nil || bd.Source != proto.ContextBreakdownEstimated {
+		t.Fatalf("expected estimated breakdown, got %+v", bd)
+	}
+	// ~2.40MB conversation (~599k tokens) + ~1.25MB tool output (~312k tokens) out of 950k total ->
+	// system_and_rules should receive only the ~39k unrecorded prefix gap, not the clipped content.
+	if *bd.Conversation < 580000 || *bd.ToolOutputs < 300000 || *bd.SystemAndRules > 60000 {
+		t.Fatalf("clipped content misattributed: sys=%d conv=%d tool=%d", *bd.SystemAndRules, *bd.Conversation, *bd.ToolOutputs)
+	}
+	if got := *bd.SystemAndRules + *bd.Conversation + *bd.ToolOutputs; got != 950000 {
+		t.Fatalf("category sum = %d, want 950000", got)
+	}
+}
+
+func TestObserveSkippedUserLineMixedImagesAndText(t *testing.T) {
+	b64 := strings.Repeat("QUJD", 25000) // 100 KB base64 image payload
+
+	// 1. Single image only: counted as one image (~6400 bytes), not 100 KB.
+	var mSingle Meta
+	singleImgLine := `{"type":"user","uuid":"u1","timestamp":"2026-11-21T10:00:00Z","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + b64 + `"}}]}}`
+	mSingle.ObserveSkippedUserLine([]byte(singleImgLine))
+	if mSingle.ContextStats.ConversationBytes != imageTokenBytesEstimate {
+		t.Fatalf("single image ConversationBytes = %d, want %d", mSingle.ContextStats.ConversationBytes, imageTokenBytesEstimate)
+	}
+	if mSingle.ContextStats.ToolOutputBytes != 0 {
+		t.Fatalf("single image ToolOutputBytes = %d, want 0", mSingle.ContextStats.ToolOutputBytes)
+	}
+
+	// 2. Large user prompt (30 KB text) + 2 base64 images: retains text AND counts both images.
+	var mMixed Meta
+	bigText := strings.Repeat("important context sentence. ", 1100) // ~30.8 KB
+	mixedLine := `{"type":"user","uuid":"u2","timestamp":"2026-11-21T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"` + bigText + `"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + b64 + `"}},{"type":"image","source":{"data":"` + b64 + `","media_type":"image/jpeg","type":"base64"}}]}}`
+	mMixed.ObserveSkippedUserLine([]byte(mixedLine))
+	wantMixed := int64(len(bigText)) + 2*imageTokenBytesEstimate
+	if mMixed.ContextStats.ConversationBytes < wantMixed-512 || mMixed.ContextStats.ConversationBytes > wantMixed+512 {
+		t.Fatalf("mixed prompt+2 images ConversationBytes = %d, want ~%d", mMixed.ContextStats.ConversationBytes, wantMixed)
+	}
+
+	// 3. tool_result containing 40 KB text + 2 images (including "type":"tool_result" after "content").
+	var mTool Meta
+	bigToolText := strings.Repeat("log output entry 0123456789\n", 1450) // ~40.6 KB
+	toolLine := `{"type":"user","uuid":"u3","timestamp":"2026-11-21T10:00:02Z","message":{"role":"user","content":[{"content":[{"type":"text","text":"` + strings.ReplaceAll(bigToolText, "\n", `\n`) + `"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + b64 + `"}},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + b64 + `"}}],"tool_use_id":"tu1","type":"tool_result"}]}}`
+	mTool.ObserveSkippedUserLine([]byte(toolLine))
+	wantTool := int64(len(bigToolText)) + 2*imageTokenBytesEstimate
+	if mTool.ContextStats.ToolOutputBytes < wantTool-1024 || mTool.ContextStats.ToolOutputBytes > wantTool+2048 {
+		t.Fatalf("tool_result text+2 images ToolOutputBytes = %d, want ~%d", mTool.ContextStats.ToolOutputBytes, wantTool)
+	}
+	if mTool.ContextStats.ConversationBytes != 0 {
+		t.Fatalf("tool_result leaked into ConversationBytes = %d", mTool.ContextStats.ConversationBytes)
+	}
+
+	// 4. Plain large text mentioning "base64" (escaped JSON inside a string): NOT treated as an image.
+	var mMention Meta
+	mentionText := `The snippet uses \"type\":\"base64\" with \"data\":\"abc\" — ` + strings.Repeat("plain prose text ", 1500)
+	mentionLine := `{"type":"user","uuid":"u4","timestamp":"2026-11-21T10:00:03Z","message":{"role":"user","content":"` + mentionText + `"}}`
+	mMention.ObserveSkippedUserLine([]byte(mentionLine))
+	if mMention.ContextStats.ConversationBytes < int64(len(mentionText))-512 {
+		t.Fatalf("plain text mentioning base64 was capped: got %d, want >= %d", mMention.ContextStats.ConversationBytes, len(mentionText)-512)
+	}
+
+	// 5. Sidechain line is ignored.
+	var mSide Meta
+	mSide.ObserveSkippedUserLine([]byte(`{"type":"user","isSidechain":true,"message":{"role":"user","content":"` + bigText + `"}}`))
+	if !mSide.ContextStats.Empty() {
+		t.Fatalf("sidechain line should be ignored: %+v", mSide.ContextStats)
+	}
+}
+
+func TestEstimateWeightedBytesInvalidUTF8NearCutoff(t *testing.T) {
+	// 1. Valid 4-byte emoji split across the 4096-byte sample cutoff (4094 ASCII + "😀" + 4096 ASCII).
+	splitEmoji := strings.Repeat("a", breakdownSampleLimit-2) + "😀" + strings.Repeat("b", breakdownSampleLimit)
+	gotEmoji := estimateWeightedBytes(splitEmoji)
+	// Almost pure ASCII (~8194 bytes), should stay close to len(splitEmoji) without panic or skew.
+	if gotEmoji < int64(len(splitEmoji))-64 || gotEmoji > int64(len(splitEmoji))+64 {
+		t.Fatalf("splitEmoji weighted bytes = %d, want ~%d", gotEmoji, len(splitEmoji))
+	}
+
+	// 2. Valid 3-byte CJK rune split across the cutoff (4095 ASCII + "中" + 4096 ASCII).
+	splitCJK := strings.Repeat("a", breakdownSampleLimit-1) + "中" + strings.Repeat("b", breakdownSampleLimit)
+	gotCJK := estimateWeightedBytes(splitCJK)
+	if gotCJK < int64(len(splitCJK))-64 || gotCJK > int64(len(splitCJK))+64 {
+		t.Fatalf("splitCJK weighted bytes = %d, want ~%d", gotCJK, len(splitCJK))
+	}
+
+	// 3. Long input filled with invalid UTF-8 bytes at and before the 4096-byte cutoff:
+	// must complete in O(1) bounded work without shrinking the sample down to 0.
+	invalidAll := strings.Repeat("\xff", 100_000)
+	gotInvalid := estimateWeightedBytes(invalidAll)
+	if gotInvalid <= 0 {
+		t.Fatalf("invalid UTF-8 weighted bytes = %d, want > 0", gotInvalid)
+	}
+
+	// 4. Long input with invalid continuation bytes right at the cutoff.
+	invalidCont := strings.Repeat("a", breakdownSampleLimit-10) + strings.Repeat("\x80", 20) + strings.Repeat("b", 50_000)
+	gotCont := estimateWeightedBytes(invalidCont)
+	if gotCont < int64(len(invalidCont)) {
+		t.Fatalf("invalid continuation weighted bytes = %d, want >= %d", gotCont, len(invalidCont))
+	}
+
+	// 5. Invalid byte 0xff followed by a truncated multi-byte start right before cutoff.
+	invalidMix := strings.Repeat("a", breakdownSampleLimit-4) + "\xff\xff\xe4\xb8" + strings.Repeat("b", 10_000)
+	gotMix := estimateWeightedBytes(invalidMix)
+	if gotMix < int64(len(invalidMix)) {
+		t.Fatalf("invalid mix weighted bytes = %d, want >= %d", gotMix, len(invalidMix))
+	}
+}
+
+func BenchmarkEstimateWeightedBytesInvalidUTF8(b *testing.B) {
+	s := strings.Repeat("\xff\xfe\x80\x81", 25_000) // 100 KB of invalid UTF-8
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = estimateWeightedBytes(s)
+	}
+}

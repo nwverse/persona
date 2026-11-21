@@ -2,6 +2,7 @@ package transcript
 
 import (
 	"bytes"
+	"encoding/json"
 	"math"
 	"strings"
 	"unicode/utf8"
@@ -18,6 +19,10 @@ const (
 	imageTokenBytesEstimate int64 = 6400
 	// skippedLineEnvelopeBytes approximates JSON envelope overhead on large skipped lines.
 	skippedLineEnvelopeBytes int64 = 256
+	// maxSkippedLineTokens bounds JSON token stepping when scanning large skipped lines for base64 images.
+	maxSkippedLineTokens = 8192
+	// maxSkippedLineDepth bounds the fixed stack depth for skipped-line scanning.
+	maxSkippedLineDepth = 64
 )
 
 // ContextStats accumulates bounded category byte weights from parsed transcript records since the
@@ -62,27 +67,233 @@ func (s *ContextStats) SetNative(b *proto.ContextBreakdown) {
 }
 
 // ObserveSkippedUserLine accounts for a large user transcript line skipped by quickLine without
-// full JSON decoding. Base64 image payloads use a bounded image estimate instead of raw byte length.
+// full JSON decoding. When base64 image blocks are present, a bounded zero-allocation JSON scan
+// strips only the base64 image source objects, counting each image block individually with
+// imageTokenBytesEstimate while preserving the remaining non-image text payload.
 func (m *Meta) ObserveSkippedUserLine(line []byte) {
 	if len(line) == 0 || bytes.Contains(line, []byte(`"isSidechain":true`)) {
 		return
 	}
-	payload := int64(len(line)) - skippedLineEnvelopeBytes
-	if payload <= 0 {
+	isMeta := bytes.Contains(line, []byte(`"isMeta":true`)) || bytes.Contains(line, []byte(`"isCompactSummary":true`))
+	isToolResult := bytes.Contains(line, []byte(`"tool_result"`))
+
+	if !bytes.Contains(line, []byte(`"base64"`)) {
+		payload := int64(len(line)) - skippedLineEnvelopeBytes
+		if payload <= 0 {
+			return
+		}
+		switch {
+		case isToolResult:
+			m.ContextStats.ToolOutputBytes += payload
+		case isMeta:
+			m.ContextStats.SystemBytes += payload
+		default:
+			m.ContextStats.ConversationBytes += payload
+		}
 		return
 	}
-	isImage := bytes.Contains(line, []byte(`"base64"`))
-	if isImage && payload > imageTokenBytesEstimate {
-		payload = imageTokenBytesEstimate
+
+	removedBytes, convImages, toolImages := scanSkippedBase64Images(line)
+	totalImages := convImages + toolImages
+	nonImageBytes := int64(len(line)) - removedBytes - skippedLineEnvelopeBytes - totalImages*26
+	if nonImageBytes < 0 {
+		nonImageBytes = 0
 	}
-	switch {
-	case bytes.Contains(line, []byte(`"tool_result"`)):
-		m.ContextStats.ToolOutputBytes += payload
-	case bytes.Contains(line, []byte(`"isMeta":true`)) || bytes.Contains(line, []byte(`"isCompactSummary":true`)):
-		m.ContextStats.SystemBytes += payload
-	default:
-		m.ContextStats.ConversationBytes += payload
+	if isMeta {
+		m.ContextStats.SystemBytes += nonImageBytes + totalImages*imageTokenBytesEstimate
+		return
 	}
+	m.ContextStats.ToolOutputBytes += toolImages * imageTokenBytesEstimate
+	m.ContextStats.ConversationBytes += convImages * imageTokenBytesEstimate
+	if nonImageBytes > 0 {
+		if isToolResult {
+			m.ContextStats.ToolOutputBytes += nonImageBytes
+		} else {
+			m.ContextStats.ConversationBytes += nonImageBytes
+		}
+	}
+}
+
+type skippedFrame struct {
+	isObj         bool
+	expectKey     bool
+	start         int
+	pendingKey    []byte
+	hasBase64     bool
+	hasData       bool
+	isToolResult  bool
+	pendingImages int64
+}
+
+// fastJSONStringEnd finds the closing quote of the JSON string starting at line[start] == '"',
+// using bytes.IndexByte for fast skipping over large base64 payloads, or -1 if unterminated.
+func fastJSONStringEnd(line []byte, start int) int {
+	i := start + 1
+	for i < len(line) {
+		rel := bytes.IndexByte(line[i:], '"')
+		if rel < 0 {
+			return -1
+		}
+		q := i + rel
+		bs := 0
+		for j := q - 1; j > start && line[j] == '\\'; j-- {
+			bs++
+		}
+		if bs%2 == 0 {
+			return q
+		}
+		i = q + 1
+	}
+	return -1
+}
+
+// scanSkippedBase64Images performs a bounded, zero-allocation JSON scan over a skipped user line
+// to locate base64 image source objects ({"type":"base64",...,"data":"..."}), returning their
+// combined raw JSON byte length and separate counts for conversation vs tool_result images.
+func scanSkippedBase64Images(line []byte) (removedBytes, convImages, toolImages int64) {
+	var stack [maxSkippedLineDepth]skippedFrame
+	depth := 0
+	extraDepth := 0
+	tokens := 0
+
+	for i := 0; i < len(line); i++ {
+		switch line[i] {
+		case ' ', '\t', '\n', '\r':
+			continue
+		case '"':
+			tokens++
+			if tokens > maxSkippedLineTokens {
+				i = len(line)
+				break
+			}
+			end := fastJSONStringEnd(line, i)
+			if end < 0 {
+				i = len(line)
+				break
+			}
+			if extraDepth == 0 && depth > 0 && stack[depth-1].isObj {
+				top := &stack[depth-1]
+				if top.expectKey {
+					top.pendingKey = line[i+1 : end]
+					top.expectKey = false
+				} else if len(top.pendingKey) > 0 {
+					val := line[i+1 : end]
+					switch string(top.pendingKey) {
+					case "type":
+						if bytes.Equal(val, []byte("base64")) {
+							top.hasBase64 = true
+						} else if bytes.Equal(val, []byte("tool_result")) {
+							top.isToolResult = true
+						}
+					case "data":
+						if len(val) > 0 {
+							top.hasData = true
+						}
+					}
+					top.pendingKey = nil
+				}
+			}
+			i = end
+		case '{':
+			tokens++
+			if tokens > maxSkippedLineTokens {
+				i = len(line)
+				break
+			}
+			if depth < maxSkippedLineDepth && extraDepth == 0 {
+				if depth > 0 && stack[depth-1].isObj {
+					stack[depth-1].pendingKey = nil
+					stack[depth-1].expectKey = false
+				}
+				stack[depth] = skippedFrame{isObj: true, expectKey: true, start: i}
+				depth++
+			} else {
+				extraDepth++
+			}
+		case '[':
+			tokens++
+			if tokens > maxSkippedLineTokens {
+				i = len(line)
+				break
+			}
+			if depth < maxSkippedLineDepth && extraDepth == 0 {
+				if depth > 0 && stack[depth-1].isObj {
+					stack[depth-1].pendingKey = nil
+					stack[depth-1].expectKey = false
+				}
+				stack[depth] = skippedFrame{isObj: false}
+				depth++
+			} else {
+				extraDepth++
+			}
+		case '}':
+			if extraDepth > 0 {
+				extraDepth--
+				continue
+			}
+			if depth == 0 {
+				continue
+			}
+			depth--
+			fr := stack[depth]
+			imgs := fr.pendingImages
+			if fr.isObj && fr.hasBase64 && fr.hasData {
+				removedBytes += int64(i - fr.start + 1)
+				imgs++
+			}
+			if imgs > 0 {
+				if fr.isToolResult {
+					toolImages += imgs
+				} else if depth > 0 {
+					stack[depth-1].pendingImages += imgs
+				} else {
+					convImages += imgs
+				}
+			}
+		case ']':
+			if extraDepth > 0 {
+				extraDepth--
+				continue
+			}
+			if depth == 0 {
+				continue
+			}
+			depth--
+			fr := stack[depth]
+			if fr.pendingImages > 0 {
+				if depth > 0 {
+					stack[depth-1].pendingImages += fr.pendingImages
+				} else {
+					convImages += fr.pendingImages
+				}
+			}
+		case ',':
+			if extraDepth == 0 && depth > 0 && stack[depth-1].isObj {
+				stack[depth-1].expectKey = true
+				stack[depth-1].pendingKey = nil
+			}
+		case ':':
+			if extraDepth == 0 && depth > 0 && stack[depth-1].isObj {
+				stack[depth-1].expectKey = false
+			}
+		}
+	}
+
+	// Flush any pending images if the scan terminated early (e.g., truncated JSON or token cap).
+	inTool := false
+	for j := 0; j < depth; j++ {
+		if stack[j].isToolResult {
+			inTool = true
+		}
+		if stack[j].pendingImages > 0 {
+			if inTool {
+				toolImages += stack[j].pendingImages
+			} else {
+				convImages += stack[j].pendingImages
+			}
+		}
+	}
+	return removedBytes, convImages, toolImages
 }
 
 // observeUserText classifies a user text block, separating injected system/context tags from user turns.
@@ -98,28 +309,12 @@ func (m *Meta) observeUserText(text string, isMeta bool) {
 	m.ContextStats.ConversationBytes += w
 }
 
-// observeItemsContext accounts for normalized Codex/generic transcript items in ContextStats.
-func (m *Meta) observeItemsContext(items []proto.Item) {
-	for _, it := range items {
-		switch it.Kind {
-		case proto.KindText, proto.KindThinking:
-			if it.Role == "user" {
-				m.observeUserText(it.Text, false)
-			} else if it.Role == "assistant" {
-				m.ContextStats.ConversationBytes += estimateWeightedBytes(it.Text)
-			}
-		case proto.KindToolUse:
-			m.ContextStats.ToolOutputBytes += int64(len(it.ToolName)) + estimateWeightedBytes(string(it.ToolInput))
-		case proto.KindToolResult:
-			m.ContextStats.ToolOutputBytes += estimateWeightedBytes(it.Text)
-		case proto.KindImage:
-			if it.ToolUseID != "" {
-				m.ContextStats.ToolOutputBytes += imageTokenBytesEstimate
-			} else {
-				m.ContextStats.ConversationBytes += imageTokenBytesEstimate
-			}
-		}
+// observeToolContext accounts for unclipped tool name, raw JSON input, and raw tool output.
+func (m *Meta) observeToolContext(name string, input json.RawMessage, output string) {
+	if m == nil {
+		return
 	}
+	m.ContextStats.ToolOutputBytes += int64(len(name)) + estimateWeightedBytes(string(input)) + estimateWeightedBytes(output)
 }
 
 // estimateWeightedBytes converts text into ASCII-equivalent bytes (~4 weighted bytes per token),
@@ -132,9 +327,19 @@ func estimateWeightedBytes(s string) int64 {
 	sample := s
 	if n > breakdownSampleLimit {
 		sample = s[:breakdownSampleLimit]
-		// Trim trailing incomplete UTF-8 sequence at the sample boundary.
-		for len(sample) > 0 && !utf8.ValidString(sample[max(len(sample)-4, 0):]) {
-			sample = sample[:len(sample)-1]
+		// Trim a trailing incomplete UTF-8 rune split across the sample boundary in O(1):
+		// walk back over at most 3 continuation bytes to the candidate rune start, then
+		// check once with DecodeRuneInString.
+		if sample[len(sample)-1] >= utf8.RuneSelf {
+			start := len(sample) - 1
+			for steps := 0; start > 0 && steps < 3 && (sample[start]&0xc0) == 0x80; steps++ {
+				start--
+			}
+			if r, size := utf8.DecodeRuneInString(sample[start:]); (r == utf8.RuneError && size == 1) || start+size != len(sample) {
+				if !utf8.FullRuneInString(sample[start:]) {
+					sample = sample[:start]
+				}
+			}
 		}
 		if len(sample) == 0 {
 			return int64(n)
