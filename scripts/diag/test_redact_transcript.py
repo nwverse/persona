@@ -69,6 +69,25 @@ class KeptAsIsTests(unittest.TestCase):
                 self.assertNotIn(word, r.text(f"see {word} here"))
 
 
+class RangeTests(unittest.TestCase):
+    def test_parse_keeps_sorted_intervals(self):
+        path, ranges = redact.parse_spec("fixture.jsonl:8000,1-5000,2-7")
+        self.assertEqual(path, "fixture.jsonl")
+        self.assertEqual(ranges, [range(1, 5001), range(2, 8), range(8000, 8001)])
+
+    def test_range_selection_preserves_source_order_without_duplicates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, output = root / "source.jsonl", root / "output.jsonl"
+            source.write_text("".join(json.dumps({"line": i}) + "\n" for i in range(1, 12)))
+            selection = str(source) + ":7,4-5,2-4,3,9-6,10-200"
+            run = subprocess.run([sys.executable, "-B", redact.__file__, "-o", str(output), selection],
+                                 capture_output=True, text=True, timeout=10)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual([json.loads(line)["line"] for line in output.read_text().splitlines()],
+                             [2, 3, 4, 5, 7, 10, 11])
+
+
 class OutputTests(unittest.TestCase):
     def test_refuses_output_alias_of_an_input(self):
         transcript = b'{"type":"user","signature":"synthetic fixture"}\n'
