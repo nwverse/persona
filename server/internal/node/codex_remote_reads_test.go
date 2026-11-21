@@ -210,8 +210,81 @@ func TestCodexRemoteShortBudgetReadsBusyAndLeftOutThreadsFirst(t *testing.T) {
 	}
 }
 
-// The read order: threads with a turn running or a request waiting first, then by when each was last asked for,
-// never asked first; the loaded list's order breaks ties.
+// A read the refresh's time cuts short is not a read: a thread new to the loaded list whose first read was cut goes
+// ahead of the threads read in that refresh, and is read and listed on the next one even when every other read hangs
+// (#12517). Counted as read, it went behind them in the loaded list's order, and was cut again or never asked.
+func TestCodexRemoteCutShortReadGoesAheadOfThreadsRead(t *testing.T) {
+	n := remoteTestNode(t)
+	home := t.TempDir()
+	var idle []string
+	for i := range 2 * codexReadWorkers {
+		idle = append(idle, fmt.Sprintf("eeeeeeee-0000-0000-0000-%012d", i))
+	}
+	const fresh = "ffffffff-0000-0000-0000-000000000001"
+	f, c := connectRemoteFixture(t, n, home, "one", idle...)
+	c.mu.Lock()
+	c.readWait, c.refreshWait = 3*time.Second, time.Second
+	c.mu.Unlock()
+
+	// The new thread comes last in the loaded list and only its read hangs: every other thread is read, then the
+	// refresh's second runs out before the read's own three.
+	f.mu.Lock()
+	f.threads = slices.Concat(idle, []string{fresh})
+	f.slowRead = map[string]bool{fresh: true}
+	f.mu.Unlock()
+	before := f.readCounts()
+	if err := c.refresh(); err != nil {
+		t.Fatal(err)
+	}
+	after := f.readCounts()
+	if read := readsSince(before, after); len(read) != len(idle)+1 {
+		t.Fatalf("the first refresh asked for %d threads, want all %d", len(read), len(idle)+1)
+	}
+	c.mu.Lock()
+	_, listed := c.threads[fresh]
+	_, backedOff := c.slow[fresh]
+	c.mu.Unlock()
+	if listed || backedOff {
+		t.Fatalf("a thread whose read was cut short: listed %v, backed off %v", listed, backedOff)
+	}
+
+	// Now every other read hangs and the new thread's is answered.
+	f.mu.Lock()
+	f.slowRead = map[string]bool{}
+	for _, raw := range idle {
+		f.slowRead[raw] = true
+	}
+	from := len(f.got)
+	f.mu.Unlock()
+	if err := c.refresh(); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	var order []string
+	for _, m := range f.got[from:] {
+		var p struct {
+			ThreadID string `json:"threadId"`
+		}
+		if m.Method == "thread/read" && json.Unmarshal(m.Params, &p) == nil {
+			order = append(order, p.ThreadID)
+		}
+	}
+	f.mu.Unlock()
+	if i := slices.Index(order, fresh); i < 0 || i >= codexReadWorkers {
+		t.Fatalf("the second refresh asked for %v, want the new thread among the first %d", order, codexReadWorkers)
+	}
+	listed = false
+	for _, s := range n.codexSessions(map[string]bool{}) {
+		listed = listed || s.SourceThreadID == fresh
+	}
+	if !listed {
+		t.Fatal("the new thread is not listed after its read was answered")
+	}
+}
+
+// The read order: threads with a turn running or a request waiting first, then by when each was last read, never read
+// first; a read cut short does not count as read, but goes behind threads not asked; the loaded list's order breaks
+// ties.
 func TestCodexReadOrder(t *testing.T) {
 	at := time.Now()
 	c := &codexRemote{
@@ -222,16 +295,16 @@ func TestCodexReadOrder(t *testing.T) {
 			"done-new": {status: proto.StatusDone},
 		},
 		seen: map[string]codexSeen{
-			"working":  {asked: at},
-			"blocked":  {asked: at.Add(-time.Minute)},
-			"done-old": {asked: at.Add(-time.Hour)},
-			"done-new": {asked: at},
-			"cut-once": {asked: at.Add(-time.Second)}, // asked once, never answered: not listed yet
+			"working":  {read: at},
+			"blocked":  {read: at.Add(-time.Minute)},
+			"done-old": {read: at.Add(-time.Hour)},
+			"done-new": {read: at},
+			"cut-once": {cut: at.Add(-time.Second)}, // asked once, cut short by the refresh's time: not listed yet
 		},
 	}
 	reads := []string{"done-new", "never-a", "working", "done-old", "cut-once", "never-b", "blocked"}
 	c.readOrder(reads)
-	want := []string{"blocked", "working", "never-a", "never-b", "done-old", "cut-once", "done-new"}
+	want := []string{"blocked", "working", "never-a", "never-b", "cut-once", "done-old", "done-new"}
 	if !slices.Equal(reads, want) {
 		t.Fatalf("order = %v, want %v", reads, want)
 	}

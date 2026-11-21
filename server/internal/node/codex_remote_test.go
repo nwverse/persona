@@ -755,8 +755,8 @@ func TestCodexRemoteSlowReadsTimeOutAlone(t *testing.T) {
 }
 
 // A refresh whose own time runs out stops asking: threads not read in time keep their last copy and are not backed off
-// as slow, while those whose own read timed out are. Reads go out never asked first (readOrder): the nine new threads
-// in list order, then the known one, asked when the connection came up.
+// as slow, while those whose own read timed out are. Reads go out never read first (readOrder): the nine new threads
+// in list order, then the known one, read when the connection came up.
 func TestCodexRemoteRefreshBudgetStopsReads(t *testing.T) {
 	n := remoteTestNode(t)
 	logs := &syncBuffer{}

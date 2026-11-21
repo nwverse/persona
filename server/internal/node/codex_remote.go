@@ -99,8 +99,11 @@ type codexSeen struct {
 	// ephemeral: its read said ephemeral, one of the app-server's own background jobs (a title, a sub-Agent helper).
 	// A thread is ephemeral or not from its creation, so it is not read again while it stays loaded.
 	ephemeral bool
-	// asked: when a refresh last sent its thread/read, answered or not (readOrder).
-	asked time.Time
+	// read: when a refresh last had its thread/read end on its own, answered, failed or timed out (readOrder).
+	read time.Time
+	// cut: when a refresh last sent its thread/read and ran out of its own time before the read ended. That is not a
+	// read: counted as one, the same threads would be cut on every refresh that falls short the same way (readOrder).
+	cut time.Time
 }
 
 // A refresh reads the loaded threads a few at a time, each read with its own timeout inside the refresh's: one slow
@@ -472,12 +475,14 @@ dispatch:
 	// Backoff counts from when the reads ended: a refresh that waited out a slow read is followed by the next at once.
 	ended := time.Now()
 	failed, cut, timedOut, settled := 0, 0, map[string]bool{}, map[string]bool{}
-	asked, found := map[string]bool{}, map[string]bool{}
+	// readEnded, readCut: its thread/read went out and ended on its own, or went out and the refresh's time ran out
+	// first (codexSeen).
+	readEnded, readCut, found := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	var firstErr error
 	for i, raw := range reads {
 		t := known[raw]
 		r := results[i]
-		asked[raw] = r.asked
+		readEnded[raw], readCut[raw] = r.asked && !r.cut, r.asked && r.cut
 		if r.cut || r.err != nil {
 			// Still loaded, just not read this time (a slow or failed call): keep the last copy and its asks.
 			if r.cut {
@@ -563,8 +568,12 @@ dispatch:
 		}
 		s := c.seen[raw]
 		s.ephemeral = s.ephemeral || found[raw]
-		if asked[raw] && s.asked.Before(now) { // a refresh that ran alongside may have asked later
-			s.asked = now
+		// A refresh that ran alongside may have asked later: keep its stamp.
+		if readEnded[raw] && s.read.Before(now) {
+			s.read = now
+		}
+		if readCut[raw] && s.cut.Before(now) {
+			s.cut = now
 		}
 		seen[raw] = s
 	}
@@ -601,9 +610,10 @@ dispatch:
 
 // readOrder sorts a refresh's reads into the order they go out in, which matters only when the refresh's time cannot
 // cover them all (#12517): first the threads with a turn running or a request waiting, whose next state is the one
-// Unread and pushes wait for; then the others by when they were last asked for, never asked first. A thread left
-// unasked goes ahead of those asked in its place, so a long loaded list does not cut the same threads on every
-// refresh. Callers hold c.mu.
+// Unread and pushes wait for; then the others by when each was last read, never read first. A read the refresh's time
+// cut short does not count as read, but among threads last read at the same time goes behind those not asked, and the
+// loaded list's order breaks the remaining ties. So a thread left unread goes ahead of those read in its place, and a
+// long loaded list does not cut the same threads on every refresh. Callers hold c.mu.
 func (c *codexRemote) readOrder(reads []string) {
 	busy := func(raw string) bool {
 		status := c.threads[raw].status
@@ -616,7 +626,8 @@ func (c *codexRemote) readOrder(reads []string) {
 			}
 			return 1
 		}
-		return c.seen[a].asked.Compare(c.seen[b].asked)
+		sa, sb := c.seen[a], c.seen[b]
+		return cmp.Or(sa.read.Compare(sb.read), sa.cut.Compare(sb.cut))
 	})
 }
 
