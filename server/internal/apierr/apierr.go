@@ -339,6 +339,8 @@ var rpcFailureKeys = map[string]string{
 	"omp_options":        "rpc-errors.omp_options",
 	// a message to an omp session the node cannot resume: no usable session file (node/ompresume.go)
 	"omp_resume_unknown": "rpc-errors.omp_resume_unknown",
+	// a resume of a conversation the computer has nothing of (node/control.go resumeKnown, #10941)
+	proto.CodeResumeUnknown: "rpc-errors.resume_unknown",
 	// a call a stopped omp has nothing to answer with: rename, interrupt, modes, queue, close (node/ompcalls.go)
 	"omp_stopped": "rpc-errors.omp_stopped",
 	// a start in a directory whose name can't be typed into a terminal (node/hostorca_launch.go)

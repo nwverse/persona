@@ -1229,6 +1229,7 @@ final class AppModel {
         forgetSeen()
         updateHeldRetryReceipts { _ in [] }
         LarkChatOutbox.forget()
+        TodoOutbox.forgetHubs(nil)
         // No hub left to answer: the open questions are denied, their results have nowhere to go.
         phoneConfirmations.denyAll()
         toolResults.forget(groups: Set(links.map(\.group)))
@@ -4720,6 +4721,7 @@ final class AppModel {
         heldAttachments = heldAttachments.filter { !gone.contains($0.key.group) }
         healthReports = healthReports.filter { !gone.contains($0.key) }
         TodosV1.shared.forget(gone)
+        TodoOutbox.forgetHubs(gone) // the To-dos list's writes on those hubs: never sent, and off the disk
         if let k = openChat, gone.contains(k.group) { openChat = nil }
         if let k = assistantCurrent, gone.contains(k.group) { assistantCurrent = nil }
         for g in gone {

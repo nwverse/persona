@@ -569,22 +569,25 @@ func (s *Service) profile(ctx context.Context, tasks []TaskView, todos *TodoRepo
 		if placed, err := s.directionKeep(ctx, v); err != nil {
 			s.logf("assistant: keep: %v", err)
 		} else {
-			p.Keep = keptSessions(v, tasks, todos.Links, s.leadSessions(ctx, v), placed)
+			p.Keep = keptSessions(v, tasks, todos.Links, s.leadSessions(ctx, v), s.spaceKeep(ctx, v), placed)
 		}
 	}
 	return p
 }
 
 // keptSessions are the conversations their machines list however long they have been quiet: the main conversation,
-// the main ones it replaced, scheduled tasks' own, the agents of open todos and the current leaders (leads). Otherwise
-// a busy machine's 80 newest transcripts crowd them out of the list and the Persona tab has no main chat (2026-11-01:
-// the main one, quiet for two days, was gone), a weekly task's conversation drops out in between, with the app's link
-// to it and the check that its last run still goes, an open task whose agent finished and exited shows "Starting
-// Agent" for ever: its todo names a session the list no longer has (#4510), and a direction the owner leaves alone for
-// a week loses its Pinned row and its tasks' supervision messages go to the main chat (#11392). Last come the sessions
-// placed under the current directions (placed, directionKeep), or a quiet one reads not_listed in its direction and can
-// no longer be moved (#11515). Keeping a row listed does not keep its transcript file.
-func keptSessions(v Settings, tasks []TaskView, links []TodoLink, leads, placed []SessionRef) []SessionRef {
+// the main ones it replaced, scheduled tasks' own, the agents of open todos, the current leaders (leads) and those listed
+// for their spaces to be told (convs, spaceKeep: the task leaders' agents of open tasks, and a batch at a time of the
+// conversations to-dos name that were never noted). Otherwise a busy machine's 80 newest transcripts crowd them out of
+// the list and the Persona tab has no main chat (2026-11-01: the main one, quiet for two days, was gone), a weekly
+// task's conversation drops out in between, with the app's link to it and the check that its last run still goes, an
+// open task whose agent finished and exited shows "Starting Agent" for ever: its todo names a session the list no
+// longer has (#4510), a direction the owner leaves alone for a week loses its Pinned row and its tasks' supervision
+// messages go to the main chat (#11392), and the space of a to-do's conversation quiet since before the manager noted
+// spaces could never be told (conversation_space_backfill.go, #10941). Last come the sessions placed under the current
+// directions (placed, directionKeep), or a quiet one reads not_listed in its direction and can no longer be moved
+// (#11515). Keeping a row listed does not keep its transcript file.
+func keptSessions(v Settings, tasks []TaskView, links []TodoLink, leads, convs, placed []SessionRef) []SessionRef {
 	out := []SessionRef{}
 	add := func(machine, id string) {
 		if machine != "" && id != "" && !slices.Contains(out, SessionRef{MachineID: machine, SessionID: id}) {
@@ -605,6 +608,9 @@ func keptSessions(v Settings, tasks []TaskView, links []TodoLink, leads, placed 
 	add(v.BackgroundSupervisorMachineID, v.BackgroundSupervisor)
 	for _, l := range leads {
 		add(l.MachineID, l.SessionID)
+	}
+	for _, c := range convs {
+		add(c.MachineID, c.SessionID)
 	}
 	for _, p := range placed {
 		add(p.MachineID, p.SessionID)
@@ -819,6 +825,7 @@ func (s *Service) profileRoutes() {
 		}
 		if r.Header.Get(RoleHeader) == roleExtension {
 			out.StartDefaults = nil // read with its own scope (GET /api/v1/assistant/start-defaults), not assistant.ask
+			out.Conversations = extensionConversations(out.Conversations)
 		}
 		apierr.WriteJSON(w, out)
 	})

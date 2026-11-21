@@ -31,6 +31,9 @@ extension Theme {
         /// A status dot (online, unread).
         static let dot = "circle.fill"
         static let time = "clock"
+        /// Someday on a to-do (#10465): the owner's own "not now", put aside for some other day (its swipe, its menu and
+        /// the list's Show Someday). Not `time`, which is Waiting's clock.
+        static let someday = "moon.stars.fill"
         /// An agent that only waits on background commands (Waiting in the Background, #6045): the mark in place of its dot.
         static let backgroundWaiting = "clock.fill"
         /// Agents grouped or ordered by their state (the Agents list's By Status / By Status).
