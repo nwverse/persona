@@ -405,6 +405,9 @@ const (
 	// SourceMeeting is a batch of a recorded meeting the session attends (docs/assistant/meeting-minutes.md "Feeding
 	// the attending session"): other people's words, never the user's; Title is the meeting's name.
 	SourceMeeting = "meeting"
+	// SourceSideConversation is an agent_send request wrapped by RenderSideConversation: another conversation's
+	// request to an Agent that already holds a task, never the owner answering that task (prompts/assistant/side_conversation.md).
+	SourceSideConversation = "side_conversation"
 )
 
 // SourceFromInjected upgrades existing metadata without guessing from ordinary text.

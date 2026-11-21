@@ -8,9 +8,60 @@ import (
 	"unicode"
 
 	"github.com/nwverse/persona/server/internal/closeout"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
+
+// ownerAuthoredDecisionText is the hub-side backstop against non-owner inputs settling a
+// pending decision. The node's promptSource already whitelists genuine user input on the
+// hook path (which carries no text), but an older node still reports a side conversation as
+// "user", and the hub's own user_spoke path can carry text with provenance. Anything wrapped
+// as a side conversation, carrying a message-source/relay envelope, or otherwise attributed
+// to an automated source is not the owner answering the ask. A user-pasted block protected by
+// ProtectUserMessage has no inferred source and still counts as the owner's words.
+func ownerAuthoredDecisionText(text string) bool {
+	if text == "" {
+		return true // hook events carry no prompt text; prompt_source is their gate
+	}
+	if prompts.IsSideConversation(text) {
+		return false
+	}
+	if src := prompts.ItemSource(proto.Item{Role: "user", Kind: proto.KindText, Text: text}); src != nil && src.Kind != "" {
+		return false
+	}
+	return prompts.ParseRelaySource(text) == nil
+}
+
+// hookPromptAllowsDecision is the hub-side backstop for the hook path, whose event carries no
+// prompt text. The node classifies prompt_source precisely once it knows side conversations;
+// this catches an older node that still reports one as "user". It blocks only on concrete
+// provenance evidence: if the node cannot be asked, the turn has not synced yet, or no user
+// prompt is visible, the node's classification stands, so a genuine owner reply still settles.
+func (s *Service) hookPromptAllowsDecision(ctx context.Context, r SessionRef) bool {
+	var res struct {
+		Items []proto.Item `json:"items"`
+	}
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := s.call(cctx, r.MachineID, DeviceSessionItems, map[string]any{"session_id": r.SessionID, "turns": 1, "lazy_images": true}, &res); err != nil {
+		return true
+	}
+	_, items := splitLastTurn(res.Items)
+	for _, it := range items {
+		if it.Role != "user" || it.Kind != proto.KindText || strings.TrimSpace(it.Text) == "" {
+			continue
+		}
+		if src := prompts.ItemSource(it); src != nil && src.Kind != "" {
+			return false
+		}
+		if prompts.IsSideConversation(it.Text) || prompts.ParseRelaySource(it.Text) != nil {
+			return false
+		}
+		return true
+	}
+	return true
+}
 
 type decisionAgentReply struct {
 	MachineID string    `json:"machine_id"`
@@ -205,6 +256,11 @@ func (s *Service) keepPriorDecisionReply(ctx context.Context, t Todo, decision r
 // agentDecisionSpoke settles only an exact owner choice; anything else pauses for the supervisor.
 // The same action lock as the deadline's final check fences a default already collected by a sweep.
 func (s *Service) agentDecisionSpoke(ctx context.Context, r SessionRef, at time.Time, text string) {
+	if !ownerAuthoredDecisionText(text) {
+		// A side conversation, relay or other non-owner input must never settle or withdraw a
+		// pending decision card, even if an older node reported it with prompt_source=user.
+		return
+	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		s.logf("decision: agent reply: load tasks: %v", err)
 		return
@@ -228,6 +284,12 @@ func (s *Service) agentDecisionSpoke(ctx context.Context, r SessionRef, at time.
 		return
 	}
 	if !ok || t.DoneAt != nil || t.Supervision == nil || t.Supervision.State != reviewNeedsUser {
+		return
+	}
+	// Hook events carry no text. A node older than the prompt-source fix still reports a side
+	// conversation as prompt_source=user, so read the turn's prompt and block on its provenance
+	// before touching the ask. The read happens only for a genuinely pending decision.
+	if text == "" && !s.hookPromptAllowsDecision(ctx, r) {
 		return
 	}
 	b := &s.accept
