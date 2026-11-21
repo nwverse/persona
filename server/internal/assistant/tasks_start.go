@@ -259,16 +259,16 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 // supervisePlanTask keeps a continuation's ledger in step with its brief even
 // if the scope changed between accepting the card and preparing dispatch.
 func (s *Service) supervisePlanTask(ctx context.Context, id, supervisor string, t *PlanTask) {
-	if t.Continues == "" {
-		s.superviseTodo(ctx, id, supervisor, t.DoneWhen, t.ExpectMinutes)
-		return
-	}
 	_, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
+		if t.Continues == "" {
+			v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, cleanDoneWhen(t.DoneWhen), t.ExpectMinutes
+			return true
+		}
 		brief, ok := s.briefOfTodo(t.Continues)
 		if !ok {
 			return false
 		}
-		v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, cleanDoneWhen(brief.Criteria), brief.ExpectNow
+		v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, cleanDoneWhen(brief.Criteria), brief.ExpectMinutes
 		return true
 	})
 	if err != nil {

@@ -4,14 +4,18 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // What an extension's token never sees of the conversations, whatever scopes it was granted (docs/extensions/extensions.md
 // "Never shown to extensions"): the health space's conversations are not listed (the legacy list, the paged
 // list, its totals and counts) and their items, images, info and screen are not read. A conversation the hub does not
-// know is not read either: its space cannot be told.
+// know is not read either: its space cannot be told. The extensions' agent.needs_you and agent.finished are not sent
+// of a card or a session they are not shown (notifyws.go).
 
 // healthSession: s runs in a health space, by its own Space or its directory (identity.InHealthSpace counts a folder
 // inside one, which only hides more).
@@ -63,6 +67,63 @@ func (h *Hub) hiddenFromExtensions(ix proto.Interaction) bool {
 	}
 	return ix.Cwd == ""
 }
+
+// sessionHiddenFromExtensions: the extensions are not told of session sid of computer machine (agent.finished): one of
+// the health space, or one the hub does not list, whose space cannot be told. A push about no session is the manager's
+// own.
+func (h *Hub) sessionHiddenFromExtensions(machine, sid string) bool {
+	if sid == "" {
+		return false
+	}
+	if m := h.localMachine(machine); m != nil {
+		if s, ok := m.session(sid); ok {
+			return healthSession(&s)
+		}
+	}
+	return true
+}
+
+// extensionResume answers whether an extension's token may resume conversation id on computer m (POST
+// /api/v1/sessions with resume_session_id), and whether only the computer's own check lets it (checked: the start
+// carries resume_outside_health); not ok has written the answer. A conversation the computer lists goes on unless an
+// extension may not control it (publicSessionForControl: the health space's, one in a folder set to Hide, a deleted
+// one): 404, as for one that does not exist. One it does not list (quiet for a week, past its 80 newest, a short
+// transcript: a stopped Agent takes no message, so a resume is the only way back to one the extension started) goes,
+// unless the owner deleted it, to a node that announces nodeproto.ResumeOutsideHealth, which resumes it only when it
+// has it outside the space; an older node would start a new conversation under an id it has nothing of, which the
+// manager would take for the one the id names, a health chat's included (#10941, docs/extensions/extensions.md
+// "Resuming a chat"): 404. While the hub cannot tell which it is (no list of that computer's sessions yet, which may
+// have it, or no word of its node since the hub or the devices manager started) the answer is 503, retryable. The
+// caller asks it after every check that holds for any id, so that only this answer depends on the id.
+func (h *Hub) extensionResume(w http.ResponseWriter, m *Machine, id string) (checked, ok bool) {
+	if _, listed := m.session(id); listed {
+		if !h.publicSessionForControl(m, id) {
+			writeErr(w, http.StatusNotFound, errDeleteUnknown)
+			return false, false
+		}
+		return false, true
+	}
+	if _, deleted := h.deletedAt(m.cfg.ID)[id]; deleted {
+		writeErr(w, http.StatusNotFound, errDeleteUnknown)
+		return false, false
+	}
+	if m.announces(nodeproto.ResumeOutsideHealth) {
+		return true, true
+	}
+	if !m.hadList() || !m.nodeReported() {
+		body := apierr.CodeBody(w, http.StatusServiceUnavailable, codeSessionsNotListed, i18n.Err("hub-http.sessions_not_listed"))
+		body["retryable"], body["delivered"] = true, "none"
+		w.Header().Set("Retry-After", "5")
+		writeErrorBody(w, http.StatusServiceUnavailable, body)
+		return false, false
+	}
+	writeErr(w, http.StatusNotFound, errDeleteUnknown)
+	return false, false
+}
+
+// codeSessionsNotListed: the hub has had no list of the computer's sessions yet, or no word of its node
+// (extensionResume); 503, retryable.
+const codeSessionsNotListed = "sessions_not_listed"
 
 // extensionReadable wraps a route of one conversation ({mid}/{sid}): an extension's token is answered 404, as for a
 // conversation there is not, when it is a health-space conversation or one the hub does not list (unless it was given

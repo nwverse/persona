@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -584,7 +583,11 @@ func (g githubForge) get(ctx context.Context, path string, out any) error {
 	}
 	token := ""
 	if g.base == "https://api.github.com" {
-		if _, err := exec.LookPath("gh"); err == nil {
+		cli, err := hasGitHubCLI(ctx)
+		if err != nil {
+			return fmt.Errorf("GitHub CLI identification interrupted: %w", err)
+		}
+		if cli {
 			return githubCLIGet(ctx, path, out)
 		}
 		token = strings.TrimSpace(os.Getenv("GH_TOKEN"))

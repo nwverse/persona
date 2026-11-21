@@ -251,7 +251,7 @@ Every snapshot includes `profile`, the subset hub needs. hub retains the latest 
 
 - Identify phone messages to main chat (`isMainOn`), machine for model configuration's "Main chat" purpose, default launcher (`launcher`: assistant setting, else `manager.json`'s `assistant.launcher`, else claude), AI twin default machine, machine selection for `/api/v1/skills`, launcher tests and usage, and `assistant.lark` only for the assistant machine.
 - User timezone (`userLocation`, `hub/usertz.go`): all hub time reads use it.
-- `keep`: sessions nodes must list regardless of inactivity (main chat, replaced old main chats, scheduled-task chats, Agents linked to unfinished to-dos, #4510; the background supervisor; current directions' lead conversations, on the computer their direction record names, else the assistant's, #11392; the sessions placed under current directions, #11515: per direction the owner's live filings, newest filing first, then the conversations its lead conversation opened, newest first, at most 50, on the computer each names; [unified-entry.md](unified-entry.md) ("The direction tree")). The part placed under directions is sorted by computer and session, so an unchanged list is not sent again. A listed row does not keep its transcript file. `keep` is left out (`null`: the nodes keep the list they were last given) when the scheduled tasks, the to-dos, the direction filing book, the recorded conversation openers, the conversation deletion record or the direction records cannot be read. `keep` does not change the age window of Codex Agent threads (a node lists them from rollouts written in the last 14 days; a kept one only gets past its agent filter, `server/internal/node/codex_registry.go`) or how other runtimes list their sessions. Since 2026-11-04 the assistant process connects computers ([machines.md](../server/machines.md) ("Who connects to computers")):
+- `keep`: sessions nodes must list regardless of inactivity (main chat, replaced old main chats, scheduled-task chats, Agents linked to unfinished to-dos, #4510; the background supervisor; current directions' lead conversations, on the computer their direction record names, else the assistant's, #11392; the task leaders' Agents that opened or supervise unfinished tasks, and, 50 at a time until each is noted or given up, the chats to-dos name whose space was never noted, #10941, [extensions.md](../extensions/extensions.md) "Never shown to extensions" (while such a chat is kept, the assistant's conversation list has it too, quiet as it is); the sessions placed under current directions, #11515: per direction the owner's live filings, newest filing first, then the conversations its lead conversation opened, newest first, at most 50, on the computer each names; [unified-entry.md](unified-entry.md) ("The direction tree")). The part placed under directions is sorted by computer and session, so an unchanged list is not sent again. A listed row does not keep its transcript file. `keep` is left out (`null`: the nodes keep the list they were last given) when the scheduled tasks, the to-dos, the direction filing book, the recorded conversation openers, the conversation deletion record or the direction records cannot be read. `keep` does not change the age window of Codex Agent threads (a node lists them from rollouts written in the last 14 days; a kept one only gets past its agent filter, `server/internal/node/codex_registry.go`) or how other runtimes list their sessions. Since 2026-11-04 the assistant process connects computers ([machines.md](../server/machines.md) ("Who connects to computers")):
   on snapshot reporting, its device layer (`internal/devices` `SetKeep`) sends `node.configure keep_sessions` once to changed machines, all machines on the first snapshot; also supplied on node connection (`configureNode`). hub only retains this copy.
 - **The first second or two after hub restart, before the assistant reports**: hub uses its persisted copy (`loadAssistantProfile`, before plugins and connectors start). Startup plugins need user timezone;
   an in-memory-only copy means they get hub timezone during these seconds and keep it until their own restart.
@@ -484,7 +484,7 @@ With over ten Agents running, most mid-task questions concern internal choices t
 - **Audit and changing answers**: triage answers sent to Agents explain "The assistant answered for me under my rules (reason: …); I may change my answer later" (`prompts/agents/answer.md`); task chat activity says "Assistant answered: X, because Y". Don't record delegation as to-do decisions (those are the user's). To change: `POST /api/v1/interactions/{id}/reanswer {answers}` (hub forwards to manager; card-answer-only devices can't use it). The Agent has already acted, so send the new answer as a message (`prompts/agents/reanswer.md`, including original assistant answer), broadcast `interaction_reanswered`, and record the user answer in task history / decisions.
 - **Statistics**: each evaluation writes `session_work_events` (`delegate_answered` / `delegate_asked` / `delegate_failed`), shown with triage statistics.
 - **Manager restart while deciding** (#2587): `delegating` and the background decision live in the manager's memory, and a restored card comes back with neither (`restoreInteractions` does not know whether it rang). So `delegate` records `delegate_start` (the card id) in `session_work_events`, and `delegateNow` records `delegate_end` once it has decided: after the assistant's answer, and before the user is told on a hand-over, so a restart right after does not push twice. No migration. As the next manager starts, `resumeDelegations` takes the restored cards whose latest mark is `delegate_start` (within 24 hours) and that do not find a supervisor route again (`restoreRoute`, "Asks go to the supervisor first" in `docs/assistant/unified-entry.md`); a hook that claims its card before the hub's handshake gets the same, from `waitInteraction`. within `timeout_seconds` of that start the assistant decides again for the time left (the card is `delegating` in the hub's first full list); past it, or when delegation is now off or the question repeats, the card goes to the user through the usual push / bot / channel path (`escalate`), recording `delegate_failed` with reason `restart` when it was the time. Restored cards without an open start were told before the restart and are not told again. Only resumable hook cards (Claude Code) are restored this way; a Codex card a node lists again after a restart goes through `announce` again (`codexAnnounced` starts empty), so it is delegated anew.
-- **Client UI**: web has "Assistant is looking", the `delegate` context and "Change answer", plus the delegated answers in **Session info** (#544, `docs/web/web.md` "Pages"); iOS / Mac have the same (`docs/apple/ios.md`, "Information architecture"). **Not done**: Android.
+- **Client UI**: web has "Assistant is looking", the `delegate` context and "Change answer", plus the delegated answers in **Session info** (#544, `docs/web/web.md` "Pages"); iOS / Mac have the same (`docs/apple/ios.md`, "Information architecture"). Android has the same pending-card looking/context presentation (#544, `docs/android/android.md` "Session controls, session origin and capabilities") and already has Change Answer.
 
 ## Asking without holding the turn (#4928)
 
@@ -2629,3 +2629,49 @@ For a hide rule, and for a block rule on a node that does not block yet, the man
 excludes matched ambient sessions from Assistant observations and reminders. Open supervised task agents remain visible, preserving the supervisor's completion and approval
 flow; after supervision ends, the rule applies again. See `docs/protocol/protocol.md` ("Agent directory visibility")
 for matching, persistence, app inspection and the confirmed `persona_settings` contract.
+
+## Durable assistant history (#11936, phase 1)
+
+For people using Assistant, history remains available from the manager's database when a runtime is away. The
+manager stores normalized messages from main, supervisor and side assistant conversations, archived conversations
+included. Ordinary coding-Agent sessions are not enrolled: their project transcripts need a separate retention,
+access and quota decision. Runtime kind does not decide enrollment.
+
+Database-first history is enabled when the `assistant.history` setting is absent. The full-role advanced endpoint
+`GET /api/v1/assistant/history` reports its effective `enabled` value and aggregate `stats`; PUT with
+`{"enabled":false}` is the rollback switch, and `{"enabled":true}` resumes collection and catch-up. This setting
+changes neither a launcher nor a model. An in-flight ingestion transaction may finish during rollback; later pages
+check the setting again. Rollback retains the tables and original runtime files; it never removes runtime history.
+
+The manager pulls unfolded pages after a durable source cursor, woken by session revisions and item notifications,
+without subscribing to every chat or requiring an open app. Each sweep reads at most eight pages of a conversation;
+the next sweep continues a long import. A periodic source probe also detects rewrites with unchanged byte counts.
+Notifications are only hints: replaying an old notification cannot restore an abandoned generation. Covered ranges,
+the known source end and item completeness are distinct. Missing older ranges fall back to the runtime; a cached
+offline page says `partial` when coverage or freshness is uncertain. Source failures never manufacture complete
+empty history. The disposable text-search index can be rebuilt without deleting durable messages.
+Legacy conversations on current nodes are imported lazily using the same source IDs. A node/runtime that omits
+the protocol's history-generation token keeps the runtime read path; the manager does not invent durable coverage
+that could mix a rewritten transcript with an older one. It can be indexed once its normalized source contract is
+available. This is a source-data compatibility fallback, not an engine-kind restriction.
+
+Historical reads and main handoffs prefer covered database content. Handoffs retain the source engine's stored
+compaction summary and bounded recent complete messages; no model is called to populate this store. An incomplete
+cached window or handoff tries the source first; a source failure retains available data marked `partial`.
+Handoffs require both covered history and a verified summary checkpoint before bypassing an available source. Strict source
+exports and user-input position projections still use the runtime. A stale source revision is checked before old
+coverage is reused. Database failures retain the runtime read path.
+
+Each stored item has a 64 KiB serialized JSON limit enforced in the application and database. Raw JSON bytes retain
+tool parameters and output, including escaped NUL. Larger tools/attachments or nested metadata keep bounded
+previews, provenance and a source item reference marked incomplete. Lazy attachments and runtime-truncated text
+are also incomplete; a reference is not a promise of offline access. The existing full-item/image routes recover
+source content when available. Complete stored copies cannot be downgraded by replaying a preview.
+
+`stats.conversations` counts stored runtime histories, `items` counts distinct source item IDs within them,
+`payload_bytes` counts stored normalized-item JSON bytes, `summary_bytes` counts source compaction-summary bytes,
+and `incomplete` counts item references whose complete content is not stored. These are not tokens, physical
+database size, WAL or backups. Phase 2 introduces logical conversations with several runtime segments.
+Deleting an assistant conversation deletes its message rows, coverage, compaction summary and references in the
+same transaction as its deletion marker. Concurrent or late ingestion cannot recreate deleted content, and a read
+that overlaps deletion discards its response before returning it.

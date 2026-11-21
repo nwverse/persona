@@ -48,7 +48,11 @@ func (s *Service) actOn(ctx context.Context, v *workView, machine string, c prot
 		return
 	case proto.WaitExternal, proto.WaitAgent:
 		if w.ResetsAt != nil {
-			if !actOnLimit(c, e, sw.AutoContinue, l, now) {
+			autoContinue := sw.AutoContinue
+			if !sw.Enabled && s.protectedQuotaWait(ctx, machine, c) {
+				autoContinue = sw.transientOn() // mechanical quota recovery is independent of semantic triage
+			}
+			if !actOnLimit(c, e, autoContinue, l, now) {
 				if sw.Enabled && !sw.AutoContinue && !c.TurnErrorResumes {
 					s.workWould(k, handAutoContinue) // only the switch kept it from being continued at the reset
 				}

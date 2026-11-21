@@ -62,6 +62,7 @@ type Options struct {
 
 // Service is the assistant. It implements Handler.
 type Service struct {
+	history conversationHistoryBook
 	// agentDirs keeps each computer's hidden Agent folders (hidden_agent_dirs.go); nil: none.
 	agentDirs AgentDirs
 	// remoteImages fetches the pictures replies name by address for the apps (remote_image.go).
@@ -206,6 +207,9 @@ type Service struct {
 	search           searchIndex           // search_index.go
 
 	deletedConversations conversationDeleteBook // conversation_delete.go
+	convSpaces           convSpaceBook          // conversation_space.go
+	spaceFill            spaceBackfill          // conversation_space_backfill.go
+	outcomeLines         outcomeLines           // todo_outcome.go
 	conversationWrites   sync.RWMutex
 
 	modelPicks modelPickBook // model_pick.go
@@ -400,6 +404,7 @@ func New(o Options) *Service {
 	s.kbInit(o.KB)
 	s.kbRoutes()
 	s.searchRoutes()
+	s.historyRoutes()
 	s.inboxRoutes()
 	s.modelConfigRoutes()
 	s.modelProfileRoutes()
@@ -418,6 +423,9 @@ func New(o Options) *Service {
 // handle adds one of the routes the hub relays.
 func (s *Service) handle(pattern string, fn http.HandlerFunc) {
 	s.routes = append(s.routes, pattern)
+	if _, path, _ := strings.Cut(pattern, " "); strings.HasPrefix(path, "/api/v1/todos/{id}") {
+		fn = s.todoScoped(fn) // what an extension is not shown of a to-do, at every route of one (todo_scope.go)
+	}
 	s.mux.HandleFunc(pattern, fn)
 }
 
@@ -484,6 +492,18 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	if method != DeviceSessionGet && method != "session.unwatch" {
 		if err := s.conversationParamsAvailable(ctx, device, params); err != nil {
 			return beforeNodeWrite(method, err)
+		}
+	}
+	if method == DeviceSessionItems || method == DeviceAssistantHandoff || method == "session.item" || method == "session.image" {
+		raw, err := json.Marshal(params)
+		if err != nil {
+			return err
+		}
+		if result, handled, err := s.historyCall(ctx, device, method, raw); handled {
+			if err != nil || out == nil {
+				return err
+			}
+			return json.Unmarshal(result, out)
 		}
 	}
 	taken := false // the node took this send (or may have): a direction's notes block it carried counts as given
@@ -1036,6 +1056,8 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	s.drainRelays(d.MachineID, d.Sessions)
 	s.undeliveredSeen(d)                      // kept owner messages go once their conversation runs again (undelivered.go)
 	s.originsChanged(d.MachineID, d.Sessions) // conversations from before origins were noted (origins.go)
+	// The conversations' spaces, before what may tell an extension of a to-do (conversation_space.go).
+	s.conversationSpacesListed(d.MachineID, d.Sessions)
 	s.todosSessionsChanged(ctx, d)
 	s.taskSpacesSessionsChanged(ctx, d)
 	s.todoRunsChanged(d.MachineID) // a to-do's view may file it elsewhere now (todo_view_push.go)

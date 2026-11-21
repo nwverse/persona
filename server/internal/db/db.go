@@ -541,7 +541,8 @@ func (d *DB) TruncateForTest(ctx context.Context) error {
 		"device_tokens", "live_activities", "phone_tools", "phone_write_queue", "node_sessions", "mail_accounts", "interactions",
 		"settings", "inbox_items", "kb_entities", "connector_secrets", "machine_systems", "machine_metrics", "sent_messages",
 		"todos", "todo_agents", "deleted_request_gates", "assistant_always", "machine_trust", "hub_settings", "manager_outbox", "handed_over",
-		"machine_audit", "sent_as_user", "session_work_events", "hub_push_sent", "urgent_calls", "model_usage", "conversation_histories"})
+		"machine_audit", "sent_as_user", "session_work_events", "hub_push_sent", "urgent_calls", "model_usage", "conversation_histories",
+		"assistant_conversation_spaces"})
 	if err != nil {
 		return err
 	}
