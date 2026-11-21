@@ -117,6 +117,8 @@ func (h *Manager) inboxAppCall(ctx context.Context, p assistantwire.AppCall) (js
 		if err = json.Unmarshal(p.Params, &ask); err == nil {
 			out, err = h.inboxMailFlags(ctx, ask)
 		}
+	case assistantwire.AppInbox + " " + assistantwire.InboxMessagePolicy:
+		out = map[string]bool{"sender_identity": true}
 	case assistantwire.AppInbox + " " + assistantwire.InboxReplyMail:
 		var a struct {
 			assistantwire.InboxMailRef
@@ -130,9 +132,10 @@ func (h *Manager) inboxAppCall(ctx context.Context, p assistantwire.AppCall) (js
 		}
 	case assistantwire.AppInbox + " " + assistantwire.InboxReply:
 		var a struct {
-			Source string               `json:"source"`
-			Reply  connector.InboxReply `json:"reply"`
-			SendID string               `json:"send_id"`
+			Source         string               `json:"source"`
+			Reply          connector.InboxReply `json:"reply"`
+			SendID         string               `json:"send_id"`
+			SenderIdentity string               `json:"sender_identity"`
 		}
 		if err = json.Unmarshal(p.Params, &a); err == nil {
 			in, ok := connector.As[connector.Inbox](h.connectorOf(a.Source))
@@ -152,7 +155,12 @@ func (h *Manager) inboxAppCall(ctx context.Context, p assistantwire.AppCall) (js
 				return nil, true, inboxSendRefusal(errCannotReply) // its connector is not here (the plugin switched off)
 			}
 			var sent assistantwire.InboxSent
-			sent.Already, err = h.sendInboxOnce(ctx, a.SendID, a.Source, func(ctx context.Context) error { return in.Reply(ctx, a.Reply) })
+			if a.SenderIdentity != "" && (a.Source != "larkcli" || a.SenderIdentity != "bot" && a.SenderIdentity != "user") {
+				return nil, true, errors.New("this source does not support the selected sender identity")
+			}
+			sent.Already, err = h.sendInboxOnce(ctx, a.SendID, a.Source, func(ctx context.Context) error {
+				return in.Reply(connector.WithSendIdentity(ctx, a.SenderIdentity), a.Reply)
+			})
 			out = sent
 		}
 	case assistantwire.AppInbox + " " + assistantwire.InboxSettle:

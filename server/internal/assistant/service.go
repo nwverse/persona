@@ -367,6 +367,7 @@ func New(o Options) *Service {
 	s.alwaysRoutes()
 	s.undeliveredRoutes()
 	s.standingAuthorizationRoutes()
+	s.outboundMessageRoutes()
 	s.ruleSuggestionRoutes()
 	s.northStarRoutes()
 	s.urgentCallRoutes() // urgent_call.go

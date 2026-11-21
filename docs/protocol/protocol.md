@@ -5176,6 +5176,30 @@ The mail details page first reads the body and attachment list, then submits `{"
 //                               "in_reply_to","references":[…]}
 ```
 
+## Outward-message settings (#9762)
+
+These assistant-manager routes require a full owner device, never an extension
+or answer-only device. Changes use an owner permission card, not a direct
+unaudited write.
+
+| Method | Path | Behavior |
+| --- | --- | --- |
+| GET | `/api/v1/assistant/outbound-messages` | `{identity: "bot" \| "user", approval_id?}`; default `bot`, for Lark via lark-cli only. An optional `approval_id` identifies the latest pending request. With query `approval=<id>`, returns `{status: "pending" \| "approved" \| "declined" \| "failed"}` for that card. |
+| POST | `/api/v1/assistant/outbound-messages` | `{identity}` requests a default-sender change; `{revision, scope: {channel: "larkcli", target, scenario: "inbox_reply" \| "assistant_message", identity}}` requests a reversible `send` standing authorization. Empty `target` means all chats in this channel. Returns HTTP 202 with `{approval_id, status: "pending"}` after saving the card, or `{status: "unchanged"}` if the sender is already selected. An authenticated owner decision within 24 hours commits the exact change and card outcome together. The card survives a restart; a change to the original setting or registry revision needs a fresh card. Existing standing-authorizations GET/DELETE remains the inspect/revoke API. |
+
+`app.call` AppInbox adds `inbox.message_policy {}` ->
+`{sender_identity: true}`. `inbox.reply` accepts optional outer
+`sender_identity: "bot" | "user"` only for source `larkcli`; other sources reject
+an override. Preflight before using overrides with an older extension manager.
+`inbox_bot_not_in_chat` is a known non-delivery refusal, never an identity fallback.
+
+`message_send {channel: "larkcli", target, text, idempotency_key}` is the
+assistant's controlled outward-message tool. It applies a matching message
+standing authorization or shows a permission card. Its durable ledger records
+the target/sender, exact text, and `let_through` authorization/approval ID,
+scenario, and outcome (`pending`, `sent`, `failed_or_unknown`). Pending/failed
+attempts never claim delivery or silently retry.
+
 ## Inbox API
 
 The hub collects Lark, mail and connector data in the background and hands it to the manager (assistant) to aggregate into entries (`docs/assistant/inbox.md` ("Ownership: the manager owns the Inbox"): entries in `server/internal/assistant/inbox.go`, sources in `server/internal/extmgr/inbox.go`). The hub forwards these endpoints to it; when the manager isn't connected they return `503 assistant_offline`.

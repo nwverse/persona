@@ -1,5 +1,12 @@
 # Lessons: web UI and interactions
 
+## Approval waiting is not delivery waiting (#9762)
+
+Settings and the Sent ledger can share a localization namespace. Keep the
+permission-card waiting message separate from a pending delivery outcome;
+reusing `pending` silently replaced the approval instructions with a delivery
+badge. Exercise the pending card and the outcome badge independently.
+
 ## A folded launcher must retain its identity (#10249)
 
 When replacing a launcher rail, do not promote the current launcher's models into a separate Recommended group or
