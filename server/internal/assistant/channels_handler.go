@@ -42,7 +42,7 @@ func (s *Service) ChannelReceive(ctx context.Context, p ChannelReceive) error {
 	if !first {
 		return nil // delivered again
 	}
-	go s.channelReceive(p.Channel, m, p.Action)
+	s.queueChannelReceive(p.Channel, m, p.Action)
 	return nil
 }
 

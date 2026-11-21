@@ -62,9 +62,11 @@ const channelSeenKeep = 300
 
 // channelsBook is the channels' state in memory.
 type channelsBook struct {
-	mu     sync.Mutex
-	loaded bool
-	prefs  map[string]*channelPrefs
+	mu sync.Mutex
+	// receiving is the last accepted message for each channel/thread, until its route and binding are settled.
+	receiving map[[2]string]chan struct{}
+	loaded    bool
+	prefs     map[string]*channelPrefs
 	// st is what the runs wait on (channels_runs.go), loaded apart from prefs.
 	st       channelsState
 	stLoaded bool
