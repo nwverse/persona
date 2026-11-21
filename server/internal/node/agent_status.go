@@ -24,6 +24,13 @@ func (n *Node) agent(id string) (host.Agent, bool) {
 	return a, ok
 }
 
+// escStops: Esc may be sent to live agent a (its status as liveStatus says) as "stop". A Claude only while a turn
+// runs: working, or blocked on a card that Esc declines. Idle, done or unknown, Esc on its empty box quits claude
+// (docs/lessons/agents.md "Esc on an idle Claude input box exits claude", #10827). Other agents are not judged here.
+func escStops(a host.Agent) bool {
+	return a.Agent != "claude" || a.AgentStatus == proto.StatusWorking || a.AgentStatus == proto.StatusBlocked
+}
+
 // liveStatus is an agent's status with its own signs of work over its host's: a Claude's as claudeStatus says, a
 // Codex's as codexStatus says; any other agent's is its host's.
 func (n *Node) liveStatus(id string, a host.Agent, now time.Time) string {

@@ -1055,8 +1055,9 @@ Closing is not durable merely because the card vanished: persist the interaction
   - `session.interrupt` (`node/node.go`, the Claude case calling `n.keys(ctx, p.SessionID, []string{"esc"}, "")`; a Codex
     session goes to `interruptCodex` and an assistant conversation to `assistantInterrupt`, which kills the process rather
     than sending Esc): the app's stop button, the assistant's `agent_interrupt`, Feishu cards and channels all land here. It
-    does not look at the session's state first, so a stop sent on a stale "working" state, or a second stop after the turn
-    already ended, can hit an idle box and end the session.
+    did not look at the session's state first, so a stop sent on a stale "working" state, or a second stop after the turn
+    already ended, could hit an idle box and end the session. Since #10827 it sends Esc only while the Claude reads as
+    working or blocked (`escStops`), and `agent_interrupt` reads the status again after the phone confirmation.
   - Not guarded: the `/effort` picker (`node/modes.go`) sends `esc` when it could not recognize the picker within its own
     timeout (`_ = n.sendKeys(ctx, pane, "esc")` before returning "没打开思考强度的选择器…"), right after `/effort` was typed
     and submitted. On a version without `/effort` the box is idle at that moment — exactly the case above. It also sends

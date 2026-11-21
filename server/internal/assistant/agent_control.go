@@ -52,6 +52,25 @@ var (
 	interruptSettleEvery = 500 * time.Millisecond
 )
 
+// agentNow is agent c on machine am as the node lists it now: agent_interrupt reads it again after the phone (#10827).
+// An agent no longer listed, or one that has stopped meanwhile, is not stopped and nothing is sent.
+func (s *Service) agentNow(ctx context.Context, am Device, c proto.Session) (proto.Session, error) {
+	list, err := s.sessions(ctx, am.ID)
+	if err != nil {
+		return c, fmt.Errorf("could not read %s again after the phone: nothing was stopped or sent: %w", agentLabel(c), err)
+	}
+	for _, now := range list {
+		if now.SessionID != c.SessionID {
+			continue
+		}
+		if stoppedAgent(now) {
+			return c, fmt.Errorf("%s stopped while the user was asked: nothing to interrupt, and nothing was sent", agentLabel(now))
+		}
+		return now, nil
+	}
+	return c, fmt.Errorf("%s is no longer listed on %s: nothing was stopped or sent", agentLabel(c), am.Name)
+}
+
 // toolAgentInterrupt stops an agent's turn (session.interrupt) and, with then, sends it the new instruction right
 // after: steering instead of agent_send's queueing behind the turn. An agent not working is not stopped; then still
 // goes to it. "Stopped" is said only once the turn has ended: the runtime saw it end (settled), or the agent no longer
@@ -91,7 +110,12 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	} else if !ok {
 		return "The user declined on the phone: the agent goes on as it was.", nil
 	}
-	// Again after the phone: the agent may have become another conversation's task while the user was asked.
+	// Again after the phone, which can take minutes: the agent may have become another conversation's task, and its
+	// turn may have ended. The status read before the phone is stale; a stop sent on it presses Esc on an idle Claude
+	// box, which quits claude (#10827).
+	if c, err = s.agentNow(ctx, am, c); err != nil {
+		return "", err
+	}
 	if err := s.exitAllowed(ctx, self, am, c, then, 0); err != nil {
 		return "", err
 	}
@@ -103,7 +127,8 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	over := false
 	if working {
 		var res struct {
-			Settled bool `json:"settled"`
+			Settled    bool `json:"settled"`
+			NotRunning bool `json:"not_running"` // the node saw no turn running and pressed nothing (#10827)
 		}
 		err := s.call(ctx, am.ID, "session.interrupt", map[string]any{"session_id": c.SessionID}, &res)
 		var re *rpc.Error
@@ -112,6 +137,7 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 			return "", fmt.Errorf("stop: %w", err)
 		}
 		s.logf("agent_interrupt %s on %s (from %s)", short(c.SessionID), am.ID, short(self))
+		working = !res.NotRunning
 		stopped = !over && (res.Settled || s.interruptLanded(ctx, am.ID, c.SessionID))
 	}
 	const overSaid = "%s on %s had already ended its turn: nothing was interrupted, and its background work is still running " +
