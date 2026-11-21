@@ -106,6 +106,9 @@ func listKeySized(list []proto.Session, size int) string {
 			w.str(c.State, '/')
 			w.int(c.StartedAt.Unix(), '\n')
 		}
+		if s.ContextRestartRecommended {
+			w.b.WriteString("context-restart\n")
+		}
 		// A Codex thread's effort, which may change on the computer without a turn (codex_effort.go).
 		if len(s.Efforts) > 0 {
 			fmt.Fprintf(&w.b, "effort:%s/%v\n", s.Effort, s.Efforts)

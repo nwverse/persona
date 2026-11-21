@@ -1245,6 +1245,14 @@ type HandoffTurn struct {
 // RenderMainHandoff is assistant/main_handoff.
 func RenderMainHandoff(h MainHandoff) string { return render("assistant/main_handoff", h) }
 
+// RenderSessionHandoff renders background for a fresh side conversation or Agent.
+func RenderSessionHandoff(summary string, recent []HandoffTurn) string {
+	return render("assistant/session_handoff", struct {
+		Summary string
+		Recent  []HandoffTurn
+	}{summary, recent})
+}
+
 // Acceptance is a deployed task, for the three lines of its "Please accept" card (assistant/acceptance_input; the system
 // prompt is assistant/acceptance; docs/extensions/bots.md "Task progress and review requests").
 type Acceptance struct {
