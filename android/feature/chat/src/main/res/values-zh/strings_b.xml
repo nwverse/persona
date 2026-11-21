@@ -153,6 +153,12 @@
     <string name="chat_request_secret_run_note">只用这一次，不会保存，助手也看不到。</string>
     <string name="chat_request_secret_run_run">运行</string>
     <string name="chat_request_secret_run_decline">拒绝</string>
+    <string name="chat_secret_handoff_always">总是允许</string>
+    <string name="chat_secret_handoff_lead">%2$s 上的「%1$s」只在这一次运行中拿到：</string>
+    <string name="chat_secret_handoff_lead_unnamed">%1$s 上的 Agent 只在这一次运行中拿到：</string>
+    <string name="chat_secret_handoff_lead_bare">Agent 只在这一次运行中拿到：</string>
+    <string name="chat_secret_handoff_note">Persona 和助手都看不到这些值。</string>
+    <string name="chat_secret_handoff_always_scope">总是允许：%1$s。</string>
     <string name="chat_plan_approve_edits">批准编辑</string>
     <string name="chat_plan_reject">打回</string>
     <string name="chat_plan_approve_all">批准并自动执行</string>
