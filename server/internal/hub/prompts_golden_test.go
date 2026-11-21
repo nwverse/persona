@@ -393,8 +393,8 @@ func TestTodoLessonsGolden(t *testing.T) {
 						Unmet: []prompts.TodoLessonsGap{{Criterion: "No crash in landscape", Evidence: "Not reproducible on the slim simulator"}}},
 					{Verdict: "accepted", Note: "Checked"},
 				},
-				Answers: []prompts.TodoLessonsAnswer{{Question: "Which simulator?", Choice: "The stock one"}},
-				Result:  []prompts.TodoLessonsCriterion{{Criterion: "No crash in landscape", State: "met", Evidence: "Screenshot test passes"}},
+				Answers:       []prompts.TodoLessonsAnswer{{Question: "Which simulator?", Choice: "The stock one"}},
+				Result:        []prompts.TodoLessonsCriterion{{Criterion: "No crash in landscape", State: "met", Evidence: "Screenshot test passes"}},
 				ExpectMinutes: 30, ActualMinutes: 95, Reply: "Fixed: the page used a fixed width.",
 				Known: []prompts.TodoLessonsKnown{{ID: "lesson-1", Kind: "missing_context", Text: "Use the stock simulator for layout bugs."}},
 			}))
