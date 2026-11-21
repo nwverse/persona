@@ -101,6 +101,10 @@ type Node struct {
 	doctorAt func() DoctorOptions
 	// machineProcs replaces OS process/port hooks in tests (machine_procs.go).
 	machineProcs *machineProcsOps
+	// serviceRunner replaces OS command execution for machine.services* RPCs in tests.
+	serviceRunner *machineServiceRunner
+	// networkDiagAt replaces machine.network dependencies in tests (machine_network.go).
+	networkDiagAt func() machineNetworkOptions
 	// fileReadDeps replaces file.read's filesystem operations in tests.
 	fileReadDeps *fileReadDependencies
 
@@ -502,6 +506,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		n.logger.Printf("write claude config: %v", err)
 	}
 	n.peer = rpc.New("n", w)
+	n.peer.ReadLimit = nodeproto.RPCReadLimit
 	// What the node sends hides the values handed to Agent starts (secretenv.go): every line, as it goes out.
 	n.peer.LineFilter = n.handoffs().scrub.filter
 	if n.updater != nil {
@@ -831,6 +836,8 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		return n.doctor(ctx, params, false)
 	case "node.doctor.fix": // the same path as `node doctor --fix`: Persona's own generated files only
 		return n.doctor(ctx, params, true)
+	case proto.MethodMachineNetwork: // on-demand read-only network & proxy diagnostics (machine_network.go)
+		return n.machineNetwork(ctx, params)
 	case proto.MethodRoutineCheck:
 		return routineCheck(ctx, params)
 	case proto.MethodSecretRun: // the password card's commands (secretrun.go); its params never reach the decoding below
@@ -864,6 +871,14 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		return n.machineProcesses(ctx, params)
 	case proto.MethodMachineProcessKill:
 		return n.machineProcessKill(ctx, params)
+	}
+	switch method { // the machine page's services and containers (machine_services.go)
+	case proto.MethodMachineServices:
+		return n.machineServices(ctx, params)
+	case proto.MethodMachineServiceLogs:
+		return n.machineServiceLogs(ctx, params)
+	case proto.MethodMachineServiceAction:
+		return n.machineServiceAction(ctx, params)
 	}
 	if method == codexTakeoverPrepare || method == codexTakeoverCommit {
 		return n.codexTakeoverCall(ctx, method, params)
@@ -1246,6 +1261,8 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			n.runtimeHost.setOrcaBridge(n.hostEnabled(proto.EngineOrca))
 			// Cindy's agents come through its bridge (cindybridge.go).
 			n.runtimeHost.setCindyBridge(n.hostEnabled(proto.EngineCindy))
+			// T3 Code's threads come through its bridge (t3codebridge.go).
+			n.runtimeHost.setT3CodeBridge(n.hostEnabled(proto.EngineT3Code))
 		}
 		n.configured()
 		c := n.engineChoice()

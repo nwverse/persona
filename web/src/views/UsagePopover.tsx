@@ -6,7 +6,7 @@ import { sendDraft } from "../lib/drafts";
 import { navigate } from "../lib/router";
 import { getState } from "../lib/store";
 import { balanceEmpty, balanceText } from "../lib/usage-balance";
-import { isBalanceAccount, isWarn, pace, planNote, resetLabel, sampleAge, sourceNames, windowKey, type PaceState, type UnconnectedProvider, type UsageAccount, type UsageWindow } from "../lib/usage-windows";
+import { accountPace, isBalanceAccount, isWarn, planNote, resetLabel, sampleAge, sourceNames, windowKey, type PaceState, type UnconnectedProvider, type UsageAccount, type UsageWindow } from "../lib/usage-windows";
 import { cx, EASE } from "../ui/atoms";
 import { Meter } from "./UsageBars";
 
@@ -44,9 +44,12 @@ function balanceProblemText(a: UsageAccount): string {
   }
 }
 
+/** Why a provider has no bars, in plain words (#12411). Only the built-in subscriptions can be read on a computer, so
+ *  they have not been read yet; any other launcher (one run through Claude Code against another provider included)
+ *  can only be read through its relay, which is the case connectPrompt hands the assistant too. */
 function connectHint(p: UnconnectedProvider): string {
-  if (p.agent === "claude") return tr("usage.connect_hint_claude");
-  if (p.agent === "agy" || p.agent === "antigravity") return tr("usage.connect_hint_agy");
+  if (p.agent === "claude" && p.id === "claude") return tr("usage.connect_hint_claude");
+  if (p.agent === "agy" || p.agent === "antigravity" || (p.agent === "codex" && p.id === "codex")) return tr("usage.connect_hint_pending", { name: p.title });
   return tr("usage.connect_hint_other");
 }
 
@@ -137,14 +140,14 @@ function AccountSection({ a, now }: { a: UsageAccount; now: number }) {
       )}
       {!a.balance && isBalanceAccount(a) && <div data-usage-balance-unavailable className="text-xs text-orange">{tr("usage.balance_unavailable")}</div>}
       {a.windows.map((w) => (
-        <WindowRow key={windowKey(w)} name={a.name} w={w} now={now} />
+        <WindowRow key={windowKey(w)} name={a.name} w={w} stale={Boolean(a.stale)} now={now} />
       ))}
     </section>
   );
 }
 
-function WindowRow({ name, w, now }: { name: string; w: UsageWindow; now: number }) {
-  const p = pace(w, now);
+function WindowRow({ name, w, stale, now }: { name: string; w: UsageWindow; stale: boolean; now: number }) {
+  const p = accountPace({ stale }, w, now);
   return (
     <div className="flex flex-col gap-1">
       {w.model && (
