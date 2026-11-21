@@ -3,6 +3,7 @@ package assistant
 import (
 	"cmp"
 	"context"
+	"slices"
 	"strings"
 	"time"
 
