@@ -59,6 +59,8 @@ func (r *Registry) AddDevContext(ctx context.Context, dir string, config json.Ra
 		}
 	}
 	translations, l10nWarnings := ReadTranslations(dir) // read before the lock: it is file I/O
+	mutation := r.settingsWrite(m.ID)
+	defer mutation.finish()
 	r.mu.Lock()
 	cur := r.extensions[m.ID]
 	if cur != nil && cur.Record.Source != SourceDev {
@@ -90,7 +92,7 @@ func (r *Registry) AddDevContext(ctx context.Context, dir string, config json.Ra
 		kind = "upgraded"
 	}
 	unlock()
-	r.changed(Change{ID: m.ID, Kind: kind, Old: cur})
+	mutation.changed(Change{ID: m.ID, Kind: kind, Old: cur})
 	return p, nil
 }
 
@@ -99,7 +101,8 @@ func (r *Registry) RestartDev(id string) error {
 	if p := r.Get(id); p == nil || p.Record.Source != SourceDev {
 		return fmt.Errorf("没有开发中的扩展 %s", id)
 	}
-	r.changed(Change{ID: id, Kind: "config"})
+	mutation := r.settingsWrite(id)
+	mutation.changed(Change{ID: id, Kind: "config"})
 	return nil
 }
 
@@ -110,6 +113,8 @@ func (r *Registry) RemoveDev(id string) error {
 		return err
 	}
 	defer unlock()
+	mutation := r.settingsWrite(id)
+	defer mutation.finish()
 	r.mu.Lock()
 	p := r.extensions[id]
 	if p == nil || p.Record.Source != SourceDev {
@@ -120,7 +125,7 @@ func (r *Registry) RemoveDev(id string) error {
 	delete(r.devSecrets, id)
 	r.mu.Unlock()
 	unlock()
-	r.changed(Change{ID: id, Kind: "removed", Old: p})
+	mutation.changed(Change{ID: id, Kind: "removed", Old: p})
 	return nil
 }
 
