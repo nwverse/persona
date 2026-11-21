@@ -124,6 +124,7 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
         launcher: launch.launcher || undefined, agent_type: launch.agentType, work_session: launch.workSession,
         model: launch.model || undefined, host: launch.host || undefined, todo_id: launch.todoId || undefined,
         launcher_default_effort: launch.launcherDefaultEffort,
+        permission_mode: launch.permissionMode || undefined,
       };
       // A Codex (and a compatible CLI) takes its first message with the start. With none, a computer that can opens
       // Codex waiting for one (docs/integrations/codex.md "Starting without a first message"); an older one refuses.
@@ -145,7 +146,7 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
       } else {
         try {
           const r = await launchOp<{ session: Session }>("/sessions", launch.startOpId, controller.signal, {
-            ...target, effort: launch.effort || undefined, permission_mode: launch.permissionMode || undefined,
+            ...target, effort: launch.effort || undefined,
             ultracode: launch.ultracode === true ? true : undefined, async: true, name_hint: launch.nameHint ?? (launch.text || undefined),
           });
           session = r.session;

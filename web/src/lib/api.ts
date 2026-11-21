@@ -128,7 +128,7 @@ export const CLIENT_VERSION = "1";
  * limit, so a dead link is still dropped. Only the timeout is asked for: the 20 s interval stays the hub's.
  */
 export const CLIENT_PONG_TIMEOUT = 45;
-export const CLIENT_FEATURES = ["elicitation", "extension_operations", "extension_auth", "managers", "extension_ui_stream_v1", "persona_contracts_v1", "persona_card_ring", "agent_message_hold"];
+export const CLIENT_FEATURES = ["elicitation", "extension_operations", "extension_auth", "managers", "extension_ui_stream_v1", "persona_contracts_v1", "persona_card_ring", "closeout.markdown.v1", "agent_message_hold"];
 
 // A read the hub has not answered by then fails instead of loading forever (#4492): a restarting hub, a stuck node or a
 // half-dead network. Longer than the hub's own cut-offs for asking a computer (30–40 s), so when the hub has an error

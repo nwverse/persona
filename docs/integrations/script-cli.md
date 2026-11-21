@@ -1,4 +1,4 @@
-# Script commands: asks, notifications and direction writes
+# Script commands: `personad ask` / `personad notify` / `personad decision` and direction writes
 
 Let scripts, CI, long-running jobs, and programs that don't run in herdr reach the phone directly, or write a direction from outside an Agent session:
 
@@ -6,8 +6,9 @@ Let scripts, CI, long-running jobs, and programs that don't run in herdr reach t
 - `personad notify "title" [body]`: sends a notification, best effort by default.
 - `personad create-direction <name> --project <slug>`: creates a direction and prints its leader as JSON.
 - `personad write-progress <direction-id>`: replaces a direction's progress and prints its leader as JSON.
+- `personad decision raise --file decision.json`: raises a rich Needs-you decision and returns its durable id immediately; `get` polls the answer and `withdraw` cancels it.
 
-Inspired by the commands of the same name in moshi-hook. Like `personad hook`, all four commands only talk to the local node (`~/.persona/node.sock`, 0600, same system user).
+Inspired by the commands of the same name in moshi-hook. Like `personad hook`, all five commands only talk to the local node (`~/.persona/node.sock`, 0600, same system user).
 They never touch the hub token and need no network configuration: if node is connected to the hub they work; if not, they follow the exit codes below.
 
 A resident node (Persona Link, the Mac's launchd node, a service node) still answers while its manager is away, in standby:
@@ -64,15 +65,63 @@ Human-readable diagnostics after the `personad ask: ` / `personad notify: ` pref
 
 Each command makes one bounded (30-second), one-shot node.sock request. It never retries a write and never sends an automatic second request, even after a timeout, a broken connection or a reply asking for a retry: the first write may already have reached the manager, so only the caller can decide to try again. A manager error string is passed through unchanged; usage and flag help stay English, and the missing-node diagnostic reuses the existing localized script CLI text.
 
+## Non-blocking owner decisions
+
+Use `decision` when a job needs the owner's rich decision but must not keep a terminal, Agent or model turn waiting:
+
+```
+personad decision raise --file decision.json
+personad decision raise --file - < decision.json
+personad decision get <decision-id>
+personad decision withdraw <decision-id>
+```
+
+A raise document contains the required question and its context, 2–4 options with outcomes, a recommendation, why only the owner can decide, the cost of waiting and reversibility. `todo_id` optionally associates it with an existing open to-do; omit it for a standalone decision. `ref` is an optional stable idempotency key for safe retries. `allow_default:false` opts this decision out of the normal reversible 24-hour recommendation default; omitting it keeps that default, and irreversible or visible-to-others decisions never default.
+
+```json
+{
+  "ref": "nightly-2026-11-20",
+  "title": "Publish the nightly build?",
+  "background": "Checks passed; the release notes are ready.",
+  "why_owner": "priority",
+  "options": [
+    {"label": "Publish", "leads_to": "Users receive the build"},
+    {"label": "Hold", "leads_to": "No build goes out"}
+  ],
+  "recommend": "Hold",
+  "cost_of_waiting": "The next nightly is delayed.",
+  "reversible": true,
+  "allow_default": false
+}
+```
+
+`raise` writes one JSON `OutsideDecisionReply` to stdout and exits as soon as the manager has durably raised the decision; `decision.id` is the polling id and `decision.ask_todo_id` is the existing Needs-you backing row. Repeating the same caller, `ref` and normalized request returns the original id with `inserted:false`, without a second card or push. Reusing the ref for different content is a conflict.
+
+`get` prints the same durable polling view. Its `decision.state` is `pending`, `answered` or `withdrawn`; after an answer, `decision.answer` carries the selected `option`, fixed `response` or owner's `text`, and `answered_by` is `owner` or `default`. `explain_first` is a recorded fixed response but deliberately leaves the state pending and stops the default, allowing a later final answer. The existing Needs-you card offers all options, the recommendation and the three fixed answers; its background names the authenticated script source. No answer is relayed to an Agent or supervisor, and Persona never invokes a model to answer one of these decisions on the owner's behalf.
+
+`withdraw` removes a pending decision from Needs you and fences later answers. Repeating withdrawal is idempotent. Withdrawing an answered decision fails with `decision_closed`; an answer that arrives after withdrawal is refused. Only the same connected computer can poll or withdraw its script's decision.
+
+Unlike `ask`, these commands never wait for an answer, reconnect to a blocking interaction, spool in standby or fall back to the terminal. A script polls with `get` at its own cadence. Raise documents and ids are bounded (64 KiB JSON input, 30-second request timeout); question text still goes to the owner's devices, so do not put secrets in it. The equivalent HTTP routes, complete response fields and `decisions.raise` extension scope are in `../protocol/protocol.md` ("Decisions raised outside a supervisor").
+
+| Exit code | `decision` |
+| --- | --- |
+| 0 | The request succeeded; a raise or poll may still be `pending` |
+| 1 | `decision_not_found`, `decision_ref_conflict`, `decision_closed`, or another state conflict |
+| 2 | Usage error, malformed JSON, or `invalid_decision` |
+| 4 | The local node, hub or manager is unavailable, or the node is too old |
+| 130 | Interrupted by Ctrl-C / SIGTERM; an already-raised durable decision is not implicitly withdrawn |
+
+Diagnostics use the `scriptcli-decision` catalog and the same language selection as `ask` / `notify`. Stdout remains one machine-readable JSON result; errors go to stderr.
 
 ## Path
 
 ```
-personad ask / notify
-  └─ node.sock  {"kind":"ask"|"notify","input":{…},"pane":"…","attempt":"…"}   one request / one reply per connection, one JSON line each
+personad ask / notify / decision
+  └─ node.sock  {"kind":"ask"|"notify"|"decision.raise"|"decision.get"|"decision.withdraw","input":{…},"pane":"…","attempt":"…"}   one request / one reply per connection, one JSON line each
        └─ node (node/scriptcli.go)
-            ├─ ask    → manager request interaction.create (assistant/fleet_events.go, same path as hook) → blocks until answered / expired
-            └─ notify → passed on by the manager to the hub's notify (deliverNotify in hub/notify_api.go, shared with POST /api/v1/notify)
+            ├─ ask      → manager request interaction.create (assistant/fleet_events.go, same path as hook) → blocks until answered / expired
+            ├─ notify   → passed on by the manager to the hub's notify (deliverNotify in hub/notify_api.go, shared with POST /api/v1/notify)
+            └─ decision → short decision.raise / decision.get / decision.withdraw request to the assistant manager; polling history is durable
 ```
 
 Direction writes use the same one-JSON-line request / reply framing, with no `pane`, `attempt`, hub token or resume marker:
@@ -94,8 +143,9 @@ node's replies for `ask` / `notify`:
 - `ask`: `{"status":"answered|denied|dismissed|timeout|unavailable|invalid","answer":"…","error":"…","retry":true}`.
   `retry` means node is exiting (hub or node restart) or is in standby within the hold; the command reconnects to the next node with the same `attempt`, for at most `nodeclient.ResumeWait` (2 minutes), exactly like hook.
 - `notify`: `{"sent":true|false,"reason":"muted|no_device|filtered","queued":true,"error":"…"}` (the reason describes hub-side suppression; `queued` means a resident node in standby kept it and sends it when its manager is back).
+- `decision.*`: `OutsideDecisionReply` (`decision`, `inserted`, and on refusal `code` / `error`). Decision requests omit the resumable `attempt`; retry a lost raise with the same stable `ref`.
 
-An old node doesn't know `ask` / `notify` (replies `{"error":"unknown kind"}`), and the command treats that as unreachable. With a new node and an old hub, the `notify` request fails with unknown method and is likewise treated as not sent. Direction commands map the same old-node reply to `unavailable` (exit 4).
+An old node doesn't know `ask` / `notify` / `decision.*` (replies `{"error":"unknown kind"}`), and the command treats that as unreachable. With a new node and an old hub, the `notify` request fails with unknown method and is likewise treated as not sent; a decision request is unavailable. Direction commands map the same old-node reply to `unavailable` (exit 4).
 
 ### What `ask` looks like on clients
 
@@ -142,13 +192,14 @@ Delivery goes through APNs (direct or via the push relay) and the persistent con
 
 ## Security and privacy
 
-- node.sock is a 0600 unix socket; only processes of the same system user can connect, which is the same trust boundary as hook and MCP. Any process of this user can pop things up on the phone with `ask` / `notify`, so cards are clearly labeled "Script". The same user boundary authorizes `direction.create` and `direction.progress`; neither direction command reads or sends a hub token.
-- An `ask` with options is an ordinary question card: the assistant's existing rules for `interaction_answer` apply to it too (the assistant may answer on the user's behalf when allowed, `docs/assistant/assistant.md`), and the command can't see `answered_by` in the answer. To make sure only a human can answer, use the form without options (the assistant can't answer permission cards).
+- node.sock is a 0600 unix socket; only processes of the same system user can connect, which is the same trust boundary as hook and MCP. Any process of this user can pop things up on the phone with `ask` / `notify` / `decision`, so cards are clearly labeled "Script" or name the script source. The same user boundary authorizes `direction.create` and `direction.progress`; neither direction command reads or sends a hub token.
+- An `ask` with options is an ordinary question card: the assistant's existing rules for `interaction_answer` apply to it too (the assistant may answer on the user's behalf when allowed, `docs/assistant/assistant.md`), and the command can't see `answered_by` in the answer. To make sure only a human can answer, use the form without options (the assistant can't answer permission cards), or use `personad decision`, whose answer path never invokes the assistant or a model and reports `answered_by`.
 - The question, body, and calling directory name go into the phone's notifications (end-to-end encrypted when going through the push relay, `../operations/push-relay.md`) and interaction history; don't put secrets in them. `notify` carries no path.
 
 ## Verification
 
-- Unit tests: `server/internal/scriptcli` (exit codes, flags, terminal fallback, Ctrl-C, `--strict`); `server/internal/node/scriptcli_test.go` (fake hub + fake socket: card shape, Markdown format propagation and plain defaults, attribution, timeout, withdrawal, restart reconnect, `notify` parameters and truncation);
+- Unit tests: `server/internal/scriptcli` (exit codes, flags, terminal fallback, Ctrl-C, `--strict`, decision JSON input/output and polling/withdrawal); `server/internal/node/scriptcli_test.go` (fake hub + fake socket: card shape, Markdown format propagation and plain defaults, attribution, timeout, withdrawal, restart reconnect, `notify` parameters and truncation, decision forwarding); `server/internal/node/decision_script_test.go` (real local socket and node-derived source);
+  `server/internal/assistant/outside_decisions_test.go` (manager lifecycle, idempotency, caller isolation, fixed answers, defaults, withdrawal and restart); `server/internal/hub/outside_decisions_scope_test.go` (explicit `decisions.raise` scope and missing-scope 403);
   `server/internal/hub/notify_api_test.go` (`silent`, `notify` from node: muting, preferences, no extension fields, the body cut to fit the push).
 - Direction unit tests: `server/internal/scriptcli/direction_test.go` and `server/internal/nodeclient/script_direction_test.go` (exact wire payloads, interspersed flags and `--`, machine/session pairs, links-only rejection, ordered links containing commas, no dial on usage errors, compact stdout, stderr and exit codes, malformed and old-node replies, deadlines, interruption and no automatic second request); `server/internal/nodecmd/direction_test.go` checks device-command dispatch.
 - `apple/PersonaTests/PlanPermissionTests.swift` (`ScriptAskMarkdownTests`) covers the optional wire field, both card kinds and visual styles, and plain defaults; `web/src/views/chat/Interactions.markdown.test.tsx` covers the same behavior on the web, including the original answer key.

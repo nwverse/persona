@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -25,11 +26,13 @@ type scriptHub struct {
 	n    *Node
 	sock string
 
-	mu        sync.Mutex
-	created   []proto.Interaction
-	notified  []map[string]any
-	cancelled []string
-	larkSent  []proto.LarkSent // what the node's gate proxy told of (lark.sent)
+	mu             sync.Mutex
+	created        []proto.Interaction
+	notified       []map[string]any
+	cancelled      []string
+	decisions      []map[string]any
+	decisionAnswer assistantwire.OutsideDecisionReply
+	larkSent       []proto.LarkSent // what the node's gate proxy told of (lark.sent)
 
 	direction      func(context.Context, string, json.RawMessage) (any, error)
 	directionCalls []scriptDirectionCall
@@ -76,6 +79,14 @@ func newScriptHub(t *testing.T, create func(ctx context.Context, ix proto.Intera
 				return h.direction(ctx, method, params)
 			}
 			return nil, nil
+		case assistantwire.MethodDecisionRaise, assistantwire.MethodDecisionGet, assistantwire.MethodDecisionWithdraw:
+			var p map[string]any
+			_ = json.Unmarshal(params, &p)
+			h.mu.Lock()
+			h.decisions = append(h.decisions, p)
+			answer := h.decisionAnswer
+			h.mu.Unlock()
+			return answer, nil
 		case proto.MethodLarkSent:
 			var s proto.LarkSent
 			_ = json.Unmarshal(params, &s)

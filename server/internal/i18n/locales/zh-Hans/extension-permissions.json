@@ -73,6 +73,7 @@
   "scope_assistant_memory_read": "读 Persona 记住的关于你的内容（只读，不含健康空间）",
   "scope_todos_read": "看待办",
   "scope_todos_write": "新建和修改待办、把对话挂到待办上（不能删待办）",
+  "scope_decisions_raise": "请你作决定，并读取或撤回它自己发起的请求",
   "scope_leaders_read": "查看方向和它们的上报",
   "scope_leaders_write": "创建方向并上报进展",
   "scope_assistant_dispatch_policy": "读取和修改助手派活策略（哪些对话可以派活）",

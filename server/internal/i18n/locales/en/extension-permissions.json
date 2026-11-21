@@ -73,6 +73,7 @@
   "scope_assistant_memory_read": "Read what Persona remembers about you (read-only, never the health space)",
   "scope_todos_read": "View to-dos",
   "scope_todos_write": "Create and edit to-dos and link chats to them (no deletion)",
+  "scope_decisions_raise": "Ask you for decisions and read or withdraw its own requests",
   "scope_leaders_read": "View directions and what they report",
   "scope_leaders_write": "Create directions and report their progress",
   "scope_assistant_dispatch_policy": "Read and change the assistant dispatch policy (which conversations may hand out work)",
