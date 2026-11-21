@@ -34,6 +34,7 @@ import { conversationPage } from "../lib/conversation-page";
 import { href, navigate, onLinkClick, showsSession, type Route } from "../lib/router";
 import { useScrollMemory } from "../lib/scroll-memory";
 import { retryFullAgentSessions, useAgentSessions, useFullAgentSessions } from "../lib/sessions";
+import { isInFlightLaunch } from "../lib/launch-handoff";
 import { getState, refresh, refreshTodos, useHubUnreachable, useStore } from "../lib/store";
 import { SESSIONS_SIDE_FOLD_FEATURE } from "../lib/side-fold";
 import { conversationTitle, mergeConversations } from "./assistant/conversations";
@@ -835,7 +836,17 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   }, [ownIds, sidebarMachines]);
   const rowOrder = useMemo(() => machineSessionOrder(machines), [machines]);
   const { sessions: every, loaded, error: listError } = useFullAgentSessions();
-  const agents = useMemo(() => every.filter(isSidebarAgent), [every]);
+  const launches = useStore((s) => Object.values(s.launches).filter((launch) => launch.phase !== "ready"));
+  // A session whose launch is still actively starting/sending is already listed under "Starting": keep it out of the
+  // regular groups until handoff completes so it moves cleanly from Starting to Working without duplicating (#12380).
+  const inFlightLaunchKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const launch of launches) {
+      if (isInFlightLaunch(launch) && launch.session) keys.add(`${launch.machineId}\u0000${launch.session.session_id}`);
+    }
+    return keys;
+  }, [launches]);
+  const agents = useMemo(() => every.filter((s) => isSidebarAgent(s) && (!inFlightLaunchKeys.size || !inFlightLaunchKeys.has(`${s.machine_id}\u0000${s.session_id}`))), [every, inFlightLaunchKeys]);
   const all = useScoped(agents);
   const mutes = useStore((s) => s.mutes);
   const pins = useStore((s) => s.pins);
@@ -844,7 +855,6 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const todosSupported = useStore((s) => s.todosSupported);
   const todosLoaded = useStore((s) => s.todosLoaded);
   const todosUnread = useTodosUnread();
-  const launches = useStore((s) => Object.values(s.launches).filter((launch) => launch.phase !== "ready"));
   // the Filter menu's choices and the words ⌘K's "Filter Agents list" put on it (#6589): the list has no field of its own
   const dimFilters = useAgentListFilters();
   const setDimFilters = setAgentListFilters;
