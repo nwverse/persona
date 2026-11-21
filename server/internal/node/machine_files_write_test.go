@@ -340,6 +340,78 @@ func TestMachineFilesWritePreRenamePathSwapRefused(t *testing.T) {
 	}
 }
 
+func TestMachineFilesPreviewDetectsConcurrentModification(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	root := filepath.Join(home, "ws")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "live.txt")
+	if err := os.WriteFile(target, []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Now().UTC().Add(-10 * time.Second).Truncate(time.Second)
+	if err := os.Chtimes(target, t0, t0); err != nil {
+		t.Fatal(err)
+	}
+
+	n := &Node{home: home}
+
+	// 1. Transient concurrent write during attempt 1 triggers a retry and returns consistent text/mtime/sha256.
+	calls := 0
+	n.machineFilePreviewAfterRead = func() {
+		calls++
+		if calls == 1 {
+			if err := os.WriteFile(target, []byte("v2-updated\n"), 0o644); err != nil {
+				t.Errorf("concurrent write: %v", err)
+				return
+			}
+			t1 := t0.Add(2 * time.Second)
+			if err := os.Chtimes(target, t1, t1); err != nil {
+				t.Errorf("chtimes v2: %v", err)
+			}
+		}
+	}
+	prev, err := n.machineFilePreview(proto.MachineFilePreviewRequest{Path: target, Root: root})
+	if err != nil {
+		t.Fatalf("preview with transient mutation: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2 preview attempts after concurrent mutation, got %d", calls)
+	}
+	if prev.Text != "v2-updated\n" || prev.SHA256 != sha256HexBytes([]byte("v2-updated\n")) || !prev.Editable {
+		t.Fatalf("preview returned inconsistent snapshot after retry: %+v", prev)
+	}
+	// Subsequent CAS write using the retried preview succeeds cleanly.
+	n.machineFilePreviewAfterRead = nil
+	if _, err := n.machineFileWrite(proto.MachineFileWriteRequest{
+		Path:             target,
+		Root:             root,
+		Text:             "v3-saved\n",
+		ExpectedMtime:    prev.ModTime,
+		ExpectedSHA256:   prev.SHA256,
+		ExpectedRevision: prev.Revision,
+	}); err != nil {
+		t.Fatalf("CAS write after retried preview failed: %v", err)
+	}
+
+	// 2. Persistent concurrent modification on every attempt returns CodeFileChanged instead of inconsistent CAS metadata.
+	seq := 0
+	n.machineFilePreviewAfterRead = func() {
+		seq++
+		content := "mutated-" + strings.Repeat("x", seq) + "\n"
+		if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
+			t.Errorf("persistent write %d: %v", seq, err)
+			return
+		}
+		ts := time.Now().UTC().Add(time.Duration(seq) * 2 * time.Second)
+		_ = os.Chtimes(target, ts, ts)
+	}
+	_, err = n.machineFilePreview(proto.MachineFilePreviewRequest{Path: target, Root: root})
+	assertRPCCode(t, "preview under continuous concurrent writes", err, proto.CodeFileChanged)
+}
+
 func TestMachineFilesCreateRenameDeleteAndGuards(t *testing.T) {
 	base := t.TempDir()
 	home := filepath.Join(base, "home")

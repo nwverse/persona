@@ -541,6 +541,47 @@ func TestMachineFilesStreamingUploadMultiChunkAndAbortCleanup(t *testing.T) {
 	if len(node.uploadAborted) != 1 {
 		t.Fatalf("expected abort cleanup on oversized chunked upload, got %v", node.uploadAborted)
 	}
+
+	// Chunked upload at exact cap succeeds, while cap + 1 byte returns 413 (never silently truncated).
+	node.uploadMaxBytes = int64(proto.MachineFileUploadChunkBytes)
+	node.uploadAborted = nil
+	exactPayload := bytes.Repeat([]byte("e"), proto.MachineFileUploadChunkBytes)
+	exactReq := httptest.NewRequest("POST", "/api/v1/machines/m1/files/upload?dir=/home/dev&name=exact.bin", bytes.NewReader(exactPayload))
+	exactReq.ContentLength = -1
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, exactReq)
+	if rec.Code != http.StatusOK || !bytes.Equal(node.uploadBuf.Bytes(), exactPayload) {
+		t.Fatalf("exact-cap chunked upload status=%d got=%d want=%d body=%s", rec.Code, node.uploadBuf.Len(), len(exactPayload), rec.Body.String())
+	}
+	if len(node.uploadAborted) != 0 {
+		t.Fatalf("unexpected abort on exact-cap chunked upload: %v", node.uploadAborted)
+	}
+
+	node.uploadAborted = nil
+	plusOnePayload := bytes.Repeat([]byte("o"), proto.MachineFileUploadChunkBytes+1)
+	plusOneReq := httptest.NewRequest("POST", "/api/v1/machines/m1/files/upload?dir=/home/dev&name=plus1.bin", bytes.NewReader(plusOnePayload))
+	plusOneReq.ContentLength = -1
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, plusOneReq)
+	if rec.Code != http.StatusRequestEntityTooLarge || !bytes.Contains(rec.Body.Bytes(), []byte(proto.CodeTooLarge)) {
+		t.Fatalf("cap+1 chunked upload status=%d want 413 body=%s", rec.Code, rec.Body.String())
+	}
+	if len(node.uploadAborted) != 1 {
+		t.Fatalf("expected abort cleanup on cap+1 chunked upload, got %v", node.uploadAborted)
+	}
+
+	// Under-reported Content-Length whose stream continues past maxBytes also returns 413 and aborts.
+	node.uploadAborted = nil
+	underReq := httptest.NewRequest("POST", "/api/v1/machines/m1/files/upload?dir=/home/dev&name=under.bin", bytes.NewReader(plusOnePayload))
+	underReq.ContentLength = int64(proto.MachineFileUploadChunkBytes)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, underReq)
+	if rec.Code != http.StatusRequestEntityTooLarge || !bytes.Contains(rec.Body.Bytes(), []byte(proto.CodeTooLarge)) {
+		t.Fatalf("under-reported oversized upload status=%d want 413 body=%s", rec.Code, rec.Body.String())
+	}
+	if len(node.uploadAborted) != 1 {
+		t.Fatalf("expected abort cleanup on under-reported oversized upload, got %v", node.uploadAborted)
+	}
 }
 
 func TestMachineFilesRoutesRequireFullCredentialsOnly(t *testing.T) {

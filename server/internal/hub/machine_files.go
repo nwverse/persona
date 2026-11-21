@@ -487,16 +487,24 @@ func (h *Hub) machineFileUpload(w http.ResponseWriter, r *http.Request, m *Machi
 		chunkBytes = begin.ChunkBytes
 	}
 
-	readLimit := maxBytes
-	if size >= 0 && size < readLimit {
-		readLimit = size
-	}
-	body := http.MaxBytesReader(w, r.Body, readLimit)
+	// Allow reading 1 byte past maxBytes so chunked or under-reported bodies exceeding the cap
+	// are always detected as oversized (413) instead of silently truncated at maxBytes.
+	body := http.MaxBytesReader(w, r.Body, maxBytes+1)
 	buf := make([]byte, chunkBytes)
 	var off int64
 	for {
 		n, err := io.ReadFull(body, buf)
 		if n > 0 {
+			if off+int64(n) > maxBytes {
+				writeCode(w, http.StatusRequestEntityTooLarge, proto.CodeTooLarge,
+					fmt.Sprintf("upload exceeds maximum size (%d bytes)", maxBytes),
+					map[string]any{"limit": maxBytes})
+				return
+			}
+			if size >= 0 && off+int64(n) > size {
+				writeErr(w, http.StatusBadRequest, fmt.Errorf("upload exceeded declared size (%d bytes)", size))
+				return
+			}
 			chunkReq := proto.MachineFileUploadChunkRequest{
 				UploadID: begin.UploadID,
 				Offset:   off,
@@ -522,7 +530,21 @@ func (h *Hub) machineFileUpload(w http.ResponseWriter, r *http.Request, m *Machi
 			return
 		}
 	}
-	if size >= 0 && off != size {
+	if size < 0 {
+		// Probe 1 trailing byte so chunked bodies ending right on a chunk/cap boundary cannot sneak past maxBytes.
+		var probe [1]byte
+		pn, perr := body.Read(probe[:])
+		if pn > 0 || bodyTooLarge(perr) {
+			writeCode(w, http.StatusRequestEntityTooLarge, proto.CodeTooLarge,
+				fmt.Sprintf("upload exceeds maximum size (%d bytes)", maxBytes),
+				map[string]any{"limit": maxBytes})
+			return
+		}
+		if perr != nil && !errors.Is(perr, io.EOF) {
+			writeErr(w, http.StatusBadRequest, perr)
+			return
+		}
+	} else if off != size {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("upload cut short: %d of %d bytes", off, size))
 		return
 	}

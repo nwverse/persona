@@ -238,6 +238,7 @@ type Node struct {
 	mfUps                        machineFileUploads
 	machineFileUploadMaxBytes    int64  // test override (0 = proto.MachineFileUploadMaxBytes)
 	machineFileWriteBeforeVerify func() // test hook invoked before pre-rename re-verification
+	machineFilePreviewAfterRead  func() // test hook invoked after preview read before post-read stat verification
 
 	// droppedResume: herdr servers (ServerID) found too old to keep a resume command, each warned about once
 	// (herdrresume.go warnDroppedResume).

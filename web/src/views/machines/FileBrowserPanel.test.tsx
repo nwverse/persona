@@ -186,7 +186,7 @@ function stubHub(input: RequestInfo | URL, init?: RequestInit): Promise<Response
       return Promise.resolve(json({ code: "file_changed", error: "file was modified externally" }, 409));
     }
     if (writeMode === "plain-409") {
-      return Promise.resolve(json({ error: "conflict" }, 409));
+      return Promise.resolve(json({ code: "exists", error: "target already exists" }, 409));
     }
     return Promise.resolve(json({
       path: "/home/dev/.env",
@@ -683,11 +683,11 @@ describe("FileBrowserPanel", () => {
     expect(host.querySelector('[data-testid="upload-confirm-panel"]')).toBeNull();
   });
 
-  it("handles plain HTTP 409 CAS conflict, reloads tail/moved dir on rename, and preserves overwrite across 412 sensitive confirm", async () => {
+  it("surfaces non-CAS HTTP 409 errors normally, refreshes current dir on child dir rename, reloads tail on file rename, and preserves overwrite across 412", async () => {
     act(() => root.render(<FileBrowserPanel machines={onlineMachines} />));
     await flush();
 
-    // 1. Plain HTTP 409 (without code: "file_changed") still shows CAS conflict banner and clears after subsequent save.
+    // 1. Non-CAS HTTP 409 (code !== "file_changed") displays server error instead of CAS conflict banner.
     await act(async () => {
       host.querySelector<HTMLButtonElement>('[data-testid="file-entry-win.ini"]')!.click();
     });
@@ -701,9 +701,9 @@ describe("FileBrowserPanel", () => {
       findButton(/确认保存|Confirm & Save/, host.querySelector('[data-testid="machine-file-diff"]')!).click();
     });
     await flush();
-    expect(host.querySelector('[data-testid="cas-conflict-banner"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="cas-conflict-banner"]')).toBeNull();
+    expect(host.textContent).toContain("target already exists");
     writeMode = "ok";
-    await act(async () => { findButton(/查看差异|Review diff/).click(); });
     await act(async () => {
       findButton(/确认保存|Confirm & Save/, host.querySelector('[data-testid="machine-file-diff"]')!).click();
     });
@@ -729,7 +729,8 @@ describe("FileBrowserPanel", () => {
     expect(calls.some((c) => c.url.includes("/files/tail?path=%2Fhome%2Fdev%2Fapp-rotated.log"))).toBe(true);
     expect(host.querySelector('[data-testid="machine-file-content"]')?.textContent).toContain("tail-batch-2");
 
-    // 3. Renaming a directory navigates to the moved directory via loadDirectory.
+    // 3. Renaming a child directory refreshes the current listing (/home/dev) instead of jumping into the moved directory.
+    const listCountBeforeDirRename = calls.filter((c) => c.url.includes("/files/list")).length;
     const renameDirBtn = [...host.querySelectorAll("button")].find((b) => b.getAttribute("aria-label")?.includes("logs") && b.getAttribute("aria-label")?.match(/rename|重命名/i));
     expect(renameDirBtn).toBeTruthy();
     await act(async () => { renameDirBtn!.click(); });
@@ -739,8 +740,10 @@ describe("FileBrowserPanel", () => {
       findButton(/重命名|Rename/, host.querySelector('[data-testid="rename-entry-panel"]')!).click();
     });
     await flush();
-    expect(calls.some((c) => c.url.includes("/files/list?path=%2Fhome%2Fdev%2Flogs-archived"))).toBe(true);
-    expect(host.querySelector<HTMLInputElement>('input[aria-label]')?.value).toBe("/home/dev/logs-archived");
+    const listCallsAfterDirRename = calls.filter((c) => c.url.includes("/files/list")).slice(listCountBeforeDirRename);
+    expect(listCallsAfterDirRename.some((c) => c.url.includes("/files/list?path=%2Fhome%2Fdev"))).toBe(true);
+    expect(listCallsAfterDirRename.some((c) => c.url.includes("logs-archived"))).toBe(false);
+    expect(host.querySelector<HTMLInputElement>('input[aria-label]')?.value).toBe("/home/dev");
 
     // 4. Upload 409 exists -> Overwrite (overwrite=1) -> 412 sensitive confirm -> final retry keeps BOTH overwrite=1 and confirm_sensitive=1.
     const uploadInput = host.querySelector<HTMLInputElement>('[data-testid="machine-file-upload-input"]')!;
