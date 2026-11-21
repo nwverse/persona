@@ -48,7 +48,9 @@ var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "sched
 // Tools are the assistant's tools (assistant.tools).
 func (s *Service) Tools(ctx context.Context) []proto.Tool {
 	tools := toolsNamed(toolNames)
-	if ownerReplyApprovalOn(s.settings(ctx)) {
+	// A bare Service has no settings store and is used by registry tests. With no
+	// store the opt-in is false; do not call the nil store function just to hide it.
+	if s.store != nil && ownerReplyApprovalOn(s.settings(ctx)) {
 		tools = append(tools, toolsNamed([]string{ownerActionPrepareTool})...)
 	}
 	if s.urgentOn(ctx) {

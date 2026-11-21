@@ -15,6 +15,9 @@ func TestOwnerApprovalSettingsDefaultOffAndReadBack(t *testing.T) {
 	if view.OwnerReplyApproval || view.PersistentOwnerActionCards || !reflect.DeepEqual(view.OwnerApprovalPhrases, []string{"发", "同意"}) {
 		t.Fatalf("default exact-approval settings: %+v", view)
 	}
+	if ownerActionPrepareOffered(s) {
+		t.Fatal("exact approval tool is offered while its opt-in is off")
+	}
 	for _, body := range []string{
 		`{"owner_reply_approval_phrases":[" 发"]}`,
 		`{"owner_reply_approval_phrases":["发","发"]}`,
@@ -31,6 +34,9 @@ func TestOwnerApprovalSettingsDefaultOffAndReadBack(t *testing.T) {
 	if w.Code != http.StatusOK || !saved.OwnerReplyApproval || !saved.PersistentOwnerActionCards || !reflect.DeepEqual(saved.OwnerApprovalPhrases, []string{"发", "Agree"}) {
 		t.Fatalf("save exact-approval settings: %d %+v %s", w.Code, saved, w.Body)
 	}
+	if !ownerActionPrepareOffered(s) {
+		t.Fatal("exact approval tool is hidden after its opt-in is enabled")
+	}
 	read := httptest.NewRecorder()
 	s.ServeHTTP(read, httptest.NewRequest(http.MethodGet, "/api/v1/assistant", nil))
 	var reloaded assistantView
@@ -42,6 +48,9 @@ func TestOwnerApprovalSettingsDefaultOffAndReadBack(t *testing.T) {
 		`{"owner_reply_approval":false,"persistent_owner_action_cards":false}`)
 	if w.Code != http.StatusOK || saved.OwnerReplyApproval || saved.PersistentOwnerActionCards || !reflect.DeepEqual(saved.OwnerApprovalPhrases, []string{"发", "Agree"}) {
 		t.Fatalf("reverse exact-approval switches: %d %+v", w.Code, saved)
+	}
+	if ownerActionPrepareOffered(s) {
+		t.Fatal("exact approval tool remains offered after its opt-in is disabled")
 	}
 
 	// Empty is a deliberate disable, not an omitted setting. It must survive both JSON persistence and a fresh view;
@@ -65,4 +74,13 @@ func TestOwnerApprovalSettingsDefaultOffAndReadBack(t *testing.T) {
 	if ownerApprovalPhrase(Settings{OwnerReplyApproval: &enabled, OwnerApprovalPhrases: persisted.OwnerApprovalPhrases}, "发") {
 		t.Fatal("an explicitly empty phrase list restored a default affirmative")
 	}
+}
+
+func ownerActionPrepareOffered(s *Service) bool {
+	for _, tool := range s.Tools(context.Background()) {
+		if tool.Name == ownerActionPrepareTool {
+			return true
+		}
+	}
+	return false
 }
