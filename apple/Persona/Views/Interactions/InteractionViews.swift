@@ -362,6 +362,8 @@ struct InteractionPanel: View {
     @State private var questionsLeft: Int?
     /// The message the card is about, where the chat can find it (#9392): View in Chat goes there.
     @Environment(\.cardSources) private var sources
+    /// Its container lets the user size it (#12306): the grabber on its top edge.
+    @Environment(\.cardResize) private var resize
 
     /// The form's cap while the keyboard is up (`cardFits`): the area less the card's header and margins; at least a tap
     /// target, so a sliver of a form never shows (a small iPhone with the shell's composer leaves the cards little more).
@@ -369,7 +371,8 @@ struct InteractionPanel: View {
         guard available > 0, headerHeight > 0 else { return .infinity }
         let row = headerAway ? 0 : headerHeight + Theme.Space.m // the row and the gap under it
         let line = suggestionHeight > 0 ? suggestionHeight + Theme.Space.m : 0 // a suggested rule's line and its gap
-        return max(available - row - line - Theme.Space.m - Theme.Space.l, Theme.Size.tapTarget) // and the margins
+        let top = grabber == nil ? Theme.Space.m : Theme.Space.l // the top margin, or the grabber's strip in its place
+        return max(available - row - line - top - Theme.Space.l, Theme.Size.tapTarget) // and the margins
     }
 
     private var fitsCap: CGFloat { cap(for: fits) }
@@ -401,8 +404,12 @@ struct InteractionPanel: View {
         return fits - headerHeight - Theme.Space.m - Theme.Space.m - Theme.Space.l < Theme.Size.box120
     }
 
+    /// The grabber shows on an open card its container lets the user size, the keyboard down (`headerAway` is only while up).
+    private var grabber: CardResize? { collapsed || headerAway ? nil : resize }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if let grabber { CardGrabber(resize: grabber) }
             if !headerAway { header }
             // Folded, the form stays in the card at no height (#9392): a question of several keeps its page and its
             // picks, and folding and unfolding animate its height, not a cut between two cards.
@@ -449,7 +456,8 @@ struct InteractionPanel: View {
         }
         .onPreferenceChange(QuestionsLeft.self) { questionsLeft = $0 }
         .padding(.horizontal, Theme.Space.l)
-        .padding(.top, Theme.Space.m)
+        // The grabber's strip takes the top margin's place, and a little more (#12306).
+        .padding(.top, grabber == nil ? Theme.Space.m : Theme.Space.flush)
         .padding(.bottom, Theme.Space.l)
         .foregroundStyle(Theme.primaryText)
         .surface(in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))

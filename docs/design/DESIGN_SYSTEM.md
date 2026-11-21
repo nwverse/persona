@@ -2023,9 +2023,20 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   share the room the footer leaves above the composer: on Android each takes at most half the page, and with both on
   screen each has at least half of that room, a card that needs less leaving the rest to the other, so the composer
   stays on the page. iOS (#9392) caps the task question as it caps the stack (`FooterRoom.cardsRoom`): alone, as a lone
-  question card (#6277), with the conversation's own cards on screen half of that room each; its card fits itself to its
+  question card (#6277), with the conversation's own cards on screen half of that room each, and with the keyboard down a
+  place that takes less (a folded card, #12306) leaves the rest to the other, as on Android; its card fits itself to its
   share and scrolls inside, its task's name and title row in view. It was uncapped, and on iPad and the open iPhone Duo
-  it took the whole page, its top under the top bar.
+  it took the whole page, its top under the top bar. Before #12306 a folded card kept its half empty, and on the open
+  iPhone Duo held sideways the task's question showed one option and the start of its description.
+  **Card height by hand** (iOS and iPadOS, #12306): with the keyboard down, a lone question card over the composer (the
+  task's question, or the conversation's own lone question; beside each other the task's question) has a grabber on its
+  top edge, the sheets' grabber in a strip the card's width (`interaction-grabber`). Dragged, the card follows the finger
+  between `Theme.Size.cardLeast` (150 pt: its title row and the first lines of what it asks) and the tallest, which
+  leaves the conversation `Theme.Space.xl` under the header as it stands open (`FooterRoom.tallestRoom`), its title row
+  and fold always on the page; a tap goes to the tallest and, from there, back to the default cap above. The choice is
+  kept on the device as a share of that range (`CardHeight`), so it reads the same upright and sideways; VoiceOver
+  adjusts it a quarter at a time and double-tap toggles. The fold still folds the card to one line. Option descriptions
+  always wrap in full; what the card's height cannot show scrolls inside it.
   A question card folds from its title row (the whole row, and the fold button at its end, `interaction-fold`) to one
   line: its title, the question and, for a card of several questions, "N left". Folded, it keeps its page and its picks
   and gives the conversation its room. Where the chat finds the message the card is about (the agent's words before the

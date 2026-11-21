@@ -1,6 +1,52 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Card Height [Question Card]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Card Height"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "カードの高さ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "卡片高度"
+          }
+        }
+      }
+    },
+    "Swipe up or down to make the card taller or shorter. Double-tap for the tallest or the default." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Swipe up or down to make the card taller or shorter. Double-tap for the tallest or the default."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上下にスワイプするとカードを高くしたり低くしたりできます。ダブルタップで最大とデフォルトの高さを切り替えます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上下轻扫可以把卡片调高或调低。轻点两下在最高和默认高度之间切换。"
+          }
+        }
+      }
+    },
     "agentDirs.action" : {
       "extractionState" : "manual",
       "localizations" : {
