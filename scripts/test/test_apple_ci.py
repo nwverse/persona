@@ -129,11 +129,11 @@ class AppleCIPreparationTests(unittest.TestCase):
     def test_explicit_unsigned_build_lane_preserves_the_real_build_and_skips_devices(self):
         script = SCRIPT.read_text()
         workflow = (ROOT / '.github/workflows/apple-test.yml').read_text()
-        self.assertIn('options: [ios, ios18, ios-build, packages, ios-focused]', workflow)
+        self.assertIn('options: [ios, ios18, ios-build, packages, ios-focused, ios-ipad-diagnostic]', workflow)
         self.assertIn("inputs.lane == 'packages' && 'Native package tests (Xcode 26.0)'", workflow)
         self.assertIn("inputs.lane == 'ios-focused' && 'Focused iOS and About tests (Xcode 26.0)'", workflow)
-        self.assertIn('all|ios|ios18|packages|ios-build|ios-focused', script)
-        self.assertIn('[ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ]', script)
+        self.assertIn('all|ios|ios18|packages|ios-build|ios-focused|ios-ipad-diagnostic', script)
+        self.assertIn('[ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ] || [ "$LANE" = ios-ipad-diagnostic ]', script)
         self.assertIn('[ "$LANE" != packages ] && [ "$LANE" != ios-build ]', script)
         start = script.index('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ]')
         end = script.index('if [ "$LANE" = ios18 ]; then', start)
@@ -154,7 +154,7 @@ class AppleCIPreparationTests(unittest.TestCase):
 
     def test_focused_lane_keeps_real_simulators_and_strict_about_results(self):
         script = SCRIPT.read_text()
-        self.assertIn('if [ "$LANE" = ios-focused ]; then', script)
+        self.assertIn('if [ "$LANE" = ios-focused ] || [ "$LANE" = ios-ipad-diagnostic ]; then', script)
         for suite in ('PageSearchableTests', 'StarredMessagesTests', 'LauncherModelChoiceTests',
                       'OmpNewAgentTests', 'PaseoPermissionModesTests', 'PaseoProvidersTests',
                       'AboutVersionCompactVisualTests'):
@@ -168,6 +168,54 @@ class AppleCIPreparationTests(unittest.TestCase):
         self.assertIn('TEST_RUNNER_PERSONA_SHOTS="$OUTPUT/regular-shots"', script)
         self.assertIn('Create stock regular-width About test simulator', script)
         self.assertIn('Verify hosted iOS test readiness', script)
+
+    def test_regular_ipad_diagnostic_is_explicit_and_does_not_change_ordinary_lanes(self):
+        workflow = (ROOT / '.github/workflows/apple-test.yml').read_text()
+        data = yaml.safe_load(workflow)
+        choices = data[True]['workflow_dispatch']['inputs']['lane']['options']
+        self.assertIn('ios-ipad-diagnostic', choices)
+        ordinary = yaml.safe_load(subprocess.run(
+            ['git', 'show', '5f73a16154d626ccc7dc5359f10254fd5ced6d0d:.github/workflows/apple-test.yml'], cwd=ROOT,
+            check=True, capture_output=True, text=True).stdout)
+        for lane in ('ios', 'ios-focused'):
+            current = dict(data['jobs']['apple'])
+            current.pop('steps')
+            baseline = dict(ordinary['jobs']['apple'])
+            baseline.pop('steps')
+            for item in (current, baseline):
+                item.pop('name')
+            self.assertEqual(current, baseline)
+        steps = data['jobs']['apple']['steps']
+        upload = next(step for step in steps if step.get('name') == 'Upload regular iPad diagnostic evidence')
+        self.assertEqual(upload['if'], "always() && inputs.lane == 'ios-ipad-diagnostic'")
+        self.assertEqual(upload['with']['if-no-files-found'], 'error')
+        original_steps = ordinary['jobs']['apple']['steps']
+        for step in original_steps:
+            if step.get('name') == 'Upload Apple failure diagnostics':
+                step = dict(step, **{'if': "failure() && inputs.lane != 'ios-ipad-diagnostic'"})
+            self.assertIn(step, steps)
+        script = SCRIPT.read_text()
+        self.assertIn('if [ "$LANE" = ios-ipad-diagnostic ]; then\n      # A deliberate app-host diagnostic stops', script)
+        self.assertIn('if [ "$lane" = ios-ipad-diagnostic ]; then\n          timeout --kill-after=5s 180s python3 "$ci_root/scripts/ci/apple_diagnostics.py"', script)
+        self.assertIn('"$OUTPUT" "$DIAGNOSTICS" "$LANE" "${IOS_COMMON[@]}"', script)
+        self.assertIn("ci_run 'Verify hosted regular iPad test readiness' 900", script)
+        self.assertIn("ci_run 'iOS regular-width About visual test on real iPad' 600", script)
+        self.assertLess(script.index('exit 0\n    fi\n    mkdir -p "$OUTPUT/regular-shots"'),
+                        script.index("ci_run 'iOS regular-width About visual test on real iPad'"))
+        self.assertNotIn("ci_run 'Collect regular iPad diagnostic evidence'", script)
+        original_script = subprocess.run(['git', 'show', '5f73a16154d626ccc7dc5359f10254fd5ced6d0d:scripts/ci/apple.sh'], cwd=ROOT,
+                                         check=True, capture_output=True, text=True).stdout
+        for lane in ('ios', 'ios-focused'):
+            current = script.replace(' || [ "$LANE" = ios-ipad-diagnostic ]', '').replace('|ios-ipad-diagnostic', '')
+            current = current.replace('      checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; diagnostics="$9"; lane="${10}"; shift 10',
+                                      '      checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; shift 8')
+            current = current.replace('      "$CI_ROOT" "$CI_BUNDLE_ID" "$OUTPUT" "$DIAGNOSTICS" "$LANE" "${IOS_COMMON[@]}" \\',
+                                      '      "$CI_ROOT" "$CI_BUNDLE_ID" "$OUTPUT" "${IOS_COMMON[@]}" \\')
+            current = current.replace('        if [ "$lane" = ios-ipad-diagnostic ]; then\n          timeout --kill-after=5s 180s python3 "$ci_root/scripts/ci/apple_diagnostics.py" \\\n            "$output" "$diagnostics" --scope regular || true\n        fi\n', '')
+            current = current.replace('    local scope=all\n    if [ "$LANE" = ios-ipad-diagnostic ]; then\n      scope=regular\n    fi\n', '')
+            current = current.replace('      "$OUTPUT" "$DIAGNOSTICS" --scope "$scope"', '      "$OUTPUT" "$DIAGNOSTICS"')
+            current = current.replace('    if [ "$LANE" = ios-ipad-diagnostic ]; then\n      # A deliberate app-host diagnostic stops after its own strict probe and\n      # observer cleanup; it neither runs nor substitutes for the visual suite.\n      exit 0\n    fi\n', '')
+            self.assertEqual(current, original_script)
 
     def test_regular_ipad_observer_has_an_independent_scope_and_strict_probe(self):
         script = SCRIPT.read_text()
@@ -538,6 +586,46 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
             self.assertEqual((destination / 'ios-unit.xcresult/summary.json').read_text(), 'test results')
             self.assertEqual((destination / 'native-ssh-trace.log').read_text(), 'diagnostic fixture')
             self.assertFalse((destination / 'ios-unit.xcresult/external-key').exists())
+
+    def test_regular_diagnostic_scope_excludes_other_suite_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / 'output'
+            destination = root / 'artifacts'
+            for name in ('regular-simulator.log', 'regular-simulator-boot.log', 'regular-readiness.log',
+                         'simulator.log', 'simulator-readiness.log', 'native-ssh-trace.log'):
+                output.mkdir(exist_ok=True)
+                (output / name).write_text(name)
+            for name in ('ios-regular-readiness.xcresult', 'ios-readiness.xcresult', 'ios-unit.xcresult'):
+                (output / name).mkdir()
+                (output / name / 'tests.json').write_text(name)
+            for name in ('live-readiness', 'live-regular-readiness'):
+                observer = output / 'diagnostics' / name
+                observer.mkdir(parents=True)
+                (observer / 'observer.status.txt').write_text(name)
+            (output / 'regular-readiness-context.json').write_text('regular scope')
+            (output / 'simulator-readiness-context.json').write_text('phone scope')
+            apple_diagnostics.collect(output, destination, lambda command, **kwargs: subprocess.CompletedProcess(command, 0, '', ''), scope='regular')
+            self.assertEqual({path.name for path in destination.iterdir()}, {
+                'regular-simulator.log', 'regular-simulator-boot.log', 'regular-readiness.log',
+                'ios-regular-readiness.xcresult', 'regular-readiness-context.json', 'live-regular-readiness',
+                'simctl-list.json', 'simctl-list.stderr.txt', 'simctl-list.status.txt',
+                'disk-space.txt', 'disk-space.stderr.txt', 'disk-space.status.txt',
+            })
+            self.assertEqual((destination / 'live-regular-readiness/observer.status.txt').read_text(), 'live-regular-readiness')
+            self.assertEqual((destination / 'regular-readiness-context.json').read_text(), 'regular scope')
+
+    def test_regular_diagnostic_scope_is_deterministic_before_context_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'output'
+            output.mkdir()
+            (output / 'regular-readiness.log').write_text('probe failed before context')
+            destination = Path(directory) / 'artifacts'
+            apple_diagnostics.collect(output, destination, lambda command, **kwargs: subprocess.CompletedProcess(command, 0, '', ''), scope='regular')
+            context = json.loads((destination / 'regular-readiness-context.json').read_text())
+            self.assertEqual(context, {'unavailable': 'regular iPad probe did not publish its owned context'})
+            self.assertFalse((destination / 'simulator-launch.status.txt').exists())
+            self.assertTrue((destination / 'regular-readiness.log').is_file())
 
     def test_unavailable_simctl_still_retains_existing_logs(self):
         with tempfile.TemporaryDirectory() as directory:
