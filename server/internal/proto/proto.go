@@ -42,6 +42,7 @@ var Features = []string{
 	FeatureMessageSendState,    // informational receipt support; trust only authenticated hello.message_send_state == 1
 	FeatureTodoSendState,       // informational: a to-do write's receipts (#10465); trust only authenticated hello.todo_send_state == 1
 	"client_ops",               // durable operation receipts and read-only status queries
+	FeatureAgentTerminalSend,   // paired terminal sends to exact Agent sessions
 	"send_refusals",            // 409 dialog_open / input_draft, clear_draft
 	"screen_dialog",            // interaction.dialog, Resolution.option, 409 prompt_changed
 	"resumable_interactions",   // hook questions survive hub / node restarts
@@ -121,6 +122,7 @@ var Features = []string{
 	"file_transfer",            // POST/GET/DELETE /api/v1/files/transfer: computer to computer, run by the manager, file_transfer events (docs/protocol/file-transfer.md)
 	"task_push",                // Task.push on /api/v1/assistant/tasks: "Push when done", every run or only what a run sends (docs/assistant/assistant.md "Push when done")
 	"task_inbox",               // Task.inbox on /api/v1/assistant/tasks: "When done, put it in the Inbox", off / only if worth a look / every time (docs/assistant/assistant.md "Put it in the Inbox when done")
+	"task_execution",           // task execution overrides, working directories and execution history
 	"task_cron",                // repeat "cron" with Task.cron on /api/v1/assistant/tasks, and GET /api/v1/assistant/tasks/cron (docs/assistant/assistant.md "Scheduled tasks")
 
 	// A secret may hold a provider's op://… reference: PUT …/{id}/-/secrets/{name} {reference}; secrets[].reference and

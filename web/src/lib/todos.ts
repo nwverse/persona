@@ -1,6 +1,6 @@
 import { formatDate, t } from "../i18n";
 import { currentHeaders, noteItemManager } from "./manager-choice";
-import { acceptanceStands, reviewState, type Supervision } from "./supervision";
+import { acceptanceStands, linkedParkInteraction, linkedParkOwnerAsk, parkInteractionID, reviewState, type Supervision } from "./supervision";
 import type { LineageStep, TaskBrief } from "./brief";
 import type { RuleSuggestion } from "./rule-suggestion";
 import type { TodoSummary } from "./todo-view-wire";
@@ -11,7 +11,7 @@ import { stateOf } from "./format";
 import { foldedState } from "./child-sessions";
 import { foldRows } from "./folded-rows";
 import { splitAgentSessions, type AgentGroup, type AgentMutes } from "./agent-groups";
-import type { AgentState, Machine, Session } from "./types";
+import type { AgentState, Interaction, Machine, Question, Session } from "./types";
 import type { Route } from "./router";
 import { byTime } from "./times";
 import { stateName, waitName } from "./state-labels";
@@ -24,6 +24,7 @@ export interface TodoAgent {
   session_id: string;
   linked_at: string;
   released_at?: string | null;
+  dismissed_at?: string | null;
   title?: string;
   cwd?: string;
   agent?: string;
@@ -114,6 +115,9 @@ export interface Todo {
   stage?: string;
   /** "code" uses the six stages; "general" hides them. Unset or unknown kinds keep the existing stage behavior. */
   stage_kind?: string;
+  /** Closed with nothing left to deploy (#11590): the bar ends with Done after `stage` instead of marking it current.
+   *  Unset while open, for work that went out or is held short of live, and from hubs before it. */
+  stage_done?: boolean;
   /** The pull or merge request the work is in, when the hub knows one. */
   pr_url?: string;
   /** Fresh, observational pull request facts; these do not change the task lifecycle. */
@@ -164,6 +168,8 @@ export function orphanedLine(todo: Pick<Todo, "orphaned" | "done_at">): { lead: 
  * `asked_at` is the round, which POST /todos/{id}/accept takes back (an earlier round's is 409).
  */
 export interface TodoAsk {
+  /** An expired ask_user's original form. Answer it on the to-do, not its expired interaction. */
+  questions?: Question[];
   outcome?: "done" | "cannot" | "decide" | string;
   verdict: string;
   recommend?: string;
@@ -341,7 +347,10 @@ export function isRemovable(status: TodoStatus): boolean {
   return status !== "working" && status !== "needs_you";
 }
 
-export type SessionLookup = (mid: string, sid: string) => Session | undefined;
+export type SessionLookup = ((mid: string, sid: string) => Session | undefined) & {
+  /** Exact pending-card lookup, present when the caller supplied its current interaction list. */
+  interaction?: (id: string) => Interaction | undefined;
+};
 
 /** The hub closed it because its task's work was judged finished; reopening undoes it (docs/assistant/todos.md "Automatic completion"). */
 export function isAutoDone(todo: Todo): boolean {
@@ -351,6 +360,19 @@ export function isAutoDone(todo: Todo): boolean {
 /** Its supervisor closed it after reviewing the work (done_by review, #3124). */
 export function isReviewDone(todo: Todo): boolean {
   return Boolean(todo.done_at) && todo.done_by === "review";
+}
+
+/** A cancelled task: its supervisor ended it without the work being accepted (the row's status line says Cancelled).
+ *  Only this outcome is struck through, so an accepted or deployed one does not read as thrown away (#11677). */
+export function isCancelled(todo: Todo): boolean {
+  return isReviewDone(todo) && todo.supervision?.state === "cancelled";
+}
+
+/** Whether a finished row strikes its title through: only a cancelled to-do (#11677). A task that succeeded — accepted,
+ *  deployed, ticked by the owner or auto-completed — keeps a plain muted title; the filled check and the muted tone
+ *  already say it is closed. A row still open (a failed start waiting on the owner) is never struck (#3713). */
+export function strikesThrough(todo: Todo, open: boolean): boolean {
+  return !open && isCancelled(todo);
 }
 
 /** An open task its supervisor accepted, reopened by the hub when its agent got more work, with nothing of it running
@@ -370,16 +392,29 @@ export function shownStatus(todo: Todo, status: TodoStatus): TodoStatus {
 export function todoStatusLabel(todo: Todo, status: TodoStatus): string {
   if (acceptedAtRest(todo, status)) return t("lib-todos.review_done");
   if (status === "done" && isReviewDone(todo)) return todo.supervision?.state === "cancelled" ? t("lib-todos.review_cancelled") : t("lib-todos.review_done");
+  if (status === "follow_up" && todo.supervision?.state === "parked" && todo.supervision.parked?.handoff && !openAsk(todo)) {
+    return TODO_STATUS_INFO.waiting.label;
+  }
   return status === "done" && isAutoDone(todo) ? t("lib-todos.auto_done") : TODO_STATUS_INFO[status].label;
 }
 
-export function makeSessionLookup(sessions: Session[] | Record<string, Session[]>): SessionLookup {
+export function withInteractionLookup(base: SessionLookup, interactions: readonly Interaction[]): SessionLookup {
+  const lookup: SessionLookup = (mid: string, sid: string) => base(mid, sid);
+  // Resolve only when a park carries an explicit ID; ordinary status reads do not scan the pending cards.
+  lookup.interaction = (id) => interactions.find((ix) => ix.id === id);
+  return lookup;
+}
+
+export function makeSessionLookup(sessions: Session[] | Record<string, Session[]>, interactions?: readonly Interaction[]): SessionLookup {
+  let base: SessionLookup;
   if (Array.isArray(sessions)) {
     const map = new Map<string, Session>();
     for (const s of sessions) map.set(`${s.machine_id}/${s.session_id}`, s);
-    return (mid, sid) => map.get(`${mid}/${sid}`);
+    base = (mid, sid) => map.get(`${mid}/${sid}`);
+  } else {
+    base = (mid, sid) => (sessions[mid] ?? []).find((s) => s.session_id === sid);
   }
-  return (mid, sid) => (sessions[mid] ?? []).find((s) => s.session_id === sid);
+  return interactions ? withInteractionLookup(base, interactions) : base;
 }
 
 /**
@@ -399,6 +434,14 @@ export function makeSessionLookup(sessions: Session[] | Record<string, Session[]
 export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
   if (todo.start_error) return "failed";
   if (todo.done_at) return "done";
+  const linkedID = parkInteractionID(todo);
+  const ownerAsk = linkedParkOwnerAsk(todo);
+  const viewKeepsPark = linkedID && todo.view && !ownerAsk && todo.view.section !== "needs_you" && todo.view.section !== "can_wait";
+  const candidate = viewKeepsPark ? undefined : linkedID ? lookup?.interaction?.(linkedID) : undefined;
+  const linked = candidate && linkedParkInteraction(todo, [candidate]);
+  if (linked) return "needs_you";
+  // With no pending-card list, use the manager's view; a supplied list, including an empty one after resolution, wins.
+  if (linkedID && !lookup?.interaction && ownerAsk) return "needs_you";
   const active = (todo.agents ?? []).filter((a) => !a.released_at);
   if (active.length === 0) return "not_started";
 
@@ -418,6 +461,10 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
     // its child sessions' state folded in (#5120): one waiting on the user makes the task wait, one working works
     const st: AgentState = s ? foldedState(s) : "offline";
     if (st === "needs_you") {
+      if (linkedID && !linked && s?.work?.interaction_id === linkedID) {
+        // The exact linked card is gone; this is its stale session state, not a new owner question.
+        continue;
+      }
       hasNeedsYou = true;
       break;
     }
@@ -630,12 +677,13 @@ export function buildTodoAgentGroups(
   machines: Machine[],
   todos: Todo[],
   mutes: AgentMutes = { spaces: [], sessions: [] },
+  compareSessions?: (a: Session, b: Session) => number,
 ): AgentGroup[] {
   const { live } = splitAgentSessions(all, machines);
   const lookup = makeSessionLookup(live);
 
-  // order of unfinished todos
-  const openTodos = sortTodos(todos.filter((t) => !t.done_at), lookup);
+  // The To-dos page's order without live Agent rank: activity updates a group's status, not its place (#11801).
+  const openTodos = sortTodos(todos.filter((t) => !t.done_at));
 
   // map each todo to its live sessions
   const liveByKey = new Map<string, Session>();
@@ -656,6 +704,12 @@ export function buildTodoAgentGroups(
   }
   const assignedSessionKeys = new Set(homeOf.keys());
   const groups: AgentGroup[] = [];
+  const byRank = compareSessions ?? ((a: Session, b: Session) => {
+    const rA = sessionRank(a, mutes);
+    const rB = sessionRank(b, mutes);
+    if (rA !== rB) return rA - rB;
+    return byDate(a, b);
+  });
 
   for (const todo of openTodos) {
     // in the todo's agents order, then the sessions on it by their own todo only
@@ -664,13 +718,8 @@ export function buildTodoAgentGroups(
     const todoSessions = keys.map((key) => liveByKey.get(key)!);
 
     if (todoSessions.length > 0) {
-      // order within a group: by status priority (pinned / needs you first, muted down), same priority by time, newest first
-      todoSessions.sort((a, b) => {
-        const rA = sessionRank(a, mutes);
-        const rB = sessionRank(b, mutes);
-        if (rA !== rB) return rA - rB;
-        return byDate(a, b);
-      });
+      // The caller's presentation order; without one, status priority then newest activity.
+      todoSessions.sort(byRank);
 
       const st = todoStatus(todo, lookup);
       groups.push({
@@ -683,12 +732,6 @@ export function buildTodoAgentGroups(
     }
   }
 
-  const byRank = (a: Session, b: Session) => {
-    const rA = sessionRank(a, mutes);
-    const rB = sessionRank(b, mutes);
-    if (rA !== rB) return rA - rB;
-    return byDate(a, b);
-  };
   // agents on no todo go last in one "Unassigned" segment, folded by default; opened by hand in a terminal or not (#6591)
   const unassigned = live.filter((s) => !assignedSessionKeys.has(`${s.machine_id}/${s.session_id}`));
   if (unassigned.length > 0) {

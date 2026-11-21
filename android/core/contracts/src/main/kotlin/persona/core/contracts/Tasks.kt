@@ -6,6 +6,7 @@ import java.time.ZoneId
 import kotlinx.serialization.KeepGeneratedSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -34,6 +35,8 @@ data class PlanTask(
     val error: String? = null,
     /** The Agent preset to resolve when this planned task starts; null on an older hub. */
     val tier: String? = null,
+    /** The hub-owned brief Start confirms; decoded for the card, never sent back by PlanTaskSerializer. */
+    val brief: TaskBrief? = null,
 ) {
     /** The directory's last part: how the user names a project. */
     val project get() = cwd.trimEnd('/').substringAfterLast('/')
@@ -188,6 +191,12 @@ data class Todo(
      *  that review (web #4874, docs/protocol/protocol.md `GET /api/v1/todos`); null otherwise and from an older hub. */
     @SerialName("decision_review") val decisionReview: DecisionReview? = null,
     @SerialName("pr_url") val prUrl: String? = null,
+    /** "code" or "general" (#3380): general work draws no stage bar, its status already says how it goes; null from an
+     *  older hub, which keeps the bar for any stage. */
+    @SerialName("stage_kind") val stageKind: String? = null,
+    /** Closed with nothing left to deploy (#11590): the stage bar ends with Done after [stage]. False while open, for work
+     *  that went out or waits to, and from an older hub. */
+    @SerialName("stage_done") val stageDone: Boolean = false,
     @WireTime @SerialName("cancelled_at") val cancelledAt: String? = null,
     /** The manager it belongs to, as the merged list stamps it (docs/assistant/managers.md "Ownership"); null: the default manager's. */
     val manager: String? = null,
@@ -520,7 +529,9 @@ data class AssistantViewActionEvent(val conversation: String = "", val action: J
 @Serializable(with = AssistantViewBlockEventSerializer::class)
 data class AssistantViewBlockEvent(val conversation: String = "", val key: String = "") : ServerEvent
 
-object PlanTaskSerializer : WireSerializer<PlanTask>(PlanTask.generatedSerializer())
+object PlanTaskSerializer : WireSerializer<PlanTask>(PlanTask.generatedSerializer()) {
+    override fun serialize(encoder: Encoder, value: PlanTask) = super.serialize(encoder, value.copy(brief = null))
+}
 object TaskPlanSerializer : WireSerializer<TaskPlan>(TaskPlan.generatedSerializer())
 object FeedItemSerializer : WireSerializer<FeedItem>(FeedItem.generatedSerializer())
 object TodoSpaceSerializer : WireSerializer<TodoSpace>(TodoSpace.generatedSerializer())

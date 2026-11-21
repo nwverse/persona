@@ -145,6 +145,7 @@
     <string name="chat_request_collapse_full">折りたたむ</string>
     <string name="chat_request_allow">許可</string>
     <string name="chat_request_deny">拒否</string>
+    <string name="chat_request_owner_reply">「%1$s」と1回だけ返信</string>
     <string name="chat_request_always_allows">常に許可すると次を通します：%1$s</string>
     <string name="chat_request_fill_in_allow">入力して許可</string>
     <string name="chat_request_secret_run_commands">順に実行するコマンド</string>
@@ -227,6 +228,7 @@
     <string name="chat_link_unsupported_text">このリンクはPersonaで開けません。</string>
     <string name="chat_link_ok">OK</string>
     <string name="chat_link_open">開く</string>
+    <string name="chat_link_open_in_app">Persona で開く</string>
     <string name="chat_link_no_app">このリンクを開けるアプリがありません</string>
     <string name="chat_links_mail_title">メールを作成しますか？</string>
     <string name="chat_links_mail_text">メールアプリを開いてメールを作成します。</string>
@@ -490,4 +492,5 @@
     <string name="chat_turn_fix_model_route_launcher">%1$sでモデルを使えません</string>
     <string name="chat_turn_fix_model_route_detail">モデル名が正しくないか、このモデルは今使えません。別のモデルを試してください。</string>
     <string name="chat_turn_fix_action">直す</string>
+    <string name="chat_slash_saved_prompts">保存済みプロンプト</string>
 </resources>

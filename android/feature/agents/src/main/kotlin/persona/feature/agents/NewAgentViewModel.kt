@@ -4,15 +4,17 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import persona.core.contracts.Machine
 import persona.core.contracts.PaseoAgent
+import persona.core.contracts.ProtocolCompatibility
 import persona.core.contracts.Session
 import persona.core.contracts.api.*
 import persona.core.designsystem.UiText
 import persona.core.designsystem.failureReasonText
+import persona.core.domain.models.ModelPanel
 import persona.feature.chat.ChatLinkContext
 import persona.feature.chat.ComposerUploadLimiter
 import persona.feature.chat.ForwardMessage
 import persona.feature.chat.ForwardPlacements
-import persona.feature.chat.RestoredPhotos
+import persona.feature.chat.ForwardPlacement
 import persona.feature.chat.R as ChatR
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -29,6 +31,14 @@ import java.util.UUID
 /** The catalog source and engine `host` of a Paseo workspace (#7259), and the `kind` its worktrees are made by (#8856). */
 private const val PaseoHost = "paseo"
 
+/** The same host a fresh start uses: the explicit workspace host, or the selected computer's default. */
+private fun Machine.startsInHerdr(host: String?): Boolean {
+    val enabled = engineHosts
+    if (enabled != null) return "herdr" in enabled && (host ?: engineDefault) == "herdr"
+    val legacyHerdr = engine.isEmpty() || engine == "herdr" || engine == "herdr-both"
+    return legacyHerdr && (host == null || host == "herdr")
+}
+
 /** What the Git status of the folder picked is asked by: the computer, the folder, a space, and the engine asked. */
 private data class RepoQuery(val machineId: String, val cwd: String, val space: AgentSpacePreset?, val kind: String?)
 
@@ -41,7 +51,7 @@ internal data class AgentSpacePreset(val machineId: String, val workspaceId: Str
  * is (a forwarded message's block, #3901). [forwardedPhotos] is the matching in-memory handoff from that forward.
  */
 internal data class NewAgentPrefill(val machineId: String? = null, val cwd: String? = null, val prompt: String? = null,
-    val context: String? = null, val forwardedPhotos: RestoredPhotos = ForwardPlacements.takeNewAgent(context))
+    val context: String? = null, val forwardedPhotos: List<ForwardPlacement> = ForwardPlacements.takeNewAgent(context))
 
 /** The forward block a required first message may stand in for: one the card can read. Null for no context, or unreadable. */
 internal fun usableForward(context: String?): String? =
@@ -75,6 +85,7 @@ internal data class NewAgentState(
     val initialized: Boolean = false,
     val space: AgentSpacePreset? = null,
     val machineId: String = "",
+    val startMachine: Machine? = null,
     val selection: AgentDefaults = AgentDefaults(),
     val launchers: List<AgentLauncher> = emptyList(),
     /**
@@ -105,8 +116,7 @@ internal data class NewAgentState(
     val prefillOffline: String? = null,
     val models: NewAgentModels = NewAgentModels(),
     /**
-     * The model picked for this start, an id of [modelList]; "": the default. Not saved on its own: picking a machine
-     * brings back the model of its latest recent setup with the same launcher ([RecentSetups.model]).
+     * The model for this start, listed by the launcher or typed for omp. Empty follows the default.
      */
     val model: String = "",
     /** This hub's recent setups, newest first; the "Recent" cards are the first ones whose machine is listed. */
@@ -181,6 +191,15 @@ internal data class NewAgentState(
     val modelLauncher: String get() = if (following) configuredLauncher?.name.orEmpty() else selection.launcher
     /** [modelLauncher] as this computer lists it; null before its launchers are read or when it lists no such one. */
     val runningLauncher: AgentLauncher? get() = launchers.firstOrNull { it.name == modelLauncher }
+    /** A separately registered runtime can also call its agent omp. Its advertised catalogue and options belong to it. */
+    val ompCli: Boolean get() = runningLauncher?.let {
+        it.agentType == "omp" && (it.source in nativeLauncherSources || ProtocolCompatibility.managedProvider(it.source))
+    } == true
+    val nativeOmpLauncher: Boolean get() = runningLauncher?.let {
+        it.agentType == "omp" && it.name == "omp" && it.source in nativeLauncherSources
+    } == true
+    val ompStart: Boolean get() = nativeOmpLauncher &&
+        startMachine?.startsInHerdr(workspace?.source?.takeIf { space == null && it.isNotEmpty() }) == true
     /** What people call [modelLauncher]: its display name (Paseo's label for its provider, #8261), else its name. */
     val modelLauncherTitle: String get() = runningLauncher?.title ?: modelLauncher
     /**
@@ -189,28 +208,33 @@ internal data class NewAgentState(
      * Allow everything ([providerMode]), and the efforts its model lists ([providerEfforts]). Null for Claude Code's
      * launchers and for every other one, which takes neither.
      */
-    val providerModes: List<String>? get() = runningLauncher?.permissionModes?.takeIf { it.isNotEmpty() }
+    val providerModes: List<String>? get() = runningLauncher?.permissionModes?.takeIf { it.isNotEmpty() && !ompCli }
     /** Claude Code's five modes, its efforts and ultracode, remembered per computer: a Claude Code launcher's start. */
     val claudeModes: Boolean get() = agentType == "claude" && providerModes == null
     /** Older computers still require Codex's first message, including when following model configuration. */
     val promptRequired: Boolean get() = agentType == "codex" &&
         launchers.firstOrNull { it.name == modelLauncher }?.promptOptional != true
-    /** [modelLauncher]'s models, once there are some to show (or a locked reason to explain). */
+    /** A native omp node advertises per-start model support independently of the number of suggestions. */
     val modelList: LauncherModels? get() = models.list?.takeIf {
-        (it.models.isNotEmpty() || it.locked != null) && models.machineId == machineId && models.launcher == modelLauncher
+        models.machineId == machineId && models.launcher == modelLauncher &&
+            if (ompCli) ompStart && (it.agent.isEmpty() || it.agent == "omp") && (it.supportsStartModel || it.locked != null)
+            else it.models.isNotEmpty() || it.locked != null
     }
     /** There is a list and a pick reaches the agent (the launcher does not pass its own --model). */
     val canPickModel: Boolean get() = modelList.let { it != null && it.locked == null }
     val pickedModel: AgentModel? get() = model.takeIf { it.isNotEmpty() && canPickModel }
         ?.let { id -> modelList?.models?.firstOrNull { it.id == id } }
+    fun typedModel(id: String): String? = if (ompStart && canPickModel) ModelPanel.typedModelId(id) else null
     /**
      * The `model` a start sends: a manual pick omits the default, while a preset's default stays explicit so Model
      * Settings cannot silently replace it. A model the launcher cannot take is left out and explained by [presetLeftOut].
      */
-    val sentModel: String? get() = if (pickedTier?.model?.isNotEmpty() == true) pickedModel?.id
-        else pickedModel?.takeUnless { it.isDefault }?.id
+    val sentModel: String? get() {
+        val listed = pickedModel ?: return typedModel(model)
+        return listed.id.takeIf { !listed.isDefault || !pickedTier?.model.isNullOrEmpty() }
+    }
     /** Model configuration › New Agent's model: what runs with no pick when its launcher is the one that runs. */
-    val configuredModel: String get() = follow?.takeIf { configuredLauncher?.name == modelLauncher }
+    val configuredModel: String get() = follow?.takeIf { configuredLauncher?.name == modelLauncher && (!ompCli || following) }
         ?.purpose?.effective?.model.orEmpty()
     /** The thinking efforts the model that will run takes, weakest first; null: not known, every level is offered. */
     val modelEfforts: List<String>? get() {
@@ -230,6 +254,7 @@ internal data class NewAgentState(
     /** A preset with an explicit model or effort waits for the list that can validate it before Start becomes available. */
     val presetNeedsModels: Boolean get() {
         val tier = pickedTier ?: return false
+        if (ompCli && !ompStart) return false
         return (!tier.model.isNullOrEmpty() || !tier.effort.isNullOrEmpty()) && models.loading &&
             models.machineId == machineId && models.launcher == modelLauncher
     }
@@ -248,6 +273,12 @@ internal data class NewAgentState(
     }
 }
 
+private val nativeLauncherSources = setOf(null, "", "path", "zshrc", "builtin")
+
+/** A model selected for herdr stays on that host, including when the computer's default changes. */
+private fun NewAgentState.afterTargetChange(previous: NewAgentState): NewAgentState =
+    if (model.isNotEmpty() && previous.ompStart && !ompStart) copy(model = "", pickedTier = null) else this
+
 /**
  * The form kept consistent with the model list: a pick the list no longer has goes back to the default, and an
  * effort the model that will run does not take back to "Follow launcher".
@@ -257,7 +288,9 @@ private fun NewAgentState.settled(): NewAgentState {
     // A preset keeps its requested values so sentModel / sentEffort and presetLeftOut can explain what cannot run.
     if (pickedTier != null) return this
     val list = modelList
-    if (model.isNotEmpty() && list != null && list.models.none { it.id == model }) next = next.copy(model = "")
+    val lostOmpOverride = ompCli && !models.loading && models.error == null && !canPickModel
+    if (model.isNotEmpty() && (lostOmpOverride || (list != null && list.models.none { it.id == model } && typedModel(model) == null)))
+        next = next.copy(model = "")
     val efforts = next.modelEfforts
     if (efforts != null && next.selection.effort.isNotEmpty() && next.selection.effort !in efforts) {
         next = next.copy(selection = next.selection.copy(effort = ""))
@@ -292,7 +325,10 @@ internal class NewAgentViewModel(
     private var workspacesJob: Job? = null
     private val uploadJobs = mutableMapOf<String, Job>()
     private val uploadLimiter = ComposerUploadLimiter()
-    private var prefillPhotos = prefill?.forwardedPhotos ?: RestoredPhotos()
+    private var prefillPhotos = prefill?.forwardedPhotos.orEmpty()
+    // Parsing the route gives its cards new UI IDs. The source URL and its message ID survive that round trip.
+    private val ChatLinkContext.photoSource get() = url to msg
+    private val photoSources = mutableMapOf<String, Pair<String, String>>()
     init {
         // Whether the folder is in a Git repository, a moment after it stops changing (iOS `loadRepo`): New Agent's
         // worktree switch shows only then, and never for a tab in an existing space.
@@ -312,8 +348,7 @@ internal class NewAgentViewModel(
                 val pending = store.pending(service.scope)
                 val recents = recentSetups()
                 if (pending != null) {
-                    prefillPhotos.attachments.forEach { uploads?.discard?.invoke(it) }
-                    prefillPhotos = RestoredPhotos()
+                    discardPrefillExcept(emptySet())
                     val r = pending.request
                     // Another agent's mode and effort are its launcher's own picks (#8261), never Claude Code's.
                     val claude = r.agentType == null
@@ -323,8 +358,8 @@ internal class NewAgentViewModel(
                     val restored = pending.firstMessage ?: r.prompt.orEmpty()
                     // Its forward's card again, and the rest of the first message as it was saved: any other block and
                     // what was typed. Without a forward, the saved message is the prompt as it is.
-                    val (block, rest) = ForwardMessage.split(restored)
-                    val forward = block?.xml()
+                    val (blocks, rest) = ForwardMessage.splitAll(restored)
+                    val forward = blocks.takeIf { it.isNotEmpty() }?.joinToString("\n") { it.xml() }
                     // A start of something else keeps its first message as it was sent, other blocks included.
                     val typed = if (forward != null) rest else restored
                     mutable.value = NewAgentState(initialized = true, machineId = r.machineId,
@@ -336,6 +371,9 @@ internal class NewAgentViewModel(
                     val last = store.lastMachine(service.scope)
                     mutable.update { it.copy(initialized = true, prompt = prefill?.prompt.orEmpty(), context = prefill?.context, recentSetups = recents) }
                     machines.collect { list ->
+                        if (state.value.machineId.isNotEmpty()) mutable.update { state ->
+                            state.copy(startMachine = list.firstOrNull { it.id == state.machineId }).afterTargetChange(state)
+                        }
                         if (state.value.machineId.isEmpty() && !state.value.locked) {
                             val space = state.value.space
                             val wanted = prefill?.machineId?.takeIf { it.isNotBlank() }
@@ -374,23 +412,25 @@ internal class NewAgentViewModel(
     fun selectMachine(id: String) = load(id)
     /** Picks machine [id] with its remembered defaults, or with [setup]'s fields once its options are read. */
     private fun load(id: String, setup: RecentSetup? = null) {
-        if (state.value.locked || machines.value.none { it.id == id && it.online }) return
+        if (state.value.locked) return
+        val machine = machines.value.firstOrNull { it.id == id && it.online } ?: return
         state.value.space?.let { if (it.machineId != id) return }
         moveAttachments(id)
         machineJob?.cancel()
         browseJob?.cancel()
         modelsJob?.cancel()
-        mutable.update { it.copy(machineId = id, selection = AgentDefaults(), launchers = emptyList(), unavailable = emptyList(),
+        mutable.update { it.copy(machineId = id, startMachine = machine, selection = AgentDefaults(), launchers = emptyList(), unavailable = emptyList(),
             tiers = emptyList(), profile = null, pickedTier = null, recent = emptyList(),
             browser = null, browsing = false, loading = true, error = null, models = NewAgentModels(), model = "", pickedSetup = null,
             workspaces = emptyList(), workspace = null, folderBeforeWorkspace = "", providerMode = "", providerEffort = "") }
         val forwarded = prefillPhotos
-        if (forwarded.attachments.isNotEmpty() || forwarded.lost > 0) {
-            prefillPhotos = RestoredPhotos()
-            val lost = forwarded.lost + attach(forwarded.attachments, showLimit = false)
-            if (lost > 0) notice(AgentText(if (lost == 1) ChatR.string.chat_forward_photos_lost_one
-                else ChatR.string.chat_forward_photos_lost_other, lost))
+        prefillPhotos = emptyList()
+        var lost = 0
+        for ((ref, photos) in forwarded) {
+            lost += photos.lost + attach(photos.attachments, showLimit = false, forward = ref)
         }
+        if (lost > 0) notice(AgentText(if (lost == 1) ChatR.string.chat_forward_photos_lost_one
+            else ChatR.string.chat_forward_photos_lost_other, lost))
         loadWorkspaces(id)
         machineJob = viewModelScope.launch {
             try {
@@ -413,7 +453,11 @@ internal class NewAgentViewModel(
                         launcher = launcher),
                     model = RecentSetups.model(it.recentSetups, id, launcher),
                     error = (config as? NewAgentModelConfig.Failed)?.let { failed -> AgentText(R.string.agents_new_error_model_config, failed.reason) })
-                    .let { next -> if (setup != null) next.filled(setup) else next } }
+                    .let { next -> when {
+                        setup != null -> next.filled(setup)
+                        next.ompCli -> next.copy(model = "") // Only an explicitly chosen recent setup reuses its omp model.
+                        else -> next
+                    } } }
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { mutable.update { it.copy(loading = false, error = AgentText(R.string.agents_new_error_load)) } }
             loadModels()
@@ -442,7 +486,7 @@ internal class NewAgentViewModel(
         browseJob?.cancel()
         mutable.update { it.copy(workspace = workspace, folderBeforeWorkspace = if (it.workspace == null) it.selection.cwd else it.folderBeforeWorkspace,
             selection = it.selection.copy(cwd = workspace.cwd), browsing = false, browser = null, error = null, pickedSetup = null,
-            repo = it.repo.takeIf { _ -> workspace.cwd == it.selection.cwd }, inWorktree = false) }
+            repo = it.repo.takeIf { _ -> workspace.cwd == it.selection.cwd }, inWorktree = false).afterTargetChange(it) }
     }
     /** "Choose by folder": no workspace, the folder picked before it back, and the worktree switch off. */
     fun chooseByFolder() {
@@ -452,14 +496,15 @@ internal class NewAgentViewModel(
             else {
                 val cwd = it.folderBeforeWorkspace.ifEmpty { it.selection.cwd }
                 it.copy(workspace = null, folderBeforeWorkspace = "", selection = it.selection.copy(cwd = cwd),
-                    repo = it.repo.takeIf { _ -> cwd == it.selection.cwd }, inWorktree = false)
+                    repo = it.repo.takeIf { _ -> cwd == it.selection.cwd }, inWorktree = false).afterTargetChange(it)
             }
         }
     }
     /** A recent folder: the start goes there, by folder (any workspace picked is no longer, nor its worktree switch). */
     fun useFolder(path: String) {
         if (state.value.locked || state.value.loading) return
-        mutable.update { it.copy(workspace = null, folderBeforeWorkspace = "", inWorktree = it.inWorktree && it.workspace == null) }
+        mutable.update { it.copy(workspace = null, folderBeforeWorkspace = "", inWorktree = it.inWorktree && it.workspace == null)
+            .afterTargetChange(it) }
         selection(state.value.selection.copy(cwd = path))
     }
     /**
@@ -480,10 +525,15 @@ internal class NewAgentViewModel(
         mutable.update { it.copy(models = NewAgentModels(machine, launcher, list = it.models.list.takeIf { same }, loading = true)) }
         modelsJob = viewModelScope.launch {
             val next = try {
-                NewAgentModels(machine, launcher, list = service.launcherModels(machine, launcher, refresh))
+                val nativeOmp = current.nativeOmpLauncher
+                // Its catalogue and lock come from herdr, including on a multi-host computer.
+                val list = service.launcherModels(machine, launcher, refresh, "herdr".takeIf { nativeOmp })
+                NewAgentModels(machine, launcher, list = list)
             } catch (e: CancellationException) { throw e }
             catch (error: Exception) {
-                NewAgentModels(machine, launcher, list = state.value.models.list.takeIf { same }, error = failureReasonText(error))
+                // A previous native capability cannot authorize a pick after this node no longer confirms it.
+                val cached = state.value.models.list.takeIf { same && !current.nativeOmpLauncher }
+                NewAgentModels(machine, launcher, list = cached, error = failureReasonText(error))
             }
             mutable.update { if (it.machineId == machine && it.modelLauncher == launcher) it.copy(models = next).settled() else it }
         }
@@ -554,7 +604,7 @@ internal class NewAgentViewModel(
         val current = state.value
         if (current.locked || !current.canPickModel) return
         val entry = current.modelList?.models?.firstOrNull { it.id == id }
-        val model = entry?.takeUnless { m -> m.isDefault }?.id.orEmpty()
+        val model = if (entry == null) current.typedModel(id).orEmpty() else entry.id.takeUnless { entry.isDefault }.orEmpty()
         mutable.update { it.copy(model = model, pickedTier = if (model == it.model) it.pickedTier else null,
             error = null, pickedSetup = null).settled() }
     }
@@ -572,9 +622,23 @@ internal class NewAgentViewModel(
                 workspace = it.workspace.takeUnless { folder }, folderBeforeWorkspace = if (folder) "" else it.folderBeforeWorkspace,
                 // another folder: its repository is asked again (the switch never shows one folder's answer for another)
                 repo = it.repo.takeIf { _ -> value.cwd == it.selection.cwd })
-            (if (next.modelLauncher != it.modelLauncher) next.copy(model = "") else next).settled() }
+            (if (next.modelLauncher != it.modelLauncher) next.copy(model = "") else next.afterTargetChange(it)).settled() }
         loadModels()
     }
+    fun forwardContext(value: String?) {
+        if (state.value.locked) return
+        val remaining = ForwardMessage.readAll(value.orEmpty()).mapTo(mutableSetOf()) { it.photoSource }
+        discardPrefillExcept(remaining)
+        photoSources.filterValues { it !in remaining }.keys.forEach(::drop)
+        mutable.update { it.copy(context = value) }
+    }
+
+    private fun discardPrefillExcept(remaining: Set<Pair<String, String>>) {
+        val (keep, removed) = prefillPhotos.partition { it.ref.photoSource in remaining }
+        prefillPhotos = keep
+        removed.forEach { handoff -> handoff.photos.attachments.forEach { uploads?.discard?.invoke(it) } }
+    }
+
     fun prompt(value: String) { if (!state.value.locked) mutable.update { it.copy(prompt = value) } }
     fun ultracode(on: Boolean) { if (!state.value.locked && state.value.ultracode != on) mutable.update { it.copy(ultracode = on, error = null) } }
     /** The permission mode for a launcher that lists its own (#8261): "" its own approval, or one it lists. */
@@ -610,7 +674,7 @@ internal class NewAgentViewModel(
             pickedSetup = if (use && it.browser != null) null else it.pickedSetup,
             // a folder chosen in the browser is a start by folder (#7259)
             workspace = if (use && it.browser != null) null else it.workspace,
-            folderBeforeWorkspace = if (use && it.browser != null) "" else it.folderBeforeWorkspace) }
+            folderBeforeWorkspace = if (use && it.browser != null) "" else it.folderBeforeWorkspace).afterTargetChange(it) }
     }
     fun resume(session: Session) {
         val current = state.value
@@ -647,12 +711,13 @@ internal class NewAgentViewModel(
         }
     }
     fun submit() {
-        val current = state.value
+        val form = state.value
+        val current = form.copy(startMachine = machines.value.firstOrNull { it.id == form.machineId })
         if (!current.initialized || current.starting || current.loading || current.created != null || current.presetNeedsModels) return
         val previous = current.pending
         val agentType = current.agentType
         if (previous == null && (current.selection.cwd.isBlank() || (current.selection.launcher.isBlank() && !current.following) ||
-                machines.value.none { it.id == current.machineId && it.online } ||
+                current.startMachine?.online != true ||
                 (current.space != null && current.space.machineId != current.machineId) ||
                 (current.promptRequired && current.prompt.isBlank() && usableForward(current.context) == null) || current.attachmentsHold != null)) return
         mutable.update { it.copy(starting = true, error = null) }
@@ -785,7 +850,7 @@ internal class NewAgentViewModel(
     val notices: Flow<AgentText> = noticeChannel.receiveAsFlow()
     fun notice(text: AgentText) { noticeChannel.trySend(text) }
     /** Picked photos and files join the form and go to the computer picked, three at a time. Returns how many did not fit. */
-    fun attach(picked: List<persona.feature.chat.ComposerAttachment>, showLimit: Boolean = true): Int {
+    fun attach(picked: List<persona.feature.chat.ComposerAttachment>, showLimit: Boolean = true, forward: ChatLinkContext? = null): Int {
         val uploads = uploads
         val current = state.value
         if (uploads == null || picked.isEmpty() || current.locked || !current.takesAttachments || current.machineId.isEmpty()) {
@@ -803,6 +868,7 @@ internal class NewAgentViewModel(
         if (showLimit && refused.isNotEmpty()) notice(AgentText(
             if (refused.any { it.media }) R.string.agents_attach_photo_limit else ChatR.string.chat_composer_file_limit))
         if (accepted.isEmpty()) return refused.size
+        forward?.photoSource?.let { source -> accepted.forEach { photoSources[it.id] = source } }
         mutable.update { it.copy(attachments = it.attachments + accepted, attachedOn = it.machineId, attachNote = null) }
         accepted.forEach { upload(it.id) }
         return refused.size
@@ -832,6 +898,8 @@ internal class NewAgentViewModel(
         clearAttachments()
     }
     private fun clearAttachments() {
+        discardPrefillExcept(emptySet())
+        photoSources.clear()
         uploadJobs.values.toList().forEach { it.cancel() }
         uploadJobs.clear()
         val gone = state.value.attachments
@@ -839,12 +907,11 @@ internal class NewAgentViewModel(
         gone.forEach { uploads?.discard?.invoke(it) }
     }
     override fun onCleared() {
-        prefillPhotos.attachments.forEach { uploads?.discard?.invoke(it) }
-        prefillPhotos = RestoredPhotos()
         clearAttachments()
         super.onCleared()
     }
     private fun drop(id: String) {
+        photoSources.remove(id)
         uploadJobs.remove(id)?.cancel()
         val gone = state.value.attachments.firstOrNull { it.id == id } ?: return
         mutable.update { it.copy(attachments = it.attachments.filterNot { a -> a.id == id }) }
@@ -899,7 +966,7 @@ internal class NewAgentViewModel(
                 }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
-                if (state.value.attachedOn != machine) return@launch
+                if (state.value.attachedOn != machine || state.value.attachments.none { it.id == id }) return@launch
                 // A failed upload stays as a row with its reason and Retry; its local content is not discarded.
                 notice(uploadFailure(attachment.name, e))
                 if (attachment.image) {

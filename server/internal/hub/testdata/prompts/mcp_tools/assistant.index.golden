@@ -74,6 +74,7 @@ task_decided
 task_start_screen
 task_start_keys
 task_retry
+todo_workspace
 todo_repositories_get
 todo_repositories_set
 todo_repository_links_set

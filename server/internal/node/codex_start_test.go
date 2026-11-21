@@ -42,10 +42,6 @@ var (
 // for a new thread with the file's message appears in ~/.codex (after delay).
 func codexStartHerdr(t *testing.T, delay time.Duration) (*Node, *fakeHerdr, string, *[]string) {
 	t.Helper()
-	// This fixture models argv delivery. Windows paste delivery has its own fixture.
-	oldPaste := codexStartPaste
-	codexStartPaste = false
-	t.Cleanup(func() { codexStartPaste = oldPaste })
 	n, f, home := herdrNode(t)
 	cwd := mkdir(t, filepath.Join(home, "proj"))
 	f.reply("workspace.list", map[string]any{"workspaces": []any{map[string]any{"workspace_id": "w1", "label": "proj"}}})
@@ -93,12 +89,16 @@ func codexStartHerdr(t *testing.T, delay time.Duration) (*Node, *fakeHerdr, stri
 func withCodexLaunchers(t *testing.T, launchers map[string][]string) {
 	t.Helper()
 	launcherCache.Lock()
-	old, oldAt := launcherCache.codex, launcherCache.at
-	launcherCache.codex, launcherCache.at = launchers, time.Now()
+	old, oldAt, oldAliases := launcherCache.codex, launcherCache.at, launcherCache.codexAliases
+	aliases := make(map[string]bool, len(launchers))
+	for name := range launchers {
+		aliases[name] = true
+	}
+	launcherCache.codex, launcherCache.at, launcherCache.codexAliases = launchers, time.Now(), aliases
 	launcherCache.Unlock()
 	t.Cleanup(func() {
 		launcherCache.Lock()
-		launcherCache.codex, launcherCache.at = old, oldAt
+		launcherCache.codex, launcherCache.at, launcherCache.codexAliases = old, oldAt, oldAliases
 		launcherCache.Unlock()
 	})
 }
