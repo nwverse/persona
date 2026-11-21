@@ -305,7 +305,11 @@ func (n *Node) machineFileWrite(req proto.MachineFileWriteRequest) (*proto.Machi
 		return nil, err
 	}
 
-	// Re-verify target has not changed or escaped before atomic rename.
+	if n.machineFileWriteBeforeVerify != nil {
+		n.machineFileWriteBeforeVerify()
+	}
+
+	// Re-verify target resolves to the exact same canonical path and inode before atomic rename.
 	rechecked, err := n.realPath(absPath(res.DisplayPath))
 	if err != nil {
 		if errors.Is(err, errOffLimits) || errors.Is(err, errICloud) || errors.Is(err, errTooManyLinks) {
@@ -313,24 +317,28 @@ func (n *Node) machineFileWrite(req proto.MachineFileWriteRequest) (*proto.Machi
 		}
 		return nil, explainDenied(res.DisplayPath, n.home, err)
 	}
+	rechecked = filepath.Clean(rechecked)
 	if res.RootPath != "" && !isWithinCanonicalRoot(rechecked, res.RootPath) {
 		return nil, machineBoundaryError("path escapes the allowed root boundary")
 	}
-	now, err := os.Stat(rechecked)
+	if rechecked != res.CanonicalPath {
+		return nil, machineBoundaryError("target path changed during save")
+	}
+	now, err := os.Lstat(rechecked)
 	if err != nil {
 		return nil, explainDenied(res.DisplayPath, n.home, err)
 	}
-	if !sameFileRead(st, now) || !now.ModTime().UTC().Equal(curMtime) || now.Size() != st.Size() {
+	if !now.Mode().IsRegular() || !sameFileRead(st, now) || !now.ModTime().UTC().Equal(curMtime) || now.Size() != st.Size() {
 		return nil, machineFileChangedError(now, "")
 	}
 
-	if err := os.Rename(tmpPath, res.CanonicalPath); err != nil {
+	if err := os.Rename(tmpPath, rechecked); err != nil {
 		return nil, explainDenied(res.DisplayPath, n.home, err)
 	}
 	committed = true
-	pastRevision(res.CanonicalPath, st)
+	pastRevision(rechecked, st)
 
-	finalSt, err := os.Stat(res.CanonicalPath)
+	finalSt, err := os.Stat(rechecked)
 	if err != nil {
 		return nil, err
 	}

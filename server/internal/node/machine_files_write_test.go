@@ -227,6 +227,119 @@ func TestMachineFilesWriteCASAtomicModeAndGuards(t *testing.T) {
 	assertRPCCode(t, "write off-limits hub.json", err, proto.CodeMachineFileBoundary)
 }
 
+func TestMachineFilesWritePreRenamePathSwapRefused(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	root := filepath.Join(home, "ws")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	realTarget := filepath.Join(root, "real-target.txt")
+	if err := os.WriteFile(realTarget, []byte("original\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	altHardLink := filepath.Join(root, "alt-hardlink.txt")
+	if err := os.Link(realTarget, altHardLink); err != nil {
+		t.Skipf("hard links unsupported on this platform/fs: %v", err)
+	}
+	displayLink := filepath.Join(root, "edit-link.txt")
+	if err := os.Symlink(realTarget, displayLink); err != nil {
+		t.Skipf("symlinks unsupported on this platform/fs: %v", err)
+	}
+
+	n := &Node{home: home}
+	prev, err := n.machineFilePreview(proto.MachineFilePreviewRequest{Path: displayLink, Root: root})
+	if err != nil {
+		t.Fatalf("preview displayLink: %v", err)
+	}
+
+	// Before pre-rename re-verification, replace realTarget with unrelated external content and
+	// repoint displayLink to altHardLink (which still shares the original inode, size, mode, and mtime).
+	// Without comparing rechecked == res.CanonicalPath, sameFileRead(st, now) would pass and rename
+	// would clobber the unrelated file now sitting at res.CanonicalPath.
+	unrelatedText := "unrelated-external-content\n"
+	n.machineFileWriteBeforeVerify = func() {
+		replacement := filepath.Join(root, "unrelated-new.txt")
+		if err := os.WriteFile(replacement, []byte(unrelatedText), 0o644); err != nil {
+			t.Errorf("write replacement: %v", err)
+			return
+		}
+		if err := os.Rename(replacement, realTarget); err != nil {
+			t.Errorf("replace realTarget: %v", err)
+			return
+		}
+		if err := os.Remove(displayLink); err != nil {
+			t.Errorf("remove displayLink: %v", err)
+			return
+		}
+		if err := os.Symlink(altHardLink, displayLink); err != nil {
+			t.Errorf("repoint displayLink to altHardLink: %v", err)
+		}
+	}
+
+	_, err = n.machineFileWrite(proto.MachineFileWriteRequest{
+		Path:             displayLink,
+		Root:             root,
+		Text:             "attacker-edit\n",
+		ExpectedMtime:    prev.ModTime,
+		ExpectedSHA256:   prev.SHA256,
+		ExpectedRevision: prev.Revision,
+	})
+	assertRPCCode(t, "pre-rename display path swapped to alternate hard link", err, proto.CodeMachineFileBoundary)
+
+	if got, err := os.ReadFile(realTarget); err != nil || string(got) != unrelatedText {
+		t.Fatalf("unrelated file at original canonical path was clobbered: got=%q err=%v", string(got), err)
+	}
+	if got, err := os.ReadFile(altHardLink); err != nil || string(got) != "original\n" {
+		t.Fatalf("alternate hard link was modified: got=%q err=%v", string(got), err)
+	}
+	if left := countTempArtifacts(t, root); len(left) > 0 {
+		t.Fatalf("temp file leaked after refused pre-rename path swap: %v", left)
+	}
+
+	// Second check: replacing a non-symlink file in place with a different inode that carries the
+	// exact same size and mtime must also be refused by sameFileRead.
+	plain := filepath.Join(root, "plain.txt")
+	if err := os.WriteFile(plain, []byte("same-len!\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plainPrev, err := n.machineFilePreview(proto.MachineFilePreviewRequest{Path: plain, Root: root})
+	if err != nil {
+		t.Fatalf("preview plain: %v", err)
+	}
+	n.machineFileWriteBeforeVerify = func() {
+		other := filepath.Join(root, "plain-other.txt")
+		if err := os.WriteFile(other, []byte("DIFF-LEN!\n"), 0o644); err != nil {
+			t.Errorf("write other: %v", err)
+			return
+		}
+		if err := os.Chtimes(other, plainPrev.ModTime, plainPrev.ModTime); err != nil {
+			t.Errorf("chtimes other: %v", err)
+			return
+		}
+		if err := os.Rename(other, plain); err != nil {
+			t.Errorf("swap plain: %v", err)
+		}
+	}
+
+	_, err = n.machineFileWrite(proto.MachineFileWriteRequest{
+		Path:             plain,
+		Root:             root,
+		Text:             "edited-plain\n",
+		ExpectedMtime:    plainPrev.ModTime,
+		ExpectedSHA256:   plainPrev.SHA256,
+		ExpectedRevision: plainPrev.Revision,
+	})
+	assertRPCCode(t, "pre-rename same-size/same-mtime inode swap", err, proto.CodeFileChanged)
+	if got, err := os.ReadFile(plain); err != nil || string(got) != "DIFF-LEN!\n" {
+		t.Fatalf("swapped file at plain path was clobbered: got=%q err=%v", string(got), err)
+	}
+	if left := countTempArtifacts(t, root); len(left) > 0 {
+		t.Fatalf("temp file leaked after inode swap refusal: %v", left)
+	}
+}
+
 func TestMachineFilesCreateRenameDeleteAndGuards(t *testing.T) {
 	base := t.TempDir()
 	home := filepath.Join(base, "home")

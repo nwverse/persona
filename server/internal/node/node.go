@@ -234,9 +234,10 @@ type Node struct {
 	sysOnce    sync.Once      // system: read once (metrics.go)
 	sys        proto.System
 
-	// Streaming uploads for machine file browser (machine_files_write.go).
-	mfUps                     machineFileUploads
-	machineFileUploadMaxBytes int64 // test override (0 = proto.MachineFileUploadMaxBytes)
+	// Streaming uploads and test hooks for machine file browser (machine_files_write.go).
+	mfUps                        machineFileUploads
+	machineFileUploadMaxBytes    int64  // test override (0 = proto.MachineFileUploadMaxBytes)
+	machineFileWriteBeforeVerify func() // test hook invoked before pre-rename re-verification
 
 	// droppedResume: herdr servers (ServerID) found too old to keep a resume command, each warned about once
 	// (herdrresume.go warnDroppedResume).
