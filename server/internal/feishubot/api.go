@@ -150,6 +150,7 @@ func (c *Client) callBody(ctx context.Context, op, method, path string, payload 
 		}
 		return lastErr
 	}
+	refreshed := false             // a forced refresh is allowed once, independently of transient attempts
 	forcedFresh, waits := false, 0 // forcedFresh makes the next token fetch bypass the cache (after a tokenGone answer); waits counts backoff slots used
 	for attempt := 0; attempt < callMaxAttempts; attempt++ {
 		tok, err := c.tenantToken(ctx, forcedFresh)
@@ -213,8 +214,8 @@ func (c *Client) callBody(ctx context.Context, op, method, path string, payload 
 					}
 					retry = true
 				case env.Code != 0:
-					if tokenGone(env.Code) && attempt == 0 {
-						forcedFresh = true
+					if tokenGone(env.Code) && !refreshed && attempt+1 < callMaxAttempts {
+						refreshed, forcedFresh = true, true
 						continue // one fresh token, one immediate retry, no backoff slot spent
 					}
 					lastErr = &APIError{Op: op, Code: env.Code, Msg: env.Msg}
@@ -501,6 +502,7 @@ var ErrTooLarge = errors.New("feishu download: too large")
 func (c *Client) Resource(ctx context.Context, messageID, key, kind string, limit int64) ([]byte, string, error) {
 	u := c.domain + "/open-apis/im/v1/messages/" + url.PathEscape(messageID) + "/resources/" + url.PathEscape(key) + "?type=" + url.QueryEscape(kind)
 	var lastErr error
+	refreshed := false
 	forcedFresh, waits := false, 0
 	for attempt := 0; attempt < callMaxAttempts; attempt++ {
 		tok, err := c.tenantToken(ctx, forcedFresh)
@@ -513,8 +515,8 @@ func (c *Client) Resource(ctx context.Context, messageID, key, kind string, limi
 		switch {
 		case err == nil:
 			return b, ct, nil
-		case errors.As(err, &apiErr) && tokenGone(apiErr.Code) && attempt == 0:
-			forcedFresh = true
+		case errors.As(err, &apiErr) && tokenGone(apiErr.Code) && !refreshed && attempt+1 < callMaxAttempts:
+			refreshed, forcedFresh = true, true
 			continue // one fresh token, one immediate retry, no backoff slot spent
 		case !retry:
 			return nil, "", err
