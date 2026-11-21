@@ -13,7 +13,6 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.longClick
-import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -82,7 +81,7 @@ import persona.feature.chat.LocalChatForwarding
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "en-w400dp-h1200dp-xhdpi")
 class AssistantForwardPhotosTest {
-    @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
+    @get:Rule val rule = createAndroidComposeRule<ComponentActivity>(effectContext = kotlinx.coroutines.Dispatchers.Main)
     private val source = Session("mac", "source", title = "Source", cwd = "/source", agent = "claude", status = "idle", state = "idle")
     private val main = SessionKey("mac", "main")
     private val paths = listOf("/source/home/first.png", "/source/home/second.png")
@@ -149,6 +148,7 @@ class AssistantForwardPhotosTest {
     @Test fun blankPersonaHomeAttachesForwardedPhotosAndSendsThemInTheFirstMessage() {
         val files = Files()
         val composer = Composer()
+        val composerState = persona.feature.chat.ChatComposerState()
         val hub = Hub()
         var home by mutableStateOf(false)
         val chats = object : ChatRepository {
@@ -183,7 +183,8 @@ class AssistantForwardPhotosTest {
                                     onStaged(attachment.size ?: 0)
                                     service.upload(session, attachment.name, File(attachment.name))
                                 },
-                                mainConversationSender = hub, chatContent = { Text("chat:${it.sessionId}") })
+                                mainConversationSender = hub, chatContent = { Text("chat:${it.sessionId}") },
+                                composerState = composerState)
                         }
                     } else {
                         ChatScreen(source.key, chats, hub, interactions, sessions, onBack = {},
@@ -207,14 +208,19 @@ class AssistantForwardPhotosTest {
             files.reads.any { it == Triple(source.machineId, source.cwd, path) }
         })
         val forward = ForwardPlacements.home.single()
-        rule.waitUntil(10_000) { rule.onAllNodesWithContentDescription("Photo 1", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
-        rule.waitUntil(10_000) { composer.uploads.size == 2 }
+        fun waitMain(timeout: Long = 10_000, condition: () -> Boolean) = rule.waitUntil(timeout) {
+            // Background uploads resume through Robolectric's main dispatcher, not Compose's idle detection alone.
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            condition()
+        }
+        waitMain { composerState.attachments.size == 2 && composerState.ready }
         rule.onNodeWithContentDescription("Photo 1", useUnmergedTree = true).assertExists()
         rule.onNodeWithContentDescription("Photo 2", useUnmergedTree = true).assertExists()
         assertEquals(setOf(main to "first.png", main to "second.png"), composer.uploads.toSet())
         rule.onNode(hasSetTextAction()).performTextReplacement("Review home")
+        waitMain { runCatching { rule.onNodeWithContentDescription("Send").assertIsEnabled() }.isSuccess }
         rule.onNodeWithContentDescription("Send").assertIsEnabled().performClick()
-        rule.waitUntil(5_000) { hub.sent.isNotEmpty() }
+        waitMain(5_000) { hub.sent.isNotEmpty() }
         val expected = forward.xml() + "\n\nReview home\n\n<attached_images>\n/up/mac/first.png\n/up/mac/second.png\n</attached_images>"
         assertEquals(listOf(SessionKey("mac", "new-1") to expected), hub.sent)
     }
