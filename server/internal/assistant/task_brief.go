@@ -247,6 +247,7 @@ type taskBriefStore interface {
 	CreateTaskBrief(ctx context.Context, r db.TaskBriefRow) (bool, error)
 	PutTaskBriefState(ctx context.Context, id string, state json.RawMessage, at time.Time) (bool, error)
 	LinkTaskBriefTodo(ctx context.Context, l db.TaskBriefTodoRow) (bool, error)
+	UnlinkTaskBriefTodo(ctx context.Context, todoID string) error
 }
 
 var _ taskBriefStore = (*db.DB)(nil)
@@ -789,6 +790,21 @@ func (s *Service) linkTaskBrief(ctx context.Context, id, todoID, continues, reas
 	if _, linked := b.links[todoID]; !linked {
 		b.links[todoID] = l
 	}
+	b.mu.Unlock()
+	return nil
+}
+
+// unlinkTaskBrief takes back a continuation whose adoption failed. The durable row goes first: a failed delete leaves
+// memory matching what a restart would read rather than hiding the stale lineage only until then.
+func (s *Service) unlinkTaskBrief(ctx context.Context, todoID string) error {
+	if st := s.taskBriefDB(); st != nil {
+		if err := st.UnlinkTaskBriefTodo(ctx, todoID); err != nil {
+			return err
+		}
+	}
+	b := &s.tbriefs
+	b.mu.Lock()
+	delete(b.links, todoID)
 	b.mu.Unlock()
 	return nil
 }

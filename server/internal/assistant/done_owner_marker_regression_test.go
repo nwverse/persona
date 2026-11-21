@@ -94,6 +94,15 @@ func TestOwnerMarkerConditionalAndQuotedOccurrences(t *testing.T) {
 		{"nested only-if question does not hide a direct requirement", "The report checks only if the deploy succeeded: you need to approve the release.", verdictNeedsUser},
 		{"quoted direct requirement is historical", `The old runbook said, "Stop. You need to approve the release." That approval is already done.`, verdictDone},
 		{"quoted direct requirement does not hide a later one", `The old runbook said, "Stop. You need to roll back." You need to approve the release.`, verdictNeedsUser},
+		{"corner-quoted direct requirement is historical", `The old runbook said, 「Stop. You need to approve the release.」 That approval is already done.`, verdictDone},
+		{"corner-quoted direct requirement does not hide a later one", `The old runbook said, 「Stop. You need to roll back.」 You need to approve the release.`, verdictNeedsUser},
+		{"corner-quoted sentence period does not expose a trailing condition", `The work is complete. You need to approve the release, per the 「Stop.」 note, if the build fails.`, verdictDone},
+		{"corner-quoted sentence period does not expose a leading condition", `The work is complete. The runbook says 「Stop. If the release fails, roll it back」, but you need to approve the release.`, verdictNeedsUser},
+		{"Markdown list direct requirement", `- You need to approve the release.`, verdictNeedsUser},
+		{"Markdown ordered bold direct requirement", `1. **You need to approve the release.**`, verdictNeedsUser},
+		{"Markdown bold direct requirement", `**You need to approve the release.**`, verdictNeedsUser},
+		{"Markdown list conditional stays conditional", `- If the release fails, you need to roll it back.`, verdictDone},
+		{"Markdown emphasis does not make a narrative direct", `**The report evaluates whether you need to split the module and concludes no.**`, verdictDone},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := &cannedJSON{answer: `{"verdict":"done","reason":"finished"}`}

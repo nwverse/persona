@@ -311,7 +311,7 @@ func (s *Service) adoptAgentFor(ctx context.Context, self, supervisor string, am
 		// risky criterion therefore aborts the whole adoption instead of surviving in an unapproved open card (#5732).
 		v, err = s.continueBriefFor(ctx, self, supervisor, previous, todo, notes, doneWhen, expect)
 		if err != nil {
-			s.dropAdoption(ctx, todo.ID, err)
+			s.dropContinuation(ctx, todo.ID, err)
 			return Todo{}, false, fmt.Errorf("continue the previous task: %w", err)
 		}
 	} else {
@@ -328,7 +328,11 @@ func (s *Service) adoptAgentFor(ctx context.Context, self, supervisor string, am
 	s.restage(ctx, todo.ID, nil)
 	todo.Supervision = &v
 	if err := s.linkTodoAgent(ctx, todo.ID, am.ID, c.SessionID, title, c.Cwd, c.Agent); err != nil {
-		s.dropAdoption(ctx, todo.ID, err)
+		if continuing {
+			s.dropContinuation(ctx, todo.ID, err)
+		} else {
+			s.dropAdoption(ctx, todo.ID, err)
+		}
 		return Todo{}, false, fmt.Errorf("link the agent: %w", err)
 	}
 	s.logf("adopt %s on %s → task %s", short(c.SessionID), am.ID, todo.ID)
@@ -588,6 +592,15 @@ const (
 // taskCardBody is a task card's body: none for a task that started its Agent.
 type taskCardBody struct {
 	Wake string `json:"wake,omitempty"`
+}
+
+// dropContinuation closes an aborted takeover and removes its brief link as well. Otherwise the closed previous card
+// would forever name a card that never took over as its successor, in memory and after a restart (#5732).
+func (s *Service) dropContinuation(ctx context.Context, id string, why error) {
+	if err := s.unlinkTaskBrief(context.WithoutCancel(ctx), id); err != nil {
+		why = errors.Join(why, fmt.Errorf("take back the continuation: %w", err))
+	}
+	s.dropAdoption(ctx, id, why)
 }
 
 // dropAdoption closes the todo an adoption made when the agent could not be put on it (why), so no empty task stays.

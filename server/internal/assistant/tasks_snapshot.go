@@ -141,17 +141,26 @@ func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.Snaps
 			if a, ok := asks[t.ID]; ok {
 				ask = triageOpenAsk(&a)
 			}
+			decisionRow := []listedTodo{{Todo: t}}
+			if err := s.listDecisionReviews(ctx, decisionRow); err != nil {
+				decisionRow[0].DecisionReview = nil // a missing dismissal record fails closed: the owner wait stays
+			}
+			decision := decisionRow[0].DecisionReview
+			dismissed := decision != nil && decision.DismissalID != ""
 			atRest := st == "followup" || st == "unread" || st == "not_started"
 			switch {
-			case review == reviewNeedsUser || ask != nil && (ask.Outcome == outcomeDecide || ask.Outcome == outcomeCannot):
+			case t.Delivery.waitsForOwner() || !dismissed && (review == reviewNeedsUser || ask != nil && (ask.Outcome == outcomeDecide || ask.Outcome == outcomeCannot)):
 				st = "owner_wait"
 			case atRest && (st == "unread" || review == reviewPending || deliveryAwaitsReview(t, agents) ||
 				ask != nil && (ask.Outcome == "" || ask.Outcome == outcomeDone)):
 				st = "awaiting_review"
 			}
-			// The hub snapshot follows the same Accepted / Seen decision table as every client. In particular, reopening
-			// accepted work does not erase acceptance, and Seen files only an ordinary finished turn (#5707, #5732).
-			switch snapshotDoneRule(t, agents, ask, now, s.location(ctx)) {
+			// The hub snapshot follows the same owner / Accepted / Seen decision table as every client. In particular,
+			// dismissing a review keeps an independent delivery approval, reopening accepted work does not erase acceptance,
+			// and Seen files only an ordinary finished turn (#5707, #5732).
+			switch snapshotDoneRule(t, agents, ask, decision, now, s.location(ctx)) {
+			case ruleOwnerDecides:
+				st = "owner_wait"
 			case ruleAccepted, ruleSeen:
 				st = "done"
 			}
@@ -371,10 +380,10 @@ func taskState(t Todo, agents []proto.Session) string {
 	return "not_started"
 }
 
-// snapshotDoneRule reuses the clients' triage decision table for the two open-at-rest Done transitions the snapshot
-// needs: accepted and ordinarily Seen. Working, owner-wait, concern, open-PR and acceptance-required rows keep their
-// existing snapshot projection instead of getting a second, divergent copy of those rules here.
-func snapshotDoneRule(t Todo, agents []proto.Session, ask *todoAsk, now time.Time, loc *time.Location) string {
+// snapshotDoneRule reuses the clients' triage decision table for owner decisions and the two open-at-rest Done
+// transitions the snapshot needs: accepted and ordinarily Seen. Working, concern, open-PR and acceptance-required rows
+// keep their existing snapshot projection instead of getting a second, divergent copy of those rules here.
+func snapshotDoneRule(t Todo, agents []proto.Session, ask *todoAsk, decision *decisionReview, now time.Time, loc *time.Location) string {
 	lookup := func(machine, session string) (proto.Session, bool) {
 		for _, c := range agents {
 			if c.MachineID == machine && c.SessionID == session {
@@ -383,7 +392,7 @@ func snapshotDoneRule(t Todo, agents []proto.Session, ask *todoAsk, now time.Tim
 		}
 		return proto.Session{}, false
 	}
-	return triageTodo(listedTodo{Todo: t, Ask: ask}, lookup, now, time.Time{}, loc, false).Rule
+	return triageTodo(listedTodo{Todo: t, Ask: ask, DecisionReview: decision}, lookup, now, time.Time{}, loc, false).Rule
 }
 
 // deliveryAwaitsReview is the snapshot's unaccepted live state at rest. A new working stretch is still work in

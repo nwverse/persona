@@ -78,6 +78,28 @@ func TestSnapshotTasksUseDeliveryAndOwnerWaitStates(t *testing.T) {
 	}
 }
 
+// The assistant snapshot uses the same decision dismissal as the to-do projection. An independent delivery approval is
+// not that dismissed review and must remain an owner wait (#5732).
+func TestSnapshotDecisionDismissalKeepsIndependentDeliveryApproval(t *testing.T) {
+	at := time.Now().UTC().Add(-time.Hour)
+	e := dismissalEnv(t, &memStore{}, at, true)
+	e.s.todos.todos["task"].Origin = "conv1"
+	ctx := context.Background()
+	if got := snapshotStatesForTest(e.s, ctx)["task"]; got.State != "等你处理" {
+		t.Fatalf("undismissed control = %+v, want owner wait", got)
+	}
+	dismissReview(t, e, at)
+	if got := snapshotStatesForTest(e.s, ctx)["task"]; got.State != "还没开始" || got.Health != "你选了不处理这个决定" {
+		t.Fatalf("dismissed review projection = %+v", got)
+	}
+	e.s.todos.mu.Lock()
+	e.s.todos.todos["task"].Delivery = &TodoDelivery{State: deliveryPR, Gate: "Approve the release", Unblock: unblockUser, At: time.Now()}
+	e.s.todos.mu.Unlock()
+	if got := snapshotStatesForTest(e.s, ctx)["task"]; got.State != "等你处理" {
+		t.Fatalf("independent delivery approval was dismissed with the review: %+v", got)
+	}
+}
+
 func TestDeliveryAwaitsReviewExcludesLiveConcern(t *testing.T) {
 	live := Todo{Delivery: &TodoDelivery{State: deliveryLive, At: time.Now()}}
 	if !deliveryAwaitsReview(live, nil) {

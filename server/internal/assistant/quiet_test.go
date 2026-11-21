@@ -115,6 +115,17 @@ func TestAgentStartStopsWhenSupervisionCannotBeStored(t *testing.T) {
 	}
 }
 
+func TestDirectionTodoStopsWhenSupervisionCannotBeStored(t *testing.T) {
+	st := failingSupervisionStore{DB: todoTestDB(t)}
+	s, _ := newQuietServiceOn(t, st)
+	if _, err := s.createDirectionTodo(context.Background(), "conv1", "direction piece", "", db.TodoEdit{}); err == nil {
+		t.Fatal("createDirectionTodo succeeded without its supervision ledger")
+	}
+	if got := s.todosOf(context.Background(), "*"); len(got) != 0 {
+		t.Fatalf("failed supervision left a direction card behind: %+v", got)
+	}
+}
+
 // The caller may disconnect exactly when the ledger write fails. The prepared card still has to close on real
 // Postgres; suppressing session.start alone would otherwise leave an open, unexplained card.
 func TestTaskPlanSupervisionFailureSurvivesCallerCancellation(t *testing.T) {

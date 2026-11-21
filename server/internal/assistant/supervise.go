@@ -439,7 +439,7 @@ func taskHealth(t Todo, agents []proto.Session, now time.Time) (string, int) {
 	if v.Waits != nil { // the judge found it stopped on the owner's decision (#1277): not to be accepted as done
 		return "停下等用户拍板，别直接验收", 0 // i18n-ignore: the snapshot is the assistant's prompt
 	}
-	if snapshotDoneRule(t, agents, nil, now, now.Location()) == ruleAccepted {
+	if snapshotDoneRule(t, agents, nil, nil, now, now.Location()) == ruleAccepted {
 		// v.state masks an accepted review after reopening; acceptanceStands inside the shared triage rule still holds
 		// until a newer review. Reopened accepted work is normal, not a second delivery awaiting review (#5732).
 		return "正常", 5 // i18n-ignore: the snapshot is the assistant's prompt

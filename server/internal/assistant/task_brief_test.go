@@ -186,6 +186,12 @@ func TestRiskyTakeOverScopeAbortsAdoption(t *testing.T) {
 		if todo.DoneAt == nil {
 			t.Fatalf("aborted takeover left an open card: %+v", todo)
 		}
+		if _, linked := s.briefOfTodo(todo.ID); linked {
+			t.Fatalf("aborted takeover stayed on the previous task's brief: %+v", todo)
+		}
+	}
+	if lineage := s.taskLineage(first.ID); len(lineage) != 1 || lineage[0].SupersededBy != "" {
+		t.Fatalf("aborted takeover rewrote the previous task's lineage: %+v", lineage)
 	}
 }
 

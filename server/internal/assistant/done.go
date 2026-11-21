@@ -370,7 +370,7 @@ func ownerMarkerAfterContrast(text, lower string, at int) bool {
 
 // ownerWithoutQuotes blanks quoted text while preserving unquoted punctuation and condition words.
 func ownerWithoutQuotes(text string) string {
-	straight, curly := false, 0
+	straight, curly, corner := false, 0, 0
 	return strings.Map(func(r rune) rune {
 		switch r {
 		case '"':
@@ -384,8 +384,16 @@ func ownerWithoutQuotes(text string) string {
 				curly--
 			}
 			return ' '
+		case '「':
+			corner++
+			return ' '
+		case '」':
+			if corner > 0 {
+				corner--
+			}
+			return ' '
 		}
-		if straight || curly > 0 {
+		if straight || curly > 0 || corner > 0 {
 			return ' '
 		}
 		return r
@@ -412,7 +420,7 @@ func ownerPreviousSentenceEnd(text string) int {
 
 // ownerSentenceEnd returns the first unquoted sentence terminator at or after at, preserving original byte offsets.
 func ownerSentenceEnd(lower string, at int) int {
-	straight, curly := false, 0
+	straight, curly, corner := false, 0, 0
 	for i := at; i < len(lower); {
 		r, size := utf8.DecodeRuneInString(lower[i:])
 		switch r {
@@ -424,8 +432,14 @@ func ownerSentenceEnd(lower string, at int) int {
 			if curly > 0 {
 				curly--
 			}
+		case '「':
+			corner++
+		case '」':
+			if corner > 0 {
+				corner--
+			}
 		default:
-			if !straight && curly == 0 && strings.ContainsRune(ownerSentenceEnds, r) && !ownerDecimalPoint(lower, i) {
+			if !straight && curly == 0 && corner == 0 && strings.ContainsRune(ownerSentenceEnds, r) && !ownerDecimalPoint(lower, i) {
 				return i
 			}
 		}
@@ -434,11 +448,24 @@ func ownerSentenceEnd(lower string, at int) int {
 	return len(lower)
 }
 
+var (
+	ownerMarkdownListPrefix = lazyre.New(`^\s*(?:[-+*]\s+|\d{1,9}[.)]\s+)`)
+	ownerMarkdownEmphasis   = strings.NewReplacer("**", "", "__", "", "*", "", "_", "")
+)
+
+// ownerMarkdownLine removes presentational list and emphasis markers before the same sentence-boundary analysis runs.
+// It does not strip block quotes: those quote somebody else's words rather than presenting a new owner requirement.
+func ownerMarkdownLine(text string) string {
+	text = ownerMarkdownListPrefix.ReplaceAllString(strings.TrimSpace(text), "")
+	return ownerMarkdownEmphasis.Replace(text)
+}
+
 // directOwnerMarker reports whether any unquoted occurrence of marker starts a direct requirement at the line or a
 // sentence/clause boundary. Subordinate and narrative uses ("if …", "evaluates whether …") are not owner actions;
 // skipping one such occurrence must not suppress a later direct one. A comma inside that same if-sentence does not end
 // its conditional scope; a new sentence or an independent "otherwise" clause does (#5732).
 func directOwnerMarker(text, marker string) bool {
+	text = ownerMarkdownLine(text)
 	lower := strings.ToLower(text)
 	for from := 0; from < len(lower); {
 		i := strings.Index(lower[from:], marker)
@@ -449,7 +476,7 @@ func directOwnerMarker(text, marker string) bool {
 		before := strings.TrimSpace(lower[:i])
 		afterContrast := ownerMarkerAfterContrast(text, lower, i)
 		direct := before == "" || before == "otherwise" || strings.HasSuffix(before, " otherwise") || afterContrast
-		terminatorBefore := strings.TrimRight(before, "\"”") // a closing quote does not hide the sentence's own terminator
+		terminatorBefore := strings.TrimRight(before, "\"”」") // a closing quote does not hide the sentence's own terminator
 		terminator, _ := utf8.DecodeLastRuneInString(terminatorBefore)
 		direct = direct || strings.ContainsRune(ownerSentenceEnds, terminator)
 		if afterContrast {
@@ -754,9 +781,9 @@ func ownerResolutionSuffix(clause string) bool {
 	return false
 }
 
-// ownerMarkerQuoted reports whether byte offset at is inside straight double quotes or Chinese curly quotes.
+// ownerMarkerQuoted reports whether byte offset at is inside straight double quotes, Chinese curly quotes or corner brackets.
 func ownerMarkerQuoted(text string, at int) bool {
-	straight, curly := false, 0
+	straight, curly, corner := false, 0, 0
 	for i, r := range text {
 		if i >= at {
 			break
@@ -770,9 +797,15 @@ func ownerMarkerQuoted(text string, at int) bool {
 			if curly > 0 {
 				curly--
 			}
+		case '「':
+			corner++
+		case '」':
+			if corner > 0 {
+				corner--
+			}
 		}
 	}
-	return straight || curly > 0
+	return straight || curly > 0 || corner > 0
 }
 
 // ownerActionLine is a final reply's explicit request for the owner to act. The judge still decides the task as a

@@ -403,6 +403,28 @@ func TestTakenTopicLeavesNoTodoBehind(t *testing.T) {
 	}
 }
 
+func TestThreadOpenStopsWhenSupervisionCannotBeStored(t *testing.T) {
+	database := failingSupervisionStore{DB: todoTestDB(t)}
+	e := newThreadEnv(t, database)
+	cardsBefore := feedRefs(e.s, "m1", feedTask)
+	e.deliver(rootEvent("om_supervision_down", "发版"))
+	if got := todoCount(e.s); got != 0 {
+		t.Fatalf("failed supervision left %d todos in memory", got)
+	}
+	if rows, err := database.ListTodos(context.Background()); err != nil || len(rows) != 0 {
+		t.Fatalf("failed supervision left stored todos %+v, %v", rows, err)
+	}
+	if got := handoffs(e.f); len(got) != 0 {
+		t.Fatalf("thread open was delivered without a supervision ledger: %+v", got)
+	}
+	if got := feedRefs(e.s, "m1", feedTask); len(got) != len(cardsBefore) {
+		t.Fatalf("task cards %v, were %v", got, cardsBefore)
+	}
+	if got := lastNote(t, e.f); !strings.Contains(got, "injected supervision write failure") {
+		t.Fatalf("the topic did not get the supervision failure: %q", got)
+	}
+}
+
 // Feishu delivers a message again when it thinks it was missed: the topic opens one to-do and the main conversation gets
 // the words once.
 func TestOpeningDeliveredTwiceOpensOnce(t *testing.T) {

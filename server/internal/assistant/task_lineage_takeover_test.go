@@ -3,9 +3,13 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -148,5 +152,63 @@ func TestAgentSendAfterCloseStartsAnIndependentBrief(t *testing.T) {
 	newLineage, _ := json.Marshal(listed[current.ID]["lineage"])
 	if strings.Contains(string(oldLineage), "superseded_by") || strings.Contains(string(newLineage), "continues") {
 		t.Fatalf("unrelated work formed lineage: old=%s new=%s", oldLineage, newLineage)
+	}
+}
+
+type failingTakeoverAgentStore struct {
+	*db.DB
+	fail atomic.Bool
+}
+
+func (s *failingTakeoverAgentStore) LinkTodoAgentWithSource(ctx context.Context, todoID, machineID, sessionID, title, cwd, agent, startError, source, via string, linkedAt time.Time) ([]string, error) {
+	if s.fail.Load() {
+		return nil, errors.New("injected takeover Agent link failure")
+	}
+	return s.DB.LinkTodoAgentWithSource(ctx, todoID, machineID, sessionID, title, cwd, agent, startError, source, via, linkedAt)
+}
+
+// A continuation whose Agent cannot be linked is closed, but it must not remain in the closed task's durable lineage.
+func TestFailedTakeoverAgentLinkRollsBackLineage(t *testing.T) {
+	st := &failingTakeoverAgentStore{DB: todoTestDB(t)}
+	s, f, old := newSupervisedServiceOn(t, st)
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	raw, _ := json.Marshal(map[string]any{"todo_id": old.ID, "verdict": "accepted", "note": "Spec 已验收", "checks": completeReviewChecks(todoNow(s, old.ID))})
+	if _, err := s.runTool(context.Background(), "server", "conv1", "task_review", raw); err != nil {
+		t.Fatal(err)
+	}
+	machine, ok := s.device(context.Background(), "box")
+	if !ok {
+		t.Fatal("task machine is missing")
+	}
+	agent, ok := s.session(context.Background(), "box", "s1")
+	if !ok {
+		t.Fatal("task agent is missing")
+	}
+	st.fail.Store(true)
+	if _, made, err := s.adoptAgent(context.Background(), "conv1", machine, agent, "接手实现", "", "换 Agent 接手实现", nil, 0, true); err == nil || made {
+		t.Fatalf("adopt with a failed Agent link: made %v, err %v", made, err)
+	}
+	if lineage := s.taskLineage(old.ID); len(lineage) != 1 || lineage[0].SupersededBy != "" {
+		t.Fatalf("failed takeover rewrote the previous task's lineage: %+v", lineage)
+	}
+	for _, todo := range s.todosOf(context.Background(), "*") {
+		if todo.ID == old.ID {
+			continue
+		}
+		if todo.DoneAt == nil {
+			t.Fatalf("failed takeover left an open card: %+v", todo)
+		}
+		if _, linked := s.briefOfTodo(todo.ID); linked {
+			t.Fatalf("failed takeover stayed on the previous task's brief: %+v", todo)
+		}
+	}
+	_, links, err := st.ListTaskBriefs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, link := range links {
+		if link.Continues == old.ID {
+			t.Fatalf("failed takeover left a durable continuation: %+v", link)
+		}
 	}
 }

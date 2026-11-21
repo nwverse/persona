@@ -153,6 +153,8 @@ func TestJudgeTaskDoneWithDetectsOwnerActionInTheReply(t *testing.T) {
 		{"quoted and resolved Chinese direct operation", "我回答了用户“需要你本人操作批准发布。”；无需进一步操作。", verdictDone, ""},
 		{"quoted and resolved Chinese direct start", "历史记录写着“由你发起发布。”；该事项已解决。", verdictDone, ""},
 		{"quoted Chinese direct operation does not hide a later requirement", "历史记录写着“需要你本人操作回滚。”；需要你本人操作批准发布。", verdictNeedsUser, "需要你本人操作批准发布"},
+		{"corner-quoted and resolved Chinese direct operation", "我回答了用户「需要你本人操作批准发布。」；无需进一步操作。", verdictDone, ""},
+		{"corner-quoted Chinese direct operation does not hide a later requirement", "历史记录写着「需要你本人操作回滚。」；需要你本人操作批准发布。", verdictNeedsUser, "需要你本人操作批准发布"},
 		{"straight-quoted and resolved Chinese choice", "我回答了用户\"要不要继续？\"；无需进一步操作。", verdictDone, ""},
 		{"resolved Chinese sentence does not hide a later direct question", "我回答了。要不要继续？", verdictNeedsUser, "要不要继续"},
 		{"resolved Chinese clause does not hide a later direct question", "我回答了上一个问题，要不要继续？", verdictNeedsUser, "要不要继续"},
