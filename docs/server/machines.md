@@ -402,7 +402,7 @@ The retired native Mac app showed this section through the shared iOS view and r
 - **Group by feature** (`FEATURES` in `web/src/lib/node-health.ts`): phone approval cards (`node.sock`, claude / assistant settings and hooks, `command-paths`), state and notifications (`node.sock`, `command-paths`), terminal and engine (`herdr`), MCP tools (`node.sock`, `mcp.json`, `command-paths`), skills (`agent-plugin`, `claude-version`), runtime integrations (`runtime.sock`).
   Each feature takes its worst check: any `fail` → **Has issues**, any `warn` → **Partly available**, all normal → **Ready**. Terminal/engine and runtime integration are optional: warn-only means **Not enabled** (in **Not set up: …**, not counted as needing attention),
   except when this computer uses herdr (including herdr + Herdr App, and no selection defaults to herdr), unreachable herdr means **Has issues**. Unmapped extra checks reported by node go to **Other checks** if abnormal, never hidden.
-  `global-permission-hooks` (user's synchronous PermissionRequest hooks) is not a feature; displayed as an informational line below features, read-only.
+  `global-permission-hooks` (user's synchronous PermissionRequest hooks) is not a feature; displayed as an informational line below features, read-only, when not ok. Hooks of extensions installed on that computer alone are ok, so they show no line (#11973).
   `launchd-process-type` (Mac) and `path-access` (#5944) are in no feature either: when not fine they show under **Other checks** with the node's hint. Their state is empty, so **Fix** doesn't offer them: reloading the LaunchAgent from inside the node would stop it, and only `personad node doctor --fix` on that Mac does it.
 - **UI**: **Everything works** or **N feature(s) need attention** at top (Moshi wording), then **Not set up: …**; **View all checks (N)** expands individual state, name, finding, remedy and differing files; **Check again**;
   **Fix** appears for generated files marked `stale` / `missing`, with confirmation listing files to rewrite and stating that user Claude Code settings won't change. Check once on opening, no polling.
@@ -496,6 +496,13 @@ The one other live edit of an entry is its kind, from `ssh` to `link` and back (
 - When the kind changes, the manager replaces the machine (`sameConfig` sees a change), which ends the SSH connection. The new
   machine then waits for Persona Link. Everything kept by id stays: pins, mutes, trust, engine choice, sessions, metrics, usage and
   `node.deploy.<id>`.
+
+The iPhone / iPad client decodes the optional `link_switch` in `apple/Shared/Models.swift` and starts through `APIClient`; an absent
+field is the older-hub gate. `MachineLinkSwitchStore` keeps one attempt per `MachineRef` across detail-page remounts and reconciles
+the accepted answer with pushed/read machine snapshots. Settled attempts expire after two minutes; an uncertain answer never reposts
+automatically, while a new explicit confirmation may follow the hub's unchanged eligibility. `MachineLinkSwitchView` is the
+advanced-detail card; its expected-disconnect guard also suppresses the ordinary offline explanation and Reconnect while the switch
+runs (#10671).
 
 ## API
 

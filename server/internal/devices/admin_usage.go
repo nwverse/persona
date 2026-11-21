@@ -173,7 +173,7 @@ func applyUsageInput(s UsageSourceConfig, in usageSourceInput, isNew bool) (Usag
 	if in.Type != nil {
 		s.Type = strings.TrimSpace(*in.Type)
 	}
-	if s.Type != usagesource.TypeRelay && s.Type != usagesource.TypeGeneric {
+	if !usagesource.Known(s.Type) {
 		return s, "invalid_type", i18n.Err("hub-admin_usage.invalid_type")
 	}
 	if in.URL != nil {
@@ -187,7 +187,7 @@ func applyUsageInput(s UsageSourceConfig, in usageSourceInput, isNew bool) (Usag
 	if in.Name != nil {
 		s.Name = strings.TrimSpace(*in.Name)
 	}
-	if s.Name == "" && s.Type == usagesource.TypeRelay {
+	if s.Name == "" && s.Type != usagesource.TypeGeneric { // both relay types read a relay
 		s.Name = "Relay"
 	}
 	if !validUsageName(s.Name) {
@@ -209,7 +209,7 @@ func applyUsageInput(s UsageSourceConfig, in usageSourceInput, isNew bool) (Usag
 			return s, "key_required", i18n.Err("hub-admin_usage.key_required")
 		}
 	}
-	if s.Key == "" && s.Type == usagesource.TypeRelay {
+	if s.Key == "" && usageKeyRequired(s.Type) {
 		return s, "key_required", i18n.Err("hub-admin_usage.key_required")
 	}
 	if in.Enabled != nil {
@@ -217,6 +217,12 @@ func applyUsageInput(s UsageSourceConfig, in usageSourceInput, isNew bool) (Usag
 		s.Enabled = &on
 	}
 	return s, "", nil
+}
+
+// usageKeyRequired: a relay answers neither of its reads without a key (its management key for relay, an ordinary API
+// key for relay_key); a generic gateway may need none.
+func usageKeyRequired(t string) bool {
+	return t == usagesource.TypeRelay || t == usagesource.TypeRelayKey
 }
 
 // sameUsageURL is a saved address as the page compares it: normalized, or as written when it does not parse (it then
@@ -430,7 +436,7 @@ func (d *Devices) adminUsageRoutes(mux *http.ServeMux) {
 			return
 		}
 		cfg := usagesource.Config{Type: strings.TrimSpace(in.Type), URL: in.URL, Key: strings.TrimSpace(in.Key)}
-		if cfg.Type != usagesource.TypeRelay && cfg.Type != usagesource.TypeGeneric {
+		if !usagesource.Known(cfg.Type) {
 			writeErrCode(w, http.StatusBadRequest, "invalid_type", i18n.Err("hub-admin_usage.invalid_type"))
 			return
 		}
@@ -469,7 +475,11 @@ func (d *Devices) adminUsageRoutes(mux *http.ServeMux) {
 			writeJSON(w, map[string]any{"ok": false, "code": usagesource.CodeOf(err)})
 			return
 		}
-		writeJSON(w, map[string]any{"ok": true, "accounts": res.Seen.Accounts, "windows": res.Seen.Windows, "listed": res.Seen.Listed, "providers": res.Seen.Providers})
+		answer := map[string]any{"ok": true, "accounts": res.Seen.Accounts, "windows": res.Seen.Windows, "listed": res.Seen.Listed, "providers": res.Seen.Providers}
+		if res.Seen.QuotaHidden { // the gateway answered but shows this key no account quota: the page says so, not "0 accounts"
+			answer["quota_hidden"] = true
+		}
+		writeJSON(w, answer)
 	})
 }
 

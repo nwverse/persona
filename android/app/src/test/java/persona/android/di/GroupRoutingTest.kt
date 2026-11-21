@@ -46,6 +46,8 @@ class GroupRoutingTest {
         // So are alert ids (#5614): the same id from two hubs replaces nothing on the other's.
         assertEquals("p1~g0a1b2c3d", (other.event(NotifyEvent("alert", "", "", id = "p1")) as NotifyEvent).id)
         assertEquals("i1", GroupKeys.raw(interaction.id))
+        assertEquals(Interaction("i1", "macbook", "s1"), other.rawInteraction(interaction))
+        assertSame(interaction, primary.rawInteraction(interaction))
         val events: List<ServerEvent> = listOf(ItemsEvent("m", "s"), SessionsEvent("m", listOf(Session("m", "s"))),
             MachinesEvent(listOf(Machine("m"))), RevsEvent("m"), InteractionEvent(Interaction("i", "m", "s")),
             NotifyEvent("done", "m", "s"), DeltaEvent("m", "s"), ScreenEvent("m", "s"), HookEvent("m", "s"),
@@ -122,7 +124,7 @@ class GroupRoutingTest {
         assertEquals(listOf("download macbook a.mp3", "stat macbook", "thumbnail macbook a.pdf 256", "convert macbook a.docx", "preview macbook a.mp4"), calls)
     }
 
-    /** Renaming and trashing (docs/protocol/protocol.md "Changing files"): both wrappers pass them on, or the app only ever sees the interface's "not supported". */
+    /** Both wrappers forward the file changes supported by the hub. */
     private class EditingFiles(val calls: MutableList<String>) : SessionFiles {
         override suspend fun directory(machineId: String, cwd: String, path: String) = error("unused")
         override suspend fun file(machineId: String, cwd: String, path: String) = error("unused")
@@ -132,6 +134,8 @@ class GroupRoutingTest {
         override suspend fun show(machineId: String, cwd: String, hash: String) = error("unused")
         override fun editsFiles(machineId: String) = true.also { calls += "edits $machineId" }
         override suspend fun rename(machineId: String, cwd: String, path: String, name: String) = "~/b".also { calls += "rename $machineId $path $name" }
+        override suspend fun move(machineId: String, cwd: String, path: String, directory: String, conflict: SessionMoveConflictPolicy?) =
+            SessionMovedFile(path, "$directory/a").also { calls += "move $machineId $cwd $path $directory $conflict" }
         override suspend fun trash(machineId: String, cwd: String, paths: List<String>) =
             listOf(SessionTrashedFile(paths.single(), "t1")).also { calls += "trash $machineId ${paths.single()}" }
         override suspend fun restore(machineId: String, trashIds: List<String>) = listOf("~/a").also { calls += "restore $machineId ${trashIds.single()}" }
@@ -140,6 +144,7 @@ class GroupRoutingTest {
     private suspend fun SessionFiles.editAll(machineId: String) {
         assertTrue(editsFiles(machineId))
         assertEquals("~/b", rename(machineId, "/w", "~/a", "b"))
+        assertEquals(SessionMovedFile("~/a", "~/folder/a"), move(machineId, "/w", "~/a", "~/folder", SessionMoveConflictPolicy.KeepBoth))
         assertEquals(listOf("t1"), trash(machineId, "/w", listOf("~/a")).map { it.trashId })
         assertEquals(listOf("~/a"), restore(machineId, listOf("t1")))
     }
@@ -147,7 +152,7 @@ class GroupRoutingTest {
     @Test fun anotherGroupsFileEditsReachItsMachineByThePlainId() = runBlocking<Unit> {
         val calls = mutableListOf<String>()
         EditingFiles(calls).inGroup(other).editAll("macbook~g0a1b2c3d")
-        assertEquals(listOf("edits macbook", "rename macbook ~/a b", "trash macbook ~/a", "restore macbook t1"), calls)
+        assertEquals(listOf("edits macbook", "rename macbook ~/a b", "move macbook /w ~/a ~/folder KeepBoth", "trash macbook ~/a", "restore macbook t1"), calls)
     }
 
     @Test fun theMergedFilesSendEditsToTheMachinesGroup() = runBlocking<Unit> {
@@ -161,11 +166,11 @@ class GroupRoutingTest {
         }
         merged.editAll("macbook")
         merged.editAll("studio~g0a1b2c3d")
-        assertEquals(listOf("edits macbook", "rename macbook ~/a b", "trash macbook ~/a", "restore macbook t1"), home)
-        assertEquals(listOf("edits studio", "rename studio ~/a b", "trash studio ~/a", "restore studio t1"), work)
+        assertEquals(listOf("edits macbook", "rename macbook ~/a b", "move macbook /w ~/a ~/folder KeepBoth", "trash macbook ~/a", "restore macbook t1"), home)
+        assertEquals(listOf("edits studio", "rename studio ~/a b", "move studio /w ~/a ~/folder KeepBoth", "trash studio ~/a", "restore studio t1"), work)
         // No open group: not offered, and a change fails as offline.
         assertFalse(merged.editsFiles("mini~gffffffff"))
-        try { merged.trash("mini~gffffffff", "/w", listOf("a")); fail("Expected offline") }
+        try { merged.move("mini~gffffffff", "/w", "~/a", "~/folder"); fail("Expected offline") }
         catch (failure: HubFailure) { assertEquals(HubError.NoNetwork, failure.kind) }
     }
     @Test fun keptMessageActionsReachTheirGroupWithPlainSessionIds() = runBlocking<Unit> {
@@ -210,6 +215,7 @@ class GroupRoutingTest {
 
     @Test fun creatingAnAgentReachesTheGroupWithItsPlainMachineAndComesBackSuffixed() = runBlocking<Unit> {
         var requested: AgentStartRequest? = null
+        var modelQuery: Triple<String, String, String?>? = null
         val service = object : AgentCreationService {
             override val scope = "hub/gen"
             override suspend fun launchers(machineId: String) = listOf(AgentLauncher(machineId))
@@ -223,6 +229,10 @@ class GroupRoutingTest {
             override suspend fun operation(operationId: String) = AgentStartResult.Pending
             override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean) =
                 LauncherModels(machineId, listOf(AgentModel(launcher)))
+            override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean, host: String?): LauncherModels {
+                modelQuery = Triple(machineId, launcher, host)
+                return LauncherModels(launcher)
+            }
         }
         val wrapped = service.inGroup(other)
         assertEquals("m", wrapped.launchers("m~g0a1b2c3d").single().name)
@@ -230,6 +240,10 @@ class GroupRoutingTest {
         assertEquals(AssistantLaunchers(listOf(AgentLauncher("m")), unavailable = listOf(UnavailableLauncher("left-m", code = "launcher_own_service"))),
             wrapped.launcherList("m~g0a1b2c3d"))
         assertEquals(LauncherModels("m", listOf(AgentModel("claude"))), wrapped.launcherModels("m~g0a1b2c3d", "claude"))
+        val merged = mergedAgentsState(listOf(primary, other),
+            listOf(AgentsWiringState("a"), AgentsWiringState("b", creation = wrapped)), 0)
+        assertEquals(LauncherModels("omp"), requireNotNull(merged.creation).launcherModels("m~g0a1b2c3d", "omp", false, "herdr"))
+        assertEquals(Triple("m", "omp", "herdr"), modelQuery)
         val created = wrapped.start(AgentStartRequest("m~g0a1b2c3d", "/", "claude"), "op") as AgentStartResult.Created
         assertEquals("m", requested!!.machineId)
         assertEquals(SessionKey("m~g0a1b2c3d", "new"), created.session.key)
@@ -299,6 +313,23 @@ class GroupRoutingTest {
         assertEquals("s+s", merged.scope)
     }
 
+    @Test fun aTargetedSessionRefreshReadsOnlyItsHubAndKeepsThatHubsFailure() = runBlocking<Unit> {
+        val calls = mutableListOf<String>()
+        val failed = assertThrows(java.io.IOException::class.java) {
+            runBlocking {
+                refreshOwnedSessions("macbook~g0a1b2c3d") { namespace, raw ->
+                    calls += "$namespace:$raw"
+                    // Another hub's healthy all-hubs refresh must not turn this owning-hub failure into success.
+                    throw java.io.IOException("owning hub unavailable")
+                }
+            }
+        }
+        assertEquals("owning hub unavailable", failed.message)
+        assertEquals(listOf("g0a1b2c3d:macbook"), calls)
+        refreshOwnedSessions("macbook") { namespace, raw -> calls += "$namespace:$raw" }
+        assertEquals(listOf("g0a1b2c3d:macbook", "null:macbook"), calls)
+    }
+
     /** A hub's machine management that records what it was asked (plain ids only), as a group's fake hub. */
     private class FakeMachines(val hub: String) : MachineManagement {
         val calls = mutableListOf<String>()
@@ -306,6 +337,8 @@ class GroupRoutingTest {
         override suspend fun launcherQuota(machineId: String, name: String, refresh: Boolean) =
             persona.core.contracts.api.LauncherQuotaAnswer(machine = machineId).also { calls += "quota $machineId $name $refresh" }
         override suspend fun reconnect(machineId: String) { calls += "reconnect $machineId" }
+        override suspend fun startLinkSwitch(machineId: String) =
+            MachineLinkSwitch(available = false, phase = "checking").also { calls += "link switch $machineId" }
         override suspend fun deploy(machineId: String) { calls += "deploy $machineId" }
         override suspend fun herdr(machineId: String) = HerdrState(false, false, true).also { calls += "herdr $machineId" }
         override suspend fun startHerdr(machineId: String) = HerdrState(false, true, true).also { calls += "start herdr $machineId" }
@@ -342,6 +375,7 @@ class GroupRoutingTest {
                 if (other.owns(machineId)) call(work.inGroup(other)) else call(home.inGroup(primary))
         })
         managed.reconnect("macbook~g0a1b2c3d")
+        assertEquals("checking", managed.startLinkSwitch("macbook~g0a1b2c3d").phase)
         managed.deploy("macbook~g0a1b2c3d")
         managed.launchers("macbook~g0a1b2c3d")
         managed.claudeSettings("macbook~g0a1b2c3d")
@@ -355,7 +389,7 @@ class GroupRoutingTest {
         assertEquals(HerdrState(false, false, true), managed.herdr("macbook~g0a1b2c3d"))
         assertEquals(HerdrState(false, true, true), managed.startHerdr("macbook~g0a1b2c3d"))
         val changed = managed.setEngine("macbook~g0a1b2c3d", "orca")
-        assertEquals(listOf("reconnect macbook", "deploy macbook", "launchers macbook", "settings macbook",
+        assertEquals(listOf("reconnect macbook", "link switch macbook", "deploy macbook", "launchers macbook", "settings macbook",
             "quota macbook cc_main true", "set macbook model", "codex settings macbook", "set codex macbook model",
             "agy settings macbook", "set agy macbook toolPermission",
             "herdr macbook", "start herdr macbook", "engine macbook orca"), work.calls)

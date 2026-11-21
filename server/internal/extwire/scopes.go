@@ -53,9 +53,12 @@ var RouteScopes = map[string]string{
 	"GET /api/v1/assistant/leaders":                              ScopeLeadersRead,
 	"GET /api/v1/assistant/dispatch-policy":                      ScopeAssistantDispatchPolicy,
 	"PUT /api/v1/assistant/dispatch-policy":                      ScopeAssistantDispatchPolicy,
+	"GET /api/v1/assistant/dispatch-guard":                       ScopeDispatchGuard,
+	"PUT /api/v1/assistant/dispatch-guard":                       ScopeDispatchGuard,
 	"GET /api/v1/assistant/worker-presets":                       ScopeAssistantStartDefaults,
 	"GET /api/v1/assistant/start-defaults":                       ScopeAssistantStartDefaults,
 	"PUT /api/v1/assistant/start-defaults":                       ScopeAssistantStartDefaults,
+	"POST /api/v1/assistant/start-defaults/preview":              ScopeAssistantStartDefaults,
 	"GET /api/v1/sessions/archived":                              ScopeAgentsRead,
 	"GET /api/v1/sessions":                                       ScopeAgentsRead,
 	"GET /api/v1/sessions/{mid}/{sid}/info":                      ScopeAgentsRead,
@@ -96,6 +99,7 @@ var RouteScopes = map[string]string{
 	"POST /api/v1/notify":                                        ScopeNotify,
 	"GET /api/v1/push/intercepts":                                ScopeNotify, // read-only: pushes ln mode held back, including an extension's own
 	"GET /api/v1/push/ln-mode":                                   ScopeNotify, // read-only: the switch state; the PUT stays full credentials only
+	"GET /api/v1/push/grading":                                   ScopeNotify, // read-only alias of the switch state; the PUT stays full credentials only
 	"GET /api/v1/push/stats/daily":                               ScopeNotify, // read-only: delivered/held counts per day, an extension sees its own manager only
 	"GET /api/v1/assistant":                                      ScopeAssistantAsk,
 	"GET /api/v1/assistant/capabilities":                         ScopeAssistantAsk,
@@ -122,12 +126,17 @@ var RouteScopes = map[string]string{
 	"GET /api/v1/todos/{id}/decisions":                             ScopeTodosRead,
 	"GET /api/v1/todos/{id}/timeline":                              ScopeTodosRead,
 	"POST /api/v1/todos":                                           ScopeTodosWrite,
+	"POST /api/v1/decisions":                                       ScopeDecisionsRaise,
+	"GET /api/v1/decisions/{id}":                                   ScopeDecisionsRaise,
+	"POST /api/v1/decisions/{id}/withdraw":                         ScopeDecisionsRaise,
 	"PATCH /api/v1/todos/{id}":                                     ScopeTodosWrite,
 	"POST /api/v1/todos/{id}/decisions":                            ScopeTodosWrite,
 	"PUT /api/v1/todos/{id}/agents/{mid}/{sid}":                    ScopeTodosWrite,
 	"DELETE /api/v1/todos/{id}/agents/{mid}/{sid}":                 ScopeTodosWrite,
 	"PUT /api/v1/todos/{id}/spaces/{mid}/{space...}":               ScopeTodosWrite,
 	"DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}":            ScopeTodosWrite,
+	// The only market route an extension token may call: its own install record chooses the market, never the request.
+	"POST /api/v1/extensions/-/self/market/refresh": ScopeMarketRefreshOwn,
 	// Another extension's own HTTP: the scope names which (ExtensionCallScope).
 	"/api/v1/extensions/{id}/": ScopeCallPrefix,
 }

@@ -1,4 +1,4 @@
-# Engines: herdr, Herdr App, Orca, Tern, Paseo, Cindy
+# Engines: herdr, Herdr App, Orca, Tern, Rex, Paseo, Cindy
 
 **One engine per computer**: Persona sees and drives Claude Code / Codex through an engine. Each computer selects one; Agents shows live sessions only from it.
 Sessions elsewhere (other engines, ordinary terminals) appear only as "Not running" history. Default herdr preserves existing machines without an explicit choice.
@@ -12,7 +12,7 @@ On computers with **botmux**, its sessions appear alongside the selected engine 
 
 ## Host sets (#2576)
 
-A computer can **enable several engines at once**, any combination of herdr, Herdr App, Orca, Tern, Paseo and Cindy, or none at all, plus a **default engine**:
+A computer can **enable several engines at once**, any combination of herdr, Herdr App, Orca, Tern, Rex, Paseo and Cindy, or none at all, plus a **default engine**:
 where new sessions started from the phone go. A retired session resumes in its previous terminal host while that host remains enabled;
 an explicit host selection overrides it. Other offline sessions use the default host. Each single choice above is a special case of a set: herdr is `{herdr}`, and
 "herdr + Herdr App" is `{herdr, herdr-core}` with herdr the default. API and storage: `docs/protocol/protocol.md` "Engines" ("Host sets").
@@ -77,6 +77,7 @@ iOS and Android also offer "No Terminal Engine", the empty set, last in Choose E
 | `herdr-both` | herdr + Herdr App | Both above | Both runtimes detected |
 | `orca` | Orca | Terminals and native Claude chats (structured sessions) in Orca desktop app, or its remote runtime launched here over SSH by Orca on another computer | Orca desktop / remote runtime running, with a Persona-compatible version |
 | `tern` | Tern | Terminal blocks in Tern's sessions, in any of its windows ("Tern" below) | `tern` found (PATH, `~/.local/bin`, the app bundle) and its session daemon answering `tern inspect` |
+| `rex` | Rex | Terminal blocks in Rex's sessions and windows ("Rex" below) | `rex` found (PATH, `~/.local/bin`, macOS Application Support / app bundle) and `rex --autostart=false api call server.status` answering |
 | `paseo` | Paseo | Paseo Agents (desktop app, `paseo` command; Claude Code, Codex, ACP all count) | Paseo daemon running; address in its home's `paseo.pid` responds |
 | `cindy` | Cindy | Cindy Agents (desktop app and `cindy-host`; Claude Code, Codex, Pi) | Cindy installed, running, or its loopback host endpoint / profile database present |
 
@@ -100,19 +101,19 @@ iOS / Android have both entry points (Android Machines is under Agents: **List s
 
 ## Capabilities by engine
 
-| Capability | herdr | Herdr App | Orca | Tern | Paseo |
-| --- | --- | --- | --- | --- | --- |
-| List sessions, show state (Needs you / Working / Unread) | Yes | Yes | Yes (polls each second) | Yes (`tern events` pushes changes) | Yes (Paseo pushes changes) |
-| Send messages (multiline as one message) | Yes | Yes | Yes | Yes | Yes (while working, injects into current turn) |
-| Keys (Enter, Esc, arrows…), interrupt | Yes | Yes | Yes | Yes | Interrupt only |
-| Answer dialogs (permissions, options) | Yes | Yes (screen-based) | Yes (screen-based) | Yes (screen-based) | Yes (cards, also answerable in Paseo app) |
-| Close sessions from phone | Yes | Yes | Yes | Yes | Backend supports archiving in Paseo; app button currently only for terminal sessions |
-| Create sessions from phone; Resume a stopped one from its terminal page (a message does not, #4754) | Yes | Yes (a new tab in the Herdr App space for the directory, #2532) | Yes (create; resume a stopped Claude session, #5548) | Yes | Yes (each Paseo provider is a launcher; a message continues a Paseo session) |
-| Create a worktree from a workspace ([terminal.md](terminal.md), "23. New worktree…") | Yes (herdr 0.9 creates it; older versions fall back to git) | Yes (Persona falls back to git and opens a Herdr App space) | Yes (Orca creates it under the original workspace and owns the checkout directory) | No | Yes on the web (Paseo creates it in its own worktrees folder as a Paseo workspace, #6295, and deletes one it made, #6297; `docs/integrations/paseo.md` ("Spaces and workspaces")) |
-| Rename spaces / tabs | Yes | Yes (written into Herdr App's layout) | No | Yes | Spaces (Paseo's projects) and workspace titles on the web, #6297; no tabs (backend supports session names; app button currently only for terminal sessions) |
-| Live terminal, phone takeover | Yes | No | No | No | No (no terminal) |
-| Colored screen reads, draft detection | Yes | No (plain text, dialogs only) | No (plain text, dialogs only) | Yes | No (no terminal) |
-| Change permission mode / thinking effort | Yes | Supported, untested | Supported, untested | Supported, untested | Yes (end-to-end tested) |
+| Capability | herdr | Herdr App | Orca | Tern | Rex | Paseo |
+| --- | --- | --- | --- | --- | --- | --- |
+| List sessions, show state (Needs you / Working / Unread) | Yes | Yes | Yes (polls each second) | Yes (`tern events` pushes changes) | Yes (`rex events --all --json` pushes changes) | Yes (Paseo pushes changes) |
+| Send messages (multiline as one message) | Yes | Yes | Yes | Yes | Yes (`block.event` paste + `enter`) | Yes (while working, injects into current turn) |
+| Keys (Enter, Esc, arrows…), interrupt | Yes | Yes | Yes | Yes | Yes (`rex send-key`) | Interrupt only |
+| Answer dialogs (permissions, options) | Yes | Yes (screen-based) | Yes (screen-based) | Yes (screen-based) | Yes (screen-based) | Yes (cards, also answerable in Paseo app) |
+| Close sessions from phone | Yes | Yes | Yes | Yes | Yes (`block.close` / `session.close_window`) | Backend supports archiving in Paseo; app button currently only for terminal sessions |
+| Create sessions from phone; Resume a stopped one from its terminal page (a message does not, #4754) | Yes | Yes (a new tab in the Herdr App space for the directory, #2532) | Yes (create; resume a stopped Claude session, #5548) | Yes | Yes (`session.create` / `session.new_window` with `focus: false`) | Yes (each Paseo provider is a launcher; a message continues a Paseo session) |
+| Create a worktree from a workspace ([terminal.md](terminal.md), "23. New worktree…") | Yes (herdr 0.9 creates it; older versions fall back to git) | Yes (Persona falls back to git and opens a Herdr App space) | Yes (Orca creates it under the original workspace and owns the checkout directory) | No | No (git fallback) | Yes on the web (Paseo creates it in its own worktrees folder as a Paseo workspace, #6295, and deletes one it made, #6297; `docs/integrations/paseo.md` ("Spaces and workspaces")) |
+| Rename spaces / tabs | Yes | Yes (written into Herdr App's layout) | No | Yes | Yes (`session.set_label` / `session.set_window_label`) | Spaces (Paseo's projects) and workspace titles on the web, #6297; no tabs (backend supports session names; app button currently only for terminal sessions) |
+| Live terminal, phone takeover | Yes | No | No | No | No | No (no terminal) |
+| Colored screen reads, draft detection | Yes | No (plain text, dialogs only) | No (plain text, dialogs only) | Yes | Yes (`rex capture --format=vt`) | No (no terminal) |
+| Change permission mode / thinking effort | Yes | Supported, untested | Supported, untested | Supported, untested | Supported, untested | Yes (end-to-end tested) |
 
 Windows: herdr has native Windows support since 0.9.5; except live terminal, capabilities match above. Orca works too. See [windows.md](../operations/windows.md), "herdr."
 
@@ -248,7 +249,7 @@ workspace behavior.
   block's foreground process, four at a time: `claude`, `codex` (also behind `node` / `bun`). A shell or classic herdr's client in front is no agent
   of Tern's (herdr run in a Tern tab keeps its own panes). Tern reports no agent state, and its own `working` flag misses Claude thinking quietly:
   a Claude's state is the status Claude Code keeps in its `sessions/<pid>.json` (busy, idle, shell when idle with a background command running, or waiting on a dialog of its own), else its transcript
-  and hooks as on the other hosts (`docs/protocol/agent-states.md`, "Claude in a Tern block").
+  and hooks as on the other hosts (`docs/protocol/agent-states.md`, "Claude in a Tern or Rex block").
 - **Changes**: `tern events` for the first window (blocks spawned, exited or closed, layouts, titles, working directories, bells; a bell is urgent).
   The node still snapshots every 10 seconds, which covers other windows. Every `tern` call is a client of its own, so the `client_*` events are
   left out of the stream.
@@ -262,6 +263,36 @@ workspace behavior.
 - **Not yet**: live terminal and phone takeover (no stream), new worktrees, events from windows other than the first.
 - **Live test**: `go test -tags ternlive -run TernLive ./internal/node/ -v` opens a hidden session of its own, drives it and closes it again;
   the user's own sessions are only counted. Pitfalls: `docs/lessons/tern.md`.
+
+## Rex
+
+Rex is a multiplexing terminal driven through its `rex` CLI and server control API (`server/internal/rexcli`,
+`server/internal/node/hostrex.go`, #12334). `rex` is located on PATH, in `~/.local/bin/rex`, or on macOS inside
+`~/Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS/rex` and
+the Rex app bundles. Every command passes `--autostart=false` so probing and snapshotting never launch a Rex server
+unexpectedly.
+
+- **Spaces, slots, panes**: Rex sessions are spaces, windows are slots, and `com.superlogical.terminal` blocks are
+  panes stored as `rex:<block id>` (where `<block id>` is Rex's full `block:<uuid>`, matching the `REX_BLOCK`
+  environment variable Rex sets in block processes and Persona hooks read via `nodeclient.HookPane`). Non-terminal
+  blocks (such as onboarding) are skipped.
+- **Agents**: Rex does not report which Agent runs in a block, so each refresh calls `block call process` (up to four
+  in parallel) and identifies `claude`, `codex` (including behind `node`/`bun`), and `traex` from the foreground
+  process while ignoring shells and nested classic `herdr`. Claude Code state is read from `sessions/<pid>.json`,
+  transcripts, hooks, and screen dialogs, using the same path as Tern.
+- **Changes**: `rex --autostart=false events --all --json` streams server, session and block events (block events
+  come only with `--all`). Every `rex` command is a client of its own, so the `client_*` server events and the
+  `client_connected` / `client_disconnected` session events the node's own calls raise are ignored, or each refresh
+  would set off the next. Sessions, windows, blocks and labels changing, and the terminal events `process_changed`,
+  `child_exited`, `title_changed` and `pwd_changed`, trigger a refresh; `bell` and `desktop_notification` an urgent one.
+- **Screens and input**: `rex capture --format=vt --trim` reads colored screens (and `--unwrap` for unwrapped recent
+  reads). `Prompt` verifies an Agent is in front, sends a `block.event` paste (neutralizing escapes), pauses, rechecks
+  foreground, and presses `enter` via `rex send-key`. `SendText` writes to `rex send` over stdin.
+- **Starting, splitting, renaming, closing**: `session.create` opens a space, `session.new_window` (`focus: false`)
+  opens a slot, and `session.new_split` (`focus: false`) splits a pane. `session.set_label` and
+  `session.set_window_label` rename spaces and slots. `block.close` / `session.close_window` close panes and slots; an
+  empty session with no attached clients is destroyed via `session.destroy`.
+- **Not yet**: live terminal streaming and phone takeover.
 
 ## tmux (approvals only)
 
@@ -376,12 +407,12 @@ After reboot, launchd / systemd starts node, but no terminal has started classic
 
   fish gets the directory only. A shell that takes no assignments (csh, nu, pwsh), and Windows, get the command as before. An Agent that should have `CLAUDE_CODE_AUTO_COMPACT_WINDOW` or `ENABLE_TOOL_SEARCH` gets it from its launcher or from Claude Code's settings, not from the pane.
   The generated `mcp.json` (the server's `env`) and the hook commands (`PERSONA_HOME=… personad hook`) name the directory as well, so they work even when the start command could not carry it.
-- **What a start tab's shell starts with** (#10365, `node/startenv.go`): what a start types comes after the shell has read its startup files, too late for the questions those files ask (oh-my-zsh's "Would you like to update? [Y/n]" reads a key while `~/.zshrc` loads). So the tab a start opens (`newTab`, pi's resume tab) is created with `DISABLE_AUTO_UPDATE=true`, `DISABLE_UPDATE_PROMPT=true` (always together: the second alone means a silent update, a `git pull` in the tab) and `POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true` in its shell's environment, next to the Agent mark `PERSONA_AGENT=1` (`startShellEnv`, one create through `host.EnvLauncher`), where the engine takes one:
+- **What a start tab's shell starts with** (#10365, `node/startenv.go`): what a start types comes after the shell has read its startup files, too late for the questions those files ask (oh-my-zsh's "Would you like to update? [Y/n]" reads a key while `~/.zshrc` loads). So the tab a start opens (`newTab`, pi's resume tab) is created with `DISABLE_AUTO_UPDATE=true`, `DISABLE_UPDATE_PROMPT=true` (always together: the second alone means a silent update, a `git pull` in the tab), `ZSH_DISABLE_COMPFIX=true` (oh-my-zsh's insecure-directories check) and `POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true` in its shell's environment, next to the Agent mark `PERSONA_AGENT=1` (`startShellEnv`, one create through `host.EnvLauncher`), where the engine takes one:
   - herdr: `tab.create` / `workspace.create` `env` (an object of strings; the CLI's `--env KEY=VALUE`; herdr 0.9.5). A herdr that refuses the field (one from before environment support) gets the create again without it (`createWithEnv` in `server/internal/herdr/herdr.go`), and the tab opens without the variables. Never in `herdrServerEnv`: the user's own tabs keep updating.
   - the Herdr App: merged into `terminal.run`'s `env` with the app's terminal identity (which wins on a clash).
   - Orca and Tern have no environment for a new terminal yet: their tabs rely on the question being answered (`docs/protocol/protocol.md` "Answering a start's question").
 
-  A terminal the user opens, a split and a preview's server tab never get them. The start line unsets them again in the sh family (`startupOnlyEnv`, next to the assistant's variables) and keeps the Agent mark, so the Agent and the shell the tab keeps have the user's environment plus `PERSONA_AGENT`; fish keeps them (no `unset`), which no Agent reads. A `zstyle ':omz:update' mode …` in `~/.zshrc` wins over the variables: that question, and the ones no variable turns off (compinit's insecure directories, ssh's unknown host key, zsh-newuser-install, a passphrase), still stop the start with `shell_waiting`, answered from the App for a New Agent start and a planned task alike (`docs/protocol/protocol.md` "Answering a start's question").
+  A terminal the user opens, a split and a preview's server tab never get them. The start line unsets them again in the sh family (`startupOnlyEnv`, next to the assistant's variables) and keeps the Agent mark, so the Agent and the shell the tab keeps have the user's environment plus `PERSONA_AGENT`; fish keeps them (no `unset`), which no Agent reads. A `zstyle ':omz:update' mode …` in `~/.zshrc` wins over the variables: that question, and the ones no variable turns off (a bare `compinit` outside oh-my-zsh on insecure directories, ssh's unknown host key, zsh-newuser-install, a passphrase), still stop the start with `shell_waiting`, answered from the App for a New Agent start and a planned task alike (`docs/protocol/protocol.md` "Answering a start's question").
 - **When a stdio node ends** (#10114): a node serving one hub connection over stdio (`personad node --stdio`, a hub's `kind: local` machine) stops, as it exits, a herdr server it started itself in that process when the server has no panes, so a throwaway hub leaves no server behind. A server with panes, one started by anyone else, and the resident node's (`--attach`) are left running.
 - **Only one**: in-node mutex plus `flock` on herdr configuration directory (another node for the same account); recheck socket after locking.
 - **One server per data directory** (#6482): a herdr server's panes reach the node whose `PERSONA_HOME` the server was started with, so two nodes with different data directories on one account must not share a server.
@@ -438,6 +469,8 @@ Persona therefore reports its own recovery command for each Claude pane (`resume
 - Claude changes sessions in a pane (`/clear`): report new ID when Persona SessionStart hook arrives; herdr does not track it automatically (v0.9.5 tested).
 - Resume command omits permission / thinking settings; paths with single quotes are not reported (herdr rejects `'` arguments), falling back to built-in restore.
 - Node-started headless server has no attached client, so herdr does not resume Agents until someone opens herdr on the computer. Resume on a Not running session's terminal page still works.
+- herdr before 0.9.2 answers the report `ok` and drops `resume_argv`. The node asks the server's version first (`ping`, never the CLI's: a binary upgraded in place says the new one while the old server runs) and on such a server reports nothing, logs once per server that its Agents will resume bare until herdr is upgraded, and gives the command to the next server (#11792).
+- An Agent resumed without Persona's command anyway (an old herdr, a resume typed by hand) is listed with `off_launcher`: the scan of running claudes sees its claude without Persona's `--mcp-config`. A launcher switch to the launcher it was started on brings it back there (`docs/protocol/protocol.md`, "Switching a running Agent to another provider").
 - **Interrupted by restart** (#1917): sessions running before restart appear `interrupted` afterward (`docs/protocol/agent-states.md`), read-only like any stopped Agent, with Resume on the terminal page. Node records the pane and
   launch time (session records in hub settings); if launch predates current node startup and no Agent is alive, it is interrupted. Sessions launched after this node startup do not count,
   nor user-started terminal sessions (no recorded pane). No automatic continuation: restart may interrupt a tool call, so the user decides. Resume uses ordinary

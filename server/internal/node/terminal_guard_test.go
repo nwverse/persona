@@ -16,7 +16,7 @@ import (
 // whose start failed before any agent ran in it, or for a finished Agent's terminal after its grace period. A new one fails here: stop the agent instead (quitAgent), or add it with
 // the reason.
 var paneClosers = map[string]string{
-	"handle":            "session.close: the user's Close, or a session with no terminal (hub supervise_leader.go)",
+	"handleMethod":      "session.close: the user's Close, or a session with no terminal (hub supervise_leader.go); the dispatch since #11687",
 	"closePane":         "panes.close: the user closes a pane or tab",
 	"retire":            "session.retire with close_terminal: the user's Archive and close, or the owner's close-on-end setting (#10355)",
 	"close":             "n.close itself",

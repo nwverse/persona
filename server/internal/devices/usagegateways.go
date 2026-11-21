@@ -53,10 +53,11 @@ type UsageSourceConfig struct {
 	ID string `json:"id"`
 	// Name is what the sidebar calls the source ("Relay").
 	Name string `json:"name"`
-	// Type: relay | generic (usagesource; an older manager.json's earlier name of relay reads as relay).
+	// Type: relay | relay_key | generic (usagesource; an older manager.json's earlier name of relay reads as relay).
 	Type string `json:"type"`
 	URL  string `json:"url"`
-	// Key is the gateway's management key (a secret: manager.json is 0600; no API answer or log ever has it).
+	// Key is the gateway's management key, for relay_key an ordinary API key of the gateway (a secret either way:
+	// manager.json is 0600; no API answer or log ever has it).
 	Key     string `json:"key,omitempty"`
 	Enabled *bool  `json:"enabled,omitempty"`
 }

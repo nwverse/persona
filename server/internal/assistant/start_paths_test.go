@@ -25,6 +25,8 @@ var startPrimitives = []string{"startOn", "start", "startConversationOn", "start
 // startWrappers pass a start on: their callers are the entry points.
 var startWrappers = map[string]string{
 	"startTaskAgent": "a planned task's agent start (tasks_placement.go), called by runPlanTaskStart",
+	// the same start into a prepared backend workspace (#11687), called only by startTaskAgent: startPlan's ledger
+	"startBackendTask": "a planned task's agent start in its backend workspace (tasks_backend_launch.go), called by startTaskAgent",
 }
 
 // supervisedStarts are the entry points that give their work a ledger, and the function that does it: it must call
@@ -41,12 +43,14 @@ var supervisedStarts = map[string]string{
 	"startTaskSuccessor": "startTaskSuccessor",
 	// agent_send's resume of a stopped agent: on an open task of the caller's, or the task the send made (#8099)
 	"resumeAndSend": "resumeAndSend",
+	// a timed-out task's original session: the user's Resume keeps its existing supervision ledger
+	"continueTimedOut": "continueTimedOut",
 }
 
 // startOptOuts are the start paths that stay unsupervised on purpose, with why. Each is the user's own conversation or
 // Agent, the supervisor itself, or work some other part of the hub already follows.
 var startOptOuts = map[string]string{
-	"botSendIn":            "a Lark message opening a conversation: the user's own conversation",
+	"startBotRun":          "a Lark message (or the owner's /read in a group) opening a conversation: the user's own conversation",
 	"channelForward":       "a channel's message opening a conversation: the user's own conversation",
 	"request":              "the hub bus's assistant.start: an app opening a conversation for the user",
 	"startRoutes":          "the apps' POST /api/v1/sessions: the user started it by hand (assistant.agent_tasks makes it a task when on)",

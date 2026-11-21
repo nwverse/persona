@@ -61,6 +61,9 @@ internal fun MachinesScreen(
     }
     val machine = machines.firstOrNull { it.id == machineId }
     val acting = actions?.state?.collectAsStateWithLifecycle()?.value ?: MachineActionsState()
+    val linkAttempt = machineId?.let { acting.linkSwitches[it] }
+    val linkSwitchBusy = linkSwitchConnectionBusy(machine?.linkSwitch, linkAttempt)
+    if (actions != null && machineId != null) LaunchedEffect(actions, machineId) { actions.observeLinkSwitch(machineId) }
     // An offline machine has no launchers; they are read again when it comes online (after "Reconnect").
     if (actions != null && machineId != null) LaunchedEffect(actions, machineId, machine?.online) {
         actions.loadLaunchers(machineId, machine?.online == true)
@@ -88,6 +91,7 @@ internal fun MachinesScreen(
     val listSummary = machineSummary(entries)
     val locale = currentLocale
     val healthState = health?.state?.collectAsStateWithLifecycle()?.value ?: MachineHealthState()
+    val subscriptionUsage = LocalSidebarUsage.current?.value ?: healthState.usage
     var allChecks by rememberSaveable(machineId) { mutableStateOf(false) }
     var allAgents by rememberSaveable(machineId) { mutableStateOf(false) }
     var confirmFix by remember { mutableStateOf(false) }
@@ -128,7 +132,7 @@ internal fun MachinesScreen(
     JListPage(
         title = if (machineId == null) stringResource(R.string.machines_title) else machine?.displayName ?: stringResource(R.string.machines_title_detail),
         summary = if (machineId == null) machineSummaryText(listSummary) else null,
-        onBack = if (machineId == null && LocalIsSidebarRoot.current) null else navigator::back,
+        onBack = if (LocalIsSidebarRoot.current) null else navigator::back,
         largeTitle = machineId == null,
         state = listState,
         actions = {
@@ -140,7 +144,7 @@ internal fun MachinesScreen(
         state.failure?.let { failure -> item("failure") { JNotice(stringResource(failure.text)) } }
         if (state.sessionsFailure) item("sessions-failure") { JNotice(stringResource(R.string.machines_sessions_failure)) }
         if (machineId == null) {
-            usageWindows(healthState.usage, java.time.Instant.ofEpochSecond(state.now))
+            usageWindows(subscriptionUsage, java.time.Instant.ofEpochSecond(state.now))
             // An offline assistant with no computer the hub still keeps: out of reach, not a first run (no Add).
             if (!state.loading && ids.isEmpty() && assistant.offline != null) item("offline") { JAssistantOffline(assistant) }
             else if (!state.loading && ids.isEmpty()) item("empty") {
@@ -167,14 +171,18 @@ internal fun MachinesScreen(
             val agents = machineSessions(sessions, machineId, model.sessions.supportsFeature(machineId, "sessions_hierarchy"))
             item("machine") {
                 MachineCard(machine, metric, AgentTally(agents), state.now, state.history?.step ?: state.range.step, deploy = deployLine,
-                    onConfirm = if (adds) confirmComputer else null)
+                    onConfirm = if (adds) confirmComputer else null, linkSwitchExpected = linkSwitchBusy)
+            }
+            if (machine != null && actions != null) item("link-switch") {
+                MachineLinkSwitchSection(machine, linkAttempt,
+                    onStart = { actions.startLinkSwitch(machine.id) }, onCheck = { actions.checkLinkSwitch(machine.id) })
             }
             if (machine == null && machines.isNotEmpty()) item("gone") { JNotice(stringResource(R.string.machines_gone)) }
             // Move to… with several managers, for this hub's own computers (a linked hub's is that hub's to give).
             val owner = machine?.takeIf { roster?.isMulti == true && movable(it, managerGroup) }?.let { roster?.ownerOf(it.manager) }
             if (machine != null && actions != null) machineControls(machine, acting.reconnecting,
                 // Reconnect goes through its manager: not while that one is offline
-                canReconnect = offlineManagerOf(roster, machine, managerGroup) == null,
+                canReconnect = offlineManagerOf(roster, machine, managerGroup) == null && !linkSwitchBusy,
                 onEngine = { navigator.navigate(EngineRoute(machine.id)) }, onReconnect = { actions.reconnect(machine.id) },
                 botmux = acting.botmux, botmuxSaving = acting.botmuxSaving, onBotmux = { actions.setBotmux(machine.id, it) },
                 move = owner?.let { id -> MachineMoveRow(roster?.manager(id)?.shownName ?: id, acting.moving) { choosingManager = true } },
@@ -300,6 +308,8 @@ internal fun MachineCard(
     deploy: (@Composable (Machine?) -> Unit)? = null,
     /** "Confirm computer" for a computer that waits to be confirmed; null where the phone cannot (demo mode). */
     onConfirm: ((String) -> Unit)? = null,
+    /** A confirmed or listed Link switch makes this computer's temporary offline state expected. */
+    linkSwitchExpected: Boolean = false,
     onClick: (() -> Unit)? = null,
 ) {
     val current = metrics.current(now)
@@ -307,6 +317,7 @@ internal fun MachineCard(
     val alerts = alerts(current, system?.cores)
     val locale = currentLocale
     val pending = machine?.pending == true
+    val switching = linkSwitchExpected || linkSwitchRunning(machine?.linkSwitch)
     val concern = machineConcern(machine, metrics.online, alerts, tally.needsYou)
     val status = when (concern) {
         MachineConcern.Pending, MachineConcern.Critical, MachineConcern.Warning,
@@ -341,7 +352,7 @@ internal fun MachineCard(
             val goneWith = offlineManagerOf(LocalManagerRoster.current, machine, LocalManagerGroup.current)
             if (goneWith != null) {
                 Text(stringResource(R.string.machines_manager_offline, goneWith.shownName), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
-            } else {
+            } else if (!switching) {
                 // A known error_code in plain words; else why and what to do as read from the hub's error, its own words
                 // after in a quieter colour; else the hub's error alone (#4463).
                 val coded = machineErrorText(machine?.errorCode)

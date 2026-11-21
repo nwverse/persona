@@ -59,6 +59,8 @@ func (n *Node) runtimeEvent(h *runtimeConn, event string, params json.RawMessage
 	switch event {
 	case "usage.report":
 		n.runtimeUsageReport(h, params, time.Now())
+	case "usage.windows":
+		n.runtimeUsageWindows(h, params, time.Now())
 	case proto.EventModeSet:
 		var e proto.ModeSetEvent
 		if json.Unmarshal(params, &e) == nil && n.runtimes.owns(h, e.SessionID) && n.peer != nil {
@@ -108,7 +110,7 @@ func (n *Node) runtimeEvent(h *runtimeConn, event string, params json.RawMessage
 
 // normalizeRuntimeSessions keeps the sessions a runtime may list (valid ids, once each) and fills what the apps expect:
 // the agent and its label, the space kind (the runtime's id). It works in place: the rows kept are list's first ones,
-// in list's own array, the rest cleared, so list is the caller's to give up.
+// in list's own array, the rest cleared, so list is the caller's to give up. Rows share read-only capabilities when equal.
 func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Session {
 	h.mu.Lock()
 	rt, agent, label, caps, daemon := h.hello.Runtime, h.hello.Agent, h.hello.Name, h.hello.Caps, h.daemon != ""
@@ -129,7 +131,7 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 	_, engine := engineRuntimes[rt]
 	ownWorkspaces := engine && caps.Workspaces && !daemon
 	seen := make(map[string]bool, len(list))
-	capsBuf := make([]proto.SessionCapabilities, 0, len(list))
+	capsByValue := map[proto.SessionCapabilities]*proto.SessionCapabilities{}
 	boolTrue, boolFalse := true, false
 	capBool := func(v bool) *bool {
 		if v {
@@ -170,8 +172,8 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 		if s.Agent == "" {
 			s.Agent = agent
 		}
-		if s.AgentLabel == "" && (s.Agent == rt || daemon && s.Agent != "claude") {
-			// The runtime runs its own agent (DSH): the apps call it by the runtime's name. A daemon is called by the
+		if s.AgentLabel == "" && (s.Agent == rt || (agent != "" && s.Agent == agent && agent != "claude") || daemon && s.Agent != "claude") {
+			// The runtime runs its own agent (DSH, opencode-<pid>): the apps call it by the runtime's name. A daemon is called by the
 			// name its config gives, whatever agent it runs (a platform running DSH), unless that is Claude Code.
 			s.AgentLabel = label
 		}
@@ -209,18 +211,23 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 		}
 		// The permission modes it lists for an agent that is not Claude Code (#8261) go with its modes too, and only where
 		// the apps' Claude Code chips do not stand (claudeModes): the apps switch between those instead.
-		claudeModes := modes && runtimeModes(caps.Modes, rt, s)
+		claudeModes := modes && runtimeModes(caps.Modes, rt, agent, s)
 		permissionModes := own.PermissionModes
 		if !modes || claudeModes {
 			permissionModes = 0
 		}
-		capsBuf = append(capsBuf, proto.SessionCapabilities{Read: true, Send: caps.Send, Interrupt: caps.Interrupt, Approve: true,
+		rowCaps := proto.SessionCapabilities{Read: true, Send: caps.Send, Interrupt: caps.Interrupt, Approve: true,
 			SupervisionPolicy: caps.Assistant && caps.SupervisionPolicy && !sub,
 			Close:             capBool(caps.Close), Rename: capBool(caps.Rename && !sub), Modes: capBool(claudeModes),
 			Rewind: capBool(rewind), RewindCode: capBool(rewindCode), Fork: caps.Fork && !sub,
+			QueueEdit: capBool(caps.QueueEdit && !sub), QueueSendNow: capBool(caps.QueueSendNow && !sub),
 			Model:           capBool(caps.Modes && caps.Model && keeps(own.Model) && !strings.Contains(s.SessionID, subagentSep)),
-			PermissionModes: permissionModes})
-		s.Capabilities = &capsBuf[len(capsBuf)-1]
+			PermissionModes: permissionModes}
+		if s.Capabilities = capsByValue[rowCaps]; s.Capabilities == nil {
+			s.Capabilities = new(proto.SessionCapabilities)
+			*s.Capabilities = rowCaps
+			capsByValue[rowCaps] = s.Capabilities
+		}
 		s.ReadOnlyReason, s.Attached, s.CodexRoute, s.CodexRouteNote = readOnly, false, "", ""
 		// The pane is the engine's to show (pi.go joins it with the engine's pane), not part of the runtime's row.
 		if s.PaneID != "" && validPane(s.PaneID) {
@@ -417,7 +424,7 @@ func runtimeHealth(h *runtimeConn, ix proto.Interaction) bool {
 // takes only its own approval and Allow all for those and for Codex (bridge.js modes). So a Paseo row running Codex,
 // opencode or any other agent gets none, and older apps show no chips there; its row lists the modes it takes instead
 // (capabilities.permission_modes, #8261).
-func runtimeModes(declared bool, rt string, s proto.Session) bool {
-	own := s.Agent == rt && rt != paseoRuntimeID
+func runtimeModes(declared bool, rt, rtAgent string, s proto.Session) bool {
+	own := (s.Agent == rt || (rtAgent != "" && s.Agent == rtAgent)) && rt != paseoRuntimeID
 	return declared && !strings.Contains(s.SessionID, subagentSep) && (s.Agent == "claude" || own)
 }

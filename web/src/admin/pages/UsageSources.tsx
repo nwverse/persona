@@ -9,7 +9,7 @@ import { addUsageSource, editUsageSource, errorText, getUsageSources, removeUsag
 import { AdminIcon } from "../icons";
 import { devDialog } from "../router";
 import type { UsageSource, UsageSourceType, UsageTestResult } from "../types";
-import { hubWords, needsKeyAgain, POLL_CHOICES, sourceStatus, testText, typeLabel, validUrl } from "../usage-sources";
+import { hubWords, keyRequired, needsKeyAgain, POLL_CHOICES, sourceStatus, testText, typeLabel, validUrl } from "../usage-sources";
 import { Card, ConfirmButton, EmptyState, ErrorBox, Field, Line, Loader, PageHeader, Segmented, Tag, useLoad } from "../parts";
 
 const providerName = (p: string) => p.charAt(0).toUpperCase() + p.slice(1);
@@ -182,7 +182,7 @@ function SourceDialog({ target, onClose, onSaved }: { target: "add" | UsageSourc
 
   const moved = saved ? needsKeyAgain(saved, { url, type }) : false;
   const urlOk = validUrl(url);
-  const keyNeeded = type === "relay" && !(saved?.has_key && !moved && !clearKey) && key.trim() === "";
+  const keyNeeded = keyRequired(type) && !(saved?.has_key && !moved && !clearKey) && key.trim() === "";
   const ok = urlOk && !keyNeeded && (type !== "generic" || name.trim() !== "");
 
   const test = async () => {
@@ -215,7 +215,7 @@ function SourceDialog({ target, onClose, onSaved }: { target: "add" | UsageSourc
       setBusy(false);
     }
   };
-  const verdict = result ? testText(result) : null;
+  const verdict = result ? testText(result, type) : null;
   return (
     <Dialog
       open={Boolean(target)}
@@ -227,7 +227,7 @@ function SourceDialog({ target, onClose, onSaved }: { target: "add" | UsageSourc
           <Button tone="quiet" onClick={onClose}>
             {t("common.cancel")}
           </Button>
-          <Button busy={testing} disabled={!urlOk || (keyNeeded && type === "relay")} onClick={() => void test()}>
+          <Button busy={testing} disabled={!urlOk || keyNeeded} onClick={() => void test()}>
             {t("admin-pages-usage.test")}
           </Button>
           <Button tone="primary" busy={busy} disabled={!ok} onClick={() => void save()}>
@@ -244,6 +244,7 @@ function SourceDialog({ target, onClose, onSaved }: { target: "add" | UsageSourc
             value={type}
             options={[
               { value: "relay", label: typeLabel("relay") },
+              { value: "relay_key", label: typeLabel("relay_key") },
               { value: "generic", label: typeLabel("generic") },
             ]}
             onChange={(v) => (setType(v), clearTest())}
@@ -258,7 +259,7 @@ function SourceDialog({ target, onClose, onSaved }: { target: "add" | UsageSourc
           mono
           autoCapitalize="none"
           error={url.trim() !== "" && !urlOk ? t("admin-pages-usage.url_invalid") : undefined}
-          hint={type === "relay" ? t("admin-pages-usage.url_hint_relay") : t("admin-pages-usage.url_hint_generic")}
+          hint={type === "relay" ? t("admin-pages-usage.url_hint_relay") : type === "relay_key" ? t("admin-pages-usage.url_hint_relay_key") : t("admin-pages-usage.url_hint_generic")}
         />
         <Field
           label={t("admin-pages-usage.key")}
@@ -270,7 +271,15 @@ function SourceDialog({ target, onClose, onSaved }: { target: "add" | UsageSourc
           autoComplete="off"
           autoCapitalize="none"
           disabled={clearKey}
-          hint={moved && saved?.has_key ? t("admin-pages-usage.key_retype") : type === "relay" ? t("admin-pages-usage.key_hint_relay") : t("admin-pages-usage.key_hint_generic")}
+          hint={
+            moved && saved?.has_key
+              ? t("admin-pages-usage.key_retype")
+              : type === "relay"
+                ? t("admin-pages-usage.key_hint_relay")
+                : type === "relay_key"
+                  ? t("admin-pages-usage.key_hint_relay_key")
+                  : t("admin-pages-usage.key_hint_generic")
+          }
         />
         {saved?.has_key && type === "generic" && (
           <label className="flex items-center gap-2 text-[12.5px] text-ink-2">

@@ -41,6 +41,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		WhyOwner      string           `json:"why_owner"`
 		Options       []DecisionOption `json:"options"`
 		CostOfWaiting string           `json:"cost_of_waiting"`
+		QuestionQuote string           `json:"question_quote"`
 		// needs_user: the decision can wait for the next daily briefing instead of a push now (#4930, decision_wait.go).
 		CanWait bool `json:"can_wait"`
 		// accepted: what was done beyond the brief (#3822, task_brief_result.go).
@@ -154,9 +155,28 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	if a.UserCheck && verdict != reviewAccepted {
 		return "", fmt.Errorf("user_check applies to accepted only")
 	}
-	if verdict == reviewAccepted { // done_needs_delivery: its PR is live first (supervise_review_delivery.go)
-		if err := s.acceptedDeliveryError(ctx, t, strings.TrimSpace(a.Link), a.Outcome); err != nil {
+	deliveryNote := ""
+	if verdict == reviewAccepted { // delivery_gate: owner wait & criteria first, then PR/issue/deploy gate (supervise_review_delivery.go)
+		if t.DoneAt == nil && t.Supervision != nil && t.Supervision.Waits != nil {
+			w := *t.Supervision.Waits
+			return "", ownerWaitError(t.ID, &w)
+		}
+		if a.Outcome != outcomeCannot && t.Supervision != nil {
+			if err := completeReviewCriteriaError(t.Supervision.DoneWhen, a.Checks); err != nil {
+				return "", err
+			}
+		}
+		if deliveryNote, err = s.acceptedDeliveryError(ctx, t, strings.TrimSpace(a.Link), a.Outcome); err != nil {
 			return "", err
+		}
+	}
+	// A bare accept must not hide a result that does not settle the task from the owner's Needs-you list (#12026): a
+	// non-done closeout, a blocker only the owner can clear, or an inconclusive / partial result. user_check (the owner
+	// passes the result themselves) and a "cannot be done" outcome are deliberate closures the guard lets through.
+	if verdict == reviewAccepted && !a.UserCheck && a.Outcome != outcomeCannot {
+		evidence := s.acceptGuardEvidence(ctx, t, note, strings.TrimSpace(a.Reason), checks)
+		if matched, _ := acceptGuardBlock(evidence); matched != "" {
+			return "", errors.New(acceptGuardRefusal(matched))
 		}
 	}
 	// A conversation supervises what it handed out (task_plan, quietAgentTask): a task without a ledger
@@ -175,11 +195,27 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			return "", err
 		}
 	}
+	var priorReply *decisionAgentReply
+	mayRaiseDecision := verdict == reviewNeedsUser || verdict == reviewRework && decided && t.Supervision != nil && t.Supervision.Round >= maxReworkRounds
+	if mayRaiseDecision && scheduledCheckOf(ctx) == "" {
+		priorReply = s.priorDecisionReply(ctx, t, cmp.Or(strings.TrimSpace(a.QuestionQuote), decision.Reason))
+	}
+	if priorReply != nil {
+		// Fence any older card answer or default while we hand the already-answered question back.
+		s.reviewDismissals.actions.acquire(t.ID)
+		defer s.reviewDismissals.actions.release(t.ID)
+		cur, ok := s.todoNow(t.ID)
+		if !ok || cur.DoneAt != nil || !cur.UpdatedAt.Equal(t.UpdatedAt) ||
+			s.activeTodoOf(priorReply.MachineID, priorReply.SessionID) != t.ID {
+			return "", fmt.Errorf("the task changed while checking the Agent conversation: review it again")
+		}
+	}
 	over, refused, parks := false, false, 0
 	var waiting *OwnerWait // accepted while the work stopped on the owner's decision: refused, nothing written (#1277)
 	judgedDone := false    // it was waiting for review: the judge had found it done
 	var criteriaErr error
 	var v Supervision
+	var reviewedAt time.Time
 	if ledger {
 		v, _, err = s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
 			if verdict == reviewAccepted && t.DoneAt == nil && v.Waits != nil {
@@ -217,6 +253,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				}
 			}
 			r := TaskReview{At: time.Now().UTC(), Verdict: verdict, Checks: checks, Note: note, UserCheck: a.UserCheck}
+			reviewedAt = r.At
 			v.applyChecks(checks, r.At, "supervisor:"+self)
 			if verdict == reviewNeedsUser {
 				r.WhyOwner, r.Reason, r.Recommend = decision.WhyOwner, decision.Reason, decision.Recommend
@@ -240,6 +277,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				r.Evidence.RecordedBy = self
 			}
 			v.State, v.Waits = verdict, nil // reviewed: the supervisor answered what the judge found
+			if priorReply != nil && verdict == reviewNeedsUser {
+				v.State = reviewPending
+			}
 			v.Reviews = append(v.Reviews, r)
 			if len(v.Reviews) > 20 {
 				v.Reviews = v.Reviews[len(v.Reviews)-20:]
@@ -274,7 +314,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	b := &s.supervise
 	b.mu.Lock()
 	b.init()
-	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigOrphaned, sigOverdue, sigRecheck, sigUndecidable, sigOwnerCannot, sigParkedDue} {
+	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigTimedOut, sigOrphaned, sigOverdue, sigEstimateDue, sigRecheck, sigUndecidable, sigOwnerCannot, sigParkedDue} {
 		delete(b.pending, t.ID+"|"+k) // reviewed: what waited is answered
 	}
 	if verdict == reviewAccepted || verdict == reviewCancelled {
@@ -351,7 +391,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		authorized := isMain || background || t.Supervision != nil && t.Supervision.Supervisor == self ||
 			t.Supervision == nil && t.Origin == self
 		cleanup := s.finishTaskTerminal(ctx, t, acceptedHere && authorized && a.Outcome != outcomeCannot && !a.UserCheck)
-		against := terminalCleanupWords(cleanup) + result.words()
+		against := terminalCleanupWords(cleanup) + result.words() + deliveryNote
 		if gaps := result.unsettled(); len(gaps) > 0 {
 			against += " You accepted it with criteria of its brief not shown met: if one no longer applies, say so with task_scope before accepting next time."
 		}
@@ -377,6 +417,16 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		return fmt.Sprintf("Task %s is accepted and closed. Tell the user the result in a line or two "+
 			"if they are waiting for it, and hand out or schedule anything that follows (deploy, TestFlight, closing an issue).", t.ID) + against, nil
 	case reviewNeedsUser:
+		if priorReply != nil {
+			choice, err := s.keepPriorDecisionReply(ctx, t, decision, priorReply, reviewedAt)
+			if err != nil {
+				return "", err
+			}
+			if choice != "" {
+				return fmt.Sprintf("Recorded the owner's exact choice %q from the Agent conversation. No card was sent. Review the task's result.", choice), nil
+			}
+			return "The owner already replied in the Agent conversation. The reply was handed to you for review and no card was sent. Verify the result or clarify the question.", nil
+		}
 		conclusion.Outcome, conclusion.Reason, conclusion.Recommend, conclusion.Decision = outcomeDecide, decision.Reason, decision.Recommend, decision
 		conclusion.Check = scheduledCheckOf(ctx) // raised by a recurring check (escalateScheduledTodo), never by a model's call
 		reversible := false
@@ -581,6 +631,8 @@ func (s *Service) reviewDoneTodo(ctx context.Context, id, reason string, accepte
 	if ok && before.DoneAt == nil {
 		if accepted && row.DoneAt != nil {
 			s.goRecordTaskOutcome(before, *row.DoneAt)
+			s.learnAcceptedEstimate(ctx, id)
+			s.goLearnTaskLessons(ctx, before, *row.DoneAt) // what it taught its project's next Agents (task_lessons.go)
 		}
 		if t, now := s.todoNow(id); ok && now {
 			// A side conversation's task the main conversation supervised: the planning conversation hears it ended (#4669).

@@ -517,20 +517,21 @@ func TestRuntimeSendRefusedWithoutTheCap(t *testing.T) {
 // runtime's own, never a subagent's. Rows of a runtime that did not declare it say false, not nothing.
 func TestRuntimeModesCapability(t *testing.T) {
 	for _, c := range []struct {
-		declared bool
-		rt, id   string
-		agent    string
-		want     bool
+		declared         bool
+		rt, rtAgent, id  string
+		agent            string
+		want             bool
 	}{
-		{true, "orca", "session-1", "claude", true},
-		{true, "agy", "session-1", "agy", true},
-		{true, "paseo", "session-1", "codex", false},
-		{true, "paseo", "session-1", "claude", true},
-		{true, "paseo", "session-1", "paseo", false}, // Paseo's catch-all (opencode, grok, ...): its modes refuses them
-		{true, "orca", "session-1" + subagentSep + "a1", "claude", false},
-		{false, "dsh", "session-1", "dsh", false},
+		{true, "orca", "", "session-1", "claude", true},
+		{true, "agy", "agy", "session-1", "agy", true},
+		{true, "opencode-4242", "opencode", "session-1", "opencode", true},
+		{true, "paseo", "", "session-1", "codex", false},
+		{true, "paseo", "", "session-1", "claude", true},
+		{true, "paseo", "paseo", "session-1", "paseo", false}, // Paseo's catch-all (opencode, grok, ...): its modes refuses them
+		{true, "orca", "", "session-1" + subagentSep + "a1", "claude", false},
+		{false, "dsh", "dsh", "session-1", "dsh", false},
 	} {
-		if got := runtimeModes(c.declared, c.rt, proto.Session{SessionID: c.id, Agent: c.agent}); got != c.want {
+		if got := runtimeModes(c.declared, c.rt, c.rtAgent, proto.Session{SessionID: c.id, Agent: c.agent}); got != c.want {
 			t.Errorf("%+v: modes %v", c, got)
 		}
 	}
@@ -896,6 +897,34 @@ func TestRuntimeStartFromTheLauncher(t *testing.T) {
 	}
 	if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": "session-new", "text": "go"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRuntimeStartForwardsAntigravityImageOnlyPrompt(t *testing.T) {
+	node, _ := runtimeNode(t)
+	hello := map[string]any{"runtime": "agy", "launcher": "agy", "version": "test", "caps": map[string]any{"start": true}}
+	host := dialRuntime(t, node, hello)
+	host.answer = func(method string, params json.RawMessage) (any, error) {
+		if method == "session.start" {
+			return map[string]any{"session": proto.Session{SessionID: "agy-new", Cwd: "/work"}}, nil
+		}
+		return nil, nil
+	}
+	images := []proto.Image{{Mime: "image/png", Data: "aW1hZ2U="}}
+	_, err := nodeCall(t, node, "session.start", map[string]any{"cwd": "/work", "host": proto.EngineOrca,
+		"launcher": "agy", "client_msg_id": "start-photo", "images": images})
+	if err != nil {
+		t.Fatal(err)
+	}
+	starts := host.got("session.start")
+	var start struct {
+		Prompt      string        `json:"prompt"`
+		ClientMsgID string        `json:"client_msg_id"`
+		Images      []proto.Image `json:"images"`
+	}
+	if len(starts) != 1 || json.Unmarshal(starts[0], &start) != nil || start.Prompt != "" ||
+		start.ClientMsgID != "start-photo" || !slices.Equal(start.Images, images) {
+		t.Fatalf("runtime starts: %s", starts)
 	}
 }
 

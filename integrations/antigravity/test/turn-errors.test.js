@@ -16,7 +16,7 @@ const FAKE = fileURLToPath(new URL('./fake-acp-rewind.mjs', import.meta.url))
 const AT = '2026-01-02T12:00:00Z'
 const RESET = '2026-01-03T18:00:00Z'
 const MESSAGE = 'Individual quota reached. Resets in 30h.'
-const TRANSIENT_401 = 'UNAUTHENTICATED (code 401): Request is missing required authentication credential'
+const TRANSIENT_401 = 'UNAUTHENTICATED (code 401): Request is missing required authentication credential. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.'
 const input = { step_index: 0, type: 'USER_INPUT', source: 'USER_EXPLICIT', status: 'DONE', created_at: AT, content: 'Check the result.' }
 const error = {
   type: 'CORTEX_STEP_TYPE_ERROR_MESSAGE', metadata: { createdAt: AT },
@@ -144,7 +144,7 @@ async function fixture(t, options = {}) {
 for (const exported of [false, true]) {
   test(`retries one transient 401 ${exported ? 'recorded in the transcript' : 'returned by ACP'} without duplicating the user message`, async (t) => {
     const { node, row, calls, items, idle } = await fixture(t, { initialCount: 1, promptPlan: [
-      { error: TRANSIENT_401, export: exported }, { reply: 'Finished.', export: exported },
+      { error: TRANSIENT_401, export: exported, undatedStep: exported }, { reply: 'Finished.', export: exported },
     ] })
     const send = (text, client_msg_id) => node.peer.call('session.send', { session_id: SESSION, text, client_msg_id })
     await send('Continue.', 'request-1')
@@ -164,8 +164,28 @@ for (const exported of [false, true]) {
   })
 }
 
+test('a plan-mode 401 retries despite a previous reply flushing and whole-second export timestamps', async (t) => {
+  const prior = { prompt: 'Earlier request.', reply: 'Earlier reply.' }
+  const { node, calls, items, row, idle } = await fixture(t, { initialCount: 1, promptPlan: [
+    { reply: prior.reply },
+    { error: TRANSIENT_401, export: true, planMode: true, wholeSeconds: true, flushReply: prior },
+    { reply: 'Finished.', export: true, planMode: true, wholeSeconds: true },
+  ] })
+  await node.peer.call('session.send', { session_id: SESSION, text: prior.prompt })
+  await until('previous turn settles without native export', () => row()?.last_text === prior.reply && idle())
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Continue.', client_msg_id: 'plan-retry' })
+  await until('plan retry settles', () => row()?.last_text === 'Finished.' && idle())
+  assert.equal(calls().filter((call) => call.method === 'session/prompt').length, 3)
+  const page = await items()
+  assert.deepEqual(page.items.map((item) => item.text), [input.content, prior.prompt, prior.reply, '/plan Continue.', 'Finished.'])
+  assert.equal(page.items[3].client_msg_id, 'plan-retry')
+})
+
 for (const [reason, plan, attempts, retryDelay] of [
   ['revoked login', [{ error: `${TRANSIENT_401}; invalid_grant` }], 1],
+  ['non-adjacent expired refresh token', [{ error: `${TRANSIENT_401}; refresh_token for this account has expired` }], 1],
+  ['revoked account credential', [{ error: `${TRANSIENT_401}; revoked the account login credential` }], 1],
+  ['explicit sign-in request', [{ error: `${TRANSIENT_401} Please sign in.` }], 1],
   ['assistant text', [{ error: TRANSIENT_401, reply: 'Partial answer' }], 1],
   ['tool work', [{ error: TRANSIENT_401, tool: true }], 1],
   ['tool work received during the delay', [{ error: TRANSIENT_401, lateTool: 30 }], 1, 250],
@@ -284,6 +304,22 @@ test('a rejected ACP prompt publishes its failure through the normal session row
   assert.equal(row().turn_error, undefined)
 })
 
+
+test('an attached picture that is cut short is not sent; the words and complete pictures are', async (t) => {
+  const { node, calls } = await fixture(t)
+  const seg = (marker, body) => Buffer.concat([Buffer.from([0xff, marker, 0, body.length + 2]), body])
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8]), seg(0xdb, Buffer.alloc(65)), seg(0xc0, Buffer.alloc(9)),
+    seg(0xda, Buffer.alloc(8)), Buffer.from([0x12, 0x34, 0xff, 0xd9])])
+  const whole = jpeg.toString('base64')
+  const cut = jpeg.subarray(0, jpeg.length - 2).toString('base64')
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Look at these.', images: [
+    { media_type: 'image/jpeg', data: whole }, { media_type: 'image/jpeg', data: cut }] })
+  await until('prompt sent', () => calls().some((call) => call.method === 'session/prompt'))
+  const blocks = calls().find((call) => call.method === 'session/prompt').params.prompt
+  assert.deepEqual(blocks.filter((b) => b.type === 'image').map((b) => b.data), [whole])
+  assert.match(blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n'), /Look at these\./)
+  assert.match(blocks.at(-1).text, /1 attached picture was incomplete or damaged and not sent/)
+})
 
 test('listing idle sessions does not start native error probes', async (t) => {
   const { calls, refresh } = await fixture(t)

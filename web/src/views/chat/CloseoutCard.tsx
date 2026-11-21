@@ -3,7 +3,7 @@
 // It is the agent's own claim and the card says so. Beside "merged" and "deployed" stands what the hub found when it
 // looked itself: confirmed, contradicted (in the caution color, with the warning mark: color is never the only signal)
 // or not checked. It is not part of the transcript: the reply that carried the raw block shows without it while this
-// card is there (lib/closeout.ts stripCloseout).
+// card is there (lib/closeout-text.ts stripCloseout).
 // Verified commands get only the facts recorded in this closeout's own exchange, never a badge: CloseoutEvidence, a chunk
 // of its own, so its matching code and strings stay off the first screen (#8118).
 import { useEffect, useState, useSyncExternalStore } from "react";
@@ -15,7 +15,8 @@ import type { Item, Session } from "../../lib/types";
 import { Collapse, cx } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { prLink } from "../TodoStageBar";
-import { CloseoutEvidence, closeoutEvidenceChunk, loadCloseoutEvidence, onCloseoutEvidenceChunk } from "./closeout-chunks";
+import { CloseoutEvidence, closeoutEvidenceChunk, loadCloseoutEvidence, onCloseoutEvidenceChunk } from "./closeout-evidence-chunk";
+export { stripCloseout } from "../../lib/closeout-text";
 
 const KIND_ICON: Record<string, IconName> = { pr: "pullRequest", commit: "commit", branch: "branch", doc: "file", build: "tool", url: "link" };
 
