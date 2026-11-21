@@ -659,12 +659,13 @@ func (s *Service) leaderTaskReview(ctx context.Context, machine, session string,
 // and no other task is reachable: it is the leader's direct worker (its ledger names this leader) or nothing.
 func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.RawMessage) (string, error) {
 	var a struct {
-		TodoID    string        `json:"todo_id"`
-		Verdict   string        `json:"verdict"`
-		Checks    []ReviewCheck `json:"checks"`
-		Note      string        `json:"note"`
-		Reason    string        `json:"reason"`
-		Recommend string        `json:"recommend"`
+		TodoID     string        `json:"todo_id"`
+		Verdict    string        `json:"verdict"`
+		ReworkKind string        `json:"rework_kind"`
+		Checks     []ReviewCheck `json:"checks"`
+		Note       string        `json:"note"`
+		Reason     string        `json:"reason"`
+		Recommend  string        `json:"recommend"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(args))
 	dec.DisallowUnknownFields()
@@ -672,10 +673,17 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 		return "", fmt.Errorf("a task leader's task_review takes only the fields its schema lists (%v)", err)
 	}
 	a.Note = strings.TrimSpace(a.Note)
+	a.ReworkKind = strings.TrimSpace(a.ReworkKind)
 	switch a.Verdict {
 	case reviewAccepted, reviewRework, reviewNeedsUser, reviewCancelled:
 	default:
 		return "", errors.New("verdict must be accepted, rework, needs_user or cancelled")
+	}
+	if a.ReworkKind != "" && a.Verdict != reviewRework {
+		return "", errors.New("rework_kind applies to rework only")
+	}
+	if !validReworkKind(a.ReworkKind) {
+		return "", errors.New("rework_kind must be external_input, substantive_new, repeated_error or low_roi_edge")
 	}
 	if a.Verdict == reviewRework && a.Note == "" && !slices.ContainsFunc(a.Checks, func(c ReviewCheck) bool { return !c.Met }) {
 		return "", errors.New("rework: say what is missing (a check that is not met, or note)")
@@ -704,7 +712,8 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 			checks = append(checks, c)
 		}
 	}
-	verdict, note, over := a.Verdict, clip(a.Note, 2000), false
+	verdict, note := a.Verdict, clip(a.Note, 2000)
+	over, overSafetyCap, overCount := false, false, 0
 	var criteriaErr error
 	v, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
 		if verdict == reviewAccepted {
@@ -712,13 +721,15 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 				return false
 			}
 		}
-		if verdict == reviewRework && v.Round >= maxReworkRounds {
-			verdict, over = reviewNeedsUser, true
+		if verdict == reviewRework {
+			if blocked, safetyCap, count := v.reworkBlocked(a.ReworkKind); blocked {
+				verdict, over, overSafetyCap, overCount = reviewNeedsUser, true, safetyCap, count
+			}
 		}
 		r := TaskReview{At: time.Now().UTC(), Verdict: verdict, Checks: checks, Note: note}
 		if verdict == reviewRework {
-			v.Round++
-			r.Round = v.Round
+			round, stalled := v.applyReworkAccounting(a.ReworkKind)
+			r.Round, r.ReworkKind, r.StalledReworkRounds = round, a.ReworkKind, stalled
 		}
 		v.State = verdict
 		v.Reviews = append(v.Reviews, r)
@@ -775,24 +786,42 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 		return fmt.Sprintf("Worker task %s is accepted and closed; its agent is stopped once it stays still (its terminal stays).", t.ID), nil
 	case reviewNeedsUser:
 		why := cmp.Or(clip(oneLine(a.Reason), 200), clip(oneLine(note), 200))
+		n := cmp.Or(overCount, maxReworkRounds)
 		if over && a.Reason == "" {
-			why = fmt.Sprintf("sent back %d times already, still short: %s", maxReworkRounds, clip(oneLine(note), 160))
+			why = fmt.Sprintf("sent back %d times already, still short: %s", n, clip(oneLine(note), 160))
 		}
 		s.signal(superviseSignal{Todo: t.ID, Kind: sigDecide, To: up, Key: fmt.Sprintf("decide@%d@%s", v.Round, time.Now().UTC().Format(time.RFC3339Nano)),
 			Detail: why, Ask: clip(oneLine(a.Recommend), 200)})
 		if over {
+			if overSafetyCap {
+				return fmt.Sprintf("Worker task %s was sent back %d times already (overall rework safety cap %d): it now waits for a decision, which went up to whoever handed "+
+					"you your task. Review it again once the answer reaches you.", t.ID, n, maxTotalReworkRounds), nil
+			}
 			return fmt.Sprintf("Worker task %s was sent back %d times already: it now waits for a decision, which went up to whoever handed "+
-				"you your task. Review it again once the answer reaches you.", t.ID, maxReworkRounds), nil
+				"you your task. Review it again once the answer reaches you.", t.ID, n), nil
 		}
 		return fmt.Sprintf("Worker task %s waits for a decision, which went up to whoever handed you your task. You are told what "+
 			"they decide; no card went to the user.", t.ID), nil
 	}
-	text := prompts.RenderSuperviseRework(prompts.SuperviseRework{Round: v.Round, Max: maxReworkRounds, Checks: reworkChecks(checks), Note: note})
+	displayMax := maxTotalReworkRounds
+	if isStalledReworkKind(a.ReworkKind) && v.Round <= maxReworkRounds {
+		displayMax = maxReworkRounds
+	}
+	text := prompts.RenderSuperviseRework(prompts.SuperviseRework{Round: v.Round, Max: displayMax, Checks: reworkChecks(checks), Note: note})
 	sent, err := s.sendToTask(ctx, t, text)
 	if err != nil {
 		return "", fmt.Errorf("recorded rework round %d, but sending it to the worker failed: %v", v.Round, err)
 	}
-	return fmt.Sprintf("Rework round %d of %d: %s. Its next stop comes back to you as a supervision message.", v.Round, maxReworkRounds, sent), nil
+	stalled := v.stalledReworkRounds()
+	if isStalledReworkKind(a.ReworkKind) && v.Round == stalled {
+		return fmt.Sprintf("Rework round %d of %d: %s. Its next stop comes back to you as a supervision message.", v.Round, maxReworkRounds, sent), nil
+	}
+	if a.ReworkKind != "" {
+		return fmt.Sprintf("Rework round %d of %d (%s; stalled/low-ROI %d of %d): %s. Its next stop comes back to you as a supervision message.",
+			v.Round, maxTotalReworkRounds, a.ReworkKind, stalled, maxReworkRounds, sent), nil
+	}
+	return fmt.Sprintf("Rework round %d of %d (stalled/low-ROI %d of %d): %s. Its next stop comes back to you as a supervision message.",
+		v.Round, maxTotalReworkRounds, stalled, maxReworkRounds, sent), nil
 }
 
 // agentSupervisedSession: the open task agent machine/session works for is supervised by a task leader's agent.
