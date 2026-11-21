@@ -149,6 +149,10 @@ screen while an Agent's reply streamed. The report's one main-thread stack was S
   committed). The block lasted 88 s, then a CPU-limit kill. The log showed the sidebar's Agents `List` given a
   different frame on every pass (331.67 / 72.3 pt left safe area, then 322.67 / 81.7, a three-pass cycle), cell heights
   unchanged, `AssistantSidebar` re-rendering each time: a value written from layout moving the layout (P7).
+- **The fix, checked the same way.** The line the rows stand on (`rowsLeading`) is measured inside the list and pads the
+  head and the main row above it; under the Duo's side safe area it briefly read 89.67 pt. The head and main row now
+  take the column's width and no more, and the write is guarded against echoes (`LayoutEchoGuard`). On the device the
+  drag no longer blocked, and the guard never had to refuse a write: the cap is what broke the loop.
 - Symbolicate system frames from Xcode's DeviceSupport copy (`…/iOS DeviceSupport/<device> <os>/…/Symbols`) with
   `atos -l <__TEXT vmaddr>` and `vmaddr + offset`; Objective-C UIKit methods resolve, Swift internals of SwiftUI do not.
 
