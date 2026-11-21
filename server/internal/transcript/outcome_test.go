@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -162,11 +163,26 @@ func TestClaudeOutcomeEdit(t *testing.T) {
 	if o.Patch != want || o.PatchCut {
 		t.Fatalf("patch %q (cut %v), want %q", o.Patch, o.PatchCut, want)
 	}
-	if !reflect.DeepEqual(o.Files, []proto.OutcomeFile{{Path: "/work/a.go", Adds: 2, Dels: 2}}) {
+	if !reflect.DeepEqual(o.Files, []proto.OutcomeFile{{Path: "/work/a.go", Adds: 2, Dels: 2, BeforeSHA256: "7b39baa38a2ec2b8d111bbbd8e448e80226477ab40105d9d2123d4dc18067438"}}) {
 		t.Fatalf("files %+v", o.Files)
 	}
 	if strings.Contains(fmt.Sprint(o), "package a") {
 		t.Fatal("the original file was copied")
+	}
+}
+
+func TestPreEditFingerprint(t *testing.T) {
+	for _, raw := range []string{`null`, `{}`, `42`, quote(strings.Repeat("x", 256<<10))} {
+		var f fileFingerprint
+		if err := json.Unmarshal([]byte(raw), &f); err != nil || f != "" {
+			t.Fatalf("unexpected fingerprint %q, %v", f, err)
+		}
+	}
+	for _, text := range []string{"", "one\ntwo\n", "雨\n"} {
+		var f fileFingerprint
+		if err := json.Unmarshal([]byte(quote(text)), &f); err != nil || string(f) != fmt.Sprintf("%x", sha256.Sum256([]byte(text))) {
+			t.Fatalf("wrong fingerprint for %q: %s, %v", text, f, err)
+		}
 	}
 }
 

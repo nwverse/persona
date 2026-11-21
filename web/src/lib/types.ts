@@ -698,7 +698,7 @@ export interface Item {
   tool_input?: Record<string, unknown>;
   is_error?: boolean;
   /** The runtime's own outcome, when the node recorded one (docs/protocol/protocol.md "Tool outcomes"). */
-  outcome?: { status?: string; exit_code?: number };
+  outcome?: { status?: string; exit_code?: number; patch?: string; patch_cut?: boolean; files?: { path: string; created?: boolean; before_sha256?: string }[]; git?: { commit?: { sha: string } } };
   full_size?: number;
   /** Opaque identity of the source record when an item ID names only a position. */
   source_fingerprint?: string;

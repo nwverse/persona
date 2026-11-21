@@ -87,6 +87,16 @@ describe("the block the agent reads", () => {
     expect(block.at(-1)).toBe("note");
   });
 
+  it("round-trips session and exchange edit comments, the old side, and the numbered line", () => {
+    const scopes = [{ kind: "changes", scope: "session" }, { kind: "changes", scope: "exchange", turn: "turn a#0" }] as const;
+    for (const diff of scopes) {
+      const quote = codeQuote({ file: "src/a.ts", path: "/repo/src/a.ts", from: 17, to: 17, old: true, diff, lines: ["-const old = 1"] });
+      const parsed = parseCommentBlock(commentBlock(quote, 1));
+      expect(parsed?.comment?.spot).toMatchObject({ diff, old: true, from: 17, to: 17 });
+      expect(parsed?.text).toBe("-const old = 1");
+    }
+  });
+
   it("uses a fence the code cannot close, and leaves the note out when there is none", () => {
     expect(fenceFor("a ``` b")).toBe("````");
     expect(fenceFor("plain")).toBe("```");

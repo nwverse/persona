@@ -48,8 +48,9 @@ async function run(theme) {
       const diff = document.querySelector("[data-change-diff]");
       return document.querySelectorAll("[data-change-call]").length >= 14 && diff && diff.scrollHeight > diff.clientHeight;
     });
+    await page.getByRole("button", { name: /Edited files/ }).click();
     const initial = await page.evaluate(() => {
-      const panel = document.querySelector("[data-changes-panel]"), nav = panel.querySelector("nav"), diff = panel.querySelector("[data-change-diff]"), content = nav.parentElement;
+      const panel = document.querySelector("[data-changes-panel]"), nav = panel.querySelector("nav"), diff = panel.querySelector("[data-change-diff]"), content = nav.parentElement.parentElement;
       return { panelBottom: panel.getBoundingClientRect().bottom, contentClient: content.clientHeight, contentScroll: content.scrollHeight,
         navBottom: nav.getBoundingClientRect().bottom, diffTop: diff.getBoundingClientRect().top, diffBottom: diff.getBoundingClientRect().bottom,
         navClient: nav.clientHeight, navScroll: nav.scrollHeight, diffClient: diff.clientHeight, diffScroll: diff.scrollHeight };
@@ -59,7 +60,7 @@ async function run(theme) {
     assert.ok(initial.diffTop >= initial.navBottom - 1, "file tree and diff must not overlap");
     assert.ok(initial.navScroll > initial.navClient && initial.diffScroll > initial.diffClient);
     const scrolled = await page.evaluate(() => {
-      const nav = document.querySelector("[data-changes-panel] nav"), diff = document.querySelector("[data-change-diff]"), content = nav.parentElement;
+      const nav = document.querySelector("[data-changes-panel] nav"), diff = document.querySelector("[data-change-diff]"), content = nav.parentElement.parentElement;
       nav.scrollTop = nav.scrollHeight;
       diff.scrollTop = 120;
       return { navTop: nav.scrollTop, diffScrollTop: diff.scrollTop, diffTop: diff.getBoundingClientRect().top,

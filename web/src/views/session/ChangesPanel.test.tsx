@@ -93,7 +93,7 @@ async function click(selector: string) {
 beforeEach(() => {
   sequence = 0;
   holder.features = [];
-  localStorage.removeItem("persona.changesTreeWidth");
+  localStorage.clear();
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -108,6 +108,61 @@ afterEach(() => {
 });
 
 describe("ChangesPanel", () => {
+  it("reviews the net change at its recorded lines and keeps each call available", async () => {
+    const path = `${CWD}/a.ts`;
+    const first = edit("e1", path, "const rate = 1;", "const rate = 2;");
+    const second = edit("e2", path, "const rate = 2;", "const rate = 3;");
+    Object.assign(first[1], { outcome: { status: "ok", files: [{ path }], patch: "@@ -12 +12 @@ rate\n-const rate = 1;\n+const rate = 2;" } });
+    Object.assign(second[1], { outcome: { status: "ok", files: [{ path }], patch: "@@ -12 +12 @@ rate\n-const rate = 2;\n+const rate = 3;" } });
+    const denied = edit("denied", path, "3", "100");
+    denied[1].outcome = { status: "denied" };
+    const current = transcript([user("u1"), ...first, ...second, ...denied]);
+    render({ kind: "changes", mid: "m", sid: "s" });
+    const net = host.querySelector<HTMLElement>("[data-net-diff]");
+    expect(net, "one net diff for both edits").not.toBeNull();
+    expect(net!.textContent).toContain("const rate = 1;");
+    expect(net!.textContent).toContain("const rate = 3;");
+    expect(net!.textContent).not.toContain("const rate = 2;");
+    expect(net!.querySelector('button[data-line="12"][data-side="old"]')).not.toBeNull();
+    await click("[data-history-toggle]");
+    expect(host.querySelectorAll("[data-change-call]")).toHaveLength(2);
+    await click("[data-viewed]");
+    expect(host.querySelector("[data-net-diff]")).toBeNull();
+    expect(host.querySelector("[data-viewed-count]")?.textContent).toContain("1/1");
+    const latest = edit("e3", path, "3", "4");
+    latest[1].outcome = { status: "ok", files: [{ path }], patch: "@@ -12 +12 @@\n-const rate = 3;\n+const rate = 4;" };
+    current.items = [...current.items, ...latest];
+    render({ kind: "changes", mid: "m", sid: "s" });
+    expect(host.querySelector("[data-net-diff]")?.textContent).toContain("const rate = 4;");
+    expect(host.querySelector("[data-viewed-count]")?.textContent).toContain("0/1");
+  });
+  it("remembers context and whitespace preferences, keeping both genuine source coordinates", async () => {
+    const path = CWD + "/a.ts";
+    const change = edit("e1", path, "let a=1;", "let a = 1;");
+    change[1].outcome = { status: "ok", files: [{ path }], patch: "@@ -4,4 +4,4 @@\n before\n-let a=1;\n+let a = 1;\n after\n more" };
+    transcript([user("u1"), ...change]);
+    render({ kind: "changes", mid: "m", sid: "s" });
+    const button = () => host.querySelector<HTMLButtonElement>("[data-review-options]")!;
+    await act(async () => button().click());
+    const context = host.querySelector("select")!;
+    await act(async () => {
+      context.value = "0";
+      context.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(host.querySelector('[data-side="new"][data-line="4"]')).toBeNull();
+    const old = () => host.querySelector('[data-side="old"][data-line="5"]')!;
+    const next = () => host.querySelector('[data-side="new"][data-line="5"]')!;
+    expect(old().parentElement).not.toBe(next().parentElement);
+    await click("label input[type=checkbox]:not([data-viewed])");
+    expect(old().parentElement).toBe(next().parentElement);
+    act(() => closePanel());
+    render({ kind: "changes", mid: "m", sid: "s" });
+    await act(async () => button().click());
+    expect(host.querySelector("select")?.value).toBe("0");
+    expect((host.querySelector("label input[type=checkbox]:not([data-viewed])") as HTMLInputElement).checked).toBe(true);
+    expect(old().parentElement).toBe(next().parentElement);
+  });
+
   it("resizes the edited-file tree with keys, remembers it on reopen and resets it", async () => {
     transcript([user("u1"), ...edit("e1", `${CWD}/a.ts`, "old", "new")]);
     render();
@@ -160,7 +215,8 @@ describe("ChangesPanel", () => {
     render();
     await until(() => host.querySelectorAll("[data-change-file]").length === 2);
     expect(host.querySelector("[data-change-diff]")?.textContent).toContain("new a");
-    expect(host.querySelector("[data-change-diff]")?.textContent).not.toContain("new b");
+    expect(host.querySelector("[data-change-diff]")?.textContent).toContain("new b");
+    expect(host.querySelectorAll("[data-review-file]")).toHaveLength(2);
     expect(host.querySelector("[data-review-with-git]")).toBeNull();
 
     await click(`[data-change-file="${CWD}/b.ts"]`);
@@ -169,6 +225,22 @@ describe("ChangesPanel", () => {
 
     await click("[data-open-file]");
     expect(getPanel()).toEqual({ kind: "file", mid: "m", sid: "s", path: `${CWD}/b.ts`, cwd: CWD });
+  });
+
+  it("finishes paging a partial exchange before offering its review totals", async () => {
+    const path = CWD + "/a.ts";
+    const earliest = user("u0");
+    const one = edit("initial", path, "first", "middle");
+    const last = edit("last", path, "middle", "last");
+    const tr = transcript(last, true);
+    render(opened(path, "call-last"));
+    await until(() => tr.loadEarlier.mock.calls.length > 0);
+    expect(host.querySelector("[data-net-diff]")).toBeNull();
+    tr.items = [earliest, ...one, ...last];
+    tr.hasMore = false;
+    render(opened(path, "call-last"));
+    await until(() => host.querySelector("[data-net-diff]")?.textContent?.includes("first") ?? false);
+    expect(host.querySelector("[data-net-diff]")?.textContent).not.toContain("middle");
   });
 
   it("loads earlier pages for the whole-session scope", async () => {
@@ -191,12 +263,13 @@ describe("ChangesPanel", () => {
     const panel = opened();
     render(panel);
     await until(() => Boolean(host.querySelector("[data-change-diff]")));
-    const before = host.querySelector("[data-change-diff]")?.textContent;
+    const before = host.querySelector(`[data-review-file="${CWD}/a.ts"]`)?.textContent;
 
     tr.items = [...tr.items, ...edit("e2", `${CWD}/b.ts`, "old b", "new b")];
     render(panel);
     await until(() => Boolean(host.querySelector("[data-new-changes]")));
-    expect(host.querySelector("[data-change-diff]")?.textContent).toBe(before);
+    expect(host.querySelector(`[data-review-file="${CWD}/a.ts"]`)?.textContent).toBe(before);
+    expect(host.querySelector(`[data-review-file="${CWD}/b.ts"]`)).not.toBeNull();
     expect(host.querySelector("[data-new-changes]")?.textContent).toContain("1");
 
     await click("[data-new-changes]");

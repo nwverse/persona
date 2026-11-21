@@ -30,7 +30,32 @@ try {
         localStorage.setItem("persona.sidebarCollapsed", "1");
         localStorage.removeItem("persona.changesTreeWidth");
       }, { theme, size });
+      const deep = "/Users/me/code/weather/src/app/services/feature/contract/very/deep/native-feature-flags.test.ts";
       const page = await context.newPage();
+      // The stock live fixture emits raw excerpts. Give these 19 distinct edits their recorded
+      // source coordinates so this two-digit layout test measures real net line counts on reload too.
+      const calls = new Map();
+      function positionEdits(message) {
+        for (const item of message.items ?? []) {
+          const id = item.tool_use_id;
+          if (item.kind === "tool_use" && item.tool_input?.file_path === deep && !calls.has(id)) {
+            calls.set(id, calls.size + 1);
+          }
+          const line = calls.get(id);
+          if (item.kind === "tool_result" && line) {
+            item.outcome = { status: "ok", files: [{ path: deep }], patch: "@@ -" + line + " +" + line + " @@\n-before\n+after " + deep };
+          }
+        }
+        return message;
+      }
+      await page.routeWebSocket(/\/api\/v1\/ws\?/, (socket) => {
+        const server = socket.connectToServer();
+        server.onMessage((raw) => socket.send(JSON.stringify(positionEdits(JSON.parse(raw.toString())))));
+      });
+      await page.route(/\/items\?/, async (route) => {
+        const response = await route.fetch();
+        await route.fulfill({ response, json: positionEdits(await response.json()) });
+      });
       page.setDefaultTimeout(20_000);
       page.on("pageerror", error => errors.push(error.message));
       await page.goto(new URL("/s/macbook/a1f3c2d4-0000-4000-8000-000000005157?token=mock", web).href);
@@ -42,7 +67,6 @@ try {
         await page.locator("[data-change-call]").first().waitFor();
       }
       await openChanges();
-      const deep = "/Users/me/code/weather/src/app/services/feature/contract/very/deep/native-feature-flags.test.ts";
       for (let n = 0; n < 19; n++) {
         const url = new URL("/mock/say", hub);
         url.searchParams.set("edit", deep);
@@ -67,6 +91,7 @@ try {
       await page.reload();
       await openChanges();
       assert.equal(await value(), 320);
+      await page.locator('[data-change-scope=session]').click();
       await handle.focus();
       await page.keyboard.press("Home");
       assert.equal(await value(), 160);
@@ -103,7 +128,8 @@ try {
       await page.mouse.move(500, 50);
       await page.screenshot({ path: join(output, `tree-${theme}-${size}.png`) });
       await page.setViewportSize({ width: 390, height: 844 });
-      assert.equal(await handle.isVisible(), false);
+      await handle.waitFor({ state: "hidden" });
+      await page.getByRole("button", { name: /Edited files/ }).click();
       const narrow = await page.locator("[data-changes-panel]").evaluate(panel => {
         const nav = panel.querySelector("nav").getBoundingClientRect(), diff = panel.querySelector("[data-change-diff]").getBoundingClientRect();
         return { treeBottom: nav.bottom, diffTop: diff.top, treeWidth: nav.width, diffWidth: diff.width };

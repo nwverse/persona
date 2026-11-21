@@ -14,5 +14,22 @@
   "retry": "再試行",
   "empty": "この範囲にはまだ編集がありません",
   "resize_label": "編集したファイル一覧の幅を変更",
-  "resize_title": "ドラッグまたは矢印キーで幅を変更。ダブルクリックまたは Enter でリセット"
+  "resize_title": "ドラッグまたは矢印キーで幅を変更。ダブルクリックまたは Enter でリセット",
+  "counts": "{add} 行追加、{del} 行削除",
+  "before": "変更前",
+  "after": "変更後",
+  "comment_line": "{side} · {line} 行目にコメント",
+  "copy_path": "パスをコピー",
+  "incomplete": "履歴だけでは完全な差分を復元できません。下の編集操作で内容を確認できます。",
+  "no_net": "一連の編集による最終的な変更はありません。",
+  "expand_context": "前後の行を表示",
+  "unknown_position": "記録された抜粋 · 行番号なし",
+  "uncaptured_range": "記録された連続する行を選んでください。",
+  "calls_one": "編集操作 {count} 件",
+  "calls_other": "編集操作 {count} 件",
+  "viewed_count": "{viewed}/{count} 件確認済み",
+  "find_files": "ファイルを検索",
+  "no_newline": "ファイル末尾に改行がありません",
+  "display_options": "表示オプション",
+  "context_lines": "コンテキスト行数"
 }

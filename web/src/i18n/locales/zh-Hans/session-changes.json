@@ -14,5 +14,22 @@
   "retry": "重试",
   "empty": "此范围还没有编辑",
   "resize_label": "调整已编辑文件列表宽度",
-  "resize_title": "拖动或使用方向键调整宽度；双击或按回车键重置"
+  "resize_title": "拖动或使用方向键调整宽度；双击或按回车键重置",
+  "counts": "新增 {add} 行，删除 {del} 行",
+  "before": "修改前",
+  "after": "修改后",
+  "comment_line": "{side} · 评论第 {line} 行",
+  "copy_path": "复制路径",
+  "incomplete": "历史记录不足以还原完整差异。可展开下方的编辑调用。",
+  "no_net": "这些编辑没有留下净变化。",
+  "expand_context": "显示更多上下文",
+  "unknown_position": "已记录的片段 · 行号未知",
+  "uncaptured_range": "请选择已记录的连续行。",
+  "calls_one": "{count} 次编辑调用",
+  "calls_other": "{count} 次编辑调用",
+  "viewed_count": "已查看 {viewed}/{count}",
+  "find_files": "查找文件",
+  "no_newline": "文件末尾无换行",
+  "display_options": "显示选项",
+  "context_lines": "上下文行数"
 }

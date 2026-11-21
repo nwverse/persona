@@ -113,7 +113,7 @@ export function editCounts(use: Item): Counts {
  *  clipNoteFormat). */
 const CLIPPED = /\n…（已截断，共 \d+ 字节）$/; // i18n-ignore: matches the hub's text
 
-function clipped(v: unknown): boolean {
+export function clipped(v: unknown): boolean {
   if (typeof v === "string") return CLIPPED.test(v);
   if (Array.isArray(v)) return v.some(clipped);
   return Boolean(v) && typeof v === "object" && Object.values(v as Record<string, unknown>).some(clipped);
@@ -157,4 +157,14 @@ export function turnChanges(steps: readonly Step[], cwd?: string): TurnChangeSet
   if (!files.size) return null;
   const list = [...files.values()];
   return { files: list, add: list.reduce((a, f) => a + f.add, 0), del: list.reduce((a, f) => a + f.del, 0), exact: list.every((f) => f.exact) };
+}
+
+/** Files listed before "Show N more files" (cindy's MAX_VISIBLE_FILES). */
+export const VISIBLE_FILES = 3;
+
+/** The card's height as drawn (Chrome, 2026-11-12), for an exchange's estimate before it is first drawn: its 4 px
+ *  margins, border, the 64 px head, and the files' padding, rows and Show more row. */
+export function turnChangesHeight(c: TurnChangeSet): number {
+  const rows = Math.min(c.files.length, VISIBLE_FILES);
+  return 8 + 2 + 64 + 1 + 16 + rows * 36 + (c.files.length > VISIBLE_FILES ? 32 : 0);
 }

@@ -54,10 +54,12 @@ type OutcomePersisted struct {
 // OutcomeFile is a file an edit changed: lines added and deleted, counted over the whole change (not only the part
 // Patch kept); Created for a file the call wrote new.
 type OutcomeFile struct {
-	Path    string `json:"path"`
-	Adds    int    `json:"adds,omitempty"`
-	Dels    int    `json:"dels,omitempty"`
-	Created bool   `json:"created,omitempty"`
+	// BeforeSHA256 identifies the exact pre-edit UTF-8 content when recorded; no file text is transmitted.
+	BeforeSHA256 string `json:"before_sha256,omitempty"`
+	Path         string `json:"path"`
+	Adds         int    `json:"adds,omitempty"`
+	Dels         int    `json:"dels,omitempty"`
+	Created      bool   `json:"created,omitempty"`
 }
 
 // OutcomeGit is what a command did in git, as Claude Code recorded it (gitOperation).
