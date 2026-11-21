@@ -51,10 +51,14 @@ final class DirectionScreensUITests: XCTestCase {
     /// A word of the app in the run's language.
     private func word(_ en: String, _ zh: String, _ ja: String) -> String { lang == "en" ? en : lang == "ja" ? ja : zh }
 
-    @MainActor private func launch() {
+    /// Launches on the Assistant page, or (`agentChat`, "machine/session") straight into that Agent's chat. The
+    /// assistant picked on this device is the hub's default unless `keepPick` (it outlives a launch, `assistant.manager`).
+    @MainActor private func launch(agentChat: String? = nil, keepPick: Bool = false) {
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-newAssistant", "YES", "-dev.openChat", "",
+        let place = agentChat.map { ["-app.tab", "chats", "-tab", "dev", "-dev.openChat", $0] }
+            ?? ["-tab", "assistant", "-newAssistant", "YES", "-dev.openChat", ""]
+        app.launchArguments = ["-pairURL", pair] + place + (keepPick ? [] : ["-assistant.manager", "{}"]) + [
                                // the first lead held open for this launch only (its fold is the device's)
                                "-assistant.direction.open.lead0000-0000-4000-8000-000000000000", "YES",
                                "-AppleLanguages", "(\(lang))", "-AppleLocale", lang == "en" ? "en_US" : lang == "ja" ? "ja_JP" : "zh_CN"]
@@ -323,8 +327,14 @@ final class DirectionScreensUITests: XCTestCase {
         launch()
         openSidebar()
         if off == "manager" {
-            app.buttons["assistant-switcher"].firstMatch.tap()
-            let work = app.buttons["assistant-switcher-row-m-3fa21c"].firstMatch
+            // The drawer's head (the current assistant, 「助手」 in the mock) opens the switcher; on a phone its rows
+            // inherit the drawer's identifier, so both are found by their words too.
+            let head = app.buttons["assistant-switcher"].exists ? app.buttons["assistant-switcher"].firstMatch
+                : app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "助手")).firstMatch
+            head.tap()
+            let byID = app.buttons["assistant-switcher-row-m-3fa21c"].firstMatch
+            let work = byID.waitForExistence(timeout: 3) ? byID
+                : app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "工作")).firstMatch
             XCTAssertTrue(work.waitForExistence(timeout: 10), "no 工作 in the switcher:\n\(app.debugDescription)")
             work.tap()
             sleep(3)
@@ -361,16 +371,21 @@ final class DirectionScreensUITests: XCTestCase {
         sleep(1)
         shot("off-title-menu-\(off)")
         dismissMenu()
-        app.buttons["shell-agents"].firstMatch.tap()
-        let agent = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "菜谱网站加搜索")).firstMatch
-        XCTAssertTrue(agent.waitForExistence(timeout: 15))
-        agent.press(forDuration: 1.2)
+        // An Agent on no to-do (Move To… would be offered with the feature on): its chat's ⋯, the same inventory as its
+        // row's long press (`AgentActionMenu`).
+        app.terminate()
+        launch(agentChat: "macbook/a1f3c2d4-0000-4000-8000-000000000007", keepPick: off == "manager")
+        if off == "manager" { sleep(2) } // the pick of 工作 is kept on the device
+        let more = app.buttons["chat.more"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 20), "no ⋯ on the Agent's chat:\n\(app.debugDescription)")
+        sleep(2)
+        more.tap()
         sleep(1)
         shot("off-agent-menu-\(off)")
     }
 
     /// VoiceOver's Expanded in the run's language.
-    private var expanded: String { lang == "en" ? "Expanded" : lang == "ja" ? "展開" : "已展开" }
+    private var expanded: String { lang == "en" ? "Expanded" : lang == "ja" ? "展開済み" : "已展开" }
 
     @MainActor private func dismissMenu() {
         app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.04)).tap()
