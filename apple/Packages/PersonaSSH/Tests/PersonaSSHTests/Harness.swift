@@ -81,6 +81,19 @@ final class TestSSHD: @unchecked Sendable {
 
     var log: String { (try? String(contentsOf: dir.appending(path: "sshd.log"), encoding: .utf8)) ?? "" }
 
+    /// Preserve timing and connection/authentication events, not the fixture username or public-key fingerprint.
+    /// These are test-generated credentials; the snapshot still redacts them before entering the retained trace.
+    func traceFailure() {
+        let lines = log.split(separator: "\n", omittingEmptySubsequences: false)
+        for line in lines.prefix(1000) {
+            let redacted = line
+                .replacingOccurrences(of: user, with: "<test-user>")
+                .replacingOccurrences(of: "SHA256:[A-Za-z0-9+/=]+", with: "<key-id>", options: .regularExpression)
+            trace("sshd failure | \(redacted)")
+        }
+        if lines.count > 1000 { trace("sshd failure | truncated \(lines.count - 1000) lines") }
+    }
+
     deinit {
         stop()
         try? FileManager.default.removeItem(at: dir)

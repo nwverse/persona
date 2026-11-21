@@ -187,6 +187,37 @@ class AppleCIPreparationTests(unittest.TestCase):
         self.assertIn('--test-bundle "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/PlugIns/PersonaTests.xctest/PersonaTests"', readiness)
 
 
+    def test_native_ssh_failure_evidence_has_a_timeline_and_a_redacted_server_snapshot(self):
+        package = ROOT / 'apple/Packages/PersonaSSH'
+        diagnostics = (package / 'Sources/PersonaSSH/Diagnostics.swift').read_text()
+        tunnel = (package / 'Sources/PersonaSSH/SSHTunnel.swift').read_text()
+        handlers = (package / 'Sources/PersonaSSH/Handlers.swift').read_text()
+        harness = (package / 'Tests/PersonaSSHTests/Harness.swift').read_text()
+        test = (package / 'Tests/PersonaSSHTests/SSHTunnelTests.swift').read_text()
+        self.assertIn('includingFractionalSeconds: true', diagnostics)
+        self.assertIn('guard let path = ProcessInfo.processInfo.environment["PERSONA_SSH_TRACE"] else { return }', diagnostics)
+        self.assertIn('func trace(_ message: @autoclosure () -> String)', diagnostics)
+        self.assertIn('guard ProcessInfo.processInfo.environment["PERSONA_SSH_TRACE"] != nil else { return nil }', diagnostics)
+        self.assertIn('traceID: "\\(self.traceID) \\(attemptID)"', tunnel)
+        for event in ('connection requested', 'dial start', 'session authenticated',
+                      'close observed', 'current owner cleared', 'channel open timed out'):
+            self.assertIn(event, tunnel)
+        for event in ('session viability', 'session error', 'session inactive'):
+            self.assertIn('trace("\\(traceID) ' + event, handlers)
+        forwarding = test.split('@Test func forwardsRequestsToTheHub() async throws {', 1)[1].split('@Test func', 1)[0]
+        self.assertLess(forwarding.index('forwarding test begin'), forwarding.index('forwarding health complete'))
+        self.assertLess(forwarding.index('forwarding health complete'), forwarding.index('forwarding session count'))
+        self.assertIn('if accepted != 1 { sshd.traceFailure() }', forwarding)
+        self.assertIn('#expect(accepted == 1, "unexpected SSH sessions; server log: \\(log)")', forwarding)
+        self.assertNotIn('repeat', forwarding)
+        self.assertIn('.prefix(1000)', harness)
+        self.assertIn('.replacingOccurrences(of: user, with: "<test-user>")', harness)
+        self.assertIn('"SHA256:[A-Za-z0-9+/=]+", with: "<key-id>"', harness)
+        # No new file or upload path: the existing failure collector retains the same opt-in trace.
+        self.assertIn('trace("sshd failure | \\(redacted)")', harness)
+        self.assertIn('ci_run \'PersonaSSH native tunnel integration tests\' 900 env PERSONA_SSH_TRACE="$OUTPUT/native-ssh-trace.log"', SCRIPT.read_text())
+        self.assertIn('"regular-readiness.log", "native-ssh-trace.log",', (ROOT / 'scripts/ci/apple_diagnostics.py').read_text())
+
     def test_native_ssh_tests_run_before_the_app_and_fail_the_lane_on_error(self):
         script = SCRIPT.read_text()
         packages = script.split('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then\n', 1)[1].split('\nfi', 1)[0]
