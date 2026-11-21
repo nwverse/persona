@@ -149,6 +149,164 @@ func TestNormalizeGitHubTaskURLAndExtract(t *testing.T) {
 	if len(prs) != 1 || prs[0] != "https://github.com/example/repo/pull/99" || len(issues) != 0 {
 		t.Fatalf("mail Message-ID extract = prs:%v issues:%v", prs, issues)
 	}
+
+	// Fallback thread extraction must reject #0 (and #00) and normalize positive numbers.
+	for _, invalidThread := range []string{"example/repo#0", "example/repo#00", "example/repo#999999999999999999999999"} {
+		it := &InboxItem{
+			ID:        "github:zero",
+			Source:    "github",
+			Connector: &InboxConnector{Thread: invalidThread},
+		}
+		gotPRs, gotIssues, gotFallback := extractInboxGitHubURLs(it)
+		if len(gotPRs) != 0 || len(gotIssues) != 0 || len(gotFallback) != 0 {
+			t.Fatalf("extractInboxGitHubURLs(thread=%q) = (%v, %v, %v), want all empty", invalidThread, gotPRs, gotIssues, gotFallback)
+		}
+	}
+	validThreadItem := &InboxItem{
+		ID:        "github:thread42",
+		Source:    "github",
+		Connector: &InboxConnector{Thread: " Example/Repo#042 "},
+	}
+	_, _, gotFallback := extractInboxGitHubURLs(validThreadItem)
+	if len(gotFallback) != 1 || gotFallback[0] != "example/repo#42" {
+		t.Fatalf("extractInboxGitHubURLs(thread=Example/Repo#042) fallback = %v, want [example/repo#42]", gotFallback)
+	}
+}
+
+func TestInboxTodoForwardSharedNumberPreservesEventKindAndRejectsZeroThread(t *testing.T) {
+	ctx := context.Background()
+	repoStore := &fakeTodoRepoStore{
+		planMemStore: &planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}},
+		repos:        map[string][]repository.TaskRepository{},
+	}
+	f := newFakeHub().withMachine()
+	s := newServiceOn(t, f, repoStore)
+	if _, err := s.updateSettings(ctx, func(v *Settings) error { v.Main = "conv1"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTimes.gather = time.Millisecond
+	in := newFakeInbox()
+	f.inbox, in.svc = in, s
+	if err := s.inboxReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+	turnInboxTodoForwardOn(t, s)
+
+	todoPR := agentTask(t, s, f)
+	todoIssue := supervisedTodo(t, s, "Issue 322 task")
+	f.setSessions("box",
+		proto.Session{SessionID: "sec00001", MachineID: "box", Cwd: "/code/desk", Agent: "claude", Title: "PR Agent", Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: time.Now()},
+		proto.Session{SessionID: "iss32201", MachineID: "box", Cwd: "/code/desk", Agent: "claude", Title: "Issue Agent", Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: time.Now()},
+	)
+	s.todos.mu.Lock()
+	s.todos.todos[todoPR.ID].PRURL = "https://github.com/example/repo/pull/321"
+	s.todos.todos[todoIssue.ID].Agents = []TodoAgent{{MachineID: "box", SessionID: "iss32201", LinkedAt: time.Now()}}
+	s.todos.mu.Unlock()
+	repoStore.repos[todoIssue.ID] = []repository.TaskRepository{{
+		RepoID: "repo-1",
+		Links:  []repository.TaskLink{{Kind: "issue", Number: "322", CanonicalURL: "https://github.com/example/repo/issues/322"}},
+	}}
+
+	// 1. Issue URL event matching a PR-bound to-do via shared number must preserve Issue kind and URL.
+	issueEvent := &InboxItem{
+		ID:        "github:issue-comment-on-pr-321",
+		Source:    "github",
+		Kind:      KindMention,
+		Title:     "Comment on #321",
+		Sender:    "reviewer",
+		Preview:   "Please re-check this case",
+		Last:      "c-321",
+		UpdatedAt: time.Now(),
+		Connector: &InboxConnector{Thread: "example/repo#321", URL: "https://github.com/Example/Repo/issues/321#issuecomment-12"},
+	}
+	// 2. Symmetric case: PR URL event matching an Issue-bound to-do via shared number must preserve PR kind and URL.
+	prEvent := &InboxItem{
+		ID:        "github:pr-on-issue-322",
+		Source:    "github",
+		Kind:      KindMention,
+		Title:     "Review on #322",
+		Sender:    "reviewer",
+		Preview:   "Looks good overall",
+		Last:      "c-322",
+		UpdatedAt: time.Now(),
+		Connector: &InboxConnector{Thread: "example/repo#322", URL: "https://github.com/example/repo/pull/322#discussion_r5"},
+	}
+	// 3. Thread-only fallback without an exact URL synthesizes from the matched binding table.
+	threadOnlyEvent := &InboxItem{
+		ID:        "github:thread-only-321",
+		Source:    "github",
+		Kind:      KindMention,
+		Title:     "Notification on #321",
+		Sender:    "reviewer",
+		Preview:   "Ping",
+		Last:      "c-321-t",
+		UpdatedAt: time.Now(),
+		Connector: &InboxConnector{Thread: "example/repo#321"},
+	}
+	// 4. Invalid #0 thread must never synthesize a match or audit metadata.
+	zeroEvent := &InboxItem{
+		ID:        "github:zero-thread",
+		Source:    "github",
+		Kind:      KindMention,
+		Title:     "Malformed #0 notification",
+		Sender:    "reviewer",
+		Preview:   "Should be ignored",
+		Last:      "c-0",
+		UpdatedAt: time.Now(),
+		Connector: &InboxConnector{Thread: "example/repo#0"},
+	}
+
+	s.inbox.mu.Lock()
+	for _, it := range []*InboxItem{issueEvent, prEvent, threadOnlyEvent, zeroEvent} {
+		s.inbox.items[it.ID] = it
+	}
+	s.inbox.mu.Unlock()
+
+	before := len(sentToAgent(f))
+	s.handPass(ctx)
+
+	sent := sentToAgent(f)[before:]
+	if len(sent) != 3 {
+		t.Fatalf("expected 3 forwarded messages, got %d", len(sent))
+	}
+	if issueEvent.TodoForward == nil || issueEvent.TodoForward.TodoID != todoPR.ID ||
+		issueEvent.TodoForward.MatchKind != todoForwardMatchIssue ||
+		issueEvent.TodoForward.CanonicalURL != "https://github.com/example/repo/issues/321" ||
+		issueEvent.TodoForward.Status != TodoForwardSent {
+		t.Fatalf("issue shared-number fallback corrupted kind/url: %+v", issueEvent.TodoForward)
+	}
+	if prEvent.TodoForward == nil || prEvent.TodoForward.TodoID != todoIssue.ID ||
+		prEvent.TodoForward.MatchKind != todoForwardMatchPR ||
+		prEvent.TodoForward.CanonicalURL != "https://github.com/example/repo/pull/322" ||
+		prEvent.TodoForward.Status != TodoForwardSent {
+		t.Fatalf("PR shared-number fallback corrupted kind/url: %+v", prEvent.TodoForward)
+	}
+	if threadOnlyEvent.TodoForward == nil || threadOnlyEvent.TodoForward.TodoID != todoPR.ID ||
+		threadOnlyEvent.TodoForward.MatchKind != todoForwardMatchPR ||
+		threadOnlyEvent.TodoForward.CanonicalURL != "https://github.com/example/repo/pull/321" ||
+		threadOnlyEvent.TodoForward.Status != TodoForwardSent {
+		t.Fatalf("thread-only fallback unexpected TodoForward: %+v", threadOnlyEvent.TodoForward)
+	}
+	if zeroEvent.TodoForward != nil {
+		t.Fatalf("expected #0 thread not to match or persist TodoForward, got %+v", zeroEvent.TodoForward)
+	}
+
+	// Verify the forwarded envelope for issueEvent carries the actual Issue URL rather than a synthesized PR URL.
+	foundIssueEnvelope := false
+	for _, msg := range sent {
+		if strings.Contains(msg, "inbox_item_id: github:issue-comment-on-pr-321") {
+			foundIssueEnvelope = true
+			if !strings.Contains(msg, "canonical_url: https://github.com/example/repo/issues/321") {
+				t.Errorf("issueEvent envelope did not preserve Issue canonical_url:\n%s", msg)
+			}
+			if strings.Contains(msg, "canonical_url: https://github.com/example/repo/pull/321") {
+				t.Errorf("issueEvent envelope misreported PR URL:\n%s", msg)
+			}
+		}
+	}
+	if !foundIssueEnvelope {
+		t.Fatalf("did not find forwarded envelope for issueEvent")
+	}
 }
 
 func TestInboxTodoForwardSettingDefaultOffAndToggle(t *testing.T) {

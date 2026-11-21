@@ -203,11 +203,16 @@ func extractInboxGitHubURLs(it *InboxItem) (prs, issues, fallbackRepoNums []stri
 	scanText(it.Context)
 
 	if it.Source == "github" && it.Connector != nil {
-		if m := inboxRepoThread.FindStringSubmatch(strings.TrimSpace(it.Connector.Thread)); m != nil {
-			repoNum := strings.ToLower(strings.TrimSpace(it.Connector.Thread))
-			if !seenFallback[repoNum] {
-				seenFallback[repoNum] = true
-				fallbackRepoNums = append(fallbackRepoNums, repoNum)
+		thread := strings.TrimSpace(it.Connector.Thread)
+		if inboxRepoThread.MatchString(thread) {
+			if repo, num, ok := strings.Cut(thread, "#"); ok && repo != "" {
+				if n, err := strconv.ParseUint(num, 10, 64); err == nil && n > 0 {
+					repoNum := fmt.Sprintf("%s#%d", strings.ToLower(repo), n)
+					if !seenFallback[repoNum] {
+						seenFallback[repoNum] = true
+						fallbackRepoNums = append(fallbackRepoNums, repoNum)
+					}
+				}
 			}
 		}
 	}
@@ -299,34 +304,40 @@ func (idx *inboxForwardTodoIndex) match(it *InboxItem) (todoForwardMatch, bool) 
 	}
 
 	// 3. Fallback for GitHub shared numbering (e.g. notification URL uses /issues/N for PR #N, or thread owner/repo#N).
-	// Still prefer PR bindings over Issue bindings.
-	repoNums := make([]string, 0, len(prs)+len(issues)+len(fallbackRepoNums))
+	// Still prefer PR bindings over Issue bindings, while preserving the event's exact canonical URL and kind when known.
+	candidates := make([]repoNumCandidate, 0, len(prs)+len(issues)+len(fallbackRepoNums))
 	seen := map[string]bool{}
-	addRepoNum := func(rn string) {
-		if rn != "" && !seen[rn] {
-			seen[rn] = true
-			repoNums = append(repoNums, rn)
+	addCandidate := func(c repoNumCandidate) {
+		if c.repoNum != "" && !seen[c.repoNum] {
+			seen[c.repoNum] = true
+			candidates = append(candidates, c)
 		}
 	}
 	for _, u := range prs {
-		addRepoNum(githubCanonicalRepoNum(u))
+		addCandidate(repoNumCandidate{repoNum: githubCanonicalRepoNum(u), canonicalURL: u, matchKind: todoForwardMatchPR})
 	}
 	for _, u := range issues {
-		addRepoNum(githubCanonicalRepoNum(u))
+		addCandidate(repoNumCandidate{repoNum: githubCanonicalRepoNum(u), canonicalURL: u, matchKind: todoForwardMatchIssue})
 	}
 	for _, rn := range fallbackRepoNums {
-		addRepoNum(rn)
+		addCandidate(repoNumCandidate{repoNum: rn})
 	}
 
-	if m, matched, ambiguous := idx.matchRepoNumCandidates(repoNums, idx.prByRepoNum, todoForwardMatchPR); matched {
+	if m, matched, ambiguous := idx.matchRepoNumCandidates(candidates, idx.prByRepoNum, todoForwardMatchPR); matched {
 		return m, true
 	} else if ambiguous {
 		return todoForwardMatch{}, false
 	}
-	if m, matched, _ := idx.matchRepoNumCandidates(repoNums, idx.issueByRepoNum, todoForwardMatchIssue); matched {
+	if m, matched, _ := idx.matchRepoNumCandidates(candidates, idx.issueByRepoNum, todoForwardMatchIssue); matched {
 		return m, true
 	}
 	return todoForwardMatch{}, false
+}
+
+type repoNumCandidate struct {
+	repoNum      string
+	canonicalURL string
+	matchKind    string
 }
 
 func (idx *inboxForwardTodoIndex) matchCandidates(urls []string, table map[string][]string, kind string) (todoForwardMatch, bool, bool) {
@@ -350,21 +361,29 @@ func (idx *inboxForwardTodoIndex) matchCandidates(urls []string, table map[strin
 	return todoForwardMatch{}, false, false
 }
 
-func (idx *inboxForwardTodoIndex) matchRepoNumCandidates(repoNums []string, table map[string][]string, kind string) (todoForwardMatch, bool, bool) {
-	found := map[string]string{} // todoID -> canonical URL synthesized from repoNum + kind
+func (idx *inboxForwardTodoIndex) matchRepoNumCandidates(candidates []repoNumCandidate, table map[string][]string, fallbackKind string) (todoForwardMatch, bool, bool) {
+	found := map[string]todoForwardMatch{} // todoID -> first matched candidate
 	seg := "issues"
-	if kind == todoForwardMatchPR {
+	if fallbackKind == todoForwardMatchPR {
 		seg = "pull"
 	}
-	for _, rn := range repoNums {
-		repo, num, ok := strings.Cut(rn, "#")
-		if !ok || repo == "" || num == "" {
-			continue
+	for _, c := range candidates {
+		canonical, kind := c.canonicalURL, c.matchKind
+		if canonical == "" {
+			repo, num, ok := strings.Cut(c.repoNum, "#")
+			if !ok || repo == "" {
+				continue
+			}
+			n, err := strconv.ParseUint(num, 10, 64)
+			if err != nil || n == 0 {
+				continue
+			}
+			canonical = fmt.Sprintf("https://github.com/%s/%s/%d", repo, seg, n)
+			kind = fallbackKind
 		}
-		canonical := fmt.Sprintf("https://github.com/%s/%s/%s", repo, seg, num)
-		for _, id := range table[rn] {
+		for _, id := range table[c.repoNum] {
 			if _, exists := found[id]; !exists {
-				found[id] = canonical
+				found[id] = todoForwardMatch{todo: idx.open[id], canonicalURL: canonical, matchKind: kind}
 			}
 		}
 	}
@@ -374,8 +393,8 @@ func (idx *inboxForwardTodoIndex) matchRepoNumCandidates(repoNums []string, tabl
 	if len(found) > 1 {
 		return todoForwardMatch{}, false, true
 	}
-	for id, u := range found {
-		return todoForwardMatch{todo: idx.open[id], canonicalURL: u, matchKind: kind}, true, false
+	for _, m := range found {
+		return m, true, false
 	}
 	return todoForwardMatch{}, false, false
 }
