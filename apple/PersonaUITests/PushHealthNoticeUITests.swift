@@ -15,7 +15,11 @@ final class PushHealthNoticeUITests: XCTestCase {
         self.hub = hub
     }
 
+    /// `PERSONA_ORIENTATION=landscape`: the captures held sideways (the Duo open on its side), like `ComposerExpandTests`.
+    private var landscape: Bool { ProcessInfo.processInfo.environment["PERSONA_ORIENTATION"] == "landscape" }
+
     override func tearDown() {
+        if landscape { XCUIDevice.shared.orientation = .portrait }
         app?.terminate()
         super.tearDown()
     }
@@ -31,6 +35,7 @@ final class PushHealthNoticeUITests: XCTestCase {
             + (keepClosed ? [] : ["-pushNotice.dismissed", "{}"])
             + (largest ? ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] : [])
         app.launchPinned()
+        if landscape { XCUIDevice.shared.orientation = .landscapeLeft }
 
         // Answer only the system's notification question. A previously authorized simulator shows no alert.
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
@@ -133,7 +138,7 @@ final class PushHealthNoticeUITests: XCTestCase {
             break
         }
         let image = app.screenshot()
-        let name = "push-health-notice-\(look)-\(largest ? "largest" : "default")-\(UITestStyle.name)"
+        let name = "push-health-notice-\(look)-\(largest ? "largest" : "default")\(landscape ? "-landscape" : "")-\(UITestStyle.name)"
         let attachment = XCTAttachment(screenshot: image)
         attachment.name = name
         attachment.lifetime = .keepAlways
