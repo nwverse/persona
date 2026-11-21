@@ -27,6 +27,7 @@ const (
 	sigStarted       = "started"        // its agent started after the supervisor's retry (start_remedy.go)
 	sigPRConflict    = "pr_conflict"    // the task's current open PR has merge conflicts at this head
 	sigDraftPR       = "draft_pr"       // an own linked PR is still draft, not waiting for upstream review
+	sigPREvent       = "pr_event"       // a current-head PR CI failure or review fell back from direct Agent routing
 	sigReport        = "report"         // its agent reported to the supervisor (report_to_supervisor, agent_control.go)
 	sigEscalated     = "escalated"      // its leader conversation judged it needs the user (supervise_leader.go): told the main one
 	sigOrphaned      = "orphaned"       // nobody works on it: its agents are closed or offline and nothing brings one back (tasks_orphan.go)
@@ -140,6 +141,9 @@ func (g superviseSignal) id() string {
 	if g.Kind == sigDraftPR {
 		return g.Todo + "|" + g.Kind + "@" + g.PRURL
 	}
+	if g.Kind == sigPREvent {
+		return g.Todo + "|" + g.Kind + "@" + g.PRURL + ":" + g.Report
+	}
 	if g.Kind == sigReport || g.Kind == sigCheck {
 		return g.Todo + "|" + g.Kind + ":" + g.Report
 	}
@@ -161,7 +165,7 @@ func (g superviseSignal) id() string {
 // urgent: a signal that waits on a decision goes out sooner than the rest.
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
-	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
+	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigPREvent, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
 		sigRecheck, sigUndecidable, sigOwnerCannot, sigEstimateDue, sigTimedOut, // the owner, an automatic deadline or a stopped task waits
 		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult:
 		return true

@@ -388,7 +388,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	queued := s.queuedDigestSignals(to)
 	msg := relayMsg{From: superviseTool, FromTitle: "督办", Tool: superviseTool, At: now.UTC()}
 	if len(queued) > 0 && !slices.ContainsFunc(kept, func(g superviseSignal) bool {
-		return g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigDecisionReply ||
+		return g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPREvent || g.Kind == sigDecisionReply ||
 			g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
 	}) {
 		// The last message may still wait in the queue: this one takes its place with both.
@@ -473,7 +473,7 @@ func (b *superviseBook) setQueuedLocked(to string, list []superviseSignal) {
 // out), and the digest is tried again in the urgent gap, or later when the gap after prev has not passed yet.
 func (s *Service) queueDigest(to string, msg relayMsg, kept []superviseSignal, at, prev time.Time) bool {
 	if slices.ContainsFunc(kept, func(g superviseSignal) bool {
-		return g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigDecisionReply ||
+		return g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPREvent || g.Kind == sigDecisionReply ||
 			g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
 	}) {
 		// Rendered relays cannot recheck PR facts, a source acknowledgment or a decision round. Keep these signals pending, so the next
@@ -628,6 +628,10 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		if p == nil || p.URL != t.PRURL || p.State != "open" || !p.Conflicts || p.HeadOID == "" ||
 			g.Key != p.URL+"@"+p.HeadOID || s.stagePR(t.ID) != p.URL {
 			return prompts.SuperviseEntry{}, false // resolved, closed, or replaced while the signal waited
+		}
+	case sigPREvent:
+		if !s.prEventSignalStillHolds(t, g) {
+			return prompts.SuperviseEntry{}, false
 		}
 	case sigTimedOut:
 		if st != reviewTimedOut {
