@@ -866,6 +866,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		Prompt                  string        `json:"prompt"`
 		ResumeSessionID         string        `json:"resume_session_id"`
 		ResumeAutomatic         bool          `json:"resume_automatic"`
+		A2AWakeOnSend           bool          `json:"a2a_wake_on_send"`
 		Host                    string        `json:"host"` // session.start: the enabled host to open in ("" the default host, #2576)
 		TaskID                  string        `json:"task_id"`
 		WorkspaceID             string        `json:"workspace_id"`
@@ -958,6 +959,36 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("bad params: %w", err)
 		}
+	}
+	if method == "session.a2a.send" {
+		// This path is called by the manager's delivery queue. The separate
+		// method prevents older nodes from ignoring the idle-only guard.
+		id := n.resolveAlias(p.SessionID)
+		for _, sess := range n.sessionList(ctx, true) {
+			runtimeWake := p.A2AWakeOnSend && sess.Status == proto.StatusOffline && sess.SourceKind == proto.SourceRuntime &&
+				sess.Capabilities != nil && sess.Capabilities.Send && sess.Capabilities.A2AWakeOnSend &&
+				(sess.Capabilities.StopCause == "" || sess.Capabilities.StopCause == proto.StopIdle || sess.Capabilities.StopCause == proto.StopRestart)
+			if sess.SessionID == id && !sess.Archived && !sess.Starting && len(sess.Queued) == 0 &&
+				(sess.Status == proto.StatusIdle || sess.Status == proto.StatusDone || runtimeWake) {
+				return n.handleMethod(ctx, "session.send", params)
+			}
+		}
+		return nil, refusal("a2a_session_busy", "A2A delivery is waiting for a live, idle session", nil)
+	}
+	if method == "session.a2a.wake" {
+		id := n.resolveAlias(p.SessionID)
+		cause := n.stopCause(id)
+		if cause != proto.StopIdle && cause != proto.StopRestart {
+			return nil, refusal("a2a_session_busy", "A2A can resume a session only after an idle stop or restart", nil)
+		}
+		params, err := json.Marshal(map[string]any{"resume_automatic": true, "resume_session_id": id,
+			"prompt": p.Text, "client_msg_id": p.ClientMsgID, "supervision_instructions": p.SupervisionInstructions,
+			"origin": p.Origin, "origin_known": p.OriginKnown, "is_main": p.IsMain, "main_compact_window": p.MainCompact,
+			"claude_interactive": p.Interactive})
+		if err != nil {
+			return nil, err
+		}
+		return n.handleMethod(ctx, "session.start", params)
 	}
 	sessionSend := method == "session.send" || method == proto.MethodSessionSendUnseen
 	if backendLaunchFrom(ctx) == nil && (sessionSend || method == "session.start" && p.ResumeSessionID != "") {

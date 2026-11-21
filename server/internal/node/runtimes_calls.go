@@ -139,6 +139,7 @@ func errRuntimeUnsupported(label, what string) error {
 
 // runtimeCallParams are the parameters of a hub call about a runtime's session that the node looks at.
 type runtimeCallParams struct {
+	A2AWakeOnSend  bool          `json:"a2a_wake_on_send"`
 	Force          bool          `json:"force"`
 	SessionID      string        `json:"session_id"`
 	Text           string        `json:"text"`
@@ -268,8 +269,11 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 				}
 			}
 			return n.sendEchoed(p.SessionID, opts.ClientMsgID, p.Text, len(p.Images), after, func() error { // echo.go
-				out, err := call("session.send", map[string]any{"session_id": p.SessionID, "text": p.Text, "images": p.Images,
-					"client_msg_id": opts.ClientMsgID})
+				input := map[string]any{"session_id": p.SessionID, "text": p.Text, "images": p.Images, "client_msg_id": opts.ClientMsgID}
+				if p.A2AWakeOnSend {
+					input["a2a_wake_on_send"] = true
+				}
+				out, err := call("session.send", input)
 				said = out
 				return err
 			})

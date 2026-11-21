@@ -198,6 +198,12 @@ describe('MCP declaration enums (#9944)', { timeout: 15_000 }, () => {
 })
 
 describe('mcpServers', () => {
+  it('passes a scoped A2A ticket only to the regular agent', () => {
+    const agent = mcpServers('/bin/personad', 'agy-1', false, 'test-ticket')
+    const chat = mcpServers('/bin/personad', 'agy-2', true, 'test-ticket')
+    assert.ok(agent[0].env.some(({ name, value }) => name === 'PERSONA_A2A_TOKEN' && value === 'test-ticket'))
+    assert.ok(chat[0].env.every(({ name }) => name !== 'PERSONA_A2A_TOKEN'))
+  })
   it('passes one persona server; an assistant chat\'s through the proxy', () => {
     const agent = mcpServers('/bin/personad', 'agy-1', false)
     assert.deepEqual(agent.map((s) => [s.name, s.command, s.args]), [['persona', '/bin/personad', ['mcp']]])

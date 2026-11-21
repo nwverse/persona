@@ -351,6 +351,9 @@ func handle(ctx context.Context, version string, req request) (any, *rpcError) {
 		// (report_to_supervisor and the todo tools need to know whose call it is: node callerTools).
 		call := map[string]any{"kind": "mcp.call", "away_ok": true, "name": p.Name, "args": p.Arguments,
 			"session_id": sessionID(), "assistant": isAssistant(), "guest": isGuest(), "pane": nodeclient.HookPane(os.Getenv)}
+		if token := os.Getenv("PERSONA_A2A_TOKEN"); token != "" {
+			call["a2a_token"] = token
+		}
 		if mcpWaitFrom(ctx) != nil {
 			call["wait_updates"] = true // an older node ignores this and returns only its final line
 		}
@@ -447,6 +450,9 @@ func listTools(ctx context.Context) (toolSnapshot, error) {
 func listToolsOnce(ctx context.Context, previous toolSnapshot) (toolSnapshot, error) {
 	req := map[string]any{"kind": "mcp.tools", "away_ok": true, "assistant": isAssistant(), "session_id": sessionID(), "guest": isGuest(),
 		"pane": nodeclient.HookPane(os.Getenv), "input": map[string]string{"revision": previous.Revision, "session": previous.Session}}
+	if token := os.Getenv("PERSONA_A2A_TOKEN"); token != "" {
+		req["a2a_token"] = token
+	}
 	if set := toolSet(); set != "" {
 		req["tool_set"] = set // a supervision round's narrower set (node/assistant_round.go)
 	}

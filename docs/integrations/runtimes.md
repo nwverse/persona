@@ -31,7 +31,21 @@ The runtime doesn't need to know where the hub is, open ports or authenticate (a
 
 A runtime that can't reach the local socket (it's a long-running service: another system user, in a container, on another machine) connects the other way round and is called a **daemon** (`docs/integrations/daemons.md`):
 it opens a WebSocket endpoint and node connects to it per `~/.persona/daemons.json`, with a token. Once connected it speaks the same protocol, and the SDK driver doesn't change a line
-(`createRuntime(driver, {listen: {port, token}})`). The name comes from config and session ids are namespaced, so a daemon can't touch other sessions on the machine, and it has no `mcp.*`.
+(`createRuntime(driver, {listen: {port, token}})`). The name comes from config and session ids are namespaced.
+The daemon's config can enroll it in [A2A](a2a.md) for its own sessions.
+
+For [A2A](a2a.md) tools, use `rt.tools({sessionId})` and
+`rt.callTool({name, args, session_id: sessionId})` with the executing Agent's
+session ID. The node checks runtime ownership before a call. A local runtime
+that configures a provider's stdio MCP server can request a ticket with
+`rt.a2aMcpToken(sessionId)`. Pass it as `PERSONA_A2A_TOKEN`, alongside
+`PERSONA_SESSION_ID`, to a private `personad mcp` process. The ticket grants
+that provider A2A tools for its own session and should stay in its MCP environment.
+
+A runtime that releases idle sessions and can safely wake them with an
+ordinary send may set `capabilities.a2a_wake_on_send` on those rows. The
+node passes `a2a_wake_on_send: true` to `send` when delivering a task update
+through that path. Decline if the session was manually stopped or archived.
 
 ## What to implement
 

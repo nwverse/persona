@@ -8,9 +8,10 @@ import (
 // TestDistBudget bounds what personad, persona-node and persona-manager embed of the runtime packages: every file
 // Generate writes from integrations/. The complete Antigravity package, including the image guard (#11790),
 // measured 192,060 B. Preserving delivered replies through a background wake (#11756) adds 1,822 B.
+// Persona A2A adds the SDK's tool declarations and session-scoped MCP support to the runtime packages.
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 194_559
+	const budget = 195_883
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

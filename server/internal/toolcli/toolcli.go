@@ -9,8 +9,7 @@
 //	    <connector>_cli tool reads the words and names the tool to call; that tool is called (through the gate, as by
 //	    name); with --format text the connector shows its answer for people (docs/protocol/connector-protocol.md "Command line")
 //
-// The one Agent-side exception is task_spawn: the node resolves its runtime/pane identity and the manager scopes it
-// to its existing supervised task. It never grants the assistant's connector tools.
+// task_spawn and the A2A tools also accept a scoped Agent session resolved by the node.
 //
 // Output is for a program: one line of JSON on stdout, or text for a person. A failure is one line of JSON on stderr
 // ({error, kind, retry_after}), or "<name>: …" with --format text, and an exit code by its kind; a mistake in the
@@ -93,7 +92,8 @@ const (
 	usageTool = "personad tool <tool> [<json args> | -]"
 	usageCLI  = "personad tool --cli <connector> [--format json|text] <words…>"
 	usage     = "personad tool: a connector's tools from the assistant's shell, through the Persona hub\n  " + usageTool + "\n  " + usageCLI +
-		"\n  task_spawn: a separate session on an Agent's existing supervised task (title and prompt)"
+		"\n  task_spawn: a separate session on an Agent's existing supervised task (title and prompt)" +
+		"\n  a2a_sessions, a2a_send, a2a_get, a2a_report, a2a_cancel: communicate through Persona A2A"
 )
 
 // Main runs one command line and returns its exit code. Help is the usage on stdout; a mistake in the command line

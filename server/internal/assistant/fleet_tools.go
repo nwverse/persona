@@ -151,6 +151,12 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 		} else if toolSetOf(ctx) == toolSetSupervise {
 			tools = roundTools(tools)
 		}
+		cfg := s.a2aConfig(ctx)
+		_, hasA2A := s.a2aStore()
+		if hasA2A == nil && (session == "" && s.a2aMachineAllowed(ctx, cfg, s.canonical(machine)) ||
+			s.a2aAllowed(ctx, cfg, a2aRef{s.canonical(machine), session})) {
+			tools = append(tools, toolsNamed(assistantwire.A2AToolNames)...)
+		}
 		return tools, nil
 	}
 	if s.isWorkMachine(machine) {
@@ -199,6 +205,9 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 	}
 	if res, refused := s.inboxModelRefusal(ctx, machine, session, origin, name); refused {
 		return res
+	}
+	if assistantwire.IsA2ATool(name) {
+		return s.a2aTool(ctx, a2aRef{s.canonical(machine), session}, name, args)
 	}
 	if isKnowledgeFolderTool(name) && !assistant {
 		return s.Tool(ctx, ToolCall{Name: name, Arguments: args, MachineID: machine, SessionID: session})

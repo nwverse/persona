@@ -987,7 +987,7 @@ export function createAgyRuntime(options = {}) {
     const check = withAcp(acp, async () => {
       try {
         await acp.ensureSessionLoaded(rawId, sessionCwds.get(rawId) || home,
-          acp.isAsst ? mcpServersFor(toPersonaId(rawId), true) : [], extraDirsFor(rawId))
+          await mcpServersFor(toPersonaId(rawId), acp.isAsst), extraDirsFor(rawId))
         const snapshot = await acp.nativeRequest('GetCascadeTrajectory', { cascadeId: rawId, disableRehydration: true })
         if (snapshot.trajectory?.cascadeId === rawId && (snapshot.trajectory.steps || []).length === count) {
           rememberCut(rawId, transcript, count)
@@ -1235,9 +1235,10 @@ export function createAgyRuntime(options = {}) {
     throw new RpcError('Antigravity image not found', 'not_found')
   }
 
-  function mcpServersFor(pid, isAsst) {
+  async function mcpServersFor(pid, isAsst) {
     if (!existsSync(personadBin)) return []
-    return mcpServers(personadBin, pid, isAsst)
+    const a2aToken = isAsst ? undefined : await rt.a2aMcpToken(pid).catch(() => undefined)
+    return mcpServers(personadBin, pid, isAsst, a2aToken)
   }
 
   /** A runtime call that uses agy acp, under a lease. A process from before the CLI signed in again is replaced first. */
@@ -1440,7 +1441,7 @@ export function createAgyRuntime(options = {}) {
         const dir = syncPolicy(policyRoot, rawId, policy)
         if (dir) extraDirs = [dir]
       }
-      await loadSession(acp, rawId, cwd, mcpServersFor(pid, acp.isAsst), extraDirs)
+      await loadSession(acp, rawId, cwd, await mcpServersFor(pid, acp.isAsst), extraDirs)
       await applySessionOptions(acp, rawId, {
         model: params.model || configuredModel(),
         permission_mode: params.permission_mode || configuredMode(),
@@ -1948,7 +1949,7 @@ export function createAgyRuntime(options = {}) {
                 const dir = syncPolicy(policyRoot, rawId, nextPolicy)
                 if (dir) extraDirs = [dir]
               }
-              await loadSession(acp, rawId, cwd, mcpServersFor(pid, acp.isAsst), extraDirs)
+              await loadSession(acp, rawId, cwd, await mcpServersFor(pid, acp.isAsst), extraDirs)
               if (!turn.cancelled && !stopped && !archived.has(rawId)) {
                 const modeInfo = sessionModes.get(rawId)
                 const settingsMode = !params.mode && modeInfo?.modeSource === 'settings'
@@ -2202,7 +2203,7 @@ export function createAgyRuntime(options = {}) {
     forking.add(pid)
     try {
       return await busyCall(acp, async () => {
-        await loadSession(acp, rawId, cwd, mcpServersFor(pid, isAsst), extraDirsFor(rawId))
+        await loadSession(acp, rawId, cwd, await mcpServersFor(pid, isAsst), extraDirsFor(rawId))
         let transcript = exportedTranscriptOf(rawId)
         while (pending && !pendingReplaced(pending, transcript.steps)) {
           const remaining = deadline - Date.now()
@@ -2305,7 +2306,7 @@ export function createAgyRuntime(options = {}) {
     rewinding.add(pid)
     try {
       const cwd = sessionCwds.get(rawId) || home
-      await loadSession(acp, rawId, cwd, mcpServersFor(pid, false))
+      await loadSession(acp, rawId, cwd, await mcpServersFor(pid, false))
       const snapshot = await acp.nativeRequest('GetCascadeTrajectory', { cascadeId: rawId,
         verbosity: 'CLIENT_TRAJECTORY_VERBOSITY_PROD_UI', trajectoryVerbosity: 'CLIENT_TRAJECTORY_VERBOSITY_PROD_UI', disableRehydration: true })
       if (snapshot.trajectory?.cascadeId !== rawId) throw new RpcError('The native conversation changed', 'rewind_mismatch')
@@ -2369,7 +2370,7 @@ export function createAgyRuntime(options = {}) {
     const acp = acpFor(rawId, isAsst)
     return busyCall(acp, async () => {
       await retryStaleModels(acp, async () => {
-        await loadSession(acp, rawId, cwd, mcpServersFor(pid, isAsst), extraDirsFor(rawId))
+        await loadSession(acp, rawId, cwd, await mcpServersFor(pid, isAsst), extraDirsFor(rawId))
         await applySessionOptions(acp, rawId, { model, permission_mode, effort })
       })
       rt.sessionsChanged()
