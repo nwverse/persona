@@ -75,6 +75,18 @@ class PersonaModelPanelTest {
         assertEquals(PersonaModelPanel.Setup("claude", null, "high", PersonaModelPanel.Source.Own), PersonaModelPanel.setup(of(gone), info))
     }
 
+    @Test fun mainDefaultEffortAndModelApplyWithoutChangingOtherChatsOrPicks() {
+        val own = info.copy(default = LauncherDefault("claude", "main-model", "low"))
+        val main = PersonaModelPanel.setup(of(chat, main = true), own)
+        assertEquals("main-model", main.model)
+        assertEquals("low", main.effort)
+        assertEquals("high", PersonaModelPanel.setup(of(chat), own).effort)
+        assertEquals("opus", PersonaModelPanel.setup(of(null), info).model)
+        val picked = chat.copy(modelPick = ModelPick("team", "picked", "medium"))
+        assertEquals(PersonaModelPanel.Setup("team", "picked", "medium", PersonaModelPanel.Source.Pick),
+            PersonaModelPanel.setup(of(picked, main = true), own))
+    }
+
     @Test fun theProvidersEndWithWhatCantRunThere() {
         val setup = PersonaModelPanel.setup(of(chat), info)
         val panel = PersonaModelPanel.panel(setup, info, ::read, typed = true, running = true)
