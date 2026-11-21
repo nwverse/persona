@@ -22,6 +22,8 @@ export interface ContextBreakdownSlot {
 export interface SessionModelUsage {
   /** Normalized bare model identifier, or "" when the transcript did not record a model. */
   model: string;
+  /** True for fast-speed requests, kept distinct from normal-speed usage on the same model (matching turn-cost.modelTokens). */
+  fast?: boolean;
   /** Human-readable display label for the model, or "" when unknown. */
   label: string;
   /** Non-cached input tokens. */
@@ -89,6 +91,7 @@ export interface CompactSupport {
 
 interface RawBucket {
   model: string;
+  fast: boolean;
   order: number;
   input: number;
   output: number;
@@ -119,15 +122,16 @@ function hitRateOf(input: number, cacheRead: number, cacheWrite: number): { hasC
 export function aggregateSessionTokens(items: readonly Item[]): SessionTokenSummary | null {
   if (!items.length) return null;
 
-  const reports = new Map<string, { model: string; input: number; output: number; cacheRead: number; cacheWrite: number }>();
+  const reports = new Map<string, { model: string; fast: boolean; input: number; output: number; cacheRead: number; cacheWrite: number }>();
   const models = new Map<string, RawBucket>();
   let nextOrder = 0;
 
-  const ensureModel = (model: string): RawBucket => {
-    let bucket = models.get(model);
+  const ensureModel = (model: string, fast: boolean): RawBucket => {
+    const key = `${model}\n${fast ? 1 : 0}`;
+    let bucket = models.get(key);
     if (!bucket) {
-      bucket = { model, order: nextOrder++, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-      models.set(model, bucket);
+      bucket = { model, fast, order: nextOrder++, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+      models.set(key, bucket);
     }
     return bucket;
   };
@@ -140,10 +144,11 @@ export function aggregateSessionTokens(items: readonly Item[]): SessionTokenSumm
     if (inp + out + read + write === 0) return;
 
     const model = u.model ? bareModel(u.model) : u.id ? "" : fallbackModel;
-    ensureModel(model);
+    const fast = Boolean(u.fast);
+    ensureModel(model, fast);
 
     if (u.id) {
-      const reportKey = `${u.id}\n${model}\n${u.fast ? 1 : 0}`;
+      const reportKey = `${u.id}\n${model}\n${fast ? 1 : 0}`;
       const prev = reports.get(reportKey);
       if (prev) {
         prev.input = Math.max(prev.input, inp);
@@ -151,12 +156,12 @@ export function aggregateSessionTokens(items: readonly Item[]): SessionTokenSumm
         prev.cacheRead = Math.max(prev.cacheRead, read);
         prev.cacheWrite = Math.max(prev.cacheWrite, write);
       } else {
-        reports.set(reportKey, { model, input: inp, output: out, cacheRead: read, cacheWrite: write });
+        reports.set(reportKey, { model, fast, input: inp, output: out, cacheRead: read, cacheWrite: write });
       }
       return;
     }
 
-    const bucket = ensureModel(model);
+    const bucket = ensureModel(model, fast);
     bucket.input += inp;
     bucket.output += out;
     bucket.cacheRead += read;
@@ -174,7 +179,7 @@ export function aggregateSessionTokens(items: readonly Item[]): SessionTokenSumm
   }
 
   for (const r of reports.values()) {
-    const bucket = ensureModel(r.model);
+    const bucket = ensureModel(r.model, r.fast);
     bucket.input += r.input;
     bucket.output += r.output;
     bucket.cacheRead += r.cacheRead;
@@ -197,6 +202,7 @@ export function aggregateSessionTokens(items: readonly Item[]): SessionTokenSumm
     const { hasCache, cacheHitRate } = hitRateOf(b.input, b.cacheRead, b.cacheWrite);
     modelRows.push({
       model: b.model,
+      ...(b.fast ? { fast: true } : {}),
       label: b.model ? replyModelName(b.model) : "",
       input: b.input,
       output: b.output,

@@ -312,4 +312,29 @@ describe("ContextMeter + lazy SessionInsightsPopover", () => {
     expect(mocks.toast).toHaveBeenCalledWith(expect.any(String), "error");
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it("renders separate rows when the same model has both normal and fast speed usage", async () => {
+    const anchor = { current: host };
+    const dualSpeedItems: Item[] = [
+      {
+        id: "a1",
+        seq: 1,
+        role: "assistant",
+        kind: "text",
+        usage: [
+          { model: "claude-opus-4-5", in: 2000, out: 1000 },
+          { model: "claude-opus-4-5", fast: true, in: 1000, out: 500 },
+        ],
+      },
+    ];
+    await mount(
+      <SessionInsightsPopover anchor={anchor} session={baseSession} items={dualSpeedItems} onClose={() => {}} />,
+    );
+    const rows = [...document.querySelectorAll("[data-insights-models] li")].map((li) => li.textContent ?? "");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toContain("Opus 4.5");
+    expect(rows[0]).not.toContain("Fast");
+    expect(rows[1]).toContain("Opus 4.5");
+    expect(rows[1]).toContain("Fast");
+  });
 });

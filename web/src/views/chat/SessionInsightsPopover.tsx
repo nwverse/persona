@@ -260,9 +260,11 @@ export function SessionInsightsPopover({
                 <ul className="flex flex-col gap-1 tabular-nums">
                   {tokens.models.map((m) => {
                     const modelHit = formatHitRate(m.cacheHitRate);
+                    const name = m.label || t("chat-sessioninsights.unknown_model");
+                    const label = m.fast ? `${name} · ${t("chat-sessiondialogs.speed_fast")}` : name;
                     return (
-                      <li key={m.model || "__unknown__"} className="flex items-center justify-between gap-2 rounded-lg bg-inset px-2.5 py-1.5">
-                        <span className="min-w-0 truncate font-medium text-ink">{m.label || t("chat-sessioninsights.unknown_model")}</span>
+                      <li key={`${m.model || "__unknown__"}\n${m.fast ? 1 : 0}`} className="flex items-center justify-between gap-2 rounded-lg bg-inset px-2.5 py-1.5">
+                        <span className="min-w-0 truncate font-medium text-ink">{label}</span>
                         <span className="shrink-0 text-ink-3">
                           {compactTokens(m.total)}
                           {modelHit ? ` · ${modelHit}` : ""}
@@ -272,10 +274,14 @@ export function SessionInsightsPopover({
                   })}
                 </ul>
               </div>
-            ) : tokens.models.length === 1 && tokens.models[0].label ? (
+            ) : tokens.models.length === 1 && (tokens.models[0].label || tokens.models[0].fast) ? (
               <div className="flex items-center justify-between gap-2 text-ink-3" data-insights-model-single>
                 <span>{t("chat-sessioninsights.model_single")}</span>
-                <span className="truncate font-medium text-ink">{tokens.models[0].label}</span>
+                <span className="truncate font-medium text-ink">
+                  {tokens.models[0].fast
+                    ? `${tokens.models[0].label || t("chat-sessioninsights.unknown_model")} · ${t("chat-sessiondialogs.speed_fast")}`
+                    : tokens.models[0].label}
+                </span>
               </div>
             ) : null}
           </section>

@@ -132,6 +132,52 @@ describe("aggregateSessionTokens", () => {
     ]);
     expect(summary.total).toBe(6900 + 3800 + 500);
   });
+
+  it("keeps normal-speed and fast-speed usage on the same model in separate buckets (matching turn-cost.modelTokens)", () => {
+    const items: Item[] = [
+      item({
+        id: "1",
+        seq: 1,
+        usage: [
+          { model: "claude-opus-4-5", in: 1000, out: 500, cache_read: 4000 },
+          { model: "claude-opus-4-5", fast: true, in: 600, out: 400, cache_read: 1000 },
+          { id: "sub-1", model: "claude-opus-4-5", in: 500, out: 200 },
+          { id: "sub-1", model: "claude-opus-4-5", fast: true, in: 300, out: 100, cache_read: 600 },
+        ],
+      }),
+      item({
+        id: "2",
+        seq: 2,
+        usage: [
+          // duplicate sub-1 reports deduplicate within each speed bucket independently
+          { id: "sub-1", model: "claude-opus-4-5", in: 700, out: 200 },
+          { id: "sub-1", model: "claude-opus-4-5", fast: true, in: 300, out: 200, cache_read: 600 },
+        ],
+      }),
+    ];
+
+    const summary = aggregateSessionTokens(items)!;
+    // normal: direct (1000, 500, 4000) + sub-1 (700, 200, 0) = in 1700, out 700, read 4000 => 6400
+    // fast:   direct (600, 400, 1000)  + sub-1 (300, 200, 600) = in 900, out 600, read 1600 => 3100
+    expect(summary.models).toHaveLength(2);
+    expect(summary.models[0]).toMatchObject({
+      model: "claude-opus-4-5",
+      input: 1700,
+      output: 700,
+      cacheRead: 4000,
+      total: 6400,
+    });
+    expect(summary.models[0].fast).toBeUndefined();
+    expect(summary.models[1]).toMatchObject({
+      model: "claude-opus-4-5",
+      fast: true,
+      input: 900,
+      output: 600,
+      cacheRead: 1600,
+      total: 3100,
+    });
+    expect(summary.total).toBe(9500);
+  });
 });
 
 describe("latestTurnDurationMs", () => {
