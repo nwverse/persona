@@ -41,7 +41,10 @@ def rows(stream, since, until):
     allowed = route_templates()
     for line in stream:
         try:
-            message = json.loads(line).get("MESSAGE", "")
+            entry = json.loads(line)
+            if not isinstance(entry, dict):
+                continue
+            message = entry.get("MESSAGE", "")
             if not isinstance(message, str) or "traffic minute=" not in message:
                 continue
             fields = shlex.split(message[message.index("traffic minute=") + len("traffic "):])
