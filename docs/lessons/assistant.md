@@ -828,6 +828,34 @@ mark the conversation as being replaced under that same lock (`relayBook.replaci
 delivery respect the mark (the direct ones queue), and clear it only where what waited has moved or the replacement
 failed, draining it again then (`TestNothingGoesIntoABackgroundSupervisorBeingReplaced`).
 
+## Personal verification is unfinished work (#10047)
+
+A supervisor's accepted review is not the owner's personal verification. Keep an explicit `user_check` task open
+until Pass, so both completed-task and ordinary idle retirement leave its Agent available. Feedback starts a new
+work round even though the task was already open: otherwise its old Pass can verify rework. Test open counts and
+the actual retirement passes as well as the card; a still-pending card alone never proves its task is open.
+The acceptance record and completion are separate durable writes: recover a saved owner Pass after a restart,
+including the verified stage if the todo was already closed.
+Recovery follows the current round's owner Pass, not only a `user_check` ledger: completion and the ledger's
+transition to `accepted` can each precede a crash before verification. Retry only unfinished steps, keep ledger
+write failures recoverable, and do not repeat completion or verification notifications on subsequent sweeps.
+Serialize the round change, not an ordinary message's Agent-start wait: a second message must still join the
+Agent already starting (`TestStoppedTaskSecondMessageGoesToTheStartingAgent`), rather than wait behind the
+first sender's action lock.
+Cover the real database too: an ordinary `done: false` edit of an already-open todo intentionally does not advance
+`reopened_at`. Personal-verification feedback must explicitly restart that work round in the store; an in-memory
+timestamp alone lets an old Pass verify the rework after a manager restart.
+Reset the raw `user_check` ledger on every reopen, including a closed task's PATCH, since its effective state
+already reads accepted while closed. A fresh personal-verification review reopens before writing its new ledger.
+Commit the reopen and ledger reset together: a partial write leaves the task waiting on a Pass it can no longer use.
+On startup and the acceptance sweep, rebuild a missing ask from its saved review. Save the ask before posting the
+card, and check the round after taking the task action lock so a queued Pass cannot complete a newer check.
+Do not restart a waiting verification until its replacement review passed validation and was saved. Release the
+round's action lock before feedback delivery, and bind the eventual reply receipt to that ask's timestamp so a slow
+delivery cannot swallow a newer verification.
+An ordinary edit that repeats `done: false` is not a reopen. A saved replacement review also makes the old Pass
+stale if a later work-round write fails, so a restart cannot verify rework through that old card.
+
 ## A queued supervision digest is not a snapshot of work that still needs review (#10424)
 
 An interruption and an unjudged turn can wait behind a busy supervisor while that task recovers and is accepted.

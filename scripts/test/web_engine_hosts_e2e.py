@@ -70,6 +70,8 @@ def run(browser, base, hub, token, size, theme, shots):
     expect(box("paseo")).to_have_attribute("aria-checked", "false")
     expect(box("tern")).to_have_attribute("aria-checked", "false")  # found on the studio, not enabled (#2154)
     expect(section.locator('[data-engine="tern"]')).to_contain_text("Tern 里的终端")
+    expect(box("rex")).to_have_attribute("aria-checked", "false")
+    expect(section.locator('[data-engine="rex"]')).to_contain_text("Rex 里的终端")
     expect(box("cindy")).to_have_attribute("aria-checked", "false")
     expect(section.locator('[data-engine="cindy"]')).to_contain_text("Cindy 里的 Agent")
     expect(box("t3code")).to_have_attribute("aria-checked", "false")
