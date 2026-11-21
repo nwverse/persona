@@ -39,13 +39,17 @@ gh workflow run pr-needs-issue.yml --ref main -f pr_number=<number>  # metadata 
 ```
 
 The seven required lanes have independent reusable workflows. **CI required** rejects failed, cancelled, missing or unexpectedly skipped
-selected jobs. iOS/Watch contributes to that aggregate; **Mac (non-blocking)** reports its actual independent result without
+selected jobs, and any run whose path selection or guards did not succeed; it reads only the jobs' results, so it checks out one
+commit, not the whole history. iOS/Watch contributes to that aggregate; **Mac (non-blocking)** reports its actual independent result without
 `continue-on-error` and is not part of the aggregate. An unselected lane is never claimed as tested.
 All workflows except the image publisher accept only `workflow_dispatch` and, for reusable platform workflows, `workflow_call`.
 The image and Release publisher additionally retains `push` for **`v*` release tags**: Docker installations use its version and `latest` images, and the same tag gets a GitHub Release.
 No branch push or PR starts it. The issue-link Action also requires explicit dispatch from the default branch with a PR number.
 
-The `changes` job runs repository/commit privacy and path safety, including `scripts/ci/guards.sh`, migration freeze, sleep ratchet and the no-CallKit source guard (`docs/operations/release.md`, "No CallKit").
+The `guards` job (**Manual repository guards**) runs `scripts/ci/guards.sh`: repository/commit privacy and path safety, migration freeze, sleep ratchet and the no-CallKit source guard (`docs/operations/release.md`, "No CallKit").
+It checks against the base the `changes` job (**Manual path selection**) resolved, so one run has one base. No platform lane needs it:
+a failing guard says nothing about the platforms, so their results still come out, and **CI required**, which needs both
+jobs, fails and names the guards. Before #12725 the guards ran inside `changes` and a guard failure skipped every lane.
 An edit, deletion or rename of a `.sql` file already on the base under `server/internal/db/migrations/hub` or
 `server/internal/db/migrations/manager` fails that check. Comment-only and whitespace-only edits pass; add a new migration instead.
 A new file is named by the UTC second it is written, `YYYYMMDDHHMMSS_<name>.sql` in lower case (`$(date -u +%Y%m%d%H%M%S)_<name>.sql`),
@@ -63,7 +67,7 @@ squash merge leaves them (`git merge-file` where `main` changed a file too), wit
 messages apply, the sleep ratchet's never-raise check included, and the merge is refused when a file ends further from its baseline
 than `main` has it. A file `main` already fails is left to its own fix unless the PR moves it further; a file both sides change in
 conflicting ways is left to the merge, which refuses it. A new per-file ratchet goes into that script's `RATCHETS` too.
-With `lanes=auto`, the base defaults to `origin/main`; an explicit `base` is resolved to a commit before guards and path selection.
+With `lanes=auto`, the base defaults to `origin/main`; an explicit `base` is resolved to a commit once, in `changes`, and the guards use that commit.
 
 Dispatched code runs with `contents: read`, without persisted checkout credentials, private config or new secrets. The issue-link
 workflow uses metadata-only write permissions and runs only from the default branch. Image and GitHub Release publishing have `packages: write` and `contents: write` only in the publish job. CI concurrency keys use the repository/branch and full/lanes selection; dispatches in the same group cancel stale
