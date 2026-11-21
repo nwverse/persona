@@ -39,6 +39,8 @@
   "change_load_all_tools": "“Load every Persona tool up front”: {before} → {after}",
   "title_agent_tasks": "Every Agent Persona starts is a supervised task",
   "change_agent_tasks": "“Every Agent Persona starts is a supervised task”: {before} → {after}",
+  "title_task_lessons": "Learn from finished tasks",
+  "change_task_lessons": "“Learn from finished tasks”: {before} → {after}",
   "title_close_ended_terminals": "Close an Agent's terminal when it ends",
   "change_close_ended_terminals": "“Close an Agent's terminal when it ends”: {before} → {after}",
   "title_inbox_signals": "Tell a task's supervisor about new Inbox messages on it",

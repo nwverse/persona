@@ -87,7 +87,8 @@ class LaunchDiagnosticsTests(unittest.TestCase):
                     path.write_text(json.dumps(context))
                 self.collect()
                 self.assertEqual(self.calls, [])
-                self.assertIn("unavailable", self.status())
+                self.assertEqual(self.status(),
+                                 "unavailable: scope-validation-failure; no launch cause established\n")
                 self.assertFalse((self.destination / "simulator-launch.json").exists())
                 self.assertFalse((self.destination / launch.CONTEXT).exists())
 
@@ -99,6 +100,8 @@ class LaunchDiagnosticsTests(unittest.TestCase):
         path.symlink_to(private)
         self.collect()
         self.assertFalse(self.calls)
+        self.assertEqual(self.status(),
+                         "unavailable: scope-validation-failure; no launch cause established\n")
         self.assertEqual({p.name for p in self.destination.iterdir()}, {"simulator-launch.status.txt"})
 
     def test_both_scope_files_reject_links_large_files_and_fifos(self):
@@ -120,7 +123,8 @@ class LaunchDiagnosticsTests(unittest.TestCase):
                         path.mkdir()
                     self.collect()
                     self.assertFalse(self.calls)
-                    self.assertIn("unavailable", self.status())
+                    self.assertEqual(self.status(),
+                                     "unavailable: scope-validation-failure; no launch cause established\n")
                     self.assertFalse((self.destination / "simulator-launch.json").exists())
                     if kind == "directory":
                         path.rmdir()
@@ -189,31 +193,111 @@ class LaunchDiagnosticsTests(unittest.TestCase):
         self.assertEqual(launch.RAW_LOG_BYTES, 4 * 1024 * 1024)
 
     def test_streamed_large_export_fails_closed(self):
-        entry = self.entry(eventMessage=f"Launch {launch.BUNDLE} " + "x" * (launch.MAX_BYTES + 1))
         command = [sys.executable, "-c", "import os; os.write(1,b'x'*" + str(launch.MAX_BYTES + 100) + ")"]
         with self.assertRaisesRegex(ValueError, "single launch event"):
             launch.stream_output(command, START, START + timedelta(minutes=15), UDID, launch.BUNDLE)
 
     def test_collection_failures_name_the_boundary_not_a_cause(self):
-        self.collect(reader=lambda command: (_ for _ in ()).throw(TimeoutError()))
-        self.assertIn("log command timed out", self.status())
+        for error in (TimeoutError(), subprocess.TimeoutExpired("/usr/bin/log", 20)):
+            with self.subTest(error=type(error).__name__):
+                self.collect(reader=lambda command, error=error: (_ for _ in ()).throw(error))
+                self.assertEqual(self.status(), "unavailable: scoped log command timed out\n")
         self.collect(reader=lambda command: b"not JSON DO NOT EXPORT")
-        self.assertIn("scoped collection failed", self.status())
+        self.assertEqual(self.status(),
+                         "unavailable: stream-parse-failure; no launch cause established\n")
         self.assertNotIn("DO NOT EXPORT", self.status())
 
-    def test_bad_output_timeout_and_command_errors_remain_unavailable(self):
-        for value in (b"not JSON DO NOT EXPORT", b"{}", b"x" * (launch.MAX_BYTES + 1),
-                      TimeoutError("DO NOT EXPORT"), OSError("DO NOT EXPORT")):
-            with self.subTest(kind=type(value).__name__):
+    def test_log_command_failures_are_distinct_from_stream_parsing(self):
+        for error in (OSError("credential /private/command-path DO NOT EXPORT"),
+                      ValueError("command failed (exit 1) DO NOT EXPORT"),
+                      subprocess.SubprocessError("DO NOT EXPORT")):
+            with self.subTest(error=type(error).__name__):
                 def reader(command):
                     self.calls.append(command)
-                    if isinstance(value, Exception):
-                        raise value
-                    return value
-                previous = len(self.calls)
+                    raise error
                 self.collect(reader=reader)
-                self.assertEqual(len(self.calls), previous + 1)
-                self.assertIn("unavailable", self.status())
+                self.assertEqual(self.status(),
+                                 "unavailable: log-command-failure; no launch cause established\n")
+                self.assertNotIn("DO NOT EXPORT", self.status())
+                self.assertNotIn("/private/", self.status())
+                self.assertEqual(len(self.calls), 1)  # No raw-error or broader fallback query.
+                self.calls.clear()
+
+    def test_reader_output_limit_has_its_own_category(self):
+        self.collect(reader=lambda command: b"x" * (launch.MAX_BYTES + 1))
+        self.assertEqual(self.status(),
+                         "unavailable: output-limit-failure; no launch cause established\n")
+
+    def test_default_stream_malformed_ndjson_is_not_a_command_or_publication_failure(self):
+        real_popen = launch.subprocess.Popen
+        def fake_log(command, **kwargs):
+            return real_popen([sys.executable, "-c", "print('not NDJSON DO NOT EXPORT')"], **kwargs)
+        with mock.patch.object(launch.subprocess, "Popen", side_effect=fake_log):
+            launch.collect(self.output, self.destination, now=START + timedelta(minutes=17))
+        self.assertEqual(self.status(),
+                         "unavailable: stream-parse-failure; no launch cause established\n")
+        self.assertNotIn("DO NOT EXPORT", self.status())
+        self.assertFalse((self.destination / "simulator-launch.json").exists())
+
+    def test_default_stream_raw_limit_is_not_a_parse_failure(self):
+        with mock.patch.object(launch, "RAW_LOG_BYTES", 8):
+            with self.assertRaises(launch.OutputLimitError):
+                launch.stream_output([sys.executable, "-c", "import os; os.write(1,b'123456789')"],
+                                     START, START + timedelta(minutes=15), UDID, launch.BUNDLE)
+
+    def test_default_stream_command_exit_is_a_log_command_failure(self):
+        real_popen = launch.subprocess.Popen
+        def fake_log(command, **kwargs):
+            return real_popen([sys.executable, "-c", "raise SystemExit(7)"], **kwargs)
+        with mock.patch.object(launch.subprocess, "Popen", side_effect=fake_log):
+            launch.collect(self.output, self.destination, now=START + timedelta(minutes=17))
+        self.assertEqual(self.status(),
+                         "unavailable: log-command-failure; no launch cause established\n")
+        self.assertNotIn("exit", self.status())
+
+    def test_default_stream_raw_limit_is_reported_at_collect_boundary(self):
+        real_popen = launch.subprocess.Popen
+        def fake_log(command, **kwargs):
+            return real_popen([sys.executable, "-c", "import os; os.write(1,b'123456789')"], **kwargs)
+        with mock.patch.object(launch.subprocess, "Popen", side_effect=fake_log), \
+                mock.patch.object(launch, "RAW_LOG_BYTES", 8):
+            launch.collect(self.output, self.destination, now=START + timedelta(minutes=17))
+        self.assertEqual(self.status(),
+                         "unavailable: output-limit-failure; no launch cause established\n")
+
+    def test_default_stream_timeout_keeps_the_existing_category(self):
+        real_popen = launch.subprocess.Popen
+        def fake_log(command, **kwargs):
+            return real_popen([sys.executable, "-c", "import signal; signal.pause()"], **kwargs)
+        with mock.patch.object(launch.subprocess, "Popen", side_effect=fake_log), \
+                mock.patch.object(launch.time, "monotonic", side_effect=[0, 100]):
+            launch.collect(self.output, self.destination, now=START + timedelta(minutes=17))
+        self.assertEqual(self.status(), "unavailable: scoped log command timed out\n")
+
+    def test_publication_failure_does_not_export_paths_or_hide_behind_stream_parse(self):
+        original = launch.Path.write_bytes
+        def fail_evidence(path, data):
+            if path.name == "simulator-launch.json":
+                raise OSError("/private/output-path credential DO NOT EXPORT")
+            return original(path, data)
+        with mock.patch.object(launch.Path, "write_bytes", fail_evidence):
+            self.collect()
+        self.assertEqual(self.status(),
+                         "unavailable: publication-failure; no launch cause established\n")
+        self.assertNotIn("DO NOT EXPORT", self.status())
+        self.assertNotIn("/private/", self.status())
+        self.assertFalse((self.destination / "simulator-launch.json").exists())
+        self.assertFalse((self.destination / launch.CONTEXT).exists())
+
+    def test_bad_output_timeout_and_command_errors_remain_unavailable(self):
+        for raw, category in ((b"not JSON DO NOT EXPORT", "stream-parse"),
+                              (b"[]\n", "stream-parse"),
+                              (b"\xff", "stream-parse"),
+                              (b"x" * (launch.MAX_BYTES + 1), "output-limit")):
+            with self.subTest(category=category, raw=raw[:20]):
+                self.collect(reader=lambda command, raw=raw: raw)
+                self.assertEqual(self.status(),
+                                 f"unavailable: {category}-failure; no launch cause established\n")
                 self.assertNotIn("DO NOT EXPORT", self.status())
                 self.assertFalse((self.destination / "simulator-launch.json").exists())
 

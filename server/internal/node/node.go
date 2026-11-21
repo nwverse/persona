@@ -99,6 +99,8 @@ type Node struct {
 
 	// doctorAt replaces the places node.doctor looks at (tests; doctor_rpc.go).
 	doctorAt func() DoctorOptions
+	// machineProcs replaces OS process/port hooks in tests (machine_procs.go).
+	machineProcs *machineProcsOps
 	// fileReadDeps replaces file.read's filesystem operations in tests.
 	fileReadDeps *fileReadDependencies
 
@@ -858,6 +860,14 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		return machdiag.Cleanup(ctx, params)
 	case proto.MethodMachineToolchain:
 		return n.machineToolchain(ctx, params)
+	}
+	switch method { // listening port inspector and process management (machine_procs.go)
+	case proto.MethodMachinePorts:
+		return n.machinePorts(ctx, params)
+	case proto.MethodMachineProcesses:
+		return n.machineProcesses(ctx, params)
+	case proto.MethodMachineProcessKill:
+		return n.machineProcessKill(ctx, params)
 	}
 	if method == codexTakeoverPrepare || method == codexTakeoverCommit {
 		return n.codexTakeoverCall(ctx, method, params)

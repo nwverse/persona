@@ -35,6 +35,9 @@ import { useScopedMachines } from "../lib/current-assistant";
 import { t } from "../i18n";
 import { addTokens, formatTokens, hitRate, percentText, totalTokens, type UsageTokens } from "../lib/tokens";
 
+// Lazy-loaded on demand when the user switches to the Ports & Processes view (#12352).
+const PortsProcessesPanel = lazyPage(() => import("./machines/PortsProcessesPanel").then((m) => m.PortsProcessesPanel));
+// Lazy-loaded on demand when the user switches to the Toolchain view (#12350).
 const ToolchainPanel = lazyPage(() => import("./machines/ToolchainPanel").then((m) => m.ToolchainPanel));
 
 export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
@@ -60,7 +63,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     return saved === "capabilities" || saved === "toolchain" ? saved : "cards";
   });
   const chooseView = (v: MachinesView) => {
-    storeValue(VIEW_KEY, v);
+    if (v !== "procs") storeValue(VIEW_KEY, v);
     setView(v);
   };
   // The alert sheet (#8037): one for the page, outside every card, on one computer's alert.
@@ -147,7 +150,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
         <IconButton icon="sidebar" label={t("machines.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
         <h1 className="text-[14px] font-semibold text-ink">{t("machines.title")}</h1>
         <div className="flex-1" />
-        {machines.length > 0 && <Segmented compact value={view} onChange={chooseView} label={t("machines.view_label")} options={[{ v: "cards", label: t("machines.view_cards") }, { v: "capabilities", label: t("machines.view_capabilities") }, { v: "toolchain", label: t("machines.view_toolchain") }]} />}
+        {machines.length > 0 && <Segmented compact value={view} onChange={chooseView} label={t("machines.view_label")} options={[{ v: "cards", label: t("machines.view_cards") }, { v: "capabilities", label: t("machines.view_capabilities") }, { v: "procs", label: t("machines.view_procs") }, { v: "toolchain", label: t("machines.view_toolchain") }]} />}
         <span className="text-[11.5px] text-ink-3 max-sm:hidden">{t("machines.refresh_interval", { seconds: 10 })}</span>
         {machines.length > 0 && canAdd && add}
       </header>
@@ -173,6 +176,13 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
           {view === "capabilities" && machines.length > 0 && (
             <div className="col-span-full">
               <MachineCapabilities machines={machines} metrics={metrics} launcherIssues={launcherIssues} onAlert={openAlert} />
+            </div>
+          )}
+          {view === "procs" && machines.length > 0 && (
+            <div className="col-span-full">
+              <Suspense fallback={<Loading />}>
+                <PortsProcessesPanel machines={machines} />
+              </Suspense>
             </div>
           )}
           {view === "toolchain" && machines.length > 0 && (
@@ -367,7 +377,7 @@ function agentCounts(list: readonly Session[]): Map<string, readonly [number, nu
   return by;
 }
 
-type MachinesView = "cards" | "capabilities" | "toolchain";
+type MachinesView = "cards" | "capabilities" | "procs" | "toolchain";
 const VIEW_KEY = "persona.machines.view";
 
 /** The launcher health records (GET /api/v1/launchers/health), kept current by the hub's `launcher_health` events and

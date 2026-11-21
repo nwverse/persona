@@ -46,6 +46,8 @@ final class AppModel {
     @ObservationIgnored private let idleLive = LiveConnection()
     /// What the titles say about the links (Waiting for Network / Connecting… / Updating…).
     let connection: ConnectionStatus
+    /// Starts of SSH → Persona Link switches made here, kept across machine-page remounts until the hub list catches up.
+    let linkSwitches = MachineLinkSwitchStore()
     /// The machines. A heartbeat, a list that differs only in `lastSeen` (on every push of a busy hub), is stored
     /// without telling who read `machines`: a body that reads them for anything else ran again on every push (the
     /// Agents list, #1495; every row through its menu, #10231). What shows `lastSeen` reads `lastSeen(_:)`.
@@ -62,6 +64,7 @@ final class AppModel {
                 withMutation(keyPath: \.machines) { machineStore = newValue }
             }
             machinesNow = machineStore
+            linkSwitches.reconcile(machineStore)
             let choices = machineStore.map(MachineChoice.init)
             if choices != machineChoices { machineChoices = choices }
             saveSnapshot()
