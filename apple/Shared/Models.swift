@@ -213,6 +213,9 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
     /// Tern's terminals (docs/integrations/engines.md): its sessions are spaces, its tabs slots, its blocks panes
     /// (`tern:<block id>`).
     static let tern = Self(rawValue: "tern")
+    /// Rex's terminals (docs/integrations/engines.md): its sessions are spaces, its windows slots, its blocks panes
+    /// (`rex:<block id>`).
+    static let rex = Self(rawValue: "rex")
     /// Paseo's agents (docs/integrations/paseo.md): no terminal; the node runs a bridge to the Paseo daemon.
     static let paseo = Self(rawValue: "paseo")
     /// Cindy's agents (docs/integrations/engines.md): no terminal; the node runs a bridge to Cindy.
@@ -220,7 +223,7 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
     /// No terminal engine: the empty host set (docs/integrations/engines.md "Host sets"), for a computer whose sessions
     /// are only the desktop apps' (#3302). Not a hub engine id: saved as `{"hosts": []}`, and not in `allCases`.
     static let noEngine = Self(rawValue: "none")
-    static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .tern, .paseo, .cindy]
+    static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .tern, .rex, .paseo, .cindy]
     var id: String { rawValue }
     var name: String {
         switch self {
@@ -229,6 +232,7 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .herdrBoth: "herdr + Herdr App"
         case .orca: "Orca"
         case .tern: "Tern"
+        case .rex: "Rex"
         case .paseo: "Paseo"
         case .cindy: "Cindy"
         case .noEngine: String(localized: "No Terminal Engine")
@@ -242,6 +246,7 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .herdrBoth: String(localized: "Sessions from both the terminal and the desktop app")
         case .orca: String(localized: "Terminals in Orca")
         case .tern: String(localized: "Terminals in Tern")
+        case .rex: String(localized: "Terminals in Rex")
         case .paseo: String(localized: "Agents in Paseo")
         case .cindy: String(localized: "Agents in Cindy")
         case .noEngine: String(localized: "Sessions of the desktop apps only")
@@ -1451,15 +1456,15 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var hostKind: String? {
         guard let paneID, !paneID.isEmpty else { return nil }
         let kind = paneID.firstIndex(of: ":").map { String(paneID[..<$0]) } ?? ""
-        return ["orca", "herdr-core", "botmux", "tern"].contains(kind) ? kind : "herdr"
+        return ["orca", "herdr-core", "botmux", "tern", "rex"].contains(kind) ? kind : "herdr"
     }
 
-    /// Where it was opened (#2526): a botmux session is a Feishu group's topic, a herdr or Tern pane a terminal; nil
+    /// Where it was opened (#2526): a botmux session is a Feishu group's topic, a herdr, Tern or Rex pane a terminal; nil
     /// for the rest (Orca, runtimes, apps), which carry no source label.
     var source: SessionSource? {
         switch hostKind {
         case "botmux": .feishu
-        case "herdr", "herdr-core", "tern": .terminal
+        case "herdr", "herdr-core", "tern", "rex": .terminal
         default: nil
         }
     }
