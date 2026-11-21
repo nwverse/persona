@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { initI18n } from "../i18n";
 import { balanceAccounts, balanceEmpty, balanceText } from "./usage-balance";
-import { countdown, fullest, isBalanceAccount, liveAccounts, pace, planNote, resetLabel, sampleAge, sourceNames, topAccounts, windowKey, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
+import { accountPace, countdown, fullest, isBalanceAccount, liveAccounts, pace, planNote, resetLabel, sampleAge, sourceNames, topAccounts, windowKey, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
 
 const NOW = new Date(2026, 10, 5, 10, 0, 0).getTime(); // local time, so same-day checks do not depend on the zone
 const at = (ms: number) => new Date(NOW + ms).toISOString();
@@ -44,6 +44,17 @@ describe("pace", () => {
     expect(pace(win("?", 0, 50, H), NOW)).toBeNull();
     expect(pace(win("5h", 300, 50, 6 * H), NOW)).toBeNull(); // not started: the reset is further than the length
     expect(pace(win("5h", 300, 50, -H), NOW)).toBeNull(); // already reset
+  });
+});
+
+describe("accountPace", () => {
+  it("is the window's pace for a fresh reading", () => {
+    expect(accountPace({}, win("5h", 300, 50, 3 * H), NOW)).toEqual({ expected: 40, state: "over" });
+    expect(accountPace({ stale: false }, win("5h", 300, 30, 3 * H), NOW)?.state).toBe("under");
+  });
+  it("says nothing for an out-of-date reading (#12411)", () => {
+    expect(accountPace({ stale: true }, win("5h", 300, 50, 3 * H), NOW)).toBeNull();
+    expect(accountPace({ stale: true }, win("7d", 10080, 100, 4 * 24 * H), NOW)).toBeNull();
   });
 });
 

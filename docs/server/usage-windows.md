@@ -253,6 +253,8 @@ User decision: the hub is only a communication center, and computers belong to t
 - **Pace** (`pace` in `lib/usage-windows.ts`): the window length is read from the label (`5h`, `7d`, falling back to `window_minutes`); expected progress = elapsed time / window length.
   More than 5 percentage points above expected is "Ahead of pace", more than 5 below is "Behind pace", nothing in between; a tick on the bar marks the expected position.
   No judgment and no tick in the first 5% of a window (in the first few minutes, using even a little counts as "ahead").
+  No judgment and no tick for an out-of-date account either (`accountPace`; iOS `UsageWindows.pace(_:stale:now:)`, Android `pace(w, now, stale)`, #12411): an old reading says nothing about how fast the window is used now, so its numbers and reset stay, faded and dated, without a verdict.
+- **Providers without data**: an active launcher with no account gets a row that says why in plain words, with **Set up with assistant** handing a prompt to the main chat. Claude Code's and the other built-in subscriptions (Codex, Antigravity) "haven't been read yet"; any other launcher, a provider run through Claude Code included, is one Persona "can't read by itself" unless its relay reports usage. Engineering terms (status line, gateway source) stay in the prompt, not the row (#12411).
 - Refreshes once a minute; no requests while the page is not in the foreground. A failed refresh keeps the last answer (iOS / Mac and Android do the same), which turns out of date at its `stale_at`; only a 404 (an older hub) hides the block.
 
 ## UI (iOS / Mac, #2889)

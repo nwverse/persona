@@ -322,14 +322,14 @@ private fun UsageAccountCard(a: UsageAccount, now: Instant) {
         val line = listOfNotNull(plan.takeIf { it.isNotEmpty() }, sources.takeIf { it.isNotEmpty() }?.joinToString(" · ")).joinToString(" · ")
         if (line.isNotEmpty()) Text(line, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
         problemText(a.problem)?.let { Text(stringResource(it), style = PersonaTheme.type.caption, color = palette.cautionText) }
-        a.windows.forEach { WindowRow(it, now) }
+        a.windows.forEach { WindowRow(it, now, a.stale) }
     }
 }
 
 @Composable
-private fun WindowRow(w: UsageWindow, now: Instant) {
+private fun WindowRow(w: UsageWindow, now: Instant, stale: Boolean) {
     val palette = PersonaTheme.palette
-    val p = pace(w, now)
+    val p = pace(w, now, stale)
     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
         w.model?.takeIf { it.isNotBlank() }?.let { Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
