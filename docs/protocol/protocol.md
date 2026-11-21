@@ -1201,6 +1201,9 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
                 // (docs/assistant/unified-entry.md "Needs you and In progress: each thing once (#3387)"); with the field absent (an older hub, or a
                 // review that began before the hub kept the time) they keep the task under Needs you. updated_at is not a stand-in: other writes move it
                 "pending_since":"...",
+                // its agent started a turn after its work was judged or reviewed (#10839, additive; state not "" then); absent
+                // otherwise. While it is there task_review accepted is refused, until the new work is judged done (pending_review again)
+                "resumed_at":"...",
                 "updated_at":"..."},
  // The task's brief (#3822, docs/assistant/unified-entry.md "Briefs"): what was asked when the work was handed out, never rewritten; absent on a to-do with none.
  // Clients that don't know it show the to-do as usual.

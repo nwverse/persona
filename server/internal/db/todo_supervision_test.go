@@ -85,6 +85,22 @@ func TestTodoSupervision(t *testing.T) {
 	if list, _ = d.ListTodoSupervision(ctx); len(list) != 1 || list[0].PendingSince != nil {
 		t.Fatalf("after the review: %+v", list)
 	}
+	// When its agent worked again after it was judged done (#10839): kept, NULL again once cleared.
+	resumed := now.Add(-5 * time.Minute)
+	r.ResumedAt = &resumed
+	if err := d.PutTodoSupervision(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ = d.ListTodoSupervision(ctx); len(list) != 1 || list[0].ResumedAt == nil || !list[0].ResumedAt.Equal(resumed) {
+		t.Fatalf("resumed_at = %+v, want %v", list, resumed)
+	}
+	r.ResumedAt = nil
+	if err := d.PutTodoSupervision(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ = d.ListTodoSupervision(ctx); len(list) != 1 || list[0].ResumedAt != nil {
+		t.Fatalf("after resumed_at cleared: %+v", list)
+	}
 	if err := d.PutTodoSupervision(ctx, TodoSupervisionRow{TodoID: "nope", Supervisor: "main", UpdatedAt: now}); !errors.Is(err, ErrTodoNotFound) {
 		t.Fatalf("missing todo: %v", err)
 	}

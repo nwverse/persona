@@ -62,7 +62,15 @@ type Supervision struct {
 	// its supervisor's to do, and an older one under Needs you (docs/assistant/unified-entry.md "Needs you and In
 	// progress"). nil in every other state, and for a task that waited for review before the hub kept the time.
 	PendingSince *time.Time `json:"pending_since,omitempty"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	// ResumedAt: when its agent started a turn after its work was judged or reviewed (State not "": waiting for review,
+	// parked, sent back for rework, waiting on the owner, or accepted and opened again; supervisedWorking). A supervision
+	// message about the work before may still be on its way to a supervisor (to more than one conversation, #4262), so
+	// while the mark holds, task_review accepted on the open task is refused: it would close the to-do under the agent's
+	// new round (#10839). Only the new work judged done clears it (the task waits for review again, updateSupervision):
+	// another review answering the same stale message (a rework, say) must not let a second one accept from it. nil
+	// otherwise.
+	ResumedAt *time.Time `json:"resumed_at,omitempty"`
+	UpdatedAt time.Time  `json:"updated_at"`
 	// Progress: what its agent last reported to the supervisor (report_to_supervisor, agent_control.go). A live
 	// reading kept in memory only (the next report brings it back after a restart), and apart from UpdatedAt, which
 	// names the review a task waits for.
@@ -200,6 +208,10 @@ func (v *Supervision) clone() *Supervision {
 		at := *v.PendingSince
 		out.PendingSince = &at
 	}
+	if v.ResumedAt != nil {
+		at := *v.ResumedAt
+		out.ResumedAt = &at
+	}
 	out.Parked = out.parked()
 	return &out
 }
@@ -236,7 +248,7 @@ func (s *Service) supervisionDB() supervisionStore {
 
 func supervisionFromRow(r db.TodoSupervisionRow) *Supervision {
 	v := &Supervision{Supervisor: r.Supervisor, DoneWhen: r.DoneWhen, Criteria: r.Criteria, ExpectMinutes: r.ExpectMinutes, State: r.State, Round: r.Round,
-		PendingSince: r.PendingSince, UpdatedAt: r.UpdatedAt}
+		PendingSince: r.PendingSince, ResumedAt: r.ResumedAt, UpdatedAt: r.UpdatedAt}
 	_ = json.Unmarshal(r.Reviews, &v.Reviews)
 	if len(r.AutoReview) > 0 {
 		var a AutoReview
@@ -263,7 +275,7 @@ func (v *Supervision) row(todoID string) db.TodoSupervisionRow {
 		waits, _ = json.Marshal(v.Waits)
 	}
 	return db.TodoSupervisionRow{TodoID: todoID, Supervisor: v.Supervisor, DoneWhen: v.DoneWhen, Criteria: v.Criteria, ExpectMinutes: v.ExpectMinutes,
-		State: v.State, Round: v.Round, Reviews: raw, AutoReview: auto, Waits: waits, PendingSince: v.PendingSince, UpdatedAt: v.UpdatedAt}
+		State: v.State, Round: v.Round, Reviews: raw, AutoReview: auto, Waits: waits, PendingSince: v.PendingSince, ResumedAt: v.ResumedAt, UpdatedAt: v.UpdatedAt}
 }
 
 // cleanDoneWhen is a task's criteria as kept: trimmed, no empty or repeated ones, at most 6 of at most 200 characters.
@@ -359,6 +371,9 @@ func (s *Service) updateSupervisionLockedAt(ctx context.Context, id string, now 
 	v.Criteria = db.AlignTodoCriteria(v.DoneWhen, v.Criteria)
 	v.UpdatedAt = now.UTC()
 	v.PendingSince = pendingSince(before, v.State, v.PendingSince, v.UpdatedAt)
+	if v.State == reviewPending {
+		v.ResumedAt = nil // the work since it resumed is judged done: its own review message is the current one
+	}
 	if park != nil && v.State == reviewPending && park.ExternalPR != nil && park.ExternalPR.wakes(park) {
 		// Match the review period after a reload. Postgres stores PendingSince to microsecond precision.
 		park.ExternalPR.PendingSince = v.UpdatedAt.Truncate(time.Microsecond)

@@ -212,6 +212,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	}
 	over, refused, parks := false, false, 0
 	var waiting *OwnerWait // accepted while the work stopped on the owner's decision: refused, nothing written (#1277)
+	var resumed *time.Time // accepted while its agent works again since its work was judged done: refused (#10839)
 	judgedDone := false    // it was waiting for review: the judge had found it done
 	var criteriaErr error
 	var v Supervision
@@ -222,6 +223,15 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				w := *v.Waits
 				waiting = &w
 				return false
+			}
+			if verdict == reviewAccepted && v.ResumedAt != nil {
+				// Open as read, or opened again since (the owner's message reached its agent): read under the ledger's
+				// lock, which the agent's turn takes to set the mark.
+				if cur, ok := s.todoNow(t.ID); t.DoneAt == nil || ok && cur.DoneAt == nil {
+					at := *v.ResumedAt
+					resumed = &at
+					return false
+				}
 			}
 			if verdict == reviewAccepted && a.Outcome != outcomeCannot {
 				if criteriaErr = completeReviewCriteriaError(v.DoneWhen, a.Checks); criteriaErr != nil {
@@ -301,6 +311,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	}
 	if waiting != nil {
 		return "", ownerWaitError(t.ID, waiting)
+	}
+	if resumed != nil {
+		return "", resumedWorkError(t.ID, *resumed)
 	}
 	if a.Verdict == reviewRework { // after the judge's done, a wrong "done" in the work stats (agents_work_wrong_done.go)
 		s.workEvent("", "", reviewReworkEvent, map[string]any{"todo": t.ID, "judged_done": judgedDone})
@@ -797,6 +810,15 @@ func ownerWaitError(id string, w *OwnerWait) error {
 		"that decision. Review it needs_user as a decision they can answer (why_owner, reason, recommend, options, "+
 		"cost_of_waiting); if the owner already decided, send their answer to its agent with agent_send and review the "+
 		"work it does next; or cancelled when it is no longer wanted", id, why)
+}
+
+// resumedWorkError refuses an acceptance of open task id whose agent started working again at at, after its work was
+// judged done or while it was parked: the supervision message being answered is about the work before (#10839).
+func resumedWorkError(id string, at time.Time) error {
+	return fmt.Errorf("task %s: its agent started working again at %s, after the work you are reviewing was judged done, so a "+
+		"message about that earlier work is out of date. Accepting now would close the task under its new round. Wait for "+
+		"its next supervision message (the new round judged done comes as a review again). Rework, needs_user and cancelled "+
+		"still apply; the owner can still close it themselves", id, at.UTC().Format(time.RFC3339))
 }
 
 // reworkOverError refuses a rework past maxReworkRounds that states no decision: the task goes to the owner only as a

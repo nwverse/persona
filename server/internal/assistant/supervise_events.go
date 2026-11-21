@@ -222,16 +222,33 @@ func (s *Service) noteOwnerWait(ctx context.Context, t Todo, work time.Time, rea
 	}
 }
 
+// resumes: a turn its agent starts now makes ledger v's supervision messages so far out of date for an acceptance
+// (ResumedAt): its work was judged or reviewed since the mark was last cleared (State is not ""), and no turn has set
+// the mark yet. A task never judged done keeps State "", and its supervisor may accept it as before.
+func resumes(v *Supervision) bool {
+	return v != nil && v.State != "" && v.ResumedAt == nil
+}
+
 // supervisedWorking: one of supervised task t's agents started a turn: a review waiting is moot (the work goes on),
 // and a parked task is parked no longer (someone sent its agent something: it is supervised as before, parked.go).
 func (s *Service) supervisedWorking(ctx context.Context, t Todo) {
 	s.autoReviewWorking(ctx, t)
-	if st := t.Supervision.state(t); st != reviewPending && st != reviewParked && st != reviewTimedOut && st != reviewClosing && (t.Supervision == nil || t.Supervision.Waits == nil) {
+	v0 := t.Supervision
+	if st := v0.state(t); st != reviewPending && st != reviewParked && st != reviewTimedOut && st != reviewClosing && (v0 == nil || v0.Waits == nil) && !resumes(v0) {
 		return
 	}
 	if _, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+		changed := false
+		if resumes(v) {
+			// Whatever a supervision message said of the work before this turn (its review waiting, a rework or a
+			// decision asked for, an acceptance the owner's message reopened) may still reach a supervisor, two
+			// conversations included (#4262): accepting from it would close the task under this round (#10839). Kept
+			// until this work is judged done in turn.
+			now := time.Now().UTC()
+			v.ResumedAt, changed = &now, true
+		}
 		if v.State != reviewPending && v.State != reviewParked && v.State != reviewTimedOut && v.State != reviewClosing && v.Waits == nil {
-			return false
+			return changed
 		}
 		v.Waits = nil // its agent goes on: the owner's answer reached it, or the work changed (#1277)
 		if v.State != reviewPending && v.State != reviewParked && v.State != reviewTimedOut && v.State != reviewClosing {

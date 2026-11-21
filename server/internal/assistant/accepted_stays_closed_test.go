@@ -127,6 +127,22 @@ func doneAndReviewed(t *testing.T) (*Service, *fakeHub, Todo) {
 	return s, f, todo
 }
 
+// stoppedShortAndReviewed is doneAndReviewed with the judge finding the work not done: its supervisor is told it
+// stopped short, and the ledger stays "" (never judged done). Its supervisor may still accept it while a turn of its
+// agent runs. A task judged done is not accepted then (#10839): its review message is about the work before that turn.
+func stoppedShortAndReviewed(t *testing.T) (*Service, *fakeHub, Todo) {
+	t.Helper()
+	s, f, todo := newSupervisedService(t)
+	f.judge = `{"verdict":"not_done","reason":"还差截图"}`
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	agentTurn(s, f, proto.StatusDone, "Fixed it: PR https://github.com/o/r/pull/77 is merged", 0)
+	waitFor(t, "the supervision message", func() bool { return supervisionOf(s, f, todo.ID).notices == 1 })
+	if v := todoNow(s, todo.ID).Supervision; v.State != "" {
+		t.Fatalf("ledger %q, want still going on", v.State)
+	}
+	return s, f, todo
+}
+
 // The case of #7539: accepted, then its agent's own wakeup starts a turn that only confirms nothing is left and ends.
 func TestAcceptedPlanTaskStaysClosedOnALateDoneTurn(t *testing.T) {
 	s, f, todo := doneAndReviewed(t)
@@ -152,7 +168,7 @@ func TestAcceptedPlanTaskStaysClosedOnALateDoneTurn(t *testing.T) {
 
 // A turn already running when the task was accepted ends after it: the same.
 func TestAcceptedTaskStaysClosedWhenARunningTurnEndsAfterIt(t *testing.T) {
-	s, f, todo := doneAndReviewed(t)
+	s, f, todo := stoppedShortAndReviewed(t)
 	agentTurn(s, f, proto.StatusWorking, "", 0) // it goes on for a moment, still the task's
 	accepted := reviewAndWait(t, s, todo.ID, reviewAccepted)
 	before, judged, receipted := supervisionOf(s, f, todo.ID), judgeCalls(f), receiptCount(t, s)
@@ -171,7 +187,7 @@ func TestAcceptedTaskStaysClosedWhenARunningTurnEndsAfterIt(t *testing.T) {
 // Accepted while its agent's turn end is being read: the receipt still says how the turn ended (as for a task closed
 // by hand meanwhile), and that is all: no stage or PR from that reply, no judgment, no signal.
 func TestAcceptedWhileItsTurnEndIsRead(t *testing.T) {
-	s, f, todo := doneAndReviewed(t)
+	s, f, todo := stoppedShortAndReviewed(t)
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	var accepted Todo
 	var before supervisionSeen
@@ -413,7 +429,7 @@ func TestAcceptedPlanTaskReopensForACardMessageAfterItsAgentStopped(t *testing.T
 // Accepted while the end of a turn the model service cut off is read: the interrupted receipt says how it ended, and
 // that is all, as for a done end: no notice, no interrupted signal, no report line.
 func TestAcceptedWhileACutOffTurnEndIsRead(t *testing.T) {
-	s, f, todo := doneAndReviewed(t)
+	s, f, todo := stoppedShortAndReviewed(t)
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	var accepted Todo
 	var before supervisionSeen
