@@ -211,9 +211,6 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 			return nil, err, true
 		}
 		out = n.echoedRaw(p.SessionID, out, "items") // echo.go
-		if h.agent() == agyAgent {
-			out = n.enrichAgyItemsRaw(p.SessionID, out, "items")
-		}
 		if !p.FoldWork || p.AfterSeq != nil || p.ThroughSeq > 0 {
 			return out, nil, true
 		}
@@ -236,9 +233,6 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		return page, nil, true
 	case "session.image", "session.item", "session.visualization":
 		out, err := call(method, params)
-		if err == nil && method == "session.item" && h.agent() == agyAgent {
-			out = n.enrichAgySingleItemRaw(p.SessionID, out)
-		}
 		return out, err, true
 	case "session.watch":
 		attempt := n.runtimes.watch(h, p.SessionID, p.SinceSeq, p.History, rpc.ConnContext(ctx))
@@ -379,21 +373,10 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 			if s.SessionID == p.SessionID {
 				info["cwd"], info["model"], info["agent"], info["last_activity"] = s.Cwd, s.Model, s.Agent, s.UpdatedAt
 				info["permission_mode"], info["effort"] = s.PermissionMode, s.Effort
-			}
-		}
-		if h.agent() == agyAgent {
-			if conversation := agyRuntimeConversationID(p.SessionID); conversation != "" {
-				if u, ok := n.agyTranscriptMeta(conversation); ok {
-					if u.model != "" && (info["model"] == nil || info["model"] == "") {
-						info["model"] = u.model
-					}
-					info["compactions"] = u.compactions
-					info["turns"] = u.turns
-					if u.hasUsage {
-						info["context_tokens"] = u.contextTokens
-						info["output_tokens"] = u.outputTokens
-						delete(info, "usage_unknown")
-					}
+				if h.agent() == agyAgent && (s.ContextTokens > 0 || s.OutputTokens > 0) {
+					info["context_tokens"] = int(s.ContextTokens)
+					info["output_tokens"] = s.OutputTokens
+					delete(info, "usage_unknown")
 				}
 			}
 		}

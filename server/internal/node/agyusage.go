@@ -2,11 +2,9 @@ package node
 
 import (
 	"bytes"
-	"encoding/json"
 	"math"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -119,10 +117,6 @@ func (u *agyTranscriptUsage) observePlanner(step agyStep) (proto.TokenUsage, boo
 	model := step.normalizedModel()
 	if model != "" {
 		u.model = model
-		if u.modelBySeq == nil {
-			u.modelBySeq = make(map[int]string)
-		}
-		u.modelBySeq[step.seq] = model
 	}
 	usage, ctxTokens, win, ok := step.tokenUsage()
 	if win > 0 {
@@ -139,10 +133,6 @@ func (u *agyTranscriptUsage) observePlanner(step agyStep) (proto.TokenUsage, boo
 	if usage.Output > 0 {
 		u.outputTokens = addSaturatingInt(u.outputTokens, usage.Output)
 	}
-	if u.usageBySeq == nil {
-		u.usageBySeq = make(map[int][]proto.TokenUsage)
-	}
-	u.usageBySeq[step.seq] = []proto.TokenUsage{usage}
 	return usage, true
 }
 
@@ -365,13 +355,13 @@ func (n *Node) agyContextWindowFor(s *proto.Session, transcriptModel string, rec
 	return agyContextWindow(lPtr, transcriptModel, recorded, used, lookupAgyModelWindow, fallbacks...)
 }
 
-// agyRuntimeConversationID returns the native conversation UUID from an agy runtime session ID ("agy-<uuid>").
-func agyRuntimeConversationID(sessionID string) string {
-	id, ok := strings.CutPrefix(sessionID, agyAgent+"-")
-	if !ok || !uuidRe.MatchString(id) {
-		return ""
+// resolveAgyContextWindow fills Session.ContextWindow for an agy session row whose ContextTokens were supplied by the
+// companion runtime without an explicit window, using managed launcher, agyModelList catalog, or built-in model rules.
+func (n *Node) resolveAgyContextWindow(s *proto.Session) {
+	if s == nil || s.ContextTokens <= 0 || s.ContextWindow > 0 {
+		return
 	}
-	return id
+	s.ContextWindow = proto.Tokens32(n.agyContextWindowFor(s, s.Model, 0, int(s.ContextTokens)))
 }
 
 // agyTranscriptMeta reads (with stat-based LRU caching) the token usage summary of an agy conversation on disk.
@@ -421,8 +411,8 @@ func (n *Node) agyTranscriptMeta(conversation string) (agyTranscriptUsage, bool)
 	return usage, true
 }
 
-// mergeAgyTranscript populates Session.Model, ContextTokens, ContextWindow, and OutputTokens on an agy session row
-// from its local transcript (when available) and resolves ContextWindow from launcher/catalog/model metadata.
+// mergeAgyTranscript populates Session.Model, ContextTokens, ContextWindow, and OutputTokens on a standalone
+// herdr-pane agy session row from its local transcript and resolves ContextWindow from launcher/catalog/model metadata.
 func (n *Node) mergeAgyTranscript(s *proto.Session, conversation string) {
 	if s == nil {
 		return
@@ -449,124 +439,5 @@ func (n *Node) mergeAgyTranscript(s *proto.Session, conversation string) {
 			return
 		}
 	}
-	if s.ContextTokens > 0 && s.ContextWindow == 0 {
-		s.ContextWindow = proto.Tokens32(n.agyContextWindowFor(s, s.Model, 0, int(s.ContextTokens)))
-	}
-}
-
-func isAgySecondaryItemID(id string) bool {
-	_, suffix, ok := strings.Cut(id, "#")
-	if !ok || suffix == "" || suffix == "0" {
-		return false
-	}
-	for _, r := range suffix {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-// enrichAgyItems attaches per-step Item.Usage and Item.Model from the local agy transcript onto companion-runtime
-// items that do not already carry them. Usage is attached once per step sequence (preferring the #0 item) so turns
-// are never double-counted.
-func (n *Node) enrichAgyItems(sessionID string, items []proto.Item) ([]proto.Item, bool) {
-	conversation := agyRuntimeConversationID(sessionID)
-	if conversation == "" || len(items) == 0 {
-		return items, false
-	}
-	u, ok := n.agyTranscriptMeta(conversation)
-	if !ok || (len(u.usageBySeq) == 0 && len(u.modelBySeq) == 0) {
-		return items, false
-	}
-	// Track sequences that already carry usage, and whether a sequence has a #0 assistant item in this slice.
-	hasUsage := make(map[int]bool)
-	hasPrimary := make(map[int]bool)
-	for _, it := range items {
-		if it.Role != "assistant" {
-			continue
-		}
-		if len(it.Usage) > 0 {
-			hasUsage[it.Seq] = true
-		}
-		if strings.HasSuffix(it.ID, "#0") {
-			hasPrimary[it.Seq] = true
-		}
-	}
-	changed := false
-	for i := range items {
-		it := &items[i]
-		if it.Role != "assistant" {
-			continue
-		}
-		if it.Model == "" {
-			if m := u.modelBySeq[it.Seq]; m != "" {
-				it.Model = m
-				changed = true
-			}
-		}
-		if len(it.Usage) == 0 && !hasUsage[it.Seq] {
-			if stepUsage := u.usageBySeq[it.Seq]; len(stepUsage) > 0 {
-				if hasPrimary[it.Seq] && !strings.HasSuffix(it.ID, "#0") {
-					continue
-				}
-				if !hasPrimary[it.Seq] && isAgySecondaryItemID(it.ID) {
-					continue
-				}
-				it.Usage = slices.Clone(stepUsage)
-				hasUsage[it.Seq] = true
-				changed = true
-			}
-		}
-	}
-	return items, changed
-}
-
-// enrichAgyItemsRaw enriches a JSON payload containing an items slice (session.items response or live push).
-func (n *Node) enrichAgyItemsRaw(sessionID string, raw json.RawMessage, field string) json.RawMessage {
-	if agyRuntimeConversationID(sessionID) == "" || len(raw) == 0 {
-		return raw
-	}
-	var obj map[string]json.RawMessage
-	if json.Unmarshal(raw, &obj) != nil || len(obj[field]) == 0 {
-		return raw
-	}
-	var items []proto.Item
-	if json.Unmarshal(obj[field], &items) != nil || len(items) == 0 {
-		return raw
-	}
-	enriched, changed := n.enrichAgyItems(sessionID, items)
-	if !changed {
-		return raw
-	}
-	encoded, err := json.Marshal(nonNil(enriched))
-	if err != nil {
-		return raw
-	}
-	obj[field] = encoded
-	out, err := json.Marshal(obj)
-	if err != nil {
-		return raw
-	}
-	return out
-}
-
-// enrichAgySingleItemRaw enriches a single JSON-encoded proto.Item returned by session.item for an agy runtime session.
-func (n *Node) enrichAgySingleItemRaw(sessionID string, raw json.RawMessage) json.RawMessage {
-	if agyRuntimeConversationID(sessionID) == "" || len(raw) == 0 {
-		return raw
-	}
-	var it proto.Item
-	if json.Unmarshal(raw, &it) != nil {
-		return raw
-	}
-	items, changed := n.enrichAgyItems(sessionID, []proto.Item{it})
-	if !changed {
-		return raw
-	}
-	out, err := json.Marshal(items[0])
-	if err != nil {
-		return raw
-	}
-	return out
+	n.resolveAgyContextWindow(s)
 }

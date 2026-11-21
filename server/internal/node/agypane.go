@@ -368,8 +368,12 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 			if runtimeRow.Effort != "" {
 				info["effort"] = runtimeRow.Effort
 			}
-		}
-		if u, ok := n.agyTranscriptMeta(conversation); ok {
+			if runtimeRow.ContextTokens > 0 || runtimeRow.OutputTokens > 0 {
+				info["context_tokens"] = int(runtimeRow.ContextTokens)
+				info["output_tokens"] = runtimeRow.OutputTokens
+				delete(info, "usage_unknown")
+			}
+		} else if u, ok := n.agyTranscriptMeta(conversation); ok {
 			if u.model != "" {
 				info["model"] = u.model
 			}

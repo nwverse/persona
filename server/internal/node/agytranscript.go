@@ -85,8 +85,6 @@ type agyTranscriptUsage struct {
 	turns         int
 	compacted     bool
 	hasUsage      bool
-	usageBySeq    map[int][]proto.TokenUsage
-	modelBySeq    map[int]string
 }
 
 type agyHistory struct {

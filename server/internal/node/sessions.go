@@ -248,9 +248,11 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			if s.Capabilities == nil && s.Status != proto.StatusOffline && s.Status != proto.StatusInterrupted {
 				s.Capabilities = &proto.SessionCapabilities{Read: true, Send: true, Interrupt: true, Approve: true, Terminal: true, Modes: proto.CanModes(false)}
 			}
+			hasRuntimeRow := false
 			if runtimeID := agyRuntimeIDs[id]; runtimeID != "" {
 				seen[runtimeID] = true
 				if runtimeRow, _, ok := n.runtimes.rowOf(runtimeID); ok {
+					hasRuntimeRow = true
 					if s.Model == "" {
 						s.Model = runtimeRow.Model
 					}
@@ -266,7 +268,11 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				}
 			}
 			if a.Agent == agyAgent {
-				n.mergeAgyTranscript(&s, agyConversations[id])
+				if hasRuntimeRow {
+					n.resolveAgyContextWindow(&s)
+				} else {
+					n.mergeAgyTranscript(&s, agyConversations[id])
+				}
 			}
 		case otherAgent(a):
 			s.ReadOnlyReason = otherNoReader(a.Agent)
@@ -327,7 +333,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				s.SetAliases(aliases)
 			}
 		} else if s.Agent == agyAgent {
-			n.mergeAgyTranscript(s, agyRuntimeConversationID(s.SessionID))
+			n.resolveAgyContextWindow(s)
 		}
 		seen[s.SessionID] = true
 		if j != i {

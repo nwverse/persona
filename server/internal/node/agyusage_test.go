@@ -364,30 +364,28 @@ func TestAgyRuntimeSessionTokensItemsAndInfo(t *testing.T) {
 	const (
 		claudeConv  = agyTestID
 		unknownConv = agyOtherTestID
-		emptyConv   = "33333333-4444-4555-8666-777777777777"
+		rewoundConv = "33333333-4444-4555-8666-777777777777"
 		claudeSID   = "agy-" + claudeConv
 		unknownSID  = "agy-" + unknownConv
-		emptySID    = "agy-" + emptyConv
+		rewoundSID  = "agy-" + rewoundConv
 	)
 
-	// Write transcript_full.jsonl for claudeConv (verifying fallback when compact transcript.jsonl is absent).
+	// Put unfiltered raw transcripts on disk whose step indices and tails deliberately diverge from the
+	// companion runtime's projected view (simulating both an inserted PERSONA_MODE_NOTICE shifting every
+	// subsequent seq by +1 and rewound-away replies left behind in transcript_full.jsonl). The node must
+	// trust the companion's projected items and session totals rather than overwriting them from raw disk.
 	fullPath := filepath.Join(n.agyDataRoot(), "brain", claudeConv, agyFullTranscriptPath)
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	agyTestWrite(t, fullPath, ""+
 		`{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","created_at":"2026-11-21T10:00:00Z","content":"Run check"}`+"\n"+
-		`{"step_index":1,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-21T10:00:01Z","model":"claude-opus-5-5-high","thinking":"Thinking","content":"Running tool","input_tokens":1200,"cache_read_tokens":48800,"cache_write_tokens":300,"output_tokens":180,"tool_calls":[{"name":"run_command","args":{"CommandLine":"echo ok"}}]}`+"\n"+
-		`{"step_index":2,"type":"GENERIC","status":"DONE","created_at":"2026-11-21T10:00:02Z","content":"ok"}`+"\n"+
-		`{"step_index":3,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-21T10:00:03Z","model":"claude-opus-5-5-high","content":"Done.","input_tokens":500,"cache_read_tokens":51000,"output_tokens":70}`+"\n")
+		`{"step_index":1,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-21T10:00:01Z","model":"stale-disk-model","content":"old","input_tokens":99999,"output_tokens":999}`+"\n"+
+		`{"step_index":2,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-21T10:00:02Z","model":"rewound-tail-model","content":"abandoned tail","input_tokens":888888,"output_tokens":8888}`+"\n")
 
-	agyTestFile(t, n.agyDataRoot(), unknownConv, ""+
-		`{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","created_at":"2026-11-21T10:00:00Z","content":"Hi"}`+"\n"+
-		`{"step_index":1,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-21T10:00:01Z","model":"opaque-agy-model-medium","content":"Yo","input_tokens":9000,"cache_read_tokens":1000,"output_tokens":55}`+"\n")
-
-	agyTestFile(t, n.agyDataRoot(), emptyConv, ""+
-		`{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","created_at":"2026-11-21T10:00:00Z","content":"No usage"}`+"\n"+
-		`{"step_index":1,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-21T10:00:01Z","content":"Reply without usage"}`+"\n")
+	agyTestFile(t, n.agyDataRoot(), rewoundConv, ""+
+		`{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","created_at":"2026-11-21T10:00:00Z","content":"Rewound prompt"}`+"\n"+
+		`{"step_index":1,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-21T10:00:01Z","model":"claude-opus-5-5-high","content":"Rewound away","input_tokens":70000,"output_tokens":700}`+"\n")
 
 	hello := map[string]any{
 		"runtime": agyAgent, "name": "Antigravity", "agent": agyAgent, "launcher": agyAgent,
@@ -395,24 +393,29 @@ func TestAgyRuntimeSessionTokensItemsAndInfo(t *testing.T) {
 	}
 	rt := dialRuntime(t, n, hello)
 	now := time.Now().UTC()
-	stepItems := []proto.Item{
-		{ID: "1@a#0", Seq: 1, TS: now, Role: "user", Kind: proto.KindText, Text: "Run check"},
-		{ID: "2@b#0", Seq: 2, TS: now, Role: "assistant", Kind: proto.KindThinking, Text: "Thinking"},
-		{ID: "2@b#1", Seq: 2, TS: now, Role: "assistant", Kind: proto.KindToolUse, ToolName: "Bash", ToolUseID: "c1"},
-		{ID: "3@c#0", Seq: 3, TS: now, Role: "user", Kind: proto.KindToolResult, ToolUseID: "c1", Text: "ok"},
-		{ID: "4@d#0", Seq: 4, TS: now, Role: "assistant", Kind: proto.KindText, Text: "Done."},
+	wantStep3Usage := []proto.TokenUsage{{Model: "claude-opus-5-5-high", Input: 1200, CacheRead: 48800, CacheWrite: 300, Output: 180}}
+	wantStep5Usage := []proto.TokenUsage{{Model: "claude-opus-5-5-high", Input: 500, CacheRead: 51000, Output: 70}}
+	// Companion-projected items after an Auto-mode refusal inserted PERSONA_MODE_NOTICE at seq 1,
+	// shifting user/assistant steps to seq 2, 3, 4, 5.
+	projectedItems := []proto.Item{
+		{ID: "1@notice#0", Seq: 1, TS: now, Role: "system", Kind: proto.KindNotice, Text: "mode fallback notice"},
+		{ID: "2@a#0", Seq: 2, TS: now, Role: "user", Kind: proto.KindText, Text: "Run check"},
+		{ID: "3@b#0", Seq: 3, TS: now, Role: "assistant", Kind: proto.KindThinking, Text: "Thinking", Model: "claude-opus-5-5-high", Usage: wantStep3Usage},
+		{ID: "3@b#1", Seq: 3, TS: now, Role: "assistant", Kind: proto.KindToolUse, ToolName: "Bash", ToolUseID: "c1", Model: "claude-opus-5-5-high"},
+		{ID: "4@c#0", Seq: 4, TS: now, Role: "user", Kind: proto.KindToolResult, ToolUseID: "c1", Text: "ok"},
+		{ID: "5@d#0", Seq: 5, TS: now, Role: "assistant", Kind: proto.KindText, Text: "Done.", Model: "claude-opus-5-5-high", Usage: wantStep5Usage},
 	}
 	rt.mu.Lock()
 	rt.answer = func(method string, raw json.RawMessage) (any, error) {
 		switch method {
 		case "session.items":
-			return map[string]any{"items": stepItems, "has_more": false, "to_seq": 4, "history": "agy:test"}, nil
+			return map[string]any{"items": projectedItems, "has_more": false, "to_seq": 5, "history": "agy:test:auto-refusal:0"}, nil
 		case "session.item":
 			var p struct {
 				ItemID string `json:"item_id"`
 			}
 			_ = json.Unmarshal(raw, &p)
-			for _, it := range stepItems {
+			for _, it := range projectedItems {
 				if it.ID == p.ItemID {
 					return it, nil
 				}
@@ -424,13 +427,22 @@ func TestAgyRuntimeSessionTokensItemsAndInfo(t *testing.T) {
 	rt.mu.Unlock()
 
 	_ = rt.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{
-		{"session_id": claudeSID, "agent": agyAgent, "cwd": n.home, "status": "done", "launcher": "agy"},
-		{"session_id": unknownSID, "agent": agyAgent, "cwd": n.home, "status": "done", "launcher": "agy"},
-		{"session_id": emptySID, "agent": agyAgent, "cwd": n.home, "status": "done", "launcher": "agy"},
+		{
+			"session_id": claudeSID, "agent": agyAgent, "cwd": n.home, "status": "done", "launcher": "agy",
+			"model": "claude-opus-5-5-high", "context_tokens": 51_500, "output_tokens": 250,
+		},
+		{
+			"session_id": unknownSID, "agent": agyAgent, "cwd": n.home, "status": "done", "launcher": "agy",
+			"model": "opaque-agy-model-medium", "context_tokens": 10_000, "output_tokens": 55,
+		},
+		// Fully rewound session: companion reports no tokens/model despite stale raw transcript on disk.
+		{
+			"session_id": rewoundSID, "agent": agyAgent, "cwd": n.home, "status": "idle", "launcher": "agy",
+		},
 	}})
 	waitFor(t, "agy runtime sessions listed", func() bool {
 		g := listed(t, n)
-		return g[claudeSID].SessionID != "" && g[unknownSID].SessionID != "" && g[emptySID].SessionID != ""
+		return g[claudeSID].SessionID != "" && g[unknownSID].SessionID != "" && g[rewoundSID].SessionID != ""
 	})
 
 	got := listed(t, n)
@@ -440,11 +452,11 @@ func TestAgyRuntimeSessionTokensItemsAndInfo(t *testing.T) {
 	if s := got[unknownSID]; s.Model != "opaque-agy-model-medium" || s.ContextTokens != 10_000 || s.ContextWindow != 0 || s.OutputTokens != 55 {
 		t.Fatalf("unknownSID row = model:%q ctx:%d/%d out:%d", s.Model, s.ContextTokens, s.ContextWindow, s.OutputTokens)
 	}
-	if s := got[emptySID]; s.ContextTokens != 0 || s.ContextWindow != 0 || s.OutputTokens != 0 {
-		t.Fatalf("emptySID row must stay zero = ctx:%d/%d out:%d", s.ContextTokens, s.ContextWindow, s.OutputTokens)
+	if s := got[rewoundSID]; s.Model != "" || s.ContextTokens != 0 || s.ContextWindow != 0 || s.OutputTokens != 0 {
+		t.Fatalf("rewoundSID row must stay cleared despite stale disk transcript = model:%q ctx:%d/%d out:%d", s.Model, s.ContextTokens, s.ContextWindow, s.OutputTokens)
 	}
 
-	// Verify session.items enriches primary item (#0) once per step and preserves model on all assistant items.
+	// Verify session.items preserves companion-projected shifted-seq usage and model without raw-disk clobbering.
 	rawPage, err := nodeCall(t, n, "session.items", map[string]any{"session_id": claudeSID})
 	if err != nil {
 		t.Fatalf("session.items: %v", err)
@@ -455,16 +467,17 @@ func TestAgyRuntimeSessionTokensItemsAndInfo(t *testing.T) {
 	if err := json.Unmarshal(rawPage, &page); err != nil {
 		t.Fatal(err)
 	}
-	wantStep2Usage := []proto.TokenUsage{{Model: "claude-opus-5-5-high", Input: 1200, CacheRead: 48800, CacheWrite: 300, Output: 180}}
-	wantStep4Usage := []proto.TokenUsage{{Model: "claude-opus-5-5-high", Input: 500, CacheRead: 51000, Output: 70}}
-	if !reflect.DeepEqual(page.Items[1].Usage, wantStep2Usage) || page.Items[2].Usage != nil {
-		t.Fatalf("step 2 items usage = %+v / %+v", page.Items[1].Usage, page.Items[2].Usage)
+	if page.Items[0].Usage != nil || page.Items[0].Model != "" {
+		t.Fatalf("notice item must not receive usage or model: %+v", page.Items[0])
 	}
-	if !reflect.DeepEqual(page.Items[4].Usage, wantStep4Usage) || page.Items[4].Model != "claude-opus-5-5-high" {
-		t.Fatalf("step 4 item = %+v", page.Items[4])
+	if !reflect.DeepEqual(page.Items[2].Usage, wantStep3Usage) || page.Items[3].Usage != nil || page.Items[3].Model != "claude-opus-5-5-high" {
+		t.Fatalf("shifted step 3 items = %+v / %+v", page.Items[2], page.Items[3])
+	}
+	if !reflect.DeepEqual(page.Items[5].Usage, wantStep5Usage) || page.Items[5].Model != "claude-opus-5-5-high" {
+		t.Fatalf("shifted step 5 item = %+v", page.Items[5])
 	}
 
-	// Verify fold_work rolls enriched usage into Fold.Usage.
+	// Verify fold_work rolls companion-projected usage into Fold.Usage.
 	rawFolded, err := nodeCall(t, n, "session.items", map[string]any{"session_id": claudeSID, "fold_work": true})
 	if err != nil {
 		t.Fatalf("session.items fold_work: %v", err)
@@ -475,20 +488,20 @@ func TestAgyRuntimeSessionTokensItemsAndInfo(t *testing.T) {
 	if err := json.Unmarshal(rawFolded, &foldedPage); err != nil {
 		t.Fatal(err)
 	}
-	if len(foldedPage.Items) != 3 || foldedPage.Items[1].Fold == nil || !reflect.DeepEqual(foldedPage.Items[1].Fold.Usage, wantStep2Usage) {
+	if len(foldedPage.Items) != 4 || foldedPage.Items[2].Fold == nil || !reflect.DeepEqual(foldedPage.Items[2].Fold.Usage, wantStep3Usage) {
 		t.Fatalf("folded runtime page = %+v", foldedPage.Items)
 	}
 
-	// Verify session.item attaches usage only to #0 and not secondary #1.
-	rawPrimary, err := nodeCall(t, n, "session.item", map[string]any{"session_id": claudeSID, "item_id": "2@b#0"})
+	// Verify session.item passes through primary (#0) and secondary (#1) without raw-disk interference.
+	rawPrimary, err := nodeCall(t, n, "session.item", map[string]any{"session_id": claudeSID, "item_id": "3@b#0"})
 	if err != nil {
 		t.Fatalf("session.item primary: %v", err)
 	}
 	var primary proto.Item
-	if err := json.Unmarshal(rawPrimary, &primary); err != nil || !reflect.DeepEqual(primary.Usage, wantStep2Usage) {
+	if err := json.Unmarshal(rawPrimary, &primary); err != nil || !reflect.DeepEqual(primary.Usage, wantStep3Usage) || primary.Model != "claude-opus-5-5-high" {
 		t.Fatalf("primary item = %+v, err=%v", primary, err)
 	}
-	rawSecondary, err := nodeCall(t, n, "session.item", map[string]any{"session_id": claudeSID, "item_id": "2@b#1"})
+	rawSecondary, err := nodeCall(t, n, "session.item", map[string]any{"session_id": claudeSID, "item_id": "3@b#1"})
 	if err != nil {
 		t.Fatalf("session.item secondary: %v", err)
 	}
@@ -497,42 +510,96 @@ func TestAgyRuntimeSessionTokensItemsAndInfo(t *testing.T) {
 		t.Fatalf("secondary item = %+v, err=%v", secondary, err)
 	}
 
-	// Verify live pushed session.items from the runtime are enriched before reaching the hub.
+	// Verify live pushed session.items from the runtime preserve companion-projected usage untouched.
 	hub := withHub(t, n)
 	_ = rt.peer.Notify("session.items", map[string]any{
-		"session_id": claudeSID, "from_seq": 3, "to_seq": 4, "history": "agy:test",
-		"items": []proto.Item{{ID: "4@d#0", Seq: 4, TS: now, Role: "assistant", Kind: proto.KindText, Text: "Done."}},
+		"session_id": claudeSID, "from_seq": 4, "to_seq": 5, "history": "agy:test:auto-refusal:0",
+		"items": []proto.Item{{ID: "5@d#0", Seq: 5, TS: now, Role: "assistant", Kind: proto.KindText, Text: "Done.", Model: "claude-opus-5-5-high", Usage: wantStep5Usage}},
 	})
-	waitFor(t, "enriched live push reaches hub", func() bool { return len(hub.got()) > 0 })
-	if pushed := hub.got()[0]; !reflect.DeepEqual(pushed.Usage, wantStep4Usage) || pushed.Model != "claude-opus-5-5-high" {
+	waitFor(t, "projected live push reaches hub", func() bool { return len(hub.got()) > 0 })
+	if pushed := hub.got()[0]; !reflect.DeepEqual(pushed.Usage, wantStep5Usage) || pushed.Model != "claude-opus-5-5-high" {
 		t.Fatalf("pushed runtime item = %+v", pushed)
 	}
 
-	// Verify session.info for populated vs usage-less agy runtime sessions.
+	// Verify session.info uses the companion's projected row totals and never resurrects rewound disk transcripts.
 	rawInfo, err := nodeCall(t, n, "session.info", map[string]any{"session_id": claudeSID})
 	if err != nil {
 		t.Fatalf("session.info claudeSID: %v", err)
 	}
 	var info map[string]any
 	_ = json.Unmarshal(rawInfo, &info)
-	if info["usage_unknown"] != nil || info["context_tokens"] != float64(51_500) || info["output_tokens"] != float64(250) || info["turns"] != float64(1) {
+	if info["usage_unknown"] != nil || info["context_tokens"] != float64(51_500) || info["output_tokens"] != float64(250) || info["model"] != "claude-opus-5-5-high" {
 		t.Fatalf("runtime session.info (populated) = %+v", info)
 	}
 
-	rawEmptyInfo, err := nodeCall(t, n, "session.info", map[string]any{"session_id": emptySID})
+	rawRewoundInfo, err := nodeCall(t, n, "session.info", map[string]any{"session_id": rewoundSID})
 	if err != nil {
-		t.Fatalf("session.info emptySID: %v", err)
+		t.Fatalf("session.info rewoundSID: %v", err)
 	}
-	var emptyInfo map[string]any
-	_ = json.Unmarshal(rawEmptyInfo, &emptyInfo)
-	if emptyInfo["usage_unknown"] != true || emptyInfo["context_tokens"] != float64(0) || emptyInfo["output_tokens"] != float64(0) {
-		t.Fatalf("runtime session.info (empty) = %+v", emptyInfo)
+	var rewoundInfo map[string]any
+	_ = json.Unmarshal(rawRewoundInfo, &rewoundInfo)
+	if rewoundInfo["usage_unknown"] != true || rewoundInfo["context_tokens"] != float64(0) || rewoundInfo["output_tokens"] != float64(0) || rewoundInfo["model"] != "" {
+		t.Fatalf("runtime session.info (rewound) must not resurrect stale disk transcript = %+v", rewoundInfo)
 	}
 
 	// Verify runtime session with agyModelList catalog window resolves dynamically without fabricating for others.
 	recordAgyModelWindows(map[string]int{"opaque-agy-model": 256_000})
 	if s := listed(t, n)[unknownSID]; s.ContextTokens != 10_000 || s.ContextWindow != 256_000 {
 		t.Fatalf("after agyModelList window recorded: ctx=%d/%d, want 10000/256000", s.ContextTokens, s.ContextWindow)
+	}
+}
+
+func TestAgyPanePrefersCompanionProjectedUsageOverUnfilteredDisk(t *testing.T) {
+	resetAgyModelWindowCache(t)
+	n, herdr, home := herdrNode(t)
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
+	t.Cleanup(freshOffline)
+
+	// Disk still holds a rewound-away second reply with huge token counts.
+	agyTestFile(t, n.agyDataRoot(), agyTestID, ""+
+		`{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","created_at":"2026-11-21T10:00:00Z","content":"Hi"}`+"\n"+
+		`{"step_index":1,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-21T10:00:01Z","model":"claude-opus-5-5-high","content":"Turn 1","input_tokens":12000,"output_tokens":110}`+"\n"+
+		`{"step_index":2,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-21T10:00:02Z","model":"stale-rewound","content":"Abandoned","input_tokens":400000,"output_tokens":5000}`+"\n")
+	seedAgents(t, n, herdr, agyTestAgent(agyTestPane, home, agyTestID))
+
+	n.runtimes = newRuntimeRegistry()
+	runtime := n.runtimes.add(nil)
+	runtime.ready, runtime.hello.Runtime, runtime.hello.Agent = true, agyAgent, agyAgent
+	n.runtimes.setSessions(runtime, []proto.Session{{
+		SessionID: agyAgent + "-" + agyTestID, Agent: agyAgent, Cwd: home, Status: proto.StatusIdle,
+		Model: "claude-opus-5-5-high", ContextTokens: 12_000, OutputTokens: 110,
+	}})
+
+	var row proto.Session
+	for _, r := range listSessions(t, n) {
+		if r.SessionID == agyTestRow {
+			row = r
+		}
+	}
+	if row.Model != "claude-opus-5-5-high" || row.ContextTokens != 12_000 || row.ContextWindow != 1_000_000 || row.OutputTokens != 110 {
+		t.Fatalf("pane row with companion = model:%q ctx:%d/%d out:%d", row.Model, row.ContextTokens, row.ContextWindow, row.OutputTokens)
+	}
+	info := agyTestCall(t, n, "session.info", agyTestRow, nil).(map[string]any)
+	if info["usage_unknown"] != nil || info["context_tokens"] != 12_000 || info["output_tokens"] != 110 || info["model"] != "claude-opus-5-5-high" {
+		t.Fatalf("pane session.info with companion = %+v", info)
+	}
+
+	// Full rewind on the companion row must also keep pane row and session.info cleared instead of reading stale disk.
+	n.runtimes.setSessions(runtime, []proto.Session{{
+		SessionID: agyAgent + "-" + agyTestID, Agent: agyAgent, Cwd: home, Status: proto.StatusIdle,
+	}})
+	row = proto.Session{}
+	for _, r := range listSessions(t, n) {
+		if r.SessionID == agyTestRow {
+			row = r
+		}
+	}
+	if row.Model != "" || row.ContextTokens != 0 || row.ContextWindow != 0 || row.OutputTokens != 0 {
+		t.Fatalf("fully rewound pane row must stay cleared = model:%q ctx:%d/%d out:%d", row.Model, row.ContextTokens, row.ContextWindow, row.OutputTokens)
+	}
+	info = agyTestCall(t, n, "session.info", agyTestRow, nil).(map[string]any)
+	if info["usage_unknown"] != true || info["context_tokens"] != 0 || info["output_tokens"] != 0 {
+		t.Fatalf("fully rewound pane session.info must stay usage_unknown = %+v", info)
 	}
 }
 
