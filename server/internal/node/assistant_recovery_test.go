@@ -948,6 +948,8 @@ func TestAssistantRecoveryCannotRestartOnTheOldNodeAfterHandover(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("handover did not finish after the active send returned")
 	}
+	// Adoption clears the old recovery map. Join the sender first so it cannot hide an old-node restart.
+	waitHandoverRecovery(t, a, r)
 	if adopted := k.adopt(b); len(adopted) != 1 || adopted[0] != p {
 		t.Fatalf("the live conversation was not handed over: %+v", adopted)
 	}
