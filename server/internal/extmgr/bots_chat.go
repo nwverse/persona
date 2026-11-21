@@ -422,7 +422,7 @@ func (h *Manager) botPair(api *feishubot.Client, openID, chatID, text string) {
 	}
 	if ok {
 		b.set.Owner = &BotOwner{OpenID: openID, ChatID: chatID, At: b.clock().UTC()}
-		b.set.Pairing = nil
+		b.set.Pairing, b.set.Configure = nil, nil
 		h.saveBotSettingsLocked()
 		record = &botRecord{auditBotPaired, map[string]any{"open_id": openID}}
 	} else {

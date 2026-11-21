@@ -51,6 +51,8 @@ type FeishuBotSettings struct {
 	Features       BotFeatures `json:"features"`
 	Owner          *BotOwner   `json:"owner,omitempty"`
 	Pairing        *botPairing `json:"pairing,omitempty"`
+	// Configure is the sanitized automatic-configuration outcome for these credentials, until paired.
+	Configure *botConfigure `json:"configure,omitempty"`
 	// Registration is an app registration under way (bots_register.go): binding in one authorization.
 	Registration *botRegistration `json:"registration,omitempty"`
 	// RegistrationDeviceEnc and RegistrationSecretEnc are the registration's device code and, once confirmed, the new
@@ -319,6 +321,10 @@ func (s FeishuBotSettings) copy() FeishuBotSettings {
 	if s.Pairing != nil {
 		p := *s.Pairing
 		s.Pairing = &p
+	}
+	if s.Configure != nil {
+		r := *s.Configure
+		s.Configure = &r
 	}
 	if s.Registration != nil {
 		r := *s.Registration
@@ -695,6 +701,7 @@ func (h *Manager) updateBot(ctx context.Context, enabled *bool, appID, secret, d
 		if next.AppID != cur.AppID {
 			cur.Owner, cur.Pairing, cur.TopicChats, cur.AISources = nil, nil, nil, nil
 		}
+		h.clearBotConfigureOnChangeLocked(next)
 		cur.AppID, cur.SecretEnc, cur.Domain = next.AppID, next.SecretEnc, next.Domain
 	}
 	if enabled != nil && *enabled != cur.Enabled {
