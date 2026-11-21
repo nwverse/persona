@@ -63,6 +63,8 @@ export interface PagedSessionListProps<T> {
    *  under it a level in, each group where its most recent member was (lib/side-sessions.ts). Rows and counts stay the
    *  server's; only the order of the loaded rows changes. */
   parentOf?: (row: T) => string | undefined;
+  /** Row identities excluded from both flat rows and grouped sections (e.g. in-flight launches shown under Starting). */
+  excludeIdentities?: ReadonlySet<string>;
   /** The sidebar's groupings (#6662): the caller chooses the dimension with its own bar, the complete list's, so both
    *  lists show the same control; this list draws that bar first, then the state chips and what ⌘K put on it, as the
    *  complete list does, with no value pill or search field of its own. A search lists its matches flat. `label` names
@@ -114,7 +116,7 @@ export function scrollParent(el: HTMLElement | null): HTMLElement | null {
   return null;
 }
 
-export function PagedSessionList<T>({ root, path, identity, compare, removeIdentity, event, renderRow, personal = false, label, machineOrder, catalog = false, justFinished = false, placeOf, activeAt, needsYou, isOpen, parentOf, grouping, failureText = sameText }: PagedSessionListProps<T>) {
+export function PagedSessionList<T>({ root, path, identity, compare, removeIdentity, event, renderRow, personal = false, label, machineOrder, catalog = false, justFinished = false, placeOf, activeAt, needsYou, isOpen, parentOf, excludeIdentities, grouping, failureText = sameText }: PagedSessionListProps<T>) {
   const [query, setQuery] = useState("");
   const [typed, setTyped] = useState("");
   // the sidebar's groupings take ⌘K's words (#6589); every other list its own field's, once typing pauses
@@ -276,15 +278,24 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     if (now && !sameValue(now, picked)) setPicked(now);
   }, [allGroups, picked]);
 
-  const transportRows = list.getTransportRows();
+  const rawTransportRows = list.getTransportRows();
+  const transportRows = useMemo(
+    () => excludeIdentities?.size ? rawTransportRows.filter((row) => !excludeIdentities.has(identity(row))) : rawTransportRows,
+    [rawTransportRows, excludeIdentities, identity],
+  );
+  const pageRows = useMemo(
+    () => excludeIdentities?.size ? page.rows.filter((row) => !excludeIdentities.has(identity(row))) : page.rows,
+    [page.rows, excludeIdentities, identity],
+  );
+  const visiblePageTotal = Math.max(0, page.total - (page.rows.length - pageRows.length));
   // Activity totals need their own newest-first transport groups: structural presentation can put an unrelated older
   // row between a recent side session and its parent, which must not end the transport's recent prefix (#11801).
   const activityNesting = useMemo(() => activeAt && parentOf ? nestUnderParents(transportRows, identity, parentOf, activeAt) : null, [transportRows, identity, parentOf, activeAt]);
   const activityRows = activityNesting?.rows ?? transportRows;
   // SessionList has already applied the one structural presentation order. This separate view draws nested rows and
   // partitions the retained presentation; its lead never substitutes for the transport's activity lead.
-  const nesting = useMemo(() => parentOf ? nestUnderParents(page.rows, identity, parentOf, activeAt) : null, [page.rows, identity, parentOf, activeAt]);
-  const rows = nesting?.rows ?? page.rows;
+  const nesting = useMemo(() => parentOf ? nestUnderParents(pageRows, identity, parentOf, activeAt) : null, [pageRows, identity, parentOf, activeAt]);
+  const rows = nesting?.rows ?? pageRows;
   const orderedRows = rows;
   // a group is as recent as its most recent member, so Earlier never splits one
   const groupActiveAt = useMemo(() => activeAt && nesting ? (row: T) => activeAt(nesting.lead.get(row) ?? row) : activeAt, [activeAt, nesting]);
@@ -301,10 +312,10 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const clock = useNow(60_000, Boolean(activeAt && win));
   const start = activeAt ? windowStart(win, clock) : null;
   // the Needs you chip's number for this scope: the server's, by the same rule as the chip
-  const needsYouTotal = chip.state ? (chip.state === "needs_you" ? page.total : 0) : chip.pane_source ? page.counts?.state?.needs_you : scopeCounts?.state?.needs_you;
+  const needsYouTotal = chip.state ? (chip.state === "needs_you" ? visiblePageTotal : 0) : chip.pane_source ? page.counts?.state?.needs_you : scopeCounts?.state?.needs_you;
   const rowNeedsYou = needsYou ?? (() => false);
   const split = activityActiveAt && start !== null
-    ? splitByActivity(activityRows, activityActiveAt, start, { total: page.total, hasMore: page.hasMore, needsYou: rowNeedsYou, needsYouTotal })
+    ? splitByActivity(activityRows, activityActiveAt, start, { total: visiblePageTotal, hasMore: page.hasMore, needsYou: rowNeedsYou, needsYouTotal })
     : null;
   // Transport's newest-first split supplies the server totals. Presentation partitions its own retained rows too: an
   // older retained row needs Earlier even when every row left in the current transport prefix is recent.
@@ -320,7 +331,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   // Count their identity union: subtracting only the transport's recent rows charges both cases to Earlier (#11801).
   const loaded = new Set(transportRows.map(identity));
   const retainedRecent = presentedRows.slice(0, recent).filter((row) => !loaded.has(identity(row)));
-  const earlierCount = hasEarlier && split ? Math.max(0, page.total - split.recent - retainedRecent.length, presentedEarlier) : 0;
+  const earlierCount = hasEarlier && split ? Math.max(0, visiblePageTotal - split.recent - retainedRecent.length, presentedEarlier) : 0;
   const recentNeedsYou = activityRows.slice(0, split?.recent ?? 0).filter(rowNeedsYou).length + retainedRecent.filter(rowNeedsYou).length;
   const earlierNeedsYou = needsYouTotal === undefined ? presentedRows.slice(recent).filter(rowNeedsYou).length
     : Math.min(earlierCount, Math.max(0, needsYouTotal - recentNeedsYou));
@@ -417,8 +428,8 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   };
   const chooseGroup = (key: string) => setPicked(key ? groups.find((g) => g.key === key) ?? null : null);
   // an open section reads the collection as the list above it does
-  const source: GroupedSource<T> = useMemo(() => ({ path, identity, compare, removeIdentity, event, summary: summaryMode, roots: rootsMode, parentOf, rowOrder }),
-    [path, identity, compare, removeIdentity, event, summaryMode, rootsMode, parentOf, rowOrder]);
+  const source: GroupedSource<T> = useMemo(() => ({ path, identity, compare, removeIdentity, event, summary: summaryMode, roots: rootsMode, parentOf, rowOrder, excludeIdentities }),
+    [path, identity, compare, removeIdentity, event, summaryMode, rootsMode, parentOf, rowOrder, excludeIdentities]);
   const openRow = sections && isOpen && placeOf ? rootPage.rows.find(isOpen) : undefined;
   const autoMore = useRef(0);
   useEffect(() => {
@@ -431,7 +442,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     void root.more().catch(() => {});
   }, [sections, isOpen, placeOf, openRow, root, rootPage]);
   const openPlace = useMemo(() => openRow && placeOf ? placeOf(openRow) : undefined, [openRow, placeOf]);
-  const shownTotal = sections ? grouped.total : page.total;
+  const shownTotal = sections ? grouped.total : visiblePageTotal;
   const states = personal ? ["unread", "idle"] : ["needs_you", "working", "unread", "idle", "offline", "unknown"];
   const loadingLine = <p role="status" className="px-2 py-2 text-xs text-ink-3">{t("sidebar.loading")}</p>;
   const searchField = <SearchField value={query} onChange={setQuery} placeholder={t("paged-agents.search")} />;
@@ -453,7 +464,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     </div>
   );
   return (
-    <div data-paged-sessions={personal ? "personal" : "runtime"} data-loaded-sessions={page.rows.length} data-has-more={page.hasMore}>
+    <div data-paged-sessions={personal ? "personal" : "runtime"} data-loaded-sessions={pageRows.length} data-has-more={page.hasMore}>
       {/* under the caller's title row its bar sits where the complete list's does: no padding of this list's above it */}
       <div className={cx("space-y-2 px-1 pb-2", !grouping && "pt-2")}>
         {/* the caller's bar and chips where the complete list has them: its padding, not this list's as well */}
@@ -510,7 +521,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
       {/* a background refresh moves nothing: only a first read or a page someone asked for says Loading (#9215) */}
       {page.loading && (!page.loaded || page.loadingMore) && loadingLine}
       {page.error && <ListError text={failureText(page.error)} onRetry={() => void list.retry().catch(() => {})} />}
-      {page.loaded && !page.loading && !page.error && !page.rows.length && <p className="px-2 py-2 text-xs text-ink-3">{t("sidebar.no_match")}</p>}
+      {page.loaded && !page.loading && !page.error && !pageRows.length && <p className="px-2 py-2 text-xs text-ink-3">{t("sidebar.no_match")}</p>}
       {hasMore && !page.loadingMore && !page.error && <ShowMoreRow label={t("paged-agents.more")} onClick={() => void list.more().catch(() => {})} />}
       </>}
     </div>
