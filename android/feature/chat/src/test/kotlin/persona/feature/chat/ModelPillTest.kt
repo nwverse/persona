@@ -46,6 +46,7 @@ import persona.core.designsystem.LocalHubFeatures
 import persona.core.designsystem.ModelPillWidth
 import persona.core.designsystem.PersonaTheme
 import persona.core.domain.models.AgentModelPanel
+import persona.core.domain.models.JLoadable
 import persona.core.domain.models.PanelConfig
 import persona.core.domain.models.PanelFavorite
 import persona.core.domain.models.PanelOverride
