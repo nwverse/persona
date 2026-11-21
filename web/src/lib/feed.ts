@@ -15,7 +15,7 @@ import type { RuleSuggestion } from "./rule-suggestion";
 import { deleteTodo, type Todo, type TodoAsk } from "./todos";
 import { getInbox, itemPath } from "./inbox";
 import { closePanel, getPanel } from "./panel";
-import { BUILTIN_MANAGER, conversationManager, defaultManager, itemHeaders, MANAGER_HEADER, managerHeaderFor, routedConversationManager } from "./manager-choice";
+import { BUILTIN_MANAGER, conversationManager, defaultManager, itemHeaders, MANAGER_HEADER, managerHeaderFor, noteConversation, routedConversationManager } from "./manager-choice";
 import type { ChatLine } from "./turns";
 import type { Item } from "./types";
 import { upsertTaskCards, type TaskCardMetadata } from "./task-cards";
@@ -64,6 +64,9 @@ export interface PlanTask {
 }
 
 export interface TaskPlan {
+  space?: string;
+  /** Client-side ownership, captured from the response or event envelope. */
+  manager?: string;
   id: string;
   conversation: string;
   tasks: PlanTask[];
@@ -427,6 +430,8 @@ interface FeedState {
 let st: FeedState = { feeds: {}, plans: {}, taskCards: {}, routes: {}, busy: {}, later: {} };
 let feedRevision = 0;
 const itemRevisions = new Map<string, number>();
+// A live plan transition or an owner action wins over an older feed snapshot.
+const planRevisions = new Map<string, number>();
 const draftOwners = new WeakMap<FeedItem, string>();
 const feedKey = (item: FeedItem) => `${item.conversation}/${item.id}`;
 const currentCard = (card: FeedItem) => st.feeds[card.conversation]?.find((it) => it.id === card.id) ?? card;
@@ -557,13 +562,28 @@ async function readFeedPages(conversation: string) {
   for (let n = 0; n < FEED_PAGES; n++) {
     const readingAt = feedRevision;
     const query = cursor ? `?cursor=${enc(cursor)}` : `?paginate=1${last ? `&since=${enc(last)}` : ""}`;
-    const res = await api<{ items: FeedItem[]; next_cursor?: string; plans?: Record<string, TaskPlan>; task_cards?: TaskCardMetadata[] | null; views?: Record<string, AssistantView>; view_actions?: Record<string, ViewAction>; view_blocks?: string[] }>(endpoint + query, { headers });
+    const res = await api<{ items: FeedItem[]; next_cursor?: string; plans?: Record<string, TaskPlan>; pending_plan_ids?: string[]; task_cards?: TaskCardMetadata[] | null; views?: Record<string, AssistantView>; view_actions?: Record<string, ViewAction>; view_blocks?: string[] }>(endpoint + query, { headers });
     if (scope !== conversationDeletionScope() || deletedConversationID(conversation)) return;
     if (!st.feeds[conversation]) set({ feeds: { ...st.feeds, [conversation]: [] } });
     const items = res.items ?? [];
+    if (res.plans) for (const [id, plan] of Object.entries(res.plans)) {
+      if (deletedConversationID(plan.conversation)) { delete res.plans[id]; continue; }
+      const manager = owner ?? defaultManager();
+      noteConversation(plan.conversation, manager);
+      res.plans[id] = { ...plan, manager };
+    }
     if (owner) for (const it of items) draftOwners.set(it, owner);
     // A write or push accepted after this read started wins over the captured response.
-    received(items.filter((it) => (itemRevisions.get(feedKey(it)) ?? 0) <= readingAt), res.plans ?? undefined);
+    if (Array.isArray(res.pending_plan_ids)) {
+      const manager = owner ?? defaultManager();
+      const current = new Set(res.pending_plan_ids);
+      const plans = { ...st.plans };
+      for (const [id, plan] of Object.entries(plans)) {
+        if (plan.manager === manager && plan.state === "open" && !current.has(id) && (planRevisions.get(id) ?? 0) <= readingAt) delete plans[id];
+      }
+      set({ plans });
+    }
+    received(items.filter((it) => (itemRevisions.get(feedKey(it)) ?? 0) <= readingAt), res.plans ? Object.fromEntries(Object.entries(res.plans).filter(([id]) => (planRevisions.get(id) ?? 0) <= readingAt)) : undefined);
     if (res.task_cards?.length) set({ taskCards: { ...st.taskCards, [conversation]: upsertTaskCards(st.taskCards[conversation] ?? [], res.task_cards) } });
     // the cards' snapshot comes whole with every page: what an event missed comes back here
     applySnapshot(conversation, res);
@@ -606,7 +626,11 @@ onHubEvent("hello", (m) => {
 });
 onHubEvent("task_plan", (m) => {
   const p = m.plan as TaskPlan | undefined;
-  if (p && !deletedConversationID(p.conversation)) set({ plans: { ...st.plans, [p.id]: p } });
+  if (p && !deletedConversationID(p.conversation)) {
+    noteConversation(p.conversation, typeof m.manager === "string" ? m.manager : BUILTIN_MANAGER);
+    planRevisions.set(p.id, ++feedRevision);
+    set({ plans: { ...st.plans, [p.id]: { ...p, manager: typeof m.manager === "string" ? m.manager : BUILTIN_MANAGER } } });
+  }
 });
 
 // ── actions ──
@@ -693,7 +717,8 @@ export async function startPlan(plan: TaskPlan, remember: boolean, edits?: Parti
   try {
     const json = { tasks: edits, remember, ...(scheduleGrant ? { schedule_grant: true } : {}) };
     const res = await api<{ plan: TaskPlan }>(`/task-plans/${enc(plan.id)}/start`, { method: "POST", json, headers: conversationHeaders(plan.conversation) });
-    set({ plans: { ...st.plans, [res.plan.id]: res.plan } });
+    planRevisions.set(res.plan.id, ++feedRevision);
+    set({ plans: { ...st.plans, [res.plan.id]: { ...res.plan, manager: plan.manager } } });
     void refreshTodos();
   } finally {
     set({ busy: { ...st.busy, [plan.id]: false } });
@@ -705,7 +730,8 @@ export async function dismissPlan(plan: TaskPlan) {
   set({ busy: { ...st.busy, [plan.id]: true } });
   try {
     const res = await api<{ plan: TaskPlan }>(`/task-plans/${enc(plan.id)}/dismiss`, { method: "POST", headers: conversationHeaders(plan.conversation) });
-    set({ plans: { ...st.plans, [res.plan.id]: res.plan } });
+    planRevisions.set(res.plan.id, ++feedRevision);
+    set({ plans: { ...st.plans, [res.plan.id]: { ...res.plan, manager: plan.manager } } });
   } finally {
     set({ busy: { ...st.busy, [plan.id]: false } });
   }
