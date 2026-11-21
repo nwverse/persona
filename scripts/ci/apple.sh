@@ -275,6 +275,9 @@ if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then
     ci_root="$1"; output="$2"; seconds="$3"; shift 3
     watch_log="$output/diagnostics/build-resources"
     mkdir -p "$watch_log"
+    printf "%s\n" "{\"unavailable\":\"observer did not complete; no memory-pressure verdict\"}" > "$watch_log/final.pending"
+    mv "$watch_log/final.pending" "$watch_log/final.json"
+    printf "%s\n" "observer incomplete; bounded unavailable final evidence only" > "$watch_log/observer.status.txt"
     python3 "$ci_root/scripts/ci/apple_build_watch.py" \
       --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" &
     watcher=$!
@@ -282,6 +285,15 @@ if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then
       local code=$?
       trap - EXIT TERM INT
       : > "$watch_log/stop"
+      # A short stop drain covers normal completion. The observer reaper bounds
+      # final collection and kills its detached process group if needed.
+      for _ in 1 2 3 4 5 6 7 8 9 10; do
+        kill -0 "$watcher" 2>/dev/null || break
+        sleep 0.05
+      done
+      if kill -0 "$watcher" 2>/dev/null; then
+        kill -KILL "-$watcher" 2>/dev/null || kill -KILL "$watcher" 2>/dev/null || true
+      fi
       wait "$watcher" || true
       exit "$code"
     }

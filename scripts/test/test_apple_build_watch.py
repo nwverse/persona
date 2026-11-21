@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from unittest import mock
 from unittest.mock import patch
@@ -59,7 +60,7 @@ class CompilerResourceTests(unittest.TestCase):
             with mock.patch.object(watch, "metadata", return_value={}), \
                     mock.patch.object(watch, "sample") as sample:
                 watch.observe(root, 1800, stop, monotonic=lambda: 0, sleep=lambda _: None)
-            sample.assert_called_once_with(root, "final", mock.ANY)
+            sample.assert_called_once_with(root, "final", mock.ANY, final=True)
             self.assertIn("periodic samples", (root / "observer.status.txt").read_text())
 
     def test_periodic_samples_stop_at_120_and_retain_only_a_bounded_final(self):
@@ -69,7 +70,7 @@ class CompilerResourceTests(unittest.TestCase):
                     mock.patch.object(watch, "sample") as sample:
                 watch.observe(root, 3600, root / "stop", monotonic=lambda: 0, sleep=lambda _: None)
             self.assertEqual(sample.call_count, 121)
-            self.assertEqual(sample.call_args_list[-1], mock.call(root, "final", mock.ANY))
+            self.assertEqual(sample.call_args_list[-1], mock.call(root, "final", mock.ANY, final=True))
             self.assertTrue(all(call.args[1] == f"sample-{index:03d}"
                                 for index, call in enumerate(sample.call_args_list[:-1])))
             self.assertTrue((root / "observer.status.txt").read_text().startswith("120 periodic samples;"))
@@ -110,6 +111,81 @@ class CompilerResourceTests(unittest.TestCase):
                     patch.object(sys, "stderr", new=io.StringIO()), \
                     self.assertRaisesRegex(SystemExit, "2"):
                 watch.main()
+
+    def test_timeout_reaps_a_detached_watcher_and_its_ignoring_collector(self):
+        source = (ROOT / "scripts/ci/apple.sh").read_text()
+        start = source.index("ci_run 'Build iOS offline unit tests'")
+        block = source[start:source.index("ci_run 'No CallKit in the simulator build'", start)]
+        block = block.replace('ci_run \'Build iOS offline unit tests\' "$BUILD_SECONDS" bash -c',
+                              "ci_run 'Build iOS offline unit tests' 1 bash -c", 1)
+        with tempfile.TemporaryDirectory(prefix="apple-watch-hard-timeout-") as directory:
+            fixture = Path(directory)
+            tools = fixture / "tools"
+            tools.mkdir()
+            watcher = fixture / "detached_watcher.py"
+            watcher.write_text(textwrap.dedent(f'''\
+                #!{sys.executable}
+                from pathlib import Path
+                import os
+                import signal
+                import sys
+                if sys.argv[1].endswith("run.py"):
+                    os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
+                os.setsid()
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                Path({str(fixture / "watcher.pid")!r}).write_text(str(os.getpid()))
+                Path({str(fixture / "collector.pid")!r}).write_text(str(os.getpid() + 1))
+                signal.pause()
+            '''))
+            watcher.chmod(0o755)
+            (tools / "python3").symlink_to(watcher)
+            xcodebuild = tools / "xcodebuild"
+            xcodebuild.write_text("#!/bin/bash\nsleep 30\n")
+            xcodebuild.chmod(0o755)
+            command = '''set -euo pipefail
+            ci_run() {
+              local label="$1" budget="$2"; shift 2
+              python3 "$CI_ROOT/scripts/ci/run.py" --label "$label" --timeout "$budget" -- "$@"
+            }
+            CI_ROOT=''' + shlex.quote(str(ROOT)) + '''
+            OUTPUT=''' + shlex.quote(str(fixture / "output")) + '''
+            IOS_COMMON=(xcodebuild)
+            IOS_UNIT_SELECTION=(-only-testing:PersonaTests)
+            BUILD_SECONDS=1800
+            ''' + block
+            outer = subprocess.Popen(["/bin/bash", "-c", command], cwd=ROOT,
+                                     env={**os.environ, "PATH": str(tools) + ":/usr/bin:/bin"},
+                                     text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                     start_new_session=True)
+            started = time.monotonic()
+            try:
+                output, _ = outer.communicate(timeout=20)
+                elapsed = time.monotonic() - started
+                self.assertEqual(outer.returncode, 124, output)
+                self.assertLess(elapsed, 15, output)
+                self.assertIn("TIMEOUT Build iOS offline unit tests", output)
+                self.assertIn("exit 124", output)
+                self.assertNotIn("Traceback", output)
+            except subprocess.TimeoutExpired as error:
+                self.fail("run.py returned 124 but the wrapper still waited for the watcher after 20 seconds: "
+                          + str(error.stdout or ""))
+            finally:
+                if outer.poll() is None:
+                    os.killpg(outer.pid, 9)
+                    outer.wait(timeout=5)
+            resource_dir = fixture / "output/diagnostics/build-resources"
+            self.assertTrue((resource_dir / "final.json").is_file())
+            self.assertTrue((resource_dir / "observer.status.txt").is_file())
+            final = json.loads((resource_dir / "final.json").read_text())
+            self.assertLess((resource_dir / "final.json").stat().st_size, 2048)
+            self.assertIn("unavailable", final)
+            self.assertNotIn("command", json.dumps(final.get("processes", {})))
+            for name in ("watcher.pid", "collector.pid"):
+                pid_path = fixture / name
+                self.assertTrue(pid_path.is_file(), f"fixture did not create {name}")
+                pid = int(pid_path.read_text())
+                with self.assertRaises(ProcessLookupError, msg=f"{name} survived cleanup"):
+                    os.kill(pid, 0)
 
     def test_every_lane_scope_and_budget_reaches_the_same_build_and_observer(self):
         source = (ROOT / "scripts/ci/apple.sh").read_text()

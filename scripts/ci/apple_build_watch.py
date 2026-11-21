@@ -56,7 +56,15 @@ def processes(runner=subprocess.run):
             "largest": entries[:MAX_PROCESSES]}
 
 
-def sample(destination, label, runner=subprocess.run):
+def sample(destination, label, runner=subprocess.run, *, final=False):
+    if final:
+        # A bounded marker exists even if a collector must be reaped.
+        path = destination / (label + ".json")
+        pending = {"captured_at": datetime.now(timezone.utc).isoformat(),
+                   "unavailable": "final collection incomplete; no pressure verdict"}
+        temporary = destination / (label + ".pending")
+        temporary.write_text(json.dumps(pending, indent=2) + "\n")
+        temporary.replace(path)
     memory = output(["memory_pressure"], runner=runner)
     pages = output(["vm_stat"], runner=runner)
     swap = output(["sysctl", "vm.swapusage"], runner=runner)
@@ -73,7 +81,9 @@ def sample(destination, label, runner=subprocess.run):
     if memory.get("exit") != 0 or pages.get("exit") != 0 or swap.get("exit") != 0:
         record["unavailable"] = "resource command failed; no pressure verdict"
     path = destination / (label + ".json")
-    path.write_text(json.dumps(record, indent=2) + "\n")
+    temporary = destination / (label + ".pending")
+    temporary.write_text(json.dumps(record, indent=2) + "\n")
+    temporary.replace(path)
     return record
 
 
@@ -87,12 +97,16 @@ def observe(destination, seconds, stop_path, runner=subprocess.run, monotonic=ti
             sample(destination, f"sample-{count:03d}", runner)
             count += 1
             sleep(max(0, min(SAMPLE_SECONDS, deadline - monotonic())))
-        sample(destination, "final", runner)
+        sample(destination, "final", runner, final=True)
         (destination / "observer.status.txt").write_text(
             f"{count} periodic samples; resource evidence only, no scheduling change or root-cause verdict\n")
     except KeyboardInterrupt:
-        sample(destination, "final", runner)
+        sample(destination, "final", runner, final=True)
         (destination / "observer.status.txt").write_text("stopped; final sample retained\n")
+    finally:
+        if not (destination / "observer.status.txt").exists():
+            (destination / "observer.status.txt").write_text(
+                "final collection incomplete; bounded evidence retained, no pressure verdict\n")
 
 
 def interrupted(signum, _frame):
