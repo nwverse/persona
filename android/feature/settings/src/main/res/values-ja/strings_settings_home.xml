@@ -32,4 +32,9 @@
     <string name="settings_inbox_sources">受信箱のソース</string>
     <string name="settings_inbox_sources_detail">受信箱に新しいものを入れるソース</string>
     <string name="settings_search_inbox_sources_aliases">受信箱 ソース 購読 おすすめ メール ミュート</string>
+    <string name="settings_digital_assistant_title">デフォルトのデジタルアシスタント</string>
+    <string name="settings_digital_assistant_detail">サイドボタン長押しやジェスチャーで起動し、画面を添付して質問</string>
+    <string name="settings_digital_assistant_active">デフォルト</string>
+    <string name="settings_digital_assistant_inactive">未設定</string>
+    <string name="settings_search_digital_assistant_aliases">デフォルト デジタルアシスタント アシスタント 音声アシスタント サイドボタン スクリーンショット</string>
 </resources>

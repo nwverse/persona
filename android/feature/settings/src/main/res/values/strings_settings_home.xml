@@ -32,4 +32,9 @@
     <string name="settings_inbox_sources">Inbox Sources</string>
     <string name="settings_inbox_sources_detail">What brings new things into your Inbox</string>
     <string name="settings_search_inbox_sources_aliases">inbox sources subscriptions recommended mail muted</string>
+    <string name="settings_digital_assistant_title">Default digital assistant</string>
+    <string name="settings_digital_assistant_detail">Side button or gesture launch with screen context</string>
+    <string name="settings_digital_assistant_active">Default</string>
+    <string name="settings_digital_assistant_inactive">Not set</string>
+    <string name="settings_search_digital_assistant_aliases">default digital assistant voice assist side button screenshot ROLE_ASSISTANT</string>
 </resources>

@@ -680,14 +680,32 @@ fun AssistantScreen(
             // composer of the page that starts it, here.
             proactiveOpen = false; settingsOpen = false; drawerOpen = false
             if (hasChat && !demo) {
-                latestMain?.let { askMain(it); return@collect }
+                latestMain?.let { main ->
+                    persona.feature.chat.AssistDraftBus.claim(persona.feature.chat.AssistDraftTarget.Session(main))
+                    askMain(main)
+                    return@collect
+                }
                 // On a cold start the conversations may still be on their way: the main one takes the cursor when it comes.
-                if (!openedMain) scope.launch {
-                    kotlinx.coroutines.withTimeoutOrNull(3_000) { snapshotFlow { latestMain }.first { it != null } }
-                        ?.let { main -> if (!openedMain || main == SessionKey(activeMachine.orEmpty(), activeSession.orEmpty())) askMain(main) }
+                if (!openedMain) {
+                    val arrived = kotlinx.coroutines.withTimeoutOrNull(300) { snapshotFlow { latestMain }.first { it != null } }
+                    if (arrived != null && (!openedMain || arrived == SessionKey(activeMachine.orEmpty(), activeSession.orEmpty()))) {
+                        persona.feature.chat.AssistDraftBus.claim(persona.feature.chat.AssistDraftTarget.Session(arrived))
+                        askMain(arrived)
+                        return@collect
+                    }
+                    scope.launch {
+                        kotlinx.coroutines.withTimeoutOrNull(3_000) { snapshotFlow { latestMain }.first { it != null } }
+                            ?.let { main ->
+                                if (!openedMain || main == SessionKey(activeMachine.orEmpty(), activeSession.orEmpty())) {
+                                    persona.feature.chat.AssistDraftBus.retarget(persona.feature.chat.AssistDraftTarget.Session(main))
+                                    askMain(main)
+                                }
+                            }
+                    }
                 }
                 if (activeSession != null || newChat != null) newConversation()
             }
+            persona.feature.chat.AssistDraftBus.claim(persona.feature.chat.AssistDraftTarget.Starter)
             // After the tab's first layout and the saved draft: the text field has to be attached (the old app waited 300 ms).
             kotlinx.coroutines.withTimeoutOrNull(3_000) { snapshotFlow { draftEditor == null || savedComposer != null }.first { it } }
             kotlinx.coroutines.delay(300)
@@ -884,6 +902,31 @@ fun AssistantScreen(
                             }
                             if (rejected.isNotEmpty() || pending.values.any { it.lost > 0 }) {
                                 persona.feature.chat.ForwardPlacements.finishHomePhotoHandoffs(rejected.mapTo(mutableSetOf()) { it.id })
+                            }
+                        }
+                        val pendingAssist by persona.feature.chat.AssistDraftBus.pending.collectAsStateWithLifecycle()
+                        LaunchedEffect(pendingAssist, active, composer, composer.draftLoaded, draftReady) {
+                            if (active != null && hasChat && !demo) return@LaunchedEffect
+                            val draft = pendingAssist ?: return@LaunchedEffect
+                            if (draft.target != persona.feature.chat.AssistDraftTarget.Starter || !draft.hasUnappliedContent) return@LaunchedEffect
+                            if (!draftReady || !composer.draftLoaded) return@LaunchedEffect
+                            val result = persona.feature.chat.applyAssistDraft(
+                                context = context,
+                                composer = composer,
+                                draft = draft,
+                                bus = persona.feature.chat.AssistDraftBus,
+                                existingContextIds = persona.feature.chat.ForwardPlacements.home.mapTo(mutableSetOf()) { it.id },
+                                onContext = { ref ->
+                                    if (active == null) persona.feature.chat.ForwardPlacements.home =
+                                        persona.feature.chat.ForwardPlacements.home + ref
+                                },
+                                onPhotoLimit = {
+                                    val message = resources.getString(persona.feature.chat.R.string.chat_composer_photo_limit)
+                                    if (feedback?.notice(message) != true) toast.show(persona.core.designsystem.FeedbackNotice(message))
+                                },
+                            )
+                            if (result.screenshotAdded || result.contextAdded) {
+                                composer.focusRequest++
                             }
                         }
                         ChatComposer(uploadTarget, composer, working = false, sending = sending || !draftReady,

@@ -315,7 +315,7 @@ fun forwardMessage(note: String, forwards: List<ChatLinkContext>, resources: Res
  * the extra attributes as JSON and a forward's route the last three); seven after [CONTEXTS_V3], as saved before
  * forwards; six each after [CONTEXTS_V2]; five each, without a mark, as saved before quotes had an id.
  */
-internal val ChatLinkContextsSaver = listSaver<List<ChatLinkContext>, String>(
+val ChatLinkContextsSaver = listSaver<List<ChatLinkContext>, String>(
     save = { refs -> listOf(CONTEXTS_V4) + refs.flatMap {
         listOf(it.kind, it.title, it.url, it.text, it.id, it.msg, it.part, JsonCodec.encodeToString(it.extra), it.route.orEmpty())
     } },

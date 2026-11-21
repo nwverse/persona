@@ -99,6 +99,9 @@ class PersonaApp : Application() {
         capsule.start()
         restorePairing()
         errorReporting.start(scope, hub)
+        scope.launch(Dispatchers.IO) {
+            runCatching { persona.android.assist.AssistScreenshotStore.pruneExpired(this@PersonaApp) }
+        }
         scope.launch {
             connection.state.map { it == persona.core.contracts.api.ConnectionState.Online }.distinctUntilChanged()
                 .collect { online -> if (online) runCatching { personas.refresh() } }

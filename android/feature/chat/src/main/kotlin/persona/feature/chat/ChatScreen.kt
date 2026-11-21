@@ -515,6 +515,27 @@ private fun ChatPage(
         }
         composer.focusRequest++
     }
+    val pendingAssist by AssistDraftBus.pending.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingAssist, composer.draftLoaded, readOnly, canSend, key) {
+        val draft = pendingAssist ?: return@LaunchedEffect
+        if (draft.target != AssistDraftTarget.Session(key) || !draft.hasUnappliedContent) return@LaunchedEffect
+        if (!composer.draftLoaded || readOnly || !canSend) return@LaunchedEffect
+        val result = applyAssistDraft(
+            context = context,
+            composer = composer,
+            draft = draft,
+            bus = AssistDraftBus,
+            existingContextIds = linkContexts.mapTo(mutableSetOf()) { it.id },
+            onContext = { ref -> linkContexts = linkContexts + ref },
+            onPhotoLimit = {
+                val limitNotice = res.getString(R.string.chat_composer_photo_limit)
+                if (feedback?.notice(limitNotice) != true) notice = limitNotice
+            },
+        )
+        if (result.screenshotAdded || result.contextAdded) {
+            composer.focusRequest++
+        }
+    }
     val pairingLoader = pageReader.pairingLoader
     val loader = pageReader.loader
     val markdownCache = pageReader.markdownCache

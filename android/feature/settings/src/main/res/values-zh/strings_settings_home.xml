@@ -32,4 +32,9 @@
     <string name="settings_inbox_sources">收件箱来源</string>
     <string name="settings_inbox_sources_detail">哪些来源会往收件箱里放新东西</string>
     <string name="settings_search_inbox_sources_aliases">收件箱 来源 订阅 推荐订阅 邮件 静音</string>
+    <string name="settings_digital_assistant_title">默认数字助理</string>
+    <string name="settings_digital_assistant_detail">侧键长按或手势唤起，附带当前截屏提问</string>
+    <string name="settings_digital_assistant_active">已设为默认</string>
+    <string name="settings_digital_assistant_inactive">未设为默认</string>
+    <string name="settings_search_digital_assistant_aliases">默认数字助理 数字助理 语音助手 侧键 长按 截屏 屏幕截图 助理</string>
 </resources>
