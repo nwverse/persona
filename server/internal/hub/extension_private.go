@@ -68,6 +68,36 @@ func (h *Hub) hiddenFromExtensions(ix proto.Interaction) bool {
 	return ix.Cwd == ""
 }
 
+// pendingCardHiddenFromExtensions says whether pending card id is one an extension's token may not act on (resolve,
+// choose): a private card or one of the health space, by the card's own directory or the session it belongs to. False
+// too when the id is not pending (answered, withdrawn or unknown), which the action routes handle with their own rules.
+// Unlike hiddenFromExtensions it does not fail closed on an unlisted session with no directory: that rule protects
+// reads and notifications, where hiding is the safe answer, but actions on such a card keep going to its manager,
+// which enforces its own scoping. The action routes answer a hidden card 404 as if it did not exist, the same answer
+// the read routes give (#12216).
+func (h *Hub) pendingCardHiddenFromExtensions(id string) (proto.Interaction, bool) {
+	ix, pending := h.pendingInteraction(id)
+	if !pending {
+		return proto.Interaction{}, false
+	}
+	return ix, h.actionCardHiddenFromExtensions(ix)
+}
+
+// actionCardHiddenFromExtensions is the definitive "an extension must not act on this card" rule, with no
+// cannot-tell branch: a private card, a card whose directory is in the health space, or one whose listed session is
+// a health-space conversation.
+func (h *Hub) actionCardHiddenFromExtensions(ix proto.Interaction) bool {
+	if ix.Private || identity.InHealthSpace(ix.Cwd) {
+		return true
+	}
+	if m := h.localMachine(ix.MachineID); m != nil {
+		if s, ok := m.session(ix.SessionID); ok {
+			return healthSession(&s)
+		}
+	}
+	return false
+}
+
 // sessionHiddenFromExtensions: the extensions are not told of session sid of computer machine (agent.finished): one of
 // the health space, or one the hub does not list, whose space cannot be told. A push about no session is the manager's
 // own.

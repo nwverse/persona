@@ -176,6 +176,13 @@ type Settings struct {
 	// subscription's 5-hour window lasts longer in interactive use; driving the interactive program from Persona may also
 	// be read as a different kind of use than it is, so it is the owner's opt-in.
 	ClaudeInteractive *bool `json:"claude_interactive,omitempty"`
+	// OwnerReplyApproval enables exact, one-shot approval of server-prepared connector batches. It never creates an
+	// Always rule. PersistentOwnerActionCards independently keeps only reconstructable proposals pending indefinitely.
+	OwnerReplyApproval         *bool `json:"owner_reply_approval,omitempty"`
+	PersistentOwnerActionCards *bool `json:"persistent_owner_action_cards,omitempty"`
+	// An explicitly empty phrase list disables reply approval. Do not omit it when encoding Settings: an omitted field
+	// decodes as nil and would silently restore the default phrases after a write or restart.
+	OwnerApprovalPhrases []string `json:"owner_reply_approval_phrases"`
 	// LoadAllTools: every Persona tool of an assistant conversation is loaded up front, as before #7317. nil is off
 	// (the default): only the frequently used ones are, the rest wait behind ToolSearch (tool_loading.go).
 	LoadAllTools *bool `json:"load_all_tools,omitempty"`
@@ -335,6 +342,76 @@ func (s *Service) mainTasksQuiet(ctx context.Context) bool {
 func (s *Service) claudeInteractive(ctx context.Context) bool {
 	v := s.settings(ctx).ClaudeInteractive
 	return v != nil && *v
+}
+
+var defaultOwnerApprovalPhrases = []string{"发", "同意"}
+
+func ownerReplyApprovalOn(v Settings) bool {
+	return v.OwnerReplyApproval != nil && *v.OwnerReplyApproval
+}
+
+func persistentOwnerActionCardsOn(v Settings) bool {
+	return v.PersistentOwnerActionCards != nil && *v.PersistentOwnerActionCards
+}
+
+// ownerApprovalPhrases returns the exact affirmative replies in effect. Nil
+// means the documented defaults; an explicitly empty list disables chat
+// approval without touching ordinary Allow/Deny cards or existing grants.
+func ownerApprovalPhrases(v Settings) ([]string, error) {
+	phrases := v.OwnerApprovalPhrases
+	if phrases == nil {
+		phrases = defaultOwnerApprovalPhrases
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(phrases))
+	if len(phrases) > 8 {
+		return nil, errors.New("owner_reply_approval_phrases accepts at most 8 phrases")
+	}
+	for _, phrase := range phrases {
+		if phrase == "" || strings.TrimSpace(phrase) != phrase || len([]rune(phrase)) > 32 || seen[phrase] {
+			return nil, errors.New("owner_reply_approval_phrases must contain unique, trimmed phrases of 1–32 characters")
+		}
+		seen[phrase] = true
+		out = append(out, phrase)
+	}
+	return out, nil
+}
+
+func ownerApprovalPhrase(v Settings, text string) bool {
+	if !ownerReplyApprovalOn(v) {
+		return false
+	}
+	phrases, err := ownerApprovalPhrases(v)
+	if err != nil {
+		return false // invalid persisted configuration fails closed
+	}
+	text = ownerApprovalFoldLatin(strings.TrimSpace(text))
+	for _, phrase := range phrases {
+		if text == ownerApprovalFoldLatin(phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+// ownerApprovalFoldLatin folds ASCII Latin capitals only. Unicode simple
+// folding would make distinct non-Latin code points (for example long s and s)
+// authorize one another, which is broader than an exact reply.
+func ownerApprovalFoldLatin(text string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + ('a' - 'A')
+		}
+		return r
+	}, text)
+}
+
+func ownerApprovalPhrasesForView(v Settings) []string {
+	phrases, err := ownerApprovalPhrases(v)
+	if err != nil {
+		return v.OwnerApprovalPhrases
+	}
+	return phrases
 }
 
 func (s *Service) interjectBackground(ctx context.Context) bool {
@@ -640,6 +717,10 @@ type assistantView struct {
 	InterjectBackground bool `json:"interject_background"`
 	// ClaudeInteractive is in effect, like DoneNeedsDelivery.
 	ClaudeInteractive bool `json:"claude_interactive"`
+	// Exact owner-action controls are always visible with their effective values on a hub that supports them.
+	OwnerReplyApproval         bool     `json:"owner_reply_approval"`
+	PersistentOwnerActionCards bool     `json:"persistent_owner_action_cards"`
+	OwnerApprovalPhrases       []string `json:"owner_reply_approval_phrases"`
 	// AgentTasks is in effect, like DoneNeedsDelivery.
 	AgentTasks bool `json:"agent_tasks"`
 	// CloseEndedTerminals is in effect, like DoneNeedsDelivery.
@@ -689,6 +770,9 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		ReviewSamplePercent:          s.reviewSamplePercent(ctx),
 		InterjectBackground:          v.InterjectBackground != nil && *v.InterjectBackground,
 		ClaudeInteractive:            v.ClaudeInteractive != nil && *v.ClaudeInteractive,
+		OwnerReplyApproval:           ownerReplyApprovalOn(v),
+		PersistentOwnerActionCards:   persistentOwnerActionCardsOn(v),
+		OwnerApprovalPhrases:         ownerApprovalPhrasesForView(v),
 		AgentTasks:                   v.AgentTasks != nil && *v.AgentTasks,
 		CloseEndedTerminals:          v.CloseEndedTerminals != nil && *v.CloseEndedTerminals,
 		AgentAutoNaming:              quietOn(v.AgentAutoNaming),

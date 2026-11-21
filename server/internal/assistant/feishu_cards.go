@@ -592,7 +592,10 @@ func (s *Service) interactionCard(ctx context.Context, ix proto.Interaction) *fe
 		}
 		c.Markdown(b.String())
 		if sum := strings.TrimSpace(ix.Summary); sum != "" {
-			c.Markdown("```\n" + strings.ReplaceAll(clip(sum, 2500), "```", "'''") + "\n```")
+			if !ownerActionProposal(ix) {
+				sum = clip(sum, 2500)
+			}
+			c.Markdown("```\n" + strings.ReplaceAll(sum, "```", "'''") + "\n```")
 		} else if in := proto.RedactArgs(ix.ToolInput); in != "" { // a credential's value never goes to the chat (#4734)
 			c.Markdown("```json\n" + strings.ReplaceAll(clip(in, 2500), "```", "'''") + "\n```")
 		}

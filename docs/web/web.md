@@ -117,6 +117,15 @@ drives the built client with synthetic data in Chinese, English and Japanese, wi
 Dismiss, Undo, reload, new same-reference progress, and that no reply or task/Agent mutation was requested; `--cdp`
 uses the shared browser and keeps the test pages open.
 
+**Pending plans across conversations (#12254).** Main's Needs you includes every open task plan of the current
+assistant in its ordinary space, including plans made by scheduled routines and side conversations. Health keeps its
+own plans; archived and deleted source conversations are excluded from the Main snapshot. The source conversation labels its group;
+Start and Don't start act on that plan's source, and Open navigates there. Other conversations show only their own plans.
+The Main feed carries the pending-plan snapshot on initial load and reconnect. A newer live update or completed owner
+action wins over an older read. Each open plan counts as one decision, however many tasks it contains. Conversation rows
+add those decisions to their existing needs-you count, and the Persona chats heading keeps the aggregate visible even
+when recent chats or the whole section are collapsed. Managers' plans are counted separately.
+
 **The open tray's room (#4656).** An open Needs you / In progress tray follows the viewport instead of the old
 `min(20rem, 40dvh)` box: while it is open, `styles.css` lets the chat dock (`DOCK_MAX`, 55% of the visible height otherwise)
 take up to `--assistant-dock-open-max` (82% of `--kb-h`), the conversation above giving up the room, and the tray fills only
@@ -1524,6 +1533,23 @@ To verify the web flow, run the mock hub with `MOCK_STARRED=1` and follow the co
 `web/e2e/starred-messages.mjs`. It drives two isolated browser contexts and verifies cross-device changes,
 search, copy, Undo, exact links, and a snapshot whose original is absent.
 
+#### Back up starred messages (#12061)
+
+Open **Backup** on the Starred page. Download a JSON backup to restore later or choose
+Markdown for a copy you can read and edit in a text editor. Exports include the selected assistant's
+saved text, title, speaker, source category and timestamps. They omit device and conversation identifiers.
+
+Choose a JSON backup and select **Preview restore** to see how many messages would be added, how many are
+already saved and how much space is available. Select **Restore messages** to save the batch. If another device changed Starred after you
+previewed it, review the current counts and confirm again. A backup that would exceed the 300-message limit
+stays in preview until you make room.
+
+Restored messages are archival snapshots. You can search, copy or remove them. They retain the saved words
+and timestamps independently of the original conversation. An older manager can still supply the snapshots
+for export. Restore appears when the connected manager supports it.
+
+Run the browser test with `MOCK_STARRED=1 MOCK_STARRED_BACKUP=1` and `node web/e2e/starred-backup.mjs`.
+
 ### Exporting a conversation (#7375)
 
 **Export Conversation…** in every chat's ⋯ (Agent chats and Persona conversations) saves the whole conversation as one
@@ -1732,6 +1758,7 @@ Two-column pages (Inbox, Knowledge) switch to one column according to their own 
   - **Check before linking**: message candidates (at most 24) go to `path-presence`; candidates arriving within 60ms are combined by machine + cwd into one `GET /machines/{mid}/stat`. Link file / dir / denied (denied explains permissions on opening); cache presence for 30 minutes, absence for 2 minutes, unanswered requests for 1 minute before retrying.
     Before an answer, with old nodes lacking `stat`, or offline, paths remain plain text. Media / document cards below replies share this cache and do not repeat requests.
   - **The assistant writes paths for this rule** (#5453): its instructions (`server/internal/prompts/assistant/claude_md.md`, and the health space's `health_claude_md.md`) put every path it shows the user in backticks, one path per span with an optional `:line`, a readable name before a file it wants opened, and never in a fenced block, so a path with spaces or Chinese still links.
+- **Local-path Markdown images and file links in chat** (#12288, aligned with iOS #12102; `lib/files.ts`, `ui/Markdown.tsx`, `ui/ReplyImages.tsx`, `ui/reply-images-plugin.ts`): in Agent and Assistant chats with a session machine (`mid`), Markdown images (`![alt](path)`) and file links (`[label](path)`) naming absolute paths (`/…`, `~/…`, Windows drive `C:\…` / `C:/…`) or session `cwd`-relative paths resolve against `cwd`. Local images load inline through authenticated `fileDownloadURL(mid, resolvedPath, cwd, { inline: true })` without triggering the third-party web consent gate, open in the full-screen `ImageViewer` on click for zoom/download, and on load error display a clear failure reason with a manual Retry button (no automatic retry loop, failure state preserved across remounts). Local Markdown file links open in the Files panel (supporting `#L<line>`). `http://`, `https://`, `//…`, `file:`, `data:`, `blob:`, `mailto:`, custom URI schemes, and hub internal routes (`/api/v1/…`) are strictly excluded so third-party `ExternalImageGate` privacy rules and hub attachment images remain unchanged. `lib/turn-images.ts` also recognizes `Path` tool arguments (such as Antigravity `read_file`).
 - **Sheets** (#1310, `session/files/SheetView.tsx`, `lib/sheets.ts`, `lib/sheets.worker.ts`; iOS / Mac #1294): CSV, TSV, xlsx / xlsm / xlsb / xls, ods, numbers open as spreadsheets.
   Column letters and row numbers stay fixed; first row frozen (can disable, stored in browser). Column width estimated from the first 300 rows (uses the file's width if wider), resize by dragging the header's right edge, double-click resets. Render only visible cells, smooth even with hundreds of thousands of rows; the grid redraws when the rows or columns on screen change (every 8 rows or 256 px of scrolling), not on every scrolled pixel, and a drag selection only when it reaches another cell.
   Merged cells, cell-specific number / date formats (SheetJS formatted text); click, drag, Shift-extend, select whole column / row by its letter / number, ⌘A; partial selection of a merged block expands to the whole block.
@@ -2147,6 +2174,14 @@ all-types example unchanged, `invalid` shows a document whose saved values are m
 its empty, correctable state, `keyboard` refuses the first single-choice save so its Tab stop can be checked, `empty` shows
 a document without groups, `unsupported` shows an unknown kind and a newer schema version, and the failure scenarios show
 only the module they happen in. The page is never built.
+
+## Extension entry-list settings (#9504)
+
+`web/src/views/settings/Extensions.tsx` renders a declared extension entry list inside the existing extension settings page, not through the generic configuration-Document form above. `EntryListControl` uses the existing settings surfaces, field rows, buttons and shared secret/removal dialogs. Saved entry `_id` metadata keys each React entry but is not an input; an unsaved entry carries an enumerable symbol that object spreading preserves across immutable edits and `JSON.stringify` omits. Arrays are atomic when a dirty draft rebases onto a fresh detail, avoiding index-wise merges of different entries.
+
+`web/src/lib/extensions.ts` adds `entry_lists=1` to every detail read and detail-returning extension write, including lifecycle and secret responses. Without it the hub supplies the legacy projection, so a response to a write must not accidentally remove the editor on the next render. Immediate fixed-field saves (the machine switches) add `preserve_entries=1`: a stale page cannot turn its old entry array into removals or secret-clearing rebinds, and the response still contains the capable form. Entry add/edit/remove changes only the raw nested configuration draft; secret values stay exclusively in the existing write-only dialog and API. New entries cannot open that dialog until the hub has saved them and minted an ID. Dynamic secret rows are rendered in their entries, not duplicated in the fixed Secrets group. A required entry list keeps an explicit empty array through compaction, dirty tracking and draft rebasing; an optional one compacts back to absent. The shared helpers cover numeric paths, indexed validation errors (`accounts[0].address`), entry identity and the maximum-entry bound.
+
+The server contract, legacy preservation, egress/consent and fixed-slot migration are in `docs/extensions/extensions.md` ("Entry lists and per-entry secrets") and `docs/protocol/protocol.md` ("Extension entry-list settings"). The interaction rules and accessibility acceptance are in `docs/design/DESIGN_SYSTEM.md` ("Extension entry lists").
 
 ## Labs
 
