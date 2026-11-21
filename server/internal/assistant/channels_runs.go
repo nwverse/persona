@@ -65,6 +65,8 @@ type chanLive struct {
 	// has shown, under mu.
 	items []proto.Item
 	cot   cotProgress
+	// native belongs to one topic-turn generation; protected by chans.mu.
+	native *cotWorker
 	// from is the seq of the run's own message once found (0: not yet: queued behind another turn, or not in);
 	// upTo the last item noted; looked when locateRun last read the conversation.
 	from, upTo int

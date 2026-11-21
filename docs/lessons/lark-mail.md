@@ -204,3 +204,7 @@ Pinned chats on the home page and normal paging both need to be bound to the act
 ## Group delivery is not permission to trigger (#10238)
 
 A platform's mention scope may coexist with broader message scopes. Enforce per-group mention-only policy before the bot's own settings commands as well as assistant handoff; a command reply is already an observable side effect. Match structured open IDs, fail closed while the bot identity is unknown, and read the policy after a queued message gets its turn. Keep omitted boolean edits distinct from false so older clients cannot silently loosen a saved policy. A strict first enrollment must not become the fallback home for unrelated requests.
+
+## Native topic progress must not hold the card mutex (#12574)
+
+Deferring native create/append until after the first card still holds the progress mutex for the entire call. Test a second progress tick and the final answer while the fake native API remains blocked. Serialize native events separately, coalesce bounded item snapshots, cancel progress at the end, and fence persisted results by the owning turn so a late response cannot modify a held next turn.

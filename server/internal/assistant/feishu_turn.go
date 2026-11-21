@@ -69,7 +69,7 @@ func (f feishuSink) progress(ctx context.Context, r *channel.Run, took time.Dura
 	}
 	if s.runExt(r, "chat") != "" {
 		// The topic's card keeps its own immediate lifecycle; the native API must not hold it back.
-		defer func() { f.cotProgressNow(ctx, r) }()
+		defer func() { f.topicCotQueue(r, false) }()
 	} else if f.cotProgressNow(ctx, r) {
 		return
 	}
@@ -214,7 +214,13 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 	}
 	// The process is in the agent message above the answer, or else folded into the answer's first card.
 	var steps []string
-	if !f.cotFinishNow(ctx, r) {
+	native := false
+	if s.runExt(r, "chat") != "" {
+		native = f.topicCotQueue(r, true)
+	} else {
+		native = f.cotFinishNow(ctx, r)
+	}
+	if !native {
 		steps = append([]string{}, all...)
 	}
 	// A /read's answer is read by the whole group: the process (commands, paths on the computer) and the web link to

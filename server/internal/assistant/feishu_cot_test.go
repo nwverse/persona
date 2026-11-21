@@ -84,7 +84,28 @@ func cotHub(t *testing.T, refuse bool) (*Service, *[]map[string]any, *[]string) 
 	})
 	f.answerApp(AppFeishu, FeishuReact, func(json.RawMessage) (any, error) { return map[string]any{}, nil })
 	f.answerApp(AppFeishu, FeishuUnreact, func(json.RawMessage) (any, error) { return map[string]any{}, nil })
-	return newTestService(t, f), posts, &calls
+	s := newTestService(t, f)
+	t.Cleanup(func() {
+		s.chans.mu.Lock()
+		var workers []*cotWorker
+		for _, p := range s.chans.live {
+			if p.native != nil {
+				workers = append(workers, p.native)
+			}
+		}
+		s.chans.mu.Unlock()
+		for _, w := range workers {
+			w.abort()
+		}
+		for _, w := range workers {
+			select {
+			case <-w.done:
+			case <-time.After(2 * time.Second):
+				t.Error("native worker did not stop during cleanup")
+			}
+		}
+	})
+	return s, posts, &calls
 }
 
 func cotRun(s *Service) (*channel.Run, *chanLive) {
