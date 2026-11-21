@@ -213,6 +213,11 @@ func TestAnAppNeverSendsAFirstMessagesID(t *testing.T) {
 			t.Fatalf("a send with a reserved id: %d %v, typed %d", code, out, sends.Load())
 		}
 	}
+	code, out := call(t, h.routes(), "POST", "/api/v1/sessions", h.cfg.Token,
+		`{"machine_id":"box","resume_session_id":"s1","prompt":"fix CI","client_msg_id":"`+proto.A2ADeliveryPrefix+`0123"}`)
+	if code != http.StatusBadRequest || out["code"] != "client_msg_id_reserved" || sends.Load() != 0 {
+		t.Fatalf("a resume with a reserved id: %d %v, typed %d", code, out, sends.Load())
+	}
 	if code, out := call(t, h.routes(), "POST", sendPath, h.cfg.Token, `{"text":"fix CI","client_msg_id":"c-1"}`); code != http.StatusOK || sends.Load() != 1 {
 		t.Fatalf("an app's own id: %d %v, typed %d", code, out, sends.Load())
 	}
