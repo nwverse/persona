@@ -163,6 +163,9 @@ type botHub struct {
 	// (bots_register.go); both replaced in tests.
 	registrar *feishubot.Registrar
 	regDomain func(region string) string
+	// bindGate serializes Feishu binding, including registration network calls, independently of mu.
+	// A channel lets a waiting client's context cancel without waiting for the current bind.
+	bindGate chan struct{}
 }
 
 func (b *botHub) clock() time.Time {
