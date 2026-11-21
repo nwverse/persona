@@ -67,11 +67,11 @@ func (n *Node) launcherModels(ctx context.Context, name, agentType string, refre
 	if proto.IsExternalLauncher(name) {
 		return n.externalLauncherModels(ctx, name, refresh)
 	}
-	if isDesktopLauncher(name) { // the app runs its session on the model it picks (claudedesktop_new.go)
-		return proto.LauncherModels{Agent: "claude", Models: []proto.AgentModel{}, Locked: desktopModelLocked}, nil
+	if isDesktopLauncher(name) {
+		return n.claudeDesktopLauncherModels(ctx, refresh)
 	}
-	if isCodexAppLauncher(name) { // so does the Codex App (codexapp_new.go)
-		return proto.LauncherModels{Agent: "codex", Models: []proto.AgentModel{}, Locked: codexAppModelLocked}, nil
+	if isCodexAppLauncher(name) {
+		return n.codexAppLauncherModels(ctx, refresh)
 	}
 	// A runtime's launcher, as a start in ctx's host runs it (where that host's engine runs only its own launchers, its
 	// provider of the name, #8140): static advertisement or native discovery.
@@ -86,6 +86,16 @@ func (n *Node) launcherModels(ctx context.Context, name, agentType string, refre
 		return n.liveRuntimeModels(ctx, h, runtimeName, refresh, res)
 	}
 	agent := n.launcherModelsAgent(ctx, name, agentType)
+	if agent == ompAgent {
+		// omp accepts a typed model on a new herdr start, unless its launcher pins it.
+		res := proto.LauncherModels{Agent: agent, Models: []proto.AgentModel{}}
+		if err := n.checkOmpStartModel(ctx, name, modelCheckProbe); err != nil {
+			res.Locked = err.Error()
+		} else {
+			res.SupportsStartModel = true
+		}
+		return res, nil
+	}
 	if agent == agyAgent && (assistantLauncherPurpose(ctx) || n.startKind(ctx) == agyAgent) {
 		// The companion is unavailable on this path. Its catalog must stay separate from the pane's cached list.
 		return proto.LauncherModels{Agent: agyAgent, Models: []proto.AgentModel{}}, nil
@@ -129,6 +139,9 @@ func (n *Node) launcherModels(ctx context.Context, name, agentType string, refre
 		wg.Wait()
 		if listErr != nil {
 			return nil, listErr
+		}
+		if agent == "codex" && name == "codex" && len(models) == 0 {
+			models = readCodexHomeModels(n.codexHome())
 		}
 		res.Models = withGatewayModels(models, gateway)
 		launcherModelsCache.Lock()

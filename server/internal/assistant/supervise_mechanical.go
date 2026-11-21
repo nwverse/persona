@@ -23,13 +23,20 @@ func (s *Service) screenMechanicalSignals(ctx context.Context, list []superviseS
 	var kept []superviseSignal
 	for _, g := range list {
 		if actionable[g.Todo] {
+			// An actionable sibling keeps the to-do out of mechanical parking, but its idle still needs the read-only wake check.
+			if g.Kind == sigIdle {
+				if _, retry := s.mechanicalCheck(ctx, g, now, true); !retry.IsZero() {
+					s.restoreScreened(g, now, prev)
+					continue
+				}
+			}
 			kept = append(kept, g)
 			continue
 		}
 		handled, retry := s.mechanicalSignal(ctx, g, now)
 		switch {
 		case !retry.IsZero():
-			s.restoreDigest([]superviseSignal{g}, now, prev)
+			s.restoreScreened(g, now, prev)
 		case handled:
 			s.turnsTold(ctx, []superviseSignal{g})
 			s.logf("supervise: task %s %s handled without a model", g.Todo, g.Kind)
@@ -53,8 +60,19 @@ func (s *Service) screenMechanicalSignals(ctx context.Context, list []superviseS
 	return kept
 }
 
+// restoreScreened keeps a deferred signal out of the digest batch that screening just kept it out of.
+func (s *Service) restoreScreened(g superviseSignal, now, prev time.Time) {
+	g.batchTo, g.batchUntil = "", time.Time{}
+	s.restoreDigest([]superviseSignal{g}, now, prev)
+}
+
 // Unknown, actionable and conflicting evidence deliberately falls through to ordinary supervision.
 func (s *Service) mechanicalSignal(ctx context.Context, g superviseSignal, now time.Time) (bool, time.Time) {
+	return s.mechanicalCheck(ctx, g, now, false)
+}
+
+// mechanicalCheck is mechanicalSignal; wakeOnly stops before delivery reads, writes or automatic parking.
+func (s *Service) mechanicalCheck(ctx context.Context, g superviseSignal, now time.Time, wakeOnly bool) (bool, time.Time) {
 	switch g.Kind {
 	case sigIdle, sigStalled, sigOrphaned, sigAllStopped:
 	default:
@@ -73,9 +91,18 @@ func (s *Service) mechanicalSignal(ctx context.Context, g superviseSignal, now t
 	if !reached {
 		return false, time.Time{}
 	}
+	for _, c := range currentTaskAgents(agents, supersededAgents(t, agents)) {
+		if g.Kind == sigIdle && c.Loop != nil && c.Loop.Kind == "wakeup" &&
+			(c.Status == proto.StatusWorking || c.State == proto.StateWorking) {
+			return false, now // the wakeup's turn is running; its end will judge the stop afresh
+		}
+	}
 	agents, wake, ok := s.mechanicalAgents(ctx, t, agents, now)
 	if !ok {
 		return false, time.Time{}
+	}
+	if wakeOnly {
+		return false, wake
 	}
 	if wake.IsZero() && len(agents) == 1 && s.parkCloseout(ctx, t, agents[0], now) {
 		return true, time.Time{}

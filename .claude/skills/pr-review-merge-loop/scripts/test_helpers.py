@@ -29,7 +29,8 @@ class HelperTests(unittest.TestCase):
                 return {"agents": [{"pane_id": "w3:p1", "agent_status": "working"}]}
             return {}
         with patch.dict(module["submit_prompt"].__globals__,
-                        {"_config": {"lifetime_seconds": 7200}, "command": fake_command}):
+                        {"_config": {"lifetime_seconds": 7200}, "command": fake_command,
+                         "scope_running": unittest.mock.Mock(return_value=True)}):
             module["submit_prompt"]("w3:p1", "large prompt", "transcript", "marker", "schema", "unit")
         self.assertEqual(sum(args[:2] == ("agent", "prompt") for args in calls), 1)
 
@@ -42,9 +43,48 @@ class HelperTests(unittest.TestCase):
                 return {"agents": [{"pane_id": "w3:p1", "agent_status": "idle"}]}
             return {}
         with patch.dict(module["submit_prompt"].__globals__,
-                        {"_config": {"lifetime_seconds": 7200}, "command": fake_command,
-                         "transcript_result": unittest.mock.Mock(side_effect=RuntimeError("no final result"))}):
+                        {"_config": {"lifetime_seconds": 7200, "startup_grace_seconds": 1},
+                         "command": fake_command, "scope_running": unittest.mock.Mock(return_value=True),
+                         "transcript_result": unittest.mock.Mock(side_effect=RuntimeError("no final result"))}), \
+                patch.object(module["time"], "monotonic", side_effect=[0, 0, 0, 1]), \
+                patch.object(module["time"], "sleep", return_value=None):
             with self.assertRaisesRegex(RuntimeError, "did not start"):
+                module["submit_prompt"]("w3:p1", "large prompt", "transcript", "marker", "schema", "unit")
+
+    def test_interactive_stalled_idle_prompt_allows_delayed_working_state(self):
+        module = runpy.run_path(str(HERE / "herdr_review.py"))
+        responses = iter([
+            {"agents": [{"pane_id": "w3:p1", "agent_status": "idle"}]},
+            {"agents": [{"pane_id": "w3:p1", "agent_status": "working"}]},
+        ])
+        calls = []
+        def fake_command(*args, **kwargs):
+            calls.append(args)
+            if args[:2] == ("agent", "prompt"):
+                raise RuntimeError("agent prompt produced no observed state change within 5000 ms")
+            if args[:2] == ("agent", "list"):
+                return next(responses)
+            return {}
+        with patch.dict(module["submit_prompt"].__globals__,
+                        {"_config": {"lifetime_seconds": 7200}, "command": fake_command,
+                         "scope_running": unittest.mock.Mock(return_value=True),
+                         "transcript_result": unittest.mock.Mock(side_effect=RuntimeError("no final result"))}), \
+                patch.object(module["time"], "monotonic", side_effect=[0, 0, 0, 1]), \
+                patch.object(module["time"], "sleep", return_value=None):
+            self.assertTrue(module["submit_prompt"](
+                "w3:p1", "large prompt", "transcript", "marker", "schema", "unit"))
+        self.assertEqual(sum(args[:2] == ("agent", "prompt") for args in calls), 1)
+
+    def test_interactive_stalled_startup_rejects_scope_exit(self):
+        module = runpy.run_path(str(HERE / "herdr_review.py"))
+        def fake_command(*args, **kwargs):
+            if args[:2] == ("agent", "prompt"):
+                raise RuntimeError("agent prompt produced no observed state change within 5000 ms")
+            return {"agents": [{"pane_id": "w3:p1", "agent_status": "idle"}]}
+        with patch.dict(module["submit_prompt"].__globals__,
+                        {"_config": {"lifetime_seconds": 7200}, "command": fake_command,
+                         "scope_running": unittest.mock.Mock(return_value=False)}):
+            with self.assertRaisesRegex(RuntimeError, "scope exited during prompt startup"):
                 module["submit_prompt"]("w3:p1", "large prompt", "transcript", "marker", "schema", "unit")
 
     def test_interactive_stalled_prompt_accepts_completed_work(self):
@@ -57,6 +97,7 @@ class HelperTests(unittest.TestCase):
             return {}
         with patch.dict(module["submit_prompt"].__globals__,
                         {"_config": {"lifetime_seconds": 7200}, "command": fake_command,
+                         "scope_running": unittest.mock.Mock(return_value=True),
                          "transcript_result": unittest.mock.Mock(return_value={"findings": []})}):
             module["submit_prompt"]("w3:p1", "large prompt", "transcript", "marker", "schema", "unit")
 
@@ -74,6 +115,7 @@ class HelperTests(unittest.TestCase):
             return {}
         with patch.dict(module["submit_prompt"].__globals__,
                         {"_config": {"lifetime_seconds": 7200}, "command": fake_command,
+                         "scope_running": unittest.mock.Mock(return_value=True),
                          "transcript_result": fake_result}):
             self.assertTrue(module["submit_prompt"](
                 "w3:p1", "large prompt", "transcript", "marker", "schema", "unit"))
@@ -88,7 +130,8 @@ class HelperTests(unittest.TestCase):
                 return {"agents": [{"pane_id": "w3:p1", "agent_status": "blocked"}]}
             return {}
         with patch.dict(module["submit_prompt"].__globals__,
-                        {"_config": {"lifetime_seconds": 7200}, "command": fake_command}):
+                        {"_config": {"lifetime_seconds": 7200}, "command": fake_command,
+                         "scope_running": unittest.mock.Mock(return_value=True)}):
             self.assertTrue(module["submit_prompt"](
                 "w3:p1", "large prompt", "transcript", "marker", "schema", "unit"))
         with patch.dict(module["wait_transcript"].__globals__,
@@ -98,6 +141,32 @@ class HelperTests(unittest.TestCase):
             with self.assertRaises(TimeoutError):
                 module["wait_transcript"](Path("/no/result"), "marker", "schema", "w3:p1", "unit", 1,
                                           accepted_stall=True)
+
+    def test_interactive_stall_blocked_only_tolerates_initial_observation(self):
+        module = runpy.run_path(str(HERE / "herdr_review.py"))
+        responses = iter([
+            {"agents": [{"pane_id": "w3:p1", "agent_status": "blocked"}]},
+            {"agents": [{"pane_id": "w3:p1", "agent_status": "working"}]},
+            {"agents": [{"pane_id": "w3:p1", "agent_status": "blocked"}]},
+        ])
+        with patch.dict(module["wait_transcript"].__globals__, {
+                "command": unittest.mock.Mock(side_effect=lambda *args, **kwargs: next(responses)),
+                "scope_running": unittest.mock.Mock(return_value=True)}), \
+                patch.object(module["time"], "sleep", return_value=None), \
+                patch.object(module["time"], "monotonic", side_effect=[0, 0, 1, 1.1]):
+            with self.assertRaisesRegex(RuntimeError, "unexpected interaction"):
+                module["wait_transcript"](Path("/no/result"), "marker", "schema", "w3:p1", "unit", 2,
+                                          accepted_stall=True)
+
+    def test_interactive_working_stall_does_not_suppress_later_block(self):
+        module = runpy.run_path(str(HERE / "herdr_review.py"))
+        with patch.dict(module["wait_transcript"].__globals__, {
+                "command": unittest.mock.Mock(return_value={
+                    "agents": [{"pane_id": "w3:p1", "agent_status": "blocked"}]}),
+                "scope_running": unittest.mock.Mock(return_value=True)}):
+            with self.assertRaisesRegex(RuntimeError, "unexpected interaction"):
+                module["wait_transcript"](Path("/no/result"), "marker", "schema", "w3:p1", "unit", 2,
+                                          accepted_stall=False)
 
     def test_interactive_reviewer_forwards_prompt_json_and_read_boundary(self):
         module = runpy.run_path(str(HERE / "herdr_review.py"))

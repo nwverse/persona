@@ -5,11 +5,12 @@ import { defaultStateRoot, legacyEnvName } from '../../runtime-sdk/lib/compat.js
 import { stateDir } from '../../runtime-sdk/lib/identity.js'
 
 export function daemonCandidates(home, options) {
-  const roots = [stateDir(home), join(home, '.persona'), join(home, '.jarvis')]
+  // An explicit runtime home owns discovery too; an ambient PERSONA_HOME must not replace it.
+  const roots = options.stateHome ? [options.stateHome] : [home ? stateDir(home, {}) : stateDir(), join(home, '.persona'), join(home, '.jarvis')]
   return [options.personadBin, options.jarvisdBin, ...roots.flatMap((root) => [join(root, 'bin', 'personad'), join(root, 'bin', 'jarvisd')])]
 }
 export function daemonBinary(home, options) {
-  return daemonCandidates(home, options).find((p) => p && existsSync(p)) || join(defaultStateRoot(home), 'bin', 'personad')
+  return daemonCandidates(home, options).find((p) => p && existsSync(p)) || (options.stateHome ? join(options.stateHome, 'bin', 'personad') : join(defaultStateRoot(home), 'bin', 'personad'))
 }
 const MCP_PROXY = fileURLToPath(new URL('../mcp-proxy.mjs', import.meta.url))
 export function mcpServers(bin, pid, assistant) {

@@ -22,6 +22,7 @@ import persona.core.contracts.api.ChatComposerService
 import persona.core.contracts.api.InteractionCenter
 import persona.core.contracts.api.MessageSender
 import persona.core.contracts.api.OutboxMessage
+import persona.core.contracts.api.ResolveOutcome
 import persona.core.contracts.api.SessionsRepository
 import persona.core.designsystem.AppFeedback
 import persona.core.designsystem.Haptic
@@ -89,12 +90,18 @@ internal class ChatInteractionController(
         }
     }
 
+    private suspend fun resolve(interaction: Interaction, resolution: Resolution): ResolveOutcome {
+        val phrase = resolution.ownerApprovalPhrase ?: return interactions.resolveOutcome(interaction.id, resolution)
+        interactions.replyOwnerApproval(interaction, phrase)
+        return ResolveOutcome()
+    }
+
     fun answer(interaction: Interaction, resolution: Resolution) {
         if (!taps.value.canTap(interaction, interactions.pending.value, java.time.Instant.now())) return
         taps.value = taps.value.tapped(interaction.id)
         scope.launch {
             try {
-                val result = submitInteraction { interactions.resolveOutcome(interaction.id, resolution) }
+                val result = submitInteraction { resolve(interaction, resolution) }
                 result.submission.haptic?.let(haptics)
                 taps.value = taps.value.answered(interaction.id, result.card)
                 if (result.withdraw) {
@@ -147,7 +154,7 @@ internal class ChatInteractionController(
                         trayApproval(interaction, sourceSession) != resolution) continue
                     taps.value = taps.value.tapped(interaction.id)
                     try {
-                        val result = submitInteraction { interactions.resolveOutcome(interaction.id, resolution) }
+                        val result = submitInteraction { resolve(interaction, resolution) }
                         result.submission.haptic?.let(haptics)
                         taps.value = taps.value.answered(interaction.id, result.card)
                         if (!result.withdraw) notice.value = result.notice(resources, interaction, resolution)

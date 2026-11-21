@@ -35,11 +35,16 @@ export async function discoverModels(bin, { env = process.env, timeout = 25_000,
   try {
     ({ stdout } = await run(bin, ['models'], { env, timeout, signal, maxBuffer: 1024 * 1024 }))
   } catch (err) {
+    const detail = err?.cause?.stderr || err?.stderr
     if (err?.killed && !signal?.aborted) {
       const timedOut = new Error(`agy models did not answer within ${Math.round(timeout / 1000)} s: the Antigravity CLI ` +
         'sign-in may have expired. Run agy once on this computer to sign in again.')
       timedOut.code = SIGNIN_TIMEOUT
       throw timedOut
+    }
+    if (typeof detail === 'string' && detail.trim()) {
+      // execFile's generic message omits the CLI's actionable refusal (for example, an expired sign-in).
+      throw new Error(detail.trim(), { cause: err })
     }
     throw err
   }

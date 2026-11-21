@@ -72,8 +72,8 @@ data class ExtensionManifest(
      */
     @SerialName("extension_pack") val extensionPack: List<ExtensionPackMember>? = null,
     /**
-     * The configuration's JSON Schema, in the subset every app draws as a form (docs "Configuration: the form
-     * subset").
+     * The configuration's JSON Schema, in the settings-form subset (docs "Configuration: the form subset"). Capable
+     * clients draw declared entry lists after opting in; other clients receive compatibility projections.
      */
     val configuration: JsonElement? = null,
     val secrets: List<ExtensionSecretSpec>? = null,
@@ -1132,6 +1132,11 @@ data class ExtensionChannelItem(
 @Serializable
 data class ExtensionChannelCapabilities(
     @SerialName("images_in") val imagesIn: Boolean? = null,
+    /**
+     * It can send pictures: the hub puts an answer's pictures in channel.send's images instead of leaving them as
+     * Markdown in the text.
+     */
+    @SerialName("images_out") val imagesOut: Boolean? = null,
     @SerialName("files_in") val filesIn: Boolean? = null,
     @SerialName("voice_in") val voiceIn: Boolean? = null,
     val format: String? = null,
