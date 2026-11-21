@@ -143,8 +143,8 @@ func TestBotRegistrationCreatesTheAppAndPairsTheOwner(t *testing.T) {
 	}
 }
 
-// A declined authorization starts another one and says why; a tenant on the other cloud is polled there.
-func TestBotRegistrationDeclinedStartsAgain(t *testing.T) {
+// A tenant on the other cloud is polled there. Declining waits for an explicit bind before starting again.
+func TestBotRegistrationDeclinedWaitsForBind(t *testing.T) {
 	w, acc, _ := registerWorld(t, `{"error":"tenant_mismatch","user_info":{"tenant_brand":"lark"}}`, `{"error":"access_denied"}`)
 	w.bind(t, "")
 	if p := w.bind(t, stepRegister); p["step"] != stepRegister || p["error"] != nil {
@@ -159,6 +159,15 @@ func TestBotRegistrationDeclinedStartsAgain(t *testing.T) {
 	p := w.bind(t, stepRegister)
 	if p["step"] != stepRegister || p["error"] == nil {
 		t.Fatalf("declined: %v", p)
+	}
+	if p := w.bind(t, stepRegister); p["error"] == nil {
+		t.Fatalf("declined on the next poll: %v", p)
+	}
+	if acc.devices != 1 {
+		t.Fatalf("polling a declined registration started another: %v", acc.asked)
+	}
+	if p := w.bind(t, ""); p["step"] != stepRegister || p["error"] != nil {
+		t.Fatalf("explicit retry: %v", p)
 	}
 	if n := strings.Count(strings.Join(acc.asked, "\n"), "begin"); n != 2 {
 		t.Fatalf("a second registration, asked %v", acc.asked)

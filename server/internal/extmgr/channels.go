@@ -462,6 +462,17 @@ func (h *Manager) bindChannel(ctx context.Context, id, step string, values map[s
 }
 
 func (h *Manager) bindFeishu(ctx context.Context, step string, values map[string]string) (connector.Prompt, error) {
+	release, err := h.acquireFeishuBind(ctx)
+	if err != nil {
+		return connector.Prompt{}, err
+	}
+	defer release()
+	return h.bindFeishuStep(ctx, step, values, true)
+}
+
+// bindFeishuStep runs with the bind gate held. Only an explicit bind may enable the bot; a stale registration poll
+// resumes the configured pairing flow passively and stops at the credentials prompt if the user has disabled it.
+func (h *Manager) bindFeishuStep(ctx context.Context, step string, values map[string]string, activate bool) (connector.Prompt, error) {
 	l := h.botLang(ctx)
 	fields := []connector.Field{
 		{Name: "app_id", Label: "App ID", Placeholder: "cli_…"},
@@ -479,11 +490,23 @@ func (h *Manager) bindFeishu(ctx context.Context, step string, values map[string
 	if step == stepRegister {
 		return h.pollFeishuRegistration(ctx, credentials)
 	}
+	if step == "" {
+		b := &h.bots
+		b.mu.Lock()
+		h.loadBotsLocked(ctx)
+		reg := b.set.registration()
+		b.mu.Unlock()
+		// A failed finish may already have saved credentials. Reopening still resumes its confirmation,
+		// rather than switching to the pairing-code flow before ownership has been saved.
+		if reg != nil && reg.AppID != "" && reg.Failure == "" {
+			return h.registerPrompt(ctx, *reg, ""), nil
+		}
+	}
 	var configNote string
 	if step == "credentials" && values != nil {
 		id, secret, domain := strings.TrimSpace(values["app_id"]), strings.TrimSpace(values["app_secret"]), strings.TrimSpace(values["domain"])
 		on := true
-		if err := h.updateBot(ctx, &on, &id, &secret, &domain, nil); err != nil {
+		if err := h.applyBotUpdate(ctx, &on, &id, &secret, &domain, nil, false); err != nil {
 			if feishubot.CredentialRejected(err) {
 				h.logf("bots: credentials rejected by the platform: %v", err)
 				return credentials(i18n.T(l, "hub-channels.credentials_rejected")), nil
@@ -506,13 +529,21 @@ func (h *Manager) bindFeishu(ctx context.Context, step string, values map[string
 		// when the accounts site cannot be reached, and on the Lark bot's settings page.
 		// A private deployment has no accounts site of ours to ask.
 		if feishubot.ConsoleURL(h.cfg.Bots.Feishu.Domain) != "" {
-			if p, ok := h.beginFeishuRegistration(ctx, ""); ok {
+			p, ok := h.beginFeishuRegistration(ctx, "")
+			if err := ctx.Err(); err != nil {
+				return connector.Prompt{}, err
+			}
+			if ok {
 				return p, nil
 			}
+			return credentials(p.Error), nil
 		}
 		return credentials(""), nil
 	}
 	if !v.Enabled {
+		if !activate {
+			return credentials(""), nil
+		}
 		on := true
 		if err := h.updateBot(ctx, &on, nil, nil, nil, nil); err != nil {
 			return connector.Prompt{}, err
@@ -524,6 +555,11 @@ func (h *Manager) bindFeishu(ctx context.Context, step string, values map[string
 	b := &h.bots
 	b.mu.Lock()
 	h.loadBotsLocked(ctx)
+	// A switch-only PUT may have disabled the bot since botView was read.
+	if !activate && !b.set.Enabled {
+		b.mu.Unlock()
+		return credentials(""), nil
+	}
 	p := b.set.Pairing
 	issued := false
 	if p == nil || !b.clock().Before(p.Expires) || step == "" && values != nil {
