@@ -26,7 +26,7 @@ import { contextTokens, fromRow, imageOf, lastText, liveText, loadBlobImage, mes
 import { createMcpProxy, extractShellGates, matchShellGate } from './mcp.js'
 import { buildLauncher, normalizeModels, PERSONA_EFFORTS, resolveModel } from './models.js'
 
-export const RUNTIME_VERSION = '0.2.0'
+export const RUNTIME_VERSION = '0.3.0'
 const ROOTS = 200 // sessions looked at for the list (the newest roots)
 const TAIL = 500 // messages read for the newest page of a conversation
 const AFTER = 600 // messages read for one catch-up page
@@ -71,7 +71,7 @@ export function createOpencodeHost(deps, options = {}) {
   const sessions = new Map() // session id -> { running, runningSince, blocked: Map, lastSeq, texts, textMessage, chain, poll, title, model, effort, mode, startedByPersona }
   const createdSessions = new Map() // session id -> { id, directory, title, model, effort, time_updated, startedByPersona, assistant, mode }
   const assistants = new Map() // session id -> { cwd, mode, memoryDir }
-  const activeAssistantByDir = new Map() // directory -> most recently active assistant session id
+  const closedAssistantSessions = new Set() // native rows may outlive a closed MCP binding
   const mcpWiredDirs = new Map() // directory -> route
   const locations = new Set() // { ctx, directory, abort? } of every registered location, in registration order
   const roots = new Map() // session id -> { root, directory } (a child session answers for its root)
@@ -103,14 +103,12 @@ export function createOpencodeHost(deps, options = {}) {
     },
     call: async (binding, name, args) => {
       const asst = binding?.assistant === true
-      // For directory-scoped routes, always resolve the currently active assistant session for that directory
-      // so later Assistant chats sharing ~/.persona/assistant are never misattributed to the first session.
-      const sid = (binding?.directory ? activeAssistantByDir.get(binding.directory) : '')
-        || binding?.session?.id
-        || binding?.sessionId
-        || ''
+      const sid = binding?.sessionId || binding?.session?.id || ''
       if (!sid || (asst && !assistants.has(sid))) {
         return { content: [{ type: 'text', text: 'Persona session is not active' }], is_error: true }
+      }
+      if (asst && binding?.directory && !await unambiguousAssistantOwner(binding.directory, sid)) {
+        return { content: [{ type: 'text', text: 'Assistant tool identity is ambiguous in this directory. Use the OpenCode companion for isolated assistant sessions.' }], is_error: true }
       }
       return rt.callTool({ name, args, session_id: sid, assistant: asst })
     },
@@ -598,10 +596,28 @@ export function createOpencodeHost(deps, options = {}) {
     }
   }
 
+  async function unambiguousAssistantOwner(directory, sessionId) {
+    if (closedAssistantSessions.has(sessionId) || assistants.get(sessionId)?.cwd !== directory) return false
+    const ids = new Set()
+    for (const [id, session] of assistants) if (session.cwd === directory && !closedAssistantSessions.has(id)) ids.add(id)
+    for (const [id, session] of createdSessions) if (session.directory === directory && !closedAssistantSessions.has(id)) ids.add(id)
+    // Include native/TUI sessions that never went through Persona's start. If
+    // the authoritative inventory is unavailable, an HTTP token cannot prove
+    // which same-directory session is calling it, so no tool is executed.
+    const native = await database()
+    if (!native) return false
+    try {
+      for (const row of native.all('select id, directory from session_v2 where parent_id is null')) {
+        if (row.directory === directory && !closedAssistantSessions.has(row.id)) ids.add(row.id)
+      }
+    } catch { return false }
+    return ids.size === 1 && ids.has(sessionId)
+  }
+
   /** Register our loopback HTTP MCP server for an assistant directory when the plugin context supports MCP registration. */
   async function ensureAssistantMcp(ctx, directory, sessionId) {
     if (!assistantEnabled || !directory) return
-    if (sessionId) activeAssistantByDir.set(directory, sessionId)
+    if (!sessionId || closedAssistantSessions.has(sessionId)) return
     if (mcpWiredDirs.has(directory)) return
     const registerFn = typeof deps.registerMcp === 'function'
       ? (config) => deps.registerMcp(ctx, { directory, name: 'persona', config, sessionId })
@@ -610,11 +626,11 @@ export function createOpencodeHost(deps, options = {}) {
         : null
     if (!registerFn) return
     try {
-      // Do NOT freeze `sessionId` into a directory-scoped route: `mcpProxy.call` resolves
-      // `activeAssistantByDir.get(directory)` dynamically so multiple Assistant chats sharing
-      // `~/.persona/assistant` never inherit the first chat's session identity.
-      const route = await mcpProxy.allocate({ assistant: true, directory })
+      // OpenCode registers MCP per directory, not per session. Freeze the first
+      // owner and check ambiguity on every execution; never retarget a token.
+      const route = await mcpProxy.allocate({ assistant: true, directory, sessionId })
       await registerFn(route.remoteConfig)
+      route.ownerSession = sessionId
       mcpWiredDirs.set(directory, route)
     } catch (err) {
       log(`persona: opencode mcp add (${directory}): ${err?.message ?? err}`)
@@ -760,7 +776,6 @@ export function createOpencodeHost(deps, options = {}) {
 
     if (isAsst) {
       assistants.set(id, { cwd, mode: reqMode || 'default', memoryDir: '', activeAt: createdAt })
-      activeAssistantByDir.set(cwd, id)
       await ensureAssistantMcp(ctx, cwd, id)
     }
 
@@ -828,7 +843,6 @@ export function createOpencodeHost(deps, options = {}) {
       const nextMode = params.mode || params.permission_mode || prev.mode || 'default'
       const nextMemoryDir = typeof params.memory_dir === 'string' && params.memory_dir ? params.memory_dir : prev.memoryDir
       assistants.set(id, { cwd: prev.cwd, mode: nextMode, memoryDir: nextMemoryDir, activeAt: now() })
-      if (prev.cwd) activeAssistantByDir.set(prev.cwd, id)
       if (typeof params.context === 'string' && params.context.trim()) {
         text = promptWithContext(rawText, params.context)
       }
@@ -1094,27 +1108,11 @@ export function createOpencodeHost(deps, options = {}) {
     createdSessions.delete(id)
     assistants.delete(id)
     if (asst?.cwd) {
-      let replacementId = ''
-      let replacementAt = -1
-      for (const [otherId, other] of assistants) {
-        if (other.cwd === asst.cwd && (other.activeAt ?? 0) >= replacementAt) {
-          replacementId = otherId
-          replacementAt = other.activeAt ?? 0
-        }
-      }
-      if (replacementId) {
-        if (activeAssistantByDir.get(asst.cwd) === id) {
-          activeAssistantByDir.set(asst.cwd, replacementId)
-        }
-      } else {
-        if (activeAssistantByDir.get(asst.cwd) === id) {
-          activeAssistantByDir.delete(asst.cwd)
-        }
-        const route = mcpWiredDirs.get(asst.cwd)
-        if (route) {
-          route.release?.()
-          mcpWiredDirs.delete(asst.cwd)
-        }
+      closedAssistantSessions.add(id)
+      const route = mcpWiredDirs.get(asst.cwd)
+      if (route?.ownerSession === id) {
+        route.release?.()
+        mcpWiredDirs.delete(asst.cwd)
       }
     }
     roots.delete(id)
