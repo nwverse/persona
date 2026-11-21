@@ -91,6 +91,7 @@ internal fun MachinesScreen(
     val listSummary = machineSummary(entries)
     val locale = currentLocale
     val healthState = health?.state?.collectAsStateWithLifecycle()?.value ?: MachineHealthState()
+    val subscriptionUsage = LocalSidebarUsage.current?.value ?: healthState.usage
     var allChecks by rememberSaveable(machineId) { mutableStateOf(false) }
     var allAgents by rememberSaveable(machineId) { mutableStateOf(false) }
     var confirmFix by remember { mutableStateOf(false) }
@@ -131,7 +132,7 @@ internal fun MachinesScreen(
     JListPage(
         title = if (machineId == null) stringResource(R.string.machines_title) else machine?.displayName ?: stringResource(R.string.machines_title_detail),
         summary = if (machineId == null) machineSummaryText(listSummary) else null,
-        onBack = if (machineId == null && LocalIsSidebarRoot.current) null else navigator::back,
+        onBack = if (LocalIsSidebarRoot.current) null else navigator::back,
         largeTitle = machineId == null,
         state = listState,
         actions = {
@@ -143,7 +144,7 @@ internal fun MachinesScreen(
         state.failure?.let { failure -> item("failure") { JNotice(stringResource(failure.text)) } }
         if (state.sessionsFailure) item("sessions-failure") { JNotice(stringResource(R.string.machines_sessions_failure)) }
         if (machineId == null) {
-            usageWindows(healthState.usage, java.time.Instant.ofEpochSecond(state.now))
+            usageWindows(subscriptionUsage, java.time.Instant.ofEpochSecond(state.now))
             // An offline assistant with no computer the hub still keeps: out of reach, not a first run (no Add).
             if (!state.loading && ids.isEmpty() && assistant.offline != null) item("offline") { JAssistantOffline(assistant) }
             else if (!state.loading && ids.isEmpty()) item("empty") {

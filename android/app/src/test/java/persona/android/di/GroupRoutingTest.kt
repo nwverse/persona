@@ -213,6 +213,7 @@ class GroupRoutingTest {
 
     @Test fun creatingAnAgentReachesTheGroupWithItsPlainMachineAndComesBackSuffixed() = runBlocking<Unit> {
         var requested: AgentStartRequest? = null
+        var modelQuery: Triple<String, String, String?>? = null
         val service = object : AgentCreationService {
             override val scope = "hub/gen"
             override suspend fun launchers(machineId: String) = listOf(AgentLauncher(machineId))
@@ -226,6 +227,10 @@ class GroupRoutingTest {
             override suspend fun operation(operationId: String) = AgentStartResult.Pending
             override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean) =
                 LauncherModels(machineId, listOf(AgentModel(launcher)))
+            override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean, host: String?): LauncherModels {
+                modelQuery = Triple(machineId, launcher, host)
+                return LauncherModels(launcher)
+            }
         }
         val wrapped = service.inGroup(other)
         assertEquals("m", wrapped.launchers("m~g0a1b2c3d").single().name)
@@ -233,6 +238,10 @@ class GroupRoutingTest {
         assertEquals(AssistantLaunchers(listOf(AgentLauncher("m")), unavailable = listOf(UnavailableLauncher("left-m", code = "launcher_own_service"))),
             wrapped.launcherList("m~g0a1b2c3d"))
         assertEquals(LauncherModels("m", listOf(AgentModel("claude"))), wrapped.launcherModels("m~g0a1b2c3d", "claude"))
+        val merged = mergedAgentsState(listOf(primary, other),
+            listOf(AgentsWiringState("a"), AgentsWiringState("b", creation = wrapped)), 0)
+        assertEquals(LauncherModels("omp"), requireNotNull(merged.creation).launcherModels("m~g0a1b2c3d", "omp", false, "herdr"))
+        assertEquals(Triple("m", "omp", "herdr"), modelQuery)
         val created = wrapped.start(AgentStartRequest("m~g0a1b2c3d", "/", "claude"), "op") as AgentStartResult.Created
         assertEquals("m", requested!!.machineId)
         assertEquals(SessionKey("m~g0a1b2c3d", "new"), created.session.key)

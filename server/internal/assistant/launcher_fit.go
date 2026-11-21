@@ -26,6 +26,8 @@ import (
 type startPick struct {
 	launcher, effort, model, speed, tier, permission string
 	ultracode                                        *bool
+	// The caller or preset selected omp with no model before Model Settings were applied.
+	ompModelDefault bool
 }
 
 // launchPick is what task t holds of its launch now, as pickOf reads it from a start's params, with its ultracode.
@@ -80,9 +82,10 @@ func pickOf(params map[string]any) startPick {
 	m, _ := params["model"].(string)
 	t, _ := params["tier"].(string)
 	v, _ := params["speed"].(string)
+	pm, _ := params["permission_mode"].(string)
 	u, _ := params["ultracode"].(*bool)
 	return startPick{launcher: strings.TrimSpace(l), effort: strings.TrimSpace(e),
-		model: strings.TrimSpace(m), speed: strings.TrimSpace(v), tier: strings.TrimSpace(t), ultracode: u}
+		model: strings.TrimSpace(m), speed: strings.TrimSpace(v), tier: strings.TrimSpace(t), permission: strings.TrimSpace(pm), ultracode: u}
 }
 
 // resolveStart fills params (a session.start's, with the caller's own launcher, model, effort and tier, if any) with
@@ -93,6 +96,8 @@ func (s *Service) resolveStart(ctx context.Context, params map[string]any, launc
 	if err := s.applyStartTier(ctx, params); err != nil {
 		return own, err
 	}
+	selected := pickOf(params)
+	own.ompModelDefault = selected.launcher == "omp" && selected.model == ""
 	return own, s.applyModelBinding(ctx, "agent.new", params, launcherDefaultModel)
 }
 
@@ -101,15 +106,62 @@ func (s *Service) resolveStart(ctx context.Context, params map[string]any, launc
 // unless its runtime's switch is on, which a start in bypassPermissions turns on (proto.Launcher.AutoAccept: Paseo's
 // Auto Accept).
 type startAgent struct {
-	agent      string
-	snapshot   string // the explicitly known kind for a to-do link; agent's compatibility defaults are not evidence
-	source     string // the selected launcher's provenance, retained through fitting and health detours
-	autoAccept bool
+	agent           string
+	snapshot        string // the explicitly known kind for a to-do link; agent's compatibility defaults are not evidence
+	source          string // the selected launcher's provenance, retained through fitting and health detours
+	autoAccept      bool
+	permissionModes proto.PermissionModeSet
 }
 
 // launcherStartAgent is what launcher l runs.
 func launcherStartAgent(l ConfiguredLauncher) startAgent {
-	return startAgent{agent: l.AgentType, source: l.Source, autoAccept: l.AutoAccept}
+	return startAgent{agent: l.AgentType, source: l.Source, autoAccept: l.AutoAccept, permissionModes: l.PermissionModes}
+}
+
+func (a startAgent) supportsPermissionMode(mode string) bool {
+	return permissionModeSupported(a.agent, a.permissionModes, mode)
+}
+
+// fitNewLauncher applies a new Agent's defaults using the launcher actually available on its destination.
+// Resumes call fitLauncher directly and keep their existing execution settings.
+func (s *Service) fitNewLauncher(ctx context.Context, m Device, own startPick, params map[string]any) (string, startAgent, error) {
+	note, agent, err := s.fitLauncher(ctx, m, own, params)
+	if err == nil {
+		err = s.applyOmpStartDefaults(ctx, m, own, agent, params)
+	}
+	return note, agent, err
+}
+
+func (s *Service) applyOmpStartDefaults(ctx context.Context, m Device, own startPick, agent startAgent, params map[string]any) error {
+	declared, _ := params["agent_type"].(string)
+	if params["launcher"] != "omp" || agent.agent != "omp" || (declared != "" && declared != "omp") || !herdrTaskHost(m, params) {
+		return nil
+	}
+	if source := compat.Source(agent.source); source != "" && source != "builtin" && !machineSource(source) {
+		return nil
+	}
+	model, _ := params["model"].(string)
+	effort, _ := params["effort"].(string)
+	mode, _ := params["permission_mode"].(string)
+	// An explicit launcher default uses omp's local model. Following Model Settings keeps its model.
+	// Only an effort or permission mode the caller named reaches the node, which refuses it before opening the tab.
+	dropModel, dropEffort, dropMode := own.ompModelDefault && model != "", own.effort == "" && effort != "", own.permission == "" && mode != ""
+	if !dropModel && !dropEffort && !dropMode {
+		return nil
+	}
+	if dropModel {
+		model = ""
+		delete(params, "model")
+	}
+	if dropEffort {
+		effort = ""
+		delete(params, "effort")
+	}
+	if dropMode {
+		mode = ""
+		delete(params, "permission_mode")
+	}
+	return s.finishModel(ctx, "agent.new", params, ModelBinding{Provider: launcherProvider("omp"), Model: model, Effort: effort, PermissionMode: mode})
 }
 
 // launcherKindSnapshot is the kind the launcher metadata actually names, before sessionLaunchers applies its Claude
@@ -135,6 +187,22 @@ func launcherKindSnapshot(discovered, overrides []ConfiguredLauncher, name strin
 		}
 	}
 	return kind
+}
+
+// configuredStartAgentLookup applies hub overrides and compatibility defaults once for an inventory, then resolves
+// names without another machine read. Both the real fit and candidate previews use this same metadata.
+func configuredStartAgentLookup(discovered, overrides []ConfiguredLauncher) func(string) startAgent {
+	configured := sessionLaunchers(discovered, overrides)
+	return func(name string) startAgent {
+		for _, l := range configured {
+			if l.Name == name {
+				a := launcherStartAgent(l)
+				a.snapshot = launcherKindSnapshot(discovered, overrides, name)
+				return a
+			}
+		}
+		return startAgent{}
+	}
 }
 
 // allowAll: the Agents Persona itself starts on the launcher (agent_start, a planned task, a read-only one too) run with
@@ -182,17 +250,7 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 		discovered = append(discovered, ConfiguredLauncher{Launcher: l})
 	}
 	overrides := s.hello(ctx).Models.Launchers[m.ID]
-	configured := sessionLaunchers(discovered, overrides)
-	agentOf := func(name string) startAgent {
-		for _, l := range configured {
-			if l.Name == name {
-				a := launcherStartAgent(l)
-				a.snapshot = launcherKindSnapshot(discovered, overrides, name)
-				return a
-			}
-		}
-		return startAgent{}
-	}
+	agentOf := configuredStartAgentLookup(discovered, overrides)
 	if slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == name }) {
 		return "", agentOf(name), nil
 	}
@@ -202,7 +260,7 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 		})
 	}
 	to := launcherInstead(m, list)
-	for _, k := range []string{"model", "effort", "model_fingerprint", "speed"} {
+	for _, k := range []string{"model", "effort", "model_fingerprint", "speed", "permission_mode"} {
 		delete(params, k)
 	}
 	params["launcher"] = to
@@ -211,6 +269,9 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 	}
 	if own.speed != "" {
 		params["speed"] = own.speed
+	}
+	if own.permission != "" {
+		params["permission_mode"] = own.permission
 	}
 	if err := s.applyModel(ctx, "agent.new", params); err != nil {
 		return "", startAgent{}, err

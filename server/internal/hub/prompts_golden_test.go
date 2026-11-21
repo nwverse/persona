@@ -246,6 +246,11 @@ func TestGoldenChannelMessage(t *testing.T) {
 	golden(t, "channel_answer_again.feishu", prompts.RenderChannelAnswerAgain(prompts.ChannelAnswerAgain{Name: "飞书"}))
 	golden(t, "channel_message.only_unsupported", prompts.RenderChannelMessage(prompts.ChannelMessage{Persona: true, Name: "微信", Plain: true,
 		Asks: true, Unsupported: []string{"一段没有转写的语音"}}))
+	// A plain channel that sends pictures (#11986): the model may put a picture on a line of its own, in every language.
+	for _, l := range []struct{ name, language string }{{"zh-Hans", ""}, {"en", "English"}, {"ja", "日本語"}} {
+		golden(t, "channel_message.images_out."+l.name, prompts.RenderChannelMessage(prompts.ChannelMessage{Persona: true, Name: "WeChat",
+			Plain: true, Asks: true, ImagesOut: true, Language: l.language, Text: "Show me the chart"}))
+	}
 }
 
 // A mention is public even when its turn runs in the owner's main conversation. Its origin and gathered context are

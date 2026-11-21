@@ -279,6 +279,7 @@ var Routes = []string{
 	"GET /api/v1/assistant/worker-presets",
 	"GET /api/v1/assistant/start-defaults",
 	"PUT /api/v1/assistant/start-defaults",
+	"POST /api/v1/assistant/start-defaults/preview",
 	"GET /api/v1/assistant/availability",
 	"GET /api/v1/assistant/directions/tree",
 	"GET /api/v1/assistant/directions/offers",
@@ -322,6 +323,9 @@ var Routes = []string{
 	"PUT /api/v1/assistant/saved-prompts/order",
 	"PUT /api/v1/assistant/saved-prompts/{id}",
 	"DELETE /api/v1/assistant/saved-prompts/{id}",
+	"GET /api/v1/assistant/starred",
+	"POST /api/v1/assistant/starred",
+	"DELETE /api/v1/assistant/starred/{id}",
 	"GET /api/v1/assistant/runs",
 	"GET /api/v1/assistant/routines",
 	"PUT /api/v1/assistant/routines",
@@ -430,6 +434,8 @@ var Routes = []string{
 	"GET /api/v1/kb-search",
 	// The assistant's chat search (search_routes.go there, docs/protocol/protocol.md "Assistant chat search", #6282).
 	"GET /api/v1/assistant/search",
+	"GET /api/v1/assistant/history",
+	"PUT /api/v1/assistant/history",
 	// The selection: what the knowledge base brings in and keeps (kb_selection.go there).
 	"GET /api/v1/kb/selection",
 	"PUT /api/v1/kb/selection",

@@ -304,6 +304,58 @@ func TestOrcaSendChecksForADialogThenPrompts(t *testing.T) {
 	}
 }
 
+func TestOrcaSendsToForegroundTraex(t *testing.T) {
+	n, _, o, procs, home := orcaNode(t)
+	const pane = "tab1:leaf1"
+	const command = "/opt/bin/traex"
+	pid := os.Getpid() // the writer lock must name a live process owned by this user
+	writeTraexOwner(t, home, threadMain, pid)
+	traexCache.Lock()
+	previous, present := traexCache.panes[pid]
+	traexCache.panes[pid] = "orca:" + pane
+	traexCache.Unlock()
+	t.Cleanup(func() {
+		traexCache.Lock()
+		defer traexCache.Unlock()
+		if present {
+			traexCache.panes[pid] = previous
+		} else {
+			delete(traexCache.panes, pid)
+		}
+	})
+	o.SetTerminals(orcaTerm("term_1", "tab1", "leaf1", traexAgent))
+	o.SetScreen("term_1", "› Ask Codex to do anything\n")
+	setProcess := func(state string) {
+		args := fmt.Sprintf("%d %s 01:00 %s", pid, state, command)
+		env := fmt.Sprintf("%d %s ORCA_PANE_KEY=%s", pid, command, pane)
+		procs.set(pane, parseOrcaPSEnv(env, parseOrcaPSArgs(args, time.Now()), nil)[pane]...)
+	}
+	setProcess("S+")
+	if s := byID(listSessions(t, n))[threadMain]; s.Agent != traexAgent || s.PaneID != "orca:"+pane {
+		t.Fatalf("TraeX conversation is not bound to its terminal: %+v", s)
+	}
+	o.Reset()
+
+	req := map[string]any{"session_id": threadMain, "text": "hello"}
+	if _, err := request(t, n, "session.send", req); err != nil {
+		t.Fatalf("send to foreground TraeX: %v", err)
+	}
+	if writes := o.Writes(); len(writes) != 2 || writes[0].Text != "\x1b[200~hello\x1b[201~" || writes[1].Text != "\r" {
+		t.Fatalf("expected a bracketed paste and a separate submit, got %+v", writes)
+	}
+
+	o.Reset()
+	setProcess("S") // the same process and pane still exist, but TraeX no longer owns the foreground group
+	if _, err := request(t, n, "session.send", req); err == nil {
+		t.Fatal("the background TraeX process accepted a send")
+	} else if code, data := refusalOf(t, err); code != "not_delivered" || data["delivered"] != "none" {
+		t.Fatalf("expected a refusal before typing, got %v", err)
+	}
+	if writes := o.Writes(); len(writes) != 0 {
+		t.Fatalf("wrote into the terminal without TraeX in front: %+v", writes)
+	}
+}
+
 // Orca turning the input down (nothing written) is a refusal the app can retry: a permission dialog is dialog_open,
 // no agent in front / a gone or read-only terminal is not_delivered.
 func TestOrcaSendRefusedByOrca(t *testing.T) {

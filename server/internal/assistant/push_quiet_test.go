@@ -360,7 +360,7 @@ func TestEscalateLevel(t *testing.T) {
 
 // The supervision message says what the switch changes: never to the user on a timeout, why_owner on escalations.
 func TestSuperviseMessageUnderTheSwitch(t *testing.T) {
-	on := prompts.RenderSupervise(prompts.Supervise{Leader: true, Background: true, Asked: true, AskMinutes: 5, LowDistraction: true,
+	on := prompts.RenderSupervise(prompts.Supervise{Leader: true, Background: true, Asked: true, AskMinutes: 5, PushGrading: true,
 		Entries: []prompts.SuperviseEntry{{Kind: sigAsk, ID: "todo_1", Title: "修登录崩溃",
 			Asks: []prompts.SuperviseAsk{{ID: "ix1", Kind: "permission", Session: "w1", Text: "Bash", Reminded: true}}}}})
 	for _, want := range []string{"signal=ask", "Question routing: timeout_minutes=5", "low_distraction=true", "session_id=w1"} {
