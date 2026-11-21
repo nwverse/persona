@@ -467,7 +467,11 @@ func (h *Manager) bindFeishu(ctx context.Context, step string, values map[string
 		return connector.Prompt{}, err
 	}
 	defer release()
+	return h.bindFeishuStep(ctx, step, values)
+}
 
+// bindFeishuStep runs with the bind gate held, including when a stale register poll resumes a configured bot.
+func (h *Manager) bindFeishuStep(ctx context.Context, step string, values map[string]string) (connector.Prompt, error) {
 	l := h.botLang(ctx)
 	fields := []connector.Field{
 		{Name: "app_id", Label: "App ID", Placeholder: "cli_…"},
@@ -508,6 +512,9 @@ func (h *Manager) bindFeishu(ctx context.Context, step string, values map[string
 			}
 			return credentials(i18n.Localize(err, l)), nil
 		}
+		// Successfully typing credentials replaces the app-registration flow. A queued register poll must not
+		// later finish the old device-code session over the app the user just chose.
+		h.putRegistration(nil)
 		// Best-effort: with the credentials just verified, set the scopes, events and the long-connection mode
 		// and submit the publish, so the console's manual steps are done (docs/extensions/bots.md). Its outcome
 		// is a sentence on the next step, never a failure of the bind.

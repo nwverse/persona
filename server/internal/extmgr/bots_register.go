@@ -172,8 +172,8 @@ func (h *Manager) pollFeishuRegistration(ctx context.Context, credentials func(s
 	now := b.clock()
 	b.mu.Unlock()
 	if !live {
-		if v := h.botView(ctx); v.Owner != nil {
-			return connector.Prompt{Done: true, Account: firstNonEmpty(v.Owner.Name, i18n.T(l, "hub-channels.paired"))}, nil
+		if v := h.botView(ctx); v.HasSecret {
+			return h.bindFeishuStep(ctx, "", nil)
 		}
 		return credentials(""), nil
 	}

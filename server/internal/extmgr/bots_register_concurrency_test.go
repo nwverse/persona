@@ -363,3 +363,22 @@ func TestBotRegistrationBeginFailurePreservesCredentialFallback(t *testing.T) {
 		t.Fatalf("retry fallback lost the terminal error: %v", p)
 	}
 }
+
+func TestBotRegistrationTypedCredentialsEndTheRegistration(t *testing.T) {
+	w, acc, _ := registerWorld(t, `{"error":"authorization_pending"}`)
+	w.bind(t, "")
+	body := fmt.Sprintf(`{"step":"credentials","values":{"app_id":"cli_typed","app_secret":"fake-secret","domain":%q}}`, w.api.srv.URL)
+	code, p := w.do(t, http.MethodPost, "/api/v1/channels/feishu/bind", body)
+	if code != http.StatusOK || p["step"] != "pair" {
+		t.Fatalf("typed credentials: HTTP %d, %v", code, p)
+	}
+	if p := w.bind(t, stepRegister); p["step"] != "pair" {
+		t.Fatalf("old register poll did not resume configured pairing: %v", p)
+	}
+	w.h.bots.mu.Lock()
+	reg, id := w.h.bots.set.registration(), w.h.bots.set.AppID
+	w.h.bots.mu.Unlock()
+	if reg != nil || id != "cli_typed" || len(acc.asked) != 1 {
+		t.Fatal("old registration survived the user's credential choice")
+	}
+}
