@@ -151,14 +151,15 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 		if !assistant {
 			tools = append(tools, s.leaderTools(ctx, machine, session)...)
 			tools = append(tools, s.spawnTools(ctx, machine, session)...)
-		} else if toolSetOf(ctx) == toolSetSupervise {
-			tools = roundTools(tools)
 		}
 		cfg := s.a2aConfig(ctx)
 		_, hasA2A := s.a2aStore()
 		if hasA2A == nil && (session == "" && s.a2aMachineAllowed(ctx, cfg, s.canonical(machine)) ||
 			s.a2aAllowed(ctx, cfg, a2aRef{s.canonical(machine), session})) {
 			tools = append(tools, toolsNamed(assistantwire.A2AToolNames)...)
+		}
+		if assistant && toolSetOf(ctx) == toolSetSupervise {
+			tools = roundTools(tools)
 		}
 		return tools, nil
 	}

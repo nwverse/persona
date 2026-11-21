@@ -1010,16 +1010,10 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		// This path is called by the manager's delivery queue. The separate
 		// method prevents older nodes from ignoring the idle-only guard.
 		id := n.resolveAlias(p.SessionID)
-		for _, sess := range n.sessionList(ctx, true) {
-			runtimeWake := p.A2AWakeOnSend && sess.Status == proto.StatusOffline && sess.SourceKind == proto.SourceRuntime &&
-				sess.Capabilities != nil && sess.Capabilities.Send && sess.Capabilities.A2AWakeOnSend &&
-				(sess.Capabilities.StopCause == "" || sess.Capabilities.StopCause == proto.StopIdle || sess.Capabilities.StopCause == proto.StopRestart)
-			if sess.SessionID == id && !sess.Archived && !sess.Starting && len(sess.Queued) == 0 &&
-				(sess.Status == proto.StatusIdle || sess.Status == proto.StatusDone || runtimeWake) {
-				return n.handleMethod(ctx, "session.send", params)
-			}
+		if !n.a2aIdleSession(ctx, id, p.A2AWakeOnSend, true) {
+			return nil, a2aBusy()
 		}
-		return nil, refusal("a2a_session_busy", "A2A delivery is waiting for a live, idle session", nil)
+		return n.handleMethod(context.WithValue(ctx, a2aIdleKey{}, p.A2AWakeOnSend), "session.send", params)
 	}
 	if method == "session.a2a.wake" {
 		id := n.resolveAlias(p.SessionID)
@@ -1028,7 +1022,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			return nil, refusal("a2a_session_busy", "A2A can resume a session only after an idle stop or restart", nil)
 		}
 		params, err := json.Marshal(map[string]any{"resume_automatic": true, "resume_session_id": id,
-			"prompt": p.Text, "client_msg_id": p.ClientMsgID, "supervision_instructions": p.SupervisionInstructions,
+			"prompt": p.Text, "client_msg_id": p.ClientMsgID, "message_source": p.MessageSource, "supervision_instructions": p.SupervisionInstructions,
 			"origin": p.Origin, "origin_known": p.OriginKnown, "is_main": p.IsMain, "main_compact_window": p.MainCompact,
 			"claude_interactive": p.Interactive})
 		if err != nil {
@@ -1597,7 +1591,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 				session, _ := out["session"].(*proto.Session)
 				if resultErr == nil && session != nil {
 					r := echoRecord{SessionID: session.SessionID, ClientMsgID: echoOpts.ClientMsgID,
-						Text: rawPrompt, Images: echoImages, SentAt: sentAt, AfterSeq: after.seq, In: after.in}
+						Text: rawPrompt, Source: p.MessageSource, Images: echoImages, SentAt: sentAt, AfterSeq: after.seq, In: after.in}
 					if n.echoes.expect(r) {
 						n.notifyEcho(r)
 					}
@@ -1984,7 +1978,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			if opts.ClientMsgID != "" {
 				after = n.echoBase(p.SessionID)
 			}
-			return n.sendEchoed(p.SessionID, opts.ClientMsgID, p.Text, len(p.Images), after, func() error { // echo.go
+			return n.sendWithEcho(p.SessionID, opts.ClientMsgID, p.Text, len(p.Images), after, p.MessageSource, nil, func() error { // echo.go
 				if n.isAssistantSession(p.SessionID) {
 					_, err := n.assistantSend(withSkillOwner(withClientMsgID(ctx, opts.ClientMsgID), p.SkillOwner), p.SessionID, "", p.Launcher, p.Text, p.Images, "", "", (modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.externalRuntime(p.SessionID, p.Launcher, p.Runtime), External: p.External, IsMain: p.IsMain, MainCompactWindow: p.MainCompact, FollowsSetting: p.FollowsSetting, ConfigDir: p.ConfigDir, Origin: p.Origin, OriginKnown: p.OriginKnown, OriginDecisionRequired: true, Public: p.Public, Interject: p.Interject, Interactive: p.Interactive}).withSupervision(p.SupervisionInstructions))
 					return err

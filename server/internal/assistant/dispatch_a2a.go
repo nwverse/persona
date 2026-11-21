@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -44,7 +45,7 @@ func (s *Service) dispatchTasks(ctx context.Context, ref a2aRef) ([]dispatchTask
 		}
 		if task.Owner == caller.Owner && s.a2aTaskVisible(ctx, cfg, caller, task) {
 			tasks = append(tasks, dispatchTask{FromMachine: ref.Machine, FromSession: ref.Session, Machine: task.TargetMachine,
-				Session: task.TargetSession, Cwd: task.Launch.CWD, Title: task.Launch.Title, At: task.Created, a2a: task})
+				Session: task.TargetSession, Cwd: cmp.Or(task.Launch.Worktree, task.Launch.CWD), Title: task.Launch.Title, At: task.Created, a2a: task})
 		}
 	}
 	return tasks, child, nil
@@ -176,6 +177,26 @@ func (s *Service) finishDispatchA2A(ctx context.Context, start *dispatchA2AStart
 	}
 }
 
+func (s *Service) saveDispatchWorktree(ctx context.Context, start *dispatchA2AStart, dir string) error {
+	if start == nil {
+		return nil
+	}
+	for range 5 {
+		task, err := decodeA2A(start.store.A2AGet(ctx, start.task.ID))
+		if err != nil {
+			return err
+		}
+		if task == nil || !task.Launch.Pending || a2aTerminal(task.State) {
+			return errA2AConflict
+		}
+		task.Launch.Worktree = dir
+		if err := s.a2aSave(ctx, start.store, task); !errors.Is(err, errA2AConflict) {
+			return err
+		}
+	}
+	return errA2AConflict
+}
+
 func dispatchA2AStatus(t *a2aTask) string {
 	if t.Disconnected && !a2aTerminal(t.State) {
 		return "computer offline"
@@ -232,5 +253,5 @@ func (s *Service) readDispatchA2A(ctx context.Context, from a2aRef, task *a2aTas
 		name = m.Name
 	}
 	return dispatchA2AResult(task, fmt.Sprintf("Task %s on %s (%s): %s.", task.TargetSession,
-		name, task.Launch.CWD, dispatchA2AStatus(task))), nil
+		name, cmp.Or(task.Launch.Worktree, task.Launch.CWD), dispatchA2AStatus(task))), nil
 }

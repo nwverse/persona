@@ -75,7 +75,7 @@ func a2aDeliveryID(task string, seq int) string { return fmt.Sprintf("persona-a2
 
 func (s *Service) a2aItems(ctx context.Context, ref a2aRef) ([]proto.Item, error) {
 	var res struct{ Items []proto.Item }
-	err := s.call(ctx, ref.Machine, DeviceSessionItems, map[string]any{"session_id": ref.Session, "turns": 4}, &res)
+	err := s.call(ctx, ref.Machine, DeviceSessionItems, map[string]any{"session_id": ref.Session, "turns": 4, "lazy_images": true}, &res)
 	return res.Items, err
 }
 
@@ -195,11 +195,14 @@ func (s *Service) a2aEndpointClosed(ctx context.Context, cfg assistantwire.A2ACo
 	if !s.a2aMachineAllowed(ctx, cfg, ref.Machine) {
 		return false
 	}
+	if _, deleted, _ := s.deletedConversation(ctx, ref.Machine, ref.Session); deleted {
+		return true
+	}
 	if row, ok, _ := s.archivedRow(ctx, ref.Machine, ref.Session); ok && row.Archived {
 		return true
 	}
 	row, ok, err := s.sessionNow(ctx, ref.Machine, ref.Session)
-	return err == nil && ok && (row.Archived || row.HiddenByDirectory() || s.hiddenByDirectory(ref.Machine, row))
+	return err == nil && ok && (row.Archived || row.IsDeleted() || row.HiddenByDirectory() || s.hiddenByDirectory(ref.Machine, row))
 }
 
 func (s *Service) a2aExpireDelivery(ctx context.Context, st a2aStore, t *a2aTask, i int) (bool, error) {
@@ -316,7 +319,7 @@ func (s *Service) a2aDeliver(ctx context.Context, st a2aStore, t *a2aTask, i int
 	}
 	text := a2aPrompt(t, e, from, string(s.lang(ctx)))
 	params := map[string]any{
-		"session_id": to.Session, "text": text, "client_msg_id": id,
+		"session_id": to.Session, "text": text, "client_msg_id": id, "message_source": a2aMessageSource(from),
 	}
 	if resume {
 		if sess.Capabilities.A2AWakeOnSend {
@@ -370,18 +373,23 @@ func (s *Service) a2aSendNode(ctx context.Context, st a2aStore, taskID string, s
 	return s.a2aReceipt(keep, st, taskID, seq, receipt)
 }
 
-func a2aPrompt(t *a2aTask, e *a2aEvent, from a2aRef, language string) string {
+func a2aMessageSource(from a2aRef) *proto.MessageSource {
 	fromName := from.Machine + "/" + from.Session
 	if from.Session == "" {
 		fromName = "A2A client"
 	}
+	return &proto.MessageSource{Kind: proto.SourceConversation, ConversationID: from.Session, Title: fromName}
+}
+
+func a2aPrompt(t *a2aTask, e *a2aEvent, from a2aRef, language string) string {
+	source := a2aMessageSource(from)
 	state := e.State
 	if state == "" {
 		state = t.State
 	}
-	text := prompts.RenderA2AMessage(prompts.A2AMessage{ID: t.ID, Sender: fromName, State: state,
+	text := prompts.RenderA2AMessage(prompts.A2AMessage{ID: t.ID, Sender: source.Title, State: state,
 		Request: e.Kind == "message", Text: e.Text, Language: language})
-	return prompts.RelayMessageText(text, &proto.MessageSource{Kind: proto.SourceConversation, ConversationID: from.Session, Title: fromName}, a2aDeliveryID(t.ID, e.Seq))
+	return prompts.RelayMessageText(text, source, a2aDeliveryID(t.ID, e.Seq))
 }
 
 // Reserve a launch before handing it to a node. An ambiguous startup stays
@@ -410,7 +418,8 @@ func (s *Service) a2aLaunch(ctx context.Context, st a2aStore, t *a2aTask) error 
 	}
 	taskID, mid, sid := t.ID, t.TargetMachine, t.TargetSession
 	request := map[string]any{"cwd": t.Launch.CWD, "launcher": t.Launch.Launcher, "session_id": sid,
-		"prompt": a2aPrompt(t, e, t.source(), string(s.lang(ctx))), "client_msg_id": a2aDeliveryID(taskID, 1), "permission_mode": "plan"}
+		"prompt": a2aPrompt(t, e, t.source(), string(s.lang(ctx))), "client_msg_id": a2aDeliveryID(taskID, 1),
+		"message_source": a2aMessageSource(t.source()), "permission_mode": "plan"}
 	go func() {
 		ctx, cancel := context.WithTimeout(s.runCtx(), agentStartTimeout)
 		defer cancel()

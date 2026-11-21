@@ -172,12 +172,44 @@ func TestA2AAmbiguousSendIsReconciledWithoutReplay(t *testing.T) {
 }
 
 func TestA2ADeliveryWaitsForLogicalSwitch(t *testing.T) {
-	s, _, _, _ := logicalPair(t, "pi")
-	for _, method := range []string{"session.a2a.send", "session.a2a.wake"} {
-		_, handled, err := s.logicalCall(t.Context(), "server", method, json.RawMessage(`{"session_id":"side-chat"}`))
-		if !handled || err == nil || !a2aNoDelivery(err) {
-			t.Fatalf("%s should wait for the conversation switch: handled=%v err=%v", method, handled, err)
+	s, _, st, _ := logicalPair(t, "pi")
+	assertDeferred := func() {
+		t.Helper()
+		for _, method := range []string{"session.a2a.send", "session.a2a.wake"} {
+			_, handled, err := s.logicalCall(t.Context(), "server", method, json.RawMessage(`{"session_id":"side-chat"}`))
+			if !handled || rpcCode(err) != assistantwire.CodeConversationBusy || !a2aNoDelivery(err) {
+				t.Fatalf("%s should wait for earlier owner input: handled=%v err=%v", method, handled, err)
+			}
 		}
+	}
+	assertDeferred()
+	c := activatePair(t, st)
+	if err := st.EnqueueConversationInput(t.Context(), "server", "side-chat", "owner-message", c.Epoch, json.RawMessage(`{"text":"Earlier owner input"}`)); err != nil {
+		t.Fatal(err)
+	}
+	assertDeferred()
+}
+
+func TestA2ADeletedRecipientReleasesTask(t *testing.T) {
+	s, h, st, cfg, parent, child := a2aFixture(t)
+	ctx := t.Context()
+	task, err := s.a2aStart(ctx, st, cfg, parent, child, "request", "", "Check the build.", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tombstone, err := json.Marshal(deletedConversation{Machine: child.Machine, ID: child.Session, At: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutConversationDeletion(ctx, child.Machine, child.Session, tombstone); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.a2aSession(ctx, cfg, child); !errors.Is(err, errA2AUnavailable) {
+		t.Fatalf("deleted recipient remained eligible: %v", err)
+	}
+	task = a2aProcessOne(t, s, st, cfg, task.ID)
+	if task.State != a2aFailed || !task.TargetClosed || len(h.sends) != 0 {
+		t.Fatalf("deleted recipient left an active or delivered task: %+v", task)
 	}
 }
 

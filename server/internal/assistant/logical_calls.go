@@ -150,6 +150,12 @@ func (s *Service) logicalCall(ctx context.Context, machine, method string, raw j
 			if current.Switch != nil {
 				return logicalRefusal(ctx, "busy")
 			}
+			if queue, ok := st.(logicalSwitchStore); ok {
+				pending, err := queue.ConversationInputPending(ctx, machine, id)
+				if err != nil || pending {
+					return logicalRefusal(ctx, "busy")
+				}
+			}
 			if !s.a2aMachineAllowed(ctx, s.a2aConfig(ctx), active.MachineID) {
 				return logicalRefusal(ctx, "unavailable")
 			}

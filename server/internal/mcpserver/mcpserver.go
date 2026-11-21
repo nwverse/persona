@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantskills"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 
@@ -480,6 +481,9 @@ func listToolsOnce(ctx context.Context, previous toolSnapshot) (toolSnapshot, er
 	tools := []map[string]any{}
 	var work map[string]bool
 	for _, t := range res.Tools {
+		if os.Getenv("PERSONA_MCP_EXCLUDE_A2A") == "1" && assistantwire.IsA2ATool(t.Name) {
+			continue
+		}
 		if t.WorkGuideTool && isAssistant() && !isGuest() && toolSet() == "" {
 			if work == nil {
 				work = make(map[string]bool)

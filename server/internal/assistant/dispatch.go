@@ -232,6 +232,7 @@ func (s *Service) dispatchStart(ctx context.Context, machine, session string, ar
 		params["prompt"] = a2aPrompt(task, &first, source, string(s.lang(sctx)))
 		params["session_id"] = task.TargetSession
 		params["client_msg_id"] = a2aDeliveryID(task.ID, 1)
+		params["message_source"] = a2aMessageSource(source)
 	}
 	if err := s.applyModel(sctx, "agent.new", params); err != nil {
 		return "", fmt.Errorf("%w; nothing was started", err)
@@ -244,6 +245,9 @@ func (s *Service) dispatchStart(ctx context.Context, machine, session string, ar
 		}
 		a.Cwd = wt.Path
 		params["cwd"], params["workspace_id"] = wt.Path, wt.WorkspaceID
+		if err := s.saveDispatchWorktree(sctx, tracker, wt.Path); err != nil {
+			return "", err
+		}
 		note = fmt.Sprintf(" It runs in a new worktree on branch %s.", wt.Branch)
 	}
 	s.setPlanThen(ctx, am.ID, params)

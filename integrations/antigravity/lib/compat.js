@@ -22,7 +22,11 @@ export function mcpServers(bin, pid, assistant, a2aToken) {
   // Assistant tools go through the proxy so deferred tools remain reachable (#7333).
   if (!assistant) {
     const server = { name: 'persona', command: bin, args: ['mcp'], env }
-    return a2aToken ? [server, { ...server, name: 'persona_a2a', env: [...env, { name: 'PERSONA_A2A_TOKEN', value: a2aToken }] }] : [server]
+    if (!a2aToken) return [server]
+    return [
+      { ...server, env: [...env, { name: 'PERSONA_MCP_EXCLUDE_A2A', value: '1' }] },
+      { ...server, name: 'persona_a2a', env: [...env, { name: 'PERSONA_A2A_TOKEN', value: a2aToken }] },
+    ]
   }
   return [{ name: 'persona', command: process.execPath, args: [MCP_PROXY, bin, 'mcp'], env }]
 }

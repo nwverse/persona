@@ -86,6 +86,7 @@ type a2aBody struct {
 
 type a2aLaunch struct {
 	CWD        string `json:"cwd"`
+	Worktree   string `json:"worktree,omitempty"`
 	Launcher   string `json:"launcher,omitempty"`
 	Pending    bool   `json:"pending"`
 	Dispatch   bool   `json:"dispatch,omitempty"`
@@ -168,7 +169,7 @@ func (s *Service) a2aMachineAllowed(ctx context.Context, cfg assistantwire.A2ACo
 // Persona binds callers to Node-attested sessions and keeps discovery and delivery
 // within the owning manager's confirmed computers.
 func (s *Service) a2aAllowed(ctx context.Context, cfg assistantwire.A2AConfig, ref a2aRef) bool {
-	if ref.Session == "" || !s.a2aMachineAllowed(ctx, cfg, ref.Machine) {
+	if ref.Session == "" || !s.a2aMachineAllowed(ctx, cfg, ref.Machine) || s.conversationAvailable(ctx, ref.Machine, ref.Session) != nil {
 		return false
 	}
 	if machine := s.logicalExecutionMachine(ctx, ref.Machine, ref.Session); machine != ref.Machine && !s.a2aMachineAllowed(ctx, cfg, machine) {
@@ -185,7 +186,7 @@ func (s *Service) a2aAllowed(ctx context.Context, cfg assistantwire.A2AConfig, r
 }
 
 func a2aVisible(session proto.Session) bool {
-	return !session.Archived && !session.HiddenByDirectory() && !session.IsSubagent &&
+	return !session.Archived && !session.IsDeleted() && !session.HiddenByDirectory() && !session.IsSubagent &&
 		session.Space != identity.SpaceHealth && !identity.InHealthSpace(session.Cwd)
 }
 

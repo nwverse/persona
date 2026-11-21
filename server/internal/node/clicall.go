@@ -297,6 +297,13 @@ func (n *Node) cliCall(ctx context.Context, c net.Conn, req sockRequest) proto.T
 // requested session alone is never sufficient to read another agent's mailbox.
 func (n *Node) a2aCaller(c net.Conn, req sockRequest, claimed string) (string, bool) {
 	if id, ok := n.assistantCaller(c); ok {
+		n.mu.Lock()
+		p := n.procs[id]
+		round := p != nil && p.toolSet == roundToolSet
+		n.mu.Unlock()
+		if round {
+			return "", false
+		}
 		return id, true
 	}
 	pid, err := peerPID(c)
