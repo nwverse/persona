@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/proto"
@@ -23,26 +22,34 @@ func (s *Service) taskModelBaseline(ctx context.Context, machine string) (ModelB
 		return b, nil // a managed provider retains its identity across computers in its scope
 	}
 	local := ModelBinding{Provider: b.Provider}
-	launchers, err := s.assistantLaunchers(ctx, machine)
-	if err != nil {
-		return local, nil // unknown discovery is not proof that an exact launcher is absent
+	r := s.mainChatFitState(ctx, machine, name, false)
+	wait, fallbacks := s.launcherRecovery(ctx, machine, name)
+	recovered := r.fit == mainChatGone && r.transient && wait > 0
+	if recovered {
+		r = s.waitMainChatLauncher(ctx, machine, name, wait)
 	}
-	if slices.ContainsFunc(launchers, func(l ConfiguredLauncher) bool { return l.Name == name }) {
+	if ctx.Err() != nil {
+		return local, ctx.Err()
+	}
+	if r.fit == mainChatFits {
 		return local, nil
 	}
+	if !recovered && r.launchers == nil && r.discoveryErr == nil {
+		// A managed provider outside this machine's scope has no picker snapshot and is not a transient shell miss.
+		r.launchers, r.discoveryErr = s.assistantLaunchers(ctx, machine)
+	}
+	if r.discoveryErr != nil {
+		return local, nil // unknown discovery is not proof that an exact launcher is absent
+	}
 	d, _ := s.device(ctx, machine)
-	kind := agentKind(s.launcherAgent(ctx, s.settings(ctx).MachineID, name))
-	if replacement := s.mainChatInstead(ctx, d, name, kind, launchers); replacement != "" {
+	kind := s.mainChatLauncherKind(ctx, s.settings(ctx).MachineID, name)
+	if replacement := s.mainChatInstead(ctx, d, name, kind, r.launchers, fallbacks); replacement != "" {
 		local.Provider = launcherProvider(replacement)
 		return local, nil
 	}
-	// Without an explicit backend choice, a computer's other headless-compatible default is valid too.
-	for _, l := range launchers {
-		if _, bad := s.launcherUnusable(ctx, machine, l.Name); !bad {
-			return ModelBinding{Provider: launcherProvider(l.Name)}, nil
-		}
-	}
-	return local, nil // normal validation reports an authoritative unavailable configuration
+	// An inherited launcher is still the user's resolved backend. Never replace it with an arbitrary local default;
+	// normal validation reports the authoritative unavailable configuration when no explicit substitute fits.
+	return local, nil
 }
 
 // Compare the binding even when the selected computer cannot report a launcher identity.

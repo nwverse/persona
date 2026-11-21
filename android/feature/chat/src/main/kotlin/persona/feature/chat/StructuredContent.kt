@@ -54,7 +54,7 @@ internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? =
     var whole by remember(item.id) { mutableStateOf<String?>(null) }
     val cut = item.fullSize != null && whole == null && update?.streaming != true
     val text = (whole ?: update?.text ?: item.text.orEmpty().let { if (item.fullSize != null) cutText(it) else it })
-        .let { if (hideCloseout) persona.core.domain.sort.stripCloseout(it) else it }
+        .let { if (hideCloseout) persona.core.domain.sort.stripCloseout(it, complete = !cut && update?.streaming != true) else it }
     val ancillaryStream = remember(item.id, update?.streaming == true) { AssistantAncillaryStream { _, _ -> } }
     val ancillary = if (update?.streaming == true && !user && item.from.isNullOrBlank()) {
         ancillaryStream.update(text, hostnames = LocalChatPorts.current?.hostnames.orEmpty(), linkable = emptySet())
@@ -118,8 +118,11 @@ private fun MessageParts(parts: List<MessagePart>, user: Boolean, id: String, on
     parts.forEachIndexed { index, part ->
         when (part) {
             is MessagePart.Text -> if (user) ReadingContent {
-                Text(messageLinkAnnotations(part.text), style = PersonaTheme.type.body, color = PersonaTheme.palette.ink,
+                val annotated = messageLinkAnnotations(part.text)
+                val layoutState = remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
+                Text(annotated, Modifier.chatLinkLongPress(annotated) { layoutState.value }, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink,
                     onTextLayout = { layout ->
+                        layoutState.value = layout
                         if (index == parts.lastIndex && layout.lineCount > 0)
                             onLastLine?.invoke((layout.size.height - layout.getLineTop(layout.lineCount - 1)).toInt() + bottomPadding)
                     })

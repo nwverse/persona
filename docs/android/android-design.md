@@ -75,7 +75,7 @@ Performance measurements are in section 5.
 | `PersonaTheme.type` | `PersonaType`: largeTitle, title, headline, body, bodyStrong, callout, caption, micro (tabular digits), label, labelSmall, number, voice (the line Persona speaks), code |
 | `PersonaTheme.shapes` | corner radii for cards, panels, controls, chips, buttons, bottom sheets |
 | `PersonaTheme.motion` | durations and curves (springs in Glass); `count` is the duration for numbers rolling to a new value and chart bars growing to a new height (#2811). Chat open/close is `Modifier.unfolding` (below), not this size motion |
-| `SharedMotion` / `Tokens.Motion` | Shared iOS motions from `spec/tokens/motion.json` (`expand`, `reveal`, `conceal`, `drawer`, `springBack`, `keyboard` via `IosMassSpring`, plus composer send and Needs You breath). Use these where the iPhone / Duo / iPad counterpart moves; Brief and Board keep their tweens only for the style-local state/layout springs. Literal animation specs are ratcheted by `scripts/app/android_motion_baseline.py` (#9897) |
+| `SharedMotion` / `Tokens.Motion` | Shared iOS motions from `spec/tokens/motion.json` (`expand`, `reveal`, `conceal`, `drawer`, `springBack`, `keyboard` via `IosMassSpring`, plus composer send and Needs You breath). Use these where the iPhone / Duo / iPad counterpart moves; Brief and Board keep their tweens only for the style-local state/layout springs. `SharedMotion.instant()` is the shared immediate change for Reduce Motion; pages do not choose raw animation specs. Literal animation specs are ratcheted by `scripts/app/android_motion_baseline.py` (#9897) |
 | `PersonaTheme.glass` | the glass level actually rendered |
 | `SpinnerTokens` | `JSpinner`'s fixed stroke widths; `compactStroke` is the 1.8dp compact activity arc, not density-scaled spacing |
 | `ContentTokens` | Existing mail, media, profile, reaction and task-content dimensions that cannot be expressed by the common spacing tokens; keeps page geometry unchanged while adopting tokens |
@@ -242,14 +242,23 @@ Components live in `Agents.kt` in `core:designsystem` (`MachineChip`, `AgentTree
 
 `app/…/ui/Root.kt`:
 
-- Only Assistant and Agents are primary destinations, selected above the page through `HomeNavigation` in all three styles (#2589).
+- **Settings › Appearance › Sidebar** offers Separate and Merged (#6378). Separate is the default on Android at all
+  widths. Merged uses the same shell, navigation keys and retained page hosts and removes the top switch from the
+  presentation. On compact windows the existing left drawer serves both roots. At regular width, one shared column sits
+  beside or overlays either root using the existing window policy in section 3.1.
+- Merged holds the assistant identity and Main conversation above the same lazy list that draws the Agents rows and
+  controls. `JSidebarSectionHeading` gives Pages, Persona Chats and Agents the same row height and top spacing.
+  The footer puts the Needs You jump above subscription usage and the New chat, Search and Settings controls.
+  The visible root selects at most one row across the column. A root's leading button opens the sidebar and
+  drill-down pages keep their existing Back. See the Android guide's "Sidebar presentation" for the available pages.
+- In Separate, Assistant and Agents are selected above the page through `HomeNavigation` in all three styles (#2589).
   The avatar opens one shared history sidebar from either page; its bottom gear opens Settings. Inbox, To-dos, Computers and extension pages are secondary sidebar destinations.
   In a regular window the same sidebar is a column beside the Assistant page instead of a drawer (section 3.1).
 - Each tab has its own back stack and badge. Visited tabs stay composed: switching away only stops placement (no drawing or touch), and disables back handling for that tab
   (`rememberNavigationEventDispatcherOwner(enabled = false)`). Selecting Assistant retains its current conversation. Selecting Agents from Assistant removes destinations above its list root (#5638),
   without replacing that root or its list state. Direct session entries and notification/link routing still open details; they do not use explicit tab selection.
   Re-tapping an already selected Glass home segment still opens its menu.
-- The top switcher belongs only to the two primary roots (`NavEntryDecorator`). Secondary pages cover it and carry Back instead.
+- In Separate, the top switcher belongs only to the two primary roots (`NavEntryDecorator`). Secondary pages cover it and carry Back instead.
   There is no bottom dock or navigation rail. In Glass each page samples its own content, never blurring another page.
 - Transitions: on push, the entire opaque new page slides in from the right with the old page underneath; on back, the top page slides away to reveal the one below. No crossfades (two translucent pages overlap their text);
   tab switches do not animate.

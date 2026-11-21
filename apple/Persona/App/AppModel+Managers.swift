@@ -50,7 +50,12 @@ extension AppModel {
         guard managerRosters[group] != roster || assistantPick(in: group) != wasPick else {
             // The same roster and pick, yet what the pages list or ask may have changed: the hub answered a roster the
             // last launch kept, or that it has none (a kept pick stopped counting).
-            if group == hub?.group { followScope() }
+            if group == hub?.group {
+                followScope()
+                #if os(iOS)
+                refreshStarred(force: false)
+                #endif
+            }
             return
         }
         let was = managerRosters[group].map { shownOwner($0, group: group) }
@@ -86,7 +91,14 @@ extension AppModel {
         let now = roster.map { shownOwner($0, group: group) }
         let back = wasOffline && assistantManagerOffline == nil
         let switched = was != nil ? was != now : assistantPick(in: group) != wasPick
-        if defaultMoved || back || switched { assistantManagerChanged(switched: switched) } else { relistAssistant() }
+        if defaultMoved || back || switched {
+            assistantManagerChanged(switched: switched)
+        } else {
+            relistAssistant()
+            #if os(iOS)
+            refreshStarred(force: false)
+            #endif
+        }
     }
 
     /// The default manager's Persona settings for group while another assistant is current (`assistantByGroup`), unless

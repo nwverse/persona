@@ -2,21 +2,24 @@
 // what happened in the last hours, what is to be verified), as the hub worked it out when the run started; the same
 // rows as the Lark card, with an Accept button for each task to verify and a Handled button for each question that can wait
 // (docs/extensions/bots.md "Morning and evening briefings").
-import { openTask } from "../../lib/handoff";
-import { type ReactNode, useRef, useState } from "react";
+import { leaveChat, openAgent, openTask } from "../../lib/handoff";
+import { conversationRoute } from "../../lib/conversation-page";
+import { type ReactNode, Suspense, useRef, useState } from "react";
+import { lazyPage } from "../../lib/lazy-page";
 import { errorText } from "../../lib/api";
-import { putTodo, refreshTodos } from "../../lib/store";
+import { getState, putTodo, refreshTodos } from "../../lib/store";
 import { updateTodo } from "../../lib/todos";
-import { acceptBrief, briefBody, briefSetupPage, failedKey, handledLater, type BriefBody, type BriefRow, type FeedItem } from "../../lib/feed";
+import { acceptBrief, briefBody, failedKey, handledLater, type BriefBody, type BriefRow, type FeedItem } from "../../lib/feed";
 import { shortDuration } from "../../lib/format";
-import { navigate } from "../../lib/router";
 import { formatDate, t } from "../../i18n";
 import { Button, cx, toast } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { TodoStageBar } from "../TodoStageBar";
 
+const BriefSetupRows = lazyPage(() => import("./BriefSetup").then((m) => m.BriefSetupRows));
+
 /** A section's rows shown at once (the hub cuts the lists as its card does; the totals say how many there were). */
-function Section({ icon, tint, title, children }: { icon: IconName; tint: string; title: string; children: React.ReactNode }) {
+export function Section({ icon, tint, title, children }: { icon: IconName; tint: string; title: string; children: React.ReactNode }) {
   return (
     <section className="border-t border-line py-2 first:border-t-0" data-brief-section>
       <div role="heading" aria-level={3} className="mb-1 flex items-center gap-2 text-[12.5px] font-medium text-ink-2">
@@ -39,8 +42,31 @@ function webLink(link?: string): string | undefined {
   return link && /^https?:\/\//i.test(link) ? link : undefined;
 }
 
-function meta(row: BriefRow): string {
-  const parts = [t("assistant-brief.waited", { wait: shortDuration(row.waited_s * 1000) })];
+/** Opens the chat a waiting or later row came from in the app (#12055), as iOS and Android do (#2320): an Agent's as the
+ *  task rows open theirs (How Agents open: the side panel, or its page with the way back to this conversation), a
+ *  Persona conversation as its page. */
+function openChat(mid: string, sid: string) {
+  const s = getState();
+  const to = conversationRoute(mid, sid, s.sessions, s.assistant);
+  if (to.name === "session") openAgent(mid, sid);
+  else leaveChat(to, false);
+}
+
+/** Open on a waiting or later row: the chat it came from, in the app; from a hub that does not name it, the row's link
+ *  in a new tab, as before. */
+function RowOpen({ row }: { row: BriefRow }) {
+  const title = t("assistant-brief.open_row", { title: row.title });
+  const { machine_id: mid, session_id: sid } = row;
+  if (mid && sid) return <Button title={title} onClick={() => openChat(mid, sid)}>{t("assistant-brief.open")}</Button>;
+  const link = webLink(row.link);
+  return link ? <Button href={link} title={title}>{t("assistant-brief.open")}</Button> : null;
+}
+
+/** What a row's meta line is made of: numbers and text only. A row typed as BriefRow cannot carry an object here: a
+ *  to-do's `ask.from` is one, and spreading the ask into a row is a type error (#11794); rows off the wire go through
+ *  lib/feed `briefRow`, which drops a field that is not text. */
+export function meta(row: Pick<BriefRow, "waited_s" | "nudged" | "from">): string {
+  const parts: string[] = [t("assistant-brief.waited", { wait: shortDuration(row.waited_s * 1000) })];
   if (row.nudged) parts.push(t("assistant-brief.nudged"));
   if (row.from) parts.push(row.from);
   return parts.join(" · ");
@@ -55,11 +81,7 @@ function WaitingRow({ row }: { row: BriefRow }) {
           <div className="text-[13.5px] font-medium [overflow-wrap:anywhere]">{row.title}</div>
           <div className="text-label text-ink-2">{meta(row)}</div>
         </div>
-        {webLink(row.link) && (
-          <Button href={webLink(row.link)} title={t("assistant-brief.open_row", { title: row.title })}>
-            {t("assistant-brief.open")}
-          </Button>
-        )}
+        <RowOpen row={row} />
       </div>
     </div>
   );
@@ -188,11 +210,7 @@ function LaterRow({ row, conversation }: { row: BriefRow; conversation: string }
         <div className="text-[13.5px] font-medium [overflow-wrap:anywhere]">{row.title}</div>
         <div className="text-label text-ink-2">{meta(row)}</div>
       </div>
-      {webLink(row.link) && (
-        <Button href={webLink(row.link)} title={t("assistant-brief.open_row", { title: row.title })}>
-          {t("assistant-brief.open")}
-        </Button>
-      )}
+      <RowOpen row={row} />
       {state === "marked" || state === "handled" ? (
         <span className="shrink-0 text-[12.5px] text-ink-2" data-brief-marked={state}>
           {t(state === "marked" ? "assistant-brief.later_marked" : "assistant-brief.handled")}
@@ -285,21 +303,8 @@ export function BriefCard({ item }: { item: FeedItem }) {
         </Section>
       )}
       {/* The week's recommended setup (#5085): the hub's own counts and words, drawn as they came. Opening the settings
-          page is all a row does: nothing is turned on from here. */}
-      {body.setup.length > 0 && (
-        <Section icon="spark" tint="bg-field text-ink-2" title={t("assistant-brief.setup_head")}>
-          <div className="py-1 text-label text-ink-2">{t("assistant-brief.setup_intro")}</div>
-          {body.setup.map((x) => {
-            const page = briefSetupPage(x.id);
-            return (
-              <div key={x.id} className="flex items-center gap-3 py-1.5" data-brief-row="setup">
-                <div className="min-w-0 flex-1 text-meta [overflow-wrap:anywhere]">{x.text}</div>
-                {page && <Button onClick={() => navigate(page)}>{t("assistant-brief.setup_open")}</Button>}
-              </div>
-            );
-          })}
-        </Section>
-      )}
+          page is all a row does: nothing is turned on from here. At most once a week, so its own chunk (#11794). */}
+      {body.setup.length > 0 && <Suspense fallback={null}><BriefSetupRows setup={body.setup} /></Suspense>}
     </div>
   );
 }
