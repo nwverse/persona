@@ -40,6 +40,7 @@ type configurePlatform struct {
 	publishCode  int
 	reject       bool
 	beforeConfig func()
+	beforeInfo   func()
 }
 
 func configureWorld(t *testing.T, code int) (*botWorld, *configureStore, *configurePlatform) {
@@ -51,7 +52,7 @@ func configureWorld(t *testing.T, code int) (*botWorld, *configureStore, *config
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.requests++
-		code, publishCode, reject, before := f.code, f.publishCode, f.reject, f.beforeConfig
+		code, publishCode, reject, before, beforeInfo := f.code, f.publishCode, f.reject, f.beforeConfig, f.beforeInfo
 		f.mu.Unlock()
 		switch {
 		case r.URL.Path == "/open-apis/auth/v3/tenant_access_token/internal":
@@ -61,6 +62,9 @@ func configureWorld(t *testing.T, code int) (*botWorld, *configureStore, *config
 				fmt.Fprint(w, `{"code":0,"tenant_access_token":"fake-token","expire":7200}`)
 			}
 		case r.URL.Path == "/open-apis/bot/v3/info":
+			if beforeInfo != nil {
+				beforeInfo()
+			}
 			fmt.Fprint(w, `{"code":0,"bot":{"app_name":"Example","open_id":"ou_bot"}}`)
 		case strings.HasSuffix(r.URL.Path, "/config") && r.Method == "PATCH":
 			if before != nil {
@@ -143,6 +147,9 @@ func TestFeishuConfigureDiagnosticSurvivesPairPoll(t *testing.T) {
 			w, st, f := configureWorld(t, tc.code)
 			f.publishCode = tc.publishCode
 			first := configureCredentials(t, w, "cli_example", "fake-secret", "feishu")
+			if strings.Contains(fmt.Sprint(first), "raw-sensitive") || strings.Contains(fmt.Sprint(first), "fake-secret") {
+				t.Fatal("raw details reached initial client response")
+			}
 			want := feishuConfigureNote(i18n.ZhHans, feishubot.ConfigureReport{Issue: tc.issue}, "feishu", "cli_example")
 			if first["step"] != "pair" || !strings.Contains(fmt.Sprint(first["hint"]), want) {
 				t.Fatalf("first response has no expected diagnostic: %v want=%s", first, want)
@@ -352,6 +359,52 @@ func TestFeishuConfigureDiagnosticIgnoresLateResult(t *testing.T) {
 			if p := configurePoll(t, w, st, f); p["hint"] != i18n.T(i18n.ZhHans, "hub-channels.pair_hint") {
 				t.Fatalf("late result persisted: %v", p)
 			}
+		})
+	}
+}
+
+// The network validator starts from an earlier snapshot. A replacement committed during validation must not
+// lend its diagnostic to the credentials being saved, even when those looked unchanged in that earlier snapshot.
+func TestFeishuConfigureDiagnosticUsesCommitTimeCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		replace func(*Manager, *FeishuBotSettings)
+	}{
+		{"app", func(_ *Manager, s *FeishuBotSettings) { s.AppID = "cli_replacement" }},
+		{"domain", func(_ *Manager, s *FeishuBotSettings) { s.Domain = "lark" }},
+		{"secret", func(h *Manager, s *FeishuBotSettings) {
+			var err error
+			s.SecretEnc, err = h.sealKey("replacement-secret")
+			if err != nil {
+				t.Error(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, st, f := configureWorld(t, 230002)
+			configureCredentials(t, w, "cli_example", "fake-secret", "feishu")
+			// Commit an intervening generation at the fake platform's validation boundary. This models a concurrent
+			// commit without requiring another route to bypass the lifecycle gate added by the separate registration PR.
+			f.mu.Lock()
+			f.beforeInfo = func() {
+				w.h.bots.mu.Lock()
+				defer w.h.bots.mu.Unlock()
+				tc.replace(w.h, &w.h.bots.set)
+				w.h.bots.set.Configure = &botConfigure{Issue: feishubot.IssueBotCapability}
+				if err := w.h.saveBotSettingsLocked(); err != nil {
+					t.Error(err)
+				}
+			}
+			f.mu.Unlock()
+			status, out := w.do(t, "PUT", "/api/v1/bots/feishu", `{"app_id":"cli_example","app_secret":"fake-secret","domain":"feishu"}`)
+			if status != 200 {
+				t.Fatalf("save earlier snapshot: %d %v", status, out)
+			}
+			p := w.bind(t, "pair")
+			if p["hint"] != i18n.T(i18n.ZhHans, "hub-channels.pair_hint") {
+				t.Fatalf("replacement diagnostic crossed credential generations: %v", p)
+			}
+			configurePoll(t, w, st, f)
 		})
 	}
 }

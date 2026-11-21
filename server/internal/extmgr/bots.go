@@ -697,11 +697,11 @@ func (h *Manager) updateBot(ctx context.Context, enabled *bool, appID, secret, d
 				d["owner_reset"] = true
 			}
 			records = append(records, botRecord{auditBotCredentials, d})
-			cur.Configure = nil
 		}
 		if next.AppID != cur.AppID {
 			cur.Owner, cur.Pairing, cur.TopicChats, cur.AISources = nil, nil, nil, nil
 		}
+		h.clearBotConfigureOnChangeLocked(next)
 		cur.AppID, cur.SecretEnc, cur.Domain = next.AppID, next.SecretEnc, next.Domain
 	}
 	if enabled != nil && *enabled != cur.Enabled {

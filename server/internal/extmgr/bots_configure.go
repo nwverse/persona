@@ -41,3 +41,20 @@ func (h *Manager) configureBotForPairing(ctx context.Context, id, secret, domain
 	}
 	h.saveBotSettingsLocked()
 }
+
+// clearBotConfigureOnChangeLocked compares the actual commit-time credentials, not the snapshot taken before
+// validation: another save may have committed while that network request was pending. b.mu is held.
+func (h *Manager) clearBotConfigureOnChangeLocked(next FeishuBotSettings) {
+	cur := &h.bots.set
+	if cur.Configure == nil {
+		return
+	}
+	if next.AppID == cur.AppID && next.Domain == cur.Domain {
+		previous, previousErr := h.openKey(cur.SecretEnc)
+		incoming, incomingErr := h.openKey(next.SecretEnc)
+		if previousErr == nil && incomingErr == nil && previous == incoming {
+			return
+		}
+	}
+	cur.Configure = nil
+}
