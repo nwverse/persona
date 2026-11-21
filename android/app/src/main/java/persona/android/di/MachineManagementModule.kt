@@ -132,6 +132,10 @@ object MachineManagementModule {
         override suspend fun purpose(id: String) = api().purpose(id)
         override suspend fun save(purpose: ModelPurpose, draft: ModelConfigurationDraft) = api().save(purpose, draft)
         override suspend fun providerModels(provider: String, refresh: Boolean, machine: String?) = api().providerModels(provider, refresh, machine)
+        override suspend fun profiles() = api().profiles()
+        override suspend fun applyProfile(id: String) = api().applyProfile(id)
+        override suspend fun rollbackProfile() = api().rollbackProfile()
+        override suspend fun saveProfile(id: String, input: ModelProfileSaveInput) = api().saveProfile(id, input)
     }
 
     // The setup checklist's main-conversation steps: the selected group's hub, while its hello says assistant_readiness.
