@@ -62,6 +62,8 @@ export interface ListCounts {
   background_waiting?: number;
   /** How many of `state.idle` are Just finished (#9751, `sessions_just_finished`); absent when none. */
   just_finished?: number;
+  /** How many of `state.needs_you` only wait on held non-interrupting cards (P1/P2) for push grading. */
+  held_needs?: number;
   revision: string;
 }
 export interface ListPage<T> {
