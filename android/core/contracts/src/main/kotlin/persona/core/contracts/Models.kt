@@ -583,6 +583,9 @@ data class Session(
     @SerialName("starting") val starting: Boolean = false,
     /** Why starting it failed; the session is offline and sends get the same error. */
     @SerialName("start_error") val startError: String? = null,
+    /** The coded start remedy, and a terminal question's line/choices when the start waits for an answer. */
+    @SerialName("start_error_code") val startErrorCode: String? = null,
+    @SerialName("start_error_args") val startErrorArgs: Map<String, String>? = null,
     /** Codex is open in its pane and has no thread until its first message. */
     @SerialName("awaiting_first_message") val awaitingFirstMessage: Boolean = false,
     /**

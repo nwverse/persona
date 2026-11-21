@@ -276,6 +276,7 @@ class HubChatRepository(
             recordAction(session, action, result, verified = true)
             return result
         }
+        override suspend fun continueStart(session: Session, choice: String): Session = delegate.continueStart(session, choice)
         override suspend fun editQueue(session: Session, keep: List<Int>) = delegate.editQueue(session, keep)
         override suspend fun sendQueuedNow(session: Session) = delegate.sendQueuedNow(session)
         override suspend fun retryUndelivered(session: Session, messageId: String) = delegate.retryUndelivered(session, messageId)

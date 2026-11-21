@@ -29,6 +29,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.MutableStateFlow
 import persona.core.contracts.AgentState
 import persona.core.contracts.CoreText
 import persona.core.contracts.PlanTask
@@ -56,6 +57,7 @@ import persona.core.designsystem.JTextField
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Status
 import persona.core.designsystem.Tokens
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.core.designsystem.pagePadding
 import persona.core.designsystem.text
@@ -66,6 +68,8 @@ import persona.core.domain.tasks.TaskNow
 import persona.core.domain.tasks.TaskState
 import persona.core.domain.tasks.isRemovable
 import persona.core.domain.tasks.orphanedLine
+import persona.core.domain.tasks.planTaskOf
+import persona.core.domain.tasks.retryLauncher
 
 // A task's detail, the dock's "All" and the plan's "Edit" (iOS TaskSheets.swift / PlanEditSheet; web TaskPanel): what a
 // tap on a task opens instead of leaving the conversation for its agent's page.
@@ -181,11 +185,16 @@ private fun TaskDetailPage(todoId: String, host: AssistantTaskHost, onDismiss: (
  * runs on, what it asks of its owner, what its agent last reported, and the agent's summary or why it has none. The sheet
  * stacks them as it always has; the page puts [gap] between them, as a page of its own spaces its parts.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ColumnScope.TaskDetail(
     todo: Todo, state: TaskState, host: AssistantTaskHost, onDismiss: () -> Unit, onRemove: () -> Unit, gap: Dp = Tokens.Space.flush,
 ) {
     val busy by host.tasks.busy.collectAsStateWithLifecycle()
+    val plans by host.tasks.plans.collectAsStateWithLifecycle()
+    val features by (host.tasks.features ?: remember { MutableStateFlow(emptySet<String>()) }).collectAsStateWithLifecycle()
+    val failedTask = planTaskOf(todo, plans)
+    val instead = if (state == TaskState.Failed) retryLauncher(failedTask, features) else null
     val agents = host.tasks.agentsOf(todo, host.sessions)
     val lead = host.tasks.lead(todo, host.sessions)
     var picked by remember(todo.id) { mutableStateOf<SessionKey?>(null) }
@@ -210,11 +219,29 @@ private fun ColumnScope.TaskDetail(
     when {
         shown != null -> AgentSummary(shown, host, routeTo = todo.id, onDismiss = onDismiss)
         failure != null -> JEmptyState(stringResource(R.string.chat_task_detail_failed), failure.trim(), icon = PhIcons.WarningCircle, action = {
-            Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                JButton(stringResource(R.string.chat_tasks_retry), { host.tasks.retryTask(todo, host.onError) }, kind = JButtonKind.Secondary,
-                    size = JButtonSize.Medium, icon = PhIcons.ArrowClockwise, loading = persona.core.domain.tasks.TasksStore.retryKey(todo.id) in busy)
-                JButton(stringResource(R.string.chat_task_detail_remove), onRemove,
-                    kind = JButtonKind.Destructive, size = JButtonSize.Medium, icon = PhIcons.Trash)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                if (state == TaskState.Failed) TaskShellQuestion(
+                    todo, failedTask, host.tasks, Modifier.padding(bottom = Tokens.Space.m),
+                )
+                val actions: @Composable () -> Unit = {
+                    if (instead != null) JButton(
+                        stringResource(persona.core.designsystem.R.string.designsystem_use_launcher_instead, instead),
+                        { host.tasks.retryTaskOnLauncher(todo, instead, host.onError) },
+                        kind = JButtonKind.Primary,
+                        size = JButtonSize.Medium,
+                        icon = PersonaIcons.retry,
+                        loading = persona.core.domain.tasks.TasksStore.retryKey(todo.id) in busy,
+                    )
+                    JButton(stringResource(R.string.chat_tasks_retry), { host.tasks.retryTask(todo, host.onError) },
+                        kind = JButtonKind.Secondary,
+                        size = JButtonSize.Medium, icon = PhIcons.ArrowClockwise,
+                        loading = persona.core.domain.tasks.TasksStore.retryKey(todo.id) in busy)
+                    JButton(stringResource(R.string.chat_task_detail_remove), onRemove,
+                        kind = JButtonKind.Destructive, size = JButtonSize.Medium, icon = PhIcons.Trash)
+                }
+                if (instead == null) Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) { actions() }
+                else FlowRow(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+                    verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) { actions() }
             }
         })
         else -> JEmptyState(stringResource(R.string.chat_task_detail_starting), stringResource(R.string.chat_task_detail_starting_body), icon = PhIcons.GearSix)

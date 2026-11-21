@@ -230,6 +230,9 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
         override suspend fun retry(clientMessageId: String) = gate.withLock {
             owner(clientMessageId)?.messages?.retry(clientMessageId) ?: false
         }
+        override suspend fun retryRefused(session: SessionKey, code: String) = gate.withLock {
+            groupOf(session.machineId)?.data?.messages?.retryRefused(GroupKeys.rawKey(session), code) ?: 0
+        }
         override suspend fun confirm(clientMessageId: String, delivered: Boolean) = gate.withLock {
             owner(clientMessageId)?.messages?.confirm(clientMessageId, delivered) ?: false
         }

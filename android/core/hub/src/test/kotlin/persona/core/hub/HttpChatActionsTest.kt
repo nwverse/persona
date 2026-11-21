@@ -61,6 +61,49 @@ class HttpChatActionsTest {
         }
     }
 
+    @Test fun continueStartUsesSlowLaneEscapesChoiceAndRequiresTheReturnedSession() = runBlocking {
+        MockWebServer().use { server ->
+            val http = OkHttpClient.Builder().retryOnConnectionFailure(false).build()
+            val slow = mutableListOf<String>()
+            val actions = HttpChatActions({ path, method, body ->
+                slow += path
+                http.newCall(Request.Builder().url(server.url(path)).method(method, body).build()).execute()
+            }) { _, _, _ -> error("a session start answer must use the slow lane") }
+            val session = Session(machineId = "machine/one#", sessionId = "session/one #2")
+            val answer = "Resume \"kept\"\nnow\\terminal"
+            val path = "/api/v1/sessions/machine%2Fone%23/session%2Fone%20%232/start/continue"
+            server.enqueue(MockResponse().setBody("""{"session":{"machine_id":"machine/one#","session_id":"session/one #2","title":"Kept terminal","status":"working","model":"returned-model"}}"""))
+            val continued = actions.continueStart(session, answer)
+            assertEquals(session.key, continued.key)
+            assertEquals("Kept terminal", continued.title)
+            assertEquals("working", continued.status)
+            assertEquals("returned-model", continued.model)
+            val request = server.takeRequest()
+            assertEquals("POST", request.method)
+            assertEquals(path, request.path)
+            val body = request.body.readUtf8()
+            assertEquals("""{"choice":"Resume \"kept\"\nnow\\terminal"}""", body)
+            assertNull(JsonCodec.parseToJsonElement(body).jsonObject["model"])
+            assertEquals(listOf(path), slow)
+
+            // A successful response without the kept session is not a successful continuation.
+            server.enqueue(MockResponse().setBody("{}"))
+            val missing = runCatching { actions.continueStart(session, answer) }.exceptionOrNull()
+            assertTrue(missing is IllegalStateException)
+            assertEquals("no session in the answer", missing?.message)
+            server.takeRequest()
+
+            server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"The start answer was refused","code":"start_answer_refused"}"""))
+            val failure = runCatching { actions.continueStart(session, answer) }.exceptionOrNull() as HubFailure
+            assertEquals(409, failure.status)
+            assertEquals("start_answer_refused", failure.code)
+            assertEquals("The start answer was refused", failure.message)
+            server.takeRequest()
+            assertEquals(listOf(path, path, path), slow)
+            assertEquals(3, server.requestCount)
+        }
+    }
+
     @Test fun ultracodeGoesAloneAndAQueuedSwitchVerifies() = runBlocking {
         MockWebServer().use { server ->
             val actions = actions(server)
