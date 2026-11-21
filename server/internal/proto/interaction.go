@@ -187,6 +187,9 @@ type Interaction struct {
 	// docs/assistant/assistant.md "Assistant answers questions first"); nothing was pushed yet. The card shows in the apps meanwhile, and an answer
 	// given there wins.
 	Delegating bool `json:"delegating,omitempty"`
+	// PushLevel is the hub push-grading urgency for this card ("P0", "P1", "P2"): empty/absent defaults to "P0",
+	// while "P1" marks a supervisor-escalated card held for the Needs you list and briefing when grading is on.
+	PushLevel string `json:"push_level,omitempty"`
 	// Delegate is what the assistant found when it left the question to the user: the context it filled in.
 	Delegate *Delegate `json:"delegate,omitempty"`
 	// Suggestion: the owner answered this kind of card the same way three times; the card offers a standing rule

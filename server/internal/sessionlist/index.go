@@ -184,8 +184,10 @@ type Counts struct {
 	BackgroundWaiting int `json:"background_waiting,omitempty"`
 	// JustFinished: how many of State["idle"] are Just finished (#9751): a client that shows them apart takes them out
 	// of its Seen count.
-	JustFinished int    `json:"just_finished,omitempty"`
-	Revision     string `json:"revision"`
+	JustFinished int `json:"just_finished,omitempty"`
+	// HeldNeeds: how many of State["needs_you"] only wait on held non-interrupting cards (P1/P2) for push grading.
+	HeldNeeds int    `json:"held_needs,omitempty"`
+	Revision  string `json:"revision"`
 }
 
 // PageWithCounts is a page with its view's current counts (with_counts=1): what a separate ?counts=1 read with the
