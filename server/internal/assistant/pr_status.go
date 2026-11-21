@@ -99,14 +99,16 @@ func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (Tod
 		return TodoPRStatus{}, fmt.Errorf("PR has no head commit")
 	}
 	type review struct {
-		ID          int64     `json:"id"`
-		State       string    `json:"state"`
-		CommitID    string    `json:"commit_id"`
-		SubmittedAt time.Time `json:"submitted_at"`
-		Body        string    `json:"body"`
-		HTMLURL     string    `json:"html_url"`
-		User        struct {
+		ID                int64     `json:"id"`
+		State             string    `json:"state"`
+		CommitID          string    `json:"commit_id"`
+		SubmittedAt       time.Time `json:"submitted_at"`
+		Body              string    `json:"body"`
+		HTMLURL           string    `json:"html_url"`
+		AuthorAssociation string    `json:"author_association"`
+		User              struct {
 			Login string `json:"login"`
+			Type  string `json:"type"`
 		} `json:"user"`
 	}
 	var reviews []review
@@ -155,7 +157,7 @@ func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (Tod
 			}
 		}
 	}
-	if out.actionableReview.State == "" && len(reviews) < 100 {
+	if out.actionableReview.State == "" && out.Review != "approved" && len(reviews) < 100 {
 		for _, r := range reviews {
 			if r.State != "COMMENTED" || r.ID <= 0 || r.CommitID != pr.Head.SHA || r.SubmittedAt.IsZero() {
 				continue
@@ -163,6 +165,9 @@ func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (Tod
 			author := strings.TrimSpace(r.User.Login)
 			body := strings.TrimSpace(r.Body)
 			if author == "" || body == "" || (pr.User.Login != "" && strings.EqualFold(author, pr.User.Login)) {
+				continue
+			}
+			if isBotReviewAuthor(author, r.User.Type) || !reviewAuthorHasWriteAssociation(r.AuthorAssociation) || commentedReviewLooksInformational(body) {
 				continue
 			}
 			if r.SubmittedAt.After(out.actionableReview.SubmittedAt) ||

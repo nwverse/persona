@@ -221,6 +221,10 @@ func extractPREvents(t Todo, cur todoStage, held *TaskReview, status TodoPRStatu
 		switch {
 		case status.actionableReview.State != "":
 			r := status.actionableReview
+			if strings.EqualFold(r.State, "COMMENTED") &&
+				(status.Review == "approved" || commentedReviewLooksInformational(r.Body)) {
+				break
+			}
 			eventID := strings.ToLower(r.State)
 			if r.ID > 0 {
 				eventID = fmt.Sprintf("review:%d", r.ID)
@@ -251,6 +255,47 @@ func extractPREvents(t Todo, cur todoStage, held *TaskReview, status TodoPRStatu
 		}
 	}
 	return events
+}
+
+func isBotReviewAuthor(login, userType string) bool {
+	return strings.EqualFold(strings.TrimSpace(userType), "Bot") ||
+		strings.HasSuffix(strings.ToLower(strings.TrimSpace(login)), "[bot]")
+}
+
+func reviewAuthorHasWriteAssociation(assoc string) bool {
+	switch strings.ToUpper(strings.TrimSpace(assoc)) {
+	case "OWNER", "MEMBER", "COLLABORATOR":
+		return true
+	default:
+		return false
+	}
+}
+
+// commentedReviewLooksInformational filters out purely informational or no-defect COMMENTED reviews
+// (such as automated semantic reviews and short LGTM/QA-pass notes) so they never wake Agents or supervisors.
+func commentedReviewLooksInformational(body string) bool {
+	lower := strings.ToLower(strings.TrimSpace(body))
+	if lower == "" {
+		return true
+	}
+	for _, phrase := range []string{
+		"no blocking defects",
+		"no blocking issues",
+		"found no blocking",
+		"no defects found",
+		"no issues found",
+		"nothing blocking",
+	} {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	trimmed := strings.Trim(lower, " .!✅👍🎉\t\r\n")
+	switch trimmed {
+	case "lgtm", "looks good", "looks good to me", "ship it", "all green", "qa passed", "verified":
+		return true
+	}
+	return false
 }
 
 // routePREvents routes actionable PR events directly to the bound Agent when assistant.pr_events_route_to_agent is on.
@@ -366,7 +411,11 @@ func (s *Service) prEventSignalStillHolds(t Todo, g superviseSignal) bool {
 	case prEventKindCIFailure:
 		return p.Checks == "failure"
 	case prEventKindReview:
-		return p.Review == "changes_requested" || p.actionableReview.State != ""
+		if p.Review == "changes_requested" {
+			return true
+		}
+		return p.Review != "approved" && p.actionableReview.State != "" &&
+			!commentedReviewLooksInformational(p.actionableReview.Body)
 	default:
 		return false
 	}
@@ -450,6 +499,11 @@ func (s *Service) deliverPREventToAgent(ctx context.Context, t Todo, ev prRouted
 	if lastStopped.SessionID == "" {
 		return "", errors.New("no usable bound agent")
 	}
+	// Never resume a stopped Agent for a plain COMMENTED review; only explicit CHANGES_REQUESTED,
+	// merge conflicts, or CI failures justify resuming a stopped session.
+	if ev.Kind == prEventKindReview && !strings.EqualFold(ev.ReviewState, "CHANGES_REQUESTED") {
+		return "", errors.New("stopped agent is not resumed for a plain COMMENTED review")
+	}
 	am, ok := s.device(ctx, lastStopped.MachineID)
 	if !ok || !am.Reachable {
 		return "", machineOffline(cmp.Or(am.Name, lastStopped.MachineID))
@@ -514,16 +568,20 @@ func formatPREventForAgent(t Todo, ev prRoutedEvent) string {
 	case prEventKindConflict:
 		b.WriteString("Details: The open PR has merge conflicts against its target branch at this head commit. Fetch latest base branch, resolve conflicts cleanly while preserving task scope, re-run verification, and push.\n")
 	case prEventKindCIFailure:
+		var ciLines []string
 		if ev.CheckName != "" {
 			if ev.CheckCount > 1 {
-				fmt.Fprintf(&b, "Failing checks (%d): %s\n", ev.CheckCount, clip(oneLine(ev.CheckName), 200))
+				ciLines = append(ciLines, fmt.Sprintf("Failing checks (%d): %s", ev.CheckCount, clip(oneLine(ev.CheckName), 200)))
 			} else {
-				fmt.Fprintf(&b, "Failing check: %s\n", clip(oneLine(ev.CheckName), 200))
+				ciLines = append(ciLines, fmt.Sprintf("Failing check: %s", clip(oneLine(ev.CheckName), 200)))
 			}
 		}
-		if ev.Summary != "" {
+		if summary := strings.TrimSpace(ev.Summary); summary != "" {
+			ciLines = append(ciLines, summary)
+		}
+		if len(ciLines) > 0 {
 			b.WriteString("\nExternal CI output (untrusted):\n")
-			b.WriteString(wrapUntrustedExternalContent("github_ci_check", "", ev.PRURL, ev.HeadSHA, ev.Summary))
+			b.WriteString(wrapUntrustedExternalContent("github_ci_check", "", ev.PRURL, ev.HeadSHA, strings.Join(ciLines, "\n")))
 			b.WriteByte('\n')
 		}
 		b.WriteString("Details: CI checks failed on the current PR head. Inspect the failing check logs, verify the failure against the repository and task scope, fix the root cause, re-run verification, and push.\n")
