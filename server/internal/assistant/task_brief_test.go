@@ -164,7 +164,15 @@ func TestBriefSurvivesTakeOvers(t *testing.T) {
 			Text: prompts.RenderSupervise(prompts.Supervise{Entries: []prompts.SuperviseEntry{{ID: first.ID, Title: first.Title, Kind: sigOrphaned}}})})
 	takeOver := func(title, prompt, from, why string) Todo {
 		t.Helper()
-		before := len(todoNow(s, first.ID).Agents)
+		current := todoNow(s, first.ID)
+		before := len(current.Agents)
+		var stopped []proto.Session
+		for _, a := range current.Agents {
+			if a.active() {
+				stopped = append(stopped, proto.Session{SessionID: a.SessionID, Status: proto.StatusOffline})
+			}
+		}
+		f.setSessions("box", stopped...)
 		got, isErr := tool(t, s, "task_plan", briefTask(map[string]any{"title": title, "prompt": prompt, "continues": from, "continues_why": why,
 			"done_when": []string{"something else entirely"}, "expect_minutes": 5, "goal": nil}))
 		if isErr {
@@ -589,6 +597,9 @@ func TestContinuationUsesAuthorizedScope(t *testing.T) {
 	}
 	waitFor(t, "original start", func() bool { return len(onlyTodo(s).Agents) == 1 })
 	todo := onlyTodo(s)
+	// The continuation needs an authoritative stopped row, rather than a missing
+	// row that could belong to a disconnected runtime.
+	f.setSessions("box", proto.Session{SessionID: todo.Agents[0].SessionID, Status: proto.StatusOffline})
 	f.mu.Lock()
 	fresh, _ := f.starts[0]["prompt"].(string)
 	f.mu.Unlock()

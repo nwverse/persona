@@ -124,6 +124,34 @@ func TestOrcaBridgeListsChats(t *testing.T) {
 	}
 }
 
+// A handoff must use the runtime close path. An unknown outcome remains an
+// error all the way back to the manager; it is never a successful stop receipt.
+func TestOrcaBridgeHandoffCloseReceipt(t *testing.T) {
+	n, _, o := orcaBridgeNode(t)
+	if _, err := nodeCall(t, n, "session.stop", map[string]any{"session_id": orcaChatUUID}); err == nil {
+		t.Fatal("terminal stop accepted a runtime-owned session")
+	}
+	o.f.Handle("agentSession.close", func(p map[string]any) any {
+		if p["sessionId"] != orcaChatID {
+			t.Errorf("wrong Orca identity: %v", p)
+		}
+		return orcarttest.Fail{Code: "agent_session_operation_unknown"}
+	})
+	if _, err := nodeCall(t, n, "session.close", map[string]any{"session_id": orcaChatUUID}); err == nil {
+		t.Fatal("unknown close outcome accepted")
+	}
+	o.f.Handle("agentSession.close", func(map[string]any) any {
+		return map[string]any{"ok": true}
+	})
+	raw, err := nodeCall(t, n, "session.close", map[string]any{"session_id": orcaChatUUID})
+	var out struct {
+		OK bool `json:"ok"`
+	}
+	if err != nil || json.Unmarshal(raw, &out) != nil || !out.OK {
+		t.Fatalf("confirmed close receipt: %s %v", raw, err)
+	}
+}
+
 // Before the transcript is on disk the bridge answers session.items with an empty page the hub can read: history,
 // when present, is the transcript's version string (the hub's itemSpan), never a bool (#4886).
 func TestOrcaBridgeItemsBeforeTranscriptDecodeAsSpan(t *testing.T) {

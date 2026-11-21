@@ -165,6 +165,9 @@ func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
 			continue
 		}
 		key := [2]string{machine, c.SessionID}
+		if s.todos.handoffAgents[key] {
+			continue
+		}
 
 		// 1. Spawned derivation: <todo_id>@<parent machine>/<parent session>
 		if todoID, parent, ok := strings.Cut(c.SpawnFrom, "@"); ok && s.todos.activeBySession[key] == "" {

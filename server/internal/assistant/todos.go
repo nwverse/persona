@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/nwverse/persona/server/internal/compat"
 	"net/http"
 	"slices"
@@ -214,6 +215,7 @@ type todoBook struct {
 	todos               map[string]*Todo
 	deletedRequestGates map[string]bool
 	activeBySession     map[[2]string]string  // (machine_id, session_id) -> the open todo it works for
+	handoffAgents       map[[2]string]bool    // session membership reserved while a continuation closes its old Agent; mu guards it
 	snapshotSyncing     map[[2]string]bool    // (machine_id, session_id) whose title is being written
 	spacesByKey         map[string]string     // "<machine_id>/<space>" -> todo_id
 	botmux              map[string]botmuxSeen // by machine: its botmux sessions' chats and dispatches (todo_sessions.go)
@@ -1791,6 +1793,12 @@ func (s *Service) linkTodoSpaceAgent(ctx context.Context, todoID, mid, key strin
 // writeTodoAgentLink writes and publishes a membership with todoBook.writing held.
 // Callers release it before notifying the hub or contacting nodes.
 func (s *Service) writeTodoAgentLink(ctx context.Context, todoID, mid, sid, title, cwd, agent, startError, source, via string, allowDone bool) error {
+	s.todos.mu.RLock()
+	handoff := s.todos.handoffAgents[[2]string{mid, sid}]
+	s.todos.mu.RUnlock()
+	if handoff {
+		return fmt.Errorf("agent %s/%s has a handoff in progress; wait for it to finish", mid, sid)
+	}
 	now := time.Now().UTC()
 	// A link keeps a directory in the health space: a run's directory follows its shell's cd, and where it worked tells
 	// the to-do's history as the space's for good (todosHidden, #10941).

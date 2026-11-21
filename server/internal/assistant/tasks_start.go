@@ -297,7 +297,7 @@ func (s *Service) taskTodoForConversation(conversation, id string) (Todo, error)
 // is not closed for good (a failed start is taken up again: takeTodoForTask reopens it, #10365), its start is not being
 // remedied in a kept tab (task_retry's), has no live agent on it, is not starting again already (a Retry's, task_retry's
 // start on its way, tasksState.retrying) and is not taken by a plan that started and has not linked its agent yet. An
-// agent linked and never let go whose session stopped (its terminal kept, tasks_close.go), was archived or whose
+// agent linked and never let go whose session stopped (its terminal kept, tasks_close.go), or whose
 // computer the hub no longer knows is no agent working on it: those links are answered as stopped, for the taker to
 // let go (releaseStoppedAgents). A computer that cannot be reached is not an answer: its agent counts as working.
 // taking: the plan hold and the start are what the caller claimed itself, so they are not looked at (takeTodoForTask
@@ -368,9 +368,12 @@ func (s *Service) startRemedying(ctx context.Context, t Todo) bool {
 }
 
 // todoAgentStopped: nothing runs agent a now, so a new agent may take over its to-do: its session is listed stopped
-// (switchStopped) or archived, or its computer is gone from the hub. Not listed at all, or the computer not reached,
+// or its computer is gone from the hub. Not listed at all, or the computer not reached,
 // is not known to be stopped.
 func (s *Service) todoAgentStopped(ctx context.Context, a TodoAgent) bool {
+	if d, ok := s.device(ctx, a.MachineID); ok && !d.Reachable {
+		return false // an offline machine's cached row cannot confirm the process stopped
+	}
 	list, err := s.sessions(ctx, a.MachineID)
 	if errors.Is(err, ErrNoDevice) {
 		return true
@@ -380,10 +383,18 @@ func (s *Service) todoAgentStopped(ctx context.Context, a TodoAgent) bool {
 	}
 	for _, c := range list {
 		if c.SessionID == a.SessionID {
-			return c.Archived || switchStopped(c)
+			return todoAgentSessionStopped(c)
 		}
 	}
 	return false
+}
+
+// An archived row or an interrupted turn can still belong to a live runtime.
+// Only a stopped session, rather than a hidden row or ended turn, permits release.
+func todoAgentSessionStopped(c proto.Session) bool {
+	// A runtime that disconnected leaves offline transcript rows behind. Its
+	// process may still be working, so even an offline runtime needs a confirmed close.
+	return c.SourceKind != proto.SourceRuntime && !c.Starting && (c.Status == proto.StatusOffline || stoppedAgent(c))
 }
 
 // takeTodoForTask is the todo a started plan's task runs on (PlanTask.ReuseTodo), checked again now (it may have been
@@ -477,8 +488,8 @@ func (s *Service) takeTodoForTask(ctx context.Context, planID, conversation stri
 	return formatTodo(t), nil
 }
 
-// stopContinuedTaskAgents is an explicit handoff, not the idle task-closure pass: stop the old process but keep its
-// terminal and history. A refusal leaves the handoff failed on this to-do, with no replacement Agent.
+// stopContinuedTaskAgents is an explicit handoff, not the idle task-closure pass: terminal agents keep their shell;
+// runtime-owned sessions close through their runtime and keep their history. A refusal starts no replacement Agent.
 func (s *Service) stopContinuedTaskAgents(ctx context.Context, todo Todo) ([]TodoAgent, error) {
 	var stopped []TodoAgent
 	for _, a := range todo.Agents {
@@ -495,13 +506,52 @@ func (s *Service) stopContinuedTaskAgents(ctx context.Context, todo Todo) ([]Tod
 			stopped = append(stopped, a)
 			continue
 		}
-		if _, ok := s.device(ctx, a.MachineID); !ok {
+		if d, ok := s.device(ctx, a.MachineID); !ok || !d.Reachable {
 			return nil, fmt.Errorf("continues: cannot confirm agent %s/%s stopped: its computer is unavailable", a.MachineID, a.SessionID)
 		}
-		if !s.todoAgentStopped(ctx, a) {
+		list, err := s.sessions(ctx, a.MachineID)
+		if err != nil {
+			return nil, fmt.Errorf("continues: cannot confirm agent %s/%s stopped: %w", a.MachineID, a.SessionID, err)
+		}
+		var row proto.Session
+		for _, c := range list {
+			if c.SessionID == a.SessionID {
+				row = c
+				break
+			}
+		}
+		if row.SessionID == "" {
+			return nil, fmt.Errorf("continues: cannot confirm agent %s/%s stopped: its session is not listed", a.MachineID, a.SessionID)
+		}
+		if row.Assistant {
+			return nil, fmt.Errorf("continues: assistant conversations cannot be stopped")
+		}
+		if !todoAgentSessionStopped(row) {
+			release, err := s.holdHandoffAgent(todo.ID, a)
+			if err != nil {
+				return nil, err
+			}
+			// Runtimes own their processes; session.stop is deliberately refused
+			// before runtime dispatch on the node. Use their declared close contract.
+			method := deviceSessionStop
+			if row.SourceKind == proto.SourceRuntime {
+				if row.Capabilities == nil || row.Capabilities.Terminal || row.Capabilities.Close == nil || !*row.Capabilities.Close {
+					release()
+					return nil, fmt.Errorf("continues: runtime agent %s/%s does not support a confirmed close without closing a terminal", a.MachineID, a.SessionID)
+				}
+				method = "session.close"
+			}
 			cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-			err := s.call(cctx, a.MachineID, deviceSessionStop, map[string]any{"session_id": a.SessionID}, nil)
+			var out struct {
+				OK      bool  `json:"ok"`
+				Stopped *bool `json:"stopped"`
+			}
+			err = s.call(cctx, a.MachineID, method, map[string]any{"session_id": a.SessionID}, &out)
 			cancel()
+			if err == nil && (method == "session.close" && !out.OK || method == deviceSessionStop && out.Stopped == nil) {
+				err = fmt.Errorf("the node did not confirm the agent stopped")
+			}
+			release()
 			if err != nil {
 				return nil, fmt.Errorf("continues: cannot stop agent %s/%s on to-do %s: %w", a.MachineID, a.SessionID, todo.ID, err)
 			}
@@ -510,6 +560,37 @@ func (s *Service) stopContinuedTaskAgents(ctx context.Context, todo Todo) ([]Tod
 		stopped = append(stopped, a)
 	}
 	return stopped, nil
+}
+
+// holdHandoffAgent rechecks ownership after the session lookup and reserves this
+// session while its close is in flight. Other sessions' membership writes stay free.
+func (s *Service) holdHandoffAgent(id string, a TodoAgent) (func(), error) {
+	b := &s.todos
+	b.writing.Lock()
+	defer b.writing.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	key := [2]string{a.MachineID, a.SessionID}
+	current := false
+	if t := b.todos[id]; t != nil {
+		for _, link := range t.Agents {
+			if link.MachineID == a.MachineID && link.SessionID == a.SessionID && link.active() && link.LinkedAt.Equal(a.LinkedAt) {
+				current = true
+			}
+		}
+	}
+	if owner := b.activeBySession[key]; !current || owner != "" && owner != id || b.handoffAgents[key] {
+		return nil, fmt.Errorf("continues: agent %s/%s ownership changed or a handoff is in progress", a.MachineID, a.SessionID)
+	}
+	if b.handoffAgents == nil {
+		b.handoffAgents = map[[2]string]bool{}
+	}
+	b.handoffAgents[key] = true
+	return func() {
+		b.mu.Lock()
+		delete(b.handoffAgents, key)
+		b.mu.Unlock()
+	}, nil
 }
 
 // todoAgentReleaser is the store's letting go of one agent link (released_at only); a store without it keeps that in

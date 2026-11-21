@@ -23,6 +23,7 @@ var terminalClosers = map[string][]string{
 		"stopCancelledAgent",       // only a session with no terminal (session.stop answers no_terminal)
 		"retireArchived",           // the user's "Archive and close" for a runtime whose declared close needs no terminal
 		"closeMain",                // the user's Clear context (#5095): the main chat's own headless process, never a pane (session.stop refuses assistant conversations)
+		"stopContinuedTaskAgents",  // explicit continuation: close is restricted to SourceRuntime; terminal agents always use session.stop
 	},
 	"session.retire": {
 		"retireArchived",     // the user's "Archive and close" (close_terminal)
