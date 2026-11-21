@@ -1,3 +1,4 @@
+import Vision
 import XCTest
 
 /// The screenshot banner (#9508, docs/apple/ios.md 「Screenshot banner」) against scripts/mock/mock_hub.py
@@ -51,6 +52,72 @@ final class ScreenshotBannerUITests: XCTestCase {
                 _ = try look(banner: banner, scheme: scheme, page: "ipad", ["-openAssistant", Self.main], control: "persona-avatar")
             }
         }
+    }
+
+    /// The banner names the assistant as the bar does (#12243). Against a mock with one assistant
+    /// (`MOCK_MANAGERS=1 PORT=… python3 scripts/mock/mock_hub.py`), the Sidebar layout's Assistant chat (the drawer row
+    /// at compact width, the bar beside the column where it stands beside the page): the bar's name pill says the
+    /// current assistant's name, and the system screenshot's banner, read with Vision, says the same name, never the
+    /// persona's ("Persona", "Pers…"), which it said before. TEST_RUNNER_PERSONA_SHOTS keeps
+    /// `screenshot-banner-name-<off|on>-<light|dark>.png` (off: what the screen shows; on: what a screenshot shows).
+    @MainActor func testTheBannerSaysTheBarsName() throws {
+        for scheme in ["light", "dark"] {
+            let args = ["-openAssistant", Self.main, "-app.navigation", "sidebar"]
+            try look(banner: false, scheme: scheme, page: "name", args, control: "persona-avatar", measure: false)
+            let app = launch(["-ui.scheme", scheme] + args, banner: true)
+            defer { app.terminate() }
+            let pill = app.descendants(matching: .any)["persona-avatar"].firstMatch
+            XCTAssertTrue(pill.waitForExistence(timeout: 30), "\(scheme): no name pill")
+            // "<name>" online, "<name>, Connecting…" while it connects (a full-width comma in Chinese).
+            let name = String(pill.label.split(whereSeparator: { $0 == "," || $0 == "\u{FF0C}" }).first ?? "")
+                .trimmingCharacters(in: .whitespaces)
+            XCTAssertFalse(name.isEmpty, "\(scheme): the pill has no name")
+            RunLoop.current.run(until: Date().addingTimeInterval(2))
+            let shot = Self.screenshot(of: app)
+            save(shot, "screenshot-banner-name-on-\(scheme)")
+            // The banner's strip: the screenshot's whole width (on its side wider than the app's frame says), down past
+            // the bar.
+            let strip = CGRect(x: 0, y: 0, width: 10_000, height: max(pill.frame.maxY + 16, 110))
+            let words = try Self.text(in: shot, strip)
+            XCTAssertTrue(words.contains { $0.contains(name) }, "\(scheme): the banner does not say the bar's name \(name): \(words)")
+            XCTAssertTrue(words.contains { $0.contains(Self.repository) }, "\(scheme): no banner in the screenshot: \(words)")
+            if name != "Persona" {
+                XCTAssertFalse(words.contains { $0.hasPrefix("Pers") }, "\(scheme): the banner says the persona's name: \(words)")
+            }
+        }
+    }
+
+    /// A system screenshot of the display the app is on: on iPhone Duo `XCUIScreen.main` is the outer display, black
+    /// while the Duo is open, so the screen as large as the app's window (the open one's inner display).
+    @MainActor private static func screenshot(of app: XCUIApplication) -> XCUIScreenshot {
+        let size = app.frame.size
+        let shots = XCUIScreen.screens.map { $0.screenshot() }
+        func fits(_ s: XCUIScreenshot) -> Bool {
+            let i = s.image.size
+            return (abs(i.width - size.width) < 2 && abs(i.height - size.height) < 2)
+                || (abs(i.width - size.height) < 2 && abs(i.height - size.width) < 2)
+        }
+        return shots.first(where: fits) ?? XCUIScreen.main.screenshot()
+    }
+
+    /// The lines Vision reads in `rect` (points) of a screenshot, Chinese and English.
+    private static func text(in shot: XCUIScreenshot, _ rect: CGRect) throws -> [String] {
+        // Upright first: a screenshot of a display on its side (the open Duo's) keeps its pixels as they were and says
+        // how to turn them.
+        let raw = shot.image
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = raw.scale
+        let image = UIGraphicsImageRenderer(size: raw.size, format: format).image { _ in raw.draw(at: .zero) }
+        let cg = try XCTUnwrap(image.cgImage)
+        let scale = CGFloat(cg.width) / image.size.width
+        let r = CGRect(x: rect.minX * scale, y: rect.minY * scale, width: rect.width * scale, height: rect.height * scale).integral
+        let crop = try XCTUnwrap(cg.cropping(to: r.intersection(CGRect(x: 0, y: 0, width: cg.width, height: cg.height))))
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.recognitionLanguages = ["zh-Hans", "en-US"]
+        request.usesLanguageCorrection = false
+        try VNImageRequestHandler(cgImage: crop).perform([request])
+        return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
     }
 
     /// Settings › Appearance & Display has the switch (on: the UI tests pass it, a fresh install's default is
@@ -157,7 +224,7 @@ final class ScreenshotBannerUITests: XCTestCase {
         if measure { XCTAssertTrue(el.isHittable, "\(page): \(id) is on screen") }
         XCTAssertFalse(app.staticTexts[Self.repository].exists, "\(page): the banner is out of VoiceOver's reach")
         RunLoop.current.run(until: Date().addingTimeInterval(2))
-        let shot = XCUIScreen.main.screenshot()
+        let shot = Self.screenshot(of: app)
         save(shot, name ?? "screenshot-banner-\(page)-\(banner ? "on" : "off")-\(scheme)")
         guard measure else { return Crop(luma: []) }
         let crop = try Self.crop(shot, el.frame.insetBy(dx: 4, dy: 4))
