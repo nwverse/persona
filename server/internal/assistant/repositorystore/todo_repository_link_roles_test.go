@@ -111,3 +111,54 @@ func TestSetTodoRepositoryLinkRoleTouchesOnlyTargetLink(t *testing.T) {
 		t.Fatalf("unknown URL rewrite: rev %d err %v", miss.Revision, err)
 	}
 }
+
+// Delivery is stored as the empty value. Re-applying delivery on a link that is already delivery (the gate's common
+// case on every acceptance pass) must be a no-op: no revision bump and no literal "delivery" written into the row
+// (P2 review finding on PR #12566).
+func TestSetTodoRepositoryLinkRoleDeliveryRewriteIsNoOp(t *testing.T) {
+	d := open(t)
+	ctx := context.Background()
+	identity, _ := repository.Parse("https://github.com/example/web", "")
+	catalog := repository.Catalog{Revision: 1, Repositories: []repository.CatalogEntry{{Identity: identity, ID: "web"}}}
+	if err := d.PutSetting(ctx, repository.CatalogKey, catalog); err != nil {
+		t.Fatal(err)
+	}
+	row := db.TodoRow{ID: "delivery-noop", Title: "Work", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	if err := d.CreateTodo(ctx, row); err != nil {
+		t.Fatal(err)
+	}
+	url := identity.CanonicalURL + "/pull/3"
+	imported, changed, err := d.ImportTodoRepositoryLinkDetails(ctx, row.ID,
+		[]repository.LinkInput{{URL: url, Role: repository.LinkRoleDelivery}}, "explicit")
+	if err != nil || !changed {
+		t.Fatal(imported, changed, err)
+	}
+	before := imported.Revision
+	if got := imported.Repositories[0].Links[0].Role; got != "" {
+		t.Fatalf("seed role = %q, want empty stored delivery", got)
+	}
+
+	again, err := d.SetTodoRepositoryLinkRole(ctx, row.ID, url, repository.LinkRoleDelivery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Revision != before {
+		t.Fatalf("delivery re-apply bumped revision %d -> %d", before, again.Revision)
+	}
+	if got := again.Repositories[0].Links[0]; got.Role != "" {
+		t.Fatalf("delivery re-apply wrote literal role %q", got.Role)
+	}
+
+	// Switching back from reference to delivery must clear the stored role in exactly one revision bump.
+	ref, err := d.SetTodoRepositoryLinkRole(ctx, row.ID, url, repository.LinkRoleReference)
+	if err != nil || ref.Revision != before+1 {
+		t.Fatalf("reference rewrite: rev %d err %v", ref.Revision, err)
+	}
+	back, err := d.SetTodoRepositoryLinkRole(ctx, row.ID, url, repository.LinkRoleDelivery)
+	if err != nil || back.Revision != before+2 {
+		t.Fatalf("delivery switch: rev %d err %v", back.Revision, err)
+	}
+	if got := back.Repositories[0].Links[0].Role; got != "" {
+		t.Fatalf("delivery switch left role %q, want empty", got)
+	}
+}

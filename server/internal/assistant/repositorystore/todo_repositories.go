@@ -196,12 +196,18 @@ func (d *Store) SetTodoRepositoryLinkRole(ctx context.Context, id, canonicalURL,
 		if err != nil {
 			return err
 		}
+		// Stored delivery links keep the empty value (see NormalizeLink); compare and write that representation so
+		// re-applying delivery to an already-delivery link is a no-op instead of bumping the revision every gate pass.
+		storedRole := ""
+		if normalized == repository.LinkRoleReference {
+			storedRole = normalized
+		}
 		changed := false
 		for ri := range cur.Repositories {
 			for li := range cur.Repositories[ri].Links {
 				if cur.Repositories[ri].Links[li].CanonicalURL == canonicalURL &&
-					cur.Repositories[ri].Links[li].Role != normalized {
-					cur.Repositories[ri].Links[li].Role = normalized
+					cur.Repositories[ri].Links[li].Role != storedRole {
+					cur.Repositories[ri].Links[li].Role = storedRole
 					changed = true
 				}
 			}
