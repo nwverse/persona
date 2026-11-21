@@ -589,8 +589,9 @@ MOCK_WORK_GROUPS
 MOCK_WORK_TIMELINE
 
 # Pending: the names the PRs open when the freeze landed were adding to mock_hub.py, each with its PRs
-# (python3 scripts/mock/mock_hub_switches.py pending, 2026-11-22; drafts idle more than 14 days left out). A name stays
-# when its PR merges; delete it once its PRs have all closed unmerged. No PR opened later gets a line here.
+# (python3 scripts/mock/mock_hub_switches.py pending --write, 2026-11-22; drafts idle more than 14 days left
+# out). A name stays when its PR merges; delete it once its PRs have all closed unmerged. No PR opened later gets a
+# line here.
 MOCK_DIRECTION_AGENT_COUNTS #11821
 MOCK_INBOX_RECLASS #4512
 MOCK_INBOX_RULES #4512

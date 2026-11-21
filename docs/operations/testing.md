@@ -830,8 +830,11 @@ then fails there, with the module to edit instead
 **No new switch in `mock_hub.py` (#12737).** Most of what `mock_hub.py` gains comes with a new `MOCK_*` switch (89 of the 195
 commits that changed it from 2026-11-14 to 2026-11-22 added one, with 72% of its net added lines), so its switch names are
 frozen. It may read only the names in `scripts/mock/mock_hub_switches.txt`: the ones it read when the freeze landed, then the
-ones the PRs open that day were adding, each with its PR (`python3 scripts/mock/mock_hub_switches.py pending` found them; it
-is not how a later PR gets a name on the list). `scripts/mock/test_mock_hub.py` parses the file and fails on any other
+ones the PRs open that day were adding, each with its PR. Both parts are written on the day the freeze lands, after
+`origin/main` is merged in, by `python3 scripts/mock/mock_hub_switches.py pending --write`: the names `origin/main` reads,
+including a pending one whose PR has merged by then, and the names open PRs add, keeping a listed one while its PR is open.
+Once the list is on `main` the command writes nothing, so it is not how a later PR gets a name on the list.
+`scripts/mock/test_mock_hub.py` parses the file and fails on any other
 `MOCK_*` name it reads through `os.environ.get`, `os.environ[...]`, `os.getenv` or `in os.environ`, or has as a whole string
 anywhere (a copy of the environment read later, a helper given the name), and on an environment read whose name is not a
 literal; a listed name the file no longer reads is a notice. Check-fast runs the test for every change to `mock_hub.py`.

@@ -8,16 +8,20 @@ one, goes into a domain module on the registry, scripts/mock/mock_domains.py (do
 domains"). A switch that moves into a domain module comes off the list; until then the test prints a notice.
 
     python3 scripts/mock/mock_hub_switches.py pending            # the names open PRs add to mock_hub.py (gh, git)
-    python3 scripts/mock/mock_hub_switches.py pending --write    # the same, written as the list's pending entries
+    python3 scripts/mock/mock_hub_switches.py pending --write    # the whole list rewritten, the day the freeze lands
 
 `pending` reads each open PR's head, fetched from origin by its commit (objects only: no ref or FETCH_HEAD is written),
 and reports the names its mock_hub.py reads that its merge base with --base did not, leaving out the ones --base reads.
-A draft whose head commit is more than --idle-days old is left out. It wrote the list's pending entries the day the
-freeze landed, for the PRs then open; it is not how a later PR gets a name on the list.
+A draft whose head commit is more than --idle-days old is left out.
+
+`--write` rewrites both parts of the list on the day the freeze lands, after origin/main is merged in: the names --base
+reads, then the pending ones. A listed pending name --base now reads joins the first part (its PR merged), one whose PRs
+have all closed comes off, one whose PR is still open stays, and the names found now are added. Once the list is on
+--base it writes nothing: it is not how a later PR gets a name on the list.
 """
 import argparse
 import ast
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import json
 from pathlib import Path
 import re
@@ -29,6 +33,7 @@ ROOT = HERE.parents[1]
 HUB = HERE / "mock_hub.py"
 LIST = HERE / "mock_hub_switches.txt"
 HUB_PATH = "scripts/mock/mock_hub.py"  # in the repository, for git show
+LIST_PATH = "scripts/mock/mock_hub_switches.txt"
 
 NAME = re.compile(r"MOCK_[A-Z0-9_]+")
 ENTRY = re.compile(r"(?P<name>\S+)(?:[ \t]+(?P<prs>#\d+(?:[ \t]+#\d+)*))?")
@@ -218,8 +223,8 @@ def open_prs():
         files = pr["files"]
         # A PR with more files than one page lists may touch mock_hub.py: read its head to see.
         touches = files["totalCount"] > len(files["nodes"]) or any(f["path"] == HUB_PATH for f in files["nodes"])
-        date = datetime.fromisoformat(pr["commits"]["nodes"][0]["commit"]["committedDate"].replace("Z", "+00:00"))
-        prs.append((pr["number"], pr["isDraft"], pr["headRefOid"], date, touches))
+        committed = datetime.fromisoformat(pr["commits"]["nodes"][0]["commit"]["committedDate"].replace("Z", "+00:00"))
+        prs.append((pr["number"], pr["isDraft"], pr["headRefOid"], committed, touches))
     return prs
 
 
@@ -235,22 +240,21 @@ def names_at(revision):
         return None
 
 
-def pending(base, idle_days, log=sys.stderr):
-    """{name: [PR numbers]}: the names each counted open PR's head reads that its merge base with base did not, without
-    the ones base reads."""
+def pending(base, today, prs, idle_days, log=sys.stderr):
+    """{name: [PR numbers]}: the names each counted PR of `prs` (open_prs()) reads at its head that its merge base with
+    base did not, without the ones base reads (`today`)."""
     now = datetime.now(timezone.utc)
     counted = []
-    for number, draft, head, date, touches in open_prs():
+    for number, draft, head, committed, touches in prs:
         if not touches:
             continue
-        if draft and now - date > timedelta(days=idle_days):
-            print("#%d: left out, a draft whose head commit is from %s" % (number, date.date()), file=log)
+        if draft and now - committed > timedelta(days=idle_days):
+            print("#%d: left out, a draft whose head commit is from %s" % (number, committed.date()), file=log)
         else:
             counted.append((number, head))
     for start in range(0, len(counted), 20):
         run(["git", "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "origin"]
             + [head for _, head in counted[start:start + 20]], 600, tries=3)
-    today = names_at(base) or set()
     found = {}
     for number, head in counted:
         merge_base = run(["git", "merge-base", head, base], 60).strip()
@@ -261,17 +265,53 @@ def pending(base, idle_days, log=sys.stderr):
     return {name: sorted(numbers) for name, numbers in sorted(found.items())}
 
 
-def write_pending(text, found):
-    """The list's text with its pending entries replaced by `found`'s, after the other names."""
-    def is_pending(line):
-        match = ENTRY.fullmatch(line.strip())
-        return bool(line.strip()) and not line.lstrip().startswith("#") and match is not None and bool(match["prs"])
+PENDING_HEADER = """\
+# Pending: the names the PRs open when the freeze landed were adding to mock_hub.py, each with its PRs
+# (python3 scripts/mock/mock_hub_switches.py pending --write, {day}; drafts idle more than {idle} days left
+# out). A name stays when its PR merges; delete it once its PRs have all closed unmerged. No PR opened later gets a
+# line here."""
 
-    kept = [line for line in text.splitlines() if not is_pending(line)]
-    while kept and not kept[-1].strip():
-        kept.pop()
-    return "\n".join(kept + ["%s %s" % (name, " ".join("#%d" % n for n in numbers))
-                             for name, numbers in found.items()]) + "\n"
+
+def rewrite(text, today, found, still_open, day, idle_days):
+    """The list's text rewritten as the freeze lands: its leading comment, the names mock_hub.py reads at the base
+    (`today`), then the pending entries. Those are the listed pending names the base does not read whose PRs are not
+    all closed, with the PRs still open (`still_open`, a set of numbers), and `found`'s ({name: [PR numbers]}). A listed
+    pending name the base reads is one of its names now, since its PR merged, so no name the base reads is dropped."""
+    lead = []
+    for line in text.splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            break
+        lead.append(line)
+    while lead and not lead[-1].strip():
+        lead.pop()
+    waiting = {}
+    for entry in read_list(text)[0]:
+        open_ones = {int(pr[1:]) for pr in entry.prs} & still_open
+        if entry.prs and entry.name not in today and open_ones:
+            waiting[entry.name] = open_ones
+    for name, numbers in found.items():
+        if name not in today:
+            waiting.setdefault(name, set()).update(numbers)
+    lines = lead + sorted(today)
+    if waiting:
+        lines += [""] + PENDING_HEADER.format(day=day, idle=idle_days).splitlines()
+        lines += ["%s %s" % (name, " ".join("#%d" % n for n in sorted(waiting[name]))) for name in sorted(waiting)]
+    return "\n".join(lines) + "\n"
+
+
+def changes(old, new):
+    """What a rewrite changed, for the person landing the freeze: one line for each part of the list."""
+    def parts(text):
+        entries = read_list(text)[0]
+        return {e.name for e in entries if not e.prs}, {e.name for e in entries if e.prs}
+
+    (old_read, old_waiting), (new_read, new_waiting) = parts(old), parts(new)
+
+    def line(label, before, after):
+        moved = ["+" + name for name in sorted(after - before)] + ["-" + name for name in sorted(before - after)]
+        return "%s: %d" % (label, len(after)) + "".join(" " + name for name in moved)
+
+    return [line("names mock_hub.py reads", old_read, new_read), line("pending", old_waiting, new_waiting)]
 
 
 def main(argv=None):
@@ -280,15 +320,35 @@ def main(argv=None):
     cmd = sub.add_parser("pending", help="the names open PRs add to mock_hub.py")
     cmd.add_argument("--base", default="origin/main", help="what the names are counted against (default origin/main)")
     cmd.add_argument("--idle-days", type=int, default=14, help="a draft whose head commit is older is left out")
-    cmd.add_argument("--write", action="store_true", help="write them as mock_hub_switches.txt's pending entries")
+    cmd.add_argument("--write", action="store_true",
+                     help="rewrite mock_hub_switches.txt, both parts, the day the freeze lands")
     args = parser.parse_args(argv)
-    found = pending(args.base, args.idle_days)
+    text = LIST.read_text()
+    if args.write:
+        if subprocess.run(["git", "cat-file", "-e", "%s:%s" % (args.base, LIST_PATH)], cwd=ROOT,
+                          capture_output=True).returncode == 0:
+            print("%s has the list already: the freeze has landed, and --write is for the day it lands. Delete the "
+                  "lines test_mock_hub.py's notices name by hand." % args.base, file=sys.stderr)
+            return 1
+        problems = read_list(text)[1]
+        if problems:
+            print("fix mock_hub_switches.txt first:\n" + "\n".join(problems), file=sys.stderr)
+            return 1
+    today = names_at(args.base)
+    if today is None:
+        print("%s has no readable %s" % (args.base, HUB_PATH), file=sys.stderr)
+        return 1
+    prs = open_prs()
+    found = pending(args.base, today, prs, args.idle_days)
     for name, numbers in found.items():
         print("%s %s" % (name, " ".join("#%d" % n for n in numbers)))
+    print("pending: %d names from %d PRs" % (len(found), len({n for numbers in found.values() for n in numbers})),
+          file=sys.stderr)
     if args.write:
-        LIST.write_text(write_pending(LIST.read_text(), found))
-    prs = {number for numbers in found.values() for number in numbers}
-    print("pending: %d names from %d PRs" % (len(found), len(prs)), file=sys.stderr)
+        new = rewrite(text, today, found, {number for number, *_ in prs}, date.today().isoformat(), args.idle_days)
+        LIST.write_text(new)
+        for line in changes(text, new):
+            print("mock_hub_switches.txt, " + line, file=sys.stderr)
     return 0
 
 

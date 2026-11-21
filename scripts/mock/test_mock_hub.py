@@ -100,10 +100,39 @@ class SwitchFreezeTests(unittest.TestCase):
         failures, _ = mock_hub_switches.check(planted(""), "MOCK_B\nMOCK_A\n")
         self.assertTrue(failures[0].startswith("mock_hub_switches.txt: line 2 (MOCK_A) is out of order"), failures)
 
-    def test_pending_entries_are_rewritten_after_the_other_names(self):
-        text = "# header\nMOCK_A\nMOCK_B\n\n# pending\nMOCK_OLD #1\n"
-        self.assertEqual(mock_hub_switches.write_pending(text, {"MOCK_C": [7, 9], "MOCK_D": [8]}),
-                         "# header\nMOCK_A\nMOCK_B\n\n# pending\nMOCK_C #7 #9\nMOCK_D #8\n")
+    def rewrite(self, today, found=None, still_open=(4512,), text=LISTED):
+        return mock_hub_switches.rewrite(text, set(today), found or {}, set(still_open), "2026-11-22", 14)
+
+    def test_the_land_day_rewrite_has_both_parts_with_a_fresh_pending_header(self):
+        new = self.rewrite({"MOCK_A", "MOCK_B"}, {"MOCK_D": [9, 7], "MOCK_C": [8]})
+        header = mock_hub_switches.PENDING_HEADER.format(day="2026-11-22", idle=14)
+        self.assertEqual(new, "# a header\nMOCK_A\nMOCK_B\n\n%s\nMOCK_C #8\nMOCK_D #7 #9\nMOCK_PENDING #4512\n"
+                         % header)
+        self.assertEqual(mock_hub_switches.read_list(new)[1], [])
+        self.assertEqual(mock_hub_switches.rewrite(new, {"MOCK_A", "MOCK_B"}, {"MOCK_C": [8], "MOCK_D": [7, 9]},
+                                                   {4512, 7, 8, 9}, "2026-11-22", 14), new)
+
+    def test_a_pending_name_whose_pr_merged_before_the_land_day_joins_the_names_main_reads(self):
+        # Its PR merged, so it is neither open nor found any more, and main reads it: it has to stay on the list.
+        merged = planted('P = os.environ.get("MOCK_PENDING")\n')
+        new = self.rewrite(mock_hub_switches.reads(merged).names, still_open=())
+        self.assertEqual(new, "# a header\nMOCK_A\nMOCK_B\nMOCK_PENDING\n")
+        self.assertEqual(mock_hub_switches.check(merged, new), ([], []))
+
+    def test_the_land_day_rewrite_follows_what_main_gained_and_lost(self):
+        gained = planted('N = os.environ.get("MOCK_NEW")\n').replace('"MOCK_B" in os.environ', "True")
+        new = self.rewrite(mock_hub_switches.reads(gained).names)
+        self.assertEqual([(e.name, e.prs) for e in mock_hub_switches.read_list(new)[0]],
+                         [("MOCK_A", []), ("MOCK_NEW", []), ("MOCK_PENDING", ["#4512"])])
+        self.assertEqual(mock_hub_switches.check(gained, new)[0], [])
+
+    def test_a_pending_name_stays_while_one_of_its_prs_is_open(self):
+        text = LISTED.replace("MOCK_PENDING #4512", "MOCK_GONE #11\nMOCK_PENDING #4512 #4600")
+        new = self.rewrite({"MOCK_A", "MOCK_B"}, still_open=(4600,), text=text)
+        self.assertEqual(new.splitlines()[-1], "MOCK_PENDING #4600")
+        self.assertNotIn("MOCK_GONE", new)  # its PRs all closed unmerged
+        self.assertEqual(mock_hub_switches.changes(text, new),
+                         ["names mock_hub.py reads: 2", "pending: 1 -MOCK_GONE"])
 
 
 if __name__ == "__main__":
