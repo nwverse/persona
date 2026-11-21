@@ -62,6 +62,7 @@ type Options struct {
 
 // Service is the assistant. It implements Handler.
 type Service struct {
+	logical logicalDeviceState
 	a2aWake chan struct{}
 	history conversationHistoryBook
 	// agentDirs keeps each computer's hidden Agent folders (hidden_agent_dirs.go); nil: none.
@@ -349,6 +350,9 @@ func New(o Options) *Service {
 	if s.store == nil {
 		s.store = func() Store { return nil }
 	}
+	if _, ok := s.store().(logicalConversationStore); ok && s.devs != nil {
+		s.devs = &logicalDevices{Devices: s.devs, s: s}
+	}
 	if s.logf == nil {
 		s.logf = func(string, ...any) {}
 	}
@@ -357,6 +361,7 @@ func New(o Options) *Service {
 	s.archiveRoutes()
 	s.conversationTagRoutes()
 	s.conversationDeleteRoutes()
+	s.logicalSwitchRoutes()
 	s.modelPickRoutes()
 	s.agentArchiveRoutes()
 	s.agentNamingRoutes() // agent_naming_request.go
@@ -502,6 +507,12 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		if err != nil {
 			return err
 		}
+		if result, handled, err := s.logicalCall(ctx, device, method, raw); handled {
+			if err != nil || out == nil {
+				return err
+			}
+			return json.Unmarshal(result, out)
+		}
 		if result, handled, err := s.historyCall(ctx, device, method, raw); handled {
 			if err != nil || out == nil {
 				return err
@@ -614,7 +625,11 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	if p, ok := params.(map[string]any); ok && startScopeMethods[method] {
 		// A Persona-managed provider out of this computer's scope does not run there (models_launchers_scope.go).
 		if name, _ := p["launcher"].(string); name != "" {
-			if err := s.launcherScopeErr(ctx, device, name); err != nil {
+			scopeMachine := device
+			if id, _ := p["session_id"].(string); id != "" {
+				scopeMachine = s.logicalExecutionMachine(ctx, device, id)
+			}
+			if err := s.launcherScopeErr(ctx, scopeMachine, name); err != nil {
 				if method == DeviceAssistantSend {
 					s.recordManagerSend(device, p, nil, err) // a failed start or resume all the same (north_star.go)
 				}
@@ -647,7 +662,10 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		return beforeNodeWrite(method, err)
 	}
 	p := DeviceCall{Device: device, Method: nodeMethod(method, params), Params: raw}
-	res, ok, err := s.localFleetDeviceCall(ctx, p) // what the hub answered before the nodes' events were the manager's
+	res, ok, err := s.logicalCall(ctx, device, p.Method, p.Params)
+	if !ok {
+		res, ok, err = s.localFleetDeviceCall(ctx, p)
+	} // what the hub answered before the nodes' events were the manager's
 	if !ok {
 		res, err = s.hub.DeviceCall(ctx, p)
 	}

@@ -327,6 +327,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if id != "" {
 		defer n.typing.lock(id)()
 	}
+	if state, ok := n.state.get(id); ok && state.SegmentRetired {
+		return "", refusal("conversation_retired", i18n.T(i18n.From(ctx), "rpc-errors.conversation_retired"), nil)
+	}
 	if externalStartupOf(ctx) != nil && ctx.Err() != nil {
 		return "", externalAdapterError(ctx, ctx.Err())
 	}
