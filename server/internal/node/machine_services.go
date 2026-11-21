@@ -10,13 +10,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -479,7 +479,7 @@ func parseLaunchdList(output string, userLabels map[string]bool) []proto.Machine
 	return items
 }
 
-var plistLogPathRe = regexp.MustCompile(`(?s)<key>(?:StandardErrorPath|StandardOutPath)</key>\s*<string>([^<]+)</string>`)
+var plistLogPathRe = lazyre.New(`(?s)<key>(?:StandardErrorPath|StandardOutPath)</key>\s*<string>([^<]+)</string>`)
 
 func (r *machineServiceRunner) launchdLogs(ctx context.Context, label string, lines int) (proto.MachineServiceLogsResult, error) {
 	res := proto.MachineServiceLogsResult{
