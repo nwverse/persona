@@ -33,7 +33,11 @@ export const SIGNIN_TIMEOUT = 'agy_signin_timeout'
 export async function discoverModels(bin, { env = process.env, timeout = 25_000, signal } = {}) {
   let stdout
   try {
-    ({ stdout } = await run(bin, ['models'], { env, timeout, signal, maxBuffer: 1024 * 1024 }))
+    // Background discovery must not launch the CLI's updater or flash a Windows console.
+    ({ stdout } = await run(bin, ['models'], {
+      env: { ...env, AGY_CLI_DISABLE_AUTO_UPDATE: 'true' },
+      windowsHide: true, timeout, signal, maxBuffer: 1024 * 1024,
+    }))
   } catch (err) {
     const detail = err?.cause?.stderr || err?.stderr
     if (err?.killed && !signal?.aborted) {

@@ -1,8 +1,8 @@
 // Machines: every computer's CPU / memory / network now and over the last hour (docs/server/machines.md), as Insight Cards. "Add computer"
 // (feature machines_add) adds one from here, and a computer waiting to be confirmed (trust pending) says so on its card.
 import { memo, Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { lazyPage } from "../lib/lazy-page";
 import { storedValue, storeValue } from "../lib/compatibility";
+import { lazyPage } from "../lib/lazy-page";
 import { concernOf, launcherFailing, machineAlerts, orderMachines, type AlertKind, type LauncherHealthRecord } from "../lib/machine-alerts";
 import { t as tr } from "../i18n";
 import { canAddComputer, isPending, machineErrorText, neverConnected } from "../lib/add-computer";
@@ -37,6 +37,8 @@ import { addTokens, formatTokens, hitRate, percentText, totalTokens, type UsageT
 
 // Lazy-loaded on demand when the user switches to the Ports & Processes view (#12352).
 const PortsProcessesPanel = lazyPage(() => import("./machines/PortsProcessesPanel").then((m) => m.PortsProcessesPanel));
+// Lazy-loaded on demand when the user switches to the Services & Containers view (#12353).
+const ServicesPanel = lazyPage(() => import("./machines/ServicesPanel").then((m) => m.ServicesPanel));
 // Lazy-loaded read-only file browser chunk (keeps Machines initial bundle and first-screen budget untouched).
 const FileBrowserPanel = lazyPage(() => import("./machines/FileBrowserPanel").then((m) => m.FileBrowserPanel));
 // Lazy-loaded on demand when the user switches to the Network Diagnostics view (#12351).
@@ -62,10 +64,10 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const known: AgentsKnown = full.loaded ? "yes" : full.error ? "failed" : "loading";
   const [view, setView] = useState<MachinesView>(() => {
     const saved = storedValue(VIEW_KEY);
-    return saved === "capabilities" || saved === "files" ? saved : "cards";
+    return saved === "capabilities" || saved === "files" || saved === "services" ? saved : "cards";
   });
   const chooseView = (v: MachinesView) => {
-    if (v === "cards" || v === "capabilities" || v === "files") storeValue(VIEW_KEY, v);
+    if (v === "cards" || v === "capabilities" || v === "services" || v === "files") storeValue(VIEW_KEY, v);
     setView(v);
   };
   // The alert sheet (#8037): one for the page, outside every card, on one computer's alert.
@@ -152,7 +154,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
         <IconButton icon="sidebar" label={t("machines.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
         <h1 className="text-[14px] font-semibold text-ink">{t("machines.title")}</h1>
         <div className="flex-1" />
-        {machines.length > 0 && <Segmented compact value={view} onChange={chooseView} label={t("machines.view_label")} options={[{ v: "cards", label: t("machines.view_cards") }, { v: "capabilities", label: t("machines.view_capabilities") }, { v: "procs", label: t("machines.view_procs") }, { v: "files", label: t("machines.view_files") }, { v: "network", label: t("machines-network.tab_label") }]} />}
+        {machines.length > 0 && <Segmented compact value={view} onChange={chooseView} label={t("machines.view_label")} options={[{ v: "cards", label: t("machines.view_cards") }, { v: "capabilities", label: t("machines.view_capabilities") }, { v: "procs", label: t("machines.view_procs") }, { v: "services", label: t("machines.view_services") }, { v: "files", label: t("machines.view_files") }, { v: "network", label: t("machines-network.tab_label") }]} />}
         <span className="text-[11.5px] text-ink-3 max-sm:hidden">{t("machines.refresh_interval", { seconds: 10 })}</span>
         {machines.length > 0 && canAdd && add}
       </header>
@@ -184,6 +186,13 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
             <div className="col-span-full">
               <Suspense fallback={<Loading />}>
                 <PortsProcessesPanel machines={machines} />
+              </Suspense>
+            </div>
+          )}
+          {view === "services" && machines.length > 0 && (
+            <div className="col-span-full">
+              <Suspense fallback={<Loading />}>
+                <ServicesPanel machines={machines} />
               </Suspense>
             </div>
           )}
@@ -386,7 +395,7 @@ function agentCounts(list: readonly Session[]): Map<string, readonly [number, nu
   return by;
 }
 
-type MachinesView = "cards" | "capabilities" | "procs" | "files" | "network";
+type MachinesView = "cards" | "capabilities" | "procs" | "services" | "files" | "network";
 const VIEW_KEY = "persona.machines.view";
 
 /** The launcher health records (GET /api/v1/launchers/health), kept current by the hub's `launcher_health` events and

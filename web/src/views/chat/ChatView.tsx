@@ -705,6 +705,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const skillManager = useStore((s) => session?.manager ?? s.machines.find((m) => m.id === mid)?.manager) ?? shownManager;
   const skillEnvironment = JSON.stringify([session?.launcher, session?.model_pick, session?.pending_switch, session?.source_kind, assistantLauncher]);
   const mention = useMemo(() => ({ cwd: session?.cwd, self: draftKey, files: () => chatFiles(items.current), workspaces: Boolean(assistant),
+    repositories: assistant ? skillManager : undefined,
     skills: { manager: skillManager, session: sid, launcher: assistant ? skillLauncher : undefined, environment: skillEnvironment, agent: !assistant },
   }), [session?.cwd, skillManager, draftKey, assistant, sid, skillLauncher, skillEnvironment]);
 
@@ -1685,8 +1686,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // elapsed timer (and empty non-expandable live row) so only one Working… timer ticks on screen (#12380).
   const dockTurnClock = Boolean(session && dockBarShown && runningWorking && !backgroundOnly && !wait && !subtasks && !command);
   const ctx = useMemo<ChatContextValue>(
-    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle, harness, opening: openingId && openingOrigin ? { id: openingId, origin: openingOrigin, opened_by: openingBy, manager: openingManager } : undefined, closeoutSegment: closeoutSegment?.id, children: places, embedded, dockTurnClock }),
-    [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle, harness, openingId, openingOrigin, openingBy, openingManager, closeoutSegment, places, embedded, dockTurnClock],
+    () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle, harness, opening: openingId && openingOrigin ? { id: openingId, origin: openingOrigin, opened_by: openingBy, manager: openingManager } : undefined, closeoutSegment: closeoutSegment?.id, children: places, embedded }),
+    [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle, harness, openingId, openingOrigin, openingBy, openingManager, closeoutSegment, places, embedded],
   );
   // ── "Search in chat" (ChatSearch.tsx, Android ChatSearchState): where the reader was when it opened, going to a hit (the
   // rows that hold it open, search-reveal.ts), lit for HIT_MS, and "Back to where you were" ──
@@ -2222,6 +2223,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                         assistant={assistant}
                         offscreen={offscreen(d.line)}
                         busy={d.line.id === busySegment || undefined}
+                        dockTurnClock={("live" in d.line && d.line.live && dockTurnClock) || undefined}
                       />
                     ),
                   ])
@@ -2245,6 +2247,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                   assistant={assistant}
                   offscreen={offscreen(row.line)}
                   busy={row.line.id === busySegment || undefined}
+                  dockTurnClock={("live" in row.line && row.line.live && dockTurnClock) || undefined}
                 />
               )])}
               </CardConversation.Provider>

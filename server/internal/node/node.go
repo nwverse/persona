@@ -41,7 +41,8 @@ import (
 )
 
 type Node struct {
-	runtimeUsage runtimeUsageReports
+	segmentStarts segmentStarts
+	runtimeUsage  runtimeUsageReports
 
 	// Only the manager's initial node.info can negotiate source delivery on this connection.
 	managerInfoOnce sync.Once
@@ -101,6 +102,8 @@ type Node struct {
 	doctorAt func() DoctorOptions
 	// machineProcs replaces OS process/port hooks in tests (machine_procs.go).
 	machineProcs *machineProcsOps
+	// serviceRunner replaces OS command execution for machine.services* RPCs in tests.
+	serviceRunner *machineServiceRunner
 	// networkDiagAt replaces machine.network dependencies in tests (machine_network.go).
 	networkDiagAt func() machineNetworkOptions
 	// fileReadDeps replaces file.read's filesystem operations in tests.
@@ -355,9 +358,12 @@ type Node struct {
 	secrets *secretStage
 	// gp is the proxy that adds the gates' credentials, made at its first use (gateproxy.go, #1317).
 	gp *gateProxy
-	// lark-cli (larkcligate.go): each command's risk level as lark-cli reported it, and where the binary is.
+	// lark-cli (larkcligate.go): each command's risk level as lark-cli reported it, where the binary is, and the login
+	// shell's PATH directories (larkLoginPATH, trustedPATH).
 	larkRisks    map[string]string
 	larkCLIPaths map[string]string
+	larkPATH     []string
+	larkPATHAt   time.Time
 
 	// assistantPrepared keeps each assistant directory's last prepare state (clicall.go).
 	assistantPrepared map[string]assistantPrepareState
@@ -772,6 +778,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 }
 
 func (n *Node) handleMethod(ctx context.Context, method string, params json.RawMessage) (result any, resultErr error) {
+	if strings.HasPrefix(method, "assistant.segment.") {
+		switch method {
+		case "assistant.segment.check", "assistant.segment.prepare", "assistant.segment.receipt", "assistant.segment.input", "assistant.segment.retire", "assistant.segment.restore":
+			return n.assistantSegment(ctx, method, params)
+		}
+	}
 	if verb, ok := strings.CutPrefix(method, methodGitBackendPrefix); ok {
 		return n.backendGit(ctx, verb, params)
 	}
@@ -870,6 +882,14 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case proto.MethodMachineProcessKill:
 		return n.machineProcessKill(ctx, params)
 	}
+	switch method { // the machine page's services and containers (machine_services.go)
+	case proto.MethodMachineServices:
+		return n.machineServices(ctx, params)
+	case proto.MethodMachineServiceLogs:
+		return n.machineServiceLogs(ctx, params)
+	case proto.MethodMachineServiceAction:
+		return n.machineServiceAction(ctx, params)
+	}
 	if method == codexTakeoverPrepare || method == codexTakeoverCommit {
 		return n.codexTakeoverCall(ctx, method, params)
 	}
@@ -894,6 +914,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		TaskID                  string        `json:"task_id"`
 		WorkspaceID             string        `json:"workspace_id"`
 		WorkspaceLabel          string        `json:"workspace_label"`
+		ReopenWorktreeWorkspace bool          `json:"reopen_worktree_workspace"`
 		NameHint                string        `json:"name_hint"` // session.start: what a start whose first message goes after it is named after (claudedesktop_new.go)
 		Text                    string        `json:"text"`
 		SkillOwner              string        `json:"skill_owner"` // manager-owned identity for explicit skill selections
@@ -1527,6 +1548,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			}
 		}
 		ctx, taskSpace := withTaskSpace(ctx, p.TaskID, p.WorkspaceID, p.WorkspaceLabel)
+		if p.ReopenWorktreeWorkspace && taskSpace == nil {
+			ctx = context.WithValue(ctx, reopenWorktreeWorkspaceKey{}, true)
+		}
 		// Optional tool waits correlate the first input through the existing echo ledger.
 		// Capture the resume boundary before launching, so an identical historical input cannot match.
 		var echoOpts sendOpts

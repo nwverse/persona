@@ -144,6 +144,8 @@ assistant.ask        GET /api/v1/assistant
 assistant.ask        GET /api/v1/assistant/capabilities
 -                    GET /api/v1/assistant/conversations/{id}/always
 assistant.ask        GET /api/v1/assistant/conversations/{id}/feed
+-                    GET /api/v1/assistant/conversations/{id}/segments
+-                    GET /api/v1/assistant/conversations/{id}/switch/{operation}
 -                    GET /api/v1/assistant/directions/offers
 -                    GET /api/v1/assistant/directions/tree
 -                    GET /api/v1/assistant/directions/{id}
@@ -166,6 +168,7 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/assistant/runs
 -                    GET /api/v1/assistant/saved-prompts
 -                    GET /api/v1/assistant/search
+-                    GET /api/v1/assistant/segments
 -                    GET /api/v1/assistant/skills
 -                    GET /api/v1/assistant/standing-authorizations
 -                    GET /api/v1/assistant/starred
@@ -308,6 +311,8 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/preview/servers
 -                    GET /api/v1/machines/{mid}/processes
 -                    GET /api/v1/machines/{mid}/screen/video/connect
+-                    GET /api/v1/machines/{mid}/services
+-                    GET /api/v1/machines/{mid}/services/logs
 machines.read        GET /api/v1/machines/{mid}/stat
 -                    GET /api/v1/managers
 -                    GET /api/v1/messaging
@@ -435,6 +440,7 @@ assistant.ask        POST /api/v1/assistant/conversations
 -                    POST /api/v1/assistant/conversations/{id}/compact
 -                    POST /api/v1/assistant/conversations/{id}/route
 assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
+-                    POST /api/v1/assistant/conversations/{id}/switch
 -                    POST /api/v1/assistant/conversations/{id}/today
 -                    POST /api/v1/assistant/conversations/{id}/unarchive
 -                    POST /api/v1/assistant/conversations/{id}/undelivered/{msg}/retry
@@ -596,6 +602,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/preview/start
 -                    POST /api/v1/machines/{mid}/processes/{pid}/kill
 -                    POST /api/v1/machines/{mid}/reconnect
+-                    POST /api/v1/machines/{mid}/services/action
 -                    POST /api/v1/machines/{mid}/spaces/{wid}/rename
 -                    POST /api/v1/machines/{mid}/tabs/close
 -                    POST /api/v1/machines/{mid}/tabs/rename
@@ -717,6 +724,7 @@ assistant.dispatch_policy PUT /api/v1/assistant/dispatch-policy
 -                    PUT /api/v1/assistant/routines
 -                    PUT /api/v1/assistant/saved-prompts/order
 -                    PUT /api/v1/assistant/saved-prompts/{id}
+-                    PUT /api/v1/assistant/segments
 -                    PUT /api/v1/assistant/sessions/{mid}/{sid}/direction
 assistant.start_defaults PUT /api/v1/assistant/start-defaults
 -                    PUT /api/v1/assistant/tasks/{id}
@@ -767,6 +775,7 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/model-profiles/{id}
 -                    PUT /api/v1/mutes
 -                    PUT /api/v1/navigation
+-                    PUT /api/v1/phone/primary
 -                    PUT /api/v1/pins
 -                    PUT /api/v1/push/grading
 -                    PUT /api/v1/push/ln-mode

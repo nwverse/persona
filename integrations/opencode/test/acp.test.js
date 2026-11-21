@@ -67,11 +67,21 @@ test('OpencodeAcpClient drops stale permission replies across process exit/resta
   await client.ensureStarted()
   const child2 = children[1]
   const child2WritesBefore = child2.written.length
+  // A late exit/error/stdout from the old generation cannot clear or poison
+  // the replacement, including an in-flight request on that replacement.
+  const pending = client._callRaw('session/new', { cwd: '/w' }, 500)
+  const request = JSON.parse(child2.written.at(-1))
+  child1.emit('exit', 1, null)
+  child1.emit('error', new Error('late old error'))
+  child1.stdout.write(JSON.stringify({ id: request.id, result: { sessionId: 'forged' } }) + '\n')
+  assert.equal(client.proc, child2)
+  child2.stdout.write(JSON.stringify({ id: request.id, result: { sessionId: 'new-owner' } }) + '\n')
+  assert.equal((await pending).sessionId, 'new-owner')
 
   // Resolving the old permission request must NOT throw unhandled rejection and must NOT write to child2!
   resolvePerm({ outcome: { outcome: 'selected', optionId: 'once' } })
   await new Promise((r) => setTimeout(r, 20))
-  assert.equal(child2.written.length, child2WritesBefore, 'stale reply must not be written to replacement child')
+  assert.equal(child2.written.length, child2WritesBefore + 1, 'only the replacement request is written, never the stale permission reply')
 
   await client.stop()
 })
