@@ -455,3 +455,76 @@ func TestAgySkillCatalogRejectsUnsupportedRuntimesAndGuests(t *testing.T) {
 		}
 	}
 }
+
+func TestAgyConnectedPreservesBuiltinUUIDSessionWithOmittedLauncher(t *testing.T) {
+	fakeClaudeManagedSettings(t)
+	n, _ := runtimeNode(t)
+	_ = dialRuntime(t, n, agyAssistantHello())
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", t.TempDir())
+
+	cwd, profile := t.TempDir(), t.TempDir()
+	claudeSkill := filepath.Join(profile, "skills", "claude-review", "SKILL.md")
+	writeFile(t, claudeSkill, "---\nname: claude-review\ndescription: Built-in Claude skill\n---\nInstructions\n")
+	// Put a distinct agy skill in cwd/.agents/skills to prove the built-in Claude path is used.
+	writeFile(t, filepath.Join(cwd, ".agents", "skills", "agy-only", "SKILL.md"),
+		"---\nname: agy-only\ndescription: Agy skill\n---\nInstructions\n")
+
+	const claudeID = "550e8400-e29b-41d4-a716-446655440010"
+	n.state.put(claudeID, sessionState{Cwd: cwd, Launcher: "claude", ConfigDir: profile})
+
+	// Omitting launcher on an existing UUID Claude session while an agy runtime is connected
+	// must stay on the built-in Claude catalog path and resolve consistently on send.
+	catalog, err := n.skillCatalog(context.Background(), skillCatalogRequest{
+		Owner:     "helper-a",
+		Machine:   n.machineID,
+		SessionID: claudeID,
+		Cwd:       cwd,
+		ConfigDir: profile,
+	})
+	if err != nil {
+		t.Fatalf("UUID Claude session with omitted launcher failed while agy connected: %v", err)
+	}
+	if len(catalog.Skills) != 1 || catalog.Skills[0].Name != "claude-review" || catalog.Skills[0].Path != resolved(t, claudeSkill) {
+		t.Fatalf("expected built-in Claude catalog, got %+v", catalog.Skills)
+	}
+	text := `<persona-context kind="skill" ref="` + catalog.Skills[0].ID + `">claude-review</persona-context>` + "\nCheck this"
+	ctx := withSkillOwner(context.Background(), "helper-a")
+	for _, sendLauncher := range []string{"", "claude"} {
+		selected, err := n.selectedSkills(ctx, claudeID, cwd, sendLauncher, text, modelExecution{ConfigDir: profile})
+		if err != nil || len(selected) != 1 || selected[0].Path != resolved(t, claudeSkill) {
+			t.Fatalf("selectedSkills(launcher=%q) failed: %+v %v", sendLauncher, selected, err)
+		}
+	}
+
+	// A UUID Claude session whose saved state uses a managed Claude launcher must also keep the built-in path.
+	n.setManaged([]proto.ManagedLauncher{{Name: "gw-claude", Agent: "claude"}})
+	const managedClaudeID = "550e8400-e29b-41d4-a716-446655440011"
+	n.state.put(managedClaudeID, sessionState{Cwd: cwd, Launcher: "gw-claude", ConfigDir: profile})
+	managedCatalog, err := n.skillCatalog(context.Background(), skillCatalogRequest{
+		Owner:     "helper-a",
+		Machine:   n.machineID,
+		SessionID: managedClaudeID,
+		Cwd:       cwd,
+		ConfigDir: profile,
+	})
+	if err != nil || len(managedCatalog.Skills) != 1 || managedCatalog.Skills[0].Name != "claude-review" {
+		t.Fatalf("managed Claude UUID session with omitted launcher failed: %+v %v", managedCatalog, err)
+	}
+	managedText := `<persona-context kind="skill" ref="` + managedCatalog.Skills[0].ID + `">claude-review</persona-context>` + "\nCheck this"
+	for _, sendLauncher := range []string{"", "gw-claude"} {
+		if selected, err := n.selectedSkills(ctx, managedClaudeID, cwd, sendLauncher, managedText, modelExecution{ConfigDir: profile}); err != nil || len(selected) != 1 {
+			t.Fatalf("managed Claude selectedSkills(launcher=%q) mismatch: %+v %v", sendLauncher, selected, err)
+		}
+	}
+
+	// Explicitly requesting launcher="agy" on that UUID Claude session remains rejected.
+	if _, err := n.skillCatalog(context.Background(), skillCatalogRequest{
+		Owner:     "helper-a",
+		Machine:   n.machineID,
+		SessionID: claudeID,
+		Cwd:       cwd,
+		Launcher:  agyAgent,
+	}); err == nil {
+		t.Fatal("explicit agy launcher on UUID Claude session must be rejected")
+	}
+}

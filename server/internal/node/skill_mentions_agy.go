@@ -14,13 +14,16 @@ const agySkillWalkDepth = 64
 // connected, assistant-capable Antigravity (agy) runtime. Non-agy runtimes, non-assistant runtime
 // sessions, disconnected runtimes, and launcher/session mismatches are rejected rather than falling
 // through to the Claude/Codex branches.
+//
+// Connected-runtime rejection applies only to runtime-backed sessions or an explicitly supplied
+// launcher; a non-runtime (UUID) session with an omitted launcher stays on the built-in Claude/Codex
+// path even when an agy runtime is connected.
 func (n *Node) agySkillRuntime(in skillCatalogRequest) (launcher string, isRuntime bool, err error) {
-	runs := n.runtimeAssistant(in.SessionID)
-	var st sessionState
-	if in.SessionID != "" && n.state != nil {
-		st, _ = n.state.get(in.SessionID)
-	}
-	if runs {
+	if n.runtimeAssistant(in.SessionID) {
+		var st sessionState
+		if n.state != nil {
+			st, _ = n.state.get(in.SessionID)
+		}
 		if in.Launcher != "" && n.assistantRuntime(in.Launcher) == nil {
 			return "", true, errors.New("skill selection is unavailable for this runtime")
 		}
@@ -29,6 +32,9 @@ func (n *Node) agySkillRuntime(in skillCatalogRequest) (launcher string, isRunti
 		owner, _, _ := n.runtimes.belongs(in.SessionID)
 		if h == nil {
 			h = owner
+			if h != nil {
+				rl = h.id()
+			}
 		}
 		if owner != nil && h != owner {
 			return "", true, errors.New("skill selection is unavailable for this runtime")
@@ -43,6 +49,9 @@ func (n *Node) agySkillRuntime(in skillCatalogRequest) (launcher string, isRunti
 	}
 	if runtimeSessionID(in.SessionID) {
 		return "", true, errors.New("skill selection is unavailable for this runtime")
+	}
+	if in.Launcher == "" {
+		return "", false, nil
 	}
 	h := n.assistantRuntime(in.Launcher)
 	if h == nil {

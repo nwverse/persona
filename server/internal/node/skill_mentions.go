@@ -52,6 +52,14 @@ func (n *Node) skillCatalog(ctx context.Context, in skillCatalogRequest) (assist
 		in.Launcher = agyLauncher
 		entries, err = n.agySkillCatalog(in)
 	} else {
+		if in.Launcher == "" && in.SessionID != "" && n.state != nil {
+			if st, ok := n.state.get(in.SessionID); ok && st.Launcher != "" &&
+				n.assistantRuntime(st.Launcher) == nil && n.runtimeOf(st.Launcher) == nil {
+				if m, ok := n.managedLauncher(st.Launcher); !ok || m.AgentType() != agyAgent {
+					in.Launcher = st.Launcher
+				}
+			}
+		}
 		if in.Launcher == "" {
 			in.Launcher = "claude"
 		}
