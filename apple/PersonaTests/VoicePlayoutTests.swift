@@ -164,8 +164,8 @@ struct VoicePlayoutTests {
     /// A link that carries 94 % of the voice's rate, from the first piece: with the fixed lead every piece played on its
     /// own with a gap after it (the reported "a syllable or two at a time"); with the growing lead, a couple of pauses.
     @Test func aLinkSlightlySlowerThanTheVoicePausesTwiceNotOncePerPiece() {
-        let length = Double(servicePiece) / 16000
-        let arrivals = (0..<40).map { Double($0) * length / 0.94 }
+        let step: TimeInterval = Double(servicePiece) / 16000 / 0.94
+        let arrivals: [TimeInterval] = (0..<40).map { Double($0) * step }
         let fixed = replay(arrivals, frames: servicePiece, rate: 16000, tellsDry: false)
         #expect(fixed.gaps.count == arrivals.count - 1)
         let growing = replay(arrivals, frames: servicePiece, rate: 16000)
@@ -176,9 +176,9 @@ struct VoicePlayoutTests {
     /// The first second and a half comes at once, then the link carries 60 % of the voice: smooth at first, then a gap
     /// after every piece; with the growing lead, a few longer pauses.
     @Test func aLinkThatFallsFarBehindAfterTheFirstBurstPausesAFewTimes() {
-        let length = Double(servicePiece) / 16000
+        let step: TimeInterval = Double(servicePiece) / 16000 / 0.6
         let burst: [TimeInterval] = (0..<5).map { Double($0) * 0.06 }
-        let behind: [TimeInterval] = (1...30).map { 0.3 + Double($0) * length / 0.6 }
+        let behind: [TimeInterval] = (1...30).map { (n: Int) -> TimeInterval in step * Double(n) + 0.3 }
         let arrivals = burst + behind
         let fixed = replay(arrivals, frames: servicePiece, rate: 16000, tellsDry: false)
         #expect(fixed.gaps.count >= 25)
@@ -189,8 +189,8 @@ struct VoicePlayoutTests {
 
     /// The measured service sends about four times faster than it plays: no gap, and the lead never grows.
     @Test func aLinkThatKeepsUpNeverGrowsTheLead() {
-        let length = Double(servicePiece) / 16000
-        let arrivals = (0..<40).map { Double($0) * length / 4 }
+        let step: TimeInterval = Double(servicePiece) / 16000 / 4
+        let arrivals: [TimeInterval] = (0..<40).map { Double($0) * step }
         let replayed = replay(arrivals, frames: servicePiece, rate: 16000)
         #expect(replayed.gaps.isEmpty)
         #expect(replayed.level == 0)
