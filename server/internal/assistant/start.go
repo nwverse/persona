@@ -959,12 +959,17 @@ func (s *Service) startRoutes() {
 			Guest *GuestSpec `json:"guest"`
 			// Via: how the user's app sent its first message when not typed in the app itself: "intent" (Siri,
 			// Shortcuts, an App Intent, which may run on a locked phone), "share" (the share sheet) or "card" (a card's
-			// button that wrote it). Such a message never counts as the user's own words (secret_handoff.go
+			// button that wrote it), or "handoff" (a generated context transfer). Such a message never counts as the
+			// user's own words (secret_handoff.go
 			// handoffUserTurn, the decision on #3962).
 			Via string `json:"via"`
 		}
-		if err := decodeLargeBody(w, r, &in, 32<<20); err != nil {
-			apierr.Write(w, http.StatusBadRequest, err)
+		if err := decodeLargeBody(w, r, &in, proto.MessageBodyLimit); err != nil {
+			writeBodyErr(w, err, err)
+			return
+		}
+		// A conversation not started has no agent yet: the limits every session gets unless its agent has its own.
+		if apierr.ImagesOverLimit(w, proto.HubImageLimits.For(""), len(in.Images)) {
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 110*time.Second)
@@ -1011,7 +1016,7 @@ func (s *Service) startRoutes() {
 		}
 		origin, ref := requestOrigin(r, in.Purpose)
 		own := false // only the user's words in it, as filled in (workspace_mention.go fillWorkspaces)
-		if in.Guest == nil {
+		if in.Guest == nil && in.Via != "handoff" {
 			in.Prompt, own = s.fillWorkspaces(ctx, in.Prompt) // as SendParams does for the next messages
 		}
 		// The main conversation is the assistant's, on its machine.

@@ -54,7 +54,7 @@ object ChatWiringModule {
     }
 
     @Provides @Singleton
-    fun assistantWiring(owner: ChatDataOwner, services: AppServices, stacks: GroupStacks, conversations: AssistantConversations): AssistantAppWiring = object : AssistantAppWiring {
+    fun assistantWiring(owner: ChatDataOwner, services: AppServices, stacks: GroupStacks, conversations: AssistantConversations, managers: HubManagers): AssistantAppWiring = object : AssistantAppWiring {
         @Composable
         override fun Host(navigator: Navigator, content: @Composable () -> Unit) {
             val wiring by owner.wiring.collectAsStateWithLifecycle()
@@ -86,7 +86,7 @@ object ChatWiringModule {
                     healthChat = options.healthChat,
                     historyFooter = options.readOnlyNote?.let { note -> { persona.core.designsystem.JNotice(note, status = persona.core.designsystem.Status.Offline) } })
             }
-            CompositionLocalProvider(LocalAssistantHost provides host) { key(active.scope.path) { content() } }
+            CompositionLocalProvider(LocalAssistantHost provides host, LocalAssistantManagers provides managers) { key(active.scope.path) { content() } }
         }
     }
 }

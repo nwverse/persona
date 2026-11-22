@@ -196,7 +196,9 @@ func (s *Service) setTaskDelivery(ctx context.Context, id string, d TodoDelivery
 		return false
 	}
 	cur := b.stages[id]
-	if dd := cur.Delivery; dd != nil && dd.State == d.State && dd.Gate == d.Gate && dd.Unblock == d.Unblock {
+	// A later owner hold can ask for the same action again after a review cleared it.
+	if dd := cur.Delivery; dd != nil && dd.State == d.State && dd.Gate == d.Gate && dd.Unblock == d.Unblock &&
+		(d.Unblock != unblockUser || !d.At.After(dd.At)) {
 		b.mu.Unlock()
 		return true
 	}
@@ -290,9 +292,11 @@ func currentDelivery(t Todo) *TodoDelivery {
 		switch {
 		case v.parking() != nil && slices.Contains(parkWaitingOn, r.WaitingOn):
 			d.Gate, d.Unblock = r.Reason, unblockOther
-		case r.Verdict == reviewNeedsUser && v.State == reviewNeedsUser && !ownerDecisionReturned(v):
+		case r.Verdict == reviewNeedsUser && triageReviewState(t) == reviewNeedsUser:
 			d.Gate, d.Unblock = cmp.Or(r.Reason, r.Note), unblockUser
-		case (acceptanceStands(t) || userCheckAsked(t)) && !r.At.Before(d.At):
+		case !r.At.Before(d.At) && (acceptanceStands(t) ||
+			v.State == reviewUserCheck && userCheckAsked(t) && (t.ReopenedAt == nil || !r.At.Before(*t.ReopenedAt))):
+			// The current round's personal verification replaces the earlier delivery approval.
 			d.Gate, d.Unblock = "", ""
 		case d.Unblock == unblockUser && !r.At.Before(d.At) &&
 			(r.Verdict == reviewNeedsUser || r.Verdict == reviewParked || r.Verdict == reviewRework):

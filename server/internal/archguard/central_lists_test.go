@@ -61,6 +61,17 @@ var centralLists = []centralList{
 
 func (l centralList) file() string { return "testdata/central_lists/" + l.id + ".txt" }
 
+// centralListByID is the row of centralLists with this id. A test names the list it plants in by id, not by its place
+// in centralLists, so a row added beside it moves nothing the test reads.
+func centralListByID(t *testing.T, id string) centralList {
+	t.Helper()
+	i := slices.IndexFunc(centralLists, func(l centralList) bool { return l.id == id })
+	if i < 0 {
+		t.Fatalf("no central list %q", id)
+	}
+	return centralLists[i]
+}
+
 func TestCentralListsTakeNoNewName(t *testing.T) {
 	for _, l := range centralLists {
 		src, err := os.ReadFile(filepath.Join(serverDir, l.source))

@@ -2191,6 +2191,20 @@ another version renames those unlabelled builds to `.prev`, so the lookup falls 
 Whenever a file's meaning is "the build of whatever version the hub runs now", whatever changes the hub's version without changing that file
 must relabel it or move it.
 
+## A node update left the Windows build behind, and it passed for the new version (2026-11-22, #12958)
+
+The same mistake came back with node updates on: the update replaced only the platforms in the release's `files`, and releases up to v0.9.1
+list no Windows `personad`, so `bin/nodes/personad-windows-amd64.exe` stayed the old build without a `.version`. Every Redeploy to a Windows
+computer then failed with "node executable self-check version or platform mismatch"; `deploy.sh`, which builds only Linux and macOS, left it
+behind the same way. Switching a hub before replacing `bin/nodes` made the new hub push the old builds, labelled as its version, to every
+computer that reconnected.
+Now a node update sets aside unlabelled builds before the release's go in, `deploy.sh` builds the Windows node programs, and the manager takes
+an unlabelled local build for the hub's version only when the version string is in the file: the node's self-check compares the version the
+build was linked with, so the string's absence proves the build is another one (its presence proves nothing). Lookups are looked up again when
+a local build changes, so a build put in place after the switch is used at once.
+Fixing one path that changes the hub's version is not enough: check every writer of the directory (self-update with and without node updates,
+deploy scripts, hand switches), and give the reader a check that does not trust any of them.
+
 ## Generic plans make "empty means no filter" lose indexes (2026-11-06, #4907)
 
 - pgx caches prepared statements by default; after five executions Postgres may choose a generic plan that can't see parameter values.
