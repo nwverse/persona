@@ -309,7 +309,7 @@ class HomeChromeTest {
     private fun assertTextNotEllipsized(text: String, case: String, expectedSize: Float? = null) {
         val layouts = mutableListOf<TextLayoutResult>()
         placedText(text, useUnmergedTree = true)
-            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { val _ = it(layouts) }
         val result = layouts.single()
         val actualSize = result.layoutInput.style.fontSize.value * result.layoutInput.density.fontScale
         assertTrue("$text is ellipsized: $case; expectedSize=$expectedSize actualSize=$actualSize layoutWidth=${result.size.width}", !result.isLineEllipsized(0))
@@ -562,7 +562,7 @@ class HomeChromeTest {
         }
         val layouts = mutableListOf<TextLayoutResult>()
         placedText("Agents", useUnmergedTree = true)
-            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { val _ = it(layouts) }
         val result = layouts.single()
         assertTrue("Agents is ellipsized at 240dp / 1.45", !result.isLineEllipsized(0))
         assertEquals("240dp / 1.45 shrank below main", expectedSize,
@@ -644,7 +644,7 @@ class HomeChromeTest {
     private fun isTextEllipsized(text: String): Boolean {
         val layouts = mutableListOf<TextLayoutResult>()
         placedText(text, useUnmergedTree = true)
-            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { val _ = it(layouts) }
         return layouts.single().isLineEllipsized(0)
     }
 
