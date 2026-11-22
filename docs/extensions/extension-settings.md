@@ -11,7 +11,7 @@ Lifecycle writes use the extension's owning manager and extension ID together. T
 ## Sections, in order
 
 1. **Enabled** — the first control, before setup and configuration.
-2. **Extension configuration** — setup/sign-in, declared settings, secrets and capability-specific controls, followed by that configuration's Save action. If there are no configurable fields, show **No configuration required**.
+2. **Extension configuration** — setup/sign-in, declared settings, secrets and capability-specific controls, followed by that configuration's Save action. If there are no configurable fields, show **No configuration required** under the section's heading. Otherwise every group in it (Pages, Settings, a form's own groups, Secrets) has a heading of its own and the section's heading is not shown; the section keeps its name for assistive technology (#8853).
 3. **Information** — a read-only identity and provenance summary.
 4. **Updates** — update availability, manual checks/review, automatic upgrades and rollback history.
 5. **Danger zone** — uninstall, last on the page, with explicit confirmation.
@@ -34,10 +34,12 @@ Canonical English wording is listed below; each client localizes it through its 
 
 ### Extension configuration
 
-- Label: **Extension configuration**.
+- Label: **Extension configuration**, shown only over **No configuration required** (see above). The form's ungrouped fields are headed **Settings**.
+- The header's **Still needs** line opens the secret it names: the first one not set that is required or whose title the line contains (the hub writes a missing secret's own title into `needs_setup`). Anything else it names (a dependency, a configuration an upgrade no longer takes) stays plain text, as does the line where the page offers no secrets to set (a read-only extension) (#8853).
 - Authentication, a connection test, choosing a computer and additional module-specific controls belong here. These are not lifecycle controls.
 - Save applies only configuration; toggling Enabled or Auto-upgrade must not submit a dirty configuration form.
 - Never return a stored secret to the client. Show its saved state, provide an empty replacement input and preserve it when left unchanged. Configuration validation and authentication errors stay inside this section.
+- An extension entry list (#9504) draws one card per entry, using its `name` or first nonempty text field as the title. **Add entry** stops at the declared maximum. Removal asks first and explains that the entry and its saved secret are deleted when the configuration is saved. Each saved entry's **Secret** button opens the existing write-only dialog, titled with both entry and secret; an unsaved entry says to save first instead. Dynamic entry secrets do not appear again in the fixed Secrets group. A network-bound address explains that saving a changed address clears that entry's secret. Entry IDs and browser-only draft keys are never editable fields or secret inputs.
 - A configuration check or sign-in action is distinct from **Check for updates**.
 
 ### Information
@@ -87,6 +89,8 @@ Keep the host's existing contribution switches, isolation status, declared permi
 `web/src/views/settings/ExtensionSettingsPage.tsx` owns the five standard sections and lifecycle controls. Every extension-detail route in `web/src/views/settings/Extensions.tsx` renders it; authentication, schema fields, secrets and custom-page links are passed only into its configuration area. Host-rendered contribution, isolation and permission details follow the identity summary. The market's package-preview page is an installation/consent workflow, not another extension settings page; connector and channel settings retain their separate business switches.
 
 No new server fields are needed for this web implementation: the established `source`, `origin`, `read_only`, `attached`, `auto_upgrade`, `auto_upgrade_paused`, `upgrade` and `previous_version` responses already distinguish the supported full-rights market operations. `origin` is manager-owned installation metadata, not a manifest setting. Web does not offer owner-only local/attached management actions or infer privileges from an arbitrary source URL. Global automatic-upgrade state and manual catalog refresh explicitly target the same manager as the extension. Actual authorization remains enforced by the existing manager endpoints.
+
+Entry-list editing (#9504) is an explicit later addition to this boundary. Web sends `entry_lists=1` on the initial detail read and every detail-returning configuration, secret, lifecycle or contribution write. Without that query the hub leaves raw configuration intact but filters the entry-list form and dynamic secret rows; non-opted configuration writes preserve the saved entry arrays, including when an old draft omitted them or held a stale copy. An immediate fixed-field save from a capable page (the machine switches) adds `preserve_entries=1` alongside `entry_lists=1`, selecting the same preserving write without losing the opted-in response. A stale immediate save therefore cannot delete entries or secrets added elsewhere. Apple and Android keep their existing fixed-field editors and cannot delete entries by saving an unrelated setting. Their entry-list editing remains future work, not a hidden raw-JSON fallback.
 
 ## Apple implementation and API boundary
 

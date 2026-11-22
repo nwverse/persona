@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// The two values of a Cloudflare Access service token (docs/operations/network.md "Behind Cloudflare Access"): the
 /// pairing sheet's and Settings › hub › Cloudflare Access's. The secret is masked and never offered to the password
@@ -115,7 +116,7 @@ struct HubCloudflareAccessPage: View {
         #if os(macOS)
         .formStyle(.grouped)
         #endif
-        .confirmationDialog("Remove Service Token?", isPresented: $clearing, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Remove Service Token?", isPresented: $clearing, titleVisibility: .visible) {
             Button("Remove Service Token", role: .destructive) {
                 model.setHubAccess(nil, hub: hubID)
                 dismiss()

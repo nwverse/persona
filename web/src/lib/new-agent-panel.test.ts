@@ -4,7 +4,7 @@
 // group, the row lit shows the form's setup, engine choices).
 import { describe, expect, it } from "vitest";
 import type { LauncherModels, PickerTier } from "./launcher-models";
-import { engineChoices, engineSetup, panelSections, type PanelProvider, type SectionsInput } from "./model-panel";
+import { engineChoices, engineSetup, panelSections, shownEffort, type PanelProvider, type SectionsInput } from "./model-panel";
 import { choiceCarries, formChoice, newAgentPanel, newAgentPill, type ModelChoice } from "./new-agent-panel";
 import type { ModelList } from "./session-models";
 import type { Launcher } from "./types";
@@ -53,6 +53,11 @@ const panel = (o: Partial<Parameters<typeof newAgentPanel>[0]> = {}) =>
 const provider = (p: ReturnType<typeof panel>, id: string) => p.providers.find((x) => x.id === id)!;
 
 describe("the panel's providers", () => {
+  it("says which Persona providers pi can use too (#8194)", () => {
+    const p = panel({ launchers: [...launchers.slice(0, 4), { name: "p-relay", display_name: "Team relay", source: "persona", pi: true }] });
+    expect(provider(p, "p-relay").alsoNote).toBe("pi 也能用");
+    expect(provider(p, "claude").alsoNote).toBeUndefined();
+  });
   it("one per launcher in the hub's order, named by display name, each led by its Default row", () => {
     const p = panel();
     expect(p.providers.map((x) => [x.id, x.name, x.engine])).toEqual([
@@ -65,6 +70,9 @@ describe("the panel's providers", () => {
     // a display name keeps its startup ID as secondary text (#5029); an rc alias has none
     expect(p.providers.map((x) => x.idNote)).toEqual([undefined, undefined, undefined, undefined, "p-relay"]);
     const claude = provider(p, "claude");
+    expect(claude.defaultModel).toBe("Sonnet 5.5");
+    expect(claude.isDefault).toBe(true);
+    expect(provider(p, "codex").isDefault).toBe(false);
     expect(claude.models?.map((m) => m.id)).toEqual(["default", "opus", "sonnet", "gateway/glm-5.3", "vendor/model-x"]);
     // the model settings run sonnet on claude: its Default row says so, and takes their effort as its default
     expect(claude.models?.[0]).toMatchObject({ name: "默认：Sonnet 5.5", providerDefault: true, defaultEffort: "high", efforts: ["low", "medium", "high"] });
@@ -80,6 +88,21 @@ describe("the panel's providers", () => {
     expect(blocked.models?.map((m) => m.name)).toEqual(["默认：glm-5.3"]);
   });
 
+  it("a provider left out on this computer comes after the launchers, off with the hub's reason (#8109)", () => {
+    const reason = "Mac 已经有自己的 Claude Code 服务，而 DeepSeek 设置为跳过这样的电脑";
+    const p = panel({ unavailable: [
+      { name: "deepseek", display_name: "DeepSeek", kind: "launcher", code: "launcher_own_service", reason },
+      { name: "claude", kind: "launcher", code: "launcher_own_service", reason: "not this one" }, // listed already: stays as listed
+      { name: "cx-gw", kind: "launcher", agent: "codex", code: "launcher_own_service", reason },
+    ] });
+    expect(p.providers.map((x) => x.id)).toEqual(["claude", "work_gw", "sonnetcc", "codex", "p-relay", "deepseek", "cx-gw"]);
+    expect(provider(p, "deepseek")).toEqual({ id: "deepseek", name: "DeepSeek", engine: "claude", models: null, unavailable: reason });
+    expect(provider(p, "cx-gw").engine).toBe("codex");
+    expect(provider(p, "claude").unavailable).toBeUndefined();
+    // the row lit stays the launcher that runs
+    expect(p.state.current?.provider).toBe("claude");
+  });
+
   it("a launcher that fixes its own --model offers its Default row alone, with why, and no typed ID", () => {
     const locked = provider(panel(), "sonnetcc");
     expect(locked.models).toHaveLength(1);
@@ -88,24 +111,26 @@ describe("the panel's providers", () => {
     expect(locked.locked).toBeUndefined();
   });
 
-  it.each(["claude_desktop", "codex_app"])("%s offers its desktop settings without model or effort overrides", (source) => {
+  it.each(["claude_desktop", "codex_app"])("%s retains its supported desktop model catalog and selection", (source) => {
     const desktop: Launcher = { name: "desktop", agent: source === "codex_app" ? "codex" : "claude", source };
-    const p = panel({ launchers: [desktop], listOf: () => ({ list: { agent: desktop.agent!, models: [], locked: "Settings follow the desktop app." } }),
-      choice: { launcher: desktop.name, model: "opus", effort: "max" }, configured: { provider: "launcher.desktop", model: "sonnet", effort: "high" }, runs: desktop.name, tiers: [] });
+    const list = source === "codex_app" ? codexList : claudeList;
+    const model = source === "codex_app" ? "gpt-5.5" : "sonnet";
+    const p = panel({ launchers: [desktop], listOf: () => ({ list }),
+      choice: { launcher: desktop.name, model, effort: "high" }, configured: null, runs: desktop.name, tiers: [] });
     const item = provider(p, desktop.name);
-    expect(item.models).toEqual([{ id: "default", name: "默认", efforts: [], providerDefault: true, description: "Settings follow the desktop app." }]);
-    expect(item.typable).toBeUndefined();
-    expect(item.locked).toBeUndefined();
-    expect(p.state.current).toEqual({ provider: desktop.name, model: "default" });
+    expect(item.models?.some((row) => row.id === model)).toBe(true);
+    expect(item.typable).toBe(true);
+    expect(p.state.current).toEqual({ provider: desktop.name, model, effort: "high" });
   });
 
-  it("does not offer desktop overrides when its model list failed", () => {
-    const desktop: Launcher = { name: "claude-desktop", agent: "claude", source: "claude_desktop" };
-    const p = panel({ launchers: [desktop], listOf: () => ({ error: "Read failed" }), choice: none, configured: null, runs: desktop.name, tiers: [] });
+  it.each(["claude_desktop", "codex_app"])("%s respects a model catalog's explicit lock", (source) => {
+    const desktop: Launcher = { name: "desktop", agent: source === "codex_app" ? "codex" : "claude", source };
+    const p = panel({ launchers: [desktop], listOf: () => ({ list: { agent: desktop.agent!, models: [], locked: "Settings follow the desktop app." } }),
+      choice: none, configured: null, runs: desktop.name, tiers: [] });
     const item = provider(p, desktop.name);
-    expect(item.models).toEqual([{ id: "default", name: "默认", efforts: [], providerDefault: true }]);
+    expect(item.models?.map((row) => row.id)).toEqual(["default"]);
+    expect(item.models?.[0].description).toBe("Settings follow the desktop app.");
     expect(item.typable).toBeUndefined();
-    expect(item.error).toBe("Read failed");
   });
 
   it("a list that couldn't be read: why and Retry, the launcher's Default row, and a typed ID for Claude Code and Codex", () => {
@@ -134,6 +159,20 @@ describe("the panel's providers", () => {
     expect(provider(p, "p-relay")).toMatchObject({ models: null, loading: true });
   });
 
+  // A launcher that lists its permission modes (#8261, Paseo's Grok and its Codex providers) takes the efforts its models
+  // list: each row its model's own, the Default row the default model's, none for a model nobody lists the levels of.
+  it("a launcher that lists its permission modes offers each model's own efforts, and none where nobody says", () => {
+    const grok: Launcher = { name: "grok", agent: "paseo", source: "paseo", display_name: "Grok", permission_modes: ["default", "bypassPermissions"] };
+    const paseoCodex: Launcher = { name: "my-codex", agent: "codex", source: "paseo", permission_modes: ["default", "bypassPermissions"] };
+    const grokList: LauncherModels = { agent: "paseo", models: [{ id: "grok-4", name: "Grok 4", default: true, efforts: ["low", "high"] }, { id: "grok-mini", name: "Grok mini" }] };
+    const p = newAgentPanel({ launchers: [grok, paseoCodex], listOf: (n) => (n === "grok" ? { list: grokList } : { list: codexList }), choice: none, configured: null, runs: "grok", tiers: [] });
+    expect(provider(p, "grok").name).toBe("Grok");
+    expect(provider(p, "grok").models?.map((m) => [m.id, m.efforts])).toEqual([["default", ["low", "high"]], ["grok-4", ["low", "high"]], ["grok-mini", []]]);
+    expect(provider(p, "my-codex").models?.map((m) => m.efforts)).toEqual([["low", "medium", "high"], ["low", "medium", "high"], ["low", "medium", "high"]]);
+    expect(newAgentPill({ launchers: [grok], runs: "grok", list: { list: grokList }, choice: { launcher: "grok", model: "", effort: "high" }, configured: null, fallback: "" }).effort)
+      .toBe("high");
+  });
+
   it("an ID typed for this start that the list lacks gets its own row, so it is lit", () => {
     const p = panel({ choice: { launcher: "claude", model: "vendor/new", effort: "" }, configured: null });
     expect(provider(p, "claude").models?.at(-1)).toMatchObject({ id: "vendor/new", efforts: EFFORTS });
@@ -144,10 +183,57 @@ describe("the panel's providers", () => {
 describe("the row lit and the state", () => {
   it("following the model settings: their launcher's Default row, with their effort; no Recommended group", () => {
     const p = panel();
-    expect(p.state).toEqual({ current: { provider: "claude", model: "default", effort: "high" }, recommended: [], starting: true });
+    expect(p.state).toEqual({ current: { provider: "claude", model: "default", effort: "high" }, currentEffortDisplayOnly: "agy", recommended: [], starting: true });
     const sections = panelSections({ providers: p.providers, state: p.state, view: { kind: "all" }, query: "", favorites: [], recent: [], overrides: {}, presets: p.presets });
     expect(sections.map((s) => s.kind)).not.toContain("recommended");
     expect(sections.find((s) => s.provider?.id === "claude")?.rows.find((r) => r.current)?.model.id).toBe("default");
+  });
+
+  it.each([
+    { launcher: "", effort: "", currentEffort: "xhigh", defaultEffort: "xhigh", shown: "xhigh" },
+    { launcher: "agy", effort: "", currentEffort: undefined, defaultEffort: "low", shown: "low" },
+    { launcher: "agy", effort: "high", currentEffort: "high", defaultEffort: "low", shown: "high" },
+  ])("shows agy effort for launcher=$launcher and effort=$effort without inheriting it in picks", ({ launcher, effort, currentEffort, defaultEffort, shown }) => {
+    const agyList: LauncherModels = { agent: "agy", models: [{ id: "example", name: "Example", default: true, default_effort: "low", efforts: EFFORTS }] };
+    const p = panel({
+      launchers: [{ name: "agy", agent: "agy" }],
+      listOf: () => ({ list: agyList }),
+      configured: { provider: "launcher.agy", model: "example", effort: "xhigh" },
+      choice: { ...none, launcher, effort },
+      runs: "agy",
+    });
+    const sections = panelSections({ providers: p.providers, state: p.state, view: { kind: "all" }, query: "", favorites: [], recent: [], overrides: {} });
+    const row = sections.flatMap((s) => s.rows).find((r) => r.current)!;
+    expect(p.state.current?.effort).toBe(currentEffort);
+    expect(row.model.defaultEffort).toBe(defaultEffort);
+    expect(shownEffort(row.setup, row.model)).toBe(shown);
+    expect(formChoice(row.setup)).toEqual({ launcher: "agy", model: "", effort });
+  });
+
+  it.each([
+    { source: "Model settings", choice: none, effort: "" },
+    // another model opens at its own default, whatever the pick before had (#12315)
+    { source: "an explicit pick", choice: { launcher: "agy", model: "example", effort: "xhigh" }, effort: "" },
+  ])("picks another agy model with the correct effort from $source", ({ choice, effort }) => {
+    const agyList: LauncherModels = {
+      agent: "agy",
+      models: [
+        { id: "example", name: "Example", efforts: ["high", "xhigh"] },
+        { id: "other", name: "Other", efforts: ["high", "xhigh"] },
+        { id: "limited", name: "Limited", efforts: ["high"] },
+      ],
+    };
+    const p = panel({
+      launchers: [{ name: "agy", agent: "agy" }],
+      listOf: () => ({ list: agyList }),
+      configured: { provider: "launcher.agy", model: "example", effort: "xhigh" },
+      choice,
+      runs: "agy",
+    });
+    const sections = panelSections({ providers: p.providers, state: p.state, view: { kind: "all" }, query: "", favorites: [], recent: [], overrides: {} });
+    const rows = sections.flatMap((s) => s.rows);
+    expect(formChoice(rows.find((r) => r.model.id === "other")!.setup)).toEqual({ launcher: "agy", model: "other", effort });
+    expect(formChoice(rows.find((r) => r.model.id === "limited")!.setup)).toEqual({ launcher: "agy", model: "limited", effort: "" });
   });
 
   it("a model picked: its row, with the effort picked", () => {
@@ -221,6 +307,26 @@ describe("engines", () => {
     expect(engineChoices(p.providers, def, p.state)).toHaveLength(1);
   });
 
+  it("each of Paseo's providers is an engine of its own, by its provider, never 'paseo' (#8142)", () => {
+    const shared = { id: "anthropic/claude-sonnet-5-5", name: "Sonnet 5.5" };
+    const paseo: Launcher[] = [
+      { name: "opencode", agent: "paseo", agent_type: "paseo", source: "paseo" },
+      { name: "pi", agent: "paseo", agent_type: "paseo", source: "paseo" },
+      { name: "grok", agent: "paseo", agent_type: "paseo", source: "paseo" },
+    ];
+    const paseoLists: Record<string, ModelList> = {
+      opencode: { list: { agent: "paseo", models: [{ ...shared, default: true }] } },
+      pi: { list: { agent: "paseo", models: [{ ...shared, default: true }] } },
+      grok: { list: { agent: "paseo", models: [{ id: "grok-4", name: "Grok 4", default: true }] } },
+    };
+    const p = newAgentPanel({ launchers: paseo, listOf: (n) => paseoLists[n] ?? {}, choice: none, configured: null, runs: "opencode", tiers: [] });
+    expect(p.providers.map((x) => x.engine)).toEqual(["opencode", "pi", "grok"]);
+    // the same model through OpenCode and Pi: two engines, as the flyout's engine pills offer them
+    const row = { kind: "model" as const, provider: p.providers[0], model: p.providers[0].models!.find((m) => m.id === shared.id)! };
+    expect(engineChoices(p.providers, row, p.state).map((c) => [c.engine, c.provider.id])).toEqual([["opencode", "opencode"], ["pi", "pi"]]);
+    expect(newAgentPill({ launchers: paseo, runs: "grok", list: paseoLists.grok, choice: none, configured: null, fallback: "" }).engine).toBe("grok");
+  });
+
   it("of one engine, a launcher that can take the pick is offered over one that can't", () => {
     const off: PanelProvider = { id: "codex-old", name: "old", engine: "codex", models: [{ id: "gateway/glm-5.3", name: "glm-5.3", efforts: [] }], unavailable: "blocked" };
     const ok: PanelProvider = { id: "codex", name: "codex", engine: "codex", models: [{ id: "gateway/glm-5.3", name: "glm-5.3", efforts: ["low", "high"] }] };
@@ -246,15 +352,14 @@ describe("the pill", () => {
     expect(newAgentPill({ launchers, runs: "codex", list: lists.codex, choice: { launcher: "codex", model: "", effort: "high" }, configured: null, fallback: "" }).effort).toBeUndefined();
   });
 
-  it("desktop pills omit stale model and effort choices, including while their list is unavailable", () => {
-    const desktop: Launcher = { name: "claude-desktop", agent: "claude", source: "claude_desktop" };
-    for (const list of [{ list: { agent: "claude", models: [], locked: "Settings follow the desktop app." } }, { error: "Read failed" }]) {
-      const pill = newAgentPill({ launchers: [desktop], runs: desktop.name, list, choice: { launcher: desktop.name, model: "opus", effort: "max" },
-        configured: { provider: "launcher.claude-desktop", model: "sonnet", effort: "high" }, fallback: "" });
-      expect(pill.effort).toBeUndefined();
-      expect(pill.model).not.toBe("Opus 5.5");
-      expect(pill.model).not.toBe("sonnet");
-    }
+  it.each(["claude_desktop", "codex_app"])("%s pills retain supported selected models", (source) => {
+    const desktop: Launcher = { name: "desktop", agent: source === "codex_app" ? "codex" : "claude", source };
+    const list = source === "codex_app" ? codexList : claudeList;
+    const model = source === "codex_app" ? "gpt-5.5" : "sonnet";
+    const pill = newAgentPill({ launchers: [desktop], runs: desktop.name, list: { list },
+      choice: { launcher: desktop.name, model, effort: "high" }, configured: null, fallback: "" });
+    expect(pill.model).toBe(source === "codex_app" ? "5.5" : "Sonnet 5.5");
+    expect(pill.effort).toBe(source === "codex_app" ? undefined : "high");
   });
 
   it("while the list is read the first time, when that failed, and with no launcher known", () => {

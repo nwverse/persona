@@ -12,8 +12,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -58,10 +60,28 @@ var (
 	// codexAppCLI is the Codex CLI the App bundles (the same version as the App's own app-server), else one on PATH or
 	// where Codex installs (a variable: tests use their own).
 	codexAppCLI = func() (string, error) {
-		if p := bundledCodexAppCLI(); p != "" {
+		if runtime.GOOS == "windows" {
+			if p := bundledCodexAppCLI(); p != "" {
+				return p, nil
+			}
+		}
+		if p := bundledCodexCLI(); p != "" {
 			return p, nil
 		}
 		return agentExecutable("codex")
+	}
+
+	// bundledCodexCLI is the Codex CLI the ChatGPT app bundles on a Mac, "" when there is none (a variable: tests use
+	// their own). Its base name is codex, so herdr, codex-start and codexEffortInherited take it for plain codex.
+	bundledCodexCLI = func() string {
+		if runtime.GOOS != "darwin" {
+			return ""
+		}
+		p := "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"
+		if st, err := os.Stat(p); err == nil && !st.IsDir() && st.Mode().Perm()&0111 != 0 {
+			return p
+		}
+		return ""
 	}
 
 	// seedCodexAppChat starts a chat named title in dir with codex in home, and returns its thread id (a variable:
@@ -119,6 +139,10 @@ func (n *Node) newCodexAppChat(ctx context.Context, p runtimeStartParams, nameHi
 		// The App lists a chat once it has a message: one with none would be nowhere to be seen.
 		return nil, refusal("codex_needs_prompt", "在 Codex App 里新开对话需要第一条消息，这次没有发送。", nil)
 	}
+	model, effort := strings.TrimSpace(p.Model), strings.TrimSpace(p.Effort)
+	if model != "" && !proto.ValidModelID(model) {
+		return nil, fmt.Errorf("invalid model %q", model)
+	}
 	cli, err := codexAppCLI()
 	if err != nil {
 		return nil, fmt.Errorf("没找到 Codex（codex 命令），不能在 Codex App 里新开对话：%v", err)
@@ -144,13 +168,23 @@ func (n *Node) newCodexAppChat(ctx context.Context, p runtimeStartParams, nameHi
 		return nil, uncertain(errors.New("Codex returned no valid identifier for the new desktop chat"))
 	}
 	s := &proto.Session{SessionID: n.codexPublicID(home, thread), Cwd: dir, Title: title, Agent: "codex",
-		Status: proto.StatusIdle, StartedByPersona: true, UpdatedAt: time.Now().UTC()}
-	n.state.put(s.SessionID, sessionState{Launcher: codexAppLauncher, Cwd: dir, StartedAt: s.UpdatedAt})
+		Launcher: codexAppLauncher, Status: proto.StatusIdle, StartedByPersona: true, UpdatedAt: time.Now().UTC()}
+	n.state.put(s.SessionID, sessionState{Launcher: codexAppLauncher, Cwd: dir, StartedAt: s.UpdatedAt,
+		DesktopPendingModel: model, DesktopPendingEffort: effort})
 	if err != nil {
 		return s, desktopCreatedError(s, err, false)
 	}
 	log.Printf("new Codex App chat %s in %s", thread, dir)
+	publicID := n.codexPublicID(home, thread)
 	src := codexSource{home: home, thread: thread, path: rolloutPath(home, thread)}
+	if err := n.finishCreatedCodexAppSettings(ctx, publicID, src); err != nil {
+		log.Printf("new Codex App chat %s: initial settings (%q, %q) did not take: %v", thread, model, effort, err)
+		return s, desktopCreatedError(s, err, false)
+	}
+	s.Model, s.Effort = model, effort
+	if pick := n.codexAppPickOf(publicID); pick != nil {
+		s.Model, s.Effort = cmp.Or(pick.model, s.Model), cmp.Or(pick.effort, s.Effort)
+	}
 	if err := n.sendCodexDesktop(ctx, src, p.Prompt, nil); err != nil {
 		log.Printf("new Codex App chat %s: the first message did not go in: %v", thread, err)
 		return s, desktopCreatedError(s, err, true)
@@ -187,7 +221,31 @@ func (n *Node) sendCreatedCodexApp(ctx context.Context, id, text string, images 
 	if !known {
 		return true, refusal("codex_read_only", "The desktop session's source is not available yet. Reopen it in Codex before sending.", nil)
 	}
+	if err := n.finishCreatedCodexAppSettings(ctx, id, src); err != nil {
+		return true, err
+	}
 	return true, n.sendCodexDesktop(ctx, src, text, images)
+}
+
+// finishCreatedCodexAppSettings recovers initial setup on the original native thread. Requested values are kept
+// separately from confirmed settings, so a failed readback never silently sends its first message on another model.
+func (n *Node) finishCreatedCodexAppSettings(ctx context.Context, id string, src codexSource) error {
+	state, _ := n.state.get(id)
+	model, effort := state.DesktopPendingModel, state.DesktopPendingEffort
+	if model == "" && effort == "" {
+		return nil
+	}
+	if err := n.setCodexDesktopSettings(ctx, id, src, model, effort); err != nil {
+		return err
+	}
+	n.state.update(id, func(cur *sessionState) bool {
+		if cur.DesktopPendingModel != model || cur.DesktopPendingEffort != effort {
+			return false
+		}
+		cur.DesktopPendingModel, cur.DesktopPendingEffort = "", ""
+		return true
+	})
+	return nil
 }
 
 // codexAppStartDir is where a new chat of the App runs: dir as for the desktop app's (desktopStartDir: there, or a new
@@ -306,6 +364,11 @@ func startCodexStdio(ctx context.Context, cli, home, dir string) (*codexStdio, e
 	}
 	cmd := exec.CommandContext(ctx, program, "app-server")
 	cmd.Dir, cmd.Env = dir, env
+	if bin := codexAppNodeBin(cli); bin != "" {
+		path := withDirsAfter(envValue(cmd.Env, "PATH"), []string{bin})
+		cmd.Env = append(withoutEnv(cmd.Env, []string{"PATH"}), "PATH="+path)
+	}
+	killGroupOnCancel(cmd)
 	prepareDesktopChild(cmd)
 	in, err := cmd.StdinPipe()
 	if err != nil {
@@ -318,6 +381,16 @@ func startCodexStdio(ctx context.Context, cli, home, dir string) (*codexStdio, e
 		_ = in.Close()
 		return nil, err
 	}
+	stopGroup := cmd.Cancel
+	cmd.Cancel = sync.OnceValue(func() error {
+		// A CLI launcher can fork a child that keeps both pipes open. Close our ends even if the group is gone.
+		_ = in.Close()
+		_ = out.Close()
+		if err := stopGroup(); err != nil {
+			return cmd.Process.Kill()
+		}
+		return nil
+	})
 	if err := cmd.Start(); err != nil {
 		cancel()
 		_ = in.Close()
@@ -341,10 +414,33 @@ func startCodexStdio(ctx context.Context, cli, home, dir string) (*codexStdio, e
 	return s, nil
 }
 
+// codexAppNodeBin is the interpreter directory for the official npm launcher when the service has no node on PATH.
+// npm links bin/codex to the script, which uses /usr/bin/env node rather than an absolute interpreter path.
+func codexAppNodeBin(cli string) string {
+	if runtime.GOOS == "windows" {
+		return ""
+	}
+	if _, err := exec.LookPath("node"); err == nil {
+		return ""
+	}
+	real, err := filepath.EvalSymlinks(cli)
+	if err != nil {
+		return ""
+	}
+	prefix, ok := strings.CutSuffix(real, "/lib/node_modules/@openai/codex/bin/codex.js")
+	if !ok || !filepath.IsAbs(prefix) {
+		return ""
+	}
+	bin := filepath.Join(prefix, "bin")
+	if _, err := exec.LookPath(filepath.Join(bin, "node")); err != nil {
+		return ""
+	}
+	return bin
+}
+
 func (s *codexStdio) close() {
 	s.cancel()
-	_ = s.in.Close()
-	_ = s.cmd.Process.Kill()
+	_ = s.cmd.Cancel()
 	_ = s.cmd.Wait()
 }
 

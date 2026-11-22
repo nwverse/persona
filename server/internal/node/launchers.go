@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log"
 	"maps"
 	"path/filepath"
 	"sort"
@@ -11,18 +12,23 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/shellcmd"
 )
 
 var launcherCache struct {
 	sync.Mutex
-	at       time.Time
-	list     []proto.Launcher
-	fetch    sync.Mutex // one login shell at a time
-	fetching bool       // a background refresh (cachedLaunchers) is running
+	at         time.Time
+	list       []proto.Launcher
+	generation uint64             // incremented whenever a discovery publishes a new list
+	fetch      singleflight.Group // concurrent asks share the login shell's result, including failure
+	fetching   bool               // a background refresh (cachedLaunchers) is running
 	// codex: how each Codex launcher runs (codex_start.go), its words as the shell would run them.
 	codex map[string][]string
+	// codexAliases distinguishes configured aliases from the plain PATH/bundled launchers, even when their argv matches.
+	codexAliases map[string]bool
 	// settings: the --settings a claude alias brings itself, as its words give it (launcher_settings.go).
 	settings map[string]string
 	// scripts: where each wrapper script on PATH is (pathlaunchers.go).
@@ -32,9 +38,9 @@ var launcherCache struct {
 // launcherScript lists the login shell's launchers in one go (sourcing ~/.zshrc takes a while): what the
 // `_claude_launchers` helper prints when the rc file has one, a GS byte, then every alias as its name and its words
 // as zsh itself splits and unquotes them (name US word US … RS), so quoting never has to be parsed here (bash prints
-// `alias -p` after bashAliasMark instead, launchers_shell.go); then, each after a GS byte, where codex, traex and omp
-// are on the PATH, the names of the shell's functions and aliases (one a line: they come before a file on PATH of the
-// same name), and its PATH (for the wrapper scripts on it, pathlaunchers.go). All of it between launcherBegin and
+// `alias -p` after bashAliasMark instead, launchers_shell.go); then, each after a GS byte, where codex, traex, omp,
+// pi, cursor-agent and agy are on the PATH, the names of the shell's functions and aliases (one a line: they come
+// before a file on PATH of the same name), and its PATH (for the wrapper scripts on it, pathlaunchers.go). All of it between launcherBegin and
 // launcherEnd, so what the rc files print around it is never read as a section (launcherOutput).
 const launcherScript = `printf '\001persona-launchers-begin\001'
 __jl_path=$PATH
@@ -58,6 +64,12 @@ if [ -n "$ZSH_VERSION" ]; then whence -p traex 2>/dev/null; else command -v trae
 printf '\035'
 if [ -n "$ZSH_VERSION" ]; then whence -p omp 2>/dev/null; else command -v omp 2>/dev/null; fi
 printf '\035'
+if [ -n "$ZSH_VERSION" ]; then whence -p pi 2>/dev/null; else command -v pi 2>/dev/null; fi
+printf '\035'
+if [ -n "$ZSH_VERSION" ]; then whence -p cursor-agent 2>/dev/null; else command -v cursor-agent 2>/dev/null; fi
+printf '\035'
+if [ -n "$ZSH_VERSION" ]; then whence -p agy 2>/dev/null; else command -v agy 2>/dev/null; fi
+printf '\035'
 if [ -n "$ZSH_VERSION" ]; then eval 'print -rl -- ${(k)functions} ${(k)aliases}'; elif [ -n "$BASH_VERSION" ]; then compgen -A function; compgen -a; fi
 printf '\035'
 printf '%s' "$__jl_path"
@@ -69,55 +81,145 @@ const (
 	launcherEnd   = "\x01persona-launchers-end\x01"
 )
 
-// launcherOutput is what launcherScript itself printed: rc files print what they like to stdout while the shell
-// starts (Ubuntu's /etc/bash.bashrc a sudo hint, #6310) and an exit trap after the script, none of it the script's.
-// Nothing without the begin marker; to the end of the output without the end marker (a shell cut off by the timeout).
-func launcherOutput(out string) string {
+// launcherOutput returns the script's framed output and whether the frame completed. Ignore rc startup text and
+// exit traps outside the markers (#6310). An interrupted script can leave a body without its end marker.
+func launcherOutput(out string) (string, bool) {
 	i := strings.LastIndex(out, launcherBegin)
 	if i < 0 {
-		return ""
+		return "", false
 	}
-	out, _, _ = strings.Cut(out[i+len(launcherBegin):], launcherEnd)
-	return out
+	body, _, complete := strings.Cut(out[i+len(launcherBegin):], launcherEnd)
+	return body, complete
 }
+
+// launcherFetchObserverKey carries a test-only signal after a request joins the shared scan.
+type launcherFetchObserverKey struct{}
 
 // launchers lists the launchers of this machine's login shell: the `_claude_launchers` helper's (claude wrapper
 // functions), then every alias that runs claude (`alias dmcc="ANTHROPIC_BASE_URL=… claude …"`), by name. A name
-// the helper lists is not repeated; none at all: plain claude.
-func (n *Node) launchers(ctx context.Context) ([]proto.Launcher, error) {
-	launcherCache.fetch.Lock()
-	defer launcherCache.fetch.Unlock()
+// the helper lists is not repeated; none at all: plain claude. A forced refresh requires a discovery newer than the
+// one visible when the request arrived, and reports a failed scan even when an older list exists.
+func (n *Node) launchers(ctx context.Context, refresh ...bool) ([]proto.Launcher, error) {
+	forced := len(refresh) > 0 && refresh[0]
 	launcherCache.Lock()
-	if time.Since(launcherCache.at) < time.Minute && launcherCache.list != nil {
-		list := launcherCache.list
+	observed := launcherCache.generation
+	cached := launcherCache.list
+	fresh := time.Since(launcherCache.at) < time.Minute
+	launcherCache.Unlock()
+	if !forced && fresh && cached != nil {
+		return cached, nil
+	}
+
+	type discovery struct {
+		list       []proto.Launcher
+		generation uint64
+	}
+	read := func() (any, error) {
+		// A scan may have completed between the initial cache read and entry into the group.
+		launcherCache.Lock()
+		current := discovery{list: launcherCache.list, generation: launcherCache.generation}
+		fresh := time.Since(launcherCache.at) < time.Minute
 		launcherCache.Unlock()
-		return list, nil
+		if current.list != nil && (current.generation != observed || (!forced && fresh)) {
+			return current, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		// Only a scan that has started outlives its caller. It can still populate the cache for a later ask.
+		scanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+		defer cancel()
+		out, err := scanLaunchers(scanCtx)
+		if err != nil {
+			return nil, err
+		}
+		list, codex, settings, scripts := mergeLaunchers(string(out))
+		aliases := codexAliasNames(string(out))
+		launcherCache.Lock()
+		launcherCache.at, launcherCache.list, launcherCache.codex, launcherCache.settings = time.Now(), list, codex, settings
+		launcherCache.codexAliases = aliases
+		launcherCache.scripts = scripts
+		launcherCache.generation++
+		current = discovery{list: list, generation: launcherCache.generation}
+		launcherCache.Unlock()
+		return current, nil
 	}
-	launcherCache.Unlock()
-	// Not cut short when the caller gives up (the hub waits a few seconds per machine): a slow rc file still finishes
-	// and the next ask within the minute gets the list from the cache.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
-	defer cancel()
-	out, err := loginShell(ctx, launcherScript).Output()
-	if err != nil && len(out) == 0 {
-		return nil, fmt.Errorf("list launchers: %w", err)
+	entered, _ := ctx.Value(launcherFetchObserverKey{}).(func())
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		result := launcherCache.fetch.DoChan("shell", read)
+		if entered != nil {
+			entered()
+			entered = nil
+		}
+		shared := <-result
+		if err := shared.Err; err != nil {
+			if canceled := ctx.Err(); canceled != nil {
+				return nil, canceled
+			}
+			if err == context.Canceled || err == context.DeadlineExceeded {
+				// The group's leader was canceled before starting a scan. A live caller can still start one.
+				continue
+			}
+			if forced {
+				return nil, err
+			}
+			return lastLaunchers(err)
+		}
+		got := shared.Val.(discovery)
+		// An ordinary cache hit shared through the group cannot satisfy a forced request for newer data.
+		if !forced || got.generation != observed {
+			return got.list, nil
+		}
 	}
-	list, codex, settings, scripts := mergeLaunchers(string(out))
+}
+
+func scanLaunchers(ctx context.Context) ([]byte, error) {
+	began := time.Now()
+	out, err := launcherShellOutput(ctx, launcherScript)
+	// A background child can hold stdout open after a complete scan. A partial frame can be just a banner.
+	if _, complete := launcherOutput(string(out)); !complete {
+		took := time.Since(began).Round(time.Millisecond)
+		if err != nil {
+			return nil, fmt.Errorf("list launchers: incomplete shell output after %v: %w", took, err)
+		}
+		return nil, fmt.Errorf("list launchers: the login shell exited before completing the list after %v", took)
+	}
+	return out, nil
+}
+
+func launcherShellOutput(ctx context.Context, script string) ([]byte, error) {
+	cmd := loginShell(ctx, script)
+	// A shell's children can hold stdout open after it dies. Bound the group and the pipe wait (#10952).
+	killGroupOnCancel(cmd)
+	return cmd.Output()
+}
+
+// lastLaunchers answers a failed read of the login shell (launchers): the last list, kept for another minute so the
+// next try is not on every ask while a slow shell stays slow; the error only when there has been no list yet.
+func lastLaunchers(failed error) ([]proto.Launcher, error) {
 	launcherCache.Lock()
-	launcherCache.at, launcherCache.list, launcherCache.codex, launcherCache.settings = time.Now(), list, codex, settings
-	launcherCache.scripts = scripts
-	launcherCache.Unlock()
-	return list, nil
+	defer launcherCache.Unlock()
+	if launcherCache.list == nil {
+		return nil, failed
+	}
+	log.Printf("node: %v; keeping the last %d launchers", failed, len(launcherCache.list))
+	launcherCache.at = time.Now()
+	return launcherCache.list, nil
 }
 
 // mergeLaunchers is launcherScript's output as the launcher list: the helper's, then the aliases it does not name,
 // then the wrapper scripts on PATH no function or alias shadows (nothing at all: plain claude), then Codex's — plain
-// codex when it is on the PATH, and the aliases that run it (how each runs: codex) — then plain traex when it is on the
-// PATH (started without Claude's flags, start_agent.go). settings: the claude aliases' and scripts' own --settings, by
+// codex when it is on the PATH (else the ChatGPT app's bundled one, bundledCodexCLI), and the aliases that run it (how each runs: codex) — then plain traex and plain omp when
+// they are on the PATH, then pi, the Cursor CLI and the Antigravity CLI when their programs are (workagent.go: started in
+// a herdr pane with the model the start names). settings: the claude aliases' and scripts' own --settings, by
 // name (launcher_settings.go); an alias is what the shell runs for its name even when the helper lists the name too.
 // scripts: where each wrapper script is.
 func mergeLaunchers(out string) (list []proto.Launcher, codex map[string][]string, settings, scripts map[string]string) {
-	helper, rest, _ := strings.Cut(launcherOutput(out), "\x1d")
+	body, _ := launcherOutput(out)
+	helper, rest, _ := strings.Cut(body, "\x1d")
 	aliases, rest, _ := strings.Cut(rest, "\x1d")
 	if a, ok := strings.CutPrefix(aliases, bashAliasMark); ok {
 		aliases = bashAliases(a)
@@ -125,6 +227,9 @@ func mergeLaunchers(out string) (list []proto.Launcher, codex map[string][]strin
 	codexPath, rest, _ := strings.Cut(rest, "\x1d")
 	traexPath, rest, _ := strings.Cut(rest, "\x1d")
 	ompPath, rest, _ := strings.Cut(rest, "\x1d")
+	piPath, rest, _ := strings.Cut(rest, "\x1d")
+	cursorPath, rest, _ := strings.Cut(rest, "\x1d")
+	agyPath, rest, _ := strings.Cut(rest, "\x1d")
 	shellNames, pathVar, _ := strings.Cut(rest, "\x1d")
 	list = parseLaunchers(helper)
 	seen := map[string]bool{}
@@ -150,13 +255,19 @@ func mergeLaunchers(out string) (list []proto.Launcher, codex map[string][]strin
 	list = append(list, pathList...)
 	maps.Copy(settings, pathSettings)
 	if len(list) == 0 {
-		list = []proto.Launcher{{Name: "claude", Model: "默认"}}
+		list = []proto.Launcher{{Name: "claude"}}
 	}
 	codex = map[string][]string{}
 	ls, words := parseCodexAliases(aliases)
-	if strings.TrimSpace(codexPath) != "" && words["codex"] == nil {
-		list = append(list, proto.Launcher{Name: "codex", Model: "默认", Agent: "codex", Source: "zshrc", PromptOptional: true, RunHere: true})
-		codex["codex"] = []string{"codex"}
+	codexWord := ""
+	if strings.TrimSpace(codexPath) != "" {
+		codexWord = "codex"
+	} else if !taken["codex"] {
+		codexWord = bundledCodexCLI() // the ChatGPT app's own, by its path: the shell would not find it
+	}
+	if codexWord != "" && words["codex"] == nil {
+		list = append(list, proto.Launcher{Name: "codex", Agent: "codex", Source: "zshrc", PromptOptional: true, RunHere: true})
+		codex["codex"] = []string{codexWord}
 	}
 	for _, l := range ls {
 		if !seen[l.Name] {
@@ -165,12 +276,39 @@ func mergeLaunchers(out string) (list []proto.Launcher, codex map[string][]strin
 		}
 	}
 	if strings.TrimSpace(traexPath) != "" && !seen[traexAgent] && codex[traexAgent] == nil {
-		list = append(list, proto.Launcher{Name: traexAgent, Model: "默认", Agent: traexAgent, Source: "zshrc"})
+		list = append(list, proto.Launcher{Name: traexAgent, Agent: traexAgent, Source: "zshrc", DisplayName: "TRAE CLI"})
 	}
 	if strings.TrimSpace(ompPath) != "" && !seen["omp"] && codex["omp"] == nil {
-		list = append(list, proto.Launcher{Name: "omp", Model: "默认", Agent: "omp", Source: "zshrc"})
+		list = append(list, proto.Launcher{Name: "omp", Agent: "omp", Source: "zshrc"})
+	}
+	for _, bin := range []struct{ name, agent, path string }{
+		{"pi", piAgent, piPath},
+		{"cursor", cursorAgent, cursorPath},
+		{"agy", agyAgent, agyPath},
+	} {
+		if strings.TrimSpace(bin.path) != "" && !seen[bin.name] && codex[bin.name] == nil {
+			list = append(list, proto.Launcher{Name: bin.name, Agent: bin.agent, Source: "zshrc",
+				RuntimeFallback: bin.agent == agyAgent && !taken[bin.name]})
+		}
 	}
 	return list, codex, settings, scripts
+}
+
+// codexAliasNames keeps the provenance mergeLaunchers' argv map alone cannot carry:
+// a configured no-op alias and the plain PATH launcher both have the words ["codex"].
+func codexAliasNames(out string) map[string]bool {
+	body, _ := launcherOutput(out)
+	_, rest, _ := strings.Cut(body, "\x1d")
+	aliases, _, _ := strings.Cut(rest, "\x1d")
+	if a, ok := strings.CutPrefix(aliases, bashAliasMark); ok {
+		aliases = bashAliases(a)
+	}
+	_, words := parseCodexAliases(aliases)
+	names := make(map[string]bool, len(words))
+	for name := range words {
+		names[name] = true
+	}
+	return names
 }
 
 // cachedLaunchers never waits for the login shell: it returns the last list (possibly stale, nil before the first
@@ -197,12 +335,47 @@ func (n *Node) inferLauncher(id string) string {
 	if !ok {
 		return ""
 	}
-	return matchLauncher(n.cachedLaunchers(), env.BaseURL, env.Model)
+	if name := matchLauncher(n.cachedLaunchers(), env.BaseURL, env.Model); name != "" {
+		return name
+	}
+	return matchLauncher(n.managedInferLaunchers(), env.BaseURL, env.Model)
+}
+
+// managedInferLaunchers returns the cached Claude managed-launcher projection so a terminal session started manually
+// with `personad launch <name>` can infer its managed launcher when the endpoint/model match is unambiguous.
+func (n *Node) managedInferLaunchers() []proto.Launcher {
+	if n == nil {
+		return nil
+	}
+	n.managed.mu.Lock()
+	if n.managed.infer == nil && len(n.managed.byID) > 0 {
+		n.managed.infer = buildManagedInferLaunchers(n.managed.byID)
+	}
+	out := n.managed.infer
+	n.managed.mu.Unlock()
+	return out
+}
+
+func buildManagedInferLaunchers(byID map[string]proto.ManagedLauncher) []proto.Launcher {
+	if len(byID) == 0 {
+		return nil
+	}
+	out := make([]proto.Launcher, 0, len(byID))
+	for _, l := range byID {
+		if a := l.AgentType(); a != "" && a != "claude" {
+			continue
+		}
+		pm, _ := providerModel(l, l.Model)
+		out = append(out, proto.Launcher{Name: l.Name, BaseURL: managedBaseURL(l), Model: sdkModel(l.Model, pm)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // matchLauncher picks the launcher that exports this base URL and model. Several launchers can share one endpoint
 // (and a launcher whose model is chosen at run time shows a placeholder such as "(claude-choose)"), so: the one
-// launcher with both equal; else the one launcher with that base URL; else nothing, never a guess between several.
+// launcher with both equal (an empty model is unknown, never evidence of a match); else the one launcher with that base
+// URL; else nothing, never a guess between several.
 func matchLauncher(list []proto.Launcher, baseURL, model string) string {
 	if baseURL == "" {
 		return "" // the default endpoint: nothing to tell launchers apart by
@@ -213,7 +386,7 @@ func matchLauncher(list []proto.Launcher, baseURL, model string) string {
 			continue
 		}
 		byURL = append(byURL, l.Name)
-		if l.Model == model {
+		if model != "" && (l.Model == model || l.Model != "" && proto.TrimModelWindow(l.Model) == proto.TrimModelWindow(model)) {
 			byBoth = append(byBoth, l.Name)
 		}
 	}
@@ -269,9 +442,6 @@ func parseCodexAliases(out string) ([]proto.Launcher, map[string][]string) {
 		argv, model, ok := codexAliasArgv(w[1 : len(w)-1])
 		if !ok {
 			continue
-		}
-		if model == "" {
-			model = "默认"
 		}
 		list = append(list, proto.Launcher{Name: w[0], Model: model, Agent: "codex", Source: "zshrc", PromptOptional: true, RunHere: true})
 		words[w[0]] = argv
@@ -420,6 +590,10 @@ func parseLaunchers(out string) []proto.Launcher {
 		}
 		if l.BaseURL == "-" {
 			l.BaseURL = ""
+		}
+		// Older shell helpers used display text for an unspecified model; it is not a model ID.
+		if l.Model == "默认" { // i18n-ignore: legacy wire value, never displayed
+			l.Model = ""
 		}
 		list = append(list, l)
 	}

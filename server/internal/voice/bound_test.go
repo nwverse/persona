@@ -107,7 +107,7 @@ func TestBoundToAnAgent(t *testing.T) {
 		{"role": "assistant", "text": "登录页的测试挂了两个"}, {"role": "tool", "text": "ignored"}}}))
 	ready := a.until(ofType("ready"))
 	target, _ := ready["target"].(map[string]any)
-	if ready["protocol"] != float64(2) || fmt.Sprint(ready["features"]) != "[target runs asks resume suspend speak speech_gate meeting]" || target["kind"] != "agent" ||
+	if ready["protocol"] != float64(2) || fmt.Sprint(ready["features"]) != "[target runs asks resume suspend speak speech_gate meeting hold dictation]" || target["kind"] != "agent" ||
 		target["agent_label"] != "Claude Code" || target["title"] != "修登录页的测试" || target["machine_name"] != "工作站" || target["session_id"] != "a1" {
 		t.Fatalf("ready: %v", ready)
 	}
@@ -148,6 +148,27 @@ func TestBoundToAnAgent(t *testing.T) {
 	a.mu.Unlock()
 	if tool {
 		t.Error("a tool frame for the handover: protocol 2 reports it with run frames")
+	}
+}
+
+func TestBoundToTraeCLI(t *testing.T) {
+	for _, test := range []struct{ label, want string }{
+		{label: "TRAEX", want: "TRAE CLI"},
+		{label: "Workspace agent", want: "Workspace agent"},
+	} {
+		t.Run(test.label, func(t *testing.T) {
+			hub := agentHub(t)
+			hub.sessions["a1"].look = func(s *proto.Session) {
+				s.Agent, s.AgentLabel = "traex", test.label
+			}
+			up := boundUpstream(t, false)
+			pl := testPlugin(t, liveProvider(up), hub.server(t))
+			a := dialApp(t, pl, boundStart("a1", nil))
+			target := a.until(ofType("ready"))["target"].(map[string]any)
+			if target["agent_label"] != test.want {
+				t.Errorf("ready target label = %q, want %q", target["agent_label"], test.want)
+			}
+		})
 	}
 }
 
@@ -880,6 +901,47 @@ func TestReconnectsStartOverAfterAStableSession(t *testing.T) {
 			a.mu.Unlock()
 			if failed {
 				t.Fatal("the call ended")
+			}
+		})
+	}
+}
+
+// A service whose model's backend is down may start the session and only then say so (error upstream_unavailable,
+// then a 1008 close): the reconnects go as for any drop, and when they run out the call ends as the service being
+// unavailable with its words, not as a dropped connection. A run of drops whose last one the service did not explain
+// stays upstream_failed (TestReconnectsStartOverAfterAStableSession).
+func TestServiceDownAfterTheSessionStartedEndsAsUnavailable(t *testing.T) {
+	for _, bound := range []bool{false, true} {
+		t.Run(fmt.Sprint("bound=", bound), func(t *testing.T) {
+			setVar(t, &stableAfter, time.Hour)
+			hub := agentHub(t)
+			var sessions atomic.Int32
+			up := newFakeUpstream(t, func(u *fakeUpstream, c *websocket.Conn, f map[string]any) {
+				if f["type"] != "session.start" {
+					return
+				}
+				sessions.Add(1)
+				u.send(c, map[string]any{"type": "session.started", "session": map[string]any{}})
+				u.send(c, map[string]any{"type": "error", "error": map[string]any{"type": "server_error",
+					"code": "upstream_unavailable", "message": "backend down (cluster c1)"}})
+				_ = c.Close(websocket.StatusPolicyViolation, "upstream unavailable")
+			})
+			pl := testPlugin(t, liveProvider(up), hub.server(t))
+			start := map[string]any{"type": "start"}
+			if bound {
+				start = boundStart("a1", nil)
+			}
+			a := dialApp(t, pl, start)
+			a.until(ofType("ready"))
+			f := a.until(ofType("error"))
+			if f["code"] != codeUpstreamUnavailable || f["fatal"] != true {
+				t.Fatalf("error: %v", f)
+			}
+			if msg, _ := f["message"].(string); !strings.Contains(msg, "backend down (cluster c1)") {
+				t.Fatalf("the service's words are not in the message: %q", msg)
+			}
+			if n := sessions.Load(); n != maxReconnects+1 {
+				t.Fatalf("%d sessions, want %d", n, maxReconnects+1)
 			}
 		})
 	}

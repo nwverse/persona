@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // ---- node sessions ----
@@ -13,20 +15,27 @@ import (
 // rows without a launcher or directory; newer nodes ignore those rows when loading
 // and write no rows for sessions they did not start (#5510).
 type NodeSession struct {
-	CreationID       string    `json:"creation_id,omitempty"`
-	Incarnation      string    `json:"incarnation,omitempty"`
-	Model            string    `json:"model,omitempty"`
-	ModelFingerprint string    `json:"model_fingerprint,omitempty"`
-	ModelEffort      string    `json:"model_effort,omitempty"`
-	ConfigDir        string    `json:"config_dir,omitempty"` // the assistant's explicit Claude profile
-	Pane             string    `json:"pane,omitempty"`
-	Launcher         string    `json:"launcher"`
-	Cwd              string    `json:"cwd"`
-	StartedAt        time.Time `json:"started_at"`
-	Tasks            []string  `json:"tasks,omitempty"` // an assistant conversation's running background tasks
+	CreationID       string          `json:"creation_id,omitempty"`
+	Incarnation      string          `json:"incarnation,omitempty"`
+	Model            string          `json:"model,omitempty"`
+	ModelFingerprint string          `json:"model_fingerprint,omitempty"`
+	ModelEffort      string          `json:"model_effort,omitempty"`
+	Origin           string          `json:"origin,omitempty"`       // manager-recorded conversation source, for model-call authorization
+	OriginKnown      bool            `json:"origin_known,omitempty"` // explicit manager decision; false on pre-upgrade records
+	ConfigDir        string          `json:"config_dir,omitempty"`   // the assistant's explicit Claude profile
+	Pane             string          `json:"pane,omitempty"`
+	Launcher         string          `json:"launcher"`
+	Cwd              string          `json:"cwd"`
+	StartedAt        time.Time       `json:"started_at"`
+	StopCause        proto.StopCause `json:"stop_cause,omitempty"`
+	StopCauseAt      int64           `json:"stop_cause_at,omitempty"`
+	Tasks            []string        `json:"tasks,omitempty"` // an assistant conversation's running background tasks
 	// The permission mode / effort the app set on an assistant conversation (node/modes.go); kept with the model.
 	AppMode   string `json:"app_mode,omitempty"`
 	AppEffort string `json:"app_effort,omitempty"`
+	// Requested initial Codex App settings still awaiting desktop readback before first-message delivery.
+	DesktopPendingModel  string `json:"desktop_pending_model,omitempty"`
+	DesktopPendingEffort string `json:"desktop_pending_effort,omitempty"`
 	// Opaque node-owned process observation, not a preference for later starts.
 	UltracodeProcess json.RawMessage `json:"ultracode_process,omitempty"`
 	// Guest and GuestKind: a guest conversation's tools and kind (node/assistant_guest.go), kept with the model: every
@@ -44,6 +53,19 @@ type NodeSession struct {
 	// PendingHandoff: a switch's handoff that waits for the next message to the session (its first one was held back
 	// by a dialog, node/engine_switch.go), opaque here like EngineHistory, kept so a node restart does not lose it.
 	PendingHandoff json.RawMessage `json:"pending_handoff,omitempty"`
+	// ModelRecovery: the node's own model recovery has the conversation on another model or its chain was exhausted
+	// (#7824). Opaque here like PendingSwitch; node-owned state, never a configured-model change.
+	ModelRecovery json.RawMessage `json:"model_recovery,omitempty"`
+	// IdleCompaction is the main chat's user-idle clock, actual context and attempt latch, owned by the node.
+	IdleCompaction json.RawMessage `json:"idle_compaction,omitempty"`
+	// FollowsSetting: a leader/supervisor conversation follows the main chat model setting (node/session_state.go).
+	FollowsSetting bool `json:"follows_setting,omitempty"`
+	// An empty assistant start has not delivered its first message or runtime instructions.
+	AwaitingFirstMessage bool `json:"awaiting_first_message,omitempty"`
+	// EngineRuntime: the engine runtime (Paseo, Cindy) whose start wrote the record (node/session_state.go), kept with
+	// the model: after a node restart too, an extension's resume of such an Agent its computer no longer lists is
+	// checked against the record's directory (#10941).
+	EngineRuntime string `json:"engine_runtime,omitempty"`
 }
 
 func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSession) error {
@@ -64,6 +86,7 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 	}
 	// SQL NULL for none: the key holds a JSON null.
 	pendingSwitch, engineHistory, pendingHandoff := jsonOrNil(s.PendingSwitch), jsonOrNil(s.EngineHistory), jsonOrNil(s.PendingHandoff)
+	modelRecovery := jsonOrNil(s.ModelRecovery)
 	_, err = d.pool.Exec(ctx, `WITH saved AS (
 		INSERT INTO node_sessions (machine_id, session_id, pane, launcher, cwd, started_at, tasks, updated_at, creation_id, incarnation)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $15, $16)
@@ -76,10 +99,23 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 		jsonb_build_object('model', $8::text, 'model_fingerprint', $9::text, 'model_effort', $10::text,
 			'app_mode', $11::text, 'app_effort', $12::text, 'ultracode_process', $13::jsonb,
 			'started_at_unknown', $14::bool, 'guest', $17::jsonb, 'guest_kind', $18::text, 'config_dir', $19::text,
-			'pending_switch', $20::jsonb, 'engine_history', $21::jsonb, 'pending_handoff', $22::jsonb), now() FROM saved
-		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+			'pending_switch', $20::jsonb, 'engine_history', $21::jsonb, 'pending_handoff', $22::jsonb,
+			'model_recovery', $23::jsonb, 'follows_setting', $24::boolean,
+			'stop_cause', $25::text, 'stop_cause_at', $26::bigint,
+			'awaiting_first_message', $27::boolean, 'idle_compaction', $28::jsonb, 'origin', $29::text,
+			'origin_known', $30::boolean, 'engine_runtime', $31::text,
+			'desktop_pending_model', $32::text, 'desktop_pending_effort', $33::text), now() FROM saved
+		ON CONFLICT (key) DO UPDATE SET value = CASE
+			WHEN COALESCE((settings.value->>'stop_cause_at')::bigint, 0) > $26
+				OR (COALESCE((settings.value->>'stop_cause_at')::bigint, 0) = $26
+					AND settings.value->>'stop_cause' = 'user' AND $25 <> 'user')
+			THEN EXCLUDED.value || jsonb_build_object('stop_cause', settings.value->'stop_cause',
+				'stop_cause_at', settings.value->'stop_cause_at')
+			ELSE EXCLUDED.value END, updated_at = now()`,
 		machine, id, s.Pane, s.Launcher, s.Cwd, s.StartedAt, tasks, s.Model, s.ModelFingerprint, s.ModelEffort, s.AppMode, s.AppEffort,
-		s.UltracodeProcess, unknownStart, s.CreationID, s.Incarnation, guest, s.GuestKind, s.ConfigDir, pendingSwitch, engineHistory, pendingHandoff)
+		s.UltracodeProcess, unknownStart, s.CreationID, s.Incarnation, guest, s.GuestKind, s.ConfigDir, pendingSwitch, engineHistory, pendingHandoff,
+		modelRecovery, s.FollowsSetting, string(s.StopCause), s.StopCauseAt, s.AwaitingFirstMessage, jsonOrNil(s.IdleCompaction), s.Origin, s.OriginKnown,
+		s.EngineRuntime, s.DesktopPendingModel, s.DesktopPendingEffort)
 	return err
 }
 
@@ -95,12 +131,16 @@ const nodeSessionsSQL = `SELECT n.session_id, n.pane, n.launcher, n.cwd, n.start
 
 // nodeModel is the node_model.<machine>.<session> settings value PutNodeSession writes.
 type nodeModel struct {
-	Model            string `json:"model"`
-	ModelFingerprint string `json:"model_fingerprint"`
-	ModelEffort      string `json:"model_effort"`
-	AppMode          string `json:"app_mode"`
-	AppEffort        string `json:"app_effort"`
-	ConfigDir        string `json:"config_dir"`
+	Model                string `json:"model"`
+	ModelFingerprint     string `json:"model_fingerprint"`
+	ModelEffort          string `json:"model_effort"`
+	Origin               string `json:"origin"`
+	OriginKnown          bool   `json:"origin_known"`
+	AppMode              string `json:"app_mode"`
+	AppEffort            string `json:"app_effort"`
+	DesktopPendingModel  string `json:"desktop_pending_model"`
+	DesktopPendingEffort string `json:"desktop_pending_effort"`
+	ConfigDir            string `json:"config_dir"`
 	// UltracodeProcess and StartedAtUnknown: the ultracode observation of the session's process, and a row stored
 	// without a start time (see PutNodeSession).
 	UltracodeProcess json.RawMessage `json:"ultracode_process"`
@@ -110,6 +150,17 @@ type nodeModel struct {
 	PendingSwitch    json.RawMessage `json:"pending_switch"`
 	EngineHistory    json.RawMessage `json:"engine_history"`
 	PendingHandoff   json.RawMessage `json:"pending_handoff"`
+	ModelRecovery    json.RawMessage `json:"model_recovery"`
+	IdleCompaction   json.RawMessage `json:"idle_compaction"`
+	FollowsSetting   bool            `json:"follows_setting"`
+	StopCause        proto.StopCause `json:"stop_cause"`
+	StopCauseAt      int64           `json:"stop_cause_at"`
+
+	// Kept until the node confirms its first actual message was delivered.
+	AwaitingFirstMessage bool `json:"awaiting_first_message"`
+	// EngineRuntime: the engine runtime whose start wrote the record ("" for a terminal's, and for a row written before
+	// it was kept).
+	EngineRuntime string `json:"engine_runtime"`
 }
 
 // jsonOrNil is raw, or nil when it holds nothing (empty, or a JSON null).
@@ -136,10 +187,19 @@ func (d *DB) NodeSessions(ctx context.Context, machine string) (map[string]NodeS
 			return nil, err
 		}
 		s.Model, s.ModelFingerprint, s.ModelEffort, s.AppMode, s.AppEffort = m.Model, m.ModelFingerprint, m.ModelEffort, m.AppMode, m.AppEffort
+		s.DesktopPendingModel, s.DesktopPendingEffort = m.DesktopPendingModel, m.DesktopPendingEffort
+		s.Origin = m.Origin
+		s.OriginKnown = m.OriginKnown
 		s.Guest, s.GuestKind = m.Guest, m.GuestKind
 		s.ConfigDir = m.ConfigDir
 		s.UltracodeProcess, s.PendingSwitch, s.EngineHistory = jsonOrNil(m.UltracodeProcess), jsonOrNil(m.PendingSwitch), jsonOrNil(m.EngineHistory)
 		s.PendingHandoff = jsonOrNil(m.PendingHandoff)
+		s.ModelRecovery = jsonOrNil(m.ModelRecovery)
+		s.IdleCompaction = jsonOrNil(m.IdleCompaction)
+		s.FollowsSetting = m.FollowsSetting
+		s.AwaitingFirstMessage = m.AwaitingFirstMessage
+		s.EngineRuntime = m.EngineRuntime
+		s.StopCause, s.StopCauseAt = m.StopCause, m.StopCauseAt
 		if m.StartedAtUnknown {
 			s.StartedAt = time.Time{}
 		}

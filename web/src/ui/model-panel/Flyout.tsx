@@ -19,7 +19,7 @@ const FLYOUT_WIDTH = 264;
 
 export type FlyoutMode = "recommended" | "customized" | "favorite";
 
-export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, focusOnOpen, extra, reposition, engines, onEngine, onEffort, onFast, onReset, onStar, onClose }: {
+export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, focusOnOpen, extra, reposition, engines, setupElsewhere, onEngine, onEffort, onFast, onReset, onStar, onClose }: {
   /** The row it belongs to, and the panel it sits beside. */
   rowEl: HTMLElement;
   panelEl: HTMLElement;
@@ -38,6 +38,8 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
   /** The engines the model runs with here (lib/model-panel.ts engineChoices), its own first: more than one draws them as
    *  small pills, the others picked on a click; absent or one: the row's engine as a static block. */
   engines?: EngineChoice[];
+  /** The panel's columns hold the effort and Fast (#12315): the flyout keeps the rarer setup only. */
+  setupElsewhere?: boolean;
   onEngine?: (choice: EngineChoice) => void;
   onEffort: (effort: string) => void;
   onFast: (on: boolean) => void;
@@ -96,7 +98,8 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, when it opens
   }, [row.key]);
 
-  const slider = model.efforts.length > 1;
+  const slider = !setupElsewhere && model.efforts.length > 1;
+  const fast = !setupElsewhere && model.fast;
   // none set and no default known (a Claude Code model for a new Agent): the slider says so rather than sit on the lowest
   const effort = shownEffort(setup, model);
   const name = model.name;
@@ -110,7 +113,7 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
       aria-label={t("ui-modelpanel.setup_of", { model: name })}
       data-model-flyout
       className="fixed z-50 flex flex-col rounded-[12px] bg-surface p-3.5 pb-3 shadow-overlay transition-[top] duration-150 ease-out"
-      style={{ width: FLYOUT_WIDTH, maxWidth: "calc(100vw - 16px)", left: at?.left ?? -9999, top: at?.top ?? -9999, visibility: at ? undefined : "hidden" }}
+      style={{ width: FLYOUT_WIDTH, maxWidth: "calc(100vw - 16px)", left: at?.left, top: at?.top, visibility: at ? undefined : "hidden" }}
     >
       <div className="flex items-start gap-2">
         <span title={name} className={cx("line-clamp-2 min-w-0 flex-1 text-[14px] leading-[1.35] font-semibold break-words text-ink", model.custom && "font-mono")}>{name}</span>
@@ -130,10 +133,10 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
         {provider.name}
         {model.context ? ` · ${t("ui-modelpanel.context", { value: contextSize(model.context) })}` : ""}
       </div>
-      {(slider || model.fast) && (
+      {(slider || fast) && (
         <div className="flex items-center gap-2 pt-3.5">
-          {slider && <EffortSlider stops={model.efforts} value={effort} recommended={model.defaultEffort} labelOf={effortTitle} unsetLabel={t("ui-modelpanel.effort_unset")} onChange={onEffort} disabled={disabled} />}
-          {model.fast && (
+          {slider && <EffortSlider stops={model.efforts} value={effort} recommended={model.variants ? undefined : model.defaultEffort} labelOf={effortTitle} unsetLabel={t("ui-modelpanel.effort_unset")} onChange={onEffort} disabled={disabled} />}
+          {fast && (
             <button
               type="button"
               data-fast-toggle
@@ -152,6 +155,9 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
           )}
         </div>
       )}
+      {!setupElsewhere && (model.effortUnavailable || model.effortNote) && (
+        <p className="pt-2 text-label leading-[1.4] text-ink-3">{model.effortUnavailable || model.effortNote}</p>
+      )}
       {extra && <div className="pt-2">{extra}</div>}
       <div role="group" aria-label={t("ui-modelpanel.engine")} className="pt-2">
         {engines && engines.length > 1 ? (
@@ -164,7 +170,7 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
                 data-engine-choice={c.engine}
                 aria-pressed={c.own}
                 disabled={disabled || c.own || c.blocked !== undefined}
-                title={c.own ? agentName(c.engine) : c.blocked || t("ui-modelpanel.engine_via", { provider: c.provider.name })}
+                title={c.own ? agentName(c.engine, c.provider.engineLabel) : c.blocked || t("ui-modelpanel.engine_via", { provider: c.provider.name })}
                 onClick={() => onEngine?.(c)}
                 className={cx(
                   "flex h-[26px] max-w-full min-w-0 items-center gap-1.5 rounded-control px-2 text-[12px] leading-4 transition-colors duration-150",
@@ -173,8 +179,8 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
                   !c.own && "disabled:cursor-not-allowed",
                 )}
               >
-                <AgentMark agent={c.engine} size={12} decorative className="shrink-0 text-ink-2" />
-                <span className="min-w-0 truncate">{agentName(c.engine)}</span>
+                <AgentMark agent={c.engine} label={c.provider.engineLabel} size={12} decorative className="shrink-0 text-ink-2" />
+                <span className="min-w-0 truncate">{agentName(c.engine, c.provider.engineLabel)}</span>
                 {c.own && <Icon name="check" size={12} stroke={2.5} className="shrink-0 text-ink" />}
               </button>
             ))}
@@ -183,9 +189,9 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
           <div className="flex min-h-7 items-center gap-1 rounded-control bg-hover-2 pr-1">
             <span className="flex min-h-7 min-w-0 flex-1 items-center gap-1.5 px-1 text-ink">
               <span aria-hidden className="inline-flex size-4 shrink-0 items-center justify-center">
-                <AgentMark agent={provider.engine} size={12} decorative className="text-ink-2" />
+                <AgentMark agent={provider.engine} label={provider.engineLabel} size={12} decorative className="text-ink-2" />
               </span>
-              <span className="min-w-0 truncate text-[12px] leading-4">{agentName(provider.engine)}</span>
+              <span className="min-w-0 truncate text-[12px] leading-4">{agentName(provider.engine, provider.engineLabel)}</span>
             </span>
             <Icon name="check" size={12} stroke={2.5} className="shrink-0 text-ink" />
           </div>

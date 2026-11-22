@@ -69,15 +69,18 @@ func TestBuildManifestNodes(t *testing.T) {
 	writeGz(t, filepath.Join(dir, "personad-linux-amd64.gz"), []byte("personad"))
 	writeGz(t, filepath.Join(dir, "personad-darwin-arm64.gz"), []byte("personad for a Mac"))
 	writeGz(t, filepath.Join(dir, "persona-node-linux-amd64.gz"), []byte("persona-node"))
+	writeGz(t, filepath.Join(dir, "persona-node-windows-amd64.exe.gz"), []byte("Windows persona-node"))
+	writeGz(t, filepath.Join(dir, "personad-windows-amd64.exe.gz"), []byte("Windows personad"))
 	m, err := BuildManifest(dir, Manifest{Version: "v1", Build: 202611030000, NodeProtocol: 2, NodeProtocolMin: 1,
 		NodeCapabilities: []string{"sessions"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(m.Files) != 2 || m.Files["linux-amd64"].Name != "personad-linux-amd64.gz" {
+	if len(m.Files) != 3 || m.Files["linux-amd64"].Name != "personad-linux-amd64.gz" || m.Files["windows-amd64"].Name != "personad-windows-amd64.exe.gz" {
 		t.Fatalf("files %+v", m.Files)
 	}
-	if n := m.Nodes["persona-node"]; len(n) != 1 || n["linux-amd64"].Name != "persona-node-linux-amd64.gz" || n["linux-amd64"].BinarySHA256 == "" {
+	if n := m.Nodes["persona-node"]; len(n) != 2 || n["linux-amd64"].Name != "persona-node-linux-amd64.gz" ||
+		n["windows-amd64"].Name != "persona-node-windows-amd64.exe.gz" || n["linux-amd64"].BinarySHA256 == "" {
 		t.Fatalf("nodes %+v", m.Nodes)
 	}
 	for _, c := range []struct{ program, plat, want string }{
@@ -89,12 +92,49 @@ func TestBuildManifestNodes(t *testing.T) {
 			t.Errorf("%s on %s: %+v %v, want %s", c.program, c.plat, f, ok, c.want)
 		}
 	}
-	if _, ok := m.NodeFile("persona-node", "windows-amd64"); ok {
-		t.Error("a platform the release has no build for")
+	if f, ok := m.NodeFile("persona-node", "windows-amd64"); !ok || f.Name != "persona-node-windows-amd64.exe.gz" {
+		t.Errorf("a Windows node download must retain its executable suffix: %+v %v", f, ok)
+	}
+	if f, ok := m.NodeFile("personad", "windows-amd64"); !ok || f.Name != "personad-windows-amd64.exe.gz" {
+		t.Errorf("a Windows personad download must not be mistaken for a POSIX program: %+v %v", f, ok)
+	}
+	if _, ok := m.NodeFile("persona-node", "windows-arm64"); ok {
+		t.Error("a missing architecture must not reuse another one's bytes")
 	}
 	b, _ := json.Marshal(m)
 	back, err := ParseManifest(b)
 	if err != nil || back.NodeProtocol != 2 || back.NodeProtocolMin != 1 || len(back.NodeCapabilities) != 1 || len(back.Nodes) != 1 {
+		t.Fatalf("round trip: %+v %v", back, err)
+	}
+}
+
+// The independent connector is indexed separately from the programs a hub swaps. Windows Link downloads keep .exe
+// before .gz, while their manifest key stays <os>-<arch>; neither one becomes a hub platform.
+func TestBuildManifestLinks(t *testing.T) {
+	dir := t.TempDir()
+	writeGz(t, filepath.Join(dir, "personad-linux-amd64.gz"), []byte("personad"))
+	writeGz(t, filepath.Join(dir, "persona-link-linux-amd64.gz"), []byte("Linux connector"))
+	writeGz(t, filepath.Join(dir, "persona-link-windows-amd64.exe.gz"), []byte("Windows amd64 connector"))
+	writeGz(t, filepath.Join(dir, "persona-link-windows-arm64.exe.gz"), []byte("Windows arm64 connector"))
+	m, err := BuildManifest(dir, Manifest{Version: "v1", Build: 202611030000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Files) != 1 || len(m.Programs) != 0 || len(m.Nodes) != 0 {
+		t.Fatalf("connector leaked into an update group: %+v", m)
+	}
+	for _, platform := range []string{"linux-amd64", "windows-amd64", "windows-arm64"} {
+		suffix := ""
+		if platform != "linux-amd64" {
+			suffix = ".exe"
+		}
+		if got := m.Links[platform].Name; got != "persona-link-"+platform+suffix+".gz" || m.Links[platform].BinarySHA256 == "" {
+			t.Errorf("%s: %+v", platform, m.Links)
+		}
+	}
+	b, _ := json.Marshal(m)
+	back, err := ParseManifest(b)
+	if err != nil || len(back.Links) != 3 {
 		t.Fatalf("round trip: %+v %v", back, err)
 	}
 }

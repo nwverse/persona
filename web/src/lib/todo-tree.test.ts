@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { agentTreeState, buildTodoTree, groupTodosByProject, nestAgents, projectOf, STALE_MS, todoTreeState, treeStateLabel } from "./todo-tree";
-import { makeSessionLookup, todoStatus, todoStatusLabel, type Todo } from "./todos";
+import { agentGroupLabel, agentTreeState, buildTodoTree, groupTodosByProject, nestAgents, projectOf, STALE_MS, todoTreeState, treeStateLabel, worstTreeState } from "./todo-tree";
+import { makeSessionLookup, todoStatus, type Todo } from "./todos";
+import { todoLook, waitOf } from "./todo-wait-reason";
 import { matchesFilter } from "./agent-filter";
 import { sessionSource } from "./agent-groups";
 import type { Machine, Session } from "./types";
@@ -17,13 +18,13 @@ const link = (sid: string, patch: object = {}) => ({ machine_id: "m1", session_i
 const noMutes = { spaces: [], sessions: [] };
 
 describe("By to-do: to-dos at the top level, no repository rows (#2526, #6458)", () => {
-  it("lists the to-dos in sortTodos's order with no repository over them, and the agents on no to-do directly under their group", () => {
+  it("lists the to-dos in static sortTodos order with live states in place, and no repository or extra loose-Agent group", () => {
     const all = [s("a", "working", "/code/persona"), s("b", "unread", "/code/persona/.worktrees/x"), s("c", "needs_you", "/code/botmux"), s("loose", "idle", "/code/persona"), s("loose2", "idle", "/code/other")];
     const todos = [todo("t1", [link("a")]), todo("t2", [link("b")]), todo("t3", [link("c")])];
     const tree = buildTodoTree(all, machines, todos, noMutes, NOW);
     expect(tree.projects).toEqual([]);
-    // the task board's order: Needs you (t3), Working (t1), Finished (t2), #4896
-    expect(tree.todos.map((td) => [td.todoId, td.state])).toEqual([["t3", "needs_you"], ["t1", "working"], ["t2", "done"]]);
+    // Live Agent rank does not move a to-do group; each group's state still updates (#11801).
+    expect(tree.todos.map((td) => [td.todoId, td.state])).toEqual([["t1", "working"], ["t2", "done"], ["t3", "needs_you"]]);
     expect(tree.loose.map((g) => [g.key, g.agents.map((a) => a.session.session_id)])).toEqual([["todo:none", ["loose", "loose2"]]]);
   });
 
@@ -85,16 +86,18 @@ describe("By to-do: to-dos at the top level, no repository rows (#2526, #6458)",
   });
 
   it("a to-do says the To-dos page's word for its state, ranked as the tree ranks it (#6458)", () => {
-    // its agents ended their turns and one waits on CI: the To-dos page's Waiting, never Done
-    const all = [s("ci", "idle", "/code/p", { work: { phase: "blocked", on: "external", line: "CI" } }), s("seen", "idle", "/code/q"), s("new", "unread", "/code/r")];
+    // its agents ended their turns and one waits on CI: the To-dos page's word for that wait (#11090), never Done
+    const all = [s("ci", "idle", "/code/p", { work: { phase: "blocked", on: "external", line: "CI", wait: "CI" } }), s("seen", "idle", "/code/q"), s("new", "unread", "/code/r")];
     const tree = buildTodoTree(all, machines, [todo("wait", [link("ci")]), todo("follow", [link("seen")]), todo("fresh", [link("new")])], noMutes, NOW);
     const byId = Object.fromEntries(tree.todos.map((td) => [td.todoId, td]));
     const lookup = makeSessionLookup(all);
     for (const id of ["wait", "follow", "fresh"]) {
       const td = todo(id, [link({ wait: "ci", follow: "seen", fresh: "new" }[id]!)]);
-      expect(byId[id]!.statusLabel).toBe(todoStatusLabel(td, todoStatus(td, lookup)));
+      const status = todoStatus(td, lookup);
+      expect(byId[id]!.statusLabel).toBe(todoLook(td, status, waitOf(td, status, lookup)).label);
     }
-    expect([byId.wait!.statusLabel, byId.follow!.statusLabel, byId.fresh!.statusLabel]).toEqual(["等待中", "待跟进", "完成未看"]);
+    expect([byId.wait!.statusLabel, byId.follow!.statusLabel, byId.fresh!.statusLabel]).toEqual(["等外部", "待跟进", "完成未看"]);
+    expect([byId.wait!.wait, byId.follow!.wait]).toEqual(["external", undefined]);
     expect(byId.wait!.state).toBe("bg_waiting");
     expect(todoTreeState("waiting")).toBe("bg_waiting");
   });
@@ -115,6 +118,15 @@ describe("By to-do: to-dos at the top level, no repository rows (#2526, #6458)",
     const all = [s("a", "working", "/code/persona")];
     const groups = groupTodosByProject([todo("t1", [link("a")]), todo("t2", [])], makeSessionLookup(all), NOW);
     expect(groups.map((g) => [g.name, g.state, g.todos.map((t) => t.id)])).toEqual([["persona", "working", ["t1"]], ["未归类", "done", ["t2"]]]);
+  });
+
+  it("a folder holding a to-do the page has in Needs you says so, a failed start the hub closed too (audit item 13)", () => {
+    const old = new Date(NOW - 3 * STALE_MS).toISOString();
+    const failedStart = todo("f1", [], { done_at: old, updated_at: old, start_error: "machine offline", origin: "conv" });
+    // by its agents alone it reads Done, and a quiet folder of it folds away
+    expect(groupTodosByProject([failedStart], makeSessionLookup([]), NOW).map((g) => [g.state, g.folded])).toEqual([["done", true]]);
+    const waiting = groupTodosByProject([failedStart, todo("t2", [])], makeSessionLookup([]), NOW, undefined, (td) => td.id === "f1");
+    expect(waiting.map((g) => [g.state, g.folded, g.todos.map((t) => t.id)])).toEqual([["needs_you", false, ["f1", "t2"]]]);
   });
 
   it("待办页先按待办所属的知识库项目分段，再按仓库，都没有的最后 (#2581)", () => {
@@ -145,6 +157,26 @@ describe("By to-do: to-dos at the top level, no repository rows (#2526, #6458)",
   });
 });
 
+describe("a group's word says what its rows say, never Done over agents that are not", () => {
+  const label = (all: Session[]) => agentGroupLabel(all, worstTreeState(all.map(agentTreeState)));
+  it("Not on a to-do holding a finished agent not looked at yet says 完成未看, as By status and the quick filter do", () => {
+    const tree = buildTodoTree([s("seen", "idle", "/code/a"), s("new", "unread", "/code/b")], machines, [], noMutes, NOW);
+    expect(tree.loose.map((g) => [g.state, g.label])).toEqual([["done", "完成未看"]]);
+    expect(label([s("seen", "idle", "/code/a"), s("new", "unread", "/code/b")])).toBe("完成未看");
+  });
+  it("Recent (not running) of stopped agents says 未运行", () => {
+    expect(label([s("gone", "offline", "/code/a"), s("gone2", "offline", "/code/b")])).toBe("未运行");
+  });
+  it("keeps the state's own word otherwise: Done for seen agents, Needs you / Working above it", () => {
+    expect(label([s("seen", "idle", "/code/a"), s("gone", "offline", "/code/b")])).toBeUndefined();
+    expect(label([s("asks", "needs_you", "/code/a"), s("new", "unread", "/code/b")])).toBeUndefined();
+    expect(label([s("runs", "working", "/code/a"), s("gone", "offline", "/code/b")])).toBeUndefined();
+    expect(label([])).toBeUndefined();
+    const seen = buildTodoTree([s("seen", "idle", "/code/a")], machines, [], noMutes, NOW);
+    expect(seen.loose[0]).not.toHaveProperty("label");
+  });
+});
+
 describe("来源：飞书群 / 终端 / 桌面端 (#2526)", () => {
   it("botmux 是飞书群，终端引擎的窗格是终端，桌面 App 自己的对话是桌面端，其余没有", () => {
     expect(sessionSource(s("b", "idle", "/", { pane_id: "botmux:abc" }))).toBe("feishu");
@@ -155,6 +187,7 @@ describe("来源：飞书群 / 终端 / 桌面端 (#2526)", () => {
     expect(sessionSource(s("x", "idle", "/", { space_kind: "codex_app", source_kind: "codex_history" }))).toBe("desktop");
     expect(sessionSource(s("p", "idle", "/", { host: "paseo", source_kind: "runtime", source_instance_id: "paseo" }))).toBe("desktop");
     expect(sessionSource(s("cy", "idle", "/", { host: "cindy", source_kind: "runtime", source_instance_id: "cindy" }))).toBe("desktop");
+    expect(sessionSource(s("t3", "idle", "/", { host: "t3code", source_kind: "runtime", source_instance_id: "t3code" }))).toBe("desktop");
     expect(sessionSource(s("q", "idle", "/", { source_kind: "runtime", source_instance_id: "orca", space_kind: "orca" }))).toBe("desktop");
     expect(sessionSource(s("d", "idle", "/", { source_kind: "runtime", source_instance_id: "dsh" }))).toBeUndefined();
     expect(sessionSource(s("n", "idle", "/"))).toBeUndefined();

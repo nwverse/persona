@@ -240,6 +240,14 @@
     }
   },
   "size": {
+    "splitPageMin": {
+      "$type": "dimension",
+      "$value": {
+        "value": 400,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.splitPageMin: least page width beside a list; otherwise the list overlays the full-width page"
+    },
     "cardColumn": {
       "$type": "dimension",
       "$value": {
@@ -247,6 +255,14 @@
         "unit": "px"
       },
       "$description": "Theme.Size.cardColumn: minimum adaptive card column; 330 iOS pt / Android dp in each platform's logical units, not physical pixels"
+    },
+    "readable": {
+      "$type": "dimension",
+      "$value": {
+        "value": 560,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.readable: the widest a page meant to be read, or a bar of a page's actions, gets on a wide window; centered"
     },
     "iconXS": {
       "$type": "dimension",

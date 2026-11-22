@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,7 +39,7 @@ const (
 		"╰──────────────────────────────────────────╯\n\n› Ask Codex to do anything\n\n  gpt-6 xhigh · /tmp/proj\n"
 )
 
-// codexWaitHerdr is codexStartHerdr whose new tab shows Codex's update offer once the launcher runs, then (after "2")
+// codexWaitHerdr is codexStartHerdr whose new tab shows Codex's update offer once the launcher runs, then (after Escape)
 // its box with the model loading, then ready a few reads later. The pane lists as a Codex herdr says works (it starts
 // its MCP servers), with no session id.
 func codexWaitHerdr(t *testing.T) (*Node, *fakeHerdr, string, *[]string) {
@@ -58,7 +59,7 @@ func codexWaitHerdr(t *testing.T) (*Node, *fakeHerdr, string, *[]string) {
 		switch {
 		case c.Method == "pane.send_input" && strings.Contains(str(c.Params["text"]), "codex-start"):
 			f.setScreen("w1:p2", cxUpdateOffer)
-		case c.Method == "pane.send_keys" && slices.Equal(keysOf(c), []string{"2"}):
+		case c.Method == "pane.send_keys" && slices.Equal(keysOf(c), []string{"escape"}):
 			f.setScreen("w1:p2", cxLoading)
 			reads = 0
 		case c.Method == "pane.read" && reads >= 0:
@@ -100,7 +101,7 @@ func TestCodexStartWithoutAMessage(t *testing.T) {
 		t.Fatalf("ran %q (commands %q)", ran, *cmds)
 	}
 	// The update offer was skipped with its own key: never enter, which takes the highlighted "Update now".
-	if keys := f.trace("pane.send_keys"); len(keys) != 1 || !strings.Contains(keys[0], `"2"`) {
+	if keys := f.trace("pane.send_keys"); len(keys) != 1 || !strings.Contains(keys[0], `"escape"`) {
 		t.Fatalf("keys %q", keys)
 	}
 	// Listed as the waiting row while herdr says the pane works (Codex starting its MCP servers): idle, not a turn.
@@ -141,7 +142,7 @@ func TestCodexFirstMessageFromTheApp(t *testing.T) {
 			mu.Lock()
 			pasted = str(c.Params["text"])
 			mu.Unlock()
-			f.setScreen("w1:p2", "› [Pasted Content 9035 chars]\n\n  gpt-6 xhigh · /tmp/proj\n")
+			f.setScreen("w1:p2", fmt.Sprintf("› [Pasted Content %d chars]\n\n  gpt-6 xhigh · /tmp/proj\n", len([]rune(specialPrompt))))
 		case c.Method == "pane.send_keys" && slices.Equal(keysOf(c), []string{"enter"}):
 			f.setScreen("w1:p2", "› fix\n\n• Working (0s • esc to interrupt)\n\n› Ask Codex to do anything\n")
 			writeWaitRollout(t, home, cwd, startThread, time.Now(), specialPrompt)
@@ -205,7 +206,7 @@ func TestCodexFirstMessageRefusals(t *testing.T) {
 	}
 }
 
-// The first message waits out a model still loading and the update offer, skipping the offer with "2" only.
+// The first message waits out a model still loading and the update offer, skipping the offer with Escape only.
 func TestCodexFirstMessageWaitsForTheBox(t *testing.T) {
 	n, f, cwd, _ := codexWaitHerdr(t)
 	home := filepath.Dir(cwd)
@@ -269,8 +270,8 @@ func TestCodexWaitingRowsInOneDirectory(t *testing.T) {
 		agentOf("codex", "", proto.StatusIdle, "w1:p3", "w1:t3", "w1", cwd, ""),
 	}, nil))
 	began := time.Now().Add(-time.Minute)
-	n.openCodexWait(context.Background(), "w1:p2", cwd, "codex", "", began)
-	n.openCodexWait(context.Background(), "w1:p3", cwd, "codex", "", began)
+	n.openCodexWait(context.Background(), "w1:p2", cwd, "codex", "", modelExecution{}, began)
+	n.openCodexWait(context.Background(), "w1:p3", cwd, "codex", "", modelExecution{}, began)
 	w2, w3 := n.codexWaitOf("w1:p2"), n.codexWaitOf("w1:p3")
 	if w2 == nil || w3 == nil || w2.id == w3.id {
 		t.Fatal("no rows")
@@ -331,8 +332,8 @@ func TestCodexWaitingRowsAmbiguousScreens(t *testing.T) {
 	n.codices.checked = nil
 	n.codices.scan = func() []codexProcess { return nil }
 	began := time.Now().Add(-time.Minute)
-	n.openCodexWait(context.Background(), "w1:p2", cwd, "codex", "", began)
-	n.openCodexWait(context.Background(), "w1:p3", cwd, "codex", "", began)
+	n.openCodexWait(context.Background(), "w1:p2", cwd, "codex", "", modelExecution{}, began)
+	n.openCodexWait(context.Background(), "w1:p3", cwd, "codex", "", modelExecution{}, began)
 	w2, w3 := n.codexWaitOf("w1:p2"), n.codexWaitOf("w1:p3")
 	writeWaitRollout(t, home, cwd, "01a19a00-0000-7000-8000-00000000000a", time.Now().Add(-5*time.Second), "same words")
 	shown := "› same words\n\n› Ask Codex to do anything\n"
@@ -362,7 +363,7 @@ func TestCodexWaitingRowAfterARestart(t *testing.T) {
 	f.reply("session.snapshot", snapshot(nil, nil, []any{agentOf("codex", "", proto.StatusDone, "w1:p2", "w1:t2", "w1", cwd, "")}, nil))
 	n.codices.checked = nil
 	n.codices.scan = func() []codexProcess { return nil }
-	n.openCodexWait(context.Background(), "w1:p2", cwd, "codex", "", time.Now())
+	n.openCodexWait(context.Background(), "w1:p2", cwd, "codex", "", modelExecution{}, time.Now())
 	id := n.codexWaitOf("w1:p2").id
 	n.mu.Lock()
 	n.codexWaiting = nil // what a new process has: the binding and the record only
@@ -390,7 +391,7 @@ func TestCodexWaitingRowGoesWithCodex(t *testing.T) {
 	f.reply("session.snapshot", snapshot(nil, nil, []any{agentOf("codex", "", proto.StatusIdle, "w1:p2", "w1:t2", "w1", cwd, "")}, nil))
 	n.codices.checked = nil
 	n.codices.scan = func() []codexProcess { return nil }
-	n.openCodexWait(context.Background(), "w1:p2", cwd, "codex", "", time.Now())
+	n.openCodexWait(context.Background(), "w1:p2", cwd, "codex", "", modelExecution{}, time.Now())
 	w := n.codexWaitOf("w1:p2")
 	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
 	f.reply("pane.get", map[string]any{"pane": map[string]any{"pane_id": "w1:p2", "agent": nil}})
@@ -432,7 +433,7 @@ func TestCodexWaitingRowTakesTheThreadItsTitleNames(t *testing.T) {
 		f.reply("session.snapshot", snapshot(nil, nil, []any{agentOf("codex", "", proto.StatusWorking, "w1:p2", "w1:t2", "w1", cwd, title)}, nil))
 		_ = n.refreshHosts(context.Background())
 	}
-	n.openCodexWait(context.Background(), "w1:p2", cwd, "codex", "", time.Now())
+	n.openCodexWait(context.Background(), "w1:p2", cwd, "codex", "", modelExecution{}, time.Now())
 	w := n.codexWaitOf("w1:p2")
 	list("Same name | proj") // two threads have that name: none is taken
 	n.lookForCodexThreadsOnce(context.Background(), []*codexWait{w}, false)
@@ -465,7 +466,7 @@ func TestCodexWaitingRowStopsScanningForAThreadNotItsOwn(t *testing.T) {
 	f.reply("workspace.list", map[string]any{"workspaces": []any{map[string]any{"workspace_id": "w1", "label": "proj"}}})
 	f.reply("session.snapshot", snapshot(nil, nil, []any{agentOf("codex", "", proto.StatusIdle, "w1:p2", "w1:t2", "w1", cwd, "")}, nil))
 	f.setScreen("w1:p2", cxReady)
-	n.openCodexWait(context.Background(), "w1:p2", cwd, "codex", "", time.Now().Add(-time.Minute))
+	n.openCodexWait(context.Background(), "w1:p2", cwd, "codex", "", modelExecution{}, time.Now().Add(-time.Minute))
 	w := n.codexWaitOf("w1:p2")
 	writeWaitRollout(t, home, cwd, "01a19a00-0000-7000-8000-0000000000d1", time.Now().Add(-10*time.Second), "someone else's")
 	for range codexJudgeLooks + 3 {
@@ -502,7 +503,7 @@ func TestCodexFirstMessageExit(t *testing.T) {
 }
 
 func TestCodexStartScreens(t *testing.T) {
-	if keys := codexSkipUpdateKeys(cxUpdateOffer); !slices.Equal(keys, []string{"2"}) {
+	if keys := codexSkipUpdateKeys(cxUpdateOffer); !slices.Equal(keys, []string{"escape"}) {
 		t.Errorf("update offer keys %v", keys)
 	}
 	if codexSkipUpdateKeys(cxTrust0153) != nil || codexSkipUpdateKeys(cxReady) != nil {

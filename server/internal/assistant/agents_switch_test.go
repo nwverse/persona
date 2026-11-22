@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -90,7 +91,7 @@ func TestAgentsSwitchEachByItsState(t *testing.T) {
 		t.Errorf("limited: %v", got)
 	}
 	for _, c := range nodeCalls(ft.f) {
-		if p := callParams(t, c); c.Method == DeviceSessionSend && (p["switch_now"] != true || !strings.Contains(p["text"].(string), prompts.RenderAgentLimitContinue())) {
+		if p := callParams(t, c); c.Method == DeviceSessionSend && (p["switch_now"] != true || !strings.Contains(p["text"].(string), prompts.RenderAgentLimitContinue(""))) {
 			t.Errorf("continuation: %v", p)
 		}
 	}
@@ -124,12 +125,15 @@ func TestAgentsSwitchEachByItsState(t *testing.T) {
 // queued one the user moved to another launcher meanwhile is dropped with nothing done.
 func TestAgentsSwitchFilterBusyAndMovedMeanwhile(t *testing.T) {
 	ft, _ := switchRig(t)
-	ft.sessions("mac", agentRow("s1dflt0001", "", proto.StatusIdle), agentRow("s2other001", "sub", proto.StatusIdle))
 	ft.f.nodes = map[string]nodeAnswer{
 		DeviceSessionSwitch: func(string, json.RawMessage) (any, error) {
 			return nil, &rpc.Error{Code: proto.CodeSwitchBusy, Message: "a background command runs"}
 		},
 	}
+	ft.sessions("mac", agentRow("s1dflt0001", "", proto.StatusIdle), agentRow("s2other001", "sub", proto.StatusIdle))
+	// Finish the initial inventory event before creating the queued request. Otherwise
+	// that older event can start a retry before the test reports the user's move.
+	waitFleetOrder(t, ft.s)
 	res, err := batchSwitch(ft, map[string]any{"launcher": "work", "from_launcher": "claude"})
 	if err != nil {
 		t.Fatal(err)
@@ -152,6 +156,37 @@ func TestAgentsSwitchFilterBusyAndMovedMeanwhile(t *testing.T) {
 	}
 	if got := callsFor(ft.f, "s1dflt0001"); len(got) != n {
 		t.Errorf("moved meanwhile, switched anyway: %v", got)
+	}
+}
+
+// Initial queue loading can overlap an inventory event. Both paths must read the
+// loaded flag under the queue mutex, including the no-store early return.
+func TestAgentsSwitchConcurrentLoadAndList(t *testing.T) {
+	for range 256 {
+		s := &Service{}
+		start := make(chan struct{})
+		var done sync.WaitGroup
+		done.Add(2)
+		go func() {
+			defer done.Done()
+			<-start
+			s.loadSwitchQueue(context.Background())
+		}()
+		go func() {
+			defer done.Done()
+			<-start
+			for range 8 {
+				s.switchQueueListed("sample-machine")
+			}
+		}()
+		close(start)
+		done.Wait()
+		s.switchQ.mu.Lock()
+		ready := s.switchQ.loaded && s.switchQ.items != nil && s.switchQ.running != nil && s.switchQ.retry != nil
+		s.switchQ.mu.Unlock()
+		if !ready {
+			t.Fatal("concurrent listing lost the initialized queue")
+		}
 	}
 }
 
@@ -246,5 +281,57 @@ func TestAgentsSwitchStoppedAndFailed(t *testing.T) {
 	ft.sessions("mac", stoppedRow("s4busy0001", "", true))
 	if got := waitCallsFor(t, ft.f, "s4busy0001", 1); strings.Join(got, ",") != "session.switch" {
 		t.Fatalf("stopped while queued: %v", got)
+	}
+}
+
+// The queue's loaded flag is read under its lock when a session list arrives while the queue is being loaded (#7303);
+// the reader and the loader run together, so only a -race run tells it from a read outside the lock.
+func TestSwitchQueueListedReadsLoadedUnderItsLock(t *testing.T) {
+	for range 500 {
+		s := &Service{} // no store: nothing to start, the flag is all there is
+		loaded := make(chan struct{})
+		go func() {
+			s.loadSwitchQueue(context.Background())
+			close(loaded)
+		}()
+		s.switchQueueListed("mac")
+		<-loaded
+	}
+}
+
+// agents_switch to the launcher an off_launcher agent was started on (#11792) switches it back there, while an agent
+// that does run on that launcher is still refused as being on it already.
+func TestAgentsSwitchBackOntoTheLauncherAnAgentRunsOff(t *testing.T) {
+	ft, _ := switchRig(t)
+	off := agentRow("s1off00001", "kimi", proto.StatusIdle)
+	off.StartedByPersona, off.OffLauncher = true, true
+	ft.sessions("mac", off, agentRow("s2there001", "kimi", proto.StatusIdle))
+	res, err := batchSwitch(ft, map[string]any{"launcher": "kimi", "agents": []map[string]any{
+		{"machine": "mac", "session_id": "s1off00001"}, {"machine": "mac", "session_id": "s2there001"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res, "1 switched,") || !strings.Contains(res, "1 refused") || !strings.Contains(res, "runs on kimi already") {
+		t.Fatalf("answer:\n%s", res)
+	}
+	if got := callsFor(ft.f, "s1off00001"); strings.Join(got, ",") != "session.modes,session.switch" {
+		t.Errorf("off its launcher: %v", got)
+	}
+	if got := callsFor(ft.f, "s2there001"); len(got) != 0 {
+		t.Errorf("on it already, reached its node: %v", got)
+	}
+
+	// Working, it is queued, and switched back when its turn ends, not dropped as running there already.
+	busy := agentRow("s3offbusy1", "kimi", proto.StatusWorking)
+	busy.StartedByPersona, busy.OffLauncher = true, true
+	ft.sessions("mac", busy)
+	if res, err := batchSwitch(ft, map[string]any{"launcher": "kimi", "agents": []map[string]any{{"machine": "mac", "session_id": "s3offbusy1"}}}); err != nil || !strings.Contains(res, "1 queued") {
+		t.Fatalf("busy, off its launcher: %v\n%s", err, res)
+	}
+	idle := busy
+	idle.Status, idle.State = proto.StatusIdle, proto.StateIdle
+	ft.sessions("mac", idle)
+	if got := waitCallsFor(t, ft.f, "s3offbusy1", 2); strings.Join(got, ",") != "session.modes,session.switch" {
+		t.Fatalf("at the end of its turn: %v", got)
 	}
 }

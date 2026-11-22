@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// A stable card location is supplied by the owning assistant conversation, never inferred from model JSON.
 nonisolated struct AssistantCardLocation: Hashable, Sendable {
@@ -23,6 +24,8 @@ struct InteractiveAssistantViewCard: View {
     @State private var openedWeb: LinkTarget?
     @Environment(AppModel.self) private var app
     @Environment(\.openLink) private var openLink
+    /// The conversation's stack: an Agent a card links to is pushed on it, with Back to the card (#12006).
+    @Environment(\.pushInboxChat) private var pushChat
 
     init(view: ExtensionView, version: Int64 = 1, complete: Bool = true, registered: Bool,
          location: AssistantCardLocation, deps: AssistantViewModel.Deps) {
@@ -50,6 +53,7 @@ struct InteractiveAssistantViewCard: View {
             }
             if supported {
                 ExtensionViewStack(view: model.view, model: model, cards: false, titles: true, link: link)
+                    .environment(\.pluginUICompact, true)
                     .environment(\.assistantHTMLRendering, AssistantHTMLRenderingContext(version: model.version, fallback: model.root.fallback,
                         answered: model.record != nil || model.attempt != nil,
                         enabled: AssistantHTMLSafety.executionVerified && app.features(location.scope.group).contains("assistant_html_bridge"),
@@ -104,7 +108,7 @@ struct InteractiveAssistantViewCard: View {
         #endif
         .sheet(item: $openedFile) { FileViewer(ref: $0) }
         .sheet(item: $openedKnowledge) { entry in
-            NavigationStack { KnowledgeDetailView(entry: entry) }
+            NavigationStack { KnowledgeDetailView(entry: entry).toolbar { SheetClose { openedKnowledge = nil } } }
         }
         .onAppear { model.update(source, version: version, complete: complete); model.registered = registered }
         .onDisappear { model.decline() }
@@ -124,7 +128,8 @@ struct InteractiveAssistantViewCard: View {
         let parts = components.percentEncodedPath.split(separator: "/").compactMap { String($0).removingPercentEncoding }
         switch components.host?.lowercased() {
         case "session" where parts.count == 2:
-            app.open(SessionKey(group: location.scope.group, machineID: parts[0], sessionID: parts[1]))
+            app.openInPage(SessionKey(group: location.scope.group, machineID: parts[0], sessionID: parts[1]),
+                           push: conversationAgentPush(pushChat))
         case "task" where parts.count == 1:
             app.selectHub(location.scope.group)
             TasksStore.shared.detailTask = parts[0]

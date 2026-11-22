@@ -39,6 +39,23 @@ export function sameMessage(a: string, b: string): boolean {
   return x === y || (Math.min([...x].length, [...y].length) >= 8 && (x.includes(y) || y.includes(x)));
 }
 
+/** Pair each photo-only queue row with at most one local pending message, in order. Claude includes saved paths;
+ *  runtimes that keep photos separately can publish an empty string instead. Indexes distinguish identical rows. */
+export function pairPhotoOnly(queued: string[], pending: { text: string; images: number; carries?: boolean }[]): Map<number, number> {
+  const pairs = new Map<number, number>();
+  const taken = new Set<number>();
+  for (const [index, raw] of queued.entries()) {
+    const q = parseQueued(raw);
+    if (q.text || q.files.length || q.contexts.length || (raw !== "" && q.photos.length === 0)) continue;
+    const i = pending.findIndex((p, k) => !taken.has(k) && !p.carries && !normalize(p.text) &&
+      (raw === "" ? p.images > 0 : p.images === q.photos.length));
+    if (i < 0) continue;
+    taken.add(i);
+    pairs.set(index, i);
+  }
+  return pairs;
+}
+
 /** A queued message read apart (#3032): Claude Code's queue holds only text, so what a message carried rides in it. */
 export interface QueuedParts {
   /** What was typed, without Claude's `[Image #n]` placeholders, the tags or the stand-in words of a message with no words. */
@@ -113,7 +130,8 @@ function isStandIn(text: string): boolean {
   return STAND_INS.includes(s) || s === t("lib-links.see_images") || s === t("lib-links.see_context");
 }
 
-/** What a pulled-back message puts in the box: its words, then each file's path, as this composer sends a file. */
+/** What a pulled-back message puts in the box: its words, then the path of each file that did not go back to its tile
+ *  (lib/composer-files.ts restoreFiles). */
 export function queuedDraft(p: Pick<QueuedParts, "text" | "files">): string {
   return [p.text, ...p.files.map((f) => quotePath(f.path))].filter(Boolean).join(" ");
 }

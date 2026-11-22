@@ -24,12 +24,18 @@ data class MessageRequest(
     val model: String? = null,
     /** The user's message that carries out the session's waiting launcher switch first (`apply_switch`, #5035). */
     val applySwitch: Boolean = false,
+    /** External provenance ([MessageVia]); null for the user's typed words. Restored and retried per message. */
+    val via: String? = null,
 ) {
-    val headers: Map<String, String> get() = ProtocolCompatibility.operationHeaders(opId)
+    val headers: Map<String, String> get() = ProtocolCompatibility.operationHeaders(opId) + ("X-Persona-Features" to AgentMessageHoldFeature)
 }
 
 sealed interface MessageTransportResult {
     data object Accepted : MessageTransportResult
+    /** The assistant kept the message to send later; its session row, not the local outbox, draws it now. */
+    data object Kept : MessageTransportResult
+    /** An offline Agent's manager has custody. Only a later transcript echo proves arrival. */
+    data object Held : MessageTransportResult
     /** Only use this when no request bytes could have reached the hub. */
     data object NotSent : MessageTransportResult
     data object NoReceipt : MessageTransportResult

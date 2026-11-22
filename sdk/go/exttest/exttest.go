@@ -17,7 +17,6 @@ import (
 	"os/exec"
 	"regexp"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -269,9 +268,12 @@ var uiVersion = func() int {
 }()
 
 // CheckView checks a View the way the apps will read it: against the schema (wire.ValidateJSON: only known fields
-// and components, the tones, the limits of each), https links, at most 300 components and 16 KB of state, and for
-// a card (compact: an overview card, a widget, a shortcut's result) at most 2 sections and 12 components and no
-// fields. The hub holds a widget to less still (FitWidget): `personad extension test` checks that.
+// and components, the tones, the limits of each), https links, a graph's structure (wire.CheckGraph), a scene's
+// (wire.CheckScene) and at most one scene, at most 300 components (a tile, a graph node or a scene's pin one each) and
+// 16 KB of state, and for a card (compact: an overview card, a widget, a shortcut's result) at most 2 sections and 12
+// components and no fields, a graph or a scene there being one of the 12 (the app draws it as a still preview, not a
+// row per node or pin). The hub holds a widget to less still (FitWidget):
+// `personad extension test` checks that.
 func CheckView(raw json.RawMessage, compact bool) error {
 	if err := wire.ValidateJSON("View", raw); err != nil {
 		return err
@@ -283,13 +285,34 @@ func CheckView(raw json.RawMessage, compact bool) error {
 	if len(v.State) > 16<<10 {
 		return errors.New("state is over 16 KB")
 	}
-	n := 0
+	n, card, scenes := 0, 0, 0
 	for si, s := range v.Sections {
 		for ii, c := range s.Items {
-			n++
+			// a grid's or a carousel's tiles, a graph's nodes and a scene's pins are components of the page each
+			n += max(1, len(c.Tiles)+len(c.Nodes)+len(c.Pins))
+			if c.Type == wire.ComponentGraph || c.Type == wire.ComponentScene {
+				card++ // a card draws a graph or a scene as one still preview
+			} else {
+				card += max(1, len(c.Tiles))
+			}
 			at := fmt.Sprintf("sections[%d].items[%d] (%s)", si, ii, c.Type)
-			if c.Type == wire.ComponentLink && !strings.HasPrefix(c.URL, "https://") {
-				return fmt.Errorf("%s: links are https", at)
+			if c.Type == wire.ComponentLink {
+				if err := wire.CheckHTTPS(c.URL, "link"); err != nil {
+					return fmt.Errorf("%s: %w", at, err)
+				}
+			}
+			if c.Type == wire.ComponentGraph {
+				if err := wire.CheckGraph(&c); err != nil {
+					return fmt.Errorf("%s: %w", at, err)
+				}
+			}
+			if c.Type == wire.ComponentScene {
+				if scenes++; scenes > 1 {
+					return fmt.Errorf("%s: a view has at most one scene", at)
+				}
+				if err := wire.CheckScene(&c); err != nil {
+					return fmt.Errorf("%s: %w", at, err)
+				}
 			}
 			if compact && c.Type == wire.ComponentField {
 				return fmt.Errorf("%s: a card has no fields (open a page for them)", at)
@@ -302,8 +325,8 @@ func CheckView(raw json.RawMessage, compact bool) error {
 	switch {
 	case n > 300:
 		return fmt.Errorf("%d components: 300 at most", n)
-	case compact && (len(v.Sections) > 2 || n > 12):
-		return fmt.Errorf("a card has at most 2 sections and 12 components, not %d and %d", len(v.Sections), n)
+	case compact && (len(v.Sections) > 2 || card > 12):
+		return fmt.Errorf("a card has at most 2 sections and 12 components, not %d and %d", len(v.Sections), card)
 	}
 	return nil
 }

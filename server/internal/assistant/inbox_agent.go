@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"slices"
 	"strings"
@@ -25,6 +26,22 @@ import (
 type InboxAgentConfig = assistantwire.InboxAgentConfig
 
 func agentConcurrency(c InboxAgentConfig) int { return max(c.Concurrency, 1) }
+
+// inboxOrdinaryRunning is the processing-conversation count that looking state already represents. A deferred row is
+// deliberately invisible here until the unified wake scheduler admits it. The caller holds inbox.mu.
+func inboxOrdinaryRunning(it *InboxItem) bool {
+	a, h := it.Agent, it.Handling
+	if a == nil || a.SessionID == "" || a.DeferredAt != nil {
+		return false
+	}
+	return h == nil && a.State == AgentRunning || h != nil && h.State == HandlingLooking
+}
+
+// inboxConversationRunning also counts an admitted programmatic turn whose handling state does not ordinarily show
+// it, principally a source reply delivered while the item's current Agent keeps HandlingAgent. The caller holds mu.
+func inboxConversationRunning(it *InboxItem) bool {
+	return inboxOrdinaryRunning(it) || it.Agent != nil && it.Agent.SessionID != "" && it.Agent.WakeSlot
+}
 
 func agentTimeout(c InboxAgentConfig) time.Duration {
 	if c.TimeoutMinutes <= 0 {
@@ -93,12 +110,21 @@ type InboxAgent struct {
 	Wake    bool        `json:"wake,omitempty"`
 	SentOf  string      `json:"sent_of,omitempty"`
 	Lost    []string    `json:"lost,omitempty"`
+	// ProcessingTurn identifies the latest prompt issued to this processing conversation.
+	ProcessingTurn string `json:"processing_turn,omitempty"`
+	// DeferredAt is when this item's oldest held programmatic wake joined the eligibility queue. WakeSlot reserves
+	// the processing conversation's admitted slot while HandlingAgent (or another non-looking state) hides it from
+	// the ordinary running count. Both are persisted internal bookkeeping and are stripped from listed items.
+	DeferredAt *time.Time `json:"deferred_at,omitempty"`
+	WakeSlot   bool       `json:"wake_slot,omitempty"`
 	// Back is the handling state a waking note interrupted (waiting, done…): a turn that only updates the recap
 	// goes back to it.
 	Back string `json:"back,omitempty"`
+	// savingRetry keeps workers off an explicit retry until its row is committed.
+	savingRetry bool
 	// told counts the notes queued into Pending (in memory only): a message made of Pending carried those queued up
-	// to its count, and the ones queued since are the newest. Pending is trimmed to the latest 20, so its length
-	// cannot tell how many came since.
+	// to its count, and the ones queued since are the newest. Pending is bounded, so its length cannot tell how
+	// many came since.
 	told int
 	// signaled is the item's message count when an inbox signal to the linked task's supervisor last counted it
 	// (in memory only, supervise_inbox.go): the next one counts the messages since that count.
@@ -108,11 +134,15 @@ type InboxAgent struct {
 	signaledOf string
 }
 
-// queueNote adds a note to Pending, kept to the latest 20.
+// queueNote adds a note to Pending, keeping 20 places for ordinary notes plus one for a recent retry instruction.
 func (a *InboxAgent) queueNote(n inboxNote) {
 	a.Pending = append(a.Pending, n)
 	if len(a.Pending) > 20 {
-		a.Pending = a.Pending[len(a.Pending)-20:]
+		start := len(a.Pending) - 20
+		if slices.ContainsFunc(a.Pending[start-1:], func(n inboxNote) bool { return n.Retry }) {
+			start--
+		}
+		a.Pending = a.Pending[start:]
 	}
 	a.told++
 }
@@ -120,6 +150,19 @@ func (a *InboxAgent) queueNote(n inboxNote) {
 // keepToldSince drops the notes a message made at count told carried: only those queued since stay.
 func (a *InboxAgent) keepToldSince(told int) {
 	a.Pending = a.Pending[len(a.Pending)-min(max(a.told-told, 0), len(a.Pending)):]
+}
+
+// keepToldOthers removes exactly the queue positions one selective delivery carried. Deferred notes before a ready
+// informational note therefore stay queued without disturbing the existing append-and-trim told accounting.
+func (a *InboxAgent) keepToldOthers(delivered map[int]bool) {
+	base := a.told - len(a.Pending)
+	kept := a.Pending[:0]
+	for i, n := range a.Pending {
+		if !delivered[base+i+1] {
+			kept = append(kept, n)
+		}
+	}
+	a.Pending = kept
 }
 
 // lost: conversation sid was found gone.
@@ -130,11 +173,16 @@ func (a *InboxAgent) startDue(now time.Time) bool {
 	return a.RetryAfter == nil || !a.RetryAfter.After(now)
 }
 
-// handInbox is one pass of the AI twin's work (docs/assistant/inbox.md"AI twin"): settle conversations that finished, hung or
-// were lost, escalate every newly triaged Needs you item to the manager (one processing conversation per event), deliver
-// what waits for the events' conversations (new messages, the user's answers), start conversations for the queued
-// ones. One pass at a time, in the background. A pass asked for while one runs is not dropped: the goroutine running
-// passes runs another after it (every caller is an event, and nothing else would come back for what it queued).
+func (a *InboxAgent) hasRetryNote() bool {
+	return slices.ContainsFunc(a.Pending, func(n inboxNote) bool { return n.Retry })
+}
+
+// handInbox is one pass of the AI twin's work (docs/assistant/inbox.md"AI twin"): look again at waiting matters whose
+// time came, settle conversations that finished, hung or were lost, escalate every newly triaged Needs you item to the
+// manager (one processing conversation per event), deliver what waits for the events' conversations (new messages, the
+// user's answers), and start conversations for the queued ones. One pass at a time, in the background. A pass asked for
+// while one runs is not dropped: the goroutine running passes runs another after it (every caller is an event, and
+// nothing else would come back for what it queued).
 func (s *Service) handInbox(ctx context.Context) {
 	b := &s.inbox
 	b.handAgain.Store(true)
@@ -161,7 +209,9 @@ func (s *Service) handInbox(ctx context.Context) {
 func (s *Service) handPass(ctx context.Context) {
 	cfg := s.inboxConfig(ctx).Agent
 	b := &s.inbox
+	s.forwardInboxToTodos(ctx)
 	s.linkInboxTaskURLs(ctx)
+	s.checkInboxFollowUps(ctx, cfg, time.Now())
 	if !cfg.Enabled {
 		s.releaseInboxAgents(ctx)
 		return
@@ -238,6 +288,7 @@ func (b *inboxBook) releaseInboxAgent(it *InboxItem, state, reason string, now t
 	}
 	if a := it.Agent; a != nil {
 		a.Pending, a.Wake, a.Back, a.RetryAfter = nil, false, "", nil
+		a.DeferredAt, a.WakeSlot = nil, false
 	}
 	b.settle(w)
 	return w
@@ -248,7 +299,7 @@ func inboxAgentReleaseState(it *InboxItem) (active, pending bool) {
 	a, h := it.Agent, it.Handling
 	active = it.open() && (h != nil && (h.State == HandlingLooking || h.State == HandlingAgent) ||
 		h == nil && a != nil && (a.State == AgentQueued || a.State == AgentRunning))
-	pending = a != nil && (len(a.Pending) > 0 || a.Wake || a.Back != "" || a.RetryAfter != nil)
+	pending = a != nil && (len(a.Pending) > 0 || a.Wake || a.Back != "" || a.RetryAfter != nil || a.DeferredAt != nil || a.WakeSlot)
 	return active, pending
 }
 
@@ -261,7 +312,8 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 	for _, t := range s.activeTasks(ctx) {
 		linked[t.ID] = &t
 	}
-	owner := s.owner(ctx)
+	hello := s.hello(ctx)
+	owner, language := inboxPromptOwner(hello), answerLanguage(hello.Locale)
 	loc := s.location(ctx) // the chain's times, read in the user's zone (the hub runs in UTC)
 	now := time.Now().UTC()
 	byEvent := s.conversationsByEvent(ctx)
@@ -274,9 +326,9 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 			continue
 		}
 		switch {
-		case it.Agent.SessionID != "" && (it.Handling == nil && it.Agent.State == AgentRunning || it.Handling != nil && it.Handling.State == HandlingLooking):
+		case inboxConversationRunning(it):
 			running++
-		case it.Agent.State == AgentQueued && it.Agent.SessionID == "" && it.open():
+		case it.Agent.State == AgentQueued && it.Agent.SessionID == "" && it.open() && !it.Agent.savingRetry:
 			// Recheck before backoff, capacity or adoption: a saved rule also covers work already queued.
 			if b.policyTwin(it) == TwinNever {
 				if w := b.releaseInboxAgent(it, HandlingDone, i18n.T(b.userLang(), "assistant-inbox_agent.never"), now); w != nil {
@@ -311,11 +363,21 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 		if len(jobs) >= max(agentConcurrency(cfg)-running, 0) {
 			continue
 		}
+		if it.Agent.DeferredAt != nil {
+			// A missing conversation recovered with held work reaches its first message only after this capacity check.
+			// Admit now so that message includes every note and the replay establishes the same restoration state.
+			b.admitInboxSourceWake(it, now)
+		}
 		it.Agent.State, it.Agent.StartedAt, it.Agent.Attempts, it.Agent.RetryAfter = AgentRunning, &now, it.Agent.Attempts+1, nil
 		delete(b.listMemo.kept, it.ID) // saved once the start returns: listed as running meanwhile (inbox_list_memo.go)
-		a := b.inboxAgentFor(it, owner, linked[it.Agent.TodoID], larkDefault, loc)
+		a := b.inboxAgentForIn(it, owner, linked[it.Agent.TodoID], larkDefault, loc, language)
 		a.KnowledgeDir = s.kb.dir // the heading of what the knowledge base knows names where it is
-		jobs = append(jobs, job{it, b.kbChatOf(it), func(kbc *prompts.KBContext) string { a.KB = kbc; return prompts.RenderInboxAgent(a) },
+		turn := rand.Text()
+		it.Agent.ProcessingTurn = turn
+		jobs = append(jobs, job{it, b.kbChatOf(it), func(kbc *prompts.KBContext) string {
+			a.KB = kbc
+			return inboxProcessingPrompt(turn, prompts.RenderInboxAgent(a))
+		},
 			it.Agent.told})
 	}
 	b.mu.Unlock()
@@ -457,8 +519,9 @@ func (s *Service) requeueAgentStart(ctx context.Context, a *InboxAgent, err erro
 }
 
 // sweepInboxAgents settles the events' conversations: one looking that ended its turn without a suggestion (after its
-// first minute) or ran past the timeout fails, so does one whose sub-session ran past four timeouts; a start the
-// manager did not live to record goes back to the queue (the event's id finds its conversation).
+// first minute) or ran past the timeout fails, so does one whose sub-session ran past four timeouts. A turn woken from
+// waiting instead returns to waiting with its next check time. A start the manager did not live to record goes back to
+// the queue (the event's id finds its conversation).
 func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, now time.Time) {
 	b := &s.inbox
 	b.mu.Lock()
@@ -467,9 +530,14 @@ func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, no
 	for _, it := range b.items {
 		a, h := it.Agent, it.Handling
 		switch {
-		case a == nil:
+		case a == nil || a.savingRetry:
+		case a.DeferredAt != nil && (h == nil || h.State != HandlingAgent || inboxDeferredAgentStop(it)):
+			// A held wake has not started a processing turn. Replied-while-Agent keeps its current Agent's supervision
+			// only until that Agent's settled stop is itself deferred; a known-settled stop must never time out as running.
 		case a.SessionID != "" && (a.State == AgentRunning || h != nil && (h.State == HandlingLooking || h.State == HandlingAgent)):
 			running = append(running, it)
+		case h != nil && h.State == HandlingAgent && a.hasRetryNote():
+			running = append(running, it) // a retry can wait for its linked Agent before it has a processing conversation
 		case a.State != AgentRunning || a.SessionID != "":
 		case a.StartedAt == nil || now.Sub(*a.StartedAt) > inboxAgentStartWait+time.Minute:
 			w := beginWrite(it)
@@ -481,7 +549,12 @@ func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, no
 	b.mu.Unlock()
 	for _, it := range running {
 		b.mu.Lock()
+		if it.Agent == nil || it.Agent.savingRetry || !it.open() {
+			b.mu.Unlock()
+			continue
+		}
 		a := *it.Agent
+		retrying := a.hasRetryNote()
 		state := HandlingLooking
 		if it.Handling != nil {
 			state = it.Handling.State
@@ -492,6 +565,7 @@ func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, no
 		}
 		b.mu.Unlock()
 		reason := ""
+		returnToWaiting := false
 		switch {
 		case s.isWorkMachine(a.MachineID):
 			reason = i18n.T(s.lang(ctx), "assistant-start.work_machine")
@@ -503,11 +577,23 @@ func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, no
 						continue // known unsettled work (or an undone stop): wait for the next pass, never time it out now
 					}
 					b.mu.Lock()
-					stillAgent := it.Agent != nil && it.Agent.SessionID == a.SessionID && it.Handling != nil && it.Handling.State == HandlingAgent
+					stillAgent := it.Agent != nil && it.Agent.SessionID == a.SessionID && it.Handling != nil && it.Handling.State == HandlingAgent &&
+						!inboxDeferredAgentStop(it)
 					b.mu.Unlock()
 					if !stillAgent {
-						continue // the stop returned the item to its processing conversation
+						continue // the stop returned the item to its processing conversation or is held for capacity
 					}
+				} else if retrying && reachable {
+					b.mu.Lock()
+					if it.open() && it.Agent != nil && sameTime(it.Agent.StartedAt, a.StartedAt) &&
+						it.Handling != nil && it.Handling.State == HandlingAgent && it.Agent.hasRetryNote() {
+						w := beginWrite(it)
+						b.wakeInboxRetry(it, now)
+						b.settle(w)
+						changed = append(changed, w)
+					}
+					b.mu.Unlock()
+					continue
 				}
 			}
 			// Only a session known to be unsettled waits past this bound. A link evicted by the chain cap, a session the
@@ -518,19 +604,25 @@ func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, no
 		case state != HandlingLooking:
 		case a.StartedAt != nil && now.Sub(*a.StartedAt) > agentTimeout(cfg):
 			reason = i18n.T(s.lang(ctx), "assistant-inbox_agent.timeout")
+			returnToWaiting = a.Back == HandlingWaiting
 		case a.StartedAt != nil && now.Sub(*a.StartedAt) > time.Minute:
 			if sess, ok := s.session(ctx, a.MachineID, a.SessionID); ok && sess.Status != proto.StatusWorking {
 				reason = i18n.T(s.lang(ctx), "assistant-inbox_agent.no_draft")
+				returnToWaiting = a.Back == HandlingWaiting
 			}
 		}
 		if reason == "" {
 			continue
 		}
 		b.mu.Lock()
-		if it.Agent != nil && it.Agent.SessionID == a.SessionID && (it.Handling == nil || it.Handling.State == state) {
+		// A wake queued during the session read can keep the same session and handling state; only settle the turn we read.
+		if it.Agent != nil && it.Agent.SessionID == a.SessionID && (it.Handling == nil || it.Handling.State == state) &&
+			a.Back == it.Agent.Back && sameTime(a.StartedAt, it.Agent.StartedAt) && !inboxDeferredAgentStop(it) {
 			w := beginWrite(it)
 			if it.Suggestion != nil { // new messages left its suggestion standing: it still holds
 				b.setHandling(it, HandlingDone, "", now)
+			} else if returnToWaiting && it.Agent.Back == HandlingWaiting {
+				b.resumeInboxWaiting(it, now)
 			} else {
 				b.failHandling(it, reason, now)
 			}
@@ -545,17 +637,25 @@ func (s *Service) sweepInboxAgents(ctx context.Context, cfg InboxAgentConfig, no
 
 // inboxAgentFor is what the AI twin's first message is made of, but the knowledge base's part.
 func (b *inboxBook) inboxAgentFor(it *InboxItem, owner string, linked *prompts.InboxTask, larkDefault int, loc *time.Location) prompts.InboxAgent {
-	a := prompts.InboxAgent{Owner: owner, EventID: it.ID, Title: it.Title, Item: b.promptItem(it), Task: it.Agent.Task, Reason: it.Agent.Reason,
+	return b.inboxAgentForIn(it, owner, linked, larkDefault, loc, answerLanguage(string(b.userLang())))
+}
+
+func (b *inboxBook) inboxAgentForIn(it *InboxItem, owner string, linked *prompts.InboxTask, larkDefault int, loc *time.Location, language string) prompts.InboxAgent {
+	a := prompts.InboxAgent{Language: language, Owner: owner, EventID: it.ID, Title: it.Title, Item: b.promptItemIn(it, language), Task: it.Agent.Task, Reason: it.Agent.Reason,
 		Linked: linked}
-	if len(it.Agent.Lost) > 0 { // the event's conversation is gone: where it got to goes with the new one
-		a.Resumed, a.Recap = true, it.Recap
+	a.Resumed = len(it.Agent.Lost) > 0
+	if a.Resumed || it.Agent.hasRetryNote() {
+		a.Recap = it.Recap
 		for _, e := range it.Chain {
 			a.Chain = append(a.Chain, chainLine(e, loc))
 		}
 	}
 	for _, n := range it.Agent.Pending {
+		if n.Deferred {
+			continue
+		}
 		if n.Name != prompts.NoteNewMessages { // the item above is its content now
-			a.Notes = append(a.Notes, renderNote(n, owner))
+			a.Notes = append(a.Notes, renderNoteIn(n, owner, language))
 		}
 	}
 	switch {

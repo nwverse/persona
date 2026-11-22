@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/devices"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -42,7 +43,11 @@ func (d *viaDevs) CallNode(ctx context.Context, id, method string, params json.R
 	if err := json.Unmarshal(params, &d.saw); err != nil {
 		return nil, err
 	}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, d.saw.URL, bytes.NewReader(d.saw.Body))
+	wireMethod := d.saw.Method
+	if wireMethod == "" {
+		wireMethod = http.MethodPost
+	}
+	req, _ := http.NewRequestWithContext(ctx, wireMethod, d.saw.URL, bytes.NewReader(d.saw.Body))
 	req.Header = d.saw.Header
 	req.Header.Set("X-Sent-By", "node")
 	resp, err := http.DefaultClient.Do(req)
@@ -62,6 +67,9 @@ const viaTestKey = "sk-via-test-0123456789"
 func TestAPIConnectionSendsThroughAComputer(t *testing.T) {
 	var direct, viaNodeHits atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.UserAgent(), modelhttp.UserAgent(); got != want {
+			t.Errorf("User-Agent = %q, want %q", got, want)
+		}
 		if r.Header.Get("X-Sent-By") == "node" {
 			viaNodeHits.Add(1)
 		} else {

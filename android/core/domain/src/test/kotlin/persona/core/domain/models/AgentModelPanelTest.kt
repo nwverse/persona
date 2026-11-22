@@ -58,6 +58,52 @@ class AgentModelPanelTest {
         assertFalse(AgentModelPanel.switchesLauncher(agent.copy(agent = "codex"), switching))
     }
 
+    @Test fun theOtherEngineIsSupportedInBothDirectionsOnlyWithTheFeature() {
+        val features = setOf(AgentModelPanel.ENGINE_SWITCH)
+        val pick = PanelConfig("cx", "gpt-5.5")
+        val claude = AgentModelPanel.panel(agent, launchers, ::read, features)
+        assertNull(claude.providers.single { it.id == "cx" }.unavailable)
+        assertEquals(PanelReason.OtherProvider, claude.providers.single { it.id == "work" }.unavailable)
+        val step = ModeStep.Launcher("cx", "example", "gpt-5.5", agent = "codex")
+        assertEquals(listOf(step), AgentModelPanel.pickPlan(agent, pick, { lists[it] }, features, launchers))
+        assertTrue(AgentModelPanel.needsEngineConfirmation(agent, step))
+        val pending = agent.copy(pendingSwitch = PendingSwitch("cx", "gpt-5.5", agent = "codex"))
+        assertFalse(AgentModelPanel.needsEngineConfirmation(pending, step))
+        assertEquals(emptyList<ModeStep>(), AgentModelPanel.pickPlan(pending, pick, { lists[it] }, features, launchers))
+        assertEquals(PanelNote.Engine, AgentModelPanel.panel(pending, launchers, ::read, features).state.note)
+        assertEquals(PillSetup("codex", "cx", AgentModelPanel.modelLabel("gpt-5.5")), AgentModelPanel.pendingPill(pending, ::read, launchers, "Default"))
+        assertEquals(listOf(ModeStep.Launcher("example", "example")),
+            AgentModelPanel.pickPlan(pending, PanelConfig("example", "opus", "high"), { lists[it] }, features, launchers))
+
+        val codex = agent.copy(agent = "codex", launcher = null, model = "gpt-5.5")
+        assertEquals(listOf(ModeStep.Launcher("example", "codex", "opus", agent = "claude")),
+            AgentModelPanel.pickPlan(codex, PanelConfig("example", "opus"), { lists[it] }, features, launchers))
+        assertNull(AgentModelPanel.pickPlan(codex, PanelConfig("example", "opus"), { lists[it] }, switching, launchers))
+    }
+
+    @Test fun unsupportedOrBusySessionsCannotScheduleAHandoff() {
+        val features = setOf(AgentModelPanel.ENGINE_SWITCH)
+        val codex = agent.copy(agent = "codex", launcher = "cx")
+        val pick = PanelConfig("example", "opus")
+        val unsupported = listOf(
+            codex.copy(assistant = true),
+            codex.copy(archived = true),
+            codex.copy(awaitingFirstMessage = true),
+            codex.copy(spaceKind = "codex_app"),
+            codex.copy(paneId = null),
+            codex.copy(sourceKind = "codex_app_server"),
+            codex.copy(sourceKind = "runtime"),
+            codex.copy(state = "offline"),
+            codex.copy(capabilities = SessionCapabilities(send = false)),
+            codex.copy(state = "working"),
+            codex.copy(state = "needs_you"),
+        )
+        for (session in unsupported) {
+            assertNull("unexpected pick for $session", AgentModelPanel.pickPlan(session, pick, { lists[it] }, features, launchers))
+        }
+        assertNull(AgentModelPanel.pickPlan(agent, PanelConfig("ghost", "gpt-5.5"), { lists["cx"] }, features, launchers))
+    }
+
     @Test fun aLauncherThatFixesItsModelTakesOnlyItsDefault() {
         val locked = lists + ("work" to lists.getValue("work").copy(locked = "--model is set"))
         val panel = AgentModelPanel.panel(agent, launchers, { ModelList(read = true, list = locked[it]) }, switching)
@@ -131,6 +177,35 @@ class AgentModelPanelTest {
         assertTrue(AgentModelPanel.canSwitchModel(paseo.copy(agent = "agy")))
         // Claude Code in a terminal, nothing said: as before.
         assertTrue(AgentModelPanel.canSwitchModel(agent) && AgentModelPanel.switchesLauncher(agent, switching))
+    }
+
+    // #8143: Paseo calls every provider but Claude Code and Codex "paseo"; each is an engine of its own, named and marked as
+    // itself: the panel never says "paseo", and moving to another provider or to Claude Code needs a new conversation.
+    @Test fun eachOfPaseosOtherProvidersIsItsOwnEngine() {
+        val caps = SessionCapabilities(read = true, send = true, interrupt = true, approve = true, modes = false, model = true)
+        val grok = agent.copy(agent = "paseo", agentLabelHint = "My Grok", launcher = "grok", model = "grok-5", effort = null,
+            sourceKind = "runtime", spaceKind = "paseo", paneId = null, capabilities = caps)
+        val paseo = listOf(AgentLauncher("claude"), AgentLauncher("grok", agentType = "paseo"), AgentLauncher("kimi", agentType = "paseo"),
+            AgentLauncher("codex", agentType = "codex"))
+        val models = mapOf("grok" to LauncherModels("paseo", listOf(AgentModel("grok-5", "Grok 5", isDefault = true, efforts = listOf("low", "high")))),
+            "kimi" to LauncherModels("paseo", listOf(AgentModel("kimi-k3", "Kimi K3"))))
+        assertEquals("grok", AgentModelPanel.engine(grok))
+        assertEquals(listOf("claude", "grok", "kimi", "codex"), paseo.map { AgentModelPanel.launcherEngine(it.name, it.agentType) })
+        val panel = AgentModelPanel.panel(grok, paseo, { ModelList(read = true, list = models[it]) }, switching)
+        assertEquals(listOf("claude", "grok", "kimi", "codex"), panel.providers.map { it.engine })
+        assertNull(panel.providers.first { it.id == "grok" }.unavailable)
+        assertEquals(PanelReason.OtherEngine("grok", "claude"), panel.providers.first { it.id == "claude" }.unavailable)
+        assertEquals(PanelReason.OtherEngine("grok", "kimi"), panel.providers.first { it.id == "kimi" }.unavailable)
+        assertEquals(listOf("low", "high"), panel.providers.first { it.id == "grok" }.models?.single()?.efforts)
+        assertEquals(PillSetup("grok", "grok", "Grok 5", null), AgentModelPanel.pill(grok, ModelList(read = true, list = models["grok"]), paseo).setup)
+        // Its own models and their efforts switch at once.
+        assertEquals(listOf(ModeStep.Effort("high")), AgentModelPanel.pickPlan(grok, PanelConfig("grok", "grok-5", "high"), { models[it] }, switching))
+        assertNull(AgentModelPanel.pickPlan(grok, PanelConfig("kimi", "kimi-k3"), { models[it] }, switching))
+        // What the words call them: its own by its label, the others by their launcher's; Claude Code and Codex keep theirs.
+        assertEquals(mapOf("grok" to "My Grok", "kimi" to "kimi"), AgentModelPanel.engineNames(grok, paseo))
+        assertEquals(mapOf("grok" to "grok", "kimi" to "kimi"), AgentModelPanel.engineNames(agent, paseo))
+        // A row with no launcher at all stays the catch-all, never Claude Code.
+        assertEquals("paseo", AgentModelPanel.engine(grok.copy(launcher = null)))
     }
 
     @Test fun aCodexThreadKeepsItsModel() {

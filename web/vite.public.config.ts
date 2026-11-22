@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig, normalizePath, type Plugin } from "vite";
 
+// Vite module IDs use forward slashes, including on Windows.
 const root = normalizePath(fileURLToPath(new URL("./public-share", import.meta.url)));
 const source = normalizePath(fileURLToPath(new URL("./src", import.meta.url)));
 const paletteID = "\0virtual:public-share-palette";

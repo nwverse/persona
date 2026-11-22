@@ -1,6 +1,6 @@
 package conformance_test
 
-// The plugin protocol's schemas (schema/extension/connector.schema.json, channel.schema.json, kb.schema.json, todos.schema.json, leaders.schema.json, models.schema.json) describe what the server's
+// The plugin protocol's schemas (schema/extension/connector.schema.json, channel.schema.json, kb.schema.json, todos.schema.json, leaders.schema.json, models.schema.json, repository.schema.json) describe what the server's
 // own code sends and reads: every call and event they list is held to the Go types the hub and connector/serve put on
 // the wire, field by field, and every connector method the server knows is in them. The schema is what an extension
 // is written from; this keeps it from drifting from the code.
@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/sdk/go/ext"
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
@@ -135,11 +136,38 @@ var goTypes = map[string]any{
 	"ModelPause":          assistantwire.ModelPause{},
 	"ModelInvalidOutput":  assistantwire.ModelInvalidOutput{},
 
+	"TranscriptionStartParams":  assistantwire.TranscriptionStartParams{},
+	"TranscriptionStartResult":  assistantwire.TranscriptionStartResult{},
+	"TranscriptionAudioParams":  assistantwire.TranscriptionAudioParams{},
+	"TranscriptionJobParams":    assistantwire.TranscriptionJobParams{},
+	"TranscriptionFinishResult": assistantwire.TranscriptionFinishResult{},
+	"TranscriptionSegment":      assistantwire.TranscriptionSegment{},
+	"TranscriptionGap":          assistantwire.TranscriptionGap{},
+
 	"TodoChangedEvent":  assistantwire.TodoChangedEvent{},
 	"TodoDecisionEvent": assistantwire.TodoDecisionEvent{},
 
 	"LeaderChangedEvent": assistantwire.LeaderChangedEvent{},
 	"LeaderReportEvent":  assistantwire.LeaderReportEvent{},
+
+	// The manager calls a repository provider with the generated wire types and reads its answers into them
+	// (extmgr/repository_providers.go), re-checking each answer before it is used.
+	"RepoParseParams":    wire.RepoParseParams{},
+	"RepoParseResult":    wire.RepoParseResult{},
+	"RepoCheckParams":    wire.RepoCheckParams{},
+	"RepoLinkParams":     wire.RepoLinkParams{},
+	"RepoLinkResult":     wire.RepoLinkResult{},
+	"RepoDescribeParams": wire.RepoDescribeParams{},
+	"RepoDescribeResult": wire.RepoDescribeResult{},
+	"RepoPRStatusParams": wire.RepoPRStatusParams{},
+	"RepoPRStatusResult": wire.RepoPRStatusResult{},
+
+	// The manager decodes an extension's browser calls into the generated wire types and answers with them
+	// (extmgr/extension_browser.go).
+	"BrowserMachinesParams": wire.BrowserMachinesParams{},
+	"BrowserMachinesResult": wire.BrowserMachinesResult{},
+	"BrowserRunParams":      wire.BrowserRunParams{},
+	"BrowserRunResult":      wire.BrowserRunResult{},
 
 	// Storage params are the actual manager-engine decoder types. Dynamic result
 	// objects are validated against these wire DTOs before committing/acknowledging.
@@ -157,6 +185,7 @@ var goTypes = map[string]any{
 	"StorageJobResult":         wire.StorageJobResult{},
 	"StorageClaimParams":       storage.Claim{},
 	"StorageClaimResult":       wire.StorageClaimResult{},
+	"StorageRenewParams":       storage.Renew{},
 	"StorageSettleParams":      storage.Settle{},
 	"StorageDeleteResult":      wire.StorageDeleteResult{},
 	"StorageRetryParams":       storage.Retry{},
@@ -197,6 +226,10 @@ var kbCalls = []string{assistantwire.MethodKBList, assistantwire.MethodKBGet, as
 // The model call the hub forwards for extensions granted models (models.schema.json).
 var modelCalls = []string{assistantwire.MethodModelComplete}
 
+// The transcription calls the hub forwards for extensions granted transcription (transcription.schema.json).
+var transcriptionCalls = []string{assistantwire.MethodTranscriptionStart, assistantwire.MethodTranscriptionAudio,
+	assistantwire.MethodTranscriptionFinish, assistantwire.MethodTranscriptionCancel}
+
 // The assistant's conversations the hub forwards for extensions granted assistant.read, its memory for those granted
 // assistant.memory.read (assistant.schema.json), and what it reads back of an extension's data contributions
 // (assistant_data.schema.json).
@@ -209,8 +242,12 @@ var todoCalls = []string{"event." + assistantwire.EventTodoChanged, "event." + a
 // The leader events the hub tells the extensions granted leaders.read (leaders.schema.json).
 var leaderCalls = []string{"event." + assistantwire.EventLeaderChanged, "event." + assistantwire.EventLeaderReport}
 
+// The calls the manager makes to a repository_providers contribution's program (repository.schema.json).
+var repoCalls = []string{ext.RepositoryNamespace + ".parse", ext.RepositoryNamespace + ".check", ext.RepositoryNamespace + ".link",
+	ext.RepositoryNamespace + ".describe", ext.RepositoryNamespace + ".pr_status"}
+
 var storageCalls = []string{"storage.request", "storage.get", "storage.list", "storage.transaction",
-	"storage.queue.list", "storage.queue.enqueue", "storage.queue.claim", "storage.queue.ack", "storage.queue.forget", "storage.queue.retry",
+	"storage.queue.list", "storage.queue.enqueue", "storage.queue.claim", "storage.queue.renew", "storage.queue.ack", "storage.queue.forget", "storage.queue.retry",
 	"storage.blob.create", "storage.blob.write", "storage.blob.finish", "storage.blob.delete", "storage.blob.read"}
 
 func TestPluginSchemasListTheServersCalls(t *testing.T) {
@@ -225,9 +262,11 @@ func TestPluginSchemasListTheServersCalls(t *testing.T) {
 	want = append(want, todoCalls...)
 	want = append(want, leaderCalls...)
 	want = append(want, modelCalls...)
+	want = append(want, transcriptionCalls...)
 	want = append(want, assistantCalls...)
 	want = append(want, sentCalls...)
 	want = append(want, storageCalls...)
+	want = append(want, repoCalls...)
 	for _, name := range want {
 		if _, ok := wire.Calls[name]; !ok {
 			t.Errorf("%s: the server has it, schema/extension does not list it (x-methods / x-events)", name)
@@ -235,7 +274,7 @@ func TestPluginSchemasListTheServersCalls(t *testing.T) {
 	}
 	for name := range wire.Calls {
 		if (strings.HasPrefix(name, serve.Namespace+".") || strings.HasPrefix(name, channel.Namespace+".") ||
-			strings.HasPrefix(name, "kb.") || strings.HasPrefix(name, "event.kb.") || strings.HasPrefix(name, "event.todo.") || strings.HasPrefix(name, "event.leader.") || strings.HasPrefix(name, "sent.") || strings.HasPrefix(name, "model.") || strings.HasPrefix(name, "assistant.") || strings.HasPrefix(name, "storage.")) &&
+			strings.HasPrefix(name, "kb.") || strings.HasPrefix(name, "event.kb.") || strings.HasPrefix(name, "event.todo.") || strings.HasPrefix(name, "event.leader.") || strings.HasPrefix(name, "sent.") || strings.HasPrefix(name, "model.") || strings.HasPrefix(name, "transcription.") || strings.HasPrefix(name, "assistant.") || strings.HasPrefix(name, "storage.") || strings.HasPrefix(name, ext.RepositoryNamespace+".")) &&
 			!slices.Contains(want, name) {
 			t.Errorf("%s: schema/extension lists it, the server has no such call", name)
 		}
@@ -280,6 +319,56 @@ func TestPluginSchemasFollowTheGoTypes(t *testing.T) {
 			continue
 		}
 		s.compare(t, d, s.def(t, d), reflect.TypeOf(v), map[string]bool{})
+	}
+}
+
+// The mention opt-in is a wire contract, not only a server-side branch: the manifest admits its kind, channel.receive
+// carries its origin/context and owner attestation, and the generated SDK exposes those same fields (#11130).
+func TestMentionChannelContractInSchemasAndGeneratedSDK(t *testing.T) {
+	s := loadSchemas(t)
+	kind := s.def(t, "ChannelItem")["properties"].(map[string]any)["kind"].(map[string]any)
+	if !slices.Contains(asSlice(kind["enum"]), any("mention")) {
+		t.Errorf("ChannelItem.kind enum %v does not admit mention", kind["enum"])
+	}
+	props := s.def(t, "ChannelMessage")["properties"].(map[string]any)
+	typ := reflect.TypeOf(wire.ChannelMessage{})
+	for jsonName, goName := range map[string]string{"chat": "Chat", "topic": "Topic", "context": "Context", "owner": "Owner"} {
+		if _, ok := props[jsonName]; !ok {
+			t.Errorf("ChannelMessage.%s is missing from channel.schema.json", jsonName)
+		}
+		field, ok := typ.FieldByName(goName)
+		if !ok {
+			t.Errorf("generated wire.ChannelMessage.%s is missing", goName)
+			continue
+		}
+		if got := strings.Split(field.Tag.Get("json"), ",")[0]; got != jsonName {
+			t.Errorf("generated wire.ChannelMessage.%s has JSON name %q, want %q", goName, got, jsonName)
+		}
+	}
+}
+
+// The opt-in and its owner/guest boundary are extension-author facing too: both channel guides name the exact target
+// and make clear that a non-owner request does not enter main (#11130).
+func TestMentionChannelOptInIsDocumented(t *testing.T) {
+	read := func(name string) string {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join("../../../../docs/extensions", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	channels := read("channels.md")
+	for _, want := range []string{`"kind": "mention"`, `target: {kind: "main"}`, "owner", "guest"} {
+		if !strings.Contains(channels, want) {
+			t.Errorf("channels.md does not document %q", want)
+		}
+	}
+	lark := read("lark-agent.md")
+	for _, want := range []string{`target: {kind: "main"}`, "channel.receive", "guest conversation", "non-owner"} {
+		if !strings.Contains(lark, want) {
+			t.Errorf("lark-agent.md does not document %q", want)
+		}
 	}
 }
 
@@ -594,5 +683,33 @@ func TestConnectorSchemaSelectionEnumsAreTheHubsLists(t *testing.T) {
 	}
 	if got := enum("ConnectorHistoryChat", "kind", false); !slices.Equal(got, connectorwire.HistoryKinds) {
 		t.Errorf("connector.schema.json ConnectorHistoryChat.kind enum %v, connectorwire.HistoryKinds %v", got, connectorwire.HistoryKinds)
+	}
+}
+
+// The repository_providers rules the schema states are the hub's: the hosts no item may claim are
+// extension.ReservedRepositoryHosts, the namespace of the calls is the point's, and the link kinds an item relabels are
+// the ones the calls answer with.
+func TestRepositorySchemaIsTheHubsPoint(t *testing.T) {
+	s := loadSchemas(t)
+	hosts := s.def(t, "RepositoryProviderItem")["properties"].(map[string]any)["hosts"].(map[string]any)["items"].(map[string]any)
+	var reserved []string
+	for _, branch := range asSlice(hosts["not"].(map[string]any)["anyOf"]) {
+		for _, v := range asSlice(branch.(map[string]any)["enum"]) {
+			reserved = append(reserved, v.(string))
+		}
+	}
+	if !slices.Equal(reserved, extension.ReservedRepositoryHosts) {
+		t.Errorf("manifest.schema.json RepositoryProviderItem.hosts refuses %v, extension.ReservedRepositoryHosts is %v", reserved,
+			extension.ReservedRepositoryHosts)
+	}
+	if p := extension.Points["repository_providers"]; p.Namespace != ext.RepositoryNamespace || !p.NeedsRPC {
+		t.Errorf("repository_providers: %+v, want namespace %q and a program that speaks the protocol", p, ext.RepositoryNamespace)
+	}
+	var kinds []string
+	for _, v := range asSlice(s.def(t, "RepositoryLinkKind")["enum"]) {
+		kinds = append(kinds, v.(string))
+	}
+	if !slices.Equal(kinds, []string{"issue", "pull_request"}) {
+		t.Errorf("RepositoryLinkKind %v, want issue and pull_request (the to-do links' kinds)", kinds)
 	}
 }

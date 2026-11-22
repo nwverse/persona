@@ -12,6 +12,31 @@ import org.junit.Test
 
 /** New agents follow the "New Agent" model configuration and start in the background (docs/protocol/protocol.md "New session"). */
 class AgentCreationModelTest {
+    @Test fun ompUsesTheOrdinarySessionEndpointWithOnlyTheChosenModel() = runBlocking {
+        MockWebServer().use { server ->
+            val service = HttpAgentCreationService("hub/pairing", server.url("/").toString(), "test-token", OkHttpClient())
+            server.enqueue(MockResponse().setBody("""{"agent":"omp","models":[],"locked":"Pinned on this computer"}"""))
+            assertEquals("Pinned on this computer", service.launcherModels("box", "omp", false, "herdr")?.locked)
+            assertEquals("/api/v1/machines/box/launchers/omp/models?host=herdr", server.takeRequest().path)
+            for ((launcher, model) in listOf("omp" to null, "omp" to "openai/gpt-5.2", "" to null)) {
+                server.enqueue(MockResponse().setBody("""{"session":{"machine_id":"box","session_id":"created"}}"""))
+                val start = AgentStartRequest("box", "/project", launcher, workspaceId = "workspace", agentType = "omp", model = model)
+                service.start(start, java.util.UUID.randomUUID().toString())
+                val post = server.takeRequest()
+                assertEquals("POST", post.method)
+                assertEquals("/api/v1/sessions", post.path)
+                assertEquals(buildJsonObject {
+                    put("machine_id", "box")
+                    put("cwd", "/project")
+                    put("launcher", launcher)
+                    put("workspace_id", "workspace")
+                    put("agent_type", "omp")
+                    model?.let { put("model", it) }
+                }, JsonCodec.parseToJsonElement(post.body.readUtf8()))
+            }
+        }
+    }
+
     @Test fun anAsyncStartWithoutLauncherFollowsTheConfigurationAndCarriesTheNameHint() = runBlocking {
         MockWebServer().use { server ->
             val service = HttpAgentCreationService("hub/pairing", server.url("/").toString(), "test-token", OkHttpClient())
@@ -146,8 +171,9 @@ class AgentCreationModelTest {
             server.enqueue(MockResponse().setBody("""{"worktree":true,"ours":false,"path":"/wt/x","dirty":0,"unmerged":0}"""))
             service.worktreeStatus("mac", "/wt/x", "paseo")
             assertEquals(buildJsonObject { put("cwd", "/wt/x"); put("kind", "paseo") }, JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()))
-            server.enqueue(MockResponse().setBody("""{"path":"/p/persona-fix","branch":"persona/fix","root":"/code"}"""))
-            service.addWorktree("mac", "/code", "Fix it", "", "paseo")
+            // Paseo makes it as a workspace of its own, which the start goes into (#8856)
+            server.enqueue(MockResponse().setBody("""{"path":"/p/persona-fix","branch":"persona/fix","root":"/code","workspace_id":"ws-made"}"""))
+            assertEquals(WorktreeAdded("/p/persona-fix", "persona/fix", "/code", "ws-made"), service.addWorktree("mac", "/code", "Fix it", "", "paseo"))
             assertEquals(buildJsonObject { put("cwd", "/code"); put("name_hint", "Fix it"); put("kind", "paseo") },
                 JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()))
             server.enqueue(MockResponse().setBody("""{"removed":true,"branch_deleted":false}"""))

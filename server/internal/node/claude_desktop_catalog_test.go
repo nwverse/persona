@@ -84,7 +84,7 @@ func TestClaudeNativeEnvironmentMembershipUsesProfileAndAccount(t *testing.T) {
 		var rows []proto.Session
 		if live {
 			n.state.put(sidA, sessionState{Launcher: "claude", Cwd: running})
-			rows = n.claudeSessions([]claudeProc{{SessionID: sidA, Kind: "interactive", Entrypoint: "claude-desktop", Cwd: running, Status: "busy"}}, nil)
+			rows = n.claudeSessions([]claudeProc{{SessionID: sidA, Kind: "interactive", Entrypoint: "claude-desktop", Cwd: running, Status: "busy"}}, nil, nil)
 		} else {
 			rows = n.scanOffline()
 		}
@@ -97,6 +97,46 @@ func TestClaudeNativeEnvironmentMembershipUsesProfileAndAccount(t *testing.T) {
 	rows, _, errs := n.desktopWorkspaces()
 	if len(rows) != 4 || len(errs) != 0 {
 		t.Fatalf("native projects should replace inferred folder rows: %+v, %+v", rows, errs)
+	}
+}
+
+func TestClaudeNativeEnvironmentAndDirectorySessionKeepDistinctProjects(t *testing.T) {
+	home := physicalTempDir(t)
+	root := filepath.Join(home, "project")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	profile, _ := useDesktopDirs(t)
+	desktopCatalogJSON(t, filepath.Join(profile, "ccd-session-presets.json"), map[string]any{
+		"byAccount": map[string]any{"account": map[string]any{"presets": []any{
+			desktopEnvironmentFixture("saved", "Saved environment", root),
+		}}},
+	})
+	for id, environment := range map[string]string{sidA: "saved", sidB: ""} {
+		desktopCatalogJSON(t, filepath.Join(profile, "claude-code-sessions", "account", "org", "local_"+id+".json"),
+			map[string]any{"cliSessionId": id, "cwd": root, "startedFromEnvironmentId": environment})
+	}
+	n := &Node{home: home}
+	rows, _, errs := n.desktopWorkspaces()
+	if len(rows) != 2 || len(errs) != 0 {
+		t.Fatalf("saved environment must not hide an unbound directory project: %+v, %+v", rows, errs)
+	}
+	index := readClaudeDesktopIndex(home)
+	for id, project := range map[string]string{sidA: claudeDesktopEnvironmentID(profile, "account", "saved"), sidB: projectSpace + root} {
+		s := proto.Session{SessionID: id, Agent: "claude", Cwd: root}
+		n.decorateClaudeDesktop(&s, index, map[string]string{})
+		if s.SpaceID != project {
+			t.Fatalf("session %s acquired another project's identity: %+v, want %q", id, s, project)
+		}
+		found := false
+		for _, row := range rows {
+			if row.Source == s.SpaceKind && row.SourceID == s.SpaceID && row.Cwd == root {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("session %s has no exact catalog project: %+v, catalog %+v", id, s, rows)
+		}
 	}
 }
 
@@ -114,7 +154,7 @@ func TestClaudeNativeEnvironmentFailureKeepsSessionDiscovery(t *testing.T) {
 	}
 	n := &Node{home: home}
 	rows, sources, errs := n.desktopWorkspaces()
-	if len(rows) != 1 || sources != 1 || len(errs) != 1 || rows[0].Cwd != root || rows[0].SourceID != claudeDesktopProjectID(root) {
+	if len(rows) != 1 || sources != 1 || len(errs) != 1 || rows[0].Cwd != root || rows[0].SourceID != projectSpace+realPath(root) {
 		t.Fatalf("corrupt mirror must preserve directory discovery: %+v, %d, %+v", rows, sources, errs)
 	}
 	if !readClaudeDesktopIndex(home).visible[sidA] {

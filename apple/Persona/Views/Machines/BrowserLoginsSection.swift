@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import PersonaWire
 
 /// Browser Sign-ins on a Mac's page (#1304, docs/plans/plan-ego-browser.md「Importing cookies」; the web's BrowserLogins): the sites whose
 /// sign-ins ego lite keeps (how many cookies, until when, never what), clearing some of them, and importing a cookie
@@ -18,7 +19,6 @@ struct BrowserLoginsSection: View {
     @State private var file: PickedFile?
     /// The sites the confirmation asks about.
     @State private var clearing: [String]?
-    @Environment(\.dynamicTypeSize) private var size
 
     init(ref: MachineRef, online: Bool, logins: BrowserLoginsModel, listOpen: Binding<Bool>) {
         self.ref = ref
@@ -129,7 +129,7 @@ struct BrowserLoginsSection: View {
                 ThemedIcon(Theme.Icon.siteLogin).foregroundStyle(.secondary).scaledFrame(width: Theme.Size.icon)
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(String(localized: "\(logins.summary.count) sites")).font(Theme.Font.body).foregroundStyle(.primary).lineLimit(1)
-                    if let detail = Self.summaryDetail(logins.summary) { detail.font(Theme.Font.label.monospacedDigit()).lineLimit(size.isAccessibilitySize ? nil : 1) }
+                    if let detail = Self.summaryDetail(logins.summary) { detail.font(Theme.Font.label.monospacedDigit()).lineLimit(1) }
                 }
                 Spacer(minLength: Theme.Space.s)
                 ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
@@ -198,22 +198,19 @@ struct BrowserLoginsSection: View {
 struct BrowserSiteRow: View, Equatable {
     var site: BrowserCookieSite
     var expired: Bool
-    @Environment(\.dynamicTypeSize) private var size
 
     static func == (a: Self, b: Self) -> Bool { a.site == b.site && a.expired == b.expired }
 
     var body: some View {
-        // At the accessibility sizes a domain wraps in full instead of losing its end, the part that tells sites apart.
-        let lines: Int? = size.isAccessibilitySize ? nil : 1
         HStack(spacing: Theme.Space.m) {
             ThemedIcon(Theme.Icon.siteLogin).foregroundStyle(.secondary).scaledFrame(width: Theme.Size.icon)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 HStack(spacing: Theme.Space.s) {
-                    Text(site.domain).font(Theme.Font.body).lineLimit(lines).accessibilityIdentifier("browser-logins-site")
+                    Text(site.domain).font(Theme.Font.body).lineLimit(1).accessibilityIdentifier("browser-logins-site")
                     if expired { Chip(text: String(localized: "Expired"), look: .review(.caution)) }
                 }
                 Text(BrowserLoginsSection.detail(count: site.count, expires: site.expires))
-                    .font(Theme.Font.label.monospacedDigit()).foregroundStyle(.secondary).lineLimit(lines)
+                    .font(Theme.Font.label.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: Theme.Space.s)
         }
@@ -226,7 +223,7 @@ extension View {
     func browserLoginsClearDialog(_ clearing: Binding<[String]?>, busy: Bool, run: @escaping ([String]) async -> Void) -> some View {
         let sites = clearing.wrappedValue ?? []
         let title = sites.count == 1 ? String(localized: "Clear Sign-in for \(sites[0])?") : String(localized: "Clear Sign-ins for \(sites.count) Sites?")
-        return confirmationDialog(title, isPresented: Binding(get: { clearing.wrappedValue != nil }, set: { if !$0 { clearing.wrappedValue = nil } }),
+        return accessibleConfirmationDialog(title, isPresented: Binding(get: { clearing.wrappedValue != nil }, set: { if !$0 { clearing.wrappedValue = nil } }),
                                   titleVisibility: .visible) {
             Button("Clear [Image Editor bce237]", role: .destructive) {
                 Task {
@@ -285,9 +282,7 @@ private struct CookiePickSheet: View {
             .navigationTitle("Choose Sites to Import")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { file = nil }.lineLimit(1).disabled(busy)
-                }
+                SheetClose(id: "browser-logins-close", disabled: busy) { file = nil }
                 ToolbarItem(placement: .confirmationAction) {
                     let n = file?.cookies.count ?? 0
                     Button(n > 0 ? String(localized: "Import \(n)") : String(localized: "Import")) { Task { await run() } }

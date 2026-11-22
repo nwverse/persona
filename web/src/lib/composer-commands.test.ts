@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentCommands, paneClaude, rankCommands, SLASH_LIMIT } from "./composer-commands";
+import { agentCommands, hasSlashSkillQuery, paneClaude, rankCommands, rankSlashSkills, SLASH_LIMIT } from "./composer-commands";
 import { t } from "../i18n";
 import { WORKFLOWS_COMMAND } from "./background-panel";
 import { LOOP_TEXT } from "./loop-command";
@@ -19,18 +19,39 @@ describe("agentCommands", () => {
     expect(words(session({ state: "working", status: "working" }))).toEqual(["继续", "/compact", "/model", LOOP_TEXT.trim()]);
     expect(words(session({ state: "needs_you", status: "blocked" }))).toEqual(["继续", "/compact", "/model", LOOP_TEXT.trim()]);
   });
-  it("has neither for Codex, TRAEX, a session without a pane or a read-only source", () => {
-    for (const s of [session({ agent: "codex" }), session({ agent: "traex" }), session({ pane_id: undefined }), session({ source_kind: "codex_app_server", capabilities: { send: true, terminal: true } })]) {
+  it("has neither for Codex, TRAE CLI or a runtime that cannot switch models", () => {
+    for (const s of [session({ agent: "codex" }), session({ agent: "traex" }), session({ source_kind: "codex_app_server", capabilities: { send: true, terminal: true } })]) {
       const w = words(s);
       expect(w).not.toContain("/model");
       expect(w).not.toContain("/clear");
     }
+  });
+  it("offers /model wherever the model pill switches models, /clear only in a pane", () => {
+    const w = words(session({ pane_id: undefined }));
+    expect(w).toContain("/model");
+    expect(w).not.toContain("/clear");
   });
   it("drops /loop where the agent has none", () => {
     expect(words(session({ agent: "codex" }))).toEqual(["继续", "/compact"]);
   });
   it("has neither /model nor /clear for an offline Claude", () => {
     expect(words(session({ state: "offline", status: "offline" }))).not.toContain("/model");
+  });
+});
+
+// A runtime's session (#11237): /model where it says the model can switch; Claude Code's typed commands never.
+describe("agentCommands on a runtime's session", () => {
+  const LIST = [{ text: "继续" }, { text: "/compact" }, { text: "/context" }, { text: "/model " }];
+  const runtime = (o: Partial<Session> = {}) => session({ source_kind: "antigravity", pane_id: undefined, agent: "antigravity", capabilities: { send: true, model: true }, ...o });
+  const list = (s?: Session) => agentCommands(LIST, s).map((c) => c.text.trim());
+  it("lists /model where capabilities.model says so, and no /compact or /context", () => {
+    expect(list(runtime())).toEqual(["继续", "/model"]);
+    expect(list(runtime({ capabilities: { send: true, model: false } }))).toEqual(["继续"]);
+  });
+  it("keeps /context to Claude Code's terminal and /compact to terminal agents", () => {
+    expect(list(session({}))).toEqual(["继续", "/compact", "/context", "/model"]);
+    expect(list(session({ agent: "codex" }))).toEqual(["继续", "/compact"]);
+    expect(list(session({ assistant: true }))).toEqual(["继续"]);
   });
 });
 
@@ -113,14 +134,49 @@ describe("rankCommands", () => {
   });
 });
 
+describe("rankSlashSkills", () => {
+  const skill = (id: string, name: string, description = "") => ({ id, name, description });
+
+  it("keeps bare / and whitespace queries free of skills", () => {
+    const list = [skill("1", "persona-office", "Generate Office documents"), skill("2", "grill-me", "Interview plan")];
+    expect(hasSlashSkillQuery("")).toBe(false);
+    expect(hasSlashSkillQuery("   ")).toBe(false);
+    expect(hasSlashSkillQuery(null)).toBe(false);
+    expect(hasSlashSkillQuery(undefined)).toBe(false);
+    expect(hasSlashSkillQuery("persona")).toBe(true);
+    expect(rankSlashSkills(list, "")).toEqual([]);
+    expect(rankSlashSkills(list, "   ")).toEqual([]);
+    expect(rankSlashSkills([], "persona")).toEqual([]);
+  });
+
+  it("ranks non-empty keyword matches by exact, prefix, contains and description without a 25-row cap", () => {
+    const list = [
+      skill("desc", "audit", "Review the change"),
+      skill("contains", "preview", ""),
+      skill("prefix", "review-later", ""),
+      skill("exact", "/review", ""),
+    ];
+    expect(rankSlashSkills(list, "REVIEW").map((s) => s.id)).toEqual(["exact", "prefix", "contains", "desc"]);
+    expect(rankSlashSkills(list, "zzz")).toEqual([]);
+
+    const large = Array.from({ length: 30 }, (_, i) => skill(`s${i}`, `persona-skill-${i}`));
+    expect(rankSlashSkills(large, "persona")).toHaveLength(30);
+    expect(rankSlashSkills(large, "persona-skill-29")[0].id).toBe("s29");
+  });
+});
+
 // /permissions (#6476) goes wherever the chat shows the permission picker: an agent with modes while it runs.
 describe("agentCommands' /permissions", () => {
   const LIST = [{ text: "/compact" }, { text: PERMISSIONS_COMMAND }];
   const has = (s?: Session) => agentCommands(LIST, s).some((c) => c.text === PERMISSIONS_COMMAND);
-  it("is listed for a running Claude Code Agent, idle or working, and Antigravity", () => {
+  it("is listed for a running Claude Code Agent, idle or working, and Antigravity's runtime", () => {
     expect(has(session({}))).toBe(true);
     expect(has(session({ state: "working", status: "working" }))).toBe(true);
-    expect(has(session({ agent: "agy" }))).toBe(true);
+    expect(has(session({ agent: "agy", source_kind: "runtime" }))).toBe(true);
+  });
+  it("is not listed for agy or cursor in a terminal pane, whose mode is their start's", () => {
+    expect(has(session({ agent: "agy" }))).toBe(false);
+    expect(has(session({ agent: "cursor" }))).toBe(false);
   });
   it("is not listed for Codex, a compatible CLI, a read-only source, an offline Agent or no session", () => {
     for (const s of [session({ agent: "codex" }), session({ agent: "traex" }), session({ source_kind: "codex_app_server", capabilities: { send: true, terminal: true } }), session({ state: "offline", status: "offline" }), session({ capabilities: { modes: false } as Session["capabilities"] }), undefined]) {

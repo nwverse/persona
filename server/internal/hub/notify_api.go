@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -37,6 +38,9 @@ type notifyRequest struct {
 	ID string `json:"id,omitempty"`
 	// Silent: no sound (`personad notify --silent`, docs/integrations/script-cli.md).
 	Silent bool `json:"silent,omitempty"`
+	// PushLevel is the ln-mode urgency: "P0" (must interrupt), "P1" (default; held for briefings in ln mode) or
+	// "P2" (silent in ln mode). It is separate from Level, the APNs interruption level.
+	PushLevel string `json:"push_level,omitempty"`
 
 	// Extension notification: only accepted when the caller is an extension token (roleExtension, with the notify scope).
 	UI      string              `json:"ui,omitempty"`
@@ -90,6 +94,13 @@ func (r *notifyRequest) validate() error {
 	case levelActive, levelTimeSensitive:
 	default:
 		return errors.New("level must be active or time-sensitive")
+	}
+	switch r.PushLevel {
+	case "":
+		r.PushLevel = assistantwire.LevelP1
+	case assistantwire.LevelP0, assistantwire.LevelP1, assistantwire.LevelP2:
+	default:
+		return errors.New("push_level must be P0, P1 or P2")
 	}
 
 	r.UI = strings.TrimSpace(r.UI)
@@ -216,7 +227,8 @@ func extensionNotifyIDs(manager, extension, id string) (ws, collapse string) {
 }
 
 // deliverNotify sends a validated notification to the devices that take them: the reply is {"sent":true} when a
-// recipient is selected, or {"sent":false,"reason":"muted"|"no_device"|"filtered"}. An error is the caller's
+// recipient is selected, {"sent":false,"held":true,"reason":...} when push grading holds it, or
+// {"sent":false,"reason":"muted"|"no_device"|"filtered"}. An error is the caller's
 // (a payload too large for APNs). machine is the subtitle:
 // the machine's name, "" for none. manager is whose it is (an extension's manager, a computer's for its
 // `personad notify` or for a request naming that computer): devices that turned that manager's pushes off skip it;
@@ -239,7 +251,14 @@ func (h *Hub) deliverNotify(in notifyRequest, machine, extID, manager string) (m
 	// Something that needs you: devices that turned off "Needs you" (prefs.input) get none of these either.
 	wants := pushWants{Kind: "input"}.fn()
 	build := func(i18n.Lang) map[string]any { return payload }
-	pushSelected, pushReachable := h.push.sendFrom(manager, build, collapse, wants, quietNone, nil)
+	policy := pushPolicy{level: in.PushLevel, title: in.Title, body: in.Body}
+	if in.ID != "" { // the caller's own id, apart from every other manager's and extension's same id
+		policy.relatedKey = "notify:" + manager + "/" + extID + "/" + in.ID
+	}
+	pushSelected, pushReachable, heldReason := h.push.sendFromPolicy(manager, policy, build, collapse, wants, quietNone, nil, nil)
+	if heldReason != "" {
+		return map[string]any{"sent": false, "held": true, "reason": heldReason}, nil
+	}
 	ws := build
 	if id != "" {
 		// The WebSocket event carries the id itself (not the push), so an Android phone replaces the earlier alert too.
@@ -247,12 +266,8 @@ func (h *Hub) deliverNotify(in notifyRequest, machine, extID, manager string) (m
 		withID["id"] = id
 		ws = func(i18n.Lang) map[string]any { return withID }
 	}
-	wsSelected, wsReachable := h.notifyWSFrom(manager, kindAlert, ws, wants, quietNone)
-	if pushSelected+wsSelected == 0 {
-		reason := "no_device"
-		if pushReachable+wsReachable > 0 {
-			reason = "filtered"
-		}
+	wsr := h.notifyWSFrom(manager, kindAlert, ws, wants, quietNone)
+	if reason := (pushOutcome{devices: pushSelected + wsr.selected, reachable: pushReachable + wsr.reachable}).reason(); reason != "" {
 		return map[string]any{"sent": false, "reason": reason}, nil
 	}
 	return map[string]any{"sent": true}, nil

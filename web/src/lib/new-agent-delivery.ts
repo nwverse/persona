@@ -1,8 +1,12 @@
 // Loaded only when a launch is delivered, after the local conversation has painted.
 import { t } from "../i18n";
+import { agentId } from "./agent-kind";
 import { ApiError, errorText, isAbort, isTransient, sessionPath } from "./api";
-import { imagePayload, quotePath, releaseAttachments, sendFile } from "./attachments";
+import { quotePath, releaseAttachments, sendFile } from "./attachments";
+import { imageLimitsFor, MAX_PICTURE_SOURCE, pictureRoom } from "./image-limits";
 import { uuid } from "./format";
+import { toast } from "../ui/atoms";
+import { launchHasFirstTurn } from "./launch-handoff";
 import { apiOp } from "./ops";
 import { href, navigate } from "./router";
 import { getState, putLaunch, upsertSession } from "./store";
@@ -37,34 +41,37 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
     launch = { ...launch, ...patch };
     if (getState().launches[id]) putLaunch(launch);
   };
+  const hasFirstTurn = launchHasFirstTurn(launch);
   update({ phase: launch.session ? "uploading" : "creating", error: undefined, uncertain: false, clearable: undefined, draft: undefined });
   try {
     const imageBytes = launch.attachments.filter((a) => a.mime.startsWith("image/")).reduce((total, a) => total + Math.ceil(a.file.size / 3) * 4, 0);
     if (imageBytes + new TextEncoder().encode(launch.text).byteLength > 31 * 1024 * 1024) throw new Error(t("lib-new-agent.attachments_too_large_start"));
-    if (launch.session && launch.desktopSetupIncomplete && launch.launcher === "claude-desktop" && !launch.text && !launch.attachments.length) {
-      // A blank conversation cannot use its first message to retry native import. This resumes setup of the known
-      // native id only: the node validates it and never seeds a second conversation or sends a model turn.
+    const target = {
+      machine_id: launch.machineId, cwd: launch.cwd, workspace_id: launch.workspaceId || undefined,
+      desktop_project_id: launch.desktopProjectId || undefined,
+      launcher: launch.launcher || undefined, agent_type: launch.agentType, work_session: launch.workSession,
+      model: launch.model || undefined, host: launch.host || undefined, todo_id: launch.todoId || undefined,
+      launcher_default_effort: launch.launcherDefaultEffort,
+      permission_mode: launch.permissionMode || undefined,
+    };
+    if (launch.session && launch.desktopSetupIncomplete && launch.launcher === "claude-desktop") {
+      // A failed seed can precede import, model settings or permission setup. Resume only the known native id before
+      // delivering the first message: the node validates it and never seeds another conversation or sends a model turn.
       update({ phase: "creating" });
       const r = await launchOp<{ session: Session }>("/sessions", launch.startOpId, controller.signal, {
-        machine_id: launch.machineId, cwd: launch.cwd, launcher: launch.launcher, resume_session_id: launch.session.session_id, prompt: "", async: false,
+        ...target, effort: launch.effort || undefined, resume_session_id: launch.session.session_id, prompt: "", async: false,
       });
       update({ session: r.session, desktopSetupIncomplete: false });
       upsertSession(r.session);
     }
     if (!launch.session) {
-      const target = {
-        machine_id: launch.machineId, cwd: launch.cwd, workspace_id: launch.workspaceId || undefined,
-        desktop_project_id: launch.desktopProjectId || undefined,
-        launcher: launch.launcher || undefined, agent_type: launch.agentType, work_session: launch.workSession,
-        model: launch.model || undefined, host: launch.host || undefined, todo_id: launch.todoId || undefined,
-      };
       // A Codex (and a compatible CLI) takes its first message with the start. With none, a computer that can opens
       // Codex waiting for one (docs/integrations/codex.md "Starting without a first message"); an older one refuses.
       const startWithPrompt = async () => {
         if (launch.attachments.length) throw new Error(t("lib-new-agent.launcher_no_attachments"));
         let r: { session: Session };
         try {
-          r = await launchOp<{ session: Session }>("/sessions", launch.startPromptOpId, controller.signal, { ...target, prompt: launch.text || undefined });
+          r = await launchOp<{ session: Session }>("/sessions", launch.startPromptOpId, controller.signal, { ...target, name_hint: launch.nameHint, prompt: launch.text || undefined });
         } catch (e) {
           if (!launch.text && e instanceof ApiError && (e.code === "codex_needs_prompt" || e.code === "work_prompt_required")) throw new Error(t("lib-new-agent.launcher_needs_text"));
           throw e;
@@ -78,8 +85,8 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
       } else {
         try {
           const r = await launchOp<{ session: Session }>("/sessions", launch.startOpId, controller.signal, {
-            ...target, effort: launch.effort || undefined, permission_mode: launch.permissionMode || undefined,
-            ultracode: launch.ultracode === true ? true : undefined, async: launch.launcher !== "claude-desktop" && launch.launcher !== "codex-app", name_hint: launch.text || undefined,
+            ...target, effort: launch.effort || undefined,
+            ultracode: launch.ultracode === true ? true : undefined, async: launch.launcher !== "claude-desktop" && launch.launcher !== "codex-app", name_hint: launch.nameHint ?? (launch.text || undefined),
           });
           session = r.session;
         } catch (e) {
@@ -88,16 +95,30 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
         }
       }
       if (!getState().launches[id]) return;
-      update({ session });
+      update({ session, ...(hasFirstTurn ? { handoffAt: Date.now() } : {}) });
       upsertSession(session);
     }
     if (!launch.outgoing) {
       update({ phase: "uploading" });
       const paths: string[] = [];
       const images: { mime: string; data: string }[] = [];
+      // the pictures go scaled down as in a chat's box, held to the hub's limits (#12973); the ones past them, and any
+      // the page cannot read, go to the computer as files with the others
+      const limits = imageLimitsFor(launch.agentType && agentId(launch.agentType));
+      const spilled = { count: 0, bytes: 0 };
       for (const att of launch.attachments) {
-        if (att.mime.startsWith("image/")) {
-          images.push(await imagePayload(att.file));
+        let image: { mime: string; data: string } | null = null;
+        if (att.mime.startsWith("image/") && images.length >= limits.per_message) spilled.count++;
+        else if (att.mime.startsWith("image/") && att.file.size <= MAX_PICTURE_SOURCE) {
+          const { fitPicture } = await import("./image-scale");
+          image = await fitPicture(att.file, limits);
+          if (image && pictureRoom(images.map((i) => i.data.length), image.data.length, limits) !== "ok") {
+            image = null;
+            spilled.bytes++;
+          }
+        }
+        if (image) {
+          images.push(image);
         } else {
           let path = launch.uploaded[att.id];
           if (!path) {
@@ -107,6 +128,8 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
           paths.push(quotePath(path));
         }
       }
+      if (spilled.count) toast(t("chat-composer.images_as_files", { max: limits.per_message, count: spilled.count }));
+      if (spilled.bytes) toast(t("chat-composer.images_bytes_as_files", { count: spilled.bytes }));
       update({ outgoing: { text: [launch.text, ...paths].filter(Boolean).join("\n"), images } });
     }
     if (!getState().launches[id]) return;
@@ -118,9 +141,8 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
       if (new TextEncoder().encode(JSON.stringify(payload)).byteLength > 32 * 1024 * 1024) throw new Error(t("lib-new-agent.attachments_too_large_retry"));
       await launchOp(`${sessionPath(launch.machineId, launch.session!.session_id)}/messages`, launch.messageId, controller.signal, payload);
     }
-    update({ phase: "ready", desktopSetupIncomplete: false });
     releaseAttachments(launch.attachments);
-    update({ attachments: [] });
+    update({ phase: "ready", desktopSetupIncomplete: false, attachments: [], ...(hasFirstTurn ? { handoffAt: Date.now() } : {}) });
     const local = { name: "session" as const, mid: launch.machineId, sid: launch.id };
     if (location.pathname === href(local)) navigate({ ...local, sid: launch.session!.session_id }, true);
   } catch (e) {
@@ -145,11 +167,12 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
     // the hub won't start it with ultracode here (an old node, a CLI or engine that can't take it): asking again would
     // get the same answer, so "Retry" starts it without, and the card says so (#3428)
     const noUltracode = creating && launch.ultracode === true && ultracodeRefused(e);
-    update({ phase: "failed", uncertain, repeatOnly: creating && (gap || launch.workSession === true), ...(gap ? {} : launchOpIds()),
+    update({ phase: "failed", handoffAt: undefined, uncertain, repeatOnly: creating && (gap || launch.workSession === true), ...(gap ? {} : launchOpIds()),
       ...(noUltracode ? { ultracode: undefined } : {}),
       error: noUltracode ? t("ultracode.start_refused", { error: ultracodeErrorText(e) }) : t(creating ? "lib-new-agent.start_failed" : sending ? "lib-new-agent.first_message_failed" : "lib-new-agent.attachments_failed", { error: errorText(e) }),
       clearable: e instanceof ApiError && e.code === "input_draft" && typeof e.body.clearable === "string" ? e.body.clearable : undefined,
       draft: e instanceof ApiError && e.code === "input_draft" ? String(e.body.draft ?? "") : undefined,
+      shellWaiting: e instanceof ApiError && e.code === "shell_waiting" ? e.body : undefined,
     });
   } finally {
     clearTimeout(deadline);

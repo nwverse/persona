@@ -163,8 +163,8 @@ describe("Switch Agent?", () => {
     act(() => root.render(<AgentModelPill session={getSession(s.machine_id, "s1")!} />));
     await flush();
     expect(pill()!.getAttribute("data-model-pill")).toBe("pending");
-    expect(pill()!.querySelector("[data-pill-target]")!.textContent).toBe("Codex");
-    expect(pill()!.getAttribute("aria-label")).toBe(t("chat-modelpill.aria_pending_effort", { agent: "Codex", model: "5.5 Mini", effort: "低" }));
+    expect(pill()!.querySelector("[data-pill-target]")!.textContent).toBe("cx");
+    expect(pill()!.getAttribute("aria-label")).toBe(t("chat-modelpill.aria_pending_effort", { agent: "cx", model: "5.5 Mini", effort: "低" }));
     expect(panel.props!.state.note).toBe(t("chat-modelpanel.engine_note"));
     expect(panel.props!.state.current).toMatchObject({ provider: "gateway", model: "opus" });
   });
@@ -289,7 +289,7 @@ describe("Switch Agent?", () => {
     expect(getSession(`mac-${machine}`, "s1")?.pending_switch).toBeUndefined();
   });
 
-  it("without the hub's engine_switch: another engine keeps its reason and a Codex Agent's pill is a label", async () => {
+  it("without engine switching, a terminal Codex pill still opens to explain unsupported effort", async () => {
     Object.assign(getState(), { features: ["launcher_switch"] });
     await show(agent());
     await open();
@@ -298,7 +298,22 @@ describe("Switch Agent?", () => {
     expect(modes()).toEqual([]);
     act(() => root.render(<></>));
     await show(terminalCodex({ session_id: "s2" }));
-    expect(pill()).toBeNull();
-    expect(host.querySelector('[data-model-pill="label"]')).not.toBeNull();
+    expect(pill()).not.toBeNull();
+    await open();
+    expect(provider("cx").models?.find((m) => m.id === "gpt-5.5")?.effortUnavailable).toBe(t("chat-modelpanel.effort_terminal"));
+    expect(modes()).toEqual([]);
+  });
+
+  it.each([
+    { name: "CLI alias", session: { agent: "codex-cli" }, reason: "effort_terminal" },
+    { name: "history without an agent ID", session: { agent: undefined, source_kind: "codex_history", capabilities: { send: false } }, reason: "effort_read_only" },
+  ])("a Codex $name keeps the actual effort and an explanation without engine switching", async ({ session, reason }) => {
+    Object.assign(getState(), { features: [] });
+    await show(terminalCodex({ ...session, effort: "max" }));
+    expect(pill()).not.toBeNull();
+    await open();
+    expect(panel.props!.state.current?.effort).toBe("max");
+    expect(provider("cx").models?.find((m) => m.id === "gpt-5.5")?.effortUnavailable).toBe(t(`chat-modelpanel.${reason}`));
+    expect(modes()).toEqual([]);
   });
 });

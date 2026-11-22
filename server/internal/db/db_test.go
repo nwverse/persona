@@ -52,7 +52,8 @@ func open(t testing.TB) *DB {
 var openTables = []string{"push_device_retirements", "lock_tests", "client_ops", "devices", "device_tokens", "pair_tokens",
 	"device_sessions", "live_activities", "phone_tools", "node_sessions", "mail_accounts", "interactions", "settings",
 	"inbox_items", "kb_entities", "connector_secrets", "machine_systems", "machine_metrics", "machine_usage",
-	"sent_messages", "todos", "todo_agents", "assistant_always", "sent_as_user"}
+	"sent_messages", "todos", "todo_agents", "assistant_always", "sent_as_user", "hub_push_sent", "urgent_calls", "model_usage",
+	"conversation_histories", "assistant_conversation_spaces", "logical_conversations", "conversation_segment_closures", "conversation_prepared_candidates"}
 
 // open empties what TRUNCATE openTables CASCADE did, a table only the cascade reaches included, and leaves a table
 // that had no row in that cascade its files: it truncates only what has a row.
@@ -252,6 +253,206 @@ func TestLiveActivityStartBudget(t *testing.T) {
 		t.Fatalf("budget FK cleanup: n=%d err=%v", n, err)
 	}
 	t.Log("two independent pools: 20 concurrent attempts, one claim; renewal retained budget; failed save rolled back")
+}
+
+// The hold on the next push-start after one the phone has not answered (#7641): counted from the claim, seen by the
+// other blue-green process, and back to the cooldown when lifted.
+func TestLiveActivityStartHold(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	at := time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
+	const cooldown, maxAge = 10 * time.Minute, 8 * time.Hour
+	if err := d.UpsertDevice(ctx, Device{DeviceID: "phone"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SaveLiveActivity(ctx, LiveActivity{DeviceID: "phone", PushToStartToken: "start"}); err != nil {
+		t.Fatal(err)
+	}
+	other, err := Open(ctx, os.Getenv("PERSONA_TEST_DATABASE_URL"), AllSets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	// hold is HoldLiveActivityStart for the start claimed at asOf, and says whether the deadline moved.
+	hold := func(pool *DB, device string, asOf time.Time, d time.Duration) bool {
+		t.Helper()
+		changed, err := pool.HoldLiveActivityStart(ctx, device, asOf, d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return changed
+	}
+	// Nothing claimed yet: nothing to hold, and no row appears.
+	if hold(d, "phone", at, maxAge) {
+		t.Fatal("a hold without a claim changed something")
+	}
+	if _, claimed, err := d.ClaimLiveActivityStart(ctx, "phone", "start", at, cooldown, maxAge); err != nil || !claimed {
+		t.Fatalf("first claim: %v %v", claimed, err)
+	}
+	if !hold(d, "phone", at, maxAge) {
+		t.Fatal("the hold of the claimed start was not applied")
+	}
+	if hold(other, "phone", at, maxAge) {
+		t.Fatal("the same hold again reported a change")
+	}
+	due, claimed, err := other.ClaimLiveActivityStart(ctx, "phone", "start", at.Add(cooldown), cooldown, maxAge)
+	if err != nil || claimed || !due.Equal(at.Add(maxAge)) {
+		t.Fatalf("held start claimed by the other pool: due=%s claimed=%v err=%v", due, claimed, err)
+	}
+	due, claimed, err = other.ClaimLiveActivityStart(ctx, "phone", "start", at.Add(maxAge-time.Microsecond), cooldown, maxAge)
+	if err != nil || claimed || !due.Equal(at.Add(maxAge)) {
+		t.Fatalf("held start claimed before the hold ended: due=%s claimed=%v err=%v", due, claimed, err)
+	}
+	// The phone answered a minute after the start: the cooldown from that claim again, which has passed.
+	if !hold(other, "phone", at.Add(time.Minute), cooldown) {
+		t.Fatal("the phone's answer did not lift the hold")
+	}
+	second := at.Add(cooldown)
+	if _, claimed, err = d.ClaimLiveActivityStart(ctx, "phone", "start", second, cooldown, maxAge); err != nil || !claimed {
+		t.Fatalf("claim after the hold was lifted: %v %v", claimed, err)
+	}
+	// Held again and never answered: the hold ends by itself, counted from the second claim.
+	if !hold(d, "phone", second, maxAge) {
+		t.Fatal("the hold of the second start was not applied")
+	}
+	if _, claimed, err = d.ClaimLiveActivityStart(ctx, "phone", "start", second.Add(maxAge), cooldown, maxAge); err != nil || !claimed {
+		t.Fatalf("claim when the hold ended: %v %v", claimed, err)
+	}
+	if hold(d, "missing", second, maxAge) {
+		t.Fatal("a hold for an unknown device changed something")
+	}
+}
+
+// A hold, a refusal or an answer is about the start it followed, named by the time that start was claimed at (#7641
+// review): arriving after the device's next start was claimed, it leaves that start's deadline as it is. Before the
+// fix the late lift of start A put start B back on the cooldown (a second card beside B's), and A's late hold kept a
+// refused B back for fleetMaxAge.
+func TestLiveActivityStartHoldLeavesNewerClaim(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	at := time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
+	const cooldown, maxAge = 10 * time.Minute, 8 * time.Hour
+	if err := d.UpsertDevice(ctx, Device{DeviceID: "phone"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SaveLiveActivity(ctx, LiveActivity{DeviceID: "phone", PushToStartToken: "start"}); err != nil {
+		t.Fatal(err)
+	}
+	// Two pools: the two blue-green processes, as in TestLiveActivityStartBudget.
+	other, err := Open(ctx, os.Getenv("PERSONA_TEST_DATABASE_URL"), AllSets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	deadline := func() (claimedAt, next time.Time) {
+		t.Helper()
+		if err := d.pool.QueryRow(ctx, `SELECT claimed_at, next_start_at FROM live_activity_start_budget WHERE device_id = 'phone'`).Scan(&claimedAt, &next); err != nil {
+			t.Fatal(err)
+		}
+		return claimedAt, next
+	}
+	// late sends what start A's flush, its refusal and an answer from before B still had on their way.
+	a, answered := at.Add(123456*time.Nanosecond), at.Add(time.Minute) // A's claim keeps microseconds: 123 of them
+	late := func(pool *DB, what string, wantNext time.Time) {
+		t.Helper()
+		for _, w := range []struct {
+			name string
+			asOf time.Time
+			hold time.Duration
+		}{
+			{"A's hold", a, maxAge},
+			{"A's lift", a, cooldown},
+			{"an answer from before B", answered, cooldown},
+			{"an answer a microsecond before B", a.Truncate(time.Microsecond).Add(cooldown - time.Microsecond), cooldown},
+		} {
+			changed, err := pool.HoldLiveActivityStart(ctx, "phone", w.asOf, w.hold)
+			if err != nil || changed {
+				t.Fatalf("%s: %s arriving late: changed=%v err=%v, want no change", what, w.name, changed, err)
+			}
+			if _, next := deadline(); !next.Equal(wantNext) {
+				t.Fatalf("%s: %s arriving late moved B's next start to %s, want %s", what, w.name, next, wantNext)
+			}
+		}
+	}
+
+	// Start A: claimed, held, then lifted by the phone's answer.
+	if _, claimed, err := d.ClaimLiveActivityStart(ctx, "phone", "start", a, cooldown, maxAge); err != nil || !claimed {
+		t.Fatalf("claim A: %v %v", claimed, err)
+	}
+	if changed, err := d.HoldLiveActivityStart(ctx, "phone", a, maxAge); err != nil || !changed {
+		t.Fatalf("A's own hold: changed=%v err=%v", changed, err)
+	}
+	if changed, err := d.HoldLiveActivityStart(ctx, "phone", answered, cooldown); err != nil || !changed {
+		t.Fatalf("the answer to A: changed=%v err=%v", changed, err)
+	}
+	// Start B, claimed by the other process as soon as A's cooldown is over, so the two claims are as close as two can
+	// be. A claim at the time of the last one is refused whatever the deadline says: claimed_at names one claim.
+	b := a.Truncate(time.Microsecond).Add(cooldown)
+	if _, claimed, err := other.ClaimLiveActivityStart(ctx, "phone", "start", b, cooldown, maxAge); err != nil || !claimed {
+		t.Fatalf("claim B: %v %v", claimed, err)
+	}
+	if claimedAt, _ := deadline(); !claimedAt.Equal(b) {
+		t.Fatalf("B claimed at %s, want %s", claimedAt, b)
+	}
+	if changed, err := other.HoldLiveActivityStart(ctx, "phone", b, 0); err != nil || !changed {
+		t.Fatalf("B's deadline set to its claim: changed=%v err=%v", changed, err)
+	}
+	if due, claimed, err := d.ClaimLiveActivityStart(ctx, "phone", "start", b, cooldown, maxAge); err != nil || claimed {
+		t.Fatalf("a second claim at B's own time: due=%s claimed=%v err=%v", due, claimed, err)
+	}
+	if changed, err := other.HoldLiveActivityStart(ctx, "phone", b, cooldown); err != nil || !changed {
+		t.Fatalf("B's cooldown put back: changed=%v err=%v", changed, err)
+	}
+
+	// B is on its cooldown (its hold has not been written yet): A's late hold must not keep it back for maxAge.
+	late(d, "B on its cooldown", b.Add(cooldown))
+	// B is held: A's late lift must not put it back on the cooldown.
+	if changed, err := other.HoldLiveActivityStart(ctx, "phone", b, maxAge); err != nil || !changed {
+		t.Fatalf("B's own hold: changed=%v err=%v", changed, err)
+	}
+	late(other, "B held", b.Add(maxAge))
+
+	// The same from both processes at once, with B's own refusal and B's own hold among them: whatever the order, only
+	// B's writes land, and the last of them decides.
+	if changed, err := d.HoldLiveActivityStart(ctx, "phone", b, cooldown); err != nil || !changed {
+		t.Fatalf("B's refusal: changed=%v err=%v", changed, err)
+	}
+	var wg sync.WaitGroup
+	for i := range 40 {
+		pool := d
+		if i%2 == 1 {
+			pool = other
+		}
+		asOf, dur := a, maxAge
+		switch i % 4 {
+		case 1:
+			dur = cooldown
+		case 2:
+			asOf, dur = answered, cooldown
+		case 3:
+			asOf = b.Add(-time.Microsecond)
+		}
+		wg.Go(func() {
+			if changed, err := pool.HoldLiveActivityStart(ctx, "phone", asOf, dur); err != nil || changed {
+				t.Errorf("a late write as of %s for %s: changed=%v err=%v, want no change", asOf, dur, changed, err)
+			}
+		})
+	}
+	wg.Go(func() {
+		if changed, err := other.HoldLiveActivityStart(ctx, "phone", b, maxAge); err != nil || !changed {
+			t.Errorf("B's own hold among the late writes: changed=%v err=%v", changed, err)
+		}
+	})
+	wg.Wait()
+	if claimedAt, next := deadline(); !claimedAt.Equal(b) || !next.Equal(b.Add(maxAge)) {
+		t.Fatalf("after 40 late writes from two pools: claimed_at=%s next_start_at=%s, want %s and %s", claimedAt, next, b, b.Add(maxAge))
+	}
+	// B's own answer still lifts it.
+	if changed, err := d.HoldLiveActivityStart(ctx, "phone", b.Add(time.Second), cooldown); err != nil || !changed {
+		t.Fatalf("the answer to B: changed=%v err=%v", changed, err)
+	}
+	if _, next := deadline(); !next.Equal(b.Add(cooldown)) {
+		t.Fatalf("after B's answer: next_start_at=%s, want %s", next, b.Add(cooldown))
+	}
+	t.Log("claim A, claim B, then A's hold, A's lift and an older answer late (alone and 40 at once from two pools): B's deadline never moved")
 }
 
 func TestLiveActivityStartParentLockOrder(t *testing.T) {
@@ -458,11 +659,13 @@ func TestDevices(t *testing.T) {
 	if err := d.UpsertDevice(ctx, Device{DeviceID: "a", Name: "iPhone", APNSToken: "t1"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.UpsertDevice(ctx, Device{DeviceID: "a", Name: "iPhone", APNSToken: "t2", PushKey: "pk", RelayURL: "https://relay.example/relay", RelayGrant: "g", Credential: "dev_1", RelayError: "403 topic not served", Features: []string{"withdraw"}}); err != nil {
+	if err := d.UpsertDevice(ctx, Device{DeviceID: "a", Name: "iPhone", APNSToken: "t2", PushKey: "pk", RelayURL: "https://relay.example/relay", RelayGrant: "g", Credential: "dev_1", RelayError: "403 topic not served", Features: []string{"withdraw"},
+		VoIPToken: "v1", VoIPGrant: "vg", VoIPError: "none yet"}); err != nil {
 		t.Fatal(err)
 	}
 	list, err := d.Devices(ctx)
-	if err != nil || len(list) != 1 || list[0].APNSToken != "t2" || list[0].PushKey != "pk" || list[0].RelayURL != "https://relay.example/relay" || list[0].RelayGrant != "g" || list[0].Credential != "dev_1" || list[0].RelayError != "403 topic not served" || !slices.Equal(list[0].Features, []string{"withdraw"}) {
+	if err != nil || len(list) != 1 || list[0].APNSToken != "t2" || list[0].PushKey != "pk" || list[0].RelayURL != "https://relay.example/relay" || list[0].RelayGrant != "g" || list[0].Credential != "dev_1" || list[0].RelayError != "403 topic not served" || !slices.Equal(list[0].Features, []string{"withdraw"}) ||
+		list[0].VoIPToken != "v1" || list[0].VoIPGrant != "vg" || list[0].VoIPError != "none yet" {
 		t.Fatalf("devices = %+v, %v", list, err)
 	}
 	if err := d.DeleteDevice(ctx, "a"); err != nil {
@@ -679,6 +882,34 @@ func TestNodeSessions(t *testing.T) {
 	}
 }
 
+// Origin is authorization state needed by node-owned recovery before the manager can re-attest a continuation.
+// Keep it in the existing node_model JSON through a real write/read cycle; no schema migration is involved.
+func TestNodeSessionOriginRoundTrip(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	if err := d.PutNodeSession(ctx, "server", "inbox-recovery", NodeSession{Launcher: "claude", Cwd: "/x", Origin: "inbox", OriginKnown: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.PutNodeSession(ctx, "server", "ordinary", NodeSession{Launcher: "claude", Cwd: "/x", OriginKnown: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.PutNodeSession(ctx, "server", "legacy", NodeSession{Launcher: "claude", Cwd: "/x"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.NodeSessions(ctx, "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["inbox-recovery"].Origin != "inbox" || !got["inbox-recovery"].OriginKnown {
+		t.Fatalf("reloaded Inbox origin decision=%+v, want known inbox", got["inbox-recovery"])
+	}
+	if got["ordinary"].Origin != "" || !got["ordinary"].OriginKnown {
+		t.Fatalf("reloaded ordinary origin decision=%+v, want explicitly known", got["ordinary"])
+	}
+	if got["legacy"].OriginKnown {
+		t.Fatal("pre-upgrade record without an origin decision became known")
+	}
+}
+
 // state.load reaches node_sessions through node_sessions_started, so it reads only the 60-day window instead of every
 // session the machine ever had, both planned for its machine and as the generic plan a cached statement may switch to.
 func TestNodeSessionsStartedIndexed(t *testing.T) {
@@ -817,6 +1048,35 @@ func TestMailAccountsReplace(t *testing.T) {
 	got, err := d.MailAccounts(ctx)
 	if err != nil || len(got) != 1 || got[0].ID != "2" {
 		t.Fatalf("accounts = %+v, %v", got, err)
+	}
+}
+
+// An ask_user that let go of its turn (assistant/ask_release.go, #7392) is marked resumable while it is pending: a
+// restart then keeps it, as it keeps one asked with wait false. One that ended or never was is not marked.
+func TestMarkInteractionResumableKeepsTheCardAcrossARestart(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	at := time.Now()
+	for _, id := range []string{"ixheld", "ixended", "ixkept"} {
+		if err := d.InsertInteraction(ctx, proto.Interaction{ID: id, MachineID: "server", SessionID: "s", Kind: proto.IxQuestion,
+			ToolName: "ask_user", CreatedAt: at, ExpiresAt: at.Add(time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.FinishInteraction(ctx, "ixended", "resolved", &proto.Resolution{Answers: map[string]string{"q": "a"}}); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]bool{"ixheld": true, "ixended": false, "nope": false} {
+		if ok, err := d.MarkInteractionResumable(ctx, id); err != nil || ok != want {
+			t.Fatalf("mark %s: %v, %v; want %v", id, ok, err, want)
+		}
+	}
+	kept, cancelled, err := d.ExpireStaleInteractions(ctx)
+	if err != nil || len(kept) != 1 || kept[0].ID != "ixheld" || !kept[0].Resumable || kept[0].ToolName != "ask_user" ||
+		len(kept[0].Questions) != 0 {
+		t.Fatalf("kept %+v, %v", kept, err)
+	}
+	if !slices.Equal(cancelled, []string{"ixkept"}) {
+		t.Fatalf("cancelled %v: only the one never marked", cancelled)
 	}
 }
 
@@ -1636,6 +1896,23 @@ func TestSentEcho(t *testing.T) {
 	}
 }
 
+func TestA2AEchoRestoresWithoutAppSend(t *testing.T) {
+	d, ctx := open(t), t.Context()
+	id := proto.A2ADeliveryPrefix + "task-1"
+	receipt := func(line string) json.RawMessage {
+		return json.RawMessage(fmt.Sprintf(`{"session_id":"child","client_msg_id":%q,"line":%q,"source":{"kind":"conversation","conversation_id":"parent"}}`, id, line))
+	}
+	for _, entry := range []json.RawMessage{receipt(""), receipt("first"), receipt("")} {
+		if err := d.RecordEcho(ctx, id, "box", entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	restored, err := d.Echoes(ctx, "box")
+	if err != nil || len(restored) != 1 || !strings.Contains(string(restored[0]), `"line": "first"`) || !strings.Contains(string(restored[0]), `"conversation_id": "parent"`) {
+		t.Fatalf("restored A2A receipts: %s %v", restored, err)
+	}
+}
+
 // A connector's secret: stored sealed by the hub, replaced, read back, deleted; another connector has none.
 func TestConnectorSecrets(t *testing.T) {
 	d, ctx := open(t), context.Background()
@@ -1658,5 +1935,40 @@ func TestConnectorSecrets(t *testing.T) {
 	}
 	if _, ok, _ := d.ConnectorSecret(ctx, "example"); ok {
 		t.Fatal("still there after delete")
+	}
+}
+
+// A partially created Codex App conversation keeps requested settings through the manager's typed state.put/load
+// boundary until the desktop confirms them; successful setup then clears that intent durably.
+func TestNodeSessionsDesktopPendingSettingsRoundTrip(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	want := NodeSession{Launcher: "codex-app", Cwd: "/work/project", Model: "confirmed-model",
+		DesktopPendingModel: "requested-model", DesktopPendingEffort: "high"}
+	if err := d.PutNodeSession(ctx, "server", "desktop-pending", want); err != nil {
+		t.Fatal(err)
+	}
+	load := func() NodeSession {
+		t.Helper()
+		rows, err := d.NodeSessions(ctx, "server")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := rows["desktop-pending"]
+		if !ok {
+			t.Fatal("desktop session was not restored")
+		}
+		return got
+	}
+	got := load()
+	if got.Launcher != want.Launcher || got.Cwd != want.Cwd || got.Model != want.Model ||
+		got.DesktopPendingModel != want.DesktopPendingModel || got.DesktopPendingEffort != want.DesktopPendingEffort {
+		t.Fatalf("pending settings round trip = %+v", got)
+	}
+	got.DesktopPendingModel, got.DesktopPendingEffort = "", ""
+	if err := d.PutNodeSession(ctx, "server", "desktop-pending", got); err != nil {
+		t.Fatal(err)
+	}
+	if cleared := load(); cleared.DesktopPendingModel != "" || cleared.DesktopPendingEffort != "" || cleared.Model != want.Model {
+		t.Fatalf("confirmed setup did not clear pending settings: %+v", cleared)
 	}
 }

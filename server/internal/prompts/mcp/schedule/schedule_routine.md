@@ -1,9 +1,18 @@
-Set up a recurring routine: every day (or on some weekdays) at a time, Persona starts a new conversation with `prompt`, you do the work, and the user gets a push with your answer (with `push: "asked"`, only what you send with notify_user). Use for "每天 9 点给我早报", "每周五下午起草周报". For one-off reminders use schedule_followup. For times a time of day and weekdays can't say, pass `cron` instead of `time` / `weekdays`: a standard 5-field cron expression `minute hour day-of-month month day-of-week` read in the user's time zone, such as `*/30 9-18 * * 1-5` (every 30 minutes from 9:00 to 18:30 on weekdays), `0 10 1 * *` (10:00 on the 1st of each month) or `0 9 * * 1,3,5`, or an alias (@hourly, @daily, @weekly, @monthly, @yearly). Day of week 0 and 7 are Sunday; when both day of month and day of week are restricted, a day matching either runs. Runs must be at least 5 minutes apart; seconds, @every and TZ= are refused. A bad expression is refused with what is wrong; the reply lists the next runs, so check them against what the user asked. Pass `id` (from list_followups) to change an existing routine: only the fields you give change; `enabled: false` pauses it. A routine can take `until`, an instant after which it stops (RFC 3339 or 30m / 2h / 1d, not a bare clock time): Persona then turns it off and records a skipped run instead of running. Omit `until` to keep an existing routine's end time; null clears it. Times are in the user's time zone. A routine runs on Main chat's launcher, model and thinking effort unless you give it its own: pass `launcher` (a name from machines_list / the launcher list on the computer where its runs start), and `model` / `effort` for that launcher (a model or effort alone pins the launcher it runs on now). An empty `launcher` clears the override and returns the routine to Main chat. Leave these out to keep what the routine has. `inbox` is the user's setting "when done, put it in the Inbox" (off / only if worth a look / every time): pass it only when they asked for the result to reach their Inbox.
+Create a recurring routine, or pass `id` from list_followups to edit only the fields supplied. `enabled: false` pauses it. Use `time` with optional `weekdays`, or `cron` instead. Times use the user's zone; cron has 5 fields, runs at least 5m apart, supports the listed aliases, treats 0/7 as Sunday and restricted day fields as either. Seconds, @every and TZ= are refused; inspect the reply's next runs. `until` cannot be a bare clock time.
+
+Runs inherit Main chat's launcher/model/effort. Omit overrides to keep them; an empty launcher returns to Main chat. Permission mode stays the user's choice. `inbox` is only for requested Inbox results. `fresh_each_run: true` starts a new chat per run with its state note. See field descriptions for push and end-time edit rules.
+
+For approved work advancing a supervised to-do, pass its explicit `todo_id`; this conversation must supervise it. Omission keeps its association; "" clears it. From the second run Persona checks Agent answers, tool calls (not waits or repeats), criterion changes and progress reports; a long stall asks Change approach / Keep waiting, even with `push: asked`. Get owner consent before creating or changing recurring work.{{template "shared/mcp_language" .}}
 
 ```json
 {
   "type": "object",
   "properties": {
+    "todo_id": {
+      "type": "string",
+      "description": "explicit supervised to-do this routine advances"
+    },
+    "fresh_each_run": { "type": "boolean" },
     "id": {
       "type": "string",
       "description": "to change an existing routine"
@@ -49,6 +58,17 @@ Set up a recurring routine: every day (or on some weekdays) at a time, Persona s
       "type": "string",
       "enum": ["off", "worthy", "every"],
       "description": "what of a run goes into the user's Inbox, independent of push: off (default for a new task), worthy (a run puts a row there with inbox_post only when it finds something worth a look; for a task that watches something), every (every run ends with a row made by Persona; for a briefing the user follows daily). Set it only when the user asked for it. Omit to keep an existing task's"
+    },
+    "run_if": {
+      "type": ["object", "null"],
+      "description": "Optional owner-approved shell check on the routine computer before scheduled runs. Exit 0 runs; exit 1 skips. Other errors follow on_error. Omit to keep it or use null to remove it.",
+      "properties": {
+        "command": {"type": "string", "maxLength": 4096},
+        "timeout_s": {"type": "integer", "minimum": 1, "maximum": 60, "default": 30},
+        "on_error": {"type": "string", "enum": ["run", "skip"], "default": "run"}
+      },
+      "required": ["command"],
+      "additionalProperties": false
     },
     "until": {
       "type": ["string", "null"],

@@ -210,7 +210,7 @@ func sourceIn(r assistantwire.InboxRound, id string) (assistantwire.InboxSource,
 // inboxMail is the hub's mail on made-up data: one account, its latest messages, their full texts, what it sent, and
 // how often its messages were listed.
 type inboxMail struct {
-	Mail
+	inboxOnlyMail
 	mu    sync.Mutex
 	msgs  []mail.MailSummary
 	full  map[uint32]*mail.MailMessage
@@ -507,7 +507,8 @@ func TestInboxSourcesAnswerTheManager(t *testing.T) {
 		len(g.replies) != 1 || g.replies[0].Text != "好的" {
 		t.Fatalf("reply: %v %+v", err, g.replies)
 	}
-	if _, err := inbox(assistantwire.InboxReply, map[string]any{"source": "lark", "reply": connector.InboxReply{Thread: "chat:1"}}); !errors.Is(err, errCannotReply) {
+	if _, err := inbox(assistantwire.InboxReply, map[string]any{"source": "lark", "reply": connector.InboxReply{Thread: "chat:1"}}); !errors.As(err, new(*rpc.Error)) ||
+		err.(*rpc.Error).Code != assistantwire.CodeInboxSourceUnavailable {
 		t.Fatalf("a reply through a connector the hub has not: %v", err)
 	}
 	if out, err := inbox(assistantwire.InboxSettle, map[string]any{"source": "examplechat", "threads": []string{"old:1", "new:2"}}); err != nil ||

@@ -106,6 +106,9 @@ func (n *Node) offLimits(path string) error {
 // certs/dev.pem below it is the project's own.
 func dataSecret(rel string) bool {
 	parts := strings.Split(rel, "/")
+	if len(parts) > 0 && parts[0] == "task-workspaces" {
+		return true
+	}
 	if len(parts) > 2 && parts[0] == "managers" {
 		parts = parts[2:]
 	}
@@ -386,10 +389,12 @@ func splitPath(p string) []string {
 	return strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == filepath.Separator })
 }
 
-// absPath makes a path absolute against the node's own working directory (a relative path asked with no cwd).
+// absPath makes a path absolute against the node's own working directory (a relative path asked with no cwd), with
+// Windows short names spelled out (longPath). The file tools resolve every client path through here, so the guard and
+// the operations see the names the entries have.
 func absPath(p string) string {
 	if a, err := filepath.Abs(p); err == nil {
-		return a
+		return longPath(a)
 	}
 	return p
 }

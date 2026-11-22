@@ -13,23 +13,32 @@ import (
 
 // ---- the suggestion tool (inbox_suggest; inbox_draft is its older name for a reply) ----
 
+// suggestReported is one externally visible step the processing conversation says it or an Agent took. The hub records
+// the statement without treating it as execution the program observed.
+type suggestReported struct {
+	Text string `json:"text"`
+	By   string `json:"by"`
+}
+
 type suggestIn struct {
-	Kind     string         `json:"kind"`
-	Text     string         `json:"text"`
-	Note     string         `json:"note"`
-	Handback bool           `json:"handback"`
-	Outcome  string         `json:"outcome"`
-	Recap    string         `json:"recap"`
-	Title    string         `json:"title"`
-	Summary  string         `json:"summary"`
-	Machine  string         `json:"machine"`
-	Cwd      string         `json:"cwd"`
-	Due      string         `json:"due"`
-	Related  []string       `json:"related"`
-	Changes  []DocChange    `json:"changes"`
-	Follow   *suggestFollow `json:"follow"`
+	Kind     string           `json:"kind"`
+	Text     string           `json:"text"`
+	Note     string           `json:"note"`
+	Handback bool             `json:"handback"`
+	Outcome  string           `json:"outcome"`
+	Recap    string           `json:"recap"`
+	Title    string           `json:"title"`
+	Summary  string           `json:"summary"`
+	Machine  string           `json:"machine"`
+	Cwd      string           `json:"cwd"`
+	Due      string           `json:"due"`
+	Related  []string         `json:"related"`
+	Changes  []DocChange      `json:"changes"`
+	Follow   *suggestFollow   `json:"follow"`
+	Reported *suggestReported `json:"reported"`
 	// Item names the event: needed from a conversation it was handed to (Hand to AI, inbox_handoff.go).
-	Item string `json:"item"`
+	Item           string `json:"item"`
+	ProcessingTurn string `json:"processing_turn"`
 }
 
 var errNotProcessing = i18n.ErrEnglish("inbox-errors.not_processing")
@@ -39,7 +48,10 @@ type errSuggestion struct{ msg string }
 
 func (e errSuggestion) Error() string { return e.msg }
 
+var errStaleInboxTurn = errSuggestion{"this Inbox processing turn has been superseded or its processing_turn is missing; nothing was written; end this turn"}
+
 var errSuggestFiled = errSuggestion{"this inbox item is already filed, so the suggestion was not submitted and the user cannot see it; end this turn"}
+var errReportedFiled = errSuggestion{"this inbox item is already filed, so the reported step was not recorded; end this turn"}
 
 // check holds a suggestion to the rules before anything is kept.
 func (in *suggestIn) check() error {
@@ -47,10 +59,24 @@ func (in *suggestIn) check() error {
 	if in.Kind != "" && in.Follow != nil {
 		return errSuggestion{"give either kind (reply, agent or conclusion) or follow, not both: follow says this turn only waits on the other side"}
 	}
+	if in.Reported != nil {
+		in.Reported.Text = clip(oneLine(strings.TrimSpace(in.Reported.Text)), 120)
+		in.Reported.By = strings.TrimSpace(in.Reported.By)
+		if in.Reported.Text == "" {
+			return errSuggestion{"reported.text is required: say one thing that was actually done"}
+		}
+		switch in.Reported.By {
+		case "":
+			in.Reported.By = ViaAssistant
+		case ViaAgent, ViaAssistant:
+		default:
+			return errSuggestion{fmt.Sprintf("reported.by %q: one of agent, assistant", in.Reported.By)}
+		}
+	}
 	switch in.Kind {
 	case "":
-		if strings.TrimSpace(in.Recap) == "" {
-			return errSuggestion{"give kind (reply, agent, conclusion or todo) with text, or at least recap"}
+		if strings.TrimSpace(in.Recap) == "" && in.Reported == nil {
+			return errSuggestion{"give kind (reply, agent, conclusion or todo) with text, at least recap, or a reported step"}
 		}
 		return nil
 	case SuggestReply, SuggestAgent, SuggestConclusion, SuggestTodo:
@@ -143,9 +169,17 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 			return "", nil, nil, false, errNotProcessing
 		}
 	}
+	if from == nil && in.ProcessingTurn != it.Agent.ProcessingTurn {
+		b.mu.Unlock()
+		return "", nil, nil, false, errStaleInboxTurn
+	}
 	if from == nil && (in.Kind != "" || in.Follow != nil) && !it.open() {
 		b.mu.Unlock()
 		return "", nil, nil, false, errSuggestFiled
+	}
+	if in.Reported != nil && !it.open() {
+		b.mu.Unlock()
+		return "", nil, nil, false, errReportedFiled
 	}
 	for _, ch := range in.Changes {
 		if it.Doc == nil || !docOffers(*it.Doc, ch) {
@@ -155,6 +189,21 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 	}
 	now := time.Now().UTC()
 	w := beginWrite(it)
+	if r := in.Reported; r != nil {
+		duplicate := false
+		for i := len(it.Chain) - 1; i >= 0; i-- {
+			if it.Chain[i].Kind != ChainReported {
+				continue
+			}
+			duplicate = it.Chain[i].Detail == r.Text
+			break
+		}
+		if !duplicate {
+			b.chainAdd(it, InboxChainEntry{Kind: ChainReported, At: now,
+				Text:   i18n.T(b.userLang(), "assistant-inbox_chain.reported", i18n.Args{"text": r.Text}),
+				Detail: r.Text, Via: r.By})
+		}
+	}
 	if r := strings.TrimSpace(in.Recap); r != "" {
 		it.Recap = clip(r, recapMax)
 	}
@@ -176,21 +225,43 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 	var handed *handoffCard
 	stop := false
 	if from == nil && in.Kind == "" && in.Follow == nil && it.open() && it.Handling != nil && it.Handling.State == HandlingLooking {
-		// Only the recap: this turn changes nothing else, the event goes back to where it was.
+		// No kind or follow: this turn offers nothing new to confirm, so the event goes back to where it was.
 		back := it.Agent.Back
 		if it.Suggestion != nil || back == "" || back == HandlingLooking || back == HandlingFailed {
 			back = HandlingDone
 		}
 		it.Agent.Wake = false
-		b.setHandling(it, back, "", now)
+		if back == HandlingWaiting {
+			agentStopped := len(it.Chain) > 0 && it.Chain[len(it.Chain)-1].Kind == ChainAgentStopped
+			b.resumeInboxWaiting(it, now)
+			if agentStopped {
+				// The stop turn's recap consumed its restoration point; later turns must not restore it again.
+				it.Agent.Back = ""
+			}
+		} else {
+			b.setHandling(it, back, "", now)
+		}
 	}
 	if in.Kind != "" && it.open() {
+		if from != nil {
+			for i := range it.Handoffs {
+				if it.Handoffs[i].MachineID == from.MachineID && it.Handoffs[i].SessionID == from.SessionID {
+					it.Handoffs[i].PendingSuggestion = false
+				}
+			}
+		}
 		if legacySuggestion(it) != nil {
 			it.SuggestSeq = max(it.SuggestSeq, 1)
 		}
-		it.SuggestSeq++
-		g := &InboxSuggestion{Version: it.SuggestSeq, Kind: in.Kind, Text: in.Text, Note: clip(strings.TrimSpace(in.Note), 600),
+		g := &InboxSuggestion{Version: it.SuggestSeq + 1, Kind: in.Kind, Text: in.Text, Note: clip(strings.TrimSpace(in.Note), 600),
 			Handback: in.Handback, Due: in.Due, Changes: in.Changes, At: now, Cwd: strings.TrimSpace(in.Cwd), Conversation: from}
+		if from != nil {
+			owner := *from
+			g.Owner = &owner
+		} else if it.Agent != nil {
+			g.Owner = &SessionRef{MachineID: it.Agent.MachineID, SessionID: it.Agent.SessionID}
+		}
+		g.SourceOf = suggestionReplyTarget(it)
 		if in.Kind == SuggestReply && !in.Handback {
 			g.MailTarget = mailTarget(*it)
 		}
@@ -199,7 +270,14 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 				g.MachineID = m.ID
 			}
 		}
+		if samePendingReply(it, g) {
+			// The reply and its authority/target are unchanged. Keep its card/version and any failed or uncertain
+			// attempt, while still saving this call's independently supplied recap/title/relationship updates.
+			goto suggestionKept
+		}
+		it.SuggestSeq++
 		it.Suggestion = g
+		inheritReplyUncertainty(it, g, g.Text)
 		var link *InboxChainLink
 		if from == nil {
 			it.Agent.Wake, it.Agent.Back = false, ""
@@ -238,12 +316,19 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		}
 		handed = handoffCardOf(it, g, in.Outcome)
 	}
+suggestionKept:
 	if in.Follow != nil && it.open() {
 		if g := legacySuggestion(it); g != nil {
 			it.SuggestSeq = max(it.SuggestSeq, 1)
 			it.Suggestion = g
 		}
+		keepAgent := from == nil && it.Handling != nil && it.Handling.State == HandlingAgent
 		b.waitForOtherSide(it, follow, ViaAssistant, now, loc, true)
+		if keepAgent {
+			// The follow is this turn's outcome, but the current Agent still owns the matter until it stops.
+			it.Agent.Back = HandlingWaiting
+			b.setHandling(it, HandlingAgent, "", now)
+		}
 	}
 	id := it.ID
 	b.settle(w)
@@ -273,9 +358,9 @@ func suggestWritesTitle(it *InboxItem) bool {
 }
 
 // inboxDraft keeps the reply drafted in conversation sessionID (inbox_draft, the older name): suggest with kind reply.
-func (s *Service) inboxDraft(ctx context.Context, sessionID, text, note string, proposed []DocChange) (string, *DocChange, error) {
-	id, refused, err := s.suggest(ctx, sessionID, suggestIn{Kind: SuggestReply, Text: text, Note: note, Changes: proposed})
-	if err != nil && !errors.Is(err, errInboxNotPersisted) && !errors.Is(err, errSuggestFiled) {
+func (s *Service) inboxDraft(ctx context.Context, sessionID, text, note string, proposed []DocChange, processingTurn string) (string, *DocChange, error) {
+	id, refused, err := s.suggest(ctx, sessionID, suggestIn{Kind: SuggestReply, Text: text, Note: note, Changes: proposed, ProcessingTurn: processingTurn})
+	if err != nil && !errors.Is(err, errInboxNotPersisted) && !errors.Is(err, errSuggestFiled) && !errors.Is(err, errStaleInboxTurn) {
 		return "", nil, nil
 	}
 	return id, refused, err
@@ -297,16 +382,27 @@ func (s *Service) toolInboxSuggest(ctx context.Context, self string, args json.R
 	if titleIgnored {
 		notice = " The title was left unchanged because this item keeps its source's own title; the title argument was ignored."
 	}
+	recorded := ""
+	if in.Reported != nil {
+		recorded = "The reported step is recorded. "
+	}
 	if in.Follow != nil {
-		return "The recap and follow-up are updated; the item is waiting on the other side." + notice, nil
+		message := "The recap and follow-up are updated; the item is waiting on the other side."
+		if in.Reported != nil && strings.TrimSpace(in.Recap) == "" {
+			message = "The follow-up is updated; the item is waiting on the other side."
+		}
+		return recorded + message + notice, nil
 	}
 	if in.Kind == "" {
-		return "The recap is updated." + notice, nil
+		if in.Reported != nil && strings.TrimSpace(in.Recap) == "" {
+			return strings.TrimSpace(recorded) + notice, nil
+		}
+		return recorded + "The recap is updated." + notice, nil
 	}
 	if from != nil {
-		return "The suggestion is in the user's inbox and shown in this chat as a card (no need to repeat it in full); nothing goes out until they confirm. What they do with it is told here; later messages on the item are not." + notice, nil
+		return recorded + "The suggestion is in the user's inbox and shown in this chat as a card (no need to repeat it in full); nothing goes out until they confirm. What they do with it is told here; later messages on the item are not." + notice, nil
 	}
-	return "The suggestion is in the user's inbox; nothing goes out until they confirm. End this turn: what comes next (their answer, new messages) is sent here." + notice, nil
+	return recorded + "The suggestion is in the user's inbox; nothing goes out until they confirm. End this turn: what comes next (their answer, new messages) is sent here." + notice, nil
 }
 
 // legacySuggestion is an AI twin draft stored before suggestions, as a reply suggestion (version 1); nil for none.

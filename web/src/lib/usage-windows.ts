@@ -1,7 +1,7 @@
 // Subscription rate-limit windows (#2432, docs/server/usage-windows.md): GET /api/v1/usage/windows lists the accounts the
 // machines' agents are signed in to with how much of each window (5h, 7d …) is used. Pure helpers here (pace,
 // countdown, sample age, what the sidebar shows); the bars and the popover are views/UsageBars.tsx.
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { formatDate, formatRelative, t as tr } from "../i18n";
 import { api, ApiError } from "./api";
 
@@ -13,12 +13,20 @@ export interface UsageWindow {
   /** An allowance a provider keeps for one model next to the plan's own (#2595); absent for the plan's window. */
   model?: string;
 }
+/** A prepaid balance (#11825): the provider's own decimal amount and currency, never turned into a percentage. */
+export interface UsageBalance {
+  amount: string;
+  currency: string;
+}
 export interface UsageAccount {
   id: string;
   provider: string;
   name: string;
   plan?: string;
   windows: UsageWindow[];
+  /** A remaining amount, for a provider with no rate-limit window (the official DeepSeek launcher). Such an account
+   *  may have no windows; a genuine zero is `amount: "0.00"`, not a missing balance. */
+  balance?: UsageBalance;
   sampled_at: string;
   stale?: boolean;
   /** When it turns stale if nothing newer comes (#1905): kept numbers are judged again against it (`liveAccounts`). */
@@ -71,11 +79,16 @@ export function pace(w: UsageWindow, now = Date.now()): Pace | null {
   return { expected, state: diff > PACE_TOLERANCE ? "over" : diff < -PACE_TOLERANCE ? "under" : "on" };
 }
 
-export const PACE_LABEL: Record<PaceState, string> = { over: tr("usage.pace_over"), under: tr("usage.pace_under"), on: tr("usage.pace_on") };
+/** The pace of one of an account's windows, as the popover shows it. An out-of-date reading says nothing about how
+ *  fast it is being used now, so a stale account has none (#12411): its numbers and reset stay, faded and dated. */
+export function accountPace(a: Pick<UsageAccount, "stale">, w: UsageWindow, now = Date.now()): Pace | null {
+  return a.stale ? null : pace(w, now);
+}
 
 type Countdown = { kind: "due" | "clock" | "span"; text: string };
 
-/** When a window starts over: the span ("45m", "2d 3h"), the local clock time when that is today, or "due". null without a time. */
+/** When a window starts over: the span ("45m", "2d 3h", "5d" with no hours left over; each language's own units, "2 天 3 小时"),
+ *  the local clock time when that is today, or "due". null without a time. */
 function countdownOf(resetsAt: string | undefined, now: number): Countdown | null {
   const at = resetsAt ? Date.parse(resetsAt) : NaN;
   if (!Number.isFinite(at)) return null;
@@ -86,11 +99,12 @@ function countdownOf(resetsAt: string | undefined, now: number): Countdown | nul
   if (new Date(at).toDateString() === new Date(now).toDateString()) return { kind: "clock", text: formatDate(at, { timeStyle: "short" }) };
   const hours = Math.floor(mins / 60);
   const d = Math.floor(hours / 24);
-  return { kind: "span", text: d > 0 ? tr("usage.days_hours", { d, h: hours % 24 }) : tr("usage.hours", { h: hours }) };
+  const h = hours % 24;
+  return { kind: "span", text: d === 0 ? tr("usage.hours", { h: hours }) : h === 0 ? tr("usage.days", { d }) : tr("usage.days_hours", { d, h }) };
 }
 
 /** When a window starts over, as it reads in the popover: "45m" within the hour, the clock time when it is today,
- *  otherwise "2d 3h" (days and hours). "" without a time; "Resets soon" when it is due. */
+ *  otherwise "2d 3h" (days and hours, "5d" without a zero hour). "" without a time; "Resets soon" when it is due. */
 export function countdown(resetsAt: string | undefined, now = Date.now()): string {
   return countdownOf(resetsAt, now)?.text ?? "";
 }
@@ -126,9 +140,15 @@ export function liveAccounts(accounts: UsageAccount[], now = Date.now()): UsageA
     const windows = a.windows.filter((w) => !w.resets_at || Date.parse(w.resets_at) > now);
     const staleAt = a.stale_at ? Date.parse(a.stale_at) : NaN;
     const stale = Boolean(a.stale) || (Number.isFinite(staleAt) && now >= staleAt);
-    if (windows.length) out.push({ ...a, windows, ...(stale ? { stale } : {}) });
+    if (windows.length || isBalanceAccount(a)) out.push({ ...a, windows, ...(stale ? { stale } : {}) });
   }
   return out;
+}
+
+/** A prepaid-balance account (#11825): it has a balance, or is a DeepSeek account with no window whose first read
+ *  failed. A DeepSeek account that does report windows stays an ordinary bar account. */
+export function isBalanceAccount(a: UsageAccount): boolean {
+  return a.balance !== undefined || (a.provider === "deepseek" && a.windows.length === 0);
 }
 
 /** The used percentage of an account's fullest window. A per-model allowance does not count while the plan's own windows
@@ -145,22 +165,6 @@ export function sourceNames(a: UsageAccount): string[] {
   return [...machines, ...(a.sources ?? [])];
 }
 
-/** What the gateway could not do, in words; "" when nothing went wrong or the hub sends a reason this build doesn't know. */
-export function problemText(a: UsageAccount): string {
-  switch (a.problem) {
-    case "rejected":
-      return tr("usage.problem_rejected");
-    case "unreachable":
-      return tr("usage.problem_unreachable");
-    case "failed":
-      return tr("usage.problem_failed");
-    case "error":
-      return tr("usage.problem_error");
-    default:
-      return "";
-  }
-}
-
 /** The plan to write beside the name, unless the name already says it ("Codex Pro" and plan "pro"). */
 export function planNote(a: UsageAccount): string {
   const plan = (a.plan ?? "").trim();
@@ -169,41 +173,81 @@ export function planNote(a: UsageAccount): string {
 
 export const windowKey = (w: UsageWindow) => `${w.label}:${w.window_minutes}:${w.model ?? ""}`;
 
-/** The accounts the sidebar draws bars for: the two with the fullest window, stale ones last. */
+/** The accounts the sidebar draws bars for: the two with the fullest window, stale ones last. A balance account has
+ *  no bar (it is shown as an amount instead), so it never takes one of these places. */
 export function topAccounts(accounts: UsageAccount[], n = 2): UsageAccount[] {
-  return [...accounts].sort((a, b) => Number(!!a.stale) - Number(!!b.stale) || fullest(b) - fullest(a)).slice(0, n);
+  return accounts
+    .filter((a) => !isBalanceAccount(a))
+    .sort((a, b) => Number(!!a.stale) - Number(!!b.stale) || fullest(b) - fullest(a))
+    .slice(0, n);
 }
 
 export const isWarn = (percent: number) => percent >= WARN_PERCENT;
 
-/** The accounts for the sidebar; [] until the hub answers and when it has none (the bars are not drawn then). A failed
- *  refresh (the assistant away, the hub out of reach) keeps the last answer, which `liveAccounts` ages (#1905); only an
- *  older hub without the route (404) means there is nothing to show. */
+export interface UnconnectedProvider {
+  id: string;
+  title: string;
+  agent: string;
+}
+
+const emptyAccounts: UsageAccount[] = [];
+let usageAccounts = emptyAccounts;
+let usageReady = false;
+let stopPolling: (() => void) | undefined;
+const listeners = new Set<() => void>();
+
+function publishUsage(accounts: UsageAccount[], ready = usageReady) {
+  usageAccounts = accounts;
+  usageReady = ready;
+  for (const listener of listeners) listener();
+}
+
+function pollUsage() {
+  let dead = false;
+  // The tab coming back to the front can overlap the poll. Only the newest reply counts.
+  let seq = 0;
+  const load = () => {
+    if (document.visibilityState !== "visible") return;
+    const mine = ++seq;
+    const current = () => !dead && mine === seq;
+    api<{ accounts?: UsageAccount[] }>("/usage/windows")
+      .then((r) => current() && publishUsage(r.accounts ?? emptyAccounts, true))
+      .catch((e: unknown) => {
+        if (!current()) return;
+        const missing = e instanceof ApiError && e.status === 404;
+        publishUsage(missing ? emptyAccounts : usageAccounts.slice(), missing ? false : usageReady);
+      });
+  };
+  load();
+  const timer = setInterval(load, POLL_MS);
+  document.addEventListener("visibilitychange", load);
+  return () => {
+    dead = true;
+    clearInterval(timer);
+    document.removeEventListener("visibilitychange", load);
+  };
+}
+
+function subscribeUsage(listener: () => void) {
+  listeners.add(listener);
+  stopPolling ??= pollUsage();
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) {
+      stopPolling?.();
+      stopPolling = undefined;
+      usageAccounts = emptyAccounts;
+      usageReady = false;
+    }
+  };
+}
+
+/** The sidebar and Agent status lines share one poll, including while switching chats. */
 export function useUsageWindows(): UsageAccount[] {
-  const [accounts, setAccounts] = useState<UsageAccount[]>([]);
-  useEffect(() => {
-    let dead = false;
-    // The tab coming back to the front asks again while the poll's request may still be out; only the newest
-    // request's reply (or failure) counts, so an older one landing late cannot overwrite or blank the bars.
-    let seq = 0;
-    const load = () => {
-      if (document.visibilityState !== "visible") return;
-      const mine = ++seq;
-      const current = () => !dead && mine === seq;
-      api<{ accounts?: UsageAccount[] }>("/usage/windows")
-        .then((r) => current() && setAccounts(r.accounts ?? []))
-        // an older hub has no such route: nothing to show; any other failure keeps the bars it last had, as a copy so
-        // that they render again and liveAccounts judges their age with the time now (#1905)
-        .catch((e: unknown) => current() && setAccounts((kept) => (e instanceof ApiError && e.status === 404 ? [] : kept.slice())));
-    };
-    load();
-    const t = setInterval(load, POLL_MS);
-    document.addEventListener("visibilitychange", load);
-    return () => {
-      dead = true;
-      clearInterval(t);
-      document.removeEventListener("visibilitychange", load);
-    };
-  }, []);
-  return accounts;
+  return useSyncExternalStore(subscribeUsage, () => usageAccounts, () => emptyAccounts);
+}
+
+/** True once GET /api/v1/usage/windows has completed a supported (non-404) response. */
+export function useUsageWindowsReady(): boolean {
+  return useSyncExternalStore(subscribeUsage, () => usageReady, () => false);
 }

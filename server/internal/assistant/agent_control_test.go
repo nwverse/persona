@@ -3,11 +3,13 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func runJSON(t *testing.T, s *Service, self, name string, args map[string]any) (string, error) {
@@ -122,7 +124,7 @@ func TestAgentSuperviseAndReport(t *testing.T) {
 	waitFor(t, "the message", func() bool { return len(f.notices()) == 1 })
 	n := f.notices()[0]
 	for _, want := range []string{"📋 督办", "任务「修登录页」", "Agent 主动向你汇报：要你拍板（第 2/5 步）", "A 先灰度，B 直接全量",
-		"- https://github.com/o/r/pull/901", "验收标准：PR 合并到 master；截图贴进 PR", "agent_interrupt"} {
+		"- https://github.com/o/r/pull/901", "验收标准：PR 合并到 master；截图贴进 PR", "signal=report"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("message lacks %q:\n%s", want, n)
 		}
@@ -265,7 +267,7 @@ func TestInterruptOfATaskIsInTheFeed(t *testing.T) {
 			routed = string(it.Body)
 		}
 	}
-	if routed != `{"from":"assistant","interrupted":true,"text":"先修测试"}` {
+	if routed != `{"from":"assistant","interrupted":true,"machine_id":"box","session_id":"s1abcdef","text":"先修测试"}` {
 		t.Fatalf("routed: %q (%s)", routed, feedKinds(s, "conv1"))
 	}
 	// Stopping without a new instruction adds nothing.
@@ -275,5 +277,96 @@ func TestInterruptOfATaskIsInTheFeed(t *testing.T) {
 	}
 	if items, _, _ := s.feed(ctx, "conv1", time.Time{}); len(items) != n {
 		t.Fatalf("a bare stop added to the feed: %s", feedKinds(s, "conv1"))
+	}
+}
+
+// agent_interrupt says "Stopped" only once the turn has ended (#8097): a node that only asked the agent to stop
+// (no settled) is looked at again; an agent that stops reading as working counts, one still working is reported as
+// not stopped yet, with the new instruction queued behind its turn. A send the runtime only queued says so.
+func TestAgentInterruptReportsOnlyAnEndedTurnAsStopped(t *testing.T) {
+	wait, every := interruptSettleWait, interruptSettleEvery
+	interruptSettleWait, interruptSettleEvery = 200*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { interruptSettleWait, interruptSettleEvery = wait, every })
+	s, f := newQuietService(t)
+	working := proto.Session{SessionID: "s1abcdef", MachineID: "box", Cwd: "/code/app", Agent: "pi",
+		Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now()}
+	f.setSessions("box", working)
+	queued := false
+	f.answerNode("session.interrupt", func(string, json.RawMessage) (any, error) { return map[string]any{"ok": true}, nil })
+	f.answerNode(DeviceSessionSend, func(string, json.RawMessage) (any, error) { return map[string]any{"ok": true, "queued": queued}, nil })
+
+	// Still working after the wait: not reported as stopped.
+	res, err := runJSON(t, s, "conv1", "agent_interrupt", map[string]any{"machine": "box", "session_id": "s1abcdef"})
+	if err != nil || strings.Contains(res, "Stopped") || !strings.Contains(res, "has not ended yet") {
+		t.Fatalf("still working: %s %v", res, err)
+	}
+	queued = true
+	res, err = runJSON(t, s, "conv1", "agent_interrupt", map[string]any{"machine": "box", "session_id": "s1abcdef", "then": "先修测试"})
+	if err != nil || strings.Contains(res, "Stopped") || !strings.Contains(res, "queued") {
+		t.Fatalf("still working, then: %s %v", res, err)
+	}
+
+	// The agent stops reading as working once asked: stopped; the instruction delivered.
+	queued = false
+	f.answerNode("session.interrupt", func(string, json.RawMessage) (any, error) {
+		idle := working
+		idle.Status, idle.State = proto.StatusIdle, proto.StateIdle
+		go f.setSessions("box", idle) // after the call, as the node's list catches up
+		return map[string]any{"ok": true}, nil
+	})
+	res, err = runJSON(t, s, "conv1", "agent_interrupt", map[string]any{"machine": "box", "session_id": "s1abcdef", "then": "先修测试"})
+	if err != nil || !strings.HasPrefix(res, "Stopped") || !strings.Contains(res, "sent the new instruction") {
+		t.Fatalf("stopped: %s %v", res, err)
+	}
+
+	// The runtime saw the turn end (settled), but the instruction still only queued: said so.
+	f.setSessions("box", working)
+	queued = true
+	f.answerNode("session.interrupt", func(string, json.RawMessage) (any, error) { return map[string]any{"ok": true, "settled": true}, nil })
+	res, err = runJSON(t, s, "conv1", "agent_interrupt", map[string]any{"machine": "box", "session_id": "s1abcdef", "then": "先修测试"})
+	if err != nil || !strings.HasPrefix(res, "Stopped") || !strings.Contains(res, "queued") {
+		t.Fatalf("settled, queued: %s %v", res, err)
+	}
+
+	// The turn ended while the phone was asked, and only background work keeps the Agent Working: the node says so
+	// (#10828). Nothing was interrupted, so it is not said to have been stopped (#10860); the instruction still goes out.
+	turnOver := func(string, json.RawMessage) (any, error) {
+		return nil, &rpc.Error{Code: proto.CodeTurnOverBackground, Message: "the turn had already ended"}
+	}
+	queued = false
+	f.answerNode("session.interrupt", turnOver)
+	res, err = runJSON(t, s, "conv1", "agent_interrupt", map[string]any{"machine": "box", "session_id": "s1abcdef"})
+	if err != nil || strings.Contains(res, "Stopped") || !strings.Contains(res, "nothing was interrupted") ||
+		!strings.Contains(res, "background work is still running") || !strings.Contains(res, "Do not tell the user it stopped") {
+		t.Fatalf("turn over with background work: %s %v", res, err)
+	}
+	res, err = runJSON(t, s, "conv1", "agent_interrupt", map[string]any{"machine": "box", "session_id": "s1abcdef", "then": "先修测试"})
+	if err != nil || strings.Contains(res, "Stopped") || !strings.Contains(res, "nothing was interrupted") || !strings.Contains(res, "The new instruction was sent") {
+		t.Fatalf("turn over with background work, then: %s %v", res, err)
+	}
+	queued = true
+	res, err = runJSON(t, s, "conv1", "agent_interrupt", map[string]any{"machine": "box", "session_id": "s1abcdef", "then": "先修测试"})
+	if err != nil || strings.Contains(res, "Stopped") || !strings.Contains(res, "The new instruction is queued") {
+		t.Fatalf("turn over with background work, then queued: %s %v", res, err)
+	}
+
+	// A stop the runtime could not make happen is an error, not "Stopped".
+	f.answerNode("session.interrupt", func(string, json.RawMessage) (any, error) {
+		return nil, errors.New("pi 的这一轮在 10 秒内没有停下来")
+	})
+	if res, err := runJSON(t, s, "conv1", "agent_interrupt", map[string]any{"machine": "box", "session_id": "s1abcdef"}); err == nil {
+		t.Fatalf("a failed stop reported: %s", res)
+	}
+}
+
+// agent_send to an agent whose runtime only queued the message behind its turn says it is queued, not sent (#8097).
+func TestAgentSendSaysQueued(t *testing.T) {
+	s, f := newQuietService(t)
+	f.setSessions("box", proto.Session{SessionID: "s1abcdef", MachineID: "box", Cwd: "/code/app", Agent: "pi",
+		Status: proto.StatusWorking, State: proto.StateWorking, UpdatedAt: time.Now()})
+	f.answerNode(DeviceSessionSend, func(string, json.RawMessage) (any, error) { return map[string]any{"ok": true, "queued": true}, nil })
+	res, err := runJSON(t, s, "conv1", "agent_send", map[string]any{"machine": "box", "session_id": "s1abcdef", "text": "看一下 CI"})
+	if err != nil || !strings.HasPrefix(res, "Queued for") {
+		t.Fatalf("queued: %s %v", res, err)
 	}
 }

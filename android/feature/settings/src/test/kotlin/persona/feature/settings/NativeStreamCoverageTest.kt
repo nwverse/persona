@@ -8,6 +8,7 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -101,6 +102,34 @@ class NativeStreamCoverageTest {
         }
     }
 
+    @Test fun nativeGaugeTilesDrawRingsAndKeepExactMeterReadouts() {
+        val gauges = """{"type":"grid","key":"gauges","max_columns":2,"tiles":[{"key":"free","title":"Used","gauge":{"ratio":0.5},"action":{"id":"open"}},{"key":"colored","title":"Storage","value":"42","gauge":{"ratio":0.424,"unit":"GB","color":"green"}}]}"""
+        val view = Json.parseToJsonElement(snapshot(gauges)).jsonObject.getValue("view").jsonObject
+        assertEquals(emptyList<String>(), NativeExtensionProfile.gaps(view))
+        show(snapshot(gauges)); mount()
+        rule.onNodeWithTag("native-gauge-free", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithTag("native-gauge-colored", useUnmergedTree = true).assertExists()
+        val free = rule.onNodeWithContentDescription("Used: 50%")
+        free.assertIsDisplayed()
+        assertEquals(ProgressBarRangeInfo(50f, 0f..100f), free.fetchSemanticsNode().config[SemanticsProperties.ProgressBarRangeInfo])
+        free.performClick(); last("free", "open")
+        val colored = rule.onNodeWithContentDescription("Storage: 42 GB, 42%")
+        colored.assertIsDisplayed()
+        assertEquals(ProgressBarRangeInfo(42f, 0f..100f), colored.fetchSemanticsNode().config[SemanticsProperties.ProgressBarRangeInfo])
+        runBlocking { session.close() }
+    }
+
+    @Test fun nativeGaugeKeepsActiveStateAndWholeTileSwitch() {
+        val gauge = """{"type":"grid","key":"gauges","tiles":[{"key":"active","title":"Lamp quota","active":true,"gauge":{"ratio":0.5},"control":{"kind":"switch","name":"enabled","on":false,"action":{"id":"toggle"}}}]}"""
+        show(snapshot(gauge)); mount()
+        val node = rule.onNodeWithContentDescription("Lamp quota: 50%")
+        node.assertIsDisplayed()
+        assertEquals("On", node.fetchSemanticsNode().config[SemanticsProperties.StateDescription])
+        node.performClick()
+        assertEquals("""{"enabled":"true"}""", last("active", "toggle", "change").interaction.value.toString())
+        runBlocking { session.close() }
+    }
+
     @Test fun disabledControlsCannotEditOrExecuteButIndependentRowActionsCan() {
         show(snapshot(row.replace("\"on\":false", "\"on\":false,\"disabled\":true"))); mount()
         rule.onNode(hasContentDescription("Lamp") and isToggleable()).assertIsNotEnabled().performClick()
@@ -128,6 +157,7 @@ class NativeStreamCoverageTest {
             """{"type":"row","key":"row","title":"Trend","spark":{"values":[0,1]}}""" to "spark",
             """{"type":"text","key":"title","text":"Title","style":"title"}""" to "style",
             """{"type":"grid","key":"grid","tiles":[{"key":"active","title":"Active scene","active":true}]}""" to "active",
+            """{"type":"grid","key":"grid","tiles":[{"key":"gauge","title":"Gauge","gauge":{"ratio":0.5},"image":{"url":"https://example.com/picture.png"}}]}""" to "image",
         )
         inputs.forEach { (item, gap) ->
             val view = Json.parseToJsonElement(snapshot(item)).jsonObject.getValue("view").jsonObject
@@ -219,7 +249,7 @@ class NativeStreamCoverageTest {
         val stepper = """{"type":"row","key":"stepper","title":"Temperature","control":{"kind":"stepper","name":"temperature","value":0,"min":0,"max":10,"step":0.5,"action":{"id":"step"}}}"""
         show(snapshot("$slider,$stepper")); mount()
         assertEquals(JsonPrimitive(0), session.state.value.tree!!.nodes.getValue("slider").getValue("control").jsonObject["value"])
-        rule.onNodeWithContentDescription("Brightness").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.SetProgress) { it(5f) }
+        rule.onNodeWithContentDescription("Brightness").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.SetProgress) { val _ = it(5f) }
         val slide = last("slider", "slide", "change")
         assertEquals("5.0", slide.interaction.value.jsonObject.getValue("brightness").jsonPrimitive.content)
         rule.onNodeWithContentDescription("Increase Temperature").performClick()
@@ -406,7 +436,9 @@ class NativeStreamCoverageTest {
             assertTrue(name, gaps.all { it.startsWith("view.") && !it.contains("https://") })
             if (name.startsWith("View.v6-") && name != "View.v6-media.json") assertTrue("$name must disclose its missing optional fields", gaps.isNotEmpty())
         }
-        assertEquals(NativeExtensionStreamAdapter.Components, ExtensionComponent.TYPES.filter { it != "html" }.toSet())
+        // Graph stays on the legacy renderer so native streams receive the hub's downgraded rows (#9727).
+        assertEquals(NativeExtensionStreamAdapter.Components, ExtensionComponent.TYPES.filterNot { it in setOf("html", "graph", "scene") }.toSet())
+        assertTrue(listOf("html", "graph", "scene").none { it in NativeExtensionStreamAdapter.Components })
         val raw = Json.parseToJsonElement("""{"sections":[{"items":[{"type":"row","title":"Zero","control":{"kind":"stepper","name":"zero","value":0,"min":0,"max":10,"action":{"id":"step"}}},{"type":"image","key":"image","src":{"url":"https://example.com/a.png","width":1,"height":1},"alt":"Empty caption","caption":"","no_zoom":false}]}]}""").jsonObject
         assertTrue(NativeExtensionProfile.gaps(raw).isEmpty())
         assertEquals(JsonPrimitive(0), raw.getValue("sections").jsonArray[0].jsonObject.getValue("items").jsonArray[0].jsonObject.getValue("control").jsonObject["value"])
@@ -530,7 +562,7 @@ class NativeStreamCoverageTest {
         rule.setContent { PersonaTheme(style = AppStyle.Board, reduceMotion = true) { if (mounted) NativeExtensionStreamPage(adapter, "Page", {}) } }
         val horizontal = SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.HorizontalScrollAxisRange)
         rule.onAllNodes(horizontal).assertCountEquals(5)
-        repeat(5) { i -> rule.onAllNodes(horizontal)[i].performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.ScrollBy) { it(100f, 0f) } }
+        repeat(5) { i -> rule.onAllNodes(horizontal)[i].performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.ScrollBy) { val _ = it(100f, 0f) } }
         rule.waitForIdle()
         fun anchors() = rule.onAllNodes(horizontal).fetchSemanticsNodes().map { it.config[androidx.compose.ui.semantics.SemanticsProperties.HorizontalScrollAxisRange].value() }
         val before = anchors()
@@ -556,7 +588,7 @@ class NativeStreamCoverageTest {
     @Test fun confirmedSliderCancelRestoresItsOriginalValueAndConfirmationPreservesLaterTyping() {
         val slider = """{"type":"row","key":"slider","title":"Brightness","control":{"kind":"slider","name":"brightness","value":0,"min":0,"max":10,"step":1,"action":{"id":"slide","confirm":"Change brightness?"}}}"""
         show(snapshot(slider)); mount()
-        fun set(value: Float) = rule.onNodeWithContentDescription("Brightness").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.SetProgress) { it(value) }
+        fun set(value: Float) = rule.onNodeWithContentDescription("Brightness").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.SetProgress) { val _ = it(value) }
         fun current() = rule.onNodeWithContentDescription("Brightness").fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.ProgressBarRangeInfo].current
         set(5f); rule.onNodeWithText("Cancel").performClick()
         assertEquals(0f, current()); assertTrue(session.state.value.drafts.isEmpty())

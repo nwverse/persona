@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The main conversation's readiness (docs/assistant/onboarding.md 4.4, 5.1, 5.2; docs/protocol/protocol.md「Main chat readiness」) against FakeHub:
 /// decoding, the step a card shows, what holds the send button, warm's answer, dismiss, coded refusals as cards.
@@ -311,6 +312,8 @@ struct AssistantReadinessTests {
 
     @Test func turnErrorCodesBecomeFixes() throws {
         #expect(TurnErrorFix(code: "not_logged_in")?.action == "connect_model")
+        // The CLI's own sign-in, which the Claude desktop app's does not give, in every language (#9366).
+        #expect(TurnErrorFix(code: "not_logged_in")?.detail.contains("claude auth login") == true)
         #expect(TurnErrorFix(code: "auth_failed")?.action == "edit_provider")
         #expect(TurnErrorFix(code: "model_route")?.action == "connect_model")
         #expect(TurnErrorFix(code: "rate_limited") == nil && TurnErrorFix(code: nil) == nil)

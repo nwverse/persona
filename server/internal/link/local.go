@@ -9,13 +9,58 @@ import (
 	"time"
 )
 
-// What persona-link keeps next to link.json besides the credential: the lock that says one is running, the status it
-// last reported (for `persona-link status`, which cannot ask it) and its log.
+// What persona-link keeps next to link.json besides the credential: the run lock, last reported status, route hint
+// and log.
+
+// RouteHintPath is the disposable active route cache beside link.json.
+func RouteHintPath(path string) string {
+	return strings.TrimSuffix(path, ".json") + ".route.json"
+}
+
+func readRouteHint(path string) routeHint {
+	b, err := os.ReadFile(RouteHintPath(path))
+	if err != nil {
+		return routeHint{}
+	}
+	var hint routeHint
+	if json.Unmarshal(b, &hint) != nil || !isFallbackKind(hint.Kind) || hint.Pairing == "" || hint.Network == "" {
+		removeRouteHint(path)
+		return routeHint{}
+	}
+	return hint
+}
+
+func writeRouteHint(path string, hint routeHint) error {
+	b, err := json.Marshal(hint)
+	if err != nil {
+		return err
+	}
+	file := RouteHintPath(path)
+	tmp := file + ".tmp"
+	_ = os.Remove(tmp)
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp)
+	_, err = f.Write(append(b, '\n'))
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(tmp, file)
+}
+
+func removeRouteHint(path string) {
+	_ = os.Remove(RouteHintPath(path))
+}
 
 var errBusy = errors.New("locked")
 
 // ErrRunning: another persona-link holds the run lock of this link.json.
-var ErrRunning = errors.New("这台电脑上已经有一个 Persona Link 在运行")
+var ErrRunning = newTextError("link-errors.running", nil)
 
 // LockRun takes the run lock of the link.json at path: one persona-link per computer, or two would keep taking the
 // link from each other. ErrRunning when another one has it; release gives it back (exiting does too).

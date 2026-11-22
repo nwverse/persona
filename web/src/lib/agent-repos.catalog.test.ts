@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildRepoMachineTree, sessionWorkspace, showsWorktreeLevel, type RepoCatalogOptions, type RepoWorktree } from "./agent-repos";
+import { buildRepoMachineTree, hasWorkspacePin, sessionWorkspace, showsWorktreeLevel, type RepoCatalogOptions, type RepoWorktree } from "./agent-repos";
 import type { HostWorkspace } from "./workspace-catalog";
 import type { Machine, Session } from "./types";
 
@@ -12,6 +12,68 @@ const rows = (all: Session[], opts: RepoCatalogOptions) => buildRepoMachineTree(
 const desktops = [["codex_app", "codex-project:home"], ["claude_desktop", "claude-environment:account"]] as const;
 
 describe("catalog-backed By repo projection", () => {
+  it("orders pinned workspaces by newest pin ahead of main and keeps equal paths as independent workspaces", () => {
+    const catalog = [
+      workspace("main", { source: "paseo", is_main: true, cwd: "/code/shared" }),
+      workspace("older", { source: "paseo", pinned_at: "2026-11-15T10:00:00Z", cwd: "/code/shared" }),
+      workspace("newer-b", { source: "paseo", pinned_at: "2026-11-16T10:00:00Z", title: "Same name", cwd: "/code/shared" }),
+      workspace("newer-a", { source: "paseo", pinned_at: "2026-11-16T10:00:00Z", title: "Same name", cwd: "/code/shared" }),
+      workspace("invalid", { source: "paseo", pinned_at: "not-a-date", cwd: "/code/shared" }),
+    ];
+    const ordered = rows([], options(catalog));
+    expect(ordered.map((w) => w.workspace?.source_id)).toEqual(["newer-a", "newer-b", "older", "main", "invalid"]);
+    expect(new Set(ordered.map((w) => w.key)).size).toBe(catalog.length);
+    expect(ordered.every((w) => w.sessions.length === 0)).toBe(true);
+    expect(rows([], options([...catalog].reverse())).map((w) => w.key)).toEqual(ordered.map((w) => w.key));
+    expect(catalog.map((w) => w.source_id)).toEqual(["main", "older", "newer-b", "newer-a", "invalid"]);
+  });
+
+  it("lifts pinned descendants and their repository without changing parentage or pinning ancestors", () => {
+    const catalog = [
+      workspace("ordinary", { project_id: "alpha", project_name: "Alpha" }),
+      workspace("main", { is_main: true, project_name: "Zeta" }),
+      workspace("parent", { project_name: "Zeta" }),
+      workspace("ordinary-child", { parent_source_id: "parent", is_main: true }),
+      workspace("pinned-child", { parent_source_id: "parent", pinned_at: "2026-11-16T10:00:00Z" }),
+    ];
+    const tree = buildRepoMachineTree([], machines, options(catalog));
+    expect(tree[0].repos.map((r) => r.name)).toEqual(["Zeta", "Alpha"]);
+    const parent = tree[0].repos[0].worktrees[0];
+    expect(parent.workspace?.source_id).toBe("parent");
+    expect(parent.workspace?.pinned_at).toBeUndefined();
+    expect(parent.children.map((w) => w.workspace?.source_id)).toEqual(["pinned-child", "ordinary-child"]);
+    expect(tree[0].repos[0].worktrees[1].workspace?.source_id).toBe("main");
+    expect(rows([], options(catalog, { search: "ordinary" })).map((w) => w.workspace?.source_id))
+      .toEqual(["ordinary", "parent", "ordinary-child"]);
+  });
+
+  it("retains an offline computer's saved conversation only with an exact unarchived host pin", () => {
+    const catalog = [workspace("pinned", { source: "paseo", pinned_at: "2026-11-16T10:00:00Z" })];
+    const saved = session("saved", "project-a", { space_kind: "paseo", workspace_id: "pinned", state: "offline", status: "offline" });
+    expect(hasWorkspacePin(saved, catalog)).toBe(true);
+    for (const patch of [{ archived: true }, { workspace_id: undefined }, { space_kind: "herdr" }, { space_kind: undefined }, { machine_id: "machine-b" }, { manager: "other" }]) {
+      expect(hasWorkspacePin({ ...saved, ...patch }, catalog, "manager-a")).toBe(false);
+    }
+    expect(hasWorkspacePin({ ...saved, workspace_id: undefined, space_id: "pinned" }, catalog)).toBe(false);
+    const stopped = machines.map((m) => ({ ...m, online: false }));
+    const tree = buildRepoMachineTree([saved, { ...saved, session_id: "archived", archived: true }], stopped, options(catalog));
+    expect(tree[0].repos[0].worktrees[0].sessions).toEqual([saved]);
+  });
+
+  it("restores ordinary order on unpin while retaining exact identities across hosts and machines", () => {
+    const catalog = [workspace("main", { source: "paseo", is_main: true }),
+      workspace("shared", { source: "paseo", pinned_at: "2026-11-16T10:00:00Z" }),
+      workspace("shared", { source: "herdr" }), workspace("shared", { source: "paseo", machine_id: "machine-b" })];
+    const before = rows([], options(catalog));
+    const after = rows([], options(catalog.map((w) => ({ ...w, pinned_at: undefined }))));
+    expect(before.filter((w) => w.workspace?.pinned_at).map((w) => w.target)).toEqual([
+      expect.objectContaining({ machineId: "machine-a", host: "paseo", workspaceId: "shared" }),
+    ]);
+    expect(after.filter((w) => w.workspace?.source === "paseo" && w.target?.machineId === "machine-a")
+      .map((w) => w.workspace?.source_id)).toEqual(["main", "shared"]);
+    expect(after.map((w) => w.key).sort()).toEqual(before.map((w) => w.key).sort());
+  });
+
   const runtime = (id: string, patch: Partial<Session> = {}) => session(id, "/code/app", {
     source_kind: "runtime", space_kind: "agy", cwd: "/code/app", repo_root: "/code/app", worktree: "/code/app", workspace_cwd: "/code/app", ...patch,
   });
@@ -158,13 +220,34 @@ describe("catalog-backed By repo projection", () => {
     expect(sessionWorkspace(agent, [a, { ...a, id: "duplicate-root" }, otherRoot])).toBeUndefined();
   });
 
-  it.each(desktops)("matches directory-derived %s placement only when a unique saved project contains its directory", (source, prefix) => {
-    const project = workspace("app", { source, source_id: `${prefix}:saved`, cwd: "C:\\Projects\\App" });
-    const directoryPrefix = source === "codex_app" ? "codex-project:" : "claude-project:";
+  it.each([["codex_app", "codex-project:"], ["claude_desktop", "codex-project:"], ["claude_desktop", "claude-project:"]])("matches directory-derived %s placement under %s only when a unique saved project contains its directory", (source, directoryPrefix) => {
+    const project = workspace("app", { source, source_id: `${directoryPrefix}profile:saved`, cwd: "C:\\Projects\\App" });
     const inferred = session("unassigned", `${directoryPrefix}C:\\Projects\\App`, { space_kind: source, cwd: "c:/projects/app/src" });
     expect(sessionWorkspace(inferred, [project])).toBe(project);
     expect(sessionWorkspace({ ...inferred, cwd: "C:\\Users\\User\\.codex\\worktrees\\fix" }, [project])).toBe(project);
-    expect(sessionWorkspace(inferred, [project, { ...project, id: "other", source_id: `${prefix}:other` }])).toBeUndefined();
+    expect(sessionWorkspace(inferred, [project, { ...project, id: "other", source_id: `${directoryPrefix}profile:other` }])).toBeUndefined();
+  });
+
+  it("keeps shared directory project ids bound to their exact desktop host and legacy namespace", () => {
+    const projectID = "codex-project:C:/Projects/App";
+    const codex = workspace("codex", { source: "codex_app", source_id: projectID, cwd: "C:/Projects/App" });
+    const claude = { ...codex, id: "claude", source: "claude_desktop" };
+    const legacy = { ...claude, id: "legacy", source_id: "claude-project:C:/Projects/App" };
+    const catalog = [codex, claude, legacy];
+    const chat = session("desktop", projectID, { cwd: "c:/projects/app/src" });
+    expect(sessionWorkspace({ ...chat, space_kind: "codex_app" }, catalog)).toBe(codex);
+    expect(sessionWorkspace({ ...chat, space_kind: "claude_desktop" }, catalog)).toBe(claude);
+    expect(sessionWorkspace({ ...chat, space_kind: "claude_desktop", space_id: legacy.source_id }, catalog)).toBe(legacy);
+    expect(sessionWorkspace({ ...chat, space_kind: "claude_desktop", space_id: "claude-environment:profile:missing" }, catalog)).toBeUndefined();
+  });
+
+  it.each(desktops)("limits an unavailable %s project's fallback to generic directory workspaces", (source, prefix) => {
+    const native = workspace("native", { source: "herdr", cwd: "C:/Projects/App" });
+    const directory = { ...native, id: "directory", source: "directory", source_id: "directory-project" };
+    const chat = session("desktop", `${prefix}:missing`, { space_kind: source, cwd: "c:/projects/app/src" });
+    expect(sessionWorkspace(chat, [native])).toBeUndefined();
+    expect(sessionWorkspace(chat, [native, directory])).toBe(directory);
+    expect(sessionWorkspace({ ...chat, workspace_id: "explicit-missing" }, [native, directory])).toBeUndefined();
   });
 
   it("binds a Paseo Agent to its workspace by id, not its project; an empty Paseo workspace is a row of the project", () => {
@@ -238,6 +321,62 @@ describe("catalog-backed By repo projection", () => {
     expect(legacy[0].directSessions).toEqual([pinned]);
     expect(legacy[0].sessions).toEqual([]);
     expect(legacy[0].tree).toEqual([]);
+  });
+
+  it("draws one section per repository when a workspace without a project shares it with session-only rows", () => {
+    const terminal = workspace("terminal", { source: "herdr", cwd: "/code/app", title: "app", project_id: undefined, project_name: undefined });
+    const herdr = session("herdr", "terminal", { space_kind: "herdr", workspace_id: "terminal", cwd: "/code/app", repo_root: "/code/app", worktree: "/code/app" });
+    const desktop = session("desktop", "project:/code/app", { space_kind: "claude_desktop", cwd: "/code/app", repo_root: "/code/app", worktree: "/code/app" });
+    const linked = session("linked", "project:/code/app", { space_kind: "claude_desktop", cwd: "/code/app/.claude/worktrees/fix", repo_root: "/code/app", worktree: "/code/app/.claude/worktrees/fix", branch: "fix" });
+    const tree = buildRepoMachineTree([herdr, desktop, linked], machines, options([terminal]));
+    expect(tree[0].repos.map((r) => [r.name, r.count])).toEqual([["app", 3]]);
+    const worktrees = tree[0].repos[0].worktrees;
+    expect(worktrees.map((w) => w.sessions.map((s) => s.session_id))).toEqual([["desktop"], ["herdr"], ["linked"]]);
+    expect(worktrees[1].workspace).toBe(terminal);
+    expect(showsWorktreeLevel(tree[0].repos[0])).toBe(true);
+    // An empty workspace joins the repository its own folder is; one whose Agents span repositories keeps its own section.
+    expect(buildRepoMachineTree([desktop], machines, options([terminal]))[0].repos.map((r) => [r.name, r.count])).toEqual([["app", 1]]);
+    const other = session("other", "terminal", { space_kind: "herdr", workspace_id: "terminal", cwd: "/code/app/vendor/lib", repo_root: "/code/app/vendor/lib", worktree: "/code/app/vendor/lib" });
+    expect(buildRepoMachineTree([herdr, other, desktop], machines, options([terminal]))[0].repos.map((r) => [r.name, r.count]).sort()).toEqual([["app", 1], ["app", 2]]);
+  });
+
+  it.each([["codex_app", "codex-project:"], ["claude_desktop", "codex-project:"], ["claude_desktop", "claude-project:"]])("never attributes a %s Agent with Git metadata under %s to a workspace above its working tree", (source, prefix) => {
+    const home = workspace("home", { source: "herdr", cwd: "/home/me", title: "me", project_id: undefined, project_name: undefined });
+    const chat = session("chat", `${prefix}/code/app`, { space_kind: source, cwd: "/home/me/.codex/worktrees/1a2b/app", repo_root: "/code/app" });
+    expect(sessionWorkspace(chat, [home])).toBeUndefined();
+    expect(sessionWorkspace({ ...chat, repo_root: undefined }, [home])).toBe(home);
+    const linked = workspace("linked", { source: "herdr", cwd: "/home/me/.codex/worktrees/1a2b/app", project_id: undefined, project_name: undefined });
+    expect(sessionWorkspace(chat, [home, linked])).toBe(linked);
+    const main = session("main", `${prefix}/code/app`, { space_kind: source, cwd: "/code/app/src", repo_root: "/code/app" });
+    expect(sessionWorkspace(main, [workspace("code", { source: "herdr", cwd: "/code", project_id: undefined })])).toBeUndefined();
+    expect(sessionWorkspace(main, [workspace("app", { source: "herdr", cwd: "/code/app", project_id: undefined })])?.source_id).toBe("app");
+    const tree = buildRepoMachineTree([chat], machines, options([home]));
+    expect(tree[0].repos.find((r) => r.name === "app")?.worktrees.flatMap((w) => w.sessions)).toEqual([chat]);
+    expect(tree[0].repos.find((r) => r.name === "me")?.count ?? 0).toBe(0);
+  });
+
+  it("keeps Windows directory inference inside its verified Git checkout", () => {
+    const home = workspace("home", { source: "directory", cwd: "C:/Users/User" });
+    const checkout = workspace("checkout", { source: "directory", cwd: "C:/Users/User/.codex/worktrees/fix/App" });
+    const chat = session("windows", "codex-project:C:/Work/App", {
+      space_kind: "codex_app", cwd: "c:/users/user/.codex/worktrees/fix/app/src", repo_root: "C:/Work/App",
+      worktree: "C:/Users/User/.codex/worktrees/fix/App",
+    });
+    expect(sessionWorkspace(chat, [home])).toBeUndefined();
+    expect(sessionWorkspace(chat, [home, checkout])).toBe(checkout);
+  });
+
+  it("keeps an Agent inside its working tree when a symlinked folder leads to its cwd", () => {
+    const herdr = { source: "herdr", project_id: undefined, project_name: undefined };
+    const home = workspace("home", { ...herdr, cwd: "/home/me" });
+    const repo = workspace("repo", { ...herdr, cwd: "/home/me/code/app" });
+    const physical = workspace("physical", { ...herdr, cwd: "/data/home/me/code/app" });
+    const chat = session("chat", "codex-project:/data/home/me/code/app", {
+      space_kind: "codex_app", cwd: "/home/me/code/app/web", workspace_cwd: "/data/home/me/code/app/web", repo_root: "/data/home/me/code/app",
+    });
+    expect(sessionWorkspace(chat, [home, repo])).toBe(repo);
+    expect(sessionWorkspace(chat, [physical])).toBe(physical);
+    expect(sessionWorkspace(chat, [home])).toBeUndefined();
   });
 
   it("retains offline/empty folder workspaces and uses session-only fallback when discovery is absent", () => {

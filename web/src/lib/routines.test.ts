@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { initI18n } from "../i18n";
 import {
   taskConversations,
   blankTask, clockLabel, dayLabel, everyLabel, fromLocalInput, fromTemplate, lastRunText, momentLabel, nextHour, nextText, normalizeDays,
-  parseTime, repeatsLabel, ruleText, runDays, runDetail, runsWith, sameTask, splitTasks, taskBody, taskTitle, TEMPLATES, toLocalInput, untilLabel, untilText, withPush,
+  parseTime, repeatsLabel, ruleText, runDays, runDetail, runsWith, sameTask, splitTasks, taskBody, taskInputSettings, taskTitle, TEMPLATES, toLocalInput, untilLabel, untilText, withPush,
   upcoming, validateTask, withRepeat, type Run, type Task,
 } from "./routines";
 
@@ -22,14 +23,26 @@ describe("words", () => {
     expect(normalizeDays([3, 1, 9, 1])).toEqual([1, 3]);
   });
 
-  it("says a clock time as Reminders does", () => {
-    expect(clockLabel("09:00")).toBe("上午 9:00");
-    expect(clockLabel("08:45")).toBe("早上 8:45");
-    expect(clockLabel("12:30")).toBe("中午 12:30");
-    expect(clockLabel("17:00")).toBe("下午 5:00");
-    expect(clockLabel("21:30")).toBe("晚上 9:30");
-    expect(clockLabel("00:15")).toBe("凌晨 12:15");
+  it("says a clock time the way the next run says it, 24-hour", () => {
+    expect(clockLabel("09:00")).toBe("09:00");
+    expect(clockLabel("12:30")).toBe("12:30");
+    expect(clockLabel("17:00")).toBe("17:00");
+    expect(clockLabel("00:15")).toBe("00:15");
     expect(clockLabel("9:00")).toBe("9:00"); // not HH:MM: left as it is
+  });
+
+  it("writes a daily rule's time and its next run's time alike, in every language", async () => {
+    const daily = task({ repeat: "daily", time: "17:00", weekdays: [5], next_run: iso(at(6, 17)) });
+    const time = (s: string) => s.match(/\d{1,2}:\d{2}(\s?[AP]M)?/)?.[0];
+    try {
+      for (const lang of ["zh-Hans", "en", "ja"] as const) {
+        await initI18n(lang);
+        expect(time(ruleText(daily)), lang).toBe("17:00");
+        expect(time(nextText(daily, now)), lang).toBe("17:00");
+      }
+    } finally {
+      await initI18n("zh-Hans");
+    }
   });
 
   it("says an interval", () => {
@@ -56,17 +69,31 @@ describe("words", () => {
   });
 
   it("says the rule", () => {
-    expect(ruleText(task({ repeat: "daily", time: "09:00", weekdays: [1, 2, 3, 4, 5] }))).toBe("每个工作日 上午 9:00");
-    expect(ruleText(task({ repeat: "daily", time: "22:00", weekdays: [] }))).toBe("每天 晚上 10:00");
-    expect(ruleText(task({ repeat: "daily", time: "17:00", weekdays: [5] }))).toBe("每周五 下午 5:00");
+    expect(ruleText(task({ repeat: "daily", time: "09:00", weekdays: [1, 2, 3, 4, 5] }))).toBe("每个工作日 09:00");
+    expect(ruleText(task({ repeat: "daily", time: "22:00", weekdays: [] }))).toBe("每天 22:00");
+    expect(ruleText(task({ repeat: "daily", time: "17:00", weekdays: [5] }))).toBe("每周五 17:00");
     expect(ruleText(task({ repeat: "interval", every_minutes: 30 }))).toBe("每 30 分钟");
     expect(ruleText(task({ repeat: "once", session_id: "s1" }))).toBe("一次 · 接着原来的对话");
     expect(ruleText(task({ repeat: "once" }))).toBe("一次 · 新对话");
   });
 
   it("titles a follow-up without one by its prompt", () => {
-    expect(taskTitle({ title: "", prompt: "\n周五发周报前核对数据\n第二行" })).toBe("周五发周报前核对数据");
-    expect(taskTitle({ title: "  周报 ", prompt: "x" })).toBe("周报");
+    expect(taskTitle({ repeat: "once", title: "", prompt: "\n周五发周报前核对数据\n第二行" })).toBe("周五发周报前核对数据");
+    expect(taskTitle({ repeat: "once", title: "  周报 ", prompt: "x" })).toBe("周报");
+  });
+
+  it("titles an untitled follow-up from the text after its selected references", () => {
+    const skill = '<persona-context kind="skill" ref="review">\nproject\n</persona-context>';
+    const file = '<persona-context kind="file" path="report.md">\nreport.md\n</persona-context>';
+    const selected = { repeat: "once" as const, title: "", prompt_selections: true };
+    expect(taskTitle({ ...selected, prompt: `${skill}\n${file}\n\n\n 核对周报 \n第二行` })).toBe("核对周报");
+    expect(taskTitle({ ...selected, prompt: file })).toBe("定时跟进");
+    for (const repeat of ["interval", "cron"] as const) {
+      expect(taskTitle({ ...selected, repeat, prompt: file })).toBe("定时任务");
+      expect(taskTitle({ ...selected, repeat, prompt: file, title: "Review" })).toBe("Review");
+      expect(taskTitle({ ...selected, repeat, prompt: `${file}\n\nReview notes` })).toBe("Review notes");
+    }
+    expect(taskTitle({ repeat: "once", title: "", prompt: `${skill}\n\n原文` })).toBe(skill.split("\n")[0]);
   });
 
   it("says the next and the last run", () => {
@@ -130,7 +157,7 @@ describe("the editor", () => {
     expect(sameTask(t, { ...t, enabled: false })).toBe(false);
     expect(sameTask(t, { ...t, permission_mode: "auto" })).toBe(false);
     expect(sameTask(t, { ...t, title: "早报 " })).toBe(true);
-    expect(sameTask(t, { ...t, launcher: "legacy", effort: "high" })).toBe(true); // models are configured by category
+    expect(sameTask(t, { ...t, launcher: "legacy", effort: "high" })).toBe(false); // task-local overrides are editable
     const end = iso(at(5, 18));
     expect(sameTask(t, { ...t, until: end })).toBe(false);
     expect(sameTask({ ...t, until: end }, { ...t, until: end })).toBe(true);
@@ -139,10 +166,10 @@ describe("the editor", () => {
     expect(sameTask(once, { ...once, until: undefined })).toBe(true); // a one-off ignores its end time
   });
 
-  it("saves editable fields without task model overrides", () => {
+  it("saves editable fields and task model overrides", () => {
     const saved = task({ repeat: "daily", time: "09:00", weekdays: [1, 2, 3, 4, 5, 6, 7], launcher: "claude", effort: "low", session_id: "s1", at: "0001-01-01T00:00:00Z" });
     const body = taskBody({ ...saved, title: " 早报 ", permission_mode: "auto" });
-    expect(body).toEqual({ title: "早报", prompt: "给我早报", repeat: "daily", enabled: true, time: "09:00", weekdays: [], every_minutes: 0, cron: "", session_id: "s1", permission_mode: "auto" });
+    expect(body).toEqual({ title: "早报", prompt: "给我早报", repeat: "daily", enabled: true, time: "09:00", weekdays: [], every_minutes: 0, cron: "", session_id: "s1", permission_mode: "auto", launcher: "claude", effort: "low", model_revision: 0 });
     expect(taskBody({ ...saved, session_id: undefined }).session_id).toBe(""); // runs go to the task's own conversation
     const once = taskBody(task({ repeat: "once", at: iso(at(2, 15)) }));
     expect(once).toMatchObject({ repeat: "once", at: iso(at(2, 15)), time: "", weekdays: [] });
@@ -213,6 +240,17 @@ describe("the editor", () => {
     expect(splitTasks([cron]).repeating).toEqual([cron]);
   });
 
+  it("previews and saves the same explicit cron rule when the draft changes repeat", () => {
+    const saved = task({ repeat: "cron", cron: "0 9 * * *" });
+    const changed = { ...saved, cron: " 0 10 * * * " };
+    const oneOff = withRepeat(saved, "once", now);
+    for (const [draft, cron] of [[changed, "0 10 * * *"], [oneOff, ""]] as const) {
+      const rule = { repeat: draft.repeat, cron };
+      expect(taskInputSettings(draft, saved)).toMatchObject(rule);
+      expect(taskBody(draft, saved)).toMatchObject(rule);
+    }
+  });
+
   it("keeps the editor valid when the rule changes", () => {
     const d = withRepeat(task({ repeat: "daily" }), "once", now);
     expect(parseTime(d.at)).toEqual(at(2, 11));
@@ -260,7 +298,7 @@ describe("lists", () => {
     ];
     expect(upcoming(list).map((u) => [u.id, u.title, u.detail])).toEqual([
       ["c", "回电话", "跟进 · 新对话"],
-      ["a", "早报", "每个工作日 上午 9:00"],
+      ["a", "早报", "每个工作日 09:00"],
     ]);
   });
 
@@ -304,4 +342,16 @@ describe("taskConversations (#2824)", () => {
     expect(taskConversations(tk, [r("1", "own", "2026-11-05T09:00:00Z"), r("2", "own", "2026-11-04T09:00:00Z"), r("3", "old", "2026-11-01T09:00:00Z")]))
       .toEqual([{ sid: "own", at: "2026-11-05T09:00:00Z" }, { sid: "old", at: "2026-11-01T09:00:00Z" }]);
   });
+});
+
+it("writes a selected reference only to the rich prompt field while plain and quoted text remain compatible", () => {
+  const text = '<persona-context kind="skill" ref="opaque">Inbox</persona-context>\n\nReview the receipts';
+  const saved = task({ prompt: text, prompt_selections: true });
+  for (const body of [taskBody(saved), taskBody({ ...saved, enabled: !saved.enabled }, saved)]) {
+    expect(body.structured_prompt).toBe(text);
+    expect(body).not.toHaveProperty("prompt");
+  }
+  // Owner typed identical markup before pickers existed (or a tool authored the plain task).
+  expect(taskBody({ ...saved, prompt_selections: false }, saved)).toHaveProperty("prompt", text);
+  expect(sameTask(saved, { ...saved, prompt_selections: false })).toBe(false);
 });

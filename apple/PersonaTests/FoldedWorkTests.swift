@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Pages of long sessions come with the agent's work folded (`Item.fold`, docs/protocol/protocol.md「Folded work」): the work
 /// line counts what a fold stands for, a fold replaces the steps it covers, and opening it puts the steps back.
@@ -232,7 +233,10 @@ struct FoldedWorkTests {
         notify.toolName = "notify_user"
         var receipt = item(3, .toolResult, role: "user", text: "failed", tool: "notify")
         receipt.isError = true
-        s.merge([receipt, item(6, .text, text: "Fictional answer")])
+        // Narration, not a finished reply, which would show the round after a failed delivery (#10440).
+        var narration = item(6, .text, text: "Fictional answer")
+        narration.narration = true
+        s.merge([receipt, narration])
         s.merge([item(1, .text, role: "user", text: "Fictional input"), notify])
         #expect(!Supervision.visible(s.items, results: ["notify": receipt], live: false))
         receipt.isError = false

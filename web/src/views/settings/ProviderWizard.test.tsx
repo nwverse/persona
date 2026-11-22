@@ -62,7 +62,10 @@ const flush = async () => {
   for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); });
 };
 const text = () => document.body.textContent ?? "";
-const button = (label: string) => [...document.body.querySelectorAll("button")].find((b) => b.textContent?.includes(label));
+const button = (label: string) => {
+  const buttons = [...document.body.querySelectorAll("button")];
+  return buttons.find((b) => b.textContent?.trim() === label) ?? buttons.find((b) => b.textContent?.includes(label));
+};
 function type(input: HTMLInputElement, value: string) {
   const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
   act(() => {
@@ -357,7 +360,7 @@ describe("ProviderWizard from presets", () => {
     });
   });
 
-  it("hides unsupported chat options and excludes drafts from test and save", async () => {
+  it("keeps supported chat headers while hiding other unsupported options", async () => {
     await open();
     act(() => button("自定义兼容网关")!.click());
     act(() => button("直接 API")!.click());
@@ -365,22 +368,22 @@ describe("ProviderWizard from presets", () => {
     type(inputs.find((input) => input.placeholder.includes("my_gateway"))!, "custom");
     type(inputs.find((input) => input.inputMode === "url")!, "https://api.example.com/v1");
     type(keyInput(), "sk-test-123456");
+    const header = document.body.querySelector<HTMLTextAreaElement>('textarea[placeholder^="X-Name"]')!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    act(() => { setter.call(header, "X-Example: value"); header.dispatchEvent(new Event("input", { bubbles: true })); });
     act(() => button("下一步")!.click());
     type(document.body.querySelector<HTMLInputElement>('input[aria-label="手动添加模型 ID"]')!, "example-chat");
     act(() => button("添加")!.click());
     act(() => button("高级")!.click());
-    const header = document.body.querySelector<HTMLTextAreaElement>('textarea[placeholder^="X-Name"]')!;
-    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
-    act(() => { setter.call(header, "X-Example: value"); header.dispatchEvent(new Event("input", { bubbles: true })); });
     type(document.body.querySelector<HTMLInputElement>('input[placeholder="http://127.0.0.1:7890"]')!, "http://proxy.example.com");
     type(document.body.querySelector<HTMLInputElement>('input[placeholder="localhost,127.0.0.1"]')!, "example.com");
     type(document.body.querySelector<HTMLInputElement>('input[placeholder="3000000"]')!, "1234");
     act(() => button("上一步")!.click());
     act(() => button("Chat Completions")!.click());
     await act(async () => button("测试连接")!.click());
-    expect(keyTests()[0]!.body).not.toHaveProperty("headers");
+    expect(keyTests()[0]!.body).toHaveProperty("headers", "X-Example: value");
     act(() => button("下一步")!.click());
-    expect(text()).toContain("上下文限制、默认思考档位");
+    expect(text()).toContain("上下文限制、分档模型");
     expect(text()).toContain("模型列表中仍可记录各模型的上下文窗口");
     expect(document.body.querySelector('textarea[placeholder^="X-Name"]')).toBeNull();
     expect(document.body.querySelector('input[placeholder="http://127.0.0.1:7890"]')).toBeNull();
@@ -397,18 +400,18 @@ describe("ProviderWizard from presets", () => {
     act(() => button("下一步")!.click());
     await act(async () => button("保存")!.click());
     const body = calls.find((c) => c.method === "POST" && c.path.endsWith("/launchers"))?.body;
-    expect(body).toMatchObject({ api: "chat" });
-    for (const key of ["headers", "proxy", "no_proxy", "env", "timeout_ms", "compact_window", "max_context", "effort"]) expect(body).not.toHaveProperty(key);
+    expect(body).toMatchObject({ api: "chat", headers: "X-Example: value" });
+    for (const key of ["proxy", "no_proxy", "env", "timeout_ms", "compact_window", "max_context", "effort"]) expect(body).not.toHaveProperty(key);
   });
 
-  it("keeps model metadata while hiding unused chat thinking controls", async () => {
+  it("keeps Chat effort metadata while hiding the wizard's thinking controls", async () => {
     act(() => root.render(<ProviderWizard existing={{ name: "chat", kind: "api", api: "chat", base_url: "https://api.example.com", model: "example-chat", has_key: true, models: [{ id: "example-chat", context_window: 16000, efforts: ["high"], default_effort: "high" }] }} onClose={() => {}} onSaved={() => {}} />));
     await flush();
     act(() => button("下一步")!.click());
     expect(document.body.querySelector<HTMLInputElement>('input[aria-label="example-chat 的上下文窗口"]')?.value).toBe("16000");
     expect(document.body.querySelector('[aria-label="example-chat 支持的思考档位"]')).toBeNull();
     expect(document.body.querySelector('[aria-label="example-chat 的默认思考档位"]')).toBeNull();
-    expect(text()).toContain("Chat Completions 不使用模型的思考档位设置");
+    expect(text()).toContain("用途编辑器可以覆盖默认档位；此向导会保留这些设置");
     await act(async () => button("保存")!.click());
     expect(calls.find((c) => c.method === "PUT" && c.path.endsWith("/launchers/chat"))?.body).not.toHaveProperty("models");
   });
@@ -426,7 +429,7 @@ describe("ProviderWizard from presets", () => {
   });
 
   it("requires an explicit choice before clearing unsupported stored Chat settings", async () => {
-    const existing = { name: "chat", kind: "api" as const, api: "chat" as const, base_url: "https://api.example.com", model: "example-chat", has_key: true, has_headers: true, has_env: true, proxy: "http://proxy.example.com", no_proxy: "example.com", timeout_ms: 1200, compact_window: 100, max_context: 200, effort: "high", opus_model: "tier-a", sonnet_model: "tier-b", haiku_model: "tier-c", fable_model: "tier-d", subagent_force: true };
+    const existing = { name: "chat", kind: "api" as const, api: "chat" as const, base_url: "https://api.example.com", model: "sonnet", has_key: true, has_headers: true, has_env: true, proxy: "http://proxy.example.com", no_proxy: "example.com", timeout_ms: 1200, compact_window: 100, max_context: 200, effort: "high", opus_model: "tier-a", sonnet_model: "tier-b", haiku_model: "tier-c", fable_model: "tier-d", subagent_force: true };
     act(() => root.render(<ProviderWizard existing={existing} onClose={() => {}} onSaved={() => {}} />));
     await flush();
     expect(text()).toContain("保存时清除这些设置");
@@ -450,9 +453,11 @@ describe("ProviderWizard from presets", () => {
     act(() => checkbox.click());
     await act(async () => button("保存")!.click());
     expect(calls.find((c) => c.method === "PUT" && c.path.endsWith("/launchers/chat"))?.body).toMatchObject({
-      headers: "", env: "", proxy: "", no_proxy: "", timeout_ms: 0, compact_window: 0, max_context: 0,
-      effort: "", opus_model: "", sonnet_model: "", haiku_model: "", fable_model: "", subagent_force: false,
+      env: "", proxy: "", no_proxy: "", timeout_ms: 0, compact_window: 0, max_context: 0,
+      model: "sonnet", opus_model: "", sonnet_model: "", haiku_model: "", fable_model: "", subagent_force: false,
     });
+    expect(calls.find((c) => c.method === "PUT" && c.path.endsWith("/launchers/chat"))?.body).not.toHaveProperty("headers");
+    expect(calls.find((c) => c.method === "PUT" && c.path.endsWith("/launchers/chat"))?.body).not.toHaveProperty("effort");
   });
 
   it("keeps the Chat Completions protocol when editing", async () => {
@@ -661,6 +666,46 @@ describe("ProviderWizard names", () => {
     type(keyInput(), "sk-test-123456");
   }
 
+  // audit item 19: Next with nothing filled in said why at the foot of a scrolled dialog, out of sight; each field now
+  // says its own problem, the first takes the focus and is brought into view, and a fixed field stops saying it
+  it("says what each empty field needs under it when Next is pressed, focusing and showing the first", async () => {
+    const scrolled: Element[] = [];
+    Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this); };
+    await custom();
+    const id = field("启动 ID")!;
+    const url = urlInput();
+    expect(id.getAttribute("aria-invalid")).toBeNull();
+    expect(url.getAttribute("aria-invalid")).toBeNull();
+    expect(keyInput().getAttribute("aria-invalid")).toBeNull();
+    act(() => button("下一步")!.click());
+    expect(addModelInput()).toBeNull();
+    expect(alertText()).toBeUndefined();
+    expect(id.getAttribute("aria-invalid")).toBe("true");
+    expect(note(id)).toBe("要填启动 ID");
+    expect(url.getAttribute("aria-invalid")).toBe("true");
+    expect(note(url)).toBe("要填地址");
+    expect(keyInput().getAttribute("aria-invalid")).toBe("true");
+    expect(note(keyInput())).toBe("要填 API Key");
+    // a red edge in place of the field's inset (an added edge would lose to the inset)
+    for (const input of [id, url, keyInput()]) {
+      expect(input.className).toContain("shadow-[inset_0_0_0_1px_var(--red)]");
+      expect(input.className).not.toContain("shadow-inset-field");
+    }
+    expect(document.activeElement).toBe(id);
+    expect(scrolled.at(-1)?.contains(id)).toBe(true);
+    expect(scrolled.at(-1)?.textContent).toContain("要填启动 ID");
+    // the next press goes to the first field still wrong
+    type(id, "team_relay");
+    expect(id.getAttribute("aria-invalid")).toBeNull();
+    act(() => button("下一步")!.click());
+    expect(document.activeElement).toBe(url);
+    connect();
+    expect(url.getAttribute("aria-invalid")).toBeNull();
+    expect(keyInput().getAttribute("aria-invalid")).toBeNull();
+    act(() => button("下一步")!.click());
+    expect(addModelInput()).not.toBeNull();
+  });
+
   it("names a new gateway in any language and leaves its startup ID to the hub", async () => {
     autoName();
     await custom();
@@ -692,7 +737,11 @@ describe("ProviderWizard names", () => {
     type(field("显示名")!, "Team relay");
     connect();
     act(() => button("下一步")!.click());
-    expect(alertText()).toBe("要填启动 ID");
+    // said under the field, which takes the focus (audit item 19)
+    expect(alertText()).toBeUndefined();
+    expect(id.getAttribute("aria-invalid")).toBe("true");
+    expect(note(id)).toBe("要填启动 ID");
+    expect(document.activeElement).toBe(id);
     type(id, "team_relay");
     act(() => button("下一步")!.click());
     expect(addModelInput()).not.toBeNull();
@@ -713,8 +762,9 @@ describe("ProviderWizard names", () => {
     act(() => button("更多选项")!.click());
     expect(button("更多选项")!.getAttribute("aria-expanded")).toBe("false");
     act(() => button("下一步")!.click());
-    expect(alertText()).toBe("启动 ID 只能用字母、数字、_ 和 -，以字母或 _ 开头");
+    expect(note(field("启动 ID")!)).toBe("启动 ID 只能用字母、数字、_ 和 -，以字母或 _ 开头");
     expect(button("更多选项")!.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(field("启动 ID"));
     expect(addModelInput()).toBeNull();
   });
 
@@ -729,7 +779,8 @@ describe("ProviderWizard names", () => {
     expect(button("测试连接")!.disabled).toBe(false);
     expect(button("获取模型列表")!.disabled).toBe(false);
     act(() => button("下一步")!.click());
-    expect(alertText()).toBe("显示名最多 64 个字，不能换行");
+    expect(note(display)).toBe("显示名最多 64 个字，不能换行");
+    expect(document.activeElement).toBe(display);
     type(display, "字".repeat(64));
     expect(display.getAttribute("aria-invalid")).toBeNull();
     act(() => button("下一步")!.click());

@@ -21,6 +21,9 @@ WKWebView ─ http://localhost:5173 ─▶ local 127.0.0.1:5173 (App listens)
 - **Who owns it**: for each live Agent's pane, take the process the host reports (herdr's foreground process; the first one is claude / codex itself),
   walk all its descendants, and add the processes on the same terminal (tty) (including ones adopted by init after `npm run dev &` and the outer shell exiting).
   Listeners belonging to claude / codex themselves (IDE bridge, MCP) do not count.
+  The host is asked for a pane's foreground processes only when the pane is new or its first process has changed (#5515): while that process is still in the
+  process table with the same parent, terminal and name, the last answer is used again, less any other process in it that exited or whose pid now names a different process (a reused pid could belong to another pane). A shell first (the Agent not started yet) is asked for on every scan,
+  so claude starting under it is not taken for one of the pane's servers. Before this, every scan made one herdr call per pane (about 10 calls/s with 40 Agents at work).
 - **How it scans**: on Linux it reads `/proc` directly (`/proc/*/stat` for the process tree; LISTEN sockets in `/proc/net/tcp{,6}` are matched to process fds by inode),
   with no child processes. On macOS it uses `ps -Ao pid=,ppid=,tty=,comm=` plus `lsof -a -p <these processes> -nP -iTCP -sTCP:LISTEN -Fpcn`.
   `lsof` exits 1 when one of the pids has exited / is a zombie but still prints results, so results are used as-is; when a scan really fails, the same error is logged only once.
@@ -29,6 +32,7 @@ WKWebView ─ http://localhost:5173 ─▶ local 127.0.0.1:5173 (App listens)
   `GetExtendedTcpTable` (`TCP_TABLE_OWNER_PID_LISTENER`, one table each for IPv4 and IPv6), in `server/internal/node/ports_windows.go`.
   Windows has no controlling terminal, so ownership is by process tree only. After a parent exits, Windows still reports its pid, and pids get reused, so when the parent started later than the child
   (or its start time can't be read) the parent-child link is ignored, so a new process doesn't "adopt" someone else's children.
+  Git Bash breaks that tree (#9815): MSYS2 emulates `fork`, and for `cd x && cmd` the forked copy that runs `cmd` as a new Windows process exits, so `cmd`'s parent pid names a process that is gone. The scan reads every listener anyway, so a listener no pane's tree owns has its process's engine pane variables read (`ORCA_PANE_KEY`, `HERDR_PANE_ID`…, which MSYS passes on; cached per process) and counts for the pane they name when that pane is being scanned. The pane's agent itself stays out, as from the tree (`paneListeners`). On a machine with about 650 processes and 65 listening sockets a scan took 15 ms without that and 18 ms with it.
 - **What counts**: for each `pid:port`, send one `GET /` (`Host: localhost:port`, which dev servers' host checks accept). Only ones that answer with HTTP are listed,
   and the home page's `<title>` (up to 60 characters) is captured along the way. One that accepts the connection but says nothing for 3 seconds (next dev compiling for the first time) is listed without a title and asked again on the next scan, up to 5 times.
   Ones that don't answer with HTTP (ssh, databases) are not listed. Results are cached per `pid:port` and dropped when the process or port goes away.
@@ -87,9 +91,10 @@ redirects / cookies need no rewriting. No DNS changes, no new ports: it uses the
 
 - `…/connect` checks first, then upgrades: the port must be in the `ports` of some session on that machine, or the user must have `POST …/open`ed it within 24 hours; otherwise 403.
   Then it registers a stream and asks the node to `port.dial`. If that fails it returns 404 (not yet upgraded, so the App gets the status code); only on success does it upgrade to WebSocket.
-- A stream is just `stream.data / stream.ack / stream.close` events on the hub↔node JSON-RPC connection (`docs/protocol/protocol.md`). Each direction allows at most 512 KB
+- A stream uses `stream.data`, `stream.ack` and `stream.close` events on the hub↔node JSON-RPC connection (`docs/protocol/protocol.md`). Each direction allows at most 512 KB
   unacknowledged; at that point the sender waits. A large file from a page can't fill the connection and starve other RPCs, and a slow reader can't make the other end buffer without limit.
   Event handling (`Mux.Event`) never blocks, because it runs in the RPC read loop.
+- TCP endpoints that negotiate stream version 1 can send `stream.eof` to half-close one direction. The App's binary WebSocket path uses full close.
 - At most 64 streams per machine at once (a page typically uses about 6); when a machine disconnects all its streams are closed.
 - The slow-request log skips `…/connect` (it is long by nature).
 

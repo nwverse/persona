@@ -16,7 +16,7 @@ import { accountTitle, type LarkAccount, type LarkAccountList } from "../../lib/
 import { useLarkOn, useStore } from "../../lib/store";
 import { Button, copyText, cx, Dialog, IconButton, Loading, Spinner, toast } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
-import { Count, Monogram } from "../inbox/InboxParts";
+import { Count, LarkAvatar } from "../inbox/InboxParts";
 import { ConnectorDetail, ConnectorList } from "./HubConnector";
 import { LarkDisplaySettings } from "./LarkDisplaySettings";
 import { LarkHomeSwitch } from "./LarkHomeSwitch";
@@ -33,7 +33,9 @@ interface LarkStatus {
   last_event_at?: number;
 }
 
-export function Connectors({ open, onOpen, onChannel }: { open: string | null; onOpen: (id: string | null) => void; onChannel?: (id: string, manager?: string) => void }) {
+/** `headerBack`: the page's top bar has the way back (a phone), so an item's page draws no Back of its own. `openBeside`:
+ *  the item open beside this list (Settings' two columns), whose row the list marks. */
+export function Connectors({ open, onOpen, onChannel, headerBack, openBeside }: { open: string | null; onOpen: (id: string | null) => void; onChannel?: (id: string, manager?: string) => void; headerBack?: boolean; openBeside?: string | null }) {
   // An older hub has no connectors API (feature "connectors"): only mail and Feishu, as before.
   const hasConnectors = useStore((s) => s.features.includes("connectors"));
   // Lark (the Lark gateway through /api/v1/lark/…) only on a hub that has it (feature `lark`); "Lark bot" is the hub's own.
@@ -44,7 +46,7 @@ export function Connectors({ open, onOpen, onChannel }: { open: string | null; o
   // `<id>@<manager>`: another manager's connector, opened from its extension's page (docs/assistant/managers.md "Clients")
   if (open === SENT_SUB) return (
     <>
-      <Button tone="quiet" icon="chevronLeft" onClick={() => onOpen(null)} className="-ml-2 mb-3">{t("settings-hubconnector.back")}</Button>
+      {!headerBack && <Button tone="quiet" icon="chevronLeft" onClick={() => onOpen(null)} className="-ml-2 mb-3">{t("settings-hubconnector.back")}</Button>}
       <h2 className="mb-2 px-1 text-[15px] font-semibold text-ink">{t("settings-sent.entry_label")}</h2>
       <SentSettings />
     </>
@@ -52,7 +54,7 @@ export function Connectors({ open, onOpen, onChannel }: { open: string | null; o
   if (open && open !== "feishu-bot") {
     const { id, manager } = parseOwnedSub(open);
     // no `@manager` in the address: the current assistant's copy, as for an extension
-    return <ConnectorDetail key={`${open}@${manager ?? ""}`} id={id} manager={manager ?? otherManager(picked ?? undefined)} onBack={() => onOpen(null)} onChannel={onChannel} />;
+    return <ConnectorDetail key={`${open}@${manager ?? ""}`} id={id} manager={manager ?? otherManager(picked ?? undefined)} onBack={headerBack ? undefined : () => onOpen(null)} onChannel={onChannel} />;
   }
   return (
     <>
@@ -62,7 +64,7 @@ export function Connectors({ open, onOpen, onChannel }: { open: string | null; o
       <Mail />
       {lark && <Feishu />}
       <FeishuBot onChannel={onChannel} larkcli={larkcli} onOpen={onOpen} />
-      {hasConnectors && <ConnectorList onOpen={onOpen} onLarkCli={setLarkcli} />}
+      {hasConnectors && <ConnectorList onOpen={onOpen} onLarkCli={setLarkcli} openBeside={openBeside} />}
       <Group anchor="sent">
         <Row icon="send" label={t("settings-sent.entry_label")} hint={t("settings-sent.hint")} onClick={() => onOpen(SENT_SUB)} />
       </Group>
@@ -490,7 +492,7 @@ function LarkAccountRow({ a, isDefault }: { a: LarkAccount; isDefault: boolean }
   const detail = a.quarantined ? t("settings-connectors.account_quarantined") : !a.signed_in ? t("settings-connectors.signed_out") : a.tenant || t("settings-connectors.signed_in");
   return (
     <div data-account={a.id} className="flex items-center gap-3 px-4 py-2.5">
-      <Monogram name={accountTitle(a)} size={30} src={a.avatar} />
+      <LarkAvatar name={accountTitle(a)} size={30} avatarURL={a.avatar_url} avatar={a.avatar} account={a.id} />
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13px] text-ink">{accountTitle(a)}</div>
         <div className={cx("mt-0.5 truncate text-[11.5px]", a.signed_in ? "text-ink-3" : "text-red")}>{detail}</div>

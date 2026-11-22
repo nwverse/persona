@@ -20,6 +20,10 @@ const (
 	KindNotice     = "notice"
 	KindImage      = "image"
 	KindRecap      = "recap" // Claude Code's "while you were away" summary
+	// KindVisualization is a Codex visualize reference: a self-contained HTML fragment on the node's disk that the
+	// Codex client draws inline. The item carries the node-side path, never the bytes; clients fetch them through the
+	// session visualization route.
+	KindVisualization = "visualization"
 	// KindFold stands for a run of the agent's work left out of a page (Item.Fold); only for callers that ask
 	// (fold_work).
 	KindFold = "fold"
@@ -56,6 +60,19 @@ type Fold struct {
 	// Usage: the tokens of the model requests the folded items stood for, summed per model and speed (TokenUsage), so
 	// a chat counts its turn's usage without opening the run. Absent when they carried none and from older nodes.
 	Usage []TokenUsage `json:"usage,omitempty"`
+	// Sources: the web pages the run's successful web calls used (FoldSource), so a chat shows its reply's sources
+	// without opening the run. Absent when it used none, and from older nodes.
+	Sources []FoldSource `json:"sources,omitempty"`
+}
+
+// FoldSourcesMax bounds Fold.Sources.
+const FoldSourcesMax = 10
+
+// FoldSource is one web page a folded run used (docs/protocol/protocol.md "Folded work"): a page it opened (WebFetch,
+// Codex's open page) or a result its web search returned, with the result's title when one was given.
+type FoldSource struct {
+	URL   string `json:"url"`
+	Title string `json:"title,omitempty"`
 }
 
 // FoldToolNamesMax bounds Fold.ToolNames.
@@ -149,8 +166,41 @@ func WithoutImageData(items []Item) []Item {
 	return out
 }
 
+// PositionalItemID identifies the fallback IDs assigned to JSONL records that lack a runtime ID.
+func PositionalItemID(id string) bool {
+	if _, source, ok := ParseSegmentItemID(id); ok {
+		id = source
+	}
+	suffix, ok := strings.CutPrefix(id, "line")
+	if !ok {
+		return false
+	}
+	line, block, ok := strings.Cut(suffix, "#")
+	return ok && decimalItemPart(line) && decimalItemPart(block)
+}
+
+// SegmentItemID namespaces only later segments. The first segment retains its
+// existing identifiers, including positional IDs used by client caches.
+func SegmentItemID(segment, source string) string { return "segment:" + segment + ":" + source }
+
+func ParseSegmentItemID(id string) (segment, source string, ok bool) {
+	rest, ok := strings.CutPrefix(id, "segment:")
+	if !ok {
+		return "", "", false
+	}
+	segment, source, ok = strings.Cut(rest, ":")
+	return segment, source, ok && segment != "" && source != ""
+}
+
+func decimalItemPart(s string) bool {
+	return s != "" && !strings.ContainsFunc(s, func(r rune) bool { return r < '0' || r > '9' })
+}
+
 // Item is one content block of a Claude Code transcript.
 type Item struct {
+	// Stored identifies an incomplete durable copy. Its source can be requested from
+	// the existing full-item/image routes; availability still depends on the runtime.
+	Stored    *StoredItem     `json:"stored,omitempty"`
 	ID        string          `json:"id"`
 	Seq       int             `json:"seq"`
 	TS        time.Time       `json:"ts"`
@@ -173,12 +223,14 @@ type Item struct {
 	// FullSize: Text was cut for pages and pushes (it ends in a "truncated, open for the full text" line, in Chinese); the whole of it, this many
 	// bytes, comes from GET /api/v1/sessions/{mid}/{sid}/items/{item id}/full.
 	FullSize int `json:"full_size,omitempty"`
+	// SourceFingerprint identifies the original text record behind a positional item ID. Unlike the line
+	// number, it does not match different content that reuses that position after a rewrite.
+	SourceFingerprint string `json:"source_fingerprint,omitempty"`
 	// Wake marks a background task's notice that started new work after the agent had finished its turn
 	// (not one absorbed mid-turn): the exchange before it is over and its last words are an answer.
 	Wake bool `json:"wake,omitempty"`
-	// Narration is assistant text that belongs to the work summary (Codex commentary). It is internal to the
-	// transcript and FoldWork: on the wire it is ordinary text, so clients need no new item kind or cache migration.
-	Narration bool `json:"-"`
+	// Narration marks assistant text belonging to the work summary (Codex commentary), even if sent unfolded.
+	Narration bool `json:"narration,omitempty"`
 	// From names the Claude session that sent this message (cross-session messaging), not the user.
 	From string `json:"from,omitempty"`
 	// Injected: this user line is a message Persona put into the conversation for the model (a task's notice, a
@@ -189,6 +241,9 @@ type Item struct {
 	// Unknown nonempty kinds are still not user-authored input.
 	Source *MessageSource `json:"source,omitempty"`
 	Fold   *Fold          `json:"fold,omitempty"`
+	// SupervisionUser is a user's visible action folded into this work item. Ordinary items retain it across pages
+	// and cache restores, matching the iOS model; old items without the field stay unmarked.
+	SupervisionUser bool `json:"supervision_user,omitempty"`
 	// Task: a background task notice, or a subagent tool result associated with its launching call.
 	Task         *TaskNote     `json:"task,omitempty"`
 	TurnDuration *TurnDuration `json:"turn_duration,omitempty"`
@@ -196,6 +251,9 @@ type Item struct {
 	Compact *Compact `json:"compact,omitempty"`
 	// ModelRefusal preserves Claude Code's refusal record on a notice.
 	ModelRefusal *ModelRefusal `json:"model_refusal,omitempty"`
+	// CodexHeartbeatQuiet identifies a generated answer from a DONT_NOTIFY envelope, not model-written prose.
+	// It travels from the node to the hub so the hub can localize Text without guessing from its wording.
+	CodexHeartbeatQuiet bool `json:"codex_heartbeat_quiet,omitempty"`
 	// Model is the model that wrote this assistant item as the transcript records it: Claude Code's message.model
 	// (never its "<synthetic>" placeholder), a Codex turn's turn_context model. Absent when the transcript does not
 	// say, on other roles, and from older nodes. Clients draw a divider where the model of the replies changes.
@@ -209,6 +267,30 @@ type Item struct {
 	// nodes. A chat sums a turn's items (folds' Fold.Usage included) into the turn's usage
 	// (docs/protocol/protocol.md "Token usage on items").
 	Usage []TokenUsage `json:"usage,omitempty"`
+	// Visualization is set on KindVisualization items: a Codex visualize marker's reference to an HTML fragment on
+	// the node. The bytes are not carried here; the session visualization route serves them after path checks.
+	Visualization *Visualization `json:"visualization,omitempty"`
+	// TTFTMS is the observed time-to-first-token in milliseconds from turn send/request start to the first
+	// assistant token/chunk during live streaming execution. Nil when not observed (such as historical replays).
+	TTFTMS *int64 `json:"ttft_ms,omitempty"`
+}
+
+type StoredItem struct {
+	Complete    bool   `json:"complete"`
+	SourceBytes int    `json:"source_bytes"`
+	MachineID   string `json:"machine_id"`
+	SessionID   string `json:"session_id"`
+	History     string `json:"history"`
+	ItemID      string `json:"item_id"`
+}
+
+// Visualization is one Codex visualize reference (the visualize plugin's in-conversation HTML contract): the
+// fragment's absolute path on the node, its display mode ("" for the regular 736 px surface, "wide" for up to
+// 1024 px) and an optional title.
+type Visualization struct {
+	Path  string `json:"path"`
+	Mode  string `json:"mode,omitempty"`
+	Title string `json:"title,omitempty"`
 }
 
 // TokenUsage is what model requests used, as the transcript records it (#5426): tokens by kind, the way the usage
@@ -242,11 +324,21 @@ type ModelRefusal struct {
 	// Raw is the whole JSONL line, for the node's own use only (telling one record from another): never encoded, so
 	// no RPC, REST answer, push or snapshot carries it. Older builds sent it as "raw"; clients must not show that.
 	Raw string `json:"-"`
+	// The following fields are present only when the node projects its own bounded recovery onto this fallback shape
+	// (#7824): a runtime record never sets them, so older clients ignore them safely. RecoveryReset says when the
+	// configured model is available again; RecoveryExhausted marks an exhausted chain; RecoveryReturning that the
+	// configured model answered a probe and the next request runs on it again; RecoveryTried lists every model tried,
+	// in order, joined by " → " (a string, not a slice, so ModelRefusal stays comparable with ==).
+	RecoveryReset     *time.Time `json:"recovery_reset,omitempty"`
+	RecoveryExhausted bool       `json:"recovery_exhausted,omitempty"`
+	RecoveryReturning bool       `json:"recovery_returning,omitempty"`
+	RecoveryTried     string     `json:"recovery_tried,omitempty"`
 }
 
 // ModelRestore is a pending "back to the configured model" (node session.restore_model, #2528): State
 // ModelRestoreNextStart says the session's idle headless process was closed (or none ran), so its next start asks for
-// To, the model the conversation is configured with as the node read it at At. Nothing about which model runs.
+// To, the model the conversation is configured with as the node read it at At. Empty To means the launcher default.
+// Nothing about which model runs.
 type ModelRestore struct {
 	State string    `json:"state"`
 	To    string    `json:"to,omitempty"`
@@ -255,6 +347,62 @@ type ModelRestore struct {
 
 // ModelRestoreNextStart: the next start of the session's process uses the configured model.
 const ModelRestoreNextStart = "next_start"
+
+// ModelRecoveryChoice is the non-secret execution identity the conversation asked for before a recovery switch.
+// A pointer keeps records written by older nodes distinguishable: nil means no recorded choice, not a zero-valued one.
+type ModelRecoveryChoice struct {
+	Effort      string `json:"effort,omitempty"`
+	UseEffort   bool   `json:"use_effort,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	Launcher    string `json:"launcher,omitempty"`
+}
+
+// ModelRecovery records the node's own bounded recovery moving a conversation off its configured model (#7824).
+// It is node-owned state persisted through session state, not a transcript record: the runtime's own refusal fallback
+// has ModelRefusal, while a switch the node drives by restarting the runtime on the next launcher model had no
+// client-visible evidence before this. Main and leader/supervisor conversations recover automatically and return to
+// the configured model as soon as it is available again; worker Agents keep their own behavior.
+type ModelRecovery struct {
+	// From is the configured model the conversation asked for; empty and "default" both mean the launcher default.
+	// To is the model that answers after the switch.
+	From string `json:"from"`
+	To   string `json:"to"`
+	// Choice is the execution identity From had when this chain began, preserved independently of the session's
+	// current model and effort, which recovery sends can overwrite. Nil on records written before this field existed.
+	Choice *ModelRecoveryChoice `json:"choice,omitempty"`
+	// ProbeFrom is the concrete configured default used only for availability probes and unavailable-cache cleanup.
+	// It never replaces From in the execution request, so returning does not pin a launcher default to a concrete model.
+	ProbeFrom string `json:"probe_from,omitempty"`
+	// Reason is one of the ModelRecoveryReason* values: why From could not answer.
+	Reason string `json:"reason"`
+	// At is when the node committed the switch to To.
+	At time.Time `json:"at"`
+	// ResetsAt is when the upstream said From becomes available again (a gateway quota's "available again at …"),
+	// when it named one. Nil when the upstream gave no time; clients then offer a manual retry without a countdown.
+	ResetsAt *time.Time `json:"resets_at,omitempty"`
+	// Tried lists every model the recovery chain attempted, in order, including the configured model first.
+	Tried []string `json:"tried,omitempty"`
+	// ChainExhausted marks the final record when every model in the chain failed: the turn ends on the failure card,
+	// which offers Retry and names the cause and ResetsAt. A later successful switch replaces it.
+	ChainExhausted bool `json:"chain_exhausted,omitempty"`
+	// Returning says From answered an availability probe: the conversation stays on To only until its next request,
+	// which runs on From again. It makes the automatic return visible before the model actually changes.
+	Returning bool `json:"returning,omitempty"`
+}
+
+// ModelRecovery Reason values.
+const (
+	// ModelRecoveryReasonSafeguards: the upstream answered with a safety-classifier refusal (stop_reason "refusal").
+	ModelRecoveryReasonSafeguards = "safeguards_refusal"
+	// ModelRecoveryReasonQuota: the gateway's account quota is exhausted (its quota_exhausted 429).
+	ModelRecoveryReasonQuota = "quota_exhausted"
+	// ModelRecoveryReasonRateLimit: ordinary throttling, not a quota window.
+	ModelRecoveryReasonRateLimit = "rate_limited"
+	// ModelRecoveryReasonServer: a 5xx/529 or another transient server failure.
+	ModelRecoveryReasonServer = "server_error"
+	// ModelRecoveryReasonUnavailable: the model is not served (a 404/model_not_found on a recovery-picked model).
+	ModelRecoveryReasonUnavailable = "model_unavailable"
+)
 
 // MessageSource preserves an input's provenance without changing the model's role.
 // ConversationID is a stable session id, never a peer's display name (Item.From).
@@ -265,13 +413,17 @@ type MessageSource struct {
 	// Push is a scheduled input's delivery mode, persisted with the input so a queued user message cannot change it.
 	// "asked" suppresses that run's normal completion; absent keeps the existing every-answer behavior.
 	Push string `json:"push,omitempty"`
+	// ScheduleRunID correlates a reference-only prompt with the run that sent it.
+	ScheduleRunID string `json:"schedule_run_id,omitempty"`
 }
 
 const (
-	SourceConversation = "conversation"
-	SourcePatrol       = "patrol"
-	SourceFollowup     = "followup"
-	SourceSupervision  = "supervision"
+	A2ADeliveryPrefix   = "persona-a2a-" // Manager-assigned client message IDs for A2A deliveries.
+	SourceConversation  = "conversation"
+	SourcePatrol        = "patrol"
+	SourceFollowup      = "followup"
+	SourceSupervision   = "supervision"
+	SourceScheduledTask = "scheduled_task" // a scheduler outside Persona, e.g. a Codex heartbeat
 	// SourceMeeting is a batch of a recorded meeting the session attends (docs/assistant/meeting-minutes.md "Feeding
 	// the attending session"): other people's words, never the user's; Title is the meeting's name.
 	SourceMeeting = "meeting"

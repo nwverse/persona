@@ -18,13 +18,14 @@ nonisolated struct AnswerLine: Hashable, Sendable {
 nonisolated enum Answered {
     static var modeLabels: [String: String] {
         [
-            "acceptEdits": String(localized: "Auto-Accept Edits"),
+            "acceptEdits": String(localized: "Auto-Edit"),
             "bypassPermissions": String(localized: "Allow Everything"),
             "default": String(localized: "Confirm each step")
         ]
     }
 
     static func answerLines(_ ix: Interaction, _ r: Resolution) -> [AnswerLine] {
+        if r.cancel == true { return [AnswerLine(label: "", answer: String(localized: "Question closed without an answer"))] }
         if r.dismiss == true { return [AnswerLine(label: "", answer: String(localized: "Handed back to the computer"))] }
         switch ix.kind {
         case .question:

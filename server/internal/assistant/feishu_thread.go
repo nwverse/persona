@@ -36,8 +36,12 @@ func (t *feishuTopic) target() feishuTarget {
 	return feishuTarget{ChatID: t.Chat, InThread: true}
 }
 
-// runTo is where a run's messages go, from its channel values (Ext): the topic it was asked in, else the private chat.
+// runTo is where a run's messages go, from its channel values (Ext): under the owner's "/read" in its group
+// (feishu_read.go), the topic it was asked in, else the private chat.
 func runTo(ext map[string]string) feishuTarget {
+	if readRun(ext) {
+		return feishuTarget{ChatID: ext[readChatKey], InThread: ext[readThreadKey] != "", NoDetour: true, Read: true}
+	}
 	if ext["chat"] == "" || ext["thread"] == "" {
 		return feishuTarget{}
 	}
@@ -77,7 +81,7 @@ func (s *Service) threadMessage(ctx context.Context, ev feishubot.MessageEvent, 
 	if !bound && s.openTopicIfAsked(ctx, ev, st, content, topic) {
 		return // a topic bound to nothing that starts one, or "/ai …" in one: a to-do is opened (feishu_thread_open.go)
 	}
-	if bound && !content.Forward && noReplyCommand(openingWords(ev, content)) { // after the bot's @, which a group that only sends what @s the bot starts every message with
+	if bound && !content.Forward && noReplyCommand(openingCommandWords(ev, content)) { // after the bot's @, which a group that only sends what @s the bot starts every message with
 		// "Don't report back": a command of its own, also for a todo that is done and not yet reported, and never passed on
 		// as words (todo_source.go).
 		s.threadNoReply(ctx, ev, t, topic)
@@ -89,7 +93,7 @@ func (s *Service) threadMessage(ctx context.Context, ev feishubot.MessageEvent, 
 			key = "assistant-feishu.thread_done"
 		}
 		// "/ai" for a to-do that is done is asked for in so many words: it is answered each time, not once in ten minutes.
-		if _, asked := aiCommand(openingWords(ev, content)); bound && asked || s.threadHintDue(msg.ChatID+"/"+msg.ThreadID) {
+		if _, asked := aiCommand(openingCommandWords(ev, content)); bound && asked || s.threadHintDue(msg.ChatID+"/"+msg.ThreadID) {
 			s.botNoteTo(ctx, to, msg.MessageID, i18n.T(l, key))
 		}
 		return
@@ -137,7 +141,7 @@ func (s *Service) threadMessage(ctx context.Context, ev feishubot.MessageEvent, 
 		notDelivered(routeErr)
 		return
 	}
-	content.Text = prompts.RenderTodoThreadReply(prompts.TodoThreadReply{Title: contextText(clip(oneLine(t.Title), 80)), Text: text, Recorded: recorded})
+	content.Text = prompts.RenderTodoThreadReply(prompts.TodoThreadReply{Language: answerLanguage(s.hello(ctx).Locale), Title: contextText(clip(oneLine(t.Title), 80)), Text: text, Recorded: recorded})
 	// A to-do that came from a question nobody answered (ask_todo.go): the reply is the owner's call, and goes to the
 	// conversation that asked (not to an Agent) as the answer; the to-do then closes.
 	asked := false

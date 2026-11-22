@@ -5,14 +5,14 @@
 // choice is not offered. Every other launcher keeps New agent as it was.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Machine, Session } from "../lib/types";
 import type { HostWorkspace } from "../lib/workspace-catalog";
 import type { NewAgentPreset } from "../lib/new-agent";
 import { t } from "../i18n";
 import { loadRecentSetups, recentSetupsKey, type RecentSetup } from "../lib/recent-setups";
 
-const state = vi.hoisted(() => ({ loaded: true, features: [] as string[], machines: [] as Machine[], sessions: {} as Record<string, Session[]>, workspaces: [] as HostWorkspace[], desktopSource: true }));
+const state = vi.hoisted(() => ({ loaded: true, features: [] as string[], machines: [] as Machine[], sessions: {} as Record<string, Session[]>, workspaces: [] as HostWorkspace[], desktopSource: true, codexPromptOptional: false }));
 vi.mock("../lib/current-assistant", async () => {
   const store = (await import("../lib/store")) as unknown as { useStore: <T>(select: (s: { machines: unknown[] }) => T) => T };
   return { useScopedMachines: () => store.useStore((s) => s.machines) };
@@ -33,7 +33,6 @@ vi.mock("../lib/workspace-catalog", async (original) => {
 });
 
 import { NewAgent } from "./NewAgent";
-import { loadPages } from "../lib/lazy-page";
 import { resetModelListsForTests } from "../lib/session-models";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -56,12 +55,10 @@ const button = (text: string) => [...document.body.querySelectorAll("button")].f
 const folderInput = () => q<HTMLInputElement>("input[placeholder]")!;
 const temporary = () => q('[data-testid="new-agent-temporary"]');
 
-// Warm the lazyPage wrappers through their real public components, not only the chunk they import.
-beforeAll(async () => { await loadPages(); });
-
 beforeEach(() => {
   resetModelListsForTests();
   state.desktopSource = true;
+  state.codexPromptOptional = false;
   state.workspaces = [];
   state.machines = [{ id: "mac", name: "MacBook", online: true, engine_hosts: ["herdr", "orca"], engine_default: "herdr" } as Machine];
   // the app's projects are in /Users/me/code (two), one in /Users/me/notes; a terminal claude's folder doesn't count
@@ -77,7 +74,10 @@ beforeEach(() => {
     const url = String(input);
     if (url.includes("/model-config/purposes/")) return json({ error: "not found" }, 404);
     if (/\/launchers\/[^/]+\/models/.test(url)) return json({ models: [] });
-    if (url.includes("/launchers")) return json({ launchers: LAUNCHERS.map((launcher) => state.desktopSource ? launcher : { ...launcher, source: undefined }) });
+    if (url.includes("/launchers")) return json({ launchers: LAUNCHERS.map((launcher) => ({ ...launcher,
+      source: state.desktopSource ? launcher.source : undefined,
+      ...(launcher.name === "codex-app" ? { prompt_optional: state.codexPromptOptional } : {}),
+    })) });
     const dirs = /\/dirs\?path=([^&]*)/.exec(url);
     if (dirs) {
       const path = decodeURIComponent(dirs[1]) || "/Users/me";
@@ -99,6 +99,7 @@ afterEach(() => {
 
 async function open(key = "a", preset?: NewAgentPreset) {
   await act(async () => root.render(<NewAgent key={key} open preset={preset} onClose={() => {}} />));
+  await act(async () => vi.dynamicImportSettled());
   await flush();
 }
 
@@ -134,7 +135,8 @@ describe("New agent in Claude's desktop app (#5480)", () => {
 
   it("names a new folder in the one browsed, which the computer makes when the session starts", async () => {
     await open();
-    act(() => q<HTMLButtonElement>('[data-testid="new-agent-new-folder"]')!.click());
+    await act(async () => q<HTMLButtonElement>('[data-testid="new-agent-new-folder"]')!.click());
+    await act(async () => vi.dynamicImportSettled());
     await flush();
     const name = q<HTMLInputElement>('[data-testid="new-agent-naming"] input')!;
     expect(q('[data-testid="new-agent-naming"]')?.textContent).toContain("会话开始时在“code”里创建。");
@@ -205,22 +207,25 @@ describe("New Agent desktop project presets", () => {
     localStorage.setItem("new.machine", "pc");
     localStorage.setItem("new.mode.pc", "plan");
   });
-  it("allows a Claude temporary session and keeps its own permissions", async () => {
+  it("allows a Claude temporary session with the selected permission mode", async () => {
     await openPreset("claude-desktop");
     expect(host.textContent).toContain(t("newagent.temporary_session"));
-    expect(host.textContent).not.toContain(t("newagent.permission_mode"));
+    expect(host.textContent).toContain(t("newagent.permission_mode"));
     expect(button(t("newagent.start"))!.disabled).toBe(false);
     act(() => button(t("newagent.start"))!.click());
-    expect(launched).toEqual([expect.objectContaining({ launcher: "claude-desktop", cwd: "", permissionMode: undefined, host: undefined, workspaceId: undefined })]);
+    expect(launched).toEqual([expect.objectContaining({ launcher: "claude-desktop", cwd: "", permissionMode: "plan", host: undefined, workspaceId: undefined })]);
     expect(localStorage.getItem("new.mode.pc")).toBe("plan");
   });
 
-  it("requires the first message for Codex even when the temporary folder is selected", async () => {
+  it.each([false, true])("requires a first message in the Codex App even when prompt_optional is %s", async (optional) => {
+    state.codexPromptOptional = optional;
     await openPreset("codex-app");
     expect(button(t("newagent.start"))!.disabled).toBe(true);
     const area = host.querySelector("textarea")!;
     act(() => area.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true })));
     expect(launched).toEqual([]);
+    type("textarea", "   ");
+    expect(button(t("newagent.start"))!.disabled).toBe(true);
     type("textarea", "Check the project");
     expect(button(t("newagent.start"))!.disabled).toBe(false);
     act(() => button(t("newagent.start"))!.click());

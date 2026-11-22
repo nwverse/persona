@@ -123,7 +123,7 @@ Unboxed (control group):
 | --- | --- | --- |
 | Missing or invalid key | Upgrade rejected: HTTP 401, `text/plain` body `Unauthorized` (standard shape) | `{"type":"error","fatal":true,"message":"语音会话没能建立：HTTP 401: Unauthorized"}` ("Voice session could not be established: HTTP 401: Unauthorized"), then closes with 1011. |
 | Banned account | Service docs say HTTP 403 during upgrade; could not reproduce. | Same as above, "HTTP 403: …" |
-| Model backend temporarily unavailable | Upgrade succeeds first (101); after `session.start`, returns `error{type: server_error, code: upstream_unavailable}`, then closes with 1008 about 0.1–0.2 s later. **The message contains the service's internal deployment diagnostics** (cluster, data center, etc.). | App receives the message **verbatim** appended to `语音会话没能建立：…` ("Voice session could not be established: …"). |
+| Model backend temporarily unavailable | Upgrade succeeds first (101); after `session.start`, returns `error{type: server_error, code: upstream_unavailable}`, then closes with 1008 about 0.1–0.2 s later. **The message contains the service's internal deployment diagnostics** (cluster, data center, etc.). Since 2026-11 the service may answer `session.started` first and send this error a few tens of milliseconds later (seen for most models of one service at once, while two others worked with the same key). | Error before `session.started`: the App receives the message **verbatim** appended to `语音会话没能建立：…` ("Voice session could not be established: …"). After it: the session counts as started (the App already has `ready`), each such session is a drop and is reconnected; once the reconnects run out the call ends with `upstream_unavailable` and the service's words (`voice-upstream.unavailable`). Before that fix the App was told `upstream_failed`, "语音连接断了，重连也没成功" ("the connection dropped and reconnecting failed"), which hid the cause. |
 | Unknown model | `error{invalid_request, param: session.model}`, connection **stays open**. | Same as above (`connect()` returns on `error` without waiting for closure). |
 | Unknown field / extension | `unknown_parameter` / `unsupported_extension`, connection stays open. | — |
 | thinking over 500 tokens | `invalid_request` (append token limit exceeded) | Already prevented by `clipTokens(…, 450)`. |
@@ -359,6 +359,8 @@ Other values: allowing 450 tokens per append (500-token limit, rejection observe
     and Retry, and Retry ends the same way at once; no crash report. To drive the real socket and UI there, use `-openVoice silent`
     (`VoiceSample.SilentAudio`: no microphone and no speaker, it reports playing for as long as the received PCM lasts). Audio itself can only be checked
     on a device, or on a simulator whose Mac lets it record.
+    `CallScreenTests`' three walks are such a check (#10553): on a Mac with no audio input at all (a Mac Studio with no microphone
+    attached) every call there ends this way, from `main` and from the commit that added them alike, and the tests say so.
   - **Reading it**: the app's own log is in the simulator (`xcrun simctl spawn <udid> log show --predicate 'process == "Persona"'`); the TCC and
     `coreaudiod` side is in the Mac's (`log show --predicate 'process == "tccd" AND eventMessage CONTAINS "kTCCServiceMicrophone"'`).
 - **The voice bar was squeezed when cards were up**: the cards and the composer share the footer's height; offered too little, the bar shrank 在听 with
@@ -527,6 +529,19 @@ Measured against a gateway's `/v1/realtime` (`gpt-realtime-1.5`, the GA Realtime
 - iOS holds the voice while nothing is playing until 200 ms has gathered, or the first piece has waited 300 ms, then
   plays it all at once (`VoicePlayout`); a player that runs dry mid-reply gathers again. A service that sends faster
   than it plays fills the lead almost at once, so this adds next to no latency there.
+- **A fixed lead shorter than one piece is no cushion** (#12922, 2026-11-22). The measured service sends a reply about
+  four times faster than it plays, but in 384 ms pieces (12,288 bytes at 16 kHz). One piece always met the 200 ms lead,
+  and a player that ran dry gathered only one piece again. So once the phone's link carried a little less than the
+  voice (a mobile network, a tunnel), the first second or two played smoothly and then every piece played on its own
+  with a gap after it: a syllable or two at a time. Replaying recorded arrival times through the playout gave one gap
+  per piece at 94 % of the voice's rate. Now a player that runs dry mid-reply (the next piece comes within 1.5 s of the
+  last one finishing) raises the lead for the rest of the call, to 0.6, 1.2 and then 2.0 s. The wait scales with it,
+  and while a raised lead gathers, what is held plays once nothing more has come for 1 s. The same replay gives 2
+  pauses at 94 % and 4 at 60 %. Each stall and the call's total are logged (`voice` category). Size the lead in
+  pieces as the service actually sends them, not in milliseconds picked for 40 ms deltas.
+- Before blaming the link, measure the upstream on its own. A probe call over the extension's unix socket gives each
+  binary frame's arrival time and size: the service's speed and its piece size. The hub forwards bytes as they come,
+  so whatever is left between the hub and the player is the phone's link or the app.
 
 ## Meeting transcription against the real service (#3862, 2026-11-13)
 

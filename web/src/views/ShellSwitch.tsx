@@ -3,14 +3,12 @@
 // are told about in the main conversation, not counted here), the current assistant's with several. Narrow screens only;
 // wide ones have the sidebar.
 //
-// The switch never runs under the bar's buttons (#5036): it takes the room between the side slots and no more. On a
-// phone (under 640 px, where "Sessions and Terminal" doesn't fit beside the main conversation's three buttons) the
-// Sessions side says its short name, on both pages alike, with less padding and its count on the segment's corner;
-// on the narrowest screens a label truncates rather than wrap or go under a button. The full name stays the link's
-// accessible name and its tooltip.
+// The switch stays within its header slots; History is a destination under Agents (#10240).
 import { href, onLinkClick, type Route } from "../lib/router";
 import { useScopedCounts } from "../lib/current-assistant";
+import { heldOnlyNeeds } from "../lib/attention";
 import { othersWaiting } from "../lib/sessions";
+import { useStore } from "../lib/store";
 import type { Session } from "../lib/types";
 import { cx, IconButton } from "../ui/atoms";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./chat/header";
@@ -20,7 +18,7 @@ type ShellPage = "assistant" | "agents";
 
 const SHELL_PAGES: { page: ShellPage; label: string; short?: string; to: Route }[] = [
   { page: "assistant", label: t("shellswitch.assistant"), to: { name: "persona" } },
-  { page: "agents", label: t("work-entry.title"), short: t("work-entry.short"), to: { name: "terminal" } },
+  { page: "agents", label: t("agentspage.title"), to: { name: "agent-list" } },
 ];
 
 export function ShellSwitch({ page }: { page: ShellPage }) {
@@ -35,7 +33,8 @@ function WaitingBadge({ count, className }: { count: number; className?: string 
  *  off where the header's switch already shows that number. */
 export function ChatSidebarButton({ session, counted, onClick }: { session?: Session; counted: boolean; onClick: () => void }) {
   const { badge, quietCounted } = useScopedCounts();
-  const waiting = counted ? othersWaiting(badge, session, quietCounted) : 0;
+  const held = useStore((s) => Boolean(s.pushGrading) && !!session && heldOnlyNeeds(session, s.interactions));
+  const waiting = counted ? othersWaiting(badge, session, quietCounted, held) : 0;
   const label = t("chat-chatview.sidebar");
   return (
     <span className="relative flex shrink-0 lg:hidden">

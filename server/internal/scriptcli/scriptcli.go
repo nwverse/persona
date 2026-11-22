@@ -50,13 +50,15 @@ type Runner struct {
 	Dial   nodeclient.Dialer
 	Getenv func(string) string
 	Getwd  func() (string, error)
+	// ReadFile reads a decision's JSON document (replaced by tests).
+	ReadFile func(string) ([]byte, error)
 	// IsTerminal says whether r is a terminal a person types in.
 	IsTerminal func(io.Reader) bool
 }
 
 // Default is the machine this process runs on.
 func Default() Runner {
-	return Runner{Dial: nodeclient.DialInterruptible, Getenv: os.Getenv, Getwd: os.Getwd, IsTerminal: isTerminal}
+	return Runner{Dial: nodeclient.DialInterruptible, Getenv: os.Getenv, Getwd: os.Getwd, ReadFile: os.ReadFile, IsTerminal: isTerminal}
 }
 
 // isTerminal: a person types at r (not /dev/null, which is a character device too).
@@ -147,6 +149,7 @@ func (r Runner) Ask(ctx context.Context, args []string, stdin io.Reader, stdout,
 		return ExitUsage
 	}
 	req.Cwd, _ = r.Getwd()
+	lang := i18n.Terminal()
 
 	// The node answers by the card's expiry; the margin is the time it may spend reconnecting to a restarted hub.
 	parent := ctx
@@ -161,12 +164,12 @@ func (r Runner) Ask(ctx context.Context, args []string, stdin io.Reader, stdout,
 	case err != nil:
 		status = nodeclient.AskUnavailable
 		if errors.Is(err, nodeclient.ErrNoNode) {
-			rep.Error = "没有在运行的 Persona node（hub 没连上这台电脑）"
+			rep.Error = i18n.T(lang, "scriptcli-ask.no_node")
 		} else {
 			rep.Error = err.Error()
 		}
 	case status == "": // a node that does not know ask
-		status, rep.Error = nodeclient.AskUnavailable, "这台电脑上的 personad 太旧，不认识 ask"
+		status, rep.Error = nodeclient.AskUnavailable, i18n.T(lang, "scriptcli-ask.too_old")
 	}
 	switch status {
 	case nodeclient.AskAnswered:
@@ -177,23 +180,23 @@ func (r Runner) Ask(ctx context.Context, args []string, stdin io.Reader, stdout,
 	case nodeclient.AskDenied:
 		return ExitDenied
 	case nodeclient.AskTimeout:
-		fmt.Fprintln(stderr, "personad ask: 超时，手机上没人回答")
+		fmt.Fprintf(stderr, "personad ask: %s\n", i18n.T(lang, "scriptcli-ask.timeout"))
 		return ExitTimeout
 	case nodeclient.AskInvalid:
 		fmt.Fprintf(stderr, "personad ask: %s\n", rep.Error)
 		return ExitUsage
 	case nodeclient.AskDismissed: // handed back to the computer
 		if *remote || !r.IsTerminal(stdin) {
-			fmt.Fprintln(stderr, "personad ask: 手机上选了「交回电脑」")
+			fmt.Fprintf(stderr, "personad ask: %s\n", i18n.T(lang, "scriptcli-ask.dismissed"))
 			return ExitDenied
 		}
-		fmt.Fprintln(stderr, "personad ask: 手机上选了「交回电脑」，在终端里问")
+		fmt.Fprintf(stderr, "personad ask: %s\n", i18n.T(lang, "scriptcli-ask.dismissed_terminal"))
 	default: // unavailable
 		if *remote || !r.IsTerminal(stdin) {
-			fmt.Fprintf(stderr, "personad ask: 联系不上手机：%s\n", rep.Error)
+			fmt.Fprintf(stderr, "personad ask: %s\n", i18n.T(lang, "scriptcli-ask.unreachable", i18n.Args{"reason": rep.Error}))
 			return ExitUnreachable
 		}
-		fmt.Fprintf(stderr, "personad ask: 联系不上手机（%s），在终端里问\n", rep.Error)
+		fmt.Fprintf(stderr, "personad ask: %s\n", i18n.T(lang, "scriptcli-ask.unreachable_terminal", i18n.Args{"reason": rep.Error}))
 	}
 	return askTerminal(parent, req, stdin, stderr, stdout) // parent: the phone's deadline does not limit the person typing
 }
@@ -288,11 +291,11 @@ func (r Runner) Notify(ctx context.Context, args []string, stdout, stderr io.Wri
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	rep, err := nodeclient.NotifyNode(ctx, r.Dial, req, nodeclient.HookPane(r.Getenv))
-	lang := i18n.From(ctx).Or(i18n.Default)
+	lang := i18n.Terminal()
 	why := ""
 	switch {
 	case errors.Is(err, nodeclient.ErrNoNode):
-		why = "没有在运行的 Persona node"
+		why = i18n.T(lang, "scriptcli-notify.no_node")
 	case err != nil:
 		why = err.Error()
 	case rep.Error != "":
@@ -301,7 +304,7 @@ func (r Runner) Notify(ctx context.Context, args []string, stdout, stderr io.Wri
 		if !*strict {
 			return ExitOK
 		}
-		why = "manager 不在线，node 先存着，回来后再发"
+		why = i18n.T(lang, "scriptcli-notify.queued")
 	case !rep.Sent:
 		switch rep.Reason {
 		case "no_device":

@@ -35,7 +35,8 @@ func (managerOfflineError) Is(target error) bool { return target == apierr.ErrOf
 
 // devicesState is the hub's side of the manager's machines.
 type devicesState struct {
-	mu sync.Mutex
+	transportOwners map[string]string // manager-owned transport aliases, no session mapping
+	mu              sync.Mutex
 	// entries are hub.json's machines and those the admin page added since (handed to the manager).
 	entries []MachineConfig
 	// absorbed: a hub.json entry whose computer another entry has → that machine's id; recEntries: this hub's
@@ -47,15 +48,16 @@ type devicesState struct {
 	// the managers removed since, the machines removed since, not taken back from the setting read late; refused:
 	// the ids each manager's last report named that are not its own (logged once); reportedDue: a write is to go;
 	// reportedSaved: the last write; reportedSave keeps writes one at a time.
-	reported       reportedMachines
-	reportedSince  map[string]bool // the managers that reported since the hub started
-	reportedRead   bool
-	reportedForgot map[string]bool
-	entriesForgot  map[string]bool
-	refused        map[string]map[string]bool
-	reportedDue    bool
-	reportedSaved  time.Time
-	reportedSave   sync.Mutex
+	reported         reportedMachines
+	reportedSince    map[string]bool // the managers that reported since the hub started
+	reportedRead     bool
+	reportedForgot   map[string]bool
+	entriesForgot    map[string]bool
+	refused          map[string]map[string]bool
+	reportedDue      bool
+	reportedDeferred bool
+	reportedSaved    time.Time
+	reportedSave     sync.Mutex
 	// kept: the machines their manager keeps in its own list, out of hub.json (machines_kept.go), machine → manager;
 	// keptRead: that is what machinesKeptKey holds. putTried: the hub.json machines put to their manager's own list
 	// (settleOwnList), each once per manager.
@@ -71,11 +73,18 @@ type devicesState struct {
 	settleDue   map[string]bool
 	saidLost    map[string]bool
 	warnedOld   map[string]bool
-	// up is closed while the manager is connected and has reported; warmUntil: until then calls wait for it (a hub
-	// just restarted, the machines shown as before).
-	up        chan struct{}
-	upOpen    bool
+	// up is closed while its manager is connected and has reported its machines, by manager (upChanLocked makes one):
+	// what a machine's reachability, a call to its node and its manager's devices.list "complete" read. The state is
+	// each manager's own, never the carrier's for everyone: one flag made the carrier's restart show the other
+	// managers' machines unreachable and their lists incomplete, and let a call to another manager's machine fail at
+	// once while the hub's start showed it online (#6795). warmUntil: a hub just restarted, the machines shown as
+	// before; until then a call waits for a manager that has not reported since the start (reportedSince).
+	up        map[string]chan struct{}
+	upOpen    map[string]bool
 	warmUntil time.Time
+	// conns counts owner's connections (devicesConnected): the end of one forgets its up state only when no newer one
+	// came meanwhile (upGone).
+	conns map[string]uint64
 	// fresh: the manager's connection is new (by manager); at its first report the hub asks it to watch what the
 	// apps watch.
 	fresh map[string]bool
@@ -91,6 +100,7 @@ type devicesState struct {
 	due           bool
 	nodeUpdateDue bool // an explicit policy write also requests a fresh package check
 	started       bool
+	fleetReady    bool // startDevices finished the initial fleet; late kept-list reads reconcile recovered machines
 	// reqs are the nodes' requests being answered (devices.request) by the manager's key; reqEnded the keys whose
 	// devices.request_end came before the request did (an event is read at once, a call in its own goroutine).
 	reqs     map[string]context.CancelFunc

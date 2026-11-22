@@ -75,8 +75,12 @@ func RenderMeetingAnswerInput(in MeetingAnswerInput) string {
 }
 
 // MeetingRoomClaudeMD is a meeting room's CLAUDE.md (meeting/room_claude): the owner's name and the meeting's language,
-// nothing else of the owner's.
-type MeetingRoomClaudeMD struct{ Owner, Language string }
+// nothing else of the owner's. Lean: a room started with lean batches (#8253), told that batches come every two minutes
+// and show the lists only now and then, and to read the newest lines before answering about what was just said.
+type MeetingRoomClaudeMD struct {
+	Owner, Language string
+	Lean            bool
+}
 
 func RenderMeetingRoomClaudeMD(d MeetingRoomClaudeMD) string { return render("meeting/room_claude", d) }
 
@@ -144,4 +148,18 @@ type MeetingFollowupSeed struct {
 
 func RenderMeetingFollowupSeed(d MeetingFollowupSeed) string {
 	return render("meeting/followup_seed", d)
+}
+
+// MeetingHandoff is a meeting handed to an Agent after it (meeting/handoff, #8852): its name, calendar title, start,
+// minutes (Markdown) and, when the owner asked, its transcript (Cut: its middle left out); Text is the owner's line.
+type MeetingHandoff struct {
+	Title, Calendar, Started string
+	Minutes                  string
+	Transcript               string
+	Cut                      bool
+	Text                     string
+}
+
+func RenderMeetingHandoff(d MeetingHandoff) string {
+	return render("meeting/handoff", d)
 }

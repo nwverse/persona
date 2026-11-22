@@ -139,7 +139,7 @@ struct TranslationChatPicker: View {
                     } label: {
                         HStack(spacing: Theme.Space.m) {
                             let conv = conversations.first { $0.id == c.id }
-                            LarkAvatarImage(name: c.name, url: conv?.avatar, isGroup: conv?.isGroup ?? true, size: Theme.Size.wellM)
+                            LarkAvatarImage(name: c.name, url: conv?.picture, account: conv?.account, size: Theme.Size.wellM)
                             Text(c.name).foregroundStyle(.primary).lineLimit(1)
                             Spacer(minLength: Theme.Space.s)
                             ThemedIcon(on ? Theme.Icon.successFilled : Theme.Icon.unchecked)
@@ -156,11 +156,9 @@ struct TranslationChatPicker: View {
             .sheetCancel(unsaved: opened.map { $0 != Set(selected.map(\.id)) } ?? false) { dismiss() }
             .onAppear { if opened == nil { opened = Set(selected.map(\.id)) } }
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done [Extension System Presentation c0b3fb]") {
-                        save(selected)
-                        dismiss()
-                    }
+                SheetConfirm(id: "translation-chats-save") {
+                    save(selected)
+                    dismiss()
                 }
             }
             .task { await load() }

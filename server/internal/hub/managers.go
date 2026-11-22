@@ -32,6 +32,9 @@ import (
 // The default manager: the assistant the hub starts (assistantwire.AssistantID), unless the user picked another.
 const managerDefaultKey = "managers.default"
 
+// managerBuiltinHideKey: the user asked to keep the built-in manager out of the switcher while it is not used (#9055).
+const managerBuiltinHideKey = "managers.builtin_hide"
+
 // installCodeTTL is how long an install code is good for; it works once.
 const installCodeTTL = 10 * time.Minute
 
@@ -69,7 +72,13 @@ type managerInfo struct {
 	Online  bool   `json:"online"`
 	Default bool   `json:"default,omitempty"`
 	// Builtin: the assistant this hub starts beside itself; it cannot be removed (hub.json assistant.external).
-	Builtin  bool       `json:"builtin,omitempty"`
+	Builtin bool `json:"builtin,omitempty"`
+	// Hide (the built-in manager only): the user asked to keep it out of the switcher while it is not used (PATCH
+	// {"hide"}). Hidden: that is in effect, and the apps leave it out of the switcher. Not while it is the default, owns
+	// a machine or has something in its inbox that needs the user: a machine that falls back to it (its manager
+	// removed) shows it again by itself (#9055).
+	Hide     bool       `json:"hide,omitempty"`
+	Hidden   bool       `json:"hidden,omitempty"`
 	Host     string     `json:"host,omitempty"`
 	OS       string     `json:"os,omitempty"`
 	Arch     string     `json:"arch,omitempty"`
@@ -131,6 +140,7 @@ func (h *Hub) managerList(ctx context.Context) ([]managerInfo, error) {
 		return nil, err
 	}
 	def := h.defaultOwner(ctx)
+	hide := h.builtinHide(ctx)
 	live := map[string]busPresence{}
 	for _, p := range h.busRoster() {
 		live[p.ID] = p
@@ -149,6 +159,13 @@ func (h *Hub) managerList(ctx context.Context) ([]managerInfo, error) {
 			m.Host, m.OS, m.Arch, m.Deploy, m.Version = p.Host, p.OS, p.Arch, p.Deploy, p.Version
 			m.NeedsUpdate = !slices.Contains(p.Capabilities, assistantwire.CapabilityConfigOwn)
 			m.InboxNeedsYou = needsYou[b.ID]
+		}
+		if m.Builtin {
+			// Not hidden while it is used: the default, a computer of its own, or something in its inbox that needs
+			// the user (else the apps would mark that something waits where the switcher cannot go).
+			waiting := m.InboxNeedsYou != nil && *m.InboxNeedsYou > 0
+			m.Hide = hide
+			m.Hidden = hide && !m.Default && !waiting && !h.managerOwnsMachine(b.ID)
 		}
 		out = append(out, m)
 	}
@@ -173,6 +190,33 @@ func (h *Hub) managerList(ctx context.Context) ([]managerInfo, error) {
 		return out[i].Name < out[j].Name
 	})
 	return out, nil
+}
+
+// builtinHide: the user asked to keep the built-in manager out of the switcher (managerInfo.Hide); false when the
+// store cannot say.
+func (h *Hub) builtinHide(ctx context.Context) bool {
+	s := h.managerStore()
+	if s == nil {
+		return false
+	}
+	var hide bool
+	ok, err := s.Setting(ctx, managerBuiltinHideKey, &hide)
+	return err == nil && ok && hide
+}
+
+// managerOwnsMachine: a machine of hub.json's, or one the apps see (a member hub's), is manager id's (machineOwner).
+func (h *Hub) managerOwnsMachine(id string) bool {
+	for _, mc := range h.cfgEntries() {
+		if h.machineOwner(mc.ID) == id {
+			return true
+		}
+	}
+	for _, m := range h.machinesNow() {
+		if h.machineOwner(m.cfg.ID) == id {
+			return true
+		}
+	}
+	return false
 }
 
 // builtinManager: id is the assistant this hub starts itself.
@@ -498,12 +542,14 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 		}
 		writeJSON(w, map[string]any{"code": code, "expires_at": until, "commands": h.managerCommands(r, id, code)})
 	})
-	// {"name"?, "default"?: true}: rename it, make it the default.
+	// {"name"?, "default"?: true, "hide"?}: rename it, make it the default, keep the built-in one out of the switcher
+	// while it is not used (#9055).
 	api.HandleFunc("PATCH /api/v1/managers/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		var req struct {
 			Name    *string `json:"name"`
 			Default *bool   `json:"default"`
+			Hide    *bool   `json:"hide"`
 		}
 		if err := decodeJSONBody(w, r, &req, 4<<10); err != nil {
 			writeBodyErr(w, err, err)
@@ -518,6 +564,17 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 			return
 		}
 		s := h.managerStore()
+		if req.Hide != nil {
+			if !info.Builtin {
+				writeErr(w, http.StatusBadRequest, errors.New("only the built-in assistant can be hidden"))
+				return
+			}
+			// Hidden only while it is not used: not the default (nor made it now), owning no machine.
+			if *req.Hide && (info.Default || req.Default != nil && *req.Default || h.managerOwnsMachine(id)) {
+				writeErrCode(w, http.StatusConflict, "builtin_in_use", errors.New("the built-in assistant is the default or has a computer"))
+				return
+			}
+		}
 		if req.Name != nil {
 			name, err := managerName(*req.Name)
 			if err != nil {
@@ -535,6 +592,12 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 				return
 			}
 			if err := s.PutSetting(r.Context(), managerDefaultKey, id); err != nil {
+				writeErr(w, http.StatusInternalServerError, err)
+				return
+			}
+		}
+		if req.Hide != nil {
+			if err := s.PutSetting(r.Context(), managerBuiltinHideKey, *req.Hide); err != nil {
 				writeErr(w, http.StatusInternalServerError, err)
 				return
 			}
@@ -566,6 +629,8 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 			writeErrCode(w, http.StatusServiceUnavailable, "owners_unknown", err)
 		case errors.Is(err, errKeeperAway): // the manager that keeps it, or the one it goes to, is away (machines_kept.go)
 			writeErrCode(w, http.StatusServiceUnavailable, "assistant_offline", err)
+		case errors.Is(err, errLinkSwitchInProgress): // 409 link_switch_in_progress (link_switch.go)
+			writeAddMachineErr(w, err)
 		case err != nil:
 			writeErr(w, http.StatusInternalServerError, err)
 		default:
@@ -639,6 +704,12 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 		// are done; the ones after find it gone (ownership_moves.go).
 		drop := r.URL.Query().Get("drop_machines") == "1"
 		err := h.removingManager(func() error {
+			// Not while one of its computers switches, and none begins until it is removed (link_switch.go).
+			release, err := h.holdManagerLinkSwitch(r.Context(), id)
+			if err != nil {
+				return err
+			}
+			defer release()
 			// What it keeps in its own list is in its manager.json only (machines_kept.go): moved away first, or
 			// dropped on purpose. Checked with the moves held off, from a record that was read.
 			if keeps, known := h.keepsAnyKnown(r.Context(), id); !drop && (keeps || !known) {
@@ -658,6 +729,9 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 			return nil
 		})
 		switch {
+		case errors.Is(err, errLinkSwitchInProgress): // 409 link_switch_in_progress
+			writeAddMachineErr(w, err)
+			return
 		case errors.Is(err, errKeepsMachines):
 			writeErrCode(w, http.StatusConflict, "keeps_machines", i18n.Err("hub-admin_machines.keeps_machines"))
 			return
@@ -737,6 +811,13 @@ func (h *Hub) managerJoinRoutes(mux *http.ServeMux) {
 			h.securityError(w, r, http.StatusTooManyRequests, "rate_limited", 0)
 			return
 		}
+		// Trading a code issues a bus token in the hub's database, before the
+		// code is spent: refused while a snapshot pauses writes.
+		if !h.quiesce.begin() {
+			writeErr(w, http.StatusServiceUnavailable, i18n.Err("hub-selfupdate.err_quiesced"))
+			return
+		}
+		defer h.quiesce.end()
 		var req struct {
 			Code string `json:"code"`
 			// Builtin: the joiner binds the built-in manager's own service (persona-manager join --builtin). A code

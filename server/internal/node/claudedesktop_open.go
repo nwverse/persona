@@ -40,7 +40,7 @@ func (n *Node) sendThroughDesktopApp(ctx context.Context, id, text string, image
 	// A scoped node's home may still be the user's real home. Its own offline
 	// sessions continue through the regular route; never inspect or open the
 	// user's desktop sessions while deciding that route.
-	if n.sessionScope != nil {
+	if n.sessionScope != nil || !claudeDesktopOpens {
 		return false, nil
 	}
 	local := readClaudeDesktopIndex(n.home).about[id].local
@@ -88,6 +88,7 @@ func (n *Node) sendThroughDesktopApp(ctx context.Context, id, text string, image
 				if peerReachable(p) && peerInboxExists(p.socket) {
 					if cur != id {
 						log.Printf("send %s: the desktop app went on in %s", id, cur)
+						n.transferDesktopSettings(id, cur)
 					}
 					return n.sendOpened(ctx, cur, text, images)
 				}
@@ -129,4 +130,23 @@ func (n *Node) desktopTranscript(local, id string) string {
 		}
 	}
 	return id
+}
+
+func (n *Node) transferDesktopSettings(oldID, newID string) {
+	if oldID == "" || newID == "" || oldID == newID {
+		return
+	}
+	n.ccPlugins.moveQueuedSettings(oldID, newID)
+	n.mu.Lock()
+	if m, ok := n.modes[oldID]; ok {
+		cur := n.modes[newID]
+		if m.Model != nil {
+			cur.Model = m.Model
+		}
+		if m.Effort != "" {
+			cur.Effort, cur.EffortAt = m.Effort, m.EffortAt
+		}
+		n.modes[newID] = cur
+	}
+	n.mu.Unlock()
 }

@@ -9,18 +9,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/link"
 )
 
-// sshPairFlags holds the optional SSH tunnel flags on `pair` and `install --pair`.
-type sshPairFlags struct {
+// routeFlags holds the optional route flags on `pair` and `install --pair`: the SSH tunnel's and the outbound proxy's.
+type routeFlags struct {
 	server    string
 	target    string
 	always    bool
 	alwaysSet bool
+	proxy     proxyFlag
 }
 
-func (f *sshPairFlags) consume(args []string, i int) (next int, ok bool, err error) {
+func (f *routeFlags) consume(args []string, i int) (next int, ok bool, err error) {
+	if next, ok, err := f.proxy.consume(args, i); ok || err != nil {
+		return next, ok, err
+	}
 	switch args[i] {
 	case "--ssh-always":
 		f.always, f.alwaysSet = true, true
@@ -40,16 +45,82 @@ func (f *sshPairFlags) consume(args []string, i int) (next int, ok bool, err err
 	return i, false, nil
 }
 
-func (f sshPairFlags) any() bool {
+// any: an SSH flag is there.
+func (f routeFlags) any() bool {
 	return f.server != "" || f.target != "" || f.alwaysSet
 }
 
-func (f sshPairFlags) build(rawLink string) (*link.SSH, error) {
+// check refuses, before anything is saved, a --proxy-always the command line alone shows cannot be turned on: with
+// a --proxy that is no URL (as persona-link proxy refuses --off and --env with --always), or with --ssh-always (only
+// one route can be the only one). saveProxy checks the rest against link.json.
+func (f routeFlags) check() error {
+	if !f.proxy.always || !f.proxy.alwaysSet {
+		return nil
+	}
+	if f.proxy.set && noProxyURL(f.proxy.value) {
+		return errUsage
+	}
+	if f.always && f.alwaysSet {
+		return link.ErrSSHAlwaysProxyAlways
+	}
+	return nil
+}
+
+// saveProxy saves the proxy flags once ssh, the tunnel this command line saves (nil: none), is known with its
+// default Always. As persona-link proxy, a refusal changes nothing: proxy-only mode and Always use SSH are checked
+// against link.json before anything is saved. --proxy-always is refused without a proxy URL given or saved, or while
+// Always use SSH stays on (saved and left alone by this line, or this line's default for loopback addresses); a
+// tunnel that is always used is refused while a saved proxy-only mode stays on. This line's tunnel replaces the saved
+// one, so when it has no Always a saved Always use SSH goes off first, before proxy-only mode goes on.
+func (f routeFlags) saveProxy(e *env, ssh *link.SSH) error {
+	if !f.proxy.any() {
+		return nil
+	}
+	saved, err := link.Read(e.configPath())
+	if errors.Is(err, os.ErrNotExist) {
+		saved, err = &link.Config{}, nil
+	}
+	if err != nil {
+		return err
+	}
+	on := f.proxy.always && f.proxy.alwaysSet
+	cleared := f.proxy.set && noProxyURL(f.proxy.value) // SetProxy turns proxy-only mode off with it
+	sshAlways := saved.SSH != nil && saved.SSH.Always
+	switch {
+	case !f.proxy.alwaysSet && saved.ProxyAlways && !cleared && ssh != nil && ssh.Always:
+		return link.ErrSSHAlwaysProxyAlways // what the pairing or SetSSH says once the proxy is saved
+	case !on:
+	case !f.proxy.set && (saved.Proxy == "" || saved.Proxy == link.ProxyOff):
+		return link.ErrProxyAlwaysNeedsURL
+	case ssh == nil && sshAlways:
+		return link.ErrProxyAlwaysSSHAlways
+	case ssh != nil && ssh.Always: // a default: check refuses --ssh-always
+		return link.NewTextError("link-cli.proxy_always_ssh_default", nil)
+	}
+	if on && f.proxy.set {
+		if _, err := link.ParseProxy(f.proxy.value); err != nil {
+			return err
+		}
+	}
+	if on && ssh != nil && sshAlways {
+		if err := link.Update(e.configPath(), func(c *link.Config) error {
+			if c.SSH != nil {
+				c.SSH.Always = false
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+	return f.proxy.save(e)
+}
+
+func (f routeFlags) build(rawLink string) (*link.SSH, error) {
 	if !f.any() {
 		return nil, nil
 	}
 	if strings.TrimSpace(f.server) == "" {
-		return nil, errors.New("用了 --ssh-target 或 --ssh-always 时要一起填 --ssh <服务器>")
+		return nil, link.NewTextError("link-cli.ssh_flags_require_server", nil)
 	}
 	always := f.always
 	if !f.alwaysSet {
@@ -140,10 +211,10 @@ func sshCmd(e *env, args []string) error {
 			return enc.Encode(sshStatusJSON{SSH: cur, DefaultTarget: defTarget})
 		}
 		if c == nil || c.SSH == nil {
-			fmt.Fprintln(e.stdout, "没有设 SSH 隧道（persona-link ssh <服务器> 设一个）。")
+			fmt.Fprintln(e.stdout, terminalText("link-cli.ssh_none"))
 			return nil
 		}
-		fmt.Fprintf(e.stdout, "SSH 隧道：%s → %s（%s）\n", c.SSH.Server, c.SSH.Target, sshRouteText(c.SSH.Always))
+		fmt.Fprintln(e.stdout, terminalText("link-cli.ssh_current", i18n.Args{"server": c.SSH.Server, "target": c.SSH.Target, "route": sshRouteText(c.SSH.Always)}))
 		return nil
 	}
 
@@ -157,9 +228,9 @@ func sshCmd(e *env, args []string) error {
 			enc.SetIndent("", "  ")
 			return enc.Encode(sshStatusJSON{SSH: nil})
 		}
-		fmt.Fprintln(e.stdout, "已移除 SSH 隧道。")
+		fmt.Fprintln(e.stdout, terminalText("link-cli.ssh_removed"))
 		if link.Running(cfgPath) {
-			fmt.Fprintln(e.stdout, "在运行的 persona-link 正在切回直连。")
+			fmt.Fprintln(e.stdout, terminalText("link-cli.ssh_switch_direct"))
 		}
 		return nil
 	}
@@ -196,7 +267,7 @@ func sshCmd(e *env, args []string) error {
 				rep.Server, rep.Target = strings.TrimSpace(server), strings.TrimSpace(target)
 			}
 			if err == nil {
-				rep.Message = fmt.Sprintf("经 SSH 连上了 %s 上的 hub。", rep.Target)
+				rep.Message = i18n.T(i18n.Default, "link-cli.ssh_test_success", i18n.Args{"target": rep.Target})
 			} else {
 				var se *link.SSHError
 				if errors.As(err, &se) {
@@ -221,7 +292,7 @@ func sshCmd(e *env, args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(e.stdout, "经 SSH 连上了 %s 上的 hub。\n", norm.Target)
+		fmt.Fprintln(e.stdout, terminalText("link-cli.ssh_test_success", i18n.Args{"target": norm.Target}))
 		return nil
 	}
 
@@ -229,7 +300,7 @@ func sshCmd(e *env, args []string) error {
 		return errUsage
 	}
 	if strings.TrimSpace(server) == "" {
-		return errors.New("要填 SSH 服务器地址：persona-link ssh <服务器>")
+		return link.NewTextError("link-cli.ssh_server_required", nil)
 	}
 	saved, err := link.SetSSH(cfgPath, &link.SSH{Server: server, Target: target, Always: always})
 	if err != nil {
@@ -241,16 +312,16 @@ func sshCmd(e *env, args []string) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(sshStatusJSON{SSH: saved})
 	}
-	fmt.Fprintf(e.stdout, "已设好 SSH 隧道：%s → %s（%s）。\n", saved.Server, saved.Target, sshRouteText(saved.Always))
+	fmt.Fprintln(e.stdout, terminalText("link-cli.ssh_set", i18n.Args{"server": saved.Server, "target": saved.Target, "route": sshRouteText(saved.Always)}))
 	if link.Running(cfgPath) {
-		fmt.Fprintln(e.stdout, "在运行的 persona-link 正在按新设置重连。")
+		fmt.Fprintln(e.stdout, terminalText("link-cli.ssh_reconnect"))
 	}
 	return nil
 }
 
 func sshRouteText(always bool) string {
 	if always {
-		return "总是走 SSH"
+		return terminalText("link-cli.ssh_route_always")
 	}
-	return "先试直连，不通再走 SSH"
+	return terminalText("link-cli.ssh_route_fallback")
 }

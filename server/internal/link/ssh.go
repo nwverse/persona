@@ -377,7 +377,8 @@ func NormalizeSSH(server, target string, always bool, eps []Endpoint) (*SSH, err
 	return &SSH{Server: canonServer, Target: canonTarget, Always: always}, nil
 }
 
-// SetSSH writes or removes (when ssh is nil) the SSH tunnel in link.json at path.
+// SetSSH writes or removes (when ssh is nil) the SSH tunnel in link.json at path. Always is refused while proxy-only
+// mode (Config.ProxyAlways) is on.
 func SetSSH(path string, ssh *SSH) (*SSH, error) {
 	var saved *SSH
 	err := Update(path, func(c *Config) error {
@@ -388,6 +389,9 @@ func SetSSH(path string, ssh *SSH) (*SSH, error) {
 		norm, err := NormalizeSSH(ssh.Server, ssh.Target, ssh.Always, c.Endpoints)
 		if err != nil {
 			return err
+		}
+		if norm.Always && c.ProxyAlways {
+			return ErrSSHAlwaysProxyAlways
 		}
 		c.SSH = norm
 		saved = cloneSSH(norm)
@@ -445,7 +449,7 @@ type sshTunnel struct {
 }
 
 func pickLoopbackPort() (int, error) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := osproc.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return 0, err
 	}
@@ -727,7 +731,7 @@ func tunnelClient(c *Config, t *sshTunnel) *http.Client {
 					}
 				}
 				tc := tls.Client(raw, tlsCfg)
-				if err := tc.HandshakeContext(ctx); err != nil {
+				if err := tracedHandshake(ctx, tc); err != nil {
 					_ = raw.Close()
 					return nil, t.wrapHandshakeError(ctx, err)
 				}
@@ -759,10 +763,10 @@ func dialSSH(ctx context.Context, c *Config, sshBin string) (*link, error) {
 		base := tunnelBaseURL(c, *cfg)
 		actx, acancel := context.WithTimeout(ctx, dialTimeout)
 		client := tunnelClient(c, t)
-		conn, resp, err := websocket.Dial(actx, wsURL(base, Path), &websocket.DialOptions{
+		conn, resp, err := diagnosticDial(actx, wsURL(base, Path), &websocket.DialOptions{
 			HTTPClient: client,
 			HTTPHeader: bearer(c.Token),
-		})
+		}, "control", KindSSH, attempt+1)
 		acancel()
 		if err != nil {
 			retryBind := attempt == 0 && t.isDone() && t.localBindBusy()
@@ -859,27 +863,4 @@ func TestSSH(ctx context.Context, sshCfg SSH, rawLink string, c *Config, sshBin 
 		return norm, nil
 	}
 	return norm, &SSHError{Code: SSHUnreachable, Server: norm.Server, Target: norm.Target}
-}
-
-// probeDirect checks whether any direct candidate in c answers over TLS (with pin or system-CA verification).
-func probeDirect(ctx context.Context, c *Config) bool {
-	if len(c.Endpoints) == 0 {
-		return false
-	}
-	client := hubClient(c, nil)
-	defer client.CloseIdleConnections()
-	_, _, err := race(ctx, c.Endpoints, func(ctx context.Context, ep Endpoint) (struct{}, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, ep.URL+"/api/v1/health", nil)
-		if err != nil {
-			return struct{}{}, err
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			return struct{}{}, err
-		}
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		_ = resp.Body.Close()
-		return struct{}{}, nil
-	}, func(struct{}) {})
-	return err == nil
 }

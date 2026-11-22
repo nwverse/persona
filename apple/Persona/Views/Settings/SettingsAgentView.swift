@@ -5,6 +5,10 @@ struct SettingsAgentView: View {
     var body: some View {
         SettingsForm {
             Section {
+                NavigationLink { HiddenAgentDirsView() } label: {
+                    SettingsRow(title: String(localized: "agentDirs.title", defaultValue: "Agent Folders"), symbol: Theme.Icon.options, tint: Theme.ai)
+                }
+                .lineLimit(1)
                 NavigationLink(value: SettingsPage.claude) {
                     SettingsRow(title: String(localized: "Claude Code Settings"), symbol: Theme.Icon.options, tint: Theme.Hue.orange)
                 }
@@ -15,6 +19,11 @@ struct SettingsAgentView: View {
                 }
                 .lineLimit(1)
                 .accessibilityIdentifier("settings-agent-codex")
+                NavigationLink(value: SettingsPage.agy) {
+                    SettingsRow(title: String(localized: "Antigravity Settings"), symbol: Theme.Icon.options, tint: Theme.Hue.blue)
+                }
+                .lineLimit(1)
+                .accessibilityIdentifier("settings-agent-agy")
                 NavigationLink(value: SettingsPage.triage) {
                     SettingsRow(title: String(localized: "Session Triage"), symbol: Theme.Icon.triage, tint: Theme.ai)
                 }

@@ -134,7 +134,8 @@ func (h *Hub) warnKeeperOld(id string) {
 }
 
 // loadMachinesKept reads machinesKeptKey (startDevices, with the owners): a machine whose manager the roster no longer
-// has is gone with it. An error leaves it unread: the next change reads it first.
+// has is gone with it. An error leaves it unread: the next change reads it first. A successful read after startDevices
+// also restores the saved entries and the machine list, whichever operation completed the read.
 func (h *Hub) loadMachinesKept(ctx context.Context) error {
 	var m map[string]string
 	if s := h.managerStore(); s != nil {
@@ -155,8 +156,23 @@ func (h *Hub) loadMachinesKept(ctx context.Context) error {
 	}
 	d := &h.devices
 	d.mu.Lock()
-	d.kept, d.keptRead = kept, true
+	d.kept = kept
+	reconcile := d.fleetReady
 	d.mu.Unlock()
+	if reconcile {
+		// The first entries read filtered out machines whose kept record was unread. Read them again before listing them,
+		// and do not call the kept-list recovery complete until that read succeeds too.
+		if err := h.loadMachineEntries(ctx); err != nil {
+			return err
+		}
+	}
+	d.mu.Lock()
+	d.keptRead = true
+	d.mu.Unlock()
+	if reconcile {
+		h.reconcileKeptMachines()
+		h.devicesConfigChanged()
+	}
 	return nil
 }
 
@@ -341,6 +357,12 @@ func (h *Hub) removeKeptMachine(ctx context.Context, mid string) (bool, error) {
 // editKeptMachine changes keys of a kept machine's entry (the admin page's connector address): got from its keeper,
 // changed, put back. false: no manager keeps mid.
 func (h *Hub) editKeptMachine(ctx context.Context, mid string, set map[string]any) (bool, error) {
+	return h.editKeptMachineIf(ctx, mid, nil, set)
+}
+
+// editKeptMachineIf is editKeptMachine when check, given the entry as its keeper has it now, answers nil (nil: always);
+// its error otherwise, nothing put (link_switch.go: a compare-and-swap).
+func (h *Hub) editKeptMachineIf(ctx context.Context, mid string, check func(json.RawMessage) error, set map[string]any) (bool, error) {
 	d := &h.devices
 	d.moving.Lock()
 	defer d.moving.Unlock()
@@ -351,6 +373,11 @@ func (h *Hub) editKeptMachine(ctx context.Context, mid string, set map[string]an
 	entry, err := h.keptEntryFull(ctx, o, mid)
 	if err != nil {
 		return true, err
+	}
+	if check != nil {
+		if err := check(entry); err != nil {
+			return true, err
+		}
 	}
 	obj, err := parseJSONObject(entry)
 	if err != nil {

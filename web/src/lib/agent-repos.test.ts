@@ -96,6 +96,14 @@ describe("Windows repository paths", () => {
     expect(tree[0]!.name).toBe("App");
   });
 
+  it("names a Windows linked checkout with the repository folder after its holding folder", () => {
+    const tree = onMachineA([
+      session("main", "C:/Work/App", { repo_root: "c:/work/app" }),
+      session("linked", "C:/Users/User/.codex/worktrees/fix-login/APP", { repo_root: "c:/work/app" }),
+    ]);
+    expect(worktrees(tree[0]!)).toEqual(["app*", "fix-login"]);
+  });
+
   it("keeps POSIX directory case and literal backslashes distinct", () => {
     expect(repoOf("/work/app/src", "/work/App").main).toBe(false);
     expect(repoOf("/work/a\\b").name).toBe("a\\b");
@@ -135,6 +143,18 @@ describe("按仓库分组的树", () => {
     expect(tree[0]!.worktrees.map((w) => [w.name, w.main, ids(w.sessions)])).toEqual([
       ["app", true, ["main"]], ["brave-fox", false, ["w1"]], ["calm-bear", false, ["w2"]],
     ]);
+  });
+
+  it("names a linked tree whose folder has the repository's name after the folder holding it (#12800)", () => {
+    const tree = onMachineA([
+      session("main", "/code/app", { repo_root: "/code/app" }),
+      session("codex", "/home/me/.codex/worktrees/fix-login/app", { repo_root: "/code/app" }),
+      session("codex-2", "/home/me/.codex/worktrees/fix-login-2/app", { repo_root: "/code/app" }),
+      session("branch", "/home/me/.codex/worktrees/fix-ui/app", { repo_root: "/code/app", branch: "ui-polish" }),
+      session("sibling", "/code/app-feature", { repo_root: "/code/app" }),
+    ]);
+    // the main checkout keeps the repository's name, a branch still wins, and a folder named otherwise keeps its name
+    expect(worktrees(tree[0]!)).toEqual(["app*", "app-feature", "fix-login", "fix-login-2", "ui-polish"]);
   });
 
   it("先给主工作树，再按名字给工作树", () => {

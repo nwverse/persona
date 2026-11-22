@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A stopped session's work state as the lists show it (`Session.work`, docs/assistant/agent-work.md; the web's lib/work.ts).
 @MainActor
@@ -26,6 +27,24 @@ struct SessionWorkTests {
         #expect(w.wakeAt == now.addingTimeInterval(600))
         #expect(w.attempts == 1 && w.max == 6)
         #expect(w.agent?.sessionID == "x" && w.agent?.label == "登录页")
+    }
+
+    @Test func justFinishedNamesOnlyUnmutedIdleWorkAndKeepsItsConclusion() throws {
+        let done = #"{"phase":"done","line":"Merged","just_finished":true}"#
+        var row = try session(work: done)
+        #expect(row.isJustFinished(muted: false) && !row.isJustFinished(muted: true))
+        #expect(row.stateLabel(muted: false) == StateName.justFinished.text)
+        #expect(row.stateTone(muted: false).dot == StatusPalette.unread.dot)
+        #expect(row.stateLabel(muted: true) == StateName.seen.text)
+        #expect(row.listPreview(muted: false) == "✓ Merged")
+        #expect(!AgentFilter.unread.matches(row, muted: false))
+        for state in ["unread", "working", "needs_you", "offline"] {
+            #expect(try !session(state: state, work: done).isJustFinished(muted: false))
+        }
+        #expect(try !session(work: #"{"phase":"done"}"#).isJustFinished(muted: false))
+        #expect(try !session(work: #"{"phase":"done","just_finished":false}"#).isJustFinished(muted: false))
+        row.markLocallySeen()
+        #expect(!row.needsSeen() && row.state == .idle && row.work?.line == "Merged")
     }
 
     @Test func anOddWorkStateNeverDropsTheSession() throws {

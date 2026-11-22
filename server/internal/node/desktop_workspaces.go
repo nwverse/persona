@@ -86,7 +86,6 @@ func (n *Node) desktopWorkspaces() ([]proto.Workspace, int, []proto.WorkspaceSou
 		}
 	}
 
-	nativeClaudeRoots := map[string]bool{}
 	for _, dir := range claudeDesktopDirs(n.home) {
 		environments, err := readClaudeDesktopEnvironments(dir)
 		if err != nil {
@@ -113,7 +112,7 @@ func (n *Node) desktopWorkspaces() ([]proto.Workspace, int, []proto.WorkspaceSou
 				if seenRoots[key] {
 					continue
 				}
-				seenRoots[key], nativeClaudeRoots[key] = true, true
+				seenRoots[key] = true
 				out = append(out, proto.Workspace{ID: id + ":" + key, Source: proto.SourceClaudeDesktop, SourceID: id,
 					Title: environment.Name, Cwd: cwd, ProjectID: id, ProjectName: environment.Name, ProjectPath: cwd,
 					Index: i + 1, Online: true, Available: real != ""})
@@ -137,7 +136,7 @@ func (n *Node) desktopWorkspaces() ([]proto.Workspace, int, []proto.WorkspaceSou
 				continue
 			}
 			root := claudeDesktopProjectRoot(firstNonEmpty(about.originCwd, about.cwd), projects)
-			if root == "" || inICloud(root) || n.cwdBlocked(root) || nativeClaudeRoots[folderKey(root)] {
+			if root == "" || inICloud(root) || n.cwdBlocked(root) {
 				continue
 			}
 			roots[folderKey(root)] = root
@@ -149,9 +148,12 @@ func (n *Node) desktopWorkspaces() ([]proto.Workspace, int, []proto.WorkspaceSou
 		sort.Strings(keys)
 		for i, key := range keys {
 			root := roots[key]
-			id := claudeDesktopProjectID(root)
+			id, name := claudeDesktopDirectoryProject(root, n.home)
+			if id == "" {
+				continue
+			}
 			out = append(out, proto.Workspace{ID: id, Source: proto.SourceClaudeDesktop, SourceID: id,
-				Title: filepath.Base(root), Cwd: root, ProjectID: id, ProjectName: filepath.Base(root), ProjectPath: root,
+				Title: name, Cwd: root, ProjectID: id, ProjectName: name, ProjectPath: root,
 				Index: i + 1, Online: true, Available: n.sessionWorkspaceCwd(root) != ""})
 		}
 	}
@@ -169,7 +171,13 @@ func claudeDesktopProjectRoot(cwd string, projects map[string]string) string {
 	return codexProjectRoot(cwd, projects)
 }
 
-func claudeDesktopProjectID(root string) string { return "claude-project:" + folderKey(root) }
+// Directory-only projects share Codex's space and the session list's home/ancestor exclusions. Native saved
+// environments keep their own identities even when several of them use the same directory.
+func claudeDesktopDirectoryProject(root, home string) (id, name string) {
+	rows := []proto.Session{{Agent: "claude", SourceKind: proto.SourceClaudeDesktop, RepoRoot: root}}
+	placeClaudeDesktop(rows, nil, home)
+	return rows[0].SpaceID, rows[0].SpaceName
+}
 
 func claudeDesktopEnvironmentID(profile, account, id string) string {
 	return "claude-environment:" + codexHomeTag(folderKey(filepath.Clean(profile))+"\x00"+account) + ":" + id
@@ -178,7 +186,7 @@ func claudeDesktopEnvironmentID(profile, account, id string) string {
 // decorateClaudeDesktop uses the same project identity for live and offline chats. The original folder survives a
 // desktop-created worktree or a later cwd change; the session's own working directory and transcript identity stay.
 func (n *Node) decorateClaudeDesktop(s *proto.Session, index claudeDesktopIndex, projects map[string]string) {
-	if n.sessionScope != nil || s.PaneID != "" || s.Agent != "claude" ||
+	if n.sessionScope != nil || s.PaneID != "" || s.SpaceID != "" || s.Assistant || s.Agent != "claude" ||
 		(s.SourceKind != "" && s.SourceKind != proto.SourceClaudeDesktop) {
 		return
 	}
@@ -200,5 +208,7 @@ func (n *Node) decorateClaudeDesktop(s *proto.Session, index claudeDesktopIndex,
 		return
 	}
 	s.RepoRoot = root
-	s.SpaceKind, s.SpaceID, s.SpaceName = proto.SourceClaudeDesktop, claudeDesktopProjectID(root), filepath.Base(root)
+	if id, name := claudeDesktopDirectoryProject(root, n.home); id != "" {
+		s.SpaceKind, s.SpaceID, s.SpaceName = proto.SourceClaudeDesktop, id, name
+	}
 }

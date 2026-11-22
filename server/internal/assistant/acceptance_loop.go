@@ -42,11 +42,12 @@ func (s *Service) acceptLoop(ctx context.Context) {
 	}
 }
 
-// retryAcceptance posts the card of each ask still waiting for one (acceptCardDue), under the round's key, so a try that
-// landed unseen is not posted twice. The round guards are a reminder's: an ask whose todo is gone or ended without the
-// hub's auto-judge, or that is from before its latest reopen, is dropped, never posted. With the bot off or its reports
-// off no card is due, and past acceptPostWindow none is tried: either way the ask stays card-less (NoCard), still
-// listed. A status that cannot be read, or a send that fails, waits for the next tick.
+// retryAcceptance posts the card of each ask still waiting for one (acceptCardDue, one its supervisor passed included,
+// #9253), under the round's key, so a try that landed unseen is not posted twice. The round guards are a reminder's: an
+// ask whose todo is gone or ended without the hub's auto-judge, that is from before its latest reopen, or whose
+// supervisor's pass no longer stands, is dropped, never posted. With the bot off or its reports off no card is due, and
+// past acceptPostWindow none is tried: either way the ask stays card-less (NoCard), still listed while it waits for the
+// owner. A status that cannot be read, or a send that fails, waits for the next tick.
 func (s *Service) retryAcceptance(now time.Time) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -70,6 +71,8 @@ func (s *Service) retryAcceptance(now time.Time) {
 	}
 	slices.Sort(due)
 	st, stErr := s.feishuStatus(ctx)
+	quiet := s.quietModeOn(ctx)
+	quietHolds := func(a *acceptAsk) bool { return quiet && !decideAsk(a) } // as quietHoldsAsk, read once for the sweep
 	for _, id := range due {
 		t, ok := s.todoNow(id)
 		if f := s.acceptSweepHook; f != nil {
@@ -79,6 +82,11 @@ func (s *Service) retryAcceptance(now time.Time) {
 		a := b.asks[id]
 		if !acceptCardDue(a) || !a.AskedAt.Equal(seen[id]) {
 			// Gone, passed, or a new round asked while the book was unlocked (the todo read is from before it).
+			b.mu.Unlock()
+			continue
+		}
+		if ok && ownerDecisionReturned(t.Supervision) {
+			// The stored round stays as facts for the supervisor, but no new card goes out until it is re-issued.
 			b.mu.Unlock()
 			continue
 		}
@@ -92,7 +100,7 @@ func (s *Service) retryAcceptance(now time.Time) {
 			continue
 		}
 		late := now.Sub(maxTime(a.AskedAt, a.PushedAt)) > acceptPostWindow // PushedAt: held for a briefing first (decision_wait.go)
-		if late || stErr == nil && !(st.Ready && st.Features.Reports) {
+		if late || stErr == nil && !(st.Ready && st.Features.Reports) || quietHolds(a) {
 			if late {
 				s.logf("task %s: acceptance: its card did not go out within %v: kept without one", id, acceptPostWindow)
 			}
@@ -103,6 +111,12 @@ func (s *Service) retryAcceptance(now time.Time) {
 		}
 		if stErr != nil {
 			b.mu.Unlock()
+			continue
+		}
+		if err := s.saveAcceptErrLocked(ctx); err != nil {
+			// An initial conclusion save may have failed: never send its key from memory alone.
+			b.mu.Unlock()
+			s.logf("task %s: acceptance: save before retry: %v", id, err)
 			continue
 		}
 		cp := *a
@@ -116,8 +130,8 @@ func (s *Service) retryAcceptance(now time.Time) {
 		var done *acceptAsk
 		if a := b.asks[id]; a != nil && a.AskedAt.Equal(cp.AskedAt) {
 			a.MessageID, a.Messages = mid, append(a.Messages, mid)
-			if !a.AcceptedAt.IsZero() {
-				c := *a // passed while the card went out: it says so too
+			if cp.AcceptedAt.IsZero() && !a.AcceptedAt.IsZero() {
+				c := *a // passed while the card went out: it says so too (one passed before says so already)
 				done = &c
 			}
 		} else if a != nil {
@@ -165,6 +179,11 @@ func (s *Service) remindAcceptance(now time.Time) {
 		return
 	}
 	if f, ready := s.feishuFeatures(ctx); !ready || !f.Reports {
+		return
+	}
+	if s.quietModeOn(ctx) {
+		// low-distraction mode: no morning card again; the briefing lists what still waits to be verified (snapshotUnaccepted).
+		s.logf("acceptance reminders: low-distraction mode, %d left to the briefing without a card", len(due))
 		return
 	}
 	slices.Sort(due)
@@ -237,8 +256,9 @@ func (s *Service) briefingClock(ctx context.Context) (int, int) {
 	return acceptMorningHour, 0
 }
 
-// snapshotUnaccepted are the deployed tasks still waiting for the user to check them, the oldest eight, and how many
-// there are (the snapshot's "waiting for the user to verify", which the morning briefing brings up).
+// snapshotUnaccepted are the deployed tasks still waiting for the user to check them, oldest first, and how many there
+// are (the snapshot's "waiting for the user to verify", which the morning briefing brings up; scopeSnapshot shows a
+// conversation the oldest snapshotAcceptLimit of its own).
 func (s *Service) snapshotUnaccepted(ctx context.Context, loc *time.Location) ([]prompts.SnapshotAccept, int) {
 	b := &s.accept
 	b.mu.Lock()
@@ -269,15 +289,16 @@ func (s *Service) snapshotUnaccepted(ctx context.Context, loc *time.Location) ([
 		if !ok {
 			continue
 		}
+		if !x.a.RecheckAt.IsZero() || ownerDecisionReturned(t.Supervision) {
+			continue // back with the supervisor: keep the stored facts, but do not present them to the owner again
+		}
 		if acceptAskEnded(&x.a, t) || acceptAskStale(&x.a, t) {
 			ended = append(ended, x) // closed by the owner or a review, or asked before the todo's latest reopen
 			continue
 		}
 		total++
-		if len(out) < 8 { // the oldest eight; the total says how many more
-			out = append(out, prompts.SnapshotAccept{Title: clip(oneLine(t.Title), 40), Verdict: clip(oneLine(verdictText(s.botLang(ctx), &x.a)), 120),
-				Changed: x.a.Changed, Link: x.a.Link, Since: x.a.AskedAt.In(loc)})
-		}
+		out = append(out, prompts.SnapshotAccept{Title: clip(oneLine(t.Title), 40), Verdict: clip(oneLine(verdictText(s.botLang(ctx), &x.a)), 120),
+			Changed: x.a.Changed, Link: x.a.Link, Since: x.a.AskedAt.In(loc), Owner: todoOwner(t)})
 	}
 	if len(ended) > 0 {
 		b.mu.Lock()

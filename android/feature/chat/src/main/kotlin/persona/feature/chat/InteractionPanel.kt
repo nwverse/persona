@@ -12,6 +12,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -28,6 +29,7 @@ import persona.core.contracts.CoreText
 import persona.core.contracts.DialogOption
 import persona.core.contracts.Interaction
 import persona.core.contracts.Machine
+import persona.core.contracts.Question
 import persona.core.contracts.Resolution
 import persona.core.contracts.ScreenDialog
 import persona.core.contracts.parseTime
@@ -63,6 +65,8 @@ internal fun InteractionPanel(
     labels: Map<String, StackLabel> = emptyMap(),
     first: String? = null,
     counted: Boolean = true,
+    /** When non-null, a lone unfolded card shows a top-edge grabber allowing the user to resize its cap (#12306). */
+    resize: CardResize? = null,
     /** Drawn under a card that is not folded: the rule a question a supervisor passed up suggests (#4929); null: nothing. */
     suggestion: (@Composable (Interaction) -> Unit)? = null,
 ) {
@@ -89,15 +93,19 @@ internal fun InteractionPanel(
         }
     }
     val closeCard: @Composable (Interaction) -> Unit = { request ->
-        val localOnly = blockedReason != null || (request.kind == "question" && request.canCancel != true)
-        if ((localOnly && onDiscardLocal != null) || (request.kind == "question" && request.canCancel == true)) {
+        val requestBlock = resolveRequestApprovalBlockedReason(request, blockedReason)
+        val stoppedWork = requestBlock != null && request.isManagerWorkCard
+        val localOnly = !stoppedWork && (requestBlock != null || (request.kind == "question" && request.canCancel != true))
+        if ((localOnly && onDiscardLocal != null) || stoppedWork || (request.kind == "question" && request.canCancel == true)) {
             val canClose = busyId == null && !linkVisible && if (localOnly) onDiscardLocal != null else
                 request.id !in uncertainIds && !RequestExpiry.expired(request.expiresAt, now)
             JIconButton(PhIcons.X, stringResource(if (localOnly) R.string.chat_card_discard_local else R.string.chat_question_close), {
                 if (canClose) {
                     if (localOnly) onDiscardLocal?.invoke(request)
-                    else if (!RequestExpiry.expired(request.expiresAt, Instant.now()))
-                        AnswerBuilder.build(request, AnswerAction.CancelQuestion).resolution?.let { onResolve(request, it) }
+                    else if (!RequestExpiry.expired(request.expiresAt, Instant.now())) {
+                        val action = if (stoppedWork) AnswerAction.Dismiss else AnswerAction.CancelQuestion
+                        AnswerBuilder.build(request, action).resolution?.let { onResolve(request, it) }
+                    }
                 }
             }, enabled = canClose)
         }
@@ -125,6 +133,7 @@ internal fun InteractionPanel(
                     headerActions = { closeCard(request) },
                     // an approval says it waits for the user, in the chat as on the web and iOS (#4883)
                     kicker = if (request.kind == "permission" && !request.isSecretRun) stringResource(DecisionKind.Tool.labelRes) else null,
+                    grabber = if (!folded && resize != null && resize.id == request.id) ({ CardGrabber(resize) }) else null,
                 ) {
                     if (full != request.id) body(request, false)
                 }
@@ -199,20 +208,40 @@ internal fun InteractionForm(
     val expired = RequestExpiry.expired(interaction.expiresAt, now)
     var password by rememberTransientSecret(interaction.id, clearWhen = expired || uncertain)
     var fieldValues by rememberTransient(interaction.id, clearWhen = expired || uncertain, empty = emptyMap<String, String>())
-    // A session whose source cannot approve (blockedReason) shows the request but answers nothing, not even "Handle on computer".
+    // A stopped Agent cannot receive a message, but its manager can still settle explicit defer choices and dismiss
+    // its own work card. Other blocked cards, including permissions, keep the original read-only behavior (#6839).
     val blocked = blockedReason != null
-    val context = AnswerContext(state = if (expired || uncertain || readOnly || linkVisible || blocked) "unknown" else "pending", sending = busy,
+    val stoppedWork = blocked && interaction.isManagerWorkCard
+    val unavailable = expired || uncertain || readOnly || linkVisible
+    val context = AnswerContext(state = if (unavailable || (blocked && !stoppedWork)) "unknown" else "pending", sending = busy,
         fullPlanRead = planRead)
-    val editable = !busy && !expired && !uncertain && !readOnly && !linkVisible && !blocked
+    val editable = !busy && !expired && !uncertain && !readOnly && !linkVisible && (!blocked || stoppedWork)
     fun act(action: AnswerAction, value: AnswerDraft = draft) {
         if (RequestExpiry.expired(interaction.expiresAt, Instant.now())) return
+        // A stopped card's page turn is navigation only, as on Web. AnswerBuilder may resolve Advance when every
+        // question is answered, so only the last page's Submit may produce that Resolution (#6839).
+        if (stoppedWork && action == AnswerAction.Advance) {
+            if (!editable || value.page >= interaction.questions.orEmpty().lastIndex) return
+            update(value.copy(page = value.page + 1))
+            return
+        }
+        if (stoppedWork && !interaction.stoppedWorkAnswerAllowed(action, value)) return
         val result = AnswerBuilder.build(interaction, action, value, context)
-        if (!result.allowed) return
+        if (!result.allowed || (stoppedWork && !interaction.stoppedWorkResultAllowed(result))) return
         if (result.resolution == null) update(result.draft)
         else { password = ""; fieldValues = emptyMap(); onAnswer(action, result.draft, planRead) }
     }
-    fun enabled(action: AnswerAction) = AnswerBuilder.build(interaction, action, draft, context).allowed
+    fun enabled(action: AnswerAction): Boolean {
+        if (stoppedWork && action == AnswerAction.Advance) {
+            return editable && draft.page < interaction.questions.orEmpty().lastIndex
+        }
+        if (stoppedWork && !interaction.stoppedWorkAnswerAllowed(action, draft)) return false
+        val result = AnswerBuilder.build(interaction, action, draft, context)
+        return result.allowed && (!stoppedWork || interaction.stoppedWorkResultAllowed(result))
+    }
     val questions = interaction.questions.orEmpty()
+    val recommendations = interaction.recommendedLabels()
+    val recommendationOnOptions = recommendations.isNotEmpty() && recommendations.all { it.isNotEmpty() }
     val question = questions.getOrNull(draft.page)
     val fallback = remember(interaction.screen, secret) {
         if (secret) null else ScreenAnswers.parse(interaction.screen.orEmpty())
@@ -235,6 +264,10 @@ internal fun InteractionForm(
                 onDecline = { act(AnswerAction.Deny) }, onRun = { act(AnswerAction.Allow, AnswerDraft(password = password)) },
                 // Room between the dock's divider and the field's label.
                 modifier = Modifier.padding(top = Tokens.Space.s))
+            else if (interaction.isSecretHandoff) SecretHandoffActions(interaction,
+                canDeny = enabled(AnswerAction.Deny), canAllow = enabled(AnswerAction.Allow), canAlways = enabled(AnswerAction.Always),
+                onDeny = { act(AnswerAction.Deny) }, onAllow = { act(AnswerAction.Allow) }, onAlways = { act(AnswerAction.Always) },
+                modifier = Modifier.padding(top = Tokens.Space.s))
             // A card with fields (#4641): its form, Deny and Fill In & Allow, no Always.
             else if (interaction.hasFieldsForm) PermissionFieldsActions(interaction.fields.orEmpty(), fieldValues, { fieldValues = it }, editable,
                 canDeny = enabled(AnswerAction.Deny),
@@ -245,23 +278,47 @@ internal fun InteractionForm(
                 DecisionButtons(
                     primary = JAction(stringResource(R.string.chat_request_allow), enabled = enabled(AnswerAction.Allow)) { act(AnswerAction.Allow) },
                     secondary = JAction(stringResource(R.string.chat_request_deny), enabled = enabled(AnswerAction.Deny)) { act(AnswerAction.Deny) },
-                    more = if (interaction.offersAlways) listOf(JAction(interaction.alwaysActionLabel.text(),
-                        enabled = enabled(AnswerAction.Always)) { act(AnswerAction.Always) }) else emptyList(),
+                    more = buildList {
+                        interaction.ownerApprovalPhrase?.let { phrase ->
+                            add(JAction(stringResource(R.string.chat_request_owner_reply, phrase),
+                                enabled = enabled(AnswerAction.OwnerReply)) { act(AnswerAction.OwnerReply) })
+                        }
+                        if (interaction.offersAlways) add(JAction(interaction.alwaysActionLabel.text(),
+                            enabled = enabled(AnswerAction.Always)) { act(AnswerAction.Always) })
+                    },
                 )
                 interaction.alwaysScopeDetail?.takeIf { interaction.offersAlways }?.let {
                     Text(stringResource(R.string.chat_request_always_allows, it.text()), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
                 }
             }
             "plan" -> {
-                DecisionButtons(
-                    primary = JAction(stringResource(R.string.chat_plan_approve_edits), enabled = enabled(AnswerAction.ApproveEdits)) { act(AnswerAction.ApproveEdits) },
-                    secondary = JAction(stringResource(R.string.chat_plan_reject), enabled = enabled(AnswerAction.Reject)) { act(AnswerAction.Reject) },
-                    // Web's three ways to approve (Interactions.tsx MODES): "Confirm each step" keeps Claude asking before each edit.
-                    more = listOf(JAction(stringResource(R.string.chat_plan_approve_all), enabled = enabled(AnswerAction.ApproveAll)) { act(AnswerAction.ApproveAll) },
-                        JAction(stringResource(R.string.chat_plan_approve_stepwise), enabled = enabled(AnswerAction.ApproveStepwise)) { act(AnswerAction.ApproveStepwise) }),
-                )
-                Text(stringResource(if (planRead) R.string.chat_plan_approve_all_note else R.string.chat_plan_read_first_note),
-                    style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+                val recordedApproval = when (val mode = interaction.recordedPlanThen) {
+                    "default" -> mode to AnswerAction.ApproveStepwise
+                    "acceptEdits", "auto" -> mode to AnswerAction.ApproveEdits
+                    SessionModes.BYPASS -> mode to AnswerAction.ApproveAll
+                    else -> null
+                }
+                if (recordedApproval != null) {
+                    val (mode, action) = recordedApproval
+                    val modeLabel = SessionModes.modeLabel(mode, LocalResources.current) ?: mode
+                    Text(modeLabel, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+                    DecisionButtons(
+                        primary = JAction(stringResource(R.string.chat_tray_approve), enabled = enabled(action)) { act(action) },
+                        secondary = JAction(stringResource(R.string.chat_plan_reject), enabled = enabled(AnswerAction.Reject)) { act(AnswerAction.Reject) },
+                    )
+                } else {
+                    DecisionButtons(
+                        primary = JAction(stringResource(R.string.chat_plan_approve_edits), enabled = enabled(AnswerAction.ApproveEdits)) { act(AnswerAction.ApproveEdits) },
+                        secondary = JAction(stringResource(R.string.chat_plan_reject), enabled = enabled(AnswerAction.Reject)) { act(AnswerAction.Reject) },
+                        // Web's three ways to approve (Interactions.tsx MODES): "Confirm each step" keeps Claude asking before each edit.
+                        more = listOf(JAction(stringResource(R.string.chat_plan_approve_all), enabled = enabled(AnswerAction.ApproveAll)) { act(AnswerAction.ApproveAll) },
+                            JAction(stringResource(R.string.chat_plan_approve_stepwise), enabled = enabled(AnswerAction.ApproveStepwise)) { act(AnswerAction.ApproveStepwise) }),
+                    )
+                }
+                if (recordedApproval == null || recordedApproval.first == SessionModes.BYPASS) {
+                    Text(stringResource(if (planRead) R.string.chat_plan_approve_all_note else R.string.chat_plan_read_first_note),
+                        style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+                }
             }
             "question" -> if (question != null) {
                 // As on iOS (needsFooter): one single-choice question is answered by tapping an option, so it has no
@@ -322,6 +379,7 @@ internal fun InteractionForm(
         }
     }
     val content: @Composable () -> Unit = {
+        if (interaction.kind == "question") DelegateNotes(interaction, recommendationOnOptions)
         // In the conversation's dock the session is the page itself and the countdown is in the dock's header.
         if (full) Text(interactionSource(interaction, machine), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
         interaction.requestSourceLabel()?.let { Text(it.text(), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2) }
@@ -339,9 +397,10 @@ internal fun InteractionForm(
             style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
         Spacer(Modifier.height(Tokens.Space.s))
         when (interaction.kind) {
-            "permission" -> if (interaction.isSecretRun) SecretRunSummary(interaction) else {
+            "permission" -> if (interaction.isSecretRun) SecretRunSummary(interaction)
+            else if (interaction.isSecretHandoff) SecretHandoffSummary(interaction) else {
                 // Another agent's card says why it asks, in its own words.
-                interaction.reason?.takeIf { interaction.agentDisplayName != null && it.isNotBlank() }?.let {
+                interaction.reason?.takeIf { interaction.fromOtherAgent && it.isNotBlank() }?.let {
                     ChatLinkText(it, style = PersonaTheme.type.callout.copy(color = PersonaTheme.palette.ink2))
                 }
                 PermissionRequestSummary(interaction)
@@ -382,17 +441,20 @@ internal fun InteractionForm(
                 ChatLinkText(question.question, style = PersonaTheme.type.body)
                 question.options.forEachIndexed { index, option ->
                     val display = AnswerBuilder.display(option.label)
+                    val assistantPick = option.label in recommendations.getOrNull(draft.page).orEmpty()
                     DecisionOption(numberedOption("${index + 1}", display.text), { act(AnswerAction.PickOption, draft.copy(optionIndex = index)) },
-                        detail = option.description, recommended = display.recommended,
-                        selected = option.label in draft.picks[question.question].orEmpty(), enabled = editable,
+                        detail = option.description, recommended = display.recommended || assistantPick,
+                        recommendedText = if (assistantPick) stringResource(R.string.chat_delegate_recommended) else null,
+                        selected = option.label in draft.picks[question.question].orEmpty(),
+                        enabled = editable && (!stoppedWork || question.isDeferChoice(option.label)),
                         multiSelect = question.multiSelect, position = index + 1 to question.options.size, fullText = full)
                 }
                 var otherOpen by rememberSaveable(interaction.id, question.question) { mutableStateOf(false) }
                 if (otherOpen || question.question in draft.other) {
                     JTextField(draft.other[question.question].orEmpty(), {
                         update(draft.copy(other = draft.other + (question.question to it), picks = draft.picks - question.question))
-                    }, label = stringResource(R.string.chat_question_other), modifier = Modifier.fillMaxWidth(), enabled = editable)
-                } else JTextButton(stringResource(R.string.chat_question_other_open), { otherOpen = true }, enabled = editable)
+                    }, label = stringResource(R.string.chat_question_other), modifier = Modifier.fillMaxWidth(), enabled = editable && !stoppedWork)
+                } else JTextButton(stringResource(R.string.chat_question_other_open), { otherOpen = true }, enabled = editable && !stoppedWork)
             }
             "elicitation" -> ElicitationFields(interaction, draft, update, editable)
             "screen" -> if (secret) {
@@ -422,8 +484,8 @@ internal fun InteractionForm(
             }
             else -> Text(stringResource(R.string.chat_request_unsupported))
         }
-        // A password card is the assistant's own: no terminal to go to, nothing to hand back (#1137).
-        if (!interaction.isSecretRun) Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+        // The assistant's own secret cards have no terminal to go to and nothing to hand back (#1137, #3962).
+        if (!interaction.isSecretRun && !interaction.isSecretHandoff) Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
             if (onTerminal != null || showTerminalHelp) JTextButton(if (onTerminal != null) RequestExpiry.terminalLabel.text() else stringResource(R.string.chat_request_terminal_help),
                 { password = ""; if (onTerminal != null) onTerminal() else terminalHelp = true })
             if (ApprovalPolicy.actions(AnswerEntry.Conversation, interaction.kind, false).any { it.id == ApprovalAction.Dismiss }) {
@@ -520,6 +582,45 @@ private fun CommandAskContent(ask: CommandAsk, now: Instant) {
                 else R.string.chat_command_ask_countdown_deny, time)
         }
         Text(line, Modifier.testTag("screen-command-countdown"), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
+    }
+}
+
+internal val Interaction.isManagerWorkCard: Boolean
+    get() = kind == "question" && toolName == "persona_triage"
+
+private fun Question.isDeferChoice(label: String): Boolean =
+    !multiSelect && options.any { it.label == label && it.action == "defer" }
+
+/** The stopped-Agent subset of Web's workCardLocalResolution: bare dismiss, or answers made only from explicit,
+ * single-choice defer options. Missing actions from an older hub never turn into local answers. */
+private fun Interaction.stoppedWorkAnswerAllowed(action: AnswerAction, draft: AnswerDraft): Boolean {
+    val questions = questions.orEmpty()
+    fun deferredPick(question: Question): Boolean {
+        if (!draft.other[question.question].isNullOrBlank()) return false
+        val picks = draft.picks[question.question].orEmpty()
+        return picks.isNotEmpty() && picks.all(question::isDeferChoice)
+    }
+    return when (action) {
+        AnswerAction.Dismiss -> true
+        AnswerAction.PickOption -> questions.getOrNull(draft.page)?.let { question ->
+            question.options.getOrNull(draft.optionIndex)?.let { question.isDeferChoice(it.label) } == true
+        } == true
+        AnswerAction.Advance -> questions.getOrNull(draft.page)?.let(::deferredPick) == true
+        AnswerAction.Submit -> questions.isNotEmpty() && questions.all(::deferredPick)
+        else -> false
+    }
+}
+
+/** Validate the actual post-action wire result, as Web's workCardLocalResolution does. In particular, Advance can
+ * resolve immediately when a retained draft completes every question; a defer on the current page is not enough. */
+private fun Interaction.stoppedWorkResultAllowed(result: AnswerResult): Boolean {
+    val resolution = result.resolution ?: return true
+    if (resolution == Resolution(dismiss = true)) return true
+    val answers = resolution.answers ?: return false
+    if (answers.isEmpty() || resolution != Resolution(answers = answers)) return false
+    val questions = questions.orEmpty()
+    return answers.all { (questionText, answer) ->
+        questions.firstOrNull { it.question == questionText }?.isDeferChoice(answer) == true
     }
 }
 

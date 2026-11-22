@@ -2,6 +2,8 @@
 
 Pitfalls hit while integrating DSH (`docs/integrations/dsh.md`) and node's runtime support (`server/internal/node/runtimes.go`, `integrations/runtime-sdk`, spec in `docs/integrations/runtimes.md`).
 
+- **A native rename can leave an earlier summary intact** (#8902). Grok's `_x.ai/session/rename` persists the current name in `generated_title` and marks it manual, but can keep the earlier `session_summary`. Register the SDK's rename handler, wait for native success, and prefer `generated_title` on every scan. Test a second rename followed by a fresh runtime, as a first rename alone can populate both fields and hide the bug.
+
 - **A session's directory does not attach it to a DSH workspace** (#5485). `sessionController.create({cwd})` leaves it ungrouped even when a workspace has that path. Use the registry's existing `resolveByPath` (exact canonical path, including symlinks), then pass only `{workspaceId}` for a match: DSH rejects both fields together. Only `ENOENT` keeps the controller's supported new-directory creation path; other lookup failures must not create an ungrouped session as if nothing matched. Verify the actual registry/controller and persisted `sessionIds`, not just a fake controller accepting a directory.
 - **DSH approvals / questions are a responder chain, not a broadcast** (`approval/request` and `user-questions/request` are Cordis waterfalls: they run in registration order and stop at whoever doesn't call `next()`).
   The browser link in the chain only withdraws its card when the request's own `signal` ends; the plugin can't withdraw it on the browser's behalf. So the phone and the Web GUI can't "both pop up, first answer wins". The plugin can only go to the phone first,
@@ -64,3 +66,8 @@ Pitfalls hit while integrating DSH (`docs/integrations/dsh.md`) and node's runti
 - **When a pi extension sends itself a `/command`, a command that doesn't exist becomes a message to the model** (2026-11-02, pi auto-update): pi only gives extensions `reload()` inside a command context, so to switch versions the extension
   registers a command and runs it on itself with `pi.sendUserMessage("/persona-reload", {expandPromptTemplates: true})`. pi looks for an extension command first and, if none is found, hands the string to the model as a user message,
   so only send it to sessions that really registered the command (an old pi without `registerCommand` doesn't switch). pi-web rejects reload while it is replying; wait until between turns.
+- **An entry check that compares `argv[1]` with `import.meta.url` as given skips the program under a symlink** (2026-11-22, #12848): Node loads the
+  entry module by its real path but leaves `process.argv[1]` as typed, so on a machine whose home is a symlink (common on Linux) the built-in
+  opencode companion skipped `main()` and exited 0 without a word, and the node started it again every minute. Compare
+  `realpathSync(process.argv[1])` with `realpathSync(fileURLToPath(import.meta.url))`, returning false when `argv[1]` has no file. A test that
+  starts the script through a symlinked directory catches it; one that starts it from the checkout passes unless the checkout's own path has a symlink.

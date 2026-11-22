@@ -11,7 +11,8 @@ Several people work in this repository, each alongside their own Agents. Two peo
    If the work touches UI, settings or defaults, or how something is counted, the claim also has an `Acceptance:` line: criteria written against `docs/design/PRINCIPLES.md`, naming the principles involved and the evidence that will show each is met (screenshots, tests, commands).
 4. **24 hours with no update counts as abandoned**: someone else can post a comment taking it over (with the reason). If you're still working on it, post a progress comment to renew.
 5. **Every PR must link an issue**: write `Fixes #N` / `Closes #N` / `Refs #N` in the description. PRs with no linked issue get a comment from the explicitly dispatched metadata Action and are closed by it.
-6. **Old issue numbers**: `#N` in lines written up to 2026-11-07 (check `git blame`) refers to the previous tracker. Here the same numbers belong to unrelated issues, and issues carried over from it have new numbers. Leave those references as they are; new text cites current numbers.
+6. **A PR with no substantive progress for more than seven days is marked and closed**: the watcher adds `stale`, leaves an English comment explaining the inactivity, then closes it without merging. A new commit, review, contributor comment, newly published failure or automatic repair counts as progress; polling and retrying the same failure do not. Drafts and PRs with a published continuation are not closed. The label and notice must succeed before closing. Work may continue by reopening the PR with an update; this never reuses an old semantic or verification approval. The separate 24-hour issue-claim rule below still applies to ownership, not to closing PRs.
+7. **Old issue numbers**: `#N` in lines written up to 2026-11-07 (check `git blame`) refers to the previous tracker. Here the same numbers belong to unrelated issues, and issues carried over from it have new numbers. Leave those references as they are; new text cites current numbers.
 
 Don't use GitHub's assign (many people don't have triage permission, and it isn't needed), don't use commands like `/claim`, and expiry isn't handled automatically: the comments in the issue are the only source of truth.
 
@@ -173,9 +174,67 @@ EOF
   conflicts are resolved once instead of once per commit, and the push is a plain push with no force while other Agents work in the repository (#5988).
   In a merge "ours" is your branch and "theirs" is `main`, the reverse of a rebase: mind it with `git checkout --ours/--theirs` and `scripts/i18n/apple_l10n.py merge`.
   A rebase is still allowed, for example for a single-commit branch.
-- Merging: once the PR's relevant local verification passes, `scripts/hooks/merge-pr.sh <number>`, not `gh pr merge` directly. It first scans the PR's changed files, commit messages, title and body with this machine's private values, and only squash-merges and deletes the branch if that passes (`docs/operations/testing.md`, "Privacy scan"). PRs do not automatically start hosted CI.
+- Merging: once the PR's relevant local verification passes, `scripts/hooks/merge-pr.sh <number>`, not `gh pr merge` directly. It first scans the PR's changed files, commit messages, title and body with this machine's private values (`docs/operations/testing.md`, "Privacy scan"), checks that the merge adds no fixed-sleep or web font ratchet failure in the files the PR changes (`docs/operations/testing.md`, "Hosted CI"), and only squash-merges and deletes the branch if both pass. PRs do not automatically start hosted CI.
 - `Fixes #N` / `Closes #N`: GitHub closes the issue automatically after merging. `Refs #N`: links without closing (an issue split into several PRs, or only partly fixed).
 - PR titles and bodies are in English (after a squash merge they are the commit on `main`); issues and comments are also in English.
+
+## Merging main: union-merged lists and generated files
+
+`.gitattributes` tells git how to merge two kinds of file that many open PRs change at once. `scripts/test/test_gitattributes.py` keeps its lines true.
+
+- **Union-merged lists** (`merge=union`), such as `server/internal/hub/testdata/route_scopes.txt`: one entry a line, and a test compares the entries exactly (`route_scopes.txt` byte for byte). When your branch and `main` both add lines, git keeps both sides' lines and reports no conflict, but it doesn't sort them, drop a duplicate or notice a line one side deleted. So after merging `main`, rerun the test named in the `# guarded by` comment above the file's line in `.gitattributes`, and fix or regenerate the list when it fails (for the routes, `PERSONA_UPDATE_ROUTE_SCOPES=1 go test ./internal/hub -run TestRouteScopes` in `server/`). In the hand-edited hub allowlists the tests catch a comment line only when it appears twice word for word, so also look for a comment one side reworded that kept its old wording next to the new one. A list joins only when such a test exists. Lists that only shrink stay out, since a union of two neighboring deletions brings both lines back.
+- **Only local merges use `merge=union`**: git applies it when you merge `main` into your branch or rebase on your machine. GitHub's own merge and conflict check ignore it, and so do the **Update branch** button and the web conflict editor, so the PR still shows the conflict. Merge `main` on your machine, rerun the guarding test and push.
+- **Generated files** (`linguist-generated=true`), such as `sdk/go/wire/wire_gen.go`: GitHub folds their diffs, and `.gitattributes` names each one's generator. Only files a generator in this repository writes from the checkout alone are marked. Resolve a conflict in one by regenerating, never by hand: take either side (`git checkout --theirs <file>`), finish merging the sources it is generated from, rerun the generator (for the wire types `python3 scripts/gen/extension_schema.py`) and commit what it writes. Golden files that tests rewrite stay unmarked, since a reviewer reads their diff.
+
+## Screenshots in PRs
+
+Screenshots taken to review a change (light and dark, before and after, UI test captures) belong to the PR, not to the repository:
+once the PR merges nobody opens them again, yet every checkout would carry them. Docs don't link to new screenshots either; describe
+the behavior in words and point to the PR when a picture helps.
+
+- **In the browser**: drag the images into the PR description or a comment; GitHub hosts them.
+- **From the command line** (`gh` cannot upload images): commit them on the PR's own branch in a `pr-assets/<issue>/` directory,
+  delete them in the very next commit, and link
+  `https://github.com/<owner>/<repo>/raw/<sha of the adding commit>/pr-assets/<issue>/<file>.png` from the PR body. The squash
+  merge leaves nothing on `main`, and the PR keeps the commit reachable.
+- **Never on a branch of their own** (`artifacts/*`, `pr-assets/*` or any other name): a default clone fetches every branch, so a
+  branch that holds only pictures costs everyone, long after its PR is closed. On 2026-11-22 the remote had 299 of them (266
+  `artifacts/*`, 33 `pr-assets/*`), and in one clone the objects only they reach took about 940 MiB of the 1.6 GiB all branches
+  reach, against about 490 MiB for the whole history of `main` (`git rev-list --objects --disk-usage`). `scripts/hooks/pre-push`
+  refuses pushing a branch under `artifacts/` or `pr-assets/` (deleting one goes through), but hooks run only where
+  `core.hooksPath` is set, so the rule is what counts.
+
+Only generated README and store images (`docs/assets/`, from `scripts/assets/`) and app resources are committed.
+`scripts/test/test_no_committed_screenshots.py` fails on any other image under `docs/` or under a `screenshots` / `shots` directory.
+The screenshots older docs still link to are listed in `scripts/test/committed_screenshots_baseline.txt`; that list only shrinks.
+
+### A clone without screenshot branches
+
+The old branches stay on the remote for now (images in earlier PRs link to them by name), but a clone doesn't have to carry them.
+In an existing clone (once per clone: its worktrees share the refs and objects), stop fetching them, drop the copies already fetched
+and give the space back:
+
+```sh
+git config --add remote.origin.fetch '^refs/heads/artifacts/*'   # negative refspecs, Git 2.29 or later
+git config --add remote.origin.fetch '^refs/heads/pr-assets/*'
+git for-each-ref --format='delete %(refname)' refs/remotes/origin/artifacts/ refs/remotes/origin/pr-assets/ | git update-ref --stdin
+git gc --prune=now
+```
+
+`git fetch` and `git fetch --prune` leave them out from then on. `--prune=now` deletes unreachable objects at once, so run it only
+while no other Git command works in this clone or its worktrees; plain `git gc` is safe at any time but keeps them two more weeks
+(`gc.pruneExpire`). Objects a local branch or a reflog entry still reaches stay until those go.
+
+A new clone can start with `main` alone and widen to every branch except the screenshot ones later
+(`git clone -c remote.origin.fetch=^…` does not help: `git clone` fetches them anyway):
+
+```sh
+git clone --single-branch --branch main https://github.com/<owner>/<repo>.git
+git remote set-branches origin '*'   # later, inside the clone: every branch, then the two exclusions above
+git config --add remote.origin.fetch '^refs/heads/artifacts/*'
+git config --add remote.origin.fetch '^refs/heads/pr-assets/*'
+git fetch origin
+```
 
 ## Checking PRs with no linked issue
 

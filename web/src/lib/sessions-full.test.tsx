@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Session } from "./types";
 
 const fixture = vi.hoisted(() => ({
-  state: { sessions: {} as Record<string, Session[]>, features: [] as string[], loaded: false },
+  state: { sessions: {} as Record<string, Session[]>, features: [] as string[], loaded: false, seen: {} as Record<string, unknown> },
   listeners: new Set<() => void>(),
   events: new Map<string, Set<(msg?: Record<string, unknown>) => void>>(),
   api: vi.fn(),
@@ -17,7 +17,7 @@ vi.mock("./api", () => {
     constructor(readonly status: number, message: string, readonly body: Record<string, unknown> = {}) { super(message); }
     get code() { return typeof this.body.code === "string" ? this.body.code : undefined; }
   }
-  return { api: fixture.api, credentialOwner: () => fixture.owner, ApiError };
+  return { api: fixture.api, onCredentialChange: () => () => {}, credentialOwner: () => fixture.owner, ApiError, errorText: (e: unknown) => (e instanceof Error ? e.message : String(e)) };
 });
 vi.mock("./store", async () => {
   const { useSyncExternalStore } = await import("react");
@@ -36,7 +36,9 @@ vi.mock("./store", async () => {
     },
   };
 });
-import { useFullAgentSessions } from "./sessions";
+import { retryFullAgentSessions, useFullAgentSessions } from "./sessions";
+import { runtimeIdentity } from "./runtime-list";
+import { newMark } from "./seen-outbox";
 import { ApiError } from "./api";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -50,14 +52,16 @@ const deferred = () => {
   return { promise, resolve, reject };
 };
 function Probe() {
-  const { sessions, loaded } = useFullAgentSessions();
-  return <output data-loaded={loaded} data-states={sessions.map((s) => s.state).join(",")} data-titles={sessions.map((s) => s.title).join(",")}>{sessions.map((s) => s.session_id).join(",")}</output>;
+  const { sessions, loaded, error } = useFullAgentSessions();
+  return <output data-loaded={loaded} data-error={error} data-states={sessions.map((s) => s.state).join(",")} data-titles={sessions.map((s) => s.title).join(",")}>{sessions.map((s) => s.session_id).join(",")}</output>;
 }
 const publish = (patch: Partial<typeof fixture.state>) => {
   fixture.state = { ...fixture.state, ...patch };
   fixture.listeners.forEach((listener) => listener());
 };
 const push = (event: string, msg?: Record<string, unknown>) => fixture.events.get(event)?.forEach((listener) => listener(msg));
+const pagingFeatures = ["sessions_list", "sessions_lookup"];
+const resetList = () => publish({ features: [], loaded: false });
 const advance = async (ms: number) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
 let host: HTMLDivElement;
 let root: Root | undefined;
@@ -68,7 +72,7 @@ const resolve = async (request: ReturnType<typeof deferred>, sessions: Session[]
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
-  fixture.state = { sessions: {}, features: ["sessions_list", "sessions_lookup"], loaded: true };
+  fixture.state = { sessions: {}, features: pagingFeatures, loaded: true, seen: {} };
   fixture.owner = "first-login";
   fixture.api.mockReset();
   host = document.createElement("div");
@@ -208,7 +212,7 @@ describe("complete session snapshots for the sidebar fallback", () => {
     fixture.api.mockReturnValueOnce(stale.promise).mockResolvedValue({ sessions: [row("new-epoch")] });
     await mount();
     const signal = fixture.api.mock.calls[0][1].signal as AbortSignal;
-    await act(async () => { publish({ loaded: false }); publish({ loaded: true }); });
+    await act(async () => { resetList(); publish({ features: pagingFeatures, loaded: true }); });
     expect(signal.aborted).toBe(true);
     expect(fixture.api).toHaveBeenCalledTimes(2);
     await resolve(stale, [row("old-epoch")]);
@@ -221,7 +225,7 @@ describe("complete session snapshots for the sidebar fallback", () => {
     await mount();
     await act(async () => {
       root!.unmount(); root = undefined;
-      if (change === "reset") { publish({ loaded: false }); publish({ loaded: true }); }
+      if (change === "reset") { resetList(); publish({ features: pagingFeatures, loaded: true }); }
       else { fixture.owner = "second-login"; if (change === "credential") publish({ sessions: {} }); }
     });
     await mount();
@@ -277,7 +281,7 @@ describe("complete session snapshots for the sidebar fallback", () => {
   });
 
   it("keeps an old hub's full store and does not fetch a second list", async () => {
-    fixture.state = { sessions: { demo: [row("legacy"), row("assistant", { assistant: true })] }, features: [], loaded: true };
+    fixture.state = { sessions: { demo: [row("legacy"), row("assistant", { assistant: true })] }, features: [], loaded: true, seen: {} };
     await mount();
     expect(host.textContent).toBe("legacy");
     expect(host.querySelector("output")!.dataset.loaded).toBe("true");
@@ -300,6 +304,17 @@ describe("complete session snapshots for the sidebar fallback", () => {
     expect(fixture.state.sessions.demo).toEqual([row("bounded-page")]);
   });
 
+  it("draws an agent seen on this page seen in its last read, the store holding no row of it (lib/seen-outbox.ts)", async () => {
+    // a paging hub keeps no complete row in the store: the complete list's own read (pins, By repository) still had the
+    // agent Unread after it was opened, and its quick filters' numbers and groups counted it until the list read again
+    const unread = row("tail", { status: "done", state: "unread", updated_at: "2025-12-31T23:59:00Z", seen_at: "0001-01-01T00:00:00Z" });
+    fixture.api.mockResolvedValue({ sessions: [row("other"), unread] });
+    await mount();
+    expect(host.querySelector("output")!.dataset.states).toBe(",unread");
+    await act(async () => { publish({ seen: { [runtimeIdentity(unread)]: newMark(unread, Date.now())! } }); });
+    expect(host.querySelector("output")!.dataset.states).toBe(",idle");
+  });
+
   it("reflects actions on fallback-only rows without replacing newer HTTP rows with old details", async () => {
     const cached = row("cached", { title: "Old cached title" });
     fixture.state.sessions = { demo: [cached] };
@@ -312,14 +327,29 @@ describe("complete session snapshots for the sidebar fallback", () => {
     expect(host.querySelector("output")!.dataset.titles).toBe("Current title,Renamed");
   });
 
-  it("waits for initial hub loading before requesting the fallback snapshot", async () => {
+  it("starts paging on hello and publishes both pages together after the first refresh", async () => {
+    fixture.state.features = [];
     fixture.state.loaded = false;
-    fixture.api.mockResolvedValue({ sessions: [row("ready")] });
+    const { hub } = pagingHub(201);
+    const read = fixture.api.getMockImplementation()!;
+    let finishPage!: () => void;
+    const heldPage = new Promise<void>((resolve) => { finishPage = resolve; });
+    fixture.api.mockImplementation(async (path: string) => {
+      if (path.includes("cursor=")) await heldPage;
+      return read(path);
+    });
     await mount();
     expect(fixture.api).not.toHaveBeenCalled();
+    await act(async () => { publish({ features: pagingFeatures }); });
+    expect(fixture.api).toHaveBeenCalledTimes(2);
+    expect(hub.baselines).toBe(1);
+    expect(host.textContent).toBe("");
     await act(async () => { publish({ loaded: true }); });
-    expect(host.textContent).toBe("ready");
-    expect(fixture.api).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toBe("");
+    await act(async () => { finishPage(); });
+    expect(host.textContent!.split(",")).toHaveLength(201);
+    expect(host.textContent).toContain("agent-200");
+    expect(hub.baselines).toBe(2);
   });
 
   it.each(["sessions_list", "session", "sessions", "sessions_delta", "hello"])("refreshes on %s without clearing visible rows", async (event) => {
@@ -423,7 +453,7 @@ describe("complete session snapshots for the sidebar fallback", () => {
     await act(async () => { push("sessions_list"); });
     expect(fixture.api).toHaveBeenCalledTimes(1);
     await act(async () => {
-      if (end === "reset") publish({ loaded: false });
+      if (end === "reset") resetList();
       else { root!.unmount(); root = undefined; }
     });
     await advance(10_000);
@@ -438,6 +468,49 @@ describe("complete session snapshots for the sidebar fallback", () => {
     expect(fixture.api).toHaveBeenCalledTimes(2);
     expect(host.textContent).toBe("previous");
     expect(host.querySelector("output")!.dataset.loaded).toBe("true");
+  });
+
+  it("says why an initial read failed, until a read loads it (audit item 4: the list stayed blank)", async () => {
+    fixture.api.mockRejectedValueOnce(new Error("HTTP 500")).mockResolvedValueOnce({ sessions: [row("recovered")] });
+    await mount();
+    expect(host.querySelector("output")!.dataset.loaded).toBe("false");
+    expect(host.querySelector("output")!.dataset.error).toBe("HTTP 500");
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(host.textContent).toBe("recovered");
+    expect(host.querySelector("output")!.dataset.error).toBe("");
+  });
+
+  it("reads again at once on Retry, loading (no error) until the answer, and keeps one retry timer", async () => {
+    const again = deferred();
+    fixture.api.mockRejectedValueOnce(new Error("HTTP 500")).mockReturnValueOnce(again.promise);
+    await mount();
+    expect(host.querySelector("output")!.dataset.error).toBe("HTTP 500");
+    await act(async () => { retryFullAgentSessions(); });
+    expect(fixture.api).toHaveBeenCalledTimes(2);
+    expect(host.querySelector("output")!.dataset.error).toBe("");
+    expect(host.querySelector("output")!.dataset.loaded).toBe("false");
+    await resolve(again, [row("recovered")]);
+    expect(host.textContent).toBe("recovered");
+    // the automatic retry it replaced does not read a third time
+    await advance(10_000);
+    expect(fixture.api).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves a loaded list's rows and no error when a later read fails", async () => {
+    fixture.api.mockResolvedValueOnce({ sessions: [row("previous")] }).mockRejectedValueOnce(new Error("HTTP 500"));
+    await mount();
+    await act(async () => { push("sessions_list"); });
+    await advance(3_000);
+    expect(host.textContent).toBe("previous");
+    expect(host.querySelector("output")!.dataset.error).toBe("");
+  });
+
+  it("never says an old hub's pushed list failed", async () => {
+    fixture.state = { ...fixture.state, features: [], sessions: { demo: [row("pushed")] } };
+    await mount();
+    expect(host.textContent).toBe("pushed");
+    expect(host.querySelector("output")!.dataset.error).toBe("");
+    expect(fixture.api).not.toHaveBeenCalled();
   });
 
   it("retries an initial failure even when the hub sends no further hints", async () => {
@@ -457,12 +530,12 @@ describe("complete session snapshots for the sidebar fallback", () => {
     await act(async () => { push("sessions_list"); });
     await advance(3_000);
     const signal = fixture.api.mock.calls[1][1].signal as AbortSignal;
-    await act(async () => { publish({ loaded: false }); });
+    await act(async () => { resetList(); });
     expect(signal.aborted).toBe(true);
     expect(host.textContent).toBe("");
     await resolve(stale, [row("stale")]);
     expect(host.textContent).toBe("");
-    await act(async () => { publish({ loaded: true }); });
+    await act(async () => { publish({ features: pagingFeatures, loaded: true }); });
     await resolve(next, [row("new-login")]);
     expect(host.textContent).toBe("new-login");
   });
@@ -601,4 +674,15 @@ describe("a complete copy on a paging hub", () => {
     expect([hub.baselines, hub.deltas]).toEqual([4, 2]);
     expect(host.querySelector("output")!.dataset.titles).toContain("round 4");
   });
+});
+
+it("filters hidden rows before folding and restores them when the rule is disabled", async () => {
+  const parent = row("parent", { hidden_by_directory: true });
+  const child = row("child", { folded_under: "parent" });
+  fixture.state = { sessions: { demo: [parent, child] }, features: [], loaded: true, seen: {} };
+  await mount();
+  expect(host.textContent).toBe("child");
+  await act(async () => publish({ sessions: { demo: [{ ...parent, hidden_by_directory: false }, child] } }));
+  expect(host.textContent).toBe("parent");
+  expect(fixture.api).not.toHaveBeenCalled();
 });

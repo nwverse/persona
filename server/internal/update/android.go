@@ -167,13 +167,8 @@ func SyncAndroid(ctx context.Context, client *http.Client, base, dir string) (An
 // githubAndroidManifest finds the newest stable GitHub release with android.json when the latest release has none.
 // Other update sources keep their existing meaning: a missing android.json publishes nothing.
 func githubAndroidManifest(ctx context.Context, client *http.Client, base string) (string, []byte, error) {
-	const latest = "/releases/latest/download"
-	u, err := url.Parse(base)
-	if err != nil || u.Scheme != "https" || u.Host != "github.com" || !strings.HasSuffix(u.Path, latest) {
-		return "", nil, nil
-	}
-	repo := strings.TrimSuffix(u.Path, latest)
-	if len(strings.Split(strings.Trim(repo, "/"), "/")) != 2 {
+	repo := githubLatestRepo(base)
+	if repo == "" {
 		return "", nil, nil
 	}
 	var releases []struct {

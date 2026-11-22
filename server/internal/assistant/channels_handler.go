@@ -24,7 +24,7 @@ func (s *Service) ChannelUnbound(_ context.Context, p ChannelUnbound) error {
 
 // ChannelReceive is channels.receive: the owner's message from a plugin's channel, taken once (the chat apps deliver
 // some again) and handled in the background.
-func (s *Service) ChannelReceive(_ context.Context, p ChannelReceive) error {
+func (s *Service) ChannelReceive(ctx context.Context, p ChannelReceive) error {
 	var m channel.Message
 	if err := json.Unmarshal(p.Message, &m); err != nil {
 		return badRequest(err)
@@ -32,14 +32,17 @@ func (s *Service) ChannelReceive(_ context.Context, p ChannelReceive) error {
 	if m.ID == "" {
 		return badRequest(errors.New("a message without an id"))
 	}
-	first, err := s.claimChannelMessage(p.Channel, m.ID)
+	if m.Owner != nil && !*m.Owner {
+		return badRequest(errors.New(i18n.T(s.botLang(ctx), "assistant-channels_plugin.mention_owner_required")))
+	}
+	admission, err := s.admitChannelMessage(p.Channel, m)
 	if err != nil {
 		return &rpc.Error{Code: CodeTryAgain, Message: err.Error()} // the hub hands it over again
 	}
-	if !first {
+	if admission == nil {
 		return nil // delivered again
 	}
-	go s.channelReceive(p.Channel, m, p.Action)
+	go admission.run(s, m, p.Action)
 	return nil
 }
 
@@ -62,6 +65,20 @@ func (s *Service) InteractionAnnounced(_ context.Context, p InteractionAnnounced
 	go s.feishuInteraction(p.Interaction)
 	go s.channelInteraction(p.Interaction)
 	go s.taskAsks(p.Interaction)
+	s.boardChanged()
+}
+
+// heldAnnounced notes card id as announced without telling the Feishu bot or the channels: an escalation push tiering
+// holds back (ask_route.go ringAsks) is the Needs you list's, and the channels' catch-up must not post it after all.
+// The board shows it at once.
+func (s *Service) heldAnnounced(id string) {
+	c := &s.chans
+	c.mu.Lock()
+	if c.announced == nil {
+		c.announced = map[string]bool{}
+	}
+	c.announced[id] = true
+	c.mu.Unlock()
 	s.boardChanged()
 }
 

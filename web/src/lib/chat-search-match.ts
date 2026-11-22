@@ -83,6 +83,10 @@ export function searchFields(item: Item): [SearchCategory, string][] {
     case "recap":
       add("event", item.text);
       break;
+    case "visualization":
+      // the card's header is all of it the chat shows as words; the fragment's bytes are not searched
+      add("event", item.visualization?.title);
+      break;
     default:
       return out;
   }
@@ -110,7 +114,13 @@ export function searchChat(items: Item[], query: string): ChatSearchResults {
   const find = finder(needle);
   const seen = new Set<string>();
   const hits: ChatSearchHit[] = [];
-  for (const item of sortItems(items).reverse()) {
+  const unique = new Map<string, Item>();
+  for (const item of items) {
+    // ChatView puts live items before cached fold steps: an exact duplicate keeps that first copy; a newer seq wins below.
+    const key = `${item.id}\0${item.seq}`;
+    if (!unique.has(key)) unique.set(key, item);
+  }
+  for (const item of sortItems([...unique.values()]).reverse()) {
     if (seen.has(item.id)) continue;
     seen.add(item.id);
     for (const [category, text] of searchFields(item)) {

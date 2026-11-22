@@ -1,9 +1,11 @@
 package kb
 
 import (
+	"cmp"
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -158,7 +160,8 @@ func (e *Engine) TagItems(ctx context.Context, max int) (more bool, err error) {
 		batch := todo[:min(tagItemsBatch, len(todo))]
 		todo = todo[len(batch):]
 		byID := map[string]*Item{}
-		in := prompts.KBItemsInput{Projects: e.knownProjects(), Tags: e.TopTags(40)}
+		owner := e.knowledgeOwner()
+		in := prompts.KBItemsInput{Language: owner.Language, Projects: e.knownProjects(), Tags: e.TopTags(40)}
 		for _, it := range batch {
 			key := it.Kind + "/" + it.ID
 			byID[key] = it
@@ -174,7 +177,7 @@ func (e *Engine) TagItems(ctx context.Context, max int) (more bool, err error) {
 		}
 		var out itemTags
 		cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-		err := e.modelFor("kb.items").JSONMax(cctx, prompts.RenderKBItems(prompts.KBOwner{Owner: e.ownerName()}), prompts.RenderKBItemsInput(in), 6000, &out)
+		err := e.modelFor("kb.items").JSONMax(cctx, prompts.RenderKBItems(owner), prompts.RenderKBItemsInput(in), 6000, &out)
 		cancel()
 		if err != nil {
 			if deferred(ctx, err) {
@@ -251,9 +254,7 @@ func (e *Engine) Search(query string, messages bool, limit int, skip ...func(lin
 	// ExtraDirs, the message days newest first, then the Moments archive (moments.go), thousands of posts read after
 	// everything else so they never crowd it out.
 	o := e.searchFiles()
-	for _, d := range o.files {
-		s.scan(d.path)
-	}
+	s.scanAll(o.files)
 	for _, dir := range e.ExtraDirs {
 		if s.full() {
 			break
@@ -272,19 +273,9 @@ func (e *Engine) Search(query string, messages bool, limit int, skip ...func(lin
 		})
 	}
 	if messages {
-		for _, d := range o.days {
-			if s.full() {
-				break
-			}
-			s.scan(d.path)
-		}
+		s.scanAll(o.days)
 	}
-	for _, d := range o.moments {
-		if s.full() {
-			break
-		}
-		s.scan(d.path)
-	}
+	s.scanAll(o.moments)
 	return s.hits
 }
 
@@ -339,21 +330,14 @@ func (e *Engine) SearchKind(query, kind string, messages bool, limit int, skip .
 		files = append(files, ranked{d, r})
 	}
 	sort.SliceStable(files, func(i, j int) bool { return files[i].rank < files[j].rank })
-	for _, f := range files {
-		if s.full() {
-			break
-		}
-		s.scan(f.d.path)
+	inOrder := make([]*dirEnt, len(files))
+	for i, f := range files {
+		inOrder[i] = f.d
 	}
+	s.scanAll(inOrder)
 	if messages && kind == KindChat {
-		for _, d := range o.days {
-			if s.full() {
-				break
-			}
-			if strings.HasPrefix(d.rel, kind+"/") {
-				s.scan(d.path)
-			}
-		}
+		// Every day is a chat's: o.days are the files under a messages/ directory, which only chats have.
+		s.scanAll(o.days, func(d *dirEnt) bool { return strings.HasPrefix(d.rel, kind+"/") })
 	}
 	return s.hits
 }
@@ -368,6 +352,8 @@ type searcher struct {
 	limit     int
 	hits      []Hit
 	skip      []func(line string) bool // lines never to give (Search's skip)
+	// filter is the search index asked this query (search_index.go); nil without one, and every file is read.
+	filter *searchFilter
 }
 
 // newSearcher starts a search; nil when there is nothing to find. Files come through Find's cache (findCache.text): a
@@ -384,8 +370,56 @@ func (e *Engine) newSearcher(query string, limit int, recordings bool) *searcher
 	if recordings {
 		s.recording = e.Store.recordingSearchView()
 	}
+	s.filter = e.searchFilter(s.ws)
 	s.gen = e.find.begin()
 	return s
+}
+
+// scanAll scans the files of the data dir in l, in order, until the limit; only those keep says yes to, when it is
+// given. With a search index the files it rules out are passed over without being read: a stretch of files at a
+// time is looked at (a stat each, in parallel), a short one first and longer ones as the search goes on without
+// filling the limit, then the files left of it are scanned in order. A query no file has costs the stats alone.
+func (s *searcher) scanAll(l []*dirEnt, keep ...func(*dirEnt) bool) {
+	want := func(d *dirEnt) bool { return len(keep) == 0 || keep[0](d) }
+	if s.filter == nil {
+		for _, d := range l {
+			if s.full() {
+				return
+			}
+			if want(d) {
+				s.scan(d.path)
+			}
+		}
+		return
+	}
+	workers := max(1, min(8, runtime.NumCPU()))
+	var out []bool
+	for n := 64; len(l) > 0 && !s.full(); n = min(2*n, 8192) {
+		part := l[:min(n, len(l))]
+		l = l[len(part):]
+		out = append(out[:0], make([]bool, len(part))...)
+		each(len(part), workers, func(i int) {
+			d := part[i]
+			if !want(d) {
+				out[i] = true
+				return
+			}
+			if recordingViewFile(d.rel) {
+				return // not read from disk (searchText): the index does not have it
+			}
+			// A file that is gone is left to scan, which finds it so.
+			st := statFile(d.path)
+			out[i] = st.ok && s.filter.skip(d.rel, st)
+		})
+		for i, d := range part {
+			if s.full() {
+				return
+			}
+			if !out[i] {
+				s.scan(d.path)
+			}
+		}
+	}
 }
 
 func (s *searcher) full() bool { return len(s.hits) >= s.limit }
@@ -461,10 +495,10 @@ func (e *Engine) List(kind, tag string) []Entry {
 	}
 	switch kind {
 	case KindProject:
+		catalog := e.projectSourceLookup()
 		for _, p := range e.Store.Projects() {
 			if has(p.Tags) && p.Live() {
-				out = append(out, Entry{Kind: kind, ID: p.Slug, Name: p.Name, OneLine: p.OneLine, Importance: p.Importance,
-					Relevance: p.Relevance, Tags: p.Tags, Updated: p.Updated, Extra: p.Kind + " · " + p.Status})
+				out = append(out, e.projectEntry(p, catalog))
 			}
 		}
 	case KindChat:
@@ -484,8 +518,7 @@ func (e *Engine) List(kind, tag string) []Entry {
 	case KindDoc, KindMeeting, KindEvent:
 		for _, it := range e.Store.Items(kind) {
 			if has(it.Tags) && it.Title != "" {
-				out = append(out, Entry{Kind: kind, ID: it.ID, Name: it.Title, OneLine: it.Note, Importance: it.Importance,
-					Relevance: it.Relevance, Tags: it.Tags, Updated: it.At, Extra: it.URL})
+				out = append(out, itemEntry(kind, it))
 			}
 		}
 	case KindRecording:
@@ -501,23 +534,54 @@ func (e *Engine) List(kind, tag string) []Entry {
 	return out
 }
 
-// recordingEntry is a recording as lists show it: Extra is the device it was made on.
+// itemEntry is a document, meeting or event of kind as lists and links show it: Extra is its link, Source the connector
+// that supplied it (#8872).
+func itemEntry(kind string, it *Item) Entry {
+	return Entry{Kind: kind, ID: it.ID, Name: it.Title, OneLine: it.Note, Importance: it.Importance,
+		Relevance: it.Relevance, Tags: it.Tags, Updated: it.At, Extra: it.URL, Source: it.Source}
+}
+
+// recordingEntry is a recording as lists show it: Extra is the device it was made on, RecordingKind its kind (a
+// recording stored before kinds is a note, as an upload without one is), MeetingID its imported meeting's id (#8872).
 func recordingEntry(r *Recording) Entry {
-	return Entry{Kind: KindRecording, ID: r.ID, Name: r.Name, OneLine: r.OneLine, Importance: r.Importance,
-		Relevance: r.Relevance, Tags: r.Tags, Updated: r.StartedAt, Extra: r.Device}
+	e := Entry{Kind: KindRecording, ID: r.ID, Name: r.Name, OneLine: r.OneLine, Importance: r.Importance,
+		Relevance: r.Relevance, Tags: r.Tags, Updated: r.StartedAt, Extra: r.Device, RecordingKind: cmp.Or(r.Kind, RecordingNote)}
+	if r.ImportedMeeting != nil {
+		e.MeetingID = r.ImportedMeeting.ID
+	}
+	return e
 }
 
 // Prompt is a short Markdown digest of the most important projects and chats, for the assistant's live snapshot.
 func (e *Engine) Prompt(projects, chats int) string {
-	var d prompts.KBDigest
+	d := prompts.KBDigest{Language: e.knowledgeOwner().Language}
+	// What has ended stays out (#9427): a done project, one whose chats have all ended at their source though it is not
+	// finished yet, and a chat that ended there (a pull request merged or closed).
 	for _, p := range e.List(KindProject, "") {
-		if len(d.Projects) >= projects || strings.HasSuffix(p.Extra, "done") || strings.HasSuffix(p.Extra, "ignored") {
+		if len(d.Projects) >= projects {
+			break
+		}
+		if strings.HasSuffix(p.Extra, "done") || strings.HasSuffix(p.Extra, "ignored") {
 			continue
+		}
+		if pr, ok := e.Store.Project(p.ID); ok {
+			if ended, _ := e.projectEnded(pr); ended {
+				continue
+			}
+		}
+		if p.ProjectMode == referenceOnly || p.Freshness != nil && p.Freshness.Fields["one_line"].NeedsReview {
+			p.OneLine = ""
 		}
 		d.Projects = append(d.Projects, digestEntry(p))
 	}
 	for _, c := range e.List(KindChat, "") {
-		if len(d.Chats) >= chats || c.Importance == "P3" {
+		if len(d.Chats) >= chats {
+			break
+		}
+		if c.Importance == "P3" {
+			continue
+		}
+		if ch, ok := e.Store.Chat(c.ID); ok && ch.Ended() {
 			continue
 		}
 		d.Chats = append(d.Chats, digestEntry(c))

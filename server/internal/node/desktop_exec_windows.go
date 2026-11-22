@@ -58,5 +58,9 @@ func desktopClaudeProgram(path string) (string, []string, error) {
 }
 
 func prepareDesktopChild(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW, HideWindow: true}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NO_WINDOW
+	cmd.SysProcAttr.HideWindow = true
 }

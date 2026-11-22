@@ -85,12 +85,15 @@ describe("an ask, as the hub sends it", () => {
     expect([decide, { ...decide, outcome: "cannot" }, { ...decide, outcome: undefined }].map(askTone)).toEqual(["attention", "red", "green"]);
   });
 
-  it("puts a stopped to-do that waits on the user with Awaiting review, ahead of what runs", () => {
+  it("puts a stopped owner decision with Waiting for you, ahead of what runs", () => {
     const asked = todo();
-    expect(awaitsReview(asked, "follow_up")).toBe(true);
+    expect(awaitsReview(asked, "follow_up")).toBe(false);
     expect(awaitsReview(asked, "working")).toBe(false); // its agent is at it again
     expect(awaitsReview(todo({ ask: undefined }), "follow_up")).toBe(false);
-    expect(boardSectionOf({ todo: asked, status: "follow_up" })).toBe("review");
+    expect(boardSectionOf({ todo: asked, status: "follow_up" })).toBe("waiting");
+    const review = todo({ ask: { ...decide, outcome: undefined } });
+    expect(awaitsReview(review, "follow_up")).toBe(true);
+    expect(boardSectionOf({ todo: review, status: "follow_up" })).toBe("review");
     const working = todo({ id: "t2", ask: undefined, created_at: new Date(Date.now() + 1000).toISOString(), agents: [{ machine_id: "m1", session_id: "s1", linked_at: now }] });
     // its agent working (t2), and the asked one's stopped and seen (t1)
     const lookup = (_m: string, s: string) => ({ machine_id: "m1", session_id: s, status: s === "s1" ? "working" : "idle", state: s === "s1" ? "working" : "idle" }) as never;
@@ -118,6 +121,16 @@ describe("a to-do's row", () => {
     expect(api.mock.calls.some(([path]) => path === "/todos")).toBe(true); // read again: the ask is gone
     expect(askRow()).toBeNull();
     expect(toast).toHaveBeenCalledWith("已按推荐来", "ok");
+  });
+
+  it("settles a recorded decision whose Agent is unavailable", async () => {
+    listed = [todo()]; // keep the settled row visible after refresh
+    api.mockImplementation(async (path: string) => path.endsWith("/accept") ? { ok: true, delivered: "none" } : path === "/todos" ? { todos: listed } : {});
+    await drawList([todo()]);
+    act(() => askButton()!.click());
+    await flush();
+    expect(host.querySelector("[data-ask-done=recorded]")?.textContent).toBe("已记下，Agent 已停，督办会接手");
+    expect(toast).toHaveBeenCalledWith("已记下，Agent 已停，督办会接手", "ok");
   });
 
   it("an earlier round already answered says so and reads the to-dos again", async () => {

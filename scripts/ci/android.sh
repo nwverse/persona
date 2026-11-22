@@ -9,14 +9,18 @@ usage() {
     '       scripts/ci/android.sh --help' \
     'Requires Bash, Python 3, timeout (or gtimeout), JAVA_HOME pointing to JDK 21,' \
     'and ANDROID_HOME (or ANDROID_SDK_ROOT) pointing to an installed Android SDK.' \
-    'Also requires rustup: core:rustcore tests build the shared Rust core (native/app-core).' \
-    'SDK setup: sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "platform-tools"' \
+    'Swift builds the source-pinned Refract CLI for the explicit About Version regeneration check in lane 0.' \
+    'The check fetches that exact public commit, verifies its deterministic source archive and never skips.' \
+    'Also requires rustup and NDK 29.0.14206865: core:rustcore tests build the host JNI library;' \
+    'core:rustcore-android packages arm64-v8a and x86_64 for the debug APK.' \
+    'SDK setup: sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "platform-tools" "ndk;29.0.14206865"' \
+    'Install the Android Rust targets: rustup target add --toolchain 1.98.0 aarch64-linux-android x86_64-linux-android' \
     'Accept SDK licenses using sdkmanager --licenses if required by your SDK tools.' \
     'Toolchain versions are read from android/gradle/libs.versions.toml.' \
     'No arguments runs the original complete verification. lint-build-test-0 owns checker tests,' \
     'translation/token checks, all-module lint, the debug APK and feature test shard 0; test-1' \
     'runs core, feature shard 1, platform and app tests. Together the two lanes run every' \
-    'included module once using its all-variant test lifecycle task.' \
+    'included module once using its all-variant test lifecycle task (release unit tests included).' \
     '--profile writes Gradle timing reports to android/build/reports/profile/.' \
     'No instrumentation/device tests or release signing.' \
     'ANDROID_CI_TIMEOUT_SECONDS: timeout per check (default 3600; kill grace 30s).' \
@@ -93,6 +97,11 @@ export ANDROID_HOME="$SDK" ANDROID_SDK_ROOT="$SDK"
 # API 37 is distributed as android-37.0, unlike older platforms' android-<API>.
 [[ -f $SDK/platforms/android-$COMPILE_SDK.0/android.jar || -f $SDK/platforms/android-$COMPILE_SDK/android.jar ]] || fail "Install SDK platform android-$COMPILE_SDK.0"
 [[ -d $SDK/build-tools/$BUILD_TOOLS ]] || fail "Install SDK build-tools $BUILD_TOOLS"
+[[ -d $SDK/ndk/29.0.14206865 ]] || fail 'Install NDK 29.0.14206865 for the Android shared core'
+rustup target list --installed --toolchain 1.98.0 | grep -Fx aarch64-linux-android >/dev/null ||
+  rustup target add --toolchain 1.98.0 aarch64-linux-android || fail 'Cannot install the arm64 Android Rust target'
+rustup target list --installed --toolchain 1.98.0 | grep -Fx x86_64-linux-android >/dev/null ||
+  rustup target add --toolchain 1.98.0 x86_64-linux-android || fail 'Cannot install the x86_64 Android Rust target'
 [[ -f $ROOT/android/gradlew && -f $ROOT/android/gradle/wrapper/gradle-wrapper.jar ]] || fail 'The Gradle wrapper is missing'
 # :core:rustcore's tests load a host build of the shared Rust core (native/app-core).
 source "$ROOT/scripts/ci/common.sh"
@@ -129,22 +138,34 @@ run_check() {
 
 # The checker tests and resource checks run in the lane that runs lint.
 if [[ $LANE == full || $LANE == lint-build-test-0 ]]; then
+  cd "$ROOT"
+  run_check 'Refract About Version regeneration' python3 -I scripts/app/refract_about_version.py check --download
+  run_check 'Refract About Build regeneration' python3 -I scripts/app/refract_about_build.py check --download
   cd "$ROOT/scripts/ci"
   run_check 'Android shard coverage tests' python3 -B test_android_shards.py
   cd "$ROOT/scripts/app"
+  run_check 'Refract About Version checker tests' python3 -B test_refract_about_version.py
+  run_check 'Refract About Build checker tests' python3 -B test_refract_about_build.py
   run_check 'translation checker tests' python3 -B test_android_i18n_check.py
   run_check 'token checker tests' python3 -B test_android_token_baseline.py
+  run_check 'motion checker tests' python3 -B test_android_motion_baseline.py
   run_check 'slot order checker tests' python3 -B test_android_slot_order.py
   run_check 'translation resources and literal baseline' python3 -B android_i18n_check.py
   run_check 'design token baseline' python3 -B android_token_baseline.py
+  run_check 'motion literal baseline' python3 -B android_motion_baseline.py
   run_check 'design-system slot order' python3 -B android_slot_order.py
   run_check 'generated design tokens' python3 -B "$ROOT/scripts/assets/gen_tokens.py" --check \
     --kotlin "$ROOT/android/core/designsystem/src/main/kotlin/persona/core/designsystem/Tokens.kt"
   run_check 'icon meanings' python3 -B "$ROOT/scripts/assets/gen_icon_meanings.py" --check
 fi
 
+# The commit About shows: an explicit value, else the runner's public GITHUB_SHA, else unknown. Never read from git here.
+BUILD_COMMIT=${PERSONA_BUILD_COMMIT:-${GITHUB_SHA:-unknown}}
+
 cd "$ROOT/android"
 # Unqualified lint still covers every module; full preserves the original selectors.
+# persona.releaseUnitTests adds the release unit tests (app, core:data) that a local test leaves out, so each
+# module's test still runs every variant here.
 # --continue collects independent failures, never turns them into success.
 # Do not stop shared daemons, update baselines, exclude tests or depend on local.properties.
 if [[ ${#TASKS[@]} -gt 0 ]]; then
@@ -155,6 +176,8 @@ if [[ ${#TASKS[@]} -gt 0 ]]; then
     -PpersonaApplicationId=com.example.persona \
     -PpersonaGoogleOAuthScheme=persona.oauth.unset \
     -PpersonaRepoRoot="$ROOT" \
+    -PpersonaBuildCommit="$BUILD_COMMIT" \
+    -Ppersona.releaseUnitTests=true \
     ${PROFILE[@]+"${PROFILE[@]}"} "${TASKS[@]}"
 else
   printf 'Android CI: no modules in lane %s; no Gradle default tasks invoked\n' "$LANE"

@@ -14,25 +14,158 @@ import (
 
 // ---- what the assistant sees ----
 
-// snapshotTasks are the tasks opened from assistant conversations that are going on or ended in the last day.
-func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.SnapshotTask {
-	var list []Todo
-	for _, t := range s.todosOf(ctx, "*") {
-		if t.Origin != "" && (t.DoneAt == nil || time.Since(*t.DoneAt) < 24*time.Hour) && time.Since(t.UpdatedAt) < 7*24*time.Hour {
+// snapshotOpenTodoLimit, snapshotTaskLimit: how many rows of the open to-do index and of the task details one
+// conversation's snapshot shows. The cached snapshot keeps them all, so a conversation's own come first whatever the
+// others have (scopeSnapshot).
+const (
+	snapshotOpenTodoLimit = 100
+	snapshotTaskLimit     = 12
+)
+
+// snapshotOpenTodos is the compact index that keeps every ordinary-sized open todo discoverable: all of them, newest
+// first, and how many (scopeSnapshot shows a conversation the first snapshotOpenTodoLimit of its own). A failed start
+// is open as long as the app's To-dos count it open (snapshotFailedStarts), and marked as one.
+func (s *Service) snapshotOpenTodos(ctx context.Context, web string) ([]prompts.SnapshotOpenTodo, int) {
+	if s.ensureTodosLoaded(ctx) != nil {
+		return nil, 0
+	}
+	asked := s.askedInSnapshot(ctx)
+	s.todos.mu.RLock()
+	list := make([]Todo, 0, len(s.todos.todos))
+	var failed []Todo
+	for _, t := range s.todos.todos {
+		switch {
+		case asked[t.ID]:
+		case t.DoneAt == nil:
+			list = append(list, copyTodoLocked(t))
+		case t.failedStart():
+			failed = append(failed, copyTodoLocked(t))
+		}
+	}
+	var all []listedTodo
+	if len(failed) > 0 { // what a failed start is superseded by is read across every to-do, as the app's triage reads it
+		all = make([]listedTodo, 0, len(s.todos.todos))
+		for _, t := range s.todos.todos {
+			all = append(all, listedTodo{Todo: copyTodoLocked(t)})
+		}
+	}
+	s.todos.mu.RUnlock()
+	open := snapshotFailedStarts(failed, all, time.Now())
+	for _, t := range failed {
+		if open[t.ID] {
 			list = append(list, t)
 		}
 	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].CreatedAt.Equal(list[j].CreatedAt) {
+			return list[i].ID < list[j].ID
+		}
+		return list[i].CreatedAt.After(list[j].CreatedAt)
+	})
+	out := make([]prompts.SnapshotOpenTodo, 0, len(list))
+	for _, t := range list {
+		out = append(out, prompts.SnapshotOpenTodo{ID: t.ID, Title: clip(oneLine(t.Title), 40), Link: todoLink(web, t.ID), Owner: todoOwner(t),
+			Failed: t.DoneAt != nil})
+	}
+	return out, len(out)
+}
+
+// snapshotFailedStarts are those of failed (failed starts) that the app's To-dos count open (triageCountsAsOpen): one
+// that still waits on the owner (rule 1, younger than triageShelveAfter) and whose row's work did not finish in a related
+// to-do (triageSupersededFailedStarts over all). The snapshot's open count is the app's, so a failed start no longer
+// takes one off it (#10365).
+func snapshotFailedStarts(failed []Todo, all []listedTodo, now time.Time) map[string]bool {
+	if len(failed) == 0 {
+		return nil
+	}
+	superseded := triageSupersededFailedStarts(all)
+	open := make(map[string]bool, len(failed))
+	for _, t := range failed {
+		l := listedTodo{Todo: t}
+		if triageCountsAsOpen(t, triageTodo(l, nil, now, time.Time{}, nil, superseded[t.ID])) {
+			open[t.ID] = true
+		}
+	}
+	return open
+}
+
+// askedInSnapshot are the question to-dos the snapshot's own line (snapshotAsked) shows. Only those stay out of the
+// roster and the task list: one whose ask record was pruned (askTodoKeep, askTodoMax), or that line no longer shows, is
+// an ordinary to-do and is listed like any other, so no open to-do drops out of both.
+func (s *Service) askedInSnapshot(ctx context.Context) map[string]bool {
+	out := map[string]bool{}
+	for _, a := range s.snapshotAsked(ctx) {
+		out[a.TodoID] = true
+	}
+	return out
+}
+
+// snapshotTasks are the open todos plus recent conversation tasks that have ended, the highest-priority first: all of
+// them (scopeSnapshot shows a conversation the first snapshotTaskLimit of its own).
+func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.SnapshotTask {
+	var list []Todo
+	if s.ensureTodosLoaded(ctx) != nil {
+		return nil
+	}
+	asked := s.askedInSnapshot(ctx)
+	s.todos.mu.RLock()
+	for _, row := range s.todos.todos {
+		t := copyTodoLocked(row)
+		if asked[t.ID] {
+			continue // questions have their own line in the snapshot
+		}
+		if t.DoneAt == nil || (t.Origin != "" && time.Since(*t.DoneAt) < 24*time.Hour && time.Since(t.UpdatedAt) < 7*24*time.Hour) {
+			list = append(list, t)
+		}
+	}
+	s.todos.mu.RUnlock()
 	sort.Slice(list, func(i, j int) bool { return list[i].CreatedAt.After(list[j].CreatedAt) })
 	type ranked struct {
 		task prompts.SnapshotTask
 		rank int
+		open bool
 	}
 	var all []ranked
 	now := time.Now()
+	asks := s.todoAsks(ctx)
+	lists := machineSessions{} // each machine listed once for all the tasks
 	for _, t := range list {
-		agents := s.taskAgents(ctx, t)
+		agents := s.taskAgentsIn(ctx, t, lists)
 		st := taskState(t, agents)
-		if st == "followup" && time.Since(t.UpdatedAt) > 24*time.Hour {
+		if t.DoneAt == nil {
+			review := ""
+			if t.Supervision != nil {
+				review = t.Supervision.state(t)
+			}
+			var ask *todoAsk
+			if a, ok := asks[t.ID]; ok {
+				ask = triageOpenAsk(&a)
+			}
+			decisionRow := []listedTodo{{Todo: t}}
+			if err := s.listDecisionReviews(ctx, decisionRow); err != nil {
+				decisionRow[0].DecisionReview = nil // a missing dismissal record fails closed: the owner wait stays
+			}
+			decision := decisionRow[0].DecisionReview
+			dismissed := decision != nil && decision.DismissalID != ""
+			atRest := st == "followup" || st == "unread" || st == "not_started"
+			switch {
+			case t.Delivery.waitsForOwner() || !dismissed && (review == reviewNeedsUser || ask != nil && (ask.Outcome == outcomeDecide || ask.Outcome == outcomeCannot)):
+				st = "owner_wait"
+			case atRest && (st == "unread" || review == reviewPending || deliveryAwaitsReview(t, agents) ||
+				ask != nil && (ask.Outcome == "" || ask.Outcome == outcomeDone)):
+				st = "awaiting_review"
+			}
+			// The hub snapshot follows the same owner / Accepted / Seen decision table as every client. In particular,
+			// dismissing a review keeps an independent delivery approval, reopening accepted work does not erase acceptance,
+			// and Seen files only an ordinary finished turn (#5707, #5732).
+			switch snapshotDoneRule(t, agents, ask, decision, now, s.location(ctx)) {
+			case ruleOwnerDecides:
+				st = "owner_wait"
+			case ruleAccepted, ruleSeen:
+				st = "done"
+			}
+		}
+		if t.DoneAt != nil && st == "followup" && time.Since(t.UpdatedAt) > 24*time.Hour {
 			continue
 		}
 		if st == "done" && t.DoneBy == db.DoneByAuto {
@@ -43,9 +176,32 @@ func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.Snaps
 			task.Last = clip(oneLine(t.StartError), 80) // why it did not start, for the morning brief (#4124)
 		}
 		task.Link = todoLink(web, t.ID)
+		if t.Cancelled() {
+			task.CancelledReason = clip(oneLine(t.DoneReason), 80)
+			if v := t.Supervision; v != nil {
+				for i := len(v.Reviews) - 1; i >= 0; i-- {
+					if r := v.Reviews[i]; r.Verdict == reviewCancelled && r.Note != "" {
+						task.CancelledReason = clip(oneLine(r.Note), 80)
+						break
+					}
+				}
+			}
+		}
+		for _, step := range s.taskLineage(t.ID) {
+			if !step.Current {
+				continue
+			}
+			task.Continues, task.ContinuesLink = step.Continues, todoLink(web, step.Continues)
+			task.SupersededBy, task.SupersededByLink = step.SupersededBy, todoLink(web, step.SupersededBy)
+		}
 		task.Delivery = clip(oneLine(deliverySummary(t)), 80)
 		var rank int
 		task.Health, rank = taskHealth(t, agents, now) // supervised tasks: what needs the assistant first (supervise.go)
+		if dismissed, err := s.decisionDismissed(ctx, t); err == nil && dismissed && !t.Delivery.waitsForOwner() {
+			// The owner chose Don't handle on this decision: not theirs to answer now, so it is not raised again. An
+			// independent delivery approval is a different owner wait and keeps both its state and its priority (#5732).
+			task.Health, rank = "你选了不处理这个决定", 6 // i18n-ignore: the snapshot's words, as taskHealth has them
+		}
 		if v := t.Supervision; v.state(t) == reviewParked {
 			task.Health = parkedHealth(v.parked(), s.location(ctx)) // until when, in the owner's zone (parked.go)
 		}
@@ -61,30 +217,44 @@ func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.Snaps
 				reported(&task, p, taskLead(st, agents), now)
 			}
 		}
-		all = append(all, ranked{task, rank})
-		if len(all) == 30 {
-			break
-		}
+		all = append(all, ranked{task: task, rank: rank, open: t.DoneAt == nil})
 	}
-	sort.SliceStable(all, func(i, j int) bool { return all[i].rank < all[j].rank })
+	sort.SliceStable(all, func(i, j int) bool {
+		if all[i].open != all[j].open {
+			return all[i].open
+		}
+		if all[i].rank != all[j].rank {
+			return all[i].rank < all[j].rank
+		}
+		return false // list was newest first, so ties keep that order
+	})
 	var out []prompts.SnapshotTask
 	for _, r := range all {
 		out = append(out, r.task)
-		if len(out) == 12 {
-			break
-		}
 	}
 	return out
+}
+
+// todoOwner is whose task t is in the snapshot: the conversation that handed it out and the one that supervises it.
+func todoOwner(t Todo) prompts.SnapshotOwner {
+	o := prompts.SnapshotOwner{Origin: t.Origin}
+	if t.Supervision != nil {
+		o.Supervisor = t.Supervision.Supervisor
+	}
+	return o
 }
 
 // snapshotTask is one task in the snapshot, in state st: its lead agent's (taskLead) last words, the step it is on
 // while it works (or has said nothing yet: an agent that only runs tools, #1583) and its running subagents, as the
 // task cards show them (docs/assistant/unified-entry.md "Task cards").
 func snapshotTask(t Todo, st string, agents []proto.Session, now time.Time) prompts.SnapshotTask {
-	task := prompts.SnapshotTask{ID: t.ID, Title: clip(oneLine(t.Title), 60), State: taskStateLabel(st)}
+	task := prompts.SnapshotTask{ID: t.ID, Title: clip(oneLine(t.Title), 60), State: taskStateLabel(st), Owner: todoOwner(t)}
 	last := taskLead(st, agents)
 	if last.SessionID == "" {
 		return task
+	}
+	if st == "interrupted" && last.TurnErrorKind == proto.TurnErrorStopped {
+		task.State = taskStateLabel("stopped") // Persona's Stop, not the model service (silent_turns.go, #10187)
 	}
 	task.Machine, task.Session = last.MachineID, short(last.SessionID)
 	task.Last = clip(oneLine(last.LastText), 80)
@@ -162,7 +332,7 @@ func taskLead(st string, agents []proto.Session) proto.Session {
 // assistant: an agent a usage limit stopped until its reset (usage_limit.go) is not interrupted for the user to
 // continue. It waits for the reset (its CLI or the manager goes on then), and a "Continue" before it is refused at once.
 func taskState(t Todo, agents []proto.Session) string {
-	if t.DoneAt != nil && t.StartError != "" {
+	if t.failedStart() {
 		return "failed"
 	}
 	// A cancelled task is closed but did not finish: it reads as "cancelled", never "done", however its agents settle.
@@ -175,6 +345,9 @@ func taskState(t Todo, agents []proto.Session) string {
 	}
 	if t.DoneAt != nil {
 		return "done"
+	}
+	if t.Supervision.state(t) == reviewTimedOut {
+		return reviewTimedOut
 	}
 	has := map[string]bool{}
 	interrupted, limited, working, waiting := false, false, false, false
@@ -211,6 +384,35 @@ func taskState(t Todo, agents []proto.Session) string {
 	return "not_started"
 }
 
+// snapshotDoneRule reuses the clients' triage decision table for owner decisions and the two open-at-rest Done
+// transitions the snapshot needs: accepted and ordinarily Seen. Working, concern, open-PR and acceptance-required rows
+// keep their existing snapshot projection instead of getting a second, divergent copy of those rules here.
+func snapshotDoneRule(t Todo, agents []proto.Session, ask *todoAsk, decision *decisionReview, now time.Time, loc *time.Location) string {
+	lookup := func(machine, session string) (proto.Session, bool) {
+		for _, c := range agents {
+			if c.MachineID == machine && c.SessionID == session {
+				return c, true
+			}
+		}
+		return proto.Session{}, false
+	}
+	return triageTodo(listedTodo{Todo: t, Ask: ask, DecisionReview: decision}, lookup, now, time.Time{}, loc, false).Rule
+}
+
+// deliveryAwaitsReview is the snapshot's unaccepted live state at rest. A new working stretch is still work in
+// progress, not a second delivery; an open concern instead waits for its own report (#3582). taskHealth uses the same
+// predicate so State and Health cannot disagree (#5732).
+func deliveryAwaitsReview(t Todo, agents []proto.Session) bool {
+	if t.DoneAt != nil || t.Kind == db.KindConcern || t.Delivery == nil || t.Delivery.State != deliveryLive {
+		return false
+	}
+	switch taskState(t, agents) {
+	case "followup", "unread", "not_started":
+		return true
+	}
+	return false
+}
+
 // agentWaits: c's turn ended and the hub or its own background work brings it back, so its task waits rather than
 // stopped (#3274): only background commands, subagents, Monitors or workflows still run and will report back
 // (BackgroundWorking), or the hub waits out another agent, a deploy / CI / a time, or a moment's model failure for it
@@ -226,9 +428,12 @@ func agentWaits(c proto.Session) bool {
 
 func taskStateLabel(st string) string {
 	return map[string]string{"done": "已完成", "auto_done": "已完成（hub 判断做完了，自动关的）", "failed": "没开起来", "needs_you": "等用户",
-		"interrupted": "模型服务出错，中断了（没做完，等用户让它继续）", "unread": "做完了（用户还没看）", "working": "在做",
-		"followup": "停着", "not_started": "还没开始",
+		"owner_wait": "等你处理", "awaiting_review": "已交付·待看", // i18n-ignore: the model reads these snapshot labels
+		"interrupted": "模型服务出错，中断了（没做完，等用户让它继续）", "unread": "已交付·待看", "working": "在做",
+		"followup": "停着", "not_started": "还没开始", "timed_out": "Timed out; Continue resumes the retained session",
 		// "cancelled" shares the ignored final line: every label here is model-read prompt text, and this keeps the
 		// hardcoded-Chinese baseline count unchanged instead of raising it.
+		// i18n-ignore: the model reads it; "stopped" is "interrupted" when Persona's Stop did it (snapshotTask)
+		"stopped":   "随对话一起被停下了（没做完：用户停了交出它的对话，它还没有任何输出；等用户让它继续）",
 		"cancelled": "已取消", "waiting": "在等（后台命令、子 Agent 或外部条件，hub 会叫醒它，不用管）", "usage_limit": "订阅的用量额度用完了，等额度重置（没做完；重置前发「继续」也会被拒）"}[st] // i18n-ignore: the model reads it
 }

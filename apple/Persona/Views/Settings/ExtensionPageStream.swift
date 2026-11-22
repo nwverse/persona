@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 /// A full native page belongs to one authenticated app connection. Private frames are never
 /// broadcast/replayed. Lifecycle and receipt fencing are separate from the legacy HTTP model.
@@ -14,7 +15,9 @@ import Observation
         "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "header", "breadcrumb",
         "file_tree", "code", "diff", "comment_thread", "composer"]
     #else
-    static let uiVersion = 6
+    // The page's own version (`ExtensionUIContext.pageVersion`): 7's section keys are the tree's, and 8's section links
+    // resolve to their section's key like any other control of it (`ExtensionStreamTree.slots`).
+    static let uiVersion = 8
     static let components: Set<String> = ["text", "metric", "progress", "row", "button", "link", "field", "divider",
         "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "header", "breadcrumb",
         "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel"]

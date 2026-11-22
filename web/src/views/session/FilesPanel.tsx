@@ -15,7 +15,7 @@ import { entryPayload, ENTRY_DRAG_TYPE } from "../../lib/entry-drag";
 import { aheadBehind, dirName, fileName, gitMark, joinPath, type FsEntry, type FsListing, type GitStatus } from "../../lib/files";
 import { historyBack, historyForward, historyGo, parentPath, pathSegments, writableHere, type FilesHistory } from "../../lib/files-nav";
 import { hitFolder, hitName, nameEntries, searchNames, type NameHit } from "../../lib/files-find-name";
-import { ago, bytes, sessionCan, shortPath } from "../../lib/format";
+import { ago, bytes, shortPath } from "../../lib/format";
 import { openPanel } from "../../lib/panel";
 import { navigate } from "../../lib/router";
 import { notePlace } from "../../lib/panel-memory";
@@ -36,7 +36,7 @@ import { FileInfoDialog } from "./files/FileInfo";
 import { FILE_CHMOD_FEATURE, PermissionsDialog } from "./files/Permissions";
 import { NewItemDialog, type NewKind } from "./files/NewItem";
 import { FileView } from "./files/FileView";
-import { DropHint, dragHasFiles, RowCheck, rowClick, rowFrameProps, RowMore, SelectionBar, useFileOps, type OpTarget, type RowOps } from "./files/FileOps";
+import { DropHint, dragHasFiles, RowCheck, rowClick, RowEnd, rowFrameProps, SelectionBar, useFileOps, type OpTarget, type RowOps } from "./files/FileOps";
 import { FilesTree } from "./files/FilesTree";
 import { Empty, FileGlyph, GitDot, GitBadge, useStoredFlag } from "./files/parts";
 
@@ -161,8 +161,10 @@ export function FilesPanel({ mid, sid, cwd, path, file, highlight: marked, onClo
   const canChmod = writable && hubHas(features, FILE_CHMOD_FEATURE) && machine?.os?.toLowerCase() !== "windows";
   // Open Terminal Here (#5832): a new tab on the computer in that folder, in the session's workspace when it has one
   const canTerminal = hubHas(features, PANE_CWD_FEATURE);
-  // A runtime engine's session (Paseo's) names a workspace with no terminal: the folder decides where the tab opens.
-  const workspace = useStore((s) => { const x = s.sessions[mid]?.find((y) => y.session_id === sid); return x && sessionCan(x, "terminal") ? x.workspace_id : undefined; });
+  // A runtime engine's session (Paseo's) names a workspace of its own, with no terminal. It goes all the same, as iOS
+  // sends it: the node then opens the tab in the terminal engine's workspace that holds the folder, where without it the
+  // computer's first workspace took the tab (#8135, docs/integrations/paseo.md).
+  const workspace = useStore((s) => s.sessions[mid]?.find((y) => y.session_id === sid)?.workspace_id || undefined);
   const openTerminal = async (folder: string) => {
     try {
       const r = await api<{ terminal: string }>(`/machines/${enc(mid)}/panes`, { method: "POST", json: { cwd: folder, ...(workspace ? { workspace_id: workspace } : {}) } });
@@ -567,11 +569,7 @@ function EntryRow({ mid, e, full, mark, marked, onOpen, ops }: { mid: string; e:
         {mark && (e.dir ? <GitDot letter={mark} /> : <GitBadge letter={mark} />)}
         {e.dir && <Icon name="chevronRight" size={13} stroke={2.2} className="shrink-0 text-ink-3" />}
       </button>
-      {/* hover devices only: on a touch screen it would be an invisible target at the row's end */}
-      <span className="hidden items-center pr-2 opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100 [@media(hover:hover)]:flex">
-        <IconButton icon="copy" label={t("session-filespanel.copy_path")} onClick={() => copyText(full)} size={26} iconSize={13} />
-        <RowMore ops={ops} x={x} open={onOpen} />
-      </span>
+      <RowEnd ops={ops} x={x} open={onOpen} />
     </div>
   );
 }

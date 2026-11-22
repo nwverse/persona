@@ -14,11 +14,14 @@ public struct ApprovalQuestion: Identifiable, Sendable {
         public var label: String
         public var detail: String?
         public var tag: String?
+        /// Off, the choice shows dimmed and can't be picked (a host that takes only some answers right now).
+        public var isEnabled: Bool
 
-        public init(_ label: String, detail: String? = nil, tag: String? = nil) {
+        public init(_ label: String, detail: String? = nil, tag: String? = nil, isEnabled: Bool = true) {
             self.label = label
             self.detail = detail
             self.tag = tag
+            self.isEnabled = isEnabled
         }
     }
 
@@ -126,6 +129,9 @@ public struct ApprovalCard<Context: View>: View {
     var sendLabel: String
     var customPlaceholder: String
     var sentMessage: String
+    /// Whole-card Skip, with the current answers so the host can restore them if it fails. `nil` keeps the original
+    /// per-question `skipLabel` behavior and layout.
+    var onSkip: ((ApprovalAnswers) -> Void)?
     var onSubmit: ((ApprovalAnswers) -> Void)?
     var onDismiss: (() -> Void)?
     var options: Options
@@ -172,6 +178,7 @@ public struct ApprovalCard<Context: View>: View {
         self.sendLabel = sendLabel
         self.customPlaceholder = customPlaceholder
         self.sentMessage = sentMessage
+        self.onSkip = nil
         self.onSubmit = onSubmit
         self.onDismiss = onDismiss
         _index = State(initialValue: min(max(0, startAt), max(0, questions.count - 1)))
@@ -319,7 +326,7 @@ public struct ApprovalCard<Context: View>: View {
                                 HStack(spacing: 6) {
                                     Text(choice.label)
                                         .buiFont(BUITextStyle(size: 13, lineHeight: 1))
-                                        .foregroundStyle(on ? theme.colors.ink : theme.colors.ink2)
+                                        .foregroundStyle(!choice.isEnabled ? theme.colors.ink3 : on ? theme.colors.ink : theme.colors.ink2)
                                         .fixedSize(horizontal: false, vertical: true)
                                     if let tag = choice.tag { BUIPill(tag, tone: .accent) }
                                 }
@@ -338,6 +345,7 @@ public struct ApprovalCard<Context: View>: View {
                         .contentShape(.rect(cornerRadius: theme.radii.control))
                     }
                     .buttonStyle(PressHighlightStyle(radius: theme.radii.control, color: theme.colors.hover))
+                    .disabled(!choice.isEnabled)
                     .accessibilityAddTraits(on ? .isSelected : [])
                 }
                 if question.allowsCustom {
@@ -361,6 +369,21 @@ public struct ApprovalCard<Context: View>: View {
 
     private var footer: some View {
         HStack(spacing: 12) {
+            if let onSkip, let skipLabel {
+                Button {
+                    guard !options.isSending else { return }
+                    advanceTask?.cancel()
+                    customFocused = false
+                    onSkip(answers)
+                } label: {
+                    Text(skipLabel).lineLimit(1)
+                }
+                .buttonStyle(.bui(.ghost, growsWithText: true))
+                // The original's compact pills are 27 pt; whole-card Skip keeps a full finger's target.
+                .frame(minHeight: 44 * max(1, theme.typeScale * 0.9))
+                .contentShape(.rect)
+                .accessibilityIdentifier("question-skip")
+            }
             if questions.count > 1 {
             HStack(spacing: 4) {
                 stepButton(.up, disabled: index <= 0) { go(to: index - 1) }
@@ -376,7 +399,7 @@ public struct ApprovalCard<Context: View>: View {
             }
             Spacer(minLength: 0)
             HStack(spacing: 6) {
-                if let skipLabel {
+                if let skipLabel, onSkip == nil {
                 Button(skipLabel) {
                     if isLast {
                         withAnimation(BUIMotion.standard) { open = false }
@@ -478,6 +501,29 @@ public extension ApprovalCard where Context == EmptyView {
         self.init(questions: questions, startAt: startAt, answers: answers, submitted: submitted, skipLabel: skipLabel,
                   continueLabel: continueLabel, sendLabel: sendLabel, customPlaceholder: customPlaceholder,
                   sentMessage: sentMessage, options: options, onSubmit: onSubmit, onDismiss: onDismiss) { _ in EmptyView() }
+    }
+
+    /// Whole-card cancellation is a separate, explicitly labeled overload: adding it to the original initializer would
+    /// let an existing unlabeled trailing closure bind to Skip instead of Submit.
+    init(
+        questions: [ApprovalQuestion],
+        startAt: Int = 0,
+        answers: ApprovalAnswers = ApprovalAnswers(),
+        submitted: Bool = false,
+        skipLabel: String? = "Skip",
+        continueLabel: String = "Continue",
+        sendLabel: String = "Send",
+        customPlaceholder: String = "Something else…",
+        sentMessage: String = "Answers sent",
+        options: Options = Options(),
+        onSkip: ((ApprovalAnswers) -> Void)?,
+        onSubmit: ((ApprovalAnswers) -> Void)? = nil,
+        onDismiss: (() -> Void)? = nil
+    ) {
+        self.init(questions: questions, startAt: startAt, answers: answers, submitted: submitted, skipLabel: skipLabel,
+                  continueLabel: continueLabel, sendLabel: sendLabel, customPlaceholder: customPlaceholder,
+                  sentMessage: sentMessage, options: options, onSubmit: onSubmit, onDismiss: onDismiss)
+        self.onSkip = onSkip
     }
 }
 

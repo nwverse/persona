@@ -1,6 +1,6 @@
 // ── the rail: the sidebar folded to its icons on a wide screen (#2524) ──
 // Imports only SidebarParts among the sidebar's files.
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { t } from "../i18n";
 import { stateOf } from "../lib/format";
 import { href, type Route } from "../lib/router";
@@ -11,16 +11,23 @@ import { StatusMark } from "../ui/StatusMark";
 import { AppMark } from "../ui/AppMark";
 import { Icon } from "../ui/icons";
 import { formatChord, jumpHint, useBindings } from "../lib/shortcuts";
-import { toggleSidebarColumn } from "../lib/layout";
-import { CURRENT_ROW, DOT_CLASS, morePagesMenu, type NavPage, useActiveKey, useGo, useNavPages } from "./SidebarParts";
+import { takeFocusHandoff, toggleSidebarColumn } from "../lib/layout";
+import { CURRENT_ROW, DOT_CLASS, morePagesMenu, pageLabel, type NavPage, pageIconStyle, useActiveKey, useGo, useNavPages } from "./SidebarParts";
+import type { UIColor } from "../lib/extension-ui-v6";
 
 /** The button that folds the sidebar to the rail and opens it again (⌘⌥B by default; the hint follows a rebinding). */
 export function CollapseButton({ collapsed, chord }: { collapsed: boolean; chord?: string }) {
   const label = collapsed ? t("sidebar.expand") : t("sidebar.collapse");
+  // pressed with the focus on it, this one is drawn in place of the other (the rail ⇄ the sidebar) and takes the focus
+  const self = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    if (takeFocusHandoff()) self.current?.focus({ preventScroll: true });
+  }, []);
   return (
     <button
+      ref={self}
       type="button"
-      onClick={toggleSidebarColumn}
+      onClick={(e) => toggleSidebarColumn(document.activeElement === e.currentTarget)}
       aria-label={label}
       aria-expanded={!collapsed}
       title={chord ? `${label} (${formatChord(chord)})` : label}
@@ -36,7 +43,7 @@ export function PagesTally({ pages }: { pages: NavPage[] }) {
   const counted = pages.filter((p) => p.badge !== undefined);
   const tones = [...new Set(counted.map((p) => p.badgeTone ?? "accent"))];
   if (!tones.length) return null;
-  const label = counted.map((p) => `${p.label} ${p.badge}`).join(t("sidebar.list_separator"));
+  const label = counted.map(pageLabel).join(t("sidebar.list_separator"));
   return (
     <span title={label} className="flex items-center gap-1">
       <span className="sr-only">{label}</span>
@@ -63,7 +70,8 @@ export function SidebarRail({ route, onSearch, onNewAgent }: { route: Route; onS
   const status = connStatus(phase, online, total);
   const st = main ? stateOf(main) : undefined;
   const pending = main?.pending_interactions ?? 0;
-  const link = (k: string, to: Route, label: string, icon: React.ReactNode, dot?: React.ReactNode, title?: string) => {
+  // `color`: a page's icon color (NavPage.color, #10822), kept under the pointer as well
+  const link = (k: string, to: Route, label: string, icon: React.ReactNode, dot?: React.ReactNode, title?: string, color?: UIColor) => {
     const active = activeKey === k;
     return (
       <a
@@ -74,6 +82,7 @@ export function SidebarRail({ route, onSearch, onNewAgent }: { route: Route; onS
         title={title ?? label}
         aria-current={active ? "page" : undefined}
         className={cx(RAIL_ITEM, active ? cx(CURRENT_ROW, "text-ink") : "text-ink-3 hover:bg-hover hover:text-ink")}
+        style={pageIconStyle(color, active)}
       >
         {icon}
         {dot}
@@ -101,10 +110,11 @@ export function SidebarRail({ route, onSearch, onNewAgent }: { route: Route; onS
         {pages.map((p) => link(
           p.k,
           p.to,
-          p.badge !== undefined ? `${p.label} ${p.badge}` : p.label,
+          pageLabel(p),
           <Icon name={p.icon} size={16} stroke={1.8} />,
           p.badge !== undefined ? <span aria-hidden className={cx("absolute top-1.5 right-1.5 size-2 rounded-full ring-2 ring-canvas", DOT_CLASS[p.badgeTone ?? "accent"])} /> : null,
           [p.title ?? p.label, p.badge ?? p.hint].filter((x) => x !== undefined).join(" · "),
+          p.color,
         ))}
         {more.length > 0 && (
           <button

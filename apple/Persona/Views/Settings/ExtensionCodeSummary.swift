@@ -1,8 +1,9 @@
 import SwiftUI
+import PersonaWire
 
 /// UI version 4–5's code-hosting components where a whole page does not draw them (a card, a section; a page draws
 /// them as the code page, `ExtensionCodePage`): what they say, read-only, small; a composer writes and sends as on the
-/// page. Cards report UI version 6 (`ExtensionUIContext.cardVersion`), so the hub sends these as they are (#827).
+/// page. Cards report UI version 8 (`ExtensionUIContext.cardVersion`), so the hub sends these as they are (#827).
 struct ExtensionCodeSummary: View {
     var item: ExtensionComponent
     var model: (any ExtensionViewControlling)?

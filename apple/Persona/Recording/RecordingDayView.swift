@@ -62,14 +62,14 @@ struct RecordingDayView: View {
         .navigationDestination(item: $transcriptAt) { focus in
             RecordingDayTranscriptView(id: id, timeZone: focus.timeZone, focus: focus.at)
         }
-        .confirmationDialog("Delete This Recording?", isPresented: $deleting, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Delete This Recording?", isPresented: $deleting, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { delete() }
         } message: {
             Text(watchRecordsThisDay
                  ? String(localized: "All-day recording stops on your Apple Watch, and today's audio and text are deleted from it and this iPhone now. Its text in Knowledge is removed after sync succeeds.")
                  : String(localized: "The day's audio and text are deleted from this iPhone and your Apple Watch now. Its text in Knowledge is removed after sync succeeds."))
         }
-        .confirmationDialog("Erase the last 10 minutes?", isPresented: $erasing, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Erase the last 10 minutes?", isPresented: $erasing, titleVisibility: .visible) {
             Button("Erase", role: .destructive) { Task { await eraseRecent() } }
         } message: {
             Text("What was said in the last 10 minutes is deleted from this iPhone and your Apple Watch now, and from Knowledge after sync succeeds.")
@@ -747,7 +747,6 @@ struct RecordingDayTranscriptView: View {
 struct RecordingDayRow: View {
     var entry: RecordingEntry
     @State private var board = RecordingDayBoard.shared
-    @Environment(\.dynamicTypeSize) private var size
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -772,7 +771,7 @@ struct RecordingDayRow: View {
                     }
                 }
                 .font(Theme.Font.caption).foregroundStyle(.secondary)
-                .lineLimit(size.isAccessibilitySize ? 3 : 1)
+                .lineLimit(1)
             }
         }
     }
@@ -786,7 +785,7 @@ struct RecordingDayRow: View {
 /// to the consent sheet, a row that opens it (the watch points here: "Agree on your iPhone to start"); today's day
 /// recording; and, once all-day recording is in use, a caution when the hub doesn't write recaps yet. Shown with a paired
 /// watch that has Persona (`RecordingDayBoard.watchAppInstalled`), or once a day exists. Its rows are the app's list rows
-/// (the switch is every Settings switch's `SettingsSwitchRow`): at the accessibility sizes they wrap as those do.
+/// (the switch is every Settings switch's `SettingsSwitchRow`).
 struct RecordingDayTodaySection: View {
     /// Today's day recording (`RecordingDayBoard.todayID`).
     var dayID: UUID?
@@ -797,7 +796,6 @@ struct RecordingDayTodaySection: View {
     @State private var control = RecordingDaySwitch.shared
     @State private var consent = RecordingDayConsent.shared
     @State private var sync = RecordingSync.shared
-    @Environment(\.dynamicTypeSize) private var size
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -814,9 +812,8 @@ struct RecordingDayTodaySection: View {
             // The "since" in the zone of the day the watch records, as that day's own times are written.
             SettingsSwitchRow(title: String(localized: "All-Day Recording"), detail: line.text(in: board.zone(of: watch?.recording)),
                               symbol: Theme.Icon.allDay,
-                              // One line, as its line is under it; at the accessibility sizes as many as it takes, as
-                              // Settings' switches with a description do.
-                              titleLines: size.isAccessibilitySize ? nil : 1,
+                              // One line, as its line is under it.
+                              titleLines: 1,
                               accessibilityID: "allday-switch",
                               isOn: Binding(get: { on }, set: { control.set($0) }))
                 // On the one row the section always has: a sheet on the section would be one per row.

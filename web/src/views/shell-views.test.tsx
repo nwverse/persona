@@ -28,12 +28,12 @@ describe("「助手 | Agents」", () => {
   it("marks the page it is on and links to the other", () => {
     const html = renderToStaticMarkup(<ShellSwitchView page="assistant" waiting={0} />);
     expect(html).toMatch(/<a href="\/" aria-current="page" aria-label="助手"/);
-    expect(html).toMatch(/<a href="\/terminal" aria-label="会话与终端"/);
-    expect(renderToStaticMarkup(<ShellSwitchView page="agents" waiting={0} />)).toMatch(/href="\/terminal" aria-current="page"/);
+    expect(html).toMatch(/<a href="\/agents" aria-label="Agents"/);
+    expect(renderToStaticMarkup(<ShellSwitchView page="agents" waiting={0} />)).toMatch(/href="\/agents" aria-current="page"/);
   });
   it("carries the agents waiting for you on its Agents side, none at 0", () => {
     const html = renderToStaticMarkup(<ShellSwitchView page="assistant" waiting={3} />);
-    expect(html).toContain('aria-label="会话与终端，3 个需要你"');
+    expect(html).toContain('aria-label="Agents，3 个需要你"');
     expect(html).toMatch(/text-attention[^"]*">3<\/span>/);
     expect(renderToStaticMarkup(<ShellSwitchView page="assistant" waiting={0} />)).not.toContain("bg-red");
   });
@@ -49,8 +49,8 @@ describe("「助手 | Agents」", () => {
     expect(html.match(/min-w-0 [^"]*px-2 [^"]*sm:shrink-0 sm:px-3\.5/g)).toHaveLength(2);
     expect(html.match(/<span class="min-w-0 truncate" data-switch-label="true">/g)).toHaveLength(2);
     // Sessions: the short name on a phone, the full one wider, the full one always its name and tooltip
-    expect(html).toContain('<span class="sm:hidden">会话</span><span class="max-sm:hidden">会话与终端</span>');
-    expect(html).toMatch(/<a href="\/terminal" aria-label="会话与终端，2 个需要你" title="会话与终端"/);
+    expect(html).toContain('Agents');
+    expect(html).toMatch(/<a href="\/agents" aria-label="Agents，2 个需要你"/);
     // the assistant side has no short name and no tooltip
     expect(html).toMatch(/<a href="\/" aria-current="page" aria-label="助手" class=/);
     // the count: inline when wide, on the segment's corner on a phone
@@ -108,20 +108,19 @@ describe("a sidebar row's ⋯", () => {
     expect(label(session())).toBe("关联到待办…");
     expect(label(session({ todo: { id: "t1", title: "发版" } } as Partial<Session>))).toBe("改挂到其他待办…");
   });
-  it("offers 关闭 Agent and 实时接入 when the chat's ⋯ does (#3405)", () => {
-    const keys = (s: Session, close = true) => agentRowMenuItems(s, { pinned: false, muted: false, onRename: () => {}, onDelete: () => {}, ...(close ? { onCloseAgent: () => {} } : {}) }).map((i) => i.key);
+  it("offers 关闭… and 实时接入 when the chat's ⋯ does (#3405, #7125)", () => {
+    const keys = (s: Session) => agentRowMenuItems(s, { pinned: false, muted: false, onRename: () => {}, onDelete: () => {} }).map((i) => i.key);
     expect(keys(session())).toContain("close");
     expect(keys(session({ state: "offline", status: "offline" }))).not.toContain("close");
     expect(keys(session({ assistant: true } as Partial<Session>))).not.toContain("close");
-    expect(keys(session(), false)).not.toContain("close");
     const live = { source_kind: "codex_app_server", capabilities: { attach: true } } as Partial<Session>;
     expect(keys(session(live))).toContain("attach");
     expect(keys(session(live))).not.toContain("close"); // no terminal capability
     expect(keys(session({ ...live, attached: true } as Partial<Session>))).not.toContain("attach");
     expect(keys(session())).not.toContain("attach");
   });
-  it("offers 重命名 and 关闭 Agent on a runtime's session where its node says so (#6294)", () => {
-    const keys = (s: Session) => agentRowMenuItems(s, { pinned: false, muted: false, onRename: () => {}, onDelete: () => {}, onCloseAgent: () => {} }).map((i) => i.key);
+  it("offers 重命名 and 关闭… on a runtime's session where its node says so (#6294)", () => {
+    const keys = (s: Session) => agentRowMenuItems(s, { pinned: false, muted: false, onRename: () => {}, onDelete: () => {} }).map((i) => i.key);
     const paseo = { source_kind: "runtime", agent: "claude", capabilities: { read: true, send: true, interrupt: true, approve: true, close: true, rename: true } } as Partial<Session>;
     expect(keys(session(paseo))).toEqual(expect.arrayContaining(["rename", "close"]));
     const refused = keys(session({ ...paseo, capabilities: { read: true, send: true, close: false, rename: false } } as Partial<Session>));

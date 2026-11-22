@@ -39,6 +39,7 @@ private class FakeMarket : ExtensionApiStub() {
     val calls = mutableListOf<String>()
     var gate: CompletableDeferred<Unit>? = null
     var preview = ExtensionPreview("pv1", PreviewManifest("example-calendar", "Example 日历", "0.9.0"), listOf(runs), "d-1")
+    var removal = ExtensionRemoval()
     var installed = ExtensionDetail(HubExtension("example-calendar", "Example 日历", "connectors", "needs_setup", version = "0.9.0",
         needsSetup = listOf("密钥「API Key」")))
 
@@ -52,7 +53,7 @@ private class FakeMarket : ExtensionApiStub() {
     override suspend fun previewFromMarket(market: String, extension: String): ExtensionPreview { calls += "preview $market/$extension"; check(); return preview }
     override suspend fun install(preview: ExtensionPreview): ExtensionDetail { calls += "install ${preview.previewId} ${preview.permissionsDigest}"; check(); return installed }
     override suspend fun upgrade(id: String, preview: ExtensionPreview): ExtensionDetail { calls += "upgrade $id ${preview.previewId}"; check(); return installed }
-    override suspend fun uninstall(id: String, keepData: Boolean, cascade: Boolean, members: Boolean): ExtensionRemoval { calls += "uninstall $id keep=$keepData"; check(); return ExtensionRemoval() }
+    override suspend fun uninstall(id: String, keepData: Boolean, cascade: Boolean, members: Boolean): ExtensionRemoval { calls += "uninstall $id keep=$keepData"; check(); return removal }
     override suspend fun markets(): List<ExtensionMarket> { check(); return markets }
     override suspend fun addMarket(spec: String, token: String?): ExtensionMarket {
         calls += "add $spec token=${token != null}"; check()
@@ -376,6 +377,75 @@ class ExtensionMarketStateTest {
         api.catalog = emptyList()
         model.load()
         assertTrue(model.state.value.missing)
+    }
+
+    @Test fun cleanupWarningsAreHeldUntilTheirOkAndBlankResultsStayQuiet() = runBlocking {
+        val warnings = listOf("请手动删除数据目录", "缓存清理失败，请手动处理")
+        val api = FakeMarket().apply { removal = ExtensionRemoval(warnings = warnings) }
+        val model = CatalogExtensionModel(api, marketA.id, "example-gateway", res)
+        model.load()
+        assertTrue(model.uninstall(keepData = true))
+        val notice = model.state.value.removalNotice!!
+        assertEquals("已卸载 Example 网关面板", notice.title)
+        assertEquals(warnings, notice.warnings)
+        model.dismissRemovalNotice()
+        assertNull(model.state.value.removalNotice)
+        assertNull(model.removal)
+
+        api.removal = ExtensionRemoval(warnings = listOf(" ", "\n"))
+        assertTrue(model.uninstall(keepData = true))
+        assertNull(model.state.value.removalNotice)
+    }
+
+    @Test fun cleanupWarningsDecodeFromDirectAndSteppedSuccessfulRemovals() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val warnings = listOf("data directory cleanup failed", "cache cleanup failed")
+        val direct = json.decodeFromString(ExtensionRemoval.serializer(),
+            """{"removed_members":["example-member"],"warnings":["data directory cleanup failed","cache cleanup failed"]}""")
+        assertEquals(listOf("example-member"), direct.removedMembers)
+        assertEquals(warnings, direct.warnings)
+        val stepped = json.decodeFromString(ExtensionOperation.serializer(),
+            """{"id":"remove","kind":"uninstall","state":"succeeded","warnings":["data directory cleanup failed","cache cleanup failed"]}""")
+        assertEquals(warnings, stepped.warnings)
+        val old = json.decodeFromString(ExtensionRemoval.serializer(), """{"removed_members":[]}""")
+        assertNull(old.warnings)
+        assertNull(extensionRemovalNotice(res, "Example", members = false, removal = old))
+    }
+
+    @Test fun marketRemovalCountsOnlyKnownAffectedExtensionsAndWordsItsFallbacks() {
+        val ownOn = HubExtension("on", source = "installed", market = "m1", manager = "assistant", autoUpgrade = true)
+        val ownOff = HubExtension("off", source = "installed", market = "m1", manager = "assistant", autoUpgrade = false)
+        val otherManager = HubExtension("other-manager", source = "installed", market = "m1", manager = "other", autoUpgrade = true)
+        val otherMarket = HubExtension("other-market", source = "installed", market = "m2", manager = "assistant", autoUpgrade = true)
+        val notFromMarket = HubExtension("local", manager = "assistant", autoUpgrade = null)
+        val configuredWithMarket = HubExtension("configured", source = "hub.json", market = "m1", autoUpgrade = true)
+        val attachedWithMarket = HubExtension("attached", source = "installed", market = "m1", autoUpgrade = true,
+            attached = kotlinx.serialization.json.JsonObject(emptyMap()))
+        val installed = listOf(ownOn, ownOff, otherManager, otherMarket, notFromMarket, configuredWithMarket, attachedWithMarket)
+        val roster = ManagerRoster(listOf(
+            HubManager("assistant", "Default", online = true, isDefault = true),
+            HubManager("other", "Other", online = true),
+        ), "assistant")
+        val defaultAssistant = CurrentAssistant(roster = roster, choice = AssistantManagerChoice.Choice(defaultId = "assistant"))
+        val selectedAssistant = CurrentAssistant(roster = roster, choice = AssistantManagerChoice.Choice(manager = "other", defaultId = "assistant"))
+        assertEquals(2, affectedExtensionCount("m1", installed, defaultAssistant))
+        assertEquals(0, affectedExtensionCount("m1", listOf(otherMarket, notFromMarket), defaultAssistant))
+        // An unstamped extension belongs to the default assistant, never to a selected non-default assistant.
+        assertEquals(0, affectedExtensionCount("m1", listOf(ownOn.copy(manager = null)), selectedAssistant))
+        assertEquals(0, affectedExtensionCount("m1", listOf(ownOn.copy(manager = null)), selectedAssistant.copy(roster = null)))
+        assertEquals(1, affectedExtensionCount("m1", listOf(ownOn.copy(manager = null)), defaultAssistant))
+        assertEquals(1, affectedExtensionCount("m1", listOf(ownOn.copy(manager = "other")), selectedAssistant))
+        assertNull(affectedExtensionCount("m1", listOf(ownOn.copy(market = null)), defaultAssistant))
+        assertNull(affectedExtensionCount("m1", installed, defaultAssistant.copy(roster = null)))
+
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val en = context.createConfigurationContext(android.content.res.Configuration(res.configuration).apply {
+            setLocale(java.util.Locale.ENGLISH)
+        }).resources
+        assertEquals("The hub stops reading this market. No installed extension came from it.", marketRemovalText(en, 0))
+        assertEquals("The hub stops reading this market. 1 extension installed from it stays, but stops upgrading until the market is added again with the same address.", marketRemovalText(en, 1))
+        assertEquals("The hub stops reading this market. 2 extensions installed from it stay, but stop upgrading until the market is added again with the same address.", marketRemovalText(en, 2))
+        assertEquals(en.getString(R.string.settings_ext_remove_market_text), marketRemovalText(en, null))
     }
 
     @Test fun managesTheMarkets() = runBlocking {

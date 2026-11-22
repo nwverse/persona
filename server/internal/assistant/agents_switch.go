@@ -171,7 +171,7 @@ func (s *Service) switchItems(ctx context.Context, a agentsSwitchArgs, t switchT
 				continue
 			}
 			own := cmp.Or(c.Launcher, "claude")
-			if own == t.Launcher || from != "" && own != from {
+			if own == t.Launcher && !c.OffLauncher || from != "" && own != from { // off it: a switch back (#11792)
 				continue
 			}
 			out = append(out, s.switchPlan(ctx, m, c, t))
@@ -250,9 +250,9 @@ func (s *Service) switchNowOrQueue(ctx context.Context, it *switchItem, t switch
 	}
 	text := ""
 	if it.plan == switchContinued {
-		text = prompts.RenderAgentLimitContinue()
+		text = prompts.RenderAgentLimitContinue(answerLanguage(s.hello(ctx).Locale))
 		if _, theirs, err := s.supervisedElsewhere(ctx, self, it.m, it.c); err == nil && theirs {
-			text = prompts.RenderSideConversation(prompts.SideConversation{From: self, Text: text})
+			text = prompts.RenderSideConversation(text)
 		}
 	}
 	err := s.moveAgent(ctx, it.m, it.c, t, text)
@@ -415,9 +415,10 @@ func (s *Service) queuedSwitchOf(machine, id string) string {
 func (s *Service) switchQueueListed(machine string) {
 	q := &s.switchQ
 	q.mu.Lock()
-	idle := q.loaded && !slices.ContainsFunc(slices.Collect(maps.Values(q.items)), func(w queuedSwitch) bool { return w.Machine == machine })
+	loaded := q.loaded
+	idle := loaded && !slices.ContainsFunc(slices.Collect(maps.Values(q.items)), func(w queuedSwitch) bool { return w.Machine == machine })
 	q.mu.Unlock()
-	if idle || s.archiveStore() == nil && !q.loaded {
+	if idle || s.archiveStore() == nil && !loaded {
 		return // nothing queued there (or nothing ever queued without a store)
 	}
 	go s.runSwitchQueue(context.Background(), machine)
@@ -451,7 +452,7 @@ func (s *Service) runSwitchQueue(ctx context.Context, machine string) {
 			drop = "queued over a day ago"
 		case !ok || switchStopped(c) && !c.StartedByPersona:
 			drop = "it stopped or is gone"
-		case cmp.Or(c.Launcher, "claude") == w.Launcher:
+		case cmp.Or(c.Launcher, "claude") == w.Launcher && !c.OffLauncher: // off it: the switch back (#11792)
 			drop = "it runs there already"
 		case cmp.Or(c.Launcher, "claude") != w.From:
 			drop = "it moved to another launcher meanwhile"
@@ -508,7 +509,7 @@ func (s *Service) runQueuedSwitch(ctx context.Context, w queuedSwitch, c proto.S
 		err = s.retargetStopped(ctx, m, c, t)
 	} else {
 		if limitStopped(c) {
-			text = prompts.RenderAgentLimitContinue()
+			text = prompts.RenderAgentLimitContinue(answerLanguage(s.hello(ctx).Locale))
 		}
 		err = s.moveAgent(ctx, m, c, t, text)
 	}

@@ -151,7 +151,7 @@ func newGroupModel(t *testing.T, replies ...string) (*groupModel, *ai.Client) {
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		reply := `{"handle":false,"reason":"示例"}`
 		stop := ""
-		if strings.Contains(in.System, "归到「事件」里") {
+		if strings.Contains(in.System, `"assign"`) && strings.Contains(in.System, "messages_around") {
 			m.mu.Lock()
 			c := capturedCall{System: in.System}
 			if len(in.Messages) > 0 {
@@ -605,6 +605,42 @@ func TestInboxGroupFallsBackOnABadAnswer(t *testing.T) {
 	h.inbox.triaging.Unlock()
 	if len(model.asked()) != before || old.TriagedBy != "model" {
 		t.Fatal("an event triaged at this version was sorted again")
+	}
+}
+
+// Only a fallback-new event loses a redundant conversation-name prefix; model titles and existing events stay unchanged.
+func TestInboxGroupTitlePrefixOnlyChangesFallbackNewEvents(t *testing.T) {
+	tests := []struct {
+		name, where, title, want string
+		byModel, existing        bool
+	}{
+		{name: "matching prefix", where: "示例群", title: "示例群：周四评审改期", want: "周四评审改期"},
+		{name: "conversation name only", where: "示例群", title: "示例群", want: "示例群"},
+		{name: "empty remainder", where: "示例群", title: "示例群：", want: "示例群："},
+		{name: "ascii colon", where: "示例群", title: "示例群: 周四评审改期", want: "示例群: 周四评审改期"},
+		{name: "no conversation", title: "示例群：周四评审改期", want: "示例群：周四评审改期"},
+		{name: "other conversation", where: "示例群", title: "别的群：周四评审改期", want: "别的群：周四评审改期"},
+		{name: "model title", where: "示例群", title: "示例群：周四评审改期", want: "示例群：周四评审改期", byModel: true},
+		{name: "existing event", where: "示例群", title: "示例群：兜底标题", want: "示例 A 方案评审", existing: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			g := &groupLark{placed: map[string]bool{}}
+			h, _ := groupHub(t, g, nil)
+			planned := plannedEvent{messages: []string{"m1060"}, title: tc.title, tier: TierFYI}
+			if tc.existing {
+				planned.existing = "lark:F1:1051"
+			}
+			thing, err := g.GroupAppend(context.Background(), connector.GroupAppend{Thread: "chat:F1", Event: planned.existing, Messages: planned.messages})
+			if err != nil {
+				t.Fatal(err)
+			}
+			thing.Tags = []connector.Tag{{Key: connector.TagChat, Name: tc.where}}
+			got := h.putEvent(sourceOf(g), "chat:F1", planned, thing, tc.byModel)
+			if got == nil || got.Title != tc.want {
+				t.Fatalf("event %+v, want title %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -1824,9 +1860,13 @@ func TestInboxGroupReopenWakesTheTwin(t *testing.T) {
 	h.collectInbox(context.Background(), roundPoll)
 	h.waitGrouping()
 
-	if !it.open() || it.Handling.State != HandlingLooking || it.Agent.SessionID != "s1" {
-		t.Fatalf("reopened event %+v, handling %+v", it, it.Handling)
-	}
+	func() {
+		h.inbox.mu.Lock()
+		defer h.inbox.mu.Unlock()
+		if !it.open() || it.Handling.State != HandlingLooking || it.Agent.SessionID != "s1" {
+			t.Fatalf("reopened event %+v, handling %+v", it, it.Handling)
+		}
+	}()
 	waitFor(t, "the new messages told to the conversation", func() bool {
 		return strings.Contains(strings.Join(notesOf(h.f, "s1"), "\n"), "有了新消息")
 	})
@@ -2030,7 +2070,7 @@ func TestInboxGroupDMFallbackNewReopenLeavesTwinDisabled(t *testing.T) {
 }
 
 // Fallback validation accepts a direct assignment to any supplied done candidate, independently of the direct-chat
-// fallback-new rewrite. Its messages follow the same default reopen path and preserve ordinary fallback triage.
+// fallback-new rewrite. Its messages follow the same default reopen path and monotonic fallback tier floor.
 func TestInboxGroupFallbackAssignsDoneEvent(t *testing.T) {
 	g := &groupLark{batch: groupBatch(), placed: map[string]bool{}, ruleTier: TierAction, fallback: connector.GroupFallbackResult{
 		Assign: []connector.GroupAssign{{Message: "m1060", Event: "lark:F1:900"}, {Message: "m1061", Event: "lark:F1:900"}}}}
@@ -2050,11 +2090,11 @@ func TestInboxGroupFallbackAssignsDoneEvent(t *testing.T) {
 		t.Fatalf("appends %+v", g.appends)
 	}
 	if !it.open() || it.DoneBy != "" || it.Read || it.Title != "示例上周的发布" || it.Summary != "示例原总结" ||
-		it.Tier != TierFYI || it.Reason != "示例原理由" || it.TriagedBy != "model" || it.Count != 3 || it.Last != "1061" {
+		it.Tier != TierAction || it.Reason != "按规则" || it.TriagedBy != "model" || it.Count != 3 || it.Last != "1061" {
 		t.Fatalf("reopened event %+v", it)
 	}
 	kinds := chainKinds(it)
-	if len(kinds) < 2 || kinds[0] != ChainReceived || kinds[1] != ChainReopened {
+	if len(kinds) != 3 || kinds[0] != ChainReceived || kinds[1] != ChainReopened || kinds[2] != ChainTriaged {
 		t.Fatalf("chain %v", kinds)
 	}
 	if len(h.inbox.items) != 2 || h.inbox.items["lark:F1:1060"] != nil {

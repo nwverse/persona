@@ -46,8 +46,8 @@ From the goldens (synthetic input, `server/internal/assistant/testdata/prompts/a
 the client supports views). Phone procedures and place reminders take about 3,400 bytes in "Interacting with
 the user".
 
-The tool goldens (`server/internal/hub/testdata/prompts/mcp_tools.assistant.golden`) hold 78 tools in about 118,000
-bytes of compact JSON. The largest are `task_plan` (about 13,100) and `task_review` (about 10,600). On a real install
+The assistant's tool golden (then one file; one file per tool under `server/internal/hub/testdata/prompts/mcp_tools/`
+since #11252) held 78 tools in about 118,000 bytes of compact JSON. The largest are `task_plan` (about 13,100) and `task_review` (about 10,600). On a real install
 #5764 counted 116 Persona tools in 143,828 bytes, with phone, mail, history-import and codebase families making up
 about 28.7 KB.
 
@@ -137,7 +137,8 @@ makes a regression visible before merge or within a week after, and makes every 
   - a supervision event is reviewed with evidence and closed with `task_review`, not retold to the owner;
   - an event the owner need not see ends with `supervision_finish` and `visibility: "silent"`;
   - an outward send without authorization goes to `ask_user` first;
-  - in the main chat a question that does not block the next step uses `ask_user` with `wait: false`;
+  - a question that does not block the next step uses `ask_user` with `wait: false`, in the main chat and in a leader
+    conversation alike (#7392);
   - work for a direction carries its `supervisor`;
   - a recurring request uses `schedule_routine`, not a chain of follow-ups.
 - **Checks are deterministic where possible**: which tools were called, with which arguments, in which order. A model

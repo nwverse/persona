@@ -200,7 +200,7 @@ func mayAsk(sess *proto.Session, triage bool) bool {
 // replyWaits: sess is an agent the user looked at that still waits on their answer, and one to remind of: not muted,
 // not one whose news goes elsewhere (an inbox draft, a Feishu thread, a quiet task's conversation), not too old.
 func (s *Service) replyWaits(machine string, sess proto.Session, now time.Time) bool {
-	if !sess.AwaitsReply || sess.State != proto.StateIdle || now.Sub(sess.UpdatedAt) > replyOldest ||
+	if sess.HiddenByDirectory() || !sess.AwaitsReply || sess.State != proto.StateIdle || now.Sub(sess.UpdatedAt) > replyOldest ||
 		spaceOf(sess) == SpaceHealth { // its questions are not for the lock screen (doneAlert)
 		return false
 	}
@@ -219,13 +219,23 @@ func (s *Service) replySince(machine string, sess proto.Session) time.Time {
 
 // remindReply pushes that sess still waits on the user's answer, to the devices that take Needs You pushes.
 func (s *Service) remindReply(machine string, sess proto.Session) error {
+	if s.directoryHiddenSession(machine, sess.SessionID) {
+		return nil
+	}
 	head, body := replyAlert(s.lang(context.Background()), sess)
 	s.logf("reply reminder %s/%s: %s", machine, short(sess.SessionID), body)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	return s.hub.NotifyRequest(ctx, NotifyRequest{Notification: Notification{ID: "ntf_" + randomHex(8),
+	_, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: Notification{ID: "ntf_" + randomHex(8),
 		Kind: assistantwire.NotifyReply, DeviceID: machine, SessionID: sess.SessionID, Subtitle: s.pushPlace(machine, sess),
-		Title: head, Body: body}})
+		Title: head, Body: body, RelatedKey: replyRelatedKey(sess)}})
+	return err
+}
+
+// replyRelatedKey names the question sess waits on for the hub's push grading: the session and the moment its turn
+// stopped on it, so reminders of one question merge while a new question of the same agent rings again.
+func replyRelatedKey(sess proto.Session) string {
+	return "reply:" + sess.SessionID + "@" + sess.UpdatedAt.UTC().Format(time.RFC3339Nano)
 }
 
 // replyAlert is the reminder's title and text, in l: the agent's name, and what it asks.

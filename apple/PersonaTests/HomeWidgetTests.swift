@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The Home Screen widgets' snapshot (docs/apple/home-widgets.md): the numbers are the app's own, the file is written only
 /// when it changes and read back only in its own shape, and the moods follow the rules the doc gives.
@@ -14,6 +15,12 @@ struct HomeWidgetTests {
             var name: String
             var input: Input
             var expected: Expected
+            var knownDifferences: [String: Difference]?
+
+            enum CodingKeys: String, CodingKey {
+                case name, input, expected
+                case knownDifferences = "known_differences"
+            }
         }
         struct Input: Decodable {
             var sessions: [Session]
@@ -24,24 +31,38 @@ struct HomeWidgetTests {
         struct Expected: Decodable {
             var badge: Int
         }
+        /// A client's known difference (the fixture's README): today's badge, when it replaces the case's.
+        struct Difference: Decodable {
+            var replace: Replace
+        }
+        struct Replace: Decodable {
+            var badge: Int?
+        }
     }
 
     /// Replays spec/fixtures/needs-you/cases.json: the Agents widget's Needs You rows are the Agents tab's badge, case by
-    /// case (one per session, never the muted agents or a quiet task's).
+    /// case (one per session, never the muted agents, a quiet task's, a directory-hidden session's or one whose only
+    /// cards are held), iOS's known differences (`known_differences.ios`) at today's value.
     @Test func needsYouIsTheAgentsBadge() throws {
         let data = try Data(contentsOf: Self.repo.appending(path: "spec/fixtures/needs-you/cases.json"))
         let fixture = try JSON.decoder.decode(Fixture.self, from: data)
         #expect(!fixture.cases.isEmpty)
         for c in fixture.cases {
             let i = c.input
-            let byKey = Dictionary(i.sessions.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
+            // As homeSnapshot reads them: the lists' rows with sides folded under their parents (`allSessions`), and
+            // every pending card but a directory-hidden session's (`scopedInteractions`).
+            let sessions = SideFold.fold(i.sessions, groups: [""]).listed
+            let own = Dictionary(i.sessions.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
+            let byKey = Dictionary(sessions.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
             let pending = i.interactions.sorted { ($0.createdAt ?? .distantPast) < ($1.createdAt ?? .distantPast) }
-            let rows = AgentsNeedsYou.rows(cards: pending, waiting: AgentsNeedsYou.waiting(i.sessions))
+                .filter { own[$0.sessionKey]?.hiddenByDirectory != true }
+            let rows = AgentsNeedsYou.rows(cards: pending, waiting: AgentsNeedsYou.waiting(sessions))
             let agents = HomeAgents.build(
-                needsYou: rows, sessions: i.sessions,
+                needsYou: rows, sessions: sessions,
                 place: { TabBadges.place($0, session: byKey[$0], quiet: i.quiet.contains(AppModel.pinKey(session: $0)), mutes: i.mutes) },
                 session: { byKey[$0] }, machineName: { _ in nil }, isTask: { _ in false })
-            #expect(agents.rows.count { $0.state == .needsYou } == c.expected.badge, "\(c.name)")
+            let badge = c.knownDifferences?["ios"]?.replace.badge ?? c.expected.badge
+            #expect(agents.rows.count { $0.state == .needsYou } == badge, "\(c.name)")
         }
     }
 
@@ -121,6 +142,48 @@ struct HomeWidgetTests {
         // A recording that starts writes at once, without a source change.
         writer.recording = .init(id: "r", title: "Review", started: 1)
         #expect(await Self.written(store) { $0.recording?.id == "r" } != nil)
+    }
+
+    /// Only live numbers moved (a working row's activity line): written at most once a `livePause`, the latest then;
+    /// anything else at once, with the latest line (#9592).
+    @Test func liveNumbersWaitTheirPause() async throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: "home-widgets-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = HomeSnapshotStore(root: dir)
+        let writer = HomeWidgetWriter(store: store, livePause: 0.6)
+        var source = HomeSnapshot(paired: true)
+        source.agents.rows = [.init(id: "m/s", title: "Agent", state: .working, detail: "Reading")]
+        writer.source = { source }
+        writer.flush()
+        _ = try #require(await Self.written(store) { $0.agents.rows.first?.detail == "Reading" })
+        source.agents.rows[0].detail = "Editing"
+        writer.flush()
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(store.read()?.agents.rows.first?.detail == "Reading", "an activity line alone waits")
+        #expect(await Self.written(store) { $0.agents.rows.first?.detail == "Editing" } != nil, "and goes once the pause is over")
+        source.agents.rows[0].detail = "Testing"
+        source.inbox = .init(needsYou: 2)
+        writer.flush()
+        let now = try #require(await Self.written(store) { $0.inbox?.needsYou == 2 })
+        #expect(now.agents.rows.first?.detail == "Testing")
+    }
+
+    @Test func settledLeavesOutOnlyTheLiveNumbers() {
+        var a = HomeSnapshot(paired: true)
+        a.agents.rows = [.init(id: "m/s", title: "Agent", state: .working, detail: "Reading")]
+        a.machines = [.init(id: "m", name: "Mac", online: true, working: 1, load: 40)]
+        a.usage = .init(tokensToday: 10, tpm: 2, hourly: [1, 2])
+        var b = a
+        b.agents.rows[0].detail = "Editing"
+        b.machines[0].load = 80
+        b.usage?.tokensToday = 20
+        b.usage?.hourly = [1, 2, 3]
+        #expect(HomeWidgetWriter.settled(a) == HomeWidgetWriter.settled(b))
+        b.agents.rows[0].state = .needsYou
+        #expect(HomeWidgetWriter.settled(a) != HomeWidgetWriter.settled(b), "a state is no live number")
+        b = a
+        b.machines[0].working = 2
+        #expect(HomeWidgetWriter.settled(a) != HomeWidgetWriter.settled(b))
     }
 
     private static func written(_ store: HomeSnapshotStore, _ ok: (HomeSnapshot) -> Bool) async -> HomeSnapshot? {

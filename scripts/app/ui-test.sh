@@ -5,6 +5,11 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 eval "$(python3 scripts/persona_config.py env)"
 python3 scripts/persona_config.py xcconfig
+if [ -x "${PERSONA_XCODE_RUNNER:-$HOME/.local/bin/xcode-slot}" ]; then
+  "${PERSONA_XCODE_RUNNER:-$HOME/.local/bin/xcode-slot}" native/app-core/scripts/build-apple.sh
+else
+  native/app-core/scripts/build-apple.sh
+fi
 SIM="${SIM:-$PERSONA_SIM}"
 # boots it slim (SIM_PROFILE=default|watch|live-activity|stock), docs/operations/testing.md "Simulators"
 SIM=$(scripts/app/sim-boot.sh "$SIM") || exit 1
@@ -20,6 +25,8 @@ d=json.load(sys.stdin); ss=d if isinstance(d,list) else d.get("sessions",[])
 live=[s for s in ss if s.get("pane_id") and not s.get("assistant")]
 print(live[0]["machine_id"]+"/"+live[0]["session_id"] if live else "")')
 fi
+# The whole project, with the watch app and the share extension, whatever the shell exported (apple/lean-dev-build.yml).
+unset PERSONA_LEAN_DEV_BUILD
 cd apple && xcodegen generate -q
 TEST_RUNNER_PERSONA_PAIR_URL="persona://pair?url=$URL&token=$TOKEN" TEST_RUNNER_PERSONA_OPEN_SESSION="$SESSION" \
   xcodebuild test -project Persona.xcodeproj -scheme Persona -destination "id=$SIM" -derivedDataPath ../build/DerivedData \

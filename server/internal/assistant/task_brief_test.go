@@ -13,9 +13,14 @@ import (
 
 // briefService is the main conversation conv1 on a fake hub, with task_plan held to what a brief requires, and the
 // owner's message said in it at asked.
-func briefService(t *testing.T, said string) (*Service, *fakeHub, time.Time) {
+func briefService(t testing.TB, said string) (*Service, *fakeHub, time.Time) {
 	t.Helper()
-	s, f := newQuietService(t)
+	return briefServiceOn(t, nil, said)
+}
+
+func briefServiceOn(t testing.TB, st Store, said string) (*Service, *fakeHub, time.Time) {
+	t.Helper()
+	s, f := newQuietServiceOn(t, st)
 	s.briefsOptional = false
 	asked := time.Date(2026, 11, 3, 9, 30, 0, 0, time.UTC)
 	f.setItems(proto.Item{ID: "m1", Seq: 1, TS: asked, Role: "user", Kind: proto.KindText, Text: said})
@@ -23,7 +28,7 @@ func briefService(t *testing.T, said string) (*Service, *fakeHub, time.Time) {
 }
 
 // tool is a model's call of an assistant tool from conv1, as the hub passes it on.
-func tool(t *testing.T, s *Service, name string, args any) (string, bool) {
+func tool(t testing.TB, s *Service, name string, args any) (string, bool) {
 	t.Helper()
 	raw, err := json.Marshal(args)
 	if err != nil {
@@ -38,7 +43,7 @@ func tool(t *testing.T, s *Service, name string, args any) (string, bool) {
 
 func briefTask(over map[string]any) map[string]any {
 	task := map[string]any{"title": "fix the login crash", "prompt": "the login page crashes in landscape: fix it and add a test",
-		"machine": "box", "cwd": "/code/app", "readonly": true, "permission": "bypassPermissions", "why": "the repository is on box",
+		"role": "worker", "machine": "box", "cwd": "/code/app", "readonly": true, "permission": "bypassPermissions", "why": "the repository is on box",
 		"goal": "the login page no longer crashes in landscape", "done_when": []string{"PR merged to main", "a test covers landscape"},
 		"expect_minutes": 30}
 	for k, v := range over {
@@ -62,8 +67,8 @@ func todoByTitle(s *Service, title string) (Todo, bool) {
 	return Todo{}, false
 }
 
-// task_plan refuses a writable task without criteria and an expected time, and a read-only one without a goal and an
-// expected time; the refusal says what is missing, and nothing is planned.
+// task_plan refuses a writable task without criteria and a read-only one without a goal. Missing time is automatic;
+// a negative override is still invalid. Refusals name what is missing and plan nothing.
 func TestTaskPlanRequiresABrief(t *testing.T) {
 	s, _, _ := briefService(t, "please fix the login crash")
 	for _, c := range []struct {
@@ -71,11 +76,10 @@ func TestTaskPlanRequiresABrief(t *testing.T) {
 		over map[string]any
 		want []string
 	}{
-		{"writable, nothing", map[string]any{"readonly": false, "done_when": nil, "expect_minutes": nil}, []string{"a writable task needs", "done_when", "expect_minutes"}},
+		{"writable, nothing", map[string]any{"readonly": false, "done_when": nil, "expect_minutes": nil}, []string{"a writable task needs", "done_when"}},
 		{"writable, blank criteria", map[string]any{"readonly": false, "done_when": []string{" ", ""}}, []string{"done_when"}},
-		{"writable, no time", map[string]any{"readonly": false, "expect_minutes": 0}, []string{"expect_minutes"}},
+		{"negative time", map[string]any{"expect_minutes": -1}, []string{"expect_minutes"}},
 		{"read-only, no goal", map[string]any{"goal": nil, "done_when": nil}, []string{"a read-only task needs", "goal"}},
-		{"read-only, no time", map[string]any{"expect_minutes": nil}, []string{"expect_minutes"}},
 		{"continues without why", map[string]any{"continues": "todo_x"}, []string{"continues_why"}},
 	} {
 		got, isErr := tool(t, s, "task_plan", briefTask(c.over))
@@ -89,10 +93,10 @@ func TestTaskPlanRequiresABrief(t *testing.T) {
 		}
 	}
 	if strings.Contains(func() string {
-		got, _ := tool(t, s, "task_plan", briefTask(map[string]any{"readonly": false, "expect_minutes": 0}))
+		got, _ := tool(t, s, "task_plan", briefTask(map[string]any{"readonly": false, "expect_minutes": -1}))
 		return got
 	}(), "done_when (") {
-		t.Fatal("a refusal for the time alone must not ask for criteria that were given")
+		t.Fatal("a refusal for an invalid time must not ask for criteria that were given")
 	}
 	s.todos.mu.RLock()
 	n := len(s.todos.todos)
@@ -100,7 +104,7 @@ func TestTaskPlanRequiresABrief(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("%d to-dos were made by refused plans", n)
 	}
-	// A read-only task needs no criteria; a writable one with criteria and a time is planned (its card waits).
+	// A read-only task needs no criteria; a writable one with criteria is planned with an automatic estimate (its card waits).
 	if got, isErr := tool(t, s, "task_plan", briefTask(map[string]any{"done_when": nil})); isErr {
 		t.Fatalf("read-only with a goal and a time: %s", got)
 	}
@@ -141,6 +145,56 @@ func TestPlanCardCarriesTheBrief(t *testing.T) {
 	}
 }
 
+// A rejected takeover scope aborts the adoption: the new card cannot keep the unapproved criterion or a linked Agent.
+func TestRiskyTakeOverScopeAbortsAdoption(t *testing.T) {
+	s, f, asked := briefService(t, "please fix the login crash before Friday")
+	closed := time.Now().UTC()
+	putTodo(s, Todo{ID: "todo_previous", Title: "fix the login crash", Origin: "conv1", DoneAt: &closed,
+		Supervision: &Supervision{Supervisor: "conv1", DoneWhen: []string{"a test covers landscape"}, ExpectMinutes: 30},
+		Agents:      []TodoAgent{{MachineID: "box", SessionID: "agent-old-1"}}})
+	first := todoNow(s, "todo_previous")
+	if _, err := s.ensureTaskBrief(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	f.setSessions("box", proto.Session{SessionID: "agent-old-1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+		Title: "fix the login crash", Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: time.Now()})
+	f.setItems(
+		proto.Item{ID: "m1", Seq: 1, TS: asked, Role: "user", Kind: proto.KindText, Text: "please fix the login crash before Friday"},
+		proto.Item{ID: "m2", Seq: 2, TS: asked.Add(time.Hour), Role: "user", Kind: proto.KindText,
+			Text: prompts.RenderSupervise(prompts.Supervise{Entries: []prompts.SuperviseEntry{{ID: first.ID, Title: first.Title, Kind: sigOrphaned}}})},
+	)
+	res, err := runJSON(t, s, "conv1", "agent_supervise", map[string]any{
+		"machine": "box", "session_id": "agent-old-1",
+		"done_when": []string{"PR merged to main", "deployed to production and checked"}, "expect_minutes": 5,
+	})
+	if err == nil || !strings.Contains(err.Error(), "only the owner may allow") {
+		t.Fatalf("risky takeover was not refused: %s (%v)", res, err)
+	}
+	if got := todoCount(s); got != 2 {
+		t.Fatalf("todos = %d, want the closed original and aborted card", got)
+	}
+	for _, todo := range s.todosOf(context.Background(), "*") {
+		if todo.ID == first.ID {
+			continue
+		}
+		if len(todo.Agents) != 0 {
+			t.Fatalf("aborted takeover linked an Agent: %+v", todo.Agents)
+		}
+		if todo.Supervision != nil && strings.Contains(strings.Join(todo.Supervision.DoneWhen, "\n"), "deployed to production") {
+			t.Fatalf("aborted takeover kept the unapproved scope: %+v", todo.Supervision)
+		}
+		if todo.DoneAt == nil {
+			t.Fatalf("aborted takeover left an open card: %+v", todo)
+		}
+		if _, linked := s.briefOfTodo(todo.ID); linked {
+			t.Fatalf("aborted takeover stayed on the previous task's brief: %+v", todo)
+		}
+	}
+	if lineage := s.taskLineage(first.ID); len(lineage) != 1 || lineage[0].SupersededBy != "" {
+		t.Fatalf("aborted takeover rewrote the previous task's lineage: %+v", lineage)
+	}
+}
+
 // A task taken over twice still has the owner's original message and date, its criteria, and one lineage; each
 // take-over's prompt is its own, and the review is against the original criteria.
 func TestBriefSurvivesTakeOvers(t *testing.T) {
@@ -160,6 +214,7 @@ func TestBriefSurvivesTakeOvers(t *testing.T) {
 			Text: prompts.RenderSupervise(prompts.Supervise{Entries: []prompts.SuperviseEntry{{ID: first.ID, Title: first.Title, Kind: sigOrphaned}}})})
 	takeOver := func(title, prompt, from, why string) Todo {
 		t.Helper()
+		before := len(todoNow(s, first.ID).Agents)
 		got, isErr := tool(t, s, "task_plan", briefTask(map[string]any{"title": title, "prompt": prompt, "continues": from, "continues_why": why,
 			"done_when": []string{"something else entirely"}, "expect_minutes": 5, "goal": nil}))
 		if isErr {
@@ -167,14 +222,17 @@ func TestBriefSurvivesTakeOvers(t *testing.T) {
 		}
 		var todo Todo
 		waitFor(t, "the take-over "+title+": "+got, func() bool {
-			todo, ok = todoByTitle(s, title)
-			return ok && len(todo.Agents) == 1
+			todo, ok = s.todoNow(first.ID)
+			return ok && len(todo.Agents) == before+1
 		})
 		return todo
 	}
 	second := takeOver("take over login", "you are taking over a session that stopped: carry on from its branch", first.ID, "its computer went offline")
 	third := takeOver("retry login fix", "second hand-over: the branch is pushed, finish the test", second.ID, "the model service kept failing")
 	for _, todo := range []Todo{second, third} {
+		if todo.ID != first.ID || todoCount(s) != 1 {
+			t.Fatalf("take-over split the original task: %+v", todo)
+		}
 		got, ok := s.briefOfTodo(todo.ID)
 		if !ok || got.ID != brief.ID || got.Request.Text != brief.Request.Text || !got.Request.At.Equal(asked) {
 			t.Fatalf("%s: brief = %+v", todo.Title, got)
@@ -183,10 +241,13 @@ func TestBriefSurvivesTakeOvers(t *testing.T) {
 			t.Fatalf("%s: the take-over's own criteria replaced the brief's: %+v", todo.Title, todo.Supervision)
 		}
 	}
-	if third.Notes != "second hand-over: the branch is pushed, finish the test" {
-		t.Fatalf("the take-over's prompt is not its own: %q", third.Notes)
+	f.mu.Lock()
+	lastPrompt, _ := f.starts[len(f.starts)-1]["prompt"].(string)
+	f.mu.Unlock()
+	if third.Notes != first.Notes || !strings.Contains(lastPrompt, "second hand-over: the branch is pushed, finish the test") {
+		t.Fatalf("the original notes or the take-over's own prompt were lost: notes=%q, prompt=%q", third.Notes, lastPrompt)
 	}
-	// The to-do as the apps get it: the brief and the chain.
+	// The to-do as the apps get it: one brief and lineage entry, with all Agents kept in its history.
 	raw, err := s.todoView(context.Background(), third.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -198,14 +259,9 @@ func TestBriefSurvivesTakeOvers(t *testing.T) {
 	if err := json.Unmarshal(raw, &view); err != nil || view.Brief == nil || view.Brief.Request.Text != brief.Request.Text {
 		t.Fatalf("view = %s (%v)", raw, err)
 	}
-	if len(view.Lineage) != 3 || view.Lineage[0].TodoID != first.ID || view.Lineage[0].Why != "its computer went offline" ||
-		view.Lineage[0].SupersededBy != second.ID || view.Lineage[1].Why != "the model service kept failing" ||
-		view.Lineage[2].Continues != second.ID || !view.Lineage[2].Current || view.Lineage[2].Why != "" || view.Lineage[2].Session == "" {
+	if len(view.Lineage) != 1 || view.Lineage[0].TodoID != first.ID || !view.Lineage[0].Current ||
+		view.Lineage[0].SupersededBy != "" || view.Lineage[0].Session == "" || len(third.Agents) != 3 {
 		t.Fatalf("lineage = %+v", view.Lineage)
-	}
-	// Closing the superseded first task ends nothing: the brief has no result while the take-over carries it.
-	if got, isErr := tool(t, s, "task_review", map[string]any{"todo_id": first.ID, "verdict": "cancelled", "note": "superseded"}); isErr {
-		t.Fatal(got)
 	}
 	if b, _ := s.briefOfTodo(third.ID); b.Result != nil {
 		t.Fatalf("cancelling a superseded task ended the brief: %+v", b.Result)
@@ -214,16 +270,32 @@ func TestBriefSurvivesTakeOvers(t *testing.T) {
 	if _, done := s.briefDigest(context.Background(), now, now.Add(-time.Hour), time.UTC); len(done) != 0 {
 		t.Fatalf("the briefing says the work ended while its take-over goes on: %+v", done)
 	}
-	// Accepted with one criterion shown and one not: the report is against the original criteria.
-	got, isErr := tool(t, s, "task_review", map[string]any{"todo_id": third.ID, "verdict": "accepted",
+	// An old criterion and a missing current one cannot be accepted: the refusal writes neither a review result nor completion.
+	rejected, isErr := tool(t, s, "task_review", map[string]any{"todo_id": third.ID, "verdict": "accepted",
 		"checks":    []map[string]any{{"criterion": "PR merged to main", "met": true, "evidence": "merged"}, {"criterion": "something else entirely", "met": true}},
 		"also_done": []string{"removed a dead flag"}})
-	if isErr || !strings.Contains(got, `"PR merged to main" met`) || !strings.Contains(got, `"a test covers landscape" not checked`) ||
+	if !isErr || !strings.Contains(rejected, "unknown current done_when") {
+		t.Fatalf("partial task_review was accepted: %s", rejected)
+	}
+	if cur := todoNow(s, third.ID); cur.DoneAt != nil || len(cur.Supervision.Reviews) != 0 {
+		t.Fatalf("the refused review changed the task: %+v %+v", cur, cur.Supervision)
+	}
+	if b, _ := s.briefOfTodo(first.ID); b.Result != nil {
+		t.Fatalf("the refused review recorded a result: %+v", b.Result)
+	}
+	// A complete acceptance has exactly one met check with evidence for each current criterion.
+	got, isErr := tool(t, s, "task_review", map[string]any{"todo_id": third.ID, "verdict": "accepted",
+		"checks": []map[string]any{
+			{"criterion": "PR merged to main", "met": true, "evidence": "merged"},
+			{"criterion": "a test covers landscape", "met": true, "evidence": "landscape test passed"},
+		},
+		"also_done": []string{"removed a dead flag"}})
+	if isErr || !strings.Contains(got, `"PR merged to main" met`) || !strings.Contains(got, `"a test covers landscape" met`) ||
 		!strings.Contains(got, "Also done: removed a dead flag") {
 		t.Fatalf("task_review: %s", got)
 	}
 	done, _ := s.briefOfTodo(first.ID)
-	if r := done.Result; r == nil || len(r.Criteria) != 2 || r.Criteria[0].State != criterionMet || r.Criteria[1].State != criterionUnchecked ||
+	if r := done.Result; r == nil || len(r.Criteria) != 2 || r.Criteria[0].State != criterionMet || r.Criteria[1].State != criterionMet ||
 		r.Todo != third.ID || len(r.AlsoDone) != 1 {
 		t.Fatalf("result = %+v", done.Result)
 	}
@@ -231,13 +303,47 @@ func TestBriefSurvivesTakeOvers(t *testing.T) {
 	now = time.Now()
 	_, ended := s.briefDigest(context.Background(), now, now.Add(-time.Hour), time.UTC)
 	if len(ended) != 1 || ended[0].Words != "please fix the login crash before Friday" || len(ended[0].Result) != 2 ||
-		ended[0].Result[0].State != criterionMet || ended[0].Result[1].State != criterionUnchecked || len(ended[0].AlsoDone) != 1 {
+		ended[0].Result[0].State != criterionMet || ended[0].Result[1].State != criterionMet || len(ended[0].AlsoDone) != 1 {
 		t.Fatalf("digest = %+v", ended)
 	}
 	s.briefDigestTold(context.Background(), now)
 	later := now.Add(time.Minute)
 	if _, ended := s.briefDigest(context.Background(), later, s.briefDigestSince(context.Background(), later), time.UTC); len(ended) != 0 {
 		t.Fatalf("listed a second time: %+v", ended)
+	}
+}
+
+// Historical multi-to-do briefs remain readable even though new continuations no longer create successor to-dos.
+func TestLegacyBriefLineageSurvivesSupersededTaskCancellation(t *testing.T) {
+	s, _, _ := briefService(t, "fix the login crash")
+	ctx := context.Background()
+	first, err := s.createTaskTodo(ctx, "Original fix", "Fix login", "conv1", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	brief, err := s.ensureTaskBrief(ctx, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.createTaskTodo(ctx, "Legacy successor", "Finish login", "conv1", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.linkTaskBrief(ctx, brief.ID, second.ID, first.ID, "The old Agent stopped"); err != nil {
+		t.Fatal(err)
+	}
+	if got, isErr := tool(t, s, "task_review", map[string]any{
+		"todo_id": first.ID, "verdict": "cancelled", "note": "superseded",
+	}); isErr {
+		t.Fatal(got)
+	}
+	if got, _ := s.briefOfTodo(second.ID); got.Result != nil {
+		t.Fatalf("cancelling a historical predecessor ended its open successor's brief: %+v", got.Result)
+	}
+	lineage := s.taskLineage(second.ID)
+	if len(lineage) != 2 || lineage[0].SupersededBy != second.ID ||
+		lineage[0].Why != "The old Agent stopped" || lineage[1].Continues != first.ID || !lineage[1].Current {
+		t.Fatalf("legacy lineage was lost: %+v", lineage)
 	}
 }
 
@@ -308,9 +414,9 @@ func TestTaskScopeIsLogged(t *testing.T) {
 		t.Fatalf("task_scope: %s", got)
 	}
 	b, _ := s.briefOfTodo(todo.ID)
-	if len(b.DoneWhen) != 2 || len(b.Criteria) != 1 || b.ExpectMinutes != 30 || b.ExpectNow != 90 || len(b.Log) != 1 ||
-		b.Log[0].Kind != briefEventScope || strings.Join(b.Log[0].Dropped, "|") != "a test covers landscape" || b.Log[0].By != "conv1" ||
-		!b.ClockAt.Equal(b.Log[0].At) {
+	if len(b.DoneWhen) != 2 || len(b.Criteria) != 1 || b.ExpectMinutes != 30 || b.ExpectNow != 90 || len(b.Log) != 2 ||
+		b.Log[1].Kind != briefEventScope || strings.Join(b.Log[1].Dropped, "|") != "a test covers landscape" || b.Log[1].By != "conv1" ||
+		!b.ClockAt.Equal(b.Log[1].At) {
 		t.Fatalf("brief = %+v", b)
 	}
 	if v := onlyTodo(s).Supervision; strings.Join(v.DoneWhen, "|") != "PR merged to main" || v.ExpectMinutes != 90 {
@@ -322,7 +428,7 @@ func TestTaskScopeIsLogged(t *testing.T) {
 	if got, isErr := tool(t, s, "task_scope", risky); !isErr || !strings.Contains(got, "only the owner may allow") || !strings.Contains(got, "ask_user") {
 		t.Fatalf("a risky change after a supervision message: %s", got)
 	}
-	if b, _ := s.briefOfTodo(todo.ID); len(b.Log) != 1 || len(b.Criteria) != 1 {
+	if b, _ := s.briefOfTodo(todo.ID); len(b.Log) != 2 || len(b.Criteria) != 1 {
 		t.Fatalf("the refused change was applied: %+v", b)
 	}
 	// The owner says yes: the turn their message starts may add the step, and the message stays on the entry.
@@ -421,9 +527,9 @@ func TestBriefClockRaisesOverdueOnce(t *testing.T) {
 	if !ok || e.Kind != sigOverdue || e.Asked != "please fix the login crash before Friday" || e.AskedAt != "2026-11-03" {
 		t.Fatalf("entry = %+v, %v", e, ok)
 	}
-	if text := prompts.RenderSupervise(prompts.Supervise{Entries: []prompts.SuperviseEntry{e}, Overdue: true}); !strings.Contains(text, "task_scope") ||
+	if text := prompts.RenderSupervise(prompts.Supervise{Entries: []prompts.SuperviseEntry{e}, Overdue: true}); !strings.Contains(text, "signal=overdue") ||
 		!strings.Contains(text, "please fix the login crash before Friday") {
-		t.Fatalf("the supervision message does not say what to do with it:\n%s", text)
+		t.Fatalf("the supervision message is missing brief facts:\n%s", text)
 	}
 	s.clearOverdue(todo.ID)
 	s.briefClock(ctx, todo, late.Add(time.Hour))
@@ -431,7 +537,7 @@ func TestBriefClockRaisesOverdueOnce(t *testing.T) {
 		t.Fatal("raised a second time for the same clock")
 	}
 	b, _ = s.briefOfTodo(todo.ID)
-	if b.Overdue == nil || len(b.Log) != 1 || b.Log[0].Kind != briefEventOverdue {
+	if b.Overdue == nil || len(b.Log) != 2 || b.Log[1].Kind != briefEventOverdue {
 		t.Fatalf("brief = %+v", b)
 	}
 	if open, _ := s.briefDigest(ctx, late, late.Add(-time.Hour), time.UTC); len(open) != 1 || !open[0].Overdue {
@@ -518,4 +624,69 @@ func TestGoldenBriefFactsBriefs(t *testing.T) {
 				{Criterion: "附上数据表", State: "dropped", Change: "数据表下周才有"}, {Criterion: "配图", State: "unchecked"}}, AlsoDone: []string{"顺手修了模板"}},
 			{Date: "2026-11-02", By: briefByRoutine, Goal: "巡检", Now: "不做了", Cancelled: true},
 		}}))
+}
+
+func TestContinuationUsesAuthorizedScope(t *testing.T) {
+	s, f, asked := briefService(t, "keep the recurring check enabled")
+	const original = "the recurring check stays enabled"
+	const effective = "report the result of one inspection"
+	got, isErr := tool(t, s, "task_plan", briefTask(map[string]any{
+		"title": "Verify the recurring check", "goal": "Check the existing schedule",
+		"prompt": "Verify the check's status", "done_when": []string{original},
+	}))
+	if isErr {
+		t.Fatal(got)
+	}
+	waitFor(t, "original start", func() bool { return len(onlyTodo(s).Agents) == 1 })
+	todo := onlyTodo(s)
+	f.mu.Lock()
+	fresh, _ := f.starts[0]["prompt"].(string)
+	f.mu.Unlock()
+	plan := &TaskPlan{ID: "waiting-continuation", Conversation: "conv1", State: planOpen, Tasks: []PlanTask{
+		{Title: "Continue task", Prompt: "Continue the earlier work", Machine: "box", Continues: todo.ID, ContinuesWhy: "The earlier Agent stopped"},
+	}}
+	ctx := context.Background()
+	if err := s.planBriefs(ctx, "", plan.Conversation, plan.Tasks); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.savePlan(ctx, plan); err != nil {
+		t.Fatal(err)
+	}
+	f.setItems(proto.Item{ID: "m2", Seq: 2, TS: asked.Add(time.Hour), Role: "user", Kind: proto.KindText,
+		Text: "Cancel the recurring check and do one inspection."})
+	reply, isErr := tool(t, s, "task_scope", map[string]any{
+		"todo_id": todo.ID, "change": "Cancel the recurring check", "why": "The owner requested one inspection",
+		"done_when": []string{effective},
+	})
+	if isErr || !strings.Contains(reply, "Effective criteria:") || !strings.Contains(reply, "Dropped criteria:") {
+		t.Fatalf("task_scope: %s", reply)
+	}
+	brief, _ := s.briefOfTodo(todo.ID)
+	if _, err := s.startPlan(ctx, plan.ID, nil, false); err == nil || !strings.Contains(err.Error(), "scope of "+todo.ID+" changed") {
+		t.Fatalf("stale card start: %v", err)
+	}
+	args := map[string]any{"title": "Inspect once", "prompt": "Inspect once, without re-enabling any schedule",
+		"continues": todo.ID, "continues_why": "The owner cancelled recurring work",
+		"scope_revision": plan.Tasks[0].Brief.ClockAt.Format(time.RFC3339Nano)}
+	if got, isErr := tool(t, s, "task_plan", briefTask(args)); !isErr || !strings.Contains(got, "scope of "+todo.ID+" changed") {
+		t.Fatalf("stale scope revision: %s", got)
+	}
+	args["scope_revision"] = brief.ClockAt.Format(time.RFC3339Nano)
+	if got, isErr := tool(t, s, "task_plan", briefTask(args)); isErr {
+		t.Fatal(got)
+	}
+	waitFor(t, "replacement start", func() bool { return len(onlyTodo(s).Agents) == 2 })
+	f.mu.Lock()
+	replacement, _ := f.starts[len(f.starts)-1]["prompt"].(string)
+	starts := len(f.starts)
+	f.mu.Unlock()
+	if starts != 2 || todoCount(s) != 1 || strings.Count(replacement, effective) != 1 || strings.Contains(replacement, original) {
+		t.Fatalf("replacement: %d starts, %d to-dos, prompt %q", starts, todoCount(s), replacement)
+	}
+	if !strings.Contains(fresh, original) || brief.Request == nil || brief.Request.Text != "keep the recurring check enabled" ||
+		len(brief.Log) != 2 || len(brief.Log[1].Dropped) != 1 || brief.Log[1].Dropped[0] != original {
+		t.Fatalf("original assignment or scope history lost: %+v", brief)
+	}
+	t.Logf("synthetic full prompts (runes/bytes): fresh %d/%d, re-scoped continuation %d/%d",
+		len([]rune(fresh)), len(fresh), len([]rune(replacement)), len(replacement))
 }

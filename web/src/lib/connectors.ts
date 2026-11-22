@@ -8,6 +8,7 @@
 
 import { formatList, formatNumber, t } from "../i18n";
 import { api, enc } from "./api";
+import { connectorProfile } from "./connector-profiles";
 import { itemHeaders } from "./manager-choice";
 
 // ── wire types ───────────────────────────────────────────
@@ -204,69 +205,26 @@ export function otherConnectors(list: HubConnector[], larkGroup = true): HubConn
   return list.filter((c) => c.id !== "mail" && c.id !== "larkcli" && !(larkGroup && c.id === "lark"));
 }
 
-// ── brand and wording, by id ─────────────────────────────
+// ── brand and wording, by id (connector-profiles.ts) ─────
 
-/** The marks that exist as files (ui/BrandMark.tsx); a connector with none of its own draws the generic icon. */
-export type BrandId = "github" | "telegram" | "lark";
-
-/** What this client knows about one connector by id. Everything is optional: a connector that is not in the table (any
- * plugin's) gets the generic icon and the generic wording, built from its own `name`. Whether an extension may bring its own
- * wording in its manifest is a protocol question, not settled here. */
-interface ConnectorProfile {
-  brand?: BrandId;
-  /** The inbox button for an item answered in the app itself ("Reply in Telegram"). */
-  openTitle?: string;
-  /** What switching it on brings in, in the switch's footer; the default is "its content". */
-  reads?: string;
-  /** The sign-in step's footer: where the credentials live and what is shown of them. */
-  signInFooter?: string;
-  /** Signing out also ends the session at the service (Telegram's log-out call); false or absent: the hub only forgets its copy. */
-  logoutEndsRemoteSession?: boolean;
-}
-
-// A Map, not an object: an extension's id may be `constructor` or `valueOf`.
-const PROFILES = new Map<string, ConnectorProfile>([
-  ["github", { brand: "github" }],
-  ["lark", { brand: "lark" }],
-  ["larkcli", { brand: "lark" }],
-  [
-    "telegram",
-    {
-      brand: "telegram",
-      openTitle: t("lib-connectors.telegram_open_title"),
-      reads: t("lib-connectors.telegram_reads"),
-      signInFooter: t("lib-connectors.telegram_sign_in_footer"),
-      logoutEndsRemoteSession: true,
-    },
-  ],
-]);
-
-/** Which mark a connector has of its own; others draw the generic one. */
-export function connectorBrand(id: string): BrandId | undefined {
-  return PROFILES.get(id)?.brand;
-}
-
-/** The inbox button for a connector's item that is answered in the app itself; undefined for a connector with no wording of its own. */
-export function connectorOpenTitle(id: string): string | undefined {
-  return PROFILES.get(id)?.openTitle;
-}
+export { connectorBrand, connectorOpenTitle, type BrandId } from "./connector-profiles";
 
 // ── its page ─────────────────────────────────────────────
 
 export function switchFooter(c: HubConnector): string {
   if (!storesData(c)) return isEnabled(c) ? t("lib-connectors.switch_footer_bot_on", { name: c.name }) : t("lib-connectors.switch_footer_bot_off");
   if (isEnabled(c)) return t("lib-connectors.switch_footer_on", { name: c.name });
-  return t("lib-connectors.switch_footer_off", { reads: PROFILES.get(c.id)?.reads ?? t("lib-connectors.reads_default") });
+  return t("lib-connectors.switch_footer_off", { reads: connectorProfile(c.id).reads ?? t("lib-connectors.reads_default") });
 }
 
 export function signInFooter(c: HubConnector): string {
-  return PROFILES.get(c.id)?.signInFooter ?? t("lib-connectors.sign_in_footer");
+  return connectorProfile(c.id).signInFooter ?? t("lib-connectors.sign_in_footer");
 }
 
 /** The sign-out confirmation. Only a connector known to end the remote session says so; every other one (GitHub's device
  * token, an extension's key) only has the hub forget its copy, so it says the authorization stays. */
 export function logoutMessage(c: HubConnector): string {
-  if (PROFILES.get(c.id)?.logoutEndsRemoteSession) return t("lib-connectors.logout_remote", { name: c.name });
+  if (connectorProfile(c.id).logoutEndsRemoteSession) return t("lib-connectors.logout_remote", { name: c.name });
   return t("lib-connectors.logout");
 }
 
@@ -491,6 +449,7 @@ export interface ThreadPerson {
   id?: string;
   name: string;
   avatar?: string;
+  avatar_url?: string;
 }
 
 export interface ThreadMedia {
@@ -530,6 +489,7 @@ export interface ThreadChat {
   kind: string; // dm | group | channel | pr | issue
   url?: string;
   avatar?: string;
+  avatar_url?: string;
   members?: number;
   /** The action that answers here; absent: the user cannot answer in this thread. */
   reply?: string;
@@ -600,7 +560,8 @@ export function mediaLine(m: ThreadMedia): string {
   const dur = m.duration ? `${Math.floor(m.duration / 60)}:${String(m.duration % 60).padStart(2, "0")}` : "";
   if (m.kind === "voice") return [t("lib-connectors.media_voice"), dur].filter(Boolean).join(" ");
   if (m.kind === "video") return [t("lib-connectors.media_video"), dur].filter(Boolean).join(" ");
-  const size = m.size ? (m.size >= 1 << 20 ? `${(m.size / (1 << 20)).toFixed(1)} MB` : `${Math.max(1, Math.round(m.size / 1024))} KB`) : "";
+  // MB from 1023.5 KB, where the KB figure would round to 1024.
+  const size = m.size ? (m.size >= 1023.5 * 1024 ? `${(m.size / (1 << 20)).toFixed(1)} MB` : `${Math.max(1, Math.round(m.size / 1024))} KB`) : "";
   return [m.name || t("lib-connectors.media_file"), size].filter(Boolean).join(" · ");
 }
 

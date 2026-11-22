@@ -142,9 +142,9 @@ func serveUIExtensionForTest() {
 		if seen != "" {
 			items = append(items, map[string]any{"type": "text", "text": seen})
 		}
-		return map[string]any{"title": "示例", "state": "page=1", "sections": []any{map[string]any{"title": "概况", "items": items}}}, nil
+		return map[string]any{"title": cmp.Or(os.Getenv("EXAMPLE_UI_ID"), "示例"), "state": "page=1", "sections": []any{map[string]any{"title": "概况", "items": items}}}, nil
 	}
-	_ = pserve.Serve(context.Background(), os.Stdin, os.Stdout, pserve.Program{ID: "example-ui", Version: cmp.Or(os.Getenv("EXAMPLE_UI_VERSION"), "1.0.0"),
+	_ = pserve.Serve(context.Background(), os.Stdin, os.Stdout, pserve.Program{ID: cmp.Or(os.Getenv("EXAMPLE_UI_ID"), "example-ui"), Version: cmp.Or(os.Getenv("EXAMPLE_UI_VERSION"), "1.0.0"),
 		Init: func(_ context.Context, _ extension.InitializeParams, h *pserve.Hub) (map[string]any, error) {
 			hub = h
 			return nil, nil
@@ -182,7 +182,7 @@ func uiPackage(t *testing.T) string {
 			       {"id": "broken", "title": "坏的", "placement": "plugin_page"},
 			       {"id": "panel", "title": "网关面板", "placement": "launcher_section", "hosts": ["127.0.0.1"]},
 			       {"id": "any", "title": "任意网关", "placement": "launcher_section"},
-			       {"id": "nav", "title": "用量", "placement": "nav_page", "icon": "chart"},
+			       {"id": "nav", "title": "用量", "placement": "nav_page", "icon": "chart", "icon_color": "teal", "group": {"id": "work", "title": "工作台"}},
 			       {"id": "card", "title": "用量", "placement": "overview_card", "opens": "nav"},
 			       {"id": "bigcard", "title": "太大的卡片", "placement": "overview_card"},
 			       {"id": "box", "title": "这台机器", "placement": "machine_section"},
@@ -191,6 +191,8 @@ func uiPackage(t *testing.T) string {
 			"events": [{"id": "agents", "subscribe": ["agent.finished"]}]},
 		"permissions": {"launcher_keys": true}}`, runtime.GOOS+"-"+runtime.GOARCH)
 	_ = os.WriteFile(filepath.Join(dir, extension.ManifestFile), []byte(manifest), 0o644)
+	_ = os.MkdirAll(filepath.Join(dir, extension.L10nDir), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, extension.L10nDir, "en.json"), []byte(`{"groups": {"work": "Workbench"}}`), 0o644)
 	return dir
 }
 
@@ -291,7 +293,7 @@ func TestExtensionUISlots(t *testing.T) {
 
 	_, all := call(t, mux, "GET", "/api/v1/plugins/-/ui", master, "")
 	list := fmt.Sprint(all["ui"])
-	for _, want := range []string{"id:nav", "icon:chart", "size:full", "id:card", "opens:nav", "size:compact", "id:box", "plugin_name:Example UI", "id:home"} {
+	for _, want := range []string{"id:nav", "icon:chart", "size:full", "id:card", "opens:nav", "size:compact", "id:box", "plugin_name:Example UI", "id:home", "group:map[id:work title:工作台]", "icon_color:teal"} {
 		if !strings.Contains(list, want) {
 			t.Fatalf("every slot's but launchers' (%s): %s", want, list)
 		}
@@ -302,6 +304,19 @@ func TestExtensionUISlots(t *testing.T) {
 	_, nav := call(t, mux, "GET", "/api/v1/plugins/-/ui?placement=nav_page", master, "")
 	if l, _ := nav["ui"].([]any); len(l) != 1 {
 		t.Fatalf("one slot: %v", nav)
+	}
+	// the nav_page's group (#9071), its title in the request's language from l10n's groups
+	en := httptest.NewRequest("GET", "/api/v1/extensions/-/ui?placement=nav_page", nil)
+	en.Header.Set("Authorization", "Bearer "+master)
+	en.Header.Set("Accept-Language", "en")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, en)
+	if !strings.Contains(w.Body.String(), `"group":{"id":"work","title":"Workbench"}`) {
+		t.Fatalf("the group in English: %s", w.Body.String())
+	}
+	// and its icon color as the manifest names it (#10822), on the new path as on the old one above
+	if !strings.Contains(w.Body.String(), `"icon_color":"teal"`) {
+		t.Fatalf("the icon color: %s", w.Body.String())
 	}
 
 	_, out := call(t, mux, "POST", "/api/v1/plugins/example-ui/-/ui/nav", master,

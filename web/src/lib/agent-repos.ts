@@ -1,7 +1,7 @@
 import { baseName, byAttention, pathSlashes, stateOf } from "./format";
 import { summaryState, type ChildStates } from "./herdr-tree";
 import type { Machine, Session } from "./types";
-import { workspaceKey, workspaceTarget, type HostWorkspace, type WorkspaceTarget } from "./workspace-catalog";
+import { byWorkspacePin, workspaceKey, workspacePinTime, workspaceTarget, type HostWorkspace, type WorkspaceTarget } from "./workspace-catalog";
 import { sessionHost } from "./agent-groups";
 import { directoryKey } from "./workspace-directory";
 
@@ -24,6 +24,8 @@ export type RepoWorktree = {
   navigationTree?: Session[];
   workspace?: HostWorkspace;
   target?: WorkspaceTarget;
+  /** Newest host pin in this visible subtree; ordering only, ancestors do not acquire a pin. */
+  latestPinTime?: number;
   /** Orca child worktrees, sorted by name. */
   children: RepoWorktree[];
   /** This worktree's own sessions, followed by every descendant's sessions. */
@@ -40,6 +42,8 @@ export type RepoTree = {
   repo: string;
   count: number;
   worktrees: RepoWorktree[];
+  /** Newest host pin among this repository's visible workspaces. */
+  latestPinTime?: number;
 };
 
 /** One computer's section in the repository tree: its live repositories ordered by name. */
@@ -98,7 +102,16 @@ export function repoOf(cwd: string, repoRoot?: string): Repo {
   return { repo: path, name: baseName(path), worktree: path, main: true };
 }
 
-const worktreeName = (path: string, repo: string) => (pathKey(path) === pathKey(repo) ? baseName(repo) : baseName(path));
+/** A working tree's name when neither a branch nor its host names it. The main checkout goes by the repository's folder,
+ *  and a linked tree by its own folder. When that folder carries the repository's name too, the linked tree goes by the
+ *  folder holding it instead, so it never reads like the repository: the Codex app keeps
+ *  `~/.codex/worktrees/<name>/<repository>` (#12800). */
+function worktreeName(path: string, repo: string): string {
+  if (pathKey(path) === pathKey(repo)) return baseName(repo);
+  const parts = trimmed(path).split("/").filter(Boolean);
+  const own = parts.pop() ?? "";
+  return baseName(pathKey(path)) === baseName(pathKey(repo)) ? (parts.pop() ?? own) : own;
+}
 
 /** The name the host gave the place a working tree's sessions run in (#4497: Paseo sends its workspace's title as
  *  slot_name, with no slot_id), when every session that gives one gives the same; two different names name nothing.
@@ -121,6 +134,18 @@ export function gitPlaceOf(s: Pick<Session, "repo_root" | "worktree">): Repo | u
   if (!worktree) return undefined;
   const repo = trimmed(s.repo_root) || worktree;
   return { repo, name: baseName(repo), worktree, main: pathKey(worktree) === pathKey(repo) };
+}
+
+/** How many folders below the top of its Git working tree a session runs, when the node says. The top is its reported
+ *  tree, else the main checkout for a cwd inside repo_root, else the cwd itself (0: a linked tree kept outside the
+ *  repository, such as a desktop app's worktree folder). Git reports physical paths, so this counts from the
+ *  node-verified physical cwd when there is one; a count, unlike a path, also holds for the cwd as given when a
+ *  symlinked folder leads to it. Undefined without Git metadata. */
+function gitTreeDepth(s: Pick<Session, "repo_root" | "worktree" | "cwd" | "workspace_cwd">): number | undefined {
+  const tree = catalogPath(s.worktree) || catalogPath(s.repo_root);
+  if (!tree) return undefined;
+  const cwd = catalogPath(s.workspace_cwd) || catalogPath(s.cwd);
+  return cwd && within(cwd, tree) ? depthOf(cwd) - depthOf(tree) : 0;
 }
 
 type Placement = Repo & { path: string; spaceId?: string; git?: boolean };
@@ -333,7 +358,9 @@ export interface RepoCatalogOptions {
 }
 
 /** Exact runtime placement always wins. Directory inference is allowed only for an unbound Agent and a unique
- *  deepest containing directory. Host-owned bindings never fall through to a different runtime at the same path. */
+ *  deepest containing directory, inside its Git working tree when the node reports one: a folder above that tree (the
+ *  home folder, a folder of repositories) holds it on disk but is not where it works. Host-owned bindings never fall
+ *  through to a different runtime at the same path. */
 export function sessionWorkspace(s: Session, catalog: readonly HostWorkspace[], manager?: string): HostWorkspace | undefined {
   if (manager && s.manager && s.manager !== manager) return undefined;
   let local = catalog.filter((w) => w.machine_id === s.machine_id);
@@ -349,24 +376,28 @@ export function sessionWorkspace(s: Session, catalog: readonly HostWorkspace[], 
     }
     // Desktop project ids describe an editor project, not a terminal workspace binding.
     if (s.workspace_id || !["codex_app", "claude_desktop"].includes(host)) return undefined;
-    const directoryPrefix = host === "codex_app" ? "codex-project:" : "claude-project:";
-    const legacyRoot = bound.startsWith(directoryPrefix) ? bound.slice(directoryPrefix.length) : "";
-    if (directoryKey(legacyRoot) !== null) inferredProjectRoot = legacyRoot;
-    // An unavailable saved project must never bind to another saved project merely because they share a directory.
+    const directoryPrefixes = host === "codex_app" ? ["codex-project:"] : ["codex-project:", "claude-project:"];
+    const directoryPrefix = directoryPrefixes.find((prefix) => bound.startsWith(prefix));
+    const directoryRoot = directoryPrefix ? bound.slice(directoryPrefix.length) : "";
+    if (directoryKey(directoryRoot) !== null) inferredProjectRoot = directoryRoot;
+    // An unavailable saved project may use a generic directory, never another host's workspace at the same path.
     // Older, directory-derived desktop placement has no saved identity and can still resolve a unique matching project.
-    if (!inferredProjectRoot) local = local.filter((w) => !["codex_app", "claude_desktop"].includes(w.source));
+    if (!inferredProjectRoot) local = local.filter((w) => w.source === "directory");
   }
   if (["herdr", "herdr-core", "botmux", "orca", "paseo"].includes(host)) return undefined;
-  return directoryWorkspace([s.cwd, s.workspace_cwd, inferredProjectRoot], local);
+  const depth = gitTreeDepth(s);
+  return directoryWorkspace([s.cwd, s.workspace_cwd, inferredProjectRoot], local, false, [depth, depth, depth === undefined ? undefined : 0]);
 }
-function directoryWorkspace(paths: readonly (string | undefined)[], workspaces: readonly HostWorkspace[], boundProject = false): HostWorkspace | undefined {
-  for (const raw of paths) {
+function directoryWorkspace(paths: readonly (string | undefined)[], workspaces: readonly HostWorkspace[], boundProject = false, depths?: readonly (number | undefined)[]): HostWorkspace | undefined {
+  for (const [index, raw] of paths.entries()) {
     const cwd = catalogPath(raw);
     if (!cwd) continue;
+    const depth = depths?.[index];
     const candidates = workspaces.filter((w) => {
       const path = catalogPath(w.cwd);
-      if (!path || !withinPath(cwd, path)) return false;
+      if (!path || !within(cwd, path)) return false;
       if (boundProject) return true;
+      if (depth !== undefined && depthOf(cwd) - depthOf(path) > depth) return false;
       const below = cwd === path ? "" : cwd.slice(path.length + (path.endsWith("/") ? 0 : 1));
       return !WORKTREE_SEGMENTS.some(([marker]) => below.startsWith(marker.slice(1)));
     });
@@ -377,7 +408,17 @@ function directoryWorkspace(paths: readonly (string | undefined)[], workspaces: 
   }
   return undefined;
 }
+
+/** A saved Agent remains in its host-pinned workspace even after its process stops. Never infer that pin from cwd. */
+export function hasWorkspacePin(s: Session, catalog: readonly HostWorkspace[], manager?: string): boolean {
+  if (s.archived || !s.workspace_id || !(s.space_kind || s.host || s.pane_id)) return false;
+  return workspacePinTime(sessionWorkspace(s, catalog, manager)) !== undefined;
+}
 const catalogPath = (value?: string) => directoryKey(value ?? "") ?? pathKey(value);
+/** Whether `path` is `dir` or below it, both already normalized by catalogPath. */
+const within = withinPath;
+/** How many folders deep a path normalized by catalogPath is: 0 at the root. */
+const depthOf = (path: string) => (path === "/" ? 0 : path.split("/").length - 1);
 
 /** Runtime logical spaces share a repository display row at a verified checkout. Action attribution continues
  *  to use sessionWorkspace and its native binding rules. */
@@ -454,7 +495,10 @@ function catalogRepos(sessions: Session[], machineId: string, options: RepoCatal
     const parent = !cycle && parentOf(node);
     if (parent) parent.children.push(node); else top.push(node);
   }
-  const order = (a: RepoWorktree, b: RepoWorktree) => Number(b.main) - Number(a.main) || a.name.localeCompare(b.name) || a.key.localeCompare(b.key);
+  // Keep a pin inside its real ancestry, but lift that branch and repository ahead of ordinary ones. Only visible
+  // descendants contribute: a pin hidden by the current search or filter cannot reorder the remaining tree.
+  const order = (a: RepoWorktree, b: RepoWorktree) => byWorkspacePin(a, b)
+    || Number(b.main) - Number(a.main) || a.name.localeCompare(b.name) || a.key.localeCompare(b.key);
   const query = options.search?.trim().toLocaleLowerCase();
   const fill = (node: RepoWorktree): boolean => {
     node.sessions.sort(options.compareSessions ?? byAttention);
@@ -466,6 +510,8 @@ function catalogRepos(sessions: Session[], machineId: string, options: RepoCatal
       node.directSessions = node.directSessions!.filter((s) => `${s.title} ${s.cwd} ${s.branch ?? ""}`.toLocaleLowerCase().includes(query!));
     }
     node.children = node.children.filter(fill).sort(order);
+    const pinned = Math.max(workspacePinTime(w) ?? -Infinity, node.children[0]?.latestPinTime ?? -Infinity);
+    if (Number.isFinite(pinned)) node.latestPinTime = pinned;
     node.tree = [...node.sessions, ...node.children.flatMap((c) => c.tree)];
     node.navigationTree = [...node.directSessions!, ...node.children.flatMap((c) => c.navigationTree ?? [])];
     for (const c of node.children) {
@@ -476,15 +522,31 @@ function catalogRepos(sessions: Session[], machineId: string, options: RepoCatal
     }
     return node.children.length > 0 || node.directSessions!.length > 0 || (!options.hideEmpty && matches);
   };
+  // A host that names no project for a workspace (herdr) leaves it to Git: the repository its Agents agree on, else the
+  // one its own folder is. Such a workspace shares that repository's section with the other hosts' places in it and with
+  // the session-only rows below, so one repository is one section, while every place keeps its own row.
+  const repositoryPath = (root: RepoWorktree): string => {
+    const w = root.workspace!;
+    if (w.project_id) return "";
+    if (w.project_path) return catalogPath(w.project_path);
+    const roots = new Set(root.tree.map((s) => catalogPath(gitPlaceOf(s)?.repo || s.repo_root)).filter(Boolean));
+    if (roots.size > 1) return "";
+    return roots.size ? [...roots][0]! : catalogPath(repoOf(catalogPath(w.cwd)).repo);
+  };
   const repos = new Map<string, RepoTree>();
+  const byPath = new Map<string, RepoTree>();
   for (const root of top.filter(fill).sort(order)) {
     const w = root.workspace!;
+    const path = repositoryPath(root);
     const project = w.project_id || w.project_path || w.source_id;
-    const key = JSON.stringify([options.owner, options.manager, machineId, w.source, project]);
+    const key = JSON.stringify(path ? [options.owner, options.manager, machineId, "path", path] : [options.owner, options.manager, machineId, w.source, project]);
     let repo = repos.get(key);
     if (!repo) {
-      repo = { key, machineId, name: w.project_name || baseName(w.project_path || "") || root.name, repo: w.project_path || `${w.source}:${project}`, count: 0, worktrees: [] };
+      repo = { key, machineId, name: w.project_name || baseName(path || w.project_path || "") || root.name, repo: path || w.project_path || `${w.source}:${project}`, count: 0, worktrees: [] };
+      // Roots are already ordered by pin, so the first member holds this repository's newest one.
+      if (root.latestPinTime !== undefined) repo.latestPinTime = root.latestPinTime;
       repos.set(key, repo);
+      if (path) byPath.set(path, repo);
     }
     repo.worktrees.push(root);
     repo.count += root.tree.length;
@@ -493,14 +555,23 @@ function catalogRepos(sessions: Session[], machineId: string, options: RepoCatal
   const groupedNavigation = new Set([...nodes.values()].flatMap((node) => node.directSessions!));
   const navigation = options.navigationSessions?.filter((s) => !groupedNavigation.has(s)
     && (!query || `${s.title} ${s.cwd}`.toLocaleLowerCase().includes(query)));
-  return [...repos.values(), ...legacyNavigationRepos(unmatched, machineId, { ...options, navigationSessions: navigation })].sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
+  const sessionOnly: RepoTree[] = [];
+  for (const repo of legacyNavigationRepos(unmatched, machineId, { ...options, navigationSessions: navigation })) {
+    const shared = byPath.get(catalogPath(repo.repo));
+    if (!shared) { sessionOnly.push(repo); continue; }
+    shared.worktrees.push(...repo.worktrees);
+    shared.worktrees.sort(order);
+    shared.count += repo.count;
+  }
+  return [...repos.values(), ...sessionOnly]
+    .sort((a, b) => byWorkspacePin(a, b) || a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
 }
 
 export function buildRepoMachineTree(all: Session[], machines: Machine[], options?: RepoCatalogOptions): RepoMachine[] {
   const online = new Set(machines.filter((m) => m.online).map((m) => m.id));
   const byMachine = new Map<string, Session[]>();
   for (const s of all) {
-    if (s.assistant || !online.has(s.machine_id)) continue;
+    if (s.assistant || (!online.has(s.machine_id) && !(options && hasWorkspacePin(s, options.workspaces, options.manager)))) continue;
     let list = byMachine.get(s.machine_id);
     if (!list) {
       list = [];

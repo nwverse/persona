@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// Settings › Extensions › Extension Market (docs/extensions/extensions.md「Extension marketplace」): the plugins of every market the hub has, searched and filtered by
 /// market; a row each with its name, version, what it does, its tags and how it stands on this hub. The markets
@@ -148,7 +149,6 @@ struct ExtensionMarketView: View {
 private struct MarketExtensionRow: View {
     var item: ExtensionCatalogItem
     var showsMarket: Bool
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Space.m) {
@@ -160,17 +160,11 @@ private struct MarketExtensionRow: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
-            if typeSize.isAccessibilitySize {
-                Text(item.name).font(Theme.Font.bodyStrong).fixedSize(horizontal: false, vertical: true)
-                Text(item.version).font(Theme.Font.label.monospacedDigit()).foregroundStyle(.secondary)
+            HStack(spacing: Theme.Space.s) {
+                Text(item.name).font(Theme.Font.bodyStrong).lineLimit(1)
+                Text(item.version).font(Theme.Font.label.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: Theme.Space.s)
                 MarketStateChip(item: item)
-            } else {
-                HStack(spacing: Theme.Space.s) {
-                    Text(item.name).font(Theme.Font.bodyStrong).lineLimit(1)
-                    Text(item.version).font(Theme.Font.label.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
-                    Spacer(minLength: Theme.Space.s)
-                    MarketStateChip(item: item)
-                }
             }
             if let d = item.description, !d.isEmpty {
                 Text(d).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(2)
@@ -220,7 +214,6 @@ private struct MarketStateChip: View {
 /// new version asks for in addition), or remove when it came from this market.
 struct MarketExtensionDetailView: View {
     @Environment(AppModel.self) private var app
-    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var page: MarketExtensionModel
     @State private var confirmRemove = false
     /// The install ended waiting for a sign-in: the extension's page opens over this one.
@@ -266,9 +259,9 @@ struct MarketExtensionDetailView: View {
         .overlay { if page.item == nil && page.error == nil { ProgressView() } }
         .detailTitle(page.item?.name ?? String(localized: "Extensions"))
         .navigationBarTitleDisplayMode(.inline)
-        .confirmationDialog("Turn Off Dependent Extensions and Uninstall?", isPresented: Binding(
+        .accessibleConfirmationDialog("Turn Off Dependent Extensions and Uninstall?", isPresented: Binding(
             get: { page.uninstallConfirmation != nil }, set: { if !$0 { page.uninstallConfirmation = nil } }),
-            titleVisibility: .visible) {
+            titleVisibility: .visible, hasCancel: true) {
             Button(role: .destructive) {
                 Task {
                     if await page.uninstall(cascade: true, members: page.removingMembers) { done(.uninstall) }
@@ -329,22 +322,18 @@ struct MarketExtensionDetailView: View {
 
     @ViewBuilder private func header(_ p: ExtensionCatalogItem) -> some View {
         Section {
-            // At the accessibility sizes the name and its line wrap and the state goes under them, or the chip beside them
-            // left "Ex…" (#4058).
-            let large = typeSize.isAccessibilitySize
             HStack(spacing: Theme.Space.m) {
                 ExtensionLogo(url: p.iconURL)
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    Text(p.name).font(Theme.Font.heading).lineLimit(large ? nil : 1)
+                    Text(p.name).font(Theme.Font.heading).lineLimit(1)
                     Text([p.version, p.publisher, p.marketName].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
-                        .font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(large ? nil : 1)
+                        .font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
                     if let downloads = p.downloads, downloads >= 0 {
                         Text("Downloads: \(downloads)").font(Theme.Font.label).foregroundStyle(.secondary)
                     }
-                    if large { MarketStateChip(item: p) }
                 }
                 Spacer(minLength: Theme.Space.s)
-                if !large { MarketStateChip(item: p) }
+                MarketStateChip(item: p)
             }
             .padding(.vertical, Theme.Space.xs)
             if let d = p.description, !d.isEmpty { Text(d).font(Theme.Font.secondary).foregroundStyle(.secondary) }
@@ -383,7 +372,7 @@ struct MarketExtensionDetailView: View {
                 .tint(Theme.danger) // a Mac form draws a button in the accent whatever its role (#1512)
                 .disabled(page.working)
                 .accessibilityIdentifier("market-uninstall")
-                .confirmationDialog("Uninstall “\(p.name)”?", isPresented: $confirmRemove, titleVisibility: .visible) {
+                .accessibleConfirmationDialog("Uninstall “\(p.name)”?", isPresented: $confirmRemove, titleVisibility: .visible, hasCancel: true) {
                     Button(role: .destructive) {
                         Task { if await page.uninstall() { done(.uninstall) } }
                     } label: { Text(page.isPack ? String(localized: "Pack Only") : String(localized: "Uninstall")).lineLimit(1) }
@@ -482,15 +471,13 @@ private struct PermissionLine: View {
 /// market under the id of one not installed). The lines wrap at the accessibility sizes.
 struct ExtensionPackMemberRow: View {
     var line: ExtensionPackMemberLine
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        let large = typeSize.isAccessibilitySize
         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-            Text(line.title).font(Theme.Font.body).lineLimit(large ? nil : 1)
+            Text(line.title).font(Theme.Font.body).lineLimit(1)
             if let detail = line.detail {
                 Text(detail).font(Theme.Font.label).foregroundStyle(.secondary)
-                    .lineLimit(large ? nil : 1).truncationMode(.middle)
+                    .lineLimit(1).truncationMode(.middle)
             }
         }
         .accessibilityElement(children: .combine)
@@ -757,7 +744,7 @@ private struct MarketRow: View {
             .buttonStyle(.borderless)
             .foregroundStyle(Theme.danger) // a Mac borderless button draws its role in the accent
             .accessibilityIdentifier("market-remove-\(market.id)")
-            .confirmationDialog("Delete market “\(market.title)”?", isPresented: $confirmRemove, titleVisibility: .visible) {
+            .accessibleConfirmationDialog("Delete market “\(market.title)”?", isPresented: $confirmRemove, titleVisibility: .visible, hasCancel: true) {
                 Button(role: .destructive) { act(.remove) } label: { Text("Delete").lineLimit(1) }
                     .accessibilityIdentifier("market-remove-confirm")
                 Button("Cancel", role: .cancel) {}
@@ -810,10 +797,7 @@ private struct ExtensionRemovalNoticeSheet: View {
             .navigationTitle(notice.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(action: done) { Text("OK [Recordings Section de32e2]").lineLimit(1) }
-                        .accessibilityIdentifier("market-removal-done")
-                }
+                SheetClose(id: "market-removal-close", action: done)
             }
         }
         .interactiveDismissDisabled()
@@ -893,13 +877,9 @@ private struct MarketTokenSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .sheetCancel(unsaved: !spec.isEmpty || !token.isEmpty) { dismiss() }
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button { submit(clearing: false) } label: {
-                        if busy { ProgressView() } else { Text(asksSpec ? String(localized: "Add [Beautiful U I Bridge 7a8a11]") : String(localized: "Save")).lineLimit(1) }
-                    }
-                    .disabled(busy || (asksSpec ? spec.trimmingCharacters(in: .whitespaces).isEmpty : token.trimmingCharacters(in: .whitespaces).isEmpty))
-                    .accessibilityIdentifier("market-save")
-                }
+                SheetConfirm(id: "market-save",
+                             disabled: asksSpec ? spec.trimmingCharacters(in: .whitespaces).isEmpty : token.trimmingCharacters(in: .whitespaces).isEmpty,
+                             busy: busy) { submit(clearing: false) }
             }
         }
         .presentationDetents([.medium, .large])

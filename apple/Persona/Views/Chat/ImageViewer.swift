@@ -12,10 +12,15 @@ import UIKit
 struct ViewerImage: Identifiable, Hashable {
     var payload: ImagePayload?
     var file: FileRef?
+    /// A reply's machine-local image: read in full through ChatImageLoader, not a path-only FileThumbnails entry.
+    var download: FileRef?
     var url: String?
     var title: String?
     var detail: String?
-    var id: String { payload?.identity ?? file.map { "file:" + $0.id } ?? url.map { "url:" + $0 } ?? "" }
+    var id: String {
+        if let download { return "download:" + download.machineRef.path + ":" + (download.cwd ?? "") + ":" + download.path }
+        return payload?.identity ?? file.map { "file:" + $0.id } ?? url.map { "url:" + $0 } ?? ""
+    }
 
     /// Width × height in pixels when known before decoding.
     var pixelSize: String? {
@@ -41,6 +46,7 @@ struct ImageViewer: View {
     /// Pages whose last load gave no picture: they say so, with Retry, instead of spinning on (#182). Not loaded again
     /// until Retry.
     @State private var failed: Set<Int> = []
+    @State private var failureReasons: [Int: String] = [:]
     @State private var chrome = true
     /// How far a pull-down has gone, 0…1: the backdrop and the bars fade with it.
     @State private var pull: CGFloat = 0
@@ -176,12 +182,12 @@ struct ImageViewer: View {
     /// failures for the session), would only fail again. The bars stay while it is the page shown (`showsChrome`).
     private func notLoaded(_ i: Int) -> some View {
         let item = images[i]
-        let again = item.payload.map { $0.ref != nil } ?? (item.url != nil)
+        let again = item.download != nil || item.payload.map { $0.ref != nil } ?? (item.url != nil)
         let retry: (title: String, run: () -> Void)? = again
             ? (title: String(localized: "Retry [Components b8784c]"), run: { self.retry(i) }) : nil
-        let message = again ? String(localized: "Couldn't get this image. Tap Retry to try again.")
+        let message = failureReasons[i] ?? (again ? String(localized: "Couldn't get this image. Tap Retry to try again.")
             : item.payload == nil && item.file != nil ? String(localized: "Couldn't get a preview of this image. Use Open in Files in the ⋯ menu.")
-            : String(localized: "This image's data can't be opened")
+            : String(localized: "This image's data can't be opened"))
         return EmptyStateView(symbol: Theme.Icon.error, title: String(localized: "Image didn't load"), message: message, action: retry,
                               tint: Theme.caution)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -191,6 +197,7 @@ struct ImageViewer: View {
     /// Retry on a page that did not load: its load runs again.
     private func retry(_ i: Int) {
         failed.remove(i)
+        failureReasons[i] = nil
         Task { await load(i) }
     }
 
@@ -219,7 +226,8 @@ struct ImageViewer: View {
 
     private var topBar: some View {
         ViewerTopBar {
-            Button { dismiss() } label: { ViewerIcon(symbol: Theme.Icon.back) }
+            // ✕, as the share card's viewer and every presented page (#9653); ‹ is for a page that was pushed.
+            Button { dismiss() } label: { ViewerIcon(symbol: Theme.Icon.close) }
                 .viewerRound()
                 .accessibilityLabel("Close")
                 .accessibilityIdentifier("viewer-close")
@@ -362,12 +370,21 @@ struct ImageViewer: View {
         await ImagePagingProbe.shared.beforeDecode(i)
         #endif
         #endif
-        let image = await ViewerLoader.image(images[i], side: nil)
-        #if DEBUG && (os(iOS) || os(visionOS))
-        ImagePagingProbe.shared.decoded(i, image: image)
-        #endif
-        decoded[i] = image
-        if image == nil, !Task.isCancelled { failed.insert(i) }
+        do {
+            let image = try await ViewerLoader.image(images[i], side: nil)
+            #if DEBUG && (os(iOS) || os(visionOS))
+            ImagePagingProbe.shared.decoded(i, image: image)
+            #endif
+            decoded[i] = image
+            if image == nil, !Task.isCancelled {
+                failed.insert(i)
+                failureReasons[i] = nil
+            }
+        } catch {
+            guard !Task.isCancelled else { return }
+            failed.insert(i)
+            failureReasons[i] = error.shown
+        }
     }
 
     private func save() async {
@@ -381,7 +398,7 @@ struct ImageViewer: View {
             return
         }
         do {
-            // `@Sendable`: Photos runs the block on its own queue, where main-actor code is a crash (BackgroundCallbackTests).
+            // `@Sendable`: Photos runs the block on its own queue, where main-actor code is a crash (test_apple_background_callbacks.py).
             try await PHPhotoLibrary.shared().performChanges { @Sendable in PHAssetChangeRequest.creationRequestForAsset(from: img) }
             Haptics.success()
             AppModel.shared.toast = Toast(String(localized: "Saved to Photos"), style: .success)
@@ -394,48 +411,21 @@ struct ImageViewer: View {
 
 /// Loads what a `ViewerImage` points at. `side`: the long edge to decode to (a thumbnail), nil for the full picture.
 enum ViewerLoader {
-    @MainActor static func image(_ item: ViewerImage, side: CGFloat?) async -> UIImage? {
+    @MainActor static func image(_ item: ViewerImage, side: CGFloat?) async throws -> UIImage? {
         if let p = item.payload { return await ChatImageLoader.image(p, side: side) }
         if let url = item.url {
             if let side { return await LarkMedia.shared.image(url, size: url.hasPrefix("/") ? larkThumbEdge(points: side / 3) : nil, maxPixel: side) }
             return await LarkMedia.shared.image(url, maxPixel: 4096)
+        }
+        if let f = item.download {
+            // Reply-local files use the same complete download and cwd-aware cache as their thumbnails.
+            return try await ChatImageLoader.image(f, side: side)
         }
         if let f = item.file, AppModel.shared.features(f.group).contains("file_thumb"), let api = AppModel.shared.api(f.group) {
             // Only the file is known: the biggest thumbnail the node draws (1024 px); Open in Files has the original.
             return await FileThumbnails.shared.thumbnail(f, size: 0, modified: nil, side: min(side ?? 1024, 1024), scale: 1, api: api)
         }
         return nil
-    }
-}
-
-/// A web picture in Markdown (`![](https://…)` in an answer, a message, a note): drawn through `LarkMedia`'s cache, a tap
-/// opens it in the viewer. Pages with their own pictures set their own provider (a file's relative images, Feishu
-/// documents); anything not on the web is left to MarkdownUI's default.
-struct WebMarkdownImages: ImageProvider {
-    func makeImage(url: URL?) -> some View { WebMarkdownImage(url: url) }
-}
-
-private struct WebMarkdownImage: View {
-    var url: URL?
-    @State private var open = false
-    @Namespace private var zoom
-
-    var body: some View {
-        if let url, let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" {
-            Button { open = true } label: {
-                LarkRemoteImage(url: url.absoluteString, maxPixel: 1600, contentMode: .fit)
-                    .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.box60, alignment: .leading)
-                    .clipShape(.rect(cornerRadius: Theme.Radius.control, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .matchedTransitionSource(id: "markdown-image", in: zoom)
-            .accessibilityLabel("Image, tap to enlarge")
-            .fullScreenCover(isPresented: $open) {
-                ImageViewer(urls: [url.absoluteString], index: 0).navigationTransition(.zoom(sourceID: "markdown-image", in: zoom))
-            }
-        } else {
-            DefaultImageProvider.default.makeImage(url: url)
-        }
     }
 }
 
@@ -490,7 +480,7 @@ private struct ViewerThumb: View {
             .overlay {
                 if let picture { Image(uiImage: picture).resizable().scaledToFill() }
             }
-            .task(id: item.id) { picture = await ViewerLoader.image(item, side: 120) }
+            .task(id: item.id) { picture = try? await ViewerLoader.image(item, side: 120) }
     }
 }
 

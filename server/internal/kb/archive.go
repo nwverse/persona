@@ -102,8 +102,8 @@ type Engine struct {
 	// DayRecordingName is a day recording's name in the owner's language for its day (YYYY-MM-DD), unless the user
 	// titled it; nil or "": the knowledge base's own.
 	DayRecordingName func(day string) string
-	// OwnerLanguage is the owner's language on the hub (an i18n code): what a recording that says no language of its
-	// own has its minutes, summary and recap written in (language.go); nil or not one of the hub's: zh-Hans.
+	// OwnerLanguage is the owner's language on the hub (an i18n code) for new knowledge explanations
+	// and the fallback for recordings without a language (language.go). Nil or invalid: zh-Hans.
 	OwnerLanguage func() i18n.Lang
 	// HandleKey is the hub's key for the senders' identity hints (handles.go); without it none are kept.
 	HandleKey []byte
@@ -151,6 +151,10 @@ type Engine struct {
 	clock func() time.Time
 	// jobLeft is how long a recap job has left (tests); nil: until its context's deadline.
 	jobLeft func(ctx context.Context) time.Duration
+	// minutesCall and minutesPart are the transcript runes the minutes read in one call and in one part of a long
+	// meeting (tests; zero: minutesOneCall and minutesChunk): the behaviour check sends a short meeting through the
+	// merging call.
+	minutesCall, minutesPart int
 }
 
 // Retries are the knowledge base steps' failures and when each may be tried again (retrySet, one per step).
@@ -253,7 +257,12 @@ func (e *Engine) AttachmentDaysFor(source string) int {
 // textCutoff and line stop writing. With a selection, each line's days are its deciding rule's (PruneSelected), and
 // documents past the days the user set for them go too (pruneDocs); a selection that cannot be read now
 // (Selection.Stopgap) prunes nothing: the next round tries again. The count is of day files, attachment days and documents.
-func (e *Engine) Prune(now time.Time) int {
+func (e *Engine) Prune(now time.Time) (removed int) {
+	defer func() {
+		if removed > 0 {
+			e.Store.SearchIndexPurge() // what retention removed leaves the search index at its next update
+		}
+	}()
 	if sel := e.selection(); sel != nil {
 		if sel.Stopgap() {
 			return 0

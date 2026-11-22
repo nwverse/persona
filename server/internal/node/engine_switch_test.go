@@ -287,8 +287,8 @@ func pickFor(t *testing.T, n *Node, id string, params map[string]any) error {
 
 // The user's next message moves the conversation to Codex: the claude is quit in its pane and Codex started in the
 // same shell through codex-start, in the conversation's folder, with the handoff block and then the user's words as
-// its first message (nothing typed a second time). The new thread's record names the Claude Code stretch it continues,
-// the old session's names none, and the list shows the conversation once: the Codex row, with the conversation's
+// its first message (nothing typed a second time). The new thread's record names the Claude Code stretch it continues
+// and the model and effort picked (what a resume runs), the old session's names none, and the list shows the conversation once: the Codex row, with the conversation's
 // title. The to-do the claude's pane was linked to is handed on (persona_from), and the pane Persona opened for the
 // old session is marked as the new one's.
 func TestEngineSwitchToCodexOnTheUsersNextMessage(t *testing.T) {
@@ -297,7 +297,7 @@ func TestEngineSwitchToCodexOnTheUsersNextMessage(t *testing.T) {
 	agent["tokens"] = map[string]any{"persona_todo_ref": "todo-1@m1/" + sidA, personaTabToken: sidA}
 	f.reply("session.snapshot", snapshot(nil, nil, []any{agent}, nil))
 	title := rowOf(t, n, sidA).Title
-	if err := pick(t, n, map[string]any{"launcher": "cx", "model": "gpt-6"}); err != nil {
+	if err := pick(t, n, map[string]any{"launcher": "cx", "model": "gpt-6", "effort": "max"}); err != nil {
 		t.Fatal(err)
 	}
 	f.reset()
@@ -320,7 +320,7 @@ func TestEngineSwitchToCodexOnTheUsersNextMessage(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("codex-start files: %+v", got)
 	}
-	if got[0].Dir != cwd || !strings.Contains(strings.Join(got[0].Argv, " "), " launch cx --model gpt-6") {
+	if got[0].Dir != cwd || !strings.Contains(strings.Join(got[0].Argv, " "), " launch cx --model gpt-6 -c model_reasoning_effort=max") {
 		t.Errorf("codex-start runs %q in %q", got[0].Argv, got[0].Dir)
 	}
 	checkHandoffBlock(t, got[0].Prompt, "claude", "codex", "gpt-6", false, "hello")
@@ -330,7 +330,7 @@ func TestEngineSwitchToCodexOnTheUsersNextMessage(t *testing.T) {
 	}
 	st, ok := n.state.get(switchedThread)
 	if !ok || len(st.EngineHistory) != 1 || st.EngineHistory[0].SessionID != sidA || st.EngineHistory[0].Agent != "claude" ||
-		st.EngineHistory[0].Until.Before(before) || st.PendingSwitch != nil || st.Launcher != "cx" || st.Model != "gpt-6" {
+		st.EngineHistory[0].Until.Before(before) || st.PendingSwitch != nil || st.Launcher != "cx" || st.Model != "gpt-6" || st.ModelEffort != "max" {
 		t.Fatalf("the new thread's record = %+v (%v)", st, ok)
 	}
 	if old, _ := n.state.get(sidA); old.EngineHistory != nil || old.PendingSwitch != nil {
@@ -1036,6 +1036,77 @@ func TestEngineSwitchKeepsTheHandoffForTheNextMessage(t *testing.T) {
 		t.Fatal("the message was not typed")
 	}
 	checkHandoffBlock(t, got[0], "codex", "claude", "", true, "and now?")
+	if st, _ := n.state.get(sidA); st.PendingHandoff != nil {
+		t.Errorf("the handoff still waits after going in: %+v", st.PendingHandoff)
+	}
+}
+
+// The same switch, and the user answers the dialog without sending anything: the first message the node held for the
+// dialog (firstAfterDialog) goes in with the handoff, and the handoff still on the record is not put in front of the
+// next message as well.
+func TestEngineSwitchHandoffGoesInOnceWithTheHeldFirstMessage(t *testing.T) {
+	withFirstAfterDialog(t, 10*time.Second, 20*time.Millisecond)
+	n, f, home, cwd, _ := codexSwitchNode(t)
+	n.state.setPendingSwitch(sidB, &proto.PendingSwitch{Launcher: "claude", Agent: "claude", At: time.Now()})
+	quitsOn(f, "w1:p1", sidB, nil, shellPane("w1:p1", "w1:t1", "w1", cwd, sidB))
+	plain, ansi := screenFixture(t, "claude-2.1.312-empty-162.txt"), screenFixture(t, "claude-2.1.312-empty-162.ansi")
+	var mu sync.Mutex
+	status := ""
+	f.after(func(c herdrCall) {
+		switch {
+		case c.Method == "pane.send_input" && strings.Contains(str(c.Params["text"]), "--resume "+sidA):
+			mu.Lock()
+			status = proto.StatusBlocked // the resume's own dialog holds the keyboard
+			mu.Unlock()
+			f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(sidA, proto.StatusBlocked, "w1:p1", "w1:t1", "w1", cwd, "")}, nil))
+		case c.Method == "agent.prompt": // what is typed reaches the transcript
+			line, _ := json.Marshal(map[string]any{"type": "user", "timestamp": time.Now().UTC().Format(time.RFC3339Nano), "cwd": cwd,
+				"message": map[string]any{"role": "user", "content": str(c.Params["text"])}})
+			appendTranscript(t, home, cwd, sidA, string(line))
+		}
+	})
+	f.handle("agent.get", func(p map[string]any) any {
+		mu.Lock()
+		defer mu.Unlock()
+		if status == "" {
+			return map[string]any{"agent": nil}
+		}
+		return map[string]any{"agent": map[string]any{"agent": "claude", "agent_status": status, "pane_id": "w1:p1",
+			"tab_id": "w1:t1", "workspace_id": "w1"}}
+	})
+	if err := tellTo(t, n, sidB, "and now?"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if st, _ := n.state.get(sidA); st.PendingHandoff == nil || !st.PendingHandoff.Resumed {
+		t.Fatalf("the handoff is not kept: %+v", st.PendingHandoff)
+	}
+	heldPolls(t, f, 5) // the dialog stays a while: nothing typed
+	if got := promptsTo(f); len(got) != 0 {
+		t.Fatalf("typed into the dialog: %q", got)
+	}
+	// The user answers the dialog and sends nothing: the held message goes in, carrying the handoff.
+	f.setScreens("w1:p1", plain, ansi)
+	f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(sidA, proto.StatusIdle, "w1:p1", "w1:t1", "w1", cwd, "")}, nil))
+	mu.Lock()
+	status = proto.StatusIdle
+	mu.Unlock()
+	n.dialogWait.Wait()
+	got := promptsTo(f)
+	if len(got) != 1 {
+		t.Fatalf("the held first message was typed %d times: %q", len(got), got)
+	}
+	checkHandoffBlock(t, got[0], "codex", "claude", "", true, "and now?")
+	if p, ok := n.lostFirst.get(sidA); ok {
+		t.Errorf("still marked lost: %s", p.why)
+	}
+	// The next message goes without the handoff: the session has it already.
+	listSessions(t, n)
+	if _, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "go on"}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if got := promptsTo(f); len(got) != 2 || got[1] != "go on" {
+		t.Fatalf("typed %q, want the next message without the handoff", got)
+	}
 	if st, _ := n.state.get(sidA); st.PendingHandoff != nil {
 		t.Errorf("the handoff still waits after going in: %+v", st.PendingHandoff)
 	}

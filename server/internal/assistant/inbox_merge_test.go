@@ -1,10 +1,14 @@
 package assistant
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/db"
 )
 
 func mergeItems(h *inboxHub) {
@@ -18,6 +22,21 @@ func mergeItems(h *inboxHub) {
 	for _, it := range []*InboxItem{a, b, c} {
 		h.inbox.items[it.ID] = it
 	}
+}
+
+// undoDeleteFailStore fails the next to-do deletion once, as a transient store error does.
+type undoDeleteFailStore struct {
+	Store
+	todoStore
+	fail bool
+}
+
+func (s *undoDeleteFailStore) DeleteTodo(ctx context.Context, id string) error {
+	if s.fail {
+		s.fail = false
+		return fmt.Errorf("synthetic delete failure")
+	}
+	return s.todoStore.DeleteTodo(ctx, id)
 }
 
 func listedIDs(t *testing.T, h *inboxHub) string {
@@ -129,7 +148,7 @@ func TestInboxTodoAndUndo(t *testing.T) {
 		if td["due_date"] != "2026-11-15" || td["inbox_item"] == "" {
 			t.Fatalf("todo %v", td)
 		}
-		if m.(map[string]any)["item"] == "b" && td["title"] != "Send Ana the numbers" {
+		if m.(map[string]any)["item"].(map[string]any)["id"] == "b" && td["title"] != "Send Ana the numbers" {
 			t.Fatalf("title %v", td["title"])
 		}
 	}
@@ -146,6 +165,68 @@ func TestInboxTodoAndUndo(t *testing.T) {
 	}
 	if _, ok := h.todoNow(made[0].(map[string]any)["todo"].(map[string]any)["id"].(string)); ok {
 		t.Fatal("to-do stays after Undo")
+	}
+}
+
+// Each made to-do names its row as {"id": …}, the shape the iPhone app decodes (#7215): with a bare string id the app
+// failed the whole answer and showed a decoding error, though the to-do was made and the row filed (#8310).
+func TestInboxTodoReplyItemIsAnObject(t *testing.T) {
+	h := muteHub(t)
+	mergeItems(h)
+	code, out := inboxCall(t, h.routes(), "POST", "/api/v1/inbox/todo", `{"items":[{"id":"a"}]}`)
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	var reply struct {
+		Todos []struct {
+			Item struct {
+				ID string `json:"id"`
+			} `json:"item"`
+			Todo struct {
+				ID string `json:"id"`
+			} `json:"todo"`
+		} `json:"todos"`
+	}
+	if err := json.Unmarshal(rawJSON(out), &reply); err != nil {
+		t.Fatalf("an app decoding item and todo as objects cannot read the answer: %v", err)
+	}
+	if len(reply.Todos) != 1 || reply.Todos[0].Item.ID != "a" || reply.Todos[0].Todo.ID == "" {
+		t.Fatalf("todos %+v", reply.Todos)
+	}
+}
+
+func TestInboxTodoUndoDeleteFailureKeepsRowFiled(t *testing.T) {
+	h := muteHub(t)
+	database, err := db.Open(context.Background(), newDatabase(t), db.ManagerSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(database.Close)
+	failing := &undoDeleteFailStore{Store: h.st, todoStore: database, fail: true}
+	h.store = func() Store { return failing }
+	mergeItems(h)
+	code, out := inboxCall(t, h.routes(), "POST", "/api/v1/inbox/todo", `{"items":[{"id":"a"}]}`)
+	if code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	todoID := out["todos"].([]any)[0].(map[string]any)["todo"].(map[string]any)["id"].(string)
+	res := h.undoInboxTodos(context.Background(), []inboxTodoUndoItem{{ID: "a", Todo: todoID}}, time.Now())
+	if len(res.Changed) != 0 || strings.Join(res.Failed, ",") != "a" {
+		t.Fatalf("a failed deletion must stay filed and report its ID: %+v", res)
+	}
+	if row := h.inbox.items["a"]; row.open() || row.DoneBy != doneByTodo {
+		t.Fatalf("the failed row must remain filed as a to-do: %+v", row)
+	}
+	if _, ok := h.todoNow(todoID); !ok {
+		t.Fatal("the failed deletion must retain the to-do")
+	}
+
+	res = h.undoInboxTodos(context.Background(), []inboxTodoUndoItem{{ID: "a", Todo: todoID}}, time.Now())
+	if len(res.Changed) != 1 || len(res.Failed) != 0 || !h.inbox.items["a"].open() {
+		t.Fatalf("the retry must reopen the row once: %+v", res)
+	}
+	if _, ok := h.todoNow(todoID); ok {
+		t.Fatal("the retry must delete the to-do")
 	}
 }
 
@@ -188,4 +269,138 @@ func TestConfirmTodoSuggestion(t *testing.T) {
 	if _, err := h.actOnSuggestion(t.Context(), "a", suggestionReq{Version: 0, Action: suggestConfirm}, false); err == nil {
 		t.Fatal("answer-only device confirmed")
 	}
+}
+
+// A model's verdict on a merged row never lowers it below the rows it stands for: its own tier before the merge, and its
+// members' now (#7230).
+func TestMergedTierSurvivesTriage(t *testing.T) {
+	ctx := context.Background()
+	merge := func(h *inboxHub, ids string) {
+		t.Helper()
+		if code, out := inboxCall(t, h.routes(), "POST", "/api/v1/inbox/merge", `{"items":[`+ids+`]}`); code != 200 {
+			t.Fatalf("merge: %d %v", code, out)
+		}
+	}
+	t.Run("the survivor's own tier", func(t *testing.T) {
+		h := muteHub(t)
+		h.in.setModel(fakeModel(t, `{"tier":"noise","summary":"all of it","reason":"nothing to do"}`))
+		mergeItems(h)
+		merge(h, `{"id":"a"},{"id":"b"},{"id":"c"}`) // b is the newest and Needs you
+		sv := h.inbox.items["b"]
+		if sv.TriagedAt != "" {
+			t.Fatalf("a merged row is judged again: %q", sv.TriagedAt)
+		}
+		h.saveWrites(ctx, []*inboxWrite{h.triage(ctx, sv)}, "its triage")
+		if sv.Tier != TierAction || sv.Summary != "all of it" || sv.TriagedAt != sv.Last {
+			t.Fatalf("after triage: tier %q summary %q triaged %q", sv.Tier, sv.Summary, sv.TriagedAt)
+		}
+	})
+	t.Run("a member's tier that moved", func(t *testing.T) {
+		h := muteHub(t)
+		h.in.setModel(fakeModel(t, `{"tier":"noise","summary":"s","reason":"r"}`))
+		mergeItems(h)
+		merge(h, `{"id":"a"},{"id":"c"}`) // a (FYI) survives c (collapsed)
+		sv := h.inbox.items["a"]
+		if sv.Tier != TierFYI {
+			t.Fatalf("merged tier %q", sv.Tier)
+		}
+		h.inbox.mu.Lock()
+		c := h.inbox.items["c"]
+		c.Tier, c.Reason, c.Urgent = TierAction, "asked for a time", true // its later verdict
+		h.inbox.mu.Unlock()
+		h.saveWrites(ctx, []*inboxWrite{h.triage(ctx, sv)}, "its triage")
+		if sv.Tier != TierAction || sv.Reason != "asked for a time" || !sv.Urgent {
+			t.Fatalf("after triage: %q %q urgent=%v", sv.Tier, sv.Reason, sv.Urgent)
+		}
+	})
+	t.Run("a verdict above them stands", func(t *testing.T) {
+		h := muteHub(t)
+		h.in.setModel(fakeModel(t, `{"tier":"action","summary":"s","reason":"r"}`))
+		mergeItems(h)
+		merge(h, `{"id":"a"},{"id":"c"}`)
+		sv := h.inbox.items["a"]
+		h.saveWrites(ctx, []*inboxWrite{h.triage(ctx, sv)}, "its triage")
+		if sv.Tier != TierAction || sv.Reason != "r" {
+			t.Fatalf("after triage: %q %q", sv.Tier, sv.Reason)
+		}
+	})
+}
+
+// The model writes one title for a merged row, in the background, from every row: the row keeps the newest row's title
+// until it answers (and when it cannot); Undo puts the old title back; a title the user wrote stays (#7229).
+func TestMergedRowTitle(t *testing.T) {
+	merge := func(h *inboxHub, ids string) map[string]any {
+		t.Helper()
+		code, out := inboxCall(t, h.routes(), "POST", "/api/v1/inbox/merge", `{"items":[`+ids+`]}`)
+		if code != 200 {
+			t.Fatalf("merge: %d %v", code, out)
+		}
+		return out
+	}
+	t.Run("written, and undone", func(t *testing.T) {
+		h := muteHub(t)
+		model, calls := captureModel(t, `{"title":"Budget for the quarter"}`)
+		h.in.setModel(model)
+		mergeItems(h)
+		out := merge(h, `{"id":"a"},{"id":"b"},{"id":"c"}`)
+		if got := out["item"].(map[string]any)["title"]; got != "Budget deadline" {
+			t.Fatalf("the reply carries the newest title before the model answers: %v", got)
+		}
+		h.inbox.titling.Wait()
+		sv := h.inbox.items["b"]
+		if sv.Title != "Budget for the quarter" || sv.TitleBy != TitleByMerged || sv.PreMergeTitle != "Budget deadline" {
+			t.Fatalf("after the model: %q by %q (was %q)", sv.Title, sv.TitleBy, sv.PreMergeTitle)
+		}
+		call := onlyCall(t, calls())
+		for _, want := range []string{"Budget numbers", "Budget deadline", "Release notes"} {
+			if !strings.Contains(call.User, want) {
+				t.Errorf("the model was not shown %q:\n%s", want, call.User)
+			}
+		}
+		if _, l := inboxCall(t, h.routes(), "GET", "/api/v1/inbox/b", ""); l["title"] != "Budget for the quarter" || l["pre_merge_title"] != nil || l["merge_title"] != nil {
+			t.Fatalf("listed: %v", l)
+		}
+		inboxCall(t, h.routes(), "POST", "/api/v1/inbox/merge/undo", `{"id":"b"}`)
+		if sv.Title != "Budget deadline" || sv.TitleBy != "" || sv.MergeTitle != "" {
+			t.Fatalf("after undo: %q by %q", sv.Title, sv.TitleBy)
+		}
+	})
+	t.Run("the user's title stays, and a failure leaves the newest", func(t *testing.T) {
+		h := muteHub(t)
+		h.in.setModel(fakeModel(t, `{"title":"Something else"}`))
+		mergeItems(h)
+		h.inbox.items["b"].TitleBy = TitleByUser
+		merge(h, `{"id":"a"},{"id":"b"}`)
+		h.inbox.titling.Wait()
+		if sv := h.inbox.items["b"]; sv.Title != "Budget deadline" || sv.TitleBy != TitleByUser {
+			t.Fatalf("the user's title: %q by %q", sv.Title, sv.TitleBy)
+		}
+		h2 := muteHub(t)
+		h2.in.setModel(fakeModel(t, `not json`))
+		mergeItems(h2)
+		merge(h2, `{"id":"a"},{"id":"b"}`)
+		h2.inbox.titling.Wait()
+		if sv := h2.inbox.items["b"]; sv.Title != "Budget deadline" || sv.TitleBy == TitleByMerged {
+			t.Fatalf("after a failed answer: %q by %q", sv.Title, sv.TitleBy)
+		}
+	})
+	t.Run("grouping leaves it alone, an undone merge drops a late answer", func(t *testing.T) {
+		h := muteHub(t)
+		h.in.setModel(fakeModel(t, `{"title":"One matter"}`))
+		mergeItems(h)
+		merge(h, `{"id":"a"},{"id":"b"}`)
+		h.inbox.titling.Wait()
+		if !keepsWords(h.inbox.items["b"]) {
+			t.Fatal("grouping would rewrite the merged title")
+		}
+		// a late answer: the row was undone meanwhile
+		h.inbox.mu.Lock()
+		sv := h.inbox.items["b"]
+		h.inbox.unmerge(sv, time.Now())
+		h.inbox.mu.Unlock()
+		h.rewriteMergedTitle(context.Background(), "b")
+		if sv.Title != "Budget deadline" || sv.MergeTitle != "" {
+			t.Fatalf("after undo and a late answer: %q %q", sv.Title, sv.MergeTitle)
+		}
+	})
 }

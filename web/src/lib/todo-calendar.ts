@@ -3,7 +3,8 @@
 // events can be another later (an entry with an end), and nothing here needs to change for it. iOS / Mac:
 // apple/Shared/TodoCalendar.swift, the same rules.
 import { formatDate } from "../i18n";
-import { isOverdue, todoDueDay, todoStatus, todoStatusLabel, type SessionLookup, type Todo, type TodoStatus } from "./todos";
+import { isOverdue, todoDueDay, todoStatus, type SessionLookup, type Todo, type TodoStatus, type TodoTone } from "./todos";
+import { todoLook, waitOf } from "./todo-wait-reason";
 
 export type CalendarMode = "day" | "week" | "month";
 
@@ -19,9 +20,11 @@ export interface CalendarEntry {
   /** When it ends: none for a to-do, which is due at a moment; an event's end. */
   end?: number;
   allDay: boolean;
-  /** Its state, colored and named as in the list. */
+  /** Its state, colored and named as in the list: a waiting one's word and tone say what it waits on (#11090, todoLook);
+   *  without `tone`, its status's. */
   status: TodoStatus;
   statusLabel: string;
+  tone?: TodoTone;
   done: boolean;
   overdue: boolean;
   high: boolean;
@@ -37,6 +40,7 @@ export function todoEntry(todo: Todo, lookup?: SessionLookup, now = Date.now()):
   const start = allDay ? day : at;
   if (start === undefined) return undefined;
   const status = todoStatus(todo, lookup);
+  const look = todoLook(todo, status, waitOf(todo, status, lookup), status);
   const done = Boolean(todo.done_at);
   return {
     id: `todo:${todo.id}`,
@@ -45,7 +49,8 @@ export function todoEntry(todo: Todo, lookup?: SessionLookup, now = Date.now()):
     start,
     allDay,
     status,
-    statusLabel: todoStatusLabel(todo, status),
+    statusLabel: look.label,
+    tone: look.tone,
     done,
     overdue: isOverdue(todo, now),
     high: todo.priority === "high" && !done,
@@ -167,9 +172,12 @@ export function entriesOn(day: number, entries: readonly CalendarEntry[]): Calen
 
 // ---- the time axis ----
 
-/** Minutes from the start of day to ms. */
+/** Minutes from the start of day to ms on the clock, as the axis's hour lines, slotAt and dropOnAxis count them: on a day
+ * the clocks change, 10:00 is still 600 minutes in, not the 540 or 660 that have passed since midnight (#9851). */
 export function minutesInto(ms: number, day: number): number {
-  return (ms - startOfDay(day)) / 60_000;
+  const d = new Date(ms);
+  const days = Math.round((startOfDay(ms) - startOfDay(day)) / 86_400_000);
+  return days * 24 * 60 + d.getHours() * 60 + d.getMinutes() + (d.getSeconds() * 1000 + d.getMilliseconds()) / 60_000;
 }
 
 function blockEnd(e: CalendarEntry, minutes: number): number {

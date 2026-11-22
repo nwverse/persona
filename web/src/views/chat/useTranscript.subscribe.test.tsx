@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
+import { clearConversationDeletions, conversationDeleted, rememberConversationDeleted } from "../../lib/conversation-deleted";
 // The subscribe a hello sends for a chat whose first page is still on its way: none. Without since_seq the hub would
 // read and send that whole page again over the socket, while the HTTP read brings it anyway (a page load opens the
 // socket and reads at once); the read subscribes from where it ends.
+import { ApiError } from "../../lib/api";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Item, ItemsPage } from "../../lib/types";
-import { useTranscript } from "./useTranscript";
+import { liveEntry, receiveLive, resetLive } from "../../lib/live";
+import { useTranscript, type Transcript } from "./useTranscript";
 
 interface Pending {
   url: string;
@@ -34,9 +37,10 @@ vi.mock("../../lib/store", async (orig) => ({
 
 let host: HTMLDivElement;
 let root: Root;
+let shown: Transcript;
 
 function Probe() {
-  useTranscript("m", "A");
+  shown = useTranscript("m", "A");
   return null;
 }
 
@@ -63,6 +67,8 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+  clearConversationDeletions();
+  resetLive();
 });
 
 describe("useTranscript subscribe", () => {
@@ -87,4 +93,46 @@ describe("useTranscript subscribe", () => {
     expect(subscribes()).toHaveLength(1);
     expect(subscribes()[0].since_seq).toBeUndefined();
   });
+});
+
+it("clears the session's cached live retry on unmount", async () => {
+  await settleFirstRead({ items: [item("a10", 10)], to_seq: 10 });
+  receiveLive({ machine_id: "m", session_id: "A", live: { retry_error: "429 Synthetic rate limit for retry capture", retry_attempt: 5, retry_max: 10 } }, 1000);
+  expect(liveEntry("m", "A")).toBeDefined();
+  act(() => root.unmount());
+  expect(liveEntry("m", "A")).toBeUndefined();
+  root = createRoot(host);
+});
+
+it("never resubscribes or displays a page that arrives after deletion", async () => {
+  await act(async () => rememberConversationDeleted("m", "A"));
+  await settleFirstRead({ items: [item("late", 10)], to_seq: 10 });
+  hello();
+  expect(subscribes()).toEqual([]);
+  expect(sent.some((m) => m.type === "unsubscribe" && m.session_id === "A")).toBe(true);
+});
+
+it("drops an older page that returns after the conversation is deleted", async () => {
+  await settleFirstRead({ items: [item("a10", 10)], to_seq: 10, has_more: true });
+  let read!: Promise<symbol | undefined>;
+  act(() => { read = shown.loadEarlier(); });
+  const older = calls.shift()!;
+  expect(older.url).toContain("before_seq=10");
+
+  await act(async () => {
+    rememberConversationDeleted("m", "A");
+    older.resolve({ items: [item("late", 5)], has_more: false });
+    expect(await read).toBeUndefined();
+    expect(await shown.loadEarlier()).toBeUndefined();
+    expect(calls).toHaveLength(0);
+  });
+
+  expect(shown.items).toEqual([]);
+  expect(shown.loadingEarlier).toBe(false);
+});
+
+it("recognizes a cold old link's 410 without a prior websocket deletion event", async () => {
+  await settleFirstRead(new ApiError(410, "Conversation deleted", { code: "conversation_deleted" }));
+  expect(conversationDeleted("m", "A")).toBe(true);
+  expect(subscribes()).toEqual([]);
 });

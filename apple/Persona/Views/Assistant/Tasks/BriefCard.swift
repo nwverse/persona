@@ -140,9 +140,9 @@ struct BriefCard: View {
                         Text(p.title).font(Theme.Font.secondaryMedium).frame(maxWidth: .infinity, alignment: .leading)
                         BriefOpenButton(title: p.title) { TasksStore.shared.detailTask = p.id }
                     }
-                    if let stage = TodoStage(hub: p.stage) {
+                    if let stage = TodoStage(hub: p.shownStage) {
                         TodoStageBar(stage: stage)
-                    } else if let stage = p.stage?.trimmingCharacters(in: .whitespacesAndNewlines), !stage.isEmpty {
+                    } else if let stage = p.shownStage?.trimmingCharacters(in: .whitespacesAndNewlines), !stage.isEmpty {
                         BriefNote(stage) // a stage this build doesn't know: the hub's word for it
                     }
                 }
@@ -194,12 +194,6 @@ private struct BriefSetupRow: View {
         HStack(spacing: Theme.Space.m) {
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 Text(line.text).font(Theme.Font.secondary)
-                if line.isOnTheWebOnly {
-                    Text("That page is in the web app's settings for Persona.")
-                        .font(Theme.Font.caption)
-                        .foregroundStyle(.secondary)
-                        .accessibilityIdentifier("brief.setup.web.\(line.id)")
-                }
             }
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -211,6 +205,8 @@ private struct BriefSetupRow: View {
             }
         }
         .padding(.vertical, Theme.Space.xs)
+        // A container, so its Open Settings keeps its own identifier (`brief.setup.open.<id>`) under the row's.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("brief.setup.\(line.id)")
     }
 }
@@ -309,6 +305,8 @@ private struct BriefOpenButton: View {
 private struct BriefChatRow: View {
     var row: BriefBody.Row
     var chat: SessionKey?
+    /// The conversation's stack: Open pushes the chat on it, with Back to the card (#12006).
+    @Environment(\.pushInboxChat) private var pushChat
 
     var body: some View {
         HStack(spacing: Theme.Space.m) {
@@ -317,7 +315,7 @@ private struct BriefChatRow: View {
                 Text(briefMeta(row)).font(Theme.Font.caption).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            if let chat { BriefOpenButton(title: row.title) { AppModel.shared.open(chat) } }
+            if let chat { BriefOpenButton(title: row.title) { AppModel.shared.openInPage(chat, push: conversationAgentPush(pushChat)) } }
         }
         .padding(.vertical, Theme.Space.xs)
     }
@@ -485,6 +483,7 @@ private struct BriefLaterRow: View {
     var group: String
     var conversation: String = ""
     var chat: SessionKey?
+    @Environment(\.pushInboxChat) private var pushChat
     private var actions: BriefActions { .shared }
 
     var body: some View {
@@ -493,7 +492,7 @@ private struct BriefLaterRow: View {
             Text(briefMeta(row)).font(Theme.Font.caption).foregroundStyle(.secondary)
             HStack(spacing: Theme.Space.s) {
                 Spacer(minLength: 0)
-                if let chat { BriefOpenButton(title: row.title) { AppModel.shared.open(chat) } }
+                if let chat { BriefOpenButton(title: row.title) { AppModel.shared.openInPage(chat, push: conversationAgentPush(pushChat)) } }
                 handled
             }
             .padding(.top, Theme.Space.xs)

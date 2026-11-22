@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// Settings › hub › Local Proxy (docs/operations/network.md "Connecting to hub through a local SOCKS5 proxy"): one paired
 /// hub's SOCKS5 proxy, with what it is doing now.
@@ -152,7 +153,7 @@ struct LocalProxyForm<Status: View>: View {
         #endif
         .onAppear(perform: load)
         .onChange(of: always) { _, now in alwaysChanged(now) }
-        .confirmationDialog("Delete Local Proxy?", isPresented: $removing, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Delete Local Proxy?", isPresented: $removing, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { onSave(nil); dismiss() }
         } message: {
             Text("Persona stops using this proxy to reach the hub.")

@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// Repository browsing keeps one compact line per Agent, without reply previews.
 nonisolated enum WorkspaceList {
@@ -87,6 +88,10 @@ struct WorkspaceSidebarCard<AgentContent: View, Actions: View>: View {
                             Text(workspace.name)
                                 .font(workspace.sidebarUnread ? Theme.WorkspaceSidebar.titleUnread : Theme.WorkspaceSidebar.title)
                                 .foregroundStyle(Theme.WorkspaceSidebar.foreground).lineLimit(1)
+                            if workspace.workspace?.pinnedAt != nil {
+                                ThemedIcon(Theme.Icon.pinned).font(Theme.WorkspaceSidebar.meta).foregroundStyle(Theme.accent)
+                                    .accessibilityHidden(true)
+                            }
                             if workspace.main {
                                 Text(String(localized: "workspace.primary", defaultValue: "Primary"))
                                     .font(Theme.WorkspaceSidebar.meta).foregroundStyle(Theme.WorkspaceSidebar.foreground.opacity(0.7))
@@ -108,6 +113,7 @@ struct WorkspaceSidebarCard<AgentContent: View, Actions: View>: View {
             .accessibilityIdentifier("agents.worktree")
             .accessibilityLabel(workspace.name)
             .accessibilityValue([workspace.main ? String(localized: "workspace.primary", defaultValue: "Primary") : "",
+                                 workspace.workspace?.pinnedAt != nil ? String(localized: "Pinned [Personal Agent List View fb47db]") : "",
                                  workspace.workspace?.branch ?? ""].filter { !$0.isEmpty }.joined(separator: ", "))
             if !workspace.sessions.isEmpty || !workspace.children.isEmpty {
                 VStack(alignment: .leading, spacing: Theme.Space.sm) {
@@ -285,49 +291,37 @@ struct WorkspaceAgentRow: View {
     var session: Session
     var time: AgentTime?
     var muted: Bool
-    @Environment(\.dynamicTypeSize) private var typeSize
-
     var body: some View {
-        Group {
-            if typeSize.isAccessibilitySize {
-                // Keep the Agent's name above model and age at accessibility text sizes.
-                VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                    HStack(spacing: Theme.Space.xs) {
-                        title
-                        Spacer(minLength: 0)
-                    }
-                    .fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: Theme.Space.xs) { metadata }
-                }
-                .padding(.vertical, Theme.Space.xs)
-            } else {
-                HStack(spacing: Theme.Space.xs) {
-                    title
-                    Spacer(minLength: 0)
-                    metadata
-                }
-                .scaledFrame(height: Theme.WorkspaceSidebar.agentHeight)
-            }
+        HStack(spacing: Theme.Space.xs) {
+            title
+            Spacer(minLength: 0)
+            metadata
         }
+        .scaledFrame(height: Theme.WorkspaceSidebar.agentHeight)
         .frame(maxWidth: .infinity, alignment: .leading).contentShape(.rect)
         .accessibilityElement(children: .combine)
         .accessibilityValue(session.stateLabel(muted: muted))
     }
 
     @ViewBuilder private var title: some View {
-        if session.state == .unread || session.state == .idle {
+        if session.showsJustFinished(muted: muted) {
+            StatusDot(state: .idle, size: Theme.Size.dotS, justFinished: true)
+        } else if session.state == .unread || session.state == .idle {
             ThemedIcon(Theme.Icon.success).font(Theme.WorkspaceSidebar.meta).foregroundStyle(Theme.WorkspaceSidebar.success)
         } else { StatusDot(state: session.state, size: Theme.Size.dotS) }
         AgentMark(session, side: Theme.Size.markXS)
         Text(session.displayTitle).font(session.state == .unread ? Theme.Font.labelStrong : Theme.WorkspaceSidebar.agent)
             .foregroundStyle(session.state == .unread ? Theme.WorkspaceSidebar.foreground : Theme.WorkspaceSidebar.muted)
-            .lineLimit(typeSize.isAccessibilitySize ? 2 : 1).layoutPriority(1)
+            .lineLimit(1).layoutPriority(1)
     }
 
     @ViewBuilder private var metadata: some View {
+        if session.showsJustFinished(muted: muted) {
+            Text(StateName.justFinished.text).font(Theme.WorkspaceSidebar.meta).foregroundStyle(StatusPalette.unread.text)
+        }
         Text(session.model.flatMap { $0.isEmpty ? nil : $0 } ?? session.agentLabel)
             .font(Theme.WorkspaceSidebar.meta.monospaced()).foregroundStyle(Theme.WorkspaceSidebar.muted).lineLimit(1)
-            .scaledWidthCap(Theme.WorkspaceSidebar.projectBadgeWidth).fixedSize(horizontal: !typeSize.isAccessibilitySize, vertical: false)
+            .scaledWidthCap(Theme.WorkspaceSidebar.projectBadgeWidth).fixedSize(horizontal: true, vertical: false)
             .accessibilityIdentifier("agents.workspaceModel")
         if let at = time?.updatedAt ?? session.updatedAt, at.isMeaningful {
             TimelineView(.periodic(from: .now, by: 30)) { tick in
@@ -493,7 +487,7 @@ struct ButtonRowInsets: ViewModifier {
         } else if let edges {
             content.listRowInsets(EdgeInsets(top: Theme.Space.flush, leading: edges.leading, bottom: Theme.Space.flush, trailing: edges.trailing))
         } else {
-            content.listRowInsets(.vertical, Theme.Space.flush)
+            content.listRowVerticalInsets(Theme.Space.flush)
         }
         #else
         content.listRowInsets(edges)
@@ -626,6 +620,8 @@ struct RepoWorktreeLine: View {
     /// Its computer is out of reach (a worktree the host lists).
     var offline = false
     var showChevron = true
+    /// Pinned in its engine (Paseo's Pin to top, #9316): the pin mark after its name.
+    var pinned = false
 
     var body: some View {
         RepoTreeLine(level: level) {
@@ -636,6 +632,10 @@ struct RepoWorktreeLine: View {
             HStack(spacing: Theme.Space.s) {
                 Text(name).font(Theme.Font.secondaryMedium).foregroundStyle(quiet || offline ? Color.secondary : Color.primary)
                     .lineLimit(1).layoutPriority(1)
+                if pinned {
+                    ThemedIcon(Theme.Icon.pinned).font(Theme.Font.caption).foregroundStyle(Theme.accent)
+                        .accessibilityHidden(true)
+                }
                 if main {
                     Chip(text: String(localized: "workspace.primary", defaultValue: "Primary"), look: .neutral, compact: true).fixedSize()
                 }
@@ -652,6 +652,7 @@ struct RepoWorktreeLine: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel([main ? String(localized: "Main worktree") : String(localized: "Worktree"), name, detail ?? "",
+                             pinned ? String(localized: "Pinned [Personal Agent List View fb47db]") : "",
                              offline ? String(localized: "This computer is offline") : "", tally ?? "",
                              showChevron ? (open ? String(localized: "Expanded") : String(localized: "Collapsed [Readiness Card ee6046]")) : ""]
             .filter { !$0.isEmpty }

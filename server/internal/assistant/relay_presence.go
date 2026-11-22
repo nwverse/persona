@@ -40,6 +40,7 @@ const (
 	relayRankAnswer   = iota // the owner's late answer to an ask_user question (ask_todo.go)
 	relayRankDecision        // a supervision message or task notice that waits on a decision
 	relayRankReport          // an outcome the conversation is to report to the owner (a task's notice)
+	relayRankHandover        // in a direction's lead: the owner's words handed to it (relayMsg.Handover, #11699)
 	relayRankOther           // everything else: other supervision messages, messages from conversations, records
 )
 
@@ -57,7 +58,13 @@ func (msg relayMsg) decisionWaiting() bool {
 	return false
 }
 
-func (msg relayMsg) rank() int {
+// rank is msg's rank in the queue of a conversation that is no direction's lead.
+func (msg relayMsg) rank() int { return msg.rankIn(false) }
+
+// rankIn is msg's rank in the queue of a direction's lead (lead) or of another conversation: a hand-over of the owner's
+// words to a lead goes after the outcomes to report and before the rest; anywhere else it ranks as any message from a
+// conversation does.
+func (msg relayMsg) rankIn(lead bool) int {
 	switch {
 	case msg.Tool == askAnswerTool:
 		return relayRankAnswer
@@ -65,6 +72,8 @@ func (msg relayMsg) rank() int {
 		return relayRankDecision
 	case msg.Tool == noticeTool:
 		return relayRankReport
+	case lead && msg.Handover != "":
+		return relayRankHandover
 	}
 	return relayRankOther
 }
@@ -126,6 +135,9 @@ func (msg relayMsg) decisionSince() time.Time {
 // session list shows the round ended (ownerRoundsSeen), or on its safety limits if the list never shows the round
 // working or never shows it stop.
 func (b *relayBook) holdLocked(to string, msg relayMsg, now time.Time) time.Duration {
+	if wait := msg.Due.Sub(now); !msg.Due.IsZero() && wait > 0 {
+		return wait // past the relay rate: it waits for the window (#10400)
+	}
 	if msg.Owner {
 		return 0
 	}
@@ -156,15 +168,20 @@ func (b *relayBook) holdLocked(to string, msg relayMsg, now time.Time) time.Dura
 }
 
 // pickLocked is the index of the message of conversation to's queue that goes in next: the best rank among those not
-// held for the owner, the one that queued first within it. The message that could not go in last time (b.stuck: its
-// agent's computer unreachable, a delivery that failed) is passed over while another may go, so it holds up nothing
-// but itself. None may go (-1): wait is how long until the first may. b.mu is held.
-func (b *relayBook) pickLocked(to string, now time.Time) (i int, wait time.Duration) {
+// held for the owner, the one that queued first within it (lead: to is a direction's lead, rankIn). The message that
+// could not go in last time (b.stuck: its agent's computer unreachable, a delivery that failed) is passed over while
+// another may go, so it holds up nothing but itself. None may go (-1): wait is how long until the first may. b.mu is
+// held.
+func (b *relayBook) pickLocked(to string, lead bool, now time.Time) (i int, wait time.Duration) {
 	i = -1
 	stuck := -1
 	q := b.st.Queue[to]
 	for j, m := range q {
-		if h := b.holdLocked(to, m, now); h > 0 {
+		lookAfter := m.LookAfter.Sub(now)
+		if m.Withdrawn {
+			lookAfter = 0 // no retry is sent: only check whether the original in-flight text landed
+		}
+		if h := max(b.holdLocked(to, m, now), lookAfter); h > 0 {
 			if wait == 0 || h < wait {
 				wait = h
 			}
@@ -174,7 +191,7 @@ func (b *relayBook) pickLocked(to string, now time.Time) (i int, wait time.Durat
 			stuck = j
 			continue
 		}
-		if i < 0 || m.rank() < q[i].rank() {
+		if i < 0 || m.rankIn(lead) < q[i].rankIn(lead) {
 			i = j
 		}
 	}
@@ -280,9 +297,9 @@ func (s *Service) ownersPresent(now time.Time) map[string]time.Time {
 // the owner set, so it waits relayDecisionMax past that time at most, as a message that waits on a decision does;
 // "Run now" is the owner's own and is not held (it does not come through runDue).
 func runHold(present map[string]time.Time, t Task, due, now time.Time) time.Duration {
-	id := t.SessionID
-	if id == "" {
-		id = t.RunSessionID
+	id := t.RunSessionID
+	if t.continuesSource() {
+		id = t.SessionID
 	}
 	spoke, ok := present[id]
 	if !ok || id == "" {
@@ -296,8 +313,8 @@ func runHold(present map[string]time.Time, t Task, due, now time.Time) time.Dura
 }
 
 // relayWaits: msg can't go into conversation to right now even though it is not running: others wait in its queue
-// already, or the owner is talking in it. The caller queues it and drains (drainRelays), which delivers what may go
-// and comes back when the hold ends.
+// already, the owner is talking in it, or it is a background supervisor being replaced (replacing). The caller queues
+// it and drains (drainRelays), which delivers what may go and comes back when the hold ends.
 func (s *Service) relayWaits(to string, msg relayMsg) bool {
 	b := &s.relays
 	b.mu.Lock()
@@ -305,7 +322,16 @@ func (s *Service) relayWaits(to string, msg relayMsg) bool {
 	if !s.relayLocked(context.Background()) {
 		return false
 	}
-	return len(b.st.Queue[to]) > 0 || b.holdLocked(to, msg, time.Now()) > 0
+	return b.replacing[to] || len(b.st.Queue[to]) > 0 || b.holdLocked(to, msg, time.Now()) > 0
+}
+
+// relayReplacing: conversation to is a background supervisor reserved for its replacement (supervise_round.go
+// backgroundOutgrown): nothing goes in straight, not even a decision reply that may interject into a running turn.
+func (s *Service) relayReplacing(to string) bool {
+	b := &s.relays
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.replacing[to]
 }
 
 // drainAfter drains conversation id's queue once more in wait, when the hold on what waits there ends. One timer per
@@ -314,6 +340,11 @@ func (s *Service) drainAfter(machine, id string, wait time.Duration) {
 	b := &s.relays
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	s.drainAfterLocked(machine, id, wait)
+}
+
+func (s *Service) drainAfterLocked(machine, id string, wait time.Duration) {
+	b := &s.relays
 	if t := b.holds[id]; t != nil {
 		t.Stop()
 	}
@@ -344,11 +375,11 @@ func (s *Service) drainConversations(machine string, ids []string) bool {
 	return true
 }
 
-// drainHeldRelays is the look every superviseTick that nothing held for the owner is left behind: a conversation
-// the owner spoke in, with a message that may go by now and no timer of its own (the manager restarted meanwhile, or
-// the timer could not read the list), is drained. The owner's last message is forgotten once ownerPresentFor passed
-// and what it held was handed on.
+// drainHeldRelays recovers queues whose timers were lost on restart or could not read the session list. It covers
+// owner presence, rate limits, and tries in doubt. The owner's last message is forgotten once ownerPresentFor has
+// passed and what it held was handed on.
 func (s *Service) drainHeldRelays(ctx context.Context, now time.Time) {
+	leads := s.queueLeads(ctx)
 	b := &s.relays
 	b.mu.Lock()
 	if !s.relayLocked(ctx) {
@@ -356,6 +387,16 @@ func (s *Service) drainHeldRelays(ctx context.Context, now time.Time) {
 		return
 	}
 	var due []string
+	for id, q := range b.st.Queue {
+		if _, spoke := b.st.Spoke[id]; spoke || b.holds[id] != nil || b.draining[id] {
+			continue
+		}
+		if slices.ContainsFunc(q, func(m relayMsg) bool { return !m.Due.IsZero() || !m.TriedAt.IsZero() }) {
+			if i, _ := b.pickLocked(id, leads[id], now); i >= 0 {
+				due = append(due, id)
+			}
+		}
+	}
 	for id, spoke := range b.st.Spoke {
 		if len(b.st.Queue[id]) == 0 {
 			if now.Sub(spoke) >= ownerPresentFor {
@@ -366,7 +407,7 @@ func (s *Service) drainHeldRelays(ctx context.Context, now time.Time) {
 		if b.holds[id] != nil || b.draining[id] {
 			continue
 		}
-		if i, _ := b.pickLocked(id, now); i >= 0 {
+		if i, _ := b.pickLocked(id, leads[id], now); i >= 0 {
 			due = append(due, id)
 		}
 	}

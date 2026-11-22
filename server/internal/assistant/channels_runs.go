@@ -30,7 +30,7 @@ type channelSink interface {
 type channelProgress interface {
 	progress(ctx context.Context, r *channel.Run, took time.Duration, steps []string, live string)
 	// folded: o went into a later run; its progress message says so.
-	folded(ctx context.Context, o *channel.Run)
+	folded(ctx context.Context, o *channel.Run, owner *chanLive)
 }
 
 // channelRecall is a sink that marks a message the owner recalled: one taken out of a run that answers others too
@@ -55,6 +55,8 @@ type chanLive struct {
 	notFound bool      // the last read did not find the message in the conversation yet
 	finished bool
 	done     chan struct{}
+	// stoppedCard is the successfully interrupted progress message; under mu, so redelivered presses act once.
+	stoppedCard string
 	// checking is held by checkChannelRun: the watch loop and a turn's end may both check at once, and two checks
 	// would send the same answer twice.
 	checking chanMutex
@@ -65,6 +67,8 @@ type chanLive struct {
 	// has shown, under mu.
 	items []proto.Item
 	cot   cotProgress
+	// native belongs to one topic-turn generation; protected by chans.mu.
+	native *cotWorker
 	// from is the seq of the run's own message once found (0: not yet: queued behind another turn, or not in);
 	// upTo the last item noted; looked when locateRun last read the conversation.
 	from, upTo int
@@ -74,6 +78,9 @@ type chanLive struct {
 	sentCard   [32]byte
 	backoff    time.Duration
 	quietUntil time.Time
+	// kit is the progress card as a CardKit entity, streamed into (feishu_stream.go); nil before it is sent, or for
+	// a card sent as a message. Under mu.
+	kit *cardKit
 	// What the progress card shows besides the steps, noted as the items come (liveNote): the calls with no result
 	// yet (oldest first), how many calls, the files read and changed, the subagents.
 	open         []openCall
@@ -176,26 +183,10 @@ func (m chanMutex) TryLock() bool {
 	}
 }
 
-// claimChannelMessage: the first time channel id's message is seen; an error while the messages seen can't be read.
+// claimChannelMessage claims a message without a thread reservation; unreadable or unwritable state stays retryable.
 func (s *Service) claimChannelMessage(id, msg string) (bool, error) {
-	c := &s.chans
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	s.loadChannelStateLocked(context.Background())
-	if !c.stLoaded {
-		return false, errChannelsUnread
-	}
-	seen := c.st.Seen[id]
-	if msg == "" || slices.Contains(seen, msg) {
-		return false, nil
-	}
-	seen = append(seen, msg)
-	if len(seen) > channelSeenKeep {
-		seen = seen[len(seen)-channelSeenKeep:]
-	}
-	c.st.Seen[id] = seen
-	s.saveChannelStateLocked()
-	return true, nil
+	admission, err := s.admitChannelMessage(id, channel.Message{ID: msg})
+	return admission != nil, err
 }
 
 var errChannelsUnread = errors.New("the channels' state could not be read")
@@ -228,6 +219,26 @@ func (s *Service) channelRuns(id string) []channel.Run {
 	return out
 }
 
+// finishUnrelatedChannelRun ends a held run whose conversation now belongs to an ordinary user turn. Its original
+// answer stands; no later answer or new quiet-ending card goes to the channel.
+func (s *Service) finishUnrelatedChannelRun(id string) {
+	r, _ := s.channelRunByID(id)
+	if r == nil {
+		return
+	}
+	s.finishChannelRun(r, &channel.Result{Quiet: true, End: channel.EndUnrelated})
+}
+
+// endHeldChannelRuns ends held runs on a conversation before an owner's own new message starts its turn. Channel
+// messages fold their earlier runs before reaching this path, so only runs left held by another surface end here.
+func (s *Service) endHeldChannelRuns(machine, session string) {
+	for _, snap := range s.channelRuns("") {
+		if snap.Held && snap.MachineID == machine && snap.SessionID == session {
+			s.finishUnrelatedChannelRun(snap.ID)
+		}
+	}
+}
+
 // startChannelRun records a run and watches it. An earlier run of the same channel on the same conversation that has
 // not answered yet is folded into this one: one answer covers both messages.
 func (s *Service) startChannelRun(r *channel.Run) {
@@ -254,7 +265,8 @@ func (s *Service) startChannelRunForBinding(r *channel.Run, generation *uint64) 
 		// One answer covers both only when both go to the same place: a topic's reply never turns up in the private chat
 		// (or another topic), nor the other way round.
 		if o.Channel == r.Channel && o.MachineID == r.MachineID && o.SessionID == r.SessionID && !c.answering[o.ID] && !o.Recalled &&
-			o.Ext["chat"] == r.Ext["chat"] && o.Ext["thread"] == r.Ext["thread"] {
+			o.Ext["chat"] == r.Ext["chat"] && o.Ext["thread"] == r.Ext["thread"] && o.Ext["clarify"] == "" && r.Ext["clarify"] == "" &&
+			o.Ext[readChatKey] == "" && r.Ext[readChatKey] == "" { // a /read is answered under its own message, alone
 			folded = append(folded, o)
 			r.Fold(o)
 			continue
@@ -286,7 +298,7 @@ func (s *Service) startChannelRunForBinding(r *channel.Run, generation *uint64) 
 			p.mu.Unlock()
 		}
 		if fs, ok := sink.(channelProgress); ok && ended {
-			fs.folded(ctx, o)
+			fs.folded(ctx, o, gone[o.ID])
 		}
 	}
 	s.noteChannelConversation(r.Channel, r.MachineID, r.SessionID)

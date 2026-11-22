@@ -119,7 +119,10 @@ final class MeetingAsk {
     /// `roomMissing`: an older manager took the room meeting with Persona off (`RecordingSync.roomMissing`), so an ask
     /// would only force a whole upload and fail; it can be asked again once a `200` carries `room`. The one rule for the
     /// meeting page, its bar, the Live Activity and `ask` / `retry` (#3862).
-    nonisolated static func canAsk(_ entry: RecordingEntry, roomMissing: Bool) -> Bool { entry.attended && !roomMissing }
+    nonisolated static func canAsk(_ entry: RecordingEntry, roomMissing: Bool) -> Bool {
+        // Never the replayed meeting (`ReplayedMeeting`, #10589): no hub has it to answer.
+        entry.answered && !roomMissing && !ReplayedMeeting.holds(entry.id)
+    }
 
     /// Asks about `entry`'s meeting: `text` typed (or, `spoken`, said while Talk was held and transcribed on this phone,
     /// #3862 phase 4), or nil to ask about what was just said. Nothing when Persona can't be asked about it (`canAsk`).
@@ -277,6 +280,9 @@ extension MeetingAsk.Deps {
              now: { RecordingCapture.shared.timeline },
              heard: { id in
                  RecordingCapture.shared.flushSegment()
+                 // Hub mode (#3862 phase 5): the hub finishes its own sentences up to `at` and ignores `live_next`; the
+                 // segment cut here still reaches it with the next upload, for when it has no sentences of its own.
+                 if MeetingTranscription.shared.hubTranscribes(id) { return nil }
                  await MeetingAskWire.transcribed(id)
                  MeetingLive.shared.append(id)
                  return await MeetingLive.shared.sent(id)
@@ -441,3 +447,4 @@ nonisolated extension MeetingAskWire.Heard {
     }
 }
 #endif
+import PersonaWire

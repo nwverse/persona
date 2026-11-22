@@ -19,20 +19,17 @@ import (
 
 // startDevices makes the machines of hub.json before the managers report them: shown as before a restart while they
 // come back (what the last hub process saw them report, saveDevicesWarm), offline otherwise, as their manager last
-// reported them (machine_entries.go); a call waits for the carrier meanwhile.
+// reported them (machine_entries.go); a call waits for its manager meanwhile (waitDevicesFor).
 func (h *Hub) startDevices(ctx context.Context) {
 	d := &h.devices
 	d.mu.Lock()
 	d.entries, d.started = slices.Clone(h.cfg.Machines), true
-	if d.up == nil {
-		d.up = make(chan struct{})
-	}
 	d.mu.Unlock()
 	if err := h.loadMachineOwners(ctx); err != nil {
 		h.logf("devices: ownership unavailable; dedicated local machines stay unassigned: %v", err)
 	}
-	_ = h.loadMachinesKept(ctx) // and the machines their managers keep out of hub.json (machines_kept.go)
-	h.loadMachineEntries(ctx)   // what each manager last reported of them (machine_entries.go)
+	_ = h.loadMachinesKept(ctx)   // and the machines their managers keep out of hub.json (machines_kept.go)
+	_ = h.loadMachineEntries(ctx) // what each manager last reported of them (machine_entries.go)
 	var saved devicesWarm
 	if h.store != nil {
 		if ok, err := h.store.TakeSetting(ctx, devicesWarmKey, &saved); err != nil || !ok || time.Since(saved.SavedAt) > devicesWarmStale {
@@ -47,18 +44,16 @@ func (h *Hub) startDevices(ctx context.Context) {
 		if h.byID[mc.ID] != nil {
 			continue
 		}
-		m := newMachine(h, mc)
-		m.managed, m.peer = true, &busNode{h: h, id: mc.ID, done: make(chan struct{})}
-		m.owner = h.entryOwner(mc.ID)
-		if e, ok := h.reportedEntryOf(m.owner, mc.ID); ok { // as its manager last reported it, until it reports again
-			m.info, m.lastSeen = e.Info, e.LastSeen
-		}
+		m := h.newManagedMachine(mc)
 		m.engine = saved.Engines[mc.ID]
 		if c, ok := saved.EngineHosts[mc.ID]; ok {
 			m.engineHosts = &c
 		}
 		if w, ok := saved.Machines[mc.ID]; ok && (w.Until.IsZero() || w.Until.After(time.Now())) {
-			m.info, m.sessions, m.warmUntil = w.Info, w.Sessions, until
+			m.info, m.sessions, m.listedOnce, m.warmUntil = w.Info, w.Sessions, true, until
+			if len(w.Archived) > 0 {
+				m.archived, m.archivedAt, m.archivedBy = w.Archived, archivedIndex(w.Archived), w.ArchivedBy
+			}
 			if !w.Until.IsZero() && w.Until.Before(until) {
 				m.warmUntil = w.Until
 			}
@@ -70,6 +65,7 @@ func (h *Hub) startDevices(ctx context.Context) {
 	h.fleet.mu.Unlock()
 	d.mu.Lock()
 	d.warmUntil = until
+	d.fleetReady = true
 	d.mu.Unlock()
 	if n > 0 {
 		h.logf("warm start: %d machines shown as before while the manager reconnects them", n)
@@ -77,10 +73,81 @@ func (h *Hub) startDevices(ctx context.Context) {
 	time.AfterFunc(devicesWarmGrace, h.devicesWarmEnded)
 }
 
-// markUnknownLocked shows m's sessions that are not offline as unknown, in a copy of its list: the kept list is never
-// changed in place (Machine.sessions). m.mu is held.
+// newManagedMachine is a machine the hub lists while its manager has not reported it yet, with what that manager last
+// reported of it.
+func (h *Hub) newManagedMachine(mc MachineConfig) *Machine {
+	m := newMachine(h, mc)
+	m.managed, m.peer = true, &busNode{h: h, id: mc.ID, done: make(chan struct{})}
+	m.owner = h.entryOwner(mc.ID)
+	if e, ok := h.reportedEntryOf(m.owner, mc.ID); ok {
+		m.info, m.lastSeen = e.Info, e.LastSeen
+	}
+	return m
+}
+
+// retryMachineAssignments reads what startDevices could not. The move locks make a recovered read and its handover one
+// move against the managers' moves and removals. False leaves the trust loop retrying at trustRetryEvery.
+func (h *Hub) retryMachineAssignments(ctx context.Context) bool {
+	d := &h.devices
+	d.mu.Lock()
+	ownersRead, keptRead := d.assignRead, d.keptRead
+	d.mu.Unlock()
+	if ownersRead && keptRead {
+		return true
+	}
+	h.moving.managers.RLock()
+	defer h.moving.managers.RUnlock()
+	d.moving.Lock()
+	defer d.moving.Unlock()
+	ownersRead = h.readOwnersMoving(ctx) == nil
+	if !keptRead {
+		d.mu.Lock()
+		keptRead = d.keptRead // another operation may have read it while this one waited for the lock
+		d.mu.Unlock()
+		if !keptRead {
+			if err := h.loadMachinesKept(ctx); err != nil {
+				return false
+			}
+			keptRead = true
+		}
+	}
+	return ownersRead && keptRead
+}
+
+// reconcileKeptMachines lists the machines whose kept records were unread at start. It runs only when those records
+// are first recovered: a manager's later report that drops one must not have it put back by the retry loop.
+func (h *Hub) reconcileKeptMachines() {
+	known := h.knownEntries()
+	added := false
+	h.fleet.mu.Lock()
+	for _, mc := range known {
+		if h.cfgEntry(mc.ID) != nil || h.byID[mc.ID] != nil {
+			continue
+		}
+		m := h.newManagedMachine(mc)
+		h.machines = append(h.machines, m)
+		h.byID[mc.ID] = m
+		added = true
+	}
+	h.fleet.mu.Unlock()
+	if added {
+		h.broadcastMachines()
+	}
+}
+
+// markUnknownLocked shows m's sessions that are not offline as unknown, its archived rows told apart (archived) as
+// well, as when they were in its list, in copies: the kept lists are never changed in place (Machine.sessions). m.mu
+// is held.
 func (m *Machine) markUnknownLocked() {
-	list := slices.Clone(m.sessions)
+	m.sessions = markedUnknown(m.sessions)
+	if len(m.archived) > 0 {
+		m.archived = markedUnknown(m.archived) // the same rows in the same order: archivedAt still holds
+	}
+}
+
+// markedUnknown is a copy of list with the sessions that are not offline shown as unknown.
+func markedUnknown(list []proto.Session) []proto.Session {
+	list = slices.Clone(list)
 	for i := range list {
 		if list[i].Status != proto.StatusOffline {
 			list[i].Status = proto.StatusUnknown
@@ -89,30 +156,52 @@ func (m *Machine) markUnknownLocked() {
 			}
 		}
 	}
-	m.sessions = list
+	return list
 }
 
-// devicesUp: the manager that carries the machines is connected and has reported them.
-func (h *Hub) devicesUp() bool {
+// devicesUp: the carrier is connected and has reported its machines (devicesUpFor): hub.json's machines nobody moved,
+// and what names no machine.
+func (h *Hub) devicesUp() bool { return h.devicesUpFor(devicesOwner) }
+
+// devicesUpFor: manager owner is connected and has reported its machines.
+func (h *Hub) devicesUpFor(owner string) bool {
 	d := &h.devices
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.upOpen
+	return d.upOpen[owner]
 }
 
-// waitDevices returns nil once the manager is up; errManagerOffline at once while it is not, unless the hub just
-// started (its machines shown as before): then a call waits for it that long.
-func (h *Hub) waitDevices(ctx context.Context) error {
+// upChanLocked is owner's up channel, made at the first ask (the maps too); d.mu is held.
+func (d *devicesState) upChanLocked(owner string) chan struct{} {
+	if d.up == nil {
+		d.up, d.upOpen = map[string]chan struct{}{}, map[string]bool{}
+	}
+	up, ok := d.up[owner]
+	if !ok {
+		up = make(chan struct{})
+		d.up[owner] = up
+	}
+	return up
+}
+
+// waitDevicesFor returns nil once manager owner is up; errManagerOffline at once while it is not, unless the hub just
+// started (its machines shown as before) and owner has not reported since: then a call waits for it that long. A
+// manager of the roster that is away is waited for like the carrier; a machine nobody is known to carry
+// (unknownMachineOwner: the ownership could not be read, ownership.go) is offline at once.
+func (h *Hub) waitDevicesFor(ctx context.Context, owner string) error {
+	if owner == unknownMachineOwner {
+		return errManagerOffline
+	}
 	d := &h.devices
 	d.mu.Lock()
-	if d.upOpen {
+	if d.upOpen[owner] {
 		d.mu.Unlock()
 		return nil
 	}
-	if d.up == nil {
-		d.up = make(chan struct{})
+	up, until := d.upChanLocked(owner), d.warmUntil
+	if d.reportedSince[owner] { // its start is over: from now on a call without it fails at once
+		until = time.Time{}
 	}
-	up, until := d.up, d.warmUntil
 	d.mu.Unlock()
 	if !time.Now().Before(until) {
 		return errManagerOffline
@@ -129,12 +218,17 @@ func (h *Hub) waitDevices(ctx context.Context) error {
 	return errManagerOffline
 }
 
-// awaitManager is waitDevices for what cannot wait long (a WebSocket handshake, a peer's request): at most limit.
-// True once the manager is up.
+// awaitManager is awaitManagerFor the carrier.
 func (h *Hub) awaitManager(ctx context.Context, limit time.Duration) bool {
+	return h.awaitManagerFor(ctx, devicesOwner, limit)
+}
+
+// awaitManagerFor is waitDevicesFor what cannot wait long (a WebSocket handshake, a peer's request): at most limit.
+// True once manager owner is up.
+func (h *Hub) awaitManagerFor(ctx context.Context, owner string, limit time.Duration) bool {
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
-	return h.waitDevices(ctx) == nil
+	return h.waitDevicesFor(ctx, owner) == nil
 }
 
 // applyDeviceStatesFrom takes devices.state from manager owner: every machine it carries, in the apps' order. The
@@ -142,6 +236,39 @@ func (h *Hub) awaitManager(ctx context.Context, limit time.Duration) bool {
 // machineOwner: another manager's, and a mesh member's from any manager but the carrier, are dropped). The apps get
 // the managers' machines grouped: devicesOwner's first, then the others' by id.
 func (h *Hub) applyDeviceStatesFrom(owner string, st devicewire.States) {
+	// A transport alias cannot take a configured or another manager's identity.
+	// The manager owns all session resolution; this only retains a bus destination.
+	validAliases := map[string]bool{}
+	for _, state := range st.Machines {
+		id, parent := state.Machine.ID, state.TransportFor
+		if id == "" || parent == "" || id == parent || h.entryOwner(parent) != owner {
+			continue
+		}
+		if h.knownEntry(id) != nil && h.entryOwner(id) != owner {
+			continue
+		}
+		h.devices.mu.Lock()
+		if h.devices.transportOwners == nil {
+			h.devices.transportOwners = map[string]string{}
+		}
+		old := h.devices.transportOwners[id]
+		if old == "" || old == owner {
+			h.devices.transportOwners[id] = owner
+			validAliases[id] = true
+		}
+		h.devices.mu.Unlock()
+	}
+
+	// Reports are complete snapshots. Dropped logical roots must release their
+	// transport ownership, so a later manager cannot inherit a stale alias.
+	h.devices.mu.Lock()
+	for id, aliasOwner := range h.devices.transportOwners {
+		if aliasOwner == owner && !validAliases[id] {
+			delete(h.devices.transportOwners, id)
+		}
+	}
+	h.devices.mu.Unlock()
+
 	now := time.Now()
 	type change struct {
 		m              *Machine
@@ -163,13 +290,26 @@ func (h *Hub) applyDeviceStatesFrom(owner string, st devicewire.States) {
 		// Only its manager reports a machine (ownership.go): hub.json's or one a manager keeps, its owner's, derived or
 		// not (another one is letting it go, or claims what is not its own); any other (a mesh member's), the
 		// carrier's only.
-		if known := h.knownEntry(id) != nil; known && h.entryOwner(id) != owner || !known && owner != devicesOwner {
+		if known := h.knownEntry(id) != nil; known && h.entryOwner(id) != owner || !known && owner != devicesOwner && !validAliases[id] {
 			continue
 		}
+		// What it is called and how it is reached: hub.json's entry says for one of this hub's own in hub.json (the
+		// manager follows it a moment later; mirrorConfig), the manager for one it keeps (machines_kept.go) and for a
+		// member's (the member renamed it).
+		name, kind := s.Machine.Name, s.Machine.Kind
+		if own := h.cfgEntry(id); own != nil && !s.Derived {
+			name, kind = cmp.Or(own.Name, id), own.Kind
+		}
+		kindChanged := false
 		if m == nil || !m.managed {
 			// Its entry stays as it was made (it is read without m.mu everywhere, as when the hub connected it).
 			m = newMachine(h, h.mirrorConfig(s))
 			m.managed, m.peer = true, &busNode{h: h, id: id, done: make(chan struct{})}
+		} else if kindName(kind) != kindName(m.kind()) {
+			// Switched to Persona Link, or back (link_switch.go): the same computer, reached another way. What ran
+			// through the old way ends as when its connection ends.
+			m.setKind(kind)
+			kindChanged = true
 		}
 		m.mu.Lock()
 		m.owner = owner
@@ -179,13 +319,7 @@ func (h *Hub) applyDeviceStatesFrom(owner string, st devicewire.States) {
 		// online is the node connected now, as it was when the hub connected it (self-update waits for it, the node
 		// updates go to it); the manager's warm start is warmUntil, as the hub's own was (the apps see both as online).
 		m.snap, m.info, m.online, m.err = &snap, s.Info, s.Connected, s.Machine.Error
-		// What it is called: hub.json's entry says for one of this hub's own in hub.json (the manager follows it a moment
-		// later), the manager for one it keeps (machines_kept.go) and for a member's (the member renamed it).
-		if mc := h.cfgEntry(id); mc != nil && !s.Derived {
-			m.setName(cmp.Or(mc.Name, id))
-		} else {
-			m.setName(snap.Name)
-		}
+		m.setName(name)
 		if s.Machine.LastSeen.After(m.lastSeen) {
 			m.lastSeen = s.Machine.LastSeen
 		}
@@ -193,8 +327,8 @@ func (h *Hub) applyDeviceStatesFrom(owner string, st devicewire.States) {
 		m.connected, m.connectedAt = s.Connected, s.ConnectedAt
 		m.warmUntil = s.WarmUntil
 		c := change{m: m}
-		c.ended = wasConn && (!s.Connected || !s.ConnectedAt.Equal(wasAt))
-		c.began = s.Connected && (!wasConn || !s.ConnectedAt.Equal(wasAt))
+		c.ended = wasConn && (!s.Connected || !s.ConnectedAt.Equal(wasAt) || kindChanged)
+		c.began = s.Connected && (!wasConn || !s.ConnectedAt.Equal(wasAt) || kindChanged)
 		if c.ended || s.Connected && !wasConn {
 			c.oldMux, m.streams = m.streams, nil
 		}
@@ -256,16 +390,19 @@ func (h *Hub) applyDeviceStatesFrom(owner string, st devicewire.States) {
 		d.recEntries = map[string][]devicewire.RecMachine{}
 	}
 	d.recEntries[owner] = st.Entries
-	if owner == devicesOwner { // hub.json's machines, the hub's start: the carrier's
+	if owner == devicesOwner { // hub.json's entries another one absorbed: the carrier's to say
 		d.absorbed = st.Absorbed
-		if d.up == nil {
-			d.up = make(chan struct{})
+	}
+	// Its machines are reachable and the calls waiting for it go (waitDevicesFor); not on a report sent after it was
+	// removed from the roster (machine_entries.go: that one is dropped too). ReportedSince is visible in the same
+	// transition: a disconnect cannot make a post-report call enter the warm wait again.
+	if !d.upOpen[owner] && !d.reportedForgot[owner] {
+		if d.reportedSince == nil {
+			d.reportedSince = map[string]bool{}
 		}
-		if !d.upOpen {
-			close(d.up)
-			d.upOpen = true
-		}
-		d.warmUntil = time.Time{} // the hub's start is over: from now on a call without the manager fails at once
+		d.reportedSince[owner] = true
+		close(d.upChanLocked(owner))
+		d.upOpen[owner] = true
 	}
 	fresh := d.fresh[owner]
 	delete(d.fresh, owner)
@@ -318,7 +455,7 @@ func (h *Hub) applyDeviceStatesFrom(owner string, st devicewire.States) {
 			h.sessionsChanged(c.m)
 		}
 		if c.began {
-			go h.fsWatchReconnected(c.m) // the web panels' open folders (#2439)
+			h.fsWatchReconnected(c.m) // queues the web panels' open folders; never calls the node here (#2439)
 		}
 	}
 }
@@ -353,6 +490,10 @@ func (h *Hub) devicesConnected(owner string) {
 		d.fresh = map[string]bool{}
 	}
 	d.fresh[owner] = true
+	if d.conns == nil {
+		d.conns = map[string]uint64{}
+	}
+	d.conns[owner]++
 	d.mu.Unlock()
 	for _, m := range h.machinesNow() {
 		m.mu.Lock()
@@ -431,15 +572,13 @@ func (h *Hub) connectionEnded(m *Machine, why string) {
 func (h *Hub) devicesGone(owner string) {
 	d := &h.devices
 	d.mu.Lock()
-	if d.upOpen && owner == devicesOwner {
-		d.up = make(chan struct{})
-		d.upOpen = false
-	}
+	conns := d.conns[owner]
 	d.mu.Unlock()
+	h.upGone(owner, conns)
 	// The hub's own stop (the manager gets its SIGTERM at the same time): the next hub shows them as they were
 	// (startDevices). A moment's wait lets the hub's stop begin first.
 	time.Sleep(500 * time.Millisecond)
-	if h.stopping.Load() || h.busConnOf(owner) != nil || owner == devicesOwner && h.devicesUp() {
+	if h.stopping.Load() || h.busConnOf(owner) != nil || h.devicesUpFor(owner) {
 		return
 	}
 	d.mu.Lock()
@@ -467,6 +606,23 @@ func (h *Hub) devicesGone(owner string) {
 			h.sessionsChanged(m)
 		}
 	}
+}
+
+// upGone forgets owner's up state with the connection that ended, unless a newer one is there already: current now, or
+// connected (devicesConnected) since conns was read. A manager reports only after its handshake, so an up state found
+// with no newer connection is the old connection's; one found after a newer handshake is that connection's and stays.
+func (h *Hub) upGone(owner string, conns uint64) {
+	if h.busConnOf(owner) != nil {
+		return
+	}
+	d := &h.devices
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.conns[owner] != conns || !d.upOpen[owner] {
+		return
+	}
+	delete(d.up, owner) // the next wait for it gets a channel of its own (upChanLocked)
+	delete(d.upOpen, owner)
 }
 
 // offlineLocal shows m offline with error why until its manager reports it again: its streams close, its sessions'

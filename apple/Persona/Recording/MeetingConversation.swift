@@ -81,6 +81,9 @@ final class MeetingConversation {
         var readPhotos: (UUID) async -> Bool = { await MeetingPhotos.shared.refresh($0) }
         /// `meeting_live` reaches the phone now: the hub-level group's socket is open (the app behind closes it).
         var streaming: () -> Bool = { false }
+        /// `transcription` and `interim` of a read (#3862 phase 5, `MeetingTranscription.liveRead`), with which of them
+        /// the read asked for (an absent part asked for is the hub's word: none).
+        var transcription: (_ id: UUID, _ view: MeetingTranscriptionView?, _ interim: MeetingInterim?, _ read: Set<String>) -> Void = { _, _, _, _ in }
     }
 
     /// Longest Just me or `…/followup` text (the contract's limit, in characters).
@@ -122,6 +125,9 @@ final class MeetingConversation {
         self.library = library
         self.sync = sync
     }
+
+    /// A replayed meeting's state (`MeetingReplay`, #9417, #10589), as the hub's reads would have left it.
+    func replace(_ id: UUID, _ m: Meeting) { if meetings[id] != m { meetings[id] = m } }
 
     /// From `MeetingRecorder.start`: hears the room of every upload `200` (`RecordingSync.onRoom`).
     func start() {
@@ -216,14 +222,17 @@ final class MeetingConversation {
     }
 
     /// The parts of a `meeting_live` event the phone follows for `id`: phase 1's, `topics` for a meeting started with the
-    /// live view (`RecordingAttendance.liveView`), `highlights` for one started with them (`RecordingAttendance.highlights`)
-    /// and `photos` for one that started with them (`RecordingAttendance.photos`).
+    /// live view (`RecordingAttendance.liveView`), `highlights` for one started with them (`RecordingAttendance.highlights`),
+    /// `photos` for one that started with them (`RecordingAttendance.photos`) and `transcription` for one that named a
+    /// transcription mode (phase 5, `RecordingAttendance.transcription`). Never `interim`: the caption comes on this phone's
+    /// own audio socket, and reading it at the hub's pace (once a second) would cost a request a second for nothing.
     func partsRead(for id: UUID) -> [String] {
         let attendance = library.entry(id)?.attendance
         var parts = Self.readParts
         if attendance?.liveView == true { parts.append("topics") }
         if attendance?.highlights == true { parts.append("highlights") }
         if attendance?.photos == true { parts.append("photos") }
+        if attendance?.transcription != nil { parts.append("transcription") }
         return parts
     }
 
@@ -344,6 +353,7 @@ final class MeetingConversation {
     /// `PUT /api/v1/recordings/{id}/private`; returns the stored value; throws APIError.
     @discardableResult
     func setPrivate(_ id: UUID, _ value: Bool) async throws -> Bool {
+        try Self.refuseReplayed(id)
         guard let api = deps.api() else { throw URLError(.notConnectedToInternet) }
         let path = Self.path(id, "private")
         let data = try await afterUpload(id) { try await api.request("PUT", path, body: PrivateMark(privateMark: value)) }
@@ -361,7 +371,7 @@ final class MeetingConversation {
     /// words than the hub takes (`tooLong`: the bar says so before, nothing is cut).
     @discardableResult
     func sendJustMe(_ entry: RecordingEntry, text: String, images: [ImagePayload] = []) -> UUID? {
-        guard !Self.tooLong(text) else { return nil }
+        guard !ReplayedMeeting.holds(entry.id), !Self.tooLong(text) else { return nil }
         let words = Self.trimmed(text)
         guard !words.isEmpty || !images.isEmpty else { return nil }
         let send = JustMe(id: UUID(), recordingID: entry.id, text: words, images: images, at: deps.now(), state: .sending)
@@ -388,6 +398,7 @@ final class MeetingConversation {
     /// were no words or images, or more words than `…/followup` takes on its way there (`followupLimited`).
     @discardableResult
     func sendFollowup(_ recording: UUID, text: String, images: [ImagePayload] = []) -> UUID? {
+        guard !ReplayedMeeting.holds(recording) else { return nil }
         let route = followupKey(recording).map { FollowupSend.Route.messages($0) } ?? FollowupSend.Route.followup
         if route == .followup, Self.tooLong(text) { return nil }
         let words = Self.trimmed(text)
@@ -527,9 +538,18 @@ final class MeetingConversation {
         return String(localized: "Couldn't change Private Meeting. Try again.")
     }
 
+    /// The replayed meeting (`ReplayedMeeting`, #10589) is on no hub: nothing about it is sent (`APIClient` would refuse
+    /// it too), and nothing waits for an upload that never comes.
+    nonisolated static func refuseReplayed(_ id: UUID) throws {
+        guard ReplayedMeeting.holds(id) else { return }
+        throw APIError(status: 409, message: String(localized: "A replayed meeting stays on this iPhone."), fields: ["code": ReplayedMeeting.refusal])
+    }
+
     // MARK: Reading
 
     private func read(_ id: UUID, _ wanted: Wanted) async {
+        // A replayed meeting (`ReplayedMeeting`, #9417, #10589) is on no hub: its tape is what the room holds.
+        if ReplayedMeeting.holds(id) { return }
         guard let api = deps.api() else { return }
         var query: [String: String] = [:]
         if case .parts(let parts) = wanted {
@@ -580,6 +600,12 @@ final class MeetingConversation {
         if let rev = answer.revs?["photos"], rev > (m.revs["photos"] ?? -1), takesPhotos(id) { photosChanged(id, rev: rev) }
         for (part, rev) in answer.revs ?? [:] where part != "photos" { m.revs[part] = max(rev, m.revs[part] ?? rev) }
         if meetings[id] != m { meetings[id] = m }
+        // Hub transcription's part (phase 5) is the transcription store's.
+        let read: Set<String> = switch wanted {
+        case .all: ["transcription", "interim"]
+        case .parts(let parts): Set(parts).intersection(["transcription", "interim"])
+        }
+        if !read.isEmpty { deps.transcription(id, answer.transcription, answer.interim, read) }
     }
 
     /// A watched recording, or a room meeting recorded here that runs or ended in the last 12 hours.
@@ -842,10 +868,13 @@ final class MeetingConversation {
         var highlights: [MeetingHighlight]?
         var highlightsAt: String?
         var revs: [String: Int64]?
+        /// Phase 5: the mode and how far the hub got; the hub's caption now.
+        var transcription: MeetingTranscriptionView?
+        var interim: MeetingInterim?
 
         enum CodingKeys: String, CodingKey {
             case room, privateMark = "private", followup, asks, topics, topicsAt = "topics_at", highlights,
-                 highlightsAt = "highlights_at", revs
+                 highlightsAt = "highlights_at", revs, transcription, interim
         }
 
         init(from decoder: Decoder) throws {
@@ -859,6 +888,8 @@ final class MeetingConversation {
             highlights = (try? c.decodeIfPresent([Lenient<MeetingHighlight>].self, forKey: .highlights))?.compactMap(\.value)
             highlightsAt = try? c.decodeIfPresent(String.self, forKey: .highlightsAt)
             revs = try? c.decodeIfPresent([String: Int64].self, forKey: .revs)
+            transcription = MeetingTranscriptionView(try? c.decodeIfPresent(JSONValue.self, forKey: .transcription))
+            interim = try? c.decodeIfPresent(MeetingInterim.self, forKey: .interim)
         }
     }
 
@@ -885,7 +916,11 @@ extension MeetingConversation.Deps {
                  }
                  return false
              },
-             streaming: { AppModel.shared.hub?.live.state == .connected })
+             streaming: { AppModel.shared.hub?.live.state == .connected },
+             transcription: { id, view, interim, read in
+                 MeetingTranscription.shared.liveRead(id, transcription: view, interim: interim, read: read)
+             })
     }
 }
 #endif
+import PersonaWire

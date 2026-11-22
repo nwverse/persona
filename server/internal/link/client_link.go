@@ -5,11 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"runtime"
 	"slices"
@@ -21,6 +21,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
@@ -30,6 +31,7 @@ type link struct {
 	ep      Endpoint
 	baseURL string       // https base URL for streams (ep.URL when direct; tunnelBaseURL when over SSH)
 	tunnel  *sshTunnel   // non-nil when this link runs over an SSH tunnel
+	proxy   string       // the outbound proxy it runs through, without credentials (Status.Proxy); "" when none
 	local   netip.Addr   // this side's address of the link's TCP connection
 	streams *http.Client // checked the same way (pin or system CAs); streams go where the link went
 	token   string
@@ -41,6 +43,18 @@ type link struct {
 	gen uint64
 	// again: link.json turned out to hold another pairing while writing to it (errPairedAgain); serve ends the link.
 	again chan struct{}
+}
+
+// directHandoff transfers ownership of an accepted direct candidate and the reloaded configuration it was validated
+// against. serve returns one only after installing errDirectReady as its context's cause.
+type directHandoff struct {
+	candidate *link
+	config    *Config
+}
+
+type directProbeResult struct {
+	candidate *link
+	err       error
 }
 
 func (l *link) closeNow() {
@@ -68,36 +82,64 @@ func (l *link) getEndpoints() []Endpoint {
 }
 
 func dial(ctx context.Context, c *Config) (*link, error) {
-	l, ep, err := race(ctx, c.Endpoints, func(ctx context.Context, ep Endpoint) (*link, error) {
+	return dialVia(ctx, c, ranked(c.Endpoints), nil)
+}
+
+// dialVia races eps for the link: straight to the hub, or through outbound proxy p when it is set (proxied); every
+// stream later opened on the link takes the same route. eps is already in its intended race order.
+func dialVia(ctx context.Context, c *Config, eps []Endpoint, p *url.URL) (*link, error) {
+	candidates := ranked(eps)
+	l, ep, err := race(ctx, candidates, func(ctx context.Context, ep Endpoint) (*link, error) {
 		var local netip.Addr
-		client := hubClient(c, func(raw net.Conn) {
+		hc := hubClient(c, p, func(raw net.Conn) {
 			if a, err := netip.ParseAddrPort(raw.LocalAddr().String()); err == nil {
 				local = a.Addr().Unmap()
 			}
 		})
-		conn, resp, err := websocket.Dial(ctx, wsURL(ep.URL, Path), &websocket.DialOptions{HTTPClient: client, HTTPHeader: bearer(c.Token)})
+		conn, resp, err := diagnosticDial(ctx, wsURL(ep.URL, Path), &websocket.DialOptions{HTTPClient: hc, HTTPHeader: bearer(c.Token)}, "control", ep.Kind, slices.Index(candidates, ep)+1)
 		if err != nil {
 			return nil, handshakeError(resp, err)
 		}
 		conn.SetReadLimit(1 << 20)
-		return &link{conn: conn, local: local, streams: hubClient(c, nil), token: c.Token}, nil
+		return &link{conn: conn, local: local, streams: hubClient(c, p, nil), token: c.Token}, nil
 	}, func(l *link) { l.closeNow() })
 	if err != nil {
 		return nil, err
 	}
 	l.ep = ep
 	l.baseURL = ep.URL
+	if p != nil {
+		l.proxy = RedactedProxy(p.String())
+	}
 	return l, nil
 }
 
 var streamID = lazyre.New(`^[A-Za-z0-9_-]{1,64}$`)
 
-// serve runs the link until it ends and says why.
-func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) error {
+// serve runs the link until it ends and says why. A direct handoff is already connected and owned by the caller;
+// every other return leaves no direct candidate behind.
+func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter, memory *routeMemory) (*directHandoff, error) {
 	l.again = make(chan struct{}, 1)
 	l.setEndpoints(c.Endpoints)
 	ctx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
+	directReady := o.directReady
+	if directReady == nil {
+		directReady = make(chan *directHandoff, 1)
+	}
+	var heartbeatDone chan struct{}
+	defer func() {
+		// Stop and join the publisher before releasing ownership. A read failure may race with the winning probe; if that
+		// probe publishes after the read loop has chosen a nil handoff, reclaim it here rather than orphaning its socket.
+		cancel(nil)
+		if heartbeatDone != nil {
+			<-heartbeatDone
+		}
+		select {
+		case handoff := <-directReady:
+			handoff.candidate.closeNow()
+		default:
+		}
+	}()
 	defer l.tunnel.close()
 	defer l.conn.CloseNow()
 	defer l.streams.CloseIdleConnections()
@@ -107,17 +149,20 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 	}
 	hello := Message{Type: "hello", Machine: c.Machine, Version: o.Version, Address: helloAddr, Features: []string{FeatureAttention}}
 	if err := l.send(ctx, hello); err != nil {
-		return err
+		return nil, err
 	}
 	since := time.Now()
 	rep.set(func(s *Status) {
 		*s = Status{State: "connected", Conn: l.gen, Machine: c.Machine, HubName: c.HubName, MachineName: c.MachineName, Address: l.ep.URL,
-			Kind: l.ep.Kind, Since: &since, Node: "unknown", Trust: trustOf(c), Endpoints: ranked(c.Endpoints), SSH: cloneSSH(c.SSH)}
+			Kind: l.ep.Kind, Proxy: l.proxy, Since: &since, Node: "unknown", Trust: trustOf(c), Endpoints: ranked(c.Endpoints), SSH: cloneSSH(c.SSH)}
 	})
+	if memory != nil {
+		memory.connected(l.ep.Kind)
+	}
 	go l.renames(ctx, o, rep)
 	go l.presence(ctx, o)
 	go l.confirms(ctx, o)
-	o.Logf("link: connected to %s (%s)", l.ep.URL, l.ep.Kind)
+	o.Logf("link: connected to %s (%s)", l.ep.URL, l.ep.Kind) // a proxy is only "proxy" here: the log never names it
 	drop := func(err error) {
 		cancel(err)
 		l.conn.CloseNow()
@@ -129,7 +174,9 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 	}
 	// The heartbeat is o's until the hub says another (endpoints); beat hands the pinger the latest, the link stays.
 	beat := make(chan heartbeat, 1)
+	heartbeatDone = make(chan struct{})
 	go func() {
+		defer close(heartbeatDone)
 		hb := heartbeat{every: o.PingEvery, timeout: o.PingTimeout}
 		t := time.NewTicker(hb.every)
 		defer t.Stop()
@@ -137,8 +184,13 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 		// it drops. The zero stamp makes the first look compare: a pairing written while this link was dialing counts.
 		pairT := time.NewTicker(cmp.Or(o.PairCheck, pairCheck))
 		defer pairT.Stop()
+		// On a fallback route (a proxy, or SSH it need not use), direct candidates are probed now and then to switch
+		// back, and a new proxy setting is followed at once. Proxy-only mode keeps a proxy link off direct: it is no
+		// fallback, but still follows the proxy setting.
+		fallback := (l.ep.Kind == KindProxy && !c.ProxyAlways) || (l.ep.Kind == KindSSH && c.SSH != nil && !c.SSH.Always)
+		followProxy := fallback || l.ep.Kind == KindProxy
 		var directC <-chan time.Time
-		if l.ep.Kind == KindSSH && c.SSH != nil && !c.SSH.Always {
+		if fallback {
 			directT := time.NewTicker(cmp.Or(o.DirectRetryEvery, DirectRetryEvery))
 			defer directT.Stop()
 			directC = directT.C
@@ -153,8 +205,20 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 			err   error
 		}
 		pongs := make(chan pong)
-		directProbe := make(chan bool, 1)
+		directProbe := make(chan directProbeResult, 1)
 		var beating, checking, probingDirect bool
+		var directProbeDone chan struct{}
+		defer func() {
+			// The buffered send always completes, including when this loop has already returned. Join the dial and close
+			// a candidate that was too late to be handed off before serve releases its own link.
+			if probingDirect {
+				result := <-directProbe
+				<-directProbeDone
+				if result.candidate != nil {
+					result.candidate.closeNow()
+				}
+			}
+		}()
 		ping := func(check bool, d time.Duration) {
 			go func() {
 				err := l.ping(ctx, d)
@@ -170,13 +234,13 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 				return
 			}
 			probingDirect = true
-			probeCfg := Config{FP: c.FP, Trust: c.Trust, Endpoints: eps}
+			directProbeDone = make(chan struct{})
+			probeDone := directProbeDone
+			probeCfg := Config{FP: c.FP, Trust: c.Trust, Token: c.Token, Endpoints: eps}
 			go func() {
-				ok := probeDirect(ctx, &probeCfg)
-				select {
-				case directProbe <- ok:
-				case <-ctx.Done():
-				}
+				defer close(probeDone)
+				candidate, err := dial(ctx, &probeCfg)
+				directProbe <- directProbeResult{candidate: candidate, err: err}
 			}()
 		}
 		for {
@@ -188,26 +252,50 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 					drop(l.tunnel.classifyExit(l.tunnel.waitErr))
 				}
 				return
-			case ok := <-directProbe:
+			case result := <-directProbe:
+				<-directProbeDone
+				directProbeDone = nil
 				probingDirect = false
-				if ok && ctx.Err() == nil {
-					o.Logf("link: direct hub reachable again; switching off ssh tunnel")
-					reconnect(errDirectReady)
+				if result.err != nil || ctx.Err() != nil {
+					if result.candidate != nil {
+						result.candidate.closeNow()
+					}
+					continue
+				}
+				candidate := result.candidate
+				if candidate == nil {
+					continue
+				}
+				next := directHandoffConfig(o.Path, c, candidate.ep)
+				if next == nil {
+					candidate.closeNow()
+					reconnect(errRepaired)
 					return
 				}
+				o.Logf("link: direct hub reachable again; switching off %s", l.ep.Kind)
+				cancel(errDirectReady)
+				if !errors.Is(context.Cause(ctx), errDirectReady) {
+					// Cancellation won while the configuration was checked or the handoff was logged. The candidate was
+					// never adopted, so it is still this probe's to close.
+					candidate.closeNow()
+					return
+				}
+				directReady <- &directHandoff{candidate: candidate, config: next}
+				_ = l.conn.Close(websocket.StatusNormalClosure, "reconnect")
+				return
 			case <-directC:
 				if !probingDirect {
 					tryDirect()
 				}
 			case p := <-pongs:
-				why := "hub 没有回应心跳"
+				why := "link-errors.heartbeat_timeout"
 				if p.check {
-					checking, why = false, "网络变了以后 hub 没有回应"
+					checking, why = false, "link-errors.heartbeat_after_network_change"
 				} else {
 					beating = false
 				}
 				if p.err != nil && ctx.Err() == nil {
-					drop(fmt.Errorf("%s：%w", why, p.err))
+					drop(newTextError(why, p.err))
 					return
 				}
 			case b := <-beat:
@@ -225,8 +313,11 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 					ping(false, hb.timeout)
 				}
 			case <-o.Check:
+				if memory != nil {
+					memory.networkChanged()
+				}
 				if l.localGone() {
-					drop(errors.New("网络变了，原来的地址已经不在"))
+					drop(newTextError("link-errors.network_address_gone", nil))
 					return
 				}
 				if !checking {
@@ -243,7 +334,7 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 				// Only the mtime says when to look: endpoints and renames rewrite link.json with the same pairing.
 				if now := stampOf(o.Path); !looked || !now.Equal(seen) {
 					looked, seen = true, now
-					if repaired(o.Path, c) {
+					if repaired(o.Path, c, followProxy) {
 						reconnect(errRepaired)
 						return
 					}
@@ -258,9 +349,14 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 		_, data, err := l.conn.Read(ctx)
 		if err != nil {
 			if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
-				return cause
+				if errors.Is(cause, errDirectReady) {
+					// The heartbeat installs the cause before publishing the candidate, so receiving here cannot redial
+					// or mistake an earlier cancellation for a successful transfer.
+					return <-directReady, cause
+				}
+				return nil, cause
 			}
-			return err
+			return nil, err
 		}
 		var m Message
 		if json.Unmarshal(data, &m) != nil {
@@ -296,13 +392,26 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 					if ctx.Err() != nil { // called off because the link ended: that says nothing about the node
 						return
 					}
-					o.Logf("link: stream %s: %v", id, err)
+					o.Logf("link: stream %s: %s", id, ErrorText(i18n.En, err))
 					_ = l.send(ctx, Message{Type: "open_failed", ID: id, Error: err.Error()})
 					rep.set(func(s *Status) { s.Node, s.NodeError = "offline", err.Error() })
 				}
 			}(m.ID)
 		}
 	}
+}
+
+// directHandoffConfig reloads link.json before an accepted candidate may replace SSH. The dial used the old link's
+// current endpoints, credential and TLS checks; a change to any identity or tunnel setting, or to this exact endpoint,
+// makes the candidate stale and returns the run to normal routing instead.
+func directHandoffConfig(path string, current *Config, ep Endpoint) *Config {
+	next, err := Load(path)
+	if err != nil || next.Hub != current.Hub || next.Machine != current.Machine || next.FP != current.FP ||
+		next.Trust != current.Trust || next.Token != current.Token || !next.SSH.Equal(current.SSH) || next.ProxyAlways ||
+		!slices.Contains(next.Endpoints, ep) {
+		return nil
+	}
+	return next
 }
 
 // endpoints takes in what the hub says about where it is and who it is: link.json keeps the candidates (the ones added
@@ -376,14 +485,17 @@ func (l *link) pairedAgain() {
 	}
 }
 
-// repaired: link.json now holds another credential, computer, hub or SSH tunnel than c, or was removed (unpaired). A
-// file that cannot be read for another reason changes nothing: the link stays as it is.
-func repaired(path string, c *Config) bool {
+// repaired: link.json now holds another credential, computer, hub, SSH tunnel or proxy-only setting than c, or
+// another proxy setting for a link that follows it (on the proxy, or on SSH it need not use, as the proxy comes
+// before SSH), or was removed (unpaired). A file that cannot be read for another reason changes nothing: the link
+// stays as it is.
+func repaired(path string, c *Config, followProxy bool) bool {
 	f, err := Read(path)
 	if err != nil {
 		return errors.Is(err, os.ErrNotExist)
 	}
-	return f.Token != c.Token || f.FP != c.FP || f.Trust != c.Trust || f.Machine != c.Machine || !f.SSH.Equal(c.SSH)
+	return f.Token != c.Token || f.FP != c.FP || f.Trust != c.Trust || f.Machine != c.Machine || !f.SSH.Equal(c.SSH) ||
+		f.ProxyAlways != c.ProxyAlways || (followProxy && f.Proxy != c.Proxy)
 }
 
 // heartbeat is how a link is pinged: every, and how long a pong may take; hub: the hub said so (endpoints).
@@ -491,7 +603,7 @@ func (l *link) localGone() bool {
 		return false
 	}
 	for _, a := range addrs {
-		if p, err := netip.ParsePrefix(a.String()); err == nil && p.Addr().Unmap().WithZone("") == l.local.WithZone("") {
+		if interfaceIP(a) == l.local.WithZone("") {
 			return false
 		}
 	}
@@ -508,10 +620,10 @@ func (l *link) forward(ctx context.Context, id, target string) error {
 	defer node.Close()
 	dctx, dcancel := context.WithTimeout(ctx, dialTimeout) // the handshake only: the stream lives as long as the link
 	defer dcancel()
-	ws, resp, err := websocket.Dial(dctx, wsURL(cmp.Or(l.baseURL, l.ep.URL), StreamPath+"?id="+id), &websocket.DialOptions{
-		HTTPClient: l.streams, HTTPHeader: bearer(l.token), CompressionMode: StreamCompression})
+	ws, resp, err := diagnosticDial(dctx, wsURL(cmp.Or(l.baseURL, l.ep.URL), StreamPath+"?id="+id), &websocket.DialOptions{
+		HTTPClient: l.streams, HTTPHeader: bearer(l.token), CompressionMode: StreamCompression}, "stream", l.ep.Kind, 1)
 	if err != nil {
-		return fmt.Errorf("开不了流：%w", handshakeError(resp, err))
+		return newTextError("link-errors.stream_open_failed", handshakeError(resp, err))
 	}
 	nc := websocket.NetConn(ctx, ws, websocket.MessageBinary)
 	defer nc.Close()

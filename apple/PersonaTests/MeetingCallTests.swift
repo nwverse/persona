@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Realtime voice in the meeting on the phone (#3862 phase 4; contract docs/assistant/meeting-minutes.md「Phase 4: realtime
 /// voice in the meeting」, the phone's side docs/apple/recording.md「Realtime voice (phase 4)」): who has a meeting call,
@@ -526,6 +527,35 @@ import Testing
         #expect(abs(pieces[0].db - (-6.02)) < 0.05 && pieces[1].db == MeetingTalkTap.quiet)
         let short = UnsafeBufferPointer(start: half.floatChannelData![0], count: 1365)
         #expect(MeetingTalkTap.levels(short, rate: 16000).pieces.count == 1, "an 85 ms buffer is one piece")
+    }
+
+    /// The page's window (#9658): no end two seconds after speech (a pause to think is common, and Talk is in sight to tap
+    /// when done); a quiet stretch ends it after 20 seconds, as before any speech, and it ends at 60 seconds.
+    @Test func thePagesWindowWaitsThroughAPause() {
+        var window = MeetingTalkWindow(opened: now, onPage: true)
+        #expect(window.heard(-20, at: now.addingTimeInterval(3)) == nil, "speech")
+        #expect(window.heard(-55, at: now.addingTimeInterval(6.5)) == nil, "a pause the Lock Screen's window would end on")
+        #expect(window.heard(-55, at: now.addingTimeInterval(22.9)) == nil)
+        #expect(window.heard(-55, at: now.addingTimeInterval(23)) == .silence)
+    }
+
+    @Test func thePagesWindowEndsAfterTwentySecondsWithoutSpeechOrAtSixty() {
+        var quiet = MeetingTalkWindow(opened: now, onPage: true)
+        #expect(quiet.tick(now.addingTimeInterval(19.9)) == nil)
+        #expect(quiet.tick(now.addingTimeInterval(20)) == .noSpeech)
+        var talking = MeetingTalkWindow(opened: now, onPage: true)
+        for s in stride(from: 0.5, to: 60, by: 0.5) {
+            #expect(talking.heard(-25, at: now.addingTimeInterval(s)) == nil)
+        }
+        #expect(talking.heard(-25, at: now.addingTimeInterval(60)) == .limit)
+    }
+
+    /// When the page's window ends by itself the caption says why; a tap needs no word.
+    @Test func thePageSaysWhyItsWindowEnded() {
+        #expect(MeetingCall.note(after: .silence) == .quiet)
+        #expect(MeetingCall.note(after: .noSpeech) == .quiet)
+        #expect(MeetingCall.note(after: .limit) == .limit)
+        #expect(MeetingCall.note(after: .tapped) == nil)
     }
 
     @Test func anotherTapEndsTheWindow() {

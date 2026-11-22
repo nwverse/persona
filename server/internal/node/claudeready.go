@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -53,7 +54,9 @@ func (n *Node) startWait() time.Duration {
 // once claude runs in the pane: a slow shell before it is not claude being slow. A wait in a herdr pane that ends with
 // the input box on screen and herdr knowing no agent there (agent_not_found, or none named) says so: herdr does not
 // know that program as Claude (#3454). probe (nil: none) is a start's command: while claude has not come, the tab's
-// shell saying it cannot run it ends the wait at once with a coded refusal (shellmiss.go, #1642).
+// shell saying it cannot run it ends the wait at once with a coded refusal (shellmiss.go, #1642). A start in a pane
+// whose host's word is not enough (startNeedsEvidence) takes claude as come only with evidence of its own, and ends
+// as not delivered when its line never reached the tab (#10588).
 func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*host.Agent, error) {
 	startWait, readyWait := n.claudeWaits()
 	poll := n.readinessPoll()
@@ -61,6 +64,8 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 	running := false
 	h, _, _ := n.paneHost(pane)
 	_, onHerdr := h.(*herdrHost)
+	ownEvidence := probe != nil && startNeedsEvidence(h)
+	echoed := false // ownEvidence: the start's line has shown in the pane at some look
 	started := func() {
 		if !running {
 			running = true
@@ -72,6 +77,7 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 	sawClaude := false      // herdr has named claude in the pane
 	var goneSince time.Time // since when herdr has named no agent there after sawClaude, with only a shell in front
 	shellSaid := ""         // a not-found line the tab's shell printed after the command, of something else than it
+	bypassTries := 0        // times the Bypass Permissions confirmation was accepted (acceptBypass)
 	gone := 0               // looks in a row at which the pane's host listed no such pane (errNoOrcaTerminal)
 	for time.Now().Before(deadline) {
 		select {
@@ -85,6 +91,9 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 		}
 		if err != nil {
 			continue
+		}
+		if ownEvidence && !echoed {
+			echoed = probe.echoed(screen)
 		}
 		if keys := trustKeys(screen); keys != nil {
 			started()
@@ -102,6 +111,23 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 			time.Sleep(time.Second)
 			continue
 		}
+		// Claude Code's Bypass Permissions confirmation, on a start Persona itself asked for bypass because the user chose
+		// it (Allow all on the task or the New session sheet): "Yes, I accept" is that same choice, so it is pressed here.
+		// Any other start that meets it (a launcher's own flag, no mode chosen) still stops below with what to do (#3294).
+		if probe != nil && probe.acceptBypass {
+			if keys := bypassConfirmKeys(screen); keys != nil {
+				if bypassTries >= bypassConfirmTries {
+					return nil, errors.New(bypassNotAccepted)
+				}
+				bypassTries++
+				started()
+				log.Printf("start in pane %s: accepting Claude Code's Bypass Permissions confirmation (the start asked for bypass)", pane)
+				_ = n.sendKeys(ctx, pane, keys...)
+				readyStreak = 0
+				time.Sleep(time.Second)
+				continue
+			}
+		}
 		if reason := firstRunScreen(unframed(screen)); reason != "" {
 			return nil, errors.New(reason)
 		}
@@ -109,11 +135,15 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 		if gone = goneLooks(gone, err); gone >= paneGoneLooks && !running {
 			return nil, errPaneGone()
 		}
-		if err != nil || a.Agent != "claude" {
+		claude := err == nil && a.Agent == "claude"
+		if claude && ownEvidence && !running && !probe.claudeCame(screen) {
+			claude = false // the host's word alone: looked at as a tab where claude has not come
+		}
+		if !claude {
 			// The tab's shell could not run the command (a launcher its rc files do not define, a claude not on its
 			// PATH): it said so right after it and is back at its prompt, and claude will not come (#1642).
 			// Or it did not take the typed line at all: a startup question ate its head (#2570). The start types it again.
-			if probe != nil && !sawClaude && !running && (mayHaveShellMiss(screen) || mayBeRejected(screen)) {
+			if probe != nil && !sawClaude && !running && (mayHaveShellMiss(screen) || probe.mayBeRejected(screen)) {
 				if full, rerr := n.readPane(ctx, pane, "recent-unwrapped", 60); rerr == nil {
 					refused, other := probe.verdict(full, func() bool { return n.shellBackOrUnknown(ctx, pane) })
 					if refused != nil {
@@ -172,6 +202,9 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 	}
 	if !running && gone > 0 {
 		return nil, errPaneGone()
+	}
+	if !running && ownEvidence && !echoed && probe.unread() {
+		return nil, startNotDelivered(startWait)
 	}
 	if !running {
 		return nil, fmt.Errorf("claude did not start within %s: the tab's shell had not run it yet (is the machine busy?)", startWait)
@@ -368,6 +401,59 @@ func styleChoice(line string) string {
 		i = j
 	}
 	return ""
+}
+
+// bypassConfirmQuestion is the warning that opens Claude Code's Bypass Permissions confirmation (2.1.322: shown on a
+// start with --permission-mode bypassPermissions, --dangerously-skip-permissions or --allow-dangerously-skip-permissions
+// until the profile has accepted it once). Its choices are "❯ No, exit" and "Yes, I accept", unnumbered.
+const bypassConfirmQuestion = "Claude Code running in Bypass Permissions mode"
+
+// bypassConfirmTries is how many times a start presses "Yes, I accept"; a confirmation still on screen after that is
+// reported (bypassNotAccepted) instead of pressed again.
+const bypassConfirmTries = 3
+
+const bypassNotAccepted = "Claude Code's Bypass Permissions confirmation stayed on screen after Persona chose \"Yes, I accept\" " +
+	"for this start: accept it in a terminal on this machine, or start the session in another permission mode"
+
+// bypassConfirmKeys returns the keys that choose "Yes, I accept" on Claude Code's Bypass Permissions confirmation, nil
+// on any other screen (a permission, the trust dialog, a picker: never these). Only the confirmation's own lines count:
+// the warning, then both of its choices below it, the cursor on one of them.
+func bypassConfirmKeys(screen string) []string {
+	lines := strings.Split(strings.ReplaceAll(screen, "\r", ""), "\n")
+	warn, cur, yes, no := -1, -1, -1, -1
+	for i, l := range lines {
+		t := strings.TrimSpace(strings.ReplaceAll(l, "\u00a0", " "))
+		if strings.Contains(t, bypassConfirmQuestion) {
+			warn, cur, yes, no = i, -1, -1, -1 // the last one drawn is the one on screen
+			continue
+		}
+		if warn < 0 {
+			continue
+		}
+		label := strings.TrimSpace(strings.TrimPrefix(t, "❯"))
+		switch label {
+		case "Yes, I accept", "2. Yes, I accept":
+			yes = i
+		case "No, exit", "1. No, exit":
+			no = i
+		default:
+			continue
+		}
+		if strings.HasPrefix(t, "❯") {
+			cur = i
+		}
+	}
+	if warn < 0 || yes < 0 || no < 0 || cur < 0 {
+		return nil
+	}
+	var keys []string
+	for i := cur; i < yes; i++ {
+		keys = append(keys, "down")
+	}
+	for i := cur; i > yes; i-- {
+		keys = append(keys, "up")
+	}
+	return append(keys, "enter")
 }
 
 // firstRunScreen names the first-run screen the node cannot complete on its own, or "" when the screen is not one.

@@ -32,11 +32,14 @@ func checkModelProfile(p *ModelProfile, stored []storedLauncher) error {
 		return i18n.Err("assistant-model_profiles.err_description", i18n.Args{"max": modelProfileAbout})
 	}
 	for id, b := range p.Purposes {
+		if err := checkExternalPurpose(b); err != nil {
+			return err
+		}
 		if !slices.Contains(modelCategoryIDs, id) {
 			return i18n.Err("assistant-model_profiles.err_purpose", i18n.Args{"purpose": id, "purposes": strings.Join(modelCategoryIDs, ", ")})
 		}
-		if b.Runtime != "" {
-			return i18n.Err("assistant-model_profiles.err_runtime")
+		if b.ConfigDir != "" {
+			return i18n.Err("assistant-model_profiles.err_config_dir")
 		}
 		for field, v := range map[string]string{"provider": b.Provider, "model": b.Model} {
 			if !validProfileValue(v) {
@@ -53,8 +56,34 @@ func checkModelProfile(p *ModelProfile, stored []storedLauncher) error {
 		if b.Effort != "" && !slices.Contains(effortLevelsForKind(kind), b.Effort) {
 			return profileEffortErr(id, b.Effort, effortLevelsForKind(kind))
 		}
+		if b.PermissionMode != "" {
+			if kind != "launcher" {
+				return i18n.Err("assistant-models.err_permission_mode_launcher_only")
+			}
+			if !slices.Contains(proto.PermissionModes, b.PermissionMode) {
+				return profilePermissionModeErr(id, b.PermissionMode)
+			}
+			if name, ok := strings.CutPrefix(b.Provider, "launcher."); ok {
+				agent := ""
+				for _, l := range stored {
+					if l.Name == name {
+						agent = l.AgentType()
+						break
+					}
+				}
+				if agent == "" && slices.Contains([]string{"codex", "traex", "agy", "omp", "pi", "cursor"}, name) {
+					agent = name
+				}
+				if !permissionModeSupported(agent, 0, b.PermissionMode) {
+					return i18n.Err("assistant-models.err_permission_mode_unsupported")
+				}
+			}
+		}
 	}
 	for name, m := range p.Launchers {
+		if proto.IsExternalLauncher(name) {
+			return i18n.Err("external-adapter.purpose_unsupported")
+		}
 		i := slices.IndexFunc(stored, func(l storedLauncher) bool { return l.Name == name })
 		if i < 0 {
 			return i18n.Err("assistant-model_profiles.err_launcher_missing", i18n.Args{"launcher": name})
@@ -106,6 +135,9 @@ func checkModelTiers(tiers map[string]ModelTier) error {
 		return i18n.Err("assistant-model_profiles.err_tiers", i18n.Args{"max": maxModelTiers})
 	}
 	for name, t := range tiers {
+		if proto.IsExternalLauncher(t.Launcher) {
+			return i18n.Err("external-adapter.purpose_unsupported")
+		}
 		if !modelTierName.MatchString(name) {
 			return i18n.Err("assistant-model_profiles.err_tier_name", i18n.Args{"tier": name})
 		}
@@ -119,6 +151,17 @@ func checkModelTiers(tiers map[string]ModelTier) error {
 		}
 		if t.Effort != "" && !slices.Contains(proto.EffortLevels, t.Effort) {
 			return profileEffortErr(name, t.Effort, proto.EffortLevels)
+		}
+		if !proto.ValidSpeed(t.Speed) {
+			return i18n.Err("assistant-model_profiles.err_tier_speed", i18n.Args{"tier": name, "speed": t.Speed})
+		}
+		if t.PermissionMode != "" {
+			if !slices.Contains(proto.PermissionModes, t.PermissionMode) {
+				return profilePermissionModeErr(name, t.PermissionMode)
+			}
+			if slices.Contains([]string{"omp", "traex", "pi", "cursor"}, t.Launcher) {
+				return i18n.Err("assistant-models.err_permission_mode_unsupported")
+			}
 		}
 		if t.Description = strings.TrimSpace(t.Description); utf8.RuneCountInString(t.Description) > modelTierAbout ||
 			strings.ContainsAny(t.Description, "\r\n\x00") {
@@ -141,6 +184,44 @@ func checkTierModel(name string, t ModelTier) error {
 
 func profileEffortErr(where, effort string, levels []string) error {
 	return i18n.Err("assistant-model_profiles.err_effort", i18n.Args{"where": where, "effort": effort, "levels": strings.Join(levels, " / ")})
+}
+
+func profilePermissionModeErr(where, mode string) error {
+	return i18n.Err("assistant-model_profiles.err_permission_mode", i18n.Args{"where": where, "mode": mode, "modes": strings.Join(proto.PermissionModes, " / ")})
+}
+
+func (s *Service) checkProfilePermissionModes(ctx context.Context, p ModelProfile) error {
+	for id, b := range p.Purposes {
+		if b.PermissionMode == "" {
+			continue
+		}
+		provider := b.Provider
+		if provider == "" {
+			if eff, err := s.resolveModel(ctx, id); err == nil {
+				provider = eff.Provider
+			}
+		}
+		name, ok := strings.CutPrefix(provider, "launcher.")
+		if !ok || name == "" {
+			continue
+		}
+		machine := ""
+		if id == "assistant" {
+			machine = s.settings(ctx).MachineID
+		}
+		if !slices.Contains(s.permissionModesForLauncher(ctx, machine, name, nil), b.PermissionMode) {
+			return i18n.Err("assistant-models.err_permission_mode_unsupported")
+		}
+	}
+	for _, t := range p.Tiers {
+		if t.PermissionMode == "" {
+			continue
+		}
+		if !slices.Contains(s.permissionModesForLauncher(ctx, "", t.Launcher, nil), t.PermissionMode) {
+			return i18n.Err("assistant-models.err_permission_mode_unsupported")
+		}
+	}
+	return nil
 }
 
 // ---- editing ----
@@ -186,6 +267,9 @@ func (s *Service) saveModelProfileLocked(ctx context.Context, revision *int64, i
 	}
 	ctx = withManagedSnapshot(ctx, stored)
 	if err := checkModelProfile(&p, stored); err != nil {
+		return p, "", err
+	}
+	if err := s.checkProfilePermissionModes(ctx, p); err != nil {
 		return p, "", err
 	}
 	for name, t := range p.Tiers {

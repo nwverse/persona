@@ -22,6 +22,14 @@ vi.mock("../../lib/store", () => ({
     return () => { hub.handlers.delete(entry); };
   },
 }));
+// jsdom lays nothing out, so the flat list's virtualizer would draw no row: draw every item, in order.
+vi.mock("@tanstack/react-virtual", () => ({
+  useVirtualizer: ({ count, getItemKey }: { count: number; getItemKey: (i: number) => string }) => ({
+    getVirtualItems: () => Array.from({ length: count }, (_, index) => ({ index, key: getItemKey(index), start: index * 32 })),
+    getTotalSize: () => count * 32,
+    measureElement: () => {},
+  }),
+}));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
 
@@ -106,6 +114,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setShown(true);
   act(() => root.unmount());
   host.remove();
   vi.useRealTimers();
@@ -137,11 +146,17 @@ async function toggle(section: HTMLElement) {
   await act(async () => heading(section).click());
   await settle();
 }
+const hubHint = () => { for (const entry of [...hub.handlers]) if (entry.event === "sessions_list") entry.fn(); };
+function setShown(shown: boolean) {
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => shown ? "visible" : "hidden" });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
 async function hint() {
   await act(async () => {
     for (const entry of [...hub.handlers]) if (entry.event === "sessions_list") entry.fn();
     await list.load();
-    await vi.advanceTimersByTimeAsync(0);
+    // past the invalidation throttle window (lib/session-list.ts): a section's trailing read has gone out
+    await vi.advanceTimersByTimeAsync(2_100);
   });
 }
 
@@ -158,24 +173,24 @@ describe("the sections' own chunk", () => {
 });
 
 describe("the list by computer", () => {
-  it("draws one section per computer, the busiest first: the first three open on their sessions, the rest folded and unread", async () => {
+  it("draws one section per computer in a fixed order: the first three open on their sessions, the rest folded and unread", async () => {
     await show();
     vi.mocked(api).mockClear();
     await browseBy("machine");
-    expect(sections().map(summary)).toEqual(["MacBook 1 3", "Windows PC 2", "Lab 1", "NAS 1"]); // name, needs you, count
+    expect(sections().map(summary)).toEqual(["Lab 1", "MacBook 1 3", "NAS 1", "Windows PC 2"]); // name, needs you, count
     expect(sections().map((s) => heading(s).getAttribute("aria-expanded"))).toEqual(["true", "true", "true", "false"]);
-    expect(sections().map(rowsIn)).toEqual([["a1", "a2", "a3"], ["b1", "b2"], ["d1"], []]);
+    expect(sections().map(rowsIn)).toEqual([["d1"], ["a1", "a2", "a3"], ["c1"], []]);
     expect(sections()[1].querySelector("[data-row]")!.getAttribute("data-within")).toBe("machine");
     expect(host.querySelector("[data-virtual-sessions]")).toBeNull();
     expect(host.querySelector("[data-session-total]")!.textContent).toBe(t("paged-agents.count", { count: 7 }));
     // one page for each open section, none for the folded one; and a section reads rows, never counts: its number is
     // on its heading already
-    expect(reads("page").map((path) => params(path).get("machine_id")).sort()).toEqual(["lab", "mac", "pc"]);
+    expect(reads("page").map((path) => params(path).get("machine_id")).sort()).toEqual(["lab", "mac", "nas"]);
     expect(reads("counts").every((path) => !params(path).has("machine_id"))).toBe(true);
 
     await toggle(sections()[3]);
-    expect(rowsIn(sections()[3])).toEqual(["c1"]);
-    expect(Object.fromEntries(params(reads("page").at(-1)!))).toEqual({ machine_id: "nas", summary: "1", limit: "50" });
+    expect(rowsIn(sections()[3])).toEqual(["b1", "b2"]);
+    expect(Object.fromEntries(params(reads("page").at(-1)!))).toEqual({ machine_id: "pc", summary: "1", limit: "50" });
   });
 
   it("stops reading a section once it is folded, and keeps it folded", async () => {
@@ -188,8 +203,8 @@ describe("the list by computer", () => {
     expect(rowsIn(sections()[0])).toEqual([]);
     vi.mocked(api).mockClear();
     await hint();
-    expect(reads("page").some((path) => params(path).get("machine_id") === "mac")).toBe(false);
-    expect(reads("page").some((path) => params(path).get("machine_id") === "pc")).toBe(true);
+    expect(reads("page").some((path) => params(path).get("machine_id") === "lab")).toBe(false);
+    expect(reads("page").some((path) => params(path).get("machine_id") === "mac")).toBe(true);
     // what someone folded stays folded the next time the list is drawn
     act(() => root.unmount());
     root = createRoot(host);
@@ -198,7 +213,7 @@ describe("the list by computer", () => {
     expect(sections().map((s) => heading(s).getAttribute("aria-expanded"))).toEqual(["false", "true", "true", "false"]);
   });
 
-  it("shows a section's newest sessions first, then what it has read, then reads on", async () => {
+  it("shows a section's newest sessions first, then what it has read, then reads on, under a quiet Load more line", async () => {
     const many = Array.from({ length: 9 }, (_, i) => row(`m${i}`, "mac", "/big"));
     vi.mocked(api).mockImplementation((path) => {
       const q = params(path as string);
@@ -209,8 +224,10 @@ describe("the list by computer", () => {
     });
     await show();
     await browseBy("machine");
-    const mac = () => sections()[0];
+    const mac = () => sections().find((s) => s.getAttribute("data-session-group") === "mac")!;
     const more = () => [...mac().querySelectorAll("button")].find((b) => b.textContent === t("paged-agents.more"))!;
+    // the sidebar's quiet line under a list's rows, not a button pill (#6662)
+    expect(more().className).toContain("text-ink-3");
     expect(rowsIn(mac())).toEqual(["m0", "m1", "m2", "m3", "m4", "m5"]);
     vi.mocked(api).mockClear();
     await act(async () => more().click());
@@ -236,10 +253,253 @@ describe("the list by computer", () => {
   });
 
   it("opens by itself the section the open conversation is in", async () => {
-    await show({ open: "c1" });
+    await show({ open: "b1" });
     await browseBy("machine");
     expect(sections().map((s) => heading(s).getAttribute("aria-expanded"))).toEqual(["true", "true", "true", "true"]);
-    expect(rowsIn(sections()[3])).toEqual(["c1"]);
+    expect(rowsIn(sections()[3])).toEqual(["b1", "b2"]);
+  });
+
+  it("opens the section of an open conversation on a later page", async () => {
+    const filler = Array.from({ length: 50 }, (_, i) => row(`f${i}`, "mac", "/bulk"));
+    const all = [...filler, ...ROWS];
+    const selected = (q: URLSearchParams) => {
+      const places = q.getAll("place"), spaces = q.getAll("space");
+      return all.filter((r) => (!q.get("state") || q.get("state") === r.state) && (!q.get("machine_id") || q.get("machine_id") === r.machine) &&
+        (!q.get("project") || q.get("project") === r.project) && (!q.get("group") || q.get("group") === r.group) && (!q.get("q") || r.id.includes(q.get("q")!)) &&
+        (!places.length || places.includes(listPair(r.machine, r.project))) && (!spaces.length || spaces.includes(listPair(r.machine, r.group))));
+    };
+    vi.mocked(api).mockImplementation((path) => {
+      const q = params(path as string);
+      const rows = selected(q);
+      const answer = q.has("catalog") ? catalogOf(rows) : q.has("counts") ? countsOf(rows)
+        : q.has("cursor") ? { sessions: rows, remove: [], has_more: false, total: rows.length, revision: "r" }
+          : { sessions: rows.slice(0, 50), remove: [], has_more: true, next_cursor: "second", total: rows.length, revision: "r" };
+      return Promise.resolve(answer) as ReturnType<typeof api>;
+    });
+    await show({ open: "b1" });
+    await browseBy("machine");
+    expect(sections().map((s) => heading(s).getAttribute("aria-expanded"))).toEqual(["true", "true", "true", "true"]);
+    expect(rowsIn(sections()[3])).toEqual(["b1", "b2"]);
+    expect(reads("page").filter((path) => params(path).get("cursor") === "second")).toHaveLength(1);
+  });
+});
+
+describe("stable presentation over paged transport (#11801)", () => {
+  it("sorts the loaded prefix before the preview, preserving its rows through refreshes and Load more", async () => {
+    type Ranked = Row & { rank: number; place: number };
+    let many: Ranked[] = Array.from({ length: 9 }, (_, i) => ({ ...row(`r${i}`, "mac", "/big"), rank: i, place: i }));
+    vi.mocked(api).mockImplementation((path) => {
+      const q = params(path as string);
+      const answer = q.has("counts") ? countsOf(many) : { sessions: many, remove: [], has_more: false, total: many.length, revision: "r" };
+      return Promise.resolve(answer) as ReturnType<typeof api>;
+    });
+    const identity = (r: Ranked) => r.id;
+    const transport = (a: Ranked, b: Ranked) => b.rank - a.rank || a.id.localeCompare(b.id);
+    const stable = (a: Ranked, b: Ranked) => a.place - b.place;
+    const rankedList = new SessionList<Ranked>("/sessions", identity, transport);
+    await rankedList.load();
+    await act(async () => root.render(<PagedSessionList root={rankedList} path="/sessions" identity={identity} compare={transport} event="sessions_list"
+      grouping={{ dimension: "machine", bar: null, label: "Machine", rowOrder: { compare: stable } }}
+      placeOf={(r) => ({ machine: r.machine, project: r.project, group: r.group })}
+      renderRow={(r) => <span data-row={r.id}>{r.id}</span>} />));
+    await settle();
+    const shown = () => [...host.querySelectorAll<HTMLElement>("[data-session-row]")].map((el) => el.textContent);
+    expect(shown()).toEqual(["r0", "r1", "r2", "r3", "r4", "r5"]);
+
+    // The last row in herdr order becomes the first in transport order. The preview must not gain or lose a row.
+    many = many.map((r) => r.id === "r0" ? { ...r, rank: 100 } : r);
+    await act(async () => {
+      hubHint();
+      await rankedList.load();
+      await vi.advanceTimersByTimeAsync(2_100);
+    });
+    expect(shown()).toEqual(["r0", "r1", "r2", "r3", "r4", "r5"]);
+    await act(async () => [...host.querySelectorAll("button")].find((b) => b.textContent === t("paged-agents.more"))!.click());
+    await settle();
+    expect(shown()).toEqual(["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8"]);
+  });
+
+  type Ranked = Row & { rank: number; place: number };
+  const transport = (a: Ranked, b: Ranked) => b.rank - a.rank || a.id.localeCompare(b.id);
+  const stable = (a: Ranked, b: Ranked) => a.place - b.place;
+  const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => `r${from + i}`);
+  const shown = () => [...host.querySelectorAll<HTMLElement>("[data-session-row]")].map((el) => el.textContent);
+  const more = () => [...host.querySelectorAll("button")].find((b) => b.textContent === t("paged-agents.more"))!;
+
+  /** A 120-row hub whose newest-first transport is the reverse of its stable tab order. */
+  async function showRankedPages(query = "") {
+    const fixture = {
+      rows: Array.from({ length: 120 }, (_, i) => ({ ...row(`r${i + 1}`, "mac", "/big"), rank: i + 1, place: i + 1 })),
+      delta: [] as Ranked[],
+      revision: "r0",
+    };
+    vi.mocked(api).mockImplementation((path) => {
+      const q = params(path as string);
+      if (q.has("counts")) return Promise.resolve(countsOf(fixture.rows)) as ReturnType<typeof api>;
+      if (q.has("since")) {
+        return Promise.resolve({ sessions: q.get("since") === fixture.revision ? [] : fixture.delta, remove: [], added: [], has_more: false,
+          total: fixture.rows.length, revision: fixture.revision }) as ReturnType<typeof api>;
+      }
+      const cursor = q.get("cursor");
+      const offset = cursor ? Number(cursor.split(":")[1]) : 0;
+      const revision = cursor?.split(":")[0] ?? fixture.revision;
+      const ordered = [...fixture.rows].sort(transport);
+      const end = offset + 50;
+      return Promise.resolve({ sessions: ordered.slice(offset, end), remove: [], has_more: end < ordered.length,
+        next_cursor: end < ordered.length ? `${revision}:${end}` : undefined, total: ordered.length, revision }) as ReturnType<typeof api>;
+    });
+    const identity = (r: Ranked) => r.id;
+    const rankedList = new SessionList<Ranked>("/sessions", identity, transport);
+    await rankedList.load();
+    await act(async () => root.render(<PagedSessionList root={rankedList} path="/sessions" identity={identity} compare={transport} event="sessions_list"
+      grouping={{ dimension: "machine", bar: null, label: "Machine", query, rowOrder: { compare: stable } }}
+      placeOf={(r) => ({ machine: r.machine, project: r.project, group: r.group })}
+      renderRow={(r) => <span tabIndex={0} data-row={r.id}>{r.id}</span>} />));
+    await settle();
+    return { fixture, rankedList };
+  }
+
+  it("does not displace the preview when activity brings an unloaded row into the loaded prefix", async () => {
+    const { fixture, rankedList } = await showRankedPages();
+    expect(shown()).toEqual(range(71, 76));
+
+    const active = { ...fixture.rows[0]!, rank: 121 };
+    fixture.rows = fixture.rows.map((r) => r.id === active.id ? active : r);
+    fixture.delta = [active];
+    fixture.revision = "r1";
+    await act(async () => {
+      hubHint();
+      await rankedList.load();
+      await vi.advanceTimersByTimeAsync(2_100);
+    });
+
+    expect(shown()).toEqual(range(71, 76));
+    await act(async () => more().click());
+    await settle();
+    expect(shown()).toEqual(range(71, 120));
+  });
+
+  it("retains flat-search rows and focus when activity brings an unloaded row into the prefix", async () => {
+    const { fixture } = await showRankedPages("r");
+    const before = shown();
+    expect(before[0]).toBe("r71");
+    const focused = host.querySelector<HTMLElement>('[data-row="r71"]')!;
+    act(() => focused.focus());
+    expect(document.activeElement).toBe(focused);
+
+    const active = { ...fixture.rows[0]!, rank: 121 };
+    fixture.rows = fixture.rows.map((r) => r.id === active.id ? active : r);
+    fixture.delta = [active];
+    fixture.revision = "r1";
+    await act(async () => {
+      hubHint();
+      await vi.advanceTimersByTimeAsync(2_100);
+    });
+
+    expect(shown()).toEqual(before); // newly active, but an old row: the current hub's empty `added` does not admit it
+    expect(document.activeElement).toBe(focused);
+  });
+
+  it("reveals the first page, then sorts a second network page into the structural union", async () => {
+    await showRankedPages();
+    expect(shown()).toEqual(range(71, 76));
+    await act(async () => more().click());
+    await settle();
+    expect(shown()).toEqual(range(71, 120));
+
+    await act(async () => more().click());
+    await settle();
+    expect(shown()).toEqual(range(21, 120));
+  });
+
+  it("applies activity, swapped slots and a new first tab, then reloads to the same placement", async () => {
+    const fixture = {
+      rows: [
+        { ...row("r1", "mac", "/big"), rank: 1, place: 1 },
+        { ...row("r2", "mac", "/big"), rank: 2, place: 2 },
+        { ...row("r3", "mac", "/big"), rank: 3, place: 3 },
+      ] as Ranked[],
+      delta: [] as Ranked[],
+      added: [] as string[],
+      revision: "r0",
+    };
+    vi.mocked(api).mockImplementation((path) => {
+      const q = params(path as string);
+      if (q.has("counts")) return Promise.resolve(countsOf(fixture.rows)) as ReturnType<typeof api>;
+      if (q.has("since")) {
+        return Promise.resolve({ sessions: q.get("since") === fixture.revision ? [] : fixture.delta, remove: [], added: fixture.added, has_more: false,
+          total: fixture.rows.length, revision: fixture.revision }) as ReturnType<typeof api>;
+      }
+      return Promise.resolve({ sessions: [...fixture.rows].sort(transport), remove: [], has_more: false,
+        total: fixture.rows.length, revision: fixture.revision }) as ReturnType<typeof api>;
+    });
+    const identity = (r: Ranked) => r.id;
+    const renderList = async (rankedList: SessionList<Ranked>) => {
+      await rankedList.load();
+      await act(async () => root.render(<PagedSessionList root={rankedList} path="/sessions" identity={identity} compare={transport} event="sessions_list"
+        grouping={{ dimension: "machine", bar: null, label: "Machine", rowOrder: { compare: stable } }}
+        placeOf={(r) => ({ machine: r.machine, project: r.project, group: r.group })}
+        renderRow={(r) => <span data-row={r.id} data-rank={r.rank} data-place={r.place}>{r.id}</span>} />));
+      await settle();
+    };
+    const refresh = async (revision: string) => {
+      fixture.revision = revision;
+      await act(async () => {
+        hubHint();
+        await vi.advanceTimersByTimeAsync(2_100);
+      });
+    };
+    let rankedList = new SessionList<Ranked>("/sessions", identity, transport);
+    await renderList(rankedList);
+    expect(shown()).toEqual(["r1", "r2", "r3"]);
+
+    const active = { ...fixture.rows[0]!, rank: 10 };
+    fixture.rows = fixture.rows.map((r) => r.id === active.id ? active : r);
+    fixture.delta = [active];
+    await refresh("r1");
+    expect(shown()).toEqual(["r1", "r2", "r3"]);
+    expect(host.querySelector('[data-row="r1"]')!.getAttribute("data-rank")).toBe("10");
+
+    const swapped = fixture.rows.map((r) => r.id === "r1" ? { ...r, place: 2 } : r.id === "r2" ? { ...r, place: 1 } : r);
+    fixture.rows = swapped;
+    fixture.delta = swapped.filter((r) => r.id !== "r3");
+    await refresh("r2");
+    expect(shown()).toEqual(["r2", "r1", "r3"]);
+
+    const first = { ...row("r0", "mac", "/big"), rank: 20, place: 0 };
+    fixture.rows = [first, ...fixture.rows];
+    fixture.delta = fixture.rows;
+    fixture.added = ["r0"];
+    await refresh("r3");
+    expect(shown()).toEqual(["r0", "r2", "r1", "r3"]);
+
+    act(() => root.unmount());
+    root = createRoot(host);
+    rankedList = new SessionList<Ranked>("/sessions", identity, transport);
+    await renderList(rankedList);
+    expect(shown()).toEqual(["r0", "r2", "r1", "r3"]);
+  });
+});
+
+describe("a list by group whose first read fails", () => {
+  // audit item 4: the groups come from the root list's counts, and its failed read left them on "Loading…" for good
+  it("says why with Retry instead of loading for good, and draws the groups once Retry reads them", async () => {
+    localStorage.setItem("persona.agentBrowseBy", "machine");
+    const answer = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(() => Promise.reject(new Error("HTTP 500")));
+    await list.load().catch(() => {});
+    await act(async () => root.render(<PagedSessionList root={list} path="/sessions" identity={identity} compare={compare} event="sessions_list"
+      label={(_, id) => NAMES[id] ?? id} renderRow={(r) => <span data-row={r.id}>{r.id}</span>} />));
+    await settle();
+    expect(host.querySelector('[role="status"]')).toBeNull();
+    const alerts = [...host.querySelectorAll('[role="alert"]')].map((el) => el.textContent);
+    expect(alerts).toEqual(["HTTP 500"]);
+    vi.mocked(api).mockImplementation(answer);
+    const retry = [...host.querySelectorAll("button")].find((b) => b.textContent === t("sidebar.retry"))!;
+    await act(async () => retry.click());
+    await settle();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(sections().map(summary)).toEqual(["Lab 1", "MacBook 1 3", "NAS 1", "Windows PC 2"]);
   });
 });
 
@@ -258,10 +518,10 @@ describe("the list by project, on a hub with the catalog", () => {
     // a row is told the group it is under: the sidebar names the computer on a row of a project that has several
     expect([...app.querySelectorAll<HTMLElement>("[data-row]")].map((el) => `${el.dataset.within}:${el.dataset.group}`)).toEqual(["project:app", "project:app", "project:app"]);
     // its remote, then each directory with its computer and how many of the sessions are there
-    const where = [...app.querySelectorAll(`[aria-label="${t("paged-agents.places")}"] li`)]
+    const where = [...app.querySelectorAll(`[aria-label="${t("agents-groupedsessions.places")}"] li`)]
       .map((li) => [li.querySelector("span[title]")!.textContent, li.querySelector("span[aria-hidden]")?.textContent].filter(Boolean).join(" = "));
     expect(where).toEqual(["git.example.com/team/app", "MacBook · ~/code/app = 2", "Windows PC · C:\\code\\App = 1"]);
-    expect(app.querySelector(`[aria-label="${t("paged-agents.places")}"] span[title="MacBook · /Users/me/code/app"]`)).not.toBeNull(); // the whole path on hover
+    expect(app.querySelector(`[aria-label="${t("agents-groupedsessions.places")}"] span[title="MacBook · /Users/me/code/app"]`)).not.toBeNull(); // the whole path on hover
     const read = reads("page").find((path) => params(path).getAll("place").length === 2)!;
     expect(params(read).getAll("place")).toEqual([listPair("mac", "/Users/me/code/app"), listPair("pc", "C:\\code\\App")]);
     expect(params(read).has("project")).toBe(false);
@@ -300,21 +560,43 @@ describe("the list by project, on a hub with the catalog", () => {
       .toEqual([`${t("lib-state-labels.needs_you")} 1`, `${t("lib-state-labels.idle")} 2`]);
   });
 
-  it("reads the groups once for a burst of hints, while the open sections follow every one", async () => {
+  it("reads the groups once per hint window, and the open sections' rows follow every one of them", async () => {
     await show();
     await browseBy("project");
     const groupReads = () => reads("catalog").length;
     const rowReads = () => reads("page").filter((path) => params(path).getAll("place").includes(listPair("pc", "C:\\code\\App"))).length;
     vi.mocked(api).mockClear();
-    for (let i = 0; i < 5; i++) await hint();
-    expect(groupReads()).toBe(0); // within the refresh gap of the first read: held for its end
-    expect(rowReads()).toBe(5);
-    await act(async () => { await vi.advanceTimersByTimeAsync(SESSION_LIST_METRICS.groupsRefresh); });
+    // A burst of hints within one window (the fleet broadcasts one per working-agent update) reads the section's
+    // rows once, not once per hint; the groups refresh (their own 1.5 s gap) ride that same window.
+    await act(async () => {
+      for (let i = 0; i < 5; i++) {
+        for (const entry of [...hub.handlers]) if (entry.event === "sessions_list") entry.fn();
+      }
+      await list.load();
+      await vi.advanceTimersByTimeAsync(2_100);
+    });
+    expect(rowReads()).toBe(1);
     expect(groupReads()).toBe(1);
-    // a hint after a quiet stretch is read at once
-    await act(async () => { await vi.advanceTimersByTimeAsync(SESSION_LIST_METRICS.groupsRefresh); });
+    // A hint after a quiet stretch is read at once
     await hint();
+    expect(rowReads()).toBe(2);
     expect(groupReads()).toBe(2);
+  });
+
+  it("reads nothing for the hints a hidden tab gets, and once for them all when it is shown again", async () => {
+    await show();
+    await browseBy("machine");
+    await act(async () => { await vi.advanceTimersByTimeAsync(SESSION_LIST_METRICS.groupsRefresh); });
+    vi.mocked(api).mockClear();
+    await act(async () => setShown(false));
+    for (let i = 0; i < 10; i++) await act(async () => { hubHint(); await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2 * SESSION_LIST_METRICS.groupsRefresh); });
+    expect(calls()).toEqual([]);
+    await act(async () => setShown(true));
+    await settle();
+    // each open section reads once, the groups once; the folded section still reads nothing
+    expect(reads("page").map((path) => params(path).get("machine_id")).sort()).toEqual(["lab", "mac", "nas"]);
+    expect(reads("counts")).toHaveLength(1);
   });
 
   it("reads a catalog again while its computers are still answering, less often as it goes on", async () => {
@@ -398,5 +680,35 @@ describe("the chosen Browse by", () => {
     localStorage.setItem("persona.agentBrowseBy", "repo");
     await show();
     expect(chosen()).toBe(t("paged-agents.recent"));
+  });
+});
+
+describe("a section passes over hints about other sessions (#9176)", () => {
+  const sectionReads = () => calls().filter((path) => { const q = params(path); return q.has("machine_id") && !q.has("counts") && !q.has("catalog"); }).length;
+  async function changeHint(since: string, revision: string, changed: string[][]) {
+    await act(async () => {
+      for (const entry of [...hub.handlers]) if (entry.event === "sessions_list") (entry.fn as (msg: unknown) => void)({ since, revision, changed });
+      await list.load(); // the root list reads on every hint (the store's), and with it the groups' numbers
+      await vi.advanceTimersByTimeAsync(SESSION_LIST_METRICS.groupsRefresh + 2_100);
+    });
+  }
+
+  it("reads an open section only for a hint that can concern its sessions, or when its heading's numbers change", async () => {
+    await show();
+    await browseBy("machine");
+    const mac = sections().find((s) => summary(s).startsWith("MacBook"))!;
+    expect(rowsIn(mac)).toEqual(["a1", "a2", "a3"]);
+    const before = sectionReads();
+    await changeHint("r", "r2", [["elsewhere", "zz"]]);
+    expect(sectionReads()).toBe(before);
+    // a session joins the section: no hint it could check names it, the heading's count does
+    ROWS.push(row("a4", "mac", "/Users/me/notes"));
+    try {
+      await changeHint("r2", "r3", [["mac", "a4"]]);
+      expect(sectionReads()).toBeGreaterThan(before);
+      expect(rowsIn(sections().find((s) => summary(s).startsWith("MacBook"))!)).toEqual(["a1", "a2", "a3", "a4"]);
+    } finally {
+      ROWS.pop();
+    }
   });
 });

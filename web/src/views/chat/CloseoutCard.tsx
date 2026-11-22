@@ -3,17 +3,33 @@
 // It is the agent's own claim and the card says so. Beside "merged" and "deployed" stands what the hub found when it
 // looked itself: confirmed, contradicted (in the caution color, with the warning mark: color is never the only signal)
 // or not checked. It is not part of the transcript: the reply that carried the raw block shows without it while this
-// card is there (lib/closeout.ts stripCloseout).
-import { useState } from "react";
+// card is there (lib/closeout-text.ts stripCloseout).
+// Verified commands get only the facts recorded in this closeout's own exchange, never a badge: CloseoutEvidence, a chunk
+// of its own, so its matching code and strings stay off the first screen (#8118).
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { t } from "../../i18n";
 import { closeoutClaim, shownCloseout, type Claim } from "../../lib/closeout";
 import { clickLink, linkHref } from "../../lib/links";
-import type { Session } from "../../lib/types";
+import type { Segment } from "../../lib/turns";
+import type { Item, Session } from "../../lib/types";
 import { Collapse, cx } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { prLink } from "../TodoStageBar";
+import { CloseoutEvidence, closeoutEvidenceChunk, loadCloseoutEvidence, onCloseoutEvidenceChunk } from "./closeout-evidence-chunk";
+export { stripCloseout } from "../../lib/closeout-text";
 
 const KIND_ICON: Record<string, IconName> = { pr: "pullRequest", commit: "commit", branch: "branch", doc: "file", build: "tool", url: "link" };
+
+// The evidence chunk starts loading as soon as the store holds a session whose closeout a card would show, before any
+// card mounts (preloadCloseout, #8139). Session lists carry only where a closeout stands; did and Verified come
+// with the session's own read, so the chunk is normally in before a card has a Verified line to draw the row under. When
+// that read still comes first, the card keeps drawing without its did, Verified and evidence rows until the chunk is in
+// and so is the closeout's exchange (the row's facts come from it): HOLD_MS at most, and never again once they showed.
+// The card grows once, as it does when the read arrives, and not again when the chunk or the transcript lands. After a
+// failed load they draw without the row, which joins them when a later card's load brings the chunk in.
+const HOLD_MS = 1000;
+
+type ExpandFold = (fold: Item) => Promise<boolean | void>;
 
 /** An artifact's reference as a web link, when it is one (http or https only). */
 function webLink(ref: string): string | undefined {
@@ -25,17 +41,36 @@ function webLink(ref: string): string | undefined {
   }
 }
 
-export function CloseoutCard({ session }: { session: Session }) {
+export function CloseoutCard({ session, segment, expandFold }: { session: Session; segment?: Segment; expandFold?: ExpandFold }) {
   const c = shownCloseout(session);
   const [open, setOpen] = useState(true);
+  const evidenceChunk = useSyncExternalStore(onCloseoutEvidenceChunk, closeoutEvidenceChunk, closeoutEvidenceChunk);
+  const hasVerified = Boolean(c?.verified);
+  const waiting = hasVerified && (evidenceChunk === "idle" || evidenceChunk === "loading" || !segment);
+  const [released, release] = useState(false);
+  const hold = waiting && !released;
+  useEffect(() => {
+    if (hasVerified) loadCloseoutEvidence();
+  }, [hasVerified]);
+  useEffect(() => {
+    if (!hasVerified) return;
+    if (!waiting) {
+      release(true);
+      return;
+    }
+    const timer = setTimeout(() => release(true), HOLD_MS);
+    return () => clearTimeout(timer);
+  }, [hasVerified, waiting]);
   if (!c) return null;
   const merged = closeoutClaim(c, "merged");
   const deployed = closeoutClaim(c, "deployed");
   const contradicted = merged?.state === "contradicted" || deployed?.state === "contradicted";
   const artifacts = session.work?.artifacts ?? [];
-  const did = c.did ?? [];
+  // held: drawn as the session list has it, without what the session's own read brought
+  const did = hold ? [] : (c.did ?? []);
+  const verified = hold ? undefined : c.verified;
   const status = c.status === "blocked" && c.waiting ? t("chat-chatview.closeout_blocked_on", { waiting: c.waiting }) : t(`chat-chatview.closeout_status_${c.status}`);
-  const hasBody = did.length > 0 || artifacts.length > 0 || Boolean(merged || deployed || c.verified || c.missing);
+  const hasBody = did.length > 0 || artifacts.length > 0 || Boolean(merged || deployed || verified || c.missing);
   return (
     // the chat column's own width and side padding, so the card lines up with the transcript under it
     <div className="mx-auto w-full max-w-[880px] shrink-0 px-5 pt-3 sm:px-8">
@@ -75,7 +110,8 @@ export function CloseoutCard({ session }: { session: Session }) {
               )}
               {merged && <Field label={t("chat-chatview.closeout_merged")}><ClaimLine what="merged" claim={merged} /></Field>}
               {deployed && <Field label={t("chat-chatview.closeout_deployed")}><ClaimLine what="deployed" claim={deployed} /></Field>}
-              {c.verified && <Field label={t("chat-chatview.closeout_verified")}>{c.verified}</Field>}
+              {verified && <Field label={t("chat-chatview.closeout_verified")}>{verified}</Field>}
+              {verified && evidenceChunk === "in" && <CloseoutEvidence session={session} verified={verified} open={open} segment={segment} expandFold={expandFold} />}
               {c.missing && <Field label={t("chat-chatview.closeout_missing")}>{c.missing}</Field>}
             </dl>
           </Collapse>

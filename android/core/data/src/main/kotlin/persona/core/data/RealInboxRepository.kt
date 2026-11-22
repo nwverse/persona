@@ -2,6 +2,7 @@ package persona.core.data
 
 import persona.core.contracts.CoreText
 import persona.core.contracts.CoreText.Key
+import persona.core.contracts.GroupKeys
 import persona.core.contracts.InboxEvent
 import persona.core.contracts.LarkEvent
 import persona.core.contracts.SessionKey
@@ -18,6 +19,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 import java.time.Instant
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicInteger
 
 enum class LarkWindowSyncState { Cached, Syncing, Complete, Incomplete, Failed }
 
@@ -61,11 +63,14 @@ class RealInboxRepository(
     private val refreshWindowMillis: Long = 1_000,
     /** Whether the hub shows source subscriptions (#2041). */
     private val subscriptionsShownFlow: Flow<Boolean> = flowOf(false),
+    /** Whether those pages are Inbox Sources (#5278, `inbox_sources`). */
+    private val inboxSourcesShownFlow: Flow<Boolean> = flowOf(false),
     // Last, so existing callers that pass it as a trailing lambda keep compiling.
     private val download: suspend (InboxAssistantTransport, LarkPart.File) -> String,
 ) : persona.feature.inbox.InboxRepository {
     override val supportsThreadOutbox: Boolean get() = sendThread != null
     override val subscriptionsShown: Flow<Boolean> get() = subscriptionsShownFlow
+    override val inboxSourcesShown: Flow<Boolean> get() = inboxSourcesShownFlow
     override val personaOutbox = mainConversationSender?.outbox ?: MutableStateFlow(emptyList())
     override val connectionState: Flow<ConnectionState> = hubConnection?.state ?: connection.current.map {
         if (it == null) ConnectionState.Connecting else ConnectionState.Online
@@ -89,6 +94,11 @@ class RealInboxRepository(
     private val sendLock = Mutex()
     private val personaLock = Mutex()
     private val personaRequests = mutableMapOf<String, String>()
+    private val agentHandOffLock = Mutex()
+    /** A synchronous read-through cache of the journal; the real outbox commits new delivery evidence before publishing. */
+    private val agentHandOffs = mutableMapOf<String, InboxAgentHandOff>()
+    /** In-flight record requests in this repository owner. */
+    private val recordingAgentHandOffs = mutableSetOf<String>()
     // Access order is maintained when a window is opened.
     private val windows = LinkedHashMap<String, Window>(16, 0.75f, true)
     private var restoredScope: String? = null
@@ -127,6 +137,12 @@ class RealInboxRepository(
                 current.update { it.copy(mutes = AgentPreferences(state.mutes.spaces, state.mutes.sessions, state.mutes.allowed)) }
             }
         }
+        // Local enqueue and OutboxState are not delivery evidence. The real outbox publishes only an Accepted transport
+        // result, an Accepted reconciliation receipt, or validated transcript evidence. Its scoped stream also crosses
+        // the app's grouped MessageSender facade without making that facade part of core/contracts.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            AuthoritativeMessageDeliveries.events.collect { delivery -> agentHandOffDelivered(delivery) }
+        }
         scope.launch {
             connection.current.collectLatest { transport ->
                 refreshLock.withLock {
@@ -143,6 +159,17 @@ class RealInboxRepository(
                     if (transport != null) restore(transport)
                 }
                 if (transport != null) {
+                    // Watch from transport acquisition: a disconnect hidden by startup IO means the first Online
+                    // replay must retry, not coalesce, the buffered attempt. This child ends with the transport owner.
+                    val startupReconnects = AtomicInteger(0)
+                    val startupWatcher = CoroutineScope(coroutineContext).launch(start = CoroutineStart.UNDISPATCHED) {
+                        var online = false
+                        (hubConnection?.state ?: flowOf(ConnectionState.Online)).collect { state ->
+                            if (state == ConnectionState.Online) online = true
+                            else if (online) startupReconnects.incrementAndGet()
+                        }
+                    }
+                    val startupReplay = replayBufferedAgentHandOffs(transport.scope)
                     sendLock.withLock {
                         val saved = journal.update(transport.scope) { document ->
                             var restored = document.copy(outbox = document.outbox.map {
@@ -152,7 +179,7 @@ class RealInboxRepository(
                                 if (draft.text.isNotBlank() && restored.outbox.none { it.request.clientId == draft.clientId }) {
                                     restored = restored.enqueue(InboxPendingReply(
                                         ReplyTarget.Lark("thread:${key.removePrefix("lark:thread-pending:")}"),
-                                        ReplyRequest(draft.text, draft.clientId), state = "unknown"))
+                                        ReplyRequest(draft.text, draft.clientId, mentions = draft.mentions), state = "unknown"))
                                 }
                             }
                             restored
@@ -160,20 +187,42 @@ class RealInboxRepository(
                         if (owns(transport)) publishLocal(saved)
                     }
                     // One collector owns startup and reconnect recovery for this transport.
+                    var starting = true
                     (hubConnection?.state ?: flowOf(ConnectionState.Online)).collectLatest { state ->
-                        if (state == ConnectionState.Online) recoverReplies(transport)
+                        if (state == ConnectionState.Online) {
+                            val alreadyReplayed = if (starting && startupReconnects.get() == 0) startupReplay else emptySet()
+                            try {
+                                replayAgentHandOffs(transport, alreadyReplayed)
+                                recoverReplies(transport)
+                            } finally {
+                                if (starting) {
+                                    starting = false
+                                    startupWatcher.cancel()
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
         scope.launch {
-            combine(sessions.sessions, interactions.pending) { agents, waiting ->
-                agents.map { AgentSession(it) } to waiting.map {
+            combine(sessions.sessions, interactions.pending, sessions.listStatus) { agents, waiting, status ->
+                Triple(agents.map { AgentSession(it) }, waiting.map {
+                    val askLine = when (it.kind) {
+                        "plan" -> (it.plan ?: it.summary)?.lineSequence()?.map { line -> line.trim().trimStart('#').trim() }
+                            ?.firstOrNull { line -> line.isNotEmpty() }
+                        "question" -> it.questions?.firstOrNull()?.question?.takeIf { q -> q.isNotBlank() } ?: it.summary
+                        "permission" -> ((it.toolInput as? JsonObject)?.get("command") as? kotlinx.serialization.json.JsonPrimitive)
+                            ?.takeIf { c -> c.isString }?.content?.takeIf { c -> c.isNotBlank() } ?: it.summary
+                        else -> it.summary
+                    }?.trimStart('#')?.trim()?.takeIf { s -> s.isNotEmpty() }
                     InboxInteraction(it.id, it.machineId, it.sessionId, it.createdAt,
                         agents.firstOrNull { agent -> agent.key == it.sessionKey }?.displayTitle.orEmpty(), it.summary, it.headline.shown,
-                        manager = it.manager)
-                }
-            }.collect { (agents, waiting) -> current.update { it.copy(sessions = agents, interactions = waiting) } }
+                        manager = it.manager, kind = it.kind, askLine = askLine)
+                }, status.loaded)
+            }.collect { (agents, waiting, targetsReady) ->
+                current.update { it.copy(sessions = agents, interactions = waiting, targetsReady = targetsReady) }
+            }
         }
         scope.launch {
             sessions.machines.collect { machines -> current.update { it.copy(machines = machines.associate { machine -> machine.id to machine.displayName }) } }
@@ -553,19 +602,21 @@ class RealInboxRepository(
         val transport = requireTransport()
         val document = journal.read(transport.scope)
         // A reply refused because its mail target changed must be confirmed again under a new identifier.
-        fun restored(text: String, clientId: String) =
-            if (document.outbox.any { it.request.clientId == clientId && it.state == "target_changed" }) ReplyDraft(text)
-            else ReplyDraft(text, clientId)
-        return document.drafts[target.storageKey()]?.let { restored(it.text, it.clientId).copy(ai = it.ai) }
+        fun restored(text: String, clientId: String, mentions: List<LarkMention>) =
+            if (document.outbox.any { it.request.clientId == clientId && it.state == "target_changed" })
+                ReplyDraft(text, mentions = mentions)
+            else ReplyDraft(text, clientId, mentions = mentions)
+        return document.drafts[target.storageKey()]?.let { restored(it.text, it.clientId, it.mentions).copy(ai = it.ai) }
             ?: document.outbox.lastOrNull { it.target == target && it.state != "sent" }?.let {
-                restored(it.request.text, it.request.clientId)
+                restored(it.request.text, it.request.clientId, it.request.mentions)
             }
     }
     override suspend fun saveDraft(target: ReplyTarget, draft: ReplyDraft) {
         val transport = requireTransport()
         val version = refreshLock.withLock { (target as? ReplyTarget.Inbox)?.let { versions[it.itemId] } }
         val saved = journal.update(transport.scope) {
-            it.copy(drafts = it.drafts + (target.storageKey() to InboxStoredDraft(draft.text, draft.clientId, version, draft.ai)))
+            it.copy(drafts = it.drafts + (target.storageKey() to
+                InboxStoredDraft(draft.text, draft.clientId, version, draft.ai, draft.mentions)))
         }
         if (owns(transport)) publishLocal(saved)
     }
@@ -642,6 +693,120 @@ class RealInboxRepository(
         return parsed.copy(item = parsed.item.copy(id = appId), manager = owner.manager)
     }
 
+    private suspend fun agentHandOffDelivered(delivery: AuthoritativeMessageDelivery): String? {
+        val transport = connection.current.value ?: return null
+        val handOff = agentHandOffLock.withLock {
+            // The common path is synchronous: the pending request is cached, or the real outbox already committed and
+            // carried its metadata. Only a restored owner with neither needs to touch the journal here.
+            val candidate = agentHandOffs[delivery.clientMessageId] ?: delivery.agentHandOff
+                ?: journal.read(transport.scope).agentHandOffs.firstOrNull {
+                    it.request.operationId == delivery.clientMessageId
+                } ?: return@withLock null
+            if (candidate.scope != transport.scope || candidate.request.operationId != delivery.clientMessageId ||
+                candidate.request.text != delivery.text ||
+                GroupKeys.rawKey(candidate.session) != GroupKeys.rawKey(delivery.session)) {
+                return@withLock null
+            }
+            val carried = delivery.agentHandOff
+            if (candidate.scope != delivery.scope && (carried == null || carried.scope != candidate.scope ||
+                carried.request != candidate.request || carried.hubItemId != candidate.hubItemId ||
+                carried.manager != candidate.manager)) {
+                // Cross-hub evidence needs the original committed metadata, not merely colliding message fields.
+                return@withLock null
+            }
+            val delivered = candidate.copy(
+                delivered = true,
+                recorded = candidate.recorded || delivery.agentHandOff?.recorded == true,
+            )
+            agentHandOffs[delivery.clientMessageId] = delivered
+            // Only the originating inbox scope accepts outbox-carried metadata; the Agent may be on another hub group.
+            delivered
+        }
+        if (handOff == null) return null
+        AuthoritativeMessageDeliveries.acknowledge(delivery)
+        if (!handOff.recorded) {
+            if (!delivery.originCommitted) try {
+                // A cross-pairing target committed its outbox first. Commit the origin before its record can run.
+                journal.update(transport.scope) { saved ->
+                    val current = saved.agentHandOffs.firstOrNull { it.request.operationId == handOff.request.operationId }
+                    when {
+                        current?.recorded == true -> saved
+                        current != null -> saved.copy(agentHandOffs = saved.agentHandOffs.map {
+                            if (it.request.operationId == handOff.request.operationId) it.copy(delivered = true) else it
+                        })
+                        else -> saved.copy(agentHandOffs = saved.agentHandOffs + handOff)
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Best-effort recording still follows authoritative delivery; a journal failure stays quiet.
+            }
+            scheduleAgentHandOffRecord(handOff, transport)
+        }
+        return handOff.request.operationId
+    }
+
+    private suspend fun replayBufferedAgentHandOffs(scope: String): Set<String> {
+        val replayed = mutableSetOf<String>()
+        AuthoritativeMessageDeliveries.replay(scope).forEach { delivery ->
+            agentHandOffDelivered(delivery)?.let(replayed::add)
+        }
+        return replayed
+    }
+
+    /** Replay only durable authoritative evidence, never a restored Sent/Shown outbox state. */
+    private suspend fun replayAgentHandOffs(transport: InboxAssistantTransport, alreadyReplayed: Set<String> = emptySet()) {
+        val coalesced = alreadyReplayed + replayBufferedAgentHandOffs(transport.scope)
+        journal.reconcileAgentHandOffDeliveries(transport.scope)
+        val restored = journal.read(transport.scope).agentHandOffs
+        val pending = agentHandOffLock.withLock {
+            restored.forEach { handOff -> if (handOff.request.operationId !in agentHandOffs) {
+                agentHandOffs[handOff.request.operationId] = handOff
+            } }
+            restored.filter { it.scope == transport.scope && it.delivered && !it.recorded }.mapNotNull {
+                agentHandOffs[it.request.operationId]?.takeUnless { current -> current.recorded }
+            }
+        }
+        pending.filter { it.request.operationId !in coalesced }.forEach { scheduleAgentHandOffRecord(it, transport) }
+    }
+
+    private suspend fun scheduleAgentHandOffRecord(handOff: InboxAgentHandOff, transport: InboxAssistantTransport) {
+        if (!owns(transport)) return
+        val id = handOff.request.operationId
+        val scheduled = agentHandOffLock.withLock {
+            if (handOff.recorded || agentHandOffs[id]?.recorded == true) false else recordingAgentHandOffs.add(id)
+        }
+        if (!scheduled) return
+        scope.launch {
+            try {
+                // Use the route committed before enqueue. recordOf(null) here could send a restored manager-owned item
+                // to the default manager merely because the new owner's inbox has not loaded yet.
+                asManager(handOff.manager) {
+                    transport.recordAgentHandOff(handOff.hubItemId, handOff.session,
+                        handOff.request.targetTitle.orEmpty(), handOff.request.operationId)
+                }
+                // If the process dies after this HTTP success but before this write, delivered remains durable and
+                // replay repeats the same client_id; the hub's idempotence is the completion guard.
+                val recorded = handOff.copy(delivered = true, recorded = true)
+                agentHandOffLock.withLock { agentHandOffs[id] = recorded }
+                journal.update(transport.scope) { saved ->
+                    val current = saved.agentHandOffs.firstOrNull { it.request.operationId == id }
+                    if (current == null) saved.copy(agentHandOffs = saved.agentHandOffs + recorded)
+                    else saved.copy(agentHandOffs = saved.agentHandOffs.map {
+                        if (it.request.operationId == id) it.copy(delivered = true, recorded = true) else it
+                    })
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Recording never changes message delivery. Delivered stays durable for reconnect or process replay.
+            } finally {
+                agentHandOffLock.withLock { recordingAgentHandOffs.remove(id) }
+            }
+        }
+    }
+
     override suspend fun handOff(request: InboxHandOffRequest): SessionKey? {
         require(request.itemId.isNotBlank() && request.text.isNotBlank() && request.operationId.isNotBlank())
         scope.coroutineContext.ensureActive()
@@ -649,18 +814,38 @@ class RealInboxRepository(
         val session = request.sessionId
         if (!machine.isNullOrBlank() && !session.isNullOrBlank()) {
             val key = SessionKey(machine, session)
-            checkNotNull(messageSender) { "agent message sender not wired" }.send(key, request.text, request.operationId)
-            // The message is already accepted: open it now and record the hand-off without holding the sheet open.
-            scope.launch {
-                quietly {
-                    val transport = requireTransport()
-                    val old = recordOf(request.itemId)
-                    val hubItemId = old?.hubItemId ?: request.itemId
-                    asItem(old) {
-                        transport.recordAgentHandOff(hubItemId, key, request.targetTitle.orEmpty(), request.operationId)
+            val transport = requireTransport()
+            val old = recordOf(request.itemId)
+            val hubItemId = old?.hubItemId ?: InboxItemKey.hubId(request.itemId)
+            val manager = old?.manager ?: InboxItemKey.managerOf(request.itemId)
+                ?: AssistantManagerChoice.itemManager(listOf("inbox", hubItemId))
+            val pending = InboxAgentHandOff(transport.scope, request, hubItemId, manager)
+            agentHandOffLock.withLock {
+                val previous = agentHandOffs[request.operationId]
+                require(previous == null || previous.scope == pending.scope && previous.request == pending.request &&
+                    previous.hubItemId == pending.hubItemId && previous.manager == pending.manager) {
+                    "Operation id reused with different parameters"
+                }
+                agentHandOffs[request.operationId] = previous ?: pending
+            }
+            val originPersisted = scope.async(start = CoroutineStart.LAZY) {
+                journal.update(transport.scope) { it.enqueue(pending) }
+                Unit
+            }
+            try {
+                withContext(InboxAgentHandOffContext(pending, originPersisted)) {
+                    checkNotNull(messageSender) { "agent message sender not wired" }.send(key, request.text, request.operationId)
+                }
+            } catch (failure: Exception) {
+                agentHandOffLock.withLock {
+                    if (agentHandOffs[request.operationId]?.delivered == false) agentHandOffs.remove(request.operationId)
+                    if (originPersisted.isActive || originPersisted.isCompleted) {
+                        journal.update(transport.scope) { it.removeUndeliveredAgentHandOff(request.operationId) }
                     }
                 }
+                throw failure
             }
+            // The local outbox answers at once. Only authoritative delivery evidence releases the background record.
             return key
         }
         // Main-chat hand-offs need a receipt from the item's manager, not merely a local queue entry.
@@ -743,7 +928,7 @@ class RealInboxRepository(
             else if (mailTarget != null && actualTarget is ReplyTarget.Inbox)
                 asItem(replied) { transport.replyMail(InboxItemKey.hubId(actualTarget.itemId), request.text, request.clientId, mailTarget) }
             else named { transport.reply((actualTarget as? ReplyTarget.Inbox)?.itemId?.let(InboxItemKey::hubId),
-                (actualTarget as? ReplyTarget.Lark)?.feedId, request.text, request.clientId) }
+                (actualTarget as? ReplyTarget.Lark)?.feedId, request.text, request.clientId, request.mentions) }
             val result = response.obj("message") ?: response
             if (response.string("state") in setOf("pending", "unknown") || result.string("state") in setOf("pending", "unknown")) {
                 val uncertain = journal.update(transport.scope) { it.transition(request.clientId, "unknown") }
@@ -1323,12 +1508,19 @@ class RealInboxRepository(
         val agent = data.obj("agent")
         val mail = data.obj("mail")
         val moment = data.obj("moment")
+        val connector = data.obj("connector")?.let { c ->
+            c.optional("thread")?.let { thread ->
+                persona.feature.inbox.InboxConnectorRef(thread, c.optional("label"), c.flag("can_reply"), c.optional("reply_to"), c.optional("url"),
+                    c.optional("avatar_url"))
+            }
+        }
+        val connectorManager = data.optional("manager") ?: previous?.takeIf { it.hubItemId == data.string("id") }?.manager
         val event = persona.core.contracts.inboxEventFields(data)
         val fresh = InboxRecord(
             InboxItem(data.string("id"), data.string("account"), data.string("kind"), data.string("title"),
                 data.optional("sender"), data.string("preview"), data.optional("summary"), data.optional("tier"),
                 data.optional("updated_at"), data.optional("done_at"), data.optional("version"),
-                notice = moment?.optional("notice"), status = event.status, urgent = event.urgent),
+                notice = moment?.optional("notice"), status = event.status, urgent = event.urgent, where = event.where),
             sourceLabel = data.optional("account_name") ?: DataText.of(if (data.string("source") == "lark") Key.SourceLark else Key.SourceMail),
             feedId = lark?.optional("feed_id"), startPosition = lark?.number("start_position"), count = data.number("count")?.toInt() ?: 0,
             agent = agent?.let { InboxAgent(it.string("state"), it.string("draft"), it.optional("note") ?: it.string("reason"),
@@ -1345,8 +1537,9 @@ class RealInboxRepository(
                     // The hub omits direct when false: a mail the user was only copied on (or got through a list).
                     direct = it.flag("direct"))
             },
-            // Only a Feishu chat has a picture on the hub; a mail row keeps its initial, as on iOS.
-            avatar = if (data.string("source") == "lark") avatar(data.optional("avatar"), transport) else null,
+            // Feishu keeps its top-level picture; a connector's thread picture is its hub avatar path.
+            avatar = if (data.string("source") == "lark") avatar(data.optional("avatar"), transport)
+                else avatar(connector?.avatarUrl, LarkContentSource(transport, connectorManager)),
             moment = moment?.let {
                 InboxMomentRef(
                     postId = it.string("post_id"),
@@ -1362,11 +1555,7 @@ class RealInboxRepository(
                 }
             }?.toMap().orEmpty(),
             doc = persona.feature.inbox.inboxDocRef(data.obj("doc")),
-            connector = data.obj("connector")?.let { c ->
-                c.optional("thread")?.let { thread ->
-                    persona.feature.inbox.InboxConnectorRef(thread, c.optional("label"), c.flag("can_reply"), c.optional("reply_to"))
-                }
-            },
+            connector = connector,
             mutes = persona.feature.inbox.inboxMuteOptions(data),
             event = event,
             manager = data.optional("manager"),

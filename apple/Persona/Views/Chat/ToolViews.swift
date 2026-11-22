@@ -2,10 +2,12 @@ import BeautifulUI
 import MarkdownUI
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 /// How each Claude Code tool is named and summarized in the chat.
 enum ToolPresentation {
-    nonisolated static func baseName(_ name: String) -> String {
+    nonisolated static func baseName(_ raw: String) -> String {
+        let name = HubNaming.canonicalMCPTool(raw)
         if name.hasPrefix("mcp__") { return name.split(separator: "__").last.map(String.init) ?? name }
         return name
     }
@@ -596,26 +598,13 @@ struct ToolCallRow: View {
                             .foregroundStyle(tint)
                     }
                 }
-                if typeSize.isAccessibilitySize {
-                    // At the accessibility sizes the subject and a background task's badge each get a line under the
-                    // verb (as `NameWithChips` stacks a row's chips): side by side, the badge, which keeps its width,
-                    // left the verb nothing and ran off the screen, and the subject was cut to a sliver of a letter.
-                    let subject = ToolPresentation.subject(call)
-                    VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                        verbText.lineLimit(2)
-                        if !subject.isEmpty { subjectText(subject) }
-                        taskBadge
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    // One line: the verb first ("GitHub · Create issue" is long), the subject gives way.
-                    verbText
-                        .lineLimit(1)
-                        .layoutPriority(1)
-                    subjectText(ToolPresentation.subject(call))
-                    Spacer(minLength: 4)
-                    taskBadge
-                }
+                // One line: the verb first ("GitHub · Create issue" is long), the subject gives way.
+                verbText
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                subjectText(ToolPresentation.subject(call))
+                Spacer(minLength: 4)
+                taskBadge
                 ToolOutcomeMark(call: call)
                 ThemedIcon(Theme.Icon.disclosure)
                     .font(Theme.Font.labelStrong)
@@ -647,17 +636,13 @@ struct ToolCallRow: View {
     /// with nothing to name (Enter Plan Mode, List Agents) draws no empty box beside its verb.
     private var chipHeader: some View {
         let subject = ToolPresentation.subject(call)
-        let stacked = typeSize.isAccessibilitySize
         return VStack(alignment: .leading, spacing: Theme.Space.xxs) {
             ToolChipRow(chip(subject), isOpen: isOpen, isRunning: call.isRunning, chipStyle: subject.isEmpty ? .plain : .boxed,
                         action: tapped) {
-                if !stacked { taskBadge }
+                taskBadge
                 ToolOutcomeMark(call: call)
             }
             .accessibilityIdentifier(headerID)
-            // At the accessibility sizes the badge, which keeps its width, left the verb nothing beside it: it gets a
-            // line of its own under the verb, past the row's 16 pt icon and its 8 pt gap.
-            if stacked { taskBadge.padding(.leading, Theme.Space.xl) }
         }
         .padding(Self.chipInsets(grouped: grouped))
     }
@@ -669,15 +654,7 @@ struct ToolCallRow: View {
             let b = TaskNoteText.badge(tasks.notes[id] ?? [])
             let text = Text(b.text).font(Theme.Font.label).foregroundStyle(b.failed ? Theme.danger : Color.secondary)
             if AppStyle.current.usesBeautifulUI {
-                BUIPill(b.text, tone: b.failed ? .red : .neutral, truncates: typeSize.isAccessibilitySize)
-            } else if typeSize.isAccessibilitySize {
-                // On a line of its own it can still be wider than the screen: then it wraps, in a box rather than a pill.
-                ViewThatFits(in: .horizontal) {
-                    badgePill(text)
-                    text.fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, Theme.Space.sm).padding(.vertical, Theme.Space.xxs)
-                        .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
-                }
+                BUIPill(b.text, tone: b.failed ? .red : .neutral, truncates: false)
             } else {
                 badgePill(text)
             }
@@ -1204,9 +1181,10 @@ struct FullOutputSheet: View {
                     }
                 }
                 #else
-                ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() }.lineLimit(1) }
+                // ✕ at the leading corner, the page's own Copy All at the trailing one (#9653).
+                SheetClose { dismiss() }
                 if let text {
-                    ToolbarItem(placement: .topBarLeading) {
+                    ToolbarItem(placement: .primaryAction) {
                         Button { UIPasteboard.general.string = text } label: { Label("Copy All [Tool Views 1c5144]", systemImage: Theme.Icon.copy) }
                     }
                 }

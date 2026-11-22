@@ -11,6 +11,12 @@ const (
 	// A checkup report or lab result for the health space (dest=health, docs/assistant/health.md "Checkup reports"): it lands in the
 	// health directory's reports/ and stays, where the health conversations read it and the others are denied.
 	UploadDestHealth = "health"
+	// A file a task's Agent made and handed to its conversation (dest=file, docs/assistant/agent-work.md "Files a task
+	// hands over"): the manager copies it from the Agent's computer to the conversation's computer, under the node's
+	// uploads/files/<date>/. It is kept like the chat's images, not swept like a terminal paste, so a message that
+	// names it still opens later.
+	UploadDestFile     = "file"
+	MaxFileUploadBytes = MaxTerminalUploadBytes
 	// A file put into a folder the app is browsing (dest=dir&dir=…, docs/protocol/protocol.md "Changing files"): it keeps its own
 	// name, only folders in the home take it (node/writeguard.go), and it may be bigger.
 	UploadDestDir     = "dir"
@@ -22,6 +28,11 @@ const (
 	UploadDestInbox     = "inbox"
 	MaxInboxUploadBytes = MaxDirUploadBytes
 	DefaultInboxDir     = "~/Downloads/Persona"
+	// A file sent with a chat message and kept for good (dest=attachment, docs/protocol/protocol.md "Sending files",
+	// #8361): it lands beside the pictures the chat sent that day, in the node's uploads/<date>/, under its own name
+	// (a taken one gets " 2"), where agents read it and nothing sweeps it. The limit is MaxUploadBytes. A node from
+	// before it uses its temp directory instead (the hub falls back), as every chat attachment did before.
+	UploadDestAttachment = "attachment"
 	// What dest=dir does when the name is taken: "" refuses with CodeExists (409, the app asks), replace overwrites
 	// the file, keep puts it beside as "name 2.ext".
 	UploadConflictReplace = "replace"

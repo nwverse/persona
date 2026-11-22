@@ -39,7 +39,7 @@ Sources:
   no diagnosis, no prescribing; on danger signs, tell the user to seek medical care first; when discussing numbers, attach a chart card by default ("Charts" below). Connector and plugin skills are installed the same way as in the assistant directory, but the instructions plugins give the assistant (`plugins.Instructions`) are not added to the health CLAUDE.md: those were written for the main chat's work scenarios, and v1 deliberately leaves them out.
 - **Memory**: Claude Code's auto memory is per working directory (`~/.claude/projects/<encoded dir>/memory/`). Only health chats read and write the health directory's memory; it is not in the main chat's context, and vice versa.
 - **Files** (#3282): the main chat's Claude can read files on the computer with Read / Bash; separate directories do not mean unreadable. So the main chat (not the Health space's assistant chat) starts with deny rules:
-  Read and Edit may not touch the health directory or its Claude project directory (memory, transcripts), `server/internal/node/healthdeny.go`; the CLI gets them via `--disallowedTools`, the Agent SDK via `permissions.deny` in settings.
+  Read and Edit may not touch the health directory or its Claude project directory (memory, transcripts), `server/internal/node/healthdeny.go`; the CLI gets them via `--disallowedTools`.
   Deny rules override every allow: even after tapping **Always Allow in Session** or switching to bypass mode, the files cannot be read (tested on Claude Code 2.1.318).
   **Always Allow in Session** for file tools in the main chat also only allows the directory of that file (`hooks.go` `fileRuleScope`), instead of opening the whole tool.
   **Not blocked**: Bash can build the path in any number of ways (`cd .. && cat he*`), so matching command text cannot catch all of them; blocking it fully needs Claude Code's sandbox or OS-level isolation. When the main chat runs on Codex, this rule does not exist yet either.
@@ -75,6 +75,13 @@ The `conversation*` tools in a chat only see chats in the same space (`server/in
 
 - `kb_update` from a health chat fails outright: health information does not go into the knowledge base (`assistant/tools.go` `runTool`). Knowledge base reads (`kb_search` etc.) work as usual.
 - Scheduled follow-ups and scheduled tasks created in a health chat (`schedule_followup`, `schedule_routine`) record their space (`Task.space`); when one fires and needs a new chat, it opens in the Health space.
+  The space owns the task's working directory: a nonempty task `cwd` is rejected when saving and before dispatch,
+  including an older stored override. Clear it to restore the canonical Health directory. Launcher, model, effort
+  and execution computer remain configurable under their existing validation; the selected computer prepares this
+  manager's Health instructions and directory. Every new Health conversation prepares that directory even when an
+  internal caller supplies an already-resolved `cwd`. A follow-up continues its source chat only when its actual
+  directory matches the freshly prepared Health directory, with the node enforcing that directory on resume.
+  Missing or mismatched source context uses the existing safe replacement path. Normal-space tasks keep their custom directories.
 - When the calling chat's space cannot be determined (the assistant's machine cannot list it for the moment), it is treated as the main space: it can only reach main-space chats, and health chats can never be listed or read. The worst case is a health chat temporarily seeing the main space's list; health content is never exposed elsewhere the other way round.
 - `list_followups` lists only this space's scheduled tasks; editing with `schedule_routine` and an id, or deleting with `delete_routine` / `cancel_followup`, treats tasks in another space as not found.
 - Extensions' skills and gated commands reach both spaces (there is no per-space contribution). Every assistant process carries its space in `PERSONA_SPACE` (`health` / `main`, #6003, `docs/extensions/extensions.md` "Assistant"), so a command meant for health data alone can refuse in the main space; a `cd` into the health directory does not change it.
@@ -90,8 +97,8 @@ The decision always depends on the chat's space (the trusted session directory),
 | Push: turn ended, `notify_user`, plan waiting for you to start, scheduled task failed | Only says "New in your health space. Open Persona to see it.", without the body, chat title or task name | `hub/machine.go` `doneAlert`, `assistant/tools.go`, `tasks.go`, `schedule.go` |
 | Phone local notification: `phone_notify` | The hub replaces the title and body with the same localized notice as `notify_user` before forwarding to the phone; no health content reaches the notification | `assistant/fleet_tools.go` `mcpCall`, `assistant/health.go` `healthNotice` |
 | Push for question / authorization cards | The lock screen likewise only says **Health**; the card content is viewed in the App. A card is judged by its chat's directory: the node and then the manager place a card of an assistant chat in the chat's directory, not the hook's after a `cd` (`identity.CardCwd`, the manager's `placeCard` covers older nodes), and any directory inside a health space counts as health (`identity.InHealthSpace`, #2368) | `hub/push_payload.go` `interactionPayloadIn` (looks at `ix.Cwd`), `assistant/fleet_machines.go` `placeCard` |
-| Lark bot, plugin channels | Forwarded `notify_user` only says there is a new message; answers in a scheduled task's chat are not mirrored; "all cards" and "all questions" exclude health chat cards (the chat the channel itself is driving works as usual) | `assistant/feishu_cards.go`, `feishu_push.go`, `channels_plugin.go` |
-| `agent_send` / `agent_start` | Confirmed on the phone every time; the card states that once handed over, the record on the other side is not deleted with the Health space | `assistant/health.go` `confirmOutbound` |
+| Lark bot, plugin channels | Forwarded `notify_user` only says there is a new message; health to-do reminders keep the generic notice without a specific to-do URL or ID in the card or a to-do reply binding (ordinary reminders retain their detail button, notes and reply context); answers in a scheduled task's chat are not mirrored; "all cards" and "all questions" exclude health chat cards (the chat the channel itself is driving works as usual) | `assistant/feishu_cards.go`, `feishu_push.go`, `channels_plugin.go` |
+| `agent_send` / `agent_start` | Confirmed on the phone every time. `agent_send` accepts targets in the conversation’s own space. The card explains that the Agent keeps its copy after the health chat is deleted | `assistant/health.go` `confirmOutbound` |
 | `task_plan` | Never starts automatically; always waits for the user to tap start on the plan card | `assistant/tasks.go` |
 | `mail_send` and connector write operations | Confirmed on the phone every time; gate allow rules do not let it through (deny still rejects) | `connector.ConfirmEach`, `callConnector` in `extmgr/connectors.go` |
 | Lark write operations (lark-cli, command gate) | Confirmed on the phone every time; allow rules do not let it through, and there is no **Always Allow in Session**; reads work as usual (deny still rejects). Both entrances hold it: the gated command (`larkCheck`) and the node's gate proxy, which a script can call without the command: a health process's proxy address lets a write through only with the one-time grant `larkCheck` leaves once the phone confirmed it. Both decide the space from a record made when the conversation's process is started, not from the directory a command runs in (a `cd` moves it); a hook directory that is itself a health space counts too, so a mix-up can only ask more | `node/larkgate.go` `larkCheck`, `node/gateproxy.go` `ServeHTTP` |
@@ -117,12 +124,30 @@ Entering Health goes straight back to the latest health chat, with its context, 
 | iOS / Mac | the sidebar's **Health** runs `AssistantView.enterHealth` (`HealthModel.entry`); the top bar's **New Chat** in a health chat pushes the Health page (`HealthModel.newOpensHealth`). `-openAssistantPage health` / `-openShellPage health` still show the page itself. Tests: `HealthModelTests` |
 | Android | the assistant sidebar's **Health** (`HealthEntry.resolve`), see "Android entry point" below |
 
+## Dietary intake and resting energy
+
+The Health space uses `phone_health_summary` for system health data, including dietary intake written by apps such as 薄荷健康. Its requested metrics are:
+
+| Metric | Meaning | Unit | Daily aggregation |
+| --- | --- | --- | --- |
+| `dietary_energy` | Energy consumed | kcal | Sum |
+| `protein` | Protein consumed | g | Sum |
+| `carbs` | Carbohydrates consumed | g | Sum |
+| `fat` | Total fat consumed | g | Sum |
+| `resting_energy` | Resting energy burned | kcal | Sum |
+
+Activity energy remains `active_energy` (kcal), separate from resting energy and intake. The summary contains daily totals, so meals and food details need their own source. Use the metrics advertised by the connected phone's tool schema.
+
+For today's intake, call `phone_health_summary` with `{"metrics":["dietary_energy","protein","carbs","fat","resting_energy"],"days":1}`. Days start at the phone's local midnight; today's values end at the query time. Missing data or denied read access must not be presented as zero intake. The Health space's generated instructions include these names, units, day boundaries and limitations.
+
+On iOS, `HealthTool` reads the corresponding HealthKit quantity types and requests their read permissions alongside the existing metrics. An existing installation may need authorization for these newly added categories. Open Persona, grant access, and reconnect it to the hub so the registered tool description and schema refresh (`docs/apple/phone-tools.md`, "Daily health summaries").
+
 ## Web entry point
 
 - A separate **Health** item in the sidebar opens `/health`, which resumes the latest health chat ("Entering Health" above).
 - Home (`/health/new`, the new health chat page): a one-line privacy note (chats and memory stay in the Health space, data is on your own hub, not a substitute for a doctor), data sources (Apple Health / Health Connect, via the phone's `phone_health_summary` / `phone_health_write_sample`; Persona must be open on the phone and authorized),
   suggested questions (tap one to start a health chat with it), past health chats, health memory (view, delete).
-- Tapping a chat opens `/health/<id>`, the same chat page as other assistant chats.
+- Tapping a chat opens `/health/<id>`, the same chat page as other assistant chats; its input box asks health questions as the home's does ("Ask a health question…", `ChatView`'s `placeholder`), not the main chat's line.
 - Health chats no longer appear in the main chat's history list.
 
 
@@ -135,7 +160,7 @@ Verification image removed; see the associated PR.
 - Entry: a **Health** row below **Knowledge** in the assistant sidebar (in the new shell's drawer it sits between **Knowledge** and **Machines**; in the Mac split-view list it is below **Scheduled Tasks**), opening the latest health chat, or the Health page when there is none ("Entering Health" above; `apple/Persona/Views/Assistant/HealthView.swift`, shared by iOS and Mac).
 - Health page: a one-line note, suggested questions (tap one to start a health chat with it), health chats (`GET /api/v1/assistant?space=health`, merged with pushed ones carrying `space: "health"`; swipe / right-click to archive),
   health memory (pushes the memory page `AssistantMemoryView(space: "health")`; view, edit and delete all carry `?space=health`), data sources, privacy. At the bottom is an input box; sending does `POST /api/v1/assistant/conversations` with `"space":"health"`, never set as the main chat.
-- iOS input box (#3825): Persona's new conversation's composer in every style (`StarterComposer` in the shell's composer): + opens the attach panel on the iPhone (touch and hold, or the iPad's tap: the + menu), and the model button picks the launcher (Health's, the default manager's, until one is picked), the effort and, a level down, the permission mode. The effort and mode are the ones Persona's new conversation picks (a health conversation already started with them). Files still go to `reports/`. The Mac keeps its input line (BeautifulUI: the prompt bar with its launcher menu).
+- iOS input box (#3825): Persona's new conversation's composer in every style (`StarterComposer` in the shell's composer): + opens the attach panel on the iPhone (touch and hold, or the iPad's tap: the + menu), and the model button picks the launcher and one of its models (#11472; Health's, the default manager's, until one is picked), the effort and, a level down, the permission mode. The effort and mode are the ones Persona's new conversation picks (a health conversation already started with them). Files still go to `reports/`. The Mac keeps its input line (BeautifulUI: the prompt bar with its launcher menu).
 - Health chats that are started or tapped open in the Persona page's chat, the same chat page as other assistant chats; go back to the Health page via **Health** in the sidebar.
 - The sidebar's **Recent**, **Archived** and search do not list health chats (`AssistantLists` splits by `Session.assistantSpace`; health ones are in `AppModel.healthConversations`).
 - Screenshot arguments: `-tab assistant -openAssistantPage health` (new shell: `-openShellPage health`). Unit tests: `PersonaTests/HealthModelTests`.
@@ -224,19 +249,68 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
   After changing `health_claude_md.md`, update the golden and review the diff (`docs/assistant/prompts.md`). Charts: `go test ./internal/assistant -run HealthClaudeMDTeachesCharts`, `go test ./internal/feishubot -run PersonaCards`.
 - Web: `cd web && npm test && npm run build`.
 - iOS / Mac: `PersonaTests/HealthModelTests` (lists and memory carry `space`, merging pushes, sidebar does not list health chats, new chats carry `space`); build `Persona` and `PersonaMac`.
+- iPhone dietary intake acceptance (real device; not covered by server or simulator tests):
+  1. In 薄荷健康, enable writing dietary energy, protein, carbohydrates and total fat to Apple Health, record today's intake, and confirm the resulting entries in the Health app. Note the totals actually present there.
+  2. Install/open the updated Persona app, enable Health under Settings › Connectors › This iPhone, and allow the new categories in the system Health authorization sheet. For a previously denied category, enable its read permission in Health's data-access settings. Keep Persona connected to the hub.
+  3. In the Health space, request today's intake, or call `phone_health_summary` with `{"metrics":["dietary_energy","protein","carbs","fat","resting_energy"],"days":1}`. Verify that the hub's advertised metric enum includes all five names and the returned `date` is today in the phone's time zone.
+  4. Compare the four dietary values against the entries written to Health (kcal / g, rounded to one decimal). If other sources also wrote entries, compare with the relevant Health totals. `resting_energy` should match available basal-energy data; it may be absent when no source recorded it. A missing value stays absent, rather than becoming zero.
+  5. Add another food entry in 薄荷健康, wait until it is visible in Health, and query again. The day's total should include both entries; no previous-day entry should enter today's total. This check verifies the source app → Health → Persona → hub path.
 
 ## Automatic workout reports (iOS)
 
 Settings → Health → Automatic workout reports is off by default. Enabling it requests
-HealthKit workout and heart-rate read access and records a consent timestamp. Opening
-or foregrounding the app uploads completed workouts lasting at least ten minutes
-whose start is after that timestamp. This version does not provide background
-HealthKit delivery. The device must reconnect to the same paired hub.
+HealthKit workout, heart-rate and distance read access and records a consent timestamp.
+Opening or foregrounding the app uploads completed workouts lasting at least ten minutes
+whose start is after that timestamp. The device must reconnect to the same paired hub.
+
+**Right after a workout (opt-in build, #2526).** A build made with config.json
+`app.health_background_delivery: true` (`docs/operations/config.md`) is signed with the
+HealthKit background delivery entitlement, and sets Info.plist
+`PersonaHealthBackgroundDelivery`. The switch is off by default, because an App ID whose
+provisioning profile doesn't allow the entitlement fails to sign, or a cloud-signed export
+drops it silently. Turn it on only after a signed build shows the profile allows it.
+`scripts/release/entitlements.py check` then reports a release that lacks it.
+
+In such a build:
+
+- `WorkoutReports.observe()` runs from `application(_:didFinishLaunchingWithOptions:)`,
+  where HealthKit wants it for a background wake, and again when reports are turned on.
+- It sets up an `HKObserverQuery` on workouts and `enableBackgroundDelivery(frequency:
+  .immediate)`.
+- A new workout wakes the app, even while Persona is closed. The app runs the same
+  `refresh`, then calls HealthKit's completion whatever happened, since HealthKit retries
+  a wake that never completes.
+- Turning reports off stops the query and disables delivery.
+- The Settings footer says which mode is active (`WorkoutReports.immediate`): right after
+  a workout, or when Persona is opened. If HealthKit refuses delivery at run time, the
+  footer falls back to the second.
+
+Only such a build reads the reports' small state file at launch; other builds do as before.
 
 Reports appear in the Health space using existing persona-card measurement cards,
 a minute-average heart-rate chart when available, and a brief interpretation. Missing
-measurements are omitted; route coordinates are not uploaded. Pace charts require
-measured splits and are not generated from the aggregate-only payload.
+measurements are omitted; route coordinates are not uploaded.
+
+Since #2526's second step, a report also carries:
+
+- the elevation gain;
+- the heart rate's average and maximum;
+- per-kilometre splits for runs, walks, hikes and rides, with pauses left out.
+
+The report then draws a pace chart from the splits, and compares the workout with the
+user's recent ones of the same activity through `phone_workouts_recent`. When the tool
+isn't available or finds nothing else, the comparison is skipped and not mentioned.
+The Health conversation's instructions point later questions at `phone_workouts_recent`
+and `phone_workout_detail` (`docs/apple/phone-tools.md`, "Workouts").
+
+The hub validates the new fields like the others:
+
+- the elevation is at most 20 km;
+- the heart rate is in (0, 300] bpm, with the average no higher than the maximum;
+- splits number kilometres 1, 2, … with positive seconds, at most 1000, summing to no
+  more than the workout.
+
+A report queued by an older app, without these fields, is still accepted.
 
 The device atomically stores its HealthKit cursor with a bounded upload outbox.
 Failed uploads are retried on the next foreground visit, except a report the hub

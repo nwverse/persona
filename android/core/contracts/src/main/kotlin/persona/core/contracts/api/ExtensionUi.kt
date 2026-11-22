@@ -12,6 +12,9 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonDecoder
+import persona.core.contracts.generated.ExtensionGauge
+import persona.core.contracts.generated.ExtensionGraphEdge
+import persona.core.contracts.generated.ExtensionGraphNode
 
 /**
  * An extension's declarative UI (docs/extensions/extensions.md "Declarative UI"): the extension never runs code in the app; it answers with a
@@ -95,6 +98,11 @@ data class ExtensionUiContext(
     val locale: String? = null,
     val platform: String? = null,
     @SerialName("ui_version") val uiVersion: Int? = null,
+    /**
+     * Inbox Sources only (#5278, #5661): the assistant's display name, the one the composer shows ("Ask {name}…").
+     * Sent even when empty (`""`): the key says this app opens Set Up with …. Never set for an extension.
+     */
+    val assistant: String? = null,
 )
 
 /**
@@ -113,7 +121,10 @@ data class ExtensionView(
     val filter: ExtensionViewFilter? = null,
     /** UI version 4: tabs on top; choosing one sends its action with `{name: value}` (and `q`). */
     val tabs: ExtensionViewTabs? = null,
-    /** UI version 4: `split` puts the sections of the `side` pane beside the rest where there is room, above them folded where not. */
+    /**
+     * UI version 4: `split` puts the sections of the `side` pane beside the rest where there is room, above them folded where not.
+     * UI version 8: `columns` draws a page's sections as cards side by side where there is room, one column on a phone.
+     */
     val layout: String? = null,
     /** UI version 5: the pending review's bar at the page's foot. */
     val review: ExtensionViewReview? = null,
@@ -172,7 +183,23 @@ data class ExtensionViewSection(
     /** UI version 4: `side` in a split view (the file tree); else the main pane. */
     val pane: String? = null,
     @Serializable(with = LenientItemsSerializer::class) val items: List<ExtensionViewItem> = emptyList(),
+    /** UI version 7: the section's key in a native stream (its node, which a press on its link or "Load more" names). */
+    val key: String? = null,
+    // UI version 8 (#9158, docs/extensions/extensions.md "UI version 8")
+    /** `full`: in a columns view the card takes the whole row; else one column. Other layouts ignore it. */
+    val span: String? = null,
+    /** One of the fixed icons, before the title, in [iconColor] (a named colour; it never colours text). */
+    val icon: String? = null,
+    @SerialName("icon_color") val iconColor: String? = null,
+    /** A link beside the title, pressed as a row's action is. */
+    val link: ExtensionViewSectionLink? = null,
+    /** 1 to 3: how many rows sit side by side on a wide screen; one on a narrow one and when absent. */
+    val columns: Int? = null,
 )
+
+/** A link beside a section's title (UI version 8): its words (1 to 40) and the action pressing it does (a push opens a page). */
+@Serializable
+data class ExtensionViewSectionLink(val title: String = "", val action: ExtensionViewAction = ExtensionViewAction())
 
 /** Reads a section's items one by one: an item that does not decode is skipped and the rest are drawn. */
 internal object LenientItemsSerializer : KSerializer<List<ExtensionViewItem>> {
@@ -338,6 +365,12 @@ data class ExtensionViewItem(
     val center: String? = null,
     /** chart (candlestick): `green` (default) or `red`, a rising candle's colour. */
     val rising: String? = null,
+    // UI version 10 (#9727): a graph's nodes and edges, laid out by the shared fixture algorithm.
+    val nodes: List<ExtensionGraphNode>? = null,
+    val edges: List<ExtensionGraphEdge>? = null,
+    val layout: String? = null,
+    val direction: String? = null,
+    val folded: List<String>? = null,
 )
 
 /**
@@ -407,6 +440,8 @@ data class ExtensionTile(
     val control: ExtensionRowControl? = null,
     val actions: List<ExtensionRowAction>? = null,
     val action: ExtensionViewAction? = null,
+    /** UI version 9: the tile's value drawn in a ring, instead of its icon. */
+    val gauge: ExtensionGauge? = null,
 )
 
 @Serializable

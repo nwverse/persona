@@ -258,7 +258,7 @@ func (h *Hub) repositoryOrigin(p sessionlist.Place) (string, originAnswer) {
 // (and takes slashes too), any other with slashes only. A path that is only a root is its own name.
 func folderName(path string) string {
 	separators := "/"
-	if windowsPath(path) {
+	if proto.WindowsPath(path) {
 		separators = `/\`
 	}
 	trimmed := strings.TrimRight(path, separators)
@@ -269,18 +269,6 @@ func folderName(path string) string {
 		return path
 	}
 	return trimmed
-}
-
-// windowsPath: a drive letter with a separator, or a UNC share.
-func windowsPath(path string) bool {
-	if strings.HasPrefix(path, `\\`) {
-		return true
-	}
-	if len(path) < 3 || path[1] != ':' || (path[2] != '\\' && path[2] != '/') {
-		return false
-	}
-	c := path[0] | 0x20
-	return c >= 'a' && c <= 'z'
 }
 
 // projectOf is the project a directory belongs to: its repository when its computer named a network origin, else
@@ -397,25 +385,27 @@ func lastIfEmpty(a, b string) int {
 }
 
 // spaceNames is what the kept rows of machines call each counted space: the first named row of a space, in its
-// machine's list order.
+// machine's list order, then among the archived rows told apart (Machine.archived), which named it in the list too.
 func (h *Hub) spaceNames(machines map[string]bool, counted map[sessionlist.Place]sessionlist.PlaceCount) map[sessionlist.Place]string {
 	names := map[sessionlist.Place]string{}
 	for _, m := range h.machinesNow() {
 		if !machines[m.cfg.ID] {
 			continue
 		}
-		list := m.keptSessions()
-		for i := range list { // by index: a range value copies every (large) session it passes
-			s := &list[i]
-			if s.SpaceName == "" {
-				continue
-			}
-			p := sessionlist.Place{Machine: m.cfg.ID, Key: cmp.Or(s.SpaceID, s.WorkspaceID)}
-			if _, ok := counted[p]; !ok {
-				continue
-			}
-			if _, named := names[p]; !named {
-				names[p] = s.SpaceName
+		list, archived := m.keptWhole()
+		for _, rows := range [2][]proto.Session{list, archived} {
+			for i := range rows { // by index: a range value copies every (large) session it passes
+				s := &rows[i]
+				if s.SpaceName == "" {
+					continue
+				}
+				p := sessionlist.Place{Machine: m.cfg.ID, Key: cmp.Or(s.SpaceID, s.WorkspaceID)}
+				if _, ok := counted[p]; !ok {
+					continue
+				}
+				if _, named := names[p]; !named {
+					names[p] = s.SpaceName
+				}
 			}
 		}
 	}

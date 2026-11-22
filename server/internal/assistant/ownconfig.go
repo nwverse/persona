@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/managerconf"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // ownConfig is what the manager's manager.json says that the hub's hello used to (docs/operations/config.md "manager.json"):
@@ -19,19 +21,26 @@ import (
 // sends them).
 type ownConfig struct {
 	Assistant *struct {
-		Owner    *string `json:"owner"`
-		Notes    *string `json:"notes"`
-		Machine  *string `json:"machine"`
-		Launcher *string `json:"launcher"`
+		Owner                         *string `json:"owner"`
+		Notes                         *string `json:"notes"`
+		Machine                       *string `json:"machine"`
+		Launcher                      *string `json:"launcher"`
+		MemoryDreaming                bool    `json:"memory_dreaming"`
+		CompleteAgentlessTodos        bool    `json:"complete_agentless_todos"`
+		SupervisionBatchMinutes       *int    `json:"supervision_batch_minutes"`
+		TaskExecutionWaitSeconds      *int    `json:"task_execution_wait_seconds"`
+		TaskExecutionLegacyFallback   *bool   `json:"task_execution_legacy_fallback"`
+		NodeUpdateHandoffGraceSeconds *int    `json:"node_update_handoff_grace_seconds"`
 	} `json:"assistant"`
 	Agents *assistantwire.AgentsConfig `json:"agents"`
 	KB     *struct {
-		ReadOnly       bool           `json:"read_only"`
-		Enabled        *bool          `json:"enabled"`
-		TextDays       int            `json:"text_days"`
-		AttachmentDays int            `json:"attachment_days"`
-		AI             *aiwire.Config `json:"ai"`
-		ExtraDirs      []string       `json:"extra_dirs"`
+		ReadOnly       bool                           `json:"read_only"`
+		Enabled        *bool                          `json:"enabled"`
+		TextDays       int                            `json:"text_days"`
+		AttachmentDays int                            `json:"attachment_days"`
+		AI             *aiwire.Config                 `json:"ai"`
+		ExtraDirs      []string                       `json:"extra_dirs"`
+		RemoteFolders  []assistantwire.KBRemoteFolder `json:"remote_folders"`
 		// AttachmentDaysBySource: attachment_days per source, e.g. years for a chat source whose history is imported.
 		AttachmentDaysBySource map[string]int `json:"attachment_days_by_source"`
 		// History: the history import (docs/assistant/knowledge.md "History import"); missing or not enabled: off.
@@ -64,8 +73,23 @@ func readOwnConfig(file string) (ownConfig, error) {
 		}
 		return c, err
 	}
-	err = json.Unmarshal(b, &c)
-	return c, err
+	if err := json.Unmarshal(b, &c); err != nil {
+		return c, err
+	}
+	if a := c.Assistant; a != nil {
+		if a.SupervisionBatchMinutes != nil {
+			if minutes := *a.SupervisionBatchMinutes; minutes < 0 || minutes > maxSupervisionBatchMinutes {
+				return c, fmt.Errorf("assistant.supervision_batch_minutes must be between 0 and %d", maxSupervisionBatchMinutes)
+			}
+		}
+		if a.TaskExecutionWaitSeconds != nil && (*a.TaskExecutionWaitSeconds < 0 || *a.TaskExecutionWaitSeconds > 3600) {
+			return c, fmt.Errorf("assistant.task_execution_wait_seconds must be between 0 and 3600")
+		}
+		if a.NodeUpdateHandoffGraceSeconds != nil && (*a.NodeUpdateHandoffGraceSeconds < 0 || *a.NodeUpdateHandoffGraceSeconds > proto.MaxNodeUpdateHandoffGraceSeconds) {
+			return c, fmt.Errorf("assistant.node_update_handoff_grace_seconds must be between 0 and %d", proto.MaxNodeUpdateHandoffGraceSeconds)
+		}
+	}
+	return c, nil
 }
 
 // validatePlacement rejects a configured assistant machine that the hub classifies as work.
@@ -79,6 +103,20 @@ func (c ownConfig) validatePlacement(h Hello) error {
 // over is h with c's sections in place of the hello's.
 func (c ownConfig) over(h Hello) Hello {
 	if a := c.Assistant; a != nil {
+		h.Assistant.MemoryDreaming = a.MemoryDreaming
+		h.Assistant.CompleteAgentlessTodos = a.CompleteAgentlessTodos
+		if a.SupervisionBatchMinutes != nil {
+			h.Assistant.SupervisionBatchMinutes = a.SupervisionBatchMinutes
+		}
+		if a.TaskExecutionWaitSeconds != nil {
+			h.Assistant.TaskExecutionWaitSeconds = a.TaskExecutionWaitSeconds
+		}
+		if a.TaskExecutionLegacyFallback != nil {
+			h.Assistant.TaskExecutionLegacyFallback = a.TaskExecutionLegacyFallback
+		}
+		if a.NodeUpdateHandoffGraceSeconds != nil {
+			h.Assistant.NodeUpdateHandoffGraceSeconds = a.NodeUpdateHandoffGraceSeconds
+		}
 		if a.Owner != nil {
 			h.Owner = strings.TrimSpace(*a.Owner)
 		}
@@ -97,7 +135,7 @@ func (c ownConfig) over(h Hello) Hello {
 	}
 	if k := c.KB; k != nil {
 		h.KB = &assistantwire.KBSettings{Off: k.Enabled != nil && !*k.Enabled, ReadOnly: k.ReadOnly, TextDays: k.TextDays,
-			AttachmentDays: k.AttachmentDays, ExtraDirs: k.ExtraDirs, AttachmentDaysBySource: positiveDays(k.AttachmentDaysBySource), History: k.History}
+			AttachmentDays: k.AttachmentDays, ExtraDirs: k.ExtraDirs, RemoteFolders: k.RemoteFolders, AttachmentDaysBySource: positiveDays(k.AttachmentDaysBySource), History: k.History}
 		h.Models.KBAI = k.AI
 	}
 	if c.AI != nil {

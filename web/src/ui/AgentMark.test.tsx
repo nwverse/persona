@@ -31,7 +31,7 @@ describe("AgentMark", () => {
   it("says which agent it is, in the interface language", () => {
     expect(draw("claude")).toContain('role="img"');
     expect(draw("claude")).toContain('aria-label="Claude Code"');
-    expect(draw("opencode")).toContain('aria-label="OpenCode"');
+    expect(draw("opencode")).toContain('aria-label="opencode"');
     expect(draw("cursor-agent")).toContain('aria-label="Cursor"');
   });
 
@@ -43,15 +43,15 @@ describe("AgentMark", () => {
   });
 
   it("draws a letter for an agent with no mark, in the same box", () => {
-    for (const [agent, label, letter] of [["traex", undefined, "T"], ["dsh", "DSH", "D"], ["amp", undefined, "A"]] as const) {
+    for (const [agent, label, letter] of [["traex", undefined, "T"], ["omp", "Oh My Pi", "O"], ["amp", undefined, "A"]] as const) {
       const html = draw(agent, { label });
       expect(html).toContain('data-agent-mark="letter"');
       expect(html).toContain(`>${letter}</span>`);
       expect(html).not.toContain("<img");
       expect(html).toContain("width:14px;height:14px");
     }
-    expect(draw("dsh", { label: "DSH" })).toContain('aria-label="DSH"');
-    expect(draw("traex")).toContain('aria-label="TRAEX"');
+    expect(draw("omp")).toContain('aria-label="Oh My Pi"');
+    expect(draw("traex")).toContain('aria-label="TRAE CLI"');
   });
 
   it("keeps every mark in a box of the size asked, centred, whatever its shape", () => {
@@ -64,7 +64,7 @@ describe("AgentMark", () => {
 
   it("pulls a square or tall mark in so it does not look bigger than a round one", () => {
     const inner = (a: string) => Number(/width:(\d+)px/.exec(draw(a, { size: 32 }).replace("width:32px;height:32px", ""))?.[1]);
-    expect(MARKED_AGENTS.map((a) => inner(a === "claude" ? "codex" : a))).toEqual([32, 32, 28, 28, 32, 29, 29]);
+    expect(MARKED_AGENTS.map((a) => inner(a === "claude" ? "codex" : a))).toEqual([32, 32, 28, 28, 32, 29, 29, 32, 32, 32, 28, 32]);
   });
 });
 
@@ -103,5 +103,27 @@ describe("SessionMark", () => {
     expect(html).toBe(draw("opencode"));
     expect(renderToStaticMarkup(<SessionMark s={{ agent: "claude", source_kind: "codex_history" }} size={14} />)).toBe(draw("codex"));
     expect(renderToStaticMarkup(<SessionMark s={{ agent: "dsh", agent_label: "DSH" }} size={14} />)).toContain('aria-label="DSH"');
+  });
+
+  it("draws one of Paseo's providers by its provider: the mark the app has for it, else its label's letter (#8142)", () => {
+    const paseo = (launcher: string, agent_label: string) => renderToStaticMarkup(<SessionMark s={{ agent: "paseo", source_kind: "runtime", launcher, agent_label }} size={14} />);
+    expect(src(paseo("cursor", "Cursor"))).toBe(src(draw("cursor")));
+    expect(src(paseo("traecli", "TRAE CLI"))).toBe(src(draw("trae")));
+    expect(src(paseo("opencode", "OpenCode"))).toBe(src(draw("opencode")));
+    expect(src(paseo("pi", "Pi"))).toBe(src(draw("pi")));
+    // a provider id of the user's own, with a label naming a known agent
+    expect(src(paseo("my-gemini", "Gemini"))).toBe(src(draw("gemini")));
+    const grok = paseo("grok", "Grok");
+    expect(grok).toContain('data-agent-mark="grok"');
+    expect(grok).toContain('aria-label="Grok"');
+    expect(grok).not.toMatch(/paseo/i);
+  });
+});
+
+describe("AgentMark's label (#8142)", () => {
+  it("draws the mark its label names for an agent with none of its own, and keeps an agent's own mark", () => {
+    expect(src(draw("paseo", { label: "Cursor" }))).toBe(src(draw("cursor")));
+    expect(src(draw("paseo", { label: "Grok · Official" }))).toBe(src(draw("grok")));
+    expect(src(draw("codex", { label: "Cursor" }))).toBe(src(draw("codex")));
   });
 });

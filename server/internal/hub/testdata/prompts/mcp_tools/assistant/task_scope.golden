@@ -1,0 +1,40 @@
+{
+  "name": "task_scope",
+  "description": "Change what a supervised task is to do, or what done means, after it started (its todo id). The brief is never rewritten: this adds a brief-log entry (what changed and why), applies the new done_when/expect_minutes, restarts overdue, estimate_due only on a new estimate; the owner reads it in the next digest. It is the only way done_when changes after start (agent_supervise and agent_send on a task use the same log). Give done_when as the whole list after the change: a criterion you leave out is logged as dropped and named in the completion report. A change adding an owner-only step (deploying, merging, releasing, public sends/comments, deleting, spending, production changes) not in the original task is refused unless the owner's own message started this turn: ask first (ask_user, or task_review needs_user), then call again. Only its supervisor may call it; the Agent is not told — send the change with agent_send. estimate_due/overdue: revise expect_minutes here, but a finished task past the settle window with no owner card is refused: give task_review first (accepted/rework/cancelled; needs_user or accepted+user_check if the owner must act); chat-only asks never reach Needs you.",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "todo_id",
+      "change",
+      "why"
+    ],
+    "properties": {
+      "todo_id": {
+        "type": "string",
+        "description": "the task's todo id (todo_…)"
+      },
+      "change": {
+        "type": "string",
+        "description": "what changes, in one sentence the owner can read (Chinese), e.g. 「不再要求灰度验证，改为只在测试环境验证」"
+      },
+      "why": {
+        "type": "string",
+        "description": "why, in one sentence (Chinese)"
+      },
+      "done_when": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 6,
+        "items": {
+          "type": "string"
+        },
+        "description": "the criteria after the change, the whole list; leave it out to keep them as they are"
+      },
+      "expect_minutes": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "how long the task should take from now; leave it out (or 0) to keep it"
+      }
+    }
+  }
+}

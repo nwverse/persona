@@ -10,9 +10,9 @@ import (
 	"time"
 )
 
-// Desktop origin alone is insufficient: background runs and subagents retain
-// it. Only primary conversations are inferred when no explicit sidebar ID exists.
-func TestCodexAppMigratedDiscoveryKeepsOnlyDesktopConversations(t *testing.T) {
+// Desktop origin alone is insufficient: background runs retain it. The raw catalog also keeps subagent metadata
+// for parent folding and guardian suppression; those rows never become independently writable conversations.
+func TestCodexAppMigratedDiscoveryKeepsOnlyDesktopSources(t *testing.T) {
 	cases := []struct {
 		name, origin, source string
 		archived             int
@@ -22,13 +22,15 @@ func TestCodexAppMigratedDiscoveryKeepsOnlyDesktopConversations(t *testing.T) {
 		{name: "work conversation", origin: "codex_work_desktop", source: "vscode", inferred: true},
 		{name: "desktop background run", origin: "Codex Desktop", source: "exec", explicit: true},
 		{name: "work background run", origin: "codex_work_desktop", source: "exec"},
-		{name: "subagent source", origin: "Codex Desktop", source: "subagent"},
-		{name: "spawned subagent", origin: "Codex Desktop", source: `{"subagent":{"thread_spawn":{"parent_thread_id":"parent","depth":1}}}`},
-		{name: "work guardian", origin: "codex_work_desktop", source: `{"subagent":{"other":"guardian"}}`},
+		{name: "subagent source", origin: "Codex Desktop", source: "subagent", inferred: true},
+		{name: "spawned subagent", origin: "Codex Desktop", source: `{"subagent":{"thread_spawn":{"parent_thread_id":"parent","depth":1}}}`, inferred: true},
+		{name: "work guardian", origin: "codex_work_desktop", source: `{"subagent":{"other":"guardian"}}`, inferred: true},
 		{name: "CLI conversation", origin: "codex-tui", source: "cli", explicit: true},
 		{name: "CLI vscode source", origin: "codex-tui", source: "vscode"},
 		{name: "SDK vscode source", origin: "codex_sdk_test", source: "vscode"},
 		{name: "unknown source", origin: "Codex Desktop", source: "unknown"},
+		{name: "unrelated object source", origin: "Codex Desktop", source: `{"kind":"job"}`},
+		{name: "malformed subagent source", origin: "Codex Desktop", source: `{"subagent":`},
 		{name: "empty source", origin: "Codex Desktop"},
 		{name: "archived conversation", origin: "Codex Desktop", source: "vscode", archived: 1, explicit: true},
 	}

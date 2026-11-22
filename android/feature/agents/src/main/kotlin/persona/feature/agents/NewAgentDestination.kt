@@ -33,7 +33,7 @@ internal fun NewAgentDestination(route: NewAgentRoute, navigator: Navigator, dep
         }
         return
     }
-    val prefill = NewAgentPrefill(route.machineId, route.cwd, route.prompt)
+    val prefill = remember(route) { NewAgentPrefill(route.machineId, route.cwd, route.prompt, route.context) }
     val starPrompt = persona.core.designsystem.LocalStarPrompt.current
     val uploads = rememberNewAgentUploads()
     val model = viewModel(key = "new-agent-page:${service.scope}:${System.identityHashCode(service)}:${route.hashCode()}") {
@@ -70,5 +70,6 @@ internal fun NewAgentDestination(route: NewAgentRoute, navigator: Navigator, dep
         }
     }
     NewAgentPage(model, machines, connection == ConnectionState.Online, onBack = navigator::back, initialModelQuery = modelQuery,
-        onAddProvider = { navigator.navigate(persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Providers)) })
+        onAddProvider = { navigator.navigate(persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Providers)) },
+        onOpenProvider = { navigator.navigate(persona.core.navigation.ModelProviderRoute(it)) })
 }

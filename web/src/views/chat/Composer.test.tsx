@@ -3,21 +3,35 @@
 // conversation (#2378), including ones still being read or a send that fails after the box moved on.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadPages } from "../../lib/lazy-page";
 import { addQuote, getQuotes, sendDraft, setQuotes } from "../../lib/drafts";
 import { toast } from "../../ui/atoms";
 import { Composer, type Outgoing } from "./Composer";
 import { onPermissionPicker } from "../../lib/permissions-command";
 import { t } from "../../i18n";
+import { setPublishedImageLimits } from "../../lib/image-limits";
 
-// imagePayload decodes on a canvas, which jsdom has not: each read waits on a promise the test settles
-const reads: ((p: { mime: string; data: string }) => void)[] = [];
-// a file upload waits on a promise the test settles too, with the path the machine stored it at
+// a picture is scaled on a canvas (lib/image-scale.ts), which jsdom has not: each read waits on a promise the test
+// settles, with the picture as the message carries it or null for one the page cannot read
+const reads: ((p: { mime: string; data: string } | null) => void)[] = [];
+// a file upload (lib/composer-files.ts) waits on a promise the test settles too, with the path the machine stored it at
 const uploads: ((path: string) => void)[] = [];
-vi.mock("../../lib/attachments", async (orig) => ({
-  ...(await orig<typeof import("../../lib/attachments")>()),
-  imagePayload: () => new Promise<{ mime: string; data: string }>((resolve) => reads.push(resolve)),
-  sendFile: () => new Promise<string>((resolve) => uploads.push(resolve)),
+const failures: ((e: Error) => void)[] = [];
+vi.mock("../../lib/image-scale", () => ({
+  fitPicture: () => new Promise<{ mime: string; data: string } | null>((resolve) => reads.push(resolve)),
+}));
+/** Settles the `i`th read once it has started (the scaling module is imported first). */
+const settle = async (i: number, p: { mime: string; data: string } | null = { mime: "image/png", data: btoa("png") }) => {
+  for (let n = 0; n < 200 && !reads[i]; n++) await act(async () => void (await new Promise((ok) => setTimeout(ok, 2))));
+  await act(async () => reads[i](p));
+};
+vi.mock("../../lib/file-ops", () => ({
+  uploadAttachment: (_mid: string, file: File) =>
+    new Promise((resolve, reject) => {
+      uploads.push((path) => resolve({ path, name: path.split("/").pop(), size: file.size }));
+      failures.push(reject);
+    }),
 }));
 
 vi.mock("../../ui/atoms", async (orig) => ({ ...(await orig<typeof import("../../ui/atoms")>()), toast: vi.fn() }));
@@ -30,10 +44,15 @@ const revoke = vi.fn();
 let host: HTMLDivElement;
 let root: Root;
 
+beforeAll(async () => {
+  await loadPages();
+});
+
 beforeEach(() => {
   urls = 0;
   reads.length = 0;
   uploads.length = 0;
+  failures.length = 0;
   create.mockClear();
   revoke.mockClear();
   URL.createObjectURL = create;
@@ -225,7 +244,7 @@ describe("Composer image object URLs", () => {
     render("a");
     await pickFile(new File(["png"], "b.png", { type: "image/png" }));
     render("b");
-    await act(async () => reads[0]({ mime: "image/png", data: btoa("png") }));
+    await settle(0);
     expect(create).toHaveBeenCalledTimes(1);
     expect(revoke).toHaveBeenCalledWith("blob:test/1");
     expect(trayImages()).toBe(0);
@@ -235,7 +254,7 @@ describe("Composer image object URLs", () => {
     render("a");
     await pickFile(new File(["png"], "b.png", { type: "image/png" }));
     act(() => root.unmount());
-    await act(async () => reads[0]({ mime: "image/png", data: btoa("png") }));
+    await settle(0);
     expect(revoke).toHaveBeenCalledWith("blob:test/1");
     root = createRoot(host);
   });
@@ -243,66 +262,136 @@ describe("Composer image object URLs", () => {
 
 // A file sent to the machine puts its path into the draft of the conversation it was picked in, not into the one
 // the box shows when the upload finishes.
-describe("Composer file upload that finishes after the box moved on", () => {
+// Files picked for a message are tiles above the input, never words in it (#8361): they upload for their own
+// conversation, hold the message until they are there, and go with it as <persona-file> tags after the words.
+describe("Composer files", () => {
   const box = () => host.querySelector("textarea")!;
-  const renderOn = (draftKey: string) => act(() => root.render(<Composer draftKey={draftKey} machineId="m1" placeholder="" onSend={async () => true} />));
-  const spinning = () => !host.querySelector("button[data-composer-plus] svg");
+  const tiles = () => Array.from(host.querySelectorAll<HTMLElement>("[data-testid=composer-files] > span"));
+  const renderOn = (draftKey: string, onSend: (m: Outgoing) => Promise<boolean> = async () => true) =>
+    act(() => root.render(<Composer draftKey={draftKey} machineId="m1" placeholder="" onSend={onSend} />));
   const pickNotes = async () => {
     await pickFile(new File(["notes"], "notes.txt", { type: "text/plain" }));
-    expect(uploads).toHaveLength(1);
+    await until(() => expect(uploads).toHaveLength(1));
   };
+  const sendButton = () => host.querySelector<HTMLButtonElement>('button[aria-label="发送"]');
+  const forget = () => tiles().forEach((t) => act(() => t.querySelector<HTMLButtonElement>("button[data-remove]")!.click()));
 
-  it("goes into its own conversation's draft, not into the one the box shows now", async () => {
+  afterEach(() => {
+    renderOn("a");
+    forget();
+    renderOn("b");
+    forget();
+  });
+
+  it("puts nothing in the words and sends the file as a tag after them", async () => {
+    const send = vi.fn(async () => true);
+    renderOn("a", send);
+    act(() => void sendDraft("a", { type: "replace", text: "look at" }));
+    await pickNotes();
+    expect(tiles().map((t) => t.dataset.state)).toEqual(["uploading"]);
+    expect(sendButton()?.disabled ?? true).toBe(true); // holds the message while it uploads
+    await act(async () => uploads[0]("/home/me/.persona/uploads/2026-11-15/notes.txt"));
+    expect(box().value).toBe("look at");
+    expect(tiles().map((t) => t.dataset.state)).toEqual(["ready"]);
+    await act(async () => sendButton()!.click());
+    expect(send).toHaveBeenCalledWith({
+      text: 'look at\n\n<persona-file kind="file" path="/home/me/.persona/uploads/2026-11-15/notes.txt" name="notes.txt" size="5"/>',
+      images: [],
+    });
+    expect(tiles()).toEqual([]);
+  });
+
+  it("goes on uploading for its own conversation while the box shows another, and is there when it comes back", async () => {
     renderOn("a");
     await pickNotes();
-    expect(spinning()).toBe(true);
     renderOn("b");
-    expect(spinning()).toBe(false); // b has nothing uploading
-    await act(async () => uploads[0]("/tmp/notes.txt"));
+    expect(tiles()).toEqual([]);
+    await act(async () => uploads[0]("/u/notes.txt"));
     expect(box().value).toBe("");
-    expect(localStorage.getItem("draft:a")).toBe("/tmp/notes.txt");
     renderOn("a");
-    expect(box().value).toBe("/tmp/notes.txt");
+    expect(tiles().map((t) => t.dataset.state)).toEqual(["ready"]);
+    expect(box().value).toBe("");
   });
 
-  it("shows its spinner again when the box comes back to its conversation before it finishes", async () => {
+  it("keeps a failed one as a tile to try again", async () => {
     renderOn("a");
     await pickNotes();
-    renderOn("b");
-    renderOn("a");
-    expect(spinning()).toBe(true);
-    await act(async () => uploads[0]("/tmp/notes.txt"));
-    expect(spinning()).toBe(false);
-    expect(box().value).toBe("/tmp/notes.txt");
+    await act(async () => failures[0](new Error("no space left on device")));
+    expect(tiles().map((t) => t.dataset.state)).toEqual(["failed"]);
+    expect(toast).toHaveBeenCalled();
+    act(() => tiles()[0].querySelector<HTMLButtonElement>("button")!.click());
+    await until(() => expect(uploads).toHaveLength(2));
+    await act(async () => uploads[1]("/u/notes.txt"));
+    expect(tiles().map((t) => t.dataset.state)).toEqual(["ready"]);
   });
 
-  it("is kept for the conversation when the box went away before it finished", async () => {
-    renderOn("a");
+  it("puts the files back over the box when the send does not go", async () => {
+    renderOn("a", async () => false);
     await pickNotes();
-    act(() => root.unmount());
-    root = createRoot(host);
-    await act(async () => uploads[0]("/tmp/notes.txt"));
-    expect(localStorage.getItem("draft:a")).toBe("/tmp/notes.txt");
-    renderOn("a");
-    expect(box().value).toBe("/tmp/notes.txt");
-  });
-
-  it("goes under what the conversation's draft already holds", async () => {
-    localStorage.setItem("draft:a", "see");
-    renderOn("a");
-    await pickNotes();
-    renderOn("b");
-    await act(async () => uploads[0]("/tmp/my notes.txt"));
-    expect(localStorage.getItem("draft:a")).toBe("see\n'/tmp/my notes.txt'");
+    await act(async () => uploads[0]("/u/notes.txt"));
+    await act(async () => sendButton()!.click());
+    expect(tiles().map((t) => t.dataset.state)).toEqual(["ready"]);
   });
 });
 
-// At most 4 pictures a message, as on iOS / Android.
-describe("Composer image cap", () => {
-  it("turns away a fifth picture from the chat", () => {
+// The pictures a message holds are the hub's (hello's image_limits, #12973): past them a picture goes as a file to the
+// session's computer, with a word on which limit it was, and is turned away where there is no computer.
+describe("Composer image limits", () => {
+  const MiB = 1024 * 1024;
+  const hub = (l: Partial<{ request_bytes: number; per_message: number }>) =>
+    setPublishedImageLimits({ request_bytes: 32 * MiB, image_bytes: 3_750_000, max_side: 1600, per_message: 4, ...l });
+  const tiles = () => Array.from(host.querySelectorAll<HTMLElement>("[data-testid=composer-files] > span"));
+  const renderOn = (draftKey: string) => act(() => root.render(<Composer draftKey={draftKey} machineId="m1" placeholder="" onSend={async () => true} />));
+  beforeEach(() => {
+    hub({});
+    vi.mocked(toast).mockClear();
+  });
+  afterEach(() => {
+    setPublishedImageLimits(undefined);
+    renderOn("a");
+    tiles().forEach((t) => act(() => t.querySelector<HTMLButtonElement>("button[data-remove]")!.click()));
+  });
+
+  it("turns away a picture past the hub's count where there is no computer", async () => {
     render("a");
     for (let i = 0; i < 5; i++) putImage("a");
+    await act(async () => {}); // the word comes once the tick's pictures are in
     expect(trayImages()).toBe(4);
+    expect(toast).toHaveBeenCalledWith(t("chat-composer.too_many_images", { max: 4 }), "error");
+  });
+
+  it("sends a picture past the hub's count to the session's computer as a file", async () => {
+    renderOn("a");
+    for (let i = 0; i < 6; i++) putImage("a");
+    expect(trayImages()).toBe(4);
+    await until(() => expect(uploads).toHaveLength(2));
+    expect(tiles()).toHaveLength(2);
+    expect(toast).toHaveBeenCalledTimes(1); // one word for the two of the same tick
+    expect(toast).toHaveBeenCalledWith(t("chat-composer.images_as_files", { max: 4, count: 2 }));
+  });
+
+  it("holds 20 pictures with a hub that publishes none", () => {
+    setPublishedImageLimits(undefined);
+    render("a");
+    for (let i = 0; i < 21; i++) putImage("a");
+    expect(trayImages()).toBe(20);
+  });
+
+  it("sends a picture past the body's room as a file", async () => {
+    hub({ request_bytes: MiB + 10 }); // 10 characters of base64 left beside the words
+    renderOn("a");
+    for (let i = 0; i < 3; i++) putImage("a"); // 4 characters each
+    expect(trayImages()).toBe(2);
+    await until(() => expect(uploads).toHaveLength(1));
+    expect(toast).toHaveBeenCalledWith(t("chat-composer.images_bytes_as_files", { count: 1 }));
+  });
+
+  it("sends a picked picture the page cannot read as a file", async () => {
+    renderOn("a");
+    await pickFile(new File(["heic"], "IMG_0001.HEIC", { type: "image/heic" }));
+    await settle(0, null);
+    await until(() => expect(uploads).toHaveLength(1));
+    expect(trayImages()).toBe(0);
   });
 
   it("reads only the pictures that fit when several are picked", async () => {
@@ -315,9 +404,8 @@ describe("Composer image cap", () => {
       input.dispatchEvent(new Event("change", { bubbles: true }));
     });
     // one read at a time: settle each so the next starts
-    for (let i = 0; i < 3; i++) {
-      await act(async () => reads[i]?.({ mime: "image/png", data: btoa("png") }));
-    }
+    for (let i = 0; i < 3; i++) await settle(i);
+    await act(async () => {});
     expect(reads.length).toBe(3);
     expect(trayImages()).toBe(4);
   });
@@ -338,8 +426,8 @@ describe("Composer image cap", () => {
     putImage("a");
     await pickFile(new File(["x"], "p1.png", { type: "image/png" }));
     await pickFile(new File(["x"], "p2.png", { type: "image/png" }));
+    await settle(0);
     expect(reads.length).toBe(1); // the second is turned away while the first is read
-    await act(async () => reads[0]({ mime: "image/png", data: btoa("png") }));
     expect(trayImages()).toBe(4);
   });
 });
@@ -775,6 +863,8 @@ describe("the / palette", () => {
     render("p");
     typeInto("/");
     await until(() => expect(palette()).not.toBeNull());
+    act(() => box().dispatchEvent(new Event("pointerdown", { bubbles: true })));
+    expect(palette()).not.toBeNull();
     act(() => document.body.dispatchEvent(new Event("pointerdown", { bubbles: true })));
     expect(palette()).toBeNull();
     typeInto("/c");
@@ -818,4 +908,93 @@ describe("the / palette", () => {
     });
     expect(palette()).toBeNull();
   });
+
+  it("keeps bare / off the skill chunk and keeps command rows usable while the keyword skill chunk is pending and after it fails", async () => {
+    const chunk = { calls: 0, fail: (_error: Error) => {} };
+    const held = new Promise<void>((_, reject) => { chunk.fail = reject; });
+    void held.catch(() => {}); // every consumer still receives the rejection
+    vi.resetModules();
+    vi.doMock("./SlashSkillView", async () => {
+      chunk.calls++;
+      await held;
+      return vi.importActual<typeof import("./SlashSkillView")>("./SlashSkillView");
+    });
+    try {
+      const { initI18n } = await import("../../i18n");
+      await initI18n("zh-Hans");
+      const { Composer: DeferredComposer } = await import("./Composer");
+      await act(async () => {
+        root.render(<DeferredComposer
+          draftKey="assistant-chunk"
+          placeholder=""
+          mention={{ files: () => [], skills: { manager: "assistant", environment: "test" } }}
+          machineId="computer"
+          commands={[{ word: "/alpha", desc: "First", text: "/alpha" }, { word: "/beta", desc: "Second", text: "/beta" }]}
+          onSend={async () => true}
+        />);
+      });
+      typeInto("/");
+      await vi.waitFor(() => expect(rows()).toEqual(["alpha", "beta"]));
+      expect(chunk.calls).toBe(0);
+
+      typeInto("/a");
+      await vi.waitFor(() => expect(chunk.calls).toBe(1));
+      await vi.waitFor(() => expect(rows()).toEqual(["alpha", "beta"]));
+      key("ArrowDown");
+      expect(focused()).toBe("beta");
+      key("Enter");
+      await vi.waitFor(() => expect(box().value).toBe("/beta"));
+      expect(palette()).toBeNull();
+
+      typeInto("/a");
+      await vi.waitFor(() => expect(rows()).toEqual(["alpha", "beta"]));
+      await act(async () => {
+        chunk.fail(new Error("stale assistant chunk"));
+        await Promise.resolve();
+      });
+      await vi.waitFor(() => expect(rows()).toEqual(["alpha", "beta"]));
+      expect(palette()).not.toBeNull();
+      key("ArrowDown");
+      expect(focused()).toBe("beta");
+      key("Enter");
+      await vi.waitFor(() => expect(box().value).toBe("/beta"));
+      expect(palette()).toBeNull();
+    } finally {
+      vi.doUnmock("./SlashSkillView");
+    }
+  }, 20_000);
+});
+
+describe("Composer suggestion chunk", () => {
+  it("appears and fills the box after its chunk resolves", async () => {
+    const chunk = { calls: 0, open: () => {} };
+    vi.resetModules();
+    vi.doMock("./ComposerOverlays", async () => {
+      chunk.calls++;
+      await new Promise<void>((resolve) => { chunk.open = resolve; });
+      return vi.importActual<typeof import("./ComposerOverlays")>("./ComposerOverlays");
+    });
+    try {
+      const { initI18n } = await import("../../i18n");
+      await initI18n("zh-Hans");
+      const { Composer: DeferredComposer } = await import("./Composer");
+      await act(async () => {
+        root.render(<DeferredComposer draftKey="deferred-pill" placeholder="" suggestion="late suggestion" onSend={async () => true} />);
+      });
+      const pill = () => host.querySelector('[data-testid="composer-suggestion"]');
+      expect(pill()).toBeNull();
+      await vi.waitFor(() => expect(chunk.calls).toBe(1));
+
+      await act(async () => { chunk.open(); });
+      await vi.waitFor(async () => {
+        await act(async () => { await Promise.resolve(); });
+        expect(pill()).not.toBeNull();
+      }, { timeout: 10_000 });
+      act(() => pill()!.querySelector("button")!.click());
+      expect(host.querySelector("textarea")!.value).toBe("late suggestion");
+      expect(pill()).toBeNull();
+    } finally {
+      vi.doUnmock("./ComposerOverlays");
+    }
+  }, 20_000);
 });

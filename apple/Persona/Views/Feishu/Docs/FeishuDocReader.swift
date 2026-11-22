@@ -1,6 +1,7 @@
 import MarkdownUI
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 // The native document reader: Markdown export first (fast, faithful tables and lists); when the owner forbids export,
 // the JSON node tree rendered natively. Around the text: title, where it lives, who edited it, read count, the cached
@@ -247,7 +248,8 @@ struct FeishuDocReader: View {
                         if let id = owner.id { open?(.profile(LarkPersonRef(id: id, name: owner.name, avatar: owner.avatarUrl), manager: manager)) }
                     } label: {
                         HStack(spacing: Theme.Space.sm) {
-                            LarkAvatarImage(name: owner.name, url: owner.avatarUrl.map(media), size: 22)
+                            LarkAvatarImage(name: owner.name, url: owner.avatarUrl, size: 22)
+                                .environment(\.larkManager, manager)
                             Text(owner.name).font(Theme.Font.captionMedium).foregroundStyle(.primary).lineLimit(1)
                         }
                     }
@@ -643,7 +645,7 @@ struct FeishuDocsOutlineSheet: View {
             .listStyle(.plain)
             .navigationTitle("Folder [Task Views 52daa7]")
             .navigationBarTitleDisplayMode(.inline)
-            .macSheetDone { dismiss() }
+            .sheetDone { dismiss() }
         }
     }
 }

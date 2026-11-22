@@ -7,11 +7,10 @@ import { api, ApiError, errorText } from "../../lib/api";
 import { startConversation } from "../../lib/assistant-start";
 import { adoptConversation, askPersonaOf, noteSent, sendToSession } from "../../lib/outbox";
 import { baseName, sessionTitle, stateOf, uuid } from "../../lib/format";
-import {
-  agentDraft, connectorReference, conversationRoute, docChangeKey, docChangeLine, HANDOFF_PRESETS, handOffContext, handOffMessage, handOffToMain, isLark, itemKey, itemPath, itemRequest, keepDropped, keptChanges, recordHandOff, sendReply, useDroppedChanges,
-  setDone, unsentReplies, type InboxItem,
-} from "../../lib/inbox";
+import { agentDraft, connectorReference, conversationRoute, docChangeKey, handOffToMain, isLark, itemKey, itemPath, itemRequest, keepDropped, keptChanges, sendReply, useDroppedChanges, setDone, unsentReplies, type InboxItem } from "../../lib/inbox";
+import { docChangeLine, HANDOFF_PRESETS, handOffContext, handOffMessage, recordHandOff } from "../../lib/inbox-page";
 import { isTransient } from "../../lib/ops";
+import { hasFinePointer } from "../../lib/viewport";
 import { machineWithHub } from "../../lib/mesh";
 import { conversationPage } from "../../lib/conversation-page";
 import { navigate } from "../../lib/router";
@@ -24,11 +23,10 @@ import { Button, cx, Dialog, Loading, Spinner, toast } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
 import { Spark } from "./InboxParts";
-import { byTime } from "../../lib/times";
+import { handOffAgents, Target, TARGET_SUB } from "./HandOffTargets";
 
-// A dialog's error under its controls, and a hand-off target's line under its title, as each one writes them.
+// A dialog's error under its controls.
 const ERROR = "mt-2 text-[12px] text-red";
-const TARGET_SUB = "block truncate text-[11.5px] text-ink-3";
 
 export function draftTitle(it: InboxItem): string {
   if (it.moment) return t("inbox-inboxdialogs.title_moment");
@@ -53,7 +51,8 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
   const agentText = agentDraft(item);
   const [text, setText] = useState(() => unsentReplies.get(key) ?? agentText ?? "");
   const [instruction, setInstruction] = useState("");
-  const [loading, setLoading] = useState(false);
+  // with nothing to show yet it drafts as it opens (below): busy from the first frame, so the text is not offered before it
+  const [loading, setLoading] = useState(() => !unsentReplies.has(key) && !agentText);
   const [error, setError] = useState("");
   // unticked proposed changes are kept with the text: the item's draft card shows and sends the same
   const dropped = useDroppedChanges(key);
@@ -61,6 +60,8 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
   const kept = keptChanges(item, dropped);
   const generation = useRef(0);
   const agent = item.agent;
+  const box = useRef<HTMLTextAreaElement>(null);
+  const focused = useRef(false);
 
   // Save as text changes (the draft card shows it): navigation can unmount without onClose, and sendReply owns
   // clearing/restoring on send.
@@ -92,6 +93,19 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
+
+  // "Edit" is for changing the words: once they are in, the caret waits at their end (audit item 16). The dialog itself
+  // takes the focus first (ui/atoms Dialog), which keeps a phone's keyboard down: a touch screen alone still taps in.
+  useEffect(() => {
+    if (loading || focused.current) return;
+    focused.current = true;
+    const el = box.current;
+    // not over a field taken meanwhile (the instruction, typed while it drafted)
+    const at = document.activeElement;
+    if (!el || !hasFinePointer() || (at && at !== document.body && at !== el.closest("[role=dialog]"))) return;
+    el.focus({ preventScroll: true });
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, [loading]);
 
   const cancel = () => {
     // Like manual mail, Cancel discards; incidental dismissal keeps the reply and the unticked changes.
@@ -160,6 +174,7 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
       {item.connector?.reply_to && <p className="mb-2 text-[11.5px] leading-relaxed text-ink-3">{t("inbox-inboxdialogs.reply_goes", { how: item.connector.reply_to })}</p>}
       <div className="relative">
         <textarea
+          ref={box}
           value={text}
           onChange={(e) => keepText(e.target.value)}
           disabled={loading}
@@ -195,17 +210,14 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
   );
 }
 
+/** "Last time" beside the target this item's source went to last time (#2121). */
+function LastTime() {
+  return <span className="shrink-0 rounded-full bg-accent px-1.5 text-[10.5px] leading-[16px] font-medium whitespace-nowrap text-white">{t("inbox-inboxdialogs.last_time")}</span>;
+}
+
 /** The hub may have taken a hand-off it gave no answer for: the same one asked again is sent once. Any other answer is
  *  kept under its client_id, so a retry after it needs a new one. */
 const mayHaveGone = (e: unknown) => isTransient(e) || (e instanceof ApiError && (e.code === "assistant_in_doubt" || e.code === "assistant_offline"));
-
-/** The agents Hand to AI offers, latest first: not Persona's own, on computers online now, not offline. */
-function handOffAgents(sessions: Record<string, Session[]>, machines: Machine[]): Session[] {
-  const online = new Set(machines.filter((m) => m.online).map((m) => m.id));
-  return Object.values(sessions).flat()
-    .filter((s) => !s.assistant && online.has(s.machine_id) && stateOf(s) !== "offline")
-    .sort((a, b) => byTime(b.updated_at, a.updated_at));
-}
 
 /** The offered agent at "<machine>/<session>", if it is still offered. */
 function listedAgent(sessions: Record<string, Session[]>, machines: Machine[], path: string): Session | undefined {
@@ -392,8 +404,8 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
 
       <p className="mt-4 mb-1.5 text-[12px] font-medium text-ink-2">{t("inbox-inboxdialogs.target_label")}</p>
       <div role="radiogroup" aria-label={t("inbox-inboxdialogs.target_label")} className="max-h-[300px] divide-y divide-line overflow-y-auto rounded-card bg-surface shadow-card">
-        <Target on={target === "main"} last={isLast("main")} onPick={() => setTarget("main")} title={t("inbox-inboxdialogs.target_main")} sub={t("inbox-inboxdialogs.target_main_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-accent-tint text-accent-ink"><Icon name="spark" size={12} /></span>} />
-        <Target on={target === "new"} last={isLast("new")} onPick={() => setTarget("new")} title={t("inbox-inboxdialogs.target_persona")} sub={t("inbox-inboxdialogs.target_persona_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-field text-ink-2"><Icon name="compose" size={12} /></span>} />
+        <Target on={target === "main"} badge={isLast("main") && <LastTime />} onPick={() => setTarget("main")} title={t("inbox-inboxdialogs.target_main")} sub={t("inbox-inboxdialogs.target_main_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-accent-tint text-accent-ink"><Icon name="spark" size={12} /></span>} />
+        <Target on={target === "new"} badge={isLast("new") && <LastTime />} onPick={() => setTarget("new")} title={t("inbox-inboxdialogs.target_persona")} sub={t("inbox-inboxdialogs.target_persona_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-field text-ink-2"><Icon name="compose" size={12} /></span>} />
         <button type="button" onClick={() => void startNewAgent()} disabled={busy || opening} data-testid="handoff-new-agent" className="flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-hover disabled:opacity-60">
           <span className="flex size-6 items-center justify-center rounded-[7px] bg-field text-ink-2"><Icon name="plus" size={12} /></span>
           <span className="min-w-0 flex-1">
@@ -406,7 +418,7 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
           <Target
             key={`${s.machine_id}/${s.session_id}`}
             on={typeof target === "object" && sameSession(target, s)}
-            last={isLast(s)}
+            badge={isLast(s) && <LastTime />}
             onPick={() => setTarget(s)}
             title={sessionTitle(s)}
             sub={[machineWithHub(s.machine_id, machines), s.space_name].filter(Boolean).join(" › ")}
@@ -417,21 +429,5 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
       {last?.gone && <p className="mt-2 text-[12px] text-orange" data-testid="handoff-last-gone">{t("inbox-inboxdialogs.last_gone")}</p>}
       {error && <p className={ERROR}>{error}</p>}
     </Dialog>
-  );
-}
-
-function Target({ on, last, onPick, title, sub, icon }: { on: boolean; last?: boolean; onPick: () => void; title: string; sub?: string; icon: React.ReactNode }) {
-  return (
-    <button type="button" role="radio" aria-checked={on} onClick={onPick} className={cx("flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors", on ? "bg-accent-tint" : "hover:bg-hover")}>
-      {icon}
-      <span className="min-w-0 flex-1">
-        <span className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate text-[13px] text-ink">{title}</span>
-          {last && <span className="shrink-0 rounded-full bg-accent px-1.5 text-[10.5px] leading-[16px] font-medium whitespace-nowrap text-white">{t("inbox-inboxdialogs.last_time")}</span>}
-        </span>
-        {sub && <span className={TARGET_SUB}>{sub}</span>}
-      </span>
-      <Icon name="check" size={13} stroke={2.6} className={cx("shrink-0 text-accent-ink", !on && "invisible")} />
-    </button>
   );
 }

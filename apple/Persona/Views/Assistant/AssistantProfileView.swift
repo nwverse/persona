@@ -10,6 +10,8 @@ struct AssistantProfileView: View {
     @State private var runs: [APIClient.ScheduleRun]?
     @State private var memoryCount: Int?
     @State private var placeCount: Int?
+    /// How many standing authorizations the current assistant has (#7002); nil until read, or when this device can't.
+    @State private var standingCount: Int?
     @State private var nextSuggestionsModel = NextSuggestionsModel()
     /// The rename sheet (the assistant's own name, #6401).
     @State private var renaming = false
@@ -40,11 +42,15 @@ struct AssistantProfileView: View {
 
     var body: some View {
         Group { if AppStyle.current.usesBeautifulUI { cards } else { list } }
+        // Keep both style trees out of every page modifier's opaque type (`MainPagesStackTests`, #10288).
+        .stackSegment()
         .pageTitle("Persona")
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
         .refreshable { await load() }
+        #if DEBUG || PERF_SIGNPOST
         .screenProbe("assistant-next-suggestions", NextSuggestionsProbe(loaded: nextSuggestionsModel.loaded))
+        #endif
         #if os(iOS)
         // A hub switch need not change assistantSwitches (New Chat can keep it nil), but it still changes this model's scope.
         .onChange(of: NextSuggestionsScope(hub: model.hub?.group, assistant: model.assistantSwitches)) {
@@ -63,7 +69,7 @@ struct AssistantProfileView: View {
         #if DEBUG
         .onAppear {
             if debugPage == nil, let p = UserDefaults.standard.string(forKey: "openAssistantPage"),
-               !["profile", "assistant", "avatars"].contains(p) { debugPage = p }
+               !["profile", "assistant", "avatars", "promptsEntry"].contains(p) { debugPage = p }
         }
         .navigationDestination(item: $debugPage) { p in
             switch p {
@@ -71,6 +77,9 @@ struct AssistantProfileView: View {
             case "runs": AssistantRunsView()
             case "memory", "memoryFile", "memoryEdit": AssistantMemoryView()
             case "places", "place", "newPlace": SavedPlacesView()
+            case "prompts", "prompt", "newPrompt": SavedPromptsView()
+            case "standing": StandingAuthorizationsView()
+            case "agentFollowUp": AgentFollowUpView()
             default: AssistantNotesView()
             }
         }
@@ -78,6 +87,7 @@ struct AssistantProfileView: View {
     }
 
     private var list: some View {
+        ScrollViewReader { proxy in
         List {
             Section { header }
                 .listRowBackground(Color.clear)
@@ -100,6 +110,14 @@ struct AssistantProfileView: View {
                     row("Run History", Theme.Icon.recent, detail: runs.flatMap(\.first).map { AssistantRunText.statusWord($0) + " · " + Fmt.relative($0.at) })
                 }
                 NavigationLink { TaskTrustView() } label: { row("Auto-Start Tasks", Theme.Icon.taskTrust, detail: nil) }
+                NavigationLink { StandingAuthorizationsView() } label: {
+                    row("Standing Authorizations", Theme.Icon.standingAuthorization, detail: standingDetail)
+                }
+                .accessibilityIdentifier("assistant-standing-authorizations")
+                if AgentFollowUpModel.offered(model.assistantConfig) {
+                    NavigationLink { AgentFollowUpView() } label: { row("Agent Follow-Up", Theme.Icon.supervised, detail: nil) }
+                        .accessibilityIdentifier("assistant-agent-follow-up")
+                }
             } header: {
                 Text("On Its Own")
             } footer: {
@@ -120,6 +138,17 @@ struct AssistantProfileView: View {
             } footer: {
                 Text("“About Me” is what you tell Persona; “Memory” is what it notes down on its own in chats. You can edit both.")
             }
+            Section {
+                NavigationLink { SavedPromptsView() } label: {
+                    row("Saved Prompts", Theme.Icon.quickCommands, detail: savedPromptsDetail)
+                }
+                .accessibilityIdentifier("assistant-saved-prompts")
+            } header: {
+                Text("In Chats")
+            } footer: {
+                Text(Self.savedPromptsFooter)
+            }
+            .id("assistant-in-chats")
             if let quiet = quietTasks {
                 Section {
                     Toggle(isOn: quiet) {
@@ -142,6 +171,28 @@ struct AssistantProfileView: View {
                     Text(Self.foldFooter)
                 }
             }
+            if let recent = recentTaskChats {
+                Section {
+                    Toggle(isOn: recent) {
+                        Label(Self.recentTitle, systemImage: Theme.Icon.schedule).lineLimit(1)
+                    }
+                    .accessibilityIdentifier("assistant-recent-task-chats")
+                } header: {
+                    Text(Self.recentHeading)
+                } footer: {
+                    Text(Self.recentFooter)
+                }
+            }
+            if ownerApprovalOffered {
+                Section {
+                    NavigationLink { OwnerApprovalSettingsView() } label: {
+                        row("Exact Approval Replies", Theme.Icon.standingAuthorization, detail: nil)
+                    }
+                    .accessibilityIdentifier("assistant-owner-approval-settings")
+                } footer: {
+                    Text("Approve one displayed batch with an exact reply. No standing permission.")
+                }
+            }
             #if os(iOS)
             if let suggestions = nextSuggestions {
                 Section {
@@ -155,16 +206,6 @@ struct AssistantProfileView: View {
                 }
             }
             #endif
-            if let own = ownTasks {
-                Section {
-                    Toggle(isOn: own) {
-                        Label(Self.ownTasksTitle, systemImage: Theme.Icon.supervised).lineLimit(1).minimumScaleFactor(0.8)
-                    }
-                    .accessibilityIdentifier("assistant-main-supervises-own-tasks")
-                } footer: {
-                    Text(Self.ownTasksFooter)
-                }
-            }
             Section {
                 NavigationLink { SkillsPage() } label: { row("Skills", Theme.Icon.skills, detail: nil) }
                 LabeledContent("Runs On", value: machineName)
@@ -188,6 +229,14 @@ struct AssistantProfileView: View {
             }
         }
         .themedPage()
+        #if DEBUG
+        .task { // `-openAssistantPage promptsEntry`: scrolled to In Chats, for screenshots of the Saved Prompts row
+            guard UserDefaults.standard.string(forKey: "openAssistantPage") == "promptsEntry" else { return }
+            try? await Task.sleep(for: .seconds(2))
+            proxy.scrollTo("assistant-in-chats", anchor: .center)
+        }
+        #endif
+        }
     }
 
     /// The BeautifulUI style: its list cards, a heading over each and a note under it.
@@ -211,6 +260,14 @@ struct AssistantProfileView: View {
                         buiRow("Run History", Theme.Icon.recent, detail: runs.flatMap(\.first).map { AssistantRunText.statusWord($0) + " · " + Fmt.relative($0.at) })
                     }
                     NavigationLink { TaskTrustView() } label: { buiRow("Auto-Start Tasks", Theme.Icon.taskTrust, detail: nil) }
+                    NavigationLink { StandingAuthorizationsView() } label: {
+                        buiRow("Standing Authorizations", Theme.Icon.standingAuthorization, detail: standingDetail)
+                    }
+                    .accessibilityIdentifier("assistant-standing-authorizations")
+                    if AgentFollowUpModel.offered(model.assistantConfig) {
+                        NavigationLink { AgentFollowUpView() } label: { buiRow("Agent Follow-Up", Theme.Icon.supervised, detail: nil) }
+                            .accessibilityIdentifier("assistant-agent-follow-up")
+                    }
                 }
                 BUIListSection(String(localized: "Knowing You"), footer: String(localized: "“About Me” is what you tell Persona; “Memory” is what it notes down on its own in chats. You can edit both.")) {
                     NavigationLink { AssistantNotesView() } label: {
@@ -222,6 +279,12 @@ struct AssistantProfileView: View {
                     NavigationLink { SavedPlacesView() } label: {
                         buiRow("Saved Places", Theme.Icon.place, detail: placesDetail)
                     }
+                }
+                BUIListSection(String(localized: "In Chats"), footer: Self.savedPromptsFooter) {
+                    NavigationLink { SavedPromptsView() } label: {
+                        buiRow("Saved Prompts", Theme.Icon.quickCommands, detail: savedPromptsDetail)
+                    }
+                    .accessibilityIdentifier("assistant-saved-prompts")
                 }
                 if let quiet = quietTasks {
                     BUIListSection(String(localized: "Task Notifications"), footer: Self.quietFooter) {
@@ -239,6 +302,22 @@ struct AssistantProfileView: View {
                         }
                     }
                 }
+                if let recent = recentTaskChats {
+                    BUIListSection(Self.recentHeading, footer: Self.recentFooter) {
+                        BUIListRow(Self.recentTitle) { IconTile(Theme.Icon.schedule, tint: Theme.accent) } trailing: {
+                            Toggle(Self.recentTitle, isOn: recent).labelsHidden()
+                                .accessibilityIdentifier("assistant-recent-task-chats")
+                        }
+                    }
+                }
+                if ownerApprovalOffered {
+                    BUIListSection(String(localized: "Exact Approval Replies")) {
+                        NavigationLink { OwnerApprovalSettingsView() } label: {
+                            buiRow("Exact Approval Replies", Theme.Icon.standingAuthorization, detail: nil)
+                        }
+                        .accessibilityIdentifier("assistant-owner-approval-settings")
+                    }
+                }
                 #if os(iOS)
                 if let suggestions = nextSuggestions {
                     BUIListSection(footer: Self.nextSuggestionsFooter) {
@@ -250,14 +329,6 @@ struct AssistantProfileView: View {
                     }
                 }
                 #endif
-                if let own = ownTasks {
-                    BUIListSection(footer: Self.ownTasksFooter) {
-                        BUIListRow(Self.ownTasksTitle) { IconTile(Theme.Icon.supervised, tint: Theme.accent) } trailing: {
-                            Toggle(Self.ownTasksTitle, isOn: own).labelsHidden()
-                                .accessibilityIdentifier("assistant-main-supervises-own-tasks")
-                        }
-                    }
-                }
                 BUIListSection(String(localized: "Settings"), footer: String(localized: "Each chat runs Claude in the background in this directory on \(machineName), outside herdr. Choose the model in Settings › Models › Main Chat; change it for a single chat from that chat's menu.")) {
                     NavigationLink { SkillsPage() } label: { buiRow("Skills", Theme.Icon.skills, detail: nil) }
                     BUIListRow(String(localized: "Runs On"), value: machineName)
@@ -352,6 +423,22 @@ struct AssistantProfileView: View {
     private static let foldTitle = String(localized: "Fold background rounds")
     private static let foldFooter = String(localized: "Rounds that another conversation, a scheduled task or a follow-up started in the main chat or a leader conversation show as one line you can open. Rounds that ask or tell you something stay shown.")
 
+    /// The sidebar's Recent lists the scheduled tasks' chats too (#8324), one value for all of the user's devices; nil
+    /// (no switch) from a hub without the setting. All Chats' menu has the same switch (`AutoConversationsView`).
+    private var recentTaskChats: Binding<Bool>? {
+        guard let on = model.assistantConfig?.recentTaskChats else { return nil }
+        return Binding(get: { on }, set: { v in Task { await model.setRecentTaskChats(v) } })
+    }
+    static let recentHeading = String(localized: "Sidebar's Recent")
+    static let recentTitle = String(localized: "Show Scheduled Task Chats")
+    private static let recentFooter = String(localized: "Chats your scheduled tasks and the background supervisor start also appear in the sidebar's Recent, by time. All your devices follow.")
+
+    /// An older hub omits all three fields, so it gets no new settings entry or local-only switch.
+    private var ownerApprovalOffered: Bool {
+        model.assistantConfig?.ownerReplyApproval != nil && model.assistantConfig?.persistentOwnerActionCards != nil &&
+            model.assistantConfig?.ownerReplyApprovalPhrases != nil
+    }
+
     /// JSON-object probe payload; the UI-test reader cannot encode a top-level Bool back to JSON.
     private struct NextSuggestionsProbe: Equatable, Encodable {
         var loaded: Bool
@@ -371,15 +458,6 @@ struct AssistantProfileView: View {
     private static let nextSuggestionsTitle = String(localized: "Suggest the Next Message")
     private static let nextSuggestionsFooter = String(localized: "After a reply in a chat you have open, a small model suggests what you might send next, above the empty message box. Claude Code in a terminal keeps its own suggestions. Uses one extra model call per reply; the model is set under Model configuration › Next-message suggestions.")
 
-    /// The main conversation follows up its own tasks instead of the background supervisor (#5083,
-    /// docs/assistant/unified-entry.md "Background supervisor"); nil (no switch) from a hub without the setting.
-    private var ownTasks: Binding<Bool>? {
-        guard let on = model.assistantConfig?.mainSupervisesOwnTasks else { return nil }
-        return Binding(get: { on }, set: { v in Task { await model.setMainSupervisesOwnTasks(v) } })
-    }
-    private static let ownTasksTitle = String(localized: "Main Chat Supervises Its Own Tasks")
-    private static let ownTasksFooter = String(localized: "While this is off, the background supervisor follows up the tasks Persona hands out, so the main chat answers you first.")
-
     // Where Persona asks before acting on your behalf: the Mac app asks in the app, iOS asks on the phone (#4068).
     // The push itself still goes to the iPhone, so "notify you" stays in both.
     #if os(macOS)
@@ -393,6 +471,15 @@ struct AssistantProfileView: View {
     private var upcoming: [AssistantUpcoming] {
         AssistantUpcoming.merge(tasks ?? []).prefix(3).map { $0 }
     }
+
+    /// Saved prompts (#9436): how many, once the list is read; nothing on an assistant without them.
+    private var savedPromptsDetail: String? {
+        let store = SavedPromptStore.shared
+        guard store.loaded, store.supported, !store.prompts.isEmpty else { return nil }
+        return String(localized: "\(store.prompts.count) saved", comment: "Saved prompts count on Assistant Profile")
+    }
+
+    static let savedPromptsFooter = String(localized: "Your own / prompts: the instructions you send again and again. Type / in any chat to use one.")
 
     private func row(_ title: LocalizedStringResource, _ symbol: String, detail: String?) -> some View {
         LabeledContent {
@@ -422,16 +509,26 @@ struct AssistantProfileView: View {
         async let h = try? api.scheduleRuns()
         async let m = try? api.assistantMemory()
         async let p = try? api.savedPlaces()
+        async let s = try? api.standingAuthorizations()
         // The switch shows once the hub says it has the setting (#1731): a hub updated since the app read it, too.
         let held = model.assistantConfig
-        if held?.mainTasksQuiet == nil || held?.mainBackgroundFolded == nil || held?.mainSupervisesOwnTasks == nil { await model.refreshAssistant() }
+        if held?.mainTasksQuiet == nil || held?.mainBackgroundFolded == nil || held?.mainSupervisesOwnTasks == nil || held?.recentTaskChats == nil ||
+            held?.ownerReplyApproval == nil || held?.persistentOwnerActionCards == nil || held?.ownerReplyApprovalPhrases == nil {
+            await model.refreshAssistant()
+        }
         tasks = await r
         runs = await h
         if let files = await m { memoryCount = files.filter { $0.name != AssistantMemoryEntry.index }.count }
         placeCount = (await p)?.count
+        standingCount = (await s)?.authorizations.count
         #if os(iOS)
         await suggestionsRead
         #endif
+    }
+
+    /// Standing Authorizations' row detail: how many there are, nothing when none.
+    private var standingDetail: String? {
+        standingCount.flatMap { $0 > 0 ? $0.formatted() : nil }
     }
 
     /// Saved Places' row detail: how many there are, nothing when none.

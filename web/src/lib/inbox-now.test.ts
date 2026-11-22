@@ -1,9 +1,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n } from "../i18n";
 import { fromLine, matches, type InboxFilter, type InboxItem } from "./inbox";
 import { nowText, rowMeta } from "./inbox-now";
+import { handOffContext, sourceLine } from "./inbox-page";
 
 const LANGS = ["en", "zh-Hans", "ja"] as const;
 type Lang = (typeof LANGS)[number];
@@ -38,8 +39,19 @@ const waitingAt = (lang: Lang, time: string) => ({
 })[lang];
 const clock = (d: Date) => `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 
+// The text depends on the machine's region and zone (formatLocale keeps the system's region when it is in the interface
+// language, so an en_AU machine wrote "3 Jan" where the fixtures say "Jan 3", #7061): pin both for every case.
+const realZone = process.env.TZ;
+beforeEach(() => {
+  vi.stubGlobal("navigator", { language: "en-US", languages: ["en-US"] });
+  process.env.TZ = "UTC";
+});
+
 afterEach(async () => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
+  if (realZone === undefined) delete process.env.TZ;
+  else process.env.TZ = realZone;
   await initI18n("zh-Hans");
 }, 30_000);
 
@@ -86,6 +98,20 @@ for (const lang of LANGS) {
 }
 
 describe("older and newer hubs", () => {
+  it("shows the source mailbox with the mail preview, including its translation", async () => {
+    await initI18n("en");
+    const mail = (mailbox?: string) => item({ source: "mail", kind: "mail", account: "demo", account_name: "Example mail", sender: "Alex", preview: "Update",
+      mail: { account_id: "demo", mailbox, uids: [7] } });
+    expect(rowMeta(mail("Projects/通知"))).toBe("Projects/通知 · Alex: Update");
+    expect(rowMeta(mail("Projects/通知"), "Translated")).toBe("Projects/通知 · Alex: Translated");
+    expect(sourceLine(mail("Projects/通知"))).toBe("Example mail · Projects/通知 · Alex");
+    expect(handOffContext(mail()).text).toContain("INBOX");
+    expect(rowMeta(mail(" INBOX "))).toBe(" INBOX  · Alex: Update");
+    for (const mailbox of [undefined, "INBOX", "InBoX", ""]) {
+      expect(rowMeta(mail(mailbox))).toBe("Alex: Update");
+    }
+  });
+
   it("leaves the app's own words in place without now or for an unknown key", () => {
     expect(nowText(item())).toBeUndefined();
     for (const now of ["a_future_state", "tomorrow", "next", "look_again", "waiting_anyone", "failed_plain"]) {

@@ -237,7 +237,7 @@ func (s *Service) runAutoReview(ctx context.Context, todoID string, run AutoRevi
 		s.cleanAutoReview(ctx, run)
 		return
 	}
-	if err := s.linkReviewer(ctx, todoID, run.MachineID, sid, snap.Path, run.ID); err != nil {
+	if err := s.linkReviewer(ctx, todoID, run.MachineID, sid, snap.Path, res.Session.Agent, run.ID); err != nil {
 		s.logf("task %s: review %s: link %s: %v", todoID, run.ID, short(sid), err)
 	}
 	s.publishSoon() // the reviewer leaves the session lists
@@ -269,11 +269,11 @@ func (s *Service) updateAutoReview(ctx context.Context, todoID, id string, chang
 }
 
 // linkReviewer records the reviewer on the todo (sourceReview, released: see above).
-func (s *Service) linkReviewer(ctx context.Context, todoID, mid, sid, cwd, via string) error {
+func (s *Service) linkReviewer(ctx context.Context, todoID, mid, sid, cwd, agent, via string) error {
 	now := time.Now().UTC()
 	title := "review"
 	if st := s.supervisionDB(); st != nil && s.todoDB() != nil {
-		if err := st.LinkTodoReviewer(ctx, todoID, mid, sid, title, cwd, via, now); err != nil {
+		if err := st.LinkTodoReviewer(ctx, todoID, mid, sid, title, cwd, agent, via, now); err != nil {
 			return err
 		}
 	}
@@ -285,7 +285,7 @@ func (s *Service) linkReviewer(ctx context.Context, todoID, mid, sid, cwd, via s
 		}
 		if !found {
 			t.Agents = append(t.Agents, TodoAgent{MachineID: mid, SessionID: sid, LinkedAt: now, ReleasedAt: &now, Title: title, Cwd: cwd,
-				Source: sourceReview, Via: via})
+				Agent: agent, Source: sourceReview, Via: via})
 		}
 	}
 	s.todos.mu.Unlock()
@@ -483,11 +483,11 @@ func (s *Service) endAutoReview(ctx context.Context, todoID, id string, e review
 		}
 		switch {
 		case a.State == autoCancelled:
-		case a.State == autoBlocking && v.Round < maxReworkRounds:
-			v.Round++
+		case a.State == autoBlocking && v.stalledReworkRounds() < maxReworkRounds && v.Round < maxTotalReworkRounds:
+			round, stalled := v.applyReworkAccounting("")
 			v.State = reviewRework
-			v.Reviews = append(v.Reviews, TaskReview{At: now, Verdict: reviewRework, By: reviewerBy, Round: v.Round,
-				Note: clip(a.Findings, 2000)})
+			v.Reviews = append(v.Reviews, TaskReview{At: now, Verdict: reviewRework, By: reviewerBy, Round: round,
+				StalledReworkRounds: stalled, Note: clip(a.Findings, 2000)})
 			if len(v.Reviews) > 20 {
 				v.Reviews = v.Reviews[len(v.Reviews)-20:]
 			}
@@ -509,7 +509,11 @@ func (s *Service) endAutoReview(ctx context.Context, todoID, id string, e review
 	s.logf("task %s: review %s: %s (%d findings, %d blocking) %s", todoID, id, ended.State, ended.Count, ended.Blocking, ended.Error)
 	switch {
 	case rework:
-		text := prompts.RenderSuperviseReviewRework(prompts.SuperviseReviewRework{Round: v.Round, Max: maxReworkRounds,
+		displayMax := maxReworkRounds
+		if v.Round > maxReworkRounds {
+			displayMax = maxTotalReworkRounds
+		}
+		text := prompts.RenderSuperviseReviewRework(prompts.SuperviseReviewRework{Round: v.Round, Max: displayMax,
 			Count: ended.Count, Blocking: ended.Blocking, Findings: ended.Findings})
 		if t, ok := s.todoNow(todoID); !ok {
 			break
@@ -591,7 +595,8 @@ func (s *Service) autoReviewWorking(ctx context.Context, t Todo) {
 // cancelled; ended ones get their reviewer and copy taken away.
 func (s *Service) autoReviewTick(ctx context.Context, now time.Time) {
 	cfg := s.reviewConfig(ctx)
-	for _, t := range s.todosOf(ctx, "*") {
+	runs := s.todosWhere(ctx, "*", func(t *Todo) bool { return t.Supervision != nil && t.Supervision.AutoReview != nil })
+	for _, t := range runs {
 		v := t.Supervision
 		if v == nil || v.AutoReview == nil {
 			continue
@@ -683,10 +688,22 @@ func (s *Service) reviewerSessionsLocked() map[[2]string]bool {
 			}
 		}
 	}
+	for _, e := range mustSessionReviews(s) {
+		if e.ReviewerID != "" {
+			if out == nil {
+				out = map[[2]string]bool{}
+			}
+			out[[2]string{e.MachineID, e.ReviewerID}] = true
+		}
+	}
 	return out
 }
 
-// isReviewer: machine's sid is a review's reviewer.
+// mustSessionReviews returns the persisted explicit-review records when the store can be read, otherwise none.
+func mustSessionReviews(s *Service) []sessionReview {
+	reviews, _ := s.sessionReviewRecords(context.Background())
+	return reviews
+}
 func (s *Service) isReviewer(machine, sid string) bool {
 	return s.reviewerSessions()[[2]string{machine, sid}]
 }

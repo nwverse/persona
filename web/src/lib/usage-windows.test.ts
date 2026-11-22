@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { countdown, fullest, liveAccounts, pace, planNote, resetLabel, sampleAge, sourceNames, topAccounts, windowKey, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
+import { initI18n } from "../i18n";
+import { balanceAccounts, balanceEmpty, balanceText } from "./usage-balance";
+import { accountPace, countdown, fullest, isBalanceAccount, liveAccounts, pace, planNote, resetLabel, sampleAge, sourceNames, topAccounts, windowKey, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
 
 const NOW = new Date(2026, 10, 5, 10, 0, 0).getTime(); // local time, so same-day checks do not depend on the zone
 const at = (ms: number) => new Date(NOW + ms).toISOString();
@@ -45,17 +47,32 @@ describe("pace", () => {
   });
 });
 
+describe("accountPace", () => {
+  it("is the window's pace for a fresh reading", () => {
+    expect(accountPace({}, win("5h", 300, 50, 3 * H), NOW)).toEqual({ expected: 40, state: "over" });
+    expect(accountPace({ stale: false }, win("5h", 300, 30, 3 * H), NOW)?.state).toBe("under");
+  });
+  it("says nothing for an out-of-date reading (#12411)", () => {
+    expect(accountPace({ stale: true }, win("5h", 300, 50, 3 * H), NOW)).toBeNull();
+    expect(accountPace({ stale: true }, win("7d", 10080, 100, 4 * 24 * H), NOW)).toBeNull();
+  });
+});
+
 describe("countdown", () => {
   it("is minutes within the hour", () => {
-    expect(countdown(at(45 * 60_000), NOW)).toBe("45m");
-    expect(countdown(at(30_000), NOW)).toBe("1m");
+    expect(countdown(at(45 * 60_000), NOW)).toBe("45 分钟");
+    expect(countdown(at(30_000), NOW)).toBe("1 分钟");
   });
   it("is the clock time later the same day", () => {
     expect(countdown(at(3 * H + 5 * 60_000), NOW)).toBe("13:05");
   });
-  it("is days and hours beyond today", () => {
-    expect(countdown(at(2 * 24 * H + 3 * H), NOW)).toBe("2d 3h");
-    expect(countdown(at(15 * H), NOW)).toBe("15h"); // tomorrow, under a day
+  it("is days and hours beyond today, in the language's own units", () => {
+    expect(countdown(at(2 * 24 * H + 3 * H), NOW)).toBe("2 天 3 小时");
+    expect(countdown(at(15 * H), NOW)).toBe("15 小时"); // tomorrow, under a day
+  });
+  it("leaves out a zero hour", () => {
+    expect(countdown(at(5 * 24 * H), NOW)).toBe("5 天");
+    expect(countdown(at(5 * 24 * H + 30 * 60_000), NOW)).toBe("5 天"); // the hours are whole: 30 minutes over is still 5 days
   });
   it("handles a due or missing time", () => {
     expect(countdown(at(-1000), NOW)).toBe("即将重置");
@@ -66,11 +83,25 @@ describe("countdown", () => {
 
 describe("reset phrase", () => {
   it("is relative for minutes and days, a clock time for later today", () => {
-    expect(resetLabel(at(45 * 60_000), NOW)).toBe("45m 后重置");
+    expect(resetLabel(at(45 * 60_000), NOW)).toBe("45 分钟后重置");
     expect(resetLabel(at(3 * H + 5 * 60_000), NOW)).toBe("13:05 重置");
-    expect(resetLabel(at(2 * 24 * H + 3 * H), NOW)).toBe("2d 3h 后重置");
+    expect(resetLabel(at(2 * 24 * H + 3 * H), NOW)).toBe("2 天 3 小时后重置");
+    expect(resetLabel(at(5 * 24 * H), NOW)).toBe("5 天后重置");
     expect(resetLabel(at(-1), NOW)).toBe("即将重置");
     expect(resetLabel(undefined, NOW)).toBe("");
+  });
+  // each language its own units: no Latin unit letters in Chinese ("55m", "2d 3h") and no zero hour ("5d 0h")
+  it.each([
+    ["en", ["Resets in 45m", "Resets in 2d 3h", "Resets in 5d", "Resets in 15h"]],
+    ["ja", ["45分後にリセット", "2日3時間後にリセット", "5日後にリセット", "15時間後にリセット"]],
+    ["zh-Hans", ["45 分钟后重置", "2 天 3 小时后重置", "5 天后重置", "15 小时后重置"]],
+  ])("reads naturally in %s", async (lang, want) => {
+    await initI18n(lang);
+    try {
+      expect([45 * 60_000, 2 * 24 * H + 3 * H, 5 * 24 * H, 15 * H].map((ms) => resetLabel(at(ms), NOW))).toEqual(want);
+    } finally {
+      await initI18n("zh-Hans");
+    }
   });
 });
 
@@ -135,5 +166,34 @@ describe("accounts with several sources and per-model windows (#2595)", () => {
   });
   it("tells windows of one length apart by model", () => {
     expect(windowKey(win("7d", 10080, 1))).not.toBe(windowKey({ ...win("7d", 10080, 1), model: "Fable" }));
+  });
+});
+
+describe("prepaid balances (#11825)", () => {
+  const bal = (id: string, amount: string, o: Partial<UsageAccount> = {}): UsageAccount => ({ id, provider: "deepseek", name: id, windows: [], sampled_at: at(-60_000), balance: { amount, currency: "CNY" }, ...o });
+  it("keeps a balance account without windows, and it takes no bar place from a window account", () => {
+    const got = liveAccounts([bal("ds", "12.34"), account("ok", 10)], NOW);
+    expect(got.map((a) => a.id)).toEqual(["ds", "ok"]);
+    expect(isBalanceAccount(got[0])).toBe(true);
+    expect(balanceAccounts(got).map((a) => a.id)).toEqual(["ds"]);
+    expect(topAccounts(got).map((a) => a.id)).toEqual(["ok"]);
+    expect(balanceText(got[0].balance!)).toBe("CNY 12.34");
+  });
+  it("leaves a DeepSeek account that reports windows as an ordinary bar account", () => {
+    const gateway: UsageAccount = { id: "ds-window", provider: "deepseek", name: "DeepSeek gateway", windows: [win("7d", 10080, 10, 24 * H)], sampled_at: at(-60_000) };
+    expect(isBalanceAccount(gateway)).toBe(false);
+    expect(balanceAccounts([gateway])).toEqual([]);
+    expect(topAccounts([gateway]).map((a) => a.id)).toEqual(["ds-window"]);
+  });
+  it("keeps a genuine zero apart from a failed read", () => {
+    const zero = bal("ds", "0.00");
+    const failed: UsageAccount = { ...bal("ds", "0.00"), balance: undefined, problem: "unreachable" };
+    expect(balanceEmpty(zero.balance!)).toBe(true);
+    expect(liveAccounts([zero], NOW)[0].balance?.amount).toBe("0.00");
+    const kept = liveAccounts([failed], NOW);
+    expect(kept).toHaveLength(1);
+    expect(kept[0].balance).toBeUndefined();
+    expect(kept[0].problem).toBe("unreachable");
+    expect(isBalanceAccount(kept[0])).toBe(true); // the provider still names a balance row, so the popover can say why
   });
 });

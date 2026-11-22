@@ -2,6 +2,7 @@ import SwiftUI
 #if canImport(UIKit)
 import UIKit
 #endif
+import PersonaWire
 
 // Native rendering of `documents/read?format=json` (ProseMirror-style nodes, see the Lark gateway's
 // src/server/lark/domains/documents-content.ts for what each docx block becomes). Used when the owner forbids
@@ -362,7 +363,8 @@ struct FeishuDocsBlock: View {
                 if !assignees.isEmpty || node.attr("due") != nil {
                     HStack(spacing: Theme.Space.sm) {
                         ForEach(Array(assignees.prefix(3).enumerated()), id: \.offset) { _, p in
-                            LarkAvatarImage(name: p.name, url: p.avatarUrl.map(context.media), size: 16)
+                            LarkAvatarImage(name: p.name, url: p.avatarUrl, size: 16)
+                                .environment(\.larkManager, context.manager)
                         }
                         if let d = node.attr("due").flatMap(JSON.parseDate) {
                             Text("Due \(d.formatted(.dateTime.month().day()))").font(Theme.Font.label).foregroundStyle(.secondary)

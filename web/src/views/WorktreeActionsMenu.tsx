@@ -1,8 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { byAttention } from "../lib/format";
-import { agentSort, byUpdated } from "../lib/agent-sort";
-import { storedValue } from "../lib/compatibility";
 import { NO_PINS, isPinned, pinnedSessions } from "../lib/pins";
 import { api, credentialOwner } from "../lib/api";
 import { MANAGER_HEADER } from "../lib/manager-choice";
@@ -110,8 +108,7 @@ export function ActiveWorktreeActions({ request, registry, onOpenWorkspace, sess
       if (seen.has(key)) return false;
       seen.add(key); return true;
     });
-    const compare = agentSort(storedValue("persona.agentSort")) === "updated" ? byUpdated : byAttention;
-    return [...pinnedSessions(unique, pins), ...unique.filter((session) => !isPinned(session, pins)).sort(compare)];
+    return [...pinnedSessions(unique, pins), ...unique.filter((session) => !isPinned(session, pins)).sort(byAttention)];
   }, [sessions, storeSessions, pins]);
   const agent = firstDirectWorktreeAgent(target, catalog, ordered);
   const changeView = (next: "rename" | "delete" | "close") => {
@@ -160,7 +157,7 @@ export function ActiveWorktreeActions({ request, registry, onOpenWorkspace, sess
   ];
   return <>
     {view === "menu" && <Menu anchor={request.at?.anchor || anchor} point={request.at?.point} onClose={close} align="right"
-      header={context.workspace?.title || target.label || t("worktree-actions.worktree")} items={items} />}
+      header={context.workspace?.title || target.label || t("worktree-actions.worktree")} headerAsWritten={Boolean(context.workspace?.title || target.label)} items={items} />}
     {view === "rename" && <RenameWorktreeDialog target={target} name={context.workspace?.title || target.label || ""} model={model} onClose={close} />}
     {(view === "delete" || view === "close") && <DeleteWorktreeDialog target={target} machineName={context.machine?.name} closeOnly={view === "close"} model={model} onClose={close} />}
   </>;

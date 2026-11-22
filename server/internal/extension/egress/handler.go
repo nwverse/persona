@@ -10,16 +10,27 @@ import (
 
 func (p *Proxy) handler(fixed string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ext := fixed
-		if ext == "" {
-			ext = p.who(r)
+		ext, chk := fixed, (*check)(nil)
+		switch {
+		case ext == "":
+			ext, chk = p.who(r)
 			if ext == "" {
 				w.Header().Set("Proxy-Authenticate", `Basic realm="persona"`)
 				http.Error(w, "persona: this proxy is for the hub's extensions", http.StatusProxyAuthRequired)
 				return
 			}
+		default:
+			chk = p.checkOf(r, fixed) // a sandbox's socket says who it is; a check's credential says which check
+			if bound, ok := r.Context().Value(runtimeCheckKey{}).(*check); ok {
+				chk = bound
+			} else if r.URL.Path == RuntimeFetchPath && chk == nil && credential(r) != "" {
+				// A runtime request with no credential is ordinary. A presented credential must name a live
+				// check of this extension, never fall back to that ordinary authority.
+				http.Error(w, "persona: settings check credential unavailable", http.StatusForbidden)
+				return
+			}
 		}
-		ctx, finish, live := p.requestLifetime(r.Context(), ext)
+		ctx, finish, live := p.requestLifetime(r.Context(), ext, chk)
 		if !live {
 			http.Error(w, "extension registration unavailable", http.StatusForbidden)
 			return
@@ -30,13 +41,16 @@ func (p *Proxy) handler(fixed string) http.Handler {
 		}
 		r = r.WithContext(ctx)
 		if fixed != "" && r.URL.Host == "" && r.URL.Path == RuntimeFetchPath {
-			p.runtimeFetch(w, r, fixed)
+			p.runtimeFetch(w, r, fixed, chk)
 			return
 		}
 		rule, ok := p.rule(ext)
 		if !ok {
 			http.Error(w, "persona: this extension is not running", http.StatusForbidden)
 			return
+		}
+		if chk != nil {
+			rule.Targets = chk.targets // what the proposed settings name, in place of the saved ones
 		}
 		broker, _ := r.Context().Value(runtimeFetchKey{}).(bool)
 		hostport := r.Host

@@ -29,7 +29,7 @@ const todos: Todo[] = [
 const sessions = [
   s("a", "working", "/code/weather"),
   s("b", "idle", "/code/weather"),
-  s("c", "idle", "/code/weather", { work: { phase: "blocked", on: "external", line: "CI" } }),
+  s("c", "idle", "/code/weather", { work: { phase: "blocked", on: "external", line: "CI", wait: "CI" } }),
   // on no to-do, started elsewhere and waiting on the user
   s("loose", "needs_you", "/code/report", { pane_id: "botmux:x" }),
   // on no to-do, opened by hand in a terminal
@@ -65,7 +65,8 @@ describe("By to-do's rows (#6458)", () => {
     const tree = buildTodoTree(sessions, machines, todos, { spaces: [], sessions: [] }, Date.now(), { keepEmpty: true });
     show(<TodoTreeView tree={tree} machines={machines} activeKey="" {...stable} />);
     const keys = [...host.querySelectorAll("[data-tree-branch]")].map((el) => el.getAttribute("data-tree-branch"));
-    expect(keys).toEqual(["todo:ship", "todo:ci", "todo:none"]);
+    // Stable title order, not the agents' activity rank: Submit for review, Ship 1.3, then no to-do.
+    expect(keys).toEqual(["todo:ci", "todo:ship", "todo:none"]);
     for (const key of keys) {
       // a sticky group heading of the list's top level, never inside another branch
       expect(row(key!).closest("[data-sidebar-group-heading]")).not.toBeNull();
@@ -78,13 +79,26 @@ describe("By to-do's rows (#6458)", () => {
     expect([...host.querySelectorAll("[data-tree-branch-row]")].map((el) => el.textContent).join(" ")).not.toMatch(/weather|report/);
     // count, then state: the to-do's in the To-dos page's word, a group's the most urgent of its agents'
     expect(row("todo:ship").textContent).toMatch(/2 个 Agent工作中$/);
-    expect(row("todo:ci").textContent).toMatch(/1 个 Agent等待中$/);
+    // a waiting one says what it waits on, in the neutral tone: nothing is the owner's (#11090)
+    expect(row("todo:ci").textContent).toMatch(/1 个 Agent等外部$/);
+    expect(row("todo:ci").querySelector("[data-tree-state]")!.className).toContain("text-ink-2");
     expect(row("todo:none").textContent).toMatch(/^没挂待办的.*2 个 Agent需要你$/);
   });
 
   it("an empty group says 0 and no state", () => {
     show(<TodoTreeView tree={buildTodoTree(onTodos, machines, todos, { spaces: [], sessions: [] }, Date.now(), { keepEmpty: true })} machines={machines} activeKey="" {...stable} />);
     expect(row("todo:none").textContent).toMatch(/^没挂待办的.*0 个 Agent$/);
+  });
+
+  it("says 完成未看 over a finished agent not looked at yet, as its row and By status do, not 已完成", () => {
+    const unseen = [...onTodos, s("done", "unread", "/code/notes"), s("seen", "idle", "/code/notes")];
+    show(<TodoTreeView tree={buildTodoTree(unseen, machines, todos, { spaces: [], sessions: [] }, Date.now())} machines={machines} activeKey="" {...stable} />);
+    expect(row("todo:none").textContent).toMatch(/^没挂待办的.*2 个 Agent完成未看$/);
+    // Recent (not running) as the sidebar draws it under By to-do: its agents stopped
+    act(() => root.unmount());
+    root = createRoot(host);
+    show(<GroupBranch branch="recent" name="最近（未运行）" icon="history" n={1} state="done" label="未运行" folded onToggle={() => {}}>{null}</GroupBranch>);
+    expect(row("recent").textContent).toMatch(/1 个 Agent未运行$/);
   });
 
   it("puts the agents opened in a terminal in the same group, each row ending with the Terminal source mark (#6591)", () => {
@@ -112,9 +126,8 @@ describe("By to-do's rows (#6458)", () => {
     const tree = buildTodoTree(onTodos, machines, todos, { spaces: [], sessions: [] }, Date.now(), { keepEmpty: true });
     const hint = tree.loose[0]!.hint;
     show(<TodoTreeView tree={tree} machines={machines} activeKey="" {...stable} />);
-    const list = branch("todo:none").querySelector("[data-tree-branch-list]")!;
-    // folded: inert, nothing for a reader to land on
-    expect(list.closest("[inert]") ?? list.getAttribute("inert")).not.toBeNull();
+    // folded: nothing under it at all, so nothing for a reader to land on (a folded group mounts no rows)
+    expect(branch("todo:none").querySelector("[data-tree-branch-list]")).toBeNull();
     const info = row("todo:none").querySelector<HTMLButtonElement>('button[aria-label="关于「没挂待办的」"]')!;
     expect(info.hasAttribute("aria-expanded")).toBe(false);
     // the tip's words load the first time an ⓘ is asked (InfoTipPanel)
@@ -126,7 +139,7 @@ describe("By to-do's rows (#6458)", () => {
     act(() => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
     expect(document.querySelector('[role="tooltip"]')).toBeNull();
     act(() => chevron("todo:none").click());
-    expect(list.textContent).toBe(hint);
+    expect(branch("todo:none").querySelector("[data-tree-branch-list]")!.textContent).toBe(hint);
   });
 
   it("draws the groups as sections beside the sections of By pinned", () => {

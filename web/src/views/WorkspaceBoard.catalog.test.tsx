@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setToken } from "../lib/api";
 import { refresh, reset } from "../lib/store";
+import { setRosterDefault } from "../lib/manager-choice";
 import { useWorkspaceCatalog, type HostWorkspace } from "../lib/workspace-catalog";
 import type { BoardMutation, BoardState } from "../lib/workspace-board";
 import { WorkspaceBoard } from "./WorkspaceBoard";
@@ -46,6 +47,7 @@ const open = async () => {
 
 beforeEach(() => {
   localStorage.clear(); reset(); setToken("board-catalog-fixture");
+  setRosterDefault("assistant");
   inventory = []; reads = [];
   board = { revision: 1, columns: [{ id: "todo", title: "Todo" }], cards: [], can_write: true };
   vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {

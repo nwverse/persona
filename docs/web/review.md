@@ -77,6 +77,7 @@ between hunks right.
 | Code | When |
 | --- | --- |
 | `not_git` | `cwd` is not in a Git repository |
+| `no_folder` | `cwd` is not there: moved or deleted, such as a removed worktree (#8733). A node from before it says `not_git` |
 | `bad_scope` | a scope other than the three, or `commit` without a `base` |
 | `bad_base` | `base` is not a commit (or branch) of the repository; also a `base` starting with `-` or holding `:` or a space |
 | `no_default_branch` | `branch` without a `base`, and none of the default branch names exists |
@@ -93,6 +94,12 @@ Tests: `server/internal/node/gitreview_test.go` runs against real repositories, 
 files, binaries, deletions, odd names (spaces, a tab, CJK), generated files, a conflict, a detached `HEAD`, no default
 branch, unrelated histories, no commit yet, guarded files and files too big for a page.
 `server/internal/hub/gitreview_test.go` covers the relay, the refusals and an old node.
+
+The answer leaves out what is empty (`omitempty`): a hunk with no function context has no `header` (every hunk of a new
+file), a repository with no commit yet a `base` with no `hash`. A client reads both as empty: one header-less hunk used
+to fail the whole review on iOS while the mock, which always sent them, passed (#8733). `spec/fixtures/review/answers.json`
+holds real answers, written by the node's `TestGitReviewWireFixture` (rewrite with `-update`) and decoded by
+`ReviewLogicTests`; the mock leaves out an empty `header` too.
 
 ## Web: the Review panel
 
@@ -130,12 +137,35 @@ branch, unrelated histories, no commit yet, guarded files and files too big for 
 - **When the agent changes files** (`fs_changed` for Git), a bar says so and offers **Refresh**: the diff doesn't move
   under the reader.
 - **States:** reading; nothing changed (Uncommitted offers the branch, Branch offers Uncommitted); not a repository;
-  an old node; no default branch and no merge base (both offer Uncommitted); a commit or branch that isn't there; any
+  a folder that is gone (both name the folder); an old node; no default branch and no merge base (both offer Uncommitted); a commit or branch that isn't there; any
   other failure with Retry. A chat that takes no messages shows the review read-only.
+
+## Independent reviewer (#1808)
+
+The manual panel above and the independent reviewer are separate actions. With hub feature `session_review`, ⋯ in an
+Agent chat also offers **Review this work**. Opening the menu reads `GET /api/v1/sessions/{mid}/{sid}/review`; it never
+starts a review. The entry is disabled while the Agent is busy or starting, another answer is pending, a review is
+running, availability is being read, or `has_changes` is false. A finished review card alone does not block a new review.
+
+Choosing the entry gives immediate **Starting review…** feedback and POSTs the same route. Success confirms **Review
+requested**; a refusal shows the hub's localized words. The manager starts the fresh plan-mode reviewer in a disposable
+snapshot and supplies only the user's asks and the actual diff, never the source Agent's reasoning. See
+`docs/assistant/agent-work.md` ("Independent review of a session's work") for that safety boundary and persistence.
+
+The result arrives through the ordinary pending-card machinery as a question with `tool_name:
+"persona_session_review"`. The web draws the finding count (`review_count`, or the summary when no count is known), the
+full Markdown `review_report` in the same bounded scroll area a long plan uses, and the two explicit actions. **Send to
+agent** answers the source card with its existing Send option; the manager forwards the stored report once, not the
+browser. **Dismiss** answers with its defer option and sends nothing. A failed resolution leaves the card answerable.
+There is no free-answer field, notification quick answer, or hand-back action.
+
+Unit coverage: `ChatView.session-review.test.tsx` and `Interactions.session-review.test.tsx`. Browser coverage:
+`scripts/test/web_agent_review_e2e.py`, with `MOCK_AGENT_REVIEW=1 MOCK_REVIEW=1` and
+`scripts/mock/mock_agent_review.py`, at desktop and phone widths in light and dark, plus a 200% page-zoom capture.
 
 ## iOS: the review page
 
-`apple/Persona/Views/Session/ReviewPage.swift`, logic in `ReviewModel.swift` (`ReviewLogic`), API in `apple/Shared/GitReview.swift`. iPhone and iPad only: the Mac app is frozen (`docs/apple/mac.md`).
+`apple/Persona/Views/Session/ReviewPage.swift`, logic in `ReviewModel.swift` (`ReviewLogic`), API in `apple/Shared/GitReview.swift`. iPhone and iPad only: the native Mac app was frozen (`docs/archive/apple/mac.md`).
 
 - **Opening it:** ⋯ › **Review Changes** in an Agent's chat (the scope the session last used), or **Review** over the Git pane's change list (Uncommitted). Both only when the hub has `git_review` and the session has a folder. It is a sheet over the chat.
 - **What it draws:** every file's diff in one page with the extension code page's parts (`CodeDiffFileHeader`, `CodeHunkHeader`, `CodeDiffRow`). Generated and big files start folded; a big file waits for **Load Diff** and is asked for on its own with the base pinned (one `path`, so a renamed big file shows as added). Secrets, binaries, empty files and mode-only changes say so.
@@ -143,7 +173,7 @@ branch, unrelated histories, no commit yet, guarded files and files too big for 
 - **Comments:** a tap on a line's numbers opens the comment under it, and another tap in the same file moves the range's end ("Comment on lines 9–11 · Tap another line number to change the range"). It has **Start a Review** / **Add to Review** (a draft), **Comment Now** (a card over the chat's message box, `AppModel.composerComments`), **Suggest Change** (a `suggestion` block of the picked new lines) and **Cancel**. The page is a page-sized sheet, on the iPad too.
 - **Drafts** are kept per session on the device (`StateCache` `review-drafts`), drawn under their last line with **Delete**; an old-side draft from another diff shows as outdated.
 - **Finish Review** opens the summary: **Send Review** sends one message (drafts in file then line order as `Code comment N` blocks, then the summary; a failed send stays in the chat to resend); **Add to Message Box** puts the drafts over the box as cards and the summary in it; **Discard Drafts** asks first. The page closes after either.
-- **When the agent changes files** (`fs_changed` for Git) a bar offers **Refresh**. **States:** reading, nothing changed (Uncommitted offers the branch, Branch offers Uncommitted), not a repository, an old node, no default branch and no merge base (both offer Uncommitted), a commit that isn't there, any other failure with Retry; a chat that takes no messages shows the review read-only.
+- **When the agent changes files** (`fs_changed` for Git) a bar offers **Refresh**. **States:** reading, nothing changed (Uncommitted offers the branch, Branch offers Uncommitted), not a repository and a folder that is gone (both name the folder, `~`-shortened as the web does, with no Retry), an old node, no default branch, no merge base and a commit that isn't there (each offers Uncommitted), any other failure with Retry and the hub's words; an answer the app can't decode says to update the app, never Swift's own text (#8733). Since a Commit's list says when it can't be read (with Retry) or there is no commit yet; a chat that takes no messages shows the review read-only.
 - **Not yet on iOS:** the lines between hunks, word diffs, Hide whitespace, viewed marks and keyboard keys.
 
 The comment block names its diff in the `Diff:` line (`lib/comments.ts` `DiffScope` kind `review`):

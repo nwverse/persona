@@ -19,18 +19,19 @@ describe("cardFold", () => {
   const wide = { narrow: false, keyboard: false, open: false };
   const narrow = { narrow: true, keyboard: false, open: false };
 
-  it("shows every card on a wide screen, the keyboard or not", () => {
-    expect(cardFold(3, wide)).toEqual({ full: 3, summary: null });
-    expect(cardFold(3, { ...wide, keyboard: true })).toEqual({ full: 3, summary: null });
+  it("shows only the first card on a wide screen, the keyboard or not", () => {
+    expect(cardFold(3, wide)).toEqual({ full: 1, summary: null });
+    expect(cardFold(3, { ...wide, keyboard: true })).toEqual({ full: 1, summary: null });
+    expect(cardFold(3, { ...wide, open: true })).toEqual({ full: 3, summary: null });
   });
 
-  it("shows the first in full and 还有 N 件 for the rest on a narrow one", () => {
-    expect(cardFold(3, narrow)).toEqual({ full: 1, summary: { kind: "more", count: 2 } });
+  it("shows only the first in full, with no summary line, on a narrow one", () => {
+    expect(cardFold(3, narrow)).toEqual({ full: 1, summary: null });
     expect(cardFold(1, narrow)).toEqual({ full: 1, summary: null });
     expect(cardFold(0, narrow)).toEqual({ full: 0, summary: null });
   });
 
-  it("shows them all once 还有 N 件 is tapped", () => {
+  it("shows them all once the position chip is tapped", () => {
     expect(cardFold(3, { ...narrow, open: true })).toEqual({ full: 3, summary: null });
   });
 
@@ -106,6 +107,14 @@ describe("awaitingTurn (#3654)", () => {
     expect(awaitingTurn(seg({ answer: { id: "a" } }), "idle", at)).toBe(false);
     expect(awaitingTurn({ steps: [] } as never, "idle", at)).toBe(false);
     expect(awaitingTurn(undefined, "idle", at)).toBe(false);
+  });
+  it("holds working across early thought/tool pushes until the hub catches up or the same turn finishes", () => {
+    for (const step of [{ kind: "thinking" }, { kind: "tool" }]) {
+      const turn = seg({ steps: [step] });
+      expect(awaitingTurn(turn, "idle", at + 500, undefined, "2026-11-05T09:59:00Z")).toBe(true);
+      expect(awaitingTurn(turn, "idle", at + 500, undefined, "2026-11-05T10:00:01Z")).toBe(false);
+      expect(awaitingTurn(turn, "offline", at + 500)).toBe(false);
+    }
   });
   it("is off when the turn failed after the message, before writing anything (#3935)", () => {
     expect(awaitingTurn(seg(), "idle", at + 2_000, { since: "2026-11-05T10:00:01Z" })).toBe(false);

@@ -2,7 +2,8 @@
 // (GET /api/v1/launchers/presets: its built-in providers, then the extensions'), a compatible gateway typed by hand last.
 // A preset needs only ② the key: it is tested on its own (POST /launchers/test with the preset) and saved with
 // assign, and (3) says what now runs on it. The gateway goes (2) "Connect" (a display name in any language, address, auth, key, the
-// startup ID under "More options" where the hub makes one up, #5029; once address and key are in it fetches the models
+// startup ID under "More options" where the hub makes one up, #5029; optional request headers sit beside the checks,
+// and once address and key are in it fetches the models
 // and tests one by itself, and "Test connection" and "Fetch models" stay for doing it by hand; where the hub finds the
 // sign-in method, #5329, that check finds it, a line names it and the choice waits under "More options") (3) "Choose models"
 // (context window, thinking levels, the default; an ID typed by hand is looked up in the hub's catalog) and, for Claude Code, its tiers
@@ -51,7 +52,11 @@ import {
   fillFromCatalog,
   formFromView,
   formModel,
+  connectProblems,
+  firstConnectProblem,
   formProblems,
+  headerRuntimeHint,
+  headersProblem,
   hostOf,
   mergeDiscovered,
   legacyChatClears,
@@ -62,6 +67,7 @@ import {
   testModel,
   testText,
   withoutAutoAuth,
+  type ConnectField,
   type FormModel,
   type ProviderForm,
   type ProviderModel,
@@ -80,7 +86,7 @@ import { Button, cx, Dialog, Loading, Spinner, toast } from "../../ui/atoms";
 import { SearchField } from "../../ui/SearchField";
 import { Icon, type IconName } from "../../ui/icons";
 import { Segmented } from "../assistant/parts";
-import { InstallClaudeHelp } from "../assistant/Readiness";
+import { InstallClaudeHelp } from "../assistant/ReadinessHelp";
 import { Pill, Switch } from "./SettingsParts";
 import { AUTO_TEST_MS, BusyLine, CheckMark, Disclosure, FIELD, INPUT, KeyField, Labelled, LineAction, SecretField, SMALL, TextField } from "./ProviderFields";
 import { ProviderPaste } from "./ProviderPaste";
@@ -196,6 +202,13 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
   const moreRef = useRef<HTMLDivElement>(null);
   const authRef = useRef<HTMLDivElement>(null);
   const revealAuth = useRef(false);
+  // Next pressed on Connect with something wrong (audit item 19): each field says its own problem under it, and the
+  // first one's field takes the focus and comes into view (`flagged`, a new object per press)
+  const [tried, setTried] = useState(false);
+  const [flagged, setFlagged] = useState<{ field: ConnectField } | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  // the focus going to a flagged field: the address it leaves is not "entered" by that (a half-typed one stays waiting)
+  const flagging = useRef(false);
   // null: not touched, so it follows the readiness (off while Claude Code already answers)
   const [assignSet, setAssign] = useState<boolean | null>(null);
   const [keyTest, setKeyTest] = useState<KeyTest | null>(null);
@@ -314,7 +327,10 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
   };
 
   const set = <K extends keyof ProviderForm>(k: K) => (v: ProviderForm[K]) => setF((x) => ({ ...x, [k]: v }));
-  const problems = formProblems(f, isNew, !!old?.has_key, autoName);
+  const problems = formProblems(f, isNew, !!old?.has_key, autoName, !!old?.has_headers);
+  const fieldProblems = connectProblems(f, isNew, !!old?.has_key, autoName);
+  // what a field says under it once Next was pressed (the display name's and a typed startup ID's say it as typed)
+  const shownProblem = (k: ConnectField) => (tried ? fieldProblems[k] || undefined : undefined);
   // models were found for this connection: choosing them is what comes next
   const foundModels = !!found && !found.error && found.n > 0;
   const openAI = f.kind === "api" && (f.api === "responses" || f.api === "chat");
@@ -456,7 +472,24 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
   // Leaving the step is leaving the URL field (a field removed while focused never blurs).
   useEffect(() => {
     if (step !== "connect") setUrlTyping(false);
+    setTried(false);
   }, [step]);
+  // The field Next flagged takes the focus and is followed into view while a fold it is in opens, its problem with it.
+  useEffect(() => {
+    if (!flagged) return;
+    const box = formRef.current?.querySelector<HTMLElement>(`[data-provider-field="${flagged.field}"]`);
+    flagging.current = true;
+    box?.querySelector<HTMLElement>("input, textarea")?.focus({ preventScroll: true });
+    flagging.current = false;
+    const until = performance.now() + REVEAL_MS;
+    let frame = 0;
+    const follow = () => {
+      box?.scrollIntoView?.({ block: "nearest" });
+      if (performance.now() < until) frame = requestAnimationFrame(follow);
+    };
+    follow();
+    return () => cancelAnimationFrame(frame);
+  }, [flagged]);
 
   const save = async () => {
     if (busy || !canSave) return;
@@ -504,11 +537,15 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
   const at = steps.indexOf(step);
   const stepProblem = step === "connect" ? problems.connect : step === "models" ? problems.models || problems.advanced : step === "devices" ? devicesProblem : "";
   const next = () => {
-    if (stepProblem) {
-      // a startup ID that keeps the step from going on is shown where it was typed
-      if (step === "connect" && launcherNameProblem(f.name)) setMore(true);
-      return setError(stepProblem);
+    const field = step === "connect" ? firstConnectProblem(fieldProblems) : null;
+    if (field) {
+      // said by the field it is about, which takes the focus; a startup ID under "More options" opens it
+      if (field === "name") setMore(true);
+      setError("");
+      setTried(true);
+      return setFlagged({ field });
     }
+    if (stepProblem) return setError(stepProblem);
     setError("");
     setStep(steps[at + 1]);
   };
@@ -536,9 +573,9 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
     </Labelled>
   );
   const idField = (
-    <TextField label={t("settings-providerwizard.startup_id")} value={f.name} onChange={set("name")} disabled={!isNew} mono
+    <TextField field="name" label={t("settings-providerwizard.startup_id")} value={f.name} onChange={set("name")} disabled={!isNew} mono
       placeholder={!isNew ? undefined : autoName ? t("settings-providerwizard.startup_id_auto") : t("settings-providerwizard.name_placeholder", { example: "my_gateway" })}
-      error={isNew ? launcherNameProblem(f.name) : undefined} hint={isNew ? t("settings-providerwizard.startup_id_hint") : t("settings-providerwizard.startup_id_fixed")} />
+      error={shownProblem("name") ?? (isNew ? launcherNameProblem(f.name) : undefined)} hint={isNew ? t("settings-providerwizard.startup_id_hint") : t("settings-providerwizard.startup_id_fixed")} />
   );
 
   return (
@@ -597,6 +634,7 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
       }
     >
       <form
+        ref={formRef}
         className="flex flex-col gap-4"
         onSubmit={(e) => {
           e.preventDefault();
@@ -649,7 +687,7 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
         {step === "connect" && (
           <div className="flex flex-col gap-3">
             {/* left empty, the provider shows what the placeholder says (the hub names a new one after its host) */}
-            <TextField label={t("settings-providerwizard.display_name")} value={f.display_name} onChange={set("display_name")}
+            <TextField field="display_name" label={t("settings-providerwizard.display_name")} value={f.display_name} onChange={set("display_name")}
               placeholder={fallbackTitle(f, autoName) || t("settings-providerwizard.display_name_placeholder")} error={displayNameProblem(f.display_name)} hint={t("settings-providerwizard.display_name_hint")} />
             {!idInMore && idField}
             {isNew && (
@@ -673,7 +711,7 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
                 <Segmented<ProviderForm["api"]> wrap label={t("settings-providerwizard.api_protocol")} value={f.api} onChange={set("api")} options={[{ v: "messages", label: "Anthropic Messages" }, { v: "responses", label: "OpenAI Responses" }, { v: "chat", label: t("settings-providerwizard.protocol_chat") }]} />
               </Labelled>
             )}
-            <TextField label={t("settings-providerwizard.base_url")} value={f.base_url} mono inputMode="url" placeholder="https://…"
+            <TextField field="base_url" label={t("settings-providerwizard.base_url")} value={f.base_url} mono inputMode="url" placeholder="https://…" error={shownProblem("base_url")}
               onChange={(v) => {
                 // typed, or a paste into part of it; a paste over all of it is the address as the user has it
                 setUrlTyping(urlPaste.current === null || oneLine(urlPaste.current) !== v.trim());
@@ -689,10 +727,10 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
                 if (whole && oneLine(text) === el.value.trim()) setUrlTyping(false);
               }}
               // left for another field or the page; the window losing focus keeps the field focused, and the URL unfinished
-              onBlur={(e) => document.activeElement !== e.currentTarget && setUrlTyping(false)}
+              onBlur={(e) => !flagging.current && document.activeElement !== e.currentTarget && setUrlTyping(false)}
               hint={urlHint(f)} />
             {!openAI && !autoAuth && authField}
-            <KeyField label={isNew || !old?.has_key ? "API Key" : t("settings-providerwizard.key_keep")} value={f.api_key} onChange={set("api_key")} placeholder={old?.has_key ? t("settings-providerwizard.key_set") : "sk-…"} hint={f.key_by_reference ? undefined : t("settings-providerwizard.key_hint")}
+            <KeyField field="api_key" error={shownProblem("api_key")} label={isNew || !old?.has_key ? "API Key" : t("settings-providerwizard.key_keep")} value={f.api_key} onChange={set("api_key")} placeholder={old?.has_key ? t("settings-providerwizard.key_set") : "sk-…"} hint={f.key_by_reference ? undefined : t("settings-providerwizard.key_hint")}
               byReference={f.key_by_reference} stored={old?.key_reference}
               onByReference={keyRefs ? (on) => setF((x) => ({ ...x, key_by_reference: on, api_key: "" })) : undefined} />
             {f.kind === "api" && (
@@ -705,6 +743,7 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
                 </select>
               </Labelled>
             )}
+            <RequestHeaders f={f} setF={setF} hadHeaders={!!old?.has_headers} savedNames={old?.header_names} error={f.headers_touched ? headersProblem(f.headers) : ""} />
             <div className="flex flex-col gap-2 rounded-card bg-inset p-3 shadow-hairline">
                 <div className="flex flex-wrap items-center gap-2">
                   <input value={probeModel} onChange={(e) => setProbeModel(e.target.value)} placeholder={testModel(f) || t("settings-providerwizard.test_model")} aria-label={t("settings-providerwizard.test_model")} autoComplete="off" spellCheck={false}
@@ -752,7 +791,7 @@ export function ProviderWizard({ existing, onClose, onSaved, draft = null, link 
             {hasTiers(f) && <ClaudeTiers f={f} setF={setF} saved={!!old} open={tiersOpen} onToggle={() => setTiersOpen((o) => !o)} />}
             <Disclosure title={t("settings-providerwizard.advanced")} open={advanced} onToggle={() => setAdvanced((o) => !o)}
               badge={advanced ? undefined : hasTiers(f) ? t("settings-providerwizard.advanced_badge_claude") : t("settings-providerwizard.advanced_badge")}>
-              <Advanced f={f} setF={setF} set={set} hadHeaders={!!old?.has_headers} hadEnv={!!old?.has_env} />
+              <Advanced f={f} setF={setF} set={set} hadEnv={!!old?.has_env} />
             </Disclosure>
           </div>
         )}
@@ -1241,11 +1280,45 @@ function ModelRow({ m, showEffort, isDefault, onChange, onDefault }: { m: FormMo
   );
 }
 
-function Advanced({ f, setF, set, hadHeaders, hadEnv }: {
+function RequestHeaders({ f, setF, hadHeaders, savedNames, error }: {
+  f: ProviderForm;
+  setF: React.Dispatch<React.SetStateAction<ProviderForm>>;
+  hadHeaders: boolean;
+  savedNames?: string[];
+  error?: string;
+}) {
+  const names = hadHeaders && !f.headers_touched && savedNames?.length ? t("settings-providerwizard.headers_names", { names: savedNames.join(", ") }) : "";
+  return (
+    <SecretField
+      field="headers"
+      label={t("settings-providerwizard.headers")}
+      multiline
+      value={f.headers}
+      onChange={(v) => setF((x) => ({ ...x, headers: v, headers_touched: true }))}
+      placeholder={hadHeaders && !f.headers_touched ? t("settings-providerwizard.headers_set") : t("settings-providerwizard.headers_placeholder")}
+      error={error || undefined}
+      hint={
+        <span className="flex flex-col gap-1">
+          <span>{t(`settings-providerwizard.${headerRuntimeHint(f)}`)}</span>
+          <span>{t("settings-providerwizard.headers_hint")}</span>
+          {names && <span>{names}</span>}
+          {hadHeaders && !f.headers_touched ? (
+            <button type="button" onClick={() => setF((x) => ({ ...x, headers: "", headers_touched: true }))} className="touch-hit self-start text-red hover:underline">
+              {t("settings-providerwizard.headers_clear")}
+            </button>
+          ) : f.headers_touched && hadHeaders && !f.headers.trim() ? (
+            <span>{t("settings-providerwizard.headers_cleared")}</span>
+          ) : null}
+        </span>
+      }
+    />
+  );
+}
+
+function Advanced({ f, setF, set, hadEnv }: {
   f: ProviderForm;
   setF: React.Dispatch<React.SetStateAction<ProviderForm>>;
   set: <K extends keyof ProviderForm>(k: K) => (v: ProviderForm[K]) => void;
-  hadHeaders: boolean;
   hadEnv: boolean;
 }) {
   const list = useId();
@@ -1300,24 +1373,6 @@ function Advanced({ f, setF, set, hadHeaders, hadEnv }: {
           </div>
         </>
       )}
-      <SecretField
-        label={t("settings-providerwizard.headers")}
-        multiline
-        value={f.headers}
-        onChange={(v) => setF((x) => ({ ...x, headers: v, headers_touched: true }))}
-        placeholder={hadHeaders && !f.headers_touched ? t("settings-providerwizard.headers_set") : t("settings-providerwizard.headers_placeholder")}
-        hint={
-          hadHeaders && !f.headers_touched ? (
-            <button type="button" onClick={() => setF((x) => ({ ...x, headers: "", headers_touched: true }))} className="touch-hit text-red hover:underline">
-              {t("settings-providerwizard.headers_clear")}
-            </button>
-          ) : f.headers_touched && hadHeaders && !f.headers.trim() ? (
-            t("settings-providerwizard.headers_cleared")
-          ) : (
-            t("settings-providerwizard.headers_hint")
-          )
-        }
-      />
       <SecretField
         label={t("settings-providerwizard.env")}
         multiline

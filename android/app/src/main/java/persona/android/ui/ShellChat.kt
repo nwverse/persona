@@ -55,9 +55,25 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
         androidx.compose.material3.CircularProgressIndicator()
         return
     }
-    val key = SessionKey(route.machineId, route.sessionId)
     val sessions by session.sessions.sessions.collectAsStateWithLifecycle()
-    val metadata = sessions.firstOrNull { it.key == key }
+    val routingConnection = wiring?.connection ?: session.connection
+    val routingState by routingConnection.state.collectAsStateWithLifecycle()
+    val routingFeatures = routingConnection.lastHello?.features.orEmpty()
+    val home = rememberChildSessionHome(SessionKey(route.machineId, route.sessionId), sessions, actions,
+        routingFeatures, routingState == ConnectionState.Online, side = route.side)
+    // A link to a side session (#7944: a notification, Needs you, a search hit) opens its parent, then the side over it,
+    // once: Back from the side comes to the parent.
+    val landedSide = remember(home, sessions, routingFeatures) { home.shownSide(sessions, routingFeatures) }
+    var sideShown by rememberSaveable(route.machineId, route.sessionId, requestId) { mutableStateOf(false) }
+    LaunchedEffect(landedSide) {
+        val side = landedSide ?: return@LaunchedEffect
+        if (sideShown) return@LaunchedEffect
+        sideShown = true
+        val chat = ChatRoute(side.machineId, side.sessionId, ConversationKind.Agent, side = true)
+        navigator.navigate(requestId?.let { InteractionRoute(chat, it) } ?: chat)
+    }
+    val key = home.key
+    val metadata = (sessions + home.rows).firstOrNull { it.key == key }
     val managerChoice by AssistantManagerChoice.current.collectAsStateWithLifecycle()
     val managerId = metadata?.manager ?: managerChoice.shown
     val assistantManagement = remember(wiring?.assistantManagement, managerId) {
@@ -82,7 +98,6 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
     // Resume in Terminal (#5565): the cover resumes the stopped Agent as it comes up.
     var resumeOnOpen by rememberSaveable(route.machineId, route.sessionId) { mutableStateOf(false) }
     val resumer = remember(session) { SessionTerminalResumer({ session.sessions.sessions.value }, { session.agentsWiring.state.value.creation }, { session.sessions.machines.value }) }
-    val handToPersona = rememberHandToPersona(wiring?.mainSender, navigator)
     var insertionFocused by remember { mutableStateOf(false) }
     var git by remember { mutableStateOf<persona.core.contracts.api.SessionGitStatus?>(null) }
     val cwd = metadata?.cwd.orEmpty()
@@ -92,9 +107,11 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
         if (!assistant && cwd.isNotBlank() && files != null) followGitStatus(connectionState, { files.status(route.machineId, cwd) }) { git = it }
     }
     val filesAvailable = !assistant && cwd.isNotBlank() && session.files != null
+    val canOpenFilePath = filesAvailable || (assistant && route.machineId.isNotBlank() && session.files != null)
     fun open(p: FilesPane, path: String? = null, line: Int? = null) {
         insertionFocused = composer.focused; focus.clearFocus(); openedPath = path; openedLine = line; pane = p
     }
+    if (editor != null && storedComposer == null) return
     // ultracode's quota line (#582) reads this chat's hub
     androidx.compose.runtime.CompositionLocalProvider(persona.feature.chat.LocalUsageRead provides wiring?.usage) {
         Box(Modifier.fillMaxSize()) {
@@ -107,10 +124,14 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                     onGit = if (filesAvailable && git?.isRepo == true) ({ open(FilesPane.Git) }) else null,
                     gitLabel = "Git${git?.files?.size?.takeIf { it > 0 }?.let { " · $it" }.orEmpty()}",
                     actions = actions, connection = wiring?.connection ?: session.connection, requestId = requestId, covered = pane != null || terminalOpen,
+                    childSessionId = home.childSessionId.takeIf { landedSide == null },
+                    lookupRows = home.rows,
                     worktrees = wiring?.worktrees,
                     assistantManagement = assistantManagement,
+                    mainConversation = assistantSnapshot.mainSession?.sessionId,
                     leaderConversations = assistantSnapshot.leaders.toSet(),
                     onOpenSession = { navigator.navigate(ChatRoute(it.machineId, it.sessionId)) },
+                    onOpenSide = { navigator.navigate(ChatRoute(it.machineId, it.sessionId, ConversationKind.Agent, side = true)) },
                     onFollowSession = { onGroupGone(route, route.copy(machineId = it.machineId, sessionId = it.sessionId)) },
                     waiting = waiting,
                     onOpenRequest = { chat, request ->
@@ -119,8 +140,8 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                     },
                     onOpenAssistant = { navigator.navigate(persona.feature.chat.conversationRoute(it, assistant = true)) },
                     onConnectionDetails = { navigator.navigate(SettingsPageRoute(SettingsPage.Diagnostics)) },
-                    files = session.files, ports = wiring?.ports, onOpenPath = if (filesAvailable) ({ path, line -> open(FilesPane.Files, path, line) }) else null,
-                    onHandToPersona = if (assistant) null else handToPersona,
+                    files = session.files, hubScope = session.identity, ports = wiring?.ports,
+                    onOpenPath = if (canOpenFilePath) ({ path, line -> open(FilesPane.Files, path, line) }) else null,
                     onOpenTodo = { todoId -> navigator.navigate(persona.core.navigation.TodoDetailRoute(todoId)) },
                     // A model error the hub named on Persona's turn: Fix It opens what the home's readiness card would (MainReadiness.kt).
                     onFixModel = { action, launcher, manager ->
@@ -134,6 +155,8 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                             persona.core.contracts.BriefSetupPage.SessionTriage -> SettingsPageRoute(SettingsPage.Triage)
                             persona.core.contracts.BriefSetupPage.SupervisorModel ->
                                 persona.core.navigation.ModelPurposeRoute(persona.core.contracts.api.BackgroundSupervisor.PURPOSE, manager)
+                            persona.core.contracts.BriefSetupPage.StandingAuthorizations ->
+                                SettingsPageRoute(SettingsPage.StandingAuthorizations)
                         })
                     }),
                 renderStyle = if (assistant) ChatRenderStyle.Assistant else ChatRenderStyle.Agent,
@@ -141,19 +164,23 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                 onDraftChanged = editor?.let { it::changed },
                 statusBindings = ChatStatusBindings(recovery = wiring?.recovery, draftSaveError = draftError?.let { androidx.compose.ui.res.stringResource(it) }),
                 onContextCleared = { navigator.navigate(ChatRoute(it.machineId, it.sessionId)) })
-            if (pane != null && filesAvailable) {
+            if (pane != null && (filesAvailable || (canOpenFilePath && openedPath != null))) {
                 BackHandler { pane = null; openedPath = null; openedLine = null }
-                SessionFilesScreen(route, cwd, requireNotNull(session.files), { pane = null; openedPath = null; openedLine = null }, { path ->
-                    composer.value = insertFilePath(composer.value, path, insertionFocused)
-                    pane = null
-                    openedPath = null
-                    openedLine = null
-                    composer.focusRequest++
-                }, initialPane = pane!!, initialPath = openedPath, initialLine = openedLine,
-                    connection = connectionState)
+                CompositionLocalProvider(persona.core.designsystem.LocalSplitDetail provides null) {
+                    SessionFilesScreen(route.copy(sessionId = key.sessionId), cwd.ifBlank { "~" }, requireNotNull(session.files), { pane = null; openedPath = null; openedLine = null }, { path ->
+                        composer.value = insertFilePath(composer.value, path, insertionFocused)
+                        pane = null
+                        openedPath = null
+                        openedLine = null
+                        composer.focusRequest++
+                    }, initialPane = pane!!, initialPath = openedPath, initialLine = openedLine,
+                        connection = connectionState)
+                }
             }
-            if (terminal != null && !assistant) persona.feature.terminal.TerminalCover(
-                key, terminalOpen, { terminalOpen = false; resumeOnOpen = false }, terminal, resumer, resumeOnOpen = resumeOnOpen)
+            if (terminal != null && !assistant) CompositionLocalProvider(persona.core.designsystem.LocalSplitDetail provides null) {
+                persona.feature.terminal.TerminalCover(
+                    key, terminalOpen, { terminalOpen = false; resumeOnOpen = false }, terminal, resumer, resumeOnOpen = resumeOnOpen)
+            }
         }
     }
 }

@@ -4,39 +4,45 @@ import (
 	"cmp"
 	"context"
 	"errors"
-	"fmt"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // NodeDownMarker is in the error a computer's link reports when its resident node is not running (nodeMissing,
 // listen.go): the hub reads it as error_code node_service_down (hub/machine_trust.go machineErrorCode). An older link
 // says it the same way, so it is kept as it is.
-const NodeDownMarker = "常驻 node 没在运行"
+const NodeDownMarker = "常驻 node 没在运行" // i18n-ignore: the hub recognizes this exact peer-facing marker
 
 // NodeDownSelf comes right before NodeDownMarker in nodeMissing: the link's own computer. The hub swaps it for the
 // computer's name on the machine's page (devices nodeUnavailable, #4080).
-const NodeDownSelf = "本机的"
+const NodeDownSelf = "本机的" // i18n-ignore: the manager recognizes this exact peer-facing prefix
 
 // nodeMissing says the resident node is not answering at target, and how this computer runs it (docs/operations/link.md "Installing
 // the node service"): the hub shows it on the machine's page.
 func nodeMissing(goos, target string) error {
-	how := "让 personad node --attach 一直跑"
+	how := "link-errors.node_how_other"
 	switch goos {
 	case "windows":
-		how = "persona-link install --personad <personad.exe 的路径> 装成登录时启动的计划任务（docs/operations/windows.md）"
+		how = "link-errors.node_how_windows"
 	case "darwin":
-		how = "菜单栏 App「Persona Link」里的「安装本机 node 服务」，或者 persona-link node install"
+		how = "link-errors.node_how_darwin"
 	case "linux":
-		how = "persona-link node install（systemd 用户服务）"
+		how = "link-errors.node_how_linux"
 	}
-	return fmt.Errorf("%s%s（%s 连不上）：%s", NodeDownSelf, NodeDownMarker, target, how)
+	return newTextError("link-errors.node_missing", nil, i18n.Args{
+		"self": newTextError("link-errors.node_down_self", nil), "marker": newTextError("link-errors.node_down_marker", nil),
+		"target": target, "how": newTextError(how, nil),
+	})
 }
 
 // These are settings, not measurements.
@@ -54,12 +60,14 @@ const (
 var errPairedAgain = errors.New("paired again meanwhile")
 
 var (
-	errPin    = errors.New("TLS 公钥指纹和配对时的不一样，不是那台 hub")
-	errRedial = errors.New("手动重连")
+	errPin               = newTextError("link-errors.pin_mismatch", nil)
+	errRedial            = newTextError("link-errors.manual_reconnect", nil)
+	errCredentialRefused = errors.New("hub refused the link credential")
 	// errRepaired: link.json was paired again while the link was up; it reconnects at once with the new pairing.
-	errRepaired = errors.New("重新配对了，用新凭据重连")
-	// errDirectReady: while connected over SSH without Always, a direct hub address answered again.
-	errDirectReady = errors.New("直连地址通了，切回直连")
+	errRepaired = newTextError("link-errors.repaired", nil)
+	// errDirectReady: while connected over SSH without Always, a direct WebSocket connected and passed validation;
+	// serve transfers that exact candidate together with this cause.
+	errDirectReady = newTextError("link-errors.direct_ready", nil)
 )
 
 // Status is what persona-link reports: Run hands one to Options.Status every time something changes, and
@@ -83,10 +91,12 @@ type Status struct {
 	// Pending, while connected: the hub waits for the user to confirm this computer ("It's mine" in the app);
 	// missing once confirmed, and with older hubs.
 	Pending bool `json:"pending,omitempty"`
-	// connected: the hub URL in use, its kind (lan | ipv6 | name | ipv4) and since when.
+	// connected: the hub URL in use, its kind (lan | ipv6 | name | ipv4, ssh, proxy) and since when.
 	Address string     `json:"address,omitempty"`
 	Kind    string     `json:"kind,omitempty"`
 	Since   *time.Time `json:"since,omitempty"`
+	// Proxy, connected with kind proxy: the outbound proxy the link runs through, never its user name or password.
+	Proxy string `json:"proxy,omitempty"`
 	// Trust: "system" when the hub is checked with the system's CAs and host name (it sits behind an HTTPS reverse
 	// proxy, Config.Trust); empty when it is pinned.
 	Trust string `json:"trust,omitempty"`
@@ -137,6 +147,10 @@ type Options struct {
 	DirectRetryEvery time.Duration
 	PairCheck        time.Duration
 	SSHBin           string
+	// directReady observes candidate publication in package tests; production leaves it nil.
+	directReady chan *directHandoff
+	// routeAddrs replaces the local address lookup for route memory tests.
+	routeAddrs func() ([]net.Addr, error)
 	// limiter replaces passive mode's (tests).
 	limiter *authLimiter
 }
@@ -149,6 +163,10 @@ type httpError struct {
 
 func (e *httpError) Error() string { return "HTTP " + strconv.Itoa(e.status) }
 
+func (e *httpError) Is(target error) bool {
+	return target == errCredentialRefused && (e.status == http.StatusUnauthorized || e.status == http.StatusForbidden)
+}
+
 func handshakeError(resp *http.Response, err error) error {
 	if resp == nil || resp.StatusCode == http.StatusSwitchingProtocols {
 		return err
@@ -158,6 +176,27 @@ func handshakeError(resp *http.Response, err error) error {
 		he.retry = time.Duration(s) * time.Second
 	}
 	return he
+}
+
+// retryWait applies rate limits to the backoff and reports whether they allow probes. A 429 anywhere in the error
+// tree disables probes, and the longest Retry-After from those responses can extend the wait.
+func retryWait(err error, wait time.Duration) (time.Duration, bool) {
+	switch e := err.(type) {
+	case *httpError:
+		if e.status == http.StatusTooManyRequests {
+			return max(wait, e.retry), false
+		}
+	case interface{ Unwrap() []error }:
+		probe := true
+		for _, child := range e.Unwrap() {
+			delay, childProbe := retryWait(child, wait)
+			wait, probe = delay, probe && childProbe
+		}
+		return wait, probe
+	case interface{ Unwrap() error }:
+		return retryWait(e.Unwrap(), wait)
+	}
+	return wait, true
 }
 
 // backoff: exponential from 1 s to a minute, each wait randomized down to half so links that broke together do not
@@ -213,6 +252,7 @@ func Run(ctx context.Context, o Options) error {
 	if o.Logf == nil {
 		o.Logf = func(string, ...any) {}
 	}
+	ctx = context.WithValue(ctx, diagnosticLogKey{}, o.Logf)
 	if o.PingEvery <= 0 || o.PingTimeout <= 0 {
 		o.PingEvery, o.PingTimeout = PingEvery, PingTimeout
 	}
@@ -224,7 +264,7 @@ func Run(ctx context.Context, o Options) error {
 		if mode == ModePassive {
 			runPassive(mctx, o, rep)
 		} else {
-			runActive(mctx, o, rep)
+			runActive(mctx, o, rep, backoff{})
 		}
 		cancel()
 		if ctx.Err() == nil {
@@ -272,18 +312,18 @@ func watchMode(ctx context.Context, path, mode string, cancel context.CancelFunc
 	}
 }
 
-// runActive keeps the link to the hub up until ctx ends.
-func runActive(ctx context.Context, o Options, rep *reporter) {
+// runActive keeps the link to the hub up until ctx ends, starting with backoff b.
+func runActive(ctx context.Context, o Options, rep *reporter, b backoff) {
 	rep.switchTo(ModeActive)
-	var b backoff
-	var lastSSH bool
-	var lastToken string
-	var lastSSHConfig *SSH
+	memory := routeMemory{path: o.Path, addresses: o.routeAddrs}
+	if memory.addresses == nil {
+		memory.addresses = net.InterfaceAddrs
+	}
 	for ctx.Err() == nil {
 		was := stampOf(o.Path) // a change from here on (paired again, an address added) cuts the wait below short
 		c, err := Load(o.Path)
 		if err != nil {
-			lastSSH, lastToken, lastSSHConfig = false, "", nil
+			memory.clear()
 			if errors.Is(err, os.ErrNotExist) {
 				rep.set(func(s *Status) { *s = Status{State: "unpaired"} })
 			} else {
@@ -292,34 +332,47 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 			o.wait(ctx, time.Hour, was)
 			continue
 		}
-		if c.Token != lastToken || !c.SSH.Equal(lastSSHConfig) {
-			lastSSH = false
-			lastToken = c.Token
-			lastSSHConfig = cloneSSH(c.SSH)
-		}
 		rep.set(func(s *Status) {
 			*s = Status{State: "connecting", Machine: c.Machine, HubName: c.HubName, MachineName: c.MachineName, Trust: trustOf(c),
 				Endpoints: ranked(c.Endpoints), SSH: cloneSSH(c.SSH)}
 		})
-		l, err := dialActive(ctx, c, o.SSHBin, lastSSH)
+		last := memory.beforeDial(c)
+		l, err := dialActive(ctx, c, o.SSHBin, last)
 		var end error
 		state := "waiting"
 		if err != nil {
 			end = err
 		} else {
-			lastSSH = l.ep.Kind == KindSSH
-			start := time.Now()
-			rep.links++
-			l.gen = rep.links
-			end = l.serve(ctx, c, o, rep)
-			if time.Since(start) > time.Minute {
+			for {
+				start := time.Now()
+				rep.links++
+				l.gen = rep.links
+				var handoff *directHandoff
+				handoff, end = l.serve(ctx, c, o, rep, &memory)
+				if time.Since(start) > time.Minute {
+					b = backoff{}
+				}
+				if handoff == nil {
+					break
+				}
+				if ctx.Err() != nil {
+					// Direct-ready may have won just before the run itself was cancelled. Ownership has transferred, so
+					// close the accepted candidate rather than leaving it for the next run iteration.
+					handoff.candidate.closeNow()
+					return
+				}
+				// Serve the exact socket the SSH probe connected, under the configuration that validated it. A redial
+				// here would both lose that ownership and reintroduce the gap that dropped working SSH links.
+				l, c = handoff.candidate, handoff.config
+				memory.clear()
 				b = backoff{}
 			}
 			// The link writes link.json itself (the hub's addresses and names): from here only a new credential or tunnel
 			// change, written while the link was up, counts as a change since it was read. The stamp is taken before the
 			// read, so a change written in between still counts.
 			now := stampOf(o.Path)
-			if f, err := Read(o.Path); err != nil || (f.Token == c.Token && f.SSH.Equal(c.SSH)) {
+			if f, err := Read(o.Path); err != nil || (f.Token == c.Token && f.SSH.Equal(c.SSH) && f.Proxy == c.Proxy &&
+				f.ProxyAlways == c.ProxyAlways) {
 				was = now
 			}
 		}
@@ -327,88 +380,154 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 			return
 		}
 		wait := b.next()
-		var he *httpError
+		rateWait, canProbe := retryWait(end, wait)
+		var reach func(context.Context) bool
 		switch {
 		case errors.Is(end, errDirectReady):
-			lastSSH = false
+			memory.clear()
 			b, wait = backoff{}, 0
 		case errors.Is(end, errRedial), errors.Is(end, errRepaired):
 			b, wait = backoff{}, 0
-		case errors.As(end, &he) && (he.status == http.StatusUnauthorized || he.status == http.StatusForbidden):
+		case errors.Is(end, errCredentialRefused):
 			state, wait = "refused", refusedWait
-			end = errors.New("hub 不认这台的凭据（可能撤销了）：重新配对")
-		case errors.As(end, &he) && he.status == http.StatusTooManyRequests:
-			wait = max(wait, he.retry)
+			end = newTextError("link-errors.credential_refused", nil)
+		case !canProbe:
+			wait = rateWait
 		case websocket.CloseStatus(end) == CloseReplaced:
 			wait = replaceWait
-			end = errors.New("这台电脑在别处又连了一条链路（同一个凭据开了两个 Persona Link？）")
+			end = newTextError("link-errors.replaced", nil)
 		case websocket.CloseStatus(end) == CloseRevoked:
 			state, wait = "refused", refusedWait
-			end = errors.New("凭据被撤销了：重新配对")
+			end = newTextError("link-errors.credential_revoked", nil)
+		case wait > probeOver:
+			reach = hubProbe(c)
 		}
 		retry := time.Now().Add(wait)
-		o.Logf("link: %v; next attempt in %s", end, wait.Round(time.Second))
+		o.Logf("link: %s; next attempt in %s", ErrorText(i18n.En, end), wait.Round(time.Second))
 		rep.set(func(s *Status) {
 			*s = Status{State: state, Machine: c.Machine, HubName: c.HubName, MachineName: c.MachineName, Error: summary(end),
 				SSHError: sshStatusOf(end), Retry: &retry, Trust: trustOf(c), Endpoints: ranked(c.Endpoints), SSH: cloneSSH(c.SSH)}
 		})
-		o.wait(ctx, wait, was)
+		o.waitWithProbe(ctx, wait, was, reach)
 	}
 }
 
-func dialActive(ctx context.Context, c *Config, sshBin string, preferSSH bool) (*link, error) {
-	switch {
-	case c.SSH == nil:
+// dialActive dials c's hub over its routes in routeOrder. A pinned hub that refused the credential, on whichever
+// route, ends the attempt: no other route can do better.
+func dialActive(ctx context.Context, c *Config, sshBin string, last string) (*link, error) {
+	p, eps, perr := proxyRoute(c)
+	return tryRoutes(routeOrder(c, p != nil || perr != nil, last), func(kind string) (*link, error) {
+		switch kind {
+		case KindSSH:
+			return dialSSH(ctx, c, sshBin)
+		case KindProxy:
+			if perr != nil {
+				return nil, perr
+			}
+			return dialVia(ctx, c, eps, p)
+		}
 		return dial(ctx, c)
-	case c.SSH.Always || len(c.Endpoints) == 0:
-		return dialSSH(ctx, c, sshBin)
-	case preferSSH:
-		l, sshErr := dialSSH(ctx, c, sshBin)
-		if sshErr == nil || ctx.Err() != nil {
-			return l, sshErr
-		}
-		l, directErr := dial(ctx, c)
-		if directErr == nil {
-			return l, nil
-		}
-		return nil, errors.Join(sshErr, directErr)
-	default:
-		l, directErr := dial(ctx, c)
-		if directErr == nil || ctx.Err() != nil {
-			return l, directErr
-		}
-		var he *httpError
-		if c.FP != "" && errors.As(directErr, &he) && (he.status == http.StatusUnauthorized || he.status == http.StatusForbidden) {
-			return nil, directErr
-		}
-		l, sshErr := dialSSH(ctx, c, sshBin)
-		if sshErr == nil {
-			return l, nil
-		}
-		return nil, errors.Join(directErr, sshErr)
+	}, func(err error) bool {
+		return ctx.Err() != nil || (c.FP != "" && errors.Is(err, errCredentialRefused))
+	})
+}
+
+// routeOrder is the order c's routes are tried in (docs/operations/link.md "Outbound proxy"): direct candidates
+// (""), the outbound proxy when there is one, the SSH tunnel when there is one; last, the kind of the link that worked
+// last, first when it is one of these. Always use SSH leaves the tunnel alone; else proxy-only mode
+// (Config.ProxyAlways) leaves the proxy alone, whatever last was; else a tunnel and no candidates leaves the tunnel.
+func routeOrder(c *Config, proxy bool, last string) []string {
+	if c.SSH != nil && c.SSH.Always {
+		return []string{KindSSH}
 	}
+	if c.ProxyAlways {
+		return []string{KindProxy}
+	}
+	if c.SSH != nil && len(c.Endpoints) == 0 {
+		return []string{KindSSH}
+	}
+	order := []string{""}
+	if proxy {
+		order = append(order, KindProxy)
+	}
+	if c.SSH != nil {
+		order = append(order, KindSSH)
+	}
+	if i := slices.Index(order, last); i > 0 {
+		order = slices.Insert(slices.Delete(order, i, i+1), 0, last)
+	}
+	return order
+}
+
+// tryRoutes tries each route in order until one works; stop ends it early after a failure no other route can mend.
+// The error is the one failure, or all of them in order.
+func tryRoutes[T any](order []string, try func(kind string) (T, error), stop func(error) bool) (T, error) {
+	var errs []error
+	for _, kind := range order {
+		v, err := try(kind)
+		if err == nil {
+			return v, nil
+		}
+		errs = append(errs, err)
+		if stop(err) {
+			break
+		}
+	}
+	var zero T
+	if len(errs) == 1 {
+		return zero, errs[0]
+	}
+	return zero, errors.Join(errs...)
 }
 
 // wait sleeps up to d, less if the network changed, a reconnect was asked for or link.json changed (paired again,
 // an address added) since was: the stamp (stampOf) from when the attempt read it, so a change that landed during the
 // attempt (a new credential written while the hub refused the old one) ends the wait at its first poll.
 func (o Options) wait(ctx context.Context, d time.Duration, was time.Time) {
+	o.waitWithProbe(ctx, d, was, nil)
+}
+
+// waitWithProbe also ends a long wait when reach reports that the hub has gone from unreachable at the start of
+// the wait to reachable. A nil reach leaves the wake conditions of wait in place.
+func (o Options) waitWithProbe(ctx context.Context, d time.Duration, was time.Time, reach func(context.Context) bool) {
+	start, reason := time.Now(), "timer"
+	defer func() {
+		if o.Logf != nil {
+			o.Logf("link: retry_wait planned_us=%d actual_us=%d wake=%s", max(d, 0).Microseconds(), time.Since(start).Microseconds(), reason)
+		}
+	}()
 	timer := time.NewTimer(d)
 	defer timer.Stop()
-	poll := time.NewTicker(cmp.Or(o.PairCheck, 2*time.Second))
+	poll := time.NewTicker(cmp.Or(o.PairCheck, pairCheck))
 	defer poll.Stop()
+	var recovered <-chan struct{}
+	if reach != nil && d > probeOver {
+		probeCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		recovered = probeRecovery(probeCtx, reach)
+	}
 	for {
 		select {
 		case <-ctx.Done():
+			reason = "canceled"
 			return
 		case <-timer.C:
 			return
 		case <-o.Check:
+			reason = "network_check"
 			return
 		case <-o.Redial:
+			reason = "redial"
+			return
+		case <-recovered:
+			reason = "hub_reachable"
+			if o.Logf != nil {
+				o.Logf("link: the hub answers again; trying now")
+			}
 			return
 		case <-poll.C:
 			if !stampOf(o.Path).Equal(was) {
+				reason = "config_changed"
 				return
 			}
 		}

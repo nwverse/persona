@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -104,6 +106,8 @@ func TestClaudeDesktopPendingImportChecksBeforeOpening(t *testing.T) {
 		{"open elsewhere", "continue", openElsewhere},
 		{"archived", "continue", "desktop_session_unavailable"},
 		{"replaced", "continue", "desktop_session_unavailable"},
+		{"deleted transcript", "continue", "desktop_session_unavailable"},
+		{"deleted local session", "continue", "desktop_session_unavailable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n, home := testNode(t)
@@ -117,6 +121,19 @@ func TestClaudeDesktopPendingImportChecksBeforeOpening(t *testing.T) {
 				writeDesktopEntry(t, first, sidA, sidA, true, nil, "")
 			case "replaced":
 				writeDesktopEntry(t, first, sidB, sidB, false, []string{sidA}, "")
+			case "deleted transcript", "deleted local session":
+				local := sidA
+				if tc.name == "deleted local session" {
+					local = sidB
+				}
+				entry := writeDesktopEntry(t, first, local, sidA, false, nil, "")
+				readClaudeDesktopIndex(home) // observe the local session's exact association before deletion
+				if err := os.Remove(entry); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(filepath.Dir(entry), "deleted_"+local), []byte("1"), 0o600); err != nil {
+					t.Fatal(err)
+				}
 			}
 			oldOpen := openDesktopLink
 			openDesktopLink = func(context.Context, string) error {
@@ -175,5 +192,82 @@ func TestClaudeDesktopPendingImportWaitsForPersistedOwnership(t *testing.T) {
 	}
 	if link := <-opened; link != "claude://resume?session="+sidA {
 		t.Fatalf("imported %q", link)
+	}
+}
+
+// A recovery request is checked as a new start before it can import or send to the app.
+func TestClaudeDesktopResumeRejectsUnsupportedSettingsBeforeImport(t *testing.T) {
+	for _, tc := range []struct{ name, model, effort, mode, project string }{
+		{name: "invalid model", model: "invalid\nmodel"},
+		{name: "invalid effort", effort: "unsupported"},
+		{name: "plan mode", mode: "plan"},
+		{name: "native Codex project", project: "codex-project:profile:workspace"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, _ := testNode(t)
+			oldDirs, oldOpen := claudeDesktopDirs, openDesktopLink
+			claudeDesktopDirs = func(string) []string { t.Fatal("an invalid recovery inspected the desktop index"); return nil }
+			openDesktopLink = func(context.Context, string) error { t.Fatal("an invalid recovery opened the app"); return nil }
+			t.Cleanup(func() { claudeDesktopDirs, openDesktopLink = oldDirs, oldOpen })
+			if _, err := n.resumeDesktopSession(context.Background(), runtimeStartParams{Resume: sidA, Model: tc.model, Effort: tc.effort, PermissionMode: tc.mode, DesktopProjectID: tc.project}); err == nil {
+				t.Fatal("invalid recovery settings were accepted")
+			}
+		})
+	}
+}
+
+func TestClaudeDesktopPartialSeedRecoveryKeepsStartSettings(t *testing.T) {
+	for _, mode := range []string{"default", "acceptEdits"} {
+		t.Run(mode, func(t *testing.T) {
+			n, home := testNode(t)
+			n.modes = map[string]sessionModes{}
+			t.Setenv("CLAUDE_CONFIG_DIR", "")
+			app := newFakeDesktopApp(t, home)
+			fakeClaudeOnPath(t)
+			seed := seedDesktopSession
+			seedDesktopSession = func(ctx context.Context, claude, dir, id, title string) error {
+				if err := seed(ctx, claude, dir, id, title); err != nil {
+					return err
+				}
+				return errors.New("the seed process failed after writing the transcript")
+			}
+			params := runtimeStartParams{Cwd: t.TempDir(), Model: "gateway-opus-5-5[1m]", Effort: "xhigh", PermissionMode: mode, Prompt: "send this after setup"}
+			params.DesktopProjectID = projectSpace + params.Cwd
+			s, err := n.newDesktopSession(context.Background(), params, "")
+			if s == nil {
+				t.Fatalf("the partial seed lost the session: %v", err)
+			}
+			checkDesktopCreationError(t, err, s.SessionID)
+			if got := importedDesktopMode(t, n.transcriptPath(s.SessionID)); got != mode {
+				t.Fatalf("partial seed mode = %q, want %q", got, mode)
+			}
+			n.ccPlugins.mu.Lock()
+			prepared := n.ccPlugins.queued[s.SessionID].settings
+			n.ccPlugins.mu.Unlock()
+			if prepared.Model != params.Model || prepared.Effort != params.Effort {
+				t.Fatalf("the partial seed lost settings before direct-send recovery: %+v", prepared)
+			}
+			if len(app.opened()) != 0 {
+				t.Fatal("the failed seed imported a session")
+			}
+			params.Resume, params.Prompt = s.SessionID, ""
+			recovered, err := n.resumeDesktopSession(context.Background(), params)
+			if err != nil || recovered == nil || recovered.SessionID != s.SessionID {
+				t.Fatalf("same-session setup recovery failed: %+v, %v", recovered, err)
+			}
+			if got := app.importedMode(s.SessionID); got != mode {
+				t.Fatalf("imported mode = %q, want %q", got, mode)
+			}
+			n.ccPlugins.mu.Lock()
+			settings := n.ccPlugins.queued[s.SessionID].settings
+			n.ccPlugins.mu.Unlock()
+			if recovered.Model != params.Model || recovered.Effort != params.Effort || settings.Model != params.Model || settings.Effort != params.Effort {
+				t.Fatalf("recovered settings = %+v, queued = %+v", recovered, settings)
+			}
+			links := app.opened()
+			if len(app.seeded()) != 1 || len(links) != 1 || links[0] != "claude://resume?session="+s.SessionID || app.inbox(s.SessionID) != nil {
+				t.Fatalf("setup recovery created a transcript or sent a turn: seeds=%v, links=%v", app.seeded(), links)
+			}
+		})
 	}
 }

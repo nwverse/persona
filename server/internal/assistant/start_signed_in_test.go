@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -31,10 +32,10 @@ func TestHubStartedConversationsStartSignedIn(t *testing.T) {
 	}
 }
 
-// A background supervisor started before this manager whose last turn ended "Not logged in" was made in a private
-// profile with no login and cannot move: it is gone, and its replacement starts signed in. One this manager started is
-// not replaced for it: it already is in the signed-in profile, and a new one would only be signed out too.
-func TestBackgroundSupervisorSignedOutIsReplaced(t *testing.T) {
+// A background supervisor started before this manager whose last turn ended "Not logged in" cannot finish its old work.
+// Since #5732 no replacement is started: its pending and queued legacy notices move to main instead of creating a new
+// background endpoint for new work. One this manager started is not treated as gone for this error either.
+func TestBackgroundSupervisorSignedOutIsNotReplaced(t *testing.T) {
 	s, f, _ := newBackgroundService(t)
 	ctx := context.Background()
 	signedOut := proto.Session{SessionID: "bg1", MachineID: "server", Assistant: true, Status: proto.StatusDone,
@@ -59,21 +60,20 @@ func TestBackgroundSupervisorSignedOutIsReplaced(t *testing.T) {
 		t.Fatal("a signed-in background supervisor counted as gone")
 	}
 
-	// Started before this manager and signed out: gone, and replaced by one that starts signed in.
+	// Started before this manager and signed out: gone, with no replacement; legacy notices move to main.
 	f.setSessions("server", main, signedOut)
 	if s.backgroundThere(ctx, s.settings(ctx), "bg1") {
 		t.Fatal("a signed-out background supervisor from before this manager is still there")
 	}
 	id, gone := s.ensureBackground(ctx)
-	if id == "" || id == "bg1" || gone != "bg1" {
+	if id != "" || gone != "bg1" {
 		t.Fatalf("ensureBackground = %q, gone %q", id, gone)
 	}
-	starts := conversationStarts(f)
-	if len(starts) != 1 || starts[0]["config_dir"] != meetingProfile {
-		t.Fatalf("the replacement started as %v", starts)
+	if starts := conversationStarts(f); len(starts) != 0 {
+		t.Fatalf("a legacy replacement started as %v", starts)
 	}
-	if got := s.settings(ctx).BackgroundSupervisor; got != id {
-		t.Fatalf("settings keep %q, want %q", got, id)
+	if got := s.settings(ctx).BackgroundSupervisor; got != "bg1" {
+		t.Fatalf("settings keep %q, want the old id for relay recovery", got)
 	}
 }
 
@@ -250,5 +250,72 @@ func TestHubStartedCodexConversationOmitsConfigDir(t *testing.T) {
 		if tc.profile && got != meetingProfile || !tc.profile && set {
 			t.Fatalf("launcher %q: config_dir = %v (set=%v)", tc.launcher, got, set)
 		}
+	}
+}
+
+// A scheduled task whose launcher runs Codex starts its new conversation also when that launcher is hidden from the
+// pickers, which the hub's list of the machine's launchers leaves out (the task's model configuration still names it),
+// and when the hub cannot tell what it runs (the machine's list did not come). Hidden, the hub still knows it runs
+// Codex and asks for no profile; not known, it asks for the one its own starts have, the node refuses it before
+// starting anything, and the start goes again without it, as on a node too old for a profile. The task keeps the
+// conversation, and the next run resumes it as before even when the node lists it with no agent (#6884).
+func TestATaskOnACodexLauncherTheHubCannotTellStarts(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		setup    func(*testing.T, *Service, *fakeHub)
+		attempts int
+	}{
+		{"hidden from the pickers", func(t *testing.T, s *Service, _ *fakeHub) {
+			if err := s.putSetting(context.Background(), launchersHiddenKey, []string{"codex-work"}); err != nil {
+				t.Fatal(err)
+			}
+		}, 1},
+		{"no launcher list", func(_ *testing.T, _ *Service, f *fakeHub) { f.launcherList = nil }, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeHub().withMachine()
+			f.settings = &Settings{MachineID: "server"}
+			f.launcherList = []proto.Launcher{{Name: "claude"}, {Name: "codex-work", Agent: "codex"}}
+			var asked []map[string]any // every assistant.send, refused or not (written under f.mu)
+			f.onAssistantSend = func(_ *fakeHub, p map[string]any) { asked = append(asked, maps.Clone(p)) }
+			s := newTestService(t, f)
+			tc.setup(t, s, f)
+			setTasks(s, Task{ID: "weekly", Title: "weekly report", Prompt: "write the weekly report", Repeat: repeatInterval, EveryMinutes: 7 * 24 * 60, Enabled: true})
+			setModel(t, s, "task.weekly", ModelBinding{Provider: "launcher.codex-work"})
+			sess, err := runNow(t, s, "weekly")
+			if err != nil {
+				t.Fatalf("the task did not start: %v", err)
+			}
+			f.mu.Lock()
+			tried := slices.Clone(asked)
+			f.mu.Unlock()
+			if len(tried) != tc.attempts || tried[0]["config_dir"] != map[bool]any{true: meetingProfile}[tc.attempts == 2] {
+				t.Fatalf("asked the node %v", tried)
+			}
+			if len(f.sends) != 1 || f.sends[0]["launcher"] != "codex-work" || f.sends[0]["config_dir"] != nil {
+				t.Fatalf("started as %v", f.sends)
+			}
+			if task, _ := taskByID(s, "weekly"); sess.SessionID == "" || task.RunSessionID != sess.SessionID {
+				t.Fatalf("the task keeps %q, started %q", task.RunSessionID, sess.SessionID)
+			}
+			wantAgent := "codex"
+			if tc.attempts == 2 {
+				wantAgent = "" // an unreadable catalog does not identify the backend
+			}
+			if runs := waitRuns(t, s, 1); runs[0].Execution.Agent != wantAgent {
+				t.Fatalf("unobserved execution backend: %+v", runs[0].Execution)
+			}
+
+			// Its last turn ended "Not logged in" and the node lists it with no agent: the hub asks to resume it in the
+			// signed-in profile, which the node refuses for Codex, and the run goes on in it without one.
+			f.setSessions("server", signedOutSession(sess.SessionID))
+			next, err := runNow(t, s, "weekly")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if last := f.sends[len(f.sends)-1]; next.SessionID != sess.SessionID || last["session_id"] != sess.SessionID || last["config_dir"] != nil {
+				t.Fatalf("the next run went to %q as %v", next.SessionID, last)
+			}
+		})
 	}
 }

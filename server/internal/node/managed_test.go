@@ -2,10 +2,13 @@ package node
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -51,11 +54,11 @@ func TestClaudeExecutableFallsBackToInstallLocations(t *testing.T) {
 	}
 }
 
-// hideMachineAgents points the fixed system directories agentExecutable and commonNodePaths look in at empty temporary
-// ones, as a test does PATH and HOME: then it finds only the claude and node it sets up, not the machine's own (#5449,
-// #6257).
+// hideMachineAgents isolates the system and configured NVM directories that agentExecutable and commonNodePaths
+// search. With a temporary PATH and HOME, the test finds only the agents it sets up (#5449, #6257).
 func hideMachineAgents(t *testing.T) {
 	t.Helper()
+	t.Setenv("NVM_DIR", "")
 	systemDirs, distroDir := agentSystemDirs, distroNodeDir
 	agentSystemDirs, distroNodeDir = []string{t.TempDir()}, t.TempDir()
 	t.Cleanup(func() { agentSystemDirs, distroNodeDir = systemDirs, distroDir })
@@ -95,6 +98,58 @@ func TestClaudeExecutableFallsBackToNVMAndActionableError(t *testing.T) {
 	got, err := claudeExecutable()
 	if err != nil || got != nvmClaude {
 		t.Fatalf("got %q %v, want %q", got, err, nvmClaude)
+	}
+
+	// NVM can be installed elsewhere when a service inherits NVM_DIR.
+	custom := filepath.Join(home, "custom NVM")
+	t.Setenv("NVM_DIR", custom)
+	customClaude := writeExecutable(t, filepath.Join(custom, "versions", "node", "v22.1.0", "bin", "claude"), "#!/bin/sh\n")
+	if got, err := claudeExecutable(); err != nil || got != customClaude {
+		t.Fatalf("got %q %v, want %q", got, err, customClaude)
+	}
+}
+
+func TestAgentExecutableKeepsSuccessfulShellLookupWithOpenChildOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses Unix shell process groups")
+	}
+	if _, err := exec.LookPath("zsh"); err != nil {
+		t.Skip("no zsh")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ZDOTDIR", home)
+	t.Setenv("SHELL", "/bin/zsh")
+	const name = "persona-test-agent-from-rc"
+	path := writeExecutable(t, filepath.Join(home, "custom agent", name), "#!/bin/sh\n")
+	other := writeExecutable(t, filepath.Join(home, "other agent"), "#!/bin/sh\n")
+	exitBanner := shellQuote("printf '%s\\n' " + shellQuote(other))
+	writeFile(t, filepath.Join(home, ".zshrc"), "export PATH="+shellQuote(filepath.Dir(path))+":\"$PATH\"\n/bin/sleep 7 &!\ntrap "+exitBanner+" EXIT\n")
+	start := time.Now()
+	if got, err := agentExecutable(name); err != nil || got != path {
+		t.Fatalf("got %q %v, want %q", got, err, path)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("lookup waited %s for a child that held stdout open", took)
+	}
+}
+
+func TestAgentExecutableRejectsShellStartupPathWithoutLookup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses Unix shell process groups")
+	}
+	if _, err := exec.LookPath("zsh"); err != nil {
+		t.Skip("no zsh")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ZDOTDIR", home)
+	t.Setenv("SHELL", "/bin/zsh")
+	const name = "persona-test-agent-missing-from-rc"
+	other := writeExecutable(t, filepath.Join(home, "other agent"), "#!/bin/sh\n")
+	writeFile(t, filepath.Join(home, ".zshrc"), "printf '%s\\n' "+shellQuote(other)+"\n/bin/sleep 7 &!\nexit 0\n")
+	if got, err := agentExecutable(name); got != "" || err == nil || !strings.Contains(err.Error(), "not found in PATH") {
+		t.Fatalf("shell exited before the lookup: got %q, error %v", got, err)
 	}
 }
 
@@ -241,31 +296,31 @@ func TestLauncherEnvEffort(t *testing.T) {
 
 func TestLaunchArgsEffort(t *testing.T) {
 	// A start with --effort retains caller's effort and does not append provider's default
-	withEffort := launchArgv("claude", []string{"--effort", "max"}, nil, "medium", "", nil)
+	withEffort := launchArgv("claude", []string{"--effort", "max"}, nil, "medium", "", nil, "")
 	if !slices.Equal(withEffort, []string{"claude", "--effort", "max"}) {
 		t.Fatalf("with effort: got %v, want [claude --effort max]", withEffort)
 	}
 
 	// A start with --effort=value retains caller's effort
-	withEffortEq := launchArgv("claude", []string{"--effort=max"}, nil, "medium", "", nil)
+	withEffortEq := launchArgv("claude", []string{"--effort=max"}, nil, "medium", "", nil, "")
 	if !slices.Equal(withEffortEq, []string{"claude", "--effort=max"}) {
 		t.Fatalf("with effort=: got %v, want [claude --effort=max]", withEffortEq)
 	}
 
 	// A start with caller args containing --effort retains caller's effort
-	withCallerEffort := launchArgv("claude", []string{"--effort", "max"}, []string{"--model", "custom"}, "medium", "", nil)
+	withCallerEffort := launchArgv("claude", []string{"--effort", "max"}, []string{"--model", "custom"}, "medium", "", nil, "")
 	if !slices.Equal(withCallerEffort, []string{"claude", "--model", "custom", "--effort", "max"}) {
 		t.Fatalf("with caller effort: got %v, want [claude --model custom --effort max]", withCallerEffort)
 	}
 
 	// A start without --effort receives provider's default level as --effort <level>
-	withoutEffort := launchArgv("claude", []string{"--permission-mode", "plan"}, nil, "medium", "", nil)
+	withoutEffort := launchArgv("claude", []string{"--permission-mode", "plan"}, nil, "medium", "", nil, "")
 	if !slices.Equal(withoutEffort, []string{"claude", "--effort", "medium", "--permission-mode", "plan"}) {
 		t.Fatalf("without effort: got %v, want [claude --effort medium --permission-mode plan]", withoutEffort)
 	}
 
 	// When launcher's own args already specify --effort, provider default is not appended
-	withLauncherArgEffort := launchArgv("claude", nil, []string{"--effort", "low"}, "medium", "", nil)
+	withLauncherArgEffort := launchArgv("claude", nil, []string{"--effort", "low"}, "medium", "", nil, "")
 	if !slices.Equal(withLauncherArgEffort, []string{"claude", "--effort", "low"}) {
 		t.Fatalf("with launcher arg effort: got %v, want [claude --effort low]", withLauncherArgEffort)
 	}
@@ -277,30 +332,60 @@ func TestLaunchArgsCodexGateway(t *testing.T) {
 	env := []string{"OPENAI_BASE_URL=http://127.0.0.1:9/v1", "OPENAI_API_KEY=k"}
 	provider := []string{"-c", `model_provider="persona-launcher"`,
 		"-c", `model_providers.persona-launcher={name="Persona launcher",base_url="http://127.0.0.1:9/v1",wire_api="responses",env_key="OPENAI_API_KEY"}`}
-	got := launchArgv("codex", []string{"exec", "--ephemeral", "hi"}, nil, "", "gpt-x", env)
+	got := launchArgv("codex", []string{"exec", "--ephemeral", "hi"}, nil, "", "gpt-x", env, "")
 	if want := append(append([]string{"codex"}, provider...), "-m", "gpt-x", "exec", "--ephemeral", "hi"); !slices.Equal(got, want) {
 		t.Fatalf("gateway: got %v, want %v", got, want)
 	}
-	keyless := launchArgv("codex", nil, nil, "", "", env[:1])
+	keyless := launchArgv("codex", nil, nil, "", "", env[:1], "")
 	if want := []string{"codex", "-c", `model_provider="persona-launcher"`, "-c", `model_providers.persona-launcher={name="Persona launcher",base_url="http://127.0.0.1:9/v1",wire_api="responses"}`}; !slices.Equal(keyless, want) {
 		t.Fatalf("no key: got %v", keyless)
 	}
 	for _, own := range [][]string{{"-c", "model_provider=mine"}, {"--config=model_provider=\"mine\""}, {"-cmodel_provider=mine"}, {"-p", "work"}, {"-pwork"}, {"--profile=work"}, {"--oss"}} {
-		if got := launchArgv("codex", own, nil, "", "", env); !slices.Equal(got, append([]string{"codex"}, own...)) {
+		if got := launchArgv("codex", own, nil, "", "", env, ""); !slices.Equal(got, append([]string{"codex"}, own...)) {
 			t.Fatalf("own provider %v: got %v", own, got)
 		}
 	}
-	if got := launchArgv("codex", nil, []string{"-c", "model_provider=mine"}, "", "", env); !slices.Equal(got, []string{"codex", "-c", "model_provider=mine"}) {
+	if got := launchArgv("codex", nil, []string{"-c", "model_provider=mine"}, "", "", env, ""); !slices.Equal(got, []string{"codex", "-c", "model_provider=mine"}) {
 		t.Fatalf("the launcher's own provider: got %v", got)
 	}
-	if got := launchArgv("codex", nil, nil, "", "gpt-x", nil); !slices.Equal(got, []string{"codex", "-m", "gpt-x"}) {
+	if got := launchArgv("codex", nil, nil, "", "gpt-x", nil, ""); !slices.Equal(got, []string{"codex", "-m", "gpt-x"}) {
 		t.Fatalf("no gateway: got %v", got)
+	}
+	// The gateway's model catalog the node found goes in the provider table, and only there.
+	catalog := "http://127.0.0.1:9/v1/models"
+	withCatalog := launchArgv("codex", []string{"exec", "hi"}, nil, "", "gpt-x", env, catalog)
+	if want := []string{"codex", "-c", `model_provider="persona-launcher"`,
+		"-c", `model_providers.persona-launcher={name="Persona launcher",base_url="http://127.0.0.1:9/v1",wire_api="responses",env_key="OPENAI_API_KEY",model_catalog_url="http://127.0.0.1:9/v1/models"}`,
+		"-m", "gpt-x", "exec", "hi"}; !slices.Equal(withCatalog, want) {
+		t.Fatalf("catalog: got %v, want %v", withCatalog, want)
+	}
+	if got := launchArgv("codex", nil, nil, "", "", env[:1], catalog); !slices.Equal(got, keyless) {
+		t.Fatalf("a keyless provider with a catalog: got %v, want %v", got, keyless) // codex would fetch it with no key
+	}
+	for _, own := range [][]string{{"-c", "model_provider=mine"}, {"-p", "work"}, {"--oss"}} {
+		if got := launchArgv("codex", own, nil, "", "", env, catalog); !slices.Equal(got, append([]string{"codex"}, own...)) {
+			t.Fatalf("own provider %v with a catalog: got %v", own, got)
+		}
+	}
+	if got := launchArgv("codex", nil, nil, "", "gpt-x", nil, catalog); !slices.Equal(got, []string{"codex", "-m", "gpt-x"}) {
+		t.Fatalf("no gateway with a catalog: got %v", got)
 	}
 	// The prompt after "--" is no option, and an option's value is not one either: the gateway still applies.
 	for _, prompt := range [][]string{{"--", "--oss"}, {"--", "-p"}, {"-m", "-p"}, {"exec", "--", "--profile=work"}} {
-		got := launchArgv("codex", prompt, nil, "", "", env)
+		got := launchArgv("codex", prompt, nil, "", "", env, "")
 		if want := append(append([]string{"codex"}, provider...), prompt...); !slices.Equal(got, want) {
 			t.Fatalf("prompt %v: got %v", prompt, got)
 		}
+	}
+}
+
+func TestLaunchArgsCodexBeforePromptSeparator(t *testing.T) {
+	got := launchArgv("codex", nil, []string{"--"}, "", "gpt-x", nil, "")
+	if want := []string{"codex", "-m", "gpt-x", "--"}; !slices.Equal(got, want) {
+		t.Fatalf("managed separator: got %v, want %v", got, want)
+	}
+	got = launchArgv("codex", nil, []string{"--", "--model", "prompt-word"}, "", "gpt-x", nil, "")
+	if want := []string{"codex", "-m", "gpt-x", "--", "--model", "prompt-word"}; !slices.Equal(got, want) {
+		t.Fatalf("prompt model text: got %v, want %v", got, want)
 	}
 }

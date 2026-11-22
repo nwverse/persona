@@ -14,6 +14,8 @@ FROM --platform=$BUILDPLATFORM node:22-alpine AS web
 # The browser's OPAQUE implementation is built from the same Go sources as the hub.
 COPY --from=go-toolchain /usr/local/go/ /usr/local/go/
 ENV PATH="/usr/local/go/bin:${PATH}"
+ARG NODE_OPTIONS=
+ENV NODE_OPTIONS=${NODE_OPTIONS}
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 # Packages the project keeps in web/vendor/ (SheetJS publishes its current releases only as a tarball, docs/web/web.md "Spreadsheets").
@@ -33,10 +35,15 @@ COPY server/cmd/password-wasm/ /src/server/cmd/password-wasm/
 # the build checks the tests too. The whole folder (about 2 MB, this stage only), so a test reading a new case folder
 # needs no line here; four image builds broke on a missing line before (#5197).
 COPY spec/fixtures/ /src/spec/fixtures/
+# The desktop bridge's types (src/lib/desktop-types.d.ts re-exports them): without it they were any, and tsc -b failed once a
+# test read a field of one (TS7006, #9626).
+COPY spec/desktop-bridge.d.ts /src/spec/desktop-bridge.d.ts
 # The extension schema, which the web app builds in: src/lib/extension-ui-stream.ts imports its *.schema.json (?raw),
 # the admin page's assistant card preview and the showcase glob its examples (import.meta.glob, which comes out empty
 # without them), and tests import example JSON (TS2307 in tsc -b without it).
 COPY schema/extension/ /src/schema/extension/
+# The configuration form's schema and validation cases: its web tests import them directly (TS2307 in tsc -b without them).
+COPY schema/configuration/ /src/schema/configuration/
 # Without prebuild's privacy check: it scans the whole checkout (scripts/, git), which is not in this context. It
 # runs on the checkout before the image is built (.github/workflows/release.yml; locally the hooks and web builds).
 RUN npm run pake:build && npm run build --ignore-scripts
@@ -60,10 +67,13 @@ COPY server/ ./
 COPY --from=web /src/web/dist/ internal/hub/webdist/
 # Its hashed assets kept gzipped, as the hub sends them (docs/web/web.md "Precompressed assets").
 RUN go run ./internal/webasset/precompress internal/hub/webdist
-# The runtime packages personad carries and keeps its runtimes on (docs/integrations/runtimes.md "Auto-update"): the DSH plugin's and
-# the pi extension's, the Paseo bridge's and the Agent SDK bridge's code.
-COPY integrations/agent-sdk/ /src/integrations/agent-sdk/
+# The runtime packages personad carries and keeps its runtimes on (docs/integrations/runtimes.md "Auto-update"): the DSH plugin's,
+# the pi extension's, the Antigravity companion's and the Paseo bridge's code, and the Persona plugin for Claude Code
+# (runtimepkg's Assets, #9626). scripts/test/test_docker_context.py checks every directory runtimepkg reads is here and in .dockerignore.
+COPY integrations/antigravity/ /src/integrations/antigravity/
+COPY integrations/claude-code-plugin/ /src/integrations/claude-code-plugin/
 COPY integrations/dsh/ /src/integrations/dsh/
+COPY integrations/opencode/ /src/integrations/opencode/
 COPY integrations/paseo/ /src/integrations/paseo/
 COPY integrations/pi/ /src/integrations/pi/
 COPY integrations/runtime-sdk/ /src/integrations/runtime-sdk/
@@ -90,12 +100,15 @@ RUN for p in persona-hub persona-manager; do \
         -ldflags "-s -w -X main.version=$VERSION -X main.channel=docker -X main.image=$IMAGE -X main.updateURL=$UPDATE_URL" -o /out/$p ./cmd/$p || exit 1; \
     done
 
-FROM alpine:3.22
-ARG TARGETARCH
+FROM alpine:3.22 AS sandbox-runtime
 # ssh: machines the hub reaches over ssh (optional with tailcat); su-exec: the entrypoint drops to the persona user.
-RUN apk add --no-cache ca-certificates tzdata openssh-client su-exec \
+# bubblewrap uses unprivileged user namespaces; the Compose seccomp profile permits its setup syscalls.
+RUN apk add --no-cache ca-certificates tzdata openssh-client su-exec bubblewrap \
+ && chmod 0755 /usr/bin/bwrap \
  && adduser -D -h /home/persona -u 1000 persona \
  && mkdir -p /home/persona/.persona && chown persona:persona /home/persona/.persona && chmod 700 /home/persona/.persona
+FROM sandbox-runtime
+ARG TARGETARCH
 COPY --from=build /out/nodes/ /opt/persona/nodes/
 RUN ln -s /opt/persona/nodes/personad-linux-$TARGETARCH /opt/persona/personad && /opt/persona/personad version
 # Next to the binary personad runs as (the link resolves into nodes/), where the hub looks for it.

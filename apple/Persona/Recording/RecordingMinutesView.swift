@@ -26,6 +26,13 @@ import UIKit
     private(set) var status: String?
     /// The transcript expired on the hub (`trimmed_at`): its minutes stay, and none can be written again.
     private(set) var trimmed = false
+    /// How the hub transcribed it (#3862 phase 5, `detail.meta.transcription`): the mode, and in hub mode how far the hub
+    /// is (the page says "being finished" until `final`) and the stretches it has no audio for. nil: no mode decided.
+    private(set) var transcription: MeetingTranscriptionView?
+    /// The meeting imported from a connected app it stands for too (#8872), with its notes' link; nil without one.
+    private(set) var imported: KBImportedMeeting?
+    /// Its latest hand-off to an Agent (#8852, `detail.meta.handoffs`): where it went, or why it didn't; nil without one.
+    private(set) var handoff: MeetingHandoff?
     /// A write (Regenerate, Add to To-Dos) or the read-back after it is on its way: no other one starts meanwhile.
     private(set) var asking = false
     /// Bumped by Try Again: the page's polling starts over (its task is keyed on it).
@@ -39,11 +46,50 @@ import UIKit
         struct Meta: Decodable {
             var state: String?
             var trimmedAt: String?
-            enum CodingKeys: String, CodingKey { case state = "minutes_state", trimmedAt = "trimmed_at" }
+            var transcription: MeetingTranscriptionView?
+            /// What the hub calls it and why (#8873).
+            var name: String?
+            var nameSource: String?
+            /// Its imported meeting's id (#8872): `links` has its notes' link.
+            var importedMeetingID: String?
+            /// Its latest hand-off to an Agent (#8852).
+            var handoff: MeetingHandoff?
+            struct Ref: Decodable { var id: String }
+            enum CodingKeys: String, CodingKey {
+                case state = "minutes_state", trimmedAt = "trimmed_at", transcription, name, nameSource = "name_source"
+                case importedMeeting = "imported_meeting", handoffs
+            }
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                state = try? c.decodeIfPresent(String.self, forKey: .state)
+                trimmedAt = try? c.decodeIfPresent(String.self, forKey: .trimmedAt)
+                name = try? c.decodeIfPresent(String.self, forKey: .name)
+                nameSource = try? c.decodeIfPresent(String.self, forKey: .nameSource)
+                importedMeetingID = (try? c.decodeIfPresent(Ref.self, forKey: .importedMeeting))?.id
+                // Read leniently: hand-offs this app can't read leave the rest as it was.
+                handoff = MeetingHandoff.latest(try? c.decodeIfPresent([Lossy<MeetingHandoff>].self, forKey: .handoffs))
+                // Read leniently: a `transcription` this app can't read leaves the rest of the page as it was.
+                transcription = MeetingTranscriptionView(try? c.decodeIfPresent(JSONValue.self, forKey: .transcription))
+            }
         }
         struct Detail: Decodable {
             var minutes: RecordingMinutes?
             var meta: Meta?
+            /// What it links to: its imported meeting among them, with its notes' link and connector (#8872).
+            var links: [KBEntry]?
+            enum CodingKeys: String, CodingKey { case minutes, meta, links }
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                minutes = try c.decodeIfPresent(RecordingMinutes.self, forKey: .minutes)
+                meta = try c.decodeIfPresent(Meta.self, forKey: .meta)
+                // Read leniently: links this app can't read leave the minutes as they were.
+                links = try? c.decodeIfPresent([KBEntry].self, forKey: .links)
+            }
+
+            /// The imported meeting, when the hub named one and linked it with a link to open.
+            var imported: KBImportedMeeting? { KBImportedMeeting.of(id: meta?.importedMeetingID, links: links) }
         }
         var detail: Detail
     }
@@ -51,6 +97,17 @@ import UIKit
     /// Where `entry`'s minutes are now. `synced`: the hub has this revision of its text.
     func load(_ entry: RecordingEntry, synced: Bool) async {
         let meeting = entry.isMeeting
+        // A replayed meeting (`ReplayedMeeting`, #9417, #10589): its tape's minutes once it ended, none before; never the
+        // hub's.
+        if ReplayedMeeting.holds(entry.id) {
+            #if os(iOS)
+            let tape = MeetingReplay.minutes(for: entry.id)
+            #else
+            let tape: RecordingMinutes? = nil
+            #endif
+            state = entry.active ? .waitingForText : tape.map { .ready($0) } ?? .waitingForSync
+            return
+        }
         if entry.active || !entry.transcribedAll {
             if case .ready = state { return } // a re-transcription keeps showing the minutes it has
             state = meeting ? .waitingForText : .none
@@ -64,8 +121,13 @@ import UIKit
             state = Self.state(minutes: answer.detail.minutes, status: answer.detail.meta?.state, meeting: meeting, synced: synced)
             status = answer.detail.meta?.state
             trimmed = answer.detail.meta?.trimmedAt?.isEmpty == false
+            if transcription != answer.detail.meta?.transcription { transcription = answer.detail.meta?.transcription }
+            if imported != answer.detail.imported { imported = answer.detail.imported }
+            if handoff != answer.detail.meta?.handoff { handoff = answer.detail.meta?.handoff }
+            // The minutes' title names it from now on (#8873): read here, where the page waits for them.
+            if let meta = answer.detail.meta { RecordingSync.shared.hubNamed(entry.id, name: meta.name, source: meta.nameSource) }
             #if os(iOS)
-            MinutesRelay.shared.note(entry, state: state)
+            MinutesRelay.shared.note(RecordingLibrary.shared.entry(entry.id) ?? entry, state: state) // the watch gets the name too
             #endif
         } catch let error as APIError where error.status == 404 {
             state = meeting ? .waitingForSync : .none
@@ -96,7 +158,7 @@ import UIKit
     /// Writes them again (`POST /api/v1/recordings/{id}/minutes`): after a failure, or when they missed something. Minutes
     /// shown stay while the new ones are written (Updating), as the hub keeps them.
     func regenerate(_ id: UUID) async {
-        guard let api = api(), !asking else { return }
+        guard !ReplayedMeeting.holds(id), let api = api(), !asking else { return }
         asking = true
         defer { asking = false }
         do {
@@ -135,7 +197,8 @@ import UIKit
     /// reads the recording back before anything else is sent. Minutes rewritten since they were shown (`409
     /// minutes_stale`) are shown as they are now, and nothing is sent again: the user sees the new ones first.
     func add(_ ids: [String], to entry: RecordingEntry, synced: Bool) async {
-        guard case .ready(let minutes) = state, let version = minutes.version, !ids.isEmpty, let api = api(), !asking else { return }
+        guard !ReplayedMeeting.holds(entry.id), case .ready(let minutes) = state, let version = minutes.version, !ids.isEmpty,
+              let api = api(), !asking else { return }
         asking = true
         defer { asking = false }
         struct Body: Encodable { var version: Int; var actions: [String] }
@@ -161,10 +224,12 @@ import UIKit
 
     /// Whether to ask again soon: while they are on their way, or newer ones are.
     var waiting: Bool {
+        // The hub is still finishing a hub-mode transcript (#3862 phase 5): the page says so until it is final.
+        if let transcription, transcription.mode == .hub, !transcription.settled { return true }
         switch state {
-        case .writing, .waitingForSync, .waitingForText: true
-        case .ready: status == "pending"
-        default: false
+        case .writing, .waitingForSync, .waitingForText: return true
+        case .ready: return status == "pending"
+        default: return false
         }
     }
 }
@@ -180,7 +245,8 @@ struct RecordingMinutesSections: View {
     /// The hub has this revision of its text (Regenerate needs the whole transcript there).
     var synced: Bool
     var jump: (Double) -> Void
-    @Environment(\.dynamicTypeSize) private var typeSize
+    /// The size its words read at: the row's layout follows them, not the interface's cap.
+    @Environment(\.readingTypeSize) private var reading
 
     var body: some View {
         switch model.state {
@@ -297,10 +363,10 @@ struct RecordingMinutesSections: View {
     }
 
     /// A point, decision, action item or open question: its words, who and by when, its time; `below` under the words (an
-    /// action item's Add to To-Dos). At the accessibility sizes the time goes under the words, which then have the row's
+    /// action item's Add to To-Dos). At the accessibility reading sizes the time goes under the words, which then have the row's
     /// width: beside it they broke every three characters and Add to To-Dos read "+ …" (#4062).
     private func row<Below: View>(_ item: RecordingMinutes.Item, _ symbol: String, @ViewBuilder below: () -> Below) -> some View {
-        let large = typeSize.isAccessibilitySize
+        let large = reading?.isAccessibilitySize == true
         return HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
             ThemedIcon(symbol).font(Theme.Font.secondary).foregroundStyle(Theme.accent)
                 .scaledFrame(width: Theme.Size.iconXS)
@@ -337,18 +403,16 @@ struct RecordingMinutesSections: View {
 
 /// The minutes' Copy and Share: Markdown rendered on the phone (`RecordingMinutes.text`), headed by the minutes' title or
 /// else the recording's name. In the minutes' sections, and on iPhone under the Summary | Transcript switch, where they
-/// stay whichever view shows (#5026). At the accessibility sizes they stack, so neither is cut to "…".
+/// stay whichever view shows (#5026). With the summary card's layout (`summaryCard`, #6563) they send the hub's own
+/// Markdown, which follows that layout (`RecordingMinutes.shareText`).
 struct RecordingMinutesActions: View {
     var entry: RecordingEntry
     var minutes: RecordingMinutes
-    @Environment(\.dynamicTypeSize) private var typeSize
+    /// The Summary shows the summary card (`RecordingMinutesCards.Summary.overview`).
+    var summaryCard = false
 
     var body: some View {
-        // At the accessibility sizes one above the other: side by side, both read "…".
-        let layout = typeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: Theme.Space.s))
-            : AnyLayout(HStackLayout(spacing: Theme.Space.m))
-        layout {
+        HStack(spacing: Theme.Space.m) {
             Button { copy() } label: { Label("Copy", systemImage: Theme.Icon.copy).lineLimit(1) }
                 .themedButton()
                 .accessibilityIdentifier("minutes-copy")
@@ -361,7 +425,12 @@ struct RecordingMinutesActions: View {
     }
 
     private var text: String {
-        minutes.text(title: entry.displayTitle)
+        Self.text(minutes, title: entry.displayTitle, summaryCard: summaryCard)
+    }
+
+    /// What Copy and Share send: the hub's Markdown with the summary card, else the phone's own.
+    static func text(_ minutes: RecordingMinutes, title: String, summaryCard: Bool) -> String {
+        summaryCard ? minutes.shareText(title: title) : minutes.text(title: title)
     }
 
     private func copy() {
@@ -459,3 +528,4 @@ struct MinutesPhoto: View {
 }
 #endif
 #endif
+import PersonaWire

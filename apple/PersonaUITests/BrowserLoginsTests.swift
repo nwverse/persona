@@ -25,6 +25,22 @@ final class BrowserLoginsTests: XCTestCase {
         try app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/cookies-\(env["PERSONA_SHOTS_APPEARANCE"] ?? "unknown")-\(name).png"))
     }
 
+    /// Two more made-up sites through the import API, so the section folds into the summary that opens the whole list
+    /// (more than `BrowserSiteList.inPlace`, #5821) whichever test ran before against the same mock.
+    @MainActor private func addSites() throws {
+        var req = URLRequest(url: try XCTUnwrap(URL(string: hub + "/api/v1/machines/macbook/browser/cookies")))
+        req.httpMethod = "POST"
+        req.setValue("Bearer mock", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let cookies = ["one", "two"].map { ["domain": ".list-\($0).example", "path": "/", "name": "sid", "value": "made-up", "expires": 2000000000] as [String: Any] }
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["cookies": cookies])
+        var status = 0
+        let done = expectation(description: "sites added")
+        URLSession.shared.dataTask(with: req) { _, r, _ in status = (r as? HTTPURLResponse)?.statusCode ?? 0; done.fulfill() }.resume()
+        wait(for: [done], timeout: 10)
+        XCTAssertEqual(status, 200, "the mock did not take the sites")
+    }
+
     @MainActor func testSitesImportAndClear() throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("cookies.txt")
         try [".example.com\tTRUE\t/\tTRUE\t2000000000\tsid\tmade-up-1", "#HttpOnly_.example.com\tTRUE\t/\tTRUE\t2000000000\ttoken\tmade-up-2",
@@ -51,16 +67,69 @@ final class BrowserLoginsTests: XCTestCase {
         try shot(app, "pick")
         confirm.tap()
         XCTAssertTrue(confirm.waitForNonExistence(timeout: 15), "the sheet stayed")
-        let org = app.staticTexts["example.org"]
-        XCTAssertTrue(org.waitForExistence(timeout: 10), "the imported site is not listed")
-        for _ in 0..<4 where !org.isHittable { page.swipeUp(velocity: .slow) }
+        // The import makes four sites, more than the section shows in place (BrowserSiteList.inPlace): they fold into a
+        // summary that opens the whole list, where a site is cleared (#5821).
+        let summary = app.buttons["browser-logins-summary"]
+        XCTAssertTrue(summary.waitForExistence(timeout: 10), "the sites did not fold:\n\(app.debugDescription)")
+        for _ in 0..<4 where !summary.isHittable { page.swipeUp(velocity: .slow) }
+        summary.tap()
+        XCTAssertTrue(app.navigationBars["浏览器登录"].waitForExistence(timeout: 10), "the whole list did not open")
+        let site = { (domain: String) in app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", domain)).firstMatch }
+        XCTAssertTrue(site("example.org").waitForExistence(timeout: 10), "the imported site is not listed")
         try shot(app, "list")
-        app.buttons.matching(identifier: "browser-logins-clear").firstMatch.tap()
+        site("example.com").swipeLeft()
+        let clear = app.buttons["清除"].firstMatch
+        XCTAssertTrue(clear.waitForExistence(timeout: 5), "no Clear on the site's row")
+        clear.tap()
         try shot(app, "clear")
         let sure = app.buttons.matching(identifier: "browser-logins-clear-confirm").firstMatch
         XCTAssertTrue(sure.waitForExistence(timeout: 5), "no confirmation")
         sure.tap()
-        XCTAssertTrue(app.staticTexts["example.com"].waitForNonExistence(timeout: 10), "the site was not cleared")
+        XCTAssertTrue(site("example.com").waitForNonExistence(timeout: 10), "the site was not cleared")
+        XCTAssertTrue(site("example.org").exists, "the list did not stay open")
+    }
+
+    /// iPhone's one top-trailing menu keeps Select and sorting reachable from the sidebar's machine detail.
+    @MainActor func testWholeListKeepsSelectAndSortInOneMenu() throws {
+        try addSites()
+        let app = XCUIApplication()
+        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+        app.launchArguments = ["-pairURL", pair, "-tab", "settings", "-openMachines", "YES",
+                               "-openMachineDetail", "macbook", "-openBrowserLogins", "YES"]
+        app.launchPinned()
+        let detail = app.navigationBars["MacBook"]
+        XCTAssertTrue(detail.waitForExistence(timeout: 20), "the machine did not open")
+        XCTAssertTrue(detail.buttons["BackButton"].exists)
+        XCTAssertFalse(app.buttons["shell-place-sidebar"].exists)
+        let summary = app.buttons["browser-logins-summary"]
+        let page = app.scrollViews.firstMatch
+        for _ in 0..<10 where !(summary.exists && summary.isHittable) { page.swipeUp(velocity: .slow) }
+        XCTAssertTrue(summary.isHittable, "Browser Sign-ins summary is not reachable:\n\(app.debugDescription)")
+        summary.tap()
+        let bar = app.navigationBars["浏览器登录"]
+        XCTAssertTrue(bar.waitForExistence(timeout: 20), "the whole Browser Sign-ins list did not open:\n\(app.debugDescription)")
+        XCTAssertTrue(bar.buttons["BackButton"].exists)
+        XCTAssertFalse(app.buttons["shell-place-sidebar"].exists)
+        XCTAssertEqual(bar.buttons.matching(identifier: "BackButton").count, 1, "the child has more than one leading button")
+        let trailing = bar.descendants(matching: .button).matching(identifier: "browser-logins-sort").allElementsBoundByIndex
+        XCTAssertEqual(trailing.count, 1, "the one trailing menu is not directly accessible:\n\(bar.debugDescription)")
+        try shot(app, "one-menu")
+
+        app.buttons["browser-logins-sort"].tap()
+        let select = app.buttons["browser-logins-select"]
+        XCTAssertTrue(select.waitForExistence(timeout: 5), "Select is not in the one menu:\n\(app.debugDescription)")
+        try shot(app, "menu-open")
+        select.tap()
+        XCTAssertTrue(app.buttons["browser-logins-select-all"].waitForExistence(timeout: 5), "Select did not start selection")
+        app.buttons["browser-logins-sort"].tap()
+        app.buttons["browser-logins-done"].tap()
+        XCTAssertTrue(app.buttons["browser-logins-select-all"].waitForNonExistence(timeout: 5), "Done did not finish selection")
+
+        app.buttons["browser-logins-sort"].tap()
+        let expiring = app.buttons["快过期的在前"] // i18n-ignore: the existing localized sort choice
+        XCTAssertTrue(expiring.waitForExistence(timeout: 5), "Sort By is not in the one menu")
+        expiring.tap()
+        XCTAssertTrue(app.buttons["browser-logins-sort"].waitForExistence(timeout: 5))
     }
 
     /// The node could not read ego's sign-ins (#1926; mock MOCK_COOKIES_FAIL=1, PERSONA_COOKIES_FAIL=1): a sentence and

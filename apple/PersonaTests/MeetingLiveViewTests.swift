@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The live view on the phone (#3862 phase 2; contract docs/assistant/meeting-minutes.md「Phase 2: live view」, the phone's
 /// side docs/apple/recording.md「Live view (phase 2)」): the flag snapshot, 15-second segments for the meetings Persona
@@ -362,6 +363,24 @@ import Testing
         #expect(silent.topic == nil && silent.line == nil && silent.persona == nil)
         let blank = content(meeting(live(), lines: ["   "]), topic: " ")
         #expect(blank.topic == nil && blank.line == nil)
+    }
+
+    /// The current topic's place among the room's topics ("Topic: … · 2 / 4", #8731 V4): from 1, with how many there are;
+    /// none for a topic the list doesn't hold, and none on the activity where it carries no topic.
+    @Test func theActivityCarriesTheTopicsPlace() {
+        let topics = [MeetingTopic(title: "Release date", state: "done"), MeetingTopic(title: "Load test", state: "current"),
+                      MeetingTopic(title: "Cache", state: "open"), MeetingTopic(title: "Export cap", state: "open")]
+        let place = RecordingActivity.place(of: "Load test", in: topics)
+        #expect(place == RecordingActivity.TopicPlace(number: 2, count: 4))
+        #expect(RecordingActivity.place(of: "Elsewhere", in: topics) == nil)
+        #expect(RecordingActivity.place(of: nil, in: topics) == nil)
+        let c = RecordingActivity.content(entry: meeting(live(), lines: ["first"]), recording: true, interrupted: false,
+                                          elapsed: 100, previous: nil, now: now, topic: "Load test", topicPlace: place)
+        #expect(c.topic == "Load test" && c.topicNumber == 2 && c.topicCount == 4)
+        let plain = RecordingActivity.content(entry: meeting(live(liveView: false), lines: ["first"]), recording: true,
+                                              interrupted: false, elapsed: 100, previous: nil, now: now, topic: "Load test",
+                                              topicPlace: place)
+        #expect(plain.topic == nil && plain.topicNumber == nil && plain.topicCount == nil)
     }
 
     /// The third line is the latest answer for 60 s after it came, then the latest line; with no line yet the answer stays

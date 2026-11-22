@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The sidebar's assistant switcher (docs/assistant/managers.md "Clients"): what each row says, the list's order, the
 /// avatar colors every client shares, what a roster kept across launches holds, and the install code a row of one still
@@ -26,12 +27,51 @@ struct AssistantSwitcherTests {
         ManagerRoster(try JSON.decoder.decode(APIClient.ManagerList.self, from: Data(roster.utf8)))
     }
 
+    /// With several hubs the list starts with them, the current one marked (#12594); with one hub there is no hub group.
+    @Test func theHubsComeFirstOnlyWithSeveral() {
+        let names = ["": "Home", "g1": "Work"]
+        let rows = AssistantSwitcherText.hubs(["", "g1"], current: "g1") { names[$0] ?? $0 }
+        #expect(rows.map(\.name) == ["Home", "Work"], "every group in order, the default group first")
+        #expect(rows.map(\.current) == [false, true])
+        #expect(AssistantSwitcherText.hubs([""], current: "") { names[$0] ?? $0 }.isEmpty, "one hub: the assistants alone")
+        #expect(AssistantSwitcherText.hubs([], current: nil) { $0 }.isEmpty)
+        #expect(AssistantSwitcherText.spokenHub(rows[1]).hasPrefix("Work, "))
+        #expect(AssistantSwitcherText.spokenHub(rows[0]) == "Home")
+    }
+
     @Test func theListIsTheInstalledOnesThenThoseInstalling() throws {
         let roster = try Self.list()
         #expect(AssistantSwitcherText.rows(roster).map(\.id) == ["m-1", "assistant", "m-2", "m-3", "m-4"],
                 "the default first, the roster's order, then the ones still installing")
         let one = ManagerRoster(managers: [HubManager(id: "assistant", name: "助手", online: true, isDefault: true, builtin: true)])
         #expect(AssistantSwitcherText.rows(one).map(\.id) == ["assistant"], "one assistant is listed too")
+    }
+
+    /// The built-in assistant the hub keeps out of the switcher (`hidden`, #9055) has no row and can't be picked, yet it
+    /// still counts as installed: the pages still scope and group by assistant, its badge still counts and the
+    /// default is still marked. Only `hidden` takes the row away: the choice alone (`hide`, while it has a computer)
+    /// keeps it.
+    @Test func aHiddenAssistantHasNoRowButStillCounts() throws {
+        let installing = Self.start.addingTimeInterval(8 * 60)
+        func roster(hidden: Bool) -> ManagerRoster {
+            ManagerRoster(managers: [
+                HubManager(id: "assistant", name: "助手", online: true, builtin: true, hide: true, hidden: hidden),
+                HubManager(id: "m-1", name: "工作", online: true, isDefault: true),
+                HubManager(id: "m-3", name: "书房", online: false, installing: installing)])
+        }
+        let hidden = roster(hidden: true)
+        #expect(AssistantSwitcherText.rows(hidden).map(\.id) == ["m-1", "m-3"], "no row for it")
+        #expect(hidden.installed.map(\.id) == ["m-1", "assistant"] && hidden.isMulti, "still one of two installed")
+        #expect(!hidden.canPick("assistant") && hidden.canPick("m-1"))
+        #expect(hidden.owner("assistant") == "assistant", "its things are still its own")
+        #expect(AssistantBadges.counts(roster: hidden, waiting: ["assistant": 2], inbox: ["m-1": 1]) == ["assistant": 2, "m-1": 1])
+
+        let inUse = roster(hidden: false)
+        #expect(AssistantSwitcherText.rows(inUse).map(\.id) == ["m-1", "assistant", "m-3"], "the choice alone keeps its row")
+        #expect(inUse.canPick("assistant"))
+
+        let kept = try JSON.decoder.decode([HubManager].self, from: JSON.encoder.encode(hidden.managers))
+        #expect(ManagerRoster(managers: kept, defaultID: hidden.defaultID) == hidden, "a launch keeps it out as the last one did")
     }
 
     @Test func aRowSaysWhetherItIsOnlineAndWhere() throws {

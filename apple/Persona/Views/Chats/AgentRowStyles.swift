@@ -96,6 +96,7 @@ struct AgentAvatar: View {
     var dense = false
     /// Off where something else beside the row says the state (`SlotRow.dot`).
     var dot = true
+    var muted = false
 
     var body: some View {
         let side = dense ? Theme.Size.wellS : Theme.Size.wellL
@@ -104,7 +105,7 @@ struct AgentAvatar: View {
             .background(Theme.Fill.well, in: Circle())
             .overlay(alignment: .bottomTrailing) {
                 if dot {
-                    StatusDot(state: session.state, size: dense ? Theme.Size.dot : Theme.Size.dotXL, waiting: session.waitsInBackground)
+                    StatusDot(state: session.state, size: dense ? Theme.Size.dot : Theme.Size.dotXL, waiting: session.waitsInBackground, justFinished: session.showsJustFinished(muted: muted))
                         .padding(Theme.Size.rule)
                         .background(Theme.card, in: Circle())
                         .offset(x: Theme.Size.rule, y: Theme.Size.rule)
@@ -145,16 +146,31 @@ extension SlotRow {
     /// Where it runs, one line: the source first (its tag, a tap away for a Lark group), then what `placeText` says, its
     /// to-do, a muted agent's bell. `states`: with Awaiting Reply and Waiting in the Background, unless the row spells
     /// its state out already (C).
+    /// The place line: whole when it fits the row; the to-do as an icon, then the model chip dropped, when it does not; and the place text cut short
+    /// last. Its chips never shrink, so at a large text size they pushed the row wider than its card, the time and the
+    /// preview running off the edge; the choice is by measured width (`ViewThatFits`), not text size.
     @MainActor private func placeLine(states: Bool = true) -> some View {
+        ViewThatFits(in: .horizontal) {
+            placeLineItems(states: states, model: true, todoChip: true, cut: false)
+            placeLineItems(states: states, model: true, todoChip: false, cut: false)
+            placeLineItems(states: states, model: false, todoChip: false, cut: false)
+            placeLineItems(states: states, model: false, todoChip: false, cut: true)
+        }
+        .font(Theme.Font.caption)
+        .foregroundStyle(.secondary)
+    }
+
+    @MainActor private func placeLineItems(states: Bool, model: Bool, todoChip: Bool, cut: Bool) -> some View {
         HStack(spacing: Theme.Space.xs) {
             sourceLabel
-            placeText(states: states).lineLimit(1)
-            if !session.modelShortName.isEmpty {
+            placeText(states: states).lineLimit(1).fixedSize(horizontal: !cut, vertical: false)
+            if model, !session.modelShortName.isEmpty {
                 Chip(text: session.modelShortName, look: .outline, compact: true)
             }
             if let todo = session.todo {
-                ViewThatFits(in: .horizontal) {
+                if todoChip {
                     Chip(text: todo.title, symbol: Theme.Icon.todo, look: .outline)
+                } else {
                     ThemedIcon(Theme.Icon.todo).help(todo.title).accessibilityLabel(String(localized: "To-do: \(todo.title)"))
                 }
             }
@@ -162,15 +178,13 @@ extension SlotRow {
                 ThemedIcon(Theme.Icon.muted).font(Theme.Font.label).accessibilityLabel("Notifications muted")
             }
         }
-        .font(Theme.Font.caption)
-        .foregroundStyle(.secondary)
     }
 
     // MARK: A · Avatar
 
     @MainActor private func avatarRow(dense: Bool) -> some View {
         HStack(alignment: .top, spacing: dense ? Theme.Space.s : Theme.Space.m) {
-            AgentAvatar(session: session, dense: dense, dot: dot)
+            AgentAvatar(session: session, dense: dense, dot: dot, muted: muted)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 TimeBesideOrUnder {
                     titleText.frame(maxWidth: .infinity, alignment: .leading)
@@ -190,6 +204,7 @@ extension SlotRow {
                     needsYouChip
                 }
                 if !session.runningWorkflows.isEmpty { WorkflowLine(runs: session.runningWorkflows) }
+                RunningChildrenCaption(session: session)
                 if hasPlaceLine { placeLine().padding(.top, Theme.Space.xxs) }
             }
         }
@@ -200,7 +215,7 @@ extension SlotRow {
 
     @MainActor private var twoLineRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-            if dot { StatusDot(state: session.state, size: Theme.Size.dot, waiting: session.waitsInBackground) }
+            if dot { StatusDot(state: session.state, size: Theme.Size.dot, waiting: session.waitsInBackground, justFinished: session.showsJustFinished(muted: muted)) }
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 TimeBesideOrUnder {
                     HStack(spacing: Theme.Space.xs) {
@@ -225,6 +240,7 @@ extension SlotRow {
                     sourceLabel
                 }
                 if !session.runningWorkflows.isEmpty { WorkflowLine(runs: session.runningWorkflows) }
+                RunningChildrenCaption(session: session)
             }
         }
         .padding(.vertical, Theme.Space.xxs)
@@ -236,7 +252,7 @@ extension SlotRow {
         let tone = session.stateTone(muted: muted)
         let waits = session.state == .needsYou && !muted
         // Its state in words, but not a quiet one's (Seen) nor where the section says it.
-        let word = hideState || muted || (session.state == .idle && !session.awaitsYourReply(muted: muted)) ? nil : session.stateLabel(muted: muted)
+        let word = hideState || muted || (session.state == .idle && !showsReviewWord) ? nil : session.stateLabel(muted: muted)
         return VStack(alignment: .leading, spacing: Theme.Space.xs) {
             TimeBesideOrUnder {
                 HStack(spacing: Theme.Space.xs) {
@@ -252,6 +268,7 @@ extension SlotRow {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if !session.runningWorkflows.isEmpty { WorkflowLine(runs: session.runningWorkflows) }
+            RunningChildrenCaption(session: session)
             HStack(spacing: Theme.Space.s) {
                 if dot, let word {
                     Text(word).font(Theme.Font.captionMedium).foregroundStyle(tone.text).lineLimit(1).fixedSize()

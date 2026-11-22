@@ -1,6 +1,7 @@
 // Machine details (docs/server/machines.md "App"): the pure part of the page — ranges, the metric charts' scales, gaps, ticks and
 // the hover read-out, the number formats, the agents by space and the system facts. MachineDetail.tsx only draws.
 import { formatDate, t } from "../i18n";
+import { normalizeTraeCliName } from "./agent-kind";
 import { stateOf, tabLabel } from "./format";
 import type { AgentState, Machine, Session } from "./types";
 import type { MachineComputer } from "./computer";
@@ -18,6 +19,8 @@ export interface DetailPoint {
   rx?: number;
   tx?: number;
   disk?: number;
+  battery_percent?: number;
+  temp_c?: number;
   gap?: boolean;
 }
 
@@ -35,6 +38,9 @@ export interface DetailSample {
   net_tx?: number;
   disk_used?: number;
   disk_total?: number;
+  battery_percent?: number;
+  battery_charging?: boolean;
+  temp_c?: number;
 }
 
 /** Machine.system (docs/server/machines.md "System information"). */
@@ -121,6 +127,10 @@ export function memPercent(used: number | undefined, total: number | undefined):
   return used !== undefined && total ? (100 * used) / total : undefined;
 }
 
+export function temperature(v: number | undefined): string {
+  return v !== undefined && Number.isFinite(v) ? `${v.toFixed(1)}°C` : "—";
+}
+
 // ── scales and ticks ──
 
 /** A linear map from [d0, d1] to [r0, r1]. */
@@ -173,13 +183,25 @@ export function yAxis(max: number, opts: { percent?: boolean; binary?: boolean }
 const MIN = 60;
 const TICK_STEPS = [5 * MIN, 10 * MIN, 15 * MIN, 30 * MIN, 3600, 2 * 3600, 3 * 3600, 6 * 3600, 12 * 3600];
 
-/** At most `max` round times inside [t0, t1] (every 15 minutes, every 2 hours…), on the local clock: `tz` is the
- * local offset east of UTC in seconds (-new Date().getTimezoneOffset() * 60). */
-export function timeTicks(t0: number, t1: number, max = 4, tz = 0): number[] {
-  const step = TICK_STEPS.find((s) => (t1 - t0) / s <= max) ?? 24 * 3600;
-  const out: number[] = [];
-  for (let t = Math.ceil((t0 + tz) / step) * step - tz; t <= t1; t += step) out.push(t);
-  return out;
+/** At most `max` round times inside [t0, t1] (every 15 minutes, every 2 hours…), on the local clock. */
+export function timeTicks(t0: number, t1: number, max = 4): number[] {
+  return clockTicks(t0, t1, TICK_STEPS.find((s) => (t1 - t0) / s <= max) ?? 24 * 3600);
+}
+
+/** The times inside [t0, t1] that are a whole number of `step` seconds (a divisor of a day) after a local midnight.
+ * Each day is laid out on its own clock, so the ticks before and after a daylight-saving change stay on round local
+ * times (#9863). */
+export function clockTicks(t0: number, t1: number, step: number): number[] {
+  const out = new Set<number>();
+  const first = new Date(t0 * 1000);
+  for (let d = new Date(first.getFullYear(), first.getMonth(), first.getDate()); d.getTime() <= t1 * 1000; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)) {
+    for (let s = 0; s < 86400; s += step) {
+      // A time the clocks skip lands on the next one, hence the set.
+      const at = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, s).getTime() / 1000;
+      if (at >= t0 && at <= t1) out.add(at);
+    }
+  }
+  return [...out];
 }
 
 // ── formats (the same as the app's MetricFormat) ──
@@ -190,12 +212,14 @@ export function bytesBin(v: number | undefined): string {
   const units = ["B", "KB", "MB", "GB", "TB"];
   let x = Math.max(0, v),
     i = 0;
-  while (x >= 1024 && i < units.length - 1) {
+  // The unit and the decimals follow the number as it is shown, after rounding (apple MachineMetrics.bytes): 1023.6 KB is
+  // "1.00 MB", not "1024 KB"; 99.97 MB is "100 MB", not "100.0 MB".
+  while (x >= 1023.5 && i < units.length - 1) {
     x /= 1024;
     i++;
   }
   if (i === 0) return `${Math.round(x)} B`;
-  return `${x >= 100 ? x.toFixed(0) : x >= 10 ? x.toFixed(1) : x.toFixed(2)} ${units[i]}`;
+  return `${x >= 99.95 ? x.toFixed(0) : x >= 9.995 ? x.toFixed(1) : x.toFixed(2)} ${units[i]}`;
 }
 
 /** Used of total for a tile's narrow sub line: one unit when both share it ("56.5 / 64.0 GB"), else both
@@ -253,8 +277,9 @@ export function uptime(bootSec: number, nowSec: number): string {
   return t("lib-machine-detail.uptime_minutes", { m });
 }
 
-/** "14:05" on the local clock (`tz` as in timeTicks). */
-export function hm(tSec: number, tz = 0): string {
+/** "14:05" on the local clock, with the offset of that moment (a time before a daylight-saving change reads as the
+ * clock did then, #9863); `tz` fixes the offset east of UTC in seconds instead. */
+export function hm(tSec: number, tz = localOffset(tSec * 1000)): string {
   const local = (((Math.floor(tSec + tz) % 86400) + 86400) % 86400) / 60;
   return `${String(Math.floor(local / 60)).padStart(2, "0")}:${String(Math.floor(local % 60)).padStart(2, "0")}`;
 }
@@ -309,7 +334,7 @@ export function countsText(c: SpaceGroup["counts"]): string {
 
 /** The tab label and, for anything but Claude Code, which agent it is: "#2 · Codex". */
 export function agentMeta(s: Session): string {
-  const agent = s.agent && s.agent !== "claude" ? (s.agent_label || (s.agent === "codex" ? "Codex" : s.agent === "traex" ? "TRAEX" : s.agent)) : "";
+  const agent = s.agent && s.agent !== "claude" ? normalizeTraeCliName(s.agent_label || (s.agent === "codex" ? "Codex" : s.agent)) : "";
   return [tabLabel(s), agent].filter(Boolean).join(" · ");
 }
 
@@ -334,8 +359,9 @@ export function connectionText(m: DetailMachine): string {
   return m.kind ? t("lib-machine-detail.conn_kind", { kind: m.kind }) : "";
 }
 
-/** "System": what it is, what it runs on, since when, and the versions (label, value, mono?). */
-export function systemFacts(system: SystemInfo | undefined, m: DetailMachine | undefined, nowSec: number, tz = 0): [string, string, boolean?][] {
+/** "System": what it is, what it runs on, since when, and the versions (label, value, mono?).
+ * The boot offset is resolved at the boot instant, which may be in another daylight-saving season. */
+export function systemFacts(system: SystemInfo | undefined, m: DetailMachine | undefined, nowSec: number, tz = localOffset((system?.boot_time ?? nowSec) * 1000)): [string, string, boolean?][] {
   const out: [string, string, boolean?][] = [];
   if (system?.name) out.push([t("lib-machine-detail.fact_system"), system.build ? t("lib-machine-detail.fact_system_build", { name: system.name, build: system.build }) : system.name]);
   if (system?.kernel) out.push([t("lib-machine-detail.fact_kernel"), system.kernel, true]);

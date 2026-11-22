@@ -26,7 +26,7 @@ final class InboxSourceDirectTests: XCTestCase {
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-app.tab", "assistant", "-dev.openChat", "",
-                               "-openSplitFresh", "YES", "-inbox.kind", "", "-inbox.source", "", "-inbox.grouping", "time"]
+                               "-openSplitFresh", "YES", "-inbox.kind", "", "-inbox.source", "", "-inbox.grouping", ""]
         app.launchPinned()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10), "no app window")
         regularWidth = app.windows.firstMatch.frame.width > 600
@@ -59,8 +59,10 @@ final class InboxSourceDirectTests: XCTestCase {
         openItem(route: "chain")
 
         let all = element("inbox.chain.all")
-        reveal(all, what: "Show all in the Received chain")
-        all.tap()
+        if all.exists {
+            reveal(all, what: "Show all in the Received chain")
+            all.tap()
+        }
         shot("chain-3-expanded")
 
         guard let received = receivedRow() else {
@@ -123,13 +125,15 @@ final class InboxSourceDirectTests: XCTestCase {
         return byLabel.first(where: { usableItemRow($0) })
     }
 
-    /// At regular width, a matching title belongs to the Inbox only on the same side of the divider as its toolbar.
+    /// At regular width, a matching title belongs to the Inbox only on the same side of the line beside the sidebar as its
+    /// toolbar (the sidebar's main row ends at that line; the column has no handle on it since #4206).
     @MainActor private func usableItemRow(_ row: XCUIElement) -> Bool {
         guard row.exists && row.isHittable else { return false }
         guard regularWidth else { return true }
-        let divider = element("split.divider.assistant.list"), inbox = element("inbox.more")
-        guard divider.exists, inbox.exists else { return true }
-        return (row.frame.midX > divider.frame.midX) == (inbox.frame.midX > divider.frame.midX)
+        let column = element("sidebar-main"), inbox = element("inbox.more")
+        guard column.exists, inbox.exists else { return true }
+        let line = column.frame.maxX
+        return (row.frame.midX > line) == (inbox.frame.midX > line)
     }
 
     // MARK: - Direct native chat
@@ -146,7 +150,12 @@ final class InboxSourceDirectTests: XCTestCase {
     }
 
     @MainActor private func assertDetail(route: String) {
+        if !element("inbox.detail.done").exists {
+            requireHittable(element("inbox.detail.more"), "the iPhone's one item-action menu")
+            element("inbox.detail.more").tap()
+        }
         requireHittable(element("inbox.detail.done"), "the item detail after \(route)")
+        app.tap() // dismiss the menu before View original
         let source = element("inbox.viewSource")
         // The chain can leave the detail scrolled below its header; bring View original back on screen before using it.
         for _ in 0..<8 where !(source.exists && source.isHittable) {

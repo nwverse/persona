@@ -22,7 +22,9 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.Density
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.CoroutineScope
@@ -51,6 +53,7 @@ import persona.core.designsystem.NavItem
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Tokens
 import persona.core.designsystem.icons.PhIcons
+import persona.core.domain.answer.AnswerDraft
 import persona.core.domain.sort.SessionRenamer
 import persona.core.domain.tasks.TasksStore
 import java.io.File
@@ -90,6 +93,10 @@ class PendingStackShotsTest {
         questions = listOf(Question("Which branch should I push to?", options = listOf(QuestionOption("main"), QuestionOption("release/1.4")))))
     private val plan = Interaction("plan", machineId = key.machineId, sessionId = key.sessionId, kind = "plan", createdAt = at(5),
         summary = "Retry the import once after a restart", plan = "## Retry the import\n1. Catch the restart error\n2. Retry once\n3. Add a test")
+    private val recordedPlan = plan.copy(id = "plan-then", planThen = "default")
+    private val recordedPlanLarge = recordedPlan.copy(plan = "1. Catch the restart error")
+    private val prepared = permission.copy(id = "prepared", canClarify = true,
+        expiresAt = Instant.now().plusSeconds(3_600).toString())
     private val renamer = object : SessionRenamer {
         override fun project(source: Flow<List<Session>>) = source
         override suspend fun rename(session: Session, title: String?, tabName: String?) = false
@@ -118,7 +125,7 @@ class PendingStackShotsTest {
         File(output, "$name.png").outputStream().use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
     }
 
-    private fun agentScene(name: String, requests: List<Interaction>, style: AppStyle, dark: Boolean, large: Boolean = false, fold: Boolean = false) {
+    private fun agentScene(name: String, requests: List<Interaction>, style: AppStyle, dark: Boolean, large: Boolean = false, fold: Boolean = false, showAnswers: Boolean = false) {
         val agent = Session(key.machineId, key.sessionId, title = "Fix the importer retry", agent = "claude", status = "blocked",
             state = "needs_you", pendingInteractions = requests.size, cwd = "/home/me/code/app")
         val sessions = object : SessionsRepository {
@@ -155,6 +162,12 @@ class PendingStackShotsTest {
         if (fold) {
             rule.onAllNodesWithContentDescription("Collapse").onFirst().performClick()
             frames({ shown -> shown.any { it == "Expand" } }, "$name folded")
+        }
+        if (showAnswers) {
+            rule.mainClock.autoAdvance = true
+            rule.onNodeWithText("Allow").performScrollTo()
+            rule.mainClock.autoAdvance = false
+            frames({ shown -> "Allow" in shown }, "$name answers")
         }
         save("$name-${style.name.lowercase()}-${if (dark) "dark" else "light"}${if (large) "-large" else ""}")
     }
@@ -253,6 +266,10 @@ class PendingStackShotsTest {
 
     @Test fun oneGlass() = agentScene("one", listOf(permission), AppStyle.Glass, false)
     @Test fun oneGlassDark() = agentScene("one", listOf(permission), AppStyle.Glass, true)
+    @Test fun preparedGlass() = agentScene("prepared", listOf(prepared), AppStyle.Glass, false, showAnswers = true)
+    @Test fun preparedGlassDark() = agentScene("prepared", listOf(prepared), AppStyle.Glass, true, showAnswers = true)
+    @Test fun preparedGlassLarge() = agentScene("prepared", listOf(prepared), AppStyle.Glass, false, large = true, showAnswers = true)
+    @Test fun preparedGlassLargeDark() = agentScene("prepared", listOf(prepared), AppStyle.Glass, true, large = true, showAnswers = true)
     @Test fun oneBrief() = agentScene("one", listOf(permission), AppStyle.Brief, false)
     @Test fun oneBriefDark() = agentScene("one", listOf(permission), AppStyle.Brief, true)
     @Test fun oneBoard() = agentScene("one", listOf(permission), AppStyle.Board, false)
@@ -264,6 +281,28 @@ class PendingStackShotsTest {
     @Test fun threeBoard() = agentScene("three", listOf(question, plan, permission), AppStyle.Board, false)
     @Test fun threeBoardDark() = agentScene("three", listOf(question, plan, permission), AppStyle.Board, true)
     @Test fun threeGlassLarge() = agentScene("three", listOf(question, plan, permission), AppStyle.Glass, false, large = true)
+    @Test fun recordedPlanGlass() = agentScene("recorded-plan", listOf(recordedPlan), AppStyle.Glass, false)
+    @Test fun recordedPlanGlassDark() = agentScene("recorded-plan", listOf(recordedPlan), AppStyle.Glass, true)
+    @Test fun recordedPlanBrief() = agentScene("recorded-plan", listOf(recordedPlan), AppStyle.Brief, false)
+    @Test fun recordedPlanBriefDark() = agentScene("recorded-plan", listOf(recordedPlan), AppStyle.Brief, true)
+    @Test fun recordedPlanBoard() = agentScene("recorded-plan", listOf(recordedPlan), AppStyle.Board, false)
+    @Test fun recordedPlanBoardDark() = agentScene("recorded-plan", listOf(recordedPlan), AppStyle.Board, true)
+    @Test fun recordedPlanGlassLarge() = agentScene("recorded-plan", listOf(recordedPlanLarge), AppStyle.Glass, false, large = true)
+    @Test fun recordedPlanComponentGlassLarge() {
+        rule.mainClock.autoAdvance = false
+        rule.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, 2f)) {
+                PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                    Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background).testTag("shot")) {
+                        InteractionForm(recordedPlanLarge, null, AnswerDraft(), {}, busy = false, uncertain = false, full = false,
+                            onAnswer = { _, _, _ -> }, onTerminal = null, onExpand = {}, showTerminalHelp = false)
+                    }
+                }
+            }
+        }
+        repeat(20) { Snapshot.sendApplyNotifications(); rule.mainClock.advanceTimeByFrame() }
+        save("recorded-plan-component-glass-light-large")
+    }
     @Test fun foldedGlass() = agentScene("folded", listOf(permission, question), AppStyle.Glass, false, fold = true)
     @Test fun foldedGlassDark() = agentScene("folded", listOf(permission, question), AppStyle.Glass, true, fold = true)
     @Test fun foldedBrief() = agentScene("folded", listOf(permission, question), AppStyle.Brief, false, fold = true)

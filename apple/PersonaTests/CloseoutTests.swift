@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// An agent's closeout (`Closeout`, docs/assistant/agent-work.md "Closeout", #3612): what the hub sends on `work`, how a
 /// claim stands against the hub's finding, the list rows' line, and the raw block left out of the last reply while
@@ -217,9 +218,10 @@ struct CloseoutTests {
         #expect(before.text == earlier.text, "an earlier turn's block stays as it was written")
     }
 
-    @Test func aReplyThatWasOnlyTheBlockIsNotDrawn() {
+    @Test(arguments: [false, true]) func aReplyThatWasOnlyTheBlockIsNotDrawn(markdown: Bool) {
         let user = item(1, .text, role: "user", text: "修一下导出")
-        let last = item(2, .text, text: block)
+        let report = "### Persona 工作报告\n\n- Status: done\n- Merged: yes\n- Deployed: no\n\n---"
+        let last = item(2, .text, text: markdown ? report : block)
         let lines = [ChatLine.row(.user(user)), .work(id: "w-2", items: [], live: false, start: nil, end: nil), .row(.assistant(last))]
         #expect(ChatLines.hidingCloseout(lines).map(\.id) == [user.id, "w-2"])
     }

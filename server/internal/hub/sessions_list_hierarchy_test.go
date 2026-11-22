@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/sessionlist"
 )
@@ -25,7 +26,7 @@ func hierarchyHub(t *testing.T) (*Hub, *Machine) {
 	at := func(n int) time.Time { return time.Unix(int64(1000+n), 0) }
 	row := func(id, state string, n int, under string, kids *proto.SessionChildren) proto.Session {
 		s := proto.Session{MachineID: "demo", SessionID: id, Title: id, State: state, Cwd: "/demo/app", UpdatedAt: at(n)}
-		s.SetFold(under, "", kids)
+		s.SetFold(under, "", "", kids)
 		return s
 	}
 	m.sessions = []proto.Session{
@@ -109,6 +110,35 @@ func TestRuntimeListHierarchy(t *testing.T) {
 	}
 }
 
+func TestRuntimeListActiveAgentsByMachine(t *testing.T) {
+	h := newTestHub(t)
+	m := newMachine(h, MachineConfig{ID: "demo"})
+	h.machines, h.byID["demo"] = []*Machine{m}, m
+	parent := proto.Session{MachineID: "demo", SessionID: "parent", State: proto.StateOffline}
+	parent.SetFold("", "", "", &proto.SessionChildren{Total: 1, Working: 1})
+	child := proto.Session{MachineID: "demo", SessionID: "child", State: proto.StateWorking}
+	child.SetFold("parent", proto.FoldedAsWorker, "", nil)
+	m.sessions = []proto.Session{
+		parent, child,
+		{MachineID: "demo", SessionID: "another", State: proto.StateIdle},
+		{MachineID: "demo", SessionID: "history", State: proto.StateOffline},
+		{MachineID: "demo", SessionID: "conversation", State: proto.StateWorking, Assistant: true},
+	}
+
+	w := httptest.NewRecorder()
+	h.listSessions(w, httptest.NewRequest("GET", "/api/v1/sessions?roots=1&limit=1&with_counts=1", nil))
+	var answer sessionlist.PageWithCounts
+	if err := json.Unmarshal(w.Body.Bytes(), &answer); err != nil || w.Code != 200 ||
+		!answer.HasMore || len(answer.Sessions) != 1 || answer.Total != 4 ||
+		len(answer.Counts.ActiveAgentsByMachine) != 1 || answer.Counts.ActiveAgentsByMachine["demo"] != 2 {
+		t.Fatalf("expected one page row and two active Agent roots: %d %s (%v)", w.Code, w.Body, err)
+	}
+	offline := hierarchyCounts(t, h, "roots=1&state=offline")
+	if offline.Total != 1 || offline.ActiveAgentsByMachine == nil || len(offline.ActiveAgentsByMachine) != 0 {
+		t.Fatalf("expected known zero active Agents: %+v", offline)
+	}
+}
+
 // A tab's workers come folded under its lead (folded_as worker, children.workers, #5180): roots=1 leaves them out of
 // the rows and every count and counts the lead by its folded state, parent_session_id=<lead> lists them, both kinds of
 // row carrying the keys; the tab's offline row and a tab of peers stay rows of their own.
@@ -119,7 +149,7 @@ func TestRuntimeListTabTeam(t *testing.T) {
 	row := func(id, state string, n int, under, as string, kids *proto.SessionChildren) proto.Session {
 		s := proto.Session{MachineID: "demo", SessionID: id, Title: id, State: state, Cwd: "/demo/app", UpdatedAt: time.Unix(int64(1000+n), 0),
 			SpaceKind: "herdr", SpaceID: "w1", SlotID: "t1"}
-		s.SetFold(under, as, kids)
+		s.SetFold(under, as, "", kids)
 		return s
 	}
 	m.sessions = []proto.Session{
@@ -237,8 +267,8 @@ func TestRuntimeListHierarchyValidationAndBinding(t *testing.T) {
 	under := runtimePage(t, h, "summary=1&machine_id=demo&parent_session_id=lead")
 	m.mu.Lock()
 	m.sessions = slices.Clone(m.sessions)
-	m.sessions[1].SetFold("", "", nil)
-	m.sessions[0].SetFold("", "", &proto.SessionChildren{Total: 2, NeedsYou: 1})
+	m.sessions[1].SetFold("", "", "", nil)
+	m.sessions[0].SetFold("", "", "", &proto.SessionChildren{Total: 2, NeedsYou: 1})
 	m.mu.Unlock()
 	h.sessionsChanged(m)
 	delta := runtimePage(t, h, "summary=1&roots=1&since="+neturl.QueryEscape(first.Revision))
@@ -248,5 +278,46 @@ func TestRuntimeListHierarchyValidationAndBinding(t *testing.T) {
 	gone := runtimePage(t, h, "summary=1&machine_id=demo&parent_session_id=lead&since="+neturl.QueryEscape(under.Revision))
 	if !slices.Equal(gone.Remove, []string{runtimeListID("demo", "mid")}) || gone.Total != 2 {
 		t.Fatalf("under delta: %v remove %v total %d", pageIDs(gone), gone.Remove, gone.Total)
+	}
+}
+
+func TestPagedCountsHeldNeeds(t *testing.T) {
+	h := newTestHub(t)
+	m := newMachine(h, MachineConfig{ID: "demo"})
+	h.machines, h.byID["demo"] = []*Machine{m}, m
+	now := time.Unix(2000, 0)
+	lead := proto.Session{MachineID: "demo", SessionID: "lead", Title: "lead", State: proto.StateIdle, UpdatedAt: now}
+	lead.SetFold("", "", "", &proto.SessionChildren{Total: 1, NeedsYou: 1})
+	leaf := proto.Session{MachineID: "demo", SessionID: "leaf", Title: "leaf", State: proto.StateNeedsYou, UpdatedAt: now}
+	leaf.SetFold("lead", "", "", nil)
+	m.sessions = []proto.Session{
+		lead,
+		leaf,
+		{MachineID: "demo", SessionID: "solo-p1", Title: "solo-p1", State: proto.StateNeedsYou, UpdatedAt: now},
+		{MachineID: "demo", SessionID: "mix-p0", Title: "mix-p0", State: proto.StateNeedsYou, UpdatedAt: now},
+		{MachineID: "demo", SessionID: "asst-p1", Title: "asst-p1", Assistant: true, State: proto.StateNeedsYou, UpdatedAt: now},
+	}
+	h.reported.mu.Lock()
+	h.reported.interactions = map[string]proto.Interaction{
+		"ix-leaf":  {ID: "ix-leaf", MachineID: "demo", SessionID: "leaf", FoldedUnder: "lead", Kind: proto.IxPermission, PushLevel: assistantwire.LevelP1},
+		"ix-solo":  {ID: "ix-solo", MachineID: "demo", SessionID: "solo-p1", Kind: proto.IxPermission, PushLevel: assistantwire.LevelP1},
+		"ix-mix-1": {ID: "ix-mix-1", MachineID: "demo", SessionID: "mix-p0", Kind: proto.IxPermission, PushLevel: assistantwire.LevelP1},
+		"ix-mix-0": {ID: "ix-mix-0", MachineID: "demo", SessionID: "mix-p0", Kind: proto.IxQuestion, PushLevel: assistantwire.LevelP0},
+		"ix-asst":  {ID: "ix-asst", MachineID: "demo", SessionID: "asst-p1", Kind: proto.IxQuestion, PushLevel: assistantwire.LevelP1},
+	}
+	h.reported.mu.Unlock()
+
+	c := hierarchyCounts(t, h, "agents_only=1&roots=1")
+	if c.State[proto.StateNeedsYou] != 3 || c.HeldNeeds != 2 {
+		t.Fatalf("counts = %+v, want needs_you=3 held_needs=2", c)
+	}
+	w := httptest.NewRecorder()
+	h.listSessions(w, httptest.NewRequest("GET", "/api/v1/sessions?summary=1&limit=10&agents_only=1&roots=1&with_counts=1", nil))
+	var pc sessionlist.PageWithCounts
+	if err := json.Unmarshal(w.Body.Bytes(), &pc); w.Code != 200 || err != nil {
+		t.Fatalf("with_counts: %d %s %v", w.Code, w.Body, err)
+	}
+	if pc.Counts.State[proto.StateNeedsYou] != 3 || pc.Counts.HeldNeeds != 2 {
+		t.Fatalf("with_counts = %+v, want needs_you=3 held_needs=2", pc.Counts)
 	}
 }

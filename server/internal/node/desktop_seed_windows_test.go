@@ -25,7 +25,7 @@ type desktopSeedRecord struct {
 // environment variables), never reads credentials, and records only the fields asserted below.
 func init() {
 	mode := os.Getenv("PERSONA_TEST_DESKTOP_CHILD")
-	if mode == "" || filepath.Base(os.Args[0]) != "desktop-seed-helper.exe" {
+	if mode == "" || (filepath.Base(os.Args[0]) != "desktop-seed-helper.exe" && !(mode == "claude-models" && filepath.Base(os.Args[0]) == "node.exe")) {
 		return
 	}
 	record := desktopSeedRecord{Args: os.Args[1:], Env: map[string]string{}}
@@ -41,6 +41,20 @@ func init() {
 	}
 	if mode == "claude" {
 		writeRecord()
+		os.Exit(0)
+	}
+	if mode == "claude-models" {
+		lines := bufio.NewScanner(os.Stdin)
+		if !lines.Scan() {
+			os.Exit(8)
+		}
+		var call map[string]any
+		if json.Unmarshal(lines.Bytes(), &call) != nil {
+			os.Exit(9)
+		}
+		record.Calls = append(record.Calls, call)
+		writeRecord()
+		fmt.Println(claudeInitAnswer)
 		os.Exit(0)
 	}
 	lines := bufio.NewScanner(os.Stdin)
@@ -295,5 +309,46 @@ func TestWindowsReadCodexAppModelsAsksTheAppsCodex(t *testing.T) {
 	}
 	if !reflect.DeepEqual(methods, []string{"initialize", "initialized", "model/list", "model/list"}) {
 		t.Fatalf("unexpected model requests: %v", methods)
+	}
+}
+
+// A desktop model query follows an npm shim's JavaScript entry with structured arguments; cmd.exe never runs.
+func TestWindowsClaudeDesktopModelsUseTheSafeNpmEntry(t *testing.T) {
+	helper, seen := windowsDesktopSeedCLI(t, "claude-models")
+	root := t.TempDir()
+	shim := filepath.Join(root, "claude.cmd")
+	entry := filepath.Join(root, "node_modules", "@anthropic-ai", "claude-code", "cli.js")
+	if err := os.MkdirAll(filepath.Dir(entry), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for path, contents := range map[string][]byte{shim: []byte("@exit /b 86\r\n"), entry: []byte("test entry")} {
+		if err := os.WriteFile(path, contents, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	body, err := os.ReadFile(helper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "node.exe"), body, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	oldCLI := desktopClaudeCLI
+	desktopClaudeCLI = func() (string, error) { return shim, nil }
+	t.Cleanup(func() { desktopClaudeCLI = oldCLI })
+	n, _ := testNode(t)
+	models, err := n.listDesktopCLIModels(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 3 || models[0].ID != "default" || models[0].Resolved != "claude-opus-5-5[1m]" {
+		t.Fatalf("models = %+v", models)
+	}
+	record := readWindowsDesktopSeed(t, seen)
+	if len(record.Args) != 9 || record.Args[0] != entry || !reflect.DeepEqual(record.Args[1:8], []string{"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--settings"}) {
+		t.Fatalf("model command arguments = %v", record.Args)
+	}
+	if len(record.Calls) != 1 || record.Calls[0]["type"] != "control_request" {
+		t.Fatalf("initialize calls = %+v", record.Calls)
 	}
 }

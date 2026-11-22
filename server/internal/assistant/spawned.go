@@ -22,6 +22,9 @@ const (
 	spawnNoticeTool = "spawn_notice"
 	// taskEndTool is the relay kind of a task's end told to the conversation that planned it (taskEndedNotice).
 	taskEndTool = "task_end"
+	// prFollowupTool is the relay kind of a post-closure delivery-PR event told to the closed to-do's original
+	// supervisor conversation (pr_followup.go). Like task_end it is a record, not a push of its own and no hop.
+	prFollowupTool = "pr_followup"
 	// spawnedKeep is how long a spawned conversation is followed: one that has not ended a turn by then is the
 	// user's own conversation by now.
 	spawnedKeep = 7 * 24 * time.Hour
@@ -65,6 +68,7 @@ func (s *Service) assistantTurnSettled(ctx context.Context, machine, sid string)
 	}
 	// The node's word, else its last words when they are the error (an older node, fleet.go).
 	sess.TurnError, sess.TurnErrorKind = latestTurnError(sess)
+	s.rememberMainReadinessSuccess(ctx, machine, sess)
 	failed := strings.TrimSpace(sess.TurnError) != ""
 	if failed {
 		// The conversation and launcher, and what kind of error: never its words, which may quote a credential.
@@ -72,6 +76,7 @@ func (s *Service) assistantTurnSettled(ctx context.Context, machine, sid string)
 			cmp.Or(sess.TurnErrorKind, "-"), cmp.Or(sess.TurnErrorCode, turnErrorCode(sess.TurnError), "-"))
 	}
 	s.spawnedTurnSettled(ctx, sess, failed)
+	s.recoverMissingReply(ctx, machine, sess)
 	if !failed {
 		s.inboxPostEvery(ctx, machine, sid) // a task set to put every run in the Inbox (inbox_post.go)
 	}
@@ -101,9 +106,10 @@ func (s *Service) spawnedTurnSettled(ctx context.Context, sess proto.Session, fa
 	b.st.Spawned[sid] = c
 	s.saveRelayLocked()
 	b.mu.Unlock()
-	name, hop, err := s.relayFrom(ctx, sid)
+	hop, answer := 0, false
+	name, err := s.relayFrom(ctx, sid)
 	if err == nil {
-		err = s.relayAllowed(sid, c.Parent, hop, time.Now())
+		hop, answer, err = s.relayAllowed(sid, c.Parent, time.Now())
 	}
 	if err != nil {
 		s.logf("spawned conversation %s: %s not told: %v", short(sid), short(c.Parent), err)
@@ -115,7 +121,7 @@ func (s *Service) spawnedTurnSettled(ctx context.Context, sess proto.Session, fa
 	} else {
 		n.Last = clip(oneLine(sess.LastText), 300)
 	}
-	msg := relayMsg{From: sid, FromTitle: name, Tool: spawnNoticeTool, Text: prompts.RenderSpawnNotice(n), Hop: hop, At: time.Now().UTC()}
+	msg := relayMsg{From: sid, FromTitle: name, Tool: spawnNoticeTool, Text: prompts.RenderSpawnNotice(n), Hop: hop, Answer: answer, At: time.Now().UTC()}
 	what := "ended without reporting back"
 	if failed {
 		what = "failed"
@@ -137,7 +143,10 @@ func (s *Service) relayOrQueue(ctx context.Context, to string, msg relayMsg) {
 		}
 		return
 	}
-	if err := s.deliverRelay(ctx, machine, to, msg); err != nil {
+	if err := s.tryDirectRelay(ctx, machine, to, &msg); err != nil {
+		if s.refusedDirect(ctx, machine, to, msg, err) {
+			return
+		}
 		s.logf("relay %s to %s: %v; queued", msg.Tool, short(to), err)
 		if s.queueRelay(to, msg) > 0 {
 			s.publish(ctx)

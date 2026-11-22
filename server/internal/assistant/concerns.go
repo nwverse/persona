@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/db"
 )
 
@@ -44,16 +45,20 @@ func todoKind(s string) (string, error) {
 
 // createConcern records a concern of the owner's: origin the main conversation, no agent; plan sets its due date,
 // priority and project as for any to-do. It needs the hub's database, or it could never be reported and closed.
-func (s *Service) createConcern(ctx context.Context, title, notes string, plan db.TodoEdit) (Todo, error) {
+func (s *Service) createConcern(ctx context.Context, title, notes string, plan db.TodoEdit, bindings ...*repository.CreateBindings) (Todo, error) {
+	return s.createConcernWithImages(ctx, title, notes, plan, nil, bindings...)
+}
+
+func (s *Service) createConcernWithImages(ctx context.Context, title, notes string, plan db.TodoEdit, images []db.TodoImage, bindings ...*repository.CreateBindings) (Todo, error) {
 	if s.todoDB() == nil {
 		return Todo{}, errConcernNoStore
 	}
 	now := time.Now().UTC()
 	row := db.TodoRow{ID: "todo_" + randomHex(8), Title: title, Notes: notes, CreatedAt: now, UpdatedAt: now,
-		Origin: s.settings(ctx).Main, Kind: db.KindConcern}
+		Origin: s.settings(ctx).Main, Kind: db.KindConcern, Images: images}
 	plan.Title, plan.Notes, plan.Done = nil, nil, nil
 	plan.Apply(&row, now)
-	return s.insertTodo(ctx, row)
+	return s.insertTodo(ctx, row, bindings...)
 }
 
 // reportConcern writes report, what the owner was told of concern id's outcome, as its reported decision and closes it

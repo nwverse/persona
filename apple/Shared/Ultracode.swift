@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // Claude Code's ultracode switch on iOS, the Mac and the watch (#1307; the server is #3427, docs/protocol/protocol.md
 // "Claude Code ultracode"; the web's lib/ultracode.ts does the same): with it on, Claude runs every substantive task as a
@@ -18,7 +19,7 @@ nonisolated enum Ultracode {
 
     // MARK: Where it shows
 
-    /// Whether a chat offers the switch: the hub has it, the agent is Claude Code (not TRAEX, Codex or a runtime's) whose
+    /// Whether a chat offers the switch: the hub has it, the agent is Claude Code (not TRAE CLI, Codex or a runtime's) whose
     /// thinking effort can change now (it takes messages, no read-only source, not offline), and it is not a Persona
     /// conversation (the main one included: the server refuses those).
     static func offered(_ s: Session?, features: Set<String>) -> Bool {

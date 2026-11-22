@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"path"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -23,8 +24,9 @@ import (
 //
 //   - only gated calls (and a few output filters): each call goes by its gate's rules (the first match: allow, confirm
 //     on the phone first with method, path and body on the card, or deny; none matching is confirmed); lark-cli's
-//     by its own risk level (larkcligate.go). Assistant bypass skips cards only for classified reads and ordinary
-//     writes; Lark sends as the user, deletion and calls it cannot classify still ask. Non-Lark commands such as
+//     by its own risk level (larkcligate.go). Assistant bypass skips cards only for classified reads, ordinary
+//     writes, and calls allowed by configured or per-chat rules; unconfigured Lark sends as the user, deletion and
+//     calls it cannot classify still ask. Non-Lark commands such as
 //     rm, git and tee remain outside this gate. Local redirect targets do not change a call's classification.
 //     Opaque execution requires confirmation when the
 //     command text names the CLI (including paths or interpreter code), or an expansion supplies
@@ -44,8 +46,12 @@ type larkCall struct {
 	Body   string // JSON text, a file's content (@file, cut), or "upload file X" (in Chinese)
 
 	CLI  bool     // lark-cli
-	Risk string   // lark-cli's own risk level for a "CLI" call: read | write | high-risk-write ("" unknown)
+	Risk string   // lark-cli's own risk level for a "CLI" call: read | write | high-risk-write ("" unknown, larkCLIMissing)
 	Args []string // lark-cli's arguments, for the phone card
+
+	relFile      bool // a relative @file body or query input, read from the conversation's directory (classifyLark, #8404)
+	queryUnknown bool // execution-time stdin, expansion, or -G data cannot be bound to a query-confirmed grant
+	dataInQuery  bool // -G moved the parsed data argument to the query, leaving the actual request body empty
 }
 
 // larkVerdict: what the gate makes of a whole Bash command.
@@ -56,6 +62,7 @@ type larkVerdict struct {
 	unsure   bool   // a command-word substitution prevents bypass and requires whole-command confirmation
 	unparsed bool   // the command could not be split into its parts at all
 	unknown  bool   // a CLI call or indirect execution could not be classified
+	dynamic  bool   // an expansion supplies an executable name
 	cliWrite bool   // a lark-cli call that is not a known read, even in a command the gate cannot follow
 	unread   []int  // gates (indexes in the config's Gates) called in a way the gate could not read
 }
@@ -80,24 +87,60 @@ func (n *Node) larkGate(ctx context.Context, in hookInput, ix proto.Interaction)
 // "deny" may carry the user's own words. Claude reaches it through the Bash PreToolUse hook (larkGate), Codex through
 // the app-server's command approvals (assistant_codex_approve.go).
 func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix proto.Interaction) (string, string, error) {
+	// Cwd on the eventual card may be normalized to the conversation's display
+	// directory. Keep the actual execution directory separately for the
+	// manager's exact-call continuation fingerprint.
+	ix.ExecutionCwd = cwd
 	cfg := n.assistantLark(ctx)
 	if slices.ContainsFunc(cfg.Gates, func(g proto.CommandGate) bool { return g.Auth != nil }) {
 		n.gates() // the proxy goes by this Node's config from now on (a resident node's next connection)
 	}
-	analysisCommand := normalizeLarkCommand(command, cwd)
-	v := classifyLark(command, cfg.Gates, cwd, n.larkCLIRisk(cfg))
+	analysisCommand := normalizeLarkCommand(command, cwd, cfg.Gates)
+	v := classifyLarkWith(command, cfg.Gates, cwd, n.larkCLIRisk(cfg), n.larkLoginPATH)
+	origin, launchCwd := n.assistantOriginCwd(session)
+	if origin == originInbox && inboxLarkOutbound(cfg, v, analysisCommand) {
+		return "deny", inboxLarkRefusal, nil
+	}
 	if v.deny != "" {
 		return "deny", v.deny, nil
 	}
 	health := n.gates().healthSession(session) || identity.InHealthSpace(cwd)
 	mode, _ := n.modesOf(session)
 	bypass := !health && mode == proto.ModeBypass && n.isAssistantSession(session) && n.guestOf(session) == nil
-	safe := len(v.calls) > 0 && !v.unparsed && !v.unknown && !v.unsure
+	// classified: every call read off the command and nothing else in it that the gate cannot follow.
+	classified := !v.unparsed && !v.unknown && !v.unsure
 	for _, c := range v.calls {
-		if larkDecision(cfg, c) == "deny" {
+		decision := larkDecision(cfg, c)
+		if decision == "deny" {
 			return "deny", "这个操作按配置不允许（" + c.Method + " " + c.Path + "）。", nil
 		}
-		safe = safe && larkBypassSafe(c)
+		if decision == "allow" && c.dataInQuery && c.Gate >= 0 && c.Gate < len(cfg.Gates) {
+			// firstLark matched the data as a request body, but curl -G sends it in the query with an empty body. A
+			// body-scoped allow therefore does not authorize the actual call, especially a direct non-Auth command.
+			if rule, ok := firstLark(cfg.Gates[c.Gate].Rules, c); ok && len(rule.Body) > 0 {
+				return "deny", "-G/--get 会把 data 移到查询并留下空请求体，实际请求不再满足按请求体放行的规则。", nil
+			}
+		}
+		// Only a rule-allowed call needs no query-bound grant. A confirmation-required GET needs one too, and a non-Auth
+		// script has no proxy backstop. Health writes always need confirmation. Refuse every unknown query in those cases
+		// rather than confirm different bytes.
+		needsConfirmation := decision != "allow" || (health && !larkRead(c))
+		if c.queryUnknown && needsConfirmation {
+			return "deny", "查询要在执行时才能确定，无法绑定这次确认；请把查询直接写在路径或 --url-query 参数里。", nil
+		}
+		classified = classified && larkBypassSafe(c)
+	}
+	safe := len(v.calls) > 0 && classified
+	boundary := slices.ContainsFunc(v.calls, func(c larkCall) bool { return !larkBypassSafe(c) })
+	// This exception is deliberately default-only. Check it before both the mixed-command and ordinary read paths:
+	// plan and bypass retain their normal permission flow even when every filter is already known to classifyLark.
+	if origin == originInbox && safe && len(v.calls) == 1 && launchCwd != "" &&
+		realPath(filepath.Clean(cwd)) == realPath(filepath.Clean(launchCwd)) &&
+		larkDecision(cfg, v.calls[0]) == "allow" && larkReadFormattingPipeline(command, cfg.Gates) {
+		if mode == proto.ModeDefault {
+			return "allow", "读操作", nil
+		}
+		return "", "", nil
 	}
 	if v.other {
 		// A write through a gate whose credentials are at the proxy goes there only as a call read off the command and
@@ -121,11 +164,17 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 			return "allow", "Conversation permission mode allows these classified calls.", nil
 		}
 		g, write := gateWrite(cfg.Gates, analysisCommand)
-		if write || v.cliWrite || v.unknown || larkCLIRe.MatchString(analysisCommand) && !safe {
+		// Text naming lark-cli in a command with no call is not one: classifyLark marks unknown what could run it
+		// (larkgate_text.go), so a grep pattern or a note written to a file is no card (#8119).
+		if write || boundary || v.cliWrite || v.unknown || larkCLIRe.MatchString(analysisCommand) && !classified {
 			ix.Kind = proto.IxPermission
 			title := wholeCommandTitle(cfg.Gates, v, analysisCommand, g, write)
 			if title != "" {
-				ix.ToolName, ix.Summary = title, "以你的身份在"+title+"上写（命令较复杂，整条显示）\n"+prettyBody(command)
+				what := "写"
+				if wholeCommandReads(v, write) {
+					what = "读"
+				}
+				ix.ToolName, ix.Summary = title, "以你的身份在"+title+"上"+what+"（命令较复杂，整条显示）\n"+prettyBody(command)
 			} else {
 				// Nothing in the command names a gate or lark-cli: an expansion names a command (`$A POST /api/…`),
 				// which could be anything, the CLI included. Still asked, as the ordinary Bash card it is (#4890).
@@ -145,12 +194,12 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 	var ask, covered, bypassed []larkCall
 	for _, c := range v.calls {
 		decision := larkDecision(cfg, c)
-		if bypass {
+		if bypass && decision != "allow" {
 			if larkBypassSafe(c) {
 				bypassed = append(bypassed, c)
 				continue
 			}
-			decision = "confirm" // a configured allow does not waive a hard boundary
+			decision = "confirm" // unconfigured outbound/deletion still requires confirmation
 		}
 		if decision == "allow" && health && !larkRead(c) {
 			decision = "confirm"
@@ -205,6 +254,9 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 // tells the manager once the API has taken one (the sent-as-user ledger).
 func (n *Node) grantGateCalls(cfg proto.AssistantLark, session string, calls []larkCall, through proto.LarkLetThrough) {
 	for _, c := range calls {
+		if c.queryUnknown {
+			continue // rule-allowed calls need no grant; larkCheck refused every confirmation-required unknown query
+		}
 		if !c.CLI && c.Gate >= 0 && c.Gate < len(cfg.Gates) && cfg.Gates[c.Gate].Auth != nil {
 			n.gates().grant(cfg.Gates[c.Gate].Command, session, c, through)
 		}
@@ -282,6 +334,16 @@ func callTitle(gates []proto.CommandGate, c larkCall) string {
 	return "飞书" // lark-cli
 }
 
+// wholeCommandReads says whether every call the gate identified is an ordinary read. An opaque non-Lark part may
+// still need the whole-command card, but does not turn those identified reads into writes. Zero calls, an explicit
+// write, an outbound/delete action, an unknown CLI risk or an expanded command name keeps the existing wording.
+func wholeCommandReads(v larkVerdict, write bool) bool {
+	if write || v.cliWrite || v.dynamic || len(v.calls) == 0 {
+		return false
+	}
+	return !slices.ContainsFunc(v.calls, func(c larkCall) bool { return !larkRead(c) || !larkBypassSafe(c) })
+}
+
 // wholeCommandTitle is what a whole-command card names as the place the command acts on, from what the command
 // shows: the gate it writes through (g, write: gateWrite's), lark-cli named in it, or a gate call read off it. ""
 // when it shows none of them: the card names no service then (#4890).
@@ -310,6 +372,7 @@ func (n *Node) confirmLark(ctx context.Context, session string, ix proto.Interac
 	if ix.ID == "" { // a gated tool's card has none yet: the ledger names the card by it
 		ix.ID = "ix_" + randHex(6)
 	}
+	ix.Detachable = n.state != nil && n.isAssistantSession(session)
 	res, ok, err := n.ask(ctx, ix)
 	if err != nil {
 		return "", "", card, err
@@ -329,7 +392,11 @@ func (n *Node) confirmLark(ctx context.Context, session string, ix proto.Interac
 			n.rememberLarkAlways(session, larkPattern(c))
 		}
 	}
-	card = proto.LarkLetThrough{Kind: proto.LarkThroughCard, InteractionID: ix.ID, AnsweredBy: res.AnsweredBy}
+	approvalID := ix.ID
+	if res.ApprovalID != "" {
+		approvalID = res.ApprovalID
+	}
+	card = proto.LarkLetThrough{Kind: proto.LarkThroughCard, InteractionID: approvalID, AnsweredBy: res.AnsweredBy}
 	if res.Remembered { // the manager answered from an "Always allow" it kept: no card was answered for this one
 		card = proto.LarkLetThrough{Kind: proto.LarkThroughAlways}
 	}
@@ -373,8 +440,21 @@ func (n *Node) assistantLark(ctx context.Context) proto.AssistantLark {
 		n.logger.Printf("assistant: Feishu gate config from hub: %v", err) // never the config itself
 		return cached
 	}
+	relayGates(&cfg)
 	n.mu.Lock()
 	n.larkCfg, n.larkCfgAt = cfg, time.Now()
 	n.mu.Unlock()
 	return cfg
+}
+
+// relayGates makes each relayed gate (proto.CommandGate.Relay, #12904) one the gate proxy stands in for: an Auth of
+// its own (no header: the manager puts the credentials on the call), so that everything that holds a gate with Auth to
+// the proxy (larkgate.go, larkgate_env.go, gateproxy.go) holds this one too. Its socket and token stay out of the
+// assistant's process (larkgate_env.go).
+func relayGates(cfg *proto.AssistantLark) {
+	for i := range cfg.Gates {
+		if g := &cfg.Gates[i]; g.Relay && g.BaseEnv != "" && g.Auth == nil {
+			g.Auth = &proto.GateAuth{}
+		}
+	}
 }

@@ -1,8 +1,9 @@
 import { t } from "../i18n";
-import type { AgentGroup, AgentMutes } from "./agent-groups";
+import { splitAgentSessions, type AgentGroup, type AgentMutes } from "./agent-groups";
 import { repoOf } from "./agent-repos";
 import { backgroundWaiting, stateOf } from "./format";
-import { buildTodoAgentGroups, interruptedAgent, todoStatus, todoStatusLabel, type SessionLookup, type Todo, type TodoStatus } from "./todos";
+import { buildTodoAgentGroups, interruptedAgent, makeSessionLookup, todoStatus, type SessionLookup, type Todo, type TodoStatus } from "./todos";
+import { todoLook, waitOf, type WaitReason } from "./todo-wait-reason";
 import { usageLimitAgent } from "./usage-limit";
 import type { Machine, Session } from "./types";
 import { stateName } from "./state-labels";
@@ -36,9 +37,12 @@ export interface TreeTodo {
   todoId?: string;
   name: string;
   status?: TodoStatus;
-  /** A to-do's state in the To-dos page's word (todoStatusLabel), said in place of `state`'s, so the two pages agree
-   *  (#6458: a to-do waiting on CI read "Done" here and "Waiting" there). `state` still ranks, folds and colors it. */
+  /** A to-do's state in the To-dos page's word (todoLook), said in place of `state`'s, so the two pages agree
+   *  (#6458: a to-do waiting on CI read "Done" here and "Waiting" there). `state` still ranks, folds and colors it, but
+   *  for a waiting one's word (#11090): attention on the owner, neutral otherwise (`wait`). */
   statusLabel?: string;
+  /** What it waits on while its status is Waiting (#11090, lib/todo-wait-reason.ts waitOf). */
+  wait?: WaitReason;
   state: TreeState;
   /** A task of the direction tree (#4352): its state as the hub decided it, shown in place of `state`'s word. */
   taskState?: DirectionTaskState;
@@ -66,6 +70,8 @@ export interface LooseGroup {
   hint: string;
   /** The most urgent of its agents' states; "Done" for none, which the row does not say. */
   state: TreeState;
+  /** What the row says in place of `state`'s word, when "Done" would hide what its rows say (agentGroupLabel). */
+  label?: string;
   agents: TreeAgent[];
   sessions: Session[];
   folded: boolean;
@@ -109,6 +115,18 @@ export function todoTreeState(status: TodoStatus, agents: readonly Session[] = [
 /** The most urgent of some states ("Done" for none). */
 export function worstTreeState(states: TreeState[]): TreeState {
   return worst(states);
+}
+
+/** What a group of agents says beside its count when its most urgent state is "Done" (Not on a to-do, Recent (not
+ *  running)): the word its rows and the other groupings use, never "Done" over agents that are not. A finished agent
+ *  not looked at yet is Unread, as By status and the quick filter call it, and a group whose agents all stopped is Not
+ *  running; undefined keeps "Done" (agents seen, or a mix of seen and stopped). */
+export function agentGroupLabel(sessions: readonly Session[], state: TreeState): string | undefined {
+  if (state !== "done" || !sessions.length) return undefined;
+  const states = sessions.map(stateOf);
+  if (states.includes("unread")) return stateName("unread");
+  if (states.every((st) => st === "offline")) return stateName("offline");
+  return undefined;
 }
 
 function worst(states: TreeState[]): TreeState {
@@ -199,8 +217,10 @@ const LOOSE_GROUPS = [
  * their order (sortTodos's, the task board's) come from buildTodoAgentGroups. `keepEmpty`: the group is listed while
  * empty (the sidebar's "By to-do" with nothing narrowing the list), its explanation inside it.
  */
-export function buildTodoTree(all: Session[], machines: Machine[], todos: Todo[], mutes?: AgentMutes, now = Date.now(), { keepEmpty = false }: { keepEmpty?: boolean } = {}): TodoTree {
-  const groups = buildTodoAgentGroups(all, machines, todos, mutes);
+export function buildTodoTree(all: Session[], machines: Machine[], todos: Todo[], mutes?: AgentMutes, now = Date.now(), { keepEmpty = false, compareSessions }: { keepEmpty?: boolean; compareSessions?: (a: Session, b: Session) => number } = {}): TodoTree {
+  const groups = buildTodoAgentGroups(all, machines, todos, mutes, compareSessions);
+  // the sessions its groups' statuses were read from, for what a waiting one waits on
+  const lookup = makeSessionLookup(splitAgentSessions(all, machines).live);
   const byId = new Map(todos.map((td) => [td.id, td]));
   const tree: TreeTodo[] = [];
   const loose = new Map<string, AgentGroup>();
@@ -212,12 +232,14 @@ export function buildTodoTree(all: Session[], machines: Machine[], todos: Todo[]
     const todo = byId.get(g.todoId);
     const status = g.todoStatus as TodoStatus | undefined;
     const state = status ? todoTreeState(status, g.sessions) : worst(g.sessions.map(agentTreeState));
+    const wait = todo && status ? waitOf(todo, status, lookup) : undefined;
     tree.push({
       key: `todo-tree:todo:${g.todoId}`,
       todoId: g.todoId,
       name: g.name,
       status,
-      ...(todo && status && { statusLabel: todoStatusLabel(todo, status) }),
+      ...(todo && status && { statusLabel: todoLook(todo, status, wait).label }),
+      ...(wait && { wait }),
       state,
       agents: nestAgents(g.sessions, todo, now),
       sessions: g.sessions,
@@ -279,7 +301,8 @@ function shareNodes<T extends { key: string }>(prev: T[], next: T[]): T[] {
 function looseTree(g: AgentGroup, below: boolean, now: number): LooseGroup {
   const agents = nestAgents(g.sessions, undefined, now);
   const state = worst(agents.map((a) => a.state));
-  return { key: g.key, name: g.name, hint: g.hint ?? "", state, agents, sessions: g.sessions, folded: below && state !== "needs_you" };
+  const label = agentGroupLabel(g.sessions, state);
+  return { key: g.key, name: g.name, hint: g.hint ?? "", state, ...(label && { label }), agents, sessions: g.sessions, folded: below && state !== "needs_you" };
 }
 
 /** The todos page's list by project (#2526): open todos under the project their agents work in, the ones with no agent
@@ -304,7 +327,15 @@ function liveAgents(td: Todo, lookup: SessionLookup): Session[] {
 /** Open to-dos by project (#2526, #2581): the knowledge-base project a to-do was put in first (named by projectName),
  *  else the repository its agents work in; those with neither last ("Unsorted"). Groups that need the user come
  *  first within each of the three; the to-dos keep their order. */
-export function groupTodosByProject(todos: Todo[], lookup: SessionLookup, now = Date.now(), projectName: (slug: string) => string = (slug) => slug): TodoProjectGroup[] {
+export function groupTodosByProject(
+  todos: Todo[],
+  lookup: SessionLookup,
+  now = Date.now(),
+  projectName: (slug: string) => string = (slug) => slug,
+  /** A to-do the To-dos page has in Needs you (its status section): its folder says Needs you whatever its agents do,
+   *  so a failed start waiting on the owner (which the hub closed) does not read Done or fold away. */
+  waiting: (td: Todo) => boolean = () => false,
+): TodoProjectGroup[] {
   const map = new Map<string, { name: string; tier: number; list: Todo[] }>();
   for (const td of todos) {
     const repo = td.project ? "" : projectOfTodo(td, lookup);
@@ -318,7 +349,7 @@ export function groupTodosByProject(todos: Todo[], lookup: SessionLookup, now = 
     map.set(key, g);
   }
   const groups = [...map.entries()].map(([key, { name, tier, list }]) => {
-    const states = list.map((td) => todoTreeState(todoStatus(td, lookup), liveAgents(td, lookup)));
+    const states = list.map((td): TreeState => (waiting(td) ? "needs_you" : todoTreeState(todoStatus(td, lookup), liveAgents(td, lookup))));
     const state = worst(states);
     const sessions = list.flatMap((td) => (td.agents ?? []).filter((a) => !a.released_at).map((a) => lookup(a.machine_id, a.session_id)).filter((s): s is Session => Boolean(s)));
     const touched = Math.max(latest(sessions), ...list.map((td) => Date.parse(td.updated_at) || 0));

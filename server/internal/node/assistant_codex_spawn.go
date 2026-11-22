@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantskills"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/osproc"
@@ -22,13 +23,18 @@ func codexArgs(bin, key string, windows ...int) []string {
 	return codexArgsForHome(bin, key, "", true, windows...)
 }
 
-func (n *Node) codexAssistantArgs(key, home string, windows ...int) ([]string, bool) {
+func (n *Node) codexAssistantArgs(key, home, cwd string, windows ...int) ([]string, bool) {
 	personaMCPOnly := n.hubSupportsPersonaContracts()
-	return codexArgsForHome(n.bin, key, home, !personaMCPOnly, windows...), personaMCPOnly
+	args := codexArgsForHome(n.bin, key, home, !personaMCPOnly, windows...)
+	if assistantskills.WorkGuideReady(cwd) {
+		// A discovery in the current turn changes which original MCP tools Codex can call.
+		args = append(args, "-c", "features.mcp_tool_list_changed=true")
+	}
+	return args, personaMCPOnly
 }
 
-// codexArgsForHome: windows[0] is a compact limit to pass (a managed launcher's declared one, #3066); none or 0 passes
-// none, and Codex compacts by its config or its model's default.
+// codexArgsForHome: windows[0] is a compact limit to pass (a managed launcher's declared one, #3066, capped for the
+// main conversation, #7314); none or 0 passes none, and Codex compacts by its config or its model's default.
 func codexArgsForHome(bin, key, home string, legacyMCP bool, windows ...int) []string {
 	q := func(s string) string { b, _ := json.Marshal(s); return string(b) } // a JSON string is a TOML basic string
 	mcpEnv := "{PERSONA_ASSISTANT=" + q("1") + ",PERSONA_SESSION_ID=" + q(key)
@@ -50,6 +56,10 @@ func codexArgsForHome(bin, key, home string, legacyMCP bool, windows ...int) []s
 		// The assistant's memory is the one the app's "Memory" page shows, shared with Claude (codexMemoryPrompt); Codex's
 		// own (~/.codex/memories) is one store for every Codex on the machine, so it stays off here.
 		"-c", "features.memories=false",
+		// The ChatGPT apps of a ChatGPT sign-in (codex_apps: every connector of that account) are declared in full in
+		// every request, inside code mode's exec tool: measured at ~140k tokens of a ~195k request on one install, for
+		// tools the assistant never calls (it has Persona's own). Off here; the machine's own Codex keeps them (#10275).
+		"-c", "features.apps=false",
 	}
 	if len(windows) > 0 && windows[0] > 0 {
 		args = append(args, "-c", fmt.Sprintf("model_auto_compact_token_limit=%d", windows[0]))
@@ -63,9 +73,13 @@ func codexArgsForHome(bin, key, home string, legacyMCP bool, windows ...int) []s
 // codexShell runs the launcher with `codex` turned into `codex <its flags> app-server <ours>`: the launcher's
 // function sets what it sets (env, -c model_provider, -m …) exactly as when it starts the TUI.
 // Use alias-safe definitions and calls: zsh expands aliases while parsing the script.
-func codexShell(launcher string) string {
+func codexShell(launcher string) string { return codexShellWith(launcher, "app-server") }
+
+// codexShellWith is codexShell for another subcommand of the launcher's codex (`debug models`,
+// assistant_fallback_window.go).
+func codexShellWith(launcher, sub string) string {
 	return `__persona_args=("$@")
-function __persona_codex { builtin command codex "$@" app-server "${__persona_args[@]}"; }
+function __persona_codex { builtin command codex "$@" ` + sub + ` "${__persona_args[@]}"; }
 if [[ -n "${ZSH_VERSION-}" ]] && (( $+functions[codex] )); then
   # Keep a user-defined codex() launcher intact while routing its final command through the app-server wrapper.
   # Copy it through the functions table: functions -c needs zsh 5.8, and a subscript never expands aliases.
@@ -84,15 +98,23 @@ func (n *Node) spawnCodex(id, cwd, launcher string, resume, spare bool, options 
 
 // codexAssistantCommand is the command that runs the Codex assistant's app-server with launcher in shell.
 func (n *Node) codexAssistantCommand(shell, launcher string, args []string) *exec.Cmd {
+	if provider, ok := n.managedLauncher(launcher); ok && provider.AgentType() == "codex" {
+		catalog, _ := n.codexCatalogFor(provider)
+		prefix := launchArgv("codex", nil, provider.Args, launcherDefaultEffort(provider), provider.Model, managedEnv(provider), catalog)
+		// Keep the assistant's MCP and provider flags before app-server. Running
+		// personad launch here bypasses the shell's codex wrapper and starts a TUI.
+		argv := append(append(prefix[1:], args...), "app-server")
+		return exec.Command(shell, append([]string{"-ic", `builtin command codex "$@"`, "persona"}, argv...)...)
+	}
 	return exec.Command(shell, append([]string{"-ic", codexShell(n.launcherForScript(launcher)), "persona"}, args...)...)
 }
 
 func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, mode string, options ...modelExecution) (*assistantProc, error) {
 	execution := executionOption(options)
-	if err := execution.check(launcher); err != nil {
+	if err := execution.check("codex"); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(cwd, 0o700); err != nil {
+	if err := n.prepareAssistantCwd(cwd, execution.Strict); err != nil {
 		return nil, err
 	}
 	root, memDir := n.codexDirs(cwd)
@@ -102,10 +124,15 @@ func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, 
 		return nil, err
 	}
 	compaction := n.assistantCompactionPolicy(launcher, cwd, "", execution)
-	args, personaMCPOnly := n.codexAssistantArgs(key, n.dir, compaction.codexLimit())
+	args, personaMCPOnly := n.codexAssistantArgs(key, n.dir, cwd, compaction.codexLimit())
 	cmd := n.codexAssistantCommand(shell, launcher, args)
 	cmd.Dir = root
 	cmd.Env = identity.Environment(os.Environ(), "PERSONA_ASSISTANT=1")
+	if provider, ok := n.managedLauncher(launcher); ok && provider.AgentType() == "codex" {
+		// Use the same managed environment and header bindings as personad launch,
+		// without passing secrets as shell code or command-line arguments.
+		cmd.Env = identity.Environment(withoutEnv(cmd.Env, envClearFor(provider)), managedEnv(provider)...)
+	}
 	gateEnv, releaseGates, nameGates := n.assistantLarkEnvNamed(cwd, id) // its addresses at the gate proxy go with the process
 	started := false
 	defer func() {
@@ -135,7 +162,7 @@ func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, 
 	started = true
 	p := &assistantProc{id: id, agent: "codex", launcher: launcher, cwd: cwd, cmd: cmd, stdin: stdin, exited: make(chan struct{}),
 		born: time.Now(), lastActive: time.Now(), model: execution, fingerprint: n.executionFingerprint(launcher, execution),
-		instructions: instructions, personaMCPOnly: personaMCPOnly}
+		instructions: instructions, personaMCPOnly: personaMCPOnly, origin: execution.Origin}
 	c := &codexConn{n: n, p: p, key: key, memDir: memDir, pending: map[int64]chan codexReply{}, asks: map[string]context.CancelFunc{}, files: map[string][]string{},
 		nameGates: nameGates}
 	p.cx = c
@@ -205,7 +232,7 @@ func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, 
 // are writable roots, and its macOS sandbox refuses one with a symlink in it (~/.persona → .persona, a ~/.claude kept in
 // dotfiles), turning every command down before it runs. Only Codex sees the real paths; the session keeps its cwd.
 func (n *Node) codexDirs(cwd string) (root, memDir string) {
-	memDir = n.memoryDir(cwd)
+	memDir = n.memoryForUse(cwd)
 	if err := os.MkdirAll(memDir, 0o700); err != nil {
 		n.logger.Printf("assistant codex: memory dir: %v", err)
 	}

@@ -319,6 +319,7 @@ type PathStat struct {
 	LinkTarget string     `json:"link_target,omitempty"`
 	LinkReal   string     `json:"link_real,omitempty"`
 	LinkBroken bool       `json:"link_broken,omitempty"`
+	Mime       string     `json:"mime,omitempty"` // a regular file's type, as file.read would give it
 }
 
 // statTimeout bounds one fs.stat: a path on a mount that does not answer (a network share, a sleeping disk) is
@@ -499,9 +500,47 @@ func (n *Node) listDir(path, cwd string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	return n.dirEntries(path, real, "")
+}
+
+// listTaskDir uses the existing path guard and lists only entries that resolve inside the selected directory.
+func (n *Node) listTaskDir(path, cwd string) (map[string]any, error) {
+	if !filepath.IsAbs(cwd) {
+		return nil, os.ErrPermission
+	}
+	_, root, err := n.resolveDir("", cwd)
+	if err != nil {
+		return nil, err
+	}
+	shown, real, err := n.resolveDir(path, cwd)
+	if err != nil {
+		return nil, err
+	}
+	if !withinTaskDirectory(root, real) {
+		return nil, os.ErrPermission
+	}
+	return n.dirEntries(shown, real, root)
+}
+
+func withinTaskDirectory(root, real string) bool {
+	rel, err := filepath.Rel(root, real)
+	return err == nil && filepath.IsLocal(rel)
+}
+
+func (n *Node) dirEntries(path, real, taskRoot string) (map[string]any, error) {
 	ents, err := os.ReadDir(real)
 	if err != nil {
 		return nil, explainDenied(path, n.home, err)
+	}
+	if taskRoot != "" {
+		ents = slices.DeleteFunc(ents, func(e os.DirEntry) bool {
+			entry := filepath.Join(real, e.Name())
+			if e.Type()&os.ModeSymlink != 0 {
+				resolved, err := n.realPath(entry)
+				return err != nil || !withinTaskDirectory(taskRoot, resolved)
+			}
+			return n.offLimitsResolved(entry) != nil || (!e.IsDir() && !e.Type().IsRegular())
+		})
 	}
 	all := n.treeOrder(real, ents)
 	list := make([]DirEntry, min(len(all), maxDirEntries))

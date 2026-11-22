@@ -1,6 +1,7 @@
 package persona.core.contracts.api
 
 import persona.core.contracts.CoreText
+import persona.core.contracts.ModelPrice
 import persona.core.contracts.QueueEdit
 import persona.core.contracts.Session
 import persona.core.contracts.SessionInfo
@@ -58,6 +59,14 @@ interface ChatActions {
      */
     suspend fun sendQueuedNow(session: Session): Unit = throw UnsupportedOperationException("Send now unavailable")
 
+    /** Retry a kept assistant message that gave up (POST …/assistant/conversations/{id}/undelivered/{msg}/retry). */
+    suspend fun retryUndelivered(session: Session, messageId: String): Unit =
+        throw UnsupportedOperationException("Kept message retry unavailable")
+
+    /** Never send a kept assistant message again (DELETE …/assistant/conversations/{id}/undelivered/{msg}). */
+    suspend fun deleteUndelivered(session: Session, messageId: String): Unit =
+        throw UnsupportedOperationException("Kept message deletion unavailable")
+
     /**
      * "Branch to new chat" (#2137, POST …/fork): the node copies the conversation up to the end of [atItemId]'s turn (a reply's
      * transcript item, `<uuid>#<n>`) into a new session on the same machine; returns its session id. Only for
@@ -83,6 +92,13 @@ interface ChatActions {
      */
     suspend fun completeRow(session: Session): Session? = null
 
+    /** Every depth folded under this parent; callers gate on sessions_hierarchy. */
+    suspend fun childRows(session: Session): List<Session> = emptyList()
+
+    /** A complete baseline or delta for the same parent filter, including its committed checkpoint and removals. */
+    suspend fun childPage(session: Session, since: String? = null): SessionListPage =
+        SessionListPage(sessions = childRows(session))
+
     /**
      * The session's cards and how each ended (GET /api/v1/interactions/history, iOS `DelegatedHistoryModel`), for Session
      * info's questions the assistant answered. A hub that keeps the history from this device (403) or has none (404) gives none.
@@ -96,6 +112,13 @@ interface ChatActions {
      * restore_nothing, restore_unknown, restore_gone, node_outdated). Not retried.
      */
     suspend fun restoreModel(session: Session): Unit = throw UnsupportedOperationException("Restore model unavailable")
+
+    /**
+     * Reference prices for model ids (`POST /api/v1/launchers/catalog`, at most 100 ids). A model the catalog answers
+     * without a price is present and null; a model it leaves out is absent. Throws when the hub cannot be asked.
+     */
+    suspend fun catalogPrices(ids: List<String>): Map<String, ModelPrice?> =
+        throw UnsupportedOperationException("Catalog unavailable")
 }
 
 /** What "Rewind to here" restores: the conversation alone, or the files changed after the message too. */

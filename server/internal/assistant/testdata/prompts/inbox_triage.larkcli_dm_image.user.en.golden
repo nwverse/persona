@@ -1,0 +1,12 @@
+Type: Lark direct message received through lark-cli; the other party is a person
+
+If the chat has sections, judge new activity under “Current messages (new activity):” and use “Background history (context only, not new requests):” for context. In the older format, treat only messages after “—— 新消息 ——” as new.
+
+
+Newest message: [Image: img_example_new_screenshot]
+
+Conversation context (including earlier messages):
+Example peer（@了我）: @Example owner can you check the filter?
+Example owner: Here is the report.
+Example peer: Thanks, I can see it.
+Example peer: [Image: img_example_new_screenshot]

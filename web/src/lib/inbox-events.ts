@@ -27,13 +27,15 @@ export interface InboxHandling {
   error?: string;
 }
 
-export type SuggestionKind = "reply" | "agent" | "conclusion";
+export type SuggestionKind = "reply" | "agent" | "conclusion" | "todo";
 
 export interface InboxSuggestion {
   version: number;
   kind: SuggestionKind | string;
   text: string;
   note?: string;
+  /** A to-do suggestion's due: a day (2006-01-02, all day) or a moment (RFC 3339); absent: no due date. */
+  due?: string;
   /** Needs judgment: confirming hands it back to the processing conversation instead of running it. */
   handback?: boolean;
   machine_id?: string;
@@ -43,10 +45,23 @@ export interface InboxSuggestion {
   conversation?: { machine_id: string; session_id: string };
 }
 
+/** A server-kept reply attempt. Its text is the actual confirmed payload, including edits. */
+export interface InboxSuggestionAttempt {
+  version: number;
+  status: "sending" | "failed" | "unknown" | "sent";
+  retryable: boolean;
+  code?: string;
+  retry_after?: number;
+  text: string;
+  at: string;
+  conversation?: { machine_id: string; session_id: string };
+}
+
 export type ChainLink =
   | { type: "source"; position?: string; uid?: number; url?: string }
   | { type: "session"; machine_id: string; session_id: string }
-  | { type: "item"; id: string };
+  | { type: "item"; id: string }
+  | { type: "todo"; id: string };
 
 export interface ChainMessage {
   sender?: string;
@@ -130,6 +145,8 @@ export function suggestionTitle(s: InboxSuggestion): string {
       return t("lib-inbox-events.kind_agent");
     case "conclusion":
       return t("lib-inbox-events.kind_conclusion");
+    case "todo":
+      return t("lib-inbox-events.kind_todo");
     default:
       return t("lib-inbox-events.kind_generic");
   }
@@ -150,6 +167,8 @@ export function suggestionButtons(s: InboxSuggestion): { confirm: string; edit: 
       return { confirm: t("lib-inbox-events.start"), edit: true };
     case "conclusion":
       return { confirm: t("lib-inbox-events.got_it"), edit: false };
+    case "todo":
+      return { confirm: t("lib-inbox-events.add_todo"), edit: false };
     default:
       return { confirm: t("lib-inbox-events.confirm"), edit: true };
   }
@@ -178,6 +197,7 @@ export function chainTap(e: ChainEntry, conversation: (mid: string, sid: string)
   if (l?.type === "session" && typeof l.machine_id === "string" && typeof l.session_id === "string" && l.machine_id && l.session_id) {
     return { kind: "route", route: conversation(l.machine_id, l.session_id) };
   }
+  if (l?.type === "todo" && typeof l.id === "string" && l.id) return { kind: "route", route: { name: "todos", id: l.id } };
   if (l?.type === "item" && typeof l.id === "string" && l.id) return { kind: "route", route: manager ? { name: "inbox", id: l.id, manager } : { name: "inbox", id: l.id } };
   return canExpand(e) ? { kind: "expand" } : { kind: "none" };
 }
@@ -209,24 +229,30 @@ export function itemAtUid(it: InboxItem, uid?: number): InboxItem {
 export type SuggestionResult =
   | { ok: true; item: InboxItem }
   | { ok: false; stale: true; item?: InboxItem; error: string }
-  | { ok: false; stale: false; error: string; code?: string };
+  | { ok: false; stale: false; error: string; code?: string; item?: InboxItem; delivered?: "none" | "unknown"; retryable?: boolean; retry_after?: number };
 
 /**
  * POST /api/v1/inbox/{id}/suggestion: "Confirm" (with the edited text when "Edit" changed it), "Reject", or "Say something" (instruct).
  * The version shown goes with it, so a suggestion that changed since is not run: the hub answers 409 suggestion_stale
  * with the item as it is now.
  */
-export async function actOnSuggestion(path: string, version: number, action: SuggestionAction, text?: string, clientID = uuid(), manager?: string): Promise<SuggestionResult> {
+export async function actOnSuggestion(path: string, version: number, action: SuggestionAction, text?: string, clientID = uuid(), manager?: string, due?: string): Promise<SuggestionResult> {
   try {
     // the item's manager (another than the default: docs/assistant/managers.md "Clients") is named on its request
-    const item = await api<InboxItem>(`${path}/suggestion`, { method: "POST", json: { version, action, text: text || undefined, client_id: clientID }, headers: itemHeaders(manager) });
+    const item = await api<InboxItem>(`${path}/suggestion`, { method: "POST", json: { version, action, text: text || undefined, due: due || undefined, client_id: clientID }, headers: itemHeaders(manager) });
     return { ok: true, item };
   } catch (e) {
     if (e instanceof ApiError && e.status === 409 && e.body?.code === "suggestion_stale") {
       const item = e.body.item as InboxItem | undefined;
       return { ok: false, stale: true, item: item?.id ? item : undefined, error: t("lib-inbox-events.stale") };
     }
-    return { ok: false, stale: false, error: errorText(e), code: e instanceof ApiError && typeof e.body?.code === "string" ? e.body.code : undefined };
+    const body = e instanceof ApiError ? e.body : undefined;
+    const item = body?.item as InboxItem | undefined;
+    return { ok: false, stale: false, error: errorText(e), code: typeof body?.code === "string" ? body.code : undefined,
+      item: item?.id ? item : undefined,
+      delivered: body?.delivered === "none" || body?.delivered === "unknown" ? body.delivered : undefined,
+      retryable: typeof body?.retryable === "boolean" ? body.retryable : undefined,
+      retry_after: typeof body?.retry_after === "number" && body.retry_after > 0 ? body.retry_after : undefined };
   }
 }
 
@@ -242,6 +268,8 @@ export function actedText(s: InboxSuggestion, action: SuggestionAction): string 
       return t("lib-inbox-events.agent_started");
     case "conclusion":
       return t("lib-inbox-events.filed");
+    case "todo":
+      return t("lib-inbox-events.todo_added");
     default:
       return t("lib-inbox-events.handed_back");
   }

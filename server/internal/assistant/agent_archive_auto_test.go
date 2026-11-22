@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // Archiving closed sessions by themselves (agent_archive_auto.go).
@@ -17,8 +18,8 @@ func TestAutoArchivable(t *testing.T) {
 	old := now.Add(-4 * 24 * time.Hour)
 	wake := now.Add(time.Hour)
 	type link struct {
-		open, onTodo, reviewer bool
-		lastDone               time.Time
+		open, filed, onTodo, reviewer bool
+		lastDone                      time.Time
 	}
 	none := link{}
 	doneLong := link{onTodo: true, lastDone: old}
@@ -49,10 +50,16 @@ func TestAutoArchivable(t *testing.T) {
 		{"archived already", func(s *proto.Session) { s.Archived = true }, none, idle, false},
 		{"linked to an open to-do", func(*proto.Session) {}, link{open: true, onTodo: true}, idle, false},
 		{"linked to an open to-do and a done one", func(*proto.Session) {}, link{open: true, onTodo: true, lastDone: old}, idle, false},
+		{"filed under a current direction", func(*proto.Session) {}, link{filed: true}, idle, false},
+		{"filed under a current direction, its to-dos done", func(*proto.Session) {}, link{filed: true, onTodo: true, lastDone: old}, idle, false},
 		{"assistant conversation", func(s *proto.Session) { s.Assistant = true }, none, idle, false},
 		{"a review's reviewer", func(*proto.Session) {}, link{reviewer: true, onTodo: true, lastDone: old}, idle, false},
 		{"a subagent's row", func(s *proto.Session) { s.IsSubagent = true }, none, idle, false},
 		{"another tool's session", func(s *proto.Session) { s.SourceKind = "codex_app_server" }, none, idle, false},
+		{"the Claude desktop app's session, quiet in its sidebar", func(s *proto.Session) {
+			s.Agent, s.AgentSurface, s.Status, s.State = "claude", transcript.SurfaceDesktop, proto.StatusOffline, proto.StateOffline
+		}, doneLong, idle, false},
+		{"a command-line session", func(s *proto.Session) { s.Agent, s.AgentSurface = "claude", transcript.SurfaceCLI }, none, idle, true},
 		{"still open in a tab", func(s *proto.Session) { s.Status, s.PaneID = proto.StatusIdle, "w1:p1" }, none, idle, false},
 		{"a tab without a status", func(s *proto.Session) { s.PaneID = "w1:p1" }, none, idle, false},
 		{"working", func(s *proto.Session) { s.Status, s.State = proto.StatusWorking, proto.StateWorking }, none, idle, false},
@@ -88,7 +95,7 @@ func TestAutoArchivable(t *testing.T) {
 		s := closedAgent(old)
 		s.LastText = "done"
 		c.edit(&s)
-		if got := autoArchivable(s, now, c.idle, c.link.open, c.link.onTodo, c.link.reviewer, c.link.lastDone); got != c.want {
+		if got := autoArchivable(s, now, c.idle, c.link.open, c.link.filed, c.link.onTodo, c.link.reviewer, c.link.lastDone); got != c.want {
 			t.Errorf("%s: autoArchivable = %v, want %v", c.name, got, c.want)
 		}
 	}

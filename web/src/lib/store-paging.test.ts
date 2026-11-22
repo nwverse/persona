@@ -1,10 +1,14 @@
+import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import { useCounts } from "./sessions";
 import { applyCompleteSessions, connect, getSession, getState, rememberSessionRow, reset, upsertSession } from "./store";
 import { archiveAgent, appArchiveDeps } from "./agent-archives";
 import { runtimeSessions } from "./runtime-list";
 import { isWaiting } from "./agent-groups";
 import { backgroundCount, workflowShortLine } from "./workflows";
 import { t } from "../i18n";
+import type { ListCounts } from "./session-list";
 import type { Session } from "./types";
 
 class Socket {
@@ -23,6 +27,9 @@ let requests: URL[];
 let changed: Session[];
 let removed: string[];
 let expired: boolean;
+let scopedNeeds: number;
+let scopedWaiting: number;
+let scopedHeld: number;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -30,6 +37,9 @@ beforeEach(() => {
   changed = [];
   removed = [];
   expired = false;
+  scopedNeeds = 1;
+  scopedWaiting = 0;
+  scopedHeld = 0;
   vi.stubGlobal("WebSocket", Socket);
   vi.stubGlobal("location", { protocol: "http:", host: "demo" });
   vi.stubGlobal("localStorage", { getItem: () => "demo-token" });
@@ -42,7 +52,15 @@ beforeEach(() => {
         expired = false;
         return new Response(JSON.stringify({ code: "revision_expired", error: "expired" }), { status: 409 });
       }
-      if (url.searchParams.has("counts")) return Response.json({ total: 8000, machine: { demo: 8000 }, project: { "/demo": 8000 }, group: {}, state: { idle: 8000 }, revision: "r2" });
+      if (url.searchParams.has("counts")) {
+        const scoped = url.searchParams.get("agents_only") === "1";
+        // The all-sessions aggregate also includes Assistant and health conversations.
+        return Response.json({ total: 8000, machine: { demo: 8000 }, project: { "/demo": 8000 }, group: {},
+          state: scoped ? { needs_you: scopedNeeds, working: 3, unread: 2 } : { needs_you: 3, working: 5, unread: 4 },
+          ...(scoped && scopedWaiting ? { background_waiting: scopedWaiting } : {}),
+          ...(scoped && scopedHeld ? { held_needs: scopedHeld } : {}),
+          revision: "r2" } satisfies Partial<ListCounts> as ListCounts);
+      }
       if (!url.search) return Response.json({ sessions: [session("legacy")] });
       if (url.searchParams.has("since")) return Response.json({ sessions: changed, remove: removed, total: 8000, has_more: false, revision: "r2" });
       const full = url.searchParams.get("summary") === "0";
@@ -54,12 +72,56 @@ beforeEach(() => {
 });
 afterEach(() => { reset(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 const settle = () => vi.advanceTimersByTimeAsync(0);
+/** Past the invalidation window (session-list.ts INVALIDATE_THROTTLE_MS): a hint's trailing read has gone out. */
+const settleThrottled = () => vi.advanceTimersByTimeAsync(2_100);
 function hello(features: string[]) {
   connect();
   Socket.last.push({ type: "hello", features });
 }
 
+function countsShown() {
+  let counts!: ReturnType<typeof useCounts>;
+  function Probe() {
+    counts = useCounts();
+    return null;
+  }
+  renderToStaticMarkup(createElement(Probe));
+  return counts;
+}
+
 describe("negotiated bounded runtime lists", () => {
+  it("counts Agents across all pages and updates the badge from the scoped delta counts", async () => {
+    hello(["sessions_list", "sessions_lookup", "sessions_hierarchy", "sessions_agents_only"]);
+    await settle();
+
+    expect(countsShown()).toMatchObject({ needs: 1, working: 3, unread: 2, badge: 1, quietCounted: true });
+    const scoped = requests.filter((url) => url.searchParams.get("agents_only") === "1");
+    expect(scoped).toHaveLength(2);
+    expect(scoped.every((url) => url.searchParams.get("roots") === "1")).toBe(true);
+    expect(scoped.some((url) => url.searchParams.has("cursor"))).toBe(false);
+
+    scopedNeeds = 0;
+    Socket.last.push({ type: "sessions_list", revision: "r2" });
+    await settleThrottled();
+    expect(countsShown()).toMatchObject({ needs: 0, badge: 0 });
+  });
+
+  it("takes the Agents that only wait in the background out of the hub's working count (#10938)", async () => {
+    scopedWaiting = 2;
+    hello(["sessions_list", "sessions_lookup", "sessions_hierarchy", "sessions_agents_only"]);
+    await settle();
+
+    expect(countsShown()).toMatchObject({ working: 1, waiting: 2, unread: 2 });
+  });
+
+  it("retains the legacy aggregate on a paged hub without the scoped query", async () => {
+    hello(["sessions_list", "sessions_lookup"]);
+    await settle();
+
+    expect(countsShown()).toMatchObject({ needs: 3, working: 5, unread: 4, badge: 3, quietCounted: true });
+    expect(requests.some((url) => url.searchParams.has("agents_only"))).toBe(false);
+  });
+
   it("requests a single 50-row summary page and separate counts, never the complete list", async () => {
     hello(["sessions_list", "sessions_delta", "sessions_lookup"]);
     await settle();
@@ -71,13 +133,17 @@ describe("negotiated bounded runtime lists", () => {
     expect(getState().sessionSummaries).toHaveLength(50);
     expect(getState().sessionCounts?.total).toBe(8000);
     expect(getState().sessions).toEqual({});
-    expect(Socket.last.url).toContain("features=sessions_list,sessions_delta,session_live");
+    expect(Socket.last.url).toContain("features=sessions_list,sessions_list_changes,sessions_delta,session_live");
   });
 
   it("keeps chat details separate and consumes title-only invalidations via since", async () => {
     hello(["sessions_list", "sessions_lookup"]);
     await settle();
-    const complete = session("s0", { title: "Complete detail title", background: [{ id: "bg", kind: "shell", description: "Long detail" }] });
+    const complete = session("s0", {
+      title: "Complete detail title",
+      background: [{ id: "bg", kind: "shell", description: "Long detail" }],
+      background_ended: [{ id: "done", kind: "shell", status: "completed", ended_at: "2026-01-01T00:01:00Z" }],
+    });
     upsertSession(complete);
     changed = [session("s0", { title: "New summary", waiting: true })];
     Socket.last.push({ type: "sessions_list", revision: "not-the-baseline" });
@@ -85,6 +151,7 @@ describe("negotiated bounded runtime lists", () => {
     expect(requests.filter((r) => r.searchParams.has("since")).at(-1)?.searchParams.get("since")).toBe("r1");
     expect(getState().sessionSummaries.find((s) => s.session_id === "s0")?.title).toBe("New summary");
     expect(getSession("demo", "s0")?.background).toEqual(complete.background);
+    expect(getSession("demo", "s0")?.background_ended).toEqual(complete.background_ended);
     expect(getSession("demo", "s0")?.title).toBe("Complete detail title");
   });
 
@@ -94,12 +161,12 @@ describe("negotiated bounded runtime lists", () => {
     const sid = "row/<&>/with/slashes";
     changed = [session(sid, { updated_at: "2027-01-01T00:00:00Z" })];
     Socket.last.push({ type: "sessions_list", revision: "r2" });
-    await settle();
+    await settleThrottled();
     expect(runtimeSessions.getSnapshot().rows.some((s) => s.session_id === sid)).toBe(true);
     changed = [];
     removed = [JSON.stringify(["demo", sid])];
     Socket.last.push({ type: "sessions_list", revision: "r3" });
-    await settle();
+    await settleThrottled();
     expect(runtimeSessions.getSnapshot().rows.some((s) => s.session_id === sid)).toBe(false);
   });
 
@@ -127,10 +194,16 @@ describe("negotiated bounded runtime lists", () => {
   it("replaces complete snapshots and clears omitted task arrays", async () => {
     hello(["sessions_list", "sessions_lookup"]);
     await settle();
-    applyCompleteSessions([session("s0", { waiting: undefined, background: [{ id: "bg", kind: "shell" }], subagents: [], workflows: [], queued: ["Queued task"], permission_mode: "plan" })]);
+    applyCompleteSessions([session("s0", {
+      waiting: undefined,
+      background: [{ id: "bg", kind: "shell" }],
+      background_ended: [{ id: "done", kind: "shell", status: "completed" }],
+      subagents: [], workflows: [], queued: ["Queued task"], permission_mode: "plan",
+    })]);
     applyCompleteSessions([session("s0", { waiting: undefined, title: "Complete latest", permission_mode: "default" })]);
     expect(getSession("demo", "s0")?.title).toBe("Complete latest");
     expect(getSession("demo", "s0")?.background).toBeUndefined();
+    expect(getSession("demo", "s0")?.background_ended).toBeUndefined();
     expect(getSession("demo", "s0")?.queued).toBeUndefined();
     expect(getSession("demo", "s0")?.permission_mode).toBe("default");
   });
@@ -215,4 +288,29 @@ describe("archive failure rollback with negotiated lists", () => {
   expect(await operation).toEqual({ok:false});
   expect(getState().sessions.demo).toEqual([newer]);
  });
+
+  it("tracks hello.push_grading and push_grading events and subtracts held_needs from badge only while grading is on (#11771)", async () => {
+    scopedNeeds = 3;
+    scopedHeld = 2;
+    connect();
+    Socket.last.push({ type: "hello", features: ["sessions_list", "sessions_lookup", "sessions_hierarchy", "sessions_agents_only"], push_grading: false });
+    await settle();
+    expect(getState().pushGrading).toBe(false);
+    expect(countsShown()).toMatchObject({ needs: 3, badge: 3 });
+
+    Socket.last.push({ type: "push_grading", enabled: true });
+    expect(getState().pushGrading).toBe(true);
+    expect(countsShown()).toMatchObject({ needs: 3, badge: 1 });
+
+    // A P1 interaction update refreshes bounded counts so held_needs updates without a session row change.
+    const countsBefore = requests.filter((r) => r.searchParams.has("counts")).length;
+    scopedHeld = 3;
+    Socket.last.push({ type: "interaction", interaction: { id: "ix_p1", machine_id: "demo", session_id: "s1", kind: "permission", push_level: "P1" } });
+    await settleThrottled();
+    expect(requests.filter((r) => r.searchParams.has("counts")).length).toBeGreaterThan(countsBefore);
+    expect(countsShown()).toMatchObject({ needs: 3, badge: 0 });
+
+    Socket.last.push({ type: "push_grading", enabled: false });
+    expect(countsShown()).toMatchObject({ needs: 3, badge: 3 });
+  });
 });

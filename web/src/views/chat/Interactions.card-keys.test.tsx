@@ -20,6 +20,9 @@ vi.mock("../../lib/ops", () => ({
 import { InteractionCard } from "./Interactions";
 import { getState } from "../../lib/store";
 import type { Interaction, Session } from "../../lib/types";
+import { loadPages } from "../../lib/lazy-page";
+
+await loadPages();
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -91,13 +94,12 @@ describe("a card answering from the keyboard", () => {
     expect(calls).toEqual([]);
   });
 
-  it("digits pick a question's options and Enter sends the answer, as the send arrow does", async () => {
+  it("a digit submits a single-question, single-choice answer right away", async () => {
     act(() => root.render(<InteractionCard ix={question} />));
     act(() => cardRoot().focus());
     await press("1");
     const picked = [...host.querySelectorAll("button[aria-pressed]")].find((b) => b.textContent?.includes("Swift Testing"))!;
     expect(picked.getAttribute("aria-pressed")).toBe("true");
-    await press("Enter");
     await flush();
     expect(calls).toEqual([{ path: "/interactions/q_1/resolve", body: { answers: { "哪个框架？": "Swift Testing" } } }]);
   });
@@ -112,7 +114,7 @@ describe("a card answering from the keyboard", () => {
 
   it("Esc goes back to the composer and answers nothing", async () => {
     const composer = document.createElement("main");
-    composer.innerHTML = '<div data-chat-dock><textarea></textarea></div>';
+    composer.innerHTML = '<div data-chat-dock><textarea data-composer-input></textarea></div>';
     document.body.append(composer);
     act(() => root.render(<InteractionCard ix={permission} />));
     act(() => cardRoot().focus());

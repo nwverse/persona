@@ -26,6 +26,12 @@ var danglingMarks = lazyre.New("\\*{2,}|_{2,}|~{2,}|`+")
 // block, emphasis and code without their marks, a link as its text. Marks a clip left unpaired are dropped too.
 func PlainMarkdown(md string) string { return plain(md, true, false) }
 
+// SearchMarkdown keeps visible words inside HTML folds (such as details) as
+// well as ordinary Markdown. Unlike PushText it does not reinterpret flattened
+// tables. Scripts, styles, attributes and comments are not searchable prose.
+// PlainMarkdown's existing preview/title behavior remains unchanged.
+func SearchMarkdown(md string) string { return plain(md, true, true) }
+
 // PushText is PlainMarkdown for a finished turn's push, whose text node already flattened to one line (snippet): a
 // table run into one line says its cells ("item · status · build · passed"), and an answer folded in an HTML block
 // (<details>) says its words, not nothing (#4462). Only the push reads text this way: a plan's title (PlanTitle) and
@@ -88,30 +94,42 @@ func oneLineTables(md string) string {
 	return strings.Join(lines, "\n")
 }
 
-// htmlText is an HTML block's words: its text, unescaped, without tags, comments, or what script and style hold.
-func htmlText(block string) string {
-	z := html.NewTokenizer(strings.NewReader(block))
+// htmlText is an HTML fragment's visible words. hidden carries an inline script or style across Markdown AST nodes:
+// Goldmark represents its opening and closing tags separately, with the content parsed as ordinary Markdown.
+func htmlText(block string, hidden *string) string {
+	// A fragment can start inside an element opened in an earlier AST node. Restore tokenizer raw-text mode so,
+	// for example, a closing </script> inside what Markdown calls an HTML comment still closes the HTML script.
+	prefix := ""
+	if *hidden != "" {
+		prefix = "<" + *hidden + ">"
+	}
+	z := html.NewTokenizer(strings.NewReader(prefix + block))
+	if prefix != "" {
+		z.Next() // the synthetic opener only restores the tokenizer's state
+	}
 	var b strings.Builder
-	skip := 0
 	for {
 		switch z.Next() {
-		case html.ErrorToken: // the end, or nothing more it can read
+		case html.ErrorToken:
 			return b.String()
-		case html.TextToken: // unescaped by the tokenizer (&lt; is <); comments are their own tokens, left out
-			if skip == 0 {
+		case html.TextToken:
+			if *hidden == "" {
 				b.Write(z.Text())
 				b.WriteByte(' ')
 			}
-		case html.StartTagToken:
-			if name, _ := z.TagName(); string(name) == "script" || string(name) == "style" {
-				skip++
+		case html.StartTagToken, html.SelfClosingTagToken:
+			name, _ := z.TagName()
+			if *hidden == "" && (string(name) == "script" || string(name) == "style") {
+				*hidden = string(name) // in HTML, even <script/> begins a non-void element
 			}
 			b.WriteByte(' ')
 		case html.EndTagToken:
-			if name, _ := z.TagName(); (string(name) == "script" || string(name) == "style") && skip > 0 {
-				skip--
+			name, _ := z.TagName()
+			if string(name) == *hidden {
+				*hidden = ""
+			} else if *hidden == "" {
+				b.WriteByte(' ')
 			}
-			b.WriteByte(' ')
 		}
 	}
 }
@@ -122,10 +140,11 @@ func plain(md string, dropDangling, htmlWords bool) string {
 	md = wire.AssistantCardText(md)
 	src := []byte(md)
 	var b strings.Builder
+	hidden := ""
 	_ = ast.Walk(plainParser.Parse(text.NewReader(src)), func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		switch n := n.(type) {
 		case *ast.Text:
-			if entering {
+			if entering && hidden == "" {
 				if p := n.Parent(); p != nil && p.Kind() == ast.KindCodeSpan {
 					b.Write(n.Segment.Value(src)) // code is its source text
 				} else {
@@ -136,16 +155,16 @@ func plain(md string, dropDangling, htmlWords bool) string {
 				}
 			}
 		case *ast.String:
-			if entering {
+			if entering && hidden == "" {
 				b.Write(n.Value)
 			}
 		case *ast.AutoLink:
-			if entering {
+			if entering && hidden == "" {
 				b.Write(n.URL(src))
 			}
 			return ast.WalkSkipChildren, nil
 		case *ast.FencedCodeBlock, *ast.CodeBlock:
-			if entering {
+			if entering && hidden == "" {
 				lines := n.Lines()
 				for i := 0; i < lines.Len(); i++ {
 					seg := lines.At(i)
@@ -160,11 +179,21 @@ func plain(md string, dropDangling, htmlWords bool) string {
 					seg := lines.At(i)
 					raw.Write(seg.Value(src))
 				}
-				b.WriteString(strings.ReplaceAll(htmlText(raw.String()), "\n", " "))
+				if n.HasClosure() {
+					raw.Write(n.ClosureLine.Value(src))
+				}
+				b.WriteString(strings.ReplaceAll(htmlText(raw.String(), &hidden), "\n", " "))
 				b.WriteByte('\n')
 			}
 			return ast.WalkSkipChildren, nil
 		case *ast.RawHTML:
+			if entering && htmlWords {
+				wasHidden := hidden != ""
+				visible := htmlText(string(n.Segments.Value(src)), &hidden)
+				if wasHidden && hidden == "" && strings.TrimSpace(visible) != "" {
+					b.WriteString(visible)
+				}
+			}
 			return ast.WalkSkipChildren, nil
 		}
 		if !entering && n.Type() == ast.TypeBlock {

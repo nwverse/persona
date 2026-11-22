@@ -65,7 +65,7 @@ func TestTaskWorkspaceNewUsesEngineAndPersistsActualCwd(t *testing.T) {
 			t.Fatalf("task did not use the machine engine: %v", f.worktrees)
 		}
 		create := f.worktrees[len(f.worktrees)-1]
-		if create["branch"] != wantBranch || len(f.starts) != 1 || f.starts[0]["workspace_id"] != "ws-new" {
+		if create["branch"] != wantBranch || len(f.starts) != 1 || f.starts[0]["workspace_id"] != "ws-new" || f.starts[0]["reopen_worktree_workspace"] != true {
 			t.Fatalf("create=%v starts=%v; want branch %s", create, f.starts, wantBranch)
 		}
 		path := create["path"].(string)
@@ -122,18 +122,18 @@ func TestTaskWorkspaceOwnershipIsMachineLocalAndOnlyActiveLinks(t *testing.T) {
 	if err := s.linkTodoAgent(ctx, owner.ID, "box", "writer", "", "/code/app", ""); err != nil {
 		t.Fatal(err)
 	}
-	if s.taskWorkspaceOwner(ctx, "another-machine", "/code/app", "") != nil ||
-		s.taskWorkspaceOwner(ctx, "box", "/code/other", "") != nil ||
-		s.taskWorkspaceOwner(ctx, "box", "/code/app", owner.ID) != nil {
+	if s.taskWorkspaceOwner(ctx, "another-machine", "/code/app", "", false) != nil ||
+		s.taskWorkspaceOwner(ctx, "box", "/code/other", "", false) != nil ||
+		s.taskWorkspaceOwner(ctx, "box", "/code/app", owner.ID, false) != nil {
 		t.Fatal("ownership leaked across machine, path, or the same task")
 	}
-	if s.taskWorkspaceOwner(ctx, "box", "/code/app/", "") == nil {
+	if s.taskWorkspaceOwner(ctx, "box", "/code/app/", "", false) == nil {
 		t.Fatal("active canonical path was not occupied")
 	}
 	s.todos.mu.Lock()
 	s.todos.todos[owner.ID].Agents[0].ReleasedAt = &owner.CreatedAt
 	s.todos.mu.Unlock()
-	if s.taskWorkspaceOwner(ctx, "box", "/code/app", "") != nil {
+	if s.taskWorkspaceOwner(ctx, "box", "/code/app", "", false) != nil {
 		t.Fatal("released task still occupies the checkout")
 	}
 }

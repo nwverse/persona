@@ -26,11 +26,15 @@ final class MessageMenu {
     @ObservationIgnored var forward: ((MessageBarInfo) -> Void)?
     /// The message whose Forward was tapped: the chat shows the picker (`ForwardSheet`).
     var forwarding: ForwardDraft?
+    /// Select Messages (#9468): the chat starts selecting with this message picked. nil: the chat does not select (the
+    /// Mac); `selectable` says whether a message can be picked (an injected line or a `/loop` tick cannot).
+    @ObservationIgnored var select: ((String) -> Void)?
+    @ObservationIgnored var selectable: (String) -> Bool = { _ in false }
     /// Where the chat's messages come from ("app › leader"), printed on share cards (read when sharing: the
     /// session may not be loaded yet when the chat binds the menu).
     @ObservationIgnored var source: () -> String = { "" }
-    /// Who answers in this chat ("Claude" / "Codex" / "TRAEX"), for share cards.
-    @ObservationIgnored var agent: () -> String = { "Claude" }
+    /// The answering session, read when making a share card because it may arrive after the menu is bound.
+    @ObservationIgnored var session: () -> Session? = { nil }
     /// Quote: the text, the message's id, whether it is the user's own, and the part quoted (nil: the whole message;
     /// `ContextRef.selectionPart`: words picked in Select Text).
     @ObservationIgnored var quote: ((String, String, Bool, String?) -> Void)?
@@ -67,6 +71,12 @@ final class MessageMenu {
     @ObservationIgnored private var pressing = false
     @ObservationIgnored private var pressEnded = Date.distantPast
 
+    func shareMessage(text: String, isUser: Bool, date: Date?) -> ShareMessage {
+        let session = session()
+        return ShareMessage(text: text, isUser: isUser, source: source(), date: date,
+                            agent: session?.agentLabel ?? "Claude", showsTerminalMark: session?.isTraex == true,
+                            prefersLetterMark: AgentKind.prefersLetterMark(for: session))    }
+
     #if os(iOS) || os(visionOS)
     func pressChanged(_ state: UIGestureRecognizer.State) {
         switch state {
@@ -76,7 +86,7 @@ final class MessageMenu {
         }
     }
     #else
-    /// The Mac's secondary click (LongPressAt in apple/Mac/Media/MessageGestures.swift) reports the same phases.
+    /// The watch's secondary click reports the same phases.
     func pressChanged(_ state: PressPhase) {
         switch state {
         case .began: pressing = true
@@ -228,12 +238,20 @@ struct LeftDrag: UIGestureRecognizerRepresentable {
 /// chat list would take its scrolling).
 struct SwipeTo: UIGestureRecognizerRepresentable {
     var direction: UISwipeGestureRecognizer.Direction
+    /// Off, it takes no touch at all: another recognizer that wants the same swipe (the system's swipe back from anywhere
+    /// on a pushed page, #9971) is not kept waiting on it.
+    var enabled = true
     var action: () -> Void
 
     func makeUIGestureRecognizer(context: Context) -> UISwipeGestureRecognizer {
         let g = UISwipeGestureRecognizer()
         g.direction = direction
+        g.isEnabled = enabled
         return g
+    }
+
+    func updateUIGestureRecognizer(_ recognizer: UISwipeGestureRecognizer, context: Context) {
+        recognizer.isEnabled = enabled
     }
 
     func handleUIGestureRecognizerAction(_ recognizer: UISwipeGestureRecognizer, context: Context) {
@@ -278,8 +296,9 @@ extension View {
     /// session's Claude), for a forward's author.
     /// delete: one only on this phone ends in Delete (#4626), on the bar and in the plain context menu alike.
     func messageActionBar(id: String, text: String, isUser: Bool, date: Date? = nil, pending: Bool = false, from: String? = nil,
-                          delete: MessageBarDelete? = nil) -> some View {
-        modifier(MessageActionBarHost(id: id, text: text, isUser: isUser, date: date, pending: pending, from: from, delete: delete))
+                          delete: MessageBarDelete? = nil, starItem: Item? = nil, showsStar: Bool = true) -> some View {
+        modifier(MessageActionBarHost(id: id, text: text, isUser: isUser, date: date, pending: pending, from: from,
+                                      delete: delete, starItem: starItem, showsStar: showsStar))
     }
     /// Messages shown with the bar outside the chat's list (the background tasks' drawer): a tap or a drag there closes
     /// it, as on the list, and it closes with the sheet (#1388: it stayed until one of its buttons was used).
@@ -344,7 +363,10 @@ private struct MessageLongPress<P: View>: ViewModifier {
     }
 
     private func lift(_ menu: MessageMenu) {
-        guard let bar else { return }
+        guard var bar else { return }
+        #if os(iOS)
+        bar.starredAction = place.environment?.starredChat?.action(for: bar)
+        #endif
         let f = place.frames
         let press = CGPoint(x: menu.anchor.x - f.row.minX, y: menu.anchor.y - f.row.minY)
         // Drawn over the page, outside the chat, in the environment it had in the chat (`MessageLift.environment`).
@@ -397,6 +419,9 @@ enum MessageSwipe {
 
 private struct MessageActionBarHost: ViewModifier {
     @Environment(MessageMenu.self) private var menu: MessageMenu?
+    #if os(iOS)
+    @Environment(\.layoutDirection) private var direction
+    #endif
     let id: String
     let text: String
     let isUser: Bool
@@ -404,14 +429,22 @@ private struct MessageActionBarHost: ViewModifier {
     let pending: Bool
     let from: String?
     let delete: MessageBarDelete?
+    let starItem: Item?
+    let showsStar: Bool
     @State private var drag: CGFloat = 0
     @State private var armed = false
 
     func body(content: Content) -> some View {
         if let menu {
             swipeable(content, menu)
+                #if os(iOS)
+                .overlay(alignment: .topTrailing) {
+                    // Chat rows leave a gutter on either side. The mark fits there without covering the message.
+                    if showsStar { StarredChatMark(item: starItem).offset(x: direction == .rightToLeft ? -Theme.Space.l : Theme.Space.l) }
+                }
+                #endif
                 .environment(\.messageBar, MessageBarInfo(id: id, text: text, isUser: isUser, date: date, pending: pending, from: from,
-                                                            delete: delete))
+                                                            delete: delete, starItem: starItem))
                 .coordinateSpace(.named(MessageMenu.row))
                 .zIndex(menu.selected == id ? 1 : 0)
         } else {
@@ -471,6 +504,12 @@ private struct MessageActionBarHost: ViewModifier {
     }
 }
 
+struct StarredMenuAction {
+    let title: String
+    let symbol: String
+    let perform: () -> Void
+}
+
 struct MessageActionBar: View {
     var id = ""
     var text: String
@@ -484,7 +523,7 @@ struct MessageActionBar: View {
     /// Only on this phone (`messageActionBar(delete:)`): Delete last, in the danger color.
     var delete: MessageBarDelete?
     var itemWidth: CGFloat = Self.item
-    @Environment(\.dynamicTypeSize) private var typeSize
+    var starredAction: StarredMenuAction? = nil
 
     static let height: CGFloat = 62
     static let item: CGFloat = 58
@@ -492,11 +531,6 @@ struct MessageActionBar: View {
     /// there fits at every size up to the accessibility ones; a long press shows an item's name large (Large Content
     /// Viewer, #5019).
     static let barTypeSize: DynamicTypeSize = .large
-    /// At the accessibility sizes the actions are a list instead, one a row with its icon and whole name
-    /// (DESIGN_SYSTEM.md 1.2 rule 3), whose words grow up to this.
-    static let listTypeSize: DynamicTypeSize = .xxxLarge
-    /// The actions as a list (`listTypeSize`) rather than a bar; the page places it by its measured size.
-    static func stacks(_ size: DynamicTypeSize) -> Bool { size.isAccessibilitySize }
     static func width(isUser: Bool, more: Bool = false) -> CGFloat { width(count: (isUser ? 5 : 4) + (more ? 1 : 0)) }
     static func width(count: Int) -> CGFloat { item * CGFloat(count) + 12 }
     /// Each action's width when the bar is `width` wide.
@@ -520,6 +554,23 @@ struct MessageActionBar: View {
         return false
         #endif
     }
+
+    /// Select Messages, a row of its own under the actions (#9468, as Telegram's menu ends in Select): on iPhone and iPad,
+    /// for a message in the transcript of a chat that selects.
+    static func selects(id: String, menu: MessageMenu, pending: Bool) -> Bool {
+        #if os(iOS)
+        return !pending && menu.select != nil && menu.selectable(id)
+        #else
+        return false
+        #endif
+    }
+
+    /// The bar's height, with the Select Messages row when it has one.
+    static func height(selects: Bool, stars: Bool = false) -> CGFloat {
+        height + CGFloat((selects ? 1 : 0) + (stars ? 1 : 0)) * (selectRow + Theme.Size.hairline)
+    }
+    /// The Select Messages row's height: a list row's.
+    static let selectRow: CGFloat = 44
 
     /// A reply ends in ⋯ with Branch to New Chat when the session can fork and the reply is a Claude transcript line of its
     /// own (`<uuid>#<n>`).
@@ -565,7 +616,7 @@ struct MessageActionBar: View {
             })
         } else {
             all.append(Item(title: String(localized: "Share"), symbol: Theme.Icon.share) {
-                menu.sharing = ShareMessage(text: text, isUser: isUser, source: menu.source(), date: date, agent: menu.agent())
+                menu.sharing = menu.shareMessage(text: text, isUser: isUser, date: date)
             })
         }
         if isUser && !pending {
@@ -584,28 +635,65 @@ struct MessageActionBar: View {
     }
 
     var body: some View {
-        Group {
-            if Self.stacks(typeSize) {
-                // As wide as its longest row, every row that wide.
-                VStack(spacing: 0) {
-                    ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
-                        if i > 0 { Divider() }
-                        action(item)
+        let actions = items
+        // The row and its divider take the actions' width: they would fill all the room the lift layer offers.
+        let width = CGFloat(actions.count) * itemWidth + 2 * Theme.Space.sm
+        VStack(spacing: Theme.Space.flush) {
+            HStack(spacing: 0) { ForEach(actions) { action($0) } }
+                .padding(.horizontal, Theme.Space.sm)
+                .frame(height: Self.height)
+            if let star = starredAction {
+                Divider().frame(width: width)
+                Button {
+                    star.perform()
+                    menu.close()
+                } label: {
+                    HStack(spacing: Theme.Space.s) {
+                        ThemedIcon(star.symbol).font(Theme.Font.heading).scaledFrame(height: Theme.Size.iconS)
+                        Text(star.title).font(Theme.Font.secondary).lineLimit(1).minimumScaleFactor(0.8)
+                        Spacer(minLength: Theme.Space.flush)
                     }
+                    .padding(.horizontal, Theme.Space.l)
+                    .frame(width: width, height: Self.selectRow)
+                    .contentShape(.rect)
                 }
-                .fixedSize()
-                .dynamicTypeSize(...Self.listTypeSize)
-            } else {
-                HStack(spacing: 0) { ForEach(items) { action($0) } }
-                    .padding(.horizontal, Theme.Space.sm)
-                    .frame(height: Self.height)
-                    .dynamicTypeSize(...Self.barTypeSize)
+                .buttonStyle(.plain)
+                .accessibilityLabel(star.title)
+                .accessibilityIdentifier("chat.starMessage")
+            }
+            if Self.selects(id: id, menu: menu, pending: pending) {
+                Divider().frame(width: width)
+                selectRow(width: width)
             }
         }
+        .dynamicTypeSize(...Self.barTypeSize)
         .background(Theme.Lift.bar, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
         // Its edge over the dimmed chat.
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous).stroke(Theme.cardStroke, lineWidth: 0.5))
         .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
+    }
+
+    /// Select Messages (#9468): the chat starts selecting with this message picked. As wide as the actions above it.
+    private func selectRow(width: CGFloat) -> some View {
+        let title = String(localized: "Select Messages [Message Menu]")
+        return Button {
+            menu.select?(id)
+            menu.close()
+        } label: {
+            HStack(spacing: Theme.Space.s) {
+                ThemedIcon(Theme.Icon.pickMessages).font(Theme.Font.heading).scaledFrame(height: Theme.Size.iconS)
+                Text(title).font(Theme.Font.secondary).lineLimit(1).minimumScaleFactor(0.8)
+                Spacer(minLength: Theme.Space.flush)
+            }
+            .padding(.horizontal, Theme.Space.l)
+            .frame(width: width, height: Self.selectRow)
+            .foregroundStyle(.primary)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityShowsLargeContentViewer { ThemedIcon(Theme.Icon.pickMessages); Text(title) }
+        .accessibilityIdentifier("chat.selectMessages")
     }
 
     private func action(_ item: Item) -> some View {
@@ -619,25 +707,12 @@ struct MessageActionBar: View {
     }
 
     @ViewBuilder private func label(_ item: Item) -> some View {
-        Group {
-            if Self.stacks(typeSize) {
-                // A row: the icon in a fixed box, so the names line up, then the whole name.
-                HStack(spacing: Theme.Space.m) {
-                    ThemedIcon(item.symbol).font(Theme.Font.heading).scaledFrame(width: Theme.Size.iconS, height: Theme.Size.iconS)
-                    Text(item.title).font(Theme.Font.body).lineLimit(1)
-                }
-                .padding(.horizontal, Theme.Space.l)
-                .scaledFrame(minHeight: Theme.Size.tapTarget)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                VStack(spacing: Theme.Space.xs) {
-                    // Symbols differ in height: a fixed box keeps every label on one line.
-                    ThemedIcon(item.symbol).font(Theme.Font.heading).scaledFrame(height: Theme.Size.iconS)
-                    Text(item.title).font(Theme.Font.label).lineLimit(1).minimumScaleFactor(0.8) // Select Text on a narrow bar
-                }
-                .frame(width: itemWidth, height: Self.height)
-            }
+        VStack(spacing: Theme.Space.xs) {
+            // Symbols differ in height: a fixed box keeps every label on one line.
+            ThemedIcon(item.symbol).font(Theme.Font.heading).scaledFrame(height: Theme.Size.iconS)
+            Text(item.title).font(Theme.Font.label).lineLimit(1).minimumScaleFactor(0.8) // Select Text on a narrow bar
         }
+        .frame(width: itemWidth, height: Self.height)
         .foregroundStyle(item.tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(HierarchicalShapeStyle.primary))
         .contentShape(.rect)
     }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -86,6 +87,90 @@ func TestRuntimeLaunchers(t *testing.T) {
 	waitFor(t, "the new launchers", func() bool {
 		return n.runtimes.launcherRuntime("paseo-grok") != nil && n.runtimes.launcherRuntime("paseo-codex") == nil
 	})
+}
+
+// A runtime's launcher carries the name the runtime gives its provider and, when its agent is not Claude Code, the
+// permission modes a start on it takes (#8261): Persona's own, whatever else the runtime sent. A Claude Code launcher's
+// are the apps' own five; an older runtime's launcher says neither.
+func TestRuntimeLauncherNamesAndPermissionModes(t *testing.T) {
+	n, _ := runtimeNode(t)
+	h := paseoEngineHello()
+	h["launchers"] = []map[string]any{
+		{"name": "my-claude", "agent": "claude", "display_name": "My Claude", "permission_modes": []string{"default", "bypassPermissions"}},
+		{"name": "grok", "agent": "paseo", "display_name": "  Grok  ", "permission_modes": []string{"bypassPermissions", "yolo", "default"}},
+		{"name": "kimi", "agent": "paseo", "display_name": strings.Repeat("π", 80), "permission_modes": []string{"default"}},
+		{"name": "older", "agent": "paseo"},
+	}
+	dialRuntime(t, n, h)
+	enablePaseo(n)
+	raw, err := nodeCall(t, n, "launchers.list", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res struct {
+		Launchers []proto.Launcher `json:"launchers"`
+	}
+	_ = json.Unmarshal(raw, &res)
+	got := map[string]proto.Launcher{}
+	for _, l := range res.Launchers {
+		if l.Source == "paseo" {
+			got[l.Name] = l
+		}
+	}
+	both := proto.PermissionModeSetOf("default", "bypassPermissions")
+	for name, want := range map[string]struct {
+		display string
+		modes   proto.PermissionModeSet
+	}{
+		"my-claude": {"My Claude", 0},
+		"grok":      {"Grok", both},
+		"kimi":      {strings.Repeat("π", 64), proto.PermissionModeSetOf("default")},
+		"older":     {"", 0},
+	} {
+		if l := got[name]; l.DisplayName != want.display || l.PermissionModes != want.modes {
+			t.Errorf("%s: %q %v, want %q %v", name, l.DisplayName, l.PermissionModes.List(), want.display, want.modes.List())
+		}
+	}
+}
+
+// A launcher whose agents' approval is a switch Allow all turns on (Paseo's Auto Accept) says so in launchers.list, the
+// runtime's own launcher too: the manager starts its own Agents there with Allow all (#8141). One the runtime does not
+// say it of has no such field, and runtime.launchers carries it as hello does.
+func TestRuntimeLauncherAutoAccept(t *testing.T) {
+	n, _ := runtimeNode(t)
+	h := paseoEngineHello()
+	h["launcher"] = "paseo-grok"
+	h["launchers"] = []map[string]any{
+		{"name": "paseo-claude", "agent": "claude"},
+		{"name": "paseo-grok", "agent": "paseo", "auto_accept": true},
+		{"name": "paseo-pi", "agent": "paseo"},
+	}
+	host := dialRuntime(t, n, h)
+	enablePaseo(n)
+	autoAccept := func() map[string]bool {
+		raw, err := nodeCall(t, n, "launchers.list", map[string]any{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var res struct {
+			Launchers []proto.Launcher `json:"launchers"`
+		}
+		_ = json.Unmarshal(raw, &res)
+		got := map[string]bool{}
+		for _, l := range res.Launchers {
+			if l.Source == "paseo" {
+				got[l.Name] = l.AutoAccept
+			}
+		}
+		return got
+	}
+	if got := autoAccept(); len(got) != 3 || !got["paseo-grok"] || got["paseo-claude"] || got["paseo-pi"] {
+		t.Fatalf("auto_accept by launcher: %v", got)
+	}
+	_ = host.peer.Notify("runtime.launchers", map[string]any{"launchers": []map[string]any{
+		{"name": "paseo-grok", "agent": "paseo"}, {"name": "paseo-pi", "agent": "paseo", "auto_accept": true},
+	}})
+	waitFor(t, "the new launchers", func() bool { got := autoAccept(); return got["paseo-pi"] && !got["paseo-grok"] })
 }
 
 // The phone's permission mode and effort reach a runtime that takes them; one that does not refuses them.
@@ -238,6 +323,95 @@ func TestEngineRuntimeSessionOpenElsewhere(t *testing.T) {
 	}
 }
 
+// The regression check of #10941's resume rule on a computer whose engine is Paseo. Paseo lists an archived Agent only
+// among the 80 newest archived in the last 7 days, and the node has no transcript under the id Persona named an Agent
+// by, so once it was not listed the node had nothing of it and refused an extension's resume (marked
+// resume_outside_health) that Paseo takes back through import_agent; while Paseo's bridge reconnected, the extension
+// got that refusal where the owner gets engine_missing. Now a start through the engine keeps the node's record of the
+// Agent's directory, which the check reads, and with the engine away any resume is engine_missing before the check.
+// One started in the health space, or an id the computer has nothing of, is still refused before Paseo is asked.
+func TestEngineRuntimeAnExtensionsResumeOfAnUnlistedAgent(t *testing.T) {
+	const (
+		own    = "bbbbbbbb-0000-4000-8000-000000000077"
+		health = "bbbbbbbb-0000-4000-8000-000000000078"
+		forged = "bbbbbbbb-0000-4000-8000-000000000079"
+	)
+	n, _ := runtimeNode(t)
+	if err := n.useEngine(context.Background(), proto.EnginePaseo); err != nil {
+		t.Fatal(err)
+	}
+	work := mkdir(t, filepath.Join(n.home, "errands"))
+	charts := mkdir(t, filepath.Join(identity.HealthDir(n.home), "charts"))
+	host := dialRuntime(t, n, paseoEngineHello())
+	host.answer = func(method string, params json.RawMessage) (any, error) {
+		var p struct {
+			SessionID string `json:"session_id"`
+			Resume    string `json:"resume"`
+			Cwd       string `json:"cwd"`
+		}
+		_ = json.Unmarshal(params, &p)
+		if method != "session.start" {
+			return map[string]any{"ok": true}, nil
+		}
+		id := p.SessionID
+		if p.Resume != "" {
+			id = p.Resume
+		}
+		return map[string]any{"session": map[string]any{"session_id": id, "status": "idle", "cwd": p.Cwd, "launcher": "paseo-claude",
+			"started_by_persona": true}}, nil
+	}
+	for id, cwd := range map[string]string{own: work, health: charts} {
+		if _, err := nodeCall(t, n, "session.start", map[string]any{"cwd": cwd, "launcher": "paseo-claude", "session_id": id, "prompt": "go"}); err != nil {
+			t.Fatal(err)
+		}
+		if st, ok := n.state.get(id); !ok || st.Cwd != cwd || st.Launcher != "paseo-claude" || st.EngineRuntime != proto.EnginePaseo {
+			t.Errorf("the record of %s started through Paseo: launcher %q, directory %q, engine runtime %q, %v", id, st.Launcher, st.Cwd, st.EngineRuntime, ok)
+		}
+	}
+	// Archived a while ago: Paseo lists neither any more.
+	_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{}})
+	waitFor(t, "Paseo's list emptied", func() bool { _, ok := listed(t, n)[own]; return !ok })
+	resume := func(id string, marked bool) error {
+		params := map[string]any{"cwd": work, "launcher": "paseo-claude", "resume_session_id": id}
+		if marked {
+			params["resume_outside_health"] = true
+		}
+		_, err := nodeCall(t, n, "session.start", params)
+		return err
+	}
+	starts := len(host.got("session.start"))
+	for _, id := range []string{health, forged} {
+		if err := resume(id, true); rpcCode(err) != proto.CodeResumeUnknown {
+			t.Errorf("the extension's resume of %s: %v (code %q), want %s", id, err, rpcCode(err), proto.CodeResumeUnknown)
+		}
+	}
+	if got := len(host.got("session.start")); got != starts {
+		t.Fatalf("a refused resume reached Paseo: %d starts, want %d", got, starts)
+	}
+	if err := resume(own, true); err != nil {
+		t.Fatalf("the extension's resume of its own Agent Paseo no longer lists: %v", err)
+	}
+	var start map[string]any
+	_ = json.Unmarshal(host.got("session.start")[starts], &start)
+	if start["resume"] != own {
+		t.Fatalf("taken back with %v", start)
+	}
+	if err := resume(health, false); err != nil {
+		t.Fatalf("the owner's resume of the health Agent: %v", err)
+	}
+
+	// The bridge restarts: every resume, the extension's of any id and the owner's, is engine_missing, as the owner's was.
+	_ = host.conn.Close()
+	waitFor(t, "Paseo away", func() bool { return n.engineRuntime(context.Background()) == nil })
+	for _, id := range []string{own, health, forged} {
+		for _, marked := range []bool{true, false} {
+			if err := resume(id, marked); rpcCode(err) != engineMissing {
+				t.Errorf("resume of %s (marked %v) while Paseo is away: %v (code %q), want %s", id, marked, err, rpcCode(err), engineMissing)
+			}
+		}
+	}
+}
+
 func TestRuntimeNativeModelsAndModelControl(t *testing.T) {
 	n, _ := runtimeNode(t)
 	hello := paseoEngineHello()
@@ -309,7 +483,7 @@ func TestRuntimeLauncherAvailabilityCheck(t *testing.T) {
 		if method != "launchers.check" {
 			return nil, errors.New("unexpected shell fallback")
 		}
-		var p struct{ Launcher, Cwd, Prompt string }
+		var p struct{ Launcher, Cwd, Prompt, Model string }
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
@@ -317,13 +491,13 @@ func TestRuntimeLauncherAvailabilityCheck(t *testing.T) {
 		if _, err := os.Stat(p.Cwd); err != nil {
 			return nil, err
 		}
-		if p.Launcher != "paseo-claude" || p.Prompt == "" {
+		if p.Launcher != "paseo-claude" || p.Prompt == "" || p.Model != "opus" {
 			return nil, errors.New("missing check parameters")
 		}
 		return proto.LauncherCheck{OK: true, Model: "native-model", Answer: "OK"}, nil
 	}
 	host.mu.Unlock()
-	result := n.launcherCheck(context.Background(), "paseo-claude")
+	result := n.launcherCheck(context.Background(), "paseo-claude", "opus")
 	if !result.OK || result.Model != "native-model" || result.Agent != "claude" || result.Answer != "OK" {
 		t.Fatalf("native check: %+v", result)
 	}
@@ -347,10 +521,81 @@ func TestRuntimeLauncherAvailabilityCheck(t *testing.T) {
 func TestRuntimeAvailabilityCheckRequiresOptIn(t *testing.T) {
 	n, _ := runtimeNode(t)
 	host := dialRuntime(t, n, paseoEngineHello())
-	if _, handled := n.runtimeLauncherCheck(context.Background(), "paseo-claude", t.TempDir(), "probe"); handled {
+	if _, handled := n.runtimeLauncherCheck(context.Background(), n.runtimes.launcherRuntime("paseo-claude"), "paseo-claude", t.TempDir(), "probe", ""); handled {
 		t.Fatal("older runtime intercepted the shell check")
 	}
 	if len(host.got("launchers.check")) != 0 {
 		t.Fatal("unsupported check reached runtime")
+	}
+}
+
+// The launcher a runtime runs the assistant on carries the Agent launcher it was set up to run it for
+// (proto.Launcher.AssistantFor: integrations/grok's grok-chat for the Paseo provider grok); another launcher of it, a
+// name no launcher may have and its own name do not.
+func TestRuntimeAssistantLauncherSaysWhatItRunsTheAssistantFor(t *testing.T) {
+	n, _ := runtimeNode(t)
+	h := map[string]any{"runtime": "grok-chat", "name": "Grok", "agent": "grok", "launcher": "grok-chat",
+		"caps": map[string]any{"start": true, "send": true, "interrupt": true, "assistant": true},
+		"launchers": []map[string]any{
+			{"name": "grok-chat", "agent": "grok", "display_name": "Grok", "assistant_for": "grok"},
+			{"name": "grok-side", "agent": "grok", "assistant_for": "grok"},
+		}}
+	host := dialRuntime(t, n, h)
+	got := func() map[string]proto.Launcher {
+		raw, err := nodeCall(t, n, "launchers.list", map[string]any{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var res struct {
+			Launchers []proto.Launcher `json:"launchers"`
+		}
+		_ = json.Unmarshal(raw, &res)
+		out := map[string]proto.Launcher{}
+		for _, l := range res.Launchers {
+			out[l.Name] = l
+		}
+		return out
+	}
+	ls := got()
+	if l := ls["grok-chat"]; !l.Assistant || l.AssistantFor != "grok" || l.DisplayName != "Grok" {
+		t.Fatalf("grok-chat: %+v", l)
+	}
+	if l := ls["grok-side"]; l.Assistant || l.AssistantFor != "" {
+		t.Fatalf("a launcher that does not run the assistant says what it runs it for: %+v", l)
+	}
+	for _, bad := range []string{"bad name!", "grok-chat"} {
+		_ = host.peer.Notify("runtime.launchers", map[string]any{"launchers": []map[string]any{{"name": "grok-chat", "agent": "grok", "assistant_for": bad}}})
+		waitFor(t, "the new launchers "+bad, func() bool { l := got()["grok-chat"]; return l.Assistant && l.AssistantFor == "" })
+	}
+}
+
+// The record an engine runtime's start keeps says whose start its directory is (EngineRuntime), and only while it is:
+// a launcher switch carried out elsewhere moves the directory and carries the switch's (none for a terminal), a start
+// that writes the record anew has none, and putting back the record a failed switch wrote over puts back its own. An
+// extension's resume of an unlisted Agent passes on such a record alone (resumeOutsideHealth, #10941), so a directory
+// a resume or a switch wrote must never keep it. It goes to the hub's copy under engine_runtime (db.NodeSession).
+func TestEngineRuntimeRecordFollowsItsDirectory(t *testing.T) {
+	s := newState()
+	agent := sessionState{Launcher: "paseo-claude", Cwd: "/work/errands", EngineRuntime: proto.EnginePaseo}
+	s.put("a", agent)
+	s.adoptSwitch("a", sessionState{Launcher: "claude", Cwd: "/work/elsewhere"})
+	if st, _ := s.get("a"); st.Cwd != "/work/elsewhere" || st.EngineRuntime != "" {
+		t.Fatalf("after a switch carried out elsewhere: %+v", st)
+	}
+	s.put("b", agent)
+	s.put("b", sessionState{Launcher: "claude", Cwd: "/work/elsewhere"}) // a terminal start writes the record anew
+	if st, _ := s.get("b"); st.EngineRuntime != "" {
+		t.Fatalf("after a terminal start: %+v", st)
+	}
+	s.restoreLaunch("b", agent, true, "")
+	if st, _ := s.get("b"); st.Cwd != agent.Cwd || st.EngineRuntime != proto.EnginePaseo {
+		t.Fatalf("after putting the record back: %+v", st)
+	}
+	raw, err := json.Marshal(agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"engine_runtime":"paseo"`) {
+		t.Fatalf("the record as the hub keeps it: %s", raw)
 	}
 }

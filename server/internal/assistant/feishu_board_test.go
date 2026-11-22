@@ -276,7 +276,7 @@ func TestBoardOrdersByWaitAndSaysWhoAsked(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"已等 1 小时 20 分", "已等 20 分钟", "已等 2 分钟", "已等 3 天", "来自 Persona", "来自 Agent「登录修复」", "来自某个 Agent",
-		"[打开](" + testWeb + "/persona/asm)", "[打开](" + testWeb + "/s/box/ag1)", "[打开](" + testWeb + "/todos?id=todo_v)"} {
+		"[打开](" + testWeb + "/persona/asm)", "[打开](" + testWeb + "/s/box/ag1)", "[打开](" + testWeb + "/todos/todo_v)"} {
 		index(t, card, want)
 	}
 }
@@ -401,6 +401,30 @@ func TestBoardStaysWhenAnEditFailsForAPassingReason(t *testing.T) {
 				t.Fatalf("the answer was not the snapshot:\n%s", c)
 			}
 		})
+	}
+}
+
+func TestBoardFrequencyLimitedEditKeepsOriginalForNextUpdate(t *testing.T) {
+	e := newBoardEnv(t)
+	e.tasks("/tasks")
+	e.failUpdates(errors.New("feishu update card: 230429 This operation triggers the frequency limit."))
+	e.tasks("/tasks")
+	if got := e.boardID(); got != "om_board_1" {
+		t.Fatalf("the frequency-limited board became %q", got)
+	}
+	if p, u := e.counts(); p != 2 || u != 1 { // the original board and the command's snapshot, no replacement board
+		t.Fatalf("after the frequency limit: %d posts, %d edits; want 2 and 1", p, u)
+	}
+
+	e.failUpdates(nil)
+	e.tasks("/tasks")
+	if p, u := e.counts(); p != 2 || u != 2 {
+		t.Fatalf("after the next update: %d posts, %d edits; want no new board and 2 edits", p, u)
+	}
+	for i, update := range e.updates {
+		if got := update["message_id"]; got != "om_board_1" {
+			t.Fatalf("update %d targeted %v, not the original board", i, got)
+		}
 	}
 }
 

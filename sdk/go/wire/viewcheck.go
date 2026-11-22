@@ -61,14 +61,51 @@ func CheckViewJSON(raw []byte) error { return checkViewJSON(raw, false) }
 func CheckFittedJSON(raw []byte) error { return checkViewJSON(raw, true) }
 
 func checkViewJSON(raw []byte, hubNames bool) error {
-	if err := ValidateJSON("View", raw); err != nil {
-		return err
-	}
+	_, err := decodeCheckedView(raw, hubNames)
+	return err
+}
+
+// DecodeCheckedViewJSON is CheckViewJSON that also gives the View it decoded
+// from raw and checked, for a caller that would decode raw again.
+func DecodeCheckedViewJSON(raw []byte) (View, error) { return decodeCheckedView(raw, false) }
+
+// CheckValidatedViewJSON is CheckViewJSON for raw that already holds to View,
+// such as the view of a frame validated as UIStreamSnapshot (whose view is
+// UIStreamView, View narrowed): it decodes raw and checks its semantics
+// without walking the View schema again.
+func CheckValidatedViewJSON(raw []byte) error {
 	var v View
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return err
 	}
-	return checkViewSemantics(&v, hubNames)
+	return checkViewSemantics(&v, false)
+}
+
+// DecodeCheckedStreamViewJSON validates raw as a UI stream's view
+// (UIStreamView), then decodes and checks it as DecodeCheckedViewJSON does.
+// UIStreamView is View ($ref) narrowed by sibling keywords, and check holds a
+// value to a $ref's target before its siblings, so a view that holds to
+// UIStreamView holds to View: View is not validated a second time.
+func DecodeCheckedStreamViewJSON(raw []byte) (View, error) {
+	if err := ValidateJSON("UIStreamView", raw); err != nil {
+		return View{}, err
+	}
+	var v View
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return View{}, err
+	}
+	return v, checkViewSemantics(&v, false)
+}
+
+func decodeCheckedView(raw []byte, hubNames bool) (View, error) {
+	if err := ValidateJSON("View", raw); err != nil {
+		return View{}, err
+	}
+	var v View
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return View{}, err
+	}
+	return v, checkViewSemantics(&v, hubNames)
 }
 
 func checkViewSemantics(v *View, hubNames bool) error {
@@ -113,8 +150,8 @@ func checkViewSemantics(v *View, hubNames bool) error {
 	}
 	for i, s := range v.Sections {
 		for j, e := range s.Items {
-			// a grid's or a carousel's tiles are components of the page each
-			if n += max(1, len(e.Tiles)); n > ItemsMost {
+			// a grid's or a carousel's tiles, a graph's nodes and a scene's pins are components of the page each
+			if n += max(1, len(e.Tiles)+len(e.Nodes)+len(e.Pins)); n > ItemsMost {
 				return fmt.Errorf("more than %d items", ItemsMost)
 			}
 			var err error
@@ -126,9 +163,7 @@ func checkViewSemantics(v *View, hubNames bool) error {
 			}
 			switch e.Type {
 			case "link":
-				if u, perr := url.Parse(e.URL); perr != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
-					err = errors.New("link needs an https url")
-				}
+				err = CheckHTTPS(e.URL, "link")
 			case "field":
 				switch {
 				case e.Kind == "choice" && len(e.Choices) == 0:
@@ -182,6 +217,12 @@ func checkViewSemantics(v *View, hubNames bool) error {
 			}
 			if err == nil {
 				err = pc.checkV6(&e)
+			}
+			if err == nil {
+				err = pc.checkV10(&e)
+			}
+			if err == nil {
+				err = pc.checkV11(&e)
 			}
 			if err == nil && code > CodeMost {
 				err = fmt.Errorf("a view carries at most %d bytes of code: page the rest (load)", CodeMost)
@@ -368,7 +409,8 @@ func checkMarkdown(text string) error {
 	return nil
 }
 
-// Actions are a view's actions (its components', its search's, filter's and sections' more) and where each is.
+// Actions are a view's actions (its components', its search's, filter's, and its sections' more and link) and where
+// each is.
 func Actions(v *View) []*Action {
 	var out []*Action
 	if v == nil {
@@ -432,6 +474,16 @@ func Actions(v *View) []*Action {
 					out = append(out, &t.Actions[l].Action)
 				}
 			}
+			for k := range e.Nodes {
+				if e.Nodes[k].Action != nil {
+					out = append(out, e.Nodes[k].Action)
+				}
+			}
+			for k := range e.Pins {
+				if e.Pins[k].Action != nil {
+					out = append(out, e.Pins[k].Action)
+				}
+			}
 			for k := range e.Threads {
 				if e.Threads[k].Reply != nil {
 					out = append(out, e.Threads[k].Reply)
@@ -443,6 +495,9 @@ func Actions(v *View) []*Action {
 		}
 		if s.More != nil {
 			out = append(out, &s.More.Action)
+		}
+		if s.Link != nil {
+			out = append(out, &s.Link.Action)
 		}
 	}
 	return out

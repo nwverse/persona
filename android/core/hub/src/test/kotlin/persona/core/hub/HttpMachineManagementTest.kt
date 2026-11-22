@@ -118,6 +118,75 @@ class HttpMachineManagementTest {
         assertEquals(HubError.Protocol, (runCatching { machines.botmux("desk") }.exceptionOrNull() as HubFailure).kind)
     }
 
+    /** #9178: Settings › Claude Code › Live Replies reads/writes `/claude-live-replies` and hides on 404. */
+    @Test fun claudeLiveRepliesReadsSavesAndHidesOnOlderHub() = withHub { server, machines ->
+        server.enqueue(MockResponse().setBody("""{"on":true}"""))
+        assertEquals(true, machines.claudeLiveReplies("desk/name"))
+        server.takeRequest().let {
+            assertEquals("GET", it.method)
+            assertEquals("/api/v1/machines/desk%2Fname/claude-live-replies", it.path)
+        }
+        server.enqueue(MockResponse().setBody("""{"on":false}"""))
+        assertEquals(false, machines.setClaudeLiveReplies("desk", false))
+        server.takeRequest().let {
+            assertEquals("PUT", it.method)
+            assertEquals("/api/v1/machines/desk/claude-live-replies", it.path)
+            assertEquals("""{"on":false}""", it.body.readUtf8())
+        }
+        // Older hub without the route: null (hidden).
+        server.enqueue(MockResponse().setResponseCode(404).setBody("404 page not found"))
+        assertNull(machines.claudeLiveReplies("desk"))
+        // Other failures stay errors for Retry.
+        server.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"machine is offline"}"""))
+        assertEquals(503, (runCatching { machines.claudeLiveReplies("desk") }.exceptionOrNull() as HubFailure).status)
+        server.enqueue(MockResponse().setResponseCode(500).setBody("""{"error":"database is down"}"""))
+        assertEquals(500, (runCatching { machines.setClaudeLiveReplies("desk", true) }.exceptionOrNull() as HubFailure).status)
+        // Missing "on" is a protocol failure.
+        server.enqueue(MockResponse().setBody("""{}"""))
+        assertEquals(HubError.Protocol, (runCatching { machines.claudeLiveReplies("desk") }.exceptionOrNull() as HubFailure).kind)
+    }
+
+    @Test fun linkSwitchPostsOnceAndDecodesTheAcceptedState() = withHub { server, machines ->
+        server.enqueue(MockResponse().setResponseCode(202).setBody(
+            """{"link_switch":{"available":false,"reason":"in_progress","phase":"checking",
+              "rollback_unconfirmed":false,"at":"2026-11-19T16:00:05+08:00","future":true}}""",
+        ))
+        val state = machines.startLinkSwitch("desk/name")
+        assertFalse(state.available)
+        assertEquals("in_progress", state.reason)
+        assertEquals("checking", state.phase)
+        assertEquals("2026-11-19T08:00:05Z", state.at)
+        server.takeRequest().let {
+            assertEquals("POST", it.method)
+            assertEquals("/api/v1/machines/desk%2Fname/link-switch", it.path)
+            assertEquals("{}", it.body.readUtf8())
+        }
+        server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"already running","code":"in_progress"}"""))
+        val refused = runCatching { machines.startLinkSwitch("desk/name") }.exceptionOrNull() as HubFailure
+        assertEquals(409, refused.status)
+        assertEquals("in_progress", refused.code)
+        server.takeRequest()
+        server.enqueue(MockResponse().setResponseCode(403).setBody("""{"error":"full access required","code":"forbidden"}"""))
+        assertEquals(403, (runCatching { machines.startLinkSwitch("desk/name") }.exceptionOrNull() as HubFailure).status)
+        server.takeRequest()
+        assertEquals(3, server.requestCount)
+    }
+
+    @Test fun linkSwitchRejectsAnAnswerItCannotTrust() = withHub { server, machines ->
+        repeat(4) { index ->
+            server.enqueue(MockResponse().setResponseCode(202).setBody(when (index) {
+                0 -> """{}"""
+                1 -> """{"link_switch":{"phase":"checking"}}"""
+                2 -> """{"link_switch":{"available":true,"phase":"failed","rollback_unconfirmed":"true"}}"""
+                else -> """{"link_switch":{"available":"yes"}}"""
+            }))
+            val failure = runCatching { machines.startLinkSwitch("desk") }.exceptionOrNull() as HubFailure
+            assertEquals(HubError.Protocol, failure.kind)
+            server.takeRequest()
+        }
+        assertEquals(4, server.requestCount)
+    }
+
     @Test fun launchersReconnectAndDeployGoToTheMachine() = withHub { server, machines ->
         server.enqueue(MockResponse().setBody("""{"launchers":[{"name":"claude","model":"opus"},{"name":"codex","agent_type":"codex"}]}"""))
         val launchers = machines.launchers("mac/one")
@@ -159,6 +228,20 @@ class HttpMachineManagementTest {
         assertEquals("/api/v1/launchers/plain/quota?machine=mac&refresh=1", (server.takeRequest().path).zhAny())
         assertTrue(none.unsupported)
         assertNull(none.quota)
+    }
+
+    @Test fun noTerminalEngineIsSavedAsTheEmptyHostSet() = withHub { server, machines ->
+        server.enqueue(MockResponse().setBody("""{"id":"m1","engine":"herdr","engine_hosts":[],"engine_default":""}"""))
+        val saved = machines.setEngine("m1", NO_TERMINAL_ENGINE)
+        val put = server.takeRequest()
+        assertEquals("PUT", put.method)
+        assertEquals("/api/v1/machines/m1/engine", put.path)
+        assertEquals("""{"hosts":[]}""", put.body.readUtf8())
+        assertEquals(emptyList<String>(), saved.engineHosts)
+        // Going back is the ordinary single engine again.
+        server.enqueue(MockResponse().setBody("""{"id":"m1","engine":"herdr","engine_hosts":["herdr"]}"""))
+        assertEquals(listOf("herdr"), machines.setEngine("m1", "herdr").engineHosts)
+        assertEquals("""{"engine":"herdr"}""", server.takeRequest().body.readUtf8())
     }
 
     @Test fun putsTheEngineAndDecodesTheMachine() = withHub { server, machines ->
@@ -306,6 +389,29 @@ class HttpMachineManagementTest {
         machines.setCodexSetting("mac", "model", JsonNull)
         assertEquals("""{"key":"model","value":null}""", (server.takeRequest().body.readUtf8()).zhAny())
     }
+
+    @Test fun agySettingsUseTheirOwnPathAndTheSameBody() = withHub { server, machines ->
+        val table = """{"settings":[{"key":"toolPermission","title":"工具权限","detail":"调用工具前要不要问你","type":"enum",
+            "options":["ask","always-proceed"],"default":"ask","value":"ask"},
+            {"key":"showFeedbackSurvey","type":"bool","default":true,"value":null}]}"""
+        server.enqueue(MockResponse().setBody(table))
+        val read = machines.agySettings("mac")
+        assertEquals("/api/v1/machines/mac/agy-settings", (server.takeRequest().path).zhAny())
+        assertEquals(listOf("ask", ""), (read.map { it.stringValue }).zhAny())
+        assertTrue(read[1].isDefault)
+        assertEquals(listOf("ask", "always-proceed"), (read[0].options).zhAny())
+
+        server.enqueue(MockResponse().setBody(table))
+        machines.setAgySetting("mac", "toolPermission", JsonPrimitive("always-proceed"))
+        server.takeRequest().let {
+            assertEquals("PUT", (it.method).zhAny())
+            assertEquals("/api/v1/machines/mac/agy-settings", (it.path).zhAny())
+            assertEquals("""{"key":"toolPermission","value":"always-proceed"}""", (it.body.readUtf8()).zhAny())
+        }
+        server.enqueue(MockResponse().setBody(table))
+        machines.setAgySetting("mac", "model", JsonNull)
+        assertEquals("""{"key":"model","value":null}""", (server.takeRequest().body.readUtf8()).zhAny())
+    }
 }
 
 class HttpModelConfigurationTest {
@@ -343,6 +449,40 @@ class HttpModelConfigurationTest {
         assertEquals("next", (JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject["model"]?.jsonPrimitive?.content).zhAny())
     }
 
+    @Test fun extensionCandidatesRoundTripOnTheExistingPurposeWithItsRevision() = withHub { server, models ->
+        val json = """{"purpose":{"id":"extension.notes","revision":7,"provider_ids":["launcher.one"],
+            "candidates":{"mode":"custom","modes":["extension","off","custom"],"most":3,"direct_provider_ids":[],
+            "custom":[{"provider":"launcher.one","model":"resolved-default","configured_model":"","available":true}],
+            "requested":[{"models":[{"model":"missing","available":false,"problem":"No provider offers this model."}],"last_used":"2026-06-02T12:30:00Z"}]}}}"""
+        server.enqueue(MockResponse().setBody(json))
+        val p = models.purpose("extension.notes").purpose
+        assertEquals("/api/v1/model-config/purposes/extension.notes", server.takeRequest().path)
+        val candidates = requireNotNull(p.candidates)
+        assertEquals(emptyList<String>(), candidates.directProviderIds)
+        assertEquals("No provider offers this model.", candidates.requested.single().models.single().problem)
+        assertEquals("2026-06-02T12:30:00Z", candidates.requested.single().lastUsed)
+        val draft = ModelConfigurationDraft.from(p)
+        assertEquals("", draft.candidates?.custom?.single()?.model)
+        val off = draft.copy(candidates = draft.candidates?.copy(mode = "off"))
+        server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"revision conflict"}"""))
+        assertEquals(ModelPurposeSave.Conflict, models.save(p, off))
+        val patch = server.takeRequest()
+        assertEquals("PATCH", patch.method)
+        assertEquals("/api/v1/model-config/purposes/extension.notes", patch.path)
+        assertEquals(JsonCodec.parseToJsonElement("""{"revision":7,"candidates":{"mode":"off"}}"""),
+            JsonCodec.parseToJsonElement(patch.body.readUtf8()))
+        val latest = json.replace("\"revision\":7", "\"revision\":8")
+        server.enqueue(MockResponse().setBody(latest))
+        val refreshed = models.purpose(p.id).purpose
+        assertEquals("GET", server.takeRequest().method)
+        server.enqueue(MockResponse().setBody(latest.replace("\"revision\":8", "\"revision\":9").replace("\"mode\":\"custom\"", "\"mode\":\"off\"")))
+        val result = models.save(refreshed, ModelConfigurationDraft.from(refreshed).copy(candidates = off.candidates)) as ModelPurposeSave.Saved
+        assertEquals("off", result.detail.purpose.candidates?.mode)
+        assertEquals(9L, result.detail.purpose.revision)
+        assertEquals(JsonCodec.parseToJsonElement("""{"revision":8,"candidates":{"mode":"off"}}"""),
+            JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()))
+    }
+
     @Test fun providerModelsAskTheHubAndOlderHubsHaveNone() = withHub { server, models ->
         server.enqueue(MockResponse().setBody("""{"agent":"claude","machine":"desk","models":[{"id":"opus","name":"Opus","default":true}]}"""))
         val list = models.providerModels("launcher.work", refresh = true)
@@ -373,5 +513,93 @@ class HttpModelConfigurationTest {
         assertEquals("模型用途不存在", (missing?.message).zhAny())
         server.enqueue(MockResponse().setResponseCode(500).setBody("""{"error":"boom"}"""))
         assertEquals(500, (runCatching { models.catalog() }.exceptionOrNull() as HubFailure).status)
+    }
+
+    @Test fun modelProfilesLoadApplyRollbackSaveAndDegradeOnOldHubs() = withHub { server, models ->
+        val profilesJson = """{
+            "revision": 4,
+            "active": "performance",
+            "rollback": {"to": "economy", "at": "2026-11-21T06:00:00Z", "changes": ["assistant"]},
+            "profiles": [
+                {
+                    "id": "performance",
+                    "name": "Performance",
+                    "description": "Strong models",
+                    "active": true,
+                    "changes": [],
+                    "purposes": {"assistant": {"provider": "launcher.claude", "model": "opus", "effort": "high", "permission_mode": "auto"}},
+                    "launchers": {"gateway": {"model": "glm-5", "small_model": ""}},
+                    "tiers": {"strong": {"launcher": "claude", "model": "opus", "effort": "high", "speed": "fast", "permission_mode": "acceptEdits", "description": "Complex tasks"}}
+                },
+                {
+                    "id": "economy",
+                    "name": "Economy",
+                    "active": false,
+                    "changes": ["assistant"]
+                }
+            ],
+            "events": [{"at": "2026-11-21T06:00:00Z", "action": "switch", "from": "economy", "to": "performance", "by": {"kind": "device", "name": "Phone"}, "changed": ["assistant"]}]
+        }"""
+        server.enqueue(MockResponse().setBody(profilesJson))
+        val view = requireNotNull(models.profiles())
+        assertEquals("/api/v1/model-profiles", server.takeRequest().path)
+        assertEquals(4L, view.revision)
+        assertEquals("performance", view.active)
+        assertEquals("economy", view.rollback?.to)
+        assertEquals(2, view.profiles.size)
+        assertEquals("auto", view.profiles[0].purposes["assistant"]?.permissionMode)
+        assertEquals("", view.profiles[0].launchers["gateway"]?.smallModel)
+        assertEquals("fast", view.profiles[0].tiers["strong"]?.speed)
+
+        // Older hub without /api/v1/model-profiles returns null cleanly.
+        server.enqueue(MockResponse().setResponseCode(404).setBody("404 page not found"))
+        assertNull(models.profiles())
+        assertEquals("/api/v1/model-profiles", server.takeRequest().path)
+
+        // Apply profile
+        server.enqueue(MockResponse().setBody(profilesJson.replace("\"active\": \"performance\"", "\"active\": \"economy\"")))
+        val applied = models.applyProfile("economy")
+        val applyReq = server.takeRequest()
+        assertEquals("POST", applyReq.method)
+        assertEquals("/api/v1/model-profiles/economy/apply", applyReq.path)
+        assertEquals("economy", applied.active)
+
+        // Rollback profile
+        server.enqueue(MockResponse().setBody(profilesJson))
+        val rolledBack = models.rollbackProfile()
+        val rollbackReq = server.takeRequest()
+        assertEquals("POST", rollbackReq.method)
+        assertEquals("/api/v1/model-profiles/rollback", rollbackReq.path)
+        assertEquals("performance", rolledBack.active)
+
+        // Save profile (200 Saved)
+        server.enqueue(MockResponse().setBody(profilesJson.replace("\"revision\": 4", "\"revision\": 5")))
+        val input = ModelProfileSaveInput(
+            revision = 4,
+            name = "Performance",
+            description = "Updated",
+            purposes = mapOf("assistant" to ModelBinding(provider = "launcher.claude", model = "opus", effort = "high")),
+            tiers = mapOf("strong" to ModelProfileTier(launcher = "claude", model = "opus", effort = "high", description = "Main")),
+        )
+        val saved = models.saveProfile("performance", input)
+        assertTrue(saved is ModelProfileSave.Saved)
+        assertEquals(5L, (saved as ModelProfileSave.Saved).view.revision)
+        val saveReq = server.takeRequest()
+        assertEquals("PUT", saveReq.method)
+        assertEquals("/api/v1/model-profiles/performance", saveReq.path)
+        val saveBody = JsonCodec.parseToJsonElement(saveReq.body.readUtf8()).jsonObject
+        assertEquals("4", saveBody["revision"]?.jsonPrimitive?.content)
+        assertEquals("Updated", saveBody["description"]?.jsonPrimitive?.content)
+
+        // Save profile (409 Conflict)
+        server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"conflict"}"""))
+        assertEquals(ModelProfileSave.Conflict, models.saveProfile("performance", input))
+        server.takeRequest()
+
+        // Save profile (400 Bad Request propagates HubFailure)
+        server.enqueue(MockResponse().setResponseCode(400).setBody("""{"error":"invalid tier"}"""))
+        assertEquals(400, (runCatching { models.saveProfile("performance", input) }.exceptionOrNull() as HubFailure).status)
+        server.takeRequest()
+        Unit
     }
 }

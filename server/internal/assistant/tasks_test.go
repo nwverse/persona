@@ -22,8 +22,24 @@ import (
 // The hub's end-to-end tests of tasks (real todos, a real node) are hub/tasks_test.go; these need the assistant's own
 // state or timing.
 
-// toolTaskPlan is task_plan from the conversation sessionID on the main machine.
+// toolTaskPlan is task_plan from the conversation sessionID on the main machine. Valid fixtures get the ordinary
+// worker role centrally; the role-contract tests call MCP directly so an omitted role stays omitted.
 func (s *Service) toolTaskPlan(ctx context.Context, sessionID string, args json.RawMessage) (string, error) {
+	var in map[string]any
+	if json.Unmarshal(args, &in) == nil {
+		tasks, _ := in["tasks"].([]any)
+		for _, item := range tasks {
+			task, _ := item.(map[string]any)
+			if task != nil {
+				if _, ok := task["role"]; !ok {
+					task["role"] = "worker"
+				}
+			}
+		}
+		if raw, err := json.Marshal(in); err == nil {
+			args = raw
+		}
+	}
 	return s.toolTaskPlanFrom(ctx, s.mainMachine(ctx), sessionID, args)
 }
 
@@ -34,13 +50,13 @@ func newTaskService(t *testing.T) (*Service, *fakeHub) {
 }
 
 // newTaskServiceOn is newTaskService with st as its database (nil: none).
-func newTaskServiceOn(t *testing.T, st Store) (*Service, *fakeHub) {
+func newTaskServiceOn(t testing.TB, st Store) (*Service, *fakeHub) {
 	t.Helper()
 	f := newFakeHub()
 	f.sessions["box"] = nil
 	f.settings = &Settings{Timezone: "Asia/Shanghai"}
 	if st == nil {
-		return newStorelessService(t, f), f
+		return storelessService(t, f), f
 	}
 	return newServiceOn(t, f, st), f
 }
@@ -52,12 +68,12 @@ func planArgs(readonly bool) json.RawMessage {
 	}
 	raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{{
 		"title": "修登录崩溃", "prompt": "iPad 横屏时登录页崩溃，修好并补测试", "machine": "box", "cwd": "/code/app",
-		"readonly": readonly, "why": "这个仓库最近在 box 上", "permission": permission,
+		"role": "worker", "readonly": readonly, "why": "这个仓库最近在 box 上", "permission": permission,
 	}}})
 	return raw
 }
 
-func waitFor(t *testing.T, what string, ok func() bool) {
+func waitFor(t testing.TB, what string, ok func() bool) {
 	t.Helper()
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 		if ok() {
@@ -500,29 +516,34 @@ func TestAutoFinishLeavesAReopenedTask(t *testing.T) {
 	if todoNow(s, "todo_r").DoneAt != nil || todoNow(s, "todo_h").DoneAt != nil || f.judged != 0 {
 		t.Fatalf("closed: %+v %+v, %d judgments", todoNow(s, "todo_r"), todoNow(s, "todo_h"), f.judged)
 	}
-	// Work after the reopen is judged, and closes it.
+	// Work after the reopen is judged and delivered for review, not closed again (#5732).
 	s.autoFinishTask(todoNow(s, "todo_r"), time.Now(), true)
-	if got := todoNow(s, "todo_r"); got.DoneAt == nil || got.DoneBy != db.DoneByAuto || f.judged != 1 {
-		t.Fatalf("not closed after new work: %+v, %d judgments", got, f.judged)
+	if got := todoNow(s, "todo_r"); got.DoneAt != nil || got.Check == nil || got.Check.Verdict != verdictDone || f.judged != 1 {
+		t.Fatalf("not judged after new work: %+v, %d judgments", got, f.judged)
 	}
 }
 
-// The agent of a task the judge closed is sent more (agent_send resumes it) and works again: the task is open again
-// while it does, and the turn's end is followed as ever — cut off by the model service, an interrupted receipt; a
-// finished one, a done receipt and the judge, which may close it again (#5892).
+// The agent of a task the supervisor accepted is sent more on its card and works again: the task is open again while
+// again while it does, and the turn's end is followed as ever — cut off by the model service, an interrupted receipt; a
+// finished one, a done receipt and a new delivery judgment, still without automatic closure (#5892, #5732).
 func TestClosedTaskReopensWhenItsAgentWorksAgain(t *testing.T) {
 	s, f := newTaskService(t)
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	todo := startedTask(t, s, f)
 	ctx := context.Background()
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "设计稿写好了", 0)
-	if ok, err := s.autoDoneTodo(ctx, todo.ID, "做完了", time.Now().Add(-time.Minute)); err != nil || !ok {
-		t.Fatalf("auto done: %v %v", ok, err)
+	raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "做完了"})
+	if _, err := s.runTool(ctx, "server", "conv1", "task_review", raw); err != nil {
+		t.Fatalf("accept before more work: %v", err)
 	}
 	if _, ok := s.taskOf(ctx, "box", "s1"); ok {
 		t.Fatal("a closed task still follows its agent")
 	}
 	time.Sleep(5 * time.Millisecond)
+	if _, err := s.routeToTask(ctx, "conv1", todo.ID, "Please continue with the remaining cases"); err != nil {
+		t.Fatalf("send more after acceptance: %v", err)
+	}
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	got := todoNow(s, todo.ID)
 	if got.DoneAt != nil || got.ReopenedAt == nil || got.DoneBy != "" || got.DoneReason != "" {
@@ -562,7 +583,7 @@ func TestClosedTaskReopensWhenItsAgentWorksAgain(t *testing.T) {
 	if rb := lastReceipt(); rb.State != "done" {
 		t.Fatalf("a finished turn of the reopened task: receipt = %+v", rb)
 	}
-	if got := todoNow(s, todo.ID); got.DoneAt == nil || got.DoneBy != db.DoneByAuto {
+	if got := todoNow(s, todo.ID); got.DoneAt != nil || got.Check == nil || got.Check.Verdict != verdictDone {
 		t.Fatalf("the work after the reopen is not judged: %+v", got)
 	}
 }
@@ -570,8 +591,9 @@ func TestClosedTaskReopensWhenItsAgentWorksAgain(t *testing.T) {
 // Only a task the hub judged done or its supervisor accepted opens again, and only for an agent that still belongs to it: not
 // a cancelled task or one the user closed (done by hand while its agent still started, #2954), not one whose start failed (that goes
 // through Retry), not one the agent was released or dismissed from, and not when the agent works for an open todo now. An
-// accepted one whose agent its plan did not start only when its conversation or supervisor sent the agent more since:
-// any other turn of such an agent is other work (#6726).
+// accepted one only when its conversation or supervisor sent the agent more since, whether or not its plan started the
+// agent: any other turn of it is other work (#6726, #7539). The send goes through noteAgentSend, and its turn starts before
+// the send returns: the task stays closed until the send's answer is in, and reopens then.
 func TestWhichClosedTaskReopens(t *testing.T) {
 	done := time.Now().Add(-time.Hour)
 	released := done.Add(time.Minute)
@@ -589,42 +611,60 @@ func TestWhichClosedTaskReopens(t *testing.T) {
 	handedOn.Supervision = &Supervision{Supervisor: "conv2", State: reviewAccepted}
 	planned := task(db.DoneByReview, s1) // its plan started the agent
 	planned.PlanID, planned.Supervision = "plan_1", &Supervision{State: reviewAccepted}
-	since, before := done.Add(time.Minute), done.Add(-time.Minute)
 	for _, c := range []struct {
-		name    string
-		todos   []Todo
-		sent    *agentSent // the agent's last send for a conversation, if any
+		name  string
+		todos []Todo
+		from  string // the conversation that last sent the agent text ("": none)
+		early bool   // that send went before the acceptance
+		// reopens: the turn opens it again
 		reopens bool
 	}{
-		{"judged done", []Todo{task(db.DoneByAuto, s1)}, nil, true},
-		{"accepted, its plan started the agent", []Todo{planned}, nil, true},
-		{"reviewed, other work", []Todo{task(db.DoneByReview, s1)}, nil, false},
-		{"accepted, other work", []Todo{accepted}, nil, false},
-		{"accepted, its conversation sent more", []Todo{accepted}, &agentSent{"conv1", since}, true},
-		{"reviewed, its conversation sent more", []Todo{task(db.DoneByReview, s1)}, &agentSent{"conv1", since}, true},
-		{"accepted, its supervisor sent more", []Todo{handedOn}, &agentSent{"conv2", since}, true},
-		{"accepted, another conversation sent", []Todo{accepted}, &agentSent{"conv9", since}, false},
-		{"accepted, sent before the acceptance", []Todo{accepted}, &agentSent{"conv1", before}, false},
-		{"cancelled", []Todo{task(db.DoneByCancelled, s1)}, nil, false},
-		{"legacy cancelled", []Todo{legacyCancelled}, nil, false},
-		{"closed by the user", []Todo{task("", s1)}, nil, false},
-		{"start failed", []Todo{failed}, nil, false},
-		{"released", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s1", ReleasedAt: &released})}, nil, false},
-		{"dismissed", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s1", DismissedAt: &released})}, nil, false},
-		{"works for an open todo", []Todo{task(db.DoneByAuto, s1), {ID: "todo_h", Title: "自己记的事", CreatedAt: done, Agents: []TodoAgent{s1}}}, nil, false},
-		{"another agent", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s2"})}, nil, false},
+		{"judged done", []Todo{task(db.DoneByAuto, s1)}, "", false, true},
+		{"accepted, its plan started the agent", []Todo{planned}, "", false, false},
+		{"accepted, its plan started the agent, its conversation sent more", []Todo{planned}, "conv1", false, true},
+		{"accepted, its plan started the agent, sent before the acceptance", []Todo{planned}, "conv1", true, false},
+		{"reviewed, other work", []Todo{task(db.DoneByReview, s1)}, "", false, false},
+		{"accepted, other work", []Todo{accepted}, "", false, false},
+		{"accepted, its conversation sent more", []Todo{accepted}, "conv1", false, true},
+		{"reviewed, its conversation sent more", []Todo{task(db.DoneByReview, s1)}, "conv1", false, true},
+		{"accepted, its supervisor sent more", []Todo{handedOn}, "conv2", false, true},
+		{"accepted, another conversation sent", []Todo{accepted}, "conv9", false, false},
+		{"accepted, sent before the acceptance", []Todo{accepted}, "conv1", true, false},
+		{"cancelled", []Todo{task(db.DoneByCancelled, s1)}, "", false, false},
+		{"legacy cancelled", []Todo{legacyCancelled}, "", false, false},
+		{"closed by the user", []Todo{task("", s1)}, "", false, false},
+		{"start failed", []Todo{failed}, "", false, false},
+		{"released", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s1", ReleasedAt: &released})}, "", false, false},
+		{"dismissed", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s1", DismissedAt: &released})}, "", false, false},
+		{"works for an open todo", []Todo{task(db.DoneByAuto, s1), {ID: "todo_h", Title: "自己记的事", CreatedAt: done, Agents: []TodoAgent{s1}}}, "", false, false},
+		{"another agent", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s2"})}, "", false, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			ctx := context.Background()
 			s, f := newTaskService(t)
+			var note *agentSendNote
+			noted := func() {
+				var err error
+				if note, err = s.noteAgentSend(ctx, c.from, "box", "s1", "", "More for it"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if c.from != "" && c.early { // sent while the task was open still
+				noted()
+			}
 			for _, td := range c.todos {
 				putTodo(s, td)
 			}
-			if c.sent != nil {
-				s.tasks.mu.Lock()
-				s.tasks.sentBy[[2]string{"box", "s1"}] = *c.sent
-				s.tasks.mu.Unlock()
+			if c.from != "" && !c.early {
+				noted()
 			}
-			agentTurn(s, f, proto.StatusWorking, "", 0)
+			agentTurn(s, f, proto.StatusWorking, "", 0) // its turn starts before the send returns
+			if note != nil {
+				if got := todoNow(s, "todo_a"); got.DoneAt == nil {
+					t.Fatalf("reopened before the send's answer was in: %+v", got)
+				}
+				note.sent(ctx, nil)
+			}
 			got := todoNow(s, "todo_a")
 			if reopened := got.DoneAt == nil && got.ReopenedAt != nil; reopened != c.reopens {
 				t.Fatalf("reopened = %v, want %v: %+v", reopened, c.reopens, got)
@@ -731,7 +771,8 @@ func TestSnapshotTaskFollowsTheAgent(t *testing.T) {
 				SessionID: "c1", State: proto.StateWorking, UpdatedAt: now, Activity: "在读 tasks.go", ActivityAt: &started}}, now),
 			got,
 		}}))
-	// #2935: a run in the background shows on its task and in its own line: the turn ended to wait for it.
+	// #2935, #11261: a run in the background shows on its task row (whose turn ended to wait for it), while the Agents
+	// section keeps only the working count.
 	wfLead := proto.Session{MachineID: "mac-a", SessionID: "d4a7f6ff-4a9b", State: proto.StateWorking, UpdatedAt: now,
 		LastText: "审计在后台跑，等结果", Workflows: []proto.Workflow{
 			{TaskID: "w1", Name: "parity-audit", Running: true, Status: proto.WorkflowRunning, Phases: []string{"Audit", "Verify"},
@@ -742,10 +783,8 @@ func TestSnapshotTaskFollowsTheAgent(t *testing.T) {
 	if len(wfTask.Workflows) != 1 || wfTask.Workflows[0].For != "14 分钟" {
 		t.Fatalf("task workflows: %+v", wfTask.Workflows)
 	}
-	running := runningWorkflows(wfLead, now)
-	running[0].Agent, running[0].Machine, running[0].Session = "各端对齐审计", "mac-a", "d4a7f6ff"
 	golden(t, "assistant_snapshot.workflows", prompts.RenderSnapshot(prompts.Snapshot{Now: now, Zone: "UTC",
-		Working: []prompts.SnapshotAgent{{Label: "各端对齐审计"}}, Workflows: running, Tasks: []prompts.SnapshotTask{wfTask}}))
+		Working: []prompts.SnapshotAgent{{Label: "各端对齐审计"}}, Tasks: []prompts.SnapshotTask{wfTask}}))
 	linked := got
 	linked.Link = todoLink("https://hub.example.com", "todo_1")
 	golden(t, "assistant_snapshot.links", prompts.RenderSnapshot(prompts.Snapshot{Now: now, Zone: "UTC",
@@ -823,8 +862,8 @@ func TestSnapshotLinks(t *testing.T) {
 		{sessionLink(web, "mac-a", "b00502b8-82a3", false), web + "/s/mac-a/b00502b8-82a3"},
 		{sessionLink(web, "mac a", "x/y", false), web + "/s/mac%20a/x%2Fy"},
 		{sessionLink(web, "mac-a", "c1", true), web + "/persona/c1"},
-		{todoLink(web, "todo_1"), web + "/todos?id=todo_1"},
-		{todoLink(web, "a&b"), web + "/todos?id=a%26b"},
+		{todoLink(web, "todo_1"), web + "/todos/todo_1"},
+		{todoLink(web, "a b"), web + "/todos/a%20b"},
 		{sessionLink("", "mac-a", "c1", false), ""},
 		{todoLink("", "todo_1"), ""},
 	} {
@@ -936,7 +975,7 @@ func TestTaskFinishedWhileItsAgentStarts(t *testing.T) {
 	taskCloseIdle = 0
 	t.Cleanup(func() { taskCloseIdle = old })
 	f.setSessions("box", idleAgent(time.Now().Add(-time.Hour)))
-	s.closeDoneTaskAgents(ctx, taskCloseRefused{})
+	s.closeDoneTaskAgents(ctx, taskCloseRefused{}, doneSeen{})
 	if got := f.retires(); len(got) != 1 || got[0] != "s1" {
 		t.Fatalf("the agent that started is not retired: %v", got)
 	}
@@ -1450,6 +1489,9 @@ func TestSideConversationTaskFailedToStartPushes(t *testing.T) {
 	}
 	if pushed[0].Title != "「修登录崩溃」没开起来" {
 		t.Fatalf("Title = %q", pushed[0].Title)
+	}
+	if pushed[0].Level == "P0" {
+		t.Fatal("a task failure is P1 (held for the briefing with push tiering on), not P0")
 	}
 	if !strings.Contains(pushed[0].Body, "Failed to authenticate") || !strings.Contains(pushed[0].Body, "打开对话点『重试』，或换一台电脑再派") {
 		t.Fatalf("Body = %q", pushed[0].Body)

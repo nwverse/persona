@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -13,7 +14,20 @@ import (
 
 // NodeEvent takes a node's event before the hub does (devices.Options.Event); false: the hub does not get it (the
 // manager tells it what follows instead).
-func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool {
+func (s *Service) nodeEvent(machine, event string, params json.RawMessage) bool {
+	if event == "launchers.changed" {
+		s.launchersChanged(machine)
+		return false
+	}
+	if err := s.conversationParamsAvailable(context.Background(), machine, params); err != nil {
+		return false
+	}
+	var hook map[string]any
+	if event == "hook.event" && json.Unmarshal(params, &hook) == nil {
+		if sid, _ := hook["session_id"].(string); sid != "" {
+			s.agentDecisionPrompt(machine, sid, hook)
+		}
+	}
 	if !s.fleetOn() {
 		return true
 	}
@@ -46,7 +60,10 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 			ID string `json:"id"`
 		}
 		if json.Unmarshal(params, &p) == nil {
-			s.recordEnd(p.ID, "dismissed", nil)
+			if s.endPreparedByID(p.ID, "dismissed", "The approval was dismissed on the computer; this card did not apply the change.") {
+				return false
+			}
+			s.recordEnd(p.ID, "dismissed", &proto.Resolution{Dismiss: true, AnsweredBy: proto.AnsweredByTerminal})
 			s.finishInteraction(p.ID)
 		}
 		return false
@@ -55,6 +72,9 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 			ID string `json:"id"`
 		}
 		if json.Unmarshal(params, &p) == nil {
+			if s.endPreparedByID(p.ID, "cancelled", "The approval was cancelled on the computer; nothing changed.") {
+				return false
+			}
 			s.recordEnd(p.ID, "cancelled", nil) // or the next manager would take it for one a hook may still claim
 			s.finishInteraction(p.ID)
 		}
@@ -63,8 +83,7 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 		s.syncCodexInteractions(machine, params)
 		return false
 	case "hook.event":
-		var p map[string]any
-		if json.Unmarshal(params, &p) == nil {
+		if p := hook; p != nil {
 			if sid, _ := p["session_id"].(string); sid != "" {
 				// A report-only hook (node/globalhooks.go) is not Persona's hooks running in the session: it asks for
 				// no card, so it must not hold the screen's back (hasHooks). Its Stop still counts for stopDuplicate.
@@ -86,7 +105,10 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 }
 
 // NodeRequest answers what of a node's requests is the manager's (devices.Options.Answer, with NodeAnswer's).
-func (s *Service) NodeRequest(ctx context.Context, machine, method string, params json.RawMessage) (any, bool, error) {
+func (s *Service) nodeRequest(ctx context.Context, machine, method string, params json.RawMessage) (any, bool, error) {
+	if err := s.conversationParamsAvailable(ctx, machine, params); err != nil {
+		return nil, true, err
+	}
 	if !s.fleetOn() {
 		return nil, false, nil
 	}
@@ -95,6 +117,13 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 		if s.ext == nil {
 			return map[string]any{"action": "cancel"}, true, nil
 		}
+		var p struct {
+			CallID json.RawMessage `json:"call_id"`
+		}
+		_ = json.Unmarshal(params, &p)
+		var callID string
+		_ = json.Unmarshal(p.CallID, &callID)
+		ctx = s.mcpWaitElicitContext(ctx, callID)
 		out, err := s.ext.AnswerComputerElicit(ctx, machine, params)
 		return out, true, err
 	case "interaction.create":
@@ -118,6 +147,12 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 			return nil, true, err
 		}
 		return s.closeoutCheck(ctx, machine, p), true, nil
+	case devicewire.MethodAuthorizeTaskTerminal:
+		var p devicewire.TaskTerminalCloseRequest
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, true, err
+		}
+		return map[string]bool{"authorized": s.authorizeTaskTerminal(ctx, machine, p)}, true, nil
 	case assistantwire.MethodCloseoutBrief: // a session starts: the closeout's form, up front (agents_closeout_brief.go)
 		var p assistantwire.CloseoutBriefRequest
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -133,6 +168,15 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 		}
 		out, err := s.ext.RecordNodeSent(ctx, machine, params)
 		return out, true, err
+	case proto.MethodGateRelay: // a relayed command gate's call, for the extension's socket here (#12904)
+		r, ok := s.ext.(interface {
+			RelayGate(ctx context.Context, machine string, params json.RawMessage) (any, error)
+		})
+		if !ok {
+			return nil, true, errors.New("gate.relay: no extensions here to relay to")
+		}
+		out, err := r.RelayGate(ctx, machine, params)
+		return out, true, err
 	case proto.MethodMailAttachment: // mail_save_attachment's bytes for the node that saves them (fleet_tools.go)
 		var p proto.MailAttachmentRequest
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -141,24 +185,50 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 		out, err := s.mailAttachment(ctx, machine, p)
 		return out, true, err
 	case "mcp.tools":
+		ctx = withToolSet(ctx, params) // a narrower set the process asks for (supervise_round.go)
 		var p struct {
-			Assistant bool   `json:"assistant"`
-			SessionID string `json:"session_id"`
-			Guest     bool   `json:"guest"` // the node's word that it is a guest conversation (guest.go)
+			Assistant  bool   `json:"assistant"`
+			SessionID  string `json:"session_id"`
+			Guest      bool   `json:"guest"` // the node's word that it is a guest conversation (guest.go)
+			Revision   string `json:"revision"`
+			LeaderOnly bool   `json:"leader_only"`
 		}
 		_ = json.Unmarshal(params, &p)
-		return map[string]any{"tools": s.sessionMCPTools(ctx, machine, p.SessionID, p.Assistant, p.Guest)}, true, nil
+		if p.LeaderOnly {
+			return map[string]any{"tools": s.runtimeLeaderTools(ctx, machine, p.SessionID, p.Guest)}, true, nil
+		}
+		out := s.sessionMCPToolsSince(ctx, machine, p.SessionID, p.Assistant, p.Guest, p.Revision)
+		// Only an assistant conversation defers tools: a guest, by the node's word or by the manager's own record
+		// (guest.go), has no ToolSearch to load one with (node/assistant_guest.go). An unchanged or failed answer
+		// carries no list to mark.
+		if tools, ok := out["tools"].([]proto.Tool); ok {
+			deferring := p.Assistant && !p.Guest && !s.isGuest(ctx, machine, p.SessionID)
+			out["tools"] = s.withToolLoading(ctx, p.SessionID, tools, deferring)
+		}
+		return out, true, nil
 	case "mcp.call":
 		var p struct {
-			Name      string          `json:"name"`
-			Args      json.RawMessage `json:"args"`
-			SessionID string          `json:"session_id"`
-			Assistant bool            `json:"assistant"`
-			Guest     bool            `json:"guest"`
+			Name             string                 `json:"name"`
+			Args             json.RawMessage        `json:"args"`
+			SessionID        string                 `json:"session_id"`
+			Origin           string                 `json:"origin"` // the node's attested origin, including during assistant startup
+			Assistant        bool                   `json:"assistant"`
+			Guest            bool                   `json:"guest"`
+			WaitUpdates      bool                   `json:"wait_updates"`
+			CallID           json.RawMessage        `json:"call_id"`
+			SourcePermission proto.SourcePermission `json:"source_permission"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, true, err
 		}
+		ctx = devicewire.WithSourcePermission(ctx, proto.SourcePermission{})
+		if p.SourcePermission.Matches(p.SessionID, p.Name, p.Args) {
+			ctx = devicewire.WithSourcePermission(ctx, p.SourcePermission)
+		}
+		var callID string
+		_ = json.Unmarshal(p.CallID, &callID)
+		ctx = s.mcpWaitContext(ctx, machine, callID, p.WaitUpdates)
+		defer s.endMCPWait(ctx)
 		if res, refused := s.guestRefuses(ctx, machine, p.SessionID, p.Name, p.Guest); refused {
 			return res, true, nil
 		}
@@ -168,7 +238,7 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 			}
 			return s.roomToolCall(ctx, rec, p.Name, p.Args), true, nil // bound to its own recording
 		}
-		return s.mcpCall(ctx, machine, p.SessionID, p.Name, p.Args, p.Assistant), true, nil
+		return s.mcpCallWithOrigin(ctx, machine, p.SessionID, p.Name, p.Args, p.Assistant, p.Origin), true, nil
 	}
 	return nil, false, nil
 }
@@ -182,9 +252,11 @@ func (s *Service) FleetUp(ctx context.Context) {
 	s.fleetStart(context.WithoutCancel(ctx))
 	defer s.boardFleetUp() // the pending cards are read: the board may have changed while the assistant was away
 	s.fleet.sentMu.Lock()
-	s.fleet.sent = nil
+	s.fleet.sent, s.fleet.archived = nil, nil
 	s.fleet.sentMu.Unlock()
 	s.hub.Tell(assistantwire.EventFleetInteractions, assistantwire.FleetInteractions{Interactions: s.pendingInteractions()})
+	reviewInteractions, _ := s.sessionReviewInteractions(ctx)
+	s.askOnPhone(reviewInteractions)
 	for _, m := range s.fleetMachines() {
 		s.publishSessions(m.ID)
 	}

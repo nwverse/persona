@@ -60,6 +60,20 @@ class AssistantConfigTest {
         }
     }
 
+    @Test fun conversationOrderWritesSavedIdsAndAnExplicitReset() = runBlocking {
+        MockWebServer().use { server ->
+            val api = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient())
+            server.enqueue(MockResponse().setBody("""{"conversation_order":["b","unknown","a"]}"""))
+            val saved = api.updateConfig(AssistantConfigUpdate(conversationOrder = listOf("b", "unknown", "a")))
+            assertEquals("""{"conversation_order":["b","unknown","a"]}""", server.takeRequest().body.readUtf8())
+            assertEquals(listOf("b", "unknown", "a"), saved.conversationOrder)
+            server.enqueue(MockResponse().setBody("{}"))
+            val reset = api.updateConfig(AssistantConfigUpdate(conversationOrder = emptyList()))
+            assertEquals("""{"conversation_order":[]}""", server.takeRequest().body.readUtf8())
+            assertNull(reset.conversationOrder)
+        }
+    }
+
     @Test fun permissionDefaultsNameBothOwnersAndSendOnlyTheNewField() = runBlocking {
         MockWebServer().use { server ->
             val source = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient())
@@ -111,7 +125,7 @@ class AssistantConfigTest {
             server.enqueue(MockResponse().setBody("""{"agent":"claude","models":[
                 {"id":"opus","name":"Opus"},{"id":"default","default":true}]}"""))
             val models = api.launcherModels("laptop", "runtime")
-            assertEquals("/api/v1/machines/laptop/launchers/runtime/models", server.takeRequest().path)
+            assertEquals("/api/v1/machines/laptop/launchers/runtime/models?purpose=assistant", server.takeRequest().path)
             assertEquals(listOf("opus", "default"), models?.models?.map { it.id })
             assertEquals(true, models?.models?.last()?.isDefault)
         }

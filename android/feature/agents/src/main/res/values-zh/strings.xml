@@ -17,12 +17,21 @@
     <plurals name="agents_summary_requests">
         <item quantity="other">有 %1$d 件事等你定</item>
     </plurals>
+    <plurals name="agents_feed_needs_you">
+        <item quantity="other">%1$d 个需要你</item>
+    </plurals>
+    <plurals name="agents_feed_offline">
+        <item quantity="other">%1$d 个未运行</item>
+    </plurals>
+    <plurals name="agents_feed_new">
+        <item quantity="other">%1$d 个新的</item>
+    </plurals>
     <plurals name="agents_summary_working">
         <item quantity="other">%1$d 个 Agent 在干活</item>
     </plurals>
     <string name="agents_summary_quiet">都安静着</string>
     <plurals name="agents_subtitle_unread">
-        <item quantity="other">%1$d 个刚做完</item>
+        <item quantity="other">%1$d 个完成未看</item>
     </plurals>
     <string name="agents_subtitle_one">%1$s。</string>
     <string name="agents_subtitle_two">%1$s，%2$s。</string>
@@ -75,6 +84,9 @@
     <string name="agents_grouping_state">按状态</string>
     <string name="agents_grouping_todo">按待办</string>
     <string name="agents_grouping_project">按项目</string>
+    <string name="agents_grouping_machine">按机器</string>
+    <string name="agents_grouping_app">按 App</string>
+    <string name="agents_grouping_recent">最近使用</string>
     <string name="agents_grouping_direction">按常驻</string>
     <string name="agents_menu_compact">细列表</string>
     <string name="agents_menu_detailed">详细列表</string>
@@ -86,7 +98,7 @@
     <string name="agents_menu_note">置顶和屏蔽同步到 hub；已读仅影响本机列表</string>
     <string name="agents_filter_all">全部</string>
     <string name="agents_filter_needs_you">需要你</string>
-    <string name="agents_filter_unread">未读</string>
+    <string name="agents_filter_unread">完成未看</string>
     <string name="agents_filter_working">工作中</string>
     <string name="agents_filter_background_waiting">后台等待中</string>
     <string name="agents_history_check_resume">核对继续结果</string>
@@ -244,11 +256,14 @@
     <string name="agents_dialog_rename_space">重命名空间</string>
     <string name="agents_dialog_rename_space_text">同时改 herdr 里这个 workspace 的名字。</string>
     <string name="agents_dialog_rename_space_text_tern">同时改 Tern 里这个 session 的名字。</string>
+    <string name="agents_dialog_rename_space_text_rex">同时改 Rex 里这个 session 的名字。</string>
     <string name="agents_dialog_rename_text">标签名同步到 herdr；会话名用 Claude 的 /rename，Mac 上 claude --resume 也看得到。</string>
     <string name="agents_dialog_rename_text_tern">标签名同步到 Tern；会话名用 Claude 的 /rename，Mac 上 claude --resume 也看得到。</string>
+    <string name="agents_dialog_rename_text_rex">标签名同步到 Rex；会话名用 Claude 的 /rename，Mac 上 claude --resume 也看得到。</string>
     <string name="agents_dialog_save">保存</string>
     <string name="agents_dialog_tab_name">标签名（herdr tab）</string>
     <string name="agents_dialog_tab_name_tern">标签名（Tern tab）</string>
+    <string name="agents_dialog_tab_name_rex">标签名（Rex tab）</string>
     <string name="agents_dialog_space_name">空间名</string>
     <string name="agents_dialog_session_name">会话名</string>
     <string name="agents_space_actions">空间操作</string>
@@ -271,6 +286,12 @@
     <string name="agents_new_parent">上一级</string>
     <string name="agents_new_no_subdirectories">这个目录下没有子目录</string>
     <string name="agents_new_git_repo">Git 仓库</string>
+    <string name="agents_workspace_title">工作区</string>
+    <string name="agents_workspace_main">主检出</string>
+    <string name="agents_workspace_folder">文件夹</string>
+    <string name="agents_workspace_other">其他工作区</string>
+    <string name="agents_workspace_choose_folder">按文件夹选择</string>
+    <string name="agents_workspace_kind_branch">%1$s · %2$s</string>
     <string name="agents_new_retry_open">重试打开</string>
     <string name="agents_new_tab_in">在「%1$s」开新标签</string>
     <string name="agents_new_online">在线</string>
@@ -281,13 +302,20 @@
     <string name="agents_new_prefill_offline">「%1$s」现在离线，先选了另一台；它连上后可以换回去</string>
     <string name="agents_new_reload">重新加载选项</string>
     <string name="agents_new_agent_type">Agent 类型</string>
+    <string name="agents_new_presets">Agent 预设</string>
+    <string name="agents_new_preset_loading">正在读取此预设的模型列表，读取完成后才能开始。</string>
+    <string name="agents_new_preset_left_out">此预设的以下设置无法在这里使用：</string>
+    <string name="agents_new_preset_left_out_model">模型「%1$s」无法在这里使用，将按启动器的模型运行。</string>
+    <string name="agents_new_preset_left_out_effort">思考强度「%1$s」无法在这里使用，将按启动器或模型自身的强度运行。</string>
+    <string name="agents_new_type_other">其他 Agent</string>
     <string name="agents_new_launcher_this_time">启动器（只换这一次）</string>
     <string name="agents_new_launcher">启动器</string>
     <string name="agents_new_search_launcher">搜索启动器或模型</string>
     <string name="agents_new_no_launchers">这台机器没有可用启动器</string>
     <string name="agents_new_follow_config">跟随模型配置</string>
     <string name="agents_new_permission_mode">权限模式</string>
-    <string name="agents_new_bypass_warning">全部放行后，改文件和执行命令都不会再询问你。</string>
+    <string name="agents_new_bypass_warning">完全访问后，改文件和执行命令都不会再询问你。</string>
+    <string name="agents_new_provider_mode_hint">不选完全访问时，这个 Agent 按它自己的审批设置来。之后也能在对话里切换。</string>
     <string name="agents_new_effort">思考强度</string>
     <string name="agents_new_no_effort">这个模型不能调思考强度</string>
     <string name="agents_new_first_message_codex">第一条消息（Codex 必填）</string>
@@ -304,11 +332,11 @@
     <string name="agents_new_recent_remove">从最近中移除</string>
     <string name="agents_new_recent_clear">清除最近配置</string>
     <string name="agents_mode_follow">跟随启动器</string>
-    <string name="agents_mode_default">手动确认</string>
-    <string name="agents_mode_accept_edits">自动改文件</string>
-    <string name="agents_mode_plan">只做计划</string>
-    <string name="agents_mode_auto">自动</string>
-    <string name="agents_mode_bypass">全部放行</string>
+    <string name="agents_mode_default">默认权限</string>
+    <string name="agents_mode_accept_edits">允许编辑</string>
+    <string name="agents_mode_plan">计划模式</string>
+    <string name="agents_mode_auto">自动审批</string>
+    <string name="agents_mode_bypass">完全访问</string>
     <string name="agents_effort_low">低</string>
     <string name="agents_effort_medium">中</string>
     <string name="agents_effort_high">高</string>
@@ -323,6 +351,9 @@
     <string name="agents_model_failed_detail">%1$s\n不影响开始，会用默认模型</string>
     <string name="agents_model_retry">重试</string>
     <string name="agents_model_sheet_note">「%1$s」里 %2$s 的模型，和在终端里输入 /model 看到的一样。只用于这次启动。</string>
+    <string name="agents_model_sheet_note_provider">「%1$s」提供的模型。只用于这次启动。</string>
+    <string name="agents_model_sheet_note_omp">为「%1$s」的这次启动选择模型或输入模型 ID。</string>
+    <string name="agents_model_omp_machine_default">这台电脑上 omp 的默认模型</string>
     <string name="agents_model_configured">模型配置：%1$s</string>
     <string name="agents_new_error_pending">上次启动的结果待确认，请核对结果</string>
     <string name="agents_new_error_record">读不出启动记录。关掉再试一次</string>
@@ -367,6 +398,7 @@
     <string name="agents_todos_done">已完成</string>
     <string name="agents_todo_reopen_failed">重新打开待办失败：%1$s</string>
     <string name="agents_todo_auto_done">自动完成</string>
+    <string name="agents_todo_concern">关注点</string>
     <string name="agents_todo_state_needs_you">等你</string>
     <string name="agents_todo_state_unread">待查看</string>
     <string name="agents_todo_state_working">进行中</string>
@@ -425,6 +457,12 @@
     <string name="agents_todo_decision_keep_editing">继续填写</string>
     <string name="agents_todo_notes_empty">点击编辑添加任务说明与要求…</string>
     <string name="agents_todo_auto_reason">自动完成理由：%1$s</string>
+    <string name="agents_todo_cancelled">已取消</string>
+    <string name="agents_todo_cancelled_reason">取消原因：%1$s</string>
+    <string name="agents_todo_lineage">任务接手记录</string>
+    <string name="agents_todo_lineage_current">当前任务</string>
+    <string name="agents_todo_lineage_continues">接手自 %1$s</string>
+    <string name="agents_todo_lineage_superseded">由新卡 %1$s 接手</string>
     <string name="agents_todo_hold_pr">停在 PR</string>
     <string name="agents_todo_due">截止 %1$s</string>
     <string name="agents_todo_was_due">已过截止 %1$s</string>
@@ -478,9 +516,6 @@
     <string name="agents_source_feishu_open">在飞书里打开这个话题</string>
     <string name="agents_filter_feishu">飞书群</string>
     <string name="agents_filter_terminal">终端</string>
-    <string name="agents_botmux">botmux</string>
-    <string name="agents_botmux_hide">隐藏 botmux 会话</string>
-    <string name="agents_botmux_show">显示 botmux 会话</string>
     <string name="agents_menu_sort">排序：%1$s</string>
     <string name="agents_sort_state">状态优先</string>
     <string name="agents_sort_updated">最近更新</string>
@@ -514,9 +549,10 @@
     <string name="agents_page_more">加载更多</string>
     <string name="agents_page_previous">加载之前的会话</string>
     <!-- To-do status sections (#3206, docs/assistant/todo-status-sop.md) -->
-    <string name="agents_todos_section_waiting">需要你</string>
+    <string name="agents_todos_section_waiting">等你处理</string>
     <string name="agents_todos_section_working">工作中</string>
     <string name="agents_todos_section_just_done">刚做完</string>
+    <string name="agents_todos_section_awaiting_review">已交付·待看</string>
     <string name="agents_todos_section_pr">PR 待合并</string>
     <string name="agents_todos_section_other">其他未完成</string>
     <string name="agents_todos_section_shelved">已搁置</string>
@@ -548,6 +584,7 @@
     <string name="agents_todo_restore">恢复</string>
     <string name="agents_todo_seen">知道了</string>
     <string name="agents_todo_seen_moved">已移到「已完成」</string>
+    <string name="agents_todo_seen_moved_open">已移到「其他未完成」</string>
     <string name="agents_todo_seen_undo">撤销</string>
     <string name="agents_todo_seen_failed">操作失败：%1$s</string>
     <string name="agents_todo_pr_moved">%1$s · %2$s有动静</string>
@@ -595,4 +632,5 @@
     <plurals name="agents_todo_calendar_undated">
         <item quantity="other">%1$d 条没有截止</item>
     </plurals>
+    <string name="agents_sidebar_heading">智能体</string>
 </resources>

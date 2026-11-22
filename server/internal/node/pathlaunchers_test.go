@@ -193,6 +193,8 @@ alias cc_alias="ls"
 cc_fn() { echo not claude; }
 `
 	list, _, settings, scripts := mergeLaunchers(asNodeIn(t, home, defs, launcherScript))
+	// pi, cursor-agent or agy installed on this machine are reported too; this test is about the script on PATH.
+	list = withoutInstalledWorkAgents(list)
 	if got := launcherNames(list); !slices.Equal(got, []string{"claude-demo:path"}) {
 		t.Fatalf("launchers %v", got)
 	}
@@ -286,12 +288,12 @@ func TestLauncherDetailMasksKeys(t *testing.T) {
 		Args: []string{"--settings", `{"env":{"ANTHROPIC_AUTH_TOKEN":"` + scriptKey + `"}}`, "--settings={\"apiKeyHelper\":\"x\"}", "--model", "claude-sonnet-4-5-20250929-long-model-id"},
 		Env:  map[string]string{"ANTHROPIC_CUSTOM_HEADERS": "x-api-key: abc123short\nx-source: dogfood", "HTTPS_PROXY": "http://me:pw-secret@proxy.example:3128"}})
 	out, _ := json.Marshal(d)
-	for _, secret := range []string{scriptKey, "abc123short", "pw-secret", "me:"} {
+	for _, secret := range []string{scriptKey, "abc123short", "pw-secret", "me:", "dogfood"} {
 		if strings.Contains(string(out), secret) {
 			t.Errorf("%s in %s", secret, out)
 		}
 	}
-	for _, kept := range []string{"x-source: dogfood", "claude-sonnet-4-5-20250929-long-model-id", "proxy.example:3128"} {
+	for _, kept := range []string{"x-source: •••", "claude-sonnet-4-5-20250929-long-model-id", "proxy.example:3128"} {
 		if !strings.Contains(string(out), kept) {
 			t.Errorf("%s gone from %s", kept, out)
 		}

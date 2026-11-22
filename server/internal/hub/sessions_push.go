@@ -380,11 +380,16 @@ func (h *Hub) broadcastSessions(m *Machine, list []proto.Session) {
 		next map[string][]byte
 	}
 	var deltas map[uintptr]delta
+	var hint *listHint
 	for c := range h.clients {
 		var b []byte
 		if c.listMode {
 			if before != revision {
-				c.sendJSON(map[string]any{"type": "sessions_list", "revision": revision})
+				if hint == nil {
+					x := h.sessionListHint(before, revision)
+					hint = &x
+				}
+				hint.send(c)
 			}
 			continue
 		}
@@ -463,9 +468,9 @@ func (h *Hub) snapshotSessions(c *client, m *Machine) {
 func mapIdentity(have map[string][]byte) uintptr { return reflect.ValueOf(have).Pointer() }
 
 // queue puts b on the client's way out; a client 512 messages behind is dropped (it would miss this one for good
-// now that nothing is sent twice) and resyncs when it reconnects.
-func (c *client) queue(b []byte) {
-	c.queueProjected(compat.ProjectJSON(b, c.canonical()))
+// now that nothing is sent twice) and resyncs when it reconnects. The result reports queue admission, not delivery.
+func (c *client) queue(b []byte) bool {
+	return c.queueProjected(compat.ProjectJSON(b, c.canonical()))
 }
 
 // canonical: the app takes the canonical contracts, which compat.ProjectJSON leaves as they are.
@@ -475,11 +480,13 @@ func (c *client) canonical() bool {
 
 // queueProjected is queue for b already as compat.ProjectJSON leaves it for the app: a message queued to several apps
 // is projected once.
-func (c *client) queueProjected(b []byte) {
+func (c *client) queueProjected(b []byte) bool {
 	select {
 	case c.out <- b:
+		return true
 	default:
 		c.dropSlow()
+		return false
 	}
 }
 

@@ -13,6 +13,7 @@ import {
 } from "../../lib/channels";
 import { canSendStep, fieldInput } from "../../lib/connectors";
 import { otherManager, ownedSub, pinManager, useChosenManager } from "../../lib/manager-choice";
+import { isOpenBeside } from "./open-beside";
 import { ago } from "../../lib/format";
 import { useStore } from "../../lib/store";
 import { Button, copyText, cx, Dialog, EASE, IconButton, Loading, Spinner, toast } from "../../ui/atoms";
@@ -25,11 +26,12 @@ import { byTime } from "../../lib/times";
 const DOT: Record<ChannelTone, string> = { green: "bg-green", red: "bg-red", idle: "bg-line-strong" };
 const fieldClass = "h-8 w-full rounded-control bg-field px-2.5 text-[12.5px] text-ink shadow-inset-field outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
 
-function StateLabel({ c }: { c: Channel }) {
+/** `compact`: under the name in the narrow column beside an open channel, in the size the other lists use there. */
+function StateLabel({ c, compact }: { c: Channel; compact?: boolean }) {
   return (
-    <span className={cx("flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[12px]", c.state === "error" ? "text-red" : "text-ink-2")}>
+    <span className={cx("flex items-center gap-1.5 whitespace-nowrap", compact ? "min-w-0 text-submeta" : "shrink-0 text-[12px]", c.state === "error" ? "text-red" : "text-ink-2")}>
       <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", DOT[channelTone(c)])} />
-      {channelStateText(c)}
+      <span className={cx(compact && "truncate")}>{channelStateText(c)}</span>
     </span>
   );
 }
@@ -77,10 +79,13 @@ export function ChannelLink({ id, manager, onOpen }: { id: string; manager?: str
 
 // ── the list ─────────────────────────────────────────────
 
-export function ChannelList({ onOpen, onMarketItem }: { onOpen: (id: string) => void; onMarketItem: (market: string, plugin: string) => void }) {
+/** `openBeside`: the channel open beside the list (Settings' two columns): its row is marked current, and every row puts
+ *  its state under its name, so the narrow column shows the name whole. */
+export function ChannelList({ onOpen, onMarketItem, openBeside }: { onOpen: (id: string) => void; onMarketItem: (market: string, plugin: string) => void; openBeside?: string | null }) {
   // the current assistant's channels (docs/assistant/managers.md "The current assistant"), asked of it by name (none for
   // the default); a row opens its copy (`<id>@<manager>`)
-  const owner = otherManager(useChosenManager() ?? undefined);
+  const picked = useChosenManager();
+  const owner = otherManager(picked ?? undefined);
   const [list, setList] = useState<Channel[] | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -121,32 +126,40 @@ export function ChannelList({ onOpen, onMarketItem }: { onOpen: (id: string) => 
       )}
       {sections.map((s) => (
         <Group key={s.title} title={s.title} footer={s.footer}>
-          {s.channels.map((c, i) => (
-            <button
-              key={c.id}
-              type="button"
-              onClick={() => (c.source === "market" && c.market && c.plugin ? onMarketItem(c.market, c.plugin) : onOpen(ownedSub(c.id, owner)))}
-              className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-hover"
-              style={{ animation: `fade-up 320ms ${EASE} ${Math.min(i, 8) * 30}ms both` }}
-            >
-              <ChannelMark c={c} size={32} />
-              <div className="min-w-0 flex-1">
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className="truncate text-[13px] text-ink">{c.name}</span>
-                  {c.source === "plugin" && c.kind === "im" && <Pill>{t("settings-channels.extension")}</Pill>}
+          {s.channels.map((c, i) => {
+            const compact = openBeside !== undefined;
+            // a route without @manager opens the current assistant's copy, this row's
+            const current = c.source !== "market" && isOpenBeside(openBeside, c.id, owner, picked);
+            const state = c.source === "market" ? (
+              <span className={cx("shrink-0 whitespace-nowrap text-accent-ink", compact ? "text-submeta" : "text-[12px]")}>{t("settings-channels.install")}</span>
+            ) : (
+              c.kind !== "app" && <StateLabel c={c} compact={compact} />
+            );
+            return (
+              <button
+                key={c.id}
+                type="button"
+                aria-current={current || undefined}
+                onClick={() => (c.source === "market" && c.market && c.plugin ? onMarketItem(c.market, c.plugin) : onOpen(ownedSub(c.id, owner)))}
+                className={cx("flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors", current ? "bg-accent-tint" : "hover:bg-hover")}
+                style={{ animation: `fade-up 320ms ${EASE} ${Math.min(i, 8) * 30}ms both` }}
+              >
+                <ChannelMark c={c} size={32} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="truncate text-[13px] text-ink">{c.name}</span>
+                    {c.source === "plugin" && c.kind === "im" && <Pill>{t("settings-channels.extension")}</Pill>}
+                  </div>
+                  {channelSubtitle(c) && (
+                    <div className={cx("mt-0.5 truncate text-[11.5px]", c.state === "error" ? "text-red" : "text-ink-3")}>{channelSubtitle(c)}</div>
+                  )}
+                  {compact && state && <div className="mt-0.5 flex min-w-0">{state}</div>}
                 </div>
-                {channelSubtitle(c) && (
-                  <div className={cx("mt-0.5 truncate text-[11.5px]", c.state === "error" ? "text-red" : "text-ink-3")}>{channelSubtitle(c)}</div>
-                )}
-              </div>
-              {c.source === "market" ? (
-                <span className="shrink-0 whitespace-nowrap text-[12px] text-accent-ink">{t("settings-channels.install")}</span>
-              ) : (
-                c.kind !== "app" && <StateLabel c={c} />
-              )}
-              <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
-            </button>
-          ))}
+                {!compact && state}
+                <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
+              </button>
+            );
+          })}
         </Group>
       ))}
     </>
@@ -157,7 +170,8 @@ export function ChannelList({ onOpen, onMarketItem }: { onOpen: (id: string) => 
 
 /** `manager`: whose channel (another manager's, opened from its extension's page): the page's requests name it while it
  *  is open; none: the current assistant's. */
-export function ChannelPage({ id, manager: named, onBack, onSettings }: { id: string; manager?: string; onBack: () => void; onSettings: (url: string) => void }) {
+/** `headerBack`: the page's top bar has the way back (a phone), so it draws no Back of its own. */
+export function ChannelPage({ id, manager: named, onBack, onSettings, headerBack }: { id: string; manager?: string; onBack: () => void; onSettings: (url: string) => void; headerBack?: boolean }) {
   // a route that names none (written by hand, or before several managers): the current assistant's, as for an extension
   const manager = named ?? otherManager(useChosenManager() ?? undefined);
   useLayoutEffect(() => pinManager(`/channels/${encodeURIComponent(id)}`, otherManager(manager)), [id, manager]);
@@ -166,6 +180,8 @@ export function ChannelPage({ id, manager: named, onBack, onSettings }: { id: st
   const [busy, setBusy] = useState("");
   const [picking, setPicking] = useState(false);
   const [unbinding, setUnbinding] = useState(false);
+  const [testFeedback, setTestFeedback] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  useEffect(() => setTestFeedback(null), [id]);
   // Every read and change of the detail takes the next number; only the newest one's answer is shown, since each is the
   // hub's whole detail and an older one would put back what a later request already changed.
   const seq = useRef(0);
@@ -213,7 +229,7 @@ export function ChannelPage({ id, manager: named, onBack, onSettings }: { id: st
 
   const head = (
     <div className="mb-3 flex items-center gap-2">
-      <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">{t("settings-channels.title")}</Button>
+      {!headerBack && <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">{t("settings-channels.title")}</Button>}
       <OwnerMark manager={manager} />
       <span className="flex-1" />
       <IconButton icon="retry" label={t("settings-channels.refresh")} onClick={() => void load()} />
@@ -230,6 +246,22 @@ export function ChannelPage({ id, manager: named, onBack, onSettings }: { id: st
     );
   }
   const editable = !d.read_only && d.source !== "market";
+  const replyOnly = !!d.capabilities.reply_only;
+  const runTest = () =>
+    void exclusive("test", async () => {
+      setTestFeedback(null);
+      try {
+        const res = await testChannel(id);
+        const text = replyOnly || res?.reply_only
+          ? (res?.note || t("settings-channels.connection_ok", { name: d.name }))
+          : (res?.note || t("settings-channels.test_sent", { name: d.name }));
+        setTestFeedback({ tone: "ok", text });
+        toast(text, "ok");
+      } catch (e) {
+        setTestFeedback({ tone: "error", text: errorText(e) });
+        throw e;
+      }
+    });
   return (
     <>
       {head}
@@ -311,24 +343,26 @@ export function ChannelPage({ id, manager: named, onBack, onSettings }: { id: st
         {d.surfaces && d.surfaces.length > 0 && <Row label={t("settings-channels.surfaces")}>{d.surfaces.join(t("settings-channels.list_separator"))}</Row>}
       </Group>
 
-      {editable && d.state === "connected" && (
-        <Group footer={t("settings-channels.test_footer")}>
+      {editable && d.state === "connected" && (d.capabilities.push || replyOnly) && (
+        <Group footer={replyOnly ? t("settings-channels.check_connection_footer") : t("settings-channels.test_footer")}>
           <div className="px-4 py-2.5">
             <Button
               tone="secondary"
-              icon="send"
+              icon={replyOnly ? "check" : "send"}
               busy={busy === "test"}
               disabled={!!busy && busy !== "test"}
-              onClick={() =>
-                void exclusive(
-                  "test",
-                  async () => void (await testChannel(id)),
-                  () => toast(t("settings-channels.test_sent", { name: d.name }), "ok"),
-                )
-              }
+              onClick={runTest}
             >
-              {t("settings-channels.send_test")}
+              {replyOnly ? t("settings-channels.check_connection") : t("settings-channels.send_test")}
             </Button>
+            {testFeedback && (
+              <p
+                role={testFeedback.tone === "error" ? "alert" : "status"}
+                className={cx("mt-2 text-submeta break-words", testFeedback.tone === "error" ? "text-red" : "text-ink-2")}
+              >
+                {testFeedback.text}
+              </p>
+            )}
           </div>
         </Group>
       )}

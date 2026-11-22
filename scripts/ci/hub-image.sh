@@ -6,7 +6,7 @@ if [ "$mode" = version ]; then
   if [ "${GITHUB_REF_TYPE:-}" = tag ]; then
     version="${GITHUB_REF_NAME#v}"
   else
-    version="$(git describe --always)-$(date -u +%Y%m%d%H%M)"
+    version="$(git describe --tags --match 'v[0-9]*' --always)-$(date -u +%Y%m%d%H%M)"
   fi
   image="ghcr.io/$(printf '%s' "${GITHUB_REPOSITORY:?}" | tr '[:upper:]' '[:lower:]')"
   printf 'version=%s\nimage=%s\n' "$version" "$image" >> "${GITHUB_OUTPUT:?}"
@@ -28,7 +28,7 @@ cleanup() {
     docker run --rm --user 0 --entrypoint sh \
       --mount "type=bind,src=$fixture,dst=/fixture" "$image" -c 'rm -rf /fixture/data /fixture/postgres' || true
   fi
-  rm -f "$fixture/.env" "$fixture/compose.yaml"
+  rm -f "$fixture/.env" "$fixture/compose.yaml" "$fixture/extension-seccomp.json"
   rmdir "$fixture" 2>/dev/null || true
   printf 'Hub image smoke finished (exit %s)\n' "$status"
 }
@@ -39,6 +39,7 @@ if [ "${CI_IMAGE_PREBUILT:-0}" != 1 ]; then
     --build-arg "VERSION=$version" --build-arg NODE_PLATFORMS=linux/amd64 -t "$image" .
 fi
 cp deploy/docker/compose.yaml "$fixture/compose.yaml"
+cp deploy/docker/extension-seccomp.json "$fixture/extension-seccomp.json"
 read -r port tls_port < <(python3 - <<'PY'
 import socket
 sockets = [socket.socket(), socket.socket()]

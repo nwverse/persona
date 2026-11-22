@@ -157,7 +157,7 @@ func TestClaudeDesktopCatalogAndRowsShareOriginalProject(t *testing.T) {
 		t.Fatalf("Claude catalog = %+v, %d, %+v", projects, sources, errs)
 	}
 	w := projects[0]
-	if w.Source != proto.SourceClaudeDesktop || w.Cwd != original || w.Title != "app" || !w.Available {
+	if w.Source != proto.SourceClaudeDesktop || w.SourceID != projectSpace+realPath(original) || w.Cwd != original || w.Title != "app" || !w.Available {
 		t.Fatalf("Claude project = %+v", w)
 	}
 	offline := byID(n.scanOffline())[sidA]
@@ -166,7 +166,7 @@ func TestClaudeDesktopCatalogAndRowsShareOriginalProject(t *testing.T) {
 		t.Fatalf("offline desktop identity = %+v", offline)
 	}
 	n.state.put(sidA, sessionState{Launcher: "claude", Cwd: running})
-	liveRows := n.claudeSessions([]claudeProc{{SessionID: sidA, Kind: "interactive", Entrypoint: "claude-desktop", Cwd: running, Status: "busy"}}, nil)
+	liveRows := n.claudeSessions([]claudeProc{{SessionID: sidA, Kind: "interactive", Entrypoint: "claude-desktop", Cwd: running, Status: "busy"}}, nil, nil)
 	if len(liveRows) != 1 {
 		t.Fatalf("live desktop rows = %+v", liveRows)
 	}
@@ -201,7 +201,63 @@ func TestClaudeDesktopProjectRootUsesGitSharedDirectory(t *testing.T) {
 	n := &Node{home: home}
 	s := proto.Session{SessionID: sidA, Agent: "claude", Cwd: linked}
 	n.decorateClaudeDesktop(&s, index, map[string]string{})
-	if s.RepoRoot != root || s.SpaceName != "project" || s.Cwd != linked {
+	if s.RepoRoot != root || s.SpaceID != projectSpace+realPath(root) || s.SpaceName != "project" || s.Cwd != linked {
 		t.Fatalf("linked desktop session = %+v", s)
+	}
+}
+
+func TestClaudeDesktopDirectoryProjectsExcludeHomeAndAncestors(t *testing.T) {
+	home := physicalTempDir(t)
+	root := filepath.Join(home, "project")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, desktop := useDesktopDirs(t)
+	index := claudeDesktopIndex{about: map[string]claudeDesktopAbout{}}
+	n := &Node{home: home}
+	for _, cwd := range []string{home, filepath.Dir(home), root} {
+		id := newUUID()
+		index.about[id] = claudeDesktopAbout{cwd: cwd}
+		desktopCatalogJSON(t, filepath.Join(desktop, "claude-code-sessions", "account", "org", "local_"+id+".json"),
+			map[string]any{"cliSessionId": id, "cwd": cwd})
+		s := proto.Session{SessionID: id, Agent: "claude", Cwd: cwd}
+		n.decorateClaudeDesktop(&s, index, map[string]string{})
+		if cwd == root {
+			if s.SpaceKind != proto.SourceClaudeDesktop || s.SpaceID != projectSpace+root {
+				t.Errorf("project directory placement = %+v", s)
+			}
+		} else if s.SpaceKind != "" || s.SpaceID != "" {
+			t.Errorf("home or ancestor became a project: %+v", s)
+		}
+	}
+	rows, sources, errs := n.desktopWorkspaces()
+	if len(rows) != 1 || sources != 1 || len(errs) != 0 || rows[0].SourceID != projectSpace+root || rows[0].Cwd != root {
+		t.Fatalf("directory catalog should omit home and ancestors: %+v, %d, %+v", rows, sources, errs)
+	}
+}
+
+func TestClaudeDesktopDecorationPreservesOwnedSpaces(t *testing.T) {
+	home := physicalTempDir(t)
+	environment := claudeDesktopEnvironmentID("profile", "account", "saved")
+	index := claudeDesktopIndex{
+		about:        map[string]claudeDesktopAbout{sidA: {cwd: home, environment: environment}},
+		environments: map[string]claudeDesktopEnvironment{environment: {Name: "Saved environment", Cwd: home}},
+	}
+	n := &Node{home: home}
+	for _, row := range []proto.Session{
+		{SessionID: sidA, Agent: "claude", SourceKind: proto.SourceClaudeDesktop, Cwd: home, SpaceKind: "herdr", SpaceID: "w1", SpaceName: "Release"},
+		{SessionID: sidA, Agent: "claude", SourceKind: proto.SourceClaudeDesktop, Cwd: home, Assistant: true},
+	} {
+		before := row
+		n.decorateClaudeDesktop(&row, index, map[string]string{})
+		if row.SpaceKind != before.SpaceKind || row.SpaceID != before.SpaceID || row.SpaceName != before.SpaceName {
+			t.Errorf("desktop index changed an owned space: %+v, before %+v", row, before)
+		}
+	}
+	// An explicitly saved environment is still a project when its folder is home.
+	row := proto.Session{SessionID: sidA, Agent: "claude", Cwd: home}
+	n.decorateClaudeDesktop(&row, index, map[string]string{})
+	if row.SpaceKind != proto.SourceClaudeDesktop || row.SpaceID != environment || row.SpaceName != "Saved environment" {
+		t.Fatalf("explicit environment lost its identity: %+v", row)
 	}
 }

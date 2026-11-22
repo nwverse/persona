@@ -178,9 +178,9 @@ func TestSettingsMainSwitchHandsOverTasks(t *testing.T) {
 	}
 }
 
-// The background supervisor follows the current main conversation's tasks without owning their ledger. A main
-// switch must move that ledger too, so digests still reach the background conversation and it can review the task.
-func TestMainTaskHandoverKeepsBackgroundSupervision(t *testing.T) {
+// A main switch moves the task ledger to the new main conversation. New digests go there, while an existing background
+// supervisor may still finish work already delegated to it (#5732).
+func TestMainTaskHandoverKeepsMainSupervision(t *testing.T) {
 	s, f, todo, led, _, _ := handoverFixture(t)
 	ctx := context.Background()
 	s.noBackground = false
@@ -204,21 +204,24 @@ func TestMainTaskHandoverKeepsBackgroundSupervision(t *testing.T) {
 	if wake := taskCardWake(s, "conv2", todo.ID); wake != wakeActive {
 		t.Fatalf("the transferred task's card wake = %q", wake)
 	}
-	if to := s.digestTo(s.settings(ctx), superviseSignal{Todo: todo.ID, Kind: sigReview}); to != "bg1" {
+	if to := s.digestTo(ctx, s.settings(ctx), superviseSignal{Todo: todo.ID, Kind: sigReview}); to != "conv2" {
 		t.Fatalf("review routed to %q", to)
 	}
-	if to := s.digestTo(s.settings(ctx), superviseSignal{Todo: led.ID, Kind: sigReview}); to != "lead1" {
+	if to := s.digestTo(ctx, s.settings(ctx), superviseSignal{Todo: led.ID, Kind: sigReview}); to != "lead1" {
 		t.Fatalf("the leader's review routed to %q", to)
 	}
-	waitFor(t, "the transferred task's review sent to the background supervisor", func() bool {
-		return strings.Contains(strings.Join(f.noticesTo("bg1"), "\n"), todo.ID)
+	waitFor(t, "the transferred task's review sent to the new main conversation", func() bool {
+		return strings.Contains(strings.Join(f.noticesTo("conv2"), "\n"), todo.ID)
 	})
+	// Closeout is a legacy exception only after an old notice actually reached the background conversation.
+	tellLegacyBackground(t, s, f, todo.ID, "bg1")
 	agent := proto.Session{SessionID: "s1", MachineID: "box"}
 	if _, elsewhere, err := s.supervisedElsewhere(ctx, "bg1", Device{ID: "box"}, agent); err != nil || elsewhere {
 		t.Fatalf("the background supervisor lost its agent: elsewhere %v, %v", elsewhere, err)
 	}
 	if res, err := runJSON(t, s, "bg1", "task_review", map[string]any{
 		"todo_id": todo.ID, "verdict": "accepted", "note": "Verified after the main conversation changed",
+		"checks": completeReviewChecks(todoNow(s, todo.ID)),
 	}); err != nil || !strings.Contains(res, "accepted and closed") {
 		t.Fatalf("background acceptance: %s %v", res, err)
 	}

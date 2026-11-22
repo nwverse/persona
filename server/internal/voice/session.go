@@ -60,8 +60,12 @@ type conversation struct {
 	resumed bool // the app picked the call up again: its first session is told what was said
 	wake    chan struct{}
 	// meeting: a meeting call (meeting.go), set by negotiate before anything else runs; nil for any other. Its fields
-	// are under mu.
-	meeting *meetingCall
+	// are under mu. dictation is an unbound, text-only session (dictation.go): it keeps protocol 1's internal shape so
+	// no target, run, observation, suspension or hold path can run, while ready still negotiates protocol 2's features.
+	meeting   *meetingCall
+	dictation bool
+	// dictationPartial: session.started granted interim captions, so standard deltas are ignored in favor of them.
+	dictationPartial bool
 	// sendsAnyway: the app's start said speech_gate, true or false (#5904): it has Send Anyway for what the
 	// user-speech gate held back, so such a handover with a task is kept for its resend and the model is told the
 	// screen offers that. An app from before it says nothing and has no such button; a meeting call never has it
@@ -81,6 +85,13 @@ type conversation struct {
 	started    bool // the app got its ready
 	outRate    int
 	reconnects int
+	// down is the last session the service said it cannot serve (error upstream_unavailable, its model's backend is
+	// down) with its words, clipped: it closes that session right after (docs/lessons/voice.md "Errors"), so the
+	// session's loss is the service's, not the network's.
+	down struct {
+		session int // sessionNo; 0 none
+		text    string
+	}
 	// toolless: its sessions declare no function tools, as its provider's service refused them (Provider.Tools unset,
 	// #1420). Set once, never cleared; read without mu (toolSet).
 	toolless atomic.Bool
@@ -151,6 +162,8 @@ type conversation struct {
 	modelAt time.Time
 	// talkIgnored: a talk frame came on a call that is not a meeting call, and was logged (meeting.go).
 	talkIgnored bool
+	// holdIgnored: a hold frame came on a call that takes none (protocol 1, a meeting call), and was logged (suspend.go).
+	holdIgnored bool
 }
 
 type outFrame struct {
@@ -199,10 +212,16 @@ func (pl *Plugin) converse(ctx context.Context, app *websocket.Conn, role string
 		switch {
 		case errors.Is(err, errNoUpstream):
 			c.failCode(codeNoUpstream, "还没配实时语音服务：在 设置 › 扩展 › 实时语音 里填服务地址和 Key", true)
+		case errors.Is(err, errNoLiveUpstream):
+			c.failCode(codeNoUpstream, err.Error(), true)
 		case errors.As(err, &ce):
 			c.failCode(ce.code, ce.msg, true)
 		default:
-			c.failCode(upstreamCode(err), "语音会话没能建立："+err.Error(), true)
+			code := upstreamCode(err)
+			if c.dictation {
+				code = firstNonEmpty(code, codeUpstreamFailed)
+			}
+			c.failCode(code, "语音会话没能建立："+err.Error(), true)
 		}
 		return
 	}
@@ -298,8 +317,14 @@ func (c *conversation) begin() error {
 	if err != nil {
 		return err
 	}
+	w := newWire(p.Dialect)
+	if c.dictation {
+		if _, ok := w.(liveWire); !ok {
+			return errNoLiveUpstream // dictation uses the existing live-dialect text-only negotiation, not another protocol
+		}
+	}
 	c.mu.Lock()
-	c.p, c.w, c.model, c.modelID = p, newWire(p.Dialect), model, p.ID+"/"+model
+	c.p, c.w, c.model, c.modelID = p, w, model, p.ID+"/"+model
 	c.gate.echoes = start.EchoCancellation != nil && !*start.EchoCancellation
 	// Only a full device's call turns the user-speech gate off: another extension's call is held to it (docs/assistant/voice.md "Permissions").
 	// A meeting call keeps it on and has no Send Anyway (meeting.go): what it hands the room goes as the owner's words,
@@ -329,6 +354,15 @@ func (c *conversation) negotiate(s *startFrame) error {
 	full := c.role == "" || c.role == roleFull
 	if s.Target != nil && !full {
 		return &codedError{code: codeTargetForbidden, msg: "别的扩展调来的语音只能交给 Persona 主对话，不能绑定对话"}
+	}
+	if s.Mode == modeDictation {
+		if s.Protocol < 2 {
+			return errors.New("dictation starts with protocol 2")
+		}
+		c.mu.Lock()
+		c.dictation = true
+		c.mu.Unlock()
+		return nil // one unbound session: no target preparation, history, resume, meeting or call features
 	}
 	meeting := s.Mode == modeMeeting
 	if meeting && (!full || s.Protocol < 2 || s.Target == nil || s.Target.MachineID == "" || s.Target.SessionID == "" ||
@@ -471,7 +505,7 @@ func (c *conversation) shutdown() {
 	}
 	c.closed = true
 	up, w := c.up, c.w
-	lines := callLines{user: c.userSeq, model: c.asstSeq, pauses: c.sus.pauses, meeting: c.meeting.meetingLog()}
+	lines := callLines{user: c.userSeq, model: c.asstSeq, pauses: c.sus.pauses, holds: c.sus.holds, meeting: c.meeting.meetingLog()}
 	for id, t := range c.pending {
 		t.Stop()
 		delete(c.pending, id)

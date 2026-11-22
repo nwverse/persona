@@ -379,3 +379,55 @@ describe("Machines in a hidden tab", () => {
     expect(metricsReads()).toBe(1);
   });
 });
+
+describe("Machines today's tokens", () => {
+  const usage = (machine_id: string, tokens: number): MachineMetrics => ({ machine_id, online: true, points: [], usage: { today: { in: tokens }, per_minute: 0, recent: [] } });
+  // the share legend's rows, each its name and count, and the bar's segments
+  const rows = () => [...host.querySelectorAll('[data-testid="machines-tokens"] .whitespace-nowrap')].map((r) => r.textContent);
+  const segments = () => host.querySelector('[data-testid="machines-tokens"] div[aria-hidden]')!.children.length;
+
+  it("keeps one row per computer when two share a name and the ranking changes", async () => {
+    fake.machines = [
+      { id: "a", name: "Mac", online: true },
+      { id: "b", name: "Linux", online: true },
+      { id: "c", name: "Mac", online: true },
+    ];
+    metricsReplies = { "/api/v1/metrics": [usage("a", 300), usage("b", 200), usage("c", 100)] };
+    act(() => root.render(<Machines onToggleSidebar={() => {}} />));
+    await flush();
+    expect(rows()).toEqual(["Mac300", "Linux200", "Mac100"]);
+
+    metricsReplies = { "/api/v1/metrics": [usage("a", 300), usage("b", 500), usage("c", 100)] };
+    await act(async () => { vi.advanceTimersByTime(10_000); });
+    await flush();
+    expect(rows()).toEqual(["Linux500", "Mac300", "Mac100"]);
+    expect(segments()).toBe(3);
+  });
+});
+
+describe("Machines battery and temperature", () => {
+  it("renders battery and temperature only when reported and omits placeholders when absent", async () => {
+    fake.machines = [
+      { id: "laptop", name: "Laptop", online: true },
+      { id: "desktop", name: "Desktop", online: true },
+    ];
+    metricsReplies = {
+      "/api/v1/metrics": [
+        { machine_id: "laptop", online: true, points: [], latest: { t: 1000, battery_percent: 82, battery_charging: true, temp_c: 54.2 } },
+        { machine_id: "desktop", online: true, points: [], latest: { t: 1000, cpu: 12 } },
+      ],
+    };
+    act(() => root.render(<Machines onToggleSidebar={() => {}} />));
+    await flush();
+    const cards = [...host.querySelectorAll("section")];
+    expect(cards.length).toBe(2);
+    const laptopBattery = cards[0].querySelector('[data-testid="metric-battery"]');
+    const laptopTemp = cards[0].querySelector('[data-testid="metric-temp"]');
+    expect(laptopBattery?.textContent).toContain("82");
+    expect(laptopBattery?.textContent).toContain("充电中");
+    expect(laptopTemp?.textContent).toContain("54.2°C");
+    expect(cards[1].querySelector('[data-testid="machine-power-thermal"]')).toBeNull();
+    expect(cards[1].querySelector('[data-testid="metric-battery"]')).toBeNull();
+    expect(cards[1].querySelector('[data-testid="metric-temp"]')).toBeNull();
+  });
+});

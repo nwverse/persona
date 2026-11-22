@@ -8,6 +8,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { UnavailableLauncher } from "../lib/launcher-models";
 import type { Launcher, Machine } from "../lib/types";
 
 const state = vi.hoisted(() => ({ loaded: true, features: [] as string[], machines: [] as Machine[] }));
@@ -36,6 +37,7 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 const BLOCKED: Launcher = { name: "work_gw", health: { state: "blocked", kind: "not_in_terminal", error: "bash: work_gw: command not found", checked_at: "2026-11-09T08:00:00Z" } };
 const OK: Launcher = { name: "claude", agent: "claude", health: { state: "ok", checked_at: "2026-11-09T08:00:00Z" } };
 let launchers: Launcher[] = [];
+let unavailable: UnavailableLauncher[] = [];
 let purpose: unknown = null;
 let host: HTMLDivElement;
 let root: Root;
@@ -59,6 +61,10 @@ async function open(key: string) {
 
 async function openPanel() {
   act(() => pill().click());
+  await act(async () => vi.dynamicImportSettled());
+  await flush();
+  // These caller tests inspect model actions; disclose the catalog first.
+  for (const header of document.body.querySelectorAll<HTMLButtonElement>('[data-panel-launcher][aria-expanded="false"]')) act(() => header.click());
   await flush();
 }
 
@@ -66,6 +72,7 @@ beforeEach(() => {
   resetModelListsForTests();
   state.machines = [{ id: "mac", name: "Mac", online: true }];
   launchers = [BLOCKED, OK];
+  unavailable = [];
   purpose = null;
   launched.length = 0;
   navigated.length = 0;
@@ -77,7 +84,7 @@ beforeEach(() => {
     const url = String(input);
     if (url.includes("/model-config/purposes/")) return purpose ? json(purpose) : json({ error: "not found" }, 404);
     if (url.includes("/launchers/") && url.includes("/models")) return json({ models: [] });
-    if (url.includes("/launchers")) return json({ launchers });
+    if (url.includes("/launchers")) return json(unavailable.length ? { launchers, unavailable } : { launchers });
     return json({ path: "/code", entries: [] });
   }));
   host = document.createElement("div");
@@ -105,9 +112,9 @@ describe("New agent's launcher health", () => {
     expect(fix("work_gw")).toBeDefined();
     const off = row("model:work_gw\ndefault");
     expect(off.getAttribute("aria-disabled")).toBe("true");
-    expect(off.getAttribute("aria-selected")).toBe("false");
+    expect(off.getAttribute("aria-pressed")).toBe("false");
     expect(off.title).toBe("这台电脑的终端里用不了");
-    expect(row("model:claude\ndefault").getAttribute("aria-selected")).toBe("true");
+    expect(row("model:claude\ndefault").getAttribute("aria-pressed")).toBe("true");
     expect(row("model:claude\ndefault").getAttribute("aria-disabled")).toBeNull();
     expect(q('[data-testid="launcher-blocked-help"]')).toBeNull();
   });
@@ -135,6 +142,24 @@ describe("New agent's launcher health", () => {
     expect(note()!.textContent).toContain("这台电脑的终端里用不了");
     act(() => button("启动").click());
     expect(launched[0]).toMatchObject({ machineId: "mac", launcher: "work_gw" });
+  });
+
+  // A Persona-managed provider its own-service rule leaves out here (#8109: own_service skip on a computer where Claude
+  // Code is signed in) is not just missing: its group says why, and How to fix opens its page, where Computers has the
+  // switch.
+  it("lists a provider left out here for its own-service rule with why, and How to fix opens its page", async () => {
+    unavailable = [{ name: "deepseek", display_name: "DeepSeek", kind: "launcher", code: "launcher_own_service", reason: "Mac 已经有自己的 Claude Code 服务，而 DeepSeek 设置为跳过这样的电脑。请在它的“电脑”里打开“已有登录的电脑也用”，或换一个供应商" }];
+    await open("o");
+    expect(pill().title).toContain("claude");
+    await openPanel();
+    const skipped = group("DeepSeek")!;
+    expect(skipped.textContent).toContain("已有登录的电脑也用");
+    expect(skipped.querySelector("[data-panel-row]")).toBeNull(); // nothing of it to pick
+    act(() => fix("DeepSeek").click());
+    expect(panel()).toBeNull();
+    expect(closed).toBe(1);
+    expect(navigated).toEqual(["/settings?tab=models&launcher=deepseek"]);
+    expect(q('[data-testid="launcher-blocked-help"]')).toBeNull();
   });
 
   it("Add model provider opens Settings › Model providers with the wizard", async () => {
@@ -165,7 +190,7 @@ describe("New agent's launcher health", () => {
     await openPanel();
     // the row that runs, lit with why (it stays reachable for its flyout, as the panel's running row always is)
     const runs = row("model:work_gw\ndefault");
-    expect(runs.getAttribute("aria-selected")).toBe("true");
+    expect(runs.getAttribute("aria-pressed")).toBe("true");
     expect(runs.title).toBe("这台电脑的终端里用不了");
     expect(fix("work_gw")).toBeDefined();
     act(() => pill().click());
@@ -197,7 +222,7 @@ describe("New agent's launcher health", () => {
     await openPanel();
     // still the choice, with the warning: it is Model settings' to change
     const follow = q("[data-follow-row]")!;
-    expect(follow.getAttribute("aria-selected")).toBe("true");
+    expect(follow.getAttribute("aria-pressed")).toBe("true");
     expect(follow.getAttribute("aria-disabled")).toBeNull();
     expect(follow.querySelector("[title]")!.getAttribute("title")).toContain("这台电脑的终端里用不了");
     act(() => pill().click());

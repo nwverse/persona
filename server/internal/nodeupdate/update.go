@@ -9,7 +9,6 @@ import (
 	"crypto/sha256"
 	"debug/buildinfo"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -47,13 +46,14 @@ type Check struct {
 }
 
 type upload struct {
-	ID        string
-	Spec      proto.NodeUpdateBeginParams
-	Path      string
-	Offset    int64
-	At        time.Time
-	Accepted  bool
-	Restarted bool
+	ID           string
+	Spec         proto.NodeUpdateBeginParams
+	Path         string
+	Offset       int64
+	At           time.Time
+	Accepted     bool
+	Restarted    bool
+	PreflightErr error
 }
 
 // Options says how the resident node is run.
@@ -89,6 +89,11 @@ type Signer interface {
 // (devices-deploy.node_ps_no_start).
 const psNoStart = "ps 读不出进程的启动时间，无法核对回滚进程身份"
 
+// windowsUnsupervised is the reason a Windows node gives when nothing declared it restarts the node: a persona-link
+// whose supervisor predates hub updates there, or a node run by hand. The hub translates it by this original text
+// (devices-deploy.node_windows_unsupervised).
+const windowsUnsupervised = "这台电脑的 Persona Link 后台服务不会替 node 接收更新：在这台电脑上重跑一次 persona-link install"
+
 // Manager must be shared by all of a resident's connection-scoped Nodes.
 type Manager struct {
 	mu                      sync.Mutex
@@ -98,7 +103,7 @@ type Manager struct {
 	reason                  string
 	needsRestart            bool
 	upload                  *upload
-	restart                 func()
+	restart                 func(string)
 	timer                   *time.Timer
 	sweep                   *time.Timer
 	closed                  bool
@@ -111,19 +116,24 @@ type Manager struct {
 }
 
 // New resolves the actual running file once. The executable is never inferred
-// from HOME, PATH, an attach socket, or the spelling of argv[0].
-func New(version string, restart func(), opts Options) *Manager {
+// from HOME, PATH, an attach socket, or the spelling of argv[0]. The restart callback receives the accepted upload ID.
+func New(version string, restart func(string), opts Options) *Manager {
 	m := &Manager{version: version, restart: restart, timeout: ConfirmTimeout, startWatch: startWatchdog, requireResidentHandover: opts.RequireResidentHandover, signer: opts.Signer, logf: opts.Logf}
 	xpc := os.Getenv("XPC_SERVICE_NAME")
 	systemd := runtime.GOOS == "linux" && os.Getenv("INVOCATION_ID") != ""
 	launchd := runtime.GOOS == "darwin" && xpc != "" && xpc != "0"
-	// A declared supervisor counts only where the detached watchdog and the in-place exec work.
-	declared := opts.Supervised && (runtime.GOOS == "linux" || runtime.GOOS == "darwin")
+	// A declared supervisor counts only where the detached watchdog works and the node can restart onto the new file:
+	// in place (exec) on Linux and macOS, through the supervisor's restart on Windows (Restart).
+	declared := opts.Supervised && (runtime.GOOS == "linux" || runtime.GOOS == "darwin" || runtime.GOOS == "windows")
 	if !systemd && !launchd && !declared {
 		m.reason = "常驻 node 未由 launchd/systemd 管理，无法保证失败后恢复"
+		if runtime.GOOS == "windows" {
+			m.reason = windowsUnsupervised
+		}
 		return m
 	}
-	if _, err := exec.LookPath("ps"); err != nil {
+	// Windows has no ps: processStart reads the creation time through a process handle there.
+	if _, err := exec.LookPath("ps"); err != nil && runtime.GOOS != "windows" {
 		m.reason = "缺少 ps，无法核对回滚进程身份"
 		return m
 	}
@@ -224,7 +234,7 @@ func (m *Manager) Begin(p proto.NodeUpdateBeginParams) (proto.NodeUpdateBeginRes
 	if _, err := rand.Read(random[:]); err != nil {
 		return proto.NodeUpdateBeginResult{}, err
 	}
-	f, err := os.CreateTemp(filepath.Dir(m.exe), ".node-update-stage-*")
+	f, err := os.CreateTemp(filepath.Dir(m.exe), ".node-update-stage-*"+exeSuffix) // validate runs it
 	if err != nil {
 		return proto.NodeUpdateBeginResult{}, err
 	}
@@ -292,6 +302,9 @@ func (m *Manager) Commit(ctx context.Context, id string, idle func() error) (pro
 	}
 	result := proto.NodeUpdateCommitResult{ID: id, Accepted: true}
 	if u.Accepted {
+		if u.PreflightErr != nil {
+			return proto.NodeUpdateCommitResult{}, u.PreflightErr
+		}
 		return result, nil
 	}
 	if u.Offset != u.Spec.Size {
@@ -331,7 +344,7 @@ func (m *Manager) Commit(ctx context.Context, id string, idle func() error) (pro
 		if err != nil {
 			return err
 		}
-		backup := m.exe + ".node-update-backup-" + id
+		backup := backupPath(m.exe, id)
 		if err := copyFile(m.exe, backup); err != nil {
 			return err
 		}
@@ -341,6 +354,7 @@ func (m *Manager) Commit(ctx context.Context, id string, idle func() error) (pro
 			return err
 		}
 		p := pending{ID: id, Exe: m.exe, Backup: backup, Stage: stage, Version: u.Spec.Version, From: m.version, OldHash: oldHash, NewHash: newHash, PID: os.Getpid(), ProcessStart: birth, ProcessPrecise: osproc.Identify(os.Getpid()).Start, Deadline: time.Now().Add(m.timeout)}
+		p.SupervisorPID, p.SupervisorStart = supervisorOf()
 		if err := savePending(p); err != nil {
 			_ = os.Remove(backup)
 			return err
@@ -389,7 +403,7 @@ func (m *Manager) Commit(ctx context.Context, id string, idle func() error) (pro
 	return result, nil
 }
 
-// ResponseWritten signals the whole resident, at most once, after the acceptance
+// ResponseWritten signals the resident to reload this update, at most once, after the acceptance
 // was written to the transport. Failed writes leave the watchdog to restore it.
 func (m *Manager) ResponseWritten(id string) {
 	m.mu.Lock()
@@ -401,7 +415,17 @@ func (m *Manager) ResponseWritten(id string) {
 	u.Restarted = true
 	restart := m.restart
 	m.mu.Unlock()
-	restart()
+	restart(id)
+}
+
+// PreflightFailed records why a committed reload could not proceed so a repeated commit returns the same error.
+// The installed file and transaction marker still belong to the rollback watchdog.
+func (m *Manager) PreflightFailed(id string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if u := m.upload; u != nil && u.ID == id && u.Restarted {
+		u.PreflightErr = err
+	}
 }
 
 func (m *Manager) Abort(id string) error {
@@ -451,8 +475,9 @@ func (m *Manager) Confirm(version string) error {
 		if err := os.Remove(markerPath(m.exe)); err != nil {
 			return err
 		}
-		_ = os.Remove(p.Backup)
+		discard(p.Backup) // the watchdog runs from it until it sees the marker gone
 		_ = os.Remove(p.Stage)
+		removeRetired(filepath.Dir(m.exe)) // the old program's file, moved aside on Windows: nothing runs it now
 		return syncDir(filepath.Dir(m.exe))
 	})
 }
@@ -565,41 +590,16 @@ func selfCheck(ctx context.Context, path string, spec proto.NodeUpdateBeginParam
 	if requireHandover && !check.ResidentHandover {
 		return errors.New("node executable does not support resident listener handover")
 	}
-	// Reopening an already executed signed Mach-O file for writing can make
-	// macOS kill a subsequent self-check. Validation never needs write access.
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	return f.Sync()
+	return syncFile(path)
 }
 
-// runCheck is what path's node-update-check says.
+// runCheck is what path's node-update-check says, under the update's limits.
 func runCheck(ctx context.Context, path string) (Check, error) {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, path, "node-update-check")
-	var output limitedBuffer
-	cmd.Stdout, cmd.Stderr = &output, io.Discard
-	cmd.WaitDelay = time.Second
-	if err := cmd.Run(); err != nil {
+	check, err := RunCheck(ctx, path, checkLimits)
+	if err != nil {
 		return Check{}, fmt.Errorf("node executable self-check: %w", err)
 	}
-	var check Check
-	if err := json.Unmarshal(output.Bytes(), &check); err != nil {
-		return Check{}, fmt.Errorf("node executable self-check output: %w", err)
-	}
 	return check, nil
-}
-
-type limitedBuffer struct{ bytes.Buffer }
-
-func (b *limitedBuffer) Write(p []byte) (int, error) {
-	if b.Len()+len(p) > 4096 {
-		return 0, errors.New("self-check output exceeds limit")
-	}
-	return b.Buffer.Write(p)
 }
 
 func fileHash(path string) (string, error) {
@@ -627,7 +627,8 @@ var errSuperseded = errors.New("node executable was replaced by another deployme
 // that renamed dst into place or rewrote it in place (cp never takes the
 // directory lock) between those points is detected, not overwritten. The
 // window that remains is the one between the last check and the rename, two
-// adjacent syscalls.
+// adjacent syscalls. The descriptor is closed before the rename: Windows will not
+// rename a file over one this process holds open.
 func renameStill(src, dst, want string) error {
 	f, err := os.Open(dst)
 	if err != nil {
@@ -652,6 +653,7 @@ func renameStill(src, dst, want string) error {
 	if !after.ModTime().Equal(before.ModTime()) || after.Size() != before.Size() {
 		return errSuperseded
 	}
+	_ = f.Close()
 	now, err := os.Stat(dst)
 	if err != nil {
 		return err
@@ -659,7 +661,7 @@ func renameStill(src, dst, want string) error {
 	if !os.SameFile(after, now) || !now.ModTime().Equal(after.ModTime()) || now.Size() != after.Size() {
 		return errSuperseded
 	}
-	return os.Rename(src, dst)
+	return replaceFile(src, dst)
 }
 func copyFile(src, dst string) (err error) {
 	in, err := os.Open(src)
@@ -688,14 +690,6 @@ func copyFile(src, dst string) (err error) {
 		return err
 	}
 	return out.Close()
-}
-func syncDir(dir string) error {
-	f, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	return f.Sync()
 }
 
 // locked runs fn holding the lock on the executable's directory (lockDir).

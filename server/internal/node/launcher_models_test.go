@@ -8,11 +8,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -51,6 +53,21 @@ func TestClaudeModelListReadsInitialize(t *testing.T) {
 	}
 }
 
+// With "model": "default" in its settings, Claude Code's list names default twice (#9998): one row of it reaches the apps.
+func TestClaudeModelListKeepsOneRowPerID(t *testing.T) {
+	out := `{"type":"control_response","response":{"subtype":"success","request_id":"persona-models","response":{"models":[` +
+		`{"value":"default","resolvedModel":"claude-opus-5-5","displayName":"Default (recommended)"},` +
+		`{"value":"opus","resolvedModel":"claude-opus-5-5","displayName":"Opus"},` +
+		`{"value":"default","resolvedModel":"default","displayName":"default","description":"Custom model"}]}}}`
+	got, err := claudeModelList(io.Discard, strings.NewReader(out+"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != "default" || got[0].Name != "Default (recommended)" || got[1].ID != "opus" {
+		t.Fatalf("got %+v, want default (the first one) and opus", got)
+	}
+}
+
 func TestClaudeModelListErrors(t *testing.T) {
 	for name, out := range map[string]string{
 		"refused":   `{"type":"control_response","response":{"subtype":"error","request_id":"persona-models","error":"Not logged in"}}`,
@@ -60,6 +77,171 @@ func TestClaudeModelListErrors(t *testing.T) {
 		if _, err := claudeModelList(io.Discard, strings.NewReader(out+"\n")); err == nil {
 			t.Errorf("%s: no error", name)
 		}
+	}
+}
+
+func TestManagedClaudeModelListWithNode(t *testing.T) {
+	for _, setup := range []string{
+		"NVM", "Homebrew prefix", "Node on service PATH", "Node from shell startup", "Claude shell wrapper",
+	} {
+		t.Run(setup, func(t *testing.T) {
+			testManagedClaudeWithNode(t, setup, false)
+		})
+	}
+}
+
+func TestManagedClaudeLaunchPreservesPath(t *testing.T) {
+	testManagedClaudeWithNode(t, "Homebrew prefix", true)
+}
+
+func testManagedClaudeWithNode(t *testing.T, setup string, ordinaryLaunch bool) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("uses Unix npm launchers and node sockets")
+	}
+	zsh, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("no zsh")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no Node.js to run the npm launcher fixture")
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := launchKeyHome(t)
+	n, _ := testNode(t)
+	n.home, n.dir = home, filepath.Dir(nodeclient.SocketPath())
+	programDir := filepath.Join(home, "Persona Link")
+	if err := os.MkdirAll(programDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	n.bin = filepath.Join(programDir, "personad")
+	if err := os.Symlink(self, n.bin); err != nil {
+		t.Fatal(err)
+	}
+	serviceBin := filepath.Join(home, "service-bin")
+	link := func(target, path string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link(zsh, filepath.Join(serviceBin, "zsh"))
+	t.Setenv("NVM_DIR", "")
+	t.Setenv("PERSONA_NODEJS", "")
+	t.Setenv("PATH", serviceBin)
+	localClaude := filepath.Join(home, ".local", "bin", "claude")
+	cli := localClaude
+	var prefix string
+	if setup == "NVM" {
+		root := filepath.Join(home, "custom NVM")
+		prefix = filepath.Join(root, "versions", "node", "v22.1.0")
+		t.Setenv("NVM_DIR", root)
+		// The service knows one Node installation; a different interpreter on PATH must not win.
+		t.Setenv("PERSONA_NODEJS", filepath.Join(prefix, "bin", "node"))
+		writeExecutable(t, filepath.Join(serviceBin, "node"), "#!/bin/sh\nexit 17\n")
+	} else if setup == "Homebrew prefix" {
+		prefix = filepath.Join(home, "opt", "homebrew")
+	}
+	if prefix != "" {
+		cli = filepath.Join(prefix, "lib", "node_modules", "@anthropic-ai", "claude-code", "cli.js")
+		bin := filepath.Join(prefix, "bin")
+		rel, err := filepath.Rel(bin, cli)
+		if err != nil {
+			t.Fatal(err)
+		}
+		link(rel, filepath.Join(bin, "claude"))
+		link(node, filepath.Join(bin, "node"))
+		if setup == "Homebrew prefix" {
+			link(filepath.Join(bin, "claude"), localClaude)
+		}
+	} else if setup == "Node on service PATH" {
+		link(node, filepath.Join(serviceBin, "node"))
+	}
+	if ordinaryLaunch {
+		writeExecutable(t, filepath.Join(serviceBin, "node"),
+			"#!/bin/sh\nFIXTURE_NODE=service exec "+shellQuote(node)+` "$@"`+"\n")
+		writeExecutable(t, filepath.Join(serviceBin, "fixture-tool"), "#!/bin/sh\nexit 0\n")
+		writeExecutable(t, filepath.Join(prefix, "bin", "fixture-tool"), "#!/bin/sh\nexit 17\n")
+	}
+
+	shellWrapper := setup == "Claude shell wrapper"
+	if shellWrapper {
+		cli = filepath.Join(home, "wrapped Claude", "cli.js")
+		writeExecutable(t, localClaude, "#!/bin/sh\nexec node "+shellQuote(cli)+` "$@"`+"\n")
+	}
+	shellSetup := setup == "Node from shell startup" || shellWrapper
+	wantPath := serviceBin
+	rc := `: > "$HOME/rc-ran"` + "\n/bin/sleep 20\n"
+	if shellSetup {
+		shellBin := filepath.Join(home, "shell runtime", "bin")
+		link(node, filepath.Join(shellBin, "node"))
+		wantPath = shellBin + ":" + serviceBin
+		rc = `: > "$HOME/rc-ran"` + "\nexport PATH=" + shellQuote(shellBin) + `:"$PATH"` + "\n"
+	}
+	t.Setenv("FIXTURE_EXPECTED_PATH", wantPath)
+	writeFile(t, filepath.Join(home, ".zshrc"), rc)
+	writeExecutable(t, cli, `#!/usr/bin/env node
+const fs = require('node:fs');
+const readline = require('node:readline');
+const args = process.argv.slice(2);
+if (process.env.PATH !== process.env.FIXTURE_EXPECTED_PATH || process.env.PERSONA_MANAGED_MODEL_PROBE !== undefined) {
+  throw new Error('Managed Claude inherited a changed PATH or the internal probe marker');
+}
+if (args.includes('--version')) {
+  const {spawnSync} = require('node:child_process');
+  if (process.env.FIXTURE_NODE !== 'service' || process.env.ANTHROPIC_AUTH_TOKEN !== 'probe-fixture' ||
+      spawnSync('fixture-tool').status !== 0) {
+    throw new Error('Managed Claude did not use the Node.js and tool from the service PATH');
+  }
+  process.exit(0);
+}
+const settings = JSON.parse(fs.readFileSync(args[args.indexOf('--settings') + 1]));
+const rl = readline.createInterface({input: process.stdin});
+rl.on('line', (line) => {
+  const req = JSON.parse(line);
+  if (req.type !== 'control_request' || req.request.subtype !== 'initialize' ||
+      !settings.disableAllHooks || settings.env.ANTHROPIC_AUTH_TOKEN !== 'probe-fixture' ||
+      process.env.ANTHROPIC_AUTH_TOKEN !== 'probe-fixture' ||
+      !args.includes('stream-json') || !args.includes('--verbose')) {
+    throw new Error('Missing managed model probe configuration');
+  }
+  console.log(JSON.stringify({type: 'control_response', response: {
+    subtype: 'success', request_id: req.request_id, response: {models: [
+      {value: 'npm-model', displayName: 'NPM model'}
+    ]}
+  }}));
+});
+`)
+	t.Setenv("ZDOTDIR", home)
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("NODE_OPTIONS", "")
+	t.Setenv("NODE_TEST_LAUNCH", "1")
+	n.setManaged([]proto.ManagedLauncher{{Name: "store", APIKey: "probe-fixture", Auth: "bearer"}})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := n.listenOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if ordinaryLaunch {
+		out, err := exec.CommandContext(ctx, n.bin, "launch", "store", "--version").CombinedOutput()
+		if err != nil {
+			t.Fatalf("managed launch: %v: %s", err, out)
+		}
+	} else {
+		models, err := n.listAgentModels(ctx, "store", "claude")
+		if err != nil || len(models) != 1 || models[0].ID != "npm-model" {
+			t.Fatalf("managed models = %+v, %v", models, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, "rc-ran")); (shellSetup && err != nil) || (!shellSetup && !os.IsNotExist(err)) {
+		t.Fatalf("shell initialization: expected ran=%t, stat error=%v", shellSetup, err)
 	}
 }
 
@@ -89,10 +271,12 @@ func fakeModelServer(t *testing.T, in io.Reader, out io.WriteCloser) {
 			reply(`{"userAgent":"codex"}`)
 		case req.Method == "model/list" && req.Params["cursor"] == nil:
 			reply(`{"data":[{"id":"preset-a","model":"model-a","displayName":"Model A","description":"default one","isDefault":true,"hidden":false,` +
-				`"defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"medium"},{"reasoningEffort":"high"}]},` +
+				`"defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"medium"},{"reasoningEffort":"high"}],` +
+				`"serviceTiers":[{"id":"priority","name":"Fast","description":"Increased usage"}]},` +
 				`{"id":"old","model":"old","displayName":"Old","hidden":true}],"nextCursor":"p2"}`)
 		case req.Method == "model/list" && req.Params["cursor"] == "p2":
-			reply(`{"data":[{"id":"gateway/model-b","model":"gateway/model-b","displayName":"","hidden":false}],"nextCursor":null}`)
+			reply(`{"data":[{"id":"gateway/model-b","model":"gateway/model-b","displayName":"","hidden":false,` +
+				`"defaultReasoningEffort":"none","supportedReasoningEfforts":[]}],"nextCursor":null}`)
 		default:
 			io.WriteString(out, `{"jsonrpc":"2.0","id":1,"error":{"message":"unexpected"}}`+"\n")
 		}
@@ -115,7 +299,12 @@ func TestCodexModelListPagesAndHides(t *testing.T) {
 	if a.ID != "model-a" || a.Name != "Model A" || !a.Default || a.DefaultEffort != "medium" || !slices.Equal(a.Efforts, []string{"low", "medium", "high"}) {
 		t.Fatalf("first %+v", a)
 	}
-	if b.ID != "gateway/model-b" || b.Name != "gateway/model-b" || b.Default {
+	raw, _ := json.Marshal(a)
+	if !strings.Contains(string(raw), `"service_tiers":[{"id":"priority","name":"Fast","description":"Increased usage"}]`) {
+		t.Fatalf("first lost its native speed choices: %s", raw)
+	}
+	// A model that takes no level (a gateway catalog's) offers none, and no default one either.
+	if b.ID != "gateway/model-b" || b.Name != "gateway/model-b" || b.Default || len(b.Efforts) != 0 || b.DefaultEffort != "" {
 		t.Fatalf("second %+v", b)
 	}
 }
@@ -153,6 +342,15 @@ fixed() { LAUNCHER_MODEL=fixed-model command claude --model fixed-model "$@" }
 	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	t.Setenv("ZDOTDIR", home)
 	t.Setenv("PATH", bin+":/usr/bin:/bin")
+	// The probe's login shell inherits this process's environment, and a runner started from an agent has the
+	// agent's model and effort there (Claude Code sets ANTHROPIC_MODEL, CLAUDE_CODE_EFFORT_LEVEL, ...): they would
+	// decide the fixture's default model and effort (#9113). t.Setenv restores each one afterwards.
+	for _, kv := range os.Environ() {
+		if name, _, _ := strings.Cut(kv, "="); strings.HasPrefix(name, "ANTHROPIC_") || strings.HasPrefix(name, "CLAUDE_") {
+			t.Setenv(name, "")
+			os.Unsetenv(name)
+		}
+	}
 	launcherCache.Lock()
 	oldAt, oldList, oldSettings := launcherCache.at, launcherCache.list, launcherCache.settings
 	launcherCache.at, launcherCache.list, launcherCache.settings = time.Now(), []proto.Launcher{{Name: "mine"}, {Name: "fixed"}}, map[string]string{}
@@ -200,6 +398,48 @@ func TestLauncherModelsRunsTheLauncher(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, "args.txt")); err == nil {
 		t.Fatal("asked the CLI again")
+	}
+}
+
+// A managed Codex provider's list is its codex's app-server's, through personad launch: the node used to run
+// `personad launch <name>` alone, whose codex started its TUI ("stdin is not a terminal") and listed nothing.
+func TestManagedCodexModelsAskTheAppServer(t *testing.T) {
+	home := fakeCLIHome(t)
+	n, _ := testNode(t)
+	n.home, n.dir = home, filepath.Join(home, ".persona")
+	// personad launch, as the provider's codex: an app-server when asked for one, else a TUI with no terminal.
+	n.bin = filepath.Join(home, "bin", "personad")
+	writeFile(t, n.bin, `#!/bin/sh
+printf '%s\n' "$@" > "$HOME/personad-args.txt"
+case " $* " in *" app-server "*) ;; *) echo "Error: stdin is not a terminal" >&2; exit 1 ;; esac
+read line
+echo '{"jsonrpc":"2.0","id":1,"result":{"userAgent":"codex"}}'
+read line
+read line
+echo '{"jsonrpc":"2.0","id":2,"result":{"data":[{"id":"example-big","model":"example-big","displayName":"Example Big","hidden":false,"defaultReasoningEffort":"high","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"high"}]},{"id":"example-plain","model":"example-plain","displayName":"Example Plain","hidden":false,"defaultReasoningEffort":"none","supportedReasoningEfforts":[]}],"nextCursor":null}}'
+sleep 60
+`)
+	if err := os.Chmod(n.bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	n.setManaged([]proto.ManagedLauncher{{Name: "gw", Agent: "codex", BaseURL: "http://127.0.0.1:9/v1", APIKey: "k", Model: "example-big"}})
+	res, err := n.launcherModels(context.Background(), "gw", "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args, _ := os.ReadFile(filepath.Join(home, "personad-args.txt"))
+	if got := strings.Fields(string(args)); !slices.Equal(got, []string{"launch", "gw", "app-server"}) {
+		t.Fatalf("personad got %q", got)
+	}
+	if res.Agent != "codex" || len(res.Models) != 2 {
+		t.Fatalf("got %+v", res)
+	}
+	big, plain := res.Models[0], res.Models[1]
+	if big.ID != "example-big" || !slices.Equal(big.Efforts, []string{"low", "high"}) || big.DefaultEffort != "high" {
+		t.Fatalf("example-big %+v", big)
+	}
+	if plain.ID != "example-plain" || len(plain.Efforts) != 0 || plain.DefaultEffort != "" {
+		t.Fatalf("a model that takes no level: %+v", plain)
 	}
 }
 

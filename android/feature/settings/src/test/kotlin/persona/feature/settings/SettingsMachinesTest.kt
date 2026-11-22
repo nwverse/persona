@@ -9,6 +9,7 @@ import org.robolectric.annotation.Config
 import persona.core.contracts.DetectedEngine
 import persona.core.contracts.Machine
 import persona.core.contracts.api.*
+import persona.core.domain.engines.Engines
 import persona.core.hub.HubError
 import persona.core.hub.HubFailure
 import kotlinx.coroutines.CompletableDeferred
@@ -71,6 +72,49 @@ class EngineSelectionModelTest {
         assertEquals("herdr", live.state.value.selected)
     }
 
+    @Test fun noTerminalEngineIsChosenSavedAndTakenBack() = runBlocking {
+        val withSets = machine.copy(engineHosts = listOf("herdr"))
+        val sent = mutableListOf<String>()
+        val applied = mutableListOf<Machine>()
+        // The hub keeps `engine` herdr for the empty set and says it in `engine_hosts`.
+        val model = EngineSelectionModel(withSets, put = { _, engine ->
+            sent += engine
+            if (engine == Engines.NONE) withSets.copy(engineHosts = emptyList()) else withSets.copy(engine = engine, engineHosts = listOf(engine))
+        }, applied = { applied += it })
+        assertEquals("herdr", model.state.value.selected)
+        model.choose(Engines.NONE)
+        assertTrue(model.save("m1"))
+        assertEquals(listOf(Engines.NONE), sent)
+        assertEquals(Engines.NONE, model.state.value.selected)
+        assertEquals(emptyList<String>(), applied.single().engineHosts)
+        // A push that says the same changes nothing; one from another client moves the picker until it is edited.
+        model.synchronize(withSets.copy(engineHosts = emptyList()))
+        assertEquals(Engines.NONE, model.state.value.selected)
+        model.synchronize(withSets.copy(engine = "orca", engineHosts = listOf("orca")))
+        assertEquals("orca", model.state.value.selected)
+        // Back to an engine.
+        model.choose("herdr")
+        assertTrue(model.save("m1"))
+        assertEquals("herdr", model.state.value.selected)
+        assertEquals(listOf(Engines.NONE, "herdr"), sent)
+    }
+
+    @Test fun aMachineSavedWithoutEnginesOpensOnNoTerminalEngineAndAFailedSaveStays() = runBlocking {
+        val offline = machine.copy(online = false, engines = emptyList(), engineHosts = emptyList())
+        val model = EngineSelectionModel(offline, put = { _, _ -> throw java.io.IOException("reset") }, applied = {})
+        assertEquals(Engines.NONE, model.state.value.selected)
+        model.choose("orca")
+        assertFalse(model.save("m1"))
+        assertEquals("orca", model.state.value.selected)
+        model.choose(Engines.NONE)
+        assertNull(model.state.value.error)
+        // Offline is saved too, and the hub's answer keeps the choice.
+        val saved = EngineSelectionModel(offline.copy(engineHosts = listOf("herdr")), put = { _, _ -> offline }, applied = {})
+        saved.choose(Engines.NONE)
+        assertTrue(saved.save("m1"))
+        assertEquals(Engines.NONE, saved.state.value.selected)
+    }
+
     @Test fun noSecondSaveWhileOneIsRunning() = runBlocking {
         val gate = CompletableDeferred<Unit>()
         var calls = 0
@@ -116,6 +160,13 @@ class ClaudeSettingsModelTest {
         override suspend fun setCodexSetting(machineId: String, key: String, value: JsonElement): List<ClaudeSetting> {
             codexWrites += Triple(machineId, key, value)
             return listOf(ClaudeSetting(key, "思考强度", type = "enum", options = listOf("low", "high"), value = value))
+        }
+        val agyWrites = mutableListOf<Triple<String, String, JsonElement>>()
+        override suspend fun agySettings(machineId: String) =
+            listOf(ClaudeSetting("toolPermission", "工具权限", type = "enum", options = listOf("ask", "always-proceed"), value = JsonPrimitive("ask")))
+        override suspend fun setAgySetting(machineId: String, key: String, value: JsonElement): List<ClaudeSetting> {
+            agyWrites += Triple(machineId, key, value)
+            return listOf(ClaudeSetting(key, "工具权限", type = "enum", options = listOf("ask", "always-proceed"), value = value))
         }
         override suspend fun launchers(machineId: String) = emptyList<AgentLauncher>()
         override suspend fun launcherQuota(machineId: String, name: String, refresh: Boolean) = persona.core.contracts.api.LauncherQuotaAnswer()
@@ -168,10 +219,26 @@ class ClaudeSettingsModelTest {
         assertEquals("low", model.state.value.settings.single().stringValue)
     }
 
+    @Test fun agyKindReadsAndWritesAgySettingsOnly() = runBlocking {
+        val api = Api()
+        val model = ClaudeSettingsModel(api, Choices(), AgentSettingsKind.Agy)
+        model.follow(listOf(mac, hub))
+        model.load()
+        assertEquals(0, api.reads)
+        assertEquals("ask", model.state.value.settings.single().stringValue)
+        assertEquals("已应用到 2 台机器", model.set("toolPermission", JsonPrimitive("always-proceed"), listOf(mac, hub))?.resolve(res))
+        assertEquals(listOf("mac", "hub"), api.agyWrites.map { it.first })
+        assertTrue(api.writes.isEmpty())
+        assertTrue(api.codexWrites.isEmpty())
+        assertEquals("always-proceed", model.state.value.settings.single().stringValue)
+    }
+
     @Test fun eachKindHasItsOwnWords() {
         assertEquals("Codex 设置", res.getString(AgentSettingsKind.Codex.title))
         assertEquals("Claude Code 设置", res.getString(AgentSettingsKind.Claude.title))
+        assertEquals("Antigravity 设置", res.getString(AgentSettingsKind.Agy.title))
         assertTrue(res.getString(AgentSettingsKind.Codex.caption).contains("~/.codex/config.toml"))
+        assertTrue(res.getString(AgentSettingsKind.Agy.caption).contains("~/.gemini/antigravity-cli/settings.json"))
     }
 
     @Test fun failuresAreListedPerMachineAndTheTableIsReadAgain() = runBlocking {

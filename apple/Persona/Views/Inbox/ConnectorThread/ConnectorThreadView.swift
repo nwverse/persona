@@ -1,6 +1,7 @@
 import MarkdownUI
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 // A chat app's conversation opened from the inbox (Telegram's), laid out like the Feishu chat page: others on the
 // left, (in a group) the name over the first of a run and the avatar beside its last, mine on the right; a time
@@ -206,7 +207,7 @@ struct ConnectorThreadRow: View {
                     Spacer(minLength: 0)
                 } else {
                     Group {
-                        if endsRun { ThreadAvatar(connector: connector, name: m.sender.name, ref: m.sender.avatar) } else { Color.clear }
+                        if endsRun { ThreadAvatar(connector: connector, person: m.sender) } else { Color.clear }
                     }
                     .scaledFrame(width: Theme.Size.wellM, height: endsRun ? Theme.Size.wellM : Theme.Size.line)
                 }
@@ -393,9 +394,10 @@ struct ThreadRichTextView: View {
                 Divider()
             }
             // Read line by line as written, as a chat's reply is (ReplyBreaks): a Lark post is one line per paragraph.
-            Markdown(Self.memo(text.body) { MarkdownContent(CJKEmphasis.apply(ReplyBreaks.apply($0))) })
+            Markdown(Self.memo(text.body) { MarkdownContent(CJKEmphasis.apply(InlineCodeGap.apply(ReplyBreaks.apply($0)))) })
                 .markdownSoftBreakMode(.lineBreak)
                 .markdownTheme(.persona)
+                .asksBeforePictures() // other people wrote it (#9474)
                 .textSelection(.enabled)
             Text(stamp).font(Theme.Font.caption).monospacedDigit().foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .trailing)

@@ -150,7 +150,8 @@ object PersonaViewBlocks {
         val (language, code) = block as Block
         val words = cardWords()
         remember(block, words) { parse(language, code, words) }?.let { PersonaViewBlock(it) }
-    }, block = { key, raw, complete -> AssistantBlock(key, raw, complete) }, live = { id -> AssistantLiveCard(id) })
+    }, block = { key, raw, complete -> AssistantBlock(key, raw, complete) }, live = { id -> AssistantLiveCard(id) },
+        picture = { language, raw, complete, index -> AssistantPictureBlock(language, raw, complete, index) })
 
     private data class Block(val language: String, val code: String)
 }
@@ -184,7 +185,7 @@ fun PersonaViewBlock(view: ExtensionView, modifier: Modifier = Modifier) {
     val state = remember(view) { ExtensionViewState(view = view) }
     val handle = remember(uri) {
         ExtensionViewHandle(press = { _, _ -> }, edit = { _, _ -> }, choose = {},
-            open = { url -> if (ExtensionViewText.isHttps(url)) runCatching { uri.openUri(url) } })
+            open = { url -> if (ExtensionViewText.isHttps(url)) { val _ = runCatching { uri.openUri(url) } } })
     }
     ExtensionViewColumn(state, handle, modifier)
 }

@@ -1,5 +1,6 @@
 import MarkdownUI
 import SwiftUI
+import PersonaWire
 
 // The components of an extension's View (docs/extensions/extensions.md「Declarative UI」「UI 版本 3」), drawn by `ExtensionItemRow`.
 
@@ -13,19 +14,16 @@ struct ExtensionComponentRowLabel<Trailing: View>: View {
     var chevron: Bool
     @ViewBuilder var trailing: Trailing
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        let stacked = typeSize.isAccessibilitySize
         HStack(spacing: Theme.Space.m) {
             leading
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                Text(row.title).font(Theme.Font.body).lineLimit(stacked ? 3 : 1).minimumScaleFactor(stacked ? 1 : 0.8)
-                if let s = row.subtitle, !s.isEmpty { Text(s).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(stacked ? 4 : 2) }
-                if stacked { details(lines: 2) }
+                Text(row.title).font(Theme.Font.body).lineLimit(1).minimumScaleFactor(0.8)
+                if let s = row.subtitle, !s.isEmpty { Text(s).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(2) }
             }
             Spacer(minLength: Theme.Space.s)
-            if !stacked { details(lines: 1) }
+            details(lines: 1)
             if let action = row.action, model?.selected(action.id) == true {
                 ThemedIcon(Theme.Icon.success).font(Theme.Font.labelStrong).foregroundStyle(Theme.positive)
                     .accessibilityLabel("Selected [Extension Components 7ecf1c]")
@@ -41,8 +39,7 @@ struct ExtensionComponentRowLabel<Trailing: View>: View {
         .contentShape(.rect)
     }
 
-    /// The trend (UI version 6), the value and the badge: after the title's column, or under the title at the
-    /// accessibility sizes.
+    /// The trend (UI version 6), the value and the badge: after the title's column.
     @ViewBuilder private func details(lines: Int) -> some View {
         // UI version 6: its trend before its value.
         if let spark = row.spark { ExtensionSparkLine(spark: spark) }
@@ -184,10 +181,12 @@ struct ExtensionLogo: View {
 struct ExtensionMarkdown: View {
     var text: String
     @Binding var link: LinkTarget?
+    @Environment(\.extensionPicture) private var picture
 
     var body: some View {
         Markdown(text)
-            .markdownTheme(.persona)
+            // In a picture the share card's theme: its code blocks wrap (`ImageRenderer` draws no scroll views).
+            .markdownTheme(picture ? .card : .persona)
             .markdownImageProvider(NoImages())
             .markdownInlineImageProvider(NoImages())
             .textSelection(.enabled)
@@ -207,39 +206,49 @@ struct ExtensionMarkdown: View {
 }
 
 /// An extension's `table`: its columns' titles, its rows, a cell on one line each; wider than the screen it scrolls
-/// sideways. Its caption under it.
+/// sideways. Its caption under it. In a picture (`extensionPicture`) it fits the width and its cells wrap: a picture
+/// cannot scroll, and `ImageRenderer` draws no scroll views at all.
 struct ExtensionTable: View {
     var table: ExtensionTableComponent
+    @Environment(\.extensionPicture) private var picture
 
     var body: some View {
         let columns = Array(table.columns.prefix(8))
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            ScrollView(.horizontal) {
-                Grid(alignment: .leading, horizontalSpacing: Theme.Space.l, verticalSpacing: Theme.Space.s) {
-                    GridRow {
-                        ForEach(Array(columns.enumerated()), id: \.offset) { _, c in
-                            Text(c.title).font(Theme.Font.labelStrong).foregroundStyle(.secondary).lineLimit(1)
-                                .gridColumnAlignment(c.align == ExtensionTableAlign.end ? .trailing : .leading)
-                        }
-                    }
-                    Divider().gridCellUnsizedAxes(.horizontal)
-                    ForEach(Array(table.rows.prefix(100).enumerated()), id: \.offset) { _, row in
-                        GridRow {
-                            ForEach(Array(columns.indices), id: \.self) { i in
-                                Text(i < row.count ? row[i] : "")
-                                    .font(columns[i].align == ExtensionTableAlign.end ? Theme.Font.secondary.monospacedDigit() : Theme.Font.secondary)
-                                    .lineLimit(1)
-                                    .fixedSize()
-                            }
-                        }
-                    }
+            if picture {
+                grid(columns)
+            } else {
+                ScrollView(.horizontal) {
+                    grid(columns)
                 }
-                .padding(.vertical, Theme.Space.xs)
+                .textSelection(.enabled)
             }
-            .textSelection(.enabled)
             if let c = table.caption, !c.isEmpty { Text(c).font(Theme.Font.label).foregroundStyle(.secondary) }
         }
         .accessibilityIdentifier("plugin-ui-table")
+    }
+
+    private func grid(_ columns: [ExtensionTableColumn]) -> some View {
+        Grid(alignment: .leading, horizontalSpacing: Theme.Space.l, verticalSpacing: Theme.Space.s) {
+            GridRow {
+                ForEach(Array(columns.enumerated()), id: \.offset) { _, c in
+                    Text(c.title).font(Theme.Font.labelStrong).foregroundStyle(.secondary).lineLimit(picture ? nil : 1)
+                        .gridColumnAlignment(c.align == ExtensionTableAlign.end ? .trailing : .leading)
+                }
+            }
+            Divider().gridCellUnsizedAxes(.horizontal)
+            ForEach(Array(table.rows.prefix(100).enumerated()), id: \.offset) { _, row in
+                GridRow {
+                    ForEach(Array(columns.indices), id: \.self) { i in
+                        Text(i < row.count ? row[i] : "")
+                            .font(columns[i].align == ExtensionTableAlign.end ? Theme.Font.secondary.monospacedDigit() : Theme.Font.secondary)
+                            .lineLimit(picture ? nil : 1)
+                            .fixedSize(horizontal: !picture, vertical: true)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, Theme.Space.xs)
     }
 }
 
@@ -260,7 +269,7 @@ struct ExtensionEmpty: View {
             .listRowBackground(Color.clear)
             .accessibilityIdentifier("plugin-ui-empty")
             .disabled(model?.managesConfirmation == true && empty.button.map { model?.isEnabled($0.action) != true } == true)
-            .confirmationDialog(empty.button?.action.confirm ?? "", isPresented: $asking, titleVisibility: .visible) {
+            .accessibleConfirmationDialog(empty.button?.action.confirm ?? "", isPresented: $asking, titleVisibility: .visible, hasCancel: true) {
                 Button { run() } label: { Text(empty.button?.title ?? String(localized: "OK [Interactive Assistant View Card fac2a6]")).lineLimit(1) }
                     .accessibilityIdentifier("plugin-ui-confirm")
                 Button("Cancel", role: .cancel) {}
@@ -416,10 +425,9 @@ struct ExtensionChartItem: View {
     /// A stacked bar of one category (a single day's parts): it is a horizontal segmented bar, not a lone column.
     private var singleShare: [SegmentedShareBar.Share]? {
         let mapped = mapped
-        guard DataChart.isSingleCategoryShare(kind: chartKind, stacked: item.stacked == true, series: mapped) else { return nil }
-        let total = mapped.reduce(0) { $0 + $1.values[0] }
+        guard let ratios = DataChart.singleCategoryShares(kind: chartKind, stacked: item.stacked == true, series: mapped) else { return nil }
         return mapped.enumerated().map { i, s in
-            SegmentedShareBar.Share(id: i, color: s.color ?? DataChart.hues[i % DataChart.hues.count], ratio: s.values[0] / total)
+            SegmentedShareBar.Share(id: i, color: s.color ?? DataChart.hues[i % DataChart.hues.count], ratio: ratios[i])
         }
     }
 
@@ -591,6 +599,10 @@ struct ExtensionActionButton<Content: View>: View {
     var model: any ExtensionViewControlling
     var values: [String: String] = [:]
     @Binding var link: LinkTarget?
+    /// Its accessibility identifier; nil: `plugin-ui-action-<action id>`.
+    var identifier: String? = nil
+    /// A canvas or other transient container that a push closes after confirmation, before the page navigates.
+    var onPush: (() -> Void)? = nil
     @ViewBuilder var label: Content
     @State private var asking = false
 
@@ -603,8 +615,8 @@ struct ExtensionActionButton<Content: View>: View {
         // A Mac form draws a button in the accent whatever its role: red as on the phone (#1512).
         .tint(destructive ? Theme.danger : nil)
         .disabled(!model.isEnabled(action))
-        .accessibilityIdentifier("plugin-ui-action-\(action.id)")
-        .confirmationDialog(action.confirm ?? "", isPresented: $asking, titleVisibility: .visible) {
+        .accessibilityIdentifier(identifier ?? "plugin-ui-action-\(action.id)")
+        .accessibleConfirmationDialog(action.confirm ?? "", isPresented: $asking, titleVisibility: .visible, hasCancel: true) {
             Button(role: destructive ? .destructive : nil) { run() } label: { Text(title.isEmpty ? String(localized: "OK [Interactive Assistant View Card fac2a6]") : title).lineLimit(1) }
                 .accessibilityIdentifier("plugin-ui-confirm")
             Button("Cancel", role: .cancel) {}
@@ -612,6 +624,7 @@ struct ExtensionActionButton<Content: View>: View {
     }
 
     private func run() {
+        if action.push != nil { onPush?() }
         let execute = model.prepared(action, with: values, displayed: displayed)
         if model.managesConfirmation && displayed == nil { Keyboard.dismiss() }
         Task {

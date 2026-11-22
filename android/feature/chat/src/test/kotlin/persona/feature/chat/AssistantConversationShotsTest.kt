@@ -46,7 +46,7 @@ class AssistantConversationShotsTest {
         Item("compact", 1, ts = at(1), role = "system", kind = "notice", text = "Context compacted"),
         Item("background", 2, ts = at(2), role = "user", kind = "text", text = "Inspect background work",
             source = MessageSource("supervision", title = "Background check")),
-        Item("quiet-answer", 3, ts = at(3), role = "assistant", kind = "text", text = "No decision needed"),
+        Item("quiet-answer", 3, ts = at(3), role = "assistant", kind = "text", text = "No decision needed", narration = true),
         Item("question", 4, ts = at(4), role = "user", kind = "text", text = "Simplify the Assistant conversation"),
         Item("read", 5, ts = at(5), role = "assistant", kind = "tool_use", toolUseId = "read", toolName = "Read",
             toolInput = buildJsonObject { put("file_path", "/sample/chat.kt") }),
@@ -91,9 +91,9 @@ class AssistantConversationShotsTest {
         var simplified by mutableStateOf(false)
         var dark by mutableStateOf(false)
         var expanded by mutableStateOf(emptySet<String>())
-        // what a tap on the dispatched line opens over the conversation (#3700)
+        // a tap on the hand-off card opens that Agent's page (#5110)
         val sheet = mutableStateOf<TaskSheet?>(null)
-        var dispatchedLabel = ""
+        var opened: SessionKey? = null
         var checkedLabel = ""
         rule.mainClock.autoAdvance = false
         try {
@@ -103,14 +103,18 @@ class AssistantConversationShotsTest {
                     // Glass draws Persona's work line as the Agent chat's, as iOS does (#4339 C13)
                     checkedLabel = if (style == AppStyle.Glass) context.resources.getString(R.string.chat_work_tools, 2)
                         else context.resources.getQuantityString(R.plurals.chat_assistant_checked, 2, 2)
-                    dispatchedLabel = androidx.compose.ui.res.stringResource(R.string.chat_assistant_dispatched_one, "Tidy the conversation")
                     val loader = remember { ImageLoader.Builder(context).build() }
                     DisposableEffect(loader) { onDispose { loader.shutdown() } }
                     val todos by store.todos.collectAsState()
-                    val host = AssistantTaskHost(store, "main", listOf(Session("computer", "agent", state = "working", activity = "Verifying layout")),
-                        { it }, {}, { throw it }, {}, sheet = sheet)
+                    val host = AssistantTaskHost(store, "main", listOf(Session("computer", "agent", state = "working", activity = "Verifying layout",
+                        activityAt = "2026-11-15T00:20:00Z")),
+                        { it }, { opened = it }, { throw it }, {}, sheet = sheet)
                     val original = ChatTimeline().lines(transcript, false, expanded).lines
-                    val presentation = AssistantConversation.project(original, transcript)
+                    // Match rememberChatPageLines with the default background-round switch off: Glass keeps quiet
+                    // supervision narration as one inline fold; Brief and Board move it into the background record.
+                    val inline = style == AppStyle.Glass
+                    val presentation = AssistantConversation.project(original, transcript,
+                        BackgroundFolding(expanded, rounds = false), inline = inline)
                     val lines = if (simplified) AssistantTaskCards.lines(presentation.foreground, feed, mapOf(plan.id to plan), todos)
                         else AssistantLines.lines(original, feed)
                     CompositionLocalProvider(LocalAssistantTaskHost provides host) {
@@ -145,10 +149,12 @@ class AssistantConversationShotsTest {
                 rule.onNodeWithText(checkedLabel).assertIsDisplayed()
                 rule.onNodeWithText("layout", substring = true).assertDoesNotExist()
                 rule.onAllNodesWithTag("assistant-dispatch-hint").assertCountEquals(1)
-                // the line names the one dispatched task and opens that task's detail, not the In progress tray
-                rule.onNodeWithText(dispatchedLabel).assertIsDisplayed()
-                rule.onNodeWithTag("assistant-dispatch-hint").performClick()
-                rule.runOnIdle { assertEquals(TaskSheet.Task("task"), sheet.value); sheet.value = null }
+                rule.onAllNodesWithTag("handoff-card").assertCountEquals(1)
+                // the card names the Agent and opens that Agent's page, not the task sheet
+                rule.onNodeWithText("Layout agent").assertIsDisplayed()
+                rule.onNodeWithText("Dispatched:", substring = true).assertDoesNotExist()
+                rule.onNodeWithTag("handoff-card").performClick()
+                rule.runOnIdle { assertEquals(SessionKey("computer", "agent"), opened); opened = null; assertNull(sheet.value) }
                 colors += capture(style, appearance, "after", language)
                 rule.onNodeWithText(checkedLabel).performClick(); settle()
                 rule.onNodeWithText("layout", substring = true).assertExists()
@@ -187,7 +193,7 @@ class AssistantConversationShotsTest {
                 val loader = remember { ImageLoader.Builder(context).build() }
                 DisposableEffect(loader) { onDispose { loader.shutdown() } }
                 Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) {
-                    AssistantBackgroundRecords(AssistantLines.lines(emptyList(), feed), session, loader,
+                    AssistantBackgroundRecords(AssistantLines.lines(emptyList(), AssistantTaskCards.backgroundFeed(feed)), session, loader,
                         onToggle = {}, onFold = {}, folding = emptySet(), foldErrors = emptyMap(), onFullText = {}, onDismiss = {})
                 }
             }
@@ -198,8 +204,8 @@ class AssistantConversationShotsTest {
                 style = appearance; dark = night
                 Snapshot.sendApplyNotifications()
                 rule.mainClock.advanceTimeBy(500)
-                rule.onNodeWithText("receipt-feed", substring = true).assertExists()
-                rule.onNodeWithText("Verification passed. Evidence remains available.", substring = true).assertExists()
+                rule.onNodeWithText("receipt-feed", substring = true).assertDoesNotExist()
+                rule.onNodeWithText("Verification passed. Evidence remains available.", substring = true).assertDoesNotExist()
                 rule.onNodeWithTag("assistant-dispatch-hint").assertDoesNotExist()
                 rule.onNodeWithText("Assistant layout", substring = false).assertDoesNotExist()
                 val bitmap = rule.runOnIdle { captureWindows() }

@@ -60,7 +60,7 @@ func (h *orcaHost) onTerminal(ctx context.Context, t orcart.Terminal, write bool
 var errNotInFront = errors.New("no agent is in front in the pane")
 
 // front makes sure an agent is in front in the pane before text goes in, and returns its terminal: our own process
-// scan finds a claude or codex in front with this pane key (not suspended, not in the background, not inside a nested
+// scan finds a supported agent in front with this pane key (not suspended, not in the background, not inside a nested
 // host). Anything else — including not being able to tell — refuses with nothing typed. Orca's terminal.agentStatus
 // is asked too, for a permission dialog (prompt: the text is a prompt, which the dialog would take as its answer); its
 // isRunningAgent is not required on macOS and Linux: Orca says false while Claude Code has background tasks, though
@@ -288,12 +288,25 @@ func (h *orcaHost) RenameSlot(ctx context.Context, slot, name string) error {
 // Close is terminal.close: Orca closes the pane (its tab when it was the only one). A terminal already gone counts as
 // closed.
 func (h *orcaHost) Close(ctx context.Context, pane host.PaneRef, _, _ string) error {
+	return h.guardedClose(ctx, pane, nil)
+}
+
+// guardedClose checks a kept start's local state after terminal lookup, immediately before each close attempt.
+// onTerminal may refresh a stale handle, so the check belongs in its callback. Ordinary Close has no guard.
+func (h *orcaHost) guardedClose(ctx context.Context, pane host.PaneRef, beforeClose func() error) error {
 	h.mu.Lock()
 	delete(h.launches, pane.ID)
 	h.mu.Unlock()
 	t, err := h.terminal(ctx, pane.ID, false)
 	if err == nil {
-		err = h.onTerminal(ctx, t, true, func(tg orcart.Target) error { return h.c.Close(ctx, tg) })
+		err = h.onTerminal(ctx, t, true, func(tg orcart.Target) error {
+			if beforeClose != nil {
+				if err := beforeClose(); err != nil {
+					return err
+				}
+			}
+			return h.c.Close(ctx, tg)
+		})
 	}
 	if err == nil {
 		h.mu.Lock()

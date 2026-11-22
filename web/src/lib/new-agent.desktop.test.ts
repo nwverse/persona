@@ -37,6 +37,17 @@ describe("desktop creation and recovery", () => {
     expect(JSON.parse(fetcher.mock.calls[0][1].body)).toMatchObject({ launcher, async: false });
   });
 
+  it.each(["claude-desktop", "codex-app"])("retains supported start choices and handoff state for %s", async (launcher) => {
+    const fetcher = vi.fn().mockResolvedValueOnce(response({ session: { ...session, machine_id: "desktop" } })).mockResolvedValueOnce(response({}));
+    vi.stubGlobal("fetch", fetcher);
+    const id = launchAgent({ ...input, launcher, model: "selected-model", effort: "high", permissionMode: "plan", nameHint: "Review project" });
+    await advanceDelivery(0);
+    expect(JSON.parse(fetcher.mock.calls[0][1].body)).toMatchObject({ launcher, async: false, model: "selected-model", effort: "high", permission_mode: "plan", name_hint: "Review project" });
+    expect(getState().launches[id]).toMatchObject({ phase: "ready", desktopSetupIncomplete: false });
+    expect(getState().launches[id].handoffAt).toEqual(expect.any(Number));
+    expect(fetcher.mock.calls[1][0]).toBe("/api/v1/sessions/desktop/native-session/messages");
+  });
+
   it("preserves an explicit native project on Codex's prompt creation", async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(response({ session: { ...session, machine_id: "desktop", agent: "codex" } }));
     vi.stubGlobal("fetch", fetcher);
@@ -57,17 +68,19 @@ describe("desktop creation and recovery", () => {
 
   it.each(["none", "unknown"])("retains a created session when first-message delivery is %s and never creates again", async (delivery) => {
     const fetcher = vi.fn().mockResolvedValueOnce(response({ code: "desktop_start_incomplete", error: "Desktop import did not complete", delivered: "unknown", created: true, session_id: session.session_id, session, first_message_delivered: delivery }, 409))
-      .mockResolvedValueOnce(response({}));
+      .mockResolvedValueOnce(response({ session: { ...session, machine_id: "desktop" } })).mockResolvedValueOnce(response({}));
     vi.stubGlobal("fetch", fetcher);
-    const id = launchAgent(input);
+    const id = launchAgent({ ...input, model: "selected-model", effort: "high", permissionMode: "plan" });
     await advanceDelivery(0);
     const recovered = { ...session, machine_id: "desktop" };
     expect(getState().launches[id]).toMatchObject({ phase: "failed", session: recovered, uncertain: delivery === "unknown" });
     expect(upsertSession).toHaveBeenCalledWith(recovered);
     expect(fetcher).toHaveBeenCalledTimes(1);
     await deliverLaunch(id);
-    expect(fetcher.mock.calls.filter((c) => c[0] === "/api/v1/sessions")).toHaveLength(1);
-    expect(fetcher.mock.calls[1][0]).toBe("/api/v1/sessions/desktop/native-session/messages");
+    const starts = fetcher.mock.calls.filter((c) => c[0] === "/api/v1/sessions");
+    expect(starts).toHaveLength(2);
+    expect(JSON.parse(starts[1][1].body)).toMatchObject({ resume_session_id: session.session_id, prompt: "", async: false, model: "selected-model", effort: "high", permission_mode: "plan" });
+    expect(fetcher.mock.calls[2][0]).toBe("/api/v1/sessions/desktop/native-session/messages");
     expect(getState().launches[id].phase).toBe("ready");
   });
 
@@ -76,13 +89,13 @@ describe("desktop creation and recovery", () => {
     const fetcher = vi.fn().mockResolvedValueOnce(response({ code: "desktop_start_incomplete", error: "Import failed", delivered: "unknown", created: true, session_id: session.session_id, session, first_message_delivered: "none" }, 409))
       .mockImplementationOnce(() => new Promise((resolve) => { finishSetup = resolve; }));
     vi.stubGlobal("fetch", fetcher);
-    const id = launchAgent({ ...input, text: "" });
+    const id = launchAgent({ ...input, text: "", model: "selected-model", effort: "high", permissionMode: "plan", desktopProjectId: "claude-project:C:\\Projects\\Sample" });
     await advanceDelivery(0);
     expect(getState().launches[id]).toMatchObject({ phase: "failed", desktopSetupIncomplete: true });
     const recovery = deliverLaunch(id);
     await advanceDelivery(0);
     expect(getState().launches[id].phase).toBe("creating");
-    expect(JSON.parse(fetcher.mock.calls[1][1].body)).toMatchObject({ launcher: "claude-desktop", resume_session_id: session.session_id, prompt: "", async: false });
+    expect(JSON.parse(fetcher.mock.calls[1][1].body)).toMatchObject({ launcher: "claude-desktop", model: "selected-model", effort: "high", permission_mode: "plan", desktop_project_id: "claude-project:C:\\Projects\\Sample", resume_session_id: session.session_id, prompt: "", async: false });
     expect(fetcher.mock.calls[1][0]).toBe("/api/v1/sessions");
     finishSetup(response({ session: { ...session, machine_id: "desktop" } }));
     await recovery;

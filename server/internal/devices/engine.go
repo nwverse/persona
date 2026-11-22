@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -129,7 +130,7 @@ var errUnknownEngine = errors.New("unknown engine")
 // setEngine stores the machine's single engine (PUT with {"engine"}): the set it stands for.
 func (d *Devices) setEngine(ctx context.Context, machine, engine string) error {
 	if _, ok := proto.EngineNames[engine]; !ok {
-		return fmt.Errorf("%w %q (herdr, herdr-core, herdr-both, orca, paseo, cindy)", errUnknownEngine, engine)
+		return fmt.Errorf("%w %q (herdr, herdr-core, herdr-both, orca, tern, rex, paseo, cindy, t3code)", errUnknownEngine, engine)
 	}
 	return d.setEngineChoice(ctx, machine, proto.EngineHostsOf(engine))
 }
@@ -241,5 +242,9 @@ func (d *Devices) putEngine(w http.ResponseWriter, r *http.Request, m *Machine) 
 		cancel()
 	}
 	d.reportNow()
-	writeJSON(w, d.decorate(m, m.snapshot()))
+	// The app takes this machine as it is: the notes on its engines in the reader's language, as in the hub's machine
+	// list (hub locale_deploy.go).
+	s := d.decorate(m, m.snapshot())
+	s.Engines = i18n.EngineNotes(i18n.FromRequest(r), s.Engines)
+	writeJSON(w, s)
 }

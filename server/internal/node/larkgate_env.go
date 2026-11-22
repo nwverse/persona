@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/assistantskills"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -55,8 +54,8 @@ func (n *Node) assistantLarkEnvNamed(cwd, session string) (env []string, release
 		}
 	}
 	skills := filepath.Join(cwd, ".claude", "skills")
-	if err := assistantskills.Sync(skills, assistantskills.UserDir(), n.signedInConnectors(cwd), n.logger.Printf); err != nil {
-		n.logger.Printf("assistant: skills: %v", err)
+	if n.assistantDirectoryPrepared(cwd) {
+		n.syncRuntimeSkillDir(cwd, skills)
 	}
 	bin := n.assistantBin(cwd)
 	_ = os.MkdirAll(bin, 0o755)
@@ -92,6 +91,9 @@ func (n *Node) assistantLarkEnvNamed(cwd, session string) (env []string, release
 			}
 			for _, m := range gateAuthRef.FindAllStringSubmatch(g.Auth.Value, -1) {
 				held[m[1]] = true
+			}
+			if g.Relay && g.SocketEnv != "" {
+				held[g.SocketEnv] = true // the manager's machine's socket: the proxy relays there (#12904)
 			}
 			b, done, err := gp.openIn(g.Command, session, health) // the proxy holds a health process's writes to the phone
 			if err != nil {
@@ -131,6 +133,12 @@ func (n *Node) assistantLarkEnvNamed(cwd, session string) (env []string, release
 		}
 	}
 	n.writeLarkCLIWrapper(bin, cfg.CLI) // lark-cli, when hub.json has lark.cli (larkcligate.go)
+	// The profile goes in the environment too, which lark-cli reads as --profile: Claude Code runs each Bash command
+	// through the user's shell snapshot, which puts the login shell's PATH back, and that may find another lark-cli
+	// before the wrapper (#9123). The snapshot exports PATH alone; the gate refuses a command that sets this one.
+	if cfg.CLI != nil && cfg.CLI.Profile != "" {
+		env = append(env, larkProfileEnvName+"="+cfg.CLI.Profile)
+	}
 	name = func(id string) {
 		for _, b := range bases {
 			gp.nameAddr(b, id)

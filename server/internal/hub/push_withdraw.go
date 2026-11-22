@@ -12,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // Taking a card's push back once the card is over (#4349): answered on the computer, the web or the watch, withdrawn
@@ -68,15 +69,24 @@ func newWithdrawals() withdrawals {
 // sendCard pushes manager's card id (sendLocalizedQuiet) under cardCollapseID and notes which devices that understand
 // withdrawals it went to. only, when not nil, is the devices that can take it at all (an MCP form or link: those that
 // registered for one).
-func (p *Pusher) sendCard(manager string, build localized, id string, wants func(NotifyPrefs) bool, rule quietRule, only func(Device) bool) {
+func (p *Pusher) sendCard(manager string, policy pushPolicy, build localized, id string, wants func(NotifyPrefs) bool, rule quietRule, only func(Device) bool) string {
 	if p == nil {
-		return
+		return ""
+	}
+	policy.manager = manager
+	if policy.level != assistantwire.LevelP0 {
+		// Extract before applyPushGrading's mode check too: enabling push grading between checks must not hold a source-less card.
+		policy = pushPolicyWithSource(policy, build(i18n.Default))
+	}
+	if allow, reason := p.applyPushGrading(policy); !allow {
+		return reason
 	}
 	p.sendFromTo(manager, build, cardCollapseID(manager, id), wants, rule, only, func(d Device) {
 		if hasFeature(d, featureWithdraw) {
 			p.cardPushedTo(id, d.DeviceID)
 		}
 	})
+	return ""
 }
 
 // cardCollapseID is the apns-collapse-id of manager's card id: the card id for the assistant the hub starts (and a card

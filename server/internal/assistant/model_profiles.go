@@ -3,7 +3,6 @@ package assistant
 import (
 	"cmp"
 	"context"
-	"errors"
 	"maps"
 	"slices"
 	"strings"
@@ -51,7 +50,7 @@ type ModelProfile struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	// Purposes: a category's choice (its record in the model configuration) by category id; an empty binding is
-	// "follow the default". The main chat's runtime is not a profile's.
+	// "follow the default". The profile the main chat's new conversations start in is not a profile's.
 	Purposes map[string]ModelBinding `json:"purposes,omitempty"`
 	// Launchers: model fields of providers added in Persona, by provider name.
 	Launchers map[string]LauncherModels `json:"launchers,omitempty"`
@@ -93,23 +92,31 @@ type launcherField struct {
 
 func profileValue(v string) *string { return &v }
 
-// ModelTier is what an Agent started on a tier runs on: a launcher, and its model and effort ("" for its defaults).
-// Description says when to use it (Paseo's "When to use"): the assistant reads it to pick a tier, the New Agent
-// form shows it.
+// ModelTier is what an Agent started on a tier runs on: a launcher, and its model, effort, start speed and permission
+// mode ("" for its defaults). Description says when to use it (Paseo's "When to use"): the assistant reads it to pick
+// a tier, the New Agent form shows it.
 type ModelTier struct {
-	Launcher    string `json:"launcher"`
-	Model       string `json:"model,omitempty"`
-	Effort      string `json:"effort,omitempty"`
-	Description string `json:"description,omitempty"`
+	Launcher       string `json:"launcher"`
+	Model          string `json:"model,omitempty"`
+	Effort         string `json:"effort,omitempty"`
+	Speed          string `json:"speed,omitempty"`
+	PermissionMode string `json:"permission_mode,omitempty"`
+	Description    string `json:"description,omitempty"`
 }
 
-// runs is what the tier runs on, in a line: its launcher, then the model and effort it sets.
+// runs is what the tier runs on, in a line: its launcher, then the model, effort, speed and permission mode it sets.
 func (t ModelTier) runs() string {
 	parts := []string{t.Launcher}
 	for _, v := range []string{t.Model, t.Effort} {
 		if v != "" {
 			parts = append(parts, v)
 		}
+	}
+	if proto.FasterSpeed(t.Speed) {
+		parts = append(parts, t.Speed)
+	}
+	if t.PermissionMode != "" {
+		parts = append(parts, t.PermissionMode)
 	}
 	return strings.Join(parts, " · ")
 }
@@ -187,6 +194,17 @@ func (s *Service) readModelProfiles(ctx context.Context) (modelProfiles, bool, e
 		return ps, false, i18n.Err("assistant-models.err_no_database")
 	}
 	ok, err := st.Setting(ctx, modelProfilesKey, &ps)
+	// The profile the main chat's new conversations start in is never a model profile's (#4633): one stored holding
+	// it anyway is read without it, so it neither shows a change it cannot make nor fails checkModelProfile at a
+	// switch or an edit, and the next write stores it clean.
+	for _, p := range ps.Profiles {
+		for id, b := range p.Purposes {
+			if b.ConfigDir != "" {
+				b.ConfigDir = ""
+				p.Purposes[id] = b
+			}
+		}
+	}
 	return ps, ok, err
 }
 
@@ -202,6 +220,13 @@ func (s *Service) readModelProfileState(ctx context.Context) (modelProfileState,
 
 // putModelProfileSettings requires an atomic store: a failed write must leave every setting untouched.
 func (s *Service) putModelProfileSettings(ctx context.Context, values map[string]any) error {
+	for _, value := range values {
+		if r, ok := value.(modelRecord); ok {
+			if err := checkExternalPurpose(r.Binding); err != nil {
+				return err
+			}
+		}
+	}
 	st := s.store()
 	if st == nil {
 		return i18n.Err("assistant-models.err_no_database")
@@ -253,7 +278,7 @@ func (s *Service) captureModels(ctx context.Context) (map[string]ModelBinding, m
 			return nil, nil, nil, err
 		}
 		b := r.Binding
-		b.Runtime = ""
+		b.ConfigDir = ""
 		purposes[id] = b
 		effective, err := s.resolveModelRecord(ctx, id, &r)
 		if err != nil {
@@ -300,14 +325,20 @@ func (s *Service) tierModel(ctx context.Context, tier string) (ModelTier, error)
 		return ModelTier{}, err
 	}
 	if p == nil && active != "" {
-		return ModelTier{}, errors.New("the model profile in use (" + active + ") no longer exists: switch to another with model_profile_switch, or leave tier out")
+		return ModelTier{}, i18n.ErrEnglish("assistant-model_profiles.err_active_profile_missing", i18n.Args{"profile": i18n.Verbatim(active)})
 	}
 	if p == nil {
-		return ModelTier{}, errors.New("no model profile is in use: switch to one with model_profile_switch, or leave tier out")
+		return ModelTier{}, i18n.ErrEnglish("assistant-model_profiles.err_no_active_profile")
 	}
 	t, ok := p.Tiers[tier]
 	if !ok {
-		return ModelTier{}, errors.New("the model profile in use (" + cmp.Or(p.Name, p.ID) + ") has no tier " + strings.TrimSpace(tier) + "; its tiers: " + strings.Join(slices.Sorted(maps.Keys(p.Tiers)), ", "))
+		return ModelTier{}, i18n.ErrEnglish("assistant-model_profiles.err_tier_not_found", i18n.Args{
+			"profile": i18n.Verbatim(cmp.Or(p.Name, p.ID)), "tier": i18n.Verbatim(strings.TrimSpace(tier)),
+			"tiers": i18n.Verbatim(strings.Join(slices.Sorted(maps.Keys(p.Tiers)), ", ")),
+		})
+	}
+	if proto.IsExternalLauncher(t.Launcher) {
+		return ModelTier{}, i18n.Err("external-adapter.purpose_unsupported")
 	}
 	return t, nil
 }

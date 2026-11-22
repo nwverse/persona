@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyDraft, onDraftEvent, parseQuote, replaceNeedsConfirm, sendDraft, splitQuote, storedQuotes, withAppended, withQuote, withQuoteBlock, withUnsent } from "./drafts";
-import { browseTarget, byPrefix, chatFiles, displayTitle, mentionAt, nameMatches, otherSessions, relPath, replaceToken, sessionQuote, workspaceContext, workspaceMatches, workspaceTitle } from "./mentions";
+import { browseTarget, byPrefix, chatFiles, displayTitle, mentionAt, nameMatches, otherSessions, relPath, replaceToken, sessionDetail, sessionQuote, workspaceContext, workspaceMatches, workspaceTitle } from "./mentions";
 import { contextXML } from "./links";
 import type { Workspace } from "./workspace-board";
 import { keepAllBut, moved, movedTo, sameMessage } from "./queue";
@@ -172,11 +172,34 @@ describe("@ mentions", () => {
     expect(displayTitle({ title: "Claude Code", cwd: "/x/weather" })).toBe("weather");
   });
 
+  it("names a Windows computer's folder by its own separator (#9901)", () => {
+    const win = sess("w", { title: "", cwd: "C:\\Users\\me\\code\\app" });
+    expect(displayTitle(win)).toBe("app");
+    expect(sessionDetail(win)).toBe("Claude · app");
+    expect(displayTitle({ title: "Claude Code", cwd: "C:\\Users\\me\\code\\app\\" })).toBe("app");
+    expect(displayTitle({ title: "", cwd: "\\\\server\\share\\app" })).toBe("app");
+    expect(workspaceTitle({ title: "", cwd: "D:\\work\\notes" })).toBe("notes");
+    // elsewhere a backslash is part of a name; no folder, or the root, is still untitled
+    expect(displayTitle({ title: "", cwd: "/code/a\\b" })).toBe("a\\b");
+    expect(displayTitle({ title: "", cwd: "/" })).toBe(displayTitle({ title: "", cwd: "" }));
+    expect(sessionDetail(sess("r", { cwd: "/" }))).toBe("Claude");
+  });
+
   it("quotes a session with its folder and last words", () => {
     const q = sessionQuote(sess("a", { title: "修登录", cwd: "/code/app", last_text: "  改好了  " }));
     expect(q.url).toBe("persona://session/m/a");
     expect(q.title).toBe("修登录");
     expect(q.text).toBe("另一个会话：修登录（Claude）\n目录：/code/app\n它最近说：改好了");
+  });
+
+  it("keeps a TRAE CLI session's custom label in the mention menu and quote", () => {
+    for (const agent of ["traex", "traecli", "trae-cli"]) {
+      const s = sess("a", { title: "Import", cwd: "/code/app", agent, agent_label: "Team relay" });
+      expect(sessionDetail(s)).toBe("Team relay · app");
+      expect(sessionQuote(s).text).toContain("Import（Team relay）");
+      expect(sessionDetail({ ...s, agent_label: "TRAEX" })).toBe("TRAE CLI · app");
+      expect(sessionDetail({ ...s, agent_label: undefined })).toBe("TRAE CLI · app");
+    }
   });
 });
 

@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 // The To-dos page's third grouping, 常驻 (#4352): offered only with a leader in the hub's direction tree, one section per
-// direction in the tree's order (empty ones skipped, the secretary's titled 书记官), the page's own rows, the Completed
-// fold kept, closed to-dos only there; the rows keep their menu; a saved choice waits for the first read (loading, not
-// the status grouping) and falls back to status with no leaders or on a hub without the tree.
+// direction in the tree's order (empty ones skipped, the secretary's titled 书记官), the page's own open rows, the to-dos
+// the tree does not list as open (closed in the last day, inactive) under their status sections after the directions, as
+// on Android, and the Completed fold kept for the Done section's; the rows keep their menu; a saved choice waits for the
+// first read (loading, not the status grouping) and falls back to status with no leaders or on a hub without the tree.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -104,6 +105,43 @@ describe("To-dos grouped by 常驻", () => {
     expect(host.querySelector<HTMLInputElement>("[data-testid=todos-detail-column] input[type=text]")?.value).toBe("Infra");
   });
 
+  it("keeps cancelled out of Completed and shows its own fold and reason", async () => {
+    localStorage.setItem("persona.todos.grouping", "direction");
+    seed({ todos: [...TODOS, todo("t-cancelled", "Cancelled work", { done_at: at, done_by: "review", cancelled_at: at, cancelled_reason: "Not needed" })] });
+    await render();
+    expect(host.textContent).toContain(t("todos.done_section", { count: 1 }));
+    expect(host.textContent).toContain(t("todos.cancelled_section", { count: 1 }));
+    expect(host.textContent).not.toContain(t("todos.done_section", { count: 2 }));
+    expect(sections().some((s) => s.textContent?.includes("Cancelled work"))).toBe(false);
+    const fold = [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === t("todos.cancelled_section", { count: 1 }));
+    await act(async () => fold!.click());
+    expect(host.textContent).toContain("Cancelled work");
+    expect(host.textContent).toContain("Not needed");
+  });
+
+  it("gives cancelled its own status section instead of mixing it into Just finished", async () => {
+    seed({ todos: [...TODOS, todo("t-cancelled", "Cancelled work", { done_at: at, done_by: "review", cancelled_at: at })] });
+    await render();
+    const cancelled = host.querySelector('[data-section="cancelled"]');
+    expect(cancelled).toBeTruthy();
+    await act(async () => cancelled!.querySelector("button")!.click());
+    expect(cancelled?.textContent).toContain("Cancelled work");
+    expect(host.querySelector('[data-section="done"]')?.textContent).not.toContain("Cancelled work");
+  });
+
+  it("marks the rows the sidebar's badge counts, and counts them on a folded direction's title (#11838)", async () => {
+    localStorage.setItem("persona.todos.grouping", "direction");
+    await render();
+    const product = sections()[1];
+    // the owner's own to-dos with no Agent on them: each counted by the badge, each marked
+    expect(product.querySelectorAll("[data-testid=todo-owner-mark]")).toHaveLength(2);
+    const title = product.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+    expect(title.querySelector("[data-testid=todo-owner-count]")).toBeNull();
+    await act(async () => title.click());
+    expect(product.querySelector("[data-testid=todo-owner-mark]")).toBeNull();
+    expect(title.querySelector("[data-testid=todo-owner-count]")?.textContent).toBe(t("todos.owner_mark_count", { count: 2 }));
+  });
+
   it("opens a row's menu on a right click, as the other groupings do", async () => {
     localStorage.setItem("persona.todos.grouping", "direction");
     await render();
@@ -150,6 +188,74 @@ describe("To-dos grouped by 常驻", () => {
     await render();
     expect(host.textContent).toContain(t("todos.empty_title"));
     expect(host.querySelector('[data-testid="todos-direction-unlisted"]')).toBeNull();
+  });
+
+  it("shows a status-only Shelved section instead of the empty state", async () => {
+    localStorage.setItem("persona.todos.grouping", "direction");
+    const daysAgo = new Date(Date.now() - 48 * 3_600_000).toISOString();
+    seed({ todos: [todo("t-quiet", "Quiet", { origin: "conv", created_at: daysAgo, updated_at: daysAgo })] });
+    await render();
+    expect(host.querySelector<HTMLElement>("[data-testid=todo-section][data-section=shelved]")?.getAttribute("data-todos")).toBe("1");
+    expect(host.textContent).not.toContain(t("todos.empty_title"));
+    expect(host.querySelector('[data-testid="todos-direction-unlisted"]')).toBeNull();
+  });
+
+  it("labels a fresh closed concern Just finished, including a mixed Just finished section", async () => {
+    await initI18n("en");
+    const hourAgo = new Date(Date.now() - 3_600_000).toISOString();
+    const closed = todo("t-closed-concern", "Reported concern", { kind: "concern", done_at: hourAgo, done_by: "reported", updated_at: hourAgo });
+    const delivered = todo("t-live-delivery", "Live delivery", { delivery: { state: "live", at: hourAgo }, updated_at: hourAgo });
+    const header = () => host.querySelector<HTMLElement>("[data-testid=todo-section][data-section=just_done] > button");
+    seed({ todos: [closed] });
+    await render();
+    expect(header()?.textContent).toContain("Just finished");
+    expect(header()?.textContent).not.toContain("Delivered · awaiting review");
+
+    // A mixed section keeps the ordinary name too; each related row still carries its own triage rule.
+    await act(async () => root.unmount());
+    seed({ todos: [closed, delivered] });
+    root = createRoot(host);
+    await render();
+    expect(header()?.textContent).toContain("Just finished");
+    expect(header()?.textContent).not.toContain("Delivered · awaiting review");
+  });
+
+  it("labels a wholly unaccepted live-delivery section Delivered awaiting review", async () => {
+    await initI18n("en");
+    const hourAgo = new Date(Date.now() - 3_600_000).toISOString();
+    const delivered = todo("t-live-delivery", "Live delivery", { delivery: { state: "live", at: hourAgo }, updated_at: hourAgo });
+    seed({ todos: [delivered] });
+    await render();
+    const header = host.querySelector<HTMLElement>("[data-testid=todo-section][data-section=just_done] > button");
+    expect(header?.textContent).toContain("Delivered · awaiting review");
+    expect(header?.textContent).not.toContain("Just finished");
+  });
+
+  it("puts closed work immediately in Done and an inactive one in its status section, counted as the header says", async () => {
+    localStorage.setItem("persona.todos.grouping", "direction");
+    const hourAgo = new Date(Date.now() - 3_600_000).toISOString();
+    const daysAgo = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    // closed an hour ago (Done immediately, not open), and a handed-out task with nothing for three days (Shelved): the
+    // hub's tree lists neither, as neither counts as open
+    const fresh = todo("t-fresh", "Fresh", { done_at: hourAgo, updated_at: hourAgo });
+    const quiet = todo("t-quiet", "Quiet", { origin: "conv", created_at: daysAgo, updated_at: daysAgo });
+    const header = t("todos.summary_triage", { open: 4, parked: 0, shelved: 1, done: 2, cancelled: 0 });
+    for (const listed of [false, true]) {
+      // and a tree whose push has not caught up yet still lists the one just ticked
+      tree.current = listed ? { directions: TREE.directions.map((d) => (d.id === "lead-b" ? { ...d, tasks: [...(d.tasks ?? []), { id: "t-fresh", title: "Fresh", state: "working" }] } : d)) } : TREE;
+      seed({ todos: [...TODOS, fresh, quiet] });
+      await act(async () => root.unmount());
+      root = createRoot(host);
+      await render();
+      expect(sections().some((s) => s.textContent?.includes("Fresh"))).toBe(false);
+      expect(host.querySelector("[data-testid=todo-section][data-section=just_done]")).toBeNull();
+      const shelved = host.querySelector<HTMLElement>("[data-testid=todo-section][data-section=shelved]");
+      expect(shelved?.getAttribute("data-todos")).toBe("1");
+      // neither is "an open to-do no direction lists"
+      expect(host.querySelector('[data-testid="todos-direction-unlisted"]')).toBeNull();
+      expect(host.querySelector("[data-testid=todos-summary]")?.textContent).toBe(header);
+      expect(host.textContent).toContain(t("todos.done_section", { count: 2 }));
+    }
   });
 
   it("narrows each section by the due-date filter (#3740) and keeps the tree's order under any sort", async () => {

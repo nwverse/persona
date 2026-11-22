@@ -6,9 +6,10 @@
 // NEW_CONVERSATION (launcher, model and effort), sent with POST /assistant/conversations.
 import { useSyncExternalStore } from "react";
 import { t } from "../i18n";
-import { managedProvider } from "./compatibility";
+import { explicitLauncherModel, managedProvider } from "./compatibility";
 import { shellPath } from "./format";
 import { modelName } from "./launcher-models";
+import { onManagerChoice } from "./manager-choice";
 
 export const NEW_CONVERSATION = "new";
 
@@ -22,20 +23,20 @@ export interface AssistantLauncher {
   agent_type?: string;
   base_url?: string;
   assistant?: boolean;
+  supervision_policy?: boolean;
   source?: string;
 }
 
-/** Runs Claude Code, Codex, or an assistant-capable runtime (such as Antigravity): what the assistant can use, as the hub's
- *  `?purpose=assistant` list (assistant/launcher_mainchat.go). A compatible CLI is left out; so are a runtime's launcher that
- *  doesn't say it runs the assistant (a Paseo provider is no shell command) and a managed Codex launcher (`personad launch`
- *  runs codex past the app-server the assistant needs). */
+/** Mirrors the hub's assistant catalog: native Claude Code/Codex launchers,
+ *  managed variants of those engines, and runtimes advertising assistant support.
+ *  Other CLI adapters still need the runtime contract before being offered. */
 export function runsAssistant(l: AssistantLauncher): boolean {
   if (l.assistant) return true;
   if (l.base_url === "(traex)") return false;
   const machine = !l.source || l.source === "zshrc" || l.source === "path" || l.source === "builtin";
   if (!machine && !managedProvider(l.source)) return false;
-  if (managedProvider(l.source) && l.agent === "codex") return false;
-  return !l.agent || l.agent === "claude" || l.agent === "codex" || l.agent === "agy";
+  const agent = l.agent_type || l.agent;
+  return !agent || agent === "claude" || agent === "codex";
 }
 
 /** Whether the assistant's launcher list offers name. A list not loaded yet (null) offers everything: nothing is dropped
@@ -57,7 +58,8 @@ export function effectiveLauncher(o: { isNew?: boolean; isMain?: boolean; picked
 
 /** The model a launcher names, shortened (Fmt.model): the last path part, with raw GPT ids made readable. */
 export function shortModel(model?: string): string {
-  return modelName({ id: model ? model.split("/").pop() ?? model : "" });
+  const explicit = explicitLauncherModel(model);
+  return modelName({ id: explicit ? explicit.split("/").pop() ?? explicit : "" });
 }
 
 /** What "Copy info" copies (AssistantCopyText.info): enough for another agent, or a terminal, to find the conversation. */
@@ -128,12 +130,32 @@ export function usePickedEffort(key: string): string | undefined {
   return useSyncExternalStore(subscribe, () => efforts.get(key));
 }
 
-/** Drop key's whole pick, launcher, model and effort together: none of it outlives the others (the new-conversation
- *  page's would go with the start, and a hub that keeps picks would keep what nobody chose). */
+/** Fast picked for the one new-conversation draft; false: Codex's own default. Independent of effort. */
+let startFast = false;
+
+export function pickedFast(): boolean {
+  return startFast;
+}
+
+export function pickFast(on: boolean) {
+  startFast = on;
+  listeners.forEach((l) => l());
+}
+
+export function usePickedFast(): boolean {
+  return useSyncExternalStore(subscribe, () => startFast);
+}
+
+// A speed was validated against one manager's catalog and start capability; never carry it to another, even with no pill mounted.
+onManagerChoice(() => pickFast(false));
+
+/** Drop key's whole pick, launcher, model, effort and speed together: none of it outlives the others (the
+ *  new-conversation page's would go with the start, and a hub that keeps picks would keep what nobody chose). */
 export function dropPick(key: string) {
   picks.delete(key);
   models.delete(key);
   efforts.delete(key);
+  if (key === NEW_CONVERSATION) startFast = false;
   listeners.forEach((l) => l());
 }
 

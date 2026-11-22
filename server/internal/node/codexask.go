@@ -73,6 +73,7 @@ type codexCards struct {
 	held      map[string]time.Time      // card id → answered from the phone: not listed again until then
 	heldIn    map[string]string         // card id → the session of a held card
 	dismissed map[string]dismissedCard  // card id → handed back to the computer from the phone
+	approvals map[string]bool           // session id → last screen scan saw a Codex approval dialog
 	pagerAt   map[string]time.Time      // pane → when its transcript pager was last closed to show a dialog
 	joins     map[string]codexJoinState // session id → joining it on its app-server (codex_daemon.go)
 }
@@ -93,22 +94,31 @@ func (n *Node) watchCodexCards(ctx context.Context) {
 }
 
 func (n *Node) syncCodexCards(ctx context.Context) {
-	cards := n.codexCardsNow(ctx, "")
+	var cards []proto.Interaction
+	for _, c := range n.codexCardsNow(ctx, "") {
+		cards = append(cards, c.ix)
+	}
+	// The questions of Claude sessions outside Persona's terminals ride along: the hub keeps them as it keeps these
+	// (claudeoutside_ask.go).
+	cards = append(cards, n.outsideAskCards()...)
 	now := time.Now()
 	n.cx.mu.Lock()
 	var list []proto.Interaction
 	var ids []string
-	for _, c := range cards {
-		if d, gone := n.cx.dismissed[c.ix.ID]; gone {
+	for _, ix := range cards {
+		if n.sessionBlocked(ix.SessionID, ix.Cwd) {
+			continue // a blocked Agent folder (agentdirs.go): the card stays on the computer's own screen
+		}
+		if d, gone := n.cx.dismissed[ix.ID]; gone {
 			d.seen = now // still asked: still the computer's
-			n.cx.dismissed[c.ix.ID] = d
+			n.cx.dismissed[ix.ID] = d
 			continue
 		}
-		if now.Before(n.cx.held[c.ix.ID]) {
+		if now.Before(n.cx.held[ix.ID]) {
 			continue
 		}
-		list = append(list, c.ix)
-		ids = append(ids, c.ix.ID)
+		list = append(list, ix)
+		ids = append(ids, ix.ID)
 	}
 	sort.Strings(ids)
 	key := strings.Join(ids, ",")
@@ -165,12 +175,23 @@ func (n *Node) codexCardsNow(ctx context.Context, only string) []codexCard {
 			out = append(out, codexCard{ix: askCard(id, a, title, ask), pane: a.pane, ask: &ask})
 		}
 		if waiting || a.joined || a.status != proto.StatusBlocked {
+			// Only clear the cached approval bit without reading the screen when the host is no longer blocked or
+			// the thread is joined on its app-server; an open rollout question alone must not drop a visible TUI approval.
+			if only == "" && (a.joined || a.status != proto.StatusBlocked) {
+				n.cx.setApproval(id, false)
+			}
 			continue
 		}
 		d, read := n.codexApprovalOn(ctx, a.pane)
 		if d != nil {
+			if only == "" {
+				n.cx.setApproval(id, true)
+			}
 			out = append(out, codexCard{ix: approvalCard(id, a, title, d), pane: a.pane, approval: d})
 		} else if read {
+			if only == "" {
+				n.cx.setApproval(id, false)
+			}
 			n.cx.approvalGone(id)
 		}
 	}
@@ -276,6 +297,35 @@ func (c *codexCards) asks(id, path string) []transcript.CodexAsk {
 	}
 	t.read()
 	return t.asks.Open()
+}
+
+// hasBlockingAsk reports whether the session's rollout currently holds an open non-async question.
+func (c *codexCards) hasBlockingAsk(id, path string) bool {
+	for _, ask := range c.asks(id, path) {
+		if !ask.Async {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *codexCards) setApproval(id string, on bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !on {
+		delete(c.approvals, id)
+		return
+	}
+	if c.approvals == nil {
+		c.approvals = map[string]bool{}
+	}
+	c.approvals[id] = true
+}
+
+func (c *codexCards) hasApproval(id string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.approvals[id]
 }
 
 func (t *codexTail) read() {
@@ -456,6 +506,9 @@ func (n *Node) codexApprovalOn(ctx context.Context, pane string) (d *screen.Code
 // codexAnswer answers a card from the phone: only into the question or approval it was made from, as it is on screen
 // and in the rollout now. A refusal (rpc error with a code) typed nothing.
 func (n *Node) codexAnswer(ctx context.Context, session, id string, r proto.Resolution) error {
+	if strings.HasPrefix(id, outsideAskPrefix) {
+		return n.outsideAnswer(ctx, session, id, r) // a Claude session's question outside Persona's terminals
+	}
 	if r.Cancel {
 		return fmt.Errorf("question cancellation is unavailable for terminal-only questions")
 	}
@@ -559,6 +612,27 @@ func (n *Node) codexType(ctx context.Context, pane, text string, shows func(draf
 		}
 	}
 	return uncertain(n.sendKeys(ctx, pane, "enter"))
+}
+
+// codexSubmitted confirms that a terminal send left the composer, not just that the host accepted Enter.
+// A remaining draft or another view is never cleared, submitted again, or treated as proof of delivery.
+func (n *Node) codexSubmitted(ctx context.Context, pane string) error {
+	ctx, cancel := context.WithTimeout(ctx, codexConfirm)
+	defer cancel()
+	for {
+		select {
+		case <-ctx.Done():
+			return uncertain(fmt.Errorf("Codex submission was not confirmed; check the computer before sending again: %w", ctx.Err()))
+		case <-time.After(codexStep):
+		}
+		s, err := n.codexScreen(ctx, pane)
+		if err != nil {
+			return uncertain(err)
+		}
+		if s.View == screen.CodexComposer && s.Draft == "" {
+			return nil
+		}
+	}
 }
 
 // pastedRE is how Codex shows a long paste in its box.

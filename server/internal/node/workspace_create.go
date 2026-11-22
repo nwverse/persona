@@ -63,7 +63,7 @@ func (n *Node) createWorkspaceProjectWithBindings(ctx context.Context, path, nam
 	}
 	if createDirectory {
 		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-			parent, err := n.resolveWorkspace(filepath.Dir(path))
+			parent, err := n.resolveWorkspace(filepath.Dir(path), false)
 			if err != nil {
 				return empty, fmt.Errorf("project parent: %w", err)
 			}
@@ -75,7 +75,7 @@ func (n *Node) createWorkspaceProjectWithBindings(ctx context.Context, path, nam
 			return empty, err
 		}
 	}
-	w, err := n.resolveWorkspace(path)
+	w, err := n.resolveWorkspace(path, false)
 	if err != nil {
 		return empty, err
 	}

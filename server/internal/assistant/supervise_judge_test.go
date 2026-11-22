@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -46,7 +47,7 @@ func TestSupervisedDoneAfterTheUsersOwnCheck(t *testing.T) {
 	waitFor(t, "the message", func() bool { return len(f.notices()) == 1 })
 
 	n := entryLine(f.notices()[0])
-	if !strings.Contains(n, "hub 判断做完了，等你验收（已合并并部署）") || strings.Contains(n, "没做完") || strings.Contains(n, "没判断出来") {
+	if !strings.Contains(n, "待逐项复核，不代表完成（已合并并部署）") || strings.Contains(n, "没做完") || strings.Contains(n, "没判断出来") {
 		t.Fatalf("message:\n%s", n)
 	}
 	if v := todoNow(s, todo.ID).Supervision; v.State != reviewPending {
@@ -62,8 +63,8 @@ func TestSupervisedDoneAfterTheUsersOwnCheck(t *testing.T) {
 	}
 }
 
-// A judgment that fails is asked once more; failing again (or unsure), the supervisor hears the hub could not tell,
-// never that the agent stopped short.
+// A transient judgment failure is asked again inline. A valid unsure verdict still tells the supervisor the hub could
+// not tell, never that the agent stopped short.
 func TestSupervisedUnjudgedIsNotStoppedShort(t *testing.T) {
 	fastJudgeRetry(t)
 	s, f, todo := newSupervisedService(t)
@@ -74,21 +75,44 @@ func TestSupervisedUnjudgedIsNotStoppedShort(t *testing.T) {
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, fullReport, 0)
 	waitFor(t, "the review message", func() bool { return len(f.notices()) == 1 })
-	if n := f.notices()[0]; !strings.Contains(n, "hub 判断做完了，等你验收") {
+	if n := f.notices()[0]; !strings.Contains(n, "待逐项复核，不代表完成") {
 		t.Fatalf("after one failure:\n%s", n)
 	}
 	if v := todoNow(s, todo.ID).Supervision; v.State != reviewPending {
 		t.Fatalf("not waiting for review: %+v", v)
 	}
 
-	// More work, and the judge keeps failing.
-	f.judge = ""
+	// More work, and this time the judge returns a valid unsure verdict.
+	f.judge = `{"verdict":"unsure","reason":"证据不足"}`
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "又改了一处", 0)
 	waitFor(t, "the second message", func() bool { return len(f.notices()) == 2 })
 	n := entryLine(f.notices()[1])
-	if !strings.Contains(n, "Agent 停下了，hub 没判断出来是不是做完了（不是说没做完）（判定模型出错）") || strings.Contains(n, "停下了，但没做完") {
-		t.Fatalf("after failures:\n%s", n)
+	if !strings.Contains(n, "Agent 停下了，hub 没判断出来是不是做完了（不是说没做完）（看不出做没做完：证据不足）") || strings.Contains(n, "停下了，但没做完") {
+		t.Fatalf("after an unsure judgment:\n%s", n)
+	}
+}
+
+// With no model set up for the judge, the supervisor hears that the judge has no model, not that the model erred: a
+// retry will not mend it, and the supervisor reads the reply itself.
+func TestSupervisedUnjudgedSaysTheJudgeHasNoModel(t *testing.T) {
+	fastJudgeRetry(t)
+	s, f, _ := newSupervisedService(t)
+	f.pageTurns = true
+	f.mu.Lock()
+	f.hello.Models.AI, f.hello.Models.TriageAI = ai.Config{}, nil
+	f.mu.Unlock()
+	s.settingsChanged(context.Background())
+	if _, err := s.purposeModel("inbox.judge").Complete(context.Background(), "", "reply", 16); !ai.IsNotConfigured(err) {
+		t.Fatalf("the judge has a model: %v", err)
+	}
+	f.setItems(text("assistant", fullReport))
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	agentTurn(s, f, proto.StatusDone, fullReport, 0)
+	waitFor(t, "the supervisor's message", func() bool { return len(f.notices()) == 1 })
+	n := entryLine(f.notices()[0])
+	if !strings.Contains(n, "signal=unjudged") || !strings.Contains(n, "（判定模型未配置）") || strings.Contains(n, "判定模型出错") {
+		t.Fatalf("no model for the judge:\n%s", n)
 	}
 }
 
@@ -103,7 +127,7 @@ func TestAcceptedTaskFollowUpIsNotStoppedShort(t *testing.T) {
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, fullReport, 0)
 	waitFor(t, "the review message", func() bool { return len(f.notices()) == 1 })
-	raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "可以"})
+	raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "可以", "checks": completeReviewChecks(todoNow(s, todo.ID))})
 	if _, err := s.runTool(ctx, "server", "conv1", "task_review", raw); err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +135,11 @@ func TestAcceptedTaskFollowUpIsNotStoppedShort(t *testing.T) {
 		t.Fatalf("not closed: %+v", got)
 	}
 
-	// Its agent is sent more: the task is open again.
+	// Its agent is sent more (the owner's message on its card: a turn nobody sent leaves it closed, #7539): the task
+	// is open again.
+	if _, err := s.routeToTask(ctx, "conv1", todo.ID, "顺手把 README 也改一下"); err != nil {
+		t.Fatal(err)
+	}
 	f.setItems(text("assistant", fullReport), text("user", "顺手把 README 也改一下"), text("assistant", "README 改了一半"))
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	reopened := todoNow(s, todo.ID)
@@ -149,7 +177,7 @@ func TestAcceptedTaskFollowUpIsNotStoppedShort(t *testing.T) {
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "README 也改好了", 0)
 	waitFor(t, "the review again", func() bool { return len(f.notices()) == 2 })
-	if n := f.notices()[1]; !strings.Contains(n, "hub 判断做完了，等你验收（README 也改好了）") {
+	if n := f.notices()[1]; !strings.Contains(n, "待逐项复核，不代表完成（README 也改好了）") {
 		t.Fatalf("message:\n%s", n)
 	}
 }

@@ -17,6 +17,8 @@ struct MessageBarInfo {
     /// Who wrote it, when not the chat's Agent or Persona (`messageActionBar(from:)`).
     var from: String? = nil
     var delete: MessageBarDelete? = nil
+    var starItem: Item? = nil
+    var starredAction: StarredMenuAction? = nil
 }
 
 /// The bar's last item on a message that is only on this phone (`PendingMessage.onlyHere`, #4626), in the danger color:
@@ -625,6 +627,29 @@ extension View {
     /// The chat page under `MessageLiftLayer`: blurred a little while a message is lifted over it. The radius goes to
     /// zero rather than the modifier away, so the page keeps its identity (and its scroll position).
     func liftBlur(_ menu: MessageMenu?) -> some View { modifier(LiftBlur(menu: menu)) }
+
+    /// `liftBlur` for the menu a page's chat hands its `MessageLiftHost`, read here rather than in the page's body: the
+    /// chat hands it over as it appears and takes it back as it goes, which a tab switch does on the open iPhone Duo, and
+    /// the whole Persona page ran again both times (#10303).
+    func liftBlur(host: MessageLiftHost) -> some View { modifier(HostLiftBlur(host: host)) }
+}
+
+private struct HostLiftBlur: ViewModifier {
+    let host: MessageLiftHost
+
+    func body(content: Content) -> some View {
+        content.modifier(LiftBlur(menu: host.menu))
+    }
+}
+
+/// The lifted message of the chat on a page that floats a bar over it (`MessageLiftHost`), over the whole page: read
+/// here for the reason `liftBlur(host:)` is.
+struct MessageLiftHostLayer: View {
+    let host: MessageLiftHost
+
+    var body: some View {
+        if let menu = host.menu { MessageLiftLayer(menu: menu) }
+    }
 }
 
 private struct LiftBlur: ViewModifier {
@@ -732,9 +757,6 @@ private struct LiftedMessage: View {
     @State private var fade = Fade()
     /// The drawn copy's height (the same as the message's where it was, unless something it reads differs).
     @State private var height: CGFloat = 0
-    /// The actions' size as a list (`MessageActionBar.stacks`, the accessibility text sizes), measured: it follows its
-    /// words. Until then the list is placed by a guess and not shown.
-    @State private var list: CGSize?
     /// Where the pressed part starts in the copy of a message drawn in parts (`MessageLift.part`), once it is laid out.
     @State private var partTop: CGFloat?
     /// The copy of a message drawn in parts opens at its pressed part (its scroll target), the only one of its parts
@@ -752,7 +774,6 @@ private struct LiftedMessage: View {
         _scroll = State(initialValue: lift.part.map { ScrollPosition(id: $0, anchor: .top) } ?? ScrollPosition())
     }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     private struct Fade: Equatable {
         var top = false
@@ -789,9 +810,9 @@ private struct LiftedMessage: View {
         let count = MessageActionBar.count(id: lift.bar.id, isUser: lift.bar.isUser, menu: menu, pending: lift.bar.pending,
                                            deletes: lift.bar.delete != nil)
         let barWidth = min(MessageActionBar.width(count: count), bounds.width - 2 * Theme.Space.s)
-        let stacked = MessageActionBar.stacks(typeSize)
-        let bar = stacked ? list ?? CGSize(width: barWidth, height: MessageActionBar.height * CGFloat(count))
-            : CGSize(width: barWidth, height: MessageActionBar.height)
+        let selects = MessageActionBar.selects(id: lift.bar.id, menu: menu, pending: lift.bar.pending)
+        let star = lift.bar.starredAction
+        let bar = CGSize(width: barWidth, height: MessageActionBar.height(selects: selects, stars: star != nil))
         let p = LiftLayout.place(message: message, press: lift.press.y + pad.top + above, bar: bar, bounds: bounds,
                                  margin: Theme.Space.s, gap: Theme.Space.s, trailing: lift.bar.isUser,
                                  part: lift.part != nil ? above : nil, pressInSight: Theme.Size.tapTarget)
@@ -811,12 +832,7 @@ private struct LiftedMessage: View {
             if !selecting {
                 MessageActionBar(id: lift.bar.id, text: lift.bar.text, isUser: lift.bar.isUser, date: lift.bar.date, menu: menu,
                                  pending: lift.bar.pending, from: lift.bar.from, delete: lift.bar.delete,
-                                 itemWidth: MessageActionBar.itemWidth(barWidth, count: count))
-                    .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
-                        guard stacked, size != list else { return }
-                        withAnimation(Theme.Motion.state) { list = size }
-                    }
-                    .opacity(stacked && list == nil ? 0 : 1)
+                                 itemWidth: MessageActionBar.itemWidth(barWidth, count: count), starredAction: star)
                     .position(x: p.bar.midX, y: p.bar.midY)
                     .transition(.scale(scale: 0.85, anchor: p.below ? .top : .bottom).combined(with: .opacity))
             }
