@@ -46,6 +46,29 @@
         }
       }
     },
+    "A message holds up to %lld pictures. The rest go as files." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A message holds up to %lld pictures. The rest go as files."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1件のメッセージに入れられる画像は%lld枚までです。残りはファイルとして送ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一条消息最多 %lld 张图，多出的作为文件发送。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Added %@ [Filed Session]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -839,6 +862,29 @@
           }
         }
       }
+    },
+    "No room for more pictures in this message" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No room for more pictures in this message"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このメッセージにはこれ以上画像を入れられません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这条消息放不下更多图片了"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "Open Scene Full Screen" : {
       "extractionState" : "manual",
@@ -1760,6 +1806,52 @@
           }
         }
       }
+    },
+    "These pictures are too large to send together" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "These pictures are too large to send together"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画像の合計が大きすぎて、まとめて送れません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这些图加起来太大了，没法一起发送"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "These pictures are too large together. The rest go as files." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "These pictures are too large together. The rest go as files."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画像の合計が大きすぎます。残りはファイルとして送ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这些图加起来太大了，多出的作为文件发送。"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "This computer can't switch to Persona Link right now." : {
       "localizations": {
@@ -133124,24 +133216,24 @@
         }
       }
     },
-    "Photos or videos, up to 4" : {
+    "Photos or videos" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Photos or videos, up to 4"
+            "value" : "Photos or videos"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "写真またはビデオ、4件まで"
+            "value" : "写真またはビデオ"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "照片或视频，最多 4 个"
+            "value" : "照片或视频"
           }
         }
       },
@@ -198018,24 +198110,24 @@
       },
       "extractionState" : "manual"
     },
-    "Up to 4 at a time" : {
+    "Up to %lld at a time" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Up to 4 at a time"
+            "value" : "Up to %lld at a time"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "一度に4枚まで"
+            "value" : "一度に%lld枚まで"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "一次最多 4 张"
+            "value" : "一次最多 %lld 张"
           }
         }
       },
