@@ -245,11 +245,13 @@ for it.
   :core:domainkit), created when the bar's rules move (A4): Kotlin's `internal` is module-wide, so only a module
   boundary keeps the adapter out of the domain. Also in the module: A3's page-facing repository and A4's bar facade,
   outside those packages, and later a strangler step that moves the rest of `persona.core.domain.inbox` in (458 lines,
-  116 of them the bar's, which A4 takes), with feature:assistant gaining a direct dependency. The transports core:hub
-  implements, the wire InboxItem and the legacy facade `api/InboxRepository` stay in core:contracts until measured.
-  Domain types live only in :core:inbox:domain and are never `@Serializable`; persisted shapes stay `@Serializable`
-  records in the store package. @StringRes members become keys, and Compose-backed members stay in feature:inbox. Then
-  core:data stops depending on feature:inbox, and a source scan keeps core modules off feature modules.
+  116 of them the bar's, which A4 takes), with feature:assistant gaining a direct dependency. Because they share the
+  module, the rule on what the adapter returns reads its internal declarations as well as its public ones (A4). The
+  transports core:hub implements, the wire InboxItem and the legacy facade `api/InboxRepository` stay in core:contracts
+  until measured. Domain types live only in :core:inbox:domain and are never `@Serializable`; persisted shapes stay
+  `@Serializable` records in the store package. @StringRes members become keys, and Compose-backed members stay in
+  feature:inbox. Then core:data stops depending on feature:inbox, and a source scan keeps core modules off feature
+  modules.
 - **Apple.** A Swift package, apple/Packages/PersonaInbox, made once the client domain guard is in, holds UI-free Inbox
   logic under `swift test` (D10b). Its Domain target, PersonaInboxDomain, imports no Foundation and depends only on
   PersonaDomainKit (a new package with the domain kit's Swift values); PersonaInboxAdapt, on the domain and
@@ -290,7 +292,8 @@ for it.
 folder becomes domain and adapt folders, Android's model package becomes the :core:inbox:domain subproject (A4) beside
 store and adapt packages, and the tier stays in Shared rather than moving into PersonaWire; since no package can see
 Shared, an app-side facade hands the Apple adapter plain values and takes answers only through closures the adapter
-calls, and the client steps wait for the client domain guard.
+calls; the Android adapter's results are checked on its internal declarations too, since its module also holds the
+repository and the facade; and the client steps wait for the client domain guard.
 
 ## 4. Steps
 
@@ -592,14 +595,22 @@ Every part waits for D3's gates, in this order.
   packages, keeps `InboxBar`'s API for its callers in feature:inbox and the app, whose imports change; as I1's, it
   passes one closure per case of the domain's visitor and never reads an answer back, and it is on a shrink-only list.
   The facade takes `buildInboxList`'s groups, so :core:inbox gains :core:domain here if A3 has not added it. The guard's
-  Android scan has no adapter-result rule either, so A4 adds the Kotlin counterpart of I1's rule for the .adapt packages
-  unless the guard has it by then. The bar's tests replay `spec/fixtures/inbox` bar*.json through the domain's public
-  API. `docs/android/android.md` gets the two modules' rows and a pointer to the domain rules.
+  Android scan has no adapter-result rule either, so A4 adds one for every .adapt package unless the guard has it by
+  then. It reads more than I1's: the Swift facade is another module and reaches only the adapter's public API, but this
+  facade and A3's repository share :core:inbox with persona.core.inbox.adapt, and Kotlin's `internal` is module-wide, so
+  an `internal fun` there that returns a String is a getter they can call with no opt-in. Every non-private function
+  and property in .adapt, internal ones included, therefore returns nothing, a domain value (a parse's outcome), a
+  core:contracts wire type or a store record, never a String, a number, a Boolean, a Pair or Triple, a collection of
+  them or a type the package declares; a helper that produces a word is `private` to its file. The bar's tests replay
+  `spec/fixtures/inbox` bar*.json through the domain's public API. `docs/android/android.md` gets the two modules' rows
+  and a pointer to the domain rules.
 - **Done when:** the client domain guard covers both new modules with no finding, and its adapter-result rule fails on
-  a planted .adapt function that returns a String; `scripts/app/android.sh test` and `lint` pass (`--max-workers=4`),
-  the bar fixtures included; `scripts/app/android.sh shots` shows no changed Inbox screenshot.
+  a planted `internal` .adapt function that returns a String and that the facade calls, and passes once that helper is
+  `private` to its file; `scripts/app/android.sh test` and `lint` pass (`--max-workers=4`), the bar fixtures included;
+  `scripts/app/android.sh shots` shows no changed Inbox screenshot.
 - *Revised 2026-11-22 in #10613:* a step of its own, so the domain kit that the counts plan's Android reducer is built
-  on (`docs/plans/plan-derived-counts.md`, section 6.2) has a named step and gate.
+  on (`docs/plans/plan-derived-counts.md`, section 6.2) has a named step and gate; its adapter-result rule reads the
+  adapter's internal declarations too, since the facade and the repository share its module.
 
 ### I1. The PersonaInbox package with the bar's decisions
 - **Change:** after the client domain guard (section 3.3), a new package apple/Packages/PersonaDomainKit (the domain
