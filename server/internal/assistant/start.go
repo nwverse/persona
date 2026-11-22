@@ -105,8 +105,13 @@ func (s *Service) prepareSpace(ctx context.Context, machine, space string) (stri
 func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onlyChanged bool) (string, bool, error) {
 	// Read settings and publish both instruction files in the same per-directory order.
 	dir := s.assistantRel()
-	if space == SpaceHealth {
+	switch space {
+	case "":
+	case SpaceHealth:
 		dir = s.healthRel()
+	default:
+		// Only the health space has a directory so far (spaceCwd): another must never fall back to the assistant's.
+		return "", false, fmt.Errorf("space %q has no directory on this version", space)
 	}
 	key := machine + "\x00" + dir
 	s.prepareLocks.acquire(key)
@@ -152,7 +157,9 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 		md = s.healthClaudeMD(ctx, machine)
 	}
 	digests, files := skillDigests(plugins.Skills)
-	given := preparedState{md: md, skills: digests, workGuide: onDemand != ""}
+	deny := s.trackDenyDirs(ctx)
+	denyKey, _ := json.Marshal(deny)
+	given := preparedState{md: md, skills: digests, workGuide: onDemand != "", deny: string(denyKey)}
 	if onlyChanged && !files {
 		s.preparedMu.Lock()
 		same := s.prepared[key] == given
@@ -162,7 +169,7 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 		}
 	}
 	params := map[string]any{"dir": dir, "claude_md": md,
-		"connectors": conns.Connectors, "clis": conns.CLIs, "plugin_skills": plugins.Skills}
+		"connectors": conns.Connectors, "clis": conns.CLIs, "plugin_skills": plugins.Skills, "deny_dirs": deny}
 	// Older nodes read only claude_md, so they retain the complete instructions.
 	if onDemand != "" {
 		params["work_guide_md"] = onDemand + plugins.Instructions
@@ -194,10 +201,11 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 	return prep.Cwd, true, nil
 }
 
-// preparedState is what prepareSpaceIf gave a node for a directory: the CLAUDE.md and the plugin skills (skillDigests).
+// preparedState is what prepareSpaceIf gave a node for a directory: the CLAUDE.md, the plugin skills (skillDigests)
+// and the denied track directories (trackDenyDirs, as JSON).
 type preparedState struct {
-	md, skills string
-	workGuide  bool
+	md, skills, deny string
+	workGuide        bool
 }
 
 // skillDigests are the plugin skills of a plugins.assistant answer as prepareSpaceIf compares them, each one's plugin,
@@ -279,8 +287,8 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 			return proto.Session{}, refusePick(http.StatusBadRequest, i18n.Err("external-adapter.scope_required"))
 		}
 	}
-	if p.Space != "" && p.Space != SpaceHealth {
-		return proto.Session{}, badRequest(fmt.Errorf("space %q: health or none", p.Space))
+	if !s.trackKnown(ctx, p.Space) {
+		return proto.Session{}, badRequest(fmt.Errorf("space %q: not a registered space", p.Space))
 	}
 	explicitPermission := strings.TrimSpace(p.PermissionMode)
 	if p.Origin == OriginInbox {
@@ -292,9 +300,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	}
 	var cwd string
 	var err error
-	if p.Space == SpaceHealth {
+	if p.Space != "" {
 		// The space owns its directory, instructions and the node's outbound gate classification.
-		// Even a task's already-resolved cwd cannot replace health preparation.
+		// Even a task's already-resolved cwd cannot replace the space's preparation.
 		cwd, err = s.prepareSpace(ctx, machine, p.Space)
 	} else if p.Cwd != "" {
 		cwd = p.Cwd
@@ -464,7 +472,7 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 // start starts a conversation: on p.MachineID ("" the assistant's machine), or the main conversation.
 func (s *Service) start(ctx context.Context, p StartParams) (proto.Session, error) {
 	if p.Main && p.Space != "" {
-		return proto.Session{}, badRequest(errors.New("the health space has no main conversation"))
+		return proto.Session{}, badRequest(errors.New("a space has no main conversation"))
 	}
 	if p.GuestTools != nil && (p.Main || p.Space != "") {
 		return proto.Session{}, badRequest(errors.New("a guest conversation is neither the main one nor in a space"))
@@ -954,7 +962,7 @@ func (s *Service) startRoutes() {
 			// MachineID one of the hub's machines instead of the assistant's (docs/protocol/protocol.md "REST (App → hub)").
 			Purpose   string `json:"purpose"`
 			MachineID string `json:"machine_id"`
-			Space     string `json:"space"` // "health": a conversation of the health space (docs/assistant/health.md)
+			Space     string `json:"space"` // a registered space, e.g. "health" (docs/assistant/health.md)
 			// ReportTasks: the tasks it opens are told back to it, as the main conversation's quiet ones are (#3192,
 			// reporters.go); a plugin's /agent hands their results on.
 			ReportTasks bool `json:"report_tasks"`
@@ -983,11 +991,11 @@ func (s *Service) startRoutes() {
 				return
 			}
 		}
-		if in.Space != "" && in.Space != SpaceHealth {
-			apierr.Write(w, http.StatusBadRequest, fmt.Errorf("space %q: health or none", in.Space))
+		if !s.trackKnown(ctx, in.Space) {
+			apierr.Write(w, http.StatusBadRequest, fmt.Errorf("space %q: not a registered space", in.Space))
 			return
 		}
-		if in.Space == SpaceHealth && r.Header.Get(RoleHeader) == roleExtension {
+		if in.Space != "" && s.trackPolicy(ctx, in.Space).HideFromExtensions && r.Header.Get(RoleHeader) == roleExtension {
 			apierr.WriteCode(w, http.StatusForbidden, "permission_denied", i18n.Err("apierr-apierr.health_start_forbidden"))
 			return
 		}
@@ -996,7 +1004,7 @@ func (s *Service) startRoutes() {
 			return
 		}
 		if in.Space != "" && in.Main {
-			apierr.Write(w, http.StatusBadRequest, errors.New("the health space has no main conversation"))
+			apierr.Write(w, http.StatusBadRequest, errors.New("a space has no main conversation"))
 			return
 		}
 		if in.MachineID != "" {

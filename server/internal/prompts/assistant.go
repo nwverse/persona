@@ -979,6 +979,8 @@ type SuperviseEntry struct {
 	LastReview *SuperviseLastReview
 	// TodoReady: an open, unstarted dependent to-do whose after prerequisites are all satisfied (#12606).
 	TodoReady *SuperviseTodoReady
+	// ExternalInfo: new external information received while a needs_user ask is still pending (#13112).
+	ExternalInfo *NeedsUserExternalInfo
 	// ParentCloseout: localized closeout guidance when all part_of children of an open parent to-do are done (#13100).
 	ParentCloseout string
 }

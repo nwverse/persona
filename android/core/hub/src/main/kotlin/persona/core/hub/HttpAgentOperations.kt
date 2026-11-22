@@ -79,4 +79,7 @@ class HttpAgentOperations(
     override suspend fun deleteSession(key: SessionKey) {
         request("DELETE", listOf("sessions", key.machineId, key.sessionId))
     }
+    override suspend fun forkSession(key: SessionKey): String =
+        (request("POST", listOf("sessions", key.machineId, key.sessionId, "fork"), buildJsonObject { put("at_item_id", "") })["session_id"] as? JsonPrimitive)
+            ?.contentOrNull?.takeIf(String::isNotBlank) ?: throw HubFailure(HubError.Protocol)
 }
