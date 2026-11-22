@@ -394,7 +394,7 @@ private struct ExtensionSceneCanvas: View {
                                     onDeferAction: onDeferAction
                                 )
                                 .position(placement.point)
-                                .zIndex(max(1, 10_000 - placement.depth))
+                                .zIndex(max(1, Theme.Scene.pinLayerBase - placement.depth))
                                 .accessibilitySortPriority(Double(pins.count - index))
                             }
                         }
@@ -491,9 +491,9 @@ private struct ExtensionSceneCanvas: View {
             let hasState = item.pin.state?.isEmpty == false
             let compactWidth = (hasIcon ? Theme.Size.scenePinCompactWidth : Theme.Size.scenePinBaseWidth) * scale
             let textPts = estimatedTextWidth(item.pin.label) + estimatedTextWidth(item.pin.state ?? "")
-            let iconPts: CGFloat = hasIcon ? 18 : 0
-            let stateGapPts: CGFloat = hasState ? 6 : 0
-            let fullWidth = (Theme.Size.scenePinBaseWidth + iconPts + stateGapPts + min(textPts, 180)) * scale
+            let iconPts = hasIcon ? Theme.Size.scenePinIconWidth : 0
+            let stateGapPts = hasState ? Theme.Size.scenePinStateGap : 0
+            let fullWidth = (Theme.Size.scenePinBaseWidth + iconPts + stateGapPts + min(textPts, Theme.Size.scenePinTextMaxWidth)) * scale
             let candidate = CGRect(x: item.point.x - fullWidth * 0.5, y: item.point.y - pillHeight * 0.5,
                                    width: fullWidth, height: pillHeight)
             let collides = occupied.contains { $0.intersects(candidate) }
@@ -510,7 +510,7 @@ private struct ExtensionSceneCanvas: View {
     private static func estimatedTextWidth(_ text: String) -> CGFloat {
         var total: CGFloat = 0
         for scalar in text.unicodeScalars {
-            total += scalar.value >= 0x2E80 ? 13.5 : Theme.Size.scenePinCharWidth
+            total += scalar.value >= 0x2E80 ? Theme.Size.scenePinWideCharWidth : Theme.Size.scenePinCharWidth
         }
         return total
     }

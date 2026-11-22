@@ -705,6 +705,12 @@ nonisolated enum Theme {
         static let scenePinCharWidth: CGFloat = 9
         static let scenePinBaseWidth: CGFloat = 40
         static let scenePinHeight: CGFloat = 32
+        // A pin pill's estimated width, for keeping pins apart: its icon, the gap before its state, the widest its
+        // text may grow, and the width of one wide (CJK) character.
+        static let scenePinIconWidth: CGFloat = 18
+        static let scenePinStateGap: CGFloat = 6
+        static let scenePinTextMaxWidth: CGFloat = 180
+        static let scenePinWideCharWidth: CGFloat = 13.5
     }
 
     /// UI version 11's 3D `scene` component (#12544): calm architectural material defaults when a shape omits `color`,
@@ -718,6 +724,8 @@ nonisolated enum Theme {
         static let maxPitch: Double = 90
         static let minZoom: Double = 0.5
         static let maxZoom: Double = 4.0
+        /// Pins draw above the model, nearer ones over farther ones: a pin's layer is this less its depth.
+        static let pinLayerBase: Double = 10_000
         static let fitMargin: Double = 1.12
         static let accessibilityYawStep: Double = 30
         static let accessibilityPitchStep: Double = 15
