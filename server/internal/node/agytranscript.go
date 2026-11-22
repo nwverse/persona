@@ -20,28 +20,71 @@ import (
 )
 
 const agyTranscriptPath = ".system_generated/logs/transcript.jsonl"
+const agyFullTranscriptPath = ".system_generated/logs/transcript_full.jsonl"
 const agyWakeReceipts = ".persona-observed-wakes"
 
+type agyStepUsage struct {
+	InputTokens              int64 `json:"input_tokens"`
+	OutputTokens             int64 `json:"output_tokens"`
+	CacheReadTokens          int64 `json:"cache_read_tokens"`
+	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+	CacheWriteTokens         int64 `json:"cache_write_tokens"`
+	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+	CacheWrite1hTokens       int64 `json:"cache_write_1h_tokens"`
+	ContextWindow            int   `json:"context_window"`
+	ModelContextWindow       int   `json:"model_context_window"`
+}
+
 type agyStep struct {
-	Index           *int            `json:"step_index"`
-	Type            string          `json:"type"`
-	Source          string          `json:"source"`
-	Status          string          `json:"status"`
-	CreatedAt       string          `json:"created_at"`
-	Content         string          `json:"content"`
-	ClientMsgID     string          `json:"client_msg_id"`
-	Thinking        string          `json:"thinking"`
-	Error           string          `json:"error"`
-	TruncatedFields []string        `json:"truncated_fields"`
-	Media           json.RawMessage `json:"media"`
-	ToolCalls       []*struct {
+	Index                    *int            `json:"step_index"`
+	Type                     string          `json:"type"`
+	Source                   string          `json:"source"`
+	Status                   string          `json:"status"`
+	CreatedAt                string          `json:"created_at"`
+	Content                  string          `json:"content"`
+	ClientMsgID              string          `json:"client_msg_id"`
+	Thinking                 string          `json:"thinking"`
+	Error                    string          `json:"error"`
+	Model                    string          `json:"model"`
+	InputTokens              int64           `json:"input_tokens"`
+	OutputTokens             int64           `json:"output_tokens"`
+	CacheReadTokens          int64           `json:"cache_read_tokens"`
+	CacheReadInputTokens     int64           `json:"cache_read_input_tokens"`
+	CacheWriteTokens         int64           `json:"cache_write_tokens"`
+	CacheCreationInputTokens int64           `json:"cache_creation_input_tokens"`
+	CacheWrite1hTokens       int64           `json:"cache_write_1h_tokens"`
+	ContextWindow            int             `json:"context_window"`
+	ModelContextWindow       int             `json:"model_context_window"`
+	Usage                    *agyStepUsage   `json:"usage"`
+	TruncatedFields          []string        `json:"truncated_fields"`
+	Media                    json.RawMessage `json:"media"`
+	ToolCalls                []*struct {
 		Name string          `json:"name"`
 		Args json.RawMessage `json:"args"`
 	} `json:"tool_calls"`
-	seq    int
-	key    string
-	branch string
-	record [32]byte
+	seq      int
+	key      string
+	branch   string
+	record   [32]byte
+	rendered [32]byte
+}
+
+type agyStepMemo struct {
+	seq      int
+	key      string
+	rendered [32]byte
+	running  bool
+}
+
+type agyTranscriptUsage struct {
+	model         string
+	contextTokens int
+	contextWindow int
+	outputTokens  int
+	compactions   int
+	turns         int
+	compacted     bool
+	hasUsage      bool
 }
 
 type agyHistory struct {
@@ -49,15 +92,93 @@ type agyHistory struct {
 	observedWakeRevision string
 	seq                  int
 	items                []proto.Item
+	usage                agyTranscriptUsage
 	// A compact export can leave full tool output in its step directory.
-	outputs map[string]int
-	media   map[string]agyMedia
+	outputs    map[string]int
+	media      map[string]agyMedia
+	stepHashes map[int][32]byte
 }
 
 type agyRevision struct {
 	length                  int
 	hash                    [32]byte
 	branch, native, rewrite string
+	steps                   []agyStepMemo
+}
+
+func isAgyStepRunning(status string) bool {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "RUNNING", "PENDING", "IN_PROGRESS", "QUEUED":
+		return true
+	default:
+		return false
+	}
+}
+
+// renderedHash hashes only the fields projected into transcript items so
+// status-only transitions (such as RUNNING -> DONE) or unrendered metadata
+// changes do not masquerade as history rewrites.
+func (s agyStep) renderedHash() [32]byte {
+	h := sha256.New()
+	write := func(v string) {
+		var lenBuf [8]byte
+		n := len(v)
+		for i := range lenBuf {
+			lenBuf[i] = byte(n >> (i * 8))
+		}
+		_, _ = h.Write(lenBuf[:])
+		_, _ = h.Write([]byte(v))
+	}
+	write(s.Type)
+	write(s.Source)
+	write(s.Content)
+	write(s.ClientMsgID)
+	write(s.Thinking)
+	write(s.Error)
+	if s.Status == "ERROR" {
+		write("ERROR")
+	} else {
+		write("")
+	}
+	write(strings.Join(s.TruncatedFields, "\x00"))
+	write(string(bytes.TrimSpace(s.Media)))
+	for _, tc := range s.ToolCalls {
+		if tc == nil {
+			write("")
+			continue
+		}
+		write(tc.Name)
+		write(string(bytes.TrimSpace(tc.Args)))
+	}
+	var sum [32]byte
+	h.Sum(sum[:0])
+	return sum
+}
+
+// agyStepsRewritten reports whether a prefix change or file truncation altered
+// settled history, rather than normal RUNNING -> DONE progress or non-rendered
+// metadata updates.
+func agyStepsRewritten(oldSteps, newSteps []agyStepMemo) bool {
+	if len(newSteps) < len(oldSteps) {
+		return true
+	}
+	bySeq := make(map[int]agyStepMemo, len(newSteps))
+	for _, s := range newSteps {
+		bySeq[s.seq] = s
+	}
+	for _, prev := range oldSteps {
+		cur, ok := bySeq[prev.seq]
+		if !ok {
+			return true
+		}
+		if cur.key != prev.key {
+			return true
+		}
+		if cur.rendered != prev.rendered && !prev.running {
+			return true
+		}
+	}
+	return false
 }
 
 func agyDigest(s string) string {
@@ -120,6 +241,7 @@ func parseAgySteps(raw []byte, conversation string) ([]agyStep, agyRevision) {
 			continue
 		}
 		step.record = sha256.Sum256(line)
+		step.rendered = step.renderedHash()
 		if step.Index != nil && *step.Index >= 0 {
 			step.seq = *step.Index + 1
 		} else if len(steps) > 0 {
@@ -140,11 +262,19 @@ func parseAgySteps(raw []byte, conversation string) ([]agyStep, agyRevision) {
 			if step.seq < last.seq && (floor < 0 || steps[floor].seq != step.seq) {
 				at = floor + 1
 				rev.native = fmt.Sprintf("%x", step.record[:10])
+			} else if step.seq < last.seq && floor >= 0 && steps[floor].seq == step.seq &&
+				isAgyStepRunning(steps[floor].Status) && step.Type == steps[floor].Type && step.CreatedAt == steps[floor].CreatedAt {
+				// An earlier RUNNING step (such as a background tool call) finished after later steps were logged.
+				// Update it in place without treating it as a branch rewind or discarding later steps.
+				step.branch = steps[floor].branch
+				step.key = steps[floor].key
+				steps[floor] = step
+				continue
 			} else {
 				if step.seq < last.seq || step.Type != last.Type || step.CreatedAt != last.CreatedAt {
 					rev.branch = agyDigest(rev.branch + "\n" + string(line))
 					rev.native = ""
-				} else if step.record != last.record {
+				} else if !isAgyStepRunning(last.Status) && step.rendered != last.rendered {
 					rev.native = fmt.Sprintf("%x", step.record[:10])
 				}
 				for len(steps) > 0 && steps[len(steps)-1].seq >= step.seq {
@@ -158,6 +288,15 @@ func parseAgySteps(raw []byte, conversation string) ([]agyStep, agyRevision) {
 		step.branch = rev.branch
 		step.key = strconv.Itoa(step.seq) + "@" + agyDigest(conversation+"\n"+step.CreatedAt+"\n"+rev.branch)
 		steps = slices.Insert(steps, at, step)
+	}
+	rev.steps = make([]agyStepMemo, len(steps))
+	for i, s := range steps {
+		rev.steps[i] = agyStepMemo{
+			seq:      s.seq,
+			key:      s.key,
+			rendered: s.rendered,
+			running:  isAgyStepRunning(s.Status),
+		}
 	}
 	return steps, rev
 }
@@ -205,6 +344,19 @@ func agyContextEndNames() string {
 
 var agyTrimSpace = lazyre.New(`^` + agySpace + `+|` + agySpace + `+$`)
 
+var agyInterruptedError = lazyre.New(`(?is)^(?:api error:\s*)?the stream was interrupted\.?(?:\s+please continue\b.*)?$`)
+
+func isAgyInterruptedStep(step agyStep) bool {
+	if step.Type != "ERROR_MESSAGE" {
+		return false
+	}
+	text := step.Error
+	if text == "" {
+		text = step.Content
+	}
+	return agyInterruptedError.MatchString(strings.TrimSpace(text))
+}
+
 func agyUserText(text string) string {
 	if m := agyUserRequest.FindStringSubmatch(text); m != nil {
 		text = m[1]
@@ -244,6 +396,9 @@ func (s agyStep) wakeKey() string {
 
 func mapAgySteps(steps []agyStep, fallback time.Time, receipts map[string]bool) agyHistory {
 	var history agyHistory
+	if len(steps) > 0 {
+		history.stepHashes = make(map[int][32]byte, len(steps))
+	}
 	var pending []string
 	if fallback.IsZero() {
 		fallback = time.Now()
@@ -254,6 +409,7 @@ func mapAgySteps(steps []agyStep, fallback time.Time, receipts map[string]bool) 
 	var notified bool
 	for _, step := range steps {
 		history.seq = step.seq
+		history.stepHashes[step.seq] = step.rendered
 		at, err := time.Parse(time.RFC3339Nano, step.CreatedAt)
 		if err != nil || at.IsZero() {
 			at = fallback
@@ -286,7 +442,7 @@ func mapAgySteps(steps []agyStep, fallback time.Time, receipts map[string]bool) 
 		// Block -1 precedes that work at its sequence, even if a watch already passed the notification.
 		plannerWork := step.Type == "PLANNER_RESPONSE" && (strings.TrimSpace(step.Content) != "" ||
 			strings.TrimSpace(step.Thinking) != "" || len(step.ToolCalls) != 0)
-		if plannerWork || step.Type == "GENERIC" || step.Type == "ERROR_MESSAGE" {
+		if plannerWork || step.Type == "GENERIC" || (step.Type == "ERROR_MESSAGE" && !isAgyInterruptedStep(step)) {
 			observed := false
 			if delivered != "" && len(receipts) > 0 {
 				link := priorWakeKey + " " + step.wakeKey()
@@ -318,6 +474,7 @@ func mapAgySteps(steps []agyStep, fallback time.Time, receipts map[string]bool) 
 			notified = delivered != ""
 		case "USER_INPUT":
 			if step.Source == "" || step.Source == "USER_EXPLICIT" {
+				history.usage.turns++
 				delivered, notified = "", false
 				text := agyUserText(step.Content)
 				if text != "" {
@@ -326,11 +483,16 @@ func mapAgySteps(steps []agyStep, fallback time.Time, receipts map[string]bool) 
 				addMedia("user", "", step.ClientMsgID, agyAttachedImagePaths(text))
 			}
 		case "CHECKPOINT":
+			history.usage.observeCheckpoint()
 			add("0", "system", proto.KindNotice, transcript.CompactedNotice)
 		case "PLANNER_RESPONSE":
+			stepModel := step.normalizedModel()
+			stepUsage, hasUsage := history.usage.observePlanner(step)
+			firstIdx := len(history.items)
 			for _, part := range []struct{ kind, text string }{{proto.KindThinking, step.Thinking}, {proto.KindText, step.Content}} {
 				if text := strings.TrimSpace(part.text); text != "" {
-					add(part.kind, "assistant", part.kind, text)
+					it := add(part.kind, "assistant", part.kind, text)
+					it.Model = stepModel
 				}
 			}
 			for k, call := range step.ToolCalls {
@@ -340,8 +502,12 @@ func mapAgySteps(steps []agyStep, fallback time.Time, receipts map[string]bool) 
 				name, input := agyTool(call.Name, call.Args)
 				callID := fmt.Sprintf("call_%s_%d", step.key, k)
 				it := add("tool"+strconv.Itoa(k), "assistant", proto.KindToolUse, "")
+				it.Model = stepModel
 				it.ToolName, it.ToolInput, it.ToolUseID = name, input, callID
 				pending = append(pending, callID)
+			}
+			if hasUsage && len(history.items) > firstIdx {
+				history.items[firstIdx].Usage = []proto.TokenUsage{stepUsage}
 			}
 		case "GENERIC":
 			callID := "call_" + step.key + "_0"
@@ -365,6 +531,9 @@ func mapAgySteps(steps []agyStep, fallback time.Time, receipts map[string]bool) 
 			}
 			addMedia("assistant", callID, "", nil)
 		case "ERROR_MESSAGE":
+			if isAgyInterruptedStep(step) {
+				break
+			}
 			text := step.Error
 			if text == "" {
 				text = step.Content

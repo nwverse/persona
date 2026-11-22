@@ -656,6 +656,89 @@ func TestAgyPaneWatchAppendPartialAndRewrites(t *testing.T) {
 	}
 }
 
+func TestAgyPaneRunningStepUpdatesKeepHistoryStable(t *testing.T) {
+	n, f, home := herdrNode(t)
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
+	seedAgents(t, n, f, agyTestAgent(agyTestPane, home, agyTestID))
+
+	const (
+		step0      = `{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","status":"DONE","created_at":"2026-11-01T00:00:00Z","content":"Run checks"}` + "\n"
+		step1      = `{"step_index":1,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-01T00:00:01Z","tool_calls":[{"name":"run_command","args":{"CommandLine":"go test"}},{"name":"view_file","args":{"AbsolutePath":"a.go"}}]}` + "\n"
+		step2Run   = `{"step_index":2,"type":"GENERIC","status":"RUNNING","created_at":"2026-11-01T00:00:02Z","content":""}` + "\n"
+		step2Done  = `{"step_index":2,"type":"GENERIC","status":"DONE","created_at":"2026-11-01T00:00:02Z","content":"ok"}` + "\n"
+		step3Run   = `{"step_index":3,"type":"GENERIC","status":"RUNNING","created_at":"2026-11-01T00:00:03Z","content":"reading"}` + "\n"
+		step3Done  = `{"step_index":3,"type":"GENERIC","status":"DONE","created_at":"2026-11-01T00:00:03Z","content":"reading"}` + "\n"
+		step4Run   = `{"step_index":4,"type":"PLANNER_RESPONSE","status":"RUNNING","created_at":"2026-11-01T00:00:04Z","content":"Checking..."}` + "\n"
+		step4Done  = `{"step_index":4,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-01T00:00:04Z","content":"All checks passed."}` + "\n"
+		step4Fixed = `{"step_index":4,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-01T00:00:04Z","content":"Settled rewrite."}` + "\n"
+	)
+
+	file := agyTestFile(t, n.agyDataRoot(), agyTestID, step0+step1+step2Run+step3Run)
+	_, initialPage := agyTestItems(t, n, agyTestRow, nil)
+	baseHistory := initialPage["history"].(string)
+
+	hub := withHub(t, n)
+	agyTestCall(t, n, "session.watch", agyTestRow, map[string]any{"since_seq": initialPage["to_seq"]})
+	t.Cleanup(func() { n.unwatch(agyTestRow) })
+
+	// 1. In-place status-only transition (RUNNING -> DONE shrinks file by 3 bytes) must not rewrite history.
+	agyTestWrite(t, file, step0+step1+step2Run+step3Done)
+	_, page := agyTestItems(t, n, agyTestRow, nil)
+	if page["history"] != baseHistory {
+		t.Fatalf("in-place RUNNING->DONE status flip changed history: got %q, want %q", page["history"], baseHistory)
+	}
+
+	// 2. Appending completion for an earlier RUNNING step (step 2) after later step 3 must update in place
+	// without rewinding/dropping step 3 or changing history, and watcher receives the updated item in place.
+	agyTestAppend(t, file, step2Done)
+	waitFor(t, "earlier RUNNING step update reaches watcher", func() bool { return len(hub.spans()) >= 1 })
+	items, page := agyTestItems(t, n, agyTestRow, nil)
+	if page["history"] != baseHistory {
+		t.Fatalf("earlier RUNNING step completion changed history: got %q, want %q", page["history"], baseHistory)
+	}
+	if len(items) != 5 || items[3].Text != "ok" || items[4].Text != "reading" {
+		t.Fatalf("earlier RUNNING step completion lost or misordered items: %+v", items)
+	}
+	if batch := hub.spans()[0]; batch.history != baseHistory || batch.fromSeq != 4 || batch.toSeq != 4 {
+		t.Fatalf("earlier RUNNING step update reset watcher: %+v", batch)
+	}
+
+	// 3. Appending a new RUNNING step and then completing it (same-step RUNNING -> DONE with updated content)
+	// must keep history stable and deliver the completion without a from_seq=0 reset.
+	agyTestAppend(t, file, step4Run)
+	waitFor(t, "new RUNNING step reaches watcher", func() bool { return len(hub.spans()) >= 2 })
+	if batch := hub.spans()[1]; batch.history != baseHistory || batch.fromSeq != 4 || batch.toSeq != 5 {
+		t.Fatalf("new RUNNING step batch: %+v", batch)
+	}
+	agyTestAppend(t, file, step4Done)
+	waitFor(t, "same-step RUNNING->DONE completion reaches watcher", func() bool { return len(hub.spans()) >= 3 })
+	items, page = agyTestItems(t, n, agyTestRow, nil)
+	if page["history"] != baseHistory {
+		t.Fatalf("same-step RUNNING->DONE changed history: got %q, want %q", page["history"], baseHistory)
+	}
+	if batch := hub.spans()[2]; batch.history != baseHistory || batch.fromSeq != 5 || batch.toSeq != 5 || items[len(items)-1].Text != "All checks passed." {
+		t.Fatalf("same-step RUNNING->DONE batch: %+v, items: %+v", batch, items)
+	}
+
+	// 4. Rewriting an already-settled (DONE) step in place MUST still bump history and reset the watcher.
+	agyTestWrite(t, file, step0+step1+step2Done+step3Done+step4Fixed)
+	waitFor(t, "settled in-place rewrite triggers history reset", func() bool { return len(hub.spans()) >= 4 })
+	_, page = agyTestItems(t, n, agyTestRow, nil)
+	settledHistory := page["history"].(string)
+	if batch := hub.spans()[3]; settledHistory == baseHistory || batch.history != settledHistory || batch.fromSeq != 0 {
+		t.Fatalf("settled in-place rewrite did not bump history: page %q, batch %+v", settledHistory, batch)
+	}
+
+	// 5. Truncating/compacting earlier steps MUST still bump history and reset the watcher.
+	agyTestWrite(t, file, step0+step1)
+	waitFor(t, "truncation triggers history reset", func() bool { return len(hub.spans()) >= 5 })
+	_, page = agyTestItems(t, n, agyTestRow, nil)
+	truncatedHistory := page["history"].(string)
+	if batch := hub.spans()[4]; truncatedHistory == settledHistory || batch.history != truncatedHistory || batch.fromSeq != 0 || batch.toSeq != 2 {
+		t.Fatalf("truncation did not bump history: page %q, batch %+v", truncatedHistory, batch)
+	}
+}
+
 func TestAgyPaneWatchConversationIsolation(t *testing.T) {
 	n, home := testNode(t)
 	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
@@ -736,7 +819,7 @@ func TestAgyPaneResumeAndTerminalControls(t *testing.T) {
 	without := agyTestAgent(agyTestPane, home, "")
 	seedAgents(t, n, f, without)
 	const model = "test-model"
-	n.noteWorkAgent(context.Background(), n.hosts.Get(host.Herdr).(*herdrHost), agyTestPane, agyTestRow, home, agyAgent, agyAgent, model, "")
+	n.noteWorkAgent(context.Background(), n.hosts.Get(host.Herdr).(*herdrHost), agyTestPane, agyTestRow, home, agyAgent, agyAgent, model, "", "")
 	assertAgyResumeReport(t, f, 0, model, "", "")
 	agyTestCall(t, n, "session.send", agyTestRow, map[string]any{"text": "first\nsecond"})
 	agyTestCall(t, n, "session.interrupt", agyTestRow, nil)
@@ -755,7 +838,7 @@ func TestAgyPaneResumeBackfillTracksConversation(t *testing.T) {
 	seedAgents(t, n, f, first)
 	const model = "test-model"
 	const effort = "high"
-	n.noteWorkAgent(context.Background(), n.hosts.Get(host.Herdr).(*herdrHost), agyTestPane, agyTestRow, home, agyAgent, agyAgent, model, effort)
+	n.noteWorkAgent(context.Background(), n.hosts.Get(host.Herdr).(*herdrHost), agyTestPane, agyTestRow, home, agyAgent, agyAgent, model, effort, "")
 	assertAgyResumeReport(t, f, 0, model, effort, agyTestID)
 	n.mu.Lock()
 	kept := n.launches[agyTestPane].AgyConversation
@@ -784,7 +867,7 @@ func TestAgyPaneResumeRejectsAmbiguousReports(t *testing.T) {
 			n, f, home := herdrNode(t)
 			seedAgents(t, n, f, agyTestAgent(agyTestPane, home, agyTestID), agyTestAgent(tc.pane, home, tc.id))
 			const model = "test-model"
-			n.noteWorkAgent(context.Background(), n.hosts.Get(host.Herdr).(*herdrHost), agyTestPane, agyTestRow, home, agyAgent, agyAgent, model, "")
+			n.noteWorkAgent(context.Background(), n.hosts.Get(host.Herdr).(*herdrHost), agyTestPane, agyTestRow, home, agyAgent, agyAgent, model, "", "")
 			assertAgyResumeReport(t, f, 0, model, "", "")
 		})
 	}

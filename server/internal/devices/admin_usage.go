@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"reflect"
-	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/managerconf"
 	"github.com/nwverse/persona/server/internal/usagesource"
 )
@@ -25,21 +25,23 @@ import (
 // session gets here (every /api/v1/admin/ route; a device token, even a full one, does not open them), and says so
 // in assistantwire.AdminHeader; a request without it is refused here too. Nothing answers with a key: a source says
 // only whether it has one. The keys live in the manager's manager.json (0600, docs/operations/config.md "manager.json"), written
-// in one step under a lock on its directory (managerconf.Edit), and a change applies at once. Sources
-// written by the owner API (owner_usage.go) have sealed_key instead; this editor preserves that encryption.
+// in one step under a lock on its directory (managerconf.Edit), and a change applies at once.
 
 const usageTestMost = 25 * time.Second
 
 var errAdminOnly = errors.New("the usage sources page is the admin UI's")
 
 type adminUsageSource struct {
-	ID      string        `json:"id"`
-	Name    string        `json:"name"`
-	Type    string        `json:"type"`
-	URL     string        `json:"url"`
-	HasKey  bool          `json:"has_key"`
-	Enabled bool          `json:"enabled"`
-	Status  gatewayStatus `json:"status"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Type string `json:"type"`
+	URL  string `json:"url"`
+	// Extension and Launcher: for a source of type extension (manager.json only), what it reads and through which launcher.
+	Extension string        `json:"extension,omitempty"`
+	Launcher  string        `json:"launcher,omitempty"`
+	HasKey    bool          `json:"has_key"`
+	Enabled   bool          `json:"enabled"`
+	Status    gatewayStatus `json:"status"`
 }
 
 type adminUsageView struct {
@@ -79,11 +81,6 @@ func (d *Devices) diskUsage() (UsageConfig, error) {
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return cfg.Usage, err
 	}
-	for i := range cfg.Usage.Sources {
-		if err := d.openUsageKey(&cfg.Usage.Sources[i]); err != nil {
-			return UsageConfig{}, err
-		}
-	}
 	return cfg.Usage, nil
 }
 
@@ -93,7 +90,7 @@ func (d *Devices) adminUsageView() adminUsageView {
 		HiddenProviders: append([]string{}, cfg.HiddenProviders...)}
 	v.Providers = uniqueSorted(append(append([]string{"claude", "codex"}, cfg.HiddenProviders...), d.usageWin.providers()...))
 	for _, s := range cfg.Sources {
-		v.Sources = append(v.Sources, adminUsageSource{ID: s.ID, Name: s.Name, Type: s.Type, URL: s.URL, HasKey: s.Key != "", Enabled: s.on(), Status: d.usageGW.status(s.ID)})
+		v.Sources = append(v.Sources, adminUsageSource{ID: s.ID, Name: s.Name, Type: s.Type, URL: s.URL, Extension: s.Extension, Launcher: s.Launcher, HasKey: s.Key != "", Enabled: s.on(), Status: d.usageGW.status(s.ID)})
 	}
 	return v
 }
@@ -175,6 +172,23 @@ func validUsageName(n string) bool {
 // "https://pool.example.com/" in manager.json is the same address as the "https://pool.example.com" the page sends,
 // and a request that does not touch the address (the enable switch) never moves it.
 func applyUsageInput(s UsageSourceConfig, in usageSourceInput, isNew bool) (UsageSourceConfig, string, error) {
+	if s.Type == usagesource.TypeExtension && !isNew {
+		// Written in manager.json: here it can be renamed, switched on or off and removed, not re-pointed.
+		if in.Type != nil && strings.TrimSpace(*in.Type) != usagesource.TypeExtension || in.URL != nil || in.Key != nil || in.ClearKey {
+			return s, "invalid_type", i18n.Err("hub-admin_usage.invalid_type")
+		}
+		if in.Name != nil {
+			s.Name = strings.TrimSpace(*in.Name)
+		}
+		if !validUsageName(s.Name) {
+			return s, "invalid_name", i18n.Err("hub-admin_usage.invalid_name")
+		}
+		if in.Enabled != nil {
+			on := *in.Enabled
+			s.Enabled = &on
+		}
+		return s, "", nil
+	}
 	oldURL, oldType := sameUsageURL(s.URL), s.Type
 	if in.Type != nil {
 		s.Type = strings.TrimSpace(*in.Type)
@@ -360,9 +374,6 @@ func (d *Devices) adminUsageRoutes(mux *http.ServeMux) {
 				if err := json.Unmarshal(raw, &cur); err != nil {
 					return u, list, err
 				}
-				if err := d.openUsageKey(&cur); err != nil {
-					return u, list, errUsageStorage
-				}
 				next, code, err := applyUsageInput(cur, in, false)
 				if err != nil {
 					bad, badCode = err, code
@@ -378,15 +389,7 @@ func (d *Devices) adminUsageRoutes(mux *http.ServeMux) {
 						return u, list, err
 					}
 				}
-				if cur.SealedKey != "" {
-					if err := d.sealUsageKey(&next); err != nil {
-						return u, list, errUsageStorage
-					}
-					entry.Del("key")
-					if err := entry.Set("sealed_key", next.SealedKey); err != nil {
-						return u, list, err
-					}
-				} else if next.Key == "" {
+				if next.Key == "" {
 					entry.Del("key")
 				} else if err := entry.Set("key", next.Key); err != nil {
 					return u, list, err
@@ -513,7 +516,7 @@ func (d *Devices) respondUsageSource(w http.ResponseWriter, id string) {
 
 const hiddenProvidersMost = 16
 
-var providerName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+var providerName = lazyre.New(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 
 // cleanHiddenProviders lowercases, drops repeats and sorts the providers to hide; false when one is not a provider
 // name or there are too many.

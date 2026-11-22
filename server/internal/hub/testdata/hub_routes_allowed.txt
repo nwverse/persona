@@ -230,6 +230,9 @@ PUT /api/v1/push/grading # push grading switch, neutral alias of ln-mode (push_g
 GET /api/v1/phone/write-queue
 POST /api/v1/phone/write-queue/{id}/cancel
 
+# The primary device phone calls go to first: the hub's phone transport and wake target, full credentials only (phone_primary.go).
+PUT /api/v1/phone/primary
+
 # Web Push to browsers (#7459): push delivery, the hub's own (hub/webpush_routes.go).
 DELETE /api/v1/push/web/{device}
 GET /api/v1/push/intercepts # held pushes, read-only (push_grading.go)

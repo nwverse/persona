@@ -3,6 +3,7 @@ from pathlib import Path
 import tempfile
 import subprocess
 import json
+import os
 import sys
 import unittest
 
@@ -88,6 +89,55 @@ class PromptLanguageRatchetTests(unittest.TestCase):
             baseline.write_text(json.dumps({"agents": {"count": 2, "files": ["agents/new.md", "agents/old.md"]}}))
             self.assertNotEqual(run().returncode, 0)
             self.assertNotEqual(run("--update").returncode, 0)
+
+    def test_a_base_baseline_that_cannot_be_fetched_fails_instead_of_passing(self):
+        # CI's guards checkout is blobless (#12753): a branch that changed the baseline has the base's copy fetched
+        # on first read. A failed fetch must fail the check, not read as "no baseline at the base" and pass.
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            source = work / "source"
+            script = source / "scripts/ci/prompt_language_ratchet.py"
+            script.parent.mkdir(parents=True)
+            script.write_text(SOURCE.read_text())
+            prompts = source / "server/internal/prompts/agents"
+            prompts.mkdir(parents=True)
+            (prompts / "old.md").write_text("中文")
+            baseline = source / "scripts/ci/prompt_language_baseline.json"
+            baseline.write_text(json.dumps({"agents": {"count": 1, "files": ["agents/old.md"]}}))
+
+            def git(*args, cwd=source):
+                subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com",
+                                "-c", "core.hooksPath=/dev/null", *args], cwd=cwd, check=True, capture_output=True,
+                               timeout=60)
+            git("init", "-q", "-b", "main")
+            git("add", ".")
+            git("commit", "-q", "-m", "baseline")
+            git("checkout", "-q", "-b", "raise")
+            (prompts / "new.md").write_text("中文")
+            baseline.write_text(json.dumps({"agents": {"count": 2, "files": ["agents/new.md", "agents/old.md"]}}))
+            git("add", ".")
+            git("commit", "-q", "-m", "raise")
+            origin = work / "origin.git"
+            git("clone", "-q", "--bare", str(source), str(origin), cwd=work)
+            git("symbolic-ref", "HEAD", "refs/heads/main", cwd=origin)
+            git("config", "uploadpack.allowFilter", "true", cwd=origin)
+            clone = work / "clone"
+            git("clone", "-q", "--filter=blob:none", "--branch", "raise", origin.as_uri(), str(clone), cwd=work)
+            git("remote", "set-url", "origin", (work / "gone.git").as_uri(), cwd=clone)
+
+            env = {key: value for key, value in os.environ.items() if key != "PERSONA_CI_SOURCE_ROOT"}
+
+            def run():
+                return subprocess.run([sys.executable, str(clone / "scripts/ci/prompt_language_ratchet.py"),
+                                       "--base", "origin/main"], cwd=clone, env=env, capture_output=True, text=True,
+                                      timeout=120)
+            offline = run()
+            self.assertEqual(offline.returncode, 1, offline.stdout)
+            self.assertIn("cannot read origin/main:scripts/ci/prompt_language_baseline.json", offline.stdout)
+            git("remote", "set-url", "origin", origin.as_uri(), cwd=clone)
+            online = run()
+            self.assertEqual(online.returncode, 1, online.stdout)
+            self.assertIn("new unlocalized prompts: agents/new.md", online.stdout)
 
 
 if __name__ == "__main__":

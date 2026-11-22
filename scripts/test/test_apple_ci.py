@@ -12,6 +12,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/ci/apple.sh"
@@ -19,6 +21,48 @@ sys.path.insert(0, str(ROOT / "scripts/ci"))
 import apple_runtime
 import apple_result
 import apple_diagnostics
+
+
+class AppleOfflineUnitSchemeTests(unittest.TestCase):
+    def setUp(self):
+        project = yaml.safe_load((ROOT / 'apple/project.yml').read_text())
+        self.schemes = project['schemes']
+        self.script = SCRIPT.read_text()
+
+    def test_offline_scheme_excludes_ui_target_and_preserves_default_scheme(self):
+        offline = self.schemes['PersonaOfflineUnitTests']
+        self.assertEqual(offline['build']['targets'], {'Persona': 'all', 'PersonaTests': ['test']})
+        self.assertEqual(offline['test'], {'targets': ['PersonaTests'], 'language': 'zh-Hans', 'region': 'CN'})
+        self.assertNotIn('PersonaUITests', str(offline))
+        # The existing unit-only visual scheme demonstrates the same minimal build-target pattern.
+        for key in ('build', 'run'):
+            self.assertEqual(offline[key], self.schemes['AboutVersionVisualTests'][key])
+        default = self.schemes['Persona']
+        self.assertEqual(default['build']['targets'], {
+            'Persona': 'all', 'PersonaTests': ['test'], 'PersonaUITests': ['test'],
+        })
+        self.assertEqual(default['test']['targets'], ['PersonaTests', 'PersonaUITests'])
+        self.assertEqual((default['test']['language'], default['test']['region']), ('zh-Hans', 'CN'))
+
+    def test_offline_build_and_execution_share_the_unit_only_scheme(self):
+        common = self.script.split('  IOS_COMMON=(', 1)[1].split('\n', 2)[:2]
+        self.assertEqual(common[0], '"${XCODE[@]}" -scheme PersonaOfflineUnitTests -derivedDataPath "$OUTPUT/ios-tests" \\')
+        self.assertNotIn('-scheme Persona ', ''.join(common))
+        for marker in ('"${IOS_UNIT_SELECTION[@]}" build-for-testing',
+                       '"${IOS_UNIT_SELECTION[@]}" \\\n    -resultBundlePath "$OUTPUT/ios-unit.xcresult" test-without-building',
+                       '-only-testing:PersonaTests/TypeScaleTests -resultBundlePath "$bundle" test-without-building',
+                       '-only-testing:PersonaTests/AboutVersionRegularVisualTests'):
+            self.assertIn(marker, self.script)
+        self.assertIn('BUILD_SECONDS=1800', self.script)
+        self.assertIn('UNIT_SECONDS=1800', self.script)
+        self.assertIn("result ios-unit \"$SIM\" TypeScaleTests IconVocabularyTests TokenRatchetTests StyleSpecTests", self.script)
+
+    def test_local_ui_test_entry_keeps_default_scheme_and_ui_target(self):
+        ui_test = (ROOT / 'scripts/app/ui-test.sh').read_text()
+        self.assertIn('xcodebuild test -project Persona.xcodeproj -scheme Persona -destination "id=$SIM"', ui_test)
+        self.assertIn('-only-testing:PersonaUITests', ui_test)
+        self.assertNotIn('PersonaOfflineUnitTests', ui_test)
+        self.assertNotIn('ui-test.sh', self.script)
 
 
 class AppleCIPreparationTests(unittest.TestCase):
@@ -85,13 +129,14 @@ class AppleCIPreparationTests(unittest.TestCase):
     def test_explicit_unsigned_build_lane_preserves_the_real_build_and_skips_devices(self):
         script = SCRIPT.read_text()
         workflow = (ROOT / '.github/workflows/apple-test.yml').read_text()
-        self.assertIn('options: [ios, ios18, ios-build, packages, ios-focused]', workflow)
+        self.assertIn('options: [ios, ios18, ios-build, packages, ios-focused, ios-regressions, ios-ipad-diagnostic]', workflow)
         self.assertIn("inputs.lane == 'packages' && 'Native package tests (Xcode 26.0)'", workflow)
         self.assertIn("inputs.lane == 'ios-focused' && 'Focused iOS and About tests (Xcode 26.0)'", workflow)
-        self.assertIn('all|ios|ios18|packages|ios-build|ios-focused', script)
-        self.assertIn('[ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ]', script)
+        self.assertIn("inputs.lane == 'ios-regressions' && 'iOS stack and Live Activity regressions (Xcode 26.0)'", workflow)
+        self.assertIn('all|ios|ios18|packages|ios-build|ios-focused|ios-regressions|ios-ipad-diagnostic', script)
+        self.assertIn('[ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ] || [ "$LANE" = ios-regressions ] || [ "$LANE" = ios-ipad-diagnostic ]', script)
         self.assertIn('[ "$LANE" != packages ] && [ "$LANE" != ios-build ]', script)
-        start = script.index('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ]')
+        start = script.index('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ] || [ "$LANE" = ios-regressions ]')
         end = script.index('if [ "$LANE" = ios18 ]; then', start)
         device = script[start:end]
         for step in ('Stage resolved packages for Meta configuration',
@@ -110,7 +155,7 @@ class AppleCIPreparationTests(unittest.TestCase):
 
     def test_focused_lane_keeps_real_simulators_and_strict_about_results(self):
         script = SCRIPT.read_text()
-        self.assertIn('if [ "$LANE" = ios-focused ]; then', script)
+        self.assertIn('if [ "$LANE" = ios-focused ] || [ "$LANE" = ios-ipad-diagnostic ]; then', script)
         for suite in ('PageSearchableTests', 'StarredMessagesTests', 'LauncherModelChoiceTests',
                       'OmpNewAgentTests', 'PaseoPermissionModesTests', 'PaseoProvidersTests',
                       'AboutVersionCompactVisualTests'):
@@ -124,6 +169,91 @@ class AppleCIPreparationTests(unittest.TestCase):
         self.assertIn('TEST_RUNNER_PERSONA_SHOTS="$OUTPUT/regular-shots"', script)
         self.assertIn('Create stock regular-width About test simulator', script)
         self.assertIn('Verify hosted iOS test readiness', script)
+
+    def test_regular_ipad_diagnostic_is_explicit_and_does_not_change_ordinary_lanes(self):
+        workflow = (ROOT / '.github/workflows/apple-test.yml').read_text()
+        data = yaml.safe_load(workflow)
+        choices = data[True]['workflow_dispatch']['inputs']['lane']['options']
+        self.assertIn('ios-ipad-diagnostic', choices)
+        ordinary = yaml.safe_load(subprocess.run(
+            ['git', 'show', 'af32ff9d9459e4faafbba63cd93b3901bd487534:.github/workflows/apple-test.yml'], cwd=ROOT,
+            check=True, capture_output=True, text=True).stdout)
+        for lane in ('ios', 'ios-focused', 'ios-regressions'):
+            current = dict(data['jobs']['apple'])
+            current.pop('steps')
+            baseline = dict(ordinary['jobs']['apple'])
+            baseline.pop('steps')
+            for item in (current, baseline):
+                item.pop('name')
+            self.assertEqual(current, baseline)
+        steps = data['jobs']['apple']['steps']
+        upload = next(step for step in steps if step.get('name') == 'Upload regular iPad diagnostic evidence')
+        self.assertEqual(upload['if'], "always() && inputs.lane == 'ios-ipad-diagnostic'")
+        self.assertEqual(upload['with']['if-no-files-found'], 'error')
+        original_steps = ordinary['jobs']['apple']['steps']
+        for step in original_steps:
+            if step.get('name') == 'Upload Apple failure diagnostics':
+                step = dict(step, **{'if': "failure() && inputs.lane != 'ios-ipad-diagnostic'"})
+            self.assertIn(step, steps)
+        script = SCRIPT.read_text()
+        self.assertIn('if [ "$LANE" = ios-ipad-diagnostic ]; then\n      # A deliberate app-host diagnostic stops', script)
+        self.assertIn('if [ "$lane" = ios-ipad-diagnostic ]; then\n          timeout --kill-after=5s 180s python3 "$ci_root/scripts/ci/apple_diagnostics.py"', script)
+        self.assertIn('"$OUTPUT" "$DIAGNOSTICS" "$LANE" "${IOS_COMMON[@]}"', script)
+        self.assertIn("ci_run 'Verify hosted regular iPad test readiness' 900", script)
+        self.assertIn("ci_run 'iOS regular-width About visual test on real iPad' 600", script)
+        self.assertLess(script.index('exit 0\n    fi\n    mkdir -p "$OUTPUT/regular-shots"'),
+                        script.index("ci_run 'iOS regular-width About visual test on real iPad'"))
+        self.assertNotIn("ci_run 'Collect regular iPad diagnostic evidence'", script)
+        original_script = subprocess.run(['git', 'show', 'af32ff9d9459e4faafbba63cd93b3901bd487534:scripts/ci/apple.sh'], cwd=ROOT,
+                                         check=True, capture_output=True, text=True).stdout
+        # The packages lane's PersonaWire tests came later (#12734) and are pinned on their own.
+        wire = script[script.index('  # The wire layer every app target links,'):script.index("  ci_run 'PersonaKit unit tests'")]
+        self.assertIn("ci_run 'PersonaWire unit tests'", wire)
+        for lane in ('ios', 'ios-focused', 'ios-regressions'):
+            current = script.replace(wire, '')
+            current = current.replace(' || [ "$LANE" = ios-ipad-diagnostic ]', '').replace('|ios-ipad-diagnostic', '')
+            current = current.replace('      checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; diagnostics="$9"; lane="${10}"; shift 10',
+                                      '      checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; shift 8')
+            current = current.replace('      "$CI_ROOT" "$CI_BUNDLE_ID" "$OUTPUT" "$DIAGNOSTICS" "$LANE" "${IOS_COMMON[@]}" \\',
+                                      '      "$CI_ROOT" "$CI_BUNDLE_ID" "$OUTPUT" "${IOS_COMMON[@]}" \\')
+            current = current.replace('        if [ "$lane" = ios-ipad-diagnostic ]; then\n          timeout --kill-after=5s 180s python3 "$ci_root/scripts/ci/apple_diagnostics.py" \\\n            "$output" "$diagnostics" --scope regular || true\n        fi\n', '')
+            current = current.replace('    local scope=all\n    if [ "$LANE" = ios-ipad-diagnostic ]; then\n      scope=regular\n    fi\n', '')
+            current = current.replace('      "$OUTPUT" "$DIAGNOSTICS" --scope "$scope"', '      "$OUTPUT" "$DIAGNOSTICS"')
+            current = current.replace('    if [ "$LANE" = ios-ipad-diagnostic ]; then\n      # A deliberate app-host diagnostic stops after its own strict probe and\n      # observer cleanup; it neither runs nor substitutes for the visual suite.\n      exit 0\n    fi\n', '')
+            self.assertEqual(current, original_script)
+
+    def test_regression_lane_stops_after_two_strict_suites(self):
+        script = SCRIPT.read_text()
+        selection = script[script.index('if [ "$LANE" = ios-regressions ]; then'):script.index('# A generic destination')]
+        self.assertEqual(re.findall(r'-only-testing:PersonaTests/(\w+)', selection), [
+            'MainPagesStackTests', 'PhoneSystemToolsTests',
+        ])
+        self.assertNotIn('IOS_EXCLUSIONS', selection)
+        readiness = script.index("ci_run 'Verify hosted iOS test readiness' 900")
+        batch = script.index("test_batch ios-unit 'iOS offline unit and design/token tests'")
+        strict = script.index('result ios-unit "$SIM" MainPagesStackTests PhoneSystemToolsTests')
+        stop = script.rindex('if [ "$LANE" = ios-regressions ]; then', batch, strict)
+        finish = script.index('if [ "$LANE" != ios-focused ]; then', strict)
+        ordinary = script.index('result ios-unit "$SIM" TypeScaleTests IconVocabularyTests TokenRatchetTests StyleSpecTests')
+        focused_start = script.index('if [ "$LANE" = ios-focused ] || [ "$LANE" = ios-ipad-diagnostic ]; then', batch)
+        focused_result = script.index('result ios-unit "$SIM" PageSearchableTests', focused_start)
+        focused = script[focused_start:script.index('\n', focused_result) + 1]
+        self.assertLess(readiness, batch)
+        self.assertLess(batch, ordinary)
+        self.assertLess(ordinary, stop)
+        self.assertLess(stop, strict)
+        self.assertEqual(script[stop:finish], '''if [ "$LANE" = ios-regressions ]; then
+    result ios-unit "$SIM" MainPagesStackTests PhoneSystemToolsTests
+    exit "$IOS_FAILED"
+  fi
+  ''')
+        self.assertLess(strict, script.index("test_batch ios-html-card 'iOS HTML card tests"))
+        # The established compact/About branch remains exactly unchanged.
+        self.assertEqual(focused, '''if [ "$LANE" = ios-focused ] || [ "$LANE" = ios-ipad-diagnostic ]; then
+    result ios-unit "$SIM" PageSearchableTests StarredMessagesTests LauncherModelChoiceTests OmpNewAgentTests PaseoPermissionModesTests PaseoProvidersTests AboutVersionCompactVisualTests
+''')
+        self.assertIn('elif [ "$LANE" != ios-regressions ]; then', script[focused_start:ordinary])
+        self.assertIn('if [ "$LANE" != ios-focused ]; then', script[finish:])
 
     def test_regular_ipad_observer_has_an_independent_scope_and_strict_probe(self):
         script = SCRIPT.read_text()
@@ -142,6 +272,80 @@ class AppleCIPreparationTests(unittest.TestCase):
         self.assertIn('--app "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/Persona"', readiness)
         self.assertIn('--test-bundle "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/PlugIns/PersonaTests.xctest/PersonaTests"', readiness)
 
+
+    def test_native_ssh_failure_evidence_has_a_timeline_and_a_redacted_server_snapshot(self):
+        package = ROOT / 'apple/Packages/PersonaSSH'
+        diagnostics = (package / 'Sources/PersonaSSH/Diagnostics.swift').read_text()
+        tunnel = (package / 'Sources/PersonaSSH/SSHTunnel.swift').read_text()
+        handlers = (package / 'Sources/PersonaSSH/Handlers.swift').read_text()
+        harness = (package / 'Tests/PersonaSSHTests/Harness.swift').read_text()
+        test = (package / 'Tests/PersonaSSHTests/SSHTunnelTests.swift').read_text()
+        self.assertIn('includingFractionalSeconds: true', diagnostics)
+        self.assertIn('guard let path = ProcessInfo.processInfo.environment["PERSONA_SSH_TRACE"] else { return }', diagnostics)
+        self.assertIn('func trace(_ message: @autoclosure () -> String)', diagnostics)
+        self.assertIn('guard ProcessInfo.processInfo.environment["PERSONA_SSH_TRACE"] != nil else { return nil }', diagnostics)
+        self.assertIn('traceID: "\\(self.traceID) \\(attemptID)"', tunnel)
+        self.assertIn('private func dial(_ attemptID: String?)', tunnel)
+        connection = tunnel.split('private func connection() -> EventLoopFuture<Channel> {', 1)[1].split('private func dial(', 1)[0]
+        self.assertIn('let attemptID = PersonaSSH.traceID("dial")', connection)
+        # Brace-scan the real function body instead of merely forbidding the identifier file-wide.
+        opening = tunnel.index('private func open(on session: Channel, joining inbound: Channel?) -> EventLoopFuture<Void> {')
+        opening = tunnel.index('{', opening)
+        depth, end, quoted, escaped = 0, opening, False, False
+        for index in range(opening, len(tunnel)):
+            char = tunnel[index]
+            if quoted:
+                if escaped:
+                    escaped = False
+                elif char == '\\':
+                    escaped = True
+                elif char == '"':
+                    quoted = False
+                continue
+            if tunnel.startswith('//', index):
+                newline = tunnel.find('\n', index)
+                if newline < 0:
+                    break
+                # Keep newlines in the slice; skip this comment's contents.
+                tunnel = tunnel[:index] + ' ' * (newline - index) + tunnel[newline:]
+                continue
+            if char == '"':
+                quoted = True
+            elif char == '{':
+                depth += 1
+            elif char == '}':
+                depth -= 1
+                if depth == 0:
+                    end = index + 1
+                    break
+        self.assertEqual(depth, 0)
+        opened = tunnel[opening:end]
+        self.assertTrue(opened.endswith('}'))
+        self.assertNotIn('attemptID', opened)
+        self.assertIn('trace("\\(self.traceID) channel open timed out', opened)
+        self.assertIn('result.fail(SSHTunnelError.timedOut)\n            session.close(promise: nil)', opened)
+        for event in ('connection requested', 'dial start', 'session authenticated',
+                      'close observed', 'current owner cleared', 'channel open timed out'):
+            self.assertIn(event, tunnel)
+        for event in ('session viability', 'session error', 'session inactive'):
+            self.assertIn('trace("\\(traceID) ' + event, handlers)
+        forwarding = test.split('@Test func forwardsRequestsToTheHub() async throws {', 1)[1].split('@Test func', 1)[0]
+        self.assertLess(forwarding.index('forwarding test begin'), forwarding.index('forwarding health complete'))
+        self.assertLess(forwarding.index('forwarding health complete'), forwarding.index('forwarding session count'))
+        self.assertIn('if accepted != 1 { sshd.traceFailure() }', forwarding)
+        self.assertIn('#expect(accepted == 1, "unexpected SSH sessions; server log: \\(log)")', forwarding)
+        self.assertNotIn('repeat', forwarding)
+        self.assertIn('let limit = 65_536', harness)
+        self.assertIn('if index == 1000 {', harness)
+        self.assertIn('let size = redacted.utf8.count', harness)
+        self.assertIn('if bytes + size > limit {', harness)
+        self.assertIn('if truncated { trace("sshd failure | snapshot truncated at 1000 lines or \\(limit) bytes") }', harness)
+        self.assertIn('.replacingOccurrences(of: user, with: "<test-user>")', harness)
+        self.assertIn('"SHA256:[A-Za-z0-9+/=]+", with: "<key-id>"', harness)
+        # No new file or upload path: the existing failure collector retains the same opt-in trace.
+        self.assertIn('trace("sshd failure | \\(redacted)")', harness)
+        self.assertIn('ci_run \'PersonaSSH native tunnel integration tests\' 900 env PERSONA_SSH_TRACE="$OUTPUT/native-ssh-trace.log"', SCRIPT.read_text())
+        self.assertIn('"regular-readiness.log", "native-ssh-trace.log",', (ROOT / 'scripts/ci/apple_diagnostics.py').read_text())
 
     def test_native_ssh_tests_run_before_the_app_and_fail_the_lane_on_error(self):
         script = SCRIPT.read_text()
@@ -178,6 +382,20 @@ class AppleCIPreparationTests(unittest.TestCase):
                     self.assertEqual((output / 'native-ssh-trace.log').read_text(), 'synthetic SSH trace\n')
                     self.assertEqual('ssh-lane-continued' in result.stdout, status == 0)
                     self.assertIn('PASS' if status == 0 else 'FAIL', result.stdout)
+
+    def test_persona_wire_tests_run_with_warnings_as_errors(self):
+        # #12734: -warnings-as-errors on a swift test line also applies to the package's dependencies, so the wire
+        # layer the app targets and later packages build on runs its own tests that way in the packages lane.
+        script = SCRIPT.read_text()
+        packages = script.split('if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then\n', 1)[1].split('\nfi', 1)[0]
+        commands = [line.strip() for line in packages.splitlines() if "ci_run 'PersonaWire " in line]
+        self.assertEqual(commands, [
+            "ci_run 'PersonaWire unit tests' 300 xcrun swift test --package-path \"$SOURCE/apple/Packages/PersonaWire\" "
+            "--scratch-path \"$SPM/PersonaWire\" -Xswiftc -warnings-as-errors"])
+        sources = ROOT / 'apple/Packages/PersonaWire/Sources/PersonaWire'
+        importing = sorted(f.name for f in sources.glob('*.swift')
+                           if re.search(r'^\s*import\s+PersonaWire\b', f.read_text(encoding='utf-8'), re.M))
+        self.assertEqual(importing, [], 'a file inside PersonaWire imports its own module, a warning (an error in CI)')
 
     def test_existing_integration_exclusions_use_exact_swift_testing_selectors(self):
         script = SCRIPT.read_text()
@@ -229,7 +447,7 @@ class AppleCIPreparationTests(unittest.TestCase):
         self.assertIn('-derivedDataPath "$OUTPUT/ios-device"', script[device_build:device_check])
         self.assertIn('python3 "$CI_ROOT/scripts/release/check_no_callkit.py" \\\n'
                       '    "$OUTPUT/ios-device/Build/Products/Debug-iphoneos/Persona.app"', script[device_check:simulator_build])
-        self.assertIn('IOS_COMMON=("${XCODE[@]}" -scheme Persona -derivedDataPath "$OUTPUT/ios-tests"', script)
+        self.assertIn('IOS_COMMON=("${XCODE[@]}" -scheme PersonaOfflineUnitTests -derivedDataPath "$OUTPUT/ios-tests"', script)
         self.assertIn('python3 "$CI_ROOT/scripts/release/check_no_callkit.py" \\\n'
                       '    "$OUTPUT/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app"', script[simulator_check:create])
         guards = (ROOT / 'scripts/ci/guards.sh').read_text()
@@ -420,6 +638,66 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
             self.assertEqual((destination / 'ios-unit.xcresult/summary.json').read_text(), 'test results')
             self.assertEqual((destination / 'native-ssh-trace.log').read_text(), 'diagnostic fixture')
             self.assertFalse((destination / 'ios-unit.xcresult/external-key').exists())
+
+    def test_regular_diagnostic_scope_excludes_other_suite_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / 'output'
+            destination = root / 'artifacts'
+            for name in ('regular-simulator.log', 'regular-simulator-boot.log', 'regular-readiness.log',
+                         'simulator.log', 'simulator-readiness.log', 'native-ssh-trace.log'):
+                output.mkdir(exist_ok=True)
+                (output / name).write_text(name)
+            for name in ('ios-regular-readiness.xcresult', 'ios-readiness.xcresult', 'ios-unit.xcresult'):
+                (output / name).mkdir()
+                (output / name / 'tests.json').write_text(name)
+            for name in ('live-readiness', 'live-regular-readiness'):
+                observer = output / 'diagnostics' / name
+                observer.mkdir(parents=True)
+                (observer / 'observer.status.txt').write_text(name)
+            (output / 'regular-readiness-context.json').write_text('{"scope":"regular"}')
+            (output / 'simulator-readiness-context.json').write_text('phone scope')
+            (output / 'simulator.log').write_text('phone-device')
+            apple_diagnostics.collect(output, destination, lambda command, **kwargs: subprocess.CompletedProcess(command, 0, '', ''), scope='regular')
+            self.assertEqual({path.name for path in destination.iterdir()}, {
+                'regular-simulator.log', 'regular-simulator-boot.log', 'regular-readiness.log',
+                'ios-regular-readiness.xcresult', 'regular-readiness-context.json', 'live-regular-readiness',
+                'simctl-list.json', 'simctl-list.stderr.txt', 'simctl-list.status.txt',
+                'disk-space.txt', 'disk-space.stderr.txt', 'disk-space.status.txt',
+            })
+            self.assertEqual((destination / 'live-regular-readiness/observer.status.txt').read_text(), 'live-regular-readiness')
+            self.assertEqual(json.loads((destination / 'regular-readiness-context.json').read_text()), {'scope': 'regular'})
+
+    def test_regular_diagnostic_scope_is_deterministic_before_context_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'output'
+            output.mkdir()
+            (output / 'regular-readiness.log').write_text('probe failed before context')
+            destination = Path(directory) / 'artifacts'
+            apple_diagnostics.collect(output, destination, lambda command, **kwargs: subprocess.CompletedProcess(command, 0, '', ''), scope='regular')
+            context = json.loads((destination / 'regular-readiness-context.json').read_text())
+            self.assertEqual(context, {'unavailable': 'regular iPad probe did not publish an owned regular-file context'})
+            self.assertFalse((destination / 'simulator-launch.status.txt').exists())
+            self.assertTrue((destination / 'regular-readiness.log').is_file())
+
+    def test_regular_context_symlink_is_rejected_without_reading_its_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'output'
+            output.mkdir()
+            (output / 'private.json').write_text('private target must not be exported')
+            (output / 'regular-readiness-context.json').symlink_to(output / 'private.json')
+            destination = Path(directory) / 'artifacts'
+            apple_diagnostics.collect(output, destination, lambda command, **kwargs: subprocess.CompletedProcess(command, 0, '', ''), scope='regular')
+            context = json.loads((destination / 'regular-readiness-context.json').read_text())
+            self.assertEqual(context, {'unavailable': 'regular iPad probe did not publish an owned regular-file context'})
+            self.assertNotIn('private target', (destination / 'regular-readiness-context.json').read_text())
+            self.assertFalse((destination / 'regular-readiness-context.json').is_symlink())
+            for name, contents in (('oversize', 'x' * 1025), ('invalid', 'not-json')):
+                with self.subTest(case=name):
+                    (output / 'regular-readiness-context.json').unlink()
+                    (output / 'regular-readiness-context.json').write_text(contents)
+                    apple_diagnostics.collect(output, destination, lambda command, **kwargs: subprocess.CompletedProcess(command, 0, '', ''), scope='regular')
+                    self.assertEqual(json.loads((destination / 'regular-readiness-context.json').read_text()), context)
 
     def test_unavailable_simctl_still_retains_existing_logs(self):
         with tempfile.TemporaryDirectory() as directory:
