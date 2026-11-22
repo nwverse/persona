@@ -149,7 +149,7 @@ func (n *Node) contextUse(id string) (tokens, window int) {
 	if m.contextTokens <= 0 {
 		return 0, 0
 	}
-	return m.contextTokens, contextWindowOf(m.model, m.contextWindow, m.contextTokens)
+	return m.contextTokens, n.sessionContextWindow(id, "", nil, m)
 }
 
 // sendCompacting is session.send with CompactIfFull: compacted first when nearly full (planCompaction), else n.send.

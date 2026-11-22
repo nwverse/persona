@@ -84,6 +84,7 @@ class HttpChatComposerService internal constructor(
             message.launcher?.let { put("launcher", it) }
             message.model?.let { put("model", it) }
             if (message.applySwitch) put("apply_switch", true)
+            message.via?.let { put("via", it) }
         }.toString().toRequestBody(jsonType)
         return try {
             request(api("sessions", message.session.machineId, message.session.sessionId, "messages"), body, message.headers).use { response ->
@@ -166,8 +167,21 @@ class HttpChatComposerService internal constructor(
             withContext(NonCancellable) { onRetryDelivery(clientMessageId, unknown, retry.opId, null) }
             throw cancelled
         }
-        if (result == MessageTransportResult.NotSent) record(original, ComposerDelivery(DeliveryState.Refused, refusal))
-        deliveries.value.getValue(clientMessageId).also { onRetryDelivery(clientMessageId, it, retry.opId, result) }
+        val outcome = when (result) {
+            MessageTransportResult.Accepted -> ComposerDelivery(DeliveryState.Sent)
+            MessageTransportResult.Kept, MessageTransportResult.Held -> ComposerDelivery(DeliveryState.Held)
+            MessageTransportResult.NotSent -> ComposerDelivery(DeliveryState.Refused, refusal)
+            is MessageTransportResult.HubError -> when {
+                result.delivered == "yes" -> ComposerDelivery(DeliveryState.Sent)
+                result.code in setOf("input_draft", "dialog_open") -> ComposerDelivery(DeliveryState.Refused, refusal)
+                else -> ComposerDelivery(DeliveryState.Unknown)
+            }
+            else -> ComposerDelivery(DeliveryState.Unknown)
+        }
+        // Another automatic attempt may update this visible id while the retry is in flight. The actual retry
+        // result is authoritative for this callback; do not read a stale Sending overlay back from the map.
+        record(original, outcome)
+        outcome.also { onRetryDelivery(clientMessageId, it, retry.opId, result) }
     }
 
     override suspend fun upload(session: SessionKey, name: String, file: File): String =

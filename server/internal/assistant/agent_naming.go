@@ -428,9 +428,17 @@ func (s *Service) tryAgentName(ctx context.Context, machine string, c proto.Sess
 		return true
 	}
 	if failureReason == "" && tab != "" && title != tab {
-		if err := s.call(callCtx, machine, assistantwire.DeviceSessionRenameTabIfCurrent, map[string]any{
+		// Not under the lock: the reply comes through the node's reader loop, which names the rows it is sent under
+		// this lock (agentDisplay) and would wait for it until the call timed out (#11752). One naming pass runs at a
+		// time (b.running), so no other attempt names this session meanwhile; the record is read again for what a
+		// rename or a requested name changed during the call.
+		b.mu.Unlock()
+		err := s.call(callCtx, machine, assistantwire.DeviceSessionRenameTabIfCurrent, map[string]any{
 			"session_id": current.SessionID, "tab_name": title, "expected_tab_name": tab, "tab_id": cmp.Or(current.SlotID, current.TabID),
-		}, nil); err != nil {
+		}, nil)
+		b.mu.Lock()
+		r = b.records[key]
+		if err != nil {
 			failureReason = "tab_rename_failed"
 			s.logf("agent naming: session=%q/%q reason=%s: %v", machine, c.SessionID, failureReason, err)
 		}

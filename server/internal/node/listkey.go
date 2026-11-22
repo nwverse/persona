@@ -126,6 +126,9 @@ func listKeySized(list []proto.Session, size int) string {
 			w.quote(*s.PendingEffort, '/')
 			w.str(strconv.FormatBool(s.EffortChangeFailed), '\n')
 		}
+		if s.OffLauncher { // the scan of running claudes flips it with no turn of the agent (offlauncher.go)
+			w.b.WriteString("off-launcher\n")
+		}
 		w.b.WriteString("source:")
 		w.str(s.SourceKind, '/')
 		w.str(s.SourceThreadID, '/')

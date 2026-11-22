@@ -27,7 +27,7 @@ vi.mock("./ChatSearch", async load => {
 const captured = vi.hoisted(() => ({
   onSend: undefined as ((out: Outgoing) => Promise<boolean>) | undefined,
   session: { machine_id: "hub", session_id: "c1", title: "Conversation", cwd: "/code", status: "idle" } as Session | undefined,
-  composer: undefined as { placeholder?: string; disabled?: boolean; blocked?: { label: string } } | undefined,
+  composer: undefined as { placeholder?: string; disabled?: boolean; blocked?: { label: string }; onSendNow?: () => Promise<void> } | undefined,
   // set: the hub answers the exact-session lookup (useRuntimeSession) and the page is connected
   features: [] as string[],
   // set: the computers the page knows (an Agent's computer away, #10661)
@@ -36,7 +36,7 @@ const captured = vi.hoisted(() => ({
 
 vi.mock("./Composer", async (importOriginal) => ({
   ...await importOriginal<typeof import("./Composer")>(),
-  Composer: ({ onSend, ...props }: { onSend: (out: Outgoing) => Promise<boolean>; placeholder?: string; disabled?: boolean; blocked?: { label: string } }) => {
+  Composer: ({ onSend, ...props }: NonNullable<typeof captured.composer> & { onSend: (out: Outgoing) => Promise<boolean> }) => {
     captured.onSend = onSend;
     captured.composer = props;
     return null;
@@ -609,6 +609,23 @@ describe("a send whose answer came back in doubt (the hub stopped waiting, the m
     expect(line()?.textContent).toContain(t("lib-outbox.peer_unconfirmed"));
   });
 
+  // The screenshot case (#9025 follow-up): a busy Claude whose Persona plugin is from before busy delivery got the
+  // message through its inbox, which did not take it. The bubble says why and what fixes it, across a reload too.
+  it("an unconfirmed relay to a session with an older Persona plugin says to reopen it on the computer", async () => {
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    let sending!: Promise<boolean>;
+    act(() => { sending = captured.onSend!({ text: "可以派 subagent 分头处理", images: [] }); });
+    await flush();
+    answer(json({ code: "peer_unconfirmed", error: "not taken", delivered: "unknown", delivered_as: "relayed", relay_reason: "plugin_outdated" }, 409));
+    await act(async () => void (await sending));
+    await flush();
+    const line = () => host.querySelector("[data-outbox] [data-in-doubt]");
+    expect(line()?.getAttribute("data-in-doubt")).toBe("unknown");
+    expect(line()?.textContent).toContain(t("lib-outbox.peer_unconfirmed_old_plugin"));
+    expect(getState().outbox["hub/c1"]![0].relay).toBe("plugin_outdated");
+  });
+
   it("a refusal stays failed even with the same words in the chat", async () => {
     act(() => root.render(<ChatView mid="hub" sid="c1" />));
     await flush();
@@ -1148,6 +1165,7 @@ describe("a queued message is not drawn as a sending bubble too", () => {
   it.each([
     ["with words", "Please check this screen", "[Image #1]\n\nPlease check this screen\n<attached_images>\npath: /tmp/a.png\n</attached_images>"],
     ["a photo only", "", "[Image #1]\n<attached_images>\npath: /tmp/a.png\n</attached_images>"],
+    ["a photo only without paths", "", ""],
   ])("%s", async (_, text, raw) => {
     captured.session = queued([]);
     reply = () => json({});
@@ -1169,6 +1187,18 @@ describe("a queued message is not drawn as a sending bubble too", () => {
     act(() => root.render(<ChatView mid="hub" sid="c1" />)); await flush();
     expect(host.querySelectorAll("[data-user-bubble][data-send-state]")).toHaveLength(1);
   });
+});
+
+it.each([false, true])("wires runtime steering for the composer (assistant=%s)", async (assistant) => {
+  const session = { machine_id: "hub", session_id: "c1", title: "Conversation", cwd: "/code", status: "working", source_kind: "runtime", agent: "agy", assistant } as Session;
+  captured.session = { ...session, capabilities: { send: true, queue_send_now: false } };
+  act(() => root.render(<ChatView mid="hub" sid="c1" assistant={assistant} />)); await flush();
+  expect(captured.composer?.onSendNow).toBeUndefined();
+  captured.session = { ...session, capabilities: { send: true, queue_send_now: true } };
+  act(() => root.render(<ChatView mid="hub" sid="c1" assistant={assistant} />)); await flush();
+  expect(captured.composer?.onSendNow).toBeTypeOf("function");
+  await act(async () => captured.composer!.onSendNow!());
+  expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).endsWith("/sessions/hub/c1/queue/send-now"))).toBe(true);
 });
 
 // The assistant could not start (#10194): the hub answers 202 delivered "later" and the manager keeps the message. The

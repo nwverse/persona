@@ -182,7 +182,7 @@ func (s *Service) relayRefused(machine, to string, msg relayMsg, err error) (sta
 	case msg.Tool == askAnswerTool && strings.HasPrefix(msg.From, approvalResultFrom):
 		// It waits for the conversation the approval came from: it has no fallback (deliverApprovalResults). A
 		// runtime conversation that cannot take it at all ends it with the owner's push, as it always did (#10338).
-		if code == assistantwire.CodeSupervisionRuntime {
+		if supervisionRefusalCode(code) {
 			return false, push
 		}
 		what = "an approval result stays queued"
@@ -208,6 +208,7 @@ func (s *Service) relayRefused(machine, to string, msg relayMsg, err error) (sta
 		}
 	case msg.Tool == "conversation_send" || msg.Tool == "conversation_new":
 		what = "its sender is told"
+		s.handoverEnded(msg.Handover, code) // a hand-over of the owner's words it carried (relay_handover.go)
 		return false, func(ctx context.Context) { s.tellRelayRefused(ctx, machine, to, msg, code) }
 	case msg.Tool == noticeTool && (msg.State == "needs" || msg.State == "failed"):
 		what = "the push it stood for goes out"
@@ -256,20 +257,26 @@ func (s *Service) moveRelay(to string, msg relayMsg) bool {
 
 // reportRelayRefused pushes the owner that conversation to refused a message of kind tool for good (code): it was not
 // delivered and will not be sent again. A supervision message's push says the task is still there to open, and with
-// assistant_supervision_runtime that the follow-up needs a Claude Code or Codex conversation; any other message's
+// assistant_supervision_runtime that the follow-up needs a compatible launcher on this computer; any other message's
 // says that this runtime cannot take Persona's separate instructions, or else that an update was refused.
 func (s *Service) reportRelayRefused(ctx context.Context, machine, to, tool, code string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	lang := s.lang(ctx)
+	args := i18n.Args{}
+	if supervisionRefusalCode(code) {
+		args = s.supervisionLauncherArgs(ctx, machine, lang)
+	}
 	s.push(ctx, Notification{DeviceID: machine, SessionID: to,
-		Title: i18n.T(lang, "assistant-conversations.relay_delivery_failed"), Body: i18n.T(lang, relayRefusedBody(tool, code))})
+		Title: i18n.T(lang, "assistant-conversations.relay_delivery_failed"), Body: i18n.T(lang, relayRefusedBody(tool, code), args)})
 }
 
 // relayRefusedBody is the key of the push's text when a message of kind tool is refused for good with code.
 func relayRefusedBody(tool, code string) string {
-	runtime := code == assistantwire.CodeSupervisionRuntime
+	runtime := supervisionRefusalCode(code)
 	switch {
+	case code == assistantwire.CodeSupervisionAccount:
+		return "rpc-errors.assistant_supervision_account"
 	case tool == superviseTool && runtime:
 		return "assistant-conversations.supervision_delivery_failed"
 	case tool == superviseTool:

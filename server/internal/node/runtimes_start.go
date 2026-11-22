@@ -1,6 +1,7 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -84,10 +85,14 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 	defer cancel()
 	params := map[string]any{"cwd": p.Cwd, "prompt": p.Prompt}
 	for k, v := range map[string]string{"launcher": p.Launcher, "model": p.Model, "permission_mode": p.PermissionMode,
-		"effort": p.Effort, "workspace_id": p.WorkspaceID, "resume": p.Resume, "session_id": p.SessionID, "agent_type": p.AgentType} {
+		"effort": p.Effort, "workspace_id": p.WorkspaceID, "resume": p.Resume, "session_id": p.SessionID, "agent_type": p.AgentType,
+		"client_msg_id": p.ClientMsgID} {
 		if v != "" {
 			params[k] = v
 		}
+	}
+	if len(p.Images) > 0 {
+		params["images"] = p.Images
 	}
 	if p.Shell {
 		params["shell_launcher"] = true
@@ -128,7 +133,27 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 	if err != nil {
 		return nil, nil, err
 	}
+	if p.Resume == "" {
+		n.recordEngineStart(h, started, p.Cwd)
+	}
 	return started, cleanInstead(res.Instead), nil
+}
+
+// recordEngineStart keeps the node's record of a session an engine runtime (Paseo, Cindy) has just started, as a
+// terminal start keeps one (putAgentState) and a start with a creation identity already did (creationResult): its
+// launcher, its directory, when, and the runtime that started it (EngineRuntime). The engine lists an archived Agent
+// only for a while (Paseo: the 80 newest archived in the last 7 days) and the node has no transcript under the id
+// Persona named it by, so without the record the computer would have nothing of it once it is not listed, and refuse
+// an extension's resume of it (resumeOutsideHealth) that the engine takes back (#10941). A session that has a record
+// keeps it.
+func (n *Node) recordEngineStart(h *runtimeConn, s *proto.Session, cwd string) {
+	if _, engine := engineRuntimes[h.id()]; !engine || s == nil || s.SessionID == "" || n.state == nil {
+		return
+	}
+	if _, ok := n.state.get(s.SessionID); ok {
+		return
+	}
+	n.state.put(s.SessionID, sessionState{Launcher: s.Launcher, Cwd: cmp.Or(s.Cwd, cwd), StartedAt: time.Now().UTC(), EngineRuntime: h.id()})
 }
 
 // listStarted lists a session h just started right away, before the runtime's next runtime.sessions, so the chat

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
@@ -163,6 +164,21 @@ func (s *Service) startBackendTask(ctx context.Context, t *PlanTask, params map[
 		return answer.Error
 	}
 	return json.Unmarshal(result, out)
+}
+
+// nodeMethod is the method a device call goes out as: a session.start that carries an admitted backend workspace
+// (startBackendTask) goes to the node's backend start, after call has handled it as the session.start it is. Every
+// other call keeps its method. A classifier only, like tracksNodeWrite: call stays the transport its callers start
+// through, and they are the start paths (start_paths_test.go).
+func nodeMethod(method string, params any) string {
+	fields, ok := params.(map[string]any)
+	if !ok || method != DeviceSessionStart {
+		return method
+	}
+	if _, managed := fields["backend_workspace"].(taskworkspace.Request); managed {
+		return devicewire.MethodStartBackendSession
+	}
+	return method
 }
 
 func (s *Service) releaseUnusedBackendStart(ctx context.Context, t *PlanTask) {

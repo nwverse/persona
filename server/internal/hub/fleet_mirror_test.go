@@ -142,6 +142,8 @@ func (d *mirrorDevices) CapacitySnapshot(context.Context) proto.CapacitySnapshot
 	return proto.CapacitySnapshot{}
 }
 
+func (d *mirrorDevices) GatewayRetryAt(string, string, time.Time) time.Time { return time.Time{} }
+
 func (d *mirrorDevices) SetAttention(link.Attention) {}
 
 func (d *mirrorDevices) LinkRang(context.Context, string, time.Duration) bool { return false }
