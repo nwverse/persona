@@ -39,3 +39,28 @@ func TestSupervisionRefusalUsesOnlyThisMachinesVerifiedChannels(t *testing.T) {
 		}
 	}
 }
+
+func TestSupervisionPickerShowsFailedProbeAsUnavailable(t *testing.T) {
+	s, _ := mainChatFixture(t)
+	list := []ConfiguredLauncher{
+		{Launcher: proto.Launcher{Name: "claude", Source: "builtin"}},
+		{Launcher: proto.Launcher{Name: "verified", DisplayName: "OpenCode", Source: "opencode", Agent: "opencode", Assistant: true, SupervisionPolicy: true}},
+		{Launcher: proto.Launcher{Name: "failed-probe", Source: "opencode", Agent: "opencode", Assistant: true}},
+		{Launcher: proto.Launcher{Name: "plugin", Source: "opencode", Agent: "opencode", Assistant: true}},
+	}
+	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+		fits, off := s.supervisionPickerLaunchers(list, nil, lang)
+		if len(fits) != 2 || len(off) != 2 {
+			t.Fatalf("%s: fits=%+v off=%+v", lang, fits, off)
+		}
+		for _, l := range off {
+			if l.Code != "assistant_supervision_runtime" || !strings.Contains(l.Reason, "OpenCode") || strings.Contains(l.Reason, "{launchers}") {
+				t.Fatalf("%s: %+v", lang, l)
+			}
+		}
+	}
+	// The ordinary Assistant catalog remains unaffected by picker-only filtering.
+	if len(list) != 4 || !list[2].Assistant {
+		t.Fatal("ordinary catalog mutated")
+	}
+}

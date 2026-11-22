@@ -126,6 +126,10 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 		// It starts as a send would: in interactive Claude Code while the setting is on (#10058; tuiWanted leaves guests
 		// and plan mode in print mode), so neither the compaction nor the next message runs a process of the other kind.
 		execution.Interactive = current.Interactive
+		// The manager's current refresh role, read afresh (#12786): a main or lead conversation compacted cold
+		// starts with its proxy again (a new, empty one: the compacted prefix is captured anew), anything else
+		// without one.
+		execution.CacheKeepalive = current.CacheKeepalive
 		if proto.IsExternalLauncher(launcher) {
 			execution.StartupContext = ctx
 		}
@@ -162,6 +166,7 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 // Both the user's request and idle-aware delivery use the same completion reporting.
 func (n *Node) compactAssistantProc(ctx context.Context, p *assistantProc) error {
 	id := p.id
+	n.forgetCacheWarm(id)
 	p.mu.Lock()
 	p.compacting, p.compacted, p.manual = true, true, true
 	p.lastActive = time.Now()

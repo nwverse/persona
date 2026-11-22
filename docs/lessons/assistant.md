@@ -1,5 +1,14 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A launcher name does not identify an execution backend (#12791). Scheduled Assistant conversations must pass
+  `purpose: assistant` to model discovery and argument-forwarding checks, just as ordinary Assistant messages do.
+  On an exclusive Agent engine, a same-named provider can advertise different models and thinking levels from the
+  shell CLI that actually runs the conversation. Keep their cache partitions separate; do not lower a saved effort
+  to match the wrong catalog. Test the due-run, retry, workout admission and task-edit paths with conflicting
+  catalogs. A structured, deterministic pre-dispatch configuration refusal retains one failure/fallback notice and
+  must not arm an unchanged automatic retry. Similar provider prose and unavailable discovery remain retryable or
+  unknown; retry log counts alone do not establish how many requests reached a model.
+
 - An inline-size check must not discard a resource that its file fallback immediately needs (#12654). The official Feishu bot read a 4 MiB image twice: the 3 MiB inline decision used the 50 MiB downloader, then saving fetched it again. Decide inline versus file inside the same download lifecycle and upload the existing bytes; pass the image-count decision into that call too. Keep the file ceiling on both routes, distinguish download and upload failures, and turn only the size sentinel into the existing skipped-file result so accompanying words survive. Count actual response-body reads and uploads at the production transport entry, and separately test the asynchronous message entry.
 
 - The node process's PATH is not the assistant's shell PATH (#12483, 2026-11-21). A node started by a service manager has a minimal PATH, while the assistant's Bash runs through the user's login shell, whose PATH restores version-manager directories. `trustedPATH` then saw every `export PATH="<version manager>/bin:$PATH"; lark-cli …` as replacing the executable and asked for a whole-command card, one per call, even for `--help` reads. Ask the login shell for its PATH once (a marked line, cached; retried after a failed ask) and trust those directories; a directory outside that set and every write still ask. Tests seed the Node's login-shell directories instead of starting a shell.
