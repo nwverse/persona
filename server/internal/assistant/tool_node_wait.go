@@ -67,12 +67,10 @@ func (e *nodeSilentError) Error() string {
 	if e.lastReport >= 0 {
 		last = "its last report was " + roundAge(e.lastReport) + " ago"
 	}
-	what := "nothing came back"
-	switch e.method {
-	case DeviceSessionItems:
+	// Every other method toolNodeWait bounds changes something on the computer (a send, a stop, a close, a rename).
+	what := "it is not known whether it was done"
+	if e.method == DeviceSessionItems {
 		what = "the transcript could not be read"
-	case DeviceSessionSend, "session.interrupt", "session.close", "session.archive", DeviceSessionRename:
-		what = "it is not known whether it was done"
 	}
 	return fmt.Sprintf("the node on %s did not answer within %s (%s): %s. The computer may be asleep or its node stuck; "+
 		"go on without it or try again later", e.machine, roundAge(e.wait), last, what)
