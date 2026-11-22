@@ -210,6 +210,14 @@ class MergeBaseTests(unittest.TestCase):
 
 
 class CheckoutTests(unittest.TestCase):
+    def test_session_insights_and_extension_view_stay_within_baseline(self):
+        targets = (
+            "web/src/views/chat/SessionInsightsPopover.tsx:",
+            "web/src/views/settings/ExtensionView.tsx:",
+        )
+        found = [violation for violation in ratchet.check(ROOT) if violation.startswith(targets)]
+        self.assertEqual(found, [])
+
     def test_this_checkout_is_at_its_baseline(self):
         self.assertEqual(ratchet.check(ROOT), [])
 

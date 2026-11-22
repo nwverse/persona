@@ -164,11 +164,11 @@ export function SessionInsightsPopover({
       aria-labelledby={titleId}
       tabIndex={-1}
       data-session-insights
-      className="fixed z-50 max-h-[min(70vh,520px)] overflow-y-auto rounded-xl border border-line bg-surface p-4 text-[12px] text-ink shadow-overlay outline-none"
+      className="fixed z-50 max-h-[min(70vh,520px)] overflow-y-auto rounded-xl border border-line bg-surface p-4 text-label text-ink shadow-overlay outline-none"
       style={style}
     >
       <div className="flex items-center justify-between gap-2">
-        <h2 id={titleId} className="text-[13px] font-semibold text-ink">{t("chat-sessioninsights.title")}</h2>
+        <h2 id={titleId} className="text-meta font-semibold text-ink">{t("chat-sessioninsights.title")}</h2>
         <button
           type="button"
           onClick={onClose}
@@ -340,7 +340,7 @@ export function SessionInsightsPopover({
               onClick={() => void triggerCompact()}
               disabled={compactBusy}
               data-insights-compact
-              className="flex w-full items-center justify-between gap-2 rounded-lg border border-line bg-inset px-3 py-2 text-[12px] font-medium text-ink transition-colors hover:bg-hover disabled:opacity-50"
+              className="flex w-full items-center justify-between gap-2 rounded-lg border border-line bg-inset px-3 py-2 text-label font-medium text-ink transition-colors hover:bg-hover disabled:opacity-50"
             >
               <span className="flex items-center gap-1.5">
                 <Icon name="layers" size={14} className="shrink-0 text-ink-2" />

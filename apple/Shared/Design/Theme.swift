@@ -729,6 +729,19 @@ nonisolated enum Theme {
         static let maxPitch: Double = 90
         static let minZoom: Double = 0.5
         static let maxZoom: Double = 4.0
+        /// The cutaway (#13036): the outer walls between the camera and the rooms are drawn this high (metres above
+        /// their bottom); a wall counts as facing the camera from this cosine on, and as an outer wall when the ground
+        /// this far past its camera-side face is not a floor (a prism no higher than the floor top); a shape within
+        /// this of a lowered wall's faces stands in it and is cut too; one rising this much over the cut within reach
+        /// of one, on the room's side, is drawn see-through at this opacity.
+        static let cutawayHeight: Double = 0.6
+        static let cutawayFacing: Double = 0.35
+        static let cutawayProbe: Double = 0.3
+        static let cutawayFloorTop: Double = 0.1
+        static let cutawayBand: Double = 0.16
+        static let cutawaySeeThroughAbove: Double = 0.6
+        static let cutawayReach: Double = 0.9
+        static let cutawaySeeThroughOpacity: CGFloat = 0.3
         /// Pins draw above the model, nearer ones over farther ones: a pin's layer is this less its depth.
         static let pinLayerBase: Double = 10_000
         static let fitMargin: Double = 1.1
@@ -744,11 +757,11 @@ nonisolated enum Theme {
         static let coolLightHex: UInt32 = 0xE6F2FF
         static let sunLightHex: UInt32 = 0xFFF9EE
         static let skyLightHex: UInt32 = 0xDDE8F8
-        static let lightAmbientIntensity: CGFloat = 260
-        static let darkAmbientIntensity: CGFloat = 180
-        static let lightKeyIntensity: CGFloat = 420
-        static let darkKeyIntensity: CGFloat = 260
-        static let lightFillIntensity: CGFloat = 140
+        static let lightAmbientIntensity: CGFloat = 380
+        static let darkAmbientIntensity: CGFloat = 230
+        static let lightKeyIntensity: CGFloat = 640
+        static let darkKeyIntensity: CGFloat = 380
+        static let lightFillIntensity: CGFloat = 90
         static let darkFillIntensity: CGFloat = 110
         // A lit lamp warms its corner of the room without washing light walls out to white.
         static let lampIntensity: CGFloat = 90
