@@ -25,6 +25,77 @@ class AboutBuildConsumerTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "optional/native/token/localization"):
                 build.validate_consumer_lock()
 
+    def test_production_generated_reference_is_rejected(self):
+        with tempfile.TemporaryDirectory(prefix="persona-refract-build-production-") as temporary:
+            android = Path(temporary) / "android"
+            production = android / "feature/settings/src/main/kotlin/Host.kt"
+            production.parent.mkdir(parents=True)
+            production.write_text("import persona.feature.settings.generated.AboutBuildRow\n")
+            with self.assertRaisesRegex(
+                    ValueError, r"feature/settings/src/main/kotlin/Host\.kt$") as error:
+                build.validate_production_exclusion(android)
+            self.assertIn("AboutBuildRow", production.read_text())
+            self.assertEqual(str(production), str(android / error.exception.args[0].split(": ")[-1]))
+
+    def test_production_comments_and_strings_do_not_create_references(self):
+        with tempfile.TemporaryDirectory(prefix="persona-refract-build-production-") as temporary:
+            android = Path(temporary) / "android"
+            production = android / "feature/settings/src/main/kotlin/Host.kt"
+            production.parent.mkdir(parents=True)
+            production.write_text('''// AboutBuildRow in a line comment
+/* AboutBuildSnapshot in a block comment
+   /* nested */ still a comment */
+/** Documentation mentions AboutBuildRow. */
+val ordinary = "AboutBuildRow and AboutBuildSnapshot"
+val raw = """AboutBuildRow /* AboutBuildSnapshot */"""
+val character = '"'
+val escaped = "\\\" AboutBuildSnapshot"
+val kept = ordinary.length + raw.length + character.code + escaped.length
+''')
+            build.validate_production_exclusion(android)
+
+    def test_production_interpolated_generated_reference_is_rejected(self):
+        for expression in ("$AboutBuildRow", "${AboutBuildRow}", "${mapOf(1 to AboutBuildSnapshot)[1]}"):
+            with self.subTest(expression=expression), \
+                    tempfile.TemporaryDirectory(prefix="persona-refract-build-production-") as temporary:
+                android = Path(temporary) / "android"
+                production = android / "feature/settings/src/main/kotlin/Host.kt"
+                production.parent.mkdir(parents=True)
+                production.write_text(f'val rendered = "{expression}"\n')
+                with self.assertRaisesRegex(ValueError, "test-only consumer"):
+                    build.validate_production_exclusion(android)
+
+    def test_debug_and_release_generated_references_are_rejected(self):
+        for source_set in ("debug", "release"):
+            with self.subTest(source_set=source_set), \
+                    tempfile.TemporaryDirectory(prefix="persona-refract-build-production-") as temporary:
+                android = Path(temporary) / "android"
+                production = android / f"feature/settings/src/{source_set}/kotlin/Host.kt"
+                production.parent.mkdir(parents=True)
+                production.write_text("AboutBuildRow(AboutBuildSnapshot(\"42\").buildNumber)\n")
+                with self.assertRaisesRegex(ValueError, f"src/{source_set}/kotlin/Host.kt$"):
+                    build.validate_production_exclusion(android)
+
+    def test_test_source_generated_reference_is_allowed(self):
+        for source_set in ("test", "androidTest"):
+            with self.subTest(source_set=source_set), \
+                    tempfile.TemporaryDirectory(prefix="persona-refract-build-production-") as temporary:
+                android = Path(temporary) / "android"
+                generated = android / f"feature/settings/src/{source_set}/kotlin/Host.kt"
+                generated.parent.mkdir(parents=True)
+                generated.write_text("AboutBuildRow(AboutBuildSnapshot(\"42\").buildNumber)\n")
+                build.validate_production_exclusion(android)
+
+    def test_host_default_and_optional_slot_are_pinned(self):
+        host = build.HOST.read_text(encoding="utf-8")
+        build.validate_host(host)
+        with self.assertRaisesRegex(ValueError, "handwritten default"):
+            build.validate_host(host.replace("buildRow: (@Composable () -> Unit)? = null", "buildRow: @Composable () -> Unit"))
+        with self.assertRaisesRegex(ValueError, "handwritten PackageInfo default"):
+            build.validate_host(host.replace('Text("${info.longVersionCode}"', 'Text("42"'))
+        with self.assertRaisesRegex(ValueError, "only the supplied Build component"):
+            build.validate_host(host.replace("buildRow()", "OtherPage()"))
+
     def test_check_generates_twice_without_patching_the_reviewed_file(self):
         original = build.GENERATED.read_bytes()
         with tempfile.TemporaryDirectory() as temporary:
