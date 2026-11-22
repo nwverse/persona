@@ -448,6 +448,9 @@ func (f *briefFacts) failedLine(x todayFailed, md bool) string {
 	if x.Why != "" {
 		line += " — " + esc(x.Why)
 	}
+	if md { // what did not go through is red on the card
+		line = "<font color='red'>" + line + "</font>"
+	}
 	return line
 }
 

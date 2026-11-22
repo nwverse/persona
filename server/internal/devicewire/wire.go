@@ -268,6 +268,10 @@ type RecMachine struct {
 
 // State is one machine as the manager has it.
 type State struct {
+	// TransportFor is an owning manager's retained transport identity. The hub
+	// validates the referenced computer belongs to that manager; it never resolves
+	// sessions or stores business mappings itself.
+	TransportFor string `json:"transport_for,omitempty"`
 	// Machine is what the apps get, but for what the hub adds (system, computer, browser).
 	Machine proto.Machine `json:"machine"`
 	// Config is the machine's entry: hub.json's, or a member's (a derived machine), as the hub gave it.
@@ -453,6 +457,7 @@ var Routes = []string{
 	"POST /api/v1/sessions/{mid}/{sid}/start/continue",
 	// Retry and Delete on a message held for an Agent while its computer was away (#10661, internal/devices held.go),
 	// from a full device.
+	HeldOutboxRoute,
 	"POST /api/v1/sessions/{mid}/{sid}/held/{msg}/retry",
 	"DELETE /api/v1/sessions/{mid}/{sid}/held/{msg}",
 	"GET /api/v1/machines/{mid}/codex/{sid}/takeover",

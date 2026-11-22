@@ -94,6 +94,7 @@ openLauncherDetails
 openLauncherEditor
 openLauncherPage
 openLauncherPicker
+openLinkSwitch
 openLinkURL
 openLiveScreenSettings
 openLocalProxy
@@ -248,6 +249,7 @@ showCloseoutSample
 showCompactChrome
 showComposerPhoto
 showConnection
+showConnectionAddresses
 showConnectionCycle
 showContexts
 showContinuityShadow

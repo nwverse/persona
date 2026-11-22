@@ -2,7 +2,7 @@
 """Keep the inventory of CJK prompts without language handling from growing.
 
 This is a structural migration guard, not a translation-quality check. A template
-handles language when an if action tests .Language/.Lang, directly or through a
+handles language when an if or else-if action tests .Language/.Lang, directly or through a
 template included with the same data. Existing omissions are recorded by filename
 and directory count; replacing an old omission with a new file is not allowed.
 There are no source exemptions. --update only removes resolved entries.
@@ -31,7 +31,7 @@ CJK = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 COMMENT = re.compile(r"{{-?\s*/\*.*?\*/\s*-?}}", re.S)
 ACTION = re.compile(r"{{-?\s*(.*?)\s*-?}}", re.S)
 QUOTED = re.compile(r'"(?:\\.|[^"\\])*"|`[^`]*`', re.S)
-LANGUAGE = re.compile(r"^if\s+.*\.(?:Language|Lang)\b", re.S)
+LANGUAGE = re.compile(r"^(?:else\s+)?if\s+.*\.(?:Language|Lang)\b", re.S)
 INCLUDE = re.compile(r'^template\s+"([^"]+)"\s+\.$')
 
 
@@ -90,6 +90,30 @@ def lowered(actual, baseline):
     return actual
 
 
+def _git(*args):
+    try:
+        return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        raise ValueError("git " + " ".join(args[:3]) + " timed out")
+
+
+def base_text(base, path):
+    """The file's text at base, or None when base has no such file.
+
+    Whether the file is there comes from the tree, not from reading it: CI's guards checkout is blobless (#12753), so
+    the base's copy of a changed baseline is fetched on first read, and a failed fetch must not count as absence.
+    """
+    listed = _git("ls-tree", "-z", "--full-tree", base, "--", path)
+    if listed.returncode:
+        raise ValueError("cannot read the tree of ratchet base " + base)
+    if not any(entry.partition("\t")[2] == path for entry in listed.stdout.split("\0")):
+        return None
+    shown = _git("show", base + ":" + path)
+    if shown.returncode:
+        raise ValueError("cannot read {0}:{1}: {2}".format(base, path, shown.stderr.strip()))
+    return shown.stdout
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--update", action="store_true")
@@ -100,12 +124,11 @@ def main():
         baseline = decode_baseline(json.loads(path.read_text(encoding="utf-8")))
         actual = scan(ROOT / SOURCE)
         # Once the baseline exists upstream, editing its JSON cannot raise it.
-        exists = subprocess.run(["git", "cat-file", "-e", args.base], cwd=ROOT, capture_output=True)
-        if exists.returncode:
+        if _git("cat-file", "-e", args.base).returncode:
             raise ValueError("cannot read ratchet base " + args.base)
-        prior = subprocess.run(["git", "show", args.base + ":" + BASELINE], cwd=ROOT, capture_output=True, text=True)
-        if prior.returncode == 0:
-            lowered(baseline, decode_baseline(json.loads(prior.stdout)))
+        prior = base_text(args.base, BASELINE)
+        if prior is not None:
+            lowered(baseline, decode_baseline(json.loads(prior)))
         lowered(actual, baseline)
         if args.update:
             path.write_text(json.dumps(encoded(actual), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

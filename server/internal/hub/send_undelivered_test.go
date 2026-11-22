@@ -20,10 +20,11 @@ import (
 // keepManager is a manager on the real bus that answers SendParams with the message as it came (or refuses it with
 // ahead) and records assistant.keep_undelivered (or refuses it when noKeep: an older manager).
 type keepManager struct {
-	mu     sync.Mutex
-	kept   []assistantwire.KeepUndeliveredParams
-	ahead  bool
-	noKeep bool
+	mu             sync.Mutex
+	kept           []assistantwire.KeepUndeliveredParams
+	ahead          bool
+	noKeep         bool
+	approvalTarget string
 }
 
 func (k *keepManager) keeps() []assistantwire.KeepUndeliveredParams {
@@ -61,6 +62,9 @@ func undeliveredHub(t *testing.T, send func(context.Context) error) (*Hub, *Mach
 			}
 			var p assistantwire.SendParams
 			_ = json.Unmarshal(raw, &p)
+			if k.approvalTarget != "" {
+				return map[string]any{"params": map[string]any{"owner_approval_handled": k.approvalTarget}}, nil
+			}
 			p.Params["live_snapshot"] = "added by the manager" // never kept: a later send makes its own
 			return map[string]any{"params": p.Params}, nil
 		case assistantwire.MethodKeepUndelivered:
@@ -149,6 +153,51 @@ func TestSendWithUnknownOutcomeIsKeptForLandedCheck(t *testing.T) {
 	}
 	if kept[0].TriedAt.IsZero() || kept[0].TriedAt.Before(started) || time.Since(kept[0].TriedAt) > time.Minute {
 		t.Fatalf("first attempt started at %s, want a recent start not before %s", kept[0].TriedAt, started)
+	}
+}
+
+// The node refuses the owner's message because the conversation is at work while its task-follow-up role changes
+// (CodeConversationBusy, nothing typed). The owner used to get 409 "wait and try again" on every send (five in a row
+// while a background script ran for 25 minutes); now the message is kept, the app is told it waits, and the manager
+// sends it once the work ends, on the new role. Other 409 refusals are still answered as before.
+func TestSendRefusedBusyForARoleChangeIsKept(t *testing.T) {
+	var tries atomic.Int32
+	h, m, k := undeliveredHub(t, func(context.Context) error {
+		tries.Add(1)
+		return &rpc.Error{Code: assistantwire.CodeConversationBusy, Message: "role changed while at work"}
+	})
+	c := sendSubscriber(h, "box", "s1")
+	w := sendAs(h, m, `{"text":"where are we?","client_msg_id":"keep-busy"}`)
+	if w.Code != http.StatusAccepted || !strings.Contains(w.Body.String(), `"delivered":"later"`) {
+		t.Fatalf("answer: %d %s, want 202 kept", w.Code, w.Body)
+	}
+	if kept := k.keeps(); len(kept) != 1 || kept[0].Code != assistantwire.CodeConversationBusy || kept[0].Params["text"] != "where are we?" {
+		t.Fatalf("kept %+v", kept)
+	}
+	if event := nextSendState(t, c); event.State != proto.MessageSendProcessing {
+		t.Fatalf("first state %+v", event)
+	}
+	if event := nextSendState(t, c); event.State != proto.MessageSendKept {
+		t.Fatalf("final state %+v", event)
+	}
+	if again := sendAs(h, m, `{"text":"where are we?","client_msg_id":"keep-busy"}`); again.Code != http.StatusAccepted {
+		t.Fatalf("retry: %d %s", again.Code, again.Body)
+	}
+	if tries.Load() != 1 || len(k.keeps()) != 1 {
+		t.Fatalf("tries=%d keeps=%d, want one each", tries.Load(), len(k.keeps()))
+	}
+}
+
+// Another 409 refusal (here a launcher of another kind) is not a wait: the owner still gets it, and nothing is kept.
+func TestSendRefusedForAnotherReasonIsNotKept(t *testing.T) {
+	h, m, k := undeliveredHub(t, func(context.Context) error {
+		return &rpc.Error{Code: assistantwire.CodeLauncherOtherKind, Message: "another kind", Data: json.RawMessage(`{"delivered":"none"}`)}
+	})
+	if w := sendAs(h, m, `{"text":"hi","client_msg_id":"keep-other"}`); w.Code != http.StatusConflict {
+		t.Fatalf("answer: %d %s, want 409", w.Code, w.Body)
+	}
+	if kept := k.keeps(); len(kept) != 0 {
+		t.Fatalf("kept %+v", kept)
 	}
 }
 

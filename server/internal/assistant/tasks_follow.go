@@ -560,6 +560,10 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 	if unheard == "" {
 		// The turn as its transcript has it: read before any receipt, since its end names the turn (task_turns.go).
 		items, read = s.lastTurnItems(cctx, last.MachineID, last.SessionID)
+		if !read {
+			// A failed read cannot identify this turn's prompt or end. A later row or sweep may name it.
+			items = nil
+		}
 		if !s.taskWorkCurrent(t.ID, since) || !s.taskRuntimeSettled(cctx, t) {
 			s.releaseReceipt(ctx, t.ID, machine, sid, reserved)
 			return settleLater
@@ -679,11 +683,10 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 	}
 	// The whole last reply, as Markdown: the session list's last_text is one line cut at 200 characters.
 	text := strings.TrimSpace(last.LastText)
-	if _, answer := turnExchange(items); answer != "" {
-		text = answer
-	}
+	_, answer := turnExchange(items)
+	text = cmp.Or(answer, text)
 	// A paged reply may have lost its tail (the file lines and the closeout are there): read the whole item.
-	text = s.taskAnswer(cctx, machine, sid, items, text)
+	text = s.taskAnswer(cctx, last.MachineID, last.SessionID, items, text)
 	if current, ok := s.todoNow(t.ID); !ok || current.Cancelled() || current.AgentAborted(machine, sid) {
 		s.logf("task %s: cancelled or agent %s/%s aborted: not issuing done receipt", t.ID, machine, sid)
 		return settleRefused
@@ -724,6 +727,7 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 	if again && turn.State != turnDone {
 		return settleTaken // it had an interrupted receipt
 	}
+	handledDecision := read && !stopped && answer != "" && s.decisionReplyTurnEnded(cctx, t, last, items, text)
 	switch id := receiptID(t.ID, turn); {
 	case again && turn.Receipt:
 		// Taken up before it had a name, and its receipt went out then (under an id of its own): no second one.
@@ -745,6 +749,10 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 	}
 	if s.closedWhileRead(t.ID) {
 		s.turnJudged(cctx, t.ID, taskDoneCheck{}, nil, "done") // nothing to judge: the sweep does not ask again
+		return settleTaken
+	}
+	if handledDecision {
+		s.turnJudged(cctx, t.ID, taskDoneCheck{}, nil, "agent_decision_handled")
 		return settleTaken
 	}
 	if again {
@@ -838,6 +846,19 @@ func (s *Service) successorOpens(ctx context.Context, t Todo, started proto.Sess
 // routeToTask sends text straight to the agent of task todoID that most needs it, and keeps it in the conversation as
 // the user's (no from: a task card's Message, or a decision the owner made in Lark).
 func (s *Service) routeToTask(ctx context.Context, conversation, todoID, text string) (FeedItem, error) {
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		return FeedItem{}, err
+	}
+	s.reviewDismissals.actions.acquire(todoID)
+	var err error
+	if t, ok := s.todoNow(todoID); ok && t.Origin == conversation && t.Supervision.state(t) == reviewUserCheck {
+		err = s.reopenTodo(ctx, todoID)
+	}
+	// Only the round change is serialized: other messages must still join an Agent start in flight.
+	s.reviewDismissals.actions.release(todoID)
+	if err != nil {
+		return FeedItem{}, err
+	}
 	return s.routeToTaskChecked(ctx, conversation, todoID, text, nil)
 }
 
