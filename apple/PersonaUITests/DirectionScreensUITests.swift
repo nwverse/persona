@@ -558,15 +558,23 @@ final class DirectionScreensUITests: XCTestCase {
         row.press(forDuration: 1.2)
         sleep(1)
         shot("off-chat-menu-\(off)")
-        dismissMenu()
-        let lead = chat("Persona 产品")
-        if lead.exists {
+        // On 工作's page the press can open Main Chat itself, the drawer gone: no menu to dismiss there (a tap would
+        // land on the chat's page), and no lead to look for.
+        let drawerGone = off == "manager" && !app.buttons["sidebar-main"].firstMatch.isHittable
+        if !drawerGone { dismissMenu() }
+        let lead = off == "manager" ? nil : chat("Persona 产品")
+        if let lead, lead.exists {
             lead.tap()
         } else {
-            // No lead here (no directions, another manager's page): the main chat. Dismissing a menu that never
-            // opened (Main Chat's, on 工作's page) can have closed the drawer.
-            if !app.buttons["sidebar-main"].firstMatch.exists { openSidebar() }
-            app.buttons["sidebar-main"].firstMatch.tap()
+            // No lead here (no directions, another manager's page): the main chat. On 工作's page a long press on
+            // Main Chat opens no menu and can open the chat itself, the drawer gone: it is then what is in front.
+            let main = app.buttons["sidebar-main"].firstMatch
+            if main.exists && main.isHittable {
+                main.tap()
+            } else if off != "manager" {
+                openSidebar()
+                main.tap()
+            }
         }
         sleep(2)
         openTitleMenu()
