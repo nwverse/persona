@@ -88,6 +88,9 @@ func closeoutPark(reply string, previous *TaskReview, now time.Time, loc *time.L
 		strings.ToLower(strings.TrimSpace(input.Evidence.Target)))) {
 		return Parked{}, false
 	}
+	// The evidence derived below is for a wait that passed the owner, own-work and Agent/user-unblock checks above,
+	// so its next step is external (admission requires next_actor). An explicit park line and a reused receipt
+	// keep their own: an Agent states it, and an older receipt without it goes back to the supervisor.
 	if !explicit {
 		prText := c.Waiting
 		for _, a := range artifacts {
@@ -116,11 +119,12 @@ func closeoutPark(reply string, previous *TaskReview, now time.Time, loc *time.L
 				return Parked{}, false
 			}
 			input.WaitingOn, input.Until = parkDate, at.Format(time.RFC3339)
-			input.Evidence = &ParkEvidence{Kind: "date", Target: c.Waiting, Wake: c.Waiting}
+			input.Evidence = &ParkEvidence{Kind: "date", Target: c.Waiting, Wake: c.Waiting, NextActor: nextActorExternal}
 		} else if source := prSource; source != "" && upstreamCloseout(c.Waiting) {
 			// The PR is an external object, not proof that a reviewer was contacted.
 			input.WaitingOn = parkExternalEvent
-			input.Evidence = &ParkEvidence{Kind: "external_event", Target: c.Waiting, URL: source, Wake: c.Waiting}
+			input.Evidence = &ParkEvidence{Kind: "external_event", Target: c.Waiting, URL: source, Wake: c.Waiting,
+				NextActor: nextActorExternal}
 		} else if externalCloseout(c.Waiting) {
 			source := strings.TrimRight(closeoutSource.FindString(c.Waiting), ".,;)")
 			if source == "" {
@@ -148,7 +152,8 @@ func closeoutPark(reply string, previous *TaskReview, now time.Time, loc *time.L
 				return Parked{}, false // review/contact evidence must not be invented from a PR link
 			}
 			input.WaitingOn = parkExternalEvent
-			input.Evidence = &ParkEvidence{Kind: "external_event", Target: c.Waiting, URL: source, Wake: c.Waiting}
+			input.Evidence = &ParkEvidence{Kind: "external_event", Target: c.Waiting, URL: source, Wake: c.Waiting,
+				NextActor: nextActorExternal}
 		}
 	}
 	p, err := readPark(c.Waiting, input.Until, input.WaitingOn, input.Evidence, now)

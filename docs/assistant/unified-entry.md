@@ -35,7 +35,7 @@ The prototype is the UI and interaction standard; compare screen by screen durin
   | Auto-start | Read-only: research, read code to answer a question | `task_plan` queues dispatch with `permission: bypassPermissions` for Claude and a Paseo provider whose approval is Auto Accept (#8141), `plan` for Codex, and no mode for TRAE CLI and omp (#7559); pi, cursor and agy have no read-only mode, so `task_plan` refuses the task (#8316). The first prompt carries the read-only constraint. The plan card collapses to "Started N tasks" |
   | Plan first | Change code, start multiple Agents, first start in this project | Show a plan card in the chat, with editable labels for each item; start only after "Start" |
 
-- Tasks you explicitly request in the chat (a direct instruction, "have an Agent do it," "go ahead and start," #2559) also start directly. Persona sets `user_requested: true` for that `task_plan` item, and the card shows progress only. A writable task that a direction's lead plans with `task_plan` after a hand-over of your quoted words was sent to it waits for your Start until you next write in that lead conversation; other ways a lead starts work (`agent_start`, its own tools) are not covered ("Across a relay": **Start in a lead after a hand-over**).
+- Tasks you explicitly request in the chat (a direct instruction, "have an Agent do it," "go ahead and start," #2559) also start directly. Persona sets `user_requested: true` for that `task_plan` item, and the card shows progress only. A writable task that a direction's lead plans with `task_plan` after a hand-over of your quoted words was sent to it waits for your Start until you next write in that lead conversation, unless it carries your relayed words as the hub verified them, or the lead already started that kind of work (same machine, repository and mode) before; other ways a lead starts work (`agent_start`, its own tools) are not covered ("Across a relay": **Start in a lead after a hand-over**).
   Inferred tasks you did not request still wait for Start. If any item in a plan needs to wait, the whole plan waits. "Start tasks I request in chat directly" under Settings › Assistant (`assistant.start_requested_tasks`, on by default) can disable this.
 - The plan card offers "Start These Directly," remembered per "computer × repository (or directory) × read-only / file changes." Similar tasks no longer ask. Stored in settings `tasks.trust`; entries can be viewed and deleted in Settings.
   An entry covers its directory and every directory under it (#8095, `assistant/task_trust_scope.go`). Directories are compared as the computer
@@ -753,8 +753,14 @@ sees it.
 - **Until when:** the owner's next message to that conversation, when it is submitted (before it is delivered, and from
   any device or extension that posts as the owner). It has no expiry, and it holds after the conversation stops being a
   lead.
-- **What it covers:** `task_plan`'s `user_requested` only. Read-only tasks and kinds the owner trusts (`tasks.trust`)
-  start as before, and the verified words still go into the brief's `request`, so the card shows them. Still starting
+- **What it covers:** `task_plan`'s `user_requested`, narrowed by #12953 so a lead starts and closes its own work
+  without the owner or the main conversation starting it. A task whose brief carries the owner's words as the hub
+  verified them, from a hand-over delivered into this very lead, keeps `user_requested` and starts as the main
+  conversation's would (the owner chose this over a Start card for every relayed request; the brief shows the words).
+  Any other task there (a turn a task's report or a follow-up opened, where `user_requested` is only the model's word)
+  keeps it only for a kind (`trustKey`: the machine, the repository or exact folder, reading or writing) that a started
+  plan of the same lead already ran; work in a place new to the lead waits for the owner's Start. Read-only tasks and kinds the owner trusts
+  (`tasks.trust`) start as before, and the verified words still go into the brief's `request`, so the card shows them. Still starting
   work with no card: `agent_start`, `agent_send` with `resume`, the lead's own tools on its computer, and passing the
   words on to a conversation that is not a lead.
 - **Nothing else changes:** an unquoted message to a lead, an answer, a conversation that is not a lead and the main
