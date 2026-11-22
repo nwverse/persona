@@ -6123,3 +6123,20 @@ request, including the original epoch; it must not read a new epoch and silently
 create a second operation. Registered runtime identity is part of a segment's
 opaque engine identity, so two runtimes embedding the same engine are distinct
 execution paths. Unknown engine kinds or identity suffixes are rejected.
+
+### Cache keepalive fields (#12786)
+
+Assistant GET/PUT settings expose `cache_keepalive` (default true),
+`cache_keepalive_minutes` (default 55, integer 1–55), and `cache_keepalive_max`
+(default 24, integer 1–144). Partial updates preserve other fields. The web settings
+control is shown only when GET reports the boolean. Native Claude launchers only;
+Codex and other runtimes are not supported yet.
+
+Manager-to-node `assistant.send` / `session.send` and node-to-manager `assistant.model`
+carry optional `cache_keepalive: {enabled, interval_minutes, max_requests}` only for
+the main conversation and registered lead ids. Missing policy denies warming.
+The existing `follows_setting` flag is not sufficient authority.
+
+| Method | Direction | Params / result |
+| --- | --- | --- |
+| `assistant.cache_clear` | manager → node | `{session_id}` → `{ok: true}`; cancel cache replay and erase its in-memory snapshot without stopping ordinary forwarding; used when archiving a conversation. Older nodes may reject it; the manager's fresh policy check also denies archived conversations. |
