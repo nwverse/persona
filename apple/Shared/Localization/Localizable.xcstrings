@@ -185,6 +185,54 @@
         }
       }
     },
+    "Cancelled: %@ [Todo Detail]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {"stringUnit": {"state": "translated", "value": "Cancelled: %@"}},
+        "zh-Hans": {"stringUnit": {"state": "translated", "value": "已取消：%@"}},
+        "ja": {"stringUnit": {"state": "translated", "value": "キャンセル理由：%@"}}
+      }
+    },
+    "Continued By %@ [Todo Detail]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {"stringUnit": {"state": "translated", "value": "Continued by: %@"}},
+        "zh-Hans": {"stringUnit": {"state": "translated", "value": "由新卡接手：%@"}},
+        "ja": {"stringUnit": {"state": "translated", "value": "新しいカードが引き継ぎ：%@"}}
+      }
+    },
+    "Continues From %@ [Todo Detail]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {"stringUnit": {"state": "translated", "value": "Continues from: %@"}},
+        "zh-Hans": {"stringUnit": {"state": "translated", "value": "接手自：%@"}},
+        "ja": {"stringUnit": {"state": "translated", "value": "引き継ぎ元：%@"}}
+      }
+    },
+    "Current Task [Todo Detail]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {"stringUnit": {"state": "translated", "value": "Current task"}},
+        "zh-Hans": {"stringUnit": {"state": "translated", "value": "当前任务"}},
+        "ja": {"stringUnit": {"state": "translated", "value": "このタスク"}}
+      }
+    },
+    "Delivered · Awaiting Review [To-do Sections]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {"stringUnit": {"state": "translated", "value": "Delivered · awaiting review"}},
+        "zh-Hans": {"stringUnit": {"state": "translated", "value": "已交付·待看"}},
+        "ja": {"stringUnit": {"state": "translated", "value": "交付済み・レビュー待ち"}}
+      }
+    },
+    "Who Worked on It [Todo Detail]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {"stringUnit": {"state": "translated", "value": "Who worked on it"}},
+        "zh-Hans": {"stringUnit": {"state": "translated", "value": "谁做过"}},
+        "ja": {"stringUnit": {"state": "translated", "value": "担当の履歴"}}
+      }
+    },
     "<user>" : {
       "localizations": {
         "en": {
@@ -206,6 +254,51 @@
           }
         }
       }
+    },
+    "A message holds up to %lld pictures. The other %lld will go as files." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A message holds up to %1$lld pictures. %#@rest@"
+          },
+          "substitutions" : {
+            "rest" : {
+              "argNum" : 2,
+              "formatSpecifier" : "lld",
+              "variations" : {
+                "plural" : {
+                  "one" : {
+                    "stringUnit" : {
+                      "state" : "translated",
+                      "value" : "The other one will go as a file."
+                    }
+                  },
+                  "other" : {
+                    "stringUnit" : {
+                      "state" : "translated",
+                      "value" : "The other %arg will go as files."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1件のメッセージに入れられる画像は%1$lld枚までです。残りの%2$lld枚はファイルとして送ります"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一条消息最多 %1$lld 张图，另外 %2$lld 张作为文件发送"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "Added %@ [Filed Session]" : {
       "extractionState" : "manual",
@@ -1001,6 +1094,52 @@
         }
       }
     },
+    "No room for more pictures in this message" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No room for more pictures in this message"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このメッセージにはこれ以上画像を入れられません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这条消息放不下更多图片了"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Open Scene Full Screen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Scene Full Screen"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "シーンをフルスクリーンで開く"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全屏打开场景"
+          }
+        }
+      }
+    },
     "Move To… [Move To]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1403,6 +1542,52 @@
           "stringUnit": {
             "state": "translated",
             "value": "这台电脑上 Persona 的文件夹不安全，不能在这里切换：主文件夹、~/.persona 或 ~/.persona/bin 属于别的用户，或者其他用户可以改动。请在那台电脑上把它们改成属于你、只有你能写入（例如：chmod go-w ~ ~/.persona ~/.persona/bin），然后再试。"
+          }
+        }
+      }
+    },
+    "Reset View" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reset View"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "視点をリセット"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还原视角"
+          }
+        }
+      }
+    },
+    "Scene" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scene"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "シーン"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "场景"
           }
         }
       }
@@ -1853,6 +2038,64 @@
         }
       }
     },
+    "These pictures are too large to send together" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "These pictures are too large to send together"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画像の合計が大きすぎて、まとめて送れません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这些图加起来太大了，没法一起发送"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "These pictures are too large together. %lld of them will go as files." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "These pictures are too large together. One of them will go as a file."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "These pictures are too large together. %1$lld of them will go as files."
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画像の合計が大きすぎます。%1$lld枚はファイルとして送ります"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这些图加起来太大了，其中 %1$lld 张作为文件发送"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "This computer can't switch to Persona Link right now." : {
       "localizations": {
         "en": {
@@ -1937,6 +2180,98 @@
           "stringUnit": {
             "state": "translated",
             "value": "这台设备不能切换电脑。请用有完全访问权限的设备。"
+          }
+        }
+      }
+    },
+    "Tilt Down" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tilt Down"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下に傾ける"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向下倾斜"
+          }
+        }
+      }
+    },
+    "Tilt Up" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tilt Up"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上に傾ける"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向上倾斜"
+          }
+        }
+      }
+    },
+    "Turn Left" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turn Left"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "左に回転"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向左旋转"
+          }
+        }
+      }
+    },
+    "Turn Right" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turn Right"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "右に回転"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向右旋转"
           }
         }
       }
@@ -133124,24 +133459,24 @@
         }
       }
     },
-    "Photos or videos, up to 4" : {
+    "Photos or videos" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Photos or videos, up to 4"
+            "value" : "Photos or videos"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "写真またはビデオ、4件まで"
+            "value" : "写真またはビデオ"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "照片或视频，最多 4 个"
+            "value" : "照片或视频"
           }
         }
       },
@@ -198018,24 +198353,24 @@
       },
       "extractionState" : "manual"
     },
-    "Up to 4 at a time" : {
+    "Up to %lld at a time" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Up to 4 at a time"
+            "value" : "Up to %lld at a time"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "一度に4枚まで"
+            "value" : "一度に%lld枚まで"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "一次最多 4 张"
+            "value" : "一次最多 %lld 张"
           }
         }
       },

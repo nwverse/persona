@@ -2192,11 +2192,14 @@ public nonisolated struct ExtensionChannelCapabilities: Codable, Hashable, Senda
     public var maxText: Int?
     public var asks: String?
     public var push: Bool?
+    /// It only replies to incoming messages or triggers and cannot send unsolicited proactive messages without
+    /// reply_to; testing checks connectivity instead of calling channel.send.
+    public var replyOnly: Bool?
     public var typing: Bool?
     public var progress: Bool?
     public var threads: Bool?
 
-    public init(imagesIn: Bool? = nil, imagesOut: Bool? = nil, filesIn: Bool? = nil, voiceIn: Bool? = nil, format: String? = nil, maxText: Int? = nil, asks: String? = nil, push: Bool? = nil, typing: Bool? = nil, progress: Bool? = nil, threads: Bool? = nil) {
+    public init(imagesIn: Bool? = nil, imagesOut: Bool? = nil, filesIn: Bool? = nil, voiceIn: Bool? = nil, format: String? = nil, maxText: Int? = nil, asks: String? = nil, push: Bool? = nil, replyOnly: Bool? = nil, typing: Bool? = nil, progress: Bool? = nil, threads: Bool? = nil) {
         self.imagesIn = imagesIn
         self.imagesOut = imagesOut
         self.filesIn = filesIn
@@ -2205,6 +2208,7 @@ public nonisolated struct ExtensionChannelCapabilities: Codable, Hashable, Senda
         self.maxText = maxText
         self.asks = asks
         self.push = push
+        self.replyOnly = replyOnly
         self.typing = typing
         self.progress = progress
         self.threads = threads
@@ -2219,6 +2223,7 @@ public nonisolated struct ExtensionChannelCapabilities: Codable, Hashable, Senda
         case maxText = "max_text"
         case asks
         case push
+        case replyOnly = "reply_only"
         case typing
         case progress
         case threads
@@ -2234,6 +2239,7 @@ public nonisolated struct ExtensionChannelCapabilities: Codable, Hashable, Senda
         self.maxText = try? c.decodeIfPresent(Int.self, forKey: .maxText)
         self.asks = try? c.decodeIfPresent(String.self, forKey: .asks)
         self.push = try? c.decodeIfPresent(Bool.self, forKey: .push)
+        self.replyOnly = try? c.decodeIfPresent(Bool.self, forKey: .replyOnly)
         self.typing = try? c.decodeIfPresent(Bool.self, forKey: .typing)
         self.progress = try? c.decodeIfPresent(Bool.self, forKey: .progress)
         self.threads = try? c.decodeIfPresent(Bool.self, forKey: .threads)

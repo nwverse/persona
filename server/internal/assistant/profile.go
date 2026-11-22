@@ -145,6 +145,14 @@ type Settings struct {
 	// InboxSignals: new Inbox messages the judge links to a supervised task reach its supervisor as the signal inbox
 	// (#4293, supervise_inbox.go). nil is off (the default): each one is a supervisor turn.
 	InboxSignals *bool `json:"inbox_signals,omitempty"`
+	// InboxTodoForward: deterministically forward PR/Issue Inbox items to the bound open to-do's Agent without LLM
+	// calls (#12492, inbox_forward.go). nil is off (the default): zero automatic forwards until opted in.
+	InboxTodoForward *bool `json:"inbox_todo_forward,omitempty"`
+	// PREventsRouteToAgent: when true, new actionable PR events observed by pr_status on an open to-do (merge conflict,
+	// current-head CI failure, or current-head changes_requested / actionable review) route directly to the bound Agent
+	// (send, queue, or non-user resume), falling back to supervisor wakes when unavailable (#12607, pr_status_route.go).
+	// nil is off (the default), preserving existing pr_status supervision behavior.
+	PREventsRouteToAgent *bool `json:"pr_events_route_to_agent,omitempty"`
 	// InboxPost: the assistant may put a conversation into the Inbox (inbox_post, a task's "put it in the Inbox when
 	// done", inbox_post.go). nil is on: a row only comes from the user's own request or a task they set. The Inbox
 	// Sources page's switch for it.
@@ -292,6 +300,12 @@ func (s *Service) updateSettings(ctx context.Context, fn func(*Settings) error) 
 }
 
 func (v Settings) workGuideOn() bool { return v.WorkGuide != nil && *v.WorkGuide }
+
+// prEventsRouteToAgentOn reports whether assistant.pr_events_route_to_agent is enabled (off by default).
+func (s *Service) prEventsRouteToAgentOn(ctx context.Context) bool {
+	v := s.settings(ctx).PREventsRouteToAgent
+	return v != nil && *v
+}
 
 // settings are the settings in effect, what the rest of the package reads (the main conversation, the machine, the time
 // zone; isMain and mainTasksQuiet for short): the machine one the hub has (else the hub's default), the launcher the
@@ -663,6 +677,7 @@ func (s *Service) leadSessions(ctx context.Context, v Settings) []SessionRef {
 func (s *Service) settingsChanged(ctx context.Context) {
 	s.transcriptionSettingsChanged(ctx) // only another contribution chosen drops the readiness answer
 	s.ProfileChanged(ctx)
+	s.retryOwnerWaits(ctx) // a restored main/conversation can deliver an explicitly pending owner push
 	s.revalidateFailedStartDeferrals(ctx)
 	s.publish(ctx)
 }
@@ -751,6 +766,10 @@ type assistantView struct {
 	AgentAutoNamingIntervalHours int  `json:"agent_auto_naming_interval_hours"`
 	// InboxSignals is in effect, like DoneNeedsDelivery.
 	InboxSignals bool `json:"inbox_signals"`
+	// InboxTodoForward is in effect, like InboxSignals (#12492).
+	InboxTodoForward bool `json:"inbox_todo_forward"`
+	// PREventsRouteToAgent is in effect, like InboxSignals (false by default).
+	PREventsRouteToAgent bool `json:"pr_events_route_to_agent"`
 	// NextSuggestions is in effect, like DoneNeedsDelivery.
 	NextSuggestions bool `json:"next_suggestions"`
 	// MainSupervisesOwnTasks is in effect, like DoneNeedsDelivery: false means the background supervisor follows up
@@ -801,9 +820,12 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		AgentAutoNaming:              quietOn(v.AgentAutoNaming),
 		AgentAutoNamingMax:           agentNamingLimit(v),
 		AgentAutoNamingIntervalHours: agentNamingInterval(v),
-		InboxSignals:                 v.InboxSignals != nil && *v.InboxSignals, MainSupervisesOwnTasks: !s.backgroundOn(v),
-		SupervisionBatchMinutes: supervisionBatchMinutesOf(v),
-		NextSuggestions:         v.NextSuggestions != nil && *v.NextSuggestions}
+		InboxSignals:                 v.InboxSignals != nil && *v.InboxSignals,
+		InboxTodoForward:             v.InboxTodoForward != nil && *v.InboxTodoForward,
+		PREventsRouteToAgent:         v.PREventsRouteToAgent != nil && *v.PREventsRouteToAgent,
+		MainSupervisesOwnTasks:       !s.backgroundOn(v),
+		SupervisionBatchMinutes:      supervisionBatchMinutesOf(v),
+		NextSuggestions:              v.NextSuggestions != nil && *v.NextSuggestions}
 	if d, ok := s.device(ctx, v.MachineID); ok {
 		out.Cwd = s.spaceCwd(d, sp)
 		var list []proto.Session
@@ -956,7 +978,7 @@ func (s *Service) warm(launcher string) {
 	// The spare is adopted only by a new conversation in the same profile (node/assistant_spare.go), and a new one is
 	// started in the main chat's, on a carried pick too (startMain, startOn).
 	profiled := s.withNewConversationProfile(ctx, machine, params)
-	ctx = context.WithValue(ctx, supervisionStartup{}, cfg.MainSupervisesOwnTasks != nil && *cfg.MainSupervisesOwnTasks)
+	ctx = context.WithValue(ctx, supervisionStartup{}, true)
 	err = s.call(ctx, machine, DeviceAssistantWarm, params, nil)
 	if profiled && (nodeOutdated(err) || profileRefused(err)) { // as startOn: an old node, or another agent than Claude Code
 		delete(params, "config_dir")

@@ -202,9 +202,19 @@ func (h *Manager) extensionChannelView(ctx context.Context, pc extensionChannel)
 			on = false
 		}
 	} else if s := h.channelStatus(it.ID); s != nil {
-		st = connector.Status{State: string(s.State), Error: s.Error}
-		if s.Account != nil {
-			st.Account = s.Account.Name
+		if h.channels.call == nil && h.extensions != nil {
+			if hp := h.extensions.get(p.Record.ID); hp == nil || hp.proc == nil {
+				st = connector.Status{
+					State: string(channel.StateError),
+					Error: i18n.T(h.botLang(ctx), "hub-channels_extension.not_running", i18n.Args{"name": it.Name}),
+				}
+			}
+		}
+		if st.State == "" {
+			st = connector.Status{State: string(s.State), Error: s.Error}
+			if s.Account != nil {
+				st.Account = s.Account.Name
+			}
 		}
 	}
 	out.Enabled = on

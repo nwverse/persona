@@ -511,6 +511,7 @@ class AssistantTraysShotsTest {
         fixture.sessionRows.value = fixture.sessionRows.value + stopped
         fixture.returnedTodos = todoRows + Todo("task-d", stopped.title, origin = "main", agents = listOf(TodoAgent(stopped.machineId, stopped.sessionId)),
             prUrl = "https://github.com/example/project/pull/57",
+            prStatus = TodoPRStatus(url = "https://github.com/example/project/pull/57", state = "open", checkedAt = Instant.now().toString()),
             check = TodoCheck("waiting", "Waiting for CI to finish", "2026-11-01T10:00:00Z", "2026-11-01T09:00:00Z"))
         fixture.tasks.reloadTodos()
         fixture.requests.value = emptyList(); fixture.drafts.value = emptyList()

@@ -2,7 +2,7 @@ Send what the user asked for to an Agent. A busy Agent may queue it. A stopped A
 
 For dialog_open, retry with dismiss_notice only when Enter alone closes the notice. For permissions and pickers, tell the user or use interaction_answer.
 
-From the main conversation, give task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. Omit task for a reply, nudge or decision.
+Give task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. Omit task for a reply, nudge or decision.
 
 Use `handoff` for an already-stopped to-do you supervise. A node acknowledgement starts its wait for the receiving Agent's result.
 
@@ -59,7 +59,7 @@ Use `handoff` for an already-stopped to-do you supervise. A node acknowledgement
     },
     "task": {
       "type": ["object", "null"],
-      "description": "new work: make it your supervised task first (main conversation only); null for a reply",
+      "description": "new work: make it your supervised task first (main or a lead); null for a reply",
       "additionalProperties": false,
       "properties": {
         "title": {

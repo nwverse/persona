@@ -235,6 +235,7 @@ type Service struct {
 	accept         acceptBook        // acceptance.go
 	pushQuiet      quietSwitch       // push_quiet.go: the hub's low-distraction switch as last read
 	deploy         deployProbe       // deploy_check.go: is the work in the running hub
+	prEventRoute   prEventRouteBook  // pr_status_route.go: opt-in direct PR-event routing dedupe
 	parkReplies    parkReplyBook     // park_reply.go: bounded source reads for explicitly bound person replies
 
 	reviewDismissals taskReviewDismissalBook // task_review_dismissals.go
@@ -785,6 +786,7 @@ type startParams struct {
 	Cwd                 string
 	TaskExecution       bool
 	LegacyTaskExecution bool
+	PromptSelections    bool
 	Text                string               `json:"text"`
 	PermissionMode      string               `json:"permission_mode,omitempty"`
 	Purpose             string               `json:"purpose,omitempty"` // the model configuration's purpose; "" is the assistant's
@@ -1023,6 +1025,7 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 	go s.registerInlineTurn(context.WithoutCancel(ctx), r)
 	s.afterSettle(context.WithoutCancel(ctx), s.registerInlineTurnSettled, r.MachineID, r.SessionID)
 	if !meeting {
+		s.backgroundRoundTurnEnded(ctx, r.SessionID, time.Now())
 		s.availTurnEnded(ctx, r.MachineID, r.SessionID, time.Now()) // an assistant conversation's round (availability.go)
 		s.afterSettle(context.WithoutCancel(ctx), s.taskTurnSettled, r.MachineID, r.SessionID)
 		// A review's reviewer answered (supervise_autoreview.go, agents_session_review.go).
@@ -1080,7 +1083,9 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	}
 	s.toolLoopsChanged(d)
 	s.progressSessions(d, time.Now()) // what the working agents do, for no_progress (supervise_progress.go)
-	s.drainRelays(d.MachineID, d.Sessions)
+	if s.retractConfirmedStartUnknowns(ctx, d.Sessions) {
+		s.drainRelays(d.MachineID, d.Sessions)
+	}
 	s.undeliveredSeen(d)                      // kept owner messages go once their conversation runs again (undelivered.go)
 	s.originsChanged(d.MachineID, d.Sessions) // conversations from before origins were noted (origins.go)
 	// The conversations' spaces, before what may tell an extension of a to-do (conversation_space.go).
