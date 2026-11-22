@@ -1,4 +1,5 @@
 import { refreshAgentsDisplay, resetAgentsDisplay } from "./agents-display";
+import { setPublishedImageLimits } from "./image-limits";
 import { forgetSentHistory } from "./send-history";
 import { availableConversation, clearConversationDeletions, conversationDeleted, conversationKeyDeleted, deletedConversation, hasDeletedConversations, rememberConversationDeleted } from "./conversation-deleted";
 import { compatibleEnvelope, setCompatibilityFeatures } from "./compatibility";
@@ -1013,6 +1014,7 @@ function onMessage(msg: Record<string, unknown>) {
     case "hello": {
       clearTimeout(sidebarTimer);
       receiptOwner = msg.message_send_state === 1 ? credentialOwner() : undefined;
+      setPublishedImageLimits(msg.image_limits);
       setCompatibilityFeatures(Array.isArray(msg.features) ? msg.features as string[] : []);
       const mesh = (msg.mesh as { hubs?: MeshHub[] } | undefined)?.hubs;
       // a hub that folds side sessions into their parent's chat (#7944): set before the features, which redraw the lists
