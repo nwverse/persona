@@ -45,6 +45,15 @@ func (s *Service) logicalPhysical(ctx context.Context, machine, method string, p
 		}
 	}
 	ctx = context.WithValue(ctx, logicalSourceKey{}, true)
+	if method == DeviceSessionGet {
+		// One session's row is the manager's (or the hub's) to answer, never a node's: a node knows no session.get, and
+		// sending it there made every adopted conversation look gone, so no second switch could start.
+		p := DeviceCall{Device: machine, Method: method, Params: raw}
+		if out, ok, err := s.localFleetDeviceCall(ctx, p); ok {
+			return out, err
+		}
+		return s.hub.DeviceCall(ctx, p)
+	}
 	if d := s.physicalDevices(); d != nil {
 		if original, ok := ctx.Value(logicalTransportKey{}).(devicewire.NodeCall); ok {
 			original.MachineID, original.Method, original.Params = machine, method, raw
