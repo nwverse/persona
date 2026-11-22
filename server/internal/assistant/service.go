@@ -786,6 +786,7 @@ type startParams struct {
 	Cwd                 string
 	TaskExecution       bool
 	LegacyTaskExecution bool
+	PromptSelections    bool
 	Text                string               `json:"text"`
 	PermissionMode      string               `json:"permission_mode,omitempty"`
 	Purpose             string               `json:"purpose,omitempty"` // the model configuration's purpose; "" is the assistant's

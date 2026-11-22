@@ -229,10 +229,11 @@ def report_process_failure(error: subprocess.CalledProcessError) -> None:
             sys.stderr.write("\n")
 
 
-def restore_reviewed_output(reviewed: bytes) -> None:
+def restore_reviewed_output(reviewed: bytes, generated: Path | None = None) -> None:
+    destination = GENERATED if generated is None else generated
     try:
-        GENERATED.write_bytes(reviewed)
-        restored = GENERATED.read_bytes() == reviewed
+        destination.write_bytes(reviewed)
+        restored = destination.read_bytes() == reviewed
     except OSError as error:
         raise ValueError(f"Could not restore the reviewed Kotlin after a generation failure: {error}") from error
     if not restored:

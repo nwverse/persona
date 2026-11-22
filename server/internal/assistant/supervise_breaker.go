@@ -4,10 +4,10 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"fmt"
 	"slices"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -351,7 +351,7 @@ func (s *Service) applyBackgroundBreaker(ctx context.Context, here Settings, to 
 				st.alerted = true
 			}
 			g.To = here.Main
-			g.BreakerNote = fmt.Sprintf("后台督办触发工具权限拒绝（assistant_denied: %s），已暂停后台重试并转交主对话处理。", cmp.Or(br.lastDeniedTool, "assistant tool"))
+			g.Breaker = &breakerFallback{Kind: prompts.BreakerAuth, Tool: cmp.Or(br.lastDeniedTool, "assistant tool")}
 			s.logf("supervise: background supervisor auth breaker open; falling back task %s (%s) once to main conversation", g.Todo, g.Kind)
 			return here.Main, g
 		}
@@ -363,7 +363,7 @@ func (s *Service) applyBackgroundBreaker(ctx context.Context, here Settings, to 
 			if !st.alerted && here.Main != "" {
 				st.alerted = true
 				g.To = here.Main
-				g.BreakerNote = fmt.Sprintf("后台督办在 all_stopped 信号上连续 %d 轮无进展（%s），已熔断暂停重试并转交主对话处理。", st.noOps, st.reason)
+				g.Breaker = &breakerFallback{Kind: prompts.BreakerAllStopped, Rounds: st.noOps, Reason: st.reason}
 				s.logf("supervise: background supervisor all_stopped breaker open for task %s (%s); falling back once to main conversation", g.Todo, st.reason)
 				return here.Main, g
 			}

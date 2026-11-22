@@ -45,15 +45,6 @@ func (s *Service) logicalPhysical(ctx context.Context, machine, method string, p
 		}
 	}
 	ctx = context.WithValue(ctx, logicalSourceKey{}, true)
-	if method == DeviceSessionGet {
-		// One session's row is the manager's (or the hub's) to answer, never a node's: a node knows no session.get, and
-		// sending it there made every adopted conversation look gone, so no second switch could start.
-		p := DeviceCall{Device: machine, Method: method, Params: raw}
-		if out, ok, err := s.localFleetDeviceCall(ctx, p); ok {
-			return out, err
-		}
-		return s.hub.DeviceCall(ctx, p)
-	}
 	if d := s.physicalDevices(); d != nil {
 		if original, ok := ctx.Value(logicalTransportKey{}).(devicewire.NodeCall); ok {
 			original.MachineID, original.Method, original.Params = machine, method, raw
@@ -77,6 +68,13 @@ func logicalSendMethod(method string) bool {
 
 func (s *Service) logicalCall(ctx context.Context, machine, method string, raw json.RawMessage) (json.RawMessage, bool, error) {
 	if ctx.Value(logicalSourceKey{}) != nil || ctx.Value(historySourceKey{}) != nil {
+		return nil, false, nil
+	}
+	if method == DeviceSessionGet {
+		// One session's row is the manager's to answer from its projected list (logicalDevices.Session: the public
+		// root shows its active segment, a private segment is not found), never a node's: a node knows no
+		// session.get, and the fleet hides the active segment's physical id, so rewriting to it made every
+		// switched conversation look gone and no further switch could start.
 		return nil, false, nil
 	}
 	st, ok := s.store().(logicalConversationStore)

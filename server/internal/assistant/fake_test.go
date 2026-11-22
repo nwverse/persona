@@ -40,6 +40,7 @@ type fakeHub struct {
 	readHooks          receiptHooks              // around session.items reads and on receipt broadcasts, no lock held
 	itemReads          int                       // session.items reads since the hooks were set
 	onDevicesList      func()                    // runs once, then clears, before the next devices.list; no lock held
+	onTell             func()                    // runs after each snapshot or event the service gave the hub was recorded; no lock held
 	// beforeSend runs once, then clears, when session.send is called, before it is answered (what happens on the
 	// agent's computer while the send is out); afterList, by machine, once after that machine's next sessions.list made
 	// with a listHooked context was answered. No lock held. sendHangs: session.send is never answered while the link
@@ -915,8 +916,12 @@ func (f *fakeHub) InboxChanged(ctx context.Context, c assistantwire.InboxChanged
 
 func (f *fakeHub) Snapshot(_ context.Context, s Snapshot) (SnapshotResult, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.snaps = append(f.snaps, s)
+	hook := f.onTell
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	return SnapshotResult{OK: true, Seq: s.Seq}, nil
 }
 
@@ -1453,8 +1458,12 @@ func (f *fakeHub) Tell(event string, params any) error {
 		return err
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.told = append(f.told, told{event, b})
+	hook := f.onTell
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	return nil
 }
 

@@ -12,6 +12,50 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+// requireParkEnded checks the one change besides its receipt that ending a park makes to review history (#10798):
+// the park that ended records park_ended_at, no earlier than the park and no later than the wake. It returns after
+// with that field reset, so the caller still compares every other field with before.
+func requireParkEnded(t *testing.T, before *Supervision, after []TaskReview, wokeBy time.Time) []TaskReview {
+	t.Helper()
+	park := before.parking()
+	if park == nil {
+		t.Fatal("no current park to end")
+	}
+	if len(after) != len(before.Reviews) {
+		t.Fatalf("review history length=%d, want unchanged %d", len(after), len(before.Reviews))
+	}
+	out := slices.Clone(after)
+	ended := 0
+	for i := range out {
+		r, was := &out[i], before.Reviews[i]
+		if r.ParkEndedAt.Equal(was.ParkEndedAt) {
+			continue
+		}
+		ended++
+		if r.Verdict != reviewParked || !r.At.Equal(park.At) || !was.ParkEndedAt.IsZero() {
+			t.Fatalf("park_ended_at changed on review %d (%s at %v, was %v), not on the park that ended (at %v)",
+				i, r.Verdict, r.At, was.ParkEndedAt, park.At)
+		}
+		if r.ParkEndedAt.Before(park.At) || r.ParkEndedAt.After(wokeBy) {
+			t.Fatalf("park_ended_at %v is outside the park: from %v to the wake by %v", r.ParkEndedAt, park.At, wokeBy)
+		}
+		r.ParkEndedAt = was.ParkEndedAt
+	}
+	if ended != 1 {
+		t.Fatalf("park_ended_at was recorded on %d reviews, want exactly the park that ended", ended)
+	}
+	return out
+}
+
+// wakeBound is the latest time a wake run at pass time now can have recorded: the pass time, or for a write that
+// takes the wall clock, the moment the wake returned.
+func wakeBound(now time.Time) time.Time {
+	if wall := time.Now(); wall.After(now) {
+		return wall
+	}
+	return now
+}
+
 // testParkEvidence is a source-backed park fixture for admission tests. Its receipt was sent before the test starts.
 func testParkEvidence(kind, target, sourceURL, wake string) map[string]any {
 	evidence := map[string]any{"kind": kind, "next_actor": "external", "target": target, "wake": wake}
