@@ -141,7 +141,7 @@ func (s *Service) attachment(ctx context.Context, accountID string, uid uint32, 
 		return nil, Attachment{}, err
 	}
 	var metadata Attachment
-	err = s.withConn(ctx, a, func(c *imapclient.Client) error {
+	err = s.withConn(ctx, a, "attachment "+mailbox, func(c *imapclient.Client) error {
 		if err := file.Truncate(0); err != nil {
 			return err
 		}

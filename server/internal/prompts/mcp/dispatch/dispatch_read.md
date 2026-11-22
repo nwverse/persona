@@ -6,7 +6,7 @@ Read the subtasks you handed to other computers with dispatch_start. With no arg
   "properties": {
     "session_id": {
       "type": "string",
-      "description": "the session id dispatch_start returned (or its first 8 characters)"
+      "description": "The A2A task ID, or the session ID dispatch_start returned. You can also use the first 8 characters of a session ID."
     },
     "wait_seconds": {
       "type": "integer",

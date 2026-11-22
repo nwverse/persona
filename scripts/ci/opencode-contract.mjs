@@ -26,7 +26,7 @@ try {
   const bin = join(directory, 'package/bin/opencode')
   await chmod(bin, 0o700)
   // The test creates a separate HOME and removes all provider credentials.
-  const child = await run(process.execPath, ['--test', 'integrations/opencode/test/real-acp-isolation.test.js'], {
+  const child = await run(process.execPath, ['--test', 'integrations/opencode/test/real-acp-isolation.test.js', 'integrations/opencode/test/real-acp-policy.test.js'], {
     cwd: resolve(process.cwd()), env: { ...process.env, OPENCODE_CONTRACT_BIN: bin }, timeout: 240_000, maxBuffer: 4 * 1024 * 1024,
   })
   process.stdout.write(child.stdout)

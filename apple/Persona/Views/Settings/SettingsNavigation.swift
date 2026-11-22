@@ -122,6 +122,10 @@ enum SettingsCatalog {
             .init(id: "phoneData", title: ConnectorText.device, symbol: Theme.Icon.thisDevice, group: .device, page: .phoneData,
                   aliases: String(localized: "settings.search.phoneData"))
         ]
+        if AlarmsAccess.isSupported {
+            rows.append(.init(id: "alarms", title: String(localized: "Alarms and Timers"), symbol: Theme.Icon.alarmClock, group: .device,
+                              page: .alarms, aliases: String(localized: "settings.search.alarms")))
+        }
         #endif
         rows.append(.init(id: "computers", title: String(localized: "Machines"), symbol: Theme.Icon.machines, group: .assistant, page: .computers,
                           aliases: String(localized: "settings.search.computers")))
