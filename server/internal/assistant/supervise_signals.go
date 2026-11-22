@@ -45,6 +45,10 @@ const (
 	sigCheck = "check"
 	// sigTodoReady: an open, unstarted dependent to-do has all of its after prerequisites satisfied (todo_after_ready.go, #12606).
 	sigTodoReady = "todo_ready"
+	// sigPRMerged: an unparked open supervised task's delivery PR merged with no other delivery PR open (pr_merge_wake.go, #13100).
+	sigPRMerged = "pr_merged"
+	// sigParentCloseout: an open parent to-do with no active Agent has all part_of children done (todo_parent_closeout.go, #13100).
+	sigParentCloseout = "parent_closeout"
 )
 
 // sigCheck's kinds of news (superviseSignal.Report).
@@ -176,6 +180,9 @@ func (g superviseSignal) id() string {
 	if g.Kind == sigDraftPR {
 		return g.Todo + "|" + g.Kind + "@" + g.PRURL
 	}
+	if g.Kind == sigPRMerged {
+		return g.Todo + "|" + g.Kind + "@" + normalizePRKey(g.PRURL)
+	}
 	if g.Kind == sigPREvent {
 		return g.Todo + "|" + g.Kind + "@" + g.PRURL + ":" + g.Report
 	}
@@ -202,7 +209,7 @@ func (g superviseSignal) urgent() bool {
 	switch g.Kind {
 	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigPREvent, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
 		sigRecheck, sigUndecidable, sigOwnerCannot, sigEstimateDue, sigTimedOut, // the owner, an automatic deadline or a stopped task waits
-		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigTodoReady:
+		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigTodoReady, sigPRMerged, sigParentCloseout:
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
@@ -1136,7 +1143,9 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	// Only the open tasks: everything below passes the finished ones by, and there can be thousands of them.
 	tasks := s.todosWhere(ctx, "*", func(t *Todo) bool { return t.DoneAt == nil })
 	s.pruneAllStoppedDedup(ctx)
+	s.prunePRMergeWakes(ctx)
 	s.sweepTodoAfterReady(ctx)
+	s.sweepParentCloseout(ctx)
 	lists := machineSessions{}     // each machine listed once for all the supervised tasks (#3029)
 	history := s.planHistoryOnce() // and the plans read once, when a task's start needs them (start_remedy.go)
 	s.backfillBriefs(ctx, tasks)   // tasks from before briefs get one from what they still have (task_brief.go)

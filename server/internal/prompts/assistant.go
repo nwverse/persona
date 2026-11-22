@@ -979,6 +979,8 @@ type SuperviseEntry struct {
 	LastReview *SuperviseLastReview
 	// TodoReady: an open, unstarted dependent to-do whose after prerequisites are all satisfied (#12606).
 	TodoReady *SuperviseTodoReady
+	// ParentCloseout: localized closeout guidance when all part_of children of an open parent to-do are done (#13100).
+	ParentCloseout string
 }
 
 // SuperviseTodoReady describes an open, unstarted to-do ready to advance once all of its after prerequisites are met.
