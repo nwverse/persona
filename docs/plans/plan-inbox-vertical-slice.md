@@ -5,15 +5,18 @@
 and lands under section 4's rules. No step changes what a user sees (no UI, setting, default or wire change), so the
 design-principles self-check does not apply.
 
-**How the numbers were taken**, as of `origin/main` at 287db61638 (2026-11-20), re-checked at 81361c1dd1 (2026-11-22):
+**How the numbers were taken**, as of `origin/main` at 287db61638 (2026-11-20), re-checked at 81361c1dd1 and
+13c0e93f6f (2026-11-22):
 - "14 days" is `git log --since=2026-11-06T00:00:00Z` on 287db61638, counted by exact path. History starts on
   2026-10-24, so the window covers most of it, repository-wide sweeps included. Those commit counts are not re-taken.
-- File:line references, file and line counts and open-PR facts are as of 81361c1dd1, against the 287 PRs open on
-  2026-11-22 (155 on 2026-11-20). Main then moved to 6dfcd36ab0 (#12859), which shifts only the snapshot and
-  turn-settled lines in `assistant/service.go`; those two are as of 6dfcd36ab0. The four commits up to 4fe1bd5cea move
-  none of the cited lines or counts. GitHub lists at most 100 files per PR and 24 of them reach that cap, so overlaps
-  may be undercounted. Hunk positions are on each PR's own base. Line numbers drift, so each step finds its lines again
-  by name and re-checks open PRs before it is pushed (section 4).
+- Open-PR facts are as of 81361c1dd1, against the 287 PRs open on 2026-11-22 (155 on 2026-11-20); the
+  `docs/android/android.md` count in A1 and A2 is from the 288 open later that day. File:line references and file and
+  line counts were found again by name at 13c0e93f6f: since 81361c1dd1, #12859 moved the snapshot and turn-settled
+  lines in `assistant/service.go` and #12878 moved W1's literal in `scripts/test/test_check_fast_inputs.py`. A landed
+  step's Change cites the code it moved where it was before the move; its Landed note says where it went. GitHub lists
+  at most 100 files per PR and 24 of them reach that cap, so overlaps may be undercounted. Hunk positions are on each
+  PR's own base. Line numbers drift, so each step finds its lines again by name and re-checks open PRs before it is
+  pushed (section 4).
 - The conflict measures in sections 4 and 6 (merge-tree and a merged `go vet` against every open PR head) were taken on
   51e333fc90 across 241 open PRs, and the timings in D3 were measured for the decisions, on the same machine. Other
   build or test speedups below are expected, not measured. Paths that do not exist yet are plain text, not code, so the
@@ -279,8 +282,8 @@ func (k Kernel) Snapshot(fn func(ctx context.Context, snap *assistantwire.Snapsh
 | S9 | The stateful module | Very high: every open server Inbox PR, and 124 test files rewritten. Rollback: before later PRs add files to the package | not planned; only if every D3 gate passes |
 | W1 | Web feature folder, starting with the section bar | None: the moved files and the edited lines have no open PR; `web/src/startup-preload.ts` (16 open PRs) and the startup namespaces (26) are untouched | now (D8a) |
 | W2 | Non-Inbox helpers leave `lib/inbox.ts` | Low: its open PRs miss the moved ranges | landed (#11538) |
-| A1 | Android module-edge ratchet | None: a new test file | now (D10a) |
-| A2 | `:core:inbox` with the pure reply and hand-off types | Low: no open PR on the moved types' file (#10396, a draft, touches only `InboxTopBar.kt` and strings in the feature), but it is hot | after A1, landed fast |
+| A1 | Android module-edge ratchet | Low: a new test file, and a note in `docs/android/android.md`, which 11 open PRs touch, none in its "Modules and code" section | now (D10a) |
+| A2 | `:core:inbox` with the pure reply and hand-off types | Low: no open PR on the moved types' file (#10396, a draft, touches only `InboxTopBar.kt` and strings in the feature), but it is hot; none of the 11 open PRs on `docs/android/android.md` edits its module table | after A1, landed fast |
 | A3 | The page-facing repository into `:core:inbox`; core:data off feature:inbox | Medium: `RealInboxRepository.kt` (#12645), the feature's `InboxRepository.kt` and the app's `InboxModule.kt` (#11918, #12509) are hot (32, 27, 21 commits); about 70 test files implement the repository, one of them (`InboxShowcaseShotsTest.kt`) in #9823 and its repairs #11168 and #11179 | after A2, when `RealInboxRepository.kt` and `InboxModule.kt` pass X6 |
 | I1 | Tier into PersonaWire; the PersonaInbox package | Low: #4512's and #7495's hunks in `apple/Shared/InboxModels.swift` miss the enum; `InboxBar.swift` has no open PR; #4512, #7495 and #11282 edit `InboxView.swift` but not its empty-state block, which loses only `EmptyKind` and `emptyKind`; `apple/project.yml` (2 open PRs) only gains entries | now (D10b) |
 
@@ -331,7 +334,7 @@ func (k Kernel) Snapshot(fn func(ctx context.Context, snap *assistantwire.Snapsh
   (`assistant/inbox_merge.go:50`, also used by the urgent-call files) and `cardLocks` (`assistant/inbox_bus.go:144`,
   also used by `assistant/tasks.go`) move to neutral files. The Inbox half of `assistant/extension_context.go`
   (`inboxExtensionCache`, `inboxExtensionContext`) moves to an inbox-prefixed file; `projectExtensionContext` stays for
-  `assistant/todo_outcome.go:406`. `assistant/tasks_draft_decisions.go` reads the book through the first two Reader
+  `assistant/todo_outcome.go:542`. `assistant/tasks_draft_decisions.go` reads the book through the first two Reader
   methods (the card-send lock, an item copy) and leaves the allowlist. Deferred until their PRs land: `replyInDoubt`
   (`assistant/inbox_triage.go:470`, 7 open PRs), `modelPaused` and the purpose constants (`assistant/inbox_hub.go`, 4),
   `assistant/context.go` (7), `assistant/feishu_workbench.go` (4), `assistant/origins.go` (#2049, idle since
@@ -433,7 +436,7 @@ func (k Kernel) Snapshot(fn func(ctx context.Context, snap *assistantwire.Snapsh
   web/src/features/inbox/model/bar.ts and bar.test.ts, whose fixture path becomes ../../../../../spec;
   `web/src/views/inbox/InboxBar.tsx` and `web/src/lib/inbox-view-memory.ts` import the new path. `lib/inbox-bar.ts`
   stays a one-line re-export on the shrink-only list for `web/src/views/inbox/InboxList.tsx`, which #1995, #4512, #4653,
-  #10920 and #12508 edit. The PR updates the literal in `scripts/test/test_check_fast_inputs.py` (968), the line in
+  #10920 and #12508 edit. The PR updates the literal in `scripts/test/test_check_fast_inputs.py` (964), the line in
   `docs/web/web.md` (858) and the comment in `web/src/views/inbox/InboxList.bar.test.tsx` (5). It adds section 3.3's
   boundary test and an eslint block that keeps effects out of the model folder: the clock, randomness, the network,
   storage, timers, the console, and imports of the store and API modules.
@@ -444,7 +447,7 @@ func (k Kernel) Snapshot(fn func(ctx context.Context, snap *assistantwire.Snapsh
 - **Change:** `withToken` (390), `shortTime` (397), `conversationRoute` (555), and the Lark message types with
   `mergeMessages` and `comparePosition` (592-667) move to their own lib modules. `lib/inbox.ts` re-exports them, so none
   of the 27 importers changes here; later PRs flip quiet importers and drop the re-exports. The interaction helpers
-  (495-530) wait for #4512, whose hunk touches them.
+  (495-530 then, 474-510 now) wait for #4512, whose hunk touches them.
 - **Done when:** npm test and the build pass, with the first-screen room unchanged or its difference reported; tsc and
   eslint are clean; `git diff --stat` shows no importer changed.
 - **Landed (#11538):** `withToken` moved to `web/src/lib/media-url.ts`, a new module (in `web/src/lib/api.ts` its
@@ -466,7 +469,7 @@ func (k Kernel) Snapshot(fn func(ctx context.Context, snap *assistantwire.Snapsh
   `InboxFacadeTest` that counts imports and fully qualified references. core:data main files using
   `persona.feature.inbox` stay a subset of today's 7, and other features may use it only from `ChatLinkHost.kt`,
   `ChatLinks.kt` (fully qualified `LarkNativeLink`, 230-232) and `MeetingHandoff.kt`. A note in
-  `docs/android/android.md`.
+  `docs/android/android.md` ("Modules and code").
 - **Done when:** the scan passes in the app's unit tests (`--max-workers=4`); a planted import fails with the hint.
 
 ### A2. :core:inbox with the pure reply and hand-off types
@@ -528,7 +531,7 @@ binary for every server change on purpose: the cross-package contract tests ther
 
 ## 5. How we will know it worked
 
-| Measure | Now (287db61638; re-checked at 81361c1dd1) | Target |
+| Measure | Now (287db61638; re-checked at 81361c1dd1 and 13c0e93f6f) | Target |
 | --- | --- | --- |
 | Inbox server commits (of 149 in 14 days) also touching `assistant/service.go`, `assistant/tools.go`, `assistant/bus.go`, `extwire/scopes.go` | 16, 8, 8, 11 | 0 for new routes, tools and bus methods in the 30 days after S6 |
 | Files outside the Inbox core reaching the book: readers; the bridge's, all of which write items | 5; 5 | `assistant/service.go` only; the bridge's stay on S2's named list unless S9 gives them Links |
