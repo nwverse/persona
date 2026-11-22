@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -86,16 +87,25 @@ func (s *Service) toolSecretStore(ctx context.Context, machine, session string, 
 			return bad("could not describe the secret storage target")
 		}
 		in.Target = desc.Target
+		agent := strings.TrimSpace(row.Title)
+		if agent == "" {
+			agent = session
+		}
+		vaultLabel := desc.VaultName + " (" + in.Target.Vault + ")"
+		itemLabel := in.Target.Title
+		if in.Target.Item != "" {
+			itemLabel += " (" + in.Target.Item + ")"
+		}
 		l := s.lang(ctx)
 		operation := i18n.T(l, "assistant-secret_store."+in.Target.Operation)
-		input := proto.SecretHandoffInput{Agent: row.Title, MachineName: s.machineName(machine), StoreOperation: in.Target.Operation, Prompt: i18n.T(l, "assistant-secret_store.note")}
+		input := proto.SecretHandoffInput{Agent: agent, MachineName: s.machineName(machine), StoreOperation: in.Target.Operation, Prompt: i18n.T(l, "assistant-secret_store.note")}
 		for _, f := range in.Target.Fields {
-			input.Variables = append(input.Variables, proto.SecretHandoffVariable{Name: f.Name, Provider: prov.Extension, ProviderName: prov.Name, Title: operation + " › " + desc.VaultName + " › " + in.Target.Title})
+			input.Variables = append(input.Variables, proto.SecretHandoffVariable{Name: f.Name, Provider: prov.Extension, ProviderName: prov.Name, Title: operation + " › " + vaultLabel + " › " + itemLabel})
 		}
 		cardRaw, _ := json.Marshal(input)
 		now := time.Now().UTC()
 		ix := proto.Interaction{ID: "ix_" + randomHex(12), MachineID: machine, SessionID: session, SessionTitle: row.Title, Kind: proto.IxPermission, ToolName: proto.SecretHandoffTool, ToolTitle: i18n.T(l, "assistant-secret_store.title"), ToolInput: cardRaw,
-			Summary: i18n.T(l, "assistant-secret_store.summary", i18n.Args{"agent": row.Title, "machine": s.machineName(machine), "operation": operation, "item": in.Target.Title, "vault": desc.VaultName, "count": len(in.Target.Fields)}), CreatedAt: now, ExpiresAt: now.Add(handoffCardWait)}
+			Summary: i18n.T(l, "assistant-secret_store.summary", i18n.Args{"agent": agent, "machine": s.machineName(machine), "operation": operation, "item": itemLabel, "vault": vaultLabel, "count": len(in.Target.Fields)}), CreatedAt: now, ExpiresAt: now.Add(handoffCardWait)}
 		r, err := s.ask(ctx, ix)
 		claim, vouched := s.takeHandoffClaim(ix.ID)
 		if err != nil {

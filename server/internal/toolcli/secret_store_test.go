@@ -85,7 +85,10 @@ func TestSecretStoreRefusesPlaintextAndUnsafeSources(t *testing.T) {
 	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "source")
-	_ = os.WriteFile(path, []byte("fake"), 0644)
+	_ = os.WriteFile(path, []byte("fake"), 0600)
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
 	if b, err := readPrivateFile(path, 100); err == nil || b != nil {
 		t.Fatal("public file accepted")
 	}

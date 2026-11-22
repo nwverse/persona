@@ -279,6 +279,10 @@ The manager-only `secrets.store` protocol has three phases (types `SecretStore*`
    template to `op item create`/`op item edit` on stdin. No value enters argv or a Persona-created disk file. Existing
    item JSON stays inside that node. Answers contain only `{references:{field:"op://vault-id/item-id/field-id"}}`.
 
+Source calls require a process identity the resident node can verify (currently macOS/Linux); otherwise they fail
+closed. An attempted commit invalidates the provider's cached launcher values, including references spelled by names,
+so a changed credential is not served from the old ten-minute cache.
+
 Raw provider/op error text is withheld on the write path. Audit rows (`secret_stored`, `secret_store_failed`) contain
 only target metadata, requesting machine/session and approving device, never ciphertext, plaintext, paths or templates.
 Owned byte buffers are cleared when possible; Go and JSON encoders can retain other memory copies until GC.

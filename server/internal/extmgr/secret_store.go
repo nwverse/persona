@@ -27,6 +27,10 @@ func (h *Manager) StoreSecret(ctx context.Context, expected extension.SecretProv
 	defer cancel()
 	err = hp.proc.Call(cctx, "secrets.store", in, &out)
 	if in.Phase == "commit" {
+		// An uncertain reply may still follow a successful write. Invalidate cached launcher values
+		// for every spelling of this provider's references, including title-based references.
+		ps.kept.forgetProvider(prov.Extension)
+		ps.forgetSecretWords(prov.Extension)
 		action := "secret_stored"
 		if err != nil {
 			action = "secret_store_failed"
