@@ -141,10 +141,9 @@ of entry goes through the same design. The central lists keep the entries they h
   - A domain inside package `assistant` calls a package-level function from an `init()` in its own file:
     `registerRoutes(name, (*Service).xRoutes)`, `registerTools(after, …)` or `registerLoop(name, (*Service).xLoop)`.
     `New` adds them to the same registry before the modules register.
-- **One of each**: there is one duplicate check, a panic in `New`, which every test that builds a `Service` runs. Tool
-  placement is computed once, at the end of `New`. There is one route table and one list of loops. Route order means
-  nothing (`TestRoutesAreTheWireOnes` sorts, and `http.ServeMux` ignores it). The tools keep the order
-  `server/internal/hub/testdata/prompts/mcp_tools/assistant.index.golden` pins.
+- **One of each**: there is one route table and one list of loops, and tool placement is computed once, at the end of
+  `New`. Route order means nothing (`TestRoutesAreTheWireOnes` sorts, and `http.ServeMux` ignores it). The tools keep
+  the order `server/internal/hub/testdata/prompts/mcp_tools/assistant.index.golden` pins.
 - **When each part lands**:
   1. the kernel, with `saved` (S1);
   2. the Inbox's routes, bus methods, hooks and snapshot part (S4);
@@ -166,10 +165,14 @@ file. The append comes after the literal, which stays first and unchanged:
   have run (`server/internal/assistant/hub.go`), and `TestRoutesAreTheWireOnes` keeps it equal to what the assistant
   serves.
 - **`proto.Features`**: `func init() { Features = append(Features, FeatureX) }` in `proto/features_<domain>.go`, beside
-  the flag's constant, and `scripts/test/test_doc_wire.py` reads the appends too. Not on `main` yet (#7891).
+  the flag's constant. Go runs the init()s after the literal is set, file by file in name order, so the hello and
+  `/health` list the literal's flags, then each domain file's. `server/internal/proto/features_test.go` holds the
+  package to that one form of append, and `scripts/test/test_doc_wire.py` reads the appends too.
 - **`extwire.RouteScopes`**: `addRouteScopes(…)` from an `init()` in `extwire/<domain>_scopes.go`, which panics on a key
-  that is already there. `server/internal/hub/testdata/route_scopes.txt` stays one sorted golden. Not on `main` yet: it
-  comes with the Inbox's scopes (step S6 of the Inbox plan).
+  that is already there, on a key that is no route pattern and on an empty scope, so a bad entry stops every program
+  that imports `extwire` at start-up. `extwire/inbox_scopes.go` does this for the Inbox's routes (step S6 of the Inbox
+  plan), and archguard's `TestCentralListsGainNoInboxEntry` keeps them there.
+  `server/internal/hub/testdata/route_scopes.txt` stays one sorted golden, the permission list a reviewer reads.
 
 The hub's bus handlers already work this way: `handleBus("notify.request", (*Hub).busNotifyRequest)` runs from an
 `init()` beside the handler, and a method registered twice panics (`server/internal/hub/bus.go`). A domain's feature
@@ -222,7 +225,9 @@ A central list with a seam takes no new name. `server/internal/archguard/central
   - the labels of `Node.handleMethod` for the methods the node's method table may hold, by their source text
     (`"node.info"`, `proto.MethodMachineToolchain`), and the prefixes it routes on as `prefix "plugin.node."`;
   - the `assistantwire.Routes` literal, by each entry's source text (`"GET /api/v1/todos"`, `"GET " + StarredImportPath`);
-  - the top-level declarations of `prompts/assistant.go`, a method as `Type.Method`.
+  - the top-level declarations of `prompts/assistant.go`, a method as `Type.Method`;
+  - the `proto.Features` literal, by each entry's source text (`"locale"`, `FeatureTodoSendState`);
+  - the keys of the `extwire.RouteScopes` literal in `extwire/scopes.go`, by their source text (`"GET /api/v1/kb/{kind}"`).
 
   Each later seam's PR adds its own list's row. That PR shows a planted entry failing and a registered one passing.
 - **Pending names**: `python3 scripts/test/name_freezes.py pending` lists the names that open PRs add, read from their

@@ -1520,12 +1520,18 @@ struct StarterComposer: View {
         draft.sent()
     }
 
-    private func add(_ img: UIImage) { MessagePhotos.add(img, to: &draft.held.images, model: model) }
+    /// The pictures a message here may carry (the hub's, #12973).
+    private var limits: ImageLimits { model.imageLimits(machine.group) }
+
+    private func add(_ img: UIImage) {
+        MessagePhotos.add(img, to: &draft.held.images, model: model, limits: limits,
+                          spill: MessagePhotos.spill(into: files, machine: machine, model: model, dest: uploadDest))
+    }
 
     /// A scan's pages: the next message's photos while they fit, else one PDF uploaded as a picked file is (#3720).
     private func addScan(_ pages: [UIImage]) {
         #if os(iOS)
-        DocumentScanner.deliver(pages, room: MessagePhotos.limit - images.count, model: model, add: { add($0) }, upload: { upload($0) })
+        DocumentScanner.deliver(pages, room: limits.roomLeft(holding: images.count), model: model, add: { add($0) }, upload: { upload($0) })
         #endif
     }
 
@@ -1569,20 +1575,22 @@ struct StarterComposer: View {
 
     #if os(iOS)
     private var attachHost: AttachSheetHost<AttachMoreRows> {
-        AttachSheetHost(panel: attachPanel, caption: textBinding, photoRoom: max(0, MessagePhotos.limit - images.count),
+        // past the hub's pictures a pick goes as a file (`add`), so the panel takes as many as the files have room for too
+        AttachSheetHost(panel: attachPanel, caption: textBinding,
+                        photoRoom: limits.roomLeft(holding: images.count) + max(0, FileAttachments.most - files.items.count),
                         videoRoom: max(0, VideoAttachments.most - videos.items.count),
                         camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
                         files: { showFiles = true }, allPhotos: { showPhotos = true }, showsMore: true,
                         more: { AttachMoreRows(panel: attachPanel, sections: moreSections) }) { outcome in
             switch outcome {
             case .then(let picks, let action):
-                Task { await draft.held.addPicked(picks, machine: machine, model: model) }
+                Task { await draft.held.addPicked(picks, machine: machine, model: model, limits: limits, dest: uploadDest) }
                 action()
             case .closed(let picks):
-                Task { await draft.held.addPicked(picks, machine: machine, model: model) }
+                Task { await draft.held.addPicked(picks, machine: machine, model: model, limits: limits, dest: uploadDest) }
             case .send(let picks):
                 Task {
-                    await draft.held.addPicked(picks, machine: machine, model: model)
+                    await draft.held.addPicked(picks, machine: machine, model: model, limits: limits, dest: uploadDest)
                     submit() // the gate first, as the box's Send
                 }
             }
@@ -1707,7 +1715,7 @@ struct StarterComposer: View {
                 }
             }
         }
-        .mediaPicker(isPresented: $showPhotos, selection: $picks)
+        .mediaPicker(isPresented: $showPhotos, selection: $picks, limit: limits.perMessage + VideoAttachments.most)
         .fileUploadPicker(isPresented: $showFiles) { urls in
             // The assistant runs on its machine (the hub's unless set otherwise): files go to that one's temp directory.
             upload(urls)
@@ -1804,6 +1812,14 @@ struct BeautifulStarterComposer: View {
         files.start(urls, machine: machine, model: model, dest: uploadDest)
     }
 
+    /// The pictures a message here may carry (the hub's, #12973).
+    private var limits: ImageLimits { model.imageLimits(machine.group) }
+
+    private func add(_ img: UIImage) {
+        MessagePhotos.add(img, to: &images, model: model, limits: limits,
+                          spill: MessagePhotos.spill(into: files, machine: machine, model: model, dest: uploadDest))
+    }
+
     private var launcherMachine: String { uploadDest == Session.healthSpace ? model.healthMachineID : model.assistantConfig?.machineID ?? model.hubMachineID }
     /// The launcher a new conversation starts with (the user's pick, else the one in Persona settings), or nil while
     /// settings are not known (#4200): no name is made up, and requests omit the field so the hub picks its default.
@@ -1825,13 +1841,7 @@ struct BeautifulStarterComposer: View {
             if !files.items.isEmpty { FileAttachmentsBar(files: files) }
             if !videos.items.isEmpty { VideoAttachmentsBar(videos: videos) }
             #if os(iOS) || os(visionOS)
-            PasteImageChip(focused: focused) { img in
-                guard images.count < 4 else { return model.toast = Toast(String(localized: "Up to 4 at a time"), style: .error) }
-                let scaled = img.scaledDown(maxSide: 1600)
-                if let jpeg = scaled.jpegData(compressionQuality: 0.75) {
-                    images.append((scaled, ImagePayload(mime: "image/jpeg", data: jpeg.base64EncodedString())))
-                }
-            }
+            PasteImageChip(focused: focused) { add($0) }
             #endif
             #if os(macOS)
             if !images.isEmpty { ComposerImages(images: imagesBinding) }
@@ -1898,7 +1908,7 @@ struct BeautifulStarterComposer: View {
                 launchers = answer.launchers.filter(\.runsAssistant)
             }
         }
-        .mediaPicker(isPresented: $showPhotos, selection: $picks)
+        .mediaPicker(isPresented: $showPhotos, selection: $picks, limit: limits.perMessage + VideoAttachments.most)
         .fileUploadPicker(isPresented: $showFiles) { urls in
             // The assistant runs on its machine (the hub's unless set otherwise): files go to that one's temp directory.
             upload(urls)
@@ -1917,10 +1927,7 @@ struct BeautifulStarterComposer: View {
                         AppModel.shared.toast = Toast(String(localized: "Couldn't read some photos (they may still be downloading from iCloud)"), style: .error)
                         continue
                     }
-                    let scaled = img.scaledDown(maxSide: 1600)
-                    if let jpeg = scaled.jpegData(compressionQuality: 0.75) {
-                        images.append((scaled, ImagePayload(mime: "image/jpeg", data: jpeg.base64EncodedString())))
-                    }
+                    add(img) // held to the hub's pictures like every other way in (#12973)
                 }
                 picks = []
             }

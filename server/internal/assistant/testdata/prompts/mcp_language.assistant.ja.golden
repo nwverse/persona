@@ -520,7 +520,7 @@
   },
   {
     "name": "agent_send",
-    "description": "Send what the user asked for to an Agent. A busy Agent may queue it. A stopped Agent needs resume and resume_why when its context is needed. Recorded non-user stops (including quota/capacity errors) allow resume. User, exit or unknown stops need the user's Resume. It must be supervised (give task unless on an open task of yours). A nearly full Agent is compacted first. For unrelated work use agent_start. Unsure: ask_user. An unstarted branch starts on its first message. Only /exit or /quit stops a running Agent and keeps the tab. The owner's controls close another conversation's Agent.\n\nFor dialog_open, retry with dismiss_notice only when Enter alone closes the notice. For permissions and pickers, tell the user or use interaction_answer.\n\nFrom the main conversation, give task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. Omit task for a reply, nudge or decision.\n\nUse `handoff` for an already-stopped to-do you supervise. A node acknowledgement starts its wait for the receiving Agent's result.\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Send what the user asked for to an Agent. A busy Agent may queue it. A stopped Agent needs resume and resume_why when its context is needed. Recorded non-user stops (including quota/capacity errors) allow resume. User, exit or unknown stops need the user's Resume. It must be supervised (give task unless on an open task of yours). A nearly full Agent is compacted first. For unrelated work use agent_start. Unsure: ask_user. An unstarted branch starts on its first message. Only /exit or /quit stops a running Agent and keeps the tab. The owner's controls close another conversation's Agent.\n\nFor dialog_open, retry with dismiss_notice only when Enter alone closes the notice. For permissions and pickers, tell the user or use interaction_answer.\n\nGive task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. Omit task for a reply, nudge or decision.\n\nUse `handoff` for an already-stopped to-do you supervise. A node acknowledgement starts its wait for the receiving Agent's result.\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [
@@ -598,7 +598,7 @@
             "object",
             "null"
           ],
-          "description": "new work: make it your supervised task first (main conversation only); null for a reply",
+          "description": "new work: make it your supervised task first (main or a lead); null for a reply",
           "additionalProperties": false,
           "properties": {
             "title": {
@@ -832,7 +832,7 @@
   },
   {
     "name": "agent_supervise",
-    "description": "Main only: adopt an Agent opened manually or by agent_start without a task. Creates a to-do/card, supervision signals and task_review closeout, as task_plan does. The background supervisor reviews it unless assistant.main_supervises_own_tasks is on; the answer names the supervisor, and main can still review. Already your task: done_when/expect_minutes change its brief scope (prefer task_scope). Another conversation's task stays theirs; use agent_transfer to move it.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Main or a lead: adopt an Agent on no open task, e.g. from agent_start. Creates a to-do/card, supervision signals and task_review closeout, as task_plan does. The background supervisor reviews it unless assistant.main_supervises_own_tasks is on; the answer names the supervisor, and main can still review. Already your task: done_when/expect_minutes change its brief scope (prefer task_scope). Another conversation's task stays theirs; use agent_transfer to move it.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [
@@ -869,7 +869,7 @@
   },
   {
     "name": "agent_transfer",
-    "description": "Main only: move an open Agent task to a current direction or main (App Move to). Keep task, brief, criteria, estimate, origin and Agent; no message, interruption or restart. Transfer back to undo. Refuses user-owned to-dos, assistant sessions and untracked work (adopt with agent_supervise).\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Move an open Agent task to a current direction or main: main moves any; a lead hands off only its own. Keep task, brief, criteria, estimate, origin and Agent; no message, interruption or restart. Refuses user-owned to-dos, assistant sessions and untracked work (adopt with agent_supervise).\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [

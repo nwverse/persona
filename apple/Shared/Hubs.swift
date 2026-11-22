@@ -65,6 +65,8 @@ nonisolated struct HubHello: Hashable, Sendable {
     /// carries them to `LiveConnection.receiptTrust`: a kept hello is the last socket's word, through a drop too, so
     /// nothing decides from it whether receipts can come now.
     var sendReceipts = SendReceiptTrust.untrusted
+    /// The pictures a message may carry (`image_limits`, #12973); nil from hubs before them, which take the standard ones.
+    var imageLimits: ImageLimitsTable?
 }
 
 /// One hub this device paired with: its address, this device's credential there, and what the app learned about it.

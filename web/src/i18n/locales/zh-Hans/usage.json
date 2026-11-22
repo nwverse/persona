@@ -32,6 +32,7 @@
   "balance_label": "预付余额",
   "balance_unavailable": "余额无法读取",
   "balance_rejected": "DeepSeek 不认这把 Key，请到设置 → 模型供应商更新",
+  "balance_rejected_kept": "DeepSeek 不认这把 Key，请到设置 → 模型供应商更新；显示的是上次的余额",
   "balance_unreachable": "暂时连不上 DeepSeek",
   "balance_unreachable_kept": "暂时连不上 DeepSeek，显示的是上次的余额",
   "balance_failed": "读取余额失败",

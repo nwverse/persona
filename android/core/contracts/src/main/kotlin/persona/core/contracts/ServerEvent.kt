@@ -62,6 +62,8 @@ data class Hello(
     @SerialName("min_app_build") val minAppBuild: Int? = null,
     /** Dedicated hub-owned receipt protocol version; an extension's feature string cannot establish trust. */
     @SerialName("message_send_state") val messageSendState: Int? = null,
+    /** The pictures a message may carry; older hubs use the same documented defaults, not a four-picture cap. */
+    @SerialName("image_limits") val imageLimits: ImageLimitsTable? = null,
 ) : ServerEvent
 
 @KeepGeneratedSerializer

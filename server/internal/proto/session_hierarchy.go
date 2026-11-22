@@ -84,7 +84,30 @@ type SessionHierarchy struct {
 	// counting only running work. Oldest first, at most eight; the node lists entries from the last day. Sparse storage
 	// keeps ordinary Session rows in their allocation size class.
 	BackgroundEnded []BackgroundTask `json:"background_ended,omitempty"`
-	Deleted         bool             `json:"deleted,omitempty"` // Permanent manager tombstone; use Session.IsDeleted/SetDeleted.
+	// ContextBreakdown splits current context window occupancy by category with an exact/estimated honesty marker.
+	// Stored here so ordinary Session rows stay inside their 1,536-byte allocation size class; encoded as a top-level
+	// "context_breakdown" wire key.
+	ContextBreakdown *ContextBreakdown `json:"context_breakdown,omitempty"`
+	Deleted          bool              `json:"deleted,omitempty"` // Permanent manager tombstone; use Session.IsDeleted/SetDeleted.
+}
+
+// ContextBreakdown returns the session's structured context window breakdown, or nil when unavailable.
+// Shared with the row's other copies: not to be modified in place.
+func (s *Session) ContextBreakdown() *ContextBreakdown {
+	if s.Hierarchy == nil {
+		return nil
+	}
+	return s.Hierarchy.ContextBreakdown
+}
+
+// SetContextBreakdown replaces the session's context breakdown without changing other copies of the row.
+func (s *Session) SetContextBreakdown(b *ContextBreakdown) {
+	if s.ContextBreakdown().Equal(b) {
+		return
+	}
+	h := s.hierarchy()
+	h.ContextBreakdown = b.Clone()
+	s.setHierarchy(h)
 }
 
 // BackgroundEnded returns recent shell / Monitor outcomes, oldest first; nil when none are retained.
@@ -150,7 +173,7 @@ func (h *SessionHierarchy) empty() bool {
 	return !h.HiddenByDirectory && h.ParentAgentID == "" && h.StartedAt.IsZero() && h.AskingParentSessionID == "" && h.FoldedUnder == "" && h.FoldedAs == "" &&
 		h.FoldedSide == "" &&
 		h.Children == nil && len(h.EngineHistory) == 0 && h.CompletedTodo == nil && len(h.Aliases) == 0 &&
-		len(h.BackgroundEnded) == 0 && !h.Deleted
+		len(h.BackgroundEnded) == 0 && h.ContextBreakdown == nil && !h.Deleted
 }
 
 // HiddenByDirectory reports the manager's directory visibility without growing every session row.
@@ -199,6 +222,7 @@ func (s *Session) hierarchy() SessionHierarchy {
 	h.EngineHistory = slices.Clone(h.EngineHistory)
 	h.Aliases = slices.Clone(h.Aliases)
 	h.BackgroundEnded = slices.Clone(h.BackgroundEnded)
+	h.ContextBreakdown = h.ContextBreakdown.Clone()
 	return h
 }
 

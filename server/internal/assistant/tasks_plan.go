@@ -250,11 +250,10 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		}
 	}
 	// A direction's lead that a hand-over of the owner's quoted words went into (#11699): the words may have reached the
-	// wrong lead, so until the owner writes there, "the user asked for this" is no Start for writable work it plans.
+	// wrong lead, so until the owner writes there, "the user asked for this" is no Start for writable work it plans
+	// outside the kinds the owner already let this lead start (heldOutsideOwnKinds, #12953).
 	if scope == nil && slices.ContainsFunc(a.Tasks, func(t PlanTask) bool { return t.UserRequested }) && s.handedOver(sessionID) {
-		for i := range a.Tasks {
-			a.Tasks[i].UserRequested = false
-		}
+		s.heldOutsideOwnKinds(ctx, sessionID, a.Tasks)
 	}
 	var round Task
 	var inRound bool
@@ -363,7 +362,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	case supervisor == "":
 	case supervisor != sessionID && supervisor != cfg.Main:
 		fmt.Fprintf(&b, " Leader conversation %s supervises them: their supervision messages go there, and it reviews them with task_review.", supervisor)
-	case background && s.isBackground(ctx, sessionID):
+	case background && s.isBackgroundSession(ctx, sessionID):
 		b.WriteString(" You follow them up as the background supervisor: a supervision message comes when one needs you (review it with task_review).")
 	case background && s.isMain(ctx, sessionID):
 		b.WriteString(" The background supervisor follows them up: their supervision messages go to it and it reviews them with " +
