@@ -170,16 +170,20 @@ func (s *Service) threadOf(id string) *TodoThread {
 func (s *Service) insertDecision(ctx context.Context, st todoStore, row db.TodoDecisionRow) (bool, error) {
 	ok, err := st.InsertTodoDecision(ctx, row)
 	if err == nil && ok {
-		s.todoDecisionEvent(row)
-		if row.Source == db.DecisionManual {
-			s.askTodoDecided(context.WithoutCancel(ctx), row) // the owner's call on a question's to-do (ask_todo.go)
-		}
-		s.parkDecided(context.WithoutCancel(ctx), row) // what a parked task waited for may have come (parked.go)
-	}
-	if err == nil && ok && postable(row) {
-		s.threadPost(row.TodoID, threadEvent{kind: threadDecision, text: decisionLine(row)})
+		s.decisionInserted(ctx, row)
 	}
 	return ok, err
+}
+
+func (s *Service) decisionInserted(ctx context.Context, row db.TodoDecisionRow) {
+	s.todoDecisionEvent(row)
+	if row.Source == db.DecisionManual {
+		s.askTodoDecided(context.WithoutCancel(ctx), row) // the owner's call on a question's to-do (ask_todo.go)
+	}
+	s.parkDecided(context.WithoutCancel(ctx), row) // what a parked task waited for may have come (parked.go)
+	if postable(row) {
+		s.threadPost(row.TodoID, threadEvent{kind: threadDecision, text: decisionLine(row)})
+	}
 }
 
 // decisionLine is a decision as a line quotes it: the question and what was chosen.

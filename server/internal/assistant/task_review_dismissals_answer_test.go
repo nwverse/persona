@@ -239,7 +239,7 @@ func TestTaskReviewDismissalNoAgentHandoffUndoesIt(t *testing.T) {
 			}
 			key := "undelivered|" + askOf(s, todo.ID).AskedAt.UTC().Format(time.RFC3339Nano)
 			s.supervise.mu.Lock()
-			signal, pending := s.supervise.pending[todo.ID+"|"+sigIdle]
+			signal, pending := s.supervise.pending[todo.ID+"|"+sigOwnerChoice]
 			s.supervise.mu.Unlock()
 			if !pending || signal.Key != key {
 				t.Fatalf("supervisor handoff was not queued: %+v", signal)

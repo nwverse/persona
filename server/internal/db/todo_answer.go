@@ -16,6 +16,17 @@ import (
 // commit together, before any message is sent. A to-do deleted after the answer's claim stays deleted; its answer
 // still enters the delivery settings, without recreating its ledger. Returned decisions are only the newly inserted ones.
 func (d *DB) CommitTodoAnswer(ctx context.Context, id string, decisions []TodoDecisionRow, settings map[string]any, at time.Time) (*TodoRow, []TodoDecisionRow, error) {
+	return d.commitTodoAnswer(ctx, id, decisions, settings, at, true)
+}
+
+// CommitTodoDecisionHandoff keeps the task open. A recorded owner answer and
+// the supervisor outbox entry that will carry it become visible together.
+func (d *DB) CommitTodoDecisionHandoff(ctx context.Context, decision TodoDecisionRow, settings map[string]any) (bool, error) {
+	_, inserted, err := d.commitTodoAnswer(ctx, decision.TodoID, []TodoDecisionRow{decision}, settings, decision.CreatedAt, false)
+	return len(inserted) != 0, err
+}
+
+func (d *DB) commitTodoAnswer(ctx context.Context, id string, decisions []TodoDecisionRow, settings map[string]any, at time.Time, closeTask bool) (*TodoRow, []TodoDecisionRow, error) {
 	if len(decisions) == 0 {
 		return nil, nil, errors.New("an answer must contain decisions")
 	}
@@ -44,6 +55,9 @@ func (d *DB) CommitTodoAnswer(ctx context.Context, id string, decisions []TodoDe
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
+		if !closeTask && (errors.Is(err, pgx.ErrNoRows) || cur.DoneAt != nil) {
+			return ErrTodoNotFound
+		}
 		if err == nil {
 			if cur.Kind == KindConcern && cur.DoneAt == nil {
 				return ErrConcernUnreported
@@ -61,11 +75,15 @@ func (d *DB) CommitTodoAnswer(ctx context.Context, id string, decisions []TodoDe
 					inserted = append(inserted, r)
 				}
 			}
-			done := true
-			TodoEdit{Done: &done}.Apply(&cur, at)
-			_, err = tx.Exec(ctx, `UPDATE todos SET done_at = $2, updated_at = $3, start_error = $4,
-				done_by = $5, done_reason = $6 WHERE id = $1`,
-				id, cur.DoneAt, cur.UpdatedAt, cur.StartError, cur.DoneBy, cur.DoneReason)
+			if closeTask {
+				done := true
+				TodoEdit{Done: &done}.Apply(&cur, at)
+				_, err = tx.Exec(ctx, `UPDATE todos SET done_at = $2, updated_at = $3, start_error = $4,
+					done_by = $5, done_reason = $6 WHERE id = $1`,
+					id, cur.DoneAt, cur.UpdatedAt, cur.StartError, cur.DoneBy, cur.DoneReason)
+			} else {
+				_, err = tx.Exec(ctx, `UPDATE todos SET updated_at = $2 WHERE id = $1`, id, at)
+			}
 			if err != nil {
 				return err
 			}

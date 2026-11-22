@@ -414,7 +414,10 @@ func (s *Service) takeRecommendation(ctx context.Context, id string, a acceptAsk
 	if st := s.todoDB(); st != nil {
 		at := decisionNow()
 		row.ID, row.TodoID, row.CreatedAt = "dec_"+randomHex(8), id, at
-		if ok, err := s.insertDecision(ctx, st, row); err != nil {
+		if ok, err := s.insertOwnerAnswer(ctx, st, row, a, sendErr, false); err != nil {
+			if sendErr != nil {
+				return acceptResult{}, err
+			}
 			s.logf("task %s: conclusion decision: %v", id, err)
 		} else if ok {
 			if !a.ByDefault {
@@ -440,8 +443,12 @@ func (s *Service) takeRecommendation(ctx context.Context, id string, a acceptAsk
 // delivery. The task no longer waits for them, so its agent's next stop comes back to the supervisor as any stop does
 // (superviseJudged), whether it finished or not, and the supervision messages are about it again.
 func (s *Service) userDecided(ctx context.Context, id string) {
+	s.userDecidedRound(ctx, id, time.Time{})
+}
+
+func (s *Service) userDecidedRound(ctx context.Context, id string, asked time.Time) {
 	if _, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
-		if v.State != reviewNeedsUser {
+		if v.State != reviewNeedsUser || !asked.IsZero() && len(v.Reviews) > 0 && v.Reviews[len(v.Reviews)-1].At.After(asked) {
 			return false
 		}
 		v.State = ""

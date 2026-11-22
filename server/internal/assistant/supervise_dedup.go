@@ -168,6 +168,12 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 	var resumingIDs [][2]string
 	resuming := delivery == leaderResumeDelivery
 	for i, entry := range entries {
+		if signals[i].Kind == sigOwnerChoice {
+			// The queue and pending outbox share an atomic admission receipt. A
+			// pre-send fingerprint could retire this choice after a crash.
+			out, kept = append(out, entry), append(kept, signals[i])
+			continue
+		}
 		key, hash := digestFingerprint(entry, signals[i])
 		current, undelivered := pending[signals[i].id()]
 		if seen, ok := next[key]; ok && seen.Hash == hash && (seen.Permanent || seen.Todo != "" || now.Sub(seen.At) < superviseDedupWindow) {

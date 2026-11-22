@@ -364,9 +364,12 @@ func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (ac
 	}
 	if st := s.todoDB(); st != nil {
 		at, dec := decisionNow(), "dec_"+randomHex(8)
-		if ok, err := s.insertDecision(ctx, st, db.TodoDecisionRow{ID: dec, TodoID: id,
+		if ok, err := s.insertOwnerAnswer(ctx, st, db.TodoDecisionRow{ID: dec, TodoID: id,
 			Question: cmp.Or(a.Reason, i18n.T(l, "assistant-reports.verdict_decide")), Choice: decisionText(label),
-			Source: db.DecisionManual, CreatedAt: at}); err != nil {
+			Source: db.DecisionManual, CreatedAt: at}, *a, sendErr, false); err != nil {
+			if sendErr != nil {
+				return acceptResult{}, err
+			}
 			s.logf("task %s: decision: %v", id, err)
 		} else if ok {
 			s.ownerDecided(id, dec, a.WhyOwner)
@@ -469,7 +472,7 @@ func (s *Service) answerDecisionTextLocked(ctx context.Context, st todoStore, t 
 	row := db.TodoDecisionRow{ID: "dec_" + randomHex(8), TodoID: id,
 		Question: cmp.Or(a.Reason, i18n.T(s.botLang(ctx), "assistant-reports.verdict_decide")),
 		Choice:   decisionText(text), Source: db.DecisionManual, SourceMessage: item.ID, CreatedAt: at}
-	if _, err := s.insertDecision(ctx, st, row); err != nil {
+	if _, err := s.insertOwnerAnswer(ctx, st, row, *a, sendErr, true); err != nil {
 		if sendErr == nil { // its Agent has the words: say so, never "nothing was taken" (the to-do may be gone by now)
 			err = wordsSent{err}
 		}

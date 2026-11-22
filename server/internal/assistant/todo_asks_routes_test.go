@@ -393,7 +393,7 @@ func TestTodoAskWordsNoAgentRecorded(t *testing.T) {
 				t.Fatalf("decisions %+v, %v", rows, err)
 			}
 			sc.s.supervise.mu.Lock()
-			g, pending := sc.s.supervise.pending[sc.row+"|"+sigIdle]
+			g, pending := sc.s.supervise.pending[sc.row+"|"+sigOwnerChoice]
 			sc.s.supervise.mu.Unlock()
 			if !pending || g.Key != "undelivered|"+asked.UTC().Format(time.RFC3339Nano) || !strings.Contains(g.Detail, words) {
 				t.Fatalf("the supervisor was not handed the words: %+v", g)

@@ -92,7 +92,8 @@ type acceptAsk struct {
 	// record or another answer path; the text matching an option label is not evidence of its recipient.
 	TextDelivery decisionTextDelivery `json:"text_delivery,omitempty"`
 	// OptionTaken distinguishes an explicit option from older Chosen text that may only spell the same label.
-	OptionTaken bool `json:"option_taken,omitempty"`
+	OptionTaken  bool `json:"option_taken,omitempty"`
+	OwnerHandoff bool `json:"owner_handoff,omitempty"` // the answer and its supervisor wake were committed together
 	// Check: the recurring schedule whose progress check raised this decision (schedule_todo.go, #11587). The option
 	// the owner takes is about the supervisor's approach, so it goes to the task's supervisor, not its Agent
 	// (checkDecided).
@@ -210,16 +211,7 @@ func (s *Service) saveAcceptErrLocked(ctx context.Context) error {
 	if !s.accept.loaded {
 		return nil
 	}
-	asks := make(map[string]*acceptAsk, len(s.accept.asks))
-	for id, a := range s.accept.asks {
-		if a != nil && a.prepared != nil {
-			prepared := *a.prepared
-			prepared.Earlier = a.Earlier // an earlier round's in-flight retry may have added its card meanwhile
-			asks[id] = &prepared
-		} else {
-			asks[id] = a
-		}
-	}
+	asks := s.acceptSnapshotLocked()
 	st := s.store()
 	if len(s.accept.outside) == 0 {
 		if st != nil {
@@ -250,6 +242,21 @@ func (s *Service) saveAcceptErrLocked(ctx context.Context) error {
 	}
 	s.accept.outside = outside
 	return nil
+}
+
+// acceptSnapshotLocked preserves prepared cards while another answer is committed.
+func (s *Service) acceptSnapshotLocked() map[string]*acceptAsk {
+	asks := make(map[string]*acceptAsk, len(s.accept.asks))
+	for id, a := range s.accept.asks {
+		if a != nil && a.prepared != nil {
+			prepared := *a.prepared
+			prepared.Earlier = a.Earlier // an earlier round's in-flight retry may have added its card meanwhile
+			asks[id] = &prepared
+		} else {
+			asks[id] = a
+		}
+	}
+	return asks
 }
 
 var urlRe = lazyre.New(`https?://[^\s<>()\[\]"'，。；、）]+`)

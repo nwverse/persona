@@ -147,7 +147,7 @@ func TestCheckDecisionWordsCardDelivery(t *testing.T) {
 				s.supervise.mu.Unlock()
 				s.sendDigest(ctx)
 				s.supervise.mu.Lock()
-				told := s.supervise.sent[todo.ID+"|"+sigIdle] == "undelivered|"+a.AskedAt.UTC().Format(time.RFC3339Nano)
+				told := s.supervise.sent[todo.ID+"|"+sigOwnerChoice] == "undelivered|"+a.AskedAt.UTC().Format(time.RFC3339Nano)
 				s.supervise.mu.Unlock()
 				if told {
 					t.Fatal("the unreachable supervisor was marked told")
@@ -156,7 +156,7 @@ func TestCheckDecisionWordsCardDelivery(t *testing.T) {
 			if tc.stop != nil {
 				found := false
 				for _, g := range pendingFor(s, todo.ID) {
-					if g.Kind == sigIdle && strings.Contains(g.Key, "undelivered|") && strings.Contains(g.Detail, words) {
+					if g.Kind == sigOwnerChoice && strings.Contains(g.Key, "undelivered|") && strings.Contains(g.Detail, words) {
 						found = true
 					}
 				}

@@ -1091,3 +1091,65 @@ func TestStopReportingDropsPersistedPending(t *testing.T) {
 		t.Fatalf("the stopped task's persisted signal survived: %+v", got)
 	}
 }
+
+func TestOwnerChoiceSurvivesIdleAndRestart(t *testing.T) {
+	st := planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}}
+	s, f, todo := newSupervisedServiceOn(t, st)
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	round := time.Now().UTC()
+	s.decisionNotDelivered(t.Context(), todo.ID, round, "Start a replacement", errors.New("Agent stopped"))
+	idle := superviseSignal{Todo: todo.ID, Kind: sigIdle, Key: "later-agent-turn", Detail: "Agent stopped"}
+	s.signal(idle)
+	choiceID := superviseSignal{Todo: todo.ID, Kind: sigOwnerChoice}.id()
+	if got := storedSupervisePending(t, s)[choiceID]; !strings.Contains(got.Detail, "Start a replacement") {
+		t.Fatalf("the later idle replaced the owner's handoff: %+v", got)
+	}
+	simulateSupervisionRestart(t, s)
+	s.superviseTimes = superviseTimings{gather: 1, every: 1, urgent: 1}
+	s.sendDigest(t.Context())
+	waitFor(t, "queued owner choice", func() bool { return strings.Contains(strings.Join(f.noticesTo("conv1"), "\n"), "Start a replacement") })
+	if got := strings.Join(f.noticesTo("conv1"), "\n"); strings.Count(got, "Start a replacement") != 1 {
+		t.Fatalf("restored supervisor delivery: %s", got)
+	}
+	if _, pending := storedSupervisePending(t, s)[choiceID]; pending {
+		t.Fatal("already delivered choice stayed in the outbox")
+	}
+}
+
+func TestRecordedOwnerChoiceCommitsWithWakeBeforeDispatch(t *testing.T) {
+	database := todoTestDB(t)
+	s, f, todo := newSupervisedServiceOn(t, database)
+	waitsForReview(t, s, f, todo.ID, "Choose a rollout.")
+	if _, err := reviewErr(s, todo.ID, rolloutDecision()); err != nil {
+		t.Fatal(err)
+	}
+	a := askOf(s, todo.ID)
+	row := db.TodoDecisionRow{ID: "dec_test_handoff", TodoID: todo.ID, Question: a.Reason, Choice: a.Recommend, Source: db.DecisionManual, CreatedAt: time.Now().UTC()}
+	removeFailure := rejectExpiredAnswerWrite(t, database, "settings", "NEW.key = '"+relayKey+"'")
+	if _, err := s.insertOwnerAnswer(t.Context(), database, row, *a, errors.New("Agent stopped"), false); err == nil {
+		t.Fatal("outbox failure accepted")
+	}
+	rows, err := database.ListTodoDecisions(t.Context(), todo.ID, false)
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("partial decision write: %v %v", rows, err)
+	}
+	removeFailure()
+	if added, err := s.insertOwnerAnswer(t.Context(), database, row, *a, errors.New("Agent stopped"), false); err != nil || !added {
+		t.Fatalf("retry: %v %v", added, err)
+	}
+	// Crash boundary: neither userDecided nor signal has run.
+	var relay relayState
+	if _, err := database.Setting(t.Context(), relayKey, &relay); err != nil {
+		t.Fatal(err)
+	}
+	g := relay.SupervisePending[superviseSignal{Todo: todo.ID, Kind: sigOwnerChoice}.id()]
+	if g.Todo != todo.ID || !strings.Contains(g.Detail, row.Choice) {
+		t.Fatalf("stored handoff: %+v", g)
+	}
+	if a := askOf(s, todo.ID); !a.OwnerHandoff || a.AcceptedAt.IsZero() {
+		t.Fatal("card not settled with its wake")
+	}
+	if tnow := todoNow(s, todo.ID); tnow.DoneAt != nil {
+		t.Fatal("handoff closed an open task")
+	}
+}

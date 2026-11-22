@@ -386,8 +386,8 @@ func TestSessionListFailureKeepsDecisionRetryable(t *testing.T) {
 	}
 	key := "undelivered|" + askOf(s, todo.ID).AskedAt.UTC().Format(time.RFC3339Nano)
 	s.supervise.mu.Lock()
-	g, pending := s.supervise.pending[todo.ID+"|"+sigIdle]
-	told := s.supervise.sent[todo.ID+"|"+sigIdle] == key
+	g, pending := s.supervise.pending[todo.ID+"|"+sigOwnerChoice]
+	told := s.supervise.sent[todo.ID+"|"+sigOwnerChoice] == key
 	s.supervise.mu.Unlock()
 	var routeErr *i18n.Message
 	if !errors.As(err, &routeErr) || routeErr.Key != "assistant-tasks.route_offline" {
@@ -475,8 +475,8 @@ func TestDefaultRecommendationWithStoppedAgentKeepsReminder(t *testing.T) {
 	}
 	key := "undelivered|" + a.AskedAt.UTC().Format(time.RFC3339Nano)
 	s.supervise.mu.Lock()
-	g, pending := s.supervise.pending[todo.ID+"|"+sigIdle]
-	told := s.supervise.sent[todo.ID+"|"+sigIdle] == key
+	g, pending := s.supervise.pending[todo.ID+"|"+sigOwnerChoice]
+	told := s.supervise.sent[todo.ID+"|"+sigOwnerChoice] == key
 	s.supervise.mu.Unlock()
 	if pending && g.Key == key || told {
 		t.Fatalf("the default became an owner decision: %+v", g)
@@ -778,8 +778,8 @@ func TestDecisionWithoutLiveAgentIsRecordedForSupervisor(t *testing.T) {
 				// outside that interval, after any in-flight digest has finished.
 				s.supervise.dedupMu.Lock()
 				s.supervise.mu.Lock()
-				g, pending := s.supervise.pending[todo.ID+"|"+sigIdle]
-				told := s.supervise.sent[todo.ID+"|"+sigIdle] == key
+				g, pending := s.supervise.pending[todo.ID+"|"+sigOwnerChoice]
+				told := s.supervise.sent[todo.ID+"|"+sigOwnerChoice] == key
 				s.supervise.mu.Unlock()
 				s.supervise.dedupMu.Unlock()
 				if tc.want == http.StatusBadGateway {

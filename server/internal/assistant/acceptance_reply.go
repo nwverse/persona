@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -256,12 +257,71 @@ func acceptSucceeded() acceptResult { return acceptResult{taken: true} }
 // decisionNotDelivered finishes a recorded decision whose Agent could not take it. The supervisor gets one handoff per
 // ask round; the hub does not resend it. The caller owns the decision row and the ask's answered marker.
 func (s *Service) decisionNotDelivered(ctx context.Context, id string, askedAt time.Time, choice string, cause error) acceptResult {
-	l := s.botLang(ctx)
 	s.userDecided(ctx, id)
-	s.signal(superviseSignal{Todo: id, Kind: sigIdle, Key: "undelivered|" + askedAt.UTC().Format(time.RFC3339Nano), Handoff: true,
-		Detail: i18n.T(l, "assistant-reports.decision_not_delivered", i18n.Args{"decision": clip(oneLine(choice), 200),
-			"error": clip(oneLine(i18n.Localize(cause, l)), 120)})})
+	s.signal(s.ownerHandoffSignal(ctx, id, askedAt, choice, cause))
 	return acceptResult{taken: true, undelivered: cause}
+}
+
+func (s *Service) ownerHandoffSignal(ctx context.Context, id string, asked time.Time, choice string, cause error) superviseSignal {
+	l := s.botLang(ctx)
+	return superviseSignal{Todo: id, Kind: sigOwnerChoice, Key: "undelivered|" + asked.UTC().Format(time.RFC3339Nano), At: time.Now().UTC(),
+		Detail: i18n.T(l, "assistant-reports.decision_not_delivered", i18n.Args{"decision": clip(oneLine(choice), 200),
+			"error": clip(oneLine(i18n.Localize(cause, l)), 120)})}
+}
+
+// Commit the answered card, decision row and pending wake under the settings
+// locks. A process can stop immediately after this returns, before signal().
+func (s *Service) insertOwnerAnswer(ctx context.Context, st todoStore, row db.TodoDecisionRow, ask acceptAsk, cause error, words bool) (bool, error) {
+	store, atomic := st.(interface {
+		CommitTodoDecisionHandoff(context.Context, db.TodoDecisionRow, map[string]any) (bool, error)
+	})
+	if cause == nil || !atomic {
+		return s.insertDecision(ctx, st, row)
+	}
+	g := s.ownerHandoffSignal(ctx, row.TodoID, ask.AskedAt, row.Choice, cause)
+	if row.SourceMessage == "" {
+		row.SourceMessage = g.Key // the database's per-to-do, per-question idempotency key
+	}
+	inserted, err := func() (bool, error) {
+		b, r := &s.accept, &s.relays
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if !s.loadAcceptLocked(ctx) || !s.relayLocked(ctx) {
+			return false, errAcceptStore
+		}
+		a := b.asks[row.TodoID]
+		if a == nil || !a.AskedAt.Equal(ask.AskedAt) {
+			return false, errAskNotFound
+		}
+		next := *a
+		next.AcceptedAt, next.OwnerHandoff = row.CreatedAt, true
+		if words {
+			next.Chosen, next.TextDelivery = row.Choice, decisionTextRecorded
+		} else if row.Choice != a.Recommend {
+			next.Chosen, next.OptionTaken = row.Choice, true
+		}
+		asks := s.acceptSnapshotLocked()
+		asks[row.TodoID] = &next
+		relay := r.st
+		relay.SupervisePending = maps.Clone(relay.SupervisePending)
+		if relay.SupervisePending == nil {
+			relay.SupervisePending = map[string]superviseSignal{}
+		}
+		relay.SupervisePending[g.id()] = g
+		added, err := store.CommitTodoDecisionHandoff(ctx, row, map[string]any{acceptanceKey: asks, relayKey: relay})
+		if err != nil {
+			b.loaded, r.loaded = false, false // an uncertain commit must be reread before another write
+			return false, err
+		}
+		*a, r.st = next, relay
+		return added, nil
+	}()
+	if err == nil && inserted {
+		s.decisionInserted(ctx, row)
+	}
+	return inserted, err
 }
 
 // acceptTry marks task id verified; result.taken is false when already handled, never asked, or asked before the latest
@@ -397,7 +457,8 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 		if err != nil {
 			// Not taken after all: the owner can take it again, and is told why it did not go.
 			b.mu.Lock()
-			if a := b.asks[id]; a != nil && a.AskedAt.Equal(cp.AskedAt) {
+			if loaded := s.loadAcceptLocked(ctx); loaded && b.asks[id] != nil && !b.asks[id].OwnerHandoff && b.asks[id].AskedAt.Equal(cp.AskedAt) {
+				a := b.asks[id]
 				// A default that did not go is not tried again (it may have reached the agent after all): its deadline stays
 				// handled (DueAt) and the sweep reminds the owner instead. So is the owner's own press whose recommendation
 				// may be with the agent: no default at its deadline sends it a second time.
