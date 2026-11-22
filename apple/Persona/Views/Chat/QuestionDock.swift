@@ -207,6 +207,10 @@ struct QuestionDock: View {
                 .environment(\.cardFits, keyboard ? area - Theme.Space.l : 0)
                 .environment(\.cardTakesArea, true)
                 .simultaneousGesture(swipe(at: at, ids: ids), isEnabled: ids.count > 1)
+                #if os(iOS)
+                // On a phone a sideways drag anywhere opens the drawer or pages the strip (`DrawerPan`): on the card it pages.
+                .background { if ids.count > 1 { SwipePageMark() } }
+                #endif
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("question-dock")
