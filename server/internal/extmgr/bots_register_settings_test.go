@@ -212,14 +212,14 @@ func TestBotRegistrationSettingsPUTValidationOrdersOldBind(t *testing.T) {
 		}
 	}
 	w.api.mu.Unlock()
-	body := fmt.Sprintf(`{"app_id":"cli_new","app_secret":"new-secret","domain":%q}`, w.api.srv.URL)
+	body := fmt.Sprintf(`{"app_id":"cli_new","app_secret":"new-secret","domain":%q,"features":{"agents":true}}`, w.api.srv.URL)
 	put := startBotRequest(w, context.Background(), http.MethodPut, "/api/v1/bots/feishu", body)
 	awaitRegistration(t, entered)
 	waiting := &observeBindWait{Context: context.Background(), waiting: make(chan struct{})}
 	bind := startRegistrationBind(w, waiting, stepRegister)
 	awaitRegistration(t, waiting.waiting)
 	// Neither the lifecycle gate nor the remote validation holds bots.mu or blocks independent switches.
-	enabled := startBotRequest(w, context.Background(), http.MethodPut, "/api/v1/bots/feishu", `{"enabled":false}`)
+	enabled := startBotRequest(w, context.Background(), http.MethodPut, "/api/v1/bots/feishu", `{"enabled":false,"features":{"read_group":true}}`)
 	if p := registrationPrompt(t, enabled); p["enabled"] != false {
 		t.Fatalf("disable PUT did not report disabled: %v", p)
 	}
@@ -235,8 +235,8 @@ func TestBotRegistrationSettingsPUTValidationOrdersOldBind(t *testing.T) {
 		t.Fatalf("queued old bind changed the new app: %v", view)
 	}
 	var saved FeishuBotSettings
-	if ok, err := w.h.store.Setting(w.ctx, botSettingsKey, &saved); !ok || err != nil || saved.Enabled {
-		t.Fatal("queued old poll persisted enabled=true")
+	if ok, err := w.h.store.Setting(w.ctx, botSettingsKey, &saved); !ok || err != nil || saved.Enabled || !saved.Features.Agents || !saved.Features.ReadGroup {
+		t.Fatal("queued old poll or credential PUT changed the disabled state or independent feature saves")
 	}
 }
 
