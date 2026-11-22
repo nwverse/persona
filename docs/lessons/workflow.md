@@ -348,3 +348,5 @@ Apple builds, where a cold build costs the most:
   `PersonaCore*.swiftmodule` at the root of `Build/Products/<config>/` in DerivedData.
 
 - Finish static review, generated tool snapshots and fixture corrections before queuing expensive shared-runner verification. A dedupe key prevents repeated submissions of one commit/group set; it cannot coalesce a series of intermediate commits. While a run waits, collect further fixes into one candidate instead of queuing each edit. Reuse an earlier shard result only when its relevant source is unchanged, and record the exact candidate and baseline commits in the PR.
+
+- Inspect test-running Git hooks before remote-only verification: merging upstream can stage token or icon files and trigger local tests even when the feature itself changes server code. Keep privacy scanning enabled and run the triggered test suites through the prescribed remote workflow.
