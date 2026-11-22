@@ -197,3 +197,10 @@ func (e Entry) Validate() error {
 	}
 	return nil
 }
+
+// Changed is the public invalidation payload, without internal routing metadata.
+type Changed struct {
+	ID       string `json:"id"`
+	RecordID string `json:"record_id"`
+	Status   string `json:"status"`
+}

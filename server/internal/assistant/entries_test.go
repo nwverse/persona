@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/entries"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -47,6 +48,9 @@ func TestEntriesHTTPRPCAndWrongEvent(t *testing.T) {
 	request := httptest.NewRequest("GET", "/api/v1/assistant/entries?by=agent&scope="+url.QueryEscape(`{"executor":"system"}`), nil)
 	w := httptest.NewRecorder()
 	e.s.ServeHTTP(w, request)
+	if err := wire.ValidateResult(assistantwire.MethodAssistantEntriesList, w.Body.Bytes()); err != nil {
+		t.Fatal(err)
+	}
 	var httpOut entries.Result
 	if err := json.Unmarshal(w.Body.Bytes(), &httpOut); err != nil || w.Code != 200 || !reflect.DeepEqual(rpcOut, httpOut) {
 		t.Fatalf("HTTP != RPC: %d %s / %+v %v", w.Code, w.Body.String(), rpcOut, err)
