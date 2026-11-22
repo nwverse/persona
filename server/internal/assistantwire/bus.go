@@ -81,6 +81,8 @@ const (
 	// (#6282, docs/protocol/protocol.md "Assistant chat search"). The hub lists the assistant_search feature only while
 	// the default manager names it; the apps keep filtering titles and last messages without it.
 	CapabilityAssistantSearch = "assistant_search"
+	// CapabilityTaskInput: the manager validates and saves structured scheduled prompts.
+	CapabilityTaskInput = "task_input"
 	// CapabilityAssistantSegments promises persistent logical routing and explicit switches.
 	CapabilityAssistantSegments = "assistant_segments"
 	// CapabilityDirectionSessions: the manager files sessions under a direction and reads one direction
@@ -187,6 +189,8 @@ const (
 	// CodeFeishuAPI: Feishu answered the bot's call with an error code (Data: {"code": n}): a refusal or a passing
 	// failure the assistant tells apart (the agent messages, feishu_cot.go).
 	CodeFeishuAPI = "feishu_api"
+	// CodeFeishuSave: the image downloaded, but saving its bytes on the selected machine failed.
+	CodeFeishuSave = "feishu_save"
 	// CodeChatDenied: the hub refused to send into a chat or to reply to a message in one, because the bot may only use
 	// the owner's private chat and the group chats the owner opted in. Nothing was sent.
 	CodeChatDenied = "chat_denied"
@@ -202,6 +206,8 @@ const (
 	// sent. The hub keeps an owner's message with an id (MethodKeepUndelivered); the manager sends it again once the
 	// conversation is idle, resolving the role again, so it starts on the new role and the old one never gets it.
 	CodeConversationBusy = "busy"
+	// CodeTaskDirectoryMissing distinguishes a missing directory from permission and validation failures.
+	CodeTaskDirectoryMissing = "task_directory_missing"
 	// CodeSupervisionRuntime means the runtime cannot receive separate supervision instructions. Nothing was sent.
 	CodeSupervisionRuntime = "assistant_supervision_runtime"
 	// CodeSupervisionAccount means the engine supports the channel but this account has not enabled it.
@@ -311,6 +317,7 @@ var Routes = []string{
 	"GET /api/v1/assistant/tasks",
 	"GET /api/v1/assistant/tasks/cron",
 	"POST /api/v1/assistant/tasks",
+	"POST /api/v1/assistant/tasks/input-context",
 	"PUT /api/v1/assistant/tasks/{id}",
 	"DELETE /api/v1/assistant/tasks/{id}",
 	"POST /api/v1/assistant/tasks/{id}/run",

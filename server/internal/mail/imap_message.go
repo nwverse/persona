@@ -24,10 +24,10 @@ func (s *Service) GetMessage(ctx context.Context, accountID string, uid uint32, 
 		mailbox = "INBOX"
 	}
 	var out *MailMessage
-	err = s.withConn(ctx, a, func(c *imapclient.Client) error {
+	err = s.withConn(ctx, a, "read "+mailbox, func(c *imapclient.Client) error {
 		out = nil
 		if _, err := c.Select(mailbox, &imap.SelectOptions{ReadOnly: true}).Wait(); err != nil {
-			return fmt.Errorf("select %s: %w", mailbox, err)
+			return failedAt("select "+mailbox, err)
 		}
 		msgs, err := c.Fetch(imap.UIDSetNum(imap.UID(uid)), &imap.FetchOptions{
 			UID:          true,
@@ -38,7 +38,7 @@ func (s *Service) GetMessage(ctx context.Context, accountID string, uid uint32, 
 			BodySection:  []*imap.FetchItemBodySection{{Peek: true}},
 		}).Collect()
 		if err != nil {
-			return fmt.Errorf("fetch: %w", err)
+			return failedAt("fetch", err)
 		}
 		if len(msgs) == 0 {
 			return fmt.Errorf("message %d not found in %s", uid, mailbox)
@@ -70,14 +70,14 @@ func (s *Service) SeenFlags(ctx context.Context, accountID, mailbox string, uids
 	for _, uid := range uids {
 		set.AddNum(imap.UID(uid))
 	}
-	err = s.withConn(ctx, a, func(c *imapclient.Client) error {
+	err = s.withConn(ctx, a, "seen flags "+mailbox, func(c *imapclient.Client) error {
 		clear(out)
 		if _, err := c.Select(mailbox, &imap.SelectOptions{ReadOnly: true}).Wait(); err != nil {
-			return fmt.Errorf("select %s: %w", mailbox, err)
+			return failedAt("select "+mailbox, err)
 		}
 		msgs, err := c.Fetch(set, &imap.FetchOptions{UID: true, Flags: true}).Collect()
 		if err != nil {
-			return fmt.Errorf("fetch: %w", err)
+			return failedAt("fetch", err)
 		}
 		for _, m := range msgs {
 			out[uint32(m.UID)] = hasFlag(m.Flags, imap.FlagSeen)
@@ -330,9 +330,9 @@ func (s *Service) SetFlags(ctx context.Context, accountID string, uid uint32, re
 	if mailbox == "" {
 		mailbox = "INBOX"
 	}
-	return s.withConn(ctx, a, func(c *imapclient.Client) error {
+	return s.withConn(ctx, a, "set flags "+mailbox, func(c *imapclient.Client) error {
 		if _, err := c.Select(mailbox, nil).Wait(); err != nil {
-			return fmt.Errorf("select %s: %w", mailbox, err)
+			return failedAt("select "+mailbox, err)
 		}
 		set := imap.UIDSetNum(imap.UID(uid))
 		if req.Seen != nil {

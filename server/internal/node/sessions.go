@@ -391,7 +391,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			n.observedRunning(s.SessionID)
 			n.noteGatewayRunning(s)
 		}
-		if earlier[s.SessionID] || !n.sessionScopeAllows(s.Cwd) {
+		if earlier[s.SessionID] || n.isRoundFork(s.SessionID) || !n.sessionScopeAllows(s.Cwd) {
 			continue
 		}
 		if n.listBlocked(s.SessionID, s.Cwd) {
@@ -495,6 +495,7 @@ func (n *Node) decorateState(s *proto.Session, managesModel bool) (sessionState,
 	if ok {
 		s.StartedByPersona = true
 		s.Launcher = st.Launcher
+		s.SetCreationID(st.CreationID)
 		s.OffLauncher = n.offLauncher(s.SessionID) // its claude not started by Persona's command (offlauncher.go)
 		if st.TaskExecution {
 			classifyTaskTurnFailure(s)

@@ -3,7 +3,9 @@ import XCTest
 /// The To-dos places (#10465; docs/design/proposals/todos-redesign.md 3.3; DESIGN_SYSTEM 3.5 "To-dos places") against
 /// the mock hub's To-dos view (`MOCK_TODO_VIEW=1`, `PERSONA_TODOS_HUB`), on an iPhone in its own layout: the drawer's
 /// To-dos row folds open Today, Upcoming, the projects with their part of N and All Projects…; a place picked there or
-/// from the list's title menu is the list; every place but All To-dos says what needs the owner elsewhere, with Show All.
+/// from the list's title menu is the list; every place but All To-dos says what needs the owner elsewhere in the list's
+/// one guard line, with Show All; only All To-dos and a project's place draw the Filter, and Upcoming's ⋯ holds Show as
+/// Calendar alone.
 /// `-showTodosV1 YES` stands for the release. With `PERSONA_TODOS_FRAMES=1` and `PERSONA_SHOTS=<dir>`, the V1 frames
 /// this step draws are saved for review instead (`PERSONA_TODOS_SCHEME`, `PERSONA_TODOS_LANGUAGE`, `PERSONA_TODOS_COLOR`,
 /// `PERSONA_TODOS_SIZE`, `PERSONA_TODOS_SUFFIX`, `PERSONA_TODOS_FRAMES_ONLY`, as `TodosV1ListTests`); on an iPad, the
@@ -51,8 +53,46 @@ final class TodosV1PlacesTests: XCTestCase {
     /// own; the bar's other buttons have theirs).
     @MainActor private func titleMenu() -> XCUIElement {
         let bar = app.navigationBars.firstMatch
-        let known: Set<String> = ["shell-place-sidebar", "todos.more", "BackButton"]
+        let known: Set<String> = ["shell-place-sidebar", "todos.view", "BackButton"]
         return bar.buttons.allElementsBoundByIndex.first { !known.contains($0.identifier) && $0.isHittable } ?? bar.staticTexts.firstMatch
+    }
+
+    /// ⋯: the page's own menu in the navigation bar, or on iOS 27 built with its SDK the bar's overflow menu, which
+    /// carries no identifier of ours: the bar's trailing button. (Upcoming's calendar has a List | Calendar choice of the
+    /// same identifier under the bar.)
+    @MainActor private func viewMenu() -> XCUIElement {
+        let bar = app.navigationBars.firstMatch
+        let ours = bar.buttons.matching(identifier: "todos.view").firstMatch
+        if ours.waitForExistence(timeout: 3) { return ours }
+        return bar.buttons.allElementsBoundByIndex.last(where: \.isHittable) ?? ours
+    }
+
+    /// An open menu's item by its identifier, else by its place: SwiftUI carries no identifier onto a menu's items on
+    /// iOS 26 and later, and these menus list their items in a fixed order.
+    @MainActor private func menuItem(_ id: String, at index: Int) -> XCUIElement {
+        let byID = app.buttons.matching(identifier: id).allElementsBoundByIndex.first(where: \.isHittable)
+        if let byID { return byID }
+        let menus = app.collectionViews.allElementsBoundByIndex.filter { $0.identifier != "todos.v1" }
+        guard let menu = menus.last else { return app.buttons[id] }
+        return menu.buttons.element(boundBy: index)
+    }
+
+    /// A choice from the Filter's menu, by its identifier (iOS 18 names a choice that is on "Filtered by: ‹choice›").
+    @MainActor private func choose(_ choice: String) {
+        let named = element("todos.filter.value")
+        let filter = !element("todos.filter").exists && named.exists ? named : element("todos.filter")
+        XCTAssertTrue(filter.waitForExistence(timeout: 20), "no Filter:\n\(app.debugDescription)")
+        filter.tap()
+        let order = ["all", "needs_you", "in_progress", "todo", "done"]
+        let item = menuItem("todos.filter." + choice, at: order.firstIndex(of: choice) ?? 0)
+        XCTAssertTrue(item.waitForExistence(timeout: 5), "no \(choice) in the Filter's menu:\n\(app.debugDescription)")
+        item.tap()
+    }
+
+    /// N as the Needs you heading says it (its spoken value).
+    @MainActor private func needsYou() -> Int? {
+        let header = element("todos.section.needs_you")
+        return header.exists ? number(header.value as? String ?? "") : nil
     }
 
     /// The last number in a spoken label ("Kyoto trip, 1"): the count a badge adds to its row.
@@ -71,8 +111,9 @@ final class TodosV1PlacesTests: XCTestCase {
     /// with what needs the owner elsewhere and Show All back to All To-dos.
     @MainActor func testTheDrawerOpensAPlace() throws {
         try launch(try hub)
-        XCTAssertTrue(element("todos.v1").waitForExistence(timeout: 60), "no V1 list:\n\(app.debugDescription)")
-        let n = try XCTUnwrap(number(element("todos.bar.needs_you").label))
+        XCTAssertTrue(element("todos.section.needs_you").waitForExistence(timeout: 60), "no V1 list:\n\(app.debugDescription)")
+        let n = try XCTUnwrap(needsYou())
+        XCTAssertTrue(element("todos.filter").exists, "All To-dos draws the Filter")
         drawer(showing: "sidebar-todos-place-today")
         for id in ["upcoming", "project:kyoto", "project:weather", "project:home", "more"] {
             XCTAssertTrue(element("sidebar-todos-place-" + id).exists, "no \(id) under To-dos:\n\(app.debugDescription)")
@@ -92,20 +133,23 @@ final class TodosV1PlacesTests: XCTestCase {
         XCTAssertTrue(element("sidebar-todos-place-today").waitForExistence(timeout: 5))
 
         element("sidebar-todos-place-today").tap()
-        let notice = element("todos.places.hiddenNeeds")
-        XCTAssertTrue(notice.waitForExistence(timeout: 20), "Today says what needs the owner elsewhere:\n\(app.debugDescription)")
-        XCTAssertTrue(notice.label.contains(String(n)) || element("todos.places.hiddenNeeds").staticTexts.allElementsBoundByIndex
-            .contains { $0.label.contains(String(n)) }, "all \(n) are elsewhere: \(notice.label)")
+        let line = element("todos.guard")
+        XCTAssertTrue(line.waitForExistence(timeout: 20), "Today says what needs the owner elsewhere:\n\(app.debugDescription)")
+        XCTAssertTrue(line.label.contains(String(n)), "all \(n) are elsewhere: \(line.label)")
         XCTAssertFalse(element("todos.section.needs_you").exists, "nothing in Today needs the owner")
-        element("todos.places.showAll").tap()
+        XCTAssertFalse(element("todos.filter").exists, "Today draws no Filter")
+        line.tap()
         XCTAssertTrue(element("todos.section.needs_you").waitForExistence(timeout: 10), "Show All: All To-dos")
-        XCTAssertFalse(element("todos.places.hiddenNeeds").exists)
+        XCTAssertFalse(element("todos.guard").exists)
     }
 
-    /// The title menu lists the same places; a project picked there is the list in place, its bar counting its own rows.
+    /// The title menu lists the same places; a project picked there is the list in place, its Needs you heading counting
+    /// its own rows, with the Filter; under a choice, one guard line counts what the choice hides and what is outside the
+    /// project, and its Show All is All To-dos.
     @MainActor func testTheTitleMenuPicksAPlace() throws {
         try launch(try hub)
-        XCTAssertTrue(element("todos.bar.needs_you").waitForExistence(timeout: 60), "no V1 list:\n\(app.debugDescription)")
+        XCTAssertTrue(element("todos.section.needs_you").waitForExistence(timeout: 60), "no V1 list:\n\(app.debugDescription)")
+        let n = try XCTUnwrap(needsYou())
         XCTAssertTrue(element("todos.row.t05").waitForExistence(timeout: 10), "the newsletter is listed in All To-dos")
         let title = titleMenu()
         XCTAssertTrue(title.exists, "no title menu:\n\(app.debugDescription)")
@@ -117,8 +161,16 @@ final class TodosV1PlacesTests: XCTestCase {
         kyoto.tap()
         XCTAssertTrue(element("todos.row.t01").waitForExistence(timeout: 10), "Kyoto trip's to-do")
         XCTAssertTrue(element("todos.row.t05").waitForNonExistence(timeout: 5), "another project's to-do left the list")
-        XCTAssertEqual(number(element("todos.bar.needs_you").label), 1, "the place's part of N")
-        XCTAssertTrue(element("todos.places.hiddenNeeds").exists, "the other two need the owner elsewhere")
+        XCTAssertEqual(needsYou(), 1, "the place's part of N")
+        XCTAssertTrue(element("todos.guard").label.contains(String(n - 1)), "the others need the owner elsewhere")
+        choose("in_progress")
+        let lines = app.descendants(matching: .any).matching(identifier: "todos.guard")
+        XCTAssertTrue(lines.firstMatch.waitForExistence(timeout: 10), "no guard line:\n\(app.debugDescription)")
+        XCTAssertEqual(lines.count, 1, "one line, not a place's and a choice's")
+        XCTAssertTrue(lines.firstMatch.label.contains(String(n)), "every one that needs the owner is hidden: \(lines.firstMatch.label)")
+        lines.firstMatch.tap()
+        XCTAssertTrue(element("todos.row.t05").waitForExistence(timeout: 10), "Show All: All To-dos")
+        XCTAssertEqual(needsYou(), n, "on All, with every section")
     }
 
     /// Upcoming lists the dated to-dos by day, each day with its +; To-dos opened again is on the last place.
@@ -127,9 +179,15 @@ final class TodosV1PlacesTests: XCTestCase {
         XCTAssertTrue(element("todos.v1").waitForExistence(timeout: 60), "no V1 list:\n\(app.debugDescription)")
         let days = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'todos.upcoming.add.day:'"))
         XCTAssertTrue(days.firstMatch.waitForExistence(timeout: 20), "no day headings:\n\(app.debugDescription)")
-        XCTAssertFalse(element("todos.grouping").exists, "Upcoming is grouped by day: its bar has no Group By")
+        XCTAssertFalse(element("todos.filter").exists, "Upcoming draws no Filter")
         XCTAssertTrue(element("todos.row.t11").exists, "the passport is dated")
         XCTAssertFalse(element("todos.row.t13").exists, "the car insurance has no date")
+        // Its ⋯ holds Show as Calendar alone: the days are its grouping and its order.
+        viewMenu().tap()
+        XCTAssertTrue(menuItem("todos.places.showCalendar", at: 0).waitForExistence(timeout: 5), "no Show as Calendar:\n\(app.debugDescription)")
+        XCTAssertFalse(app.buttons.matching(identifier: "todos.view.sort.suggested").firstMatch.exists, "no Sort By on Upcoming")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.6)).tap() // the menu closes
+        XCTAssertTrue(days.firstMatch.waitForExistence(timeout: 5))
         // Another page, then To-dos again: still Upcoming.
         drawer(showing: "sidebar-inbox")
         element("sidebar-inbox").tap()
@@ -140,7 +198,7 @@ final class TodosV1PlacesTests: XCTestCase {
         // To-dos in front: its row is All To-dos.
         drawer(showing: "sidebar-todos")
         element("sidebar-todos").tap()
-        XCTAssertTrue(element("todos.grouping").waitForExistence(timeout: 20), "All To-dos, its bar's Group By:\n\(app.debugDescription)")
+        XCTAssertTrue(element("todos.filter").waitForExistence(timeout: 20), "All To-dos, with its Filter:\n\(app.debugDescription)")
         XCTAssertFalse(days.firstMatch.exists, "no day headings")
     }
 
@@ -173,7 +231,7 @@ final class TodosV1PlacesTests: XCTestCase {
         }
         XCTAssertTrue(rows("").waitForExistence(timeout: 10), "listed in Today at once:\n\(app.debugDescription)")
         XCTAssertTrue(rows("todo_").waitForExistence(timeout: 20), "still in Today once the hub has it:\n\(app.debugDescription)")
-        XCTAssertTrue(element("todos.places.hiddenNeeds").exists, "still Today, with what needs the owner elsewhere")
+        XCTAssertTrue(element("todos.guard").exists, "still Today, with what needs the owner elsewhere")
     }
 
     // MARK: Frames
@@ -210,8 +268,11 @@ final class TodosV1PlacesTests: XCTestCase {
         }
     }
 
-    /// The frames this step draws, for the review (no checks beyond reaching them): `~drawer`, `~menu`, `~today`,
-    /// `~kyoto`, Upcoming as a list and as a calendar, and New To-Do's sheet on Today and in a project.
+    /// The frames this step draws, for the review (no checks beyond reaching them): `~drawer`, `~menu`, `~today` (the
+    /// mock has nothing due today: its empty state), `~kyoto`, a project with nothing open (`~kyoto-empty`, the mock's
+    /// Garden), a project under a choice with its one guard line (`~kyoto-filter`), ⋯ in a project and on Upcoming,
+    /// Upcoming as a list, scrolled under the bar (where it is longer than the screen, as at the largest text size) and
+    /// as a calendar, New To-Do's sheet on Today and in a project, and All Projects… with each project's counts.
     @MainActor func testFrames() throws {
         guard env["PERSONA_TODOS_FRAMES"] == "1", let hub = env["PERSONA_TODOS_HUB"], let dir = env["PERSONA_SHOTS"] else {
             throw XCTSkip("PERSONA_TODOS_FRAMES=1 with PERSONA_TODOS_HUB and PERSONA_SHOTS")
@@ -234,12 +295,12 @@ final class TodosV1PlacesTests: XCTestCase {
         if UIDevice.current.userInterfaceIdiom == .pad { return try padFrames(hub, extra, wants: wants, shot: shot) }
         let relaunch = { (args: [String]) in try self.relaunch(hub, extra + args) }
         try relaunch(["-openTodoPlace", "all"])
-        _ = element("todos.bar.all").waitForExistence(timeout: 10)
+        _ = element("todos.section.needs_you").waitForExistence(timeout: 10)
         if wants("~drawer") {
             drawer(showing: "sidebar-todos-place-today")
             shot("~drawer")
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap() // the page beside the drawer closes it
-            _ = element("todos.bar.all").waitForExistence(timeout: 5)
+            _ = element("todos.section.needs_you").waitForExistence(timeout: 5)
         }
         if wants("~menu") {
             titleMenu().tap()
@@ -247,9 +308,30 @@ final class TodosV1PlacesTests: XCTestCase {
             shot("~menu")
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.6)).tap()
         }
-        for (frame, place) in [("~today", "today"), ("~kyoto", "project:kyoto"), ("~upcoming", "upcoming")] where wants(frame) {
+        for (frame, place) in [("~today", "today"), ("~kyoto", "project:kyoto"), ("~kyoto-empty", "project:garden"),
+                               ("~upcoming", "upcoming")] where wants(frame) {
             try relaunch(["-openTodoPlace", place, "-todos.v1.upcomingCalendar", "NO"])
             shot(frame)
+        }
+        if wants("~kyoto-filter") {
+            try relaunch(["-openTodoPlace", "project:kyoto"])
+            choose("in_progress")
+            _ = element("todos.guard").waitForExistence(timeout: 10)
+            shot("~kyoto-filter")
+        }
+        for (frame, place) in [("~more-kyoto", "project:kyoto"), ("~more-upcoming", "upcoming")] where wants(frame) {
+            try relaunch(["-openTodoPlace", place, "-todos.v1.upcomingCalendar", "NO"])
+            viewMenu().tap()
+            _ = menuItem(place == "upcoming" ? "todos.places.showCalendar" : "todos.view.sort.suggested", at: 0).waitForExistence(timeout: 5)
+            shot(frame)
+        }
+        if wants("~upcoming-scrolled") {
+            // A day's heading under the bar: headings scroll away with their cards, so no row runs into its words.
+            try relaunch(["-openTodoPlace", "upcoming", "-todos.v1.upcomingCalendar", "NO"])
+            let list = element("todos.v1")
+            list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+                .press(forDuration: 0.05, thenDragTo: list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)))
+            shot("~upcoming-scrolled")
         }
         if wants("~upcoming-calendar") {
             try relaunch(["-openTodoPlace", "upcoming", "-todos.v1.upcomingCalendar", "YES", "-todos.calendar.mode", "week"])

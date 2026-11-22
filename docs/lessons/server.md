@@ -1,5 +1,18 @@
 # Lessons: hub / node and networking
 
+## An IMAP retry that replays the step that ended the connection fails the same way (2026-11-22, #12808)
+
+go-imap/v2 completes a command when its tagged answer arrives, before it reads on. A server that hangs up right after
+answering (QQ Mail does after a keyword `UID SEARCH`) leaves the command a success and fails the *next* one: the reader
+has already closed the connection, so over TLS the write returns a bare `net.ErrClosed` ("use of closed network
+connection"). Retrying the whole operation on a new login sends the search again, and the server ends that connection
+too: two QQ accounts' `mail_search` failed on every try with `fetch: use of closed network connection`, and nothing
+was logged. What a try already got (the search's UIDs) has to survive into the retry, so the retry only does what
+failed (`listOne` in `server/internal/mail/imap_list.go`). Tell a dead connection by `Client.State() ==
+ConnStateLogout`: the reader sets it before it fails the waiting commands, so a command that failed sees it already,
+and `Client.Close()` then returns the reader's own error, the reason to log. A proxy that closes after a chosen tagged
+answer reproduces it (`server/internal/mail/closed_conn_test.go`).
+
 ## Under a full-tunnel VPN the default route's address is the tunnel's (#11125)
 
 A UDP "connect" towards a far address reports the source address of the route it would take, the usual way to find
@@ -1988,6 +2001,11 @@ For future safety-driven delete/reject decisions, don't rely on error-swallowing
 - Before taking rows out of a list, find every reader of the list, not only the lookups by id: grep the field and every accessor that returns it (`m.sessions`, `keptSessions`, `sessionList`). The hub's lists never showed archived rows, but `Machine.session` (sending, deleting, pins) and the watch-state prune found them, and scans read them too: a port an archived agent listens on allowed `/ports/{port}/connect` and previews (`portAllowed`), the manager's `sessions.list`, the update's busy check, space names, the node's revs and the unknown state while the manager is away. The first version kept only the lookups and narrowed port access without meaning to (review of #6877). Keep the rows apart in the order told and give the scans an accessor for both (`keptWhole`); prove it by comparing each reader against a hub given the whole list, and check the test fails without the change.
 - A cache of derived data needs a key that changes with everything it was derived from. The archive's sorted row index depends on the record set (never changed in place, so its identity is the key) and on which of the node's rows have a record: a session the node lists again moves from the archive's rows into the node's, with no record written. A test that only writes records would pass with a key that misses the second.
 
+## Archive generations outlive close RPCs (2026-11-21, #7789)
+
+- `time.Now` alone is not an archive version: it can tie or move backwards, and deleting a provisional record loses the high-water mark a later archive needs after a restart. Allocate the next marker from the persisted one under the archive gate. An applicable force-close rollback leaves a restored generation; a stale rollback is a no-op, not another write that could fence out a newer close.
+- A close RPC runs outside the archive gate. Carry the generation captured by the archive write into completion, and check it under the gate before writing `ClosedAt` or requesting native archiving. Skip a stale completion's publish; an applicable completion publishes with the archive read marker captured under that gate, so a re-archive between check and publish is not visible as activity to the old close. Publishing a cached blocked row without that fence can automatically restore the newer re-archive even when its record was left untouched. Metadata-write errors are different: preserve the committed archive's normal publish and recheck the generation before the immediate native retry.
+
 ## Heartbeat timeouts on slow links (2026-11-06, #3452)
 
 At about 30 KB/s from hub to a computer, its link repeatedly disconnected with "no pong within 5s", failing every message. Ping doesn't jump the queue: it follows bytes already given to TCP,
@@ -2172,6 +2190,20 @@ Redeploy installed the old node (or failed its self-check), and the mismatch cou
 another version renames those unlabelled builds to `.prev`, so the lookup falls through to the release of the hub's version.
 Whenever a file's meaning is "the build of whatever version the hub runs now", whatever changes the hub's version without changing that file
 must relabel it or move it.
+
+## A node update left the Windows build behind, and it passed for the new version (2026-11-22, #12958)
+
+The same mistake came back with node updates on: the update replaced only the platforms in the release's `files`, and releases up to v0.9.1
+list no Windows `personad`, so `bin/nodes/personad-windows-amd64.exe` stayed the old build without a `.version`. Every Redeploy to a Windows
+computer then failed with "node executable self-check version or platform mismatch"; `deploy.sh`, which builds only Linux and macOS, left it
+behind the same way. Switching a hub before replacing `bin/nodes` made the new hub push the old builds, labelled as its version, to every
+computer that reconnected.
+Now a node update sets aside unlabelled builds before the release's go in, `deploy.sh` builds the Windows node programs, and the manager takes
+an unlabelled local build for the hub's version only when the version string is in the file: the node's self-check compares the version the
+build was linked with, so the string's absence proves the build is another one (its presence proves nothing). Lookups are looked up again when
+a local build changes, so a build put in place after the switch is used at once.
+Fixing one path that changes the hub's version is not enough: check every writer of the directory (self-update with and without node updates,
+deploy scripts, hand switches), and give the reader a check that does not trust any of them.
 
 ## Generic plans make "empty means no filter" lose indexes (2026-11-06, #4907)
 
@@ -3101,3 +3133,37 @@ the TLS hello then held it open forever, on the direct route and through the pro
 Whoever writes a `DialTLSContext` gives the handshake its own deadline and closes the raw connection when it runs out.
 Test it by waiting for the far end to see the connection close, not by how long the request took: the request returns
 on its own deadline either way (`TestDirectStalledHandshakeIsClosed`, `TestProxyStallingInsideTheTunnelIsClosed`).
+
+## A script on a proxied machine sends the hub's token to the proxy (2026-11-21, #12493)
+
+- A machine whose environment sets `http_proxy` / `https_proxy` usually has a `no_proxy` that excludes private ranges as
+  CIDRs (`<private range>/8`). Python's `urllib` matches `no_proxy` by host name suffix and ignores CIDR entries; other
+  clients differ on this. A script that calls the hub's API by its LAN address (`http://<hub address>:18660/api/…`)
+  then goes to the proxy, `Authorization: Bearer <token>` included, in plain HTTP.
+- Seen on a hub machine: a one-off `POST /api/v1/machines/{mid}/deploy` got an HTML `403 Forbidden` back. The hub's
+  log had no such request; the proxy had answered, and it had the master token. The token had to be rotated.
+- Call the hub's API from such a machine with proxies off: `urllib.request.build_opener(urllib.request.ProxyHandler({}))`,
+  `curl --noproxy '*'`, or `env -u http_proxy -u https_proxy …`. `127.0.0.1` helps only when the hub listens there; a
+  hub.json `listen` bound to one address does not.
+- Before sending a credential, ask `GET /api/v1/health` without one and check the answer is the hub's JSON (its `commit`,
+  and `features` for a trusted source). An HTML page or any answer that is not the hub's, to a request that carried a
+  credential, means the credential left the machine: rotate it, then retry with proxies off.
+
+## Rich-text mention boundaries are not textual whitespace (#12655)
+
+A received Lark post can place an `at` element immediately before a command's `text` element. Flattening those into
+`@Persona/read` loses the boundary that the whole-word textual mention stripper needs. Retain the structured nodes
+for command extraction, resolve each leading `at` through the event's mention IDs, and stop at unapproved mentions
+or ordinary text. Display names can collide; inserting spaces alone cannot establish which person was mentioned.
+Check both the manager's admission gate and the assistant's reparse of the original event, using a synthetic event,
+a recording handoff and a queue barrier. Such a test proves local handling of that event shape, not whether a live
+client inserts whitespace.
+
+## Required extension isolation must fail closed (#12994)
+
+A proxy URL in an environment variable is voluntary routing, not a sandbox. When
+the sandbox probe fails, reject the host spec before starting a process or egress
+proxy. Container images must carry bubblewrap and allow its nested user namespace
+and mounts; test the actual runtime stage as a non-root user with no outer
+capabilities. Merely finding `bwrap` on PATH or skipping an unavailable real test
+is not evidence of isolation.

@@ -87,6 +87,29 @@ nonisolated enum TodosPlaces {
         }
     }
 
+    // MARK: What a place draws
+
+    /// Whether the place draws the Filter (DECISIONS 11-21 "The To-dos list"): All To-dos and a project's place. Today
+    /// and Upcoming list open to-dos already narrowed by date, so Done would always be empty there and the other choices
+    /// would narrow little; they land on All and stay there.
+    static func filters(_ place: TodoPlaceRef) -> Bool { place.isAll || place.project != nil }
+
+    /// Whether ⋯'s Group by Project files the place's rows under their projects' headings: All To-dos and Today. Not in
+    /// Upcoming, whose days are its grouping (its ⋯ holds Show as Calendar alone), nor in a project's place, which is one
+    /// project (its ⋯ greys the item with why).
+    static func groupsByProject(_ place: TodoPlaceRef) -> Bool { place.isAll || place == .today }
+
+    /// Each project's open to-dos (`TodoCounts.open`: not closed, not in Someday, a step its parent carries counted with
+    /// its parent), counted on the device from the rows its place holds: All Projects… draws them neutral beside each
+    /// project's part of N. The hub sends a place's N alone.
+    static func openCounts(_ rows: [TodoFiled], projects: [String]) -> [String: Int] {
+        var byProject: [String: [TodoFiled]] = [:]
+        for row in rows { if let slug = row.project, !slug.isEmpty { byProject[slug, default: []].append(row) } }
+        var out: [String: Int] = [:]
+        for slug in projects { out[slug] = TodoCountsFallback.counts(byProject[slug] ?? []).open }
+        return out
+    }
+
     // MARK: What a place holds
 
     /// Whether `row` belongs in `place` (proposal 3.3; plan S2-4: the places filter the one list on the device).
@@ -177,6 +200,12 @@ final class TodosPlacesModel {
         let quiet = TodoProjectLogic.choices(deps.projects(), current: nil).filter { !slugs.contains($0.slug) }
             .map { TodoPlace(id: TodoPlaceRef.project($0.slug).id, kind: TodoPlaceKind.project, title: $0.name, project: $0.slug) }
         return listed + quiet
+    }
+
+    /// Each of `projects`' open to-dos, by slug (All Projects…, `TodosPlaces.openCounts`): from the current assistant's
+    /// rows as filed, the ones the list draws.
+    func openCounts(_ projects: [TodoPlace]) -> [String: Int] {
+        TodosPlaces.openCounts(deps.store.countsSource.filed, projects: projects.compactMap(\.project))
     }
 
     /// The title menu's pick: the list shows `place` at once, where it is.

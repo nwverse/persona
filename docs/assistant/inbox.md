@@ -759,7 +759,7 @@ To-dos do not store a separate tree. Code: `assistant/inbox_parent.go`.
   Item parents must exist (404 otherwise); no cycles, at most 8 ancestor levels (409 otherwise). IDs up to 256 characters, no control characters (400). Return updated item.
 - **Read a thread**: `GET /api/v1/inbox/tree/{kind}/{id...}` returns `{node, item?, ancestors, children}`. `ancestors` nearest first (last may be a to-do / session without an item,
   or an item no longer in Inbox, with no `item`); `children` are direct child items, oldest start time first. `kind` may be `todo` / `session` to list items growing from it.
-- Extension tokens require `inbox.read` for trees, `inbox.write` for parent changes (`extwire/scopes.go`); Watch cannot call either API.
+- Extension tokens require `inbox.read` for trees, `inbox.write` for parent changes (`extwire/inbox_scopes.go`); Watch cannot call either API.
 - Client rendering: "Relationships" under "App" below (web `web/src/views/inbox/InboxLine.tsx` offers **Not the same matter** and **Same matter as…**, the latter also in the detail's More menu; they use the existing `PUT /api/v1/inbox/{id}/parent` with `null` and `{kind, id}` respectively).
 - Tests: `inbox_parent_test.go` (`continues`, PUT / removal, depth, precedence, trees).
 

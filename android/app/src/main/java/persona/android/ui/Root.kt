@@ -375,8 +375,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     // With several hub groups paired the Persona menu's heading ends with the selected group's name, as on iOS.
     val hubGroups by session.groups.groups.collectAsStateWithLifecycle()
     val preferences by session.preferences.snapshots.collectAsStateWithLifecycle(AgentsPreferencesSnapshot())
-    val todos by (session.tasks?.todos ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())).collectAsStateWithLifecycle()
-    val todosSupported by (session.tasks?.todosSupported ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsStateWithLifecycle()
+    val todos by (session.tasks?.todos ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyList()) }).collectAsStateWithLifecycle()
+    val todosSupported by (session.tasks?.todosSupported ?: remember { kotlinx.coroutines.flow.MutableStateFlow(false) }).collectAsStateWithLifecycle()
     // Every page shows the current assistant (docs/assistant/managers.md "Clients"): the counts beside them are its too.
     val currentAssistant = persona.core.designsystem.currentAssistant()
     val counts = remember(currentAssistant, sessions, preferences.mutes) { ShellCounts(currentAssistant, sessions, preferences.mutes) }

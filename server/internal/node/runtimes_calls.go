@@ -211,6 +211,7 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 			return nil, err, true
 		}
 		out = n.echoedRaw(p.SessionID, out, "items") // echo.go
+		out = n.ttft.annotateRaw(p.SessionID, out, "items", p.BeforeSeq == 0 && p.ThroughSeq == 0)
 		if !p.FoldWork || p.AfterSeq != nil || p.ThroughSeq > 0 {
 			return out, nil, true
 		}
@@ -306,8 +307,13 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 				if p.A2AWakeOnSend {
 					input["a2a_wake_on_send"] = true
 				}
+				sentAt := time.Now()
+				n.ttft.arm(p.SessionID, sentAt, "")
 				out, err := call(method, input)
 				said = out
+				if (err != nil && !maybeDelivered(err)) || (err == nil && runtimeAnswerFlag(out, "queued")) {
+					n.ttft.disarm(p.SessionID, sentAt)
+				}
 				return err
 			})
 		})

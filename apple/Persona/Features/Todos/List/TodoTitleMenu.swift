@@ -75,8 +75,9 @@ struct TodoPlaceFollower: View {
 }
 
 /// Every project as a place (All Projects…, from the sidebar or the title menu): the hub's projects with open to-dos,
-/// each with its part of N, then the knowledge base's others, by name. A task over the page; a pick closes it and the
-/// caller opens the place.
+/// then the knowledge base's others, by name, each with its part of N (blue, hidden at 0) and how many to-dos are open
+/// in it (neutral, `TodoCounts.open` counted from its rows; the sidebar's rows keep N alone). A task over the page; a
+/// pick closes it and the caller opens the place.
 struct TodoAllProjectsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppModel.self) private var app
@@ -87,26 +88,36 @@ struct TodoAllProjectsSheet: View {
         NavigationStack {
             List {
                 let projects = places.allProjects
+                let open = places.openCounts(projects)
                 if projects.isEmpty {
                     EmptyStateView(symbol: Theme.Icon.space, title: String(localized: "No projects yet [To-dos Places]"),
                                    message: String(localized: "Projects come from your knowledge base. [To-dos Places]"))
                         .listRowBackground(Color.clear)
                 }
                 ForEach(projects, id: \.id) { place in
+                    let name = places.title(TodoPlaceRef(id: place.id))
+                    let count = open[place.project ?? ""] ?? 0
                     Button {
                         Haptics.tap()
                         pick(TodoPlaceRef(id: place.id))
                     } label: {
                         HStack(spacing: Theme.Space.m) {
                             ThemedIcon(Theme.Icon.space).foregroundStyle(.secondary)
-                            Text(places.title(TodoPlaceRef(id: place.id))).foregroundStyle(Color.primary).lineLimit(1)
+                            Text(name).foregroundStyle(Color.primary).lineLimit(1)
                             Spacer(minLength: Theme.Space.s)
                             if place.needsYou > 0 { CountBadge(count: place.needsYou, look: .needs) }
+                            if count > 0 { Text(verbatim: String(count)).monospacedDigit().foregroundStyle(.secondary) }
                         }
                         .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
                     .themedRow()
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(name)
+                    .accessibilityValue([place.needsYou > 0 ? StateName.count(.needsYou, place.needsYou) : nil,
+                                         count > 0 ? String(localized: "\(count) to-dos [To-dos List]") : nil].compactMap { $0 }
+                        .joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
+                    .accessibilityAddTraits(.isButton)
                     .accessibilityIdentifier("todos.places.project." + place.id)
                 }
             }

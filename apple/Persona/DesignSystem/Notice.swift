@@ -11,9 +11,6 @@ struct NoticeBanner<Action: View>: View {
         case neutral
         /// Something waits on the user or is held up (a warning, not an error).
         case caution
-        /// What needs the user elsewhere (#10465, a To-dos place's "2 more need you, not in Today"): Needs You's blue,
-        /// as every count of it is drawn.
-        case needs
         /// Something failed.
         case danger
     }
@@ -85,7 +82,6 @@ struct NoticeBanner<Action: View>: View {
         switch tone {
         case .neutral: Theme.Icon.info
         case .caution: Theme.Icon.error
-        case .needs: Theme.Icon.needsYou
         case .danger: Theme.Icon.errorFilled
         }
     }
@@ -94,7 +90,6 @@ struct NoticeBanner<Action: View>: View {
         switch tone {
         case .neutral: .secondary
         case .caution: Theme.caution
-        case .needs: Theme.needsYou
         case .danger: Theme.danger
         }
     }

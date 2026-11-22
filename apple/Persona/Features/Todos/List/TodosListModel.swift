@@ -35,10 +35,11 @@ nonisolated struct TodoCapture: Equatable, Identifiable, Sendable {
 
 /// The V1 To-dos list (#10465; docs/design/proposals/todos-redesign.md 3.3, 3.4; DESIGN_SYSTEM 3.4 "To-dos list"): the
 /// current assistant's rows as the hub files them (`TodoStore.countsSource.filed`, the rows its numbers are counted
-/// from), drawn in sections for the bar's choice, the grouping and the sort.
+/// from), drawn in sections for the place shown (DESIGN_SYSTEM 3.5 "To-dos places"), the Filter's choice, the search,
+/// the sort and ⋯'s Group by Project.
 ///
 /// - Rows never move under a finger: while the list is scrolled or out of sight (`hold`, the page reports what it does)
-///   a new filing waits, and so does what each row says, since a new line can wrap or a door come and go, and a row's
+///   a new filing waits, and so does what each row says, since a new line can wrap or a line 3 come and go, and a row's
 ///   new height moves every row under it (the Agents list learned it, `ChatsView`'s `landCritical`). Once the list rests
 ///   it all lands at once, the rows that changed place fading in. A row that comes to need the owner lands at once,
 ///   alone; the numbers are the store's, never held.
@@ -70,7 +71,11 @@ final class TodosListModel {
             var item: TodoItem
             var view: TodoSummary?
             var filed: TodoFiled
-            var grouping: TodosListGrouping
+            /// The list draws project headings (`TodosListModel.grouped`): line 3 leaves the project out of a row filed
+            /// under one (`TodosListLayout.underProjects`).
+            var grouped: Bool
+            /// The place shown is a project, whose title names it: line 3 leaves the project out of every row.
+            var inProject: Bool
             var projects: [TodoProject]
             /// The owner's write on it still on the device (`TodoOutbox`): a tick waiting out its Undo, a new to-do.
             var pending: TodoRowWrite?
@@ -87,16 +92,25 @@ final class TodosListModel {
         func entered() { entering = false }
     }
 
-    /// The bar's choice: All each time the list is made, never stored, so a remembered choice can't hide what needs the
-    /// owner (proposal 3.3).
+    /// The Filter's choice: All each time the list is made, never stored, so a remembered choice can't hide what needs
+    /// the owner (proposal 3.3). Back to All when the Filter goes (the calm list, no rows), so no choice comes back on
+    /// its own with it.
     var choice: TodosChoice = .all {
         didSet { if choice != oldValue { relayout() } }
     }
-    var grouping: TodosListGrouping = .phase {
-        didSet { if grouping != oldValue { relayout(contents: true) } }
+    /// ⋯'s Group by Project, kept on the device by the page (`todos.v1.byProject`): line 3 drops the project its heading
+    /// says where the list draws the headings (`grouped`).
+    var byProject = false {
+        didSet { if byProject != oldValue { relayout() } }
     }
+    /// The order inside each section (⋯ › Sort By): kept on the device by the page (`todos.v1.sort`).
     var sort: TodosListSort = .suggested {
         didSet { if sort != oldValue { relayout() } }
+    }
+    /// The search field's words (`TodosListLayout.Input.query`): this list's, never kept. A search looks through every
+    /// open to-do, whatever the place (places pick where, search finds any to-do).
+    var query = "" {
+        didSet { if query != oldValue { relayout() } }
     }
     /// The place the list shows (`TodosPlaces.holds`): another one lands on All, at once, as the owner's own pick.
     var place: TodoPlaceRef = .all {
@@ -106,17 +120,23 @@ final class TodosListModel {
             if choice != .all { choice = .all } else { relayout() }
         }
     }
-    /// A place's own numbers (its bar, its Needs you header), counted from its rows; nil for All To-dos, which shows the
-    /// store's. Never held, as the store's are not.
+    /// A place's own numbers (its Filter's counts, its Needs you header), counted from its rows; nil for All To-dos,
+    /// which shows the store's. Never held, as the store's are not; set only when they change (P5).
     private(set) var placeCounts: TodoCounts?
-    /// What needs the owner outside the place shown (its notice, "2 more need you, not in Today"); 0 in All To-dos. Kept,
-    /// set only when it changes, so the store's other numbers moving never redraw the page that reads it (P5).
-    private(set) var hiddenNeeds = 0
+    /// What needs the owner outside the place shown ("2 more need you, not in Today"); 0 in All To-dos. Kept, set only
+    /// when it changes, so the store's other numbers moving never redraw what reads it (P5).
+    private(set) var outsideNeeds = 0
     /// Today's "3 coming up this week".
     private(set) var comingUp = 0
     /// The folds the owner opened (Can wait, Someday, Done today): this list's, not kept.
     private(set) var unfolded: Set<String> = []
     private(set) var layout = TodosListLayout.Output.empty
+    /// The layout's flags, kept apart from it so the bars and menus that read them redraw when one changes, not at each
+    /// landing (P5): the calm rule holds; the search field has words (the list is what they match); the list has rows
+    /// under some choice.
+    private(set) var calm = false
+    private(set) var searching = false
+    private(set) var hasRows = false
     /// Whether the list can draw: the views are known (kept from the last run, or the first read ended). Until then it
     /// draws nothing rather than filing its rows twice (`TodoStore.viewsRead`).
     private(set) var ready = false
@@ -139,6 +159,10 @@ final class TodosListModel {
     /// The place's rows as last worked out, and what from: the place's numbers and its layout share one pass (P4).
     @ObservationIgnored private var placeRowsMemo: (place: TodoPlaceRef, now: Date, filed: [TodoFiled], items: [String: TodoItem],
                                                     rows: [TodoFiled])?
+    #if DEBUG
+    /// `-openTodosChoice <choice>`: the Filter's choice the list takes once it first draws the Filter (measurements).
+    @ObservationIgnored private var launchChoice: TodosChoice?
+    #endif
 
     /// What the list reads of the store, the outbox and the app.
     private struct Snapshot: Equatable {
@@ -161,35 +185,58 @@ final class TodosListModel {
     }
 
     var groups: [TodosListGroup] { layout.groups }
-    var calm: Bool { layout.calm }
-    /// The bar's choices with the store's counts: never held, so they change in the same update as every other place
-    /// that shows them.
-    var entries: [TodosBar.Entry] {
-        TodosBar.entries(placeCounts ?? deps.store.countsSource.counts, doneRows: layout.doneRows, chosen: choice)
+    /// Whether the Filter is drawn: in All To-dos and a project's place (never in Today or Upcoming, which list open
+    /// to-dos already narrowed by date), not before the list can draw, in the calm list, or while nothing is listed under
+    /// any choice.
+    var filters: Bool { ready && !calm && hasRows && TodosPlaces.filters(place) }
+    /// The Filter's choices with the counts of the place shown: never held, so they change in the same update as every
+    /// other place that shows them.
+    var filterOptions: [TodosFilter.Option] {
+        TodosFilter.options(placeCounts ?? deps.store.countsSource.counts, doneToday: layout.doneToday)
     }
-    /// N, as the drawer, the bar and the Needs you header say it; in a place, its part of N.
+    /// N, as the drawer, the guard line and the Needs you header say it; in a place, its part of N.
     var needsYou: Int { placeCounts?.needsYou ?? deps.store.countsSource.needsYou }
-    /// Nothing to list under the current choice.
-    var isEmpty: Bool { layout.groups.allSatisfy { $0.keys.isEmpty && $0.folds.isEmpty } }
-    /// The list has rows, under any choice: the bar is drawn (unless calm), so an empty choice can be left.
-    var hasRows: Bool { !layout.sections.isEmpty }
-    /// A place other than All To-dos with nothing open in it says so in its own words (`TodoPlaceEmptyState`). A project
-    /// keeps its closed rows, which All lists only as Done today, so an empty list under All (or a calm one, which draws
-    /// All) is a place with nothing open, whatever closed rows it has; under another choice, that choice's empty state.
-    var placeIsEmpty: Bool { !place.isAll && isEmpty && (!hasRows || calm || choice == .all) }
+    /// What needs the owner that the list does not show (the guard line's "3 more need you"): what the choice hides,
+    /// and in a place what is outside it as well, one line for both; none while searching, which sets the place and the
+    /// choice aside.
+    var hiddenNeeds: Int {
+        guard !searching else { return 0 }
+        guard let placed = placeCounts else { return calm ? 0 : TodosFilter.hiddenNeeds(choice, needsYou: needsYou) }
+        return outsideNeeds + TodosFilter.hiddenNeeds(choice, needsYou: placed.needsYou)
+    }
+    /// What `hiddenNeeds` counts is all outside the place shown, the choice hiding none of its own: the line names the
+    /// place ("2 more need you, not in Today").
+    var hiddenElsewhere: Bool {
+        guard let placed = placeCounts, !searching else { return false }
+        return TodosFilter.hiddenNeeds(choice, needsYou: placed.needsYou) == 0
+    }
+    /// The title's subtitle (iOS 26 and later) while a choice hides what needs the owner and is not set aside.
+    var subtitle: String { searching || calm ? "" : TodosFilter.subtitle(choice, needsYou: hiddenNeeds) }
+    /// Nothing to list under the current choice or search.
+    var isEmpty: Bool { layout.groups.allSatisfy { $0.keys.isEmpty && $0.folds.isEmpty && $0.tail == nil } }
+    /// A place other than All To-dos with nothing in it says so in its own words (`TodoPlaceEmptyState`); under another
+    /// choice, that choice's empty state, and while searching, the search's.
+    var placeIsEmpty: Bool { !place.isAll && isEmpty && !searching && (!hasRows || calm || choice == .all) }
+
+    /// The list draws project headings: Group by Project, where the list draws them (not the calm list's one card, nor
+    /// under Needs You or Done, which draw one section or the days). Needs you's rows and the tail folds' sit under none.
+    nonisolated static func grouped(_ byProject: Bool, calm: Bool, choice: TodosChoice, searching: Bool) -> Bool {
+        byProject && !calm && (searching || TodosFilter.groupingNote(choice) == nil)
+    }
 
     /// A drawn row's cell; kept until the layout that drops its row lands.
     func row(_ key: String) -> Row? { cells[key] }
 
     /// Whether `key`'s row is drawn now: in a group, or in a fold that is open (the place shown may leave it out).
-    func draws(_ key: String) -> Bool {
-        layout.groups.contains { group in group.keys.contains(key) || group.folds.contains { $0.open && $0.keys.contains(key) } }
-    }
+    func draws(_ key: String) -> Bool { layout.groups.contains { $0.drawnKeys.contains(key) } }
 
     /// Follows the store from now on; the first layout lands at once.
     func start() {
         guard !following else { return }
         following = true
+        #if DEBUG
+        launchChoice = UserDefaults.standard.string(forKey: "openTodosChoice").flatMap(TodosChoice.init(rawValue:))
+        #endif
         now = deps.now()
         hold.land = { [weak self] in self?.landAll(animated: true) }
         snapshot = current()
@@ -198,14 +245,11 @@ final class TodosListModel {
         landAll(force: true, animated: false)
     }
 
+    /// A fold opened or closed; nothing while searching, which draws every fold open.
     func toggle(_ fold: String) {
+        guard !searching else { return }
         if unfolded.contains(fold) { unfolded.remove(fold) } else { unfolded.insert(fold) }
         relayout()
-    }
-
-    func setFold(_ fold: String, open: Bool) {
-        guard open != unfolded.contains(fold) else { return }
-        toggle(fold)
     }
 
     /// The page's minute: the rows' times are said again, and rows that moved by the clock (Done today) are filed
@@ -481,13 +525,15 @@ final class TodosListModel {
         recountPlace()
         guard hold.wait() else { return landAll(force: clock, animated: true) }
         if clock { clockWaits = true }
-        updateCells(force: false, held: true)
+        updateCells(force: false, held: true, grouped: groupsByProject(calm: calm, searching: searching))
         landNeeds()
     }
 
-    /// Everything that waited lands: what the rows say, then where they are.
+    /// Everything that waited lands: where the rows are, then what they say (line 3 follows the grouping drawn), then
+    /// both are drawn.
     private func landAll(force: Bool = false, animated: Bool) {
-        updateCells(force: force || clockWaits, held: false)
+        let laid = makeLayout(snapshot)
+        updateCells(force: force || clockWaits, held: false, grouped: groupsByProject(calm: laid.calm, searching: laid.searching))
         clockWaits = false
         hold.landed()
         drawn = snapshot
@@ -496,7 +542,7 @@ final class TodosListModel {
         if cells.count > keys.count || cells.keys.contains(where: { !keys.contains($0) }) {
             cells = cells.filter { keys.contains($0.key) }
         }
-        show(makeLayout(drawn), animated: animated)
+        show(laid, animated: animated)
     }
 
     /// While held, the rows that come to need the owner land at once, alone (DESIGN_SYSTEM 3.4; `Hold`: critical changes
@@ -520,14 +566,32 @@ final class TodosListModel {
         show(makeLayout(drawn), animated: true)
     }
 
-    /// A choice, the grouping, the sort or a fold changed: the owner's own tap, never held, never faded.
-    private func relayout(contents: Bool = false) {
-        landAll(force: contents, animated: false)
+    /// A choice, the search, the sort, the grouping or a fold changed: the owner's own doing, never held, never faded.
+    private func relayout() {
+        landAll(animated: false)
     }
 
     /// Draws `laid`, not animated: rows it puts in another group fade in where they now are (proposal 3.9, "Hub
     /// re-files a row"), so nothing slides across the list.
     private func show(_ laid: TodosListLayout.Output, animated: Bool) {
+        if calm != laid.calm { calm = laid.calm }
+        if searching != laid.searching { searching = laid.searching }
+        let rows = !laid.sections.isEmpty
+        if hasRows != rows { hasRows = rows }
+        // The Filter is gone: what it had chosen goes with it, the list laid out and drawn again as All.
+        if laid.calm || !rows, choice != .all {
+            choice = .all
+            return
+        }
+        #if DEBUG
+        if filters, let chosen = launchChoice {
+            launchChoice = nil
+            if choice != chosen {
+                choice = chosen
+                return
+            }
+        }
+        #endif
         guard laid != layout else { return }
         settleArrivals()
         if animated && !layout.groups.isEmpty {
@@ -559,7 +623,7 @@ final class TodosListModel {
         var at: [String: String] = [:]
         for group in out.groups {
             for key in group.keys { at[key] = group.id }
-            for fold in group.folds where fold.open {
+            for fold in group.folds + [group.tail].compactMap({ $0 }) where fold.open {
                 for key in fold.keys { at[key] = group.id + "/" + fold.id }
             }
         }
@@ -581,35 +645,48 @@ final class TodosListModel {
         let counts = place.isAll ? nil
             : deps.store.countsSource.counts(of: placeRows(snapshot.filed, items: snapshot.items, at: at))
         if counts != placeCounts { placeCounts = counts }
-        let hidden = counts.map { max(0, snapshot.counts.needsYou - $0.needsYou) } ?? 0
-        if hidden != hiddenNeeds { hiddenNeeds = hidden }
+        let outside = counts.map { max(0, snapshot.counts.needsYou - $0.needsYou) } ?? 0
+        if outside != outsideNeeds { outsideNeeds = outside }
         let coming = place == .today ? TodosPlaces.comingUp(snapshot.filed, items: snapshot.items, now: at, calendar: calendar) : 0
         if coming != comingUp { comingUp = coming }
     }
 
-    private func makeLayout(_ from: Snapshot) -> TodosListLayout.Output {
-        let projects = from.projects
-        let rows = placeRows(from.filed, items: from.items, at: now)
-        if place == .upcoming {
-            return TodoUpcomingLayout.layout(rows, items: from.items, now: now, calendar: deps.calendar(), choice: choice)
-        }
-        return TodosListLayout.layout(.init(
-            rows: rows, items: from.items, choice: choice, grouping: grouping, sort: sort, unfolded: unfolded,
-            now: now, calendar: deps.calendar(),
-            projectName: { TodoProjectLogic.name($0, in: projects) }))
+    /// Whether the rows are filed under their projects' headings (line 3 then leaves the project out): ⋯'s Group by
+    /// Project where the list draws them, never in Upcoming's days or a project's place, which is one project; a search
+    /// sets the place aside.
+    private func groupsByProject(calm: Bool, searching: Bool) -> Bool {
+        let here = searching || TodosPlaces.groupsByProject(place)
+        return here && Self.grouped(byProject, calm: calm, choice: choice, searching: searching)
     }
 
-    /// Each row's content, worked out again only where its facts, its view, its filing or the clock (`force`) changed.
-    /// `held`: a drawn row keeps what it says until the list rests (`waiting`); otherwise what waited lands.
-    private func updateCells(force: Bool, held: Bool) {
+    /// The list for the place, or, while the search field has words, every open to-do that matches them, whatever the
+    /// place and the choice.
+    private func makeLayout(_ from: Snapshot) -> TodosListLayout.Output {
+        let projects = from.projects
+        let searching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let rows = searching ? from.filed : placeRows(from.filed, items: from.items, at: now)
+        if place == .upcoming && !searching {
+            return TodoUpcomingLayout.layout(rows, items: from.items, now: now, calendar: deps.calendar())
+        }
+        return TodosListLayout.layout(.init(
+            rows: rows, items: from.items, choice: TodosPlaces.filters(place) ? choice : .all,
+            byProject: byProject && (searching || TodosPlaces.groupsByProject(place)), sort: sort, unfolded: unfolded,
+            query: query, now: now, calendar: deps.calendar(), projectName: { TodoProjectLogic.name($0, in: projects) }))
+    }
+
+    /// Each row's content, worked out again only where its facts, its view, its filing, the grouping or the clock
+    /// (`force`) changed. `held`: a drawn row keeps what it says until the list rests (`waiting`); otherwise what waited
+    /// lands. `grouped`: the rows sit under their project's heading.
+    private func updateCells(force: Bool, held: Bool, grouped: Bool) {
         let calendar = deps.calendar()
         let projects = snapshot.projects
-        // A project's place names its project, as By Project does: line 3 leaves it out.
-        let grouping = place.project == nil ? self.grouping : .project
+        // A project's place names its project in its title: line 3 leaves it out (not while searching, which lists any).
+        let inProject = place.project != nil && query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         for filed in snapshot.filed {
             guard let item = snapshot.items[filed.id] else { continue }
             let key = TodosListLayout.key(filed)
-            let inputs = Row.Inputs(item: item, view: snapshot.views[filed.id], filed: filed, grouping: grouping, projects: projects,
+            let inputs = Row.Inputs(item: item, view: snapshot.views[filed.id], filed: filed, grouped: grouped, inProject: inProject,
+                                    projects: projects,
                                     pending: snapshot.writes[filed.id].map {
                                         TodoRowWrite(write: $0.write, waits: $0.waits && !$0.answered, unsure: $0.unsure)
                                     })
@@ -620,8 +697,8 @@ final class TodosListModel {
                 }
                 continue
             }
-            let content = TodoRowContentLogic.content(filed, item: item, view: inputs.view, grouping: grouping, now: now,
-                                                      calendar: calendar,
+            let content = TodoRowContentLogic.content(filed, item: item, view: inputs.view, byProject: grouped,
+                                                      inProject: inProject, now: now, calendar: calendar,
                                                       projectName: { TodoProjectLogic.name($0, in: projects) },
                                                       pending: inputs.pending)
             if let cell = cells[key] {

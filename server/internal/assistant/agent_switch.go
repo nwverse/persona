@@ -124,7 +124,7 @@ func switchUnsupported(c proto.Session, launcher string) error {
 // switchReachable says why agents on am cannot be moved to launcher now, nil when they can: this manager connects the
 // computer, its node can (capability), and the launcher is in the computer's scope.
 func (s *Service) switchReachable(ctx context.Context, am Device, launcher, capability string) error {
-	nodes, _ := s.devs.(nodeAnnouncer)
+	nodes, _ := s.physicalDevices().(nodeAnnouncer)
 	if s.devs == nil || nodes == nil || !s.devs.Has(am.ID) {
 		return fmt.Errorf("%s is not connected by this manager: it cannot move agents there", am.Name)
 	}

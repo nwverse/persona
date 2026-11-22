@@ -5,8 +5,8 @@ import Testing
 import PersonaWire
 
 /// The To-dos places (#10465; docs/design/proposals/todos-redesign.md 3.3; DESIGN_SYSTEM 3.5 "To-dos places"): which
-/// places the sidebar and the title menu list, what each holds, its numbers and its notice, and where a pick leaves
-/// To-dos.
+/// places the sidebar and the title menu list, what each holds and draws, its numbers and its guard line, and where a
+/// pick leaves To-dos.
 @MainActor
 struct TodosPlacesModelTests {
     private static let calendar: Calendar = {
@@ -172,22 +172,53 @@ struct TodosPlacesModelTests {
         #expect(TodoUpcomingLayout.day(out.groups[1].id, calendar: Self.calendar) == Self.calendar.date(byAdding: .day, value: 1,
                                                                                                          to: Self.calendar.startOfDay(for: Self.now)))
         #expect(TodoUpcomingLayout.day(TodoUpcomingLayout.overdue, calendar: Self.calendar) == nil)
-        #expect(out.calm && out.sections.count == 4, "plain To do rows alone: calm, no bar")
+        #expect(!out.calm && out.sections.count == 4, "no Filter to hide: the days are drawn whatever the rows")
     }
 
-    /// Upcoming keeps the section bar: a choice keeps its sections' rows, still by day.
-    @Test func upcomingsBarChoosesItsRowsByDay() {
+    /// Only All To-dos and a project's place draw the Filter (DECISIONS 11-21 "The To-dos list"): Upcoming lists every
+    /// dated row by day whatever its section, and Today lands on All. Group by Project files rows in All To-dos and Today
+    /// alone: Upcoming's days are its grouping, and a project's place is one project.
+    @Test func onlyAllAndAProjectDrawTheFilter() {
         let items: [String: TodoItem] = [
             "ask": TodoItem(id: "ask", title: "ask", dueDate: Self.day(1)),
             "plain": TodoItem(id: "plain", title: "plain", dueDate: Self.day(1)),
             "run": TodoItem(id: "run", title: "run", dueDate: Self.day(2)),
         ]
         let rows = [Self.filed("ask", TodoListSection.needsYou), Self.filed("plain"), Self.filed("run", TodoListSection.working)]
-        let all = TodoUpcomingLayout.layout(rows, items: items, now: Self.now, calendar: Self.calendar)
-        #expect(!all.calm && all.groups.flatMap(\.keys).count == 3)
-        let needs = TodoUpcomingLayout.layout(rows, items: items, now: Self.now, calendar: Self.calendar, choice: .needsYou)
-        #expect(needs.groups.map(\.id) == ["day:" + Self.day(1)] && needs.groups[0].keys == ["/ask"])
-        #expect(needs.sections.count == 3, "every row of the place still counts as one (the bar stays)")
+        let out = TodoUpcomingLayout.layout(rows, items: items, now: Self.now, calendar: Self.calendar)
+        #expect(!out.calm && out.groups.map(\.id) == ["day:" + Self.day(1), "day:" + Self.day(2)])
+        #expect(out.groups.flatMap(\.keys) == ["/ask", "/plain", "/run"])
+        #expect(TodosPlaces.filters(.all) && TodosPlaces.filters(.project("kyoto")))
+        #expect(!TodosPlaces.filters(.today) && !TodosPlaces.filters(.upcoming))
+        #expect(TodosPlaces.groupsByProject(.all) && TodosPlaces.groupsByProject(.today))
+        #expect(!TodosPlaces.groupsByProject(.upcoming) && !TodosPlaces.groupsByProject(.project("kyoto")))
+    }
+
+    /// All Projects… counts each project's open to-dos from its rows: not closed, not in Someday, a step its parent
+    /// carries with its parent; a project with no rows has none.
+    @Test func allProjectsCountsEachProjectsOpenToDos() {
+        let rows = [Self.filed("t01", TodoListSection.needsYou, project: "kyoto"),
+                    Self.filed("t01-s1", project: "kyoto", partOf: "t01"),
+                    Self.filed("t08", TodoListSection.done, closed: true, project: "kyoto"),
+                    Self.filed("t09", TodoListSection.someday, project: "kyoto"),
+                    Self.filed("t02", TodoListSection.working, project: "weather"),
+                    Self.filed("t03", project: "weather"),
+                    Self.filed("t04")]
+        #expect(TodosPlaces.openCounts(rows, projects: ["kyoto", "weather", "garden"]) == ["kyoto": 1, "weather": 2, "garden": 0])
+    }
+
+    /// A project's place says its project in its title: line 3 leaves it out of every row there, Needs you's included,
+    /// where All To-dos keeps it beside another fact.
+    @Test func aProjectsPlaceLeavesItsNameOffLine3() {
+        let view = TodoSummary(phase: TodoPhase.needsYou, section: TodoListSection.needsYou, reason: "rest",
+                               steps: TodoStepCount(done: 1, total: 3))
+        let item = TodoItem(id: "t01", title: "Plan the Kyoto trip", project: "kyoto")
+        let row = Self.filed("t01", TodoListSection.needsYou, project: "kyoto")
+        let name = { (_: String) in "Kyoto trip" }
+        let all = TodoRowContentLogic.content(row, item: item, view: view, now: Self.now, projectName: name)
+        #expect(all.caption?.contains("Kyoto trip") == true, "\(all.caption ?? "")")
+        let here = TodoRowContentLogic.content(row, item: item, view: view, inProject: true, now: Self.now, projectName: name)
+        #expect(here.caption != nil && here.caption?.contains("Kyoto trip") == false, "\(here.caption ?? "")")
     }
 
     /// Upcoming's calendar colours each to-do by its view's phase, not by its sessions.
@@ -328,8 +359,9 @@ struct TodosPlacesModelTests {
         }
     }
 
-    /// In a place the bar and the Needs you header count its rows; the notice counts what needs the owner elsewhere,
-    /// and Show All goes back to All To-dos, where there is no notice.
+    /// In a place the Filter and the Needs you header count its rows; the guard line counts what needs the owner
+    /// elsewhere and names the place; under a choice the one line counts both, what the choice hides and what is outside
+    /// the place. Show All goes back to All To-dos, where nothing is hidden.
     @Test func aPlacesNumbersAndWhatNeedsYouElsewhere() async throws {
         let hub = FakeHub()
         hub.on("GET", "/api/v1/todos", json: Self.list)
@@ -348,14 +380,18 @@ struct TodosPlacesModelTests {
         list.place = places.current
         #expect(list.groups.map(\.id) == [TodoListSection.needsYou, TodoListSection.working])
         #expect(list.needsYou == 1, "the place's part of N")
-        #expect(list.entries.first(where: { $0.choice == .inProgress })?.count == 1)
-        #expect(list.hiddenNeeds == 1, "Kyoto trip's to-do needs the owner too")
+        #expect(list.placeCounts?.inProgress == 1 && list.filters, "the Filter counts the place's rows")
+        #expect(list.hiddenNeeds == 1 && list.hiddenElsewhere, "Kyoto trip's to-do needs the owner too")
+        list.choice = .inProgress
+        #expect(list.hiddenNeeds == 2 && !list.hiddenElsewhere, "one line: the place's own and Kyoto trip's")
+        #expect(!list.subtitle.isEmpty)
 
         list.choice = .needsYou
         places.show(.today)
         list.place = places.current
         #expect(list.choice == .all, "another place lands on All")
-        #expect(list.isEmpty && list.hiddenNeeds == 2)
+        #expect(list.isEmpty && list.hiddenNeeds == 2 && list.hiddenElsewhere)
+        #expect(!list.filters, "Today draws no Filter")
 
         places.show(.all) // Show All
         list.place = places.current
@@ -385,8 +421,8 @@ struct TodosPlacesModelTests {
         #expect(!places.entries.isEmpty && places.current == .project("kyoto"))
     }
 
-    /// A project whose to-dos are all closed (none today) is a place with nothing open: its own empty state, with New
-    /// To-Do in it, not All To-dos'.
+    /// A project whose to-dos are all closed (none today) is a place with nothing open: its own empty state (the foot's +
+    /// starts a to-do in it), not All To-dos'.
     @Test func aProjectWithOnlyClosedToDosSaysNothingIsOpenInIt() async throws {
         let hub = FakeHub()
         hub.on("GET", "/api/v1/todos", json: TodoViewJSON.list([
@@ -511,6 +547,29 @@ struct TodosPlacesModelTests {
         try await waitForPlacesTest { !list.isEmpty }
         #expect(store.countsSource.needsYou == 2 && part("kyoto") == 1 && list.needsYou == 1)
         #expect(hub.sent("DELETE", "/api/v1/todos/t01").isEmpty && hub.sent("PUT", "/api/v1/todos/t02/someday").isEmpty)
+    }
+
+    /// A search finds any to-do, whatever the place: it sets the place aside as it sets the choice aside, with no guard
+    /// line and no place's empty state, and the place is back once the field is cleared.
+    @Test func searchFindsAnyToDoWhateverThePlace() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/todos", json: Self.list)
+        hub.on("GET", "/api/v1/todos/places", json: Self.placesJSON)
+        let store = store(hub)
+        defer { store.forget() }
+        let list = listModel(store, hub: hub)
+        list.start()
+        await store.refresh(api: hub.client)
+        try await waitForPlacesTest { list.ready && list.hasRows }
+        list.place = .project("kyoto")
+        #expect(!list.groups.flatMap(\.drawnKeys).contains("/t03"))
+        list.query = "t03"
+        #expect(list.searching && list.groups.flatMap(\.drawnKeys) == ["/t03"], "Weather App's, from Kyoto trip")
+        #expect(list.hiddenNeeds == 0 && !list.placeIsEmpty)
+        list.query = "nothing like it"
+        #expect(list.isEmpty && !list.placeIsEmpty, "the search's own empty state")
+        list.query = ""
+        #expect(list.groups.flatMap(\.drawnKeys) == ["/t01"] && list.hiddenNeeds == 1)
     }
 
     /// A list made on Upcoming counts what needs the owner elsewhere once it starts, whatever the page draws first: its

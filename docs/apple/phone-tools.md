@@ -105,7 +105,7 @@ See `docs/android/android.md` ("App shell and direct page navigation," the Setti
 | `phone_workout_detail {id}` | Health (read) | No | One workout by id: the same row plus per-kilometre splits (pauses left out) and minute-average heart rate |
 | `phone_photos_recent {limit?, days?, screenshots_only?}` | Photos (read) | No | Recent photo/video metadata: local id, time, type, dimensions, screenshot/favorite flags, duration, latitude/longitude |
 | `phone_photo_get {id, max_size?}` | Photos (read) | No | Returns the JPEG image itself (default longest edge 1280, quality 0.7) + metadata |
-| `phone_device_info {}` | None | No | Model identifier, iOS version, battery and charging state, Low Power Mode, storage, network type, time zone, language, thermal state, the app's `app_version`, `app_build` and `app_channel` (`debug` / `release`; the app carries no commit) |
+| `phone_device_info {}` | None | No | Model identifier, iOS version, battery and charging state, Low Power Mode, storage, network type, time zone, language, thermal state, the app's `app_version`, `app_build` and `app_channel` (`debug` / `release`); on iOS also `build` (`commit`, `dirty`, `branch`, `built_at`, `builder`, `xcode`, `swift`, `configuration`, `bundle_id`: a Debug build has them all, a Release build the commit) and `runtime` (`hub_host`, `hub_version`, `hub_connection`, `launched_at`). `build` and `runtime` are `AppDebugInfo` (`apple/Persona/App/BuildInfo.swift`), the same value Settings › About › Debug Info shows and copies (#12926); any field may be missing (older apps, Android), and the hub relays the result as it is |
 | `phone_clipboard_get {}` | None (foreground; system paste prompt) | No | Reads clipboard text |
 | `phone_clipboard_set {text}` or `{file, trim?}` | None (foreground) | No | Replaces clipboard text; `file` copies a text file from the agent's computer without the model reading it (see "Copying a file to the clipboard") |
 | `phone_notify {title, body, delay_seconds?}` | Notifications | No | Local notification, optionally delayed up to 24 hours |
@@ -237,6 +237,29 @@ Code: `CalendarTool`, `RemindersTool`, `ContactsTool` (changes), `MapsTool`, `Al
 
 Results are consistently pretty-printed JSON text (`ToolContent.text`), with all timestamps in ISO 8601 including the local time-zone offset; date fields use
 `yyyy-MM-dd`. `phone_photo_get` also includes a `ToolContent.image`.
+
+### Alarms and timers page
+
+AlarmKit alarms don't show in the Clock app, so before #12805 an alarm Persona set was visible nowhere until it rang. **Settings › This Device ›
+Alarms and Timers** (`AlarmsPage`, iOS 26+ like the tools; also in Settings search) lists every alarm and timer Persona set. It serves
+anyone who asked the assistant for one.
+
+- **Rows**: the name from `AlarmsTool.Labels` ("Alarm" / "Timer" without one), the time on the phone's clock or a timer's time left, how it
+  repeats (once, every day, weekdays, weekends, or the days) or a timer's length, and the state (scheduled, counting down, paused, ringing).
+  Timers come first, ringing ones on top. A timer's time left comes from the Live Activity AlarmKit runs for it
+  (`Activity<AlarmAttributes<PersonaAlarmData>>`): AlarmKit's `Alarm` has no fire date. Until the activity agrees with the alarm's state,
+  the row has no digits, and the feed reads it again for up to three seconds.
+- **Actions**: Delete on every row, after a confirmation (swipe or long press); Pause / Resume on a counting or paused timer. They call
+  the tools' own `AlarmsTool.cancel` / `pause(_:resume:)`, so a deleted alarm's label goes the same way as with `phone_alarm_cancel`. The
+  row changes at once, and AlarmKit's next list confirms it (`AlarmsPageModel.merge`).
+- **Live**: it follows `AlarmManager.shared.alarmUpdates` (`AlarmFeed`) only while the page is in front (`.tabActiveTask`). Leaving the page
+  or its tab, or the app going to the background, stops listening; coming back reads the list again.
+- **Permission**: opening the page never asks. Not asked yet: Allow Alarms asks. Refused: Open Settings. Same pattern as Settings ›
+  Meetings' calendar access.
+- **Data and tests**: AlarmKit is read into `AlarmEntry`, a plain value (`AlarmEntry(id:state:schedule:countdown:label:activity:)`), and the
+  page reaches AlarmKit only through `AlarmsPageModel.Deps`. `AlarmsPageTests` builds rows from AlarmKit's own types and drives the
+  model with a fake. `-openAlarms list|empty|denied|notAsked` (DEBUG) opens the page on made-up data for screenshots, so AlarmKit's
+  prompt never shows.
 
 ## Confirmation flow
 

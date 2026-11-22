@@ -88,6 +88,11 @@ type acceptAsk struct {
 	// A recurring check's decision answered where its Agent works keeps even the recommended one (decisionTold): its
 	// card then does not say the Agent was not told.
 	Chosen string `json:"chosen,omitempty"`
+	// TextDelivery records Agent delivery or recording for supervisor follow-up, saved with the answered round. Empty: an older
+	// record or another answer path; the text matching an option label is not evidence of its recipient.
+	TextDelivery decisionTextDelivery `json:"text_delivery,omitempty"`
+	// OptionTaken distinguishes an explicit option from older Chosen text that may only spell the same label.
+	OptionTaken bool `json:"option_taken,omitempty"`
 	// Check: the recurring schedule whose progress check raised this decision (schedule_todo.go, #11587). The option
 	// the owner takes is about the supervisor's approach, so it goes to the task's supervisor, not its Agent
 	// (checkDecided).

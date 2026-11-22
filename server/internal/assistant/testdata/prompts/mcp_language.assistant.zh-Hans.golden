@@ -520,7 +520,7 @@
   },
   {
     "name": "agent_send",
-    "description": "Send what the user asked for to an Agent. A busy Agent may queue it. A stopped Agent needs resume and resume_why when its context is needed. Recorded non-user stops (including quota/capacity errors) allow resume. User, exit or unknown stops need the user's Resume. It must be supervised (give task unless on an open task of yours). A nearly full Agent is compacted first. For unrelated work use agent_start. Unsure: ask_user. An unstarted branch starts on its first message. Only /exit or /quit stops a running Agent and keeps the tab. The owner's controls close another conversation's Agent.\n\nFor dialog_open, retry with dismiss_notice only when Enter alone closes the notice. For permissions and pickers, tell the user or use interaction_answer.\n\nFrom the main conversation, give task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. Omit task for a reply, nudge or decision.\n\nUse `handoff` for an already-stopped to-do you supervise. A node acknowledgement starts its wait for the receiving Agent's result.\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.",
+    "description": "Send what the user asked for to an Agent. A busy Agent may queue it. A stopped Agent needs resume and resume_why when its context is needed. Recorded non-user stops (including quota/capacity errors) allow resume. User, exit or unknown stops need the user's Resume. It must be supervised (give task unless on an open task of yours). A nearly full Agent is compacted first. For unrelated work use agent_start. Unsure: ask_user. An unstarted branch starts on its first message. Only /exit or /quit stops a running Agent and keeps the tab. The owner's controls close another conversation's Agent.\n\nFor dialog_open, retry with dismiss_notice only when Enter alone closes the notice. For permissions and pickers, tell the user or use interaction_answer.\n\nGive task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. Omit task for a reply, nudge or decision.\n\nUse `handoff` for an already-stopped to-do you supervise. A node acknowledgement starts its wait for the receiving Agent's result.\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -598,7 +598,7 @@
             "object",
             "null"
           ],
-          "description": "new work: make it your supervised task first (main conversation only); null for a reply",
+          "description": "new work: make it your supervised task first (main or a lead); null for a reply",
           "additionalProperties": false,
           "properties": {
             "title": {
@@ -832,7 +832,7 @@
   },
   {
     "name": "agent_supervise",
-    "description": "Main only: adopt an Agent opened manually or by agent_start without a task. Creates a to-do/card, supervision signals and task_review closeout, as task_plan does. The background supervisor reviews it unless assistant.main_supervises_own_tasks is on; the answer names the supervisor, and main can still review. Already your task: done_when/expect_minutes change its brief scope (prefer task_scope). Another conversation's task stays theirs; use agent_transfer to move it.",
+    "description": "Main or a lead: adopt an Agent on no open task, e.g. from agent_start. Creates a to-do/card, supervision signals and task_review closeout, as task_plan does. The background supervisor reviews it unless assistant.main_supervises_own_tasks is on; the answer names the supervisor, and main can still review. Already your task: done_when/expect_minutes change its brief scope (prefer task_scope). Another conversation's task stays theirs; use agent_transfer to move it.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -869,7 +869,7 @@
   },
   {
     "name": "agent_transfer",
-    "description": "Main only: move an open Agent task to a current direction or main (App Move to). Keep task, brief, criteria, estimate, origin and Agent; no message, interruption or restart. Transfer back to undo. Refuses user-owned to-dos, assistant sessions and untracked work (adopt with agent_supervise).",
+    "description": "Move an open Agent task to a current direction or main: main moves any; a lead hands off only its own. Keep task, brief, criteria, estimate, origin and Agent; no message, interruption or restart. Refuses user-owned to-dos, assistant sessions and untracked work (adopt with agent_supervise).",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2233,7 +2233,7 @@
   },
   {
     "name": "task_plan",
-    "description": "Use task_plan for code, repository research and work beyond a few tool calls. Make one task per independent piece. Check machines_list, then use the knowledge base, agents_list and user preferences to fill the editable choices and their one-line reasons. Read-only, user_requested and preapproved kinds start at once; other tasks wait for the owner's 开始. A queued receipt is dispatch, so check the to-do outcome and reach its Agent via agent_send. Tool-owned reminders and events are separate.\n\nDefault machine_policy=fixed keeps the machine on retries and refuses an unavailable launcher there. Use flexible only for portable work: a failed health check can move it and the reply explains why. A side conversation supervises its work, receives 督办 and closes with task_review. Main delegates a whole plan with supervisor (one of assistant.leaders) or leaves it out. With no leader, the background supervisor handles 督办 and task_review unless assistant.main_supervises_own_tasks puts main in charge. If the caller cannot receive 督办, the same follow-up handles it and sends the caller a short notice and link at the end. Check the returned supervisor and similar running work. Pass todo_id for the caller's existing unassigned to-do, including a Lark topic, task split or failed start.\n\nStarted tasks keep a brief (owner request or started_why). Give goal, done_when, out_of_bounds. Writable work needs done_when (PR/Issue defaults to PR merged + issue closed unless owner asks for PR-only/draft-only); read-only needs goal. Omit expect_minutes for automatic estimation; positive overrides. Manual Agents have no estimate_due. Continue via continues+continues_why; use task_retry for failed starts and task_scope+scope_revision for scope changes.\n\nFile changes need readonly=false and explicitly authorized write permission. Replace a read-only Codex process with a writable one for fixes. Use agent_send for live follow-up when permissions stay the same. readonly=true adds the read-only constraint to the assignment. Claude-family uses bypassPermissions for both. Codex uses plan unless assistant.readonly_mode=prompt (normal runtime permissions). pi, cursor and agy refuse readonly in either setting. Set role=worker, or leader to start and review direct workers through restricted task_plan/task_review. Workers cannot delegate.\n\nWhen repository identity needs resolving, consult repositories_list, and repository_get only when useful. The user's explicit repository URL or path takes precedence. A saved binding is a reference, not authorization or an allowlist; never infer a machine or checkout path from it. Non-repository tasks need no lookup; retrieval is not a mandatory dispatch preflight. Closing the terminal on acceptance is the owner's Start choice; this tool cannot set it.\n\nFor an existing todo with a saved workspace naming plan, explicitly select {\"backend\":{\"operation_id\":\"\u003csaved operation ID\u003e\"}}. Its selected repositories must all be ready before the session starts at the saved root on its owning computer. An optional backend.host selects a supported engine on that computer.\n\nWorkspace policy: \"new\" makes an isolated checkout; {\"new\":{\"branch\":\"task/my-change\"}} names its branch; {\"existing\":\"\u003ccwd or workspace_id\u003e\"} selects one; \"none\" creates nothing. Omitted: readonly uses none; writable Git follows assistant.task_workspace_preference (prefer-existing by default, prefer-new for isolation), and an occupied cwd uses new. Explicit existing never switches silently; refusal names its task owner. For an explicit new branch already checked out, reuse requires a clean checkout, no live Agent and no unfinished-task owner; otherwise refuse with its path and known owner. The machine's engine owns creation, location and registration; never run git worktree add. The card previews the path and is editable before Start. Default branch: task/\u003ctodo id\u003e. Creation failure starts no Agent. Workspaces remain after acceptance. Organization read-only policy refusals include their reason: follow it, never retry unchanged.\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single-task plan waits; approval cards and multi-task plans return immediately.",
+    "description": "Use task_plan for code, repository research and work beyond a few tool calls. Make one task per independent piece. Check machines_list, then use the knowledge base, agents_list and user preferences to fill the editable choices and their one-line reasons. Read-only, user_requested and preapproved kinds start at once; other tasks wait for the owner's 开始. A queued receipt is dispatch, so check the to-do outcome and reach its Agent via agent_send. Tool-owned reminders and events are separate.\n\nFixed machine_policy retries on the same machine and refuses unavailable launchers; flexible moves only portable work after a failed health check and explains why. Main supervises and accepts every new task_plan, even with supervisor=leader; side chats supply evidence and get a completion notice/link. Only an assigned manual leader or a runtime advertising supervision_policy keeps its route; old background work finishes there, with none new. If the caller cannot receive 督办, the compatible follow-up takes over. Check the returned supervisor and similar running work. Pass todo_id for the caller's existing unassigned to-do, including a Lark topic, task split or failed start.\n\nStarted tasks keep a hub brief (owner request or started_why; supplied brief dropped). Give goal, done_when, out_of_bounds. Writable work needs done_when (PR/Issue defaults to PR merged + issues closed unless PR-only/draft-only); read-only needs goal. Omit expect_minutes for automatic estimation; positive overrides. Manual Agents have no estimate_due. Continue via continues+continues_why; task_retry for failed starts and task_scope+scope_revision for owner-approved changes. The card confirms the brief.\n\nFile changes need readonly=false and explicitly authorized write permission. Replace a read-only Codex process with a writable one for fixes. Use agent_send for live follow-up when permissions stay the same. readonly=true adds the read-only constraint to the assignment. Claude-family uses bypassPermissions for both. Codex uses plan unless assistant.readonly_mode=prompt (normal runtime permissions). pi, cursor and agy refuse readonly in either setting. Set role=worker, or leader to start and review direct workers through restricted task_plan/task_review. Workers cannot delegate.\n\nWhen repository identity needs resolving, consult repositories_list, and repository_get only when useful. The user's explicit repository URL or path takes precedence. A saved binding is a reference, not authorization or an allowlist; never infer a machine or checkout path from it. Non-repository tasks need no lookup; retrieval is not a mandatory dispatch preflight. Closing the terminal on acceptance is the owner's Start choice; this tool cannot set it.\n\nFor an existing todo with a saved workspace naming plan, explicitly select {\"backend\":{\"operation_id\":\"\u003csaved operation ID\u003e\"}}. Its selected repositories must all be ready before the session starts at the saved root on its owning computer. An optional backend.host selects a supported engine on that computer.\n\nWorkspace policy: \"new\" makes an isolated checkout; {\"new\":{\"branch\":\"task/my-change\"}} names its branch; {\"existing\":\"\u003ccwd or workspace_id\u003e\"} selects one; \"none\" creates nothing. Omitted: readonly uses none; writable Git follows assistant.task_workspace_preference (prefer-existing by default, prefer-new for isolation), and an occupied cwd uses new. Explicit existing never switches silently; refusal names its task owner. For an explicit new branch already checked out, reuse requires a clean checkout, no live Agent and no unfinished-task owner; otherwise refuse with its path and known owner. The machine's engine owns creation, location and registration; never run git worktree add. The card previews the path and is editable before Start. Default branch: task/\u003ctodo id\u003e. Creation failure starts no Agent. Workspaces remain after acceptance. Organization read-only policy refusals include their reason: follow it, never retry unchanged.\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single-task plan waits; approval cards and multi-task plans return immediately.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2247,7 +2247,7 @@
         },
         "supervisor": {
           "type": "string",
-          "description": "main only: leader conversation id (assistant.leaders); it supervises; omit for no direction or your own work"
+          "description": "main only: legacy leader id (assistant.leaders); new tasks stay main-supervised"
         },
         "tasks": {
           "type": "array",
@@ -2549,7 +2549,7 @@
   },
   {
     "name": "task_review",
-    "description": "accepted closes work after the delivery gate (default delivery_gate=merged: park verified open PRs; linked issues must close). user_check keeps the task and Agent open until owner Pass and routes feedback to that Agent. If opted in at Start, accepted done cleans up the idle tab unless user_check. Report closed/skipped/pending; never close the tab yourself. rework caps stalled/low-ROI churn at 2 rounds (external_input/substantive_new cap at 10 total); accept with a brief note instead of bouncing for low-ROI edge cases or style nitpicks. Replace stopped Agents via agent_start. Use parked with evidence for external waits and needs_user for owner decisions.\n\naccepted (outcome=done) with done_when needs every criterion once in checks (met=true + nonblank evidence); user_check cannot bypass. outcome=cannot, cancelled and no-criteria tasks are unchanged. Other verdicts may omit checks without losing progress. Report each criterion met/not_met/dropped, then also_done. Judge the scoped brief, not a handover or Agent claims.\n\nGive accepted's outcome/reason/link. The hub handles conclusion cards and passes “Please verify” on acceptance unless user_check. needs_user can default to recommend at 24h/deadline; irreversible or visible_to_others only reminds. Recheck at 24h. can_wait needs low cost, nobody blocked today and no deadline within 12h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or taking irreversible/external action.\n\nA non-main conversation reviewing another supervisor's task may only accept/cancel; send gaps with agent_send. A leader's needs_user reaches main too. Cancel only duplicates/unwanted tasks; their Agents close/archive and waiting cards end.",
+    "description": "accepted closes work after the delivery gate (default delivery_gate=merged: park verified open PRs; linked issues must close). user_check keeps the task and Agent open until owner Pass and routes feedback to that Agent. If opted in at Start, accepted done cleans up the idle tab unless user_check. Report closed/skipped/pending; never close the tab yourself. rework caps stalled/low-ROI churn at 2 rounds (external_input/substantive_new cap at 10 total); accept with a brief note instead of bouncing for low-ROI edge cases or style nitpicks. Replace stopped Agents via agent_start. Use parked with evidence for external waits and needs_user if only the owner can contact, approve, or trigger work.\n\nFor accepted (outcome=done), include each done_when criterion once in checks (met=true, nonblank evidence), even with user_check. outcome=cannot, cancelled and no-criteria tasks are unchanged. Other verdicts can omit checks and keep progress. Report each criterion met/not_met/dropped, then also_done. Judge the scoped brief over handovers or Agent claims.\n\nGive accepted outcome/reason/link. The hub sends conclusion cards and passes verification unless user_check. needs_user can default to recommend at 24h/deadline. Irreversible or visible_to_others only remind. Recheck at 24h. can_wait needs low cost, nobody blocked today and no deadline within 12h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.\n\nA non-main reviewer of another supervisor's task may only accept/cancel; send gaps via agent_send. A leader's needs_user reaches main too. Cancel only duplicates/unwanted tasks; their Agents close/archive and cards end.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2603,7 +2603,7 @@
               }
             }
           },
-          "description": "each criterion, met or not, with its evidence or gap; updates that done_when entry's persisted state, evidence, time and supervisor identity. Omitted entries keep their progress"
+          "description": "each criterion (met or not) with evidence/gap; updates persisted state, evidence, time, and supervisor. Omitted entries keep progress"
         },
         "note": {
           "type": "string",
@@ -2615,11 +2615,11 @@
             "done",
             "cannot"
           ],
-          "description": "accepted: done (the work is done or the answer is yes), or cannot (the task found it cannot be done); default done"
+          "description": "accepted: done (work complete or answer yes) or cannot (proved impossible); default done"
         },
         "reason": {
           "type": "string",
-          "description": "accepted: the conclusion card's one sentence of why, in the user's language; default the note's first line. needs_user (required): one sentence saying what is to be decided, in the user's language. parked (required): one sentence saying what the task waits for, in the user's language; waiting on a PR: include its link"
+          "description": "one sentence in the user's language: accepted (why; default note's first line), needs_user (required: what to decide), or parked (required: what it waits for; include PR link if waiting on a PR)"
         },
         "waiting_on": {
           "type": "string",
@@ -2702,18 +2702,19 @@
         },
         "user_check": {
           "type": "boolean",
-          "description": "accepted only: the user is still to look at the result themselves (a UI change someone has to see): a \"Please verify\" card waits for their \"Pass\" instead of your acceptance passing it; default false"
+          "description": "accepted only: user must inspect result (e.g. UI change); shows \"Please verify\" card awaiting \"Pass\" instead of auto-passing; default false"
         },
         "reversible": {
           "type": "boolean",
-          "description": "with deadline: whether taking recommend can be undone later. false for deleting, sending anything to other people, spending money or changing production: those are never taken by default (why_owner irreversible and visible_to_others must say false)"
+          "description": "with deadline: whether taking recommend can be undone; false for delete/external send/spend/prod change (never auto-taken; required false for irreversible/visible_to_others)"
         },
         "evidence": {
           "type": "object",
           "required": [
             "kind",
             "target",
-            "wake"
+            "wake",
+            "next_actor"
           ],
           "properties": {
             "kind": {
@@ -2735,6 +2736,14 @@
               "type": "string",
               "maxLength": 600,
               "description": "Observable change that ends the wait"
+            },
+            "next_actor": {
+              "type": "string",
+              "enum": [
+                "external",
+                "owner"
+              ],
+              "description": "external: third party, system or time, without a prior owner step. owner: use needs_user"
             },
             "url": {
               "type": "string",
@@ -2860,7 +2869,7 @@
   },
   {
     "name": "task_scope",
-    "description": "Change what a task you supervise is to do, or what done means for it, after it started (its todo id). The task's brief (the owner's request and the criteria it started with) is never rewritten: this adds an entry to the brief's log with what changed and why, applies the new done_when and expect_minutes, restarts overdue, estimate_due only on a new estimate, and the owner reads the change in their next digest. It is the only way done_when changes after a task started (agent_supervise and agent_send with a task on your own task go through the same log). Give done_when as the whole list after the change: a criterion you leave out is recorded as dropped by this change, and the completion report says so. A change that adds a step only the owner may allow (deploying, merging, releasing, sending or commenting where other people see it, deleting, spending, changing production) and was not part of the task is refused unless the owner's own message started this turn: ask them first (ask_user, or task_review needs_user), then call it again when they answered. Only the task's supervisor may call it. The agent is not told: send it what changed with agent_send. Use it also for estimate_due/overdue: explain and set expect_minutes.",
+    "description": "Change what a supervised task is to do, or what done means, after it started (its todo id). The brief is never rewritten: this adds a brief-log entry (what changed and why), applies the new done_when/expect_minutes, restarts overdue, estimate_due only on a new estimate; the owner reads it in the next digest. It is the only way done_when changes after start (agent_supervise and agent_send on a task use the same log). Give done_when as the whole list after the change: a criterion you leave out is logged as dropped and named in the completion report. A change adding an owner-only step (deploying, merging, releasing, public sends/comments, deleting, spending, production changes) not in the original task is refused unless the owner's own message started this turn: ask first (ask_user, or task_review needs_user), then call again. Only its supervisor may call it; the Agent is not told — send the change with agent_send. estimate_due/overdue: revise expect_minutes here, but a finished task past the settle window with no owner card is refused: give task_review first (accepted/rework/cancelled; needs_user or accepted+user_check if the owner must act); chat-only asks never reach Needs you.",
     "input_schema": {
       "type": "object",
       "required": [

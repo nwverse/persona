@@ -636,6 +636,9 @@ final class AppModel {
     /// state and Agents, for the sidebar's Pinned rows, the To-dos page and the Agents page. Read with the assistant, on
     /// every connect and on the `directions` event; nil from a hub without it (404) or before it is read.
     private(set) var directionTree: DirectionTree?
+    /// Counts the current hub's hellos (its socket connecting again): a page that reads on reconnect follows it, so it
+    /// reads on that alone and not on every push (#11516's page).
+    private(set) var hubHellos = 0
     /// Numbers the tree reads in the order they were asked; `directionTreeLanded` is the newest one whose answer was
     /// taken. An answer older than that is dropped; a read that fails moves neither, so it never makes an earlier
     /// good answer count as stale.
@@ -1660,7 +1663,10 @@ final class AppModel {
         do { read = try await api.directionsTree() } catch { return }
         guard ask > directionTreeLanded, assistantShows(nil), showsPage(of: api) else { return }
         directionTreeLanded = ask
-        if read != directionTree { directionTree = read }
+        // The filed sessions (#11516) go to their own boxes: the tree's readers redraw only when the tree they draw
+        // changed, not on a filed session's turn.
+        let taken = read.map { DirectionFilings.shared.takeFiled($0) }
+        if taken != directionTree { directionTree = taken }
         guard let tree = read else { return }
         let names = tree.leaderNames
         if names != directionNames { directionNames = names }
@@ -2327,6 +2333,13 @@ final class AppModel {
     func features(_ group: String) -> Set<String> { link(group)?.features ?? [] }
     /// What the hub-level group's hub listed (hub-level pages: connectors, skills…).
     var hubFeatures: Set<String> { hub?.features ?? [] }
+    /// The pictures a message may carry on `group`'s hub (nil: the hub-level one) to a session of `agent`: its hello's
+    /// `image_limits` (#12973), the standard ones from a hub before them.
+    func imageLimits(_ group: String? = nil, agent: String? = nil) -> ImageLimits {
+        (group.flatMap { link($0) } ?? hub)?.hello.imageLimits?.limits(for: agent) ?? .standard
+    }
+    /// The pictures a message to `key` may carry (`imageLimits`, by its hub and its agent).
+    func imageLimits(_ key: SessionKey) -> ImageLimits { imageLimits(key.group, agent: session(key)?.agent) }
     /// The hub-level group's hub's desktops: Mac apps connected and computers where Persona Link reports you at them
     /// (`DesktopDevice`, the banner in DesktopPresence.swift).
     var desktops: [DesktopDevice] { hub?.desktops ?? [] }
@@ -3094,6 +3107,10 @@ final class AppModel {
             if isHub { PersonalAgentSync.shared.received([]) }
             // The direction tree changes while the socket is down: read it again on every (re)connect (#4352).
             if isHub, let hubAPI = api { Task { await refreshDirectionTree(hubAPI) } }
+            // Its features say again whether this hub's filing routes are there (#11516), whichever hub is picked now; a
+            // page open on the current hub reads again (`hubHellos`).
+            DirectionFilings.shared.hello(group)
+            if isHub { hubHellos += 1 }
             #if os(iOS)
             // `meeting_live` events sent while the socket was down are gone: the meetings on screen are read again (#3862).
             if isHub { MeetingConversation.shared.reconnected() }
@@ -3711,11 +3728,11 @@ final class AppModel {
                 if let photo = await machinePhoto(key, path) { photos.append((path, photo)) } else { left.append(path) }
             }
         }
-        let room = max(0, MessagePhotos.limit - held.images.count)
+        let room = imageLimits(key).roomLeft(holding: held.images.count)
         let overflow = photos.dropFirst(room)
         left += overflow.compactMap(\.path)
         held.images += photos.prefix(room).map(\.photo)
-        // A hub photo has no machine path to leave as text. Keep it visible; `sendNow` still enforces the four-photo cap.
+        // A hub photo has no machine path to leave as text. Keep it visible; `sendNow` still holds the hub's count.
         held.images += overflow.filter { $0.path == nil }.map(\.photo)
         left += held.videos.restore(draft.files.filter(\.playable)).map(\.xml)
         left += held.files.restore(draft.files.filter { !$0.playable }).map(\.xml)
@@ -3798,8 +3815,9 @@ final class AppModel {
     func sendNow(_ key: SessionKey, text: String, images: [ImagePayload] = [], via: APIClient.MessageVia? = nil) -> Bool {
         guard allowSend(key, forMessage: true) else { return false }
         // Take-back can retain pathless hub photos past the picker's cap; the person removes some before sending.
-        guard images.count <= MessagePhotos.limit else {
-            toast = Toast(String(localized: "Up to 4 at a time"), style: .error)
+        let limits = imageLimits(key)
+        guard images.count <= limits.perMessage else {
+            toast = Toast(String(localized: "Up to \(limits.perMessage) at a time"), style: .error)
             return false
         }
         var msg = PendingMessage(text: text, images: images)
@@ -4804,6 +4822,7 @@ final class AppModel {
         }
         directionTree = nil // the other hub's to-dos and sessions; `refreshAssistant` below reads this one's
         directionTreeLanded = directionTreeAsk // and a read already under way answers for the other one
+        DirectionFilings.shared.forget() // moves out to the other hub
         // The picked group's settings are read again: until that read finishes, the page shows its loading state.
         assistantConfigLoadFailed = false
         if let a = assistantCurrent, a.group != hub?.group { assistantCurrent = assistantMain }
@@ -4847,6 +4866,7 @@ final class AppModel {
         if switched || !assistantShows(nil) {
             directionTree = nil // the other manager's; `refreshAssistant` below reads this one's
             directionTreeLanded = directionTreeAsk // and a read already under way answers for the other one
+            DirectionFilings.shared.forget() // moves out to the other manager
         }
         assistantConfigLoadFailed = false
         readiness.forget()
