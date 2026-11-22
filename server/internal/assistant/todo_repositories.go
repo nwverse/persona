@@ -25,6 +25,13 @@ type todoRepositoryStore interface {
 
 var _ todoRepositoryStore = (*repositorystore.Store)(nil)
 
+// todoRepositoryRoleStore persists a single link role rewrite the manager classified, bumping the revision.
+type todoRepositoryRoleStore interface {
+	SetTodoRepositoryLinkRole(ctx context.Context, id, canonicalURL, role string) (repository.TaskSet, error)
+}
+
+var _ todoRepositoryRoleStore = (*repositorystore.Store)(nil)
+
 func decodeTaskRepositoryInput(raw []byte, out any) error {
 	if len(raw) > 256<<10 {
 		return repository.Problem("limit")

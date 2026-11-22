@@ -18,6 +18,7 @@ import { envValue } from '../runtime-sdk/lib/identity.js'
 import { defaultDbPath, openReadOnly } from './lib/db.js'
 import { readConfiguredModel } from './lib/models.js'
 import { createOpencodeHost } from './lib/opencode.js'
+import { registerA2A } from './lib/a2a.js'
 
 function configDir(env = process.env) {
   return join(env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'opencode')
@@ -63,11 +64,19 @@ export default {
   server() {
     return {}
   },
-  setup(ctx) {
+  async setup(ctx) {
     // opencode 1.x loads definitions in a registration-only host without sessions or events: nothing to do there.
     if (!ctx?.session || !ctx.event?.subscribe) return undefined
     // One-shot runs (`opencode run …`) have nobody to drive from the phone.
     if (process.argv[2] === 'run') return undefined
-    return host().register(ctx)
+    const runtime = host()
+    const dispose = runtime.register(ctx)
+    try {
+      await registerA2A(ctx, runtime.runtime)
+    } catch (err) {
+      dispose()
+      throw err
+    }
+    return dispose
   },
 }

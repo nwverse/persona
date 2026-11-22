@@ -88,6 +88,11 @@ type acceptAsk struct {
 	// A recurring check's decision answered where its Agent works keeps even the recommended one (decisionTold): its
 	// card then does not say the Agent was not told.
 	Chosen string `json:"chosen,omitempty"`
+	// TextDelivery records Agent delivery or recording for supervisor follow-up, saved with the answered round. Empty: an older
+	// record or another answer path; the text matching an option label is not evidence of its recipient.
+	TextDelivery decisionTextDelivery `json:"text_delivery,omitempty"`
+	// OptionTaken distinguishes an explicit option from older Chosen text that may only spell the same label.
+	OptionTaken bool `json:"option_taken,omitempty"`
 	// Check: the recurring schedule whose progress check raised this decision (schedule_todo.go, #11587). The option
 	// the owner takes is about the supervisor's approach, so it goes to the task's supervisor, not its Agent
 	// (checkDecided).
@@ -331,6 +336,12 @@ func decisionOpen(a *acceptAsk, t Todo) bool {
 // old card. A fresh needs_user review replaces that marker. Non-decision verification asks are unaffected.
 // A ReopenedAt the auto-judge's second close leaves is harmless (the new ask is younger); zero AskedAt is a claim.
 func acceptAskStale(a *acceptAsk, t Todo) bool {
+	// A saved rework review supersedes verification even if its work-round write failed.
+	if !a.AskedAt.IsZero() && !decideAsk(a) && !a.Conclusion {
+		if r := triageLatestReview(t.Supervision); r != nil && r.Verdict != reviewAccepted && r.At.After(a.AskedAt) {
+			return true
+		}
+	}
 	return !a.AskedAt.IsZero() && (t.ReopenedAt != nil && a.AskedAt.Before(*t.ReopenedAt) ||
 		decideAsk(a) && t.Supervision.legacyOwnerPriorityReview() != nil)
 }

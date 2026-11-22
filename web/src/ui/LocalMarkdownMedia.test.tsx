@@ -10,11 +10,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setToken } from "../lib/api";
 import { isMachineRef, resolveRef } from "../lib/files";
 import { closePanel, getPanel } from "../lib/panel";
+import { resetPathPresence } from "../lib/path-presence";
 import { getState } from "../lib/store";
 import { Markdown } from "./Markdown";
 import { forgetMarkdown } from "./markdown-cache";
 import { clearLocalImageFailures } from "./ReplyImages";
 import { loadReplyImages } from "./reply-images-lazy";
+
+// Path-presence lookups use a mocked API so they do not share the local-image probe's global fetch spy.
+vi.mock("../lib/api", async (orig) => ({
+  ...(await orig<typeof import("../lib/api")>()),
+  api: async () => ({ stats: [] }),
+}));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 (globalThis as { ResizeObserver?: unknown }).ResizeObserver ??= class {
@@ -36,6 +43,7 @@ const until = async (ready: () => boolean) => {
 };
 
 beforeEach(async () => {
+  resetPathPresence();
   forgetMarkdown();
   clearLocalImageFailures();
   closePanel();
@@ -65,6 +73,7 @@ afterEach(() => {
   host.remove();
   if (srcDesc) Object.defineProperty(HTMLImageElement.prototype, "src", srcDesc);
   Object.assign(getState(), { features: [] });
+  resetPathPresence();
   vi.restoreAllMocks();
 });
 

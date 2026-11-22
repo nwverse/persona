@@ -547,6 +547,12 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
   // pushed meanwhile is old.
   const dirtyNow = useRef(dirty);
   dirtyNow.current = dirty;
+  // A save answers to the local revision it submitted, which may be older than the form by then.
+  const editRevision = useRef(0);
+  const draftNow = useRef(draft);
+  const typedNow = useRef(typed);
+  draftNow.current = draft;
+  typedNow.current = typed;
   const backNow = useRef(onBack);
   backNow.current = onBack;
   useEffect(() => {
@@ -570,6 +576,7 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
   }, [id, manager]);
 
   const edit = (path: string[], value: Json | undefined) => {
+    editRevision.current++;
     setDraft((d) => setAt(d, path, value));
     const key = fieldPath(path);
     if (fieldErrors[key] || fieldErrors[""]) setFieldErrors(({ [key]: _a, [""]: _b, ...rest }) => rest);
@@ -581,9 +588,11 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
     setCheckFailed("");
     const n = readNumber(text, integer);
     if (!n.error) edit(path, n.value);
+    else editRevision.current++;
   };
   const revert = () => {
     if (!detail) return;
+    editRevision.current++;
     setDraft(detail.config ?? {});
     setTyped({});
     setFieldErrors({});
@@ -596,10 +605,24 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
     setFieldErrors({});
     setCheckFailed("");
     const n = writing();
+    const submitted = draft;
+    const revision = editRevision.current;
     try {
       const d = await setExtensionConfig(id, compact(draft, requiredEntryLists));
-      if (wrote(n, d)) apply(d);
-      setTyped({});
+      const unchanged = editRevision.current === revision;
+      if (wrote(n, d)) {
+        if (unchanged) apply(d);
+        else {
+          // Only edits made after submission remain local; submitted and untouched fields take the authoritative answer.
+          const fresh = d.config ?? {};
+          const next = rebaseDraft({ base: submitted, draft: draftNow.current, typed: typedNow.current }, fresh, requiredEntryLists);
+          base.current = fresh;
+          setDraft(next.draft);
+          setTyped(next.typed);
+          setError("");
+        }
+      }
+      if (unchanged) setTyped({});
       toast(t("settings-extensions.saved_restart"), "ok");
     } catch (e) {
       const ce = configError(e);
@@ -668,6 +691,7 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
   const saveNow = async (path: string[], value: Json | undefined) => {
     if (!detail) return;
     const saved = detail.config ?? {};
+    editRevision.current++;
     setDraft((d) => setAt(d, path, value));
     const n = writing();
     try {

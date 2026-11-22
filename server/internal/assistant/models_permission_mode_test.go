@@ -272,6 +272,14 @@ func TestPermissionModeLaunchPropagationAndPrecedence(t *testing.T) {
 		if start := runStart(t, ModelBinding{Provider: "launcher.agy", PermissionMode: "auto"}, nil, map[string]any{}); start["permission_mode"] != "auto" {
 			t.Fatalf("agy agent.new permission_mode: %v", start)
 		}
+		// AGY with no mode anywhere runs in Allow all as Claude Code does: its worker would otherwise stop at agy's own
+		// approval prompt in the pane. A mode the call names stays.
+		if start := runStart(t, ModelBinding{Provider: "launcher.agy"}, nil, map[string]any{}); start["permission_mode"] != "bypassPermissions" {
+			t.Fatalf("agy default permission_mode: %v", start)
+		}
+		if start := runStart(t, ModelBinding{Provider: "launcher.agy"}, nil, map[string]any{"permission_mode": "acceptEdits"}); start["permission_mode"] != "acceptEdits" {
+			t.Fatalf("agy explicit permission_mode: %v", start)
+		}
 		// Tier overrides agent.new
 		if start := runStart(t,
 			ModelBinding{Provider: "launcher.claude", PermissionMode: "acceptEdits"},

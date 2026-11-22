@@ -168,6 +168,21 @@ func (s *Service) advanceTaskReply(ctx context.Context, t Todo, machine, session
 
 func (s *Service) advanceTaskReplyAt(ctx context.Context, t Todo, machine, session, text string, at time.Time) bool {
 	urls := taskRepositoryReportLinks(text)
+	references := referenceReportLinks(text, urls)
+	var referenceURLs []string
+	roleByURL := map[string]string{}
+	for _, raw := range urls {
+		if references[raw] {
+			referenceURLs = append(referenceURLs, raw)
+			roleByURL[raw] = repository.LinkRoleReference
+		}
+	}
+	if len(referenceURLs) > 0 {
+		_, err := s.importReportedLinksWithRoles(ctx, t.ID, referenceURLs, "pull_request", nil, roleByURL, nil)
+		if err != nil {
+			s.logf("task %s: repository links not saved: %v", t.ID, err)
+		}
+	}
 	stage, pr := stageOf(text)
 	d, marked := deliveryMark(text)
 	if pr == "" {
