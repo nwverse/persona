@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UIKit
 @testable import Persona
 
 /// The pictures a message may carry come from the hub's hello (#12973, docs/protocol/protocol.md "Pictures in a message"):
@@ -38,6 +39,22 @@ struct ImageLimitsTests {
         #expect(l.room(held: [1, 1, 1], size: 1) == .count)
         #expect(l.roomLeft(holding: 2) == 1)
         #expect(l.roomLeft(holding: 5) == 0)
+    }
+
+    /// A photo past the limits goes through the box's spill, and one word counts the burst, as the web's does; with no
+    /// spill it is turned away with an error.
+    @MainActor @Test func picturesPastTheLimitsGoAsFilesWithOneWordThatCountsThem() {
+        let model = AppModel()
+        let limits = ImageLimits(requestBytes: ImageLimits.standard.requestBytes, imageBytes: 3_750_000, maxSide: 1600, perMessage: 1)
+        let img = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { _ in }
+        var images: [(UIImage, ImagePayload)] = []
+        var spilled = 0
+        for _ in 0..<3 { MessagePhotos.add(img, to: &images, model: model, limits: limits, spill: { _ in spilled += 1; return true }) }
+        #expect(images.count == 1 && spilled == 2)
+        #expect(model.toast?.message == String(localized: "A message holds up to \(1) pictures. The other \(2) will go as files."))
+        #expect(model.toast?.style == .info)
+        MessagePhotos.add(img, to: &images, model: model, limits: limits)
+        #expect(images.count == 1 && model.toast?.message == String(localized: "Up to \(1) at a time") && model.toast?.style == .error)
     }
 
     @Test func theTableKeepsItsAgentsWhenStored() throws {

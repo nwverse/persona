@@ -46,24 +46,46 @@
         }
       }
     },
-    "A message holds up to %lld pictures. The rest go as files." : {
+    "A message holds up to %lld pictures. The other %lld will go as files." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A message holds up to %lld pictures. The rest go as files."
+            "value" : "A message holds up to %1$lld pictures. %#@rest@"
+          },
+          "substitutions" : {
+            "rest" : {
+              "argNum" : 2,
+              "formatSpecifier" : "lld",
+              "variations" : {
+                "plural" : {
+                  "one" : {
+                    "stringUnit" : {
+                      "state" : "translated",
+                      "value" : "The other one will go as a file."
+                    }
+                  },
+                  "other" : {
+                    "stringUnit" : {
+                      "state" : "translated",
+                      "value" : "The other %arg will go as files."
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "1件のメッセージに入れられる画像は%lld枚までです。残りはファイルとして送ります。"
+            "value" : "1件のメッセージに入れられる画像は%1$lld枚までです。残りの%2$lld枚はファイルとして送ります"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "一条消息最多 %lld 张图，多出的作为文件发送。"
+            "value" : "一条消息最多 %1$lld 张图，另外 %2$lld 张作为文件发送"
           }
         }
       },
@@ -1830,24 +1852,36 @@
       },
       "extractionState" : "manual"
     },
-    "These pictures are too large together. The rest go as files." : {
+    "These pictures are too large together. %lld of them will go as files." : {
       "localizations" : {
         "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "These pictures are too large together. The rest go as files."
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "These pictures are too large together. One of them will go as a file."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "These pictures are too large together. %1$lld of them will go as files."
+                }
+              }
+            }
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "画像の合計が大きすぎます。残りはファイルとして送ります。"
+            "value" : "画像の合計が大きすぎます。%1$lld枚はファイルとして送ります"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这些图加起来太大了，多出的作为文件发送。"
+            "value" : "这些图加起来太大了，其中 %1$lld 张作为文件发送"
           }
         }
       },

@@ -32,11 +32,19 @@ import SwiftUI
         Haptics.tap()
     }
 
-    /// A picture past `limits` (`why`): a file through `spill`, else turned away, with a word on which limit it was.
+    /// The word on pictures sent as files while it is still the toast shown: the next one of the same burst (a pick of
+    /// many) adds to its count rather than saying "1" again.
+    private static var spilled: (toast: Toast.ID, why: ImageLimits.Room, count: Int)?
+
+    /// A picture past `limits` (`why`): a file through `spill`, else turned away, with a word on which limit it was and,
+    /// for files, how many went (as the web says it, #12973).
     static func overflow(_ img: UIImage, _ why: ImageLimits.Room, limits: ImageLimits, model: AppModel, spill: ((UIImage) -> Bool)?) {
         if let spill, spill(img) {
-            model.toast = Toast(why == .count ? String(localized: "A message holds up to \(limits.perMessage) pictures. The rest go as files.")
-                                              : String(localized: "These pictures are too large together. The rest go as files."))
+            let count = spilled.flatMap { $0.toast == model.toast?.id && $0.why == why ? $0.count + 1 : nil } ?? 1
+            let toast = Toast(why == .count ? String(localized: "A message holds up to \(limits.perMessage) pictures. The other \(count) will go as files.")
+                                            : String(localized: "These pictures are too large together. \(count) of them will go as files."))
+            model.toast = toast
+            spilled = (toast.id, why, count)
         } else {
             model.toast = Toast(why == .count ? String(localized: "Up to \(limits.perMessage) at a time")
                                               : String(localized: "These pictures are too large to send together"), style: .error)
