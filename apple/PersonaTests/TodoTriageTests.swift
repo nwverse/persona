@@ -11,10 +11,13 @@ struct TodoTriageTests {
     private let now = ISO8601DateFormatter().date(from: "2026-11-10T12:00:00Z")!
     private func ago(_ h: Double) -> Date { now.addingTimeInterval(-h * 3600) }
 
-    private func session(_ id: String, state: AgentState, updatedHoursAgo: Double = 1) -> Session {
+    private func session(_ id: String, state: AgentState, updatedHoursAgo: Double = 1, turnError: String? = nil,
+                         workOn: String? = nil) -> Session {
+        let error = turnError.map { #","turn_error":"\#($0)""# } ?? ""
+        let work = workOn.map { #","work":{"phase":"blocked","on":"\#($0)","wait":"Replacement will resume"}"# } ?? ""
         let json = """
         {"machine_id":"m","session_id":"\(id)","title":"\(id)","cwd":"/tmp","status":"\(state == .working ? "working" : "idle")",
-         "state":"\(state.rawValue)","updated_at":"\(ISO8601DateFormatter().string(from: ago(updatedHoursAgo)))"}
+         "state":"\(state.rawValue)","updated_at":"\(ISO8601DateFormatter().string(from: ago(updatedHoursAgo)))"\(error)\(work)}
         """
         do { return try JSON.decoder.decode(Session.self, from: Data(json.utf8)) }
         catch { fatalError("bad fixture: \(error)") }
@@ -81,6 +84,80 @@ struct TodoTriageTests {
     @Test func runningAgentIsWorkingEvenOnAnOldTodo() {
         let t = at(todo("t", updated: 400, agents: ["run"]))
         #expect(t.section == .working && t.rule == .agentRunning)
+    }
+
+    /// A previous attempt's stopped error is historical once a replacement is running, even after its own newer activity
+    /// (#10399, AC4). The separate To-dos surface must not put the task back in Needs You.
+    @Test func oldInterruptionDoesNotOutrankWorkingReplacement() {
+        let old = session("cut", state: .idle, updatedHoursAgo: 4, turnError: "Context unavailable")
+        let replacement = session("replacement", state: .working, updatedHoursAgo: 0.5)
+        let lookup = TodosLogic.makeSessionLookup([old, replacement])
+        let item = todo("t", updated: 0.25, agents: ["cut", "replacement"])
+        #expect(TodoTriageLogic.agentsStatus(item, lookup: lookup) == .working)
+        let t = TodoTriageLogic.triage(item, lookup: lookup, now: now)
+        #expect(t.section == .working && t.rule == .agentRunning)
+    }
+
+    /// Waiting on another Agent, an external event, or a transient failure is also current work. No background activity
+    /// is required for that replacement to suppress the old interruption.
+    @Test(arguments: ["agent", "external", "transient"])
+    func oldInterruptionDoesNotOutrankWaitingReplacement(waitingOn: String) {
+        let old = session("cut", state: .idle, updatedHoursAgo: 4, turnError: "Context unavailable")
+        let replacement = session("replacement", state: .idle, updatedHoursAgo: 0.5, workOn: waitingOn)
+        #expect(replacement.waitsToBeWoken && !replacement.backgroundWorking && !replacement.backgroundWaiting)
+        let lookup = TodosLogic.makeSessionLookup([old, replacement])
+        let item = todo("t", updated: 0.25, agents: ["cut", "replacement"])
+        #expect(TodoTriageLogic.agentsStatus(item, lookup: lookup) == .followUp)
+        let t = TodoTriageLogic.triage(item, lookup: lookup, now: now)
+        #expect(t.section == .other && t.rule == .rest)
+    }
+
+    @Test func oldInterruptionDoesNotOutrankTransientWaitingReplacementWithTurnError() {
+        var staleInvalid = session("stale", state: .idle, turnError: "Context unavailable", workOn: "transient")
+        staleInvalid.turnErrorKind = "unrecoverable"
+        let staleItem = todo("stale", agents: ["stale"])
+        let staleLookup = TodosLogic.makeSessionLookup([staleInvalid])
+        #expect(TodoTriageLogic.agentsStatus(staleItem, lookup: staleLookup) == .interrupted)
+
+        let old = session("cut", state: .idle, updatedHoursAgo: 4, turnError: "Context unavailable")
+        var replacement = session("replacement", state: .idle, updatedHoursAgo: 0.5,
+                                  turnError: "API Error: 503 Service Unavailable", workOn: "transient")
+        replacement.turnErrorKind = "transient"
+        #expect(replacement.waitsToBeWoken && !replacement.backgroundWorking && !replacement.backgroundWaiting)
+        let lookup = TodosLogic.makeSessionLookup([old, replacement])
+        let item = todo("t", updated: 0.25, agents: ["cut", "replacement"])
+        #expect(TodoTriageLogic.agentsStatus(item, lookup: lookup) == .followUp)
+        let t = TodoTriageLogic.triage(item, lookup: lookup, now: now)
+        #expect(t.section == .other && t.rule == .rest)
+    }
+
+    /// #10399: legacy sessions have no structured error kind/code, so the raw sealed-compaction error must win over
+    /// stale transient work left behind by the interrupted turn.
+    @Test func legacyAccountSealedCompactionWithoutErrorMetadataIsInterrupted() {
+        let sealed = session(
+            "sealed",
+            state: .idle,
+            turnError: "This conversation was compacted natively by <account>: the compaction is sealed (encrypted) to that account and can't go to it now",
+            workOn: "transient"
+        )
+        let item = todo("sealed", agents: ["sealed"])
+        let lookup = TodosLogic.makeSessionLookup([sealed])
+        #expect(TodoTriageLogic.agentsStatus(item, lookup: lookup) == .interrupted)
+        #expect(TodoTriageLogic.triage(item, lookup: lookup, now: now).section == .waiting)
+    }
+
+    @Test func parkedOrClosedTaskDoesNotReviveOldInterruption() {
+        let old = session("cut", state: .idle, updatedHoursAgo: 4, turnError: "Context unavailable")
+        let lookup = TodosLogic.makeSessionLookup([old])
+        let parked = todo("parked", updated: 0.25, agents: ["cut"]) {
+            $0.supervision = .init(supervisor: "conv", state: "parked")
+        }
+        #expect(TodoTriageLogic.agentsStatus(parked, lookup: lookup) == .followUp)
+        #expect(TodoTriageLogic.triage(parked, lookup: lookup, now: now).section == .other)
+
+        let closed = todo("closed", updated: 0.25, done: 0.25, agents: ["cut"])
+        #expect(TodoTriageLogic.agentsStatus(closed, lookup: lookup) == .done)
+        #expect(TodoTriageLogic.triage(closed, lookup: lookup, now: now).section == .justDone)
     }
 
     @Test func closedIsJustFinishedForADayThenDone() {
