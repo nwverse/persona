@@ -113,6 +113,21 @@ type BotFeatures struct {
 
 var defaultBotFeatures = BotFeatures{Main: true, Cards: true, Reports: true, TopicCot: true}
 
+// botFeatureUpdate keeps partial settings intent separate from an internal full replacement.
+// A patch is validated by its entry point, then merged into current features under bots.mu.
+type botFeatureUpdate struct {
+	replace *BotFeatures
+	patch   json.RawMessage
+}
+
+func (u botFeatureUpdate) apply(current BotFeatures) (BotFeatures, error) {
+	if u.replace != nil {
+		return *u.replace, nil
+	}
+	err := json.Unmarshal(u.patch, &current)
+	return current, err
+}
+
 // BotOwner is the paired user: the only one the bot answers, and where pushes go.
 type BotOwner struct {
 	OpenID string    `json:"open_id"`
@@ -166,6 +181,9 @@ type botHub struct {
 	// (bots_register.go); both replaced in tests.
 	registrar *feishubot.Registrar
 	regDomain func(region string) string
+	// bindGate serializes Feishu binding, including registration network calls, independently of mu.
+	// A channel lets a waiting client's context cancel without waiting for the current bind.
+	bindGate chan struct{}
 }
 
 func (b *botHub) clock() time.Time {
@@ -486,16 +504,16 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 			writeErr(w, http.StatusBadRequest, err)
 			return
 		}
-		var fs *BotFeatures
+		var fs *botFeatureUpdate
 		if len(in.Features) > 0 && string(in.Features) != "null" {
-			// Over the switches as they are: an app from before a switch (reports) sends the others only, and leaves
-			// that one as it was.
-			f := h.botFeatures()
+			// Validate before any credential check or write, but keep the supplied keys until commit:
+			// an older app omits newer switches, and another save may change them meanwhile.
+			var f BotFeatures
 			if err := json.Unmarshal(in.Features, &f); err != nil {
 				writeErr(w, http.StatusBadRequest, err)
 				return
 			}
-			fs = &f
+			fs = &botFeatureUpdate{patch: in.Features}
 		}
 		var topics []BotChat
 		mentionEdits := map[string]bool{}
@@ -535,7 +553,10 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 			}
 		}
 		if nudge != nil {
-			h.setNudgeAfter(r.Context(), *nudge)
+			if err := h.setNudgeAfter(r.Context(), *nudge); err != nil {
+				writeErr(w, http.StatusInternalServerError, i18n.Err("hub-bots.nudge_save_failed"))
+				return
+			}
 		}
 		if reportDelay != nil || in.SourceReportFullReply != nil {
 			if err := h.setSourceReportSettings(r.Context(), reportDelay, in.SourceReportFullReply); err != nil {
@@ -625,7 +646,19 @@ func (h *Manager) testFeishuBot(ctx context.Context) error {
 }
 
 // updateBot applies the app's changes; new credentials are tried (the bot's info) before they are saved.
-func (h *Manager) updateBot(ctx context.Context, enabled *bool, appID, secret, domain *string, features *BotFeatures) error {
+func (h *Manager) updateBot(ctx context.Context, enabled *bool, appID, secret, domain *string, features *botFeatureUpdate) error {
+	if appID != nil || secret != nil || domain != nil {
+		release, err := h.acquireFeishuBind(ctx)
+		if err != nil {
+			return err
+		}
+		defer release()
+	}
+	return h.applyBotUpdate(ctx, enabled, appID, secret, domain, features, false)
+}
+
+// applyBotUpdate requires the bind gate for credential updates. Only registration's own finish preserves its session.
+func (h *Manager) applyBotUpdate(ctx context.Context, enabled *bool, appID, secret, domain *string, features *botFeatureUpdate, preserveRegistration bool) error {
 	b := &h.bots
 	b.mu.Lock()
 	h.loadBotsLocked(ctx)
@@ -679,10 +712,27 @@ func (h *Manager) updateBot(ctx context.Context, enabled *bool, appID, secret, d
 	b.mu.Lock()
 	// Onto the settings as they are now: the credentials were checked over the network meanwhile, and a pairing may
 	// have come in.
+	if creds && ctx.Err() != nil {
+		b.mu.Unlock()
+		return ctx.Err()
+	}
 	cur := &b.set
+	previous := cur.copy()
+	var merged BotFeatures
+	if features != nil {
+		var err error
+		merged, err = features.apply(cur.Features)
+		if err != nil {
+			b.mu.Unlock()
+			return err
+		}
+	}
 	var records []botRecord
 	if creds {
 		if credsChanged {
+			if !preserveRegistration {
+				cur.Registration, cur.RegistrationDeviceEnc, cur.RegistrationSecretEnc = nil, "", ""
+			}
 			d := map[string]any{"app_id": next.AppID}
 			if next.Domain != "" {
 				d["domain"] = next.Domain
@@ -706,12 +756,16 @@ func (h *Manager) updateBot(ctx context.Context, enabled *bool, appID, secret, d
 		records = append(records, botRecord{auditBotEnabled, map[string]any{"enabled": *enabled}})
 	}
 	if features != nil {
-		if *features != cur.Features {
-			records = append(records, botRecord{auditBotFeatures, map[string]any{"features": *features}})
+		if merged != cur.Features {
+			records = append(records, botRecord{auditBotFeatures, map[string]any{"features": merged}})
 		}
-		cur.Features = *features
+		cur.Features = merged
 	}
-	h.saveBotSettingsLocked()
+	if err := h.saveBotSettingsLocked(); err != nil {
+		b.set = previous
+		b.mu.Unlock()
+		return err
+	}
 	b.mu.Unlock()
 	h.auditBot(ctx, records...)
 	if reconnect {

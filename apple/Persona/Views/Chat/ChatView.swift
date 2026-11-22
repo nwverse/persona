@@ -5944,12 +5944,12 @@ struct Composer: View, Equatable {
         guard isMainAssistantChat else { return nil }
         // The response cache is unobserved; this small revision is the redraw signal after a fresh hub answer.
         _ = model.assistantLauncherRevision
-        return AssistantModelChoice.effective(session: model.session(key), response: model.cachedAssistantLaunchers(key.machineRef))
+        return AssistantModelChoice.effective(session: model.session(key), response: model.cachedAssistantLaunchers(key.machineRef, main: true))
     }
     /// The model name the composer title and the modes menu row both show for the main chat, from the one effective
     /// setup (#6911 M7): the two surfaces never name different models.
     private var assistantEffectiveName: String? {
-        assistantEffective.flatMap { AssistantModelChoice.displayName($0, response: model.cachedAssistantLaunchers(key.machineRef)) }
+        assistantEffective.flatMap { AssistantModelChoice.displayName($0, response: model.cachedAssistantLaunchers(key.machineRef, main: true)) }
     }
 
     @ViewBuilder private var extensionPrompts: some View {
@@ -6599,7 +6599,7 @@ struct Composer: View, Equatable {
         // request every streaming tick, so the AppModel invalidates the cache from assistant snapshots instead.
         .task(id: "\(key.sessionID)-\(model.assistantLauncherRequestRevision)") {
             guard assistantModelPickAvailable else { return }
-            _ = try? await model.assistantLaunchers(key.machineRef, refresh: true)
+            _ = try? await model.assistantLaunchers(key.machineRef, refresh: true, main: true)
         }
         .onChange(of: picks) { _, items in
             guard !items.isEmpty else { return }

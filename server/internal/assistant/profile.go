@@ -74,6 +74,9 @@ type Settings struct {
 	IdleAutoCompact        *bool `json:"idle_auto_compact,omitempty"`
 	IdleAutoCompactMinutes *int  `json:"idle_auto_compact_minutes,omitempty"`
 	IdleAutoCompactTokens  *int  `json:"idle_auto_compact_tokens,omitempty"`
+	CacheKeepalive         *bool `json:"cache_keepalive,omitempty"`
+	CacheKeepaliveMinutes  *int  `json:"cache_keepalive_minutes,omitempty"`
+	CacheKeepaliveMax      *int  `json:"cache_keepalive_max,omitempty"`
 	IdleReleaseMinutes     *int  `json:"idle_release_minutes,omitempty"` // #12008, idle_compact_settings.go
 	// StartRequestedTasks: a task_plan task the user asked for in so many words starts without the card's "Start"
 	// (#2559). nil is on (the default).
@@ -557,6 +560,16 @@ func (s *Service) launcherNow(ctx context.Context) string {
 	return s.settings(ctx).Launcher
 }
 
+// mainLauncherNow resolves the main-only binding without changing new-chat defaults.
+// An unreadable main override must not become permission to probe another launcher.
+func (s *Service) mainLauncherNow(ctx context.Context) string {
+	binding, err := s.resolveModel(ctx, purposeMain)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimPrefix(binding.Provider, "launcher.")
+}
+
 // profile is what the hub's features need of the settings (Snapshot.Profile); tasks are the scheduled tasks and todos
 // the open todos' agents as reported (either nil: unreadable, and Keep is left out, so the nodes keep what they list;
 // Keep is left out too when what places the directions' sessions cannot be read, directionKeep). nil when the
@@ -686,6 +699,9 @@ type assistantView struct {
 	IdleAutoCompact        bool               `json:"idle_auto_compact"`
 	IdleAutoCompactMinutes int                `json:"idle_auto_compact_minutes"`
 	IdleAutoCompactTokens  int                `json:"idle_auto_compact_tokens"`
+	CacheKeepalive         bool               `json:"cache_keepalive"`
+	CacheKeepaliveMinutes  int                `json:"cache_keepalive_minutes"`
+	CacheKeepaliveMax      int                `json:"cache_keepalive_max"`
 	IdleReleaseMinutes     int                `json:"idle_release_minutes"`
 	// StartRequestedTasks is in effect, like MainTasksQuiet.
 	StartRequestedTasks     bool   `json:"start_requested_tasks"`
@@ -761,6 +777,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	out := assistantView{WorkspaceNamingVersion: workspacenaming.Version, EffectiveWorkspaceRules: effectiveRules, Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: recordingDaysOf(v), MinutesDays: kb.MinutesDaysFor(minutesDaysSetting(v), recordingDaysOf(v)),
 		IdleAutoCompact: s.idleAutoCompact(ctx), IdleAutoCompactMinutes: s.idleAutoCompactMinutes(ctx), IdleAutoCompactTokens: s.idleAutoCompactTokens(ctx),
+		CacheKeepalive: cacheKeepaliveOf(v).Enabled, CacheKeepaliveMinutes: cacheKeepaliveOf(v).IntervalMinutes, CacheKeepaliveMax: cacheKeepaliveOf(v).MaxRequests,
 		IdleReleaseMinutes: s.idleReleaseMinutes(ctx), MeetingAttendanceDefault: meetingAttendanceOf(v), KBTopics: quietOn(v.KBTopics),
 		MeetingTranscriptionDefault: meetingTranscriptionDefaultOf(v), MeetingGlossary: meetingGlossaryOf(v),
 		MeetingTranscriptionExtension: meetingTranscriptionExtensionOf(v), MeetingTranscriptionReady: s.transcriptionReadyNow(),
@@ -917,7 +934,7 @@ func (s *Service) warm(launcher string) {
 		return // no real session exists for a prewarm's external scope
 	}
 	if launcher == "" && !picked {
-		launcher = s.launcherNow(ctx)
+		launcher = s.mainLauncherNow(ctx)
 	}
 	if _, ok := s.device(ctx, machine); !ok {
 		return
@@ -930,7 +947,7 @@ func (s *Service) warm(launcher string) {
 	if picked {
 		err = s.applyPick(ctx, params, pick)
 	} else {
-		err = s.applyModel(ctx, "assistant", params)
+		err = s.applyModel(ctx, purposeMain, params)
 	}
 	if err != nil {
 		s.logf("warm model: %v", err)

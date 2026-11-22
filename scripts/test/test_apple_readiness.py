@@ -261,6 +261,7 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
         env = dict(os.environ, PATH=str(self.fixture.bin) + os.pathsep + os.environ["PATH"],
                    LANE="ios-regressions" if regression_only else "ios", CI_ROOT=str(ROOT), SOURCE=str(ROOT), OUTPUT=str(self.output),
                    PERSONA_CONFIG=str(self.output / "config.json"), SIM_NAME="owned readiness fixture",
+                   DIAGNOSTICS=str(self.root / "diagnostic-artifacts"),
                    CI_BUNDLE_ID="org.example.persona.ci",
                    IOS_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-0", OWNED_UDID=owned_udid,
                    REGULAR_SIM_NAME="owned regular About fixture",
@@ -607,6 +608,91 @@ cleanup_device "$REGULAR_SIM" "$REGULAR_SIM_NAME" "$REGULAR_SIM_STARTED"
         self.assertTrue((self.root / "regular-suite-started").exists())
         self.assertEqual(self.fixture.device(PHONE)["state"], "Shutdown")
 
+    def test_dedicated_ipad_diagnostic_stops_after_strict_probe_and_retains_its_scope(self):
+        result, calls = self.run_preparation(regular_only=True, LANE="ios-ipad-diagnostic")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][calls[0].index("-destination") + 1], "platform=iOS Simulator,id=" + REGULAR_UDID)
+        self.assertEqual([a for a in calls[0] if a.startswith(("-only-testing:", "-skip-testing:"))],
+                         ["-only-testing:PersonaTests/TypeScaleTests"])
+        self.assertTrue((self.root / "regular-probe-started").exists())
+        self.assertFalse((self.root / "regular-suite-started").exists())
+        artifacts = self.root / "diagnostic-artifacts"
+        self.assertTrue((artifacts / "regular-readiness.log").is_file(), result.stdout + result.stderr)
+        self.assertTrue((artifacts / "ios-regular-readiness.xcresult/tests.json").is_file())
+        self.assertEqual(json.loads((artifacts / "regular-readiness-context.json").read_text())["udid"], REGULAR_UDID)
+        self.assertTrue((artifacts / "live-regular-readiness/observer.status.txt").is_file())
+        self.assertTrue((artifacts / "live-regular-readiness/simulator-launch.status.txt").is_file())
+        self.assertFalse((artifacts / "live-readiness").exists())
+        self.assertFalse((artifacts / "ios-unit.xcresult").exists())
+        self.assertFalse((artifacts / "simulator-readiness.log").exists())
+        self.assertFalse((artifacts / "simulator-launch.status.txt").exists())
+        self.assertFalse((artifacts / "regular-readiness-context.json").is_symlink())
+        self.assertIn("Verify hosted regular iPad test readiness|900", (self.root / "budgets").read_text())
+        self.assertNotIn("iOS regular-width About visual test", (self.root / "budgets").read_text())
+        for pid in self.watcher_pids.read_text().splitlines():
+            with self.assertRaises(ProcessLookupError):
+                os.kill(int(pid), 0)
+
+    def test_dedicated_ipad_diagnostic_retains_failed_strict_results_without_visuals(self):
+        for options in ({"REGULAR_PROBE_STATUS": "65"}, {"RESULT_STATUS": "Failed"},
+                        {"RESULT_STATUS": "Skipped"}, {"RESULT_STATUS": "empty"},
+                        {"RESULT_SUITE": "UnrelatedTests"}):
+            with self.subTest(options=options):
+                case = AppleReadinessTests()
+                case.setUp()
+                try:
+                    result, calls = case.run_preparation(regular_only=True, LANE="ios-ipad-diagnostic", **options)
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(len(calls), 1)
+                    artifacts = case.root / "diagnostic-artifacts"
+                    self.assertTrue((artifacts / "regular-readiness.log").is_file())
+                    self.assertTrue((artifacts / "live-regular-readiness/observer.status.txt").is_file())
+                    self.assertFalse((case.root / "regular-suite-started").exists())
+                    self.assertTrue((case.output / "diagnostics/live-regular-readiness/observer.stop").exists())
+                    for pid in case.watcher_pids.read_text().splitlines():
+                        with self.assertRaises(ProcessLookupError):
+                            os.kill(int(pid), 0)
+                finally:
+                    case.doCleanups()
+
+    def test_dedicated_ipad_outer_cleanup_keeps_regular_scope_before_context_publication(self):
+        source = SCRIPT.read_text()
+        helpers = source[source.index('cleanup_device() {'):source.index('trap cleanup EXIT')] + '\ntrap cleanup EXIT\n'
+        shell = '''set -euo pipefail
+CI_ROOT="$1"
+OUTPUT="$2"
+DIAGNOSTICS="$3"
+LANE=ios-ipad-diagnostic
+SIM=""
+SIM_NAME="unused phone"
+SIM_STARTED=0
+REGULAR_SIM=""
+REGULAR_SIM_NAME="unused regular"
+REGULAR_SIM_STARTED=0
+ci_run() { shift 2; "$@"; }
+''' + helpers + '''
+exit 65
+'''
+        (self.output / 'simulator-readiness.log').write_text('phone evidence must stay out')
+        (self.output / 'simulator-readiness-context.json').write_text('phone context must stay out')
+        (self.output / 'regular-readiness.log').write_text('regular evidence')
+        for name in ('ios-readiness.xcresult', 'ios-regular-readiness.xcresult'):
+            (self.output / name).mkdir()
+            (self.output / name / 'tests.json').write_text(name)
+        result = subprocess.run(['bash', '-c', shell, '--', str(ROOT), str(self.output), str(self.root / 'artifacts')],
+                                cwd=ROOT, env=dict(os.environ, PATH=str(self.fixture.bin) + os.pathsep + os.environ['PATH']),
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 65, result.stdout + result.stderr)
+        artifacts = self.root / 'artifacts'
+        self.assertTrue((artifacts / 'regular-readiness.log').is_file(), result.stdout + result.stderr)
+        self.assertFalse((artifacts / 'simulator-readiness.log').exists())
+        self.assertFalse((artifacts / 'simulator-readiness-context.json').exists())
+        self.assertFalse((artifacts / 'ios-readiness.xcresult').exists())
+        self.assertTrue((artifacts / 'ios-regular-readiness.xcresult/tests.json').is_file())
+        self.assertEqual(json.loads((artifacts / 'regular-readiness-context.json').read_text()),
+                         {'unavailable': 'regular iPad probe did not publish an owned regular-file context'})
+
     def test_regular_readiness_must_pass_before_the_regular_suite(self):
         for options in ({"REGULAR_PROBE_STATUS": "65"}, {"RESULT_STATUS": "Failed"},
                         {"RESULT_STATUS": "Skipped"}, {"RESULT_STATUS": "empty"},
@@ -625,9 +711,10 @@ cleanup_device "$REGULAR_SIM" "$REGULAR_SIM_NAME" "$REGULAR_SIM_STARTED"
                     case.doCleanups()
 
     def test_regular_readiness_and_result_inspection_share_one_deadline(self):
-        for key, marker in (("REGULAR_PROBE_HANG", "regular-probe.stopped"),
-                            ("RESULT_HANG", "result.stopped")):
-            with self.subTest(phase=key):
+        for key, marker, lane in (("REGULAR_PROBE_HANG", "regular-probe.stopped", "ios"),
+                                  ("RESULT_HANG", "result.stopped", "ios"),
+                                  ("REGULAR_PROBE_HANG", "regular-probe.stopped", "ios-ipad-diagnostic")):
+            with self.subTest(phase=key, lane=lane):
                 case = AppleReadinessTests()
                 case.setUp()
                 # The global fixture models a hung legacy bootstatus. This case
@@ -635,7 +722,7 @@ cleanup_device "$REGULAR_SIM" "$REGULAR_SIM_NAME" "$REGULAR_SIM_STARTED"
                 case.fixture.state["bootstatus_hang"] = False
                 case.fixture.save()
                 try:
-                    result, calls = case.run_preparation(regular_only=True, TEST_STEP_TIMEOUT="1", **{key: "1"})
+                    result, calls = case.run_preparation(regular_only=True, LANE=lane, TEST_STEP_TIMEOUT="1", **{key: "1"})
                     self.assertEqual(result.returncode, 124, result.stdout + result.stderr)
                     self.assertEqual(len(calls), 1)
                     self.assertEqual((case.root / marker).read_text(), "terminated")

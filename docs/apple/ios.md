@@ -1748,8 +1748,8 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
   `AgentListOrder` (Agents list sorting and grouping), then convert to a reducer.
 - Unit tests never connect to the hub: replace `APIClient.transport` with `FakeHub` (PersonaTests), which returns fixed JSON by "method path" and records requests; view models use real requests and decoding.
   Demo mode still uses the global `APIClient.local`.
-- `AppModel` (`Persona/App`): pairing stored in Keychain; `LiveConnection` (WebSocket, exponential-backoff reconnect, resubscribing with `since_seq` after reconnect);
-  one `ChatStore` per session (deduplicated by id, sorted by seq, `buildRows` produces display rows).
+- `AppModel` (`Persona/App`): pairing stored in Keychain; `LiveConnection` (WebSocket, exponential-backoff reconnect, resubscribing with `since_seq` after reconnect;
+  send receipts trusted per socket, "Send receipts" under To-dos); one `ChatStore` per session (deduplicated by id, sorted by seq, `buildRows` produces display rows).
 - Entering a chat page calls `subscribe`, leaving calls `unsubscribe`; the hub pushes `items` / `screen` / `sessions` / `interaction`.
 - Phone tools: hub pushes `tool_call` → `PhoneToolRegistry.call` (writes require confirmation first) → `tool_result`. On connection, `register_phone` declares tools (`docs/apple/phone-tools.md`).
 - Push: after pairing, request notification permission and register APNs, `POST /api/v1/devices`; when the hub has `apns.json`, it pushes new interactions and Agent completion (completion waits 1 minute, is skipped if seen on a computer or in the App, and waits for background tasks to finish; push policy in `docs/server/server.md`), with "Title" (no ✅; interrupted or failed is "⚠️ Title"),
@@ -2104,7 +2104,8 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   (`TodosPlacePage`, below); the gate stays a plain value. It is off in every Release build until the switch-on
   (`TodosV1.released`), and on the iPhone and iPad only (`TodosV1.platform`): visionOS keeps today's To-dos. The data
   and model files under `apple/Persona/Features/Todos/` compile on every platform, since `TodoStore` (shared with
-  visionOS) names them; the V1 views are iOS only (`List/`). The hub's `todo_send_state` marker is not read yet.
+  visionOS) names them; the V1 views are iOS only (`List/`). The socket reads the hub's `todo_send_state` marker
+  ("Send receipts", below).
 - **The list** (`apple/Persona/Features/Todos/List/`, iOS only; DESIGN_SYSTEM 3.4 "To-dos list"). `TodosListModel`
   (`Deps`: the store, the hub, the clock, the projects' names) follows the store and lays the list out once per change
   (`TodosListLayout`, pure): the sections for the bar's choice (`TodosBar`, `TodosChoice`), the grouping and the sort,
@@ -2183,6 +2184,27 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   what it draws and whether the gate is on (`probe.todos-page`). The store's one-minute clock for rows filed by the
   app's own rules runs while a counted row is filed so (the drawer's N included, whether or not the list was drawn) and
   follows whatever changes that, another assistant made current included (`TodoCountsSource.byRulesChanged`).
+- **Send receipts** (`apple/Shared/SendReceipts.swift`; `docs/protocol/protocol.md` "Message feedback (#5258)" and its
+  "To-do writes"). The socket decodes `message_send_state` and `todo_send_state` (`ServerEvent.sendReceipt`) and passes
+  one on only while its own authenticated hello carries that kind's top-level version, `message_send_state: 1` or
+  `todo_send_state: 1` (`SendReceiptTrust`; a feature-array entry is not proof). That trust goes the moment the socket
+  drops, another opens or the credential changes (`LiveConnection.receiptTrust`), so a new connection has to say it
+  again. It is observed and written only when it changes, so what offers to check a send follows the current socket;
+  the hello kept on `HubLink` (`HubHello.sendReceipts`) is the last socket's word, through a drop too, and decides
+  nothing. The iOS app alone declares `todo_send_state`, in `client_hello` and in the socket URL's `features`, so the
+  hub knows from the upgrade on (it sends the event only to the full devices that ask); `message_send_state` goes to a
+  session's subscribers unasked. `AppModel.sendReceipts` (`SendReceiptStore`) holds the sends the app waits on: before
+  it sends, a sender expects its `client_msg_id` or op id (compared without case: the hub lowercases op ids) under the
+  hub group it writes to (`HubLink.group`; receipts are stamped with their socket's group, and the key has no default
+  group) with the session or to-do it goes to, keeps the `SendReceiptCell` it is given, and forgets the key once the
+  HTTP answer comes, not when it stops waiting. A receipt for another id, session, to-do or hub group is ignored;
+  Processing moves the cell; the final state (`delivered`, `failed`, `unknown`, or `kept` for a session's message) ends
+  the entry, which leaves the table (at most 64: one more lets the oldest go without a state), while the cell keeps
+  what it was told. Each cell is observed on its own, so a burst of other sends' receipts draws nothing. Receipts are
+  feedback only: the HTTP answer, or the op id's receipt, stays authoritative, and the events are not replayed after a
+  reconnect. Nothing reads the cells yet: the to-do page's composer will, and the chats still show Processing after
+  the HTTP answer (`ChatSendFeedback`). `MOCK_TODO_VIEW` sends both (`docs/operations/testing.md`). Tests:
+  `SendReceiptsTests`; `SendReceiptsBurstTests` prints the main thread's time per event under a burst.
 - **404 and 405.** An older hub answers 405 for `GET /api/v1/todos/{id}` and `GET /api/v1/todos/places` (the `PATCH` and
   `DELETE` routes of `/api/v1/todos/{id}` match the path) and 404 for the other new routes: `TodoNotThere` takes both
   as "not there". A 404 with `todo_not_found` is the to-do itself gone. `GET /api/v1/todos` answering 404 still hides
@@ -3000,6 +3022,18 @@ header and its list appear once a roster is known (read in this run, or kept fro
 can be shown, including with one installed assistant (an offline one counts, one still installing doesn't). A one-assistant
 roster has no Default chip, and **New Assistant** and **Manage Assistants…** stay below it. On a hub without a roster,
 `AppModel.showsAssistantSwitcher` is false and the sidebar keeps the persona's name as its title.
+
+**Hubs in the switcher** (#12594, [multi-hub.md](../protocol/multi-hub.md)): with several groups of hubs the list starts with
+them under the heading "hub": one row per group in order (`AssistantSwitcherText.hubs`), its symbol in a well with its link's
+dot at the foot (`HubStatusDot`), its name, and a check on the current hub; then a divider and "Assistants on <hub>" over the
+current hub's assistants, so the header picks hub › its assistants in one place. Picking another hub makes it the current
+hub (`AppModel.selectHub`), closes the list and says so in a toast; the header then names that hub's assistant. With one
+hub the list is the assistants alone, unchanged. A hub without a roster keeps the plain title with `HubSwitcher` under it.
+The conversation's menu (the face or the name in its top bar, the Separate layout's Assistant segment) has no hub section:
+it holds only that conversation's actions. Where the sidebar is away (an iPad with the column hidden, the iPhone and the
+folded Duo, where it is a drawer), its button brings the header back; the Inbox's top left and Settings › hub switch hubs
+too. Tests: `AssistantSwitcherTests.theHubsComeFirstOnlyWithSeveral`; UI suite `HubSwitchSidebarTests` (two mock hubs,
+the switch made in the sidebar's header, and the conversation's menu without hubs).
 
 The pick is the manager's id per group (`AppModel.assistantPicks`), kept on this device across launches (`AssistantPickStore`,
 the app's defaults); no pick follows the hub's default. A pick whose manager leaves the roster, or that the roster marks

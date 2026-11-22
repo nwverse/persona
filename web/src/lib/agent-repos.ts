@@ -89,7 +89,16 @@ export function repoOf(cwd: string, repoRoot?: string): Repo {
   return { repo: path, name: baseName(path), worktree: path, main: true };
 }
 
-const worktreeName = (path: string, repo: string) => (path === repo ? baseName(repo) : baseName(path));
+/** A working tree's name when neither a branch nor its host names it. The main checkout goes by the repository's folder,
+ *  and a linked tree by its own folder. When that folder carries the repository's name too, the linked tree goes by the
+ *  folder holding it instead, so it never reads like the repository: the Codex app keeps
+ *  `~/.codex/worktrees/<name>/<repository>` (#12800). */
+function worktreeName(path: string, repo: string): string {
+  if (path === repo) return baseName(repo);
+  const parts = segments(path);
+  const own = parts.pop() ?? "";
+  return own === baseName(repo) ? (parts.pop() ?? own) : own;
+}
 
 /** The name the host gave the place a working tree's sessions run in (#4497: Paseo sends its workspace's title as
  *  slot_name, with no slot_id), when every session that gives one gives the same; two different names name nothing.

@@ -350,7 +350,7 @@ func (h *Manager) botAIElsewhere(api *feishubot.Client, set FeishuBotSettings, e
 	}
 	// Cheap first, from the text alone: what does not start with /ai (after the @s it starts with) is not asked about the
 	// bot at all, so a group's ordinary messages cost no call.
-	if _, ok := feishubot.AICommand(feishubot.StripLeadingMentions(content.Text, msg.Mentions, nil)); !ok {
+	if _, ok := feishubot.AICommand(content.StripLeadingMentions(msg.Mentions, nil)); !ok {
 		return
 	}
 	botID := h.botOpenID(api)
@@ -361,7 +361,7 @@ func (h *Manager) botAIElsewhere(api *feishubot.Client, set FeishuBotSettings, e
 	if !slices.ContainsFunc(msg.Mentions, isBot) {
 		return
 	}
-	if _, ok := feishubot.AICommand(feishubot.StripLeadingMentions(content.Text, msg.Mentions, isBot)); !ok {
+	if _, ok := feishubot.AICommand(content.StripLeadingMentions(msg.Mentions, isBot)); !ok {
 		return
 	}
 	h.takeAISource(msg.ChatID, msg.MessageID, "")
