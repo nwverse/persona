@@ -169,6 +169,8 @@ struct ChatView: View {
 
     private enum Entry: Equatable {
         case latestAnswer, line(String), message(String)
+        /// The message a task's card is about (#12625), found once the items are in.
+        case card(Interaction)
         #if os(iOS)
         case starred(MessageJump)
         #endif
@@ -1697,6 +1699,19 @@ struct ChatView: View {
                 entry = nil
             } else if store.backlogBuilt {
                 if store.hasMore, scratch.entryPages < Self.entryPageLimit { searchOlderForEntry() } else { entry = nil }
+            }
+            return
+        case .card(let card):
+            // A task's card opened from the assistant's pager (#12625): the message it is about, then as a link's message.
+            // Not in what is loaded: older pages as for a link; none at all, the chat stays at its newest.
+            guard store.backlogBuilt else { return }
+            if let item = CardSource.source(for: card, in: store.items) {
+                entry = .message(item)
+                landEntry(lines)
+            } else if !(card.toolUseID ?? "").isEmpty, store.hasMore, scratch.entryPages < Self.entryPageLimit {
+                searchOlderForEntry() // a card without an id takes the newest question loaded, never an older page's
+            } else {
+                entry = nil
             }
             return
         #if os(iOS)
@@ -4716,6 +4731,10 @@ struct ChatView: View {
             return true
         }
         #endif
+        if let card = j.card {
+            entry = .card(card)
+            return true
+        }
         entry = .message(j.item)
         return true
     }

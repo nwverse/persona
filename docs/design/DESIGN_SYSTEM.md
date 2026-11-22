@@ -2076,7 +2076,12 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   line: its title, the question and, for a card of several questions, "N left". Folded, it keeps its page and its picks
   and gives the conversation its room. Where the chat finds the message the card is about (the agent's words before the
   call that asked it, `CardSource`), the open card's title row has **View in Chat**: the card folds and the chat goes to
-  that message and lights it up, as a quote's jump does. A task's question asks in another chat and has none.
+  that message and lights it up, as a quote's jump does. A task's card in the assistant's To Decide pager (iOS and
+  iPadOS, #12625) has View in Chat too: it pushes that Agent's conversation over the main one as a drill-down
+  (`AppModel.openInPage`, the sidebar's selection unchanged) and lands on the message that asked, found by the card's
+  tool use id once the chat's items are in (`MessageJump.card`, `CardSource.source`, older pages as for a link); a card
+  read off a terminal has no id and lands on that chat's newest question, or at its newest message without one. The pager
+  is left as it was: Back shows the same card, or the next if it was answered on the Agent's page.
   A child session's request (web, #5120: `folded_under`) has its parent's page as its home: shown there with the
   parent's own, "From subagent · <title>", counted once under the parent, and every link to it opens the parent.
   A lead's worker's request (web, #5180) has the lead's page as its home too. While the Team panel shows that worker,

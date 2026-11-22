@@ -493,10 +493,15 @@ struct InteractionPanel: View {
                 }
                 Spacer(minLength: 4)
                 // Back to the message the card is about (#9392): the chat goes there and the card folds out of the way.
-                if !collapsed, let open = sources?.opener(for: interaction.id) {
+                // A task's card in the assistant's pager opens its Agent's chat at that message instead (#12625), the pager
+                // left as it is for Back.
+                let inChat = sources?.opener(for: interaction.id)
+                if !collapsed, let open = inChat ?? dock?.source {
                     Button {
                         Haptics.tap()
-                        if let dock { dock.collapse() } else { withAnimation(Theme.Motion.standard) { collapsed = true } }
+                        if inChat != nil {
+                            if let dock { dock.collapse() } else { withAnimation(Theme.Motion.standard) { collapsed = true } }
+                        }
                         open()
                     } label: {
                         Text("View in Chat [Question Card]").lineLimit(1).fixedSize()
