@@ -280,3 +280,39 @@ func TestCloseEndedTerminalsHTTP(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenTaskKeepsTerminalAfterUnexplainedStop(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	closeOnEnd(t, s, true)
+	a := todo.Agents[0]
+	run := idleAgent(time.Now())
+	run.SessionID = a.SessionID
+	seen := endedSeen{[2]string{a.MachineID, a.SessionID}: true}
+	run.PaneID, run.Status, run.State = "", proto.StatusOffline, proto.StateUnknown
+	run.StartedByPersona = true
+	run.Capabilities = &proto.SessionCapabilities{Read: true, Terminal: true}
+	f.setSessions(a.MachineID, run)
+	s.closeEndedAgentTerminals(t.Context(), seen)
+	if got := retireCalls(f); len(got) != 0 {
+		t.Fatalf("closed the open task's terminal: %v", got)
+	}
+}
+
+func TestTerminalResumeOptionTargetsOnlyItsBoundAgent(t *testing.T) {
+	task := Todo{Agents: []TodoAgent{{MachineID: "box", SessionID: "00000001-example"}}}
+	label := "Resume 00000001 on its terminal page"
+	if target := decisionTerminal(task, label); target == nil || target.MachineID != "box" {
+		t.Fatal(target)
+	}
+	if decisionTerminal(task, "Resume 00000002 on its terminal page") != nil {
+		t.Fatal("unrelated terminal")
+	}
+	if terminalResumeLabel("Start a replacement") {
+		t.Fatal("ordinary decision classified as a terminal action")
+	}
+	now := time.Now()
+	task.Agents[0].ReleasedAt = &now
+	if decisionTerminal(task, label) != nil || soleDecisionAgent(task) != nil {
+		t.Fatal("released Agent")
+	}
+}

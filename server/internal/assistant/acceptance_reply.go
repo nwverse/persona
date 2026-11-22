@@ -332,6 +332,10 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 			return acceptResult{}, err
 		}
 	}
+	if decideAsk(a) && terminalResumeLabel(a.Recommend) {
+		b.mu.Unlock()
+		return acceptResult{}, i18n.Err("assistant-reports.manual_terminal_resume")
+	}
 	previousDueAt, previousAcceptedAt := a.DueAt, a.AcceptedAt
 	if a.AcceptedAt.IsZero() {
 		a.AcceptedAt = time.Now().UTC()
