@@ -30,6 +30,8 @@ func assistantModelSource(e modelExecution) modelhttp.Source {
 		role = "background"
 	case e.Strict:
 		role = "routine"
+	case e.Origin == "task":
+		role = "background"
 	}
 	return modelhttp.Source{Role: role}
 }

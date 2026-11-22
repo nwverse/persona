@@ -10,6 +10,10 @@ import (
 
 type modelSourceKey struct{}
 
+func planModelSource(task PlanTask) modelhttp.Source {
+	return modelhttp.Source{Role: "task_agent", Todo: task.TodoID, Routine: task.Schedule}.Safe()
+}
+
 func (s *Service) startModelSource(ctx context.Context, p StartParams, main bool) modelhttp.Source {
 	if source, ok := ctx.Value(modelSourceKey{}).(modelhttp.Source); ok {
 		return source.Safe()
@@ -47,12 +51,17 @@ func (s *Service) conversationModelSource(ctx context.Context, machine, id strin
 	}
 	s.origins.mu.Lock()
 	var origin, ref string
-	if s.originsLocked(ctx) {
+	originsKnown := s.originsLocked(ctx)
+	if originsKnown {
 		if o := s.origins.m[id]; o != nil && (o.MachineID == "" || o.MachineID == machine) {
 			origin, ref = o.Origin, o.Ref
 		}
 	}
 	s.origins.mu.Unlock()
+	if !originsKnown {
+		source.Role = "background"
+		return source.Safe()
+	}
 	switch {
 	case origin == OriginTask && ref != "":
 		source.Role, source.Routine = "routine", ref
@@ -64,6 +73,11 @@ func (s *Service) conversationModelSource(ctx context.Context, machine, id strin
 	default:
 		if todo := s.modelSourceTodo(ctx, machine, id); todo != "" {
 			source.Role, source.Todo = "task_agent", todo
+			if task, ok := s.todoNow(todo); ok && task.PlanID != "" {
+				if plan, index, err := s.currentPlanAssignment(ctx, task); err == nil {
+					source.Routine = plan.Tasks[index].Schedule
+				}
+			}
 		} else if c, ok := s.session(ctx, machine, id); ok && !c.Assistant {
 			source.Role = "task_agent"
 		}

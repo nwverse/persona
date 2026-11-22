@@ -46,6 +46,9 @@ func TestConversationModelSourceRoles(t *testing.T) {
 }
 
 func TestScheduledModelSourceIncludesBothIDs(t *testing.T) {
+	if got := planModelSource(PlanTask{TodoID: "todo_123", Schedule: "routine_456"}); got != (modelhttp.Source{Role: "task_agent", Todo: "todo_123", Routine: "routine_456"}) {
+		t.Fatalf("scheduled work Agent source=%+v", got)
+	}
 	s := newTestService(t, newFakeHub().withMachine())
 	task := Task{ID: "routine_123", TodoID: "todo_456"}
 	start := taskStartParams(task, "example prompt", TaskExecution{})

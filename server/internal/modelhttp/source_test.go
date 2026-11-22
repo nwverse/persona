@@ -54,7 +54,7 @@ func TestSourceRolesAndHeaderMerge(t *testing.T) {
 	if strings.Contains(strings.ToLower(got), "x-persona-") || !strings.Contains(got, "X-Team: blue") {
 		t.Fatalf("official merge=%q", got)
 	}
-	for _, id := range []string{"bad\r\nX-Injected: yes", "user message", "用户内容", strings.Repeat("a", 257)} {
+	for _, id := range []string{"bad\r\nX-Injected: yes", "user message", "caf\u00e9", strings.Repeat("a", 257)} {
 		if got := (Source{Role: "unknown", Todo: id, Routine: id, Session: id}).Safe(); got.Role != "background" || got.Todo != "" || got.Routine != "" || got.Session != "" {
 			t.Fatal("unsafe metadata accepted")
 		}

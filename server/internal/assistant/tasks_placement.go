@@ -12,7 +12,6 @@ import (
 
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -218,7 +217,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	t.startFilled, t.startNamed = startFill{}, startNamed{}
 	// A self-planning constraint applies only while a policy rule asks for it on this try.
 	t.planFirst = false
-	params := map[string]any{"model_source": modelhttp.Source{Role: "task_agent", Todo: t.TodoID}, "launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "speed": t.Speed, "tier": t.Tier}
+	params := map[string]any{"model_source": planModelSource(*t), "launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "speed": t.Speed, "tier": t.Tier}
 	// The start-defaults policy: its preset goes in before the start is resolved, as if the task had named that tier;
 	// its effort and ultracode after the launcher fit, and the goal (a rule's or the Codex default) after that.
 	defaults, withDefaults := s.taskStartDefaults(ctx, t)

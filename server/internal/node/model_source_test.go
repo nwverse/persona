@@ -16,6 +16,7 @@ func TestClaudeModelSourceMergesLauncherHeaders(t *testing.T) {
 	t.Setenv(modelhttp.SourceHostsEnv, "*.example.com")
 	fakeClaudeManagedSettings(t)
 	n := codexTestNode(t)
+	n.dir = t.TempDir()
 	cwd := t.TempDir()
 	own := filepath.Join(cwd, "provider.json")
 	before := `{"env":{"ANTHROPIC_CUSTOM_HEADERS":"X-Team: blue\nx-persona-todo: todo_old","OTHER_ENV":"preserved"},"permissions":{"defaultMode":"default"}}`
@@ -44,6 +45,7 @@ func TestClaudeModelSourceMergesLauncherHeaders(t *testing.T) {
 func TestClaudeModelSourceUsesEffectiveAddress(t *testing.T) {
 	fakeClaudeManagedSettings(t)
 	n := codexTestNode(t)
+	n.dir = t.TempDir()
 	cwd := t.TempDir()
 	for _, tc := range []struct {
 		hosts, configured, effective string
@@ -94,6 +96,7 @@ func TestClaudeAssistantStartCarriesKnownSessionSource(t *testing.T) {
 
 func TestModelSourceChangesProcessFingerprintAndSurvivesResume(t *testing.T) {
 	n := codexTestNode(t)
+	n.dir = t.TempDir()
 	e := modelExecution{Source: modelhttp.Source{Role: "main"}}
 	first := n.executionFingerprint("claude", e)
 	e.Source = modelhttp.Source{Role: "routine", Routine: "routine_1"}
