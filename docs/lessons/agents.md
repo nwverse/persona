@@ -1580,3 +1580,12 @@ therefore activate its suffix-command parser and append a command to an unrelate
 ACP embedded text resource, keeping the user's own text in its separate text block. Separate text blocks alone are
 insufficient: ACP expands each one. Preserve explicit standalone native commands, and test the captured ACP payload
 for both a new conversation and later messages with command names in the snapshot.
+
+
+## Embedded context has a native transcript envelope (#12813)
+
+Moving auxiliary input out of ACP text blocks protects it from command expansion, but Antigravity serializes the
+embedded resource back into native `USER_INPUT.content` with a `Content of persona-context:///snapshot.txt:` label.
+Removing only the snapshot XML leaves that label visible. Check the native export before blaming replay, and clean
+both the companion and pane history projections. Require the complete leading Persona resource envelope so ordinary
+labels and other URI schemes survive; keep embedded-resource transport intact and version the history format.

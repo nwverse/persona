@@ -593,16 +593,18 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	}
 	stalled := v.stalledReworkRounds()
 	if isStalledReworkKind(a.ReworkKind) && v.Round == stalled {
-		return fmt.Sprintf("Rework round %d of %d is %s. When the agent stops again you get a 督办 message to review it again.", v.Round,
-			maxReworkRounds, sent), nil
+		return fmt.Sprintf("Rework round %d of %d is %s. ", v.Round, maxReworkRounds, sent) + reviewAgainNote, nil
 	}
 	if a.ReworkKind != "" {
-		return fmt.Sprintf("Rework round %d of %d (%s; stalled/low-ROI %d of %d) is %s. When the agent stops again you get a 督办 message to review it again.", v.Round,
-			maxTotalReworkRounds, a.ReworkKind, stalled, maxReworkRounds, sent), nil
+		return fmt.Sprintf("Rework round %d of %d (%s; stalled/low-ROI %d of %d) is %s. ", v.Round,
+			maxTotalReworkRounds, a.ReworkKind, stalled, maxReworkRounds, sent) + reviewAgainNote, nil
 	}
-	return fmt.Sprintf("Rework round %d of %d (stalled/low-ROI %d of %d) is %s. When the agent stops again you get a 督办 message to review it again.", v.Round,
-		maxTotalReworkRounds, stalled, maxReworkRounds, sent), nil
+	return fmt.Sprintf("Rework round %d of %d (stalled/low-ROI %d of %d) is %s. ", v.Round,
+		maxTotalReworkRounds, stalled, maxReworkRounds, sent) + reviewAgainNote, nil
 }
+
+// reviewAgainNote ends every rework reply: the supervisor is told where its next look comes from.
+const reviewAgainNote = "When the agent stops again you get a 督办 message to review it again."
 
 // reviewReply is what a review says of the work, as the reply a "Please verify" card's three lines are read from.
 func reviewReply(note string, checks []ReviewCheck) string {

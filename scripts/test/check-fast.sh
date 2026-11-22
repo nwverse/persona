@@ -643,7 +643,8 @@ job_migration_freeze() {
 }
 
 # job_sleep_ratchet counts fixed time.Sleep calls in Go tests. In diff mode the base is the merge-base check-fast
-# already resolved (so --base agrees); --all resolves the default branch itself.
+# already resolved (so --base agrees), which also holds each changed file to its count there. --all is a full-tree run:
+# counts are held to the baseline only, and the ratchet resolves the default branch itself for its never-raise check.
 job_sleep_ratchet() {
   [ "$HAVE_PY" -eq 1 ] || skip "python3 not found"
   if [ "$ALL" -eq 1 ]; then

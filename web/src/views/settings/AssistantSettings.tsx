@@ -29,13 +29,14 @@ import { Tag, textareaClass } from "../assistant/parts";
 import { PersonaAvatar, usePersona } from "../assistant/Persona";
 import { TaskTrust } from "./TaskTrust";
 import { DirectionNotes, directionNotesDeps } from "./DirectionNotes";
+import { CacheKeepaliveSettings, type CacheKeepaliveState } from "./CacheKeepaliveSettings";
 import { PageBoundary } from "../PageBoundary";
 
 const StandingAuthorizations = lazyPage(() => import("./StandingAuthorizations").then((m) => m.StandingAuthorizations));
 const Repositories = lazyPage(() => import("./Repositories").then((m) => m.Repositories));
 const WorkspaceNaming = lazyPage(() => import("../../ui/WorkspaceNaming").then((m) => m.WorkspaceNaming));
 
-interface AssistantState extends AgentAutoNamingState {
+interface AssistantState extends AgentAutoNamingState, CacheKeepaliveState {
   manager?: string;
   default_permission_mode?: string;
   readonly_mode?: "sandbox" | "prompt";
@@ -680,6 +681,12 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         </Row>
         {info?.timezone && <Row label={t("settings-assistantsettings.timezone")}>{info.timezone}</Row>}
       </Group>
+
+      {info && <CacheKeepaliveSettings value={info} save={async (patch) => {
+        const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: patch });
+        if (r.manager !== manager || Object.entries(patch).some(([key, v]) => r[key as keyof CacheKeepaliveState] !== v)) throw new Error(t("settings-cachekeepalive.unconfirmed"));
+        setInfo((current) => current ? { ...current, cache_keepalive: r.cache_keepalive, cache_keepalive_minutes: r.cache_keepalive_minutes, cache_keepalive_max: r.cache_keepalive_max } : current);
+      }} />}
 
       {/* Interactive Claude Code instead of claude -p (#10058): an advanced, off-by-default switch, only from a hub that has it */}
       {typeof info?.claude_interactive === "boolean" && (
