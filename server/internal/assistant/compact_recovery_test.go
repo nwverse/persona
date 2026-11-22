@@ -99,7 +99,13 @@ func TestCompactRecoverySourceScopeAndVerbatimDecisions(t *testing.T) {
 	if err := os.WriteFile(e.Store.Path(kb.KindProject, project.Slug, "STATE.md"), []byte("STATE_FROM_PROJECT"+strings.Repeat("状态", 2000)), 0600); err != nil {
 		t.Fatal(err)
 	}
-	f.setItems(proto.Item{ID: "u-recent", Seq: 4, Role: "user", Kind: proto.KindText, Text: "RECENT_ORIGINAL"}, proto.Item{ID: "partial", Role: "user", Kind: proto.KindText, Text: "PARTIAL_QUOTE_ONLY", FullSize: 10000}, proto.Item{ID: "stored", Role: "user", Kind: proto.KindText, Text: "STORED_QUOTE_ONLY", Stored: &proto.StoredItem{}}, proto.Item{ID: "relay", Role: "user", Kind: proto.KindText, Text: "RELAY_ONLY", Source: &proto.MessageSource{Kind: proto.SourceConversation}})
+	f.setItems(
+		proto.Item{ID: "u-recent", Seq: 4, Role: "user", Kind: proto.KindText, Text: "RECENT_ORIGINAL"},
+		proto.Item{ID: "partial", Role: "user", Kind: proto.KindText, Text: "PARTIAL_QUOTE_ONLY", FullSize: 10000},
+		proto.Item{ID: "stored", Role: "user", Kind: proto.KindText, Text: "STORED_QUOTE_ONLY", Stored: &proto.StoredItem{}},
+		proto.Item{ID: "relay", Role: "user", Kind: proto.KindText, Text: "RELAY_ONLY", Source: &proto.MessageSource{Kind: proto.SourceConversation}},
+		proto.Item{ID: "native-relay", Role: "user", Kind: proto.KindText, Text: "NATIVE_RELAY_ONLY", From: "other-session"},
+	)
 	p := ContextParams{SessionID: "conv1", MachineID: "server", RecoveryID: "break-1"}
 	out, handled, err := s.nodeAnswer(ctx, "server", "assistant.context", json.RawMessage(`{"session_id":"conv1","recovery_id":"break-1","machine_id":"untrusted"}`))
 	if err != nil || !handled {
@@ -111,7 +117,7 @@ func TestCompactRecoverySourceScopeAndVerbatimDecisions(t *testing.T) {
 			t.Errorf("recovery lacks %q: %s", want, got.Recovery)
 		}
 	}
-	for _, bad := range []string{"AGENT_ONLY", "OLD_ONLY", "RELAY_ONLY", "PARTIAL_QUOTE_ONLY", "STORED_QUOTE_ONLY"} {
+	for _, bad := range []string{"AGENT_ONLY", "OLD_ONLY", "RELAY_ONLY", "NATIVE_RELAY_ONLY", "PARTIAL_QUOTE_ONLY", "STORED_QUOTE_ONLY"} {
 		if strings.Contains(got.Recovery, bad) {
 			t.Errorf("leaked %q", bad)
 		}
