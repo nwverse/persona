@@ -1479,6 +1479,51 @@ export interface SecretsResolveResult {
 }
 
 /**
+ * A public field name/type; never a value or source path.
+ */
+export interface SecretStoreField {
+  name: string;
+  type: string;
+}
+
+/**
+ * The canonical public target approved on the secret storage card.
+ */
+export interface SecretStoreTarget {
+  operation: string;
+  vault: string;
+  item?: string;
+  title?: string;
+  category?: string;
+  fields: SecretStoreField[];
+}
+
+/**
+ * secrets.store: describe metadata, prepare an expiring node HPKE key after explicit approval, commit one encrypted
+ * payload.
+ */
+export interface SecretStoreParams {
+  contribution?: string;
+  phase: string;
+  target: SecretStoreTarget;
+  machine: string;
+  session: string;
+  key_id?: string;
+  sealed?: string;
+}
+
+/**
+ * Metadata and a recipient key, or references of written fields. Never values.
+ */
+export interface SecretStoreResult {
+  target: SecretStoreTarget;
+  vault_name?: string;
+  key?: string;
+  key_id?: string;
+  references?: Record<string, string>;
+}
+
+/**
  * secrets.used (an event to the provider, no answer): a reference it resolved was used, for the usage record its own
  * page shows. Never the value.
  */

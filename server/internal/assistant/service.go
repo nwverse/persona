@@ -119,7 +119,8 @@ type Service struct {
 	// listen; nil: none.
 	heard ownerHeard
 	// humanSent: the messages a person's own app sent, as the hub vouched (secret_handoff.go).
-	humanSent humanSends
+	humanSent      humanSends
+	storeApprovals storeApprovals
 
 	hub   Hub
 	store func() Store
