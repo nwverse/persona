@@ -33,13 +33,14 @@ const (
 	ScopeModels                  = extwire.ScopeModels
 	ScopeAssistantRead           = extwire.ScopeAssistantRead
 	ScopeAssistantMemoryRead     = extwire.ScopeAssistantMemoryRead
+	ScopeAssistantEntriesRead    = extwire.ScopeAssistantEntriesRead
 	ScopeTranscription           = extwire.ScopeTranscription
 	ScopeMarketRefreshOwn        = extwire.ScopeMarketRefreshOwn
 )
 
 // HubScopes are the scopes, in the order the install screen lists them.
 var HubScopes = []string{ScopeKBRead, ScopeKBWrite, ScopeSentRead, ScopeInboxRead, ScopeInboxWrite, ScopeAgentsRead, ScopeAgentsControl,
-	ScopeAgentsPermissionMode, ScopeMachinesRead, ScopeBrowserRun, ScopeNotify, ScopeAssistantAsk, ScopeAssistantRead, ScopeAssistantMemoryRead,
+	ScopeAgentsPermissionMode, ScopeMachinesRead, ScopeBrowserRun, ScopeNotify, ScopeAssistantAsk, ScopeAssistantRead, ScopeAssistantMemoryRead, ScopeAssistantEntriesRead,
 	ScopeTodosRead, ScopeTodosWrite, ScopeDecisionsRaise, ScopeLeadersRead, ScopeAssistantDispatchPolicy, ScopeAssistantStartDefaults, ScopeDispatchGuard, ScopeModels,
 	ScopeTranscription, ScopeMarketRefreshOwn}
 
@@ -81,6 +82,7 @@ var scopeTitles = map[string]string{
 	ScopeModels:                  "scope_models",
 	ScopeAssistantRead:           "scope_assistant_read",
 	ScopeAssistantMemoryRead:     "scope_assistant_memory_read",
+	ScopeAssistantEntriesRead:    "scope_assistant_entries_read",
 	ScopeTranscription:           "scope_transcription",
 	ScopeMarketRefreshOwn:        "scope_market_refresh_own",
 }

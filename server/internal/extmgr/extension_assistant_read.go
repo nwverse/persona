@@ -18,6 +18,8 @@ func (ps *extensions) extensionAssistantCall(ctx context.Context, id, method str
 	switch method {
 	case assistantwire.MethodAssistantConversations, assistantwire.MethodAssistantMessages:
 		scope = extension.ScopeAssistantRead
+	case assistantwire.MethodAssistantEntriesList:
+		scope = extension.ScopeAssistantEntriesRead
 	case assistantwire.MethodAssistantMemory:
 		scope = extension.ScopeAssistantMemoryRead
 	default:

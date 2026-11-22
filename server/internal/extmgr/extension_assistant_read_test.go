@@ -88,3 +88,26 @@ func TestExtensionAssistantMemoryNeedsItsGrant(t *testing.T) {
 		t.Fatalf("assistant.messages with the memory grant: %v", err)
 	}
 }
+
+func TestExtensionEntriesNeedTheirOwnGrant(t *testing.T) {
+	h := newTestManager(t)
+	granted := kbExtensionSpec(t, h, "example-entries", extension.Permissions{Hub: []string{extension.ScopeAssistantEntriesRead}})
+	memory := kbExtensionSpec(t, h, "example-memory", extension.Permissions{Hub: []string{extension.ScopeAssistantMemoryRead, extension.ScopeAssistantRead}})
+	calls := 0
+	h.opts.Assistant = func(_ context.Context, method string, p json.RawMessage) (json.RawMessage, error) {
+		calls++
+		if method != assistantwire.MethodAssistantEntriesList || string(p) != `{"after":"example","by":"user"}` {
+			t.Fatalf("forwarded %s %s", method, p)
+		}
+		return json.RawMessage(`{"entries":[],"after":"example","has_more":false}`), nil
+	}
+	p := json.RawMessage(`{"after":"example","by":"user"}`)
+	_, err := memory.Handle(context.Background(), assistantwire.MethodAssistantEntriesList, p)
+	var re *rpc.Error
+	if !errors.As(err, &re) || re.Code != extension.CodePermissionDenied || !strings.Contains(string(re.Data), `"assistant.entries.read"`) || calls != 0 {
+		t.Fatalf("denied: %v calls=%d", err, calls)
+	}
+	if _, err := granted.Handle(context.Background(), assistantwire.MethodAssistantEntriesList, p); err != nil || calls != 1 {
+		t.Fatalf("granted: %v calls=%d", err, calls)
+	}
+}
