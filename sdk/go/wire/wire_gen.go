@@ -813,9 +813,12 @@ type ChannelCapabilities struct {
 	MaxText   int    `json:"max_text,omitempty"`
 	Asks      string `json:"asks,omitempty"`
 	Push      bool   `json:"push,omitempty"`
-	Typing    bool   `json:"typing,omitempty"`
-	Progress  bool   `json:"progress,omitempty"`
-	Threads   bool   `json:"threads,omitempty"`
+	// It only replies to incoming messages or triggers and cannot send unsolicited proactive messages without reply_to;
+	// testing checks connectivity instead of calling channel.send.
+	ReplyOnly bool `json:"reply_only,omitempty"`
+	Typing    bool `json:"typing,omitempty"`
+	Progress  bool `json:"progress,omitempty"`
+	Threads   bool `json:"threads,omitempty"`
 }
 
 type EventsItem struct {

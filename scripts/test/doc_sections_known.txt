@@ -29,7 +29,6 @@ docs/operations/release.md	docs/operations/hub-update.md	Preventing rollback
 docs/operations/release.md	docs/operations/link.md	Installing the node service
 docs/operations/testing.md	docs/protocol/protocol.md	Item continuity
 docs/operations/testing.md	docs/protocol/protocol.md	Sending video
-docs/protocol/protocol.md	channels.md	6. Endpoints
 docs/protocol/protocol.md	computer-use.md	Approving per app
 docs/protocol/protocol.md	docs/apple/ios.md	Reasoning effort and permission mode
 docs/protocol/protocol.md	docs/assistant/todos.md	Record the conclusion when done

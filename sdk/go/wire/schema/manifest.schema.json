@@ -829,6 +829,7 @@
         "max_text": {"type": "integer", "minimum": 0},
         "asks": {"type": "string", "enum": ["none", "text", "buttons"]},
         "push": {"type": "boolean"},
+        "reply_only": {"type": "boolean", "description": "It only replies to incoming messages or triggers and cannot send unsolicited proactive messages without reply_to; testing checks connectivity instead of calling channel.send."},
         "typing": {"type": "boolean"},
         "progress": {"type": "boolean"},
         "threads": {"type": "boolean"}
