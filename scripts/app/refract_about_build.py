@@ -210,6 +210,13 @@ def run(cli: Path, mode: str, android_out: Path, harmony_out: Path) -> None:
                    cwd=ROOT, capture_output=True, text=True, timeout=90, check=True, errors="replace")
 
 
+def remove_new_output(generated: Path) -> None:
+    """Remove a failed run's new output, or preserve an explicit cleanup failure."""
+    generated.unlink(missing_ok=True)
+    if generated.exists():
+        source_lock.fail("New unreviewed Kotlin still exists after removal")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("check", "generate"), nargs="?", default="check")
@@ -248,13 +255,19 @@ def main() -> int:
         if isinstance(error, subprocess.CalledProcessError):
             source_lock.report_process_failure(error)
         print(f"Refract About Build: FAILED: {error}", file=sys.stderr)
-        if args.mode == "generate" and before is not None:
+        if args.mode == "generate":
             try:
-                source_lock.restore_reviewed_output(before, GENERATED)
+                if before is not None:
+                    source_lock.restore_reviewed_output(before, GENERATED)
+                else:
+                    remove_new_output(GENERATED)
             except (ValueError, OSError) as restore_error:
                 print(f"Refract About Build: secondary restoration failure: {restore_error}", file=sys.stderr)
                 return 1
-            print("Refract About Build: original reviewed Kotlin restored after generation failure", file=sys.stderr)
+            if before is not None:
+                print("Refract About Build: original reviewed Kotlin restored after generation failure", file=sys.stderr)
+            else:
+                print("Refract About Build: new unreviewed Kotlin removed after generation failure", file=sys.stderr)
         return 1
     return 0
 

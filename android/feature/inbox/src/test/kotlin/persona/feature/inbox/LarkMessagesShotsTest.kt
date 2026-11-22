@@ -254,7 +254,7 @@ class LarkMessagesShotsTest {
     private fun assertVisiblePrefix(text: String, characters: Int) {
         val node = rule.onNodeWithText(text, useUnmergedTree = true).fetchSemanticsNode()
         val layouts = mutableListOf<TextLayoutResult>()
-        node.config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
+        val _ = node.config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
         val layout = layouts.single()
         val lastRequiredGlyph = layout.getBoundingBox(characters - 1)
         assertTrue(

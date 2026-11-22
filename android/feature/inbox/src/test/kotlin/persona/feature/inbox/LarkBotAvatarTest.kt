@@ -39,7 +39,7 @@ class LarkBotAvatarTest {
         assertArrayEquals(byteArrayOf(2), bot.read())
         val person = larkMessage(message("/api/v1/lark/media/k"), transport, "feed").avatar!!
         assertEquals("hub/a:/api/v1/lark/media/k?size=144", person.cacheKey)
-        person.read()
+        val _ = person.read()
         assertEquals(listOf("https://cdn.example.com/avatar/bot.jpg", "/api/v1/lark/media/k?size=144"), transport.avatars)
         assertEquals(emptyList<String>(), transport.media)
     }
