@@ -96,7 +96,7 @@ type Placement struct {
 	SupervisionBatchMinutes *int `json:"supervision_batch_minutes,omitempty"`
 }
 
-// DeviceCall is device.call's params. Device is a machine id, or DeviceAll for DeviceDevicesList.
+// DeviceCall is device.call's params. Device is a machine id, or DeviceAll for DeviceDevicesList and fleet-wide DeviceInteractionsList.
 type DeviceCall struct {
 	Device string          `json:"device"`
 	Method string          `json:"method"`
@@ -128,7 +128,7 @@ const (
 	// DeviceDevicesList (on DeviceAll): {} → {devices: [Device], phone_online, apps: [ClientApp]}, the user's machines
 	// and the Persona apps that last said their version (apps: absent from a hub from before).
 	DeviceDevicesList = "devices.list"
-	// DeviceInteractionsList (on DeviceAll): {} → {interactions}, what the machines' agents wait on the user for.
+	// DeviceInteractionsList (on DeviceAll or a machine id): {} → {interactions}, what the machines' agents wait on the user for.
 	DeviceInteractionsList = "interactions.list"
 	// DeviceSessionsList: {} → {sessions}, the machine's sessions as the apps get them (state, titles).
 	DeviceSessionsList = "sessions.list"

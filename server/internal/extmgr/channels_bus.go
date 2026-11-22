@@ -150,6 +150,9 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 	}
 	switch method {
 	case assistantwire.FeishuStatusGet:
+		if err := h.loadBotSettings(ctx); err != nil {
+			return nil, err
+		}
 		api, set := h.botAPI()
 		nudge := set.nudgeAfter()
 		reportDelay := set.sourceReportDelayMinutes()

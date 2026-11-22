@@ -110,10 +110,10 @@ func (h *Manager) feishuChannel(ctx context.Context) channel.View {
 		Enabled: v.Enabled, Bind: channel.BindFields, Capabilities: feishuCapabilities,
 		Description: i18n.T(l, "hub-channels.feishu_description")}
 	switch {
-	case !v.Enabled:
-		out.State = channel.StateDisabled
 	case v.Error != "":
 		out.State, out.Error = channel.StateError, v.Error
+	case !v.Enabled:
+		out.State = channel.StateDisabled
 	case !v.HasSecret:
 		out.State, out.Error = channel.StateNotConnected, i18n.T(l, "hub-channels.no_credentials")
 	case v.Owner == nil:
@@ -363,6 +363,9 @@ func (h *Manager) channelExtensionSet(ctx context.Context, id string, on bool) e
 
 // configureFeishu applies the assistant's changes to the bot's switches (feishu.configure): only what is given.
 func (h *Manager) configureFeishu(ctx context.Context, enabled *bool, features map[string]bool) error {
+	if err := h.loadBotSettings(ctx); err != nil {
+		return err
+	}
 	var fs *botFeatureUpdate
 	if len(features) > 0 {
 		patch := make(map[string]bool, len(features)+1)
@@ -454,6 +457,9 @@ func (h *Manager) bindFeishu(ctx context.Context, step string, values map[string
 // bindFeishuStep runs with the bind gate held. Only an explicit bind may enable the bot; a stale registration poll
 // resumes the configured pairing flow passively and stops at the credentials prompt if the user has disabled it.
 func (h *Manager) bindFeishuStep(ctx context.Context, step string, values map[string]string, activate bool) (connector.Prompt, error) {
+	if err := h.loadBotSettings(ctx); err != nil {
+		return connector.Prompt{}, err
+	}
 	l := h.botLang(ctx)
 	fields := []connector.Field{
 		{Name: "app_id", Label: "App ID", Placeholder: "cli_…"},
