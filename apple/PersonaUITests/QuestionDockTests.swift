@@ -136,7 +136,13 @@ final class QuestionDockTests: XCTestCase {
             let from = card.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)).withOffset(CGVector(dx: 8, dy: 0))
             let to = from.withOffset(CGVector(dx: min(card.frame.width, width - card.frame.minX - 24), dy: 0))
             from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .default, thenHoldForDuration: 0)
-            expectPosition("3 / 5", "swiped back (\(look))")
+            // XCUITest's drags never reach the app on the open iPhone Duo simulator (as in QuestionCardFoldTests).
+            let swiped = { self.expectPosition("3 / 5", "swiped back (\(look))") }
+            if ProcessInfo.processInfo.environment["PERSONA_DRAGS_UNSUPPORTED"] != nil {
+                XCTExpectFailure("XCUITest drags do not reach the app on the open iPhone Duo simulator", strict: false, failingBlock: swiped)
+            } else {
+                swiped()
+            }
             app.terminate()
         }
     }
