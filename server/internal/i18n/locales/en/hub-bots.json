@@ -1,4 +1,5 @@
 {
+  "settings_unavailable": "Lark bot settings could not be read. Try again shortly.",
   "no_credentials": "App credentials not entered yet",
   "bot_off": "The bot is off or not paired yet",
   "test_title": "Test message",
