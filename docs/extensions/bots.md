@@ -59,8 +59,12 @@ The two complement each other and have separate switches.
   the client asks again every `interval` seconds. Once confirmed, the answer carries the new app's App ID and Secret: they are saved and checked like typed ones, `AutoConfigure` runs as below, the confirming
   person becomes the owner, and the bot greets them by `open_id`, which gives the private chat's `chat_id`; the assistant is told `feishu.owner {paired, greeted}` and starts the chat without a second greeting.
   The registration under way (its device code sealed with `secret.key`) is kept in `bots.feishu.registration`, so a restart between polls loses nothing; a confirmed one whose finishing failed is finished on the next poll, never registered again.
-  A tenant on the other cloud (`tenant_brand`) is polled there; an expired or declined authorization starts another one and says so; when the accounts site cannot be reached, or the deployment is private, the step is the credentials form.
+  Concurrent clients reuse the same effective registration; binding operations wait independently of the bot settings lock, so an older network response cannot replace or clear a newer session (#12620).
+  A tenant on the other cloud (`tenant_brand`) is polled there. An expired or declined authorization keeps its error until the user cancels the step and starts binding again; background polling does not start another registration.
+  When the accounts site cannot be reached, or the deployment is private, the step is the credentials form.
   Typing the App ID and App Secret of an existing app stays available on the Lark bot's settings page, folded under Advanced.
+  Changing credentials through binding or the bot settings page retires the previous registration in the same settings commit, after validation succeeds; a failed validation or save keeps it. These updates share the binding lifecycle gate, while switch-only and feature-only settings remain independent and keep the registration.
+  Polls from a retired registration do not re-enable a bot the user turned off; they stop at the credentials prompt until the user explicitly binds or enables it again.
   The web Lark bot page starts the same registration itself when there is no app (#5818): its first group is **Create the bot**, one
   **Scan to create with Lark** button that sends the channel's bind step (`POST /api/v1/channels/feishu/bind`) and draws the QR step
   Settings › Channels draws, so both places run one flow. The credentials form and the manual steps sit under a folded
@@ -221,6 +225,8 @@ Subscribe to **Receive message v2.0** (`im.message.receive_v1`) as for the DM; t
 `/modellist` lists the models available from the main chat's current launcher; `/modelchange <model ID>` selects one of those IDs for the main chat. An unknown ID is refused. Wait for the confirmation before sending the next message. The selection is kept with the main conversation and applies to its next message; it does not change the Main chat default in Model Settings. These commands work when the bot is targeting the main chat; switch back with `/main` first if it is driving another Persona chat or an Agent. See `docs/assistant/model-config.md` ("A conversation's own model") for how the selection is stored and applied.
 
 A newline, Tab or full-width space after the command name all count as separators, and a leading full-width slash `／` counts as `/`; content after `/new` is passed through as is, multiple lines included (#3897).
+
+In the owner's private chat, `/new <first message>` explicitly starts a fresh Persona conversation even when replying to an older bot card or its thread. The first message does not answer that card's pending question, approval or verification; the original reply still supplies quoted context. Bare `/new` only confirms that the next unbound private message will start a conversation; ordinary replies still follow their existing card or thread binding.
 
 ## Cards
 

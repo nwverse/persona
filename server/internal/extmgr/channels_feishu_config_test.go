@@ -446,6 +446,8 @@ func configureAwait(t *testing.T, ch <-chan struct{}, what string) {
 	}
 }
 
+// The main-line binding gate now serializes the formerly reproducible route interleaving. Cancellation while
+// A is paused must not commit B, and later successful settings saves keep or retire the authoritative outcome.
 func TestFeishuConfigureCommittedReceiptThroughRoute(t *testing.T) {
 	for _, bodies := range [][]string{
 		{`{"app_id":"cli_example","app_secret":"fake-secret","domain":"feishu"}`},
@@ -460,25 +462,77 @@ func TestFeishuConfigureCommittedReceiptThroughRoute(t *testing.T) {
 			finished := make(chan struct{})
 			go func() { defer close(finished); configureCredentials(t, w, "cli_example", "fake-secret", "feishu") }()
 			configureAwait(t, gate.entered, "credentials did not reach post-save report")
+			before := st.writes.Load()
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			rec := httptest.NewRecorder()
+			w.mux.ServeHTTP(rec, httptest.NewRequest("PUT", "/api/v1/bots/feishu", strings.NewReader(bodies[0])).WithContext(ctx))
+			if rec.Code == 200 || st.writes.Load() != before {
+				t.Fatalf("canceled gate waiter committed: %d", rec.Code)
+			}
+			once.Do(func() { close(gate.release) })
+			configureAwait(t, finished, "credentials request did not finish")
+			first := w.bind(t, "pair")
 			for _, body := range bodies {
 				status, out := w.do(t, "PUT", "/api/v1/bots/feishu", body)
 				if status != 200 {
-					t.Fatalf("intervening save: %d %v", status, out)
+					t.Fatalf("later save: %d %v", status, out)
+				}
+			}
+			p := w.bind(t, "pair")
+			if len(bodies) == 1 && p["hint"] != first["hint"] {
+				t.Fatalf("same credentials lost durable outcome: %v", p)
+			}
+			if len(bodies) > 1 && p["hint"] != i18n.T(i18n.ZhHans, "hub-channels.pair_hint") {
+				t.Fatalf("replacement kept previous generation: %v", p)
+			}
+			configurePoll(t, w, st, f)
+		})
+	}
+}
+
+// Exercise the receipt-returning commit used by the real bind route, releasing the gate before a later real PUT.
+// The old request may not obtain that later save's identity when it finally starts configuration.
+func TestFeishuConfigureCommittedReceiptCannotAdoptLaterSave(t *testing.T) {
+	for _, bodies := range [][]string{
+		{`{"app_id":"cli_example","app_secret":"fake-secret","domain":"feishu"}`},
+		{`{"app_id":"cli_other","app_secret":"other-secret","domain":"feishu"}`, `{"app_id":"cli_example","app_secret":"fake-secret","domain":"feishu"}`},
+	} {
+		t.Run(fmt.Sprint(len(bodies)), func(t *testing.T) {
+			w, st, f := configureWorld(t, 230002)
+			release, err := w.h.acquireFeishuBind(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			on, id, secret, domain := true, "cli_example", "fake-secret", "feishu"
+			receipt, err := w.h.applyBotUpdateWithReceipt(context.Background(), &on, &id, &secret, &domain, nil, false)
+			release()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, body := range bodies {
+				status, out := w.do(t, "PUT", "/api/v1/bots/feishu", body)
+				if status != 200 {
+					t.Fatalf("later save: %d %v", status, out)
 				}
 			}
 			f.mu.Lock()
 			before := f.requests
 			f.mu.Unlock()
-			once.Do(func() { close(gate.release) })
-			configureAwait(t, finished, "old credentials request did not finish")
+			writes := st.writes.Load()
+			if err := w.h.configureBotForPairing(context.Background(), receipt); err != nil {
+				t.Fatal(err)
+			}
 			f.mu.Lock()
 			after := f.requests
 			f.mu.Unlock()
-			p := w.bind(t, "pair")
-			if p["hint"] != i18n.T(i18n.ZhHans, "hub-channels.pair_hint") || before != after {
-				t.Fatalf("old request adopted newer commit: hint=%v HTTP=%d -> %d", p, before, after)
+			if before != after || writes != st.writes.Load() {
+				t.Fatal("stale receipt ran configuration or saved an outcome")
 			}
-			configurePoll(t, w, st, f)
+			p := w.bind(t, "pair")
+			if p["hint"] != i18n.T(i18n.ZhHans, "hub-channels.pair_hint") {
+				t.Fatalf("old receipt adopted new generation: %v", p)
+			}
 		})
 	}
 }

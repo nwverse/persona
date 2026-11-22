@@ -158,6 +158,13 @@ Review follow-up: the optional projection isn't a required field for a whole pag
 - Temporary picked copies in Application Support aren't cleaned up automatically by the system; after the process restarts, clean up old UUID directories first, then start new picks. Cleanup runs only once and shares a lock with picking, and must not delete copies the current process just created or the separate persistent media directory.
 - The timeout for streaming uploads includes the phone's upload time, so give the phone and the hub the same budget based on file size; the Lark gateway's pending / failed local messages must not become ordinary sent bubbles even after they're removed from the local outbox.
 
+## Feishu bot token refresh after transient retries
+
+Track the one forced tenant-token refresh separately from the request attempt index: a retryable 503 or 429 can precede
+an expired-token rejection. The refresh still consumes the existing attempt budget and must stop after one refresh;
+an expiry on the final attempt returns that expiry. A confirmed auth rejection permits replay of a UUID-less POST,
+while a transport/read failure or server error still stops it. Keep the original payload and UUID across keyed retries.
+
 ## Message Tweaks and account settings
 
 A PUT of the whole local settings overwrites fields that the web or another client just changed. The phone changes the two display switches only through a restricted PATCH that carries the old values; unknown results are reread first and never retried automatically. The hub returns the user ID of the actually selected account, and must not substitute another primary user from the account list. The identity check before and after can reject a response from a switched account, but it isn't a database transaction spanning sign-in operations.
