@@ -3485,8 +3485,8 @@ All three are held to the limits the hub publishes in hello's `image_limits` (#1
   `image_bytes` may go as it is.
 - `per_message`: the pictures one message may carry. The hub refuses more on all three routes with 413 `images_over_limit` before
   anything reaches a computer. Only the message's own pictures count, never those earlier in its conversation.
-- `agents` (absent today): complete sets for the sessions whose `agent` (`claude` when empty) needs other limits. A client uses
-  `agents[session.agent]` when there is one, else the top level; a conversation not started yet uses the top level.
+- `agents` (absent today): complete sets for the sessions whose `agent` needs other limits. A client uses `agents[session.agent]`
+  when there is one, else the top level; an empty agent, a conversation not started yet included, is `claude`, as on the hub.
 
 A hub without `image_limits` has the same body limit and counts no pictures, so a client uses these same numbers with it. Pictures over
 `per_message` or `request_bytes` are not dropped: a client sends them as file attachments instead ("Sending files") and says so. Videos
