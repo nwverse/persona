@@ -162,8 +162,12 @@ class PersonaModelPanelTest {
         for ((page, running) in listOf(of(null) to false, of(mainChat, main = true) to true)) {
             val setup = PersonaModelPanel.setup(page, sharedInfo)
             val panel = PersonaModelPanel.panel(setup, sharedInfo, ::read, typed = true, running = running)
-            assertEquals(sharedAssistantNames, panel.providers.filter { it.unavailable == null }.map { it.id })
-            assertEquals(PanelReason.Hub("Cannot run Assistant"), panel.providers.single { it.id == "codex-gw" }.unavailable)
+            val expected = if (running) sharedAssistantNames - "codex-gw" else sharedAssistantNames
+            assertEquals(expected, panel.providers.filter { it.unavailable == null }.map { it.id })
+            assertEquals(
+                if (running) PanelReason.OtherEngine("claude", "codex") else null,
+                panel.providers.single { it.id == "codex-gw" }.unavailable,
+            )
         }
     }
 
