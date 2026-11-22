@@ -67,6 +67,7 @@ func (d *DB) AppendAssistantEntry(ctx context.Context, e entries.Entry) (entries
 		if err := tx.QueryRow(ctx, `SELECT GREATEST(clock_timestamp(),COALESCE(MAX(at)+interval '1 microsecond', '-infinity'::timestamptz)) FROM assistant_entries`).Scan(&e.At); err != nil {
 			return err
 		}
+		e.At = e.At.UTC()
 		b, err := json.Marshal(e)
 		if err != nil {
 			return err

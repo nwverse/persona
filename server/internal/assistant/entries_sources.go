@@ -9,7 +9,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/nwverse/persona/server/internal/entries"
+	ledger "github.com/nwverse/persona/server/internal/entries"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -48,9 +48,9 @@ func (s *Service) ledgerCardDecisions(ctx context.Context, ix proto.Interaction,
 				}
 			}
 		}
-		e := entries.Entry{ID: entrySourceID("card", ix.MachineID, ix.ID, q.Question), Type: "decision", Text: q.Question + ": " + answer, Quote: answer,
-			OriginSpace: s.entriesSourceSpace(ctx, ix.MachineID, ix.SessionID), Source: entries.Source{Machine: ix.MachineID, Session: ix.SessionID, Card: ix.ID}, Scope: entries.Scope{Executor: "system", Machine: []string{ix.MachineID}, Personal: true},
-			Trust: "user_verbatim", By: "user", Status: "active", Decision: &entries.Decision{Options: options, Selected: selected, Rejected: rejected, Reason: r.Reason, Reversible: ix.Reversible}}
+		e := ledger.Entry{ID: entrySourceID("card", ix.MachineID, ix.ID, q.Question), Type: "decision", Text: q.Question + ": " + answer, Quote: answer,
+			OriginSpace: s.entriesSourceSpace(ctx, ix.MachineID, ix.SessionID), Source: ledger.Source{Machine: ix.MachineID, Session: ix.SessionID, Card: ix.ID}, Scope: ledger.Scope{Executor: "system", Machine: []string{ix.MachineID}, Personal: true},
+			Trust: "user_verbatim", By: "user", Status: "active", Decision: &ledger.Decision{Options: options, Selected: selected, Rejected: rejected, Reason: r.Reason, Reversible: ix.Reversible}}
 		if _, err := st.AppendAssistantEntry(ctx, e); err != nil {
 			return err
 		}
@@ -72,7 +72,7 @@ func (s *Service) toolEntries(ctx context.Context, machine, session, name string
 		return "", errors.New("entries are only available in the owner's assistant conversations")
 	}
 	if name == "decisions_query" {
-		var p entries.Params
+		var p ledger.Params
 		if err := strictParams(name, args, &p); err != nil {
 			return "", err
 		}
@@ -85,8 +85,8 @@ func (s *Service) toolEntries(ctx context.Context, machine, session, name string
 		return string(b), err
 	}
 	var in struct {
-		Entry      entries.Entry   `json:"entry"`
-		UserQuotes []entries.Entry `json:"user_quotes"`
+		Entry      ledger.Entry   `json:"entry"`
+		UserQuotes []ledger.Entry `json:"user_quotes"`
 	}
 	if err := strictParams(name, args, &in); err != nil {
 		return "", err

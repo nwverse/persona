@@ -134,6 +134,10 @@ func (p *Params) Validate() error {
 }
 
 func (e *Entry) Normalize() {
+	if e.ExpiresAt != nil {
+		at := e.ExpiresAt.UTC()
+		e.ExpiresAt = &at
+	}
 	if e.Category == nil {
 		e.Category = []string{}
 	}

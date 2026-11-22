@@ -38,6 +38,9 @@ func TestAssistantEntriesPaginationAndFilters(t *testing.T) {
 	future := time.Now().Add(time.Hour)
 	a.ExpiresAt = &future
 	a = add(a)
+	if replay, err := d.AppendAssistantEntry(ctx, a); err != nil || !replay.At.Equal(a.At) {
+		t.Fatalf("expiry replay: %+v %v", replay, err)
+	}
 	b := ledgerFixture("entry-b")
 	b.By = "agent"
 	b.Trust = "agent"
