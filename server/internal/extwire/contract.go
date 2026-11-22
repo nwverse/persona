@@ -14,7 +14,11 @@ const (
 	ScopeInboxWrite    = "inbox.write"
 	ScopeAgentsRead    = "agents.read"
 	ScopeAgentsControl = "agents.control"
-	ScopeMachinesRead  = "machines.read"
+	ScopeMachinesRead = "machines.read"
+	// ScopeMachinesPair lets an extension request a one-time active-mode pairing link (machines.pair_link) for a
+	// pending link computer and read its connection status (machines.status). Granted by name only; newly added
+	// computers still wait for the owner's "This is my computer" confirmation.
+	ScopeMachinesPair = "machines.pair"
 	ScopeNotify        = "notify"
 	ScopeAssistantAsk  = "assistant.ask"
 	ScopeTodosRead     = "todos.read"

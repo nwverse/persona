@@ -225,6 +225,18 @@ func (h *Hub) AssistantDataStatus(ctx context.Context) (wire.AssistantDataStatus
 	return callHub[wire.AssistantDataStatusResult](ctx, h, "assistant.data_status", wire.AssistantDataStatusParams{})
 }
 
+// MachinesPairLink requests a one-time active-mode pairing link (persona://link?...) for a pending link computer
+// (permission machines.pair; #12798). Newly added computers still require the owner's confirmation.
+func (h *Hub) MachinesPairLink(ctx context.Context, p wire.MachinesPairLinkParams) (wire.MachinesPairLinkResult, error) {
+	return callHub[wire.MachinesPairLinkResult](ctx, h, "machines.pair_link", p)
+}
+
+// MachinesStatus reads one computer's current connection and confirmation status (permission machines.read or
+// machines.pair; #12798).
+func (h *Hub) MachinesStatus(ctx context.Context, p wire.MachinesStatusParams) (wire.MachinesStatusResult, error) {
+	return callHub[wire.MachinesStatusResult](ctx, h, "machines.status", p)
+}
+
 func callHub[R any](ctx context.Context, h *Hub, method string, params any) (R, error) {
 	var r R
 	err := h.Call(ctx, method, params, &r)

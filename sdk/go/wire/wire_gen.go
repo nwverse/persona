@@ -5628,6 +5628,58 @@ type AssistantDataStatusResult struct {
 	Items []AssistantDataItem `json:"items"`
 }
 
+// MachinesPairLinkParams: machines.pair_link (machines.pair): request a one-time persona://link?... pairing link for
+// a pending link computer.
+type MachinesPairLinkParams struct {
+	// Optional existing pending link machine id to re-issue a pairing link for (mutually exclusive with name/os/icon
+	// when omitted, or used as the requested id when adding).
+	MachineID string `json:"machine_id,omitempty"`
+	// Display name for a newly added computer (required when machine_id does not exist yet).
+	Name string `json:"name,omitempty"`
+	// Target OS hint for install commands.
+	OS string `json:"os,omitempty"`
+	// Optional icon for the computer.
+	Icon string `json:"icon,omitempty"`
+}
+
+type MachinesPairLinkResult struct {
+	// The hub machine id assigned to the computer.
+	MachineID string `json:"machine_id"`
+	// The display name of the computer.
+	Name string `json:"name"`
+	// The one-time persona://link?... pairing URL.
+	Link string `json:"link"`
+	// When the pairing link expires.
+	ExpiresAt time.Time `json:"expires_at"`
+	// Whether the computer is waiting for the owner's confirmation.
+	Pending bool `json:"pending"`
+	// Optional one-line Linux install-and-pair command when the hub knows its publication site.
+	InstallLinux string `json:"install_linux,omitempty"`
+}
+
+// MachinesStatusParams: machines.status (machines.read or machines.pair): read one computer's current connection and
+// confirmation state.
+type MachinesStatusParams struct {
+	// The computer's hub machine id.
+	MachineID string `json:"machine_id"`
+}
+
+type MachinesStatusResult struct {
+	MachineID string `json:"machine_id"`
+	Name      string `json:"name,omitempty"`
+	Exists    bool   `json:"exists"`
+	// Whether the computer's link/connection is currently up.
+	Online bool `json:"online"`
+	// Whether the resident node is connected and responding.
+	NodeOnline bool `json:"node_online"`
+	// Whether the computer is waiting for the owner's confirmation.
+	Pending bool `json:"pending"`
+	// When the computer was last seen online, if ever.
+	LastSeen time.Time `json:"last_seen,omitzero"`
+	// Last connection error, if any.
+	Error string `json:"error,omitempty"`
+}
+
 type StorageEmptyParams struct {
 }
 
@@ -7390,6 +7442,10 @@ var newDef = map[string]func() any{
 	"AssistantDataStatusParams":     func() any { return new(AssistantDataStatusParams) },
 	"AssistantDataItem":             func() any { return new(AssistantDataItem) },
 	"AssistantDataStatusResult":     func() any { return new(AssistantDataStatusResult) },
+	"MachinesPairLinkParams":        func() any { return new(MachinesPairLinkParams) },
+	"MachinesPairLinkResult":        func() any { return new(MachinesPairLinkResult) },
+	"MachinesStatusParams":          func() any { return new(MachinesStatusParams) },
+	"MachinesStatusResult":          func() any { return new(MachinesStatusResult) },
 	"StorageEmptyParams":            func() any { return new(StorageEmptyParams) },
 	"StorageRequestResult":          func() any { return new(StorageRequestResult) },
 	"StorageKeyParams":              func() any { return new(StorageKeyParams) },
@@ -7530,6 +7586,8 @@ var Calls = map[string]Call{
 	"assistant.messages":             {Name: "assistant.messages", From: "program", Params: "AssistantMessagesParams", Result: "AssistantMessagesResult"},
 	"assistant.memory":               {Name: "assistant.memory", From: "program", Params: "AssistantMemoryParams", Result: "AssistantMemoryResult"},
 	"assistant.data_status":          {Name: "assistant.data_status", From: "program", Params: "AssistantDataStatusParams", Result: "AssistantDataStatusResult"},
+	"machines.pair_link":             {Name: "machines.pair_link", From: "program", Params: "MachinesPairLinkParams", Result: "MachinesPairLinkResult"},
+	"machines.status":                {Name: "machines.status", From: "program", Params: "MachinesStatusParams", Result: "MachinesStatusResult"},
 	"storage.request":                {Name: "storage.request", From: "program", Params: "StorageEmptyParams", Result: "StorageRequestResult"},
 	"storage.get":                    {Name: "storage.get", From: "program", Params: "StorageKeyParams", Result: "StorageEntry"},
 	"storage.list":                   {Name: "storage.list", From: "program", Params: "StorageListParams", Result: "StorageListResult"},

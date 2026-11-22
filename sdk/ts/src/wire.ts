@@ -6071,6 +6071,62 @@ export interface AssistantDataStatusResult {
   items: AssistantDataItem[];
 }
 
+/**
+ * machines.pair_link (machines.pair): request a one-time persona://link?... pairing link for a pending link computer.
+ */
+export interface MachinesPairLinkParams {
+  /**
+   * Optional existing pending link machine id to re-issue a pairing link for (mutually exclusive with name/os/icon
+   * when omitted, or used as the requested id when adding).
+   */
+  machine_id?: string;
+  /** Display name for a newly added computer (required when machine_id does not exist yet). */
+  name?: string;
+  /** Target OS hint for install commands. */
+  os?: string;
+  /** Optional icon for the computer. */
+  icon?: string;
+}
+
+export interface MachinesPairLinkResult {
+  /** The hub machine id assigned to the computer. */
+  machine_id: string;
+  /** The display name of the computer. */
+  name: string;
+  /** The one-time persona://link?... pairing URL. */
+  link: string;
+  /** When the pairing link expires. */
+  expires_at: string;
+  /** Whether the computer is waiting for the owner's confirmation. */
+  pending: boolean;
+  /** Optional one-line Linux install-and-pair command when the hub knows its publication site. */
+  install_linux?: string;
+}
+
+/**
+ * machines.status (machines.read or machines.pair): read one computer's current connection and confirmation state.
+ */
+export interface MachinesStatusParams {
+  /** The computer's hub machine id. */
+  machine_id: string;
+}
+
+export interface MachinesStatusResult {
+  machine_id: string;
+  name?: string;
+  exists: boolean;
+  /** Whether the computer's link/connection is currently up. */
+  online: boolean;
+  /** Whether the resident node is connected and responding. */
+  node_online: boolean;
+  /** Whether the computer is waiting for the owner's confirmation. */
+  pending: boolean;
+  /** When the computer was last seen online, if ever. */
+  last_seen?: string;
+  /** Last connection error, if any. */
+  error?: string;
+}
+
 export interface StorageEmptyParams {
 }
 
@@ -6886,6 +6942,8 @@ export const CALLS: Record<string, Call> = {
   "assistant.messages": { from: "program", params: "AssistantMessagesParams", result: "AssistantMessagesResult" },
   "assistant.memory": { from: "program", params: "AssistantMemoryParams", result: "AssistantMemoryResult" },
   "assistant.data_status": { from: "program", params: "AssistantDataStatusParams", result: "AssistantDataStatusResult" },
+  "machines.pair_link": { from: "program", params: "MachinesPairLinkParams", result: "MachinesPairLinkResult" },
+  "machines.status": { from: "program", params: "MachinesStatusParams", result: "MachinesStatusResult" },
   "storage.request": { from: "program", params: "StorageEmptyParams", result: "StorageRequestResult" },
   "storage.get": { from: "program", params: "StorageKeyParams", result: "StorageEntry" },
   "storage.list": { from: "program", params: "StorageListParams", result: "StorageListResult" },

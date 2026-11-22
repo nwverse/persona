@@ -1153,6 +1153,8 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			return ps.extensionKBCall(ctx, id, method, params)
 		case "assistant.conversations", "assistant.messages", "assistant.memory": // assistant.read, assistant.memory.read (extension_assistant_read.go)
 			return ps.extensionAssistantCall(ctx, id, method, params)
+		case "machines.pair_link", "machines.status": // machines.pair / machines.read (extension_machines.go)
+			return ps.extensionMachinesCall(ctx, id, method, params)
 		case "model.complete": // assistantwire.MethodModelComplete (extension_model_calls.go)
 			return ps.extensionModelCall(ctx, id, params)
 		case assistantwire.MethodTranscriptionStart, assistantwire.MethodTranscriptionAudio, assistantwire.MethodTranscriptionFinish,
