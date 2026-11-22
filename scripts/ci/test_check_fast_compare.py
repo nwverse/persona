@@ -29,6 +29,26 @@ GO_HEAD = (
     "internal/broken/x.go:3:1: syntax error\n"
     "FAIL\t" + MODULE + "/internal/broken [build failed]\n"
     "FAIL\n")
+# go_test_partitioned.py's output for ./internal/assistant/... (#12765): the other packages as they come, then each
+# partition whole, after its header line.
+RUNNER = ("python3", "-B", "../scripts/test/go_test_partitioned.py")
+GO_PARTITIONED = (
+    "== go test: 2 package(s)\n"
+    "== go test: ./internal/assistant partition (2 tests)\n"
+    "== go test: ./internal/assistant partition (1 tests)\n"
+    "ok  \t" + MODULE + "/internal/assistant/inbox\t0.2s\n"
+    "--- FAIL: TestInbox (0.00s)\n"
+    "FAIL\n"
+    "FAIL\t" + MODULE + "/internal/assistant/kbsent\t0.1s\n"
+    "FAIL\n"
+    "== go test: ./internal/assistant partition (2 tests), exit 1\n"
+    "--- FAIL: TestRedOnMain (0.01s)\n"
+    "FAIL\n"
+    "FAIL\t" + MODULE + "/internal/assistant\t0.9s\n"
+    "== go test: ./internal/assistant partition (1 tests), exit 1\n"
+    "--- FAIL: TestMine (0.00s)\n"
+    "FAIL\n"
+    "FAIL\t" + MODULE + "/internal/assistant\t0.5s\n")
 PY_39 = ("FAIL: test_a (test_thing.T)\n"
          "ERROR: test_b (test_thing.T)\n"
          "FAIL: test_c (test_thing.T) (case=1)\n"
@@ -148,6 +168,29 @@ class RerunLineTests(HelperTestCase):
             "(cd server && go test -count=1 -run '^(TestOther)$' ./internal/other)",
             "(cd server && go test -count=1 ./internal/broken)",
         ], compare.rerun_lines([step], self.root))
+
+    def test_go_through_the_partitioned_runner_reruns_the_named_tests_of_every_partition(self):
+        step = self.step("FAIL", "server", GO_PARTITIONED, *RUNNER, "go", "test", "-count=1", "-timeout", "290s",
+                         "./internal/assistant/...")
+        self.assertEqual([
+            "(cd server && go test -count=1 -run '^(TestRedOnMain|TestMine)$' ./internal/assistant)",
+            "(cd server && go test -count=1 -run '^(TestInbox)$' ./internal/assistant/kbsent)",
+        ], compare.rerun_lines([step], self.root))
+
+    def test_a_timed_out_partitioned_run_reruns_through_the_runner(self):
+        step = self.step("TIMEOUT", "server", "", *RUNNER, "go", "test", "-count=1", "-timeout", "290s",
+                         "./internal/assistant/...")
+        self.assertEqual(["(cd server && python3 -B ../scripts/test/go_test_partitioned.py go test -count=1 -timeout "
+                          "290s ./internal/assistant/...)"], compare.rerun_lines([step], self.root))
+
+    def test_the_go_command_a_step_runs(self):
+        go = ["go", "test", "./..."]
+        for argv, expected in ((go, go), ([*RUNNER, *go], go), (["python3", "-I", "x/go_test_partitioned.py", *go], go),
+                               (["../scripts/test/go_test_partitioned.py", *go], go),
+                               (["python3", "scripts/privacy_check.py"], None), (["python3", "-m", "unittest"], None),
+                               (["python3", "go_test_partitioned.py"], None), (["npm", "test"], None), ([], None)):
+            with self.subTest(argv=argv):
+                self.assertEqual(expected, compare.go_command(argv))
 
     def test_go_without_a_package_line_reruns_its_command(self):
         step = self.step("FAIL", "server", "go: no go.mod\n", "go", "test", "-count=1", "./...")
@@ -302,6 +345,15 @@ class CompareTests(HelperTestCase):
         self.comparison([step], runner).compare()
         self.assertIn("UNKNOWN  scripts/tools test_thing.T.test_a: not compared: scripts/tools/test_thing.py does not "
                       "load at bbbbbbbbbb", self.out.getvalue())
+
+    def test_a_partitioned_go_command_reruns_with_the_go_timeout_in_a_go_slot(self):
+        (self.root / "server").mkdir(exist_ok=True)
+        command = compare.Command("server", [*RUNNER, "go", "test", "-count=1", "./internal/assistant/..."],
+                                  "go test ./internal/assistant/...", root=self.root)
+        runner = FakeRunner(lambda argv, cwd: (1, "FAIL\n"))
+        checkout = compare.WorkingTree(self.root)
+        command.compare(checkout, runner, compare.Timeouts(300, 120), lambda subject, output: "a log")
+        self.assertEqual([(300, "go")], [(timeout, slot) for _, _, timeout, slot in runner.calls])
 
     def test_a_command_narrows_to_itself_or_nothing(self):
         command = compare.Command(".", ["python3", "x.py"], "python3 x.py", root=self.root)

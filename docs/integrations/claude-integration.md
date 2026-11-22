@@ -681,6 +681,15 @@ The session writes the message as a peer's: the transcript reader takes the user
 
 Measured end to end on a throwaway `claude` 2.1.291 in an empty directory (its own `CLAUDE_CONFIG_DIR`, a pseudo console): with the default permission mode the message was taken in 0.15–0.3 s (also while a startup dialog was on screen) and answered in the transcript; a second message while it worked was queued and answered next; in bypass permissions mode the message was held, as above. The desktop app's sessions were not written to.
 
+### Queue controls (#12789)
+
+A message that comes while such a session works waits in Claude Code's own queue, which its transcript reports and the
+apps list. Editing that queue and Claude Code's send-now are keys on the session's screen (`queue.go`). So a session with
+no pane (the desktop app's, a background one) lists `queue_edit` and `queue_send_now` as false, and the apps offer
+neither. A call that comes anyway is refused with 409 `queue_edit_unsupported` or `send_now_unsupported` and nothing
+pressed; the messages go in order at its next step. A session in a tmux pane lists both as true and takes them as a
+Claude in an engine pane does.
+
 ### Owner input in a tmux pane (#5965)
 
 An outside Claude in tmux already has a terminal the node can read and type into (`outsidePane`, `hosttmux.go`). A normal
