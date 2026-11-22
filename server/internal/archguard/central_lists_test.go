@@ -69,6 +69,17 @@ var centralLists = []centralList{
 
 func (l centralList) file() string { return "testdata/central_lists/" + l.id + ".txt" }
 
+// centralListNamed is the row with that id. A test that binds its row this way keeps reading that row when another PR
+// adds one before it, where an index would silently move to the new row.
+func centralListNamed(t *testing.T, id string) centralList {
+	t.Helper()
+	i := slices.IndexFunc(centralLists, func(l centralList) bool { return l.id == id })
+	if i < 0 {
+		t.Fatalf("no central list %q", id)
+	}
+	return centralLists[i]
+}
+
 func TestCentralListsTakeNoNewName(t *testing.T) {
 	for _, l := range centralLists {
 		src, err := os.ReadFile(filepath.Join(serverDir, l.source))
@@ -310,7 +321,7 @@ func TestCentralListNames(t *testing.T) {
 // The freeze's own behaviour, on planted sources: a new name fails with where it goes instead, a removed one is a
 // notice, a pending one passes before and after its PR merges, and the list's format is checked.
 func TestCentralListFreeze(t *testing.T) {
-	routes, prompts, features := centralLists[0], centralLists[1], centralLists[2]
+	routes, prompts := centralLists[0], centralLists[1]
 	const bus = `package assistantwire
 
 const P = "/api/v1/p"
@@ -346,6 +357,12 @@ func (s Snapshot) Up() int { return 0 }
 
 func (b *B[T]) Down() int { return 0 }
 `
+	const routesList = "# a header\n\"GET \" + P\n\"GET /api/v1/a\"\n\"POST /api/v1/c\"\n\"PUT /api/v1/b\"\n"
+	const promptsList = "A\nB\nB.Down\nC\nRenderA\nSnapshot\nSnapshot.Up\nv\n"
+
+	// The proto_features row's planted source, list and seam, in one block and bound by id: a later row adds a block
+	// of its own beside this one rather than editing these lines.
+	features := centralListNamed(t, "proto_features")
 	const flags = `package proto
 
 const FeatureB = "b"
@@ -357,9 +374,8 @@ var Features = []string{
 
 func init() { Features = append(Features, FeatureAppended) }
 `
-	const routesList = "# a header\n\"GET \" + P\n\"GET /api/v1/a\"\n\"POST /api/v1/c\"\n\"PUT /api/v1/b\"\n"
-	const promptsList = "A\nB\nB.Down\nC\nRenderA\nSnapshot\nSnapshot.Up\nv\n"
 	const flagsList = "\"a\"\nFeatureB\nnodeproto.A\n"
+	const flagSeam = "proto/features_<domain>.go"
 
 	check := func(l centralList, src, list string) ([]string, []string) {
 		t.Helper()
@@ -369,7 +385,7 @@ func init() { Features = append(Features, FeatureAppended) }
 		}
 		return failures, notices
 	}
-	const routeSeam, promptSeam, flagSeam = "assistantwire/<domain>.go", "prompts/assistant_<topic>.go", "proto/features_<domain>.go"
+	const routeSeam, promptSeam = "assistantwire/<domain>.go", "prompts/assistant_<topic>.go"
 	for _, c := range []struct {
 		l          centralList
 		src, list  string
