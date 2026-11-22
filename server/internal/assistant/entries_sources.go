@@ -49,7 +49,7 @@ func (s *Service) ledgerCardDecisions(ctx context.Context, ix proto.Interaction,
 			}
 		}
 		e := entries.Entry{ID: entrySourceID("card", ix.MachineID, ix.ID, q.Question), Type: "decision", Text: q.Question + ": " + answer, Quote: answer,
-			Space: s.entriesSourceSpace(ctx, ix.MachineID, ix.SessionID), Source: entries.Source{Machine: ix.MachineID, Session: ix.SessionID, Card: ix.ID}, Scope: entries.Scope{Executor: "system", Machine: []string{ix.MachineID}, Personal: true},
+			OriginSpace: s.entriesSourceSpace(ctx, ix.MachineID, ix.SessionID), Source: entries.Source{Machine: ix.MachineID, Session: ix.SessionID, Card: ix.ID}, Scope: entries.Scope{Executor: "system", Machine: []string{ix.MachineID}, Personal: true},
 			Trust: "user_verbatim", By: "user", Status: "active", Decision: &entries.Decision{Options: options, Selected: selected, Rejected: rejected, Reason: r.Reason, Reversible: ix.Reversible}}
 		if _, err := st.AppendAssistantEntry(ctx, e); err != nil {
 			return err
@@ -143,15 +143,15 @@ func (s *Service) toolEntries(ctx context.Context, machine, session, name string
 		if q.Scope.Personal && machine != s.settings(ctx).MachineID {
 			return "", errors.New("personal quotes require the owner's machine")
 		}
-		if q.Space == "" {
-			q.Space = s.entriesSourceSpace(ctx, q.Source.Machine, q.Source.Session)
+		if q.OriginSpace == "" {
+			q.OriginSpace = s.entriesSourceSpace(ctx, q.Source.Machine, q.Source.Session)
 		}
 		if err := q.Validate(); err != nil {
 			return "", err
 		}
 	}
-	if e.Space == "" {
-		e.Space = s.entriesSourceSpace(ctx, e.Source.Machine, e.Source.Session)
+	if e.OriginSpace == "" {
+		e.OriginSpace = s.entriesSourceSpace(ctx, e.Source.Machine, e.Source.Session)
 	}
 	if err := e.Validate(); err != nil {
 		return "", err

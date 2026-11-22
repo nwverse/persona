@@ -28,8 +28,8 @@ func TestAssistantEntriesPaginationAndFilters(t *testing.T) {
 		return out
 	}
 	a := ledgerFixture("entry-a")
-	a.Space = "health"
-	a.Category = "health"
+	a.OriginSpace = "health"
+	a.Category = []string{"health", "finance"}
 	a.RelayedVia = []string{"session-relay"}
 	a.Trust = "user_relayed"
 	a.Tag = []string{"import", "example"}
@@ -111,13 +111,13 @@ func TestAssistantEntriesPaginationAndFilters(t *testing.T) {
 	}
 	// Required fields are present even when empty/null, not silently omitted.
 	original, _ := d.AssistantEntry(ctx, "entry-a")
-	if original.Space != "health" || original.Category != "health" {
+	if original.OriginSpace != "health" || !reflect.DeepEqual(original.Category, []string{"health", "finance"}) {
 		t.Fatalf("metadata round trip: %+v", original)
 	}
 	raw, _ := json.Marshal(original)
 	var fields map[string]json.RawMessage
 	_ = json.Unmarshal(raw, &fields)
-	for _, field := range []string{"relayed_via", "supersedes", "expires_at", "tag"} {
+	for _, field := range []string{"relayed_via", "supersedes", "expires_at", "tag", "origin_space", "category"} {
 		if _, ok := fields[field]; !ok {
 			t.Errorf("missing %s", field)
 		}

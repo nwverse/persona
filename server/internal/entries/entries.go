@@ -37,23 +37,23 @@ type Decision struct {
 }
 
 type Entry struct {
-	Space      string     `json:"space"`
-	Category   string     `json:"category"`
-	ID         string     `json:"id"`
-	Type       string     `json:"type"`
-	Text       string     `json:"text"`
-	Quote      string     `json:"quote"`
-	Source     Source     `json:"source"`
-	RelayedVia []string   `json:"relayed_via"`
-	Scope      Scope      `json:"scope"`
-	At         time.Time  `json:"at"`
-	ExpiresAt  *time.Time `json:"expires_at"`
-	Supersedes string     `json:"supersedes"`
-	Trust      string     `json:"trust"`
-	Status     string     `json:"status"`
-	By         string     `json:"by"`
-	Tag        []string   `json:"tag"`
-	Decision   *Decision  `json:"decision,omitempty"`
+	OriginSpace string     `json:"origin_space"`
+	Category    []string   `json:"category"`
+	ID          string     `json:"id"`
+	Type        string     `json:"type"`
+	Text        string     `json:"text"`
+	Quote       string     `json:"quote"`
+	Source      Source     `json:"source"`
+	RelayedVia  []string   `json:"relayed_via"`
+	Scope       Scope      `json:"scope"`
+	At          time.Time  `json:"at"`
+	ExpiresAt   *time.Time `json:"expires_at"`
+	Supersedes  string     `json:"supersedes"`
+	Trust       string     `json:"trust"`
+	Status      string     `json:"status"`
+	By          string     `json:"by"`
+	Tag         []string   `json:"tag"`
+	Decision    *Decision  `json:"decision,omitempty"`
 	// ExtID is reserved for future per-publisher idempotency; H1a exposes no write RPC.
 	ExtID string `json:"ext_id,omitempty"`
 }
@@ -134,6 +134,9 @@ func (p *Params) Validate() error {
 }
 
 func (e *Entry) Normalize() {
+	if e.Category == nil {
+		e.Category = []string{}
+	}
 	if e.RelayedVia == nil {
 		e.RelayedVia = []string{}
 	}

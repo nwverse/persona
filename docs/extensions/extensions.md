@@ -811,7 +811,7 @@ current per-extension grant includes it may read all personal entries over HTTP 
 or content category. The manager checks the live registry by authenticated extension ID on every request and again
 when delivering events: disabling the extension or revoking the scope takes effect without renewing its credential.
 An allowed reader may alternatively prove co-location through the same-user Node socket. Legacy full-hub permission
-alone does not opt into remote personal reads. No space or privacy-tier exclusion applies; `space` and `category` are
+alone does not opt into remote personal reads. No space or privacy-tier exclusion applies; `origin_space` and `category` are
 metadata reserved for later labeling and use-time policy. Secret input fields and automated answers are not owner
 question answers.
 
@@ -821,7 +821,7 @@ future increments; an empty result retains the incoming cursor. Source timestamp
 
 | Entry field | Type and meaning |
 | --- | --- |
-| `space`, `category` | Source-space and content-category strings; empty until known or labeled (for example `health`, `finance`, `relationship`, `legal`); neither restricts authorized reads |
+| `origin_space`, `category` | Source-space string (`""` means main) and content-category string array (`[]` means general); for example `health`, `finance`, `relationships`, `emotion`, `legal_id`; neither restricts authorized reads |
 | `id`, `type`, `text` | Stable ID, one of the four persisted types, one-line judgment; hot state is not stored |
 | `quote` | Source wording; model-supplied quotes stay inferred until later verification |
 | `source` | `{machine, session, msg_uuid?, card_id?, file?, line?}`; original source pointer |

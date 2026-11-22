@@ -209,7 +209,7 @@ func TestEntriesHTTPPersonalGrantRevocationAndCategories(t *testing.T) {
 		return []byte(`{"ok":true,"machine_id":"a-different-computer"}`), nil
 	}
 	for _, space := range []string{"", "health", "finance", "relationship"} {
-		item := entries.Entry{ID: "entry-space-" + space, Type: "decision", Text: "Keep the example choice.", Quote: "Stage", Space: space, Category: "health", Source: entries.Source{Machine: "computer-example", Session: "session-example", Message: "message-example"}, Scope: entries.Scope{Executor: "assistant", Personal: true}, By: "user", Trust: "user_verbatim", Status: "active", Decision: &entries.Decision{Options: []string{"Stage", "Release"}, Selected: []string{"Stage"}, Rejected: []string{"Release"}, Reason: "Example rationale."}}
+		item := entries.Entry{ID: "entry-space-" + space, Type: "decision", Text: "Keep the example choice.", Quote: "Stage", OriginSpace: space, Category: []string{"health", "finance"}, Source: entries.Source{Machine: "computer-example", Session: "session-example", Message: "message-example"}, Scope: entries.Scope{Executor: "assistant", Personal: true}, By: "user", Trust: "user_verbatim", Status: "active", Decision: &entries.Decision{Options: []string{"Stage", "Release"}, Selected: []string{"Stage"}, Rejected: []string{"Release"}, Reason: "Example rationale."}}
 		if _, err := database.AppendAssistantEntry(ctx, item); err != nil {
 			t.Fatal(err)
 		}
@@ -225,7 +225,7 @@ func TestEntriesHTTPPersonalGrantRevocationAndCategories(t *testing.T) {
 		return w.Code, out
 	}
 	code, out := get("example-reader")
-	if code != 200 || len(out.Entries) != 4 || out.Entries[0].Category != "health" {
+	if code != 200 || len(out.Entries) != 4 || !reflect.DeepEqual(out.Entries[0].Category, []string{"health", "finance"}) {
 		t.Fatalf("approved cross-space personal read: %d %+v", code, out)
 	}
 	rpcCtx := entries.WithExtensionReader(ctx, "example-reader")
@@ -268,7 +268,7 @@ func TestEntriesCollectOwnerCardAnswersAcrossSourceSpaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err := database.ListAssistantEntries(ctx, entries.Params{By: "user"}, true)
-	if err != nil || len(out.Entries) != 1 || out.Entries[0].Space != "health" || out.Entries[0].Category != "" {
+	if err != nil || len(out.Entries) != 1 || out.Entries[0].OriginSpace != "health" || len(out.Entries[0].Category) != 0 {
 		t.Fatalf("source/category: %+v %v", out, err)
 	}
 }
