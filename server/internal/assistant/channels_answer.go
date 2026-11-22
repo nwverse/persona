@@ -313,7 +313,7 @@ func (s *Service) finishChannelRun(r *channel.Run, res *channel.Result) (unrelat
 		prog.steps, prog.live, prog.dirty = nil, "", false
 		prog.from, prog.upTo = 0, 0
 		prog.open, prog.calls, prog.read, prog.edited, prog.subs, prog.subsMore = nil, 0, nil, nil, nil, 0
-		prog.items, prog.cot = nil, cotProgress{}
+		prog.items, prog.cot, prog.native = nil, cotProgress{}, nil
 	} else {
 		prog.finished = true
 		delete(c.live, r.ID)

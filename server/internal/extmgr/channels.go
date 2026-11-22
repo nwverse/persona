@@ -493,7 +493,8 @@ func (h *Manager) bindFeishuStep(ctx context.Context, step string, values map[st
 	if step == "credentials" && values != nil {
 		id, secret, domain := strings.TrimSpace(values["app_id"]), strings.TrimSpace(values["app_secret"]), strings.TrimSpace(values["domain"])
 		on := true
-		if err := h.applyBotUpdate(ctx, &on, &id, &secret, &domain, nil, false); err != nil {
+		receipt, err := h.applyBotUpdateWithReceipt(ctx, &on, &id, &secret, &domain, nil, false)
+		if err != nil {
 			if feishubot.CredentialRejected(err) {
 				h.logf("bots: credentials rejected by the platform: %v", err)
 				return credentials(i18n.T(l, "hub-channels.credentials_rejected")), nil
@@ -503,11 +504,9 @@ func (h *Manager) bindFeishuStep(ctx context.Context, step string, values map[st
 		// Best-effort: with the credentials just verified, set the scopes, events and the long-connection mode
 		// and submit the publish, so the console's manual steps are done (docs/extensions/bots.md). Its outcome
 		// is a sentence on the next step, never a failure of the bind.
-		rep := feishubot.New(id, secret, domain).AutoConfigure(ctx)
-		if rep.Detail != "" {
-			h.logf("bots: auto-configure: %s", rep.Detail)
+		if err := h.configureBotForPairing(ctx, receipt); err != nil {
+			return credentials(i18n.Localize(err, l)), nil
 		}
-		configNote = feishuConfigureNote(l, rep, domain, id)
 		step = ""
 	}
 	v := h.botView(ctx)
@@ -550,18 +549,26 @@ func (h *Manager) bindFeishuStep(ctx context.Context, step string, values map[st
 	p := b.set.Pairing
 	issued := false
 	if p == nil || !b.clock().Before(p.Expires) || step == "" && values != nil {
+		previous := p
 		p = &botPairing{Code: botPairCode(), Expires: b.clock().Add(botPairFor)}
 		b.set.Pairing = p
-		h.saveBotSettingsLocked()
+		if err := h.saveBotSettingsLocked(); err != nil {
+			b.set.Pairing = previous
+			b.mu.Unlock()
+			return connector.Prompt{}, errBotSettingsSave
+		}
 		issued = true
 	}
 	code := p.Code
+	if c := b.set.Configure; c != nil {
+		configNote = feishuConfigureNote(l, feishubot.ConfigureReport{Issue: c.Issue, Configured: c.Configured}, b.set.Domain, b.set.AppID)
+	}
 	b.mu.Unlock()
 	if issued {
 		h.auditBot(ctx, botRecord{action: auditBotPairCode})
 	}
 	hint := i18n.T(l, "hub-channels.pair_hint")
-	if configNote != "" { // what the auto-configure just did, if anything
+	if configNote != "" { // the saved automatic-configuration outcome for this app
 		hint = configNote + " " + hint
 	}
 	return connector.Prompt{Step: "pair", Kind: PromptPairCode, UserCode: code, Interval: 3, Hint: hint}, nil
