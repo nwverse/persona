@@ -58,7 +58,9 @@ func NormalizeLinkRole(role string) (string, Problem) { return repositorywire.No
 func LinkKey(identity Identity, link TaskLink) string { return repositorywire.LinkKey(identity, link) }
 func DefaultAlias(identity Identity) string           { return repositorywire.DefaultAlias(identity) }
 
-func PreserveLinkTitles(current, next []TaskLink)          { repositorywire.PreserveLinkTitles(current, next) }
+func PreserveLinkTitles(current, next []TaskLink, input []LinkInput) {
+	repositorywire.PreserveLinkTitles(current, next, input)
+}
 func ParseTaskLink(raw string) (Identity, TaskLink, error) { return repositorywire.ParseTaskLink(raw) }
 func ParseTaskLinkInput(in LinkInput) (Identity, TaskLink, error) {
 	return repositorywire.ParseTaskLinkInput(in)

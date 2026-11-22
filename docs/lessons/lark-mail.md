@@ -2,6 +2,14 @@
 
 Pitfalls, odd behavior and the trade-offs made at the time (originally in `CLAUDE.md`; index in `docs/lessons/README.md`). Put new lessons in the matching section; if none fits, start a new one.
 
+## Bot HTTP rejections with JSON bodies
+
+A gateway can reject a bot request with valid JSON that omits Feishu's `code`, or even contains `code: 0` (#12643).
+An integer's zero value is not evidence of HTTP success. After existing transient-status and business-code handling,
+reject remaining non-2xx responses before decoding output or returning nil for an operation without output. Report
+the operation and HTTP status without copying gateway details into the error; test through a real client and a local
+fake gateway after a successful token exchange, including idempotency-aware retries and normal 2xx controls.
+
 ## Lark system events are not new conversation requests
 
 A new message ID and timestamp do not establish new human activity (#9789). Consume system events and unidentified senders without creating or updating Inbox things, including the direct-chat sweep and history promotion path. Keep real attachments and independently authored bot notifications. When fetching conversation history for triage, retain timestamps and distinguish the incoming batch from background: an empty system event otherwise disappears from flattened context and makes an old request look current. An already collected follow-up remains background; promoting an unindexed follow-up must not rewind Last when another group of the same chat is processed in the same round.
@@ -120,14 +128,8 @@ Review follow-up: the optional projection isn't a required field for a whole pag
 
 ## Lark Open Platform bots (`docs/extensions/bots.md`)
 
-- Keep the tenant-token cache mutex out of HTTP exchanges (#12681). Concurrent calls share a per-client
-  completion signal and select their own context cancellation while waiting. Check the in-flight exchange
-  before a locally valid cached token: the API may already have rejected that token, and spending a final
-  attempt on it loses the request. On wake, recheck the current exchange and cache under the mutex rather
-  than returning a saved token that another refresh may have superseded. A successful cache generation
-  satisfies waiting refresh requests; after failure, surviving callers fetch with their own contexts.
-  Gate both initial and forced token exchanges in loopback tests, including final attempts and delayed wakes.
-  This coordination preserves credential/domain isolation, retry budgets and unkeyed-write replay rules.
+- A settings setter must return a failed write before reporting success or recording an audit. Restore only its own previous field while holding the same settings lock; this preserves an unset default and other successful saves. A fake store must reject the intended write, since one settings request can make several separate commits (#12666).
+- Inbound rich-text `code_block.text` can itself be a Markdown document (#12667). When flattening it for the bot's model context, use a backtick wrapper longer than every run in the body; a fixed three-backtick wrapper lets a literal fence become a closing delimiter and can turn following post nodes into code. Verify synthetic events through the public event/content parsers and check the resulting Markdown AST, alongside exact ordinary-output and adjacent-media controls. This is separate from escaping or folding outbound answer cards.
 
 - With card JSON 2.0, **one unknown extra field rejects the whole card** (1.0 ignores it): 2.0 has no `action` module and no `note` (lay buttons out horizontally with `column_set` + `flex_mode: flow`,
   small text with `div` + `text_size: notation`), and button callbacks go in `behaviors`; a new card returned from a card callback must also be 2.0, otherwise you get 200830. Before writing, check every field against the 2.0 component docs.
@@ -135,6 +137,7 @@ Review follow-up: the optional projection isn't a required field for a whole pag
 - The docs for card link buttons only mention http(s) and AppLink; don't put a custom scheme (`persona://`) there, or the whole card may be rejected.
 - Long-connection events must be acknowledged within 3 seconds, or Lark redelivers the same event: do the processing in the background and de-duplicate by message_id.
 - A message sent to a chat that's busy queues behind the current turn: the end of that turn isn't its answer; find this message in the transcript and take the answer after it (`botRun.Probe`).
+- Redacting a health reminder means checking the whole outgoing card, including summary, header, fallback and button behaviors: a detail URL still identifies the private to-do when its visible title and notes are generic (#12694). Exercise the production reminder entry with a public example base and synthetic IDs, and keep ordinary navigation and reply-context controls. Gate reminder navigation with its existing privacy decision; shared URL and button helpers also serve explicitly requested navigation.
 
 - The Lark gateway's 201 receipt for a file send may contain only `fileKey/name/size`; `messageId` is optional, so don't report a sent file as failed because of it and invite a resend. In image JSON, the slashes in base64 may also all be escaped; the HTTP body limit must cover this legal encoding, while the actual image size is still limited to 7.5 MiB after decoding.
 - Unsent attachments are user data: put the private copies made after picking in Application Support, excluded from backup; not in tmp/uploads or tmp/lark-drafts, which clearing the cache deletes.
@@ -155,6 +158,24 @@ Review follow-up: the optional projection isn't a required field for a whole pag
 
 - Temporary picked copies in Application Support aren't cleaned up automatically by the system; after the process restarts, clean up old UUID directories first, then start new picks. Cleanup runs only once and shares a lock with picking, and must not delete copies the current process just created or the separate persistent media directory.
 - The timeout for streaming uploads includes the phone's upload time, so give the phone and the hub the same budget based on file size; the Lark gateway's pending / failed local messages must not become ordinary sent bubbles even after they're removed from the local outbox.
+
+## Feishu bot token refresh after transient retries
+
+Track the one forced tenant-token refresh separately from the request attempt index: a retryable 503 or 429 can precede
+an expired-token rejection. The refresh still consumes the existing attempt budget and must stop after one refresh;
+an expiry on the final attempt returns that expiry. A confirmed auth rejection permits replay of a UUID-less POST,
+while a transport/read failure or server error still stops it. Keep the original payload and UUID across keyed retries.
+
+## Feishu bot concurrent token refresh
+
+- Keep the tenant-token cache mutex out of HTTP exchanges (#12681). Concurrent calls share a per-client
+  completion signal and select their own context cancellation while waiting. Check the in-flight exchange
+  before a locally valid cached token: the API may already have rejected that token, and spending a final
+  attempt on it loses the request. On wake, recheck the current exchange and cache under the mutex rather
+  than returning a saved token that another refresh may have superseded. A successful cache generation
+  satisfies waiting refresh requests; after failure, surviving callers fetch with their own contexts.
+  Gate both initial and forced token exchanges in loopback tests, including final attempts and delayed wakes.
+  This coordination preserves credential/domain isolation, retry budgets and unkeyed-write replay rules.
 
 ## Message Tweaks and account settings
 

@@ -301,7 +301,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			if t.Permission == "" {
 				t.Permission = configuredMode
 			}
-		case fit.allowAll():
+		case fit.allowAllOver(t.Permission):
 			t.Permission = "bypassPermissions"
 		}
 	}

@@ -23,7 +23,7 @@ import (
 // declares, take the methods *db.DB serves of them, and look at the SQL those methods (and the db functions they
 // call) run.
 
-var createTableRE = regexp.MustCompile(`(?i)CREATE TABLE (?:IF NOT EXISTS )?([a-z_]+)`)
+var createTableRE = regexp.MustCompile(`(?i)CREATE TABLE (?:IF NOT EXISTS )?([a-z_][a-z0-9_]*)`)
 
 // setTables are the tables migrations/<part> makes.
 func setTables(t *testing.T, part string) []string {

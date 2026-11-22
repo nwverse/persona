@@ -302,6 +302,8 @@ var rpcFailureKeys = map[string]string{
 	"send_now_unsupported":  "rpc-errors.send_now_unsupported",
 	"send_now_unrecognized": "rpc-errors.send_now_unrecognized", // #2467
 	"send_now_in_doubt":     "rpc-errors.in_doubt",
+	// queued messages edited where no pane takes the keys: a Claude in its desktop app, a background one (#12789)
+	"queue_edit_unsupported": "rpc-errors.queue_edit_unsupported",
 	// a new agent's worktree (#6115)
 	"not_a_repository":  "rpc-errors.not_a_repository",
 	"not_our_worktree":  "rpc-errors.not_our_worktree",
@@ -334,6 +336,7 @@ var rpcFailureKeys = map[string]string{
 	// session.modes (node/modes.go, #1843)
 	proto.CodeModesOnComputer:     "rpc-errors.modes_on_computer",
 	proto.CodeModesNotRunning:     "rpc-errors.modes_not_running",
+	proto.CodeModesUnsupported:    "rpc-errors.modes_unsupported",
 	proto.CodeEffortChangePending: "rpc-errors.effort_change_pending",
 	// a message to a stopped agent: read-only, its terminal page's Resume brings it back (node stopped.go, #4754)
 	"agent_stopped":      "rpc-errors.agent_stopped",
