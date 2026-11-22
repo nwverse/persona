@@ -20,7 +20,9 @@ type NodeSession struct {
 	Model            string          `json:"model,omitempty"`
 	ModelFingerprint string          `json:"model_fingerprint,omitempty"`
 	ModelEffort      string          `json:"model_effort,omitempty"`
-	ConfigDir        string          `json:"config_dir,omitempty"` // the assistant's explicit Claude profile
+	Origin           string          `json:"origin,omitempty"`       // manager-recorded conversation source, for model-call authorization
+	OriginKnown      bool            `json:"origin_known,omitempty"` // explicit manager decision; false on pre-upgrade records
+	ConfigDir        string          `json:"config_dir,omitempty"`   // the assistant's explicit Claude profile
 	Pane             string          `json:"pane,omitempty"`
 	Launcher         string          `json:"launcher"`
 	Cwd              string          `json:"cwd"`
@@ -57,6 +59,10 @@ type NodeSession struct {
 	FollowsSetting bool `json:"follows_setting,omitempty"`
 	// An empty assistant start has not delivered its first message or runtime instructions.
 	AwaitingFirstMessage bool `json:"awaiting_first_message,omitempty"`
+	// EngineRuntime: the engine runtime (Paseo, Cindy) whose start wrote the record (node/session_state.go), kept with
+	// the model: after a node restart too, an extension's resume of such an Agent its computer no longer lists is
+	// checked against the record's directory (#10941).
+	EngineRuntime string `json:"engine_runtime,omitempty"`
 }
 
 func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSession) error {
@@ -93,7 +99,8 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 			'pending_switch', $20::jsonb, 'engine_history', $21::jsonb, 'pending_handoff', $22::jsonb,
 			'model_recovery', $23::jsonb, 'follows_setting', $24::boolean,
 			'stop_cause', $25::text, 'stop_cause_at', $26::bigint,
-			'awaiting_first_message', $27::boolean, 'idle_compaction', $28::jsonb), now() FROM saved
+			'awaiting_first_message', $27::boolean, 'idle_compaction', $28::jsonb, 'origin', $29::text,
+			'origin_known', $30::boolean, 'engine_runtime', $31::text), now() FROM saved
 		ON CONFLICT (key) DO UPDATE SET value = CASE
 			WHEN COALESCE((settings.value->>'stop_cause_at')::bigint, 0) > $26
 				OR (COALESCE((settings.value->>'stop_cause_at')::bigint, 0) = $26
@@ -103,7 +110,8 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 			ELSE EXCLUDED.value END, updated_at = now()`,
 		machine, id, s.Pane, s.Launcher, s.Cwd, s.StartedAt, tasks, s.Model, s.ModelFingerprint, s.ModelEffort, s.AppMode, s.AppEffort,
 		s.UltracodeProcess, unknownStart, s.CreationID, s.Incarnation, guest, s.GuestKind, s.ConfigDir, pendingSwitch, engineHistory, pendingHandoff,
-		modelRecovery, s.FollowsSetting, string(s.StopCause), s.StopCauseAt, s.AwaitingFirstMessage, jsonOrNil(s.IdleCompaction))
+		modelRecovery, s.FollowsSetting, string(s.StopCause), s.StopCauseAt, s.AwaitingFirstMessage, jsonOrNil(s.IdleCompaction), s.Origin, s.OriginKnown,
+		s.EngineRuntime)
 	return err
 }
 
@@ -122,6 +130,8 @@ type nodeModel struct {
 	Model            string `json:"model"`
 	ModelFingerprint string `json:"model_fingerprint"`
 	ModelEffort      string `json:"model_effort"`
+	Origin           string `json:"origin"`
+	OriginKnown      bool   `json:"origin_known"`
 	AppMode          string `json:"app_mode"`
 	AppEffort        string `json:"app_effort"`
 	ConfigDir        string `json:"config_dir"`
@@ -142,6 +152,9 @@ type nodeModel struct {
 
 	// Kept until the node confirms its first actual message was delivered.
 	AwaitingFirstMessage bool `json:"awaiting_first_message"`
+	// EngineRuntime: the engine runtime whose start wrote the record ("" for a terminal's, and for a row written before
+	// it was kept).
+	EngineRuntime string `json:"engine_runtime"`
 }
 
 // jsonOrNil is raw, or nil when it holds nothing (empty, or a JSON null).
@@ -168,6 +181,8 @@ func (d *DB) NodeSessions(ctx context.Context, machine string) (map[string]NodeS
 			return nil, err
 		}
 		s.Model, s.ModelFingerprint, s.ModelEffort, s.AppMode, s.AppEffort = m.Model, m.ModelFingerprint, m.ModelEffort, m.AppMode, m.AppEffort
+		s.Origin = m.Origin
+		s.OriginKnown = m.OriginKnown
 		s.Guest, s.GuestKind = m.Guest, m.GuestKind
 		s.ConfigDir = m.ConfigDir
 		s.UltracodeProcess, s.PendingSwitch, s.EngineHistory = jsonOrNil(m.UltracodeProcess), jsonOrNil(m.PendingSwitch), jsonOrNil(m.EngineHistory)
@@ -176,6 +191,7 @@ func (d *DB) NodeSessions(ctx context.Context, machine string) (map[string]NodeS
 		s.IdleCompaction = jsonOrNil(m.IdleCompaction)
 		s.FollowsSetting = m.FollowsSetting
 		s.AwaitingFirstMessage = m.AwaitingFirstMessage
+		s.EngineRuntime = m.EngineRuntime
 		s.StopCause, s.StopCauseAt = m.StopCause, m.StopCauseAt
 		if m.StartedAtUnknown {
 			s.StartedAt = time.Time{}

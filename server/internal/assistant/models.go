@@ -41,20 +41,25 @@ type modelRecord struct {
 
 // ModelProvider is one provider as Settings › Model configuration offers it: never its key.
 type ModelProvider struct {
-	ID           string                `json:"id"`
-	Name         string                `json:"name"`
-	Kind         string                `json:"kind"`
-	Agent        string                `json:"agent,omitempty"`
-	API          string                `json:"api,omitempty"`
-	ChatEffort   bool                  `json:"chat_effort,omitempty"`
-	Effort       string                `json:"effort,omitempty"`
-	Model        string                `json:"model,omitempty"`
-	Machines     []string              `json:"machines,omitempty"`
-	Hidden       bool                  `json:"hidden,omitempty"`
-	HasKey       bool                  `json:"has_key,omitempty"`
-	Models       []proto.ProviderModel `json:"models,omitempty"`
-	ModelAliases map[string]string     `json:"model_aliases,omitempty"`
-	Status       string                `json:"status,omitempty"`
+	ID              string                  `json:"id"`
+	Name            string                  `json:"name"`
+	Kind            string                  `json:"kind"`
+	Source          string                  `json:"source,omitempty"`
+	Agent           string                  `json:"agent,omitempty"`
+	API             string                  `json:"api,omitempty"`
+	ChatEffort      bool                    `json:"chat_effort,omitempty"`
+	Effort          string                  `json:"effort,omitempty"`
+	Model           string                  `json:"model,omitempty"`
+	Machines        []string                `json:"machines,omitempty"`
+	Hidden          bool                    `json:"hidden,omitempty"`
+	HasKey          bool                    `json:"has_key,omitempty"`
+	PermissionModes proto.PermissionModeSet `json:"permission_modes,omitempty"`
+	Models          []proto.ProviderModel   `json:"models,omitempty"`
+	ModelAliases    map[string]string       `json:"model_aliases,omitempty"`
+	Status          string                  `json:"status,omitempty"`
+	// Internal provenance for model.run compatibility checks (never serialized).
+	builtinCompanion bool
+	modelRunMachines []string
 }
 
 type ModelChoice = assistantwire.ModelChoice
@@ -119,11 +124,13 @@ var modelCategoryIDs = []string{"assistant", "agent.new", "kb", "inbox.triage", 
 // in the order of Agents' uses, then the background supervisor's (#5806), then the In-meeting conversation's and
 // Meeting minutes' (#7980), last so the rows the apps drew before each was listed keep their order; category-default
 // assignment and model profiles must not write them.
-var modelConfigIDs = append(slices.Clone(modelCategoryIDs), purposeAgent, purposeLarkAgent, purposeSupervise, purposeMeetingRoom, purposeMeetingMinutes)
+var modelConfigIDs = append(slices.Clone(modelCategoryIDs), purposeAgent, purposeLarkAgent, purposeSupervise, purposeMeetingRoom, purposeMeetingMinutes, purposeMain)
 
 // agentsOverride: a use of Agents the user may set apart, the AI twin (#4232) or Lark /agent. With nothing saved it
 // follows Agents; every other use follows its category only.
 func agentsOverride(id string) bool { return id == purposeAgent || id == purposeLarkAgent }
+
+const purposeMain = "assistant.main"
 
 // modelPurposes are the uses; Name, Group and Uses hold catalog names (assistant-models), read in a language by
 // localized.
@@ -148,7 +155,7 @@ var modelPurposes = []ModelPurpose{
 	{ID: "kb.moments", Group: "group_processing", Kind: "api", Parent: "kb"},
 	{ID: "kb.topics", Group: "group_processing", Kind: "api", Parent: "kb"}, // knowledge points by topic (kb/topics.go)
 	{ID: "assistant.title", Group: "group_processing", Kind: "api", Parent: "kb"},
-	{ID: "assistant.route", Group: "group_processing", Kind: "api", Parent: "kb"}, // New chat: a direction or a quick chat (route.go)
+	{ID: "assistant.route", Group: "group_processing", Kind: "api", Parent: "kb"}, // Suggest a supervisor for a new agent (agent_route.go).
 	{ID: "agent.title", Group: "group_processing", Kind: "api", Parent: "kb"},
 	{ID: "todo.title", Group: "group_processing", Kind: "api", Parent: "kb"}, // a task's todo (assistant/todo_titles.go)
 	// A meeting or note named while it records (kb/recording_title.go, #8873): a few short calls a recording.
@@ -171,6 +178,8 @@ var modelPurposes = []ModelPurpose{
 	// may be a cheaper or a stronger one. In the catalog the apps list (modelConfigIDs, #5806): each app that asked for
 	// it by its own id draws it once, and one from before draws the row with the name sent here.
 	{ID: purposeSupervise, Group: "group_assistant", Kind: "launcher", Parent: "assistant"},
+	// Main execution is independent of the defaults for new side conversations.
+	{ID: purposeMain, Group: "group_assistant", Kind: "launcher", Parent: "assistant"},
 	// The room conversation of a recorded meeting (meeting_room.go, #7980): the main chat's launcher, model and effort
 	// until it is given its own, Claude Code only and never a runtime (models_room.go).
 	{ID: purposeMeetingRoom, Group: "group_assistant", Kind: "launcher", Parent: "assistant"},
@@ -180,7 +189,7 @@ var modelPurposes = []ModelPurpose{
 // the opt-in overrides of Agents, a scheduled task's own use, the background supervisor's, the In-meeting
 // conversation's and Meeting minutes' (#7980). With nothing saved it follows its category.
 func ownModelRecord(id string) bool {
-	return agentsOverride(id) || isTaskPurpose(id) || id == purposeSupervise || id == purposeMeetingRoom || id == purposeMeetingMinutes
+	return agentsOverride(id) || isTaskPurpose(id) || id == purposeMain || id == purposeSupervise || id == purposeMeetingRoom || id == purposeMeetingMinutes
 }
 
 // mc is a assistant-models text in l.
@@ -273,6 +282,7 @@ type modelsState struct {
 	cacheMu  sync.Mutex
 	cacheAt  map[string]time.Time
 	have     map[string]map[string]bool   // machine \x00 launcher → its models (ids and what aliases resolve to)
+	declared map[string][]string          // machine \x00 launcher → every id the launcher declared (ids, resolved, aliases)
 	aliases  map[string]map[string]string // machine \x00 launcher → alias id → its resolved id
 	defaults map[string]string            // machine \x00 launcher → its default model's resolved or own id
 
@@ -385,7 +395,7 @@ func (s *Service) modelPurposeDef(ctx context.Context, id string) (ModelPurpose,
 				// A task's own conversation starts on the assistant's machine (schedule.go runTask), so its override
 				// is held to that machine's launchers. A conversation it came from keeps its own launcher and does not
 				// use this purpose.
-				machine := cmp.Or(s.settings(ctx).MachineID, t.MachineID)
+				machine := cmp.Or(t.ExecutionMachineID, s.settings(ctx).MachineID, t.MachineID)
 				return ModelPurpose{ID: id, CategoryID: "assistant", Name: t.Label, Group: mc(l, "group_assistant"), Kind: "launcher", Parent: "assistant", MachineID: machine}, nil
 			}
 		}
@@ -487,10 +497,10 @@ func (s *Service) modelProviders(ctx context.Context) []ModelProvider {
 				}
 			}
 		}
-		out = append(out, ModelProvider{ID: "launcher." + v.Name, Name: cmp.Or(v.DisplayName, v.Name), Kind: kind, Agent: agent, API: apiName, ChatEffort: kind == "api" && apiName == "chat", Effort: v.Effort, Model: v.Model, Machines: v.Machines, Hidden: v.Hidden, HasKey: v.HasKey, Models: v.Models, ModelAliases: aliases})
+		out = append(out, ModelProvider{ID: "launcher." + v.Name, Name: cmp.Or(v.DisplayName, v.Name), Kind: kind, Source: v.Source, Agent: agent, API: apiName, ChatEffort: kind == "api" && apiName == "chat", Effort: v.Effort, Model: v.Model, Machines: v.Machines, Hidden: v.Hidden, HasKey: v.HasKey, PermissionModes: v.PermissionModes, Models: v.Models, ModelAliases: aliases, builtinCompanion: v.builtinCompanion, modelRunMachines: v.modelRunMachines})
 	}
 	if !slices.ContainsFunc(out, func(p ModelProvider) bool { return p.ID == "launcher.claude" }) {
-		p := ModelProvider{ID: "launcher.claude", Name: mc(l, "provider_claude_default"), Kind: "launcher", Agent: "claude"}
+		p := ModelProvider{ID: "launcher.claude", Name: mc(l, "provider_claude_default"), Kind: "launcher", Source: "builtin", Agent: "claude"}
 		if b, ok := s.builtinClaude(ctx, s.zshrcLaunchers(ctx, false)); ok {
 			p.Machines = b.Machines // where plain claude is: Settings › Model Providers lists it by machine
 		}

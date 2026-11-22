@@ -70,7 +70,8 @@ and the tags collapse into one line next to the bubble, "Context · N items", fo
   After the first reply, a turn that ends without calling the tool sends nothing (whether and what to send is the Agent's call). The prompt asks it to send only meaningful progress and results.
 - **Dispatched tasks**: the extension opens the chat with `report_tasks: true`. Tasks this chat dispatches with `task_plan` / `agent_start` behave like the main chat's
   "quiet tasks" (`docs/assistant/unified-entry.md`): no separate pushes; finished, waiting for the user, interrupted, failed to start are all delivered as task notices (`Reporting` in `prompts/assistant/task_notice.md`)
-  into this /agent chat (queued after the current turn if it is busy); it then sends the result to the topic with `lark_agent_reply`.
+  into this /agent chat (queued after the current turn if it is busy); it then sends the result to the topic with `lark_agent_reply`. With `assistant.agent_tasks` on, an Agent's
+  `report_to_supervisor` also returns through this chat's notice path, without adding a supervision ledger or changing these task notices.
   The registration lives in `assistant.task_reporters` in the settings table (14 days) and survives hub restarts.
 - **Stopping (#3308)**: sending `/stop` (also `/停止`, `/停`, optionally preceded by an @mention) in the request's topic, or quoting the request (or its reply), stops that request,
   even right after it was sent while the context is still being read. Only my own messages count (as with `/agent`, the request can only be mine, so the requester is me); others' are ignored, with no "not allowed" reply (replying that to a colleague in my name would be odd).
@@ -110,6 +111,16 @@ assistant ("turn on /agent in Lark"), which changes them through `persona_settin
 Once the extension that connects Lark through the Lark gateway is enabled, /agent is handled by the extension: the hub's own live events and /agent stop, and `lark_agent_reply` gives way to the extension's connector tool of the same name (with one extra parameter `request`: the request's message / comment id).
 The extension uses the hub's public API: `POST /api/v1/assistant/conversations` with `purpose: "lark.agent"` and the configured machine (`machine_id`) to open a chat, `POST /api/v1/sessions/{m}/{s}/messages` to continue the same topic,
 and `GET /api/v1/kb/chats/{id}/context` to get what the knowledge base knows about this conversation / project. Configuration lives in the extension (`agent`, `agent_launcher`, `agent_machine`); `lark_agent` in hub.json no longer takes effect.
+
+## Optional main-chat answers (#11130)
+
+The host offers an opt-in `mention` channel contract for the extension to adopt; this host change does not rewrite the extension's current per-request chats. With the channel's explicit `target: {kind: "main"}`, an owner's `/agent` request uses the unified `channel.receive` pipeline and the owner's main chat instead. Without that target, today's new chat per request or topic remains the default.
+
+The extension supplies `chat`, `topic`, the quoted message and gathered `context` with each request. They enter the main turn as escaped context, and the unified run reads the answer from that turn and returns it through the extension's existing `channel.send` reply path with the original request in `reply_to`. A busy main chat queues the request normally; `channel.receive` acknowledges accepted work before the model turn, while the extension remains responsible for the OnIt → DONE reactions.
+
+A mention turn is public even though it runs in main. Its localized prompt says not to reveal private context from other chats, sessions, mail or health unless the owner's request explicitly asks for the specific information, and the per-turn internal `public` marker suppresses the owner's live snapshot for that input only. It does not change the main conversation's origin or any later private turn.
+
+The main-chat receive path requires `owner: true`; a false or missing attestation is refused. Every non-owner request keeps using a separate guest conversation and never enters the owner's main chat. Proactive push/sync copies and approval fan-out are not enabled for mention channels by this contract.
 
 ## Not done yet
 

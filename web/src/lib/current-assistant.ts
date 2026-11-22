@@ -5,7 +5,7 @@
 import { useMemo } from "react";
 import { useChosenManager, useShownManager } from "./manager-choice";
 import { installedManagers, managerOf, multiManager, ownerIn, useRoster, type Manager, type ManagerList } from "./managers";
-import { stateCounts, useAgentListStatus, useAgentSessions, useCounts, useFullAgentSessions, type AgentList } from "./sessions";
+import { directoryVisibleCards, stateCounts, useAgentListStatus, useAgentSessions, useCounts, useFullAgentSessions, type AgentList } from "./sessions";
 import { useStore } from "./store";
 import type { Session } from "./types";
 
@@ -71,7 +71,7 @@ export function useScopedTodos() {
 
 /** The current assistant's pending cards. */
 export function useScopedInteractions() {
-  return useScoped(useStore((s) => s.interactions));
+  return useScoped(useStore((s) => directoryVisibleCards(s.interactions)));
 }
 
 /** The agents the pages list: the current assistant's with several (from the complete list: the hub's first page
@@ -88,10 +88,12 @@ export function useScopedCounts(): ReturnType<typeof useCounts> {
   const scope = useScope();
   const whole = useCounts();
   const { sessions } = useFullAgentSessions(scope.several);
+  const allInteractions = useStore((s) => s.interactions);
+  const grading = useStore((s) => s.pushGrading);
   const interactions = useScopedInteractions().length;
   return useMemo(
-    () => (scope.several ? { ...stateCounts(scoped(sessions, scope)), interactions, quietCounted: false } : whole),
-    [scope, sessions, interactions, whole],
+    () => (scope.several ? { ...stateCounts(scoped(sessions, scope), allInteractions, grading), interactions, quietCounted: false } : whole),
+    [scope, sessions, allInteractions, grading, interactions, whole],
   );
 }
 

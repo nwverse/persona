@@ -202,6 +202,8 @@ internal fun ChatLine.contentType(): String = when (this) {
     is ChatLine.Viewed -> "viewed"
     is ChatLine.Extra -> "extra"
     is ChatLine.ModelChange -> "model_change"
+    is ChatLine.EngineChanged -> "engine_change"
+    is ChatLine.ModeChange -> "mode_change"
 }
 
 internal fun interactionSource(res: android.content.res.Resources, interaction: Interaction, machine: Machine?): String = listOfNotNull(

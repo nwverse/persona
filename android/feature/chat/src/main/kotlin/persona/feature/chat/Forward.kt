@@ -37,6 +37,10 @@ object ForwardMessage {
     const val KIND = ChatLinkContext.FORWARD
     /** The most of the original a forward carries; a longer one is cut with a line saying so. */
     const val LIMIT = 20_000
+    const val MOST = 30
+    private const val TOTAL = 60_000
+
+    fun limit(count: Int): Int = minOf(LIMIT, TOTAL / count.coerceAtLeast(1))
 
     /** Whose message it was: the user's own, Persona's, an Agent's, or another source's (a relay, another session's Claude). */
     enum class Role(val wire: String) { User("user"), Persona("persona"), Agent("agent"), Other("other") }
@@ -59,7 +63,7 @@ object ForwardMessage {
     )
 
     /** The block for a message whose text, as the transcript has it, is [raw]. */
-    fun ref(raw: String, source: Source, resources: Resources, zone: ZoneId = ZoneId.systemDefault()): ChatLinkContext {
+    fun ref(raw: String, source: Source, resources: Resources, zone: ZoneId = ZoneId.systemDefault(), limit: Int = LIMIT): ChatLinkContext {
         val extra = linkedMapOf(
             "role" to source.role.wire,
             // The user's own message is "Me" in the sender's language, as iOS and the web write it.
@@ -70,16 +74,24 @@ object ForwardMessage {
         source.machine?.takeIf { it.isNotEmpty() }?.let { extra["machine"] = it }
         source.time?.let { extra["time"] = time(it, zone) }
         return ChatLinkContext(KIND, heading(extra, resources), url(source.key, source.item),
-            body(raw, source.machine, source.role == Role.User, resources), msg = source.item, extra = extra)
+            body(raw, source.machine, source.role == Role.User, resources, limit), msg = source.item, extra = extra)
     }
 
     /** The block a message's text holds, read back (the new-agent form's card); null when it holds no forward. */
     fun read(text: String): ChatLinkContext? = ChatLinkContext.parse(text).first.firstOrNull { it.isForward }
 
-    /** The block a message's text holds and what was typed after it (a pending start's first message, restored). */
+    /** All forwarded messages in wire order. */
+    fun readAll(text: String): List<ChatLinkContext> = ChatLinkContext.parse(text).first.filter(ChatLinkContext::isForward)
+
     fun split(text: String): Pair<ChatLinkContext?, String> {
-        val forward = read(text) ?: return null to text
-        return forward to ChatLinkContext.withoutForwards(text)
+        val (all, note) = splitAll(text)
+        return all.firstOrNull() to note
+    }
+
+    /** Restore every forwarded block plus the original note and any other contexts on a pending start. */
+    fun splitAll(text: String): Pair<List<ChatLinkContext>, String> {
+        val forwards = readAll(text)
+        return forwards to if (forwards.isEmpty()) text else ChatLinkContext.withoutForwards(text)
     }
 
     private val quoteKinds = setOf(ChatLinkContext.QUOTE, "context", "edit", KIND)
@@ -89,7 +101,7 @@ object ForwardMessage {
      * tags; the quotes and forwards it opened with as `> ` lines led by their heading; files sent with it by name; cut at
      * [LIMIT] characters.
      */
-    fun body(raw: String, machine: String?, user: Boolean, resources: Resources): String {
+    fun body(raw: String, machine: String?, user: Boolean, resources: Resources, limit: Int = LIMIT): String {
         val model = messageModel(raw, user = user)
         val parts = mutableListOf<String>()
         for (c in model.contexts) {
@@ -100,8 +112,8 @@ object ForwardMessage {
         for (f in model.attached) parts += machine?.takeIf { it.isNotEmpty() }
             ?.let { resources.getString(R.string.chat_forward_file_on, it, f.name) } ?: resources.getString(R.string.chat_forward_file, f.name)
         val text = parts.joinToString("\n\n")
-        if (text.codePointCount(0, text.length) <= LIMIT) return text
-        return text.substring(0, text.offsetByCodePoints(0, LIMIT)) + "\n\n" + resources.getString(R.string.chat_forward_cut)
+        if (text.codePointCount(0, text.length) <= limit) return text
+        return text.substring(0, text.offsetByCodePoints(0, limit)) + "\n\n" + resources.getString(R.string.chat_forward_cut)
     }
 
     /** What a quote or forward block a message opened with says about itself, as its `> ` lines are led by. */
@@ -133,6 +145,7 @@ object ForwardMessage {
 
     /** The chat and message a forward's link names, as its hub calls them ([msg] when the link has no item). */
     data class Origin(val machine: String, val session: String, val item: String?) {
+        fun sameChat(other: Origin?): Boolean = machine == other?.machine && session == other.session
         /** The chat as this app lists it, for a forward read in a chat of the group of [near]. */
         fun key(near: SessionKey): SessionKey = SessionKey(GroupKeys.machine(machine, GroupKeys.namespaceOf(near.machineId)), session)
     }
@@ -357,32 +370,71 @@ class ChatForwarding(
 /** Supplied by the app shell; null: messages offer no Forward. */
 val LocalChatForwarding = staticCompositionLocalOf<ChatForwarding?> { null }
 
+/** A forward and the photos read from its source message, waiting for their target's composer. */
+data class ForwardPlacement(val ref: ChatLinkContext, val photos: RestoredPhotos = RestoredPhotos())
+
 /**
  * Forwards waiting for their target's composer (iOS `composerContexts`): put here as the target opens, taken by that chat's
  * page once it is on screen (already composed or not), and by Persona's new conversation ([home]). In memory only.
  */
 object ForwardPlacements {
-    private val pending = mutableStateMapOf<SessionKey, List<ChatLinkContext>>()
+    private val pending = mutableStateMapOf<SessionKey, List<ForwardPlacement>>()
 
     /** The forwards over Persona's new-conversation composer, removed there by ✕ and once sent. */
-    var home by mutableStateOf<List<ChatLinkContext>>(emptyList())
+    private val homeState = mutableStateOf<List<ChatLinkContext>>(emptyList())
+    var home: List<ChatLinkContext>
+        get() = homeState.value
+        set(value) {
+            homeState.value.filter { old -> value.none { it.id == old.id } }.forEach { homePhotos.remove(it.id) }
+            homeState.value = value
+        }
+    private val homePhotos = mutableStateMapOf<String, RestoredPhotos>()
+    private val newAgentPhotos = mutableStateMapOf<String, List<ForwardPlacement>>()
 
-    fun place(key: SessionKey, ref: ChatLinkContext) { pending[key] = withQuote(pending[key].orEmpty(), ref) }
+    /** False when this message already waits for the target; its new photo handoff belongs to the caller to discard. */
+    fun place(key: SessionKey, ref: ChatLinkContext, photos: RestoredPhotos = RestoredPhotos()): Boolean {
+        val current = pending[key].orEmpty()
+        if (withQuote(current.map(ForwardPlacement::ref), ref).size == current.size) return false
+        pending[key] = current + ForwardPlacement(ref, photos)
+        return true
+    }
 
-    fun placeHome(ref: ChatLinkContext) { home = withQuote(home, ref) }
+    fun placeHome(ref: ChatLinkContext, photos: RestoredPhotos = RestoredPhotos()): Boolean {
+        if (withQuote(home, ref).size == home.size) return false
+        home = home + ref
+        homePhotos[ref.id] = photos
+        return true
+    }
 
     /** What waits for [key] (read in composition, so the page sees a new one at once). */
-    fun waiting(key: SessionKey): List<ChatLinkContext>? = pending[key]
+    fun waiting(key: SessionKey): List<ForwardPlacement>? = pending[key]
 
-    fun take(key: SessionKey): List<ChatLinkContext> = pending.remove(key).orEmpty()
+    fun take(key: SessionKey): List<ForwardPlacement> = pending.remove(key).orEmpty()
+
+    /** Photo handoffs for the home composer, retained while their forward is over it. */
+    fun homePhotoHandoffs(): Map<String, RestoredPhotos> = homePhotos.toMap()
+
+    /** Records source loss and target-cap rejection once; accepted photos stay available if the composer is replaced. */
+    fun finishHomePhotoHandoffs(rejected: Set<String>) {
+        homePhotos.replaceAll { _, handoff ->
+            handoff.copy(attachments = handoff.attachments.filterNot { it.id in rejected }, lost = 0)
+        }
+    }
+
+    /** The route carries text; keep each staged photo with the source message that owns it. */
+    fun placeNewAgent(context: String, messages: List<ForwardPlacement>): List<ForwardPlacement> =
+        newAgentPhotos.put(context, messages.filter { it.photos.attachments.isNotEmpty() || it.photos.lost > 0 }).orEmpty()
+
+    fun takeNewAgent(context: String?): List<ForwardPlacement> = context?.let(newAgentPhotos::remove).orEmpty()
 }
 
-/** A pressed message on its way to Forward to: where it is and who wrote it, its text as the chat holds it, and its cut item. */
+/** A pressed message on its way to Forward to: where it is and who wrote it, its text and photos, and its cut item. */
 internal data class ForwardDraft(
     val source: ForwardMessage.Source,
     val raw: String,
     /** The item the hub cut for the page (`full_size`): its whole text is read when it goes. */
     val cut: String? = null,
+    val photos: List<String> = emptyList(),
 )
 
 /**
@@ -390,31 +442,30 @@ internal data class ForwardDraft(
  * where it comes from and goes; Persona with no main conversation yet, the new conversation's composer; a new Agent, the
  * new-agent form. [from] is the chat it was pressed in.
  */
-internal fun deliverForward(target: ForwardTarget, ref: ChatLinkContext, from: SessionKey, forwarding: ChatForwarding, resources: Resources) {
-    val source = ref.extra["machine"]
-    when (target) {
-        ForwardTarget.NewAgent -> forwarding.openNewAgent(ref.xml())
-        ForwardTarget.Persona -> {
-            val routed = ref.copy(route = ForwardMessage.route(source, null, resources))
-            val main = forwarding.assistant.value.mainSession?.takeIf { forwarding.personaGroupOf(from) }
-            if (main != null) {
-                ForwardPlacements.place(main, routed)
-                forwarding.openChat(main, true)
-            } else {
-                ForwardPlacements.placeHome(routed)
-                forwarding.openPersonaHome()
-            }
-        }
-        is ForwardTarget.Chat -> {
-            val key = target.key
-            val persona = forwarding.assistant.value.conversations.any { it.key == key }
-            val session = forwarding.agents.value.firstOrNull { it.key == key }
-            val to = if (persona || session?.assistant == true) null else ForwardMessage.RouteTarget(session?.agentLabel ?: "Claude",
-                forwarding.machines.value.firstOrNull { it.id == key.machineId }?.displayName)
-            ForwardPlacements.place(key, ref.copy(route = ForwardMessage.route(source, to, resources)))
-            forwarding.openChat(key, to == null)
-        }
+internal fun deliverForward(target: ForwardTarget, messages: List<ForwardPlacement>, from: SessionKey, forwarding: ChatForwarding,
+    resources: Resources, onDuplicate: (RestoredPhotos) -> Unit = {}) {
+    if (messages.isEmpty()) return
+    if (target == ForwardTarget.NewAgent) {
+        val context = messages.joinToString("\n") { it.ref.xml() }
+        ForwardPlacements.placeNewAgent(context, messages).forEach { onDuplicate(it.photos) }
+        forwarding.openNewAgent(context)
+        return
     }
+    val key = when (target) {
+        is ForwardTarget.Chat -> target.key
+        else -> forwarding.assistant.value.mainSession?.takeIf { forwarding.personaGroupOf(from) }
+    }
+    val session = forwarding.agents.value.firstOrNull { it.key == key }
+    val persona = target == ForwardTarget.Persona || session?.assistant == true ||
+        forwarding.assistant.value.conversations.any { it.key == key }
+    val to = if (persona) null else ForwardMessage.RouteTarget(session?.agentLabel ?: "Claude",
+        forwarding.machines.value.firstOrNull { it.id == key?.machineId }?.displayName)
+    for ((ref, photos) in messages) {
+        val routed = ref.copy(route = ForwardMessage.route(ref.extra["machine"], to, resources))
+        val added = if (key == null) ForwardPlacements.placeHome(routed, photos) else ForwardPlacements.place(key, routed, photos)
+        if (!added) onDuplicate(photos)
+    }
+    if (key == null) forwarding.openPersonaHome() else forwarding.openChat(key, persona)
 }
 
 /**
@@ -436,5 +487,6 @@ internal fun forwardDraftOf(target: MessageTarget, key: SessionKey, session: Ses
     val source = ForwardMessage.Source(key, target.id, role, author, chat,
         project = if (persona) null else session?.forwardProject, machine = if (persona) null else machine?.displayName,
         time = parseTime(target.time))
-    return ForwardDraft(source, target.raw, target.cut)
+    return ForwardDraft(source, target.raw, target.cut,
+        photos = if (role == ForwardMessage.Role.User) messageModel(target.raw, user = true).images.take(MAX_COMPOSER_MEDIA) else emptyList())
 }

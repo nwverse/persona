@@ -110,6 +110,24 @@ func (s *Service) assistantAccepts(ctx context.Context, t Todo, a acceptAsk) {
 // NoCard), for retryAcceptance.
 func (s *Service) postAsk(ctx context.Context, t Todo, a acceptAsk) bool {
 	b := &s.accept
+	if !a.ForBriefing && (a.Conclusion || t.Supervision.state(t) == reviewUserCheck) {
+		// Keep the complete ask and its key before a provider call so a restart can retry the same card (#10393).
+		b.mu.Lock()
+		if c := b.asks[t.ID]; c != nil && c.AskedAt.IsZero() {
+			a.Earlier = c.Earlier
+			prepared := a
+			c.prepared = &prepared
+		}
+		err := s.saveAcceptErrLocked(ctx)
+		if err != nil {
+			b.asks[t.ID] = &a // release the claim for a later sweep; it must save before sending too
+		}
+		b.mu.Unlock()
+		if err != nil {
+			s.logf("task %s: acceptance: save before send: %v (tried again on the next tick)", t.ID, err)
+			return false
+		}
+	}
 	var st FeishuStatus
 	var stErr error
 	if !a.ForBriefing {
@@ -215,15 +233,23 @@ func (s *Service) acceptCard(ctx context.Context, t Todo, a acceptAsk, again boo
 	if again {
 		head = "assistant-reports.accept_again"
 	}
-	title := i18n.T(l, head, i18n.Args{"task": clip(oneLine(t.Title), 30)})
-	c := feishubot.NewCard("🧪 "+title, feishubot.Purple, title)
+	title := s.feishuDirection(ctx, t, s.feishuDirections(ctx)) + i18n.T(l, head, i18n.Args{"task": clip(oneLine(t.Title), 30)})
+	color := feishubot.Orange // the owner is to check it
+	if !a.AcceptedAt.IsZero() {
+		color = feishubot.Grey
+	}
+	c := feishubot.NewCard(title, color, title).Tag(i18n.T(l, "assistant-reports.tag_accept"), feishubot.Neutral)
 	link := i18n.T(l, "assistant-reports.accept_no_link")
 	if a.Link != "" {
 		link = "[" + feishubot.EscapeMarkdown(clip(a.Link, 80)) + "](" + a.Link + ")"
 	}
 	c.Markdown("**" + feishubot.EscapeMarkdown(verdictText(l, &a)) + "**")
+	how := a.How
+	if how == "" {
+		how = i18n.T(l, "assistant-reports.accept_how_default")
+	}
 	c.Markdown(i18n.T(l, "assistant-reports.accept_lines", i18n.Args{"changed": feishubot.EscapeMarkdown(a.Changed), "link": link,
-		"how": feishubot.EscapeMarkdown(a.How)}))
+		"how": feishubot.EscapeMarkdown(how)}))
 	if !a.AcceptedAt.IsZero() {
 		return c.Note(acceptedNote(l, &a))
 	}

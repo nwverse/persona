@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import argparse
+import ast
 import fnmatch
+from functools import cached_property
 import json
 import os
 from pathlib import Path
@@ -219,6 +221,58 @@ def _setup_reach(root):
     return reach
 
 
+class _WebIndex:
+    """What web_plan derives from the scan of web/ (the inputs, the Vite configs' sources, the vitest setup's reach,
+    each file's reads), worked out once and kept for every plan made with it (web_plans)."""
+
+    def __init__(self, root):
+        self.root = Path(root)
+        self._reads = {}
+
+    @cached_property
+    def inputs(self):
+        return web_inputs(self.root)
+
+    @cached_property
+    def config(self):
+        return _config_sources(self.root)
+
+    @cached_property
+    def setup(self):
+        return _setup_reach(self.root)
+
+    def reads(self, file):
+        if file.path not in self._reads:
+            self._reads[file.path] = _read_patterns(self.root, file)
+        return self._reads[file.path]
+
+    def plan(self, changed):
+        web = [path for path in changed if path.startswith("web/")]
+        outside = [path for path in changed if not path.startswith("web/")
+                   and any(fnmatch.fnmatchcase(path, pattern) for pattern in self.inputs)]
+        if not web and not outside:
+            return "none", "no change under web/ or in a file web/src and its tests read", []
+        for path in web:
+            if not path.startswith("web/src/"):
+                return "full", f"{path} is outside web/src", []
+            if any(fnmatch.fnmatchcase(path, pattern) for pattern in WEB_FULL_SUITE):
+                return "full", f"{path} is a shared entry point", []
+            if posixpath.splitext(path)[0] in self.config:
+                return "full", f"{path} is part of the Vite config", []
+        for path in web + outside:
+            if any(fnmatch.fnmatchcase(path, pattern) for pattern in self.setup):
+                return "full", f"{path} is part of the vitest setup", []
+        readers = []
+        for file in web_scan(self.root):
+            always = file.fs or file.build or (file.test and file.vite)
+            if always or (file.vite and any(fnmatch.fnmatchcase(path, pattern)
+                                            for pattern in self.reads(file) for path in changed)):
+                readers.append(file.path)
+        files = list(dict.fromkeys(web + outside + sorted(readers)))
+        reason = f"{len(web) + len(outside)} changed file(s) and {len(readers)} that read files from disk"
+        return "related", reason, [posixpath.relpath(path, "web") for path in files]
+
+
 def web_plan(changed, root=ROOT):
     """check-fast's web check for a list of changed repository paths (#10619): (mode, reason, files).
 
@@ -229,56 +283,50 @@ def web_plan(changed, root=ROOT):
     they read), every other web/src module that reads through fs or builds, and each one that reads through Vite a
     path a changed file matches.
     """
-    root = Path(root)
-    inputs = web_inputs(root)
-    web = [path for path in changed if path.startswith("web/")]
-    outside = [path for path in changed if not path.startswith("web/")
-               and any(fnmatch.fnmatchcase(path, pattern) for pattern in inputs)]
-    if not web and not outside:
-        return "none", "no change under web/ or in a file web/src and its tests read", []
-    config = _config_sources(root)
-    for path in web:
-        if not path.startswith("web/src/"):
-            return "full", f"{path} is outside web/src", []
-        if any(fnmatch.fnmatchcase(path, pattern) for pattern in WEB_FULL_SUITE):
-            return "full", f"{path} is a shared entry point", []
-        if posixpath.splitext(path)[0] in config:
-            return "full", f"{path} is part of the Vite config", []
-    setup = _setup_reach(root)
-    for path in web + outside:
-        if any(fnmatch.fnmatchcase(path, pattern) for pattern in setup):
-            return "full", f"{path} is part of the vitest setup", []
-    readers = []
-    for file in web_scan(root):
-        always = file.fs or file.build or (file.test and file.vite)
-        if always or (file.vite and any(fnmatch.fnmatchcase(path, pattern)
-                                        for pattern in _read_patterns(root, file) for path in changed)):
-            readers.append(file.path)
-    files = list(dict.fromkeys(web + outside + sorted(readers)))
-    reason = f"{len(web) + len(outside)} changed file(s) and {len(readers)} that read files from disk"
-    return "related", reason, [posixpath.relpath(path, "web") for path in files]
+    return _WebIndex(root).plan(changed)
+
+
+def web_plans(paths, root=ROOT):
+    """web_plan of each path on its own, from one scan (check-fast --each, #11026)."""
+    index = _WebIndex(root)
+    return [index.plan([path]) for path in paths]
 
 
 # Go compatibility tests read these client contracts and interaction entry points,
-# not unrelated Mac/Android screens or their build toolchains.
+# not unrelated Mac/Android screens or their build toolchains. internal/proto reads the wire package's JSONValue.swift
+# (#11026: check-fast runs it for that file, so CI's server lane does too).
 SERVER_CLIENT_INPUTS = [
     "apple/Shared/**", "apple/Persona/Views/Interactions/**", "apple/Persona/App/**",
     "apple/Persona/Intents/**", "apple/PersonaWatch/**", "apple/PersonaWidgets/**",
-    "apple/LiveActivity/**", "apple/PersonaTests/**", "android/core/contracts/**",
+    "apple/LiveActivity/**", "apple/PersonaTests/**", "apple/Packages/PersonaWire/**", "android/core/contracts/**",
 ]
 
+def mock_domain_inputs(root=ROOT):
+    # Parse the registry's literal inventory, not its executable route setup, and only when desktop selection is
+    # requested: minimal Web fixture repositories need not carry the mock hub.
+    registry = ast.parse((Path(root) / "scripts/mock/mock_domains.py").read_text())
+    names = next(ast.literal_eval(node.value) for node in registry.body if isinstance(node, ast.Assign)
+                 and [getattr(target, "id", None) for target in node.targets] == ["DOMAINS"])
+    return [f"scripts/mock/{name}.py" for name in names]
+
+
+# CI's lanes. check-fast's own per-path table, for the checks it runs beyond the web plan above, is beside this file in
+# scripts/ci/check_fast_map.py (#11535): a module of its own, because importing this one scans web/ and check-fast asks
+# the table on every run.
 FILTERS = {
     "server": ["server/**", "sdk/go/**", "sdk/ts/src/**", "schema/**", "spec/**", "integrations/**", "docs/assistant/prompts.md", "docs/protocol/**", "scripts/test/server_test_env.py", "scripts/test/go_trimpath.sh", "scripts/ci/*server*", "scripts/ci/postgres.py", "scripts/ci/gofmt.py", ".github/workflows/server-test.yml"] + SERVER_CLIENT_INPUTS,
     # The files outside web/ that web/src and its tests read are derived, never listed (web_inputs).
     "web": ["web/**", *web_inputs(), "scripts/ci/web.sh", ".github/workflows/web-test.yml"],
     "android": ["android/**", "native/app-core/**", "schema/**", "spec/**", "scripts/app/*android*", "scripts/ci/*android*", ".github/workflows/android-test.yml"],
     "apple": ["apple/**", "native/app-core/**", "schema/**", "spec/**", "scripts/app/sim-boot.sh", "scripts/i18n/**", "scripts/ci/apple*", "scripts/test/isolation-lint*", "scripts/test/isolation-lint/**", "scripts/test/apple_isolation_baseline.json", "scripts/test/test_apple_no_callkit.py", "scripts/release/check_no_callkit.py", ".github/workflows/apple-test.yml"],
-    "core": ["native/app-core/**", "spec/fixtures/continuity/**", "android/core/rustcore/src/main/kotlin/**", "apple/Packages/PersonaCore/**", "harmony/entry/src/main/ets/core/rustcore/**", "harmony/entry/src/main/ets/core/PersonaCore.ts",
+    "core": ["native/app-core/**", "spec/fixtures/continuity/**", "spec/fixtures/sync-driver/**", "android/core/rustcore/src/main/kotlin/**", "apple/Packages/PersonaCore/**", "harmony/entry/src/main/ets/core/rustcore/**", "harmony/entry/src/main/ets/core/PersonaCore.ts",
                    "harmony/entry/src/main/cpp/types/libpersona_core/**", "harmony/tests/rustcore-*.test.mjs", "harmony/tests/core-host/**",
                    "scripts/ci/core.sh", ".github/workflows/core-test.yml"],
     "runtimes": ["integrations/**", "sdk/ts/**", "schema/**", "spec/**", "scripts/ci/runtimes.sh", ".github/workflows/runtimes-test.yml"],
-    # The lane builds and loads the web client, drives the synthetic hub and compiles the shared bridge type.
-    "desktop": ["desktop/**", "web/**", "scripts/mock/mock_hub.py", "scripts/mock/stream_trace.py", "scripts/mock/test_desktops_mock.py", "spec/desktop-bridge.d.ts",
+    # The lane builds and loads the web client, drives the synthetic hub and compiles the shared bridge type. The hub
+    # loads every module of mock_domains.DOMAINS as it starts.
+    "desktop": ["desktop/**", "web/**", "scripts/mock/mock_hub.py", "scripts/mock/mock_domains.py",
+                  "scripts/mock/stream_trace.py", "scripts/mock/test_desktops_mock.py", "spec/desktop-bridge.d.ts",
                   # web/scripts/build-pake.mjs compiles these Go sources into the sign-in WebAssembly.
                   "server/cmd/password-wasm/**", "server/internal/passwordpake/**", "server/go.mod", "server/go.sum", "scripts/ci/desktop*.sh", ".github/workflows/desktop-test.yml"],
     "scripts": ["**"],
@@ -289,8 +337,15 @@ SHARED = [".github/workflows/ci.yml", "scripts/ci/common.sh", "scripts/ci/run.py
 
 def select(paths, all_platforms=False):
     shared = all_platforms or any(fnmatch.fnmatchcase(path, pattern) for path in paths for pattern in SHARED)
-    return {platform: shared or any(fnmatch.fnmatchcase(path, pattern) for path in paths for pattern in patterns)
-            for platform, patterns in FILTERS.items()}
+    selected = {platform: shared or any(fnmatch.fnmatchcase(path, pattern) for path in paths for pattern in patterns)
+                for platform, patterns in FILTERS.items()}
+    if not selected["desktop"] and any(path.startswith("scripts/mock/") and path.endswith(".py") for path in paths):
+        # The synthetic minimal repositories used by the Web planner have no mock registry and no desktop input.
+        registry = ROOT / "scripts/mock/mock_domains.py"
+        if registry.is_file():
+            selected["desktop"] = any(fnmatch.fnmatchcase(path, pattern) for path in paths
+                                      for pattern in mock_domain_inputs())
+    return selected
 
 
 LANES = tuple(name for name in FILTERS if name != "image")
@@ -341,6 +396,15 @@ def main():
     parser.add_argument("--web-plan", action="store_true",
                         help="read changed paths from stdin, one per line, and print check-fast's web check: "
                              "a first line '<none|full|related> <reason>', then vitest related's files relative to web/")
+    parser.add_argument("--lanes-for", action="store_true",
+                        help="read changed paths from stdin, one per line, and print the lanes CI runs for them "
+                             "(not image), space-separated on one line (check-fast names the ones it does not run)")
+    parser.add_argument("--lanes-for-each", action="store_true",
+                        help="read paths from stdin, one per line, and print --lanes-for of each path on its own, one "
+                             "line per path in the same order (check-fast --each)")
+    parser.add_argument("--web-plan-each", action="store_true",
+                        help="read paths from stdin, one per line, and print the first line of --web-plan for each "
+                             "path on its own, one line per path in the same order (check-fast --each)")
     args = parser.parse_args()
     if args.web_inputs:
         print("\n".join(web_inputs()))
@@ -348,6 +412,19 @@ def main():
     if args.web_plan:
         mode, reason, files = web_plan([line for line in sys.stdin.read().splitlines() if line])
         print("\n".join([f"{mode} {reason}", *files]))
+        return
+    if args.lanes_for:
+        selected = select([line for line in sys.stdin.read().splitlines() if line])
+        print(" ".join(lane for lane in LANES if selected[lane]))
+        return
+    if args.lanes_for_each:
+        for path in [line for line in sys.stdin.read().splitlines() if line]:
+            selected = select([path])
+            print(" ".join(lane for lane in LANES if selected[lane]))
+        return
+    if args.web_plan_each:
+        for mode, reason, _ in web_plans([line for line in sys.stdin.read().splitlines() if line]):
+            print(f"{mode} {reason}")
         return
     event_path = os.environ.get("GITHUB_EVENT_PATH")
     event = json.loads(Path(event_path).read_text()) if event_path else {}

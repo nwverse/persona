@@ -36,12 +36,18 @@ import PersonaWire
     private(set) var roots = SidebarPageRoots.start
     /// The root in front.
     var root: SidebarPageRoot { roots.current }
+    // The column's one selected row (#11032) is the root in front, read by each kind of row below: at most one of them
+    // holds at a time, a pick in the column changes it, and a page opened from inside the page (pushed on the root, a
+    // drill-down) never does.
     /// The page beside the sidebar is the Persona conversation (with or without pages opened from it): its row is the
-    /// one shaded.
+    /// one shaded (the main conversation's, or the Persona chat's in it).
     var atRoot: Bool { roots.current == .conversation }
     /// The place shown beside the sidebar (Inbox, To-dos, Machines…), its row shaded while it is the page's root, also
     /// with pages opened from it; nil for a conversation or an Agent.
     var shownPlace: ShellPage? { roots.current.place }
+    /// The Agent whose chat is the page's root, its row in the Agents list shaded, also with pages opened from it; nil
+    /// for the conversation, a place, or another page the Agents list opened (a space, a machine).
+    var shownAgent: SessionKey? { roots.current.value?.base as? SessionKey }
 
     /// `root` picked (its row, a route) while the page shows `path` over the root in front: the root replaced at once,
     /// or the root in front back at its root (`SidebarPageRoots.select`). Only the pop of a re-pick animates.
@@ -156,6 +162,9 @@ extension ShellPage {
     var isSidebarPlace: Bool {
         switch self {
         case .inbox, .todos, .routines, .knowledge, .machines, .health, .recordings, .extensionPage, .messages: true
+        #if os(iOS)
+        case .starred: true
+        #endif
         case .newConversation, .profile, .conversation: false
         }
     }
@@ -183,14 +192,17 @@ struct UnifiedSidebarColumn<Agents: View>: View {
         let _ = PerfTrace.body("UnifiedSidebarColumn")
         #endif
         VStack(spacing: 0) {
-            persona(.header)
+            // The head and the main row take the column's width and no more (#12318): they stand on the rows' line
+            // (`rowsLeading`), measured in the list below, so a head that could widen the column moved the list, which
+            // moved the line, which moved the head, round and round inside one layout pass.
+            persona(.header).frame(minWidth: .zero, maxWidth: .infinity)
             switch state.part {
             case .whole:
-                persona(.main)
+                persona(.main).frame(minWidth: .zero, maxWidth: .infinity)
                 list(persona(.rows))
                 SidebarNeedsJump(state: state)
             case .persona:
-                persona(.main)
+                persona(.main).frame(minWidth: .zero, maxWidth: .infinity)
                 personaList
             case .agents:
                 list(nil)
@@ -237,6 +249,7 @@ struct UnifiedSidebarColumn<Agents: View>: View {
                          openHealth: { show(.health) },
                          openRecordingsPage: { show(.recordings) },
                          openMessages: LarkHomePreference.shared.shows ? { show(.messages) } : nil,
+                         openStarred: { show(.starred) },
                          part: part, shared: state.ui, shownPlace: state.shownPlace,
                          foldColumn: inDrawer ? nil : showList?.hide)
     }

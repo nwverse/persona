@@ -54,9 +54,9 @@ struct TaskRemoval: ViewModifier {
     @Binding var pending: TodoItem?
 
     func body(content: Content) -> some View {
-        content.confirmationDialog(pending.map { String(localized: "Remove “\($0.title)”?") } ?? "",
+        content.accessibleConfirmationDialog(pending.map { String(localized: "Remove “\($0.title)”?") } ?? "",
                                    isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }),
-                                   titleVisibility: .visible, presenting: pending) { todo in
+                                   titleVisibility: .visible, hasCancel: true, presenting: pending) { todo in
             Button("Remove [Task Sheets 6135d4]", role: .destructive) { Task { await TasksStore.shared.remove(todo) } }
             Button("Cancel", role: .cancel) {}
         } message: { _ in
@@ -354,8 +354,7 @@ struct PlanTaskRow: View {
             FlowLayoutRow(spacing: Theme.Space.xs) {
                 Chip(text: TaskPlace.machineName(task.machine), symbol: Theme.Icon.laptop)
                 Chip(text: task.project, symbol: Theme.Icon.folder)
-                Chip(text: task.model.flatMap { $0.isEmpty ? nil : $0 } ?? task.launcher.flatMap { $0.isEmpty ? nil : $0 } ?? String(localized: "Default Model"),
-                     symbol: Theme.Icon.cpu)
+                Chip(text: modelLabel, symbol: Theme.Icon.cpu)
                 if task.isReadOnly {
                     Chip(text: String(localized: "Read-only"), symbol: Theme.Icon.view, look: .tint(Theme.accent))
                 } else if let p = task.permission, !p.isEmpty {
@@ -379,13 +378,24 @@ struct PlanTaskRow: View {
         }
     }
 
+    /// An explicit model wins; a tier names its preset with the task's launcher, then the existing launcher/default.
+    private var modelLabel: String {
+        if let model = task.model, !model.isEmpty { return model }
+        let launcher = task.launcher.flatMap { $0.isEmpty ? nil : $0 }
+        if let tier = task.tier, !tier.isEmpty {
+            let preset = String(localized: "Preset \(tier)")
+            return launcher.map { "\($0) · \(preset)" } ?? preset
+        }
+        return launcher ?? String(localized: "Default Model")
+    }
+
     /// The modes a planned task can start with (web PLAN_PERMISSIONS, Android PlanPermissions); Auto too, which the hub
     /// may settle an unset one to from Claude Code's default mode (#3026).
     static let permissions = ["default", "acceptEdits", "plan", "auto", "bypassPermissions"]
 
     static func permissionLabel(_ mode: String) -> String {
         switch mode {
-        case "acceptEdits": String(localized: "Can edit files")
+        case "acceptEdits": String(localized: "Auto-Edit")
         case "plan": String(localized: "Plan first")
         case "auto": String(localized: "Auto [Plan Card Permission]", comment: "A planned task's permission mode: the agent judges the risk itself")
         case "bypassPermissions": String(localized: "Allow Everything")
@@ -830,7 +840,8 @@ struct TaskQuestions: View {
             .flatMap { todo in store.interactions(todo).map { (todo: todo, ix: $0) } }
             .sorted { ($0.ix.createdAt ?? .distantPast) < ($1.ix.createdAt ?? .distantPast) }
         if let first = asks.first {
-            let cap = cap
+            let resize = resize(first.ix.id)
+            let cap = cap(resize)
             let keyboard = keyboardRoom
             let area = cap > 0 ? max(cap - labelHeight - Theme.Space.xs, Theme.Size.tapTarget) : 0
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
@@ -849,8 +860,9 @@ struct TaskQuestions: View {
                     .environment(\.cardRoom, containerLength)
                     .environment(\.cardArea, area)
                     .environment(\.cardFits, keyboard ? area - Theme.Space.l : 0)
-                    // Alone, the cap is its only one (a lone question past half the page, #6277).
-                    .environment(\.cardTakesArea, !sharesRoom)
+                    // Alone, the cap is its only one (a lone question past half the page, #6277); sized by hand, too.
+                    .environment(\.cardTakesArea, !sharesRoom || resize != nil)
+                    .environment(\.cardResize, resize)
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("task-question")
@@ -876,13 +888,27 @@ struct TaskQuestions: View {
     /// The conversation's own cards are on screen under the entries: half the room each (#9392).
     private var sharesRoom: Bool { room.stackShown > 0 }
 
-    /// How tall the question with its task's name may be; 0 before the page is measured (no cap yet).
-    private var cap: CGFloat {
+    private var rest: CGFloat { footerRest > 0 ? footerRest : room.footer - shown - room.stackShown }
+
+    /// How tall the question with its task's name may be; 0 before the page is measured (no cap yet). Beside the
+    /// conversation's own cards each has half the room, and a card that takes less (folded, #12306) leaves the rest to
+    /// the other: a folded card kept its half empty while the question showed one option. The user's height
+    /// (`CardHeight`) wins with the keyboard down.
+    private func cap(_ resize: CardResize?) -> CGFloat {
         guard room.height > 0, room.footer > 0 else { return 0 }
-        let rest = footerRest > 0 ? footerRest : room.footer - shown - room.stackShown
         let whole = room.cardsRoom(rest: rest, keyboard: keyboardRoom)
-        if sharesRoom { return max(Theme.Size.tapTarget, whole / 2) }
-        return keyboardRoom ? max(Theme.Size.tapTarget, whole) : max(room.height / 2, whole)
+        if keyboardRoom { return max(Theme.Size.tapTarget, sharesRoom ? whole / 2 : whole) }
+        let fallback = sharesRoom ? max(Theme.Size.tapTarget, whole / 2, whole - room.stackShown) : max(room.height / 2, whole)
+        guard let resize else { return fallback }
+        return CardHeight.shared.cap(default: fallback, range: resize.range, id: resize.id)
+    }
+
+    /// The grabber's terms (#12306), the keyboard down: from the shortest card to all the room above the composer the
+    /// conversation's own cards leave, the conversation keeping a sliver. Beside them the question is the one sized.
+    private func resize(_ id: String) -> CardResize? {
+        guard room.height > 0, room.footer > 0, !keyboardRoom else { return nil }
+        let tallest = room.tallestRoom(rest: rest) - (sharesRoom ? room.stackShown : 0)
+        return CardResize(id: id, height: { shown }, range: FooterRoom.resizeRange(tallest: tallest))
     }
 }
 

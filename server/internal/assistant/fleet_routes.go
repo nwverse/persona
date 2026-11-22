@@ -52,7 +52,7 @@ func (s *Service) fleetHandler(next http.Handler) http.Handler {
 			case errors.Is(err, errHandoffElsewhere):
 				apierr.WriteCode(w, http.StatusForbidden, proto.CodeSecretHandoffElsewhere, err)
 			case errors.Is(err, errNotPending):
-				s.writeEnded(r.Context(), w, id, res, err)
+				s.writeEnded(r.Context(), w, id, res, err, r.Header.Get(RoleHeader) == roleExtension)
 			case errors.Is(err, errInvalidElicitation), errors.Is(err, errInvalidQuestionCancel), errors.Is(err, errInvalidEditedAnswer):
 				apierr.Write(w, http.StatusBadRequest, err)
 			default:
@@ -104,8 +104,10 @@ func (s *Service) fleetHandler(next http.Handler) http.Handler {
 // writeEnded answers a resolve of an interaction that is over already. Answered (or handed back, and handed back
 // again) it is the same outcome as the first time: 200 with already and the answer as the history keeps it, so the
 // app shows the card as answered rather than an error — the first answer's event may not have reached it. Otherwise
-// (expired, withdrawn, handed back, or unknown) 410, with how it ended when the history knows.
-func (s *Service) writeEnded(ctx context.Context, w http.ResponseWriter, id string, r proto.Resolution, err error) {
+// (expired, withdrawn, handed back, or unknown) 410, with how it ended when the history knows. An extension's token
+// (ext) is not given the answer: it may be a health card's or hold what was typed into a card's fields, which the
+// history does not show it either (docs/extensions/extensions.md "Never shown to extensions").
+func (s *Service) writeEnded(ctx context.Context, w http.ResponseWriter, id string, r proto.Resolution, err error, ext bool) {
 	var status string
 	var kept *proto.Resolution
 	if just := (*answeredJustNow)(nil); errors.As(err, &just) {
@@ -118,7 +120,7 @@ func (s *Service) writeEnded(ctx context.Context, w http.ResponseWriter, id stri
 	if status == "resolved" || (status == "dismissed" && r.Dismiss) ||
 		(status == "cancelled" && r.IsQuestionCancel() && kept != nil && kept.Cancel) {
 		out := map[string]any{"ok": true, "already": true, "status": status}
-		if kept != nil {
+		if kept != nil && !ext {
 			out["resolution"] = kept
 		}
 		apierr.WriteJSON(w, out)
@@ -163,7 +165,7 @@ func (s *Service) localFleetDeviceCall(ctx context.Context, p DeviceCall) (json.
 	}
 	switch {
 	case p.Device == DeviceAll && p.Method == DeviceInteractionsList:
-		out, err := json.Marshal(map[string]any{"interactions": s.pendingInteractions()})
+		out, err := json.Marshal(map[string]any{"interactions": s.visiblePendingInteractions()})
 		return out, true, err
 	case p.Device == DeviceAll:
 		return nil, false, nil
@@ -202,7 +204,7 @@ func (s *Service) localFleetDeviceCall(ctx context.Context, p DeviceCall) (json.
 		sess, ok := s.nodeSession(m.ID, a.SessionID)
 		if ok {
 			sess.Assistant = m.isAssistant(sess)
-			if sess.Assistant {
+			if sess.Assistant && sess.Space == "" {
 				sess.Space = identity.SpaceOf(sess.Cwd)
 			}
 			s.nameAgentRow(m.ID, &sess)
@@ -305,6 +307,15 @@ func (s *Service) channelResolve(ctx context.Context, ch, id string, r proto.Res
 		return nil, err
 	}
 	r.AnsweredBy, r.Remembered = "", false
+	if ownerActionProposal(ix) {
+		if err := s.resolveOwnerProposal(ctx, ix, r, ownerActionCardProof(ix, ch)); err != nil {
+			if errors.Is(err, errNotPending) {
+				return map[string]any{"ok": false, "status": s.endedStatus(ctx, id, err)}, nil
+			}
+			return nil, err
+		}
+		return map[string]any{"ok": true}, nil
+	}
 	if err := s.resolve(id, r); err != nil {
 		if errors.Is(err, errNotPending) {
 			return map[string]any{"ok": false, "status": s.endedStatus(ctx, id, err)}, nil
@@ -322,6 +333,9 @@ func (s *Service) channelClarify(ctx context.Context, ch, id, text, clientMsgID,
 		return nil, err
 	}
 	id = strings.TrimSpace(id)
+	if clientMsgID == "" {
+		clientMsgID = "approval-question-" + id + "-" + randomHex(6)
+	}
 	ix, ok := s.pendingIx(id)
 	if !ok {
 		return map[string]any{"ok": false, "status": s.interactionOutcome(ctx, id)}, nil
@@ -329,9 +343,16 @@ func (s *Service) channelClarify(ctx context.Context, ch, id, text, clientMsgID,
 	if ch != channel.Feishu || !ix.CanClarify || ix.Private {
 		return nil, errClarifyUnavailable
 	}
+	var proof struct {
+		Token string `json:"clarification_proof"`
+	}
 	if err := s.appCall(ctx, AppInteractions, assistantwire.InteractionsOwnerAction, map[string]any{"interaction_id": id,
-		"action": action, "channel": ch, "kind": ix.Kind}, nil); err != nil {
+		"action": action, "channel": ch, "kind": ix.Kind, "clarify": true, "text": text, "client_msg_id": clientMsgID,
+		"machine_id": ix.MachineID, "session_id": ix.SessionID}, &proof); err != nil {
 		return nil, err
+	}
+	if proof.Token != "" {
+		ctx = assistantwire.WithClarificationProof(ctx, proof.Token)
 	}
 	if err := s.clarify(ctx, id, text, clientMsgID, origin); err != nil {
 		if errors.Is(err, errClarifyUnavailable) {

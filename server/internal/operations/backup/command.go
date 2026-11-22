@@ -17,13 +17,15 @@ import (
 
 const Usage = `personad backup create --output <file> --writes-quiesced [database options]
                            create and temporarily restore both databases before atomically publishing a mode-0600 whole-install bundle
+  personad backup inspect --bundle <file> [--json]
+                           check bundle integrity offline and print a summary
   personad backup verify --bundle <file> [database options]
                            verify every SHA-256 and restore both dumps into temporary databases (no service writes)
   personad backup restore --bundle <file> --writes-quiesced [--allow-external-kb] [database options]
                            stage both databases and runtime files, preserve the previous databases, and roll back on failure
 
-  Put create's --output outside the knowledge base and the runtime's managers/assistant, extensions, skills and
-  hub.machines_kept directories: they are collected, so create refuses it (a case-insensitive file system may let a
+  Put create's --output outside the knowledge base and the runtime's managers/assistant, extensions, skills,
+  hub.machines_kept and tls directories: they are collected, so create refuses it (a case-insensitive file system may let a
   differently-cased path through, so spell the path as it is).
   Needs pg_dump/pg_restore of the server's major version on PATH, or (for a loopback server) docker with the
   persona-postgres container. The shipped Docker Compose deployment (database host "postgres", hub image without
@@ -37,6 +39,9 @@ type operatorRunner interface {
 
 // Run is the top-level personad backup command.
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) > 0 && args[0] == "inspect" {
+		return runInspect(ctx, args[1:], stdout)
+	}
 	return runWithOperator(ctx, NewOperator(), args, stdout, stderr)
 }
 

@@ -15,6 +15,34 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+type a2aIdleKey struct{}
+
+func a2aBusy() error {
+	return refusal("a2a_session_busy", "A2A delivery is waiting for a live, idle session", nil)
+}
+
+func (n *Node) a2aIdleSession(ctx context.Context, id string, wake, refresh bool) bool {
+	for _, sess := range n.sessionList(ctx, refresh) {
+		if sess.SessionID != id || sess.Archived || sess.Starting || len(sess.Queued) != 0 {
+			continue
+		}
+		if sess.Status == proto.StatusIdle || sess.Status == proto.StatusDone {
+			return true
+		}
+		caps := sess.Capabilities
+		return wake && sess.Status == proto.StatusOffline && sess.SourceKind == proto.SourceRuntime && caps != nil &&
+			caps.Send && caps.A2AWakeOnSend && (caps.StopCause == "" || caps.StopCause == proto.StopIdle || caps.StopCause == proto.StopRestart)
+	}
+	return false
+}
+
+func (n *Node) a2aSendReady(ctx context.Context, id string) error {
+	if wake, a2a := ctx.Value(a2aIdleKey{}).(bool); a2a && !n.a2aIdleSession(ctx, id, wake, false) {
+		return a2aBusy()
+	}
+	return nil
+}
+
 // paneFor returns the pane hosting a live session, refreshing herdr state once if needed.
 func (n *Node) paneFor(ctx context.Context, id string) (string, error) {
 	if a, ok := n.agent(id); ok {
@@ -51,6 +79,23 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		return err
 	}
 	defer unlock()
+	return n.sendLocked(ctx, id, text, images, opts)
+}
+
+// sendLocked sends to the agent with its input lock held.
+func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.Image, opts sendOpts) error {
+	if err := n.a2aSendReady(ctx, id); err != nil {
+		return err
+	}
+	if opts.WaitForEffort {
+		if change := n.switches().effortChange(id); change.target != "" {
+			if n.effortPaneStillLive(ctx, id, change.pane) {
+				return change.refusal()
+			}
+			n.switches().setEffortChange(id, effortChange{})
+			n.notifySessionsSoon()
+		}
+	}
 	selectionText := text
 	if opts.SwitchNow {
 		// The assistant's agent_switch (#5973): the switch it picked goes with this message now, or nothing does
@@ -90,7 +135,7 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		ctx = n.withResumeHost(ctx, id)
 	}
 	if err != nil && (n.codexPath(id) != "" || n.traexPath(id) != "") {
-		return n.stoppedRefusal(id) // a stopped Codex or TRAEX takes no messages (stopped.go, #4754)
+		return n.stoppedRefusal(id) // a stopped Codex or TRAE CLI takes no messages (stopped.go, #4754)
 	}
 	kind := "claude"
 	if err == nil {
@@ -175,7 +220,7 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 			return n.stoppedRefusal(id)
 		}
 		r := n.resumeWith(id, opts)
-		s, err := n.start(ctx, r.cwd, r.launcher, "", id, "", r.mode, r.effort, r.tab, "", "", r.execution)
+		s, err := n.start(ctx, r.cwd, r.launcher, "", id, r.workspaceID, r.mode, r.effort, r.tab, "", "", r.execution)
 		if err != nil {
 			return err
 		}

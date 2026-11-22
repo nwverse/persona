@@ -110,6 +110,34 @@ describe("the requests graph", () => {
     expect(host.querySelector("[data-graph-counts]")).toBeNull();
   });
 
+  it("names the hub's blockers on the card, in the queue and on focus, without drawing a missing link", () => {
+    const render = (blockers: string[]) => {
+      const list = todos.map((item) => item.id === "e2e" ? { ...item, after: ["api", "front", "missing-piece"], prerequisite_blockers: blockers } : item);
+      act(() => root.render(<TodoRequestGraph todos={list} lookup={lookup} machines={machines} onOpenTodo={(id) => opened.push(id)} />));
+    };
+    const why = () => host.querySelector('[data-queued-row="todo:e2e"] [data-queued-why]')?.textContent;
+    const tip = () => document.querySelector('[role="tooltip"]');
+    const linked = () => [...host.querySelectorAll('[data-edge$=">todo:e2e"]')].map((edge) => [edge.getAttribute("data-edge"), edge.getAttribute("stroke-dasharray")]);
+    render(["api", "missing-piece"]);
+    expect(card("e2e").dataset.state).toBe("queued");
+    expect(card("e2e").querySelector("[data-node-detail]")?.textContent).toBe("Waits for API fields, missing-piece");
+    expect(why()).toBe("Waits for API fields, missing-piece");
+    expect(linked()).toEqual([["todo:api>todo:e2e", "3 3"], ["todo:front>todo:e2e", "3 3"]]);
+    act(() => card("e2e").focus());
+    expect(tip()?.textContent).toContain("Needs these first");
+    expect([...tip()!.querySelectorAll("li")].map((item) => item.textContent)).toEqual(["API fields", "missing-piece"]);
+    act(() => card("e2e").blur());
+
+    render([]);
+    expect(card("e2e").dataset.state).toBe("ready");
+    expect(card("e2e").querySelector("[data-node-detail]")).toBeNull();
+    expect(why()).toBe("Can start now; no Agent has it yet");
+    expect(linked()).toEqual([["todo:api>todo:e2e", null], ["todo:front>todo:e2e", null]]);
+    act(() => card("e2e").focus());
+    expect(tip()?.textContent).toContain("Ready");
+    expect(tip()?.textContent).not.toContain("Needs these first");
+  });
+
   it("lights a hovered piece's lineage and dims the rest; a queued row lights its piece", () => {
     enter(card("e2e"));
     expect(card("e2e").hasAttribute("data-lit")).toBe(true);
@@ -305,6 +333,18 @@ describe("a piece's Agent tree", () => {
     expect(agentsOpened).toEqual(["mac/W1", "mac/L@r1"]);
     act(() => host.querySelector<HTMLButtonElement>('[data-node="todo:lead"]')!.click());
     expect(opened).toEqual(["lead"]);
+  });
+
+  it("opens a line's Agent as a drill-down from the To-dos page when the page leaves it to the graph (#12055)", () => {
+    history.replaceState(null, "", "/todos?id=lead");
+    act(() => root.render(<TodoRequestGraph todos={list} lookup={makeSessionLookup(rows)} machines={machines} onOpenTodo={(id) => opened.push(id)} />));
+    const before = history.length;
+    act(() => line("mac/W1").click());
+    // a page of its own on top of the To-dos page, whose address its entry keeps for Back and the sidebar
+    expect(location.pathname).toBe("/s/mac/W1");
+    expect(history.length).toBe(before + 1);
+    expect(history.state).toEqual({ handoff: { path: "/todos?id=lead" } });
+    history.replaceState(null, "", "/");
   });
 
   it("folds to its first line and opens again, the card shrinking with it", () => {

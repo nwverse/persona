@@ -87,6 +87,13 @@
   .task-count-meter { border: 1px solid CanvasText; }
   .task-count-meter > span { background: Highlight; }
 }
+/* A waiting card's own field typed into with a phone's keyboard up (#11442): the dock may take what is visible, so the
+   field stays in sight over the composer instead of being cut under the card's answer row. Not once the keyboard is
+   down (`data-kb`, lib/viewport.ts) or the focus is elsewhere: DOCK_MAX again. Taller than the room, it shrinks to it
+   (min-height) and the card scrolls in its box, the composer kept on screen. */
+@media (max-width: 1023px) and (pointer: coarse) {
+  :root[data-kb] [data-chat-dock]:has([data-chat-dock-above] [data-pending-card] :is(input, textarea):focus) { max-height: var(--kb-h); min-height: 0; }
+}
 
 /* Design tokens, keyframes and component grammar from Beautiful UI (https://www.beautifului.dev/, MIT,
  * Copyright (c) 2026 Shane Levine; see THIRD_PARTY_NOTICES.md). Every view reads colors through these.
@@ -306,6 +313,10 @@
   --font-mono: "JetBrains Mono", "SF Mono", "DejaVu Sans Mono", "Liberation Mono", ui-monospace, Menlo, Consolas, monospace;
 }
 
+/* @theme inline expands utility families to literals; resolve the runtime preference for these utilities too. */
+.font-sans { font-family: var(--font-sans); }
+.font-mono { font-family: var(--font-mono); }
+
 body {
   background: var(--page);
   color: var(--ink);
@@ -345,6 +356,14 @@ body {
 :root { --sidebar-row: 32px; --sidebar-row-pad: 4px; --sidebar-indent: 12px; }
 @utility sidebar-indent { padding-inline-start: var(--sidebar-indent); }
 @utility sidebar-row { min-height: var(--sidebar-row); padding-block: var(--sidebar-row-pad); line-height: 18px; }
+/* The sidebar's top-level headings (#10637): Pages, Persona chats, Personal Agents and Agents each take a box this tall,
+   whatever they carry beside their title, so they stand evenly apart, folded or not (iOS's SidebarHeadingBox, #10561).
+   24px is the tallest control a heading carries, the Agents title row's fold-all button (`size-6`); a touch screen's 44
+   is that button's there (`size-11`) and a touch row's. The height is the content box's: a heading's room under it
+   (`pb-1`) comes on top, and its controls are centred in it, never setting its height. */
+:root { --sidebar-heading: 24px; }
+@media (pointer: coarse) { :root { --sidebar-heading: 44px; } }
+@utility sidebar-heading { box-sizing: content-box; height: var(--sidebar-heading); }
 /* The machine page's load chart (iOS MetricColor.load): its own hue, apart from CPU / memory / network. */
 :root { --chart-load: #e87ba4; }
 .dark { --chart-load: #d55181; }
@@ -448,7 +467,7 @@ button:disabled { cursor: default; }
    draw Chinese in a serif (NSimSun on Windows; Linux falls back to Noto CJK on its own). The monospaced faces come first:
    a CJK face has proportional Latin letters. Its ink is a step quieter than --ink, a long way from --ink-2 (iOS
    Theme.Reply.codeInk; theme-contrast.test.ts keeps it readable). */
-.prose-j code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "PingFang SC", "Microsoft YaHei", monospace; font-size: .94em; color: color-mix(in srgb, var(--ink) 55%, var(--ink-2)); }
+.prose-j code { font-family: var(--font-inline-code, ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "PingFang SC", "Microsoft YaHei", monospace); font-size: .94em; color: color-mix(in srgb, var(--ink) 55%, var(--ink-2)); }
 .prose-j pre { margin: .7em 0; background: var(--inset); border-radius: 10px; box-shadow: var(--shadow-hairline); padding: 10px 12px; overflow-x: auto; font-size: 12.5px; line-height: 1.6; }
 .prose-j pre code { font-family: var(--font-mono); font-size: inherit; }
 /* A code block with its title bar (#2984, CodeBar): the box is the wrap's, the pre sits in it. */
@@ -497,13 +516,20 @@ button:disabled { cursor: default; }
 .prose-j .card-ui :is(p, h1, h2, h3, h4, h5, ul, ol, li, a, code, pre, table, thead, tbody, tr, th, td, img):not(.card-ui .prose-j *) { all: revert-layer; }
 .prose-compact pre { padding: 6px 10px; font-size: 12px; line-height: 1.5; }
 
-/* Mochi, the default persona (views/assistant/MochiFace.tsx): the app icon's colors, not the page's accent. */
+/* Mochi, the default persona (views/assistant/MochiFace.tsx): the app icon's colors, not the page's accent. Asleep (offline)
+   on the dark disc it keeps the dark icon's ink outline, a lighter gray body and a lighter shadow (#12090, as on iOS): a gray
+   outline there sat halfway between the disc and the body, so the body's edge came in two small steps and looked blurred.
+   The closed eyes and the cheek keep their gray; the paper disc's asleep face is as before. */
 :root {
   --mochi-disc-top: #f4eadf; --mochi-disc-bottom: #e7d7c4; --mochi-body-top: #fff; --mochi-body-bottom: #e9e3de;
   --mochi-ink: #1d1816; --mochi-outline: #1d1816; --mochi-motion: #1d1816; --mochi-cheek: #f2703c; --mochi-shadow: rgb(0 0 0 / .14);
   --mochi-sleep-top: #d9d4d0; --mochi-sleep-bottom: #bdb6b1; --mochi-sleep-ink: #6e6763; --mochi-sleep-cheek: #a59d98; --mochi-needs-you: var(--attention);
+  --mochi-sleep-outline: #6e6763; --mochi-sleep-shadow: rgb(0 0 0 / .14);
 }
-.dark { --mochi-disc-top: #332a26; --mochi-disc-bottom: #1d1816; --mochi-outline: #0e0b0a; --mochi-motion: #d6d1cd; --mochi-shadow: rgb(0 0 0 / .45); --mochi-needs-you: var(--attention); }
+.dark {
+  --mochi-disc-top: #332a26; --mochi-disc-bottom: #1d1816; --mochi-outline: #0e0b0a; --mochi-motion: #d6d1cd; --mochi-shadow: rgb(0 0 0 / .45); --mochi-needs-you: var(--attention);
+  --mochi-sleep-top: #e2ddd9; --mochi-sleep-bottom: #c8c1bc; --mochi-sleep-outline: #0e0b0a; --mochi-sleep-shadow: rgb(0 0 0 / .3);
+}
 /* The faces' loops (.mochi-blink / -spin / -rock / -pulse) run as Web Animations (views/assistant/face-motion.ts): as CSS
    animations every cycle sent an animationiteration event to React's root listener and cost the page a style recalc and
    a layout, five faces in the persona picker kept /settings busy while idle. Here only where they turn from. */
@@ -566,6 +592,24 @@ section[data-segment] { contain-intrinsic-block-size: auto var(--seg-est, 0px); 
     &::before { content: ""; position: absolute; top: min(0px, calc(50% - 22px)); bottom: min(0px, calc(50% - 22px)); left: min(0px, calc(50% - 22px)); right: min(0px, calc(50% - 22px)); }
   }
 }
+/* The same for a ✕ in a tile's top-right corner (an attachment's remove): the area grows out of the corner instead, up
+   through the 6 px gap above a row of tiles (no further) and right as far as touch-hit reaches, and only --hit-in-x /
+   --hit-in-y (6 px) into the tile, so a tap on a picture's middle still opens the picture. A tile with nothing to tap
+   under its ✕ (a file's) lets it reach further in. */
+@utility touch-hit-corner {
+  position: relative;
+  @media (pointer: coarse) {
+    &::before { content: ""; position: absolute; top: -8px; right: -13px; bottom: calc(-1 * var(--hit-in-y, 6px)); left: calc(-1 * var(--hit-in-x, 6px)); }
+  }
+}
+/* An extension's graph on a page (UI version 10, #9727): the canvas is 70% of the page's visible height, at least 320
+   and at most 900 px (docs/extensions/extensions.md "Drawing, on every app"); in a card, a still preview fitted into
+   200 px (graph-preview, views/extensions/ViewBody10.tsx). */
+@utility graph-canvas { height: clamp(320px, 70dvh, 900px); }
+@utility graph-canvas-timed { height: clamp(320px, 46dvh, 460px); }
+/* The graph page's shell: the canvas band keeps that height, and the mobile inspector and timeline stack below it. */
+@utility graph-shell { min-height: clamp(320px, 70dvh, 900px); }
+@utility graph-preview { height: 200px; }
 /* iOS zooms the page into any focused field under 16px: on touch screens none is. Unlayered on purpose, so it wins
    over the text-[13px] utilities. */
 @media (pointer: coarse) {

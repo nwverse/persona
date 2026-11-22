@@ -2,8 +2,10 @@
 // The catalogs and the code agree (docs/web/web.md "Internationalization"): the three languages have the same namespaces, keys and
 // placeholders; every t("literal") key exists and gets a value for each placeholder its text uses; every key is used; and no interface text is written into the code in Chinese. That last
 // one is a ratchet while the strings move into catalogs: a file may only lose hard-coded strings, never gain them
-// (hardcoded-baseline.json; a file that reaches zero leaves it). Comments and tests don't count; a line that has to
-// keep CJK text (it matches what someone else writes, like a hub's output) says `i18n-ignore` in a comment.
+// (hardcoded-baseline.json; a file that reaches zero leaves it). Only a gain fails: a file under its record is noted,
+// and lowering the record is tidying anyone can do (docs/operations/testing.md, "Count ratchets"). Comments and tests
+// don't count; a line that has to keep CJK text (it matches what someone else writes, like a hub's output) says
+// `i18n-ignore` in a comment.
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import ts from "typescript";
@@ -24,6 +26,7 @@ const admins: Record<string, Record<string, string>> = Object.fromEntries(
 const SRC = join(__dirname, "..");
 const LOCALES = join(__dirname, "locales");
 const BASELINE = join(__dirname, "hardcoded-baseline.json");
+const PLURAL_FORMS = ["zero", "one", "two", "few", "many", "other"] as const;
 const PLURAL = /_(zero|one|two|few|many|other)$/;
 const CJK = /[　-〿぀-ヿ㐀-䶿一-鿿！-｠]/;
 
@@ -45,6 +48,33 @@ function catalogs(): Record<string, Record<string, Catalog>> {
 const CATALOGS = catalogs();
 
 const placeholders = (s: string) => [...new Set([...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]))].sort();
+
+// The runtime considers suffixes only when count may be numeric. A key that
+// ends in "_other" can also be the exact name of a string.
+function callTexts(cat: Catalog, key: string, vars?: string[]): string[] {
+  const names = vars === undefined || vars.includes("count")
+    ? [key, ...PLURAL_FORMS.map((form) => `${key}_${form}`)]
+    : [key];
+  return names.filter((name) => Object.hasOwn(cat, name)).map((name) => cat[name]);
+}
+
+describe("literal calls", () => {
+  const sample = {
+    sign_in_other: "Sign in to {provider}.",
+    saved_one: "{count} item",
+    saved_other: "{count} items in {group}",
+  };
+
+  it("keeps the exact name and placeholders of a singular key ending in _other", () => {
+    expect(callTexts(sample, "sign_in_other", ["provider"])).toEqual(["Sign in to {provider}."]);
+  });
+
+  it("checks the possible plural forms when count can be provided", () => {
+    expect(callTexts(sample, "saved", ["count", "group"])).toEqual(["{count} item", "{count} items in {group}"]);
+    expect(callTexts(sample, "saved")).toEqual(["{count} item", "{count} items in {group}"]);
+    expect(callTexts(sample, "saved", [])).toEqual([]);
+  });
+});
 
 /** key without its plural suffix → the placeholders of all its forms */
 function shape(cat: Catalog): Map<string, string[]> {
@@ -271,6 +301,12 @@ describe("code", () => {
   // The independent viewer is a real resource consumer too, but never imports the authenticated translator.
   const files = [...sourceFiles(SRC), ...sourceFiles(join(SRC, "..", "public-share"))];
   const scans = new Map(files.map((f) => [relative(SRC, f), scan(f)]));
+  const sourceCatalog = CATALOGS[SOURCE_LANG];
+  const texts = ({ key, vars }: Scan["keys"][number]) => {
+    const dot = key.indexOf(".");
+    const cat = sourceCatalog[key.slice(0, dot)];
+    return cat ? callTexts(cat, key.slice(dot + 1), vars) : [];
+  };
 
   it("uses admin-* keys only in the admin UI, whose page is the only one that loads them", () => {
     const outside = [...scans]
@@ -280,9 +316,7 @@ describe("code", () => {
   });
 
   it("only uses keys that exist", () => {
-    const flat = new Set<string>();
-    for (const [ns, cat] of Object.entries(CATALOGS[SOURCE_LANG])) for (const k of Object.keys(cat)) flat.add(`${ns}.${k.replace(PLURAL, "")}`);
-    const missing = [...scans].flatMap(([f, s]) => s.keys.filter((k) => !flat.has(k.key)).map((k) => `${f}:${k.line} ${k.key}`));
+    const missing = [...scans].flatMap(([f, s]) => s.keys.filter((call) => !texts(call).length).map((k) => `${f}:${k.line} ${k.key}`));
     expect(missing).toEqual([]);
   });
 
@@ -304,12 +338,11 @@ describe("code", () => {
 
   // interpolate() and tRich() leave a placeholder with no value as a literal `{name}` on the page
   it("passes every placeholder a key's text uses", () => {
-    const want = new Map<string, string[]>();
-    for (const [ns, cat] of Object.entries(CATALOGS[SOURCE_LANG])) for (const [k, ps] of shape(cat)) want.set(`${ns}.${k}`, ps);
     const missing = [...scans].flatMap(([f, s]) =>
-      s.keys.flatMap(({ line, key, vars }) => {
+      s.keys.flatMap((call) => {
+        const { line, key, vars } = call;
         if (!vars) return [];
-        const lacks = (want.get(key) ?? []).filter((p) => !vars.includes(p));
+        const lacks = [...new Set(texts(call).flatMap(placeholders))].filter((p) => !vars.includes(p));
         return lacks.length ? [`${f}:${line} ${key} lacks ${lacks.join(", ")}`] : [];
       }),
     );
@@ -319,16 +352,25 @@ describe("code", () => {
   it("writes no more interface text in Chinese than before", () => {
     const counts: Record<string, number> = {};
     for (const [f, s] of scans) if (s.hardcoded.length) counts[f] = s.hardcoded.length;
-    if (process.env.UPDATE_I18N_BASELINE) {
-      writeFileSync(BASELINE, JSON.stringify(counts, null, 2) + "\n");
-      return;
-    }
     const baseline: Record<string, number> = JSON.parse(readFileSync(BASELINE, "utf8"));
+    if (process.env.UPDATE_I18N_BASELINE) {
+      // Only lower: a file above its record (or new) keeps what the record allows, and still fails below.
+      const lowered = Object.fromEntries(
+        Object.entries(baseline)
+          .map(([f, n]) => [f, Math.min(n, counts[f] ?? 0)] as const)
+          .filter(([, n]) => n > 0),
+      );
+      writeFileSync(BASELINE, JSON.stringify(lowered, null, 2) + "\n");
+    }
     const grew = Object.entries(counts)
       .filter(([f, n]) => n > (baseline[f] ?? 0))
       .map(([f, n]) => `${f}: ${n} (baseline ${baseline[f] ?? 0})\n` + scans.get(f)!.hardcoded.map((h) => `  ${f}:${h.line} ${h.text}`).join("\n"));
     expect(grew, "move these into src/i18n/locales (or mark data with i18n-ignore)").toEqual([]);
     const stale = Object.entries(baseline).filter(([f, n]) => (counts[f] ?? 0) < n).map(([f]) => f);
-    expect(stale, "fewer hard-coded strings now: run UPDATE_I18N_BASELINE=1 npx vitest run src/i18n/catalog.test.ts").toEqual([]);
+    if (stale.length && !process.env.UPDATE_I18N_BASELINE)
+      console.info(
+        `fewer hard-coded strings now in ${stale.join(", ")}; lowering the baseline is tidying anyone can do: ` +
+          "python3 scripts/ci/lower_baselines.py, or UPDATE_I18N_BASELINE=1 npx vitest run src/i18n/catalog.test.ts",
+      );
   });
 });

@@ -52,7 +52,8 @@ func open(t testing.TB) *DB {
 var openTables = []string{"push_device_retirements", "lock_tests", "client_ops", "devices", "device_tokens", "pair_tokens",
 	"device_sessions", "live_activities", "phone_tools", "node_sessions", "mail_accounts", "interactions", "settings",
 	"inbox_items", "kb_entities", "connector_secrets", "machine_systems", "machine_metrics", "machine_usage",
-	"sent_messages", "todos", "todo_agents", "assistant_always", "sent_as_user", "hub_push_sent", "urgent_calls", "model_usage"}
+	"sent_messages", "todos", "todo_agents", "assistant_always", "sent_as_user", "hub_push_sent", "urgent_calls", "model_usage",
+	"conversation_histories", "assistant_conversation_spaces", "logical_conversations", "conversation_segment_closures", "conversation_prepared_candidates"}
 
 // open empties what TRUNCATE openTables CASCADE did, a table only the cascade reaches included, and leaves a table
 // that had no row in that cascade its files: it truncates only what has a row.
@@ -878,6 +879,34 @@ func TestNodeSessions(t *testing.T) {
 	_ = d.PutNodeSession(ctx, "server", "s1", NodeSession{Launcher: "cc_ds", Cwd: "/x", StartedAt: start, Tasks: []string{"tail log", "sleep"}})
 	if got, _ = d.NodeSessions(ctx, "server"); len(got["s1"].Tasks) != 2 || got["s1"].Tasks[0] != "tail log" {
 		t.Fatalf("tasks = %v", got["s1"].Tasks)
+	}
+}
+
+// Origin is authorization state needed by node-owned recovery before the manager can re-attest a continuation.
+// Keep it in the existing node_model JSON through a real write/read cycle; no schema migration is involved.
+func TestNodeSessionOriginRoundTrip(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	if err := d.PutNodeSession(ctx, "server", "inbox-recovery", NodeSession{Launcher: "claude", Cwd: "/x", Origin: "inbox", OriginKnown: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.PutNodeSession(ctx, "server", "ordinary", NodeSession{Launcher: "claude", Cwd: "/x", OriginKnown: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.PutNodeSession(ctx, "server", "legacy", NodeSession{Launcher: "claude", Cwd: "/x"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.NodeSessions(ctx, "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["inbox-recovery"].Origin != "inbox" || !got["inbox-recovery"].OriginKnown {
+		t.Fatalf("reloaded Inbox origin decision=%+v, want known inbox", got["inbox-recovery"])
+	}
+	if got["ordinary"].Origin != "" || !got["ordinary"].OriginKnown {
+		t.Fatalf("reloaded ordinary origin decision=%+v, want explicitly known", got["ordinary"])
+	}
+	if got["legacy"].OriginKnown {
+		t.Fatal("pre-upgrade record without an origin decision became known")
 	}
 }
 
@@ -1864,6 +1893,23 @@ func TestSentEcho(t *testing.T) {
 	_, _ = d.pool.Exec(ctx, `UPDATE sent_messages SET created_at = now() - interval '2 days' WHERE client_msg_id = 'm2'`)
 	if got, _ := d.Echoes(ctx, "box"); len(got) != 1 {
 		t.Fatalf("a send older than a day was handed back: %s", got)
+	}
+}
+
+func TestA2AEchoRestoresWithoutAppSend(t *testing.T) {
+	d, ctx := open(t), t.Context()
+	id := proto.A2ADeliveryPrefix + "task-1"
+	receipt := func(line string) json.RawMessage {
+		return json.RawMessage(fmt.Sprintf(`{"session_id":"child","client_msg_id":%q,"line":%q,"source":{"kind":"conversation","conversation_id":"parent"}}`, id, line))
+	}
+	for _, entry := range []json.RawMessage{receipt(""), receipt("first"), receipt("")} {
+		if err := d.RecordEcho(ctx, id, "box", entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	restored, err := d.Echoes(ctx, "box")
+	if err != nil || len(restored) != 1 || !strings.Contains(string(restored[0]), `"line": "first"`) || !strings.Contains(string(restored[0]), `"conversation_id": "parent"`) {
+		t.Fatalf("restored A2A receipts: %s %v", restored, err)
 	}
 }
 

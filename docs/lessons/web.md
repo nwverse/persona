@@ -912,6 +912,8 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - **Usage totals belong to the complete report scope** (#1567): bind accepted data and request status to the machine, range, model and launcher. Keep selector catalogs separately while another scope loads or fails; they are navigation options, not evidence of that scope's totals. Show current failures with retry, and label retained same-scope data as potentially stale. A scope cleanup alone does not order overlapping polls: ignore superseded success, error, unsupported and completion handlers even when transport cancellation arrives late. Exercise the actual component through the REST client with deferred synthetic fetch responses, including machine changes and empty launcher encoding.
 
 - **A `seen` the page only sends is lost without a word** (#6493): the web sent `{"type":"seen"}` on open and drew whatever the hub pushed next. `send` drops the message while the socket is still connecting (opening a chat link, a reload, a tab coming back after its socket went quiet), a half-open socket swallows it, and the next list still says Unread: the green dot stays after reading. Mark it seen locally at once and keep the mark until the hub's own rows say it was recorded (a later `seen_at`), with an HTTP retry after 5 s and a resend after hello (`lib/seen-outbox.ts`, the app's `SeenOutbox`). Hold the mark in the store's `set` so every way rows come in (pushes, paged-list pages, HTTP answers) is drawn seen, and hold it in `SessionRow` too: the paged sidebar draws the list's own rows, not the store's. The mock hub always takes the socket's `seen` and pushes back at once, so a plain mock run does not show this; rewrite or drop frames with `page.routeWebSocket` to check it.
+- **A mark the hub recorded still holds the lists that have not read since** (#12766): the page reads several lists of the same agents, each on its own hints and at most once in two seconds (the chat's lookup, the store's list, the sidebar's root list, a filtered list, the groups' counts). Letting a seen mark go as soon as the first of them showed `seen_at` recorded put the sidebar's row, still the one read before the look, back to green until its own list read: up to two seconds on a fleet whose working agents hint all the time. Keep the recorded mark for a while (`SEEN_SETTLE_MS`), held only against rows that still carry the old `seen_at`, and drop it at once when a row shows a new turn, work or a question. The plain mock hides it (every list reads at once): bump a working agent every 300 ms (`/mock/bump?what=last`) so each list reads on its own window.
+- **Correct a count only against the rows of the same read** (#12766): the hub's Unread counts still count an agent the page holds seen until a read after the record. Subtract a held agent only when it is among rows that came in the same answer as those counts (`sessions_page_counts`: the root list's or a filtered list's own page, published in one `SessionList` update since then; without the feature the hub's counts are left as they are); a separate counts read (a grouping while Lark-bot sessions are hidden) against another list's older rows took the agent off twice, one too few for up to two seconds, and one newer row against older counts put it back for a moment. Counts read on their own are read on every hint and follow the hub within one round trip.
 - **Do not compare the page's own `seen_at` with the hub's**: "Mark all as seen" writes a local `seen_at` into its copy, which would read as "recorded" and drop the mark before the hub ever had it. Remember the value written and ignore it.
 - **Mark a turn that ends while the chat is shown in the same update that brings it**: a React effect on the session's state runs after the green frame is drawn (and was the only path that re-marked). The store knows which chats are on screen (`viewSession`) and marks them inside `set` while the tab is visible.
 
@@ -1114,6 +1116,7 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 ## Composer Enter yields to the IME first (2026-11-05, #2733)
 
 - **Every composer `onKeyDown` handling Enter / Esc must start with `if (composing(e.nativeEvent)) return;`** (`lib/send-history.ts`, checks `isComposing || keyCode === 229`). Browsers still deliver Enter used to confirm Japanese conversion or commit English through Pinyin. Without a composition check, incomplete text creates to-dos, saves titles, or adds list items. Esc likewise cancels composition and closes the whole row. Test in jsdom with `new KeyboardEvent("keydown", { key: "Enter", isComposing: true })` (`views/ime-enter.test.tsx`).
+- **macOS Safari and WKWebView fire `compositionend` just before the committing Enter's `keydown`**, which then has `isComposing` false (#11237). A field whose Enter sends or picks a row tracks the composition itself: `useComposition` (`lib/ime.ts`) spreads `onCompositionStart` / `onCompositionEnd` on the field and `busy(e.nativeEvent)` also treats a key within `COMPOSITION_TAIL_MS` of the end as the input method's. Native capture listeners use `imeKey` with their own state. Menus that a typed `/` or `@` opens wait for the composition to end, and the chat composer is not collapsed to measure its height mid-composition. Test by dispatching `compositionstart` / `compositionend` and then a plain `keydown` Enter.
 
 ## Pushes are best-effort; pages need their own fallback (2026-11-05, #3139)
 
@@ -1321,6 +1324,19 @@ own and reloads when idle (docs/web/web.md "New versions"). When verifying a web
 before it, not only a fresh load.
 ## Workspace identity outlives its Agents
 
+An optional lazy panel needs a local error boundary at every mount (#7100).
+Settings' boundary did not protect the Todo detail: a naming import failure
+reached the route boundary and unmounted its dirty title and notes. Exercise the
+real Todo lifecycle with the import pending, reject it after both fields are
+dirty, and check that the same editors can still save. Test actual chunk failure
+and Reload in a browser too; saved-field recovery after a full reload is distinct
+from retaining unsaved drafts while the local error is displayed.
+
+Naming-preview retries must reconcile selected repository IDs after reloading task associations (#7100). Keeping a
+draft does not mean keeping IDs for removed repositories: an invisible stale ID made every retry fail even after
+reloading. Intersect the selection with the fetched associations, preserve unchecked choices, and leave newly added
+repositories unselected. Verify the request after a real association removal, not only the rendered checkbox list.
+
 An Agent collection cannot serve as a workspace inventory: empty ancestors disappear, and pinning or filtering can remove the only row carrying a parent edge. Keep discovery independent of the board and count actual Agents separately from catalog containers. Bind actions to credential generation, manager, computer, host and runtime workspace ID; matching paths do not grant ownership. A combined browser fixture must stamp its sessions and discovery with the same manager, or it correctly exercises isolation instead of navigation.
 
 The current assistant and the roster's default are different scopes. Workspace discovery and management entry points follow `shownManager`, while an item without a manager still belongs to `defaultManager`. A choice change must cancel reads and invalidate deletion previews immediately, even if the user switches back before a response arrives; subscribing only to changes of the roster's default misses that transition.
@@ -1346,6 +1362,10 @@ same owner, manager, host and workspace safety checks.
 A workspace row has separate disclosure, selection and action controls. When merging shared sidebar fold timing, keep that structure and apply `sidebarFoldMotion` to its disclosure chevron and `sidebarFold` to the matching `Collapse`. Choosing either side wholesale drops either workspace controls or the shared timing; child-workspace folds need the same motion contract.
 
 The first screen also counts startup translations. Keep generic request-owner and uncertain-creation errors in the existing worktree catalog; load the advanced composer catalog with the composer. A pair of eager error labels should not make every advanced-field description part of the first screen.
+
+## Split a sidebar summary from a lazy message index (#12038)
+
+A compact index shared by the sidebar and every message can put the message menu's identity map and per-message subscriptions on the first screen even when its writes are lazy. Give the sidebar a small count/access store and let the lazy message controls own the full index. Do not remove read-only markers or duplicate request logic to save bytes. Measure the production bundle: merely moving translation keys or splitting type files may add bytes instead of reducing them.
 
 ## Archive refusals must roll back optimistic removal (#4277)
 
@@ -1452,6 +1472,12 @@ owner retyped it on the computer. Keep the node's code on the entry and word the
 entries kept from before), draw an uncertain one as waiting (caution color, no "Not sent"), and make a Check that finds
 nothing new say so. The node tells held from merely unconfirmed by the session's permission mode (`peer_held`).
 
+- Keep delivery receipts on the synchronous send path when deferring optional failure UI. The kept-message renderer and its retry/delete actions can load together, while receipt validation and row reconciliation stay immediate. Put the deferred row under a local error boundary and show the existing user bubble while it loads; verify that a failed import leaves the composer and its draft mounted. Keep words used only by deferred dialogs in the full client catalog: the existing lazy-import wait loads it before rendering. The startup literal-key guard and normal app/public build must still pass without changing the budget or counter. Startup selectors are prefixes: rewind.editing also selects rewind.editing_hint, so do not list both.
+
+### Flat work traces keep expansion separate from execution (#10247)
+
+Changing a live action group's header must not change its identity: search and jump-to-step open those keys, and folded history may replace the first visible item. Close a superseded run inside an already inspected trace, preserve explicit reopen/jump choices, and keep the outer summary's live override separate so completion still collapses it. Count action kinds from the complete group, not the progressive rendering budget; otherwise headers change as idle batches mount. Preview edits only in the current run, while every edit row still opens the complete changes view.
+
 ## Filter history after folding, and reconcile search snapshots (#10240)
 
 A stopped parent can own a working child or a pending side request. Fold the complete sidebar rows before selecting non-running history, or the parent disappears from live work and its children become duplicate history rows. A frozen content-search result can also outlive Resume or deletion: use the current complete row for its identity and drop identities removed from a loaded snapshot. Compute day headings and counts after all filters, with local calendar fields rather than UTC date substrings.
@@ -1465,6 +1491,29 @@ trigger when opening. Check a real xterm textarea and a non-editable element as 
 pane addresses also need to resolve a listed Agent before closing, or they would fall back to a shell confirmation
 and lose the busy-Agent warning.
 
+## Local font preferences (#10243)
+
+A stylesheet's normal custom property loses to a theme's inline value. An explicit font preference needs precedence while keeping the inline default intact for reset and fallback. Do not replace the theme's token in place. Keep before-paint validation and runtime validation contract-tested, quote a custom family as one CSS string, and treat FontFaceSet checks as advisory: they cannot reliably establish whether every installed family exists.
+
+Full UI retains a machine's xterm feed between surfaces. Reading font family only in `mount()` misses a newly opened surface that reuses that feed. Refresh its family on attachment, preserve font size, and guard asynchronous local CJK loading against a later family choice.
+
 ## Deep tree rows need space for their counts (#10477)
 
 A shrinking file name cannot protect an end count when the row itself has unbounded indentation padding. Put the indentation and icon inside the name's shrinkable, clipped region; keep the count outside it with no wrapping. Bound deep indentation to a share of that region so the file name still has room for an ellipsis. Measure bounds against the containing panel, not the viewport, and keep the requested width separate from its temporary fitted width. Verify deep rows at minimum width in a real browser: jsdom cannot detect a clipped minus sign.
+
+### A local preference moving to shared settings (#10241)
+
+A read-then-write migration can overwrite a choice another browser just saved.
+Use an insert-if-absent at the database's unique key, not a service mutex or an
+unconditional PUT after a GET. Return the current value even when migration loses.
+Keep the legacy key on read/write failure and guard delayed reads with a save and
+credential generation. Filtering must consume the acknowledged shared value in
+both complete and paged lists before grouping/counts; a quick filter must never
+turn the display preference back on as a side effect.
+
+## Live turn clock ownership stays on the live line (#12446)
+
+A foreground dock timer flag in `ChatContext` invalidates every historical exchange when a turn starts or ends,
+even through memoized rows. Carry it as a prop only on live transcript lines (including live children of an opened
+background round). Compare message-action renders for starting and ending separately against different history
+lengths, and retain the single-timer tests for Agent and Persona chats.

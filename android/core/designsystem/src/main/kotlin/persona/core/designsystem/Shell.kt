@@ -91,6 +91,11 @@ private fun MessageItemState(meta: MessageItemMeta) {
     }
 }
 
+/** The one avatar geometry shared by [MessageItem] and the picture loader its caller provides. */
+object MessageItemTokens {
+    fun avatarSize(prominent: Boolean) = if (prominent) 42.dp else 38.dp
+}
+
 /**
  * An inbox item. Items that need a reply ([status] NeedsYou) are cards of their own in glass and strips with
  * an amber holder on the board; the rest are rows of a group. [extra] holds the draft and its actions. [avatar] is the
@@ -132,6 +137,8 @@ fun MessageItem(
     dimmed: Boolean = false,
     /** The event row's third content line; absent, every line keeps its existing meaning and placement. */
     meta: MessageItemMeta? = null,
+    /** A chat list keeps its name readable at accessibility sizes by moving time below it; other rows keep their layout. */
+    stackTitleTimeAtLargeText: Boolean = false,
     extra: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
@@ -150,19 +157,20 @@ fun MessageItem(
                 JCheckMark(androidx.compose.ui.state.ToggleableState(checked), Modifier.padding(top = Tokens.Space.s))
                 Spacer(Modifier.width(Tokens.Space.m))
             }
-            JAvatar(group ?: sender, size = if (prominent) 42.dp else 38.dp, icon = avatarIcon, badge = badge, badgeColor = badgeColor, image = avatar)
+            JAvatar(group ?: sender, size = MessageItemTokens.avatarSize(prominent), icon = avatarIcon, badge = badge, badgeColor = badgeColor, image = avatar)
             Spacer(Modifier.width(12.dp.dense))
             Column(Modifier.weight(1f)) {
                 val followed = meta != null
                 val prioritizeTitle = followed || heading != null
                 val titleText = if (followed) heading ?: title else heading ?: group ?: sender
-                val stackTitleTime = prioritizeTitle && time != null && LocalDensity.current.fontScale >= STACK_TITLE_TIME_AT_FONT_SCALE
+                val stackTitleTime = (prioritizeTitle || stackTitleTimeAtLargeText) && time != null &&
+                    LocalDensity.current.fontScale >= STACK_TITLE_TIME_AT_FONT_SCALE
                 if (stackTitleTime) {
                     Column {
                         Row(verticalAlignment = Alignment.Top) {
                             Text(titleText, style = type.headline, color = palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f))
-                            if (titleIcon != null) {
+                            if (prioritizeTitle && titleIcon != null) {
                                 Spacer(Modifier.width(Tokens.Space.xs))
                                 JIcon(titleIcon, titleIconLabel, size = Tokens.Space.l, tint = palette.ink3, decorative = titleIconLabel == null)
                             }

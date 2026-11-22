@@ -20,9 +20,8 @@ The manager sends one Ctrl+D through the selected session's terminal writer only
   SessionStart in `~/.codex/hooks.json`), `agent_session.value` is the Codex session id.
 - Panes without a session id (started before the integration was installed, or herdr recorded the id only at startup and `/resume` later switched threads in Codex):
   Codex writes the thread name in the terminal title ("thread name | directory", either part possibly truncated to `...`). Find a same-named thread in `session_index.jsonl` (`codexByTitle`);
-  among duplicates, prefer the id recorded by herdr / at startup, otherwise the most recently written. Resolve panes identifiable by title first; only then guess panes without a thread name (new threads) from
-  "the newest unclaimed rollout in the same working directory" (`codexSession`). Before 2026-10-31, recognition relied only on guessing: 4 of 5 Codex sessions in the same directory on one machine were misidentified,
-  the active one showed another session with a gray dot and none of the new turn's messages (9 of 26 Codex panes on that machine were misidentified overall).
+  a unique match or the matching id recorded by the host or by Persona identifies the thread. A manually opened Codex in herdr or Herdr App with no established identity gets a waiting row of its own.
+  A shared directory or an ambiguous title gives no evidence of which conversation that pane is running. Its earlier conversations keep their history and last-active times.
 - **Sub-Agent rollouts are not sessions**: Codex thread_spawn sub-Agents (and Guardian approval reviews, Codex's and the fork's, below) each write their own rollout,
   in the same directory and cwd as the main chat, with newer writes. Identify them from `session_meta` only: `thread_source` is `subagent`, or `source` is `{"subagent": …}`.
   Their parent chat is `session_id` (fall back to `parent_thread_id`). Skip them when guessing sessions; if herdr reports a sub-Agent id, replace it with the main chat's
@@ -134,7 +133,7 @@ not screen reading or typing into the terminal. Panes it cannot join retain the 
     Simultaneous answers: app-server accepts only the first, and runs the command only once. Observers never auto-answer (`codex_remote_asks.go`).
   - Disable the terminal route for these panes: do not inspect their screens for approvals or recognize blocking questions from their rollout. One question must not produce two cards or two answers.
 - **Panes that cannot join**: launches with `-c` / `--profile` and similar arguments (0.163 runs in its own process rather than the daemon in this case), already-running non-daemon sessions, 0.153 (auto-connects only
-  if the socket already exists), and the internal Codex fork retain the terminal route.
+  if the socket already exists), and TRAE CLI retain the terminal route.
 - **Daemon restart, disconnect, or version change**: disconnect clears join state, and these panes immediately fall back to the terminal route (screen cards, typing), with existing cards removed. The TUI displays
   "Reconnecting to server…", reconnects when the new daemon starts, and reloads the thread. The node reconnects to the new daemon every 2–5 seconds and rejoins; pending requests replay as new cards.
   Persona does not block the TUI: requests also go to it, so users can answer on the computer at any time.
@@ -156,7 +155,7 @@ not its command name; Claude launchers still reject Codex-only levels (`node/ass
 
 - **Unchanged**: permission mode still cannot be changed on the phone (Codex approval policy and sandbox remain determined by launch arguments and `config.toml`; requests with permission mode return
   "Only Codex thinking effort can be changed on the phone; change permission mode on the computer"). Terminal-only panes (terminal route), sub-Agents
-  and the internal Codex fork cannot even change thinking effort, with existing prompts unchanged. Codex desktop App chats change it through the App (#5575, "Sessions in the Codex desktop App" below). Starting Codex from the phone still omits thinking effort (see "Starting from the phone").
+  and TRAE CLI cannot even change thinking effort, with existing prompts unchanged. Codex desktop App chats change it through the App (#5575, "Sessions in the Codex desktop App" below). Starting Codex from the phone still omits thinking effort (see "Starting from the phone").
 - **Available levels**: `supportedReasoningEfforts` reported by this thread's model in app-server `model/list` (read once per connection with `includeHidden`,
   since the thread may use a hidden model). If the model is absent or the list cannot be read, use the same set as the "Codex Settings" page: minimal / low / medium / high / xhigh / max / ultra.
   An explicitly empty list means unsupported: neither show nor accept it. The session includes `efforts` (levels from weakest to strongest) and `effort` (current value); clients show the selector only when `efforts` is nonempty
@@ -187,7 +186,7 @@ not its command name; Claude launchers still reject Codex-only levels (`node/ass
   Supported changes explain that they apply on the next turn without interrupting the current one.
 - **Tests**: `node/codex_effort_test.go` (synthetic app-server: rejected before joining; after joining accepts only effort; invalid levels; `thread/settings/update` parameters;
   -32601 carries effort on next `turn/start` but not `turn/steer`; other errors / timeout / disconnect report failure, record nothing, and clear previous selections; rejected `turn/start` discards the selection;
-  changed connection or unloaded thread invalidates it; model levels and defaults; Codex rejection; model without levels; `thread/settings/updated`; terminal route and internal fork still rejected);
+  changed connection or unloaded thread invalidates it; model levels and defaults; Codex rejection; model without levels; `thread/settings/updated`; terminal route and TRAE CLI still rejected);
   web `session-actions.test.ts`; iOS `SyncEventTests.codexThreadOnItsAppServerSetsItsEffortOnly`; Android `SessionSourceTest`, `SessionModesTest`.
   Real Codex was manually checked only for `model/list`, `thread/settings/update`, and `thread/read` on a stdio app-server with temporary `CODEX_HOME` (no model run).
   `scripts/test/test-codex.sh` does not yet cover this.
@@ -350,7 +349,7 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
   offered only `codex-app`, so its Codex Agents ran as Codex App chats outside herdr on the App's model. Aliases in `~/.zshrc` that run a single `codex` command are listed after Claude launchers (can have preceding
   `export A=1;`, `VAR=… codex`, or wrappers such as `env` / `command`; arguments are retained, model taken from `-m` / `--model` / `-c model=…`).
   They carry `agent: "codex"` in the launcher list and are marked "Codex" on the App's launchers page (`parseCodexAliases` in `launchers.go`). Unsupported: shell functions running Codex
-  under other names (rejected with an explanation, `codex_launcher`), aliases doing additional work (`cd x && codex`, not listed), and the internal Codex fork.
+  under other names (rejected with an explanation, `codex_launcher`), aliases doing additional work (`cd x && codex`, not listed), and TRAE CLI.
   On Unix, the native `codex` command honors a same-name shell function, including its environment and flags (#4876).
   With an available Bash/Zsh, the function or executable can be supplied by its rc file; it need not exist on the outer process's PATH.
 - **First message arrives unchanged**: Codex creates a thread only after receiving its first message. A start that includes it answers with that thread (below); one without it answers with a waiting row
@@ -358,6 +357,7 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
   so Apps make the message optional only for launchers marked `prompt_optional`. Launcher words and message are written together to a private temporary file under the node directory (0600). The pane receives only
   `personad codex-start <file>`: it claims the file (renames it away, so a node that gave up on the start and withdrew the file the same way leaves it nothing, and the other way round), reads and deletes it, then runs the launcher words (preceding `VAR=…` enters the environment), adding `--` and the message only when one is supplied.
   On Unix, native `codex` runs through the user's interactive shell to preserve a same-name function. The shell executes only `"$@"`: launcher words and the message are positional arguments, never interpolated as shell code.
+  On every OS, the private launch file carries the complete prompt and the helper passes it as one native argv value after `--` (#11145). Windows does not type this message through ConPTY: its key stream and paste-burst grouping do not preserve an atomic long paste reliably. The npm shim is resolved to the native executable; unknown batch shims with a prompt are refused. Windows checks the fully quoted command line against 32,767 UTF-16 units including the NUL terminator, without truncation or terminal fallback. A rejected helper closes its owned new pane through the usual failed-start path. Line endings become LF and terminal controls remain inert on Windows; complete rollout matching still confirms startup. Codex App uses structured IPC input instead.
   Quotes, newlines, `$`, backticks, Chinese, and thousands of characters all reach Codex unchanged (`codex_start.go`). Launcher words also stay off-screen and out of shell history
   (aliases may contain keys). With `--remote`, add `-C <directory>` (the TUI does not supply the directory itself when connecting to another app-server).
 - **Text only**: the first message carries no photos or files. New Agent offers no attachments for a Codex launcher on iPhone and iPad, and the web refuses such a start with "This launcher can't take attachments in the first message" (#2321).
@@ -368,7 +368,7 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
   (an existing same-named shell variable wins; these words are not shell-expanded, so `$HOME` and `~` remain literal and cannot substitute values). pi's herdr-resume command `personad tab-start` shares this code without setting `HERDR_AGENT`.
 - **Match this request**: startup is synchronous. The node waits for the Codex thread to appear before replying, and returns that thread's session, so the App opens the actual Agents entry,
   not a separate "Starting" placeholder later replaced by another. Match a rollout in this directory started after launch (`session_meta` timestamp) whose first user message exactly matches what was sent.
-  During this wait the pane is excluded from "newest rollout in the same directory" guessing (`codexStarting`), preventing premature association with an old thread in the directory.
+  During this wait `codexStarting` reserves the pane for this explicit start. Discovery leaves the pane for the start to identify.
   Answer Codex's dialogs according to the user's intent: trust the directory (the user selected it), skip update prompts.
   The screen is read as `visible` (the blank rows under it left out): 0.167 draws its trust dialog from the top of the pane, and the last 40 `recent` rows of a 51-row pane were all blank (#2351).
   The trust dialog is known by its question asking about trust, the option by what it says ("Trust and continue", "Yes, continue"), not by its number or the other option
@@ -379,6 +379,7 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
   followed by the last screen lines of that tab (falling back to the visible screen when the bottom rows are blank). If the launcher cannot run (command not found), fail as soon as a `personad codex-start:` line appears, without waiting the full timeout. codex-start's notes that it goes on after (the agent sandbox not wrapping the start) say `personad codex-start (note):` instead, so the Codex after them is not taken for a failure.
   If the terminal still reports Codex running, the error carries `agent_start_stalled`: the hub neither counts it as a broken launcher nor retries or reroutes the task automatically.
   Only after this wait returns a failure (including cancellation), the node closes the new pane to stop a Codex still waiting on a screen from later executing its queued prompt without a linked task.
+  If that pane explicitly identifies a fresh thread, or its unique Codex writer holds the fresh rollout, cleanup also asks Codex to archive that thread natively after the pane closes (#11145). This removes an already-published orphan from the Agent list while retaining its transcript. A directory, title or matching first line never authorizes archive; adopted panes remain untouched. Native archive failure is retained with the failed-pane cleanup for retry.
   This uses the terminal's existing close operation instead of keeping a background start waiting indefinitely for a thread. The last screen lines remain in the error.
   Independent starts in the same directory with the same launcher remain concurrent; waiting for one thread does not delay another start.
   If closing fails, the error says termination could not be confirmed. The node remembers every failed-cleanup pane for the directory and launcher; a later start must close the pending panes before opening another tab. Only that cleanup is serialized, and failures from concurrent starts are retained separately.
@@ -388,6 +389,7 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
   "Connection" explains "Started with launcher 'X': it includes -c, so Codex runs in its own process, not the shared app-server". Version 0.153 has no daemon and also uses the terminal route.
 - **Read-only tasks**: a terminal start with `permission_mode: plan` adds `--sandbox read-only --ask-for-approval never`. Conflicting launcher permission flags are refused before creating a tab; other modes preserve launcher arguments. See [To-dos](../assistant/todos.md#read-only-planned-tasks).
 - **Creation defaults**: Codex uses launcher arguments and `~/.codex/config.toml`. A model purpose's explicitly configured thinking effort is forwarded as `-c model_reasoning_effort=...` after launcher defaults; an inherited/empty effort leaves those arguments unchanged.
+  On Orca, a new start of the stock `codex` launcher with no explicit Persona permission mode first reads `settings.getAgentLaunch` and inserts `agentDefaultArgs.codex` as literal argv before the normal model, effort and permission resolution. Alias and configured launchers, and every explicit Persona permission mode, keep their own launch configuration without reading those Orca defaults. Unavailable preferences, a custom Orca command or environment, incomplete quoting, newlines and shell-dependent arguments refuse the start with `codex_launch_preferences` before a terminal opens; Persona never writes Orca's launch settings on this path.
   Any `-c` takes the start off the shared daemon (see "Route"), and Codex then starts up with the pane's environment instead of the daemon's.
   So the node leaves the flag out when the Codex already runs at that effort. It does so only when all of these hold:
 - the launcher runs `codex` itself, would join the shared app-server, and changes none of `CODEX_HOME`, `HOME`,
@@ -412,7 +414,7 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
   That pane is the user's terminal: a start that fails there never closes it (nor counts it as a start to clean up later); the switch quits what it left in front and brings the claude back.
   The first message is the handoff block, then the user's words.
 - **Tests**: `node/codex_start_test.go` (fake herdr: pane command only `codex-start <file>`, file contains launcher words and message, exactly one session, route note, rejection, timeout and startup failure errors, trust dialogs,
-  `codex-start` subprocess receives message byte-for-byte, Codex aliases in `~/.zshrc`). Real Codex: `TestLiveCodexStart` in `scripts/test/test-codex.sh`
+  `codex-start` subprocess receives message byte-for-byte, Codex aliases in `~/.zshrc`), `node/codex_orca_launch_preferences_test.go` (fake Orca: stock launch defaults, model/effort precedence, literal quoting, bypasses and fail-closed validation with no terminal or settings writes). Real Codex: `TestLiveCodexStart` in `scripts/test/test-codex.sh`
   (0.163 connected with `--remote` to the test's own app-server, 0.153, 0.163 with `-c`; each round in a fresh git repository, so Codex asks to trust it and the start must answer;
   multiple turns each, messages with quotes / newlines / `$` / backticks / Chinese / long text,
   unchanged in rollout, one session per pane, correct route, a subsequent phone message received). App: `MachinePagesTests.testNewCodexSessionStartsWithItsFirstMessage`.
@@ -425,13 +427,14 @@ and answers with a **waiting row** for the pane (`node/codex_waiting.go`).
 - **Before its thread exists, Codex has no session id**: herdr lists the pane as `agent: codex` with no `session_id` (Codex 0.153.4, herdr 0.9.3), and no rollout or `threads` row exists yet. About two seconds after the first message
   the rollout appears, and the pane's `codex` process holds it open. herdr still reports no session id.
 - **The start**: `codex-start` runs the launcher words alone. The node waits for Codex's input box, at most 60 seconds. On the way it trusts the folder, waits out a model still loading (`model: loading` in the header),
-  and skips the update offer. The offer is skipped with "Skip"'s own key (`2`), never Enter: Enter takes the highlighted "Update now", which runs the installer. On 0.153.4, `2` alone closes the offer.
+  and skips the update offer. Codex's own three-choice offer (`Update now`, `Skip`, `Skip until next version`) is skipped with Escape on every operating system, never Enter: Enter takes the highlighted "Update now", which runs the installer. Version upgrades belong to operations, not a message-delivery attempt.
   If the launcher fails (a `personad codex-start:` line), the start fails and the tab closes, as above. If Codex runs but its box has not come up in time, the row is still returned and the tab stays.
   Nothing is queued in that tab that could run later.
 - **The waiting row**: its id is the node's own: a UUID whose first group is `c0de0000`, which no Codex thread id (a UUIDv7) or Claude session id takes. It carries `awaiting_first_message: true`,
   `agent: codex`, the pane and tab, `status: idle` whatever herdr says (Codex starting its MCP servers reads as working, then done), or `blocked` while a dialog holds the pane.
   Its capabilities are read, send and terminal. Its conversation is empty. Modes, the queue and forking are refused until the thread exists, and it has no history, archive or resume.
   The node binds the pane to the row's id. The hub stores and returns that binding, so a restarted node knows the row again from the id's shape and its record.
+  A Codex started by hand in a herdr or Herdr App tab uses the same row. Its title is the tab's label, with the directory name as a fallback. The row's time is when Persona first saw that pane.
 - **Attaching the thread, never by directory**: the node looks every second while a row waits. It scans the Codex processes only when a new thread appeared in the row's directory or herdr or the title named one, and every 15 seconds otherwise.
   A new thread that no rule attached in three looks (one from a Codex outside herdr in the same repository) no longer triggers scans; only the 15-second scan looks at it again.
   1. The rollout the pane's own `codex` process holds open: `HERDR_PANE_ID` in its environment, `lsof` or `/proc` for its files. App-server processes are left out: a daemon a pane started inherits that pane's `HERDR_PANE_ID` and holds every thread it serves.
@@ -446,12 +449,14 @@ and answers with a **waiting row** for the pane (`node/codex_waiting.go`).
      - its first message shows, as a Codex user message (a `› ` line and the lines indented under it), on that pane's screen and on no other waiting pane's.
 
   Anything else attaches nothing, and the node logs why, once per reason. The row then stays, its terminal works, and the thread is listed as ordinary Codex history.
-  On attach, the start's record moves to the thread: launcher, directory, start time, read-only mode and creation receipt. The pane is bound to the thread, and requests that still name the row reach it.
+  On attach, an explicit Persona start transfers its launcher, directory, start time, read-only mode and creation receipt. A manually opened tab keeps its own name and ownership.
+  The pane is bound to the thread, and requests that still name the row reach it.
   The row leaves the list and the thread's row comes, in the same pane.
 - **The first message from the Apps** (`session.send` to the row): text only (photos refuse with `codex_first_text`, nothing typed). The node brings Codex to its empty input box first, at most 20 seconds.
   On the way it answers the trust dialog and the update offer, and waits out the model loading and "Starting MCP servers".
   It types nothing, and refuses with the usual codes, when the box holds a draft (`input_draft`), when an approval, question or dialog that isn't ours is open (`dialog_open`), or when the box doesn't come (`codex_not_ready`).
-  The message goes in as one bracketed paste, unchanged, and Enter is pressed only once the box shows it (or Codex's `[Pasted Content N chars]`).
+  The message goes in as one bracketed paste, unchanged, and Enter is pressed only once the box shows it (or Codex's `[Pasted Content N chars]` chips with matching visible text before, between or after them). Chip lengths and visible fragments must cover the whole expected message in order, allowing terminal wrapping whitespace; a chip for only a prefix waits for its tail before Enter. Hidden content is still unverified: only a complete first-message rollout match confirms startup. A compact status row whose directory is just `~` is excluded from the draft too.
+  If the recognized update offer appears after paste, startup skips it once. A retained matching draft is submitted without pasting again; only an empty, unqueued composer may receive one replay. A different draft or unknown dialog is never cleared or submitted. This recovery has a bounded confirmation window within the original startup request.
   The send then waits up to 45 seconds for the thread (rules 1–3) and answers `{ok, session}` with the thread's session. Rule 3 finding two threads answers `{ok}` alone, and the row stays until rule 1 or 2 knows it.
   No thread in time is `codex_first_unconfirmed` with `delivered: unknown`: the message went in, so it is not sent again.
   First messages to one row go one at a time: a second one (another phone, a quick second tap) waits for the first, then goes to the thread it began as any message does.
@@ -472,7 +477,7 @@ and answers with a **waiting row** for the pane (`node/codex_waiting.go`).
   - both attachments used rule 1.
 
   Rule 4 (the daemon route) is covered by unit tests only.
-- **Tests**: `node/codex_waiting_test.go`. It covers: the start skipping the update offer with `2` and never Enter; the row listed idle while herdr says working; the App's first message as one paste and the row becoming the thread;
+- **Tests**: `node/codex_waiting_test.go` and `node/codex_start_input_test.go`. They cover: the start skipping the update offer with Escape and never Enter; late update offers, retained/lost pastes, mixed chips and visible text, complete transcript confirmation and bounded failure cleanup; the row listed idle while herdr says working; the App's first message as one paste and the row becoming the thread;
   drafts, photos and dialogs refused with nothing typed; a model loading and MCP servers starting waited out; two rows in one directory;
   an app-server holding a pane's thread ignored; rule 4's ambiguities; the row known again after a restart and gone with Codex.
   The clients: the web's unit tests (`web/src/lib/codex-waiting.test.ts`, `web/src/lib/new-agent.test.ts`,
@@ -543,8 +548,8 @@ Codex has no terminal hook that can answer on its behalf ("Research" below), so 
   the call is rejected (error output), and the model immediately retries. The rejected call has no item. Creating cards from `function_call` used to leave an unanswerable card forever (observed 2026-11-02).
 - Cards disappear when answered on the computer (reply envelope, or any other user message: 0.153 has no question panel, so users type answers directly), the turn is interrupted (`turn_aborted`), or the Agent exits.
   Do not restore async questions older than 12 hours (node restart rereads rollout).
-- The internal Codex fork shares rollout parsing (also recognizes AgentMessage / UserMessage in `history_mutation`) and screen parsing, with state inferred by the node. Not yet tested against the real fork.
-- Implementation: the node scans live Codex / internal-fork sessions every second (`node/codexask.go`; rollout reads only appended data, initially the last 8 MB). Whenever open cards change, send the complete list to the hub
+- TRAE CLI shares rollout parsing (also recognizes AgentMessage / UserMessage in `history_mutation`) and screen parsing. The node determines the state from the terminal.
+- Implementation: the node scans live Codex and TRAE CLI sessions every second (`node/codexask.go`; rollout reads only appended data, initially the last 8 MB). Whenever open cards change, send the complete list to the hub
   (`codex.interactions`). The manager creates a local interaction for each card (`assistant/fleet_ix_codex.go`): push new ones, end those absent from the list, and replace generic screen cards for the same session.
   Answers return to the node through `codex.answer`. Reread screen and rollout before keys / input; errors return directly to the answering user (synchronously, like screen cards).
   If input fails (draft, wrong UI state), retain the card. If the node says Codex no longer asks (`prompt_changed`), remove it. Relisted cards after node reconnect do not ring again.
@@ -595,7 +600,7 @@ own receipt paths; Botmux has no readable terminal composer.
 ### Tests
 
 - Unit tests: `screen/codex_test.go` (recorded screens, 0.153.4 / 0.163.0, `screen/testdata/codex-*`), `transcript/codexask_test.go` (rollout recognition, both schemas,
-  partial answers, direct typing, old desktop replies, internal fork), `node/codexask_test.go` (keys and input for every UI state on fake herdr, no keys on refusal),
+  partial answers, direct typing, old desktop replies, TRAE CLI), `node/codexask_test.go` (keys and input for every UI state on fake herdr, no keys on refusal),
   `node/codex_submit_test.go` (terminal submission confirmation, uncertain outcomes, retry deduplication and matching-draft preservation),
   `hub/codexcards_test.go` (list additions / removals, restoring cards after failed answers, silent reconnect, push titles).
 - Real Codex: `scripts/test/test-codex.sh` (`docs/operations/testing.md`, "Codex integration testing") starts Codex in isolated herdr, asks questions and requests approvals, with one case per UI state and multiple turns each.
@@ -611,22 +616,24 @@ Two things Claude Code sessions have are missing here. Persona installs no Codex
 
 - Resuming from the phone covers a thread nothing has open in the default home ("Resuming from the phone"). Offline / archived history on external app-server instances is read-only; never silently start another app-server to continue it. Codex App threads continue only through the App.
 - Threads archived only in Codex (the Codex App's Archive) are not listed in Persona's archive; only Persona's own archives are mirrored to Codex ("Archive").
-- Starting Codex from the phone requires the first message. Shell functions running Codex, aliases doing other work, and the internal fork cannot be used to start sessions; permission mode and thinking effort cannot be selected at creation.
-- Permission mode cannot be changed on the phone. Only app-server sessions can change thinking effort ("Thinking effort"); terminal-route Codex and the internal fork cannot.
+- Starting Codex from the phone requires the first message. This start path cannot invoke shell functions that run Codex or aliases that do additional work. Permission mode and thinking effort cannot be selected at creation.
+- Permission mode cannot be changed on the phone. Only app-server sessions can change thinking effort ("Thinking effort"); terminal-route Codex and TRAE CLI cannot.
 - Sessions started by launchers with arguments such as `-c` are not on the shared daemon and use only the terminal route (screen reading, typing).
 - Unrecognized Codex dialogs (not matching "Questions and approvals" above) retain generic "Terminal needs attention" screen interactions.
 - Queued messages, sub-Agents, background tasks, and other information unique to Claude transcripts are empty in Codex sessions.
 
-## Internal Codex fork
+<a id="internal-codex-fork"></a>
+## TRAE CLI
 
-An internal company fork of Codex has been supported since 2026-10-28, appearing in Agents like Codex (lists, chats, live state, messaging, terminals, closing),
-with its own tag and "Message the Agent" input label. Code: `server/internal/node/traex.go`; shares rollout parsing with Codex in `transcript/codex.go`.
+[TRAE CLI](https://docs.trae.cn/cli_get-started-with-trae-cli-2?lang=zh) starts with the `traecli` command. Persona uses the product name for sessions, launchers, and approval cards.
+In Agents you can see live state, send messages, open the terminal, and close sessions. Existing sessions keep their stored agent identifier.
+The node integration (`server/internal/node/traex.go`) shares rollout parsing with Codex in `transcript/codex.go`.
 
-- **herdr does not recognize it**: fork panes are ordinary herdr panes (`agent_status: unknown`, absent from `agent list`); herdr has no custom-Agent configuration either.
+- **herdr does not recognize it**: TRAE CLI panes are ordinary herdr panes (`agent_status: unknown`, absent from `agent list`); herdr has no custom-Agent configuration either.
   The node finds them itself: `~/.trae/cli/thread-writer-locks/<session id>.owner.json` records the pid writing the session. That pid's environment contains herdr's
   `HERDR_PANE_ID` (Linux reads `/proc/<pid>/environ`, macOS uses `ps -E`), giving an exact pane → pid → session mapping without directory guessing. Pane information comes from
   `panes` in `herdr api snapshot`.
-- **One process writes multiple threads**: before executing a tool, the fork sends that step to a review model for automatic approval assessment (guardian; `session_meta` has
+- **One process writes multiple threads**: before executing a tool, TRAE CLI sends that step to a review model for automatic approval assessment (guardian; `session_meta` has
   `source: {"subagent": {"other": "guardian"}}`, `thread_source: subagent`, and `session_id` / `forked_from_id` both pointing to the main chat).
   The same process writes this review chat, which has its own owner file and newer writes than the main chat. Selecting "the newest owner file per pid" displays the review chat in the App
   (review-request and assessment-result JSON), unlike the terminal (user feedback 2026-11-01). Now select the newest non-sub-Agent thread for each pid; if only sub-Agents exist, take their main chat.
@@ -650,7 +657,7 @@ with its own tag and "Message the Agent" input label. Code: `server/internal/nod
   (full context after compaction); decode only `display_completions`. `task_started` / `task_complete` are recorded in `Meta.TurnOpen`.
   `TerminalInteraction` (polling / sending input to a running command) is not displayed.
 - **Messaging**: herdr's `agent prompt` recognizes only known Agents and returns not found for fork panes, so use `pane send-text` + Enter (`Node.prompt`).
-- A phone message to an exited internal-fork session is refused: a stopped Agent is read-only (#4754). Resume on its terminal page resumes one Persona started (`<launcher> resume <id>`, `node/retire.go` `resumeOtherWith`); one started outside Persona returns an error (its launcher is not known).
+- A phone message to an exited TRAE CLI session is refused: a stopped Agent is read-only (#4754). Resume on its terminal page resumes one Persona started (`<launcher> resume <id>`, `node/retire.go` `resumeOtherWith`); one started outside Persona returns an error (its launcher is not known).
 
 ## Research: app-server and approval hooks for Codex in Agents (2026-11-02, conclusions only, not implemented)
 
@@ -672,7 +679,7 @@ Read codex-rs source tags `rust-v0.153.4` / `rust-v0.163.0`, plus binaries for b
   receiving replayed pending requests. This is exactly the required "phone knows when the computer answered first" behavior, without screen reading. It is all in stable schema without `--experimental`;
   both versions export identical approval, question, elicitation, and `serverRequest/resolved` parameters (0.163 removes `thread/rollback`, adds `thread/attachment/*`).
 - **Costs**:
-  - Covers only daemon sessions: 0.153 needs someone to start a daemon first; launchers with `-c`, `--no-daemon`, existing pure-TUI sessions, and the internal fork are not on it,
+  - Covers only daemon sessions: 0.153 needs someone to start a daemon first; launchers with `-c`, `--no-daemon`, existing pure-TUI sessions, and TRAE CLI use the terminal route,
     so the rollout + screen route must remain. Version 0.163 rejects a second writer process for the same thread (`rollout/src/writer_lock.rs`); an already-running session cannot be taken over by starting another process.
   - The daemon inherits its starting process's environment (source). Inference: launcher environment and herdr's `HERDR_PANE_ID` come from the first pane to start the daemon, and herdr's
     SessionStart hook runs in the daemon too. Check how `herdr-agent-state.sh` identifies panes before using it.
@@ -736,6 +743,13 @@ provide the current speed. A native null means Standard. Missing speed stays unk
 currently report it. Refreshes preserve acknowledged state, and reconnects start with unknown state until native
 settings arrive. Terminal-only panes, subagents and models without advertised tiers have no speed control.
 
+The iOS main Assistant conversation reads the same session fields in its existing composer menu. A Speed section appears
+only when the session advertises `default` or `priority`; it uses localized Standard / Fast labels, explains Fast's extra
+quota use and says the choice applies to the next turn. Working does not disable it, while an offline or read-only action
+carries a one-line reason. Each choice is its own `POST …/modes {service_tier}` and nothing is drawn optimistically: the
+acknowledged session value owns the checkmark, summary updates preserve both fields, and a refusal or unconfirmed request
+shows an error without moving the last acknowledged selection. Model and effort requests remain separate.
+
 A new Persona conversation can carry the same native tier in `POST /api/v1/assistant/conversations` while the default
 manager names `assistant_start_service_tier` in `manager.hello` and the hub lists that feature. Launcher model discovery
 preserves `serviceTiers` as `service_tiers`; the web offers Fast only for a row that advertises `priority`, never from a
@@ -748,4 +762,4 @@ localized refusals (`assistant_service_tier_start_only`, `assistant_service_tier
 capability gets 501 `assistant_service_tier_manager_outdated` before relaying; a node without `assistant_service_tier`
 returns 409 `node_outdated`. An older hub ignores the unknown field, so the web neither offers nor sends it there. The
 start choice is one-shot, not execution-fingerprint or recovery state; later changes still use `session.speed`.
-New Agent starts have no speed setting.
+New terminal Agent starts have a separate `speed` contract for Codex Fast / Ultrafast and Claude Code fast mode, including catalog validation, start-only semantics and the `session_start_speed` compatibility gate; see [Launchers](launchers.md) "Speed". The New Agent form itself still has no speed control.

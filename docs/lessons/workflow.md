@@ -2,6 +2,10 @@
 
 Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.md`; index in `docs/lessons/README.md`). Put new lessons in the matching section; if none fits, start a new one.
 
+- Permission-mode audits must observe each actual writer (#10308): assistant calls can bypass the hub, and plan
+  hooks return `setMode` directly with a recorded `plan_then` fallback. Preserve authenticated actor metadata outside
+  client bodies, and distinguish a returned hook decision from runtime confirmation.
+
 - Disposable Postgres containers need `docker rm -fv`, not only `docker rm -f` (#8832): the image creates an anonymous
   data volume even without a mount argument. Remove only the current fixture's container; never prune historical
   volumes or change persistent database cleanup to repair a test fixture leak.
@@ -111,6 +115,14 @@ Node 24 removed `--experimental-default-type=module`; a portable SDK driver that
 SDK synchronization intentionally replaces only the selected SDK subtree (#1471). Keep the destination guard on each recursive deletion (`"${dest:?}/sdk/go"` and `"${dest:?}/sdk/ts"`), even when the entrypoint already rejects an empty destination. Verify that selective synchronization preserves both the unselected SDK and unrelated destination files, and records the source checkout's commit in `sdk/VERSION`. This makes cleanup ownership explicit without changing the official copy contents or release versions.
 
 ## Hosted CI path aggregation
+
+- Repository-wide caller guards should shortlist tracked files with a literal Git search, then inspect non-comment command
+  lines (#12258). An optional greedy prefix in the XcodeGen expression backtracked on long unrelated source lines and
+  exceeded 60 seconds; keep the same path exclusions, inspect working-tree edits, and fail on Git errors rather than
+  returning an empty inventory. Synthetic paths must not look like real dependency literals to the check-fast input
+  inventory; extensionless fixture scripts still exercise the same tracked-path scan. Build-mode guards must check
+  actual arguments per lane: the iOS 18.6 lane intentionally
+  requests only the simulator Rust-core slice, while release and the other Apple CI lanes still require the full framework.
 
 - The web lane's inputs outside `web/` are derived, not listed (#10619): `scripts/ci/paths.py` scans `web/src` and the web tests for the paths they name relative to themselves, and both CI's web lane and `check-fast` use that scan. The hand list it replaced named 6 of the ~25 fixture directories the tests read. Read a fixture by a path relative to the file (an import, `new URL("../…", import.meta.url)`, `join(__dirname, "../…")` or `".."` elements); a path built from the working directory or a variable root is invisible to the scan. Legacy JSON fixture members must be composed from their existing compatibility carrier, not repeated in a new test file or allowed by broadening the identifier registry. Fix the source of failures rather than weakening portable guards.
 

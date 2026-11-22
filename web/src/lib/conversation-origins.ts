@@ -5,8 +5,9 @@
 import { t } from "../i18n";
 import type { IconName } from "../ui/icons";
 import type { BrandId } from "./connectors";
+import { byConversationOrder } from "./conversation-order";
 import { byTime } from "./times";
-import type { Item, Session } from "./types";
+import type { AssistantInfo, Item, Session } from "./types";
 
 /** The sidebar's groups of automatic conversations, in its order; `other` is any origin this page doesn't know. */
 export const AUTO_ORIGINS = ["inbox", "task", "lark_agent", "spawned", "extension", "other"] as const;
@@ -124,10 +125,24 @@ export function autoConversations(conversations: readonly Session[], main: strin
  *  entry on Scheduled Tasks and stay in "All chats", so they no longer crowd Recent), by last activity (equal times by
  *  id, as iOS). The sidebar shows the first ones (lib/sidebar-recent.ts, #5146). `withTasks`: the user's "Show scheduled
  *  task chats" (#8324, `assistant.recent_task_chats`) brings the background supervisor and the tasks' chats back, by time. */
-export function recentConversations(conversations: readonly Session[], main: string | undefined, leaders: readonly string[], background?: string, withTasks = false): Session[] {
+export function recentConversations(conversations: readonly Session[], main: string | undefined, leaders: readonly string[], background?: string, withTasks = false, order?: readonly string[]): Session[] {
   const lead = new Set(leaders);
-  return conversations
+  const recent = conversations
     .filter((c) => c.session_id !== main && !lead.has(c.session_id) && !c.archived
       && (withTasks || (!(background && c.session_id === background) && autoOrigin(c, background) !== "task")))
     .sort((a, b) => byTime(b.updated_at, a.updated_at) || (a.session_id < b.session_id ? -1 : a.session_id > b.session_id ? 1 : 0));
+  return byConversationOrder(recent, order);
+}
+
+/** The assistant's conversations in `rows` (its machine's, as the session list or a push brings them) that the held
+ *  answer of GET /api/v1/assistant does not list (#10190): one made elsewhere while the page is open (an integration's
+ *  POST /api/v1/assistant/conversations, a chat started on the phone), or the background supervisor the hub made or
+ *  replaced since (#5082). Not the main conversation or the named background supervisor, and none the answer leaves out
+ *  anyway (archived, deleted, another space's). Only reading the answer again brings such a conversation into Recent
+ *  and All chats with everything it gives one (lib/store.ts does, once for each). */
+export function unlistedConversations(assistant: Pick<AssistantInfo, "main" | "background_supervisor" | "conversations">, rows: readonly Session[]): string[] {
+  const candidates = rows.filter((s) => s.assistant && !s.archived && !s.deleted && !s.space);
+  if (!candidates.length) return [];
+  const listed = new Set([assistant.main, assistant.background_supervisor, ...assistant.conversations.map((c) => c.session_id)]);
+  return candidates.filter((s) => !listed.has(s.session_id)).map((s) => s.session_id);
 }

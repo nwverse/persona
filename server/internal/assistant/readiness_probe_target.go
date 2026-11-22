@@ -42,14 +42,14 @@ func (s *Service) readinessProbeTarget(ctx context.Context, machine string, v Se
 			return readinessTarget{}, err
 		}
 	} else {
-		if err := s.applyModel(ctx, "assistant", p); err != nil {
+		if err := s.applyModel(ctx, purposeMain, p); err != nil {
 			return readinessTarget{}, err
 		}
-		if _, err := s.finishMainChatModel(ctx, machine, "assistant", p, false); err != nil {
+		if _, err := s.finishMainChatModel(ctx, machine, purposeMain, p, false); err != nil {
 			return readinessTarget{}, err
 		}
 	}
-	s.withNewConversationProfile(ctx, machine, "assistant", p)
+	s.withNewConversationProfile(ctx, machine, p)
 	t := readinessTarget{conversation: v.Main}
 	t.launcher, _ = p["launcher"].(string)
 	t.model, _ = p["model"].(string)

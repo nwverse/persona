@@ -1,13 +1,15 @@
 // Tool approval is not part of the chat's first screen: load the complete card with the first permission interaction,
 // as CommandScreenCard does. Its optional question editor is a further chunk loaded only when that action opens.
-import { Suspense, useState } from "react";
+import { Suspense, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { alwaysScope, offersAlways } from "../../lib/always-scope";
 import { lazyPage } from "../../lib/lazy-page";
+import { ownerApprovalAttempt, replyOwnerApproval } from "../../lib/owner-approval";
 import { cardToolName } from "../../lib/turns";
 import type { Interaction } from "../../lib/types";
-import { Button, Kbd } from "../../ui/atoms";
+import { Button, Kbd, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
+import { Markdown } from "../../ui/Markdown";
 import { permissionDetail, permissionReason, summaryExtra } from "../../lib/tool-detail";
 import { DIFF_TOOLS, DiffBlocks, editDiffs } from "./ActionRow";
 import { useChatCardTapGuard } from "./card-tap-guard";
@@ -18,18 +20,31 @@ const ApprovalQuestion = lazyPage(() => import("./ApprovalQuestion").then((m) =>
 
 export function PermissionCard({ ix }: { ix: Interaction }) {
   const [busy, setBusy] = useState(false);
+  const [replyBusy, setReplyBusy] = useState(false);
   const [questionOpen, setQuestionOpen] = useState(false);
+  const replyAttempt = useRef<{ target: string; id: string } | null>(null);
   const editable = usePermissionText(ix);
   const go = async (body: Record<string, unknown>) => {
     setBusy(true);
     await resolve(ix, body);
     setBusy(false);
   };
+  const replyPhrase = ix.owner_proposal ? ix.owner_approval_phrases?.[0] : undefined;
+  const reply = async () => {
+    if (!replyPhrase) return;
+    setReplyBusy(true);
+    const attempt = ownerApprovalAttempt(ix, replyAttempt.current);
+    replyAttempt.current = attempt;
+    const error = await replyOwnerApproval(ix, replyPhrase, attempt.id);
+    if (error) toast(error, "error");
+    else replyAttempt.current = null;
+    setReplyBusy(false);
+  };
   // Enter allows (the Allow button), except while the independent question
   // editor is open. Deny is never a key away.
   const keys = useCardKeys({
     enter: () => {
-      if (busy || questionOpen || editable.composing || !editable.canAllow) return false;
+      if (busy || replyBusy || questionOpen || editable.composing || !editable.canAllow) return false;
       void go(editable.allow());
     },
   });
@@ -41,27 +56,32 @@ export function PermissionCard({ ix }: { ix: Interaction }) {
       cardKeys={keys}
       tapGuard={tapGuard}
       onDismiss={() => go({ dismiss: true })}
-      busy={busy}
+      busy={busy || replyBusy}
       footer={
         <>
           <span className="flex min-w-0 gap-1.5">
             {ix.can_clarify && (
-              <Button tone="quiet" disabled={busy} aria-expanded={questionOpen} onClick={() => setQuestionOpen((v) => !v)}>
+              <Button tone="quiet" disabled={busy || replyBusy} aria-expanded={questionOpen} onClick={() => setQuestionOpen((v) => !v)}>
                 {t("chat-interactions.have_question")}
               </Button>
             )}
-            <Button tone="quiet" disabled={busy} onClick={() => go(editable.deny())}>
+            <Button tone="quiet" disabled={busy || replyBusy} onClick={() => go(editable.deny())}>
               {t("chat-interactions.deny")}
             </Button>
           </span>
           <span className="flex gap-1.5">
             {/* Only where an Always is kept (offersAlways): never on the manager's own cards. */}
             {offersAlways(ix) && !editable.changed && (
-              <Button tone="secondary" disabled={busy} onClick={() => go({ allow: true, always: true })}>
+              <Button tone="secondary" disabled={busy || replyBusy} onClick={() => go({ allow: true, always: true })}>
                 {t("chat-interactions.always_allow")}
               </Button>
             )}
-            <Button tone="primary" busy={busy} disabled={!editable.canAllow} onClick={() => go(editable.allow())}>
+            {replyPhrase && (
+              <Button tone="secondary" busy={replyBusy} disabled={busy || replyBusy} onClick={() => void reply()}>
+                {t("chat-interactions.owner_reply", { phrase: replyPhrase })}
+              </Button>
+            )}
+            <Button tone="primary" busy={busy} disabled={replyBusy || !editable.canAllow} onClick={() => go(editable.allow())}>
               {t("chat-interactions.allow")}
               {keys.focused && !questionOpen && <Kbd>Enter</Kbd>}
             </Button>
@@ -113,7 +133,7 @@ export function PermissionBody({ ix }: { ix: Interaction }) {
         </div>
       )}
       {extraShown && <p className="text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink-2">{extra}</p>}
-      {lead && <pre className={CODE_BOX}>{lead}</pre>}
+      {lead && (ix.format === "markdown" ? <Markdown text={lead} small compact /> : <pre className={CODE_BOX}>{lead}</pre>)}
       {hasInput && (detail || lead) && (
         <button type="button" aria-expanded={showInput} onClick={() => setShowInput((v) => !v)} className="touch-hit flex items-center gap-1 self-start text-[11.5px] whitespace-nowrap text-ink-3 transition-colors hover:text-ink">
           <Icon name="chevron" size={11} stroke={2.4} style={{ transform: showInput ? "none" : "rotate(-90deg)", transition: "transform 150ms" }} />

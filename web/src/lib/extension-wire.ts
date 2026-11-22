@@ -46,7 +46,8 @@ export interface Manifest {
    */
   extension_pack?: PackMember[];
   /**
-   * The configuration's JSON Schema, in the subset every app draws as a form (docs "Configuration: the form subset").
+   * The configuration's JSON Schema, in the settings-form subset (docs "Configuration: the form subset"). Capable
+   * clients draw declared entry lists after opting in; other clients receive compatibility projections.
    */
   configuration?: unknown;
   secrets?: SecretSpec[];
@@ -321,6 +322,7 @@ export interface Contributes {
   browser?: NamedItem[];
   iphone?: NamedItem[];
   quota?: QuotaItem[];
+  usage?: UsageItem[];
   providers?: ProviderItem[];
   api?: APIItem[];
   assistant?: AssistantItem[];
@@ -574,7 +576,18 @@ export interface RepositoryProviderItem {
    * kinds stay issue and pull_request.
    */
   link_kinds?: RepositoryLinkLabel[];
+  /**
+   * What else the program answers (#11584): pr_status, the state of a pull request for delivery checks
+   * (repo.pr_status). Without it the manager reads repo.describe's state. Each at most once.
+   */
+  capabilities?: RepositoryCapability[];
 }
+
+/**
+ * A repository provider's optional answer: pr_status (repo.pr_status).
+ */
+export type RepositoryCapability = "pr_status" | (string & {});
+export const REPOSITORY_CAPABILITIES = ["pr_status"] as const;
 
 /**
  * The word a repository provider shows for one kind of its links (MR for a pull_request).
@@ -679,6 +692,12 @@ export interface QuotaItem {
   hosts?: string[];
 }
 
+export interface UsageItem {
+  id: string;
+  name: string;
+  hosts?: string[];
+}
+
 export interface ProviderItem {
   id: string;
   name: string;
@@ -754,6 +773,11 @@ export interface UIItem {
   hosts?: string[];
   /** nav_page only. */
   icon?: NavIcon;
+  /**
+   * nav_page only: the icon's named color in the sidebar, the same colors as a row's icon_color, drawn only while the
+   * owner chose Colored sidebar icons (#10822); without it the icon stays the sidebar's neutral ink.
+   */
+  icon_color?: Color;
   /** overview_card, capsule_card and widget only: a nav_page or extension_page of the same extension. */
   opens?: string;
   /** inbox_item only: one of the extension's own connectors. */
@@ -795,6 +819,11 @@ export interface ChannelItem {
 
 export interface ChannelCapabilities {
   images_in?: boolean;
+  /**
+   * It can send pictures: the hub puts an answer's pictures in channel.send's images instead of leaving them as
+   * Markdown in the text.
+   */
+  images_out?: boolean;
   files_in?: boolean;
   voice_in?: boolean;
   format?: string;
@@ -1144,6 +1173,8 @@ export interface UIPlace {
   connector?: string;
   /** A nav_page's sidebar group, its title in the request's language (#9071). */
   group?: UIGroup;
+  /** A nav_page's icon color as its manifest names it, drawn only with Colored sidebar icons (#10822). */
+  icon_color?: Color;
 }
 
 export interface UIPlaces {
@@ -1619,9 +1650,11 @@ export type Component =
   | ComposerComponent
   | ImageComponent
   | GridComponent
-  | CarouselComponent;
-export const COMPONENT_TYPES = ["text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel"] as const;
-export const COMPONENT_SINCE: Record<string, number> = { text: 1, metric: 1, progress: 1, row: 1, button: 1, link: 1, field: 1, divider: 1, chart: 2, stat_grid: 2, segmented: 2, markdown: 3, table: 3, empty: 3, loading: 3, html: 4, header: 4, breadcrumb: 4, file_tree: 4, code: 4, diff: 4, comment_thread: 4, composer: 4, image: 6, grid: 6, carousel: 6 };
+  | CarouselComponent
+  | GraphComponent
+  | SceneComponent;
+export const COMPONENT_TYPES = ["text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel", "graph", "scene"] as const;
+export const COMPONENT_SINCE: Record<string, number> = { text: 1, metric: 1, progress: 1, row: 1, button: 1, link: 1, field: 1, divider: 1, chart: 2, stat_grid: 2, segmented: 2, markdown: 3, table: 3, empty: 3, loading: 3, html: 4, header: 4, breadcrumb: 4, file_tree: 4, code: 4, diff: 4, comment_thread: 4, composer: 4, image: 6, grid: 6, carousel: 6, graph: 10, scene: 11 };
 
 /**
  * A paragraph.
@@ -2010,6 +2043,243 @@ export interface CarouselComponent {
   tiles: Tile[];
   width?: TileWidth;
 }
+
+/**
+ * Nodes joined by edges, drawn as a canvas the person can pan, zoom, fit and open full screen (UI version 10): work
+ * split into parts, a plan's steps, a family of things. The app lays it out (layout, direction) and draws each node
+ * with its own design system; tapping a node does its action, as a row's (or opens its in-place inspector first on
+ * the web when the node carries facts, detail or links, with the action inside); a node with children folds them.
+ * Each node counts as a component of the page. The hub refuses ids that repeat, an edge naming an unknown node or
+ * itself, a repeated edge, a cycle, a second parent in a tree, and selected or folded naming an unknown node. In a
+ * card it is a still preview that opens full screen. An older app gets a row per node in reading order, indented.
+ */
+export interface GraphComponent {
+  type: "graph";
+  /** Keeps the person's pan, zoom and folding across redraws of the page. */
+  key?: string;
+  nodes: GraphNode[];
+  edges?: GraphEdge[];
+  layout?: GraphLayout;
+  direction?: GraphDirection;
+  /** A node's id: drawn as selected, and the canvas opens centred on it. */
+  selected?: string;
+  /**
+   * Ids of nodes whose children start folded. Once the person folds or unfolds one, the app keeps their choice for
+   * this key.
+   */
+  folded?: string[];
+}
+
+/**
+ * One node of a graph (UI version 10): a box with a title, a state line, a badge, an icon and a progress bar, in
+ * tone's role color or color's named color (never both), with optional timing and inspector details.
+ */
+export interface GraphNode {
+  id: string;
+  title: string;
+  subtitle?: string;
+  badge?: Badge;
+  tone?: Tone;
+  color?: Color;
+  icon?: NavIcon;
+  /** A thin bar along the node's foot, 0 to 1. */
+  progress?: number;
+  /**
+   * Nodes with the same parents and the same group sit next to each other inside one frame titled with it (the same
+   * task tried several ways).
+   */
+  group?: string;
+  action?: Action;
+  /** Unix timestamp in seconds when this node started. */
+  started_at?: number;
+  /** Unix timestamp in seconds when this node ended; omitted while still running. */
+  ended_at?: number;
+  /** Short label/value readings shown in the node inspector. */
+  facts?: Fact[];
+  /** Plain-text summary, verifier feedback or error shown in the node inspector. */
+  detail?: string;
+  /** HTTPS links shown in the node inspector (for example work and verifier sessions across attempts). */
+  links?: GraphNodeLink[];
+}
+
+/**
+ * An https link shown in a graph node's inspector (UI version 10).
+ */
+export interface GraphNodeLink {
+  title: string;
+  url: string;
+}
+
+/**
+ * An edge from one node to another (UI version 10): from is the parent, to the child.
+ */
+export interface GraphEdge {
+  from: string;
+  to: string;
+}
+
+/**
+ * tree (the default): every node has at most one parent, children under it, a parent centred over its children.
+ * layered: a node may have several parents; each node sits one layer past its furthest parent (a plan whose steps
+ * wait for several others).
+ */
+export type GraphLayout = "tree" | "layered" | (string & {});
+export const GRAPH_LAYOUTS = ["tree", "layered"] as const;
+
+/**
+ * right (the default): roots at the start, children after them, so a wide fan-out reads down the screen like an
+ * outline. down: roots at the top, children below.
+ */
+export type GraphDirection = "right" | "down" | (string & {});
+export const GRAPH_DIRECTIONS = ["right", "down"] as const;
+
+/**
+ * A small 3D model the person can turn, zoom and tap (UI version 11): a home with its rooms and furniture as simple
+ * shapes, each device pinned where it is with its state, and a light in the model for lamps that are on. The app
+ * builds it with its own engine; the extension sends shapes, never a model file or code. Metres; plan coordinates [x,
+ * y] with x east and y north, heights up from the floor; angles in degrees counter-clockwise from +x seen from above.
+ * Each pin counts as a component of the page; a view has at most one scene. In a card it is a still preview that
+ * opens full screen. An older app gets the poster as an image, or without one a row per pin.
+ */
+export interface SceneComponent {
+  type: "scene";
+  /** Keeps the person's camera across redraws of the page. */
+  key?: string;
+  /** What the model shows, in a sentence: read out first, and shown when it cannot be drawn. */
+  alt: string;
+  caption?: string;
+  /**
+   * A picture of the model for an older app (an image in its place) and for share as image. Without it an older app
+   * gets a row per pin.
+   */
+  poster?: ImageSource;
+  camera?: SceneCamera;
+  shapes: SceneShape[];
+  labels?: SceneLabel[];
+  pins?: ScenePin[];
+}
+
+/**
+ * Where the model is first seen from (UI version 11), orthographic, around the centre of the shapes' bounding box.
+ * Each field has its default when absent.
+ */
+export interface SceneCamera {
+  /**
+   * The camera's direction from the centre, in degrees counter-clockwise from +x (east): 225 (the default) stands
+   * south-west, looking north-east.
+   */
+  yaw?: number;
+  /** Degrees above the floor plane: 35 by default, 90 straight down. */
+  pitch?: number;
+  /** 1 (the default) fits the shapes' bounding box in the view; 2 draws it twice as large. */
+  zoom?: number;
+}
+
+/**
+ * One shape of a scene (UI version 11), told apart by kind: a box, a cylinder or a prism, standing from bottom to top
+ * (metres above the floor, at least 0.005 apart). Without color, the material's own.
+ */
+export type SceneShape =
+  | SceneBox
+  | SceneCylinder
+  | ScenePrism;
+export const SCENE_SHAPE_KINDS = ["box", "cylinder", "prism"] as const;
+
+/**
+ * A box (UI version 11): at yaw 0, size[0] along +x and size[1] along +y. round rounds its corners seen from above
+ * (at most half the smaller size); the app bevels its upright edges no more than half its height.
+ */
+export interface SceneBox {
+  kind: "box";
+  center: number[];
+  size: number[];
+  yaw?: number;
+  round?: number;
+  bottom: number;
+  top: number;
+  color?: string;
+  material?: SceneMaterial;
+}
+
+/**
+ * An upright cylinder (UI version 11): a round table's top, a stool, a lamp's stem.
+ */
+export interface SceneCylinder {
+  kind: "cylinder";
+  center: number[];
+  radius: number;
+  bottom: number;
+  top: number;
+  color?: string;
+  material?: SceneMaterial;
+}
+
+/**
+ * A floor plan's polygon raised from bottom to top (UI version 11): a room's floor, an L-shaped counter. The hub
+ * refuses a polygon that is not simple: a point twice, an edge shorter than 0.005, an edge folding back, edges that
+ * touch, an area under 0.0001.
+ */
+export interface ScenePrism {
+  kind: "prism";
+  points: (number[])[];
+  bottom: number;
+  top: number;
+  color?: string;
+  material?: SceneMaterial;
+}
+
+/**
+ * How a shape's surface looks (UI version 11): matte (the default), glass (see-through), metal, screen (dark and
+ * glossy), tile and wood (the app's own pattern, in metres, in the shape's color).
+ */
+export type SceneMaterial = "matte" | "glass" | "metal" | "screen" | "tile" | "wood" | (string & {});
+export const SCENE_MATERIALS = ["matte", "glass", "metal", "screen", "tile", "wood"] as const;
+
+/**
+ * A quiet name on the floor (UI version 11): a room's. Not tappable and not a component of the page; read out after
+ * alt.
+ */
+export interface SceneLabel {
+  text: string;
+  at: number[];
+  height?: number;
+}
+
+/**
+ * A device in the model (UI version 11): a pin at its place with its label and state, in tone's role color or color's
+ * named color (never both); with light on, the model lights up around it. Tapping it does its action, as a tile's.
+ * state is required when a tone other than neutral, a color or a light that is on says something, so it never rides
+ * on color or light alone. A scene has at most 16 pins with a light on.
+ */
+export interface ScenePin {
+  id: string;
+  at: number[];
+  /** Metres above the floor: a ceiling lamp's 2.4, an AC's 2.2. 0 when absent. */
+  height?: number;
+  label: string;
+  /** In plain words: On, Off, 26 °C. */
+  state?: string;
+  icon?: NavIcon;
+  tone?: Tone;
+  color?: Color;
+  light?: SceneLight;
+  action?: Action;
+}
+
+/**
+ * A lamp's light (UI version 11): when on, the model is lit around the pin, warm or cool. Off (the default) adds no
+ * light.
+ */
+export interface SceneLight {
+  on?: boolean;
+  warmth?: SceneWarmth;
+}
+
+/**
+ * warm (the default): a lamp's yellow light; cool: a white one.
+ */
+export type SceneWarmth = "warm" | "cool" | (string & {});
+export const SCENE_WARMTHS = ["warm", "cool"] as const;
 
 /**
  * Where a picture comes from (UI version 6): an https url the app loads without credentials, or a ref the extension
@@ -2721,6 +2991,8 @@ export interface MessagingAccount {
   id: string;
   name?: string;
   avatar?: string;
+  /** Hub-supplied avatar path derived from avatar. Old sources supply only avatar. */
+  avatar_url?: string;
   tenant?: string;
   signed_in: boolean;
   unread?: number;
@@ -2738,6 +3010,8 @@ export interface MessagingConversation {
   id: string;
   name: string;
   avatar?: string;
+  /** Hub-supplied avatar path derived from avatar. Old sources supply only avatar. */
+  avatar_url?: string;
   kind: MessagingConversationKind;
   unread: number;
   marked_unread?: boolean;
@@ -2762,6 +3036,8 @@ export interface MessagingPerson {
   id?: string;
   name: string;
   avatar?: string;
+  /** Hub-supplied avatar path derived from avatar. Old sources supply only avatar. */
+  avatar_url?: string;
   kind?: string;
 }
 
@@ -3175,6 +3451,8 @@ export interface MessagingProfile {
   id: string;
   name: string;
   avatar?: string;
+  /** Hub-supplied avatar path derived from avatar. Old sources supply only avatar. */
+  avatar_url?: string;
   cover?: string;
   kind?: string;
   subtitle?: string;

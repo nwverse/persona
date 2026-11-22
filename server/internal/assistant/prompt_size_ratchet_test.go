@@ -8,11 +8,13 @@ package assistant
 // down, like the Apple token ratchet (apple/PersonaTests TokenRatchetTests): a rule that has to grow is shortened
 // or moved elsewhere first. A single piece may still grow when text moves between prompts and the total falls by
 // more (a move into the shared instructions shrinks the goldens it came from); such a PR says where the text moved
-// to. After a shrink or such a move, lower the baseline in the same PR by running
+// to. After such a move, or a new piece, rewrite the baseline in the same PR by running
 //
 //	PROMPT_SIZE_UPDATE=1 go test ./internal/assistant -run PromptSizeRatchet
 //
-// which also adds new keys and drops removed ones, but refuses to write a larger total.
+// which also adds new keys and drops removed ones, but refuses to write a larger total. Only growth fails: a piece
+// that shrank or is no longer measured is noted, and lowering the baseline for it is tidying anyone can do, then or
+// later (python3 scripts/ci/lower_baselines.py; docs/operations/testing.md, "Count ratchets").
 
 import (
 	"bytes"
@@ -23,6 +25,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/mcptoolgolden"
 )
 
 const promptSizeBaseline = "testdata/prompt_sizes.json"
@@ -82,9 +86,10 @@ func promptSizePieces(t *testing.T) map[string]int {
 		}
 	}
 
-	// The assistant's MCP tools, one entry per tool object.
-	toolsPath := filepath.Join("..", "hub", "testdata", "prompts", "mcp_tools.assistant.golden")
-	raw, err := os.ReadFile(toolsPath)
+	// The assistant's MCP tools, one entry per tool object, from the hub's goldens (one file a tool since #11252).
+	toolsDir := filepath.Join("..", "hub", mcptoolgolden.Dir)
+	toolsPath := filepath.Join(toolsDir, "assistant") // for messages: the list's index and tool files
+	raw, err := mcptoolgolden.Load(toolsDir, "assistant")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,13 +240,13 @@ func TestPromptSizeRatchet(t *testing.T) {
 		cur, inCurrent := current[key]
 		switch {
 		case !inCurrent:
-			t.Errorf("%s is no longer measured; PROMPT_SIZE_UPDATE=1 go test ./internal/assistant -run PromptSizeRatchet rewrites the baseline", key)
+			t.Logf("%s is no longer measured; lowering the baseline is tidying anyone can do: python3 scripts/ci/lower_baselines.py, or PROMPT_SIZE_UPDATE=1 go test ./internal/assistant -run PromptSizeRatchet", key)
 		case !inBaseline:
 			t.Errorf("%s is new at %d bytes; PROMPT_SIZE_UPDATE=1 go test ./internal/assistant -run PromptSizeRatchet adds it", key, cur)
 		case cur > old:
 			t.Errorf("%s grew from %d to %d bytes; growth is decided when the baseline is updated, never slipped in: when moving text between prompts, PROMPT_SIZE_UPDATE=1 go test ./internal/assistant -run PromptSizeRatchet accepts it as long as the total goes down", key, old, cur)
 		case cur < old:
-			t.Logf("%s shrank from %d to %d bytes; PROMPT_SIZE_UPDATE=1 go test ./internal/assistant -run PromptSizeRatchet lowers the baseline", key, old, cur)
+			t.Logf("%s shrank from %d to %d bytes; lowering the baseline is tidying anyone can do: python3 scripts/ci/lower_baselines.py, or PROMPT_SIZE_UPDATE=1 go test ./internal/assistant -run PromptSizeRatchet", key, old, cur)
 		}
 	}
 }

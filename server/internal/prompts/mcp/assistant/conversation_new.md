@@ -1,4 +1,4 @@
-Open a Persona conversation with a first message; returns its id. For threads the user asks for. Marked as from this one; named after its first turn and told to report with conversation_send. Failure or no report leaves one notice. A read-only policy may refuse: follow it, do not retry. Add `tags` only if asked.
+Open a Persona conversation with a first message; returns its id. For threads the user asks for. Marked as from this one; named after its first turn and told to report with conversation_send. Failure or no report leaves one notice. A read-only policy may refuse: follow it, do not retry. Add `tags` only if asked.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -16,7 +16,7 @@ Open a Persona conversation with a first message; returns its id. For threads th
     },
     "quote": {
       "type": "string",
-      "description": "\"latest\" or a message id: the user's words, carried verbatim"
+      "description": "\"latest\" (this turn), a message id or the user's exact words"
     }
   }
 }

@@ -34,6 +34,10 @@ const (
 	// featureAgentsPageCounts: the same for a paged GET /api/v1/agents/sessions, the personal Agents the extension
 	// manager serves (extmgr/agents.go, #6496).
 	featureAgentsPageCounts = "agents_page_counts"
+	// featureAgentsProviderOR: a paged GET /api/v1/agents/sessions takes provider repeatedly (1 to 64 values) for an
+	// exact, case-sensitive OR set. Order and duplicates do not change matching, counts or cursor binding. An older hub
+	// rejects repetition on a paged request, so clients send it only when this feature is advertised (#994).
+	featureAgentsProviderOR = "agents_provider_or"
 	// featureSessionsListChanges: an app that lists it in the WebSocket URL's ?features= gets, on a sessions_list hint
 	// that follows a change of the index, the revision before the change (`since`) and the ids changed after it
 	// (`changed`), so an open chat does not read its row again for another session's change (sessionListHint, #6685).
@@ -215,7 +219,7 @@ func indexedRow(mid, id string, row *proto.Session, stamp bool, manager, root st
 		todo = row.Todo.ID
 	}
 	item := sessionlist.Item{
-		ID: id, Machine: mid, Project: project, Group: group, PaneSource: pane,
+		ID: id, Machine: mid, Project: project, Group: group, PaneSource: pane, HiddenByDirectory: row.HiddenByDirectory(),
 		State: row.State, BackgroundWaiting: row.BackgroundWaiting, JustFinished: row.Work != nil && row.Work.JustFinished,
 		Source: row.SourceKind, Provider: row.Agent, UpdatedAt: row.UpdatedAt,
 		Fold: indexedFold(mid, row, root, todo, indexed.Fold), Private: healthSession(row), Assistant: row.Assistant,
@@ -445,7 +449,7 @@ func runtimeSummary(s proto.Session) runtimeRowSummary {
 		Agent: s.Agent, AgentLabel: s.AgentLabel, AgentName: s.AgentName, AgentSurface: s.AgentSurface,
 		SourceKind: s.SourceKind, SourceThreadID: s.SourceThreadID, SourceInstanceID: s.SourceInstanceID,
 		ParentThreadID: s.ParentThreadID, ParentSessionID: s.ParentSessionID, RootSessionID: s.RootSessionID, IsSubagent: s.IsSubagent,
-		Capabilities: s.Capabilities, Attached: s.Attached, CanFork: s.CanFork,
+		Capabilities: s.Capabilities, Attached: s.Attached, CanFork: s.CanFork, BypassPending: s.BypassPending,
 		SpaceKind: s.SpaceKind, SpaceID: s.SpaceID, SpaceName: s.SpaceName, SpaceIndex: s.SpaceIndex,
 		ParentSpaceID: s.ParentSpaceID, SlotID: s.SlotID, SlotName: s.SlotName, SlotIndex: s.SlotIndex, PaneIndex: s.PaneIndex,
 		WorkspaceID: s.WorkspaceID, TabID: s.TabID, PaneID: s.PaneID,
@@ -456,7 +460,8 @@ func runtimeSummary(s proto.Session) runtimeRowSummary {
 		TurnError: rowText(s.TurnError, 180), TurnErrorKind: s.TurnErrorKind, TurnErrorCode: s.TurnErrorCode,
 		TurnErrorResetsAt: s.TurnErrorResetsAt, TurnErrorResumes: s.TurnErrorResumes,
 		PendingInteractions: s.PendingInteractions, Rev: s.Rev, Quiet: s.Quiet,
-		Model: s.Model, Effort: s.Effort, ContextTokens: s.ContextTokens, ContextWindow: s.ContextWindow,
+		Model: s.Model, RequestedModel: s.RequestedModel, Effort: s.Effort, PendingEffort: s.PendingEffort, EffortChangeFailed: s.EffortChangeFailed,
+		ContextTokens: s.ContextTokens, ContextWindow: s.ContextWindow,
 		Hierarchy: s.Hierarchy, // folded_under, children, started_at: the child cards and the parent's state (#5120)
 	}
 	out.SetBackgroundEnded(nil)
@@ -577,7 +582,7 @@ func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request, manager stri
 		return
 	}
 	opts.Manager = manager
-	opts.NoPrivate = extensionToken(r) // an extension's token never sees a health-space conversation (extension_private.go)
+	opts.NoPrivate = restrictedAgentData(r) // external Agent clients cannot see health-space conversations
 	if values, lookup := r.URL.Query()["session_id"]; lookup {
 		if len(values) != 1 || values[0] == "" || opts.Machine == "" || opts.Since != "" || opts.Cursor != "" {
 			sessionListErr(w, errors.New("exact session lookup requires one nonempty session_id and machine_id, without since or cursor"))
@@ -639,7 +644,7 @@ func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request, manager stri
 		return
 	}
 	if catalogAsked(r) {
-		catalog, err := h.sessionCatalogOf(r.Context(), index, opts, own, limited, !extensionToken(r))
+		catalog, err := h.sessionCatalogOf(r.Context(), index, opts, own, limited, !restrictedAgentData(r))
 		if err != nil {
 			sessionListErr(w, err)
 			return
@@ -648,13 +653,7 @@ func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request, manager stri
 		return
 	}
 	if counts := r.URL.Query().Get("counts"); counts == "1" || counts == "true" {
-		var counts sessionlist.Counts
-		var err error
-		if limited {
-			counts, err = ownCounts(index, opts, own)
-		} else {
-			counts, err = index.Counts(opts)
-		}
+		counts, err := h.countsWithHeld(index, opts, own, limited)
 		if err != nil {
 			sessionListErr(w, err)
 			return
@@ -676,12 +675,7 @@ func (h *Hub) pagedSessions(w http.ResponseWriter, r *http.Request, manager stri
 	if with := r.URL.Query().Get("with_counts"); with == "1" || with == "true" {
 		o := opts
 		o.Since, o.Cursor = "", "" // current membership, as the separate counts read asks for it
-		var counts sessionlist.Counts
-		if limited {
-			counts, err = ownCounts(index, o, own)
-		} else {
-			counts, err = index.Counts(o)
-		}
+		counts, err := h.countsWithHeld(index, o, own, limited)
 		if err != nil {
 			sessionListErr(w, err)
 			return
@@ -707,6 +701,82 @@ func (h *Hub) extensionMachines(r *http.Request) (own []string, limited bool) {
 		}
 	}
 	return own, limited
+}
+
+func (h *Hub) heldNeedsIDs() []string {
+	interactions := h.pendingInteractions()
+	if len(interactions) == 0 {
+		return nil
+	}
+	type flags struct {
+		hasP0   bool
+		hasHeld bool
+	}
+	byHome := map[[2]string]flags{}
+	for _, ix := range interactions {
+		if ix.Delegating {
+			continue
+		}
+		home := ix.FoldedUnder
+		if home == "" {
+			home = ix.SessionID
+		}
+		if home == "" {
+			continue
+		}
+		k := [2]string{ix.MachineID, home}
+		st := byHome[k]
+		if ix.PushLevel == assistantwire.LevelP1 || ix.PushLevel == assistantwire.LevelP2 {
+			st.hasHeld = true
+		} else {
+			st.hasP0 = true
+		}
+		byHome[k] = st
+	}
+	var ids []string
+	for k, st := range byHome {
+		if st.hasHeld && !st.hasP0 {
+			ids = append(ids, runtimeListID(k[0], k[1]))
+		}
+	}
+	return ids
+}
+
+func (h *Hub) countsWithHeld(index *sessionlist.Index, opts sessionlist.Options, own []string, limited bool) (sessionlist.Counts, error) {
+	var (
+		counts sessionlist.Counts
+		err    error
+	)
+	if limited {
+		counts, err = ownCounts(index, opts, own)
+	} else {
+		counts, err = index.Counts(opts)
+	}
+	if err != nil {
+		return sessionlist.Counts{}, err
+	}
+	ids := h.heldNeedsIDs()
+	if len(ids) == 0 || counts.State[proto.StateNeedsYou] == 0 {
+		return counts, nil
+	}
+	if limited {
+		for _, mid := range own {
+			o := opts
+			o.Machine, o.Cursor = mid, ""
+			n, herr := index.CountMatchingState(o, proto.StateNeedsYou, ids)
+			if herr != nil {
+				return sessionlist.Counts{}, herr
+			}
+			counts.HeldNeeds += n
+		}
+	} else {
+		n, herr := index.CountMatchingState(opts, proto.StateNeedsYou, ids)
+		if herr != nil {
+			return sessionlist.Counts{}, herr
+		}
+		counts.HeldNeeds = n
+	}
+	return counts, nil
 }
 
 // ownCounts are the counts of opts over the machines own only (each machine's, added up).

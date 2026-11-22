@@ -27,9 +27,9 @@ var mainOnlySignals = []string{sigFailed, sigStarted, sigEscalated, sigLeaderStu
 
 // backgroundSignals are the signals digestTo sends the background supervisor for the main conversation's tasks:
 // every kind but mainOnlySignals.
-var backgroundSignals = []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigAllStopped, sigInterrupted,
+var backgroundSignals = []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigTimedOut, sigAllStopped, sigInterrupted,
 	sigPRConflict, sigDraftPR, sigReport, sigOrphaned, sigAsk, sigDecide, sigDecisionReply, sigRecheck, sigUndecidable,
-	sigOwnerCannot, sigParkedDue, sigParkDecided, sigInbox, sigOverdue}
+	sigOwnerCannot, sigParkedDue, sigParkDecided, sigInbox, sigOverdue, sigCheck}
 
 // roundConnectorTools are the round's tools that come with the Lark extension (lark_search) or the lark-cli connector
 // (larkcli_search) rather than the assistant's own list.
@@ -155,6 +155,8 @@ func roundMessage(lang string) string {
 			e.Decision = decision
 		case sigOwnerCannot:
 			e.Decision, e.Response = decision, "decide_yourself"
+		case sigCheck: // the owner's answer to a check's decision, the fullest of the check's three
+			e.Report, e.Decision, e.Response = checkDecidedReport, decision, "10% first"
 		case sigParkedDue, sigParkDecided:
 			e.Parked, e.Decisions = parked, decisions
 		case sigInbox:
@@ -164,7 +166,7 @@ func roundMessage(lang string) string {
 		entries = append(entries, e)
 	}
 	return prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(entries), Leader: true, Background: true, Fresh: true,
-		Overdue: true, ParkedDue: true, ParkDecided: true, Decisions: true, Inbox: true, Asked: true, AskMinutes: 5, LowDistraction: true})
+		Overdue: true, ParkedDue: true, ParkDecided: true, Decisions: true, Inbox: true, Asked: true, AskMinutes: 5, PushGrading: true})
 }
 
 // roundScanTools are the tools the scans below look for: the assistant's own, the extensions' that Persona's own text
@@ -192,14 +194,14 @@ func namedTools(text string) []string {
 // for the round's tools, or listed here when it is one of these.
 var roundPassingMentions = map[string][]string{
 	"agent_archive":      {"agent_unarchive", "conversation_archive"},
-	"agent_send":         {"agent_start", "agent_supervise", "ask_user"},
+	"agent_send":         {"agent_start", "ask_user"},
 	"agents_list":        {"agent_start", "agent_switch", "agent_unarchive"},
 	"conversation_read":  {"conversations_list"},
 	"kb_get":             {"kb_list"},
 	"kb_search":          {"kb_list"},
 	"schedule_followup":  {"inbox_post"},
 	"supervision_finish": {"ask_user"},
-	"task_plan":          {"kb_list", "repositories_list", "repository_get", "task_retry", "todo_create"},
+	"task_plan":          {"kb_list", "repositories_list", "repository_get", "task_retry"},
 	"task_review":        {"agent_start"},
 	"task_scope":         {"agent_supervise", "ask_user"},
 	"todo_get":           {"todo_repository_links_add"},

@@ -15,6 +15,19 @@ import (
 
 var idleCompactPolicy = assistantwire.IdleCompaction{Enabled: true, IdleMinutes: 30, ContextTokens: 300000}
 
+func TestA2ADeliveryDefersDuringCompaction(t *testing.T) {
+	n := &Node{}
+	ctx := context.WithValue(t.Context(), a2aIdleKey{}, false)
+	p := &assistantProc{compacting: true}
+	if err := n.idleCompactBeforeInput(ctx, p); rpcCode(err) != "a2a_session_busy" {
+		t.Fatalf("A2A should defer during compaction: %v", err)
+	}
+	p.compacting = false
+	if err := n.idleCompactBeforeInput(ctx, p); err != nil {
+		t.Fatalf("idle A2A delivery was refused: %v", err)
+	}
+}
+
 type idleCompactSink struct {
 	syncBuffer
 	compact chan struct{}
@@ -50,6 +63,7 @@ func idleCompactFixture(t *testing.T) (*Node, *assistantProc, *idleCompactSink) 
 	p.stdin = &ackControlWriter{WriteCloser: sink, p: p}
 	n.state.update(p.id, func(st *sessionState) bool {
 		st.IsMain = true
+		st.OriginKnown = true
 		st.IdleCompaction = &idleCompactionState{
 			Policy: idleCompactPolicy, Since: time.Now().Add(-time.Hour), Tokens: p.context,
 		}

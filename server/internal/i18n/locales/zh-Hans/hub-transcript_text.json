@@ -50,6 +50,7 @@
   "runtime_error_cause": "出错了：{error}",
   "runtime_exit_code": "（退出码 {code}）",
   "runtime_canceled": "（已取消）",
+  "runtime_agy_auto_refused": "agy 拒绝了 Auto 模式，已改由 Persona 自动批准权限请求",
   "background_moved": "超时转到后台的命令",
   "queued_from": "【来自 {from}】",
   "act_plan": "在更新计划",
@@ -132,5 +133,5 @@
   "paseo_ui_state_blocked": "受阻",
   "paseo_ui_state_skipped": "已跳过",
   "paseo_ui_reply_with": "可直接回复以下任一项：",
-  "omp_stopped": "这个 omp 会话已停止。现在只能在电脑上接着它（omp --resume），这里还不能给它发消息。"
+  "omp_stopped": "这个 omp 会话已停止。发一条消息会在电脑上新开一个终端标签页，用 omp --resume 接着它。"
 }

@@ -73,7 +73,7 @@ A single binary `personad`, four modes:
 
 The hub only handles communication: app and other clients ↔ managers, hub ↔ hub (linked hubs), connections (WebSocket, node / connector links), pairing and auth, the admin UI, push delivery, and various relays.
 Business logic lives in the managers (`server/internal/assistant`, `devices`, `extmgr`; see `docs/server/machines.md`, `docs/extensions/extensions.md` ("Who owns what"), `docs/assistant/assistant.md`):
-the data for the assistant, Inbox, to-dos, usage limits, board, extensions and devices, plus model calls (triage, titles, summaries, judgments). The hub forwards these endpoints to the managers as-is (`assistantwire.Routes`, `devicewire.Routes`, `extwire.Routes`), except the merged lists, which it joins, adding up the to-dos' `counts` and joining their places over the JSON as the managers send it (`server/internal/hub/ownership_lists.go`, `server/internal/hub/todo_view.go`); it never works out a to-do's phase.
+the data for the assistant, Inbox, to-dos, usage limits, board, extensions and devices, plus model calls (triage, titles, summaries, judgments). The hub forwards these endpoints to the managers as-is (`assistantwire.Routes`, `devicewire.Routes`, `extwire.Routes`), except the merged lists, which it joins, adding up the to-dos' `counts` and joining their places over the JSON as the managers send it (`server/internal/hub/ownership_lists.go`, `server/internal/hub/todo_view.go`); it never works out a to-do's phase. A few relayed writes keep an operation receipt at the hub (`client_ops`): a meeting's Just me and follow-up (`server/internal/hub/meeting_receipts.go`), and the answer to a to-do's ask and a message to a to-do on its conversation's route (`server/internal/hub/todo_receipts.go`); the hub keeps the manager's reply for the same op id, while the manager decides the answer. For the two to-do writes the hub also says on the socket that it has the write (`todo_send_state`) before the manager answers, as it does for a session's message (`message_send_state`): transport only, never the to-do's state.
 An ordinary route goes as one `http.request` on the bus, its body read whole (a body of 1 MiB or more goes on a relay stream of its own beside the bus, `http.request_streamed`, so the bus is not held up behind it: `docs/protocol/protocol.md` "Forwarding App requests"); a route that upgrades to a WebSocket cannot, so the extensions' routes and the assistant's
 WebSocket routes (`assistantwire.SocketRoutes`: a meeting's audio socket, `docs/assistant/meeting-minutes.md` "Audio from the phone") go over a relay stream instead
 (`extwire.MethodAccept`): the manager dials the relay and serves the request there, and later ones while the hub keeps the stream open (`docs/extensions/extensions.md` ("Who owns what")), and the manager's extensions layer hands the assistant's to it
@@ -102,6 +102,7 @@ The parts (the hub, the managers, the node on each computer, extensions) talk on
 | `connectorwire` | Inbox things and replies, conversation batches, posts and snapshots from connectors (`docs/protocol/connector-protocol.md`) |
 | `aiwire` | A model setting (`aiwire.Config`) |
 | `dialogwire` | A terminal dialog read off a screen, as the node and the apps see it |
+| `repositorywire` | A task's requested refs, repository layouts and the preparation snapshot a manager hands to a node, with the alias and ref rules both apply; `assistant/repository` aliases them |
 | `nodeproto` | The node protocol handshake: the protocol version and capability names a node announces (`docs/protocol/protocol.md` "Node handshake") |
 | `proto`, `rpc`, `relayproto` | The client API and node protocol types, the JSON-RPC framing, the push relay |
 | `sdk/go/wire` (the SDK's module) | The extension protocol's types generated from its schema (an error report the bus carries, say), shared with extensions written against the SDK |
@@ -118,6 +119,108 @@ Where the business type needs fields of its own, it stays a separate type with t
 - **Reap first**: every production `osproc.ReapInherited` call (the hub's `claimInherited`, the manager's `runManager`, `managercli.Assistant`, the node's `runNode`) comes before anything that could start a child, and the hub's `Run`, `Serve` and `RunSlot` call `claimInherited` first (`reap_test.go`).
   Only the calls its list names, each with why it starts no process, may run ahead; a new call site has to be listed.
 
+## Registering a domain's entries
+
+Nearly every feature used to add a line to one of a few central lists: the route calls in the assistant's `New`,
+`toolNames` and the cases of `runTool`, the loops `Service.Run` starts, `proto.Features`, `assistantwire.Routes`,
+`extwire.RouteScopes`, the switch in `Node.handle` and `server/internal/prompts/assistant.go`. Those lines are where most
+of the server's merge conflicts come from (#7891). A domain adds its entries from its own files instead, and every kind
+of entry goes through the same design. The central lists keep the entries they have, and take no new name (below).
+
+### One registry per Service
+
+- **The registry**: the package `kernel`, under `server/internal/assistant`, holds one registry per assistant `Service`,
+  with a slot for each kind of entry. The slots are routes (installed through `Service.handle`), bus methods, tools
+  (each placed after a named anchor tool), the hooks for a settled turn and a new connection, snapshot parts, and loops.
+  `Kernel.Bus` is where any domain adds a new bus method, not only the Inbox. Not on `main` yet: the package comes with
+  step S1 of `docs/plans/plan-inbox-vertical-slice.md`.
+- **Two ways in, one registry**:
+  - A module in a subpackage calls `Register(k)` from `New`, where its central line was. `saved` comes first: today
+    `New` calls `saved.Register(saved.Host{…})`, and S1 registers it through the kernel instead, keeping `saved.Host`
+    as saved's own adapter.
+  - A domain inside package `assistant` calls a package-level function from an `init()` in its own file:
+    `registerRoutes(name, (*Service).xRoutes)`, `registerTools(after, …)` or `registerLoop(name, (*Service).xLoop)`.
+    `New` adds them to the same registry before the modules register.
+- **One of each**: there is one duplicate check, a panic in `New`, which every test that builds a `Service` runs. Tool
+  placement is computed once, at the end of `New`. There is one route table and one list of loops. Route order means
+  nothing (`TestRoutesAreTheWireOnes` sorts, and `http.ServeMux` ignores it). The tools keep the order
+  `server/internal/hub/testdata/prompts/mcp_tools/assistant.index.golden` pins.
+- **When each part lands**:
+  1. the kernel, with `saved` (S1);
+  2. the Inbox's routes, bus methods, hooks and snapshot part (S4);
+  3. `registerRoutes` and `registerLoop` (#7891);
+  4. `registerTools`, with or just before the Inbox's tools (S5).
+
+  Until a slot exists, its entries go where they went before. The 63 route calls already in `New`, and the tools and
+  loops already listed, stay where they are.
+
+How each registration is checked, and when the registry closes, is written with the kernel (S1).
+
+### Lists that stay package variables
+
+A wire list that is a plain variable in a contract package takes a domain's entries from an `init()` in that domain's
+file. The append comes after the literal, which stays first and unchanged:
+
+- **`assistantwire.Routes`**: `func init() { Routes = append(Routes, …) }` in `assistantwire/<domain>.go`. Seven files do
+  this today, among them `agents.go`, `board.go` and `urgent_call.go`. Package `assistant` reads the list after they
+  have run (`server/internal/assistant/hub.go`), and `TestRoutesAreTheWireOnes` keeps it equal to what the assistant
+  serves.
+- **`proto.Features`**: `func init() { Features = append(Features, FeatureX) }` in `proto/features_<domain>.go`, beside
+  the flag's constant, and `scripts/test/test_doc_wire.py` reads the appends too. Not on `main` yet (#7891).
+- **`extwire.RouteScopes`**: `addRouteScopes(…)` from an `init()` in `extwire/<domain>_scopes.go`, which panics on a key
+  that is already there. `server/internal/hub/testdata/route_scopes.txt` stays one sorted golden. Not on `main` yet: it
+  comes with the Inbox's scopes (step S6 of the Inbox plan).
+
+The hub's bus handlers already work this way: `handleBus("notify.request", (*Hub).busNotifyRequest)` runs from an
+`init()` beside the handler, and a method registered twice panics (`server/internal/hub/bus.go`). A domain's feature
+flags and methods are documented in its domain's protocol doc: `docs/protocol/protocol.md`, or a doc split from it
+(`scripts/test/test_doc_wire.py` finds a flag in either).
+
+### The node's method table
+
+The node gets a table of the same shape, its own because the node may not import the manager's packages. Not on `main`
+yet (#7891, #1267).
+
+- **Which methods**: the table maps exact method names, and only for methods that are not bound to a session. It is
+  consulted in `Node.handle`, where `sessions.history` is handed to its domain's handler today
+  (`server/internal/node/sessions_history.go`).
+- **What stays in the switch**: methods bound to a session (`session.*`, `terminal.*`, `assistant.send`, `codex.answer`,
+  …). The shared decode, alias resolution and refusals run before them, and a table entry would skip those. The table
+  refuses these names when the node starts.
+
+### Prompts
+
+A new prompt's types and `Render` function go in a file of their own, `prompts/assistant_<topic>.go`, as
+`assistant_answer_again.go` has them. Templates and goldens do not change (`docs/assistant/prompts.md`). The topics
+already in `prompts/assistant.go` move out one file at a time, and only while no open PR edits them.
+
+### Frozen central lists
+
+A central list with a seam takes no new name. `server/internal/archguard/central_lists_test.go` checks this.
+
+- **The names**: each frozen list has a row in `centralLists`, and its names are in
+  `server/internal/archguard/testdata/central_lists/<id>.txt`. The file holds the names the list had when its freeze
+  landed, then the names the PRs open that day were adding, each with its PRs.
+- **The check**: a new name fails. The message gives the file and line, where the entry goes instead, and this section.
+  A listed name that has left the list is a notice, and its line can go. Editing an existing entry is fine, because the
+  freeze is on names, not lines. These files hold names, never counts (they are not count ratchets,
+  `docs/operations/testing.md` "Count ratchets").
+- **Frozen today**:
+  - the `assistantwire.Routes` literal, by each entry's source text (`"GET /api/v1/todos"`, `"GET " + StarredImportPath`);
+  - the top-level declarations of `prompts/assistant.go`, a method as `Type.Method`.
+
+  Each later seam's PR adds its own list's row. That PR shows a planted entry failing and a registered one passing.
+- **Pending names**: `python3 scripts/test/name_freezes.py pending` lists the names that open PRs add, read from their
+  heads. A draft whose head commit is more than 14 days old does not count. The script asks the archguard test for the
+  names (`-central-list-names`), so they are in the form the freeze compares.
+- **Writing the list**: on the day a row lands, `pending --write` rewrites the list's file, after `origin/main` is merged
+  in. Once the list is on `main`, `--write` only prunes it: it keeps the listed names `main` still has, a pending one
+  whose PR merged among them, and drops the names that have left and the pending ones whose PRs closed. It adds no
+  name: one that `main` has and the list lacks is reported as an error, and the freeze keeps failing on it. So it is
+  not how a later PR gets a name on a list.
+- **The mock hub too**: `scripts/mock/mock_hub_switches.py` uses the same module for the mock hub's switch freeze
+  (`docs/operations/testing.md` "Mock hub domains").
+
 ## Key flows
 
 ### Starting a session
@@ -127,6 +230,15 @@ Where the business type needs fields of its own, it stays a separate type with t
    (the last one, the live replies `MessageDisplay` hook, only while the machine's Settings › Claude Code › Live replies is on; older Claude Code: `--settings ~/.persona/claude-settings.json` instead of the plugins).
 3. The node waits for the agent to be ready (`agent wait`); if it is blocked (trust folder, etc.), the screen is pushed to the phone as a `screen` interaction. Once ready, the first message is sent.
 4. The node starts tailing the transcript, and events are pushed through the hub to subscribed apps.
+
+### Retrying a held Agent message
+
+The hub forwards the owner's Retry to the devices manager, which owns the held queue and claims each send in its
+database. If the last attempt may have arrived, the manager asks the node for echo evidence for that session and
+message ID. The node can confirm a match from its echo record. It can authorize another attempt when the live Agent
+is idle and the transcript covers the original send through a later turn end. The node rechecks with the session's
+input lock held before replacing an ambiguous send receipt. With an unknown result or an older node, the manager can
+still confirm delivery from a matching ID in recent turns.
 
 ### Answering questions / approving plans
 1. claude calls AskUserQuestion → PreToolUse lets Claude draw its terminal dialog → the following PermissionRequest connects `personad hook` to node.sock and sends an `interaction` → the node hands it to the manager (`interaction.create`), which records it and has the hub push it to the app / watch (including a local notification).

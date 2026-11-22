@@ -271,7 +271,6 @@ func TestModelPickRefusals(t *testing.T) {
 		{"own sign-in", "main", `{"launcher":"own"}`, 409, proto.CodeLauncherOwnService, "own"},
 		{"missing", "main", `{"launcher":"gone"}`, 409, proto.CodeLauncherMissing, "“gone”"},
 		{"can't run the assistant", "main", `{"launcher":"cc-relay"}`, 400, "", "can’t run assistant chats"},
-		{"managed Codex on a side chat", "side", `{"launcher":"codex-gw"}`, 400, "", "can’t run assistant chats"},
 		{"no launcher", "main", `{"model":"opus"}`, 400, "", "Choose a model provider"},
 		{"no model id", "main", `{"launcher":"claude","model":"-rf"}`, 400, "", "-rf"},
 		{"locked", "main", `{"launcher":"cx","model":"gpt-5"}`, 400, "", "sets its own model"},
@@ -406,7 +405,6 @@ func TestMainChatPickerListsWhatItCantRun(t *testing.T) {
 	}
 	want := []string{
 		"cc-relay:launcher:claude::not_main_chat",
-		"codex-gw:launcher:codex::not_main_chat",
 		"far:launcher:::launcher_out_of_scope",
 		"own:launcher:::launcher_own_service",
 		"resp:api::responses:api_protocol",
@@ -555,8 +553,8 @@ func TestWarmTakesTheMainConversationsPick(t *testing.T) {
 
 // A new main conversation takes a model with its first message, as a message does, and keeps what it was started with
 // as its pick: its later messages run on it. Only a main start keeps one (#6911); another conversation's start runs on
-// what it named and keeps nothing, as the conversation then runs on what it started with. Nothing named, nothing kept; a launcher that is gone falls back as before, with its
-// model dropped and no pick kept.
+// what it named and keeps nothing, as the conversation then runs on what it started with. Nothing named, nothing kept;
+// a launcher that is gone is refused without a send or an implicit substitute, and no pick is kept.
 func TestStartTakesAModelAndKeepsThePick(t *testing.T) {
 	start := func(t *testing.T, s *Service, body string) (int, map[string]any) {
 		t.Helper()
@@ -648,13 +646,15 @@ func TestStartTakesAModelAndKeepsThePick(t *testing.T) {
 		}
 	})
 	t.Run("a launcher that is gone", func(t *testing.T) {
+		fastLauncherRecovery(t)
 		s, f := pickFixture(t)
+		setLauncherRecovery(f, 1, nil)
 		code, got := start(t, s, `{"prompt":"hi","main":true,"launcher":"gone","model":"m9"}`)
-		if code != 200 || got["pick"] != nil {
+		if code != http.StatusBadGateway || got["pick"] != nil || !strings.Contains(got["body"].(string), "no configured substitute") {
 			t.Fatalf("%d %v", code, got)
 		}
-		if p := f.lastSend(t); p["launcher"] != "gw" || p["model"] != nil {
-			t.Fatalf("first message: %v", p)
+		if len(f.sends) != 0 {
+			t.Fatalf("a refused launcher started a conversation: %v", f.sends)
 		}
 	})
 	t.Run("refused before anything starts", func(t *testing.T) {
@@ -718,15 +718,22 @@ func TestRelayedMessagesAndTheSupervisorRunOnTheirModel(t *testing.T) {
 	if p := relay("bg"); p["launcher"] != "cx" {
 		t.Fatalf("a relayed message to the supervisor: %v", p)
 	}
-	// with a pick, both run on it
+	// with a pick, both run on it after a manager restart too; the main conversation still follows its own default
 	if r := putPick(t, s, "bg", `{"launcher":"claude","model":"haiku"}`); r.Code != 200 {
 		t.Fatalf("PUT bg: %d %s", r.Code, r.Body.String())
 	}
+	s = newServiceOn(t, f, s.store())
+	if p, err := send(t, s, "main", map[string]any{}); err != nil || p["launcher"] != "gw" {
+		t.Fatalf("the main conversation after the restart: %v %v", p, err)
+	}
+	if p, err := send(t, s, "lead", map[string]any{}); err != nil || p["launcher"] != "claude" || p["model"] != "opus" {
+		t.Fatalf("the leader after the restart: %v %v", p, err)
+	}
 	if p, err := send(t, s, "bg", map[string]any{}); err != nil || p["launcher"] != "claude" || p["model"] != "haiku" {
-		t.Fatalf("typed to the supervisor on its pick: %v %v", p, err)
+		t.Fatalf("typed to the supervisor on its pick after the restart: %v %v", p, err)
 	}
 	if p := relay("bg"); p["launcher"] != "claude" || p["model"] != "haiku" {
-		t.Fatalf("relayed to the supervisor on its pick: %v", p)
+		t.Fatalf("relayed to the supervisor on its pick after the restart: %v", p)
 	}
 }
 

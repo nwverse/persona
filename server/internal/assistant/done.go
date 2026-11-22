@@ -18,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/textfmt"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
@@ -99,6 +100,8 @@ func autoDoneSkip(t Todo, work time.Time, worked bool) string {
 		return "cancelled"
 	case t.DoneAt != nil:
 		return "done"
+	case t.Supervision.state(t) == reviewTimedOut || t.Supervision.state(t) == reviewClosing:
+		return "held"
 	case t.ReopenedAt != nil && !(worked && work.After(*t.ReopenedAt)):
 		return "reopened" // no new turn since the user reopened it
 	}
@@ -175,7 +178,8 @@ func (s *Service) lastTurnItems(ctx context.Context, machine, sid string) (items
 	if err := s.call(cctx, machine, DeviceSessionItems, map[string]any{"session_id": sid, "turns": 1}, &res); err != nil {
 		return nil, false
 	}
-	return res.Items, true
+	_, items = splitLastTurn(res.Items)
+	return items, true
 }
 
 // lastTwoTurns are the items of the agent's turn before its latest one (earlier; none when there is none) and of its
@@ -215,10 +219,24 @@ func turnExchange(items []proto.Item) (ask, answer string) {
 	}
 	for i := len(items) - 1; i >= 0; i-- {
 		if it := items[i]; it.Kind == proto.KindText && it.Role == "assistant" && strings.TrimSpace(it.Text) != "" {
-			return ask, strings.TrimSpace(it.Text)
+			return ask, turnReplyText(it.Text, it.FullSize > 0)
 		}
 	}
 	return ask, ""
+}
+
+// Indentation is significant in a Markdown report. A clipped excerpt ending exactly at its rule
+// still has more text after it and cannot be read as the final report.
+func turnReplyText(text string, clipped bool) string {
+	if !strings.Contains(text, "### Persona ") {
+		return strings.TrimSpace(text)
+	}
+	if clipped {
+		if _, ok := textfmt.FinalWorkReport(text); ok {
+			return text + "\n…"
+		}
+	}
+	return text
 }
 
 // userStoppedNotice is the notice the transcript reader puts where the user stopped a turn (Claude Code's "[Request
@@ -425,6 +443,15 @@ func judgeTaskDoneWith(ctx context.Context, m jsonModel, in taskDoneInput) (task
 // autoFinishTask: t's receipt went out (its agents all stopped). work is when one of them last started a turn. The
 // todo is marked done when the judge finds the work finished; otherwise it stays as it is.
 func (s *Service) autoFinishTask(t Todo, work time.Time, worked bool) {
+	s.autoFinishTaskMode(t, work, worked, true)
+}
+
+// autoFinishTaskRetry is the supervision sweep's deferred pass. Its backoff replaces another inline three-second wait.
+func (s *Service) autoFinishTaskRetry(t Todo, work time.Time, worked bool) {
+	s.autoFinishTaskMode(t, work, worked, false)
+}
+
+func (s *Service) autoFinishTaskMode(t Todo, work time.Time, worked bool, immediateRetry bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), taskDoneTimeout)
 	defer cancel()
 	if skip := autoDoneSkip(t, work, worked); skip != "" {
@@ -443,7 +470,7 @@ func (s *Service) autoFinishTask(t Todo, work time.Time, worked bool) {
 		return
 	}
 	c, err := s.judgeTaskDone(ctx, t)
-	if err != nil && !ai.IsPaused(err) && !ai.IsNotConfigured(err) && ctx.Err() == nil {
+	if immediateRetry && err != nil && !ai.IsPaused(err) && !ai.IsNotConfigured(err) && ctx.Err() == nil {
 		// One failed call (a model service hiccup, a reply that was no verdict) is asked once more before the task is
 		// left unjudged (#3111); no model at all is not asked again.
 		s.logf("task %s: done judge: %v (asked again)", t.ID, err)
@@ -453,7 +480,15 @@ func (s *Service) autoFinishTask(t Todo, work time.Time, worked bool) {
 		case <-ctx.Done():
 		}
 	}
-	if !s.taskCompletionCurrent(ctx, t, work) {
+	stateCtx := ctx
+	if t.Supervision != nil && err != nil && ctx.Err() != nil {
+		// A judge timeout expires its own context. Use a fresh one only to verify that this is still the same stopped
+		// stretch and to persist its retry; otherwise the timeout would bypass the service-failure budget entirely.
+		var cancelState context.CancelFunc
+		stateCtx, cancelState = context.WithTimeout(context.Background(), taskDoneTimeout)
+		defer cancelState()
+	}
+	if !s.taskCompletionCurrent(stateCtx, t, work) {
 		if cur, ok := s.todoNow(t.ID); !ok || cur.DoneAt != nil {
 			s.logf("task %s: closed while judged: judgment dropped", t.ID) // accepted, cancelled or closed by hand (#7539)
 		} else {
@@ -461,7 +496,12 @@ func (s *Service) autoFinishTask(t Todo, work time.Time, worked bool) {
 		}
 		return
 	}
-	s.applyTaskDone(ctx, t, work, worked, c, err)
+	if deferred, judgedErr := s.deferTaskDoneJudgment(stateCtx, t, work, err); deferred {
+		return
+	} else {
+		err = judgedErr
+	}
+	s.applyTaskDone(stateCtx, t, work, worked, c, err)
 }
 
 // applyTaskDone writes judgment c (err: the judge could not say) of task t, whose agents last started a turn at work
