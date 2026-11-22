@@ -35,7 +35,7 @@ func TestSupervisionInstructionsBulletsAreSeparateLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, line := range strings.Split(string(raw), "\n") {
-		if strings.Contains(line, ".- `- ") {
+		if strings.Contains(line, ".- ") {
 			t.Fatalf("two bullets are glued on one line (missing newline): %q", line)
 		}
 	}
