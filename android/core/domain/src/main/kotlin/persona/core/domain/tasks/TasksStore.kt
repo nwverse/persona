@@ -25,6 +25,7 @@ import persona.core.contracts.AssistantViewEvent
 import persona.core.contracts.FeedItem
 import persona.core.contracts.FeedResponse
 import persona.core.contracts.Session
+import persona.core.contracts.SessionKey
 import persona.core.contracts.PlanTask
 import persona.core.contracts.RuleSuggestion
 import persona.core.contracts.RuleSuggestionMade
@@ -195,6 +196,7 @@ class TasksStore(
     /** Message card ids put off with "Later"; another draft for the same inbox item remains visible. */
     val later = MutableStateFlow<Set<String>>(emptySet())
     /** Conversation → when the Today card was last asked for, and the day of the card the hub gave (null while asking). */
+    private val todayLock = Any()
     private val todayAsked = HashMap<String, Pair<Instant, LocalDate?>>()
     /** This hub's assistant cards (docs/assistant/assistant-views.md): live cards, answers and registered reply blocks. */
     val cards = AssistantViewStore()
@@ -551,7 +553,7 @@ class TasksStore(
         error("Feed page limit exceeded")
     }
 
-    private var main: String? = null
+    @Volatile private var main: String? = null
     /** The main assistant conversation's id once read: its dock also shows the agents no task stands for (#1113). */
     val mainConversation = MutableStateFlow<String?>(null)
 
@@ -562,7 +564,8 @@ class TasksStore(
     fun loadTodayIfMain(conversation: String) {
         scope.launch {
             val id = main.takeIf { it == conversation }
-                ?: runCatching { api.mainConversation() }.getOrNull()?.also { main = it; mainConversation.value = it }
+                ?: try { api.mainConversation() } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+                    ?.also { main = it; mainConversation.value = it }
             if (id == conversation) loadToday(conversation)
         }
     }
@@ -579,18 +582,33 @@ class TasksStore(
     fun loadToday(conversation: String) {
         val now = clock.instant()
         val today = LocalDate.now(clock)
-        todayAsked[conversation]?.let { (at, day) ->
-            // at.atZone(…).toLocalDate(), not LocalDate.ofInstant: that one is Java 9, on Android only from API 34, and this
-            // module is plain JVM (no lint, no desugaring), so it built fine and threw NoSuchMethodError on API 30–33 (#5227).
-            if (at.atZone(clock.zone).toLocalDate() == today &&
-                (day == null || day > today || now < at + todayRecheck)) return
+        synchronized(todayLock) {
+            todayAsked[conversation]?.let { (at, day) ->
+                // at.atZone(…).toLocalDate(), not LocalDate.ofInstant: that one is Java 9, on Android only from API 34, and this
+                // module is plain JVM (no lint, no desugaring), so it built fine and threw NoSuchMethodError on API 30–33 (#5227).
+                if (at.atZone(clock.zone).toLocalDate() == today &&
+                    (day == null || day > today || now < at + todayRecheck)) return
+            }
+            todayAsked[conversation] = now to null
         }
-        todayAsked[conversation] = now to null
         scope.launch {
-            runCatching { api.today(conversation) }.onSuccess { card ->
-                todayAsked[conversation] = now to (card.ref?.let { runCatching { LocalDate.parse(it) }.getOrNull() } ?: today)
+            try {
+                val card = api.today(conversation)
+                val parsedDay = card.ref?.let { runCatching { LocalDate.parse(it) }.getOrNull() } ?: today
+                synchronized(todayLock) {
+                    if (todayAsked[conversation]?.first == now) todayAsked[conversation] = now to parsedDay
+                }
                 received(listOf(card))
-            }.onFailure { todayAsked.remove(conversation) }
+            } catch (cancelled: CancellationException) {
+                synchronized(todayLock) {
+                    if (todayAsked[conversation] == (now to null)) todayAsked.remove(conversation)
+                }
+                throw cancelled
+            } catch (_: Exception) {
+                synchronized(todayLock) {
+                    if (todayAsked[conversation] == (now to null)) todayAsked.remove(conversation)
+                }
+            }
         }
     }
 
@@ -617,21 +635,40 @@ class TasksStore(
 
     /** The task's agents among [sessions], and its state. */
     fun agentsOf(todo: Todo, sessions: List<Session>): List<Session> =
-        todo.activeAgents.filter { it.dismissedAt == null && it.machineId.isNotBlank() && it.sessionId.isNotBlank() }.map { a ->
-            val listed = sessions.firstOrNull { it.key == a.key }
-            val exact = agentSessions.value[a.key]
-            listOfNotNull(listed, exact).maxByOrNull { it.rev ?: 0L } ?: Session(
-                machineId = a.machineId, sessionId = a.sessionId, title = a.title.orEmpty(), cwd = a.cwd.orEmpty(),
-                agent = a.agent, state = "offline", status = "offline", startError = a.startError,
-            )
+        agentsOf(todo, sessions.associateBy { it.key })
+
+    fun agentsOf(todo: Todo, sessionsByKey: Map<SessionKey, Session>): List<Session> {
+        val exactMap = agentSessions.value
+        return todo.activeAgents.filter { it.dismissedAt == null && it.machineId.isNotBlank() && it.sessionId.isNotBlank() }.map { a ->
+            val listed = sessionsByKey[a.key]
+            val exact = exactMap[a.key]
+            when {
+                listed != null && exact != null -> if ((exact.rev ?: 0L) > (listed.rev ?: 0L)) exact else listed
+                listed != null -> listed
+                exact != null -> exact
+                else -> Session(
+                    machineId = a.machineId, sessionId = a.sessionId, title = a.title.orEmpty(), cwd = a.cwd.orEmpty(),
+                    agent = a.agent, state = "offline", status = "offline", startError = a.startError,
+                )
+            }
         }
+    }
 
     fun stateOf(todo: Todo, sessions: List<Session>): TaskState =
-        agentsOf(todo, sessions).let { a -> TaskState.of(todo, a.map { it.agentState }, a.any { it.interrupted }) }
+        stateOfAgents(todo, agentsOf(todo, sessions))
+
+    fun stateOfAgents(todo: Todo, agents: List<Session>): TaskState {
+        val waiting = agents.size > 1 && agents.any { it.waitsWithoutBackground() && Interruption.of(it)?.invalid != true }
+        val interrupted = agents.any { it.interrupted && (agents.size == 1 || Interruption.of(it)?.invalid == true || !it.waitsWithoutBackground()) }
+        return TaskState.of(todo, agents.map { it.agentState }, interrupted, waiting)
+    }
 
     /** The agent to open first: the one waiting for the user, then one cut off (#1516), then working, then the latest. */
     fun lead(todo: Todo, sessions: List<Session>): Session? =
-        agentsOf(todo, sessions).minWithOrNull(compareBy<Session>({ it.agentState != AgentState.NeedsYou }, { !it.interrupted },
+        leadOfAgents(agentsOf(todo, sessions))
+
+    fun leadOfAgents(agents: List<Session>): Session? =
+        agents.minWithOrNull(compareBy<Session>({ it.agentState != AgentState.NeedsYou }, { !it.interrupted },
             { it.agentState.priority }).thenByDescending { it.updatedAt.orEmpty() })
 
     /** [edits] is "Edit": the plan's tasks as the user changed them, by index (null: as planned). */

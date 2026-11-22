@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/nodeproto"
@@ -555,16 +556,21 @@ type wireAdder func(string, string, string, string, json.RawMessage, map[string]
 // wireNode exercises the real RPC consumer without launching a node or opening a network connection.
 func wireNode(t *testing.T, reply func(json.RawMessage) any) *Machine {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	h2nR, h2nW := io.Pipe()
-	n2hR, n2hW := io.Pipe()
-	hp, np := rpc.New("h", h2nW), rpc.New("n", n2hW)
-	np.OnRequest = func(_ context.Context, method string, p json.RawMessage) (any, error) {
+	return wireNodeRPC(t, func(_ context.Context, method string, p json.RawMessage) (any, error) {
 		if method != "session.items" {
 			return nil, fmt.Errorf("unexpected method: %s", method)
 		}
 		return reply(p), nil
-	}
+	})
+}
+
+func wireNodeRPC(t *testing.T, reply rpc.Handler) *Machine {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	h2nR, h2nW := io.Pipe()
+	n2hR, n2hW := io.Pipe()
+	hp, np := rpc.New("h", h2nW), rpc.New("n", n2hW)
+	np.OnRequest = reply
 	done := make(chan struct{}, 2)
 	go func() { defer func() { done <- struct{}{} }(); _ = hp.Serve(ctx, n2hR) }()
 	go func() { defer func() { done <- struct{}{} }(); _ = np.Serve(ctx, h2nR) }()
@@ -685,6 +691,11 @@ func wireErrors(t *testing.T, add wireAdder) {
 		}
 		add("errors", "conflict_"+code, "拒绝操作的错误字段与 error 平铺在同一层。", "error", wireBody(t, w, 409), fields, "server/internal/hub/http.go: callErr", "apple/Shared/APIClient.swift: APIError.fields(in:)", "docs/protocol/protocol.md: 发消息 / 终端对话框")
 	}
+	w = httptest.NewRecorder()
+	apierr.ImagesOverLimit(w, proto.DefaultImageLimits, proto.ImagesPerMessage+1)
+	add("errors", "images_over_limit", "A message with more pictures than a message holds: the limits and the count as numbers beside the error, flat like the other fields (#12973).", "error",
+		wireBody(t, w, http.StatusRequestEntityTooLarge), map[string]any{"/code": proto.CodeImagesOverLimit, "/delivered": "none", "/limit/per_message": proto.ImagesPerMessage, "/got/images": proto.ImagesPerMessage + 1},
+		"server/internal/apierr/images.go: ImagesOverLimit", "docs/protocol/protocol.md: Pictures in a message")
 }
 
 func wireCompatibility(t *testing.T, files map[string][]wireSample, add wireAdder, ws, httpJSON func(any) json.RawMessage, now time.Time) {
@@ -717,9 +728,12 @@ func wireCompatibility(t *testing.T, files map[string][]wireSample, add wireAdde
 	add("compatibility", "session_zero_time", "Go 零时间能解码，但不算有意义的日期。", "compat_session", httpJSON(proto.Session{SessionID: "s1"}), map[string]any{"/updated_at_meaningful": false, "/seen_at_meaningful": false}, "server/internal/proto/session.go: Session", "apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift: JSON.decoder, Date.isMeaningful")
 	add("compatibility", "date_at_cutoff", "当前 iOS 将 2000 年起点本身也判为无意义日期。", "compat_session", httpJSON(map[string]any{"session_id": "s1", "updated_at": "2000-01-01T00:00:00Z"}), map[string]any{"/updated_at_meaningful": false}, "apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift: Date.isMeaningful", "docs/archive/redesign/README.md: D5（现状差异）")
 	for i := range files["errors"] {
-		if i == 0 {
+		switch {
+		case i == 0:
 			files["errors"][i].HTTPStatus = 401
-		} else {
+		case files["errors"][i].Name == "images_over_limit":
+			files["errors"][i].HTTPStatus = http.StatusRequestEntityTooLarge
+		default:
 			files["errors"][i].HTTPStatus = 409
 		}
 	}

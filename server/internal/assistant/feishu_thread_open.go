@@ -6,10 +6,12 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -37,35 +39,39 @@ func aiCommand(text string) (rest string, ok bool) { return feishubot.AICommand(
 
 // openingWords are the owner's words in ev as an opening reads them: only a text or a rich-text message has any (a
 // voice message, a shared group or card, a location, a card, a file and a message of a type not known come as a
-// placeholder like "[语音消息]", which are no words); the bot's @ at the start is taken off (in a group where the bot
-// only gets what @s it, every message starts with one; content has it as the name, the message's own text as
-// @_user_N), and an @ further in is the person's name when the message's mentions give it, else left as it stands.
-// A rich-text message of only pictures or videos has no words either. "" when there are none.
+// placeholder like "[语音消息]", which are no words); the bot's @ at the start is taken off when separated by whitespace
+// (in a group where the bot only gets what @s it, every message starts with one; content has it as the name, the
+// message's own text as @_user_N), and an @ further in is the person's name when the message's mentions give it, else
+// left as it stands. A rich-text message of only pictures or videos has no words either. "" when there are none.
 func openingWords(ev feishubot.MessageEvent, content feishubot.Content) string {
+	return extractOpeningWords(ev, content, false)
+}
+
+// openingCommandWords extracts the owner's words for command parsing (/ai, /read, /noreply): for rich-text posts it
+// strips leading structured at elements through their mention IDs so an adjacent command keeps its boundary (#12668),
+// without removing mentions that touch punctuation in ordinary topic-opening notes and quotes (#12932).
+func openingCommandWords(ev feishubot.MessageEvent, content feishubot.Content) string {
+	return extractOpeningWords(ev, content, true)
+}
+
+func extractOpeningWords(ev feishubot.MessageEvent, content feishubot.Content, structuredPostMentions bool) string {
 	m := ev.Message
 	var text string
 	switch m.MessageType {
 	case "text":
 		text = feishubot.ParseContent(m.MessageType, m.Content, nil).Text // with the @_user_N keys still in it
+		text = trimOpeningMentions(text, m.Mentions, unicode.IsSpace)
 	case "post":
-		text = content.Text
+		if structuredPostMentions {
+			text = content.StripLeadingMentions(m.Mentions, nil)
+		} else {
+			if stripped := content.StripLeadingMentions(m.Mentions, nil); !hasOpeningWords(stripped) {
+				return ""
+			}
+			text = trimOpeningMentions(content.Text, m.Mentions, unicode.IsSpace)
+		}
 	default:
 		return ""
-	}
-	text = strings.TrimSpace(text)
-	for cut := true; cut; {
-		cut = false
-		for _, mn := range m.Mentions {
-			for _, tok := range []string{mn.Key, "@" + mn.Name} {
-				if tok == "" || tok == "@" {
-					continue
-				}
-				// A whole word: "@_user_1" is not the start of "@_user_10".
-				if rest, ok := strings.CutPrefix(text, tok); ok && (rest == "" || unicode.IsSpace([]rune(rest)[0])) {
-					text, cut = strings.TrimSpace(rest), true
-				}
-			}
-		}
 	}
 	for _, mn := range m.Mentions {
 		if mn.Key != "" && mn.Name != "" {
@@ -73,23 +79,114 @@ func openingWords(ev feishubot.MessageEvent, content feishubot.Content) string {
 			text = regexp.MustCompile(regexp.QuoteMeta(mn.Key)+`\b`).ReplaceAllLiteralString(text, "@"+mn.Name)
 		}
 	}
-	// The placeholders feishubot.ParseContent writes for a picture and a video in rich text.
-	if strings.TrimSpace(strings.NewReplacer("[图片]", "", "[视频]", "").Replace(text)) == "" { // i18n-ignore: matched against the text parsePost writes
+	if !hasOpeningWords(text) {
 		return ""
 	}
 	return text
 }
 
+func hasOpeningWords(text string) bool {
+	// The placeholders feishubot.ParseContent writes for a picture and a video in rich text.
+	return strings.TrimSpace(strings.NewReplacer("[图片]", "", "[视频]", "").Replace(text)) != "" // i18n-ignore: matched against the text parsePost writes
+}
+
+func trimOpeningMentions(text string, mentions []feishubot.Mention, separator func(rune) bool) string {
+	text = strings.TrimLeftFunc(strings.TrimSpace(text), separator)
+	for cut := true; cut; {
+		cut = false
+		for _, mn := range mentions {
+			for _, tok := range []string{mn.Key, "@" + mn.Name} {
+				if tok == "" || tok == "@" {
+					continue
+				}
+				// A whole word: "@_user_1" is not the start of "@_user_10".
+				if rest, ok := strings.CutPrefix(text, tok); ok {
+					r, _ := utf8.DecodeRuneInString(rest)
+					if rest == "" || separator(r) {
+						text, cut = strings.TrimLeftFunc(rest, separator), true
+					}
+				}
+			}
+		}
+	}
+	return text
+}
+
+var (
+	// Media placeholders emitted by Lark, and common attachment/link icons in copied text.
+	topicAttachment = lazyre.New(`(?i)^(?:\[(?:图片|视频|文件|附件|image|video|file|attachment)(?:[:：][^\]\r\n]*)?\]|[📎🔗]\x{FE0F}?)`) // i18n-ignore: incoming message text
+	topicURL        = lazyre.New(`(?i)^<?(?:https?://|www\.)[^\s\p{Z}<>，。！？；、]+>?`)
+	topicFilename   = lazyre.New(`^[^\s\p{Z}/\\]+\.[A-Za-z0-9]{1,8}[\s\p{Z}]+`)
+)
+
+// openingTitleWords chooses the temporary display name. The full parsed message still supplies
+// the notes, the handoff and the model's later title.
+func openingTitleWords(text string, content feishubot.Content, mentions []feishubot.Mention) (words string, linkLabel bool) {
+	if stripped := content.StripLeadingMentions(mentions, nil); stripped != content.Text && (text == content.Text || text == stripped) {
+		text = trimOpeningMentions(stripped, mentions, topicSeparator)
+	} else if strings.HasPrefix(text, "@") {
+		text = trimOpeningMentions(text, mentions, topicSeparator)
+	}
+	for text != "" {
+		if label, rest, ok := content.CutPostLink(text); ok {
+			label = strings.TrimSpace(label)
+			if label != "" && !topicURL.MatchString(label) && topicAttachment.FindString(label) != label && !genericTopicRequest(label) {
+				return label, true
+			}
+			text = trimOpeningMentions(rest, mentions, topicSeparator)
+			continue
+		}
+		prefix := topicAttachment.FindString(text)
+		if prefix == "" {
+			prefix = topicURL.FindString(text)
+		}
+		if prefix == "" {
+			// A filename can itself be the subject ("slides.pdf needs edits"). Skip it only beside a shared resource.
+			if name := topicFilename.FindString(text); name != "" {
+				rest := text[len(name):]
+				if _, _, link := content.CutPostLink(rest); link || topicURL.MatchString(rest) || topicAttachment.MatchString(rest) {
+					prefix = name
+				}
+			}
+		}
+		if prefix == "" {
+			break
+		}
+		text = trimOpeningMentions(text[len(prefix):], mentions, topicSeparator)
+	}
+	if genericTopicRequest(text) {
+		return "", false
+	}
+	return text, false
+}
+
+func topicSeparator(r rune) bool {
+	return unicode.IsSpace(r) || strings.ContainsRune(",;:，；：、", r) // i18n-ignore: punctuation in the owner's incoming words, matched as written
+}
+
+// Match a whole request, so "Have a look at the seed order" keeps its subject.
+func genericTopicRequest(text string) bool {
+	if !strings.ContainsFunc(text, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }) {
+		return true
+	}
+	switch strings.ToLower(strings.Trim(strings.TrimSpace(text), ".!?。！？")) { // i18n-ignore: punctuation in the owner's incoming words, matched as written
+	case "have a look", "take a look", "please have a look", "please take a look",
+		"看看", "看一下", "看下", "帮我看看", "请看一下", "見てください", "確認してください": // i18n-ignore: the owner's incoming words
+		return true
+	}
+	return false
+}
+
 // openTopicIfAsked opens a to-do for the message when it asks for one: it starts a topic that is bound to nothing, or
 // it is "/ai …" in such a topic. It says whether it took the message (everything the owner is to be told is said).
 func (s *Service) openTopicIfAsked(ctx context.Context, ev feishubot.MessageEvent, st FeishuStatus, content feishubot.Content, topic *feishuTopic) bool {
-	text := openingWords(ev, content)
-	rest, asked := aiCommand(text)
+	rest, asked := aiCommand(openingCommandWords(ev, content))
 	if !asked && !isTopicRoot(ev) {
 		return false
 	}
-	if asked {
-		text = rest
+	text := rest
+	if !asked {
+		text = openingWords(ev, content)
 	}
 	s.openTopicTodo(ctx, ev, st, content, text, topic)
 	return true
@@ -164,9 +261,22 @@ func (s *Service) openTodoIn(ctx context.Context, ev feishubot.MessageEvent, st 
 	if quote != "" {
 		words += "\n\n" + i18n.T(l, "assistant-feishu.elsewhere_quote_label") + "\n" + prompts.ContextBody(quote)
 	}
-	title, retitle := s.taskTitle(ctx, "", text)
+	titleWords, linkLabel := text, false
+	if topic != nil && src == nil {
+		titleWords, linkLabel = openingTitleWords(text, content, msg.Mentions)
+		if titleWords == "" {
+			titleWords = i18n.T(l, "assistant-tool_titles.todo_create")
+		}
+	}
+	var title string
+	retitle := true
+	if linkLabel {
+		title = cutTitle(oneLine(titleWords), todoTitleMax(string(l)))
+	} else {
+		title, retitle = s.taskTitle(ctx, "", titleWords)
+	}
 	if title == "" {
-		title = cutRunes(oneLine(text), todoTitleMax(s.hello(ctx).Locale))
+		title = cutRunes(oneLine(titleWords), todoTitleMax(s.hello(ctx).Locale))
 	}
 	todo, err := s.createTodo(ctx, title, clip(words, openNotesMax), origin, "")
 	if err != nil {
@@ -199,7 +309,12 @@ func (s *Service) openTodoIn(ctx context.Context, ev feishubot.MessageEvent, st 
 		s.nameTodoLater(ctx, todo.ID, title, text)
 	}
 	// The main conversation follows up what it hands out (supervise.go), and its feed shows the task as task_plan's do.
-	s.superviseTodo(ctx, todo.ID, origin, nil, 0)
+	if err := s.superviseTodo(ctx, todo.ID, origin, nil, 0); err != nil {
+		if rerr := s.removeTodo(context.WithoutCancel(ctx), todo.ID); rerr != nil {
+			s.logf("todo %s: take back after supervision failure: %v", todo.ID, rerr)
+		}
+		return Todo{}, failed("thread_open_failed", err)
+	}
 	if _, err := s.appendFeed(ctx, origin, feedTask, todo.ID, nil); err != nil {
 		s.logf("task %s: feed: %v", todo.ID, err)
 	}

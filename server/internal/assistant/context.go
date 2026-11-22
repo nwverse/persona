@@ -28,7 +28,7 @@ func (s *Service) Context(ctx context.Context, p ContextParams) ContextResult {
 		}
 		return ContextResult{}
 	}
-	background := s.isBackground(ctx, p.SessionID)
+	background := s.isBackgroundSession(ctx, p.SessionID)
 	snapshot := ""
 	cleanRound := s.cleanRoundSession(p.SessionID)
 	if !cleanRound { // a granted schedule's round reads nothing from outside (schedule_grant.go)
@@ -136,7 +136,7 @@ func backgroundSnapshot(snap prompts.Snapshot) prompts.Snapshot {
 // whole list to the main conversation (docs/assistant/todos.md); another conversation that got it took the user's
 // question for one of the others' tasks, which crowded its own out of the first rows.
 func (s *Service) snapshotScope(ctx context.Context, id string) string {
-	if id == "" || s.settings(ctx).Main == "" || s.isMain(ctx, id) || s.isBackground(ctx, id) || s.runsScheduledTask(ctx, id) {
+	if id == "" || s.settings(ctx).Main == "" || s.isMain(ctx, id) || s.isBackgroundSession(ctx, id) || s.runsScheduledTask(ctx, id) {
 		return ""
 	}
 	return id
@@ -338,6 +338,7 @@ func (s *Service) snapshotOld() {
 // ProfileChanged makes the next message take a new snapshot (the time zone changed), and the settings be read again
 // (the hub's defaults for them changed, or someone changed them behind the assistant's back).
 func (s *Service) ProfileChanged(context.Context) {
+	s.mcpChanges.notify() // language/settings changes invalidate the model's tool descriptions too
 	cs := &s.live
 	cs.mu.Lock()
 	cs.snap, cs.at = nil, time.Time{}

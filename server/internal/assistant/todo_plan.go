@@ -38,6 +38,7 @@ func (t *Todo) setPlan(row db.TodoRow) {
 	t.InboxItem = row.InboxItem
 	t.PartOf, t.After = row.PartOf, slices.Clone(row.After)
 	t.RequireAcceptedAfter = row.RequireAcceptedAfter
+	t.Responsible = cloneResponsible(row.Responsible)
 }
 
 // keepPlan writes t's plan, project and the owner's marks (seen, restored, Someday) into row: a row made in memory for a
@@ -55,6 +56,7 @@ func (t *Todo) keepPlan(row *db.TodoRow) {
 	row.InboxItem = t.InboxItem
 	row.PartOf, row.After = t.PartOf, slices.Clone(t.After)
 	row.RequireAcceptedAfter = t.RequireAcceptedAfter
+	row.Responsible = cloneResponsible(t.Responsible)
 }
 
 // todoRowOf is todo t as a row (what memory has of it; the store-less PATCH changes it).
@@ -213,7 +215,12 @@ func (s *Service) createDirectionTodo(ctx context.Context, leader, title, notes 
 	if err != nil {
 		return Todo{}, err
 	}
-	s.superviseTodo(ctx, t.ID, leader, nil, 0)
+	if err := s.superviseTodo(ctx, t.ID, leader, nil, 0); err != nil {
+		if rerr := s.removeTodo(context.WithoutCancel(ctx), t.ID); rerr != nil {
+			s.logf("todo %s: take back after supervision failure: %v", t.ID, rerr)
+		}
+		return Todo{}, err
+	}
 	if cur, ok := s.todoNow(t.ID); ok {
 		t = cur
 	}
@@ -241,6 +248,9 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 	if !ok {
 		return Todo{}, db.ErrTodoNotFound
 	}
+	if e.Done != nil && *e.Done && cur.DoneAt == nil && s.outsideBackingPending(id) {
+		return Todo{}, errOutsideDecisionPending
+	}
 	if cur.isConcern() && cur.DoneAt == nil && e.Done != nil && *e.Done {
 		return Todo{}, db.ErrConcernUnreported // only its report closes it (concerns.go); the store checks it again
 	}
@@ -251,13 +261,24 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 	if f := s.editWriteHook; f != nil {
 		f(id)
 	}
+	reopening := e.Done != nil && !*e.Done
+	if reopening {
+		// Keep a concurrent ledger writer from publishing an older state over the reopened row.
+		s.supervise.writeMu.Lock()
+	}
 	s.todos.writing.Lock()
+	unlock := func() {
+		s.todos.writing.Unlock()
+		if reopening {
+			s.supervise.writeMu.Unlock()
+		}
+	}
 	if links {
 		// Checked again with the graph held still: a write since the caller's check may have changed the request
 		// (todo_pieces.go). A *pieceError when it no longer holds.
 		l, err := s.recheckPieces(id, e)
 		if err != nil {
-			s.todos.writing.Unlock()
+			unlock()
 			return Todo{}, err
 		}
 		e.PartOf, e.After = l.PartOf, l.After
@@ -267,7 +288,7 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 	if st := s.todoDB(); st != nil {
 		var err error
 		if row, err = st.EditTodo(ctx, id, e, now); err != nil {
-			s.todos.writing.Unlock()
+			unlock()
 			return Todo{}, err
 		}
 	} else {
@@ -275,7 +296,7 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		// again from the copy read before the lock)
 		base, ok := s.todoNow(id)
 		if !ok {
-			s.todos.writing.Unlock()
+			unlock()
 			return Todo{}, db.ErrTodoNotFound
 		}
 		r := todoRowOf(base)
@@ -283,7 +304,7 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		row = &r
 	}
 	out, doneKeys, applied := s.setTodoRow(id, *row, nil)
-	s.todos.writing.Unlock()
+	unlock()
 	if applied {
 		s.todoRowSet(ctx, doneKeys)
 	}
@@ -292,6 +313,13 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		// still has the agents that were working on it.
 		s.goRecordTaskOutcome(cur, *row.DoneAt)
 		s.askTodoClosed(context.WithoutCancel(ctx), id, row.Title) // a question's to-do closed unanswered (ask_todo.go)
+		if row.StartError == "" && row.DoneBy != db.DoneByCancelled {
+			s.evaluateTodoAfterDependents(ctx, id)
+		}
+	}
+	if reopening && row.DoneAt == nil && (cur.DoneAt != nil || e.RestartWork ||
+		row.ReopenedAt != nil && (cur.ReopenedAt == nil || !row.ReopenedAt.Equal(*cur.ReopenedAt))) {
+		s.resetTodoReadyWake(ctx, id)
 	}
 	return out, nil
 }
@@ -301,6 +329,9 @@ func (s *Service) deleteTodo(ctx context.Context, id string) error {
 	cur, ok := s.todoNow(id)
 	if !ok {
 		return db.ErrTodoNotFound
+	}
+	if s.outsideBackingPending(id) {
+		return errOutsideDecisionPending
 	}
 	if err := s.removeTodo(ctx, id); err != nil {
 		return err

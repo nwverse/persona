@@ -26,6 +26,8 @@ type taskNode struct {
 	starts []map[string]any
 	sends  []map[string]any
 	n      int
+	// nextID: when non-empty, the next session.start uses this id before returning to s1, s2…
+	nextID string
 	// failStart: session.start answers this error instead of a session.
 	failStart error
 	// gate: when set, session.start waits for it to close (a start that takes a while).
@@ -67,6 +69,9 @@ func connectTaskNode(t *testing.T, h *Hub, id string) *taskNode {
 			}
 			tn.n++
 			sid := "s" + string(rune('0'+tn.n))
+			if tn.nextID != "" {
+				sid, tn.nextID = tn.nextID, ""
+			}
 			return map[string]any{"session": proto.Session{SessionID: sid, Cwd: p["cwd"].(string), Agent: "claude"}}, nil
 		case "session.send":
 			tn.sends = append(tn.sends, p)
@@ -153,7 +158,7 @@ func taskLine(h *Hub, todo Todo) string {
 func planArgs(readonly bool) json.RawMessage {
 	task := map[string]any{
 		"title": "修登录崩溃", "prompt": "iPad 横屏时登录页崩溃，修好并补测试", "machine": "box", "cwd": "/code/app",
-		"readonly": readonly, "why": "这个仓库最近在 box 上", "permission": "bypassPermissions",
+		"role": "worker", "readonly": readonly, "why": "这个仓库最近在 box 上", "permission": "bypassPermissions",
 		// What task_plan requires of a brief (#3822): a read-only task's goal and how long it should take.
 		"goal": "登录页横屏不再崩溃", "expect_minutes": 10,
 	}

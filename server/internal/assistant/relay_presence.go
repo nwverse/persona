@@ -40,6 +40,7 @@ const (
 	relayRankAnswer   = iota // the owner's late answer to an ask_user question (ask_todo.go)
 	relayRankDecision        // a supervision message or task notice that waits on a decision
 	relayRankReport          // an outcome the conversation is to report to the owner (a task's notice)
+	relayRankHandover        // in a direction's lead: the owner's words handed to it (relayMsg.Handover, #11699)
 	relayRankOther           // everything else: other supervision messages, messages from conversations, records
 )
 
@@ -57,7 +58,13 @@ func (msg relayMsg) decisionWaiting() bool {
 	return false
 }
 
-func (msg relayMsg) rank() int {
+// rank is msg's rank in the queue of a conversation that is no direction's lead.
+func (msg relayMsg) rank() int { return msg.rankIn(false) }
+
+// rankIn is msg's rank in the queue of a direction's lead (lead) or of another conversation: a hand-over of the owner's
+// words to a lead goes after the outcomes to report and before the rest; anywhere else it ranks as any message from a
+// conversation does.
+func (msg relayMsg) rankIn(lead bool) int {
 	switch {
 	case msg.Tool == askAnswerTool:
 		return relayRankAnswer
@@ -65,6 +72,8 @@ func (msg relayMsg) rank() int {
 		return relayRankDecision
 	case msg.Tool == noticeTool:
 		return relayRankReport
+	case lead && msg.Handover != "":
+		return relayRankHandover
 	}
 	return relayRankOther
 }
@@ -159,15 +168,20 @@ func (b *relayBook) holdLocked(to string, msg relayMsg, now time.Time) time.Dura
 }
 
 // pickLocked is the index of the message of conversation to's queue that goes in next: the best rank among those not
-// held for the owner, the one that queued first within it. The message that could not go in last time (b.stuck: its
-// agent's computer unreachable, a delivery that failed) is passed over while another may go, so it holds up nothing
-// but itself. None may go (-1): wait is how long until the first may. b.mu is held.
-func (b *relayBook) pickLocked(to string, now time.Time) (i int, wait time.Duration) {
+// held for the owner, the one that queued first within it (lead: to is a direction's lead, rankIn). The message that
+// could not go in last time (b.stuck: its agent's computer unreachable, a delivery that failed) is passed over while
+// another may go, so it holds up nothing but itself. None may go (-1): wait is how long until the first may. b.mu is
+// held.
+func (b *relayBook) pickLocked(to string, lead bool, now time.Time) (i int, wait time.Duration) {
 	i = -1
 	stuck := -1
 	q := b.st.Queue[to]
 	for j, m := range q {
-		if h := max(b.holdLocked(to, m, now), m.LookAfter.Sub(now)); h > 0 {
+		lookAfter := m.LookAfter.Sub(now)
+		if m.Withdrawn {
+			lookAfter = 0 // no retry is sent: only check whether the original in-flight text landed
+		}
+		if h := max(b.holdLocked(to, m, now), lookAfter); h > 0 {
 			if wait == 0 || h < wait {
 				wait = h
 			}
@@ -177,7 +191,7 @@ func (b *relayBook) pickLocked(to string, now time.Time) (i int, wait time.Durat
 			stuck = j
 			continue
 		}
-		if i < 0 || m.rank() < q[i].rank() {
+		if i < 0 || m.rankIn(lead) < q[i].rankIn(lead) {
 			i = j
 		}
 	}
@@ -365,6 +379,7 @@ func (s *Service) drainConversations(machine string, ids []string) bool {
 // owner presence, rate limits, and tries in doubt. The owner's last message is forgotten once ownerPresentFor has
 // passed and what it held was handed on.
 func (s *Service) drainHeldRelays(ctx context.Context, now time.Time) {
+	leads := s.queueLeads(ctx)
 	b := &s.relays
 	b.mu.Lock()
 	if !s.relayLocked(ctx) {
@@ -377,7 +392,7 @@ func (s *Service) drainHeldRelays(ctx context.Context, now time.Time) {
 			continue
 		}
 		if slices.ContainsFunc(q, func(m relayMsg) bool { return !m.Due.IsZero() || !m.TriedAt.IsZero() }) {
-			if i, _ := b.pickLocked(id, now); i >= 0 {
+			if i, _ := b.pickLocked(id, leads[id], now); i >= 0 {
 				due = append(due, id)
 			}
 		}
@@ -392,7 +407,7 @@ func (s *Service) drainHeldRelays(ctx context.Context, now time.Time) {
 		if b.holds[id] != nil || b.draining[id] {
 			continue
 		}
-		if i, _ := b.pickLocked(id, now); i >= 0 {
+		if i, _ := b.pickLocked(id, leads[id], now); i >= 0 {
 			due = append(due, id)
 		}
 	}

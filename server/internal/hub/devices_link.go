@@ -35,7 +35,8 @@ func (managerOfflineError) Is(target error) bool { return target == apierr.ErrOf
 
 // devicesState is the hub's side of the manager's machines.
 type devicesState struct {
-	mu sync.Mutex
+	transportOwners map[string]string // manager-owned transport aliases, no session mapping
+	mu              sync.Mutex
 	// entries are hub.json's machines and those the admin page added since (handed to the manager).
 	entries []MachineConfig
 	// absorbed: a hub.json entry whose computer another entry has → that machine's id; recEntries: this hub's
@@ -47,15 +48,16 @@ type devicesState struct {
 	// the managers removed since, the machines removed since, not taken back from the setting read late; refused:
 	// the ids each manager's last report named that are not its own (logged once); reportedDue: a write is to go;
 	// reportedSaved: the last write; reportedSave keeps writes one at a time.
-	reported       reportedMachines
-	reportedSince  map[string]bool // the managers that reported since the hub started
-	reportedRead   bool
-	reportedForgot map[string]bool
-	entriesForgot  map[string]bool
-	refused        map[string]map[string]bool
-	reportedDue    bool
-	reportedSaved  time.Time
-	reportedSave   sync.Mutex
+	reported         reportedMachines
+	reportedSince    map[string]bool // the managers that reported since the hub started
+	reportedRead     bool
+	reportedForgot   map[string]bool
+	entriesForgot    map[string]bool
+	refused          map[string]map[string]bool
+	reportedDue      bool
+	reportedDeferred bool
+	reportedSaved    time.Time
+	reportedSave     sync.Mutex
 	// kept: the machines their manager keeps in its own list, out of hub.json (machines_kept.go), machine → manager;
 	// keptRead: that is what machinesKeptKey holds. putTried: the hub.json machines put to their manager's own list
 	// (settleOwnList), each once per manager.

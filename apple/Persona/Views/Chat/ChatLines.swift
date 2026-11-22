@@ -31,7 +31,7 @@ struct ChatLines {
         }
     }
 
-    /// The lines without the raw `<closeout …>…</closeout>` block of the last reply (#3612): the card in the chat's
+    /// The lines without the raw closeout of the last reply (#3612): the card in the chat's
     /// header says it, so the reply does not say it again as text. Exactly that block goes (`Closeout.strip`), from
     /// the last exchange's last words only; a reply that was nothing but the block is not drawn at all. An earlier
     /// turn's block stays as it was written: the card is about the turn that just ended.
@@ -42,8 +42,9 @@ struct ChatLines {
         for index in lines.indices.reversed() {
             switch lines[index].content {
             case .row(.assistant(let item)):
-                guard let text = item.text, Closeout.holdsBlock(text) else { return lines }
-                let stripped = Closeout.strip(text)
+                guard let text = item.text else { return lines }
+                let stripped = Closeout.strip(text, complete: item.fullSize == nil)
+                guard stripped != text else { return lines }
                 var out = lines
                 if stripped.isEmpty, item.fullSize == nil {
                     out.remove(at: index)
@@ -102,6 +103,8 @@ struct ChatLines {
     /// Background rounds fold too (docs/apple/ios.md "Background rounds"): the main conversation and the leader
     /// conversations (`AssistantInfo.leaders`, #6595), with the hub's `main_background_folded` on. Needs `foldSupervision`.
     var foldBackground = false
+    /// The main Assistant conversation: a routine relay reply stays folded; leader conversations keep the old fallback.
+    var main = false
     var openSupervision: Set<String> = []
     var openAllSupervision = false
     var active = false
@@ -173,7 +176,7 @@ struct ChatLines {
                 entry = nil
             }
             guard let trace = round, let first = trace.first else { return }
-            if Supervision.visible(evidence, results: results, live: running) {
+            if Supervision.visible(evidence, results: results, live: running, routineMainRelay: main && source?.kind == "conversation") {
                 out += trace
             } else {
                 out.append(.supervision(id: "sv-" + first.id, lines: trace, live: running, source: source))
@@ -298,13 +301,19 @@ struct ChatLines {
                 // Woken and at work with nothing of it here yet: its work line.
                 if segments.isEmpty, woke != nil, t.id == liveID { segments = [(nil, [])] }
                 for (k, seg) in segments.enumerated() {
+                    let firstLine = out.count
                     let live = t.id == liveID && k == segments.count - 1
                     // The work a wake opened is known by the wake: its line keeps its id from before its first step.
                     let opening = k == 0 && seg.user == nil ? woke?.id : nil
                     // Photos sent with the message (Claude inlines a pasted image path as an image block) sit above
                     // its text, as they did while it was being sent — not in the agent's work.
                     let photos = Self.photos(seg.rows)
-                    if !photos.isEmpty { out.append(.userImages(id: "img-" + photos[0].id, items: photos)) }
+                    if !photos.isEmpty {
+                        var line = ChatLine.userImages(id: "img-" + photos[0].id, items: photos)
+                        // A photo with no text is an input of its own; photos beside text stay before its divider.
+                        line.startsExchange = seg.user == nil
+                        out.append(line)
+                    }
                     if let u = seg.user { out.append(.row(u)) }
                     let last = live && streaming ? nil : seg.rows.lastIndex { if case .assistant = $0 { true } else { false } }
                     // Only an idle compaction with no later work belongs after the answer. A running turn's
@@ -338,6 +347,10 @@ struct ChatLines {
                     out += Self.viewed("vi-" + (seg.user?.id ?? opening ?? seg.rows.first?.id ?? t.id), items)
                     if let last { out.append(.row(seg.rows[last])) }
                     out += after.sorted().map { .row(seg.rows[$0]) }
+                    if opening != nil, out.count > firstLine {
+                        // A wake opens where a message would be, whether its notice is drawn or only its work/reply is.
+                        out[firstLine].startsExchange = true
+                    }
                 }
                 out += t.trailing.map { .row($0) }
             }
@@ -443,7 +456,11 @@ struct ChatLines {
                         }
                         return child
                     }
-                    out += unfold(raw)
+                    out += unfold(raw).map { child in
+                        var child = child
+                        child.inFoldedRound = true
+                        return child
+                    }
                 }
                 continue
             }

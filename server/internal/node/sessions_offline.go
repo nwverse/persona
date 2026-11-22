@@ -119,7 +119,7 @@ func (n *Node) scanOffline() []proto.Session {
 	desktop := readClaudeDesktopIndex(n.home)
 	for _, p := range files {
 		id := strings.TrimSuffix(filepath.Base(p), ".jsonl")
-		if !validID(id) {
+		if !validID(id) || n.isRoundFork(id) {
 			continue
 		}
 		st, err := os.Stat(p)
@@ -187,6 +187,18 @@ func (n *Node) scanOffline() []proto.Session {
 			title, cwd = cmp.Or(title, about.title), cmp.Or(cwd, about.cwd)
 		}
 		cwd = n.assistantHome(id, cwd)
+		if c.count == assistants && !identity.IsAssistantDir(cwd) && !identity.InHealthSpace(cwd) {
+			base := filepath.Base(filepath.Dir(c.path))
+			if dir := n.assistantDirOfProject(base); dir != "" {
+				cwd = dir
+			} else if !isMeetingRoomProject(base) {
+				if strings.HasSuffix(base, "-health") {
+					cwd = identity.HealthDir(n.home)
+				} else if strings.HasSuffix(base, "-assistant") {
+					cwd = identity.AssistantDir(n.home)
+				}
+			}
+		}
 		if !n.sessionScopeAllows(cwd) {
 			continue
 		}
@@ -204,12 +216,13 @@ func (n *Node) scanOffline() []proto.Session {
 		}
 		n.setPath(id, c.path)
 		s := proto.Session{
-			SessionID: id, Title: title, Cwd: cwd, Status: proto.StatusOffline, Model: m.model,
+			SessionID: id, Title: title, Cwd: cwd, Status: proto.StatusOffline, Model: n.shownModel(id, m.model),
 			Agent: "claude", AgentSurface: m.surface,
 			LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, c.st), Rev: c.st.Size(),
 		}
 		s.Activity, s.ActivityAt = m.activityOf()
 		setContext(&s, m)
+		m.turnErr.set(&s) // Preserve the full gateway error and its reset after the terminal Agent exits.
 		s.ModelFallback = m.modelFallback
 		n.setModelRestore(&s, c.path, m)
 		n.terminalModesRow(&s, m)
@@ -310,7 +323,7 @@ func (n *Node) assistantHome(id, cwd string) string {
 	if n.state == nil {
 		return cwd
 	}
-	if st, ok := n.state.get(id); ok && identity.IsAssistantDir(st.Cwd) {
+	if st, ok := n.state.get(id); ok && (identity.IsAssistantDir(st.Cwd) || identity.InHealthSpace(st.Cwd)) {
 		return st.Cwd
 	}
 	return cwd

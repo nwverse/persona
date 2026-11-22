@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"path"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -23,8 +24,9 @@ import (
 //
 //   - only gated calls (and a few output filters): each call goes by its gate's rules (the first match: allow, confirm
 //     on the phone first with method, path and body on the card, or deny; none matching is confirmed); lark-cli's
-//     by its own risk level (larkcligate.go). Assistant bypass skips cards only for classified reads and ordinary
-//     writes; Lark sends as the user, deletion and calls it cannot classify still ask. Non-Lark commands such as
+//     by its own risk level (larkcligate.go). Assistant bypass skips cards only for classified reads, ordinary
+//     writes, and calls allowed by configured or per-chat rules; unconfigured Lark sends as the user, deletion and
+//     calls it cannot classify still ask. Non-Lark commands such as
 //     rm, git and tee remain outside this gate. Local redirect targets do not change a call's classification.
 //     Opaque execution requires confirmation when the
 //     command text names the CLI (including paths or interpreter code), or an expansion supplies
@@ -94,8 +96,9 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 		n.gates() // the proxy goes by this Node's config from now on (a resident node's next connection)
 	}
 	analysisCommand := normalizeLarkCommand(command, cwd, cfg.Gates)
-	v := classifyLark(command, cfg.Gates, cwd, n.larkCLIRisk(cfg))
-	if n.assistantOrigin(session) == originInbox && inboxLarkOutbound(cfg, v, analysisCommand) {
+	v := classifyLarkWith(command, cfg.Gates, cwd, n.larkCLIRisk(cfg), n.larkLoginPATH)
+	origin, launchCwd := n.assistantOriginCwd(session)
+	if origin == originInbox && inboxLarkOutbound(cfg, v, analysisCommand) {
 		return "deny", inboxLarkRefusal, nil
 	}
 	if v.deny != "" {
@@ -129,6 +132,16 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 	}
 	safe := len(v.calls) > 0 && classified
 	boundary := slices.ContainsFunc(v.calls, func(c larkCall) bool { return !larkBypassSafe(c) })
+	// This exception is deliberately default-only. Check it before both the mixed-command and ordinary read paths:
+	// plan and bypass retain their normal permission flow even when every filter is already known to classifyLark.
+	if origin == originInbox && safe && len(v.calls) == 1 && launchCwd != "" &&
+		realPath(filepath.Clean(cwd)) == realPath(filepath.Clean(launchCwd)) &&
+		larkDecision(cfg, v.calls[0]) == "allow" && larkReadFormattingPipeline(command, cfg.Gates) {
+		if mode == proto.ModeDefault {
+			return "allow", "读操作", nil
+		}
+		return "", "", nil
+	}
 	if v.other {
 		// A write through a gate whose credentials are at the proxy goes there only as a call read off the command and
 		// let through here: in a command the gate cannot follow it would be refused after the phone said yes.
@@ -181,12 +194,12 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 	var ask, covered, bypassed []larkCall
 	for _, c := range v.calls {
 		decision := larkDecision(cfg, c)
-		if bypass {
+		if bypass && decision != "allow" {
 			if larkBypassSafe(c) {
 				bypassed = append(bypassed, c)
 				continue
 			}
-			decision = "confirm" // a configured allow does not waive a hard boundary
+			decision = "confirm" // unconfigured outbound/deletion still requires confirmation
 		}
 		if decision == "allow" && health && !larkRead(c) {
 			decision = "confirm"
@@ -427,8 +440,21 @@ func (n *Node) assistantLark(ctx context.Context) proto.AssistantLark {
 		n.logger.Printf("assistant: Feishu gate config from hub: %v", err) // never the config itself
 		return cached
 	}
+	relayGates(&cfg)
 	n.mu.Lock()
 	n.larkCfg, n.larkCfgAt = cfg, time.Now()
 	n.mu.Unlock()
 	return cfg
+}
+
+// relayGates makes each relayed gate (proto.CommandGate.Relay, #12904) one the gate proxy stands in for: an Auth of
+// its own (no header: the manager puts the credentials on the call), so that everything that holds a gate with Auth to
+// the proxy (larkgate.go, larkgate_env.go, gateproxy.go) holds this one too. Its socket and token stay out of the
+// assistant's process (larkgate_env.go).
+func relayGates(cfg *proto.AssistantLark) {
+	for i := range cfg.Gates {
+		if g := &cfg.Gates[i]; g.Relay && g.BaseEnv != "" && g.Auth == nil {
+			g.Auth = &proto.GateAuth{}
+		}
+	}
 }

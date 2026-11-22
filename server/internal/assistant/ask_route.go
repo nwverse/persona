@@ -190,7 +190,7 @@ func (s *Service) askLadder(ctx context.Context, ix proto.Interaction) (ladder [
 			return nil, "", "", false
 		}
 		if lead == "" || lead == cfg.Main || s.handedBack(cfg, lead, t) {
-			lead = s.ownSupervisor(cfg) // an ended direction's open tasks went back to this route (#11394)
+			lead = s.ownSupervisor(cfg) // an ended direction's open tasks went back to the main chat (#11394)
 		}
 		// Side conversations supervise their own work too. Resolve the same
 		// destination as a supervision message when a runtime cannot receive it.
@@ -436,6 +436,9 @@ func (s *Service) ringAsks(todo string, ids []string, d *proto.Delegate, esc esc
 		}
 		p.route = nil
 		p.ix.Delegating = false
+		if esc.level != "" {
+			p.ix.PushLevel = esc.level
+		}
 		if d != nil {
 			c := *d
 			p.ix.Delegate = &c

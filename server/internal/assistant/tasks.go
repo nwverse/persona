@@ -101,10 +101,15 @@ type PlanTask struct {
 	// Reroute is set once a flexible task has been moved to another machine; nil while it runs where it was asked.
 	// Repeated moves keep the original FromMachine and refresh ToMachine and Reason (#2271).
 	Reroute *PlanReroute `json:"reroute,omitempty"`
-	// DoneWhen: what done means, criteria the supervisor checks before it accepts the work; ExpectMinutes: how long it
-	// should take (#3124, supervise.go). Both optional; the agent is told the criteria with its prompt.
-	DoneWhen      []string `json:"done_when,omitempty"`
-	ExpectMinutes int      `json:"expect_minutes,omitempty"`
+	// DoneWhen: what done means, criteria the supervisor checks before it accepts the work. ExpectMinutes is an optional
+	// override of the hub-selected estimate; EstimateSource records which automatic estimate the brief owns (#11685).
+	DoneWhen         []string              `json:"done_when,omitempty"`
+	ExpectMinutes    int                   `json:"expect_minutes,omitempty"`
+	EstimateSource   string                `json:"estimate_source,omitempty"`
+	EstimateEvidence *TaskEstimateEvidence `json:"estimate_evidence,omitempty"`
+	// EstimateCalibration is set only by task_plan and stored with the task.
+	// Direct owner starts and older plans have no calibration provenance.
+	EstimateCalibration bool `json:"estimate_calibration,omitempty"`
 	// The brief (#3822, task_brief.go): Goal is the work in one sentence (the title when left out), OutOfBounds what
 	// the agent must not do. Continues: the to-do this task carries on in (a retry on another computer or a rework
 	// round), for ContinuesWhy: it keeps that to-do and its brief instead of creating another. Brief is
@@ -118,16 +123,16 @@ type PlanTask struct {
 	// StartedWhy: why the assistant starts this on its own, when the owner did not just ask for it.
 	StartedWhy string     `json:"started_why,omitempty"`
 	Brief      *TaskBrief `json:"brief,omitempty"`
-	// Supervisor: the leader conversation the main conversation handed the task to (task_plan's supervisor, #3608);
-	// "" the plan's own conversation supervises it, as before.
+	// Supervisor: the legacy task_plan supervisor input (#3608), retained in saved plans so pre-#5732 leader-plan
+	// tasks can be told apart from the manual-Agent exception. It no longer chooses the supervisor of new work.
 	Supervisor string `json:"supervisor,omitempty"`
 	// ReuseTodo: the todo this task runs on instead of a new one (task_plan's todo_id, #5279): one this conversation
 	// opened that has no agent yet, such as the todo a Lark topic opened (feishu_thread_open.go). Checked when the
 	// plan is made and again when it starts; it is not what the apps send back with an edit.
 	ReuseTodo string `json:"reuse_todo,omitempty"`
-	// Role: "leader" makes the task's agent a task leader that may hand out workers beneath this task (task_leader.go,
-	// #3656); "" is an ordinary worker. Only a supervising conversation's task_plan sets it. Parent: the leader's task
-	// this task is a worker of; the hub's, never what a tool call or an edit says.
+	// Role: every new task declares "worker" or "leader". A leader may hand out workers beneath its task
+	// (task_leader.go, #3656); a role-less task in a legacy stored plan remains an ordinary worker. Parent: the
+	// leader's task this task is a worker of; the hub's, never what a tool call or an edit says.
 	Role   string `json:"role,omitempty"`
 	Parent string `json:"parent,omitempty"`
 	// PartOf and After: the request the task's to-do is a piece of and the pieces of it the to-do waits for
@@ -195,11 +200,15 @@ type PlanTask struct {
 	planFirst bool
 	// callerPick: the launcher, model, effort, tier, permission mode and ultracode the task named itself, kept from its
 	// first start try in this process, so every try starts from them again whichever start-defaults rule fits it.
-	// Never serialized: the task as stored keeps its own value for whatever a policy filled in (storedLaunch).
+	// Never serialized: the task as stored keeps its own launch, not what a tier, Model configuration › Agents or a
+	// policy filled in for a start (storedLaunch, #12618).
 	callerPick *startPick
 	// startFilled: what the start-defaults policy filled in on this start try (start_defaults.go): the next try goes
 	// back to callerPick first, and the plan keeps the task's own value for exactly those. Never serialized.
 	startFilled startFill
+	// startNamed: what this start try put in place of the launch resolved for the task, which the task names from then
+	// on as its card shows it (storedLaunch). Never serialized; this try only.
+	startNamed startNamed
 	// startedAgent is the kind this start's answer reported, or the explicitly resolved launcher kind when that answer omitted it.
 	// Kept only until the Agent is linked; never serialized.
 	startedAgent string
@@ -222,6 +231,7 @@ func (t *PlanTask) normalizeReadonlyPermission(mode string) {
 
 // TaskPlan is a plan the assistant handed the user.
 type TaskPlan struct {
+	Space        string     `json:"space,omitempty"`
 	ID           string     `json:"id"`
 	Conversation string     `json:"conversation"`
 	Tasks        []PlanTask `json:"tasks"`
@@ -469,7 +479,7 @@ func (s *Service) patchPlanTask(ctx context.Context, planID string, i int, chang
 			return errPlanNotFound
 		}
 		if err == nil && row != nil {
-			s.event(ctx, map[string]any{"type": "task_plan", "plan": planFromRow(*row)})
+			s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSpace(ctx, planFromRow(*row))})
 		}
 		return err
 	}
@@ -484,7 +494,7 @@ func (s *Service) patchPlanTask(ctx context.Context, planID string, i int, chang
 	if ok, err := s.movePlan(ctx, p, planStarted); err != nil || !ok {
 		return err
 	}
-	s.event(ctx, map[string]any{"type": "task_plan", "plan": p})
+	s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSpace(ctx, p)})
 	return nil
 }
 
@@ -860,7 +870,7 @@ func (s *Service) taskRoutes() {
 			planErr(w, err)
 			return
 		}
-		apierr.WriteJSON(w, map[string]any{"plan": p})
+		apierr.WriteJSON(w, map[string]any{"plan": s.planWithSpace(r.Context(), p)})
 	})
 	s.handle("POST /api/v1/task-plans/{id}/dismiss", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
@@ -872,7 +882,7 @@ func (s *Service) taskRoutes() {
 			planErr(w, err)
 			return
 		}
-		apierr.WriteJSON(w, map[string]any{"plan": p})
+		apierr.WriteJSON(w, map[string]any{"plan": s.planWithSpace(r.Context(), p)})
 	})
 	s.handle("POST /api/v1/todos/{id}/retry", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
@@ -921,6 +931,11 @@ func (s *Service) taskRoutes() {
 			apierr.Write(w, http.StatusBadRequest, errFeedCursor)
 			return
 		}
+		ext := r.Header.Get(RoleHeader) == roleExtension
+		if ext && s.feedHiddenFromExtension(r.Context(), r.PathValue("id")) { // feed_scope.go
+			apierr.Write(w, http.StatusNotFound, errNoSuchConversation)
+			return
+		}
 		var items []FeedItem
 		var nextCursor string
 		var err error
@@ -938,8 +953,28 @@ func (s *Service) taskRoutes() {
 			return
 		}
 		plans := s.feedPlans(r.Context(), items)
+		var pendingIDs []string
+		// Main watches pending plans from every conversation of this manager. Extension
+		// tokens retain their existing conversation-only feed and visibility rules.
+		if !ext && r.PathValue("id") == s.settings(r.Context()).Main {
+			pending, readErr := s.mainPendingPlans(r.Context())
+			if readErr != nil {
+				apierr.Write(w, http.StatusServiceUnavailable, readErr)
+				return
+			}
+			pendingIDs = make([]string, 0, len(pending))
+			for _, p := range pending {
+				pendingIDs = append(pendingIDs, p.ID)
+				plans[p.ID] = p
+			}
+		}
+
+		var shown func(TaskCard) bool
+		if ext {
+			items, plans, shown = s.extensionFeed(r.Context(), items, plans)
+		}
 		for id, p := range plans {
-			plans[id] = s.planWithSuggestion(r.Context(), p, s.requestLang(r))
+			plans[id] = s.planWithSpace(r.Context(), s.planWithSuggestion(r.Context(), p, s.requestLang(r)))
 		}
 		if items == nil {
 			items = []FeedItem{}
@@ -963,7 +998,13 @@ func (s *Service) taskRoutes() {
 		if cardErr != nil {
 			s.logf("feed: task card projection: %v", cardErr)
 		}
+		if shown != nil && cards != nil {
+			cards = slices.DeleteFunc(cards, func(c TaskCard) bool { return !shown(c) })
+		}
 		out := map[string]any{"items": items, "plans": plans, "task_cards": cards, "views": views, "view_actions": actions, "view_blocks": blocks}
+		if pendingIDs != nil {
+			out["pending_plan_ids"] = pendingIDs
+		}
 		if paginated {
 			out["next_cursor"] = nextCursor
 		}

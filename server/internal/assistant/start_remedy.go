@@ -402,7 +402,7 @@ func (s *Service) giveUpStart(ctx context.Context, id, by string, told bool) {
 	if pt.Start == nil || pt.Start.State != remedying {
 		return
 	}
-	if s.taskStartOnWay(id) {
+	if s.taskStartOnWay(id) || pt.Queue != nil {
 		return
 	}
 	reason := cmp.Or(pt.Start.Reason, pt.Error)
@@ -453,7 +453,7 @@ func (s *Service) remedyWatch(ctx context.Context, t Todo, now time.Time, histor
 	if err != nil {
 		return
 	}
-	if r := p.Tasks[i].Start; r != nil && r.State == remedying && !r.Until.IsZero() && now.After(r.Until) {
+	if r := p.Tasks[i].Start; r != nil && r.State == remedying && p.Tasks[i].Queue == nil && !r.Until.IsZero() && now.After(r.Until) {
 		s.giveUpStart(ctx, t.ID, "hub", false)
 	}
 }

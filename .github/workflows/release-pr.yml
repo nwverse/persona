@@ -232,9 +232,17 @@ jobs:
           if-no-files-found: error
           retention-days: 2
 
+  android-tests:
+    name: Run the complete Android suite in the standard shards
+    needs: plan
+    if: needs.plan.outputs.pr != '0' && needs.plan.outputs.version != ''
+    uses: ./.github/workflows/android-test.yml
+    with:
+      commit: ${{ needs.plan.outputs.commit }}
+
   android:
     name: Build and sign Android for the exact merge result
-    needs: plan
+    needs: [plan, android-tests]
     if: needs.plan.outputs.pr != '0' && needs.plan.outputs.version != ''
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -264,6 +272,26 @@ jobs:
         with:
           name: release-pr-plan-${{ needs.plan.outputs.pr }}
           path: ${{ runner.temp }}/release-plan
+      - name: Download every required Android shard receipt
+        uses: actions/download-artifact@v4
+        with:
+          pattern: android-source-receipt-${{ needs.plan.outputs.commit }}-*
+          path: ${{ runner.temp }}/android-source-evidence
+          merge-multiple: true
+      - name: Verify every required Android shard passed this exact source
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/android-source-evidence"
+          for lane in lint-build-test-0 test-1; do
+            test -f "$RUNNER_TEMP/android-source-evidence/receipt-$lane.json"
+            python3 - "$RUNNER_TEMP/android-source-evidence/receipt-$lane.json" "${{ needs.plan.outputs.commit }}" <<'PY'
+          import json, sys
+          from pathlib import Path
+          receipt = json.loads(Path(sys.argv[1]).read_text())
+          assert receipt['commit'] == sys.argv[2], 'Android test evidence belongs to another commit'
+          assert receipt['verified'] is True
+          PY
+          done
       - name: Prepare protected Android signing configuration without logging secrets
         env:
           PERSONA_ANDROID_CERTIFICATE_SHA256: ${{ secrets.PERSONA_ANDROID_CERTIFICATE_SHA256 }}
@@ -285,7 +313,7 @@ jobs:
           python3 scripts/release/android_tag_release.py \
             --config "$RUNNER_TEMP/persona-android/android.json" \
             --worktree "$GITHUB_WORKSPACE" --commit "${{ needs.plan.outputs.commit }}" \
-            --version "${{ needs.plan.outputs.version }}" --receipt "$RUNNER_TEMP/android-receipt.json"
+            --version "${{ needs.plan.outputs.version }}" --receipt "$RUNNER_TEMP/android-receipt.json" --release-only
       - name: Verify the signed APK and Android index against the release plan
         run: |
           set -euo pipefail
@@ -399,6 +427,16 @@ jobs:
             printf '%s' "${!name}" | base64 --decode > "$RUNNER_TEMP/profile-$i.mobileprovision"
             cp "$RUNNER_TEMP/profile-$i.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/"
           done
+      - name: Prepare the explicitly public privacy waiver without logging private values
+        env:
+          PERSONA_PRIVACY_PUBLIC_WORDS: ${{ secrets.PERSONA_PRIVACY_PUBLIC_WORDS }}
+        run: |
+          set -euo pipefail
+          test "$PERSONA_PRIVACY_PUBLIC_WORDS" = 'chyroc'
+          umask 077
+          mkdir -p "$RUNNER_TEMP/persona-public-config/persona"
+          printf '# The public account identifier is not private; all other privacy checks remain active.\n!chyroc\n' > "$RUNNER_TEMP/persona-public-config/persona/private-words.txt"
+          printf 'XDG_CONFIG_HOME=%s\n' "$RUNNER_TEMP/persona-public-config" >> "$GITHUB_ENV"
       - name: Archive, export and upload the formal iPhone/Watch build
         env:
           RUSTUP_TOOLCHAIN: '1.98.0'
@@ -450,7 +488,9 @@ jobs:
 
   windows:
     name: Verify Windows programs natively and sign the desktop package
-    needs: [plan, cli-web, android, apple]
+    # Windows consumes only CLI/Web and Android artifacts. An unrelated Apple failure must not hide a native Windows
+    # execution or signing regression; the final aggregate still requires every platform to succeed.
+    needs: [plan, cli-web, android]
     if: needs.plan.outputs.pr != '0' && needs.plan.outputs.version != ''
     runs-on: windows-latest
     timeout-minutes: 120
@@ -469,10 +509,6 @@ jobs:
         with:
           name: release-pr-android-${{ needs.plan.outputs.pr }}-${{ needs.plan.outputs.commit }}
           path: release/downloads
-      - uses: actions/download-artifact@v4
-        with:
-          name: release-pr-apple-${{ needs.plan.outputs.pr }}-${{ needs.plan.outputs.commit }}
-          path: release
       - name: Run every Windows CLI on its matching native architecture
         shell: pwsh
         run: |
@@ -490,11 +526,11 @@ jobs:
           foreach ($path in Get-ChildItem release/downloads -File) {
             $assets += @{path=$path.FullName; name=$path.Name; sha256=(Get-FileHash $path.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
           }
-          $assets += @{path=(Resolve-Path release/downloads/persona-link-windows-amd64.verification.json).Path; name='persona-link-windows-amd64.verification.json'; sha256=(Get-FileHash release/downloads/persona-link-windows-amd64.verification.json -Algorithm SHA256).Hash.ToLowerInvariant()}
-          $assets += @{path=(Resolve-Path release/downloads/personad-windows-amd64.verification.json).Path; name='personad-windows-amd64.verification.json'; sha256=(Get-FileHash release/downloads/personad-windows-amd64.verification.json -Algorithm SHA256).Hash.ToLowerInvariant()}
-          $assets += @{path=(Resolve-Path release/downloads/persona-node-windows-amd64.verification.json).Path; name='persona-node-windows-amd64.verification.json'; sha256=(Get-FileHash release/downloads/persona-node-windows-amd64.verification.json -Algorithm SHA256).Hash.ToLowerInvariant()}
+          # windows_release.py already writes each verification JSON beside its executable. Do not add it a second time.
+          # This windows-latest runner proves amd64 only. ARM64 remains an explicit prerequisite, not a fabricated pass.
+          $architecture = if ($env:PROCESSOR_ARCHITECTURE -eq 'AMD64') { 'amd64' } elseif ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { throw 'Unsupported native Windows architecture' }
           @{commit=$plan.commit; assets=$assets} | ConvertTo-Json -Depth 5 | Set-Content release/receipt.json -NoNewline
-          python -B -c "import sys; sys.path.insert(0, 'scripts/operations'); from windows_release import check_windows_artifacts; import json; data=json.load(open('release/receipt.json')); check_windows_artifacts(data['assets'], '$($plan.version)')"
+          python -B -c "import sys; sys.path.insert(0, 'scripts/operations'); from windows_release import check_windows_artifacts; import json; data=json.load(open('release/receipt.json')); check_windows_artifacts(data['assets'], '$($plan.version)', '$architecture')"
           python scripts/operations/release_pr.py --repository '${{ github.repository }}' --channel '${{ needs.plan.outputs.channel }}' verify-artifacts --plan release/plan.json --commit '${{ needs.plan.outputs.commit }}' --add release/downloads
       - uses: actions/setup-node@v4
         with:
@@ -536,10 +572,18 @@ jobs:
   verify:
     name: All available release-PR checks passed
     needs: [plan, cli-web, android, apple, windows]
-    if: needs.plan.outputs.pr != '0' && needs.plan.outputs.version != ''
+    # A failed or skipped dependency normally skips this whole job, including its failure-conclusion step. Always run
+    # the aggregate for an actual release plan so the exact merge-result check cannot remain pending indefinitely.
+    if: always() && needs.plan.outputs.pr != '0' && needs.plan.outputs.version != ''
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # The failure conclusion needs this script even when the platform gate below stops before any artifact download.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
       - name: Require every platform job to succeed before verification
         env:
           CLI_WEB: ${{ needs.cli-web.result }}
@@ -551,11 +595,6 @@ jobs:
           for result in "$CLI_WEB" "$ANDROID" "$APPLE" "$WINDOWS"; do
             test "$result" = success || { echo "A required platform failed or did not complete: $result" >&2; exit 1; }
           done
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.plan.outputs.commit }}
-          fetch-depth: 0
-          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           name: release-pr-plan-${{ needs.plan.outputs.pr }}

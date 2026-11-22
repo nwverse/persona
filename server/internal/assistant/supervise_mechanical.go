@@ -15,7 +15,7 @@ func (s *Service) screenMechanicalSignals(ctx context.Context, list []superviseS
 	actionable := map[string]bool{}
 	for _, g := range list {
 		switch g.Kind {
-		case sigIdle, sigStalled, sigOrphaned:
+		case sigIdle, sigStalled, sigOrphaned, sigAllStopped:
 		default:
 			actionable[g.Todo] = true
 		}
@@ -23,17 +23,29 @@ func (s *Service) screenMechanicalSignals(ctx context.Context, list []superviseS
 	var kept []superviseSignal
 	for _, g := range list {
 		if actionable[g.Todo] {
+			// An actionable sibling keeps the to-do out of mechanical parking, but its idle still needs the read-only wake check.
+			if g.Kind == sigIdle {
+				if _, retry := s.mechanicalCheck(ctx, g, now, true); !retry.IsZero() {
+					s.restoreScreened(g, now, prev)
+					continue
+				}
+			}
 			kept = append(kept, g)
 			continue
 		}
 		handled, retry := s.mechanicalSignal(ctx, g, now)
 		switch {
 		case !retry.IsZero():
-			s.restoreDigest([]superviseSignal{g}, now, prev)
+			s.restoreScreened(g, now, prev)
 		case handled:
 			s.turnsTold(ctx, []superviseSignal{g})
 			s.logf("supervise: task %s %s handled without a model", g.Todo, g.Kind)
 		default:
+			if t, ok := s.todoNow(g.Todo); ok {
+				if a := lastAutomatic(t.Supervision); a != nil && a.Count >= maxAutomaticParks {
+					g.Detail += " Automatic-parking limit reached (three unchanged attempts)."
+				}
+			}
 			kept = append(kept, g)
 		}
 	}
@@ -48,10 +60,21 @@ func (s *Service) screenMechanicalSignals(ctx context.Context, list []superviseS
 	return kept
 }
 
+// restoreScreened keeps a deferred signal out of the digest batch that screening just kept it out of.
+func (s *Service) restoreScreened(g superviseSignal, now, prev time.Time) {
+	g.batchTo, g.batchUntil = "", time.Time{}
+	s.restoreDigest([]superviseSignal{g}, now, prev)
+}
+
 // Unknown, actionable and conflicting evidence deliberately falls through to ordinary supervision.
 func (s *Service) mechanicalSignal(ctx context.Context, g superviseSignal, now time.Time) (bool, time.Time) {
+	return s.mechanicalCheck(ctx, g, now, false)
+}
+
+// mechanicalCheck is mechanicalSignal; wakeOnly stops before delivery reads, writes or automatic parking.
+func (s *Service) mechanicalCheck(ctx context.Context, g superviseSignal, now time.Time, wakeOnly bool) (bool, time.Time) {
 	switch g.Kind {
-	case sigIdle, sigStalled, sigOrphaned:
+	case sigIdle, sigStalled, sigOrphaned, sigAllStopped:
 	default:
 		return false, time.Time{}
 	}
@@ -60,27 +83,64 @@ func (s *Service) mechanicalSignal(ctx context.Context, g superviseSignal, now t
 		return false, time.Time{}
 	}
 	v := t.Supervision
-	if v.state(t) != "" || v.Waits != nil || v.AutoReview != nil && v.AutoReview.State == autoRunning {
+	st := v.state(t)
+	if st != "" && st != reviewRework || v.Waits != nil || v.AutoReview != nil && v.AutoReview.State == autoRunning {
 		return false, time.Time{}
 	}
 	agents, reached := s.taskAgentsReached(ctx, t)
-	agents = currentTaskAgents(agents, supersededAgents(t, agents))
-	if !reached || len(agents) == 0 {
+	if !reached {
 		return false, time.Time{}
+	}
+	for _, c := range currentTaskAgents(agents, supersededAgents(t, agents)) {
+		if g.Kind == sigIdle && c.Loop != nil && c.Loop.Kind == "wakeup" &&
+			(c.Status == proto.StatusWorking || c.State == proto.StateWorking) {
+			return false, now // the wakeup's turn is running; its end will judge the stop afresh
+		}
+	}
+	agents, wake, ok := s.mechanicalAgents(ctx, t, agents, now)
+	if !ok {
+		return false, time.Time{}
+	}
+	if wakeOnly {
+		return false, wake
+	}
+	if wake.IsZero() && len(agents) == 1 && s.parkCloseout(ctx, t, agents[0], now) {
+		return true, time.Time{}
+	}
+	if st != "" {
+		return false, time.Time{} // only evidenced closeouts extend the existing mechanical path to rework
+	}
+	if g.Kind == sigAllStopped {
+		return false, wake // other all-stopped handling retains its existing group checks
+	}
+	return s.mechanicalPR(ctx, t, agents, now, wake)
+}
+
+// Callers establish reachability; both paths require the same safely stopped inventory.
+func (s *Service) mechanicalAgents(ctx context.Context, t Todo, agents []proto.Session, now time.Time) ([]proto.Session, time.Time, bool) {
+	v := t.Supervision
+	st := v.state(t)
+	if st != "" && st != reviewRework || v.Waits != nil || v.AutoReview != nil && v.AutoReview.State == autoRunning {
+		return nil, time.Time{}, false
+	}
+	agents = currentTaskAgents(agents, supersededAgents(t, agents))
+	if len(agents) == 0 {
+		return nil, time.Time{}, false
 	}
 	for _, c := range agents {
 		if c.Status != proto.StatusDone || c.State == proto.StateWorking || c.State == proto.StateNeedsYou ||
 			c.PendingInteractions > 0 || len(c.Queued) > 0 || c.TurnError != "" || c.ReadOnlyReason != "" {
-			return false, time.Time{}
+			return nil, time.Time{}, false
 		}
 	}
 	if !s.loadWork(ctx) {
-		return false, time.Time{}
+		return nil, time.Time{}, false
 	}
 	for _, c := range agents {
 		if e, exists := s.workEntry([2]string{c.MachineID, c.SessionID}); exists && sameTurn(c, e.TurnAt) &&
-			(e.Work.On == proto.WaitUser || e.Work.Phase == proto.WorkWorking) {
-			return false, time.Time{}
+			(e.Work.On == proto.WaitUser || e.Work.Phase == proto.WorkWorking ||
+				e.Work.Closeout != nil && closeoutDisproved(*e.Work.Closeout)) {
+			return nil, time.Time{}, false
 		}
 	}
 
@@ -110,6 +170,10 @@ func (s *Service) mechanicalSignal(ctx context.Context, g superviseSignal, now t
 			wake = next
 		}
 	}
+	return agents, wake, true
+}
+
+func (s *Service) mechanicalPR(ctx context.Context, t Todo, agents []proto.Session, now time.Time, wake time.Time) (bool, time.Time) {
 	d := t.Delivery
 	if d == nil || d.Unblock != unblockOther || d.Gate == "" || d.At.IsZero() ||
 		(d.State != deliveryPR && d.State != deliveryMerged) || t.PRURL == "" || len(agents) != 1 {
@@ -153,7 +217,7 @@ func (s *Service) mechanicalSignal(ctx context.Context, g superviseSignal, now t
 			(a.ReleasedAt == nil) == (b.ReleasedAt == nil) && (a.DismissedAt == nil) == (b.DismissedAt == nil)
 	})
 	if !exists || cur.DoneAt != nil || cur.PRURL != t.PRURL || !sameAgents ||
-		cur.Supervision == nil || !cur.Supervision.UpdatedAt.Equal(v.UpdatedAt) ||
+		cur.Supervision == nil || !cur.Supervision.UpdatedAt.Equal(t.Supervision.UpdatedAt) ||
 		!present || latest.Status != proto.StatusDone || !sameTurn(latest, c.UpdatedAt) ||
 		latest.PendingInteractions > 0 || len(latest.Queued) > 0 || latest.TurnError != "" {
 		return false, time.Time{}

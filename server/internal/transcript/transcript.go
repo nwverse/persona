@@ -3,6 +3,8 @@ package transcript
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	jsonv2 "encoding/json/v2"
 	"fmt"
@@ -94,6 +96,8 @@ type entry struct {
 	} `json:"quotaLimits"`
 	// system/scheduled_task_fire: the /loop prompt that is about to run.
 	Prompt string `json:"prompt"`
+	// ContextBreakdown is an optional native context category split when an engine writes one into the transcript.
+	ContextBreakdown *proto.ContextBreakdown `json:"context_breakdown"`
 }
 
 type block struct {
@@ -125,10 +129,11 @@ type Meta struct {
 	// VersionAt is when the line that said Version was written (zero when it had no timestamp).
 	VersionAt      time.Time
 	PermissionMode string
-	// ModeAt / Effort / EffortAt: when the permission mode was last seen, and the effort level of the latest reply.
+	// ModeAt / Effort / EffortAt / ModelAt: when the permission mode was last seen, and when the latest reply or turn_context named Effort or Model.
 	ModeAt   time.Time
 	Effort   string
 	EffortAt time.Time
+	ModelAt  time.Time
 	// Ultracode is independent of effort: nil means the transcript has no dated evidence. Since, when set by a
 	// caller, ignores observations from before the current Claude process (resume resets the session-only switch).
 	Ultracode        *bool
@@ -141,9 +146,13 @@ type Meta struct {
 	// ContextCompacted: a compaction came after the latest reply, so the context is not known (ContextTokens 0) until
 	// the next one; the size before it no longer stands (#9207).
 	ContextCompacted bool
+	restartContext   contextRestart
+	restartCodex     tokenuse.CodexTotal
 	// ContextWindow is the model's context window when the transcript says it (a Codex rollout's token_count carries
 	// model_context_window); 0 for Claude Code, whose transcripts do not (node/contextwindow.go knows by model id).
-	ContextWindow    int
+	ContextWindow int
+	// ContextStats holds bounded category byte accumulators (and any native exact breakdown) for ContextBreakdown.
+	ContextStats     ContextStats
 	OutputTokens     int // total generated, counted once per message
 	Compactions      int
 	Turns            int // user prompts
@@ -293,33 +302,33 @@ type Meta struct {
 	Updated      time.Time
 }
 
-// ObserveNamingMetadata reads title provenance, generated usage and Codex turn settings during an existing incremental scan.
+// ObserveNamingMetadata reads title provenance, usage and Codex turn settings during an existing incremental scan.
 // It never decodes message content (which can contain large screenshots or tool output).
 func (m *Meta) ObserveNamingMetadata(line []byte) {
 	if !bytes.Contains(line, []byte(`"custom-title"`)) && !bytes.Contains(line, []byte(`"ai-title"`)) &&
-		!bytes.Contains(line, []byte(`"output_tokens"`)) && !bytes.Contains(line, []byte(`"turn_context"`)) {
+		!bytes.Contains(line, []byte(`"usage"`)) && !bytes.Contains(line, []byte(`"turn_context"`)) &&
+		!bytes.Contains(line, []byte(`"compact_boundary"`)) && !bytes.Contains(line, []byte(`"compacted"`)) &&
+		!bytes.Contains(line, []byte(`"context_compacted"`)) && !bytes.Contains(line, []byte(`"token_count"`)) {
 		return
 	}
 	var e struct {
 		Type        string    `json:"type"`
+		Subtype     string    `json:"subtype"`
 		Timestamp   time.Time `json:"timestamp"`
 		CustomTitle string    `json:"customTitle"`
 		AITitle     string    `json:"aiTitle"`
 		IsSidechain bool      `json:"isSidechain"`
+		APIError    bool      `json:"isApiErrorMessage"`
 		Message     *struct {
-			ID    string `json:"id"`
-			Usage *struct {
-				OutputTokens int `json:"output_tokens"`
-			} `json:"usage"`
+			ID    string                `json:"id"`
+			Model string                `json:"model"`
+			Usage *tokenuse.ClaudeUsage `json:"usage"`
 		} `json:"message"`
 		Payload struct {
-			Type   string `json:"type"`
-			Effort string `json:"effort"`
-			Info   *struct {
-				Total struct {
-					OutputTokens int `json:"output_tokens"`
-				} `json:"total_token_usage"`
-			} `json:"info"`
+			Type   string              `json:"type"`
+			Model  string              `json:"model"`
+			Effort string              `json:"effort"`
+			Info   *tokenuse.CodexInfo `json:"info"`
 		} `json:"payload"`
 	}
 	if json.Unmarshal(line, &e) != nil {
@@ -327,6 +336,9 @@ func (m *Meta) ObserveNamingMetadata(line []byte) {
 	}
 	switch e.Type {
 	case "turn_context":
+		if e.Payload.Model != "" && !e.Timestamp.Before(m.ModelAt) {
+			m.Model, m.ModelAt = e.Payload.Model, e.Timestamp
+		}
 		if e.Payload.Effort != "" && !e.Timestamp.Before(m.EffortAt) {
 			m.Effort, m.EffortAt = e.Payload.Effort, e.Timestamp
 		}
@@ -340,11 +352,30 @@ func (m *Meta) ObserveNamingMetadata(line []byte) {
 		}
 	case "assistant":
 		if !e.IsSidechain && e.Message != nil && e.Message.Usage != nil {
-			m.observeOutput(e.Message.ID, e.Message.Usage.OutputTokens)
+			m.observeOutput(e.Message.ID, int(e.Message.Usage.OutputTokens))
+			t, _, ok := tokenuse.ClaudeTokens(e.Message.Model, e.Message.Usage, e.APIError)
+			tokens := t.Input + t.CacheRead + t.CacheWrite
+			if ok && e.Message.ID != "" && tokens > 0 && tokens <= MaxContextTokens {
+				m.restartContext.observe(e.Message.ID, tokens)
+			}
 		}
+	case "system":
+		if e.Subtype == "compact_boundary" && !e.IsSidechain {
+			m.restartContext.compact()
+		}
+	case "compacted":
+		m.restartContext.compact()
 	case "event_msg":
-		if e.Payload.Type == "token_count" && e.Payload.Info != nil {
-			m.OutputTokens = e.Payload.Info.Total.OutputTokens
+		switch e.Payload.Type {
+		case "context_compacted":
+			m.restartContext.compact()
+		case "token_count":
+			if info := e.Payload.Info; info != nil {
+				m.OutputTokens = int(info.Total.Output)
+				if m.restartCodex.Grew(info.Total.Total) && info.Last.Input > 0 && info.Last.Input <= MaxContextTokens {
+					m.restartContext.observe("", info.Last.Input)
+				}
+			}
 		}
 	}
 }
@@ -466,12 +497,21 @@ func ParseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		meta.FirstUser = clipTo(meta.FirstUser, pageTextLen)
 	}
 	defer func() { meta.localInput = false }()
-	for _, it := range items {
+	var fingerprint string
+	for i := range items {
+		it := &items[i]
+		if (it.Kind == proto.KindText || it.Kind == proto.KindImage && it.Role == "user") && proto.PositionalItemID(it.ID) {
+			if fingerprint == "" {
+				digest := sha256.Sum256(line)
+				fingerprint = hex.EncodeToString(digest[:16])
+			}
+			it.SourceFingerprint = fingerprint
+		}
 		if it.Role != "system" && !it.TS.IsZero() && it.TS.After(meta.LastActivity) {
 			meta.LastActivity = it.TS
 		}
-		meta.trackActivity(it)
-		meta.trackPlan(it)
+		meta.trackActivity(*it)
+		meta.trackPlan(*it)
 		if it.Wake || it.Role == "user" && !it.Queued && (it.Kind == proto.KindText || it.Kind == proto.KindImage) {
 			// A new turn's words start afresh (TurnAnswer): a photo with no caption and a command that runs the model
 			// start one too, though they do not reach ClaudeTurnStarted.
@@ -567,13 +607,23 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			// What the latest reply saw was compacted away, and the boundary's postTokens leaves out the system prompt
 			// and tools (the next reply sees about four times as much, #9207): unknown until that reply.
 			meta.ContextTokens, meta.ContextCompacted = 0, true
+			meta.ContextStats.ResetCompacted()
 		}
+	case e.Type == "system" && !e.IsSidechain && e.ContextBreakdown != nil:
+		meta.ContextStats.SetNative(e.ContextBreakdown)
 	case e.Type == "assistant" && e.Message != nil && e.Message.Usage != nil && !e.IsSidechain:
 		u := e.Message.Usage
 		// A gateway's sum of a whole turn is not a context, nor the zeros it reports on the turn's other replies
 		// (usage.go): the last real one stands.
 		if tokens := int(u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens); tokens > 0 && PlausibleContext(tokens, 0) {
 			meta.ContextTokens, meta.ContextCompacted = tokens, false
+			if e.ContextBreakdown != nil {
+				meta.ContextStats.SetNative(e.ContextBreakdown)
+			} else {
+				meta.ContextStats.Native = nil
+			}
+		} else if e.ContextBreakdown != nil {
+			meta.ContextStats.SetNative(e.ContextBreakdown)
 		}
 		meta.observeOutput(e.Message.ID, int(u.OutputTokens))
 	}
@@ -781,6 +831,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			meta.handedBack(agent, report)
 		}
 		if e.IsCompactSummary {
+			meta.ContextStats.SystemBytes += estimateWeightedBytes(rawString(e.Message.Content))
 			it := mk(0, "system", proto.KindNotice)
 			it.Text = CompactSummaryNotice
 			return []proto.Item{it}
@@ -792,6 +843,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		}
 		var s string
 		if raw := bytes.TrimSpace(e.Message.Content); len(raw) > 0 && raw[0] == '"' && unmarshalLine(raw, &s) == nil {
+			meta.observeUserText(s, e.IsMeta)
 			if strings.Contains(s, "<task-notification>") {
 				meta.taskFinished(s, e.Timestamp)
 			}
@@ -823,6 +875,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		for i, b := range blocks {
 			switch b.Type {
 			case "text":
+				meta.observeUserText(b.Text, e.IsMeta)
 				if strings.Contains(b.Text, "<task-notification>") {
 					meta.taskFinished(b.Text, e.Timestamp)
 				}
@@ -845,6 +898,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 					continue
 				}
 				if img := imageOf(b); img != nil {
+					meta.ContextStats.ConversationBytes += imageTokenBytesEstimate
 					it := mk(i, "user", proto.KindImage)
 					it.Image = img
 					out = append(out, it)
@@ -855,6 +909,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 					continue
 				}
 				text, imgs := toolResultContent(b.Content)
+				meta.ContextStats.ToolOutputBytes += estimateWeightedBytes(text) + int64(len(imgs))*imageTokenBytesEstimate
 				meta.backgroundStarted(b.ToolUseID, text, b.IsError, e.Timestamp)
 				it := mk(i, "user", proto.KindToolResult)
 				it.ToolUseID = b.ToolUseID
@@ -882,6 +937,9 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		}
 		if model != "" {
 			meta.Model = model
+			if !e.IsSidechain && !meta.Updated.IsZero() {
+				meta.ModelAt = meta.Updated
+			}
 			meta.observeReplyModel(model)
 		}
 		var blocks []block
@@ -895,6 +953,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 				if strings.TrimSpace(b.Text) == "" {
 					continue
 				}
+				meta.ContextStats.ConversationBytes += estimateWeightedBytes(b.Text)
 				if t, ok := thinkingAsText(b.Text); ok {
 					if t != "" {
 						it := mk(i, "assistant", proto.KindThinking)
@@ -911,10 +970,12 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 				if strings.TrimSpace(b.Thinking) == "" {
 					continue
 				}
+				meta.ContextStats.ConversationBytes += estimateWeightedBytes(b.Thinking)
 				it := mk(i, "assistant", proto.KindThinking)
 				it.Text = clip(b.Thinking)
 				out = append(out, it)
 			case "tool_use", "server_tool_use":
+				meta.ContextStats.ToolOutputBytes += int64(len(b.Name)) + estimateWeightedBytes(string(b.Input))
 				if b.Name == handbackTool {
 					// a subagent handing its report back to the session that launched it: its last words, not a step
 					if report := meta.handbackCall(b.ID, b.Input); report != "" {

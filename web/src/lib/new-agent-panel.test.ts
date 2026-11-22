@@ -190,7 +190,8 @@ describe("the row lit and the state", () => {
 
   it.each([
     { source: "Model settings", choice: none, effort: "" },
-    { source: "an explicit pick", choice: { launcher: "agy", model: "example", effort: "xhigh" }, effort: "xhigh" },
+    // another model opens at its own default, whatever the pick before had (#12315)
+    { source: "an explicit pick", choice: { launcher: "agy", model: "example", effort: "xhigh" }, effort: "" },
   ])("picks another agy model with the correct effort from $source", ({ choice, effort }) => {
     const agyList: LauncherModels = {
       agent: "agy",

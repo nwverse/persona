@@ -54,12 +54,18 @@ class Results:
     PACKAGE_LINES = 20  # a package that fails outside its tests (build, panic, timeout): its last lines
 
     def __init__(self):
-        self.slow, self.failed, self.output, self.package_output = [], [], {}, {}
+        self.slow, self.failed, self.output, self.package_output, self.build_output = [], [], {}, {}, {}
 
     def take(self, event, process=0):
         """Record one event of a go test process (a shard runs a partitioned package in several); return the text to
         print, if it has any."""
         package, test, action = event.get("Package", ""), event.get("Test"), event.get("Action")
+        if action == "build-output":
+            # Since Go 1.24 a package that does not compile (or fails go test's vet) reports its errors only as
+            # build-output events. Dropping them made such a shard exit in seconds with no error text.
+            text = event.get("Output", "")
+            self.build_output.setdefault(event.get("ImportPath", ""), []).append(text)
+            return text
         if action == "output":
             text = event.get("Output", "")
             if test:
@@ -78,7 +84,11 @@ class Results:
             # A panic or timeout ends the package inside the tests still running, which never end on their own.
             for name in [name for name in self.output if name[:2] == (process, package)]:
                 self.failed.append((package, name[2], None, self.output.pop(name)))
-            self.failed.append((package, None, event.get("Elapsed", 0), list(self.package_output.get((process, package), ()))))
+            lines = list(self.package_output.get((process, package), ()))
+            if event.get("FailedBuild"):
+                # The package's fail event names the build that failed; its errors are that build's output.
+                lines = self.build_output.pop(event["FailedBuild"], [])[-self.PACKAGE_LINES:] + lines
+            self.failed.append((package, None, event.get("Elapsed", 0), lines))
         return None
 
     def failures(self, tests=5, lines=5, width=300):
@@ -123,8 +133,14 @@ def main():
     packages = select_packages(listed.splitlines(), args.shard)
     if not packages:
         parser.error(f"No packages in server shard {args.shard}")
-    partitions = {package: go_partitions.list_patterns(ROOT / "server", package)
-                  for package in go_partitions.split(packages)[1]}
+    try:
+        partitions = {package: go_partitions.list_patterns(ROOT / "server", package)
+                      for package in go_partitions.split(packages)[1]}
+    except subprocess.CalledProcessError as error:
+        # Listing a partitioned package's tests compiles it; a compile error ends the shard here, before any test.
+        print(f"Server shard {args.shard}: could not list the tests of a partitioned package "
+              f"(go test -list exit {error.returncode}); its build errors are printed above.", flush=True)
+        return error.returncode or 1
     runs = commands(packages, args.shard, args.database_file, partitions)
     results, lock = Results(), threading.Lock()
 

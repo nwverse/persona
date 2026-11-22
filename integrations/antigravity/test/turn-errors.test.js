@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { nativeErrorStep } from '../lib/errors.js'
-import { stepsToItems } from '../lib/map.js'
+import { stepsToItems, transcriptState } from '../lib/map.js'
 import { createAgyRuntime } from '../lib/runtime.js'
 
 const RAW = '11111111-2222-4333-8444-555555555555'
@@ -16,7 +16,7 @@ const FAKE = fileURLToPath(new URL('./fake-acp-rewind.mjs', import.meta.url))
 const AT = '2026-01-02T12:00:00Z'
 const RESET = '2026-01-03T18:00:00Z'
 const MESSAGE = 'Individual quota reached. Resets in 30h.'
-const TRANSIENT_401 = 'UNAUTHENTICATED (code 401): Request is missing required authentication credential'
+const TRANSIENT_401 = 'UNAUTHENTICATED (code 401): Request is missing required authentication credential. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.'
 const input = { step_index: 0, type: 'USER_INPUT', source: 'USER_EXPLICIT', status: 'DONE', created_at: AT, content: 'Check the result.' }
 const error = {
   type: 'CORTEX_STEP_TYPE_ERROR_MESSAGE', metadata: { createdAt: AT },
@@ -84,6 +84,92 @@ test('a request the service refuses as it is names its cause and is the user\'s 
     .turn_error, { turn_error: 'Model not available', turn_error_kind: 'user' })
 })
 
+const INTERRUPTED_NOTE = 'The stream was interrupted. Please continue the task you were working on.'
+
+test('stopping a turn drops agy\'s stream-interrupted note in both export and native error paths', () => {
+  for (const errorBody of [
+    { userErrorMessage: INTERRUPTED_NOTE },
+    { modelErrorMessage: INTERRUPTED_NOTE },
+    { shortError: INTERRUPTED_NOTE },
+    { userErrorMessage: 'Agent execution terminated due to error.', shortError: INTERRUPTED_NOTE },
+    { userErrorMessage: 'The stream was interrupted.' },
+  ]) {
+    assert.equal(nativeErrorStep({
+      type: 'CORTEX_STEP_TYPE_ERROR_MESSAGE',
+      status: 'CORTEX_STEP_STATUS_DONE',
+      metadata: { createdAt: AT },
+      errorMessage: { error: errorBody },
+    }, 1), null)
+  }
+
+  // Real upstream errors that mention stream interruption keep their error card and turn_error.
+  const realUpstream = nativeErrorStep({
+    type: 'CORTEX_STEP_TYPE_ERROR_MESSAGE',
+    status: 'CORTEX_STEP_STATUS_DONE',
+    metadata: { createdAt: AT },
+    errorMessage: { error: { userErrorMessage: 'The stream was interrupted: 503 unavailable', errorCode: 503 } },
+  }, 1)
+  assert.deepEqual(realUpstream?.turn_error, { turn_error: 'The stream was interrupted: 503 unavailable' })
+
+  const interrupted = { step_index: 2, type: 'ERROR_MESSAGE', source: 'SYSTEM', status: 'DONE', created_at: AT, error: INTERRUPTED_NOTE }
+  const reply = { step_index: 1, type: 'PLANNER_RESPONSE', source: 'MODEL', status: 'DONE', created_at: AT, content: 'Partial reply.' }
+  const stopped = stepsToItems([input, reply, interrupted])
+  assert.equal(stopped.toSeq, 3)
+  assert.equal(stopped.turnError, undefined)
+  assert.equal(stopped.lastText, 'Partial reply.')
+  assert.deepEqual(stopped.items.map((item) => [item.role, item.kind, item.text]), [
+    ['user', 'text', input.content],
+    ['assistant', 'text', 'Partial reply.'],
+  ])
+  assert.deepEqual(transcriptState([input, reply, interrupted]), { status: 'idle' })
+
+  // An interrupted note still resets pending tool calls and does not trigger a stray wake notice.
+  const afterWake = stepsToItems([
+    input,
+    reply,
+    { step_index: 2, type: 'SYSTEM_MESSAGE', created_at: AT, content: 'background update' },
+    { ...interrupted, step_index: 3 },
+  ])
+  assert.equal(afterWake.items.some((item) => item.wake), false)
+  assert.equal(afterWake.turnError, undefined)
+
+  const interruptedTool = stepsToItems([
+    input,
+    { step_index: 1, type: 'PLANNER_RESPONSE', created_at: AT, tool_calls: [{ name: 'run_command', args: {} }] },
+    interrupted,
+    { step_index: 3, type: 'USER_INPUT', source: 'USER_EXPLICIT', status: 'DONE', created_at: AT, content: 'Continue' },
+    { step_index: 4, type: 'PLANNER_RESPONSE', created_at: AT, tool_calls: [{ name: 'view_file', args: {} }] },
+    { step_index: 5, type: 'GENERIC', status: 'DONE', created_at: AT, content: 'file body' },
+  ])
+  const uses = interruptedTool.items.filter((item) => item.kind === 'tool_use')
+  const result = interruptedTool.items.find((item) => item.kind === 'tool_result')
+  assert.equal(result.tool_use_id, uses[1].tool_use_id)
+  assert.equal(interruptedTool.items.some((item) => item.text?.startsWith('API Error:')), false)
+  assert.equal(interruptedTool.turnError, undefined)
+
+  // Real exported errors stay visible.
+  const realExported = stepsToItems([
+    input,
+    { step_index: 1, type: 'ERROR_MESSAGE', source: 'SYSTEM', status: 'DONE', created_at: AT, error: 'The stream was interrupted: 503 unavailable' },
+  ])
+  assert.equal(realExported.turnError?.turn_error, 'The stream was interrupted: 503 unavailable')
+  assert.equal(realExported.items.at(-1).text, 'API Error: The stream was interrupted: 503 unavailable')
+})
+
+test('runtime ignores an omitted native stream-interrupted note without emitting turn_error', async (t) => {
+  const { row, items } = await fixture(t, {
+    nativeError: {
+      type: 'CORTEX_STEP_TYPE_ERROR_MESSAGE',
+      status: 'CORTEX_STEP_STATUS_DONE',
+      metadata: { createdAt: AT },
+      errorMessage: { error: { userErrorMessage: INTERRUPTED_NOTE } },
+    },
+  })
+  const page = await items()
+  assert.equal(page.items.some((item) => item.text?.startsWith('API Error:')), false)
+  assert.equal(row().turn_error, undefined)
+})
+
 async function fixture(t, options = {}) {
   const home = mkdtempSync(join(tmpdir(), 'agy-turn-error-'))
   const config = join(home, 'config')
@@ -144,7 +230,7 @@ async function fixture(t, options = {}) {
 for (const exported of [false, true]) {
   test(`retries one transient 401 ${exported ? 'recorded in the transcript' : 'returned by ACP'} without duplicating the user message`, async (t) => {
     const { node, row, calls, items, idle } = await fixture(t, { initialCount: 1, promptPlan: [
-      { error: TRANSIENT_401, export: exported }, { reply: 'Finished.', export: exported },
+      { error: TRANSIENT_401, export: exported, undatedStep: exported }, { reply: 'Finished.', export: exported },
     ] })
     const send = (text, client_msg_id) => node.peer.call('session.send', { session_id: SESSION, text, client_msg_id })
     await send('Continue.', 'request-1')
@@ -164,8 +250,28 @@ for (const exported of [false, true]) {
   })
 }
 
+test('a plan-mode 401 retries despite a previous reply flushing and whole-second export timestamps', async (t) => {
+  const prior = { prompt: 'Earlier request.', reply: 'Earlier reply.' }
+  const { node, calls, items, row, idle } = await fixture(t, { initialCount: 1, promptPlan: [
+    { reply: prior.reply },
+    { error: TRANSIENT_401, export: true, planMode: true, wholeSeconds: true, flushReply: prior },
+    { reply: 'Finished.', export: true, planMode: true, wholeSeconds: true },
+  ] })
+  await node.peer.call('session.send', { session_id: SESSION, text: prior.prompt })
+  await until('previous turn settles without native export', () => row()?.last_text === prior.reply && idle())
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Continue.', client_msg_id: 'plan-retry' })
+  await until('plan retry settles', () => row()?.last_text === 'Finished.' && idle())
+  assert.equal(calls().filter((call) => call.method === 'session/prompt').length, 3)
+  const page = await items()
+  assert.deepEqual(page.items.map((item) => item.text), [input.content, prior.prompt, prior.reply, '/plan Continue.', 'Finished.'])
+  assert.equal(page.items[3].client_msg_id, 'plan-retry')
+})
+
 for (const [reason, plan, attempts, retryDelay] of [
   ['revoked login', [{ error: `${TRANSIENT_401}; invalid_grant` }], 1],
+  ['non-adjacent expired refresh token', [{ error: `${TRANSIENT_401}; refresh_token for this account has expired` }], 1],
+  ['revoked account credential', [{ error: `${TRANSIENT_401}; revoked the account login credential` }], 1],
+  ['explicit sign-in request', [{ error: `${TRANSIENT_401} Please sign in.` }], 1],
   ['assistant text', [{ error: TRANSIENT_401, reply: 'Partial answer' }], 1],
   ['tool work', [{ error: TRANSIENT_401, tool: true }], 1],
   ['tool work received during the delay', [{ error: TRANSIENT_401, lateTool: 30 }], 1, 250],
@@ -284,6 +390,22 @@ test('a rejected ACP prompt publishes its failure through the normal session row
   assert.equal(row().turn_error, undefined)
 })
 
+
+test('an attached picture that is cut short is not sent; the words and complete pictures are', async (t) => {
+  const { node, calls } = await fixture(t)
+  const seg = (marker, body) => Buffer.concat([Buffer.from([0xff, marker, 0, body.length + 2]), body])
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8]), seg(0xdb, Buffer.alloc(65)), seg(0xc0, Buffer.alloc(9)),
+    seg(0xda, Buffer.alloc(8)), Buffer.from([0x12, 0x34, 0xff, 0xd9])])
+  const whole = jpeg.toString('base64')
+  const cut = jpeg.subarray(0, jpeg.length - 2).toString('base64')
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Look at these.', images: [
+    { media_type: 'image/jpeg', data: whole }, { media_type: 'image/jpeg', data: cut }] })
+  await until('prompt sent', () => calls().some((call) => call.method === 'session/prompt'))
+  const blocks = calls().find((call) => call.method === 'session/prompt').params.prompt
+  assert.deepEqual(blocks.filter((b) => b.type === 'image').map((b) => b.data), [whole])
+  assert.match(blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n'), /Look at these\./)
+  assert.match(blocks.at(-1).text, /1 attached picture was incomplete or damaged and not sent/)
+})
 
 test('listing idle sessions does not start native error probes', async (t) => {
   const { calls, refresh } = await fixture(t)

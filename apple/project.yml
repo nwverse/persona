@@ -180,6 +180,16 @@ targets:
           git -C "$SRCROOT/.." diff --quiet HEAD -- 2>/dev/null || sha="$sha+"
           plist="$TARGET_BUILD_DIR/$INFOPLIST_PATH"
           /usr/libexec/PlistBuddy -c "Set :PersonaCommit $sha" "$plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :PersonaCommit string $sha" "$plist"
+      # What a Debug build was built from (commit, branch, dirty, time, machine, Xcode, Swift) for Settings › About
+      # (#12926, BuildInfo.swift). Debug only; it skips itself unless the code was linked again, the Info.plist was
+      # written again or HEAD moved, so an unchanged build still writes and signs nothing (#10713). Never fails a build.
+      - name: Stamp the debug build info
+        basedOnDependencyAnalysis: false
+        inputFiles: ["$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)"]
+        script: |
+          [ "$CONFIGURATION" = Debug ] || exit 0
+          "$SRCROOT/../scripts/app/stamp_debug_build_info.sh" "$TARGET_BUILD_DIR/$INFOPLIST_PATH" \
+            "$TARGET_BUILD_DIR/$EXECUTABLE_PATH" "$DERIVED_FILE_DIR/debug-build-info.stamp" "$SRCROOT/.." || true
     info:
       path: Persona/Resources/Info.plist
       properties:
@@ -754,6 +764,18 @@ schemes:
     test:
       targets: [PersonaTests, PersonaUITests]
       # The tests' expectations and the pixel / layout baselines are the Chinese UI (docs/apple/ios.md「Interface language」).
+      language: zh-Hans
+      region: CN
+  # Offline unit-test builds and runs share one graph without the unused UI-test bundle (#12474).
+  PersonaOfflineUnitTests:
+    build:
+      targets:
+        Persona: all
+        PersonaTests: [test]
+    run:
+      config: Debug
+    test:
+      targets: [PersonaTests]
       language: zh-Hans
       region: CN
   # Only the app and unit-test bundle: visual evidence never builds PersonaUITests.

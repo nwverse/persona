@@ -128,6 +128,39 @@ class HttpExtensionManagementTest {
         }
     }
 
+    @Test fun savesAnExplicitReferenceAndRemovesAConfirmedHandoffRule() = withHub { server, api ->
+        server.enqueue(MockResponse().setBody(detail))
+        api.setSecretReference("example-notes", "api_key", "op://Dev/Notes/new")
+        server.takeRequest().let {
+            assertEquals("PUT", it.method)
+            assertEquals("/api/v1/plugins/example-notes/-/secrets/api_key", it.path)
+            assertEquals("""{"reference":"op://Dev/Notes/new"}""", it.body.readUtf8())
+        }
+        server.enqueue(MockResponse().setBody(detail))
+        api.removeHandoffRule("example-vault", "0123456789abcdef")
+        server.takeRequest().let {
+            assertEquals("DELETE", it.method)
+            assertEquals("/api/v1/plugins/example-vault/-/handoff-rules/0123456789abcdef", it.path)
+        }
+        assertTrue(runCatching { api.removeHandoffRule("example-vault", "../bad") }.exceptionOrNull() is IllegalArgumentException)
+    }
+
+    @Test fun modernRoutesSaveAReferenceAndRemoveAHandoffRule() = withHub(legacy = false) { server, api ->
+        server.enqueue(MockResponse().setBody(detail))
+        api.setSecretReference("example-notes", "api_key", "op://Dev/Notes/new")
+        server.takeRequest().let {
+            assertEquals("PUT", it.method)
+            assertEquals("/api/v1/extensions/example-notes/-/secrets/api_key", it.path)
+            assertEquals("""{"reference":"op://Dev/Notes/new"}""", it.body.readUtf8())
+        }
+        server.enqueue(MockResponse().setBody(detail))
+        api.removeHandoffRule("example-vault", "0123456789abcdef")
+        server.takeRequest().let {
+            assertEquals("DELETE", it.method)
+            assertEquals("/api/v1/extensions/example-vault/-/handoff-rules/0123456789abcdef", it.path)
+        }
+    }
+
     // What the phone says of itself in every view's context; a fixed one so the bodies are exact.
     private val device = ExtensionUiContext(tz = "Asia/Shanghai", locale = "zh-Hans-CN", platform = "android", uiVersion = 2)
     private val deviceJson = """"tz":"Asia/Shanghai","locale":"zh-Hans-CN","platform":"android","ui_version":2"""
@@ -578,5 +611,43 @@ class HttpExtensionManagementTest {
         assertEquals("扩展开着时这台 Mac 不会自动锁屏。", (field.confirm).zhAny())
         assertEquals("machines", (d.nodeMachines).zhAny())
         assertEquals("running", (d.extension.nodes!!.single().state).zhAny())
+    }
+
+    @Test fun extensionUiCallsUseAReadTimeoutBeyondTheHubsUiTimeout() = runBlocking {
+        MockWebServer().use { server ->
+            val http = OkHttpClient.Builder().retryOnConnectionFailure(false).build()
+            val timeouts = mutableListOf<Pair<String, Long?>>()
+            val api = HttpExtensionManagement({ path, method, body, timeout ->
+                timeouts += path to timeout
+                http.newCall(Request.Builder().url(server.url(path)).method(method, body).build()).execute()
+            }, device = { device }, legacy = false)
+
+            server.enqueue(MockResponse().setBody("""{"extensions":[],"can_install":false,"markets":false}"""))
+            api.listing()
+            server.takeRequest()
+
+            server.enqueue(MockResponse().setBody("""{"view":{"title":"Markets","sections":[]}}"""))
+            assertEquals("Markets", api.renderUi("example-markets", "watchlist").title)
+            server.takeRequest()
+
+            server.enqueue(MockResponse().setBody("""{"view":{"title":"Markets","sections":[]}}"""))
+            api.uiAction("example-markets", "watchlist", "refresh")
+            server.takeRequest()
+
+            server.enqueue(MockResponse().setBody("""{"view":{"title":"Subscriptions","sections":[]}}"""))
+            api.renderUi(persona.core.contracts.api.SUBSCRIPTIONS_UI, "pages")
+            server.takeRequest()
+
+            assertTrue(HttpExtensionManagement.UI_READ_TIMEOUT_SECONDS >= 30L)
+            assertEquals(
+                listOf(
+                    "/api/v1/extensions" to null,
+                    "/api/v1/extensions/example-markets/-/ui/watchlist" to HttpExtensionManagement.UI_READ_TIMEOUT_SECONDS,
+                    "/api/v1/extensions/example-markets/-/ui/watchlist" to HttpExtensionManagement.UI_READ_TIMEOUT_SECONDS,
+                    "/api/v1/subscriptions/-/ui" to HttpExtensionManagement.UI_READ_TIMEOUT_SECONDS,
+                ),
+                timeouts,
+            )
+        }
     }
 }

@@ -346,23 +346,30 @@ internal fun ScrollEdge(
     val density = LocalDensity.current
     val full = with(density) { edgeHeight.toPx() }
     val soft = with(density) { style.fade.toPx() }.coerceAtMost(full)
-    fun wash(strength: Float): Brush {
-        val solid = Color.Black.copy(alpha = strength)
-        val stop = (full - soft) / full
-        return if (top) Brush.verticalGradient(0f to solid, stop to solid, 1f to Color.Transparent)
+    val blurOn = style.blur && state != null && PersonaTheme.glass != GlassLevel.Solid
+    val washStrength = if (blurOn) 0.5f else 0.92f
+    val mask = remember(top, full, soft, washStrength) {
+        val solid = Color.Black.copy(alpha = washStrength)
+        val stop = if (full > 0f) (full - soft) / full else 0f
+        if (top) Brush.verticalGradient(0f to solid, stop to solid, 1f to Color.Transparent)
         else Brush.verticalGradient(0f to Color.Transparent, (1f - stop) to solid, 1f to solid)
     }
-    if (style.blur && state != null && PersonaTheme.glass != GlassLevel.Solid) {
-        Box(strip.hazeBlur(HazeInput.Sources(state), style = HazeBlurStyle {
-            blurRadius(18.dp)
-            noiseFactor(0f)
-            progressive(
-                if (top) HazeProgressive.verticalGradient(startY = full - soft, startIntensity = 1f, endY = full, endIntensity = 0f)
-                else HazeProgressive.verticalGradient(startY = 0f, startIntensity = 0f, endY = soft, endIntensity = 1f),
-            )
-        })) { AmbientLight(light, Modifier.matchParentSize(), inWindow = true, mask = wash(0.5f)) }
+    if (blurOn) {
+        val blurStyle = remember(top, full, soft) {
+            HazeBlurStyle {
+                blurRadius(18.dp)
+                noiseFactor(0f)
+                progressive(
+                    if (top) HazeProgressive.verticalGradient(startY = full - soft, startIntensity = 1f, endY = full, endIntensity = 0f)
+                    else HazeProgressive.verticalGradient(startY = 0f, startIntensity = 0f, endY = soft, endIntensity = 1f),
+                )
+            }
+        }
+        Box(strip.hazeBlur(HazeInput.Sources(state), style = blurStyle)) {
+            AmbientLight(light, Modifier.matchParentSize(), inWindow = true, mask = mask)
+        }
     } else {
-        Box(strip) { AmbientLight(light, Modifier.matchParentSize(), inWindow = true, mask = wash(0.92f)) }
+        Box(strip) { AmbientLight(light, Modifier.matchParentSize(), inWindow = true, mask = mask) }
     }
 }
 
@@ -422,7 +429,8 @@ fun JTopBar(
     onTitleClick: (() -> Unit)? = null,
     showTitle: Boolean = true,
 ) {
-    LocalHomeChrome.current?.takeIf { onBack == null }?.let { home ->
+    val home = LocalHomeChrome.current?.takeIf { onBack == null }
+    if (home?.showSwitch == true) {
         CompositionLocalProvider(LocalIconsRaised provides true) {
             HomeNavigation(home.items, home.selected, home.onSelect, home.leading,
                 modifier = home.barHeight?.let { height -> Modifier.onSizeChanged { height.intValue = it.height } } ?: Modifier,
@@ -433,13 +441,16 @@ fun JTopBar(
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val compactHeight = 56.dp
+    val barModifier = home?.barHeight?.let { height -> Modifier.onSizeChanged { height.intValue = it.height } } ?: Modifier
+    val rootLeading = LocalRootLeading.current
     val splitLeading = resolveDetailLeading(LocalSplitDetail.current, onBack)
     val leading: @Composable () -> Unit = {
-        when (splitLeading) {
+        if (home != null) home.leading()
+        else when (splitLeading) {
             is DetailLeading.ShowList -> JIconButton(persona.core.designsystem.icons.PersonaIcons.sidebar, stringResource(R.string.designsystem_sidebar), splitLeading.onClick)
             is DetailLeading.Back -> JBackButton(onClick = splitLeading.onClick)
             DetailLeading.Hidden -> Spacer(Modifier.width(if (style == AppStyle.Brief) Tokens.Space.s else Tokens.Space.sm))
-            null -> LocalRootLeading.current?.invoke()
+            null -> rootLeading?.invoke()
         }
     }
     val titleBlock: @Composable RowScope.() -> Unit = {
@@ -462,7 +473,7 @@ fun JTopBar(
     when (style) {
         AppStyle.Glass -> {
             val shape = RoundedCornerShape(30.dp.corner)
-            Box(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 10.dp.dense, vertical = 6.dp.dense)) {
+            Box(barModifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 10.dp.dense, vertical = 6.dp.dense)) {
                 Crossfade(showTitle, label = "bar") { full ->
                     if (full) Row(
                         Modifier.fillMaxWidth().height(60.dp).floatingSurface(shape).padding(horizontal = 6.dp.dense),
@@ -482,7 +493,7 @@ fun JTopBar(
         else -> Row(
             // Board keeps its summary beside the title here. Let their measured lines grow the bar; PageFrame uses
             // that same measured height to place the list and its pull-refresh content. Brief keeps its fixed bar.
-            Modifier.fillMaxWidth().background(palette.background).statusBarsPadding()
+            barModifier.fillMaxWidth().background(palette.background).statusBarsPadding()
                 .then(if (style == AppStyle.Board) Modifier.heightIn(min = compactHeight) else Modifier.height(compactHeight))
                 .padding(horizontal = 4.dp.dense),
             verticalAlignment = Alignment.CenterVertically,

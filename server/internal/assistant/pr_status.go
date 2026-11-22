@@ -1,9 +1,11 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +24,34 @@ type TodoPRStatus struct {
 	Checks             string     `json:"checks"`
 	Conflicts          bool       `json:"conflicts"`
 	CheckedAt          time.Time  `json:"checked_at"`
+
+	submittedReview  prSubmittedReview  // consumed by the park in the same pass, separate from the stage's review summary
+	actionableReview prActionableReview // current-head changes_requested / actionable review for opt-in Agent routing
+	failingCheck     prFailingCheck     // current-head failing CI summary for opt-in Agent routing
+}
+
+type prSubmittedReview struct {
+	ID          int64     `json:"id"`
+	SubmittedAt time.Time `json:"submitted_at"`
+}
+
+type prActionableReview struct {
+	ID          int64
+	Author      string
+	State       string
+	Body        string
+	URL         string
+	SubmittedAt time.Time
+}
+
+type prFailingCheck struct {
+	ID         int64
+	Name       string
+	Conclusion string
+	URL        string
+	Summary    string
+	Count      int
+	Digest     string
 }
 
 type prStatusForge interface {
@@ -69,11 +99,16 @@ func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (Tod
 		return TodoPRStatus{}, fmt.Errorf("PR has no head commit")
 	}
 	type review struct {
-		State       string    `json:"state"`
-		CommitID    string    `json:"commit_id"`
-		SubmittedAt time.Time `json:"submitted_at"`
-		User        struct {
+		ID                int64     `json:"id"`
+		State             string    `json:"state"`
+		CommitID          string    `json:"commit_id"`
+		SubmittedAt       time.Time `json:"submitted_at"`
+		Body              string    `json:"body"`
+		HTMLURL           string    `json:"html_url"`
+		AuthorAssociation string    `json:"author_association"`
+		User              struct {
 			Login string `json:"login"`
+			Type  string `json:"type"`
 		} `json:"user"`
 	}
 	var reviews []review
@@ -83,6 +118,15 @@ func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (Tod
 	}
 	latest := map[string]review{}
 	for _, r := range reviews {
+		// A submitted review is an event even if it did not change the review verdict. Use provider time and head.
+		switch r.State {
+		case "APPROVED", "CHANGES_REQUESTED", "COMMENTED":
+			if r.ID > 0 && r.User.Login != "" && r.CommitID == pr.Head.SHA && !r.SubmittedAt.IsZero() &&
+				(r.SubmittedAt.After(out.submittedReview.SubmittedAt) ||
+					r.SubmittedAt.Equal(out.submittedReview.SubmittedAt) && r.ID > out.submittedReview.ID) {
+				out.submittedReview = prSubmittedReview{ID: r.ID, SubmittedAt: r.SubmittedAt.UTC()}
+			}
+		}
 		switch r.State {
 		case "APPROVED", "CHANGES_REQUESTED", "DISMISSED":
 			latest[r.User.Login] = r
@@ -98,9 +142,44 @@ func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (Tod
 			out.Review = "changes_requested"
 			// A local poll time cannot date a review. A full page may omit its later dismissal or approval.
 			if len(reviews) < 100 && strings.TrimSpace(r.User.Login) != "" && r.CommitID == pr.Head.SHA && !r.SubmittedAt.IsZero() &&
-				(out.ChangesRequestedAt == nil || r.SubmittedAt.After(*out.ChangesRequestedAt)) {
+				(out.ChangesRequestedAt == nil || r.SubmittedAt.After(*out.ChangesRequestedAt) ||
+					r.SubmittedAt.Equal(*out.ChangesRequestedAt) && r.ID > out.actionableReview.ID) {
 				at := r.SubmittedAt.UTC()
 				out.ChangesRequestedAt = &at
+				out.actionableReview = prActionableReview{
+					ID:          r.ID,
+					Author:      strings.TrimSpace(r.User.Login),
+					State:       r.State,
+					Body:        strings.TrimSpace(r.Body),
+					URL:         strings.TrimSpace(r.HTMLURL),
+					SubmittedAt: at,
+				}
+			}
+		}
+	}
+	if out.actionableReview.State == "" && out.Review != "approved" && len(reviews) < 100 {
+		for _, r := range reviews {
+			if r.State != "COMMENTED" || r.ID <= 0 || r.CommitID != pr.Head.SHA || r.SubmittedAt.IsZero() {
+				continue
+			}
+			author := strings.TrimSpace(r.User.Login)
+			body := strings.TrimSpace(r.Body)
+			if author == "" || body == "" || (pr.User.Login != "" && strings.EqualFold(author, pr.User.Login)) {
+				continue
+			}
+			if isBotReviewAuthor(author, r.User.Type) || !reviewAuthorHasWriteAssociation(r.AuthorAssociation) || commentedReviewLooksInformational(body) {
+				continue
+			}
+			if r.SubmittedAt.After(out.actionableReview.SubmittedAt) ||
+				r.SubmittedAt.Equal(out.actionableReview.SubmittedAt) && r.ID > out.actionableReview.ID {
+				out.actionableReview = prActionableReview{
+					ID:          r.ID,
+					Author:      author,
+					State:       r.State,
+					Body:        body,
+					URL:         strings.TrimSpace(r.HTMLURL),
+					SubmittedAt: r.SubmittedAt.UTC(),
+				}
 			}
 		}
 	}
@@ -111,37 +190,172 @@ func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (Tod
 		out.Review = "pending"
 	}
 	var status struct {
-		State string `json:"state"`
-		Total int    `json:"total_count"`
+		State    string `json:"state"`
+		Total    int    `json:"total_count"`
+		Statuses []struct {
+			ID          int64  `json:"id"`
+			Context     string `json:"context"`
+			State       string `json:"state"`
+			Description string `json:"description"`
+			TargetURL   string `json:"target_url"`
+		} `json:"statuses"`
 	}
 	commit := fmt.Sprintf("/repos/%s/commits/%s", repo, pr.Head.SHA)
 	if err := g.get(ctx, commit+"/status", &status); err != nil {
 		return TodoPRStatus{}, err
 	}
+	type failedCheckItem struct {
+		id         int64
+		name       string
+		conclusion string
+		url        string
+		summary    string
+	}
+	var failedItems []failedCheckItem
 	if status.Total > 0 {
 		out.Checks = checkState(status.State)
+		for _, st := range status.Statuses {
+			if checkState(st.State) != "failure" {
+				continue
+			}
+			name := strings.TrimSpace(st.Context)
+			if st.ID == 0 && name == "" {
+				continue
+			}
+			failedItems = append(failedItems, failedCheckItem{
+				id:         st.ID,
+				name:       name,
+				conclusion: strings.ToLower(strings.TrimSpace(st.State)),
+				url:        strings.TrimSpace(st.TargetURL),
+				summary:    strings.TrimSpace(st.Description),
+			})
+		}
 	}
-	var checks struct {
-		Total int `json:"total_count"`
-		Runs  []struct {
-			Status     string `json:"status"`
-			Conclusion string `json:"conclusion"`
-		} `json:"check_runs"`
+	type checkRun struct {
+		ID         int64  `json:"id"`
+		Name       string `json:"name"`
+		Status     string `json:"status"`
+		Conclusion string `json:"conclusion"`
+		DetailsURL string `json:"details_url"`
+		HTMLURL    string `json:"html_url"`
+		Output     struct {
+			Title   string `json:"title"`
+			Summary string `json:"summary"`
+		} `json:"output"`
 	}
-	if err := g.get(ctx, commit+"/check-runs?per_page=100&filter=latest", &checks); err != nil {
+	type checkRunsPage struct {
+		Total int        `json:"total_count"`
+		Runs  []checkRun `json:"check_runs"`
+	}
+	const maxCheckRunPages = 10
+	var firstChecks checkRunsPage
+	if err := g.get(ctx, commit+"/check-runs?per_page=100&filter=latest", &firstChecks); err != nil {
 		return TodoPRStatus{}, err
 	}
-	if checks.Total > len(checks.Runs) {
+	totalChecks := firstChecks.Total
+	allRuns := make([]checkRun, 0, len(firstChecks.Runs))
+	seenRunID := make(map[int64]bool, len(firstChecks.Runs))
+	appendRuns := func(runs []checkRun) {
+		for _, run := range runs {
+			if run.ID > 0 {
+				if seenRunID[run.ID] {
+					continue
+				}
+				seenRunID[run.ID] = true
+			}
+			allRuns = append(allRuns, run)
+		}
+	}
+	appendRuns(firstChecks.Runs)
+	for page := 2; totalChecks > len(allRuns) && len(firstChecks.Runs) > 0 && page <= maxCheckRunPages; page++ {
+		var next checkRunsPage
+		if err := g.get(ctx, fmt.Sprintf("%s/check-runs?per_page=100&filter=latest&page=%d", commit, page), &next); err != nil {
+			return TodoPRStatus{}, err
+		}
+		if next.Total > totalChecks {
+			totalChecks = next.Total
+		}
+		if len(next.Runs) == 0 {
+			break
+		}
+		before := len(allRuns)
+		appendRuns(next.Runs)
+		if len(allRuns) == before {
+			break
+		}
+	}
+	checksTruncated := totalChecks > len(allRuns) || (len(status.Statuses) > 0 && status.Total > len(status.Statuses))
+	if totalChecks > len(allRuns) {
 		out.Checks = joinCheckState(out.Checks, "pending")
 	}
-	for _, run := range checks.Runs {
+	for _, run := range allRuns {
 		state := "pending"
 		if run.Status == "completed" {
 			state = checkState(run.Conclusion)
 		}
 		out.Checks = joinCheckState(out.Checks, state)
+		if state == "failure" {
+			name := strings.TrimSpace(run.Name)
+			if run.ID == 0 && name == "" {
+				continue
+			}
+			failedItems = append(failedItems, failedCheckItem{
+				id:         run.ID,
+				name:       name,
+				conclusion: strings.ToLower(strings.TrimSpace(run.Conclusion)),
+				url:        cmp.Or(strings.TrimSpace(run.HTMLURL), strings.TrimSpace(run.DetailsURL)),
+				summary:    cmp.Or(strings.TrimSpace(run.Output.Title), strings.TrimSpace(run.Output.Summary)),
+			})
+		}
+	}
+	if len(failedItems) > 0 {
+		sort.Slice(failedItems, func(i, j int) bool {
+			li, lj := strings.ToLower(failedItems[i].name), strings.ToLower(failedItems[j].name)
+			if li != lj {
+				return li < lj
+			}
+			if failedItems[i].name != failedItems[j].name {
+				return failedItems[i].name < failedItems[j].name
+			}
+			return failedItems[i].id < failedItems[j].id
+		})
+		var names []string
+		var digest []string
+		for _, item := range failedItems {
+			if item.name != "" && !slices.Contains(names, item.name) && len(names) < 3 {
+				names = append(names, item.name)
+			}
+			if key := normalizedFailingCheckIdentity(item.name, item.id); key != "" && !slices.Contains(digest, key) {
+				digest = append(digest, key)
+			}
+		}
+		sort.Strings(digest)
+		digestStr := strings.Join(digest, ",")
+		if checksTruncated {
+			// Never use a truncated API page's membership as an event fingerprint; keep it stable per head SHA.
+			digestStr = "truncated"
+		}
+		out.failingCheck = prFailingCheck{
+			ID:         failedItems[0].id,
+			Name:       strings.Join(names, ", "),
+			Conclusion: failedItems[0].conclusion,
+			URL:        failedItems[0].url,
+			Summary:    failedItems[0].summary,
+			Count:      len(failedItems),
+			Digest:     digestStr,
+		}
 	}
 	return out, nil
+}
+
+func normalizedFailingCheckIdentity(name string, id int64) string {
+	if norm := strings.ToLower(strings.Join(strings.Fields(name), " ")); norm != "" {
+		return norm
+	}
+	if id > 0 {
+		return "id:" + strconv.FormatInt(id, 10)
+	}
+	return ""
 }
 
 func checkState(state string) string {
@@ -177,7 +391,7 @@ func polledPRs(t Todo) []string {
 	}
 	for i := len(t.PRs) - 1; i >= 0 && len(out) <= prsPolled; i-- {
 		u := t.PRs[i]
-		if u == t.PRURL || !ciPRURL.MatchString(u) {
+		if u == t.PRURL || !ciPRURL.MatchString(u) && !otherReviewLink(u) {
 			continue
 		}
 		if f, ok := known[u]; ok && (f.State == "merged" || f.State == "closed") {
@@ -195,6 +409,11 @@ func polledPRs(t Todo) []string {
 				out = append(out, u)
 			}
 			break
+		}
+		if u := externalParkPRURL(r); u != "" && !slices.ContainsFunc(out, func(known string) bool {
+			return ciPRURL.MatchString(known) && triageNormalizePRURL(known) == u
+		}) {
+			out = append(out, u)
 		}
 	}
 	return out
@@ -218,18 +437,17 @@ func prFacts(t Todo, url string) *TodoPRStatus {
 
 // The existing minute deploy pass owns polling. Reads never block a task list or
 // snapshot, and failures leave the last observation to expire rather than invent success.
+// A review request on another host is polled the same way through its code host (code_host.go), which says its state
+// only: no review, checks or head.
 func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
-	f, ok := s.forge().(prStatusForge)
-	if !ok {
-		return
-	}
+	f, github := s.forge().(prStatusForge)
 	if s.ensureTodosLoaded(ctx) != nil {
 		return
 	}
 	s.todos.mu.RLock()
 	var tasks []Todo
 	for _, t := range s.todos.todos {
-		if t.DoneAt == nil && t.PRURL != "" && !isAskTodo(t.ID) {
+		if t.DoneAt == nil && (t.PRURL != "" || externalParkPRURL(t.Supervision.parking()) != "") && !isAskTodo(t.ID) {
 			tasks = append(tasks, copyTodoLocked(t))
 		}
 	}
@@ -238,12 +456,31 @@ func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
 		if t.DoneAt != nil || t.Cancelled() {
 			continue
 		}
+		held := t.Supervision.parking()
+		source := externalParkPRURL(held)
 		for _, url := range polledPRs(t) {
 			m := ciPRURL.FindStringSubmatch(url)
-			if m == nil {
+			var other codeHost
+			switch {
+			case m != nil && !github:
 				continue
+			case m == nil && !otherReviewLink(url):
+				continue
+			case m == nil:
+				if other, _ = s.codeHostFor(url); other == nil {
+					continue
+				}
 			}
-			if old := prFacts(t, url); old != nil && now.Sub(old.CheckedAt) < deployRecheck {
+			var checkedAt time.Time
+			bound := source != "" && source == triageNormalizePRURL(url)
+			if bound {
+				if held.ExternalPR != nil {
+					checkedAt = held.ExternalPR.CheckedAt
+				}
+			} else if old := prFacts(t, url); old != nil {
+				checkedAt = old.CheckedAt
+			}
+			if !checkedAt.IsZero() && now.Sub(checkedAt) < deployRecheck {
 				continue
 			}
 			if ctx.Err() != nil {
@@ -266,15 +503,21 @@ func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
 			last.statusPR, last.statusAt = url, now
 			p.seen[key] = last // failures are attempts too, not fresh evidence
 			p.mu.Unlock()
-			number, _ := strconv.Atoi(m[2])
-			status, err := f.PRStatus(ctx, m[1], number)
+			var status TodoPRStatus
+			var err error
+			if other != nil {
+				status, err = otherPRStatus(ctx, other, url)
+			} else {
+				number, _ := strconv.Atoi(m[2])
+				status, err = f.PRStatus(ctx, m[1], number)
+			}
 			if err != nil {
 				s.logf("task %s: PR status: %v", t.ID, err)
 				continue
 			}
 			observedAt := now.UTC()
 			// The pass may have started before this captured wait. Its source request cannot predate that wait.
-			if held := t.Supervision.parking(); held != nil && held.Evidence != nil && parkWaitsOnPR(held, url) && observedAt.Before(held.At) {
+			if held != nil && held.Evidence != nil && (parkWaitsOnPR(held, url) || bound) && observedAt.Before(held.At) {
 				observedAt = held.At
 			}
 			status.URL, status.CheckedAt = url, observedAt
@@ -288,6 +531,11 @@ func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
 func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus) error {
 	// The wait belongs to the snapshot taken before the forge request, not a park created while it was in flight.
 	held := t.Supervision.parking()
+	if source := externalParkPRURL(held); source != "" && source == triageNormalizePRURL(status.URL) {
+		if err := s.applyExternalParkPRStatus(ctx, t, status); err != nil {
+			return err
+		}
+	}
 	current, ok := s.todoNow(t.ID)
 	if !ok || current.DoneAt != nil || current.PRURL != status.URL && !slices.Contains(current.PRs, status.URL) {
 		return nil
@@ -362,13 +610,18 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 	if status.State == "open" && status.Draft && status.Own && status.HeadOID != "" && t.Supervision != nil {
 		s.signal(superviseSignal{Todo: t.ID, Kind: sigDraftPR, PRURL: status.URL, Key: status.URL + "@" + status.HeadOID})
 	}
-	if status.URL == cur.PR && status.State == "open" && status.Conflicts && status.HeadOID != "" && t.Supervision != nil {
+	conflictRouted, reviewRouted := false, false
+	if s.prEventsRouteToAgentOn(ctx) {
+		conflictRouted, reviewRouted = s.routePREvents(ctx, t, cur, held, status)
+	}
+	if !conflictRouted && status.URL == cur.PR && status.State == "open" && status.Conflicts && status.HeadOID != "" && t.Supervision != nil &&
+		!parkWaitsOnPR(t.Supervision.parking(), status.URL) {
 		// Only the current PR raises a conflict signal: the digest revalidates against the task/stage PR, so an
 		// earlier PR's conflict would be dropped there anyway.
 		s.signal(superviseSignal{Todo: t.ID, Kind: sigPRConflict, Key: status.URL + "@" + status.HeadOID,
 			Detail: fmt.Sprintf("PR %s at head %s is open and has merge conflicts.", status.URL, status.HeadOID)})
 	}
-	reviewChange := parkReviewChangeRequested(held, status)
+	reviewChange := !reviewRouted && parkReviewChangeRequested(held, status)
 	if held != nil && (terminal && (wasOpen || legacyHold || held.Evidence != nil) || reviewChange) {
 		// Typed waits reconcile terminal facts even after a failed ledger write or a restart. Legacy parks retain
 		// their transition/stage gate. A new changes-request review is actionable before other PRs resolve.
@@ -409,6 +662,9 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 	}
 	if status.URL == t.PRURL && status.State == "merged" && stageIndex(t.Stage) < stageIndex("merge") {
 		s.setTaskStageOn(ctx, t.ID, "merge", "", "", false, status.URL)
+	}
+	if strings.EqualFold(status.State, "merged") {
+		s.evaluateTodoAfterDependents(ctx, t.ID)
 	}
 	return nil
 }
@@ -458,18 +714,20 @@ func parkPRsResolved(t Todo, r *TaskReview, observed string) bool {
 	return parkWaitsOnPR(r, terminal...)
 }
 
-// parkWaitsOnPR uses the recorded merge source for typed waits. Only legacy parks without evidence use prose or
-// bare "#N" references; a different typed source or kind must never fall back to the reason.
+// parkWaitsOnPR uses the exact source of a typed review or an automatically admitted passive PR wait.
+// Only legacy parks without evidence use prose or bare "#N"; manual external-event binding is separate.
 func parkWaitsOnPR(r *TaskReview, urls ...string) bool {
 	if r == nil || r.WaitingOn != parkExternalEvent && r.WaitingOn != parkSomeoneElse {
 		return false
 	}
 	if e := r.Evidence; e != nil {
-		if e.Kind != "merge_review" || !e.Ready || r.WaitingOn != parkSomeoneElse {
+		review := e.Kind == "merge_review" && e.Ready && r.WaitingOn == parkSomeoneElse
+		automatic := r.Automatic != nil && e.Kind == "external_event" && r.WaitingOn == parkExternalEvent
+		if !review && !automatic {
 			return false
 		}
 		source := triageNormalizePRURL(e.URL)
-		if ciPRURL.FindString(source) != source || source == "" {
+		if source == "" || ciPRURL.FindString(source) != source && !otherReviewLink(source) { // other hosts: code_host.go
 			return false
 		}
 		for _, u := range urls {
@@ -498,4 +756,18 @@ func parkWaitsOnPR(r *TaskReview, urls ...string) bool {
 		}
 	}
 	return false
+}
+
+// otherPRStatus is url's state as code host h reads it, with the labels GitHub's read keeps when it knows no more.
+func otherPRStatus(ctx context.Context, h codeHost, url string) (TodoPRStatus, error) {
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	st, err := h.ReviewStatus(cctx, url)
+	if err == nil && st.State == "" {
+		err = errReviewUnsupported
+	}
+	if err != nil {
+		return TodoPRStatus{}, fmt.Errorf("%s: %w", h.Name(), err)
+	}
+	return TodoPRStatus{State: st.State, Review: "pending", Checks: "none"}, nil
 }

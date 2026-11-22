@@ -61,7 +61,11 @@ func (s *Service) watchChannelRun(r *channel.Run) {
 			if c.live[r.ID] == prog {
 				delete(c.live, r.ID)
 			}
+			native := prog.native
 			c.mu.Unlock()
+			if native != nil {
+				native.abort()
+			}
 			return
 		}
 		s.retryFollow(r.MachineID, r.SessionID)

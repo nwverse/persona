@@ -55,6 +55,10 @@ func (h *Manager) channelsAppCall(ctx context.Context, p assistantwire.AppCall) 
 			Action        string `json:"action"`
 			Channel       string `json:"channel"`
 			Kind          string `json:"kind"`
+			ApprovalReply bool   `json:"approval_reply"`
+			MessageID     string `json:"message_id"`
+			ParentID      string `json:"parent_id"`
+			ChatID        string `json:"chat_id"`
 			Clarify       bool   `json:"clarify"`
 			Text          string `json:"text"`
 			ClientMsgID   string `json:"client_msg_id"`
@@ -72,14 +76,26 @@ func (h *Manager) channelsAppCall(ctx context.Context, p assistantwire.AppCall) 
 				return nil, true, errors.New("invalid clarification proof request")
 			}
 		}
-		// The assistant answers a card from a channel only with the owner's action handed over with that press or
-		// message in that channel (a card's for that card, a message's for a kind it takes typed), once
-		// (fleet_routes.go channelResolve there; kind is the queue's).
-		err = h.takeOwnerAction(a.Action, a.Channel, strings.TrimSpace(a.InteractionID), a.Kind)
-		if err == nil && a.Clarify {
-			out = map[string]any{"clarification_proof": h.clarificationProofs.issue(question)}
+		if a.ApprovalReply {
+			if a.Clarify || a.Channel != channel.Feishu {
+				return nil, true, errors.New("invalid owner approval proof request")
+			}
+			expected := assistantwire.OwnerApprovalProof{MessageID: a.MessageID, ParentID: a.ParentID, ChatID: a.ChatID, Text: a.Text}
+			var proof assistantwire.OwnerApprovalProof
+			proof, err = h.takeOwnerApproval(a.Action, a.Channel, strings.TrimSpace(a.InteractionID), a.Kind, expected)
+			if err == nil {
+				out = map[string]any{"owner_approval_proof": proof}
+			}
 		} else {
-			out = map[string]any{}
+			// The assistant answers a card from a channel only with the owner's action handed over with that press or
+			// message in that channel (a card's for that card, a message's for a kind it takes typed), once
+			// (fleet_routes.go channelResolve there; kind is the queue's).
+			err = h.takeOwnerAction(a.Action, a.Channel, strings.TrimSpace(a.InteractionID), a.Kind)
+			if err == nil && a.Clarify {
+				out = map[string]any{"clarification_proof": h.clarificationProofs.issue(question)}
+			} else {
+				out = map[string]any{}
+			}
 		}
 	default:
 		return nil, false, nil
@@ -107,6 +123,7 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 		Kind       string               `json:"kind"`
 		Name       string               `json:"name"`
 		MachineID  string               `json:"machine_id"`
+		AsFile     bool                 `json:"as_file"` // feishu.resource: the message's inline image slots are full
 		OpenID     string               `json:"open_id"`
 		Enabled    *bool                `json:"enabled"`
 		Features   map[string]bool      `json:"features"`
@@ -120,6 +137,11 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 		Element    string               `json:"element"`   // feishu.card_stream: the element streamed into
 		Sequence   int64                `json:"sequence"`  // feishu.card_*: the write's place, larger than the last
 		Streaming  bool                 `json:"streaming"` // feishu.card_settings
+		// This optional constraint can only narrow a reminder post to its original private-chat pairing.
+		TodoReminderPairing *struct {
+			Owner    string    `json:"owner"`
+			PairedAt time.Time `json:"paired_at"`
+		} `json:"todo_reminder_pairing"`
 	}
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &a); err != nil {
@@ -128,6 +150,9 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 	}
 	switch method {
 	case assistantwire.FeishuStatusGet:
+		if err := h.loadBotSettings(ctx); err != nil {
+			return nil, err
+		}
 		api, set := h.botAPI()
 		nudge := set.nudgeAfter()
 		reportDelay := set.sourceReportDelayMinutes()
@@ -148,6 +173,16 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 		return map[string]any{}, h.testFeishuBot(ctx)
 	}
 	api, set := h.botAPI()
+	if binding := a.TodoReminderPairing; binding != nil {
+		// Use the very snapshot that supplies api and the destination below. A fresh status in the assistant is
+		// insufficient: pairing may change before this call. Subsequent changes cannot select a new recipient.
+		if method != assistantwire.FeishuPost || api == nil || set.Owner == nil || !set.Features.Pushes ||
+			binding.Owner == "" || binding.PairedAt.IsZero() || binding.Owner != set.Owner.OpenID ||
+			!binding.PairedAt.Equal(set.Owner.At) || set.Owner.ChatID == "" ||
+			a.ChatID != "" || a.ReplyTo != "" || a.InThread || callerKey(a.UUID, feishuMaxUUID-4) == "" {
+			return nil, &rpc.Error{Code: assistantwire.CodeChatDenied, Message: "feishu: original reminder pairing unavailable"}
+		}
+	}
 	if api == nil {
 		return nil, errBotOff
 	}
@@ -155,6 +190,18 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 	case assistantwire.FeishuPost:
 		if a.Card == "" {
 			return nil, errors.New("feishu.post needs a card")
+		}
+		// The answer to the owner's "/read" goes under that message, in a group the bot may not otherwise write in
+		// (#11803, bots_read.go): a bounded number of replies, never a detour into the group.
+		if chatID, found, err := readSourceReply(set, a.ChatID, a.ReplyTo, h.bots.clock().UTC()); found {
+			if err != nil {
+				return nil, err
+			}
+			if !h.useAISourceReply(a.ReplyTo, false) {
+				return nil, errBotSourceReply
+			}
+			id, err := h.botPostJSONKeyedOpt(ctx, api, chatID, a.ReplyTo, a.Card, a.Fallback, callerKey(a.UUID, feishuMaxUUID-4), a.InThread, true)
+			return map[string]any{"message_id": id}, err
 		}
 		chatID, err := botSendChat(set, a.ChatID)
 		if err != nil {
@@ -296,13 +343,32 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 		return map[string]any{"name": h.botName(ctx, api, a.OpenID)}, nil
 	case assistantwire.FeishuResource:
 		data, mime, err := api.Resource(ctx, a.MessageID, a.Key, a.Kind, botFileMax)
+		if errors.Is(err, feishubot.ErrTooLarge) {
+			return map[string]any{"too_large": true, "name": a.Key}, nil
+		}
 		if err != nil {
 			return nil, err
 		}
-		if len(data) > botImageMax {
-			return map[string]any{"mime": mime, "too_large": true}, nil
+		if len(data) <= botImageMax && !a.AsFile {
+			return map[string]any{"data": data, "mime": mime}, nil
 		}
-		return map[string]any{"data": data, "mime": mime}, nil
+		// The inline check already has the bytes: save those, rather than asking Feishu for the resource again.
+		// The former save call checked the bot again. Keep that gate if it was switched off or paired anew while reading.
+		current, latest := h.botAPI()
+		if current == nil || current != api || latest.Owner.OpenID != set.Owner.OpenID ||
+			latest.Owner.ChatID != set.Owner.ChatID || !latest.Owner.At.Equal(set.Owner.At) {
+			return nil, &rpc.Error{Code: assistantwire.CodeFeishuSave, Message: errBotOff.Error()}
+		}
+		m := h.localMachine(a.MachineID)
+		if m == nil {
+			return nil, &rpc.Error{Code: assistantwire.CodeFeishuSave, Message: noDevice(a.MachineID).Error()}
+		}
+		name := botImageName(a.Key, mime)
+		path, err := h.uploadBytes(ctx, m, name, data)
+		if err != nil {
+			return nil, &rpc.Error{Code: assistantwire.CodeFeishuSave, Message: err.Error()}
+		}
+		return map[string]any{"path": path, "mime": mime, "name": name}, nil
 	case assistantwire.FeishuSave:
 		m := h.localMachine(a.MachineID)
 		if m == nil {
@@ -319,6 +385,14 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 		return map[string]any{"path": path}, err
 	}
 	return nil, fmt.Errorf("app %s has no method %s", assistantwire.AppFeishu, method)
+}
+
+func botImageName(key, mime string) string {
+	name := key + map[string]string{"image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp"}[mime]
+	if !strings.Contains(name, ".") {
+		name += ".png"
+	}
+	return name
 }
 
 func (h *Manager) channelsCall(ctx context.Context, method string, params json.RawMessage) (any, error) {

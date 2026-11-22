@@ -1,4 +1,16 @@
 {
+  "plan_edit_task": "タスク",
+  "plan_edit_task_n": "タスク {n}",
+  "plan_edit_title": "タイトル",
+  "plan_edit_machine": "コンピューター",
+  "plan_edit_cwd": "ディレクトリ",
+  "plan_edit_model": "モデル",
+  "plan_edit_permission": "権限",
+  "plan_edit_prompt": "Agentへの最初のメッセージ",
+  "plan_edit_discard": "変更を破棄しますか？",
+  "plan_edit_model_placeholder": "空欄ならデフォルト",
+  "plan_edit_model_placeholder_kept": "空欄ならPersonaが選んだ{model}",
+  "plan_edit_model_placeholder_tier": "空欄ならプリセット {tier} のモデル",
   "continuity": "実行の引き継ぎ",
   "fresh_each_run": "実行ごとに新しいチャットを開始",
   "state_note": "タスクの状態メモ",
@@ -115,5 +127,9 @@
   "follow_assistant": "アシスタントに従う",
   "follow_launcher": "Agent の既定値",
   "daily_hint_zone": "{days} {time}（{zone}のタイムゾーン）。",
-  "cron_hint_named": "分・時・日・月・曜日の順で、{zone}のタイムゾーンで計算します。日と曜日の両方を指定すると、どちらかに当てはまる日に実行します。"
+  "cron_hint_named": "分・時・日・月・曜日の順で、{zone}のタイムゾーンで計算します。日と曜日の両方を指定すると、どちらかに当てはまる日に実行します。",
+  "input_hint": "@ でファイルやスキルを、/ でスキルや保存済みプロンプトを選べます。タスクの実行時に最新の内容を使います。",
+  "input_loading": "実行するコンピュータと作業フォルダを確認中…",
+  "input_unsupported": "この実行設定ではファイルとスキルを選択できません。テキストと定型プロンプトは利用できます。",
+  "input_changed": "このファイルは別のコンピュータ、フォルダ、またはエージェントで選ばれました。削除して選び直してください。"
 }

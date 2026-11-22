@@ -160,6 +160,8 @@ type Progress struct {
 type Delivery struct {
 	State string    `json:"state"`
 	At    time.Time `json:"at"`
+	Owner bool      `json:"owner,omitempty"` // an open delivery hold asks the owner to release it
+	Gate  string    `json:"gate,omitempty"`
 }
 
 // PRStatus is an observation of one of the task's PRs.
@@ -209,6 +211,10 @@ func (f *Facts) closed() bool {
 	return f.DoneAt != nil && (f.StartError == "" || f.Superseded)
 }
 
+// outsideDecisionRow has its own answer home: part_of associates it with
+// existing work, but does not make the request a step of that work (#8235).
+func outsideDecisionRow(f Facts) bool { return strings.HasPrefix(f.ID, "todo_od_") }
+
 // relate fills in what a to-do's facts take from the rest of the list: its steps (the to-dos whose part_of names it,
 // oldest first) and whether a failed start is superseded (a Superseded already set stays). It returns a new list; the
 // steps it attaches carry no steps of their own (steps are one level deep).
@@ -217,7 +223,7 @@ func relate(list []Facts) []Facts {
 	superseded := supersededFailedStarts(list)
 	steps := map[string][]Facts{}
 	for _, f := range list {
-		if f.PartOf != "" && f.PartOf != f.ID {
+		if f.PartOf != "" && f.PartOf != f.ID && !outsideDecisionRow(f) {
 			f.Steps, f.Superseded = nil, f.Superseded || superseded[f.ID]
 			steps[f.PartOf] = append(steps[f.PartOf], f)
 		}

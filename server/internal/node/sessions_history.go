@@ -34,6 +34,8 @@ type historyParams struct {
 	Runtime string `json:"runtime"`
 }
 
+func init() { nodeRPC("sessions.history", (*Node).sessionsHistory) } // sessions active in a time window, inactive ones too
+
 // sessionsHistory answers sessions.history: one page of every source's sessions in the window (or of the one source
 // asked), merged newest first, and how each source answered.
 func (n *Node) sessionsHistory(ctx context.Context, raw json.RawMessage) (sessionhistory.Answer, error) {

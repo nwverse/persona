@@ -1,10 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./store", () => {
   const state = { launches: {} as Record<string, import("./new-agent").AgentLaunch> };
   return { getState: () => state, putLaunch: (launch: import("./new-agent").AgentLaunch) => { state.launches[launch.id] = launch; }, upsertSession: vi.fn(), isOpen: () => true, onHubEvent: () => () => {} };
 });
 vi.mock("./router", () => ({ href: (r: { mid: string; sid: string }) => `/s/${r.mid}/${r.sid}`, navigate: vi.fn() }));
+// no decoder here: a small picture within the limits goes as it is, as lib/image-scale.ts sends one (#12973)
+vi.mock("./image-scale", async () => {
+  const { imagePayload } = await import("./attachments");
+  return { fitPicture: (b: Blob) => imagePayload(b) };
+});
 
 import { acknowledgeLaunch, deliverLaunch, launchAgent, onOpenNewAgent, openNewAgent, presetPrompt, startKeys } from "./new-agent";
 import { getState, upsertSession } from "./store";
@@ -18,6 +23,9 @@ const input = { machineId: "desktop", cwd: "/workspace/project", launcher: "", t
 function response(body: unknown, status = 200) {
   return { ok: status < 400, status, text: async () => JSON.stringify(body) };
 }
+
+// loaded before the fake clock, as a page that already scaled a picture has it
+beforeAll(async () => void (await import("./image-scale")));
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -59,6 +67,7 @@ describe("本地优先启动", () => {
     vi.stubGlobal("fetch", fetcher);
     const id = launchAgent({ ...input, attachments: [image, file] });
     await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(getState().launches[id].phase).not.toBe("uploading")); // the scaler loads in real time
     expect(getState().launches[id].phase).toBe("ready");
     expect(fetcher.mock.calls[1][0]).toBe("/api/v1/machines/desktop/files?name=report.txt");
     expect(JSON.parse(fetcher.mock.calls[2][1].body)).toEqual({ text: "看一下附件\n'/uploads/my report.txt'", images: [{ mime: "image/png", data: "AQID" }], client_msg_id: getState().launches[id].messageId });
@@ -71,6 +80,7 @@ describe("本地优先启动", () => {
     vi.stubGlobal("fetch", fetcher);
     const id = launchAgent({ ...input, attachments: [image] });
     await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(getState().launches[id].phase).not.toBe("uploading")); // the scaler loads in real time
     expect(getState().launches[id]).toMatchObject({ phase: "failed", session, clearable: "existing", uncertain: false });
     expect(getState().launches[id].attachments).toEqual([image]);
     expect(URL.revokeObjectURL).not.toHaveBeenCalled();
@@ -126,6 +136,7 @@ describe("本地优先启动", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response({ session })).mockResolvedValueOnce(response({})));
     const id = launchAgent({ ...input, attachments: [pickAttachment(new File(["image"], "figure.png", { type: "image/png" }))] });
     await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(getState().launches[id].phase).not.toBe("uploading")); // the scaler loads in real time
     acknowledgeLaunch("desktop", "remote-id", { text: input.text, images: [] });
     expect(getState().launches[id].outgoing).toBeDefined();
     acknowledgeLaunch("desktop", "remote-id", { text: input.text, images: [{}] });
@@ -202,6 +213,33 @@ describe("本地优先启动", () => {
     const body = JSON.parse(codex.mock.calls[1][1].body);
     expect(body).toMatchObject({ launcher: "codex", model: "gpt-5.5-mini", prompt: input.text });
     expect(body).not.toHaveProperty("effort");
+  });
+
+  it("includes permission_mode on inlinePrompt Codex starts and codex_needs_prompt retries", async () => {
+    const inlineFetch = vi.fn().mockResolvedValueOnce(response({ session: { ...session, agent: "codex" } }));
+    vi.stubGlobal("fetch", inlineFetch);
+    launchAgent({ ...input, launcher: "codex", agentType: "codex", inlinePrompt: true, permissionMode: "bypassPermissions" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(inlineFetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(inlineFetch.mock.calls[0][1].body)).toMatchObject({
+      launcher: "codex",
+      agent_type: "codex",
+      prompt: input.text,
+      permission_mode: "bypassPermissions",
+    });
+
+    const fallbackFetch = vi.fn()
+      .mockResolvedValueOnce(response({ error: "needs prompt", code: "codex_needs_prompt" }, 409))
+      .mockResolvedValueOnce(response({ session: { ...session, agent: "codex" } }));
+    vi.stubGlobal("fetch", fallbackFetch);
+    launchAgent({ ...input, launcher: "codex", permissionMode: "plan" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fallbackFetch).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fallbackFetch.mock.calls[1][1].body)).toMatchObject({
+      launcher: "codex",
+      prompt: input.text,
+      permission_mode: "plan",
+    });
   });
 
   it("requests the native agy effort with no effort override", async () => {

@@ -56,11 +56,7 @@ func (s *Service) Call(ctx context.Context, name string, args json.RawMessage, a
 	case ToolSearch:
 		res, err := s.search(ctx, args)
 		if err != nil {
-			var incomplete *IncompleteSearchError
-			if errors.As(err, &incomplete) {
-				return proto.TextResult(i18n.Localize(incomplete, i18n.From(ctx)), true)
-			}
-			return proto.TextResult(err.Error(), true)
+			return proto.TextResult(toolError(ctx, err), true)
 		}
 		var b strings.Builder
 		switch {
@@ -103,7 +99,7 @@ func (s *Service) Call(ctx context.Context, name string, args json.RawMessage, a
 		}
 		msg, err := s.GetMessage(ctx, req.AccountID, req.UID, req.Mailbox)
 		if err != nil {
-			return proto.TextResult(err.Error(), true)
+			return proto.TextResult(toolError(ctx, err), true)
 		}
 		var b strings.Builder
 		fmt.Fprintf(&b, "From: %s <%s>\n", msg.From.Name, msg.From.Email)
@@ -144,6 +140,20 @@ func (s *Service) Call(ctx context.Context, name string, args json.RawMessage, a
 		return res
 	}
 	return proto.TextResult("unknown tool "+name, true)
+}
+
+// toolError is a failed search's or read's answer: the errors that say what happened in words (an incomplete
+// search of every account, an account that could not be reached) in the caller's language, any other as it is.
+func toolError(ctx context.Context, err error) string {
+	var incomplete *IncompleteSearchError
+	if errors.As(err, &incomplete) {
+		return i18n.Localize(incomplete, i18n.From(ctx))
+	}
+	var unreachable *UnreachableError
+	if errors.As(err, &unreachable) {
+		return i18n.Localize(unreachable, i18n.From(ctx))
+	}
+	return err.Error()
 }
 
 // noAccounts is mail_accounts' answer without an account.

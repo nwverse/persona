@@ -1,5 +1,15 @@
 # Lessons: Android
 
+## A delayed settings GET must not undo an acknowledged PUT (#12680)
+
+A pull-to-refresh can remain pending while a settings switch is saved. Protecting the credential form alone does not
+protect the hub status: an older GET can still restore the previous switch value or replace a save's error. In the Lark
+bot model, reserve each read's sequence and save generation before suspension; invalidate earlier reads when saving
+starts, and ignore reads begun during a save. Keep loading ownership separate so an older completion cannot stop a
+newer refresh's indicator. A fresh read after success, failure or cancellation must still work. Test the causal order
+with `CompletableDeferred` in the real model's fake API, including both response orders and exact PUT counts; do not
+infer the race from network timing or disable the switch for the whole refresh.
+
 ## A false pairing snapshot can mean restoration is still pending (#4055)
 
 Removing a main-thread restore changes more than the first suspend call. A `StateFlow<Boolean>` whose initial value is
@@ -488,6 +498,14 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - A shot diff against `main` needs the images' own noise first (2026-11-12, #4339). `android_shots_diff.py` on one run of `main` and one of a branch with no relevant change calls hundreds of the ~1,700 images different: live clocks ("21:30"), a shimmer, the dither of dark Brief and Board, text heights that jump by 4 px between two runs of the same code. Run each side at least twice (`clean…UnitTest` and `--no-build-cache`, or Gradle replays the results without redrawing a picture), take the pixels that differ between two runs of one side as that image's noise, and count only the differences outside it, with a pixel of margin; what is left is what the change drew, and it is looked at by eye. Shots drawn by tests whose class name does not end in `ShotsTest` need a `--tests` pattern of their own.
 
 - A fixture time fed to code that reads the real clock is a time bomb (2026-11-12, #5530). The Assistant's trays build In progress with `System.currentTimeMillis()`, and an open task that hasn't moved for 48 hours, with nothing running, is shelved (`SHELVE_AFTER_MS`). `AssistantTraysShotsTest` and `CloseoutShotsTest` pinned their tasks to `2026-11-10T08:00:00Z`. They passed on the day they merged and failed from 2026-11-12T08:00Z on every commit, so a bisect over the day's merges pointed at nothing. Build such times from `Instant.now()` (as the chat shot tests do), or pass the code a fixed `now` when it takes one (`TodosScreen(now = …)`). To see whether a test will break later, move its date literals back N days in a scratch copy and run it: to code that reads the real clock, that is the same test N days later.
+
+## Isolate retained screenshots by invocation
+
+Treat `persona.shots` and fixed screenshot defaults as shared base directories, not the current run's output directory.
+Use `Files.createTempDirectory(base, "run-")` to atomically allocate a fresh child and report its absolute path for PR
+evidence. Do not clear the base, reuse a timestamp-only child or maintain a mutable `latest` link: another task may own
+those files. A new empty run directory excludes removed scenarios without deleting siblings. Keep bitmap comparisons in
+memory; output isolation must not become a reason to compare against a file another invocation could replace.
 
 - A screenshot test's fake image loader is global state (#2546). `SingletonImageLoader.setUnsafe` survives into later Robolectric classes using the same sandbox. Reset the singleton and shut down the test-owned loader in teardown. Otherwise a later image-fallback assertion can fail because it receives a successful synthetic bitmap; running only that later class hides the leak. Reproduce with the showcase and native-stream classes together, and retain the original fallback assertion.
 

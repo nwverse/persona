@@ -51,6 +51,8 @@ func isCodexWaitID(id string) bool { return len(id) == 36 && strings.HasPrefix(i
 // codexWait is a Codex opened with no first message, until its thread is known.
 type codexWait struct {
 	id, pane, cwd string
+	// A manual tab belongs to the user. Only its temporary row has a record, with no launcher.
+	manual bool
 	// began is when codex was run in the pane: rules 3 and 4 take only threads begun after it.
 	began time.Time
 	// herdr is the thread herdr's codex integration names for the pane, titled the one its title names (setAgentsAt,
@@ -81,7 +83,7 @@ var (
 	codexDialogPause = time.Second
 )
 
-// errCodexBoxLate: codex runs in the new tab but its input box did not come up within codexStartWait.
+// errCodexBoxLate: Codex runs in the new tab but its input box did not come up in time.
 var errCodexBoxLate = errors.New("codex box late")
 
 // codexLoadingRE: Codex 0.153 draws its input box before its model is known ("model:     loading" in the header).
@@ -91,17 +93,17 @@ var codexLoadingRE = lazyre.New(`(?m)^\W*(model|directory):\s+loading\b`)
 // shows the pane working meanwhile.
 func codexBusyStarting(text string) bool { return strings.Contains(text, "Starting MCP servers") }
 
-// waitCodexBox waits for the input box of the Codex a start without a message ran: what it takes for the row to be
-// offered (codexStartWait at most). The folder trust dialog and an update offer are answered on the way as
+// waitCodexBox waits for the input box of Codex to be offered, for at most maxWait.
+// The folder trust dialog and an update offer are answered on the way as
 // waitCodexThread does. nil once the box shows with the model known; errCodexBoxLate when codex runs but its box did
 // not come in time; the launcher's failure (codex-start's line) at once.
-func (n *Node) waitCodexBox(ctx context.Context, pane string) error {
-	deadline := time.Now().Add(codexStartWait)
+func (n *Node) waitCodexBox(ctx context.Context, pane string, maxWait time.Duration) error {
+	deadline := time.Now().Add(maxWait)
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(codexStartPoll):
+		case <-time.After(min(time.Until(deadline), codexStartPoll)):
 		}
 		text, err := n.readPane(ctx, pane, "visible", screen.DialogLines)
 		if err != nil {
@@ -117,13 +119,20 @@ func (n *Node) waitCodexBox(ctx context.Context, pane string) error {
 			return nil
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if agent, err := n.paneAgent(ctx, pane); err == nil && agent != nil && agent.Agent == "codex" {
 		return errCodexBoxLate
 	}
-	if adoptedPane(ctx) != nil { // Run Agent Here (#5504): the user's own pane, not a new tab, and it stays as it is
-		return &rpc.Error{Code: "codex_no_box_here", Message: i18n.T(i18n.Default, "node-codex-start.no_box_here", map[string]any{"seconds": int(codexStartWait.Seconds())})}
+	args := i18n.Args{"seconds": maxWait.Seconds()}
+	code := "codex_no_box"
+	key := "node-codex-start.no_box"
+	if adoptedPane(ctx) != nil { // Run Agent Here (#5504) leaves the user's pane open.
+		code = "codex_no_box_here"
+		key = "node-codex-start.no_box_here"
 	}
-	return &rpc.Error{Code: "codex_no_box", Message: fmt.Sprintf("Codex 已经在电脑上的新标签里打开了，但 %d 秒内没看到它的输入框", int(codexStartWait.Seconds()))}
+	return refusal(code, i18n.T(i18n.Default, key, args), args)
 }
 
 // answerCodexStartDialog answers what Codex shows before its input box as the user would for a start they asked for:
@@ -175,9 +184,13 @@ func (n *Node) openCodexWait(ctx context.Context, pane, cwd, launcher, mode stri
 	}
 	n.state.put(w.id, st)
 	n.mu.Lock()
+	previous := n.codexWaiting[pane]
 	n.panes[pane] = w.id // given back by the hub after a restart, which is how the row is known again (codexWaitOf)
 	n.addCodexWaitLocked(w)
 	n.mu.Unlock()
+	if previous != nil && previous.manual {
+		n.state.setPane(previous.id, "") // an explicit start took a pane discovered while its tab was opening
+	}
 	n.logf("codex %s: open with no first message, row %s", pane, w.id)
 	_ = n.refreshHosts(ctx)
 	a, ok := n.agent(w.id)
@@ -190,6 +203,27 @@ func (n *Node) openCodexWait(ctx context.Context, pane, cwd, launcher, mode stri
 	return s
 }
 
+// watchManualCodexLocked gives an unbound Codex its own row. The caller has checked the current host snapshot and
+// holds n.mu, so overlapping refreshes create just one id. Only Persona starts have a recorded launcher.
+func (n *Node) watchManualCodexLocked(a host.Agent) *codexWait {
+	w := &codexWait{id: codexWaitID(), pane: a.PaneID, cwd: firstNonEmpty(a.ForegroundCwd, a.Cwd), began: time.Now().UTC(), manual: true}
+	if n.panes == nil {
+		n.panes = map[string]string{}
+	}
+	n.panes[w.pane] = w.id
+	n.addCodexWaitLocked(w)
+	return w
+}
+
+// saveManualCodexWait records the temporary binding for a restart, after the snapshot releases n.mu. If the thread
+// was identified or its pane disappeared during this write, leave the temporary record unbound.
+func (n *Node) saveManualCodexWait(w *codexWait) {
+	n.state.put(w.id, sessionState{Pane: w.pane, Cwd: w.cwd, StartedAt: w.began})
+	if n.codexWaitByID(w.id) != w {
+		n.state.setPane(w.id, "")
+	}
+}
+
 // addCodexWaitLocked registers w and starts looking for its thread; the caller holds n.mu.
 func (n *Node) addCodexWaitLocked(w *codexWait) {
 	if n.codexWaiting == nil {
@@ -198,7 +232,11 @@ func (n *Node) addCodexWaitLocked(w *codexWait) {
 	n.codexWaiting[w.pane] = w
 	if !n.codexWaitLooking {
 		n.codexWaitLooking = true
-		go n.lookForCodexThreads(codexWaitTick)
+		var disconnected <-chan struct{}
+		if n.peer != nil {
+			disconnected = n.peer.Done()
+		}
+		go n.lookForCodexThreads(codexWaitTick, disconnected)
 	}
 }
 
@@ -219,7 +257,7 @@ func (n *Node) codexWaitOf(pane string) *codexWait {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if w = n.codexWaiting[pane]; w == nil && n.panes[pane] == id {
-		w = &codexWait{id: id, pane: pane, cwd: st.Cwd, began: st.StartedAt}
+		w = &codexWait{id: id, pane: pane, cwd: st.Cwd, began: st.StartedAt, manual: st.Launcher == ""}
 		n.addCodexWaitLocked(w)
 	}
 	return w
@@ -442,10 +480,19 @@ func (n *Node) codexTitleThread(a host.Agent) string {
 }
 
 // lookForCodexThreads looks for the waiting rows' threads every `every` (codexWaitTick, read by the caller) until none
-// waits.
-func (n *Node) lookForCodexThreads(every time.Duration) {
+// waits or this node's connection ends. A new node restores the rows from state.load.
+func (n *Node) lookForCodexThreads(every time.Duration, disconnected <-chan struct{}) {
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
 	for tick := 0; ; tick++ {
-		time.Sleep(every)
+		select {
+		case <-disconnected:
+			n.mu.Lock()
+			n.codexWaitLooking = false
+			n.mu.Unlock()
+			return
+		case <-ticker.C:
+		}
 		n.mu.Lock()
 		if len(n.codexWaiting) == 0 {
 			n.codexWaitLooking = false
@@ -640,8 +687,8 @@ func (n *Node) codexWaitNote(w *codexWait, note string) {
 	}
 }
 
-// attachCodexWait makes thread the session of w's pane: the start's record (launcher, directory, model and effort, time,
-// read-only mode, creation receipt) moves to the thread, the pane is bound to it, and requests that still name the row go to it.
+// attachCodexWait binds w's pane to the thread and forwards requests that still name the waiting row. An app
+// start's record follows its thread. A manually opened tab stays the user's.
 func (n *Node) attachCodexWait(ctx context.Context, w *codexWait, thread, how string) bool {
 	n.mu.Lock()
 	waits := n.codexWaiting[w.pane] == w
@@ -651,11 +698,16 @@ func (n *Node) attachCodexWait(ctx context.Context, w *codexWait, thread, how st
 	}
 	// The thread's record first, then the pane moves to it in the same step that ends the wait: a list built in between
 	// would find the pane still bound to the row's id and make the row again (codexWaitOf).
-	st, _ := n.state.get(w.id)
-	n.state.put(thread, sessionState{Pane: w.pane, Launcher: st.Launcher, Cwd: st.Cwd, Model: st.Model, ModelEffort: st.ModelEffort,
-		StartedAt: st.StartedAt, AppMode: st.AppMode, CreationID: st.CreationID, Incarnation: st.Incarnation})
+	if !w.manual {
+		st, _ := n.state.get(w.id)
+		n.state.put(thread, sessionState{Pane: w.pane, Launcher: st.Launcher, Cwd: st.Cwd, Model: st.Model, ModelEffort: st.ModelEffort,
+			StartedAt: st.StartedAt, AppMode: st.AppMode, CreationID: st.CreationID, Incarnation: st.Incarnation})
+	}
 	n.mu.Lock()
-	if n.codexWaiting[w.pane] != w {
+	occupied := n.agents[thread].PaneID
+	// Only live owners block an identified manual resume. n.panes also remembers closed Persona starts for restore.
+	belongsElsewhere := w.manual && (occupied != "" && occupied != w.pane || !n.codexThreadAvailableLocked(w.pane, thread, n.codexManual))
+	if n.codexWaiting[w.pane] != w || belongsElsewhere {
 		n.mu.Unlock()
 		return false
 	}
@@ -670,10 +722,18 @@ func (n *Node) attachCodexWait(ctx context.Context, w *codexWait, thread, how st
 		}
 	}
 	n.codexAttached[w.id] = codexAttach{thread: thread, at: time.Now()}
+	if w.manual {
+		if n.codexManual == nil {
+			n.codexManual = map[string]string{}
+		}
+		n.codexManual[w.pane] = thread
+	}
 	n.mu.Unlock()
 	n.state.setPane(w.id, "")
 	n.logf("codex %s: thread %s attached to row %s (%s)", w.pane, thread, w.id, how)
-	n.namePersonaTab(ctx, w.pane, thread)
+	if !w.manual {
+		n.namePersonaTab(ctx, w.pane, thread)
+	}
 	_ = n.refreshHosts(ctx)
 	n.notifySessions()
 	return true
@@ -706,7 +766,12 @@ func (n *Node) sendFirstCodex(ctx context.Context, w *codexWait, text string, im
 		n.codexWaitNote(w, how)
 		return nil, nil
 	}
-	n.attachCodexWait(ctx, w, thread, how)
+	if !n.attachCodexWait(ctx, w, thread, how) {
+		thread = n.codexAttachedThread(w.id) // another look attached it, or the candidate belongs to a different pane
+		if thread == "" {
+			return nil, nil
+		}
+	}
 	return n.codexWaitSession(w, thread), nil
 }
 
@@ -824,6 +889,10 @@ func (n *Node) codexWaitCalls(method, id string) (any, error, bool) {
 func (n *Node) sendFirstCodexCall(ctx context.Context, w *codexWait, params json.RawMessage, text string, images []proto.Image) (any, error) {
 	var opts sendOpts
 	_ = json.Unmarshal(params, &opts)
+	var meta struct {
+		Source *proto.MessageSource `json:"message_source"`
+	}
+	_ = json.Unmarshal(params, &meta)
 	var s *proto.Session
 	sent := time.Now()
 	err := n.sends.once(opts.ClientMsgID, func() error {
@@ -840,7 +909,7 @@ func (n *Node) sendFirstCodexCall(ctx context.Context, w *codexWait, params json
 				return n.stoppedRefusal(w.id) // Codex left its tab before a first message
 			}
 			// as session.send to the thread: its echo counted from where its transcript is now (node.go)
-			if err := n.sendEchoed(thread, opts.ClientMsgID, text, len(images), n.echoBase(thread), func() error {
+			if err := n.sendWithEcho(thread, opts.ClientMsgID, text, len(images), n.echoBase(thread), meta.Source, nil, func() error {
 				return n.send(ctx, thread, text, images, opts)
 			}); err != nil {
 				return err
@@ -860,7 +929,7 @@ func (n *Node) sendFirstCodexCall(ctx context.Context, w *codexWait, params json
 	out := map[string]any{"ok": true}
 	if s != nil && s.SessionID != w.id {
 		out["session"] = s
-		if opts.ClientMsgID != "" && n.echoes.expect(echoRecord{SessionID: s.SessionID, ClientMsgID: opts.ClientMsgID, Text: text, SentAt: sent}) {
+		if opts.ClientMsgID != "" && n.echoes.expect(echoRecord{SessionID: s.SessionID, ClientMsgID: opts.ClientMsgID, Text: text, Source: meta.Source, SentAt: sent}) {
 			if cur, ok := n.echoes.record(s.SessionID, opts.ClientMsgID); ok {
 				n.notifyEcho(cur)
 			}

@@ -159,6 +159,15 @@ var goTypes = map[string]any{
 	"RepoLinkResult":     wire.RepoLinkResult{},
 	"RepoDescribeParams": wire.RepoDescribeParams{},
 	"RepoDescribeResult": wire.RepoDescribeResult{},
+	"RepoPRStatusParams": wire.RepoPRStatusParams{},
+	"RepoPRStatusResult": wire.RepoPRStatusResult{},
+
+	// The manager decodes an extension's browser calls into the generated wire types and answers with them
+	// (extmgr/extension_browser.go).
+	"BrowserMachinesParams": wire.BrowserMachinesParams{},
+	"BrowserMachinesResult": wire.BrowserMachinesResult{},
+	"BrowserRunParams":      wire.BrowserRunParams{},
+	"BrowserRunResult":      wire.BrowserRunResult{},
 
 	// Storage params are the actual manager-engine decoder types. Dynamic result
 	// objects are validated against these wire DTOs before committing/acknowledging.
@@ -176,6 +185,7 @@ var goTypes = map[string]any{
 	"StorageJobResult":         wire.StorageJobResult{},
 	"StorageClaimParams":       storage.Claim{},
 	"StorageClaimResult":       wire.StorageClaimResult{},
+	"StorageRenewParams":       storage.Renew{},
 	"StorageSettleParams":      storage.Settle{},
 	"StorageDeleteResult":      wire.StorageDeleteResult{},
 	"StorageRetryParams":       storage.Retry{},
@@ -234,10 +244,10 @@ var leaderCalls = []string{"event." + assistantwire.EventLeaderChanged, "event."
 
 // The calls the manager makes to a repository_providers contribution's program (repository.schema.json).
 var repoCalls = []string{ext.RepositoryNamespace + ".parse", ext.RepositoryNamespace + ".check", ext.RepositoryNamespace + ".link",
-	ext.RepositoryNamespace + ".describe"}
+	ext.RepositoryNamespace + ".describe", ext.RepositoryNamespace + ".pr_status"}
 
 var storageCalls = []string{"storage.request", "storage.get", "storage.list", "storage.transaction",
-	"storage.queue.list", "storage.queue.enqueue", "storage.queue.claim", "storage.queue.ack", "storage.queue.forget", "storage.queue.retry",
+	"storage.queue.list", "storage.queue.enqueue", "storage.queue.claim", "storage.queue.renew", "storage.queue.ack", "storage.queue.forget", "storage.queue.retry",
 	"storage.blob.create", "storage.blob.write", "storage.blob.finish", "storage.blob.delete", "storage.blob.read"}
 
 func TestPluginSchemasListTheServersCalls(t *testing.T) {

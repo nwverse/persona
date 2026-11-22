@@ -3,6 +3,7 @@ package assistant
 import (
 	"cmp"
 	"context"
+	"errors"
 
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -30,6 +31,9 @@ type feishuTarget struct {
 	// NoDetour: a reply whose parent is gone fails (the hub's no_detour) instead of landing in the chat as a message of
 	// its own: for what belongs under that parent or nowhere (a to-do's line into its topic, a card into a topic).
 	NoDetour bool
+	// Read: a reply under the owner's "/read" in a group (feishu_read.go): its cards carry no workbench button, which
+	// would only be refused there.
+	Read bool
 }
 
 // params adds the target's fields to p; the zero target adds none, so the call is the same as before.
@@ -50,6 +54,9 @@ func (t feishuTarget) params(p map[string]any) map[string]any {
 // with what it was (feishuSendAs): how many went out, of which kind and for which conversation, can be counted from
 // the log (#8270).
 func (s *Service) botPostTo(ctx context.Context, to feishuTarget, replyTo string, card *feishubot.Card, fallback, key string) (string, error) {
+	if to.Read {
+		return s.botPostContent(ctx, to, replyTo, card.JSON(), fallback, key)
+	}
 	return s.botPostContent(ctx, to, replyTo, s.workbenchStamp(ctx, card).JSON(), fallback, key)
 }
 
@@ -63,8 +70,15 @@ func (s *Service) botPostContent(ctx context.Context, to feishuTarget, replyTo, 
 	if key != "" {
 		p["uuid"] = key
 	}
+	reminder, _ := ctx.Value(todoReminderSendKey{}).(*todoReminderSend)
+	if reminder != nil {
+		p["todo_reminder_pairing"] = map[string]any{"owner": reminder.owner, "paired_at": reminder.pairedAt}
+	}
 	to.params(p)
 	err := s.appCall(ctx, AppFeishu, FeishuPost, p, &res)
+	if reminder != nil && err == nil && res.MessageID == "" {
+		err = errors.New("todo reminder: delivery receipt unavailable")
+	}
 	if err == nil {
 		l, _ := ctx.Value(feishuSendKey{}).(feishuSend)
 		s.logf("bots: card sent: kind=%s machine=%s session=%s message=%s", cmp.Or(l.kind, "other"), cmp.Or(l.machine, "-"),

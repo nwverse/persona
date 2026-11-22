@@ -50,9 +50,10 @@ type extLink struct {
 	report atomic.Pointer[extwire.Report] // the assistant's
 	// savePending is the latest assistant report not written yet. One save worker runs at a time, with at most one
 	// trailing report coalesced behind its write; the manager bus loop only replaces savePending.
-	saveMu      sync.Mutex
-	savePending *extwire.Report
-	saveRunning bool
+	saveMu          sync.Mutex
+	savePending     *extwire.Report
+	saveRunning     bool
+	saveBeforeBegin func() // tests: runs between popping savePending and calling quiesce.beginOrDefer
 	// reports are the other managers' (manager_state.go).
 	reportsMu sync.Mutex
 	reports   map[string]*extwire.Report
@@ -140,11 +141,30 @@ func (h *Hub) saveExtReports() {
 		r := h.ext.savePending
 		h.ext.savePending = nil
 		h.ext.saveMu.Unlock()
-		ctx, cancel := context.WithTimeout(context.Background(), extReportStoreTimeout)
-		err := h.store.PutSetting(ctx, extReportKey, *r)
-		cancel()
-		if err != nil {
-			h.logf("extensions: keep the report: %v", err)
+		if r != nil {
+			if hook := h.ext.saveBeforeBegin; hook != nil {
+				hook()
+			}
+			// A snapshot refuses new writes; publish the deferred report and
+			// clear saveRunning atomically with quiesce.mu so resume cannot
+			// observe saveRunning==true and miss it (quiesce.go).
+			if !h.quiesce.beginOrDefer(func() {
+				h.ext.saveMu.Lock()
+				if h.ext.savePending == nil {
+					h.ext.savePending = r
+				}
+				h.ext.saveRunning = false
+				h.ext.saveMu.Unlock()
+			}) {
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), extReportStoreTimeout)
+			err := h.store.PutSetting(ctx, extReportKey, *r)
+			cancel()
+			h.quiesce.end()
+			if err != nil {
+				h.logf("extensions: keep the report: %v", err)
+			}
 		}
 		h.ext.saveMu.Lock()
 		if h.ext.savePending == nil {
@@ -154,6 +174,19 @@ func (h *Hub) saveExtReports() {
 		}
 		h.ext.saveMu.Unlock()
 	}
+}
+
+// resumeExtReportSave writes a report left pending by a snapshot's pause.
+func (h *Hub) resumeExtReportSave() {
+	h.ext.saveMu.Lock()
+	if h.ext.savePending == nil || h.ext.saveRunning {
+		h.ext.saveMu.Unlock()
+		return
+	}
+	h.ext.saveRunning = true
+	h.nodeWorkers.Add(1)
+	h.ext.saveMu.Unlock()
+	go h.saveExtReports()
 }
 
 // loadExtReport is the report kept before the hub restarted, until the manager reports again.
@@ -185,7 +218,7 @@ func machineExtrasEqual(a, b map[string]extwire.MachineExtras) bool {
 // features are the hub's features with those of the extensions serving part of the API.
 func (h *Hub) features() []string {
 	out := append(slices.Clone(proto.Features), featureSessionsList, featureSessionsLookup, featureSessionsPaneSource, featureSessionsManager, featureSessionsPageCounts,
-		featureSessionsSearch, featureAgentsPageCounts, featureSessionsHierarchy, featureSessionsCatalog, featureSessionsTodo, featureSessionsQuickFilters, featureSessionsJustFinished, featureSessionsAgentsOnly, featureMachineRename, featureDesktopUnregister, nodeproto.MCPWait)
+		featureSessionsSearch, featureAgentsPageCounts, featureAgentsProviderOR, featureSessionsHierarchy, featureSessionsCatalog, featureSessionsTodo, featureSessionsQuickFilters, featureSessionsJustFinished, featureSessionsAgentsOnly, featureMachineRename, featureDesktopUnregister, nodeproto.MCPWait, "starred_messages")
 	out = append(out, h.agentSessionArchiveFeatures()...)
 	out = append(out, h.agentAutonameFeatures()...)
 	out = append(out, h.sessionsSideFoldFeatures()...)
@@ -199,7 +232,13 @@ func (h *Hub) features() []string {
 	out = append(out, h.meetingTranscriptionFeatures()...)
 	out = append(out, h.recordingDayFeatures()...)
 	out = append(out, h.assistantSearchFeatures()...)
+	if h.defaultManagerNames(assistantwire.CapabilityAssistantSegments) {
+		out = append(out, assistantwire.CapabilityAssistantSegments)
+	}
 	out = append(out, h.directionSessionsFeatures()...)
+	if h.defaultManagerNames(assistantwire.CapabilityTaskInput) {
+		out = append(out, assistantwire.CapabilityTaskInput)
+	}
 	out = append(out, h.remoteImagesFeatures()...)
 	out = append(out, h.assistantStartServiceTierFeatures()...)
 	out = append(out, h.todoViewFeatures()...)
@@ -212,9 +251,9 @@ func (h *Hub) features() []string {
 	out = append(out, "assistant_views", "assistant_html_bridge")
 	for _, f := range h.extReport().Features {
 		switch f {
-		case featureAgentSessionArchives, featureAgentSessionArchiveClose, featureAgentAutoname, featureMeetingAttendance, featureMeetingConversation,
+		case assistantwire.CapabilityAssistantSegments, featureAgentSessionArchives, featureAgentSessionArchiveClose, featureAgentAutoname, featureMeetingAttendance, featureMeetingConversation,
 			featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingNotes, featureMeetingEcho, featureMeetingTranscription, featureRecordingDay,
-			featureAssistantSearch, featureDirectionSessions, featureAssistantStartServiceTier, featureSessionsSideFold, featureRemoteImages, featureTodoView, featureTodoPlaces, featureTodoAsks, featureTodoTimeline:
+			assistantwire.CapabilityTaskInput, featureAssistantSearch, featureDirectionSessions, featureAssistantStartServiceTier, featureSessionsSideFold, featureRemoteImages, featureTodoView, featureTodoPlaces, featureTodoAsks, featureTodoTimeline:
 			continue // only manager hello can promise fleet archives, requested names, meetings, all-day recordings, chat search, direction sessions, start speed, the side-session fold, remote images, the To-dos view, its answers and its history
 		}
 		if !slices.Contains(out, f) {
@@ -574,7 +613,7 @@ func (h *Hub) dialManager(ctx context.Context, id string) (net.Conn, error) {
 	}
 	cctx, cancel := context.WithCancel(context.Background())
 	nc := websocket.NetConn(cctx, taken.conn, websocket.MessageBinary)
-	rc := &relayConn{Conn: nc, done: func() {
+	rc := &relayConn{Conn: nc, ws: taken.conn, done: func() {
 		cancel()
 		close(taken.done)
 	}}
@@ -585,6 +624,7 @@ func (h *Hub) dialManager(ctx context.Context, id string) (net.Conn, error) {
 // relayConn ends its relay when it is closed.
 type relayConn struct {
 	net.Conn
+	ws   *websocket.Conn
 	once sync.Once
 	done func()
 	// uses counts the requests the transport gave it, idleAt is that count when it last went back to the pool idle

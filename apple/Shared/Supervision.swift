@@ -167,7 +167,7 @@ nonisolated struct TaskSupervision: Codable, Hashable, Sendable {
 
 /// The review state that holds now (`TodoItem.reviewState`).
 nonisolated enum ReviewState: String, Sendable {
-    case ongoing = "", pendingReview = "pending_review", rework, needsUser = "needs_user", accepted, cancelled
+    case ongoing = "", pendingReview = "pending_review", userCheck = "user_check", rework, needsUser = "needs_user", accepted, cancelled
 }
 
 /// How a review state is colored: pending / rework caution, needs_user danger, accepted positive, the rest neutral.
@@ -204,6 +204,7 @@ nonisolated extension TodoItem {
     var reviewState: ReviewState? {
         guard let supervision else { return nil }
         let st = ReviewState(rawValue: supervision.state) ?? .ongoing
+        if doneAt != nil, st == .userCheck { return .accepted }
         if doneAt == nil, st == .accepted, !supervision.acceptanceStands { return .ongoing }
         if doneAt == nil, st == .cancelled { return .ongoing }
         return st
@@ -217,6 +218,7 @@ nonisolated extension TodoItem {
         guard let supervision, let state = reviewState else { return nil }
         let (label, tone): (String, ReviewTone) = switch state {
         case .pendingReview: (String(localized: "Awaiting review"), .caution)
+        case .userCheck: (String(localized: "Awaiting your verification"), .caution)
         case .rework: (ReviewText.rework(round: supervision.round), .caution)
         case .needsUser: (String(localized: "Needs your call"), .danger)
         case .accepted: (String(localized: "Accepted"), .positive)
@@ -231,7 +233,9 @@ nonisolated extension TodoItem {
 
     /// Why the hub closed it (auto-complete or a review), when it did.
     var closedReason: String? {
-        guard autoDone || reviewDone, let r = doneReason?.trimmingCharacters(in: .whitespacesAndNewlines), !r.isEmpty else { return nil }
+        guard isCancelled || autoDone || reviewDone else { return nil }
+        let text = isCancelled ? cancellationReason : doneReason
+        guard let r = text?.trimmingCharacters(in: .whitespacesAndNewlines), !r.isEmpty else { return nil }
         return r
     }
 }

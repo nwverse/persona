@@ -49,6 +49,36 @@ func TestAgentNameUsesHerdrTabAndProtectsManualRename(t *testing.T) {
 	}
 }
 
+// The tab rename is a device call whose reply the node's reader loop reads; that loop also names every session row it
+// is sent (agentDisplay, which takes the naming lock), so the lock must not be held while the call waits (#11752).
+func TestAgentNameTabRenameDoesNotHoldTheNamingLock(t *testing.T) {
+	s, f, _ := namingFixture(t, func(w http.ResponseWriter, _ *http.Request) { namingReply(w, "Fix export") })
+	ctx := context.Background()
+	c := f.sessions["server"][0]
+	c.SpaceKind, c.SlotID, c.SlotName = "herdr", "w1:t1", "agent-1"
+	f.sessions["server"][0] = c
+	if err := s.store().PutSetting(ctx, agentsUseHerdrTabNameKey, true); err != nil {
+		t.Fatal(err)
+	}
+	held := false
+	f.onRename = func() {
+		if !s.agentNames.mu.TryLock() {
+			held = true
+			return
+		}
+		s.agentNames.mu.Unlock()
+	}
+	if !s.tryAgentName(ctx, "server", c, time.Now()) || len(f.sends) != 1 {
+		t.Fatalf("no tab rename: sends = %v", f.sends)
+	}
+	if held {
+		t.Fatal("the naming lock was held across the tab rename call")
+	}
+	if rec := s.agentNames.records[agentNameKey("server", c.SessionID)]; rec.TabName != "Fix export" || rec.LastFailure != "" {
+		t.Fatalf("the rename was not recorded: %+v", rec)
+	}
+}
+
 func TestAgentNameDoesNotOverwriteTabRenamedDuringNaming(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	s, f, _ := namingFixture(t, func(w http.ResponseWriter, _ *http.Request) {

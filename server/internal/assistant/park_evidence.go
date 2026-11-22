@@ -12,6 +12,9 @@ import (
 	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
+// nextActorExternal is the evidence.next_actor of a wait on a third party, a system or a date: no owner action.
+const nextActorExternal = "external"
+
 // ParkEvidence records the supervisor's source-backed account of an external wait. It is not a provider receipt
 // fetched by the hub: the supervisor must inspect the linked source before recording it. nil means a legacy park
 // without recorded evidence, not a verified contact. RecordedBy is set by task_review, never trusted from its input.
@@ -20,8 +23,11 @@ type ParkEvidence struct {
 	Target string `json:"target"`
 	URL    string `json:"url,omitempty"`
 	Wake   string `json:"wake"`
+	// NextActor is required on admission. Old reviews can have typed evidence without it.
+	NextActor string `json:"next_actor,omitempty"`
 	// InteractionID is an external_event's existing pending owner request, verified against this task's worker.
 	InteractionID string                        `json:"interaction_id,omitempty"`
+	PREvent       string                        `json:"pr_event,omitempty"`
 	Contact       *ParkContact                  `json:"contact,omitempty"`
 	Ready         bool                          `json:"ready,omitempty"`
 	RecordedBy    string                        `json:"recorded_by,omitempty"`
@@ -71,6 +77,14 @@ func readParkEvidence(input *ParkEvidence, waitingOn, until string, now time.Tim
 	}
 	text("evidence.target (the named person/reviewer or external object)", e.Target, 200)
 	text("evidence.wake (the observable change that ends this wait)", e.Wake, 600)
+	e.NextActor = strings.TrimSpace(e.NextActor)
+	switch e.NextActor {
+	case nextActorExternal:
+	case "owner":
+		missing = append(missing, "evidence.next_actor: only the owner can take the next step: use needs_user with why_owner, reason, recommend, options and cost_of_waiting")
+	default:
+		missing = append(missing, "evidence.next_actor (external for a third party, a system or a date that needs no owner action; use needs_user for owner action)")
+	}
 	want := ""
 	switch e.Kind {
 	case "person_reply", "merge_review":
@@ -128,6 +142,9 @@ func readParkEvidence(input *ParkEvidence, waitingOn, until string, now time.Tim
 	}
 	if e.Reply != nil && (e.Kind != "person_reply" || !parkReplyBinding(e)) {
 		missing = append(missing, "evidence.reply (person_reply only: larkcli source, brand, app_id, account_open_id, person_open_id, chat_id, thread_id and request_message_id matching the sent topic link)")
+	}
+	if e.PREvent != "" && (e.Kind != "external_event" || !externalPREvent(e.PREvent) || githubParkPRURL(e.URL) == "") {
+		missing = append(missing, "evidence.pr_event (external_event with a GitHub PR URL: terminal or terminal_or_review)")
 	}
 	return e, missing
 }

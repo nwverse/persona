@@ -15,7 +15,12 @@ import (
 // owner's message said in it at asked.
 func briefService(t testing.TB, said string) (*Service, *fakeHub, time.Time) {
 	t.Helper()
-	s, f := newQuietService(t)
+	return briefServiceOn(t, nil, said)
+}
+
+func briefServiceOn(t testing.TB, st Store, said string) (*Service, *fakeHub, time.Time) {
+	t.Helper()
+	s, f := newQuietServiceOn(t, st)
 	s.briefsOptional = false
 	asked := time.Date(2026, 11, 3, 9, 30, 0, 0, time.UTC)
 	f.setItems(proto.Item{ID: "m1", Seq: 1, TS: asked, Role: "user", Kind: proto.KindText, Text: said})
@@ -38,7 +43,7 @@ func tool(t testing.TB, s *Service, name string, args any) (string, bool) {
 
 func briefTask(over map[string]any) map[string]any {
 	task := map[string]any{"title": "fix the login crash", "prompt": "the login page crashes in landscape: fix it and add a test",
-		"machine": "box", "cwd": "/code/app", "readonly": true, "permission": "bypassPermissions", "why": "the repository is on box",
+		"role": "worker", "machine": "box", "cwd": "/code/app", "readonly": true, "permission": "bypassPermissions", "why": "the repository is on box",
 		"goal": "the login page no longer crashes in landscape", "done_when": []string{"PR merged to main", "a test covers landscape"},
 		"expect_minutes": 30}
 	for k, v := range over {
@@ -62,8 +67,8 @@ func todoByTitle(s *Service, title string) (Todo, bool) {
 	return Todo{}, false
 }
 
-// task_plan refuses a writable task without criteria and an expected time, and a read-only one without a goal and an
-// expected time; the refusal says what is missing, and nothing is planned.
+// task_plan refuses a writable task without criteria and a read-only one without a goal. Missing time is automatic;
+// a negative override is still invalid. Refusals name what is missing and plan nothing.
 func TestTaskPlanRequiresABrief(t *testing.T) {
 	s, _, _ := briefService(t, "please fix the login crash")
 	for _, c := range []struct {
@@ -71,11 +76,10 @@ func TestTaskPlanRequiresABrief(t *testing.T) {
 		over map[string]any
 		want []string
 	}{
-		{"writable, nothing", map[string]any{"readonly": false, "done_when": nil, "expect_minutes": nil}, []string{"a writable task needs", "done_when", "expect_minutes"}},
+		{"writable, nothing", map[string]any{"readonly": false, "done_when": nil, "expect_minutes": nil}, []string{"a writable task needs", "done_when"}},
 		{"writable, blank criteria", map[string]any{"readonly": false, "done_when": []string{" ", ""}}, []string{"done_when"}},
-		{"writable, no time", map[string]any{"readonly": false, "expect_minutes": 0}, []string{"expect_minutes"}},
+		{"negative time", map[string]any{"expect_minutes": -1}, []string{"expect_minutes"}},
 		{"read-only, no goal", map[string]any{"goal": nil, "done_when": nil}, []string{"a read-only task needs", "goal"}},
-		{"read-only, no time", map[string]any{"expect_minutes": nil}, []string{"expect_minutes"}},
 		{"continues without why", map[string]any{"continues": "todo_x"}, []string{"continues_why"}},
 	} {
 		got, isErr := tool(t, s, "task_plan", briefTask(c.over))
@@ -89,10 +93,10 @@ func TestTaskPlanRequiresABrief(t *testing.T) {
 		}
 	}
 	if strings.Contains(func() string {
-		got, _ := tool(t, s, "task_plan", briefTask(map[string]any{"readonly": false, "expect_minutes": 0}))
+		got, _ := tool(t, s, "task_plan", briefTask(map[string]any{"readonly": false, "expect_minutes": -1}))
 		return got
 	}(), "done_when (") {
-		t.Fatal("a refusal for the time alone must not ask for criteria that were given")
+		t.Fatal("a refusal for an invalid time must not ask for criteria that were given")
 	}
 	s.todos.mu.RLock()
 	n := len(s.todos.todos)
@@ -100,7 +104,7 @@ func TestTaskPlanRequiresABrief(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("%d to-dos were made by refused plans", n)
 	}
-	// A read-only task needs no criteria; a writable one with criteria and a time is planned (its card waits).
+	// A read-only task needs no criteria; a writable one with criteria is planned with an automatic estimate (its card waits).
 	if got, isErr := tool(t, s, "task_plan", briefTask(map[string]any{"done_when": nil})); isErr {
 		t.Fatalf("read-only with a goal and a time: %s", got)
 	}
@@ -138,6 +142,56 @@ func TestPlanCardCarriesTheBrief(t *testing.T) {
 	}
 	if n := len(s.briefTodos(b.ID)); n != 0 {
 		t.Fatalf("a brief was kept before the plan started (%d to-dos)", n)
+	}
+}
+
+// A rejected takeover scope aborts the adoption: the new card cannot keep the unapproved criterion or a linked Agent.
+func TestRiskyTakeOverScopeAbortsAdoption(t *testing.T) {
+	s, f, asked := briefService(t, "please fix the login crash before Friday")
+	closed := time.Now().UTC()
+	putTodo(s, Todo{ID: "todo_previous", Title: "fix the login crash", Origin: "conv1", DoneAt: &closed,
+		Supervision: &Supervision{Supervisor: "conv1", DoneWhen: []string{"a test covers landscape"}, ExpectMinutes: 30},
+		Agents:      []TodoAgent{{MachineID: "box", SessionID: "agent-old-1"}}})
+	first := todoNow(s, "todo_previous")
+	if _, err := s.ensureTaskBrief(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	f.setSessions("box", proto.Session{SessionID: "agent-old-1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+		Title: "fix the login crash", Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: time.Now()})
+	f.setItems(
+		proto.Item{ID: "m1", Seq: 1, TS: asked, Role: "user", Kind: proto.KindText, Text: "please fix the login crash before Friday"},
+		proto.Item{ID: "m2", Seq: 2, TS: asked.Add(time.Hour), Role: "user", Kind: proto.KindText,
+			Text: prompts.RenderSupervise(prompts.Supervise{Entries: []prompts.SuperviseEntry{{ID: first.ID, Title: first.Title, Kind: sigOrphaned}}})},
+	)
+	res, err := runJSON(t, s, "conv1", "agent_supervise", map[string]any{
+		"machine": "box", "session_id": "agent-old-1",
+		"done_when": []string{"PR merged to main", "deployed to production and checked"}, "expect_minutes": 5,
+	})
+	if err == nil || !strings.Contains(err.Error(), "only the owner may allow") {
+		t.Fatalf("risky takeover was not refused: %s (%v)", res, err)
+	}
+	if got := todoCount(s); got != 2 {
+		t.Fatalf("todos = %d, want the closed original and aborted card", got)
+	}
+	for _, todo := range s.todosOf(context.Background(), "*") {
+		if todo.ID == first.ID {
+			continue
+		}
+		if len(todo.Agents) != 0 {
+			t.Fatalf("aborted takeover linked an Agent: %+v", todo.Agents)
+		}
+		if todo.Supervision != nil && strings.Contains(strings.Join(todo.Supervision.DoneWhen, "\n"), "deployed to production") {
+			t.Fatalf("aborted takeover kept the unapproved scope: %+v", todo.Supervision)
+		}
+		if todo.DoneAt == nil {
+			t.Fatalf("aborted takeover left an open card: %+v", todo)
+		}
+		if _, linked := s.briefOfTodo(todo.ID); linked {
+			t.Fatalf("aborted takeover stayed on the previous task's brief: %+v", todo)
+		}
+	}
+	if lineage := s.taskLineage(first.ID); len(lineage) != 1 || lineage[0].SupersededBy != "" {
+		t.Fatalf("aborted takeover rewrote the previous task's lineage: %+v", lineage)
 	}
 }
 
@@ -360,9 +414,9 @@ func TestTaskScopeIsLogged(t *testing.T) {
 		t.Fatalf("task_scope: %s", got)
 	}
 	b, _ := s.briefOfTodo(todo.ID)
-	if len(b.DoneWhen) != 2 || len(b.Criteria) != 1 || b.ExpectMinutes != 30 || b.ExpectNow != 90 || len(b.Log) != 1 ||
-		b.Log[0].Kind != briefEventScope || strings.Join(b.Log[0].Dropped, "|") != "a test covers landscape" || b.Log[0].By != "conv1" ||
-		!b.ClockAt.Equal(b.Log[0].At) {
+	if len(b.DoneWhen) != 2 || len(b.Criteria) != 1 || b.ExpectMinutes != 30 || b.ExpectNow != 90 || len(b.Log) != 2 ||
+		b.Log[1].Kind != briefEventScope || strings.Join(b.Log[1].Dropped, "|") != "a test covers landscape" || b.Log[1].By != "conv1" ||
+		!b.ClockAt.Equal(b.Log[1].At) {
 		t.Fatalf("brief = %+v", b)
 	}
 	if v := onlyTodo(s).Supervision; strings.Join(v.DoneWhen, "|") != "PR merged to main" || v.ExpectMinutes != 90 {
@@ -374,7 +428,7 @@ func TestTaskScopeIsLogged(t *testing.T) {
 	if got, isErr := tool(t, s, "task_scope", risky); !isErr || !strings.Contains(got, "only the owner may allow") || !strings.Contains(got, "ask_user") {
 		t.Fatalf("a risky change after a supervision message: %s", got)
 	}
-	if b, _ := s.briefOfTodo(todo.ID); len(b.Log) != 1 || len(b.Criteria) != 1 {
+	if b, _ := s.briefOfTodo(todo.ID); len(b.Log) != 2 || len(b.Criteria) != 1 {
 		t.Fatalf("the refused change was applied: %+v", b)
 	}
 	// The owner says yes: the turn their message starts may add the step, and the message stays on the entry.
@@ -483,7 +537,7 @@ func TestBriefClockRaisesOverdueOnce(t *testing.T) {
 		t.Fatal("raised a second time for the same clock")
 	}
 	b, _ = s.briefOfTodo(todo.ID)
-	if b.Overdue == nil || len(b.Log) != 1 || b.Log[0].Kind != briefEventOverdue {
+	if b.Overdue == nil || len(b.Log) != 2 || b.Log[1].Kind != briefEventOverdue {
 		t.Fatalf("brief = %+v", b)
 	}
 	if open, _ := s.briefDigest(ctx, late, late.Add(-time.Hour), time.UTC); len(open) != 1 || !open[0].Overdue {
@@ -630,7 +684,7 @@ func TestContinuationUsesAuthorizedScope(t *testing.T) {
 		t.Fatalf("replacement: %d starts, %d to-dos, prompt %q", starts, todoCount(s), replacement)
 	}
 	if !strings.Contains(fresh, original) || brief.Request == nil || brief.Request.Text != "keep the recurring check enabled" ||
-		len(brief.Log) != 1 || len(brief.Log[0].Dropped) != 1 || brief.Log[0].Dropped[0] != original {
+		len(brief.Log) != 2 || len(brief.Log[1].Dropped) != 1 || brief.Log[1].Dropped[0] != original {
 		t.Fatalf("original assignment or scope history lost: %+v", brief)
 	}
 	t.Logf("synthetic full prompts (runes/bytes): fresh %d/%d, re-scoped continuation %d/%d",

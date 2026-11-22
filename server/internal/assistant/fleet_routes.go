@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/apierr"
@@ -52,7 +53,7 @@ func (s *Service) fleetHandler(next http.Handler) http.Handler {
 			case errors.Is(err, errHandoffElsewhere):
 				apierr.WriteCode(w, http.StatusForbidden, proto.CodeSecretHandoffElsewhere, err)
 			case errors.Is(err, errNotPending):
-				s.writeEnded(r.Context(), w, id, res, err)
+				s.writeEnded(r.Context(), w, id, res, err, r.Header.Get(RoleHeader) == roleExtension)
 			case errors.Is(err, errInvalidElicitation), errors.Is(err, errInvalidQuestionCancel), errors.Is(err, errInvalidEditedAnswer):
 				apierr.Write(w, http.StatusBadRequest, err)
 			default:
@@ -104,8 +105,10 @@ func (s *Service) fleetHandler(next http.Handler) http.Handler {
 // writeEnded answers a resolve of an interaction that is over already. Answered (or handed back, and handed back
 // again) it is the same outcome as the first time: 200 with already and the answer as the history keeps it, so the
 // app shows the card as answered rather than an error — the first answer's event may not have reached it. Otherwise
-// (expired, withdrawn, handed back, or unknown) 410, with how it ended when the history knows.
-func (s *Service) writeEnded(ctx context.Context, w http.ResponseWriter, id string, r proto.Resolution, err error) {
+// (expired, withdrawn, handed back, or unknown) 410, with how it ended when the history knows. An extension's token
+// (ext) is not given the answer: it may be a health card's or hold what was typed into a card's fields, which the
+// history does not show it either (docs/extensions/extensions.md "Never shown to extensions").
+func (s *Service) writeEnded(ctx context.Context, w http.ResponseWriter, id string, r proto.Resolution, err error, ext bool) {
 	var status string
 	var kept *proto.Resolution
 	if just := (*answeredJustNow)(nil); errors.As(err, &just) {
@@ -118,7 +121,7 @@ func (s *Service) writeEnded(ctx context.Context, w http.ResponseWriter, id stri
 	if status == "resolved" || (status == "dismissed" && r.Dismiss) ||
 		(status == "cancelled" && r.IsQuestionCancel() && kept != nil && kept.Cancel) {
 		out := map[string]any{"ok": true, "already": true, "status": status}
-		if kept != nil {
+		if kept != nil && !ext {
 			out["resolution"] = kept
 		}
 		apierr.WriteJSON(w, out)
@@ -162,8 +165,19 @@ func (s *Service) localFleetDeviceCall(ctx context.Context, p DeviceCall) (json.
 		return nil, false, nil
 	}
 	switch {
-	case p.Device == DeviceAll && p.Method == DeviceInteractionsList:
-		out, err := json.Marshal(map[string]any{"interactions": s.visiblePendingInteractions()})
+	case p.Method == DeviceInteractionsList:
+		if p.Device == DeviceAll {
+			out, err := json.Marshal(map[string]any{"interactions": s.visiblePendingInteractions()})
+			return out, true, err
+		}
+		m, ok := s.fleetMachine(p.Device)
+		if !ok {
+			return nil, true, ErrNoDevice
+		}
+		list := slices.DeleteFunc(s.visiblePendingInteractions(), func(ix proto.Interaction) bool {
+			return ix.MachineID != "" && ix.MachineID != m.ID
+		})
+		out, err := json.Marshal(map[string]any{"interactions": list})
 		return out, true, err
 	case p.Device == DeviceAll:
 		return nil, false, nil
@@ -202,7 +216,7 @@ func (s *Service) localFleetDeviceCall(ctx context.Context, p DeviceCall) (json.
 		sess, ok := s.nodeSession(m.ID, a.SessionID)
 		if ok {
 			sess.Assistant = m.isAssistant(sess)
-			if sess.Assistant {
+			if sess.Assistant && sess.Space == "" {
 				sess.Space = identity.SpaceOf(sess.Cwd)
 			}
 			s.nameAgentRow(m.ID, &sess)
@@ -305,6 +319,15 @@ func (s *Service) channelResolve(ctx context.Context, ch, id string, r proto.Res
 		return nil, err
 	}
 	r.AnsweredBy, r.Remembered = "", false
+	if ownerActionProposal(ix) {
+		if err := s.resolveOwnerProposal(ctx, ix, r, ownerActionCardProof(ix, ch)); err != nil {
+			if errors.Is(err, errNotPending) {
+				return map[string]any{"ok": false, "status": s.endedStatus(ctx, id, err)}, nil
+			}
+			return nil, err
+		}
+		return map[string]any{"ok": true}, nil
+	}
 	if err := s.resolve(id, r); err != nil {
 		if errors.Is(err, errNotPending) {
 			return map[string]any{"ok": false, "status": s.endedStatus(ctx, id, err)}, nil
