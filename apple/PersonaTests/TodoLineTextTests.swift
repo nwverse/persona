@@ -130,6 +130,11 @@ struct TodoLineTextTests {
             #expect(!text.contains("["), "\(language): \(text)")
             if language != "en" { #expect(text.unicodeScalars.contains { $0.value >= 0x3040 }, "\(language): \(text)") }
         }
+        // A due day at a row's end never reads as a parked row's "until …" on line 2, a day's name or a date.
+        for day in [now.addingTimeInterval(86_400 * 3), now.addingTimeInterval(86_400 * 30)] {
+            let until = words("until \(TodoTimeWords.day(day, now: now, words: words, calendar: utc)) [To-dos Line]")
+            #expect(TodoTimeWords.due(day, now: now, words: words, calendar: utc) != until, "\(language): \(until)")
+        }
     }
 }
 

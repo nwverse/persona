@@ -14,7 +14,9 @@ struct TodoListCell: View {
     var cell: TodosListModel.Row
     var model: TodosListModel
 
-    /// A row's one padding is its own (`TodoListRow`); the card's inner inset at its sides, none above or below.
+    /// A row's one padding is its own (`TodoListRow`); the card's inner inset at its sides, none above or below. Set by
+    /// the list on the row's outermost view (`TodoListView.row`): set here, inside the swipe and the long press, the
+    /// list never saw it, and the rows kept the system's margins on every side.
     static let insets = EdgeInsets(top: Theme.Space.flush, leading: Theme.Space.l, bottom: Theme.Space.flush, trailing: Theme.Space.l)
 
     var body: some View {
@@ -26,7 +28,6 @@ struct TodoListCell: View {
                 }
                 TodoRowDialogs(model: model, key: cell.id)
             }
-            .listRowInsets(Self.insets)
             .modifier(TodoRowActions(model: model, key: cell.id, row: c))
     }
 }

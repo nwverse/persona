@@ -60,16 +60,19 @@ struct TodoListView: View {
             .accessibilityIdentifier("todos.v1") // the list itself
             .themedPage()
             .refreshable { await model.refresh() }
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentInsets.top } action: { _, top in
-                sight.covered = top
-                lines.covered = top
+            .onScrollGeometryChange(for: TodoListEdges.self) { TodoListEdges($0) } action: { _, edges in
+                sight.covered = edges.top
+                sight.atEnd = edges.atEnd
+                lines.covered = edges.top
             }
             .onScrollPhaseChange { old, phase in
                 model.hold.set(.scrolling, phase != .idle)
+                sight.scrolling = phase != .idle
                 if phase != .idle { model.settleArrivals() } // nothing fades in under a finger
                 // Where a scroll came to rest; not the idle a page is made in, before its rows are drawn.
-                if phase == .idle, old != .idle, let top = sight.top(in: model.groups) {
-                    workspace.rested(workspace.place, at: top, shown: shownHere)
+                if phase == .idle, old != .idle {
+                    sight.restedAtEnd = sight.atEnd
+                    if let top = sight.top(in: model.groups) { workspace.rested(workspace.place, at: top, shown: shownHere) }
                 }
             }
             .onAppear {
@@ -77,18 +80,24 @@ struct TodoListView: View {
                 model.byProject = byProject
                 model.start()
                 model.hold.set(.outOfSight, false)
+                // Back from a to-do pushed over it: a list that rested at its very end is at its end again. The to-do
+                // page has no foot toolbar, so while it is in front the list's foot inset is smaller, and a list at its
+                // end is held to that shorter end; once the toolbar is back it would sit lower than it rested.
+                if placed, sight.restedAtEnd { backToTheEnd(proxy) }
             }
             .onDisappear { model.hold.set(.outOfSight, true) }
-            // A choice re-files the list from its top: the line over the first card, else the first heading, once the list
-            // has the new rows. Its guard line starts in sight, so the subtitle waits until it scrolls away again.
+            // A choice re-files the list from its top, once the list has the new rows: its first line or row is put at the
+            // foot of what is in sight, which the list cannot scroll that far up for, so it stops at its top, the first
+            // heading in sight (a heading's own id puts its rows at the top, the heading under the bar). Its guard line
+            // starts in sight, so the subtitle waits until it scrolls away again.
             .onChange(of: model.choice) { _, _ in
                 lines.guardGone = false
                 let target = TodosTopLines.first(offline: TodosTopLines.offline(app), hidden: model.hiddenNeeds)
-                    ?? model.groups.first.map { TodosSectionHeader.id($0.id) }
+                    ?? model.groups.first.map { $0.drawnKeys.first ?? TodosSectionHeader.id($0.id) }
                 guard let target else { return }
                 Task { @MainActor in
                     await Task.yield()
-                    proxy.scrollTo(target, anchor: .top)
+                    proxy.scrollTo(target, anchor: .bottom)
                 }
             }
             // Back where the place's list last rested, once its rows are laid out: only for a page made anew (another
@@ -117,7 +126,7 @@ struct TodoListView: View {
         .navigationBarTitleDisplayMode(.inline)
         .modifier(TodosSubtitle(model: model, lines: lines))
         .modifier(TodosViewOptions(model: model))
-        .pageSearchable(text: $model.query, prompt: String(localized: "Search To-dos [To-dos Search]"))
+        .pageSearchable(text: $model.query, placement: Self.searchPlacement, prompt: String(localized: "Search To-dos [To-dos Search]"))
         .modifier(TodosFootBar(model: model, creating: $creating))
         .sheet(item: Binding(get: { model.dating.flatMap { key in model.item(key).map { DueTarget(key: key, item: $0) } } },
                              set: { model.dating = $0?.key })) { target in
@@ -156,6 +165,28 @@ struct TodoListView: View {
         guard let key = pickedChat else { return }
         pickedChat = nil
         app.openAssistantConversation(key)
+    }
+
+    /// Where the search field is: iOS 26's foot toolbar (the system's); before it, the drawer under the title, always
+    /// shown, since under an inline title the system's drawer starts folded away until a pull, and a calm list would
+    /// show no way to search at all.
+    private static var searchPlacement: SearchFieldPlacement? {
+        if #available(iOS 26.0, *) { return nil }
+        return .navigationBarDrawer(displayMode: .always)
+    }
+
+    /// The list at its end again, as it rested: put to its last drawn row's top, which a list at its end cannot reach,
+    /// so the list stops at its end. Each moment of the way back while it is not there (the toolbar's inset comes back
+    /// over the pop's frames), a second at most; never while a finger moves it.
+    private func backToTheEnd(_ proxy: ScrollViewProxy) {
+        Task { @MainActor in
+            for _ in 0..<20 where !Task.isCancelled && !sight.scrolling {
+                if !sight.atEnd, let last = model.groups.last(where: { !$0.drawnKeys.isEmpty })?.drawnKeys.last {
+                    proxy.scrollTo(last, anchor: .top)
+                }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        }
     }
 
     // MARK: The list
@@ -203,6 +234,8 @@ struct TodoListView: View {
             // Where its middle is in the list's frame, kept unobserved: whether the bars cover it.
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .scrollView).midY } action: { sight.middles[key] = $0 }
             .id(key)
+            // The row's list traits on its outermost view, where the list reads them (`TodoListCell.insets`).
+            .listRowInsets(TodoListCell.insets)
         }
     }
 
@@ -223,6 +256,7 @@ struct TodoListView: View {
             .contentShape(.rect)
         }
         .listRowInsets(TodoListCell.insets)
+        .disabled(model.searching) // a search opens every fold: there is nothing to fold until it ends
         .todosFoldAccessibility(fold)
     }
 
@@ -231,7 +265,8 @@ struct TodoListView: View {
             AssistantOfflineNotice(manager: offline)
         } else if model.searching {
             // Nothing open matches: the line under it widens the search to the chats.
-            EmptyStateView(symbol: Theme.Icon.search, title: String(localized: "No Results for “\(model.query)”"),
+            EmptyStateView(symbol: Theme.Icon.search,
+                           title: String(localized: "No Results for “\(model.query.trimmingCharacters(in: .whitespacesAndNewlines))”"),
                            message: String(localized: "Search looks through the titles and notes of your open to-dos. [To-dos Search]"))
         } else {
             switch model.choice {
@@ -276,15 +311,13 @@ private struct TodosChatSearch: Identifiable {
 /// form: the Filter's glyph (filled while a choice is on, a tap back to All), "Filtered by: ‹choice›" in the middle, and
 /// +, with the search field under the title. The calm list and a list with no rows have no Filter; when it comes back it
 /// takes the toolbar's free leading slot, so no row moves. Toolbar items are chosen on the view, since a toolbar's
-/// builder cannot ask the OS (docs/lessons/ios.md "iOS 18.6 floor"). Its own modifier, so a choice or a count redraws
-/// the toolbar, not the list (P5).
+/// builder cannot ask the OS (docs/lessons/ios.md "iOS 18.6 floor"). Its own modifier reading the model's few flags,
+/// never its layout, so a choice or a count redraws the toolbar and a landing does not (P5).
 private struct TodosFootBar: ViewModifier {
     var model: TodosListModel
     @Binding var creating: Bool
 
-    /// Whether the Filter is drawn: not before the list can draw, in the calm list, or while nothing is listed under
-    /// any choice.
-    private var filters: Bool { model.ready && !model.calm && model.hasRows }
+    private var filters: Bool { model.filters }
     private var filtered: Bool { filters && model.choice != .all }
 
     func body(content: Content) -> some View {
@@ -440,8 +473,9 @@ private struct TodosNewButton: View {
                 .labelStyle(.iconOnly)
         }
         .keyboardShortcut("n", modifiers: .command)
+        .accessibilityShowsLargeContentViewer()
         .accessibilityIdentifier("todos.new")
-        if prominent { button.themedButton(prominent: true) } else { button.accessibilityShowsLargeContentViewer() }
+        if prominent { button.themedButton(prominent: true) } else { button }
     }
 }
 
@@ -453,7 +487,7 @@ private struct TodosSubtitle: ViewModifier {
     var lines: TodosTopLinesSight
 
     func body(content: Content) -> some View {
-        content.navigationSubtitleWhenSupported(model.hiddenNeeds > 0 && lines.guardGone ? model.subtitle : "")
+        content.navigationSubtitleWhenSupported(lines.guardGone ? model.subtitle : "")
     }
 }
 
@@ -516,15 +550,16 @@ private struct TodosViewMenuItems: View {
             }
         }
         if !model.calm {
-            Section {
-                if let note = TodosFilter.groupingNote(model.choice) {
-                    Button {} label: {
-                        Text("Group by Project [To-dos View]")
-                        Text(note)
-                    }
-                    .disabled(true)
-                    .accessibilityIdentifier("todos.view.byProject")
-                } else {
+            if let note = TodosFilter.groupingNote(model.choice) {
+                // Greyed, with why in the section's heading: a disabled item's own words are too faint to read on the
+                // menu's glass (docs/lessons/ios.md "A switch with words under it inside a menu").
+                Section(note) {
+                    Button {} label: { Text("Group by Project [To-dos View]") }
+                        .disabled(true)
+                        .accessibilityIdentifier("todos.view.byProject")
+                }
+            } else {
+                Section {
                     Toggle(isOn: Binding(get: { model.byProject }, set: { on in
                         Haptics.tap()
                         model.byProject = on
@@ -541,9 +576,10 @@ private struct TodosViewMenuItems: View {
 // MARK: Headers, folds and the lines over the list
 
 /// A section's title with its count, the system's inset grouped header (no font of ours), its words over the rows'
-/// ticks: Needs you's is N in the needs-you badge, as the drawer says it (while searching, what matches); the others
-/// count the rows under them in plain numbers (DESIGN_SYSTEM 3.4, the Agents list's state headers). A view of its own,
-/// so N changing redraws the header, not the list (P5). Spoken once: the title, then the count as its value.
+/// ticks: Needs you's is N in the needs-you badge, as the drawer says it; the others, and Needs you's while searching
+/// (what matches, which is not N), count the rows under them in plain numbers (DESIGN_SYSTEM 3.4, the Agents list's
+/// state headers), so the blue badge only ever says N. A view of its own, so N changing redraws the header, not the
+/// list (P5). Spoken once: the title, then the count as its value.
 private struct TodosSectionHeader: View {
     var model: TodosListModel
     var group: TodosListGroup
@@ -552,14 +588,15 @@ private struct TodosSectionHeader: View {
     static func id(_ group: String) -> String { "todos.header." + group }
 
     var body: some View {
-        let count = group.needs && !model.searching ? model.needsYou : group.count
+        let badge = group.needs && !model.searching
+        let count = badge ? model.needsYou : group.count
         HStack(spacing: Theme.Space.sm) {
-            SectionHeader(title: title, count: group.needs ? count : nil, tone: StatusPalette.needsYou)
-            if !group.needs, count > 0 { Text(verbatim: String(count)).monospacedDigit() }
+            SectionHeader(title: title, count: badge ? count : nil, tone: StatusPalette.needsYou)
+            if !badge, count > 0 { Text(verbatim: String(count)).monospacedDigit() }
         }
         .textCase(nil)
         .lineLimit(1)
-        .todosHeaderInsets()
+        .listRowHorizontalInsets(Theme.Space.l)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)
         .accessibilityValue(String(count))
@@ -586,9 +623,11 @@ private struct TodosTailFold: View {
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .disabled(model.searching) // a search opens every fold
         .textCase(nil)
-        .todosHeaderInsets()
+        .listRowHorizontalInsets(Theme.Space.l)
         .todosFoldAccessibility(fold)
+        .id(TodosSectionHeader.id("tail:" + fold.id)) // its group's: where a choice scrolls the list to
     }
 }
 
@@ -634,7 +673,13 @@ private struct TodosTopLines: View {
         let offline = Self.offline(app) && model.hasRows
         if offline || hidden > 0 {
             Section {
-                if offline { TodosOfflineLine(model: model).id("todos.lines.offline") }
+                if offline {
+                    // A surface over the cards: as wide as they are.
+                    TodosOfflineLine(model: model)
+                        .id("todos.lines.offline")
+                        .listRowInsets(EdgeInsets(top: Theme.Space.flush, leading: Theme.Space.flush, bottom: Theme.Space.flush,
+                                                  trailing: Theme.Space.flush))
+                }
                 if hidden > 0 {
                     TodosGuardLine(text: String(localized: "\(hidden) more need you [To-dos Filter]")) {
                         Haptics.tap()
@@ -648,11 +693,11 @@ private struct TodosTopLines: View {
                         if sight.guardGone != gone { sight.guardGone = gone }
                     }
                     .id("todos.lines.guard")
+                    .listRowInsets(TodoListCell.insets)
                 }
             }
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
-            .listRowInsets(TodoListCell.insets)
         }
     }
 }
@@ -689,7 +734,8 @@ struct TodosGuardLine: View {
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(text)
+        .accessibilityLabel([text, String(localized: "Show All [To-dos Filter]")]
+            .joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
         .accessibilityHint(String(localized: "Shows all your to-dos. [To-dos Filter]"))
         .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("todos.guard")
@@ -745,6 +791,8 @@ private struct TodosSearchChatsRow: View {
                     }
                     .contentShape(.rect)
                 }
+                // Plain, so its glyph and chevron are the grays they say, not the accent a list's button tints them.
+                .buttonStyle(.plain)
                 .listRowInsets(TodoListCell.insets)
                 .accessibilityIdentifier("todos.searchChats")
             }
@@ -753,12 +801,6 @@ private struct TodosSearchChatsRow: View {
 }
 
 private extension View {
-    /// A header's words, a fold's too, over the rows' ticks: the cards' inner inset at their sides (iOS 26 and later;
-    /// iOS 18 can set only all four insets, so its headers keep the system's).
-    @ViewBuilder func todosHeaderInsets() -> some View {
-        if #available(iOS 26.0, *) { listRowInsets(.horizontal, Theme.Space.l) } else { self }
-    }
-
     /// A fold spoken as `FoldButton` speaks a section's: its name, folded or not, and how many it holds.
     func todosFoldAccessibility(_ fold: TodosListGroup.Fold) -> some View {
         let detail = String(localized: "\(fold.keys.count) to-dos [To-dos List]")
@@ -771,6 +813,19 @@ private extension View {
     }
 }
 
+/// What the list's scroll geometry says the page needs: how much of its top the bars cover, and whether it is at its
+/// very end (a list shorter than its frame has no end to come back to).
+struct TodoListEdges: Equatable {
+    var top: CGFloat
+    var atEnd: Bool
+
+    init(_ g: ScrollGeometry) {
+        top = g.contentInsets.top
+        let end = g.contentSize.height + g.contentInsets.bottom - g.containerSize.height
+        atEnd = end > -g.contentInsets.top && g.contentOffset.y >= end - 1
+    }
+}
+
 /// The rows a list has drawn, and where they are: where the list rests, by its top row in sight. Not observed: scrolling
 /// redraws nothing.
 @MainActor final class TodoListSight {
@@ -780,6 +835,10 @@ private extension View {
     var middles: [String: CGFloat] = [:]
     /// How much of the list's top the bars cover.
     var covered: CGFloat = 0
+    /// The list is at its very end now; it came to rest there; a finger moves it.
+    var atEnd = false
+    var restedAtEnd = false
+    var scrolling = false
 
     /// The first row whose middle is clear of the bars.
     func top(in groups: [TodosListGroup]) -> String? {

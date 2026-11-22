@@ -189,7 +189,8 @@ nonisolated enum TodoTimeWords {
         if calendar.isDate(date, inSameDayAs: now) { return words("Due today [To-dos Due]") }
         var style = Date.FormatStyle(calendar: calendar, timeZone: calendar.timeZone).locale(words.formatting)
         let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: date)).day ?? 99
-        if (1...6).contains(days) { return words("Due \(date.formatted(style.weekday(.abbreviated))) [To-dos Due]") }
+        // A day's name has words of its own: Japanese adds the word for "day of the week" after an abbreviated one.
+        if (1...6).contains(days) { return words("Due \(date.formatted(style.weekday(.abbreviated))) [To-dos Due Weekday]") }
         style = style.month(.abbreviated).day()
         if calendar.component(.year, from: date) != calendar.component(.year, from: now), abs(days) > 180 { style = style.year() }
         return words("Due \(date.formatted(style)) [To-dos Due]")
@@ -211,15 +212,6 @@ nonisolated enum TodoTimeWords {
     }
 
     // Said in full for VoiceOver, where "16m" reads as a length and "Apr 4" does not say what it is.
-
-    /// "10:00" today; "Tuesday" within six days either way; "April 3" further.
-    static func spokenDay(_ date: Date, now: Date, words: TodoWords, calendar: Calendar) -> String {
-        var style = Date.FormatStyle(calendar: calendar, timeZone: calendar.timeZone).locale(words.formatting)
-        if calendar.isDate(date, inSameDayAs: now) { return date.formatted(style.hour().minute()) }
-        let days = abs(calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: date)).day ?? 99)
-        style = days <= 6 ? style.weekday(.wide) : style.month(.wide).day()
-        return date.formatted(style)
-    }
 
     /// "Due today", "Due Saturday", "Due April 3".
     static func spokenDue(_ date: Date, now: Date, words: TodoWords, calendar: Calendar) -> String {

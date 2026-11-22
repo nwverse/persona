@@ -196,12 +196,9 @@ would narrow little. Each client draws the Filter in its own idiom (stage 4); th
 `docs/assistant/inbox.md`): it is drawn as a Filter, not a bar, because the list already lands on every section with
 its heading and count, so the control only narrows it, where the Inbox's bar is the way to the sections it does not
 land on; the list lands on **All**, because To-dos is also the owner's plain list and All already
-puts Needs you first; **All comes first**, by the rule both shipped bars already follow, that a bar's landing choice is
-its first chip (the Inbox lands on Needs you, its first; the Agents list lands on All, its first), so landing leaves
-the strip at its start with Needs you and its count beside All in any column, where a last chip would have to be
-scrolled to and push them out of a 320-pt column (all three prototypes hit this); To do takes FYI's place, since To-dos
-has no FYI; Done keeps the to-do's shipped zh-Hans word (section 3.11); and the calm rule below hides the bar. Owner
-decision 3 names all five. The Inbox keeps its order: its All is the reset, not the landing.
+puts Needs you first; **All is listed first** in the Filter's menu, its landing choice; To do takes FYI's place, since
+To-dos has no FYI; Done keeps the to-do's shipped zh-Hans word (section 3.11); and the calm rule below hides the Filter.
+Owner decision 3 names all five. The Inbox keeps its order: its All is the reset, not the landing.
 
 **Answer to #9053.** No filter is drawn as navigation: places have identity, and states are the Filter. There is no
 third column: places live in the existing sidebar column. There is no second pattern by width: the same tree is the
@@ -473,14 +470,14 @@ The mock values are the prototypes' data (section 4.2).
 
 | Number | Definition | Shown on | Mock |
 | --- | --- | --- | --- |
-| **N** | open to-dos whose phase is `needs_you` (Can wait excluded), each counted once however many of its runs ask | the sidebar or drawer **To-dos** row (blue, hidden at 0); the bar's Needs you; the Needs you header in All; the tray's "To-dos" group; the To-dos widget | 3 |
+| **N** | open to-dos whose phase is `needs_you` (Can wait excluded), each counted once however many of its runs ask | the sidebar or drawer **To-dos** row (blue, hidden at 0); the Needs you header in All; the Filter menu's Needs You line; under a choice that hides it, the guard line and, on iOS 26, the title's subtitle; the tray's "To-dos" group; the To-dos widget | 3 |
 | A place's part of N | the same rule within a project | the project's sidebar row; a group header in By Project | Kyoto trip 1 · Weather App 1 · Home 1 |
 | **The Assistant's Needs you** | N + M, where M = sessions needing the owner that belong to no to-do + the conversation's own cards + plans waiting for Start + drafts (DESIGN_SYSTEM 4.8) | the composer's Needs you entry, grouped "To-dos · 3" / "Elsewhere · 1" so the parts add up | 4 |
 | Agents badge | sessions needing the owner (unchanged, `docs/design/DECISIONS.md` ("11-10 Needs You counts sessions")); a to-do's run counts here as the session it is | the Agents tab, the Agents list's Needs you section and filter | 2 |
 | Fleet Live Activity header | sessions needing the owner (unchanged, `docs/apple/live-activity.md`) | the Lock Screen and the Dynamic Island | 2 |
-| In progress | the rows of Working and Waiting; Just finished is listed at its foot but not counted (unchanged, #8237) | the bar's In progress chip; the tray's In progress entry | 5 |
+| In progress | the rows of Working and Waiting; Just finished is listed at its foot but not counted (unchanged, #8237) | the Filter menu's In Progress line; the tray's In progress entry | 5 |
 | App icon | unchanged (the tab badges added up, #5824); its double counting belongs to #5974 | — | — |
-| Section counts | rows in the section in the current place; tinted only for Needs you | section headers, bar chips | Working 2 · Waiting 3 · To do 2 · Just finished 2 |
+| Section counts | rows in the section in the current place; tinted only for Needs you | section headers, the Filter menu's lines | Working 2 · Waiting 3 · To do 2 · Just finished 2 |
 
 One number changes, named in owner decision 4: the Assistant's Needs you counts each to-do once, however many of its
 runs ask, and says so by grouping its rows. The web's separate Parked entry (#9325) folds into In progress's Waiting
@@ -860,7 +857,7 @@ page per to-do with its conversation beside it").
     folded). In progress counts Working + Waiting (5 in the mock), with Just finished as an uncounted group at its foot,
     as the tray shows it since #8237. Can wait under Needs you is listed, not counted, and holds held asks and Awaiting
     Reply. The bar has the Inbox's chips with the landing choice first (All · Needs you · In progress · To do · Done),
-    landing on All, with the calm rule.
+    landing on All, with the calm rule (amended 2026-11-21: drawn as a Filter at the list's foot, section 3.3).
   - (b) As (a), in the order the Agents list uses since #9751: **Needs you · Working · Just finished · Waiting · To
     do**, with In progress counting every row it lists (7 in the mock). One order on To-dos,
     the tray, the tree and Agents, at the cost of DESIGN_SYSTEM 3.4's rule and #8237's uncounted group.
@@ -869,7 +866,8 @@ page per to-do with its conversation beside it").
   - (d) PR #9823's five peer groups (Needs you · In progress · Awaiting acceptance · Stopped unfinished · Parked).
 - **Named changes in (a):**
   - The bar's differences from the Inbox's (section 3.3): it lands on All, which comes first (the landing choice
-    first, as in the Agents list), To do takes FYI's place, Done keeps the to-do's word, and the calm rule hides it.
+    first, as in the Agents list), To do takes FYI's place, Done keeps the to-do's word, and the calm rule hides it
+    (amended 2026-11-21: drawn as a Filter at the list's foot, section 3.3).
   - The web's Parked entry (#9325) folds into In progress's Waiting rows; Parked is a reason, not a group.
   - A finished open to-do stays in Just finished while unseen and 24 h after it is seen, then files in To do ("Finished
     Tue · Mark Done"), never in Done. Today rule 9a files it in Done once seen
@@ -1233,7 +1231,7 @@ Stages 1 and 2 are additive and ship visible value, the merged page, before any 
 | P1 Defaults first | met by the design; walkthrough task 9 verifies | The default fits one sentence (top of this document). A new to-do shows five things; the calm rule keeps a first-use list plain; the list lands on All. The prototypes draw it (V1's `iphone/list~calm`) |
 | P2 Progressive disclosure | met by the design | Developer detail sits behind one folded Work details line and in run sessions; Hand to Agent moves to ⋯ (Agents audience); tool work is one line per run; the full transcript is one level deeper (escalation table) |
 | P3 User control | met by the design, one deviation | Undo on tick, answer, scope change and Don't handle; Delete confirms; every number has a one-line definition (counts table); the sidebar's fold state is the owner's. **Deviation:** the sidebar steps aside by itself while the pane is open on iPad landscape; it is transient, never saved, reverses on close, and is owner decision 2 (ii) |
-| P4 Consistency first | met by the design, with named deviations | Reuses `CapsuleFilterBar` / `QuickFilterBar`, `PendingCards`' card, `floatingFooter`, `CountBadge`, shipped state words and DESIGN_SYSTEM 4.3's states. **Kept as decided:** DESIGN_SYSTEM 3.4's section order, #8237's uncounted Just finished, the Inbox's bar order, Fleet's session count. **Deviations, each with its reason in section 5:** the bar's five differences from the Inbox (section 3.3); the Someday swipe, the Parked group folding into Waiting and Got it's retirement (decision 3); counting each to-do once in the Assistant's Needs you and the one-line door adapting DESIGN_SYSTEM 4.8's Team panel rule (decision 4); the per-place overlay, the Duo's 320-pt paper minimum, the main-chat push and the web's fixed 440 column (decision 2). New patterns (the pane, the pinned header, the addressee chip, rounds) go into `DESIGN_SYSTEM.md` with the build |
+| P4 Consistency first | met by the design, with named deviations | Reuses the Inbox's five choices and words for the Filter, drawn as a pop-up at the iOS list's foot (amended 2026-11-21, section 3.3), `PendingCards`' card, `floatingFooter`, `CountBadge`, shipped state words and DESIGN_SYSTEM 4.3's states. **Kept as decided:** DESIGN_SYSTEM 3.4's section order, #8237's uncounted Just finished, the Inbox's bar order, Fleet's session count. **Deviations, each with its reason in section 5:** the Filter's differences from the Inbox's bar (section 3.3); the Someday swipe, the Parked group folding into Waiting and Got it's retirement (decision 3); counting each to-do once in the Assistant's Needs you and the one-line door adapting DESIGN_SYSTEM 4.8's Team panel rule (decision 4); the per-place overlay, the Duo's 320-pt paper minimum, the main-chat push and the web's fixed 440 column (decision 2). New patterns (the pane, the pinned header, the addressee chip, rounds) go into `DESIGN_SYSTEM.md` with the build |
 | P5 Model and product are separate | met by the design | Nothing picks or names a model. The steward's turn uses the assistant's configured model; the addressee chip never names a runtime or model |
 | P6 Rules are checkable | met by the design; the checks are built in stages 0–5 | Six fixture sets (section 7.2), the guards (section 7.7), the walkthrough's measures (section 4.3) and screenshots of every key frame in both appearances, attached to the PR (section 4.4) |
 | P7 Fast, local-first and stateful | met by the design; to measure in the build | Optimistic tick and answer; Sending → Processing, with Delivered and Queued kept apart from execution; drafts kept per to-do above the view tree; unknown delivery never resent; the cached list offline; the web's tick becomes optimistic (stage 4). Targets named; unmeasured: the Duo animator and the Duo's keyboard height |

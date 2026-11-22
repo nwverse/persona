@@ -102,8 +102,8 @@ nonisolated struct TodoRowWrite: Equatable, Sendable {
 /// The order inside each section (⋯ › Sort By, kept on the device as `todos.v1.sort`): the hub's, by its rank, unless
 /// the owner picks the most recently changed first (the old page's order), the earliest due first (the one way to order
 /// Working and Waiting by date) or the high-priority ones first, which their rows mark. A sort never moves a section, and
-/// Needs you and Can wait keep the hub's order, its deadlines first, under every sort. A kept value this build does not
-/// offer reads as Suggested.
+/// Needs you and Can wait keep the hub's order, its deadlines first, and closed rows their newest first, under every
+/// sort. A kept value this build does not offer reads as Suggested.
 nonisolated enum TodosListSort: String, CaseIterable, Identifiable, Sendable {
     case suggested, activity, due, priority
     var id: String { rawValue }
@@ -173,8 +173,6 @@ nonisolated enum TodosListLayout {
         var groups: [TodosListGroup] = []
         /// The calm rule holds: no Filter, no headers.
         var calm = false
-        /// Rows in Done.
-        var doneRows = 0
         /// The ones closed today (the Filter's Done says how many).
         var doneToday = 0
         /// The search field has words: the rows are what they match.
@@ -193,7 +191,6 @@ nonisolated enum TodosListLayout {
         var rows = input.rows.filter { !carried.contains($0.id) }
         var out = Output()
         for row in rows { out.sections[key(row)] = row.section }
-        out.doneRows = rows.count(where: { $0.section == TodoListSection.done })
         let closedToday = { (row: TodoFiled) in
             input.items[row.id]?.doneAt.map { input.calendar.isDate($0, inSameDayAs: input.now) } ?? false
         }
@@ -212,10 +209,13 @@ nonisolated enum TodosListLayout {
         let shown = Set(choice.sections)
         var bySection: [String: [TodoFiled]] = [:]
         for row in rows where shown.contains(row.section) { bySection[row.section, default: []].append(row) }
-        // What needs the owner keeps the hub's order (its deadlines first) under every sort; the sort orders the rest.
+        // What needs the owner keeps the hub's order (its deadlines first) under every sort, and what closed its newest
+        // first, since a closed row shows neither a due day nor its priority; the sort orders the rest.
         let hubsOrder: Set<String> = [TodoListSection.needsYou, TodoListSection.canWait]
         func sorted(_ list: [TodoFiled]) -> [String] {
-            list.allSatisfy { hubsOrder.contains($0.section) } ? list.map(key) : order(list, input).map(key)
+            if list.allSatisfy({ hubsOrder.contains($0.section) }) { return list.map(key) }
+            if list.allSatisfy({ $0.section == TodoListSection.done }) { return newestFirst(list, input).map(key) }
+            return order(list, input).map(key)
         }
         func fold(_ section: String, title: String, _ list: [TodoFiled]) -> TodosListGroup.Fold? {
             list.isEmpty ? nil : .init(id: section, title: title, keys: sorted(list), open: opened(section))
@@ -331,7 +331,15 @@ nonisolated enum TodosListLayout {
         }
     }
 
-    /// Done by when each closed: today, yesterday, this week, earlier.
+    /// Closed rows by when they closed, the newest first; ties in the order given.
+    private static func newestFirst(_ list: [TodoFiled], _ input: Input) -> [TodoFiled] {
+        stable(list) { a, b in
+            let x = input.items[a.id]?.doneAt ?? .distantPast, y = input.items[b.id]?.doneAt ?? .distantPast
+            return x == y ? nil : x > y
+        }
+    }
+
+    /// Done by when each closed: today, yesterday, this week, earlier; in each, the newest first under every sort.
     private static func byDay(_ list: [TodoFiled], _ input: Input) -> [TodosListGroup] {
         let cal = input.calendar
         let today = cal.startOfDay(for: input.now)
@@ -339,20 +347,16 @@ nonisolated enum TodosListLayout {
             ("today", String(localized: "Today [To-dos Done]")), ("yesterday", String(localized: "Yesterday [To-dos Done]")),
             ("week", String(localized: "This week [To-dos Done]")), ("earlier", String(localized: "Earlier [To-dos Done]")),
         ]
-        var rows: [String: [(row: TodoFiled, at: Date)]] = [:]
+        var rows: [String: [TodoFiled]] = [:]
         for row in list {
             let at = input.items[row.id]?.doneAt ?? .distantPast
             let ago = cal.dateComponents([.day], from: cal.startOfDay(for: at), to: today).day ?? 99
             let id = ago <= 0 ? "today" : ago == 1 ? "yesterday" : ago <= 6 ? "week" : "earlier"
-            rows[id, default: []].append((row, at))
+            rows[id, default: []].append(row)
         }
         return days.compactMap { d in
             guard let members = rows[d.id], !members.isEmpty else { return nil }
-            // Newest first, unless the owner picked another order.
-            let ordered = input.sort == .suggested
-                ? members.enumerated().sorted { $0.element.at != $1.element.at ? $0.element.at > $1.element.at : $0.offset < $1.offset }
-                    .map(\.element.row)
-                : order(members.map(\.row), input)
+            let ordered = newestFirst(members, input)
             return TodosListGroup(id: "done:" + d.id, title: d.title, count: ordered.count, keys: ordered.map(key))
         }
     }

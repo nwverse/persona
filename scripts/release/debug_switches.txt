@@ -189,6 +189,7 @@ openTerminalsPage
 openThreadAt
 openTodoDetail
 openTodoTitled
+openTodosChoice
 openTokenUsage
 openTranslationSettings
 openTriageSettings

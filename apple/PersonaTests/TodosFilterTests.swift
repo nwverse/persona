@@ -39,8 +39,8 @@ struct TodosFilterTests {
         let progress = TodosChoice.inProgress.title
         #expect(TodosFilter.subtitle(.inProgress, needsYou: 3, words: en) == progress + " · 3 need you")
         #expect(TodosFilter.subtitle(.inProgress, needsYou: 1, words: en) == progress + " · 1 needs you")
-        #expect(TodosFilter.subtitle(.inProgress, needsYou: 0, words: en) == progress)
-        #expect(TodosFilter.subtitle(.needsYou, needsYou: 3, words: en) == TodosChoice.needsYou.title)
+        #expect(TodosFilter.subtitle(.inProgress, needsYou: 0, words: en) == "", "nothing hidden: the Filter names its choice")
+        #expect(TodosFilter.subtitle(.needsYou, needsYou: 3, words: en) == "")
     }
 
     /// Group by Project is greyed, with why, under a choice that draws one section or the days.
@@ -117,7 +117,7 @@ struct TodosListLayoutTests {
         #expect(someday.id == TodoListSection.someday && someday.keys == ["/t14"] && !someday.open)
         #expect(out.groups.last?.keys == [] && out.groups.last?.title == nil, "its rows only while open, under the fold itself")
         #expect(out.sections["/t01-s1"] == nil, "a step its parent carries is no row")
-        #expect(out.doneRows == 0)
+        #expect(out.doneToday == 0)
     }
 
     @Test func anOutsideDecisionKeepsItsOwnRowWithAnOpenParent() {
@@ -215,6 +215,22 @@ struct TodosListLayoutTests {
         #expect(TodosListLayout.layout(calm).groups.map(\.id) == ["plain"], "the calm list is never grouped")
     }
 
+    /// Closed rows show neither a due day nor a priority, so no sort reorders them: the newest first in Done today and in
+    /// Done's days, whatever the sort.
+    @Test func closedRowsKeepTheirNewestFirst() {
+        let rows = [filed("old", TodoListSection.done), filed("new", TodoListSection.done), filed("t", TodoListSection.todo),
+                    filed("w", TodoListSection.working)] // not the calm list, which has no Filter
+        var i = input(rows, items: [TodoItem(id: "old", title: "old", doneAt: now.addingTimeInterval(-3600), dueAt: now, priority: "high"),
+                                    TodoItem(id: "new", title: "new", doneAt: now.addingTimeInterval(-60), priority: "low")])
+        for sort in TodosListSort.allCases {
+            i.sort = sort
+            i.choice = .all
+            #expect(TodosListLayout.layout(i).groups.last?.tail?.keys == ["/new", "/old"], "Done today, \(sort)")
+            i.choice = .done
+            #expect(TodosListLayout.layout(i).groups.first?.keys == ["/new", "/old"], "Done, \(sort)")
+        }
+    }
+
     /// Done today folds at the end of All; Done alone lists the closed rows by day, newest first.
     @Test func doneIsByDay() {
         let cal = Calendar(identifier: .gregorian)
@@ -224,7 +240,7 @@ struct TodosListLayoutTests {
                      TodoItem(id: "old", title: "old", doneAt: cal.date(byAdding: .day, value: -20, to: now))]
         var i = input(rows, items: items)
         let all = TodosListLayout.layout(i)
-        #expect(all.doneRows == 2 && all.doneToday == 1)
+        #expect(all.doneToday == 1)
         #expect(all.groups.last?.tail?.id == TodoListSection.done && all.groups.last?.tail?.keys == ["/today"])
         i.choice = .done
         #expect(TodosListLayout.layout(i).groups.map(\.id) == ["done:today", "done:earlier"])

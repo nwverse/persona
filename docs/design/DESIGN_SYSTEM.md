@@ -876,8 +876,8 @@ The web Agent conversation header's **Session overview** list button toggles a p
   - "N related" sits inside the row it belongs to, under its words; opened, the related rows come under it a level in, with a line down their side.
   - A filter and a sort for such a list go in one button's menu next to the view switch (on the web, next to the search field), the active filter also as a chip that clears it ("List controls" below); the sort orders rows inside each section and never moves a section (To-dos on iOS, Android and the web, #3740). The V1 To-dos list on iOS (below) keeps the filter at the foot toolbar and the sort in ⋯.
 - **To-dos list** (#10465; iOS, hubs with `todo_view`, from #10465's switch-on; `docs/design/proposals/todos-redesign.md`
-  3.3 and 3.4, the V1 frames `iphone/list`, redrawn on 11-21 around the page, the row and the container the owner
-  chose): the hub files each to-do (its `view`'s section) and the list draws the sections in the hub's order, what the
+  3.3 and 3.4, the page, the row and the container the owner chose on 11-21, which supersede the V1 frames
+  `iphone/list`, `docs/design/prototypes/todos/v1/notes.md`): the hub files each to-do (its `view`'s section) and the list draws the sections in the hub's order, what the
   owner has to act on first: Needs you, with Can wait folded at its foot (listed, not counted); Working; Waiting; To do;
   Just finished; then Someday folded, and under All the to-dos closed today folded as Done today. A row without a view
   (an older manager's) is filed by the app's frozen rules. Inside a section the rows follow the hub's rank, then the
@@ -890,8 +890,9 @@ The web Agent conversation header's **Session overview** list button toggles a p
     and **+** (New To-Do), the bar's one prominent item, which opens New To-Do's sheet (⌘N). iOS 26 and later draw it as
     Liquid Glass items, the search field folding to ⌕ while a choice is on; iOS 18's classic toolbar draws Mail's iOS 18
     form: the Filter's glyph, "Filtered by: ‹choice›" in the middle while one is on (a tap opens the menu; the filled
-    glyph itself is a tap back to All), and +, with the search field the system's drawer under the title, shown by a
-    pull and folding as the list scrolls (as on the Inbox and the Agents list). Why at the foot: Mail and Reminders keep
+    glyph itself is a tap back to All), and +, with the search field the system's drawer under the title, always shown
+    (under an inline title the system's drawer starts folded until a pull, and a calm list would show no way to search
+    at all). Why at the foot: Mail and Reminders keep
     a list's filter, search and new item there, and the strip it replaces cut its own names at the default text size and
     slid Done out of sight.
   - **The Filter** narrows the list to one of the states the Inbox's bar names, as a pop-up (HIG "Pop-up buttons"): at
@@ -912,11 +913,13 @@ The web Agent conversation header's **Session overview** list button toggles a p
     list's first line is "● 3 more need you · Show All": a line on the page over the first card, never a card or a
     tint of its own (quiet surfaces), the needs-you dot still, the words secondary, Show All in the accent, the whole
     line one button back to All (`TodosGuardLine`). On iOS 26 and later, once it has scrolled away, the title's
-    subtitle keeps the choice and N in sight ("In Progress · 3 need you"); iOS 18 has no subtitle, and its toolbar
-    names the choice all the while. A place's notice ("2 more need you, not in Today") takes the same line.
+    subtitle keeps the choice and N in sight ("In Progress · 3 need you"); a choice that hides nothing has no subtitle,
+    the Filter naming it at the foot; iOS 18 has no subtitle, and its toolbar names the choice all the while. The line
+    is spoken with its action ("3 more need you, Show All"). A place's notice ("2 more need you, not in Today") takes the same line.
   - **Search**: the system's field, scoped to the list. It looks through the titles and notes of the open to-dos on
-    the device as the words are typed (case and accents aside), keeps the sections with every fold open, counts what
-    matches on the headings (the drawer's number stays N), and sets the Filter's choice aside until the field is
+    the device as the words are typed (case and accents aside), keeps the sections with every fold open (and unfoldable
+    until the field is cleared), counts what matches on the headings in plain numbers, Needs you's too, so the blue
+    badge only ever says N (the drawer's number stays N), and sets the Filter's choice aside until the field is
     cleared. Its last row, "⌕ Search Chats for “kyoto” ›", takes the words to the app's search over Persona's chats
     (no Agents scope on an everyday page). Closed to-dos and the hub's own matches come with the search's next step.
   - **⋯** (on All To-dos, Today and a project; Upcoming's holds Show as Calendar alone) arranges the list, kept on the
@@ -926,14 +929,17 @@ The web Agent conversation header's **Session overview** list button toggles a p
     and Waiting by date) and Priority (优先级: high, then normal, then low, the hub's order inside each); Suggested is a
     sort's name only, apart from suggested steps (建议), and choosing it is the reset. Then **Group by Project**, one
     checkmarked item as Mail's Group by Sender: below Needs you, a group per project in place of the other sections, the
-    rows under a project's heading without their project on line 3; never offered in the calm list, greyed with why
-    under Needs You ("Needs you is one section") and Done. Needs you and Can wait keep the hub's order, deadlines first,
-    under every sort and grouping. There is no Reset View, Group By › Due Date or Show toggle: Today, Upcoming and
+    rows under a project's heading without their project on line 3 (rows with no such heading, in the calm list or
+    Done's days, keep it); never offered in the calm list, greyed under Needs You and Done with why in its section's
+    heading ("Needs you is one section"), since a disabled item's own words are too faint to read on the menu. Needs
+    you and Can wait keep the hub's order, deadlines first, and closed to-dos their newest first (a closed row shows
+    neither a due day nor a priority), under every sort and grouping. There is no Reset View, Group By › Due Date or Show toggle: Today, Upcoming and
     Filter › To Do cover the dates, and the folds hold what the toggles did. Should more come back, each is one item in
     ⋯ for a named task places, the Filter and search cannot do, never a section of choices.
   - **The calm rule**: while only the owner's plain To do rows exist (Someday and Done do not count) the Filter and the
     section headers are not drawn, so the list reads as a plain list, its foot search and + alone; they come back once
-    two sections have rows, the Filter taking the toolbar's free leading slot without a bar dropping in.
+    two sections have rows, the Filter taking the toolbar's free leading slot without a bar dropping in, on All: a choice
+    goes with the Filter (as it does when the list has no rows), so none comes back that the owner cannot see.
   - **The container: section cards** (`.sectionCards()`), the Agents list's: one card per state, the system's inset
     grouped section, on each style's page (`themedPage()`); the shared `SectionHeader` above it at the system's header
     type (no font of ours), Needs you's count its blue `CountBadge` and the others plain secondary numbers; no stroke,
@@ -942,7 +948,8 @@ The web Agent conversation header's **Session overview** list button toggles a p
     Island and Lark), so the swipe, Select and the long press are the system's shapes on every OS. Headings scroll away
     with their cards, as in Settings and the Agents list. Where it differs from the Agents list, on purpose: the rows
     sit `Space.l` (16) inside the card, not the system's 20, for the answers' width; the headings' words sit over the
-    ticks; separators run from the titles' column (without them a row's answers read as the next row's start); only
+    ticks (on iOS 18, which can set a heading's side insets only with all four, the headings keep the system's inset, a
+    few points right of the ticks); separators run from the titles' column (without them a row's answers read as the next row's start); only
     Can wait, Someday and Done today fold, with ⌄ beside their words, not every heading; only Needs you's count is
     blue. BeautifulUI draws Glass's section cards until its card per to-do comes through `StyleSpec` with the
     switch-on.
@@ -1009,8 +1016,8 @@ The web Agent conversation header's **Session overview** list button toggles a p
     until a read lists it, with Try Again and Remove. A write the hub turns down is dropped and said in a toast; one it
     keeps failing with nobody knowing is said after five tries.
   - **Offline**: while the titles say the hub is out of reach, the list is the one last read, under one caution line,
-    "Can't reach your hub · showing what was saved 10:14" (the time the hub last answered a read of it). The line says
-    the link itself: the shell's pill stays away while it is in sight (docs/apple/shell.md "Said once").
+    "Can't reach your hub · showing what was saved 10:14" (the time the hub last answered a read of it), a
+    `NoticeBanner` as wide as the cards under it. The line says the link itself: the shell's pill stays away while it is in sight (docs/apple/shell.md "Said once").
   - **Undo for VoiceOver and Switch Control**: the toast's Undo is out of their reach (HIG-005), so while either runs a
     held write waits `Theme.Motion.todoUndoAssistive`, and every row's actions offer **Undo “‹title›”** for the latest
     one made on the list while it waits.
@@ -1083,13 +1090,13 @@ A list's controls come in four kinds. Each kind looks like itself, so that narro
 | Control | What it decides | Rule |
 | --- | --- | --- |
 | Scope | which computers or hub | a menu that names what is shown |
-| Filter | which states, sources or dimensions show | each active filter shows as a chip that removes it; Reset clears them all. A filter of states that exclude one another, on a list that lands on all of them (iOS To-dos), is one pop-up that names its choice, with its own ×, and counts in its menu; a list that lands on one section and reaches the rest through the control (the Inbox) draws it as a bar |
+| Filter | which states, sources or dimensions show | each active filter shows as a chip that removes it; Reset clears them all. A filter of states that exclude one another, on a list that lands on all of them (iOS To-dos; iOS, hubs with `todo_view`, from #10465's switch-on), is one pop-up that names its choice, with its own ×, and counts in its menu; a list that lands on one section and reaches the rest through the control (the Inbox) draws it as a bar |
 | Grouping and display | how rows are grouped, sorted and drawn | a grouping control or the ⋯ menu, never a filter chip |
 | Navigation entry, such as personal Agents | opens another page | a row or the sidebar, never chip-shaped |
 
 Search may take query operators and scopes; they live inside the search field.
 
-On the web a list keeps no standing search field of its own beside the app's one search (#6589, the web's Agents list; the native clients are left out, `docs/design/DECISIONS.md` 11-13). On iOS a list may carry the system's search field (`pageSearchable`), scoped to the list, with one row at the end of its results that takes the words to the app's search, never a hand-built field (the To-dos list, 3.4). On the web: **Search chats** (⌘K) finds its rows with the list's operators (`machine:`, `project:`, `harness:`, `model:`, `state:`, `is:pinned`, `since:`), a match on the row's name first, then its project or computer, then what is inside it, and its **Filter Agents list** (⇧↵) puts the query on the list in place, as a filter chip whose text reopens ⌘K. ⌘K's own **Filter** button, at the end of its field, offers the list's filter choices (computer, project, status, harness, model, Pinned, updated within) and writes each into the query as its operator, the number of operators on it, so a choice stays text to read and change and no hint line has to name the operators. The list's filter button sits on the list's title row, with the list's other menu buttons, and says how many filters are on, as iOS keeps its Agents filter (the computer) in the top bar's list menu with the chosen one a chip over the list.
+On the web a list keeps no standing search field of its own beside the app's one search (#6589, the web's Agents list; the native clients are left out, `docs/design/DECISIONS.md` 11-13). On iOS a list may carry the system's search field (`pageSearchable`), scoped to the list, with one row at the end of its results that takes the words to the app's search, never a hand-built field (the To-dos list, 3.4; iOS, hubs with `todo_view`, from #10465's switch-on). On the web: **Search chats** (⌘K) finds its rows with the list's operators (`machine:`, `project:`, `harness:`, `model:`, `state:`, `is:pinned`, `since:`), a match on the row's name first, then its project or computer, then what is inside it, and its **Filter Agents list** (⇧↵) puts the query on the list in place, as a filter chip whose text reopens ⌘K. ⌘K's own **Filter** button, at the end of its field, offers the list's filter choices (computer, project, status, harness, model, Pinned, updated within) and writes each into the query as its operator, the number of operators on it, so a choice stays text to read and change and no hint line has to name the operators. The list's filter button sits on the list's title row, with the list's other menu buttons, and says how many filters are on, as iOS keeps its Agents filter (the computer) in the top bar's list menu with the chosen one a chip over the list.
 
 - **iOS Agents filter capsule** (#7033, owner-approved final E; whole labels, #9121): `CapsuleFilterBar` below search is one fully rounded surface (`Theme.card`, `Theme.cardStroke`, `Theme.Size.hairline`). Android's `JAgentFilterCapsule` (`AgentFilterCapsule.kt`, #7034) follows the same rule. Only the existing quick filters scroll horizontally; their availability, counts and defaults are unchanged. **Every filter shows its whole name, always**, in every language and at every text size: never two characters and an ellipsis, never a name cut to fit, and a chip is as wide chosen as not (no focus or width animation). A strip whose names do not fit scrolls; the web's quick filters show whole names too, wrapping onto more lines. An edge with more past it fades out over `Theme.Size.fadeEdge` (`.edgeFade()`, a mask, as the space tab strip's): the trailing edge while content lies past it, the leading edge once the strip has scrolled from its start, so a cut-off chip reads as "more"; where nothing is hidden the chips are drawn as they are. The chosen filter keeps its highlight (`Theme.FilterCapsule.selection`, `Theme.Motion.standard`) and scrolls to the strip's middle where it can; counts never truncate. Reduce Motion turns the highlight's animation and the scroll to a chosen filter into plain changes, and the fade has no animation of its own, so it snaps. At the trailing end, a 44 pt `Theme.Icon.capsuleGrouping` control stays fixed behind a hairline of `Theme.FilterCapsule.separatorHeight` (22 pt); its menu contains only `DevGrouping.offeredNow` and checks the current grouping. The former separate grouping pill is removed. Personal Agents keeps its separate navigation entry, outside the capsule. Spoken filter labels remain complete, including counts and selection. Why: the owner requested one compact row without mixing grouping choices into state filters; this serves people monitoring Agents, not Assistant. #9121 dropped the two-character label of #7033 and #7034: in Chinese and Japanese it saved no width and could change the meaning (完成未看, "done, not seen yet", read 完成…, "done"). The Mac's segmented control and the web are unchanged.
 - **Inbox section bar** (#9053, `docs/assistant/inbox.md` "Section bar"; the To-dos list draws the same states as a Filter at its foot, 3.4, since it lands on all of them): a filter of states, drawn with each client's quick-filter component (iOS `CapsuleFilterBar`, Android `QuickFilterBar`, the web Agents filter bar's look) with Needs you, In progress, FYI, Done and All. Needs you and All always show; the others while they have rows or are chosen; Collapsed stays under All. Needs you carries the `.needs` `CountBadge`, In progress and FYI the neutral one, Done and All none. It opens on Needs you on each entry and is not kept across visits; All is the stacked page as before, the filter's reset. Grouping sits in the bar's trailing menu, not in a row of its own; on Android it is "Group by" in the Inbox's ⋯ sheet, since `QuickFilterBar` has no trailing control and its five choices already run past a phone's width (hidden while In progress or Done is chosen, as the menu is). Why: the stacked page put FYI and Done several screens below a long Needs you; a bar that lands on Needs you keeps what needs the user first and one tap from everything else (3.4 "Sessions that need the user": the Needs you count stays in sight from every choice).
@@ -1199,7 +1206,7 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
   and does not add a page-closing Done to a navigation bar. There is no Mac toolbar.
 - Buttons side by side in equal widths go in a `StackingButtonRow` (`apple/Persona/DesignSystem/StackingButtonRow.swift`, #6151). It keeps them in one row while every label fits its share whole, and stacks them otherwise, the first on top and each across the row (rule 3 (c) in 1.2). It decides by measured width, not by text size: a short label keeps its row at sizes where a long one, or a long translation, stacks. Each label is a `Text(…).buttonLabelLine()`, one line that may shrink to 0.8 for a small overflow, which tells the row how narrow its button can be with the words whole. A button whose label isn't one is taken to fit. First used by the to-do page's bottom buttons; other rows of equal buttons move to it when they are next touched.
 - Equal columns of values or titles go in an `EqualColumns` (`apple/Persona/DesignSystem/EqualColumns.swift`). It keeps one row while every cell's content fits its share whole and drops to two columns, the rest wrapping below, when one does not; like `StackingButtonRow` it goes by measured width, not text size. First used by the Machines card's metrics and Today's Tokens, so a number is never cut to "3.85…" at a large text size.
-- Actions floating over a scrolling page's foot are pills (`.floatingPill(prominent:)`, `apple/Persona/DesignSystem/FloatingPill.swift`, #9008; a page with a foot toolbar adds through its +, as the To-dos list does, and the pill stays where a page has none), drawn as the Sidebar layout's foot draws its own (#4206): the prominent one a capsule of `Theme.accent` with white `Theme.Font.bodyStrong` words, as the foot's New Chat; the other a capsule on `.surface(interactive: true)` (Liquid Glass in the glass styles) with words in the primary color, as its Search and Settings. At least `Theme.Size.avatarL` tall (46 pt, the foot's), apart from each other, the button `.buttonStyle(.plain)`. They go in a `floatingFooter` (3.12), nothing behind them but the page's blur; a row of them is a `StackingButtonRow`. First used by the to-do page.
+- Actions floating over a scrolling page's foot are pills (`.floatingPill(prominent:)`, `apple/Persona/DesignSystem/FloatingPill.swift`, #9008; a page with a foot toolbar adds through its +, as the To-dos list does (iOS, hubs with `todo_view`, from #10465's switch-on), and the pill stays where a page has none), drawn as the Sidebar layout's foot draws its own (#4206): the prominent one a capsule of `Theme.accent` with white `Theme.Font.bodyStrong` words, as the foot's New Chat; the other a capsule on `.surface(interactive: true)` (Liquid Glass in the glass styles) with words in the primary color, as its Search and Settings. At least `Theme.Size.avatarL` tall (46 pt, the foot's), apart from each other, the button `.buttonStyle(.plain)`. They go in a `floatingFooter` (3.12), nothing behind them but the page's blur; a row of them is a `StackingButtonRow`. First used by the to-do page.
 - Icon buttons use a 44 pt frame around a smaller visual (composer round button, viewer chrome).
 - Destructive actions use `role: .destructive`. Red is also used for risky-but-not-destructive actions (DS-24).
   A secondary button with that role is red (`Theme.danger`) in every style (#7042): `.themedButton()` reads the role, so a

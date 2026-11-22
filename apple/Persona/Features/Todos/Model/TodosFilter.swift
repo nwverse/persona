@@ -73,12 +73,12 @@ nonisolated enum TodosFilter {
         }
     }
 
-    /// The title's subtitle while a choice is on (iOS 26 and later): its name, and what needs the owner outside it
-    /// ("In Progress · 3 need you"); nothing under All.
+    /// The title's subtitle while a choice hides what needs the owner (iOS 26 and later), once the guard line has gone:
+    /// the choice's name and how many ("In Progress · 3 need you"). Nothing while nothing is hidden: the Filter names
+    /// its choice at the foot all the while.
     static func subtitle(_ choice: TodosChoice, needsYou: Int, words: TodoWords = TodoWords()) -> String {
-        guard choice != .all else { return "" }
         let hidden = hiddenNeeds(choice, needsYou: needsYou)
-        return hidden > 0 ? words("\(choice.title) · \(hidden) need you [To-dos Filter]") : choice.title
+        return hidden > 0 ? words("\(choice.title) · \(hidden) need you [To-dos Filter]") : ""
     }
 
     /// Why ⋯'s Group by Project is greyed under a choice that draws one section or the days, or nil where it groups.

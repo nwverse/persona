@@ -2136,14 +2136,19 @@ built in stages behind the hub's `todo_view`; this section grows with it.
     (`DefaultToolbarItem(kind: .search, placement: .bottomBar)`, folded to ⌕ by `searchToolbarBehavior(.minimize)`
     while a choice is on) and +
     (`themedButton(prominent: true)`); on iOS 18 one `ToolbarItemGroup(placement: .bottomBar)` with the glyph, "Filtered
-    by:" and +, the search field the system's drawer (`pageSearchable` picks it), hidden at rest until a pull as on the
-    Inbox and the Agents list. The Filter is not drawn in the calm list or a list with no rows (`TodosFootBar`), and,
-    once the places come, not in Today or Upcoming. ⋯ (`TodosViewOptions`) is `ToolbarOverflowMenu` on iOS 27 built
+    by:" and +, the search field the system's drawer, passed as `.navigationBarDrawer(displayMode: .always)`, since
+    under an inline title the drawer the system picks starts hidden until a pull. The Filter is not drawn in the calm
+    list or a list with no rows (`TodosListModel.filters`), and, once the places come, not in Today or Upcoming; its
+    choice goes back to All with it, so none comes back unseen. The toolbar, the subtitle and ⋯ read the model's flags
+    (`calm`, `searching`, `hasRows`, kept apart from the layout and set only when they change), never the layout, so a
+    landing does not redraw them. ⋯ (`TodosViewOptions`) is `ToolbarOverflowMenu` on iOS 27 built
     with its SDK (`#if compiler(>=6.4)`), else `TodosViewMenu` as the primary action; both hold `TodosViewMenuItems`:
     Sort By, one `Section` of `Toggle`s
     (Suggested, Recently Changed, Due Date, Priority), then Group by Project, a `Toggle` left out while the list is calm
-    and a disabled `Button` with `TodosFilter.groupingNote` as its subtitle under Needs You and Done; `TodosListLayout`
-    keeps Needs you and Can wait in the hub's order under every sort. A high-priority row's title is
+    and a disabled `Button` under Needs You and Done in a `Section` headed with `TodosFilter.groupingNote` (a disabled
+    item's subtitle is too faint to read); `TodosListLayout` keeps Needs you and Can wait in the hub's order and closed
+    rows newest first under every sort, and line 3 drops the project only where a project's heading is drawn
+    (`TodosListModel.grouped`). A high-priority row's title is
     `TodoListRow.title`, "!" in `Theme.cautionText` before it, and its spoken label says "High priority". The guard line
     (`TodosGuardLine`, `TodosListModel.hiddenNeeds`) is the first line while a choice hides what needs the owner;
     once its frame in the list is under what the bars cover (`onGeometryChange` against the list's top inset;
@@ -2151,23 +2156,36 @@ built in stages behind the hub's `todo_view`; this section grows with it.
     under the title (`navigationSubtitleWhenSupported`, iOS 26 and later). The search (`TodosListModel.query`) matches the
     open rows' titles and notes with `localizedStandardContains`, opens every fold and sets the choice aside; its last
     row presents `AssistantFullSearch` (Persona's chats only) with the words, and a chat picked there opens through
-    `AppModel.openAssistantConversation` once the cover is gone. A choice scrolls the list to its top. Each view reads
+    `AppModel.openAssistantConversation` once the cover is gone; while it searches the folds are drawn open and do
+    nothing, and the Needs you heading counts its matches in a plain number, so the blue badge only says N. A choice
+    scrolls the list to its top: its first line or row is put at the foot of what is in sight (`anchor: .bottom`), which
+    the list cannot reach, so it stops at its top; a heading's own id put its rows at the top, the heading under the
+    bar. Each view reads
     only what it draws (the toolbar, the subtitle, the top lines, the headers), so a count or a choice redraws those
     alone (P5).
   - **The container and the row.** `.sectionCards()` (the design system's, `listStyle(.insetGrouped)` today) on
     `themedPage()`; rows and Can wait keep the system's cells (`TodoListCell.insets`: `Space.l` at the sides, none
-    above or below) and the row has its own `Space.m` padding; headers drop their font for the system's and move their
-    words over the ticks with `listRowInsets(.horizontal, Space.l)` on iOS 26 and later (iOS 18 can set only all four
-    insets, so its headers keep the system's). Someday and Done today are tail groups (`TodosListGroup.tail`): a
+    above or below, set on the row's outermost view in `TodoListView.row`, after its `.id`: set inside the cell, under
+    its swipe and long-press modifiers, the list never read them and the rows kept the system's margins on every side)
+    and the row has its own `Space.m` padding; headers drop their font for the system's and move their words over the
+    ticks with `listRowHorizontalInsets(Space.l)` (`SystemCompat`; iOS 18 can set only all four insets, so its headers
+    keep the system's). The offline line is as wide as the cards (no insets), the guard line's words in the headings'
+    column. Someday and Done today are tail groups (`TodosListGroup.tail`): a
     section whose header is the fold, its rows drawn only while open. The row's time is `TodoTimeWords.due` ("Due Fri")
     or `.age` ("16m ago"), none when line 2 said a time (`TodoLineText.Said.timed`); its separator is
     `TodoTimeWords.separator`, a no-break space before "·". Tests: `TodosFilterTests`, `TodosListLayoutTests`,
     `TodoListContainerTests` (no row background of the list's own), `TodoLineTextTests`, `TodosListModelTests`
-    (`theFilterAndItsGuardLine`, `theSortOrdersInsideEachSection`) and the UI suite's `testTheFilterSearchAndNewToDo`
-    against `MOCK_TODO_VIEW=1`.
+    (`theFilterAndItsGuardLine`, `theSortOrdersInsideEachSection`, `aChoiceGoesWithTheFilter`,
+    `aFoldTappedWhileSearchingStaysAsItWas`, `aRowKeepsItsProjectWhereNoHeadingSaysIt`) and the UI suite's
+    `testTheFilterSearchAndNewToDo` and `testTheRowsAreCompact` against `MOCK_TODO_VIEW=1`. `-openTodosChoice <choice>`
+    (DEBUG, `todo`, `in_progress`, …) opens the list on a Filter choice once it draws the Filter, to measure a glide
+    with the guard line in the list.
   `TodoWorkspace` (one for the app, `TodoWorkspace.shared`, outside the pages' trees) keeps the place and where each
   place's list came to rest, written only while the scene is active and only from the tree the window shows; a page
-  made anew puts its list back there once, and a page a to-do popped back to keeps its own place. The sort and Group by
+  made anew puts its list back there once, and a page a to-do popped back to keeps its own place. A list that rested
+  at its very end is put at its end again after the pop (`TodoListView.backToTheEnd`, `TodoListEdges`): the to-do page
+  has no foot toolbar, so while it is in front the list's end is that much shorter and a list at its end is held to
+  it; `testTheListStaysWhereItRested` swipes the list to its end for it. The sort and Group by
   Project are kept on the device (`todos.v1.sort`, `todos.v1.byProject`, written back from the model whenever ⋯
   changes them; a sort this build does not offer reads as Suggested); the Filter's choice and the search's words are
   not.

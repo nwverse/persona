@@ -505,7 +505,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "“已完成”按天列出"
+            "value" : "「已完成」按天列出"
           }
         }
       }
@@ -533,6 +533,29 @@
         }
       }
     },
+    "Due %@ [To-dos Due Weekday]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Due %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "期限%@曜日"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@截止"
+          }
+        }
+      }
+    },
     "Due %@ [To-dos Due]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -545,7 +568,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@まで"
+            "value" : "期限%@"
           }
         },
         "zh-Hans" : {
@@ -568,7 +591,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "今日まで"
+            "value" : "今日が期限"
           }
         },
         "zh-Hans" : {
@@ -614,7 +637,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "フィルタ:"
+            "value" : "フィルタ："
           }
         },
         "zh-Hans" : {
@@ -637,7 +660,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "プロジェクトでグループ化"
+            "value" : "プロジェクト別"
           }
         },
         "zh-Hans" : {
@@ -733,7 +756,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "“需要你”只有一组"
+            "value" : "「需要你」只有一组"
           }
         }
       }
@@ -67609,7 +67632,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@到期"
+            "value" : "%@截止"
           }
         }
       }
@@ -67700,7 +67723,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "今天到期"
+            "value" : "今天截止"
           }
         }
       }

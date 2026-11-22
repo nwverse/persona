@@ -170,6 +170,39 @@ final class TodosV1ListTests: XCTestCase {
         XCTAssertFalse(element("todos.filter").exists, "a calm list draws no Filter")
         XCTAssertFalse(element("todos.section.todo").exists, "nor section headers")
         XCTAssertTrue(element("todos.new").exists, "New To-Do stays")
+        // ⋯ still sorts, and offers no grouping: a calm list has one card.
+        viewMenu().tap()
+        XCTAssertTrue(menuItem("todos.view.sort.suggested", at: 0).waitForExistence(timeout: 5), "no Sort By in ⋯:\n\(app.debugDescription)")
+        XCTAssertFalse(app.buttons.matching(identifier: "todos.view.byProject").firstMatch.exists, "no Group by Project while calm")
+        let menus = app.collectionViews.allElementsBoundByIndex.filter { $0.identifier != "todos.v1" }
+        if let menu = menus.last { XCTAssertEqual(menu.buttons.count, TodosV1ListTests.sorts.count, "the four sorts alone") }
+    }
+
+    /// ⋯'s sorts, in its order.
+    private static let sorts = ["suggested", "activity", "due", "priority"]
+
+    /// The rows are compact (DESIGN_SYSTEM 3.4 "To-dos list", the row): their one padding, 12 pt above and below, and
+    /// none of the cell's own, and their ticks 16 pt inside the card. The list reads a row's insets only from its outermost
+    /// view, and rows that set them inside their cell were 20 to 30 pt taller and, on iOS 18 and 27, 20 pt inside.
+    @MainActor func testTheRowsAreCompact() throws {
+        guard let hub = env["PERSONA_TODOS_HUB"] else { throw XCTSkip("needs MOCK_TODO_VIEW=1 (PERSONA_TODOS_HUB)") }
+        launch(hub, ["-todos.v1.byProject", "NO", "-todos.v1.sort", "suggested"], layout: "separate")
+        XCTAssertTrue(element("todos.v1").waitForExistence(timeout: 60), "no V1 list:\n\(app.debugDescription)")
+        // Two rows one under the other in Working: from the first's tick to the second's is the first's cell.
+        let first = element("todos.tick.t05"), second = element("todos.tick.t06"), words = element("todos.row.t05")
+        XCTAssertTrue(first.waitForExistence(timeout: 20) && second.exists && words.exists, "no Working rows:\n\(app.debugDescription)")
+        let cell = second.frame.minY - first.frame.minY
+        let padding = cell - words.frame.height
+        // 12 above and below, and the tick ring rising a little above the title's line; the system's own margins on top
+        // made it 59 pt.
+        XCTAssertLessThanOrEqual(padding, 2 * 12 + 8, "the row's one padding, nothing more: a \(cell)-pt cell for \(words.frame.height) pt of words")
+        // The tick under its heading's words, both 16 pt inside the card (iOS 26 and later: iOS 18 can set a heading's
+        // side insets only with all four, so its headings keep the system's).
+        if #available(iOS 26.0, *) {
+            let heading = element("todos.section.working")
+            XCTAssertTrue(heading.exists)
+            XCTAssertEqual(first.frame.minX, heading.frame.minX, accuracy: 1.5, "the tick under the heading's words")
+        }
     }
 
     /// A choice from the Filter's menu, by its identifier.
@@ -217,33 +250,49 @@ final class TodosV1ListTests: XCTestCase {
     }
 
     /// The foot toolbar: the Filter narrows the list and names its choice; a choice that leaves Needs you out says so on
-    /// a guard line, whose Show All is All again, as × is; ⋯ holds Sort By (Suggested, Recently Changed, Due Date,
-    /// Priority), the one checked kept, and Group by Project, greyed under Needs You; the search keeps the sections, sets
-    /// the choice aside and ends with Search Chats; + opens New To-Do.
+    /// a guard line, whose Show All is All again, as × is, the list back at its top; ⋯ holds Sort By (Suggested, Recently
+    /// Changed, Due Date, Priority), the one checked kept, and Group by Project, greyed under Needs You; the search keeps
+    /// the sections, sets the choice aside and ends with Search Chats, which opens the app's search over the chats with
+    /// the words; + opens New To-Do. Launched in English only because the system's search controls (its ⌕, Cancel and
+    /// ×) carry no identifier and are found by their words; what the test checks of ours is by identifier.
     @MainActor func testTheFilterSearchAndNewToDo() throws {
         guard let hub = env["PERSONA_TODOS_HUB"] else { throw XCTSkip("needs MOCK_TODO_VIEW=1 (PERSONA_TODOS_HUB)") }
-        launch(hub, ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"], layout: "separate")
+        // The arrangement as the list starts, whatever an earlier run left on the device.
+        launch(hub, ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-todos.v1.byProject", "NO", "-todos.v1.sort", "suggested"],
+               layout: "separate")
         XCTAssertTrue(element("todos.v1").waitForExistence(timeout: 60), "no V1 list:\n\(app.debugDescription)")
         XCTAssertTrue(element("todos.section.needs_you").waitForExistence(timeout: 20))
-        let sorts = ["suggested", "activity", "due", "priority"]
+        let sorts = Self.sorts
         let sort = { (id: String) in self.menuItem("todos.view.sort." + id, at: sorts.firstIndex(of: id) ?? 0) }
         let byProject = { self.menuItem("todos.view.byProject", at: sorts.count) }
         let project = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'todos.section.project:'")).firstMatch
-        // Grouped by project by a run that stopped half way (it is kept on the device): the sections again first.
-        if project.waitForExistence(timeout: 2) {
-            viewMenu().tap()
-            byProject().tap()
-        }
+        // iOS 26 names the choice on the Filter itself; iOS 18 says "Filtered by: ‹choice›" between its glyph and +.
+        let atRest = element("todos.filter").value as? String
         choose("in_progress")
         XCTAssertTrue(element("todos.guard").waitForExistence(timeout: 10), "no guard line:\n\(app.debugDescription)")
         XCTAssertFalse(element("todos.section.needs_you").exists, "Needs you is left out")
         XCTAssertTrue(element("todos.section.working").exists)
-        // iOS 26 names the choice on the Filter itself; iOS 18 says "Filtered by: ‹choice›" between its glyph and +.
         let named = element("todos.filter").exists ? element("todos.filter") : element("todos.filter.value")
-        XCTAssertEqual(named.value as? String, "In Progress", "the Filter names its choice")
+        let value = named.value as? String
+        XCTAssertTrue(value?.isEmpty == false && value != atRest, "the Filter names its choice: \(value ?? "nil") at rest \(atRest ?? "nil")")
         element("todos.guard").tap()
         XCTAssertTrue(element("todos.section.needs_you").waitForExistence(timeout: 10), "Show All")
         XCTAssertFalse(element("todos.guard").exists)
+        // A choice re-files the list from its top: down the list under In Progress, then × (All again, no guard line),
+        // and the first heading is in sight.
+        choose("in_progress")
+        XCTAssertTrue(element("todos.guard").waitForExistence(timeout: 10))
+        app.collectionViews.firstMatch.swipeUp(velocity: .slow)
+        sleep(1)
+        let clearAll = element("todos.filter.clear")
+        XCTAssertTrue(clearAll.waitForExistence(timeout: 5))
+        clearAll.tap()
+        let needsHeader = element("todos.section.needs_you")
+        XCTAssertTrue(needsHeader.waitForExistence(timeout: 10))
+        sleep(1)
+        XCTAssertTrue(needsHeader.frame.minY >= app.navigationBars.firstMatch.frame.maxY - 2
+                      && needsHeader.frame.maxY < app.windows.firstMatch.frame.height / 2,
+                      "a choice puts the list at its top: \(needsHeader.frame) under \(app.navigationBars.firstMatch.frame)")
         choose("needs_you")
         XCTAssertTrue(element("todos.row.t01").waitForExistence(timeout: 10))
         XCTAssertFalse(element("todos.section.working").exists)
@@ -279,6 +328,15 @@ final class TodosV1ListTests: XCTestCase {
         XCTAssertFalse(element("todos.row.t05").exists, "a row that does not match")
         XCTAssertFalse(element("todos.guard").exists, "the choice is set aside while searching")
         XCTAssertTrue(element("todos.searchChats").waitForExistence(timeout: 5), "Search Chats for …")
+        // Search Chats: the app's search over Persona's chats, with the words, and no Agents scope on an everyday page.
+        element("todos.searchChats").tap()
+        let chats = element("full-search-field")
+        XCTAssertTrue(chats.waitForExistence(timeout: 10), "no full search:\n\(app.debugDescription)")
+        XCTAssertEqual(chats.value as? String, "Kyoto", "the words go with it")
+        XCTAssertFalse(element("full-search-scope").exists, "Persona's chats only")
+        element("full-search-close").tap()
+        XCTAssertTrue(chats.waitForNonExistence(timeout: 10))
+        XCTAssertTrue(element("todos.searchChats").waitForExistence(timeout: 10), "back on the list's search")
         let cancel = app.buttons.matching(NSPredicate(format: "label ==[c] 'cancel' OR label ==[c] 'close'")).allElementsBoundByIndex
             .first(where: \.isHittable)
         try XCTUnwrap(cancel, "no way out of the search:\n\(app.debugDescription)").tap()
@@ -344,8 +402,19 @@ final class TodosV1ListTests: XCTestCase {
             choose(id)
             shot(frame)
         }
-        // Group by Project and a sort other than Suggested, each kept on the device, as the list opens with it.
-        for (frame, more) in [("~group-project", ["-todos.v1.byProject", "YES"]), ("~sorted-priority", ["-todos.v1.sort", "priority"])]
+        // ⋯ under Needs You: Group by Project greyed, with why in its section's heading.
+        if wants("~view-needs") {
+            choose("needs_you")
+            viewMenu().tap()
+            shot("~view-needs")
+            away()
+            fresh([])
+        }
+        // Group by Project and a sort other than Suggested, each kept on the device, as the list opens with it (the
+        // whole arrangement said, so a frame never draws the one before it).
+        for (frame, more) in [("~group-project", ["-todos.v1.byProject", "YES", "-todos.v1.sort", "suggested"]),
+                              ("~sorted-priority", ["-todos.v1.byProject", "NO", "-todos.v1.sort", "priority"]),
+                              ("~sorted-due", ["-todos.v1.byProject", "NO", "-todos.v1.sort", "due"])]
         where wants(frame) {
             fresh(more)
             shot(frame)
@@ -483,9 +552,9 @@ final class TodosV1ListTests: XCTestCase {
         sleep(1)
         let first = rowsInSight().first?.identifier
         let list = app.collectionViews.firstMatch
-        // Once, so the list rests part way down. The compact rows make it short enough that a second swipe can reach its
-        // very end, and a list resting there was seen to come back from today's to-do page (which has no bottom bar)
-        // about 34 pt lower on iOS 27, its foot toolbar's inset short by the home indicator's: a separate issue.
+        // Twice, which with the compact rows takes the list to its very end: the to-do page has no foot toolbar, so
+        // while it is in front the list's end is a toolbar's height shorter, and the list must come back where it was.
+        list.swipeUp(velocity: .slow)
         list.swipeUp(velocity: .slow)
         sleep(2) // at rest
         let top = try XCTUnwrap(rowsInSight().first, "no rows in sight")

@@ -312,6 +312,79 @@ struct TodosListModelTests {
         #expect(list.groups.count == 3)
     }
 
+    /// A fold is drawn open while searching and does nothing then: cleared, the list folds as the owner left it.
+    @Test func aFoldTappedWhileSearchingStaysAsItWas() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/todos", json: Self.list([
+            TodoViewJSON.row("n", title: "Call the ryokan", view: TodoViewJSON.view(TodoListSection.needsYou, line: "decision")),
+            TodoViewJSON.row("c", title: "Pick a ryokan", view: TodoViewJSON.view(TodoListSection.canWait, line: "decision")),
+            TodoViewJSON.row("w", view: TodoViewJSON.view(TodoListSection.working))]))
+        hub.on("GET", "/api/v1/todos/places", json: Self.places)
+        let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, v1: .on())
+        defer { store.forget() }
+        let list = model(store, hub: hub)
+        list.start()
+        await store.refresh(api: hub.client)
+        try await waitForListTest { list.groups.count == 2 }
+        list.query = "ryokan"
+        #expect(list.searching && list.groups.first?.folds.first?.open == true)
+        list.toggle(TodoListSection.canWait)
+        list.query = ""
+        #expect(list.unfolded.isEmpty && list.groups.first?.folds.first?.open == false, "folded, as before the search")
+    }
+
+    /// The Filter goes with the calm list, and its choice with it: when the list leaves calm again it lands on All, not on
+    /// a choice nobody can see (proposal 3.3, "lands on All").
+    @Test func aChoiceGoesWithTheFilter() async throws {
+        let hub = FakeHub()
+        let busy = Self.list([TodoViewJSON.row("w", view: TodoViewJSON.view(TodoListSection.working)),
+                              TodoViewJSON.row("t", view: TodoViewJSON.view(TodoListSection.todo, line: "rest"))])
+        hub.on("GET", "/api/v1/todos", json: busy)
+        hub.on("GET", "/api/v1/todos/places", json: Self.places)
+        let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, v1: .on())
+        defer { store.forget() }
+        let list = model(store, hub: hub)
+        list.start()
+        await store.refresh(api: hub.client)
+        try await waitForListTest { list.groups.count == 2 }
+        list.choice = .todo
+        #expect(list.filters && list.choice == .todo)
+        hub.on("GET", "/api/v1/todos", json: Self.list([TodoViewJSON.row("t", view: TodoViewJSON.view(TodoListSection.todo, line: "rest"))],
+                                                       needsYou: 0, inProgress: 0))
+        await store.refresh(api: hub.client)
+        try await waitForListTest { list.calm }
+        #expect(!list.filters && list.choice == .all, "calm: no Filter, and no choice kept")
+        hub.on("GET", "/api/v1/todos", json: busy)
+        await store.refresh(api: hub.client)
+        try await waitForListTest { !list.calm }
+        #expect(list.choice == .all && list.groups.map(\.id) == [TodoListSection.working, TodoListSection.todo])
+    }
+
+    /// Group by Project leaves a row's project off line 3 only where its heading says it: the calm list's one card and
+    /// Done's days have no project headings, so their rows keep it.
+    @Test func aRowKeepsItsProjectWhereNoHeadingSaysIt() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/todos", json: Self.list([
+            TodoViewJSON.row("w", extra: #""project":"kyoto""#, view: TodoViewJSON.view(TodoListSection.working, inactive: "idle")),
+            TodoViewJSON.row("d", extra: #""project":"kyoto","done_at":"2026-11-21T08:00:00Z""#,
+                             view: TodoViewJSON.view(TodoListSection.done, inactive: "idle"))]))
+        hub.on("GET", "/api/v1/todos/places", json: Self.places)
+        let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, v1: .on())
+        defer { store.forget() }
+        let list = model(store, hub: hub)
+        list.start()
+        await store.refresh(api: hub.client)
+        try await waitForListTest { !list.groups.isEmpty }
+        #expect(list.row("/w")?.content.caption?.contains("Kyoto trip") == true, "\(list.row("/w")?.content.caption ?? "nil")")
+        list.byProject = true
+        #expect(list.groups.contains { $0.id == "project:kyoto" })
+        #expect(list.row("/w")?.content.caption?.contains("Kyoto trip") == false, "its heading says it")
+        list.choice = .done
+        #expect(list.row("/d")?.content.caption?.contains("Kyoto trip") == true, "Done is listed by day: no heading says it")
+        #expect(!TodosListModel.grouped(true, calm: true, choice: .all, searching: false), "the calm list is one card")
+        #expect(TodosListModel.grouped(true, calm: false, choice: .needsYou, searching: true), "a search lists All")
+    }
+
     /// ⋯'s Sort By, the list's one arrangement: Due Date puts the earliest due first inside a section (the one way to
     /// order Working by date), Recently Changed the latest change, Priority the high ones first; Suggested, the hub's order,
     /// is the reset. Needs you keeps the hub's order (its deadlines first) under every sort. The Filter keeps its choice
