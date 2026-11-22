@@ -2087,28 +2087,69 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   visionOS) names them; the V1 views are iOS only (`List/`). The hub's `todo_send_state` marker is not read yet.
 - **The list** (`apple/Persona/Features/Todos/List/`, iOS only; DESIGN_SYSTEM 3.4 "To-dos list"). `TodosListModel`
   (`Deps`: the store, the hub, the clock, the projects' names) follows the store and lays the list out once per change
-  (`TodosListLayout`, pure): the sections for the bar's choice (`TodosBar`, `TodosChoice`), the grouping and the sort,
-  from `countsSource.filed`, less the steps their parents carry. Each row reads its own cell (`TodosListModel.Row`),
-  whose content (`TodoRowContentLogic`: times said from now, the mark, line 2 through `TodoLineText`, the door, line 3,
-  and the row in words for VoiceOver) is worked out again only when its facts, its view or the minute changes; a line
-  key this build does not know says the section's word, so the mark stays. While the list is scrolled or out of sight
-  (`Hold`: the page reports its scroll phase and when it is out of sight) a new filing waits, and so does what each
-  row says, since a new line can wrap or a door come and go and a row's new height moves every row under it; a row
-  gone from the store keeps its cell until then. A row that comes to need the owner lands at once, alone, onto the
-  list as drawn; the numbers (`countsSource`) are never held. When the rest lands, the rows that changed group are
-  drawn in place at once and fade in (`Theme.Motion.conceal`), so nothing slides across the list. A row in another
-  group or fold is a new view there (another section's `ForEach`), so a trigger it observes cannot start the fade (it
-  starts with the value as it already is, and the view it leaves sees the change first), and an `onAppear` that
-  starts one comes a frame after the row was drawn whole. The landing marks the row instead (`Row.entering`), which the
-  new view reads from its first frame, drawn hidden, and clears inside the animation as it appears. A mark not taken
-  (a row that landed out of sight) is cleared at the next landing and when a scroll starts, so nothing fades in under
-  a finger; with Reduce Motion nothing is marked. The page's minute
-  (`tick`, also as the page comes back to the front) says the times again. Rows open today's to-do page until the to-do's own page arrives. On iOS 26 the section bar is pinned over the
-  list; iOS 18 has no scroll edge effect to draw behind it, so there the bar is the list's first row, as the Inbox's.
+  (`TodosListLayout`, pure): the sections for the Filter's choice (`TodosFilter`, `TodosChoice`), the search's words and
+  the sort, from `countsSource.filed`, less the steps their parents carry; with ⋯'s Group by Project, a group per
+  project below Needs you. Each row reads its own cell (`TodosListModel.Row`), whose content (`TodoRowContentLogic`:
+  times said from now, the mark, line 2 through `TodoLineText`, line 3, and the row in words for VoiceOver) is worked
+  out again only when its facts, its view or the minute changes; a line key this build does not know says the section's
+  word, so the mark stays. While the list is scrolled or out of sight (`Hold`: the page reports its scroll phase and
+  when it is out of sight) a new filing waits, and so does what each row says, since a new line can wrap or a line 3
+  come and go and a row's new height moves every row under it; a row gone from the store keeps its cell until then. A
+  row that comes to need the owner lands at once, alone, onto the list as drawn; the numbers (`countsSource`) are never
+  held. When the rest lands, the rows that changed group are drawn in place at once and fade in
+  (`Theme.Motion.conceal`), so nothing slides across the list. A row in another group or fold is a new view there
+  (another section's `ForEach`), so a trigger it observes cannot start the fade (it starts with the value as it already
+  is, and the view it leaves sees the change first), and an `onAppear` that starts one comes a frame after the row was
+  drawn whole. The landing marks the row instead (`Row.entering`), which the new view reads from its first frame, drawn
+  hidden, and clears inside the animation as it appears. A mark not taken (a row that landed out of sight) is cleared at
+  the next landing and when a scroll starts, so nothing fades in under a finger; with Reduce Motion nothing is marked.
+  The page's minute (`tick`, also as the page comes back to the front) says the times again. Rows open today's to-do
+  page until the to-do's own page arrives.
+  - **The page** (DESIGN_SYSTEM 3.4 "To-dos list"; `docs/design/DECISIONS.md` "11-21 The To-dos list"). Nothing under
+    the title. The foot toolbar (`TodosFootBar`) is chosen on the view: on iOS 26 and later the Filter
+    (`TodosFilterButton`, a `Menu` with `.menuOrder(.fixed)`, since a bottom bar's menu otherwise lists All last, whose
+    items are `Toggle`s with the count as a second `Text`, the system's subtitle, as a `Picker` in a menu drops both;
+    once a choice is on, its label is the filled glyph and the choice's `Text` side by side, as the bar draws a `Label`
+    as its icon alone; the Filter at rest and the named pop-up are separate bar items, since one item whose label
+    changed from the one to the other was drawn empty on iOS 26.3), × while a choice is on, the search item
+    (`DefaultToolbarItem(kind: .search, placement: .bottomBar)`, folded to ⌕ by `searchToolbarBehavior(.minimize)`
+    while a choice is on) and +
+    (`themedButton(prominent: true)`); on iOS 18 one `ToolbarItemGroup(placement: .bottomBar)` with the glyph, "Filtered
+    by:" and +, the search field the system's drawer (`pageSearchable` picks it), hidden at rest until a pull as on the
+    Inbox and the Agents list. The Filter is not drawn in the calm list or a list with no rows (`TodosFootBar`), and,
+    once the places come, not in Today or Upcoming. ⋯ (`TodosViewOptions`) is `ToolbarOverflowMenu` on iOS 27 built
+    with its SDK (`#if compiler(>=6.4)`), else `TodosViewMenu` as the primary action; both hold `TodosViewMenuItems`:
+    Sort By, one `Section` of `Toggle`s
+    (Suggested, Recently Changed, Due Date, Priority), then Group by Project, a `Toggle` left out while the list is calm
+    and a disabled `Button` with `TodosFilter.groupingNote` as its subtitle under Needs You and Done; `TodosListLayout`
+    keeps Needs you and Can wait in the hub's order under every sort. A high-priority row's title is
+    `TodoListRow.title`, "!" in `Theme.cautionText` before it, and its spoken label says "High priority". The guard line
+    (`TodosGuardLine`, `TodosListModel.hiddenNeeds`) is the first line while a choice hides what needs the owner;
+    once its frame in the list is under what the bars cover (`onGeometryChange` against the list's top inset;
+    `onScrollVisibilityChange` never said a list row had gone under a bar), `TodosSubtitle` puts `TodosListModel.subtitle`
+    under the title (`navigationSubtitleWhenSupported`, iOS 26 and later). The search (`TodosListModel.query`) matches the
+    open rows' titles and notes with `localizedStandardContains`, opens every fold and sets the choice aside; its last
+    row presents `AssistantFullSearch` (Persona's chats only) with the words, and a chat picked there opens through
+    `AppModel.openAssistantConversation` once the cover is gone. A choice scrolls the list to its top. Each view reads
+    only what it draws (the toolbar, the subtitle, the top lines, the headers), so a count or a choice redraws those
+    alone (P5).
+  - **The container and the row.** `.sectionCards()` (the design system's, `listStyle(.insetGrouped)` today) on
+    `themedPage()`; rows and Can wait keep the system's cells (`TodoListCell.insets`: `Space.l` at the sides, none
+    above or below) and the row has its own `Space.m` padding; headers drop their font for the system's and move their
+    words over the ticks with `listRowInsets(.horizontal, Space.l)` on iOS 26 and later (iOS 18 can set only all four
+    insets, so its headers keep the system's). Someday and Done today are tail groups (`TodosListGroup.tail`): a
+    section whose header is the fold, its rows drawn only while open. The row's time is `TodoTimeWords.due` ("Due Fri")
+    or `.age` ("16m ago"), none when line 2 said a time (`TodoLineText.Said.timed`); its separator is
+    `TodoTimeWords.separator`, a no-break space before "·". Tests: `TodosFilterTests`, `TodosListLayoutTests`,
+    `TodoListContainerTests` (no row background of the list's own), `TodoLineTextTests`, `TodosListModelTests`
+    (`theFilterAndItsGuardLine`, `theSortOrdersInsideEachSection`) and the UI suite's `testTheFilterSearchAndNewToDo`
+    against `MOCK_TODO_VIEW=1`.
   `TodoWorkspace` (one for the app, `TodoWorkspace.shared`, outside the pages' trees) keeps the place and where each
   place's list came to rest, written only while the scene is active and only from the tree the window shows; a page
-  made anew puts its list back there once, and a page a to-do popped back to keeps its own place. The grouping and the
-  sort are kept on the device (`todos.v1.grouping`, `todos.v1.sort`); the bar's choice is not.
+  made anew puts its list back there once, and a page a to-do popped back to keeps its own place. The sort and Group by
+  Project are kept on the device (`todos.v1.sort`, `todos.v1.byProject`, written back from the model whenever ⋯
+  changes them; a sort this build does not offer reads as Suggested); the Filter's choice and the search's words are
+  not.
 - **The rows' writes** (`TodoListActions.swift`, `TodoOutbox`; DESIGN_SYSTEM 3.4 "To-dos list"). The tick, the trailing
   swipe (Done, Someday; Reopen on a closed row), the long-press menu (Today, Date…, Project, Someday, Copy Link,
   Delete…) and New To-Do; which a row offers is `TodoRowActionList`'s, so the swipe, the menu and VoiceOver's actions
