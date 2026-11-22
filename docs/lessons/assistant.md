@@ -1,5 +1,7 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A command that returns text to the message pipeline must keep its explicit destination (#12700). In the official bot DM, resetting `current` for `/new <first message>` was insufficient: pending-card handlers could consume the text, and parent/root bindings could restore an old target. Carry the fresh Persona target past those handlers while retaining reply metadata for quoted context. Test through `FeishuMessage` with old Persona/Agent bindings, an answerable card and duplicate delivery; keep bare `/new` and ordinary replies as controls.
+
 - A launcher name does not identify an execution backend (#12791). Scheduled Assistant conversations must pass
   `purpose: assistant` to model discovery and argument-forwarding checks, just as ordinary Assistant messages do.
   On an exclusive Agent engine, a same-named provider can advertise different models and thinking levels from the
