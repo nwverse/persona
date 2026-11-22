@@ -249,7 +249,7 @@ func contextDelta(seen map[string]string, snapshot string) (string, map[string]s
 // hub keeps them until then: a message that fails to go out leaves them for the next one).
 func (n *Node) turnContext(id string, c contextAnswer) (block string, commit func()) {
 	// A snapshot may have been prefetched before idle-aware compaction completed.
-	if st, ok := n.state.get(id); ok && st.RecoveryPending != "" && st.RecoveryPending != c.RecoveryID && n.peer != nil {
+	if st, ok := n.state.get(id); ok && st.RecoveryPending != "" && c.requested && st.RecoveryPending != c.requestedRecoveryID && n.peer != nil {
 		c = n.assistantContext(id)
 	}
 	n.mu.Lock()
@@ -345,6 +345,9 @@ func (n *Node) toolsAtStart(id string, tools []string) {
 
 // contextAnswer is the hub's assistant.context answer (assistantwire.ContextResult).
 type contextAnswer struct {
+	// Local request provenance: intentionally empty guest/public input must never trigger a context fetch.
+	requested           bool
+	requestedRecoveryID string
 	RecoveryID          string          `json:"recovery_id,omitempty"`
 	Recovery            string          `json:"recovery,omitempty"`
 	CompactInstructions string          `json:"compact_instructions,omitempty"`
@@ -361,11 +364,11 @@ func (n *Node) assistantContext(id string) contextAnswer {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	var res contextAnswer
 	st, _ := n.state.get(id)
+	res := contextAnswer{requested: true, requestedRecoveryID: st.RecoveryPending}
 	if err := n.peer.Call(ctx, "assistant.context", map[string]any{"session_id": id, "recovery_id": st.RecoveryPending, "prepare_recovery": true}, &res); err != nil {
 		n.logger.Printf("assistant context: %v", err)
-		return contextAnswer{}
+		return contextAnswer{requested: true, requestedRecoveryID: st.RecoveryPending}
 	}
 	if res.CompactInstructions != "" {
 		n.state.update(id, func(v *sessionState) bool {

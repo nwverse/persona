@@ -96,10 +96,10 @@ func TestCompactRecoverySourceScopeAndVerbatimDecisions(t *testing.T) {
 	s.todos.mu.Lock()
 	s.todos.todos[todo.ID].Project = project.Slug
 	s.todos.mu.Unlock()
-	if err := os.WriteFile(e.Store.Path(kb.KindProject, project.Slug, "STATE.md"), []byte("STATE_FROM_PROJECT"), 0600); err != nil {
+	if err := os.WriteFile(e.Store.Path(kb.KindProject, project.Slug, "STATE.md"), []byte("STATE_FROM_PROJECT"+strings.Repeat("状态", 2000)), 0600); err != nil {
 		t.Fatal(err)
 	}
-	f.setItems(proto.Item{ID: "u-recent", Seq: 4, Role: "user", Kind: proto.KindText, Text: "RECENT_ORIGINAL"}, proto.Item{ID: "relay", Role: "user", Kind: proto.KindText, Text: "RELAY_ONLY", Source: &proto.MessageSource{Kind: proto.SourceConversation}})
+	f.setItems(proto.Item{ID: "u-recent", Seq: 4, Role: "user", Kind: proto.KindText, Text: "RECENT_ORIGINAL"}, proto.Item{ID: "partial", Role: "user", Kind: proto.KindText, Text: "PARTIAL_QUOTE_ONLY", FullSize: 10000}, proto.Item{ID: "stored", Role: "user", Kind: proto.KindText, Text: "STORED_QUOTE_ONLY", Stored: &proto.StoredItem{}}, proto.Item{ID: "relay", Role: "user", Kind: proto.KindText, Text: "RELAY_ONLY", Source: &proto.MessageSource{Kind: proto.SourceConversation}})
 	p := ContextParams{SessionID: "conv1", MachineID: "server", RecoveryID: "break-1"}
 	out, handled, err := s.nodeAnswer(ctx, "server", "assistant.context", json.RawMessage(`{"session_id":"conv1","recovery_id":"break-1","machine_id":"untrusted"}`))
 	if err != nil || !handled {
@@ -111,7 +111,7 @@ func TestCompactRecoverySourceScopeAndVerbatimDecisions(t *testing.T) {
 			t.Errorf("recovery lacks %q: %s", want, got.Recovery)
 		}
 	}
-	for _, bad := range []string{"AGENT_ONLY", "OLD_ONLY", "RELAY_ONLY"} {
+	for _, bad := range []string{"AGENT_ONLY", "OLD_ONLY", "RELAY_ONLY", "PARTIAL_QUOTE_ONLY", "STORED_QUOTE_ONLY"} {
 		if strings.Contains(got.Recovery, bad) {
 			t.Errorf("leaked %q", bad)
 		}
@@ -159,6 +159,15 @@ func TestCompactRecoveryDirectionAndExclusions(t *testing.T) {
 		if tc.want && !strings.Contains(got.Recovery, "DIRECTION_RULE") {
 			t.Fatal("direction rule missing")
 		}
+	}
+	s.directions.mu.Lock()
+	s.directions.m["conv_lead"].MachineID = ""
+	s.directions.mu.Unlock()
+	if got := s.Context(ctx, ContextParams{SessionID: "conv_lead", MachineID: "server", RecoveryID: "legacy"}); !strings.Contains(got.Recovery, "DIRECTION_RULE") {
+		t.Fatal("legacy direction lost the configured machine fallback")
+	}
+	if got := s.Context(ctx, ContextParams{SessionID: "conv_lead", MachineID: "wrong", RecoveryID: "legacy"}); got.Recovery != "" {
+		t.Fatal("legacy machine fallback broadened scope")
 	}
 	if got := s.Context(ctx, ContextParams{SessionID: "conv_lead", MachineID: "server"}); got.Recovery != "" {
 		t.Fatal("ordinary turn repeated recovery")

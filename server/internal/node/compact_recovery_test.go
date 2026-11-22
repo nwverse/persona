@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func TestCompactRecoveryDeliveryRetryAndRestart(t *testing.T) {
@@ -70,5 +71,57 @@ func TestCompactRecoverySummaryInstructionsReachRuntimes(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(strings.TrimPrefix(args[1], "compact_prompt=")), &decoded); err != nil || decoded != instructions {
 		t.Fatalf("Codex compact prompt: %v %q", err, decoded)
+	}
+}
+
+func TestCompactRecoveryDoesNotFetchIntentionallyOmittedContext(t *testing.T) {
+	n, asked := closeoutHookNode(t, func(string, json.RawMessage) (any, error) { return contextAnswer{Text: "PRIVATE_OWNER_STATE"}, nil })
+	const id = "11111111-2222-3333-4444-555555555555"
+	n.state.put(id, sessionState{Launcher: "claude", Cwd: "/example"})
+	n.contextCompacted(id)
+	block, commit := n.turnContext(id, contextAnswer{}) // guest/public delivery intentionally supplied no context
+	commit()
+	if block != "" || asked.Load() != 0 {
+		t.Fatalf("omitted context fetched owner state: %q (%d asks)", block, asked.Load())
+	}
+	st, _ := n.state.get(id)
+	if st.RecoveryPending == "" {
+		t.Fatal("omitted context consumed a future authorized recovery")
+	}
+}
+
+func TestCompactRecoveryRefreshesOnlyAPrefetchFromBeforeItsCheckpoint(t *testing.T) {
+	n, asked := closeoutHookNode(t, func(method string, raw json.RawMessage) (any, error) {
+		var p struct {
+			RecoveryID string `json:"recovery_id"`
+		}
+		if method != "assistant.context" {
+			return nil, &rpc.Error{Code: "unexpected", Message: method}
+		}
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return nil, err
+		}
+		out := contextAnswer{Text: "snapshot", RecoveryID: p.RecoveryID}
+		if p.RecoveryID != "" {
+			out.Recovery = "recovered checkpoint"
+		}
+		return out, nil
+	})
+	const id = "11111111-2222-3333-4444-555555555555"
+	n.state.put(id, sessionState{Launcher: "claude", Cwd: "/example"})
+	prefetched := n.assistantContext(id)
+	n.contextCompacted(id)
+	block, commit := n.turnContext(id, prefetched)
+	if !strings.Contains(block, "recovered checkpoint") || asked.Load() != 2 {
+		t.Fatalf("prefetch not refreshed: %q (%d asks)", block, asked.Load())
+	}
+	commit()
+	// A request already made for this checkpoint must not be fetched again after an empty/unsupported answer.
+	n.contextCompacted(id)
+	current := n.assistantContext(id)
+	current.Recovery, current.RecoveryID = "", ""
+	_, _ = n.turnContext(id, current)
+	if asked.Load() != 3 {
+		t.Fatalf("same-checkpoint answer retried immediately: %d asks", asked.Load())
 	}
 }

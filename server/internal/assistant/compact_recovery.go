@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"html"
@@ -89,7 +90,7 @@ func (s *Service) compactRecoverySource(ctx context.Context, p ContextParams) co
 	cfg := s.settings(ctx)
 	main := cfg.Main == p.SessionID && cfg.mainRouteMachine() == p.MachineID
 	leader := s.isLeader(ctx, p.SessionID)
-	if d := s.directionOf(p.SessionID); leader && (d == nil || d.MachineID != p.MachineID || d.EndedAt != nil) {
+	if d := s.directionOf(p.SessionID); leader && (d == nil || cmp.Or(d.MachineID, cfg.MachineID) != p.MachineID || d.EndedAt != nil) {
 		leader = false
 	}
 	_ = s.ensureTodosLoaded(ctx)
@@ -204,8 +205,8 @@ func (s *Service) compactRecoverySource(ctx context.Context, p ContextParams) co
 			if f, err := os.Open(e.Store.Path(kb.KindProject, project.Slug, "STATE.md")); err == nil {
 				raw, readErr := io.ReadAll(io.LimitReader(f, 8192))
 				_ = f.Close()
-				if readErr == nil && utf8.Valid(raw) {
-					state = string(raw)
+				if readErr == nil {
+					state = strings.ToValidUTF8(string(raw), "")
 					source = "project/" + project.Slug + "/STATE.md"
 				}
 			}
@@ -229,7 +230,7 @@ func (s *Service) compactRecoveryBudget(ctx context.Context, p ContextParams) in
 		return compactRecoveryBytes
 	}
 	if s.isLeader(ctx, p.SessionID) {
-		if d := s.directionOf(p.SessionID); d != nil && d.MachineID == p.MachineID && d.EndedAt == nil {
+		if d := s.directionOf(p.SessionID); d != nil && cmp.Or(d.MachineID, cfg.MachineID) == p.MachineID && d.EndedAt == nil {
 			return compactRecoveryBytes
 		}
 	}
@@ -324,7 +325,7 @@ func (s *Service) compactRecoveryPins(ctx context.Context, p ContextParams) []pr
 	if s.call(readCtx, p.MachineID, DeviceSessionItems, map[string]any{"session_id": p.SessionID, "turns": 4}, &recent) == nil {
 		for i := len(recent.Items) - 1; i >= 0 && len(pins) < 3; i-- {
 			it := recent.Items[i]
-			if it.Role != "user" || it.Kind != proto.KindText || prompts.ItemSource(it) != nil || contextTagRe.MatchString(it.Text) {
+			if it.Role != "user" || it.Kind != proto.KindText || it.FullSize > 0 || it.Stored != nil || prompts.ItemSource(it) != nil || contextTagRe.MatchString(it.Text) {
 				continue
 			}
 			pins = append(pins, prompts.RecoveryEntry{Source: fmt.Sprintf("session/%s/%s/item/%s seq=%d", p.MachineID, p.SessionID, it.ID, it.Seq), Text: it.Text})

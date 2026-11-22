@@ -1066,7 +1066,8 @@ For the main and direction conversations, the first input after a compaction car
 6 KiB of UTF-8, including its markup. Task workers use at most 3 KiB. The node persists a checkpoint when the runtime
 reports a compaction and consumes it only when an input carrying the matching recovery block is delivered. Failed
 sends retain it; a restart retains it; an older delivery cannot clear a newer checkpoint. A snapshot prefetched before
-idle-aware compaction is refreshed at delivery. The block accompanies the next real input and does not start a turn.
+idle-aware compaction is refreshed at delivery only when that input originally requested context. Intentionally
+omitted guest/public context never triggers a recovery fetch. The block accompanies the next real input and does not start a turn.
 
 The manager collects scoped to-do state, direction instructions, project `STATE.md` (falling back to the existing
 project summary), effective user decisions and recent user inputs. Main and direction recovery includes the last seven
@@ -1082,7 +1083,8 @@ session IDs, non-negotiable rules, and items waiting for the user. Claude reads 
 instructions and receives them on explicit/idle compaction; Codex receives them through its `compact_prompt` setting.
 Claude SessionStart(compact) has a separate recovery handler, including headless Assistant conversations. It waits
 at most 1.5 seconds for the manager, using scoped records prepared asynchronously during regular context reads and
-fresh user quotes. A socket reply consumes its matching checkpoint only after a successful write. Hook-first and
+fresh user quotes. Prepared records expire after two minutes; recovery on a platform input reads the source records
+afresh. A socket reply consumes its matching checkpoint only after a successful write. Hook-first and
 stream-boundary-first ordering share that checkpoint; timeout leaves it pending for the next platform input.
 Report-only hooks, guests, subagents and sessions not owned by the platform cannot use this handler.
 
