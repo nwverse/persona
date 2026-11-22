@@ -8,6 +8,7 @@
     <string name="settings_pairing_notice_local_denied">Local network access wasn\'t granted. Allow it in system settings, then come back and try again.</string>
     <string name="settings_pairing_notice_camera_denied">Camera access is off. You can enter the address and pairing code by hand.</string>
     <string name="settings_pairing_notice_clipboard_empty">There\'s no pairing link on the clipboard.</string>
+    <string name="settings_pairing_help">Help</string>
     <string name="settings_pairing_welcome_title">Welcome to Persona</string>
     <string name="settings_pairing_welcome_guide">No hub yet?</string>
     <string name="settings_pairing_failed_title">Couldn\'t connect</string>

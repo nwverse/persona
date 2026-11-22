@@ -3966,3 +3966,8 @@ and ordinary-new-chat caches are distinct; no main read writes shared defaults.
 An older hub with no main purpose retains shared defaults; a transient main read
 failure keeps the last good main value. Reuse the existing capsule, panel and
 feedback, without a new control or polling loop.
+
+
+## First-run pairing
+
+Center the Persona mark and title above the primary control. A phone opens its scanner. A browser takes a pairing link and submits it with the arrow inside the field group. Place the secondary actions in one centered row of icons with short labels. Keep the action and its label in a single tap target. Allow wrapping or stacking at larger text sizes. Help explains where to get a code or link. A warning about replacing an existing pairing stays beside the action.

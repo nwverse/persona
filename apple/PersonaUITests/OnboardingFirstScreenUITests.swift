@@ -43,6 +43,11 @@ final class OnboardingFirstScreenUITests: XCTestCase {
         sleep(1)
         shot(app, "welcome")
 
+        app.buttons["welcome.help"].tap()
+        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5))
+        app.alerts.firstMatch.buttons["welcome.help.done"].tap()
+        XCTAssertTrue(pair.isHittable)
+
         app.buttons["welcome.other"].tap()
         let address = app.textFields["服务器地址"]
         XCTAssertTrue(address.waitForExistence(timeout: 10), "其他方式 has no address field:\n\(app.debugDescription)")

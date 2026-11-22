@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { ApiError, errorText } from "../lib/api";
 import { pair } from "../lib/auth";
 import { here, rememberHub } from "../lib/hubs";
-import { Button, Collapse, cx, Spinner } from "../ui/atoms";
+import { Button, cx, Spinner } from "../ui/atoms";
 import { AppMark } from "../ui/AppMark";
 import { Icon } from "../ui/icons";
 import { OtherHubs } from "./Hubs";
@@ -36,9 +36,7 @@ export function Login({ onDone, error: linkError = "" }: { onDone: () => void; e
   // the link form's error (a link's token that didn't work starts there) and the master key's
   const [error, setError] = useState(linkError);
   const [masterError, setMasterError] = useState("");
-  const [advanced, setAdvanced] = useState(false);
-  const [noHub, setNoHub] = useState(false);
-  const [qrOpen, setQrOpen] = useState(false);
+  const [panel, setPanel] = useState<"qr" | "help" | "advanced" | null>(null);
   useEffect(() => void rememberHub(here()), []);
 
   const submit = (from: "link" | "master") => async (e: React.FormEvent) => {
@@ -68,123 +66,116 @@ export function Login({ onDone, error: linkError = "" }: { onDone: () => void; e
   return (
     <div className="flex min-h-full items-center justify-center bg-page px-5 py-16">
       <div className="w-full max-w-[380px]" style={{ animation: "fade-up 450ms cubic-bezier(0.23,1,0.32,1) both" }}>
-        <header className="mb-5 flex items-center gap-3">
-          <AppMark size={44} radius={12} className="shadow-raised" />
-          <h1 id="login-title" className="text-xl font-semibold tracking-tight text-ink">{t("login.title")}</h1>
+        <header className="mb-7 flex flex-col items-center gap-4 text-center">
+          <AppMark size={80} radius={20} className="shadow-raised" />
+          <h1 id="login-title" className="text-2xl font-semibold tracking-tight text-ink">{t("login.title")}</h1>
         </header>
 
         <div className="rounded-card bg-surface shadow-card">
-          <form onSubmit={submit("link")} aria-labelledby="login-title" className="space-y-2 p-3">
-            <label className={field}>
-              <Icon name="link" size={14} className="text-ink-3" />
-              <input
-                autoFocus
-                type="text"
-                value={link}
-                onChange={(e) => {
-                  setLink(e.target.value);
-                  setError("");
-                }}
-                placeholder={t("login.link_placeholder")}
-                aria-label={t("login.link_placeholder")}
-                aria-describedby="login-link-error"
-                autoComplete="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                className={input}
-              />
-            </label>
-            <Button type="submit" tone="primary" disabled={!link.trim() || busy !== ""} className="min-h-11 w-full">
-              {busy === "link" ? <Spinner /> : t("login.sign_in")}
-            </Button>
-            <p id="login-link-error" className={`empty:hidden ${formError}`} role="alert">{error}</p>
+          <form onSubmit={submit("link")} aria-labelledby="login-title" className="p-2">
+            <div className="flex items-center gap-2">
+              <label className={cx(field, "min-w-0 flex-1")}>
+                <Icon name="link" size={14} className="text-ink-3" />
+                <input
+                  autoFocus
+                  type="text"
+                  value={link}
+                  onChange={(e) => {
+                    setLink(e.target.value);
+                    setError("");
+                  }}
+                  placeholder={t("login.link_placeholder")}
+                  aria-label={t("login.link_placeholder")}
+                  aria-describedby="login-link-error"
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  className={input}
+                />
+              </label>
+              <Button type="submit" tone="primary" disabled={!link.trim() || busy !== ""} aria-label={t("login.sign_in")} title={t("login.sign_in")} className="min-h-11 w-11 shrink-0 !p-0">
+                {busy === "link" ? <Spinner /> : <Icon name="arrowRight" size={20} />}
+              </Button>
+            </div>
+            <p id="login-link-error" className={`mt-2 empty:hidden ${formError}`} role="alert">{error}</p>
           </form>
-          <details className="group border-t border-line">
-            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-2 rounded-control px-4 text-meta text-ink-2 hover:bg-hover [&::-webkit-details-marker]:hidden">
-              {t("login.get_link")}
-              <Icon name="chevronRight" size={14} className="group-open:rotate-90" />
-            </summary>
-            <ol className="list-decimal space-y-2 pb-2 pl-9 pr-4 text-meta leading-relaxed text-ink-2">
-              <li>{tRich("login.phone_step_open", { path: <strong className="font-medium text-ink">{t("login.phone_path")}</strong> })}</li>
-              <li>{t("login.phone_step_copy")}</li>
-            </ol>
-            <p className="px-4 pb-4 text-meta leading-relaxed text-ink-2">{t("login.phone_step_scan")}</p>
-          </details>
         </div>
 
-        <div className="mt-4 divide-y divide-line">
-          {/* A code is made only once this is opened, by someone who means to scan it (#10291). */}
-          <Disclosure open={qrOpen} onToggle={() => setQrOpen((v) => !v)} label={t("login.qr_open")} id="login-qr">
-            {qrOpen && <div className="px-1 pb-2"><BrowserLoginQR onDone={onDone} /></div>}
-          </Disclosure>
-          <Disclosure open={noHub} onToggle={() => setNoHub((v) => !v)} label={t("login.no_hub")} id="login-no-hub">
+        <div className="mt-5 flex justify-center gap-3">
+          {([
+            ["qr", "phone", "login.qr_short", "login.qr_open"],
+            ["help", "info", "login.help_short", "login.get_link"],
+            ["advanced", "key", "login.key_short", "login.advanced"],
+          ] as const).map(([id, icon, caption, name]) => (
+            <button key={id} type="button" title={t(name)}
+              aria-expanded={panel === id} aria-controls={`login-${id}`}
+              onClick={() => setPanel(panel === id ? null : id)}
+              className="group flex min-w-16 flex-col items-center gap-1.5 rounded-control text-meta text-ink-2">
+              <span className={cx("grid size-11 place-items-center rounded-full bg-surface shadow-hairline group-hover:bg-hover", panel === id && "bg-field ring-1 ring-current")}>
+                <Icon name={icon} size={20} />
+              </span>
+              {t(caption)}
+            </button>
+          ))}
+        </div>
+        <div id="login-qr" className="mt-4" hidden={panel !== "qr"}>
+          {panel === "qr" && <BrowserLoginQR onDone={onDone} />}
+        </div>
+        <div id="login-help" hidden={panel !== "help"} className="mt-4 rounded-card bg-surface p-4 text-meta text-ink-2 shadow-card">
+          <h2 className="mb-2 font-semibold text-ink">{t("login.get_link")}</h2>
+          <ol className="list-decimal space-y-2 pb-2 pl-5 text-meta leading-relaxed text-ink-2">
+            <li>{tRich("login.phone_step_open", { path: <strong className="font-medium text-ink">{t("login.phone_path")}</strong> })}</li>
+            <li>{t("login.phone_step_copy")}</li>
+          </ol>
+          <p className="pb-3 text-meta leading-relaxed text-ink-2">{t("login.phone_step_scan")}</p>
+          <p className="mb-3">{t("login.credential_note")}</p>
+          <details>
+            <summary className="cursor-pointer py-2">{t("login.no_hub")}</summary>
             <div className="space-y-1.5 px-3 pb-2 text-[12px] leading-relaxed text-ink-2">
               <p>{t("login.no_hub_what")}</p>
               <p>{t("login.no_hub_yours")}</p>
               <p>{t("login.no_hub_others")}</p>
             </div>
-          </Disclosure>
-          <Disclosure open={advanced} onToggle={() => setAdvanced((v) => !v)} label={t("login.advanced")} id="login-advanced">
-            <form onSubmit={submit("master")} aria-label={t("login.connect")} className="px-3 pb-2">
-              <p className="flex items-start gap-1.5 text-[12px] leading-relaxed text-ink-2">
-                <Icon name="warning" size={13} className="mt-0.5 shrink-0 text-orange" />
-                <span>{t("login.master_warning")}</span>
-              </p>
-              <p className="mt-1.5 text-[11.5px] leading-[1.9] text-ink-3">
-                {tRich("login.master_where", {
-                  pair: <code className={code}>personad hub pair --legacy</code>,
-                  jq: <code className={code}>jq -r .token ~/.persona/hub.json</code>,
-                })}
-              </p>
-              <div className="mt-2 rounded-card bg-surface p-1.5 shadow-card">
-                <label className={field}>
-                  <Icon name="key" size={14} className="text-ink-3" />
-                  <input
-                    type="password"
-                    value={master}
-                    onChange={(e) => {
-                      setMaster(e.target.value);
-                      setMasterError("");
-                    }}
-                    placeholder={t("login.master_placeholder")}
-                    aria-label={t("login.master_placeholder")}
-                    autoComplete="off"
-                    className={input}
-                  />
-                </label>
-                <Button type="submit" tone="secondary" disabled={!master.trim() || busy !== ""} className="mt-1.5 min-h-11 w-full">
-                  {busy === "master" ? <Spinner /> : t("login.connect")}
-                </Button>
-              </div>
-              <p className={`mt-2 ${formError}`} role="alert">
-                {masterError}
-              </p>
-            </form>
-          </Disclosure>
+          </details>
         </div>
-        <p className="mt-5 px-3 text-meta leading-relaxed text-ink-3">{t("login.credential_note")}</p>
+        <div id="login-advanced" hidden={panel !== "advanced"} className="mt-4 rounded-card bg-surface p-3 shadow-card">
+          <form onSubmit={submit("master")} aria-label={t("login.connect")} className="px-3 pb-2">
+            <p className="flex items-start gap-1.5 text-[12px] leading-relaxed text-ink-2">
+              <Icon name="warning" size={13} className="mt-0.5 shrink-0 text-orange" />
+              <span>{t("login.master_warning")}</span>
+            </p>
+            <p className="mt-1.5 text-[11.5px] leading-[1.9] text-ink-3">
+              {tRich("login.master_where", {
+                pair: <code className={code}>personad hub pair --legacy</code>,
+                jq: <code className={code}>jq -r .token ~/.persona/hub.json</code>,
+              })}
+            </p>
+            <div className="mt-2 rounded-card bg-surface p-1.5 shadow-card">
+              <label className={field}>
+                <Icon name="key" size={14} className="text-ink-3" />
+                <input
+                  type="password"
+                  value={master}
+                  onChange={(e) => {
+                    setMaster(e.target.value);
+                    setMasterError("");
+                  }}
+                  placeholder={t("login.master_placeholder")}
+                  aria-label={t("login.master_placeholder")}
+                  autoComplete="off"
+                  className={input}
+                />
+              </label>
+              <Button type="submit" tone="secondary" disabled={!master.trim() || busy !== ""} className="mt-1.5 min-h-11 w-full">
+                {busy === "master" ? <Spinner /> : t("login.connect")}
+              </Button>
+            </div>
+            <p className={`mt-2 ${formError}`} role="alert">
+              {masterError}
+            </p>
+          </form>
+        </div>
         <OtherHubs />
-      </div>
-    </div>
-  );
-}
-
-/** A quiet row that folds what is under it up and down. */
-function Disclosure({ open, onToggle, label, id, children }: { open: boolean; onToggle: () => void; label: string; id: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        aria-controls={id}
-        className="flex min-h-11 w-full items-center justify-between gap-2 rounded-control px-3 text-left text-[12.5px] text-ink-2 transition-colors hover:bg-hover hover:text-ink"
-      >
-        <span>{label}</span>
-        <Icon name="chevronRight" size={14} className={cx("shrink-0 text-ink-3 transition-transform duration-200", open && "rotate-90")} />
-      </button>
-      <div id={id}>
-        <Collapse open={open}>{children}</Collapse>
       </div>
     </div>
   );

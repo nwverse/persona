@@ -914,7 +914,7 @@ struct WelcomeView: View {
     @Environment(AppModel.self) private var model
     @State private var pair: PairView.Start?
     @State private var guide: LinkTarget?
-    @State private var appear = false
+    @State private var showHelp = false
     #if os(macOS)
     private static let pairTitle = String(localized: "Paste Pairing Link")
     private static let pairIcon = Theme.Icon.paste
@@ -926,66 +926,41 @@ struct WelcomeView: View {
     #endif
 
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer()
-            AppGlyph(size: 96)
-                .scaleEffect(appear ? 1 : 0.8)
-                .opacity(appear ? 1 : 0)
-            Text("Persona")
-                .font(Theme.Font.display)
-                .padding(.top, Theme.Space.xl)
-            Text("Connect your computers and your phone, and let AI get things done.")
-                .font(Theme.Font.title)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.top, Theme.Space.sm)
-                .padding(.horizontal, Theme.Space.xl)
-            VStack(alignment: .leading, spacing: Theme.Space.l) {
-                feature(Theme.Icon.agentChat, String(localized: "Get things done by chatting"), String(localized: "It reads files and runs commands on your computer, and asks you before it acts"))
-                feature("bolt.horizontal", String(localized: "See what it's doing, live"), String(localized: "Thinking, tool calls, and the terminal, streamed"))
-                #if os(macOS)
-                feature(Theme.Icon.click, String(localized: "Decide in one window"), String(localized: "Answer questions, approve plans, and allow tools without switching to the terminal"))
-                feature(Theme.Icon.mailAccounts, String(localized: "Bring your mail and iPhone"), String(localized: "Gmail and other mail; calendar, contacts, and photos from Persona on your iPhone"))
-                #else
-                feature(Theme.Icon.tap, String(localized: "Decide on your phone"), String(localized: "Answer questions, approve plans, and allow tools, even on your watch"))
-                feature(Theme.Icon.thisDevice, String(localized: "Bring your phone and mail"), String(localized: "Calendar, reminders, contacts, health, photos, Gmail"))
-                #endif
-            }
-            .padding(.top, 40)
-            .padding(.horizontal, Theme.Space.xxl)
-            Spacer()
-            Button { pair = .scan } label: {
-                Label(Self.pairTitle, systemImage: Self.pairIcon).font(Theme.Font.heading).lineLimit(1)
-                    .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.well)
-            }
-            .themedButton(prominent: true)
-            .controlSize(.large)
-            .padding(.horizontal, Theme.Space.xl)
-            .accessibilityIdentifier("welcome.pair")
-            Text(Self.pairHint)
-                .font(Theme.Font.label)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, Theme.Space.m)
-                .padding(.horizontal, Theme.Space.xl)
-            VStack(spacing: Theme.Space.s) {
-                if let url = GettingStarted.url {
-                    link(String(localized: "No hub yet?"), id: "welcome.guide") { guide = LinkTarget(url: url) }
+        GeometryReader { bounds in
+            ScrollView {
+                VStack(spacing: Theme.Space.xl) {
+                    VStack(spacing: Theme.Space.l) {
+                        AppGlyph(size: Theme.Size.box80)
+                        Text("Persona").font(Theme.Font.display).accessibilityAddTraits(.isHeader)
+                    }
+                    Button { pair = .scan } label: {
+                        Label(Self.pairTitle, systemImage: Self.pairIcon)
+                            .font(Theme.Font.heading).lineLimit(1).minimumScaleFactor(0.8)
+                            .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.well)
+                    }
+                    .themedButton(prominent: true)
+                    .controlSize(.large)
+                    .accessibilityIdentifier("welcome.pair")
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: Theme.Space.xl) { actions }
+                        VStack(spacing: Theme.Space.s) { actions }
+                    }
                 }
-                // Without a hub there is nothing else to see: App Review and friends with the TestFlight link start here.
-                link(String(localized: "Try it first (made-up data)"), id: "welcome.demo") { model.enterDemo() }
-                link(String(localized: "Other ways"), id: "welcome.other") { pair = .other }
+                .padding(Theme.Space.xl)
+                .frame(maxWidth: Theme.Size.box380)
+                .frame(maxWidth: .infinity, minHeight: bounds.size.height)
             }
-            .padding(.top, Theme.Space.l)
-            .padding(.bottom, Theme.Space.m)
         }
-        // iPad: a centered column, not buttons from edge to edge.
-        .frame(maxWidth: Theme.Size.readable)
-        .frame(maxWidth: .infinity)
         .sheet(item: $pair) { PairView(start: $0) }
         .sheet(item: $guide) { LinkSheet(target: $0) }
-        .onAppear { withAnimation(.spring(duration: 0.8, bounce: 0.35)) { appear = true } }
+        .alert(Text("Help"), isPresented: $showHelp) {
+            if let url = GettingStarted.url {
+                Button("No hub yet?") { guide = LinkTarget(url: url) }
+                    .accessibilityIdentifier("welcome.guide")
+            }
+            Button("OK", role: .cancel) {}
+                .accessibilityIdentifier("welcome.help.done")
+        } message: { Text(Self.pairHint) }
         #if DEBUG
         // `-openPairSheet YES` (or `other`): the pairing sheet, for screenshots (scripts/app/sim.sh).
         .onAppear {
@@ -998,28 +973,24 @@ struct WelcomeView: View {
         #endif
     }
 
-    private func link(_ title: String, id: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title).font(Theme.Font.secondaryStrong).lineLimit(1).minimumScaleFactor(0.8)
-                .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.tapTarget)
-        }
-        .buttonStyle(.borderless)
-        .foregroundStyle(Theme.accent)
-        .padding(.horizontal, Theme.Space.xl)
-        .accessibilityIdentifier(id)
+    @ViewBuilder private var actions: some View {
+        shortcut("Other ways", icon: Theme.Icon.keyboard, id: "welcome.other") { pair = .other }
+        shortcut("Help", icon: Theme.Icon.help, id: "welcome.help") { showHelp = true }
+        shortcut("Demo", icon: Theme.Icon.playMedia, id: "welcome.demo") { model.enterDemo() }
     }
 
-    private func feature(_ symbol: String, _ title: String, _ detail: String) -> some View {
-        HStack(alignment: .top, spacing: Theme.Space.l) {
-            ThemedIcon(symbol)
-                .font(Theme.Font.title)
-                .foregroundStyle(Theme.accent)
-                .scaledFrame(width: Theme.Size.wellS)
-            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                Text(title).font(Theme.Font.heading)
-                Text(detail).font(Theme.Font.secondary).foregroundStyle(.secondary)
+    private func shortcut(_ title: LocalizedStringKey, icon: String, id: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: Theme.Space.xs) {
+                ThemedIcon(icon)
+                    .font(Theme.Font.title)
+                    .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+                    .background(.quaternary, in: Circle())
+                Text(title).font(Theme.Font.secondaryStrong).lineLimit(1).fixedSize()
             }
         }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(id)
     }
 }
 

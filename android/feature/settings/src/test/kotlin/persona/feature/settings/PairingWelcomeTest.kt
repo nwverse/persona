@@ -92,6 +92,8 @@ class PairingWelcomeTest {
 
     @Test fun withoutABuildAddressThereIsNoGuideLink() {
         show { PairingScreen(FakePairing(), sessions, onReady = {}, onDiagnostics = {}, gettingStartedUrl = null) }
+        tap(R.string.settings_pairing_help)
+        rule.onNodeWithText(text(R.string.settings_pairing_connect_body)).assertExists()
         rule.onNodeWithText(text(R.string.settings_pairing_welcome_guide)).assertDoesNotExist()
     }
 
@@ -99,6 +101,7 @@ class PairingWelcomeTest {
     @Test fun theGuideOpensInTheAppsLinkCardAndNeverInTheSystemBrowser() {
         show { PairingScreen(FakePairing(), sessions, onReady = {}, onDiagnostics = {}, gettingStartedUrl = guide) }
         rule.onNodeWithTag("chat_link_card").assertDoesNotExist()
+        tap(R.string.settings_pairing_help)
         tap(R.string.settings_pairing_welcome_guide)
         rule.waitUntil(5_000) { rule.onAllNodesWithTag("chat_link_card").fetchSemanticsNodes().isNotEmpty() }
         assertNull(shadowOf(rule.activity).nextStartedActivity)
@@ -208,7 +211,7 @@ class PairingWelcomeTest {
     /** The three buttons of the first screen stay on one line at twice the font size, in each language. */
     private fun welcomeButtonsStayOnOneLine() {
         show(fontScale = 2f) { PairingScreen(FakePairing(), sessions, onReady = {}, onDiagnostics = {}, gettingStartedUrl = guide) }
-        for (id in listOf(R.string.settings_pairing_scan, R.string.settings_pairing_welcome_guide, R.string.settings_pairing_other_ways)) {
+        for (id in listOf(R.string.settings_pairing_scan, R.string.settings_pairing_help, R.string.settings_pairing_other_ways)) {
             val results = mutableListOf<TextLayoutResult>()
             val node = rule.onNodeWithText(text(id), useUnmergedTree = true).fetchSemanticsNode()
             val _ = node.config[SemanticsActions.GetTextLayoutResult].action?.invoke(results)

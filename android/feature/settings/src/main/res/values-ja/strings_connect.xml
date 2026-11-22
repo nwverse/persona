@@ -7,6 +7,7 @@
     <string name="settings_pairing_notice_local_denied">ローカルネットワークへのアクセスが許可されていません。システム設定で許可してから、戻ってもう一度お試しください。</string>
     <string name="settings_pairing_notice_camera_denied">カメラへのアクセスがオフです。アドレスとペアリングコードを手動で入力できます。</string>
     <string name="settings_pairing_notice_clipboard_empty">クリップボードにペアリングリンクがありません。</string>
+    <string name="settings_pairing_help">ヘルプ</string>
     <string name="settings_pairing_welcome_title">Personaへようこそ</string>
     <string name="settings_pairing_welcome_guide">ハブがまだない場合</string>
     <string name="settings_pairing_failed_title">接続できませんでした</string>

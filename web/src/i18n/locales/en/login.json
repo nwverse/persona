@@ -31,5 +31,8 @@
   "qr_title": "Scan this code with Persona on your phone",
   "qr_number_label": "Number shown on your phone",
   "qr_number_hint": "Type the number your phone shows. One try: a wrong number cancels this sign-in.",
-  "qr_voided": "That number didn't match, so this sign-in was cancelled. Refresh the code to try again."
+  "qr_voided": "That number didn't match, so this sign-in was cancelled. Refresh the code to try again.",
+  "qr_short": "Scan",
+  "help_short": "Help",
+  "key_short": "Key"
 }

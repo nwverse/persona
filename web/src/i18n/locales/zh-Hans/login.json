@@ -31,5 +31,8 @@
   "qr_title": "用手机上的 Persona 扫这个码",
   "qr_number_label": "手机上显示的数字",
   "qr_number_hint": "输入手机上显示的数字。只能输一次，输错这次登录就作废。",
-  "qr_voided": "数字不对，这次登录已作废。请刷新二维码再试。"
+  "qr_voided": "数字不对，这次登录已作废。请刷新二维码再试。",
+  "qr_short": "扫码",
+  "help_short": "帮助",
+  "key_short": "密钥"
 }
