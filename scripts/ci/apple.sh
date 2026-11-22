@@ -159,7 +159,9 @@ test_batch() {
     IOS_LAST_STATUS=0
     ci_run "$@" 2>&1 | tee "$OUTPUT/$name.log" || IOS_LAST_STATUS=$?
   else
-    ci_run "$@"
+    # pipefail keeps the bounded command's failure status. The existing failure
+    # collector retains this allowlisted console log with its xcresult.
+    ci_run "$@" 2>&1 | tee "$OUTPUT/$name.log"
   fi
 }
 
@@ -303,7 +305,8 @@ fi
     mv "$watch_log/final.pending" "$watch_log/final.json"
     printf "%s\n" "observer incomplete; bounded unavailable final evidence only" > "$watch_log/observer.status.txt"
     python3 "$ci_root/scripts/ci/apple_build_watch.py" \
-      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" &
+      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" \
+      --derived-data "$output/ios-tests" &
     watcher=$!
     stop_watcher() {
       local code=$?

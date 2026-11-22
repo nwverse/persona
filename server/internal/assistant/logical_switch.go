@@ -65,6 +65,15 @@ func (s *Service) logicalTarget(ctx context.Context, machine, launcher string) (
 	}
 	return target, nil
 }
+
+// sessionEngineAgent is the agent a session row runs: an empty agent outside a runtime is Claude Code, as the node
+// lists a native Claude Code session without one (proto.Session.Agent). A runtime's empty agent stays unknown.
+func sessionEngineAgent(row proto.Session) string {
+	if row.Agent == "" && row.SourceKind != proto.SourceRuntime {
+		return "claude"
+	}
+	return row.Agent
+}
 func (s *Service) segmentsEnabled(ctx context.Context) bool {
 	if s.store() == nil {
 		return false
@@ -249,7 +258,7 @@ func (s *Service) beginLogicalSwitch(ctx context.Context, machine, id string, p 
 		return nil, s.supervisionRuntimeRefusal(ctx, p.MachineID)
 	}
 	if c == nil {
-		if p.ExpectedEpoch != 1 || assistantKind(row.Agent) == "" {
+		if p.ExpectedEpoch != 1 || assistantKind(sessionEngineAgent(row)) == "" {
 			return nil, logicalRefusal(ctx, "unknown_engine")
 		}
 		var page historyPage
@@ -259,7 +268,7 @@ func (s *Service) beginLogicalSwitch(ctx context.Context, machine, id string, p 
 		if page.History == "" {
 			return nil, logicalRefusal(ctx, "missing_generation")
 		}
-		sourceEngine := proto.AssistantExecutionIdentity(row.Agent, row.SourceKind, row.SourceInstanceID, row.Launcher)
+		sourceEngine := proto.AssistantExecutionIdentity(sessionEngineAgent(row), row.SourceKind, row.SourceInstanceID, row.Launcher)
 		if sourceEngine == "" {
 			return nil, logicalRefusal(ctx, "unknown_engine")
 		}
@@ -441,6 +450,18 @@ func (s *Service) advanceLogicalConversation(ctx context.Context, st logicalSwit
 				return err
 			}
 			params["cwd"] = cwd
+			// The role's policy goes with the preparation, as the manager makes it (never from the app's request): the
+			// first input carries the same policy, so the prepared process is kept. A Codex thread with no turn yet
+			// cannot be resumed, so a restart for a policy arriving only with that input started a new thread under
+			// another id and lost the segment (a direction supervisor switched to Codex, live 2026-11-22).
+			policy, err := s.supervisionInstructions(ctx, c.MachineID, c.SessionID)
+			if err != nil {
+				_ = st.ResolveConversationSwitch(ctx, c.MachineID, c.SessionID, op.OperationID, "rejected", "preparation unavailable")
+				return err
+			}
+			if policy != "" {
+				params["supervision_instructions"] = policy
+			}
 		}
 		var raw json.RawMessage
 		err = st.WithConversationEpoch(ctx, c.MachineID, c.SessionID, c.Epoch, func(current *db.LogicalConversation) error {

@@ -104,12 +104,13 @@ fun Todo.supervisorReviewing(now: Long): Boolean {
     return now - since < REVIEW_OVERDUE_MS
 }
 
-/** The task waits for the user's decision or review: an open ask (a decided one only while the task is open), or its
- *  supervisor's `needs_user` on an open task, or a `pending_review` that is the owner's: one waiting an hour or more at
- *  [now], or one the hub gives no start for ([supervisorReviewing]). A younger review is its supervisor's to do. */
+/** The task waits for the user's decision or review: an open task's ask, or its supervisor's `needs_user` on an open
+ *  task, or a `pending_review` that is the owner's: one waiting an hour or more at [now], or one the hub gives no start
+ *  for ([supervisorReviewing]). A younger review is its supervisor's to do. A finished task never waits, whatever ask
+ *  it still carries: the hub's To-dos triage files it with the finished ones (#12974). */
 fun Todo.awaitsDecision(now: Long): Boolean {
-    openAsk?.let { return !(isDone && it.outcome == "decide") }
     if (isDone) return false
+    if (openAsk != null) return true
     return supervision?.state == "user_check" || supervision?.state == "needs_user" || (supervision?.state == "pending_review" && !supervisorReviewing(now))
 }
 
@@ -130,15 +131,19 @@ fun Todo.decisionDismissed(): Boolean {
     return at == decisionRound()
 }
 
-/** The web's `todoRank` (what the user must act on first), on the triage status. */
+/** The web's `todoRank` (what the user must act on first), on the triage status and its display state. */
 private fun Todo.entryRank(status: TriageStatus): Int {
-    if ((supervision?.state == "pending_review" || openAsk != null) && status in RESTING) return 20
+    if (waitsForOwner()) return 0
+    if (kind != "concern" && !isDone && acceptanceStands && (status in RESTING || status == TriageStatus.UsageLimit)) return 80
+    val reviewRequired = supervision?.state == "pending_review" || openAsk != null || (kind != "concern" && delivery?.state == "live")
+    if (reviewRequired && status in RESTING) return 20
     return when (status) {
         TriageStatus.NeedsYou -> 0
         TriageStatus.Interrupted -> 10
         TriageStatus.UsageLimit -> 15
         TriageStatus.Failed -> 30
         TriageStatus.Working -> 40
+        TriageStatus.Waiting -> 45
         TriageStatus.NotStarted -> 50
         TriageStatus.Unread -> 60
         TriageStatus.FollowUp -> 70
@@ -187,7 +192,12 @@ fun assistantEntries(
             }
         } else allStatus
         val asks = own.flatMap { asksOf[GroupKeys.rawKey(it.key)].orEmpty() }
-        val bucket = todo.bucket(lookup, now, restored[todo.id] ?: 0L, superseded = todo.id in superseded)
+        val placed = todo.triage(lookup, now, restored[todo.id] ?: 0L, superseded = todo.id in superseded)
+        val bucket = when {
+            todo.countsAsOpen(placed) -> TodoBucket.Open
+            placed.section == TriageSection.Shelved -> TodoBucket.Shelved
+            else -> TodoBucket.Closed
+        }
         // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open
         val waits = if (status == TriageStatus.Failed) bucket == TodoBucket.Open
             else !todo.isDone && (status == TriageStatus.NeedsYou || status == TriageStatus.Interrupted)
@@ -212,11 +222,10 @@ fun assistantEntries(
             else -> {
                 // finished work a conversation handed out, for a day after it finished, seen or not (#10922); a failed
                 // start a related to-do finished is history, not news
-                val placed = todo.triage(lookup, now, restored[todo.id] ?: 0L, superseded = todo.id in superseded)
                 val ended = todo.finishedAt(placed)
                 if ((placed.section == TriageSection.JustDone || placed.section == TriageSection.Done) &&
                     status != TriageStatus.Failed && !todo.origin.isNullOrBlank() && ended > 0 && now - ended < JUST_DONE_MS) {
-                    finished += FinishedEntry(todo, status, fresh = placed.section == TriageSection.JustDone, at = ended)
+                    finished += FinishedEntry(todo, status, fresh = todo.showsJustFinished(placed, now), at = ended)
                 }
                 continue
             }

@@ -2,12 +2,14 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -57,6 +59,12 @@ func TestAssistantCacheProxyScopeAndLauncherPrecedence(t *testing.T) {
 			var requests atomic.Int32
 			var marked atomic.Int32
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && r.URL.Path == "/" && slices.Contains(portProbeAgents, r.Header.Get("User-Agent")) {
+					// A Persona node on the machine running these tests (they run under its agents) finds this server
+					// among an agent's ports and probes it (ports.go). It is not a provider request: counted, it let
+					// the wait below pass before the CLI's own request and failed the byte check.
+					return
+				}
 				b, _ := io.ReadAll(r.Body)
 				requests.Add(1)
 				if r.Header.Get("X-Persona-Request-Kind") == "cache-keepalive" {
@@ -101,11 +109,23 @@ func TestAssistantCacheProxyScopeAndLauncherPrecedence(t *testing.T) {
 			if (p.cacheProxy != nil) != tc.allow {
 				t.Fatal("wrong process got a proxy")
 			}
+			// A send marks the conversation busy before it writes (writeQueuedAgain); the turn's result clears it. Without
+			// that, f.idle below could pass before the node read the provider's message_start, and Tick found nothing yet.
+			p.mu.Lock()
+			p.busy = true
+			p.mu.Unlock()
 			if err := p.write([]byte(`{"type":"user","message":{"role":"user","content":"fixture"}}`)); err != nil {
 				t.Fatal(err)
 			}
 			cliWait(t, "fake provider request", func() bool { return requests.Load() == 1 })
 			f.idle(t, p.id)
+			// The result clears busy before it sends the turn's last delta, the clear of its live text: wait for that too,
+			// or it can land between the snapshots below and read as the refresh's output.
+			cliWait(t, "the turn's live text cleared", func() bool {
+				f.fh.mu.Lock()
+				defer f.fh.mu.Unlock()
+				return len(f.fh.deltas) > 0 && f.fh.deltas[len(f.fh.deltas)-1] == ""
+			})
 			var barrier any
 			if err := f.n.peer.Call(context.Background(), "assistant.lark", map[string]any{}, &barrier); err != nil {
 				t.Fatal(err)
@@ -132,9 +152,10 @@ func TestAssistantCacheProxyScopeAndLauncherPrecedence(t *testing.T) {
 			}
 			f.fh.mu.Lock()
 			afterDeltas, afterInteractions := len(f.fh.deltas), len(f.fh.asked)
+			newDeltas := slices.Clone(f.fh.deltas[deltas:])
 			f.fh.mu.Unlock()
 			if afterDeltas != deltas || afterInteractions != interactions {
-				t.Fatal("refresh emitted UI output or interactions")
+				t.Fatalf("refresh emitted UI output or interactions: deltas %q, interactions %d -> %d", newDeltas, interactions, afterInteractions)
 			}
 			if want == 1 {
 				f.fh.mu.Lock()
@@ -193,4 +214,70 @@ func waitCacheCheck(t *testing.T, n *Node, id string) {
 	t.Helper()
 	b := n.cacheWarmPool()
 	cliWait(t, "cache policy check", func() bool { b.mu.Lock(); defer b.mu.Unlock(); e := b.entries[id]; return e == nil || !e.checking })
+}
+
+// A main or lead conversation on a Persona-managed Claude launcher whose gateway is an HTTPS address (#12786): the
+// start mounts the proxy in its settings, which win over the provider's own ANTHROPIC_BASE_URL that `personad launch`
+// puts in the process environment; the proxy forwards to that HTTPS gateway. A start the manager gave no role (as a
+// session.send without one did) runs straight on the gateway.
+func TestAssistantCacheProxyMountsForHTTPSManagedLauncher(t *testing.T) {
+	const gateway = "https://gateway.example/anthropic"
+	for _, tc := range []struct {
+		name  string
+		allow bool
+	}{{"attested", true}, {"no-role", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := cliTestBash(t)
+			f.fakeLaunch(t)
+			f.n.setManaged([]proto.ManagedLauncher{{Name: "gw", Kind: "api", BaseURL: gateway, Model: "example-model"}})
+			e := cliExec()
+			e.Model = "example-model"
+			e.IsMain = true
+			if tc.allow {
+				e.CacheKeepalive = &assistantwire.CacheKeepalive{Enabled: true, IntervalMinutes: 55, MaxRequests: 24}
+			}
+			c := f.n.assistantCompactionPolicy("gw", t.TempDir(), "", e)
+			if !c.endpointKnown || c.endpoint != gateway {
+				t.Fatalf("managed endpoint %q known=%v", c.endpoint, c.endpointKnown)
+			}
+			id := newUUID()
+			p, err := f.n.spawnClaude(id, t.TempDir(), "gw", false, false, e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.n.stopAssistant(p.id)
+			if (p.cacheProxy != nil) != tc.allow {
+				t.Fatalf("proxy mounted: %v, want %v", p.cacheProxy != nil, tc.allow)
+			}
+			dir := f.n.dir
+			if dir == "" {
+				dir = filepath.Join(f.n.home, ".persona")
+			}
+			b, err := os.ReadFile(filepath.Join(dir, "launcher-settings", "assistant-compact-"+id+".json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var s struct {
+				Env map[string]any `json:"env"`
+			}
+			if err := json.Unmarshal(b, &s); err != nil {
+				t.Fatal(err)
+			}
+			base, _ := s.Env["ANTHROPIC_BASE_URL"].(string)
+			if tc.allow {
+				if base != p.cacheProxy.BaseURL() || !strings.HasPrefix(base, "http://127.0.0.1:") {
+					t.Fatalf("settings base %q, want the proxy", base)
+				}
+				b := f.n.cacheWarmPool()
+				b.mu.Lock()
+				_, pooled := b.entries[id]
+				b.mu.Unlock()
+				if !pooled {
+					t.Fatal("proxy not registered for refreshes")
+				}
+			} else if strings.HasPrefix(base, "http://127.0.0.1:") {
+				t.Fatalf("unattested start points at a proxy: %q", base)
+			}
+		})
+	}
 }

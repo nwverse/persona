@@ -250,6 +250,13 @@ func (s *Service) publishSessions(machine string) {
 // The list is decorated and told under sentMu: two publishers (FleetUp's lists, a snapshot's changed machines) would
 // otherwise each decorate, then tell in either order, and an older list could land last on the hub and stay there.
 func (s *Service) publishList(machine string) []proto.Session {
+	return s.publishListAtArchiveMark(machine)
+}
+
+// publishListAtArchiveMark publishes with a fixed archive read marker when an operation supplies one. Otherwise it
+// takes the current marker under sentMu, as publishList always has. A fixed marker keeps a close completion's publish
+// from treating a newer archive write as activity visible to that close.
+func (s *Service) publishListAtArchiveMark(machine string, fixed ...uint64) []proto.Session {
 	f := &s.fleet
 	f.sentMu.Lock()
 	defer f.sentMu.Unlock()
@@ -257,17 +264,46 @@ func (s *Service) publishList(machine string) []proto.Session {
 	// own, when they change: they are the most of a machine that has been used for months, and the hub leaves them
 	// out of everything it sends the apps.
 	apart := s.hello(context.Background()).ArchivedApart
+	mark := s.archiveMark()
+	if len(fixed) > 0 {
+		mark = fixed[0]
+	}
 	var list []proto.Session
 	var archived archivedPart
 	if apart {
-		list, archived = s.decoratedApart(machine)
+		list, archived = s.decoratedApart(machine, mark)
 	} else {
-		list = s.decorated(machine)
+		var err error
+		list, _, err = s.archivedInventoryAtMark(context.Background(), machine, mark)
+		if err != nil {
+			s.logf("load agent archives: %v", err)
+		}
 	}
 	// A deleted conversation's row is the assistant's, never an archived one: it goes with the rows the apps see.
 	list = s.deletionRows(context.Background(), machine, list, true)
 	// A review's reviewer is no agent of the user's (supervise_autoreview.go): its result is on the task it reviewed.
+	// Forked background supervisor round branches are also internal and must not flood the ordinary Agents list (#12650).
 	hide := s.reviewerSessions()
+	if roundForks := s.hiddenBackgroundRoundForks(context.Background(), machine, list); len(roundForks) > 0 {
+		if hide == nil {
+			hide = roundForks
+		} else {
+			for k := range roundForks {
+				hide[k] = true
+			}
+		}
+	}
+	if apart {
+		if roundForks := s.hiddenBackgroundRoundForks(context.Background(), machine, archived.rows); len(roundForks) > 0 {
+			if hide == nil {
+				hide = roundForks
+			} else {
+				for k := range roundForks {
+					hide[k] = true
+				}
+			}
+		}
+	}
 	reviewWorktrees := map[string]bool{}
 	for _, e := range mustSessionReviews(s) {
 		if e.MachineID == machine && e.Worktree != "" {
@@ -324,10 +360,9 @@ func (s *Service) publishList(machine string) []proto.Session {
 	return list
 }
 
-// decoratedApart is decorated told apart (archiveApplied.apart): the rows the apps see, folded as the whole list
-// folds them, and the archived rows.
-func (s *Service) decoratedApart(machine string) ([]proto.Session, archivedPart) {
-	mark := s.archiveMark()
+// decoratedApart is decorated told apart at mark (archiveApplied.apart): the rows the apps see, folded as the whole
+// list folds them, and the archived rows.
+func (s *Service) decoratedApart(machine string, mark uint64) ([]proto.Session, archivedPart) {
 	a, _, err := s.applyArchives(context.Background(), machine, s.decoratedUnarchived(machine), mark, true)
 	if err != nil {
 		s.logf("load agent archives: %v", err)
@@ -500,10 +535,14 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 	defer asks.done()
 	suggested := s.hubSuggestions(machine)
 	quiet := s.quietMarks(machine) // turns of task Agents that had no output (silent_turns.go)
+	bgMatch := s.backgroundMatcher(context.Background(), machine)
 	for i := range list {
 		list[i].MachineID = machine
 		list[i].PendingInteractions = counts[list[i].SessionID]
 		list[i].Assistant = isAssistantSession(&list[i], dir, m.manager)
+		if !list[i].Assistant && bgMatch.matches(&list[i]) {
+			list[i].Assistant = true
+		}
 		if list[i].Assistant && list[i].Space == "" {
 			list[i].Space = identity.SpaceOf(list[i].Cwd)
 		}

@@ -813,9 +813,12 @@ type ChannelCapabilities struct {
 	MaxText   int    `json:"max_text,omitempty"`
 	Asks      string `json:"asks,omitempty"`
 	Push      bool   `json:"push,omitempty"`
-	Typing    bool   `json:"typing,omitempty"`
-	Progress  bool   `json:"progress,omitempty"`
-	Threads   bool   `json:"threads,omitempty"`
+	// It only replies to incoming messages or triggers and cannot send unsolicited proactive messages without reply_to;
+	// testing checks connectivity instead of calling channel.send.
+	ReplyOnly bool `json:"reply_only,omitempty"`
+	Typing    bool `json:"typing,omitempty"`
+	Progress  bool `json:"progress,omitempty"`
+	Threads   bool `json:"threads,omitempty"`
 }
 
 type EventsItem struct {
@@ -2009,6 +2012,7 @@ type SceneShape struct {
 	Top      *float64    `json:"top,omitempty"`
 	Color    string      `json:"color,omitempty"`
 	Material string      `json:"material,omitempty"`
+	Wall     bool        `json:"wall,omitempty"`
 	Radius   float64     `json:"radius,omitempty"`
 	Points   [][]float64 `json:"points,omitempty"`
 }
@@ -3978,6 +3982,8 @@ type ConnectorInboxThing struct {
 	// Marks the newest move: a different last adds to the open item.
 	Last string `json:"last,omitempty"`
 	URL  string `json:"url,omitempty"`
+	// The observed lifecycle of a GitHub pull request: open, closed or merged.
+	ThreadState string `json:"thread_state,omitempty"`
 	// A link the system opens instead (sms:…).
 	OpenURL string `json:"open_url,omitempty"`
 	// Where a reply goes and who sees it.
@@ -5204,24 +5210,35 @@ type TodoEventThread struct {
 	Title    string `json:"title"`
 }
 
+// TodoEventResponsible: an external responsible party on a to-do that is not a Persona-started agent: a long-running
+// session or a person, with optional machine_id and session_id hints.
+type TodoEventResponsible struct {
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	MachineID string `json:"machine_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
 // TodoChangedEvent: event.todo.changed: a to-do was created or deleted, or its title, whether it is done (or failed
-// to start), its supervisor, or the thread it is bound to changed. Changes within about a second of each other are
-// told once, as the to-do is at the end of them. title, thread and done are as after the change (the last ones for a
-// deleted to-do); thread is left out when the to-do has none, done unless the to-do is done (closed, or its task
-// failed to start). supervisor is the conversation that supervises it (the main conversation or a leader, see
-// leaders.schema.json), left out when none does; a change of supervisor (the task moved to another leader) sends it
-// too. kind is concern for something the owner raised in the main conversation and wants an answer to; such a to-do
-// is done only once its outcome was reported to the owner (an event.todo.decision of source reported comes with it),
-// never on its own; kind is left out for a to-do or a task and never changes. Notes, agents and decisions changing do
-// not send it (decisions have event.todo.decision). Read the to-do again if it matters.
+// to start), its supervisor, the thread it is bound to, or its external responsible party changed. Changes within
+// about a second of each other are told once, as the to-do is at the end of them. title, thread, done and responsible
+// are as after the change (the last ones for a deleted to-do); thread and responsible are left out when the to-do has
+// none, done unless the to-do is done (closed, or its task failed to start). supervisor is the conversation that
+// supervises it (the main conversation or a leader, see leaders.schema.json), left out when none does; a change of
+// supervisor (the task moved to another leader) sends it too. kind is concern for something the owner raised in the
+// main conversation and wants an answer to; such a to-do is done only once its outcome was reported to the owner (an
+// event.todo.decision of source reported comes with it), never on its own; kind is left out for a to-do or a task and
+// never changes. Notes, agents and decisions changing do not send it (decisions have event.todo.decision). Read the
+// to-do again if it matters.
 type TodoChangedEvent struct {
-	ID         string           `json:"id"`
-	Title      string           `json:"title"`
-	Thread     *TodoEventThread `json:"thread,omitempty"`
-	Done       bool             `json:"done,omitempty"`
-	Supervisor string           `json:"supervisor,omitempty"`
-	Kind       string           `json:"kind,omitempty"`
-	What       string           `json:"what"`
+	ID          string                `json:"id"`
+	Title       string                `json:"title"`
+	Thread      *TodoEventThread      `json:"thread,omitempty"`
+	Done        bool                  `json:"done,omitempty"`
+	Supervisor  string                `json:"supervisor,omitempty"`
+	Kind        string                `json:"kind,omitempty"`
+	Responsible *TodoEventResponsible `json:"responsible,omitempty"`
+	What        string                `json:"what"`
 }
 
 // TodoEventDecision: A decision on a to-do: what was asked and chosen (reason and supersedes_id left out when empty),
@@ -5626,6 +5643,46 @@ type AssistantDataItem struct {
 
 type AssistantDataStatusResult struct {
 	Items []AssistantDataItem `json:"items"`
+}
+
+// BrowserMachinesParams: browser.machines (browser.run): list computers that have a browser backend enabled.
+type BrowserMachinesParams struct {
+	// Optional backend filter (e.g. ego, cdp). Empty returns all backends.
+	Backend string `json:"backend,omitempty"`
+}
+
+type BrowserMachine struct {
+	MachineID string `json:"machine_id"`
+	Name      string `json:"name"`
+	// Browser backend identifier (e.g. ego, cdp).
+	Backend string `json:"backend"`
+	Online  bool   `json:"online"`
+	Ready   bool   `json:"ready"`
+}
+
+type BrowserMachinesResult struct {
+	Machines []BrowserMachine `json:"machines"`
+}
+
+// BrowserRunParams: browser.run (browser.run): run a script inside an extension-isolated browser task space
+// (ext-<extensionID>-<slot>) on machine_id.
+type BrowserRunParams struct {
+	MachineID string `json:"machine_id"`
+	// Browser backend to use (default: ego).
+	Backend string `json:"backend,omitempty"`
+	// Logical slot name scoped to this extension (e.g. pac-muse).
+	Slot string `json:"slot"`
+	// Async JS script body executed inside the isolated task space.
+	Script    string `json:"script"`
+	TimeoutMs int    `json:"timeout_ms,omitempty"`
+}
+
+type BrowserRunResult struct {
+	Backend string `json:"backend"`
+	// Raw output / JSON payload returned by the browser backend.
+	Output string `json:"output"`
+	// Script error message, if any.
+	Error string `json:"error,omitempty"`
 }
 
 type StorageEmptyParams struct {
@@ -7363,6 +7420,7 @@ var newDef = map[string]func() any{
 	"KBChangedEvent":                func() any { return new(KBChangedEvent) },
 	"KBForgottenEvent":              func() any { return new(KBForgottenEvent) },
 	"TodoEventThread":               func() any { return new(TodoEventThread) },
+	"TodoEventResponsible":          func() any { return new(TodoEventResponsible) },
 	"TodoChangedEvent":              func() any { return new(TodoChangedEvent) },
 	"TodoEventDecision":             func() any { return new(TodoEventDecision) },
 	"TodoDecisionEvent":             func() any { return new(TodoDecisionEvent) },
@@ -7390,6 +7448,11 @@ var newDef = map[string]func() any{
 	"AssistantDataStatusParams":     func() any { return new(AssistantDataStatusParams) },
 	"AssistantDataItem":             func() any { return new(AssistantDataItem) },
 	"AssistantDataStatusResult":     func() any { return new(AssistantDataStatusResult) },
+	"BrowserMachinesParams":         func() any { return new(BrowserMachinesParams) },
+	"BrowserMachine":                func() any { return new(BrowserMachine) },
+	"BrowserMachinesResult":         func() any { return new(BrowserMachinesResult) },
+	"BrowserRunParams":              func() any { return new(BrowserRunParams) },
+	"BrowserRunResult":              func() any { return new(BrowserRunResult) },
 	"StorageEmptyParams":            func() any { return new(StorageEmptyParams) },
 	"StorageRequestResult":          func() any { return new(StorageRequestResult) },
 	"StorageKeyParams":              func() any { return new(StorageKeyParams) },
@@ -7530,6 +7593,8 @@ var Calls = map[string]Call{
 	"assistant.messages":             {Name: "assistant.messages", From: "program", Params: "AssistantMessagesParams", Result: "AssistantMessagesResult"},
 	"assistant.memory":               {Name: "assistant.memory", From: "program", Params: "AssistantMemoryParams", Result: "AssistantMemoryResult"},
 	"assistant.data_status":          {Name: "assistant.data_status", From: "program", Params: "AssistantDataStatusParams", Result: "AssistantDataStatusResult"},
+	"browser.machines":               {Name: "browser.machines", From: "program", Params: "BrowserMachinesParams", Result: "BrowserMachinesResult"},
+	"browser.run":                    {Name: "browser.run", From: "program", Params: "BrowserRunParams", Result: "BrowserRunResult"},
 	"storage.request":                {Name: "storage.request", From: "program", Params: "StorageEmptyParams", Result: "StorageRequestResult"},
 	"storage.get":                    {Name: "storage.get", From: "program", Params: "StorageKeyParams", Result: "StorageEntry"},
 	"storage.list":                   {Name: "storage.list", From: "program", Params: "StorageListParams", Result: "StorageListResult"},

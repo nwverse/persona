@@ -140,7 +140,7 @@ class DirectionTreeTest {
         val result = TriageResult(
             TriageSection.entries.associateWith { emptyList<TriageGroup>() } + mapOf(TriageSection.Waiting to listOf(shared), TriageSection.Shelved to listOf(shelved)),
             TriageSection.entries.associateWith { 0 } + mapOf(TriageSection.Waiting to 1, TriageSection.Working to 1, TriageSection.Shelved to 1),
-            open = 2, shelved = 1, finished = 0)
+            open = 2, shelved = 1, finished = 0, cancelled = 0)
         val rest = result.without(setOf("t1"))
         assertTrue(rest.rows(TriageSection.Waiting).isEmpty())
         assertEquals(listOf("t2"), rest.rows(TriageSection.Working).map { it.lead.id })

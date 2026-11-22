@@ -106,6 +106,7 @@ type StartParams struct {
 	Cwd                 string        `json:"-"` // internal scheduled task directory; validated on the target computer
 	TaskExecution       bool          `json:"-"` // refuse execution substitutions
 	LegacyTaskExecution bool          `json:"-"` // an unconfigured scheduled turn may use an older node
+	PromptSelections    bool          `json:"-"` // from the stored, owner-approved scheduled prompt
 	Text                string        `json:"text"`
 	Images              []proto.Image `json:"images,omitempty"`
 	Launcher            string        `json:"launcher,omitempty"`
