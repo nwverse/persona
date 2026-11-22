@@ -11,7 +11,9 @@ the byte range of its output in job.<n>.steps.log, its description, then its com
 what failed in it:
 
   go test          the named tests that failed, by package (--- FAIL: lines, each package's FAIL line after them);
-                   a package that failed without a named test (a build failure, a panic outside a test) stays whole
+                   a package that failed without a named test (a build failure, a panic outside a test) stays whole.
+                   check-fast runs it through scripts/test/go_test_partitioned.py, whose output is go test's with
+                   each partition's printed whole, so it is read the same way (#12765)
   python -m unittest
                    the failing test ids (FAIL: and ERROR: lines; setUpClass names its class)
   anything else    the command itself, a guard: the privacy scan, a ratchet, a typecheck, a checker script
@@ -71,6 +73,22 @@ PY_IMPORT = re.compile(r"^\s*(?:from\s+(test_\w+)\s+import\b|import\s+(test_\w+)
 DURATION = re.compile(r"\b\d+(?:\.\d+)?(?:ms|s)\b")
 # Commands that need an install of their own at the base (web/node_modules); they are not rerun there.
 INSTALLERS = ("npm", "npx", "bun")
+# The runner check-fast hands its go test commands to (python3 -B ../scripts/test/go_test_partitioned.py go test ...).
+GO_RUNNER = "go_test_partitioned.py"
+
+
+def go_command(argv):
+    """The go command argv runs: argv itself for go, the one it hands the partitioned runner, or None for another."""
+    rest = list(argv)
+    if rest[:1] and posixpath.basename(rest[0]).startswith("python"):
+        rest = rest[1:]
+        while rest and rest[0].startswith("-"):  # the interpreter's own flags (-B, -I)
+            rest = rest[1:]
+        if not rest or posixpath.basename(rest[0]) != GO_RUNNER:
+            return None
+    if rest[:1] and posixpath.basename(rest[0]) == GO_RUNNER:
+        rest = rest[1:]
+    return rest if rest[:1] == ["go"] else None
 
 
 class CompareError(Exception):
@@ -399,7 +417,7 @@ class Command(Failure):
         if not checkout.within(self.directory).is_dir():
             return [Verdict("UNKNOWN", subject, "not compared: %s has no %s" % (at, self.directory))]
         argv = [argument.replace(str(self.root), str(checkout.path)) for argument in self.argv]
-        go = argv[0] == "go"
+        go = go_command(argv) is not None
         code, output = run(argv, cwd=checkout.within(self.directory), timeout=timeouts.go if go else timeouts.other,
                            slot="go" if go else None)
         where = log(subject, output)
@@ -493,7 +511,7 @@ class Step:
         if self.status != "FAIL":
             return [self.whole(root, "it timed out here")]
         argv = self.argv
-        if argv[:2] == ["go", "test"]:
+        if (go_command(argv) or [])[:2] == ["go", "test"]:
             return self.go_failures(root)
         modules = unittest_modules(argv)
         if modules is not None:
