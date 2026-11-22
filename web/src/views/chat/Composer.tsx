@@ -21,7 +21,8 @@ import { focusTaken } from "../../lib/dock-focus";
 import { useComposition } from "../../lib/ime";
 import { COMPACT_COMPOSER, COMPOSER_LINES, lineCount, offersExpand } from "./composer-grow";
 import { INPUT_MAX } from "./dock";
-import { imagePayload, MAX_IMAGE, releaseAttachments } from "../../lib/attachments";
+import { base64File, releaseAttachments } from "../../lib/attachments";
+import { imageLimitsFor, MAX_PICTURE_SOURCE, pictureRoom, type ImageLimits } from "../../lib/image-limits";
 import { addFiles as addComposerFiles, filesBusy, MAX_FILES, readyFiles, restoreFiles, splitFileTags, takeReadyFiles, useComposerFiles, withFiles } from "../../lib/composer-files";
 import { activateComposer, addContext, getContexts, newContext, registerComposer, removeContext, useContexts, withContexts, type ComposerHandle } from "../../lib/links";
 import { addQuote, applyDraft, getQuotes, onDraftEvent, parseQuotes, removeQuote, replaceNeedsConfirm, sendDraft, setQuotes, splitQuotes, storeDraft, useQuotes, withQuoteBlock, withUnsent, type DraftImage } from "../../lib/drafts";
@@ -43,7 +44,7 @@ import type { PlanMode } from "./PermissionPicker";
 import { useSendHistory } from "./useSendHistory";
 import { isModelCommand, requestModelPicker } from "../../lib/model-switch";
 import { isPermissionsCommand, permissionsCommand, PERMISSIONS_COMMAND, requestPermissionPicker } from "../../lib/permissions-command";
-import { MAX_IMAGES, rankCommands } from "../../lib/composer-commands";
+import { rankCommands } from "../../lib/composer-commands";
 import { escapeCancelsEdit, escapeCountsForEdit, upStartsEdit, type EditLastBox } from "../../lib/edit-last-key";
 import { t } from "../../i18n";
 import type { VoiceOffer } from "./voice/VoiceParts";
@@ -115,8 +116,13 @@ function parseSlash(draft: string) {
   return m ? m[1].toLowerCase() : null;
 }
 
-async function readImage(file: File): Promise<Attachment> {
-  return { ...await imagePayload(file), id: uuid(), name: file.name || "image.png", url: URL.createObjectURL(file) };
+/** A picked picture made ready for a message (scaled down as on the iPhone, lib/image-scale.ts, loaded here), or null when
+ *  the page cannot read it or bring it under the limits: it goes as a file. */
+async function readImage(file: File, limits: ImageLimits): Promise<Attachment | null> {
+  if (file.size > MAX_PICTURE_SOURCE) return null;
+  const { fitPicture } = await import("../../lib/image-scale");
+  const fit = await fitPicture(file, limits);
+  return fit && { ...fit, id: uuid(), name: file.name || "image.png", url: URL.createObjectURL(file) };
 }
 
 function fromDraftImage(img: DraftImage, id = uuid(), edited?: EditedImage): Attachment {
@@ -131,6 +137,7 @@ export const Composer = memo(function Composer({
   draftKey,
   placeholder,
   machineId,
+  agent,
   uploadDest,
   working,
   needsYou,
@@ -160,6 +167,9 @@ export const Composer = memo(function Composer({
   draftKey: string;
   placeholder: string;
   machineId?: string;
+  /** The session's agent (Session.agent): which of the hub's image limits its messages are held to (lib/image-limits.ts);
+   *  none for a conversation not started yet. */
+  agent?: string;
   /** Where a file sent to machineId lands: "health" keeps it in the health space's reports/ (docs/assistant/health.md "Checkup reports"). */
   uploadDest?: "health";
   working?: boolean;
@@ -300,21 +310,42 @@ export const Composer = memo(function Composer({
   // after the box moved on: their object URLs are freed when they leave the box without being sent
   const attsNow = useRef(atts);
   attsNow.current = atts;
-  // pictures being read for this box, counted against MAX_IMAGES before they land
+  // pictures being read for this box, counted against a message's pictures before they land (their size unknown yet)
   const reading = useRef(0);
-  const roomForImage = () => attsNow.current.length + reading.current < MAX_IMAGES;
+  const limits = () => imageLimitsFor(agent);
+  // whether a picture of `size` base64 characters fits beside those in the box and those being read (#12973)
+  const roomForImage = (size: number) => pictureRoom([...attsNow.current.map((a) => a.data.length), ...Array<number>(reading.current).fill(0)], size, limits());
   // appends at once to the ref as well, so a second paste or draft image in the same tick sees it
   const appendImage = (a: Attachment) => {
     attsNow.current = [...attsNow.current, a];
     setAtts((cur) => [...cur, a]);
   };
-  // one word for the pictures turned away in the same tick (a paste of several, a burst of draft images)
-  const refusing = useRef(false);
-  const refuseImages = () => {
-    if (refusing.current) return;
-    refusing.current = true;
-    queueMicrotask(() => (refusing.current = false));
-    toast(t("chat-composer.too_many_images", { max: MAX_IMAGES }), "error");
+  // Pictures past what a message holds are not dropped (#12973): they go to the session's computer as files, as the share
+  // sheet sends them, with one word on which limit it was; with no computer to send them to they are turned away.
+  const spillImages = (files: File[], why: "count" | "bytes") => {
+    if (!files.length) return;
+    if (!machineId) {
+      toast(why === "count" ? t("chat-composer.too_many_images", { max: limits().per_message }) : t("chat-composer.images_too_large"), "error");
+      return;
+    }
+    const r = addComposerFiles(draftKey, machineId, files, uploadDest);
+    const went = files.length - r.tooMany;
+    if (went > 0) toast(why === "count" ? t("chat-composer.images_as_files", { max: limits().per_message, count: went }) : t("chat-composer.images_bytes_as_files", { count: went }));
+    if (r.tooMany) toast(t("chat-composer.too_many_files", { max: MAX_FILES }), "error");
+  };
+  // draft pictures that do not fit, gathered over one tick (a burst of forwarded ones) for one word
+  const spilling = useRef<{ count: File[]; bytes: File[] } | null>(null);
+  const spillLater = (f: File, why: "count" | "bytes") => {
+    if (!spilling.current) {
+      const batch = { count: [] as File[], bytes: [] as File[] };
+      spilling.current = batch;
+      queueMicrotask(() => {
+        spilling.current = null;
+        spillImages(batch.count, "count");
+        spillImages(batch.bytes, "bytes");
+      });
+    }
+    spilling.current[why].push(f);
   };
   const keyNow = useRef(draftKey);
   keyNow.current = draftKey;
@@ -369,8 +400,9 @@ export const Composer = memo(function Composer({
         }
         if (!canTake.current) return;
         if (e.type === "image") {
-          if (!roomForImage()) {
-            refuseImages();
+          const room = roomForImage(e.image.data.length);
+          if (room !== "ok") {
+            spillLater(base64File(e.image.name, e.image.mime, e.image.data), room);
             return;
           }
           appendImage(fromDraftImage(e.image, uuid(), e.edited));
@@ -712,37 +744,45 @@ export const Composer = memo(function Composer({
 
   const addFiles = async (picked: FileList | File[]) => {
     if (disabled) return;
-    // at most MAX_IMAGES pictures a message, as on the phone: the ones past it are turned away with a word
-    // (the count takes in pictures still being read by an earlier paste or drop)
-    let refused = false;
+    // pictures are scaled down as on the phone and held to the hub's limits (#12973; the count takes in pictures still
+    // being read by an earlier paste or drop); the ones past them go as files (spillImages)
+    const spill = { count: [] as File[], bytes: [] as File[] };
     const others: File[] = [];
     for (const f of Array.from(picked)) {
       if (f.type.startsWith("image/")) {
-        if (!roomForImage()) {
-          refused = true;
-          continue;
-        }
-        if (f.size > MAX_IMAGE) {
-          toast(t("chat-composer.image_too_large", { name: f.name }), "error");
+        if (roomForImage(0) === "count") {
+          spill.count.push(f);
           continue;
         }
         reading.current++;
-        let a: Attachment;
+        let a: Attachment | null;
         try {
-          a = await readImage(f);
+          a = await readImage(f, limits());
         } finally {
           reading.current--;
         }
-        // read after the box closed or moved to another conversation: freed, not put into that one
-        if (mounted.current && keyNow.current === draftKey) appendImage(a);
-        else releaseAttachments([a]);
+        if (!a) {
+          // one the page cannot read (a HEIC in most browsers) or bring under the limits: a file, as it is
+          if (machineId) others.push(f);
+          else toast(t("chat-composer.image_unreadable", { name: f.name }), "error");
+          continue;
+        }
+        const room = roomForImage(a.data.length);
+        if (room !== "ok" || !mounted.current || keyNow.current !== draftKey) {
+          releaseAttachments([a]);
+          // read after the box closed or moved to another conversation: freed, not put into that one
+          if (room !== "ok" && mounted.current && keyNow.current === draftKey) spill[room].push(f);
+          continue;
+        }
+        appendImage(a);
       } else if (machineId) {
         others.push(f);
       } else {
         toast(t("chat-composer.images_only"), "error");
       }
     }
-    if (refused) refuseImages();
+    spillImages(spill.count, "count");
+    spillImages(spill.bytes, "bytes");
     // other files go to the session's machine as tiles above the input, never words in it (lib/composer-files.ts, #8361)
     if (others.length) {
       const r = addComposerFiles(draftKey, machineId!, others, uploadDest);

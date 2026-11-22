@@ -253,7 +253,9 @@ private val TITLE_NOISE = Regex("[\\s\\p{P}\\p{S}]+")
  */
 fun Todo.relatedKeys(): List<String> {
     val keys = mutableListOf<String>()
-    val pr = prUrl.orEmpty().trim().replace(Regex("[#?].*$"), "").trimEnd('/').lowercase()
+    val rawPr = prUrl.orEmpty().trim()
+    val cut = rawPr.indexOfFirst { it == '#' || it == '?' }
+    val pr = (if (cut >= 0) rawPr.substring(0, cut) else rawPr).trimEnd('/').lowercase()
     if (pr.isNotEmpty()) keys += "pr:$pr"
     ISSUE_REF.find(title)?.let { keys += "issue:" + it.groupValues[1] }
     val t = title.lowercase().replace(TITLE_NOISE, "")
@@ -340,6 +342,8 @@ fun relatedRoots(list: List<Todo>): Map<String, String> {
  * assistant's entries alike (the web's `supersededFailedStarts`).
  */
 fun supersededFailedStarts(todos: List<Todo>): Set<String> {
+    if (todos.none { !it.startError.isNullOrEmpty() }) return emptySet()
+    if (todos.none { it.isDone && it.startError.isNullOrEmpty() }) return emptySet()
     val roots = relatedRoots(todos)
     val finished = todos.filter { it.isDone && it.startError.isNullOrEmpty() }.mapTo(HashSet()) { roots.getValue(it.id) }
     return todos.filter { !it.startError.isNullOrEmpty() && roots.getValue(it.id) in finished }.mapTo(HashSet()) { it.id }
