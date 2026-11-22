@@ -269,8 +269,9 @@ The manager-only `secrets.store` protocol has three phases (types `SecretStore*`
 2. A manager `secret_handoff` card with `store_operation` names create/edit, vault, item, every field, Agent and source
    machine. It uses the existing explicit phone/web approval gate, without Always rules. No value or source path is in it.
 3. `prepare`: after the approving device is vouched for, the resident provider node generates a one-use P-256 key,
-   bound to the exact target, fields and source machine/session, kept at most two minutes in memory. The manager also
-   retains that exact approval for two minutes. Neither survives restart; both have bounded pending-operation counts.
+   bound to the exact target, fields and source machine/session, valid for at most two minutes. The manager also
+   bounds that exact approval to two minutes. Expired records are rejected immediately and removed on subsequent
+   preparation/commit attempts; memory cleanup is lazy. Neither survives restart; both pending maps are bounded.
 4. The CLI reads field files **after approval**, seals a JSON array of `{name,value}` (value is base64 bytes) with HPKE
    DHKEM(P-256, HKDF-SHA256), HKDF-SHA256, AES-256-GCM and info `persona secret store v1\0<key_id>`, then sends `commit`.
    Only the resident node has the private key. Hub, manager and hub extension carry ciphertext only.
