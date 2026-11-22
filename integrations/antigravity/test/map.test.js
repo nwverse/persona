@@ -402,7 +402,7 @@ describe('antigravity transcript and tool mapping', () => {
       ['image destination', '![chart](file:///work/repo/chart.png)', '![chart](/work/repo/chart.png)'],
       ['windows drive', '[win](file:///C:/work/notes.md#L5)', '[win](C:/work/notes.md#L5)'],
       ['windows encoded colon', '[win](file:///c%3A/work/notes.md)', '[win](c:/work/notes.md)'],
-      ['reference definition', '[ref]: file:///work/repo/notes.md "Ref"', '[ref]: /work/repo/notes.md "Ref"'],
+      ['reference definition', '[ref]: file:///work/repo/notes.txt "Ref"', '[ref]: /work/repo/notes.txt "Ref"'],
       ['list continuation', '- item\n    [notes](file:///work/notes.md)', '- item\n    [notes](/work/notes.md)'],
       ['inline code untouched', 'Use `[notes](file:///work/notes.md)` literally.', 'Use `[notes](file:///work/notes.md)` literally.'],
       ['fenced code untouched', '```md\n[notes](file:///work/notes.md)\n```\n[live](file:///work/live.md)', '```md\n[notes](file:///work/notes.md)\n```\n[live](/work/live.md)'],
