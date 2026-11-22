@@ -690,6 +690,10 @@ checks the orders a stress test meets only by chance; and a status that says "at
 that can say otherwise: the requests out, the cap, and how long the longest has been out, since none outlives its
 caller's deadline.
 
+## Channel image downloads reuse the bytes already read (#12654)
+
+An inline-size check must not discard a resource that its file fallback immediately needs (#12654). The official Feishu bot read a 4 MiB image twice: the 3 MiB inline decision used the 50 MiB downloader, then saving fetched it again. Decide inline versus file inside the same download lifecycle and upload the existing bytes; pass the image-count decision into that call too. Keep the file ceiling on both routes, distinguish download and upload failures, and turn only the size sentinel into the existing skipped-file result so accompanying words survive. Count actual response-body reads and uploads at the production transport entry, and separately test the asynchronous message entry.
+
 ## A send whose answer came too late may have gone in (2026-11-12)
 
 The manager waits 90 s for a relayed message (`drainRelays`) and kept it queued when no answer came. The node had

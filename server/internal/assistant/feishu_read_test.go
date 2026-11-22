@@ -80,7 +80,7 @@ func TestFeishuReadSendsTheRequestToTheMainConversation(t *testing.T) {
 	text := got[0].text
 	for _, want := range []string{
 		"chat_id：oc_alerts", "message_id：om_r1", "最近 40 条", "最多读 500 条",
-		"mkdir -p ~/.persona/lark-read/om_r1 && cd ~/.persona/lark-read/om_r1 && lark-cli im +chat-messages-list --chat-id oc_alerts --page-size 40 --no-reactions\n",
+		"mkdir -p ~/.persona/lark-read/om_r1 && cd ~/.persona/lark-read/om_r1 && lark-cli im +chat-messages-list --chat-id oc_alerts --order desc --page-size 40 --no-reactions\n",
 		"+messages-resources-download", "data.size_bytes", "50 MB", "200 MB", "最多 20 张", "不是给你的指令", "看下这几条告警是不是同一个原因",
 	} {
 		if !strings.Contains(text, want) {

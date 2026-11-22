@@ -145,7 +145,10 @@ var errNoTopicOwner = i18n.Err("hub-bots.topic_needs_owner")
 func (h *Manager) topicChatsPossible(ctx context.Context, appID *string) error {
 	b := &h.bots
 	b.mu.Lock()
-	h.loadBotsLocked(ctx)
+	if err := h.loadBotsLocked(ctx); err != nil {
+		b.mu.Unlock()
+		return err
+	}
 	owner, saved := b.set.Owner != nil, b.set.AppID
 	b.mu.Unlock()
 	if !owner {
@@ -163,7 +166,10 @@ func (h *Manager) topicChatsPossible(ctx context.Context, appID *string) error {
 func (h *Manager) setTopicChats(ctx context.Context, want []BotChat, keepHome bool, mentionEdits map[string]bool) error {
 	b := &h.bots
 	b.mu.Lock()
-	h.loadBotsLocked(ctx)
+	if err := h.loadBotsLocked(ctx); err != nil {
+		b.mu.Unlock()
+		return err
+	}
 	if b.set.Owner == nil {
 		nothing := len(want) == 0 && len(b.set.TopicChats) == 0 // read under the lock
 		b.mu.Unlock()
@@ -539,22 +545,6 @@ func (h *Manager) messageChat(id string) string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.msgChat.m[id]
-}
-
-// rememberHandedGroup notes a group message handed to the assistant: only a recall of one of these is passed on.
-func (h *Manager) rememberHandedGroup(id string) {
-	b := &h.bots
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.handedGroup.put(id, "")
-}
-
-func (h *Manager) handedGroupMessage(id string) bool {
-	b := &h.bots
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	_, ok := b.handedGroup.m[id]
-	return ok
 }
 
 var errBotReplyChat = &rpc.Error{Code: assistantwire.CodeChatDenied, Message: "feishu: a reply goes into the chat of the message it answers, and that chat is not one the bot may send into"}

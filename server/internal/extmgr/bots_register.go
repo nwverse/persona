@@ -87,7 +87,10 @@ func (h *Manager) registeredDomain(region string) string {
 func (h *Manager) beginFeishuRegistration(ctx context.Context, errText string) (connector.Prompt, bool) {
 	b := &h.bots
 	b.mu.Lock()
-	h.loadBotsLocked(ctx)
+	if h.loadBotsLocked(ctx) != nil {
+		b.mu.Unlock()
+		return connector.Prompt{}, false
+	}
 	reg := b.set.registration()
 	now := b.clock()
 	b.mu.Unlock()
@@ -137,6 +140,10 @@ func (s FeishuBotSettings) registration() *botRegistration {
 func (h *Manager) putRegistration(reg *botRegistration) {
 	b := &h.bots
 	b.mu.Lock()
+	if h.loadBotsLocked(context.Background()) != nil {
+		b.mu.Unlock()
+		return
+	}
 	b.set.Registration, b.set.RegistrationDeviceEnc, b.set.RegistrationSecretEnc = nil, "", ""
 	if reg != nil {
 		r := *reg
@@ -162,7 +169,10 @@ func (h *Manager) pollFeishuRegistration(ctx context.Context, credentials func(s
 	l := h.botLang(ctx)
 	b := &h.bots
 	b.mu.Lock()
-	h.loadBotsLocked(ctx)
+	if err := h.loadBotsLocked(ctx); err != nil {
+		b.mu.Unlock()
+		return connector.Prompt{}, err
+	}
 	var reg botRegistration
 	cur := b.set.registration()
 	live := cur != nil
