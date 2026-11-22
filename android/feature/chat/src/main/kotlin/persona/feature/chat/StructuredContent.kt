@@ -220,10 +220,17 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
                 AttachedPhotoRow(photos)
                 if (parts.isNotEmpty()) Spacer(Modifier.height(Tokens.Space.s))
             }
+            val foldText = remember(parts, streaming) {
+                if (streaming || parts.isEmpty() || parts.any { it !is MessagePart.Text }) ""
+                else parts.filterIsInstance<MessagePart.Text>().joinToString("\n\n") { it.text }
+            }
+            val foldKey = items.firstOrNull()?.id?.takeIf { it.isNotBlank() && foldText.isNotEmpty() }
             SelectableWords(target.takeIf { menu }) {
-                Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                    MessageParts(parts, true, items.firstOrNull()?.id.orEmpty(), onLastLine)
-                    if (streaming) StreamingCursor()
+                BubbleFold(foldText, foldKey, own = own) {
+                    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                        MessageParts(parts, true, items.firstOrNull()?.id.orEmpty(), onLastLine)
+                        if (streaming) StreamingCursor()
+                    }
                 }
             }
         } else if (openingSource != null) Box(Modifier.align(Alignment.End)) { footer?.invoke() }
