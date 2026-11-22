@@ -258,6 +258,10 @@ type SnapshotTask struct {
 	// Workflows: that agent's background workflow runs still running (#2935): its turn ended to wait for them.
 	Workflows []SnapshotWorkflow
 	Link      string // the todo's page in the hub's web app ("" when the hub has no public_url)
+	// Cancellation and brief lineage keep the history visible in the same snapshot as the state (#5732).
+	CancelledReason                string
+	Continues, ContinuesLink       string
+	SupersededBy, SupersededByLink string
 	// Health: how a task the main conversation supervises stands (normal, stuck N minutes, waiting for an answer, to accept, rework round N, your call,
 	// accepted; #3124), "" for any other; DoneWhen how many criteria it has.
 	Health   string
@@ -459,10 +463,10 @@ func RenderSnapshotWorkflow(w SnapshotWorkflow) string {
 type AssistantContext struct {
 	ScheduledWorkPlan bool // Inline instructions for a granted scheduled round when the manager uses persona-work.
 	Main              bool
-	Leader            bool // a leader conversation (#3133): it supervises the tasks it hands out
+	Leader            bool // a leader conversation: explicit manual-Agent tasks only; new task_plan work is main-supervised
 	Owner             string
 	Snapshot          string
-	// Directions: for the main conversation, the current leaders it hands work to (task_plan supervisor, #3609);
+	// Directions: for the main conversation, the current leaders used as direction labels;
 	// LeaderName: for a leader, its direction's name.
 	Directions []ContextDirection
 	LeaderName string
@@ -470,23 +474,23 @@ type AssistantContext struct {
 	// filed under (#10086). Here rather than in its system prompt: a summary rewrite changes it, and a changed system
 	// prompt would restart the leader.
 	LeaderStatus string
-	// Background: this is the background supervisor (#4927), which follows up the tasks no leader supervises.
-	// BackgroundStarted: for the main conversation, once: the background supervisor's id, the first message after it
-	// began to follow up the main conversation's tasks.
+	// Background: the legacy background supervisor, which finishes only tasks assigned before universal main supervision.
+	// BackgroundStarted: for the main conversation, once: that legacy supervisor's id, when it began following old tasks.
 	Background        bool
 	BackgroundStarted string
 }
-
-// SupervisorStart is the message the background supervisor's conversation starts with (assistant/supervisor_start):
-// what it is for, before its first supervision message.
-type SupervisorStart struct{ Owner string }
-
-func RenderSupervisorStart(d SupervisorStart) string { return render("assistant/supervisor_start", d) }
 
 // ContextDirection is one current leader as the main conversation is told of it: its conversation id and name.
 type ContextDirection struct{ ID, Name string }
 
 func RenderAssistantContext(c AssistantContext) string { return render("assistant/context", c) }
+
+// SupervisorStart is the message an explicitly started background supervisor's conversation starts with
+// (assistant/supervisor_start): what it is for, before its first supervision message. Automatic replacement of a
+// legacy background supervisor stays disabled under universal main supervision (#5732).
+type SupervisorStart struct{ Owner string }
+
+func RenderSupervisorStart(d SupervisorStart) string { return render("assistant/supervisor_start", d) }
 
 // TaskRun is the message a scheduled task's run starts with (assistant/task_run).
 type TaskRun struct {
@@ -875,8 +879,8 @@ func RenderAskLater(a AskLater) string { return render("assistant/ask_later", a)
 type Supervise struct {
 	Level   string
 	Entries []SuperviseEntry
-	// Leader: it goes to a leader conversation, for the tasks it handed out (#3133); Escalated: an entry is a leader's
-	// needs_user, told the main conversation.
+	// Leader: it goes to a leader conversation, for a manual Agent explicitly assigned to it (#5732); Escalated: an
+	// entry is a leader's needs_user, told the main conversation.
 	Leader, Escalated bool
 	// Background: with Leader, it goes to the background supervisor (#4927): the leader's message, for tasks other
 	// conversations handed out, whose cards go from it to the user.
@@ -884,7 +888,7 @@ type Supervise struct {
 	// BackgroundEscalated: with Escalated, one of those entries is the background supervisor's needs_user (#4927): no
 	// leader is named for it.
 	BackgroundEscalated bool
-	// Side: it goes to an ordinary side conversation, for the tasks that conversation handed out itself.
+	// Side: a legacy route to an ordinary side conversation for tasks it supervised before universal main supervision.
 	Side bool
 	// LeaderStuck: an entry is a leader's task past its inactivity threshold (sigLeaderStuck), told the main conversation (#3609).
 	LeaderStuck bool

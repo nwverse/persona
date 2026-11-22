@@ -537,4 +537,23 @@ final class DirectionRowsUITests: XCTestCase {
         let growth = labels.first { $0.hasPrefix("增长") }
         XCTAssertTrue(growth.map { !$0.contains("工作中") } ?? false, "增长's section spins or is missing: \(growth ?? "missing")")
     }
+
+    @MainActor func testCancelledTodoStaysOutOfPinnedRowsInItsOwnFold() {
+        launch(["-todos.grouping", "direction", "-todos.view", "list", "-todos.filter", "all", "-todos.sort", "recent"])
+        openSidebar()
+        app.buttons["sidebar-todos"].firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["todos.direction"].firstMatch.waitForExistence(timeout: 15),
+                      "the To-dos page is not grouped by 常驻:\n\(app.debugDescription)")
+        let fold = app.descendants(matching: .any)["todos.section.cancelled"]
+        let row = app.buttons["todos.row.todo_cut_login"]
+        let list = app.collectionViews.firstMatch
+        for _ in 0..<24 where !fold.exists { list.swipeUp() }
+        XCTAssertTrue(fold.exists, "no independent Cancelled fold in direction grouping:\n\(app.debugDescription)")
+        XCTAssertFalse(row.exists, "a cancelled to-do stayed in an open direction row")
+        for _ in 0..<8 where !fold.isHittable { list.swipeUp() }
+        fold.tap()
+        for _ in 0..<8 where !row.exists { list.swipeUp() }
+        XCTAssertTrue(row.exists, "opening Cancelled did not reveal its to-do")
+        shot("todos-cancelled")
+    }
 }

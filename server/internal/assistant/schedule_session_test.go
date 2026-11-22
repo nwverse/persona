@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -582,7 +583,14 @@ func verifyReferenceOnlyRetryStops(t *testing.T, h *Service, n *fakeHub, taskID,
 		Cwd: "/home/me/.persona/assistant"})
 	n.setItems(proto.Item{ID: "u2", Role: "user", Kind: proto.KindText, Text: retry},
 		proto.Item{ID: "a2", Role: "assistant", Kind: proto.KindText})
-	time.Sleep(3 * h.turnPoll / 2)
+	// The retry's watcher must see its turn working before it ends (waitTurnEnd), or the end reads as a start that
+	// failed at once: wait for its poll after the change.
+	from := n.callCount()
+	var watcher string
+	waitFor(t, "the retry's watcher to read its turn working", func() bool {
+		watcher = n.watcherReadAfter(from, "s1")
+		return watcher != ""
+	})
 	n.setSessions("server", proto.Session{SessionID: "s1", Status: proto.StatusOffline, State: proto.StateIdle, Assistant: true,
 		Cwd: "/home/me/.persona/assistant"})
 	waitFor(t, "the retry's silent failure", func() bool {
@@ -593,7 +601,9 @@ func verifyReferenceOnlyRetryStops(t *testing.T, h *Service, n *fakeHub, taskID,
 			return r.RefID == taskID && r.ID == repeated.ScheduleRunID && r.Retried && r.Status == runFailed && r.Error == want
 		})
 	})
-	time.Sleep(h.runRetry + h.turnPoll)
+	// A failed retry is not tried again: its watcher returns where it would otherwise wait runRetry and send the next
+	// prompt itself (watchScheduledRun). Once that goroutine has ended, no prompt can follow.
+	waitFor(t, "the retry's watcher to end", func() bool { return goroutineGone(watcher) })
 	if n.sent() != 2 {
 		t.Fatalf("two silent completed attempts sent %d prompts", n.sent())
 	}
@@ -1033,5 +1043,17 @@ func TestDailyRunHintNamesTheKnowledgeDir(t *testing.T) {
 	}
 	if strings.Contains(text, "~/.persona/data") || !strings.Contains(text, "（知识库 "+dir+"：") {
 		t.Fatalf("the hint should name %s: %q", dir, text)
+	}
+}
+
+// goroutineGone reports whether goroutine id ("goroutine N") has ended.
+func goroutineGone(id string) bool {
+	buf := make([]byte, 1<<16)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			return !strings.Contains("\n\n"+string(buf[:n]), "\n\n"+id+" [")
+		}
+		buf = make([]byte, 2*len(buf))
 	}
 }
