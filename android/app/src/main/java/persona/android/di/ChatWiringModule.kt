@@ -101,6 +101,7 @@ internal suspend fun createChatWiring(
     fun current() = isCurrent()
     val composer = data.messages.connectComposer { transport ->
         HttpChatComposerService(data.scope, transport, connection, data.credentials.deviceToken,
+            onRetryStart = data.messages::beginComposerRetry,
             onRetryDelivery = data.messages::recordComposerDelivery,
             onPairingExpired = { if (current()) connection.revoke() }, isCurrent = ::current,
             onHeld = { session, held -> if (current()) repositories.sessions.showHeld(session, held) })

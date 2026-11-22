@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/apierr"
@@ -164,8 +165,19 @@ func (s *Service) localFleetDeviceCall(ctx context.Context, p DeviceCall) (json.
 		return nil, false, nil
 	}
 	switch {
-	case p.Device == DeviceAll && p.Method == DeviceInteractionsList:
-		out, err := json.Marshal(map[string]any{"interactions": s.visiblePendingInteractions()})
+	case p.Method == DeviceInteractionsList:
+		if p.Device == DeviceAll {
+			out, err := json.Marshal(map[string]any{"interactions": s.visiblePendingInteractions()})
+			return out, true, err
+		}
+		m, ok := s.fleetMachine(p.Device)
+		if !ok {
+			return nil, true, ErrNoDevice
+		}
+		list := slices.DeleteFunc(s.visiblePendingInteractions(), func(ix proto.Interaction) bool {
+			return ix.MachineID != "" && ix.MachineID != m.ID
+		})
+		out, err := json.Marshal(map[string]any{"interactions": list})
 		return out, true, err
 	case p.Device == DeviceAll:
 		return nil, false, nil
