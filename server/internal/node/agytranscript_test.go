@@ -135,7 +135,7 @@ func TestAgyContextResourceHistory(t *testing.T) {
 		{"native first request", "<USER_REQUEST>\n" + label + context + user + "\n</USER_REQUEST>\n<ADDITIONAL_METADATA>clock</ADDITIONAL_METADATA>", user},
 		{"unwrapped resource", label + context + user, user},
 		{"another Persona URI", "Content of persona-context:///other.txt:\r\n" + context + user, user},
-		{"successive resources", label + context + label + context + user, user},
+		{"successive resources", label + context + "\n" + label + context + user, user},
 		{"no prefix", user, user},
 		{"literal label", label + user, label + user},
 		{"other URI", "Content of file:///snapshot.txt:\n" + context + user, "Content of file:///snapshot.txt:\n" + user},

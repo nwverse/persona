@@ -344,7 +344,7 @@ func agyContextEndNames() string {
 
 // Antigravity writes embedded ACP resources into USER_INPUT.content. Require the complete
 // leading Persona envelope so a quoted label or another URI scheme keeps its text.
-var agyContextResource = lazyre.New(`(?s)^Content of persona-context://[^\r\n]*:\r?\n<persona-context>.*?</persona-context>`)
+var agyContextResource = lazyre.New(`(?s)^(?:Content of persona-context://[^\r\n]*:\r?\n<persona-context>.*?</persona-context>` + agySpace + `*)+`)
 
 var agyTrimSpace = lazyre.New(`^` + agySpace + `+|` + agySpace + `+$`)
 
