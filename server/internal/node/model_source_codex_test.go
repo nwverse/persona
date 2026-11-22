@@ -149,3 +149,25 @@ func TestCodexSourceShellRunsAfterLauncherEnvironment(t *testing.T) {
 		t.Fatalf("final helper arguments=%s", seen)
 	}
 }
+
+func TestCodexSourceResolvesLauncherHomeAndWorkingDirectory(t *testing.T) {
+	t.Setenv(modelhttp.SourceHostsEnv, "*.example.com")
+	home, cwd, env := sourceCodexFixture(t, sourceCodexProvider)
+	other := t.TempDir()
+	writeFile(t, filepath.Join(other, ".codex", "config.toml"), strings.ReplaceAll(sourceCodexProvider, "https://gw.example.com/v1", "https://api.openai.com/v1"))
+	input := []string{"codex", "app-server"}
+	if got, _ := codexModelSource(input, append(env, "HOME="+other), cwd, home); !reflect.DeepEqual(got, input) {
+		t.Fatal("used the node home instead of the launcher home")
+	}
+	if got, _ := codexModelSource(input, append(env, "HOME="+home, "HOME="+other), cwd, home); !reflect.DeepEqual(got, input) {
+		t.Fatal("injected with an ambiguous provider home")
+	}
+	project := t.TempDir()
+	writeFile(t, filepath.Join(project, ".codex", "config.toml"), "model_provider='openai'\n")
+	for _, args := range [][]string{{"-C", project}, {"--cd=" + project}, {"-C" + project}} {
+		input := append([]string{"codex"}, args...)
+		if got, _ := codexModelSource(input, env, cwd, home); !reflect.DeepEqual(got, input) {
+			t.Fatal("ignored the launcher's working directory")
+		}
+	}
+}

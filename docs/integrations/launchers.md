@@ -802,7 +802,7 @@ headers stay intact. These local configuration overrides keep attribution on tha
 Some Codex traffic cannot carry the fields: the built-in `openai` provider ignores ordinary provider header overrides;
 explicit remote/desktop app-servers and external runtimes own their own HTTP transport; project-level provider choices
 are skipped because only Codex knows whether it trusts that project configuration. Unknown/unreadable provider
-configuration is also skipped. Use a Persona-managed or ordinary custom Responses provider on a local CLI when
+configuration and legacy administrator provider overlays are also skipped. Use a Persona-managed or ordinary custom Responses provider on a local CLI when
 attribution is required. A new Codex session's ID is allocated after startup, so its initial process may omit
 `X-Persona-Session`; a resume with a known ID can include it.
 

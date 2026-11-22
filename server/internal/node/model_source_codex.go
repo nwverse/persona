@@ -134,6 +134,62 @@ func codexModelSource(argv, env []string, cwd, home string) ([]string, []string)
 
 // codexSourceConfig resolves only local configuration layers. It never logs their contents or writes user files.
 func codexSourceConfig(argv, env []string, cwd, home string) (map[string]any, error) {
+	for _, key := range []string{"HOME", "USERPROFILE", "CODEX_HOME"} {
+		seen, found := "", false
+		for _, entry := range env {
+			name, value, _ := strings.Cut(entry, "=")
+			if name == key {
+				if found && seen != value {
+					return nil, errors.New("ambiguous provider configuration environment")
+				}
+				seen, found = value, true
+			}
+		}
+	}
+
+	if actual := envValue(env, "HOME"); actual != "" {
+		home = actual
+	}
+	if actual := envValue(env, "USERPROFILE"); actual != "" && envValue(env, "HOME") == "" {
+		home = actual
+	}
+	startDir := cwd
+	for i := 1; i < len(argv); i++ {
+		arg, selected := argv[i], ""
+		if arg == "--" {
+			break
+		}
+		switch {
+		case (arg == "-C" || arg == "--cd") && i+1 < len(argv):
+			i++
+			selected = argv[i]
+		case strings.HasPrefix(arg, "--cd="):
+			selected = strings.TrimPrefix(arg, "--cd=")
+		case strings.HasPrefix(arg, "-C") && len(arg) > 2:
+			selected = strings.TrimPrefix(strings.TrimPrefix(arg, "-C"), "=")
+		case codexValueFlags[arg] && i+1 < len(argv):
+			i++
+		}
+		if selected != "" {
+			if strings.HasPrefix(selected, "~") {
+				return nil, errors.New("unknown provider working directory")
+			}
+			if !filepath.IsAbs(selected) {
+				selected = filepath.Join(startDir, selected)
+			}
+			cwd = selected
+		}
+	}
+	resolved, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return nil, err
+	}
+	cwd = resolved
+	// Legacy administrator overlays can change the endpoint after user/CLI configuration.
+	// Their precedence is runtime-owned; do not attach attribution when one is present.
+	if _, err := os.Stat("/etc/codex/managed_config.toml"); err == nil || !os.IsNotExist(err) {
+		return nil, errors.New("administrator provider policy is runtime-owned")
+	}
 	config := map[string]any{}
 	read := func(path string) error {
 		raw, err := os.ReadFile(path)
@@ -153,6 +209,12 @@ func codexSourceConfig(argv, env []string, cwd, home string) (map[string]any, er
 	codexHome := envValue(env, "CODEX_HOME")
 	if codexHome == "" {
 		codexHome = filepath.Join(home, ".codex")
+	}
+	if !filepath.IsAbs(codexHome) {
+		return nil, errors.New("relative provider configuration home")
+	}
+	if err := read("/etc/codex/config.toml"); err != nil {
+		return nil, err
 	}
 	if err := read(filepath.Join(codexHome, "config.toml")); err != nil {
 		return nil, err
