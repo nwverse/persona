@@ -30,10 +30,13 @@ func (s *Service) putCacheKeepalive(ctx context.Context, machine, id string, mai
 		return
 	}
 	if id != "" {
+		if id == v.BackgroundSupervisor {
+			return
+		}
 		if archived, known := s.archivedSet(); !known || archived[id] != "" {
 			return
 		}
-		if c, ok := s.session(ctx, machine, id); !ok || c.Archived || c.IsDeleted() {
+		if c, ok := s.session(ctx, machine, id); !ok || !c.Assistant || c.IsSubagent || c.ParentSessionID != "" || c.ParentThreadID != "" || c.Archived || c.IsDeleted() {
 			return
 		}
 	}

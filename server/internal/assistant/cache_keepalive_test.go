@@ -23,10 +23,10 @@ func TestCacheKeepaliveOnlyMainAndRegisteredLeads(t *testing.T) {
 	})
 	var sessions []proto.Session
 	for _, id := range []string{"main", "lead", "background", "worker", "child", "ordinary"} {
-		sessions = append(sessions, proto.Session{SessionID: id, Launcher: "claude", Model: "example-model", Assistant: true})
+		sessions = append(sessions, proto.Session{SessionID: id, Launcher: "claude", Model: "example-model", Assistant: id != "worker", IsSubagent: id == "child"})
 	}
 	f.setSessions("server", sessions...)
-	for _, id := range []string{"main", "lead", "background", "worker", "child", "ordinary"} {
+	for _, id := range []string{"main", "lead", "background", "worker", "child", "ordinary", "unknown"} {
 		t.Run(id, func(t *testing.T) {
 			p, err := s.SendParams(ctx, SendParams{MachineID: "server", SessionID: id, Params: map[string]any{"text": "hello", "cache_keepalive": assistantwire.CacheKeepalive{Enabled: true}}})
 			if err != nil {
@@ -37,6 +37,15 @@ func TestCacheKeepaliveOnlyMainAndRegisteredLeads(t *testing.T) {
 				t.Fatalf("%s policy: %v", id, p["cache_keepalive"])
 			}
 		})
+	}
+	// Even a stale/corrupt lead registry cannot authorize a background/worker/child row.
+	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"background", "worker", "child"} })
+	for _, id := range []string{"background", "worker", "child"} {
+		p := map[string]any{}
+		s.putCacheKeepalive(ctx, "server", id, false, p)
+		if p["cache_keepalive"] != nil {
+			t.Fatalf("excluded row %s retained authority", id)
+		}
 	}
 	// A removed or archived lead loses authority even while its node retains a snapshot.
 	setSettings(t, s, func(v *Settings) { v.Leaders = nil })
