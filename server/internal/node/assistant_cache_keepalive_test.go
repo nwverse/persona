@@ -46,7 +46,7 @@ func TestAssistantCacheProxyScopeAndLauncherPrecedence(t *testing.T) {
 		allow, managed, override bool
 	}{{"main", true, false, false}, {"lead", true, true, false}, {"background", false, false, false}, {"worker", false, false, false}, {"child", false, false, false}, {"override", true, false, true}, {"inherited-child", true, false, false}} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := cliTest(t)
+			f := cliTestBash(t)
 			t.Setenv("CACHE_FIXTURE_BODY", cacheFixtureBody)
 			if tc.name == "inherited-child" {
 				t.Setenv("CACHE_FIXTURE_CHILD", "1")
@@ -76,13 +76,14 @@ func TestAssistantCacheProxyScopeAndLauncherPrecedence(t *testing.T) {
 				f.fakeLaunch(t)
 				f.n.setManaged([]proto.ManagedLauncher{{Name: launcher, Kind: "api", BaseURL: upstream.URL, Model: "example-model"}})
 			} else {
-				rc := fmt.Sprintf("function gw { export ANTHROPIC_BASE_URL=%q; command claude \"$@\"; }\n", upstream.URL)
+				rc := fmt.Sprintf("gw() { export ANTHROPIC_BASE_URL=%q; command claude \"$@\"; }\n", upstream.URL)
 				if tc.override {
 					file := filepath.Join(os.Getenv("HOME"), "override.json")
 					writeFile(t, file, fmt.Sprintf(`{"env":{"ANTHROPIC_BASE_URL":%q}}`, upstream.URL))
-					rc = fmt.Sprintf("function gw { command claude \"$@\" --settings %q; }\n", file)
+					rc = fmt.Sprintf("gw() { command claude \"$@\" --settings %q; }\n", file)
 				}
 				writeFile(t, filepath.Join(os.Getenv("HOME"), ".zshrc"), rc)
+				writeFile(t, filepath.Join(os.Getenv("HOME"), ".bashrc"), rc)
 			}
 			e := cliExec()
 			e.Model = "example-model"
@@ -160,7 +161,7 @@ func TestAssistantCacheProxyScopeAndLauncherPrecedence(t *testing.T) {
 	}
 }
 func TestAssistantCacheProxyExcludesUnsupportedAndSpare(t *testing.T) {
-	f := cliTest(t)
+	f := cliTestBash(t)
 	c := assistantCompaction{endpoint: "https://api.example.com", endpointKnown: true}
 	on := &assistantwire.CacheKeepalive{Enabled: true, IntervalMinutes: 55, MaxRequests: 24}
 	f.n.setManaged([]proto.ManagedLauncher{{Name: "codex-provider", Agent: "codex"}, {Name: "other-provider", Agent: "agy"}})
