@@ -274,7 +274,7 @@ struct NewChatView: View {
     private var promptHint: String {
         if codexNeedsFirst { return String(localized: "What should Codex do? (Required: Codex starts a session only after the first message)") }
         if codex { return String(localized: "What should Codex do? (Optional: you can also send it later, here or in its terminal)") }
-        // Claude only for Claude Code: a Paseo provider such as Grok, TRAEX or a runtime's agent is just the agent (#8144).
+        // Claude only for Claude Code: a Paseo provider such as Grok, TRAE CLI or a runtime's agent is just the agent (#8144).
         if startAgent != "claude" { return String(localized: "What should the agent do? (Optional)") }
         return String(localized: "What should Claude do? (Optional)")
     }

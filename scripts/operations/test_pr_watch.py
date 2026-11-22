@@ -832,18 +832,22 @@ class WatcherTests(unittest.TestCase):
         success = [c for c in self.github.call_args_list if c.args[0][:3] == ["gh", "pr", "review"]]
         self.assertEqual((len(findings), len(success)), (1, 1))
 
-    def test_a_new_finding_on_the_same_head_is_still_published(self):
+    def test_a_heads_findings_are_published_once_except_a_new_p0(self):
         first = {"path": "x.py", "line": 2, "severity": "P2", "summary": "note", "suggestion": "consider"}
         moved = dict(first, summary="same place, new words")
-        new = {"path": "y.py", "line": 9, "severity": "P1", "summary": "another", "suggestion": "fix"}
+        nit = {"path": "y.py", "line": 9, "severity": "P1", "summary": "another", "suggestion": "fix"}
+        p0 = {"path": "z.py", "line": 4, "severity": "P0", "summary": "breaks", "suggestion": "repair"}
         snapshot = {"head": SHA_A}
-        for findings in ([first], [moved], [moved, new]):
+        for findings in ([first], [moved], [moved, nit], [moved, nit, p0], [moved, nit, p0]):
             self.watcher.comment_findings("example/one", 7, snapshot, findings)
         posted = [c for c in self.github.call_args_list if c.args[0][:2] == ["gh", "api"]]
-        self.assertEqual(len(posted), 2)
-        self.assertIn("y.py", posted[1].kwargs["input_text"])
+        self.assertEqual(len(posted), 2)  # the first review, then the new P0 alone
+        second = json.loads(posted[1].kwargs["input_text"])
+        self.assertEqual([(c["path"], c["line"]) for c in second["comments"]], [("z.py", 4)])
         anchors = {(f["path"], f["line"]) for f in self.watcher.head_publication("example/one", 7, SHA_A)["published_findings"]}
-        self.assertEqual(anchors, {("x.py", 2), ("y.py", 9)})
+        self.assertEqual(anchors, {("x.py", 2), ("z.py", 4)})
+        self.watcher.comment_findings("example/one", 7, {"head": SHA_B}, [nit])
+        self.assertEqual(len([c for c in self.github.call_args_list if c.args[0][:2] == ["gh", "api"]]), 3)
 
     def test_success_review_is_posted_once_per_head(self):
         for head in (SHA_A, SHA_A, SHA_B):
@@ -1846,7 +1850,9 @@ class WatcherTests(unittest.TestCase):
         self.assertFalse(any(command[0].startswith("CI ") for command in commands))
         self.assertEqual(calls, [None, None, None, str(root / "scripts/operations"), None, None])
 
-    def test_changed_sleep_guard_requires_lowering_the_baseline(self):
+    def test_changed_sleep_guard_refuses_a_rise_and_passes_a_fall(self):
+        # Count ratchets fail only when a count rises (docs/operations/testing.md, "Count ratchets"): a test file under
+        # its baseline passes without the baseline lowered.
         import pr_watch_test_guards
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1858,8 +1864,12 @@ class WatcherTests(unittest.TestCase):
             test.parent.mkdir(parents=True)
             test.write_text("package example\n")
             with patch.object(pr_watch_test_guards, "checked", return_value=baseline.read_text()):
+                self.assertEqual(pr_watch_test_guards.baseline_guard("server/internal/example/example_test.go", root), [])
+            test.write_text("package example\n\nfunc TestWait(t *testing.T) {\n" + "\ttime.Sleep(time.Second)\n" * 3 + "}\n")
+            with patch.object(pr_watch_test_guards, "checked", return_value=baseline.read_text()):
                 violations = pr_watch_test_guards.baseline_guard("server/internal/example/example_test.go", root)
-            self.assertIn("lower the baseline", violations[0])
+            self.assertEqual(len(violations), 1)
+            self.assertIn("3 time.Sleep call(s), baseline 2", violations[0])
 
     def test_go_test_runner_uses_disposable_postgres_and_cleanup(self):
         import pr_watch_go_tests

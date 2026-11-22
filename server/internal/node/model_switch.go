@@ -254,7 +254,7 @@ func (n *Node) setModel(ctx context.Context, id, model string) error {
 		return fmt.Errorf("Persona 对话的模型在对话上方的芯片里换")
 	}
 	if n.externalCodex(id) || n.codexPath(id) != "" || n.traexPath(id) != "" {
-		return fmt.Errorf("Codex / TRAEX 的会话不支持在手机上切换模型")
+		return fmt.Errorf("Codex / TRAE CLI 的会话不支持在手机上切换模型")
 	}
 	if err := n.switchingRefusal(id); err != nil { // a launcher switch, maybe on the last connection's Node
 		return err

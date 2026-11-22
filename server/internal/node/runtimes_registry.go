@@ -424,15 +424,15 @@ func (b *runtimeRegistry) setAssistantPIDs(h *runtimeConn, reports map[string]in
 		return
 	}
 	verified := make(map[string]int)
-	seen := make(map[int]string)
+	counts := make(map[int]int)
+	// A process reported for two sessions is shared, even when one of those
+	// sessions is an ordinary Agent. Never grant it assistant authority.
+	for _, worker := range reports {
+		counts[worker]++
+	}
 	for id, worker := range reports {
-		if runtimeSessionID(id) && strictDescendant(worker, pid, parentPID) && isAssistant(id) {
-			if previous, duplicate := seen[worker]; duplicate {
-				delete(verified, previous)
-			} else {
-				seen[worker] = id
-				verified[id] = worker
-			}
+		if counts[worker] == 1 && runtimeSessionID(id) && strictDescendant(worker, pid, parentPID) && isAssistant(id) {
+			verified[id] = worker
 		}
 	}
 	b.mu.Lock()
@@ -705,7 +705,7 @@ func (h *runtimeConn) formLauncherLocked(l runtimeLauncher) proto.Launcher {
 	}
 	builtinCompanion := h.builtinAgy && h.daemon == "" && h.hello.Runtime == agyRuntimeID && agent == agyAgent
 	return proto.Launcher{Name: l.Name, Model: l.Model, Source: h.hello.Runtime, Agent: agent, PromptOptional: l.PromptOptional,
-		Assistant: assistant, AssistantFor: assistantFor, AutoAccept: l.AutoAccept, DisplayName: l.DisplayName, PermissionModes: modes,
+		Assistant: assistant, SupervisionPolicy: assistant && h.hello.Caps.SupervisionPolicy, AssistantFor: assistantFor, AutoAccept: l.AutoAccept, DisplayName: l.DisplayName, PermissionModes: modes,
 		BuiltinCompanion: builtinCompanion}
 }
 

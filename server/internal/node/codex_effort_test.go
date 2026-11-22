@@ -74,7 +74,7 @@ func TestCodexEffortOnAJoinedPane(t *testing.T) {
 	if s := paneRow(t, n, remoteRaw); len(s.Efforts) != 0 || s.Effort != "" {
 		t.Fatalf("a pane on the terminal route offers efforts: %v %q", s.Efforts, s.Effort)
 	}
-	if err := n.setModes(ctx, remoteRaw, "", "high"); err == nil || !strings.Contains(err.Error(), "Codex / TRAEX 的会话不支持") {
+	if err := n.setModes(ctx, remoteRaw, "", "high"); err == nil || !strings.Contains(err.Error(), "Codex / TRAE CLI 的会话不支持") {
 		t.Fatalf("terminal route: %v", err)
 	}
 	joinPane(t, n)
@@ -436,7 +436,7 @@ func TestCodexEffortRefusedOffTheAppServer(t *testing.T) {
 	n.mu.Unlock()
 	for _, id := range []string{codexID, traexID} {
 		_, err := request(t, n, "session.modes", map[string]any{"session_id": id, "effort": "high"})
-		if err == nil || !strings.Contains(err.Error(), "Codex / TRAEX 的会话不支持") {
+		if err == nil || !strings.Contains(err.Error(), "Codex / TRAE CLI 的会话不支持") {
 			t.Errorf("%s: %v", id, err)
 		}
 		if s := paneRow(t, n, id); len(s.Efforts) != 0 {

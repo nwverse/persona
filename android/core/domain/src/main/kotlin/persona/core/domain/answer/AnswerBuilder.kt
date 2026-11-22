@@ -91,6 +91,18 @@ internal object KotlinAnswerBuilder {
         fun blocked() = AnswerResult(false, draft = draft)
         fun resolved(resolution: Resolution) = AnswerResult(true, resolution, draft)
         if (context.state != "pending" || context.sending) return blocked()
+        if (interaction.isSecretHandoff) {
+            when (action) {
+                AnswerAction.Allow, AnswerAction.Always -> {
+                    if (context.entry != AnswerEntry.Conversation || context.locked || draft != AnswerDraft() ||
+                        interaction.secretHandoff?.variables?.isNotEmpty() != true ||
+                        (action == AnswerAction.Always && interaction.alwaysLabel.isNullOrBlank())) return blocked()
+                    return resolved(Resolution(allow = true, always = if (action == AnswerAction.Always) true else null))
+                }
+                AnswerAction.Deny -> if (draft != AnswerDraft(message = draft.message) || draft.message.length > 4000) return blocked()
+                else -> return blocked()
+            }
+        }
         // A password card takes only its own two answers (#1581); no other card's answer carries a typed password.
         val passwordRulesMet = if (interaction.isSecretRun) secretRunAnswer(action, draft, context) else draft.password.isEmpty()
         if (!passwordRulesMet) return blocked()

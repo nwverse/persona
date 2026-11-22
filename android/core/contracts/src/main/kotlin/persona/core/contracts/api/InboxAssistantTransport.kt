@@ -126,6 +126,11 @@ interface InboxAssistantTransport {
     /** [createConversation] for one manager (null: the default), as [assistantOf]. */
     suspend fun createConversationOf(manager: String?, main: Boolean, launcher: String? = null): JsonObject =
         if (launcher == null) createConversation(main) else createConversation(main, launcher)
+    /** A marked creation must be explicit; legacy transports reject it instead of losing provenance. */
+    suspend fun createConversationOf(manager: String?, main: Boolean, launcher: String?, via: String?): JsonObject {
+        require(via == null) { "Message provenance is not supported" }
+        return createConversationOf(manager, main, launcher)
+    }
     /**
      * [createConversationOf] with the model and effort picked on the new-chat page (`POST /api/v1/assistant/conversations`
      * `{launcher, model?, effort?}`), which a hub with `assistant_model_pick` keeps as the chat's `model_pick` (#5033).

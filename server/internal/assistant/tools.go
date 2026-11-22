@@ -70,7 +70,7 @@ func toolsNamed(names []string) []proto.Tool {
 }
 
 // Tool runs one of the assistant's MCP tools for the conversation call.SessionID on machine call.MachineID.
-func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
+func (s *Service) tool(ctx context.Context, call ToolCall) proto.ToolResult {
 	if err := s.conversationAvailable(ctx, call.MachineID, call.SessionID); err != nil {
 		return proto.TextResult(err.Error(), true)
 	}
@@ -644,6 +644,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				}
 			}
 		}
+		// The tier that actually contributed a launcher is a caller choice: fitLauncher refuses where its launcher is
+		// absent instead of substituting another one and dropping the preset (#12032). A tier that gave nothing
+		// (a launcher of the caller's own) leaves this "".
+		own.tier = tier
 		own.ompModelDefault = a.Launcher == "omp" && a.Model == ""
 		// What it runs on this computer, before the user is asked (#2640, launcher_fit.go): a launcher named here that
 		// the computer lacks starts nothing; a default it lacks gives way to one it has, and the card and answer say so.
@@ -676,6 +680,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			}
 			a.Effort = ""
 			a.PermissionMode = ""
+			delete(run, "effort")
+			delete(run, "permission_mode")
+		} else if mode, _ := run["permission_mode"].(string); mode != "" && own.permission == "" && !fit.supportsPermissionMode(mode) {
+			delete(run, "permission_mode")
 		}
 		// The admission gate refuses a too-busy computer before the user is asked to approve anything.
 		gated, _ := run["launcher"].(string)
@@ -699,6 +707,11 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_model", i18n.Args{"model": a.Model})
 		case proto.FasterSpeed(a.Speed):
 			where += " · " + a.Speed
+		}
+		if tier == "" {
+			if perm, _ := run["permission_mode"].(string); perm != "" {
+				where += " · " + perm
+			}
 		}
 		if a.Ultracode {
 			where += " · ultracode"
@@ -967,7 +980,8 @@ type completedNodeWriteError struct{ error }
 func (e *completedNodeWriteError) Unwrap() error { return e.error }
 
 func tracksNodeWrite(method string) bool {
-	return method == DeviceSessionSend || method == DeviceSessionStart || method == devicewire.MethodCloseTaskTerminal
+	return method == DeviceSessionSend || method == DeviceSessionStart || method == devicewire.MethodCloseTaskTerminal ||
+		method == "session.a2a.send" || method == "session.a2a.wake"
 }
 
 func beforeNodeWrite(method string, err error) error {

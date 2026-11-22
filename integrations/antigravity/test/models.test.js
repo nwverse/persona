@@ -308,6 +308,59 @@ test('a delayed default after auto acknowledgement still uses the fallback', asy
   assert.equal(notices.length, 1)
 })
 
+test('auto-mode refusal notice shifts projected seq without misaligning item usage or model', async (t) => {
+  const f = await modePermissionFixture(t, { refuseAuto: true }, { assistant: true, permission_mode: 'auto' })
+  const rawId = f.sessionId.replace(/^agy-/, '')
+  const logs = join(f.home, 'settings', 'brain', rawId, '.system_generated', 'logs')
+  mkdirSync(logs, { recursive: true })
+  const at = '2026-11-21T10:00:00Z'
+  const rawSteps = [
+    { step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: at, content: 'Run check' },
+    {
+      step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: at,
+      model: 'claude-opus-5-5-high', thinking: 'Checking', content: 'Running tool',
+      input_tokens: 1200, cache_read_tokens: 48800, cache_write_tokens: 300, output_tokens: 180,
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'echo ok' } }],
+    },
+    { step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'DONE', created_at: at, content: 'ok' },
+    {
+      step_index: 3, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: at,
+      model: 'claude-opus-5-5-high', content: 'Done.',
+      input_tokens: 500, cache_read_tokens: 51000, output_tokens: 70,
+    },
+  ]
+  writeFileSync(join(logs, 'transcript_full.jsonl'), rawSteps.map((s) => JSON.stringify(s)).join('\n') + '\n')
+
+  const page = await f.items()
+  assert.equal(page.items[0].kind, 'notice')
+  assert.equal(page.items[0].text, AUTO_REFUSAL_NOTICE)
+  assert.equal(page.items[0].seq, 1)
+  assert.equal(page.items[0].usage, undefined)
+  assert.equal(page.items[0].model, undefined)
+
+  // Raw step 1 shifted to projected seq 3; raw step 3 shifted to projected seq 5.
+  const step1Items = page.items.filter((item) => item.seq === 3)
+  assert.equal(step1Items.length, 3)
+  const wantStep1Usage = [{ model: 'claude-opus-5-5-high', in: 1200, out: 180, cache_read: 48800, cache_write: 300 }]
+  assert.deepEqual(step1Items[0].usage, wantStep1Usage)
+  assert.equal(step1Items[1].usage, undefined)
+  assert.equal(step1Items[2].usage, undefined)
+  assert.deepEqual(step1Items.map((item) => item.model), ['claude-opus-5-5-high', 'claude-opus-5-5-high', 'claude-opus-5-5-high'])
+
+  const step3Item = page.items.find((item) => item.seq === 5)
+  assert.equal(step3Item.text, 'Done.')
+  assert.equal(step3Item.model, 'claude-opus-5-5-high')
+  assert.deepEqual(step3Item.usage, [{ model: 'claude-opus-5-5-high', in: 500, out: 70, cache_read: 51000 }])
+
+  // session.item returns exact projected usage on #0 and omits it on secondary #1.
+  const primary = await f.n.peer.call('session.item', { session_id: f.sessionId, item_id: step1Items[0].id })
+  assert.deepEqual(primary.usage, wantStep1Usage)
+  assert.equal(primary.model, 'claude-opus-5-5-high')
+  const secondary = await f.n.peer.call('session.item', { session_id: f.sessionId, item_id: step1Items[1].id })
+  assert.equal(secondary.usage, undefined)
+  assert.equal(secondary.model, 'claude-opus-5-5-high')
+})
+
 // #11106: an expired sign-in makes agy models hang rather than fail. The timeout says what to do about it.
 test('a discovery that times out reports an expired sign-in', async (t) => {
   const { n, catalog } = await fixture(t, { noStart: true, modelsTimeoutMs: 300 })

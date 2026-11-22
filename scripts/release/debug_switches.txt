@@ -24,6 +24,7 @@ newAssistant
 openAbout
 openAgent
 openAgentsFresh
+openAlarms
 openAllWork
 openAppearance
 openAssistant
@@ -94,6 +95,7 @@ openLauncherDetails
 openLauncherEditor
 openLauncherPage
 openLauncherPicker
+openLinkSwitch
 openLinkURL
 openLiveScreenSettings
 openLocalProxy
@@ -247,6 +249,7 @@ showCloseoutSample
 showCompactChrome
 showComposerPhoto
 showConnection
+showConnectionAddresses
 showConnectionCycle
 showContexts
 showContinuityShadow

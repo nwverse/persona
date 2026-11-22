@@ -132,6 +132,7 @@ func (s *Service) launcherViewsFrom(ctx context.Context, zshrc []zshrcLaunchers,
 	}
 	hidden := s.hiddenLaunchers(ctx)
 	byName := map[string]*LauncherView{}
+	unrestrictedModes := map[string]bool{}
 	var names []string
 	for _, m := range zshrc {
 		for _, l := range m.Launchers {
@@ -147,7 +148,13 @@ func (s *Service) launcherViewsFrom(ctx context.Context, zshrc []zshrcLaunchers,
 				v = &LauncherView{Name: l.Name, Source: src, Agent: l.Agent, BaseURL: l.BaseURL, Model: l.Model, Hidden: slices.Contains(hidden, l.Name), PermissionModes: l.PermissionModes, builtinCompanion: l.BuiltinCompanion, modelRunMachines: []string{}}
 				byName[l.Name] = v
 				names = append(names, l.Name)
-			} else if l.PermissionModes != 0 {
+				if l.PermissionModes == 0 {
+					unrestrictedModes[l.Name] = true
+				}
+			} else if l.PermissionModes == 0 {
+				unrestrictedModes[l.Name] = true
+				v.PermissionModes = 0
+			} else if !unrestrictedModes[l.Name] {
 				v.PermissionModes |= l.PermissionModes
 			}
 			v.Machines = append(v.Machines, m.MachineID)
@@ -292,11 +299,12 @@ func (s *Service) machineLaunchersFrom(ctx context.Context, machine string, res 
 		out = append(out, proto.Launcher{Name: "claude", Source: "builtin"})
 	}
 	agyAssistant := slices.ContainsFunc(res.Launchers, func(l proto.LauncherEnvelope) bool { return l.Agent == "agy" && l.Assistant })
+	agyPolicy := slices.ContainsFunc(res.Launchers, func(l proto.LauncherEnvelope) bool { return l.Agent == "agy" && l.Assistant && l.SupervisionPolicy })
 	for _, m := range managed {
 		if m.Kind == "api" {
 			continue
 		}
-		out = append(out, proto.Launcher{Name: m.Name, BaseURL: m.BaseURL, Model: m.Model, Source: "persona", Agent: m.Agent, Assistant: m.Agent == "agy" && agyAssistant,
+		out = append(out, proto.Launcher{Name: m.Name, BaseURL: m.BaseURL, Model: m.Model, Source: "persona", Agent: m.Agent, Assistant: m.Agent == "agy" && agyAssistant, SupervisionPolicy: m.Agent == "agy" && agyPolicy,
 			PromptOptional: m.Agent == "codex" && codexOptional, RunHere: m.Agent == "codex" && codexHere, Pi: m.PiAPI() != ""})
 	}
 	return out, res.HostRuntime

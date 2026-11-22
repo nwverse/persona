@@ -5,7 +5,7 @@ import { t } from "../../i18n";
 import { api, errorText } from "../../lib/api";
 import { onShownHint } from "../../lib/shown-hints";
 import { filterQuery, SessionList, type ListCounts, type ListFilters } from "../../lib/session-list";
-import { groupMachines, type GroupDimension, type SessionGroup, type SessionPlace, type TodoNames } from "../../lib/session-groups";
+import { groupMachines, JUST_FINISHED_KEY, type GroupDimension, type SessionGroup, type SessionPlace, type TodoNames } from "../../lib/session-groups";
 import { SESSION_LIST_METRICS, SESSION_LIST_STYLE } from "../../ui/list-metrics";
 import { SearchField } from "../../ui/SearchField";
 import { STATE_LABEL } from "../../lib/state-labels";
@@ -63,6 +63,8 @@ export interface PagedSessionListProps<T> {
    *  under it a level in, each group where its most recent member was (lib/side-sessions.ts). Rows and counts stay the
    *  server's; only the order of the loaded rows changes. */
   parentOf?: (row: T) => string | undefined;
+  /** Row identities excluded from both flat rows and grouped sections (e.g. in-flight launches shown under Starting). */
+  excludeIdentities?: ReadonlySet<string>;
   /** The sidebar's groupings (#6662): the caller chooses the dimension with its own bar, the complete list's, so both
    *  lists show the same control; this list draws that bar first, then the state chips and what ⌘K put on it, as the
    *  complete list does, with no value pill or search field of its own. A search lists its matches flat. `label` names
@@ -71,6 +73,10 @@ export interface PagedSessionListProps<T> {
   /** The words a failed read of the list's rows or groups is said in, given its reason (the reason alone by default): the
    *  sidebar's says it could not read the Agents list, as its complete list does. */
   failureText?: (reason: string) => string;
+  /** The hub's counts of this list's scope as the page shows them, given rows read in that scope: the sidebar's leaves
+   *  out of Unread an agent seen on this page that those rows, and so the counts read with them, still have Unread
+   *  (lib/seen-outbox.ts heldCounts). The chips' numbers and By state's sections follow it. */
+  holdCounts?: (counts: ListCounts, rows: readonly T[]) => ListCounts;
 }
 
 export interface PagedGrouping<T> {
@@ -114,7 +120,7 @@ export function scrollParent(el: HTMLElement | null): HTMLElement | null {
   return null;
 }
 
-export function PagedSessionList<T>({ root, path, identity, compare, removeIdentity, event, renderRow, personal = false, label, machineOrder, catalog = false, justFinished = false, placeOf, activeAt, needsYou, isOpen, parentOf, grouping, failureText = sameText }: PagedSessionListProps<T>) {
+export function PagedSessionList<T>({ root, path, identity, compare, removeIdentity, event, renderRow, personal = false, label, machineOrder, catalog = false, justFinished = false, placeOf, activeAt, needsYou, isOpen, parentOf, excludeIdentities, grouping, failureText = sameText, holdCounts }: PagedSessionListProps<T>) {
   const [query, setQuery] = useState("");
   const [typed, setTyped] = useState("");
   // the sidebar's groupings take ⌘K's words (#6589); every other list its own field's, once typing pauses
@@ -268,7 +274,29 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     else void root.retry().catch(() => {});
   }, [facetScoped, root]);
   const grouped = useSessionGroups({ dimension, catalog: cataloged, countsPath, scope: groupScope, facets, facetQuery, facetsError: facetsFailure, retryFacets, waiting: sections ? scopeNeeds : 0, event, todos: grouping?.todos, justFinished, machineOrder });
-  const allGroups = grouped.groups;
+  // The scope's counts as the page shows them (holdCounts): only against the rows the same answer brought (the root's,
+  // or the filtered list's own page, on a hub that sends a page's counts with it), so a newer count is never taken for
+  // an older row's or the other way round. Counts read on their own (a scope only the hub can count, such as hidden
+  // botmux sessions in a grouping) are the hub's: they are read again on every hint, the one after the hub records a
+  // seen too.
+  const coupled = !root.usesPageCounts() ? undefined
+    : scopeQuery === "counts=1" ? (rootPage.counts ? { counts: rootPage.counts, rows: rootPage.rows } : undefined)
+    : scopeFromFacets && facetsFromList && page.counts ? { counts: page.counts, rows: page.rows } : undefined;
+  const coupledCounts = coupled?.counts, coupledRows = coupled?.rows;
+  const held = useMemo(() => (coupledCounts && coupledRows && holdCounts ? holdCounts(coupledCounts, coupledRows) : undefined),
+    [coupledCounts, coupledRows, holdCounts]);
+  const shownCounts = held && held !== coupledCounts ? held : scopeCounts;
+  // By state drawn from those same counts (no chip narrows the groups): the sections the held agents left (Unread, Just
+  // finished) are smaller, Seen larger
+  const chipless = !Object.keys(filters).some((key) => (CHIP_KEYS as readonly string[]).includes(key));
+  const allGroups = useMemo(() => {
+    const groups = grouped.groups;
+    if (!groups || dimension !== "state" || !chipless || !held || !coupledCounts || held === coupledCounts) return groups;
+    const unread = (coupledCounts.state.unread ?? 0) - (held.state.unread ?? 0);
+    const finished = (coupledCounts.just_finished ?? 0) - (held.just_finished ?? 0);
+    const less = (key: string) => (key === "unread" ? unread : key === JUST_FINISHED_KEY ? finished : key === "idle" ? -(unread + finished) : 0);
+    return groups.map((g) => (less(g.key) ? { ...g, count: Math.max(0, g.count - less(g.key)) } : g));
+  }, [grouped.groups, dimension, chipless, held, coupledCounts]);
   // the picked group follows what the hub says of it now (a project gains a directory); gone from the scope, it stays picked
   useEffect(() => {
     if (!picked || !allGroups) return;
@@ -276,15 +304,24 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     if (now && !sameValue(now, picked)) setPicked(now);
   }, [allGroups, picked]);
 
-  const transportRows = list.getTransportRows();
+  const rawTransportRows = list.getTransportRows();
+  const transportRows = useMemo(
+    () => excludeIdentities?.size ? rawTransportRows.filter((row) => !excludeIdentities.has(identity(row))) : rawTransportRows,
+    [rawTransportRows, excludeIdentities, identity],
+  );
+  const pageRows = useMemo(
+    () => excludeIdentities?.size ? page.rows.filter((row) => !excludeIdentities.has(identity(row))) : page.rows,
+    [page.rows, excludeIdentities, identity],
+  );
+  const visiblePageTotal = Math.max(0, page.total - (page.rows.length - pageRows.length));
   // Activity totals need their own newest-first transport groups: structural presentation can put an unrelated older
   // row between a recent side session and its parent, which must not end the transport's recent prefix (#11801).
   const activityNesting = useMemo(() => activeAt && parentOf ? nestUnderParents(transportRows, identity, parentOf, activeAt) : null, [transportRows, identity, parentOf, activeAt]);
   const activityRows = activityNesting?.rows ?? transportRows;
   // SessionList has already applied the one structural presentation order. This separate view draws nested rows and
   // partitions the retained presentation; its lead never substitutes for the transport's activity lead.
-  const nesting = useMemo(() => parentOf ? nestUnderParents(page.rows, identity, parentOf, activeAt) : null, [page.rows, identity, parentOf, activeAt]);
-  const rows = nesting?.rows ?? page.rows;
+  const nesting = useMemo(() => parentOf ? nestUnderParents(pageRows, identity, parentOf, activeAt) : null, [pageRows, identity, parentOf, activeAt]);
+  const rows = nesting?.rows ?? pageRows;
   const orderedRows = rows;
   // a group is as recent as its most recent member, so Earlier never splits one
   const groupActiveAt = useMemo(() => activeAt && nesting ? (row: T) => activeAt(nesting.lead.get(row) ?? row) : activeAt, [activeAt, nesting]);
@@ -301,10 +338,10 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const clock = useNow(60_000, Boolean(activeAt && win));
   const start = activeAt ? windowStart(win, clock) : null;
   // the Needs you chip's number for this scope: the server's, by the same rule as the chip
-  const needsYouTotal = chip.state ? (chip.state === "needs_you" ? page.total : 0) : chip.pane_source ? page.counts?.state?.needs_you : scopeCounts?.state?.needs_you;
+  const needsYouTotal = chip.state ? (chip.state === "needs_you" ? visiblePageTotal : 0) : chip.pane_source ? page.counts?.state?.needs_you : scopeCounts?.state?.needs_you;
   const rowNeedsYou = needsYou ?? (() => false);
   const split = activityActiveAt && start !== null
-    ? splitByActivity(activityRows, activityActiveAt, start, { total: page.total, hasMore: page.hasMore, needsYou: rowNeedsYou, needsYouTotal })
+    ? splitByActivity(activityRows, activityActiveAt, start, { total: visiblePageTotal, hasMore: page.hasMore, needsYou: rowNeedsYou, needsYouTotal })
     : null;
   // Transport's newest-first split supplies the server totals. Presentation partitions its own retained rows too: an
   // older retained row needs Earlier even when every row left in the current transport prefix is recent.
@@ -320,7 +357,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   // Count their identity union: subtracting only the transport's recent rows charges both cases to Earlier (#11801).
   const loaded = new Set(transportRows.map(identity));
   const retainedRecent = presentedRows.slice(0, recent).filter((row) => !loaded.has(identity(row)));
-  const earlierCount = hasEarlier && split ? Math.max(0, page.total - split.recent - retainedRecent.length, presentedEarlier) : 0;
+  const earlierCount = hasEarlier && split ? Math.max(0, visiblePageTotal - split.recent - retainedRecent.length, presentedEarlier) : 0;
   const recentNeedsYou = activityRows.slice(0, split?.recent ?? 0).filter(rowNeedsYou).length + retainedRecent.filter(rowNeedsYou).length;
   const earlierNeedsYou = needsYouTotal === undefined ? presentedRows.slice(recent).filter(rowNeedsYou).length
     : Math.min(earlierCount, Math.max(0, needsYouTotal - recentNeedsYou));
@@ -379,13 +416,13 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     return () => parent.removeEventListener("scroll", scroll);
   }, [list, getScrollElement, sections, hasMore, page.loadingMore, page.error, margin, totalSize]);
 
-  const stateTotals = scopeCounts?.state ?? {};
+  const stateTotals = shownCounts?.state ?? {};
   // the quick filters' numbers, as the complete list counts them: Working without the ones waiting in the background
   const quickCounts = useMemo((): FilterCounts | undefined => {
-    if (!scopeCounts) return undefined;
-    const by = scopeCounts.state ?? {}, waiting = scopeCounts.background_waiting ?? 0, origin = scopeCounts.pane_source ?? {};
+    if (!shownCounts) return undefined;
+    const by = shownCounts.state ?? {}, waiting = shownCounts.background_waiting ?? 0, origin = shownCounts.pane_source ?? {};
     return { needs: by.needs_you ?? 0, unread: by.unread ?? 0, working: Math.max(0, (by.working ?? 0) - waiting), bg_waiting: waiting, feishu: origin.feishu ?? 0, terminal: origin.terminal ?? 0 };
-  }, [scopeCounts]);
+  }, [shownCounts]);
   const onQuickCounts = quick?.onCounts;
   useEffect(() => { onQuickCounts?.(quickCounts); }, [onQuickCounts, quickCounts]);
   // the fixed group order: the menu lists a bounded number of them, and the picked one whatever its place
@@ -417,8 +454,8 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   };
   const chooseGroup = (key: string) => setPicked(key ? groups.find((g) => g.key === key) ?? null : null);
   // an open section reads the collection as the list above it does
-  const source: GroupedSource<T> = useMemo(() => ({ path, identity, compare, removeIdentity, event, summary: summaryMode, roots: rootsMode, parentOf, rowOrder }),
-    [path, identity, compare, removeIdentity, event, summaryMode, rootsMode, parentOf, rowOrder]);
+  const source: GroupedSource<T> = useMemo(() => ({ path, identity, compare, removeIdentity, event, summary: summaryMode, roots: rootsMode, parentOf, rowOrder, excludeIdentities }),
+    [path, identity, compare, removeIdentity, event, summaryMode, rootsMode, parentOf, rowOrder, excludeIdentities]);
   const openRow = sections && isOpen && placeOf ? rootPage.rows.find(isOpen) : undefined;
   const autoMore = useRef(0);
   useEffect(() => {
@@ -431,7 +468,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     void root.more().catch(() => {});
   }, [sections, isOpen, placeOf, openRow, root, rootPage]);
   const openPlace = useMemo(() => openRow && placeOf ? placeOf(openRow) : undefined, [openRow, placeOf]);
-  const shownTotal = sections ? grouped.total : page.total;
+  const shownTotal = sections ? grouped.total : visiblePageTotal;
   const states = personal ? ["unread", "idle"] : ["needs_you", "working", "unread", "idle", "offline", "unknown"];
   const loadingLine = <p role="status" className="px-2 py-2 text-xs text-ink-3">{t("sidebar.loading")}</p>;
   const searchField = <SearchField value={query} onChange={setQuery} placeholder={t("paged-agents.search")} />;
@@ -453,7 +490,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     </div>
   );
   return (
-    <div data-paged-sessions={personal ? "personal" : "runtime"} data-loaded-sessions={page.rows.length} data-has-more={page.hasMore}>
+    <div data-paged-sessions={personal ? "personal" : "runtime"} data-loaded-sessions={pageRows.length} data-has-more={page.hasMore}>
       {/* under the caller's title row its bar sits where the complete list's does: no padding of this list's above it */}
       <div className={cx("space-y-2 px-1 pb-2", !grouping && "pt-2")}>
         {/* the caller's bar and chips where the complete list has them: its padding, not this list's as well */}
@@ -510,7 +547,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
       {/* a background refresh moves nothing: only a first read or a page someone asked for says Loading (#9215) */}
       {page.loading && (!page.loaded || page.loadingMore) && loadingLine}
       {page.error && <ListError text={failureText(page.error)} onRetry={() => void list.retry().catch(() => {})} />}
-      {page.loaded && !page.loading && !page.error && !page.rows.length && <p className="px-2 py-2 text-xs text-ink-3">{t("sidebar.no_match")}</p>}
+      {page.loaded && !page.loading && !page.error && !pageRows.length && <p className="px-2 py-2 text-xs text-ink-3">{t("sidebar.no_match")}</p>}
       {hasMore && !page.loadingMore && !page.error && <ShowMoreRow label={t("paged-agents.more")} onClick={() => void list.more().catch(() => {})} />}
       </>}
     </div>

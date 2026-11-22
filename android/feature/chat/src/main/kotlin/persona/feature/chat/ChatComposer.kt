@@ -316,6 +316,7 @@ fun ChatComposer(
                         state.attachments = state.attachments.map {
                             if (it.id == attachment.id) it.copy(path = path, uploadState = DraftUploadState.Uploaded) else it
                         }
+                        println("composer-upload-finished: id=${attachment.id} path=$path state=${state.attachments.map { it.name to it.uploadState }}")
                     }
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) {

@@ -97,10 +97,11 @@ func (t *PlanTask) noteWhy(note string) {
 }
 
 // fitTaskLauncher holds t's resolved launcher (params, resolveStart's) to what m has (fitLauncher): a default m lacks
-// is swapped for one it has, which t then names, without a tier that no longer applies, and its why says so. It also
-// reports what the resolved launcher runs (startAgent: its agent type, and whether it runs with Allow all), using the same
-// launcher list rather than another probe. A read-only task whose launcher has no read-only mode is refused here
-// (readonlyLauncherRefusal), when it is planned and again before it starts.
+// is swapped for one it has, which t then names, without a tier that no longer applies, and its why says so. An
+// explicit tier (or a policy preset) whose launcher m lacks is refused there instead, with no swap and no start
+// (#12032). It also reports what the resolved launcher runs (startAgent: its agent type, and whether it runs with
+// Allow all), using the same launcher list rather than another probe. A read-only task whose launcher has no read-only
+// mode is refused here (readonlyLauncherRefusal), when it is planned and again before it starts.
 func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, own startPick, params map[string]any) (startAgent, error) {
 	note, agent, err := s.fitNewLauncher(ctx, m, own, params)
 	if err != nil {
@@ -300,7 +301,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			if t.Permission == "" {
 				t.Permission = configuredMode
 			}
-		case fit.allowAll():
+		case fit.allowAllOver(t.Permission):
 			t.Permission = "bypassPermissions"
 		}
 	}
@@ -456,8 +457,11 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if t.WaitInputID != "" {
 		params["client_msg_id"] = t.WaitInputID
 	}
-	if t.WorkspaceResolved != nil && t.WorkspaceResolved.WorkspaceID != "" {
-		params["workspace_id"] = t.WorkspaceResolved.WorkspaceID
+	if w := t.WorkspaceResolved; w != nil && w.WorkspaceID != "" {
+		params["workspace_id"] = w.WorkspaceID
+		if w.Created || w.Reused {
+			params["reopen_worktree_workspace"] = true
+		}
 	}
 	ctx, unlockTaskSpace, err := s.withTaskSpaceStart(ctx, *t, m, params)
 	if err != nil {

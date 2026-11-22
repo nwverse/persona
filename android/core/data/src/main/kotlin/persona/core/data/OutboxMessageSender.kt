@@ -138,6 +138,8 @@ class OutboxMessageSender(
     private val publishedDeliveries = mutableSetOf<String>()
     /** A publication interrupted at an unknown store point is recovered by the origin, not blocked on that store again. */
     private val interruptedDeliveries = mutableSetOf<String>()
+    /** A composer owns these visible messages until its actual HTTP result or cancellation arrives. Access under [lifecycle]. */
+    private val composerAttempts = mutableSetOf<String>()
     /** Whether a session is at work (connectActivity): its turn may write a delivered message only when it ends. */
     @Volatile private var busy: (SessionKey) -> Boolean = { false }
 
@@ -211,7 +213,11 @@ class OutboxMessageSender(
         enqueue(OutboxEntry(clientMessageId, session, text, clearDraft, createdAt = now()))
 
     override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?, launcher: String?, model: String?) =
-        enqueue(OutboxEntry(clientMessageId, session, text, clearDraft, createdAt = now(), launcher = launcher, model = model))
+        send(session, text, clientMessageId, clearDraft, launcher, model, null)
+
+    override suspend fun send(
+        session: SessionKey, text: String, clientMessageId: String, clearDraft: String?, launcher: String?, model: String?, via: String?,
+    ) = enqueue(OutboxEntry(clientMessageId, session, text, clearDraft, createdAt = now(), launcher = launcher, model = model, via = via))
 
     override suspend fun sendApplyingSwitch(session: SessionKey, text: String, clientMessageId: String) =
         enqueue(OutboxEntry(clientMessageId, session, text, createdAt = now(), applySwitch = true))
@@ -371,6 +377,11 @@ class OutboxMessageSender(
         check(job.isActive) { "Pairing scope is closed" }
         val entry = store.entries.first().firstOrNull { it.clientMessageId == id } ?: error("Message state changed")
         val starting = delivery.state == DeliveryState.Sending && result == null
+        if (starting) {
+            check(composerAttempts.add(id)) { "A composer retry is already in flight" }
+        } else if (opId != null) {
+            composerAttempts.remove(id)
+        }
         if (!starting && opId != null && opId != entry.operationId) return@withLock
         if (!starting && entry.state !in awaitingReceipt) {
             // A transcript or receipt can settle the same operation before the HTTP call returns.
@@ -382,13 +393,22 @@ class OutboxMessageSender(
             else OutboxState.entries.first { it.delivery == delivery.state }
         val from = if (starting) setOf(OutboxState.Refused) else awaitingReceipt
         // Refused again: nothing was delivered under that id either, so a later retry takes another.
-        val next = when (state) {
-            OutboxState.Refused -> newOperationId()
-            OutboxState.Sending -> opId
+        val next = when {
+            // Bind the live composer POST to its own operation id. Its completion must be distinguishable from
+            // a late reply to an older attempt while the visible client id stays the same.
+            starting -> opId
+            state == OutboxState.Refused -> newOperationId()
+            state == OutboxState.Sending -> opId
             else -> null
         }
-        check(if (next != null) store.transition(id, from, state, delivery.refusal?.code, next)
-            else store.transition(id, from, state, delivery.refusal?.code)) { "Message state changed" }
+        val moved = if (next != null) store.transition(id, from, state, delivery.refusal?.code, next)
+            else store.transition(id, from, state, delivery.refusal?.code)
+        if (starting && !moved) {
+            // A catch-up can observe the active composer row between its state and operation-id writes.
+            // It is the same attempt only when both already match; otherwise this is not a retry to repeat.
+            val current = store.entries.first().firstOrNull { it.clientMessageId == id }
+            check(current?.state == OutboxState.Sending && current.operationId == opId) { "Message state changed" }
+        } else check(moved) { "Message state changed" }
         // Composer retries bypass attempt(), but their fresh operation still belongs to this same visible message.
         if (state == OutboxState.Sending) receiptState.begin(attempt, entry.mainTarget)
         else receiptState.result(attempt, when (state) {
@@ -400,9 +420,9 @@ class OutboxMessageSender(
     }
 
     /** Attachments need the same durably bound target before uploading machine-local files. */
-    suspend fun prepareMainConversation(): SessionKey? = processing.withLock {
+    suspend fun prepareMainConversation(via: String? = null): SessionKey? = processing.withLock {
         check(job.isActive) { "Pairing scope is closed" }
-        if (transport.readyToSend.value) (resolveMain() as? MainTarget.Found)?.session else null
+        if (transport.readyToSend.value) (resolveMain(via) as? MainTarget.Found)?.session else null
     }
 
     override suspend fun sendDraft(session: SessionKey, draft: DraftSnapshot, clientMessageId: String) = lifecycle.withLock {
@@ -415,12 +435,15 @@ class OutboxMessageSender(
         Unit
     }
 
-    override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?) = lifecycle.withLock {
+    override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?) =
+        sendToMain(text, clientMessageId, draft, null)
+
+    override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?, via: String?) = lifecycle.withLock {
         check(job.isActive) { "Pairing scope is closed" }
         require(text.isNotBlank() && clientMessageId.isNotBlank())
         require(draft == null || draft.scope == hubScope)
         store.enqueueDraft(OutboxEntry(clientMessageId, PendingMainConversation, text,
-            createdAt = now(), mainTarget = true), draft)
+            createdAt = now(), mainTarget = true, via = via), draft)
         if (transport.readyToSend.value) receiptState.preparing(PendingMainConversation, clientMessageId, true)
         wake.trySend(Unit)
         Unit
@@ -549,10 +572,13 @@ class OutboxMessageSender(
         for (queued in store.entries.first()) {
             var entry = queued
             if (!transport.readyToSend.value) return
+            // The composer owns its manual retry until the actual callback. An automatic catch-up/send must not
+            // start another attempt under the visible id and overwrite that result (including cancellation/Unknown).
+            if (composerAttempts.contains(entry.clientMessageId)) continue
             val allowed = if (transport.supportsClientOps) dispatchable + OutboxState.Unknown else dispatchable
             if (entry.mainTarget && entry.session == PendingMainConversation) {
                 if (entry.state !in dispatchable) continue
-                val target = when (val main = resolveMain()) {
+                val target = when (val main = resolveMain(entry.via)) {
                     is MainTarget.Found -> main.session
                     // The hub said why it cannot start (no computer, no Claude Code…): nothing was started, so the
                     // message is not queued behind it (docs/assistant/onboarding.md 4.4); the user fixes the step and retries.
@@ -600,6 +626,16 @@ class OutboxMessageSender(
         }
         val state = classify(result)
         val error = (result as? MessageTransportResult.HubError)?.let { it.code ?: it.error }
+        val current = store.entries.first().firstOrNull { it.clientMessageId == id } ?: return state
+        // The operation that started this attempt may have been superseded by the composer's fresh retry id.
+        // Its late result must not write into the new attempt or change the visible message back to Sending.
+        if (current.operationId != entry.operationId) return current.state
+        if (state == OutboxState.Sending) {
+            // A composer completion is newer than an automatic attempt that was already in flight. Do not let
+            // that older attempt put an already settled visible message back into Sending.
+            if (current.state in settled) return current.state
+        }
+        println("outbox-settle: id=$id entryState=${entry.state} nextState=$state result=$result")
         val moved = if ((result as? MessageTransportResult.HubError)?.delivered == "none") {
             store.transition(id, from, state, error, newOperationId())
         } else store.transition(id, from, state, error)
@@ -692,7 +728,7 @@ class OutboxMessageSender(
 
     private fun request(entry: OutboxEntry) = MessageRequest(
         hubScope, entry.session, entry.text, entry.clientMessageId, entry.clearDraft,
-        opId = entry.operationId, launcher = entry.launcher, model = entry.model, applySwitch = entry.applySwitch,
+        opId = entry.operationId, launcher = entry.launcher, model = entry.model, applySwitch = entry.applySwitch, via = entry.via,
     )
 
     private sealed interface MainTarget {
@@ -703,12 +739,12 @@ class OutboxMessageSender(
         data class NotYet(val code: String = "main_not_ready") : MainTarget
     }
 
-    private suspend fun resolveMain(): MainTarget {
+    private suspend fun resolveMain(via: String? = null): MainTarget {
         store.mainConversation()?.let { return MainTarget.Found(it) }
         val resolver = mainResolver ?: return MainTarget.NotYet()
         return try {
             val target = resolver.findMainConversation() ?: if (store.claimMainCreation()) {
-                resolver.createMainConversation()
+                resolver.createMainConversation(via)
             } else null
             if (target != null) store.bindMainConversation(target)
             target?.let { MainTarget.Found(it) } ?: MainTarget.NotYet()
