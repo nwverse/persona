@@ -8,6 +8,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -214,21 +215,7 @@ func (s *Service) compactRecoverySource(ctx context.Context, p ContextParams) co
 			out.State = append(out.State, prompts.RecoveryEntry{Source: source, Text: state})
 		}
 	}
-	// Recent user inputs are pins, not inferred decisions. Injected/forwarded text is excluded by ItemSource.
-	var recent struct {
-		Items []proto.Item `json:"items"`
-	}
-	readCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-	defer cancel()
-	if s.call(readCtx, p.MachineID, DeviceSessionItems, map[string]any{"session_id": p.SessionID, "turns": 4}, &recent) == nil {
-		for i := len(recent.Items) - 1; i >= 0 && len(out.Pins) < 3; i-- {
-			it := recent.Items[i]
-			if it.Role != "user" || it.Kind != proto.KindText || prompts.ItemSource(it) != nil || contextTagRe.MatchString(it.Text) {
-				continue
-			}
-			out.Pins = append(out.Pins, prompts.RecoveryEntry{Source: fmt.Sprintf("session/%s/%s/item/%s seq=%d", p.MachineID, p.SessionID, it.ID, it.Seq), Text: it.Text})
-		}
-	}
+	out.Pins = s.compactRecoveryPins(ctx, p)
 	return out
 }
 
@@ -252,4 +239,96 @@ func (s *Service) compactRecoveryBudget(ctx context.Context, p ContextParams) in
 		}
 	}
 	return 0
+}
+
+// Cache source records ahead of a native mid-turn hook. Cached data carries no checkpoint or authorization.
+type compactRecoveryCache struct {
+	mu      sync.Mutex
+	entries map[[2]string]compactRecoveryCached
+	busy    map[[2]string]bool
+}
+type compactRecoveryCached struct {
+	data compactRecoveryData
+	at   time.Time
+}
+
+func (s *Service) prepareCompactRecovery(ctx context.Context, p ContextParams) {
+	if s.isWorkMachine(p.MachineID) || s.isGuest(ctx, p.MachineID, p.SessionID) || s.compactRecoveryBudget(ctx, p) == 0 {
+		return
+	}
+	key := [2]string{p.MachineID, p.SessionID}
+	c := &s.compactRecovery
+	c.mu.Lock()
+	if c.busy[key] {
+		c.mu.Unlock()
+		return
+	}
+	if c.busy == nil {
+		c.busy = map[[2]string]bool{}
+	}
+	c.busy[key] = true
+	c.mu.Unlock()
+	go func() {
+		readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		data := s.compactRecoverySource(readCtx, p)
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		delete(c.busy, key)
+		if readCtx.Err() != nil {
+			return
+		}
+		if c.entries == nil || len(c.entries) >= 512 {
+			c.entries = map[[2]string]compactRecoveryCached{}
+		}
+		c.entries[key] = compactRecoveryCached{data: data, at: time.Now()}
+	}()
+}
+
+func (s *Service) compactRecoveryContext(ctx context.Context, p ContextParams) ContextResult {
+	if p.RecoveryID == "" || s.cleanRoundSession(p.SessionID) || s.isWorkMachine(p.MachineID) || s.isGuest(ctx, p.MachineID, p.SessionID) {
+		return ContextResult{}
+	}
+	budget := s.compactRecoveryBudget(ctx, p)
+	if budget == 0 {
+		return ContextResult{}
+	}
+	var data compactRecoveryData
+	cached := false
+	if p.RecoveryOnly {
+		c := &s.compactRecovery
+		c.mu.Lock()
+		entry, ok := c.entries[[2]string{p.MachineID, p.SessionID}]
+		c.mu.Unlock()
+		if ok && time.Since(entry.at) < 2*time.Minute {
+			data = entry.data
+			cached = true
+		}
+	}
+	if !cached {
+		data = s.compactRecoverySource(ctx, p)
+	} else if pins := s.compactRecoveryPins(ctx, p); len(pins) > 0 {
+		data.Pins = pins
+	}
+	return ContextResult{RecoveryID: p.RecoveryID, Recovery: assembleCompactRecovery(answerLanguage(s.hello(ctx).Locale), p.RecoveryID, data, budget)}
+}
+
+func (s *Service) compactRecoveryPins(ctx context.Context, p ContextParams) []prompts.RecoveryEntry {
+	var pins []prompts.RecoveryEntry
+	// Recent user inputs are pins, not inferred decisions. Injected/forwarded text is excluded by ItemSource.
+	var recent struct {
+		Items []proto.Item `json:"items"`
+	}
+	readCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	defer cancel()
+	if s.call(readCtx, p.MachineID, DeviceSessionItems, map[string]any{"session_id": p.SessionID, "turns": 4}, &recent) == nil {
+		for i := len(recent.Items) - 1; i >= 0 && len(pins) < 3; i-- {
+			it := recent.Items[i]
+			if it.Role != "user" || it.Kind != proto.KindText || prompts.ItemSource(it) != nil || contextTagRe.MatchString(it.Text) {
+				continue
+			}
+			pins = append(pins, prompts.RecoveryEntry{Source: fmt.Sprintf("session/%s/%s/item/%s seq=%d", p.MachineID, p.SessionID, it.ID, it.Seq), Text: it.Text})
+		}
+	}
+	return pins
 }

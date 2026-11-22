@@ -400,7 +400,9 @@ func (n *Node) assistantCompactCommand(id string) string {
 }
 func (n *Node) assistantCompactInstructions(id string) string {
 	if n.peer != nil {
-		return n.assistantContext(id).CompactInstructions
+		if instructions := n.assistantContext(id).CompactInstructions; instructions != "" {
+			return instructions
+		}
 	}
 	st, _ := n.state.get(id)
 	return st.CompactInstructions

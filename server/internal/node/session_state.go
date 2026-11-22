@@ -79,6 +79,7 @@ type sessionState struct {
 	Compaction *proto.Compaction `json:"compaction,omitempty"`
 	// RecoveryPending survives restarts until an input carrying this checkpoint is delivered.
 	RecoveryPending     string `json:"recovery_pending,omitempty"`
+	RecoveryHookPending bool   `json:"recovery_hook_pending,omitempty"`
 	CompactInstructions string `json:"compact_instructions,omitempty"`
 	// IdleCompaction is the main chat's user-idle clock and unattended compaction latch.
 	IdleCompaction *idleCompactionState `json:"idle_compaction,omitempty"`

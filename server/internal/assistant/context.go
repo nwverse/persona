@@ -28,6 +28,9 @@ func (s *Service) Context(ctx context.Context, p ContextParams) ContextResult {
 		}
 		return ContextResult{}
 	}
+	if p.RecoveryOnly {
+		return s.compactRecoveryContext(ctx, p)
+	}
 	background := s.isBackgroundSession(ctx, p.SessionID)
 	snapshot := ""
 	cleanRound := s.cleanRoundSession(p.SessionID)
@@ -56,11 +59,12 @@ func (s *Service) Context(ctx context.Context, p ContextParams) ContextResult {
 		receipts = append(receipts, assistantwire.ViewErrorReceipt{ItemID: backgroundAnnounceReceipt, Digest: c.BackgroundStarted})
 	}
 	out := ContextResult{Text: text, ViewErrors: errs, Receipts: receipts, CompactInstructions: prompts.RenderCompactInstructions(answerLanguage(s.hello(ctx).Locale))}
-	if p.RecoveryID != "" && !cleanRound && !s.isWorkMachine(p.MachineID) && !s.isGuest(ctx, p.MachineID, p.SessionID) {
-		if budget := s.compactRecoveryBudget(ctx, p); budget > 0 {
-			out.RecoveryID = p.RecoveryID
-			out.Recovery = assembleCompactRecovery(answerLanguage(s.hello(ctx).Locale), p.RecoveryID, s.compactRecoverySource(ctx, p), budget)
+	if !cleanRound {
+		if p.PrepareRecovery && p.RecoveryID == "" {
+			s.prepareCompactRecovery(ctx, p)
 		}
+		recovery := s.compactRecoveryContext(ctx, p)
+		out.RecoveryID, out.Recovery = recovery.RecoveryID, recovery.Recovery
 	}
 	return out
 }

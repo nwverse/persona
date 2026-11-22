@@ -1080,8 +1080,11 @@ Summary instructions follow the configured user language. Simplified Chinese exp
 English and Japanese have their own instructions. All require user decisions verbatim with references, running task and
 session IDs, non-negotiable rules, and items waiting for the user. Claude reads these instructions from the generated
 instructions and receives them on explicit/idle compaction; Codex receives them through its `compact_prompt` setting.
-Runtime-initiated compaction in the middle of a turn is recovered at the next platform input; this does not add a
-runtime-native mid-turn hook.
+Claude SessionStart(compact) has a separate recovery handler, including headless Assistant conversations. It waits
+at most 1.5 seconds for the manager, using scoped records prepared asynchronously during regular context reads and
+fresh user quotes. A socket reply consumes its matching checkpoint only after a successful write. Hook-first and
+stream-boundary-first ordering share that checkpoint; timeout leaves it pending for the next platform input.
+Report-only hooks, guests, subagents and sessions not owned by the platform cannot use this handler.
 
 ### Manual compaction (2026-11-04, #1727)
 

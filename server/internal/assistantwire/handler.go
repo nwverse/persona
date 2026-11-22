@@ -124,10 +124,12 @@ type UserSpokeParams struct {
 // node's connection, never from the node's params. With Ack the call only confirms that a message carrying those
 // view errors (ContextResult.ViewErrors) was delivered, and answers nothing.
 type ContextParams struct {
-	RecoveryID string             `json:"recovery_id,omitempty"`
-	SessionID  string             `json:"session_id"`
-	MachineID  string             `json:"machine_id,omitempty"`
-	Ack        []ViewErrorReceipt `json:"ack,omitempty"`
+	RecoveryID      string             `json:"recovery_id,omitempty"`
+	RecoveryOnly    bool               `json:"recovery_only,omitempty"`
+	PrepareRecovery bool               `json:"prepare_recovery,omitempty"`
+	SessionID       string             `json:"session_id"`
+	MachineID       string             `json:"machine_id,omitempty"`
+	Ack             []ViewErrorReceipt `json:"ack,omitempty"`
 }
 
 // ContextResult is assistant.context's answer: the <persona-context> text, and the <persona-view-errors> block of the

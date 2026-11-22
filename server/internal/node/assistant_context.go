@@ -298,6 +298,10 @@ func (n *Node) turnContext(id string, c contextAnswer) (block string, commit fun
 // contextCompacted forgets what conversation id has seen: its old blocks were summarized away.
 func (n *Node) contextCompacted(id string) {
 	n.state.update(id, func(v *sessionState) bool {
+		if v.RecoveryHookPending {
+			v.RecoveryHookPending = false
+			return true
+		}
 		v.RecoveryPending = newUUID()
 		return true
 	})
@@ -359,12 +363,15 @@ func (n *Node) assistantContext(id string) contextAnswer {
 	defer cancel()
 	var res contextAnswer
 	st, _ := n.state.get(id)
-	if err := n.peer.Call(ctx, "assistant.context", map[string]any{"session_id": id, "recovery_id": st.RecoveryPending}, &res); err != nil {
+	if err := n.peer.Call(ctx, "assistant.context", map[string]any{"session_id": id, "recovery_id": st.RecoveryPending, "prepare_recovery": true}, &res); err != nil {
 		n.logger.Printf("assistant context: %v", err)
 		return contextAnswer{}
 	}
 	if res.CompactInstructions != "" {
 		n.state.update(id, func(v *sessionState) bool {
+			if v.CompactInstructions == res.CompactInstructions {
+				return false
+			}
 			v.CompactInstructions = res.CompactInstructions
 			return true
 		})

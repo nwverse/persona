@@ -54,7 +54,7 @@ func TestCompactRecoveryAssemblyAndByteBudget(t *testing.T) {
 	}
 }
 
-func TestCompactRecoveryConfiguredSummaryLanguage(t *testing.T) {
+func TestGoldenCompactRecoveryConfiguredSummaryLanguage(t *testing.T) {
 	f := newFakeHub().withMachine()
 	s := newTestService(t, f)
 	for _, tc := range []struct{ locale, want string }{{"zh-Hans", "压缩摘要必须使用简体中文"}, {"en", "Write every compaction summary in English"}, {"ja", "圧縮要約は必ず日本語"}} {
@@ -162,5 +162,21 @@ func TestCompactRecoveryDirectionAndExclusions(t *testing.T) {
 	}
 	if got := s.Context(ctx, ContextParams{SessionID: "conv_lead", MachineID: "server"}); got.Recovery != "" {
 		t.Fatal("ordinary turn repeated recovery")
+	}
+}
+
+func TestCompactRecoveryNativeHookUsesPreparedScopedRecords(t *testing.T) {
+	f := newFakeHub().withMachine()
+	s := newTestService(t, f)
+	ctx := context.Background()
+	setSettings(t, s, func(v *Settings) { v.Main = "main" })
+	s.compactRecovery.entries = map[[2]string]compactRecoveryCached{
+		{"server", "main"}: {data: compactRecoveryData{State: []prompts.RecoveryEntry{{Source: "todo/prepared", Text: "PREPARED_STATE"}}}, at: time.Now()},
+		{"other", "main"}:  {data: compactRecoveryData{State: []prompts.RecoveryEntry{{Source: "todo/other", Text: "OTHER_MACHINE"}}}, at: time.Now()},
+	}
+	f.setItems(proto.Item{ID: "latest", Seq: 9, Role: "user", Kind: proto.KindText, Text: "LATEST_QUOTE"})
+	got := s.Context(ctx, ContextParams{MachineID: "server", SessionID: "main", RecoveryID: "native-checkpoint", RecoveryOnly: true})
+	if got.Text != "" || got.RecoveryID != "native-checkpoint" || !strings.Contains(got.Recovery, "PREPARED_STATE") || !strings.Contains(got.Recovery, "LATEST_QUOTE") || strings.Contains(got.Recovery, "OTHER_MACHINE") {
+		t.Fatalf("native hook context: %+v", got)
 	}
 }
