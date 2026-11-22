@@ -35,10 +35,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 FAKE_GO = '#!/bin/sh\nprintf "%s|%s\\n" "${PWD##*/}" "$*" >> "$FAKE_GO_LOG"\n'
-# The package lists of check-fast's two repo-wide guard calls: whole packages, and the named guard tests (-run) of two
-# packages whose other tests are slow or need Postgres.
-GUARD_PACKAGES = "./internal/lazyre ./internal/archguard ./internal/tzguard ./plugins"
-GUARD_RUN_PACKAGES = "./internal/hub ./internal/assistant"
+# The package lists of check-fast's two repo-wide guard calls: whole packages, and the named guard and contract tests
+# (-run) of packages whose other tests are slow or need Postgres (#12842).
+GUARD_PACKAGES = "./internal/lazyre ./internal/archguard ./internal/tzguard ./plugins ./internal/i18n ./internal/prompts"
+GUARD_RUN_PACKAGES = ("./internal/hub ./internal/assistant ./internal/update ./cmd/persona-hub ./cmd/persona-manager "
+                      "./cmd/persona-node")
 
 
 @unittest.skipUnless(shutil.which("timeout") or shutil.which("gtimeout"), "check-fast.sh needs GNU timeout")
@@ -282,15 +283,10 @@ class CheckFastServerInputsTests(unittest.TestCase):
         calls = self.guard_calls()
         self.assertEqual(2, len(calls), out)
         self.assertEqual("server|test -count=1 " + GUARD_PACKAGES, calls[0])
-        match = re.fullmatch(r"server\|test -count=1 -run \^\(([\w|]+)\)\$ " + re.escape(GUARD_RUN_PACKAGES), calls[1])
+        match = re.fullmatch(r"server\|test -count=1 -run \^\(([\w|.*]+)\)\$ " + re.escape(GUARD_RUN_PACKAGES), calls[1])
         self.assertIsNotNone(match, calls[1])
-        # go test -run passes when a name matches nothing: every named guard must exist, and every package directory.
-        sources = "".join(path.read_text() for package in GUARD_RUN_PACKAGES.split()
-                          for path in (ROOT / "server" / package).glob("*_test.go"))
-        defined = set(re.findall(r"^func (Test\w+)\(t \*testing\.T\)", sources, re.M))
-        self.assertEqual(set(), set(match.group(1).split("|")) - defined)
-        for package in (GUARD_PACKAGES + " " + GUARD_RUN_PACKAGES).split():
-            self.assertTrue((ROOT / "server" / package).is_dir(), package)
+        # go test -run passes when a name matches nothing: test_check_fast_guards.py's CheckFastGoGuardListTests holds
+        # every entry to a func of these packages in this repository, and every package directory to its tests.
 
     def test_a_plugin_change_runs_its_own_tests_and_the_guards_not_a_build(self):
         self.write("server/plugins/wechat/x.go", "package wechat\n")

@@ -405,6 +405,8 @@ type Node struct {
 	// phones: Phone Screen (#9314, phonescreen.go): on a Mac, the one live screen whose phone shows a window on a virtual
 	// display, through Persona Input. nil elsewhere: screen.phone answers unavailable.
 	phones *phoneScreens
+	// toolchain caches on-demand read-only development toolchain probes (machine_toolchain.go).
+	toolchain toolchainState
 }
 
 func New(version string) (*Node, error) {
@@ -875,6 +877,8 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		return machdiag.Diagnose(ctx, params)
 	case proto.MethodMachineCleanup:
 		return machdiag.Cleanup(ctx, params)
+	case proto.MethodMachineToolchain:
+		return n.machineToolchain(ctx, params)
 	}
 	switch method { // listening port inspector and process management (machine_procs.go)
 	case proto.MethodMachinePorts:

@@ -53,8 +53,10 @@ CHECKS = {
     "go-package": "go test ./<top>/<name>/... in server/ for server/internal/<name>, server/cmd/<name> or "
                   "server/plugins/<name>, the path's package group",
     "server-build": "go build ./... in server/: a server change no package group covers",
-    "go-guards": "the server's repo-wide guard tests (GO_GUARD_PKGS, GO_GUARD_TESTS in check-fast.sh): they read "
-                 "other packages' source, go list output, the migrations or sdk/go (#1936)",
+    "go-guards": "the server's repo-wide guard and contract tests (GO_GUARD_PKGS, GO_GUARD_TEST_PKGS, GO_GUARD_TESTS "
+                 "in check-fast.sh): they read other packages' source, go list output, the migrations or sdk/go "
+                 "(#1936), scan the module for text and prompts (i18n, prompts), check what each program links, or pin "
+                 "what other packages render, such as the prompt and MCP goldens and the wire samples (#12842)",
     "sdk-go": "go test ./... in the sdk/go module",
     "android": "scripts/app/android_i18n_check.py, the slot order, token and motion baselines, and four of their "
                "unittests (no Gradle)",
