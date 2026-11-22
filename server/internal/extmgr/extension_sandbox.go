@@ -157,9 +157,9 @@ func (ps *extensions) sandboxOf(ctx context.Context, p *extension.Extension) san
 		st.Active = sup.Available()
 		if !st.Active {
 			l := ps.h.contextLang(ctx)
-			why, detail := i18n.ExtensionFailureText(l, sup.Why, "extension-status.sandbox_unavailable")
+			_, detail := i18n.ExtensionFailureText(l, sup.Why, "extension-status.sandbox_unavailable")
 			st.Detail = detail
-			st.Why = i18n.T(l, "hub-extension_sandbox.start_blocked", i18n.Args{"why": why})
+			st.Why = i18n.T(l, "hub-extension_sandbox.start_blocked", i18n.Args{"why": i18n.ExtensionStatusText(l, sup.Why)})
 		}
 	}
 	if px := ps.sandboxes.proxyIfStarted(); px != nil {

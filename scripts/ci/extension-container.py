@@ -10,7 +10,12 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def run(args, timeout, **kwargs):
     print("+", " ".join(map(str, args)), flush=True)
-    return subprocess.run(args, check=True, timeout=timeout, **kwargs)
+    result = subprocess.run(args, timeout=timeout, **kwargs)
+    if kwargs.get("capture_output"):
+        print(result.stdout, end="", flush=True)
+        print(result.stderr, end="", flush=True)
+    result.check_returncode()
+    return result
 
 
 def main():
@@ -20,6 +25,7 @@ def main():
         # Non-root container users can traverse the binary's bind mount.
         directory.chmod(0o755)
         binary = directory / "sandbox.test"
+        container = directory.name
         try:
             run(["docker", "build", "--target", "sandbox-runtime", "--iidfile", str(directory / "image"), "."],
                 120, cwd=ROOT)
@@ -27,7 +33,7 @@ def main():
             run(["go", "test", "-c", "-o", str(binary), "./internal/extension/sandbox"],
                 180, cwd=ROOT / "server", env={**os.environ, "CGO_ENABLED": "0"})
             binary.chmod(0o755)
-            result = run(["docker", "run", "--rm", "--network=none", "--cap-drop=ALL", "--user=1000:1000",
+            result = run(["docker", "run", "--rm", "--name", container, "--network=none", "--cap-drop=ALL", "--user=1000:1000",
                           "--security-opt=no-new-privileges:true",
                           "--security-opt=seccomp=" + str(ROOT / "deploy/docker/extension-seccomp.json"),
                           "--security-opt=apparmor=unconfined",
@@ -38,11 +44,11 @@ def main():
                           'grep -q "^CapEff:[[:space:]]*0000000000000000$" /proc/self/status; '
                           'exec /probe/sandbox.test -test.run=^TestLinuxSandboxForReal$ -test.v -test.timeout=45s'],
                          60, capture_output=True, text=True)
-            print(result.stdout, end="", flush=True)
             if "--- PASS: TestLinuxSandboxForReal" not in result.stdout or "--- SKIP:" in result.stdout:
                 raise RuntimeError("real container isolation did not run successfully")
             print("Extension container isolation: PASS (non-root, no capabilities, real filesystem/network isolation)")
         finally:
+            subprocess.run(["docker", "rm", "-f", container], timeout=30, check=False, capture_output=True)
             if image:
                 subprocess.run(["docker", "image", "rm", image], timeout=30, check=False)
 
