@@ -94,6 +94,12 @@ type Placement struct {
 	// SupervisionBatchMinutes is manager.json's administrator-pinned routine supervision interval. Nil leaves the
 	// assistant's saved setting in effect; an explicit zero pins immediate delivery through the legacy cadence.
 	SupervisionBatchMinutes *int `json:"supervision_batch_minutes,omitempty"`
+	// TaskExecutionWaitSeconds bounds pre-delivery waits for a node with scheduled execution support (default 600).
+	TaskExecutionWaitSeconds *int `json:"task_execution_wait_seconds,omitempty"`
+	// TaskExecutionLegacyFallback permits only attested inherited ordinary tasks to omit task_execution on old nodes.
+	TaskExecutionLegacyFallback *bool `json:"task_execution_legacy_fallback,omitempty"`
+	// NodeUpdateHandoffGraceSeconds bounds natural-idle update waits before new headless turns are refused (default 60).
+	NodeUpdateHandoffGraceSeconds *int `json:"node_update_handoff_grace_seconds,omitempty"`
 }
 
 // DeviceCall is device.call's params. Device is a machine id, or DeviceAll for DeviceDevicesList and fleet-wide DeviceInteractionsList.

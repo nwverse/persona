@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -684,6 +685,7 @@ func TestEveryDevicesLayerRefusalWaits(t *testing.T) {
 	known := map[string]string{
 		"proto.CodeNodeOutdated":         proto.CodeNodeOutdated,
 		"proto.CodeStartGoalUnsupported": proto.CodeStartGoalUnsupported,
+		"nodeproto.CodeRestarting":       nodeproto.CodeRestarting,
 		"devicewire.CodeNoDevice":        devicewire.CodeNoDevice,
 		"devicewire.CodeDeadline":        devicewire.CodeDeadline,
 		"devicewire.CodeMachineOffline":  devicewire.CodeMachineOffline,

@@ -272,6 +272,59 @@ func TestAgyCallWithoutResultDoesNotShiftLaterResults(t *testing.T) {
 	}
 }
 
+func TestAgyAssistantTextNormalizesLocalFileLinks(t *testing.T) {
+	for _, tc := range []struct{ name, input, want string }{
+		{"unix_file_link", "See [notes.md](file:///work/repo/notes.md).", "See [notes.md](/work/repo/notes.md)."},
+		{"line_fragment", "Check [app.go](file:///work/repo/app.go#L10-L20).", "Check [app.go](/work/repo/app.go#L10-L20)."},
+		{"localhost", "[doc](file://localhost/work/repo/doc.md)", "[doc](/work/repo/doc.md)"},
+		{"uppercase_and_spaces", "[a](FILE:///work/My%20Notes/a.md)", "[a](/work/My%20Notes/a.md)"},
+		{"angle_brackets", `[a](<file:///work/My Notes/a.md> "title")`, `[a](</work/My Notes/a.md> "title")`},
+		{"balanced_parens", `[p](file:///work/photo(1).png "shot")`, `[p](/work/photo(1).png "shot")`},
+		{"image", "![chart](file:///work/repo/chart.png)", "![chart](/work/repo/chart.png)"},
+		{"windows_drive", "[win](file:///C:/work/notes.md#L5)", "[win](C:/work/notes.md#L5)"},
+		{"windows_encoded_colon", "[win](file:///c%3A/work/notes.md)", "[win](c:/work/notes.md)"},
+		{"ref_def", `[ref]: file:///work/repo/notes.md "Ref"`, `[ref]: /work/repo/notes.md "Ref"`},
+		{"list_continuation", "- item\n    [notes](file:///work/notes.md)", "- item\n    [notes](/work/notes.md)"},
+		{"inline_code", "Use `[notes](file:///work/notes.md)` literally.", "Use `[notes](file:///work/notes.md)` literally."},
+		{"fenced_code", "```md\n[notes](file:///work/notes.md)\n```\n[live](file:///work/live.md)", "```md\n[notes](file:///work/notes.md)\n```\n[live](/work/live.md)"},
+		{"indented_code", "Example:\n\n    [notes](file:///work/notes.md)\n\n[live](file:///work/live.md)", "Example:\n\n    [notes](file:///work/notes.md)\n\n[live](/work/live.md)"},
+		{"remote_host", "[r](file://other-host/share/notes.md)", "[r](file://other-host/share/notes.md)"},
+		{"unc_double_slash", "[u](file:////server/share/notes.md)", "[u](file:////server/share/notes.md)"},
+		{"hub_route", "[api](file:///api/v1/sessions)", "[api](file:///api/v1/sessions)"},
+		{"query_string", "[q](file:///work/notes.md?x=1)", "[q](file:///work/notes.md?x=1)"},
+		{"nul_byte", "[n](file:///work/notes%00.md)", "[n](file:///work/notes%00.md)"},
+		{"relative_file", "[rel](file:notes.md)", "[rel](file:notes.md)"},
+		{"escaped_bracket", `text \](file:///work/notes.md)`, `text \](file:///work/notes.md)`},
+		{"unclosed_link", "See [notes](file:///work/no", "See [notes](file:///work/no"},
+	} {
+		if got := agyAssistantText(tc.input); got != tc.want {
+			t.Errorf("%s: agyAssistantText(%q) = %q, want %q", tc.name, tc.input, got, tc.want)
+		}
+	}
+
+	fixture := `{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","status":"DONE","created_at":"2026-01-01T00:00:00Z","content":"Open [u](file:///work/u.md)"}
+{"step_index":1,"type":"PLANNER_RESPONSE","source":"MODEL","status":"DONE","created_at":"2026-01-01T00:00:01Z","thinking":"Check [t](file:///work/t.md)","content":"Opened [notes.md](file:///work/notes.md#L12) and ![img](file:///work/img.png).","tool_calls":[{"name":"view_file","args":{"AbsolutePath":"/work/notes.md"}}]}
+{"step_index":2,"type":"GENERIC","status":"DONE","created_at":"2026-01-01T00:00:02Z","content":"[out](file:///work/out.md)"}
+`
+	steps, _ := parseAgySteps([]byte(fixture), agyTestID)
+	history := mapAgySteps(steps, time.Time{}, nil)
+	if len(history.items) != 5 {
+		t.Fatalf("items = %+v", history.items)
+	}
+	if history.items[0].Text != "Open [u](file:///work/u.md)" {
+		t.Errorf("user text = %q", history.items[0].Text)
+	}
+	if history.items[1].Text != "Check [t](file:///work/t.md)" {
+		t.Errorf("thinking text = %q", history.items[1].Text)
+	}
+	if history.items[2].Text != "Opened [notes.md](/work/notes.md#L12) and ![img](/work/img.png)." {
+		t.Errorf("assistant text = %q", history.items[2].Text)
+	}
+	if history.items[4].Text != "[out](file:///work/out.md)" {
+		t.Errorf("tool output = %q", history.items[4].Text)
+	}
+}
+
 func TestAgyInterruptedErrorNoteIsDropped(t *testing.T) {
 	const afterSystem = `{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","status":"DONE","created_at":"2026-01-01T00:00:00Z","content":"run task"}
 {"step_index":1,"type":"PLANNER_RESPONSE","source":"MODEL","status":"DONE","created_at":"2026-01-01T00:00:01Z","content":"Working on it."}

@@ -7,6 +7,7 @@ import persona.core.contracts.SessionKey
 import persona.core.contracts.Todo
 import persona.core.contracts.TodoAsk
 import persona.core.contracts.parseTime
+import persona.core.domain.lines.ApiErrorInfo
 
 // The To-dos page's sections (#3156, #3206, docs/assistant/todo-status-sop.md): each to-do's place comes from real signals
 // only — its agents' sessions (alive, running, asking), its PR / delivery state, the latest task_review verdict and when it
@@ -55,6 +56,7 @@ fun Todo.triageStatus(lookup: (SessionKey) -> Session?, now: Long = System.curre
     var limit = false
     var unread = false
     var working = false
+    var waiting = false
     for (a in active) {
         if (!a.startError.isNullOrEmpty()) continue // a failed start counts as stopped
         val s = lookup(a.key)
@@ -62,13 +64,16 @@ fun Todo.triageStatus(lookup: (SessionKey) -> Session?, now: Long = System.curre
         if (st == AgentState.NeedsYou) return TriageStatus.NeedsYou
         when {
             s?.isUsageLimited(now) == true -> limit = true
+            s?.interrupted == true && (s.turnErrorKind == "unrecoverable" || s.turnErrorCode == "compaction_sealed" ||
+                ApiErrorInfo.unrecoverable(s.turnError)) -> interrupted = true
+            st == AgentState.Working || s?.starting == true -> working = true
+            active.size > 1 && s?.waitsWithoutBackground() == true -> waiting = true
             s?.interrupted == true -> interrupted = true
             st == AgentState.Unread -> unread = true
-            st == AgentState.Working || s?.starting == true -> working = true
         }
     }
     return when {
-        interrupted && !working && supervision?.state != "parked" -> TriageStatus.Interrupted
+        interrupted && !working && !waiting && supervision?.state != "parked" -> TriageStatus.Interrupted
         limit -> TriageStatus.UsageLimit
         unread -> TriageStatus.Unread
         working -> TriageStatus.Working
