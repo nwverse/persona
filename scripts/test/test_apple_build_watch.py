@@ -270,6 +270,15 @@ class CompilerResourceTests(unittest.TestCase):
                     self.assertNotIn("frontend_candidates", record["processes"])
                     self.assertNotIn("/Toolchain", (Path(directory) / "final.json").read_text())
 
+    def test_streaming_command_failure_after_partial_stdout_has_no_candidates(self):
+        row = ("42 2 90.0 6000 00:05 00:01.50 Sun Nov 22 10:00:00 2026 "
+               "swift-frontend /Toolchain/swift-frontend -module-name Example")
+        source = f"print({row!r}); raise SystemExit(1)"
+        parsed = watch.processes(popen=self.pipe_fixture(source))
+        self.assertEqual(parsed["unavailable"], "process-command-failed")
+        self.assertEqual(parsed["largest"], [])
+        self.assertEqual(parsed["frontend_candidates"], [])
+
     def test_streaming_history_keeps_frontends_beyond_largest(self):
         rows = "\n".join(
             f"{pid} 2 90.0 {9000 - pid} 00:05 00:01.50 Sun Nov 22 10:00:00 2026 "
@@ -330,6 +339,37 @@ class CompilerResourceTests(unittest.TestCase):
         self.assertNotIn("lstart=", calls[1])
         self.assertEqual(parsed["unavailable"], "invalid-process-output")
         self.assertEqual(parsed["largest"], [])
+
+        valid_frontend = ("42 2 90.0 6000 00:05 00:01.50 swift-frontend "
+                          "/Toolchain/swift-frontend -module-name Example")
+        for collector in ("legacy", "stream"):
+            with self.subTest(collector=collector):
+                calls = []
+                def partial_second(command, **kwargs):
+                    calls.append(command)
+                    text = mixed if "lstart=" in command[2] else valid_frontend + "\nmalformed row\n"
+                    if collector == "legacy":
+                        return subprocess.CompletedProcess(command, 0, text, "")
+                    return self.pipe_fixture(f"print({text!r}, end='')")(command, **kwargs)
+                if collector == "legacy":
+                    parsed = watch.processes(partial_second)
+                else:
+                    parsed = watch.processes(popen=partial_second)
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(parsed["unavailable"], "invalid-process-output")
+                self.assertEqual(parsed["largest"], [])
+                self.assertEqual(parsed["frontend_candidates"], [])
+
+                with tempfile.TemporaryDirectory() as directory:
+                    history = {}
+                    def fake_output(command, **kwargs):
+                        return subprocess.CompletedProcess(command, 0, "", "")
+                    with mock.patch.object(watch, "processes", return_value=parsed):
+                        record = watch.sample(Path(directory), "final", runner=fake_output,
+                                              final=True, frontend_history=history, monotonic=lambda: 100.0)
+                    self.assertEqual(history, {"truncated": True})
+                    self.assertEqual(record["swift_frontend_lifetimes"]["status"], "truncated")
+                    self.assertEqual(record["swift_frontend_lifetimes"]["records"], [])
 
     def test_incomplete_no_start_listing_is_explicitly_unavailable(self):
         incomplete = "incomplete row"

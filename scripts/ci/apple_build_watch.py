@@ -321,10 +321,8 @@ def stream_processes(popen):
 
     def unavailable(result):
         reason = result.get("unavailable", "invalid-process-output")
-        candidates = [] if result.get("exit") != 0 else result.get("frontend_candidates", [])
-        candidate_truncated = result.get("summary", {}).get("candidate_truncated", False)
-        return {"counts": {}, "total_rss_kib": 0, "largest": [], "frontend_candidates": candidates,
-                "candidate_truncated": candidate_truncated, "unavailable": reason,
+        return {"counts": {}, "total_rss_kib": 0, "largest": [], "frontend_candidates": [],
+                "candidate_truncated": False, "unavailable": reason,
                 "process_start_status": "uncertain"}
 
     result = process_output(["ps", "-axo"], True, popen)
@@ -369,10 +367,10 @@ def processes(runner=subprocess.run, *, popen=None):
                 result["unavailable"] = unavailable
             else:
                 rows, invalid_durations, valid_rows = _process_rows_with_status(result.get("stdout", ""), False)
+                output_lines = len(result.get("stdout", "").splitlines())
                 if invalid_durations:
                     unavailable = "invalid-process-duration"
-                    rows = []
-                elif result.get("stdout", "").strip() and not valid_rows:
+                elif result.get("stdout", "").strip() and valid_rows != output_lines:
                     unavailable = "invalid-process-output"
                 if unavailable:
                     rows = []
@@ -388,10 +386,11 @@ def processes(runner=subprocess.run, *, popen=None):
                 unavailable = result.get("unavailable", "process-command-failed")
                 rows = []
             else:
-                rows, invalid_durations, _ = _process_rows_with_status(result.get("stdout", ""), False)
+                rows, invalid_durations, valid_rows = _process_rows_with_status(result.get("stdout", ""), False)
+                output_lines = len(result.get("stdout", "").splitlines())
                 if invalid_durations:
                     unavailable = "invalid-process-duration"
-                elif result.get("stdout", "").strip() and not rows:
+                elif result.get("stdout", "").strip() and valid_rows != output_lines:
                     unavailable = "invalid-process-output"
                 if unavailable:
                     rows = []
@@ -589,7 +588,7 @@ def sample(destination, label, runner=subprocess.run, *, final=False, derived_da
     candidate_truncated = process.pop("candidate_truncated")
     if frontend_history is not None:
         track_frontends(frontend_history, candidates, monotonic())
-        if candidate_truncated:
+        if candidate_truncated or process.get("unavailable"):
             frontend_history["truncated"] = True
     # Keep only the evidence needed to compare resource pressure over time. Full
     # pressure/process logs make a 30-minute build produce tens of megabytes.
