@@ -269,16 +269,23 @@ func (h *Hub) lookupToken(ctx context.Context, tok string) (principal, bool, err
 	}
 	touch := time.Since(t.touched[c.p.ID]) > 5*time.Minute
 	if touch {
-		t.touched[c.p.ID] = time.Now()
+		// Account for the async last_seen write under the quiescer before
+		// spawning: paused snapshots skip the touch (without stamping touched,
+		// so the next request after resume updates it), and already-started
+		// touches finish before pause returns.
+		if h.quiesce.begin() {
+			t.touched[c.p.ID] = time.Now()
+			t.mu.Unlock()
+			go func(id string) {
+				defer h.quiesce.end()
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = h.store.TouchDeviceToken(ctx, id)
+			}(c.p.ID)
+			return *c.p, true, nil
+		}
 	}
 	t.mu.Unlock()
-	if touch {
-		go func(id string) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = h.store.TouchDeviceToken(ctx, id)
-		}(c.p.ID)
-	}
 	return *c.p, true, nil
 }
 

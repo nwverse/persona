@@ -54,6 +54,44 @@ class TaskLaunchReconciliationTest {
         assertTrue(store.agentsOf(linked.copy(agents = linked.agents.map { it.copy(dismissedAt = "2026-01-01T00:00:00Z") }), unrelated).isEmpty())
     }
 
+    @Test fun aWaitingReplacementKeepsAnOldInterruptionOutOfTaskState() = runTest {
+        val store = TasksStore(Api(), Connection(), backgroundScope)
+        val old = Session("box", "original", state = "unread", turnError = "opaque account transition 7A99",
+            turnErrorKind = "unrecoverable", turnErrorCode = "compaction_sealed")
+        val task = starting.copy(agents = listOf(
+            TodoAgent("box", "original"),
+            TodoAgent("box", "replacement"),
+        ))
+        for (on in listOf("agent", "external", "transient")) {
+            val replacement = Session("box", "replacement", state = "idle", work = WorkState(phase = "blocked", on = on))
+            assertTrue(on, replacement.waitsWithoutBackground())
+            assertNotEquals(on, TaskState.Interrupted, store.stateOf(task, listOf(old, replacement)))
+        }
+    }
+
+    @Test fun aTransientWaitingReplacementWithTurnErrorKeepsAnOldInterruptionOutOfTaskState() = runTest {
+        val store = TasksStore(Api(), Connection(), backgroundScope)
+        val old = Session("box", "original", state = "idle", turnError = "opaque account transition 7A99",
+            turnErrorKind = "unrecoverable", turnErrorCode = "compaction_sealed")
+        val replacement = Session("box", "replacement", state = "idle",
+            turnError = "API Error: 503 Service Unavailable", turnErrorKind = "transient",
+            work = WorkState(phase = "blocked", on = "transient"))
+        val task = starting.copy(agents = listOf(
+            TodoAgent("box", "original"),
+            TodoAgent("box", "replacement"),
+        ))
+        assertTrue(replacement.waitsWithoutBackground())
+        assertEquals(TaskState.Followup, store.stateOf(task, listOf(old, replacement)))
+    }
+
+    @Test fun anInvalidAgentWithStaleTransientWorkRemainsInterruptedInTaskState() = runTest {
+        val store = TasksStore(Api(), Connection(), backgroundScope)
+        val invalid = Session("box", "original", state = "idle", turnError = "opaque account transition 7A99",
+            turnErrorKind = "unrecoverable", turnErrorCode = "compaction_sealed",
+            work = WorkState(phase = "blocked", on = "transient"))
+        assertEquals(TaskState.Interrupted, store.stateOf(linked, listOf(invalid)))
+    }
+
     @Test fun delayedAcknowledgementAndReconnectRecoverTheExistingBinding() = runTest {
         val api = Api().apply { list = listOf(starting) }
         val connection = Connection()

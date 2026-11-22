@@ -3,7 +3,6 @@
   "archive_background_supervisor": "The background supervisor can’t be archived",
   "supervision_source": "Supervisor",
   "background_supervisor": "Background supervisor",
-  "background_supervisor_former": "Background supervisor · until {month}/{day}",
   "notice_delivery_refused": "This conversation refused an update from Persona about a task or a chat. It was not delivered and will not be sent again.",
   "relay_delivery_failed": "Message could not be delivered",
   "supervision_delivery_failed": "This conversation cannot receive task follow-up instructions. Open the task for its latest status and reports. Supported launchers on this computer: {launchers}.",

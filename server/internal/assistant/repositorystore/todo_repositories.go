@@ -46,6 +46,37 @@ func (d *Store) TodoRepositories(ctx context.Context, id string) (repository.Tas
 	return decodeTodoRepositories(id, revision, raw)
 }
 
+// ListTodoRepositories loads saved repository associations for the named to-dos in one query.
+func (d *Store) ListTodoRepositories(ctx context.Context, ids []string) (map[string][]repository.TaskRepository, error) {
+	out := make(map[string][]repository.TaskRepository, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	err := d.Transaction(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT todo_id, repositories FROM todo_repository_sets WHERE todo_id = ANY($1)`, ids)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var todoID string
+			var raw []byte
+			if err := rows.Scan(&todoID, &raw); err != nil {
+				return err
+			}
+			set, err := decodeTodoRepositories(todoID, 0, raw)
+			if err != nil {
+				return err
+			}
+			if len(set.Repositories) > 0 {
+				out[todoID] = set.Repositories
+			}
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
 // ReadTodoRepositoriesTx locks the Todo, including an empty association set. Preparation
 // consumers can read this value and persist their own selected snapshot in the same
 // transaction. It never seals business associations or changes legacy execution paths.
@@ -171,7 +202,7 @@ func (d *Store) SetTodoRepositoryLinks(ctx context.Context, id, repoID string, i
 				if err != nil {
 					return err
 				}
-				repository.PreserveLinkTitles(row.Links, links)
+				repository.PreserveLinkTitles(row.Links, links, in.Links)
 				cur.Repositories[index].Links = links
 				cur.Revision++
 				out = cur
@@ -183,30 +214,31 @@ func (d *Store) SetTodoRepositoryLinks(ctx context.Context, id, repoID string, i
 	return out, err
 }
 
-// SetTodoRepositoryLinkRoles persists a role rewrite the manager classified (e.g. a proven-foreign PR downgraded to
-// reference), serializing with interactive edits through the same revision and Todo lock.
-func (d *Store) SetTodoRepositoryLinkRoles(ctx context.Context, id string, rows []repository.TaskRepository) (repository.TaskSet, error) {
+// SetTodoRepositoryLinkRole rewrites the role of a single link (matched by canonical URL) inside one transaction, so
+// the automatic gate downgrade can never clobber a concurrent edit made to another link.
+func (d *Store) SetTodoRepositoryLinkRole(ctx context.Context, id, canonicalURL, role string) (repository.TaskSet, error) {
+	normalized, perr := repository.NormalizeLinkRole(role)
+	if perr != "" {
+		return repository.TaskSet{}, perr
+	}
 	var out repository.TaskSet
 	err := d.Transaction(ctx, func(tx pgx.Tx) error {
 		cur, err := ReadTodoRepositoriesTx(ctx, tx, id, nil)
 		if err != nil {
 			return err
 		}
-		roles := map[string]string{}
-		for _, row := range rows {
-			for _, l := range row.Links {
-				role, perr := repository.NormalizeLinkRole(l.Role)
-				if perr != "" {
-					return perr
-				}
-				roles[l.CanonicalURL] = role
-			}
+		// Stored delivery links keep the empty value (see NormalizeLink); compare and write that representation so
+		// re-applying delivery to an already-delivery link is a no-op instead of bumping the revision every gate pass.
+		storedRole := ""
+		if normalized == repository.LinkRoleReference {
+			storedRole = normalized
 		}
 		changed := false
 		for ri := range cur.Repositories {
 			for li := range cur.Repositories[ri].Links {
-				if role, ok := roles[cur.Repositories[ri].Links[li].CanonicalURL]; ok && cur.Repositories[ri].Links[li].Role != role {
-					cur.Repositories[ri].Links[li].Role = role
+				if cur.Repositories[ri].Links[li].CanonicalURL == canonicalURL &&
+					cur.Repositories[ri].Links[li].Role != storedRole {
+					cur.Repositories[ri].Links[li].Role = storedRole
 					changed = true
 				}
 			}

@@ -294,8 +294,8 @@ fun ChatComposer(
                 if (attachment.path != null) return@LaunchedEffect
                 if (!withContext(Dispatchers.IO) { attachmentReadable(context, attachment) }) {
                     val reason = resources.getString(R.string.chat_composer_attachment_gone)
-                    state.attachments = state.attachments.map {
-                        if (it.id == attachment.id) it.copy(uploadState = DraftUploadState.Invalid, error = reason) else it
+                    state.updateAttachment(attachment.id) {
+                        it.copy(uploadState = DraftUploadState.Invalid, error = reason)
                     }
                     onNotice(reason)
                     return@LaunchedEffect
@@ -303,25 +303,19 @@ fun ChatComposer(
                 if (attachment.error != null || service == null) return@LaunchedEffect
                 try {
                     val path = uploadLimiter.withSlot {
-                        state.attachments = state.attachments.map {
-                            if (it.id == attachment.id) it.copy(uploadState = DraftUploadState.Uploading) else it
-                        }
+                        state.updateAttachment(attachment.id) { it.copy(uploadState = DraftUploadState.Uploading) }
                         performUpload(service, session, attachment) { size ->
-                            state.attachments = state.attachments.map {
-                                if (it.id == attachment.id) it.copy(size = size) else it
-                            }
+                            state.updateAttachment(attachment.id) { it.copy(size = size) }
                         }
                     }
                     if (state.attachments.any { it.id == attachment.id }) {
-                        state.attachments = state.attachments.map {
-                            if (it.id == attachment.id) it.copy(path = path, uploadState = DraftUploadState.Uploaded) else it
-                        }
+                        state.updateAttachment(attachment.id) { it.copy(path = path, uploadState = DraftUploadState.Uploaded) }
                     }
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) {
                     val reason = (e as? ComposerOperationException)?.message ?: resources.getString(R.string.chat_composer_upload_failed)
-                    state.attachments = state.attachments.map {
-                        if (it.id == attachment.id) it.copy(error = reason, uploadState = DraftUploadState.Failed) else it
+                    state.updateAttachment(attachment.id) {
+                        it.copy(error = reason, uploadState = DraftUploadState.Failed)
                     }
                 }
             }

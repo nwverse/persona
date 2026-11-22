@@ -177,7 +177,11 @@ func (b *relayBook) pickLocked(to string, lead bool, now time.Time) (i int, wait
 	stuck := -1
 	q := b.st.Queue[to]
 	for j, m := range q {
-		if h := max(b.holdLocked(to, m, now), m.LookAfter.Sub(now)); h > 0 {
+		lookAfter := m.LookAfter.Sub(now)
+		if m.Withdrawn {
+			lookAfter = 0 // no retry is sent: only check whether the original in-flight text landed
+		}
+		if h := max(b.holdLocked(to, m, now), lookAfter); h > 0 {
 			if wait == 0 || h < wait {
 				wait = h
 			}

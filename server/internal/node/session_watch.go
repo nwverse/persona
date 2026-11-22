@@ -182,6 +182,7 @@ func (n *Node) pushItems(id string, items []proto.Item, span transcript.Span) {
 	n.mu.Unlock()
 	agentUsage(f, items) // finished subagents' results carry what they used (agent_usage.go)
 	items = n.echoed(id, f, items)
+	n.ttft.annotate(id, items, true)
 	_ = n.peer.Notify("session.items", withSpan(map[string]any{"session_id": id, "items": nonNil(items)}, span, true))
 	n.liveRecheck(id) // the words these items brought replace their live copy, right after them (livereply.go)
 }

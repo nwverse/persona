@@ -170,6 +170,7 @@ func TestDecisionThatCannotBeKeptAsHeldIsPushed(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.store = func() Store { return st }
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	res := reviewTask(t, s, todo.ID, waitingDecision())
 	if strings.Contains(res, "can wait (can_wait)") || !strings.Contains(res, "can_wait was ignored ("+waitNotKept+")") ||
 		!strings.Contains(res, "A push with your recommendation") {
@@ -308,17 +309,17 @@ func TestHeldDecisionsCardIsRetriedFromThePush(t *testing.T) {
 	}
 }
 
-// A leader's held decision is not told to the main conversation when it is raised (nothing went to the owner, and the
-// main conversation is not woken for what can wait); it is told once the decision is pushed after all.
-func TestLeadersHeldDecisionEscalatesWhenItIsPushed(t *testing.T) {
+// A leader conversation's held decision is already main-supervised: can_wait sends no escalation and wakes nobody;
+// the deferred push still goes out once, without a second supervision stream (#5732).
+func TestLeaderConversationHeldDecisionUsesMainDirectly(t *testing.T) {
 	s, f, todo := newLeaderService(t)
 	briefingOn(s, true)
 	waitsForReview(t, s, f, todo.ID, "两种走法。")
 	args := waitingDecision()
 	args["todo_id"] = todo.ID
-	res, err := runJSON(t, s, "lead1", "task_review", args)
+	res, err := runJSON(t, s, "conv1", "task_review", args)
 	if err != nil || !strings.Contains(res, "can wait (can_wait)") {
-		t.Fatalf("the leader's needs_user: %s %v", res, err)
+		t.Fatalf("main's needs_user: %s %v", res, err)
 	}
 	escalated := func() bool {
 		id := superviseSignal{Todo: todo.ID, Kind: sigEscalated}.id()
@@ -328,15 +329,14 @@ func TestLeadersHeldDecisionEscalatesWhenItIsPushed(t *testing.T) {
 		return waits || s.supervise.sent[id] != ""
 	}
 	if escalated() || len(f.noticesTo("conv1")) != 0 {
-		t.Fatalf("the main conversation is told of a held decision: %q", f.noticesTo("conv1"))
+		t.Fatalf("a held decision added a supervision stream: %q", f.noticesTo("conv1"))
 	}
 	s.sweepWaitingDecisions(time.Now().Add(decisionWaitFor))
 	if n := deadlinePushes(f, todo.ID); n != 1 {
 		t.Fatalf("%d pushes, want 1", n)
 	}
-	waitFor(t, "the main conversation's message", func() bool { return len(f.noticesTo("conv1")) == 1 })
-	if n := f.noticesTo("conv1")[0]; !strings.Contains(n, "负责它的 leader 对话判断要用户决定") || !strings.Contains(n, "leader 推荐：先灰度 10%") {
-		t.Fatalf("the main conversation's message:\n%s", n)
+	if escalated() || len(f.noticesTo("conv1")) != 0 {
+		t.Fatalf("the deferred push added an escalation: %q", f.noticesTo("conv1"))
 	}
 }
 
@@ -468,11 +468,15 @@ func TestOnlyABriefingThatReachedTheOwnerEndsTheWait(t *testing.T) {
 func TestBackgroundSupervisorsHeldDecisionEscalatesWhenItIsPushed(t *testing.T) {
 	s, f, todo := newBackgroundService(t)
 	briefingOn(s, true)
+	setSettings(t, s, func(v *Settings) { v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "bg1", "server" })
+	f.known["bg1"] = true
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "bg1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "两种走法。", 0)
-	bg := backgroundID(t, s)
-	listBackground(t, s, f, bg)
-	waitFor(t, "the background supervisor's message", func() bool { return len(f.noticesTo(bg)) == 1 })
+	waitFor(t, "main's supervision message", func() bool { return len(f.noticesTo("conv1")) == 1 })
+	bg := "bg1"
+	tellLegacyBackground(t, s, f, todo.ID, bg)
 	args := waitingDecision()
 	args["todo_id"] = todo.ID
 	res, err := runJSON(t, s, bg, "task_review", args)
@@ -482,15 +486,15 @@ func TestBackgroundSupervisorsHeldDecisionEscalatesWhenItIsPushed(t *testing.T) 
 	if a := askOf(s, todo.ID); a == nil || !a.ForBriefing || a.RaisedBy != bg {
 		t.Fatalf("the held decision does not say who raised it: %+v", a)
 	}
-	if n := f.noticesTo("conv1"); len(n) != 0 {
-		t.Fatalf("the main conversation is told of a held decision: %q", n)
+	if n := f.noticesTo("conv1"); len(n) != 1 {
+		t.Fatalf("a held decision added a main message: %q", n)
 	}
 	s.sweepWaitingDecisions(time.Now().Add(decisionWaitFor))
 	if n := deadlinePushes(f, todo.ID); n != 1 {
 		t.Fatalf("%d pushes, want 1", n)
 	}
-	waitFor(t, "the main conversation's message", func() bool { return len(f.noticesTo("conv1")) == 1 })
-	n := f.noticesTo("conv1")[0]
+	waitFor(t, "main's escalation", func() bool { return len(f.noticesTo("conv1")) == 2 })
+	n := f.noticesTo("conv1")[1]
 	for _, want := range []string{"跟进它的后台督办对话判断要用户决定", "后台督办对话推荐：先灰度 10%"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("the main conversation's message lacks %q:\n%s", want, n)

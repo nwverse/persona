@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/update"
 )
@@ -817,5 +818,401 @@ func TestDevelopmentBackupKeepsUnstagedPackageIdentity(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Finding #3: built-in quiesce mode refuses extra_databases, extra_roots, and
+// other local managers (even owning no machines) when no external quiesce/resume
+// hook pair is configured, and explains why in availability/reporting.
+func TestDevelopmentRequiresExternalHooksForExtrasAndOtherLocalManagers(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("development updates are unsupported on Windows")
+	}
+	hooks := update.DevelopmentBackupConfig{Quiesce: []string{"pause"}, Resume: []string{"resume"}}
+
+	t.Run("extra_databases", func(t *testing.T) {
+		h := newTestHub(t)
+		u := h.upd
+		h.cfg.Update.Development = &update.DevelopmentConfig{
+			Backup: update.DevelopmentBackupConfig{ExtraDatabases: []string{"postgres://localhost/extra"}},
+		}
+		if u.developmentAvailable() {
+			t.Fatal("built-in mode accepted extra_databases without external hooks")
+		}
+		v := u.viewIn(i18n.En)
+		if v.Development.Configured || v.Development.BuiltinQuiesce || !strings.Contains(v.Development.Why, "extra databases") {
+			t.Fatalf("development view did not explain extra_databases requirement: %+v", v.Development)
+		}
+		if _, err := u.quiesceDevelopmentWriters(context.Background(), h.cfg.Update.Development.Backup); err == nil {
+			t.Fatal("quiesceDevelopmentWriters accepted extra_databases without hooks")
+		}
+		withHooks := hooks
+		withHooks.ExtraDatabases = []string{"postgres://localhost/extra"}
+		h.cfg.Update.Development.Backup = withHooks
+		if !u.developmentAvailable() {
+			t.Fatal("extra_databases with external hooks was refused")
+		}
+		if v, _ := getUpdate(t, u); !v.Development.Configured || v.Development.BuiltinQuiesce {
+			t.Fatalf("unexpected development view with hooks: %+v", v.Development)
+		}
+	})
+
+	t.Run("extra_roots", func(t *testing.T) {
+		h := newTestHub(t)
+		u := h.upd
+		h.cfg.Update.Development = &update.DevelopmentConfig{
+			Backup: update.DevelopmentBackupConfig{ExtraRoots: []string{"/srv/extra"}},
+		}
+		if u.developmentAvailable() {
+			t.Fatal("built-in mode accepted extra_roots without external hooks")
+		}
+		v := u.viewIn(i18n.En)
+		if v.Development.Configured || v.Development.BuiltinQuiesce || !strings.Contains(v.Development.Why, "extra roots") {
+			t.Fatalf("development view did not explain extra_roots requirement: %+v", v.Development)
+		}
+		withHooks := hooks
+		withHooks.ExtraRoots = []string{"/srv/extra"}
+		h.cfg.Update.Development.Backup = withHooks
+		if !u.developmentAvailable() {
+			t.Fatal("extra_roots with external hooks was refused")
+		}
+	})
+
+	t.Run("other local manager with no owned machines", func(t *testing.T) {
+		h := newTestHub(t)
+		u := h.upd
+		// Built-in assistant manager.json alone still permits built-in quiesce.
+		asstDir := filepath.Join(h.cfg.dir, "managers", "assistant")
+		if err := os.MkdirAll(asstDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(asstDir, "manager.json"), []byte(`{}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// Stray regular files (e.g. .DS_Store or README) and symlinks to files
+		// under managers/ must not be mistaken for another local manager.
+		if err := os.WriteFile(filepath.Join(h.cfg.dir, "managers", ".DS_Store"), []byte("junk"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(h.cfg.dir, "managers", "README.txt"), []byte("note"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(h.cfg.dir, "managers", "README.txt"), filepath.Join(h.cfg.dir, "managers", "readme-link")); err != nil {
+			t.Fatal(err)
+		}
+		if !u.developmentAvailable() {
+			t.Fatal("built-in assistant manager.json or stray files under managers/ blocked built-in quiesce")
+		}
+
+		// Adding another local manager with no owned machines refuses built-in mode.
+		otherDir := filepath.Join(h.cfg.dir, "managers", "m-other")
+		if err := os.MkdirAll(otherDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(otherDir, "manager.json"), []byte(`{"database_url":"postgres://localhost/other"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if u.developmentAvailable() {
+			t.Fatal("built-in mode accepted another local manager without external hooks")
+		}
+		v := u.viewIn(i18n.En)
+		if v.Development.Configured || v.Development.BuiltinQuiesce || !strings.Contains(v.Development.Why, "local manager") {
+			t.Fatalf("development view did not explain local manager requirement: %+v", v.Development)
+		}
+		if _, err := u.quiesceDevelopmentWriters(context.Background(), update.DevelopmentBackupConfig{Builtin: true}); err == nil {
+			t.Fatal("quiesceDevelopmentWriters accepted another local manager in built-in mode")
+		}
+		// Configuring external hooks restores availability.
+		h.cfg.Update.Development = &update.DevelopmentConfig{Backup: hooks}
+		if !u.developmentAvailable() {
+			t.Fatal("another local manager with external hooks was refused")
+		}
+		if v, _ := getUpdate(t, u); !v.Development.Configured || v.Development.BuiltinQuiesce {
+			t.Fatalf("unexpected development view with hooks: %+v", v.Development)
+		}
+	})
+}
+
+// Finding #6: changing development_backup_directory or development_backup_retain
+// is refused with err_busy while an update or check is active, or if the
+// effective folder changed before u.mu was re-acquired.
+func TestDevelopmentBackupSettingsRefusedWhileActiveOrFolderChanged(t *testing.T) {
+	t.Run("active update or check", func(t *testing.T) {
+		for _, mode := range []string{"running", "checking", "unconfirmed"} {
+			t.Run(mode, func(t *testing.T) {
+				h := newTestHub(t)
+				u := h.upd
+				switch mode {
+				case "running":
+					u.running = true
+				case "checking":
+					u.checking = true
+				case "unconfirmed":
+					u.confirmed = false
+				}
+				candidate := filepath.Join(t.TempDir(), "should-not-be-created")
+				if w := nodePolicyRequest(t, u, http.MethodPut, fmt.Sprintf(`{"development_backup_directory":%q}`, candidate)); w.Code != http.StatusConflict {
+					t.Fatalf("folder change during %s -> %d: %s", mode, w.Code, w.Body.String())
+				}
+				if _, err := os.Lstat(candidate); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("refused folder change during %s created directory: %v", mode, err)
+				}
+				if w := nodePolicyRequest(t, u, http.MethodPut, `{"development_backup_retain":9}`); w.Code != http.StatusConflict {
+					t.Fatalf("retain change during %s -> %d: %s", mode, w.Code, w.Body.String())
+				}
+				if v, _ := getUpdate(t, u); v.Development.BackupRetain != developmentBackupRetainDefault {
+					t.Fatalf("retain changed during %s: %d", mode, v.Development.BackupRetain)
+				}
+			})
+		}
+	})
+
+	t.Run("effective folder changed before save re-acquires lock", func(t *testing.T) {
+		for _, race := range []string{"folder-changed", "update-started"} {
+			t.Run(race, func(t *testing.T) {
+				u, _, _ := updaterWithStoredSettings(t)
+				initial := filepath.Join(t.TempDir(), "initial")
+				next := filepath.Join(t.TempDir(), "next")
+				other := filepath.Join(t.TempDir(), "other")
+				u.mu.Lock()
+				u.settings.DevelopmentBackupDirectory = &initial
+				u.loaded = true
+				u.mu.Unlock()
+				u.testAfterBackupRecoveryCheck = func() {
+					u.mu.Lock()
+					if race == "folder-changed" {
+						u.settings.DevelopmentBackupDirectory = &other
+					} else {
+						u.running = true
+					}
+					u.mu.Unlock()
+				}
+				if w := nodePolicyRequest(t, u, http.MethodPut, fmt.Sprintf(`{"development_backup_directory":%q}`, next)); w.Code != http.StatusConflict {
+					t.Fatalf("race %s was not refused -> %d: %s", race, w.Code, w.Body.String())
+				}
+				u.mu.Lock()
+				got := ""
+				if u.settings.DevelopmentBackupDirectory != nil {
+					got = *u.settings.DevelopmentBackupDirectory
+				}
+				u.mu.Unlock()
+				want := initial
+				if race == "folder-changed" {
+					want = other
+				}
+				if got != want {
+					t.Fatalf("saved directory after %s = %q, want %q", race, got, want)
+				}
+			})
+		}
+	})
+
+	t.Run("combined source and folder change keeps settings intact on race refusal", func(t *testing.T) {
+		for _, race := range []string{"folder-changed", "update-started"} {
+			t.Run(race, func(t *testing.T) {
+				u, _, _ := updaterWithStoredSettings(t)
+				initial := filepath.Join(t.TempDir(), "initial")
+				next := filepath.Join(t.TempDir(), "next")
+				other := filepath.Join(t.TempDir(), "other")
+				receipt := &update.DevelopmentBackup{ID: "keep-receipt"}
+				u.mu.Lock()
+				u.settings.Source = "web-dev"
+				u.settings.DevelopmentAuto = true
+				u.settings.DevelopmentBackup = receipt
+				u.settings.DevelopmentBackupDirectory = &initial
+				u.loaded = true
+				u.mu.Unlock()
+				u.testAfterBackupRecoveryCheck = func() {
+					u.mu.Lock()
+					if race == "folder-changed" {
+						u.settings.DevelopmentBackupDirectory = &other
+					} else {
+						u.running = true
+					}
+					u.mu.Unlock()
+				}
+				body := fmt.Sprintf(`{"source":"release","development_backup_directory":%q}`, next)
+				if w := nodePolicyRequest(t, u, http.MethodPut, body); w.Code != http.StatusConflict {
+					t.Fatalf("combined race %s was not refused -> %d: %s", race, w.Code, w.Body.String())
+				}
+				u.mu.Lock()
+				gotSource := u.settings.Source
+				gotDevAuto := u.settings.DevelopmentAuto
+				gotBackup := u.settings.DevelopmentBackup
+				gotDir := ""
+				if u.settings.DevelopmentBackupDirectory != nil {
+					gotDir = *u.settings.DevelopmentBackupDirectory
+				}
+				u.mu.Unlock()
+				wantDir := initial
+				if race == "folder-changed" {
+					wantDir = other
+				}
+				if gotSource != "web-dev" || !gotDevAuto || gotBackup == nil || gotBackup.ID != "keep-receipt" || gotDir != wantDir {
+					t.Fatalf("rejected combined request mutated settings after %s: source=%q devAuto=%v backup=%+v dir=%q (want dir %q)",
+						race, gotSource, gotDevAuto, gotBackup, gotDir, wantDir)
+				}
+			})
+		}
+	})
+
+	t.Run("ABA update failure or late recovery marker before save re-acquires lock", func(t *testing.T) {
+		for _, race := range []string{"update-failed-with-incomplete-marker", "incomplete-marker-without-active-flag", "update-ran-and-finished"} {
+			t.Run(race, func(t *testing.T) {
+				u, _, _ := updaterWithStoredSettings(t)
+				initial := filepath.Join(t.TempDir(), "initial")
+				if err := os.Mkdir(initial, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				next := filepath.Join(t.TempDir(), "next")
+				u.mu.Lock()
+				u.settings.DevelopmentBackupDirectory = &initial
+				u.loaded = true
+				u.mu.Unlock()
+				u.testAfterBackupRecoveryCheck = func() {
+					switch race {
+					case "update-failed-with-incomplete-marker":
+						u.mu.Lock()
+						u.running = true
+						u.opGen++
+						u.mu.Unlock()
+						if err := os.Mkdir(filepath.Join(initial, ".incomplete-aba"), 0o700); err != nil {
+							t.Fatal(err)
+						}
+						u.mu.Lock()
+						u.running = false
+						u.checking = false
+						u.mu.Unlock()
+					case "incomplete-marker-without-active-flag":
+						if err := os.Mkdir(filepath.Join(initial, ".incomplete-late"), 0o700); err != nil {
+							t.Fatal(err)
+						}
+					case "update-ran-and-finished":
+						u.mu.Lock()
+						u.running = true
+						u.opGen++
+						u.running = false
+						u.checking = false
+						u.mu.Unlock()
+					}
+				}
+				w := nodePolicyRequest(t, u, http.MethodPut, fmt.Sprintf(`{"development_backup_directory":%q}`, next))
+				if w.Code != http.StatusConflict {
+					t.Fatalf("ABA race %s was not refused -> %d: %s", race, w.Code, w.Body.String())
+				}
+				if race != "update-ran-and-finished" && !strings.Contains(w.Body.String(), "incomplete") {
+					t.Fatalf("ABA race %s body = %s, want incomplete recovery refusal", race, w.Body.String())
+				}
+				u.mu.Lock()
+				got := ""
+				if u.settings.DevelopmentBackupDirectory != nil {
+					got = *u.settings.DevelopmentBackupDirectory
+				}
+				u.mu.Unlock()
+				if got != initial {
+					t.Fatalf("saved directory after %s = %q, want %q", race, got, initial)
+				}
+			})
+		}
+	})
+}
+
+// Finding #7: POSIX backslash paths are refused by the settings API before
+// creation, and a valid saved folder round-trips through webdev.py's backups
+// list operation cleanly.
+func TestDevelopmentBackupPathRoundTripWithHelper(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("development updates are unsupported on Windows")
+	}
+	h := newTestHub(t)
+	u := h.upd
+	bad := filepath.Join(t.TempDir(), `bad\dir`)
+	if w := nodePolicyRequest(t, u, http.MethodPut, fmt.Sprintf(`{"development_backup_directory":%q}`, bad)); w.Code != http.StatusConflict {
+		t.Fatalf("backslash path accepted: %d %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Lstat(bad); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("backslash path created directory: %v", err)
+	}
+
+	good := filepath.Join(t.TempDir(), "roundtrip-snapshots")
+	if w := nodePolicyRequest(t, u, http.MethodPut, fmt.Sprintf(`{"development_backup_directory":%q}`, good)); w.Code != http.StatusOK {
+		t.Fatalf("valid path refused: %d %s", w.Code, w.Body.String())
+	}
+	u.mu.Lock()
+	u.settings.Source = "web-dev"
+	u.mu.Unlock()
+	u.devRun = update.DevelopmentRequest
+	versions, err := u.developmentBackups(context.Background())
+	if err != nil {
+		t.Fatalf("webdev.py backups failed for API-saved directory %q: %v", good, err)
+	}
+	if len(versions) != 0 {
+		t.Fatalf("unexpected backups in fresh folder: %+v", versions)
+	}
+}
+
+// Finding #8b: backup_default_directory is canonicalized through symlinks and
+// backup_directory_is_default stays true even when hub.json or cfg.dir uses a
+// symlinked path.
+func TestDevelopmentRecommendedDirectoryMatchesThroughSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks require privileges on Windows")
+	}
+	realHome := filepath.Join(t.TempDir(), "real-home")
+	if err := os.MkdirAll(realHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkHome := filepath.Join(t.TempDir(), "link-home")
+	if err := os.Symlink(realHome, linkHome); err != nil {
+		t.Fatal(err)
+	}
+	h := newTestHub(t)
+	h.cfg.dir = linkHome
+	u := h.upd
+
+	resolvedHome, err := filepath.EvalSymlinks(realHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDefault := filepath.Join(resolvedHome, "update", "development-backups")
+
+	v, _ := getUpdate(t, u)
+	if v.Development.BackupDefaultDirectory != wantDefault {
+		t.Fatalf("BackupDefaultDirectory = %q, want %q", v.Development.BackupDefaultDirectory, wantDefault)
+	}
+	if !v.Development.BackupDirectoryIsDefault {
+		t.Fatalf("expected BackupDirectoryIsDefault=true initially: %+v", v.Development)
+	}
+
+	// "Use recommended" stores the resolved path and keeps BackupDirectoryIsDefault true.
+	if w := nodePolicyRequest(t, u, http.MethodPut, `{"development_backup_directory":""}`); w.Code != http.StatusOK {
+		t.Fatal(w.Body.String())
+	}
+	v, _ = getUpdate(t, u)
+	if v.Development.BackupDirectory != wantDefault || !v.Development.BackupDirectoryIsDefault {
+		t.Fatalf("after Use recommended: %+v", v.Development)
+	}
+
+	// Custom directory flips BackupDirectoryIsDefault to false.
+	custom := filepath.Join(t.TempDir(), "custom-snapshots")
+	if w := nodePolicyRequest(t, u, http.MethodPut, fmt.Sprintf(`{"development_backup_directory":%q}`, custom)); w.Code != http.StatusOK {
+		t.Fatal(w.Body.String())
+	}
+	v, _ = getUpdate(t, u)
+	if v.Development.BackupDirectoryIsDefault {
+		t.Fatalf("custom folder reported as default: %+v", v.Development)
+	}
+
+	// hub.json pointing to the unresolved symlinked recommended path still
+	// reports BackupDirectoryIsDefault=true when Web override is unset.
+	u.mu.Lock()
+	u.settings.DevelopmentBackupDirectory = nil
+	u.mu.Unlock()
+	h.cfg.Update.Development = &update.DevelopmentConfig{
+		Backup: update.DevelopmentBackupConfig{Directory: filepath.Join(linkHome, "update", "development-backups")},
+	}
+	v, _ = getUpdate(t, u)
+	if !v.Development.BackupDirectoryIsDefault {
+		t.Fatalf("symlinked hub.json recommended path reported as non-default: %+v", v.Development)
 	}
 }

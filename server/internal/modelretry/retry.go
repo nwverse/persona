@@ -38,6 +38,24 @@ func Temporary(text string) bool {
 	return false
 }
 
+// AccountExhausted recognizes a provider response saying that its upstream
+// account pool has no account available for another attempt. It remains a
+// transient classification; the caller's policy decides whether to retry it.
+func AccountExhausted(text string) bool {
+	t := strings.ToLower(text)
+	for _, word := range []string{
+		"no other eligible account",
+		"no eligible upstream",
+		"upstream attempt budget is exhausted",
+		"upstream attempt budget exhausted",
+	} {
+		if strings.Contains(t, word) {
+			return true
+		}
+	}
+	return false
+}
+
 // Permanent recognizes explicit evidence that continuation cannot fix.
 func Permanent(text string) bool {
 	t := strings.ToLower(text)

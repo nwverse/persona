@@ -24,6 +24,7 @@ newAssistant
 openAbout
 openAgent
 openAgentsFresh
+openAlarms
 openAllWork
 openAppearance
 openAssistant
@@ -189,6 +190,7 @@ openTerminalsPage
 openThreadAt
 openTodoDetail
 openTodoTitled
+openTodosChoice
 openTokenUsage
 openTranslationSettings
 openTriageSettings
