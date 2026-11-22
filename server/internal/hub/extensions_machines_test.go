@@ -269,3 +269,102 @@ func TestHubExtensionMachinesPairLinkThroughProxyE2E(t *testing.T) {
 		t.Fatalf("confirmed computer pair_link: got %v, want rpc.Error(not_pending)", err)
 	}
 }
+
+func TestHubExtensionMachinesManagerBoundaryAndConcurrency(t *testing.T) {
+	store := newMemPairTrustStore()
+	h := newTestHub(t)
+	h.store = store
+	h.cfg.Security.TrustedCIDRs = []string{"127.0.0.0/8", "::1/128"}
+	h.devices.entries = append([]MachineConfig(nil), h.cfg.Machines...)
+	h.devices.started = true
+	h.trust.pending = map[string]time.Time{}
+
+	tlsSrv := httptest.NewTLSServer(h.routes())
+	t.Cleanup(tlsSrv.Close)
+	u, _ := url.Parse(tlsSrv.URL)
+	port, _ := strconv.Atoi(u.Port())
+	h.public.mu.Lock()
+	h.public.port = port
+	h.public.mu.Unlock()
+	h.cfg.Public.TLSListen = u.Host
+	h.cfg.PublicURL = tlsSrv.URL
+
+	// Manager A creates a pending machine with explicit ID.
+	pairA, err := h.hubMachinesPairLink(context.Background(), "m-alpha", "personal-agent-club",
+		json.RawMessage(`{"machine_id":"pac-alpha-1","name":"Alpha Node","os":"linux"}`))
+	if err != nil {
+		t.Fatalf("manager A pair_link: %v", err)
+	}
+	if pairA.MachineID != "pac-alpha-1" {
+		t.Fatalf("unexpected machine_id: %+v", pairA)
+	}
+	// Mark manager A as owner in kept map (or move) so entryOwner returns m-alpha.
+	h.devices.mu.Lock()
+	if h.devices.kept == nil {
+		h.devices.kept = map[string]string{}
+	}
+	h.devices.kept["pac-alpha-1"] = "m-alpha"
+	h.devices.mu.Unlock()
+	// Remove from cfg/entries so entryOwner consults kept, simulating a manager-scoped machine.
+	h.mu.Lock()
+	h.cfg.Machines = nil
+	h.mu.Unlock()
+	h.devices.mu.Lock()
+	h.devices.entries = nil
+	h.devices.mu.Unlock()
+
+	// Manager B must be refused on both re-pairing (add==nil) and reusable (add!=nil) paths.
+	for _, req := range []string{
+		`{"machine_id":"pac-alpha-1"}`,
+		`{"machine_id":"pac-alpha-1","name":"Hijacked","os":"linux"}`,
+		`{"name":"Alpha Node","os":"linux"}`,
+	} {
+		_, err := h.hubMachinesPairLink(context.Background(), "m-beta", "other-ext", json.RawMessage(req))
+		var re *rpc.Error
+		if !errors.As(err, &re) || re.Code != codeOtherManager {
+			t.Fatalf("pair_link(%s) by m-beta: got %v, want %s", req, err, codeOtherManager)
+		}
+	}
+
+	// Manager B must be refused on machines.status for m-alpha's machine, while m-alpha succeeds.
+	if _, err := h.hubMachinesStatus("m-beta", json.RawMessage(`{"machine_id":"pac-alpha-1"}`)); err == nil {
+		t.Fatal("expected machines.status by m-beta to be rejected")
+	} else {
+		var re *rpc.Error
+		if !errors.As(err, &re) || re.Code != codeOtherManager {
+			t.Fatalf("machines.status by m-beta: got %v, want %s", err, codeOtherManager)
+		}
+	}
+	stA, err := h.hubMachinesStatus("m-alpha", json.RawMessage(`{"machine_id":"pac-alpha-1"}`))
+	if err != nil || !stA.Exists || !stA.Pending {
+		t.Fatalf("machines.status by m-alpha: st=%+v err=%v", stA, err)
+	}
+
+	// Concurrent pair_link additions under -race select distinct IDs without racing.
+	const workers = 6
+	var wg sync.WaitGroup
+	ids := make(chan string, workers)
+	errs := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res, err := h.hubMachinesPairLink(context.Background(), "m-alpha", "personal-agent-club",
+				json.RawMessage(`{"name":"Concurrent Box","os":"linux"}`))
+			if err != nil {
+				errs <- err
+				return
+			}
+			ids <- res.MachineID
+		}()
+	}
+	wg.Wait()
+	close(ids)
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent pair_link error: %v", err)
+	}
+	if len(ids) != workers {
+		t.Fatalf("got %d results, want %d", len(ids), workers)
+	}
+}

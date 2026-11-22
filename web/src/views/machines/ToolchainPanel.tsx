@@ -85,14 +85,17 @@ export interface MachineToolchainReport {
   environment: ToolchainEnvSummary;
 }
 
+type UnavailableReason = "old_node" | "old_hub" | "forbidden";
+
 type LoadState =
   | { kind: "idle" }
-  | { kind: "loading" }
-  | { kind: "ready"; report: MachineToolchainReport }
-  | { kind: "unavailable"; reason: "old_node" | "forbidden" }
-  | { kind: "error"; message: string };
+  | { kind: "loading"; mid: string }
+  | { kind: "ready"; mid: string; report: MachineToolchainReport }
+  | { kind: "unavailable"; mid: string; reason: UnavailableReason }
+  | { kind: "error"; mid: string; message: string };
 
 const TOOLCHAIN_TIMEOUT_MS = 20_000;
+const UNKNOWN_METHOD_RE = /\bunknown method(?::\s*|\s+)machine\.toolchain\b/i;
 
 function statusTone(status: string | undefined): { pill: string; dot: string } {
   switch (status) {
@@ -150,13 +153,12 @@ function formatVram(vramMb: number): string {
   return t("machines-toolchain.hw_vram_mb", { mb: String(vramMb) });
 }
 
-function classifyUnavailable(err: unknown): "old_node" | "forbidden" | null {
+function classifyUnavailable(err: unknown): UnavailableReason | null {
   if (!(err instanceof ApiError)) return null;
   if (err.status === 403) return "forbidden";
-  const msg = err.message.toLowerCase();
-  if (err.status === 409 || msg.includes("unknown method") || err.status === 404) {
-    return "old_node";
-  }
+  if (err.status === 404 && !err.isJson) return "old_hub";
+  if (err.code === "node_outdated") return "old_node";
+  if (UNKNOWN_METHOD_RE.test(err.message)) return "old_node";
   return null;
 }
 
@@ -171,27 +173,40 @@ export function ToolchainPanel({ machines }: { machines: Machine[] }) {
   const activeMachine = machines.find((m) => m.id === activeMid);
 
   const [state, setState] = useState<LoadState>({ kind: "idle" });
-  const [refreshing, setRefreshing] = useState(false);
+  const [refreshing, setRefreshing] = useState<{ seq: number; mid: string } | null>(null);
   const [showPath, setShowPath] = useState(false);
   const seq = useRef(0);
+  const activeMidRef = useRef(activeMid);
+  activeMidRef.current = activeMid;
+  const inFlight = useRef<{ seq: number; mid: string; ctrl: AbortController } | null>(null);
+
+  const abortInFlight = useCallback(() => {
+    inFlight.current?.ctrl.abort();
+    inFlight.current = null;
+  }, []);
 
   const fetchReport = useCallback(
-    async (mid: string, refresh: boolean, signal?: AbortSignal) => {
+    async (mid: string, refresh: boolean) => {
+      abortInFlight();
+      const ctrl = new AbortController();
       const mine = ++seq.current;
+      inFlight.current = { seq: mine, mid, ctrl };
       if (refresh) {
-        setRefreshing(true);
+        setRefreshing({ seq: mine, mid });
       } else {
-        setState({ kind: "loading" });
+        setRefreshing(null);
+        setState({ kind: "loading", mid });
       }
       try {
         const query = refresh ? "?refresh=1" : "";
         const report = await api<MachineToolchainReport>(`/machines/${enc(mid)}/toolchain${query}`, {
-          signal,
+          signal: ctrl.signal,
           timeout: pastHub(TOOLCHAIN_TIMEOUT_MS),
         });
-        if (mine !== seq.current) return;
+        if (ctrl.signal.aborted || mine !== seq.current || activeMidRef.current !== mid) return;
         setState({
           kind: "ready",
+          mid,
           report: {
             ...report,
             tools: report.tools ?? [],
@@ -200,34 +215,39 @@ export function ToolchainPanel({ machines }: { machines: Machine[] }) {
           },
         });
       } catch (err) {
-        if (isAbort(err) || mine !== seq.current) return;
+        if (ctrl.signal.aborted || isAbort(err) || mine !== seq.current || activeMidRef.current !== mid) return;
         const unavailable = classifyUnavailable(err);
         if (unavailable) {
-          setState({ kind: "unavailable", reason: unavailable });
+          setState({ kind: "unavailable", mid, reason: unavailable });
         } else {
-          setState({ kind: "error", message: errorText(err) });
+          setState({ kind: "error", mid, message: errorText(err) });
         }
       } finally {
-        if (mine === seq.current) {
-          setRefreshing(false);
+        if (inFlight.current?.seq === mine) {
+          inFlight.current = null;
         }
+        setRefreshing((prev) => (prev?.seq === mine ? null : prev));
       }
     },
-    [],
+    [abortInFlight],
   );
 
   useEffect(() => {
     setShowPath(false);
     if (!activeMachine || !activeMachine.online) {
       seq.current++;
+      abortInFlight();
       setState({ kind: "idle" });
-      setRefreshing(false);
+      setRefreshing(null);
       return;
     }
-    const ctrl = new AbortController();
-    void fetchReport(activeMachine.id, false, ctrl.signal);
-    return () => ctrl.abort();
-  }, [activeMachine?.id, activeMachine?.online, fetchReport]);
+    void fetchReport(activeMachine.id, false);
+    return () => {
+      seq.current++;
+      abortInFlight();
+      setRefreshing(null);
+    };
+  }, [activeMachine?.id, activeMachine?.online, fetchReport, abortInFlight]);
 
   if (machines.length === 0) {
     return (
@@ -237,7 +257,9 @@ export function ToolchainPanel({ machines }: { machines: Machine[] }) {
     );
   }
 
-  const report = state.kind === "ready" ? state.report : null;
+  const activeState: LoadState = state.kind === "idle" || state.mid === activeMid ? state : { kind: "idle" };
+  const isRefreshing = refreshing !== null && refreshing.mid === activeMid;
+  const report = activeState.kind === "ready" ? activeState.report : null;
   const readyCore = report ? report.tools.filter((x) => x.found).length : 0;
   const readyAgents = report ? report.agent_clis.filter((x) => x.found).length : 0;
 
@@ -254,10 +276,10 @@ export function ToolchainPanel({ machines }: { machines: Machine[] }) {
             <Button
               tone="secondary"
               icon="retry"
-              busy={refreshing || state.kind === "loading"}
+              busy={isRefreshing || activeState.kind === "loading"}
               onClick={() => activeMachine && void fetchReport(activeMachine.id, true)}
             >
-              {refreshing ? t("machines-toolchain.refreshing") : t("machines-toolchain.refresh")}
+              {isRefreshing ? t("machines-toolchain.refreshing") : t("machines-toolchain.refresh")}
             </Button>
           )}
         </div>
@@ -304,27 +326,29 @@ export function ToolchainPanel({ machines }: { machines: Machine[] }) {
         <section className="rounded-card bg-surface px-4 py-4 shadow-card">
           <p className="text-meta text-ink-3">{t("machines-toolchain.offline")}</p>
         </section>
-      ) : state.kind === "loading" ? (
+      ) : activeState.kind === "loading" ? (
         <section className="rounded-card bg-surface px-4 py-5 shadow-card">
           <p className="flex items-center gap-2 text-meta text-ink-2" role="status">
             <Spinner />
             {t("machines-toolchain.loading")}
           </p>
         </section>
-      ) : state.kind === "unavailable" ? (
+      ) : activeState.kind === "unavailable" ? (
         <section className="rounded-card bg-surface px-4 py-4 shadow-card">
           <p className="text-meta text-ink-2">
-            {state.reason === "forbidden"
+            {activeState.reason === "forbidden"
               ? t("machines-toolchain.unavailable_forbidden")
-              : t("machines-toolchain.unavailable_old_node")}
+              : activeState.reason === "old_hub"
+                ? t("machines-toolchain.unavailable_old_hub")
+                : t("machines-toolchain.unavailable_old_node")}
           </p>
         </section>
-      ) : state.kind === "error" ? (
+      ) : activeState.kind === "error" ? (
         <section className="flex flex-wrap items-center gap-3 rounded-card bg-surface px-4 py-3.5 shadow-card">
           <p role="alert" className="min-w-0 flex-1 break-words text-meta text-red">
-            {t("machines-toolchain.error_load", { error: state.message })}
+            {t("machines-toolchain.error_load", { error: activeState.message })}
           </p>
-          <Button tone="secondary" icon="retry" onClick={() => void fetchReport(activeMachine.id, true)}>
+          <Button tone="secondary" icon="retry" busy={isRefreshing} onClick={() => void fetchReport(activeMachine.id, true)}>
             {t("machines-toolchain.refresh")}
           </Button>
         </section>

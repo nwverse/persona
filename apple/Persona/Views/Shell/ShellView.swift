@@ -116,6 +116,8 @@ struct ShellView: View {
                          openHealth: { go(.health) },
                          openRecordingsPage: openRecordingsPage,
                          openStarred: openStarredPage)
+            // Keep the drawer's route closures out of the page strip's opaque type (#6735, #12249).
+            .stackSegment()
     }
 
     private var openStarredPage: (() -> Void)? {

@@ -221,6 +221,7 @@ class AppleCIPreparationTests(unittest.TestCase):
             current = current.replace('        if [ "$lane" = ios-ipad-diagnostic ]; then\n          timeout --kill-after=5s 180s python3 "$ci_root/scripts/ci/apple_diagnostics.py" \\\n            "$output" "$diagnostics" --scope regular || true\n        fi\n', '')
             current = current.replace('    local scope=all\n    if [ "$LANE" = ios-ipad-diagnostic ]; then\n      scope=regular\n    fi\n', '')
             current = current.replace('      "$OUTPUT" "$DIAGNOSTICS" --scope "$scope"', '      "$OUTPUT" "$DIAGNOSTICS"')
+            current = current.replace('  else\n    # pipefail keeps the bounded command\'s failure status. The existing failure\n    # collector retains this allowlisted console log with its xcresult.\n    ci_run "$@" 2>&1 | tee "$OUTPUT/$name.log"\n  fi\n}', '  else\n    ci_run "$@"\n  fi\n}')
             current = current.replace('    if [ "$LANE" = ios-ipad-diagnostic ]; then\n      # A deliberate app-host diagnostic stops after its own strict probe and\n      # observer cleanup; it neither runs nor substitutes for the visual suite.\n      exit 0\n    fi\n', '')
             self.assertEqual(current, original_script)
 

@@ -116,8 +116,11 @@ describe("a prepaid balance in the sidebar (#11825)", () => {
     expect(renderToStaticMarkup(<UsagePopover accounts={[never]} now={NOW} />)).toContain("暂时连不上 DeepSeek");
     const kept = balanceAccount("ds", "12.34", { problem: "unreachable" });
     expect(renderToStaticMarkup(<UsagePopover accounts={[kept]} now={NOW} />)).toContain("上次的余额");
-    const refused = balanceAccount("ds", "12.34", { problem: "rejected" });
+    const refused = balanceAccount("ds", "12.34", { balance: undefined, problem: "rejected" });
     expect(renderToStaticMarkup(<UsagePopover accounts={[refused]} now={NOW} />)).toContain("Key");
+    expect(renderToStaticMarkup(<UsagePopover accounts={[refused]} now={NOW} />)).not.toContain("上次的余额");
+    const refusedKept = balanceAccount("ds", "12.34", { problem: "rejected" });
+    expect(renderToStaticMarkup(<UsagePopover accounts={[refusedKept]} now={NOW} />)).toContain("上次的余额");
   });
 });
 
@@ -285,5 +288,64 @@ describe("where the numbers came from (#2595)", () => {
       act(() => root.unmount());
       host.remove();
     }
+  });
+});
+
+describe("provider cards with a reset timeline (#13173)", () => {
+  it("draws one card per provider with every account, 5h before 7d, and a timeline under each account", () => {
+    const claude = (id: string, name: string, h7: number): UsageAccount => ({
+      ...account(id, 10, 20, { provider: "claude", name }),
+      windows: [
+        { label: "7d", window_minutes: 10080, used_percent: 20, resets_at: iso(h7 * H) },
+        { label: "5h", window_minutes: 300, used_percent: 10, resets_at: iso(3 * H) },
+      ],
+    });
+    const html = renderToStaticMarkup(<UsagePopover accounts={[claude("1", "Later", 100), claude("2", "Sooner", 30), account("3", 1, 1)]} now={NOW} />);
+    expect(html.match(/data-usage-provider="/g)).toHaveLength(2);
+    expect(html).toContain("2 个账号");
+    expect(html.indexOf("Sooner")).toBeLessThan(html.indexOf("Later"));
+    expect(html.match(/data-usage-timeline/g)).toHaveLength(2); // one chart per card, not per account
+    expect(html.match(/data-timeline-row="/g)).toHaveLength(3);
+    const first = html.slice(html.indexOf("Sooner"));
+    expect(first.indexOf(">5h<")).toBeLessThan(first.indexOf(">7d<"));
+    expect(html).toContain("额度重置时间线");
+    // the chart's rows follow the quota list's order
+    const chart = html.slice(html.indexOf('data-timeline-row="2"'));
+    expect(chart.indexOf('data-timeline-row="2"')).toBeLessThan(chart.indexOf('data-timeline-row="1"'));
+  });
+  it("draws no timeline for a card whose accounts have no reset time", () => {
+    const a = account("a", 1, 1);
+    a.windows.forEach((w) => delete w.resets_at);
+    expect(renderToStaticMarkup(<UsagePopover accounts={[a]} now={NOW} />)).not.toContain("data-usage-timeline");
+  });
+  it("draws a protection line, flag and zone on a window that carries protect_percent, and nothing without it", () => {
+    const a = account("a", 10, 20);
+    a.windows[1].protect_percent = 95;
+    const html = renderToStaticMarkup(<UsagePopover accounts={[a]} now={NOW} />);
+    expect(html.match(/data-protect-line/g)).toHaveLength(1);
+    expect(html).toContain("保护 95%");
+    expect(html).toContain("data-protect-zone");
+    expect(html).toContain("保护线在 95%");
+    expect(renderToStaticMarkup(<UsagePopover accounts={[account("b", 10, 20)]} now={NOW} />)).not.toContain("data-protect");
+  });
+  it("renders usage bars and popover typography with named text tokens instead of hard-coded pixel classes (#13211)", () => {
+    const a = account("a", 40, 65, {
+      provider: "claude",
+      name: "Work Claude",
+      plan: "Max",
+      sources: ["Relay"],
+      problem: "unreachable",
+    });
+    a.windows[1].protect_percent = 90;
+    a.windows.push({ label: "7d", window_minutes: 10080, used_percent: 50, resets_at: iso(30 * H), model: "Sonnet" });
+    const stripHtml = renderToStaticMarkup(<UsageBars accounts={[a, balanceAccount("ds", "12.34")]} now={NOW} />);
+    const popoverHtml = renderToStaticMarkup(<UsagePopover accounts={[a, balanceAccount("ds", "12.34")]} now={NOW} />);
+    const arbitraryPxFont = /text-\[(?:length:)?\d+(?:\.\d+)?px\]/;
+    expect(stripHtml).not.toMatch(arbitraryPxFont);
+    expect(popoverHtml).not.toMatch(arbitraryPxFont);
+    expect(stripHtml).toContain("text-submeta");
+    expect(popoverHtml).toContain("text-meta");
+    expect(popoverHtml).toContain("text-label");
+    expect(popoverHtml).toContain("text-submeta");
   });
 });

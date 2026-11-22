@@ -167,6 +167,13 @@ var goTypes = map[string]any{
 	"MachinesStatusParams":   wire.MachinesStatusParams{},
 	"MachinesStatusResult":   wire.MachinesStatusResult{},
 
+	// The manager decodes an extension's browser calls into the generated wire types and answers with them
+	// (extmgr/extension_browser.go).
+	"BrowserMachinesParams": wire.BrowserMachinesParams{},
+	"BrowserMachinesResult": wire.BrowserMachinesResult{},
+	"BrowserRunParams":      wire.BrowserRunParams{},
+	"BrowserRunResult":      wire.BrowserRunResult{},
+
 	// Storage params are the actual manager-engine decoder types. Dynamic result
 	// objects are validated against these wire DTOs before committing/acknowledging.
 	"StorageEmptyParams":       struct{}{},

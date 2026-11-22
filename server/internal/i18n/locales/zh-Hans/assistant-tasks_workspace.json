@@ -9,6 +9,8 @@
   "engine_path": "工作区引擎未返回绝对检出路径；未启动 Agent",
   "engine_checkout": "工作区引擎未确认请求的分支和检出路径；未启动 Agent",
   "busy": "工作区被任务 {id}（{title}）占用；请等待其结束或选择新建工作区（电脑 {machine}，路径 {path}）",
+  "queued": "已排在任务 {id}（{title}）之后等待 {machine} 的 {path}，对方结束后将自动启动",
+  "queued_after": "已在 {machine} 的 {path} 排队，正在等待前置任务 {blockers} 完成",
   "machine_local": "任务工作区已在 {from} 上准备好，不能迁移到 {to}",
   "create": "新任务工作区未创建成功；未启动 Agent",
   "no_commits": "{machine} 上的 {path} 还没有任何提交，无法从它新建任务工作区；先提交一次，或选择一个已有工作区。未启动 Agent",

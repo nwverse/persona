@@ -121,7 +121,11 @@ func (s *Service) sessionMCPTools(ctx context.Context, machine, session string, 
 // state read. Otherwise the failed list is cached until an unrelated link changes.
 func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session string, assistant, guestHint bool) (result []proto.Tool, resultErr error) {
 	defer func() { result = localizedMCPTools(result, s.toolLanguage(ctx)) }()
-	assistant = assistant && s.assistantDiscovery(ctx, machine, session)
+	if assistant && !s.assistantDiscovery(ctx, machine, session) {
+		s.logf("mcp tools: assistant discovery denied for machine %s session %s (tool_set=%q); falling back to agent tools", machine, short(session), toolSetOf(ctx))
+		s.noteAssistantDenied(ctx, machine, session, "mcp.tools")
+		assistant = false
+	}
 	allowed, guest, err := s.guestOf(ctx, machine, session)
 	if err != nil {
 		return nil, err
@@ -205,10 +209,14 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 		return proto.TextResult(i18n.T(s.lang(ctx), "assistant-privacy.tool_denied"), true)
 	}
 	if assistant && !s.assistantCaller(ctx, machine, session) {
+		s.noteAssistantDenied(ctx, machine, session, name)
 		return proto.TextResult(i18n.T(s.lang(ctx), "assistant-privacy.assistant_denied"), true)
 	}
 	if res, refused := s.inboxModelRefusal(ctx, machine, session, origin, name); refused {
 		return res
+	}
+	if name == "secret_store" {
+		return s.toolSecretStore(ctx, machine, session, args)
 	}
 	if assistantwire.IsA2ATool(name) {
 		return s.a2aTool(ctx, a2aRef{s.canonical(machine), session}, name, args)

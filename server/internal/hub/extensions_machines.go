@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 
 	"github.com/nwverse/persona/sdk/go/wire"
@@ -51,7 +52,29 @@ func (h *Hub) hubMachinesPairLink(ctx context.Context, from, extID string, raw j
 		}
 	}
 	actor := "extension:" + extID
+	h.machineAdd.Lock()
+	if machineID != "" && h.knownEntry(machineID) != nil && from != "" && h.entryOwner(machineID) != from {
+		h.machineAdd.Unlock()
+		return wire.MachinesPairLinkResult{}, &rpc.Error{Code: codeOtherManager, Message: errOtherManager.Error()}
+	}
+	if machineID == "" && add != nil && name != "" && from != "" {
+		base := machineSlug(name, p.OS)
+		for n := 1; ; n++ {
+			cand := base
+			if n > 1 {
+				cand = base + "-" + strconv.Itoa(n)
+			}
+			if mc := h.knownEntry(cand); mc != nil && mc.Name == name && mc.Kind == kindLink && h.machinePending(cand) && h.neverConnected(cand) && h.entryOwner(cand) != from {
+				h.machineAdd.Unlock()
+				return wire.MachinesPairLinkResult{}, &rpc.Error{Code: codeOtherManager, Message: errOtherManager.Error()}
+			}
+			if !h.machineIDTaken(cand) {
+				break
+			}
+		}
+	}
 	id, _, err := h.computerFor(ctx, existingMachine, add, true, actor)
+	h.machineAdd.Unlock()
 	if err != nil {
 		return wire.MachinesPairLinkResult{}, mapAddMachineRPCError(err)
 	}
@@ -79,7 +102,7 @@ func (h *Hub) hubMachinesPairLink(ctx context.Context, from, extID string, raw j
 }
 
 // hubMachinesStatus handles extwire.HubMachinesStatus from an extension granted machines.read or machines.pair (#12798).
-func (h *Hub) hubMachinesStatus(raw json.RawMessage) (wire.MachinesStatusResult, error) {
+func (h *Hub) hubMachinesStatus(from string, raw json.RawMessage) (wire.MachinesStatusResult, error) {
 	var p wire.MachinesStatusParams
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return wire.MachinesStatusResult{}, &rpc.Error{Code: "invalid_params", Message: "machine_id is required"}
@@ -92,6 +115,9 @@ func (h *Hub) hubMachinesStatus(raw json.RawMessage) (wire.MachinesStatusResult,
 	id := strings.TrimSpace(p.MachineID)
 	if id == "" {
 		return wire.MachinesStatusResult{}, &rpc.Error{Code: "invalid_params", Message: "machine_id is required"}
+	}
+	if from != "" && h.knownEntry(id) != nil && h.entryOwner(id) != from {
+		return wire.MachinesStatusResult{}, &rpc.Error{Code: codeOtherManager, Message: errOtherManager.Error()}
 	}
 	res := wire.MachinesStatusResult{
 		MachineID: id,
@@ -106,6 +132,9 @@ func (h *Hub) hubMachinesStatus(raw json.RawMessage) (wire.MachinesStatusResult,
 	}
 	for _, m := range h.machineList() {
 		if m.ID != id {
+			continue
+		}
+		if from != "" && h.entryOwner(m.ID) != from {
 			continue
 		}
 		res.Exists = true

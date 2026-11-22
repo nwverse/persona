@@ -65,6 +65,8 @@ internal fun InteractionPanel(
     labels: Map<String, StackLabel> = emptyMap(),
     first: String? = null,
     counted: Boolean = true,
+    /** When non-null, a lone unfolded card shows a top-edge grabber allowing the user to resize its cap (#12306). */
+    resize: CardResize? = null,
     /** Drawn under a card that is not folded: the rule a question a supervisor passed up suggests (#4929); null: nothing. */
     suggestion: (@Composable (Interaction) -> Unit)? = null,
 ) {
@@ -131,6 +133,7 @@ internal fun InteractionPanel(
                     headerActions = { closeCard(request) },
                     // an approval says it waits for the user, in the chat as on the web and iOS (#4883)
                     kicker = if (request.kind == "permission" && !request.isSecretRun) stringResource(DecisionKind.Tool.labelRes) else null,
+                    grabber = if (!folded && resize != null && resize.id == request.id) ({ CardGrabber(resize) }) else null,
                 ) {
                     if (full != request.id) body(request, false)
                 }

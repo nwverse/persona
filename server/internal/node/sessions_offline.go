@@ -119,7 +119,7 @@ func (n *Node) scanOffline() []proto.Session {
 	desktop := readClaudeDesktopIndex(n.home)
 	for _, p := range files {
 		id := strings.TrimSuffix(filepath.Base(p), ".jsonl")
-		if !validID(id) {
+		if !validID(id) || n.isRoundFork(id) {
 			continue
 		}
 		st, err := os.Stat(p)
@@ -187,6 +187,18 @@ func (n *Node) scanOffline() []proto.Session {
 			title, cwd = cmp.Or(title, about.title), cmp.Or(cwd, about.cwd)
 		}
 		cwd = n.assistantHome(id, cwd)
+		if c.count == assistants && !identity.IsAssistantDir(cwd) && !identity.InHealthSpace(cwd) {
+			base := filepath.Base(filepath.Dir(c.path))
+			if dir := n.assistantDirOfProject(base); dir != "" {
+				cwd = dir
+			} else if !isMeetingRoomProject(base) {
+				if strings.HasSuffix(base, "-health") {
+					cwd = identity.HealthDir(n.home)
+				} else if strings.HasSuffix(base, "-assistant") {
+					cwd = identity.AssistantDir(n.home)
+				}
+			}
+		}
 		if !n.sessionScopeAllows(cwd) {
 			continue
 		}

@@ -119,7 +119,8 @@ type Service struct {
 	// listen; nil: none.
 	heard ownerHeard
 	// humanSent: the messages a person's own app sent, as the hub vouched (secret_handoff.go).
-	humanSent humanSends
+	humanSent      humanSends
+	storeApprovals storeApprovals
 
 	hub   Hub
 	store func() Store
@@ -235,6 +236,7 @@ type Service struct {
 	accept         acceptBook        // acceptance.go
 	pushQuiet      quietSwitch       // push_quiet.go: the hub's low-distraction switch as last read
 	deploy         deployProbe       // deploy_check.go: is the work in the running hub
+	prEventRoute   prEventRouteBook  // pr_status_route.go: opt-in direct PR-event routing dedupe
 	parkReplies    parkReplyBook     // park_reply.go: bounded source reads for explicitly bound person replies
 
 	reviewDismissals taskReviewDismissalBook // task_review_dismissals.go
@@ -673,7 +675,12 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		return beforeNodeWrite(method, err)
 	}
 	p := DeviceCall{Device: device, Method: nodeMethod(method, params), Params: raw}
-	res, err := s.callDevice(ctx, p)
+	cctx, cancel, bounded := toolNodeContext(ctx, method) // a model's tool waits for a silent node only so long (tool_node_wait.go)
+	res, err := s.callDevice(cctx, p)
+	if bounded && err != nil && ctx.Err() == nil && errors.Is(context.Cause(cctx), errNodeSilent) {
+		err = s.nodeSilent(device, method, err)
+	}
+	cancel()
 	// Not taken: refused before anything was typed, or it never reached the computer (relay_refusal.go).
 	taken = err == nil || !sendNotTaken(err)
 	if taskRoot != "" && (method == DeviceSessionSend || method == deviceTaskStart) {
@@ -785,6 +792,7 @@ type startParams struct {
 	Cwd                 string
 	TaskExecution       bool
 	LegacyTaskExecution bool
+	PromptSelections    bool
 	Text                string               `json:"text"`
 	PermissionMode      string               `json:"permission_mode,omitempty"`
 	Purpose             string               `json:"purpose,omitempty"` // the model configuration's purpose; "" is the assistant's
@@ -1023,6 +1031,7 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 	go s.registerInlineTurn(context.WithoutCancel(ctx), r)
 	s.afterSettle(context.WithoutCancel(ctx), s.registerInlineTurnSettled, r.MachineID, r.SessionID)
 	if !meeting {
+		s.backgroundRoundTurnEnded(ctx, r.SessionID, time.Now())
 		s.availTurnEnded(ctx, r.MachineID, r.SessionID, time.Now()) // an assistant conversation's round (availability.go)
 		s.afterSettle(context.WithoutCancel(ctx), s.taskTurnSettled, r.MachineID, r.SessionID)
 		// A review's reviewer answered (supervise_autoreview.go, agents_session_review.go).
@@ -1080,7 +1089,9 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	}
 	s.toolLoopsChanged(d)
 	s.progressSessions(d, time.Now()) // what the working agents do, for no_progress (supervise_progress.go)
-	s.drainRelays(d.MachineID, d.Sessions)
+	if s.retractConfirmedStartUnknowns(ctx, d.Sessions) {
+		s.drainRelays(d.MachineID, d.Sessions)
+	}
 	s.undeliveredSeen(d)                      // kept owner messages go once their conversation runs again (undelivered.go)
 	s.originsChanged(d.MachineID, d.Sessions) // conversations from before origins were noted (origins.go)
 	// The conversations' spaces, before what may tell an extension of a to-do (conversation_space.go).
