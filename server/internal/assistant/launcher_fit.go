@@ -214,9 +214,17 @@ func configuredStartAgentLookup(discovered, overrides []ConfiguredLauncher) func
 // allowAll: the Agents Persona itself starts on the launcher (agent_start, a planned task, a read-only one too) run with
 // Allow all, bypassPermissions: Claude Code's, and, by the owner's decision (#8141), those whose approval is a switch
 // Allow all turns on (Paseo's providers with Auto Accept: Grok and its other ACP providers, OpenCode), which otherwise
-// ask for every tool and leave a card the assistant never answers. Codex keeps its sandbox, on Paseo as in a terminal:
-// its tasks take the settled mode (tasks_permission.go). A start a person makes (New Agent) keeps the mode they chose.
-func (a startAgent) allowAll() bool { return a.agent == "claude" || a.autoAccept }
+// ask for every tool and leave a card the assistant never answers, and the Antigravity CLI (agy), whose worker would
+// otherwise stop at its own approval prompt in the pane (--dangerously-skip-permissions, node/workagent.go). Codex keeps
+// its sandbox, on Paseo as in a terminal: its tasks take the settled mode (tasks_permission.go). A start a person makes
+// (New Agent) keeps the mode they chose.
+func (a startAgent) allowAll() bool { return a.agent == "claude" || a.agent == "agy" || a.autoAccept }
+
+// allowAllOver: a task's mode gives way to Allow all, always on Claude Code and an Auto Accept provider (their planned
+// tasks run in it), only when it has none on agy, whose start runs in the mode it names (node/workagent.go).
+func (a startAgent) allowAllOver(mode string) bool {
+	return a.allowAll() && (a.agent != "agy" || mode == "")
+}
 
 // fitLauncher holds params' launcher (resolveStart's) to what computer m can start. One the caller named, or an
 // explicit tier resolved to, that m does not have is refused, naming the ones it has: both are caller choices the

@@ -554,3 +554,203 @@ func TestMachineToolchainRejectsMalformedParams(t *testing.T) {
 		t.Fatal("expected error for malformed machine.toolchain params")
 	}
 }
+
+func TestMachineToolchainDetachedSingleFlightAndNoIncompleteCache(t *testing.T) {
+	var (
+		runs       atomic.Int32
+		blockProbe atomic.Bool
+		gate       = make(chan struct{})
+		started    = make(chan struct{}, 4)
+		now        = time.Date(2026, 11, 21, 17, 0, 0, 0, time.UTC)
+	)
+
+	n := &Node{home: "/home/dev"}
+	n.toolchain.deps = &toolchainDeps{
+		goos:           "linux",
+		goarch:         "amd64",
+		home:           "/home/dev",
+		overallTimeout: 25 * time.Millisecond,
+		getenv: func(k string) string {
+			if k == "PATH" {
+				return "/usr/bin"
+			}
+			return ""
+		},
+		now:      func() time.Time { return now },
+		stat:     func(string) (os.FileInfo, error) { return nil, os.ErrNotExist },
+		readDir:  func(string) ([]os.DirEntry, error) { return nil, os.ErrNotExist },
+		readFile: func(string) ([]byte, error) { return nil, os.ErrNotExist },
+		lookPathIn: func(name string, _ []string) string {
+			if name == "git" {
+				return "/usr/bin/git"
+			}
+			return ""
+		},
+		run: func(ctx context.Context, _ []string, name string, _ ...string) ([]byte, error) {
+			if filepath.Base(name) != "git" {
+				return nil, errors.New("not found")
+			}
+			runs.Add(1)
+			if blockProbe.Load() {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-gate
+			return []byte("git version 2.47.1\n"), nil
+		},
+	}
+
+	// 1. An incomplete probe (overall timeout exceeded) must NOT populate the cache.
+	blockProbe.Store(true)
+	out, err := n.machineToolchain(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("incomplete probe returned error: %v", err)
+	}
+	degraded := out.(proto.MachineToolchainReport)
+	if degraded.Cached {
+		t.Error("incomplete probe should not be marked cached")
+	}
+	n.toolchain.mu.Lock()
+	cachedAfterTimeout := n.toolchain.cached
+	n.toolchain.mu.Unlock()
+	if cachedAfterTimeout != nil {
+		t.Fatal("incomplete timed-out probe must not be stored in cache")
+	}
+
+	// 2. Caller 1 cancels mid-flight while Caller 2 waits on the shared single-flight probe.
+	// The shared probe runs on context.WithoutCancel and completes cleanly for Caller 2.
+	blockProbe.Store(false)
+	n.toolchain.mu.Lock()
+	n.toolchain.deps.overallTimeout = 5 * time.Second
+	n.toolchain.mu.Unlock()
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	var (
+		wg   sync.WaitGroup
+		err1 error
+		rep2 proto.MachineToolchainReport
+		err2 error
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, err1 = n.machineToolchain(ctx1, json.RawMessage(`{}`))
+	}()
+	<-started
+	go func() {
+		defer wg.Done()
+		res, e := n.machineToolchain(context.Background(), json.RawMessage(`{}`))
+		err2 = e
+		if e == nil {
+			rep2 = res.(proto.MachineToolchainReport)
+		}
+	}()
+	// Cancel caller 1 while the probe is still gated, then release the gate.
+	cancel1()
+	close(gate)
+	wg.Wait()
+
+	if !errors.Is(err1, context.Canceled) {
+		t.Fatalf("cancelled caller 1 err = %v, want context.Canceled", err1)
+	}
+	if err2 != nil {
+		t.Fatalf("waiter caller 2 err = %v, want nil", err2)
+	}
+	if e := findEntryByID(rep2.Tools, "git"); e == nil || e.Version != "2.47.1" || e.Status != "ready" {
+		t.Fatalf("waiter caller 2 git entry = %+v, want ready 2.47.1", e)
+	}
+
+	// 3. A failed/timed-out manual refresh must leave the previous valid cache intact.
+	blockProbe.Store(true)
+	n.toolchain.mu.Lock()
+	n.toolchain.deps.overallTimeout = 20 * time.Millisecond
+	n.toolchain.mu.Unlock()
+
+	out, err = n.machineToolchain(context.Background(), json.RawMessage(`{"refresh":true}`))
+	if err != nil {
+		t.Fatalf("timed-out refresh returned err: %v", err)
+	}
+	if out.(proto.MachineToolchainReport).Cached {
+		t.Error("timed-out refresh should not be marked cached")
+	}
+
+	// Next regular read must still serve the intact cached 2.47.1 report without re-probing.
+	runsBefore := runs.Load()
+	out, err = n.machineToolchain(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("post-refresh cached read: %v", err)
+	}
+	cachedRep := out.(proto.MachineToolchainReport)
+	if !cachedRep.Cached {
+		t.Fatal("expected previous valid cache to remain intact")
+	}
+	if runs.Load() != runsBefore {
+		t.Fatalf("expected cache hit without re-running commands: before=%d after=%d", runsBefore, runs.Load())
+	}
+	if e := findEntryByID(cachedRep.Tools, "git"); e == nil || e.Version != "2.47.1" || e.Status != "ready" {
+		t.Fatalf("cached git entry = %+v, want ready 2.47.1", e)
+	}
+}
+
+func TestMachineToolchainTimedOutLimiterSlotsArePopulated(t *testing.T) {
+	n := &Node{home: "/home/dev"}
+	n.toolchain.deps = &toolchainDeps{
+		goos:           "linux",
+		goarch:         "amd64",
+		home:           "/home/dev",
+		overallTimeout: 20 * time.Millisecond,
+		getenv: func(k string) string {
+			if k == "PATH" {
+				return "/usr/bin"
+			}
+			return ""
+		},
+		now:      func() time.Time { return time.Date(2026, 11, 21, 17, 5, 0, 0, time.UTC) },
+		stat:     func(string) (os.FileInfo, error) { return nil, os.ErrNotExist },
+		readDir:  func(string) ([]os.DirEntry, error) { return nil, os.ErrNotExist },
+		readFile: func(string) ([]byte, error) { return nil, os.ErrNotExist },
+		// Every tool exists so all limiter slots fill up and remaining goroutines hit ctx.Done before acquiring a slot.
+		lookPathIn: func(name string, _ []string) string {
+			return "/usr/bin/" + name
+		},
+		run: func(ctx context.Context, _ []string, _ string, _ ...string) ([]byte, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+
+	out, err := n.machineToolchain(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("machineToolchain: %v", err)
+	}
+	rep := out.(proto.MachineToolchainReport)
+
+	if len(rep.Tools) != len(coreToolchainSpecs) {
+		t.Fatalf("len(Tools) = %d, want %d", len(rep.Tools), len(coreToolchainSpecs))
+	}
+	if len(rep.AgentCLIs) != len(agentToolchainSpecs) {
+		t.Fatalf("len(AgentCLIs) = %d, want %d", len(rep.AgentCLIs), len(agentToolchainSpecs))
+	}
+	for i, spec := range coreToolchainSpecs {
+		got := rep.Tools[i]
+		if got.ID != spec.id || got.Category != spec.category {
+			t.Errorf("Tools[%d] = {ID:%q Category:%q}, want {ID:%q Category:%q}", i, got.ID, got.Category, spec.id, spec.category)
+		}
+		if got.Status != "error" || got.Note == "" {
+			t.Errorf("Tools[%d] (%s) = {Status:%q Note:%q}, want error with timeout note", i, spec.id, got.Status, got.Note)
+		}
+	}
+	for i, spec := range agentToolchainSpecs {
+		got := rep.AgentCLIs[i]
+		if got.ID != spec.id || got.Category != spec.category {
+			t.Errorf("AgentCLIs[%d] = {ID:%q Category:%q}, want {ID:%q Category:%q}", i, got.ID, got.Category, spec.id, spec.category)
+		}
+		if got.Status != "error" || got.Note == "" {
+			t.Errorf("AgentCLIs[%d] (%s) = {Status:%q Note:%q}, want error with timeout note", i, spec.id, got.Status, got.Note)
+		}
+	}
+}

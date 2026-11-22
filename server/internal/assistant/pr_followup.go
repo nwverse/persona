@@ -211,6 +211,7 @@ func (s *Service) notifyFollowup(ctx context.Context, sub repository.PRFollowup,
 	}
 	text := prompts.RenderPRFollowupNotice(prompts.PRFollowupNotice{
 		ID: sub.TodoID, Title: title, PRURL: sub.PRURL, Event: event, Realtime: realtime,
+		Language: answerLanguage(s.hello(ctx).Locale),
 	})
 	s.relayOrQueue(ctx, supervisor, relayMsg{
 		From: sub.TodoID, FromTitle: "任务「" + title + "」", Tool: prFollowupTool, Text: text, At: time.Now().UTC(), // i18n-ignore: queue label, as the task notices'

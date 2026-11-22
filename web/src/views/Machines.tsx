@@ -156,7 +156,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
         <IconButton icon="sidebar" label={t("machines.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
         <h1 className="text-[14px] font-semibold text-ink">{t("machines.title")}</h1>
         <div className="flex-1" />
-        {machines.length > 0 && <Segmented compact value={view} onChange={chooseView} label={t("machines.view_label")} options={[{ v: "cards", label: t("machines.view_cards") }, { v: "capabilities", label: t("machines.view_capabilities") }, { v: "procs", label: t("machines.view_procs") }, { v: "toolchain", label: t("machines.view_toolchain") }, { v: "services", label: t("machines.view_services") }, { v: "files", label: t("machines.view_files") }, { v: "network", label: t("machines-network.tab_label") }]} />}
+        {machines.length > 0 && <Segmented compact value={view} onChange={chooseView} label={t("machines.view_label")} options={[{ v: "cards", label: t("machines.view_cards") }, { v: "capabilities", label: t("machines.view_capabilities") }, { v: "procs", label: t("machines.view_procs") }, { v: "services", label: t("machines.view_services") }, { v: "files", label: t("machines.view_files") }, { v: "toolchain", label: t("machines.view_toolchain") }, { v: "network", label: t("machines-network.tab_label") }]} />}
         <span className="text-[11.5px] text-ink-3 max-sm:hidden">{t("machines.refresh_interval", { seconds: 10 })}</span>
         {machines.length > 0 && canAdd && add}
       </header>
@@ -404,7 +404,7 @@ function agentCounts(list: readonly Session[]): Map<string, readonly [number, nu
   return by;
 }
 
-type MachinesView = "cards" | "capabilities" | "procs" | "toolchain" | "services" | "files" | "network";
+type MachinesView = "cards" | "capabilities" | "procs" | "services" | "files" | "toolchain" | "network";
 const VIEW_KEY = "persona.machines.view";
 
 /** The launcher health records (GET /api/v1/launchers/health), kept current by the hub's `launcher_health` events and

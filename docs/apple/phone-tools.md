@@ -2,7 +2,7 @@
 
 `apple/Persona/PhoneTools/`: wraps iPhone capabilities as MCP tools so Claude on a computer can operate phone data. Toggles and authorization are under Settings › Connectors › This iPhone (called "Phone data" before 2026-11-01).
 
-Route: Claude calls a `phone_*` tool → `personad mcp` → node.sock → hub → an online device (iPhone, Android, or Mac, WebSocket `tool_call`) →
+Route: Claude calls a `phone_*` tool → `personad mcp` → node.sock → hub → an online device (iPhone, Android, or Mac, WebSocket `tool_call`; which one: "Which device takes a call" below) →
 the app queries/writes locally → `tool_result` returns along the same route.
 
 Device tool descriptions and schemas are registered by the app (iOS `apple/Persona/PhoneTools/`, Android `android/platform/phonetools/` (`PhoneToolCatalog.kt`)). The hub adds an optional `queue_if_offline` parameter to confirmed writes and supplies its own queue management tools from `server/internal/prompts/mcp/phone/` (`docs/assistant/prompts.md`, "MCP tools"). `personad mcp` adds `file` and `trim` to `phone_clipboard_set` (see "Copying a file to the clipboard").
@@ -10,6 +10,41 @@ A conversation lists its tools once (`personad mcp` says `listChanged: false`): 
 Descriptions and parameters for tools with the same name must match exactly on both platforms (the hub merges tools from all phones by name; `PhoneToolCatalogTest` compares against the catalog exported by iOS).
 
 Mail tools `mail_*` use the same `personad mcp`, but execute on the hub without going through the phone; see "Mail tools (mail_*)" below.
+
+## Which device takes a call
+
+Several of the owner's devices can offer phone tools at once: an iPhone and an iPad on one account, an Android phone.
+Each call goes to one of them (`callPhoneWithWait` in `server/internal/hub/hub.go`, `server/internal/hub/phone_primary.go`):
+
+- **Automatic** (the default, nothing chosen): among the connected devices that registered the tool, a real device
+  before a simulator, then the one that sent a message last. With none connected, the hub wakes the iOS device that
+  registered the tool most recently (silent push, at most one per device every 30 seconds) and waits up to 20 seconds
+  for a phone that offers it.
+- **A primary device** (#12019): the owner picks one in Settings › Devices on iPhone or iPad (`PUT /api/v1/phone/primary`,
+  `docs/protocol/protocol.md` "Authentication"). The hub keeps it in its own settings (`phone.primary`), one value for
+  every client. While the primary device offers the tool (connected: what its app offers now; away: its latest
+  registration):
+  1. connected, it takes the call, even when another device was active more recently;
+  2. not connected, the hub wakes it (iOS only; an Android phone is never woken) and waits up to 20 seconds for it
+     alone: another device connecting meanwhile does not end the wait;
+  3. still away, another connected device that offers the tool answers, in the automatic order. With none, the call
+     fails naming the primary device (`tools/phone_primary_offline.md`).
+
+  A primary device that cannot be reached (switched off, or Persona force-quit so the silent push never wakes it)
+  costs every call that wait before another device answers; choosing Automatic while it is away avoids it.
+
+  The clipboard tools (`phoneOnScreenTools`) are never woken for: a connected primary device takes them, otherwise
+  another connected device, otherwise the usual "open Persona" answer. Queued writes ("Offline write queue" below) wait
+  for the primary device: they are queued while it is away, even when another device is connected, and delivered to it
+  when it connects. When the primary device does not offer the tool (that data source is off there, or the tool is
+  another platform's, such as Android's `phone_notifications_list`), the call follows the automatic order.
+- **Saying which device answered**: whenever a primary device is chosen and another device answers, the result tells
+  the model so, with both devices' names (`tools/phone_stand_in.md`), so the assistant can tell the owner where an
+  answer came from, a location above all. A result that is one JSON object gets the note as its `device_note` field,
+  because the map and quick-result cards read that object from the result's text blocks joined into one; any other
+  result gets the note as a text block of its own.
+- Revoking the primary device's credential ends the choice: Settings › Devices shows Automatic again, and calls follow
+  the automatic order.
 
 ## Registration and toggles
 
@@ -203,6 +238,29 @@ Code: `CalendarTool`, `RemindersTool`, `ContactsTool` (changes), `MapsTool`, `Al
 Results are consistently pretty-printed JSON text (`ToolContent.text`), with all timestamps in ISO 8601 including the local time-zone offset; date fields use
 `yyyy-MM-dd`. `phone_photo_get` also includes a `ToolContent.image`.
 
+### Alarms and timers page
+
+AlarmKit alarms don't show in the Clock app, so before #12805 an alarm Persona set was visible nowhere until it rang. **Settings › This Device ›
+Alarms and Timers** (`AlarmsPage`, iOS 26+ like the tools; also in Settings search) lists every alarm and timer Persona set. It serves
+anyone who asked the assistant for one.
+
+- **Rows**: the name from `AlarmsTool.Labels` ("Alarm" / "Timer" without one), the time on the phone's clock or a timer's time left, how it
+  repeats (once, every day, weekdays, weekends, or the days) or a timer's length, and the state (scheduled, counting down, paused, ringing).
+  Timers come first, ringing ones on top. A timer's time left comes from the Live Activity AlarmKit runs for it
+  (`Activity<AlarmAttributes<PersonaAlarmData>>`): AlarmKit's `Alarm` has no fire date. Until the activity agrees with the alarm's state,
+  the row has no digits, and the feed reads it again for up to three seconds.
+- **Actions**: Delete on every row, after a confirmation (swipe or long press); Pause / Resume on a counting or paused timer. They call
+  the tools' own `AlarmsTool.cancel` / `pause(_:resume:)`, so a deleted alarm's label goes the same way as with `phone_alarm_cancel`. The
+  row changes at once, and AlarmKit's next list confirms it (`AlarmsPageModel.merge`).
+- **Live**: it follows `AlarmManager.shared.alarmUpdates` (`AlarmFeed`) only while the page is in front (`.tabActiveTask`). Leaving the page
+  or its tab, or the app going to the background, stops listening; coming back reads the list again.
+- **Permission**: opening the page never asks. Not asked yet: Allow Alarms asks. Refused: Open Settings. Same pattern as Settings ›
+  Meetings' calendar access.
+- **Data and tests**: AlarmKit is read into `AlarmEntry`, a plain value (`AlarmEntry(id:state:schedule:countdown:label:activity:)`), and the
+  page reaches AlarmKit only through `AlarmsPageModel.Deps`. `AlarmsPageTests` builds rows from AlarmKit's own types and drives the
+  model with a fake. `-openAlarms list|empty|denied|notAsked` (DEBUG) opens the page on made-up data for screenshots, so AlarmKit's
+  prompt never shows.
+
 ## Confirmation flow
 
 Writes (create / change / delete event, create / change / complete / delete reminder, write health data, create / change contact, alarms and timers,
@@ -237,15 +295,17 @@ Read tools, `phone_clipboard_set`, and `phone_notify` cannot be queued. A write 
 registration; the hub refuses tools that no registered phone offers.
 
 - **Default unchanged**: omitting the parameter, or setting it to false, uses the existing call and background wake path;
-  an unreachable phone still returns an error. With true and no connected device offering that tool, the hub saves the
-  request immediately and returns its queue record and opaque `id`. After admission, it also attempts a silent push
+  an unreachable phone still returns an error. With true and no connected device offering that tool (with a primary
+  device chosen that offers it: while that device is not connected), the hub saves the request immediately and
+  returns its queue record and opaque `id`. After admission, it also attempts a silent push
   in the background using the same device selection and 30-second throttle as ordinary calls. The caller waits for
   neither the push nor reconnection. Without push configuration this attempt does nothing; the entry waits for the
   app to connect. With a connected device, the call runs normally and waits for its result. An error after sending
   never turns into a new queue entry.
 - **Confirmation still required**: accepting a queue entry does not mean the write happened. When a phone registers
   the needed tool, one delivery loop sends queued entries in their original order among the currently available tools,
-  waiting for each result before sending the next. Every delivery uses the normal app confirmation flow and starts its
+  waiting for each result before sending the next; an entry for a tool the primary device offers goes only to that
+  device ("Which device takes a call"). Every delivery uses the normal app confirmation flow and starts its
   own `phoneConfirmWait` deadline (30 minutes). Registration does not wait for queue delivery, and a tool unavailable
   on every connected device stays queued.
 - **Deduplication before delivery**: a queued entry with the same tool and normalized JSON arguments returns the existing

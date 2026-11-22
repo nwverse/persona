@@ -86,18 +86,19 @@ var toolchainMacShims = map[string]bool{
 }
 
 type toolchainDeps struct {
-	goos         string
-	goarch       string
-	home         string
-	getenv       func(string) string
-	now          func() time.Time
-	stat         func(string) (os.FileInfo, error)
-	readDir      func(string) ([]os.DirEntry, error)
-	readFile     func(string) ([]byte, error)
-	evalSymlinks func(string) (string, error)
-	lookPathIn   func(name string, dirs []string) string
-	run          func(ctx context.Context, env []string, name string, args ...string) ([]byte, error)
-	dialUnix     func(ctx context.Context, sock string) error
+	goos           string
+	goarch         string
+	home           string
+	overallTimeout time.Duration
+	getenv         func(string) string
+	now            func() time.Time
+	stat           func(string) (os.FileInfo, error)
+	readDir        func(string) ([]os.DirEntry, error)
+	readFile       func(string) ([]byte, error)
+	evalSymlinks   func(string) (string, error)
+	lookPathIn     func(name string, dirs []string) string
+	run            func(ctx context.Context, env []string, name string, args ...string) ([]byte, error)
+	dialUnix       func(ctx context.Context, sock string) error
 }
 
 // toolchainState holds the node's on-demand toolchain cache and single-flight
@@ -111,8 +112,9 @@ type toolchainState struct {
 }
 
 type toolchainFlight struct {
-	done   chan struct{}
-	report proto.MachineToolchainReport
+	done     chan struct{}
+	report   proto.MachineToolchainReport
+	complete bool
 }
 
 func (n *Node) machineToolchain(ctx context.Context, params json.RawMessage) (any, error) {
@@ -123,7 +125,7 @@ func (n *Node) machineToolchain(ctx context.Context, params json.RawMessage) (an
 		}
 	}
 	deps := n.toolchainDeps()
-	return n.toolchain.get(ctx, deps, p.Refresh), nil
+	return n.toolchain.get(ctx, deps, p.Refresh)
 }
 
 func (n *Node) toolchainDeps() toolchainDeps {
@@ -187,49 +189,74 @@ func (n *Node) toolchainDeps() toolchainDeps {
 	}
 }
 
-func (s *toolchainState) get(ctx context.Context, deps toolchainDeps, refresh bool) proto.MachineToolchainReport {
-	s.mu.Lock()
-	now := deps.now()
-	if !refresh && s.cached != nil && now.Sub(s.cachedAt) < toolchainCacheTTL {
-		rep := cloneToolchainReport(*s.cached)
-		rep.Cached = true
+func (s *toolchainState) get(ctx context.Context, deps toolchainDeps, refresh bool) (proto.MachineToolchainReport, error) {
+	if !refresh {
+		s.mu.Lock()
+		now := deps.now()
+		if s.cached != nil && now.Sub(s.cachedAt) < toolchainCacheTTL {
+			rep := cloneToolchainReport(*s.cached)
+			rep.Cached = true
+			s.mu.Unlock()
+			return rep, nil
+		}
+		if s.inFlight != nil {
+			flight := s.inFlight
+			s.mu.Unlock()
+			select {
+			case <-flight.done:
+				rep := cloneToolchainReport(flight.report)
+				rep.Cached = flight.complete
+				return rep, nil
+			case <-ctx.Done():
+				return proto.MachineToolchainReport{}, ctx.Err()
+			}
+		}
+		flight := &toolchainFlight{done: make(chan struct{})}
+		s.inFlight = flight
 		s.mu.Unlock()
-		return rep
-	}
-	if !refresh && s.inFlight != nil {
-		flight := s.inFlight
-		s.mu.Unlock()
+
+		// Run the shared probe detached from the first caller's cancellation so
+		// one caller disconnecting cannot poison waiters or cache a partial result.
+		probeCtx := context.WithoutCancel(ctx)
+		go func() {
+			rep, complete := probeMachineToolchain(probeCtx, deps)
+			s.mu.Lock()
+			cachedCopy := cloneToolchainReport(rep)
+			if complete {
+				s.cached = &cachedCopy
+				s.cachedAt = deps.now()
+			}
+			flight.report = cachedCopy
+			flight.complete = complete
+			if s.inFlight == flight {
+				s.inFlight = nil
+			}
+			close(flight.done)
+			s.mu.Unlock()
+		}()
+
 		select {
 		case <-flight.done:
-			rep := cloneToolchainReport(flight.report)
-			rep.Cached = true
-			return rep
+			return cloneToolchainReport(flight.report), nil
 		case <-ctx.Done():
-			return probeMachineToolchain(ctx, deps)
+			return proto.MachineToolchainReport{}, ctx.Err()
 		}
 	}
-	flight := &toolchainFlight{done: make(chan struct{})}
-	if !refresh {
-		s.inFlight = flight
-	}
-	s.mu.Unlock()
 
-	rep := probeMachineToolchain(ctx, deps)
-
-	s.mu.Lock()
-	cachedCopy := cloneToolchainReport(rep)
-	s.cached = &cachedCopy
-	s.cachedAt = deps.now()
-	if s.inFlight == flight {
-		flight.report = cachedCopy
-		close(flight.done)
-		s.inFlight = nil
-	} else {
-		flight.report = cachedCopy
-		close(flight.done)
+	// Manual refresh runs on the caller's context and only replaces the cache if
+	// it completes without cancellation or overall timeout.
+	rep, complete := probeMachineToolchain(ctx, deps)
+	if ctx.Err() != nil {
+		return proto.MachineToolchainReport{}, ctx.Err()
 	}
-	s.mu.Unlock()
-	return rep
+	if complete {
+		s.mu.Lock()
+		cachedCopy := cloneToolchainReport(rep)
+		s.cached = &cachedCopy
+		s.cachedAt = deps.now()
+		s.mu.Unlock()
+	}
+	return rep, nil
 }
 
 func cloneToolchainReport(r proto.MachineToolchainReport) proto.MachineToolchainReport {
@@ -273,9 +300,13 @@ func cloneToolchainReport(r proto.MachineToolchainReport) proto.MachineToolchain
 	return out
 }
 
-func probeMachineToolchain(parent context.Context, deps toolchainDeps) proto.MachineToolchainReport {
+func probeMachineToolchain(parent context.Context, deps toolchainDeps) (proto.MachineToolchainReport, bool) {
 	started := deps.now()
-	ctx, cancel := context.WithTimeout(parent, toolchainOverallTimeout)
+	overall := deps.overallTimeout
+	if overall <= 0 {
+		overall = toolchainOverallTimeout
+	}
+	ctx, cancel := context.WithTimeout(parent, overall)
 	defer cancel()
 
 	searchDirs, versionManagers := buildToolchainSearchDirs(deps)
@@ -299,8 +330,28 @@ func probeMachineToolchain(parent context.Context, deps toolchainDeps) proto.Mac
 		return err == nil
 	})
 
+	// Pre-populate every slot with its ID, category, and timeout fallback so
+	// entries skipped when the overall context expires never appear as empty rows.
 	coreEntries := make([]proto.ToolchainEntry, len(coreToolchainSpecs))
+	for i, spec := range coreToolchainSpecs {
+		coreEntries[i] = proto.ToolchainEntry{
+			ID:       spec.id,
+			Category: spec.category,
+			Found:    false,
+			Status:   "error",
+			Note:     "probe timed out",
+		}
+	}
 	agentEntries := make([]proto.ToolchainEntry, len(agentToolchainSpecs))
+	for i, spec := range agentToolchainSpecs {
+		agentEntries[i] = proto.ToolchainEntry{
+			ID:       spec.id,
+			Category: spec.category,
+			Found:    false,
+			Status:   "error",
+			Note:     "probe timed out",
+		}
+	}
 
 	var (
 		dockerInfo *proto.ToolchainDockerInfo
@@ -320,6 +371,9 @@ func probeMachineToolchain(parent context.Context, deps toolchainDeps) proto.Mac
 				return
 			}
 			defer func() { <-limiter }()
+			if ctx.Err() != nil {
+				return
+			}
 			fn()
 		}()
 	}
@@ -358,19 +412,21 @@ func probeMachineToolchain(parent context.Context, deps toolchainDeps) proto.Mac
 	wg.Wait()
 
 	// Follow-up capability checks for gh and docker (bounded by remaining overall timeout).
-	var followWG sync.WaitGroup
-	followWG.Add(2)
-	go func() {
-		defer followWG.Done()
-		ghEntry := findEntryByID(coreEntries, "gh")
-		ghInfo = probeGitHubCLI(ctx, deps, probeEnv, ghPath, ghEntry)
-	}()
-	go func() {
-		defer followWG.Done()
-		dockerEntry := findEntryByID(coreEntries, "docker")
-		dockerInfo = probeDockerRuntime(ctx, deps, probeEnv, dockerPath, dockerEntry)
-	}()
-	followWG.Wait()
+	if ctx.Err() == nil {
+		var followWG sync.WaitGroup
+		followWG.Add(2)
+		go func() {
+			defer followWG.Done()
+			ghEntry := findEntryByID(coreEntries, "gh")
+			ghInfo = probeGitHubCLI(ctx, deps, probeEnv, ghPath, ghEntry)
+		}()
+		go func() {
+			defer followWG.Done()
+			dockerEntry := findEntryByID(coreEntries, "docker")
+			dockerInfo = probeDockerRuntime(ctx, deps, probeEnv, dockerPath, dockerEntry)
+		}()
+		followWG.Wait()
+	}
 
 	// Enrich gh and docker entries with capability flags and refined status.
 	for i := range coreEntries {
@@ -418,6 +474,7 @@ func probeMachineToolchain(parent context.Context, deps toolchainDeps) proto.Mac
 		dur = 0
 	}
 
+	complete := ctx.Err() == nil
 	return proto.MachineToolchainReport{
 		CollectedAt: deps.now().UTC(),
 		Cached:      false,
@@ -437,7 +494,7 @@ func probeMachineToolchain(parent context.Context, deps toolchainDeps) proto.Mac
 			HasCustomGoPath: customGoPath,
 			ProxyConfigured: proxyConfigured,
 		},
-	}
+	}, complete
 }
 
 func probeToolchainEntry(
@@ -448,6 +505,15 @@ func probeToolchainEntry(
 	spec toolchainSpec,
 	hasMacDevDir func() bool,
 ) proto.ToolchainEntry {
+	if ctx.Err() != nil {
+		return proto.ToolchainEntry{
+			ID:       spec.id,
+			Category: spec.category,
+			Found:    false,
+			Status:   "error",
+			Note:     "probe timed out",
+		}
+	}
 	entry := proto.ToolchainEntry{
 		ID:       spec.id,
 		Category: spec.category,

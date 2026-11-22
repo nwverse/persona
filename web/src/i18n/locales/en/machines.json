@@ -46,6 +46,7 @@
   "view_toolchain": "Toolchain",
   "view_services": "Services",
   "view_files": "Files",
+  "view_toolchain": "Toolchain",
   "battery": "Battery",
   "charging": "charging",
   "temperature": "Temp"
