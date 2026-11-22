@@ -65,6 +65,7 @@ describe("compactResendSupport", () => {
     expect(compactResendSupport(s, { assistant: true, hubSupportsAssistantCompact: true })).toEqual({ supported: true, mode: "assistant" });
     expect(compactResendSupport(s, { assistant: true, hubSupportsAssistantCompact: false })).toEqual({ supported: false, mode: null });
     expect(compactResendSupport(s, { assistant: true, hubSupportsAssistantCompact: true, blocked: true })).toEqual({ supported: false, mode: null });
+    expect(compactResendSupport(s, { assistant: true, hubSupportsAssistantCompact: true, offline: true })).toEqual({ supported: false, mode: null });
     expect(compactResendSupport(s, { assistant: true, hubSupportsAssistantCompact: true, routed: true })).toEqual({ supported: false, mode: null });
     expect(compactResendSupport(baseSession({ assistant: true, capabilities: { send: false } }), { assistant: true, hubSupportsAssistantCompact: true })).toEqual({ supported: false, mode: null });
   });
@@ -72,6 +73,7 @@ describe("compactResendSupport", () => {
   it("supports live terminal Claude Code sessions and withholds unsupported agent sessions", () => {
     expect(compactResendSupport(baseSession({ status: "idle" }), {})).toEqual({ supported: true, mode: "claude-terminal" });
     expect(compactResendSupport(baseSession({ status: "done", agent: "claude" }), {})).toEqual({ supported: true, mode: "claude-terminal" });
+    expect(compactResendSupport(baseSession({ status: "idle" }), { offline: true })).toEqual({ supported: false, mode: null });
     // Unsupported runtimes, agents, hosts, and states must not offer a broken action.
     expect(compactResendSupport(baseSession({ agent: "codex" }), {})).toEqual({ supported: false, mode: null });
     expect(compactResendSupport(baseSession({ agent: "agy" }), {})).toEqual({ supported: false, mode: null });

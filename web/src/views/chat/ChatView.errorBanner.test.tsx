@@ -18,7 +18,12 @@ vi.hoisted(() => {
 });
 
 const IDLE: Session = { machine_id: "hub", session_id: "c1", title: "Conversation", cwd: "/code", status: "idle" };
-const captured = vi.hoisted(() => ({ session: undefined as Session | undefined, features: [] as string[] }));
+const captured = vi.hoisted(() => ({
+  session: undefined as Session | undefined,
+  features: [] as string[],
+  assistantMain: undefined as string | undefined,
+  ownerOffline: undefined as string | undefined,
+}));
 
 vi.mock("./Composer", async (importOriginal) => ({
   ...await importOriginal<typeof import("./Composer")>(),
@@ -35,13 +40,25 @@ vi.mock("../../lib/store", async (importOriginal) => {
     useStore: <T,>(select: (s: ReturnType<typeof store.getState>) => T) => {
       const [, changed] = useReducer((n: number) => n + 1, 0);
       useEffect(() => store.subscribe(changed), []);
-      return select({ ...store.getState(), features: captured.features, sessions: { hub: captured.session ? [captured.session] : [] } });
+      const base = store.getState();
+      return select({
+        ...base,
+        features: captured.features,
+        assistant: captured.assistantMain ? { ...(base.assistant ?? { machine_id: "hub", conversations: [] }), main: captured.assistantMain } : base.assistant,
+        sessions: { hub: captured.session ? [captured.session] : [] },
+      });
     },
   };
 });
+const openPanelSpy = vi.hoisted(() => vi.fn());
 vi.mock("../../lib/panel", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../lib/panel")>(),
   usePanel: () => null,
+  openPanel: openPanelSpy,
+}));
+vi.mock("../ManagerParts", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../ManagerParts")>(),
+  useManagerOffline: () => captured.ownerOffline,
 }));
 vi.mock("../../lib/router", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../lib/router")>(),
@@ -83,6 +100,7 @@ const failedTurn = [msg("u1", 1, "user", "接着把命名改完"), msg("e1", 2, 
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } });
 let bodies: { client_msg_id: string; text: string; images?: { mime: string; data: string }[] }[];
 let compactCalls: string[];
+let clearCalls: string[];
 let reply: () => Response;
 let host: HTMLDivElement;
 let root: Root;
@@ -102,6 +120,9 @@ beforeEach(() => {
   resetRestoredForTests();
   resetOutboxClaimsForTests();
   captured.features = [];
+  captured.assistantMain = undefined;
+  captured.ownerOffline = undefined;
+  openPanelSpy.mockClear();
   for (const key of Object.keys(getState().outbox)) setOutbox(key, []);
   captured.session = IDLE;
   media.fine = false;
@@ -110,10 +131,15 @@ beforeEach(() => {
   transcript.items = failedTurn;
   bodies = [];
   compactCalls = [];
+  clearCalls = [];
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/compact") && init?.method === "POST") {
       compactCalls.push(url);
+      return Promise.resolve(json({ ok: true }));
+    }
+    if (url.endsWith("/assistant/main/clear") && init?.method === "POST") {
+      clearCalls.push(url);
       return Promise.resolve(json({ ok: true }));
     }
     if (!url.endsWith("/messages") || !init?.body) return Promise.resolve(json({}));
@@ -465,5 +491,54 @@ describe("image-limit Compact and send again (#13045)", () => {
     act(() => upsertSession(captured.session!));
     await draw(false);
     expect(bodies.map((b) => b.text)).toEqual(["/compact"]);
+  });
+
+  it("handles main-chat /clear locally via onSend command path instead of posting it to /messages", async () => {
+    captured.features = ["assistant_compact", "assistant_main_clear"];
+    captured.assistantMain = "c1";
+    captured.session = { ...IDLE, assistant: true, turn_error_code: "images_too_large" };
+    transcript.items = [msg("u1", 1, "user", "/clear"), msg("e1", 2, "assistant", TOO_LARGE)];
+    await draw(true);
+    act(() => banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]')!.click());
+    await flush();
+    expect(compactCalls).toHaveLength(1);
+
+    captured.session = { ...captured.session, compaction: { state: "done", started_at: "2026-11-22T12:00:00Z", finished_at: "2026-11-22T12:00:05Z" } };
+    act(() => upsertSession(captured.session!));
+    await flush();
+    expect(clearCalls).toHaveLength(1);
+    expect(bodies).toEqual([]);
+  });
+
+  it("handles agent /workflows locally via openBackgroundPanel instead of posting it to /messages", async () => {
+    captured.session = { ...IDLE, agent: "claude", turn_error_code: "images_too_large" };
+    transcript.items = [msg("u1", 1, "user", "/workflows"), msg("e1", 2, "assistant", TOO_LARGE)];
+    await draw(false);
+    act(() => banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]')!.click());
+    await flush();
+    expect(bodies.map((b) => b.text)).toEqual(["/compact"]);
+
+    captured.session = { ...captured.session, status: "working", state: "working" };
+    act(() => upsertSession(captured.session!));
+    await draw(false);
+    transcript.items = [
+      ...transcript.items,
+      { id: "c1", seq: 3, role: "assistant", kind: "notice", compact: { trigger: "manual" }, text: "上下文已压缩", ts: "2026-11-22T12:00:05Z" } as Item,
+    ];
+    captured.session = { ...captured.session, status: "idle", state: "idle", turn_error_code: undefined };
+    act(() => upsertSession(captured.session!));
+    await draw(false);
+    expect(openPanelSpy).toHaveBeenCalledTimes(1);
+    expect(bodies.map((b) => b.text)).toEqual(["/compact"]);
+  });
+
+  it("hides Compact and send again for assistant conversations when the owning manager is offline", async () => {
+    captured.features = ["assistant_compact"];
+    captured.ownerOffline = "Manager offline";
+    captured.session = { ...IDLE, assistant: true, manager: "m2", turn_error_code: "images_too_large" };
+    transcript.items = [msg("u1", 1, "user", "帮我看看这张图"), msg("e1", 2, "assistant", TOO_LARGE)];
+    await draw(true);
+    expect(banner()!.textContent).toContain("这个对话里的图片太多或太大，超出了模型限制。");
+    expect(banner()!.querySelector('[data-testid="compact-and-resend"]')).toBeNull();
   });
 });

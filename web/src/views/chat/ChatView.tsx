@@ -1351,8 +1351,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     internalCompactIds.current.clear();
   }, [mid, sid, cancelCompactResend]);
 
-  const onSend = async (out: Outgoing): Promise<boolean> => {
-    cancelCompactResend();
+  const sendMessage = async (out: Outgoing): Promise<boolean> => {
     // /clear in the main conversation clears its context in place, it is not words for Persona (#5095); an edit of the
     // last message stays an edit (its rewind already ran)
     if (clears && !out.edit && isClearCommand(out.text, out.images.length)) return clearMainContext(sid);
@@ -1381,6 +1380,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       }
     }
     return deliver(out, uuid(), out.edit?.clearDraft, 0, Boolean(out.edit));
+  };
+  const sendMessageNow = useRef(sendMessage);
+  sendMessageNow.current = sendMessage;
+
+  const onSend = async (out: Outgoing): Promise<boolean> => {
+    cancelCompactResend();
+    return sendMessage(out);
   };
   // the composer is memoized: one function, running the latest onSend
   const sendNow = useRef(onSend);
@@ -2220,6 +2226,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     assistant,
     hubSupportsAssistantCompact,
     blocked: Boolean(gate.blocked),
+    offline: Boolean(offlineLine),
     composerDisabled,
     routed: hasTaskRoute,
     working,
@@ -2296,7 +2303,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       }
       if (key) setErrorRetried(key);
       backToComposer();
-      const went = await deliver(resolved.payload, uuid());
+      const went = await sendMessageNow.current(resolved.payload);
       if (!went && key) setErrorRetried((k) => (k === key ? undefined : k));
     } finally {
       if (compactResendCtl.current === ctl) {
