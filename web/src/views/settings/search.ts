@@ -82,7 +82,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
     ),
     anchor: "agents",
   },
-  { tab: "persona", group: t("settings-assistantsettings.default_permissions"), anchor: "default-permissions" },
+  { tab: "persona", group: t("settings-assistantsettings.default_permissions"), hint: words(t("settings-directionnotes.title"), t("settings-directionnotes.permissions")), anchor: "default-permissions" },
   { tab: "persona", group: t("settings-assistantsettings.readonly_mode"), anchor: "readonly-mode" },
   {
     tab: "persona",

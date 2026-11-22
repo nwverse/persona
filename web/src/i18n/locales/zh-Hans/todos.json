@@ -155,6 +155,7 @@
   "unblock_user": "要你点头",
   "unblock_agent": "Agent 能接着做",
   "unblock_other": "等别人 / CI / 环境",
+  "unblock_supervisor": "督办先看",
   "thread_section": "话题",
   "thread_unbind": "解绑",
   "thread_unbind_label": "解绑话题「{name}」",

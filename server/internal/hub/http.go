@@ -774,7 +774,7 @@ func (h *Hub) listSessions(w http.ResponseWriter, r *http.Request) {
 		if mid != "" && m.cfg.ID != mid || em != "" && owner != em || named != "" && owner != named {
 			continue
 		}
-		lists = append(lists, stampedList{withoutHealthSessions(r, h.shown(m.cfg.ID, m.keptSessions())), owner})
+		lists = append(lists, stampedList{withoutSpaceSessions(r, h.shown(m.cfg.ID, m.keptSessions())), owner})
 	}
 	writeSessionLists(w, lists)
 }
@@ -924,13 +924,13 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 		}
 	}
 	if restrictedAgentData(r) {
-		// A scoped token resumes only a chat its computer lists, shown and outside the health space. An extension's
+		// A scoped token resumes only a chat its computer lists, shown and outside any space. An extension's
 		// resume is decided last (extensionResume): one its computer no longer lists goes to the computer's check (#10941).
 		if pr.Role == roleScoped && p.ResumeSessionID != "" && !h.publicSessionForControl(m, p.ResumeSessionID) {
 			writeErr(w, http.StatusNotFound, errDeleteUnknown)
 			return
 		}
-		if identity.InHealthSpace(startCwd(m, p.Cwd)) {
+		if identity.InSpace(startCwd(m, p.Cwd)) {
 			writeErrCode(w, http.StatusForbidden, "permission_denied", i18n.Err("apierr-apierr.health_start_forbidden"))
 			return
 		}

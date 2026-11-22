@@ -1,5 +1,9 @@
 # Lessons: testing and validation
 
+- A manager route's response contract is also asserted by hub relay tests (#13234). When making a closed plan's
+  dismiss response idempotent, update both the manager's route test and the hub's end-to-end plan lifecycle test;
+  verify the returned state and persisted state, rather than only replacing the expected HTTP status.
+
 - Execute release collection steps against the actual build-directory layout (#11684). The installer is rendered at
   `build-publish/install.sh`, while archives and indexes live in `build-publish/bin/`. A receipt that only hashes files
   that happened to be copied cannot detect an omitted installer. Stop on failed copies, require bootstrap files before
@@ -520,6 +524,11 @@ The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer m
 
 - A test that needs Postgres skips without `PERSONA_TEST_DATABASE_URL`, and a plain `go test` prints `ok` for its package. #5031 changed what `task_plan` answers and checked `internal/hub` without a database, so `TestSupervisedTaskOverTheBus`, which drives that answer end to end, never ran and went red on `main` (#5182). Before a change that touches what a database test covers, run its package with `scripts/test/test-server.sh <package>`, or `go test -v` and check for `SKIP` lines.
 - Allocation budgets are set from numbers measured on the hub machine (linux/amd64). The same tests read about 2 KB lower on an arm64 Mac, so #5150 passed `TestReindexOneRevAllocation` and `TestIndexWholeListAllocation` there and failed them on the hub (#5188). Judge a budget only from a `test-server.sh` run. To find where a regression comes from, compare `allocated(...)` in a probe at both commits; the Mac shows the same difference, so a `pprof -sample_index=alloc_space` profile of the measured call can be taken there.
+
+## Settle task outcomes and query review history by ref in Postgres tests (#13231)
+
+- Accepting a task review starts `goRecordTaskOutcome`, which asynchronously writes a `DecisionOutcome` receipt. Call `s.tasks.outcomeRuns.Wait()` before inspecting the task's decisions, then keep rejecting every non-outcome row; neither deleting the assertion nor treating that receipt as an owner click tests supersession. Cancelling a review does not start this writer.
+- `DB.Feed` returns a bounded, oldest-first conversation page. In a shared Postgres shard, older rows can fill all 500 entries and push the review written by the current test out of that page. For a to-do's review audit, query `FeedByRef` with `feedReview` and retain the conversation and `superseded_reason` assertions; increasing the page size only moves the intermittent failure.
 
 ## "Not listed" holds for a transcript the list never shows (2026-11-12, #5054)
 

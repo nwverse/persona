@@ -492,12 +492,9 @@ func (s *Service) admitTaskWorkspace(ctx context.Context, t *PlanTask) error {
 	return nil
 }
 
-// newTaskWorktree makes the task's new checkout, or reuses the checkout of its branch the node finds clean and idle:
-// an explicit {new: {branch}}'s (#8357), and this to-do's own task/<todo id>, which a failed start or an earlier Agent
-// of the same to-do left in the checkouts folder (#10365). The own branch reuses only a checkout in that folder (never
-// the main checkout or a folder of the user's own); a leftover it cannot reuse is refused with its path and the
-// workspace {existing} that continues there, and any other failure to look falls back to making the checkout, as an
-// older node that does not look gets.
+// newTaskWorktree makes a checkout or reuses the idle checkout of its branch. Explicit branches must be clean
+// (#8357). The to-do's generated branch can retain untracked files in the checkouts folder. A node that cannot
+// look up the branch still falls back to normal creation.
 func (s *Service) newTaskWorktree(ctx context.Context, t *PlanTask) (proto.WorktreeCreateResult, bool, error) {
 	branch, own := t.Workspace.Branch, false
 	if branch == "" {
@@ -505,7 +502,7 @@ func (s *Service) newTaskWorktree(ctx context.Context, t *PlanTask) (proto.Workt
 	}
 	if branch != "" {
 		var prep proto.WorktreePrepare
-		err := s.call(ctx, t.Machine, DeviceWorktreePrepare, map[string]any{"cwd": t.Cwd, "branch": branch}, &prep)
+		err := s.call(ctx, t.Machine, DeviceWorktreePrepare, map[string]any{"cwd": t.Cwd, "branch": branch, "allow_untracked": own}, &prep)
 		switch at := prep.Existing; {
 		case err != nil && !own:
 			return proto.WorktreeCreateResult{}, false, err
@@ -546,13 +543,19 @@ func ownCheckoutRefusal(err error) error {
 	if !errors.As(err, &re) {
 		return nil
 	}
-	var data struct{ Branch, Path, Owner string }
+	var data struct{ Branch, Path, Owner, Files string }
 	_ = json.Unmarshal(re.Data, &data)
 	args := i18n.Args{"branch": data.Branch, "path": data.Path, "owner": data.Owner}
 	var key string
 	switch re.Code {
 	case proto.CodeCheckoutDirty:
 		key = "own_checkout_dirty"
+		if data.Files != "" {
+			key = "own_checkout_dirty_files"
+			args["files"] = data.Files
+		}
+		message := i18n.ErrEnglish("assistant-tasks_workspace."+key, args).(*i18n.Message)
+		return fmt.Errorf("%w (%s)", taskCheckoutRefusal{message, err}, data.Path)
 	case proto.CodeCheckoutInUse:
 		key = "own_checkout_in_use"
 	case proto.CodeCheckoutChanged, proto.CodeCheckoutUnverified:

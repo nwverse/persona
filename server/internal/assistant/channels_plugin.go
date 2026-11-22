@@ -571,8 +571,8 @@ func (s *Service) channelInteraction(ix proto.Interaction) {
 		if ix.Private {
 			continue // a Just me turn's card: never in a channel (meeting_justme.go)
 		}
-		// "All questions" does not take a health conversation's: only one the channel drives itself (health.go).
-		if !s.channelDrives(ctx, v.ID, ix.MachineID, ix.SessionID) && (!featureOn(v, channel.FeatureAllAsks) || s.ixInHealth(ctx, ix)) {
+		// "All questions" does not take the cards of a space that redacts: only one the channel drives itself (health.go).
+		if !s.channelDrives(ctx, v.ID, ix.MachineID, ix.SessionID) && (!featureOn(v, channel.FeatureAllAsks) || s.ixPolicy(ctx, ix).Redact) {
 			continue
 		}
 		to = append(to, v.ID)
@@ -908,8 +908,8 @@ func (s *Service) extensionMirror(ctx context.Context, machine, session string) 
 		return
 	}
 	sess, ok := s.session(ctx, machine, session)
-	if !ok || sess.WokeByTask && !main || spaceOf(sess) == SpaceHealth {
-		return // a health task's runs stay off the channels (health.go)
+	if !ok || sess.WokeByTask && !main || s.trackPolicy(ctx, spaceOf(sess)).Redact {
+		return // the runs of a space that redacts stay off the channels (health.go)
 	}
 	if s.transientRetryTurn(ctx, sess) {
 		return
