@@ -91,9 +91,9 @@ export function UsagePopover({
         {groupByProvider(accounts).map((g) => (
           <section key={g.provider} data-usage-provider={g.provider} aria-label={providerTitle(g.provider)} className="flex flex-col gap-3 rounded-control border border-line p-2.5">
             <header className="flex items-baseline gap-2">
-              <h3 className="min-w-0 flex-1 truncate text-[13px] font-semibold text-ink">{providerTitle(g.provider)}</h3>
-              <span className="shrink-0 whitespace-nowrap text-[11px] text-ink-3">{tr("usage.provider_accounts", { count: g.accounts.length })}</span>
-              {g.sampledAt && <span className="shrink-0 whitespace-nowrap text-[11px] text-ink-3">{sampleAge(g.sampledAt, now)}</span>}
+              <h3 className="min-w-0 flex-1 truncate text-meta font-semibold text-ink">{providerTitle(g.provider)}</h3>
+              <span className="shrink-0 whitespace-nowrap text-submeta text-ink-3">{tr("usage.provider_accounts", { count: g.accounts.length })}</span>
+              {g.sampledAt && <span className="shrink-0 whitespace-nowrap text-submeta text-ink-3">{sampleAge(g.sampledAt, now)}</span>}
             </header>
             {g.accounts.map((a, i) => (
               <div key={a.id} className={cx("flex flex-col", i > 0 && "border-t border-line pt-2.5")}>
@@ -133,17 +133,17 @@ function AccountSection({ a, now }: { a: UsageAccount; now: number }) {
     <section aria-label={a.name} className={cx("flex flex-col gap-2", a.stale && "opacity-70")}>
       <header className="flex flex-col gap-0.5">
         <div className="flex items-baseline gap-2">
-          <h3 className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-ink">{a.name}</h3>
-          <span className="shrink-0 whitespace-nowrap text-[11px] text-ink-3">{a.stale ? tr("usage.stale_age", { age: sampleAge(a.sampled_at, now) }) : sampleAge(a.sampled_at, now)}</span>
+          <h3 className="min-w-0 flex-1 truncate text-label font-medium text-ink">{a.name}</h3>
+          <span className="shrink-0 whitespace-nowrap text-submeta text-ink-3">{a.stale ? tr("usage.stale_age", { age: sampleAge(a.sampled_at, now) }) : sampleAge(a.sampled_at, now)}</span>
         </div>
         {(from.length > 0 || plan) && (
-          <div data-usage-source className="flex min-w-0 items-baseline gap-1.5 text-[11px] text-ink-3">
+          <div data-usage-source className="flex min-w-0 items-baseline gap-1.5 text-submeta text-ink-3">
             {plan && <span className="shrink-0 whitespace-nowrap">{plan}</span>}
             {plan && from.length > 0 && <span aria-hidden>·</span>}
             <span className="min-w-0 truncate" title={tr("usage.sources_title", { sources: from.join(" · ") })}>{from.join(" · ")}</span>
           </div>
         )}
-        {problem && <div className="text-[11px] leading-snug text-orange">{problem}</div>}
+        {problem && <div className="text-submeta leading-snug text-orange">{problem}</div>}
       </header>
       {a.balance && (
         <div data-usage-balance className="flex items-baseline justify-between gap-2 rounded-control bg-inset px-2.5 py-2">
@@ -172,9 +172,9 @@ export function ProviderTimeline({ accounts, now }: { accounts: UsageAccount[]; 
   return (
     <div data-usage-timeline className="border-t border-line pt-2" role="group" aria-label={tr("usage.timeline_title")}>
       <div className="relative h-4" style={{ marginLeft: TIMELINE_NAME_W }} aria-hidden>
-        <span className="absolute left-0 top-0 text-[10px] font-semibold text-ink">{tr("usage.timeline_now")}</span>
+        <span className="absolute left-0 top-0 text-submeta font-semibold leading-none text-ink">{tr("usage.timeline_now")}</span>
         {TIMELINE_TICKS_HOURS.map((h, i) => (
-          <span key={h} className={cx("absolute top-0 text-[10px] text-ink-3", i === TIMELINE_TICKS_HOURS.length - 1 ? "-translate-x-full" : "-translate-x-1/2")} style={{ left: `${timelinePosition(h * 3600_000) * 100}%` }}>
+          <span key={h} className={cx("absolute top-0 text-submeta leading-none text-ink-3", i === TIMELINE_TICKS_HOURS.length - 1 ? "-translate-x-full" : "-translate-x-1/2")} style={{ left: `${timelinePosition(h * 3600_000) * 100}%` }}>
             {tickLabel(h)}
           </span>
         ))}
@@ -189,9 +189,9 @@ export function ProviderTimeline({ accounts, now }: { accounts: UsageAccount[]; 
           return (
             <div key={r.account.id} data-timeline-row={r.account.id} role="img" aria-label={`${r.account.name}: ${parts.join("; ")}`} title={parts.join("\n")} className={cx("relative h-[30px]", r.account.stale && "opacity-60")}>
               {i % 2 === 0 && <span aria-hidden className="absolute inset-y-0 right-0 rounded-md bg-inset" style={{ left: `-${TIMELINE_NAME_W}` }} />}
-              <span className="absolute top-0 z-[1] flex h-[30px] flex-col justify-center truncate pl-1 text-[10.5px] leading-tight text-ink-2" style={{ left: `-${TIMELINE_NAME_W}`, width: "3.4rem" }}>
+              <span className="absolute top-0 z-[1] flex h-[30px] flex-col justify-center truncate pl-1 text-submeta leading-tight text-ink-2" style={{ left: `-${TIMELINE_NAME_W}`, width: "3.4rem" }}>
                 {r.account.name}
-                {planNote(r.account) && <small className="truncate text-[9px] text-ink-3">{planNote(r.account).split(" ")[0]}</small>}
+                {planNote(r.account) && <small className="truncate text-ink-3">{planNote(r.account).split(" ")[0]}</small>}
               </span>
               {r.lanes.map((l) => {
                 const color = l.long ? LANE_COLOR.long : LANE_COLOR.short;
@@ -202,7 +202,7 @@ export function ProviderTimeline({ accounts, now }: { accounts: UsageAccount[]; 
                   <span key={l.key} data-timeline-lane={l.label}>
                     <span aria-hidden className="absolute left-0 z-[1] rounded" style={{ top, height: l.long ? 9 : 6, width: `${l.end * 100}%`, backgroundImage: `linear-gradient(90deg, transparent, ${color})` }} />
                     <span aria-hidden className="absolute z-[2] size-[11px] -translate-x-1/2 rounded-full border-2 bg-surface" style={{ left: `${l.end * 100}%`, top: dotTop, borderColor: color }} />
-                    <span aria-hidden className={cx("absolute z-[2] whitespace-nowrap text-[9.5px] font-semibold", flip && "text-white")} style={{ top: dotTop - 1, ...(flip ? { right: `calc(${100 - l.end * 100}% + 9px)` } : { left: `calc(${l.end * 100}% + 9px)`, color }) }}>
+                    <span aria-hidden className={cx("absolute z-[2] whitespace-nowrap text-submeta font-semibold leading-none", flip && "text-white")} style={{ top: dotTop - 1, ...(flip ? { right: `calc(${100 - l.end * 100}% + 9px)` } : { left: `calc(${l.end * 100}% + 9px)`, color }) }}>
                       {remainingText(l.remainingMs)}
                     </span>
                   </span>
@@ -221,11 +221,11 @@ function WindowRow({ name, w, stale, now }: { name: string; w: UsageWindow; stal
   return (
     <div className="flex flex-col gap-1">
       {w.model && (
-        <span data-usage-model className="truncate text-[11px] text-ink-3" title={w.model}>
+        <span data-usage-model className="truncate text-submeta text-ink-3" title={w.model}>
           {w.model}
         </span>
       )}
-      <div className="flex items-baseline gap-2 text-[11.5px]">
+      <div className="flex items-baseline gap-2 text-submeta">
         <span className="w-7 shrink-0 text-ink-2">{w.label}</span>
         <span className={cx("shrink-0 tabular-nums", isWarn(w.used_percent) ? "text-orange" : "text-ink")}>{shown(w.used_percent)}</span>
         {p && p.state !== "on" && <span className={cx("shrink-0 whitespace-nowrap", PACE_TEXT[p.state])}>{paceLabel(p.state)}</span>}
