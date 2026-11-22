@@ -80,7 +80,11 @@ func (n *Node) inputCacheWarm(id string) {
 }
 
 func (n *Node) startCacheWarm(id, launcher string, c assistantCompaction, e modelExecution, excluded bool) *cachewarm.Proxy {
-	if excluded || e.Strict || e.CacheKeepalive == nil || !e.CacheKeepalive.Enabled || !e.CacheKeepalive.Valid() || proto.IsExternalLauncher(launcher) || n.agentOf(launcher) != "claude" || !c.endpointKnown {
+	if excluded || e.Strict || e.CacheKeepalive == nil || !e.CacheKeepalive.Enabled || !e.CacheKeepalive.Valid() || proto.IsExternalLauncher(launcher) || !c.endpointKnown {
+		return nil
+	}
+	agent, err := n.assistantAgent(context.Background(), launcher)
+	if err != nil || agent != "claude" {
 		return nil
 	}
 	upstream := c.endpoint

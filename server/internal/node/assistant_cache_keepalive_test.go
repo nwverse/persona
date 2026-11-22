@@ -2,7 +2,6 @@ package node
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -181,7 +180,7 @@ func TestAssistantCacheProxyExcludesUnsupportedAndSpare(t *testing.T) {
 		p.Close()
 		t.Fatal("spare/guest mounted proxy")
 	}
-	if p := f.n.startCacheWarm("example", "external:example", c, modelExecution{CacheKeepalive: on}, false); p != nil {
+	if p := f.n.startCacheWarm("example", proto.ExternalLauncherPrefix+strings.Repeat("a", 32), c, modelExecution{CacheKeepalive: on}, false); p != nil {
 		p.Close()
 		t.Fatal("external runtime mounted proxy")
 	}
