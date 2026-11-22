@@ -84,7 +84,8 @@ class FormatTests(unittest.TestCase):
 
     def test_the_committed_lists_read_cleanly(self):
         paths = sorted(LISTS.glob("*.txt"))
-        self.assertEqual([p.name for p in paths], ["assistantwire_routes.txt", "prompts_assistant.txt"])
+        self.assertEqual([p.name for p in paths], ["assistantwire_routes.txt", "node_handle_method.txt",
+                                                   "prompts_assistant.txt"])
         for path in paths:
             with self.subTest(path=path.name):
                 text = path.read_text()
@@ -188,15 +189,25 @@ class GoNamesTests(unittest.TestCase):
     def test_the_freeze_reads_the_names_of_the_given_files(self):
         bus = (ROOT / "server/internal/assistantwire/bus.go").read_text()
         planted = bus.replace("var Routes = []string{\n", 'var Routes = []string{\n\t"DELETE /api/v1/planted",\n', 1)
+        node = (ROOT / "server/internal/node/node.go").read_text()
+        dispatch = "\tswitch method {\n"
+        self.assertIn(dispatch, node)
+        planted_node = node.replace(dispatch, dispatch + '\tcase "machine.planted", "session.planted":\n\t\treturn nil, nil\n', 1)
         with tempfile.TemporaryDirectory() as work:
             lists, names = name_freezes.central_names(work, {
                 ("assistantwire_routes", "now"): bus, ("assistantwire_routes", "planted"): planted,
-                ("assistantwire_routes", "broken"): "package x\nvar Routes = []string{\n"})
+                ("assistantwire_routes", "broken"): "package x\nvar Routes = []string{\n",
+                ("node_handle_method", "now"): node, ("node_handle_method", "planted"): planted_node})
         self.assertEqual([(l.id, l.source, l.file) for l in lists], [
             ("assistantwire_routes", "server/internal/assistantwire/bus.go",
              "server/internal/archguard/testdata/central_lists/assistantwire_routes.txt"),
             ("prompts_assistant", "server/internal/prompts/assistant.go",
-             "server/internal/archguard/testdata/central_lists/prompts_assistant.txt")])
+             "server/internal/archguard/testdata/central_lists/prompts_assistant.txt"),
+            ("node_handle_method", "server/internal/node/node.go",
+             "server/internal/archguard/testdata/central_lists/node_handle_method.txt")])
+        # A session-bound label stays in the switch, so only the other one is a name.
+        self.assertEqual(names[("node_handle_method", "planted")] - names[("node_handle_method", "now")],
+                         {'"machine.planted"'})
         listed = {e.name for e in name_freezes.CENTRAL.read((ROOT / lists[0].file).read_text())[0]}
         now = names[("assistantwire_routes", "now")]
         self.assertGreater(len(now), 100)

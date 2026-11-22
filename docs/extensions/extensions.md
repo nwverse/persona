@@ -3107,8 +3107,10 @@ its state, and a light in the model for each lamp that is on. The app sends `11`
 `hub.extension_points.ui` is `11`; there is no new `features` entry (an older hub holds the app's version to its own, and the
 extension sees that). One new component, `scene`, authoritative in `schema/extension/view.schema.json` (`SceneComponent` and
 its `Scene*` definitions, `x-since: 11`); the example is `schema/extension/examples/View.v11-scene-flat.json`. **An app sends
-11 only when it draws all of the below** (and all of 10). No app sends 11 yet: the iPhone and iPad are first
-(nwverse/persona#12544); until then every app gets the downgrade below.
+11 only when it draws all of the below** (and all of 10). **iOS** (#12544) draws `scene` in
+`apple/Persona/Views/Settings/ExtensionScene.swift` (`ExtensionSceneGeometry.swift`, `ExtensionSceneModel.swift`) and sends `11`
+for pages and cards (`pageVersion` and `cardVersion`, including Share as Image's direct still snapshot); **web** (#12641) and
+**Android** (#12642) stay on `10` and get the downgrade below until their renderers land.
 
 Extensions still run no code in the app and send no model file: they say what the shapes are, and each app builds them with
 its own engine. A list of simple shapes is the contract because no 3D file format is drawn by every client (SceneKit reads
@@ -3126,7 +3128,7 @@ angles in degrees, counter-clockwise from +x seen from above. A box at `yaw` 0 h
 | `labels` (0–32) | `{text, at, height?}`: quiet names on the floor, a room's. Not tappable, not components of the page; read out after `alt` |
 | `pins` (0–100) | `{id, at, height?, label, state?, icon?, tone? \| color?, light?, action?}`: a device in the model. Each pin counts as one of the page's 300 components. `tone` or a named `color`, never both, colors the pin's dot; `state` is plain words (On, Off, 26 °C) and is **required** whenever the tone is not neutral, a color is set or the light is on, so a state never rides on color or light alone. `light` (`{on?, warmth?: warm \| cool}`, off and warm when left out) lights the model around the pin when on; at most 16 pins of a scene have their light on (a phone lights so many at once). Tapping a pin does its `action`, as a tile's |
 | `camera` | Where the model is first seen from, orthographic, around the centre of the shapes' bounding box (pins and labels left out): `yaw`, the camera's direction from the centre (225, the default, stands south-west looking north-east), `pitch` above the floor plane (10–90, 35 by default, 90 straight down), `zoom` (0.5–4; 1, the default, fits the bounding box) |
-| `poster` | An `ImageSource` (version 6's rules: `ref` only from an extension, never in an assistant card): a picture of the model for an older app and for share as image |
+| `poster` | An `ImageSource` (version 6's rules: `ref` only from an extension, never in an assistant card): a picture of the model for an older app and for surfaces that export a downgraded card as an image (iOS renders the scene snapshot directly) |
 | `key` | As every component's: keeps the person's camera across redraws |
 
 **Colors.** A scene's shapes are content, like the pixels of an `image`, so their colors are the extension's own: walls, floors
