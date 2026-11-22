@@ -101,7 +101,7 @@ func (s *Service) toolSecretStore(ctx context.Context, machine, session string, 
 		if err != nil {
 			return bad("secret storage approval interrupted; nothing was written")
 		}
-		if !vouched || !proto.SecretHandoffApproves(r) || claim.r.Always || time.Now().After(ix.ExpiresAt) {
+		if !vouched || !proto.SecretHandoffApproves(r) || time.Now().After(ix.ExpiresAt) {
 			return bad("secret storage was not explicitly approved on its card; nothing was written")
 		}
 		by = "device:" + claim.approver.DeviceID

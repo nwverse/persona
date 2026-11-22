@@ -35,7 +35,7 @@ func (f *storeFake) StoreSecret(_ context.Context, _ extension.SecretProvider, i
 	return out, nil
 }
 func TestSecretStorageRequiresExplicitVouchedCardAndConsumesApproval(t *testing.T) {
-	for _, answer := range []string{`{"allow":false}`, `{"allow":true,"always":true}`, `{"allow":true}`} {
+	for _, answer := range []string{`{"allow":false}`, `{"allow":false,"always":true}`, `{"allow":true,"always":true}`, `{"allow":true}`} {
 		t.Run(answer, func(t *testing.T) {
 			r := newHandoffRig(t)
 			r.devs.setSessions("box", []proto.Session{{MachineID: "box", SessionID: "writer", Title: "Write test"}})
@@ -59,7 +59,7 @@ func TestSecretStorageRequiresExplicitVouchedCardAndConsumesApproval(t *testing.
 			case <-time.After(5 * time.Second):
 				t.Fatal("card did not finish")
 			}
-			approved := answer == `{"allow":true}`
+			approved := strings.HasPrefix(answer, `{"allow":true`)
 			if got.IsError == approved {
 				t.Fatalf("approval outcome %+v", got)
 			}
