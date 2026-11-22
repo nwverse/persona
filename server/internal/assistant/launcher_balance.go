@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -152,8 +153,14 @@ func (s *Service) LauncherBalances(ctx context.Context) (accounts []proto.UsageA
 		}
 		seen[digest] = true
 		sample.BalanceCredential = hex.EncodeToString(digest[:])
+		client, err := s.balanceClient(l)
+		if err != nil {
+			sample.Problem = "failed"
+			accounts = append(accounts, sample)
+			continue
+		}
 		accounts = append(accounts, sample)
-		jobs = append(jobs, balanceReadJob{index: len(accounts) - 1, base: base, key: key, client: s.balanceClient(l)})
+		jobs = append(jobs, balanceReadJob{index: len(accounts) - 1, base: base, key: key, client: client})
 	}
 	if len(jobs) > 0 {
 		workers := min(max(balanceReadWorkers, 1), len(jobs))
@@ -285,29 +292,44 @@ func (s *Service) launcherMachineKeys(ctx context.Context) (map[string][]machine
 
 // balanceClient is the client for one launcher's balance read. It goes where the launcher's own calls go: through the
 // computer it names, through its proxy (honoring no_proxy), or directly, as probeTarget.do sends a probe. A redirect
-// is never followed, so the key stays with the address asked, and one read is bounded like a probe.
-func (s *Service) balanceClient(l storedLauncher) *http.Client {
+// is never followed, so the key stays with the address asked, and one read is bounded like a probe. An invalid or
+// hostless configured proxy returns an error instead of falling back to a direct client, so a required proxy is never
+// silently bypassed.
+func (s *Service) balanceClient(l storedLauncher) (*http.Client, error) {
 	client := &http.Client{Timeout: balanceTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}
-	if l.ViaMachine != "" {
-		client.Transport = viaNode{s: s, machine: l.ViaMachine}
-		return client
+	if via := strings.TrimSpace(l.ViaMachine); via != "" {
+		client.Transport = viaNode{s: s, machine: via}
+		return client, nil
 	}
-	if strings.TrimSpace(l.Proxy) == "" && strings.TrimSpace(l.NoProxy) == "" {
-		return client
+	proxy := strings.TrimSpace(l.Proxy)
+	noProxy := strings.TrimSpace(l.NoProxy)
+	if proxy == "" && noProxy == "" {
+		return client, nil
+	}
+	var proxyURL *url.URL
+	if proxy != "" {
+		u, err := url.Parse(proxy)
+		if err != nil || u.Host == "" || !slices.Contains([]string{"http", "https", "socks5", "socks5h"}, u.Scheme) {
+			return nil, errors.New("invalid launcher proxy")
+		}
+		proxyURL = u
 	}
 	transport, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
-		return client
+		if proxyURL != nil {
+			return nil, errors.New("cannot configure launcher proxy on non-default transport")
+		}
+		return client, nil
 	}
 	t := transport.Clone()
 	t.DisableKeepAlives = true
-	if u, err := url.Parse(strings.TrimSpace(l.Proxy)); err == nil && u.Host != "" {
-		t.Proxy = balanceProxy(u, l.NoProxy)
+	if proxyURL != nil {
+		t.Proxy = balanceProxy(proxyURL, l.NoProxy)
 	}
 	client.Transport = t
-	return client
+	return client, nil
 }
 
 // balanceProxy is the launcher's proxy for a request, except for an address its bypass list (no_proxy) exempts.

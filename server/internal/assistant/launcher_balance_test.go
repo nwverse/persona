@@ -290,12 +290,15 @@ func TestLauncherBalancesKeepsSamplesWhenTheMachineKeyStoreCannotBeRead(t *testi
 // computer it names, with the same no-redirect policy as a probe (#11825).
 func TestBalanceClientFollowsTheLaunchersRoute(t *testing.T) {
 	s, _ := launcherTestService(t)
-	direct := s.balanceClient(storedLauncher{})
-	if direct.Timeout != balanceTimeout || direct.CheckRedirect == nil || direct.Transport != nil {
-		t.Fatalf("direct: %+v", direct)
+	direct, err := s.balanceClient(storedLauncher{})
+	if err != nil || direct.Timeout != balanceTimeout || direct.CheckRedirect == nil || direct.Transport != nil {
+		t.Fatalf("direct: err=%v client=%+v", err, direct)
 	}
-	proxied := s.balanceClient(storedLauncher{ManagedLauncher: proto.ManagedLauncher{
+	proxied, err := s.balanceClient(storedLauncher{ManagedLauncher: proto.ManagedLauncher{
 		Proxy: "http://proxy.example.com:8080", NoProxy: "localhost"}})
+	if err != nil {
+		t.Fatalf("proxied err: %v", err)
+	}
 	tr, ok := proxied.Transport.(*http.Transport)
 	if !ok {
 		t.Fatalf("proxied transport: %T", proxied.Transport)
@@ -314,9 +317,56 @@ func TestBalanceClientFollowsTheLaunchersRoute(t *testing.T) {
 	if u, err := tr.Proxy(bypassed); err != nil || u != nil {
 		t.Fatalf("no_proxy must exempt its addresses: %v %v", u, err)
 	}
-	via := s.balanceClient(storedLauncher{ViaMachine: "m1"})
+	via, err := s.balanceClient(storedLauncher{ViaMachine: "m1"})
+	if err != nil {
+		t.Fatalf("via err: %v", err)
+	}
 	if v, ok := via.Transport.(viaNode); !ok || v.machine != "m1" || v.s != s {
 		t.Fatalf("via machine: %#v", via.Transport)
+	}
+}
+
+// An invalid or hostless configured proxy must fail cleanly and never fall back to a direct HTTP request (#11825).
+func TestLauncherBalancesRejectsInvalidOrHostlessProxyWithoutDirectRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		proxy string
+	}{
+		{name: "unparseable url", proxy: "://bad-proxy"},
+		{name: "hostless http scheme", proxy: "http://"},
+		{name: "path only", proxy: "/just/a/path"},
+		{name: "missing scheme hostport", proxy: "proxy.example.com:8080"},
+		{name: "schemeless host", proxy: "//proxy.example.com:8080"},
+		{name: "unsupported scheme", proxy: "ftp://proxy.example.com:21"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := launcherTestService(t)
+			sealed, err := s.sealKey(fakeKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			l := storedLauncher{
+				KeySealed: sealed,
+				ManagedLauncher: proto.ManagedLauncher{
+					Name:    "deepseek",
+					BaseURL: "https://api.deepseek.com/anthropic",
+					Proxy:   tc.proxy,
+				},
+			}
+			if client, err := s.balanceClient(l); err == nil || client != nil {
+				t.Fatalf("balanceClient(%q) must return error, got client=%+v err=%v", tc.proxy, client, err)
+			}
+			putLaunchers(t, s, l)
+			asked := false
+			interceptProbe(t, func(r *http.Request) (*http.Response, error) {
+				asked = true
+				return probeResponse(r, http.StatusOK, `{"balance_infos":[{"currency":"CNY","total_balance":"12.34"}]}`), nil
+			})
+			accounts, known := s.LauncherBalances(context.Background())
+			if !known || len(accounts) != 1 || accounts[0].Balance != nil || accounts[0].Problem != "failed" || asked {
+				t.Fatalf("proxy %q must fail without sending a direct request: known=%v asked=%v accounts=%+v", tc.proxy, known, asked, accounts)
+			}
+		})
 	}
 }
 
