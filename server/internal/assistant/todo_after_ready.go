@@ -223,7 +223,7 @@ func (s *Service) checkTodoAfterReady(ctx context.Context, candidate Todo) ([]pr
 	if len(afterIDs) == 0 {
 		return nil, false, nil
 	}
-	if todoHasActiveAgent(candidate) || s.requestStartPending(ctx, candidate) {
+	if todoHasActiveAgent(candidate) || s.requestStartPending(ctx, candidate) || s.workspaceQueuePending(ctx, candidate) {
 		return nil, false, nil
 	}
 
@@ -556,6 +556,11 @@ func (s *Service) evaluateTodoAfterDependents(ctx context.Context, prereqID stri
 		return
 	}
 	s.todos.mu.RLock()
+	var prereq Todo
+	var hasPrereq bool
+	if p, ok := s.todos.todos[prereqID]; ok {
+		prereq, hasPrereq = copyTodoLocked(p), true
+	}
 	var candidates []Todo
 	for _, t := range s.todos.todos {
 		if t.DoneAt == nil && slices.Contains(t.After, prereqID) {
@@ -569,6 +574,18 @@ func (s *Service) evaluateTodoAfterDependents(ctx context.Context, prereqID stri
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].ID < candidates[j].ID })
 	for _, c := range candidates {
 		s.maybeEmitTodoReady(ctx, c)
+		if hasPrereq && needsUserWakeEligible(c) {
+			s.todos.mu.RLock()
+			requireAccepted := c.PartOf != "" && s.hasRequestGateLocked(c.PartOf)
+			s.todos.mu.RUnlock()
+			if p, ok, err := s.prerequisiteSatisfied(ctx, prereq, requireAccepted); err == nil && ok {
+				summary := "Prerequisite " + p.Title + " (" + p.ID + ") is now " + p.Reason
+				if len(p.MergedPRs) > 0 {
+					summary += " (" + strings.Join(p.MergedPRs, ", ") + ")"
+				}
+				s.emitNeedsUserExternalInfo(ctx, c, "prerequisite "+p.ID, summary, "prereq:"+p.ID+":"+p.Reason)
+			}
+		}
 	}
 }
 

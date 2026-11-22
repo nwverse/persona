@@ -169,7 +169,7 @@ func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, res
 							// System binary directories have special filter semantics downstream; keep relative prefixes opaque there.
 							if literal && moved && !filepath.IsAbs(prefix[0]) && strings.HasPrefix(prefix[0], "./") &&
 								larkNoParentReference(prefix[0]) && currentDir != "" && varsDir[p.Param.Value] == currentDir &&
-								currentDir != "/bin" && currentDir != "/usr/bin" &&
+								filepath.Dir(filepath.Join(currentDir, prefix[0])) != "/bin" && filepath.Dir(filepath.Join(currentDir, prefix[0])) != "/usr/bin" &&
 								!isLarkCLI(prefix[0]) && !larkRelativeGate(gates, prefix[0]) {
 								prefix[0] = filepath.Join(currentDir, prefix[0])
 								resolvable = true
@@ -484,11 +484,12 @@ func larkIndependentRead(args []*syntax.Word, words []string, executable int) bo
 }
 
 // larkReadOnlyWord permits literal glob/brace syntax and side-effect-free scalar parameters. Actual brace expansion only
-// adds read arguments. Command/process substitution, arithmetic, arrays and parameter operators remain opaque. A literal
-// bracket or colon next to a parameter is rejected because zsh can evaluate an arithmetic subscript or :F:...: modifier
-// even when the bash-dialect AST does not show it.
+// adds read arguments. Command/process substitution, arithmetic, arrays and parameter operators remain opaque. Parsing
+// uses the bash dialect, while execution may use zsh: once a word contains a parameter or literal '$', only pure ASCII
+// $NAME/${NAME} parameters and the literal set [A-Za-z0-9/._,@%-] are accepted. This conservatively rejects zsh flags,
+// subscripts, modifiers and glob qualifiers rather than trying to blacklist each spelling.
 func larkReadOnlyWord(word *syntax.Word) bool {
-	safe, parameter, bracket, colon := true, false, false, false
+	safe, restricted, literalsSafe := true, false, true
 	syntax.Walk(word, func(node syntax.Node) bool {
 		if !safe {
 			return false
@@ -497,21 +498,54 @@ func larkReadOnlyWord(word *syntax.Word) bool {
 		case nil, *syntax.Word, *syntax.DblQuoted:
 			return true
 		case *syntax.Lit:
-			bracket = bracket || strings.Contains(n.Value, "[")
-			colon = colon || strings.Contains(n.Value, ":")
+			restricted = restricted || strings.Contains(n.Value, "$")
+			literalsSafe = literalsSafe && larkReadOnlyLiteral(n.Value)
 			return true
 		case *syntax.SglQuoted:
 			return false
 		case *syntax.ParamExp:
-			parameter = true
-			safe = scalarParameter(n)
+			restricted = true
+			safe = larkReadOnlyParameter(n)
 			return false
 		default:
 			safe = false
 			return false
 		}
 	})
-	return safe && (!parameter || (!bracket && !colon))
+	return safe && (!restricted || literalsSafe)
+}
+
+func larkReadOnlyParameter(p *syntax.ParamExp) bool {
+	if !scalarParameter(p) {
+		return false
+	}
+	name := p.Param.Value
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c == '_' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || i > 0 && c >= '0' && c <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func larkReadOnlyLiteral(value string) bool {
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' {
+			continue
+		}
+		switch c {
+		case '/', '.', '_', ',', '@', '%', '-':
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // larkBindingRedirects keeps assignments across descriptor duplication and literal /dev/null input/output. Real file

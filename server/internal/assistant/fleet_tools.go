@@ -221,6 +221,9 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 	if slices.Contains(resourceToolNames, name) {
 		return s.resourceTool(ctx, machine, session, name, args)
 	}
+	if name == "secret_store" {
+		return s.toolSecretStore(ctx, machine, session, args)
+	}
 	if assistantwire.IsA2ATool(name) {
 		return s.a2aTool(ctx, a2aRef{s.canonical(machine), session}, name, args)
 	}

@@ -300,7 +300,11 @@ func (s *Service) briefTaskWait(ctx context.Context, t Todo, agents []proto.Sess
 		return w, true
 	}
 	if queue != nil {
-		base.Kind, base.WaitingOn, base.Since, base.Until, base.Reason = "capacity", "capacity", queue.QueuedAt, queue.NextAt, clip(oneLine(queue.Reason), 120)
+		until := queue.NextAt
+		if queue.Key == workspaceQueueKey {
+			until = time.Time{}
+		}
+		base.Kind, base.WaitingOn, base.Since, base.Until, base.Reason = "capacity", "capacity", queue.QueuedAt, until, clip(oneLine(queue.Reason), 120)
 		return base, true
 	}
 	if len(t.Agents) > 0 {
