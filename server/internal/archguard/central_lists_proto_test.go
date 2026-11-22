@@ -26,7 +26,7 @@ func init() {
 // the seam and the doc; a flag appended from an init() is no entry, so the unplanted source passes with one; a pending
 // entry passes once its PR merges.
 func TestProtoFeaturesFreeze(t *testing.T) {
-	l := centralListNamed(t, "proto_features")
+	l := centralListByID(t, "proto_features")
 	const src = `package proto
 
 const FeatureB = "b"

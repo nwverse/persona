@@ -61,9 +61,9 @@ var centralLists = []centralList{
 
 func (l centralList) file() string { return "testdata/central_lists/" + l.id + ".txt" }
 
-// centralListNamed is the row with that id. A test that binds its row this way keeps reading that row when another PR
-// adds a row before it, where an index would read whichever row now sits there.
-func centralListNamed(t *testing.T, id string) centralList {
+// centralListByID is the row of centralLists with this id. A test names the list it plants in by id, not by its place
+// in centralLists, so a row added beside it moves nothing the test reads.
+func centralListByID(t *testing.T, id string) centralList {
 	t.Helper()
 	i := slices.IndexFunc(centralLists, func(l centralList) bool { return l.id == id })
 	if i < 0 {
