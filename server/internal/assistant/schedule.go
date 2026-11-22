@@ -1569,6 +1569,7 @@ func weekdayText(ds []int) string {
 func (s *Service) Run(ctx context.Context) {
 	s.running.Store(&ctx)
 	go s.a2aLoop(ctx)
+	go s.resourceLoop(ctx)
 	go s.transcriptionReadyLoop(ctx)
 	recoverCtx, cancel := context.WithTimeout(ctx, taskFailTimeout)
 	if err := s.recoverTaskStarts(recoverCtx, s.tasks.recoverBefore); err != nil {

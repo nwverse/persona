@@ -1,0 +1,120 @@
+package resourcequeue
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestV1QueueAndResult(t *testing.T) {
+	raw, err := os.ReadFile("testdata/queue-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := ParseQueue(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.Slots != 3 || len(q.Running) != 3 || len(q.Waiting) != 5 || q.Waiting[0].DuplicateOf != "t1" {
+		t.Fatalf("bad queue: %+v", q)
+	}
+	for _, s := range []string{`{"v":2}`, `{"v":1,"slots":3}`, `{"v":1,"slots":3,"now":"bad","running":[],"waiting":[]}`} {
+		if _, err := ParseQueue([]byte(s)); err == nil {
+			t.Fatalf("accepted %s", s)
+		}
+	}
+	o, err := ParseResult([]byte(`{"v":1,"exit":0,"run":"example-run","finished_at":"2026-11-22T10:00:00Z"}`))
+	if err != nil || o.Exit != 0 {
+		t.Fatalf("result: %+v %v", o, err)
+	}
+	if _, err := ParseResult([]byte(`{"v":1,"run":"example-run","finished_at":"2026-11-22T10:00:00Z"}`)); err == nil {
+		t.Fatal("missing exit interpreted as success")
+	}
+	if o, err := ParseResult([]byte(`null`)); err != nil || o != nil {
+		t.Fatalf("missing result: %v %v", o, err)
+	}
+}
+func TestNewJoinedCachedAndFencing(t *testing.T) {
+	now := time.Now().UTC()
+	rows := []Lease{}
+	in := Request{Resource: "ci.example", Project: "example", Commit: strings.Repeat("a", 40), Groups: []string{"web", "scripts", "web"}, Holder: Holder{Machine: "computer-a", Session: "one"}}
+	first, err := Acquire(&rows, in, now, "one", 1)
+	if err != nil || first.Status != "queued" {
+		t.Fatalf("new: %+v %v", first, err)
+	}
+	Advance(rows, 1, 0, now)
+	if rows[0].State != "granted" {
+		t.Fatal(rows)
+	}
+	in.Groups = []string{"scripts", "web"}
+	in.Holder.Session = "two"
+	joined, err := Acquire(&rows, in, now, "two", 2)
+	if err != nil || joined.Status != "joined" || len(rows) != 1 {
+		t.Fatalf("join: %+v %v", joined, err)
+	}
+	if _, err := Mutate(rows, Request{Action: "release", ID: "one", Holder: in.Holder, Token: 1}, now); err == nil {
+		t.Fatal("joiner released holder")
+	}
+	rep, err := Mutate(rows, Request{Action: "release", ID: "one", Holder: rows[0].Holder, Token: 1, Outcome: &Outcome{Exit: 0, Run: "example-run"}}, now)
+	if err != nil || rep.Status != "released" {
+		t.Fatalf("release: %+v %v", rep, err)
+	}
+	cached, err := Acquire(&rows, in, now, "three", 3)
+	if err != nil || cached.Status != "cached" || cached.Lease.Outcome.Run != "example-run" {
+		t.Fatalf("cache: %+v %v", cached, err)
+	}
+	if CacheOK(rows[0].Outcome, now.Add(13*time.Hour)) {
+		t.Fatal("old cache accepted")
+	}
+}
+func TestAdmissionLimitFIFOExpiryAndExternalSlots(t *testing.T) {
+	now := time.Now()
+	rows := []Lease{}
+	for i := 0; i < 3; i++ {
+		in := Request{Resource: "ci.example", Project: "example", Commit: strings.Repeat(string(rune('a'+i)), 40), Holder: Holder{Machine: "computer-a", Session: "one"}}
+		rep, err := Acquire(&rows, in, now, string(rune('a'+i)), int64(i+1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 2 && rep.Status != "refused" {
+			t.Fatal(rep)
+		}
+	}
+	Advance(rows, 3, 2, now)
+	if rows[0].State != "granted" || rows[1].State != "queued" {
+		t.Fatal(rows)
+	}
+	Advance(rows, 3, 2, now.Add(90*time.Second))
+	if rows[0].State != "expired" || rows[1].State != "granted" {
+		t.Fatal(rows)
+	}
+	rep, _ := Mutate(rows, Request{Action: "renew", ID: rows[0].ID, Token: 1, Holder: rows[0].Holder}, now.Add(90*time.Second))
+	if rep.Status != "fenced" {
+		t.Fatal(rep)
+	}
+}
+func TestRunnerUnavailableAndLegacyFallback(t *testing.T) {
+	if strings.Contains(os.Getenv("GOOS"), "windows") {
+		t.Skip("shell fixture")
+	}
+	dir := t.TempDir()
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	script := filepath.Join(dir, "ssh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 255\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := ReadQueue(context.Background(), Mirror{Target: "runner.example.com"})
+	if err == nil || !snap.Unknown || !snap.ObservedAt.IsZero() {
+		t.Fatalf("unreachable: %+v %v", snap, err)
+	}
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ncase \"$*\" in *--json*) exit 64;; esac\necho 'running: ticket-1'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	snap, err = ReadQueue(context.Background(), Mirror{Target: "runner.example.com"})
+	if err != nil || !snap.Unknown || snap.Queue != nil || !strings.Contains(snap.Raw, "ticket-1") {
+		t.Fatalf("legacy: %+v %v", snap, err)
+	}
+}

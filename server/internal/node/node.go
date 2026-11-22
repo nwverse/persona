@@ -1239,6 +1239,8 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		return ok(n.attachCodex(ctx, p.SessionID))
 	case "ping": // the hub checking a tailcat connection is alive (its userspace TCP has no keepalive)
 		return map[string]any{}, nil
+	case "resource.queue", "resource.result":
+		return n.resourceRead(ctx, method, params)
 	case "node.info":
 		n.managerInfoOnce.Do(func() {
 			var p nodeproto.NodeInfoQuery

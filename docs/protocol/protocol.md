@@ -2499,6 +2499,7 @@ Server → client:
 | `push_grading` | `enabled` (boolean): hub push-grading switch toggled; open web and desktop clients update notifications, sounds, and alert badges immediately |
 | `endpoints` | `endpoints` (the full candidate list, only sent to connections that declared the capability of the same name) |
 | `client_hello_ack` | `heartbeat: {interval, pong_timeout}` (the seconds actually used after this negotiation) |
+| `resources` | `resources`: registered runner definitions, last mirror with `observed_at` / `attempted_at` / `unknown`, versioned queue tickets and durable CI leases; emitted after each mirror refresh. Read once with `GET /api/v1/resources`. |
 | `machines` | `machines` (also after a rename: the whole list, with the new `name`) |
 | `file_transfer` | `transfer` (`FileTransfer`): a computer-to-computer transfer started, progressed (at most once a second) or ended; `manager` identifies a non-default manager. Only full devices that declared `file_transfer` receive it; not in the event log, so clients `GET` the current transfers after reconnecting ([file-transfer.md](file-transfer.md)) |
 | `managers` | No payload: the manager roster changed (created, renamed, connected, disconnected, deleted, new reported bot identities); clients re-read `GET /api/v1/managers` ("Bus" below, [managers.md](../assistant/managers.md) "Clients"). Only sent to connections that asked for feature `managers` (`?features=` or `client_hello.features`), not in the event log |
@@ -6206,3 +6207,73 @@ The existing `follows_setting` flag is not sufficient authority.
 | Method | Direction | Params / result |
 | --- | --- | --- |
 | `assistant.cache_clear` | manager → node | `{session_id}` → `{ok: true}`; cancel cache replay and erase its in-memory snapshot without stopping ordinary forwarding; used when archiving a conversation. Older nodes may reject it; the manager's fresh policy check also denies archived conversations. |
+
+
+## Shared CI resources
+
+This advanced interface serves Agent operators sharing a runner. The manager owns
+`resource_leases` in PostgreSQL; the hub only relays routes and events. A fresh
+installation has no registered runners and starts no external polling.
+
+| Method | Route | Contract |
+| --- | --- | --- |
+| GET | `/api/v1/resources?resource=` | `{resources: [...]}`; optional resource filter. Capacity, last queue mirror and durable leases share one source with `resource_status`. |
+| PUT | `/api/v1/resources` | Full devices only. `{resources: [{id,capacity,mirror:{machine,target,port?,identity?},repositories?:{project:gitURL}}]}`. Replace the registry; an empty list disables polling. Existing runner locks remain authoritative. |
+
+Configure the registry in Computers > Shared resources > Configure runners. Values
+are operator-supplied; the node executes fixed SSH commands without a local shell.
+The node reads `queue --json` every 15 seconds. Version 1 carries `v`, `slots`,
+`now`, `running` and `waiting`. Tickets carry `ticket`, `project`, `ref`, `commit`,
+`groups`, optional `tag`, and `started_at` or `enqueued_at`. Unknown schemas and
+legacy text are display-only. An unreachable node preserves the last successful
+mirror and marks it unknown; clients show its age rather than an empty queue.
+Duplicate tickets are marked by project, full commit and sorted unique groups.
+
+`personad resource status [resource]` prints the same JSON.
+`personad gate <project> <ref> [groups...]` (or one quoted request) resolves branch
+names through the registered repository URL and submits the immutable commit.
+Exactly one runner must be registered for the gate command. Bundle input is
+bounded to 128 MiB, must expose exactly one reference, and is rewound for SSH.
+
+Admission is serialized by a PostgreSQL transaction advisory lock per resource,
+with a partial unique index on active dedupe keys. Same-key work returns `joined`;
+a successful result no older than 12 hours returns `cached`. Failure or missing
+exit status is never cached. Only the holder can renew, release or cancel; joined
+sessions may read the result. Queue order is priority descending then sequence,
+with at most two queued requests per session. Leases retain state over manager
+restarts. The heartbeat expires after 90 seconds; the client renews every 20
+seconds. An old fencing token cannot settle a later holder.
+
+Gate output preserves runner stdout and its exit code. Joined callers receive the
+same captured result (bounded to the last 256 KiB); cached external successes print
+`RESULT=` and `EXIT_CODE=`. Unknown outcomes return a nonzero exit, never success.
+If the manager cannot be reached before admission, the explicit
+`PERSONA_GATE_SSH_TARGET`, `PERSONA_GATE_SSH_PORT` and
+`PERSONA_GATE_SSH_IDENTITY` fallback settings allow the original SSH queue with a
+`DEGRADED` notice. Once admitted, uncertainty never triggers a second submission.
+Deployment, browser and rate leases are not implemented by this interface.
+
+### Shared runner rollout checks
+
+After an operator deploys the change, register one runner and verify:
+
+1. With three running and five waiting tickets, compare the page and
+   `resource_status` against the runner JSON: tickets, projects, commits, groups,
+   positions, elapsed time and duplicate markers must match.
+2. Submit one immutable project/commit/group set from two sessions. Only one
+   runner ticket appears; the second returns `joined`; both report the same result
+   and exit code. Submit the successful key again within 12 hours: `cached`, no
+   new ticket. Reordered or repeated groups are the same set.
+3. Queue three different keys from one session while capacity is occupied: the
+   third is refused. Terminate a granted CLI and verify expiry within 90 seconds,
+   queue progress, and rejection of its old fencing token. Restart the manager
+   while work is queued and confirm leases remain.
+4. Disconnect the mirror node: retained rows remain visible with an increasing
+   stale age. Reconnect and confirm fresh data replaces them. A legacy runner
+   shows text/unknown and cannot manufacture a cached success.
+5. Check English, Simplified Chinese and Japanese in light and dark appearance.
+   The page is secondary to Computers, uses existing surfaces and buttons, and
+   does not expose operational details on the main conversation.
+
+Rollback: restore the prior binary and registry. The runner's own locks and
+commands remain compatible; the additive manager table can remain in place.

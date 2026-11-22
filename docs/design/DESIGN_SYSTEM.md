@@ -3877,3 +3877,15 @@ and ordinary-new-chat caches are distinct; no main read writes shared defaults.
 An older hub with no main purpose retains shared defaults; a transient main read
 failure keeps the last good main value. Reuse the existing capsule, panel and
 feedback, without a new control or polling loop.
+
+
+### Shared runner visibility
+
+Computers includes an advanced Shared resources view for Agent operators. It uses
+the existing segmented view picker, surface, button and loading patterns. Each
+card counts the running tickets in the last external snapshot against that
+snapshot's slot capacity; the manager's admission rows are listed separately.
+Unknown freshness is always visible, retained data is labeled stale, duplicate
+tickets name their shared result, and start estimates say unknown when no reliable
+duration is available. Runner registration is editable only on explicit request
+through Configure runners, and saving an empty list disables polling.
