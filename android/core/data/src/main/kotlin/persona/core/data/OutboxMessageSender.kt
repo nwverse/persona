@@ -620,6 +620,13 @@ class OutboxMessageSender(
         }
         val state = classify(result)
         val error = (result as? MessageTransportResult.HubError)?.let { it.code ?: it.error }
+        if (state == OutboxState.Sending) {
+            val current = store.entries.first().firstOrNull { it.clientMessageId == id } ?: return state
+            // A composer completion is newer than an automatic attempt that was already in flight. Do not let
+            // that older attempt put an already settled visible message back into Sending.
+            if (current.state in settled) return current.state
+        }
+        println("outbox-settle: id=$id entryState=${entry.state} nextState=$state result=$result")
         val moved = if ((result as? MessageTransportResult.HubError)?.delivered == "none") {
             store.transition(id, from, state, error, newOperationId())
         } else store.transition(id, from, state, error)
