@@ -1007,12 +1007,12 @@ enum GettingStarted {
 struct PairView: View {
     /// What the sheet opens on: the scanner (the Mac: pasting the link), or Other ways — typing the address, an SSH
     /// tunnel, the command line (#4195: commands only here).
-    enum Start: String, Identifiable { case scan, other; var id: String { rawValue } }
+    enum Start: String, Identifiable { case password, scan, other; var id: String { rawValue } }
 
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @Environment(\.webAuthenticationSession) private var webAuth
-    var start: Start = .scan
+    let start: Start
     @State private var url = ""
     @State private var token = ""
     /// The SSH tunnel set up here, for a hub this device cannot reach directly (docs/operations/network.md「Connecting to hub through SSH」).
@@ -1026,7 +1026,7 @@ struct PairView: View {
     @State private var editingSSH = false
     #endif
     @State private var connecting = false
-    @State private var passwordMode = true
+    @State private var passwordMode: Bool
     @State private var error: String?
     @State private var scanning = DataScannerViewController.isSupported && DataScannerViewController.isAvailable
     /// The code was refused as expired or used (401 invalid_token): say so, and offer to scan again.
@@ -1039,6 +1039,11 @@ struct PairView: View {
     @State private var pickedPhoto: PhotosPickerItem?
     @State private var readingPhoto = false
     #endif
+
+    init(start: Start = .password) {
+        self.start = start
+        _passwordMode = State(initialValue: start == .password)
+    }
 
     private var other: Bool { start == .other || showOther }
 

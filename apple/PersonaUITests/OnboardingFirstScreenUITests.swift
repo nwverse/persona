@@ -45,7 +45,7 @@ final class OnboardingFirstScreenUITests: XCTestCase {
 
         app.buttons["welcome.help"].tap()
         XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5))
-        app.alerts.firstMatch.buttons["welcome.help.done"].tap()
+        app.alerts.firstMatch.buttons.matching(identifier: "welcome.help.done").firstMatch.tap()
         XCTAssertTrue(pair.isHittable)
 
         app.buttons["welcome.other"].tap()
@@ -67,6 +67,16 @@ final class OnboardingFirstScreenUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] 'invalid token'")).firstMatch.exists)
         sleep(1)
         shot(app, "welcome-expired")
+    }
+
+    @MainActor func testScanOpensQRPairing() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-openWelcome", "YES"]
+        app.launchPinned()
+        let pair = app.buttons["welcome.pair"]
+        XCTAssertTrue(pair.waitForExistence(timeout: 20))
+        pair.tap()
+        XCTAssertTrue(app.buttons["pair.choosePhoto"].waitForExistence(timeout: 10))
     }
 
     /// Just paired with a hub in MOCK_READINESS=<scenario>: the checklist comes up in place of the app.
