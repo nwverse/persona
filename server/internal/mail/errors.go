@@ -35,3 +35,20 @@ func (*IncompleteSearchError) Text(l i18n.Lang) string {
 
 func (*IncompleteSearchError) Code() string    { return "mail_search_incomplete" }
 func (*IncompleteSearchError) HTTPStatus() int { return http.StatusBadGateway }
+
+// UnreachableError is an account whose server could not be reached, or whose connection ended under the operation,
+// on the first try and again on the one reconnect (withConnAt). It says so in words; the raw error is in the log and
+// stays in its chain for errors.Is / errors.As.
+type UnreachableError struct {
+	Account string
+	err     error
+}
+
+func (e *UnreachableError) Error() string { return e.Text(i18n.En) }
+
+// Text says it in the client's language.
+func (*UnreachableError) Text(l i18n.Lang) string { return i18n.T(l, "mail-errors.unreachable") }
+
+func (e *UnreachableError) Unwrap() error { return e.err }
+func (*UnreachableError) Code() string    { return "mail_unreachable" }
+func (*UnreachableError) HTTPStatus() int { return http.StatusBadGateway }
