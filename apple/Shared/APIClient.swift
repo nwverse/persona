@@ -868,6 +868,11 @@ nonisolated struct APIClient: Sendable {
     func stamp(_ list: [Interaction]) -> [Interaction] { group.isEmpty ? list : list.map { var i = $0; i.group = group; return i } }
     func stamp(_ s: Session) -> Session { var s = s; s.group = group; return s }
     func stamp(_ k: SessionKey) -> SessionKey { var k = k; k.group = group; return k }
+    /// The independent main-chat binding; callers retain the shared eligibility catalog.
+    func mainAssistantLaunchers(machine: String) async throws -> LaunchersResponse {
+        try await launcherList(machine: machine, purpose: "assistant.main")
+    }
+
     func launcherList(machine: String, purpose: String? = nil) async throws -> LaunchersResponse {
         let client = purpose == "assistant" ? currentAssistantSettings() : self
         return try await client.get("/api/v1/machines/\(machine)/launchers",

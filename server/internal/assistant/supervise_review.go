@@ -20,10 +20,11 @@ import (
 
 func (s *Service) toolTaskReview(ctx context.Context, self string, args json.RawMessage) (string, error) {
 	var a struct {
-		TodoID  string        `json:"todo_id"`
-		Verdict string        `json:"verdict"`
-		Checks  []ReviewCheck `json:"checks"`
-		Note    string        `json:"note"`
+		TodoID     string        `json:"todo_id"`
+		Verdict    string        `json:"verdict"`
+		ReworkKind string        `json:"rework_kind"`
+		Checks     []ReviewCheck `json:"checks"`
+		Note       string        `json:"note"`
 		// The conclusion card's (conclusion.go): accepted's outcome (done, or cannot be done), its one sentence of why and
 		// its one link; needs_user's recommended option.
 		Outcome   string `json:"outcome"`
@@ -55,10 +56,17 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		return "", fmt.Errorf("arguments: %v", err)
 	}
 	a.Note = strings.TrimSpace(a.Note)
+	a.ReworkKind = strings.TrimSpace(a.ReworkKind)
 	switch a.Verdict {
 	case reviewAccepted, reviewRework, reviewNeedsUser, reviewParked, reviewCancelled:
 	default:
 		return "", fmt.Errorf("verdict must be accepted, rework, needs_user, parked or cancelled")
+	}
+	if a.ReworkKind != "" && a.Verdict != reviewRework {
+		return "", fmt.Errorf("rework_kind applies to rework only")
+	}
+	if !validReworkKind(a.ReworkKind) {
+		return "", fmt.Errorf("rework_kind must be external_input, substantive_new, repeated_error or low_roi_edge")
 	}
 	switch a.Outcome = strings.TrimSpace(a.Outcome); a.Outcome {
 	case "", outcomeDone, outcomeCannot:
@@ -144,8 +152,10 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	if err := restated(t, a.Verdict, decision); err != nil {
 		return "", err
 	}
-	if a.Verdict == reviewRework && !decided && t.Supervision != nil && t.Supervision.Round >= maxReworkRounds {
-		return "", reworkOverError(t.ID)
+	if a.Verdict == reviewRework && !decided {
+		if blocked, safetyCap, count := t.Supervision.reworkBlocked(a.ReworkKind); blocked {
+			return "", reworkCapError(t.ID, safetyCap, count)
+		}
 	}
 	checks := make([]ReviewCheck, 0, len(a.Checks))
 	for _, c := range a.Checks {
@@ -211,7 +221,8 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		}
 	}
 	var priorReply *decisionAgentReply
-	mayRaiseDecision := verdict == reviewNeedsUser || verdict == reviewRework && decided && t.Supervision != nil && t.Supervision.Round >= maxReworkRounds
+	reworkOverPre, _, _ := t.Supervision.reworkBlocked(a.ReworkKind)
+	mayRaiseDecision := verdict == reviewNeedsUser || verdict == reviewRework && decided && reworkOverPre
 	if mayRaiseDecision && scheduledCheckOf(ctx) == "" {
 		priorReply = s.priorDecisionReply(ctx, t, cmp.Or(strings.TrimSpace(a.QuestionQuote), decision.Reason))
 	}
@@ -222,7 +233,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			return "", fmt.Errorf("the task changed while checking the Agent conversation: review it again")
 		}
 	}
-	over, refused, parks := false, false, 0
+	over, overSafetyCap, overCount := false, false, 0
+	refused, refusedSafetyCap, refusedCount := false, false, 0
+	parks := 0
 	var waiting *OwnerWait // accepted while the work stopped on the owner's decision: refused, nothing written (#1277)
 	judgedDone := false    // it was waiting for review: the judge had found it done
 	var criteriaErr error
@@ -246,12 +259,14 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			} else if v.Supervisor == "" {
 				v.Supervisor = t.Origin
 			}
-			if verdict == reviewRework && v.Round >= maxReworkRounds {
-				if !decided {
-					refused = true // another rework took the last round meanwhile: nothing is written
-					return false
+			if verdict == reviewRework {
+				if blocked, safetyCap, count := v.reworkBlocked(a.ReworkKind); blocked {
+					if !decided {
+						refused, refusedSafetyCap, refusedCount = true, safetyCap, count // another rework took the last round meanwhile: nothing is written
+						return false
+					}
+					verdict, over, overSafetyCap, overCount = reviewNeedsUser, true, safetyCap, count
 				}
-				verdict, over = reviewNeedsUser, true
 			}
 			if verdict == reviewParked {
 				// Parked again while it still is (its agent's turn would have ended that): one more in a row.
@@ -280,8 +295,8 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				}
 			}
 			if verdict == reviewRework {
-				v.Round++
-				r.Round = v.Round
+				round, stalled := v.applyReworkAccounting(a.ReworkKind)
+				r.Round, r.ReworkKind, r.StalledReworkRounds = round, a.ReworkKind, stalled
 			}
 			if verdict == reviewParked {
 				r.Reason, r.Until, r.WaitingOn, r.Parks = park.Reason, park.Until, park.WaitingOn, park.Count
@@ -309,7 +324,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		return "", criteriaErr
 	}
 	if refused {
-		return "", reworkOverError(t.ID)
+		return "", reworkCapError(t.ID, refusedSafetyCap, refusedCount)
 	}
 	if parks > 0 {
 		return "", reparkError(t.ID, parks)
@@ -351,6 +366,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		result = s.recordBriefResult(ctx, t, checks, a.AlsoDone, "", verdict)
 	}
 	body := reviewFeedBody{Title: t.Title, Verdict: verdict, Round: v.Round, Note: note, Checks: checks, Result: result}
+	if verdict == reviewRework {
+		body.ReworkKind = a.ReworkKind
+	}
 	if verdict == reviewParked { // what it waits for is what the line says; an older app shows it as the note
 		body.Note, body.Until, body.WaitingOn = cmp.Or(note, park.Reason), park.Until, park.WaitingOn
 	}
@@ -502,10 +520,17 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			pushed = fmt.Sprintf(" It cannot be undone: at the deadline (%s) the user is only reminded again, nothing is taken.",
 				deadline.In(s.location(ctx)).Format(toolTimeLayout))
 		}
+		overLabel := func() string {
+			n := cmp.Or(overCount, maxReworkRounds)
+			if overSafetyCap {
+				return fmt.Sprintf(" was sent back %d times already (overall rework safety cap %d): it now", n, maxTotalReworkRounds)
+			}
+			return fmt.Sprintf(" was sent back %d times already: it now", n)
+		}
 		if held {
 			was := ""
 			if over {
-				was = fmt.Sprintf(" was sent back %d times already: it now", maxReworkRounds)
+				was = overLabel()
 			}
 			return fmt.Sprintf("Task %s%s waits for the user (needs_user), and its decision can wait (can_wait): no push and no card went out. "+
 				"It is in their Needs you now, and the next daily briefing lists it with your recommendation, where they answer it; if no "+
@@ -527,8 +552,8 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 					"recommendation, and their answer goes to the task's agent"
 			}
 			if over {
-				return fmt.Sprintf("Task %s was sent back %d times already: it now waits for the user (needs_user): %s. Don't ask them "+
-					"again; review it once the agent stops.%s", t.ID, maxReworkRounds, said, pushed), nil
+				return fmt.Sprintf("Task %s%s waits for the user (needs_user): %s. Don't ask them "+
+					"again; review it once the agent stops.%s", t.ID, overLabel(), said, pushed), nil
 			}
 			return fmt.Sprintf("Task %s waits for the user: %s. Don't ask them again; review it once the agent stops.%s", t.ID, said, pushed), nil
 		}
@@ -538,7 +563,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			// turns: what is to decide reaches them by the hub's push, or by its notify_user when there was none.
 			was := ""
 			if over {
-				was = fmt.Sprintf(" was sent back %d times already: it now", maxReworkRounds)
+				was = overLabel()
 			}
 			tell := "Push what is to decide, with your recommendation, to the user with notify_user (they do not read this conversation)"
 			if phone {
@@ -548,23 +573,38 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				"they decide (that also ends the decision the briefing lists for it).%s", t.ID, was, tell, pushed), nil
 		}
 		if over {
-			return fmt.Sprintf("Task %s was sent back %d times already: it now waits for the user (needs_user). Tell the user what is "+
+			return fmt.Sprintf("Task %s%s waits for the user (needs_user). Tell the user what is "+
 				"still missing and ask how to go on (ask_user or in your answer); review it again once they decide (that also ends the decision "+
-				"the briefing lists for it).%s", t.ID, maxReworkRounds, pushed), nil
+				"the briefing lists for it).%s", t.ID, overLabel(), pushed), nil
 		}
 		return fmt.Sprintf("Task %s waits for the user. Ask them (ask_user, or in your answer, pushed with notify_user if they are away); "+
 			"review it again once they decide (that also ends the decision the briefing lists for it).%s", t.ID, pushed), nil
 	case reviewParked:
 		return parkedAnswer(t.ID, park, s.location(ctx)), nil
 	}
-	text := prompts.RenderSuperviseRework(prompts.SuperviseRework{Round: v.Round, Max: maxReworkRounds, Checks: reworkChecks(checks), Note: note})
+	displayMax := maxTotalReworkRounds
+	if isStalledReworkKind(a.ReworkKind) && v.Round <= maxReworkRounds {
+		displayMax = maxReworkRounds
+	}
+	text := prompts.RenderSuperviseRework(prompts.SuperviseRework{Round: v.Round, Max: displayMax, Checks: reworkChecks(checks), Note: note})
 	sent, err := s.sendToTask(ctx, t, text)
 	if err != nil {
 		return "", fmt.Errorf("recorded rework round %d, but sending it to the agent failed: %v (send it with agent_send)", v.Round, err)
 	}
-	return fmt.Sprintf("Rework round %d of %d is %s. When the agent stops again you get a 督办 message to review it again.", v.Round,
-		maxReworkRounds, sent), nil
+	stalled := v.stalledReworkRounds()
+	if isStalledReworkKind(a.ReworkKind) && v.Round == stalled {
+		return fmt.Sprintf("Rework round %d of %d is %s. ", v.Round, maxReworkRounds, sent) + reviewAgainNote, nil
+	}
+	if a.ReworkKind != "" {
+		return fmt.Sprintf("Rework round %d of %d (%s; stalled/low-ROI %d of %d) is %s. ", v.Round,
+			maxTotalReworkRounds, a.ReworkKind, stalled, maxReworkRounds, sent) + reviewAgainNote, nil
+	}
+	return fmt.Sprintf("Rework round %d of %d (stalled/low-ROI %d of %d) is %s. ", v.Round,
+		maxTotalReworkRounds, stalled, maxReworkRounds, sent) + reviewAgainNote, nil
 }
+
+// reviewAgainNote ends every rework reply: the supervisor is told where its next look comes from.
+const reviewAgainNote = "When the agent stops again you get a 督办 message to review it again."
 
 // reviewReply is what a review says of the work, as the reply a "Please verify" card's three lines are read from.
 func reviewReply(note string, checks []ReviewCheck) string {
@@ -590,11 +630,12 @@ const feedReview = "review"
 const reviewByBackground = "background"
 
 type reviewFeedBody struct {
-	Title   string        `json:"title"`
-	Verdict string        `json:"verdict"`
-	Round   int           `json:"round,omitempty"`
-	Note    string        `json:"note,omitempty"`
-	Checks  []ReviewCheck `json:"checks,omitempty"`
+	Title      string        `json:"title"`
+	Verdict    string        `json:"verdict"`
+	Round      int           `json:"round,omitempty"`
+	ReworkKind string        `json:"rework_kind,omitempty"`
+	Note       string        `json:"note,omitempty"`
+	Checks     []ReviewCheck `json:"checks,omitempty"`
 	// By: reviewByBackground when the background supervisor wrote it (supervise_background.go); "" for the review of
 	// the conversation that handed the task out, a leader's, the main conversation's and a sampled acceptance.
 	By string `json:"by,omitempty"`
@@ -826,13 +867,19 @@ func ownerWaitError(id string, w *OwnerWait) error {
 		"work it does next; or cancelled when it is no longer wanted", id, why)
 }
 
-// reworkOverError refuses a rework past maxReworkRounds that states no decision: the task goes to the owner only as a
-// decision they can answer (#3804), so the supervisor states one, or closes it.
-func reworkOverError(id string) error {
-	return fmt.Errorf("task %s was sent back %d times already: a third rework goes to the user, and only as a decision they can "+
+// reworkCapError refuses a rework past its cap (either the strict stalled/low-ROI cap or the overall
+// safety valve) that states no decision: the task goes to the owner only as a decision they can answer (#3804).
+func reworkCapError(id string, safetyCap bool, count int) error {
+	if safetyCap {
+		return fmt.Errorf("task %s was sent back %d times already (overall rework safety cap %d): further rework is refused regardless of rework_kind. "+
+			"Review it needs_user with why_owner, reason (what is to be decided: how it should go on), recommend, options "+
+			"(2 to 4, each {label, leads_to}: one more round, taking it as it is, dropping it) and cost_of_waiting; or accept it as it "+
+			"is (accepted), or end it (cancelled)", id, count, maxTotalReworkRounds)
+	}
+	return fmt.Errorf("task %s was sent back %d times already (stalled/low-ROI cap %d): a third stalled/low-ROI rework goes to the user, and only as a decision they can "+
 		"answer. Review it needs_user with why_owner, reason (what is to be decided: how it should go on), recommend, options "+
 		"(2 to 4, each {label, leads_to}: one more round, taking it as it is, dropping it) and cost_of_waiting; or accept it as it "+
-		"is (accepted), or end it (cancelled)", id, maxReworkRounds)
+		"is (accepted; prefer accepted with a brief note over low-ROI edge cases), or end it (cancelled)", id, maxReworkRounds, maxReworkRounds)
 }
 
 // restated checks a needs_user against what the owner answered the task's decision before (decision.go): after "You

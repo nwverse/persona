@@ -1,5 +1,14 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A launcher name does not identify an execution backend (#12791). Scheduled Assistant conversations must pass
+  `purpose: assistant` to model discovery and argument-forwarding checks, just as ordinary Assistant messages do.
+  On an exclusive Agent engine, a same-named provider can advertise different models and thinking levels from the
+  shell CLI that actually runs the conversation. Keep their cache partitions separate; do not lower a saved effort
+  to match the wrong catalog. Test the due-run, retry, workout admission and task-edit paths with conflicting
+  catalogs. A structured, deterministic pre-dispatch configuration refusal retains one failure/fallback notice and
+  must not arm an unchanged automatic retry. Similar provider prose and unavailable discovery remain retryable or
+  unknown; retry log counts alone do not establish how many requests reached a model.
+
 - Tool-result images use the user role in transcripts (#12573). A held channel run must check an image's `ToolUseID` before treating it as owner input; otherwise reading a screenshot silently discards the continuation answer. Apply that distinction in the shared classifier used by polling and live session items, and retain the unrelated-turn guard for actual owner text and photos, even after a wake or tool image.
 
 - The node process's PATH is not the assistant's shell PATH (#12483, 2026-11-21). A node started by a service manager has a minimal PATH, while the assistant's Bash runs through the user's login shell, whose PATH restores version-manager directories. `trustedPATH` then saw every `export PATH="<version manager>/bin:$PATH"; lark-cli …` as replacing the executable and asked for a whole-command card, one per call, even for `--help` reads. Ask the login shell for its PATH once (a marked line, cached; retried after a failed ask) and trust those directories; a directory outside that set and every write still ask. Tests seed the Node's login-shell directories instead of starting a shell.
