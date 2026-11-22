@@ -158,8 +158,8 @@ func (s *Service) todoVerdicts(ctx context.Context, ids []string, gone map[strin
 		// Where a run started, as its link keeps it, is its space for good.
 		if slices.ContainsFunc(e.links, func(a TodoAgent) bool {
 			c, seen := read[[2]string{a.MachineID, a.SessionID}]
-			return s.trackPolicy(ctx, identity.SpaceAt(a.Cwd)).HideFromExtensions ||
-				seen && s.trackPolicy(ctx, runSpace(c)).HideFromExtensions
+			return s.extensionHides(ctx, identity.SpaceAt(a.Cwd)) ||
+				seen && s.extensionHides(ctx, runSpace(c))
 		}) {
 			own[id] = todoHidden
 		}
@@ -234,7 +234,7 @@ func (s *Service) todoVerdicts(ctx context.Context, ids []string, gone map[strin
 				continue // told above
 			}
 			switch c, ok := listed[run]; {
-			case ok && s.trackPolicy(ctx, runSpace(c)).HideFromExtensions:
+			case ok && s.extensionHides(ctx, runSpace(c)):
 				raise(id, todoHidden)
 			case !ok && a.Cwd == "":
 				raise(id, todoUntold)
@@ -271,7 +271,7 @@ func (s *Service) todoVerdicts(ctx context.Context, ids []string, gone map[strin
 func (s *Service) unshownConversations(ctx context.Context, conversations []string) map[string]bool {
 	out := map[string]bool{}
 	for c, t := range s.conversationSpaces(ctx, conversations) {
-		if !t.known || s.trackPolicy(ctx, t.space).HideFromExtensions {
+		if !t.known || s.extensionHides(ctx, t.space) {
 			out[c] = t.known
 		}
 	}
@@ -383,7 +383,7 @@ func (s *Service) todoDecisionVerdict(n todoNotice) todoVerdict {
 // …/agents/{mid}/{sid}, and each run a PUT …/spaces brings): one in a space hidden from extensions, as /sessions answers
 // 404 for a chat of the space, and one linked to a to-do it is not shown, since the link would move the run off it.
 func (s *Service) todoTakeRefused(ctx context.Context, mid string, c proto.Session) bool {
-	if s.trackPolicy(ctx, runSpace(c)).HideFromExtensions {
+	if s.extensionHides(ctx, runSpace(c)) {
 		return true
 	}
 	var holders []string

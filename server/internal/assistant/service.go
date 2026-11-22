@@ -378,6 +378,7 @@ func New(o Options) *Service {
 	s.agentArchiveRoutes()
 	s.agentNamingRoutes() // agent_naming_request.go
 	s.alwaysRoutes()
+	s.infoAccessRoutes()
 	s.undeliveredRoutes()
 	s.standingAuthorizationRoutes()
 	s.ruleSuggestionRoutes()
@@ -454,7 +455,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		apierr.Call(w, err)
 		return
 	}
-	s.mux.ServeHTTP(w, r)
+	s.mux.ServeHTTP(w, s.extensionReaderRequest(r))
 }
 
 // fullRole: the request came from a device that may do everything (RoleHeader; none: a test's own request).
