@@ -3,9 +3,11 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -115,6 +117,30 @@ func TestNormalizeGitHubTaskURLAndExtract(t *testing.T) {
 			wantURL:  "https://github.com/owner/repo/issues/456",
 			wantKind: todoForwardMatchIssue,
 			wantOK:   true,
+		},
+		{
+			raw:      "https://github.com/%4Fwner/Re%70o/%70ull/%31%32%33",
+			wantURL:  "https://github.com/owner/repo/pull/123",
+			wantKind: todoForwardMatchPR,
+			wantOK:   true,
+		},
+		{
+			raw:      "https://github.com/owner/repo/%69ssues/456",
+			wantURL:  "https://github.com/owner/repo/issues/456",
+			wantKind: todoForwardMatchIssue,
+			wantOK:   true,
+		},
+		{
+			raw:    "https://github.com/own%2Fer/repo/pull/123",
+			wantOK: false,
+		},
+		{
+			raw:    "https://github.com/owner/re%00po/pull/123",
+			wantOK: false,
+		},
+		{
+			raw:    "https://github.com/owner/re%ZZpo/pull/123",
+			wantOK: false,
 		},
 		{
 			raw:    "https://github.com/owner/repo/actions/runs/999",
@@ -771,8 +797,8 @@ func TestInboxTodoForwardDeliveryStatesAndFallbacks(t *testing.T) {
 		if !it.open() {
 			t.Fatal("fallback must not drop or close the Inbox item")
 		}
-		if g, ok := pendingInbox(s, todo.ID); !ok || g.Inbox == nil || g.Inbox.Item != it.ID {
-			t.Fatalf("expected supervisor fallback signal, got ok=%v g=%+v", ok, g)
+		if !hasFallbackDelivery(s, f, "conv1", it.ID) {
+			t.Fatal("expected supervisor fallback delivery for user-stopped agent")
 		}
 	})
 
@@ -811,8 +837,8 @@ func TestInboxTodoForwardDeliveryStatesAndFallbacks(t *testing.T) {
 		if !it.open() {
 			t.Fatal("offline fallback must keep Inbox item open")
 		}
-		if _, ok := pendingInbox(s, todo.ID); !ok {
-			t.Fatal("expected supervisor fallback signal for offline machine")
+		if !hasFallbackDelivery(s, f, "conv1", it.ID) {
+			t.Fatal("expected supervisor fallback delivery for offline machine")
 		}
 	})
 
@@ -844,8 +870,483 @@ func TestInboxTodoForwardDeliveryStatesAndFallbacks(t *testing.T) {
 		if !it.open() {
 			t.Fatal("no-agent fallback must keep Inbox item open")
 		}
-		if _, ok := pendingInbox(s, todo.ID); !ok {
-			t.Fatal("expected supervisor fallback signal for no bound agent")
+		if !hasFallbackDelivery(s, f, "conv1", it.ID) {
+			t.Fatal("expected supervisor fallback delivery for no bound agent")
 		}
 	})
+}
+
+func hasFallbackDelivery(s *Service, f *fakeHub, convID, itemID string) bool {
+	f.mu.Lock()
+	for _, p := range f.sends {
+		if p["session_id"] == convID {
+			if txt, _ := p["text"].(string); strings.Contains(txt, itemID) && strings.Contains(txt, "Inbox auto-forward fallback") {
+				f.mu.Unlock()
+				return true
+			}
+		}
+	}
+	for _, call := range f.calls {
+		if call.Method == DeviceAssistantSend {
+			var p map[string]any
+			if json.Unmarshal(call.Params, &p) == nil && p["session_id"] == convID {
+				if txt, _ := p["text"].(string); strings.Contains(txt, itemID) && strings.Contains(txt, "Inbox auto-forward fallback") {
+					f.mu.Unlock()
+					return true
+				}
+			}
+		}
+	}
+	f.mu.Unlock()
+	s.relays.mu.Lock()
+	defer s.relays.mu.Unlock()
+	for _, msg := range s.relays.st.Queue[convID] {
+		if strings.Contains(msg.Text, itemID) && strings.Contains(msg.Text, "Inbox auto-forward fallback") {
+			return true
+		}
+	}
+	return false
+}
+
+type flakyLedgerStore struct {
+	*memStore
+	mu          sync.Mutex
+	failGet     bool
+	failPut     bool
+	failRelay   bool
+	putHook     func(key string)
+	putAttempts int
+}
+
+func (f *flakyLedgerStore) Setting(ctx context.Context, key string, dst any) (bool, error) {
+	f.mu.Lock()
+	fail := f.failGet && key == inboxTodoForwardLedgerKey
+	f.mu.Unlock()
+	if fail {
+		return false, errors.New("ledger read failed")
+	}
+	return f.memStore.Setting(ctx, key, dst)
+}
+
+func (f *flakyLedgerStore) PutSetting(ctx context.Context, key string, val any) error {
+	f.mu.Lock()
+	hook := f.putHook
+	if key == inboxTodoForwardLedgerKey {
+		f.putAttempts++
+		if f.failPut {
+			f.mu.Unlock()
+			return errors.New("ledger write failed")
+		}
+	}
+	if key == relayKey && f.failRelay {
+		f.mu.Unlock()
+		return errors.New("relay queue write failed")
+	}
+	f.mu.Unlock()
+	if hook != nil {
+		hook(key)
+	}
+	return f.memStore.PutSetting(ctx, key, val)
+}
+
+func TestInboxTodoForwardLedgerWriteFailureRetries(t *testing.T) {
+	ctx := context.Background()
+	st := &flakyLedgerStore{memStore: &memStore{}, failPut: true}
+	f := newFakeHub().withMachine()
+	s := newServiceOn(t, f, st)
+	if _, err := s.updateSettings(ctx, func(v *Settings) error { v.Main = "conv1"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	in := newFakeInbox()
+	f.inbox, in.svc = in, s
+	if err := s.inboxReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+	turnInboxTodoForwardOn(t, s)
+
+	todo := agentTask(t, s, f)
+	s.todos.mu.Lock()
+	s.todos.todos[todo.ID].PRURL = "https://github.com/example/repo/pull/501"
+	s.todos.mu.Unlock()
+
+	it := &InboxItem{
+		ID: "github:pr501", Source: "github", Kind: KindMention, Title: "PR #501", Sender: "reviewer",
+		Preview: "Please fix", Last: "c1", UpdatedAt: time.Now(),
+		Connector: &InboxConnector{URL: "https://github.com/example/repo/pull/501"},
+	}
+	s.inbox.mu.Lock()
+	s.inbox.items[it.ID] = it
+	s.inbox.mu.Unlock()
+
+	// Pass 1: PutSetting fails; authoritative in-memory ledger must NOT commit and item must stay retryable.
+	s.forwardInboxToTodos(ctx)
+	key := inboxTodoForwardKey(it.ID, todo.ID)
+	s.inbox.forwardMu.Lock()
+	_, inLedger := s.inbox.forwardLedger[key]
+	inFlight := s.inbox.forwardInFlight[key]
+	s.inbox.forwardMu.Unlock()
+	if inLedger || inFlight {
+		t.Fatalf("failed ledger write must leave inLedger=false inFlight=false, got inLedger=%v inFlight=%v", inLedger, inFlight)
+	}
+	if it.TodoForward != nil {
+		t.Fatalf("failed ledger write must not mark TodoForward committed, got %+v", it.TodoForward)
+	}
+
+	// Pass 2: PutSetting succeeds; retry must reuse the same client_msg_id, persist durably, and deduplicate Pass 3.
+	st.mu.Lock()
+	st.failPut = false
+	st.mu.Unlock()
+	s.forwardInboxToTodos(ctx)
+	if it.TodoForward == nil || it.TodoForward.Status != TodoForwardSent {
+		t.Fatalf("expected retry after ledger recovery to succeed, got %+v", it.TodoForward)
+	}
+	var clientIDs []string
+	f.mu.Lock()
+	for _, call := range f.calls {
+		if call.Method == DeviceSessionSend {
+			var p map[string]any
+			if json.Unmarshal(call.Params, &p) == nil {
+				if cid, _ := p["client_msg_id"].(string); cid != "" {
+					clientIDs = append(clientIDs, cid)
+				}
+			}
+		}
+	}
+	f.mu.Unlock()
+	if len(clientIDs) != 2 || clientIDs[0] != clientIDs[1] {
+		t.Fatalf("expected 2 idempotent sends with identical client_msg_id, got %v", clientIDs)
+	}
+
+	// Pass 3: now durable -> must not send a 3rd time.
+	before := len(sentToAgent(f))
+	s.forwardInboxToTodos(ctx)
+	if got := len(sentToAgent(f)) - before; got != 0 {
+		t.Fatalf("expected durable ledger to deduplicate pass 3, got %d extra sends", got)
+	}
+}
+
+func TestInboxTodoForwardSendUnknownRetriesSameClientIDWithoutFallback(t *testing.T) {
+	ctx := context.Background()
+	st := &flakyLedgerStore{memStore: &memStore{}}
+	f := newFakeHub().withMachine()
+	s := newServiceOn(t, f, st)
+	if _, err := s.updateSettings(ctx, func(v *Settings) error { v.Main = "conv1"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	in := newFakeInbox()
+	f.inbox, in.svc = in, s
+	if err := s.inboxReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+	turnInboxTodoForwardOn(t, s)
+
+	todo := agentTask(t, s, f)
+	s.todos.mu.Lock()
+	s.todos.todos[todo.ID].PRURL = "https://github.com/example/repo/pull/502"
+	s.todos.mu.Unlock()
+
+	it := &InboxItem{
+		ID: "github:pr502", Source: "github", Kind: KindMention, Title: "PR #502", Sender: "reviewer",
+		Preview: "Please check timeout", Last: "c1", UpdatedAt: time.Now(),
+		Connector: &InboxConnector{URL: "https://github.com/example/repo/pull/502"},
+	}
+	s.inbox.mu.Lock()
+	s.inbox.items[it.ID] = it
+	s.inbox.mu.Unlock()
+
+	f.mu.Lock()
+	f.failSend = context.DeadlineExceeded
+	f.mu.Unlock()
+
+	// Pass 1: sendUnknown -> NO supervisor fallback, NO terminal ledger entry.
+	s.forwardInboxToTodos(ctx)
+	if it.TodoForward != nil {
+		t.Fatalf("sendUnknown must not mark TodoForward delivered/fallback, got %+v", it.TodoForward)
+	}
+	if hasFallbackDelivery(s, f, "conv1", it.ID) {
+		t.Fatal("sendUnknown must NOT trigger an independent supervisor fallback")
+	}
+
+	// Pass 2: machine temporarily offline while previous send is uncertain -> STILL no duplicate supervisor fallback.
+	f.mu.Lock()
+	f.down = map[string]bool{"box": true}
+	f.mu.Unlock()
+	s.forwardInboxToTodos(ctx)
+	if hasFallbackDelivery(s, f, "conv1", it.ID) {
+		t.Fatal("offline retry after sendUnknown must NOT emit duplicate supervisor fallback")
+	}
+
+	// Pass 3: machine back online and idempotent retry succeeds -> resolves with same client_msg_id and commits.
+	f.mu.Lock()
+	f.down["box"] = false
+	f.failSend = nil
+	f.mu.Unlock()
+	s.forwardInboxToTodos(ctx)
+	if it.TodoForward == nil || it.TodoForward.Status != TodoForwardSent || it.TodoForward.SessionID != "sec00001" {
+		t.Fatalf("expected uncertain delivery to resolve to forwarded, got %+v", it.TodoForward)
+	}
+	var ids []string
+	f.mu.Lock()
+	for _, call := range f.calls {
+		if call.Method == DeviceSessionSend {
+			var p map[string]any
+			if json.Unmarshal(call.Params, &p) == nil {
+				if cid, _ := p["client_msg_id"].(string); cid != "" {
+					ids = append(ids, cid)
+				}
+			}
+		}
+	}
+	f.mu.Unlock()
+	if len(ids) != 2 || ids[0] != ids[1] {
+		t.Fatalf("expected uncertain retry to reuse exact client_msg_id, got %v", ids)
+	}
+	if hasFallbackDelivery(s, f, "conv1", it.ID) {
+		t.Fatal("resolved uncertain send must never emit supervisor fallback")
+	}
+}
+
+func TestInboxTodoForwardMandatoryFallbackWorksWithoutInboxSignalsAndHandlesUnaccepted(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("default config (inbox_signals=false) and owner-waiting task still deliver fallback", func(t *testing.T) {
+		f := newFakeHub().withMachine()
+		s := newServiceOn(t, f, &memStore{})
+		if _, err := s.updateSettings(ctx, func(v *Settings) error { v.Main = "conv1"; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		if s.inboxSignalsOn(ctx) {
+			t.Fatal("expected assistant.inbox_signals to default to false")
+		}
+		in := newFakeInbox()
+		f.inbox, in.svc = in, s
+		if err := s.inboxReady(ctx); err != nil {
+			t.Fatal(err)
+		}
+		turnInboxTodoForwardOn(t, s)
+
+		// Put conv1 live as assistant session so fallback delivers directly via DeviceAssistantSend.
+		f.setSessions("box", proto.Session{
+			SessionID: "conv1", MachineID: "box", Assistant: true, Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: time.Now(),
+		})
+
+		todo := supervisedTodo(t, s, "Owner-waiting PR task")
+		s.todos.mu.Lock()
+		s.todos.todos[todo.ID].PRURL = "https://github.com/example/repo/pull/503"
+		s.todos.todos[todo.ID].Supervision.State = reviewNeedsUser
+		s.todos.mu.Unlock()
+
+		it := &InboxItem{
+			ID: "github:pr503", Source: "github", Kind: KindMention, Title: "PR #503 review", Sender: "reviewer",
+			Preview: "Please update spec", Last: "c1", UpdatedAt: time.Now(),
+			Connector: &InboxConnector{URL: "https://github.com/example/repo/pull/503"},
+		}
+		s.inbox.mu.Lock()
+		s.inbox.items[it.ID] = it
+		s.inbox.mu.Unlock()
+
+		s.forwardInboxToTodos(ctx)
+		if it.TodoForward == nil || it.TodoForward.Status != TodoForwardFallback {
+			t.Fatalf("expected accepted mandatory fallback, got %+v", it.TodoForward)
+		}
+		if !hasFallbackDelivery(s, f, "conv1", it.ID) {
+			t.Fatal("expected mandatory fallback to reach conv1 even with inbox_signals=false and reviewNeedsUser")
+		}
+		// Must NOT rely on setting-gated sigInbox.
+		if _, ok := pendingInbox(s, todo.ID); ok {
+			t.Fatal("mandatory fallback must not reuse setting-gated sigInbox")
+		}
+	})
+
+	t.Run("leader-supervised task routes fallback to supervising conversation above leader", func(t *testing.T) {
+		f := newFakeHub().withMachine()
+		s := newServiceOn(t, f, &memStore{})
+		if _, err := s.updateSettings(ctx, func(v *Settings) error { v.Main = "conv1"; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		in := newFakeInbox()
+		f.inbox, in.svc = in, s
+		if err := s.inboxReady(ctx); err != nil {
+			t.Fatal(err)
+		}
+		turnInboxTodoForwardOn(t, s)
+
+		f.setSessions("box", proto.Session{
+			SessionID: "conv1", MachineID: "box", Assistant: true, Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: time.Now(),
+		})
+		leadTodo := supervisedTodo(t, s, "Leader task")
+		workerTodo := supervisedTodo(t, s, "Worker PR task")
+		s.todos.mu.Lock()
+		s.todos.todos[leadTodo.ID].Agents = []TodoAgent{{MachineID: "box", SessionID: "lead0001", LinkedAt: time.Now()}}
+		s.todos.todos[workerTodo.ID].PRURL = "https://github.com/example/repo/pull/504"
+		s.todos.todos[workerTodo.ID].Supervision.Supervisor = leaderRef("box", "lead0001")
+		s.todos.mu.Unlock()
+
+		it := &InboxItem{
+			ID: "github:pr504", Source: "github", Kind: KindMention, Title: "PR #504", Sender: "reviewer",
+			Preview: "Needs fix", Last: "c1", UpdatedAt: time.Now(),
+			Connector: &InboxConnector{URL: "https://github.com/example/repo/pull/504"},
+		}
+		s.inbox.mu.Lock()
+		s.inbox.items[it.ID] = it
+		s.inbox.mu.Unlock()
+
+		s.forwardInboxToTodos(ctx)
+		if it.TodoForward == nil || it.TodoForward.Status != TodoForwardFallback {
+			t.Fatalf("expected leader-supervised fallback accepted by conv1, got %+v", it.TodoForward)
+		}
+		if !hasFallbackDelivery(s, f, "conv1", it.ID) {
+			t.Fatal("expected leader-supervised task fallback to reach supervising conversation conv1")
+		}
+	})
+
+	t.Run("unaccepted fallback stays uncommitted and surfaces failed until accepted", func(t *testing.T) {
+		st := &flakyLedgerStore{memStore: &memStore{}, failRelay: true}
+		f := newFakeHub().withMachine()
+		s := newServiceOn(t, f, st)
+		if _, err := s.updateSettings(ctx, func(v *Settings) error { v.Main = "conv1"; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		in := newFakeInbox()
+		f.inbox, in.svc = in, s
+		if err := s.inboxReady(ctx); err != nil {
+			t.Fatal(err)
+		}
+		turnInboxTodoForwardOn(t, s)
+
+		todo := supervisedTodo(t, s, "Queue-failing fallback task")
+		s.todos.mu.Lock()
+		s.todos.todos[todo.ID].PRURL = "https://github.com/example/repo/pull/505"
+		s.todos.mu.Unlock()
+
+		it := &InboxItem{
+			ID: "github:pr505", Source: "github", Kind: KindMention, Title: "PR #505", Sender: "reviewer",
+			Preview: "Please review", Last: "c1", UpdatedAt: time.Now(),
+			Connector: &InboxConnector{URL: "https://github.com/example/repo/pull/505"},
+		}
+		s.inbox.mu.Lock()
+		s.inbox.items[it.ID] = it
+		s.inbox.mu.Unlock()
+
+		// Pass 1: relay queue save fails -> status is failed and ledger stays uncommitted.
+		s.forwardInboxToTodos(ctx)
+		if it.TodoForward == nil || it.TodoForward.Status != TodoForwardFailed {
+			t.Fatalf("expected failed status when supervisor delivery not accepted, got %+v", it.TodoForward)
+		}
+		key := inboxTodoForwardKey(it.ID, todo.ID)
+		s.inbox.forwardMu.Lock()
+		_, committed := s.inbox.forwardLedger[key]
+		s.inbox.forwardMu.Unlock()
+		if committed {
+			t.Fatal("unaccepted fallback must not commit a terminal ledger record")
+		}
+
+		// Pass 2: relay store recovers -> retries and commits fallback.
+		st.mu.Lock()
+		st.failRelay = false
+		st.mu.Unlock()
+		s.forwardInboxToTodos(ctx)
+		if it.TodoForward == nil || it.TodoForward.Status != TodoForwardFallback {
+			t.Fatalf("expected retry to succeed with fallback once supervisor queue recovers, got %+v", it.TodoForward)
+		}
+		if !hasFallbackDelivery(s, f, "conv1", it.ID) {
+			t.Fatal("expected accepted fallback delivery after recovery")
+		}
+	})
+}
+
+func TestInboxTodoForwardLedgerSerializedAndFailedLoadDoesNotClobber(t *testing.T) {
+	ctx := context.Background()
+	st := &flakyLedgerStore{memStore: &memStore{}, failGet: true}
+	// Pre-seed a persisted record in the underlying memStore.
+	existingKey := inboxTodoForwardKey("github:existing", "todo_existing")
+	if err := st.memStore.PutSetting(ctx, inboxTodoForwardLedgerKey, map[string]inboxTodoForwardRecord{
+		existingKey: {
+			InboxItemID: "github:existing",
+			TodoID:      "todo_existing",
+			Last:        "c0",
+			Status:      TodoForwardSent,
+			ForwardedAt: time.Now().UTC(),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	f := newFakeHub().withMachine()
+	s := newServiceOn(t, f, st)
+
+	// Failed initial load must NOT publish an empty map or mark forwardLoaded=true.
+	if err := s.loadTodoForwardLedger(ctx); err == nil {
+		t.Fatal("expected loadTodoForwardLedger to fail when store Setting fails")
+	}
+	s.inbox.forwardMu.Lock()
+	loaded := s.inbox.forwardLoaded
+	s.inbox.forwardMu.Unlock()
+	if loaded {
+		t.Fatal("failed initial load must leave forwardLoaded=false")
+	}
+
+	// Once load succeeds, the pre-seeded record must be intact.
+	st.mu.Lock()
+	st.failGet = false
+	st.mu.Unlock()
+	if err := s.loadTodoForwardLedger(ctx); err != nil {
+		t.Fatalf("loadTodoForwardLedger after recovery: %v", err)
+	}
+	claimed, _, err := s.claimTodoForward(ctx, "github:existing", "todo_existing", "c0")
+	if err != nil || claimed {
+		t.Fatalf("pre-seeded record must deduplicate, got claimed=%v err=%v", claimed, err)
+	}
+
+	// Concurrent finishTodoForward writes for two distinct keys must serialize so neither clobbers the other.
+	enteredFirst := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var hookOnce sync.Once
+	st.mu.Lock()
+	st.putHook = func(key string) {
+		if key == inboxTodoForwardLedgerKey {
+			hookOnce.Do(func() {
+				close(enteredFirst)
+				<-releaseFirst
+			})
+		}
+	}
+	st.mu.Unlock()
+
+	var wg sync.WaitGroup
+	recA := inboxTodoForwardRecord{InboxItemID: "github:a", TodoID: "todo_a", Last: "1", Status: TodoForwardSent, ForwardedAt: time.Now().UTC()}
+	recB := inboxTodoForwardRecord{InboxItemID: "github:b", TodoID: "todo_b", Last: "1", Status: TodoForwardSent, ForwardedAt: time.Now().UTC()}
+	if ok, _, err := s.claimTodoForward(ctx, recA.InboxItemID, recA.TodoID, recA.Last); err != nil || !ok {
+		t.Fatalf("claim A failed: ok=%v err=%v", ok, err)
+	}
+	if ok, _, err := s.claimTodoForward(ctx, recB.InboxItemID, recB.TodoID, recB.Last); err != nil || !ok {
+		t.Fatalf("claim B failed: ok=%v err=%v", ok, err)
+	}
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if err := s.finishTodoForward(ctx, recA, true); err != nil {
+			t.Errorf("finish A: %v", err)
+		}
+	}()
+	<-enteredFirst
+	go func() {
+		defer wg.Done()
+		if err := s.finishTodoForward(ctx, recB, true); err != nil {
+			t.Errorf("finish B: %v", err)
+		}
+	}()
+	close(releaseFirst)
+	wg.Wait()
+
+	var persisted map[string]inboxTodoForwardRecord
+	ok, err := st.memStore.Setting(ctx, inboxTodoForwardLedgerKey, &persisted)
+	if err != nil || !ok {
+		t.Fatalf("read persisted ledger: ok=%v err=%v", ok, err)
+	}
+	for _, k := range []string{existingKey, inboxTodoForwardKey("github:a", "todo_a"), inboxTodoForwardKey("github:b", "todo_b")} {
+		if _, exists := persisted[k]; !exists {
+			t.Fatalf("persisted ledger lost concurrent/existing key %q: %+v", k, persisted)
+		}
+	}
 }

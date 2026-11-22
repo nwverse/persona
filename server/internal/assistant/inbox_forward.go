@@ -15,7 +15,6 @@ import (
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/lazyre"
-	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -35,11 +34,23 @@ const (
 	TodoForwardFallback = "fallback"
 	TodoForwardFailed   = "failed"
 
+	// Internal retryable ledger status when a node send/resume returned an ambiguous (sendUnknown) outcome.
+	todoForwardUncertain = "uncertain"
+
 	todoForwardMatchPR    = "pull_request"
 	todoForwardMatchIssue = "issue"
 
 	inboxTodoForwardLedgerCap = 2000
 )
+
+func isTerminalTodoForwardStatus(status string) bool {
+	switch status {
+	case TodoForwardSent, TodoForwardQueued, TodoForwardResumed, TodoForwardFallback:
+		return true
+	default:
+		return false
+	}
+}
 
 // InboxTodoForward is persisted on an InboxItem after deterministic PR/Issue auto-forwarding (#12492).
 type InboxTodoForward struct {
@@ -62,6 +73,10 @@ type inboxTodoForwardRecord struct {
 	Last         string    `json:"last,omitempty"`
 	CanonicalURL string    `json:"canonical_url,omitempty"`
 	Status       string    `json:"status"`
+	MachineID    string    `json:"machine_id,omitempty"`
+	SessionID    string    `json:"session_id,omitempty"`
+	ClientMsgID  string    `json:"client_msg_id,omitempty"`
+	WasResume    bool      `json:"was_resume,omitempty"`
 	Reason       string    `json:"reason,omitempty"`
 	ForwardedAt  time.Time `json:"forwarded_at"`
 }
@@ -102,8 +117,23 @@ func (s *Service) forwardInboxSoon(ctx context.Context) {
 	}()
 }
 
+// isValidGitHubSegment reports whether a decoded GitHub owner or repository segment is safe and valid.
+func isValidGitHubSegment(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // normalizeGitHubTaskURL normalizes a GitHub PR or Issue URL to canonical form:
-// https://github.com/<owner>/<repo>/(pull|issues)/<num> (lowercased owner/repo, stripped query/fragment/trailing slash).
+// https://github.com/<owner>/<repo>/(pull|issues)/<num> (decoded and lowercased owner/repo, stripped query/fragment/trailing slash).
 func normalizeGitHubTaskURL(raw string) (canonical, kind string, ok bool) {
 	trimmed := strings.TrimSpace(raw)
 	trimmed = strings.TrimRight(trimmed, ".,;:!?)]}>\"'，。；：！）》」』") // i18n-ignore: URL punctuation, not displayed text
@@ -115,11 +145,22 @@ func normalizeGitHubTaskURL(raw string) (canonical, kind string, ok bool) {
 	if host != "github.com" && host != "www.github.com" {
 		return "", "", false
 	}
-	parts := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
-	if len(parts) < 4 || parts[0] == "" || parts[1] == "" {
+	rawParts := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
+	if len(rawParts) < 4 {
 		return "", "", false
 	}
+	parts := make([]string, len(rawParts))
+	for i, rawSeg := range rawParts {
+		dec, err := url.PathUnescape(rawSeg)
+		if err != nil || dec == "" || strings.ContainsAny(dec, "/\\\x00") {
+			return "", "", false
+		}
+		parts[i] = dec
+	}
 	owner, repo := strings.ToLower(parts[0]), strings.ToLower(parts[1])
+	if !isValidGitHubSegment(owner) || !isValidGitHubSegment(repo) {
+		return "", "", false
+	}
 	seg := strings.ToLower(parts[2])
 	n, err := strconv.ParseUint(parts[3], 10, 64)
 	if err != nil || n == 0 {
@@ -502,8 +543,19 @@ func inboxTodoForwardKey(itemID, todoID string) string {
 }
 
 // loadTodoForwardLedger reads persisted (inbox_item_id, todo_id) forwarding records once per process.
+// Serialized by forwardStoreMu so overlapping passes cannot race initial load against writes or publish an empty map on failure.
 func (s *Service) loadTodoForwardLedger(ctx context.Context) error {
 	b := &s.inbox
+	b.forwardMu.Lock()
+	if b.forwardLoaded {
+		b.forwardMu.Unlock()
+		return nil
+	}
+	b.forwardMu.Unlock()
+
+	b.forwardStoreMu.Lock()
+	defer b.forwardStoreMu.Unlock()
+
 	b.forwardMu.Lock()
 	if b.forwardLoaded {
 		b.forwardMu.Unlock()
@@ -522,18 +574,25 @@ func (s *Service) loadTodoForwardLedger(ctx context.Context) error {
 			loaded = stored
 		}
 	}
+
 	b.forwardMu.Lock()
-	if !b.forwardLoaded {
-		b.forwardLedger = loaded
-		b.forwardLoaded = true
+	b.forwardLedger = loaded
+	if b.forwardPending == nil {
+		b.forwardPending = map[string]inboxTodoForwardRecord{}
 	}
+	for k, rec := range loaded {
+		if rec.Status == todoForwardUncertain {
+			b.forwardPending[k] = rec
+		}
+	}
+	b.forwardLoaded = true
 	b.forwardMu.Unlock()
 	return nil
 }
 
-func (s *Service) claimTodoForward(ctx context.Context, itemID, todoID, last string) (claimed bool, err error) {
+func (s *Service) claimTodoForward(ctx context.Context, itemID, todoID, last string) (claimed bool, pending *inboxTodoForwardRecord, err error) {
 	if err := s.loadTodoForwardLedger(ctx); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	key := inboxTodoForwardKey(itemID, todoID)
 	b := &s.inbox
@@ -543,41 +602,102 @@ func (s *Service) claimTodoForward(ctx context.Context, itemID, todoID, last str
 		b.forwardInFlight = map[string]bool{}
 	}
 	if b.forwardInFlight[key] {
-		return false, nil
+		return false, nil, nil
 	}
-	if rec, exists := b.forwardLedger[key]; exists {
+	if rec, exists := b.forwardLedger[key]; exists && isTerminalTodoForwardStatus(rec.Status) {
 		if last == "" || rec.Last == "" || rec.Last == last {
-			return false, nil
+			return false, nil, nil
 		}
 	}
+	if p, exists := b.forwardPending[key]; exists && (last == "" || p.Last == "" || p.Last == last) {
+		cp := p
+		pending = &cp
+	}
 	b.forwardInFlight[key] = true
-	return true, nil
+	return true, pending, nil
 }
 
-func (s *Service) finishTodoForward(ctx context.Context, rec inboxTodoForwardRecord, persist bool) {
+// finishTodoForward releases the in-flight claim for (itemID, todoID). When persist is true, it durably persists
+// the record under forwardStoreMu BEFORE publishing it into the authoritative in-memory ledger; on persistence error,
+// the previous in-memory ledger state is preserved, the in-flight marker is cleared, and the error is returned so a later pass retries.
+func (s *Service) finishTodoForward(ctx context.Context, rec inboxTodoForwardRecord, persist bool) error {
 	key := inboxTodoForwardKey(rec.InboxItemID, rec.TodoID)
 	b := &s.inbox
-	b.forwardMu.Lock()
-	delete(b.forwardInFlight, key)
 	if !persist {
+		b.forwardMu.Lock()
+		delete(b.forwardInFlight, key)
 		b.forwardMu.Unlock()
-		return
+		return nil
 	}
-	if b.forwardLedger == nil {
-		b.forwardLedger = map[string]inboxTodoForwardRecord{}
+
+	b.forwardStoreMu.Lock()
+	defer b.forwardStoreMu.Unlock()
+
+	b.forwardMu.Lock()
+	if !b.forwardLoaded {
+		delete(b.forwardInFlight, key)
+		b.forwardMu.Unlock()
+		return fmt.Errorf("todo forward ledger not loaded")
 	}
-	b.forwardLedger[key] = rec
-	if len(b.forwardLedger) > inboxTodoForwardLedgerCap {
-		pruneTodoForwardLedgerLocked(b.forwardLedger, inboxTodoForwardLedgerCap)
+	baseGen := b.forwardGen
+	next := maps.Clone(b.forwardLedger)
+	if next == nil {
+		next = map[string]inboxTodoForwardRecord{}
 	}
-	snapshot := maps.Clone(b.forwardLedger)
+	next[key] = rec
+	if len(next) > inboxTodoForwardLedgerCap {
+		pruneTodoForwardLedgerLocked(next, inboxTodoForwardLedgerCap)
+	}
 	b.forwardMu.Unlock()
 
 	if st := s.store(); st != nil {
-		if err := st.PutSetting(ctx, inboxTodoForwardLedgerKey, snapshot); err != nil {
+		if err := st.PutSetting(ctx, inboxTodoForwardLedgerKey, next); err != nil {
+			b.forwardMu.Lock()
+			delete(b.forwardInFlight, key)
+			b.forwardMu.Unlock()
 			s.logf("inbox: save todo forward ledger: %v", err)
+			return err
 		}
 	}
+
+	b.forwardMu.Lock()
+	if b.forwardGen == baseGen {
+		b.forwardLedger = next
+	} else {
+		if b.forwardLedger == nil {
+			b.forwardLedger = map[string]inboxTodoForwardRecord{}
+		}
+		b.forwardLedger[key] = rec
+	}
+	b.forwardGen++
+	if isTerminalTodoForwardStatus(rec.Status) {
+		delete(b.forwardPending, key)
+	} else if rec.Status == todoForwardUncertain {
+		if b.forwardPending == nil {
+			b.forwardPending = map[string]inboxTodoForwardRecord{}
+		}
+		b.forwardPending[key] = rec
+	}
+	delete(b.forwardInFlight, key)
+	b.forwardMu.Unlock()
+	return nil
+}
+
+// recordTodoForwardUncertain saves a retryable uncertain-send marker so later passes retry only via the node's
+// idempotent send/resume path with the same client_msg_id instead of emitting a duplicate supervisor fallback.
+func (s *Service) recordTodoForwardUncertain(ctx context.Context, rec inboxTodoForwardRecord) {
+	rec.Status = todoForwardUncertain
+	key := inboxTodoForwardKey(rec.InboxItemID, rec.TodoID)
+	b := &s.inbox
+	// Keep in-memory pending state even if durable persistence fails, so in-process retries still use the same client_msg_id.
+	b.forwardMu.Lock()
+	if b.forwardPending == nil {
+		b.forwardPending = map[string]inboxTodoForwardRecord{}
+	}
+	b.forwardPending[key] = rec
+	b.forwardMu.Unlock()
+
+	_ = s.finishTodoForward(ctx, rec, true)
 }
 
 func pruneTodoForwardLedgerLocked(m map[string]inboxTodoForwardRecord, keep int) {
@@ -695,7 +815,7 @@ func (s *Service) forwardInboxToTodos(ctx context.Context) {
 		if !ok {
 			continue
 		}
-		if tf := it.TodoForward; tf != nil && tf.TodoID == m.todo.ID && (it.Last == "" || tf.Last == "" || tf.Last == it.Last) {
+		if tf := it.TodoForward; tf != nil && tf.TodoID == m.todo.ID && isTerminalTodoForwardStatus(tf.Status) && (it.Last == "" || tf.Last == "" || tf.Last == it.Last) {
 			continue
 		}
 		candidates = append(candidates, candidate{it: it, snapshot: *it, match: m})
@@ -727,8 +847,19 @@ func (s *Service) loadOpenTodoRepositories(ctx context.Context, ids []string) ma
 	return out
 }
 
+type todoForwardDelivery struct {
+	status       string
+	machineID    string
+	sessionID    string
+	clientMsgID  string
+	wasResume    bool
+	reason       string
+	commitLedger bool
+	uncertain    bool
+}
+
 func (s *Service) forwardOneInboxItemToTodo(ctx context.Context, it *InboxItem, snap InboxItem, m todoForwardMatch) {
-	claimed, err := s.claimTodoForward(ctx, snap.ID, m.todo.ID, snap.Last)
+	claimed, pending, err := s.claimTodoForward(ctx, snap.ID, m.todo.ID, snap.Last)
 	if err != nil {
 		s.logf("inbox: todo forward ledger check for %s -> %s: %v", snap.ID, m.todo.ID, err)
 		return
@@ -740,12 +871,12 @@ func (s *Service) forwardOneInboxItemToTodo(ctx context.Context, it *InboxItem, 
 	// Re-check that the to-do is still open right before delivery.
 	curTodo, ok := s.todoNow(m.todo.ID)
 	if !ok || !taskOpen(curTodo) {
-		s.finishTodoForward(ctx, inboxTodoForwardRecord{InboxItemID: snap.ID, TodoID: m.todo.ID}, false)
+		_ = s.finishTodoForward(ctx, inboxTodoForwardRecord{InboxItemID: snap.ID, TodoID: m.todo.ID}, false)
 		return
 	}
 
 	envelope := formatInboxTodoForwardEnvelope(&snap, curTodo, m.canonicalURL, m.matchKind)
-	status, machineID, sessionID, reason := s.deliverInboxForwardToTodo(ctx, &snap, curTodo, m.canonicalURL, envelope)
+	res := s.deliverInboxForwardToTodo(ctx, &snap, curTodo, m.canonicalURL, envelope, pending)
 	now := time.Now().UTC()
 
 	rec := inboxTodoForwardRecord{
@@ -753,42 +884,70 @@ func (s *Service) forwardOneInboxItemToTodo(ctx context.Context, it *InboxItem, 
 		TodoID:       curTodo.ID,
 		Last:         snap.Last,
 		CanonicalURL: m.canonicalURL,
-		Status:       status,
-		Reason:       reason,
+		Status:       res.status,
+		MachineID:    res.machineID,
+		SessionID:    res.sessionID,
+		ClientMsgID:  res.clientMsgID,
+		WasResume:    res.wasResume,
+		Reason:       res.reason,
 		ForwardedAt:  now,
 	}
-	s.finishTodoForward(ctx, rec, true)
+
+	if res.uncertain {
+		// Ambiguous node send outcome: preserve retryable pending state with the same client_msg_id and do not fall back or mark delivered.
+		s.recordTodoForwardUncertain(ctx, rec)
+		return
+	}
+
+	if res.commitLedger {
+		if err := s.finishTodoForward(ctx, rec, true); err != nil {
+			// Ledger persistence failed: do not mark the Inbox item as delivered so the next pass retries.
+			return
+		}
+	} else {
+		// Uncommitted failure (e.g. supervisor delivery was not accepted): release in-flight claim without persisting to ledger.
+		_ = s.finishTodoForward(ctx, rec, false)
+	}
 
 	// Persist forwarding metadata on the Inbox item without dropping it.
 	b := &s.inbox
 	var w *inboxWrite
+	recordAudit := res.commitLedger
 	b.mu.Lock()
 	if b.items[snap.ID] == it {
-		w = beginWrite(it)
-		it.TodoForward = &InboxTodoForward{
-			TodoID:       curTodo.ID,
-			TodoTitle:    clip(oneLine(curTodo.Title), 120),
-			CanonicalURL: m.canonicalURL,
-			MatchKind:    m.matchKind,
-			Status:       status,
-			MachineID:    machineID,
-			SessionID:    sessionID,
-			Reason:       reason,
-			ForwardedAt:  now,
-			Last:         snap.Last,
+		unchangedFailure := !res.commitLedger && it.TodoForward != nil &&
+			it.TodoForward.TodoID == curTodo.ID &&
+			it.TodoForward.Status == res.status &&
+			it.TodoForward.Reason == res.reason &&
+			it.TodoForward.Last == snap.Last
+		if !unchangedFailure {
+			w = beginWrite(it)
+			it.TodoForward = &InboxTodoForward{
+				TodoID:       curTodo.ID,
+				TodoTitle:    clip(oneLine(curTodo.Title), 120),
+				CanonicalURL: m.canonicalURL,
+				MatchKind:    m.matchKind,
+				Status:       res.status,
+				MachineID:    res.machineID,
+				SessionID:    res.sessionID,
+				Reason:       res.reason,
+				ForwardedAt:  now,
+				Last:         snap.Last,
+			}
+			if it.Agent == nil {
+				it.Agent = &InboxAgent{State: AgentSkipped}
+			}
+			if it.Agent.TodoID == "" {
+				it.Agent.TodoID = curTodo.ID
+			}
+			// Avoid duplicate supervision signal if assistant.inbox_signals is also enabled for this committed delivery.
+			if res.commitLedger && it.Agent.TodoID == curTodo.ID && snap.Last != "" {
+				it.Agent.signaledOf = snap.Last
+				it.Agent.signaled = it.Count
+			}
+			b.settle(w)
+			recordAudit = true
 		}
-		if it.Agent == nil {
-			it.Agent = &InboxAgent{State: AgentSkipped}
-		}
-		if it.Agent.TodoID == "" {
-			it.Agent.TodoID = curTodo.ID
-		}
-		// Avoid duplicate supervision signal if assistant.inbox_signals is also enabled for this exact message.
-		if it.Agent.TodoID == curTodo.ID && snap.Last != "" {
-			it.Agent.signaledOf = snap.Last
-			it.Agent.signaled = it.Count
-		}
-		b.settle(w)
 	}
 	b.mu.Unlock()
 	if w != nil {
@@ -796,7 +955,9 @@ func (s *Service) forwardOneInboxItemToTodo(ctx context.Context, it *InboxItem, 
 	}
 
 	// Append audit entry on the to-do for traceability.
-	s.recordTodoForwardAudit(ctx, &snap, curTodo, m.canonicalURL, status, machineID, sessionID, reason)
+	if recordAudit {
+		s.recordTodoForwardAudit(ctx, &snap, curTodo, m.canonicalURL, res.status, res.machineID, res.sessionID, res.reason)
+	}
 }
 
 type resolvedBoundAgent struct {
@@ -889,15 +1050,25 @@ func (s *Service) resolveLatestBoundAgent(ctx context.Context, t Todo) resolvedB
 	return resolvedBoundAgent{reason: lastReason}
 }
 
-// deliverInboxForwardToTodo sends, queues, or resumes the bound Agent, falling back to the supervising conversation on unavailability.
-func (s *Service) deliverInboxForwardToTodo(ctx context.Context, it *InboxItem, t Todo, canonicalURL, envelope string) (status, machineID, sessionID, reason string) {
+// deliverInboxForwardToTodo sends, queues, or resumes the bound Agent, falling back to the supervising conversation on definite unavailability.
+// When a previous attempt returned an ambiguous (sendUnknown) outcome, pending carries its target and client_msg_id so
+// retries go exclusively through the node's idempotent send/resume path without emitting a duplicate supervisor fallback.
+func (s *Service) deliverInboxForwardToTodo(ctx context.Context, it *InboxItem, t Todo, canonicalURL, envelope string, pending *inboxTodoForwardRecord) todoForwardDelivery {
+	clientMsgID := namedClientID("inbox-todo-forward\n" + it.ID + "\n" + t.ID + "\n" + it.Last)
+	if pending != nil && pending.ClientMsgID != "" {
+		clientMsgID = pending.ClientMsgID
+	}
+
+	if pending != nil && pending.MachineID != "" && pending.SessionID != "" {
+		return s.retryUncertainInboxForward(ctx, t, canonicalURL, envelope, *pending, clientMsgID)
+	}
+
 	resolved := s.resolveLatestBoundAgent(ctx, t)
 	if !resolved.found {
-		return s.fallbackInboxForwardToSupervisor(ctx, it, t, canonicalURL, resolved.reason)
+		return s.fallbackInboxForwardToSupervisor(ctx, it, t, canonicalURL, envelope, resolved.reason)
 	}
 	c := resolved.session
 	am := resolved.device
-	clientMsgID := namedClientID("inbox-todo-forward\n" + it.ID + "\n" + t.ID + "\n" + it.Last)
 
 	stopped := c.Status == proto.StatusOffline || c.ReadOnlyReason == "stopped"
 	if stopped {
@@ -907,7 +1078,7 @@ func (s *Service) deliverInboxForwardToTodo(ctx context.Context, it *InboxItem, 
 		}
 		resumeWhy := fmt.Sprintf("auto-forwarded Inbox event for %s", canonicalURL)
 		if err := s.resumeAllowed(ctx, supervisorSelf, am, c, resumeWhy, nil); err != nil {
-			return s.fallbackInboxForwardToSupervisor(ctx, it, t, canonicalURL, clip(oneLine(err.Error()), 240))
+			return s.fallbackInboxForwardToSupervisor(ctx, it, t, canonicalURL, envelope, clip(oneLine(err.Error()), 240))
 		}
 		params := map[string]any{
 			"session_id":    c.SessionID,
@@ -915,9 +1086,26 @@ func (s *Service) deliverInboxForwardToTodo(ctx context.Context, it *InboxItem, 
 			"client_msg_id": clientMsgID,
 		}
 		if _, err := s.resumeAndSend(ctx, supervisorSelf, am, c, params, resumeWhy, envelope, "", nil); err != nil {
-			return s.fallbackInboxForwardToSupervisor(ctx, it, t, canonicalURL, clip(oneLine(err.Error()), 240))
+			if sendUnknown(err) {
+				return todoForwardDelivery{
+					status:      todoForwardUncertain,
+					machineID:   c.MachineID,
+					sessionID:   c.SessionID,
+					clientMsgID: clientMsgID,
+					wasResume:   true,
+					reason:      clip(oneLine(err.Error()), 240),
+					uncertain:   true,
+				}
+			}
+			return s.fallbackInboxForwardToSupervisor(ctx, it, t, canonicalURL, envelope, clip(oneLine(err.Error()), 240))
 		}
-		return TodoForwardResumed, c.MachineID, c.SessionID, ""
+		return todoForwardDelivery{
+			status:       TodoForwardResumed,
+			machineID:    c.MachineID,
+			sessionID:    c.SessionID,
+			clientMsgID:  clientMsgID,
+			commitLedger: true,
+		}
 	}
 
 	working := c.Status == proto.StatusWorking || c.State == proto.StateWorking
@@ -929,38 +1117,252 @@ func (s *Service) deliverInboxForwardToTodo(ctx context.Context, it *InboxItem, 
 		"client_msg_id": clientMsgID,
 	}
 	if err := s.call(sctx, c.MachineID, DeviceSessionSend, params, nil); err != nil {
-		return s.fallbackInboxForwardToSupervisor(ctx, it, t, canonicalURL, clip(oneLine(err.Error()), 240))
+		if sendUnknown(err) {
+			return todoForwardDelivery{
+				status:      todoForwardUncertain,
+				machineID:   c.MachineID,
+				sessionID:   c.SessionID,
+				clientMsgID: clientMsgID,
+				reason:      clip(oneLine(err.Error()), 240),
+				uncertain:   true,
+			}
+		}
+		return s.fallbackInboxForwardToSupervisor(ctx, it, t, canonicalURL, envelope, clip(oneLine(err.Error()), 240))
 	}
+	status := TodoForwardSent
 	if working {
-		return TodoForwardQueued, c.MachineID, c.SessionID, ""
+		status = TodoForwardQueued
 	}
-	return TodoForwardSent, c.MachineID, c.SessionID, ""
+	return todoForwardDelivery{
+		status:       status,
+		machineID:    c.MachineID,
+		sessionID:    c.SessionID,
+		clientMsgID:  clientMsgID,
+		commitLedger: true,
+	}
 }
 
-func (s *Service) fallbackInboxForwardToSupervisor(ctx context.Context, it *InboxItem, t Todo, canonicalURL, reason string) (status, machineID, sessionID, outReason string) {
-	reason = clip(oneLine(reason), 240)
-	if t.Supervision != nil {
-		g := superviseSignal{
-			Todo:   t.ID,
-			Kind:   sigInbox,
-			Key:    "todo_forward:" + it.ID + "@" + it.Last,
-			Detail: "Inbox auto-forward fallback: " + reason,
-			Inbox: &prompts.SuperviseInbox{
-				Item:    it.ID,
-				Title:   clip(oneLine(it.Title), 80),
-				Sender:  clip(oneLine(it.Sender), 40),
-				Preview: clip(oneLine(it.Preview), 140),
-				Count:   max(it.Count, 1),
-				URL:     canonicalURL,
-			},
+// retryUncertainInboxForward resolves a previously ambiguous (sendUnknown) delivery exclusively through the original
+// node's idempotent send/resume path using the same client_msg_id, never emitting an independent supervisor fallback.
+func (s *Service) retryUncertainInboxForward(ctx context.Context, t Todo, canonicalURL, envelope string, pending inboxTodoForwardRecord, clientMsgID string) todoForwardDelivery {
+	stayUncertain := func(reason string) todoForwardDelivery {
+		return todoForwardDelivery{
+			status:      todoForwardUncertain,
+			machineID:   pending.MachineID,
+			sessionID:   pending.SessionID,
+			clientMsgID: clientMsgID,
+			wasResume:   pending.WasResume,
+			reason:      clip(oneLine(reason), 240),
+			uncertain:   true,
 		}
-		s.signal(g)
-		return TodoForwardFallback, "", "", reason
 	}
-	if t.Origin != "" {
-		return TodoForwardFallback, "", "", reason
+
+	am, ok := s.device(ctx, pending.MachineID)
+	if !ok || !am.Reachable {
+		return stayUncertain(fmt.Sprintf("awaiting node %s to confirm uncertain delivery", pending.MachineID))
 	}
-	return TodoForwardFailed, "", "", reason + " (no supervising conversation)"
+	list, err := s.sessions(ctx, pending.MachineID)
+	if err != nil {
+		return stayUncertain(fmt.Sprintf("machine %s unreachable during uncertain delivery retry: %v", pending.MachineID, err))
+	}
+	var matched *proto.Session
+	for i := range list {
+		if list[i].SessionID == pending.SessionID {
+			sess := list[i]
+			sess.MachineID = pending.MachineID
+			matched = &sess
+			break
+		}
+	}
+	if matched == nil {
+		return stayUncertain(fmt.Sprintf("bound session %s/%s not listed during uncertain delivery retry", pending.MachineID, short(pending.SessionID)))
+	}
+
+	stopped := matched.Status == proto.StatusOffline || matched.ReadOnlyReason == "stopped"
+	if stopped {
+		if !pending.WasResume {
+			return stayUncertain(fmt.Sprintf("session %s/%s stopped after uncertain send", pending.MachineID, short(pending.SessionID)))
+		}
+		supervisorSelf := supervisorOf(t)
+		if supervisorSelf == "" {
+			supervisorSelf = t.Origin
+		}
+		resumeWhy := fmt.Sprintf("auto-forwarded Inbox event for %s", canonicalURL)
+		if err := s.resumeAllowed(ctx, supervisorSelf, am, *matched, resumeWhy, nil); err != nil {
+			return stayUncertain(err.Error())
+		}
+		params := map[string]any{
+			"session_id":    matched.SessionID,
+			"text":          envelope,
+			"client_msg_id": clientMsgID,
+		}
+		if _, err := s.resumeAndSend(ctx, supervisorSelf, am, *matched, params, resumeWhy, envelope, "", nil); err != nil {
+			return stayUncertain(err.Error())
+		}
+		return todoForwardDelivery{
+			status:       TodoForwardResumed,
+			machineID:    matched.MachineID,
+			sessionID:    matched.SessionID,
+			clientMsgID:  clientMsgID,
+			commitLedger: true,
+		}
+	}
+
+	working := matched.Status == proto.StatusWorking || matched.State == proto.StateWorking
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)
+	defer cancel()
+	params := map[string]any{
+		"session_id":    matched.SessionID,
+		"text":          envelope,
+		"client_msg_id": clientMsgID,
+	}
+	if err := s.call(sctx, matched.MachineID, DeviceSessionSend, params, nil); err != nil {
+		return stayUncertain(err.Error())
+	}
+	status := TodoForwardSent
+	if working {
+		status = TodoForwardQueued
+	}
+	return todoForwardDelivery{
+		status:       status,
+		machineID:    matched.MachineID,
+		sessionID:    matched.SessionID,
+		clientMsgID:  clientMsgID,
+		commitLedger: true,
+	}
+}
+
+// resolveFallbackSupervisorConversation picks the supervising conversation for a mandatory inbox auto-forward fallback.
+// It is controlled strictly by inbox.todo_forward.enabled (never gated by assistant.inbox_signals), remains valid for
+// owner-waiting tasks, and routes leader-agent-supervised tasks to the supervising conversation above the leader.
+func (s *Service) resolveFallbackSupervisorConversation(ctx context.Context, t Todo) (machineID, convID string) {
+	here := s.settings(ctx)
+	if here.MachineID == "" {
+		return "", ""
+	}
+	if t.Supervision == nil && t.Origin == "" {
+		return "", ""
+	}
+
+	var candidates []string
+	add := func(id string) {
+		if id == "" || slices.Contains(candidates, id) {
+			return
+		}
+		if _, _, isLeaderAgent := parseLeaderRef(id); isLeaderAgent {
+			return
+		}
+		candidates = append(candidates, id)
+	}
+
+	if t.Supervision != nil {
+		sup := t.Supervision.Supervisor
+		if _, _, isLeaderAgent := parseLeaderRef(sup); isLeaderAgent {
+			if up, _ := s.supervisorAboveTask(ctx, t); up != "" {
+				add(up)
+			}
+			add(here.Main)
+		} else {
+			if sup != "" {
+				add(sup)
+			}
+			if sup == "" || sup == here.Main {
+				add(s.ownSupervisor(here))
+			}
+		}
+		add(t.Origin)
+		add(here.Main)
+	} else {
+		add(t.Origin)
+	}
+
+	// Prefer a currently listed assistant conversation on the assistant machine.
+	for _, id := range candidates {
+		if c, ok := s.session(ctx, here.MachineID, id); ok && c.Assistant {
+			return here.MachineID, id
+		}
+	}
+	// Otherwise fall back to the first valid supervising conversation (durable queue delivers once it reconnects).
+	for _, id := range candidates {
+		if id == here.Main || (id != "" && id == here.BackgroundSupervisor) {
+			return here.MachineID, id
+		}
+	}
+	if len(candidates) > 0 {
+		return here.MachineID, candidates[0]
+	}
+	return "", ""
+}
+
+func formatInboxTodoForwardFallbackNotice(it *InboxItem, t Todo, canonicalURL, reason, envelope string) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Inbox auto-forward fallback for task %q (%s)\n", clip(oneLine(t.Title), 120), t.ID)
+	fmt.Fprintf(&sb, "Canonical URL: %s\n", canonicalURL)
+	fmt.Fprintf(&sb, "Fallback reason: %s\n", reason)
+	sb.WriteString("Could not deliver this event directly to the bound Agent; please review and decide the next step.\n\n")
+	sb.WriteString(envelope)
+	return sb.String()
+}
+
+func (s *Service) deliverFallbackRelay(ctx context.Context, machineID, convID string, msg relayMsg) (accepted bool, failReason string) {
+	c, ok := s.session(ctx, machineID, convID)
+	if !ok || c.Starting || s.relayReplacing(convID) || c.Status == proto.StatusWorking || s.relayWaits(convID, msg) {
+		n, err := s.queueRelayDurable(convID, msg)
+		if err != nil || n == 0 {
+			return false, "supervisor queue unavailable"
+		}
+		s.publish(ctx)
+		if ok && c.Status != proto.StatusWorking && !c.Starting {
+			s.drainRelays(machineID, []proto.Session{c})
+		}
+		return true, ""
+	}
+	if err := s.tryDirectRelay(ctx, machineID, convID, &msg); err != nil {
+		if s.refusedDirect(ctx, machineID, convID, msg, err) {
+			return false, "supervisor delivery refused"
+		}
+		s.logf("inbox: todo forward fallback to %s: %v; queueing", short(convID), err)
+		n, qerr := s.queueRelayDurable(convID, msg)
+		if qerr != nil || n == 0 {
+			return false, "supervisor delivery failed"
+		}
+		s.publish(ctx)
+		return true, ""
+	}
+	return true, ""
+}
+
+func (s *Service) fallbackInboxForwardToSupervisor(ctx context.Context, it *InboxItem, t Todo, canonicalURL, envelope, reason string) todoForwardDelivery {
+	reason = clip(oneLine(reason), 240)
+	machineID, convID := s.resolveFallbackSupervisorConversation(ctx, t)
+	if machineID == "" || convID == "" {
+		return todoForwardDelivery{
+			status:       TodoForwardFailed,
+			reason:       reason + " (no supervising conversation)",
+			commitLedger: false,
+		}
+	}
+	msg := relayMsg{
+		From:      t.ID,
+		FromTitle: "Task " + clip(oneLine(t.Title), 60),
+		Tool:      noticeTool,
+		Text:      formatInboxTodoForwardFallbackNotice(it, t, canonicalURL, reason, envelope),
+		OnceID:    namedClientID("inbox-todo-forward-fallback\n" + it.ID + "\n" + t.ID + "\n" + it.Last),
+		At:        time.Now().UTC(),
+	}
+	if accepted, failReason := s.deliverFallbackRelay(ctx, machineID, convID, msg); accepted {
+		return todoForwardDelivery{
+			status:       TodoForwardFallback,
+			reason:       reason,
+			commitLedger: true,
+		}
+	} else {
+		return todoForwardDelivery{
+			status:       TodoForwardFailed,
+			reason:       reason + " (" + failReason + ")",
+			commitLedger: false,
+		}
+	}
 }
 
 func (s *Service) recordTodoForwardAudit(ctx context.Context, it *InboxItem, t Todo, canonicalURL, status, machineID, sessionID, reason string) {

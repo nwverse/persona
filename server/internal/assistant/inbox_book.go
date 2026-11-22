@@ -101,9 +101,12 @@ type inboxBook struct {
 	// Deterministic PR/Issue to-do auto-forwarding state (inbox_forward.go).
 	forwarding      sync.Mutex
 	forwardAgain    atomic.Bool
+	forwardStoreMu  sync.Mutex // serializes ledger DB load and save (lock order: forwardStoreMu -> forwardMu)
 	forwardMu       sync.Mutex
 	forwardLoaded   bool
+	forwardGen      uint64
 	forwardLedger   map[string]inboxTodoForwardRecord
+	forwardPending  map[string]inboxTodoForwardRecord
 	forwardInFlight map[string]bool
 }
 
