@@ -213,7 +213,9 @@ class AssistantForwardPhotosTest {
             // Background uploads resume through Robolectric's main dispatcher, not Compose's idle detection alone.
             androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
             org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
-            condition()
+            if (condition()) return@waitUntil true
+            println("forward-photo-state: ${composerState.attachments.map { "${it.name}:${it.uploadState}:path=${it.path}:error=${it.error}" }}")
+            false
         }
         waitMain { composerState.attachments.size == 2 && composerState.ready }
         rule.onNodeWithContentDescription("Photo 1", useUnmergedTree = true).assertExists()
