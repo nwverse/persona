@@ -260,7 +260,7 @@ func TestBuildFleetOneItemPerAgent(t *testing.T) {
 	// An elicitation is left out before the dedup: the agent's next card still stands for it.
 	st = buildFleet(agents[:1], []proto.Interaction{
 		{ID: "e1", MachineID: "m", SessionID: "a", Kind: proto.IxElicitation, CreatedAt: t0},
-		{ID: "a1", MachineID: "m", SessionID: "a", Kind: proto.IxPermission, CreatedAt: t0.Add(time.Second)},
+		{ID: "a1", MachineID: "m", SessionID: "a", Kind: proto.IxPermission, Summary: "run it", CreatedAt: t0.Add(time.Second)},
 	})
 	if st.NeedsYou != 1 || len(st.Items) != 1 || st.Items[0].Interaction != "a1" {
 		t.Fatalf("after an elicitation %+v", st.Items)

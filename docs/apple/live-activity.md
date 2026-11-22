@@ -330,9 +330,9 @@ Each received push redraws both the Dynamic Island and the Lock Screen, so the h
   #12982 the stale Lock Screen draws only the persona and "Waiting for hub…": no counts and no rows, which are no longer known to be true.
 - **Buttons only with context** (#12982): Allow / Deny or Approve appear only when the card can say who asks, what, and what
   approving does. The manager leaves `interaction` empty for a permission without a summary (a bare tool name), a plan without a
-  title and a private ("Just me") card (`decidable` in `server/internal/assistant/fleet_live.go`); with Lock Screen details off
-  (rows read "A permission request is waiting") both the hub (`forDevice`) and the app (`FleetState.tailored`) drop it for every
-  row. Without buttons a tap on the request opens it in the app.
+  title and a private ("Just me") permission or plan (`decidable` in `server/internal/assistant/fleet_live.go`); with Lock Screen
+  details off (rows read "A permission request is waiting") both the hub (`forDevice`) and the app (`FleetState.tailored`) drop it
+  from every permission and plan row. Questions and terminal cards never have buttons and keep their `interaction`. Without buttons a tap on the request opens it in the app.
 
 ## Settings (Settings › Notifications › Live Activities)
 

@@ -63,7 +63,9 @@ func forDevice(s FleetState, p NotifyPrefs, stats FleetStats) FleetState {
 		// or what approving does, so it gets no Allow / Deny there, only a tap into the app (#12982).
 		d.Items = slices.Clone(s.Items)
 		for i := range d.Items {
-			d.Items[i].Interaction = ""
+			if k := d.Items[i].Kind; k == "permission" || k == "plan" { // the kinds with buttons; others keep naming their card
+				d.Items[i].Interaction = ""
+			}
 		}
 	}
 	shows := func(slot string) bool { return d.Left == slot || d.Right == slot }

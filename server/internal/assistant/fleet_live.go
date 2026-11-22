@@ -492,7 +492,7 @@ func needItem(l i18n.Lang, n needer) FleetItem {
 			item.Detail = i18n.T(l, "push.private_card")
 		}
 		item.Interaction, item.Since = ix.ID, unixSeconds(ix.CreatedAt)
-		if len(ix.Fields) > 0 || ix.ToolName == proto.SecretHandoffTool || ix.Private || !decidable(*ix) {
+		if len(ix.Fields) > 0 || ix.ToolName == proto.SecretHandoffTool || !decidable(*ix) {
 			// What it asks for (a password) is filled in in the app, or (a hand-off) approved on the card only
 			// (hub/secret_handoff.go), or the card cannot say what approving does (#12982): no Allow / Deny on the
 			// activity, a tap opens the request in the app.
@@ -502,17 +502,18 @@ func needItem(l i18n.Lang, n needer) FleetItem {
 	return item
 }
 
-// decidable: the card says what approving it does, in words the Live Activity can show beside Allow / Deny or Approve
-// (#12982). A permission needs its summary (a bare tool name says nothing about what runs), a plan its title; anything
-// else is answered in the app.
+// decidable: a card the Live Activity offers buttons for (a permission: Allow / Deny, a plan: Approve) says what
+// approving does (#12982): a permission its summary (a bare tool name says nothing about what runs), a plan its title,
+// and neither is private (a "Just me" card shows without its text). Other kinds never get buttons and keep their
+// interaction, which names the card.
 func decidable(ix proto.Interaction) bool {
 	switch ix.Kind {
 	case proto.IxPermission:
-		return strings.TrimSpace(ix.Summary) != ""
+		return !ix.Private && strings.TrimSpace(ix.Summary) != ""
 	case proto.IxPlan:
-		return strings.TrimSpace(planTitle(ix.Plan)) != ""
+		return !ix.Private && strings.TrimSpace(planTitle(ix.Plan)) != ""
 	}
-	return false
+	return true
 }
 
 // workingItem is the item of a working agent.
