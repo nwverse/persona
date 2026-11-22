@@ -758,6 +758,7 @@
         "at": {"type": "string", "format": "date-time"},
         "last": {"type": "string", "description": "Marks the newest move: a different last adds to the open item."},
         "url": {"type": "string"},
+        "thread_state": {"type": "string", "description": "The observed lifecycle of a GitHub pull request: open, closed or merged."},
         "open_url": {"type": "string", "description": "A link the system opens instead (sms:…)."},
         "reply_to": {"type": "string", "description": "Where a reply goes and who sees it."},
         "can_reply": {"type": "boolean"},

@@ -141,10 +141,9 @@ of entry goes through the same design. The central lists keep the entries they h
   - A domain inside package `assistant` calls a package-level function from an `init()` in its own file:
     `registerRoutes(name, (*Service).xRoutes)`, `registerTools(after, …)` or `registerLoop(name, (*Service).xLoop)`.
     `New` adds them to the same registry before the modules register.
-- **One of each**: there is one duplicate check, a panic in `New`, which every test that builds a `Service` runs. Tool
-  placement is computed once, at the end of `New`. There is one route table and one list of loops. Route order means
-  nothing (`TestRoutesAreTheWireOnes` sorts, and `http.ServeMux` ignores it). The tools keep the order
-  `server/internal/hub/testdata/prompts/mcp_tools/assistant.index.golden` pins.
+- **One of each**: there is one route table and one list of loops, and tool placement is computed once, at the end of
+  `New`. Route order means nothing (`TestRoutesAreTheWireOnes` sorts, and `http.ServeMux` ignores it). The tools keep
+  the order `server/internal/hub/testdata/prompts/mcp_tools/assistant.index.golden` pins.
 - **When each part lands**:
   1. the kernel, with `saved` (S1);
   2. the Inbox's routes, bus methods, hooks and snapshot part (S4);
