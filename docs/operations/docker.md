@@ -17,9 +17,7 @@ The image has no herdr and no Claude Code, so **the hub machine can't also be a 
 - The `hub.json` written on first start has `"machines": []` (not the native method's "one local machine, `kind: local`"); every computer has to be added.
 - The "Persona" assistant runs on one of your computers: set `assistant.machine` to its id in the built-in manager's `data/managers/assistant/manager.json` (`docs/operations/config.md` ("manager.json"); if unset, the first entry in `machines` is used).
 
-Extensions (`docs/extensions/extensions.md`) work as usual; installed ones live in `data/extensions/` and survive an image upgrade. The image lacks a few things the native method has:
-- No `bwrap`: an extension that would get a sandbox by default (one not installed from a trusted market, `docs/extensions/extensions.md` ("Sandbox")) still runs, just without a sandbox, and its details and the list say 没有沙箱 (no sandbox);
-  it can then read and write all of `data/` (including `hub.json`), so install only ones you trust.
+Extensions (`docs/extensions/extensions.md`) work as usual; installed ones live in `data/extensions/` and survive an image upgrade. The image includes bubblewrap; required isolation must work before an extension can start (see "Extension sandboxes" below). The image lacks a few things the native method has:
 - No `git`: git markets (`git:`, `git@…`, `ssh://…`) can't be added; `github:` and `https://` markets go over HTTPS and work as usual.
 - The image is Alpine (musl): TypeScript extensions packed by `personad extension pack` (bun's `bun-linux-*` targets, which need glibc) won't start; Go extensions (`CGO_ENABLED=0`) are unaffected.
 - No interpreters such as node or python: an extension whose command is an interpreter (e.g. one run with `node` in the manager's `manager.json`) won't start; write and pack extensions (`personad extension dev` / `pack`) on another computer.

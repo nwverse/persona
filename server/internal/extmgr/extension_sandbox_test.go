@@ -502,13 +502,13 @@ func TestExtensionSandboxMissing(t *testing.T) {
 }
 
 func TestExtensionSandboxMissingOfficialExemption(t *testing.T) {
+	h, _ := extensionTestHub(t)
 	// TestMain disables the public market; use a locally verified official-key fixture.
 	key := newMarketKey(t)
 	useOfficialMarket(t, "github:example/plugins", key.text)
 	oldKeys := officialMarketKeys
 	officialMarketKeys = []string{keyIDOf(key.text)}
 	t.Cleanup(func() { officialMarketKeys = oldKeys })
-	h, _ := extensionTestHub(t)
 	old := sandboxProbe
 	sandboxProbe = func() sandbox.Support {
 		t.Fatal("an exempt extension must not depend on sandbox support")
