@@ -65,6 +65,15 @@ func (s *Service) logicalTarget(ctx context.Context, machine, launcher string) (
 	}
 	return target, nil
 }
+
+// sessionEngineAgent is the agent a session row runs: an empty agent outside a runtime is Claude Code, as the node
+// lists a native Claude Code session without one (proto.Session.Agent). A runtime's empty agent stays unknown.
+func sessionEngineAgent(row proto.Session) string {
+	if row.Agent == "" && row.SourceKind != proto.SourceRuntime {
+		return "claude"
+	}
+	return row.Agent
+}
 func (s *Service) segmentsEnabled(ctx context.Context) bool {
 	if s.store() == nil {
 		return false
@@ -249,7 +258,7 @@ func (s *Service) beginLogicalSwitch(ctx context.Context, machine, id string, p 
 		return nil, s.supervisionRuntimeRefusal(ctx, p.MachineID)
 	}
 	if c == nil {
-		if p.ExpectedEpoch != 1 || assistantKind(row.Agent) == "" {
+		if p.ExpectedEpoch != 1 || assistantKind(sessionEngineAgent(row)) == "" {
 			return nil, logicalRefusal(ctx, "unknown_engine")
 		}
 		var page historyPage
@@ -259,7 +268,7 @@ func (s *Service) beginLogicalSwitch(ctx context.Context, machine, id string, p 
 		if page.History == "" {
 			return nil, logicalRefusal(ctx, "missing_generation")
 		}
-		sourceEngine := proto.AssistantExecutionIdentity(row.Agent, row.SourceKind, row.SourceInstanceID, row.Launcher)
+		sourceEngine := proto.AssistantExecutionIdentity(sessionEngineAgent(row), row.SourceKind, row.SourceInstanceID, row.Launcher)
 		if sourceEngine == "" {
 			return nil, logicalRefusal(ctx, "unknown_engine")
 		}

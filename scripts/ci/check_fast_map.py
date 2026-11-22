@@ -53,8 +53,10 @@ CHECKS = {
     "go-package": "go test ./<top>/<name>/... in server/ for server/internal/<name>, server/cmd/<name> or "
                   "server/plugins/<name>, the path's package group",
     "server-build": "go build ./... in server/: a server change no package group covers",
-    "go-guards": "the server's repo-wide guard tests (GO_GUARD_PKGS, GO_GUARD_TESTS in check-fast.sh): they read "
-                 "other packages' source, go list output, the migrations or sdk/go (#1936)",
+    "go-guards": "the server's repo-wide guard and contract tests (GO_GUARD_PKGS, GO_GUARD_TEST_PKGS, GO_GUARD_TESTS "
+                 "in check-fast.sh): they read other packages' source, go list output, the migrations or sdk/go "
+                 "(#1936), scan the module for text and prompts (i18n, prompts), check what each program links, or pin "
+                 "what other packages render, such as the prompt and MCP goldens and the wire samples (#12842)",
     "sdk-go": "go test ./... in the sdk/go module",
     "android": "scripts/app/android_i18n_check.py, the slot order, token and motion baselines, and four of their "
                "unittests (no Gradle)",
@@ -130,6 +132,14 @@ TABLE = (
     # runs it, on top of the doc suites above.
     (
         (("AGENTS.md", "CLAUDE.md"), ("scripts/test/test_agents_md.py",)),
+    ),
+    # The name freezes (docs/server/architecture.md "Registering a domain's entries", #12844): test_name_freezes.py
+    # runs the archguard test that reads the central lists' names and their files, and mock_hub_switches.py takes its
+    # list format and the open PRs' heads from name_freezes.py.
+    (
+        (("server/internal/archguard/central_lists_test.go", "server/internal/archguard/testdata/central_lists/*"),
+         ("scripts/test/test_name_freezes.py",)),
+        (("scripts/test/name_freezes.py",), ("scripts/mock/test_mock_hub.py",)),
     ),
     # Most section names test_doc_sections.py checks sit in code comments under its SOURCE_DIRS (about a second).
     (
