@@ -883,6 +883,14 @@ func (s *Service) taskRoutes() {
 			return
 		}
 		p, err := s.dismissPlan(r.Context(), r.PathValue("id"))
+		// Don't Start on a card already started, dismissed or withdrawn elsewhere (another device, the conversation's
+		// task_plan_withdraw) while no event reached this client: answer with the plan as it is, so the client's card
+		// shows what happened instead of a 409 the user can only tap again (an iOS app held such a card until restarted).
+		if errors.Is(err, errPlanNotOpen) {
+			if cur, lerr := s.loadPlan(r.Context(), r.PathValue("id")); lerr == nil && cur.State != planOpen {
+				p, err = cur, nil
+			}
+		}
 		if err != nil {
 			planErr(w, err)
 			return
