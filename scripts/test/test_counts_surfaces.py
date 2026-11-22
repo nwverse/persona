@@ -10,7 +10,8 @@ draws, its scope, each client's code symbol and test, and whether drawing the ma
 - `matches` rows with the same label draw the same count;
 - the replays' report surfaces (`replays`) are rows of each lane, read from keys every fixture case has, and a
   lane's mark in a case (`known_differences.<lane>`) on a key a surface reads is in that row's `decisions`;
-- the `differs` rows only go down: the README states how many there are, and none is new against the base commit;
+- the `differs` rows only go down: the README states how many there are, and none is new against the base commit
+  but in the change that records a decided refinement of a count it draws (the count's `refined_by`), naming it;
 - a hub-fed surface (a row with `view`) names its fallback in no source file of its client but the fallback's own;
 - check-fast runs this guard for every file the table names (scripts/ci/check_fast_map.py).
 
@@ -55,6 +56,8 @@ _SKIP_DIRS = {".git", "node_modules", "build", ".build", "dist", "DerivedData", 
 SCOPES = {"assistant", "unscoped", "default_manager", "manager", "each_assistant", "all_hubs", "list"}
 STATUSES = ("matches", "differs")
 ROW_KEYS = {"client", "surface", "label", "shown_on", "count", "scope", "code", "tests", "status", "why"}
+COUNT_KEYS = {"rule", "pinned_by", "waits_on"}
+COUNT_OPTIONAL_KEYS = {"refined_by"}
 OPTIONAL_KEYS = {"decisions", "local", "view"}
 _DECISION = re.compile(r"D[0-9]+")
 _PLAN_DECISION = re.compile(r"^- \*\*(D[0-9]+)\*\*", re.M)
@@ -106,9 +109,13 @@ def shape_problems(table, decisions, root):
     if not isinstance(counts, dict) or not counts:
         return found + ["counts: missing"]
     for name, count in counts.items():
-        if not isinstance(count, dict) or set(count) != {"rule", "pinned_by", "waits_on"}:
-            found.append(f"counts.{name}: needs rule, pinned_by and waits_on, and nothing else")
+        if not isinstance(count, dict) or not COUNT_KEYS <= set(count) or set(count) - COUNT_KEYS - COUNT_OPTIONAL_KEYS:
+            found.append(f"counts.{name}: needs rule, pinned_by and waits_on, may have refined_by, and nothing else")
             continue
+        refined = count.get("refined_by", [])
+        if not isinstance(refined, list) or "refined_by" in count and not refined or any(
+                d not in decisions for d in refined):
+            found.append(f"counts.{name}: refined_by lists decisions of the plan's section 6")
         if count["rule"] is not None and not (isinstance(count["rule"], str) and count["rule"].strip()):
             found.append(f"counts.{name}: rule is a sentence, or null while it waits on a decision")
         if count["pinned_by"] is not None and not (root / str(count["pinned_by"])).is_dir():
@@ -254,7 +261,22 @@ def mark_problems(table, fixture, cases, replay, surface, read):
     return found
 
 
+def newly_refined(table, base_table):
+    """{count id: the decisions its refined_by lists that the base's does not}: the refinements this change records."""
+    base_counts = base_table.get("counts") if isinstance(base_table.get("counts"), dict) else {}
+    out = {}
+    for name, count in table["counts"].items():
+        base = base_counts.get(name) if isinstance(base_counts.get(name), dict) else {}
+        added = set(count.get("refined_by", [])) - set(base.get("refined_by") or [])
+        if added:
+            out[name] = added
+    return out
+
+
 def ratchet_problems(table, readme_text, base_table):
+    """The `differs` rows only go down. A decided refinement of a count (D18 of the plan: it keeps its id) may make
+    rows that matched differ, but only in the change that adds the decision to the count's refined_by, and only rows
+    that name it: once the base lists it, no further row can come to differ by it."""
     found = []
     now = differs(table)
     stated = _README_COUNT.search(readme_text)
@@ -263,9 +285,16 @@ def ratchet_problems(table, readme_text, base_table):
     elif int(stated.group(1)) != len(now):
         found.append(f"{README}: says {stated.group(1)} `differs` rows; the table has {len(now)}")
     if base_table is not None:
-        new = sorted(now - differs(base_table))
+        refined = newly_refined(table, base_table)
+        rows = {rid(row): row for row in table["surfaces"]}
+
+        def recorded_here(name):
+            row = rows[name]
+            return any(decision in refined.get(count, ()) for count in row["count"] for decision in row["decisions"])
+        new = sorted(name for name in now - differs(base_table) if not recorded_here(name))
         if new:
-            found.append("the `differs` rows only go down; new against the base commit: " + ", ".join(new))
+            found.append("the `differs` rows only go down; new against the base commit: " + ", ".join(new)
+                         + " (a row comes to differ only by a refinement its count's refined_by adds in this change)")
     return found
 
 
@@ -532,6 +561,32 @@ class SeededViolationTests(unittest.TestCase):
             del t["surfaces"][0]["decisions"]
             t["replays"] = {}  # the seed's mark on ios.tab goes with it, as a real one would
         self.assertEqual([], self.run_guard(self.broken(fewer), readme="`differs` rows today: 1", base=self.TABLE))
+
+    def test_a_decided_refinement_lets_rows_differ_only_in_its_own_change(self):
+        def refined(t, decision="D1"):
+            t["counts"]["agents"]["refined_by"] = ["D1"]
+            t["surfaces"][1].update(status="differs", decisions=[decision])
+        readme = "`differs` rows today: 3"
+        # The change that adds D1 to the count's refined_by may make a row that drew it differ, naming D1.
+        self.assertEqual([], self.run_guard(self.broken(refined), readme=readme, base=self.TABLE))
+        # Once the base lists the refinement, no further row comes to differ by it.
+        base = self.broken(lambda t: t["counts"]["agents"].update(refined_by=["D1"]))
+        self.assertCaught(self.broken(refined), "only go down", "server.live", readme=readme, base=base)
+        # A row that names another decision is a new difference all the same.
+        self.assertCaught(self.broken(lambda t: refined(t, "D7")), "only go down", "server.live", readme=readme,
+                          base=self.TABLE)
+        # Nor does a refinement of one count let a row that draws another differ.
+        def other_count(t):
+            t["counts"]["agents"]["refined_by"] = ["D7"]
+            t["surfaces"][2].update(status="differs", decisions=["D7"])
+        self.assertCaught(self.broken(other_count), "only go down", "web.inbox", readme=readme, base=self.TABLE)
+        # refined_by lists decisions of the plan, at least one.
+        self.assertCaught(self.broken(lambda t: t["counts"]["agents"].update(refined_by=["D99"])),
+                          "counts.agents", "refined_by")
+        self.assertCaught(self.broken(lambda t: t["counts"]["agents"].update(refined_by=[])),
+                          "counts.agents", "refined_by")
+        self.assertCaught(self.broken(lambda t: t["counts"]["agents"].update(extra=1)), "counts.agents",
+                          "nothing else")
 
     def test_a_differs_row_names_a_decision_of_the_plan(self):
         self.assertCaught(self.broken(lambda t: t["surfaces"][0].pop("decisions")), "names the decisions")
