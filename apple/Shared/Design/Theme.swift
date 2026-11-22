@@ -690,6 +690,56 @@ nonisolated enum Theme {
         static let graphPreviewMinScale: CGFloat = 0.01
         static let graphZoomStep: CGFloat = 1.25
         static let graphWheelZoomSensitivity: Double = 0.0025
+        // An extension's 3D scene (UI version 11, #12544): page share, compact preview and pin collision box.
+        static let scenePageShare: CGFloat = 0.62
+        static let scenePageMinHeight: CGFloat = 280
+        static let scenePageMaxHeight: CGFloat = 640
+        static let scenePreviewHeight: CGFloat = 200
+        static let sceneZoomStep: Double = 1.25
+        static let sceneWheelZoomSensitivity: Double = 0.0025
+        static let sceneOrbitSensitivity: Double = 0.45
+        static let scenePinCompactWidth: CGFloat = 44
+        static let scenePinCharWidth: CGFloat = 9
+        static let scenePinBaseWidth: CGFloat = 40
+        static let scenePinHeight: CGFloat = 32
+    }
+
+    /// UI version 11's 3D `scene` component (#12544): calm architectural material defaults when a shape omits `color`,
+    /// warm and cool lamp tints, and light/dark illumination levels (dark mode dims the room lighting, never the
+    /// extension's `#RRGGBB` shape colors).
+    enum Scene {
+        static let defaultYaw: Double = 225
+        static let defaultPitch: Double = 35
+        static let defaultZoom: Double = 1
+        static let minPitch: Double = 10
+        static let maxPitch: Double = 90
+        static let minZoom: Double = 0.5
+        static let maxZoom: Double = 4.0
+        static let fitMargin: Double = 1.12
+        static let accessibilityYawStep: Double = 30
+        static let accessibilityPitchStep: Double = 15
+        static let matteHex: UInt32 = 0xECE7DE
+        static let woodHex: UInt32 = 0xC9A97E
+        static let tileHex: UInt32 = 0xE5E0D6
+        static let metalHex: UInt32 = 0xB8BCC2
+        static let screenHex: UInt32 = 0x1E2024
+        static let glassHex: UInt32 = 0xB8D4E3
+        static let warmLightHex: UInt32 = 0xFFDCAA
+        static let coolLightHex: UInt32 = 0xE6F2FF
+        static let sunLightHex: UInt32 = 0xFFF9EE
+        static let skyLightHex: UInt32 = 0xDDE8F8
+        static let lightAmbientIntensity: CGFloat = 260
+        static let darkAmbientIntensity: CGFloat = 180
+        static let lightKeyIntensity: CGFloat = 420
+        static let darkKeyIntensity: CGFloat = 260
+        static let lightFillIntensity: CGFloat = 140
+        static let darkFillIntensity: CGFloat = 110
+        static let lampIntensity: CGFloat = 220
+        static let lampAttenuationStart: CGFloat = 0.25
+        static let lampAttenuationEnd: CGFloat = 3.8
+        static let maxOmniLights: Int = 8
+        static let glassOpacity: CGFloat = 0.42
+        static var ground: Color { StyleSpec.current.usesGlass ? Theme.groupedCard : Theme.card }
     }
 
     /// The system's sidebar column on iPad (iOS 26, the glass styles), measured from its pixels: the split fills the
