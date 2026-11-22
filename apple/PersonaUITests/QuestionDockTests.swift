@@ -216,11 +216,13 @@ final class QuestionDockTests: XCTestCase {
         shot("own-source-dark")
     }
 
-    /// The pushed chat's Back: the navigation bar's, or on the open iPhone Duo the side rail's round one ("返回").
-    @MainActor private func backButton() -> XCUIElement {
-        let labelled = app.buttons.matching(NSPredicate(format: "label == %@ OR label == %@", "返回", "Back")).allElementsBoundByIndex
-            .first { $0.isHittable }
-        return labelled ?? app.navigationBars.buttons.element(boundBy: 0)
+    /// Taps the pushed chat's Back: "返回" in the navigation bar, or on the open iPhone Duo the side rail's round one
+    /// (`BackButton`, no label), by its point. False when there is none.
+    @MainActor @discardableResult private func tapBack() -> Bool {
+        let back = app.buttons.matching(NSPredicate(format: "identifier == %@ OR label == %@ OR label == %@", "BackButton", "返回", "Back")).firstMatch
+        guard back.waitForExistence(timeout: 5) else { return false }
+        back.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        return true
     }
 
     /// View in Chat on a task's card (#12625): the Agent's chat is pushed over the conversation at the message that asked
@@ -242,9 +244,7 @@ final class QuestionDockTests: XCTestCase {
         settle(1.5)
         XCTAssertTrue(message.isHittable, "the message that asked is not in view (\(message.frame))")
         shot("task-source-light")
-        let back = backButton()
-        XCTAssertTrue(back.exists, "no Back on the Agent's chat")
-        back.tap()
+        XCTAssertTrue(tapBack(), "no Back on the Agent's chat")
         XCTAssertTrue(dock.waitForExistence(timeout: 5), "Back did not come back to the pager")
         expectPosition("2 / 5", "back on the same card")
 
@@ -255,7 +255,7 @@ final class QuestionDockTests: XCTestCase {
         settle(2.5)
         XCTAssertFalse(dock.exists, "the blog's chat did not open over the pager")
         shot("terminal-source-light")
-        backButton().tap()
+        XCTAssertTrue(tapBack(), "no Back on the blog's chat")
         XCTAssertTrue(dock.waitForExistence(timeout: 5), "Back did not come back to the pager")
         expectPosition("4 / 5", "back on the terminal's card")
     }
