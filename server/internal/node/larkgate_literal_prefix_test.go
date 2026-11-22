@@ -126,6 +126,9 @@ func TestLarkLiteralPrefixIndependentReadSafety(t *testing.T) {
 		{"here document clears binding", "READER=/tmp/reader.sh; cat <<'EOF'\nexample\nEOF\n$READER list", 1},
 		{"stdout device target clears binding", `READER=/tmp/reader.sh; ls /tmp >/dev/stdout; $READER list`, 1},
 		{"zsh parameter subscript clears binding", `READER=/tmp/reader.sh; echo $HOME[READER=7]; $READER list`, 1},
+		{"zsh parameter modifier clears binding", `READER=/tmp/reader.sh; echo $HOME:F:READER=7:h; $READER list`, 1},
+		{"quoted zsh parameter modifier clears binding", `READER=/tmp/reader.sh; echo "$HOME:F:READER=7:h"; $READER list`, 1},
+		{"special parameter modifier clears binding", `READER=/tmp/reader.sh; echo $#HOME:F:READER=7:h; $READER list`, 1},
 		{"dollar at is not scalar", `echo "$@"; READER=/tmp/reader.sh; $READER list`, 1},
 		{"dollar star is not scalar", `echo $*; READER=/tmp/reader.sh; $READER list`, 1},
 		{"array parameter is not scalar", `echo ${X[1]}; READER=/tmp/reader.sh; $READER list`, 1},
@@ -149,6 +152,8 @@ func TestLarkLiteralPrefixIndependentReadSafety(t *testing.T) {
 		{"file instead of directory stays unknown", `cd ` + directoryFile + `; READER=./reader.sh; $READER list`, 1},
 		{"unanchored relative executable stays unknown", `cd /tmp; READER=sub/reader.sh; $READER list`, 1},
 		{"parent relative executable stays unknown", `cd /tmp; READER=./../reader.sh; $READER list`, 1},
+		{"system bin directory stays unknown", `cd /bin; READER=./cat; $READER list`, 1},
+		{"system usr bin directory stays unknown", `cd /usr/bin; READER=./cat; $READER list`, 1},
 		{"parent relative gate read stays unknown", `cd /tmp; REQUEST=../example/scripts/ex.sh; $REQUEST GET /health`, 1},
 		{"nested relative CLI stays unknown", `cd /tmp; READER=./sub/lark-cli; $READER docs +fetch --doc-id example`, 1},
 		{"pushd stays unknown", `pushd /tmp; READER=./reader.sh; $READER list`, 1},
@@ -166,6 +171,7 @@ func TestLarkLiteralPrefixCodexShellApprovalShapes(t *testing.T) {
 		{"wrapped independent read", `/bin/zsh -lc 'READER=/tmp/reader.sh; ls /tmp 2>&1; $READER list'`, 0},
 		{"wrapped named descriptor", `/bin/zsh -lc 'READER=/tmp/reader.sh; ls /tmp {READER}>/dev/null; $READER list'`, 1},
 		{"wrapped zsh subscript", `/bin/zsh -lc 'READER=/tmp/reader.sh; echo $HOME[READER=7]; $READER list'`, 1},
+		{"wrapped zsh modifier", `/bin/zsh -lc 'READER=/tmp/reader.sh; ls $HOME:F:READER=7:h; $READER list'`, 1},
 		{"wrapped gate write", `/bin/zsh -lc 'REQUEST=/tmp/example/scripts/ex.sh; ls /tmp 2>&1; $REQUEST POST /messages/example/recall'`, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) { assertAssistantBypassClassification(t, tc.command, tc.cards, gate) })

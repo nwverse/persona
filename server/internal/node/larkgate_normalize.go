@@ -166,8 +166,10 @@ func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, res
 						if value, ok := vars[p.Param.Value]; ok {
 							prefix, literal := literalCommandPrefix(value)
 							resolvable := literal && (!moved || filepath.IsAbs(prefix[0]))
+							// System binary directories have special filter semantics downstream; keep relative prefixes opaque there.
 							if literal && moved && !filepath.IsAbs(prefix[0]) && strings.HasPrefix(prefix[0], "./") &&
 								larkNoParentReference(prefix[0]) && currentDir != "" && varsDir[p.Param.Value] == currentDir &&
+								currentDir != "/bin" && currentDir != "/usr/bin" &&
 								!isLarkCLI(prefix[0]) && !larkRelativeGate(gates, prefix[0]) {
 								prefix[0] = filepath.Join(currentDir, prefix[0])
 								resolvable = true
@@ -483,9 +485,10 @@ func larkIndependentRead(args []*syntax.Word, words []string, executable int) bo
 
 // larkReadOnlyWord permits literal glob/brace syntax and side-effect-free scalar parameters. Actual brace expansion only
 // adds read arguments. Command/process substitution, arithmetic, arrays and parameter operators remain opaque. A literal
-// bracket next to a parameter is rejected because zsh treats it as an arithmetic subscript even when the AST does not.
+// bracket or colon next to a parameter is rejected because zsh can evaluate an arithmetic subscript or :F:...: modifier
+// even when the bash-dialect AST does not show it.
 func larkReadOnlyWord(word *syntax.Word) bool {
-	safe, parameter, bracket := true, false, false
+	safe, parameter, bracket, colon := true, false, false, false
 	syntax.Walk(word, func(node syntax.Node) bool {
 		if !safe {
 			return false
@@ -495,6 +498,7 @@ func larkReadOnlyWord(word *syntax.Word) bool {
 			return true
 		case *syntax.Lit:
 			bracket = bracket || strings.Contains(n.Value, "[")
+			colon = colon || strings.Contains(n.Value, ":")
 			return true
 		case *syntax.SglQuoted:
 			return false
@@ -507,7 +511,7 @@ func larkReadOnlyWord(word *syntax.Word) bool {
 			return false
 		}
 	})
-	return safe && (!parameter || !bracket)
+	return safe && (!parameter || (!bracket && !colon))
 }
 
 // larkBindingRedirects keeps assignments across descriptor duplication and literal /dev/null input/output. Real file
