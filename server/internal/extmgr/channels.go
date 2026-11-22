@@ -110,10 +110,10 @@ func (h *Manager) feishuChannel(ctx context.Context) channel.View {
 		Enabled: v.Enabled, Bind: channel.BindFields, Capabilities: feishuCapabilities,
 		Description: i18n.T(l, "hub-channels.feishu_description")}
 	switch {
-	case !v.Enabled:
-		out.State = channel.StateDisabled
 	case v.Error != "":
 		out.State, out.Error = channel.StateError, v.Error
+	case !v.Enabled:
+		out.State = channel.StateDisabled
 	case !v.HasSecret:
 		out.State, out.Error = channel.StateNotConnected, i18n.T(l, "hub-channels.no_credentials")
 	case v.Owner == nil:
@@ -363,6 +363,9 @@ func (h *Manager) channelExtensionSet(ctx context.Context, id string, on bool) e
 
 // configureFeishu applies the assistant's changes to the bot's switches (feishu.configure): only what is given.
 func (h *Manager) configureFeishu(ctx context.Context, enabled *bool, features map[string]bool) error {
+	if err := h.loadBotSettings(ctx); err != nil {
+		return err
+	}
 	var fs *botFeatureUpdate
 	if len(features) > 0 {
 		patch := make(map[string]bool, len(features)+1)
@@ -454,6 +457,9 @@ func (h *Manager) bindFeishu(ctx context.Context, step string, values map[string
 // bindFeishuStep runs with the bind gate held. Only an explicit bind may enable the bot; a stale registration poll
 // resumes the configured pairing flow passively and stops at the credentials prompt if the user has disabled it.
 func (h *Manager) bindFeishuStep(ctx context.Context, step string, values map[string]string, activate bool) (connector.Prompt, error) {
+	if err := h.loadBotSettings(ctx); err != nil {
+		return connector.Prompt{}, err
+	}
 	l := h.botLang(ctx)
 	fields := []connector.Field{
 		{Name: "app_id", Label: "App ID", Placeholder: "cli_…"},
@@ -487,7 +493,8 @@ func (h *Manager) bindFeishuStep(ctx context.Context, step string, values map[st
 	if step == "credentials" && values != nil {
 		id, secret, domain := strings.TrimSpace(values["app_id"]), strings.TrimSpace(values["app_secret"]), strings.TrimSpace(values["domain"])
 		on := true
-		if err := h.applyBotUpdate(ctx, &on, &id, &secret, &domain, nil, false); err != nil {
+		receipt, err := h.applyBotUpdateWithReceipt(ctx, &on, &id, &secret, &domain, nil, false)
+		if err != nil {
 			if feishubot.CredentialRejected(err) {
 				h.logf("bots: credentials rejected by the platform: %v", err)
 				return credentials(i18n.T(l, "hub-channels.credentials_rejected")), nil
@@ -497,11 +504,9 @@ func (h *Manager) bindFeishuStep(ctx context.Context, step string, values map[st
 		// Best-effort: with the credentials just verified, set the scopes, events and the long-connection mode
 		// and submit the publish, so the console's manual steps are done (docs/extensions/bots.md). Its outcome
 		// is a sentence on the next step, never a failure of the bind.
-		rep := feishubot.New(id, secret, domain).AutoConfigure(ctx)
-		if rep.Detail != "" {
-			h.logf("bots: auto-configure: %s", rep.Detail)
+		if err := h.configureBotForPairing(ctx, receipt); err != nil {
+			return credentials(i18n.Localize(err, l)), nil
 		}
-		configNote = feishuConfigureNote(l, rep, domain, id)
 		step = ""
 	}
 	v := h.botView(ctx)
@@ -544,18 +549,26 @@ func (h *Manager) bindFeishuStep(ctx context.Context, step string, values map[st
 	p := b.set.Pairing
 	issued := false
 	if p == nil || !b.clock().Before(p.Expires) || step == "" && values != nil {
+		previous := p
 		p = &botPairing{Code: botPairCode(), Expires: b.clock().Add(botPairFor)}
 		b.set.Pairing = p
-		h.saveBotSettingsLocked()
+		if err := h.saveBotSettingsLocked(); err != nil {
+			b.set.Pairing = previous
+			b.mu.Unlock()
+			return connector.Prompt{}, errBotSettingsSave
+		}
 		issued = true
 	}
 	code := p.Code
+	if c := b.set.Configure; c != nil {
+		configNote = feishuConfigureNote(l, feishubot.ConfigureReport{Issue: c.Issue, Configured: c.Configured}, b.set.Domain, b.set.AppID)
+	}
 	b.mu.Unlock()
 	if issued {
 		h.auditBot(ctx, botRecord{action: auditBotPairCode})
 	}
 	hint := i18n.T(l, "hub-channels.pair_hint")
-	if configNote != "" { // what the auto-configure just did, if anything
+	if configNote != "" { // the saved automatic-configuration outcome for this app
 		hint = configNote + " " + hint
 	}
 	return connector.Prompt{Step: "pair", Kind: PromptPairCode, UserCode: code, Interval: 3, Hint: hint}, nil
@@ -594,8 +607,7 @@ func feishuConfigureNote(l i18n.Lang, rep feishubot.ConfigureReport, domain, app
 // unbindChannel undoes the binding: a plugin channel's connector signs out, the Feishu bot forgets its owner.
 func (h *Manager) unbindChannel(ctx context.Context, id string) error {
 	if id == channel.Feishu {
-		h.unpairBot(ctx)
-		return nil
+		return h.unpairBot(ctx)
 	}
 	lang := h.botLang(ctx)
 	pc, ok := h.extensionChannel(id)
