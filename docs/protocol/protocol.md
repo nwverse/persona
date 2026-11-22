@@ -6218,6 +6218,7 @@ installation has no registered runners and starts no external polling.
 | Method | Route | Contract |
 | --- | --- | --- |
 | GET | `/api/v1/resources?resource=` | `{resources: [...]}`; optional resource filter. Capacity, last queue mirror and durable leases share one source with `resource_status`. |
+| POST | `/api/v1/resources/{action}` | Full-device acquire/get/renew/release/cancel; the request names resource and holder, with lease ID/token for mutations. Operator requests may set priority 1; session tools always use priority 0. |
 | PUT | `/api/v1/resources` | Full devices only. `{resources: [{id,capacity,mirror:{machine,target,port?,identity?},repositories?:{project:gitURL}}]}`. Replace the registry; an empty list disables polling. Existing runner locks remain authoritative. |
 
 Configure the registry in Computers > Shared resources > Configure runners. Values

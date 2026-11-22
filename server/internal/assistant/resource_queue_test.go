@@ -97,3 +97,24 @@ func TestResourceNewJoinedCachedAndMirrorUnavailable(t *testing.T) {
 		t.Fatalf("stale snapshot lost: %+v", snap)
 	}
 }
+
+func TestResourceExternalTicketsJoinAndOccupyCapacity(t *testing.T) {
+	s, st, d := resourceFixture(t)
+	ctx := t.Context()
+	commit := strings.Repeat("b", 40)
+	snap := rq.Snapshot{ObservedAt: time.Now().UTC(), Queue: &rq.Queue{V: 1, Slots: 3, Running: []rq.Job{{Ticket: "external-one", Slot: 1, Project: "example", Commit: commit, Groups: []string{"web"}}}, Waiting: []rq.Job{}}}
+	if err := st.PutSetting(ctx, resourceMirrorKey(d.ID), snap); err != nil {
+		t.Fatal(err)
+	}
+	joined, err := s.resourceRequest(ctx, rq.Request{Action: "acquire", Resource: d.ID, Project: "example", Commit: commit, Groups: []string{"web"}, Holder: rq.Holder{Machine: "computer-a", Session: "one"}})
+	if err != nil || joined.Status != "joined" || !joined.Lease.External {
+		t.Fatalf("external join: %+v %v", joined, err)
+	}
+	list, err := s.resourceStatus(ctx, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list[0].Leases) != 1 || list[0].Leases[0].State != "granted" {
+		t.Fatal(list)
+	}
+}

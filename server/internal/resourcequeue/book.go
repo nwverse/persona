@@ -73,13 +73,15 @@ func Acquire(rows *[]Lease, in Request, now time.Time, id string, seq int64) (Re
 		}
 	}
 	n := 0
+	pending := []string{}
 	for _, l := range *rows {
 		if l.State == "queued" && l.Holder.Owner() == in.Holder.Owner() {
 			n++
+			pending = append(pending, l.ID)
 		}
 	}
 	if n >= 2 {
-		return Reply{Status: "refused"}, nil
+		return Reply{Status: "refused", Pending: pending}, nil
 	}
 	if in.ID != "" {
 		id = in.ID

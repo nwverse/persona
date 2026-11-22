@@ -18,7 +18,7 @@ import (
 	rq "github.com/nwverse/persona/server/internal/resourcequeue"
 )
 
-func resourceCall(ctx context.Context, name string, args any, out any) error {
+var resourceCall = func(ctx context.Context, name string, args any, out any) error {
 	raw, err := nodeclient.DialInterruptible(ctx, map[string]any{"kind": "cli.call", "name": name, "args": args, "pane": nodeclient.HookPane(os.Getenv), "codex_thread_id": os.Getenv("CODEX_THREAD_ID")})
 	if err != nil {
 		return err
@@ -37,6 +37,7 @@ func resourceCall(ctx context.Context, name string, args any, out any) error {
 	}
 	return errors.New("empty resource response")
 }
+
 func resourceCommand(ctx context.Context, args []string) error {
 	if len(args) < 1 || args[0] != "status" || len(args) > 2 {
 		return UsageError("usage: personad resource status [resource]")
@@ -69,6 +70,7 @@ func gateCommand(ctx context.Context, args []string, stdin io.Reader, stdout, st
 		fmt.Fprintln(stderr, "invalid gate request")
 		return 2
 	}
+	fmt.Fprintln(stderr, "RESOURCE_STATUS=checking")
 	var state struct {
 		Resources []rq.Status `json:"resources"`
 	}
@@ -143,6 +145,9 @@ func gateCommand(ctx context.Context, args []string, stdin io.Reader, stdout, st
 		return 69
 	}
 	fmt.Fprintln(stderr, "RESOURCE_STATUS="+reply.Status)
+	if reply.Position > 0 {
+		fmt.Fprintf(stderr, "RESOURCE_POSITION=%d\n", reply.Position)
+	}
 	if reply.Status == "cached" {
 		return printGateOutcome(reply.Lease, stdout, stderr)
 	}
@@ -224,10 +229,28 @@ func gateCommand(ctx context.Context, args []string, stdin io.Reader, stdout, st
 	return code
 }
 
-type gateCapture struct{ data []byte }
+type gateCapture struct {
+	data    []byte
+	pending []byte
+	run     string
+}
 
 func (c *gateCapture) Write(p []byte) (int, error) {
 	n := len(p)
+	c.pending = append(c.pending, p...)
+	for {
+		line, rest, ok := bytes.Cut(c.pending, []byte("\n"))
+		if !ok {
+			break
+		}
+		if bytes.HasPrefix(line, []byte("RESULT=")) {
+			c.run = strings.TrimSpace(string(line[len("RESULT="):]))
+		}
+		c.pending = rest
+	}
+	if len(c.pending) > 8192 {
+		c.pending = bytes.Clone(c.pending[len(c.pending)-8192:])
+	}
 	c.data = append(c.data, p...)
 	if len(c.data) > 256<<10 {
 		c.data = bytes.Clone(c.data[len(c.data)-(256<<10):])
@@ -235,6 +258,9 @@ func (c *gateCapture) Write(p []byte) (int, error) {
 	return n, nil
 }
 func (c *gateCapture) result() string {
+	if c.run != "" {
+		return c.run
+	}
 	for _, line := range strings.Split(string(c.data), "\n") {
 		if strings.HasPrefix(line, "RESULT=") {
 			return strings.TrimPrefix(line, "RESULT=")
@@ -272,6 +298,12 @@ func printGateOutcome(l *rq.Lease, out, errout io.Writer) int {
 	o := l.Outcome
 	if o.Output != "" {
 		fmt.Fprint(out, o.Output)
+		if !strings.Contains(o.Output, "RESULT="+o.Run) {
+			fmt.Fprintln(out, "RESULT="+o.Run)
+		}
+		if !strings.Contains(o.Output, fmt.Sprintf("EXIT_CODE=%d", o.Exit)) {
+			fmt.Fprintf(out, "EXIT_CODE=%d\n", o.Exit)
+		}
 	} else {
 		fmt.Fprintln(out, "RESULT="+o.Run)
 		fmt.Fprintf(out, "EXIT_CODE=%d\n", o.Exit)

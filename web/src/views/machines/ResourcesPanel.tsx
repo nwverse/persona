@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { t } from "../../i18n";
 import { api, errorText } from "../../lib/api";
+import { fromShownManager, onManagerChoice } from "../../lib/manager-choice";
 import { onHubEvent } from "../../lib/store";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
 import { Button, Loading } from "../../ui/atoms";
@@ -32,18 +33,21 @@ export function ResourcesPanel() {
   const [saving, setSaving] = useState(false);
   useEffect(() => {
     let dead = false;
+    let generation = 0;
     const load = async () => {
+      const request = ++generation;
       if (!dead) setNow(Date.now());
       try {
         const result = await api<{ resources: ResourceStatus[] }>("/resources");
-        if (!dead) { setResources(result.resources); setError(""); setNow(Date.now()); }
-      } catch (e) { if (!dead) setError(errorText(e)); }
+        if (!dead && request === generation) { setResources(result.resources); setError(""); setNow(Date.now()); }
+      } catch (e) { if (!dead && request === generation) setError(errorText(e)); }
     };
+    const choice = onManagerChoice(() => { setResources(null); void load(); });
     const stop = visiblePoll(() => void load(), 15_000, documentPage);
     const off = onHubEvent("resources", (event) => {
-      if (Array.isArray(event.resources)) { setResources(event.resources as ResourceStatus[]); setNow(Date.now()); }
+      if (fromShownManager(event) && Array.isArray(event.resources)) { ++generation; setError(""); setResources(event.resources as ResourceStatus[]); setNow(Date.now()); }
     });
-    return () => { dead = true; stop(); off(); };
+    return () => { dead = true; stop(); off(); choice(); };
   }, []);
   const configure = () => {
     setDraft(JSON.stringify((resources ?? []).map(({ id, capacity, mirror, repositories }) => ({ id, capacity, mirror, repositories })), null, 2));

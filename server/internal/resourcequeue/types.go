@@ -103,9 +103,10 @@ type Request struct {
 	Cached   *Outcome `json:"cached,omitempty"`
 }
 type Reply struct {
-	Status   string `json:"status"`
-	Lease    *Lease `json:"lease,omitempty"`
-	Position int    `json:"position,omitempty"`
+	Pending  []string `json:"pending,omitempty"`
+	Status   string   `json:"status"`
+	Lease    *Lease   `json:"lease,omitempty"`
+	Position int      `json:"position,omitempty"`
 }
 type Status struct {
 	Definition

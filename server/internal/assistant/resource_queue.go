@@ -108,6 +108,11 @@ func (s *Service) resourceRows(ctx context.Context, d rq.Definition, fn func(*[]
 						if l.Key == key && (l.State == "queued" || l.State == "granted") {
 							found = true
 							if l.External {
+								if job.Slot > 0 {
+									l.State = "granted"
+								} else {
+									l.State = "queued"
+								}
 								l.HeartbeatUntil = now.Add(90 * time.Second)
 								l.HoldUntil = now.Add(time.Hour)
 							}
@@ -184,8 +189,10 @@ func (s *Service) resourceRows(ctx context.Context, d rq.Definition, fn func(*[]
 			if err != nil {
 				return err
 			}
-			if _, err = tx.Exec(ctx, `INSERT INTO resource_leases(id,resource,seq,state,dedupe_key,body) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET state=EXCLUDED.state,body=EXCLUDED.body,updated_at=CASE WHEN resource_leases.body IS DISTINCT FROM EXCLUDED.body THEN now() ELSE resource_leases.updated_at END`, l.ID, d.ID, l.Seq, l.State, l.Key, body); err != nil {
-				return err
+			if tag, e := tx.Exec(ctx, `INSERT INTO resource_leases(id,resource,seq,state,dedupe_key,body) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET state=EXCLUDED.state,body=EXCLUDED.body,updated_at=CASE WHEN resource_leases.body IS DISTINCT FROM EXCLUDED.body THEN now() ELSE resource_leases.updated_at END WHERE resource_leases.resource=EXCLUDED.resource AND resource_leases.dedupe_key=EXCLUDED.dedupe_key`, l.ID, d.ID, l.Seq, l.State, l.Key, body); e != nil {
+				return e
+			} else if tag.RowsAffected() != 1 {
+				return errors.New("request ID already belongs to another key")
 			}
 		}
 		return nil
@@ -217,7 +224,8 @@ func (s *Service) resourceRequest(ctx context.Context, in rq.Request) (rq.Reply,
 		// Only the trusted node transport can attest an external successful result.
 		check, cancel := context.WithTimeout(ctx, 15*time.Second)
 		var o *rq.Outcome
-		if s.devs != nil {
+		snapshot := s.resourceMirror(ctx, d.ID)
+		if s.devs != nil && snapshot.Queue != nil && !snapshot.Unknown {
 			raw, e := s.devs.CallNode(check, d.Mirror.Machine, "resource.result", resourceParams(map[string]any{"mirror": d.Mirror, "project": in.Project, "commit": in.Commit, "groups": in.Groups}))
 			if e == nil {
 				_ = json.Unmarshal(raw, &o)
@@ -248,7 +256,13 @@ func (s *Service) resourceStatus(ctx context.Context, id string) ([]rq.Status, e
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, rq.Status{Definition: d, MirrorState: s.resourceMirror(ctx, d.ID), Leases: rows})
+		active := make([]rq.Lease, 0)
+		for _, l := range rows {
+			if l.State == "queued" || l.State == "granted" {
+				active = append(active, l)
+			}
+		}
+		out = append(out, rq.Status{Definition: d, MirrorState: s.resourceMirror(ctx, d.ID), Leases: active})
 	}
 	return out, nil
 }

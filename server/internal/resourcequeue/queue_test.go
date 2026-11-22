@@ -118,3 +118,24 @@ func TestRunnerUnavailableAndLegacyFallback(t *testing.T) {
 		t.Fatalf("legacy: %+v %v", snap, err)
 	}
 }
+
+func TestPriorityCancellationAndWaitTimeout(t *testing.T) {
+	now := time.Now()
+	rows := []Lease{
+		{ID: "normal", State: "queued", Seq: 1, WaitUntil: now.Add(time.Hour), Holder: Holder{Machine: "computer-a", Session: "one"}},
+		{ID: "urgent", State: "queued", Seq: 2, Priority: 1, WaitUntil: now.Add(time.Hour), Holder: Holder{Machine: "computer-a", Session: "two"}},
+	}
+	Advance(rows, 1, 0, now)
+	if rows[0].State != "queued" || rows[1].State != "granted" {
+		t.Fatal(rows)
+	}
+	cancelled, err := Mutate(rows, Request{Action: "cancel", ID: "normal", Holder: rows[0].Holder}, now)
+	if err != nil || cancelled.Status != "cancelled" {
+		t.Fatalf("cancel: %+v %v", cancelled, err)
+	}
+	rows = append(rows, Lease{ID: "late", State: "queued", Seq: 3, WaitUntil: now})
+	Advance(rows, 1, 0, now)
+	if rows[2].State != "timeout" {
+		t.Fatal(rows)
+	}
+}
