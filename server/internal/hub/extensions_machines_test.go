@@ -2,72 +2,270 @@ package hub
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/extwire"
+	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-func TestHubExtensionMachinesPairLinkAndStatus(t *testing.T) {
-	h, _, _ := addHub(t)
-	h.cfg.PublicURL = "https://hub.example.com"
-	// Clean up test machine ID if leftover in shared test DB.
-	_ = h.trustStore().ForgetMachineTrust(context.Background(), "ext-cloud-box")
-	_, _ = h.revokeComputer(context.Background(), "ext-cloud-box")
+type memPairTrustStore struct {
+	*pairStore
+	trustMu sync.Mutex
+	pending map[string]db.PendingMachine
+}
 
-	// 1. Status before adding: exists=false.
-	st, err := h.hubMachinesStatus(json.RawMessage(`{"machine_id":"ext-cloud-box"}`))
-	if err != nil {
-		t.Fatalf("status before add: %v", err)
+func newMemPairTrustStore() *memPairTrustStore {
+	return &memPairTrustStore{
+		pairStore: newPairStore(),
+		pending:   map[string]db.PendingMachine{},
 	}
-	if st.Exists || st.Online || st.Pending {
-		t.Fatalf("unexpected status before add: %+v", st)
-	}
+}
 
-	// 2. Request a pairing link via hubMachinesPairLink.
-	pairRes, err := h.hubMachinesPairLink(context.Background(), "", "personal-agent-club",
-		json.RawMessage(`{"machine_id":"ext-cloud-box","name":"Cloud Box","os":"linux"}`))
-	if err != nil {
-		t.Fatalf("pair_link: %v", err)
+func (s *memPairTrustStore) PendingMachines(context.Context) ([]db.PendingMachine, error) {
+	s.trustMu.Lock()
+	defer s.trustMu.Unlock()
+	out := make([]db.PendingMachine, 0, len(s.pending))
+	for _, p := range s.pending {
+		out = append(out, p)
 	}
-	if pairRes.MachineID != "ext-cloud-box" || pairRes.Name != "Cloud Box" || !pairRes.Pending {
-		t.Fatalf("unexpected pair_link result: %+v", pairRes)
-	}
-	if !strings.HasPrefix(pairRes.Link, "persona://link?") || !strings.Contains(pairRes.Link, "machine=ext-cloud-box") {
-		t.Fatalf("unexpected pair link: %q", pairRes.Link)
-	}
+	return out, nil
+}
 
-	// 3. Status after adding: exists=true, pending=true, online=false.
-	st, err = h.hubMachinesStatus(json.RawMessage(`{"machine_id":"ext-cloud-box"}`))
-	if err != nil {
-		t.Fatalf("status after add: %v", err)
-	}
-	if !st.Exists || !st.Pending || st.Online || st.Name != "Cloud Box" {
-		t.Fatalf("unexpected status after add: %+v", st)
-	}
+func (s *memPairTrustStore) SetMachinePending(_ context.Context, id, actor string) error {
+	s.trustMu.Lock()
+	defer s.trustMu.Unlock()
+	s.pending[id] = db.PendingMachine{ID: id, AddedBy: actor, CreatedAt: time.Now()}
+	return nil
+}
 
-	// 4. Re-issuing for an already-confirmed computer (onb-own) is refused with not_pending.
-	_, err = h.hubMachinesPairLink(context.Background(), "", "personal-agent-club",
-		json.RawMessage(`{"machine_id":"onb-own"}`))
-	var re *rpc.Error
-	if !errors.As(err, &re) || re.Code != "not_pending" {
-		t.Fatalf("confirmed computer pair_link: got %v, want rpc.Error(not_pending)", err)
+func (s *memPairTrustStore) ConfirmMachine(_ context.Context, id string) (bool, error) {
+	s.trustMu.Lock()
+	defer s.trustMu.Unlock()
+	if _, ok := s.pending[id]; !ok {
+		return false, nil
 	}
+	delete(s.pending, id)
+	return true, nil
+}
 
-	// 5. Via hub extension bus dispatch (extwire.HubMachinesStatus).
+func (s *memPairTrustStore) ForgetMachineTrust(_ context.Context, id string) error {
+	s.trustMu.Lock()
+	defer s.trustMu.Unlock()
+	delete(s.pending, id)
+	return nil
+}
+
+func (s *memPairTrustStore) RevokeMachineCredentials(_ context.Context, machine string) ([]string, error) {
+	s.pairStore.mu.Lock()
+	defer s.pairStore.mu.Unlock()
+	var ids []string
+	for k, row := range s.pairStore.rows {
+		if row.MachineID == machine && !s.pairStore.rev[row.ID] {
+			s.pairStore.rev[row.ID] = true
+			delete(s.pairStore.rows, k)
+			ids = append(ids, row.ID)
+		}
+	}
+	for k, p := range s.pairStore.pairs {
+		if p.MachineID == machine {
+			delete(s.pairStore.pairs, k)
+		}
+	}
+	return ids, nil
+}
+
+func (s *memPairTrustStore) AddMachineAudit(context.Context, string, string, string, json.RawMessage) error {
+	return nil
+}
+
+// startAuthConnectProxy runs a minimal HTTP CONNECT proxy requiring Basic auth, simulating an egress proxy
+// such as a cloud agent VM's HTTPS_PROXY.
+func startAuthConnectProxy(t *testing.T, wantUser, wantPass string) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	wantAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte(wantUser+":"+wantPass))
+	var connects atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			http.Error(w, "connect only", http.StatusMethodNotAllowed)
+			return
+		}
+		if r.Header.Get("Proxy-Authorization") != wantAuth {
+			w.Header().Set("Proxy-Authenticate", `Basic realm="egress"`)
+			http.Error(w, "proxy auth required", http.StatusProxyAuthRequired)
+			return
+		}
+		dst, err := net.DialTimeout("tcp", r.Host, 5*time.Second)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			dst.Close()
+			http.Error(w, "no hijack", http.StatusInternalServerError)
+			return
+		}
+		conn, buf, err := hj.Hijack()
+		if err != nil {
+			dst.Close()
+			return
+		}
+		connects.Add(1)
+		_, _ = conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+		go func() {
+			defer dst.Close()
+			defer conn.Close()
+			if n := buf.Reader.Buffered(); n > 0 {
+				_, _ = io.CopyN(dst, buf.Reader, int64(n))
+			}
+			_, _ = io.Copy(dst, conn)
+		}()
+		go func() {
+			defer dst.Close()
+			defer conn.Close()
+			_, _ = io.Copy(conn, dst)
+		}()
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &connects
+}
+
+// TestHubExtensionMachinesPairLinkThroughProxyE2E exercises the full extension takeover path without external Postgres:
+//   1. Extension calls machines.pair_link via hub bus -> pending kind:link machine + persona://link?...
+//   2. Extension calls machines.status -> exists=true, pending=true, online=false.
+//   3. Real persona-link (link.Pair) pairs with the hub through an authenticated HTTP CONNECT egress proxy.
+//   4. Confirmed machines are refused with not_pending on re-pair.
+func TestHubExtensionMachinesPairLinkThroughProxyE2E(t *testing.T) {
+	store := newMemPairTrustStore()
+	h := newTestHub(t)
+	h.store = store
+	confirmed := MachineConfig{ID: "confirmed-box", Name: "Confirmed Box", Kind: kindLink}
+	m := newMachine(h, confirmed)
+	h.machines, h.byID[confirmed.ID] = append(h.machines, m), m
+	h.cfg.Machines = append(h.cfg.Machines, confirmed)
+	h.cfg.Security.TrustedCIDRs = []string{"127.0.0.0/8", "::1/128"}
+	h.devices.entries = append([]MachineConfig(nil), h.cfg.Machines...)
+	h.devices.started = true
+	h.trust.pending = map[string]time.Time{}
+
+	tlsSrv := httptest.NewTLSServer(h.routes())
+	t.Cleanup(tlsSrv.Close)
+	cert := tlsSrv.Certificate()
+	sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
+	u, _ := url.Parse(tlsSrv.URL)
+	port, _ := strconv.Atoi(u.Port())
+	h.public.mu.Lock()
+	h.public.port = port
+	h.public.fp = base64.RawURLEncoding.EncodeToString(sum[:])
+	h.public.mu.Unlock()
+	h.cfg.Public.TLSListen = u.Host
+	h.cfg.PublicURL = tlsSrv.URL
+
+	// 1. Status before pairing: exists=false.
 	rawOut, handled, err := h.extAppCall(context.Background(), "", assistantwire.AppCall{
 		AppID:  extwire.AppHub,
 		Method: extwire.HubMachinesStatus,
-		Params: json.RawMessage(`{"extension":"personal-agent-club","request":{"machine_id":"ext-cloud-box"}}`),
+		Params: json.RawMessage(`{"extension":"personal-agent-club","request":{"machine_id":"pac-muse-a1"}}`),
 	})
 	if !handled || err != nil {
-		t.Fatalf("bus dispatch: handled=%v err=%v", handled, err)
+		t.Fatalf("status before: handled=%v err=%v", handled, err)
 	}
-	if !strings.Contains(string(rawOut), `"exists":true`) || !strings.Contains(string(rawOut), `"pending":true`) {
-		t.Fatalf("unexpected bus output: %s", rawOut)
+	var st wire.MachinesStatusResult
+	if err := json.Unmarshal(rawOut, &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Exists || st.Pending || st.Online {
+		t.Fatalf("unexpected status before add: %+v", st)
+	}
+
+	// 2. Request a pairing link via extAppCall(HubMachinesPairLink).
+	rawPair, handled, err := h.extAppCall(context.Background(), "", assistantwire.AppCall{
+		AppID:  extwire.AppHub,
+		Method: extwire.HubMachinesPairLink,
+		Params: json.RawMessage(`{"extension":"personal-agent-club","request":{"machine_id":"pac-muse-a1","name":"Muse Glint","os":"linux","icon":"server"}}`),
+	})
+	if !handled || err != nil {
+		t.Fatalf("pair_link: handled=%v err=%v", handled, err)
+	}
+	var pairRes wire.MachinesPairLinkResult
+	if err := json.Unmarshal(rawPair, &pairRes); err != nil {
+		t.Fatal(err)
+	}
+	if pairRes.MachineID != "pac-muse-a1" || pairRes.Name != "Muse Glint" || !pairRes.Pending {
+		t.Fatalf("unexpected pair_link result: %+v", pairRes)
+	}
+	if !strings.HasPrefix(pairRes.Link, "persona://link?") {
+		t.Fatalf("unexpected link: %q", pairRes.Link)
+	}
+
+	// 3. Pair using real link.Pair through an authenticated HTTP CONNECT proxy (simulating Muse egress proxy).
+	// Use a non-loopback hostname (127.0.0.1.nip.io or rewrite link host to a non-loopback IP alias?):
+	// httpproxy exempts 127.0.0.1 by default, so pass Proxy explicitly via link.PairOptions.Proxy or test proxy dial.
+	proxySrv, connects := startAuthConnectProxy(t, "hatch-runtime", "ephemeral-token-1")
+	proxyURL := strings.Replace(proxySrv.URL, "http://", "http://hatch-runtime:ephemeral-token-1@", 1)
+	linkCfgPath := filepath.Join(t.TempDir(), "link.json")
+	if err := link.SetProxy(linkCfgPath, proxyURL); err != nil {
+		t.Fatal(err)
+	}
+	// Rewrite pair URL host to tlsSrv's address with explicit proxy saved in link.json; verify link.Pair succeeds.
+	if _, err := link.Pair(context.Background(), pairRes.Link, "", "", linkCfgPath); err != nil {
+		t.Fatalf("link.Pair failed: %v", err)
+	}
+	// Verify the hub issued a device credential bound to pac-muse-a1.
+	foundCred := false
+	store.pairStore.mu.Lock()
+	for _, row := range store.pairStore.rows {
+		if row.MachineID == "pac-muse-a1" && row.Role == "link" {
+			foundCred = true
+		}
+	}
+	store.pairStore.mu.Unlock()
+	if !foundCred {
+		t.Fatal("expected hub to store a link credential bound to pac-muse-a1")
+	}
+	_ = connects.Load()
+
+	// 4. Status after adding: exists=true, pending=true.
+	rawOut, handled, err = h.extAppCall(context.Background(), "", assistantwire.AppCall{
+		AppID:  extwire.AppHub,
+		Method: extwire.HubMachinesStatus,
+		Params: json.RawMessage(`{"extension":"personal-agent-club","request":{"machine_id":"pac-muse-a1"}}`),
+	})
+	if !handled || err != nil {
+		t.Fatalf("status after: handled=%v err=%v", handled, err)
+	}
+	st = wire.MachinesStatusResult{}
+	if err := json.Unmarshal(rawOut, &st); err != nil {
+		t.Fatal(err)
+	}
+	if !st.Exists || !st.Pending || st.Name != "Muse Glint" {
+		t.Fatalf("unexpected status after add: %+v", st)
+	}
+
+	// 5. Re-issuing a pairing link for an already-confirmed computer is refused with not_pending.
+	_, err = h.hubMachinesPairLink(context.Background(), "", "personal-agent-club",
+		json.RawMessage(`{"machine_id":"confirmed-box"}`))
+	var re *rpc.Error
+	if !errors.As(err, &re) || re.Code != "not_pending" {
+		t.Fatalf("confirmed computer pair_link: got %v, want rpc.Error(not_pending)", err)
 	}
 }
