@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -286,28 +287,36 @@ func (s *Service) botSendIn(ctx context.Context, ev *feishubot.MessageEvent, con
 			var res struct {
 				Data     []byte `json:"data"`
 				MIME     string `json:"mime"`
+				Path     string `json:"path"`
+				Name     string `json:"name"`
 				TooLarge bool   `json:"too_large"`
 			}
-			if err := s.appCall(ctx, AppFeishu, FeishuResource, map[string]any{"message_id": bm.of, "key": md.Key, "kind": md.Kind}, &res); err != nil {
+			if err := s.appCall(ctx, AppFeishu, FeishuResource, map[string]any{"message_id": bm.of, "key": md.Key, "kind": md.Kind,
+				"machine_id": rt.machine, "as_file": len(images) >= botImagesMax}, &res); err != nil {
 				if bm.quoted {
 					s.logf("bots: the quoted message's image: %v", err)
 					continue
 				}
+				var coded *rpc.Error
+				if errors.As(err, &coded) && coded.Code == assistantwire.CodeFeishuSave {
+					return fmt.Errorf("%s%w", i18n.T(s.botLang(ctx), "assistant-feishu.save_file", i18n.Args{"machine": rt.machineName}), err)
+				}
 				return fmt.Errorf("%s%w", i18n.T(s.botLang(ctx), "assistant-feishu.download_image"), err)
+			}
+			if res.TooLarge || (res.Name != "" && res.Path == "") {
+				tooLarge = append(tooLarge, res.Name)
+				continue
+			}
+			if res.Path != "" {
+				in.Files = append(in.Files, res.Path)
+				continue
 			}
 			mime := res.MIME
 			if !strings.HasPrefix(mime, "image/") {
 				mime = "image/png"
 			}
-			if len(images) < botImagesMax && !res.TooLarge {
-				images = append(images, proto.Image{Mime: mime, Data: base64.StdEncoding.EncodeToString(res.Data)})
-				continue
-			}
-			// More pictures than a message takes, or one too big for the model: as a file.
-			md.Name = md.Key + map[string]string{"image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp"}[mime]
-			if !strings.Contains(md.Name, ".") {
-				md.Name += ".png"
-			}
+			images = append(images, proto.Image{Mime: mime, Data: base64.StdEncoding.EncodeToString(res.Data)})
+			continue
 		}
 		var saved struct {
 			Path     string `json:"path"`
@@ -426,6 +435,9 @@ func (s *Service) botQuote(ctx context.Context, id string, lang i18n.Lang) (*pro
 		return nil, nil
 	}
 	it := items[0]
+	if it.Deleted {
+		return nil, nil
+	}
 	c := feishubot.ParseContent(it.MsgType, it.Body.Content, it.MentionList())
 	who := "Persona"
 	if it.Sender.SenderType == "user" {

@@ -39,10 +39,12 @@ type Client struct {
 	domain           string
 	http             *http.Client
 
-	mu      sync.Mutex
-	token   string
-	console string // the developer console this client links out to, when not what the domain says (tests)
-	expires time.Time
+	mu         sync.Mutex
+	token      string
+	console    string // the developer console this client links out to, when not what the domain says (tests)
+	expires    time.Time
+	refresh    chan struct{}
+	generation uint64
 }
 
 func New(appID, appSecret, domain string) *Client {
@@ -74,20 +76,62 @@ func (e *APIError) Error() string {
 func tokenGone(code int) bool { return code == 99991663 || code == 99991664 || code == 99991661 }
 
 func (c *Client) tenantToken(ctx context.Context, fresh bool) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !fresh && c.token != "" && time.Now().Before(c.expires) {
-		return c.token, nil
+	var waited bool
+	var generation uint64
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		c.mu.Lock()
+		if waited {
+			// A successful exchange since we joined satisfies even a forced refresh.
+			// Failure leaves the generation unchanged, so try with our own context.
+			fresh = c.generation == generation
+		}
+		if pending := c.refresh; pending != nil {
+			waited, generation = true, c.generation
+			c.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-pending:
+				// Recheck the current exchange and cache; this result may be superseded.
+				continue
+			}
+		}
+		if !fresh && c.token != "" && time.Now().Before(c.expires) {
+			token := c.token
+			c.mu.Unlock()
+			return token, nil
+		}
+		pending := make(chan struct{})
+		c.refresh = pending
+		c.mu.Unlock()
+
+		token, expires, err := c.fetchTenantToken(ctx)
+		c.mu.Lock()
+		if err == nil {
+			c.token, c.expires = token, expires
+			c.generation++
+		}
+		c.refresh = nil
+		close(pending)
+		c.mu.Unlock()
+		return token, err
 	}
+}
+
+// fetchTenantToken performs HTTP outside the cache lock using the refreshing caller's context.
+func (c *Client) fetchTenantToken(ctx context.Context) (string, time.Time, error) {
 	body, _ := json.Marshal(map[string]string{"app_id": c.appID, "app_secret": c.appSecret})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.domain+"/open-apis/auth/v3/tenant_access_token/internal", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 	defer resp.Body.Close()
 	var out struct {
@@ -97,14 +141,12 @@ func (c *Client) tenantToken(ctx context.Context, fresh bool) (string, error) {
 		Expire int    `json:"expire"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("feishu token: HTTP %d: %w", resp.StatusCode, err)
+		return "", time.Time{}, fmt.Errorf("feishu token: HTTP %d: %w", resp.StatusCode, err)
 	}
 	if out.Code != 0 || out.Token == "" {
-		return "", &APIError{Op: "token", Code: out.Code, Msg: out.Msg}
+		return "", time.Time{}, &APIError{Op: "token", Code: out.Code, Msg: out.Msg}
 	}
-	c.token = out.Token
-	c.expires = time.Now().Add(time.Duration(max(out.Expire-300, 60)) * time.Second)
-	return c.token, nil
+	return out.Token, time.Now().Add(time.Duration(max(out.Expire-300, 60)) * time.Second), nil
 }
 
 const (
