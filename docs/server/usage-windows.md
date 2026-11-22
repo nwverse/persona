@@ -75,6 +75,12 @@ API (read-only, not usable with extension tokens, `testdata/route_scopes.txt`):
 }], "checked_at": "2026-11-05T09:08:20Z"}
 ```
 
+A window from a usage extension may also carry the gateway's protection line:
+
+```json
+{"label": "7d", "window_minutes": 10080, "used_percent": 55.0, "resets_at": "2026-11-27T09:00:00Z", "protect_percent": 99.0}
+```
+
 `local` says the numbers were read on one of the computers. `machines` names those computers (their names in hub.json now, #1907), and `sources` names the account-pool gateways that reported it (below).
 
 With no data, `accounts` is `[]`; old hubs lack this route (404), and the web treats that as no data.
@@ -105,7 +111,9 @@ A gateway whose answer fits none of the three adapters is read by an extension t
 {"id": "src-3a4b5c6d", "name": "Pool", "type": "extension", "extension": "example-usage", "launcher": "pool"}
 ```
 
-It is written in `manager.json` (the admin page lists it and can rename, switch and remove it, not create it). Its rows are shown as the extension sent them and are never merged with the computers' accounts. Besides the usual fields a window may carry `group`, `title` and `note`, and an account `headline` and `notice` (plain text in the user's language): windows next to each other with the same `group` belong together, an account with a `notice` and no window says why there is nothing to draw. All are optional; without them a client draws the flat windows as before.
+It is written in `manager.json` (the admin page lists it and can rename, switch and remove it, not create it). Its rows are shown as the extension sent them and are never merged with the computers' accounts. Besides the usual fields a window may carry `group`, `title` and `note`, and `protect_percent` (below), and an account `headline` and `notice` (plain text in the user's language): windows next to each other with the same `group` belong together, an account with a `notice` and no window says why there is nothing to draw. All are optional; without them a client draws the flat windows as before.
+
+`protect_percent` (0 to 100, #13173) is the used percentage at which the gateway stops sending work to that account for that window (its quota protection line). It can differ per account and per window, so an extension sends the value that applies to each window it lists. A number outside 0 to 100, or one that is not a number, is dropped (never clamped into a value); a window without it simply has no line. The hub carries it unchanged in `GET /api/v1/usage/windows` as `protect_percent` on the window, only for rows an extension sent; windows read by the computers or by the built-in gateway adapters never have it. Clients draw a marker on the window's bar at that percentage and ignore the field when it is absent.
 
 ### Configuration
 
