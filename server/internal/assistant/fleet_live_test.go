@@ -350,8 +350,8 @@ func TestBuildFleetOffersNoAllowForACardWithFields(t *testing.T) {
 func TestFleetButtonsOnlyForDecidableCards(t *testing.T) {
 	now := time.Now()
 	agents := []fleetInput{
-		{Machine: "M", Session: proto.Session{MachineID: "m", SessionID: "a", Title: "With summary", State: proto.StateNeedsYou}},
-		{Machine: "M", Session: proto.Session{MachineID: "m", SessionID: "b", Title: "Tool only", State: proto.StateNeedsYou}},
+		{Machine: "M", Session: &proto.Session{MachineID: "m", SessionID: "a", Title: "With summary", State: proto.StateNeedsYou}},
+		{Machine: "M", Session: &proto.Session{MachineID: "m", SessionID: "b", Title: "Tool only", State: proto.StateNeedsYou}},
 	}
 	ixs := []proto.Interaction{
 		{ID: "ix_a", MachineID: "m", SessionID: "a", Kind: proto.IxPermission, ToolName: "todo_complete", Summary: "Mark the to-do done", CreatedAt: now},
