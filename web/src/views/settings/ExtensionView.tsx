@@ -12,7 +12,7 @@ import { extIdOf } from "../../lib/extension-api";
 import { openLink } from "../../lib/links";
 import {
   actUI, fieldValues, isUnsupported, numberProblem, outcome, pushPage, refreshDelay, renderUI, submitValues, uiPlaces, UI_VERSION,
-  type UIAction, type UIContext, type UIItem, type UIMore, type UIPage, type UIPlace, type UIPush, type UITabs, type UIView,
+  type UIAction, type UIContext, type UIFilter, type UIItem, type UIMore, type UIPage, type UIPlace, type UIPush, type UISearch, type UITabs, type UIView,
 } from "../../lib/extension-ui";
 import { navigate } from "../../lib/router";
 import { isResumed } from "../../lib/reconnect";
@@ -20,6 +20,7 @@ import { appSocketReady, onAppSocket, onHubEvent } from "../../lib/store";
 import { wideView } from "../../lib/code-view";
 import { INERT, ViewSections } from "../extensions/ViewBody";
 import { Button, cx, Dialog, Loading, Spinner, toast } from "../../ui/atoms";
+import { NATIVE, NativeTabs } from "../../ui/ExtensionNative";
 import { keepLoaded, patchView } from "../../lib/code-review";
 import { KeysHelp, ReviewBar, ReviewKeys, ReviewProvider, ReviewToolbar, reviewing } from "../extensions/DiffReview";
 import { Icon } from "../../ui/icons";
@@ -144,6 +145,7 @@ export function pageHref(extension: string, ui: string, state?: string): string 
  * (`open`, the default for a card and a section inside another page). `state`: the first page's state (a full page opened by a push).
  */
 const HELLO_NEGOTIATION_MS = 5000;
+const NOOP = () => {};
 // The native stream page and its schema validator are a chunk of their own: most pages are drawn over HTTP and never need it.
 const NativeExtensionUI = lazyPage(() => import("./NativeExtensionUI").then((m) => m.NativeExtensionUI));
 export function ExtensionUI({ remember, ...props }: Parameters<typeof LegacyExtensionUI>[0] & {
@@ -180,7 +182,7 @@ export function ExtensionUI({ remember, ...props }: Parameters<typeof LegacyExte
     const [extension, ui, state, language] = JSON.parse(page) as string[];
     return readKeptView({ extension, ui, state, language }, httpOnly ? [UI_VERSION] : [NATIVE_UI_VERSION, UI_VERSION], defaultId || undefined);
   }, [page, httpOnly, defaultId]);
-  const placeholder = kept ? <KeptView view={kept.view} native={kept.key.version === NATIVE_UI_VERSION} compact={props.compact} onWide={props.onWide} /> : undefined;
+  const placeholder = kept ? <KeptView view={kept.view} native={kept.key.version === NATIVE_UI_VERSION} compact={props.compact} bare={props.bare} title={props.title} onWide={props.onWide} /> : undefined;
   const onView = useCallback((view: UIView, version: number, manager = defaultKnown() ? defaultManager() : "") => {
     if (!page || !manager) return;
     const [extension, ui, state, language] = JSON.parse(page) as string[];
@@ -201,19 +203,28 @@ export function ExtensionUI({ remember, ...props }: Parameters<typeof LegacyExte
 }
 
 /** The page's last view while its extension draws it again (docs/web/web.md "Extension pages on reload"): as it was, as
- *  wide, but nothing in it can be pressed or focused, and a quiet "Updating" in the page's top margin, so nothing moves
- *  when the drawing replaces it. `native`: drawn over the socket, which titles the page itself. `compact`: a card's
- *  (#11091), its sections laid out as the drawing's own in the card's column (`contents`), "Updating" for screen readers
- *  only: the card's heading marks it (OverviewCard, by `data-kept-view`). */
-function KeptView({ view, native, compact, onWide }: { view: UIView; native: boolean; compact?: boolean; onWide?: (wide: boolean) => void }) {
+ *  wide, with its View-level tabs, search and filter intact, but nothing in it can be pressed or focused, and a quiet
+ *  "Updating" in the page's top margin, so nothing moves when the drawing replaces it. `native`: drawn over the socket,
+ *  which titles the page itself. `compact`: a card's (#11091), its sections laid out as the drawing's own in the card's
+ *  column (`contents`), "Updating" for screen readers only: the card's heading marks it (OverviewCard, by `data-kept-view`). */
+function KeptView({ view, native, compact, bare, title, onWide }: { view: UIView; native: boolean; compact?: boolean; bare?: boolean; title?: string; onWide?: (wide: boolean) => void }) {
   const wide = wideView(view);
   useEffect(() => onWide?.(wide), [wide, onWide]);
+  const values = useMemo(() => fieldValues(view), [view]);
+  const first = view.sections[0]?.items[0];
+  const titled = view.title || title;
+  const heading = first?.type === "header" && first.title === titled ? undefined : titled;
+  const filterValue = view.filter ? view.filter.value ?? view.filter.choices[0]?.value ?? "" : "";
   if (compact)
     return (
       <div className="contents" data-kept-view>
         <p role="status" className="sr-only">{t("settings-extensionview.updating")}</p>
         <div inert aria-busy="true" className="contents">
-          <ViewSections view={view} compact {...INERT} />
+          {view.tabs && <Tabs tabs={view.tabs} value={view.tabs.value} busy="" onChoose={NOOP} />}
+          {(view.search || view.filter) && (
+            <SearchFilterBar search={view.search} filter={view.filter} query={view.search?.value ?? ""} filterValue={filterValue} compact busy="" onQuery={NOOP} onFilter={NOOP} />
+          )}
+          <ViewSections view={view} compact {...INERT} values={values} />
         </div>
       </div>
     );
@@ -223,9 +234,50 @@ function KeptView({ view, native, compact, onWide }: { view: UIView; native: boo
         <Spinner size={10} />
         {t("settings-extensionview.updating")}
       </p>
-      <div inert aria-busy="true" className={native ? "flex min-w-0 flex-col gap-4 text-sm text-ink" : "flex flex-col gap-6"}>
-        {native && view.title !== undefined && <h2 className="text-xl font-semibold text-ink">{view.title}</h2>}
-        <ViewSections view={view} {...INERT} />
+      <div inert aria-busy="true" className={native ? NATIVE.page : "flex flex-col gap-6"}>
+        {native ? (
+          <>
+            {view.title !== undefined && <h2 className="text-xl font-semibold text-ink">{view.title}</h2>}
+            {view.tabs && <NativeTabs name={view.tabs.name} items={view.tabs.items} value={view.tabs.value} disabled onChoose={NOOP} />}
+            {(view.search || view.filter) && (
+              <div className="flex flex-wrap items-center gap-2">
+                {view.search && (
+                  <input
+                    type="search"
+                    aria-label={view.search.placeholder ?? t("settings-extensionview.search")}
+                    placeholder={view.search.placeholder}
+                    className={NATIVE.field}
+                    value={view.search.value ?? ""}
+                    disabled
+                    onChange={NOOP}
+                  />
+                )}
+                {view.filter && (
+                  <select aria-label={view.filter.title ?? view.filter.name} className={NATIVE.field} value={filterValue} disabled onChange={NOOP}>
+                    {view.filter.choices.map((it) => (
+                      <option key={it.value} value={it.value}>
+                        {it.title ?? it.value}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            {!bare && heading && (
+              <div className="flex items-center gap-2 px-1">
+                <h2 className="min-w-0 flex-1 truncate text-[15px] font-semibold text-ink">{heading}</h2>
+              </div>
+            )}
+            {view.tabs && <Tabs tabs={view.tabs} value={view.tabs.value} busy="" onChoose={NOOP} />}
+            {(view.search || view.filter) && (
+              <SearchFilterBar search={view.search} filter={view.filter} query={view.search?.value ?? ""} filterValue={filterValue} busy="" onQuery={NOOP} onFilter={NOOP} />
+            )}
+          </>
+        )}
+        <ViewSections view={view} {...INERT} values={values} />
       </div>
     </div>
   );
@@ -599,43 +651,20 @@ export function LegacyExtensionUI({
         />
       )}
       {view && (view.search || view.filter) && (
-        <div className={cx("flex items-center gap-2", compact ? "px-4" : "px-0")}>
-          {view.search && (
-            <label className="relative min-w-0 flex-1">
-              <Icon name="search" size={13} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-ink-3" />
-              <input
-                type="search"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder={view.search.placeholder || t("settings-extensionview.search")}
-                aria-label={view.search.placeholder || t("settings-extensionview.search")}
-                spellCheck={false}
-                autoComplete="off"
-                className={cx(inputClass, "pl-8")}
-              />
-            </label>
-          )}
-          {view.filter && (
-            <select
-              aria-label={view.filter.title || view.filter.name}
-              value={values[view.filter.name] ?? view.filter.value ?? view.filter.choices[0]?.value ?? ""}
-              disabled={!!busy}
-              onChange={(e) => {
-                const f = view.filter!;
-                setValues((x) => ({ ...x, [f.name]: e.target.value }));
-                void run(f.action, { ...listValues(), [f.name]: e.target.value });
-              }}
-              className={cx(inputClass, "w-auto max-w-[200px] shrink-0")}
-            >
-              {view.filter.choices.map((c) => (
-                <option key={c.value} value={c.value}>
-                  {c.title || c.value}
-                </option>
-              ))}
-            </select>
-          )}
-          {busy && <Spinner />}
-        </div>
+        <SearchFilterBar
+          search={view.search}
+          filter={view.filter}
+          query={query}
+          filterValue={view.filter ? values[view.filter.name] ?? view.filter.value ?? view.filter.choices[0]?.value ?? "" : ""}
+          compact={compact}
+          busy={busy}
+          onQuery={setQuery}
+          onFilter={(next) => {
+            const f = view.filter!;
+            setValues((x) => ({ ...x, [f.name]: next }));
+            void run(f.action, { ...listValues(), [f.name]: next });
+          }}
+        />
       )}
       {!view && !error && (placeholder ?? (
         <div className={cx(compact ? "px-4 py-3" : embedded ? "py-2" : "rounded-card bg-surface px-4 py-3 shadow-card")}>
@@ -720,6 +749,50 @@ export function LegacyExtensionUI({
           <p className="text-[13px] leading-relaxed whitespace-pre-line break-words text-ink-2">{confirming.action.confirm}</p>
         </Dialog>
       )}
+    </div>
+  );
+}
+
+/** A view's search box and filter bar (UI version 3): shared between live and cached views so refresh swaps only data. */
+function SearchFilterBar({
+  search, filter, query, filterValue, compact, busy, onQuery, onFilter,
+}: {
+  search?: UISearch; filter?: UIFilter; query: string; filterValue: string; compact?: boolean; busy: string;
+  onQuery: (v: string) => void; onFilter: (v: string) => void;
+}) {
+  return (
+    <div className={cx("flex items-center gap-2", compact ? "px-4" : "px-0")}>
+      {search && (
+        <label className="relative min-w-0 flex-1">
+          <Icon name="search" size={13} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-ink-3" />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => onQuery(e.target.value)}
+            placeholder={search.placeholder || t("settings-extensionview.search")}
+            aria-label={search.placeholder || t("settings-extensionview.search")}
+            spellCheck={false}
+            autoComplete="off"
+            className={cx(inputClass, "pl-8")}
+          />
+        </label>
+      )}
+      {filter && (
+        <select
+          aria-label={filter.title || filter.name}
+          value={filterValue}
+          disabled={!!busy}
+          onChange={(e) => onFilter(e.target.value)}
+          className={cx(inputClass, "w-auto max-w-[200px] shrink-0")}
+        >
+          {filter.choices.map((c) => (
+            <option key={c.value} value={c.value}>
+              {c.title || c.value}
+            </option>
+          ))}
+        </select>
+      )}
+      {busy && <Spinner />}
     </div>
   );
 }
