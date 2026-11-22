@@ -22,7 +22,9 @@ design-principles self-check does not apply.
   build or test speedups below are expected, not measured. Paths that do not exist yet are plain text, not code, so the
   docs path checks stay meaningful.
 - Passages marked "Revised 2026-11-22 in #10613" bring the plan in line with the domain rules; the facts they state
-  were re-checked on 8d3dce7b6a (open PRs as of that day), the rest of the passage's numbers are as above.
+  were re-checked on 8d3dce7b6a (open PRs as of that day), the rest of the passage's numbers are as above. The client
+  steps' gates, the Apple adapter's inputs and I1's CI lines were corrected after that (#13052), with their facts
+  re-checked on 134686adc4; the way the Apple adapter answers and step A4 followed, re-checked on 600d6a1af8.
 
 ## 1. Why
 
@@ -218,6 +220,11 @@ of domain packages is kept; and the stored item is a record in the item core's a
 
 ### 3.3 Clients
 
+Each client's domain module follows the domain rules' client part, which the client domain guard adds after #12899: a
+later step of #10613 that finds the Swift and Kotlin domain modules by name and checks them (the web's rules come with
+W1). No client step adds a domain module, an adapter or a store package before it lands, so W1, I1, A2 and A4 wait
+for it.
+
 - **Web.** A feature folder, web/src/features/inbox (D8a), takes the section bar's rules first, into
   features/inbox/domain with features/inbox/adapt beside it (W1), then the store and API client from
   `web/src/lib/inbox.ts`, then the page-only modules; `web/src/views/inbox` stays the route-level UI, and helpers that
@@ -235,22 +242,33 @@ of domain packages is kept; and the stored item is a record in the item core's a
   test (D10a). Its build file sets `explicitApi()` and `allWarningsAsErrors`. It holds persona.core.inbox.store (A2's
   `@Serializable` reply and hand-off records, moved unchanged) and persona.core.inbox.adapt. The Inbox's domain is the
   Gradle subproject :core:inbox:domain (persona.core.inbox.domain, depending only on the domain kit's
-  :core:domainkit), created when the bar's rules move: Kotlin's `internal` is module-wide, so only a module boundary
-  keeps the adapter out of the domain. Also in the module: A3's page-facing repository, outside those packages, and
-  later a strangler step that moves `persona.core.domain.inbox` in (458 lines), with feature:assistant gaining a direct
-  dependency. The transports core:hub implements, the wire InboxItem and the legacy facade `api/InboxRepository` stay
-  in core:contracts until measured. Domain types live only in :core:inbox:domain and are never `@Serializable`;
-  persisted shapes stay `@Serializable` records in the store package. @StringRes members become keys, and
-  Compose-backed members stay in feature:inbox. Then core:data stops depending on feature:inbox, and a source scan
-  keeps core modules off feature modules.
-- **Apple.** A Swift package, apple/Packages/PersonaInbox, holds UI-free Inbox logic under `swift test` now (D10b). Its
-  Domain target, PersonaInboxDomain, imports no Foundation and depends only on PersonaDomainKit (a new package with the
-  domain kit's Swift values); PersonaInboxAdapt maps PersonaWire's and Shared's types to it.
-  `apple/Packages/PersonaWire` is unchanged: the domain owns the bar's InboxSection and InboxChoice, and the adapter
-  maps Shared's `InboxItem.Tier` to them. `apple/Shared/InboxModels.swift`, `InboxEvents.swift` and `InboxNow.swift`
-  stay in Shared: the watch compiles them, and the item's Codable form is the StateCache record and the WatchSync
-  payload. The item moves only with two-way compatibility tests (an old blob decodes in the new build, and the reverse).
-  The views stay in `apple/Persona/Views/Inbox` until PersonaDesign (#10613), then move to apple/Persona/Features/Inbox.
+  :core:domainkit), created when the bar's rules move (A4): Kotlin's `internal` is module-wide, so only a module
+  boundary keeps the adapter out of the domain. Also in the module: A3's page-facing repository and A4's bar facade,
+  outside those packages, and later a strangler step that moves the rest of `persona.core.domain.inbox` in (458 lines,
+  116 of them the bar's, which A4 takes), with feature:assistant gaining a direct dependency. Because they share the
+  module, the rule on what the adapter returns reads its internal declarations as well as its public ones (A4). The
+  transports core:hub implements, the wire InboxItem and the legacy facade `api/InboxRepository` stay in core:contracts
+  until measured. Domain types live only in :core:inbox:domain and are never `@Serializable`; persisted shapes stay
+  `@Serializable` records in the store package. @StringRes members become keys, and Compose-backed members stay in
+  feature:inbox. Then core:data stops depending on feature:inbox, and a source scan keeps core modules off feature
+  modules.
+- **Apple.** A Swift package, apple/Packages/PersonaInbox, made once the client domain guard is in, holds UI-free Inbox
+  logic under `swift test` (D10b). Its Domain target, PersonaInboxDomain, imports no Foundation and depends only on
+  PersonaDomainKit (a new package with the domain kit's Swift values); PersonaInboxAdapt, on the domain and
+  PersonaWire, builds the domain's values. `apple/Packages/PersonaWire` is unchanged, and no package can see Shared's
+  types: `apple/Shared` is a source folder each app target compiles (`apple/project.yml`), not a module. So an
+  app-side facade, compiled with Shared, hands the adapter plain values, such as the section words (`InboxItem.Tier`'s
+  raw values) and the counts InboxProjection keeps; the adapter parses them into the domain's InboxSection and
+  InboxChoice. Answers never come back as plain values: the adapter's public functions return nothing or a domain
+  value (a parse's outcome), never a word, a number, a tuple or a struct of its own. For each answer the facade passes
+  one closure per case of the domain's visitor, the adapter visits and calls each with that case's section word, count
+  or emptiness word, and the facade builds the app's `InboxItem.Tier`, InboxChoice and `InboxPage.EmptyKind` from the
+  calls without reading anything back (the domain rules' way of acting on a decision). `InboxItem.Tier`, the item's
+  triage fallback (the hub's status, else the tier) and the tier's localized title stay in Shared, as do
+  `apple/Shared/InboxModels.swift`, `InboxEvents.swift` and `InboxNow.swift`: the watch compiles them, and the item's
+  Codable form is the StateCache record and the WatchSync payload. The item moves only with two-way compatibility tests
+  (an old blob decodes in the new build, and the reverse). The views stay in `apple/Persona/Views/Inbox` until
+  PersonaDesign (#10613), then move to apple/Persona/Features/Inbox.
 - **Lark (D9).** The Lark chat pages stay in the Inbox as its Lark sub-area on every client (`LarkThread.tsx` and the
   rest on the web, 47 files in `apple/Persona/Views/Inbox/Lark`, `LarkScreen.kt` on Android): Messages reuses the
   Inbox's chat view (`docs/extensions/lark-migration.md`, "Entry point"), and the two change together. This is
@@ -271,8 +289,11 @@ of domain packages is kept; and the stored item is a record in the item core's a
   to replace.
 
 *Revised 2026-11-22 in #10613:* each client's Inbox rules are a domain module beside an adapter, so the web's model
-folder becomes domain and adapt folders, Android's model package becomes the :core:inbox:domain subproject beside
-store and adapt packages, and the tier stays in Shared rather than moving into PersonaWire.
+folder becomes domain and adapt folders, Android's model package becomes the :core:inbox:domain subproject (A4) beside
+store and adapt packages, and the tier stays in Shared rather than moving into PersonaWire; since no package can see
+Shared, an app-side facade hands the Apple adapter plain values and takes answers only through closures the adapter
+calls; the Android adapter's results are checked on its internal declarations too, since its module also holds the
+repository and the facade; and the client steps wait for the client domain guard.
 
 ## 4. Steps
 
@@ -301,18 +322,19 @@ store and adapt packages, and the tier stays in Shared rather than moving into P
 | S1 | Kernel package; saved registers through it | Low: 34 open PRs touch `assistant/service.go`; S1 and S4 together made no open PR conflict more (51e333fc90). Of three drafts on `assistant/saved`, only #12113 edits `assistant/saved/saved.go`, inside its Register, which S1 leaves alone | after #12899's domain rules (Windows) |
 | S2 | Guards and contract tests | None: new files | landed (#11650) |
 | S3 | Seams in quiet files | None: the four files had no open PR | landed (#11536) |
-| S4 | Routes, bus methods, hooks, snapshot through the kernel | Low: 34 open PRs on `assistant/service.go` and 12 on `assistant/bus.go`, none on `assistant/handler.go`; with S1, no open PR conflicts more, and merged with #12508 and with #6539 the package vets clean. Since the Inbox moved into the assistant (a8b9516e1a, 2026-11-04) only two commits changed the lines it moves (8833b4d530, 5a3a8e5025), so it saves few conflicts itself: it is the kernel's first full user for the registry stage | after S1 and #12899's agentref; no window and no wait for the registry stage (Windows) |
+| S4 | Routes, bus methods, hooks, snapshot through the kernel | Low: 34 open PRs on `assistant/service.go` and 12 on `assistant/bus.go`, none on `assistant/handler.go`; with S1, no open PR conflicts more, and merged with #12508 and with #6539 the package vets clean. Since the Inbox moved into the assistant (a8b9516e1a, 2026-11-04) only two commits changed the lines it moves (8833b4d530, 5a3a8e5025), so it saves few conflicts itself: it is the kernel's first full user for the registry stage | after S1 and agentref, the shared session identity that follows #12899; no window and no wait for the registry stage (Windows) |
 | S5 | The five tools through the kernel | Medium: 15 open PRs on `assistant/tools.go`; #6539 and #9782 append next to inbox_post (39 and 230), and S5 adds one conflicted file to each | after #6539 and #9782 (Windows), with or after the registry stage's tool placement (#7891) |
 | S6 | Inbox scopes in their own extwire file | Low: 4 open PRs on `extwire/scopes.go`, #4512 with three Inbox scopes; the move made no open PR conflict more | now, as one PR with the registry stage's scope step (D7) |
 | S7 | The task bridge renamed; the core calls it through one interface | Medium: #6206 (a draft), #9744, #10808, #10894, #12508 and #12524 (a repair of #9744) edit bridge files, all task-side work | its own hunk gate under X6 (D5) |
 | S8 | The item slice: S8b, the lifecycle core and the stored types' methods; S8a, the stored item as a record in the core's adapter | High: `assistant/inbox.go` has 5 open PRs (#4512, #9790 with its repairs #10580 and #10587, #12508); 12 open PRs touch non-test `inbox*.go`, 11 of them with heads from the last 7 days; the text move broke 7 open PRs (51e333fc90). Rollback: later steps first | under D3's gates, S8b first and S8a after it (Windows) |
 | S9 | The stateful module | Very high: every open server Inbox PR, and 124 test files rewritten. Rollback: before later PRs add files to the package | not planned; only if every D3 gate passes |
-| W1 | Web feature folder, starting with the section bar | None: the moved files and the edited lines have no open PR; `web/src/startup-preload.ts` (16 open PRs) and the startup namespaces (26) are untouched | now (D8a) |
+| W1 | Web feature folder, starting with the section bar | None: the moved files and the edited lines have no open PR; `web/src/startup-preload.ts` (16 open PRs) and the startup namespaces (26) are untouched | after the client domain guard (section 3.3; D8a, Windows) |
 | W2 | Non-Inbox helpers leave `lib/inbox.ts` | Low: its open PRs miss the moved ranges | landed (#11538) |
 | A1 | Android module-edge ratchet | Low: a new test file, and a note in `docs/android/android.md`, which 11 open PRs touch, none in its "Modules and code" section | now (D10a) |
-| A2 | `:core:inbox` with the pure reply and hand-off types | Low: no open PR on the moved types' file (#10396, a draft, touches only `InboxTopBar.kt` and strings in the feature), but it is hot; none of the 11 open PRs on `docs/android/android.md` edits its module table | after A1, landed fast |
+| A2 | `:core:inbox` with the pure reply and hand-off types | Low: no open PR on the moved types' file (#10396, a draft, touches only `InboxTopBar.kt` and strings in the feature), but it is hot; none of the 11 open PRs on `docs/android/android.md` edits its module table | after A1 and the client domain guard (section 3.3; Windows), landed fast |
 | A3 | The page-facing repository into `:core:inbox`; core:data off feature:inbox | Medium: `RealInboxRepository.kt` (#12645), the feature's `InboxRepository.kt` and the app's `InboxModule.kt` (#11918, #12509) are hot (32, 27, 21 commits); about 70 test files implement the repository, one of them (`InboxShowcaseShotsTest.kt`) in #9823 and its repairs #11168 and #11179 | after A2, when `RealInboxRepository.kt` and `InboxModule.kt` pass X6 |
-| I1 | The PersonaInbox package, on PersonaDomainKit | Low: `apple/Shared/InboxModels.swift` (#4512, #7495) and `InboxView.swift` (#4512, #7495, #11282) are not edited, the latter behind an app-side facade; `InboxBar.swift` has no open PR; `apple/project.yml` (2 open PRs) only gains entries | now (D10b) |
+| A4 | The bar's rules into `:core:inbox:domain`, on `:core:domainkit` | Low: `InboxBar.kt` in :core:domain has no open PR, and of its callers only `InboxScreen.kt` has one (#12896); `android/settings.gradle.kts` has none | after A2, the client domain guard and #13024 (an unused result is a compile error in every Android module), while `InboxBar.kt` has no open PR (section 3.3; Windows) |
+| I1 | The PersonaInbox package, on PersonaDomainKit | Low: `apple/Shared/InboxModels.swift` (#4512, #7495) and `InboxView.swift` (#4512, #7495, #11282) are not edited, the latter behind an app-side facade; `InboxBar.swift` has no open PR; `apple/project.yml` (2 open PRs) only gains entries, and `scripts/ci/apple.sh` (2 open drafts, #12316 and #1756) two lines | after the client domain guard (section 3.3; D10b, Windows) |
 
 ### S1. Kernel package, with saved as its first user
 - **Change:** server/internal/assistant/kernel, declared `//persona:layer application seam` and landing after #12899's
@@ -382,8 +404,8 @@ store and adapt packages, and the tier stays in Shared rather than moving into P
   still name `extension_context.go`, whose header now points to the Inbox file.
 
 ### S4. Routes, bus methods, hooks and snapshot through the kernel
-- **Change:** the kernel gains Bus, TurnSettled, Connected, Snapshot and Publish; it lands after #12899's shared
-  session identity, agentref. An Inbox module in package assistant registers through the sealed kernel the unchanged
+- **Change:** the kernel gains Bus, TurnSettled, Connected, Snapshot and Publish; it lands after agentref, the shared
+  session identity after #12899. An Inbox module in package assistant registers through the sealed kernel the unchanged
   `inboxRoutes` body, the 8 bus methods (`inboxRequest` split per method, each a `NewBusMethod` over the existing
   assistantwire request and reply types), `inboxAgentTurnSettled` (its hook takes `agentref.Ref`: turnEnded parses the
   ref once, and a turn whose ids do not parse calls no hook and is logged, since that is bad input, not a defect), the
@@ -400,7 +422,7 @@ store and adapt packages, and the tier stays in Shared rather than moving into P
   full package, pass; `go test ./internal/hub -run 'TestRouteScopes|TestGoldenMCPTools|TestHubAnswersOnlyItsOwnRoutes'`
   passes with every golden unchanged; `./internal/archguard` passes; X6's measures are in the PR.
 - *Revised 2026-11-22 in #10613:* the turn hook takes `agentref.Ref`, bus methods and events are typed, and the repair
-  PRs' closing is recorded.
+  PRs' closing is recorded; agentref comes after #12899, not with it.
 
 ### S5. The Inbox's tools through the kernel
 - **Change:** the five tools register as one block after ask_escalate, through the tool placement the registry stage
@@ -492,13 +514,16 @@ Every part waits for D3's gates, in this order.
   `web/src/views/inbox/InboxBar.tsx` and `web/src/lib/inbox-view-memory.ts` read the bar through the adapter.
   `lib/inbox-bar.ts` stays a shim with its old API, reaching the new model through the adapter, on the shrink-only
   list, so `web/src/views/inbox/InboxList.tsx`, which #1995, #4512, #4653 and #12508 edit, is untouched. The PR updates
-  the literal in `scripts/test/test_check_fast_inputs.py` (964), the line in `docs/web/web.md` (862) and the comment in
+  the literal in `scripts/test/test_check_fast_inputs.py` (1125), the line in `docs/web/web.md` (862) and the comment in
   `web/src/views/inbox/InboxList.bar.test.tsx` (5). It adds section 3.3's boundary test and the domain rules' lint
   blocks for the domain, adapt and domain-kit folders, which also keep effects out of the domain folder: the clock,
-  randomness, the network, storage, timers, the console, and imports of the store and API modules.
+  randomness, the network, storage, timers, the console, and imports of the store and API modules. It lands after the
+  client domain guard (section 3.3) and adds the web's paragraph to the client part of the domain rules that guard
+  brings.
 - **Done when:** `cd web && npm test && npm run build` passes, again after merging the latest `origin/main`; the
   first-screen room under `FIRST_SCREEN_BUDGET` is reported before and after (not raised); tsc and eslint are clean.
-- *Revised 2026-11-22 in #10613:* domain and adapt folders in place of a model folder the bar moved into unchanged.
+- *Revised 2026-11-22 in #10613:* domain and adapt folders in place of a model folder the bar moved into unchanged,
+  after the client domain guard.
 
 ### W2. Non-Inbox helpers leave lib/inbox.ts
 - **Change:** `withToken` (390), `shortTime` (397), `conversationRoute` (555), and the Lark message types with
@@ -537,10 +562,12 @@ Every part waits for D3's gates, in this order.
   persona.core.inbox.store. It stays a pure move: the persisted outbox types remain `@Serializable` records, unchanged,
   each pinning @SerialName to its old fully qualified name, because the reply outbox stores ReplyTarget as polymorphic
   JSON; so files written by either build decode in the other, which is also the rollback. Their UUID defaults are frozen
-  by name until a later PR, with its own old-blob test, passes ids in. `InboxReplyJournal.kt`, `InboxReplyOutbox.kt`
-  and `InboxReplyReceipt.kt` use only these types, so the ratchet's baseline goes from 7 to 4. No domain module is
-  made for records: :core:inbox:domain, with the domain kit's :core:domainkit, comes when the bar's rules move.
-- *Revised 2026-11-22 in #10613:* the records go to a store package, not to a package of the Inbox's rules.
+  by name in the client domain guard's Android scan until a later PR, with its own old-blob test, passes ids in, so A2
+  lands after that guard (section 3.3). `InboxReplyJournal.kt`, `InboxReplyOutbox.kt` and `InboxReplyReceipt.kt` use
+  only these types, so the ratchet's baseline goes from 7 to 4. No domain module is made for records:
+  :core:inbox:domain, with the domain kit's :core:domainkit, comes when the bar's rules move (A4).
+- *Revised 2026-11-22 in #10613:* the records go to a store package, not to a package of the Inbox's rules, after the
+  client domain guard.
 - **Done when:** the `:core:inbox`, `:core:data` and `:feature:inbox` unit tests pass; a test decodes an outbox entry
   written under the old names; the PR says whether `android/app/src/main/baseline-prof.txt` was regenerated.
 
@@ -556,36 +583,85 @@ Every part waits for D3's gates, in this order.
   screenshot; core:data depends on no feature module.
 - *Revised 2026-11-22 in #10613:* the module's packages are now named store and adapt (section 3.3).
 
+### A4. The bar's rules into :core:inbox:domain, on :core:domainkit
+- **Change:** after A2, the client domain guard and #13024 (an unused result is a compile error in every Android
+  module), while `android/core/domain/src/main/kotlin/persona/core/domain/inbox/InboxBar.kt` (116 lines) has no open PR
+  (0 on 2026-11-22): the domain kit's Kotlin module :core:domainkit, with no dependency, and the Gradle subproject
+  :core:inbox:domain (section 3.3), on :core:domainkit alone, whose build file sets `explicitApi()`,
+  `allWarningsAsErrors` and `-Xreturn-value-checker=full`, so a caller that drops one of its answers does not compile.
+  The bar's rules leave `InboxBar.kt` for it as values with private state: built by parse or a staged builder, changed
+  only by becoming the next value, drawn through a visitor, with the search text as a value of its own;
+  persona.core.inbox.adapt maps the wire and store types to them. A facade in :core:inbox, outside its store and adapt
+  packages, keeps `InboxBar`'s API for its callers in feature:inbox and the app, whose imports change; as I1's, it
+  passes one closure per case of the domain's visitor and never reads an answer back, and it is on a shrink-only list.
+  The facade takes `buildInboxList`'s groups, so :core:inbox gains :core:domain here if A3 has not added it. The guard's
+  Android scan has no adapter-result rule either, so A4 adds one for every .adapt package unless the guard has it by
+  then. It reads more than I1's: the Swift facade is another module and reaches only the adapter's public API, but this
+  facade and A3's repository share :core:inbox with persona.core.inbox.adapt, and Kotlin's `internal` is module-wide, so
+  an `internal fun` there that returns a String is a getter they can call with no opt-in. Every non-private function
+  and property in .adapt, internal ones included, therefore returns nothing, a domain value (a parse's outcome), a
+  core:contracts wire type or a store record, never a String, a number, a Boolean, a Pair or Triple, a collection of
+  them or a type the package declares; a helper that produces a word is `private` to its file. The bar's tests replay
+  `spec/fixtures/inbox` bar*.json through the domain's public API. `docs/android/android.md` gets the two modules' rows
+  and a pointer to the domain rules.
+- **Done when:** the client domain guard covers both new modules with no finding, and its adapter-result rule fails on
+  a planted `internal` .adapt function that returns a String and that the facade calls, and passes once that helper is
+  `private` to its file; `scripts/app/android.sh test` and `lint` pass (`--max-workers=4`), the bar fixtures included;
+  `scripts/app/android.sh shots` shows no changed Inbox screenshot.
+- *Revised 2026-11-22 in #10613:* a step of its own, so the domain kit that the counts plan's Android reducer is built
+  on (`docs/plans/plan-derived-counts.md`, section 6.2) has a named step and gate; its adapter-result rule reads the
+  adapter's internal declarations too, since the facade and the repository share its module.
+
 ### I1. The PersonaInbox package with the bar's decisions
-- **Change:** a new package apple/Packages/PersonaDomainKit (the domain kit's Swift values; a target without
-  Foundation and an adapt target with the Foundation bridges and the system clock), and apple/Packages/PersonaInbox
-  with three targets: PersonaInboxDomain (only PersonaDomainKit, no Foundation, the domain rules' Swift settings),
-  PersonaInboxAdapt (PersonaInboxDomain and PersonaWire) and the domain's tests, run with
-  `--disable-testable-imports`. PersonaWire is unchanged. The domain owns the bar's InboxSection and InboxChoice, and
-  PersonaInboxAdapt maps Shared's `InboxItem.Tier` and its triage fallback (`apple/Shared/InboxModels.swift`) to them,
-  so cache and watch bytes do not change and the tier's localized title stays in Shared. The domain takes the pure
-  section-bar decisions from `apple/Persona/Views/Inbox/InboxBar.swift` (`Rows`, entries, shown, empty, draws and
-  `InboxBarState`) as values with private state: built by parse, a staged builder for Rows' counts or a restore that
-  returns an outcome; changed only by becoming the next value; drawn through a visitor; with the search text as a value
-  of its own. An app-side InboxBar facade keeps `apple/Persona/Views/Inbox/InboxView.swift`, with its `EmptyKind`, its
-  `emptyKind(source:kind:query:)` and three open PRs, untouched, and is on a shrink-only list. The empty-state titles,
-  messages and views, the landing, `waiting` (it reads Shared's `Interaction` and `SessionKey`), the Rows built from
-  `InboxProjection` and `InboxBarLanding` stay in the app. The Rows unit cases move to `swift test`; the `bar*.json`
-  replay goes through `InboxProjection`, so it stays in PersonaTests. The packages declare `.macOS(.v15)`. PersonaInbox
-  is linked into Persona and PersonaVision (the Vision link goes if PersonaVision is retired) and joins the ALWAYS list
-  in `scripts/test/test_apple_dev_build.py`; `docs/operations/testing.md` gets its line, and `docs/apple/ios.md` a
-  pointer to the domain rules. The PR names the next candidates for the package.
+- **Change:** after the client domain guard (section 3.3), a new package apple/Packages/PersonaDomainKit (the domain
+  kit's Swift values; a target without Foundation, an adapt target with the Foundation bridges and the system clock, and
+  their tests), and apple/Packages/PersonaInbox with three targets: PersonaInboxDomain (only PersonaDomainKit, no
+  Foundation, the domain rules' Swift settings), PersonaInboxAdapt (PersonaInboxDomain and PersonaWire) and the domain's
+  tests. Every target of both packages, tests included, sets `-warnings-as-errors` in its own Swift settings, as
+  PersonaCore's do, so the flag also holds when xcodebuild builds the app; `scripts/ci/apple.sh` gets one
+  `xcrun swift test --disable-testable-imports` line per package in its packages lane, beside PersonaWire's. PersonaWire
+  is unchanged. The domain owns the bar's InboxSection and InboxChoice. No package can import Shared (section 3.3), so
+  an app-side InboxBar facade, compiled with Shared, is PersonaInboxAdapt's one caller: it hands the adapter plain
+  values, such as the section words (`InboxItem.Tier`'s raw values), the counts `InboxProjection` keeps by each item's
+  `triage` and the whole list's emptiness from `InboxPage.emptyKind`; the adapter parses them into the domain's values.
+  The facade never reads an answer back: for each one it passes a closure per case of the domain's visitor, the adapter
+  visits and calls each with that case's section word, count or emptiness word, and from those calls the facade builds
+  `InboxItem.Tier`, the app's InboxChoice and `InboxPage.EmptyKind` (section 3.3). No planned check enforces this: the
+  client domain guard reads the public API of Domain targets only and has no Swift counterpart of the Go guard's
+  adapter-exported-result rule, so an adapter function returning a word would pass it. I1 therefore adds that rule to
+  the guard for every Adapt target, unless the guard has it by then: their public functions and properties return
+  nothing, a domain value or a PersonaWire type, never a String, a number, a Bool, a tuple, a collection of them or a
+  type the target declares. `InboxItem.Tier`, the item's triage fallback (`apple/Shared/InboxModels.swift`, which the
+  watch also reads) and the tier's localized title stay in Shared, so cache and watch bytes do not change. The domain
+  takes the pure section-bar decisions from `apple/Persona/Views/Inbox/InboxBar.swift` (`Rows`, entries, shown, empty,
+  draws and `InboxBarState`) as values with private state: built by parse, a staged builder for Rows' counts or a
+  restore that returns an outcome; changed only by becoming the next value; drawn through a visitor; with the search
+  text as a value of its own. `empty` takes the whole list's emptiness as an input where it called `InboxPage.emptyKind`
+  itself, and the facade's closures for its cases build `InboxPage.EmptyKind`, so
+  `apple/Persona/Views/Inbox/InboxView.swift`, with its `EmptyKind`, its `emptyKind(source:kind:query:)` and three open
+  PRs, stays untouched; the facade is on a shrink-only list. The empty-state titles, messages and views, the landing,
+  `waiting` (it reads Shared's `Interaction` and `SessionKey`), the Rows built from `InboxProjection` and
+  `InboxBarLanding` stay in the app. The Rows unit cases move to `swift test`; the `bar*.json` replay goes through
+  `InboxProjection`, so it stays in PersonaTests. The packages declare `.macOS(.v15)`. PersonaInbox is linked into
+  Persona and PersonaVision (the Vision link goes if PersonaVision is retired) and joins the ALWAYS list in
+  `scripts/test/test_apple_dev_build.py`; `docs/operations/testing.md` gets its line, and `docs/apple/ios.md` a pointer
+  to the domain rules. The PR names the next candidates for the package.
 - **Done when:** PersonaInboxDomain depends on PersonaDomainKit alone; `swift test --disable-testable-imports` passes
-  in the new packages and `swift test` in PersonaWire, without a simulator; iOS and watch builds pass with `-jobs 4`, a
-  generic destination and `scripts/persona_config.py xcconfig`, naming the Xcode used or "26.0 not verified", which
-  also shows that the domain's compiler settings hold under xcodebuild; the PR carries the
-  `docs/apple/performance.md` checklist; `scripts/i18n/apple_l10n.py` sync shows no string change.
+  in the new packages through their `scripts/ci/apple.sh` lines, and `swift test` in PersonaWire, without a simulator;
+  the client domain guard passes on the new targets; iOS and watch builds pass with `-jobs 4`, a generic destination
+  and `scripts/persona_config.py xcconfig`, naming the Xcode used or "26.0 not verified", which also shows that the
+  domain's compiler settings hold under xcodebuild; the guard's adapter-result rule fails on a planted Adapt-target
+  function that returns a String and passes the facade's closure shape; the PR carries the `docs/apple/performance.md`
+  checklist; `scripts/i18n/apple_l10n.py` sync shows no string change.
 - *Revised 2026-11-22 in #10613:* the bar's rules get a Domain target without Foundation and an Adapt target, and the
-  tier stays in Shared, mapped by the adapter, rather than becoming a wire type; the heading drops the tier.
+  tier stays in Shared rather than becoming a wire type; since no package can see Shared, the app-side facade hands the
+  adapter plain values and the whole list's emptiness, and takes answers only through closures the adapter calls,
+  which a Swift adapter-result rule holds; every target keeps `-warnings-as-errors`, with an apple.sh line per package;
+  the step waits for the client domain guard; the heading drops the tier.
 
 **Later, not planned in detail:** the web store, API and page modules as they go quiet; the Apple views (after
-PersonaDesign) and the item (with the compatibility tests); `persona.core.domain.inbox` into :core:inbox and Android's
-other feature edges; the deferred S3 moves and the two Reader methods; the Lark steps in section 3.3.
+PersonaDesign) and the item (with the compatibility tests); the rest of `persona.core.domain.inbox` into :core:inbox
+and Android's other feature edges; the deferred S3 moves and the two Reader methods; the Lark steps in section 3.3.
 
 **Risks:** a "pure" registration step can change behaviour silently (hook order, `!meeting`, the handshake goroutine,
 tool order), which byte-identical goldens, `TestWireSamples`, `TestRoutesAreTheWireOnes` and a full package run catch;
@@ -624,11 +700,11 @@ history. Each row is what the plan now does; sections 3 and 4 carry the details.
 | D8a | **Web folder:** web/src/features/inbox, with its rules in features/inbox/domain and their adapter in features/inbox/adapt (W1). Later web domains, #10613's web slices among them, use web/src/features/<domain>. *Revised 2026-11-22 in #10613:* domain and adapt folders, not `web/src/features/todos`' layout |
 | D8b | **One `FIRST_SCREEN_BUDGET`.** Structural boundary tests hold the domains (section 3.3); W1 reports the room before and after and never raises the budget |
 | D9 | **Lark:** the Lark chat pages stay in the Inbox as its Lark sub-area, re-decided when source migration M3 lands or the pages become extension UI; the first steps are in section 3.3 |
-| D10a | **Android:** :core:inbox is the Inbox's UI-free home, with the scope in section 3.3: its store and adapt packages, and the Inbox's domain as the Gradle subproject :core:inbox:domain; A1 is only the source scan, A2 creates the module, A3's typealiases are shrink-only. *Revised 2026-11-22 in #10613:* the domain is a subproject of its own, not a package of the module |
-| D10b | **Apple:** PersonaInbox now, with a Domain target without Foundation on PersonaDomainKit and an Adapt target, and PersonaWire unchanged (I1); the views stay until PersonaDesign, then move to apple/Persona/Features/Inbox. *Revised 2026-11-22 in #10613:* Domain and Adapt targets, with no tier moved into the wire package |
+| D10a | **Android:** :core:inbox is the Inbox's UI-free home, with the scope in section 3.3: its store and adapt packages, and the Inbox's domain as the Gradle subproject :core:inbox:domain; A1 is only the source scan, A2 creates the module, A3's typealiases are shrink-only, A4 creates the domain subproject with the bar's rules. *Revised 2026-11-22 in #10613:* the domain is a subproject of its own, not a package of the module, made by a step of its own |
+| D10b | **Apple:** a PersonaInbox package rather than a folder first, landing once the client domain guard does, with a Domain target without Foundation on PersonaDomainKit and an Adapt target that an app-side facade feeds and that answers it only through the facade's closures, `-warnings-as-errors` on every target of both packages, one `scripts/ci/apple.sh` `swift test --disable-testable-imports` line per package, and PersonaWire unchanged (I1); the views stay until PersonaDesign, then move to apple/Persona/Features/Inbox. *Revised 2026-11-22 in #10613:* Domain and Adapt targets, with no tier moved into the wire package and no plain value returned from the adapter, after the client domain guard instead of now |
 | D11 | **Translation:** `/api/v1/translate`, `/translate/message` and `/translate/mail` stay in InboxRoutes, and the Inbox module registers them. Revisited when non-Inbox translation changes reach 3 or more in 30 days: they then split on the manager side as their own kernel module, with InboxRoutes kept as the relay list, so the wire and the hub stay unchanged |
 | D12 | **Inbox wire generation is not reopened**; #9117's decision stands, on the conditions below |
-| Windows | S1 once #12899's domain rules land, then S4 in the same shape once its agentref does, with no window and no wait for the registry stage. S6 now. S5 keeps its gate on #6539 and #9782. S8 under D3's gates, S8b first and S8a after it. Every push runs X6's measures (section 4). *Revised 2026-11-22 in #10613:* S1 and S4 wait for the domain rules they are written to, and S8's order |
+| Windows | S1 once #12899's domain rules land, then S4 in the same shape once agentref, the shared session identity that follows them, does, with no window and no wait for the registry stage. S6 and A1 now. W1, I1 and A2 once the client domain guard lands (section 3.3), and A4 after A2, that guard and #13024. S5 keeps its gate on #6539 and #9782. S8 under D3's gates, S8b first and S8a after it. Every push runs X6's measures (section 4). *Revised 2026-11-22 in #10613:* S1 and S4 wait for the domain rules and agentref they are written to, W1, I1 and A2 for the client domain guard, A4 also for #13024, and S8's order |
 | X6 | **Landing beside open PRs** is section 4's rule, for every pure-move or seam step here (and the registry stage's): merge-tree and a merged `go vet` per open PR head, activity by head commit age; a failing line stays and moves in a follow-up |
 
 **D12 in detail.** #9117 ended Inbox wire generation, and nothing in this plan depends on it. Since #9117 the generator

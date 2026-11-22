@@ -393,7 +393,7 @@ class HubHttpClient(
      */
     fun evictConnections() {
         if (closed.get()) return
-        runCatching { client.dispatcher.executorService.execute { client.connectionPool.evictAll() } }
+        val _ = runCatching { client.dispatcher.executorService.execute { client.connectionPool.evictAll() } }
     }
 
     private val closed = AtomicBoolean()

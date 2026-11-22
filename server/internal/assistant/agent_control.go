@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -199,9 +200,10 @@ func (s *Service) interruptLanded(ctx context.Context, machine, id string) bool 
 
 // ---- agent_supervise ----
 
-// toolAgentSupervise takes agent machine/session under the main conversation's supervision: a task of it already
+// toolAgentSupervise takes agent machine/session under the supervision of conversation self, the main conversation or a
+// direction's lead (within leadTakeAllowed, #12953): a task of it already
 // gets the new done_when / expect_minutes; an agent of no task becomes one (a todo of this conversation with the
-// agent on it, as quietAgentTask makes); another conversation's task, or the user's own todo, stays theirs.
+// agent on it, as an answered agent_start makes); another conversation's task, or the user's own todo, stays theirs.
 func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json.RawMessage) (string, error) {
 	var a struct {
 		Machine       string   `json:"machine"`
@@ -213,8 +215,8 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %v", err)
 	}
-	if !s.isMain(ctx, self) {
-		return "", fmt.Errorf("only the main conversation supervises agents: from here, talk to it with agent_send")
+	if !s.supervises(ctx, self) {
+		return "", fmt.Errorf("only the main conversation and a direction's lead supervise agents: from here, send it without a task")
 	}
 	am, c, err := s.findAgent(ctx, a.Machine, a.SessionID)
 	if err != nil {
@@ -222,6 +224,9 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 	}
 	if c.Assistant {
 		return "", fmt.Errorf("that is an assistant conversation, not a coding agent")
+	}
+	if err := s.leadTakeAllowed(ctx, self, am, c); err != nil {
+		return "", fmt.Errorf("%w. Nothing changed", err)
 	}
 	todo, made, err := s.adoptAgent(ctx, self, am, c, a.Title, "", i18n.T(s.lang(ctx), "assistant-tasks.adopt_notes",
 		i18n.Args{"agent": agentLabel(c), "machine": am.Name, "cwd": c.Cwd}), a.DoneWhen, a.ExpectMinutes, true)
@@ -255,6 +260,13 @@ func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c prot
 // (assistantsConversation, #10801).
 func (s *Service) adoptAgentAs(ctx context.Context, self string, am Device, c proto.Session, title, prompt, notes string, doneWhen []string,
 	expect int, update, quiet bool) (Todo, bool, error) {
+	return s.adoptAgentFor(ctx, self, self, am, c, title, prompt, notes, doneWhen, expect, update, quiet)
+}
+
+// adoptAgentFor is adoptAgentAs with the todo's origin and supervisor kept separate (#5732). A side conversation
+// keeps its dispatch origin while the main conversation supervises the new task.
+func (s *Service) adoptAgentFor(ctx context.Context, self, supervisor string, am Device, c proto.Session, title, prompt, notes string, doneWhen []string,
+	expect int, update, quiet bool) (Todo, bool, error) {
 	if s.assistantsConversation(ctx, am.ID, c) {
 		return Todo{}, false, errors.New("that is an assistant conversation, not a coding agent")
 	}
@@ -273,13 +285,22 @@ func (s *Service) adoptAgentAs(ctx context.Context, self string, am Device, c pr
 			return t, false, nil
 		}
 		// Its criteria change only through the brief's log (task_brief_scope.go): the same rules as task_scope.
-		v, err := s.rescope(ctx, t, self, "agent_supervise", doneWhen, expect)
+		v, err := s.rescope(ctx, t, self, supervisor, "agent_supervise", doneWhen, expect)
 		if err != nil {
 			return Todo{}, false, err
 		}
 		t.Supervision = &v
 		s.restage(ctx, t.ID, nil) // by its new criteria; a read-only start still holds
 		return t, false, nil
+	}
+	previous, continuing := s.closedTodoOfAgent(am.ID, c.SessionID)
+	// Only an explicit adoption/takeover continues the closed card's brief. A newly titled agent_send task is new work,
+	// even when it reuses the same Agent; it must not rewrite the old card's scope or lineage (#5732).
+	continuing = continuing && update
+	if continuing {
+		if succ, ok := s.openSuccessor(previous.ID); ok {
+			return Todo{}, false, errContinued(previous.ID, succ)
+		}
 	}
 	title, retitle := s.adoptedTitle(ctx, c, title, prompt)
 	todo, err := s.newTodo(ctx, title, notes, self, "", quiet || s.quietTask(ctx, self))
@@ -289,19 +310,35 @@ func (s *Service) adoptAgentAs(ctx context.Context, self string, am Device, c pr
 	if retitle {
 		s.nameTodoLater(ctx, todo.ID, title, cmp.Or(strings.TrimSpace(prompt), title))
 	}
-	v, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
-		v.Supervisor, v.DoneWhen, v.ExpectMinutes = self, doneWhen, expect
-		return true
-	})
-	if err != nil {
-		s.dropAdoption(ctx, todo.ID, err)
-		return Todo{}, false, fmt.Errorf("supervise it: %w", err)
+	var v Supervision
+	var rollback *continuationRollback
+	if continuing {
+		// A takeover inherits the brief and changes its scope before any ledger or Agent link is committed. A rejected
+		// risky criterion therefore aborts the whole adoption instead of surviving in an unapproved open card (#5732).
+		v, rollback, err = s.continueBriefFor(ctx, self, supervisor, previous, todo, notes, doneWhen, expect)
+		if err != nil {
+			s.dropContinuation(ctx, todo.ID, rollback, err)
+			return Todo{}, false, fmt.Errorf("continue the previous task: %w", err)
+		}
+	} else {
+		v, _, err = s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
+			v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, doneWhen, expect
+			return true
+		})
+		if err != nil {
+			s.dropAdoption(ctx, todo.ID, err)
+			return Todo{}, false, fmt.Errorf("supervise it: %w", err)
+		}
+		s.briefFor(ctx, s.callerOrigin(ctx, self), todo, doneWhen, expect) // before its agent is linked (task_brief.go)
 	}
 	s.restage(ctx, todo.ID, nil)
 	todo.Supervision = &v
-	s.briefFor(ctx, s.callerOrigin(ctx, self), todo, doneWhen, expect) // before its agent is linked (task_brief.go)
 	if err := s.linkTodoAgent(ctx, todo.ID, am.ID, c.SessionID, title, c.Cwd, c.Agent); err != nil {
-		s.dropAdoption(ctx, todo.ID, err)
+		if continuing {
+			s.dropContinuation(ctx, todo.ID, rollback, err)
+		} else {
+			s.dropAdoption(ctx, todo.ID, err)
+		}
 		return Todo{}, false, fmt.Errorf("link the agent: %w", err)
 	}
 	s.logf("adopt %s on %s → task %s", short(c.SessionID), am.ID, todo.ID)
@@ -318,6 +355,55 @@ func othersTask(c proto.Session, t Todo, self string) error {
 		return fmt.Errorf("%s works for task %q (%s) of another conversation: it stays that conversation's", agentLabel(c), t.Title, t.ID)
 	}
 	return nil
+}
+
+// leadTakeAllowed is the boundary within which conversation self, a direction's lead, takes agent c of machine am
+// under its own supervision (agent_send with a task, also when resuming it, and agent_supervise; #12953), so a lead
+// does its own work without the main conversation sending for it. The main conversation is not limited here.
+//
+//   - An agent on an open task stays that task's: another conversation's or the user's own (named, with whose it is);
+//     one on self's own task goes on under it, as from the main conversation.
+//   - An agent on no open task (its earlier task, of any direction, is closed) becomes a new task of self; the closed
+//     to-do and its supervisor are left as they are. Moving an open task between supervisors stays agent_transfer's.
+//   - An agent waiting for the user (a question, plan, permission or dialog) is the user's to answer first.
+//   - An agent busy on work no task tracks that Persona did not start (a terminal the user opened) may be the user's
+//     own run: not taken until it is idle. One Persona started (the lead's own agent_start) is taken as it runs.
+func (s *Service) leadTakeAllowed(ctx context.Context, self string, am Device, c proto.Session) error {
+	if s.isMain(ctx, self) || !s.isLeader(ctx, self) {
+		return nil
+	}
+	if c.State == proto.StateNeedsYou || c.PendingInteractions > 0 {
+		return fmt.Errorf("%s is waiting for the user (a question, plan, permission or dialog): it is theirs to answer first", agentLabel(c))
+	}
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		return err
+	}
+	if t, ok := s.openTodoOfAgent(am.ID, c.SessionID); ok {
+		if t.Origin == "" {
+			return othersTask(c, t, self)
+		}
+		if sup := cmp.Or(supervisorOf(t), t.Origin); sup != self && t.Origin != self {
+			return fmt.Errorf("%s works for task %q (%s), supervised by %s: it stays theirs until that task is closed or "+
+				"its supervisor hands it over", agentLabel(c), t.Title, t.ID, s.conversationWords(ctx, sup))
+		}
+		return nil
+	}
+	if !stoppedAgent(c) && c.Status == proto.StatusWorking && !c.StartedByPersona {
+		return fmt.Errorf("%s is busy on work no task tracks that Persona did not start (it may be the user's own run): send "+
+			"it without task, or wait until it is idle", agentLabel(c))
+	}
+	return nil
+}
+
+// conversationWords names conversation id in a refusal: the main conversation, a direction's lead, or the conversation.
+func (s *Service) conversationWords(ctx context.Context, id string) string {
+	switch {
+	case s.isMain(ctx, id):
+		return "the main conversation (" + id + ")"
+	case s.isLeader(ctx, id):
+		return "the direction lead " + id
+	}
+	return "conversation " + id
 }
 
 // ---- agent_send with a task ----
@@ -356,25 +442,25 @@ func (t sendTask) none() bool {
 // handedTask is the task agent_send with a task put the agent on: made now, or self's own that it worked for already
 // (then task's criteria are written once the text went: a send that fails changes nothing).
 type handedTask struct {
-	todo Todo
-	made bool
-	self string
-	task sendTask
+	todo       Todo
+	made       bool
+	self       string
+	supervisor string
+	task       sendTask
 	// wake: its card's (taskCard), wakeResumed when the agent was closed and the message resumes it
 	wake string
 	run  SessionRef // the agent the text goes to, which its routed line names (#10465)
 }
 
-// sendTaskAllowed refuses agent_send's task before anything is sent: only the main conversation supervises; an agent
-// working for the user's own todo or another conversation's task stays theirs; one on a task of self's with another
-// title would put other work under that task (it is not, so it is not lost when that task is closed); and /exit is no
-// work. A plain agent_send still goes in each case.
+// sendTaskAllowed refuses agent_send's task before anything is sent: an agent working for the user's own todo or
+// another conversation's task stays theirs; one on a task of self's with another title would put other work under
+// that task; and /exit is no work. Any conversation may hand work out, with main supervising it (#5732).
 func (s *Service) sendTaskAllowed(ctx context.Context, self string, am Device, c proto.Session, task sendTask, text string) error {
-	if !s.isMain(ctx, self) {
-		return fmt.Errorf("only the main conversation hands out tasks: send it without task")
-	}
 	if exitText(text) {
 		return fmt.Errorf("%s closes the agent, it hands it no work: send it without task", strings.TrimSpace(text))
+	}
+	if err := s.leadTakeAllowed(ctx, self, am, c); err != nil {
+		return fmt.Errorf("%w; nothing was sent", err)
 	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return err
@@ -462,7 +548,10 @@ func (s *Service) adoptedTitle(ctx context.Context, c proto.Session, given, prom
 // todo's notes, and its title when task has none. An agent on a task of self's stays on it, unchanged until the send.
 func (s *Service) handTask(ctx context.Context, self string, am Device, c proto.Session, task sendTask, text string) (*handedTask, error) {
 	// Decided under adoptMu (adoptAgent): another hand-off may have put the agent on a task since sendTaskAllowed.
-	todo, made, err := s.adoptAgent(ctx, self, am, c, task.Title, text, text, task.DoneWhen, task.ExpectMinutes, false)
+	// Only the configured main supervises an assistant hand-off. With no main, keep the origin but leave Supervisor
+	// empty: the calling leader must not become the acceptance authority for its own assistant-dispatched task (#5732).
+	supervisor := s.settings(ctx).Main
+	todo, made, err := s.adoptAgentFor(ctx, self, supervisor, am, c, task.Title, text, text, task.DoneWhen, task.ExpectMinutes, false, false)
 	if err != nil {
 		return nil, fmt.Errorf("%w; nothing was sent", err)
 	}
@@ -471,12 +560,12 @@ func (s *Service) handTask(ctx context.Context, self string, am Device, c proto.
 		if c.Status == proto.StatusOffline || stoppedAgent(c) { // closed: the send (or its resume, #8099) starts it first
 			wake = wakeResumed
 		}
-		return &handedTask{todo: todo, made: true, self: self, wake: wake, run: SessionRef{MachineID: am.ID, SessionID: c.SessionID}}, nil
+		return &handedTask{todo: todo, made: true, self: self, supervisor: supervisor, wake: wake, run: SessionRef{MachineID: am.ID, SessionID: c.SessionID}}, nil
 	}
 	if err := otherWork(c, todo, task); err != nil {
 		return nil, err
 	}
-	return &handedTask{todo: todo, self: self, task: task, run: SessionRef{MachineID: am.ID, SessionID: c.SessionID}}, nil
+	return &handedTask{todo: todo, self: self, supervisor: supervisor, task: task, run: SessionRef{MachineID: am.ID, SessionID: c.SessionID}}, nil
 }
 
 // sent: the text went. A task made for it gets its card in the conversation; one it was on already gets task's
@@ -489,10 +578,13 @@ func (h *handedTask) sent(ctx context.Context, s *Service, text string) string {
 	refused := ""
 	if h.made {
 		s.taskCard(ctx, h.self, h.todo.ID, h.wake)
+		if h.todo.Supervision != nil && h.todo.Supervision.Supervisor != "" && h.todo.Supervision.Supervisor != h.self {
+			s.taskCard(ctx, h.todo.Supervision.Supervisor, h.todo.ID, h.wake)
+		}
 	} else {
 		doneWhen, expect := cleanDoneWhen(h.task.DoneWhen), max(0, min(h.task.ExpectMinutes, 24*60))
-		s.releaseHold(ctx, h.todo.ID)                                            // the supervisor sent its agent on: follow-ups go again (decision.go)
-		v, err := s.rescope(ctx, h.todo, h.self, "agent_send", doneWhen, expect) // through the brief's log, as task_scope
+		s.releaseHold(ctx, h.todo.ID)                                                          // the supervisor sent its agent on: follow-ups go again (decision.go)
+		v, err := s.rescope(ctx, h.todo, h.self, h.supervisor, "agent_send", doneWhen, expect) // through the brief's log, as task_scope
 		if err != nil {
 			s.logf("task %s: supervision: %v", h.todo.ID, err)
 			refused = " Its done_when was NOT changed: " + err.Error()
@@ -560,6 +652,56 @@ type taskCardBody struct {
 	Wake string `json:"wake,omitempty"`
 }
 
+// dropContinuation closes an aborted takeover and removes only its own brief link and scope event. Every current or
+// snapshot member follows the latest restored brief; a revision recheck prevents a stale brief read from overwriting a
+// newer scope. Review fields are restored only when the before/after/current evidence attributes them to this abort.
+func (s *Service) dropContinuation(ctx context.Context, id string, rollback *continuationRollback, why error) {
+	ctx = context.WithoutCancel(ctx) // the caller may have left exactly when its Agent link failed; cleanup still has to commit
+	if rollback == nil {
+		s.dropAdoption(ctx, id, why)
+		return
+	}
+	if err := s.unlinkTaskBrief(ctx, id, rollback.eventID); err != nil {
+		why = errors.Join(why, fmt.Errorf("take back the continuation: %w", err))
+	}
+	// A member added after the before snapshot is included too. A member without a ledger still gets none: its later
+	// dispatch reads the restored brief instead of having a ledger invented by cleanup.
+	targets := map[string]bool{}
+	for todoID := range rollback.before {
+		targets[todoID] = true
+	}
+	for _, todoID := range s.briefTodos(rollback.brief) {
+		targets[todoID] = true
+	}
+	for todoID := range targets {
+		for {
+			brief, revision, ok := s.briefSnapshotByID(rollback.brief)
+			if !ok {
+				break
+			}
+			_, _, err := s.updateSupervisionGuarded(ctx, todoID, func(t Todo) bool {
+				return t.DoneAt == nil && t.Supervision != nil
+			}, func(v *Supervision) bool {
+				desired := rollback.restoredLedger(todoID, v, brief, s.supervise.roundEpochs[todoID])
+				if reflect.DeepEqual(v, desired) {
+					return false
+				}
+				*v = *desired
+				return true
+			})
+			if err != nil {
+				why = errors.Join(why, fmt.Errorf("restore task %s after the continuation: %w", todoID, err))
+				break
+			}
+			_, currentRevision, ok := s.briefSnapshotByID(rollback.brief)
+			if !ok || currentRevision == revision {
+				break
+			}
+		}
+	}
+	s.dropAdoption(ctx, id, why)
+}
+
 // dropAdoption closes the todo an adoption made when the agent could not be put on it (why), so no empty task stays.
 func (s *Service) dropAdoption(ctx context.Context, id string, why error) {
 	s.logf("adopt: task %s: %v", id, why)
@@ -578,6 +720,30 @@ func (s *Service) openTodoOfAgent(mid, sid string) (Todo, bool) {
 		return Todo{}, false
 	}
 	return copyTodoLocked(t), true
+}
+
+// closedTodoOfAgent is the latest assistant task this agent carried before its new card. It supplies the source of a
+// take-over; a user's manual to-do is never adopted into assistant history (#5732).
+func (s *Service) closedTodoOfAgent(mid, sid string) (Todo, bool) {
+	s.todos.mu.RLock()
+	defer s.todos.mu.RUnlock()
+	var best Todo
+	found := false
+	for _, t := range s.todos.todos {
+		if t.DoneAt == nil || t.Origin == "" {
+			continue
+		}
+		for _, a := range t.Agents {
+			if a.MachineID != mid || a.SessionID != sid {
+				continue
+			}
+			if !found || t.DoneAt.After(*best.DoneAt) || t.DoneAt.Equal(*best.DoneAt) && t.UpdatedAt.After(best.UpdatedAt) {
+				best, found = copyTodoLocked(t), true
+			}
+			break
+		}
+	}
+	return best, found
 }
 
 // criteriaWords is done_when as the tool's answer says it: the new list, else the ledger's, else that there is none.

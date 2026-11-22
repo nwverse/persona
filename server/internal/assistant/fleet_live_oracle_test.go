@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,7 +72,10 @@ func oracleBuildFleetIn(l i18n.Lang, agents []oracleInput, ixs []proto.Interacti
 		if ix := n.card; ix != nil {
 			item.Kind, item.Detail = ix.Kind, clip(oneLine(interactionDetail(l, *ix)), fleetDetailMax)
 			item.Interaction, item.Since = ix.ID, unixSeconds(ix.CreatedAt)
-			if len(ix.Fields) > 0 {
+			// #12982: no buttons for a permission without a summary or a plan without a title.
+			blind := ix.Kind == proto.IxPermission && strings.TrimSpace(ix.Summary) == "" ||
+				ix.Kind == proto.IxPlan && strings.TrimSpace(planTitle(ix.Plan)) == ""
+			if len(ix.Fields) > 0 || blind {
 				item.Interaction = ""
 			}
 		}

@@ -40,6 +40,15 @@ describe("legacyOf", () => {
     expect(legacyOf(view("todo", "rest", inactive))).toBe("shelved");
   });
 
+  it("keeps #5732 closes and cancellations in their own sections, and live delivery awaiting review", () => {
+    const closed = view("just_finished", "closed_unseen", { phase: "done" });
+    expect(legacyOf(closed)).toBe("done");
+    expect(legacyOf(closed, true)).toBe("just_done"); // a fresh closed concern
+    expect(legacyOf(view("done", "canceled", { phase: "done" }))).toBe("cancelled");
+    const live = view("just_finished", "finished_recent", { line: { key: "deployed" } });
+    expect(classify(local("just_done", "finished_unseen"), live, facts(), NOW)).toEqual({ kind: "same" });
+  });
+
   it("reads only sections and reasons this web knows", () => {
     expect(knownView(view("todo", "rest"))).toBe(true);
     expect(knownView(view("later", "rest"))).toBe(false);

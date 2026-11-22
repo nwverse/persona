@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -40,6 +41,8 @@ type fakeHub struct {
 	readHooks          receiptHooks              // around session.items reads and on receipt broadcasts, no lock held
 	itemReads          int                       // session.items reads since the hooks were set
 	onDevicesList      func()                    // runs once, then clears, before the next devices.list; no lock held
+	watcherGets        map[int]string            // index in calls of a session.get a run watcher made -> its goroutine
+	onTell             func()                    // runs after each snapshot or event the service gave the hub was recorded; no lock held
 	// beforeSend runs once, then clears, when session.send is called, before it is answered (what happens on the
 	// agent's computer while the send is out); afterList, by machine, once after that machine's next sessions.list made
 	// with a listHooked context was answered. No lock held. sendHangs: session.send is never answered while the link
@@ -375,6 +378,14 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, p)
+	if p.Method == DeviceSessionGet { // the fake answers on the caller's goroutine: note a run watcher's poll
+		if g, ok := runWatcherGoroutine(); ok {
+			if f.watcherGets == nil {
+				f.watcherGets = map[int]string{}
+			}
+			f.watcherGets[len(f.calls)-1] = g
+		}
+	}
 	if trace, ok := ctx.Value(deviceCallsForTest{}).(*[]DeviceCall); ok {
 		*trace = append(*trace, p)
 	}
@@ -915,8 +926,12 @@ func (f *fakeHub) InboxChanged(ctx context.Context, c assistantwire.InboxChanged
 
 func (f *fakeHub) Snapshot(_ context.Context, s Snapshot) (SnapshotResult, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.snaps = append(f.snaps, s)
+	hook := f.onTell
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	return SnapshotResult{OK: true, Seq: s.Seq}, nil
 }
 
@@ -1008,6 +1023,30 @@ func (f *fakeHub) itemsReadAfter(from int) bool {
 		}
 	}
 	return false
+}
+
+// watcherReadAfter is the goroutine ("goroutine N") of the first run watcher (watchScheduledRun, through
+// waitTurnEnd's poll) that read sid's session after the first `from` calls, or "" when none did yet. Calls are logged
+// under the lock the sessions are, so that read saw every change made before `from` was taken.
+func (f *fakeHub) watcherReadAfter(from int, sid string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := min(from, len(f.calls)); i < len(f.calls); i++ {
+		var a map[string]any
+		_ = json.Unmarshal(f.calls[i].Params, &a)
+		if g := f.watcherGets[i]; g != "" && f.calls[i].Method == DeviceSessionGet && a["session_id"] == sid {
+			return g
+		}
+	}
+	return ""
+}
+
+// runWatcherGoroutine is the calling goroutine ("goroutine N") when it runs a scheduled run's watcher.
+func runWatcherGoroutine() (string, bool) {
+	buf := make([]byte, 1<<14)
+	stack := string(buf[:runtime.Stack(buf, false)])
+	header, _, _ := strings.Cut(stack, " [")
+	return header, strings.Contains(stack, ".watchScheduledRun(")
 }
 
 func (f *fakeHub) callCount() int {
@@ -1453,8 +1492,12 @@ func (f *fakeHub) Tell(event string, params any) error {
 		return err
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.told = append(f.told, told{event, b})
+	hook := f.onTell
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	return nil
 }
 

@@ -13,12 +13,12 @@ import (
 )
 
 // Task-specific wire parameters and execution evidence stay together; runTask owns the scheduling lifecycle.
-func taskSourceParams(t Task, text, cwd string) map[string]any {
+func (s *Service) taskSourceParams(ctx context.Context, t Task, text, cwd string, lang i18n.Lang) (map[string]any, error) {
 	params := map[string]any{"session_id": t.SessionID, "text": text, "message_source": taskMessageSource(t), "permission_mode": t.PermissionMode, "resume_only": true}
 	if cwd != "" {
 		params["cwd"], params["task_execution"] = cwd, true
 	}
-	return params
+	return params, s.sendModel(ctx, t.MachineID, t.SessionID, params, lang)
 }
 
 func taskResumeParams(t Task, text string, ex TaskExecution) map[string]any {
@@ -32,7 +32,8 @@ func taskResumeParams(t Task, text string, ex TaskExecution) map[string]any {
 func taskStartParams(t Task, text string, ex TaskExecution) startParams {
 	return startParams{Text: text, Source: taskMessageSource(t), PermissionMode: t.PermissionMode,
 		Purpose: "task." + t.ID, Space: t.Space, Origin: OriginTask, OriginRef: t.ID, MachineID: ex.MachineID, Cwd: ex.Cwd,
-		TaskExecution: true, LegacyTaskExecution: ex.LegacyCompatible, TaskModel: &ModelBinding{Provider: launcherProvider(ex.Launcher), Model: ex.Model, Effort: ex.Effort, PermissionMode: ex.PermissionMode}}
+		TaskExecution: true, LegacyTaskExecution: ex.LegacyCompatible, PromptSelections: t.PromptSelections,
+		TaskModel: &ModelBinding{Provider: launcherProvider(ex.Launcher), Model: ex.Model, Effort: ex.Effort, PermissionMode: ex.PermissionMode}}
 }
 
 func (s *Service) sourceTaskExecution(ctx context.Context, t Task, params map[string]any) *TaskExecution {
@@ -40,7 +41,10 @@ func (s *Service) sourceTaskExecution(ctx context.Context, t Task, params map[st
 	used, _ := params["launcher"].(string)
 	model, _ := params["model"].(string)
 	effort, _ := params["effort"].(string)
-	return &TaskExecution{MachineID: t.MachineID, Launcher: used, Model: model, Effort: effort, Agent: c.Agent, Cwd: c.Cwd, PermissionMode: cmp.Or(t.PermissionMode, c.PermissionMode)}
+	cwd, _ := params["cwd"].(string)
+	runtime, _ := params["runtime"].(string)
+	return &TaskExecution{MachineID: t.MachineID, Launcher: used, Model: model, Effort: effort,
+		Agent: c.Agent, Cwd: cmp.Or(cwd, c.Cwd), Runtime: runtime, PermissionMode: cmp.Or(t.PermissionMode, c.PermissionMode)}
 }
 
 // A pre-dispatch refusal may select the task's own conversation. A lost RPC response is not such proof.
@@ -49,22 +53,28 @@ func taskSourceDefinitelyUnsent(err error, id string) bool {
 }
 
 func (s *Service) taskConversationChanged(t Task, ex TaskExecution, override ModelBinding, run *ScheduleRun) bool {
-	switch {
-	case t.RunExecution != nil && !compatibleTaskExecution(*t.RunExecution, ex):
-		run.ConversationReason = "execution_changed"
-		s.logf("task %s: execution context changed; starting a new conversation", t.ID)
-	case t.RunExecution == nil && (t.Cwd != "" || t.ExecutionMachineID != "" || override != (ModelBinding{})):
-		run.ConversationReason = "legacy_context"
-		s.logf("task %s: previous execution context is unknown; starting a new conversation", t.ID)
-	default:
+	reason := taskExecutionChangeReason(t, ex, override)
+	if reason == "" {
 		return false
 	}
+	run.ConversationReason = reason
+	s.logf("task %s: %s; starting a new conversation", t.ID, run.ConversationReason)
 	return true
+}
+
+func taskExecutionChangeReason(t Task, ex TaskExecution, override ModelBinding) string {
+	switch {
+	case t.RunExecution != nil && !compatibleTaskExecution(*t.RunExecution, ex):
+		return "execution_changed"
+	case t.RunExecution == nil && (t.Cwd != "" || t.ExecutionMachineID != "" || override != (ModelBinding{})):
+		return "legacy_context"
+	}
+	return ""
 }
 
 func (s *Service) failSourceTaskRun(ctx context.Context, t Task, run ScheduleRun, err error) (proto.Session, error) {
 	// ErrNotSent retries this same source after the existing delay; it does not select another conversation.
-	return s.failTaskRun(ctx, t, run, err, !errors.Is(err, rpc.ErrNotSent))
+	return s.failTaskRun(ctx, t, run, err, !errors.Is(err, rpc.ErrNotSent) && nodeDelivered(err) != "none")
 }
 
 func taskRunCompatibilityEvidence(ctx context.Context, run *ScheduleRun) {

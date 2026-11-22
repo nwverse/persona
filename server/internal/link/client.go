@@ -371,7 +371,8 @@ func runActive(ctx context.Context, o Options, rep *reporter, b backoff) {
 			// change, written while the link was up, counts as a change since it was read. The stamp is taken before the
 			// read, so a change written in between still counts.
 			now := stampOf(o.Path)
-			if f, err := Read(o.Path); err != nil || (f.Token == c.Token && f.SSH.Equal(c.SSH) && f.Proxy == c.Proxy) {
+			if f, err := Read(o.Path); err != nil || (f.Token == c.Token && f.SSH.Equal(c.SSH) && f.Proxy == c.Proxy &&
+				f.ProxyAlways == c.ProxyAlways) {
 				was = now
 			}
 		}
@@ -414,7 +415,7 @@ func runActive(ctx context.Context, o Options, rep *reporter, b backoff) {
 // dialActive dials c's hub over its routes in routeOrder. A pinned hub that refused the credential, on whichever
 // route, ends the attempt: no other route can do better.
 func dialActive(ctx context.Context, c *Config, sshBin string, last string) (*link, error) {
-	p, eps, perr := proxied(c)
+	p, eps, perr := proxyRoute(c)
 	return tryRoutes(routeOrder(c, p != nil || perr != nil, last), func(kind string) (*link, error) {
 		switch kind {
 		case KindSSH:
@@ -433,9 +434,16 @@ func dialActive(ctx context.Context, c *Config, sshBin string, last string) (*li
 
 // routeOrder is the order c's routes are tried in (docs/operations/link.md "Outbound proxy"): direct candidates
 // (""), the outbound proxy when there is one, the SSH tunnel when there is one; last, the kind of the link that worked
-// last, first when it is one of these. Always use SSH, or a tunnel and no candidates, leaves the tunnel alone.
+// last, first when it is one of these. Always use SSH leaves the tunnel alone; else proxy-only mode
+// (Config.ProxyAlways) leaves the proxy alone, whatever last was; else a tunnel and no candidates leaves the tunnel.
 func routeOrder(c *Config, proxy bool, last string) []string {
-	if c.SSH != nil && (c.SSH.Always || len(c.Endpoints) == 0) {
+	if c.SSH != nil && c.SSH.Always {
+		return []string{KindSSH}
+	}
+	if c.ProxyAlways {
+		return []string{KindProxy}
+	}
+	if c.SSH != nil && len(c.Endpoints) == 0 {
 		return []string{KindSSH}
 	}
 	order := []string{""}

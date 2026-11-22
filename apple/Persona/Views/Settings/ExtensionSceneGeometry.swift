@@ -187,12 +187,17 @@ nonisolated struct ExtensionScenePreparedGeometry: Equatable, Sendable {
     var bounds: ExtensionSceneBounds
     var floorTop: Double
     var batches: [ExtensionSceneMeshBatch]
+    /// The walls drawn low for the cutaway it was built for (shape indices, sorted; #13036).
+    var lowered: [Int] = []
 
     var totalVertices: Int { batches.reduce(0) { $0 + $1.vertexCount } }
     var totalTriangles: Int { batches.reduce(0) { $0 + $1.triangleCount } }
 }
 
 nonisolated enum ExtensionSceneGeometryBuilder {
+    /// The batch of shapes the cutaway draws see-through (not one of the wire's materials).
+    static let seeThrough = "see-through"
+
     static let materialOrder: [String] = [
         ExtensionSceneMaterial.matte,
         ExtensionSceneMaterial.wood,
@@ -200,7 +205,13 @@ nonisolated enum ExtensionSceneGeometryBuilder {
         ExtensionSceneMaterial.metal,
         ExtensionSceneMaterial.screen,
         ExtensionSceneMaterial.glass,
+        seeThrough,
     ]
+
+    /// Drawn see-through: glass, and what the cutaway shows through (#13036).
+    static func isSeeThrough(_ material: String) -> Bool {
+        material == ExtensionSceneMaterial.glass || material == seeThrough
+    }
 
     private struct Accumulator {
         var positions: [Float] = []
@@ -260,24 +271,38 @@ nonisolated enum ExtensionSceneGeometryBuilder {
         }
     }
 
-    static func build(_ shapes: [ExtensionSceneShape]) -> ExtensionScenePreparedGeometry {
+    /// The meshes for `shapes`; with `cutawayYaw`, the cutaway for a camera at that yaw (#13036). The bounds are always
+    /// the whole model's, so the framing holds while walls come down.
+    static func build(_ shapes: [ExtensionSceneShape], cutawayYaw: Double? = nil) -> ExtensionScenePreparedGeometry {
         let bounds = ExtensionSceneBounds.of(shapes)
+        var drawn = shapes
+        var faded: Set<Int> = []
+        var lowered: [Int] = []
+        if let yaw = cutawayYaw {
+            let walls = ExtensionSceneCutaway.walls(shapes)
+            lowered = ExtensionSceneCutaway.lowered(walls, bounds: bounds, yaw: yaw)
+            if !lowered.isEmpty {
+                let treatments = ExtensionSceneCutaway.treatments(shapes, walls: walls, lowered: lowered, yaw: yaw)
+                (drawn, faded) = ExtensionSceneCutaway.apply(shapes, treatments: treatments)
+            }
+        }
         var floorTop = bounds.minH
         var buckets: [String: Accumulator] = [:]
-        for shape in shapes {
+        for (index, shape) in drawn.enumerated() {
+            let fade = faded.contains(index)
             switch shape {
             case .box(let box):
                 let top = max(box.bottom, box.top)
                 if top.isFinite, top - bounds.minH <= 0.25 { floorTop = max(floorTop, top) }
                 let mat = normalizedMaterial(box.material)
                 let col = linearRGBA(hex: box.color, material: mat)
-                appendBox(box, color: col, into: &buckets[mat, default: Accumulator()])
+                appendBox(box, color: col, into: &buckets[fade ? seeThrough : mat, default: Accumulator()])
             case .cylinder(let cyl):
                 let top = max(cyl.bottom, cyl.top)
                 if top.isFinite, top - bounds.minH <= 0.25 { floorTop = max(floorTop, top) }
                 let mat = normalizedMaterial(cyl.material)
                 let col = linearRGBA(hex: cyl.color, material: mat)
-                appendCylinder(cyl, color: col, into: &buckets[mat, default: Accumulator()])
+                appendCylinder(cyl, color: col, into: &buckets[fade ? seeThrough : mat, default: Accumulator()])
             case .prism(let prism):
                 let top = max(prism.bottom, prism.top)
                 if top.isFinite, top - bounds.minH <= 0.25 { floorTop = max(floorTop, top) }
@@ -289,7 +314,7 @@ nonisolated enum ExtensionSceneGeometryBuilder {
             }
         }
         let batches = materialOrder.compactMap { buckets[$0]?.freeze(material: $0) }
-        return ExtensionScenePreparedGeometry(bounds: bounds, floorTop: floorTop, batches: batches)
+        return ExtensionScenePreparedGeometry(bounds: bounds, floorTop: floorTop, batches: batches, lowered: lowered)
     }
 
     static func normalizedMaterial(_ raw: String?) -> String {
@@ -780,19 +805,30 @@ nonisolated enum ExtensionSceneGeometryBuilder {
         case ExtensionSceneMaterial.screen:
             mat.roughness.contents = 0.18
             mat.metalness.contents = 0.08
+        case seeThrough:
+            // the cutaway's see-through furniture: its own colors, faint, never hiding what is behind it
+            mat.roughness.contents = 0.84
+            mat.metalness.contents = 0.0
+            seeThroughSurface(mat, opacity: Theme.Scene.cutawaySeeThroughOpacity)
         case ExtensionSceneMaterial.glass:
             mat.roughness.contents = 0.08
             mat.metalness.contents = 0.05
-            mat.transparency = Theme.Scene.glassOpacity
-            mat.blendMode = .alpha
-            mat.transparencyMode = .singleLayer
-            mat.writesToDepthBuffer = false
-            mat.isDoubleSided = true
+            seeThroughSurface(mat, opacity: Theme.Scene.glassOpacity)
         default:
             mat.roughness.contents = 0.84
             mat.metalness.contents = 0.0
         }
         return mat
+    }
+
+    /// A see-through surface at `opacity`. A physically based material ignores `transparency` (it drew glass solid, #13036):
+    /// the opacity goes in its transparent property, read from alpha (`.aOne`).
+    static func seeThroughSurface(_ mat: SCNMaterial, opacity: CGFloat) {
+        mat.transparent.contents = UIColor(white: 0, alpha: opacity)
+        mat.transparencyMode = .aOne
+        mat.blendMode = .alpha
+        mat.writesToDepthBuffer = false
+        mat.isDoubleSided = true
     }
 
     static func makeSCNGeometry(from batch: ExtensionSceneMeshBatch) -> SCNGeometry {
@@ -831,8 +867,8 @@ nonisolated enum ExtensionSceneGeometryBuilder {
         let meshRoot: SCNNode
         let cameraNode: SCNNode
         let ambientLight: SCNLight
-        let keyLightNode: SCNNode
-        let keyLight: SCNLight
+        let mainLightNode: SCNNode
+        let mainLight: SCNLight
         let fillLight: SCNLight
         let lampNodes: [SCNNode]
         let glowRoot: SCNNode
@@ -856,18 +892,18 @@ nonisolated enum ExtensionSceneGeometryBuilder {
         ambientNode.light = ambientLight
         scene.rootNode.addChildNode(ambientNode)
 
-        let keyLight = SCNLight()
-        keyLight.type = .directional
-        keyLight.color = uiColor(hex: Theme.Scene.sunLightHex)
-        keyLight.castsShadow = true
-        keyLight.shadowMode = .forward
-        keyLight.automaticallyAdjustsShadowProjection = false
-        keyLight.shadowSampleCount = 4
-        keyLight.shadowRadius = 2.5
-        keyLight.shadowMapSize = CGSize(width: 1024, height: 1024)
-        let keyLightNode = SCNNode()
-        keyLightNode.light = keyLight
-        scene.rootNode.addChildNode(keyLightNode)
+        let mainLight = SCNLight()
+        mainLight.type = .directional
+        mainLight.color = uiColor(hex: Theme.Scene.sunLightHex)
+        mainLight.castsShadow = true
+        mainLight.shadowMode = .forward
+        mainLight.automaticallyAdjustsShadowProjection = false
+        mainLight.shadowSampleCount = 4
+        mainLight.shadowRadius = 2.5
+        mainLight.shadowMapSize = CGSize(width: 1024, height: 1024)
+        let mainLightNode = SCNNode()
+        mainLightNode.light = mainLight
+        scene.rootNode.addChildNode(mainLightNode)
 
         let fillLight = SCNLight()
         fillLight.type = .directional
@@ -896,7 +932,7 @@ nonisolated enum ExtensionSceneGeometryBuilder {
         scene.rootNode.addChildNode(glowRoot)
 
         return Rig(scene: scene, meshRoot: meshRoot, cameraNode: cameraNode, ambientLight: ambientLight,
-                   keyLightNode: keyLightNode, keyLight: keyLight, fillLight: fillLight,
+                   mainLightNode: mainLightNode, mainLight: mainLight, fillLight: fillLight,
                    lampNodes: lamps, glowRoot: glowRoot)
     }
 
@@ -904,7 +940,7 @@ nonisolated enum ExtensionSceneGeometryBuilder {
         for child in rig.meshRoot.childNodes { child.removeFromParentNode() }
         for batch in prepared.batches {
             let node = SCNNode(geometry: makeSCNGeometry(from: batch))
-            if batch.material == ExtensionSceneMaterial.glass {
+            if isSeeThrough(batch.material) {
                 node.castsShadow = false
                 node.renderingOrder = 10
             } else {
@@ -921,16 +957,16 @@ nonisolated enum ExtensionSceneGeometryBuilder {
         let sunPos = target + sunDir * sunDist
         let right = simd_normalize(simd_cross(SIMD3<Double>(0, 1, 0), sunDir))
         let up = simd_cross(sunDir, right)
-        rig.keyLightNode.simdTransform = simd_float4x4(columns: (
+        rig.mainLightNode.simdTransform = simd_float4x4(columns: (
             SIMD4(Float(right.x), Float(right.y), Float(right.z), 0),
             SIMD4(Float(up.x), Float(up.y), Float(up.z), 0),
             SIMD4(Float(sunDir.x), Float(sunDir.y), Float(sunDir.z), 0),
             SIMD4(Float(sunPos.x), Float(sunPos.y), Float(sunPos.z), 1)
         ))
-        rig.keyLight.orthographicScale = CGFloat(r * 1.35)
-        rig.keyLight.zNear = CGFloat(max(0.1, sunDist - r * 2.4))
-        rig.keyLight.zFar = CGFloat(sunDist + r * 2.6)
-        rig.keyLight.shadowColor = UIColor(white: 0, alpha: 0.22)
+        rig.mainLight.orthographicScale = CGFloat(r * 1.35)
+        rig.mainLight.zNear = CGFloat(max(0.1, sunDist - r * 2.4))
+        rig.mainLight.zFar = CGFloat(sunDist + r * 2.6)
+        rig.mainLight.shadowColor = UIColor(white: 0, alpha: 0.22)
     }
 
     static func selectLitPins(_ pins: [ExtensionScenePin], target: SIMD3<Double>) -> (omnis: [ExtensionScenePin], glows: [ExtensionScenePin]) {
@@ -958,7 +994,7 @@ nonisolated enum ExtensionSceneGeometryBuilder {
         rig.scene.background.contents = resolvedBackgroundColor(dark: dark)
         rig.ambientLight.intensity = dark ? Theme.Scene.darkAmbientIntensity : Theme.Scene.lightAmbientIntensity
         rig.ambientLight.color = UIColor.white
-        rig.keyLight.intensity = dark ? Theme.Scene.darkKeyIntensity : Theme.Scene.lightKeyIntensity
+        rig.mainLight.intensity = dark ? Theme.Scene.darkKeyIntensity : Theme.Scene.lightKeyIntensity
         rig.fillLight.intensity = dark ? Theme.Scene.darkFillIntensity : Theme.Scene.lightFillIntensity
 
         let (omnis, glows) = selectLitPins(pins, target: bounds.worldTarget)
