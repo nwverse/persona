@@ -105,6 +105,9 @@ type Todo struct {
 	// Source: where the todo was asked for when that is another chat (#6146, todo_source.go): the outcome is told
 	// there once; nil for any other todo.
 	Source *TodoSource `json:"source,omitempty"`
+	// Responsible: an external responsible party that is not a Persona-started agent (#12712, todo_responsible.go):
+	// a long-running session or a person; nil while none is set.
+	Responsible *TodoResponsible `json:"responsible,omitempty"`
 	// When it is due (DueAt a moment, DueDate a day "2006-01-02" in the user's time zone; at most one), when the phone
 	// is reminded of it and whether it was, and its priority ("" normal, high, low): #1683, todo_plan.go. Clients that do
 	// not know them show the todo as ever.
@@ -239,6 +242,11 @@ type todoBook struct {
 	// remindWake wakes remindLoop when the todos change (todo_plan.go).
 	remindOnce sync.Once
 	remindWake chan struct{}
+
+	// readyWakes persists idempotent todo_ready wake markers per open dependent to-do (todo_after_ready.go).
+	readyWakeMu      sync.Mutex
+	readyWakes       map[string]todoReadyWakeMarker
+	readyWakesLoaded bool
 }
 
 // spaceKey computes the unified space key string ("machineID/space").
@@ -701,6 +709,7 @@ func copyTodoLocked(t *Todo) Todo {
 		src := *t.Source
 		out.Source = &src
 	}
+	out.Responsible = cloneResponsible(t.Responsible)
 	return out
 }
 
@@ -992,6 +1001,7 @@ func (s *Service) todoRoutes() {
 			Kind                 string               `json:"kind"`
 			RequireAcceptedAfter *bool                `json:"require_accepted_after"`
 			RepositoryBindings   json.RawMessage      `json:"repository_bindings"`
+			Responsible          json.RawMessage      `json:"responsible"`
 			todoPlanIn
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -1014,6 +1024,12 @@ func (s *Service) todoRoutes() {
 			return
 		}
 		var plan db.TodoEdit
+		if setResp, respVal, err := parseResponsiblePatch(in.Responsible); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		} else if setResp {
+			plan.SetResponsible, plan.Responsible = true, respVal
+		}
 		if in.RequireAcceptedAfter != nil {
 			if !fullRole(r) {
 				apierr.Write(w, http.StatusForbidden, errors.New("only the owner can change request prerequisite enforcement"))
@@ -1063,7 +1079,8 @@ func (s *Service) todoRoutes() {
 	})
 
 	// PATCH /api/v1/todos/{id}: update title, notes, done, due_at | due_date, remind_at, priority, project ("" clears it),
-	// part_of ("" clears it) and after ([] clears it), checked as todo_pieces.go says
+	// part_of ("" clears it), after ([] clears it), and responsible (null clears it), checked as todo_pieces.go and
+	// todo_responsible.go say
 	s.handle("PATCH /api/v1/todos/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !todoWriter(r) {
 			apierr.Write(w, http.StatusForbidden, errors.New("read-only role cannot modify todos"))
@@ -1088,6 +1105,7 @@ func (s *Service) todoRoutes() {
 			PartOf               json.RawMessage `json:"part_of"`
 			After                json.RawMessage `json:"after"`
 			RequireAcceptedAfter *bool           `json:"require_accepted_after"`
+			Responsible          json.RawMessage `json:"responsible"`
 			todoPlanIn
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -1107,6 +1125,12 @@ func (s *Service) todoRoutes() {
 				return
 			}
 			e.Title = &t
+		}
+		if setResp, respVal, err := parseResponsiblePatch(in.Responsible); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		} else if setResp {
+			e.SetResponsible, e.Responsible = true, respVal
 		}
 		if err := in.todoPlanIn.edit(&e); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
@@ -2008,6 +2032,7 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 	s.todoRowSet(ctx, doneKeys)
 	if row.DoneAt != nil {
 		s.goRecordTaskOutcome(before, *row.DoneAt) // what the task came to (todo_outcome.go, #2820)
+		s.evaluateTodoAfterDependents(ctx, id)
 	}
 	return ok, nil
 }
@@ -2065,6 +2090,7 @@ func (s *Service) reopenFailedTodo(ctx context.Context, id string) (Todo, bool, 
 	if applied {
 		s.todoRowSet(ctx, doneKeys)
 	}
+	s.resetTodoReadyWake(ctx, id)
 	return out, true, nil
 }
 

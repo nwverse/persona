@@ -192,8 +192,10 @@ func (s *Service) prepareTaskExecutionEdit(ctx context.Context, previous Task, t
 
 func (s *Service) patchTaskExecution(ctx context.Context, t *Task, raw map[string]json.RawMessage, old modelRecord, wasFresh bool) (*modelRecord, error) {
 	changed := false
+	destinationChanged := false
 	for key, dst := range map[string]*string{"execution_machine_id": &t.ExecutionMachineID, "cwd": &t.Cwd} {
 		if v, ok := raw[key]; ok {
+			previous := *dst
 			if err := json.Unmarshal(v, dst); err != nil {
 				return nil, err
 			}
@@ -203,6 +205,7 @@ func (s *Service) patchTaskExecution(ctx context.Context, t *Task, raw map[strin
 			if strings.ContainsAny(*dst, "\x00\r\n") {
 				return nil, i18n.Err("assistant-models.err_field_invalid")
 			}
+			destinationChanged = destinationChanged || *dst != previous
 			changed = true
 		}
 	}
@@ -259,7 +262,9 @@ func (s *Service) patchTaskExecution(ctx context.Context, t *Task, raw map[strin
 	if taskExecutionNeedsOwnChat(*t, b) || source && b != (ModelBinding{}) && (wasFresh || b != old.Binding) {
 		return nil, i18n.Err("assistant-schedule.execution_own_chat")
 	}
-	if !changed {
+	// Echoing the stored execution fields with a selected prompt leaves its
+	// destination and model unchanged, even if the computer is offline.
+	if !changed || (t.PromptSelections && !destinationChanged && b == old.Binding) {
 		return nil, nil
 	}
 	if source {
@@ -391,6 +396,25 @@ func taskEditConfig(t Task) Task {
 		t.At = time.Time{} // due runs advance At; ArmedAt records a deliberate retime
 	}
 	return t
+}
+
+// A saved selection can be paused or renamed without contacting its node.
+func taskInputEditNeedsValidation(before, after Task) bool {
+	if (!before.Enabled && after.Enabled) || !reflect.DeepEqual(before.StateNote, after.StateNote) {
+		return true
+	}
+	config := func(t Task) Task {
+		t = taskEditConfig(t)
+		t.Title, t.Enabled, t.DisabledAt = "", false, time.Time{}
+		// Execution bindings are compared through the canonical model record.
+		t.Launcher, t.Model, t.Effort = "", "", ""
+		t.At, t.ArmedAt, t.Until = t.At.UTC(), t.ArmedAt.UTC(), t.Until.UTC()
+		if len(t.Weekdays) == 0 {
+			t.Weekdays = nil
+		}
+		return t
+	}
+	return !reflect.DeepEqual(config(before), config(after))
 }
 
 func mergeTaskEditRuntime(task *Task, before, current Task) error {

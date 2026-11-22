@@ -294,5 +294,14 @@
   "summary_filtered": "{filter}：未完了{open} · 保留中{parked} · 動きなし{shelved} · 完了{done}",
   "section_parked": "保留中",
   "ask_chat_route": "判断への回答：{title}",
-  "ask_chat_hint": "次のメッセージをこの判断への回答としてタスクに保存します。判断せず相談する場合は、この宛先を解除してください。"
+  "ask_chat_hint": "次のメッセージをこの判断への回答としてタスクに保存します。判断せず相談する場合は、この宛先を解除してください。",
+  "responsible_section": "担当",
+  "responsible_kind_session": "セッション",
+  "responsible_kind_person": "担当者",
+  "responsible_label": "担当：{name}",
+  "responsible_clear": "解除",
+  "responsible_clear_label": "担当「{name}」を解除",
+  "responsible_cleared": "担当を解除しました",
+  "responsible_clear_failed": "担当を解除できませんでした：{error}",
+  "no_agents_responsible": "{name} が担当しています。Persona に実行を任せる場合は下のボタンからエージェントに渡してください。"
 }

@@ -39,6 +39,33 @@ export interface TodoSpace {
   linked_at: string;
 }
 
+export type TodoResponsibleKind = "session" | "person";
+
+/** A responsible party that is not a Persona-started agent (#12712). */
+export interface TodoResponsible {
+  kind: TodoResponsibleKind;
+  name: string;
+  machine_id?: string;
+  session_id?: string;
+}
+
+/** The to-do's responsible party, when the hub sent a whole one (valid kind and non-empty name). */
+export function responsibleOf(todo: Pick<Todo, "responsible"> | undefined): TodoResponsible | undefined {
+  const r = todo?.responsible;
+  if (!r) return undefined;
+  if (r.kind !== "session" && r.kind !== "person") return undefined;
+  const name = typeof r.name === "string" ? r.name.trim() : "";
+  if (!name) return undefined;
+  const machine_id = typeof r.machine_id === "string" && r.machine_id.trim() ? r.machine_id.trim() : undefined;
+  const session_id = typeof r.session_id === "string" && r.session_id.trim() ? r.session_id.trim() : undefined;
+  return {
+    kind: r.kind,
+    name,
+    ...(machine_id ? { machine_id } : {}),
+    ...(session_id ? { session_id } : {}),
+  };
+}
+
 /** Private image metadata on a to-do; bytes are read separately from `url`. */
 export interface TodoImage {
   id: string;
@@ -131,6 +158,8 @@ export interface Todo {
   check?: TodoCheck;
   /** The chat thread the todo is bound to (#5279, docs/assistant/todos.md "Chat thread"); unset while it has none. */
   thread?: TodoThread;
+  /** Optional responsible party that is not a Persona-started agent (#12712); linked agents take precedence when present. */
+  responsible?: TodoResponsible;
   /** What it waits on from the user (#2056, docs/assistant/todos.md "Waiting for the owner"); unset while nothing does,
    *  and from hubs before it. */
   ask?: TodoAsk;
@@ -444,7 +473,7 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
   // With no pending-card list, use the manager's view; a supplied list, including an empty one after resolution, wins.
   if (linkedID && !lookup?.interaction && ownerAsk) return "needs_you";
   const active = (todo.agents ?? []).filter((a) => !a.released_at);
-  if (active.length === 0) return "not_started";
+  if (active.length === 0) return responsibleOf(todo) ? "follow_up" : "not_started";
 
   let hasNeedsYou = false;
   let hasInterrupted = false;
@@ -882,6 +911,8 @@ export interface TodoPatch {
   priority?: string;
   /** A knowledge-base project's slug; "" takes it out of its project. */
   project?: string;
+  /** A responsible party that is not a Persona-started agent (#12712); null clears it. */
+  responsible?: TodoResponsible | null;
 }
 
 export async function updateTodo(id: string, patch: TodoPatch): Promise<Todo> {

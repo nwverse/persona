@@ -27,6 +27,7 @@ const (
 	sigStarted       = "started"        // its agent started after the supervisor's retry (start_remedy.go)
 	sigPRConflict    = "pr_conflict"    // the task's current open PR has merge conflicts at this head
 	sigDraftPR       = "draft_pr"       // an own linked PR is still draft, not waiting for upstream review
+	sigPREvent       = "pr_event"       // a current-head PR CI failure or review fell back from direct Agent routing
 	sigReport        = "report"         // its agent reported to the supervisor (report_to_supervisor, agent_control.go)
 	sigEscalated     = "escalated"      // its leader conversation judged it needs the user (supervise_leader.go): told the main one
 	sigOrphaned      = "orphaned"       // nobody works on it: its agents are closed or offline and nothing brings one back (tasks_orphan.go)
@@ -40,6 +41,8 @@ const (
 	// Agent's (#11587). Report says which: its check saw no progress, could not save what it saw, or the owner
 	// answered the decision it raised (checkDecided), which did not go to the Agent.
 	sigCheck = "check"
+	// sigTodoReady: an open, unstarted dependent to-do has all of its after prerequisites satisfied (todo_after_ready.go, #12606).
+	sigTodoReady = "todo_ready"
 )
 
 // sigCheck's kinds of news (superviseSignal.Report).
@@ -119,6 +122,28 @@ type superviseSignal struct {
 	// a persisted relay payload: once admitted, the existing queue owns delivery.
 	batchTo    string
 	batchUntil time.Time
+	// Breaker: why the background supervisor's circuit breaker handed this signal once to the main conversation;
+	// digestEntry puts it above the entry in the digest's language (breakerNote).
+	Breaker *breakerFallback `json:"breaker,omitempty"`
+	// BreakerNote is that fact as finished text, as a signal queued by an older hub carries it: shown as it is.
+	BreakerNote string `json:"breaker_note,omitempty"`
+}
+
+// breakerFallback is what a circuit-breaker fallback note says (prompts.BreakerNote): its kind and their facts.
+type breakerFallback struct {
+	Kind   string `json:"kind"`             // prompts.BreakerAuth or prompts.BreakerAllStopped
+	Tool   string `json:"tool,omitempty"`   // the denied tool (BreakerAuth)
+	Rounds int    `json:"rounds,omitempty"` // no-progress rounds in a row (BreakerAllStopped)
+	Reason string `json:"reason,omitempty"` // why the breaker tripped (BreakerAllStopped)
+}
+
+// breakerNote is g's circuit-breaker fallback note in language (answerLanguage), or "" when it has none.
+func breakerNote(g superviseSignal, language string) string {
+	if b := g.Breaker; b != nil {
+		return prompts.RenderBreakerNote(prompts.BreakerNote{Language: language, Kind: b.Kind, Tool: b.Tool,
+			Rounds: b.Rounds, Reason: b.Reason})
+	}
+	return g.BreakerNote
 }
 
 const (
@@ -143,6 +168,9 @@ func (g superviseSignal) id() string {
 	if g.Kind == sigDraftPR {
 		return g.Todo + "|" + g.Kind + "@" + g.PRURL
 	}
+	if g.Kind == sigPREvent {
+		return g.Todo + "|" + g.Kind + "@" + g.PRURL + ":" + g.Report
+	}
 	if g.Kind == sigReport || g.Kind == sigCheck {
 		return g.Todo + "|" + g.Kind + ":" + g.Report
 	}
@@ -164,9 +192,9 @@ func (g superviseSignal) id() string {
 // urgent: a signal that waits on a decision goes out sooner than the rest.
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
-	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
+	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigPREvent, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
 		sigRecheck, sigUndecidable, sigOwnerCannot, sigEstimateDue, sigTimedOut, // the owner, an automatic deadline or a stopped task waits
-		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult:
+		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigTodoReady:
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
@@ -531,6 +559,7 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	// Only the open tasks: everything below passes the finished ones by, and there can be thousands of them.
 	tasks := s.todosWhere(ctx, "*", func(t *Todo) bool { return t.DoneAt == nil })
 	s.pruneAllStoppedDedup(ctx)
+	s.sweepTodoAfterReady(ctx)
 	lists := machineSessions{}     // each machine listed once for all the supervised tasks (#3029)
 	history := s.planHistoryOnce() // and the plans read once, when a task's start needs them (start_remedy.go)
 	s.backfillBriefs(ctx, tasks)   // tasks from before briefs get one from what they still have (task_brief.go)

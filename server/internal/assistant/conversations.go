@@ -840,8 +840,14 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 		handed(err)
 		return err
 	}
+	if s.isBackground(ctx, to) && res.SessionID != "" && res.SessionID != to {
+		s.registerBackgroundRoundFork(ctx, machine, res.SessionID, to)
+	}
 	if round {
 		s.superviseRoundAnswered(to, res)
+	}
+	if msg.Tool == superviseTool {
+		s.backgroundRoundDelivered(ctx, to, msg, time.Now())
 	}
 	s.relayDelivered(ctx, to, msg)
 	return nil

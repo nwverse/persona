@@ -3143,3 +3143,12 @@ or ordinary text. Display names can collide; inserting spaces alone cannot estab
 Check both the manager's admission gate and the assistant's reparse of the original event, using a synthetic event,
 a recording handoff and a queue barrier. Such a test proves local handling of that event shape, not whether a live
 client inserts whitespace.
+
+## Required extension isolation must fail closed (#12994)
+
+A proxy URL in an environment variable is voluntary routing, not a sandbox. When
+the sandbox probe fails, reject the host spec before starting a process or egress
+proxy. Container images must carry bubblewrap and allow its nested user namespace
+and mounts; test the actual runtime stage as a non-root user with no outer
+capabilities. Merely finding `bwrap` on PATH or skipping an unavailable real test
+is not evidence of isolation.
