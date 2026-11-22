@@ -98,6 +98,7 @@ func TestCacheKeepaliveEligibilityDoesNotReadTheNode(t *testing.T) {
 		v.Leaders = []string{"lead", "worker", "child", "archived", "background"}
 		v.BackgroundSupervisor = "background"
 	})
+	getsBefore, listsBefore := len(d.callsTo("server", DeviceSessionGet)), len(d.callsTo("server", DeviceSessionsList))
 	for _, id := range []string{"main", "lead", "worker", "child", "archived", "background"} {
 		p := map[string]any{}
 		s.putCacheKeepalive(context.Background(), "server", id, id == "main", p)
@@ -105,10 +106,10 @@ func TestCacheKeepaliveEligibilityDoesNotReadTheNode(t *testing.T) {
 			t.Fatalf("wrong policy for %s", id)
 		}
 	}
-	if got := len(d.callsTo("server", DeviceSessionGet)); got != 0 {
-		t.Fatalf("eligibility read session.get %d times", got)
+	if got := len(d.callsTo("server", DeviceSessionGet)); got != getsBefore {
+		t.Fatalf("eligibility added %d session.get calls", got-getsBefore)
 	}
-	if got := len(d.callsTo("server", DeviceSessionsList)); got != 0 {
-		t.Fatalf("eligibility read sessions.list %d times", got)
+	if got := len(d.callsTo("server", DeviceSessionsList)); got != listsBefore {
+		t.Fatalf("eligibility added %d sessions.list calls", got-listsBefore)
 	}
 }
