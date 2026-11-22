@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -193,4 +194,70 @@ func waitCacheCheck(t *testing.T, n *Node, id string) {
 	t.Helper()
 	b := n.cacheWarmPool()
 	cliWait(t, "cache policy check", func() bool { b.mu.Lock(); defer b.mu.Unlock(); e := b.entries[id]; return e == nil || !e.checking })
+}
+
+// A main or lead conversation on a Persona-managed Claude launcher whose gateway is an HTTPS address (#12786): the
+// start mounts the proxy in its settings, which win over the provider's own ANTHROPIC_BASE_URL that `personad launch`
+// puts in the process environment; the proxy forwards to that HTTPS gateway. A start the manager gave no role (as a
+// session.send without one did) runs straight on the gateway.
+func TestAssistantCacheProxyMountsForHTTPSManagedLauncher(t *testing.T) {
+	const gateway = "https://gateway.example/anthropic"
+	for _, tc := range []struct {
+		name  string
+		allow bool
+	}{{"attested", true}, {"no-role", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := cliTestBash(t)
+			f.fakeLaunch(t)
+			f.n.setManaged([]proto.ManagedLauncher{{Name: "gw", Kind: "api", BaseURL: gateway, Model: "example-model"}})
+			e := cliExec()
+			e.Model = "example-model"
+			e.IsMain = true
+			if tc.allow {
+				e.CacheKeepalive = &assistantwire.CacheKeepalive{Enabled: true, IntervalMinutes: 55, MaxRequests: 24}
+			}
+			c := f.n.assistantCompactionPolicy("gw", t.TempDir(), "", e)
+			if !c.endpointKnown || c.endpoint != gateway {
+				t.Fatalf("managed endpoint %q known=%v", c.endpoint, c.endpointKnown)
+			}
+			id := newUUID()
+			p, err := f.n.spawnClaude(id, t.TempDir(), "gw", false, false, e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.n.stopAssistant(p.id)
+			if (p.cacheProxy != nil) != tc.allow {
+				t.Fatalf("proxy mounted: %v, want %v", p.cacheProxy != nil, tc.allow)
+			}
+			dir := f.n.dir
+			if dir == "" {
+				dir = filepath.Join(f.n.home, ".persona")
+			}
+			b, err := os.ReadFile(filepath.Join(dir, "launcher-settings", "assistant-compact-"+id+".json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var s struct {
+				Env map[string]any `json:"env"`
+			}
+			if err := json.Unmarshal(b, &s); err != nil {
+				t.Fatal(err)
+			}
+			base, _ := s.Env["ANTHROPIC_BASE_URL"].(string)
+			if tc.allow {
+				if base != p.cacheProxy.BaseURL() || !strings.HasPrefix(base, "http://127.0.0.1:") {
+					t.Fatalf("settings base %q, want the proxy", base)
+				}
+				b := f.n.cacheWarmPool()
+				b.mu.Lock()
+				_, pooled := b.entries[id]
+				b.mu.Unlock()
+				if !pooled {
+					t.Fatal("proxy not registered for refreshes")
+				}
+			} else if strings.HasPrefix(base, "http://127.0.0.1:") {
+				t.Fatalf("unattested start points at a proxy: %q", base)
+			}
+		})
+	}
 }
