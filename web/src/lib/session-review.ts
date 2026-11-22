@@ -4,7 +4,8 @@
 // views/session/ReviewPanel.tsx.
 import { api, enc } from "./api";
 import { codeQuote, type DiffScope } from "./comments";
-import { hunkRows, type Hunk, type Thread } from "./code-view";
+import type { Hunk, Thread } from "./code-view";
+import { hunkRows } from "./hunk-rows";
 import { withQuoteBlock, type DraftQuote } from "./drafts";
 import type { UIItem } from "./extension-ui";
 import { uuid } from "./format";
