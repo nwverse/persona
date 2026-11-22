@@ -1,6 +1,6 @@
 {
   "name": "resource_renew",
-  "description": "Renew this session’s granted lease using its fencing token. Stop the runner client when fenced.",
+  "description": "Renew this session’s queued or granted lease. Use token 0 while queued and the fencing token once granted. Stop the runner client when fenced.",
   "input_schema": {
     "type": "object",
     "properties": {

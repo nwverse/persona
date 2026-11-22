@@ -161,9 +161,16 @@ func gateCommand(ctx context.Context, args []string, stdin io.Reader, stdout, st
 	joined := reply.Status == "joined"
 	request.ID = lease.ID
 	// Waiting never resubmits: a lost response is uncertainty, not permission to start another job.
+	lastQueuedRenew := time.Now()
 	for joined || lease.State == "queued" {
 		if !gatePause(ctx, 2*time.Second) {
 			return 130
+		}
+		if !joined && time.Since(lastQueuedRenew) >= 20*time.Second {
+			var renewed rq.Reply
+			if err := resourceCall(ctx, "resource_renew", request, &renewed); err == nil {
+				lastQueuedRenew = time.Now()
+			}
 		}
 		var next rq.Reply
 		if err := resourceCall(ctx, "resource_get", request, &next); err != nil {

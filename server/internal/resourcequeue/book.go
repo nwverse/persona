@@ -93,7 +93,7 @@ func Acquire(rows *[]Lease, in Request, now time.Time, id string, seq int64) (Re
 	if in.ID != "" {
 		id = in.ID
 	}
-	l := Lease{Priority: in.Priority, ID: id, Seq: seq, Resource: in.Resource, Key: key, State: "queued", Holder: in.Holder, CreatedAt: now, WaitUntil: now.Add(90 * time.Minute)}
+	l := Lease{Priority: in.Priority, ID: id, Seq: seq, Resource: in.Resource, Key: key, State: "queued", Holder: in.Holder, CreatedAt: now, HeartbeatUntil: now.Add(90 * time.Second), WaitUntil: now.Add(90 * time.Minute)}
 	if CacheOK(in.Cached, now) {
 		l.State = "released"
 		l.Outcome = in.Cached
@@ -128,6 +128,10 @@ func Mutate(rows []Lease, in Request, now time.Time) (Reply, error) {
 			l.State = "cancelled"
 			return Reply{Status: l.State, Lease: l}, nil
 		}
+		if in.Action == "renew" && l.State == "queued" && in.Token == 0 && now.Before(l.HeartbeatUntil) {
+			l.HeartbeatUntil = now.Add(90 * time.Second)
+			return Reply{Status: l.State, Lease: l}, nil
+		}
 		if l.State != "granted" || l.Token != in.Token || !now.Before(l.HeartbeatUntil) {
 			return Reply{Status: "fenced"}, nil
 		}
@@ -153,6 +157,9 @@ func Expire(rows []Lease, now time.Time) {
 	for i := range rows {
 		l := &rows[i]
 		if l.State == "granted" && (!now.Before(l.HeartbeatUntil) || !now.Before(l.HoldUntil)) {
+			l.State = "expired"
+		}
+		if l.State == "queued" && !l.HeartbeatUntil.IsZero() && !now.Before(l.HeartbeatUntil) {
 			l.State = "expired"
 		}
 		if l.State == "queued" && !now.Before(l.WaitUntil) {

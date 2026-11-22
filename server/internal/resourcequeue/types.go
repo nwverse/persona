@@ -95,7 +95,7 @@ type Request struct {
 	Action   string   `json:"action"`
 	Resource string   `json:"resource"`
 	ID       string   `json:"lease_id,omitempty"`
-	Token    int64    `json:"token,omitempty"`
+	Token    int64    `json:"token"`
 	Project  string   `json:"project,omitempty"`
 	Commit   string   `json:"commit,omitempty"`
 	Groups   []string `json:"groups,omitempty"`

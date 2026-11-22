@@ -6246,8 +6246,9 @@ a successful result no older than 12 hours returns `cached`. Failure or missing
 exit status is never cached. Only the holder can renew, release or cancel; joined
 sessions may read the result. Queue order is priority descending then sequence,
 with at most two queued requests per session. Leases retain state over manager
-restarts. The heartbeat expires after 90 seconds; the client renews every 20
-seconds. An old fencing token cannot settle a later holder.
+restarts. Queued and granted process leases have a 90-second heartbeat; the client renews
+every 20 seconds, including while waiting. A queued lease renews with token 0;
+granted leases require their fencing token. An old fencing token cannot settle a later holder.
 
 Gate output preserves runner stdout and its exit code. Joined callers receive the
 same captured result (bounded to the last 256 KiB); cached external successes print

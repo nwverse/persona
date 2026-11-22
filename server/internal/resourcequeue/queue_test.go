@@ -88,6 +88,9 @@ func TestAdmissionLimitFIFOExpiryAndExternalSlots(t *testing.T) {
 	if rows[0].State != "granted" || rows[1].State != "queued" {
 		t.Fatal(rows)
 	}
+	if _, err := Mutate(rows, Request{Action: "renew", ID: rows[1].ID, Token: 0, Holder: rows[1].Holder}, now.Add(60*time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	Advance(rows, 3, 2, now.Add(90*time.Second))
 	if rows[0].State != "expired" || rows[1].State != "granted" {
 		t.Fatal(rows)
@@ -165,5 +168,19 @@ func TestV1LegacyEmptyFieldsRetainIndependentEntries(t *testing.T) {
 	outcome, err := ParseResult([]byte(`{"v":1,"project":"example","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","groups":["web"],"exit":null,"run":"","finished_at":"","tag":""}`))
 	if err != nil || outcome != nil {
 		t.Fatalf("no-result response: %+v %v", outcome, err)
+	}
+}
+
+func TestQueuedClientHeartbeatExpiresWithoutPromotingDeadWork(t *testing.T) {
+	now := time.Now()
+	rows := []Lease{}
+	in := Request{Resource: "ci.example", Project: "example", Commit: strings.Repeat("a", 40), Holder: Holder{Machine: "computer-a", Session: "dead"}}
+	if _, err := Acquire(&rows, in, now, "dead", 1); err != nil {
+		t.Fatal(err)
+	}
+	Advance(rows, 1, 1, now)
+	Advance(rows, 1, 0, now.Add(90*time.Second))
+	if rows[0].State != "expired" {
+		t.Fatalf("dead queued client was admitted: %+v", rows[0])
 	}
 }
