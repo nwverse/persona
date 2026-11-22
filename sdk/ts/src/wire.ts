@@ -4228,6 +4228,8 @@ export interface ConnectorInboxThing {
   /** Marks the newest move: a different last adds to the open item. */
   last?: string;
   url?: string;
+  /** The observed lifecycle of a GitHub pull request: open, closed or merged. */
+  thread_state?: string;
   /** A link the system opens instead (sms:…). */
   open_url?: string;
   /** Where a reply goes and who sees it. */

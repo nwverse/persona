@@ -10,12 +10,12 @@ export type SkillCatalogState = { catalog?: SkillCatalog; status?: "loading" | "
 export type CatalogMemory = { current?: { key: string; catalog: SkillCatalog } };
 
 /** Read once per picker opening/environment, never per keystroke. Late responses cannot fill another environment. */
-export function useSkillCatalog(source: SkillSource | undefined, machine: string | undefined, cwd: string | undefined, memory?: CatalogMemory): SkillCatalogState {
+export function useSkillCatalog(source: SkillSource | undefined, machine: string | undefined, cwd: string | undefined, memory?: CatalogMemory, enabled = true): SkillCatalogState {
   const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, () => "");
   const key = JSON.stringify([owner, machine, cwd, source?.manager, source?.session, source?.launcher, source?.environment, source?.agent]);
   const [state, setState] = useState<SkillCatalogState & { key: string }>({ key: "" });
   useEffect(() => {
-    if (!source || !machine) return;
+    if (!enabled || !source || !machine) return;
     const ac = new AbortController();
     const query = new URLSearchParams({ machine_id: machine });
     if (source.session) query.set("session_id", source.session);
@@ -36,7 +36,8 @@ export function useSkillCatalog(source: SkillSource | undefined, machine: string
     return () => ac.abort();
     // Each request primitive is in key; keystrokes deliberately are not.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, memory]);
+  }, [enabled, key, memory]);
+  if (!enabled) return {};
   if (!source || !machine) return { status: "error" };
   if (state.key === key) return state;
   const cached = memory?.current;

@@ -457,12 +457,24 @@ func (s *Service) leaderRoute(g superviseSignal) (lead TodoAgent, handled, reach
 // so nothing is queued here. An offline resume completes in the background.
 func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list []superviseSignal, web string, now, prev time.Time) bool {
 	var entries []prompts.SuperviseEntry
-	var kept []superviseSignal
+	var kept, moot, retry []superviseSignal
 	for _, g := range list {
-		if e, ok := s.digestEntry(ctx, g, web); ok {
+		if e, ok, deferRetry := s.digestEntryChecked(ctx, g, web); ok {
 			entries, kept = append(entries, e), append(kept, g)
+		} else if deferRetry {
+			retry = append(retry, g)
+		} else {
+			moot = append(moot, g)
 		}
 	}
+	if len(retry) > 0 {
+		at := now
+		if len(entries) > 0 {
+			at = time.Time{}
+		}
+		s.restoreDigest(retry, at, prev)
+	}
+	s.clearSentTodoReady(moot)
 	if len(entries) == 0 {
 		return false
 	}
@@ -520,6 +532,7 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 	s.logf("supervise: %d signal(s) to task leader %s", len(entries), short(lead.SessionID))
 	s.parkedDueTold(ctx, kept)
 	s.estimateDueTold(ctx, kept)
+	s.todoReadyTold(ctx, kept)
 	s.turnsTold(ctx, kept) // how a turn ended is told once, to a leader too (task_turns.go)
 	return true
 }
@@ -587,6 +600,7 @@ func (s *Service) leaderDelivered(ctx context.Context, lead TodoAgent, entries [
 	}
 	s.parkedDueTold(ctx, kept)
 	s.estimateDueTold(ctx, kept)
+	s.todoReadyTold(ctx, kept)
 	s.turnsTold(ctx, kept)
 	s.logf("supervise: %d signal(s) to task leader %s after confirmation", len(kept), short(lead.SessionID))
 }
@@ -916,7 +930,7 @@ func (s *Service) mayReviewForLeader(ctx context.Context, self string, t Todo) b
 	}
 	// The background supervisor stands in for the main conversation above a task leader no leader conversation
 	// supervises: the leader's decisions come to it (digestTo).
-	return up == self || s.isBackground(ctx, self) && !s.isLeader(ctx, up)
+	return up == self || s.isBackgroundSession(ctx, self) && !s.isLeader(ctx, up)
 }
 
 // leaderTaskOf is the open task leader agent lead leads.

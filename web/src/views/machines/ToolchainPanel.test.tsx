@@ -134,21 +134,152 @@ describe("ToolchainPanel", () => {
     expect(host.textContent).toContain("This computer is offline");
   });
 
-  it("shows an update hint when an older node does not implement machine.toolchain", async () => {
+  it("shows an update-node hint for node_outdated code and unknown method machine.toolchain", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(() => Promise.resolve(json({ error: "unknown method: machine.toolchain" }, 500))),
-    );
-    // Test 409 / unknown method classification via ApiError.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => Promise.resolve(json({ error: "unknown method: machine.toolchain" }, 409))),
+      vi.fn(() => Promise.resolve(json({ error: "node too old", code: "node_outdated" }, 409))),
     );
 
     const machines: Machine[] = [{ id: "old-node", name: "Old Node", online: true }];
     act(() => root.render(<ToolchainPanel machines={machines} />));
     await flush();
 
-    expect(host.textContent).toContain("does not support toolchain profiling yet");
+    expect(host.textContent).toContain("This computer's node does not support toolchain profiling yet");
+
+    act(() => root.unmount());
+    root = createRoot(host);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(json({ error: "unknown method machine.toolchain" }, 502))),
+    );
+    act(() => root.render(<ToolchainPanel machines={machines} />));
+    await flush();
+
+    expect(host.textContent).toContain("This computer's node does not support toolchain profiling yet");
+  });
+
+  it("distinguishes old-hub non-JSON 404 from generic 409 and JSON 404 errors", async () => {
+    const machines: Machine[] = [{ id: "box-1", name: "Box 1", online: true }];
+
+    // 1. Plain-text route-level 404 from an older hub -> update-hub message.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response("404 page not found\n", { status: 404, headers: { "Content-Type": "text/plain" } }))),
+    );
+    act(() => root.render(<ToolchainPanel machines={machines} />));
+    await flush();
+    expect(host.textContent).toContain("This hub does not support toolchain profiling yet");
+    expect(host.textContent).not.toContain("Update the node");
+
+    // 2. Generic 409 without node_outdated code -> normal error state preserving the server message.
+    act(() => root.unmount());
+    root = createRoot(host);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(json({ error: "probe rejected due to concurrent state conflict", code: "conflict" }, 409))),
+    );
+    act(() => root.render(<ToolchainPanel machines={machines} />));
+    await flush();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("probe rejected due to concurrent state conflict");
+    expect(host.textContent).not.toContain("Update the node");
+    expect(host.textContent).not.toContain("Update the hub");
+
+    // 3. JSON 404 (e.g. unknown machine) -> normal error state, not old-hub or old-node.
+    act(() => root.unmount());
+    root = createRoot(host);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(json({ error: "machine not found", code: "not_found" }, 404))),
+    );
+    act(() => root.render(<ToolchainPanel machines={machines} />));
+    await flush();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("machine not found");
+    expect(host.textContent).not.toContain("Update the node");
+    expect(host.textContent).not.toContain("Update the hub");
+  });
+
+  it("aborts pending manual refresh on machine switch and never leaks stale machine data or clears current busy state", async () => {
+    const reportFor = (mid: string, gitPath: string, cached = true): MachineToolchainReport => ({
+      ...sampleReport,
+      cached,
+      tools: [{ id: "git", category: "core", found: true, version: "2.47.1", path: gitPath, resolved_path: gitPath, status: "ready" }],
+      agent_clis: [],
+      environment: { shell: mid },
+    });
+
+    let resolveRefreshA!: (r: Response) => void;
+    let resolveRefreshB!: (r: Response) => void;
+    let signalRefreshA: AbortSignal | undefined;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/v1/machines/box-a/toolchain") {
+          return Promise.resolve(json(reportFor("box-a", "/opt/box-a/bin/git", true)));
+        }
+        if (url === "/api/v1/machines/box-a/toolchain?refresh=1") {
+          signalRefreshA = init?.signal ?? undefined;
+          return new Promise<Response>((resolve) => {
+            resolveRefreshA = resolve;
+          });
+        }
+        if (url === "/api/v1/machines/box-b/toolchain") {
+          return Promise.resolve(json(reportFor("box-b", "/opt/box-b/bin/git", true)));
+        }
+        if (url === "/api/v1/machines/box-b/toolchain?refresh=1") {
+          return new Promise<Response>((resolve) => {
+            resolveRefreshB = resolve;
+          });
+        }
+        return Promise.reject(new Error(`unexpected url ${url}`));
+      }),
+    );
+
+    const machines: Machine[] = [
+      { id: "box-a", name: "Box A", online: true },
+      { id: "box-b", name: "Box B", online: true },
+    ];
+    act(() => root.render(<ToolchainPanel machines={machines} />));
+    await flush();
+    expect(host.textContent).toContain("/opt/box-a/bin/git");
+
+    // Start a manual refresh on Box A.
+    const refreshBtn = () => [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("Refresh")) as HTMLButtonElement;
+    act(() => refreshBtn().click());
+    await flush();
+    expect(signalRefreshA).toBeDefined();
+    expect(signalRefreshA?.aborted).toBe(false);
+    expect(refreshBtn().textContent).toContain("Refreshing");
+
+    // Switch to Box B while Box A's refresh is still in flight: Box A's manual refresh must be aborted.
+    const tabB = [...host.querySelectorAll('[role="tab"]')].find((b) => b.textContent?.includes("Box B")) as HTMLButtonElement;
+    act(() => tabB.click());
+    await flush();
+    expect(signalRefreshA?.aborted).toBe(true);
+    expect(host.textContent).toContain("/opt/box-b/bin/git");
+    expect(host.textContent).not.toContain("/opt/box-a/bin/git");
+
+    // Start a manual refresh on Box B, then resolve Box A's stale refresh promise out of order.
+    act(() => refreshBtn().click());
+    await flush();
+    expect(refreshBtn().textContent).toContain("Refreshing");
+    expect(refreshBtn().disabled).toBe(true);
+
+    resolveRefreshA(json(reportFor("box-a", "/opt/box-a/bin/git-stale", false)));
+    await flush();
+
+    // Stale Box A response must NOT render under Box B and must NOT clear Box B's busy refresh state.
+    expect(host.textContent).toContain("/opt/box-b/bin/git");
+    expect(host.textContent).not.toContain("/opt/box-a/bin/git-stale");
+    expect(refreshBtn().textContent).toContain("Refreshing");
+    expect(refreshBtn().disabled).toBe(true);
+
+    // Resolving Box B's refresh updates Box B cleanly and clears busy state.
+    resolveRefreshB(json(reportFor("box-b", "/opt/box-b/bin/git-fresh", false)));
+    await flush();
+    expect(host.textContent).toContain("/opt/box-b/bin/git-fresh");
+    expect(refreshBtn().textContent).not.toContain("Refreshing");
+    expect(refreshBtn().disabled).toBe(false);
   });
 });

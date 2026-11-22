@@ -8,6 +8,7 @@
   "offline": "这台电脑当前离线，上线后可探测其工具链。",
   "no_machines": "没有可用的电脑。",
   "unavailable_old_node": "这台电脑的节点暂不支持工具链画像，更新节点后即可查看。",
+  "unavailable_old_hub": "当前 Hub 暂不支持工具链画像，更新 Hub 后即可查看电脑环境。",
   "unavailable_forbidden": "查看电脑的工具链画像需要完整设备权限。",
   "error_load": "无法读取工具链画像：{error}",
   "meta_cached": "缓存结果（{seconds} 秒有效）",
