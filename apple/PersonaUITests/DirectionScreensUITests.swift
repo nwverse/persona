@@ -218,16 +218,34 @@ final class DirectionScreensUITests: XCTestCase {
         app.buttons.matching(NSPredicate(format: "identifier == 'direction-page-filed' AND label CONTAINS %@", words)).firstMatch
     }
 
-    /// Scrolls the sidebar until `row` is clear of the bar at its foot (New Chat), not merely hittable under it.
+    /// The New Chat bar at the sidebar's foot: its own identifier, or on a phone the drawer container's, which SwiftUI
+    /// can put on its footer buttons, with its label in the run's language (as `drawerNewChatButton`).
+    @MainActor private var newChatBar: XCUIElement {
+        let identified = app.buttons["sidebar-new"].firstMatch
+        if identified.exists { return identified }
+        return app.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", "assistant-sidebar",
+                                                word("New Chat", "新对话", "新しいチャット"))).firstMatch
+    }
+
+    /// Drags `list` up (`by` > 0) or down by about that many points: a step small enough to stop near a row.
+    @MainActor private func drag(_ list: XCUIElement, by points: CGFloat) {
+        let start = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -points)))
+        usleep(500_000)
+    }
+
+    /// Scrolls the sidebar until `row` is clear of the New Chat bar at its foot, not merely hittable under it, and
+    /// asserts it is: a helper that did nothing cannot pass.
     @MainActor private func revealAboveTheBar(_ row: XCUIElement) {
-        let bar = app.descendants(matching: .any).matching(identifier: "sidebar-new").firstMatch
-        for _ in 0..<8 {
-            guard row.exists, bar.exists, row.frame.maxY > bar.frame.minY - 8 else { return }
+        let bar = newChatBar
+        XCTAssertTrue(bar.waitForExistence(timeout: 5), "no New Chat bar:\n\(app.debugDescription)")
+        for _ in 0..<10 where row.exists && bar.exists && row.frame.maxY > bar.frame.minY - 8 {
             let list = sidebarList
-            guard list.exists else { return }
-            list.swipeUp(velocity: .slow)
-            usleep(400_000)
+            guard list.exists else { break }
+            drag(list, by: 120)
         }
+        XCTAssertTrue(row.exists && row.frame.maxY <= bar.frame.minY - 8,
+                      "the row is not above the New Chat bar (\(row.frame) / \(bar.frame)):\n\(app.debugDescription)")
     }
 
     /// A conversation row by the start of its title, scrolled into view.
@@ -273,8 +291,14 @@ final class DirectionScreensUITests: XCTestCase {
         shot("standings-end")
         // Collapse All in Added Here's header: its rows go, the header and its count stay.
         let fold = app.buttons["direction-page-fold"].firstMatch
-        for _ in 0..<6 where !(fold.exists && fold.isHittable) { app.collectionViews.firstMatch.swipeDown(velocity: .slow) }
-        XCTAssertTrue(fold.isHittable, "no Collapse All:\n\(app.debugDescription)")
+        // Clear of the navigation bar, not merely hittable under it.
+        let bar = app.navigationBars.firstMatch
+        let pageList = app.descendants(matching: .any).matching(identifier: "direction-page").firstMatch
+        for _ in 0..<12 where !(fold.exists && fold.isHittable && (!bar.exists || fold.frame.minY >= bar.frame.maxY + 4)) {
+            drag(pageList, by: -120)
+        }
+        XCTAssertTrue(fold.isHittable && (!bar.exists || fold.frame.minY >= bar.frame.maxY + 4),
+                      "Collapse All is not clear of the navigation bar:\n\(app.debugDescription)")
         fold.tap()
         XCTAssertTrue(app.buttons.matching(identifier: "direction-page-filed").firstMatch.waitForNonExistence(timeout: 5),
                       "Collapse All left rows:\n\(app.debugDescription)")
@@ -619,7 +643,8 @@ final class DirectionScreensUITests: XCTestCase {
         sleep(2)
         openTitleMenu()
         sleep(1)
-        XCTAssertTrue(app.buttons[word("Knowledge", "知识库", "ナレッジ")].firstMatch.waitForExistence(timeout: 5),
+        // An item only the menu has (an iPad's sidebar has a Knowledge row of its own).
+        XCTAssertTrue(app.buttons[word("Details", "详细信息", "詳細")].firstMatch.waitForExistence(timeout: 5),
                       "the title menu did not open:\n\(app.debugDescription)")
         shot("off-title-menu-\(off)")
         dismissMenu()
