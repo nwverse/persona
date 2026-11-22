@@ -100,7 +100,11 @@ func (s *Service) supervisedDecisionCandidates(supervisorID string) []Todo {
 	out := todos[:0]
 	for _, t := range todos {
 		a, ok := s.askCopy(t.ID)
-		if !ok || !decisionOpen(&a, t) || !a.RecheckAt.IsZero() || ownerDecisionReturned(t.Supervision) {
+		// A can_wait decision held for a briefing has no card yet and the owner has never seen
+		// this round: an ordinary supervisor-conversation message must neither release the hold
+		// nor settle it (heldForBriefing also clears once a briefing lists it).
+		if !ok || heldForBriefing(&a) || !decisionOpen(&a, t) || !a.RecheckAt.IsZero() ||
+			ownerDecisionReturned(t.Supervision) {
 			continue
 		}
 		out = append(out, t)
@@ -129,6 +133,13 @@ func (s *Service) settleSupervisorChoice(ctx context.Context, t Todo, at time.Ti
 	s.reviewDismissals.actions.acquire(id)
 	cur, ok := s.todoNow(id)
 	if !ok || cur.DoneAt != nil || cur.Supervision == nil || cur.Supervision.State != reviewNeedsUser {
+		s.reviewDismissals.actions.release(id)
+		return
+	}
+	// An active "Don't handle" hides this round: an option-shaped message in the supervisor
+	// conversation must not reopen and execute it. Fail closed on a read error, like the
+	// deadline sweep, rather than settling against an unknown dismissal state.
+	if dismissed, err := s.decisionDismissed(ctx, cur); err != nil || dismissed {
 		s.reviewDismissals.actions.release(id)
 		return
 	}
@@ -163,6 +174,10 @@ func (s *Service) handBackOneSupervisorReply(ctx context.Context, r SessionRef, 
 	if !ok || cur.DoneAt != nil || cur.Supervision == nil || cur.Supervision.State != reviewNeedsUser {
 		return
 	}
+	// A hidden ("Don't handle") round stays hidden: free text must not pause or hand it back.
+	if dismissed, err := s.decisionDismissed(ctx, cur); err != nil || dismissed {
+		return
+	}
 	b := &s.accept
 	b.mu.Lock()
 	if !s.loadAcceptLocked(ctx) {
@@ -180,7 +195,8 @@ func (s *Service) handBackOneSupervisorReply(ctx context.Context, r SessionRef, 
 		b.mu.Unlock()
 		return
 	}
-	a.AgentReply = &decisionAgentReply{MachineID: r.MachineID, SessionID: r.SessionID, At: at.UTC(), Text: clip(text, 2000)}
+	a.AgentReply = &decisionAgentReply{MachineID: r.MachineID, SessionID: r.SessionID, At: at.UTC(),
+		Text: clip(text, 2000), FromSupervisor: true}
 	a.DueAt = at.UTC()
 	// Even a failed write must not let this process take the default; the in-memory pause stands and the sweep retries.
 	if err := s.saveAcceptErrLocked(ctx); err != nil {
