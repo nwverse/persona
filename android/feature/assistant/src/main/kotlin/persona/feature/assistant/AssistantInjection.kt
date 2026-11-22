@@ -14,6 +14,7 @@ import dagger.Provides
 import javax.inject.Singleton
 import persona.core.data.HubDataStore
 import persona.core.contracts.api.DraftSnapshot
+import persona.core.contracts.api.HubManagers
 import persona.core.contracts.api.MainConversationSender
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.AssistantManagement
@@ -39,6 +40,9 @@ data class AssistantHostBindings(
 )
 
 val LocalAssistantHost = staticCompositionLocalOf<AssistantHostBindings?> { null }
+
+/** The selected hub's manager API, available to assistant-owned pages such as Details. */
+val LocalAssistantManagers = staticCompositionLocalOf<HubManagers?> { null }
 
 @Composable
 internal fun assistantComposerService(): ChatComposerService? {

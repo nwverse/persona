@@ -3304,6 +3304,153 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(resolved["outcome"], "merged")
         self.assertEqual(resolved["human_review"]["id"], 203)
 
+    def test_same_head_comment_after_human_approval_parks_instead_of_using_stored_pass(self):
+        self.enable_human_reviews()
+        decisions = [self.human_decision("approved", review_id=301),
+                     self.human_decision("commented", review_id=302)]
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "human_review_decision", side_effect=decisions) as human, \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(pr_watch, "verify", return_value=[{"name": "privacy", "ok": True}]) as verify, \
+                patch.object(self.watcher, "merge", return_value=False) as merge:
+            self.watcher.process("example/one", 7)
+            approved = self.watcher.state.get("example/one", 7)
+            self.assertEqual(approved["outcome"], "passed")
+            self.assertEqual(approved["semantic_source"], "human")
+            self.watcher.process("example/one", 7)
+        self.assertEqual(human.call_count, 2)
+        review.assert_not_called()
+        verify.assert_called_once()
+        merge.assert_called_once()
+        parked = self.watcher.state.get("example/one", 7)
+        self.assertEqual(parked["outcome"], "human_commented")
+        self.assertEqual(parked["human_review"]["id"], 302)
+
+    def test_same_head_dismissal_after_human_approval_restores_normal_ai_review(self):
+        self.enable_human_reviews()
+        decisions = [self.human_decision("approved", review_id=303),
+                     self.human_decision("none")]
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "human_review_decision", side_effect=decisions) as human, \
+                patch.object(pr_watch, "semantic_review", return_value=[]) as review, \
+                patch.object(pr_watch, "verify", return_value=[{"name": "privacy", "ok": True}]), \
+                patch.object(self.watcher, "merge", return_value=False):
+            self.watcher.process("example/one", 7)
+            self.assertEqual(self.watcher.state.get("example/one", 7)["semantic_source"], "human")
+            self.watcher.process("example/one", 7)
+        self.assertEqual(human.call_count, 2)
+        review.assert_called_once()
+        record = self.watcher.state.get("example/one", 7)
+        self.assertNotIn("semantic_source", record)
+        self.assertEqual(record["semantic"], "passed")
+
+    def test_restart_with_human_semantic_evidence_resumes_verification_and_merge(self):
+        self.enable_human_reviews()
+        decision = self.human_decision("approved", review_id=304)
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="reviewed",
+                               semantic="passed", findings=[], semantic_source="human",
+                               human_review=decision["review"], review_attempts=0,
+                               review_posted=True, success_posted=True)
+        resumed = pr_watch.Watcher(self.config, verbose=False)
+        resumed.remove_worktree = lambda *args: None
+        resumed.worktree = lambda *args: self.root / "checkout"
+        resumed.comment = lambda repo, number, body: self.comments.append(body)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(resumed, "human_review_decision", return_value=decision), \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(pr_watch, "verify", return_value=[{"name": "privacy", "ok": True}]) as verify, \
+                patch.object(resumed, "merge", return_value=True) as merge:
+            resumed.process("example/one", 7)
+        review.assert_not_called()
+        verify.assert_called_once()
+        merge.assert_called_once()
+        self.github.assert_not_called()
+        self.assertEqual(self.comments, [])
+        record = resumed.state.get("example/one", 7)
+        self.assertEqual(record["verification"], "passed")
+        self.assertEqual(record["semantic_source"], "human")
+        self.assertEqual(record["outcome"], "merged")
+
+    def test_same_head_comment_after_merge_failure_parks_instead_of_retrying_merge(self):
+        self.enable_human_reviews()
+        approval = self.human_decision("approved", review_id=305)
+        comment = self.human_decision("commented", review_id=306)
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="merge_failed",
+                               semantic="passed", findings=[], semantic_source="human",
+                               human_review=approval["review"], verification="passed",
+                               verification_policy=pr_watch.VERIFICATION_POLICY_VERSION,
+                               checks=[{"name": "privacy", "ok": True}], review_posted=True,
+                               success_posted=True, retry_after=0, blocking=False)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "human_review_decision", return_value=comment) as human, \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(pr_watch, "verify") as verify, \
+                patch.object(self.watcher, "merge", return_value=True) as merge:
+            self.watcher.process("example/one", 7)
+        human.assert_called_once_with("example/one", 7, SHA_A)
+        review.assert_not_called()
+        verify.assert_not_called()
+        merge.assert_not_called()
+        record = self.watcher.state.get("example/one", 7)
+        self.assertEqual(record["outcome"], "human_commented")
+        self.assertEqual(record["human_review"]["id"], 306)
+
+    def test_human_review_read_failure_during_merge_retry_stays_retryable(self):
+        self.enable_human_reviews()
+        approval = self.human_decision("approved", review_id=308)
+        comment = self.human_decision("commented", review_id=309)
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="merge_failed",
+                               semantic="passed", findings=[], semantic_source="human",
+                               human_review=approval["review"], verification="passed",
+                               verification_policy=pr_watch.VERIFICATION_POLICY_VERSION,
+                               checks=[{"name": "privacy", "ok": True}], review_posted=True,
+                               success_posted=True, retry_after=0, blocking=False)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "human_review_decision",
+                             side_effect=[pr_watch_common.WatchError("reviews unavailable"), comment]) as human, \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(pr_watch, "verify") as verify, \
+                patch.object(self.watcher, "merge", return_value=True) as merge:
+            self.watcher.process("example/one", 7)
+            self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "retry")
+            self.watcher.state.annotate("example/one", 7, retry_after=0)
+            self.watcher.process("example/one", 7)
+        self.assertEqual(human.call_count, 2)
+        review.assert_not_called()
+        verify.assert_not_called()
+        merge.assert_not_called()
+        record = self.watcher.state.get("example/one", 7)
+        self.assertEqual(record["outcome"], "human_commented")
+        self.assertEqual(record["human_review"]["id"], 309)
+
+    def test_failed_or_repairing_human_evidence_does_not_restart_verification(self):
+        self.enable_human_reviews()
+        decision = self.human_decision("approved", review_id=307)
+        for number, outcome in ((7, "failed"), (8, "repairing")):
+            with self.subTest(outcome=outcome):
+                evidence_key = "example/one#" + str(number) + "@" + SHA_BASE + ".." + SHA_A
+                self.watcher.state.put("example/one", number, SHA_A, evidence_key=evidence_key,
+                                       base=SHA_BASE, format=1, outcome=outcome,
+                                       semantic="passed", findings=[], semantic_source="human",
+                                       human_review=decision["review"], review_posted=True,
+                                       verification_policy=pr_watch.VERIFICATION_POLICY_VERSION,
+                                       success_posted=True, retry_after=0)
+                with patch.object(pr_watch, "pr_snapshot", return_value=pr(number=number)), \
+                        patch.object(self.watcher, "human_review_decision", return_value=decision) as human, \
+                        patch.object(pr_watch, "verify", return_value=[]) as verify, \
+                        patch.object(self.watcher, "merge", return_value=False) as merge:
+                    self.watcher.process("example/one", number)
+                human.assert_not_called()
+                verify.assert_not_called()
+                merge.assert_not_called()
+                self.assertEqual(self.watcher.state.get("example/one", number)["outcome"], outcome)
+
     def test_human_comment_only_parks_without_approval_or_merge(self):
         self.enable_human_reviews()
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \

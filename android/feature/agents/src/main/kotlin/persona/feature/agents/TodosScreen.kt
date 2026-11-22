@@ -1,5 +1,6 @@
 package persona.feature.agents
 
+import persona.feature.chat.SessionModes
 import persona.feature.chat.TodoRestores
 import persona.core.domain.tasks.orphanedLine
 import persona.core.domain.tasks.HoldStep
@@ -63,6 +64,7 @@ import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.answer.askingLine
 import persona.core.domain.answer.firstBySession
+import persona.core.domain.modelShortName
 import persona.core.domain.plainMarkdown
 import persona.core.domain.tasks.TasksStore
 import persona.core.navigation.NewTodoRequests
@@ -109,6 +111,23 @@ fun mostUrgentAgent(todo: Todo, sessionLookup: (SessionKey) -> Session?): TodoMo
     return best
 }
 
+private fun taskLeadAgent(todo: Todo, sessionLookup: (SessionKey) -> Session?): Session? {
+    fun movedAt(session: Session) = listOfNotNull(parseTime(session.updatedAt), parseTime(session.stateSince)).maxOrNull() ?: Instant.EPOCH
+    var lead: Session? = null
+    for (agent in todo.currentAgents) {
+        val candidate = sessionLookup(agent.key) ?: continue
+        val current = lead
+        if (current == null) {
+            lead = candidate
+            continue
+        }
+        val working = candidate.agentState == AgentState.Working
+        val leadWorking = current.agentState == AgentState.Working
+        if (if (working != leadWorking) working else movedAt(candidate) > movedAt(current)) lead = candidate
+    }
+    return lead
+}
+
 @Composable
 fun TodosScreen(
     todos: List<Todo>,
@@ -126,6 +145,8 @@ fun TodosScreen(
     assistant: persona.core.contracts.api.CurrentAssistant? = null,
     /** The hub's direction tree (#4352): the list can then be grouped by direction. Null (an older hub): status only. */
     directions: DirectionTree? = null,
+    /** Computer display names for the task's lead-Agent metadata (#10904). */
+    machines: List<Machine> = emptyList(),
 ) {
     val cards = remember(pending) { pending.firstBySession() }
     var query by rememberSaveable { mutableStateOf("") }
@@ -166,6 +187,7 @@ fun TodosScreen(
 
     val sessionMap = remember(sessions) { sessions.associateBy { it.key } }
     val sessionLookup: (SessionKey) -> Session? = remember(sessionMap) { { key: SessionKey -> sessionMap[key] } }
+    val machineMap = remember(machines) { machines.associateBy { it.id } }
     val hubFeatures = tasks?.features?.collectAsState()
     val seenOn = hubFeatures?.value?.contains("todo_seen") == true
 
@@ -475,6 +497,7 @@ fun TodosScreen(
                                 relatedOpen = false,
                                 onToggleRelated = {},
                                 sessionLookup = sessionLookup,
+                                machines = machineMap,
                                 cards = cards,
                                 now = now,
                                 onOpen = { onOpenTodo(todo.id) },
@@ -519,6 +542,7 @@ fun TodosScreen(
                                 relatedOpen = open,
                                 onToggleRelated = { expanded = if (open) expanded - group.key else expanded + group.key },
                                 sessionLookup = sessionLookup,
+                                machines = machineMap,
                                 cards = cards,
                                 now = now,
                                 onOpen = { onOpenTodo(group.lead.id) },
@@ -613,6 +637,7 @@ private fun TodoTriageRow(
     relatedOpen: Boolean,
     onToggleRelated: () -> Unit,
     sessionLookup: (SessionKey) -> Session?,
+    machines: Map<String, Machine>,
     cards: Map<SessionKey, Interaction>,
     now: Instant,
     onOpen: () -> Unit,
@@ -627,6 +652,17 @@ private fun TodoTriageRow(
     val state = todo.state(sessionLookup)
     val accepted = triage.rule == TriageRule.Accepted || todo.acceptedAtRest(sessionLookup)
     val urgent = mostUrgentAgent(todo, sessionLookup)
+    val lead = remember(todo, sessionLookup) { taskLeadAgent(todo, sessionLookup) }
+    val leadEffort = SessionModes.effortLabel(lead?.effort, res)?.takeIf(String::isNotEmpty)
+    val agentMetadata = remember(lead, machines, leadEffort) {
+        lead?.let { session ->
+            listOfNotNull(
+                machines[session.machineId]?.displayName ?: session.machineId,
+                modelShortName(session.model).ifBlank { null },
+                leadEffort,
+            ).joinToString(" · ")
+        }
+    }
     val lastMoved = if (triage.last > 0) Instant.ofEpochMilli(triage.last) else todo.updated ?: todo.created
     JSwipeActions(
         start = if (finished) SwipeAction(stringResource(R.string.agents_todo_reopen), PhIcons.ArrowUUpLeft, Status.Working, { onDone(todo, false) })
@@ -732,14 +768,29 @@ private fun TodoTriageRow(
                                 .padding(horizontal = Tokens.Space.xs),
                         )
                     }
-                    Spacer(Modifier.weight(1f))
+                    if (onSeen != null || triage.section == TriageSection.Shelved || todo.currentAgents.isEmpty()) {
+                        Spacer(Modifier.weight(1f))
+                    }
                     if (onSeen != null) {
                         JTextButton(stringResource(R.string.agents_todo_seen), onSeen)
                     } else if (triage.section == TriageSection.Shelved) {
                         JTextButton(stringResource(R.string.agents_todo_restore), onRestore, icon = PhIcons.ArrowUUpLeft)
                     } else if (!finished && todo.currentAgents.isNotEmpty()) {
-                        Text(pluralStringResource(R.plurals.agents_todo_agents, todo.currentAgents.size, todo.currentAgents.size),
-                            style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3, maxLines = 1)
+                        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                agentMetadata ?: pluralStringResource(R.plurals.agents_todo_agents, todo.currentAgents.size, todo.currentAgents.size),
+                                style = PersonaTheme.type.micro,
+                                color = PersonaTheme.palette.ink3,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            if (agentMetadata != null && todo.currentAgents.size > 1) {
+                                Spacer(Modifier.width(Tokens.Space.xs))
+                                Text(stringResource(R.string.agents_todo_calendar_more, todo.currentAgents.size - 1),
+                                    style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3, maxLines = 1)
+                            }
+                        }
                     }
                 }
             }

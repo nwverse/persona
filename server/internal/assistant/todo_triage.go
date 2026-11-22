@@ -178,6 +178,11 @@ func triageStatus(t Todo, look triageLookup, now time.Time) string {
 		switch {
 		case found && triageUsageLimit(s, now):
 			limited = true
+		case found && triageInterrupted(s, now) && (proto.UnrecoverableTurnErrorCode(s.TurnError) != "" ||
+			s.TurnErrorKind == proto.TurnErrorUnrecoverable || s.TurnErrorCode == proto.TurnErrorCompactionSealed):
+			interrupted = true
+		case len(active) > 1 && st != proto.StateWorking && found && triageAgentWaits(s):
+			waiting = true
 		case found && triageInterrupted(s, now):
 			interrupted = true
 		case st == proto.StateUnread:
@@ -218,8 +223,8 @@ func acceptanceStands(t Todo) bool {
 	return t.Supervision != nil && t.Supervision.State == reviewAccepted && r != nil && r.Verdict == reviewAccepted
 }
 
-// triageReviewState is the review state that holds now (the web's reviewState): a cancelled task reopened goes on
-// again; an accepted one stays accepted while its acceptance stands.
+// triageReviewState is the current review for the task list. A decision from before reopening stays in history;
+// an accepted task stays accepted while its acceptance stands.
 func triageReviewState(t Todo) string {
 	if t.Supervision == nil {
 		return ""
@@ -228,6 +233,11 @@ func triageReviewState(t Todo) string {
 		return ""
 	}
 	st := t.Supervision.State
+	if st == reviewNeedsUser && t.ReopenedAt != nil {
+		if r := triageLatestReview(t.Supervision); r == nil || r.At.Before(*t.ReopenedAt) {
+			return "" // the previous round's decision stays in review history
+		}
+	}
 	if st == reviewUserCheck && t.DoneAt != nil {
 		return reviewAccepted
 	}
