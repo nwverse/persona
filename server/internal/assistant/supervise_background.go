@@ -66,6 +66,7 @@ func (s *Service) isBackground(ctx context.Context, id string) bool {
 // ledger may name it directly; a notice delivered or queued for it is also persisted in relayState. Merely being
 // configured is never enough: new main-supervised work cannot be accepted here, including after a restart.
 func (s *Service) backgroundSupervises(ctx context.Context, self string, t Todo) bool {
+	self = s.supervisionHoldKey(ctx, self) // an attested round fork uses its base's legacy evidence, never its own grant
 	if t.Origin == "" || t.Supervision == nil || !s.isBackground(ctx, self) {
 		return false
 	}
@@ -91,6 +92,7 @@ func legacyBackgroundGrant(grants map[string]bool, conversation, todoID string) 
 // legacyBackgroundNotice reports whether a real old notice reached this background conversation. The in-memory grant
 // covers the current turn; relayState keeps it across restarts and reconstructs it for pre-upgrade queued messages.
 func (s *Service) legacyBackgroundNotice(ctx context.Context, self, todoID string) bool {
+	self = s.supervisionHoldKey(ctx, self)
 	b := &s.supervise
 	// deliverDigest publishes the grant after a visible send or queue admission, before sendDigest releases dedupMu.
 	// Serialize the check with that boundary so an immediate review cannot be rejected while its notice is in flight.

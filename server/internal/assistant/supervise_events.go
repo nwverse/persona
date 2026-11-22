@@ -384,6 +384,7 @@ func (s *Service) notifyTaskNeedsUser(ctx context.Context, t Todo, work time.Tim
 // supervisedWorking: one of supervised task t's agents started a turn: a review waiting is moot (the work goes on),
 // and a parked task is parked no longer (someone sent its agent something: it is supervised as before, parked.go).
 func (s *Service) supervisedWorking(ctx context.Context, t Todo) {
+	s.resetBackgroundBreakerForTodo(t.ID)
 	s.autoReviewWorking(ctx, t)
 	// Retire the previous stop before any early return or outbox deletion. Exact-key retraction owns every idle form;
 	// a later signal-id sweep could erase a newer idle admitted while the old one's final write was in flight.

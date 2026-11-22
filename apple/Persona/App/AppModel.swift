@@ -2333,6 +2333,13 @@ final class AppModel {
     func features(_ group: String) -> Set<String> { link(group)?.features ?? [] }
     /// What the hub-level group's hub listed (hub-level pages: connectors, skills…).
     var hubFeatures: Set<String> { hub?.features ?? [] }
+    /// The pictures a message may carry on `group`'s hub (nil: the hub-level one) to a session of `agent`: its hello's
+    /// `image_limits` (#12973), the standard ones from a hub before them.
+    func imageLimits(_ group: String? = nil, agent: String? = nil) -> ImageLimits {
+        (group.flatMap { link($0) } ?? hub)?.hello.imageLimits?.limits(for: agent) ?? .standard
+    }
+    /// The pictures a message to `key` may carry (`imageLimits`, by its hub and its agent).
+    func imageLimits(_ key: SessionKey) -> ImageLimits { imageLimits(key.group, agent: session(key)?.agent) }
     /// The hub-level group's hub's desktops: Mac apps connected and computers where Persona Link reports you at them
     /// (`DesktopDevice`, the banner in DesktopPresence.swift).
     var desktops: [DesktopDevice] { hub?.desktops ?? [] }
@@ -3721,11 +3728,11 @@ final class AppModel {
                 if let photo = await machinePhoto(key, path) { photos.append((path, photo)) } else { left.append(path) }
             }
         }
-        let room = max(0, MessagePhotos.limit - held.images.count)
+        let room = imageLimits(key).roomLeft(holding: held.images.count)
         let overflow = photos.dropFirst(room)
         left += overflow.compactMap(\.path)
         held.images += photos.prefix(room).map(\.photo)
-        // A hub photo has no machine path to leave as text. Keep it visible; `sendNow` still enforces the four-photo cap.
+        // A hub photo has no machine path to leave as text. Keep it visible; `sendNow` still holds the hub's count.
         held.images += overflow.filter { $0.path == nil }.map(\.photo)
         left += held.videos.restore(draft.files.filter(\.playable)).map(\.xml)
         left += held.files.restore(draft.files.filter { !$0.playable }).map(\.xml)
@@ -3808,8 +3815,9 @@ final class AppModel {
     func sendNow(_ key: SessionKey, text: String, images: [ImagePayload] = [], via: APIClient.MessageVia? = nil) -> Bool {
         guard allowSend(key, forMessage: true) else { return false }
         // Take-back can retain pathless hub photos past the picker's cap; the person removes some before sending.
-        guard images.count <= MessagePhotos.limit else {
-            toast = Toast(String(localized: "Up to 4 at a time"), style: .error)
+        let limits = imageLimits(key)
+        guard images.count <= limits.perMessage else {
+            toast = Toast(String(localized: "Up to \(limits.perMessage) at a time"), style: .error)
             return false
         }
         var msg = PendingMessage(text: text, images: images)

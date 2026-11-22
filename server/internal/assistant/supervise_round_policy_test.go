@@ -23,7 +23,7 @@ import (
 
 // mainOnlySignals are the signals the instructions' background line leaves to the main conversation; their handling
 // rules name the tools a round withholds (task_start_screen, task_start_keys, task_retry, conversation_send).
-var mainOnlySignals = []string{sigFailed, sigStarted, sigEscalated, sigLeaderStuck}
+var mainOnlySignals = []string{sigFailed, sigStarted, sigEscalated, sigLeaderStuck, sigTodoReady}
 
 // backgroundSignals are the signals an existing background conversation can receive for explicitly addressed legacy
 // notices. Without that explicit legacy target, all of them stay with main for new assistant-dispatched work (#5732).

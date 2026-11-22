@@ -4228,6 +4228,8 @@ export interface ConnectorInboxThing {
   /** Marks the newest move: a different last adds to the open item. */
   last?: string;
   url?: string;
+  /** The observed lifecycle of a GitHub pull request: open, closed or merged. */
+  thread_state?: string;
   /** A link the system opens instead (sms:…). */
   open_url?: string;
   /** Where a reply goes and who sees it. */
@@ -6071,6 +6073,50 @@ export interface AssistantDataStatusResult {
   items: AssistantDataItem[];
 }
 
+/**
+ * browser.machines (browser.run): list computers that have a browser backend enabled.
+ */
+export interface BrowserMachinesParams {
+  /** Optional backend filter (e.g. ego, cdp). Empty returns all backends. */
+  backend?: string;
+}
+
+export interface BrowserMachine {
+  machine_id: string;
+  name: string;
+  /** Browser backend identifier (e.g. ego, cdp). */
+  backend: string;
+  online: boolean;
+  ready: boolean;
+}
+
+export interface BrowserMachinesResult {
+  machines: BrowserMachine[];
+}
+
+/**
+ * browser.run (browser.run): run a script inside an extension-isolated browser task space (ext-<extensionID>-<slot>)
+ * on machine_id.
+ */
+export interface BrowserRunParams {
+  machine_id: string;
+  /** Browser backend to use (default: ego). */
+  backend?: string;
+  /** Logical slot name scoped to this extension (e.g. pac-muse). */
+  slot: string;
+  /** Async JS script body executed inside the isolated task space. */
+  script: string;
+  timeout_ms?: number;
+}
+
+export interface BrowserRunResult {
+  backend: string;
+  /** Raw output / JSON payload returned by the browser backend. */
+  output: string;
+  /** Script error message, if any. */
+  error?: string;
+}
+
 export interface StorageEmptyParams {
 }
 
@@ -6886,6 +6932,8 @@ export const CALLS: Record<string, Call> = {
   "assistant.messages": { from: "program", params: "AssistantMessagesParams", result: "AssistantMessagesResult" },
   "assistant.memory": { from: "program", params: "AssistantMemoryParams", result: "AssistantMemoryResult" },
   "assistant.data_status": { from: "program", params: "AssistantDataStatusParams", result: "AssistantDataStatusResult" },
+  "browser.machines": { from: "program", params: "BrowserMachinesParams", result: "BrowserMachinesResult" },
+  "browser.run": { from: "program", params: "BrowserRunParams", result: "BrowserRunResult" },
   "storage.request": { from: "program", params: "StorageEmptyParams", result: "StorageRequestResult" },
   "storage.get": { from: "program", params: "StorageKeyParams", result: "StorageEntry" },
   "storage.list": { from: "program", params: "StorageListParams", result: "StorageListResult" },

@@ -1211,11 +1211,13 @@ Ordinary signals go to that leader (`digestTo`) and the leader reviews the task.
 by main, including a leader's own plan. The value stays in `PlanTask.Supervisor` so an existing pre-#5732 plan can be
 recognized and rehomed without confusing it with an explicit manual-Agent assignment.
 
-**The main chat moves an existing task**: `agent_transfer {machine, session_id, supervisor}` uses the same Move to
-operation as the App, without adoption. The destination is a current direction or the main conversation; transfer
-back to undo. The task, brief, criteria, estimate, origin and Agent session stay. Its supervision and task card move;
-no message, interruption or restart is sent. Non-main callers, owner-created to-dos, assistant sessions and Agents
-without an open task are refused.
+**Main or a direction lead moves an existing task**: `agent_transfer {machine, session_id, supervisor}` uses the same Move to
+operation as the App, without adoption. Main may move any open supervised task; a current direction lead may hand off
+only an open task it supervises (taking another supervisor's task is refused, naming the current supervisor and who
+can move it). The destination is a current direction or the main conversation. The task, brief, criteria, estimate,
+origin and Agent session stay. Its supervision and task card move; no message, interruption or restart is sent.
+Other callers, owner-created to-dos, assistant sessions and Agents without an open task are refused.
+
 
 A plan of a leader's that waits for the owner's Start is still a `decision` report (`leader.report` with `plan`, told
 once), as the owner ruled after H1. The waiting plans are read from the plans themselves every 10 minutes and right

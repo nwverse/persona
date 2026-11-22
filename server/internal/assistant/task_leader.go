@@ -457,13 +457,17 @@ func (s *Service) leaderRoute(g superviseSignal) (lead TodoAgent, handled, reach
 // so nothing is queued here. An offline resume completes in the background.
 func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list []superviseSignal, web string, now, prev time.Time) bool {
 	var entries []prompts.SuperviseEntry
-	var kept, moot []superviseSignal
+	var kept, moot, retry []superviseSignal
 	// An earlier offline resume owns its in-flight signals until its real delivery callback. Keep them out of this
 	// batch's acknowledgements as well as its text: a second digest may carry new signals, but must not ack the first
 	// batch before that first batch reaches the leader (#5732, #9701). dedupMu is held throughout this selection.
 	batch := make([]superviseSignal, 0, len(list))
 	for _, g := range list {
-		e, ok := s.digestEntry(ctx, g, web)
+		e, ok, deferRetry := s.digestEntryChecked(ctx, g, web)
+		if deferRetry {
+			retry = append(retry, g)
+			continue
+		}
 		if !ok {
 			moot = append(moot, g)
 			batch = append(batch, g)
@@ -476,6 +480,14 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 		entries, kept = append(entries, e), append(kept, g)
 		batch = append(batch, g)
 	}
+	if len(retry) > 0 {
+		at := now
+		if len(entries) > 0 {
+			at = time.Time{}
+		}
+		s.restoreDigest(retry, at, prev)
+	}
+	s.clearSentTodoReady(moot)
 	s.turnsTold(ctx, moot) // what no longer holds is not told after a restart either
 	if len(entries) == 0 {
 		s.ackSupervisePending(batch)
@@ -500,6 +512,7 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 	}
 	if len(entries) == 0 {
 		s.ackSupervisePending(batch)
+		s.todoReadyTold(ctx, holds)
 		s.turnsTold(ctx, holds) // already covered by the deduplication history
 		return false
 	}
@@ -539,6 +552,7 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 	s.ackSupervisePending(batch)
 	s.parkedDueTold(ctx, kept)
 	s.estimateDueTold(ctx, kept)
+	s.todoReadyTold(ctx, holds)
 	s.turnsTold(ctx, holds) // kept went, the rest was said the same within the deduplication window
 	return true
 }
@@ -607,6 +621,7 @@ func (s *Service) leaderDelivered(ctx context.Context, lead TodoAgent, entries [
 	s.ackSupervisePending(all)
 	s.parkedDueTold(ctx, sent)
 	s.estimateDueTold(ctx, sent)
+	s.todoReadyTold(ctx, receipts)
 	s.turnsTold(ctx, receipts)
 	s.logf("supervise: %d signal(s) to task leader %s after confirmation", len(sent), short(lead.SessionID))
 }
@@ -941,7 +956,9 @@ func (s *Service) mayReviewForLeader(ctx context.Context, self string, t Todo) b
 		return false
 	}
 	// The background supervisor stands in for main only when this worker really had a legacy notice for it. Being
-	// configured as background never grants acceptance over a new task-leader worker (#5732).
+	// configured as background never grants acceptance over a new task-leader worker (#5732). An attested round fork
+	// shares only its base's already recorded notice, never a fresh acceptance grant.
+	self = s.supervisionHoldKey(ctx, self)
 	return up == self || s.isBackground(ctx, self) && !s.isLeader(ctx, up) && s.legacyBackgroundNotice(ctx, self, t.ID)
 }
 
