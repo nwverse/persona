@@ -2752,7 +2752,8 @@ the proxy and cannot produce refreshes. Ordinary API requests and streamed repli
 are forwarded without changing payload bytes. Provider errors are returned as-is;
 transport failures return a generic 502 without logging upstream error text.
 
-Only a successful request with exclusively one-hour cache declarations can be retained. Mixed TTL requests
+Only a successful request with a reported cache read/write and exclusively one-hour
+cache declarations can be retained. Mixed TTL requests
 are skipped to avoid rewriting an expired five-minute history behind a cache hit on
 the system prefix.
 The provider response's message id must also appear on the CLI's root `message_start`;

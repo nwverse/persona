@@ -68,7 +68,7 @@ func TestAssistantCacheProxyScopeAndLauncherPrecedence(t *testing.T) {
 					t.Error("normal provider bytes changed")
 				}
 				w.Header().Set("Content-Type", "text/event-stream")
-				_, _ = io.WriteString(w, "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"model\":\"example-model\",\"usage\":{\"input_tokens\":1}}}\n\n")
+				_, _ = io.WriteString(w, "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_fixture\",\"model\":\"example-model\",\"usage\":{\"input_tokens\":1,\"cache_creation_input_tokens\":1234}}}\n\n")
 			}))
 			defer upstream.Close()
 			launcher := "gw"

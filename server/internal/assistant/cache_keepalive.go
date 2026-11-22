@@ -26,7 +26,7 @@ func cacheKeepaliveOf(v Settings) assistantwire.CacheKeepalive {
 func (s *Service) putCacheKeepalive(ctx context.Context, machine, id string, main bool, p map[string]any) {
 	delete(p, "cache_keepalive")
 	v := s.settings(ctx)
-	if !main && !slices.Contains(v.Leaders, id) {
+	if !main && (id == "" || !slices.Contains(v.Leaders, id)) {
 		return
 	}
 	if id != "" {

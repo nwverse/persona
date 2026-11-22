@@ -367,14 +367,16 @@ func (t *responseTap) Write(v []byte) (int, error) {
 	}
 	t.buf = append(t.buf, v...)
 	var event struct {
-		Type    string `json:"type"`
-		ID      string `json:"id"`
+		Type    string     `json:"type"`
+		ID      string     `json:"id"`
+		Usage   cacheUsage `json:"usage"`
 		Message struct {
-			ID string `json:"id"`
+			Usage cacheUsage `json:"usage"`
+			ID    string     `json:"id"`
 		} `json:"message"`
 	}
 	if !t.stream {
-		if json.Unmarshal(t.buf, &event) == nil && event.ID != "" {
+		if json.Unmarshal(t.buf, &event) == nil && event.ID != "" && event.Usage.cached() {
 			t.p.candidate(event.ID, t.c)
 			t.done = true
 			t.buf = nil
@@ -391,7 +393,7 @@ func (t *responseTap) Write(v []byte) (int, error) {
 		if !bytes.HasPrefix(line, []byte("data:")) {
 			continue
 		}
-		if json.Unmarshal(bytes.TrimSpace(line[5:]), &event) == nil && event.Type == "message_start" && event.Message.ID != "" {
+		if json.Unmarshal(bytes.TrimSpace(line[5:]), &event) == nil && event.Type == "message_start" && event.Message.ID != "" && event.Message.Usage.cached() {
 			t.p.candidate(event.Message.ID, t.c)
 			t.done = true
 			t.buf = nil
@@ -400,3 +402,12 @@ func (t *responseTap) Write(v []byte) (int, error) {
 	}
 	return n, nil
 }
+
+// Cache-control declarations alone do not prove that the provider cached anything
+// (for example a prompt below its minimum). Retain only a reported read or write.
+type cacheUsage struct {
+	Read  int `json:"cache_read_input_tokens"`
+	Write int `json:"cache_creation_input_tokens"`
+}
+
+func (u cacheUsage) cached() bool { return u.Read > 0 || u.Write > 0 }

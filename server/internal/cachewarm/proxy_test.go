@@ -48,7 +48,7 @@ func (u *warmUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal(body, &req)
 	if req.Stream {
 		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprintf(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_%d\"}}\n\n", id)
+		fmt.Fprintf(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_%d\",\"usage\":{\"cache_read_input_tokens\":%d}}}\n\n", id, read)
 		w.(http.Flusher).Flush()
 		_, _ = io.WriteString(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 		return
@@ -288,4 +288,16 @@ func TestStreamingFlushesBeforeUpstreamFinishes(t *testing.T) {
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
+}
+
+func TestUncachedNormalRequestDoesNotSpendOnRefresh(t *testing.T) {
+	p, u, _ := proxyFixture(t)
+	u.mu.Lock()
+	u.read = 0
+	u.mu.Unlock()
+	normal(t, p, warmBody, true)
+	p.Tick(context.Background(), time.Now().Add(55*time.Minute), policy(), true)
+	if u.count() != 1 {
+		t.Fatal("warmed a prefix the provider never cached")
+	}
 }
