@@ -831,8 +831,8 @@ nonisolated enum ExtensionSceneGeometryBuilder {
         let meshRoot: SCNNode
         let cameraNode: SCNNode
         let ambientLight: SCNLight
-        let keyLightNode: SCNNode
-        let keyLight: SCNLight
+        let mainLightNode: SCNNode
+        let mainLight: SCNLight
         let fillLight: SCNLight
         let lampNodes: [SCNNode]
         let glowRoot: SCNNode
@@ -856,18 +856,18 @@ nonisolated enum ExtensionSceneGeometryBuilder {
         ambientNode.light = ambientLight
         scene.rootNode.addChildNode(ambientNode)
 
-        let keyLight = SCNLight()
-        keyLight.type = .directional
-        keyLight.color = uiColor(hex: Theme.Scene.sunLightHex)
-        keyLight.castsShadow = true
-        keyLight.shadowMode = .forward
-        keyLight.automaticallyAdjustsShadowProjection = false
-        keyLight.shadowSampleCount = 4
-        keyLight.shadowRadius = 2.5
-        keyLight.shadowMapSize = CGSize(width: 1024, height: 1024)
-        let keyLightNode = SCNNode()
-        keyLightNode.light = keyLight
-        scene.rootNode.addChildNode(keyLightNode)
+        let mainLight = SCNLight()
+        mainLight.type = .directional
+        mainLight.color = uiColor(hex: Theme.Scene.sunLightHex)
+        mainLight.castsShadow = true
+        mainLight.shadowMode = .forward
+        mainLight.automaticallyAdjustsShadowProjection = false
+        mainLight.shadowSampleCount = 4
+        mainLight.shadowRadius = 2.5
+        mainLight.shadowMapSize = CGSize(width: 1024, height: 1024)
+        let mainLightNode = SCNNode()
+        mainLightNode.light = mainLight
+        scene.rootNode.addChildNode(mainLightNode)
 
         let fillLight = SCNLight()
         fillLight.type = .directional
@@ -896,7 +896,7 @@ nonisolated enum ExtensionSceneGeometryBuilder {
         scene.rootNode.addChildNode(glowRoot)
 
         return Rig(scene: scene, meshRoot: meshRoot, cameraNode: cameraNode, ambientLight: ambientLight,
-                   keyLightNode: keyLightNode, keyLight: keyLight, fillLight: fillLight,
+                   mainLightNode: mainLightNode, mainLight: mainLight, fillLight: fillLight,
                    lampNodes: lamps, glowRoot: glowRoot)
     }
 
@@ -921,16 +921,16 @@ nonisolated enum ExtensionSceneGeometryBuilder {
         let sunPos = target + sunDir * sunDist
         let right = simd_normalize(simd_cross(SIMD3<Double>(0, 1, 0), sunDir))
         let up = simd_cross(sunDir, right)
-        rig.keyLightNode.simdTransform = simd_float4x4(columns: (
+        rig.mainLightNode.simdTransform = simd_float4x4(columns: (
             SIMD4(Float(right.x), Float(right.y), Float(right.z), 0),
             SIMD4(Float(up.x), Float(up.y), Float(up.z), 0),
             SIMD4(Float(sunDir.x), Float(sunDir.y), Float(sunDir.z), 0),
             SIMD4(Float(sunPos.x), Float(sunPos.y), Float(sunPos.z), 1)
         ))
-        rig.keyLight.orthographicScale = CGFloat(r * 1.35)
-        rig.keyLight.zNear = CGFloat(max(0.1, sunDist - r * 2.4))
-        rig.keyLight.zFar = CGFloat(sunDist + r * 2.6)
-        rig.keyLight.shadowColor = UIColor(white: 0, alpha: 0.22)
+        rig.mainLight.orthographicScale = CGFloat(r * 1.35)
+        rig.mainLight.zNear = CGFloat(max(0.1, sunDist - r * 2.4))
+        rig.mainLight.zFar = CGFloat(sunDist + r * 2.6)
+        rig.mainLight.shadowColor = UIColor(white: 0, alpha: 0.22)
     }
 
     static func selectLitPins(_ pins: [ExtensionScenePin], target: SIMD3<Double>) -> (omnis: [ExtensionScenePin], glows: [ExtensionScenePin]) {
@@ -958,7 +958,7 @@ nonisolated enum ExtensionSceneGeometryBuilder {
         rig.scene.background.contents = resolvedBackgroundColor(dark: dark)
         rig.ambientLight.intensity = dark ? Theme.Scene.darkAmbientIntensity : Theme.Scene.lightAmbientIntensity
         rig.ambientLight.color = UIColor.white
-        rig.keyLight.intensity = dark ? Theme.Scene.darkKeyIntensity : Theme.Scene.lightKeyIntensity
+        rig.mainLight.intensity = dark ? Theme.Scene.darkKeyIntensity : Theme.Scene.lightKeyIntensity
         rig.fillLight.intensity = dark ? Theme.Scene.darkFillIntensity : Theme.Scene.lightFillIntensity
 
         let (omnis, glows) = selectLitPins(pins, target: bounds.worldTarget)
