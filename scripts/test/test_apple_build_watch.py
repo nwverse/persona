@@ -26,26 +26,65 @@ class CompilerResourceTests(unittest.TestCase):
             "  12 10  0.0    900 00:12 00:00.00 /usr/bin/xcodebuild",
             "  13  2  0.0    800 00:13 00:00.00 /usr/bin/clang",
         ]), "")
-        parsed = watch.processes(lambda *args, **kwargs: result)
+        def legacy_ps(command, **kwargs):
+            if "lstart=" in command:
+                return subprocess.CompletedProcess(command, 1, "", "lstart unavailable")
+            return result
+        parsed = watch.processes(legacy_ps)
         self.assertEqual(parsed["counts"], {"swift-frontend": 1, "swiftc": 1, "xcodebuild": 1, "clang": 1})
         self.assertEqual(parsed["total_rss_kib"], 129156)
         self.assertNotIn("command", json.dumps(parsed["largest"]))
-        self.assertEqual(parsed["largest"][0]["target_module"], "Example")
         frontend = next(entry for entry in parsed["largest"] if entry["name"] == "swift-frontend")
-        self.assertEqual(frontend, {"pid": 10, "ppid": 2, "cpu_percent": "80.5", "rss_kib": 123456,
-                                    "name": "swift-frontend", "cpu_seconds": 2.5, "elapsed_seconds": 10.0,
-                                    "target_module": "Example", "primary_source": "Example.swift",
-                                    "output": "Example.o"})
+        self.assertEqual(frontend["target_module"], "Example")
+        self.assertEqual(frontend["cpu_seconds"], 2.5)
+        self.assertEqual(frontend["elapsed_seconds"], 10.0)
+        self.assertEqual(frontend["primary_source"], "Example.swift")
+        self.assertEqual(frontend["process_start_status"], "uncertain")
 
     def test_process_summary_keeps_the_eight_largest_compiler_entries(self):
         result = subprocess.CompletedProcess([], 0, "\n".join(
             f"  {pid}  2 1.0 {pid * 1000} 00:01 00:00.01 /Toolchain/usr/bin/swift-frontend" for pid in range(10, 22)), "")
-        parsed = watch.processes(lambda *args, **kwargs: result)
+        def legacy_ps(command, **kwargs):
+            if "lstart=" in command:
+                return subprocess.CompletedProcess(command, 1, "", "lstart unavailable")
+            return result
+        parsed = watch.processes(legacy_ps)
         self.assertEqual(watch.MAX_PROCESSES, 8)
         self.assertEqual(parsed["counts"], {"swift-frontend": 12})
         self.assertEqual(len(parsed["largest"]), 8)
         self.assertEqual([entry["pid"] for entry in parsed["largest"]], list(range(21, 13, -1)))
         self.assertEqual(sum(entry["name"] == "swift-frontend" for entry in parsed["largest"]), 8)
+
+    def test_process_start_identity_is_parsed_from_bounded_ps_output(self):
+        line = ("42 2 90.0 10000 01:10 00:02.50 Sun Nov 22 10:00:00 2026 "
+                "/Toolchain/swift-frontend -module-name Example -primary-file /tmp/Example.swift")
+        parsed = watch.processes(lambda *args, **kwargs: subprocess.CompletedProcess([], 0, line, ""))
+        frontend = parsed["largest"][0]
+        self.assertEqual(frontend["process_start"], "Sun Nov 22 10:00:00 2026")
+        self.assertEqual(frontend["process_start_status"], "known")
+        self.assertEqual(frontend["primary_source"], "Example.swift")
+        self.assertNotIn("/tmp", json.dumps(parsed))
+
+    def test_lstart_success_with_legacy_output_falls_back_without_process_identity(self):
+        line = "42 2 90.0 10000 01:10 00:02.50 /Toolchain/swift-frontend -module-name Example"
+        def runner(command, **kwargs):
+            return subprocess.CompletedProcess(command, 0, line, "")
+        frontend = watch.processes(runner)["largest"][0]
+        self.assertEqual(frontend["target_module"], "Example")
+        self.assertIsNone(frontend["process_start"])
+        self.assertEqual(frontend["process_start_status"], "uncertain")
+
+    def test_process_rows_reject_an_invalid_start_without_guessing_argv(self):
+        line = "42 2 90.0 10000 01:10 00:02.50 not a process start time /Toolchain/swift-frontend"
+        self.assertEqual(watch.process_rows(line, True), [])
+        self.assertEqual(watch.process_rows("not a ps row", False), [])
+
+    @staticmethod
+    def frontend(pid=42, start="Sun Nov 22 10:00:00 2026", cpu=1.5, elapsed=5.0, source="First.swift"):
+        return {"pid": pid, "ppid": 2, "cpu_percent": "10.0", "rss_kib": 1000,
+                "name": "swift-frontend", "cpu_seconds": cpu, "elapsed_seconds": elapsed,
+                "process_start": start, "process_start_status": "known" if start else "uncertain",
+                "target_module": "Example", "primary_source": source, "output": "First.o"}
 
     def test_frontend_identity_is_selected_and_sanitized_never_raw_argv(self):
         identity = watch.swift_frontend_identity(
@@ -69,36 +108,62 @@ class CompilerResourceTests(unittest.TestCase):
 
     def test_pid_first_last_cpu_elapsed_and_reuse_are_bounded(self):
         history = {}
-        first = {"pid": 42, "ppid": 2, "cpu_percent": "10.0", "rss_kib": 1000,
-                 "name": "swift-frontend", "cpu_seconds": 1.5, "elapsed_seconds": 5.0,
-                 "target_module": "Example", "primary_source": "First.swift", "output": "First.o"}
-        second = {**first, "cpu_seconds": 4.75, "elapsed_seconds": 20.0}
+        first = self.frontend()
         watch.track_frontends(history, [first], 100.0)
-        watch.track_frontends(history, [second], 115.0)
-        record = history[42]
+        watch.track_frontends(history, [self.frontend(cpu=4.75, elapsed=20.0)], 115.0)
+        record = history[(42, first["process_start"])]
         self.assertEqual(record["first_seen_monotonic"], 100.0)
         self.assertEqual(record["last_seen_monotonic"], 115.0)
         self.assertEqual(record["first_cpu_seconds"], 1.5)
         self.assertEqual(record["last_cpu_seconds"], 4.75)
         self.assertEqual(record["sample_count"], 2)
-        self.assertFalse(record["pid_reuse_observed"])
-        self.assertEqual(record["identity"],
-                         {"target_module": "Example", "primary_source": "First.swift", "output": "First.o"})
-        self.assertNotIn("/tmp", json.dumps(history))
-        reused = {**second, "cpu_seconds": 0.1, "elapsed_seconds": 1.0,
-                  "target_module": "Other", "primary_source": "Other.swift"}
-        watch.track_frontends(history, [reused], 130.0)
-        self.assertTrue(history[42]["pid_reuse_observed"])
-        self.assertEqual(history[42]["first_seen_monotonic"], 130.0)
-        self.assertEqual(history[42]["sample_count"], 1)
-        self.assertEqual(history[42]["prior_lifetimes"][0]["first_seen_monotonic"], 100.0)
-        self.assertEqual(history[42]["prior_lifetimes"][0]["last_cpu_seconds"], 4.75)
-        watch.track_frontends(history, [{**first, "pid": 100 + index,
-                                        "target_module": f"Module{index}"}
-                                       for index in range(watch.MAX_FRONTEND_LIFETIMES - 1)], 140.0)
-        watch.track_frontends(history, [{"pid": 9999, **first}], 150.0)
-        self.assertEqual(len(history), watch.MAX_FRONTEND_LIFETIMES)
-        self.assertNotIn(9999, history)
+        self.assertEqual(record["continuity"], "known")
+        self.assertEqual(record["first_identity"]["primary_source"], "First.swift")
+        replacement = self.frontend(start="Sun Nov 22 10:01:00 2026", cpu=0.1, elapsed=1.0)
+        watch.track_frontends(history, [replacement], 130.0)
+        self.assertEqual(len(history), 2)
+        self.assertEqual(history[(42, first["process_start"])]["last_seen_monotonic"], 115.0)
+        self.assertEqual(history[(42, replacement["process_start"])]["first_seen_monotonic"], 130.0)
+        watch.track_frontends(history, [self.frontend(start=None, cpu=0.0)], 140.0)
+        self.assertEqual(history[(42, None)]["continuity"], "uncertain")
+
+    def test_consecutive_primary_files_do_not_restart_a_process(self):
+        history = {}
+        watch.track_frontends(history, [self.frontend()], 100.0)
+        watch.track_frontends(history, [self.frontend(cpu=3.0, elapsed=20.0, source="Second.swift")], 115.0)
+        record = history[(42, "Sun Nov 22 10:00:00 2026")]
+        self.assertEqual(record["first_seen_monotonic"], 100.0)
+        self.assertEqual(record["last_seen_monotonic"], 115.0)
+        self.assertEqual(record["first_identity"]["primary_source"], "First.swift")
+        self.assertEqual(record["last_identity"]["primary_source"], "Second.swift")
+        self.assertEqual(record["identity_changes"], 1)
+        self.assertEqual(len(history), 1)
+
+    def test_duplicate_pid_in_one_sample_preserves_the_first_observation(self):
+        history = {}
+        watch.track_frontends(history, [self.frontend(), self.frontend(cpu=99.0)], 100.0)
+        record = history[(42, "Sun Nov 22 10:00:00 2026")]
+        self.assertEqual(record["first_seen_monotonic"], 100.0)
+        self.assertEqual(record["last_seen_monotonic"], 100.0)
+        self.assertEqual(record["last_cpu_seconds"], 1.5)
+        self.assertEqual(record["sample_count"], 1)
+        self.assertTrue(record["duplicate_pid_in_sample"])
+        self.assertEqual(len(history), 1)
+
+    def test_pid_reuse_chain_and_full_bound_are_explicitly_truncated(self):
+        history = {}
+        for index in range(watch.MAX_FRONTEND_LIFETIMES + 10):
+            start = f"Sun Nov 22 10:{index // 60:02d}:{index % 60:02d} 2026"
+            watch.track_frontends(history, [self.frontend(start=start)], 100.0 + index)
+        self.assertEqual(len([key for key in history if key != "truncated"]), watch.MAX_FRONTEND_LIFETIMES)
+        self.assertTrue(history["truncated"])
+        summary = watch.final_frontend_history(history)
+        self.assertEqual(len(summary["records"]), watch.MAX_FINAL_FRONTEND_RECORDS)
+        self.assertEqual(summary["status"], "truncated")
+        self.assertGreater(summary["omitted_records"], watch.MAX_FRONTEND_LIFETIMES - watch.MAX_FINAL_FRONTEND_RECORDS)
+        self.assertLessEqual(watch.MAX_FINAL_JSON_BYTES, 16 * 1024)
+        self.assertLessEqual(watch.MAX_OUTPUT_BYTES, 64 * 1024)
+        self.assertEqual(watch.MAX_PROCESSES, 8)
 
     def test_activity_log_path_allowlist_does_not_copy_or_export_contents(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -206,8 +271,8 @@ class CompilerResourceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             result = subprocess.CompletedProcess([], 0,
-                "42 2 90.0 10000 1-02:03:04 01:02:03.50 /Toolchain/swift-frontend "
-                "-module-name Example -primary-file /private/source/Example.swift -o /tmp/Example.o", "")
+                "42 2 90.0 10000 1-02:03:04 01:02:03.50 Sun Nov 22 10:00:00 2026 "
+                "/Toolchain/swift-frontend -module-name Example -primary-file /private/source/Example.swift -o /tmp/Example.o", "")
             history = {}
             def runner(command, **kwargs):
                 if command[0] == "ps":
@@ -215,15 +280,48 @@ class CompilerResourceTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, "", "")
             record = watch.sample(root, "final", runner=runner,
                                   final=True, frontend_history=history, monotonic=lambda: 100.0)
-            self.assertEqual(record["swift_frontend_lifetimes"][0]["first_elapsed_seconds"], 93784.0)
-            self.assertEqual(record["swift_frontend_lifetimes"][0]["last_cpu_seconds"], 3723.5)
-            self.assertEqual(record["swift_frontend_lifetimes"][0]["identity"]["target_module"], "Example")
+            self.assertEqual(record["swift_frontend_lifetimes"]["records"][0]["first_elapsed_seconds"], 93784.0)
+            self.assertEqual(record["swift_frontend_lifetimes"]["records"][0]["last_cpu_seconds"], 3723.5)
+            self.assertEqual(record["swift_frontend_lifetimes"]["records"][0]["first_identity"]["target_module"], "Example")
             serialized = (root / "final.json").read_text()
             self.assertNotIn("/private", serialized)
             self.assertNotIn("/tmp", serialized)
             self.assertNotIn("args", serialized)
             self.assertNotIn("unavailable", record)
             self.assertEqual(record["xcactivitylogs"], [])
+
+    def test_atomic_final_size_budget_truncates_history_and_preserves_old_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            history = {}
+            for index in range(watch.MAX_FRONTEND_LIFETIMES):
+                entry = self.frontend(pid=index, start=f"Sun Nov 22 10:{index // 60:02d}:{index % 60:02d} 2026")
+                entry["target_module"] = "M" * 80
+                entry["primary_source"] = "S" * 128
+                entry["output"] = "O" * 128
+                watch.track_frontends(history, [entry], 100.0 + index)
+            old = {"previous": "complete evidence"}
+            root.joinpath("final.json").write_text(json.dumps(old))
+            result = watch.write_json(root, "final", {"swift_frontend_lifetimes": watch.final_frontend_history(history)})
+            data = root.joinpath("final.json").read_bytes()
+            self.assertLessEqual(len(data), watch.MAX_FINAL_JSON_BYTES)
+            self.assertLessEqual(len(result["swift_frontend_lifetimes"]["records"]), watch.MAX_FINAL_FRONTEND_RECORDS)
+            self.assertFalse(root.joinpath("final.pending").exists())
+            if result["swift_frontend_lifetimes"]["status"] == "truncated":
+                self.assertGreater(result["swift_frontend_lifetimes"]["omitted_records"], 0)
+            self.assertEqual(json.loads(data)["swift_frontend_lifetimes"]["status"],
+                             result["swift_frontend_lifetimes"]["status"])
+
+    def test_unserializable_final_input_fails_closed_before_atomic_replace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.joinpath("final.json").write_text('{"previous":"complete evidence"}\n')
+            result = watch.write_json(root, "final", {"unserializable": object()})
+            self.assertEqual(result["status"], "unavailable")
+            self.assertIn("byte budget", result["unavailable"])
+            self.assertEqual(json.loads(root.joinpath("final.json").read_text())["status"], "unavailable")
+            self.assertLessEqual(root.joinpath("final.json").stat().st_size, watch.MAX_FINAL_JSON_BYTES)
+            self.assertFalse(root.joinpath("final.pending").exists())
 
     def test_observer_deadline_accepts_both_lane_budgets_and_rejects_larger_values(self):
         self.assertEqual(watch.MAX_SECONDS, 3600)
