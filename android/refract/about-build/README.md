@@ -61,5 +61,6 @@ No iOS or HarmonyOS evidence is claimed.
 en/zh-Hans/ja, standard/2x text, and present/absent values. It asserts exact pixels, localized fallback semantics,
 absence of a leaked resource key and the unchanged handwritten production About row. Captures stay in build output or
 `-Dpersona.shots=<dir>`, never in the repository. These are Native JVM Compose comparisons, not a physical device,
-TalkBack, accessibility-service or performance result. They add bounded Gate B/C evidence only and leave Gates A–D
-and the separately unauthorized HarmonyOS destination open.
+TalkBack, accessibility-service or performance result. This local generation, Kotlin compilation and JVM comparison
+does not complete any part of Gates A–D, their required visual/device acceptance, or the separately unauthorized
+HarmonyOS destination. It must not be cited as a Gate B/C pass or a readiness decision.
