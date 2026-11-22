@@ -67,6 +67,7 @@ func TestOutboundPromiseSendBoundaries(t *testing.T) {
 	}{
 		{"default", "算完再同步", 24 * time.Hour}, // i18n-ignore: sent-message fixtures
 		{"later", "稍后给结果，2小时后。", 2 * time.Hour},
+		{"later_update", "稍后同步结果，2小时后。", 2 * time.Hour},
 		{"combined", "补完统一同步", 24 * time.Hour},
 		{"english", "I'll share the results within 3 hours.", 3 * time.Hour},
 		{"minutes", "We will post an update in 45 minutes.", 45 * time.Minute},
@@ -104,7 +105,7 @@ func TestOutboundPromiseSendBoundaries(t *testing.T) {
 }
 
 func TestOutboundPromiseIgnoresNonPromisesAndPrivateBotChat(t *testing.T) {
-	for _, text := range []string{"The results are ready.", "> 算完再同步", "```\n算完再同步\n```", "I will not share results later.", "不会同步"} { // i18n-ignore: message fixtures
+	for _, text := range []string{"The results are ready.", "> 算完再同步", "```\n算完再同步\n```", "I will not share results later.", "不会同步", "请稍后同步结果。", "不会稍后同步结果。"} { // i18n-ignore: message fixtures
 		st := &memStore{}
 		s, _, r, _ := outwardBot(t, st)
 		sendOutwardBot(t, s, r, text)

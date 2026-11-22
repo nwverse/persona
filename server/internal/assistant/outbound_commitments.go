@@ -73,7 +73,7 @@ func noteOutboundReadback(ctx context.Context, already bool) {
 
 var (
 	// i18n-ignore: literal outward message data, not user-interface copy.
-	outboundPromiseZH = lazyre.New(`(?:算完再同步|稍后给结果|补完统一同步|(?:我|我们)(?:会|将)(?:再)?(?:同步|给.{0,8}结果)|(?:^|[。！\n])\s*会同步)`)
+	outboundPromiseZH = lazyre.New(`(?:算完再同步|稍后给结果|补完统一同步|(?:我|我们)(?:会|将)(?:再)?(?:同步|给.{0,8}结果)|(?:^|[。！\n])\s*(?:会同步|稍后同步))`)
 	outboundPromiseEN = lazyre.New(`(?i)\b(?:i|we)(?:'ll| will)\s+(?:send|share|post|provide|give|sync|update|follow up)\b.{0,100}\b(?:later|results?|update|tomorrow|within|in [0-9])\b`)
 	outboundDuration  = lazyre.New(`(?i)\b(?:in|within)\s+([0-9]+)\s*(minutes?|hours?|days?|m|h|d)\b`)
 	// i18n-ignore: literal deadline data.
