@@ -422,6 +422,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	var res struct {
 		SessionID string `json:"session_id"`
 	}
+	if p.GuestTools == nil {
+		s.putCacheKeepalive(ctx, machine, "", main, params)
+	}
 	if main && p.Space == "" && p.GuestTools == nil {
 		cfg := s.settings(ctx)
 		ctx = context.WithValue(ctx, supervisionStartup{}, cfg.MainSupervisesOwnTasks != nil && *cfg.MainSupervisesOwnTasks)
@@ -1302,6 +1305,7 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	if p["is_main"] == true {
 		p["idle_compaction"] = s.idleCompactionPolicy(ctx)
 	}
+	s.putCacheKeepalive(ctx, machine, sid, p["is_main"] == true, p)
 	putMainCompactWindow(cfg, p)
 	if handled, err := s.logicalSendModel(ctx, machine, sid, p); handled {
 		return err
