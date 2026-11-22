@@ -148,6 +148,19 @@ describe("the Main chat default's agent-kind mismatch", () => {
     expect(launcherRead.calls.every((call) => call.mid === "hub" && call.again)).toBe(true);
   });
 
+  it("keeps that trailing refresh when the conversation starts working before the pending read settles", async () => {
+    launcherRead.hold = true;
+    await show(session({ rev: 1 }));
+    await show(session({ rev: 2 }));
+    expect(launcherRead.calls).toHaveLength(2);
+    // a new turn marks the conversation working before its first write moves the revision
+    await show(session({ rev: 2, status: "working", state: "working" }));
+    const release = launcherRead.release!;
+    await act(async () => { release(); await flush(); });
+    expect(launcherRead.calls).toHaveLength(3);
+    expect(launcherRead.calls.every((call) => call.mid === "hub" && call.again)).toBe(true);
+  });
+
   it("does not add a trailing refresh when the old request settles before the effect", async () => {
     launcherRead.hold = true;
     await show(session({ rev: 1 }));

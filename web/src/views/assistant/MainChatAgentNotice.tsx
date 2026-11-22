@@ -22,7 +22,7 @@ export function MainChatAgentNotice({ session, isMain, onNewMain }: { session: S
   // A hub-side default change can arrive while this page stays open. Follow the pill: a pushed session revision
   // re-reads the launchers once per turn (useRevisionReread), and useModelLists redraws this notice with the answer so
   // a stale mismatch cannot linger.
-  useRevisionReread(session, () => {
+  useRevisionReread(session, Boolean(isMain && mid), () => {
     if (!isMain || !mid) return;
     const read = readAssistantLaunchers(mid, { again: true });
     // Only the exact request seen at render can have preceded this revision. If it already settled, this call returned

@@ -314,7 +314,7 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session, ma
   // A long-open page must still show the effective Main chat model after a hub-side change (#6542): a push that moves
   // this conversation's revision re-reads the picker, so the pill can't keep an old model the hub no longer resolves.
   // Once per turn: the revision moves with every write while the turn streams (useRevisionReread).
-  useRevisionReread(session, () => {
+  useRevisionReread(session, Boolean(mid), () => {
     if (!mid) return;
     void readAssistantLaunchers(mid, { again: true });
     if (isMain) void readMainDefault(mid, { again: true });
