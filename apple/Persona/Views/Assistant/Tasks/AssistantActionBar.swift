@@ -166,8 +166,26 @@ nonisolated enum AssistantEntries {
 
     /// It waits for the user's review while nothing of it runs or asks (the web's `awaitsReview`): rank 2.
     static func rank(_ todo: TodoItem, _ status: Status) -> Double {
+        // TaskState has no interrupted / usage-limit cases: keep the raw status's rest semantics instead of letting
+        // their display-only follow-up mapping reclassify an active error as accepted or awaiting review (#5732).
         let resting = status == .followUp || status == .unread || status == .notStarted
-        return resting && (todo.reviewState == .pendingReview || openAsk(todo) != nil) ? 2 : status.rank
+        if resting || status == .usageLimit, todo.acceptedAtRest(status.taskState) { return 8 }
+        if todo.waitsForOwner { return 0 }
+        if resting, todo.deliveredAwaitingReview(status.taskState) { return 2 }
+        return status.rank
+    }
+
+    /// Whether a Finished row is new. Seen clears that marker without filing a delivery that still awaits review (#5732).
+    static func showsJustFinished(_ todo: TodoItem, _ triage: TodoTriage, now: Date) -> Bool {
+        let completedAt: Date?
+        switch triage.rule {
+        case .closed: completedAt = todo.doneAt
+        case .accepted: completedAt = todo.supervision?.latestReview?.at
+        case .finishedUnseen: completedAt = TodoTriageLogic.finishedAt(todo, triage)
+        default: completedAt = nil
+        }
+        guard let completedAt else { return false }
+        return now.timeIntervalSince(completedAt) < 24 * 3600 && (todo.seenAt.map { $0 < completedAt } ?? true)
     }
 
     /// How long a task's review is its supervisor's alone (docs/assistant/unified-entry.md "Needs you and In progress"):
@@ -183,12 +201,14 @@ nonisolated enum AssistantEntries {
         return now.timeIntervalSince(since) < reviewOverdueAfter
     }
 
-    /// The task waits for the user's decision or review (the web's `taskAwaitsDecision`): an open ask (a decided one only
-    /// while the task is open), or its supervisor's `needs_user` on an open task, or a `pending_review` that is the
-    /// owner's: one waiting an hour or more, or one the hub gives no start for. A younger review is its supervisor's.
+    /// The task waits for the user's decision or review (the web's `taskAwaitsDecision`): an open task's ask, or its
+    /// supervisor's `needs_user` on an open task, or a `pending_review` that is the owner's: one waiting an hour or more,
+    /// or one the hub gives no start for. A younger review is its supervisor's. A finished task never waits, whatever ask
+    /// it still carries: the hub's To-dos triage files it with the finished ones, and its row here has nothing to answer
+    /// (`TodoItem.openAsk` is nil once it is done), so it would keep the badge up for good (#12974).
     static func awaitsDecision(_ todo: TodoItem, now: Date) -> Bool {
-        if let ask = openAsk(todo) { return !(todo.doneAt != nil && ask.outcome == "decide") }
         guard todo.doneAt == nil else { return false }
+        if openAsk(todo) != nil { return true }
         let state = todo.supervision?.state
         return state == "user_check" || state == "needs_user" || (state == "pending_review" && !supervisorReviewing(todo, now: now))
     }
@@ -301,7 +321,7 @@ nonisolated enum AssistantEntries {
             else if triage.section == .justDone || triage.section == .done, status != .failed, !(todo.origin ?? "").isEmpty {
                 let ended = TodoTriageLogic.finishedAt(todo, triage)
                 if ended > .distantPast, now.timeIntervalSince(ended) < TodoTriageLogic.justDone {
-                    finished.append(Finished(row: row, fresh: triage.section == .justDone, at: ended))
+                    finished.append(Finished(row: row, fresh: showsJustFinished(todo, triage, now: now), at: ended))
                 }
             }
         }
@@ -1061,7 +1081,7 @@ struct AssistantActionBar: View {
         guard AppModel.shared.hubFeatures.contains(TodoSeen.feature) else { return }
         // the task's own Agents, as the row has them: the bar never reads every session (AllSessionsReadersTests)
         let t = TodoTriageLogic.triage(todo, lookup: TodosLogic.makeSessionLookup(store.sessions(todo)), now: .now)
-        guard t.section == .justDone else { return }
+        guard AssistantEntries.showsJustFinished(todo, t, now: .now) else { return }
         Task { try? await TodoStore.shared.setSeen(id: todo.id, true, after: t.last) }
     }
 

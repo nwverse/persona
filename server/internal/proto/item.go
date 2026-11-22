@@ -413,6 +413,8 @@ type MessageSource struct {
 	// Push is a scheduled input's delivery mode, persisted with the input so a queued user message cannot change it.
 	// "asked" suppresses that run's normal completion; absent keeps the existing every-answer behavior.
 	Push string `json:"push,omitempty"`
+	// ScheduleRunID correlates a reference-only prompt with the run that sent it.
+	ScheduleRunID string `json:"schedule_run_id,omitempty"`
 }
 
 const (

@@ -371,18 +371,30 @@ class OutboxMessageSender(
      * transport outcome, or null while sending or when cancellation leaves it unknown; only explicit acceptance is
      * authoritative hand-off delivery. In particular, a Sent overlay can instead carry an HTTP delivered=yes hint.
      */
-    suspend fun beginComposerRetry(id: String, opId: String): Unit = lifecycle.withLock {
-        beginComposerRetryLocked(id, opId)
+    suspend fun beginComposerRetry(id: String, opId: String) {
+        // The claim must precede the lock: a suspended automatic write checks it after committing and then yields.
+        // Once that write finishes, this retry re-reads and durably binds its own operation before any HTTP call.
+        check(claimComposer(id)) { "A composer retry is already in flight" }
+        try {
+            lifecycle.withLock { beginComposerRetryLocked(id, opId) }
+        } catch (error: Throwable) {
+            releaseComposer(id)
+            throw error
+        }
     }
 
-    /** Under [lifecycle]. A legacy record start uses this same path without re-entering the mutex. */
+    /** Under [lifecycle], with this composer claimed by the HTTP begin callback or the legacy record callback below. */
     private suspend fun beginComposerRetryLocked(id: String, opId: String) {
         check(job.isActive) { "Pairing scope is closed" }
-        check(claimComposer(id)) { "A composer retry is already in flight" }
+        check(composerActive(id) || claimComposer(id)) { "A composer retry is already in flight" }
         val entry = store.entries.first().firstOrNull { it.clientMessageId == id } ?: error("Message state changed")
         // An automatic attempt may have moved the refused row to Sending but not finished yet. Bind this manual
         // attempt before its HTTP call, so that old attempt cannot start another under its own operation id.
-        val moved = store.transition(id, setOf(OutboxState.Refused, OutboxState.Sending), OutboxState.Sending, error = null, opId = opId)
+        // An automatic write may commit Unknown after this claim was published but before it can yield the lock.
+        // This already-claimed retry owns the next state: restore its active Sending row and bind its own operation.
+        // Never start over any other state, particularly a transcript's Shown or a completion's Sent result.
+        val from = setOf(OutboxState.Refused, OutboxState.Sending, OutboxState.Unknown)
+        val moved = store.transition(id, from, OutboxState.Sending, error = null, opId = opId)
         if (!moved) {
             val current = store.entries.first().firstOrNull { it.clientMessageId == id }
             check(current?.state == OutboxState.Sending && current.operationId == opId) { "Message state changed" }
@@ -636,9 +648,22 @@ class OutboxMessageSender(
         }
     }
 
-    /** An automatic transition never waits for a coroutine lock; its stale result is discarded if the composer claimed meanwhile. */
-    private suspend fun transitionAutomatic(id: String, from: Set<OutboxState>, to: OutboxState): Boolean =
-        !composerActive(id) && store.transition(id, from, to) && !composerActive(id)
+    /** Only the transition to Unknown owns rollback if a composer claims while its suspended write commits. */
+    private suspend fun transitionAutomatic(id: String, from: Set<OutboxState>, to: OutboxState): Boolean = lifecycle.withLock {
+        if (composerActive(id)) return@withLock false
+        if (!store.transition(id, from, to)) return@withLock false
+        if (!composerActive(id)) return@withLock true
+        if (to == OutboxState.Unknown) {
+            // The manual claim is already visible but its durable start is queued behind this lock. Undo only this
+            // write for a still-active Sending row, retaining its operation id. A composer that already acquired
+            // lifecycle may have sent or shown the message; that newer result must not regress to Sending.
+            val current = store.entries.first().firstOrNull { it.clientMessageId == id }
+            if (current?.state == OutboxState.Sending || current?.state == OutboxState.Unknown) {
+                store.transition(id, setOf(current.state), OutboxState.Sending, current.error, current.operationId)
+            }
+        }
+        false
+    }
 
     /**
      * Records [result] for the message's current operation id. When the hub said nothing was delivered, that id is
@@ -665,7 +690,6 @@ class OutboxMessageSender(
             // that older attempt put an already settled visible message back into Sending.
             if (current.state in settled) return current.state
         }
-        println("outbox-settle: id=$id entryState=${entry.state} nextState=$state result=$result")
         val moved = if ((result as? MessageTransportResult.HubError)?.delivered == "none") {
             store.transition(id, from, state, error, newOperationId())
         } else store.transition(id, from, state, error)

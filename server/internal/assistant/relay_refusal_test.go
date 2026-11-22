@@ -531,11 +531,16 @@ func TestQuietNoticeRefusedForGoodSendsItsPush(t *testing.T) {
 			lark := proto.Session{SessionID: "lark1", MachineID: "server", Assistant: true, Status: proto.StatusWorking}
 			f.setSessions("server", main, lark)
 			s.markReporter(ctx, "server", "lark1")
-			if _, err := s.runTool(ctx, "server", "lark1", "agent_start",
-				json.RawMessage(`{"machine":"box","cwd":"/code/app","prompt":"看看 CI"}`)); err != nil {
+			// Build the legacy unsupervised quiet task directly: new agent_start work is main-supervised (#5732),
+			// while this test exercises the refusal fallback for an already-existing legacy notification route.
+			todo, err := s.newTodo(ctx, "看看 CI", "看看 CI", "lark1", "", true)
+			if err != nil {
 				t.Fatal(err)
 			}
-			todo := onlyTodo(s)
+			if err := s.linkTodoAgent(ctx, todo.ID, "box", "s1", todo.Title, "/code/app", ""); err != nil {
+				t.Fatal(err)
+			}
+			todo = onlyTodo(s)
 			if !todo.Quiet || todo.Supervision != nil || todo.Origin != "lark1" {
 				t.Fatalf("not a quiet task told in lark1: %+v", todo)
 			}

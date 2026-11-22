@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -27,6 +28,9 @@ import (
 
 // marketStale is how old an index may be before the catalog reads it again (in the background).
 const marketStale = 6 * time.Hour
+
+// marketCAFileMost bounds a configured CA bundle so a bad path cannot turn into an unbounded read.
+const marketCAFileMost = 1 << 20
 
 // marketSelfRefreshWindow is shared by every extension installed from one market: they share the market's upstream
 // token and API quota, so their accepted self-refresh requests share one window too.
@@ -372,9 +376,30 @@ func (h *Manager) marketClient() (*http.Client, error) {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	if h.cfg != nil && h.cfg.ExtensionMarket.CAFile != "" {
 		caFile := h.cfg.ExtensionMarket.CAFile
-		pemBytes, err := os.ReadFile(caFile)
+		info, err := os.Stat(caFile)
 		if err != nil {
 			return nil, fmt.Errorf("extension_market.ca_file: read %q: %w", caFile, err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("extension_market.ca_file: read %q: not a regular file", caFile)
+		}
+		if info.Size() > marketCAFileMost {
+			return nil, fmt.Errorf("extension_market.ca_file: read %q: %d bytes exceeds %d-byte limit", caFile, info.Size(), marketCAFileMost)
+		}
+		f, err := os.Open(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("extension_market.ca_file: read %q: %w", caFile, err)
+		}
+		pemBytes, readErr := io.ReadAll(io.LimitReader(f, marketCAFileMost+1))
+		closeErr := f.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("extension_market.ca_file: read %q: %w", caFile, readErr)
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("extension_market.ca_file: read %q: %w", caFile, closeErr)
+		}
+		if len(pemBytes) > marketCAFileMost {
+			return nil, fmt.Errorf("extension_market.ca_file: read %q: %d bytes exceeds %d-byte limit", caFile, len(pemBytes), marketCAFileMost)
 		}
 		roots, err := x509.SystemCertPool()
 		if err != nil {

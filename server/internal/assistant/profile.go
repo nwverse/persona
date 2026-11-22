@@ -145,6 +145,9 @@ type Settings struct {
 	// InboxSignals: new Inbox messages the judge links to a supervised task reach its supervisor as the signal inbox
 	// (#4293, supervise_inbox.go). nil is off (the default): each one is a supervisor turn.
 	InboxSignals *bool `json:"inbox_signals,omitempty"`
+	// InboxTodoForward: deterministically forward PR/Issue Inbox items to the bound open to-do's Agent without LLM
+	// calls (#12492, inbox_forward.go). nil is off (the default): zero automatic forwards until opted in.
+	InboxTodoForward *bool `json:"inbox_todo_forward,omitempty"`
 	// PREventsRouteToAgent: when true, new actionable PR events observed by pr_status on an open to-do (merge conflict,
 	// current-head CI failure, or current-head changes_requested / actionable review) route directly to the bound Agent
 	// (send, queue, or non-user resume), falling back to supervisor wakes when unavailable (#12607, pr_status_route.go).
@@ -674,6 +677,7 @@ func (s *Service) leadSessions(ctx context.Context, v Settings) []SessionRef {
 func (s *Service) settingsChanged(ctx context.Context) {
 	s.transcriptionSettingsChanged(ctx) // only another contribution chosen drops the readiness answer
 	s.ProfileChanged(ctx)
+	s.retryOwnerWaits(ctx) // a restored main/conversation can deliver an explicitly pending owner push
 	s.revalidateFailedStartDeferrals(ctx)
 	s.publish(ctx)
 }
@@ -762,6 +766,8 @@ type assistantView struct {
 	AgentAutoNamingIntervalHours int  `json:"agent_auto_naming_interval_hours"`
 	// InboxSignals is in effect, like DoneNeedsDelivery.
 	InboxSignals bool `json:"inbox_signals"`
+	// InboxTodoForward is in effect, like InboxSignals (#12492).
+	InboxTodoForward bool `json:"inbox_todo_forward"`
 	// PREventsRouteToAgent is in effect, like InboxSignals (false by default).
 	PREventsRouteToAgent bool `json:"pr_events_route_to_agent"`
 	// NextSuggestions is in effect, like DoneNeedsDelivery.
@@ -815,6 +821,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		AgentAutoNamingMax:           agentNamingLimit(v),
 		AgentAutoNamingIntervalHours: agentNamingInterval(v),
 		InboxSignals:                 v.InboxSignals != nil && *v.InboxSignals,
+		InboxTodoForward:             v.InboxTodoForward != nil && *v.InboxTodoForward,
 		PREventsRouteToAgent:         v.PREventsRouteToAgent != nil && *v.PREventsRouteToAgent,
 		MainSupervisesOwnTasks:       !s.backgroundOn(v),
 		SupervisionBatchMinutes:      supervisionBatchMinutesOf(v),
@@ -971,7 +978,7 @@ func (s *Service) warm(launcher string) {
 	// The spare is adopted only by a new conversation in the same profile (node/assistant_spare.go), and a new one is
 	// started in the main chat's, on a carried pick too (startMain, startOn).
 	profiled := s.withNewConversationProfile(ctx, machine, params)
-	ctx = context.WithValue(ctx, supervisionStartup{}, cfg.MainSupervisesOwnTasks != nil && *cfg.MainSupervisesOwnTasks)
+	ctx = context.WithValue(ctx, supervisionStartup{}, true)
 	err = s.call(ctx, machine, DeviceAssistantWarm, params, nil)
 	if profiled && (nodeOutdated(err) || profileRefused(err)) { // as startOn: an old node, or another agent than Claude Code
 		delete(params, "config_dir")

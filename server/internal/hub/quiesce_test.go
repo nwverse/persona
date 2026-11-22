@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -281,7 +282,7 @@ func TestDevelopmentPauseSkipsAndWaitsForDeviceTokenTouch(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("authenticated GET during pause -> %d, want 200", w.Code)
 	}
-	time.Sleep(25 * time.Millisecond)
+	waitNoWriteInFlight(t, h)
 	if n := store.touches.Load(); n != 0 {
 		t.Fatalf("TouchDeviceToken ran %d times while paused", n)
 	}
@@ -293,7 +294,7 @@ func TestDevelopmentPauseSkipsAndWaitsForDeviceTokenTouch(t *testing.T) {
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("authenticated POST during pause -> %d, want 503", w.Code)
 	}
-	time.Sleep(25 * time.Millisecond)
+	waitNoWriteInFlight(t, h)
 	if n := store.touches.Load(); n != 0 {
 		t.Fatalf("TouchDeviceToken ran %d times after refused POST while paused", n)
 	}
@@ -375,12 +376,14 @@ func TestDevelopmentPauseDefersTimedBackgroundWriters(t *testing.T) {
 		if err := h.quiesce.pause(ctx); err != nil {
 			t.Fatal(err)
 		}
+		var refused atomic.Int32
+		h.quiesce.testOnPauseDefer = func() { refused.Add(1) } // only the lock test dispatcher writes in this hub
 		stop, err := h.startLockTests(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer stop()
-		time.Sleep(40 * time.Millisecond)
+		waitFor(t, "the due lock test refused while paused", func() bool { return refused.Load() >= 1 })
 		if n := store.lockTestAttempts.Load(); n != 0 {
 			t.Fatalf("AttemptLockTest ran %d times while paused", n)
 		}
@@ -408,7 +411,11 @@ func TestDevelopmentPauseDefersTimedBackgroundWriters(t *testing.T) {
 			t.Fatal(err)
 		}
 		h.machineEntriesChanged()
-		time.Sleep(40 * time.Millisecond)
+		waitFor(t, "the machine entries write deferred while paused", func() bool {
+			h.devices.mu.Lock()
+			defer h.devices.mu.Unlock()
+			return h.devices.reportedDeferred
+		})
 		if store.settingWrites(machineEntriesKey) != 0 {
 			t.Fatal("machine entries wrote to store while paused")
 		}
@@ -469,7 +476,11 @@ func TestDevelopmentPauseDefersTimedBackgroundWriters(t *testing.T) {
 		if err := h.startClientOps(ctx); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(40 * time.Millisecond)
+		waitFor(t, "the client ops cleanup deferred while paused", func() bool {
+			h.clientOps.mu.Lock()
+			defer h.clientOps.mu.Unlock()
+			return h.clientOps.deferred
+		})
 		if n := store.clientOpCleanups.Load(); n != 0 {
 			t.Fatalf("CleanupClientOps ran %d times while paused", n)
 		}
@@ -504,7 +515,16 @@ func TestDevelopmentPauseDefersTimedBackgroundWriters(t *testing.T) {
 		if _, err := h.push.web.key(context.Background()); err == nil {
 			t.Fatal("webpush key creation succeeded while paused")
 		}
-		time.Sleep(40 * time.Millisecond)
+		// Each pass of the loop tries reconcileDevices first, whose refusal marks maintenance deferred; the held-push
+		// writer stops when its write is refused.
+		waitFor(t, "push maintenance and the held-push writer deferred while paused", func() bool {
+			h.push.mu.Lock()
+			deferred := h.push.maintenanceDeferred
+			h.push.mu.Unlock()
+			h.push.gradingMu.Lock()
+			defer h.push.gradingMu.Unlock()
+			return deferred && !h.push.gradingWriting
+		})
 		if n := store.pushReconciles.Load(); n != 0 {
 			t.Fatalf("ReconcilePushDevices ran %d times while paused", n)
 		}
@@ -785,12 +805,7 @@ func TestExtReportSaveResumeInterleaving(t *testing.T) {
 		}
 		// Start resume while saveExtReports has observed paused==true and has
 		// not yet restored savePending / cleared saveRunning.
-		resumeDone := make(chan struct{})
-		go func() {
-			h.resumeDevelopmentWriters()
-			close(resumeDone)
-		}()
-		time.Sleep(20 * time.Millisecond)
+		resumeDone := startResume(t, h)
 		close(release)
 		select {
 		case <-resumeDone:
@@ -848,12 +863,7 @@ func TestDeviceSessionFinishResumeInterleavingAndOrder(t *testing.T) {
 
 			// Resume races right at the interleaving point, and a second session
 			// ends right after resume starts.
-			resumeDone := make(chan struct{})
-			go func() {
-				h.resumeDevelopmentWriters()
-				close(resumeDone)
-			}()
-			time.Sleep(20 * time.Millisecond)
+			resumeDone := startResume(t, h)
 			close(release)
 			select {
 			case <-finish1Done:
@@ -1761,12 +1771,7 @@ func TestWebPushDefersFirstKeyCreationAndDispatchUntilResume(t *testing.T) {
 				case <-time.After(time.Second):
 					t.Fatal("webpush dispatch did not enter paused beginOrDefer")
 				}
-				resumeDone := make(chan struct{})
-				go func() {
-					h.resumeDevelopmentWriters()
-					close(resumeDone)
-				}()
-				time.Sleep(20 * time.Millisecond)
+				resumeDone := startResume(t, h)
 				close(release)
 				select {
 				case <-resumeDone:
@@ -2459,4 +2464,67 @@ func TestLiveActivityDeferredHoldCannotOverwriteNewerLift(t *testing.T) {
 			t.Fatalf("final heldUntil = %s, want %s", finalDue, wantDue)
 		}
 	})
+}
+
+// waitNoWriteInFlight waits until no write holds a quiescer turn. A request starts its async write (the token touch)
+// only under a turn it takes before it answers, so once none is in flight, any write the request started has run.
+func waitNoWriteInFlight(t *testing.T, h *Hub) {
+	t.Helper()
+	waitFor(t, "no write in flight", func() bool {
+		h.quiesce.mu.Lock()
+		defer h.quiesce.mu.Unlock()
+		return h.quiesce.inflight == 0
+	})
+}
+
+// startResume runs resumeDevelopmentWriters on a goroutine of its own and returns once that goroutine has gone as far
+// as it can while the test holds a writer: it returned, or it waits on a lock inside resumeDevelopmentWriters (the
+// quiescer's, which the held writer keeps). That is the interleaving the race tests exercise.
+func startResume(t *testing.T, h *Hub) <-chan struct{} {
+	t.Helper()
+	done := make(chan struct{})
+	self := make(chan string, 1)
+	go func() {
+		self <- goroutineID()
+		h.resumeDevelopmentWriters()
+		close(done)
+	}()
+	id := <-self
+	waitFor(t, "resume to return or wait on the held writer", func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+		}
+		return goroutineWaitsOnLockIn(id, "resumeDevelopmentWriters")
+	})
+	return done
+}
+
+// goroutineID is the calling goroutine's "goroutine N" as its stack trace names it.
+func goroutineID() string {
+	buf := make([]byte, 64)
+	header, _, _ := strings.Cut(string(buf[:runtime.Stack(buf, false)]), " [")
+	return header
+}
+
+// goroutineWaitsOnLockIn reports whether goroutine id is parked on a mutex (or a semaphore) with fn on its stack.
+func goroutineWaitsOnLockIn(id, fn string) bool {
+	buf := make([]byte, 1<<16)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		header, stack, _ := strings.Cut(g, "\n")
+		if !strings.HasPrefix(header, id+" [") || !strings.Contains(stack, fn) {
+			continue
+		}
+		return strings.Contains(header, "Mutex") || strings.Contains(header, "semacquire")
+	}
+	return false
 }
