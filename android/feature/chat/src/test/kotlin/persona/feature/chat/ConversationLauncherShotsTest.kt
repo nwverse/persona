@@ -114,8 +114,8 @@ class ConversationLauncherShotsTest {
         rule.waitUntil(5_000) { rule.onAllNodes(androidx.compose.ui.test.hasText("Default: claude")).fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithText("Default: claude").performClick()
         rule.waitUntil(5_000) { rule.onAllNodes(androidx.compose.ui.test.hasText("Opus")).fetchSemanticsNodes().isNotEmpty() }
-        assertEquals(listOf("runtime", "codex-gw", "team-api"), sharedCandidates.map { it.name })
-        assertEquals(sharedAssistantNames, listOf("runtime", "team-api"))
+        assertEquals(listOf("runtime", "codex-gw", "team-api"), sharedAssistantNames)
+        // A main chat already on Claude keeps the same-engine Team API, not the other-engine Codex provider.
         rule.onNodeWithText("runtime").assertExists()
         rule.onNodeWithText("team-api", substring = true).assertExists()
         rule.onNodeWithText("codex-gw").assertDoesNotExist()

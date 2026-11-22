@@ -90,6 +90,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.android == 'true'
     uses: ./.github/workflows/android-test.yml
+    with:
+      commit: ${{ github.sha }}
   apple:
     name: iOS and Watch
     needs: changes
