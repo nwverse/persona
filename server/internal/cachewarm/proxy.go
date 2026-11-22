@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/osproc"
 )
 
 const bodyMost = 32 << 20
@@ -60,7 +61,7 @@ func New(session, upstream string, logf func(string, ...any)) (*Proxy, error) {
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, &url.Error{Op: "cache proxy", URL: "", Err: errInvalidUpstream{}}
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := osproc.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
 	}
