@@ -225,6 +225,17 @@ func (h *Hub) AssistantDataStatus(ctx context.Context) (wire.AssistantDataStatus
 	return callHub[wire.AssistantDataStatusResult](ctx, h, "assistant.data_status", wire.AssistantDataStatusParams{})
 }
 
+// BrowserMachines lists computers that have a browser backend enabled (permission browser.run; #12866).
+func (h *Hub) BrowserMachines(ctx context.Context, p wire.BrowserMachinesParams) (wire.BrowserMachinesResult, error) {
+	return callHub[wire.BrowserMachinesResult](ctx, h, "browser.machines", p)
+}
+
+// BrowserRun runs a script inside an extension-isolated browser task space on a paired computer (permission
+// browser.run; #12866).
+func (h *Hub) BrowserRun(ctx context.Context, p wire.BrowserRunParams) (wire.BrowserRunResult, error) {
+	return callHub[wire.BrowserRunResult](ctx, h, "browser.run", p)
+}
+
 func callHub[R any](ctx context.Context, h *Hub, method string, params any) (R, error) {
 	var r R
 	err := h.Call(ctx, method, params, &r)

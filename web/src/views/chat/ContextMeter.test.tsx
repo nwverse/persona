@@ -58,4 +58,40 @@ describe("ContextMeter", () => {
     expect(html).not.toContain("opus");
     expect(renderToStaticMarkup(<ContextMeter session={{ ...s, context_window: undefined }} compact />)).toBe("");
   });
+  it("shows a compact token pill when context window is unknown but item token usage exists", () => {
+    const html = renderToStaticMarkup(
+      <ContextMeter
+        session={{ ...s, context_tokens: undefined, context_window: undefined, assistant: true }}
+        items={[{ id: "1", seq: 1, role: "assistant", kind: "text", usage: [{ in: 2500, out: 1500 }] }]}
+        assistant
+      />,
+    );
+    expect(html).toContain("4.0k tok");
+    expect(html).not.toContain("progressbar");
+  });
+  it("deduplicates subagent reports by per-field maxima so the pill total matches aggregateSessionTokens", () => {
+    const html = renderToStaticMarkup(
+      <ContextMeter
+        session={{ ...s, context_tokens: undefined, context_window: undefined }}
+        items={[
+          {
+            id: "1",
+            seq: 1,
+            role: "assistant",
+            kind: "text",
+            usage: [{ id: "sub-1", model: "anthropic/claude-opus-4-5", in: 1200, out: 400 }],
+          },
+          {
+            id: "2",
+            seq: 2,
+            role: "assistant",
+            kind: "text",
+            usage: [{ id: "sub-1", model: "claude-opus-4-5-20250929", in: 900, out: 700 }],
+          },
+        ]}
+      />,
+    );
+    // max(1200, 900) + max(400, 700) = 1900 -> 1.9k tok (not max(1600, 1600) = 1.6k tok)
+    expect(html).toContain("1.9k tok");
+  });
 });

@@ -104,9 +104,11 @@ func TestAccountExhaustionCancelsAlreadyQueuedContinuation(t *testing.T) {
 	}
 }
 
-// Main-chat, leader and background-supervision conversations are Assistant
-// sessions. Their continuation re-resolves the configured launcher and model,
-// so the coding-Agent account-pool budget must not change their behavior.
+// All Assistant conversations are exempt: main chat, leader and
+// background-supervision conversations, side chats, scheduled-task and health
+// chats, and meeting rooms. This fixture intentionally has none of the three
+// protected roles, so it pins the wider exemption. Task-leader Agents are
+// coding Agents and remain subject to the budget.
 func TestAssistantAccountExhaustionStillAutoContinues(t *testing.T) {
 	s, f := transientService(t)
 	c := apiErrorTurn("s1", "API Error: 503 no eligible upstream account")

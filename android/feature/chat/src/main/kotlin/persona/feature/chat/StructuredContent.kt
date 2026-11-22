@@ -64,7 +64,7 @@ internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? =
     // Forward (#3901) takes the transcript's text and who wrote it when that is another session (a relay, its "From" card).
     val target = MessageTarget(item.id, model.plain, user, model.editText(), raw = text,
         from = item.from?.takeIf { it.isNotBlank() } ?: (model.parts.singleOrNull() as? MessagePart.Source)?.name?.takeIf { it.isNotBlank() },
-        time = item.ts, cut = item.id.takeIf { cut })
+        time = item.ts, cut = item.id.takeIf { cut }, starItem = item)
     PickableMessageColumn(target, Modifier.fillMaxWidth().messageMenu(target)) {
         MessageForwardContexts(model.contexts, "${item.id}/contexts", uri::openUri, alignEnd = user)
         AttachedFileCards(model.attached, alignEnd = user)
@@ -78,6 +78,7 @@ internal fun MessageContent(item: Item, user: Boolean, update: ChatTextUpdate? =
                 }
             }
         }
+        StarredChatMark(item)
         if (cut) FullTextButton(item) { whole = it } else ReaderEntry(text)
         if (update?.streaming == true) StreamingCursor()
         // An answer's documents as cards with their first page (iOS #1543), the rest as chips.
@@ -177,7 +178,8 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
             models.joinToString("\n\n") { it.editText() }.trim(), pending, items.lastOrNull()?.ts,
             raw = texts.joinToString("\n\n"),
             from = items.firstNotNullOfOrNull { it.from?.takeIf(String::isNotBlank) },
-            cut = items.singleOrNull()?.takeIf { it.fullSize != null && updates[it.id] == null }?.id)
+            cut = items.singleOrNull()?.takeIf { it.fullSize != null && updates[it.id] == null }?.id,
+            starItem = items.singleOrNull())
     }
     val timestamp = items.lastOrNull()?.ts
     val locale = currentLocale
@@ -186,12 +188,18 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
     val channels = LocalChannels.current
     val source = remember(items, channels) { items.firstNotNullOfOrNull { ChannelSources.of(it.clientMsgId, channels) } }
     val sourceLine: (@Composable () -> Unit)? = if (source != null) ({ JChannelSource(source) }) else openingSource
-    val footer: (@Composable () -> Unit)? = if (time == null && files.isEmpty() && sourceLine == null) null else ({
+    val starredUserItem = items.singleOrNull()
+    val hasStarMark = starredUserItem != null &&
+        LocalStarredChatContext.current?.source(starredUserItem)?.let { starSource ->
+            LocalStarredMessagesStore.current?.state?.collectAsState()?.value?.mark(starSource) != null
+        } == true
+    val footer: (@Composable () -> Unit)? = if (time == null && files.isEmpty() && sourceLine == null && !hasStarMark) null else ({
         Column(horizontalAlignment = Alignment.End) {
             FileChips(files, alignEnd = true)
-            if (sourceLine == null) time?.let { Text(it, style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) }
+            if (sourceLine == null && !hasStarMark) time?.let { Text(it, style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) }
             else Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
-                sourceLine()
+                sourceLine?.invoke()
+                if (hasStarMark) StarredChatMark(starredUserItem)
                 time?.let { Text(it, style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) }
             }
         }
@@ -220,10 +228,20 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
                 AttachedPhotoRow(photos)
                 if (parts.isNotEmpty()) Spacer(Modifier.height(Tokens.Space.s))
             }
+            val foldText = remember(parts, streaming) {
+                if (streaming || parts.isEmpty() || parts.any { it !is MessagePart.Text }) ""
+                else parts.filterIsInstance<MessagePart.Text>().joinToString("\n\n") { it.text }
+            }
+            val foldKey = items.firstOrNull()?.id?.takeIf { it.isNotBlank() && foldText.isNotEmpty() }
             SelectableWords(target.takeIf { menu }) {
-                Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                    MessageParts(parts, true, items.firstOrNull()?.id.orEmpty(), onLastLine)
-                    if (streaming) StreamingCursor()
+                BubbleFold(foldText, foldKey, own = own) { shownText ->
+                    val displayParts = remember(parts, foldText, shownText) {
+                        if (shownText === foldText) parts else listOf(MessagePart.Text(shownText))
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                        MessageParts(displayParts, true, items.firstOrNull()?.id.orEmpty(), onLastLine)
+                        if (streaming) StreamingCursor()
+                    }
                 }
             }
         } else if (openingSource != null) Box(Modifier.align(Alignment.End)) { footer?.invoke() }

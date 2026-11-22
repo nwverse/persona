@@ -704,9 +704,8 @@ struct NewChatView: View {
                 if prompt.isEmpty { prompt = initialPrompt }
                 if !forwardedAttached {
                     forwardedAttached = true
-                    for img in forwardedImages.prefix(MessagePhotos.limit) {
-                        if let p = MessagePhotos.payload(img) { attachments.images.append(p) }
-                    }
+                    // no computer picked yet: past the hub's pictures one is turned away with a word, never dropped silently
+                    for img in forwardedImages { attachments.add(img, model: model, to: nil) }
                 }
                 if let preset { machineID = preset.machineID; cwd = preset.cwd } else { pickDefaultMachine() }
             }
@@ -715,18 +714,18 @@ struct NewChatView: View {
             .onChange(of: machineID) { _, now in
                 attachments.computerChanged(to: now) { model.machine(MachineRef(path: $0))?.name }
             }
-            .photosPicker(isPresented: $showPhotos, selection: $photoPicks, maxSelectionCount: MessagePhotos.limit,
+            .photosPicker(isPresented: $showPhotos, selection: $photoPicks, maxSelectionCount: model.imageLimits(ref.group).perMessage,
                           matching: .images, preferredItemEncoding: .current)
             .onChange(of: photoPicks) { _, items in
                 guard !items.isEmpty else { return }
                 Task {
-                    await attachments.load(items, model: model)
+                    await attachments.load(items, model: model, to: ref)
                     photoPicks = []
                 }
             }
             .fileUploadPicker(isPresented: $showFiles) { urls in attachments.upload(urls, to: ref, model: model) }
             .fullScreenCover(isPresented: $showCamera) {
-                CameraPicker { img in attachments.add(img, model: model) }.ignoresSafeArea()
+                CameraPicker { img in attachments.add(img, model: model, to: ref) }.ignoresSafeArea()
             }
             #if DEBUG && (os(iOS) || os(visionOS))
             // `-openNewAgentAttachments photo,build.log`: once this computer's launchers are in, the made-up photo
@@ -736,7 +735,7 @@ struct NewChatView: View {
                 debugAttached = true
                 for name in list.split(separator: ",").map(String.init) {
                     if name == "photo" {
-                        attachments.add(ChatView.debugPhoto, model: model)
+                        attachments.add(ChatView.debugPhoto, model: model, to: ref)
                         continue
                     }
                     let url = FileManager.default.temporaryDirectory.appending(path: name)

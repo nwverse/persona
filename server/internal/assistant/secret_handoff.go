@@ -129,7 +129,7 @@ func (s *Service) handoffPrepare(ctx context.Context, machine, machineName strin
 	if !s.hello(ctx).SecretHandoffGate {
 		return nil, errors.New("the hub is older than secret hand-offs (it does not check who approves them): update the hub first")
 	}
-	nodes, _ := s.devs.(nodeAnnouncer)
+	nodes, _ := s.physicalDevices().(nodeAnnouncer)
 	if s.devs == nil || !s.devs.Has(machine) || nodes == nil {
 		return nil, fmt.Errorf("%s is not connected by this manager: secrets can be handed only to an Agent on one of its own computers", machineName)
 	}

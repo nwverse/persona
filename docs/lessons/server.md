@@ -2191,6 +2191,20 @@ another version renames those unlabelled builds to `.prev`, so the lookup falls 
 Whenever a file's meaning is "the build of whatever version the hub runs now", whatever changes the hub's version without changing that file
 must relabel it or move it.
 
+## A node update left the Windows build behind, and it passed for the new version (2026-11-22, #12958)
+
+The same mistake came back with node updates on: the update replaced only the platforms in the release's `files`, and releases up to v0.9.1
+list no Windows `personad`, so `bin/nodes/personad-windows-amd64.exe` stayed the old build without a `.version`. Every Redeploy to a Windows
+computer then failed with "node executable self-check version or platform mismatch"; `deploy.sh`, which builds only Linux and macOS, left it
+behind the same way. Switching a hub before replacing `bin/nodes` made the new hub push the old builds, labelled as its version, to every
+computer that reconnected.
+Now a node update sets aside unlabelled builds before the release's go in, `deploy.sh` builds the Windows node programs, and the manager takes
+an unlabelled local build for the hub's version only when the version string is in the file: the node's self-check compares the version the
+build was linked with, so the string's absence proves the build is another one (its presence proves nothing). Lookups are looked up again when
+a local build changes, so a build put in place after the switch is used at once.
+Fixing one path that changes the hub's version is not enough: check every writer of the directory (self-update with and without node updates,
+deploy scripts, hand switches), and give the reader a check that does not trust any of them.
+
 ## Generic plans make "empty means no filter" lose indexes (2026-11-06, #4907)
 
 - pgx caches prepared statements by default; after five executions Postgres may choose a generic plan that can't see parameter values.
@@ -3120,6 +3134,21 @@ Whoever writes a `DialTLSContext` gives the handshake its own deadline and close
 Test it by waiting for the far end to see the connection close, not by how long the request took: the request returns
 on its own deadline either way (`TestDirectStalledHandshakeIsClosed`, `TestProxyStallingInsideTheTunnelIsClosed`).
 
+## A script on a proxied machine sends the hub's token to the proxy (2026-11-21, #12493)
+
+- A machine whose environment sets `http_proxy` / `https_proxy` usually has a `no_proxy` that excludes private ranges as
+  CIDRs (`<private range>/8`). Python's `urllib` matches `no_proxy` by host name suffix and ignores CIDR entries; other
+  clients differ on this. A script that calls the hub's API by its LAN address (`http://<hub address>:18660/api/…`)
+  then goes to the proxy, `Authorization: Bearer <token>` included, in plain HTTP.
+- Seen on a hub machine: a one-off `POST /api/v1/machines/{mid}/deploy` got an HTML `403 Forbidden` back. The hub's
+  log had no such request; the proxy had answered, and it had the master token. The token had to be rotated.
+- Call the hub's API from such a machine with proxies off: `urllib.request.build_opener(urllib.request.ProxyHandler({}))`,
+  `curl --noproxy '*'`, or `env -u http_proxy -u https_proxy …`. `127.0.0.1` helps only when the hub listens there; a
+  hub.json `listen` bound to one address does not.
+- Before sending a credential, ask `GET /api/v1/health` without one and check the answer is the hub's JSON (its `commit`,
+  and `features` for a trusted source). An HTML page or any answer that is not the hub's, to a request that carried a
+  credential, means the credential left the machine: rotate it, then retry with proxies off.
+
 ## Rich-text mention boundaries are not textual whitespace (#12655)
 
 A received Lark post can place an `at` element immediately before a command's `text` element. Flattening those into
@@ -3129,3 +3158,12 @@ or ordinary text. Display names can collide; inserting spaces alone cannot estab
 Check both the manager's admission gate and the assistant's reparse of the original event, using a synthetic event,
 a recording handoff and a queue barrier. Such a test proves local handling of that event shape, not whether a live
 client inserts whitespace.
+
+## Required extension isolation must fail closed (#12994)
+
+A proxy URL in an environment variable is voluntary routing, not a sandbox. When
+the sandbox probe fails, reject the host spec before starting a process or egress
+proxy. Container images must carry bubblewrap and allow its nested user namespace
+and mounts; test the actual runtime stage as a non-root user with no outer
+capabilities. Merely finding `bwrap` on PATH or skipping an unavailable real test
+is not evidence of isolation.

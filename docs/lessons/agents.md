@@ -157,6 +157,14 @@ callers the node's reported absolute executable as data for the existing scoped 
 unavailable metadata or unknown capabilities omit unverified hints, not the assignment.
 Keep the existing project context, approval snapshot and attachment order intact.
 
+A handoff note that reads as an instruction gets followed (#12995). A Codex worker at high reasoning effort read
+"use the terminal entry below for a separate session on this assignment" as a step of its task: it handed its whole
+assignment to a child in the same checkout, telling it the parent would coordinate and verify, then polled the
+child's process, `git status` and transcript until it finished. Nothing said the caller still owns its assignment,
+that the child shares its directory and permissions, or that the child reports to the supervisor, not to the caller.
+The note now says each wherever an entry is offered. The server still allows writable children in the caller's
+directory: continuations rely on them (`tasks_continuation_test.go`).
+
 - A guest conversation's session id and tools are registered before the node starts it: Claude Code lists the
   Persona MCP server's tools as it starts, a later `guestSet` makes that first list empty, and a connected MCP server
   with no tools does not fail by itself. Verify `system/init.tools` and a real `tools/call`, not a server saying

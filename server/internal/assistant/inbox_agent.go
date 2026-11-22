@@ -209,6 +209,7 @@ func (s *Service) handInbox(ctx context.Context) {
 func (s *Service) handPass(ctx context.Context) {
 	cfg := s.inboxConfig(ctx).Agent
 	b := &s.inbox
+	s.forwardInboxToTodos(ctx)
 	s.linkInboxTaskURLs(ctx)
 	s.checkInboxFollowUps(ctx, cfg, time.Now())
 	if !cfg.Enabled {

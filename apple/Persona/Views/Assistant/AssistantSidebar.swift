@@ -502,6 +502,8 @@ struct DrawerPan: UIGestureRecognizerRepresentable {
             }
             // Within 45° of horizontal: steeper is the page's own scrolling.
             guard abs(dx) > abs(dy) else { return refused("direction") }
+            // The To Decide pager's card pages sideways itself (#12831, `SwipePageMark`): a drag on it is the pager's.
+            if SwipePageMark.covers(start, in: view) { return refused("a pager's swipe") }
             if Self.pushed(at: start, in: view, beyond: firstPages ? 2 : 1) {
                 #if DEBUG
                 ShellTrace.shared.note("pan refused: pushed")
@@ -714,6 +716,30 @@ struct DrawerPan {}
 #endif
 
 #if os(iOS) || os(visionOS)
+/// Marks a view whose sideways drags the drawer and the strip leave alone, either way (the To Decide pager's card, #12831):
+/// a drag that starts inside a mounted mark is the view's own.
+struct SwipePageMark: UIViewRepresentable {
+    final class Marker: UIView {}
+    /// The marks on screen, held weakly: the drawer asks only when a drag begins.
+    @MainActor private static let marks = NSHashTable<Marker>.weakObjects()
+
+    func makeUIView(context: Context) -> Marker {
+        let v = Marker()
+        v.isUserInteractionEnabled = false
+        Self.marks.add(v)
+        return v
+    }
+
+    func updateUIView(_ uiView: Marker, context: Context) {}
+
+    /// Whether `point` (in `view`) is inside a mark shown in the same window.
+    @MainActor static func covers(_ point: CGPoint, in view: UIView) -> Bool {
+        marks.allObjects.contains { m in
+            m.window != nil && m.window === view.window && !m.isHidden && m.convert(m.bounds, to: view).contains(point)
+        }
+    }
+}
+
 /// Marks a list row whose swipe to the left the drawer and the strip leave alone (a sidebar conversation's Archive):
 /// they look for it in the cell under the finger.
 struct SwipeRowMark: UIViewRepresentable {
@@ -915,7 +941,9 @@ struct AssistantSidebar: View {
         // for another hub's or manager's page.
         .task(id: AssistantTaskChatsStore.readKey(out: out, group: model.hub?.group, manager: model.assistantManagerID,
                                                    conversations: all.count)) { if out { await taskChats.refresh(model.api) } }
+        // Keep the drawer's growing row types out of the sheet/search modifiers (#6735, #12249).
         .modifier(AssistantSidebarPresenters(ui: ui, open: open))
+        .stackSegment()
         .background {
             if let drawer {
                 SidebarClosed(drawer: drawer) {

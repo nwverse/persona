@@ -26,7 +26,6 @@ const DECIDED: Record<string, ByDesign> = {
   failed_start_due_ahead: "failed_start",
   awaits_reply: "awaits_reply",
   finished_seen_recently: "finished_recent",
-  deployed_seen_recently: "finished_recent",
   finished_seen_over_a_day: "finished_seen",
   accepted_reopened_unseen: "finished_unseen",
   usage_limit_until_reset: "usage_limit",
