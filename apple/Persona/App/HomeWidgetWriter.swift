@@ -65,8 +65,9 @@ final class HomeWidgetWriter {
             let has = infos.contains { kinds.contains($0.kind) }
             let shown = Set(infos.compactMap { byName[$0.kind] })
             Task { @MainActor in
+                let placementChanged = HomeWidgetData.shared.installed != shown
                 HomeWidgetData.shared.installed = shown
-                HomeWidgetData.shared.refresh()
+                HomeWidgetData.shared.refresh(forceIntake: placementChanged)
                 let writer = HomeWidgetWriter.shared
                 guard writer.toldHub != has else { return }
                 do {
@@ -205,6 +206,21 @@ final class HomeWidgetWriter {
     nonisolated static func parts(_ s: HomeSnapshot) -> [HomeKind: Data] {
         func data<T: Encodable>(_ value: T) -> Data { (try? JSONEncoder.sorted.encode(value)) ?? Data() }
         struct Common: Encodable { var paired: Bool; var look: HomeSnapshot.Look }
+        struct IntakePart: Encodable {
+            var supported: Bool
+            var day: String
+            var zone: String
+            var nextDay: Double
+            var portion: HomeSnapshot.Portion
+            var days: [Double]
+        }
+        func intakePart(water: Bool) -> Data {
+            let part = s.intake.map {
+                IntakePart(supported: $0.supported, day: $0.day, zone: $0.zone, nextDay: $0.nextDay,
+                           portion: water ? $0.water : $0.protein, days: $0.days.map { water ? $0.water : $0.protein })
+            }
+            return data(part)
+        }
         let common = data(Common(paired: s.paired, look: s.look))
         let parts: [HomeKind: Data] = [
             .agents: data(s.agents) + data(s.machines.map { [$0.id, $0.name] }),
@@ -214,6 +230,9 @@ final class HomeWidgetWriter {
             .computers: data(s.machines),
             .record: data(s.recording) + data(s.today),
             .health: data(s.health),
+            .water: intakePart(water: true),
+            .protein: intakePart(water: false),
+            .healthToday: data(s.health) + data(s.activity) + data(s.intake),
             .inbox: data(s.inbox),
         ]
         return parts.mapValues { common + $0 }
@@ -249,7 +268,7 @@ extension AppModel {
         case .record: MeetingRecorder.openRecordings()
         case .today, .todos: showShellPage(.todos)
         case .usage, .computers: showShellPage(.machines)
-        case .health: showShellPage(.health)
+        case .health, .water, .protein, .healthToday: showShellPage(.health)
         }
     }
 
@@ -317,6 +336,8 @@ extension AppModel {
         s.usage = HomeUsage.build(UsageWindows.live(UsageWindowsStore.shared.accounts, now: now), tokens: stats?.tokens ?? 0,
                                   tpm: stats?.tpm ?? 0, hourly: data.hourly, spent: data.spentToday(now))
         s.health = data.health
+        s.intake = data.intake
+        s.activity = data.activity
         return s
     }
 }

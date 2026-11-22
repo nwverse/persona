@@ -391,6 +391,7 @@ targets:
       # Persona's Home Screen widgets (docs/apple/home-widgets.md): the snapshot the app writes, the views, their tokens.
       - path: Shared/HomeWidgets
       - path: Shared/Design/HomeWidgetTokens.swift
+      - path: Shared/Design/HealthIntakePalette.swift
       # The app's String Catalog and interface language (docs/apple/ios.md「Interface language」).
       - path: Shared/Localization
     entitlements:

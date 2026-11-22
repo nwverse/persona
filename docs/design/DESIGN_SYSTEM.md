@@ -1703,6 +1703,16 @@ The widget extension doesn't build `Theme`: Persona's widgets take their colors,
 - **A widget's own switch and buttons** (the Calendar widget's Today · Week · Month and its days, #6946): a segmented control drawn in `HomeWidgetTokens` (`segment…`: a track, the chosen part filled, fixed sizes like a hero), and days as buttons. Each is a widget button (an App Intent) that changes only that widget and redraws it at once, without the app or the network; Edit Widget keeps where it starts. Why a new pattern: a view people flip between often does not belong behind Edit Widget's sheet, and a widget has no other control.
 - **The Lock Screen** shows the same hero in one color: the circle holds the hero alone, the rectangle the widget's line and one or two under it, the inline one line beside the clock.
 
+Water and Protein (#13275) share `HealthIntakePalette` with `Theme.Health`, keeping the app's blue and amber exactly.
+Today's Health has four separate rings (Water, Protein, Steps, Sleep), chosen independently in Edit Widget; repeated
+items retain their positions. Its steps token is purple, apart from Move's red; the existing Health widget keeps pink.
+Sleep remains indigo. Activity uses only short neutral straight bars and values, never rings or UIKit: Move, Exercise,
+Stand, with absent goals removing rows. Small has values, medium adds names, goals and units. The compact Activity
+numbers and cell captions use fixed widget tokens to fit the system canvas, with shrinking and a `.xxxLarge` cap.
+VoiceOver reads each cell's label, value and goal or average, including the compact rows' omitted names and units.
+Today's Health is privacy sensitive; standalone Water and Protein remain readable while locked. See
+`docs/apple/home-widgets.md` for day boundaries, data ownership, sizes and refresh rules.
+
 ### 3.15 Charts (iOS)
 
 - `GaugeRing` (`apple/Persona/DesignSystem/GaugeRing.swift`) draws one progress value, unit, title and optional

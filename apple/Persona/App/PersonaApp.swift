@@ -496,7 +496,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let group = AppModel.shared.pushGroup(info)
         AppModel.shared.wakeLinks(group)
         #if os(iOS)
-        HomeWidgetData.shared.refresh() // the calendar, Health and the usage the widgets show, when due
+        HomeWidgetData.shared.refresh(forceIntake: true) // a widget wake also reads intake changed elsewhere
         #endif
         nonisolated(unsafe) let done = completionHandler
         DispatchQueue.main.asyncAfter(deadline: .now() + 25) {
