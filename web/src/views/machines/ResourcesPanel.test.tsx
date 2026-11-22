@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { initI18n } from "../../i18n";
-import { ResourceCard, ResourcesPanel, type ResourceStatus } from "./ResourcesPanel";
+import { jobAgeSeconds, ResourceCard, ResourcesPanel, type ResourceStatus } from "./ResourcesPanel";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let root: Root;
@@ -46,4 +46,9 @@ it("keeps separate legacy rows whose ticket and commit are empty", () => {
   expect(host.textContent).toContain("example-legacy-one");
   expect(host.textContent).toContain("example-legacy-two");
   expect(host.textContent).not.toContain("Same result as");
+});
+
+it("uses a running job start when the wire includes a zero enqueue time", () => {
+  expect(jobAgeSeconds({ ticket: "one", project: "example", commit: "", groups: ["web"], enqueued_at: "0001-01-01T00:00:00Z", started_at: "2026-11-22T10:00:00Z" }, Date.parse("2026-11-22T10:01:00Z"))).toBe(60);
+  expect(jobAgeSeconds({ ticket: "one", project: "example", commit: "", groups: ["web"] }, Date.now())).toBeNull();
 });

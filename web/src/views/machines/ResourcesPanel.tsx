@@ -24,6 +24,10 @@ export function ageSeconds(at: string | undefined, now = Date.now()) {
   return Number.isFinite(parsed) && parsed > 0 ? Math.max(0, Math.floor((now - parsed) / 1000)) : null;
 }
 
+export function jobAgeSeconds(job: ResourceJob, now: number) {
+  return ageSeconds(job.enqueued_at, now) ?? ageSeconds(job.started_at, now);
+}
+
 export function ResourcesPanel() {
   const [resources, setResources] = useState<ResourceStatus[] | null>(null);
   const [error, setError] = useState("");
@@ -102,7 +106,7 @@ export function ResourceCard({ resource, now }: { resource: ResourceStatus; now:
         <td className="p-2">{job.ticket || job.run || t("resources.unknown")}{job.duplicate_of && <span className="block text-attention">{t("resources.duplicate", { ticket: job.duplicate_of })}</span>}</td>
         <td className="p-2">{job.project}</td><td className="p-2 font-mono">{job.commit || t("resources.unknown")}</td>
         <td className="p-2">{job.groups.join(", ")}</td>
-        <td className="p-2">{t("resources.seconds", { seconds: ageSeconds(job.enqueued_at ?? job.started_at, now) ?? 0 })}</td>
+        <td className="p-2">{jobAgeSeconds(job, now) === null ? t("resources.unknown") : t("resources.seconds", { seconds: jobAgeSeconds(job, now)! })}</td>
         <td className="p-2">{job.position ? t("resources.position", { position: job.position }) : t("resources.running")}</td>
       </tr>)}</tbody>
     </table></div>}
