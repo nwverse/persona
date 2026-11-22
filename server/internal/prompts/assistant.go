@@ -973,7 +973,8 @@ type SuperviseInbox struct {
 	Count                        int
 	// URL is a GitHub PR's or issue's address; ToAgent is "sent" once the note reached the task's agent (InboxToAgent,
 	// #7346), "unhandled" when its bounded retry failed, "" when only the supervisor is told.
-	URL, ToAgent string
+	URL, ToAgent    string
+	AfterAcceptance bool // new feedback on a still-open PR of an accepted task
 }
 
 // InboxToAgent is the note a task's agent gets when someone else writes on the task's GitHub thread (#7346): who,
@@ -1258,6 +1259,14 @@ type HandoffTurn struct {
 
 // RenderMainHandoff is assistant/main_handoff.
 func RenderMainHandoff(h MainHandoff) string { return render("assistant/main_handoff", h) }
+
+// RenderSessionHandoff renders background for a fresh side conversation or Agent.
+func RenderSessionHandoff(summary string, recent []HandoffTurn) string {
+	return render("assistant/session_handoff", struct {
+		Summary string
+		Recent  []HandoffTurn
+	}{summary, recent})
+}
 
 // Acceptance is a deployed task, for the three lines of its "Please accept" card (assistant/acceptance_input; the system
 // prompt is assistant/acceptance; docs/extensions/bots.md "Task progress and review requests").

@@ -363,6 +363,7 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		Detached:               func(machine string) { svc.NodeDetached(machine) },
 		HiddenAgentDirsChanged: func(machine string) { svc.HiddenAgentDirsChanged(machine) },
 		Location:               func() *time.Location { return svc.location(context.Background()) },
+		UpdateHandoffGrace:     func() time.Duration { return nodeUpdateHandoffGraceOf(svc.hello(context.Background())) },
 		PromptLanguage:         func() string { return answerLanguage(svc.hello(context.Background()).Locale) },
 		// The extensions' part of a node's connection and its events (internal/extmgr).
 		Own:         func(ctx context.Context, machine string) map[string]json.RawMessage { return ext.Own(ctx, machine) },

@@ -133,7 +133,7 @@ func sendTimingOf(ctx context.Context) *sendTiming {
 
 func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 	started := time.Now()
-	p, ok := optionalObject(w, r, 32<<20)
+	p, ok := optionalObject(w, r, proto.MessageBodyLimit)
 	if !ok {
 		return
 	}
@@ -144,6 +144,12 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 		return
 	}
 	sid := r.PathValue("sid")
+	// The pictures this message carries, never those before it in the conversation (#12973).
+	if images, _ := p["images"].([]any); len(images) > 0 {
+		if row, _ := m.session(sid); apierr.ImagesOverLimit(w, proto.HubImageLimits.For(row.Agent), len(images)) {
+			return
+		}
+	}
 	if terminalAgentSend(r.Context()) {
 		if _, ok := h.terminalAgentTarget(m, sid); !ok {
 			h.refuseTerminalAgent(w, r)

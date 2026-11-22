@@ -94,9 +94,15 @@ type Placement struct {
 	// SupervisionBatchMinutes is manager.json's administrator-pinned routine supervision interval. Nil leaves the
 	// assistant's saved setting in effect; an explicit zero pins immediate delivery through the legacy cadence.
 	SupervisionBatchMinutes *int `json:"supervision_batch_minutes,omitempty"`
+	// TaskExecutionWaitSeconds bounds pre-delivery waits for a node with scheduled execution support (default 600).
+	TaskExecutionWaitSeconds *int `json:"task_execution_wait_seconds,omitempty"`
+	// TaskExecutionLegacyFallback permits only attested inherited ordinary tasks to omit task_execution on old nodes.
+	TaskExecutionLegacyFallback *bool `json:"task_execution_legacy_fallback,omitempty"`
+	// NodeUpdateHandoffGraceSeconds bounds natural-idle update waits before new headless turns are refused (default 60).
+	NodeUpdateHandoffGraceSeconds *int `json:"node_update_handoff_grace_seconds,omitempty"`
 }
 
-// DeviceCall is device.call's params. Device is a machine id, or DeviceAll for DeviceDevicesList.
+// DeviceCall is device.call's params. Device is a machine id, or DeviceAll for DeviceDevicesList and fleet-wide DeviceInteractionsList.
 type DeviceCall struct {
 	Device string          `json:"device"`
 	Method string          `json:"method"`
@@ -128,7 +134,7 @@ const (
 	// DeviceDevicesList (on DeviceAll): {} → {devices: [Device], phone_online, apps: [ClientApp]}, the user's machines
 	// and the Persona apps that last said their version (apps: absent from a hub from before).
 	DeviceDevicesList = "devices.list"
-	// DeviceInteractionsList (on DeviceAll): {} → {interactions}, what the machines' agents wait on the user for.
+	// DeviceInteractionsList (on DeviceAll or a machine id): {} → {interactions}, what the machines' agents wait on the user for.
 	DeviceInteractionsList = "interactions.list"
 	// DeviceSessionsList: {} → {sessions}, the machine's sessions as the apps get them (state, titles).
 	DeviceSessionsList = "sessions.list"

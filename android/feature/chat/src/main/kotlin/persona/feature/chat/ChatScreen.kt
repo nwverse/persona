@@ -1006,8 +1006,9 @@ private fun ChatPage(
                                 onFreeze = { timeline.freeze(currentItems()); timelineVersion++ },
                                 onVisibilityChanged = { taskPageVisible = it },
                                 onExpandFold = ::expand, foldErrors = foldErrors,
-                                // While the link card peeks, the composer needs the room more (glass laid them over each other).
-                                showBar = linkInset.value <= 0f, callJumps = callJumps)
+                                // Glass agent chats surface the plan via the floating PlanPill above the composer (matching iOS)
+                                // instead of a top full-width progress bar; also hide while the link card peeks.
+                                showBar = linkInset.value <= 0f && !(glass && agentChat), callJumps = callJumps)
                         }
                     },
                     bottomBar = footer@ {
@@ -1227,7 +1228,8 @@ private fun ChatPage(
                         onFullText = { item -> readFullText(key, item) }, loader = loader, session = session,
                         earlierEngines = earlierEngines, onReadEarlierText = ::readFullText,
                         machineName = machines.firstOrNull { it.id == key.machineId }?.name, subagentCards = subagentCards,
-                        messageMenu = messageMenu, turnLauncher = session?.launcher)
+                        messageMenu = messageMenu, turnLauncher = session?.launcher,
+                        hasPendingCards = requests.isNotEmpty() || taskAsk != null)
                 }
             }
             ChatPageOverlays(pushedDetail, taskHost, search, searchableItems, projection.turns.size, snapshot.hasOlder,

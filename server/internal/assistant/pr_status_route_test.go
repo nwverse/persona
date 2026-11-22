@@ -127,14 +127,41 @@ func TestPREventsRouteSettingOffUnchanged(t *testing.T) {
 	}
 	s, f, task := newBoundPRTask(t, &memStore{}, idleAgent)
 	ctx := context.Background()
+	before := len(sentToAgent(f))
+	now := time.Now().UTC().Truncate(time.Second)
+
+	// Unparked task: conflict raises sigPRConflict, CI failure does not emit sigPREvent, and bound Agent receives nothing.
+	unparkedStatus := TodoPRStatus{
+		URL:       task.PRURL,
+		State:     "open",
+		HeadOID:   "head-off-unparked",
+		Conflicts: true,
+		Checks:    "failure",
+		CheckedAt: now,
+	}
+	if err := s.applyPRStatus(ctx, todoNow(s, task.ID), unparkedStatus); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(sentToAgent(f)) - before; got != 0 {
+		t.Fatalf("setting off still sent %d message(s) to bound Agent", got)
+	}
+	if _, ok := pendingPRConflict(s, task.ID); !ok {
+		t.Fatal("setting off lost existing sigPRConflict supervisor wake")
+	}
+	if _, ok := pendingPREventSignal(s, task.ID, task.PRURL, prEventKindCIFailure); ok {
+		t.Fatal("setting off unexpectedly emitted sigPREvent for CI failure")
+	}
+
+	// Merge-parked task: changes_requested still wakes existing sigReview while conflict stays quiet per #10798.
+	s.supervise.mu.Lock()
+	clear(s.supervise.pending)
+	s.supervise.mu.Unlock()
 	if _, err := reviewErr(s, task.ID, mergePark(task.PRURL)); err != nil {
 		t.Fatal(err)
 	}
 	at := todoNow(s, task.ID).Supervision.parking().At
 	reviewAt := at.Add(time.Second)
-	before := len(sentToAgent(f))
-
-	status := TodoPRStatus{
+	parkedStatus := TodoPRStatus{
 		URL:                task.PRURL,
 		State:              "open",
 		HeadOID:            "head-off-1",
@@ -147,14 +174,14 @@ func TestPREventsRouteSettingOffUnchanged(t *testing.T) {
 			ID: 501, Author: "reviewer", State: "CHANGES_REQUESTED", Body: "Please fix nil check.", SubmittedAt: reviewAt,
 		},
 	}
-	if err := s.applyPRStatus(ctx, todoNow(s, task.ID), status); err != nil {
+	if err := s.applyPRStatus(ctx, todoNow(s, task.ID), parkedStatus); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(sentToAgent(f)) - before; got != 0 {
 		t.Fatalf("setting off still sent %d message(s) to bound Agent", got)
 	}
-	if _, ok := pendingPRConflict(s, task.ID); !ok {
-		t.Fatal("setting off lost existing sigPRConflict supervisor wake")
+	if _, ok := pendingPRConflict(s, task.ID); ok {
+		t.Fatal("merge-parked task unexpectedly emitted standalone sigPRConflict")
 	}
 	if !pendingReviewSignal(s, task.ID) || todoNow(s, task.ID).Supervision.State != reviewPending {
 		t.Fatal("setting off lost existing parked changes_requested supervisor wake")
@@ -582,31 +609,20 @@ func TestPREventsRouteSupervisorFallback(t *testing.T) {
 			tc.setup(t, s, f, task)
 			ctx := context.Background()
 			now := time.Now().UTC().Truncate(time.Second)
-
-			// Park the task to verify parked changes_requested also falls back cleanly.
-			if _, err := reviewErr(s, task.ID, mergePark(task.PRURL)); err != nil {
-				t.Fatal(err)
-			}
-			parkAt := todoNow(s, task.ID).Supervision.parking().At
-			reviewAt := parkAt.Add(time.Second)
 			beforeSends := len(sentToAgent(f))
 			startCallsBefore := len(startCalls(f))
 
-			status := TodoPRStatus{
-				URL:                task.PRURL,
-				State:              "open",
-				HeadOID:            "head-fb-1",
-				Conflicts:          true,
-				Checks:             "failure",
-				Review:             "changes_requested",
-				ChangesRequestedAt: &reviewAt,
-				CheckedAt:          parkAt.Add(2 * time.Second),
-				failingCheck:       prFailingCheck{ID: 55, Name: "ci-build", Digest: "55"},
-				actionableReview: prActionableReview{
-					ID: 77, Author: "reviewer", State: "CHANGES_REQUESTED", Body: "Needs tests", SubmittedAt: reviewAt,
-				},
+			// 1. Unparked conflict + CI failure fall back to sigPRConflict and sigPREvent.
+			unparkedStatus := TodoPRStatus{
+				URL:          task.PRURL,
+				State:        "open",
+				HeadOID:      "head-fb-1",
+				Conflicts:    true,
+				Checks:       "failure",
+				CheckedAt:    now,
+				failingCheck: prFailingCheck{ID: 55, Name: "ci-build", Digest: "ci-build"},
 			}
-			if err := s.applyPRStatus(ctx, todoNow(s, task.ID), status); err != nil {
+			if err := s.applyPRStatus(ctx, todoNow(s, task.ID), unparkedStatus); err != nil {
 				t.Fatal(err)
 			}
 			if got := len(sentToAgent(f)) - beforeSends; got != 0 {
@@ -616,11 +632,9 @@ func TestPREventsRouteSupervisorFallback(t *testing.T) {
 				len(startCalls(f)) != startCallsBefore {
 				t.Fatalf("disallowed stop cause attempted session.start resume (%d calls)", len(startCalls(f))-startCallsBefore)
 			}
-			// 1. Conflict fell back to sigPRConflict.
 			if _, ok := pendingPRConflict(s, task.ID); !ok {
 				t.Fatal("conflict fallback lost sigPRConflict")
 			}
-			// 2. CI failure fell back to sigPREvent and holds in digestEntry.
 			ciSig, ok := pendingPREventSignal(s, task.ID, task.PRURL, prEventKindCIFailure)
 			if !ok {
 				t.Fatal("CI failure fallback lost sigPREvent")
@@ -628,21 +642,46 @@ func TestPREventsRouteSupervisorFallback(t *testing.T) {
 			if entry, holds := s.digestEntry(ctx, ciSig, ""); !holds || !strings.Contains(entry.Detail, "ci-build") {
 				t.Fatalf("CI failure fallback digestEntry = %+v, holds=%v", entry, holds)
 			}
-			// 3. Parked changes_requested fell back to existing reviewPending + sigReview.
+
+			// 2. Parked changes_requested falls back to existing reviewPending + sigReview.
+			if _, err := reviewErr(s, task.ID, mergePark(task.PRURL)); err != nil {
+				t.Fatal(err)
+			}
+			parkAt := todoNow(s, task.ID).Supervision.parking().At
+			reviewAt := parkAt.Add(time.Second)
+			parkedStatus := TodoPRStatus{
+				URL:                task.PRURL,
+				State:              "open",
+				HeadOID:            "head-fb-1",
+				Conflicts:          true,
+				Checks:             "failure",
+				Review:             "changes_requested",
+				ChangesRequestedAt: &reviewAt,
+				CheckedAt:          parkAt.Add(2 * time.Second),
+				failingCheck:       prFailingCheck{ID: 55, Name: "ci-build", Digest: "ci-build"},
+				actionableReview: prActionableReview{
+					ID: 77, Author: "reviewer", State: "CHANGES_REQUESTED", Body: "Needs tests", SubmittedAt: reviewAt,
+				},
+			}
+			if err := s.applyPRStatus(ctx, todoNow(s, task.ID), parkedStatus); err != nil {
+				t.Fatal(err)
+			}
+			if got := len(sentToAgent(f)) - beforeSends; got != 0 {
+				t.Fatalf("unavailable Agent unexpectedly got %d sends after park", got)
+			}
 			if cur := todoNow(s, task.ID); cur.Supervision.State != reviewPending || !pendingReviewSignal(s, task.ID) {
 				t.Fatalf("parked review fallback failed: state=%q reviewSignal=%v", cur.Supervision.State, pendingReviewSignal(s, task.ID))
 			}
 
 			// If CI recovers before digest dispatch, stale sigPREvent is dropped cleanly.
-			status.Checks = "success"
-			status.CheckedAt = parkAt.Add(3 * time.Second)
-			if err := s.applyPRStatus(ctx, todoNow(s, task.ID), status); err != nil {
+			parkedStatus.Checks = "success"
+			parkedStatus.CheckedAt = parkAt.Add(3 * time.Second)
+			if err := s.applyPRStatus(ctx, todoNow(s, task.ID), parkedStatus); err != nil {
 				t.Fatal(err)
 			}
 			if _, holds := s.digestEntry(ctx, ciSig, ""); holds {
 				t.Fatal("resolved CI failure still held in digestEntry")
 			}
-			_ = now
 		})
 	}
 }
@@ -896,6 +935,32 @@ func TestPREventsRouteUncertainDeliveryPreservesSupervisionWakes(t *testing.T) {
 	})
 
 	ctx := context.Background()
+	baseNow := time.Now().UTC().Truncate(time.Second)
+
+	// Pass 1 (unparked): uncertain delivery records agent_uncertain for conflict + CI failure and preserves sigPRConflict & sigPREvent.
+	unparkedStatus := TodoPRStatus{
+		URL:          task.PRURL,
+		State:        "open",
+		HeadOID:      "head-uncertain-1",
+		Conflicts:    true,
+		Checks:       "failure",
+		CheckedAt:    baseNow,
+		failingCheck: prFailingCheck{ID: 71, Name: "ci-unit", Digest: "ci-unit"},
+	}
+	if err := s.applyPRStatus(ctx, todoNow(s, task.ID), unparkedStatus); err != nil {
+		t.Fatal(err)
+	}
+	if sendCalls != 2 {
+		t.Fatalf("pass 1 (unparked) send calls = %d, want 2", sendCalls)
+	}
+	if _, ok := pendingPRConflict(s, task.ID); !ok {
+		t.Fatal("pass 1 uncertain delivery suppressed sigPRConflict")
+	}
+	if _, ok := pendingPREventSignal(s, task.ID, task.PRURL, prEventKindCIFailure); !ok {
+		t.Fatal("pass 1 uncertain delivery lost sigPREvent for CI failure")
+	}
+
+	// Pass 1b (parked): uncertain delivery records agent_uncertain for review and preserves parked sigReview wake.
 	if _, err := reviewErr(s, task.ID, mergePark(task.PRURL)); err != nil {
 		t.Fatal(err)
 	}
@@ -915,27 +980,19 @@ func TestPREventsRouteUncertainDeliveryPreservesSupervisionWakes(t *testing.T) {
 			ID: 81, Author: "reviewer", State: "CHANGES_REQUESTED", Body: "Fix edge case", SubmittedAt: reviewAt,
 		},
 	}
-
-	// Pass 1: uncertain delivery records agent_uncertain and preserves all supervisor fallback paths.
 	if err := s.applyPRStatus(ctx, todoNow(s, task.ID), status); err != nil {
 		t.Fatal(err)
 	}
 	if sendCalls != 3 {
-		t.Fatalf("pass 1 send calls = %d, want 3", sendCalls)
+		t.Fatalf("pass 1b (parked review) send calls = %d, want 3", sendCalls)
 	}
 	for _, id := range seenMsgIDs {
 		if id == "" {
 			t.Fatal("expected deterministic client_msg_id on uncertain send")
 		}
 	}
-	if _, ok := pendingPRConflict(s, task.ID); !ok {
-		t.Fatal("pass 1 uncertain delivery suppressed sigPRConflict")
-	}
 	if cur := todoNow(s, task.ID); cur.Supervision.State != reviewPending || !pendingReviewSignal(s, task.ID) {
-		t.Fatalf("pass 1 uncertain delivery suppressed parked review wake: state=%q reviewSignal=%v", cur.Supervision.State, pendingReviewSignal(s, task.ID))
-	}
-	if _, ok := pendingPREventSignal(s, task.ID, task.PRURL, prEventKindCIFailure); !ok {
-		t.Fatal("pass 1 uncertain delivery lost sigPREvent for CI failure")
+		t.Fatalf("pass 1b uncertain delivery suppressed parked review wake: state=%q reviewSignal=%v", cur.Supervision.State, pendingReviewSignal(s, task.ID))
 	}
 
 	var saved map[string]prEventRouteRecord
@@ -948,7 +1005,7 @@ func TestPREventsRouteUncertainDeliveryPreservesSupervisionWakes(t *testing.T) {
 		}
 	}
 
-	// Simulate restart / re-park before supervision handled the conflict & review:
+	// Simulate restart before supervision handled the conflict (unparked) & review (parked):
 	// Pass 2 must NOT resend to the Agent, yet must still preserve sigPRConflict and parked sigReview wakes.
 	s.supervise.mu.Lock()
 	clear(s.supervise.pending)
@@ -957,26 +1014,44 @@ func TestPREventsRouteUncertainDeliveryPreservesSupervisionWakes(t *testing.T) {
 	s.prEventRoute.loaded = false
 	s.prEventRoute.seen = nil
 	s.prEventRoute.mu.Unlock()
+
+	// Unparked pass 2 (task is reviewPending, not parked): conflict still raises sigPRConflict without resending.
+	status.CheckedAt = parkAt.Add(3 * time.Second)
+	if err := s.applyPRStatus(ctx, todoNow(s, task.ID), status); err != nil {
+		t.Fatal(err)
+	}
+	if sendCalls != 3 {
+		t.Fatalf("pass 2 (unparked) after agent_uncertain re-sent to Agent: total sendCalls=%d, want 3", sendCalls)
+	}
+	if _, ok := pendingPRConflict(s, task.ID); !ok {
+		t.Fatal("pass 2 after agent_uncertain permanently suppressed sigPRConflict")
+	}
+
+	// Parked pass 2b: parked changes_requested still raises sigReview without resending.
+	s.supervise.mu.Lock()
+	clear(s.supervise.pending)
+	s.supervise.mu.Unlock()
 	if _, err := reviewErr(s, task.ID, mergePark(task.PRURL)); err != nil {
 		t.Fatal(err)
 	}
 	parkAt2 := todoNow(s, task.ID).Supervision.parking().At
-	reviewAt2 := parkAt2.Add(time.Second)
+	afterPass2 := parkAt.Add(3 * time.Second)
+	if parkAt2.After(afterPass2) {
+		afterPass2 = parkAt2
+	}
+	reviewAt2 := afterPass2.Add(time.Second)
 	status.ChangesRequestedAt = &reviewAt2
 	status.actionableReview.SubmittedAt = reviewAt2
-	status.CheckedAt = parkAt2.Add(2 * time.Second)
+	status.CheckedAt = afterPass2.Add(2 * time.Second)
 
 	if err := s.applyPRStatus(ctx, todoNow(s, task.ID), status); err != nil {
 		t.Fatal(err)
 	}
 	if sendCalls != 3 {
-		t.Fatalf("pass 2 after agent_uncertain re-sent to Agent: total sendCalls=%d, want 3", sendCalls)
-	}
-	if _, ok := pendingPRConflict(s, task.ID); !ok {
-		t.Fatal("pass 2 after agent_uncertain permanently suppressed sigPRConflict")
+		t.Fatalf("pass 2b (parked) after agent_uncertain re-sent to Agent: total sendCalls=%d, want 3", sendCalls)
 	}
 	if cur := todoNow(s, task.ID); cur.Supervision.State != reviewPending || !pendingReviewSignal(s, task.ID) {
-		t.Fatalf("pass 2 after agent_uncertain permanently suppressed parked review wake: state=%q reviewSignal=%v", cur.Supervision.State, pendingReviewSignal(s, task.ID))
+		t.Fatalf("pass 2b after agent_uncertain permanently suppressed parked review wake: state=%q reviewSignal=%v", cur.Supervision.State, pendingReviewSignal(s, task.ID))
 	}
 }
 
@@ -1003,32 +1078,54 @@ func TestPREventsRoutePersistErrorPreservesFallbackAndCache(t *testing.T) {
 	turnPREventsRouteOn(t, s)
 
 	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	beforeSends := len(sentToAgent(f))
+
+	// Unparked conflict + CI failure: persistence failure must not poison cache and must preserve sigPRConflict + sigPREvent.
+	unparkedStatus := TodoPRStatus{
+		URL:          task.PRURL,
+		State:        "open",
+		HeadOID:      "head-persist-err",
+		Conflicts:    true,
+		Checks:       "failure",
+		CheckedAt:    now,
+		failingCheck: prFailingCheck{ID: 88, Name: "ci-lint", Digest: "ci-lint"},
+	}
+	if err := s.applyPRStatus(ctx, todoNow(s, task.ID), unparkedStatus); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(sentToAgent(f)) - beforeSends; got != 2 {
+		t.Fatalf("unparked sent count = %d, want 2", got)
+	}
+	if _, ok := pendingPRConflict(s, task.ID); !ok {
+		t.Fatal("PutSetting failure suppressed sigPRConflict")
+	}
+	if _, ok := pendingPREventSignal(s, task.ID, task.PRURL, prEventKindCIFailure); !ok {
+		t.Fatal("PutSetting failure suppressed sigPREvent for CI failure")
+	}
+
+	// Parked changes_requested: persistence failure must preserve parked sigReview wake.
 	if _, err := reviewErr(s, task.ID, mergePark(task.PRURL)); err != nil {
 		t.Fatal(err)
 	}
 	parkAt := todoNow(s, task.ID).Supervision.parking().At
 	reviewAt := parkAt.Add(time.Second)
-	beforeSends := len(sentToAgent(f))
-
-	status := TodoPRStatus{
+	parkedStatus := TodoPRStatus{
 		URL:                task.PRURL,
 		State:              "open",
 		HeadOID:            "head-persist-err",
-		Conflicts:          true,
-		Checks:             "failure",
 		Review:             "changes_requested",
 		ChangesRequestedAt: &reviewAt,
 		CheckedAt:          parkAt.Add(2 * time.Second),
-		failingCheck:       prFailingCheck{ID: 88, Name: "ci-lint", Digest: "ci-lint"},
 		actionableReview: prActionableReview{
 			ID: 89, Author: "maintainer", State: "CHANGES_REQUESTED", Body: "Add test", SubmittedAt: reviewAt,
 		},
 	}
-	if err := s.applyPRStatus(ctx, todoNow(s, task.ID), status); err != nil {
+	if err := s.applyPRStatus(ctx, todoNow(s, task.ID), parkedStatus); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(sentToAgent(f)) - beforeSends; got != 3 {
-		t.Fatalf("sent count = %d, want 3", got)
+		t.Fatalf("total sent count = %d, want 3", got)
 	}
 	// In-memory seen map must NOT have recorded unpersisted entries, and in-flight claims must be released.
 	s.prEventRoute.mu.Lock()
@@ -1038,15 +1135,8 @@ func TestPREventsRoutePersistErrorPreservesFallbackAndCache(t *testing.T) {
 	if seenLen != 0 || inFlightLen != 0 {
 		t.Fatalf("after PutSetting failure: seen=%d inFlight=%d, want 0/0", seenLen, inFlightLen)
 	}
-	// Supervisor fallback must be preserved for all three event types.
-	if _, ok := pendingPRConflict(s, task.ID); !ok {
-		t.Fatal("PutSetting failure suppressed sigPRConflict")
-	}
 	if cur := todoNow(s, task.ID); cur.Supervision.State != reviewPending || !pendingReviewSignal(s, task.ID) {
 		t.Fatalf("PutSetting failure suppressed parked review wake: state=%q reviewSignal=%v", cur.Supervision.State, pendingReviewSignal(s, task.ID))
-	}
-	if _, ok := pendingPREventSignal(s, task.ID, task.PRURL, prEventKindCIFailure); !ok {
-		t.Fatal("PutSetting failure suppressed sigPREvent for CI failure")
 	}
 
 	// Once persistence recovers, recording succeeds and populates both store and in-memory cache.

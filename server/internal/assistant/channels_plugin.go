@@ -20,7 +20,6 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/remoteimage"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -362,7 +361,7 @@ func (s *Service) channelForwardInGeneration(ctx context.Context, id string, m c
 		}
 		data, mime := img.Data, img.MIME
 		if len(data) > channel.ImageMost { // a photo sent as the original: scaled down to fit, not dropped (#11985)
-			fit, err := remoteimage.Fit(data, channel.ImageMost)
+			fit, err := s.remoteImages.Fit(ctx, data, channel.ImageMost)
 			if err != nil {
 				in.Unsupported = append(in.Unsupported, i18n.T(lang, "assistant-channels_plugin.image_too_large"))
 				continue

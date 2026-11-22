@@ -108,6 +108,7 @@ fun EntryProviderScope<NavKey>.agentsEntries(
         val wiring by dependencies.wiring().state.collectAsStateWithLifecycle()
         val tasksStore = dependencies.tasks() ?: wiring.tasks
         val sessions by dependencies.sessions().sessions.collectAsStateWithLifecycle()
+        val machines by dependencies.sessions().machines.collectAsStateWithLifecycle()
         val todos by (tasksStore?.todos ?: flowOf(emptyList())).collectAsStateWithLifecycle(emptyList())
         val pending by dependencies.interactions().pending.collectAsStateWithLifecycle()
         // The selected assistant's direction tree (#4352), for grouping the list by direction.
@@ -125,6 +126,7 @@ fun EntryProviderScope<NavKey>.agentsEntries(
             newTodoRequests = newTodo,
             assistant = assistant,
             directions = directionTree,
+            machines = machines,
         )
     }
     entry<TodosRoute> { todosPage(null) }
