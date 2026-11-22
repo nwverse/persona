@@ -19,6 +19,48 @@ Code: `server/internal/feishubot` (long connection, REST, events and message con
 `server/internal/assistant/feishu*.go` (targets, commands, sending into chats, cards, pushes, sync: Lark's side of the shared pipeline);
 prompt `server/internal/prompts/bot/message.md`; the App page `apple/Persona/Views/Settings/FeishuBotView.swift` (**Settings › Connectors › Lark Bot**). On web Settings › Connectors, the lark-cli status appears in this Lark group.
 
+## Recovering saved settings
+
+The manager treats a missing `bots.feishu` record as a fresh, disabled bot with the existing feature defaults.
+A failed storage read or JSON decode leaves the settings unknown: Settings GET/PUT and pairing requests fail,
+channel binding does not start registration, and `feishu.status` returns an error rather than an empty owner.
+The assistant therefore does not reconcile an unread pairing as an unpairing. Writes are blocked until a complete read succeeds.
+
+Later status, settings and transport lookups retry the read, at most once every five seconds per manager while it fails.
+Each storage read has a five-second deadline, shortened by the caller's earlier cancellation. Only one read runs at a time;
+it releases the bot settings mutex during storage I/O, and concurrent lookups return temporarily unavailable instead of
+waiting behind the read. A timeout starts the same cooldown, and the next eligible lookup can recover.
+There is no additional polling loop. A successful read restores the saved credentials, owner, pending pairing and switches
+and starts the enabled bot's connection under the manager's existing context; the owner does not pair again.
+Successful reads, including a genuinely missing record, are cached as before. JSON `null` and `{}` retain the existing
+defaulted-decode behavior; only an actual read/decode error leaves settings unknown. A disabled bot, a member hub or a manager
+whose context has ended keeps the connection closed. Persistently invalid records remain protected and log one failure
+per attempted read; correcting the stored record lets the next eligible lookup recover it. This does not add a reset or
+migration of invalid data, change chat permissions, or change the card-nudge defaults or timing.
+
+The lark-cli connector is registered before connector switches and options are restored, even while its profile is
+unknown. Every CLI execution, including Inbox polling and login, is gated on a known identity. A manager.json profile
+override is already authoritative during a storage outage; a genuinely empty saved configuration still selects the CLI
+default after a successful read. A saved manual profile applies even when the bot itself is disabled.
+On recovery the existing connector refresh path synchronizes the managed profile when needed and replaces the placeholder
+outside the bot settings lock, after startup has restored connector settings. Replacement preserves the connector's own
+enabled/feed switches and current options; retained old connectors refuse calls rather than reuse their Inbox caches
+for a different profile. Publication stays quarantined until the new instance has its disabled mark; only then is the
+identity gate released and an enabled connector started. Retired instances refuse process execution even when the selected
+profile name is unchanged. Assistant configuration and extension host CLI requests also fail closed while identity is unread.
+
+The connector's `connectors.settings` record is independent of `bots.feishu`: a failed read quarantines the placeholder
+with its connector and Inbox feed off, and rejects preference writes until that record can be read completely. Recovery
+reads its durable options, feed and enabled choices before starting the replacement; a missing record keeps the existing
+defaults. A manager.json profile override still works when only bot settings are unavailable, with known connector choices.
+An unavailable preferences record also gates that override until its enabled/feed policy is known.
+
+A failed managed-profile synchronization remains pending after bot settings have loaded. Ordinary bot status/transport
+lookups, connector listings and tool/CLI calls can request one recovery attempt after the shared five-second failure
+cooldown. Concurrent requests coalesce into one worker; synchronization runs outside the bot lock under the manager's
+lifetime. There is no recovery timer loop. A later successful synchronization releases the identity gate, restores the
+connector preferences and resumes its normal lifecycle.
+
 ## How it differs from Lark `/agent`
 
 | | Lark bot (this page) | Lark `/agent` (`docs/extensions/lark-agent.md`) |
