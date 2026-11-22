@@ -11,6 +11,11 @@ const calls = `${directory}/calls.jsonl`
 const loaded = new Set()
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\n')
 const server = createServer(async (req, res) => {
+  // Agent port discovery probes listeners with GET /; it is not a native call and must not kill the fake.
+  if (req.method !== 'POST') {
+    res.writeHead(404).end('{"message":"Unknown native method"}')
+    return
+  }
   const chunks = []
   for await (const chunk of req) chunks.push(chunk)
   const params = JSON.parse(Buffer.concat(chunks).toString())
@@ -105,7 +110,10 @@ const server = createServer(async (req, res) => {
   res.writeHead(404).end('{"message":"Unknown native method"}')
 })
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
-const openService = () => writeFileSync(log, `Language server listening on random port at ${server.address().port} for HTTP\n`)
+const openService = () => {
+  writeFileSync(log, `Language server listening on random port at ${server.address().port} for HTTP\n`)
+  writeFileSync(`${directory}/service-port`, String(server.address().port))
+}
 if (!JSON.parse(readFileSync(`${directory}/trajectory.json`, 'utf8')).lazyService) openService()
 const input = createInterface({ input: process.stdin })
 let prompts = 0

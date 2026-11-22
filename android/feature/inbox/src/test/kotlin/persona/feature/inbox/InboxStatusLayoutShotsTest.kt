@@ -98,7 +98,7 @@ class InboxStatusLayoutShotsTest {
     private fun assertComplete(text: String, context: String, checkVisualOverflow: Boolean = true) {
         val node = rule.onNodeWithText(text, useUnmergedTree = true).fetchSemanticsNode()
         val layouts = mutableListOf<TextLayoutResult>()
-        node.config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
+        val _ = node.config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
         val layout = layouts.single()
         val lastGlyph = layout.getBoundingBox(text.lastIndex)
         if (checkVisualOverflow) {

@@ -704,8 +704,8 @@ private fun ChatPage(
     // Paths in messages link only when there on the machine (PathLinks.kt): asked of the session's directory.
     val pathPresence = remember(chrome.files, key, session?.cwd, chrome.onOpenPath != null) {
         val files = chrome.files
-        val cwd = session?.cwd.orEmpty()
-        if (files == null || cwd.isBlank() || chrome.onOpenPath == null) null
+        val cwd = session?.cwd.orEmpty().ifBlank { "~" }
+        if (files == null || key.machineId.isBlank() || chrome.onOpenPath == null) null
         else PathPresence(scope, { paths -> files.stat(key.machineId, cwd, paths) })
     }
     val currentSend by rememberUpdatedState<(String) -> Unit>({ send(it) })
@@ -891,11 +891,25 @@ private fun ChatPage(
     } else null
     val replyUsage = rememberReplyUsage(snapshot.items, projection.lines,
         persona = renderStyle == ChatRenderStyle.Assistant, hideAnswerId = liveAnswerId, catalog = actionsService)
+    val starredChat = remember(key, renderStyle, session, personaName) {
+        StarredChatContext(
+            key = key,
+            conversation = if (renderStyle == ChatRenderStyle.Assistant) {
+                persona.core.contracts.api.StarredConversation.Assistant
+            } else {
+                persona.core.contracts.api.StarredConversation.Agent
+            },
+            title = session?.displayTitle.orEmpty(),
+            speaker = if (renderStyle == ChatRenderStyle.Assistant) personaName else session?.displayTitle.orEmpty(),
+            manager = session?.manager,
+        )
+    }
     CompositionLocalProvider(LocalChatMarkdownCache provides markdownCache, LocalChatRowActions provides rowActions,
         LocalContentColor provides PersonaTheme.palette.ink, LocalChatPorts provides chatPorts,
         persona.core.designsystem.LocalAssistantCards provides cardsHost, LocalChatSubagents provides subagentLinks, LocalSubagentFolds provides subagentFolds, LocalChatWorkflows provides workflowCards,
         LocalChatTaskIndex provides projection.tasks, LocalChatJumpToCall provides callJumps::jump, LocalToolNames provides toolNames,
         LocalReplyUsage provides replyUsage, LocalChatChildren provides childCards,
+        LocalStarredChatContext provides starredChat,
         LocalSubagentHarness provides session?.let { subagentHarness(it, res) }) {
         // Under the files pane or the terminal's cover: hidden from screen readers too.
         ChatLinkHost(Modifier.fillMaxSize().background(PersonaTheme.palette.background)
@@ -922,6 +936,7 @@ private fun ChatPage(
                     RuleSuggestionLine("card:${card.id}", card.suggestion, tasks, { notice = operationFeedback(it).text.resolve(res) },
                         card.manager, enabled = canApprove)
                 }
+                val cardHeight = rememberCardHeightStore()
                 // The pending cards above the composer (DESIGN_SYSTEM.md 4.8, iOS PendingCards and TaskQuestions), in two places:
                 // [task] Persona's task question above its entries, else the stack. Each takes at most half the page and never so
                 // much that the composer leaves it; with the keyboard up, what the conversation has above the rest of the
@@ -931,15 +946,37 @@ private fun ChatPage(
                     val density = LocalDensity.current
                     val above = LocalChromeInsets.current.top
                     val otherShown = if (task) stackCards.isNotEmpty() else taskAsk != null
+                    val lone = cards.singleOrNull()
+                    val canResize = !keyboard && lone != null && (task || taskAsk == null)
+                    val resizeRange by remember(canResize, density, above, task, otherShown, windowHeightPx) {
+                        derivedStateOf {
+                            if (!canResize) null else with(density) {
+                                PendingStack.resizeRange(pageHeight(), rest = (footerHeight - taskHeight - stackHeight).coerceAtLeast(0).toDp(),
+                                    header = above + topBarHeight.toDp(), floor = Tokens.Space.xl,
+                                    other = if (!otherShown) null else (if (task) stackHeight else taskHeight).toDp())
+                            }
+                        }
+                    }
+                    val resize = if (canResize && lone != null && resizeRange != null) {
+                        CardResize(
+                            id = lone.id,
+                            height = { with(density) { (if (task) taskHeight else stackHeight).toDp() } },
+                            range = resizeRange!!,
+                            store = cardHeight,
+                        )
+                    } else null
                     // The window's height is a key too: it stands in for the page's until the page is measured, and the
                     // lambda this derived state keeps must see the window's current one after a resize.
-                    val cap by remember(keyboard, density, above, task, otherShown, windowHeightPx) {
+                    val cap by remember(keyboard, density, above, task, otherShown, windowHeightPx, resize, cardHeight) {
                         derivedStateOf {
-                            with(density) {
+                            val defaultCap = with(density) {
                                 PendingStack.cap(pageHeight(), keyboard, rest = (footerHeight - taskHeight - stackHeight).coerceAtLeast(0).toDp(),
                                     header = above + topBarHeight.toDp(), floor = Tokens.Space.xl,
                                     other = if (!otherShown) null else (if (task) stackHeight else taskHeight).toDp())
                             }
+                            if (resize != null && !requestFolds.isFolded(resize.id)) {
+                                cardHeight.cap(defaultCap, resize.range, resize.id)
+                            } else defaultCap
                         }
                     }
                     // In a box of its own: with no cards it is nothing, and its height reads 0 again.
@@ -951,7 +988,8 @@ private fun ChatPage(
                             blockedReason = if (canApprove) null else approvalBlockedReason(res, session),
                             terminalHelp = canTerminal, onDiscardLocal = interactionController::discard, keyboard = keyboard,
                             labels = if (task) taskAsk?.let { mapOf(it.card.id to it.label) }.orEmpty() else emptyMap(),
-                            first = if (task) null else chrome.requestId, counted = !task, suggestion = ruleLine)
+                            first = if (task) null else chrome.requestId, counted = !task, suggestion = ruleLine,
+                            resize = resize)
                     }
                 }
                 val onOpenSibling = chrome.onOpenSession
@@ -1006,8 +1044,9 @@ private fun ChatPage(
                                 onFreeze = { timeline.freeze(currentItems()); timelineVersion++ },
                                 onVisibilityChanged = { taskPageVisible = it },
                                 onExpandFold = ::expand, foldErrors = foldErrors,
-                                // While the link card peeks, the composer needs the room more (glass laid them over each other).
-                                showBar = linkInset.value <= 0f, callJumps = callJumps)
+                                // Glass agent chats surface the plan via the floating PlanPill above the composer (matching iOS)
+                                // instead of a top full-width progress bar; also hide while the link card peeks.
+                                showBar = linkInset.value <= 0f && !(glass && agentChat), callJumps = callJumps)
                         }
                     },
                     bottomBar = footer@ {
@@ -1074,16 +1113,25 @@ private fun ChatPage(
                                 if (assistantChat) taskHost?.let { host ->
                                     val namespace = GroupKeys.namespaceOf(key.machineId)
                                     val owner = session?.manager ?: managerChoice.shown
-                                    val trayRequests = taps.shown(allRequests).filter { request ->
-                                        GroupKeys.namespaceOf(request.machineId) == namespace &&
-                                            (request.sessionKey == key || request.sessionKey in taskKeys ||
-                                                host.sessions.any { it.key == GroupKeys.rawKey(request.sessionKey) && !it.assistant && (it.manager ?: managerChoice.defaultId) == owner })
+                                    val trayRequests = remember(allRequests, taps, namespace, key, taskKeys, host.sessions, owner, managerChoice.defaultId) {
+                                        val ownedAgents = host.sessions.asSequence()
+                                            .filter { !it.assistant && (it.manager ?: managerChoice.defaultId) == owner }
+                                            .map { it.key }
+                                            .toHashSet()
+                                        taps.shown(allRequests).filter { request ->
+                                            GroupKeys.namespaceOf(request.machineId) == namespace &&
+                                                (request.sessionKey == key || request.sessionKey in taskKeys ||
+                                                    GroupKeys.rawKey(request.sessionKey) in ownedAgents)
+                                        }
+                                    }
+                                    val trayInboxDrafts = remember(inboxDrafts, owner, managerChoice.defaultId) {
+                                        inboxDrafts.filter { (it.manager ?: managerChoice.defaultId) == owner }
                                     }
                                     // What its tasks ask, at the bottom where the user is: the oldest question above the entries and the
                                     // tray, answered there (iOS taskFooter, TaskQuestions).
                                     taskAsk?.let { pendingCards(listOf(it.card), true, keyboard) }
                                     AssistantTrays(host, assistantTrays, trayRequests,
-                                        inboxDrafts.filter { (it.manager ?: managerChoice.defaultId) == owner }, traySchedules,
+                                        trayInboxDrafts, traySchedules,
                                         maximumHeight = trayMax,
                                         busy = trayApproving || traySending || taps.busy, enabled = canSend,
                                         onApprove = ::approveTray, onReview = { interaction ->
@@ -1227,7 +1275,8 @@ private fun ChatPage(
                         onFullText = { item -> readFullText(key, item) }, loader = loader, session = session,
                         earlierEngines = earlierEngines, onReadEarlierText = ::readFullText,
                         machineName = machines.firstOrNull { it.id == key.machineId }?.name, subagentCards = subagentCards,
-                        messageMenu = messageMenu, turnLauncher = session?.launcher)
+                        messageMenu = messageMenu, turnLauncher = session?.launcher,
+                        hasPendingCards = requests.isNotEmpty() || taskAsk != null)
                 }
             }
             ChatPageOverlays(pushedDetail, taskHost, search, searchableItems, projection.turns.size, snapshot.hasOlder,

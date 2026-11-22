@@ -752,7 +752,7 @@ func (s *Service) toolSearchWords(lang i18n.Lang, d Device, st ReadinessStep) Re
 	if st.Code != proto.TurnErrorToolSearchUnsupported {
 		return st
 	}
-	if nodes, ok := s.devs.(nodeAnnouncer); ok && nodes.NodeAnnounced(d.ID, nodeproto.AssistantToolSearchFallback) {
+	if nodes, ok := s.physicalDevices().(nodeAnnouncer); ok && nodes.NodeAnnounced(d.ID, nodeproto.AssistantToolSearchFallback) {
 		st.Detail = i18n.T(lang, "assistant-readiness.tool_search_unsupported_fallback_detail")
 	}
 	return st

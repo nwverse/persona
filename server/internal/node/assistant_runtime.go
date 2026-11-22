@@ -63,9 +63,37 @@ func (n *Node) runtimeAssistant(id string) bool {
 	return runtimeSessionID(id) && n.isAssistantSession(id)
 }
 
+func (n *Node) strictRuntimeSession(id string, strict bool) bool {
+	if !strict {
+		return false
+	}
+	_, _, known := n.runtimes.belongs(id)
+	return known
+}
+
+// assistantRuntimeRoute classifies the resolved launcher and the existing conversation.
+func (n *Node) assistantRuntimeRoute(id, launcher string, strictRuntime bool) (*runtimeConn, bool) {
+	return n.assistantRuntime(launcher), n.runtimeAssistant(id) || strictRuntime
+}
+
 // runtimeSessionID: id is shaped like a runtime's conversation. Claude's and Codex's ids are uuids (validID); a
 // runtime's are its own (DSH: session-<uuid>).
 func runtimeSessionID(id string) bool { return id != "" && !validID(id) && runtimeIDRe.MatchString(id) }
+
+func (n *Node) runtimeAssistantCwd(id, cwd string, st sessionState) string {
+	if cwd != "" {
+		return cwd
+	}
+	if st.Cwd != "" {
+		return st.Cwd
+	}
+	if id != "" {
+		if row, _, ok := n.runtimes.rowOf(id); ok && row.Cwd != "" {
+			return row.Cwd
+		}
+	}
+	return identity.AssistantDir(n.home)
+}
 
 // assistantSendRuntime is assistantSend on a runtime (h, nil when it is not connected): a new conversation is started
 // there (session.start with assistant), then the message goes with the snapshot as its context unless public is true,
@@ -73,7 +101,7 @@ func runtimeSessionID(id string) bool { return id != "" && !validID(id) && runti
 // instructions only a runtime needs (memory, Feishu). Runtimes that advertise caps.supervision_policy receive manager-owned
 // supervision_instructions as an explicit protocol field on session.start and session.send; non-capable runtimes keep
 // the runtimePolicyDropped boundary (refusing supervision deliveries, dropping policy for owner messages).
-func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd, launcher, text string, images []proto.Image, mode string, public, strict bool, modelEffortPolicy ...string) (string, error) {
+func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd, launcher, text string, images []proto.Image, mode string, public, strict bool, selected []assistantskills.Entry, modelEffortPolicy ...string) (string, error) {
 	hasInput := strings.TrimSpace(text) != "" || len(images) != 0
 	if id != "" && hasInput && n.runtimes.compacting(id) {
 		return "", runtimeCompactingRefusal(ctx)
@@ -89,12 +117,7 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		policy = modelEffortPolicy[2]
 	}
 	st, known := n.state.get(id)
-	if cwd == "" {
-		cwd = st.Cwd
-	}
-	if cwd == "" {
-		cwd = identity.AssistantDir(n.home)
-	}
+	cwd = n.runtimeAssistantCwd(id, cwd, st)
 	if launcher == "" {
 		launcher = st.Launcher
 	}
@@ -194,6 +217,14 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 			live = strings.TrimSpace(n.runtimeInstructions(cwd, memDir) + "\n" + live)
 		}
 	}
+	if len(selected) > 0 {
+		skillBlock := selectedSkillInstructions(selected)
+		if live != "" {
+			live = strings.TrimSpace(live + "\n" + skillBlock)
+		} else {
+			live = skillBlock
+		}
+	}
 	params := map[string]any{"session_id": id, "text": text, "images": images}
 	// The message's own client_msg_id, none when it came without one (#5225): a runtime may put the id it is sent with
 	// on the message's line, and the apps match their pending bubble by the id a line carries, or by its words when it
@@ -220,13 +251,23 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	cctx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
 	defer cancel()
 	var said json.RawMessage
+	sentAt := time.Now()
+	if !command {
+		n.ttft.arm(id, sentAt, "")
+	}
 	if err := h.peer.Call(cctx, "session.send", params, &said); err != nil {
+		if !command && !maybeDelivered(err) {
+			n.ttft.disarm(id, sentAt)
+		}
 		if isRPCError(err) {
 			return "", n.localizeSupervisionRefusal(ctx, err)
 		}
 		return "", fmt.Errorf("%s: %w", h.label(), err)
 	}
 	if runtimeAnswerFlag(said, "queued") {
+		if !command {
+			n.ttft.disarm(id, sentAt)
+		}
 		markSendQueued(ctx)
 	}
 	if st.AwaitingFirstMessage || beforeSend != nil {

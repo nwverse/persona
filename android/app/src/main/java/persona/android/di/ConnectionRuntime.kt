@@ -287,7 +287,7 @@ class ConnectionRuntime @Inject constructor(application: Application) : HubConne
         paired.value = false
         app.showHub(null)
         mutableState.value = ConnectionState.Revoked
-        scope.launch { runCatching { dataStore.publish(null) } }
+        scope.launch { val _ = runCatching { dataStore.publish(null) } }
     }
 
     /** Opens every group the registry lists (the first read migrates a single pairing); false when there is none. */

@@ -53,11 +53,14 @@ const BROWSERS_EVERY = 10_000 // ms: how often pi-web is asked which sessions a 
  *   agent: the agent this host serves (pi; omp for the pi fork of the same extension API). name: the agent's name in
  *   the apps. instancePrefix: the `<prefix>-<pid>` the runtime and, when instance is not given, the instance take.
  *   interactionPrefix: what a card's id starts with. resumeCommand: how its terminal resumes a session on disk.
+ *   settleEvents: which events end a turn for this agent (pi's agent_settled, which also covers its automatic retry,
+ *   compaction and queued continuation; omp's pi compatibility layer dispatches only the loop's agent_end).
  *   interruptSettleMs: how long an interrupt waits for the turn to end (tests).
  */
 export function createPiHost(deps, options = {}) {
   const web = deps.web
   const agent = options.agent ?? 'pi'
+  const settleEvents = options.settleEvents ?? ['agent_settled']
   const instancePrefix = options.instancePrefix ?? 'pi'
   const interactionPrefix = options.interactionPrefix ?? 'pi'
   // --approve: the resume runs in a herdr tab nobody watches, where pi's project Trust prompt would hold it (#9462).
@@ -104,8 +107,7 @@ export function createPiHost(deps, options = {}) {
     supervisionPolicy: Boolean(web),
     ...(listDisk ? {
       launcher: 'pi-web', launcherModel: agent,
-      // A display label is not a model argument. This adapter currently keeps
-      // the model chosen inside pi; choosing its default sends no model/effort.
+      // pi keeps its own model: the display label is not a model argument, so no model/effort is sent.
       launchers: [{ name: 'pi-web', agent, model: agent, models: [{ id: 'default', name: agent, default: true }], permission_modes: ['default', 'bypassPermissions'] }],
     } : {}),
     socketPath: options.socketPath,
@@ -403,7 +405,8 @@ export function createPiHost(deps, options = {}) {
       await refreshDisk(true)
       const path = await diskPath(id)
       const running = live.get(id)
-      if (!running && !path) throw new RpcError('The prepared pi session is not yet available', 'assistant_supervision_runtime')
+      // No prompt went to pi-web before recording the assistant: the switch rolls back.
+      if (!running && !path) throw new RpcError('The prepared pi session is not yet available', 'assistant_supervision_runtime', { delivered: 'none' })
       recordAssistant(running?.ctx.sessionManager || deps.SessionManager.open(path), params)
       if (prompt) await send({ ...params, session_id: id, text: prompt })
     }
@@ -508,7 +511,10 @@ export function createPiHost(deps, options = {}) {
       track(ctx).running = true
       rt.sessionsChanged(0)
     })
-    pi.on('agent_settled', (_e, ctx) => {
+    // settleEvents: pi's agent_settled, or the agent's own word for a turn that is over (omp's agent_end; the events
+    // of an agent that dispatches more than one of them settle on the first, as the same turn's later ones change
+    // nothing).
+    for (const event of settleEvents) pi.on(event, (_e, ctx) => {
       const s = track(ctx)
       s.running = false
       wakeSettled(s)

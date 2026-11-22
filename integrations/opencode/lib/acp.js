@@ -294,7 +294,6 @@ export class OpencodeAcpClient extends EventEmitter {
           this.pending.delete(id)
           reject(new Error(`opencode acp ${method} timed out after ${timeoutMs}ms`))
         }, timeoutMs)
-        timer.unref?.()
       }
       this.pending.set(id, { resolve, reject, timer })
       try {

@@ -140,8 +140,9 @@ type updater struct {
 	busy        []busyItem
 	running     bool
 	checking    bool
-	now         bool // the user confirmed "Update now": stop waiting for idle
-	confirmed   bool // no update to confirm, or this process confirmed it
+	opGen       uint64 // bumped whenever an update or check starts, preventing busy-check ABA races
+	now         bool   // the user confirmed "Update now": stop waiting for idle
+	confirmed   bool   // no update to confirm, or this process confirmed it
 
 	// refreshing is held by the one request reading latest.json for an install script (freshRelease); refreshTried
 	// is when one last did. releaseRead is when release was read: a read that worked (lastCheck is when the hub last
@@ -155,6 +156,9 @@ type updater struct {
 	devRun      func(context.Context, *update.DevelopmentConfig, string, string, map[string]any, any) error
 	// behindNote is the update source and release noteBehind last logged as behind: once per pair, not every hour.
 	behindNote string
+	// testAfterBackupRecoveryCheck runs in tests right after UnrecoveredSnapshot
+	// and before re-acquiring u.mu in PUT /api/v1/hub/update/settings.
+	testAfterBackupRecoveryCheck func()
 }
 
 func newUpdater(h *Hub) *updater {
@@ -573,8 +577,9 @@ func (u *updater) rollback(p update.Pending, reason string) error {
 }
 
 // updateNodes puts the release's node binaries where "Redeploy" takes them (the manager's, internal/devices deploy.go)
-// and has the manager redeploy each connected machine whose node is not this build, one at a time. With node updates
-// off, the hub moved on from version from alone: the builds of that version it leaves in bin/nodes go aside.
+// and has the manager redeploy each connected machine whose node is not this build, one at a time. The builds of
+// version from that carry no version file go aside first, whether node updates are on or off: only the release's own
+// builds may pass for the hub's version (#1825; a platform the release does not carry, #12958).
 func (u *updater) updateNodes(ctx context.Context, staged, from string, development ...*update.DevelopmentCandidate) error {
 	dir := identity.NodeBinaryDir()
 	info, err := os.Lstat(dir)
@@ -597,6 +602,17 @@ func (u *updater) updateNodes(ctx context.Context, staged, from string, developm
 			}
 		}
 		return nil
+	}
+	if !dev && !managed && from != "" && from != u.h.version {
+		// The release replaces the builds of the platforms it carries; one it does not carry (a Windows build next to
+		// a release published without one, a build left by hand) would otherwise stay unlabelled and pass for this
+		// hub's version, and Redeploy would send it to fail the node's self-check. Set aside first, the release's
+		// builds go in below, and the manager fetches the rest from the release of the hub's version.
+		if moved, err := setAsideOldNodes(dir); err != nil {
+			u.h.logf("update: set aside the node builds of %s: %v", from, err)
+		} else if len(moved) > 0 {
+			u.h.logf("update: node builds of %s set aside before the release's go in: %s", from, strings.Join(moved, ", "))
+		}
 	}
 	if dev && from != "" && from != u.h.version {
 		if development[0].BackupID != "" {
@@ -770,9 +786,11 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 		dv.Why = u.developmentUnavailableWhy(l)
 	}
 	backupConfig := u.developmentBackupConfigLocked()
-	dv.BackupDirectory, dv.BackupRetain, dv.BuiltinQuiesce = backupConfig.Directory, backupConfig.Retain, backupConfig.Builtin
+	dv.BackupDirectory, dv.BackupRetain = backupConfig.Directory, backupConfig.Retain
+	dv.BuiltinQuiesce = backupConfig.Builtin && u.developmentQuiesceError(backupConfig) == nil
 	if u.h.cfg != nil {
 		dv.BackupDefaultDirectory = backup.RecommendedDevelopmentBackupDir(u.h.cfg.dir)
+		dv.BackupDirectoryIsDefault = backup.SamePath(backupConfig.Directory, dv.BackupDefaultDirectory)
 	}
 	v.Development = dv
 	if u.developmentLocked() {

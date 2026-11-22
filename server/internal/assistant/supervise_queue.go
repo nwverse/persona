@@ -14,6 +14,19 @@ func encodeDigestSignals(list []superviseSignal) string {
 	return string(raw)
 }
 
+// decodeDigestSignals reads the comparable JSON payload. The bool distinguishes a structured empty list from a legacy
+// text-only message or an invalid payload; exact retraction must not mistake the former for legacy prose.
+func decodeDigestSignals(raw string) ([]superviseSignal, bool) {
+	if raw == "" {
+		return nil, false
+	}
+	var list []superviseSignal
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return nil, false
+	}
+	return list, true
+}
+
 // Keep the same rendering for initial dispatch and a queue that has waited while tasks changed.
 func (s *Service) renderQueuedDigest(ctx context.Context, to string, list []prompts.SuperviseEntry, originalFresh ...bool) string {
 	here := s.settings(ctx)
@@ -23,7 +36,11 @@ func (s *Service) renderQueuedDigest(ctx context.Context, to string, list []prom
 	if len(originalFresh) > 0 {
 		fresh = originalFresh[0]
 	}
-	return prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(list), Leader: leader, Background: background,
+	level := supervisionTriage
+	if len(list) > 0 && !slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind != sigParkedSummary }) {
+		level = supervisionInfo
+	}
+	return prompts.RenderSupervise(prompts.Supervise{Level: level, Entries: sortEntries(list), Leader: leader, Background: background,
 		Fresh: fresh, Side: to != here.Main && !leader, Escalated: escalatedIn(list),
 		BackgroundEscalated: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigEscalated && e.Background }),
 		LeaderStuck:         slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigLeaderStuck }),
@@ -35,6 +52,36 @@ func (s *Service) renderQueuedDigest(ctx context.Context, to string, list []prom
 		}),
 		Inbox: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigInbox }),
 		Asked: askedIn(list), AskMinutes: int(askHoldFor.Minutes()), PushGrading: askedIn(list) && s.quietModeOn(ctx)})
+}
+
+// recheckDigestTo preserves the supervisor already persisted for a queued signal. New dispatch uses digestTo's
+// main-supervision policy; revalidating an existing relay must not rehome it merely because that policy changed.
+func (s *Service) recheckDigestTo(ctx context.Context, cfg Settings, g superviseSignal) string {
+	if g.To != "" {
+		return s.digestTo(ctx, cfg, g)
+	}
+	switch g.Kind {
+	case sigEscalated, sigFailed, sigStarted, sigLeaderStuck:
+		return cfg.Main
+	}
+	t, ok := s.todoNow(g.Todo)
+	if !ok || t.Supervision == nil {
+		return cfg.Main
+	}
+	lead := t.Supervision.Supervisor
+	if lead == "" || lead == cfg.Main {
+		return cfg.Main
+	}
+	if t.Supervision.state(t) == reviewNeedsUser && g.Kind != sigAllStopped {
+		return cfg.Main
+	}
+	return lead
+}
+
+// recheckDigestTarget applies the same runtime policy boundary as an immediate delivery without discarding the
+// supervisor preserved by recheckDigestTo.
+func (s *Service) recheckDigestTarget(ctx context.Context, cfg Settings, g superviseSignal) string {
+	return s.digestRuntimeTarget(ctx, cfg, g, s.recheckDigestTo(ctx, cfg, g))
 }
 
 // Recheck structured queue entries at the last delivery boundary. Unknown task state keeps the original queue.
@@ -64,12 +111,33 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 				return msg, false, true
 			}
 		}
+		if g.Kind == sigTodoReady {
+			if t, ok := s.todoNow(g.Todo); ok && t.DoneAt == nil {
+				if _, _, err := s.checkTodoAfterReady(ctx, t); err != nil {
+					return msg, false, true
+				}
+			}
+		}
+		if g.Kind == sigPRMerged {
+			if t, ok := s.todoNow(g.Todo); ok && t.DoneAt == nil {
+				if _, _, err := s.checkUnparkedPRMerged(ctx, t, g.PRURL); err != nil {
+					return msg, false, true
+				}
+			}
+		}
+		if g.Kind == sigParentCloseout {
+			if t, ok := s.todoNow(g.Todo); ok && t.DoneAt == nil {
+				if _, _, _, err := s.checkParentCloseoutReady(ctx, t); err != nil {
+					return msg, false, true
+				}
+			}
+		}
 		if e, ok := s.digestEntry(ctx, g, web); ok {
 			// A worker reassigned to an Agent needs the ordinary dispatcher, not assistant.send to its old conversation.
 			if _, handled, _ := s.leaderRoute(g); handled {
 				return msg, false, true
 			}
-			target := s.digestTarget(ctx, here, g)
+			target := s.recheckDigestTarget(ctx, here, g)
 			if target == "" {
 				return msg, false, true
 			}
@@ -136,6 +204,12 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 
 // Read the payload that is actually queued, rather than the last in-memory digest (which may have drained).
 func (s *Service) queuedDigestSignals(to string) []superviseSignal {
+	// A pre-signals relay has no structured payload, so retain the legacy book's fallback without nesting the locks in
+	// the opposite order from signalReplacing (supervise.mu → relays.mu). The queue is still checked under relays.mu;
+	// if it changed meanwhile, its current structured payload wins and this snapshot is not used.
+	s.supervise.mu.Lock()
+	legacy := slices.Clone(s.supervise.queued[to])
+	s.supervise.mu.Unlock()
 	b := &s.relays
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -151,10 +225,7 @@ func (s *Service) queuedDigestSignals(to string) []superviseSignal {
 			_ = json.Unmarshal([]byte(msg.Signals), &list)
 			return list
 		}
-		s.supervise.mu.Lock()
-		list = slices.Clone(s.supervise.queued[to])
-		s.supervise.mu.Unlock()
-		return list
+		return legacy
 	}
 	return nil
 }
