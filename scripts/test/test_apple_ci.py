@@ -239,6 +239,38 @@ class AppleCIPreparationTests(unittest.TestCase):
             current = current.replace('xcodebuild -project "$OFFLINE_PROJECT" -configuration Debug \\\n'
                                       '    -clonedSourcePackagesDirPath "$SPM/SourcePackages"',
                                       '"${XCODE[@]}"')
+            # #13281 independently brings the iPhone observer's bounded
+            # lifecycle in line with the existing regular-iPad observer.
+            readiness_start = current.index('    mkdir -p "$watch_log"', current.index("ci_run 'Verify hosted iOS test readiness'"))
+            readiness_end = current.index('    trap stop_watcher EXIT TERM INT', readiness_start) + len('    trap stop_watcher EXIT TERM INT')
+            self.assertIn('a fast probe must not terminate its product collector in the same group',
+                          current[readiness_start:readiness_end])
+            previous_readiness = '''    mkdir -p "$watch_log"
+    python3 "$ci_root/scripts/ci/apple_readiness_watch.py" \\
+      --udid "$udid" --bundle-id "$bundle_id" --scope-root "$output" \\
+      --app "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/Persona" \\
+      --test-bundle "$output/ios-tests/Build/Products/Debug-iphonesimulator/Persona.app/PlugIns/PersonaTests.xctest/PersonaTests" \\
+      --output "$watch_log" --seconds 900 &
+    watcher=$!
+    stop_watcher() {
+      local code=$?
+      trap - EXIT TERM INT
+      if kill -0 "$watcher" 2>/dev/null; then
+        mkdir -p "$watch_log"
+        : > "$watch_log/observer.stop"
+        kill -TERM "$watcher" 2>/dev/null || true
+      fi
+      # This wait is inside the original readiness deadline. The outer process
+      # group deadline still bounds a stuck watcher and all its child commands.
+      wait "$watcher" || true
+      exit "$code"
+    }
+    trap stop_watcher EXIT TERM INT'''
+            current = current[:readiness_start] + previous_readiness + current[readiness_end:]
+            current = current.replace('OFFLINE_PROJECT="$SOURCE/apple/PersonaOfflineUnitTests.xcodeproj"\n', '')
+            current = current.replace('xcodebuild -project "$OFFLINE_PROJECT" -configuration Debug \\\n'
+                                      '    -clonedSourcePackagesDirPath "$SPM/SourcePackages"',
+                                      '"${XCODE[@]}"')
             current = current.replace(wire, '')
             current = current.replace(' || [ "$LANE" = ios-ipad-diagnostic ]', '').replace('|ios-ipad-diagnostic', '')
             current = current.replace('      checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; diagnostics="$9"; lane="${10}"; shift 10',

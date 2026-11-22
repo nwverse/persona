@@ -5,6 +5,7 @@ from pathlib import Path
 import signal
 import subprocess
 import textwrap
+import time
 import unittest
 
 import yaml
@@ -146,9 +147,9 @@ FAKE_XCRUN_WRAPPER = textwrap.dedent('''\
         if args[:2] == ["simctl", "boot"] and os.environ.get("BOOT_HANG") == "1":
             assert args[2:] == [os.environ["OWNED_UDID"]], args
             def stop(*_):
-                (root / "boot.stopped").write_text("terminated")
                 sys.exit(143)
             signal.signal(signal.SIGTERM, stop)
+            (root / "boot.stopped").write_text("terminated")
             signal.pause()
         os.execv(str(root / "bin/fake-simctl"), ["xcrun", *args])
     ''')
@@ -265,7 +266,10 @@ class AppleReadinessTests(unittest.TestCase):
 ci_run() {
   local label="$1" budget="$2"; shift 2
   printf '%s|%s\\n' "$label" "$budget" >> "$FAKE/budgets"
-  python3 "$CI_ROOT/scripts/ci/run.py" --label "$label" --timeout "$TEST_STEP_TIMEOUT" -- "$@"
+  if [[ "$label" == *readiness* || "$label" == "Grant Reminders access to the owned test app" ]]; then
+    budget="${TEST_STEP_TIMEOUT:-$budget}"
+  fi
+  python3 "$CI_ROOT/scripts/ci/run.py" --label "$label" --timeout "$budget" -- "$@"
 }
 XCODE=(xcodebuild)
 OFFLINE_PROJECT="$SOURCE/apple/PersonaOfflineUnitTests.xcodeproj"
@@ -279,8 +283,12 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
                    CI_BUNDLE_ID="org.example.persona.ci",
                    IOS_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-27-0", OWNED_UDID=owned_udid,
                    REGULAR_SIM_NAME="owned regular About fixture",
-                   FAKE=str(self.root), TEST_STEP_TIMEOUT="10")
+                   FAKE=str(self.root))
         env.update(options)
+        # A short injected deadline belongs to the readiness/probe only, not to
+        # build/simulator setup that must start it on slower Darwin hosts.
+        if "TEST_STEP_TIMEOUT" not in options:
+            env["TEST_STEP_TIMEOUT"] = "10"
         env.setdefault("FULL_RESULT_SUITE", "TypeScaleTests,IconVocabularyTests,TokenRatchetTests,StyleSpecTests")
         result = subprocess.run(["bash", "-c", shell], cwd=ROOT, env=env,
                                 capture_output=True, text=True, timeout=25)
@@ -416,7 +424,7 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
         # its log in this writable fixture, not at a machine-level fixture path.
         observer = textwrap.dedent('''\
             #!/usr/bin/env python3
-            import json, os, signal, sys
+            import json, os, sys, time
             from pathlib import Path
             root = Path(os.environ["READINESS_FIXTURE"])
             arguments = sys.argv[1:]
@@ -424,17 +432,18 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
             sys.stdout = sys.stderr = log
             root.joinpath("observer.pid").write_text(str(os.getpid()))
             root.joinpath("observer-arguments.json").write_text(json.dumps(arguments))
-            def stop(*_):
-                root.joinpath("observer-stopped").write_text("terminated")
-                sys.exit(0)
-            signal.signal(signal.SIGTERM, stop)
-            signal.signal(signal.SIGINT, stop)
+            destination = Path(arguments[arguments.index("--output") + 1])
             root.joinpath("observer-ready").write_text("ready")
             print("observer-ready", flush=True)
             log.close()
             os.close(1)
             os.close(2)
-            signal.pause()
+            deadline = time.monotonic() + 10
+            while not destination.joinpath("observer.stop").exists():
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("observer stop was not published")
+                time.sleep(0.01)
+            root.joinpath("observer-stopped").write_text("stop-file")
         ''')
         ci_root = self.root / "ci-root/scripts/ci"
         ci_root.mkdir(parents=True)
@@ -529,7 +538,7 @@ IOS_TESTS=(xcodebuild -destination "platform=iOS Simulator,id=$SIM" -destination
         details = stdout + stderr + (log_path.read_text() if log_path.exists() else "")
         self.assertEqual(result.returncode, 0, details)
         self.assertNotIn("unbound variable", stdout + stderr)
-        self.assertEqual((self.root / "observer-stopped").read_text(), "terminated")
+        self.assertEqual((self.root / "observer-stopped").read_text(), "stop-file")
         self.assertEqual((self.root / "budgets").read_text(), "Verify hosted iOS test readiness|900\n")
         arguments = json.loads((self.root / "observer-arguments.json").read_text())
         self.assertEqual(arguments[arguments.index("--bundle-id") + 1], "org.example.persona.ci")
@@ -824,6 +833,16 @@ exit 65
                     self.assertTrue((case.root / pid_name).exists())
                     # The deadline terminates the probe/result process, not just its shell.
                     self.assertEqual((case.root / pid_name.replace(".pid", ".stopped")).read_text(), "terminated")
+                    observer = case.output / "diagnostics/live-readiness"
+                    self.assertIn("xcodebuild-finished", (observer / "observer.status.txt").read_text())
+                    self.assertTrue((observer / "host-final.json").is_file())
+                    for suffix in ("architecture.txt", "libraries.txt", "bundle-signature.txt"):
+                        self.assertTrue((observer / f"product-0-{suffix}").is_file(), suffix)
+                    watcher_pids = [int(pid) for pid in case.watcher_pids.read_text().splitlines()]
+                    self.assertTrue(watcher_pids)
+                    for pid in watcher_pids:
+                        with self.assertRaises(ProcessLookupError, msg=f"watcher {pid} survived {key} cleanup"):
+                            os.kill(pid, 0)
                 finally:
                     case.doCleanups()
 
