@@ -416,7 +416,12 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 			return proto.Session{}, refusePick(http.StatusBadRequest, err)
 		}
 	}
-	if err := s.validateSkillSelections(ctx, machine, "", params); err != nil {
+	if p.TaskExecution {
+		err = s.validateTaskSelections(ctx, machine, "", params, p.PromptSelections)
+	} else {
+		err = s.validateSkillSelections(ctx, machine, "", params)
+	}
+	if err != nil {
 		return proto.Session{}, err
 	}
 	var res struct {
@@ -426,8 +431,7 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		s.putCacheKeepalive(ctx, machine, "", main, params)
 	}
 	if main && p.Space == "" && p.GuestTools == nil {
-		cfg := s.settings(ctx)
-		ctx = context.WithValue(ctx, supervisionStartup{}, cfg.MainSupervisesOwnTasks != nil && *cfg.MainSupervisesOwnTasks)
+		ctx = context.WithValue(ctx, supervisionStartup{}, true)
 	}
 	err = s.call(ctx, machine, DeviceAssistantSend, params, &res)
 	if fromSetting && (nodeOutdated(err) || profileRefused(err)) {
@@ -531,7 +535,7 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 func (s *Service) startConversation(ctx context.Context, p startParams) (proto.Session, error) {
 	return s.startSignedIn(ctx, StartParams{Text: prompts.MessageSourceText(p.Text, p.Source), PermissionMode: p.PermissionMode, Purpose: p.Purpose, Space: p.Space,
 		Origin: p.Origin, OriginRef: p.OriginRef, MachineID: p.MachineID, Cwd: p.Cwd, TaskExecution: p.TaskExecution,
-		LegacyTaskExecution: p.LegacyTaskExecution, TaskModel: p.TaskModel, NewSessionID: p.NewSessionID})
+		LegacyTaskExecution: p.LegacyTaskExecution, PromptSelections: p.PromptSelections, TaskModel: p.TaskModel, NewSessionID: p.NewSessionID})
 }
 
 // Start is assistant.start: a conversation one of the hub's features starts (the inbox's AI twin), or the channels'

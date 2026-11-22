@@ -428,6 +428,15 @@ func (s *Service) parkCloseout(ctx context.Context, t Todo, c proto.Session, now
 	return parked
 }
 
+// automaticParkSummaryTo fixes the logical target routeTo would choose. Delivery still checks reachability; an
+// optimistic dispatcher lookup here only covers the no-main fallback and keeps generation and revalidation consistent.
+func (s *Service) automaticParkSummaryTo(ctx context.Context, cfg Settings, t Todo) string {
+	if to := s.digestTo(ctx, cfg, superviseSignal{Todo: t.ID}); to != "" {
+		return to
+	}
+	return s.dispatcherOf(t.ID, func(string) bool { return true })
+}
+
 // One morning batch, starting the day after admission; never one immediate model wake per new park.
 func (s *Service) automaticParkSummary(ctx context.Context, t Todo, now time.Time) (superviseSignal, bool) {
 	r := t.Supervision.parking()
@@ -436,7 +445,7 @@ func (s *Service) automaticParkSummary(ctx context.Context, t Todo, now time.Tim
 	}
 	a := r.Automatic
 	day := now.Format(time.DateOnly)
-	to := s.digestTo(s.settings(ctx), superviseSignal{Todo: t.ID})
+	to := s.automaticParkSummaryTo(ctx, s.settings(ctx), t)
 	if now.Hour() < 9 || !a.FirstAt.In(now.Location()).Before(time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())) ||
 		to == "" || a.SummaryDay == day && a.SummaryTo == to {
 		return superviseSignal{}, false

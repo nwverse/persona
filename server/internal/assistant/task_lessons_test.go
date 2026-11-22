@@ -28,9 +28,12 @@ func lessonsEnv(t *testing.T, on bool) (*Service, *fakeHub, Todo) {
 		Status: proto.StatusDone, LastText: outcomeReply})
 	f.outcome = `{"outcome":"修好了","links":[],"decisions":[],"pitfalls":[]}`
 	f.lessons = lessonsAnswer
-	if on {
-		setSettings(t, s, func(v *Settings) { v.TaskLessons = new(true) })
-	}
+	setSettings(t, s, func(v *Settings) {
+		v.Main = "conv1" // #5732: acceptance comes from the supervising main conversation, not Origin alone.
+		if on {
+			v.TaskLessons = new(true)
+		}
+	})
 	s.superviseTodo(context.Background(), todo.ID, "conv1", []string{"横屏不再崩溃"}, 0)
 	return s, f, todoNow(s, todo.ID)
 }

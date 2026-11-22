@@ -197,6 +197,9 @@ func TestBackgroundForkedRoundInheritsAuthAndSupervisionTools(t *testing.T) {
 		t.Fatalf("supervision_finish unexpected result: %+v", resFinish)
 	}
 
+	// Seed the durable evidence a delivered legacy notice records. A fork inherits only that base evidence; merely being
+	// a new main-supervised task is not enough (#5732).
+	s.rememberLegacyBackground("bg1", []superviseSignal{{Todo: todo.ID, Kind: sigReview, To: "bg1"}})
 	resReview := privacyRequest(t, s, "other", "mcp.call", map[string]any{
 		"session_id": forkFromRelay,
 		"assistant":  true,
@@ -487,18 +490,17 @@ func TestBackgroundBreakerTripsOnMCPToolsDiscoveryDowngrade(t *testing.T) {
 	}
 }
 
-// Replacing an outgrown background supervisor clears any fork and circuit-breaker state that belonged to the previous
-// supervisor, so the replacement starts with a clean slate; if starting the replacement fails, the old supervisor's
-// state stays intact.
-func TestReplaceBackgroundClearsForkAndBreakerState(t *testing.T) {
+// An outgrown legacy background supervisor moves its unread work to main without starting a replacement (#5732). Its
+// attested fork and breaker state belong to the unchanged base and must survive both an unavailable start path and a
+// later settings recovery; no new supervisor is created and no stale state is cleared merely to make a replacement clean.
+func TestOutgrownBackgroundKeepsForkAndBreakerStateWithoutReplacement(t *testing.T) {
 	s, f, _, bg, nextSignal := setupAllStoppedBackground(t)
 	ctx := context.Background()
 
-	// Seed a forked round session and trip both the repeated no-op all_stopped breaker and the auth-denied breaker.
 	const staleFork = "bg1-fork-stale"
 	s.registerBackgroundRoundFork(ctx, "server", staleFork, bg)
 	if !s.isBackgroundSession(ctx, staleFork) {
-		t.Fatal("registered fork should be recognized before replacement")
+		t.Fatal("registered fork should be recognized before the legacy round outgrows its anchor")
 	}
 
 	wakeRound(s, nextSignal(1))
@@ -507,71 +509,60 @@ func TestReplaceBackgroundClearsForkAndBreakerState(t *testing.T) {
 	s.backgroundRoundTurnEnded(ctx, bg, time.Now())
 	s.backgroundRoundDelivered(ctx, bg, relayMsg{Tool: superviseTool}, time.Now())
 	s.noteAssistantDenied(ctx, "server", staleFork, "task_review")
-
-	// Mark bg outgrown so ensureBackground attempts replaceBackground.
 	s.superviseRoundAnswered(bg, superviseRoundReply{Context: "kept", Why: "no_anchor"})
 
-	// If starting the replacement fails, old supervisor continues and its fork/breaker state must NOT be wiped.
+	// An unavailable assistant start must not be used to start a replacement or wipe the unchanged base's state.
 	f.mu.Lock()
 	f.failAssistant = errors.New("start failed")
 	f.mu.Unlock()
-	if id, gone := s.ensureBackground(ctx); id != bg || gone != "" {
-		t.Fatalf("failed replaceBackground returned (%q, %q), want (%q, \"\")", id, gone, bg)
+	if id, gone := s.ensureBackground(ctx); id != "" || gone != bg {
+		t.Fatalf("outgrown legacy route returned (%q, %q), want no replacement and the old id to move", id, gone)
 	}
 	r := &s.background.rounds
 	r.mu.Lock()
 	keptForks := len(r.forks)
 	keptByTodo := len(r.breaker.byTodo)
 	keptAuthTrips := r.breaker.authTrips
-	r.replacedAt = time.Time{} // allow immediate retry once start succeeds
 	r.mu.Unlock()
 	if keptForks != 1 || keptByTodo == 0 || keptAuthTrips == 0 {
-		t.Fatalf("failed replaceBackground wiped state: forks=%d byTodo=%d authTrips=%d", keptForks, keptByTodo, keptAuthTrips)
+		t.Fatalf("outgrown legacy route wiped state: forks=%d byTodo=%d authTrips=%d", keptForks, keptByTodo, keptAuthTrips)
 	}
 
-	// Once start succeeds, replaceBackground installs a new supervisor and clears stale fork and breaker state.
+	// Recovery still does not create a replacement. The same base keeps its exact fork and breaker state.
 	f.mu.Lock()
 	f.failAssistant = nil
 	f.mu.Unlock()
-	newID, gone := s.ensureBackground(ctx)
-	if newID == "" || newID == bg || gone != bg {
-		t.Fatalf("replaceBackground returned (%q, %q), want new id replacing %q", newID, gone, bg)
+	if id, gone := s.ensureBackground(ctx); id != "" || gone != bg {
+		t.Fatalf("recovered legacy route returned (%q, %q), want no replacement and the old id to move", id, gone)
 	}
 	r.mu.Lock()
 	gotForks := len(r.forks)
-	gotActive := r.breaker.active
 	gotByTodo := len(r.breaker.byTodo)
 	gotAuthTrips := r.breaker.authTrips
-	gotAuthUntil := r.breaker.authUntil
-	gotAuthAlerted := r.breaker.authAlerted
-	gotLastDenied := r.breaker.lastDeniedTool
 	r.mu.Unlock()
-	if gotForks != 0 || gotActive != nil || gotByTodo != 0 || gotAuthTrips != 0 || !gotAuthUntil.IsZero() || gotAuthAlerted || gotLastDenied != "" {
-		t.Fatalf("replaceBackground left stale state: forks=%d active=%v byTodo=%d authTrips=%d authUntil=%v authAlerted=%v lastDenied=%q",
-			gotForks, gotActive, gotByTodo, gotAuthTrips, gotAuthUntil, gotAuthAlerted, gotLastDenied)
+	if gotForks != keptForks || gotByTodo != keptByTodo || gotAuthTrips != keptAuthTrips {
+		t.Fatalf("legacy base state changed without a replacement: forks=%d byTodo=%d authTrips=%d", gotForks, gotByTodo, gotAuthTrips)
 	}
-	if s.isBackgroundSession(ctx, staleFork) {
-		t.Fatal("stale fork from replaced supervisor is still authorized")
-	}
-	// Persisted fork table must also have been cleared so a restart does not resurrect staleFork.
 	r.mu.Lock()
 	r.forks = nil
 	r.forksLoaded = false
 	r.mu.Unlock()
-	if s.isBackgroundSession(ctx, staleFork) {
-		t.Fatal("stale fork from replaced supervisor was resurrected from persisted store")
+	if !s.isBackgroundSession(ctx, staleFork) {
+		t.Fatal("the unchanged base lost its attested fork after reconstruction")
 	}
 
-	// The new supervisor receives the next all_stopped wake cleanly (not suppressed or redirected to main).
+	// The next wake follows the moved legacy work to main, not to a newly started background supervisor.
 	f.setSessions("server",
 		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
-		proto.Session{SessionID: newID, MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: bg, MachineID: "server", Assistant: true, Status: proto.StatusIdle},
 	)
+	beforeMain := len(assistantSendsTo(f, "conv1"))
+	beforeBackground := len(assistantSendsTo(f, bg))
 	wakeRound(s, nextSignal(3))
-	if got := len(assistantSendsTo(f, newID)); got != 1 {
-		t.Fatalf("new supervisor sends after replacement = %d, want 1 (main sends = %d)", got, len(assistantSendsTo(f, "conv1")))
+	if got := len(assistantSendsTo(f, "conv1")); got != beforeMain+1 {
+		t.Fatalf("main sends after moving the outgrown legacy work = %d, want %d", got, beforeMain+1)
 	}
-	if got := len(assistantSendsTo(f, "conv1")); got != 0 {
-		t.Fatalf("main conversation should not receive fallback after clean replacement: %d sends", got)
+	if got := len(assistantSendsTo(f, bg)); got != beforeBackground {
+		t.Fatalf("outgrown background received %d new sends, want none", got-beforeBackground)
 	}
 }
