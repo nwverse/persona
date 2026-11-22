@@ -27,6 +27,11 @@ type UsageWindow struct {
 	Group string `json:"group,omitempty"`
 	Title string `json:"title,omitempty"`
 	Note  string `json:"note,omitempty"`
+	// ProtectPercent is the used percentage at which the source stops sending work to this account for this window (an
+	// account-pool gateway's quota protection line; it can differ per account and per window). Set by a usage extension
+	// only, 0 to 100; nil when the source did not say. A client draws a marker on the window's bar at that percentage
+	// and ignores the field when it is absent or unknown to it.
+	ProtectPercent *float64 `json:"protect_percent,omitempty"`
 }
 
 // UsageBalance is a prepaid account's remaining amount as its provider reports it (#11825), for a provider that has

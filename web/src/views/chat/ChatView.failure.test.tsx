@@ -1369,6 +1369,8 @@ describe("a message to an Agent whose computer is away", () => {
     expect(line?.className).toContain("text-red");
     const buttons = [...bubble!.querySelectorAll<HTMLButtonElement>('[role="alert"] button')];
     expect(buttons.map((b) => b.textContent)).toEqual([t("chat-outboxbubbles.retry"), t("chat-outboxbubbles.delete")]);
+    // The lazy mode-changes watcher may issue its GET after Retry; let it finish before asserting the last request.
+    await act(async () => { await vi.dynamicImportSettled(); }); await flush();
     await act(async () => buttons[0].click()); await flush();
     expect(fetched().at(-1)).toEqual({ url: "/api/v1/sessions/hub/c1/held/k1/retry", method: "POST" });
     // without the manager's words: the plain line in the page's language

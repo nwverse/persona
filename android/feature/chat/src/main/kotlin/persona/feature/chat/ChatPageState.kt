@@ -690,7 +690,7 @@ internal fun rememberChatPageSession(key: SessionKey, chrome: ChatChromeBindings
     } ?: lastSession
     SideEffect { if (liveSession != null) lastSession = liveSession }
     val session = liveSession ?: readOnlySessionMetadata(key, historyReadOnly, historySession)
-    return ChatPageSession(child, workflowAgent, historyOnly, footer, readOnly, row, session, switch?.version ?: 0L, refreshDetail)
+    return ChatPageSession(child, workflowAgent, historyOnly, footer, readOnly, row, session, switch?.version ?: 0L, refreshDetail, ownerOffline != null)
 }
 
 /** What [rememberChatPageSession] hands back to ChatPage: plain values, and the detail reload action. */
@@ -704,6 +704,7 @@ internal class ChatPageSession(
     val session: Session?,
     val switchObservation: Long,
     val refreshDetail: suspend () -> Unit,
+    val managerOffline: Boolean = false,
 )
 
 /** ChatPage's launcher switch and closeout: the switch drawn here, the closeout card's detail (moved as is). */

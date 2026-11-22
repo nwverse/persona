@@ -119,7 +119,8 @@ type Service struct {
 	// listen; nil: none.
 	heard ownerHeard
 	// humanSent: the messages a person's own app sent, as the hub vouched (secret_handoff.go).
-	humanSent humanSends
+	humanSent      humanSends
+	storeApprovals storeApprovals
 
 	hub   Hub
 	store func() Store
@@ -681,7 +682,12 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		return beforeNodeWrite(method, err)
 	}
 	p := DeviceCall{Device: device, Method: nodeMethod(method, params), Params: raw}
-	res, err := s.callDevice(ctx, p)
+	cctx, cancel, bounded := toolNodeContext(ctx, method) // a model's tool waits for a silent node only so long (tool_node_wait.go)
+	res, err := s.callDevice(cctx, p)
+	if bounded && err != nil && ctx.Err() == nil && errors.Is(context.Cause(cctx), errNodeSilent) {
+		err = s.nodeSilent(device, method, err)
+	}
+	cancel()
 	// Not taken: refused before anything was typed, or it never reached the computer (relay_refusal.go).
 	taken = err == nil || !sendNotTaken(err)
 	if taskRoot != "" && (method == DeviceSessionSend || method == deviceTaskStart) {

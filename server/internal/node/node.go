@@ -1544,6 +1544,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case "session.start.options":
 		return n.workSessionOptions(ctx, p.Name, p.ConfiguredAgent, p.Host, p.Configured, true)
 	case "session.start", devicewire.MethodStartWorkSession:
+		if err := n.guardAgentDirectory(ctx, p.Cwd); err != nil {
+			return nil, err
+		}
+		if p.ResumeSessionID == "" {
+			p.TaskInstructions = agentPlatformInstructions(runtime.GOOS, p.TaskInstructions)
+		}
 		speed, err := n.prepareSessionStartSpeed(ctx, p.Speed, p.Launcher, p.Host, p.ResumeSessionID)
 		if err != nil {
 			return nil, err
@@ -2201,14 +2207,24 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if err := json.Unmarshal(params, &in); err != nil {
 			return nil, fmt.Errorf("bad params: %w", err)
 		}
+		if in.Cwd != "" {
+			if err := n.guardAgentDirectory(ctx, in.Cwd); err != nil {
+				return nil, err
+			}
+		}
 		if in.Composer {
 			return n.worktreeComposerPrepare(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID)
 		}
-		return n.worktreePrepareBranch(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, in.Cwd, in.Branch)
+		return n.worktreePrepareBranch(worktreeComposerContext(ctx, params), in)
 	case methodWorktreeCreate: // a Git worktree of a workspace's repository, opened as a workspace (worktree.go)
 		var in worktreeCreateParams
 		if err := json.Unmarshal(params, &in); err != nil {
 			return nil, fmt.Errorf("bad params: %w", err)
+		}
+		if in.ForAgent {
+			if err := n.guardAgentDirectory(ctx, in.Cwd); err != nil {
+				return nil, err
+			}
 		}
 		if in.Composer {
 			return n.worktreeCompose(worktreeComposerContext(ctx, params), in.Kind, in.WorkspaceID, params)

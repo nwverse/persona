@@ -139,7 +139,8 @@ func TestDenyDirs(t *testing.T) {
 	if rules := n.healthDenyRules(assistant); slices.ContainsFunc(rules, func(r string) bool { return strings.Contains(r, "qa-finance") }) {
 		t.Fatalf("an emptied list still denies: %q", rules)
 	}
-	if identity.SpaceAt(finance) != "" {
-		t.Fatal("an emptied list still tells the track")
+	// What is named is forgotten; the default layout (tracks/<slug>) is still told by its shape (identity.SpaceAt).
+	if got := identity.TrackDirs(); len(got) != 0 {
+		t.Fatalf("an emptied list still names %v", got)
 	}
 }
