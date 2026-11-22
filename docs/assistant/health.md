@@ -55,6 +55,15 @@ Sources:
   The main space has every switch off; every other track, registered or not, has every switch on, which is exactly the health space's behavior. Grading uses by information category and scene replaces `trackPolicy` later.
   The hub and the nodes cannot read the registry: a node learns the other tracks' directories from the manager (`deny_dirs`) and tells sessions in them by `space`, and both treat any track as the strictest. Once noted in a track other than the main space, a conversation stays there (`assistant_conversation_spaces`).
 
+## Information categories (#13246)
+
+Collecting is not limited by track: every assistant conversation is tagged with the kinds of personal information it carries, so a later step can decide each use by the information's categories and the scene it goes to instead of by the track it came from.
+
+- **Categories** (`server/internal/assistant/track_registry.go`, versioned in code, never user-defined): `health`, `finance`, `relationships`, `emotion`, `legal_id`. No category means general. Credentials are no category: they are filtered out before anything is kept.
+- **A conversation's categories** (`conversationCategories` in `server/internal/assistant/info_tag.go`): its track's default categories, a floor nobody takes away (the health space's is `health`), and what was tagged since, kept in the manager table `assistant_info_categories` by session id. They only grow: the model and agents only add, and only the user takes one away, which stays away (a `removed_by_user` row) until the user adds it back. When the categories cannot all be told (the store or the conversation's track cannot be read), uses outside the track are to take the conversation for sensitive.
+- **Tagging after each turn**: once an assistant conversation's turn ended and stayed still, what the user said and the reply (the first 1,000 characters) go to the model use `info.tag`, a read-only use under Sorting (`inbox.triage`). Its prompt is `server/internal/prompts/assistant/info_tag.md`, in English whatever the owner's language, and the answer is category names only; the track's default categories are passed as the ones to look for especially. Health conversations are tagged too: tagging is collecting, and limits belong to how information is used, so the first 1,000 characters of every health turn go to the model Sorting is set up with, which need not be the health conversation's own. Answers are cached by text and model. A turn that cannot be read or tagged (no model set up, paused, timed out) leaves the categories as they were.
+- The health space behaves exactly as before: what hides, redacts or confirms still reads `TrackPolicy`; the categories are what the scene decision reads next.
+
 ## API
 
 For the exact protocol, see the "Assistant" table in `docs/protocol/protocol.md`.

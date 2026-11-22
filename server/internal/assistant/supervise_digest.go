@@ -254,6 +254,12 @@ func (s *Service) sendDigest(ctx context.Context) {
 		s.scheduleDigestLocked(now)
 		b.mu.Unlock()
 	}
+	for key, list := range leaders {
+		leaders[key] = s.screenFinalWakeSignals(ctx, list, now, prev)
+	}
+	for to, list := range groups {
+		groups[to] = s.screenFinalWakeSignals(ctx, list, now, prev)
+	}
 	delivered := false
 	for _, lead := range leaderOrder {
 		delivered = s.deliverToLeaderAgent(ctx, lead, leaders[[2]string{lead.MachineID, lead.SessionID}], web, now, prev) || delivered
