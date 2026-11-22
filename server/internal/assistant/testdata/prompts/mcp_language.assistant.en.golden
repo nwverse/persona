@@ -3872,5 +3872,234 @@
       }
     },
     "defer_loading": true
+  },
+  {
+    "name": "decision_record",
+    "description": "Record a structured decision in the unified ledger. Preserve options, selected and rejected choices, reason and reversibility. Model-supplied user quotes remain inferred until source verification; never claim they are verified. user_quotes optionally appends attributed source excerpts. origin_space (string) and category (string array) are optional source-space and content-category metadata; leave unknown labels empty.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "entry"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "entry": {
+          "type": "object",
+          "required": [
+            "text",
+            "decision"
+          ],
+          "properties": {
+            "origin_space": {
+              "type": "string"
+            },
+            "category": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "text": {
+              "type": "string"
+            },
+            "quote": {
+              "type": "string"
+            },
+            "source": {
+              "type": "object",
+              "properties": {
+                "machine": {
+                  "type": "string"
+                },
+                "session": {
+                  "type": "string"
+                },
+                "msg_uuid": {
+                  "type": "string"
+                },
+                "card_id": {
+                  "type": "string"
+                },
+                "file": {
+                  "type": "string"
+                },
+                "line": {
+                  "type": "integer"
+                }
+              }
+            },
+            "relayed_via": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "scope": {
+              "type": "object",
+              "properties": {
+                "executor": {
+                  "type": "string"
+                },
+                "machine": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "project": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "personal": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "expires_at": {
+              "type": "string"
+            },
+            "supersedes": {
+              "type": "string"
+            },
+            "tag": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "decision": {
+              "type": "object",
+              "required": [
+                "options",
+                "selected",
+                "rejected",
+                "reason",
+                "reversible"
+              ],
+              "properties": {
+                "options": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "selected": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "rejected": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "reversible": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "user_quotes": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "properties": {
+              "origin_space": {
+                "type": "string"
+              },
+              "category": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "text": {
+                "type": "string"
+              },
+              "quote": {
+                "type": "string"
+              },
+              "source": {
+                "type": "object"
+              },
+              "relayed_via": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "scope": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "defer_loading": true
+  },
+  {
+    "name": "decisions_query",
+    "description": "Read structured decisions from the unified ledger using after pagination, provenance, trust, status, scope and tag filters. Expired entries are omitted unless requested. Keep user-authored decisions distinct from agent notes and inferred quotes.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "by": {
+          "type": "string"
+        },
+        "trust": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "object",
+          "properties": {
+            "executor": {
+              "type": "string"
+            },
+            "machine": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "project": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "personal": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "defer_loading": true
   }
 ]
