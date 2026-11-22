@@ -88,6 +88,10 @@ func (s *Service) resourceRows(ctx context.Context, d rq.Definition, fn func(*[]
 		if err := rows.Err(); err != nil {
 			return err
 		}
+		heldBefore := map[string]bool{}
+		for _, l := range leases {
+			heldBefore[l.ID] = l.State == "granted"
+		}
 		var seq int64
 		if err := tx.QueryRow(ctx, `SELECT nextval(pg_get_serial_sequence('resource_leases','seq'))`).Scan(&seq); err != nil {
 			return err
@@ -176,6 +180,16 @@ func (s *Service) resourceRows(ctx context.Context, d rq.Definition, fn func(*[]
 			for _, l := range leases {
 				if l.State == "queued" && l.ID != reply.Lease.ID && (l.Priority > reply.Lease.Priority || (l.Priority == reply.Lease.Priority && l.Seq < reply.Lease.Seq)) {
 					reply.Position++
+				}
+			}
+		}
+		// Request order and grant order differ under priority. A durable sequence fences grants in grant order,
+		// including after the recent-result window was pruned from this transaction's read.
+		for i := range leases {
+			l := &leases[i]
+			if l.State == "granted" && !heldBefore[l.ID] {
+				if err := tx.QueryRow(ctx, `SELECT nextval('resource_fence_tokens')`).Scan(&l.Token); err != nil {
+					return err
 				}
 			}
 		}

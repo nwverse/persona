@@ -118,3 +118,42 @@ func TestResourceExternalTicketsJoinAndOccupyCapacity(t *testing.T) {
 		t.Fatal(list)
 	}
 }
+
+func TestResourceFencingTokensFollowGrantOrderUnderPriority(t *testing.T) {
+	s, _, d := resourceFixture(t)
+	d.Capacity = 1
+	ctx := t.Context()
+	now := time.Now()
+	_, rows, err := s.resourceRows(ctx, d, func(rows *[]rq.Lease, seq int64) (rq.Reply, error) {
+		normal, err := rq.Acquire(rows, rq.Request{Resource: d.ID, Project: "example", Commit: strings.Repeat("a", 40), Holder: rq.Holder{Machine: "computer-a", Session: "normal"}}, now, "normal", seq)
+		if err != nil {
+			return rq.Reply{}, err
+		}
+		_ = normal
+		_, err = rq.Acquire(rows, rq.Request{Resource: d.ID, Project: "example", Commit: strings.Repeat("b", 40), Priority: 1, Holder: rq.Holder{Machine: "computer-a", Session: "urgent"}}, now, "urgent", seq+1)
+		return rq.Reply{}, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var urgent rq.Lease
+	for _, l := range rows {
+		if l.ID == "urgent" {
+			urgent = l
+		}
+	}
+	if urgent.State != "granted" {
+		t.Fatal(rows)
+	}
+	_, rows, err = s.resourceRows(ctx, d, func(rows *[]rq.Lease, _ int64) (rq.Reply, error) {
+		return rq.Mutate(*rows, rq.Request{Action: "release", ID: urgent.ID, Token: urgent.Token, Holder: urgent.Holder, Outcome: &rq.Outcome{Exit: 1, Run: "example-run"}}, time.Now())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range rows {
+		if l.ID == "normal" && (l.State != "granted" || l.Token <= urgent.Token) {
+			t.Fatalf("later grant token=%d, prior=%d, state=%s", l.Token, urgent.Token, l.State)
+		}
+	}
+}

@@ -10,6 +10,12 @@ import (
 // Advance preserves the external runner's hard locks: expired clients never imply a remote job was killed.
 func Advance(rows []Lease, capacity, external int, now time.Time) {
 	held := external
+	var token int64
+	for _, l := range rows {
+		if l.Token > token {
+			token = l.Token
+		}
+	}
 	Expire(rows, now)
 	for i := range rows {
 		l := &rows[i]
@@ -36,7 +42,8 @@ func Advance(rows []Lease, capacity, external int, now time.Time) {
 		}
 		l := &rows[i]
 		l.State = "granted"
-		l.Token = l.Seq
+		token++
+		l.Token = token
 		l.GrantedAt = now
 		l.HeartbeatUntil = now.Add(90 * time.Second)
 		l.HoldUntil = now.Add(time.Hour)

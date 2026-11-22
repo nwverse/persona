@@ -1,4 +1,5 @@
 -- CI arbitration is manager-owned; the external runner retains its own hard locks.
+CREATE SEQUENCE resource_fence_tokens;
 CREATE TABLE resource_leases (
  id text PRIMARY KEY,
  resource text NOT NULL,
