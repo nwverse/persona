@@ -472,9 +472,16 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		}
 	}
 	if origin == originInbox && guest == nil {
-		// Plan rejects MCP before consulting allowedTools, which stalls investigation and inbox_suggest. Default keeps
-		// Persona's explicit MCP allowlist effective; the manager/node origin policy remains the outbound boundary.
-		mode = "default"
+		// Only the manager's dedicated field may carry the AI twin's own saved mode. The generic caller mode and an older
+		// manager's missing field stay in default. A live process keeps its mode; a new or stopped process uses the setting.
+		keepCurrent := false
+		if resume {
+			n.mu.Lock()
+			p := n.procs[id]
+			keepCurrent = p != nil && p.alive()
+			n.mu.Unlock()
+		}
+		mode = inboxPermissionMode(requested.InboxPermissionMode, mode, keepCurrent)
 	}
 	if err := checkFileReferenceAudience(ctx, text, origin, guest != nil, public); err != nil {
 		return "", err
