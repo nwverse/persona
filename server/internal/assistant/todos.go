@@ -247,6 +247,16 @@ type todoBook struct {
 	readyWakeMu      sync.Mutex
 	readyWakes       map[string]todoReadyWakeMarker
 	readyWakesLoaded bool
+
+	// prMergeWakes persists idempotent (todo_id, pr_url, merged) wake markers for unparked open tasks (pr_merge_wake.go).
+	prMergeWakeMu      sync.Mutex
+	prMergeWakes       map[string]prMergeWakeMarker
+	prMergeWakesLoaded bool
+
+	// parentCloseoutWakes persists idempotent parent_closeout wake markers per open parent to-do (todo_parent_closeout.go).
+	parentCloseoutMu          sync.Mutex
+	parentCloseoutWakes       map[string]parentCloseoutWakeMarker
+	parentCloseoutWakesLoaded bool
 }
 
 // spaceKey computes the unified space key string ("machineID/space").
@@ -2054,6 +2064,7 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 	if row.DoneAt != nil {
 		s.goRecordTaskOutcome(before, *row.DoneAt) // what the task came to (todo_outcome.go, #2820)
 		s.evaluateTodoAfterDependents(ctx, id)
+		s.evaluateParentCloseoutForChild(ctx, id)
 	}
 	return ok, nil
 }
@@ -2112,6 +2123,7 @@ func (s *Service) reopenFailedTodo(ctx context.Context, id string) (Todo, bool, 
 		s.todoRowSet(ctx, doneKeys)
 	}
 	s.resetTodoReadyWake(ctx, id)
+	s.resetParentCloseoutWake(ctx, id)
 	return out, true, nil
 }
 

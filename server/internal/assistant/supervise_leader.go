@@ -282,9 +282,9 @@ func (s *Service) rehomeQueuedSupervision(ctx context.Context, old string, ids m
 // leaders' Agent-supervised workers are handled by leaderRoute before this function.
 func (s *Service) digestTo(ctx context.Context, cfg Settings, g superviseSignal) string {
 	own := s.ownSupervisor(cfg)
-	if g.Kind == sigTodoReady {
-		// Dependent to-do readiness wakes go to the owning supervisor conversation (Leader or Main chat), never to the
-		// background supervisor.
+	if g.Kind == sigTodoReady || g.Kind == sigParentCloseout {
+		// Dependent readiness and parent closeout wakes go to the owning supervisor conversation (Leader or Main chat),
+		// never to the background supervisor.
 		if g.To != "" && g.To != cfg.BackgroundSupervisor {
 			return g.To
 		}
@@ -354,8 +354,8 @@ func (s *Service) digestRuntimeTarget(ctx context.Context, cfg Settings, g super
 	if to != cfg.Main && !s.runtimeWithoutSupervisionPolicy(ctx, cfg.MachineID, to) {
 		return to
 	}
-	if g.Kind == sigFailed || g.Kind == sigTodoReady {
-		return cfg.Main // the background supervisor has no start remedies and never receives todo_ready wakes
+	if g.Kind == sigFailed || g.Kind == sigTodoReady || g.Kind == sigParentCloseout {
+		return cfg.Main // the background supervisor has no start remedies and never receives todo_ready or parent_closeout wakes
 	}
 	own := s.runtimeSupervisorFallback(ctx, cfg)
 	s.logf("supervise: %s runs on a runtime that cannot take supervision policy: its signal goes to %s", short(to), short(own))
