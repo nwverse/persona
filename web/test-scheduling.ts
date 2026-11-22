@@ -9,9 +9,9 @@ export function testWorkers(parallelism = availableParallelism(), configured?: n
   return Math.min(8, Math.max(parallelism - 1, 1));
 }
 
-export const testWorkerLimit: Plugin = {
+export const testWorkerLimit = (parallelism?: number): Plugin => ({
   name: "persona-test-worker-limit",
   config(config) {
-    if (config.test?.maxWorkers === undefined) return { test: { maxWorkers: testWorkers() } };
+    if (config.test?.maxWorkers === undefined) return { test: { maxWorkers: testWorkers(parallelism) } };
   },
-};
+});

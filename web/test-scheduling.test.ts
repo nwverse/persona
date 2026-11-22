@@ -13,10 +13,10 @@ it("bounds file workers without leaving a small machine serial", () => {
 it("keeps an explicit caller or project worker limit", () => {
   expect(testWorkers(64, 2)).toBe(2);
   expect(testWorkers(64, "50%")).toBe("50%");
-  expect(testWorkerLimit.config?.call({}, { test: { maxWorkers: 2 } }, {} as never)).toBeUndefined();
-  expect(testWorkerLimit.config?.call({}, { test: { maxWorkers: "50%" } }, {} as never)).toBeUndefined();
+  expect(testWorkerLimit().config?.call({}, { test: { maxWorkers: 2 } }, {} as never)).toBeUndefined();
+  expect(testWorkerLimit().config?.call({}, { test: { maxWorkers: "50%" } }, {} as never)).toBeUndefined();
 });
 
 it("sets a default through Vite's config hook without replacing other test options", () => {
-  expect(testWorkerLimit.config?.call({}, { test: { isolate: true } }, {} as never)).toEqual({ test: { maxWorkers: 8 } });
+  expect(testWorkerLimit(64).config?.call({}, { test: { isolate: true } }, {} as never)).toEqual({ test: { maxWorkers: 8 } });
 });

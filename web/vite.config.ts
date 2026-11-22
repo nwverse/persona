@@ -241,7 +241,7 @@ const holdLazyImports: Plugin = {
 };
 
 export default defineConfig({
-  plugins: [testWorkerLimit, katexFonts, i18nCatalogs, pageTokensPlugin, react(), tailwindcss(), adminFallback, showcaseImages, startupPreload(), holdLazyImports, classicWorker, buildStamp, thirdPartyLicenses,
+  plugins: [testWorkerLimit(), katexFonts, i18nCatalogs, pageTokensPlugin, react(), tailwindcss(), adminFallback, showcaseImages, startupPreload(), holdLazyImports, classicWorker, buildStamp, thirdPartyLicenses,
     compatBootstrap(fileURLToPath(new URL("./public/compatibility-bootstrap.js", import.meta.url)))],
   // Text size (src/lib/text-scale.ts): font sizes become calc(size * var(--text-scale, 1)), after Tailwind wrote them.
   css: { postcss: { plugins: [textScale()] } },
