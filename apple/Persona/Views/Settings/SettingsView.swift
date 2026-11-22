@@ -709,6 +709,9 @@ struct PhoneDataView: View {
                         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                             Text(s.title).lineLimit(1)
                             Text(s.detail).font(Theme.Font.label).foregroundStyle(.secondary)
+                            #if os(iOS)
+                            if s == .location, isOn(s) { LocationLevelRow() } // when the assistant may read it (#13200)
+                            #endif
                         }
                         Spacer(minLength: Theme.Space.s)
                         if asking == s {
@@ -764,7 +767,12 @@ struct PhoneDataView: View {
     }
 
     private func set(_ s: PhoneDataSource, _ on: Bool) async {
-        defer { model.registerPhone() } // what the hub may call follows the switch
+        defer {
+            model.registerPhone() // what the hub may call follows the switch
+            #if os(iOS)
+            if s == .location { BackgroundLocation.shared.apply() } // Location off: no Always session, no wakes (#13200)
+            #endif
+        }
         guard on else {
             s.isEnabled = false
             enabled[s] = false
@@ -792,6 +800,40 @@ struct PhoneDataView: View {
 }
 
 #if os(iOS)
+/// Under Location in Settings › Connectors › This iPhone (#13200): whether the assistant can read it while Persona isn't
+/// open, and the one thing to do about it: Allow Always while iOS can still ask, else iOS Settings. Words and button on
+/// one line where they fit, the button under the words where they don't.
+private struct LocationLevelRow: View {
+    var body: some View {
+        let location = BackgroundLocation.shared
+        if let line = BackgroundLocationPolicy.line(location.level, asked: location.state.asked) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) { words(line); button(line) }
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) { words(line); button(line) }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("location-level")
+        }
+    }
+
+    private func words(_ line: LocationLevelLine) -> some View {
+        Text(line.text).font(Theme.Font.label).foregroundStyle(.secondary)
+    }
+
+    private func button(_ line: LocationLevelLine) -> some View {
+        Button {
+            Haptics.tap()
+            if line.action == .allowAlways, BackgroundLocation.shared.allowAlways() { return }
+            if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+        } label: {
+            Text(line.actionTitle).font(Theme.Font.labelStrong).lineLimit(1)
+        }
+        .buttonStyle(.borderless) // in the row: only the button takes its taps, not the switch beside it
+        .tapTargetOutset()
+        .accessibilityIdentifier(line.action == .allowAlways ? "location-allow-always" : "location-open-settings")
+    }
+}
+
 /// Settings › Phone Data › Reminders: import the reminders of the lists picked as to-dos, one way (#4009,
 /// `RemindersImport`). Off by default; every list until the user turns some off.
 private struct RemindersImportSection: View {
