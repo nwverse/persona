@@ -18,10 +18,20 @@ const ROW_NAME = "min-w-0 flex-1 truncate text-[11.5px] text-ink-3";
 const ROW_VALUE = "shrink-0 text-[11.5px] tabular-nums";
 
 /** A bar: the track, the used part (caution colour from 80%) and, with `expected`, a tick where an even pace would be. */
-export function Meter({ used, expected, label, tall }: { used: number; expected?: number; label: string; tall?: boolean }) {
+export function Meter({ used, expected, protect, label, tall }: { used: number; expected?: number; protect?: number; label: string; tall?: boolean }) {
+  const hasProtect = typeof protect === "number" && Number.isFinite(protect) && protect >= 0 && protect <= 100;
   return (
-    <div role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent(used))} className={cx("relative w-full rounded-full bg-inset", tall ? "h-1.5" : "h-1")}>
+    <div role="progressbar" aria-label={hasProtect ? `${label}, ${tr("usage.protect_label", { percent: Math.round(protect) })}` : label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent(used))} className={cx("relative w-full rounded-full bg-inset", tall ? "h-1.5" : "h-1", hasProtect && "mt-3")}>
       <div className={cx("h-full rounded-full transition-[width] duration-300", fill(used))} style={{ width: `${percent(used)}%` }} />
+      {hasProtect && (
+        <>
+          <span aria-hidden data-protect-zone className="absolute inset-y-0 right-0 rounded-r-full" style={{ left: `${percent(protect)}%`, backgroundImage: "repeating-linear-gradient(135deg, transparent 0 2px, color-mix(in srgb, var(--orange) 45%, transparent) 2px 3px)" }} />
+          <span aria-hidden data-protect-line className="absolute -top-1 -bottom-1 w-0.5 -translate-x-1/2 rounded-full bg-orange" style={{ left: `${percent(protect)}%` }} />
+          <span aria-hidden data-protect-flag className="absolute -top-3.5 -translate-x-1/2 whitespace-nowrap rounded-sm bg-surface px-0.5 text-[9px] font-bold leading-none text-orange" style={{ left: `${Math.min(percent(protect), 92)}%` }}>
+            {tr("usage.protect_flag", { percent: Math.round(protect) })}
+          </span>
+        </>
+      )}
       {expected !== undefined && <span aria-hidden data-pace-tick className="absolute -top-0.5 -bottom-0.5 w-0.5 -translate-x-1/2 rounded-full bg-ink-2" style={{ left: `${percent(expected)}%` }} />}
     </div>
   );

@@ -136,6 +136,13 @@ func (s *Service) threadMessage(ctx context.Context, ev feishubot.MessageEvent, 
 		}
 		s.botNoteTo(ctx, to, msg.MessageID, i18n.T(l, key, i18n.Args{"error": clip(oneLine(err.Error()), 200)}))
 	}
+	if text != "" && needsUserWakeEligible(t) {
+		label := msg.ThreadID
+		if t.Thread != nil && strings.TrimSpace(t.Thread.Title) != "" {
+			label = t.Thread.Title
+		}
+		s.emitNeedsUserExternalInfo(ctx, t, "feishu thread "+label, text, "feishu_thread:"+msg.ChatID+"/"+msg.ThreadID+"@"+msg.MessageID)
+	}
 	if len(routes) == 0 {
 		s.logf("bots: topic message of todo %s: no one to give it to: %v", t.ID, routeErr)
 		notDelivered(routeErr)

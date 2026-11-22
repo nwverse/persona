@@ -276,6 +276,17 @@ User decision: the hub is only a communication center, and computers belong to t
 - **Providers without data**: an active launcher with no account gets a row that says why in plain words, with **Set up with assistant** handing a prompt to the main chat. Claude Code's and the other built-in subscriptions (Codex, Antigravity) "haven't been read yet"; any other launcher, a provider run through Claude Code included, is one Persona "can't read by itself" unless its relay reports usage. Engineering terms (status line, gateway source) stay in the prompt, not the row (#12411).
 - Refreshes once a minute; no requests while the page is not in the foreground. A failed refresh keeps the last answer (iOS / Mac and Android do the same), which turns out of date at its `stale_at`; only a 404 (an older hub) hides the block.
 
+## Provider cards and the reset timeline (#13173)
+
+One rule on every client; web first (`web/src/lib/usage-windows.ts`: `groupByProvider`, `sortForCard`, `sortedWindows`, `timeline`; view `web/src/views/UsagePopover.tsx`). It is computed on the client from data already loaded: no new request, and the hub's answer is unchanged.
+
+- **Cards**: the accounts are grouped by provider (account type) in the order the hub listed them. A card has the provider's name, its account count and the newest sample age. **Every account is listed** (no "two fullest" folding in the details view; the collapsed sidebar strip is unchanged).
+- **Order inside a card**: by the plan's 7d window reset, soonest first; accounts without a 7d window or reset time last, then by name.
+- **Rows**: per account the 5h window, then 7d, then other plan windows by length, then per-model allowances; each with the bar, used percent, pace tick (`pace`) and reset countdown as before. Out-of-date accounts stay faded and have no pace.
+- **Reset timeline**: one chart per card, always drawn when any account in it has a reset time. A shared axis (now, 6h, 12h, 1d, 3d, 5d, 7d; the first 24 hours take 45% of the width, 1 to 7 days the other 55%, `timelinePosition`), one row per account in the card's quota order, and in each row a teal capsule for the 5h window over a blue one for the 7d window, from the now line to the window's reset, with a hollow end dot and the time left (the label sits inside the capsule, in white, when the end is past about 80% of the width). Windows without a reset time, ended ones and per-model allowances are left out; an account with none has no row. A row's accessible label lists each window's reset ("5h · Resets in 4h").
+- **Protection line**: a window may carry `protect_percent` (0-100; it can differ per account and per window): the use at which scheduling stops using the account. When present, its bar shows a thin warning-colour notch at that percent, a small "protect N%" flag, and a hatched zone from the line to 100%; the bar's accessible label includes the value. When absent (an older hub, or no such rule) nothing is drawn. The hub side of the field is a separate change; clients only read it.
+- **Switches**: one switch per provider on **Admin › Usage sources › Providers in the usage bars**, writing `usage.hidden_providers` (display only, #11767). No new setting.
+
 ## UI (iOS / Mac, #2889)
 
 Same rules as the web (pure functions in `apple/Packages/PersonaWire/Sources/PersonaWire/UsageWindows.swift`, unit tests `UsageWindowsTests` share the web's cases; views in `Persona/Views/Machines/UsageWindowsViews.swift`):

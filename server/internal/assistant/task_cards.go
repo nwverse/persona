@@ -152,11 +152,11 @@ func (s *Service) taskCards(ctx context.Context, items []FeedItem, feedPlans map
 			}
 			// A task parked by the admission gate has no agent yet, so the todo alone reads "not started": show it as
 			// waiting (the hub will retry it) with the gate's reason (#6909).
-			if task.Queue != nil {
+			if task.Queue != nil && card.State != "cancelled" && card.State != "done" && card.State != "accepted" {
 				card.State = "waiting"
 				card.Reason = i18n.T(s.lang(ctx), "assistant-tasks.admission_queued", i18n.Args{
 					"reason": task.Queue.Reason})
-				if task.Queue.Claimed || task.Queue.Key == requestGateKey {
+				if task.Queue.Claimed || task.Queue.Key == requestGateKey || task.Queue.Key == workspaceQueueKey {
 					card.Reason = task.Queue.Reason
 				}
 				card.UpdatedAt = task.Queue.NextAt
