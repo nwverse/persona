@@ -37,13 +37,54 @@ class AboutBuildConsumerTest(unittest.TestCase):
             self.assertIn("AboutBuildRow", production.read_text())
             self.assertEqual(str(production), str(android / error.exception.args[0].split(": ")[-1]))
 
-    def test_test_source_generated_reference_is_allowed(self):
+    def test_production_comments_and_strings_do_not_create_references(self):
         with tempfile.TemporaryDirectory(prefix="persona-refract-build-production-") as temporary:
             android = Path(temporary) / "android"
-            generated = android / "feature/settings/src/test/kotlin/Host.kt"
-            generated.parent.mkdir(parents=True)
-            generated.write_text("AboutBuildRow(AboutBuildSnapshot(\"42\").buildNumber)\n")
+            production = android / "feature/settings/src/main/kotlin/Host.kt"
+            production.parent.mkdir(parents=True)
+            production.write_text('''// AboutBuildRow in a line comment
+/* AboutBuildSnapshot in a block comment
+   /* nested */ still a comment */
+/** Documentation mentions AboutBuildRow. */
+val ordinary = "AboutBuildRow and AboutBuildSnapshot"
+val raw = """AboutBuildRow /* AboutBuildSnapshot */"""
+val character = '"'
+val escaped = "\\\" AboutBuildSnapshot"
+val kept = ordinary.length + raw.length + character.code + escaped.length
+''')
             build.validate_production_exclusion(android)
+
+    def test_production_interpolated_generated_reference_is_rejected(self):
+        for expression in ("$AboutBuildRow", "${AboutBuildRow}", "${mapOf(1 to AboutBuildSnapshot)[1]}"):
+            with self.subTest(expression=expression), \
+                    tempfile.TemporaryDirectory(prefix="persona-refract-build-production-") as temporary:
+                android = Path(temporary) / "android"
+                production = android / "feature/settings/src/main/kotlin/Host.kt"
+                production.parent.mkdir(parents=True)
+                production.write_text(f'val rendered = "{expression}"\n')
+                with self.assertRaisesRegex(ValueError, "test-only consumer"):
+                    build.validate_production_exclusion(android)
+
+    def test_debug_and_release_generated_references_are_rejected(self):
+        for source_set in ("debug", "release"):
+            with self.subTest(source_set=source_set), \
+                    tempfile.TemporaryDirectory(prefix="persona-refract-build-production-") as temporary:
+                android = Path(temporary) / "android"
+                production = android / f"feature/settings/src/{source_set}/kotlin/Host.kt"
+                production.parent.mkdir(parents=True)
+                production.write_text("AboutBuildRow(AboutBuildSnapshot(\"42\").buildNumber)\n")
+                with self.assertRaisesRegex(ValueError, f"src/{source_set}/kotlin/Host.kt$"):
+                    build.validate_production_exclusion(android)
+
+    def test_test_source_generated_reference_is_allowed(self):
+        for source_set in ("test", "androidTest"):
+            with self.subTest(source_set=source_set), \
+                    tempfile.TemporaryDirectory(prefix="persona-refract-build-production-") as temporary:
+                android = Path(temporary) / "android"
+                generated = android / f"feature/settings/src/{source_set}/kotlin/Host.kt"
+                generated.parent.mkdir(parents=True)
+                generated.write_text("AboutBuildRow(AboutBuildSnapshot(\"42\").buildNumber)\n")
+                build.validate_production_exclusion(android)
 
     def test_host_default_and_optional_slot_are_pinned(self):
         host = build.HOST.read_text(encoding="utf-8")

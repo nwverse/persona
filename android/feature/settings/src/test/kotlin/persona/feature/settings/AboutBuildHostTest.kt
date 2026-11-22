@@ -40,8 +40,7 @@ class AboutBuildHostTest {
         val info = packages.getInternalMutablePackageInfo(context.packageName)
         val previous = info.longVersionCode
         val build = 9_007_199_254_740_993L
-        val nativeBuild = build
-        val generatedBuild = build - 1
+        val nativeBuild = (build + 1).toString()
         val commit = BuildCommit.parse("0123456789abcdef0123456789abcdef01234567")
         val notices = mutableListOf<String>()
         val feedback = object : AppFeedback {
@@ -52,12 +51,14 @@ class AboutBuildHostTest {
         try {
             info.setLongVersionCode(build)
             val snapshot = AboutBuildSnapshot.from(context.packageManager.getPackageInfo(context.packageName, 0))
+            val generatedBuild = requireNotNull(snapshot.buildNumber)
+            info.setLongVersionCode(nativeBuild.toLong())
             val nativeVersion = context.packageManager.getPackageInfo(context.packageName, 0).versionName
             rule.setContent {
                 CompositionLocalProvider(LocalAppFeedback provides feedback) {
                     PersonaTheme(darkTheme = false, reduceMotion = true) {
                         AboutSettingsPage(commit, buildRow = if (generated.value) {
-                            { AboutBuildRow(generatedBuild.toString()) }
+                            { AboutBuildRow(generatedBuild) }
                         } else {
                             null
                         })
@@ -66,8 +67,8 @@ class AboutBuildHostTest {
             }
 
             rule.onAllNodesWithText("Build").assertCountEquals(1)
-            rule.onNodeWithText(nativeBuild.toString(), useUnmergedTree = true).assertIsDisplayed()
-            rule.onAllNodesWithText(generatedBuild.toString()).assertCountEquals(0)
+            rule.onNodeWithText(nativeBuild, useUnmergedTree = true).assertIsDisplayed()
+            rule.onAllNodesWithText(generatedBuild).assertCountEquals(0)
             rule.onNodeWithText(nativeVersion ?: "Not provided", useUnmergedTree = true).assertIsDisplayed()
             rule.onNodeWithText("Commit").performClick()
             rule.waitForIdle()
@@ -79,16 +80,16 @@ class AboutBuildHostTest {
             generated.value = true
             rule.waitForIdle()
             rule.onAllNodesWithText("Build").assertCountEquals(1)
-            rule.onNodeWithText(generatedBuild.toString(), useUnmergedTree = true).assertIsDisplayed()
-            rule.onAllNodesWithText(nativeBuild.toString()).assertCountEquals(0)
+            rule.onNodeWithText(generatedBuild, useUnmergedTree = true).assertIsDisplayed()
+            rule.onAllNodesWithText(nativeBuild).assertCountEquals(0)
             rule.onNodeWithText(nativeVersion ?: "Not provided", useUnmergedTree = true).assertIsDisplayed()
             rule.onNodeWithText(commit.short, useUnmergedTree = true).assertIsDisplayed()
 
             generated.value = false
             rule.waitForIdle()
             rule.onAllNodesWithText("Build").assertCountEquals(1)
-            rule.onNodeWithText(nativeBuild.toString(), useUnmergedTree = true).assertIsDisplayed()
-            rule.onAllNodesWithText(generatedBuild.toString()).assertCountEquals(0)
+            rule.onNodeWithText(nativeBuild, useUnmergedTree = true).assertIsDisplayed()
+            rule.onAllNodesWithText(generatedBuild).assertCountEquals(0)
             rule.onNodeWithText(nativeVersion ?: "Not provided", useUnmergedTree = true).assertIsDisplayed()
             rule.onNodeWithText(commit.short, useUnmergedTree = true).assertIsDisplayed()
         } finally {
