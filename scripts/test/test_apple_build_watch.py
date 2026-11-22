@@ -4,6 +4,7 @@ import io
 import json
 import os
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -79,6 +80,31 @@ class CompilerResourceTests(unittest.TestCase):
         self.assertEqual(watch.process_rows(line, True), [])
         self.assertEqual(watch.process_rows("not a ps row", False), [])
 
+    def test_lstart_timeout_and_oserror_do_not_retry_legacy(self):
+        for error in (subprocess.TimeoutExpired(["ps"], 10), OSError("collector unavailable")):
+            with self.subTest(error=type(error).__name__):
+                calls = []
+                def failing(command, **kwargs):
+                    calls.append(command)
+                    raise error
+                self.assertEqual(watch.processes(failing)["unavailable"], type(error).__name__)
+                self.assertEqual(len(calls), 1)
+                self.assertIn("lstart=", calls[0][2])
+
+    def test_process_failures_and_malformed_legacy_output_are_explicit(self):
+        for result in (subprocess.CompletedProcess([], 1, "", "ps failed"),
+                       subprocess.CompletedProcess([], 0, "x" * (watch.MAX_OUTPUT_BYTES + 1), "")):
+            with self.subTest(result=result.returncode):
+                self.assertIn("unavailable", watch.processes(lambda *args, **kwargs: result))
+        calls = []
+        def legacy_malformed(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, "not a ps row", "")
+        parsed = watch.processes(legacy_malformed)
+        self.assertEqual(parsed["unavailable"], "invalid-process-output")
+        self.assertEqual(parsed["largest"], [])
+        self.assertEqual(len(calls), 1)
+
     @staticmethod
     def frontend(pid=42, start="Sun Nov 22 10:00:00 2026", cpu=1.5, elapsed=5.0, source="First.swift"):
         return {"pid": pid, "ppid": 2, "cpu_percent": "10.0", "rss_kib": 1000,
@@ -105,6 +131,13 @@ class CompilerResourceTests(unittest.TestCase):
         self.assertEqual(watch.swift_frontend_identity("/bin/swift-frontend -primary-file /tmp/" + "x" * 300 + ".swift")["primary_source"],
                          "redacted")
         self.assertEqual(watch.safe_identity("/tmp/.hidden"), "redacted")
+
+    def test_unquoted_space_in_source_path_is_unavailable_not_a_fake_basename(self):
+        identity = watch.swift_frontend_identity(
+            "/bin/swift-frontend -module-name Example -primary-file /tmp/Project File.swift -o /tmp/Example.o")
+        self.assertEqual(identity, {"target_module": "unavailable", "primary_source": "unavailable",
+                                    "output": "unavailable"})
+        self.assertNotIn("Project", json.dumps(identity))
 
     def test_pid_first_last_cpu_elapsed_and_reuse_are_bounded(self):
         history = {}
@@ -149,6 +182,18 @@ class CompilerResourceTests(unittest.TestCase):
         self.assertEqual(record["sample_count"], 1)
         self.assertTrue(record["duplicate_pid_in_sample"])
         self.assertEqual(len(history), 1)
+
+    def test_duplicate_pid_with_different_start_preserves_only_first_and_marks_uncertain(self):
+        history = {}
+        other_start = "Sun Nov 22 10:01:00 2026"
+        watch.track_frontends(history, [self.frontend(), self.frontend(start=other_start, cpu=2.5)], 100.0)
+        self.assertEqual(set(history), {(42, "Sun Nov 22 10:00:00 2026")})
+        record = history[(42, "Sun Nov 22 10:00:00 2026")]
+        self.assertEqual(record["first_seen_monotonic"], 100.0)
+        self.assertEqual(record["last_seen_monotonic"], 100.0)
+        self.assertEqual(record["last_cpu_seconds"], 1.5)
+        self.assertTrue(record["duplicate_pid_in_sample"])
+        self.assertEqual(record["continuity"], "uncertain")
 
     def test_pid_reuse_chain_and_full_bound_are_explicitly_truncated(self):
         history = {}
@@ -220,7 +265,7 @@ class CompilerResourceTests(unittest.TestCase):
             raise OSError("unavailable")
         metadata = watch.metadata(unavailable)
         self.assertTrue(all("unavailable" in item for item in metadata.values()))
-        self.assertEqual(watch.processes(unavailable), {"counts": {}, "total_rss_kib": 0, "largest": []})
+        self.assertEqual(watch.processes(unavailable)["unavailable"], "OSError")
 
     def test_observer_stops_and_retains_final_sample(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -322,6 +367,64 @@ class CompilerResourceTests(unittest.TestCase):
             self.assertEqual(json.loads(root.joinpath("final.json").read_text())["status"], "unavailable")
             self.assertLessEqual(root.joinpath("final.json").stat().st_size, watch.MAX_FINAL_JSON_BYTES)
             self.assertFalse(root.joinpath("final.pending").exists())
+
+    def test_final_publishes_history_before_a_slow_final_collector(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            history = {}
+            watch.track_frontends(history, [self.frontend()], 100.0)
+            def slow_collector(command, **kwargs):
+                published = json.loads(root.joinpath("final.json").read_text())
+                self.assertEqual(published["swift_frontend_lifetimes"]["records"][0]["pid"], 42)
+                self.assertIn("unavailable", published)
+                raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+            record = watch.sample(root, "final", runner=slow_collector, final=True,
+                                  frontend_history=history, monotonic=lambda: 115.0)
+            self.assertIn("unavailable", record)
+            published = json.loads(root.joinpath("final.json").read_text())
+            self.assertEqual(published["swift_frontend_lifetimes"]["records"][0]["pid"], 42)
+            self.assertIn("unavailable", published)
+            self.assertFalse(root.joinpath("final.pending").exists())
+
+    def test_normal_stop_slow_collector_retains_history_and_reaps_process_group(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stop = root / "stop"
+            stop.touch()
+            history = {}
+            watch.track_frontends(history, [self.frontend()], 100.0)
+            process = subprocess.Popen([
+                "/usr/bin/python3", "-I", "-c",
+                "import os,signal,sys,time; "
+                "sys.path.insert(0, sys.argv[1]); import apple_build_watch as watch; "
+                "watch.sample(__import__('pathlib').Path(sys.argv[2]), 'final', runner=lambda *a, **k: time.sleep(30), "
+                "final=True, frontend_history=__import__('json').loads(sys.argv[3]))",
+                str(ROOT / "scripts/ci"), str(root), json.dumps({str(key): value for key, value in history.items()}),
+            ], start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    if root.joinpath("final.json").exists():
+                        published = json.loads(root.joinpath("final.json").read_text())
+                        if published.get("swift_frontend_lifetimes", {}).get("records"):
+                            break
+                    if process.poll() is not None:
+                        self.fail("final collector exited before its history was published: "
+                                  + str(process.communicate()))
+                    time.sleep(0.01)
+                else:
+                    self.fail("history was not published before the slow final collector")
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=5)
+                published = json.loads(root.joinpath("final.json").read_text())
+                self.assertEqual(published["swift_frontend_lifetimes"]["records"][0]["pid"], 42)
+                self.assertIn("unavailable", published)
+            finally:
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=5)
+                process.stdout.close()
+                process.stderr.close()
 
     def test_observer_deadline_accepts_both_lane_budgets_and_rejects_larger_values(self):
         self.assertEqual(watch.MAX_SECONDS, 3600)

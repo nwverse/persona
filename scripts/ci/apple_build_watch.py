@@ -61,9 +61,13 @@ def safe_identity(value, limit=128):
 
 
 def swift_frontend_identity(command):
-    """Retain only selected module/source names; never the compiler's raw argv."""
+    """Retain selected identities only when unquoted argv has unambiguous boundaries."""
     unavailable = {"target_module": "unavailable", "primary_source": "unavailable", "output": "unavailable"}
     if not isinstance(command, str) or len(command) > MAX_OUTPUT_BYTES:
+        return unavailable
+    # ps args is not shell quoted. Interpreting a space in a source path as an
+    # argument separator would invent a basename or even a module identity.
+    if re.search(r"(?:^|\s)(?:-primary-file|-o)\s+(?:[^'\"/-]\S*\s+|/[^\s'\"]*\s+(?=[^'\"/-]))", command):
         return unavailable
     try:
         argv = shlex.split(command)
@@ -159,11 +163,33 @@ def processes(runner=subprocess.run):
     result = output(command, runner=runner)
     with_start = result.get("exit") == 0
     rows = process_rows(result.get("stdout", ""), with_start) if with_start else []
-    if not with_start or not rows and result.get("stdout", "").strip():
-        command = ["ps", "-axo", "pid=,ppid=,%cpu=,rss=,etime=,time=,args="]
-        result = output(command, runner=runner)
+    unavailable = result.get("unavailable")
+    if with_start and result.get("stdout", "").strip() and not rows:
+        # A successful but demonstrably legacy-shaped response can be retried;
+        # invalid lstart output is not silently converted to valid evidence.
         rows = process_rows(result.get("stdout", ""), False)
-    return process_snapshot(rows)
+        if rows:
+            with_start = False
+        else:
+            unavailable = "invalid-process-output"
+    if not with_start and "unavailable" not in result:
+        if result.get("exit", 0) != 0:
+            unavailable = "process-command-failed"
+        else:
+            command = ["ps", "-axo", "pid=,ppid=,%cpu=,rss=,etime=,time=,args="]
+            result = output(command, runner=runner)
+            if result.get("exit") != 0:
+                unavailable = result.get("unavailable", "process-command-failed")
+                rows = []
+            else:
+                rows = process_rows(result.get("stdout", ""), False)
+                if result.get("stdout", "").strip() and not rows:
+                    unavailable = "invalid-process-output"
+    summary = process_snapshot(rows)
+    if unavailable:
+        summary.update({"counts": {}, "total_rss_kib": 0, "largest": [],
+                        "unavailable": unavailable, "process_start_status": "uncertain"})
+    return summary
 
 
 def new_lifetime(entry, now, *, reused=False):
@@ -188,8 +214,8 @@ def track_frontends(history, entries, now):
         key = (entry["pid"], start)
         current = history.get(key)
         if entry["pid"] in seen:
-            # Any duplicate PID in one sample is anomalous; do not update the
-            # retained observation or infer another process instance from it.
+            # A duplicate PID never supplies a new lifetime, even with another
+            # reported start: the first observation is the only reliable one.
             for instance in history.values():
                 if (isinstance(instance, dict) and instance["pid"] == entry["pid"]
                         and instance["last_seen_monotonic"] == now):
@@ -210,6 +236,8 @@ def track_frontends(history, entries, now):
             key = (entry["pid"], start, now, entry["cpu_seconds"])
             current = None
             reused = True
+            history[key] = new_lifetime(entry, now, reused=reused)
+            continue
         if current is None:
             if len(history) >= MAX_FRONTEND_LIFETIMES:
                 history["truncated"] = True
@@ -334,10 +362,13 @@ def write_json(destination, label, record):
 def sample(destination, label, runner=subprocess.run, *, final=False, derived_data=None,
            frontend_history=None, monotonic=time.monotonic):
     if final:
-        # A bounded marker exists even if a collector must be reaped.
-        write_json(destination, label, {
-            "captured_at": datetime.now(timezone.utc).isoformat(),
-            "unavailable": "final collection incomplete; no pressure verdict"})
+        # Publish accumulated evidence before any slow collector. If the normal
+        # stop drain reaps this observer, the bounded history already exists.
+        pending = {"captured_at": datetime.now(timezone.utc).isoformat(),
+                   "unavailable": "final collection incomplete; no pressure verdict"}
+        if frontend_history is not None:
+            pending["swift_frontend_lifetimes"] = final_frontend_history(frontend_history)
+        write_json(destination, label, pending)
     memory = output(["memory_pressure"], runner=runner)
     pages = output(["vm_stat"], runner=runner)
     swap = output(["sysctl", "vm.swapusage"], runner=runner)
@@ -356,6 +387,8 @@ def sample(destination, label, runner=subprocess.run, *, final=False, derived_da
               "xcactivitylogs": activity_log_paths(derived_data)}
     if memory.get("exit") != 0 or pages.get("exit") != 0 or swap.get("exit") != 0:
         record["unavailable"] = "resource command failed; no pressure verdict"
+    if process.get("unavailable"):
+        record["unavailable"] = "process collection failed; no compiler or pressure verdict"
     if final and frontend_history is not None:
         record["swift_frontend_lifetimes"] = final_frontend_history(frontend_history)
     return write_json(destination, label, record)
