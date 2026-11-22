@@ -12,7 +12,7 @@ func init() {
 			return
 		}
 		if h.extensions.todoWanted(assistantwire.EventAssistantEntriesChanged) {
-			h.extensions.queueEvent(assistantwire.EventAssistantEntriesChanged, fieldsOf(p))
+			h.extensions.queueOn(&h.extensions.events, extensionNotice{topic: assistantwire.EventAssistantEntriesChanged, entryPersonal: p.Personal, payload: map[string]any{"id": p.ID, "record_id": p.RecordID, "status": p.Status}})
 		}
 	})
 }

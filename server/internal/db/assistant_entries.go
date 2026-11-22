@@ -52,7 +52,7 @@ func (d *DB) AppendAssistantEntry(ctx context.Context, e entries.Entry) (entries
 			if err != nil {
 				return err
 			}
-			// A successor must not declassify personal content.
+			// A successor must retain the personal-data access boundary.
 			if personal && !e.Scope.Personal {
 				return errors.New("a personal entry requires a personal successor")
 			}

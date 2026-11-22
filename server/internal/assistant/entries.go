@@ -12,7 +12,9 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/entries"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/nodeclient"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 type entriesStore interface {
@@ -68,9 +70,17 @@ func (s *Service) entriesRoutes() {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
-		// HTTP is the UI/metrics read surface. A bearer extension credential carries
-		// no physical instance identity; those readers use the local RPC for personal data.
-		personal := r.Header.Get(RoleHeader) != roleExtension
+		personal := true
+		if r.Header.Get(RoleHeader) == roleExtension {
+			allowed, granted := s.entriesReadAccess(r.Header.Get(ExtensionHeader))
+			if !allowed {
+				body := apierr.CodeBody(w, http.StatusForbidden, "permission_denied", errors.New("assistant.entries.list requires assistant.entries.read"))
+				body["scope"] = extwire.ScopeAssistantEntriesRead
+				apierr.WriteBody(w, http.StatusForbidden, body)
+				return
+			}
+			personal = granted || s.localEntriesReader(r.Context())
+		}
 		out, err := s.listEntries(r.Context(), p, personal)
 		if err != nil {
 			apierr.Call(w, err)
@@ -157,8 +167,8 @@ func (s *Service) markEntryWrong(ctx context.Context, id string) (entries.Entry,
 	if err != nil {
 		return e, err
 	}
-	if publisher, ok := s.hub.(entriesEventPublisher); ok && (!e.Scope.Personal || s.localEntriesReader(ctx)) {
-		if err := publisher.EntriesEvent(assistantwire.EventAssistantEntriesChanged, assistantwire.AssistantEntriesChanged{ID: id, RecordID: e.ID, Status: "wrong"}); err != nil {
+	if publisher, ok := s.hub.(entriesEventPublisher); ok {
+		if err := publisher.EntriesEvent(assistantwire.EventAssistantEntriesChanged, assistantwire.AssistantEntriesChanged{ID: id, RecordID: e.ID, Status: "wrong", Personal: e.Scope.Personal}); err != nil {
 			s.logf("entries: change notification could not be delivered")
 		}
 	}
@@ -168,3 +178,35 @@ func (s *Service) markEntryWrong(ctx context.Context, id string) (entries.Entry,
 type entriesEventPublisher interface{ EntriesEvent(string, any) error }
 
 func (b *BusHub) EntriesEvent(event string, params any) error { return b.notifyHub(event, params) }
+
+// The hub supplies the authenticated extension ID; this live registry lookup is
+// deliberately separate from the token's initial scope snapshot.
+type entriesAuthorizer interface{ EntriesReadAccess(string) (bool, bool) }
+
+func (s *Service) entriesReadAccess(id string) (bool, bool) {
+	if id == "" {
+		return false, false
+	}
+	if a, ok := s.hub.(entriesAuthorizer); ok {
+		return a.EntriesReadAccess(id)
+	}
+	return false, false
+}
+func (b *BusHub) EntriesReadAccess(id string) (bool, bool) {
+	if a, ok := b.opts.Extensions.(entriesAuthorizer); ok {
+		return a.EntriesReadAccess(id)
+	}
+	return false, false
+}
+func (s *Service) extensionEntriesPersonal(ctx context.Context) (bool, error) {
+	id := entries.ExtensionReader(ctx)
+	if id == "" {
+		return s.localEntriesReader(ctx), nil
+	}
+	allowed, personal := s.entriesReadAccess(id)
+	if !allowed {
+		data, _ := json.Marshal(map[string]string{"scope": extwire.ScopeAssistantEntriesRead})
+		return false, &rpc.Error{Code: "permission_denied", Message: "assistant.entries.list requires assistant.entries.read", Data: data}
+	}
+	return personal || s.localEntriesReader(ctx), nil
+}

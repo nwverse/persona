@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/entries"
+
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -17,10 +18,10 @@ import (
 // until H1b verifies them against their source messages.
 func (s *Service) ledgerCardDecisions(ctx context.Context, ix proto.Interaction, r proto.Resolution, status string) error {
 	st := s.entriesDB()
-	if st == nil || status != "resolved" || ix.Kind != proto.IxQuestion || ix.Private || ix.Secret || len(ix.Fields) > 0 || r.Dismiss || r.Cancel || r.AnsweredBy != "" {
+	if st == nil || status != "resolved" || ix.Kind != proto.IxQuestion || ix.Secret || len(ix.Fields) > 0 || r.Dismiss || r.Cancel || r.AnsweredBy != "" {
 		return nil
 	}
-	if s.agentCallerSpace(ctx, ix.MachineID, ix.SessionID) == SpaceHealth || s.justMeNow(ix.MachineID, ix.SessionID) || s.isGuest(ctx, ix.MachineID, ix.SessionID) || s.isWorkMachine(ix.MachineID) {
+	if s.isGuest(ctx, ix.MachineID, ix.SessionID) || s.isWorkMachine(ix.MachineID) {
 		return nil
 	}
 	for _, q := range ix.Questions {
@@ -48,7 +49,7 @@ func (s *Service) ledgerCardDecisions(ctx context.Context, ix proto.Interaction,
 			}
 		}
 		e := entries.Entry{ID: entrySourceID("card", ix.MachineID, ix.ID, q.Question), Type: "decision", Text: q.Question + ": " + answer, Quote: answer,
-			Source: entries.Source{Machine: ix.MachineID, Session: ix.SessionID, Card: ix.ID}, Scope: entries.Scope{Executor: "system", Machine: []string{ix.MachineID}, Personal: true},
+			Space: s.entriesSourceSpace(ctx, ix.MachineID, ix.SessionID), Source: entries.Source{Machine: ix.MachineID, Session: ix.SessionID, Card: ix.ID}, Scope: entries.Scope{Executor: "system", Machine: []string{ix.MachineID}, Personal: true},
 			Trust: "user_verbatim", By: "user", Status: "active", Decision: &entries.Decision{Options: options, Selected: selected, Rejected: rejected, Reason: r.Reason, Reversible: ix.Reversible}}
 		if _, err := st.AppendAssistantEntry(ctx, e); err != nil {
 			return err
@@ -67,8 +68,8 @@ func (s *Service) toolEntries(ctx context.Context, machine, session, name string
 	// Only private assistant sessions have these tools; still enforce the boundary
 	// here so a direct call cannot bypass the catalog.
 	_, guest, err := s.guestOf(ctx, machine, session)
-	if err != nil || guest || s.isWorkMachine(machine) || isOutwardReader(ctx) || s.agentCallerSpace(ctx, machine, session) == SpaceHealth || s.justMeNow(machine, session) {
-		return "", errors.New("entries are only available in private assistant conversations")
+	if err != nil || guest || s.isWorkMachine(machine) || isOutwardReader(ctx) {
+		return "", errors.New("entries are only available in the owner's assistant conversations")
 	}
 	if name == "decisions_query" {
 		var p entries.Params
@@ -142,9 +143,15 @@ func (s *Service) toolEntries(ctx context.Context, machine, session, name string
 		if q.Scope.Personal && machine != s.settings(ctx).MachineID {
 			return "", errors.New("personal quotes require the owner's machine")
 		}
+		if q.Space == "" {
+			q.Space = s.entriesSourceSpace(ctx, q.Source.Machine, q.Source.Session)
+		}
 		if err := q.Validate(); err != nil {
 			return "", err
 		}
+	}
+	if e.Space == "" {
+		e.Space = s.entriesSourceSpace(ctx, e.Source.Machine, e.Source.Session)
 	}
 	if err := e.Validate(); err != nil {
 		return "", err
@@ -173,4 +180,11 @@ func (s *Service) toolEntries(ctx context.Context, machine, session, name string
 	}
 	b, err := json.Marshal(map[string]any{"entry": e})
 	return string(b), err
+}
+
+func (s *Service) entriesSourceSpace(ctx context.Context, machine, session string) string {
+	if row, ok := s.session(ctx, machine, session); ok {
+		return spaceOf(row)
+	}
+	return ""
 }

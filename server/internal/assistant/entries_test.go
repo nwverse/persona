@@ -120,7 +120,7 @@ func TestEntriesPersonalInstanceBoundary(t *testing.T) {
 	e.s.ServeHTTP(w, r)
 	var out entries.Result
 	_ = json.Unmarshal(w.Body.Bytes(), &out)
-	if w.Code != 200 || len(out.Entries) != 0 {
+	if w.Code != 403 {
 		t.Fatalf("HTTP boundary: %d %s", w.Code, w.Body.String())
 	}
 }
@@ -184,5 +184,91 @@ func TestEntriesAskUserAnswerIsQueryableAndModelQuotesStayInferred(t *testing.T)
 	agent, err := database.ListAssistantEntries(ctx, entries.Params{By: "agent", Type: "decision"}, true)
 	if err != nil || len(agent.Entries) != 1 {
 		t.Fatalf("agent decision replay: %+v %v", agent, err)
+	}
+}
+
+type entriesAccessHub struct {
+	*fakeHub
+	allowed, personal bool
+}
+
+func (h *entriesAccessHub) EntriesReadAccess(id string) (bool, bool) {
+	if id != "example-reader" {
+		return false, false
+	}
+	return h.allowed, h.personal
+}
+
+func TestEntriesHTTPPersonalGrantRevocationAndCategories(t *testing.T) {
+	database := todoTestDB(t)
+	e := newTodoEnv(t, database)
+	ctx := context.Background()
+	h := &entriesAccessHub{fakeHub: e.f, allowed: true, personal: true}
+	e.s.hub = h
+	e.s.entriesDial = func(context.Context, any) ([]byte, error) {
+		return []byte(`{"ok":true,"machine_id":"a-different-computer"}`), nil
+	}
+	for _, space := range []string{"", "health", "finance", "relationship"} {
+		item := entries.Entry{ID: "entry-space-" + space, Type: "decision", Text: "Keep the example choice.", Quote: "Stage", Space: space, Category: "health", Source: entries.Source{Machine: "computer-example", Session: "session-example", Message: "message-example"}, Scope: entries.Scope{Executor: "assistant", Personal: true}, By: "user", Trust: "user_verbatim", Status: "active", Decision: &entries.Decision{Options: []string{"Stage", "Release"}, Selected: []string{"Stage"}, Rejected: []string{"Release"}, Reason: "Example rationale."}}
+		if _, err := database.AppendAssistantEntry(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	get := func(id string) (int, entries.Result) {
+		r := httptest.NewRequest("GET", "/api/v1/assistant/entries?by=user", nil)
+		r.Header.Set(RoleHeader, roleExtension)
+		r.Header.Set(ExtensionHeader, id)
+		w := httptest.NewRecorder()
+		e.s.ServeHTTP(w, r)
+		var out entries.Result
+		_ = json.Unmarshal(w.Body.Bytes(), &out)
+		return w.Code, out
+	}
+	code, out := get("example-reader")
+	if code != 200 || len(out.Entries) != 4 || out.Entries[0].Category != "health" {
+		t.Fatalf("approved cross-space personal read: %d %+v", code, out)
+	}
+	rpcCtx := entries.WithExtensionReader(ctx, "example-reader")
+	value, handled, err := e.s.conversationsRequest(rpcCtx, assistantwire.MethodAssistantEntriesList, json.RawMessage(`{}`))
+	if err != nil || !handled || len(value.(entries.Result).Entries) != 4 {
+		t.Fatalf("authorized RPC: %+v %v", value, err)
+	}
+	code, _ = get("unapproved-reader")
+	if code != 403 {
+		t.Fatalf("unapproved read: %d", code)
+	}
+	// The token/extension ID stays identical; the live scope changes beneath it.
+	h.allowed, h.personal = false, false
+	code, _ = get("example-reader")
+	if code != 403 {
+		t.Fatalf("revoked grant still works: %d", code)
+	}
+	if _, _, err := e.s.conversationsRequest(rpcCtx, assistantwire.MethodAssistantEntriesList, json.RawMessage(`{}`)); err == nil {
+		t.Fatal("revoked RPC still works")
+	}
+	// A read grant without explicit personal consent can use the retained local proof.
+	h.allowed = true
+	owner := e.s.settings(ctx).MachineID
+	e.s.entriesDial = func(context.Context, any) ([]byte, error) {
+		return []byte(`{"ok":true,"machine_id":"` + owner + `"}`), nil
+	}
+	code, out = get("example-reader")
+	if code != 200 || len(out.Entries) != 4 {
+		t.Fatalf("local alternative: %d %+v", code, out)
+	}
+}
+
+func TestEntriesCollectOwnerCardAnswersAcrossSourceSpaces(t *testing.T) {
+	database := todoTestDB(t)
+	e := newTodoEnv(t, database)
+	ctx := context.Background()
+	e.f.setSessions("server", proto.Session{SessionID: "health-example", Assistant: true, Space: "health"})
+	ix := proto.Interaction{ID: "card-health-example", MachineID: "server", SessionID: "health-example", Kind: proto.IxQuestion, Questions: []proto.Question{{Question: "Keep the example reminder?", Options: []proto.QuestionOption{{Label: "Keep"}, {Label: "Skip"}}}}}
+	if err := e.s.ledgerCardDecisions(ctx, ix, proto.Resolution{Answers: map[string]string{"Keep the example reminder?": "Keep"}}, "resolved"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := database.ListAssistantEntries(ctx, entries.Params{By: "user"}, true)
+	if err != nil || len(out.Entries) != 1 || out.Entries[0].Space != "health" || out.Entries[0].Category != "" {
+		t.Fatalf("source/category: %+v %v", out, err)
 	}
 }

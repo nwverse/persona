@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -109,5 +110,21 @@ func TestExtensionEntriesNeedTheirOwnGrant(t *testing.T) {
 	}
 	if _, err := granted.Handle(context.Background(), assistantwire.MethodAssistantEntriesList, p); err != nil || calls != 1 {
 		t.Fatalf("granted: %v calls=%d", err, calls)
+	}
+}
+
+func TestEntriesHTTPTokenDoesNotCacheARevokedGrant(t *testing.T) {
+	h := newTestManager(t)
+	kbExtensionSpec(t, h, "example-entries", extension.Permissions{Hub: []string{extension.ScopeAssistantEntriesRead}})
+	tok := h.extTokens.issue("example-entries", "Example", []string{extension.ScopeAssistantEntriesRead})
+	request := extwire.Authorize{Hash: hashToken(tok), Pattern: "GET /api/v1/assistant/entries", Method: "GET", Path: "/api/v1/assistant/entries"}
+	if out := h.authorize(request); !out.OK || out.Extension != "example-entries" {
+		t.Fatalf("approved: %+v", out)
+	}
+	if err := h.extensions.reg.SetEnabled(context.Background(), "example-entries", false, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if out := h.authorize(request); out.OK {
+		t.Fatalf("unchanged credential survived revoke: %+v", out)
 	}
 }

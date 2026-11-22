@@ -806,11 +806,14 @@ extension authors and integrations; this increment adds no client screen. RPC `a
 
 All filters are ANDed. Scope dimensions are ANDed too: `executor=any` entries match either execution audience;
 machine/project restrictions match an overlapping requested ID, or every ID if the stored list is empty. A personal
-filter never grants permission. The local extension RPC proves co-location using the same-user Node socket's machine
-identity and the owner's assistant-machine setting. Unknown/offline/older nodes return no personal entries. An HTTP
-extension credential has no physical instance proof and returns only non-personal entries. Authenticated UI readers
-see personal entries too. Personal card answers are conservatively stored with `personal=true`; private cards, health
-conversations and automatically answered cards are excluded.
+filter never grants permission. An installed extension whose manifest declares `assistant.entries.read` and whose
+current per-extension grant includes it may read all personal entries over HTTP or RPC, regardless of source space
+or content category. The manager checks the live registry by authenticated extension ID on every request and again
+when delivering events: disabling the extension or revoking the scope takes effect without renewing its credential.
+An allowed reader may alternatively prove co-location through the same-user Node socket. Legacy full-hub permission
+alone does not opt into remote personal reads. No space or privacy-tier exclusion applies; `space` and `category` are
+metadata reserved for later labeling and use-time policy. Secret input fields and automated answers are not owner
+question answers.
 
 The response is `{entries: [...], after: "<opaque continuation>", has_more: false}`. Entries are ordered by increasing,
 server-assigned publication `at`, then `id`. Keep the filters unchanged while paging. At the end, retain `after` for
@@ -818,6 +821,7 @@ future increments; an empty result retains the incoming cursor. Source timestamp
 
 | Entry field | Type and meaning |
 | --- | --- |
+| `space`, `category` | Source-space and content-category strings; empty until known or labeled (for example `health`, `finance`, `relationship`, `legal`); neither restricts authorized reads |
 | `id`, `type`, `text` | Stable ID, one of the four persisted types, one-line judgment; hot state is not stored |
 | `quote` | Source wording; model-supplied quotes stay inferred until later verification |
 | `source` | `{machine, session, msg_uuid?, card_id?, file?, line?}`; original source pointer |
@@ -853,7 +857,7 @@ Owner-only `POST /api/v1/assistant/entries/{id}/wrong` appends a wrong correctio
 `assistant.entries.changed` with `{id, record_id, status:"wrong"}`. The original and correction remain queryable.
 Subscribed running extensions need `assistant.entries.read` to receive `event.assistant.entries.changed`.
 Notifications contain IDs only, are best effort, and require a lifecycle rescan after reconnect; an incremental cursor
-alone does not revisit an earlier row's derived status. Personal invalidations use the same co-location boundary.
+alone does not revisit an earlier row's derived status. Personal invalidations use the same live per-extension grant or co-location proof.
 
 Assistant tools `decision_record` and `decisions_query` write structured decisions and read them. Trusted owner
 question-card answers enter automatically with their card pointer. `decision_record` also accepts up to 20

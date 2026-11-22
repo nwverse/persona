@@ -63,7 +63,11 @@ func (s *Service) conversationsRequest(ctx context.Context, method string, param
 		if err := strictParams(method, params, &p); err != nil {
 			return nil, true, err
 		}
-		out, err := s.listEntries(ctx, p, s.localEntriesReader(ctx))
+		personal, err := s.extensionEntriesPersonal(ctx)
+		if err != nil {
+			return nil, true, err
+		}
+		out, err := s.listEntries(ctx, p, personal)
 		return out, true, err
 	case assistantwire.MethodAssistantMemory:
 		var p assistantwire.AssistantMemoryParams

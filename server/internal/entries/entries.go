@@ -37,6 +37,8 @@ type Decision struct {
 }
 
 type Entry struct {
+	Space      string     `json:"space"`
+	Category   string     `json:"category"`
 	ID         string     `json:"id"`
 	Type       string     `json:"type"`
 	Text       string     `json:"text"`

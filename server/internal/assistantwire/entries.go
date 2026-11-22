@@ -14,6 +14,8 @@ type AssistantEntriesChanged struct {
 	ID       string `json:"id"`
 	RecordID string `json:"record_id"`
 	Status   string `json:"status"`
+	// Personal is internal routing metadata, omitted from plugin notifications.
+	Personal bool `json:"personal,omitempty"`
 }
 
 func init() {

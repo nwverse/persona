@@ -44,7 +44,7 @@ func TestEntriesWrongEventRequiresGrantedRead(t *testing.T) {
 			for _, bad := range []string{`{}`, `{"id":"e","record_id":"r","status":"active"}`} {
 				h.AssistantSaid(assistantwire.EventAssistantEntriesChanged, json.RawMessage(bad))
 			}
-			if !h.AssistantSaid(assistantwire.EventAssistantEntriesChanged, json.RawMessage(`{"id":"entry-example","record_id":"entry-correction","status":"wrong","quote":"must not be forwarded"}`)) {
+			if !h.AssistantSaid(assistantwire.EventAssistantEntriesChanged, json.RawMessage(`{"id":"entry-example","record_id":"entry-correction","status":"wrong","personal":true,"quote":"must not be forwarded"}`)) {
 				t.Fatal("event unhandled")
 			}
 			// Both notices use the same queue; this sentinel proves the preceding one was processed.
