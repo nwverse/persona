@@ -93,6 +93,15 @@ async function run(theme, width, textSize) {
     assert.match(await dialog.textContent(), /never inherit Agents' Full access/);
     assert.equal(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth + 1), true, `${tag}: dialog overflows`);
     await page.screenshot({ path: join(output, `${tag}-default.png`) });
+    const screenshots = [`${tag}-default.png`];
+    if (width < 500) {
+      const hint = dialog.getByText(modelText.permission_mode_hint_inbox, { exact: true });
+      await hint.evaluate((el) => el.scrollIntoView({ block: "center" }));
+      const box = await hint.boundingBox();
+      assert.ok(box && box.y >= 0 && box.y + box.height <= 844, `${tag}: the full permission hint is visible after scrolling`);
+      await page.screenshot({ path: join(output, `${tag}-hint.png`) });
+      screenshots.push(`${tag}-hint.png`);
+    }
 
     await select.selectOption("bypassPermissions");
     assert.match(await dialog.textContent(), new RegExp(modes.bypass_warning));
@@ -109,7 +118,7 @@ async function run(theme, width, textSize) {
     assert.match(await select.locator("option").first().textContent(), new RegExp(modes.mode_default));
     assert.doesNotMatch(await select.locator("option").first().textContent(), new RegExp(modes.mode_bypass_permissions));
     assert.deepEqual(errors, []);
-    results.push({ tag, writes: state.writes, screenshots: [`${tag}-default.png`], pageErrors: errors });
+    results.push({ tag, writes: state.writes, screenshots, pageErrors: errors });
     console.log(`PASS ${tag}: default does not inherit Agents bypass; explicit bypass saves; reset restores default`);
   } catch (error) {
     await writeFile(join(output, `${tag}-failure.txt`), await page.locator("body").innerText());
