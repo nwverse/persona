@@ -72,7 +72,11 @@ internal fun ChatMessageActions(
                             val msg = resources.getString(R.string.chat_starred_removed)
                             if (removed != null) {
                                 val undo = FeedbackAction(resources.getString(R.string.chat_starred_undo)) {
-                                    scope.launch { starredStore.add(removed) }
+                                    scope.launch {
+                                        starredStore.add(removed).onFailure {
+                                            onNotice(resources.getString(R.string.chat_starred_failed))
+                                        }
+                                    }
                                 }
                                 if (feedback?.notice(msg, undo) != true) onNotice(msg)
                             } else if (feedback?.notice(msg, FeedbackStyle.Success) != true) {

@@ -113,6 +113,8 @@ fun StarredMessagesScreen(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
+    val feedback = LocalAppFeedback.current
+    val resources = LocalResources.current
     val state = store?.state?.collectAsState()?.value
     val loadState = state?.loadState ?: StarredLoadState.Unsupported
     val snapshots = state?.snapshots.orEmpty()
@@ -123,6 +125,31 @@ fun StarredMessagesScreen(
     val assistantLabel = stringResource(R.string.assistant_starred_speaker_assistant)
     val matches = remember(snapshots, query, meLabel, assistantLabel) {
         filterStarredSnapshots(snapshots, query, meLabel, assistantLabel)
+    }
+    // Unstar and Undo run in the screen-level scope so removing a card from the LazyColumn
+    // never cancels the Undo coroutine that restores it.
+    val onUnstar: (StarredSnapshot) -> Unit = { star ->
+        store?.let { active ->
+            scope.launch {
+                active.remove(star.source, id = star.id).onSuccess { removed ->
+                    val message = resources.getString(R.string.assistant_starred_unstarred)
+                    if (removed != null) {
+                        val undo = FeedbackAction(resources.getString(R.string.assistant_starred_undo)) {
+                            scope.launch {
+                                active.add(removed).onFailure {
+                                    feedback?.notice(resources.getString(R.string.assistant_starred_action_failed))
+                                }
+                            }
+                        }
+                        feedback?.notice(message, undo)
+                    } else {
+                        feedback?.notice(message, FeedbackStyle.Success)
+                    }
+                }.onFailure {
+                    feedback?.notice(resources.getString(R.string.assistant_starred_action_failed))
+                }
+            }
+        }
     }
 
     DisposableEffect(store) {
@@ -167,6 +194,7 @@ fun StarredMessagesScreen(
                     meLabel = meLabel,
                     assistantLabel = assistantLabel,
                     onOpenOriginal = { onOpenOriginal(star) },
+                    onUnstar = { onUnstar(star) },
                 )
             }
         } else {
@@ -243,12 +271,11 @@ private fun StarredMessageCard(
     meLabel: String,
     assistantLabel: String,
     onOpenOriginal: () -> Unit,
+    onUnstar: () -> Unit,
 ) {
     val palette = PersonaTheme.palette
     val scope = rememberCoroutineScope()
     val copy = rememberCopy()
-    val feedback = LocalAppFeedback.current
-    val resources = LocalResources.current
     val locale = currentLocale
     var expanded by rememberSaveable(star.id) { mutableStateOf(false) }
     var checking by remember(star.id) { mutableStateOf(false) }
@@ -369,23 +396,7 @@ private fun StarredMessageCard(
                 if (canWrite && store != null) {
                     JTextButton(
                         text = stringResource(R.string.assistant_starred_unstar),
-                        onClick = {
-                            scope.launch {
-                                store.remove(star.source, id = star.id).onSuccess { removed ->
-                                    val message = resources.getString(R.string.assistant_starred_unstarred)
-                                    if (removed != null) {
-                                        val undo = FeedbackAction(resources.getString(R.string.assistant_starred_undo)) {
-                                            scope.launch { store.add(removed) }
-                                        }
-                                        feedback?.notice(message, undo)
-                                    } else {
-                                        feedback?.notice(message, FeedbackStyle.Success)
-                                    }
-                                }.onFailure {
-                                    feedback?.notice(resources.getString(R.string.assistant_starred_action_failed))
-                                }
-                            }
-                        },
+                        onClick = onUnstar,
                         modifier = Modifier.testTag("starred-unstar"),
                         enabled = !pending,
                     )
