@@ -175,6 +175,8 @@ type Content struct {
 	Text      string
 	Media     []Media
 	postLinks []postLink
+	// post retains element boundaries and identities for command parsing.
+	post *richPost
 	// Forward: a merged forward; its messages are read with Client.Message.
 	Forward bool
 	// Sticker: a sticker carries no request; accept it silently instead of starting an Agent turn.
@@ -394,17 +396,18 @@ func writeNodes(b *strings.Builder, nodes []richNode, mentions []Mention, post *
 	}
 }
 
+type richPost struct {
+	Title   string       `json:"title"`
+	Content [][]richNode `json:"content"`
+}
+
 // parsePost flattens rich text: paragraphs become lines, links Markdown links, code blocks fenced; images are media.
 // A received post is {"title","content":[[…]]}; one read back may be keyed by language ({"zh_cn":{…}}).
 // mentions give names for at nodes that carry a user_id without a user_name.
 func parsePost(content string, mentions []Mention) Content {
-	type post struct {
-		Title   string       `json:"title"`
-		Content [][]richNode `json:"content"`
-	}
-	var p post
+	var p richPost
 	if err := json.Unmarshal([]byte(content), &p); err != nil || (p.Title == "" && p.Content == nil) {
-		var byLang map[string]post
+		var byLang map[string]richPost
 		if json.Unmarshal([]byte(content), &byLang) == nil {
 			for _, k := range []string{"zh_cn", "en_us", "ja_jp"} {
 				if v, ok := byLang[k]; ok {
@@ -420,7 +423,11 @@ func parsePost(content string, mentions []Mention) Content {
 			}
 		}
 	}
-	var c Content
+	return renderPost(p, mentions)
+}
+
+func renderPost(p richPost, mentions []Mention) Content {
+	c := Content{post: &p}
 	var lines []string
 	if p.Title != "" {
 		lines = append(lines, "**"+p.Title+"**")
