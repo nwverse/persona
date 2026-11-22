@@ -21,6 +21,7 @@ type larkCLIRecovery struct {
 	running           atomic.Bool
 	after             atomic.Int64
 	preferencesUnread atomic.Bool
+	publishing        atomic.Bool
 }
 
 func (h *Manager) deferLarkCLIRecovery() {
@@ -49,7 +50,7 @@ func (h *Manager) requestLarkCLIRecovery(ctx context.Context) {
 // An explicit manager profile identifies the account, but cannot enable a
 // connector whose durable enabled/feed choices are still unread.
 func (h *Manager) larkCLIExecutionProfile(ctx context.Context) (string, error) {
-	if h.larkCLIRecovery.preferencesUnread.Load() {
+	if h.larkCLIRecovery.preferencesUnread.Load() || h.larkCLIRecovery.publishing.Load() {
 		h.requestLarkCLIRecovery(ctx)
 		return "", errBotSettingsUnread
 	}
@@ -273,9 +274,13 @@ func larkCLIBrand(domain string) string {
 // change keeps the chat Inbox working.
 func (h *Manager) newLarkCLIConnector(profile string) *larkcliconnector.Connector {
 	cli := h.cfg.Lark.CLI
-	lc := larkcliconnector.New(larkcliadapter.Config{Bin: cli.Bin, Profile: profile,
+	var lc *larkcliconnector.Connector
+	lc = larkcliconnector.New(larkcliadapter.Config{Bin: cli.Bin, Profile: profile,
 		InboxPoll: cli.InboxPoll(), InboxPageLimit: cli.InboxPageLimit,
 		ResolveProfile: func(ctx context.Context) (string, error) {
+			if h.connectors.Get(larkcliconnector.ID) != lc {
+				return "", errBotSettingsUnread // a retired instance never owns current-account calls
+			}
 			current, err := h.larkCLIExecutionProfile(ctx)
 			if err != nil {
 				return "", err
@@ -305,7 +310,13 @@ func (h *Manager) newLarkCLIConnector(profile string) *larkcliconnector.Connecto
 // refreshLarkCLIConnector applies a profile change to the live registry. The
 // registry's Remove/Add pair preserves the user's enabled switch and cancels a
 // pending login through the connector lifecycle.
-func (h *Manager) refreshLarkCLIConnector(ctx context.Context) (err error) {
+func (h *Manager) refreshLarkCLIConnector(ctx context.Context) error {
+	return h.refreshLarkCLIConnectorAtPublication(ctx, nil)
+}
+
+// beforeActivation observes the published replacement before its instance switch is applied.
+// Production passes nil; integration tests use this boundary for concurrent Registry.Call.
+func (h *Manager) refreshLarkCLIConnectorAtPublication(ctx context.Context, beforeActivation func()) (err error) {
 	if h == nil || h.cfg == nil || h.cfg.Lark.CLI == nil || h.connectors == nil {
 		return nil
 	}
@@ -365,10 +376,13 @@ func (h *Manager) refreshLarkCLIConnector(ctx context.Context) (err error) {
 	}
 	// Unknown preferences were quarantined before Start. Keep that fence until
 	// the replacement has its durable options and feed choices, then restore on/off.
+	h.larkCLIRecovery.publishing.Store(true)
+	defer h.larkCLIRecovery.publishing.Store(false)
+	// Keep Add from starting a watcher before the new instance has its switch.
+	if err = h.connectors.SetEnabled(larkcliconnector.ID, false); err != nil {
+		return err
+	}
 	if unread {
-		if err = h.connectors.SetEnabled(larkcliconnector.ID, false); err != nil {
-			return err
-		}
 		on, chosen := cs.Inbox[larkcliconnector.ID]
 		if err = h.connectors.SetFeed(larkcliconnector.ID, connector.FeedInbox, !chosen || on); err != nil {
 			return err
@@ -379,13 +393,20 @@ func (h *Manager) refreshLarkCLIConnector(ctx context.Context) (err error) {
 	if err = h.addConnector(next); err != nil {
 		return err
 	}
-	if unread {
-		h.larkCLIRecovery.preferencesUnread.Store(false)
+	if beforeActivation != nil {
+		beforeActivation()
 	}
 	// Reapply off to the new pointer as well as preserving the registry's ID
 	// switch: StatusOf uses the connector instance's disabled mark.
-	if err = h.connectors.SetEnabled(larkcliconnector.ID, enabled); err != nil {
+	if err = h.connectors.SetEnabled(larkcliconnector.ID, false); err != nil {
 		return err
+	}
+	if unread {
+		h.larkCLIRecovery.preferencesUnread.Store(false)
+	}
+	h.larkCLIRecovery.publishing.Store(false)
+	if enabled {
+		return h.connectors.SetEnabled(larkcliconnector.ID, true)
 	}
 	return nil
 }
