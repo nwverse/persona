@@ -304,6 +304,9 @@ func (s FeishuBotSettings) sourceReportDelayMinutes() int {
 func (s FeishuBotSettings) copy() FeishuBotSettings {
 	s.TopicChats = slices.Clone(s.TopicChats)
 	s.AISources = slices.Clone(s.AISources)
+	for i := range s.AISources {
+		s.AISources[i].ReadCards = slices.Clone(s.AISources[i].ReadCards)
+	}
 	if s.NudgeAfter != nil {
 		n := *s.NudgeAfter
 		s.NudgeAfter = &n

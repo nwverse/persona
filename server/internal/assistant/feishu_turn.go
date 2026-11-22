@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/feishubot"
@@ -457,6 +458,10 @@ func endHeader(l i18n.Lang, c *feishubot.Card, end channel.End) {
 
 // unreachable: the call did not reach the hub, or did not come back (worth trying again).
 func unreachable(err error) bool {
+	var re *rpc.Error
+	if errors.As(err, &re) && re.Code == assistantwire.CodeFeishuReplyBudgetUnavailable {
+		return true // the hub refused before transport; its keyed reservation can be retried safely
+	}
 	return errors.Is(err, bus.ErrOffline) || errors.Is(err, rpc.ErrClosed) || errors.Is(err, context.DeadlineExceeded)
 }
 

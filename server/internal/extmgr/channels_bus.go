@@ -178,8 +178,8 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 			if err != nil {
 				return nil, err
 			}
-			if !h.useAISourceReply(a.ReplyTo, false) {
-				return nil, errBotSourceReply
+			if err := h.useReadCardReply(chatID, a.ReplyTo, a.UUID, a.InThread); err != nil {
+				return nil, err
 			}
 			id, err := h.botPostJSONKeyedOpt(ctx, api, chatID, a.ReplyTo, a.Card, a.Fallback, callerKey(a.UUID, feishuMaxUUID-4), a.InThread, true)
 			return map[string]any{"message_id": id}, err
