@@ -57,6 +57,14 @@ var centralLists = []centralList{
 		seam: "give a new prompt's types and Render function a file of their own, prompts/assistant_<topic>.go, " +
 			"as assistant_answer_again.go does",
 	},
+	{
+		id:     "extwire_route_scopes",
+		source: "internal/extwire/scopes.go",
+		what:   "key of the RouteScopes literal",
+		names:  literalEntries("RouteScopes"),
+		seam: "give a route opened to extensions its scope from an init() in its domain's own file, " +
+			"extwire/<domain>_scopes.go, func init() { addRouteScopes(map[string]string{…}) }, as inbox_scopes.go does",
+	},
 }
 
 func (l centralList) file() string { return "testdata/central_lists/" + l.id + ".txt" }
@@ -303,6 +311,7 @@ func TestCentralListNames(t *testing.T) {
 // notice, a pending one passes before and after its PR merges, and the list's format is checked.
 func TestCentralListFreeze(t *testing.T) {
 	routes, prompts := centralLists[0], centralLists[1]
+	scopes := centralLists[2]
 	const bus = `package assistantwire
 
 const P = "/api/v1/p"
@@ -338,8 +347,19 @@ func (s Snapshot) Up() int { return 0 }
 
 func (b *B[T]) Down() int { return 0 }
 `
+	// A route given its scope from a domain's init() is no key of the literal, so it passes.
+	const scope = `package extwire
+
+var RouteScopes = map[string]string{
+	"GET /api/v1/a": ScopeA,
+	"PUT /api/v1/b": ScopeB, // a comment
+}
+
+func init() { addRouteScopes(map[string]string{"GET /api/v1/registered": ScopeA}) }
+`
 	const routesList = "# a header\n\"GET \" + P\n\"GET /api/v1/a\"\n\"POST /api/v1/c\"\n\"PUT /api/v1/b\"\n"
 	const promptsList = "A\nB\nB.Down\nC\nRenderA\nSnapshot\nSnapshot.Up\nv\n"
+	const scopesList = "\"GET /api/v1/a\"\n\"PUT /api/v1/b\"\n"
 
 	check := func(l centralList, src, list string) ([]string, []string) {
 		t.Helper()
@@ -350,6 +370,7 @@ func (b *B[T]) Down() int { return 0 }
 		return failures, notices
 	}
 	const routeSeam, promptSeam = "assistantwire/<domain>.go", "prompts/assistant_<topic>.go"
+	const scopeSeam = "extwire/<domain>_scopes.go"
 	for _, c := range []struct {
 		l          centralList
 		src, list  string
@@ -361,6 +382,8 @@ func (b *B[T]) Down() int { return 0 }
 		{prompts, prompt, promptsList, "func init() {}\n", "func RenderPlanted() string { return \"\" }\n", "RenderPlanted", promptSeam},
 		{prompts, prompt, promptsList, "func init() {}\n", "func (s Snapshot) Planted() int { return 0 }\n", "Snapshot.Planted", promptSeam},
 		{prompts, prompt, promptsList, "func init() {}\n", "type Planted struct{}\n", "Planted", promptSeam},
+		{scopes, scope, scopesList, "var RouteScopes = map[string]string{\n", "\t\"DELETE /api/v1/planted\": ScopeA,\n",
+			`"DELETE /api/v1/planted"`, scopeSeam},
 	} {
 		if failures, notices := check(c.l, c.src, c.list); len(failures)+len(notices) != 0 {
 			t.Errorf("%s: unplanted source reports %q, %q", c.l.id, failures, notices)

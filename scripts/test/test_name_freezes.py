@@ -84,14 +84,15 @@ class FormatTests(unittest.TestCase):
 
     def test_the_committed_lists_read_cleanly(self):
         paths = sorted(LISTS.glob("*.txt"))
-        self.assertEqual([p.name for p in paths], ["assistantwire_routes.txt", "prompts_assistant.txt"])
+        self.assertEqual([p.name for p in paths],
+                         ["assistantwire_routes.txt", "extwire_route_scopes.txt", "prompts_assistant.txt"])
         for path in paths:
             with self.subTest(path=path.name):
                 text = path.read_text()
                 entries, problems = self.format.read(text)
                 self.assertEqual(problems, [])
                 self.assertTrue(text.startswith("# "), "a list starts with what it is")
-                self.assertGreater(len(entries), 100)
+                self.assertGreater(len(entries), 50)
 
 
 class OpenPRTests(unittest.TestCase):
@@ -196,7 +197,9 @@ class GoNamesTests(unittest.TestCase):
             ("assistantwire_routes", "server/internal/assistantwire/bus.go",
              "server/internal/archguard/testdata/central_lists/assistantwire_routes.txt"),
             ("prompts_assistant", "server/internal/prompts/assistant.go",
-             "server/internal/archguard/testdata/central_lists/prompts_assistant.txt")])
+             "server/internal/archguard/testdata/central_lists/prompts_assistant.txt"),
+            ("extwire_route_scopes", "server/internal/extwire/scopes.go",
+             "server/internal/archguard/testdata/central_lists/extwire_route_scopes.txt")])
         listed = {e.name for e in name_freezes.CENTRAL.read((ROOT / lists[0].file).read_text())[0]}
         now = names[("assistantwire_routes", "now")]
         self.assertGreater(len(now), 100)
