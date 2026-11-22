@@ -80,6 +80,13 @@ What a piece of information may do is decided where it is used, by one function,
 
 Information whose categories are not known yet (not tagged, tagging failed or timed out) takes the sensitive side outside its own track. `TrackPolicy` sums these rules up as the switches the call sites read until each asks `usage` for its own scene (`policyOf`); a track's policy is that of its default categories, so the health space keeps every switch on, the main space none, a slug the registry does not know every one, and only tracks with a sensitive default category have their directories denied the other conversations (`deny_dirs`). `TestUsageHealthOutbound` maps every row of the table under "Outbound" to its scene.
 
+Which categories a use reads depends on the scene:
+
+- **A text leaving Persona** (scenes 3, 4, 5 and 7: a push or `notify_user`, `phone_notify`, `urgent_call`, a to-do reminder, a scheduled task's failure notice, a decision's push, "all cards" and "all questions" on Lark and the plugin channels, `agent_send`, `agent_start`, `agent_switch`, an A2A message or task from an assistant conversation, a task plan, `kb_update`) carries the categories tagged of its own words, within 800 ms, and its track's default categories (`exitPolicy` in `server/internal/assistant/info_use.go`). Never its conversation's accumulated ones: the main chat would soon carry every category and have everything confirmed. A track sensitive by default asks no model. When the words cannot be tagged in time (a timeout, a paused model, an error), the conversation's categories stand in when it was tagged and no turn of it waits to be tagged; otherwise the text is taken for sensitive. With no model set up for `info.tag`, a text carries its track's default categories, as before tagging.
+- **A conversation as a whole** (scenes 6 and 2: an extension listing or reading it, a recall elsewhere) carries its accumulated categories (`conversationPolicy`); while a turn of it waits to be tagged they are not known. The manager and the hub still hide by track for now; the extension side follows in a later step.
+- A redacted push outside the health space says only that there is news (`assistant-health.sensitive_notice_*`), and a confirmation card says the content may be personal (`assistant-health.sensitive_outbound`); a track whose default categories carry health keeps the health space's words.
+- What stays inside Persona is not a text leaving: to-do edits from a conversation (`todo_create`, `todo_update`, their repositories and workspaces) and the main chat's mirror to the owner's own Lark chat and plugin channels keep the track's rule.
+
 ## API
 
 For the exact protocol, see the "Assistant" table in `docs/protocol/protocol.md`.
@@ -120,7 +127,7 @@ The `conversation*` tools in a chat only see chats in the same space (`server/in
 ## Outbound (#3194)
 
 The boundary is not "health information may not leave" but "it may not leave without the user knowing". Emailing checkup results to a doctor, or sending them over Lark to a fitness coach or family, is legitimate and still works.
-The decision always depends on the chat's space (the trusted session directory), never on a model judging "does this sentence count as health".
+In the health space the decision always depends on the chat's space (the trusted session directory), never on a model judging "does this sentence count as health": its default category makes every exit below strict without asking a model. Outside it the same exits judge the words leaving ("Using information by scene").
 
 | Exit | In a health chat | Code |
 | --- | --- | --- |
