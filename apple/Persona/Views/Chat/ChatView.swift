@@ -169,6 +169,8 @@ struct ChatView: View {
 
     private enum Entry: Equatable {
         case latestAnswer, line(String), message(String)
+        /// The message a task's card is about (#12625), found once the items are in.
+        case card(Interaction)
         #if os(iOS)
         case starred(MessageJump)
         #endif
@@ -221,6 +223,8 @@ struct ChatView: View {
     @State private var footerRoom = FooterRoom()
     /// Where each pending card's message is in the chat, for its View in Chat (#9392).
     @State private var cardSources = CardSources()
+    /// The assistant's pager over the composer and its To Decide entry (#12831).
+    @State private var dock = QuestionDockState()
     @Environment(\.openSpace) private var openSpace
     @State private var link: LinkTarget?
     /// ⋯ › Preview's list of the session's dev servers, and the one picked there, opened once the list is gone (#150).
@@ -833,7 +837,10 @@ struct ChatView: View {
         .onChange(of: model.composerFocus) { _, k in if k == key, pane == .terminal { pane = .chat } }
         #endif
         // A different chat shown in place: its own cards decide whether another conversation needs you (#4348).
-        .onChange(of: key) { _, _ in offeredNext = nil }
+        .onChange(of: key) { _, _ in
+            offeredNext = nil
+            dock = QuestionDockState()
+        }
         // Leaving the conversation (another agent shown in place, the page gone, or hidden in the shell: `onTabVisibility`)
         // leaves the phone's voice chat bound to it with the bar back to it at the top, and coming back takes the bar away
         // (docs/assistant/voice.md 6.5; #9887 one button: it no longer ends there).
@@ -1700,6 +1707,19 @@ struct ChatView: View {
                 entry = nil
             } else if store.backlogBuilt {
                 if store.hasMore, scratch.entryPages < Self.entryPageLimit { searchOlderForEntry() } else { entry = nil }
+            }
+            return
+        case .card(let card):
+            // A task's card opened from the assistant's pager (#12625): the message it is about, then as a link's message.
+            // Not in what is loaded: older pages as for a link; none at all, the chat stays at its newest.
+            guard store.backlogBuilt else { return }
+            if let item = CardSource.source(for: card, in: store.items) {
+                entry = .message(item)
+                landEntry(lines)
+            } else if !(card.toolUseID ?? "").isEmpty, store.hasMore, scratch.entryPages < Self.entryPageLimit {
+                searchOlderForEntry() // a card without an id takes the newest question loaded, never an older page's
+            } else {
+                entry = nil
             }
             return
         #if os(iOS)
@@ -2893,7 +2913,13 @@ struct ChatView: View {
     @ViewBuilder private var taskFooter: some View {
         let conversation = key.sessionID
         let tasks = TasksStore.shared
-        TaskQuestions(conversation: conversation, room: footerRoom)
+        // What waits for the owner, one card at a time behind To Decide (#12831): the conversation's own cards and its tasks'.
+        let own = dockCards
+        QuestionDock(own: own, conversation: conversation, room: footerRoom, state: dock, inCall: VoiceCalls.shared.isLive(on: key))
+            .environment(\.cardSources, cardSources)
+            .task(id: CardSourceInputs(cards: own.map(\.id), count: store.items.count, last: store.items.last?.id)) {
+                if !own.isEmpty { findCardSources() }
+            }
         DraftReader(key: key) { typed in
             if let range = TaskMentionList.mention(in: typed) {
                 TaskMentionList(conversation: conversation) { todo in
@@ -2909,12 +2935,20 @@ struct ChatView: View {
         // Out of the way of a voice call (docs/assistant/voice.md 6.2「通话期间」), back when it ends.
         VoiceCallHides(key: key) {
             // Needs You / In Progress in the dock's capsules, each opening its tray (#3393), on every device.
-            AssistantActionBar(conversation: conversation, key: key, computer: computerActivity)
+            AssistantActionBar(conversation: conversation, key: key, computer: computerActivity, dock: dock, dockOwn: own)
             RouteChip(conversation: conversation)
             // Items handed to the main conversation that are still open: "Wrap up" asks it for the final write-back (#5932).
             if model.assistantMain == key { WrapUpChips(key: key) }
         }
     }
+
+    /// The conversation's own cards as the assistant's pager takes them (#12831).
+    private var dockCards: [DockCard] {
+        pendingCards.map { DockCard(interaction: $0.interaction, enabled: $0.enabled, localOnly: $0.localOnly, blocked: $0.blocked, from: $0.from) }
+    }
+
+    /// The assistant's pager holds the conversation's own cards (#12831): the stack under the entries is only an Agent's.
+    private var cardsDocked: Bool { style == .assistant && viewing == nil }
 
     /// The agent's pending cards, and in DEBUG the sample ones the screenshot switches add (`-showSampleQuestion YES`…).
     private var pendingCards: [PendingCards.Card] {
@@ -2996,7 +3030,7 @@ struct ChatView: View {
                 if style == .dev, viewing == nil, ComputerActivityPill.shows(computerActivity) {
                     ComputerActivityPill(activity: computerActivity, from: key).frame(maxWidth: .infinity, alignment: .leading)
                 }
-                if !pendingCards.isEmpty {
+                if !cardsDocked, !pendingCards.isEmpty {
                     PendingCards(cards: pendingCards, room: footerRoom)
                         .environment(\.cardSources, cardSources)
                         .task(id: CardSourceInputs(cards: pendingCards.map(\.id), count: store.items.count, last: store.items.last?.id)) {
@@ -4705,6 +4739,10 @@ struct ChatView: View {
             return true
         }
         #endif
+        if let card = j.card {
+            entry = .card(card)
+            return true
+        }
         entry = .message(j.item)
         return true
     }

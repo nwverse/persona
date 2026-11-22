@@ -28,6 +28,9 @@ vi.mock("../../lib/store", async (importOriginal) => {
 });
 
 const { Machines } = await import("../Machines");
+// Load the lazy Toolchain chunk up front (#12915). A fixed number of flushes does not cover a cold dynamic import: the
+// click below fetched nothing, and the "not restored" checks passed even when Machines restored the view.
+await import("./ToolchainPanel");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
