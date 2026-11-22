@@ -559,7 +559,6 @@ describe("Assistant Needs you / In progress trays", () => {
       done("f-old", "Move the docs", "2026-11-09T08:00:00Z"),
     ];
     await act(async () => refreshTodos());
-    // after the unfinished work, drawn quiet, with the done check's green mark; counted by its rows, not as open work
     expect(entries().map((b) => b.dataset.trayEntry)).toEqual(["needs", "running", "finished"]);
     expect(entry("finished").textContent).toBe(`${label.finished}2`);
     expect(entry("finished").className).toContain("text-ink-2");
@@ -570,7 +569,6 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(rows().map((row) => row.dataset.taskSlot)).toEqual(["task:f-new", "task:f-seen"]);
     expect(rows().map((row) => row.querySelector("[data-task-status]")!.getAttribute("data-task-status"))).toEqual(["just_finished", "done"]);
     expect(rows()[0].querySelector('[data-state="just_finished"]')).not.toBeNull();
-    // opening the new one opens the task and marks it seen where the hub keeps the mark: it stays, as a seen row
     Object.assign(getState() as unknown as Record<string, unknown>, { features: ["todo_seen"] });
     const answer = vi.mocked(fetch).getMockImplementation()!;
     vi.mocked(fetch).mockImplementation(async (url, init) => {
@@ -584,6 +582,23 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(rows().map((row) => row.dataset.taskSlot)).toEqual(["task:f-new", "task:f-seen"]);
     expect(rows().map((row) => row.querySelector("[data-task-status]")!.getAttribute("data-task-status"))).toEqual(["done", "done"]);
     expect(entry("finished").textContent).toBe(`${label.finished}2`);
+  });
+
+  it("keeps reopened accepted work Working while its Agent runs again", () => {
+    act(() => entry("running").click());
+    act(() => putTodo({ ...todo, done_at: undefined, supervision: { ...todo.supervision!, state: "accepted", reviews: [{ at, verdict: "accepted" }] } }));
+    const running = host.querySelector("[data-task-slot]")!;
+    expect(host.querySelector("[data-progress-just-finished]")).toBeNull();
+    expect(running.querySelector("[data-task-status]")?.getAttribute("data-task-status")).toBe("working");
+    expect(running.querySelector("[data-task-mark]")?.getAttribute("data-task-mark")).toBe("working");
+  });
+
+  it("keeps an accepted concern open instead of drawing it as Done", () => {
+    act(() => entry("running").click());
+    act(() => putTodo({ ...todo, kind: "concern", agents: [], done_at: undefined, supervision: { ...todo.supervision!, state: "accepted", reviews: [{ at, verdict: "accepted" }] } }));
+    const concern = host.querySelector("[data-task-slot]")!;
+    expect(concern.querySelector("[data-task-status]")?.getAttribute("data-task-status")).toBe("not_started");
+    expect(concern.querySelector("[data-task-mark]")?.getAttribute("data-task-mark")).toBe("not_started");
   });
 
   it("reuses round-bound owner acceptance and deduplicates its supervision decision", async () => {
@@ -693,9 +708,9 @@ describe("Assistant Needs you / In progress trays", () => {
     // an open ask (please verify) during a review is the owner's too
     act(() => putTodo(reviewed("2026-11-10T08:50:00Z", { ask: { outcome: "done", verdict: "Please check that the login page loads.", asked_at: at } })));
     expect(entries().map((button) => button.textContent)).toEqual([`${label.needs}1`, `${label.running}1`]);
-    // accepted: closed, in no entry
+    // accepted: closed, uncounted and under Finished, though its please-verify ask is still on it (#12974)
     act(() => putTodo(reviewed(undefined, { done_at: at, supervision: { supervisor: conversation, state: "accepted", updated_at: at, reviews: [] } })));
-    expect(entries().map((button) => button.textContent)).toEqual([label.needs, `${label.running}1`]);
+    expect(entries().map((button) => button.textContent)).toEqual([label.needs, `${label.running}1`, `${label.finished}1`]);
   });
 
   it("puts a task waiting on the user and a draft in Needs you only, without sending anything", async () => {

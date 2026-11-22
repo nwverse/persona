@@ -218,13 +218,21 @@ describe("the overview", () => {
     expect(html).not.toMatch(/>。<\/p>/);
   });
 
-  it.each([{ state: "online", online: true }, { state: "offline", online: false }])("keeps the ready state with an existing $state computer and no agents", ({ online }) => {
-    const html = render([], [], { machines: [{ ...mac, online }] });
+  it("keeps the ready state with an existing online computer and no agents", () => {
+    const html = render([], [], { machines: [mac] });
     expect(html).toContain("一切就绪");
     expect(html).toContain("所有 Agent 都在等你");
     expect(buttonLabels(html)).toContain("新建 Agent");
     expect(html).not.toContain("还没有电脑");
     expect(buttonLabels(html)).not.toContain("打开机器页");
+  });
+
+  it("makes an offline computer actionable instead of calling the page all set (#12561)", () => {
+    const html = render([], [], { machines: [{ ...mac, online: false }] });
+    expect(html).not.toContain("一切就绪");
+    expect(html).toContain('data-actionable-computer="mac"');
+    expect(html).toContain("有 1 件事等你处理");
+    expect(buttonLabels(html)).toContain("新建 Agent");
   });
 
   it("keeps an agent that only waits in the background out of 工作中, in its own section with the clock (#10938)", () => {

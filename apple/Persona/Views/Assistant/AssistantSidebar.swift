@@ -915,7 +915,9 @@ struct AssistantSidebar: View {
         // for another hub's or manager's page.
         .task(id: AssistantTaskChatsStore.readKey(out: out, group: model.hub?.group, manager: model.assistantManagerID,
                                                    conversations: all.count)) { if out { await taskChats.refresh(model.api) } }
+        // Keep the drawer's growing row types out of the sheet/search modifiers (#6735, #12249).
         .modifier(AssistantSidebarPresenters(ui: ui, open: open))
+        .stackSegment()
         .background {
             if let drawer {
                 SidebarClosed(drawer: drawer) {
@@ -1078,7 +1080,8 @@ enum AssistantSidebarPart {
     /// the Pages heading: its head and the main conversation start there too, so the marks of the head, the main row and
     /// the places stand on one line (#4206). nil until the list is laid out. Written only through `placeRows(at:)`.
     private(set) var rowsLeading: CGFloat?
-    @ObservationIgnored private var rowsLeadingEchoes = LayoutEchoGuard()
+    /// Lazy: made by the first row-layout measurement, not when the view creates its `@State` model (P3).
+    @ObservationIgnored private lazy var rowsLeadingEchoes = LayoutEchoGuard()
 
     /// A new measure of where the rows start. It is read back by the head and the main row, so a measure that only swings
     /// back to the one before (the list moved by the write it caused) is not written again: the iPhone Duo grown from split
@@ -1171,7 +1174,7 @@ struct AssistantSidebarPresenters: ViewModifier {
             if model.assistantLeaders.contains(session.sessionID) {
                 let title = session.title.isEmpty || session.title == "Claude Code"
                     ? String(localized: "New Chat [Quick Actions ea4b29]") : session.title
-                Text(String(localized: "Unpin Confirmation Message \(title) [Leader Actions 6214]"))
+                Text(UnpinWords.message(String(localized: "Unpin Confirmation Message \(title) [Leader Actions 6214]"), model: model))
             } else {
                 Text(String(localized: "Pin Confirmation Message [Leader Actions 6214]"))
             }
@@ -1602,7 +1605,7 @@ extension AssistantSidebar {
             ForEach(directions) { s in
                 AssistantSidebarDirection(direction: model.directionTree?.leader(s.sessionID), id: s.sessionID,
                                           name: model.directionNames[s.sessionID] ?? s.title, isShell: isShell, drawer: drawer,
-                                          selected: s.key == current, selectedFill: Self.selectedFill) { shades in
+                                          selected: s.key == current, selectedFill: Self.selectedFill, lead: s.key) { shades in
                     row(s, named: model.directionNames[s.sessionID], drawsShade: shades)
                 }
             }
@@ -1877,6 +1880,8 @@ extension AssistantSidebar {
                     lead ? Label("Unpin [Assistant Sidebar b7c40e]", systemImage: Theme.Icon.unpin)
                         : Label("Pin [Assistant Sidebar 6d1f2a]", systemImage: Theme.Icon.pin)
                 }
+                // File it under a direction, or on its own (#11516): only where the hub files sessions.
+                MoveToMenu(key: s.key, title: title, state: s.state)
             }
             if !isMain {
                 Button { ui.renaming = s } label: { Label("Rename… [Assistant Sidebar ec4cd0]", systemImage: Theme.Icon.edit) }

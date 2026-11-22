@@ -19,6 +19,7 @@ type logicalConversationStore interface {
 	LogicalConversations(context.Context) ([]db.LogicalConversation, error)
 	AdoptConversationAliases(context.Context, string, string, string, string, string, []string) error
 	WithConversationEpoch(context.Context, string, string, int64, func(*db.LogicalConversation) error) error
+	WithDrainedConversationEpoch(context.Context, string, string, int64, func(*db.LogicalConversation) error) error
 	BeginConversationSwitch(context.Context, string, string, db.ConversationSwitch) error
 	PrepareConversationSegment(context.Context, string, string, string, conversationlog.Segment, int) error
 	ActivateConversationSegment(context.Context, string, string, string, int64) error
@@ -101,6 +102,9 @@ func (s *Service) logicalChanged() {
 	s.logical.mu.Unlock()
 }
 
+// logicalDevices is s.devs when the store keeps logical conversations. Embedding the Devices interface promotes only
+// its methods, so an optional capability (nodeAnnouncer, mcpWaitNotifier, machineRedeployer, ReportState) is asked of
+// physicalDevices(): asked of s.devs it would never be found (#12928).
 type logicalDevices struct {
 	Devices
 	s *Service

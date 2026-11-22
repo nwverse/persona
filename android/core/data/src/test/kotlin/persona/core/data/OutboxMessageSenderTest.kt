@@ -19,6 +19,12 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -499,6 +505,7 @@ class OutboxMessageSenderTest {
         val sending = ComposerDelivery(DeliveryState.Sending)
         val sent = ComposerDelivery(DeliveryState.Sent)
         sender.recordComposerDelivery("visible", sending, "first")
+        assertEquals("the live attempt is bound to its own operation", "first", store.entries.value.single().operationId)
         sender.recordComposerDelivery("visible", ComposerDelivery(DeliveryState.Refused), "first", MessageTransportResult.NotSent)
         sender.recordComposerDelivery("visible", sending, "second")
         sender.recordComposerDelivery("visible", sent, "first", MessageTransportResult.Accepted)
@@ -510,6 +517,69 @@ class OutboxMessageSenderTest {
         sender.recordComposerDelivery("visible", sent, "second", MessageTransportResult.Accepted)
         assertEquals(OutboxState.Cancelled, store.state("visible"))
         sender.close()
+    }
+
+    @Test fun automaticRetryDoesNotAdoptAnActiveComposerAttempt() = runTest {
+        val store = InterleavedOutboxStore()
+        val automaticStarted = CompletableDeferred<Unit>()
+        val automaticFinished = CompletableDeferred<Unit>()
+        val transport = object : MessageTransport {
+            override val readyToSend = MutableStateFlow(true)
+            override val supportsClientOps = true
+            override suspend fun send(request: MessageRequest): MessageTransportResult {
+                automaticStarted.complete(Unit)
+                automaticFinished.await()
+                return MessageTransportResult.NoReceipt
+            }
+        }
+        val sender = OutboxMessageSender(scope, store, transport, backgroundScope)
+        runCurrent()
+        store.enqueue(OutboxEntry("visible", session, "hello", state = OutboxState.Refused, createdAt = 100))
+
+        val automatic = async { sender.retry("visible") }
+        val manual = withContext(Dispatchers.Default) {
+            withTimeoutOrNull(10_000) { automaticStarted.await() } ?: error("Automatic send did not start")
+            // The automatic retry passed its active-composer check. Its durable retry write suspends until the
+            // composer owns the message, reproducing the interleaving of two independent store operations.
+            store.interleaveManual = true
+            withTimeoutOrNull(10_000) { store.automaticStateWritten.await() } ?: error("Automatic transition did not start")
+            async(start = CoroutineStart.UNDISPATCHED) { sender.beginComposerRetry("visible", "manual-operation") }.also {
+                store.continueAutomatic.complete(Unit)
+                automaticFinished.complete(Unit)
+            }
+        }
+        withTimeoutOrNull(10_000) { manual.join() } ?: error("Manual retry did not finish")
+        withTimeoutOrNull(10_000) { automatic.join() } ?: error("Automatic retry did not finish")
+        runCurrent()
+
+        assertEquals(OutboxState.Sending, store.entries.value.single { it.clientMessageId == "visible" }.state)
+        assertEquals("manual-operation", store.entries.value.single().operationId)
+        sender.recordComposerDelivery("visible", ComposerDelivery(DeliveryState.Sent), "manual-operation", MessageTransportResult.Accepted)
+        assertEquals(OutboxState.Sent, store.entries.value.single().state)
+        sender.close()
+        runCurrent()
+    }
+
+    private class InterleavedOutboxStore : OutboxStore {
+        val automaticStateWritten = CompletableDeferred<Unit>()
+        val continueAutomatic = CompletableDeferred<Unit>()
+        @Volatile var interleaveManual = false
+        private val delegate = MemoryOutboxStore()
+        override val entries = delegate.entries
+        override suspend fun enqueue(entry: OutboxEntry) = delegate.enqueue(entry)
+        override suspend fun recoverInterrupted() = delegate.recoverInterrupted()
+
+        override suspend fun transition(id: String, from: Set<OutboxState>, to: OutboxState, error: String?): Boolean {
+            if (interleaveManual && to == OutboxState.Unknown) {
+                interleaveManual = false
+                automaticStateWritten.complete(Unit)
+                continueAutomatic.await()
+            }
+            return delegate.transition(id, from, to, error)
+        }
+
+        override suspend fun transition(id: String, from: Set<OutboxState>, to: OutboxState, error: String?, opId: String): Boolean =
+            delegate.transition(id, from, to, error, opId)
     }
 
     @Test fun catchUpChecksAllUncertainStatesBeforeSendingAndUsesTheSameOperationId() = runTest {

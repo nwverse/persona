@@ -3,6 +3,7 @@ package assistant
 import (
 	"cmp"
 	"context"
+	"errors"
 
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -69,8 +70,15 @@ func (s *Service) botPostContent(ctx context.Context, to feishuTarget, replyTo, 
 	if key != "" {
 		p["uuid"] = key
 	}
+	reminder, _ := ctx.Value(todoReminderSendKey{}).(*todoReminderSend)
+	if reminder != nil {
+		p["todo_reminder_pairing"] = map[string]any{"owner": reminder.owner, "paired_at": reminder.pairedAt}
+	}
 	to.params(p)
 	err := s.appCall(ctx, AppFeishu, FeishuPost, p, &res)
+	if reminder != nil && err == nil && res.MessageID == "" {
+		err = errors.New("todo reminder: delivery receipt unavailable")
+	}
 	if err == nil {
 		l, _ := ctx.Value(feishuSendKey{}).(feishuSend)
 		s.logf("bots: card sent: kind=%s machine=%s session=%s message=%s", cmp.Or(l.kind, "other"), cmp.Or(l.machine, "-"),

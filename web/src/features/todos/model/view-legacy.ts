@@ -31,7 +31,11 @@ const LEGACY: Record<(typeof TODO_LIST_SECTIONS)[number], TriageSection> = {
   done: "done",
 };
 
-export function legacyOf(view: TodoSummary): TriageSection | undefined {
+export function legacyOf(view: TodoSummary, freshClosedConcern = false): TriageSection | undefined {
+  // #5732: an ordinary close is Done immediately; a fresh closed concern keeps the hub's Just finished row.
+  if (view.reason === "closed_unseen" && !freshClosedConcern) return "done";
+  // Cancelled work keeps its own section rather than being folded into Done.
+  if (view.reason === "canceled") return "cancelled";
   if (view.section === "todo" && view.inactive) return "shelved";
   return LEGACY[view.section as keyof typeof LEGACY];
 }
@@ -130,7 +134,7 @@ export type ByDesign =
   | "someday"
   | "inactive";
 
-const FINISHED_DONE: ReadonlySet<TriageRule> = new Set(["seen", "accepted", "deployed"]);
+const FINISHED_DONE: ReadonlySet<TriageRule> = new Set(["seen", "accepted"]);
 const AT_REST: ReadonlySet<TriageRule> = new Set(["rest", "stale"]);
 /** Today's rules for what the hub places above row 4 (rows 1 to 3) or as closed (rows 6 and 7). */
 const ABOVE_CAN_WAIT: ReadonlySet<TriageRule> = new Set(["failed_start", "superseded", "agent_asks", "owner_decides", "closed"]);
@@ -140,7 +144,7 @@ const RUN_PLACED: ReadonlySet<string> = new Set(["agent_running", "starting", "b
 const STEP_SECTIONS: ReadonlySet<string> = new Set(["needs_you", "working", "waiting", "can_wait"]);
 const CAN_WAIT_LIFTS: ReadonlySet<TriageSection> = new Set(["other", "just_done", "shelved", "done"]);
 /** lib/todo-triage.ts TRIAGE_SECTIONS, which this chunk may not import (view-legacy.test.ts keeps the two equal). */
-export const PAGE_ORDER: readonly TriageSection[] = ["waiting", "working", "parked", "other", "just_done", "shelved", "done"];
+export const PAGE_ORDER: readonly TriageSection[] = ["waiting", "working", "parked", "other", "just_done", "shelved", "done", "cancelled"];
 const ahead = (a: TriageSection | undefined, b: TriageSection) => a !== undefined && PAGE_ORDER.indexOf(a) < PAGE_ORDER.indexOf(b);
 
 /** The decided differences, first that holds: each names the view it expects and the web's (section, rule) it replaces.
@@ -169,8 +173,8 @@ export const BY_DESIGN: readonly { why: ByDesign; holds: (local: Triage, view: T
   { why: "usage_limit", holds: (l, v, f) => f.usageLimit && AT_REST.has(l.rule) && RUN_PLACED.has(v.reason) },
   // row 4: a run that ended on a plain-text question is Can wait, ahead of everything below row 3 but closed work
   { why: "awaits_reply", holds: (l, v, f) => v.reason === "awaits_reply" && f.awaitsReply && !ABOVE_CAN_WAIT.has(l.rule) },
-  // row 9: accepted or deployed work nobody has seen stays in Just finished however long (the web: Done after 24 h)
-  { why: "finished_unseen", holds: (l, v) => v.reason === "finished_unseen" && (l.rule === "accepted" || l.rule === "deployed") && l.section === "done" },
+  // row 9: accepted work nobody has seen stays in Just finished however long (the web: Done after 24 h)
+  { why: "finished_unseen", holds: (l, v) => v.reason === "finished_unseen" && l.rule === "accepted" && l.section === "done" },
   // row 9: finished work stays in Just finished for 24 h after it was seen (the web: Done once seen), ahead of an open
   // PR (row 10), which the web puts first, or reads as no wait at all for a review not done yet
   {
@@ -210,7 +214,7 @@ function outdated(view: TodoSummary, now: number): boolean {
 
 export function classify(local: Triage, view: TodoSummary, facts: RowFacts, now: number): ViewVerdict {
   if (!knownView(view)) return { kind: "unknown" };
-  if (legacyOf(view) === local.section) return { kind: "same" };
+  if (legacyOf(view, local.rule === "closed" && local.section === "just_done") === local.section) return { kind: "same" };
   const hit = BY_DESIGN.find((d) => d.holds(local, view, facts));
   if (hit) return { kind: "by_design", why: hit.why };
   if (facts.missing) return { kind: "client_gap" };

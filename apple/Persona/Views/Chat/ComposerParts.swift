@@ -175,10 +175,10 @@ final class ComposerAttachments {
         edited.append(kept)
     }
 
-    /// An edited picture after the photos (at most `MessagePhotos.limit`, a toast says so).
-    func add(_ edit: EditedImage, model: AppModel) {
+    /// An edited picture after the photos while they fit `limits`; past them it goes through `spill` (`MessagePhotos.add`).
+    func add(_ edit: EditedImage, model: AppModel, limits: ImageLimits, spill: ((UIImage) -> Bool)?) {
         let before = images.count
-        MessagePhotos.add(edit.result, to: &images, model: model)
+        MessagePhotos.add(edit.result, to: &images, model: model, limits: limits, spill: spill)
         guard images.count > before, let added = images.last?.0 else { return }
         var kept = edit
         kept.result = added

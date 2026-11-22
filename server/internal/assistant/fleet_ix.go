@@ -344,6 +344,14 @@ func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction
 				// initial wait. The disconnected context must not expire a card its
 				// resumable request has already reclaimed.
 				p.prepared.caller = ctx
+			} else if prepared != nil && !p.claimed {
+				// A card restored from Postgres after a manager restart has p.prepared == nil
+				// until its still-running hook reconnects with the prepared coordinator (#12918).
+				p.prepared = prepared
+				p.ix.CanClarify = true
+				if p.prepared.decisionDeadline.IsZero() {
+					p.prepared.decisionDeadline = p.ix.ExpiresAt
+				}
 			}
 			if p.graceEnded {
 				// The grace period ended and the card is being ended outside the lock (the history, the apps): the
@@ -474,10 +482,11 @@ func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction
 // await blocks on a registered interaction. When ctx ends — the node's connection is gone — a resumable
 // interaction stays pending for its hook to claim again.
 func (s *Service) await(ctx context.Context, p *pending) (proto.Resolution, error) {
+	s.fleet.mu.Lock()
 	if p.prepared != nil {
+		s.fleet.mu.Unlock()
 		return s.awaitPrepared(ctx, p)
 	}
-	s.fleet.mu.Lock()
 	if p.resolved == nil {
 		p.resolved = make(chan struct{})
 	}

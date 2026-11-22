@@ -378,7 +378,7 @@ func (s *Service) appendToSent(ctx context.Context, a *MailAccount, raw []byte) 
 	if sent == "" {
 		return
 	}
-	err = s.withConn(ctx, a, func(c *imapclient.Client) error {
+	err = s.withConn(ctx, a, "save to "+sent, func(c *imapclient.Client) error {
 		cmd := c.Append(sent, int64(len(raw)), &imap.AppendOptions{
 			Flags: []imap.Flag{imap.FlagSeen},
 			Time:  time.Now(),
@@ -400,7 +400,7 @@ func (s *Service) appendToSent(ctx context.Context, a *MailAccount, raw []byte) 
 // sentMailbox finds the Sent mailbox name, preferring SPECIAL-USE \Sent.
 func (s *Service) sentMailbox(ctx context.Context, a *MailAccount) (string, error) {
 	var out string
-	err := s.withConn(ctx, a, func(c *imapclient.Client) error {
+	err := s.withConn(ctx, a, "find sent mailbox", func(c *imapclient.Client) error {
 		out = ""
 		data, err := c.List("", "*", listOptions(c.Caps(), nil)).Collect()
 		if err != nil {

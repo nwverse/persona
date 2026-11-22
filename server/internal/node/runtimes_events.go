@@ -89,14 +89,20 @@ func (n *Node) runtimeEvent(h *runtimeConn, event string, params json.RawMessage
 		}
 		n.runtimes.pushed(p.SessionID, last, p.History, p.FromSeq != nil && *p.FromSeq == 0)
 		if n.peer != nil {
-			_ = n.peer.Notify("session.items", n.echoedRaw(p.SessionID, params, "items")) // echo.go
+			raw := n.echoedRaw(p.SessionID, params, "items") // echo.go
+			raw = n.ttft.annotateRaw(p.SessionID, raw, "items", true)
+			_ = n.peer.Notify("session.items", raw)
 		}
 	case "session.delta":
 		var p struct {
 			SessionID string `json:"session_id"`
+			Text      string `json:"text"`
 		}
 		if json.Unmarshal(params, &p) != nil || !n.runtimes.owns(h, p.SessionID) || n.peer == nil {
 			return
+		}
+		if p.Text != "" {
+			n.ttft.firstToken(p.SessionID, time.Now(), "")
 		}
 		n.deltaMu.Lock()
 		_ = n.peer.Notify("session.delta", params)
@@ -217,6 +223,7 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 			permissionModes = 0
 		}
 		rowCaps := proto.SessionCapabilities{Read: true, Send: caps.Send, Interrupt: caps.Interrupt, Approve: true,
+			A2AWakeOnSend:     caps.Send && own.A2AWakeOnSend && !sub && !s.Archived,
 			SupervisionPolicy: caps.Assistant && caps.SupervisionPolicy && !sub,
 			Close:             capBool(caps.Close), Rename: capBool(caps.Rename && !sub), Modes: capBool(claudeModes),
 			Rewind: capBool(rewind), RewindCode: capBool(rewindCode), Fork: caps.Fork && !sub,
@@ -261,6 +268,14 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 			s.UpdatedAt = time.Now().UTC()
 		}
 		s.UpdatedAt = s.UpdatedAt.UTC()
+		if bd := s.ContextBreakdown().Sanitized(); bd != nil {
+			if bd.Free == nil && s.ContextWindow > 0 && s.ContextTokens > 0 {
+				bd.Free = proto.Int(max(int(s.ContextWindow)-int(s.ContextTokens), 0))
+			}
+			s.SetContextBreakdown(bd)
+		} else if s.ContextBreakdown() != nil {
+			s.SetContextBreakdown(nil)
+		}
 		runtimeWork(&s)
 		out = append(out, s)
 	}

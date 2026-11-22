@@ -102,6 +102,7 @@ type fakeOpenAPI struct {
 	readCode          map[string]int   // message id -> business code GET /messages/:id answers instead of its items
 	readFail          map[string]int   // message id -> how many more GETs answer HTTP 500 (the client reads again)
 	botInfoFail       bool             // GET /bot/v3/info answers a business error
+	beforeBotInfo     func()           // optional response barrier, called outside mu
 	pins              []map[string]any // what GET /pins answers (its items)
 }
 
@@ -119,8 +120,12 @@ func newFakeOpenAPI(t *testing.T) *fakeOpenAPI {
 		f.calls = append(f.calls, r.Method+" "+r.URL.Path+" "+string(body))
 		f.n++
 		n := f.n
+		beforeBotInfo := f.beforeBotInfo
 		f.mu.Unlock()
 		p := r.URL.Path
+		if p == "/open-apis/bot/v3/info" && beforeBotInfo != nil {
+			beforeBotInfo()
+		}
 		reply := func(v any) { _ = json.NewEncoder(w).Encode(v) }
 		switch {
 		case p == "/open-apis/auth/v3/tenant_access_token/internal":

@@ -50,6 +50,8 @@ final class AppModel {
     let connection: ConnectionStatus
     /// Starts of SSH → Persona Link switches made here, kept across machine-page remounts until the hub list catches up.
     let linkSwitches = MachineLinkSwitchStore()
+    /// The hub's receipts for the sends this app waits on (`SendReceiptStore`).
+    let sendReceipts = SendReceiptStore()
     /// The machines. A heartbeat, a list that differs only in `lastSeen` (on every push of a busy hub), is stored
     /// without telling who read `machines`: a body that reads them for anything else ran again on every push (the
     /// Agents list, #1495; every row through its menu, #10231). What shows `lastSeen` reads `lastSeen(_:)`.
@@ -634,6 +636,9 @@ final class AppModel {
     /// state and Agents, for the sidebar's Pinned rows, the To-dos page and the Agents page. Read with the assistant, on
     /// every connect and on the `directions` event; nil from a hub without it (404) or before it is read.
     private(set) var directionTree: DirectionTree?
+    /// Counts the current hub's hellos (its socket connecting again): a page that reads on reconnect follows it, so it
+    /// reads on that alone and not on every push (#11516's page).
+    private(set) var hubHellos = 0
     /// Numbers the tree reads in the order they were asked; `directionTreeLanded` is the newest one whose answer was
     /// taken. An answer older than that is dropped; a read that fails moves neither, so it never makes an earlier
     /// good answer count as stale.
@@ -765,6 +770,7 @@ final class AppModel {
     nonisolated struct AssistantLauncherScope: Hashable {
         var machine: MachineRef
         var manager: String?
+        var main: Bool = false
     }
     /// Only the assistant settings that decide whose launcher catalog and effective default the picker shows. Volatile
     /// conversation and preference fields are deliberately not part of this signature.
@@ -1657,7 +1663,10 @@ final class AppModel {
         do { read = try await api.directionsTree() } catch { return }
         guard ask > directionTreeLanded, assistantShows(nil), showsPage(of: api) else { return }
         directionTreeLanded = ask
-        if read != directionTree { directionTree = read }
+        // The filed sessions (#11516) go to their own boxes: the tree's readers redraw only when the tree they draw
+        // changed, not on a filed session's turn.
+        let taken = read.map { DirectionFilings.shared.takeFiled($0) }
+        if taken != directionTree { directionTree = taken }
         guard let tree = read else { return }
         let names = tree.leaderNames
         if names != directionNames { directionNames = names }
@@ -2324,6 +2333,13 @@ final class AppModel {
     func features(_ group: String) -> Set<String> { link(group)?.features ?? [] }
     /// What the hub-level group's hub listed (hub-level pages: connectors, skills…).
     var hubFeatures: Set<String> { hub?.features ?? [] }
+    /// The pictures a message may carry on `group`'s hub (nil: the hub-level one) to a session of `agent`: its hello's
+    /// `image_limits` (#12973), the standard ones from a hub before them.
+    func imageLimits(_ group: String? = nil, agent: String? = nil) -> ImageLimits {
+        (group.flatMap { link($0) } ?? hub)?.hello.imageLimits?.limits(for: agent) ?? .standard
+    }
+    /// The pictures a message to `key` may carry (`imageLimits`, by its hub and its agent).
+    func imageLimits(_ key: SessionKey) -> ImageLimits { imageLimits(key.group, agent: session(key)?.agent) }
     /// The hub-level group's hub's desktops: Mac apps connected and computers where Persona Link reports you at them
     /// (`DesktopDevice`, the banner in DesktopPresence.swift).
     var desktops: [DesktopDevice] { hub?.desktops ?? [] }
@@ -3091,6 +3107,10 @@ final class AppModel {
             if isHub { PersonalAgentSync.shared.received([]) }
             // The direction tree changes while the socket is down: read it again on every (re)connect (#4352).
             if isHub, let hubAPI = api { Task { await refreshDirectionTree(hubAPI) } }
+            // Its features say again whether this hub's filing routes are there (#11516), whichever hub is picked now; a
+            // page open on the current hub reads again (`hubHellos`).
+            DirectionFilings.shared.hello(group)
+            if isHub { hubHellos += 1 }
             #if os(iOS)
             // `meeting_live` events sent while the socket was down are gone: the meetings on screen are read again (#3862).
             if isHub { MeetingConversation.shared.reconnected() }
@@ -3264,6 +3284,8 @@ final class AppModel {
             UrgentCallCenter.shared.changed(id: id, state: state)
             #endif
             _ = (id, state)
+        case .sendReceipt(let receipt):
+            sendReceipts.received(receipt)
         case .items(let key, let items, let backlog, let hasMore, let span, let moreAfter):
             if backlog { connection.caughtUp(Self.catchUpPart(key)) }
             let store = chat(key)
@@ -3386,6 +3408,7 @@ final class AppModel {
         case .extensionInvalidate: "extension_ui"
         case .meetingLive: "meeting_live"
         case .urgentCall: "urgent_call"
+        case .sendReceipt(let receipt): receipt.key.kind == .todo ? SendReceipt.todoType : SendReceipt.messageType
         case .error: "error"
         }
     }
@@ -3705,11 +3728,11 @@ final class AppModel {
                 if let photo = await machinePhoto(key, path) { photos.append((path, photo)) } else { left.append(path) }
             }
         }
-        let room = max(0, MessagePhotos.limit - held.images.count)
+        let room = imageLimits(key).roomLeft(holding: held.images.count)
         let overflow = photos.dropFirst(room)
         left += overflow.compactMap(\.path)
         held.images += photos.prefix(room).map(\.photo)
-        // A hub photo has no machine path to leave as text. Keep it visible; `sendNow` still enforces the four-photo cap.
+        // A hub photo has no machine path to leave as text. Keep it visible; `sendNow` still holds the hub's count.
         held.images += overflow.filter { $0.path == nil }.map(\.photo)
         left += held.videos.restore(draft.files.filter(\.playable)).map(\.xml)
         left += held.files.restore(draft.files.filter { !$0.playable }).map(\.xml)
@@ -3792,8 +3815,9 @@ final class AppModel {
     func sendNow(_ key: SessionKey, text: String, images: [ImagePayload] = [], via: APIClient.MessageVia? = nil) -> Bool {
         guard allowSend(key, forMessage: true) else { return false }
         // Take-back can retain pathless hub photos past the picker's cap; the person removes some before sending.
-        guard images.count <= MessagePhotos.limit else {
-            toast = Toast(String(localized: "Up to 4 at a time"), style: .error)
+        let limits = imageLimits(key)
+        guard images.count <= limits.perMessage else {
+            toast = Toast(String(localized: "Up to \(limits.perMessage) at a time"), style: .error)
             return false
         }
         var msg = PendingMessage(text: text, images: images)
@@ -4423,18 +4447,26 @@ final class AppModel {
     /// The main chat's picker data (`GET …/launchers?purpose=assistant`, #5033): the launchers that can run the
     /// assistant on this machine, the effective Main chat default (`default`, what the next message runs with no pick),
     /// and the ones that can't with why. Cached until Model Settings change or a `refresh`.
-    func assistantLaunchers(_ machine: MachineRef, refresh: Bool = false, using catalogAPI: APIClient? = nil) async throws -> APIClient.LaunchersResponse {
+    func assistantLaunchers(_ machine: MachineRef, refresh: Bool = false, using catalogAPI: APIClient? = nil, main: Bool = false) async throws -> APIClient.LaunchersResponse {
         guard let client = (catalogAPI ?? api(machine.group))?.currentAssistantSettings() else {
             return APIClient.LaunchersResponse(launchers: [], default: nil, unavailable: nil)
         }
-        let scope = AssistantLauncherScope(machine: machine, manager: client.managerID)
+        let scope = AssistantLauncherScope(machine: machine, manager: client.managerID, main: main)
         if !refresh, let cached = assistantLauncherCache[scope] { return cached }
         let revision = assistantLauncherRequestRevision
         assistantLauncherReadID += 1
         let read = assistantLauncherReadID
         if assistantLauncherReads[scope] == nil && assistantLauncherReads.count >= 64 { assistantLauncherReads.removeAll() }
         assistantLauncherReads[scope] = read
-        let r = try await client.launcherList(machine: machine.id, purpose: "assistant")
+        var r = try await client.launcherList(machine: machine.id, purpose: "assistant")
+        if main {
+            do {
+                let own = try await client.mainAssistantLaunchers(machine: machine.id)
+                r = AssistantModelChoice.mainCatalog(shared: r, own: own)
+            } catch let error as APIError where error.status == 404 {
+                // Older hubs have only the shared default; other failures keep the last good main binding.
+            }
+        }
         guard revision == assistantLauncherRequestRevision, assistantLauncherReads[scope] == read else { return r }
         if assistantLauncherCache[scope] == nil && assistantLauncherCache.count >= 64 { assistantLauncherCache.removeAll() }
         assistantLauncherCache[scope] = r
@@ -4495,9 +4527,9 @@ final class AppModel {
 
     /// The main chat picker data already read for `machine` (nil: nothing cached yet; `assistantLaunchers(_:)` reads it).
     /// The composer title reads this so it shows the effective Main chat model, not only the running process's last one.
-    func cachedAssistantLaunchers(_ machine: MachineRef) -> APIClient.LaunchersResponse? {
+    func cachedAssistantLaunchers(_ machine: MachineRef, main: Bool = false) -> APIClient.LaunchersResponse? {
         let manager = api(machine.group)?.currentAssistantSettings().managerID
-        return assistantLauncherCache[AssistantLauncherScope(machine: machine, manager: manager)]
+        return assistantLauncherCache[AssistantLauncherScope(machine: machine, manager: manager, main: main)]
     }
 
 
@@ -4790,6 +4822,7 @@ final class AppModel {
         }
         directionTree = nil // the other hub's to-dos and sessions; `refreshAssistant` below reads this one's
         directionTreeLanded = directionTreeAsk // and a read already under way answers for the other one
+        DirectionFilings.shared.forget() // moves out to the other hub
         // The picked group's settings are read again: until that read finishes, the page shows its loading state.
         assistantConfigLoadFailed = false
         if let a = assistantCurrent, a.group != hub?.group { assistantCurrent = assistantMain }
@@ -4833,6 +4866,7 @@ final class AppModel {
         if switched || !assistantShows(nil) {
             directionTree = nil // the other manager's; `refreshAssistant` below reads this one's
             directionTreeLanded = directionTreeAsk // and a read already under way answers for the other one
+            DirectionFilings.shared.forget() // moves out to the other manager
         }
         assistantConfigLoadFailed = false
         readiness.forget()
@@ -5368,6 +5402,48 @@ extension AppModel {
 @Observable final class SessionCell {
     var value: Session?
     init(_ value: Session?) { self.value = value }
+}
+
+/// The hub's receipts for the sends this app waits on (`SendReceipts`; docs/protocol/protocol.md "Message feedback
+/// (#5258)"). A sender expects its `client_msg_id` or op id before it sends and keeps the cell it is given, and forgets
+/// it once the HTTP answer comes, not when it stops waiting for one: the hub's final state still says how the send
+/// ended. A receipt the socket trusted (`LiveConnection.receiptTrust`) moves that cell alone, so other sends' receipts,
+/// every session's included, draw nothing. The cell keeps the final state after the table lets the id go. Nothing
+/// draws them yet: the to-do composer will (#10465), and the chats still show Processing after the HTTP answer
+/// (`ChatSendFeedback`).
+final class SendReceiptStore {
+    private var table = SendReceipts()
+    private var cells: [SendReceipt.Key: SendReceiptCell] = [:]
+
+    /// The sends still waiting on a receipt.
+    var waiting: Int { table.count }
+
+    /// Before sending under `key` to `target`: the cell its receipts land in. The key names the hub group the send
+    /// goes to (`HubLink.group`), as its receipts are stamped with their socket's. Expecting a key again starts it over
+    /// with a new cell; when the table is full, the oldest send's cell stops moving.
+    func expect(_ key: SendReceipt.Key, target: SendReceipt.Target) -> SendReceiptCell {
+        let cell = SendReceiptCell()
+        if let gone = table.expect(key, target: target) { cells[gone] = nil }
+        cells[key] = cell
+        return cell
+    }
+
+    func received(_ receipt: SendReceipt) {
+        guard let state = table.apply(receipt), let cell = cells[receipt.key] else { return }
+        cell.state = state
+        if state.isFinal { cells[receipt.key] = nil }
+    }
+
+    /// The sender has its answer: later receipts for `key` are ignored.
+    func forget(_ key: SendReceipt.Key) {
+        table.forget(key)
+        cells[key] = nil
+    }
+}
+
+/// One send's receipt as `SendReceiptStore.expect` hands it out: nil while the hub has said nothing (Sending).
+@Observable final class SendReceiptCell {
+    fileprivate(set) var state: SendReceipt.State?
 }
 
 /// A workflow run as `AppModel.workflow(_:call:)` hands it out.

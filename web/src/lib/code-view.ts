@@ -4,6 +4,7 @@
 // loaded the first time a code or diff is drawn; plain until then). Drawn by views/extensions/CodeViews.tsx.
 import { useEffect, useState } from "react";
 import { commonLowlight } from "./lowlight";
+import { hunkRows, type DiffRow } from "./hunk-rows";
 
 export type FileStatus = "added" | "modified" | "deleted" | "renamed" | string;
 
@@ -142,33 +143,9 @@ export function statusMark(status?: FileStatus): { letter: string; tone: "positi
 
 // ── diff ──────────────────────────────────────────────
 
-export type RowKind = "context" | "add" | "del" | "note";
-
-/** One line of a hunk: its kind, its numbers in the old and the new file, its text without the prefix. */
-export interface DiffRow {
-  kind: RowKind;
-  old?: number;
-  new?: number;
-  text: string;
-  /** Its place among the old (or new) side's lines of the hunk: where its highlighting is. */
-  oldAt?: number;
-  newAt?: number;
-}
-
-export function hunkRows(h: Hunk): DiffRow[] {
-  let o = h.old_start;
-  let n = h.new_start;
-  let oi = 0;
-  let ni = 0;
-  return h.lines.map((line): DiffRow => {
-    const sign = line[0] ?? " ";
-    const text = line.slice(1);
-    if (sign === "+") return { kind: "add", new: n++, text, newAt: ni++ };
-    if (sign === "-") return { kind: "del", old: o++, text, oldAt: oi++ };
-    if (sign === "\\") return { kind: "note", text: line.slice(1).trim() };
-    return { kind: "context", old: o++, new: n++, text, oldAt: oi++, newAt: ni++ };
-  });
-}
+// A hunk's rows live in hunk-rows.ts so the first screen can number a hunk without this module (session-review.ts).
+export { hunkRows };
+export type { DiffRow, RowKind } from "./hunk-rows";
 
 /** A hunk's old and new side as text, for highlighting each with its own state (a comment open across lines). */
 export function hunkSides(h: Hunk): { old: string; new: string } {

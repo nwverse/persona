@@ -38,8 +38,36 @@ const (
 	reviewCancelled = "cancelled"
 )
 
-// maxReworkRounds is how many times a task is sent back; one more rework goes to the user instead.
+// maxReworkRounds is the strict circuit breaker for consecutive stalled/low-ROI rework rounds
+// (repeated_error, low_roi_edge, or legacy unspecified rework).
 const maxReworkRounds = 2
+
+// maxTotalReworkRounds is the overall safety valve across all rework kinds (including external_input
+// and substantive_new) to prevent runaway supervision loops.
+const maxTotalReworkRounds = 10
+
+// Optional rework_kind values on task_review(verdict="rework").
+const (
+	reworkExternalInput  = "external_input"
+	reworkSubstantiveNew = "substantive_new"
+	reworkRepeatedError  = "repeated_error"
+	reworkLowROIEdge     = "low_roi_edge"
+)
+
+func validReworkKind(kind string) bool {
+	switch kind {
+	case "", reworkExternalInput, reworkSubstantiveNew, reworkRepeatedError, reworkLowROIEdge:
+		return true
+	default:
+		return false
+	}
+}
+
+// isStalledReworkKind reports whether kind counts toward the tight 2-round stalled/low-ROI cap.
+// Legacy unspecified rework ("") defaults to stalled accounting for backward compatibility.
+func isStalledReworkKind(kind string) bool {
+	return kind != reworkExternalInput && kind != reworkSubstantiveNew
+}
 
 // Supervision is a supervised task's ledger, as the apps get it on the todo (supervision).
 type Supervision struct {
@@ -50,9 +78,10 @@ type Supervision struct {
 	State         string             `json:"state"` // "" going on, or one of review*
 	// Parked: what a parked task waits for (parked.go); nil unless State is parked. Read off its latest review each time
 	// the ledger is copied, not kept on its own.
-	Parked  *Parked      `json:"parked,omitempty"`
-	Round   int          `json:"round"` // reworks so far
-	Reviews []TaskReview `json:"reviews"`
+	Parked              *Parked      `json:"parked,omitempty"`
+	Round               int          `json:"round"`                           // total reworks so far
+	StalledReworkRounds int          `json:"stalled_rework_rounds,omitempty"` // consecutive stalled/low-ROI reworks
+	Reviews             []TaskReview `json:"reviews"`
 	// AutoReview is the latest independent review of its change (supervise_autoreview.go, #2173); nil when none ran.
 	AutoReview *AutoReview `json:"auto_review,omitempty"`
 	// Waits: the done judge found the latest stretch of work stopped on a decision only the owner can make (verdict
@@ -90,12 +119,14 @@ type TaskProgress struct {
 
 // TaskReview is one review: the assistant's verdict, with each criterion's evidence or gap.
 type TaskReview struct {
-	At      time.Time     `json:"at"`
-	Verdict string        `json:"verdict"`
-	By      string        `json:"by,omitempty"`    // "reviewer": the independent reviewer's rework (#2173); "judge": the done judge's own acceptance (#3128); "" the supervisor's
-	Round   int           `json:"round,omitempty"` // the rework round it started (rework)
-	Checks  []ReviewCheck `json:"checks,omitempty"`
-	Note    string        `json:"note,omitempty"`
+	At                  time.Time     `json:"at"`
+	Verdict             string        `json:"verdict"`
+	By                  string        `json:"by,omitempty"`                    // "reviewer": the independent reviewer's rework (#2173); "judge": the done judge's own acceptance (#3128); "" the supervisor's
+	Round               int           `json:"round,omitempty"`                 // the total rework round it started (rework)
+	ReworkKind          string        `json:"rework_kind,omitempty"`           // external_input, substantive_new, repeated_error, low_roi_edge (rework)
+	StalledReworkRounds int           `json:"stalled_rework_rounds,omitempty"` // consecutive stalled/low-ROI rework rounds after this rework
+	Checks              []ReviewCheck `json:"checks,omitempty"`
+	Note                string        `json:"note,omitempty"`
 	// UserCheck: an accepted review that still wants the owner to look themselves (task_review user_check): its
 	// "Please verify" waits for them instead of being passed by the supervisor (acceptance_supervisor.go, #3240).
 	UserCheck bool `json:"user_check,omitempty"`
@@ -117,9 +148,13 @@ type TaskReview struct {
 	WaitingOn string    `json:"waiting_on,omitempty"`
 	Parks     int       `json:"parks,omitempty"`
 	DueAt     time.Time `json:"due_at,omitzero"`
+	// ParkEndedAt is recorded when this wait is replaced or resolved, so its time is excluded from stalled checks.
+	ParkEndedAt time.Time `json:"park_ended_at,omitzero"`
 	// Evidence is absent on legacy parks. A new park records its external wait, inspected source receipt and
 	// recording conversation here, in the existing Reviews JSON; it needs no new state store.
 	Evidence *ParkEvidence `json:"evidence,omitempty"`
+	// Automatic keeps closeout admission and its unchanged-dependency streak in the existing review JSON.
+	Automatic *automaticPark `json:"automatic,omitempty"`
 	// Reply is the source receipt that ended this exact park, committed with the pending-review transition.
 	Reply *connectorwire.LarkReplyObservation `json:"reply,omitempty"`
 	// ExternalPR is this external-event park's observed object, independent of the task's PR associations.
@@ -144,11 +179,14 @@ type TaskReview struct {
 }
 
 // OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on the owner's decision:
-// when it was judged and the judge's reason.
+// when it was judged and the judge's reason. PushPending marks a new, still-undelivered push; NotifiedAt records its
+// success. Legacy waits have neither and are not replayed on upgrade.
 type OwnerWait struct {
-	Work   time.Time `json:"work"`
-	At     time.Time `json:"at"`
-	Reason string    `json:"reason,omitempty"`
+	Work        time.Time  `json:"work"`
+	At          time.Time  `json:"at"`
+	Reason      string     `json:"reason,omitempty"`
+	PushPending bool       `json:"push_pending,omitempty"`
+	NotifiedAt  *time.Time `json:"notified_at,omitempty"`
 }
 
 type ReviewCheck struct {
@@ -174,6 +212,10 @@ func (v *Supervision) clone() *Supervision {
 		out.Reviews[i].Checks = slices.Clone(r.Checks)
 		out.Reviews[i].Options = slices.Clone(r.Options)
 		out.Reviews[i].Evidence = r.Evidence.clone()
+		if r.Automatic != nil {
+			a := *r.Automatic
+			out.Reviews[i].Automatic = &a
+		}
 		if r.Reply != nil {
 			receipt := *r.Reply
 			out.Reviews[i].Reply = &receipt
@@ -262,6 +304,7 @@ func supervisionFromRow(r db.TodoSupervisionRow) *Supervision {
 	v := &Supervision{Supervisor: r.Supervisor, DoneWhen: r.DoneWhen, Criteria: r.Criteria, ExpectMinutes: r.ExpectMinutes, State: r.State, Round: r.Round,
 		PendingSince: r.PendingSince, UpdatedAt: r.UpdatedAt}
 	_ = json.Unmarshal(r.Reviews, &v.Reviews)
+	v.StalledReworkRounds = v.stalledReworkRounds()
 	if len(r.AutoReview) > 0 {
 		var a AutoReview
 		if json.Unmarshal(r.AutoReview, &a) == nil {
@@ -275,6 +318,69 @@ func supervisionFromRow(r db.TodoSupervisionRow) *Supervision {
 		}
 	}
 	return v.clone()
+}
+
+// stalledReworkRounds returns the effective consecutive stalled/low-ROI rework count for the current
+// supervision round. It reconstructs cleanly from persisted Reviews JSON (without needing a new DB column)
+// and treats legacy/unaccounted Round counts conservatively as stalled for full backward compatibility.
+func (v *Supervision) stalledReworkRounds() int {
+	if v == nil || v.Round <= 0 {
+		return 0
+	}
+	var last *TaskReview
+	for i := len(v.Reviews) - 1; i >= 0; i-- {
+		r := &v.Reviews[i]
+		if (r.Verdict == reviewAccepted && !r.UserCheck) || r.Verdict == reviewCancelled {
+			break
+		}
+		if r.Verdict == reviewRework {
+			last = r
+			break
+		}
+	}
+	if last == nil {
+		return max(v.StalledReworkRounds, v.Round)
+	}
+	base := last.StalledReworkRounds
+	if last.ReworkKind == "" && last.StalledReworkRounds == 0 {
+		base = max(1, last.Round)
+	}
+	if v.Round > last.Round {
+		base += v.Round - last.Round
+	}
+	return max(v.StalledReworkRounds, base)
+}
+
+// reworkBlocked checks whether a rework of kind is blocked by either the overall safety valve
+// (maxTotalReworkRounds) or the strict stalled/low-ROI circuit breaker (maxReworkRounds).
+func (v *Supervision) reworkBlocked(kind string) (blocked, safetyCap bool, count int) {
+	if v == nil {
+		return false, false, 0
+	}
+	if v.Round >= maxTotalReworkRounds {
+		return true, true, v.Round
+	}
+	if isStalledReworkKind(kind) {
+		if stalled := v.stalledReworkRounds(); stalled >= maxReworkRounds {
+			return true, false, stalled
+		}
+	}
+	return false, false, 0
+}
+
+// applyReworkAccounting updates total Round and consecutive StalledReworkRounds for a rework of kind.
+func (v *Supervision) applyReworkAccounting(kind string) (round, stalled int) {
+	curStalled := v.stalledReworkRounds()
+	v.Round++
+	switch kind {
+	case reworkExternalInput:
+		v.StalledReworkRounds = curStalled
+	case reworkSubstantiveNew:
+		v.StalledReworkRounds = 0
+	default:
+		v.StalledReworkRounds = curStalled + 1
+	}
+	return v.Round, v.StalledReworkRounds
 }
 
 func (v *Supervision) row(todoID string) db.TodoSupervisionRow {
@@ -302,8 +408,9 @@ func cleanDoneWhen(list []string) []string {
 	return out
 }
 
-// superviseTodo makes todo id a supervised task of conversation supervisor.
-func (s *Service) superviseTodo(ctx context.Context, id, supervisor string, doneWhen []string, expect int) {
+// superviseTodo makes todo id a supervised task of conversation supervisor. A persistence failure leaves its in-memory
+// ledger untouched; callers that must not start untracked work check the returned error.
+func (s *Service) superviseTodo(ctx context.Context, id, supervisor string, doneWhen []string, expect int) error {
 	_, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
 		v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, cleanDoneWhen(doneWhen), max(0, min(expect, 24*60))
 		return true
@@ -311,6 +418,7 @@ func (s *Service) superviseTodo(ctx context.Context, id, supervisor string, done
 	if err != nil {
 		s.logf("task %s: supervision: %v", id, err)
 	}
+	return err
 }
 
 // startSupervisionRound: a plan's task took todo id over to start a new Agent on it (task_plan continues, or its
@@ -327,11 +435,18 @@ func (s *Service) startSupervisionRound(ctx context.Context, id string) {
 		return
 	}
 	if _, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
-		if v.State != reviewAccepted && v.State != reviewCancelled {
-			return false
+		changed := false
+		if v.State == reviewAccepted || v.State == reviewCancelled {
+			v.State, v.Round, v.StalledReworkRounds, v.Waits = "", 0, 0, nil
+			changed = true
 		}
-		v.State, v.Round, v.Waits = "", 0, nil
-		return true
+		// A new Agent round is distinct evidence even when a scope already cleared the terminal state, so there is no
+		// database field left to change. This process-local epoch still prevents a failed takeover restoring acceptance.
+		if s.supervise.roundEpochs == nil {
+			s.supervise.roundEpochs = map[string]uint64{}
+		}
+		s.supervise.roundEpochs[id]++
+		return changed
 	}); err != nil {
 		s.logf("task %s: new supervision round: %v", id, err)
 	}
@@ -359,14 +474,35 @@ func (s *Service) updateSupervision(ctx context.Context, id string, change func(
 
 // updateSupervisionAt is updateSupervision at the caller's supervision-pass time.
 func (s *Service) updateSupervisionAt(ctx context.Context, id string, now time.Time, change func(*Supervision) bool) (Supervision, bool, error) {
+	return s.updateSupervisionGuardedAt(ctx, id, now, nil, change)
+}
+
+// updateSupervisionGuarded is updateSupervision with a current-todo guard evaluated in the same write boundary.
+func (s *Service) updateSupervisionGuarded(ctx context.Context, id string, guard func(Todo) bool, change func(*Supervision) bool) (Supervision, bool, error) {
+	return s.updateSupervisionGuardedAt(ctx, id, time.Now().UTC(), guard, change)
+}
+
+// updateSupervisionGuardedAt preserves both the caller's supervision-pass time and the guarded write boundary.
+func (s *Service) updateSupervisionGuardedAt(ctx context.Context, id string, now time.Time, guard func(Todo) bool, change func(*Supervision) bool) (Supervision, bool, error) {
+	if guard != nil {
+		// Match editTodo's write boundary. The guard, stored receipt and in-memory mirror are one admission relative
+		// to a user close; taking writeMu first would invert the todos.writing → writeMu order used by other writers.
+		s.todos.writing.Lock()
+		defer s.todos.writing.Unlock()
+	}
 	b := &s.supervise
 	b.writeMu.Lock()
 	defer b.writeMu.Unlock()
-	return s.updateSupervisionLockedAt(ctx, id, now, change)
+	return s.updateSupervisionGuardedLockedAt(ctx, id, now, guard, change)
 }
 
 // updateSupervisionLockedAt is updateSupervisionAt with supervise.writeMu already held.
 func (s *Service) updateSupervisionLockedAt(ctx context.Context, id string, now time.Time, change func(*Supervision) bool) (Supervision, bool, error) {
+	return s.updateSupervisionGuardedLockedAt(ctx, id, now, nil, change)
+}
+
+// updateSupervisionGuardedLockedAt is the guarded form with supervise.writeMu already held.
+func (s *Service) updateSupervisionGuardedLockedAt(ctx context.Context, id string, now time.Time, guard func(Todo) bool, change func(*Supervision) bool) (Supervision, bool, error) {
 	t, ok := s.todoNow(id)
 	if !ok {
 		return Supervision{}, false, db.ErrTodoNotFound
@@ -375,13 +511,32 @@ func (s *Service) updateSupervisionLockedAt(ctx context.Context, id string, now 
 	if v == nil {
 		v = (&Supervision{}).clone()
 	}
+	if guard != nil && !guard(t) {
+		return *v, false, nil
+	}
 	before := v.State
+	var parkedAt time.Time
+	if p := v.parking(); p != nil {
+		parkedAt = p.At
+	}
 	park := v.parking()
 	if !change(v) {
 		return *v, false, nil
 	}
 	v.Criteria = db.AlignTodoCriteria(v.DoneWhen, v.Criteria)
 	v.UpdatedAt = now.UTC()
+	if p := v.parking(); !parkedAt.IsZero() && (p == nil || !p.At.Equal(parkedAt)) {
+		for i := len(v.Reviews) - 1; i >= 0; i-- {
+			r := &v.Reviews[i]
+			if r.Verdict == reviewParked && r.At.Equal(parkedAt) {
+				r.ParkEndedAt = v.UpdatedAt
+				if i+1 < len(v.Reviews) {
+					r.ParkEndedAt = v.Reviews[i+1].At
+				}
+				break
+			}
+		}
+	}
 	v.PendingSince = pendingSince(before, v.State, v.PendingSince, v.UpdatedAt)
 	if park != nil && v.State == reviewPending && park.ExternalPR != nil && park.ExternalPR.wakes(park) {
 		// Match the review period after a reload. Postgres stores PendingSince to microsecond precision.
@@ -436,9 +591,11 @@ func taskHealth(t Todo, agents []proto.Session, now time.Time) (string, int) {
 	case reviewUserCheck:
 		return "待你验收", 0 // i18n-ignore: the snapshot is the assistant's prompt
 	case reviewNeedsUser:
-		return "等你决定", 0
+		if triageReviewState(t) == reviewNeedsUser {
+			return "等你处理", 0
+		}
 	case reviewPending:
-		return "待验收", 1
+		return "已交付·待看", 1
 	case reviewAccepted:
 		return "已验收", 8
 	case reviewCancelled:
@@ -456,6 +613,14 @@ func taskHealth(t Todo, agents []proto.Session, now time.Time) (string, int) {
 	}
 	if v.Waits != nil { // the judge found it stopped on the owner's decision (#1277): not to be accepted as done
 		return "停下等用户拍板，别直接验收", 0 // i18n-ignore: the snapshot is the assistant's prompt
+	}
+	if snapshotDoneRule(t, agents, nil, nil, now, now.Location()) == ruleAccepted {
+		// v.state masks an accepted review after reopening; acceptanceStands inside the shared triage rule still holds
+		// until a newer review. Reopened accepted work is normal, not a second delivery awaiting review (#5732).
+		return "正常", 5 // i18n-ignore: the snapshot is the assistant's prompt
+	}
+	if deliveryAwaitsReview(t, agents) {
+		return "已交付·待看", 1 // i18n-ignore: the snapshot is the assistant's prompt
 	}
 	for _, c := range agents {
 		if c.State == proto.StateNeedsYou || c.PendingInteractions > 0 {

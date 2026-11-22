@@ -1,8 +1,8 @@
 Use task_plan for code, repository research and work beyond a few tool calls. Make one task per independent piece. Check machines_list, then use the knowledge base, agents_list and user preferences to fill the editable choices and their one-line reasons. Read-only, user_requested and preapproved kinds start at once; other tasks wait for the owner's 开始. A queued receipt is dispatch, so check the to-do outcome and reach its Agent via agent_send. Tool-owned reminders and events are separate.
 
-Default machine_policy=fixed keeps the machine on retries and refuses an unavailable launcher there. Use flexible only for portable work: a failed health check can move it and the reply explains why. A side conversation supervises its work, receives 督办 and closes with task_review. Main delegates a whole plan with supervisor (one of assistant.leaders) or leaves it out. With no leader, the background supervisor handles 督办 and task_review unless assistant.main_supervises_own_tasks puts main in charge. If the caller cannot receive 督办, the same follow-up handles it and sends the caller a short notice and link at the end. Check the returned supervisor and similar running work. Pass todo_id for the caller's existing unassigned to-do, including a Lark topic, task split or failed start.
+Fixed machine_policy retries on the same machine and refuses unavailable launchers; flexible moves only portable work after a failed health check and explains why. Main supervises and accepts every new task_plan, even with supervisor=leader; side chats supply evidence and get a completion notice/link. Only an assigned manual leader or a runtime advertising supervision_policy keeps its route; old background work finishes there, with none new. If the caller cannot receive 督办, the compatible follow-up takes over. Check the returned supervisor and similar running work. Pass todo_id for the caller's existing unassigned to-do, including a Lark topic, task split or failed start.
 
-Started tasks keep a brief (owner request or started_why). Give goal, done_when, out_of_bounds. Writable work needs done_when (PR/Issue defaults to PR merged + issue closed unless owner asks for PR-only/draft-only); read-only needs goal. Omit expect_minutes for automatic estimation; positive overrides. Manual Agents have no estimate_due. Continue via continues+continues_why; use task_retry for failed starts and task_scope+scope_revision for scope changes.
+Started tasks keep a hub brief (owner request or started_why; supplied brief dropped). Give goal, done_when, out_of_bounds. Writable work needs done_when (PR/Issue defaults to PR merged + issues closed unless PR-only/draft-only); read-only needs goal. Omit expect_minutes for automatic estimation; positive overrides. Manual Agents have no estimate_due. Continue via continues+continues_why; task_retry for failed starts and task_scope+scope_revision for owner-approved changes. The card confirms the brief.
 
 File changes need readonly=false and explicitly authorized write permission. Replace a read-only Codex process with a writable one for fixes. Use agent_send for live follow-up when permissions stay the same. readonly=true adds the read-only constraint to the assignment. Claude-family uses bypassPermissions for both. Codex uses plan unless assistant.readonly_mode=prompt (normal runtime permissions). pi, cursor and agy refuse readonly in either setting. Set role=worker, or leader to start and review direct workers through restricted task_plan/task_review. Workers cannot delegate.
 
@@ -28,7 +28,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
     },
     "supervisor": {
       "type": "string",
-      "description": "main only: leader conversation id (assistant.leaders); it supervises; omit for no direction or your own work"
+      "description": "main only: legacy leader id (assistant.leaders); new tasks stay main-supervised"
     },
     "tasks": {
       "type": "array",
