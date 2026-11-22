@@ -736,8 +736,19 @@ func TestStopButtonOnATopicsProgressCard(t *testing.T) {
 	e.topicTodo("发版")
 	e.deliver(topicEvent("om_t1", "开始"))
 	ctx := context.Background()
-	r := e.s.channelRuns(channel.Feishu)[0]
-	feishuSink{e.s}.progress(ctx, &r, time.Second, []string{"读文件"}, "")
+	runID := e.s.channelRuns(channel.Feishu)[0].ID
+	// Production posts progress from the registered watcher under its progress lock. Use the same ownership here instead
+	// of racing the watcher's initial devices.list or a lifecycle change while calling the sink directly.
+	waitFor(t, "topic run watcher", func() bool { _, prog := e.s.channelRunByID(runID); return prog != nil })
+	_, prog := e.s.channelRunByID(runID)
+	prog.mu.Lock()
+	r, live := e.s.channelRunByID(runID)
+	if r == nil || live != prog {
+		prog.mu.Unlock()
+		t.Fatal("topic run changed before its progress post")
+	}
+	feishuSink{e.s}.progress(ctx, r, time.Second, []string{"读文件"}, "")
+	prog.mu.Unlock()
 	var card string
 	for _, p := range e.f.appParams(AppFeishu, FeishuPost) {
 		if c, _ := p["card"].(string); strings.Contains(c, `"a":"stop"`) && p["chat_id"] == testChat {
