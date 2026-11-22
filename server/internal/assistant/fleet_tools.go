@@ -215,6 +215,9 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 	if res, refused := s.inboxModelRefusal(ctx, machine, session, origin, name); refused {
 		return res
 	}
+	if name == "secret_store" {
+		return s.toolSecretStore(ctx, machine, session, args)
+	}
 	if assistantwire.IsA2ATool(name) {
 		return s.a2aTool(ctx, a2aRef{s.canonical(machine), session}, name, args)
 	}

@@ -96,7 +96,8 @@ const (
 	usageCLI  = "personad tool --cli <connector> [--format json|text] <words…>"
 	usage     = "personad tool: a connector's tools from the assistant's shell, through the Persona hub\n  " + usageTool + "\n  " + usageCLI +
 		"\n  from an Agent's pane: its own tools (task_spawn, todo_decisions, a task leader's task_plan, …), as its MCP server calls them" +
-		"\n  a2a_sessions, a2a_send, a2a_get, a2a_report, a2a_cancel: communicate through Persona A2A"
+		"\n  a2a_sessions, a2a_send, a2a_get, a2a_report, a2a_cancel: communicate through Persona A2A" +
+		"\n  personad tool secret_store --from-file <private metadata manifest | ->: phone-approved encrypted writes from local field files"
 )
 
 // Main runs one command line and returns its exit code. Help is the usage on stdout; a mistake in the command line
@@ -108,6 +109,9 @@ func Main(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io
 	}
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
+	if len(args) > 0 && args[0] == "secret_store" {
+		return secretStore(ctx, args[1:], stdin, stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "--cli" {
 		return commandLine(ctx, args[1:], stdin, stdout, stderr)
 	}

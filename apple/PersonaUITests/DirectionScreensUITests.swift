@@ -99,15 +99,20 @@ final class DirectionScreensUITests: XCTestCase {
     @MainActor private func launch(agentChat: String? = nil, keepPick: Bool = false, extra: [String] = []) {
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        let place = agentChat.map { ["-app.tab", "chats", "-tab", "dev", "-dev.openChat", $0] }
+        let place: [String] = agentChat.map { ["-app.tab", "chats", "-tab", "dev", "-dev.openChat", $0] }
             ?? ["-tab", "assistant", "-newAssistant", "YES", "-dev.openChat", ""]
-        app.launchArguments = ["-pairURL", pair] + place + (keepPick ? [] : ["-assistant.manager", "{}"]) + [
-                               // the first lead held open for this launch only (its fold is the device's)
-                               "-assistant.direction.open.lead0000-0000-4000-8000-000000000000", "YES",
-                               "-AppleLanguages", "(\(lang))", "-AppleLocale", lang == "en" ? "en_US" : lang == "ja" ? "ja_JP" : "zh_CN"]
-            // PERSONA_SHOT_NAV: the layout to pin, `sidebar` or `separate` (`launchPinned`'s own when unset); any
-            // other value ("auto") picks nothing, so the app's default applies: Merged on an iPad.
-            + (ProcessInfo.processInfo.environment["PERSONA_SHOT_NAV"].map { ["-app.navigation", $0] } ?? []) + extra
+        // Built in steps: as one expression, Xcode 26.3's type-checker gives up on it (#13098).
+        let locale: String = lang == "en" ? "en_US" : (lang == "ja" ? "ja_JP" : "zh_CN")
+        var args: [String] = ["-pairURL", pair]
+        args += place
+        if !keepPick { args += ["-assistant.manager", "{}"] }
+        // the first lead held open for this launch only (its fold is the device's)
+        args += ["-assistant.direction.open.lead0000-0000-4000-8000-000000000000", "YES"]
+        args += ["-AppleLanguages", "(\(lang))", "-AppleLocale", locale]
+        // PERSONA_SHOT_NAV: the layout to pin, `sidebar` or `separate` (`launchPinned`'s own when unset); any
+        // other value ("auto") picks nothing, so the app's default applies: Merged on an iPad.
+        if let nav = ProcessInfo.processInfo.environment["PERSONA_SHOT_NAV"] { args += ["-app.navigation", nav] }
+        app.launchArguments = args + extra
         app.launchPinned()
     }
 
