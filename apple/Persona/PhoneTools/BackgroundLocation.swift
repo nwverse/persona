@@ -109,7 +109,7 @@ nonisolated enum LocationAlwaysPoint: CaseIterable, Identifiable, Sendable {
     var text: String {
         switch self {
         case .readWhenNeeded:
-            String(localized: "The assistant reads your location only when it needs it to answer you, for example when you ask how far you are from home while Persona isn't open.")
+            String(localized: "The assistant reads your location only when it needs it to answer you, for example when you ask “How far am I from home?” while Persona isn't open.")
         case .noTrail:
             String(localized: "When you move a long way, iOS may wake Persona in the background, but it doesn't record where you go.")
         }

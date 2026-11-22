@@ -174,25 +174,25 @@
         }
       }
     },
-    "The assistant reads your location only when it needs it to answer you, for example when you ask how far you are from home while Persona isn't open." : {
+    "The assistant reads your location only when it needs it to answer you, for example when you ask “How far am I from home?” while Persona isn't open." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "The assistant reads your location only when it needs it to answer you, for example when you ask how far you are from home while Persona isn't open."
+            "value" : "The assistant reads your location only when it needs it to answer you, for example when you ask “How far am I from home?” while Persona isn't open."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只在助手需要回答你的问题时才读取位置，例如你没打开 Persona 时问我离家还有多远。"
+            "value" : "只在助手需要回答你的问题时才读取位置，例如你没打开 Persona 时问「我离家还有多远」。"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "位置情報を読み取るのは、アシスタントが質問に答えるのに必要なときだけです。たとえばPersonaを開いていないときに、家まであとどれくらいかを尋ねた場合です。"
+            "value" : "位置情報を読み取るのは、アシスタントが質問に答えるのに必要なときだけです。たとえばPersonaを開いていないときに「家まであとどれくらい？」と尋ねた場合です。"
           }
         }
       }
