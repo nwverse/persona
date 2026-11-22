@@ -199,6 +199,12 @@ func setContext(s *proto.Session, m quickMeta) {
 	}
 	s.ContextTokens = proto.Tokens32(m.contextTokens)
 	s.ContextWindow = proto.Tokens32(contextWindowOf(m.model, m.contextWindow, m.contextTokens))
+	if m.contextStats.Native == nil {
+		if existing := s.ContextBreakdown(); existing != nil && existing.Source == proto.ContextBreakdownExact {
+			fillBreakdownDerived(s, existing, 0)
+			return
+		}
+	}
 	s.SetContextBreakdown(transcript.BuildContextBreakdown(m.contextStats, int(s.ContextTokens), int(s.ContextWindow), 0, m.contextFullWindow))
 }
 
@@ -364,6 +370,12 @@ func fillBreakdownDerived(s *proto.Session, existing *proto.ContextBreakdown, au
 
 // setSessionContext is setContext with a managed-launcher fallback when the transcript records no context window.
 func (n *Node) setSessionContext(s *proto.Session, m quickMeta) {
+	var native *proto.ContextBreakdown
+	if s != nil {
+		if existing := s.ContextBreakdown(); existing != nil && existing.Source == proto.ContextBreakdownExact {
+			native = existing.Clone()
+		}
+	}
 	setContext(s, m)
 	if s == nil || s.ContextTokens == 0 {
 		return
@@ -372,6 +384,10 @@ func (n *Node) setSessionContext(s *proto.Session, m quickMeta) {
 		s.ContextWindow = proto.Tokens32(n.sessionContextWindow(s.SessionID, s.Launcher, s, m))
 	}
 	autoCompact := n.sessionAutoCompactThreshold(s.SessionID, s.Launcher, int(s.ContextWindow))
+	if native != nil && m.contextStats.Native == nil {
+		fillBreakdownDerived(s, native, autoCompact)
+		return
+	}
 	if existing := s.ContextBreakdown(); existing != nil && existing.Source == proto.ContextBreakdownExact {
 		fillBreakdownDerived(s, existing, autoCompact)
 		return
@@ -381,14 +397,13 @@ func (n *Node) setSessionContext(s *proto.Session, m quickMeta) {
 
 // setRuntimeSessionContext is setRuntimeContext with a managed-launcher fallback when the transcript records no window.
 func (n *Node) setRuntimeSessionContext(s *proto.Session, m quickMeta) {
-	native := s.ContextBreakdown()
-	if native != nil && native.Source != proto.ContextBreakdownExact {
-		native = nil
+	var native *proto.ContextBreakdown
+	if s != nil {
+		if existing := s.ContextBreakdown(); existing != nil && existing.Source == proto.ContextBreakdownExact {
+			native = existing.Clone()
+		}
 	}
 	setRuntimeContext(s, m)
-	if native != nil {
-		s.SetContextBreakdown(native)
-	}
 	if s == nil || s.ContextTokens == 0 {
 		return
 	}
@@ -407,6 +422,10 @@ func (n *Node) setRuntimeSessionContext(s *proto.Session, m quickMeta) {
 		}
 	}
 	autoCompact := n.sessionAutoCompactThreshold(s.SessionID, s.Launcher, int(s.ContextWindow))
+	if native != nil && m.contextStats.Native == nil {
+		fillBreakdownDerived(s, native, autoCompact)
+		return
+	}
 	if existing := s.ContextBreakdown(); existing != nil && existing.Source == proto.ContextBreakdownExact {
 		fillBreakdownDerived(s, existing, autoCompact)
 		return

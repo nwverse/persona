@@ -220,13 +220,23 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	cctx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
 	defer cancel()
 	var said json.RawMessage
+	sentAt := time.Now()
+	if !command {
+		n.ttft.arm(id, sentAt, "")
+	}
 	if err := h.peer.Call(cctx, "session.send", params, &said); err != nil {
+		if !command && !maybeDelivered(err) {
+			n.ttft.disarm(id, sentAt)
+		}
 		if isRPCError(err) {
 			return "", n.localizeSupervisionRefusal(ctx, err)
 		}
 		return "", fmt.Errorf("%s: %w", h.label(), err)
 	}
 	if runtimeAnswerFlag(said, "queued") {
+		if !command {
+			n.ttft.disarm(id, sentAt)
+		}
 		markSendQueued(ctx)
 	}
 	if st.AwaitingFirstMessage || beforeSend != nil {

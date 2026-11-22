@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func TestTurnTTFTTrackerLiveMeasurementAndHistoricalOmission(t *testing.T) {
@@ -157,5 +158,75 @@ func TestClaudeReadAssistantStreamEventMeasuresTTFT(t *testing.T) {
 	items := []proto.Item{{ID: "c1#0", Seq: 1, TS: time.Now(), Role: "assistant", Kind: proto.KindThinking, Text: "step 1"}}
 	if !n.ttft.annotate(sid, items, true) || items[0].TTFTMS == nil || *items[0].TTFTMS < 55 {
 		t.Fatalf("expected Claude streaming TTFT >= 55ms, got %+v", items[0].TTFTMS)
+	}
+}
+
+func TestRuntimeSendArmsBeforeRPCAndDisarmsOnRefusal(t *testing.T) {
+	n, _ := runtimeNode(t)
+	const (
+		fastID    = "01a1b2c3-0000-7000-8000-000000000091"
+		refusedID = "01a1b2c3-0000-7000-8000-000000000092"
+		queuedID  = "01a1b2c3-0000-7000-8000-000000000093"
+	)
+	rt := dialRuntime(t, n, map[string]any{
+		"runtime": "pi-web",
+		"agent":   "pi",
+		"caps":    map[string]any{"send": true},
+	})
+	_ = rt.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{
+		{"session_id": fastID, "status": "idle"},
+		{"session_id": refusedID, "status": "idle"},
+		{"session_id": queuedID, "status": "working"},
+	}})
+	waitFor(t, "runtime sessions listed", func() bool {
+		return n.runtimes.ownerOf(fastID) != nil && n.runtimes.ownerOf(refusedID) != nil && n.runtimes.ownerOf(queuedID) != nil
+	})
+
+	rt.answer = func(method string, params json.RawMessage) (any, error) {
+		if method != "session.send" {
+			return map[string]any{"ok": true}, nil
+		}
+		var body map[string]any
+		_ = json.Unmarshal(params, &body)
+		switch body["session_id"] {
+		case fastID:
+			// Emit streaming delta BEFORE session.send returns.
+			_ = rt.peer.Notify("session.delta", map[string]any{"session_id": fastID, "text": "Early token"})
+			waitFor(t, "node captured early runtime delta", func() bool { return n.ttft.has(fastID) })
+			return map[string]any{"ok": true}, nil
+		case refusedID:
+			return nil, &rpc.Error{Code: "not_running", Message: "stopped", Data: json.RawMessage(`{"delivered":"none"}`)}
+		case queuedID:
+			return map[string]any{"ok": true, "queued": true}, nil
+		}
+		return map[string]any{"ok": true}, nil
+	}
+
+	// 1. Early delta during runtime session.send RPC is captured and survives noteRuntimeWorking.
+	if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": fastID, "text": "go"}); err != nil {
+		t.Fatalf("fast runtime send: %v", err)
+	}
+	if h := n.runtimes.ownerOf(fastID); h != nil {
+		n.noteRuntimeWorking(h, fastID, nil)
+	}
+	fastItems := []proto.Item{{ID: "r1#0", Seq: 1, TS: time.Now(), Role: "assistant", Kind: proto.KindText, Text: "Early token"}}
+	if !n.ttft.annotate(fastID, fastItems, true) || fastItems[0].TTFTMS == nil || *fastItems[0].TTFTMS < 0 {
+		t.Fatalf("expected runtime TTFT captured before send ack, got %+v", fastItems[0].TTFTMS)
+	}
+
+	// 2. Definitive send refusal disarms tracker so subsequent deltas are ignored.
+	if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": refusedID, "text": "go"}); err == nil {
+		t.Fatal("expected refusal error")
+	}
+	if _, ok := n.ttft.firstToken(refusedID, time.Now(), ""); ok {
+		t.Fatal("definitive runtime send refusal should have disarmed TTFT tracker")
+	}
+
+	// 3. Queued runtime send disarms tracker so it does not steal an active turn's TTFT.
+	if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": queuedID, "text": "next"}); err != nil {
+		t.Fatalf("queued runtime send: %v", err)
+	}
+	if _, ok := n.ttft.firstToken(queuedID, time.Now(), ""); ok {
+		t.Fatal("queued runtime send should have disarmed TTFT tracker")
 	}
 }

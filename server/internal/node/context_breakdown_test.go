@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 func TestNodeContextBreakdownFromTranscriptAndLauncher(t *testing.T) {
@@ -127,5 +128,65 @@ func TestRuntimeNormalizeAndMergePiPreservesExactBreakdown(t *testing.T) {
 	}
 	if bd := herdrRow.ContextBreakdown(); bd == nil || bd.Source != proto.ContextBreakdownExact || *bd.Free != 185000 {
 		t.Fatalf("mergePiRow lost ContextBreakdown: %+v", bd)
+	}
+}
+
+func TestSetSessionContextPreservesExistingExactBreakdown(t *testing.T) {
+	n := &Node{}
+	n.setCatalog([]proto.ManagedLauncher{{
+		Name:          "gw1m",
+		CompactWindow: 800000,
+		Models:        []proto.ProviderModel{{ID: "claude-sonnet-4-6", ContextWindow: 1000000}},
+	}})
+
+	exact := &proto.ContextBreakdown{
+		Source:         proto.ContextBreakdownExact,
+		SystemAndRules: proto.Int(4200),
+		ToolsAndMCP:    proto.Int(6800),
+		Conversation:   proto.Int(9000),
+		ToolOutputs:    proto.Int(5000),
+	}
+	m := quickMeta{
+		model:             "claude-sonnet-4-6",
+		contextTokens:     25000,
+		contextFullWindow: true,
+		contextStats: transcript.ContextStats{
+			ConversationBytes: 4000,
+			ToolOutputBytes:   4000,
+		},
+	}
+
+	// Direct setContext preserves existing exact breakdown and derives free from fallback window.
+	direct := proto.Session{SessionID: "s-direct", Model: "claude-sonnet-4-6"}
+	direct.SetContextBreakdown(exact)
+	setContext(&direct, m)
+	dbd := direct.ContextBreakdown()
+	if dbd == nil || dbd.Source != proto.ContextBreakdownExact ||
+		*dbd.SystemAndRules != 4200 || *dbd.ToolsAndMCP != 6800 || *dbd.Conversation != 9000 || *dbd.ToolOutputs != 5000 {
+		t.Fatalf("setContext overwrote exact breakdown: %+v", dbd)
+	}
+	if dbd.Free == nil || *dbd.Free != int(direct.ContextWindow)-25000 {
+		t.Fatalf("setContext free = %v, want %d", dbd.Free, int(direct.ContextWindow)-25000)
+	}
+
+	// setSessionContext preserves existing exact breakdown and derives Free / AutoCompactThreshold from launcher's 1M window.
+	s := proto.Session{SessionID: "s-launcher", Launcher: "gw1m", Model: "claude-sonnet-4-6"}
+	s.SetContextBreakdown(exact)
+	n.setSessionContext(&s, m)
+	bd := s.ContextBreakdown()
+	if bd == nil || bd.Source != proto.ContextBreakdownExact {
+		t.Fatalf("setSessionContext replaced exact breakdown: %+v", bd)
+	}
+	if *bd.SystemAndRules != 4200 || *bd.ToolsAndMCP != 6800 || *bd.Conversation != 9000 || *bd.ToolOutputs != 5000 {
+		t.Fatalf("setSessionContext altered exact categories: %+v", bd)
+	}
+	if s.ContextWindow != 1000000 {
+		t.Fatalf("ContextWindow = %d, want 1000000", s.ContextWindow)
+	}
+	if bd.Free == nil || *bd.Free != 975000 {
+		t.Fatalf("Free = %v, want 975000 (from final 1M launcher window)", bd.Free)
+	}
+	if bd.AutoCompactThreshold == nil || *bd.AutoCompactThreshold != 800000 {
+		t.Fatalf("AutoCompactThreshold = %v, want 800000", bd.AutoCompactThreshold)
 	}
 }

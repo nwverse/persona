@@ -307,8 +307,13 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 				if p.A2AWakeOnSend {
 					input["a2a_wake_on_send"] = true
 				}
+				sentAt := time.Now()
+				n.ttft.arm(p.SessionID, sentAt, "")
 				out, err := call(method, input)
 				said = out
+				if (err != nil && !maybeDelivered(err)) || (err == nil && runtimeAnswerFlag(out, "queued")) {
+					n.ttft.disarm(p.SessionID, sentAt)
+				}
 				return err
 			})
 		})

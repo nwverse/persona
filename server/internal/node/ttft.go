@@ -141,6 +141,30 @@ func (t *turnTTFTTracker) clearPending(id string) {
 	}
 }
 
+// disarm cancels an armed turn (and any pending measurement captured for that exact send timestamp)
+// when a send RPC definitively failed before typing/starting a turn or returned queued.
+func (t *turnTTFTTracker) disarm(id string, startedAt time.Time) {
+	if t == nil || id == "" || startedAt.IsZero() {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	st := t.sessions[id]
+	if st == nil {
+		return
+	}
+	if st.armed && st.startedAt.Equal(startedAt) {
+		st.armed = false
+		st.startedAt = time.Time{}
+		st.promptID = ""
+	}
+	if st.pendingReady && st.pendingStart.Equal(startedAt) {
+		st.pendingReady = false
+		st.pendingStart = time.Time{}
+		st.pendingTTFT = 0
+	}
+}
+
 func (t *turnTTFTTracker) has(id string) bool {
 	if t == nil || id == "" {
 		return false

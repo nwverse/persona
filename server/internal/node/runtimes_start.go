@@ -116,7 +116,14 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 			return nil, nil, err
 		}
 	}
+	sentAt := time.Now()
+	if p.SessionID != "" && p.Prompt != "" {
+		n.ttft.arm(p.SessionID, sentAt, "")
+	}
 	if err := h.peer.Call(ctx, "session.start", params, &res); err != nil {
+		if p.SessionID != "" && p.Prompt != "" && !maybeDelivered(err) {
+			n.ttft.disarm(p.SessionID, sentAt)
+		}
 		return nil, nil, err
 	}
 	var s proto.Session
@@ -132,6 +139,9 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 	started, err := n.listStarted(h, s, row.Transcript)
 	if err != nil {
 		return nil, nil, err
+	}
+	if p.Prompt != "" && started.SessionID != "" && p.SessionID == "" {
+		n.ttft.armIfUnarmed(started.SessionID, sentAt, "")
 	}
 	if p.Resume == "" {
 		n.recordEngineStart(h, started, p.Cwd)
@@ -224,7 +234,6 @@ func (n *Node) noteRuntimeWorking(h *runtimeConn, id string, before *proto.Sessi
 	if h == nil || id == "" {
 		return
 	}
-	n.ttft.arm(id, time.Now(), "")
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for index := range h.sessions {
