@@ -662,9 +662,9 @@ struct AssistantView: View {
         navPath.wrappedValue = path
     }
 
-    #if os(iOS)
     /// Whether To-dos is the place in front, whatever is pushed on it: the Sidebar layout's root, else the place this
-    /// page shows over the conversation (the shell's and the iPad's), else the classic page.
+    /// page shows over the conversation (the shell's and the iPad's), else the classic page. `show` asks it on every
+    /// platform, visionOS included.
     private var todosInFront: Bool {
         #if os(iOS)
         if embedded, let unified { return unified.shownPlace == .todos }
@@ -672,6 +672,7 @@ struct AssistantView: View {
         return placesByValue ? places.current == .todos : showTodos
     }
 
+    #if os(iOS)
     /// The Sidebar layout (#8359): each page the sidebar opens is a root of the page beside it, the conversation one of
     /// them. Picking one replaces the root at once, the one left keeping what was opened on it; picking the one in front
     /// goes back to it (`SidebarPageRoots`). The shaded row follows the root (`UnifiedSidebar.shownPlace`, `atRoot`).
