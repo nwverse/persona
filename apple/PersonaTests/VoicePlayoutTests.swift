@@ -177,7 +177,9 @@ struct VoicePlayoutTests {
     /// after every piece; with the growing lead, a few longer pauses.
     @Test func aLinkThatFallsFarBehindAfterTheFirstBurstPausesAFewTimes() {
         let length = Double(servicePiece) / 16000
-        let arrivals = (0..<5).map { Double($0) * 0.06 } + (1...30).map { 0.3 + Double($0) * length / 0.6 }
+        let burst: [TimeInterval] = (0..<5).map { Double($0) * 0.06 }
+        let behind: [TimeInterval] = (1...30).map { 0.3 + Double($0) * length / 0.6 }
+        let arrivals = burst + behind
         let fixed = replay(arrivals, frames: servicePiece, rate: 16000, tellsDry: false)
         #expect(fixed.gaps.count >= 25)
         let growing = replay(arrivals, frames: servicePiece, rate: 16000)
