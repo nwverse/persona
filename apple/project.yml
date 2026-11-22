@@ -655,6 +655,12 @@ targets:
       # The All-Day Recording complication: the state the watch app wrote into the watch App Group.
       - path: Shared/Recording/AllDaySnapshot.swift
       - path: Shared/Design/WatchFaceTokens.swift
+      - path: Shared/WatchIntake.swift
+      - path: Shared/WatchIntakeConfiguration.swift
+      - path: Shared/WatchIntakeComplicationView.swift
+      - path: Shared/StatusPalette.swift
+      - path: Shared/Design/Palette.swift
+      - path: Shared/Design/HealthIntakePalette.swift
       - path: Shared/Localization
     entitlements:
       path: PersonaWatchWidgets/PersonaWatchWidgets.entitlements

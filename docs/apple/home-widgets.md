@@ -172,6 +172,40 @@ Lock Screen, in StandBy and in the Smart Stack.
 
 ## Water, Protein and Today's Health (#13275)
 
+### Apple Watch
+
+Water and Protein also have watch-face complications: circular, rectangular and inline, with no corner or four-item
+family. They show only Persona's intake, without Health permission or a new watch app page. Their stable WidgetKit
+kinds are `persona.watch.water` and `persona.watch.protein`. The circle uses the system capacity gauge; the rectangle
+adds the total, goal, unit and a short progress bar; inline shows the name, total and unit. Blue and amber come from
+the same `HealthIntakePalette` as the phone; single-color faces use the system accent group. VoiceOver reads the
+name, total, goal, unit and whether the value is cached. Standalone intake stays readable while locked.
+
+Edit Complication can choose a paired hub group. Without a choice, the default group is used, or the sole available
+group; an ambiguous or removed group asks for pairing rather than silently using another group's amounts.
+`WatchIntakeProvider` reads the watch-only App Group's `ExtensionSurfaceStore` credential directly, as extension
+complications do. It sends `GET /api/v1/assistant/health/intake?space=health&days=1`, with the watch's own answer-only
+token and no selected-manager header, using the existing redirect-refusing client. It never requests the full page,
+changes stream or a phone credential. This path was checked in the system-hosted watch widget process on a simulator
+with a synthetic credential and loopback server, including App Group write/readback.
+
+The timeline asks for another refresh after about 15 minutes; watchOS budgets decide the actual schedule. Every
+timeline request fetches again, so an accepted watch write can call `WatchIntakeKind.reloadTimelines()` immediately
+without waiting for cache expiry. That entry point reloads just the two stable kinds above. The Log Water intent
+belongs to its own change; this change provides the callable entry point, not the write action.
+
+Network/decoding failures retain the last matching pairing's projection in the separate `WatchIntake/snapshot.json`
+file. Cached amounts are identified in the rectangle and VoiceOver. A 403 from an older hub (also a missing route's
+404) shows Update the hub; it never revokes a credential, erases extension widget content or changes the extension
+catalog. A subsequent successful read removes that hint. Pairing generations fence late responses and offline reads;
+older requests cannot replace newer projections. The cache holds at most 32 groups, no tokens, records or notes.
+An extra entry at the hub's next day boundary clears today's amounts while keeping the goals, including across DST;
+another marks an unrefreshed value as cached. No watch app fetch job or extra background schedule is needed.
+If the hub returns an unresolved `Local` time-zone label, the next GET supplies its new day bucket; the complication
+keeps the cached authoritative amount instead of guessing the phone's or UTC's midnight and clearing it early.
+
+### iPhone and iPad
+
 Water and Protein show Persona's own intake from the default manager, without Health permission. Their stable kinds
 are `persona.home.water` and `persona.home.protein`; Today's Health is `persona.home.healthToday`. Every tap opens the
 Health home. The existing `persona.home.health` widget keeps its families, appearance and count definitions.

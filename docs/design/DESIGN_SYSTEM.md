@@ -1663,7 +1663,15 @@ VoiceOver reads the label and percentage; finite ratios are clamped to 0–1 and
 The circular gauge is independent of `progress.style`. `accessory_rectangular` uses a bar and `accessory_inline`
 omits progress.
 
-The watch widget extension doesn't build `Theme`, so complications take their fonts, marks and colors from `WatchFaceTokens` (`apple/Shared/Design/WatchFaceTokens.swift`, the documented fixed-size exception in 2.2), whose symbols mirror `Theme.Icon` with an `// icon:` note. A complication only draws what its app last wrote (a snapshot file in the watch App Group); all-day recording reloads only its own kind's timeline (`AllDaySnapshot.widgetKind`), not the other faces'.
+The watch widget extension doesn't build `Theme`, so complications take their fonts, marks and colors from `WatchFaceTokens` (`apple/Shared/Design/WatchFaceTokens.swift`, the documented fixed-size exception in 2.2), whose symbols mirror `Theme.Icon` with an `// icon:` note. Recording and pet complications draw snapshots the app writes in the watch App Group; all-day recording reloads only its own kind's timeline (`AllDaySnapshot.widgetKind`), not the other faces'. Extension and intake complications can read directly with the watch's own shared credential.
+
+- **Water and Protein** (#13275): circular, rectangular and inline only. The circle uses the system circular capacity
+  gauge with today's amount in its center; the rectangle shows the name, total, goal and unit above a straight capacity
+  bar; inline keeps the name, amount and unit. They share the phone's blue/amber `HealthIntakePalette`, system accent
+  grouping, and the `.xxxLarge` text cap with shrinking. VoiceOver reads name, total, goal and unit. On a failed read,
+  cached values remain, identified in the rectangle and VoiceOver; an old hub's 403 says Update the hub instead.
+  No watch app page or Health permission is added. Hub choice lives on the complication; the default is the default
+  paired group, or the only available group. Data and 15-minute refresh rules are in `docs/apple/home-widgets.md`.
 
 - **All-Day Recording** (#4741, `AllDayRecordingComplication`; circular, corner, rectangular, inline, the Smart Stack): five faces, each in words and a mark, never by color alone. Off: "All-Day Recording" (the corner says "All-Day"), "Tap to start". Recording: "Recording all day" with the running time (`Text(_:style: .timer)`, so it needs no reload), in red as the system shows a microphone in use. Paused (by the user or a call): "Paused", "Tap to continue", `allDayPausedSymbol`, orange. Stopped by itself: "Stopped", "Tap to continue", the triangle, orange.
 - **The stale face**: a recording snapshot is trusted only while the app keeps rewriting it (every 10 minutes while recording); the timeline carries a second entry at `AllDaySnapshot.staleAfter` (25 minutes after the last write), which shows "Check recording", how long since it was last heard, the triangle, orange. Why: if the app dies without a word, a face still saying "Recording all day" would be a lie.
