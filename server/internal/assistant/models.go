@@ -124,11 +124,13 @@ var modelCategoryIDs = []string{"assistant", "agent.new", "kb", "inbox.triage", 
 // in the order of Agents' uses, then the background supervisor's (#5806), then the In-meeting conversation's and
 // Meeting minutes' (#7980), last so the rows the apps drew before each was listed keep their order; category-default
 // assignment and model profiles must not write them.
-var modelConfigIDs = append(slices.Clone(modelCategoryIDs), purposeAgent, purposeLarkAgent, purposeSupervise, purposeMeetingRoom, purposeMeetingMinutes)
+var modelConfigIDs = append(slices.Clone(modelCategoryIDs), purposeAgent, purposeLarkAgent, purposeSupervise, purposeMeetingRoom, purposeMeetingMinutes, purposeMain)
 
 // agentsOverride: a use of Agents the user may set apart, the AI twin (#4232) or Lark /agent. With nothing saved it
 // follows Agents; every other use follows its category only.
 func agentsOverride(id string) bool { return id == purposeAgent || id == purposeLarkAgent }
+
+const purposeMain = "assistant.main"
 
 // modelPurposes are the uses; Name, Group and Uses hold catalog names (assistant-models), read in a language by
 // localized.
@@ -176,6 +178,8 @@ var modelPurposes = []ModelPurpose{
 	// may be a cheaper or a stronger one. In the catalog the apps list (modelConfigIDs, #5806): each app that asked for
 	// it by its own id draws it once, and one from before draws the row with the name sent here.
 	{ID: purposeSupervise, Group: "group_assistant", Kind: "launcher", Parent: "assistant"},
+	// Main execution is independent of the defaults for new side conversations.
+	{ID: purposeMain, Group: "group_assistant", Kind: "launcher", Parent: "assistant"},
 	// The room conversation of a recorded meeting (meeting_room.go, #7980): the main chat's launcher, model and effort
 	// until it is given its own, Claude Code only and never a runtime (models_room.go).
 	{ID: purposeMeetingRoom, Group: "group_assistant", Kind: "launcher", Parent: "assistant"},
@@ -185,7 +189,7 @@ var modelPurposes = []ModelPurpose{
 // the opt-in overrides of Agents, a scheduled task's own use, the background supervisor's, the In-meeting
 // conversation's and Meeting minutes' (#7980). With nothing saved it follows its category.
 func ownModelRecord(id string) bool {
-	return agentsOverride(id) || isTaskPurpose(id) || id == purposeSupervise || id == purposeMeetingRoom || id == purposeMeetingMinutes
+	return agentsOverride(id) || isTaskPurpose(id) || id == purposeMain || id == purposeSupervise || id == purposeMeetingRoom || id == purposeMeetingMinutes
 }
 
 // mc is a assistant-models text in l.

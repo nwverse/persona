@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -243,6 +244,10 @@ func (s *Service) continueTimedOut(ctx context.Context, task Todo) (json.RawMess
 	agents := s.taskAgents(ctx, current)
 	byID := map[[2]string]proto.Session{}
 	for _, c := range agents {
+		if proto.UnrecoverableTurnErrorCode(c.TurnError) != "" || c.TurnErrorKind == proto.TurnErrorUnrecoverable ||
+			c.TurnErrorCode == proto.TurnErrorCompactionSealed {
+			return nil, i18n.Err("assistant-agents_work.conversation_invalid")
+		}
 		byID[[2]string{c.MachineID, c.SessionID}] = c
 	}
 	st, claimed := s.claimTaskStart(task.ID)

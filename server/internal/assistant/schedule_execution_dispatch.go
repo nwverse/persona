@@ -7,6 +7,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -66,13 +67,38 @@ func (s *Service) failSourceTaskRun(ctx context.Context, t Task, run ScheduleRun
 	return s.failTaskRun(ctx, t, run, err, !errors.Is(err, rpc.ErrNotSent))
 }
 
+func taskRunCompatibilityEvidence(ctx context.Context, run *ScheduleRun) {
+	if devicewire.LegacyTaskExecutionUsed(ctx) {
+		run.CompatibilityFallback = devicewire.LegacyTaskExecutionFallback
+	}
+}
+
 func (s *Service) failTaskRun(ctx context.Context, t Task, run ScheduleRun, err error, unknown bool) (proto.Session, error) {
+	taskRunCompatibilityEvidence(ctx, &run)
 	run.Status, run.Error, run.DeliveryUnknown = runFailed, err.Error(), unknown
 	s.recordRun(run)
+	if !unknown && run.Execution != nil {
+		ex := run.Execution
+		s.logf("task %s refused before dispatch: retried=%t launcher=%q model=%q effort=%q: %v", t.ID, run.Retried, ex.Launcher, ex.Model, ex.Effort, err)
+	}
 	if unknown {
 		s.oneOffFailed(ctx, t, run)
 	} else {
-		s.oneOffNotStarted(ctx, t, run)
+		s.oneOffNotStarted(ctx, t, run, err)
 	}
 	return proto.Session{}, err
+}
+
+// Only structured parameter refusals stop the automatic retry. Provider configuration can change between
+// admission and request preparation, so provider/RPC/discovery errors retain their existing recovery path.
+func taskConfigurationRefusal(err error) bool {
+	var message *i18n.Message
+	if !errors.As(err, &message) {
+		return false
+	}
+	switch message.Key {
+	case "assistant-models.err_effort_unsupported", "assistant-models.err_model_invalid", "assistant-schedule.task_execution_wait_timeout":
+		return true
+	}
+	return false
 }

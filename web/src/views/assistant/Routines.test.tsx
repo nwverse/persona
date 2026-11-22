@@ -100,6 +100,19 @@ describe("routine run history loading", () => {
     expect(marks.some((mark) => mark.classList.contains("bg-field") && mark.classList.contains("text-red"))).toBe(true);
   });
 
+  it("shows actual legacy task execution fallback beside successful timing, not eligibility alone", async () => {
+    const fallbackRun = { ...run, compatibility_fallback: "legacy_task_execution", session_id: "fallback-chat" };
+    const ordinaryRun = { ...run, id: "ordinary-run", title: "Ordinary summary", session_id: "ordinary-chat" };
+    runsReply = () => json({ runs: [fallbackRun, ordinaryRun] });
+    await render();
+
+    const line = (title: string) => [...history().querySelectorAll<HTMLElement>("button")].find((el) => el.textContent?.includes(title))!;
+    expect(line(fallbackRun.title).textContent).toContain("准时");
+    expect(line(fallbackRun.title).textContent).toContain("使用旧版任务执行方式");
+    expect(line(ordinaryRun.title).textContent).toContain("准时");
+    expect(line(ordinaryRun.title).textContent).not.toContain("使用旧版任务执行方式");
+  });
+
   it("shows a failed request's reason and retry while keeping the tasks visible", async () => {
     await render();
 

@@ -23,27 +23,28 @@ import (
 )
 
 type updatingNode struct {
-	mu          sync.Mutex
-	machine     *Machine
-	peer        *rpc.Peer
-	data        []byte
-	expected    []byte
-	begin       int
-	commits     int
-	confirms    int
-	aborts      int
-	resume      int64
-	badOffset   bool
-	busyCommit  bool
-	busySession bool
-	sessionErr  error
-	background  bool
-	sessions    []proto.Session // when set, what sessions.list answers
-	updateBusy  *bool           // with sessions: the node's update_busy (nil leaves it out)
-	installErr  error
-	stayOld     bool
-	target      string // the build it confirms ("" the fixture hub's, new-build)
-	committed   chan struct{}
+	mu                  sync.Mutex
+	machine             *Machine
+	peer                *rpc.Peer
+	data                []byte
+	expected            []byte
+	begin               int
+	commits             int
+	confirms            int
+	aborts              int
+	resume              int64
+	badOffset           bool
+	busyCommit          bool
+	busySession         bool
+	sessionErr          error
+	background          bool
+	sessions            []proto.Session // when set, what sessions.list answers
+	updateBusy          *bool           // with sessions: the node's update_busy (nil leaves it out)
+	installErr          error
+	stayOld             bool
+	target              string // the build it confirms ("" the fixture hub's, new-build)
+	committed           chan struct{}
+	handoffGraceSeconds int
 }
 
 func (n *updatingNode) handle(_ context.Context, method string, params json.RawMessage) (any, error) {
@@ -102,6 +103,13 @@ func (n *updatingNode) handle(_ context.Context, method string, params json.RawM
 		}
 		return map[string]any{"offset": offset}, nil
 	case "node.update.commit":
+		var p proto.NodeUpdateCommitParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if p.HandoffGraceSeconds != nil {
+			n.handoffGraceSeconds = *p.HandoffGraceSeconds
+		}
 		n.commits++
 		if n.busyCommit && n.commits == 1 {
 			return nil, &rpc.Error{Code: "node_update_busy", Message: "node is busy"}
@@ -249,8 +257,14 @@ func TestLinkedDeployTransfersAndConfirms(t *testing.T) {
 func TestRedeployBringsTheProgramTheNodeRuns(t *testing.T) {
 	fullBuild := updatetest.Program(t, nodeproto.ProgramPersonad, "linux", "amd64")
 	nodeBuild := updatetest.Program(t, nodeproto.ProgramPersonaNode, "linux", "amd64")
-	for _, tc := range []struct{ program, via string }{{nodeproto.ProgramPersonaNode, "redeploy"}, {nodeproto.ProgramPersonad, "redeploy"},
-		{"", "redeploy"}, {nodeproto.ProgramPersonaNode, "reconnect"}, {"", "reconnect"}} {
+	for _, tc := range []struct{ program, via, path string }{
+		{nodeproto.ProgramPersonaNode, "redeploy", ""},
+		{nodeproto.ProgramPersonad, "redeploy", "/opt/persona/bin/persona-node"},
+		{"", "redeploy", ""},
+		{nodeproto.ProgramPersonaNode, "reconnect", ""},
+		{nodeproto.ProgramPersonad, "reconnect", "/opt/persona/bin/persona-node"},
+		{"", "reconnect", ""},
+	} {
 		program := tc.program
 		t.Run(tc.via+"/program="+program, func(t *testing.T) {
 			home := t.TempDir()
@@ -278,6 +292,7 @@ func TestRedeployBringsTheProgramTheNodeRuns(t *testing.T) {
 			n.mu.Unlock()
 			m.mu.Lock()
 			m.info.Program = program
+			m.info.Executable = tc.path
 			info := m.info
 			m.mu.Unlock()
 			if tc.via == "reconnect" {

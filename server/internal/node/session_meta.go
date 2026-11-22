@@ -77,6 +77,7 @@ type quickMeta struct {
 	contextTokens, contextWindow int
 	contextStats                 transcript.ContextStats
 	contextFullWindow            bool
+	contextRestartRecommended    bool
 	// turnClosed: the tail ends with a turn finished (transcript.Meta.TurnClosed): a Codex rollout's, a Claude
 	// transcript's (turn_duration, an interrupt)
 	turnClosed bool
@@ -440,6 +441,7 @@ func (n *Node) mergeNamingMetadata(path string, m *quickMeta) {
 		return
 	}
 	m.outputTokens = sc.meta.OutputTokens
+	m.contextRestartRecommended = sc.meta.ContextRestartRecommended()
 	if m.codex && sc.meta.ModelAt.After(m.modelAt) {
 		// A long tool result can push the latest turn_context out of the quick tail.
 		m.model, m.modelAt = sc.meta.Model, sc.meta.ModelAt

@@ -4,6 +4,7 @@
   "skip_next_invalid": "有効な実行時刻を入力してください。",
   "skip_next_owner": "あなたがスキップしました",
   "execution_context_unavailable": "タスクの会話の実行環境を確認できません。Agent を再接続して再試行してください。",
+  "task_execution_wait_timeout": "task_execution_wait_timeout: 選択したコンピューターが実行オプションに対応する前に待機時間が切れました。タスクは送信されていません。",
   "followup": "フォローアップ",
   "morning": "朝のまとめ",
   "evening": "夜の振り返り",

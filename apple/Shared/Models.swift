@@ -651,6 +651,8 @@ nonisolated struct ComputerJob: Codable, Hashable, Sendable {
     var code: String? = nil
     /// An iPhone job's iPhone.
     var device: String? = nil
+    /// The computer's start time, shared by every status for this job.
+    var started: Date? = nil
 
     var running: Bool { state == "running" }
 }
@@ -2756,9 +2758,11 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var usage: [TokenUsage]? = nil
     /// Raw record identity for a text item with a positional ID, stable before clipping. Older nodes omit it.
     var sourceFingerprint: String? = nil
+    /// The model that wrote this assistant item, including tool work after the last words. Older hubs omit it.
+    var model: String? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source, outcome, usage
+        case id, seq, ts, role, kind, text, image, queued, from, wake, fold, task, compact, injected, source, outcome, usage, model
         case modelRefusal = "model_refusal", narration, codexHeartbeatQuiet = "codex_heartbeat_quiet"
         case sourceFingerprint = "source_fingerprint"
         case toolUseID = "tool_use_id", toolName = "tool_name", toolInput = "tool_input", isError = "is_error", fullSize = "full_size",

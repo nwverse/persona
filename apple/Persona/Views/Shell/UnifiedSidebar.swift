@@ -192,14 +192,17 @@ struct UnifiedSidebarColumn<Agents: View>: View {
         let _ = PerfTrace.body("UnifiedSidebarColumn")
         #endif
         VStack(spacing: 0) {
-            persona(.header)
+            // The head and the main row take the column's width and no more (#12318): they stand on the rows' line
+            // (`rowsLeading`), measured in the list below, so a head that could widen the column moved the list, which
+            // moved the line, which moved the head, round and round inside one layout pass.
+            persona(.header).frame(minWidth: .zero, maxWidth: .infinity)
             switch state.part {
             case .whole:
-                persona(.main)
+                persona(.main).frame(minWidth: .zero, maxWidth: .infinity)
                 list(persona(.rows))
                 SidebarNeedsJump(state: state)
             case .persona:
-                persona(.main)
+                persona(.main).frame(minWidth: .zero, maxWidth: .infinity)
                 personaList
             case .agents:
                 list(nil)

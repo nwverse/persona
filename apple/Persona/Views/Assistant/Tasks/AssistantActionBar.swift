@@ -123,6 +123,8 @@ nonisolated enum AssistantEntries {
             let stopped = st == .unread || st == .idle
             let error = !(s?.turnError ?? "").isEmpty
             if error, s?.turnErrorKind == "usage_limit", stopped { limit = true }
+            else if error, stopped, TurnErrorReason.invalid(s) { interrupted = true }
+            else if active.count > 1, st != .working, s?.waitsToBeWoken == true { waiting = true }
             else if error, stopped { interrupted = true }
             else if st == .unread { unread = true }
             else if s?.waitsToBeWoken == true { waiting = true }
@@ -807,7 +809,7 @@ struct AssistantActionBar: View {
                                  detail: activity.isActive && status == .waiting ? StateName.working.text : detail(todo, status: status, agents: agents),
                                  tint: tint(status), subtitle: subtitle(todo, status: status, lead: lead, activity: activity),
                                  subtitleTint: status == .failed || status == .interrupted ? Theme.danger : nil,
-                                 subtitleLines: APIErrorInfo.unrecoverable(lead?.turnError) ? nil : 1,
+                                 subtitleLines: TurnErrorReason.invalid(lead) ? nil : 1,
                                  trail: .open, activity: activity) {
                                 if open != .needsYou && (activity.isActive || status == .working) {
                                     WorkingIndicator().accessibilityIdentifier("action-tray.working-mark")
@@ -901,7 +903,7 @@ struct AssistantActionBar: View {
         let review = todo.reviewState
         let resting = status == .followUp || status == .unread || status == .notStarted
         var parts: [String]
-        if status == .interrupted, APIErrorInfo.unrecoverable(store.leadSession(todo)?.turnError) {
+        if status == .interrupted, TurnErrorReason.invalid(store.leadSession(todo)) {
             parts = [String(localized: "Invalid conversation")]
         }
         else if status == .interrupted { parts = [String(localized: "Interrupted [Chat Layout]")] }
@@ -938,7 +940,7 @@ struct AssistantActionBar: View {
             let when = lead?.usageLimitWhen()
             return [reason, when].compactMap { $0 }.joined(separator: " · ").nilIfEmpty
         case .interrupted:
-            return one(lead?.turnError.flatMap { TurnErrorReason.of($0) ?? $0 })
+            return one(TurnErrorReason.of(lead) ?? lead?.turnError)
         case .notStarted:
             return String(localized: "Starting the agent")
         case .failed:
@@ -963,8 +965,7 @@ struct AssistantActionBar: View {
     /// that failed, Continue for a turn the model service cut off (or a usage limit nothing continues by itself).
     @ViewBuilder private func actions(_ todo: TodoItem, status: AssistantEntries.Status, lead: Session?) -> some View {
         let retry = status == .failed && store.state(todo) == .failed
-        let invalid = lead?.turnErrorKind == "unrecoverable" || lead?.turnErrorCode == "compaction_sealed" ||
-            APIErrorInfo.unrecoverable(lead?.turnError)
+        let invalid = TurnErrorReason.invalid(lead)
         let resume = !invalid && (status == .interrupted || status == .usageLimit && lead.map { !$0.usageLimitContinues } == true)
         if retry || resume || status == .failed {
             let busy = store.busyRetries.contains(todo.id)

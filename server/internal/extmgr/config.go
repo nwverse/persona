@@ -64,6 +64,8 @@ type Config struct {
 type ExtensionMarketConfig struct {
 	// Proxy is an http:// or socks5:// URL used for catalog reads, package downloads and HTTPS git clones.
 	Proxy string `json:"proxy,omitempty"`
+	// CAFile is the path to a PEM bundle appended to the system roots for the marketplace HTTP client only.
+	CAFile string `json:"ca_file,omitempty"`
 }
 
 // RemoteImagesConfig is manager.json's remote_images: DoH is the DNS-over-HTTPS JSON API asked for a host's real

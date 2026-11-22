@@ -25,6 +25,8 @@ type botRegistration struct {
 	URL           string    `json:"url"`    // the page to open or scan
 	Expires       time.Time `json:"expires"`
 	Interval      int       `json:"interval"` // seconds between polls
+	// Failure keeps a terminal outcome until the user binds again; polling must not create a new app session.
+	Failure string `json:"failure,omitempty"` // localization key
 	// Once confirmed, what the answer carried, kept until the bind is finished (a failed finish is tried again on
 	// the next poll instead of creating another app).
 	AppID     string `json:"app_id,omitempty"`
@@ -38,6 +40,28 @@ const (
 	botRegisterInterval = 5
 	botRegisterName     = "Persona"
 )
+
+// acquireFeishuBind orders the whole binding operation, including its finish, so a late Begin/Poll cannot overwrite
+// a later bind. The settings mutex remains available while the accounts site or open platform is being called.
+func (h *Manager) acquireFeishuBind(ctx context.Context) (func(), error) {
+	b := &h.bots
+	b.mu.Lock()
+	if b.bindGate == nil {
+		b.bindGate = make(chan struct{}, 1)
+	}
+	gate := b.bindGate
+	b.mu.Unlock()
+	select {
+	case gate <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-gate
+			return nil, err
+		}
+		return func() { <-gate }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
 
 // registrar is the accounts site's client (replaced in tests).
 func (h *Manager) registrar() *feishubot.Registrar {
@@ -63,31 +87,43 @@ func (h *Manager) registeredDomain(region string) string {
 func (h *Manager) beginFeishuRegistration(ctx context.Context, errText string) (connector.Prompt, bool) {
 	b := &h.bots
 	b.mu.Lock()
-	h.loadBotsLocked(ctx)
+	if h.loadBotsLocked(ctx) != nil {
+		b.mu.Unlock()
+		return connector.Prompt{}, false
+	}
 	reg := b.set.registration()
 	now := b.clock()
 	b.mu.Unlock()
-	if reg != nil && now.Before(reg.Expires) && errText == "" {
+	if reg != nil && reg.Failure == "" && (reg.AppID != "" || now.Before(reg.Expires)) {
 		return h.registerPrompt(ctx, *reg, ""), true
+	}
+	if errText == "" && reg != nil && reg.Failure != "" {
+		errText = i18n.T(h.botLang(ctx), reg.Failure)
 	}
 	region := "feishu"
 	ch, err := h.registrar().Begin(ctx, region, botRegisterName)
 	if err != nil {
 		h.logf("bots: registration: %v", err)
+		return connector.Prompt{Error: errText}, false
+	}
+	if ctx.Err() != nil {
 		return connector.Prompt{}, false
 	}
 	sealed, err := h.sealKey(ch.DeviceCode)
 	if err != nil {
 		h.logf("bots: registration: %v", err)
-		return connector.Prompt{}, false
+		return connector.Prompt{Error: errText}, false
 	}
 	expires := time.Duration(ch.ExpiresIn) * time.Second
 	if expires <= 0 {
 		expires = botRegisterFor
 	}
+	b.mu.Lock()
+	now = b.clock()
+	b.mu.Unlock()
 	next := botRegistration{Region: region, DeviceCodeEnc: sealed, URL: ch.URL, Expires: now.Add(expires), Interval: max(ch.Interval, botRegisterInterval)}
 	h.putRegistration(&next)
-	return h.registerPrompt(ctx, next, errText), true
+	return h.registerPrompt(ctx, next, ""), true
 }
 
 // registration is the registration under way with its sealed parts, nil when there is none.
@@ -100,10 +136,14 @@ func (s FeishuBotSettings) registration() *botRegistration {
 	return &r
 }
 
-// putRegistration keeps reg (nil: drops it), its sealed parts in the settings' top-level fields.
+// putRegistration keeps reg (nil: drops it), its sealed parts in the settings' top-level fields. The bind gate is held.
 func (h *Manager) putRegistration(reg *botRegistration) {
 	b := &h.bots
 	b.mu.Lock()
+	if h.loadBotsLocked(context.Background()) != nil {
+		b.mu.Unlock()
+		return
+	}
 	b.set.Registration, b.set.RegistrationDeviceEnc, b.set.RegistrationSecretEnc = nil, "", ""
 	if reg != nil {
 		r := *reg
@@ -117,6 +157,9 @@ func (h *Manager) putRegistration(reg *botRegistration) {
 
 func (h *Manager) registerPrompt(ctx context.Context, reg botRegistration, errText string) connector.Prompt {
 	l := h.botLang(ctx)
+	if errText == "" && reg.Failure != "" {
+		errText = i18n.T(l, reg.Failure)
+	}
 	return connector.Prompt{Step: stepRegister, Kind: connector.PromptQRCode, URL: reg.URL, Interval: reg.Interval,
 		Hint: i18n.T(l, "hub-channels.register_hint"), Link: reg.URL, LinkText: i18n.T(l, "hub-channels.register_open"), Error: errText}
 }
@@ -126,7 +169,10 @@ func (h *Manager) pollFeishuRegistration(ctx context.Context, credentials func(s
 	l := h.botLang(ctx)
 	b := &h.bots
 	b.mu.Lock()
-	h.loadBotsLocked(ctx)
+	if err := h.loadBotsLocked(ctx); err != nil {
+		b.mu.Unlock()
+		return connector.Prompt{}, err
+	}
 	var reg botRegistration
 	cur := b.set.registration()
 	live := cur != nil
@@ -136,17 +182,37 @@ func (h *Manager) pollFeishuRegistration(ctx context.Context, credentials func(s
 	now := b.clock()
 	b.mu.Unlock()
 	if !live {
-		return h.restartRegistration(ctx, "", credentials), nil
+		if v := h.botView(ctx); v.HasSecret {
+			return h.bindFeishuStep(ctx, "", nil, false)
+		}
+		return credentials(""), nil
+	}
+	failed := func(key string) (connector.Prompt, error) {
+		reg.Failure = key
+		h.putRegistration(&reg)
+		if key == "hub-channels.register_failed" {
+			return credentials(i18n.T(l, key)), nil
+		}
+		return h.registerPrompt(ctx, reg, ""), nil
+	}
+	if reg.Failure != "" {
+		if reg.Failure == "hub-channels.register_failed" {
+			return credentials(i18n.T(l, reg.Failure)), nil
+		}
+		return h.registerPrompt(ctx, reg, ""), nil
 	}
 	if reg.AppID == "" {
 		if !now.Before(reg.Expires) {
-			return h.restartRegistration(ctx, i18n.T(l, "hub-channels.register_expired"), credentials), nil
+			return failed("hub-channels.register_expired")
 		}
 		code, err := h.openKey(reg.DeviceCodeEnc)
 		if err != nil {
-			return h.restartRegistration(ctx, "", credentials), nil
+			return failed("hub-channels.register_failed")
 		}
 		t, err := h.registrar().Poll(ctx, reg.Region, code)
+		if ctx.Err() != nil {
+			return connector.Prompt{}, ctx.Err()
+		}
 		if err != nil { // the network: asked again on the next poll
 			h.logf("bots: registration poll: %v", err)
 			return h.registerPrompt(ctx, reg, ""), nil
@@ -171,8 +237,7 @@ func (h *Manager) pollFeishuRegistration(ctx context.Context, credentials func(s
 			}
 			if t.Status == feishubot.RegisterFailed {
 				h.logf("bots: registration: %s", t.ErrorText)
-				h.putRegistration(nil)
-				return credentials(i18n.T(l, "hub-channels.register_failed")), nil
+				return failed("hub-channels.register_failed")
 			}
 			if t.Status == feishubot.RegisterSlowDown {
 				reg.Interval += 5
@@ -180,9 +245,9 @@ func (h *Manager) pollFeishuRegistration(ctx context.Context, credentials func(s
 			}
 			return h.registerPrompt(ctx, reg, ""), nil
 		case feishubot.RegisterExpired:
-			return h.restartRegistration(ctx, i18n.T(l, "hub-channels.register_expired"), credentials), nil
+			return failed("hub-channels.register_expired")
 		case feishubot.RegisterDenied:
-			return h.restartRegistration(ctx, i18n.T(l, "hub-channels.register_denied"), credentials), nil
+			return failed("hub-channels.register_denied")
 		}
 	}
 	name, err := h.finishFeishuRegistration(ctx, reg)
@@ -192,16 +257,6 @@ func (h *Manager) pollFeishuRegistration(ctx context.Context, credentials func(s
 	}
 	h.putRegistration(nil)
 	return connector.Prompt{Done: true, Account: firstNonEmpty(name, i18n.T(l, "hub-channels.paired"))}, nil
-}
-
-// restartRegistration drops the registration and starts another, saying why; the credentials step when the accounts
-// site cannot be reached.
-func (h *Manager) restartRegistration(ctx context.Context, errText string, credentials func(string) connector.Prompt) connector.Prompt {
-	h.putRegistration(nil)
-	if p, ok := h.beginFeishuRegistration(ctx, errText); ok {
-		return p
-	}
-	return credentials(errText)
 }
 
 // finishFeishuRegistration binds the registered app: its credentials saved and checked like typed ones, the app
@@ -214,7 +269,7 @@ func (h *Manager) finishFeishuRegistration(ctx context.Context, reg botRegistrat
 	}
 	domain := h.registeredDomain(reg.Region)
 	on := true
-	if err := h.updateBot(ctx, &on, &reg.AppID, &secret, &domain, nil); err != nil {
+	if err := h.applyBotUpdate(ctx, &on, &reg.AppID, &secret, &domain, nil, true); err != nil {
 		return "", err
 	}
 	// Best-effort, as after typed credentials: the template opened the scopes and the callback; this subscribes the

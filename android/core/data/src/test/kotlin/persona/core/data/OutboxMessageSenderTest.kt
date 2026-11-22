@@ -19,6 +19,12 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.withContext
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -499,6 +505,7 @@ class OutboxMessageSenderTest {
         val sending = ComposerDelivery(DeliveryState.Sending)
         val sent = ComposerDelivery(DeliveryState.Sent)
         sender.recordComposerDelivery("visible", sending, "first")
+        assertEquals("the live attempt is bound to its own operation", "first", store.entries.value.single().operationId)
         sender.recordComposerDelivery("visible", ComposerDelivery(DeliveryState.Refused), "first", MessageTransportResult.NotSent)
         sender.recordComposerDelivery("visible", sending, "second")
         sender.recordComposerDelivery("visible", sent, "first", MessageTransportResult.Accepted)
@@ -509,6 +516,38 @@ class OutboxMessageSenderTest {
         assertTrue(sender.discard("visible"))
         sender.recordComposerDelivery("visible", sent, "second", MessageTransportResult.Accepted)
         assertEquals(OutboxState.Cancelled, store.state("visible"))
+        sender.close()
+    }
+
+    @Test fun automaticRetryDoesNotAdoptAnActiveComposerAttempt() = runTest {
+        val store = MemoryOutboxStore()
+        val automaticStarted = CompletableDeferred<Unit>()
+        val automaticFinished = CompletableDeferred<Unit>()
+        val transport = object : MessageTransport {
+            override val readyToSend = MutableStateFlow(true)
+            override val supportsClientOps = true
+            override suspend fun send(request: MessageRequest): MessageTransportResult {
+                automaticStarted.complete(Unit)
+                automaticFinished.await()
+                return MessageTransportResult.NoReceipt
+            }
+        }
+        val sender = OutboxMessageSender(scope, store, transport, backgroundScope)
+        runCurrent()
+        store.enqueue(OutboxEntry("visible", session, "hello", state = OutboxState.Refused, createdAt = 100))
+
+        val automatic = async(Dispatchers.Default + SupervisorJob()) { sender.retry("visible") }
+        withContext(Dispatchers.Default) { automaticStarted.await() }
+        sender.beginComposerRetry("visible", "manual-operation")
+        assertEquals("manual-operation", store.entries.value.single().operationId)
+        automaticFinished.complete(Unit)
+        automatic.join()
+        runCurrent()
+
+        assertEquals(OutboxState.Sending, store.state("visible"))
+        assertEquals("manual-operation", store.entries.value.single().operationId)
+        sender.recordComposerDelivery("visible", ComposerDelivery(DeliveryState.Sent), "manual-operation", MessageTransportResult.Accepted)
+        assertEquals(OutboxState.Sent, store.state("visible"))
         sender.close()
     }
 

@@ -681,6 +681,15 @@ The session writes the message as a peer's: the transcript reader takes the user
 
 Measured end to end on a throwaway `claude` 2.1.291 in an empty directory (its own `CLAUDE_CONFIG_DIR`, a pseudo console): with the default permission mode the message was taken in 0.15–0.3 s (also while a startup dialog was on screen) and answered in the transcript; a second message while it worked was queued and answered next; in bypass permissions mode the message was held, as above. The desktop app's sessions were not written to.
 
+### Queue controls (#12789)
+
+A message that comes while such a session works waits in Claude Code's own queue, which its transcript reports and the
+apps list. Editing that queue and Claude Code's send-now are keys on the session's screen (`queue.go`). So a session with
+no pane (the desktop app's, a background one) lists `queue_edit` and `queue_send_now` as false, and the apps offer
+neither. A call that comes anyway is refused with 409 `queue_edit_unsupported` or `send_now_unsupported` and nothing
+pressed; the messages go in order at its next step. A session in a tmux pane lists both as true and takes them as a
+Claude in an engine pane does.
+
 ### Owner input in a tmux pane (#5965)
 
 An outside Claude in tmux already has a terminal the node can read and type into (`outsidePane`, `hosttmux.go`). A normal
@@ -738,12 +747,33 @@ installs and updates it.
   a caller put in the params. Messages from the assistant, extensions, channels (the Lark and WeChat bots), relays
   between conversations and the auth relay have no mark and keep the inbox, as do non-owner Stop requests and the
   answers to a question the session asked (both at priority `now`), and slash commands (still refused, `peer_command`).
-- **When**: when the plugin advertises `busy_input` (0.2.0+), owner messages go through the plugin both at rest and
-  while a turn runs (`$.prompt.submit` writes `queue-operation: enqueue` immediately, without blocking the poll loop or
-  being held for computer approval in `bypassPermissions` / `auto` mode, and `session.send` reports `queued: true` while
-  busy); a session waiting on an `AskUserQuestion` still takes the peer inbox at priority `now` so the question ends
-  instead of blocking the queue. Older plugins without `busy_input` receive owner messages only at rest and fall back to
-  the inbox while busy (`relay_reason: "busy"`).
+- **When**: when the plugin advertises `busy_input` (0.2.0+), owner messages go through the plugin at rest, while a
+  turn runs, and while the session waits on a dialog other than a question (a permission prompt, a plan to approve):
+  `$.prompt.submit` writes `queue-operation: enqueue` immediately, without blocking the poll loop or being held for
+  computer approval in `bypassPermissions` / `auto` mode, and the prompt runs as the person's words when the turn ends
+  (`session.send` reports `queued: true`, and `waits_on_computer: true` behind a dialog). A session waiting on an
+  `AskUserQuestion` still takes the peer inbox at priority `now` so the question ends instead of blocking the queue.
+  Older plugins without `busy_input` receive owner messages only at rest; while the session works or waits on a dialog
+  the message falls back to the inbox with `relay_reason: "plugin_outdated"`, and the web app says to reopen the
+  session on the computer once (below). `relay_reason: "busy"` is left for a status the plugin does not deliver in.
+- **Measured** (2026-11-22, Windows 11, Claude Code 2.1.329, throwaway `claude -p --input-format stream-json` sessions
+  with a throwaway plugin from `--plugin-dir`): in `bypassPermissions` mode with a turn running a long command, two
+  `asUser` submits wrote their `queue-operation` enqueues within 2 ms, were not held, waited through every tool
+  boundary of that turn and ran together as one user turn once it ended; the submit promise settled only when that turn
+  started. With `--permission-prompt-tool stdio` and a permission request left unanswered (`status: "waiting"`,
+  `waitingFor: "permission prompt"`), an `asUser` submit was enqueued at once and ran when the turn ended. A
+  `claude plugin update` of an installed plugin answers "Restart to apply changes": a running session kept the old
+  plugin's code on its next turn, and a plugin's own `$.command.run({ command: "reload-plugins" })` is refused in an SDK
+  session such as the desktop app's ("/reload-plugins isn't available over a remote connection"). So a session keeps
+  the plugin version it started with until it is opened again.
+- **Why the inbox is not used for the owner's words where the plugin can take them**: the inbox's outcomes reach only a
+  sender with an inbox of its own (receipts go to its `from`), which the node is not. A message the inbox read can be
+  held (the transcript then has Claude Code's "Held peer message" notice, `peer_held`), or refused or dropped with no
+  trace in the transcript (Claude Code 2.1.330's ingress guard drops for a rate limit, a repeated body, a full queue or
+  a hop loop, and its receive gate refuses when cross-session messaging is switched off). One 2026-11-21 case: a desktop
+  session in bypass mode working through a 20-minute turn took twelve owner messages through the inbox in a row (each
+  `queue-operation` enqueue, absorbed at a tool boundary) and then wrote nothing at all for the next, with no hold
+  notice: `peer_unconfirmed`, and the message never arrived. Its plugin was 0.1.0, so it had no other way in.
 - **Owner Stop**: when the plugin advertises `interrupt` (0.2.0+), an owner-attested `session.interrupt` cancels the
   running main-loop turn via `$.turn.abort({ turnId })` (falling back to the peer inbox when no plugin turn is active or
   for non-owner interrupts), and `capabilities.interrupt` stays true while a turn runs and the plugin is reachable.
@@ -754,16 +784,23 @@ installs and updates it.
   plugin submits nothing later) and counts it in once the transcript shows the plugin's prompt or its queue entry, or
   the plugin says it submitted it (its submit resolves as the turn starts). No poll takes it within 3 s, the plugin says
   it did not submit it, or nothing shows within 10 s: the message goes through the inbox instead, as above.
+  For 3 minutes after the node starts, a session whose claude can have the plugin (it is installed in that claude's
+  config directory) and has not polled yet gets up to 10 s for its first poll before the message is relayed as
+  `no_plugin`: a node that restarted (an update) knows no plugin until each polls again, a few seconds later.
   `session.send` answers `delivered_as: "user_input"` or `"relayed"` with `relay_reason` (`no_plugin`, `busy`,
-  `plugin_unavailable`, `plugin_refused`, `plugin_unconfirmed`), only for messages that carried `owner_input` to such a
-  session. A relayed message meets the inbox's own outcomes too: one a bypass-mode session holds is `peer_held`, as
-  before. Pictures go as paths in `<attached_images>`, as through the inbox.
+  `plugin_outdated`, `plugin_unavailable`, `plugin_refused`, `plugin_unconfirmed`), only for messages that carried
+  `owner_input` to such a session; a relayed message that ends in an error (`peer_unconfirmed`, `peer_held`) carries
+  both fields in the error's data as well. A relayed message meets the inbox's own outcomes too: one a bypass-mode
+  session holds is `peer_held`, as before. Pictures go as paths in `<attached_images>`, as through the inbox.
 - **What the apps show**: a no-pane session's row says `capabilities.plugin_input: true` while its plugin polls. The message
   shows in the chat as the user's own line (the transcript's plain user line); one relayed shows from "Persona" as
   before. The web app says so when an owner's message to a session with the plugin was relayed (`lib-outbox.relayed_busy`,
   `lib-outbox.relayed_plugin`): the Agent may not take it as their approval. Nothing is said when it went in as their
-  input, nor for a session without the plugin (it never had another way). iOS and Android show the chat line as it is
-  and ignore the new fields for now.
+  input, nor for a session without the plugin (it never had another way). A session whose plugin is from before busy
+  delivery gets its own words (`lib-outbox.relayed_old_plugin` when the inbox took it,
+  `lib-outbox.peer_unconfirmed_old_plugin` when it did not): reopen the session on the computer once and its messages
+  go in as the person's input from then on. iOS and Android show the chat line as it is and ignore the new fields for
+  now.
 - **The plugin** submits text, owner turn interrupts and session settings: no command, no file but its own manifest,
   nothing written. It refuses a slash command, an empty or overlong text and a message past its deadline, tells the node
   why (`ack`), and keeps quiet (the debug log only) while no node answers, backing off up to a minute.

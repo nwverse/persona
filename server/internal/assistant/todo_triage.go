@@ -178,6 +178,11 @@ func triageStatus(t Todo, look triageLookup, now time.Time) string {
 		switch {
 		case found && triageUsageLimit(s, now):
 			limited = true
+		case found && triageInterrupted(s, now) && (proto.UnrecoverableTurnErrorCode(s.TurnError) != "" ||
+			s.TurnErrorKind == proto.TurnErrorUnrecoverable || s.TurnErrorCode == proto.TurnErrorCompactionSealed):
+			interrupted = true
+		case len(active) > 1 && st != proto.StateWorking && found && triageAgentWaits(s):
+			waiting = true
 		case found && triageInterrupted(s, now):
 			interrupted = true
 		case st == proto.StateUnread:

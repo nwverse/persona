@@ -740,7 +740,13 @@ class HubChatRepository(
             result.operations.forEach { operation ->
                 synchronized(entry.operations) { entry.operations[operation.id] }?.complete(operation.requests)
             }
-            dispatch(entry, result.requests)
+            dispatch(entry, result.requests.filterNot { action ->
+                // expandFoldAsync owns its range HTTP request. It receives this action through the operation's
+                // acknowledged waiter, so generic catch-up dispatch must not ignore it or issue a duplicate.
+                action is Action.FetchRange && result.operations.any { operation ->
+                    operation.requests.contains(action) && synchronized(entry.operations) { entry.operations[operation.id] } != null
+                }
+            })
             if (continueFill) dispatch(entry, acceptAsync(entry, Input.ContinueFill)?.requests.orEmpty())
             if (result.stateChanged && entry.persistPending.compareAndSet(false, true)) entry.scope.launch { persist(entry) }
         }

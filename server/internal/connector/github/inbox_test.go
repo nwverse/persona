@@ -208,7 +208,7 @@ func TestReviewRequestWithdrawnOrMerged(t *testing.T) {
 	f.notifications = "[" + note("1", "review_requested", "PullRequest", "https://api.github.com"+api12, t1) + "]"
 	c := f.server(t)
 	c.poll(context.Background())
-	if th := things(t, c)["example-org/example-repo#12"]; th.Done != connector.DoneRead {
+	if th := things(t, c)["example-org/example-repo#12"]; th.Done != connector.DoneRead || th.ThreadState != "open" {
 		t.Errorf("withdrawn: %+v", th)
 	}
 
@@ -224,7 +224,7 @@ func TestReviewRequestWithdrawnOrMerged(t *testing.T) {
 	f.notifications = "[" + note("1", "review_requested", "PullRequest", "https://api.github.com"+api12, fixtureAt(10*time.Hour)) + "]"
 	c.inbox.fullAt = time.Time{}
 	c.poll(context.Background())
-	if th := things(t, c)["example-org/example-repo#12"]; th.Done != connector.DoneRead {
+	if th := things(t, c)["example-org/example-repo#12"]; th.Done != connector.DoneRead || th.ThreadState != "merged" {
 		t.Errorf("merged: %+v", th)
 	}
 }
@@ -349,4 +349,27 @@ func messageLastTime(t *testing.T, last string) string {
 		t.Fatalf("invalid message identity: %q", last)
 	}
 	return head.At.UTC().Format(time.RFC3339)
+}
+
+func TestInboxNotificationIncludesInlineReviewFeedback(t *testing.T) {
+	f := &fakeNotifications{
+		prs: map[string]string{
+			api12: strings.Replace(openPR(""), "{", `{"review_comments":1,`, 1),
+			"/repos/example-org/example-repo/issues/12": `{"comments":0}`,
+		},
+		comments: map[string]string{
+			api12 + "/reviews":  `[{"id":8,"user":{"login":"example-reviewer[bot]","type":"Bot"},"state":"COMMENTED","body":"","submitted_at":"` + fixtureAt(9*time.Hour) + `"}]`,
+			api12 + "/comments": `[{"id":9,"user":{"login":"example-reviewer[bot]","type":"Bot"},"body":"Cover the empty result before returning.","created_at":"` + fixtureAt(9*time.Hour) + `"}]`,
+		},
+		notifications: "[" + note("1", "author", "PullRequest", "https://api.github.com"+api12, t2) + "]",
+	}
+	c := f.server(t)
+	if _, moved, err := c.poll(context.Background()); err != nil || !moved {
+		t.Fatalf("poll moved=%v err=%v", moved, err)
+	}
+	item := things(t, c)["example-org/example-repo#12"]
+	if !strings.Contains(item.Preview, "Cover the empty result") || !strings.Contains(item.Context, "Cover the empty result") ||
+		!strings.Contains(item.Sender, "example-reviewer") || item.ThreadState != "open" {
+		t.Fatalf("inline-only review was not surfaced: %+v", item)
+	}
 }
