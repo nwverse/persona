@@ -4,15 +4,16 @@ package resourcequeue
 import (
 	"encoding/json"
 	"errors"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
-var word = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
-var sha = regexp.MustCompile(`^[a-f0-9]{40}$`)
+var word = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
+var sha = lazyre.New(`^[a-f0-9]{40}$`)
 
 type Mirror struct {
 	Machine  string `json:"machine"`

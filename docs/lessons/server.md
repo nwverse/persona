@@ -3171,3 +3171,5 @@ is not evidence of isolation.
 ## Shared runner mirrors
 
 - Versioned queue output can retain incomplete entries during a rolling upgrade. Preserve empty ticket, tag and commit fields as unknown; do not reject the whole snapshot or deduplicate an empty commit. Track an external lease by its stable run name when present: a legacy waiting ticket may be absent once that same run enters a slot. Keep the original ticket for display. A v1 result with null exit and empty run/finish time means no known result, not exit zero. Cover both transitions with scrubbed fixtures.
+
+- Register relayed resource routes in the domain’s `assistantwire` file instead of expanding the frozen central literal. New CLI tools that bind to a verified process need both forged-caller rejection and a positive process-session test; pane-only fixtures cannot attest process identity. Keep package-level validation regexes lazy so adding a CLI does not add startup work to every hook.
