@@ -539,6 +539,14 @@ nonisolated enum Theme {
         /// How much of a long quote in a reply shows while it is folded (about four lines of body text, #2984).
         static let quoteFold: CGFloat = 104
         static let barWide: CGFloat = 4
+        /// The usage cards' reset timeline (#13173): a row of the chart, the account-name column, the 5h and 7d bars, the
+        /// hollow dot at a bar's end, and the room a window's bar leaves above itself for its protection flag.
+        static let timelineRow: CGFloat = 30
+        static let timelineName: CGFloat = 64
+        static let timelineCap: CGFloat = 6
+        static let timelineCapWide: CGFloat = 9
+        static let timelineEnd: CGFloat = 11
+        static let protectFlag: CGFloat = 14
         /// A share bar's thickness (the assistant's stacked-bar card).
         static let meter: CGFloat = 12
         /// An Agent chat's header folded into its slim bar (Android `Tokens.Size.slimBar`).
