@@ -10350,6 +10350,29 @@ if os.environ.get("MOCK_SCREEN_DIALOG"):
                         {"key": "2", "label": "Yes, and don't ask again for git push commands in /Users/me/code/weather", "keys": ["2"]},
                         {"key": "3", "label": "No, and tell Claude what to do differently (esc)", "keys": ["3"]}]}})
 
+# MOCK_DOCK=1 (#12831, with MOCK_TASKS): two more of the main conversation's tasks wait for the owner, so its To Decide
+# pager has several kinds: the widget fix asks to run a command (a tool approval) and the blog migration asks a question
+# read off its terminal (a screen card with no tool use id). /mock/reset puts both back unanswered, and the network
+# tests' question.
+DOCK_INTERACTIONS = []
+if os.environ.get("MOCK_DOCK") == "1":
+    DOCK_INTERACTIONS = [
+        {"id": "ix_dock_widget_bash", "machine_id": "macbook", "session_id": WIDGET, "session_title": "修小组件横屏崩溃",
+         "cwd": "/Users/me/code/weather", "kind": "permission", "created_at": ago(minutes=20), "expires_at": later(minutes=40),
+         "tool_name": "Bash", "tool_use_id": "toolu_dock_bash",
+         "tool_input": {"command": "xcodebuild test -scheme WeatherWidget -destination 'platform=iOS Simulator,name=iPhone 17'",
+                        "description": "跑小组件的测试"}},
+        {"id": "scr_studio_blog_6a1d0e9c", "machine_id": "studio", "session_id": BLOG, "session_title": "博客迁移到 Astro",
+         "cwd": "/Users/me/code/blog", "kind": "screen", "created_at": ago(minutes=10), "expires_at": later(hours=24),
+         "screen": " 旧文章的固定链接怎么处理？\n ❯ 1. 保留旧链接\n   2. 换成新格式并加跳转\n",
+         "dialog": {"question": "旧文章的固定链接怎么处理？", "detail": "", "rev": "6a1d0e9c", "options": [
+             {"key": "1", "label": "保留旧链接", "keys": ["1"]},
+             {"key": "2", "label": "换成新格式并加跳转", "keys": ["2"]}]}},
+    ]
+    INTERACTIONS.extend(copy.deepcopy(DOCK_INTERACTIONS))
+    # The network tests' question too: a test answers it in the pager, the next starts with it again.
+    DOCK_INTERACTIONS += [copy.deepcopy(x) for x in INTERACTIONS if x["id"] == "ix_tests"]
+
 # MOCK_SCREEN_DANGER=before|after: Claude Code 2.1.322's safety check on a command (bypass mode, #5265 / #5266) with
 # its countdown, on the review agent. "before": as a hub before #5265 read it at a narrow width (the command missing,
 # the wrapped countdown in detail); "after": as a hub reads it now (command, description, the warning and what it is
@@ -26592,7 +26615,7 @@ class H(BaseHTTPRequestHandler):
             BUMPED.pop("blocked", None)
             TODOS[:] = copy.deepcopy(TODOS_INIT); DECISION_DISMISSALS.clear()
             TODO_DECISIONS[:] = copy.deepcopy(TODO_DECISIONS_INIT)
-            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS + ASK_LONG_INTERACTIONS + QUESTION_CANCEL_INTERACTIONS  # the cards back, unanswered
+            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS + ASK_LONG_INTERACTIONS + QUESTION_CANCEL_INTERACTIONS + DOCK_INTERACTIONS  # the cards back, unanswered
             ids = {x["id"] for x in again}
             INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in ids] + copy.deepcopy(again)
             RESOLVED[:] = [r for r in RESOLVED if r["id"] not in ids]
