@@ -2868,12 +2868,12 @@ function ResponsibleSection({ todo, machines }: { todo: Todo; machines: Machine[
 
   return (
     <div className="mt-6" data-testid="todo-responsible-section">
-      <div className="mb-2 text-[11.5px] font-medium tracking-[0.04em] text-ink-3 uppercase">
+      <div className="mb-2 text-xs font-medium tracking-[0.04em] text-ink-3 uppercase">
         {t("todos.responsible_section")}
       </div>
       <div className="flex items-center justify-between gap-3 rounded-control border border-line bg-canvas p-3">
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2 text-[13px] font-semibold text-ink">
+          <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-ink">
             <span className="shrink-0 text-ink-3">
               <Icon name={responsible.kind === "person" ? "person" : "terminal"} size={14} />
             </span>
@@ -2882,13 +2882,13 @@ function ResponsibleSection({ todo, machines }: { todo: Todo; machines: Machine[
             </span>
             <span
               data-testid="todo-responsible-kind"
-              className="shrink-0 whitespace-nowrap rounded bg-hover px-1.5 py-0.5 text-[10.5px] font-normal text-ink-3"
+              className="shrink-0 whitespace-nowrap rounded bg-hover px-1.5 py-0.5 text-xs font-normal text-ink-3"
             >
               {t(`todos.responsible_kind_${responsible.kind}`)}
             </span>
           </div>
           {hint && (
-            <div data-testid="todo-responsible-hint" className="mt-0.5 truncate pl-5.5 text-[12px] text-ink-3">
+            <div data-testid="todo-responsible-hint" className="mt-0.5 truncate pl-5.5 text-xs text-ink-3">
               {hint}
             </div>
           )}
@@ -2898,7 +2898,7 @@ function ResponsibleSection({ todo, machines }: { todo: Todo; machines: Machine[
           busy={busy}
           disabled={busy}
           title={t("todos.responsible_clear_label", { name: responsible.name })}
-          className="shrink-0 whitespace-nowrap px-2 py-1 text-[12px] text-ink-3 hover:bg-red-tint/50 hover:text-red"
+          className="shrink-0 whitespace-nowrap px-2 py-1 text-xs text-ink-3 hover:bg-red-tint/50 hover:text-red"
           onClick={() => void clear()}
         >
           {t("todos.responsible_clear")}
