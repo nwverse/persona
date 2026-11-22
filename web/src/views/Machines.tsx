@@ -68,10 +68,10 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const known: AgentsKnown = full.loaded ? "yes" : full.error ? "failed" : "loading";
   const [view, setView] = useState<MachinesView>(() => {
     const saved = storedValue(VIEW_KEY);
-    return saved === "capabilities" || saved === "services" || saved === "files" || saved === "network" || saved === "storage" ? saved : "cards";
+    return saved === "capabilities" || saved === "files" || saved === "services" || saved === "storage" ? saved : "cards";
   });
   const chooseView = (v: MachinesView) => {
-    if (v === "cards" || v === "capabilities" || v === "services" || v === "files" || v === "network" || v === "storage") storeValue(VIEW_KEY, v);
+    if (v === "cards" || v === "capabilities" || v === "services" || v === "files" || v === "storage") storeValue(VIEW_KEY, v);
     setView(v);
   };
   // The alert sheet (#8037): one for the page, outside every card, on one computer's alert.

@@ -56,6 +56,16 @@ test('AGY streams one assistant message at a time across tool calls', { timeout:
   await until('live text cleared at completion', () => node.last('session.delta')?.text === '', 15_000)
 })
 
+test('AGY normalizes closed local file:// links while streaming without rewriting incomplete URLs', { timeout: 20_000 }, async (t) => {
+  const { node, update, chunk, promptCount } = await fixture(t)
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Show the file.' })
+  await promptCount(1)
+  await chunk('See [notes.md](file:///work/repo/no')
+  await chunk('tes.md#L5) and ![pic](file:///work/repo/pic.png).', 'See [notes.md](/work/repo/notes.md#L5) and ![pic](/work/repo/pic.png).')
+  update({ end: true })
+  await until('live text cleared at completion', () => node.last('session.delta')?.text === '', 15_000)
+})
+
 test('a queued prompt does not receive the executing prompt text and starts with an empty stream', { timeout: 20_000 }, async (t) => {
   const { node, update, chunk, promptCount } = await fixture(t)
   await node.peer.call('session.send', { session_id: SESSION, text: 'First request.' })
