@@ -22,6 +22,8 @@
   "copy_raw": "原文をコピー",
   "retry": "再試行",
   "retry_title": "現在のタスクを続行",
+  "compact_and_resend": "圧縮して再送信",
+  "compacting_to_resend": "圧縮中…",
   "copy_field": "{label}をコピー",
   "fix_it": "直す",
   "background_done": "バックグラウンドからの報告",

@@ -18,7 +18,7 @@ vi.hoisted(() => {
 });
 
 const IDLE: Session = { machine_id: "hub", session_id: "c1", title: "Conversation", cwd: "/code", status: "idle" };
-const captured = vi.hoisted(() => ({ session: undefined as Session | undefined }));
+const captured = vi.hoisted(() => ({ session: undefined as Session | undefined, features: [] as string[] }));
 
 vi.mock("./Composer", async (importOriginal) => ({
   ...await importOriginal<typeof import("./Composer")>(),
@@ -35,7 +35,7 @@ vi.mock("../../lib/store", async (importOriginal) => {
     useStore: <T,>(select: (s: ReturnType<typeof store.getState>) => T) => {
       const [, changed] = useReducer((n: number) => n + 1, 0);
       useEffect(() => store.subscribe(changed), []);
-      return select({ ...store.getState(), sessions: { hub: captured.session ? [captured.session] : [] } });
+      return select({ ...store.getState(), features: captured.features, sessions: { hub: captured.session ? [captured.session] : [] } });
     },
   };
 });
@@ -71,7 +71,7 @@ vi.mock("../../ui/atoms", async (importOriginal) => ({
 
 const { ChatView } = await import("./ChatView");
 const { toast } = await import("../../ui/atoms");
-const { getState, setOutbox } = await import("../../lib/store");
+const { getState, setOutbox, upsertSession } = await import("../../lib/store");
 const { resetOutboxClaimsForTests, resetRestoredForTests } = await import("../../lib/outbox");
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -82,6 +82,7 @@ const failedTurn = [msg("u1", 1, "user", "接着把命名改完"), msg("e1", 2, 
 
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } });
 let bodies: { client_msg_id: string; text: string }[];
+let compactCalls: string[];
 let reply: () => Response;
 let host: HTMLDivElement;
 let root: Root;
@@ -100,6 +101,7 @@ beforeEach(() => {
   localStorage.clear();
   resetRestoredForTests();
   resetOutboxClaimsForTests();
+  captured.features = [];
   for (const key of Object.keys(getState().outbox)) setOutbox(key, []);
   captured.session = IDLE;
   media.fine = false;
@@ -107,8 +109,14 @@ beforeEach(() => {
   vi.mocked(toast).mockClear();
   transcript.items = failedTurn;
   bodies = [];
+  compactCalls = [];
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-    if (!String(input).endsWith("/messages") || !init?.body) return Promise.resolve(json({}));
+    const url = String(input);
+    if (url.endsWith("/compact") && init?.method === "POST") {
+      compactCalls.push(url);
+      return Promise.resolve(json({ ok: true }));
+    }
+    if (!url.endsWith("/messages") || !init?.body) return Promise.resolve(json({}));
     bodies.push(JSON.parse(String(init.body)));
     return Promise.resolve(reply());
   }));
@@ -252,5 +260,93 @@ describe("the error the Persona conversation stopped on", () => {
     expect(banner()).toBeNull();
     expect(inChat()).not.toBeNull();
     expect(button(inChat(), "重试")).toBeUndefined();
+  });
+});
+
+describe("image-limit Compact and send again (#13045)", () => {
+  const TOO_LARGE = "Request too large (max 32MB). Accumulated images and attachments in the conversation pushed the request over the limit.";
+
+  it("runs assistant_compact and resends the failed message once compaction succeeds", async () => {
+    captured.features = ["assistant_compact"];
+    captured.session = { ...IDLE, assistant: true, turn_error_code: "images_too_large" };
+    transcript.items = [msg("u1", 1, "user", "帮我对比这几张截图"), msg("e1", 2, "assistant", TOO_LARGE)];
+    await draw(true);
+    expect(banner()!.textContent).toContain("这个对话里的图片太多或太大，超出了模型限制。");
+    const btn = banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]');
+    expect(btn?.textContent).toBe("压缩并重发");
+    expect(button(banner(), "重试")).toBeUndefined();
+
+    act(() => btn!.click());
+    await flush();
+    expect(compactCalls).toHaveLength(1);
+    expect(compactCalls[0]).toContain("/assistant/conversations/c1/compact");
+    expect(bodies).toEqual([]);
+
+    // Compaction runs and finishes -> resend fires automatically.
+    captured.session = { ...captured.session, compaction: { state: "running", started_at: "2026-11-22T12:00:00Z" } };
+    act(() => upsertSession(captured.session!));
+    await flush();
+    expect(bodies).toEqual([]);
+
+    captured.session = { ...captured.session, compaction: { state: "done", started_at: "2026-11-22T12:00:00Z", finished_at: "2026-11-22T12:00:05Z" } };
+    act(() => upsertSession(captured.session!));
+    await flush();
+    expect(bodies.map((b) => b.text)).toEqual(["帮我对比这几张截图"]);
+  });
+
+  it("does not resend when assistant compaction fails", async () => {
+    captured.features = ["assistant_compact"];
+    captured.session = { ...IDLE, assistant: true, turn_error_code: "images_too_large" };
+    transcript.items = [msg("u1", 1, "user", "帮我对比这几张截图"), msg("e1", 2, "assistant", TOO_LARGE)];
+    await draw(true);
+    act(() => banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]')!.click());
+    await flush();
+    captured.session = { ...captured.session, compaction: { state: "failed", started_at: "2026-11-22T12:00:00Z", finished_at: "2026-11-22T12:00:03Z", error: "too short" } };
+    act(() => upsertSession(captured.session!));
+    await flush();
+    expect(bodies).toEqual([]);
+  });
+
+  it("sends /compact and resends after boundary + idle on terminal Claude Code", async () => {
+    captured.session = { ...IDLE, agent: "claude", turn_error_code: "images_too_large" };
+    transcript.items = [msg("u1", 1, "user", "看看这些界面差异"), msg("e1", 2, "assistant", TOO_LARGE)];
+    await draw(false);
+    const btn = banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]');
+    expect(btn?.textContent).toBe("压缩并重发");
+    expect(button(banner(), "重试")).toBeUndefined();
+
+    act(() => btn!.click());
+    await flush();
+    expect(bodies.map((b) => b.text)).toEqual(["/compact"]);
+
+    // Terminal works, writes compact_boundary, then returns idle -> resends original message.
+    captured.session = { ...captured.session, status: "working", state: "working" };
+    act(() => upsertSession(captured.session!));
+    await draw(false);
+    transcript.items = [
+      ...transcript.items,
+      { id: "c1", seq: 3, role: "assistant", kind: "notice", compact: { trigger: "manual" }, text: "上下文已压缩", ts: "2026-11-22T12:00:05Z" } as Item,
+    ];
+    captured.session = { ...captured.session, status: "idle", state: "idle", turn_error_code: undefined };
+    act(() => upsertSession(captured.session!));
+    await draw(false);
+    expect(bodies.map((b) => b.text)).toEqual(["/compact", "看看这些界面差异"]);
+  });
+
+  it("hides Compact and send again when compaction is not supported", async () => {
+    // Assistant without assistant_compact hub feature.
+    captured.features = [];
+    captured.session = { ...IDLE, assistant: true, turn_error_code: "images_too_large" };
+    transcript.items = [msg("u1", 1, "user", "看看图"), msg("e1", 2, "assistant", TOO_LARGE)];
+    await draw(true);
+    expect(banner()!.textContent).toContain("这个对话里的图片太多或太大，超出了模型限制。");
+    expect(banner()!.querySelector('[data-testid="compact-and-resend"]')).toBeNull();
+
+    // Non-Claude agent session (Codex).
+    captured.session = { ...IDLE, agent: "codex", turn_error_code: "images_too_large" };
+    await draw(false);
+    expect(banner()!.textContent).toContain("这个对话里的图片太多或太大，超出了模型限制。");
+    expect(banner()!.querySelector('[data-testid="compact-and-resend"]')).toBeNull();
+    expect(button(banner(), "重试")).toBeUndefined();
   });
 });

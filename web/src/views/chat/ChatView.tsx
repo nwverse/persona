@@ -60,6 +60,9 @@ import { segmentChanges, shiftAbove } from "./offscreen";
 import { glide } from "./glide";
 import { AGENT_COMMANDS, Composer, type Outgoing } from "./Composer";
 import { agentCommands } from "../../lib/composer-commands";
+import { IMAGE_LIMIT_CODE } from "../../lib/api-errors";
+import { COMPACT_FEATURE, compactBody, compactPath } from "../../lib/compaction";
+import { compactResendSupport, countCompactions, failedMessageToResend, isImageLimitError, waitForAssistantCompaction, waitForTerminalCompaction } from "../../lib/compact-resend";
 import { CLEAR_MAIN_FEATURE, clearMainContext, isClearCommand, mainCommands } from "../../lib/main-clear";
 import { PendingCards, TurnCards } from "./Interactions";
 import { splitTurnAsks } from "../../lib/turn-asks";
@@ -1321,7 +1324,22 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     }
   }
 
+  const compactResendCtl = useRef<AbortController | null>(null);
+  const [compactingToResend, setCompactingToResend] = useState(false);
+  const itemsListeners = useRef(new Set<() => void>());
+  useEffect(() => {
+    itemsListeners.current.forEach((fn) => fn());
+  }, [tr.items]);
+  const cancelCompactResend = useCallback(() => {
+    if (!compactResendCtl.current) return;
+    compactResendCtl.current.abort();
+    compactResendCtl.current = null;
+    setCompactingToResend(false);
+  }, []);
+  useEffect(() => () => cancelCompactResend(), [mid, sid, cancelCompactResend]);
+
   const onSend = async (out: Outgoing): Promise<boolean> => {
+    cancelCompactResend();
     // /clear in the main conversation clears its context in place, it is not words for Persona (#5095); an edit of the
     // last message stays an edit (its rewind already ran)
     if (clears && !out.edit && isClearCommand(out.text, out.images.length)) return clearMainContext(sid);
@@ -1938,6 +1956,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const canRetry =
     lastLine?.kind === "apiError" && state !== "working" && !outgoing && sessionCan(session, "send") &&
     session?.turn_error_code !== FALLBACK_UNAVAILABLE && session?.turn_error_code !== "compaction_sealed" &&
+    session?.turn_error_code !== IMAGE_LIMIT_CODE &&
     session?.turn_error_kind !== "unrecoverable" && !gate.blocked;
   // An exhausted recovery chain (#7824): the last error card names the cause and reset time, and Retry stays offered
   // even for a safeguards-class error the parser calls non-transient. The marker is session-level, so only the last
@@ -2183,6 +2202,67 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const agentCompactBlocked = Boolean(composerDisabled || composerBlocked || hasTaskRoute);
   // Assistant compaction calls the hub HTTP endpoint directly, so composer send disables (e.g. offlineLine) do not gate it.
   const compactBlocked = isAssistant ? Boolean(gate.blocked) : agentCompactBlocked;
+  const hubSupportsAssistantCompact = useStore((s) => hubHas(s.features, COMPACT_FEATURE));
+  const compactResend = compactResendSupport(session, {
+    assistant,
+    hubSupportsAssistantCompact,
+    blocked: Boolean(gate.blocked),
+    composerDisabled,
+    routed: hasTaskRoute,
+    working,
+    outgoing: outgoing > 0,
+    stopped: Boolean(stoppedLine),
+  });
+  const isBannerImageLimit = Boolean(bannerError && isImageLimitError(bannerError.info.code, session?.turn_error_code));
+  const compactAndResend = useCallback(async () => {
+    if (!bannerError || !session || !compactResend.supported || !compactResend.mode || compactResendCtl.current) return;
+    const resendText = failedMessageToResend(linesNow.current, bannerError.id, t("chat-chatview.continue_text"));
+    const key = tailKey;
+    const ctl = new AbortController();
+    compactResendCtl.current = ctl;
+    setCompactingToResend(true);
+    try {
+      if (compactResend.mode === "assistant") {
+        const before = getSession(mid, sid)?.compaction;
+        try {
+          await api(compactPath(sid), { method: "POST", json: compactBody(mid) });
+          window.dispatchEvent(new CustomEvent("persona:compact-requested", { detail: { mid, sid } }));
+        } catch (e) {
+          toast(t("assistant-assistantchat.compact_start_failed", { error: errorText(e) }), "error");
+          return;
+        }
+        const outcome = await waitForAssistantCompaction(mid, sid, before, ctl.signal);
+        if (ctl.signal.aborted || outcome !== "done") return;
+      } else {
+        const curItems = items.current;
+        const snapshot = { compactions: countCompactions(curItems), lastItemId: curItems.at(-1)?.id };
+        const sent = await deliver({ text: "/compact", images: [] }, uuid());
+        if (!sent || ctl.signal.aborted) return;
+        const outcome = await waitForTerminalCompaction(
+          mid,
+          sid,
+          snapshot,
+          () => items.current,
+          (fn) => {
+            itemsListeners.current.add(fn);
+            return () => itemsListeners.current.delete(fn);
+          },
+          ctl.signal,
+        );
+        if (ctl.signal.aborted || outcome !== "done") return;
+      }
+      if (key) setErrorRetried(key);
+      backToComposer();
+      const went = await deliver({ text: resendText, images: [] }, uuid());
+      if (!went && key) setErrorRetried((k) => (k === key ? undefined : k));
+    } finally {
+      if (compactResendCtl.current === ctl) {
+        compactResendCtl.current = null;
+        setCompactingToResend(false);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- backToComposer reads stable refs and fine media state
+  }, [bannerError, session, compactResend.supported, compactResend.mode, tailKey, mid, sid, deliver]);
 
   const page = (
     <div className="@container/session flex h-full min-w-0 flex-col">
@@ -2296,6 +2376,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                         expandFold={tr.expandFold}
                         launcher={session?.launcher}
                         fix={d.line.id === lastLine?.id ? turnFix : undefined}
+                        turnErrorCode={d.line.id === lastLine?.id ? session?.turn_error_code : undefined}
                         limit={d.line.kind === "apiError" && d.line.id === limitOn ? limitLine : undefined}
                         exhausted={d.line.kind === "apiError" && d.line.id === lastLine?.id ? exhausted : undefined}
                         assistant={assistant}
@@ -2320,6 +2401,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                   sid={sid}
                   streaming={wordsFor(row.line)}
                   expandFold={tr.expandFold}
+                  turnErrorCode={row.line.id === lastLine?.id ? session?.turn_error_code : undefined}
                   limit={row.line.kind === "apiError" && row.line.id === limitOn ? limitLine : undefined}
                   exhausted={row.line.kind === "apiError" && row.line.id === lastLine?.id ? exhausted : undefined}
                   assistant={assistant}
@@ -2446,8 +2528,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
             launcher={session?.launcher}
             exhausted={exhausted}
             fix={turnFix}
+            turnErrorCode={session?.turn_error_code}
             onRetry={canRetry ? () => void retryError() : undefined}
             onEditLastMessage={onEditLastMessage}
+            onCompactAndResend={isBannerImageLimit && compactResend.supported ? () => void compactAndResend() : undefined}
+            compactingToResend={compactingToResend || Boolean(isAssistant && session?.compaction?.state === "running")}
             onDismiss={dismissBanner}
           />
         )}
