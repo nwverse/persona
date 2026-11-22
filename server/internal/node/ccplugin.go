@@ -5,12 +5,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -18,6 +20,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // Persona's Claude Code plugin (integrations/claude-code-plugin; docs/integrations/claude-integration.md "Owner input
@@ -71,6 +74,13 @@ var (
 	// ccPluginPickupWait is how long a message waits for the session's plugin to take it: an idle plugin's next poll
 	// comes within moments of the last one ending.
 	ccPluginPickupWait = 3 * time.Second
+	// ccPluginRejoinWindow and ccPluginRejoinWait: for this long after the node started, a session whose claude can
+	// have the plugin (it is installed in that claude's config directory) but has not polled this node yet gets up to
+	// ccPluginRejoinWait for its first poll. A node that just restarted (an update, a deploy) knows no plugin until
+	// each polls again, which a plugin's backoff after the node went away puts a few seconds off; a message sent then
+	// went through the inbox (no_plugin), where a busy session can drop it without a trace.
+	ccPluginRejoinWindow = 3 * time.Minute
+	ccPluginRejoinWait   = 10 * time.Second
 	// ccPluginSubmitWait is the deadline the plugin gets: it submits nothing later than this after it was handed over.
 	ccPluginSubmitWait = 5 * time.Second
 	// ccPluginConfirmWait is how long the node looks for the prompt in the transcript, past ccPluginSubmitWait: only a
@@ -84,8 +94,13 @@ const (
 	deliveredUserInput = "user_input" // the plugin submitted it as the person's words
 	deliveredRelayed   = "relayed"    // through the session's peer inbox, as another session's message
 
-	relayNoPlugin    = "no_plugin"          // no plugin polls from this session's claude
-	relayBusy        = "busy"               // the session works or waits on a dialog: the inbox queues the message there
+	relayNoPlugin = "no_plugin" // no plugin polls from this session's claude
+	relayBusy     = "busy"      // the session is in a state the plugin does not deliver in (its status file says neither)
+	// relayOutdated: the session works or waits on a dialog, and the plugin it loaded is one from before busy_input
+	// (0.1.0): it would hold its poll until the turn ends. Claude Code keeps the plugin a session loaded until that
+	// session starts again (an update says "Restart to apply changes", and a desktop session cannot run
+	// /reload-plugins), so the app says what to do on the computer.
+	relayOutdated    = "plugin_outdated"
 	relayUnavailable = "plugin_unavailable" // the plugin did not take it in time
 	relayRefused     = "plugin_refused"     // the plugin took it and did not submit it
 	relayUnconfirmed = "plugin_unconfirmed" // taken, and nothing showed it went in before its deadline
@@ -459,6 +474,67 @@ func (n *Node) desktopPluginReady() bool {
 	return st != nil && st.Version != "" && st.Version == st.Bundled
 }
 
+// ccPluginInstalledFor: Persona's plugin is installed and on in Claude Code config directory dir, so a claude started
+// there since has it loaded (a variable: tests stand in for the installer's status).
+var ccPluginInstalledFor = func(n *Node, dir string) bool {
+	st := n.claudePluginStatus()
+	if st == nil {
+		return false
+	}
+	for _, d := range st.ConfigDirs {
+		if (d.State == proto.ClaudePluginInstalled || d.State == proto.ClaudePluginOutdated) && sameDir(d.Path, dir) {
+			return true
+		}
+	}
+	return false
+}
+
+// ccPluginRejoined: no plugin of session id's claude c has polled this node yet, the node started a moment ago, and c
+// can have one (ccPluginRejoinWindow); true once its first poll came within ccPluginRejoinWait.
+func (n *Node) ccPluginRejoined(ctx context.Context, c claudeProc, id string) bool {
+	if time.Since(n.bootAt) > ccPluginRejoinWindow || c.dir == "" || !ccPluginInstalledFor(n, filepath.Dir(c.dir)) {
+		return false
+	}
+	deadline := time.Now().Add(ccPluginRejoinWait)
+	for n.ccPlugins.session(id, c.pid) == nil {
+		if time.Now().After(deadline) {
+			log.Printf("send %s: claude %d can have Persona's plugin and none polled within %s of this node starting", id, c.pid, ccPluginRejoinWait)
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return true
+}
+
+// withOwnerRoute adds how the owner's message went (delivered_as, relay_reason) to a send's coded error, as a send that
+// went says them in its answer: a message the inbox read and the session did not take still says why it went through
+// the inbox (an outdated plugin, none), so the app can say what would have delivered it. Other errors are as they are.
+func withOwnerRoute(err error, owner *ownerDelivery) error {
+	var re *rpc.Error
+	if owner == nil || owner.as == "" || !errors.As(err, &re) || re.Code == "" {
+		return err
+	}
+	data := map[string]any{}
+	if len(re.Data) > 0 && json.Unmarshal(re.Data, &data) != nil {
+		return err
+	}
+	data["delivered_as"] = owner.as
+	if owner.reason != "" {
+		data["relay_reason"] = owner.reason
+	}
+	b, merr := json.Marshal(data)
+	if merr != nil {
+		return err
+	}
+	out := *re
+	out.Data = b
+	return &out
+}
+
 // ccPluginStatusNow is claude-plugin.status's answer.
 func (n *Node) ccPluginStatusNow() map[string]any {
 	live := map[string]int{}
@@ -650,15 +726,26 @@ func ownerDeliveryOf(ctx context.Context) *ownerDelivery {
 // ccPluginSend hands text, the owner's own message, to the plugin in claude c, which has session id open. true when the
 // session took it as the person's input: the transcript shows the prompt (or its queue entry), or the plugin said it
 // submitted it. false with why it did not, nothing submitted (the caller sends it through the inbox).
+//
+// At rest the prompt starts a turn. While a turn runs, and while the session waits on a dialog (a permission prompt, a
+// plan to approve: sendOutside sends the answer to a question at priority now, never here), Claude Code writes the
+// prompt's queue entry at once and runs it as the person's words when the turn ends; a session in bypassPermissions
+// mode does not hold it, as it can hold an inbox message (measured with Claude Code 2.1.329, 2026-11-22: docs/
+// integrations/claude-integration.md "Owner input through the Persona plugin"). Only a plugin that says busy_input
+// gets it then: an older one waits on its submit until that turn, polling nothing meanwhile.
 func (n *Node) ccPluginSend(ctx context.Context, c claudeProc, id, text string) (bool, string) {
-	if n.ccPlugins.session(id, c.pid) == nil {
+	if n.ccPlugins.session(id, c.pid) == nil && !n.ccPluginRejoined(ctx, c, id) {
 		return false, relayNoPlugin
 	}
+	idle := claudeBgStatus[c.Status] == proto.StatusIdle
+	working := c.Status == "busy" || c.Status == "waiting"
 	switch {
-	case claudeBgStatus[c.Status] == proto.StatusIdle:
-	case c.Status == "busy" && n.ccPlugins.busyInputCapable(id, c.pid):
+	case idle:
+	case working && n.ccPlugins.busyInputCapable(id, c.pid):
+	case working:
+		return false, relayOutdated
 	default:
-		return false, relayBusy // behind a dialog, or an older plugin that awaits turn completion on submit
+		return false, relayBusy
 	}
 	path := n.transcriptPath(id)
 	var offset int64
@@ -681,8 +768,8 @@ func (n *Node) ccPluginSend(ctx context.Context, c claudeProc, id, text string) 
 		if path != "" && ccPluginSeen(path, offset, needle) {
 			return true, ""
 		}
-		if submitted && c.Status == "busy" {
-			return true, "" // queued via $.prompt.submit while a turn runs; ack confirmed acceptance
+		if submitted && !idle {
+			return true, "" // queued via $.prompt.submit behind the running turn or dialog; the ack confirmed it
 		}
 		if time.Now().After(deadline) {
 			if submitted {

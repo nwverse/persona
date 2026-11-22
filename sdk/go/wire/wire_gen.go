@@ -1876,6 +1876,13 @@ type Component struct {
 	// Ids of nodes whose children start folded. Once the person folds or unfolds one, the app keeps their choice for
 	// this key.
 	Folded []string `json:"folded,omitempty"`
+	// A picture of the model for an older app (an image in its place) and for share as image. Without it an older app
+	// gets a row per pin.
+	Poster *ImageSource `json:"poster,omitempty"`
+	Camera *SceneCamera `json:"camera,omitempty"`
+	Shapes []SceneShape `json:"shapes,omitempty"`
+	Labels []SceneLabel `json:"labels,omitempty"`
+	Pins   []ScenePin   `json:"pins,omitempty"`
 }
 
 // Component types.
@@ -1907,13 +1914,14 @@ const (
 	ComponentGrid          = "grid"
 	ComponentCarousel      = "carousel"
 	ComponentGraph         = "graph"
+	ComponentScene         = "scene"
 )
 
 // ComponentTypes are the types of Component, in order.
-var ComponentTypes = []string{"text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel", "graph"}
+var ComponentTypes = []string{"text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel", "graph", "scene"}
 
 // ComponentSince is the UI version that brought each type.
-var ComponentSince = map[string]int{"text": 1, "metric": 1, "progress": 1, "row": 1, "button": 1, "link": 1, "field": 1, "divider": 1, "chart": 2, "stat_grid": 2, "segmented": 2, "markdown": 3, "table": 3, "empty": 3, "loading": 3, "html": 4, "header": 4, "breadcrumb": 4, "file_tree": 4, "code": 4, "diff": 4, "comment_thread": 4, "composer": 4, "image": 6, "grid": 6, "carousel": 6, "graph": 10}
+var ComponentSince = map[string]int{"text": 1, "metric": 1, "progress": 1, "row": 1, "button": 1, "link": 1, "field": 1, "divider": 1, "chart": 2, "stat_grid": 2, "segmented": 2, "markdown": 3, "table": 3, "empty": 3, "loading": 3, "html": 4, "header": 4, "breadcrumb": 4, "file_tree": 4, "code": 4, "diff": 4, "comment_thread": 4, "composer": 4, "image": 6, "grid": 6, "carousel": 6, "graph": 10, "scene": 11}
 
 // GraphNode: one node of a graph (UI version 10): a box with a title, a state line, a badge, an icon and a progress
 // bar, in tone's role color or color's named color (never both), with optional timing and inspector details.
@@ -1975,6 +1983,102 @@ const (
 
 // GraphDirections are the values of GraphDirection, in order.
 var GraphDirections = []string{"right", "down"}
+
+// SceneCamera: where the model is first seen from (UI version 11), orthographic, around the centre of the shapes'
+// bounding box. Each field has its default when absent.
+type SceneCamera struct {
+	// The camera's direction from the centre, in degrees counter-clockwise from +x (east): 225 (the default) stands
+	// south-west, looking north-east.
+	Yaw *float64 `json:"yaw,omitempty"`
+	// Degrees above the floor plane: 35 by default, 90 straight down.
+	Pitch *float64 `json:"pitch,omitempty"`
+	// 1 (the default) fits the shapes' bounding box in the view; 2 draws it twice as large.
+	Zoom *float64 `json:"zoom,omitempty"`
+}
+
+// SceneShape: one shape of a scene (UI version 11), told apart by kind: a box, a cylinder or a prism, standing from
+// bottom to top (metres above the floor, at least 0.005 apart). Without color, the material's own. One struct for
+// every variant: kind says which fields mean something.
+type SceneShape struct {
+	Kind     string      `json:"kind"`
+	Center   []float64   `json:"center,omitempty"`
+	Size     []float64   `json:"size,omitempty"`
+	Yaw      *float64    `json:"yaw,omitempty"`
+	Round    *float64    `json:"round,omitempty"`
+	Bottom   *float64    `json:"bottom,omitempty"`
+	Top      *float64    `json:"top,omitempty"`
+	Color    string      `json:"color,omitempty"`
+	Material string      `json:"material,omitempty"`
+	Radius   float64     `json:"radius,omitempty"`
+	Points   [][]float64 `json:"points,omitempty"`
+}
+
+// SceneShape kinds.
+const (
+	SceneShapeBox      = "box"
+	SceneShapeCylinder = "cylinder"
+	SceneShapePrism    = "prism"
+)
+
+// SceneShapeKinds are the kinds of SceneShape, in order.
+var SceneShapeKinds = []string{"box", "cylinder", "prism"}
+
+// SceneMaterial: how a shape's surface looks (UI version 11): matte (the default), glass (see-through), metal, screen
+// (dark and glossy), tile and wood (the app's own pattern, in metres, in the shape's color).
+const (
+	SceneMaterialMatte  = "matte"
+	SceneMaterialGlass  = "glass"
+	SceneMaterialMetal  = "metal"
+	SceneMaterialScreen = "screen"
+	SceneMaterialTile   = "tile"
+	SceneMaterialWood   = "wood"
+)
+
+// SceneMaterials are the values of SceneMaterial, in order.
+var SceneMaterials = []string{"matte", "glass", "metal", "screen", "tile", "wood"}
+
+// SceneLabel: A quiet name on the floor (UI version 11): a room's. Not tappable and not a component of the page; read
+// out after alt.
+type SceneLabel struct {
+	Text   string    `json:"text"`
+	At     []float64 `json:"at"`
+	Height *float64  `json:"height,omitempty"`
+}
+
+// ScenePin: A device in the model (UI version 11): a pin at its place with its label and state, in tone's role color
+// or color's named color (never both); with light on, the model lights up around it. Tapping it does its action, as a
+// tile's. state is required when a tone other than neutral, a color or a light that is on says something, so it never
+// rides on color or light alone. A scene has at most 16 pins with a light on.
+type ScenePin struct {
+	ID string    `json:"id"`
+	At []float64 `json:"at"`
+	// Metres above the floor: a ceiling lamp's 2.4, an AC's 2.2. 0 when absent.
+	Height *float64 `json:"height,omitempty"`
+	Label  string   `json:"label"`
+	// In plain words: On, Off, 26 °C.
+	State  string      `json:"state,omitempty"`
+	Icon   string      `json:"icon,omitempty"`
+	Tone   string      `json:"tone,omitempty"`
+	Color  string      `json:"color,omitempty"`
+	Light  *SceneLight `json:"light,omitempty"`
+	Action *Action     `json:"action,omitempty"`
+}
+
+// SceneLight: A lamp's light (UI version 11): when on, the model is lit around the pin, warm or cool. Off (the
+// default) adds no light.
+type SceneLight struct {
+	On     bool   `json:"on,omitempty"`
+	Warmth string `json:"warmth,omitempty"`
+}
+
+// SceneWarmth: warm (the default): a lamp's yellow light; cool: a white one.
+const (
+	SceneWarmthWarm = "warm"
+	SceneWarmthCool = "cool"
+)
+
+// SceneWarmths are the values of SceneWarmth, in order.
+var SceneWarmths = []string{"warm", "cool"}
 
 // ImageSource: where a picture comes from (UI version 6): an https url the app loads without credentials, or a ref
 // the extension serves itself (ui.image) through the hub; exactly one. path is written by the hub only, for a ref:
@@ -6320,194 +6424,495 @@ func (v requiredJSONComponent) MarshalJSON() ([]byte, error) {
 	case "text", "markdown", "code":
 		return json.Marshal(struct {
 			plain
-			Text string `json:"text"`
+			Text   string                   `json:"text"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Text:  v.Text,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "metric":
 		return json.Marshal(struct {
 			plain
-			Label string `json:"label"`
-			Value string `json:"value"`
+			Label  string                   `json:"label"`
+			Value  string                   `json:"value"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Label: v.Label,
 			Value: v.Value,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "progress":
 		return json.Marshal(struct {
 			plain
-			Label string   `json:"label"`
-			Ratio *float64 `json:"ratio"`
+			Label  string                   `json:"label"`
+			Ratio  *float64                 `json:"ratio"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Label: v.Label,
 			Ratio: v.Ratio,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "row", "empty", "header":
 		return json.Marshal(struct {
 			plain
-			Title string `json:"title"`
+			Title  string                   `json:"title"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Title: v.Title,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "button":
 		return json.Marshal(struct {
 			plain
-			Title  string  `json:"title"`
-			Action *Action `json:"action"`
+			Title  string                   `json:"title"`
+			Action *Action                  `json:"action"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain:  plain(v),
 			Title:  v.Title,
 			Action: v.Action,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "link":
 		return json.Marshal(struct {
 			plain
-			Title string `json:"title"`
-			URL   string `json:"url"`
+			Title  string                   `json:"title"`
+			URL    string                   `json:"url"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Title: v.Title,
 			URL:   v.URL,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "field":
 		return json.Marshal(struct {
 			plain
-			Label string `json:"label"`
-			Name  string `json:"name"`
-			Kind  string `json:"kind"`
+			Label  string                   `json:"label"`
+			Name   string                   `json:"name"`
+			Kind   string                   `json:"kind"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Label: v.Label,
 			Name:  v.Name,
 			Kind:  v.Kind,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "divider", "loading":
 		return json.Marshal(struct {
 			plain
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "chart":
 		return json.Marshal(struct {
 			plain
-			Kind   string        `json:"kind"`
-			Series []ChartSeries `json:"series"`
+			Kind   string                   `json:"kind"`
+			Series []ChartSeries            `json:"series"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain:  plain(v),
 			Kind:   v.Kind,
 			Series: v.Series,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "stat_grid":
 		return json.Marshal(struct {
 			plain
-			Stats []Stat `json:"stats"`
+			Stats  []Stat                   `json:"stats"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Stats: v.Stats,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "segmented":
 		return json.Marshal(struct {
 			plain
-			Value   string   `json:"value"`
-			Action  *Action  `json:"action"`
-			Name    string   `json:"name"`
-			Choices []Choice `json:"choices"`
+			Value   string                   `json:"value"`
+			Action  *Action                  `json:"action"`
+			Name    string                   `json:"name"`
+			Choices []Choice                 `json:"choices"`
+			Shapes  []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain:   plain(v),
 			Value:   v.Value,
 			Action:  v.Action,
 			Name:    v.Name,
 			Choices: v.Choices,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "table":
 		return json.Marshal(struct {
 			plain
-			Columns []TableColumn `json:"columns"`
-			Rows    [][]string    `json:"rows"`
+			Columns []TableColumn            `json:"columns"`
+			Rows    [][]string               `json:"rows"`
+			Shapes  []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain:   plain(v),
 			Columns: v.Columns,
 			Rows:    v.Rows,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "html":
 		return json.Marshal(struct {
 			plain
-			Html string `json:"html"`
+			Html   string                   `json:"html"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Html:  v.Html,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "breadcrumb":
 		return json.Marshal(struct {
 			plain
-			Crumbs []Crumb `json:"crumbs"`
+			Crumbs []Crumb                  `json:"crumbs"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain:  plain(v),
 			Crumbs: v.Crumbs,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "file_tree":
 		return json.Marshal(struct {
 			plain
-			Entries []TreeEntry `json:"entries"`
+			Entries []TreeEntry              `json:"entries"`
+			Shapes  []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain:   plain(v),
 			Entries: v.Entries,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "diff":
 		return json.Marshal(struct {
 			plain
-			Path string `json:"path"`
+			Path   string                   `json:"path"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Path:  v.Path,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "comment_thread":
 		return json.Marshal(struct {
 			plain
-			Comments []Comment `json:"comments"`
+			Comments []Comment                `json:"comments"`
+			Shapes   []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain:    plain(v),
 			Comments: v.Comments,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "composer":
 		return json.Marshal(struct {
 			plain
-			Name    string           `json:"name"`
-			Buttons []ComposerButton `json:"buttons"`
+			Name    string                   `json:"name"`
+			Buttons []ComposerButton         `json:"buttons"`
+			Shapes  []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain:   plain(v),
 			Name:    v.Name,
 			Buttons: v.Buttons,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "image":
 		return json.Marshal(struct {
 			plain
-			Src *ImageSource `json:"src"`
-			Alt string       `json:"alt"`
+			Src    *ImageSource             `json:"src"`
+			Alt    string                   `json:"alt"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Src:   v.Src,
 			Alt:   v.Alt,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "grid", "carousel":
 		return json.Marshal(struct {
 			plain
-			Tiles []Tile `json:"tiles"`
+			Tiles  []Tile                   `json:"tiles"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Tiles: v.Tiles,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
 		})
 	case "graph":
 		return json.Marshal(struct {
 			plain
-			Nodes []GraphNode `json:"nodes"`
+			Nodes  []GraphNode              `json:"nodes"`
+			Shapes []requiredJSONSceneShape `json:"shapes,omitempty"`
 		}{
 			plain: plain(v),
 			Nodes: v.Nodes,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
+		})
+	case "scene":
+		return json.Marshal(struct {
+			plain
+			Alt    string                   `json:"alt"`
+			Shapes []requiredJSONSceneShape `json:"shapes"`
+		}{
+			plain: plain(v),
+			Alt:   v.Alt,
+			Shapes: func() []requiredJSONSceneShape {
+				if v.Shapes == nil {
+					return nil
+				}
+				out := make([]requiredJSONSceneShape, len(v.Shapes))
+				for i, item := range v.Shapes {
+					out[i] = (requiredJSONSceneShape)(item)
+				}
+				return out
+			}(),
+		})
+	default:
+		return json.Marshal(plain(v))
+	}
+}
+
+// requiredJSONSceneShape preserves required fields only inside stream payloads.
+type requiredJSONSceneShape SceneShape
+
+func (v requiredJSONSceneShape) MarshalJSON() ([]byte, error) {
+	type plain SceneShape
+	switch v.Kind {
+	case "box":
+		return json.Marshal(struct {
+			plain
+			Center []float64 `json:"center"`
+			Size   []float64 `json:"size"`
+			Bottom *float64  `json:"bottom"`
+			Top    *float64  `json:"top"`
+		}{
+			plain:  plain(v),
+			Center: v.Center,
+			Size:   v.Size,
+			Bottom: v.Bottom,
+			Top:    v.Top,
+		})
+	case "cylinder":
+		return json.Marshal(struct {
+			plain
+			Center []float64 `json:"center"`
+			Bottom *float64  `json:"bottom"`
+			Top    *float64  `json:"top"`
+			Radius float64   `json:"radius"`
+		}{
+			plain:  plain(v),
+			Center: v.Center,
+			Bottom: v.Bottom,
+			Top:    v.Top,
+			Radius: v.Radius,
+		})
+	case "prism":
+		return json.Marshal(struct {
+			plain
+			Bottom *float64    `json:"bottom"`
+			Top    *float64    `json:"top"`
+			Points [][]float64 `json:"points"`
+		}{
+			plain:  plain(v),
+			Bottom: v.Bottom,
+			Top:    v.Top,
+			Points: v.Points,
 		})
 	default:
 		return json.Marshal(plain(v))
@@ -6692,6 +7097,11 @@ var newDef = map[string]func() any{
 	"GraphNode":                     func() any { return new(GraphNode) },
 	"GraphNodeLink":                 func() any { return new(GraphNodeLink) },
 	"GraphEdge":                     func() any { return new(GraphEdge) },
+	"SceneCamera":                   func() any { return new(SceneCamera) },
+	"SceneShape":                    func() any { return new(SceneShape) },
+	"SceneLabel":                    func() any { return new(SceneLabel) },
+	"ScenePin":                      func() any { return new(ScenePin) },
+	"SceneLight":                    func() any { return new(SceneLight) },
 	"ImageSource":                   func() any { return new(ImageSource) },
 	"RowControl":                    func() any { return new(RowControl) },
 	"RowAction":                     func() any { return new(RowAction) },
