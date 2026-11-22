@@ -15,6 +15,7 @@ import persona.core.contracts.api.AssistantSnapshot
 import persona.core.contracts.api.ChatComposerService
 import persona.core.contracts.api.ConnectionState
 import persona.core.designsystem.AppStyle
+import persona.core.designsystem.CopyAction
 import persona.core.designsystem.JAction
 import persona.core.designsystem.JActionSheet
 import persona.core.designsystem.PersonaTheme
@@ -157,7 +158,7 @@ internal fun AssistantTitleMenu(
     mainActions: MainActions,
     onVoice: (() -> Unit)?,
     mainConversation: MainConversationController,
-    copy: (String, String?) -> Boolean,
+    copy: CopyAction,
     scope: CoroutineScope,
     onDismiss: () -> Unit,
     onKnowledge: () -> Unit,

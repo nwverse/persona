@@ -120,5 +120,5 @@ fun ExpandedComposer(
                 verticalAlignment = Alignment.CenterVertically, content = send)
         }
     }
-    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    LaunchedEffect(Unit) { val _ = runCatching { focus.requestFocus() } }
 }

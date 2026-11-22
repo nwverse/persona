@@ -336,7 +336,7 @@ fun ChatLinkHost(
                                     },
                                     JAction(stringResource(R.string.chat_link_share), PhIcons.ShareNetwork) {
                                         val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, page())
-                                        runCatching { context.startActivity(Intent.createChooser(send, null)) }
+                                        val _ = runCatching { context.startActivity(Intent.createChooser(send, null)) }
                                     }.takeIf { forwarded == null },
                                 ))
                             }
