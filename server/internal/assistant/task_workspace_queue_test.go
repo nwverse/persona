@@ -128,7 +128,7 @@ func TestTaskWorkspaceQueueJSONValidation(t *testing.T) {
 	if string(raw) != `{"existing":"/code/app"}` {
 		t.Fatalf("non-queued existing must keep exact legacy JSON, got %s", raw)
 	}
-	for _, invalid := range []string{`{"queue":true}`, `{"new":{"branch":"a"},"queue":true}`, `{"backend":{"operation_id":"op_1"},"queue":true}`} {
+	for _, invalid := range []string{`{"queue":true}`, `{"new":{"branch":"a"},"queue":true}`, `{"backend":{"operation_id":"op_1"},"queue":true}`, `{"container":{"selected_repo_ids":["r1"]},"queue":true}`} {
 		var bad TaskWorkspace
 		if err := json.Unmarshal([]byte(invalid), &bad); err == nil {
 			t.Fatalf("%s should be rejected", invalid)

@@ -251,7 +251,7 @@ func (n *Node) mayCall(cwd, tool string) bool {
 func (n *Node) cliCall(ctx context.Context, c net.Conn, req sockRequest) proto.ToolResult {
 	if slices.Contains(callerTools, req.Name) {
 		session, assistant := n.cliAgentCaller(req), false
-		if assistantwire.IsA2ATool(req.Name) {
+		if assistantwire.IsA2ATool(req.Name) || req.Name == "secret_store" {
 			session, assistant = n.a2aCaller(c, req, session)
 			if session == "" {
 				return proto.ErrorResult(proto.ToolErrorUnavailable, "A2A requires a verified local session", 0)

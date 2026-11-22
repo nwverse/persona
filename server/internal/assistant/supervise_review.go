@@ -712,6 +712,7 @@ func (s *Service) reviewDoneTodo(ctx context.Context, id, reason string, accepte
 		s.onTodoWorkspaceReleased(ctx, before, accepted)
 		if accepted && row.DoneAt != nil {
 			s.evaluateTodoAfterDependents(ctx, id)
+			s.evaluateParentCloseoutForChild(ctx, id)
 		}
 		if t, now := s.todoNow(id); ok && now {
 			// A side conversation's task the main conversation supervised: the planning conversation hears it ended (#4669).

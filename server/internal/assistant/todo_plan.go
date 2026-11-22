@@ -317,11 +317,13 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		s.onTodoWorkspaceReleased(ctx, cur, maySatisfyAfter)
 		if maySatisfyAfter {
 			s.evaluateTodoAfterDependents(ctx, id)
+			s.evaluateParentCloseoutForChild(ctx, id)
 		}
 	}
 	if reopening && row.DoneAt == nil && (cur.DoneAt != nil || e.RestartWork ||
 		row.ReopenedAt != nil && (cur.ReopenedAt == nil || !row.ReopenedAt.Equal(*cur.ReopenedAt))) {
 		s.resetTodoReadyWake(ctx, id)
+		s.resetParentCloseoutWake(ctx, id)
 	}
 	return out, nil
 }

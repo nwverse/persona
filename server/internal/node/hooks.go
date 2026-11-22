@@ -264,7 +264,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 			session = n.canonicalAssistantSession(session)
 		}
 		sid := n.mcpCaller(req.Name, session, req.Pane, assistant)
-		if assistantwire.IsA2ATool(req.Name) {
+		if assistantwire.IsA2ATool(req.Name) || req.Name == "secret_store" {
 			sid, assistant = n.a2aCaller(c, req, sid)
 			if sid == "" {
 				resp = proto.TextResult("A2A requires a verified local session", true)
@@ -995,7 +995,7 @@ func toolSummary(name string, input json.RawMessage) string {
 // leader's task_plan and task_review (assistant/task_leader.go) and task_spawn. The manager's come from the list it
 // reads itself, so a tool it adds there gets its caller here too (#9089: the repository tools were added to one list
 // only, and every agent's call of them reached the hub with no session).
-var callerTools = slices.Concat(assistantwire.AgentToolNames, assistantwire.A2AToolNames, []string{"dispatch_start", "dispatch_read", "task_plan", "task_review", "task_spawn"})
+var callerTools = slices.Concat(assistantwire.AgentToolNames, assistantwire.A2AToolNames, []string{"dispatch_start", "dispatch_read", "task_plan", "task_review", "task_spawn", "secret_store"})
 
 // mcpCaller is the session an MCP call of tool name goes to the hub with: the one it names, else, for an agent's
 // tools that need to know whose call it is (callerTools), the session its pane runs. The rest go on as before, with

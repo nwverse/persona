@@ -118,6 +118,20 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 				}
 			}
 		}
+		if g.Kind == sigPRMerged {
+			if t, ok := s.todoNow(g.Todo); ok && t.DoneAt == nil {
+				if _, _, err := s.checkUnparkedPRMerged(ctx, t, g.PRURL); err != nil {
+					return msg, false, true
+				}
+			}
+		}
+		if g.Kind == sigParentCloseout {
+			if t, ok := s.todoNow(g.Todo); ok && t.DoneAt == nil {
+				if _, _, _, err := s.checkParentCloseoutReady(ctx, t); err != nil {
+					return msg, false, true
+				}
+			}
+		}
 		if e, ok := s.digestEntry(ctx, g, web); ok {
 			// A worker reassigned to an Agent needs the ordinary dispatcher, not assistant.send to its old conversation.
 			if _, handled, _ := s.leaderRoute(g); handled {
