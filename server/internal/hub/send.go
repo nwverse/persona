@@ -172,7 +172,7 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 
 	if caller := principalOf(r.Context()); caller.Role == roleScoped {
 		row, exists := m.session(sid)
-		if !exists || healthSession(&row) {
+		if !exists || spaceSession(&row) {
 			writeErr(w, http.StatusNotFound, errors.New("no such session"))
 			return
 		}

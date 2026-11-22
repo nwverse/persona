@@ -82,6 +82,8 @@
   "retry": "Retry",
   "remove": "Remove",
   "continue": "Continue",
+  "delivery_ok": "Finished, waiting for your OK to ship",
+  "open_task": "Open task",
   "task_fallback": "Task",
   "say_to": "To \"{title}\"",
   "answered": "Answered",

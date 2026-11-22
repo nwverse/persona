@@ -9,12 +9,15 @@ vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
-import { initI18n } from "../i18n";
-import { handoffFrom, openFromPage } from "../lib/handoff";
+import { initI18n, t } from "../i18n";
+import { setAgentOpenMode } from "../lib/agent-open";
+import { handoffFrom, openAgent, openFromPage, pickMainChat } from "../lib/handoff";
+import { closePanel, getPanel } from "../lib/panel";
 import { useRoute } from "../lib/router";
 import { refresh, reset } from "../lib/store";
 import type { Machine, Session } from "../lib/types";
 import { Sidebar } from "./Sidebar";
+import { SidebarRail } from "./SidebarRail";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -128,3 +131,80 @@ describe("the sidebar on an Agent's page opened from inside a page (#12055)", ()
     expect(lit()).toEqual(["/s/mac/s1"]);
   });
 });
+
+describe("Main Chat in the sidebar, set to Full page (#13164)", () => {
+  const mainRow = () => host.querySelector<HTMLAnchorElement>(`a[title="${t("sidebar.persona_main")}"]`)!;
+  const pick = async (a: HTMLAnchorElement) => {
+    act(() => a.click());
+    await flush();
+  };
+  afterEach(() => {
+    pickMainChat(true);
+    setAgentOpenMode("panel");
+    closePanel();
+  });
+
+  it("opens the Agent the conversation opened again over it, picked from another place, and Back returns to the conversation", async () => {
+    setAgentOpenMode("page");
+    await show();
+    act(() => openAgent("mac", "s1"));
+    await flush();
+    expect(lit()).toEqual(["/"]);
+    // another place: an Agent picked in the sidebar, a root
+    await pick(agentRow("s2"));
+    expect(lit()).toEqual(["/s/mac/s2"]);
+    await pick(mainRow());
+    expect(location.pathname).toBe("/s/mac/s1");
+    expect(handoffFrom()).toEqual({ path: "/" });
+    expect(lit()).toEqual(["/"]);
+    await back();
+    await flush();
+    expect(location.pathname).toBe("/");
+    expect(lit()).toEqual(["/"]);
+    // Back to the conversation dropped it: from another place Main Chat is the bare conversation
+    await pick(agentRow("s2"));
+    await pick(mainRow());
+    expect(location.pathname).toBe("/");
+  });
+
+  it("goes to the bare conversation when picked while the Agent opened from it is in front, and keeps nothing", async () => {
+    setAgentOpenMode("page");
+    await show();
+    act(() => openAgent("mac", "s1"));
+    await flush();
+    await pick(mainRow());
+    expect(location.pathname).toBe("/");
+    expect(lit()).toEqual(["/"]);
+    await pick(agentRow("s2"));
+    await pick(mainRow());
+    expect(location.pathname).toBe("/");
+  });
+
+  it("does the same from the folded sidebar's rail", async () => {
+    setAgentOpenMode("page");
+    await show();
+    act(() => openAgent("mac", "s1"));
+    await flush();
+    await pick(agentRow("s2"));
+    act(() => root.render(<Rail />));
+    await flush();
+    await pick(host.querySelector<HTMLAnchorElement>('a[href="/"]')!);
+    expect(location.pathname).toBe("/s/mac/s1");
+    expect(handoffFrom()).toEqual({ path: "/" });
+  });
+
+  it("leaves the side panel mode as it was: the Agent opens beside the chat and Main Chat is the conversation", async () => {
+    await show();
+    act(() => openAgent("mac", "s1"));
+    await flush();
+    expect(getPanel()).toEqual({ kind: "agent", mid: "mac", sid: "s1" });
+    expect(location.pathname).toBe("/");
+    await pick(agentRow("s2"));
+    await pick(mainRow());
+    expect(location.pathname).toBe("/");
+  });
+});
+
+function Rail() {
+  return <SidebarRail route={useRoute()} onSearch={() => {}} onNewAgent={() => {}} />;
+}

@@ -458,12 +458,17 @@ func TestTodoAfterReadyRestartAndResweepIdempotency(t *testing.T) {
 	}
 	waitFor(t, "first wake", func() bool { return len(sendsToConversation(f1, "conv1")) == 1 })
 
-	// Verify durable wake marker was persisted to the store.
-	markers := map[string]todoReadyWakeMarker{}
-	found, err := st.Setting(ctx, todoReadyWakesKey, &markers)
-	if err != nil || !found || markers[dep.ID].Key != todoReadyKey(dep) {
-		t.Fatalf("persisted wake markers = %+v (found=%v err=%v), want key %q for %s", markers, found, err, todoReadyKey(dep), dep.ID)
-	}
+	// Direct delivery completes before deliverDigest's deferred bookkeeping persists the marker. Wait for that durable
+	// commit, not only the observable send, before checking the state a restarted Service must inherit.
+	var markers map[string]todoReadyWakeMarker
+	waitFor(t, "persisted wake marker", func() bool {
+		markers = map[string]todoReadyWakeMarker{}
+		found, err := st.Setting(ctx, todoReadyWakesKey, &markers)
+		if err != nil {
+			t.Fatalf("read persisted wake markers: %v", err)
+		}
+		return found && markers[dep.ID].Key == todoReadyKey(dep)
+	})
 
 	// Repeated sweeps on the same Service must NOT re-emit.
 	s1.sweepTodoAfterReady(ctx)

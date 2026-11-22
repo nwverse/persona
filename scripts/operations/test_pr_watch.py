@@ -2833,8 +2833,10 @@ class WatcherTests(unittest.TestCase):
                                   "verify": {}, "merge": True, "privacy": None, "notify_command": None}]
         watcher = pr_watch.Watcher(config, verbose=False)
         with patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run, \
+                patch.object(pr_watch, "require_local_gate") as local_gate, \
                 patch.object(pr_watch, "pr_snapshot", return_value=pr(state="MERGED")):
             watcher.merge(config["repositories"][0], pr())
+        local_gate.assert_called_once_with(repo, SHA_A, SHA_BASE)
         argv = run.call_args.args[0]
         self.assertEqual(argv[2:6], ["--expect-head", SHA_A, "--expect-base", SHA_BASE])
         self.assertEqual(argv[6], "7")

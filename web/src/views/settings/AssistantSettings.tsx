@@ -645,7 +645,11 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         )}
       </Group>
 
-      <DirectionNotes deps={directionNotes} />
+      <DirectionNotes deps={directionNotes} onOpenPermissions={() => {
+        const select = document.querySelector<HTMLSelectElement>('[data-settings-row="default-permissions"] select');
+        select?.scrollIntoView?.({ block: "center" });
+        select?.focus({ preventScroll: true });
+      }} />
 
       {/* Learning from finished tasks (#12295): off by default, only from a hub that has it; the lessons are on each
           project's page in Knowledge */}

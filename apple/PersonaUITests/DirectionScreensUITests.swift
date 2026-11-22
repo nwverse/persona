@@ -16,7 +16,7 @@ final class DirectionScreensUITests: XCTestCase {
     private var app: XCUIApplication!
     private var lang: String { ProcessInfo.processInfo.environment["PERSONA_SHOT_LANG"] ?? "en" }
 
-    /// The default assistant again, whatever a case left picked (the "manager" off case picks 工作).
+    /// The default assistant again, whatever a case left picked (the "manager" off case picks manager m-3fa21c).
     override func tearDown() {
         let hub: String? = self.hub
         MainActor.assumeIsolated { AssistantUITestReset.toDefaultMain(hub: hub) }
@@ -579,8 +579,8 @@ final class DirectionScreensUITests: XCTestCase {
             throw XCTSkip("PERSONA_OFF_CASE=none|feature|manager|missing")
         }
         // That case runs against a mock with MOCK_SESSIONS_LIST=1 too (PERSONA_OFF_MANAGER_HUB), the setup its pairs
-        // with main were taken with. 工作's own chat does not reach its page there either: the conversation compared
-        // below is its Main Chat row.
+        // with main were taken with. Manager m-3fa21c's own chat does not reach its page there either: the conversation
+        // compared below is its Main Chat row.
         if off == "manager" {
             guard let paged = ProcessInfo.processInfo.environment["PERSONA_OFF_MANAGER_HUB"], !paged.isEmpty else {
                 XCTFail("PERSONA_OFF_MANAGER_HUB: the manager case needs a mock with MOCK_LEADERS=1 "
@@ -591,7 +591,7 @@ final class DirectionScreensUITests: XCTestCase {
         }
         reset(off == "feature" ? "feature=off" : off == "missing" ? "routes=missing" : "")
         if off == "manager" {
-            launch(keepPick: true, extra: ["-openAssistantManager", "m-3fa21c"]) // 工作's page, picked at launch
+            launch(keepPick: true, extra: ["-openAssistantManager", "m-3fa21c"]) // manager m-3fa21c's page, picked at launch
             sleep(3)
         } else {
             launch()
@@ -617,19 +617,19 @@ final class DirectionScreensUITests: XCTestCase {
         if off != "none" && off != "manager" { revealAboveTheBar(chat("基础设施")) }
         sleep(2)
         shot("off-sidebar-\(off)")
-        // Every case has a conversation's menu to compare. 工作's own conversation (scripts/mock/direction_sessions_mock.py)
+        // Every case has a conversation's menu to compare. Manager m-3fa21c's own conversation (scripts/mock/direction_sessions_mock.py)
         // does not reach its page, on main's build and this one alike: there it is the page's one conversation row, Main Chat.
         let row = off == "manager" ? app.buttons["sidebar-main"].firstMatch : chat("帮我约周五")
         XCTAssertTrue(row.waitForExistence(timeout: 10), "no conversation to long-press:\n\(app.debugDescription)")
         row.press(forDuration: 1.2)
         sleep(1)
-        // An item both builds' conversation menus have (工作's Main Chat opens the chat itself, no menu).
+        // An item both builds' conversation menus have (manager m-3fa21c's Main Chat opens the chat itself, no menu).
         if off != "manager" {
             XCTAssertTrue(app.buttons[word("Rename…", "重命名…", "名前を変更…")].firstMatch.waitForExistence(timeout: 5),
                           "the conversation's menu did not open:\n\(app.debugDescription)")
         }
         shot("off-chat-menu-\(off)")
-        // On 工作's page the press can open Main Chat itself, the drawer gone: no menu to dismiss there (a tap would
+        // On manager m-3fa21c's page the press can open Main Chat itself, the drawer gone: no menu to dismiss there (a tap would
         // land on the chat's page), and no lead to look for.
         let drawerGone = off == "manager" && !app.buttons["sidebar-main"].firstMatch.isHittable
         if !drawerGone { dismissMenu() }
@@ -637,7 +637,7 @@ final class DirectionScreensUITests: XCTestCase {
         if let lead, lead.exists {
             lead.tap()
         } else {
-            // No lead here (no directions, another manager's page): the main chat. On 工作's page a long press on
+            // No lead here (no directions, another manager's page): the main chat. On manager m-3fa21c's page a long press on
             // Main Chat opens no menu and can open the chat itself, the drawer gone: it is then what is in front.
             let main = app.buttons["sidebar-main"].firstMatch
             if main.exists && main.isHittable {
@@ -659,7 +659,7 @@ final class DirectionScreensUITests: XCTestCase {
         // row's long press (`AgentActionMenu`).
         app.terminate()
         launch(agentChat: "macbook/a1f3c2d4-0000-4000-8000-000000000007", keepPick: off == "manager")
-        if off == "manager" { sleep(2) } // the pick of 工作 is kept on the device
+        if off == "manager" { sleep(2) } // manager m-3fa21c stays selected on the device
         let more = app.buttons["chat.more"].firstMatch
         XCTAssertTrue(more.waitForExistence(timeout: 20), "no ⋯ on the Agent's chat:\n\(app.debugDescription)")
         sleep(2)

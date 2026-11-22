@@ -260,14 +260,14 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 			// notify_user's: nothing goes out, the text stays in the conversation, which the meeting page shows.
 			return proto.TextResult(justMeNotice(s.lang(ctx)), false)
 		}
-		if name == "phone_notify" && s.inHealth(ctx, session) {
+		if name == "phone_notify" && s.selfPolicy(ctx, session).Redact {
 			var a map[string]any
 			if err := json.Unmarshal(args, &a); err != nil {
 				return proto.TextResult(err.Error(), true)
 			}
 			if a != nil {
 				// Local phone notifications follow the same privacy rule as notify_user.
-				a["title"], a["body"] = healthNotice(s.lang(ctx))
+				a["title"], a["body"] = spaceNotice(s.lang(ctx))
 				args, _ = json.Marshal(a)
 			}
 		}

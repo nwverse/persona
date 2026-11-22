@@ -57,12 +57,13 @@ type a2aTaskView struct {
 	Source       a2aRef     `json:"source"`
 	Target       a2aRef     `json:"target"`
 	State        string     `json:"state"`
+	Queued       bool       `json:"queued,omitempty"`
 	Events       []a2aEvent `json:"events"`
 	Disconnected bool       `json:"target_disconnected,omitempty"`
 }
 
 func (t *a2aTask) view() a2aTaskView {
-	return a2aTaskView{ID: t.ID, Context: t.Context, Source: t.source(), Target: t.target(), State: t.State, Events: t.Events, Disconnected: t.Disconnected}
+	return a2aTaskView{ID: t.ID, Context: t.Context, Source: t.source(), Target: t.target(), State: t.State, Queued: t.State == a2aQueued, Events: t.Events, Disconnected: t.Disconnected}
 }
 
 func (s *Service) a2aToolCall(ctx context.Context, st a2aStore, cfg assistantwire.A2AConfig, c a2aCaller, name string, args json.RawMessage) (any, error) {

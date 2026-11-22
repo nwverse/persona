@@ -151,7 +151,7 @@ type setupEvidence struct {
 	plans     []*TaskPlan
 	todos     []Todo
 	// scopeOf says where a to-do works, as a standing authorization names it (ruleTodoScope); health: the plan's
-	// conversation is in the health space, whose plans wait for Start whatever is trusted.
+	// conversation is in a space that confirms what leaves it, whose plans wait for Start whatever is trusted.
 	scopeOf func(todo string) (machineID, directory string, ok bool)
 	health  func(conversation string) bool
 	// What is already granted: a kind tasks.trust holds or a scope a standing authorization covers is not counted.
@@ -405,7 +405,7 @@ func (s *Service) setupRead(ctx context.Context, now time.Time) (setupEvidence, 
 		}
 		return s.ruleTodoScope(ctx, t, seen)
 	}
-	ev.health = func(conversation string) bool { return s.inHealth(ctx, conversation) }
+	ev.health = func(conversation string) bool { return s.selfPolicy(ctx, conversation).ConfirmOutbound }
 	return ev, nil
 }
 

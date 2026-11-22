@@ -45,7 +45,7 @@ func TestDeliveryApprovalFollowsPark(t *testing.T) {
 			ctx, now := context.Background(), time.Now()
 			const oldGate = "Approve the release"
 			s.setTaskDelivery(ctx, task.ID, TodoDelivery{State: deliveryPR, Gate: oldGate, Unblock: unblockUser, At: now})
-			checkDeliveryApproval(t, s, task.ID, deliveryPR, oldGate, unblockUser)
+			checkDeliveryApproval(t, s, task.ID, deliveryPR, oldGate, unblockSupervisor) // its supervisor reads it first (#13191)
 			if _, err := reviewErr(s, task.ID, map[string]any{
 				"verdict": reviewParked, "reason": tc.reason, "waiting_on": tc.waitingOn, "until": now.Add(time.Hour).Format(time.RFC3339),
 				"evidence": testParkEvidence(tc.kind, tc.target, "https://example.com/releases/42", tc.reason),
@@ -63,7 +63,7 @@ func TestDeliveryApprovalFollowsRework(t *testing.T) {
 	waitsForReview(t, s, f, task.ID, "The revised checks are ready for review.")
 	const oldGate = "Approve the revised checks"
 	s.setTaskDelivery(ctx, task.ID, TodoDelivery{State: deliveryPR, Gate: oldGate, Unblock: unblockUser, At: time.Now().Add(-time.Hour)})
-	checkDeliveryApproval(t, s, task.ID, deliveryPR, oldGate, unblockUser)
+	checkDeliveryApproval(t, s, task.ID, deliveryPR, oldGate, unblockSupervisor) // its supervisor reads it first (#13191)
 
 	reviewTask(t, s, task.ID, map[string]any{"verdict": reviewRework, "note": "Add coverage for delayed replies"})
 	cur := todoNow(s, task.ID)
@@ -77,7 +77,7 @@ func TestDeliveryApprovalFollowsRework(t *testing.T) {
 
 	// A later round can renew the same hold without changing what it asks the owner to do.
 	s.setTaskDelivery(ctx, task.ID, TodoDelivery{State: deliveryPR, Gate: oldGate, Unblock: unblockUser, At: time.Now()})
-	checkDeliveryApproval(t, s, task.ID, deliveryPR, oldGate, unblockUser)
+	checkDeliveryApproval(t, s, task.ID, deliveryPR, oldGate, unblockSupervisor) // its supervisor reads it first (#13191)
 	decision := rolloutDecision()
 	reviewTask(t, s, task.ID, decision)
 	checkDeliveryApproval(t, s, task.ID, deliveryPR, decision["reason"].(string), unblockUser)
@@ -141,7 +141,7 @@ func TestDeliveryApprovalFollowsDecisionAndAcceptance(t *testing.T) {
 	// A later judgment can still ask for an approval in a new round. The supervisor's requested owner check
 	// ends that hold and leaves the existing verification ask as the next step.
 	s.setTaskDelivery(ctx, task.ID, TodoDelivery{State: deliveryMerged, Gate: "Approve the next release", Unblock: unblockUser, At: time.Now()})
-	checkDeliveryApproval(t, s, task.ID, deliveryMerged, "Approve the next release", unblockUser)
+	checkDeliveryApproval(t, s, task.ID, deliveryMerged, "Approve the next release", unblockSupervisor) // its supervisor reads it first (#13191)
 	f.judge = `{"changed":"The change is ready","how":"Open the updated screen"}`
 	reviewTask(t, s, task.ID, map[string]any{"verdict": reviewAccepted, "user_check": true,
 		"checks": completeReviewChecks(todoNow(s, task.ID))})
@@ -166,14 +166,14 @@ func TestDeliveryApprovalFollowsPRStatus(t *testing.T) {
 	const readyGate = "Approve marking the PR ready for review"
 	s.setTaskDelivery(ctx, task.ID, TodoDelivery{State: deliveryPR, Gate: readyGate, Unblock: unblockUser, At: now})
 	observe("open", true, now.Add(time.Second))
-	checkDeliveryApproval(t, s, task.ID, deliveryPR, readyGate, unblockUser)
+	checkDeliveryApproval(t, s, task.ID, deliveryPR, readyGate, unblockSupervisor) // its supervisor reads it first (#13191)
 	observe("open", false, now.Add(2*time.Second))
 	checkDeliveryApproval(t, s, task.ID, deliveryPR, "", unblockOther)
 
 	const mergeGate = "Approve the merge"
 	s.setTaskDelivery(ctx, task.ID, TodoDelivery{State: deliveryPR, Gate: mergeGate, Unblock: unblockUser, At: now.Add(3 * time.Second)})
 	observe("open", false, now.Add(4*time.Second))
-	checkDeliveryApproval(t, s, task.ID, deliveryPR, mergeGate, unblockUser)
+	checkDeliveryApproval(t, s, task.ID, deliveryPR, mergeGate, unblockSupervisor) // its supervisor reads it first (#13191)
 	observe("merged", false, now.Add(5*time.Second))
 	checkDeliveryApproval(t, s, task.ID, deliveryMerged, "", unblockAgent)
 	if got := todoNow(s, task.ID); got.Stage != "merge" || got.DoneAt != nil {

@@ -60,22 +60,97 @@ func (s *Service) screenMechanicalSignals(ctx context.Context, list []superviseS
 	return kept
 }
 
+// screenFinalWakeSignals rechecks only wake promises after routing and recipient batches have merged their final lists.
+func (s *Service) screenFinalWakeSignals(ctx context.Context, list []superviseSignal, now, prev time.Time) []superviseSignal {
+	kept, deferred := s.partitionFinalWakeSignals(ctx, list, now, "final")
+	for _, g := range deferred {
+		s.restoreScreened(g, now, prev)
+	}
+	return kept
+}
+
+// partitionFinalWakeSignals separates deferred idles without restoring them. Queue drain restores only after its
+// rewritten durable queue no longer contains those idles; ordinary final delivery restores them immediately.
+func (s *Service) partitionFinalWakeSignals(ctx context.Context, list []superviseSignal, now time.Time, boundary string) (kept, deferred []superviseSignal) {
+	kept = list[:0]
+	for _, g := range list {
+		if g.Kind == sigIdle {
+			if _, retry := s.mechanicalCheckAt(ctx, g, now, true, boundary); !retry.IsZero() {
+				deferred = append(deferred, g)
+				continue
+			}
+		}
+		kept = append(kept, g)
+	}
+	return kept, deferred
+}
+
 // restoreScreened keeps a deferred signal out of the digest batch that screening just kept it out of.
 func (s *Service) restoreScreened(g superviseSignal, now, prev time.Time) {
 	g.batchTo, g.batchUntil = "", time.Time{}
 	s.restoreDigest([]superviseSignal{g}, now, prev)
 }
 
-// Unknown, actionable and conflicting evidence deliberately falls through to ordinary supervision.
-func (s *Service) mechanicalSignal(ctx context.Context, g superviseSignal, now time.Time) (bool, time.Time) {
-	return s.mechanicalCheck(ctx, g, now, false)
+// futureNativeWake returns the earliest live native wakeup when every current agent has one and a stopped-state
+// conflict would otherwise hide it. Queued input, offline and read-only agents always fail open. Clean stops keep the
+// ordinary Work and delivery checks. The conflict is diagnostic: it names why this idle would have needed supervision.
+func futureNativeWake(agents []proto.Session, now time.Time) (time.Time, string, bool) {
+	var wake time.Time
+	conflict := "none"
+	suppress := false
+	for _, c := range agents {
+		if c.Status != proto.StatusDone || c.ReadOnlyReason != "" ||
+			c.Loop == nil || c.Loop.Kind != "wakeup" || !c.Loop.NextAt.After(now) {
+			return time.Time{}, "none", false
+		}
+		if c.State == proto.StateNeedsYou || c.PendingInteractions > 0 || c.TurnError != "" {
+			suppress = true
+			if conflict == "none" {
+				conflict = nativeWakeConflict(c)
+			}
+		}
+		if wake.IsZero() || c.Loop.NextAt.Before(wake) {
+			wake = c.Loop.NextAt
+		}
+	}
+	return wake, conflict, suppress
 }
 
-// mechanicalCheck is mechanicalSignal; wakeOnly stops before delivery reads, writes or automatic parking.
+func nativeWakeConflict(c proto.Session) string {
+	switch {
+	case c.State == proto.StateNeedsYou || c.PendingInteractions > 0:
+		return "needs_you"
+	case c.TurnError != "":
+		return "turn_error"
+	case len(c.Queued) > 0:
+		return "queued"
+	default:
+		return "none"
+	}
+}
+
+// Unknown, actionable and conflicting evidence deliberately falls through to ordinary supervision.
+func (s *Service) mechanicalSignal(ctx context.Context, g superviseSignal, now time.Time) (bool, time.Time) {
+	return s.mechanicalCheckAt(ctx, g, now, false, "first")
+}
+
+// mechanicalCheck is the first-boundary form used by mixed actionable batches.
 func (s *Service) mechanicalCheck(ctx context.Context, g superviseSignal, now time.Time, wakeOnly bool) (bool, time.Time) {
+	return s.mechanicalCheckAt(ctx, g, now, wakeOnly, "first")
+}
+
+func (s *Service) logWakeWithheld(g superviseSignal, boundary string, wake time.Time, conflict string) {
+	s.logf("supervise: idle withheld task=%s boundary=%s wake=%s conflict=%s", g.Todo, boundary, wake.Format(time.RFC3339Nano), conflict)
+}
+
+// mechanicalCheckAt is mechanicalSignal; wakeOnly stops before delivery reads, writes or automatic parking.
+func (s *Service) mechanicalCheckAt(ctx context.Context, g superviseSignal, now time.Time, wakeOnly bool, boundary string) (bool, time.Time) {
 	switch g.Kind {
 	case sigIdle, sigStalled, sigOrphaned, sigAllStopped:
 	default:
+		return false, time.Time{}
+	}
+	if g.Kind == sigIdle && g.Handoff {
 		return false, time.Time{}
 	}
 	t, ok := s.todoNow(g.Todo)
@@ -91,10 +166,18 @@ func (s *Service) mechanicalCheck(ctx context.Context, g superviseSignal, now ti
 	if !reached {
 		return false, time.Time{}
 	}
-	for _, c := range currentTaskAgents(agents, supersededAgents(t, agents)) {
+	agents = currentTaskAgents(agents, supersededAgents(t, agents))
+	for _, c := range agents {
 		if g.Kind == sigIdle && c.Loop != nil && c.Loop.Kind == "wakeup" &&
 			(c.Status == proto.StatusWorking || c.State == proto.StateWorking) {
+			s.logWakeWithheld(g, boundary, c.Loop.NextAt, nativeWakeConflict(c))
 			return false, now // the wakeup's turn is running; its end will judge the stop afresh
+		}
+	}
+	if g.Kind == sigIdle {
+		if wake, conflict, ok := futureNativeWake(agents, now); ok {
+			s.logWakeWithheld(g, boundary, wake, conflict)
+			return false, wake
 		}
 	}
 	agents, wake, ok := s.mechanicalAgents(ctx, t, agents, now)
@@ -102,6 +185,9 @@ func (s *Service) mechanicalCheck(ctx context.Context, g superviseSignal, now ti
 		return false, time.Time{}
 	}
 	if wakeOnly {
+		if g.Kind == sigIdle && !wake.IsZero() {
+			s.logWakeWithheld(g, boundary, wake, "none")
+		}
 		return false, wake
 	}
 	if wake.IsZero() && len(agents) == 1 && s.parkCloseout(ctx, t, agents[0], now) {
@@ -113,7 +199,11 @@ func (s *Service) mechanicalCheck(ctx context.Context, g superviseSignal, now ti
 	if g.Kind == sigAllStopped {
 		return false, wake // other all-stopped handling retains its existing group checks
 	}
-	return s.mechanicalPR(ctx, t, agents, now, wake)
+	handled, retry := s.mechanicalPR(ctx, t, agents, now, wake)
+	if g.Kind == sigIdle && !retry.IsZero() {
+		s.logWakeWithheld(g, boundary, retry, "none")
+	}
+	return handled, retry
 }
 
 // Callers establish reachability; both paths require the same safely stopped inventory.
