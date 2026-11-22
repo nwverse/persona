@@ -104,12 +104,13 @@ fun Todo.supervisorReviewing(now: Long): Boolean {
     return now - since < REVIEW_OVERDUE_MS
 }
 
-/** The task waits for the user's decision or review: an open ask (a decided one only while the task is open), or its
- *  supervisor's `needs_user` on an open task, or a `pending_review` that is the owner's: one waiting an hour or more at
- *  [now], or one the hub gives no start for ([supervisorReviewing]). A younger review is its supervisor's to do. */
+/** The task waits for the user's decision or review: an open task's ask, or its supervisor's `needs_user` on an open
+ *  task, or a `pending_review` that is the owner's: one waiting an hour or more at [now], or one the hub gives no start
+ *  for ([supervisorReviewing]). A younger review is its supervisor's to do. A finished task never waits, whatever ask
+ *  it still carries: the hub's To-dos triage files it with the finished ones (#12974). */
 fun Todo.awaitsDecision(now: Long): Boolean {
-    openAsk?.let { return !(isDone && it.outcome == "decide") }
     if (isDone) return false
+    if (openAsk != null) return true
     return supervision?.state == "user_check" || supervision?.state == "needs_user" || (supervision?.state == "pending_review" && !supervisorReviewing(now))
 }
 

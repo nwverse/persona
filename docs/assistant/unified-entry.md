@@ -144,10 +144,13 @@ inside active work. Each thing is one row in exactly one entry, Needs you first;
 rule below. Native clients keep their existing two-entry presentation until they adopt this grouping:
 
 - **Needs you**: a task whose current agent asks something (one row, its cards under the task's name), a task waiting
-  for a decision that is the owner's (an open `ask`; `needs_user` on an open task; on Android and Apple also a
+  for a decision that is the owner's (an `ask` on an open task; `needs_user` on an open task; on Android and Apple also a
   `pending_review` that is overdue, next bullet), one whose turn broke off on a model error (`interrupted`) or whose start failed while it is
   still the user's to retry; in the main chat, an Agent opened by hand (no task) that asks something; a plan waiting
-  for Start (one row per plan); a message card waiting for Send; the conversation's own cards.
+  for Start (one row per plan); a message card waiting for Send; the conversation's own cards. A finished task is never
+  here, whatever `ask` it still carries (a supervisor's accepting review can leave its "please verify" behind): the
+  To-dos page files it with the finished ones and the tray has nothing to answer, so until #12974 such rows kept the
+  badge up for good while the list the owner opened showed none of them.
 - **A supervisor's review is not the owner's.** A supervised task judged finished waits in `pending_review` for its
   supervisor (the background supervisor, a leader, or the conversation that handed it out; "Supervision" and
   "Background supervisor" below), who closes it with `task_review`. That review is Persona's to do, so the Needs you
