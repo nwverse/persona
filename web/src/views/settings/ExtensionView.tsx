@@ -7,7 +7,7 @@
 // extension; extension_ui {invalidate} draws the view on screen again (one off screen when it comes back). A view with
 // refresh_after is drawn again while it is on screen. Logic in lib/extension-ui.ts.
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { ApiError, credentialOwner, errorText, getToken } from "../../lib/api";
+import { ApiError, credentialOwner, errorText, getToken, onCredentialChange } from "../../lib/api";
 import { extIdOf } from "../../lib/extension-api";
 import { openLink } from "../../lib/links";
 import {
@@ -69,9 +69,11 @@ function useRefresh(delay: number, drawnAt: number, draw: () => void) {
  * extension_ui {invalidate} for this extension (and this ui, or all of its): `draw` now when the page is visible, else
  * once it is visible again. At most once a second.
  */
-function useInvalidate(extension: string, ui: string, draw: () => void) {
+function useInvalidate(extension: string, ui: string, draw: () => void, skipHello?: () => boolean) {
   const drawRef = useRef(draw);
   drawRef.current = draw;
+  const skipHelloRef = useRef(skipHello);
+  skipHelloRef.current = skipHello;
   useEffect(() => {
     let dirty = false;
     let last = 0;
@@ -100,7 +102,7 @@ function useInvalidate(extension: string, ui: string, draw: () => void) {
     // the subscription pages (#2041): a subscription saved, run or deleted anywhere draws them again
     const offSubscription = extension === SUBSCRIPTIONS_UI ? onHubEvent("subscription", () => now()) : () => {};
     // a reconnect the hub could not resume: an invalidate missed meanwhile is not replayed (#4954)
-    const offHello = onHubEvent("hello", (msg) => !isResumed(msg) && now());
+    const offHello = onHubEvent("hello", (msg) => !isResumed(msg) && !skipHelloRef.current?.() && now());
     const shown = () => {
       if (dirty && document.visibilityState === "visible") now();
     };
@@ -146,6 +148,16 @@ export function pageHref(extension: string, ui: string, state?: string): string 
  */
 const HELLO_NEGOTIATION_MS = 5000;
 const NOOP = () => {};
+// Pages that fell back from the native UI stream to HTTP in this session: reopen over HTTP immediately instead of
+// repeating the stream-open round-trip (cleared on credential changes or extension lifecycle updates).
+const httpFallbacks = new Set<string>();
+let fallbackResetWired = false;
+function wireFallbackReset() {
+  if (fallbackResetWired) return;
+  fallbackResetWired = true;
+  if (typeof onCredentialChange === "function") onCredentialChange(() => httpFallbacks.clear());
+  if (typeof onHubEvent === "function") onHubEvent("extensions", () => httpFallbacks.clear());
+}
 // The native stream page and its schema validator are a chunk of their own: most pages are drawn over HTTP and never need it.
 const NativeExtensionUI = lazyPage(() => import("./NativeExtensionUI").then((m) => m.NativeExtensionUI));
 export function ExtensionUI({ remember, ...props }: Parameters<typeof LegacyExtensionUI>[0] & {
@@ -162,41 +174,56 @@ export function ExtensionUI({ remember, ...props }: Parameters<typeof LegacyExte
   const negotiated = useRef(false);
   const [legacyNegotiation, setLegacyNegotiation] = useState(false);
   if (ready) negotiated.current = true;
-  const waitingHello = !props.embedded && !props.compact && typeof localStorage !== "undefined" && !!getToken() && !ready && !negotiated.current;
-  useEffect(() => {
-    if (!waitingHello || legacyNegotiation) return;
-    const timer = setTimeout(() => setLegacyNegotiation(true), HELLO_NEGOTIATION_MS);
-    return () => clearTimeout(timer);
-  }, [waitingHello, legacyNegotiation]);
   // System/embedded slots remain full fitted snapshots. Old hubs keep the exact existing component.
   // Another manager's extension draws over HTTP, which names its manager on each request (docs/assistant/managers.md "Clients").
   // The subscription pages (#2041) are the manager's, drawn over HTTP only.
-  const http = legacyNegotiation || !supported || props.embedded || props.compact || otherManager(props.manager) || props.extension === SUBSCRIPTIONS_UI;
+  const baseHttp = legacyNegotiation || !supported || props.embedded || props.compact || otherManager(props.manager) || props.extension === SUBSCRIPTIONS_UI;
   // The page's last view, until it is drawn again: one drawn with a UI version it may be drawn with now (before the hello
   // either; over the socket also HTTP's, which a page the socket cannot draw falls back to) by the default's extension
   // (before the roster, the last one drawn).
   const page = remember ? JSON.stringify([props.extension, props.ui, props.state ?? "", currentLanguage()]) : "";
-  const httpOnly = known && http;
+  const httpOnly = known && baseHttp;
   const kept = useMemo(() => {
     if (!page) return null;
     const [extension, ui, state, language] = JSON.parse(page) as string[];
     return readKeptView({ extension, ui, state, language }, httpOnly ? [UI_VERSION] : [NATIVE_UI_VERSION, UI_VERSION], defaultId || undefined);
   }, [page, httpOnly, defaultId]);
+  // Pages whose last render used HTTP (cached with UI_VERSION) or that already fell back to HTTP in this session start
+  // their HTTP render immediately instead of waiting for WebSocket hello, GET /managers, and a failing stream probe.
+  const fallbackKey = JSON.stringify([owner, group, props.extension, props.ui]);
+  const knownHttp = kept?.key.version === UI_VERSION || httpFallbacks.has(fallbackKey);
+  const mountKey = JSON.stringify([owner, group, props.extension, props.ui, props.state ?? "", props.manager ?? ""]);
+  const httpLocked = useRef("");
+  const lockedHttp = httpLocked.current === mountKey;
+  const http = lockedHttp || baseHttp || knownHttp;
+  const waitingHello = !lockedHttp && !knownHttp && !props.embedded && !props.compact && typeof localStorage !== "undefined" && !!getToken() && !ready && !negotiated.current;
+  useEffect(() => {
+    if (!waitingHello || legacyNegotiation) return;
+    const timer = setTimeout(() => setLegacyNegotiation(true), HELLO_NEGOTIATION_MS);
+    return () => clearTimeout(timer);
+  }, [waitingHello, legacyNegotiation]);
   const placeholder = kept ? <KeptView view={kept.view} native={kept.key.version === NATIVE_UI_VERSION} compact={props.compact} bare={props.bare} title={props.title} onWide={props.onWide} /> : undefined;
-  const onView = useCallback((view: UIView, version: number, manager = defaultKnown() ? defaultManager() : "") => {
+  const onView = useCallback((view: UIView, version: number, manager = defaultId || (defaultKnown() ? defaultManager() : "")) => {
     if (!page || !manager) return;
     const [extension, ui, state, language] = JSON.parse(page) as string[];
     keepView({ extension, ui, state, language, version, manager }, view);
-  }, [page]);
+  }, [page, defaultId]);
+  const onLegacyFallback = useCallback(() => {
+    wireFallbackReset();
+    httpFallbacks.add(fallbackKey);
+  }, [fallbackKey]);
   const keeps = page ? { placeholder, onView } : {};
   // Bound initial negotiation when HTTP works but WebSocket upgrades do not. Once HTTP
   // mounts, retain it even if a late hello arrives: never allocate a second source page.
   if (waitingHello && !legacyNegotiation) return placeholder ?? <Loading />;
-  if (http) return <LegacyExtensionUI {...props} {...keeps} />;
+  if (http) {
+    httpLocked.current = mountKey;
+    return <LegacyExtensionUI {...props} {...keeps} />;
+  }
   return (
     <PageBoundary page={`extension:${props.extension}/${props.ui}`}>
       <Suspense fallback={placeholder ?? <Loading />}>
-        <NativeExtensionUI key={JSON.stringify([owner, group, props.extension, props.ui, props.state ?? ""])} {...props} {...keeps} legacy={(page) => <LegacyExtensionUI {...page} />} />
+        <NativeExtensionUI key={JSON.stringify([owner, group, props.extension, props.ui, props.state ?? ""])} {...props} {...keeps} onLegacyFallback={onLegacyFallback} legacy={(page) => <LegacyExtensionUI {...page} />} />
       </Suspense>
     </PageBoundary>
   );
@@ -353,8 +380,10 @@ export function LegacyExtensionUI({
   // whose number is not the latest any more is older than what was asked since (a press, another page, the next search)
   // and is not drawn, nor its error shown (#4931).
   const asked = useRef(0);
+  const inFlightRef = useRef(false);
   const load = useCallback((keep?: boolean) => {
     const mine = ++asked.current;
+    inFlightRef.current = true;
     setLoading(true);
     renderUI(extension, top.ui, context, stateRef.current, manager)
       .then((v) => mine === asked.current && show(v, keep === true))
@@ -368,7 +397,10 @@ export function LegacyExtensionUI({
           setDrawnAt(Date.now()); // a failed refresh waits a whole interval too
         }
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (mine === asked.current) inFlightRef.current = false;
+        setLoading(false);
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [extension, pageKey, ctxKey, manager]);
   // a new page (pushed, popped, another one): its own state, a fresh view
@@ -395,9 +427,15 @@ export function LegacyExtensionUI({
   useRefresh(active ? refreshDelay(view) : 0, drawnAt, () => {
     if (!busy) load(true);
   });
-  useInvalidate(extension, top.ui, () => {
-    if (active && !busy) load(true);
-  });
+  useInvalidate(
+    extension,
+    top.ui,
+    () => {
+      if (active && !busy) load(true);
+    },
+    // Skip the initial non-resumed hello while the first draw started before hello is already in flight.
+    () => !drawnRef.current && inFlightRef.current,
+  );
   const drawnFor = useRef(revision);
   useEffect(() => {
     if (drawnFor.current === revision) return;
