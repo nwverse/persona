@@ -67,6 +67,12 @@ final class QuestionDockTests: XCTestCase {
     @MainActor private var dock: XCUIElement { app.otherElements["question-dock"].firstMatch }
     @MainActor private var entry: XCUIElement { app.buttons["action-bar.to-decide"].firstMatch }
 
+    /// To the first card: one that comes in after the pager showed never moves it (#12831), so a test starts from there.
+    @MainActor private func goFirst() {
+        let previous = app.buttons["question-dock.previous"]
+        for _ in 0..<6 where previous.exists && previous.isEnabled { previous.tap(); settle(0.5) }
+    }
+
     /// Waits for the pager to say `want` ("2 / 5").
     @MainActor private func expectPosition(_ want: String, _ step: String, file: StaticString = #filePath, line: UInt = #line) {
         let label = app.staticTexts["question-dock.position"].firstMatch
@@ -88,6 +94,7 @@ final class QuestionDockTests: XCTestCase {
             XCTAssertTrue(dock.waitForExistence(timeout: 20), "no pager (\(look))")
             dismissIconAlert()
             settle(2)
+            goFirst()
             XCTAssertTrue(entry.exists, "no To Decide entry (\(look))")
             XCTAssertTrue(entry.label.contains("5"), "the entry says \(entry.label), not 5 (\(look))")
             expectPosition("1 / 5", "first (\(look))")
@@ -138,6 +145,7 @@ final class QuestionDockTests: XCTestCase {
         XCTAssertTrue(dock.waitForExistence(timeout: 20), "no pager")
         dismissIconAlert()
         settle(2)
+        goFirst()
         app.buttons["question-dock.next"].tap()
         expectPosition("2 / 5", "next")
 
@@ -166,6 +174,7 @@ final class QuestionDockTests: XCTestCase {
         XCTAssertTrue(dock.waitForExistence(timeout: 20), "no pager")
         dismissIconAlert()
         settle(2)
+        goFirst()
         app.buttons["question-dock.next"].tap()
         expectPosition("2 / 5", "next")
         app.buttons["action-bar.needs-you"].firstMatch.tap()
@@ -187,6 +196,7 @@ final class QuestionDockTests: XCTestCase {
         XCTAssertTrue(dock.waitForExistence(timeout: 20), "no pager")
         dismissIconAlert()
         settle(2)
+        goFirst()
         let source = dock.buttons["interaction-source"].firstMatch
         XCTAssertTrue(source.waitForExistence(timeout: 5), "no View in Chat on the conversation's own card")
         source.tap()

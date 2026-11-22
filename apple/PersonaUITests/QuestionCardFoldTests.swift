@@ -108,6 +108,15 @@ final class QuestionCardFoldTests: XCTestCase {
     @MainActor private var dock: XCUIElement { app.otherElements["question-dock"].firstMatch }
     @MainActor private var entry: XCUIElement { app.buttons["action-bar.to-decide"].firstMatch }
 
+    /// The pager on the task's question, its second card: the conversation's own first (#12831). A card that comes in
+    /// later never moves the pager, so it goes to the first and then one on.
+    @MainActor private func showTasksQuestion() {
+        let previous = app.buttons["question-dock.previous"]
+        for _ in 0..<5 where previous.exists && previous.isEnabled { previous.tap(); settle(0.5) }
+        app.buttons["question-dock.next"].tap()
+        settle()
+    }
+
     @MainActor private func assertInPage(_ card: XCUIElement, _ step: String, file: StaticString = #filePath, line: UInt = #line) {
         let fold = foldControl(card)
         XCTAssertTrue(fold.exists && fold.isHittable, "\(step): the card's fold is not on screen", file: file, line: line)
@@ -270,7 +279,7 @@ final class QuestionCardFoldTests: XCTestCase {
         shot("agent-source-dark")
     }
 
-    /// Persona's own question and a task's at once: one pager, the conversation's own first (#12831), on the page under
+    /// Persona's own question and its tasks' at once: one pager, the conversation's own first (#12831), on the page under
     /// the top bar with the conversation's room over it.
     @MainActor func testATasksQuestionAndTheConversationsShareThePager() throws {
         let hub = try hub("PERSONA_BOTH_HUB")
@@ -279,11 +288,11 @@ final class QuestionCardFoldTests: XCTestCase {
         dismissIconAlert()
         settle(2)
         shot("both-dark")
-        XCTAssertEqual(app.staticTexts["question-dock.position"].firstMatch.label, "1 / 2", "not one pager of two")
+        // The conversation's own question first, then the tasks' (the network tests' question and its build approval).
+        XCTAssertTrue(app.staticTexts["question-dock.position"].firstMatch.label.hasSuffix("/ 3"), "not one pager of three")
         XCTAssertFalse(app.scrollViews["pending-cards"].exists, "the conversation's card is still in the stack")
-        assertInPage(dock, "both: the conversation's")
-        app.buttons["question-dock.next"].tap()
-        settle()
+        assertInPage(dock, "both: the pager")
+        showTasksQuestion()
         XCTAssertTrue(text("Swift Testing").waitForExistence(timeout: 3), "the second page is not the task's question")
         assertInPage(dock, "both: the task's")
     }
@@ -300,9 +309,7 @@ final class QuestionCardFoldTests: XCTestCase {
             XCTAssertTrue(task.waitForExistence(timeout: 20), "no pager (\(look))")
             dismissIconAlert()
             settle(2)
-            // The task's question is the pager's second card (#12831).
-            app.buttons["question-dock.next"].tap()
-            settle()
+            showTasksQuestion()
             let grabber = task.descendants(matching: .any)["interaction-grabber"].firstMatch
             XCTAssertTrue(grabber.exists && grabber.isHittable, "no grabber on the task's question (\(look))")
             let start = task.frame.height
@@ -345,8 +352,7 @@ final class QuestionCardFoldTests: XCTestCase {
             XCTAssertTrue(task.waitForExistence(timeout: 20), "no pager, relaunched (\(look))")
             dismissIconAlert()
             settle(2)
-            app.buttons["question-dock.next"].tap()
-            settle()
+            showTasksQuestion()
             XCTAssertEqual(task.frame.height, chosen, accuracy: 4, "relaunched, the question is not the height chosen (\(look))")
             app.terminate()
         }
