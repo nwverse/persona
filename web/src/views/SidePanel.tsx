@@ -52,7 +52,8 @@ export function SidePanel() {
   // ⌘⇧↵ shows only the middle: the panel stays open (its terminal keeps running) but is not drawn, on a wide screen
   const maximized = useLayout().maximized;
   // narrow, it covers the page: Back closes it first (and stays on the conversation)
-  useCloseOnBack(Boolean(panel), closePanel, useMedia(NARROW));
+  // On a link to another page useSessionPanels saves the current panel and closes it there.
+  useCloseOnBack(Boolean(panel), (navigating) => { if (!navigating) closePanel(); }, useMedia(NARROW));
   // the width asked for; what is drawn is `shown`, which also fits the room there is now (the window, the sidebar).
   // Until the room is measured (or with no page beside it), the old cap: 72% of the window.
   const [width, setWidth] = useState(() => Math.max(PANEL_MIN, Number(localStorage.getItem(WIDTH_KEY)) || DEFAULT_WIDTH));

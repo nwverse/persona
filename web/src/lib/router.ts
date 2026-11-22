@@ -1,7 +1,7 @@
 import { assistantPath } from "./compatibility";
 // A tiny history router: the hub serves index.html for every path that isn't a file.
 import { useSyncExternalStore } from "react";
-import { takeOverlayEntry } from "./back-close";
+import { navigateOverlay } from "./back-close";
 import { BASE, stripBase } from "./base";
 import { decodeURIComponentSafe } from "./uri";
 
@@ -275,13 +275,11 @@ export function navigate(r: Route | string, replace = false, state: Record<strin
   // the query is part of the address (/s/…?view=term): the same page with another view is somewhere else
   if (to === location.pathname + location.search) return;
   returnedTo = "";
-  // From inside an open overlay (a drawer's link, a sheet's action): the new page takes the overlay's entry, so Back
-  // from it goes to the page under the overlay, not to a dead copy of it (#1996). A replace keeps the entry's state:
-  // an overlay open over the page keeps its marker.
+  const notify = () => listeners.forEach((l) => l());
+  if (navigateOverlay(to, state, replace, notify)) return;
   if (replace) history.replaceState(state ?? history.state, "", to);
-  else if (takeOverlayEntry()) history.replaceState(state, "", to);
   else history.pushState(state, "", to);
-  listeners.forEach((l) => l());
+  notify();
 }
 
 /** The route shows this agent's chat: its own address (/s/…) or its tab's (/t/…/<sid>). */

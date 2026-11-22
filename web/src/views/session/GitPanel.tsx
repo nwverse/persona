@@ -23,6 +23,8 @@ import { ago, shortPath } from "../../lib/format";
 import { useStore } from "../../lib/store";
 import { openPanel, type GitSpot } from "../../lib/panel";
 import { REVIEW_FEATURE } from "../../lib/session-review";
+import { useBackStack } from "../../lib/back-stack";
+import { NARROW, useMedia } from "../../lib/viewport";
 import { useFsLive } from "../../lib/use-fs-live";
 import { Button, copyText, cx, IconButton, Loading, Spinner, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -55,6 +57,7 @@ export function GitPanel({ mid, sid, cwd, at, onClose }: { mid: string; sid: str
   const [noMore, setNoMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [views, setViews] = useState<View[]>([]);
+  useBackStack(views.length, (n) => setViews((current) => current.slice(0, n)), useMedia(NARROW));
   const [reloads, setReloads] = useState(0);
   const lastReload = useRef(reloads);
   const head = useRef<string | undefined>(undefined);
