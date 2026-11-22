@@ -3875,13 +3875,12 @@
   },
   {
     "name": "decision_record",
-    "description": "Record a structured decision in the unified ledger. Preserve options, selected and rejected choices, reason and reversibility. Model-supplied user quotes remain inferred until source verification; never claim they are verified. user_quotes optionally appends attributed source excerpts. origin_space (string) and category (string array) are optional source-space and content-category metadata; leave unknown labels empty.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Record entry {text,scope?,decision:{options[],selected[],rejected[],reason,reversible:bool|null}}. user_quotes need quote and source {machine,session,msg_uuid|card_id|file,line}; quotes stay inferred.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [
         "entry"
       ],
-      "additionalProperties": false,
       "properties": {
         "entry": {
           "type": "object",
@@ -3890,123 +3889,11 @@
             "decision"
           ],
           "properties": {
-            "origin_space": {
-              "type": "string"
-            },
-            "category": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
             "text": {
               "type": "string"
             },
-            "quote": {
-              "type": "string"
-            },
-            "source": {
-              "type": "object",
-              "properties": {
-                "machine": {
-                  "type": "string"
-                },
-                "session": {
-                  "type": "string"
-                },
-                "msg_uuid": {
-                  "type": "string"
-                },
-                "card_id": {
-                  "type": "string"
-                },
-                "file": {
-                  "type": "string"
-                },
-                "line": {
-                  "type": "integer"
-                }
-              }
-            },
-            "relayed_via": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "scope": {
-              "type": "object",
-              "properties": {
-                "executor": {
-                  "type": "string"
-                },
-                "machine": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                "project": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                "personal": {
-                  "type": "boolean"
-                }
-              }
-            },
-            "expires_at": {
-              "type": "string"
-            },
-            "supersedes": {
-              "type": "string"
-            },
-            "tag": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
             "decision": {
-              "type": "object",
-              "required": [
-                "options",
-                "selected",
-                "rejected",
-                "reason",
-                "reversible"
-              ],
-              "properties": {
-                "options": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                "selected": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                "rejected": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                "reason": {
-                  "type": "string"
-                },
-                "reversible": {
-                  "type": [
-                    "boolean",
-                    "null"
-                  ]
-                }
-              }
+              "type": "object"
             }
           }
         },
@@ -4014,48 +3901,19 @@
           "type": "array",
           "maxItems": 20,
           "items": {
-            "type": "object",
-            "properties": {
-              "origin_space": {
-                "type": "string"
-              },
-              "category": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "text": {
-                "type": "string"
-              },
-              "quote": {
-                "type": "string"
-              },
-              "source": {
-                "type": "object"
-              },
-              "relayed_via": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "scope": {
-                "type": "object"
-              }
-            }
+            "type": "object"
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "defer_loading": true
   },
   {
     "name": "decisions_query",
-    "description": "Read structured decisions from the unified ledger using after pagination, provenance, trust, status, scope and tag filters. Expired entries are omitted unless requested. Keep user-authored decisions distinct from agent notes and inferred quotes.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "List decisions with after paging. Scope filters executor, machine[], project[] and personal.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
-      "additionalProperties": false,
       "properties": {
         "after": {
           "type": "string"
@@ -4076,29 +3934,10 @@
           "type": "string"
         },
         "scope": {
-          "type": "object",
-          "properties": {
-            "executor": {
-              "type": "string"
-            },
-            "machine": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "project": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "personal": {
-              "type": "boolean"
-            }
-          }
+          "type": "object"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "defer_loading": true
   }
