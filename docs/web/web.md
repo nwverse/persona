@@ -2400,6 +2400,11 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   each with the models its agent lists in its own /model menu (`GET …/launchers/{name}/models`, the list **New agent**
   uses). The pill reads the session's own list once (for the model's name); the panel, on each opening, shows the lists
   read before at once and reads every list again behind them, the session's own first, at most three at a time.
+  A Persona chat's pill (and the main chat's other-agent notice) reads the computer's `?purpose=assistant` launchers,
+  and Main chat's or the background supervisor's default, again when a push moves the conversation's `rev` (#6542), so
+  a hub-side change reaches a page left open. `rev` moves with every write to the transcript, so a move while the
+  conversation works waits for the turn to end and is read once then; a move while it isn't working reads at once
+  (`useRevisionReread`, #12776).
 - **Quota and prices** (#5056): the opening also reads each launcher's existing `GET /launchers/{name}/quota?machine=<mid>`
   answer without `refresh=1`, so the hub's one-minute cache absorbs repeated openings and an unsupported gateway draws
   nothing. A launcher summary shows the tightest weekly window's remaining percentage and bar and the reset

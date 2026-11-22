@@ -127,6 +127,15 @@ describe("the Main chat default's agent-kind mismatch", () => {
     expect(launcherRead.calls).toEqual([{ mid: "hub", again: true }, { mid: "hub", again: true }]);
   });
 
+  it("holds revision refreshes while the conversation works and refreshes once when its turn ends", async () => {
+    await show(session({ rev: 1 }));
+    expect(launcherRead.calls).toHaveLength(1);
+    for (let rev = 2; rev <= 6; rev++) await show(session({ rev, status: "working", state: "working" }));
+    expect(launcherRead.calls).toHaveLength(1);
+    await show(session({ rev: 7 }));
+    expect(launcherRead.calls).toEqual([{ mid: "hub", again: true }, { mid: "hub", again: true }]);
+  });
+
   it("keeps a trailing refresh when a revision arrives during a pending launcher read", async () => {
     launcherRead.hold = true;
     await show(session({ rev: 1 }));
