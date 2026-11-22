@@ -24,6 +24,7 @@ import (
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/promptcontent"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/shellcmd"
@@ -298,6 +299,16 @@ func serviceTierRefusal(ctx context.Context, code string) error {
 	return refusal(code, i18n.T(i18n.From(ctx), "rpc-errors."+code), nil)
 }
 
+// assistantInputOrigin resolves an existing conversation's origin for both content checks and sends.
+func assistantInputOrigin(st sessionState, requested modelExecution, resume bool) (origin string, known bool) {
+	origin, known = requested.Origin, requested.OriginKnown || st.OriginKnown || !resume
+	if resume && !requested.OriginKnown && (st.OriginKnown || st.Origin != "" || origin == "") {
+		// A persisted decision, including a legacy non-empty Inbox origin, wins over an unattested caller value.
+		origin = st.Origin
+	}
+	return origin, known
+}
+
 // assistantSend delivers a user message, starting or restarting the headless claude when needed.
 // id == "" starts a new conversation and returns its id.
 func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string, images []proto.Image, mode, effort string, options ...modelExecution) (_ string, sendErr error) {
@@ -310,8 +321,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if launcher != "" && !shellcmd.NameRe.MatchString(launcher) {
 		return "", fmt.Errorf("invalid launcher %q", launcher)
 	}
-	_, _, runtimeKnown := n.runtimes.belongs(id)
-	strictRuntime := executionOption(options).Strict && runtimeKnown
+	strictRuntime := n.strictRuntimeSession(id, executionOption(options).Strict)
 	if id != "" && !validID(id) && !n.runtimeAssistant(id) && !strictRuntime {
 		return "", fmt.Errorf("invalid session id %q", id)
 	}
@@ -446,14 +456,8 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			n.state.put(id, st)
 		}
 	}
-	requestedOrigin := executionOption(options)
-	origin, originKnown := requestedOrigin.Origin, requestedOrigin.OriginKnown || st.OriginKnown || !resume
-	if resume && !requestedOrigin.OriginKnown && (st.OriginKnown || st.Origin != "" || origin == "") {
-		// An unattested caller origin is not evidence. A persisted decision, including a legacy non-empty Inbox origin,
-		// wins over it; only an explicit origin_known can replace that decision with an ordinary empty origin.
-		origin = st.Origin
-	}
-	if resume && requestedOrigin.OriginDecisionRequired && !originKnown && guest == nil {
+	origin, originKnown := assistantInputOrigin(st, requested, resume)
+	if resume && requested.OriginDecisionRequired && !originKnown && guest == nil {
 		// A pre-upgrade record has no ordinary-origin decision. Neither an older manager's send nor a non-empty caller
 		// origin proves one; wait for the new manager's explicit origin_known instead of starting ordinary built-ins.
 		return "", errAssistantOriginUnknown
@@ -471,6 +475,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		// Plan rejects MCP before consulting allowedTools, which stalls investigation and inbox_suggest. Default keeps
 		// Persona's explicit MCP allowlist effective; the manager/node origin policy remains the outbound boundary.
 		mode = "default"
+	}
+	if err := checkFileReferenceAudience(ctx, text, origin, guest != nil, public); err != nil {
+		return "", err
 	}
 	if guest != nil {
 		if refs, err := assistantskills.References(text); err != nil || len(refs) != 0 {
@@ -506,9 +513,12 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return "", err
 		}
 	}
-	if onRuntime, runs := n.assistantRuntime(rl), n.runtimeAssistant(id) || strictRuntime; guest != nil && (onRuntime != nil || runs) {
+	if onRuntime, runs := n.assistantRuntimeRoute(id, rl, strictRuntime); guest != nil && (onRuntime != nil || runs) {
 		return "", errGuestAgent
 	} else if onRuntime != nil || runs {
+		if refs, err := promptcontent.Files(text); err != nil || len(refs) > 0 {
+			return "", fileRuntimeUnsupported(ctx)
+		}
 		if origin == originInbox {
 			// External runtimes do not yet attest the origin on their first callback. Refuse rather than leave an
 			// unguarded startup window; built-in Claude and Codex carry it in their process and session state.
@@ -631,6 +641,19 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if proto.IsExternalLauncher(launcher) {
 		execution.StartupContext = ctx
 	}
+	// Validate the file scope before taking a spare or persisting a conversation.
+	fileCwd := cwd
+	if fileCwd == "" {
+		fileCwd = n.storedCwd(st.Cwd)
+	}
+	files, err := n.selectedFiles(ctx, text, fileCwd, launcher, execution.Runtime)
+	if err != nil {
+		return "", err
+	}
+	if len(files) > 0 {
+		// An empty cwd would let a new send adopt a spare in any directory. Require the directory that was checked.
+		cwd = fileCwd
+	}
 	var p *assistantProc
 	if id == "" && guest != nil {
 		// Never the warm spare: it was started with the assistant's tools. Its process reads Guest from the state.
@@ -671,7 +694,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	timing.mark("preflight_done", true)
 	if cwd == "" {
-		cwd = n.storedCwd(st.Cwd)
+		cwd = fileCwd
 	}
 	selectionSession := id
 	if !resume {
@@ -930,6 +953,14 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		return id, nil
 	}
 	if hasInput && (launcher != selectedLauncher || execution != selectedExecution || len(selected) > 0 && p.agent == "claude") {
+		// A new native conversation uses the file scope checked before startup. A resumed one can retain an
+		// existing process's launcher and runtime while a switch waits.
+		if resume && len(files) > 0 {
+			files, err = n.selectedFiles(ctx, text, cwd, launcher, execution.Runtime)
+			if err != nil {
+				return "", err
+			}
+		}
 		// An active process may retain its old environment while a switch waits. Never send selections to that
 		// different environment simply because the display names match. Claude startup can also
 		// reveal a managed-policy cache; recheck before handing exact-file instructions to it.
@@ -937,6 +968,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		if err != nil {
 			return "", err
 		}
+	}
+	if len(files) > 0 {
+		text += "\n\n" + prompts.RenderAssistantSelectedFiles(files, agentPromptLanguage(ctx))
 	}
 	retryMode, retryEffort := n.modesOf(id) // retain the request before an unconfirmed control can roll it back
 	// Controls do not depend on the live context. Start their acknowledged sync

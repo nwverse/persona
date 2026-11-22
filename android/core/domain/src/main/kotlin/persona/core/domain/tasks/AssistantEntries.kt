@@ -130,15 +130,19 @@ fun Todo.decisionDismissed(): Boolean {
     return at == decisionRound()
 }
 
-/** The web's `todoRank` (what the user must act on first), on the triage status. */
+/** The web's `todoRank` (what the user must act on first), on the triage status and its display state. */
 private fun Todo.entryRank(status: TriageStatus): Int {
-    if ((supervision?.state == "pending_review" || openAsk != null) && status in RESTING) return 20
+    if (waitsForOwner()) return 0
+    if (kind != "concern" && !isDone && acceptanceStands && (status in RESTING || status == TriageStatus.UsageLimit)) return 80
+    val reviewRequired = supervision?.state == "pending_review" || openAsk != null || (kind != "concern" && delivery?.state == "live")
+    if (reviewRequired && status in RESTING) return 20
     return when (status) {
         TriageStatus.NeedsYou -> 0
         TriageStatus.Interrupted -> 10
         TriageStatus.UsageLimit -> 15
         TriageStatus.Failed -> 30
         TriageStatus.Working -> 40
+        TriageStatus.Waiting -> 45
         TriageStatus.NotStarted -> 50
         TriageStatus.Unread -> 60
         TriageStatus.FollowUp -> 70
@@ -220,7 +224,7 @@ fun assistantEntries(
                 val ended = todo.finishedAt(placed)
                 if ((placed.section == TriageSection.JustDone || placed.section == TriageSection.Done) &&
                     status != TriageStatus.Failed && !todo.origin.isNullOrBlank() && ended > 0 && now - ended < JUST_DONE_MS) {
-                    finished += FinishedEntry(todo, status, fresh = placed.section == TriageSection.JustDone, at = ended)
+                    finished += FinishedEntry(todo, status, fresh = todo.showsJustFinished(placed, now), at = ended)
                 }
                 continue
             }

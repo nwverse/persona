@@ -413,18 +413,18 @@ func TestSendDigestRoutesOpenReviewForSupervision(t *testing.T) {
 	b.pending[g.id()] = g
 	b.last = time.Time{}
 	b.mu.Unlock()
+	// signal normally writes the durable outbox before sendDigest. This fixture seeds pending directly, so establish the
+	// same prerequisite rather than testing a direct delivery that production would never attempt (#5732).
+	s.updateSupervisePending(func(pending map[string]superviseSignal) { pending[g.id()] = g })
 	s.sendDigest(context.Background())
 	if got := todoNow(s, todo.ID); got.Supervision.State != "" || len(got.Supervision.Reviews) != 0 || got.DoneAt != nil {
 		t.Fatalf("digest fabricated a park or closed the task: %+v", got)
 	}
-	bg := s.settings(context.Background()).BackgroundSupervisor
-	if bg == "" || bg == "conv1" || len(conversationStarts(f)) != 1 {
-		t.Fatalf("unsupported parking did not reach ordinary background supervision: %q", bg)
+	if bg := s.settings(context.Background()).BackgroundSupervisor; bg != "" || len(conversationStarts(f)) != 0 {
+		t.Fatalf("new work started a legacy background supervisor: %q", bg)
 	}
-	listBackground(t, s, f, bg)
-	waitFor(t, "the external wait's supervision message", func() bool { return len(f.noticesTo(bg)) == 1 })
-	if notices := f.noticesTo(bg); !strings.Contains(notices[0], "signal=idle") || len(f.noticesTo("conv1")) != 0 {
-		t.Fatalf("open review did not reach its responsible supervisor alone: %q", notices)
+	if notices := f.noticesTo("conv1"); len(notices) != 1 || !strings.Contains(notices[0], "signal=idle") {
+		t.Fatalf("open review did not reach main supervision alone: %q", notices)
 	}
 	if len(f.asked) != 0 {
 		t.Fatalf("mechanical screening called a model instead of routing the signal: %d", len(f.asked))

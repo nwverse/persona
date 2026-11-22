@@ -193,7 +193,7 @@ func TestTodoAfterReadyMultiPrereqPartialAndTaskReviewAccepted(t *testing.T) {
 	if closed, err := s.reviewDoneTodo(ctx, p1.ID, "accepted", true); err != nil || !closed {
 		t.Fatalf("accept p1: closed=%v err=%v", closed, err)
 	}
-	time.Sleep(4 * shortSuperviseTimings.gather)
+	requireNoTodoReadyQueued(t, s, "premature wake after partial satisfaction / cancellation")
 	if got := len(sendsToConversation(f, "conv1")); got != 0 {
 		t.Fatalf("premature wake after partial satisfaction / cancellation: %v", sendsToConversation(f, "conv1"))
 	}
@@ -236,7 +236,7 @@ func TestTodoAfterReadyPRMergeExactDelivery(t *testing.T) {
 		if err := s.applyPRStatus(ctx, todoNow(s, pre.ID), TodoPRStatus{URL: prURL, State: "closed", CheckedAt: now.Add(time.Second)}); err != nil {
 			t.Fatalf("apply closed PR: %v", err)
 		}
-		time.Sleep(4 * shortSuperviseTimings.gather)
+		requireNoTodoReadyQueued(t, s, "non-merged PR emitted premature wake")
 		if got := len(sendsToConversation(f, "conv1")); got != 0 {
 			t.Fatalf("non-merged PR emitted premature wake: %v", sendsToConversation(f, "conv1"))
 		}
@@ -257,7 +257,7 @@ func TestTodoAfterReadyPRMergeExactDelivery(t *testing.T) {
 		if closed, err := s.reviewDoneTodo(ctx, pre.ID, "accepted after merge", true); err != nil || !closed {
 			t.Fatalf("reviewDoneTodo after merge: closed=%v err=%v", closed, err)
 		}
-		time.Sleep(4 * shortSuperviseTimings.gather)
+		requireNoTodoReadyQueued(t, s, "completing already-merged prerequisite re-emitted wake")
 		if got := len(sendsToConversation(f, "conv1")); got != 1 {
 			t.Fatalf("completing already-merged prerequisite re-emitted wake: got %d wakes", got)
 		}
@@ -285,7 +285,7 @@ func TestTodoAfterReadyPRMergeExactDelivery(t *testing.T) {
 		if err := s.applyPRStatus(ctx, todoNow(s, pre.ID), TodoPRStatus{URL: pr2, State: "open", CheckedAt: now}); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(4 * shortSuperviseTimings.gather)
+		requireNoTodoReadyQueued(t, s, "partial PR merge emitted premature wake")
 		if got := len(sendsToConversation(f, "conv1")); got != 0 {
 			t.Fatalf("partial PR merge emitted premature wake: %v", sendsToConversation(f, "conv1"))
 		}
@@ -336,7 +336,7 @@ func TestTodoAfterReadyPRMergeExactDelivery(t *testing.T) {
 		if err := s.applyPRStatus(ctx, todoNow(s, pre.ID), TodoPRStatus{URL: prDelivery1, State: "merged", CheckedAt: now}); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(4 * shortSuperviseTimings.gather)
+		requireNoTodoReadyQueued(t, s, "unmerged delivery repo PR failed to block wake")
 		if got := len(sendsToConversation(f, "conv1")); got != 0 {
 			t.Fatalf("unmerged delivery repo PR failed to block wake: %v", sendsToConversation(f, "conv1"))
 		}
@@ -379,7 +379,7 @@ func TestTodoAfterReadySkipsAlreadyStartedDependent(t *testing.T) {
 	if _, err := s.editTodo(ctx, pre.ID, db.TodoEdit{Done: &done}); err != nil {
 		t.Fatalf("complete pre: %v", err)
 	}
-	time.Sleep(4 * shortSuperviseTimings.gather)
+	requireNoTodoReadyQueued(t, s, "already-started dependent received unexpected wake")
 	if got := len(sendsToConversation(f, "conv1")); got != 0 {
 		t.Fatalf("already-started dependent received unexpected wake: %v", sendsToConversation(f, "conv1"))
 	}
@@ -469,7 +469,7 @@ func TestTodoAfterReadyRestartAndResweepIdempotency(t *testing.T) {
 	s1.sweepTodoAfterReady(ctx)
 	s1.superviseWatch(ctx, time.Now())
 	s1.evaluateTodoAfterDependents(ctx, pre.ID)
-	time.Sleep(4 * shortSuperviseTimings.gather)
+	requireNoTodoReadyQueued(t, s1, "repeated sweeps emitted")
 	if got := len(sendsToConversation(f1, "conv1")); got != 1 {
 		t.Fatalf("repeated sweeps emitted %d wakes, want 1", got)
 	}
@@ -488,7 +488,7 @@ func TestTodoAfterReadyRestartAndResweepIdempotency(t *testing.T) {
 
 	s2.sweepTodoAfterReady(ctx)
 	s2.superviseWatch(ctx, time.Now())
-	time.Sleep(4 * shortSuperviseTimings.gather)
+	requireNoTodoReadyQueued(t, s2, "restarted service re-emitted")
 	if got := len(sendsToConversation(f2, "conv1")); got != 0 {
 		t.Fatalf("restarted service re-emitted %d duplicate wakes, want 0", got)
 	}
@@ -501,7 +501,7 @@ func TestTodoAfterReadyRestartAndResweepIdempotency(t *testing.T) {
 		t.Fatalf("recovered wake mismatch:\n%s", msg)
 	}
 	s2.sweepTodoAfterReady(ctx)
-	time.Sleep(4 * shortSuperviseTimings.gather)
+	requireNoTodoReadyQueued(t, s2, "recovered dependent re-emitted wake")
 	if got := len(sendsToConversation(f2, "conv1")); got != 1 {
 		t.Fatalf("recovered dependent re-emitted wake: got %d", got)
 	}
@@ -560,7 +560,7 @@ func TestTodoAfterReadyFailedStartAndRequireAcceptedGateAndUpdatedAfterSet(t *te
 			t.Fatalf("failTodo: %v", err)
 		}
 		s.sweepTodoAfterReady(ctx)
-		time.Sleep(4 * shortSuperviseTimings.gather)
+		requireNoTodoReadyQueued(t, s, "failed-start prerequisite emitted wake")
 		if got := len(sendsToConversation(f, "conv1")); got != 0 {
 			t.Fatalf("failed-start prerequisite emitted wake: %v", sendsToConversation(f, "conv1"))
 		}
@@ -585,7 +585,7 @@ func TestTodoAfterReadyFailedStartAndRequireAcceptedGateAndUpdatedAfterSet(t *te
 		if err := s.applyPRStatus(ctx, todoNow(s, pre.ID), TodoPRStatus{URL: prURL, State: "merged", CheckedAt: time.Now().UTC()}); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(4 * shortSuperviseTimings.gather)
+		requireNoTodoReadyQueued(t, s, "PR merge bypassed RequireAcceptedAfter")
 		if got := len(sendsToConversation(f, "conv1")); got != 0 {
 			t.Fatalf("PR merge bypassed RequireAcceptedAfter: %v", sendsToConversation(f, "conv1"))
 		}
@@ -719,7 +719,7 @@ func TestTodoAfterReadyRepoStoreUnavailableFailsClosedAndRetriesAfterRecovery(t 
 		if err := s.applyPRStatus(ctx, todoNow(s, pre.ID), TodoPRStatus{URL: pr1, State: "merged", CheckedAt: time.Now().UTC()}); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(4 * shortSuperviseTimings.gather)
+		requireNoTodoReadyQueued(t, s, "store_unavailable fell back to stage PR and emitted premature wake")
 		if got := len(sendsToConversation(f, "conv1")); got != 0 {
 			t.Fatalf("store_unavailable fell back to stage PR and emitted premature wake: %v", sendsToConversation(f, "conv1"))
 		}
@@ -737,7 +737,7 @@ func TestTodoAfterReadyRepoStoreUnavailableFailsClosedAndRetriesAfterRecovery(t 
 		})
 		repoStore.setErr(nil)
 		s.sweepTodoAfterReady(ctx)
-		time.Sleep(4 * shortSuperviseTimings.gather)
+		requireNoTodoReadyQueued(t, s, "unmerged delivery PR failed to block after store recovery")
 		if got := len(sendsToConversation(f, "conv1")); got != 0 {
 			t.Fatalf("unmerged delivery PR failed to block after store recovery: %v", sendsToConversation(f, "conv1"))
 		}
@@ -951,7 +951,7 @@ func TestTodoAfterReadyReopenDependentClearsWakeStateAndAllowsNextWake(t *testin
 
 		// While pre is open, sweep must not wake dep prematurely.
 		s.sweepTodoAfterReady(ctx)
-		time.Sleep(4 * shortSuperviseTimings.gather)
+		requireNoTodoReadyQueued(t, s, "premature wake while reopened prereq is open")
 		if got := len(sendsToConversation(f, "conv1")); got != 1 {
 			t.Fatalf("premature wake while reopened prereq is open: got %d, want 1", got)
 		}
@@ -967,7 +967,7 @@ func TestTodoAfterReadyReopenDependentClearsWakeStateAndAllowsNextWake(t *testin
 
 		// Repeated sweeps and a simulated restart (with Postgres microsecond ReopenedAt truncation) must not duplicate.
 		s.sweepTodoAfterReady(ctx)
-		time.Sleep(4 * shortSuperviseTimings.gather)
+		requireNoTodoReadyQueued(t, s, "re-sweep duplicated reopened wake")
 		if got := len(sendsToConversation(f, "conv1")); got != 2 {
 			t.Fatalf("re-sweep duplicated reopened wake: got %d, want 2", got)
 		}
@@ -988,7 +988,7 @@ func TestTodoAfterReadyReopenDependentClearsWakeStateAndAllowsNextWake(t *testin
 		s2.todos.mu.Unlock()
 
 		s2.sweepTodoAfterReady(ctx)
-		time.Sleep(4 * shortSuperviseTimings.gather)
+		requireNoTodoReadyQueued(t, s2, "restarted service re-emitted")
 		if got := len(sendsToConversation(f2, "conv1")); got != 0 {
 			t.Fatalf("restarted service re-emitted %d duplicate wakes for reopened dependent, want 0", got)
 		}
@@ -1019,7 +1019,7 @@ func TestTodoAfterReadyReopenDependentClearsWakeStateAndAllowsNextWake(t *testin
 		s.sweepTodoAfterReady(ctx)
 		waitFor(t, "reopened dependent sweep wake", func() bool { return len(sendsToConversation(f, "conv1")) == 2 })
 		s.sweepTodoAfterReady(ctx)
-		time.Sleep(4 * shortSuperviseTimings.gather)
+		requireNoTodoReadyQueued(t, s, "second sweep duplicated reopened wake")
 		if got := len(sendsToConversation(f, "conv1")); got != 2 {
 			t.Fatalf("second sweep duplicated reopened wake: got %d, want 2", got)
 		}
@@ -1044,9 +1044,25 @@ func TestTodoAfterReadyReopenDependentClearsWakeStateAndAllowsNextWake(t *testin
 			t.Fatal(err)
 		}
 		s.sweepTodoAfterReady(ctx)
-		time.Sleep(4 * shortSuperviseTimings.gather)
+		requireNoTodoReadyQueued(t, s, "no-op reopen caused duplicate wake")
 		if got := len(sendsToConversation(f, "conv1")); got != 1 {
 			t.Fatalf("no-op reopen caused duplicate wake: got %d, want 1", got)
 		}
 	})
+}
+
+// requireNoTodoReadyQueued checks, right after the call that could have raised one, that no todo_ready wake waits to
+// go out. The call checks the dependents' prerequisites itself (evaluateTodoAfterDependents, sweepTodoAfterReady) and
+// queues a wake on the spot (s.signal), while the digest takes the queue only a gather later: a wake raised by the call
+// is still in the queue here, and one delivered before shows in the sends the caller counts next.
+func requireNoTodoReadyQueued(t *testing.T, s *Service, why string) {
+	t.Helper()
+	b := &s.supervise
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, g := range b.pending {
+		if g.Kind == sigTodoReady {
+			t.Fatalf("%s: a todo_ready wake for %s is queued", why, g.Todo)
+		}
+	}
 }

@@ -70,6 +70,11 @@ package metadata and generated/native text, descriptions, click/custom actions a
 bounds in en/zh-Hans/ja for present and absent optional inputs. It does not alter the generated source or repeat the
 pixel matrix.
 
+#13061 adds isolated temporary-file rollback checks for the Build generation entrypoint. Nondeterministic successive
+outputs restore the original reviewed bytes and return nonzero. If restoration itself fails, the original generator
+diagnostic remains first and the restoration error is explicitly secondary; no successful rollback is claimed.
+These tests do not regenerate or edit the reviewed Kotlin.
+
 These are Native JVM Compose comparisons, not a physical device,
 TalkBack, accessibility-service or performance result. This local generation, Kotlin compilation and JVM comparison
 does not complete any part of Gates A–D, their required visual/device acceptance, or the separately unauthorized
