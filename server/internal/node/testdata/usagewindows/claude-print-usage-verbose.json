@@ -25,6 +25,17 @@
             "percent": 72,
             "resets_at": "2026-11-27T09:00:00+00:00",
             "scope": null
+          },
+          {
+            "kind": "weekly_scoped",
+            "group": "weekly",
+            "percent": 18,
+            "resets_at": "2026-11-27T09:00:00+00:00",
+            "scope": {
+              "model": {
+                "display_name": "Sonnet"
+              }
+            }
           }
         ]
       }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -79,7 +80,9 @@ func TestMain(m *testing.M) {
 	codexDebugModels = func(context.Context, *Node, string) ([]byte, error) { return nil, errors.New("no codex in tests") }
 	// Subscription usage tests provide their own CLI / app-server instead of polling a real account.
 	codexUsageCLI = func() (string, error) { return "", errors.New("no codex in tests") }
-	claudeUsageCLI = func() (string, error) { return "", errors.New("no claude in tests") }
+	claudeUsageCommand = func(context.Context, string, []string, []string, bool) (*exec.Cmd, error) {
+		return nil, errors.New("no claude in tests")
+	}
 	// Nor the ChatGPT app's bundled codex: a test that wants one sets its own (codex_bundled_test.go).
 	bundledCodexCLI = func() string { return "" }
 	// Nor the user's Paseo: its home points nowhere (a test that wants one sets its own).

@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -31,14 +30,16 @@ import (
 // Claude Code subscription usage via the local CLI (#12412, docs/server/usage-windows.md).
 //
 // Persona never reads Claude's OAuth tokens or calls /api/oauth/usage directly. Instead, in a bounded background poll
-// (mirroring usagewindows_codex.go), the node asks the local `claude` CLI for its current subscription rate-limit
-// windows without sending a model request:
+// (mirroring usagewindows_codex.go), the node invokes the computer's built-in `claude` launcher through the user's
+// login shell (so shell functions, aliases, and PATH wrappers match what the user runs) without sending a model
+// request:
 //
 //   1. Preferred: stream-json control protocol (`initialize`, then `get_usage` with `skip_behaviors: true`), which
 //      returns structured JSON (`rate_limits_available`, `subscription_type`, `five_hour`, `seven_day`, `model_scoped`,
 //      `limits[]`) with RFC 3339 timestamps.
-//   2. Fallback: `claude -p /usage --output-format json --verbose` for older CLIs that reject `get_usage`, reading
-//      `usage_report.rate_limits` first and falling back to `/usage`'s printed text.
+//   2. Fallback: `claude -p /usage --output-format json --verbose` when the CLI rejects `get_usage` as unsupported or
+//      reports `rate_limits_available: true` with no windows (for example `rate_limits: null` in a fresh process),
+//      reading `usage_report.rate_limits` first and falling back to `/usage`'s printed text.
 //
 // Each config directory is probed at most once per claudeUsageMinInterval, and after the first poll only when Claude
 // Code was active in that directory or a previously observed window has reset. A fresh status-line file
@@ -46,18 +47,20 @@ import (
 
 const (
 	claudeUsagePollParallel = 4
-	claudeUsagePollTimeout  = 15 * time.Second // each config dir, including CLI startup
+	claudeUsagePollTimeout  = 45 * time.Second // each CLI invocation, covering slow login shells and launcher wrappers
 	claudeUsageMinInterval  = 5 * time.Minute  // minimum interval between probes for one config dir
 	claudeUsageIdleBackoff  = 30 * time.Minute // retry interval when an idle dir had no subscription windows
 	claudeUsageStatusFresh  = 15 * time.Minute // status-line drop newer than this wins over a CLI probe
 	claudeResetSlack        = 2 * time.Hour    // clock skew slack when inferring year/day for text reset times
 	claudeUsagePrefix       = "claude-cli:"
 	claudeUsageSettingsJSON = `{"disableAllHooks":true}`
+	claudeUsageBeginMarker  = "__PERSONA_CLAUDE_USAGE_BEGIN__"
+	claudeUsageEndMarker    = "__PERSONA_CLAUDE_USAGE_END__"
 )
 
 var (
-	// claudeUsageCLI locates the local Claude Code binary; swapped in tests.
-	claudeUsageCLI = claudeExecutable
+	// claudeUsageCommand builds the subprocess that runs the built-in `claude` launcher for one probe; swapped in tests.
+	claudeUsageCommand = defaultClaudeUsageCommand
 
 	// claudeUsageNow provides the current time; swapped in tests.
 	claudeUsageNow = time.Now
@@ -125,10 +128,6 @@ func (n *Node) collectClaudeCLIUsage(ctx context.Context, dirs []string, prevPro
 	if len(targets) == 0 {
 		return nil
 	}
-	cli, err := claudeUsageCLI()
-	if err != nil {
-		return nil
-	}
 	defaultUserDir := realPath(filepath.Join(n.home, ".claude"))
 	inheritedConfigDir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR"))
 	inheritedIsDefault := inheritedConfigDir != "" && realPath(proto.ExpandHome(inheritedConfigDir, n.home)) == defaultUserDir
@@ -147,19 +146,21 @@ func (n *Node) collectClaudeCLIUsage(ctx context.Context, dirs []string, prevPro
 			break
 		}
 		reads.Go(func() error {
-			readCtx, cancel := context.WithTimeout(ctx, claudeUsagePollTimeout)
-			defer cancel()
-			env := claudeUsageEnv(cli, t.dir, t.real, defaultUserDir, inheritedIsDefault)
-			sampledAt := claudeUsageNow().UTC()
-			acct, ok, modelTurn := readClaudeCLIUsage(readCtx, cli, env, sampledAt, !t.noPrintFallback)
-			if readCtx.Err() != nil && ctx.Err() != nil {
+			configDir := ""
+			if t.real != defaultUserDir || inheritedIsDefault {
+				configDir = t.dir
+			}
+			env := claudeUsageEnv(configDir)
+			startedAt := claudeUsageNow().UTC()
+			acct, ok, modelTurn := readClaudeCLIUsage(ctx, configDir, env, !t.noPrintFallback)
+			if ctx.Err() != nil {
 				return nil // canceled by disable/shutdown; do not record a probe timestamp
 			}
 			res := probeResult{
 				real: t.real,
 				ran:  true,
 				probe: claudeUsageProbe{
-					at:              sampledAt,
+					at:              startedAt,
 					hasWindows:      ok && len(acct.Windows) > 0,
 					nextReset:       earliestWindowReset(acct.Windows),
 					noPrintFallback: t.noPrintFallback || modelTurn,
@@ -271,81 +272,93 @@ func (n *Node) claudeDirActiveSince(dir, real string, since time.Time) bool {
 	return false
 }
 
-// claudeUsageEnv builds the subprocess environment for probing dir.
+// claudeUsageEnv builds the subprocess environment for probing configDir ("" means the default ~/.claude directory).
 //
 // On macOS, Claude Code derives the Keychain service name from CLAUDE_CONFIG_DIR whenever that variable is set, so
 // explicitly setting CLAUDE_CONFIG_DIR=~/.claude misses the default Keychain login. Keep CLAUDE_CONFIG_DIR unset for
 // the default ~/.claude directory unless the node's own inherited CLAUDE_CONFIG_DIR points at that same directory.
-func claudeUsageEnv(cli, dir, real, defaultUserDir string, inheritedIsDefault bool) []string {
+func claudeUsageEnv(configDir string) []string {
 	env := withoutEnv(desktopSeedEnv(os.Environ()), []string{
 		"CLAUDECODE",
 		"CLAUDE_CODE_ENTRYPOINT",
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
 		"CLAUDE_CONFIG_DIR",
 	})
-	if real != defaultUserDir || inheritedIsDefault {
-		env = append(env, "CLAUDE_CONFIG_DIR="+dir)
-	}
-	if bin := claudeUsageNodeBin(cli); bin != "" {
-		path := withDirsAfter(envValue(env, "PATH"), []string{bin})
-		env = append(withoutEnv(env, []string{"PATH"}), "PATH="+path)
+	if configDir != "" {
+		env = append(env, "CLAUDE_CONFIG_DIR="+configDir)
 	}
 	return env
 }
 
-// claudeUsageNodeBin finds the paired node interpreter for an npm-installed Claude CLI when node is absent from PATH.
-func claudeUsageNodeBin(cli string) string {
-	if runtime.GOOS == "windows" {
-		return ""
+// claudeUsageShellScript builds the interactive login-shell command that runs the built-in `claude` launcher (matching
+// shell functions, aliases, and PATH wrappers) with explicit CLAUDE_CONFIG_DIR handling and output framing markers.
+func claudeUsageShellScript(configDir string, withEndMarker bool) string {
+	var b strings.Builder
+	b.WriteString("builtin printf '\\n" + claudeUsageBeginMarker + "\\n'; ")
+	if configDir == "" {
+		b.WriteString("unset CLAUDE_CONFIG_DIR; ")
+	} else {
+		b.WriteString("export CLAUDE_CONFIG_DIR=" + scriptPath(configDir) + "; ")
 	}
-	if _, err := exec.LookPath("node"); err == nil {
-		return ""
+	b.WriteString(`claude "$@"`)
+	if withEndMarker {
+		b.WriteString("; __persona_rc=$?; builtin printf '\\n" + claudeUsageEndMarker + "\\n'; exit $__persona_rc")
 	}
-	real, err := filepath.EvalSymlinks(cli)
+	return b.String()
+}
+
+func defaultClaudeUsageCommand(ctx context.Context, configDir string, env []string, args []string, withEndMarker bool) (*exec.Cmd, error) {
+	shell, err := interactiveShell()
 	if err != nil {
-		return ""
+		return nil, err
 	}
-	for _, suffix := range []string{
-		"/lib/node_modules/@anthropic-ai/claude-code/cli.js",
-		"/lib/node_modules/@anthropic-ai/claude-code/bin/claude.js",
-	} {
-		prefix, ok := strings.CutSuffix(real, suffix)
-		if !ok || !filepath.IsAbs(prefix) {
-			continue
-		}
-		bin := filepath.Join(prefix, "bin")
-		if _, err := exec.LookPath(filepath.Join(bin, "node")); err == nil {
-			return bin
-		}
-	}
-	return ""
+	script := claudeUsageShellScript(configDir, withEndMarker)
+	cmd := exec.CommandContext(ctx, shell, append([]string{"-ic", script, "persona"}, args...)...)
+	cmd.Env = env
+	return cmd, nil
 }
 
 // readClaudeCLIUsage reads Claude Code's subscription windows from the structured stream-json `get_usage` control
-// request, falling back to `claude -p /usage --output-format json --verbose` only when the CLI explicitly rejects the
-// control request as unsupported.
-func readClaudeCLIUsage(ctx context.Context, cli string, env []string, now time.Time, allowPrintFallback bool) (proto.UsageAccount, bool, bool) {
-	acct, available, err := readClaudeControlUsage(ctx, cli, env, now)
+// request, falling back to `claude -p /usage --output-format json --verbose` when the CLI rejects `get_usage` as
+// unsupported or reports `rate_limits_available: true` with no windows (for example `rate_limits: null` in a fresh
+// process). Each subprocess step gets its own claudeUsagePollTimeout derived from ctx so slow wrappers can complete
+// both steps while disable/shutdown cancels immediately.
+func readClaudeCLIUsage(ctx context.Context, configDir string, env []string, allowPrintFallback bool) (proto.UsageAccount, bool, bool) {
+	ctrlCtx, cancelCtrl := context.WithTimeout(ctx, claudeUsagePollTimeout)
+	acct, available, err := readClaudeControlUsage(ctrlCtx, configDir, env)
+	cancelCtrl()
+	fallbackPlan := acct.Plan
 	if err == nil {
 		if !available {
 			return proto.UsageAccount{}, false, false
 		}
-		return acct, len(acct.Windows) > 0, false
-	}
-	if !allowPrintFallback || !errors.Is(err, errClaudeControlUnsupported) || ctx.Err() != nil {
+		if len(acct.Windows) > 0 {
+			return acct, true, false
+		}
+		if !allowPrintFallback || ctx.Err() != nil {
+			return proto.UsageAccount{}, false, false
+		}
+	} else if !allowPrintFallback || !errors.Is(err, errClaudeControlUnsupported) || ctx.Err() != nil {
 		return proto.UsageAccount{}, false, false
 	}
-	return readClaudePrintUsage(ctx, cli, env, now)
+	printCtx, cancelPrint := context.WithTimeout(ctx, claudeUsagePollTimeout)
+	defer cancelPrint()
+	printAcct, ok, modelTurn := readClaudePrintUsage(printCtx, configDir, env)
+	if ok && printAcct.Plan == "" && fallbackPlan != "" {
+		printAcct.Plan = fallbackPlan
+		printAcct.Name = claudeAccountName(fallbackPlan)
+	}
+	return printAcct, ok, modelTurn
 }
 
-func readClaudeControlUsage(ctx context.Context, cli string, env []string, now time.Time) (proto.UsageAccount, bool, error) {
+func readClaudeControlUsage(ctx context.Context, configDir string, env []string) (proto.UsageAccount, bool, error) {
 	tmp, err := os.MkdirTemp("", "persona-claude-usage-")
 	if err != nil {
 		return proto.UsageAccount{}, false, err
 	}
 	defer os.RemoveAll(tmp)
 
-	cmd := exec.CommandContext(ctx, cli,
+	cmd, err := claudeUsageCommand(ctx, configDir, env, []string{
 		"-p",
 		"--input-format", "stream-json",
 		"--output-format", "stream-json",
@@ -355,10 +368,13 @@ func readClaudeControlUsage(ctx context.Context, cli string, env []string, now t
 		"--setting-sources", "",
 		"--settings", claudeUsageSettingsJSON,
 		"--no-session-persistence",
-	)
+	}, false)
+	if err != nil {
+		return proto.UsageAccount{}, false, err
+	}
 	cmd.Dir = tmp
-	cmd.Env = env
 	killGroupOnCancel(cmd)
+	msysCmdLine(cmd)
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return proto.UsageAccount{}, false, err
@@ -408,9 +424,9 @@ func readClaudeControlUsage(ctx context.Context, cli string, env []string, now t
 		if ctx.Err() != nil {
 			return proto.UsageAccount{}, false, ctx.Err()
 		}
-		return proto.UsageAccount{}, false, err
+		return proto.UsageAccount{Plan: normalizeClaudePlan(initPlan)}, false, err
 	}
-	acct, available, ok := parseClaudeGetUsage(usageRaw, initPlan, now)
+	acct, available, ok := parseClaudeGetUsage(usageRaw, initPlan, claudeUsageNow().UTC())
 	if !ok {
 		return proto.UsageAccount{}, false, errors.New("unexpected claude get_usage response")
 	}
@@ -503,24 +519,21 @@ func parseClaudeGetUsage(data []byte, fallbackPlan string, now time.Time) (acct 
 	if !*resp.RateLimitsAvailable {
 		return proto.UsageAccount{}, false, true
 	}
-	if resp.RateLimits == nil {
-		return proto.UsageAccount{}, true, true
-	}
-	wins := parseClaudeRateLimitsPayload(resp.RateLimits, now)
-	if len(wins) == 0 {
-		return proto.UsageAccount{}, true, true
-	}
 	plan := normalizeClaudePlan(resp.SubscriptionType)
 	if plan == "" {
 		plan = normalizeClaudePlan(fallbackPlan)
 	}
-	return proto.UsageAccount{
+	acct = proto.UsageAccount{
 		Provider:  "claude",
 		Name:      claudeAccountName(plan),
 		Plan:      plan,
-		Windows:   wins,
 		SampledAt: now.UTC(),
-	}, true, true
+	}
+	if resp.RateLimits == nil {
+		return acct, true, true
+	}
+	acct.Windows = parseClaudeRateLimitsPayload(resp.RateLimits, now)
+	return acct, true, true
 }
 
 func parseClaudeRateLimitsPayload(rl *claudeRateLimitsPayload, now time.Time) []proto.UsageWindow {
@@ -616,14 +629,14 @@ func claudeAccountName(plan string) string {
 	return "Claude " + strings.ToUpper(plan[:1]) + plan[1:]
 }
 
-func readClaudePrintUsage(ctx context.Context, cli string, env []string, now time.Time) (proto.UsageAccount, bool, bool) {
+func readClaudePrintUsage(ctx context.Context, configDir string, env []string) (proto.UsageAccount, bool, bool) {
 	tmp, err := os.MkdirTemp("", "persona-claude-usage-")
 	if err != nil {
 		return proto.UsageAccount{}, false, false
 	}
 	defer os.RemoveAll(tmp)
 
-	cmd := exec.CommandContext(ctx, cli,
+	cmd, err := claudeUsageCommand(ctx, configDir, env, []string{
 		"-p", "/usage",
 		"--output-format", "json",
 		"--verbose",
@@ -632,16 +645,89 @@ func readClaudePrintUsage(ctx context.Context, cli string, env []string, now tim
 		"--setting-sources", "",
 		"--settings", claudeUsageSettingsJSON,
 		"--no-session-persistence",
-	)
-	cmd.Dir = tmp
-	cmd.Env = env
-	cmd.Stdin = strings.NewReader("")
-	killGroupOnCancel(cmd)
-	out, _ := cmd.Output()
-	if ctx.Err() != nil || len(bytes.TrimSpace(out)) == 0 {
+	}, true)
+	if err != nil {
 		return proto.UsageAccount{}, false, false
 	}
-	return parseClaudePrintUsage(out, now)
+	cmd.Dir = tmp
+	cmd.Stdin = nil
+	killGroupOnCancel(cmd)
+	msysCmdLine(cmd)
+	out, _ := cmd.Output()
+	if ctx.Err() != nil {
+		return proto.UsageAccount{}, false, false
+	}
+	out = extractClaudeUsageOutput(out)
+	if len(out) == 0 {
+		return proto.UsageAccount{}, false, false
+	}
+	return parseClaudePrintUsage(out, claudeUsageNow().UTC())
+}
+
+// extractClaudeUsageOutput strips interactive login-shell rc banners and exit lines outside our framing markers.
+func extractClaudeUsageOutput(data []byte) []byte {
+	if _, after, ok := bytes.Cut(data, []byte(claudeUsageBeginMarker)); ok {
+		data = after
+	}
+	if before, _, ok := bytes.Cut(data, []byte(claudeUsageEndMarker)); ok {
+		data = before
+	}
+	return bytes.TrimSpace(data)
+}
+
+type claudePrintItem struct {
+	Type          string          `json:"type"`
+	IsError       bool            `json:"is_error"`
+	Result        string          `json:"result"`
+	TotalCostUSD  float64         `json:"total_cost_usd"`
+	DurationAPIMS float64         `json:"duration_api_ms"`
+	Message       json.RawMessage `json:"message"`
+	UsageReport   *struct {
+		Session *struct {
+			TotalCostUSD       float64 `json:"total_cost_usd"`
+			TotalAPIDurationMS float64 `json:"total_api_duration_ms"`
+		} `json:"session"`
+		RateLimits *claudeRateLimitsPayload `json:"rate_limits"`
+	} `json:"usage_report"`
+}
+
+// parseClaudePrintJSON finds a JSON array or one or more JSON objects emitted by `claude -p /usage --output-format json`,
+// skipping any plain-text banner lines printed by a launcher wrapper before or after the JSON payload.
+func parseClaudePrintJSON(trimmed []byte) (items []claudePrintItem, found bool) {
+	for i := 0; i < len(trimmed); {
+		line := bytes.TrimLeft(trimmed[i:], " \t\r")
+		offset := len(trimmed) - len(line)
+		if len(line) > 0 {
+			switch line[0] {
+			case '[':
+				var arr []claudePrintItem
+				dec := json.NewDecoder(bytes.NewReader(trimmed[offset:]))
+				if dec.Decode(&arr) == nil && len(arr) > 0 {
+					for _, it := range arr {
+						if it.Type != "" || it.UsageReport != nil {
+							return arr, true
+						}
+					}
+				}
+			case '{':
+				var obj claudePrintItem
+				dec := json.NewDecoder(bytes.NewReader(trimmed[offset:]))
+				if dec.Decode(&obj) == nil && (obj.Type != "" || obj.UsageReport != nil) {
+					items = append(items, obj)
+					if step := int(dec.InputOffset()); step > 0 {
+						i = offset + step
+						continue
+					}
+				}
+			}
+		}
+		nl := bytes.IndexByte(trimmed[i:], '\n')
+		if nl < 0 {
+			break
+		}
+		i += nl + 1
+	}
+	return items, len(items) > 0
 }
 
 // parseClaudePrintUsage reads the output of `claude -p /usage --output-format json --verbose`: structured
@@ -649,98 +735,53 @@ func readClaudePrintUsage(ctx context.Context, cli string, env []string, now tim
 // If the output indicates a billed model turn ran (an assistant `message` or nonzero API cost/duration), it rejects
 // the response and reports modelTurn=true so the caller stops using the `-p /usage` fallback for that directory.
 func parseClaudePrintUsage(data []byte, now time.Time) (acct proto.UsageAccount, ok bool, modelTurn bool) {
-	trimmed := bytes.TrimSpace(data)
+	trimmed := extractClaudeUsageOutput(data)
 	if len(trimmed) == 0 {
 		return proto.UsageAccount{}, false, false
 	}
-	if trimmed[0] == '[' {
-		var items []struct {
-			Type          string          `json:"type"`
-			IsError       bool            `json:"is_error"`
-			Result        string          `json:"result"`
-			TotalCostUSD  float64         `json:"total_cost_usd"`
-			DurationAPIMS float64         `json:"duration_api_ms"`
-			Message       json.RawMessage `json:"message"`
-			UsageReport   *struct {
-				Session *struct {
-					TotalCostUSD       float64 `json:"total_cost_usd"`
-					TotalAPIDurationMS float64 `json:"total_api_duration_ms"`
-				} `json:"session"`
-				RateLimits *claudeRateLimitsPayload `json:"rate_limits"`
-			} `json:"usage_report"`
-		}
-		if json.Unmarshal(trimmed, &items) == nil {
-			var resultText string
-			var isErr bool
-			var structured []proto.UsageWindow
-			for _, item := range items {
-				if item.TotalCostUSD > 0 || item.DurationAPIMS > 0 {
-					return proto.UsageAccount{}, false, true
-				}
-				if item.Type == "assistant" {
-					msg := bytes.TrimSpace(item.Message)
-					if len(msg) > 0 && !bytes.Equal(msg, []byte("null")) {
-						return proto.UsageAccount{}, false, true
-					}
-				}
-				if item.UsageReport != nil {
-					if s := item.UsageReport.Session; s != nil && (s.TotalCostUSD > 0 || s.TotalAPIDurationMS > 0) {
-						return proto.UsageAccount{}, false, true
-					}
-					if item.UsageReport.RateLimits != nil && len(structured) == 0 {
-						structured = parseClaudeRateLimitsPayload(item.UsageReport.RateLimits, now)
-					}
-				}
-				if item.Type == "result" {
-					isErr = item.IsError
-					resultText = item.Result
-				}
-			}
-			if isErr {
-				return proto.UsageAccount{}, false, false
-			}
-			if len(structured) > 0 {
-				return proto.UsageAccount{
-					Provider:  "claude",
-					Name:      "Claude",
-					Windows:   structured,
-					SampledAt: now.UTC(),
-				}, true, false
-			}
-			if resultText != "" {
-				a, ok := parseClaudeUsageText(resultText, now)
-				return a, ok, false
-			}
-			return proto.UsageAccount{}, false, false
-		}
-	}
-	if trimmed[0] == '{' {
-		var obj struct {
-			Type          string          `json:"type"`
-			IsError       bool            `json:"is_error"`
-			Result        string          `json:"result"`
-			TotalCostUSD  float64         `json:"total_cost_usd"`
-			DurationAPIMS float64         `json:"duration_api_ms"`
-			Message       json.RawMessage `json:"message"`
-		}
-		if json.Unmarshal(trimmed, &obj) == nil {
-			if obj.TotalCostUSD > 0 || obj.DurationAPIMS > 0 {
+	if items, found := parseClaudePrintJSON(trimmed); found {
+		var resultText string
+		var isErr bool
+		var structured []proto.UsageWindow
+		for _, item := range items {
+			if item.TotalCostUSD > 0 || item.DurationAPIMS > 0 {
 				return proto.UsageAccount{}, false, true
 			}
-			if obj.Type == "assistant" {
-				msg := bytes.TrimSpace(obj.Message)
+			if item.Type == "assistant" {
+				msg := bytes.TrimSpace(item.Message)
 				if len(msg) > 0 && !bytes.Equal(msg, []byte("null")) {
 					return proto.UsageAccount{}, false, true
 				}
 			}
-			if obj.Type == "result" {
-				if obj.IsError {
-					return proto.UsageAccount{}, false, false
+			if item.UsageReport != nil {
+				if s := item.UsageReport.Session; s != nil && (s.TotalCostUSD > 0 || s.TotalAPIDurationMS > 0) {
+					return proto.UsageAccount{}, false, true
 				}
-				a, ok := parseClaudeUsageText(obj.Result, now)
-				return a, ok, false
+				if item.UsageReport.RateLimits != nil && len(structured) == 0 {
+					structured = parseClaudeRateLimitsPayload(item.UsageReport.RateLimits, now)
+				}
+			}
+			if item.Type == "result" {
+				isErr = item.IsError
+				resultText = item.Result
 			}
 		}
+		if isErr {
+			return proto.UsageAccount{}, false, false
+		}
+		if len(structured) > 0 {
+			return proto.UsageAccount{
+				Provider:  "claude",
+				Name:      "Claude",
+				Windows:   structured,
+				SampledAt: now.UTC(),
+			}, true, false
+		}
+		if resultText != "" {
+			a, ok := parseClaudeUsageText(resultText, now)
+			return a, ok, false
+		}
+		return proto.UsageAccount{}, false, false
 	}
 	a, ok := parseClaudeUsageText(string(trimmed), now)
 	return a, ok, false

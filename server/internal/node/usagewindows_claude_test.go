@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -62,6 +63,13 @@ func TestParseClaudeGetUsage(t *testing.T) {
 		t.Errorf("fallback plan/clamp = %+v avail=%v ok=%v", acct, avail, ok)
 	}
 
+	// Available with null rate_limits (observed on fresh Linux processes): preserves subscription plan with no windows
+	// so the caller can fall back to `-p /usage`.
+	acct, avail, ok = parseClaudeGetUsage([]byte(`{"subscription_type":"max","rate_limits_available":true,"rate_limits":null}`), "", now)
+	if !ok || !avail || acct.Name != "Claude Max" || acct.Plan != "max" || len(acct.Windows) != 0 {
+		t.Errorf("available empty limits: got acct=%+v avail=%v ok=%v", acct, avail, ok)
+	}
+
 	// Malformed payload is rejected with ok=false.
 	if _, _, ok := parseClaudeGetUsage([]byte(`{"unexpected":true}`), "", now); ok {
 		t.Error("malformed payload unexpectedly parsed")
@@ -71,16 +79,28 @@ func TestParseClaudeGetUsage(t *testing.T) {
 func TestParseClaudePrintUsage(t *testing.T) {
 	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
 
-	// Verbose JSON prefers structured usage_report.rate_limits.
+	// Verbose JSON prefers structured usage_report.rate_limits (session, weekly_all, weekly_scoped).
 	acct, ok, modelTurn := parseClaudePrintUsage(usageFixture(t, "claude-print-usage-verbose.json"), now)
-	if !ok || modelTurn || acct.Provider != "claude" || len(acct.Windows) != 2 {
+	if !ok || modelTurn || acct.Provider != "claude" || len(acct.Windows) != 3 {
 		t.Fatalf("verbose json = %+v ok=%v modelTurn=%v", acct, ok, modelTurn)
 	}
 	if acct.Windows[0].Label != "5h" || acct.Windows[0].UsedPercent != 55 || acct.Windows[0].ResetsAt == nil || acct.Windows[0].ResetsAt.Hour() != 16 {
 		t.Errorf("5h = %+v", acct.Windows[0])
 	}
-	if acct.Windows[1].Label != "7d" || acct.Windows[1].UsedPercent != 72 {
+	if acct.Windows[1].Label != "7d" || acct.Windows[1].Model != "" || acct.Windows[1].UsedPercent != 72 {
 		t.Errorf("7d = %+v", acct.Windows[1])
+	}
+	if acct.Windows[2].Label != "7d" || acct.Windows[2].Model != "Sonnet" || acct.Windows[2].UsedPercent != 18 {
+		t.Errorf("7d Sonnet = %+v", acct.Windows[2])
+	}
+
+	// Login-shell rc banners, wrapper log lines, and trailing `exit` are stripped before JSON decoding.
+	wrapped := "rc-banner-no-newline\n" + claudeUsageBeginMarker + "\n[wrapper] auth ready\n" +
+		string(usageFixture(t, "claude-print-usage-verbose.json")) + "\n[wrapper] done\n" +
+		claudeUsageEndMarker + "\nexit\n"
+	acct, ok, modelTurn = parseClaudePrintUsage([]byte(wrapped), now)
+	if !ok || modelTurn || len(acct.Windows) != 3 || acct.Windows[2].Model != "Sonnet" {
+		t.Fatalf("wrapped verbose json = %+v ok=%v modelTurn=%v", acct, ok, modelTurn)
 	}
 
 	// Plain text fallback (including "Last 7d · 403 requests" which must not trigger 403 denial).
@@ -106,8 +126,9 @@ func TestParseClaudePrintUsage(t *testing.T) {
 		t.Error("auth error text parsed")
 	}
 
-	// Output containing an assistant model turn or nonzero API cost/duration is rejected and flagged as modelTurn.
-	if _, ok, mt := parseClaudePrintUsage([]byte(`[{"type":"assistant","message":{"role":"assistant","content":"hi"}},{"type":"result","subtype":"success","result":"Current session: 10% used"}]`), now); ok || !mt {
+	// Output containing an assistant model turn or nonzero API cost/duration is rejected and flagged as modelTurn,
+	// even when preceded by wrapper banner lines.
+	if _, ok, mt := parseClaudePrintUsage([]byte("[wrapper] ok\n"+`[{"type":"assistant","message":{"role":"assistant","content":"hi"}},{"type":"result","subtype":"success","result":"Current session: 10% used"}]`), now); ok || !mt {
 		t.Errorf("assistant model turn: got ok=%v modelTurn=%v, want false, true", ok, mt)
 	}
 	if _, ok, mt := parseClaudePrintUsage([]byte(`{"type":"result","subtype":"success","total_cost_usd":0.01,"duration_api_ms":800,"result":"Current session: 10% used"}`), now); ok || !mt {
@@ -276,7 +297,7 @@ func TestClaudeCLIUsageRefreshProtocolFallbackThrottleAndCancel(t *testing.T) {
 		if a.Name == "Claude Pro" && len(a.Windows) == 2 && a.Windows[0].UsedPercent == 44 {
 			gotDefault = true
 		}
-		if a.Name == "Claude" && len(a.Windows) == 1 && a.Windows[0].UsedPercent == 19 {
+		if a.Name == "Claude Pro" && len(a.Windows) == 1 && a.Windows[0].UsedPercent == 19 {
 			gotCustom = true
 		}
 	}
@@ -560,6 +581,163 @@ func TestClaudeCLIUsageRetainsNewerCLISampleAfterStatusLineAges(t *testing.T) {
 	}
 }
 
+func TestClaudeCLIUsageFallsBackWhenGetUsageReturnsNoWindows(t *testing.T) {
+	useFakeClaudeUsageCLI(t)
+	prevCodex := codexUsageCLI
+	codexUsageCLI = func() (string, error) { return "", os.ErrNotExist }
+	t.Cleanup(func() { codexUsageCLI = prevCodex })
+
+	home := t.TempDir()
+	maxDir := filepath.Join(home, ".claude")
+	apiDir := filepath.Join(home, ".claude-api")
+	for _, d := range []string{maxDir, apiDir} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("PERSONA_TEST_CLAUDE_DEFAULT_DIR", maxDir)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	prevNow := claudeUsageNow
+	claudeUsageNow = func() time.Time { return now }
+	t.Cleanup(func() { claudeUsageNow = prevNow })
+
+	// Fresh process reports rate_limits_available: true with rate_limits: null; `-p /usage` returns limits[].
+	writeClaudeUsageFixture(t, maxDir, "control", `{"subscription_type":"max","rate_limits_available":true,"rate_limits":null}`)
+	writeClaudeUsageFixture(t, maxDir, "print", fmt.Sprintf(`[
+		{"type":"system","subtype":"init"},
+		{"type":"assistant","usage_report":{
+			"session":{"total_cost_usd":0,"total_api_duration_ms":0},
+			"rate_limits":{"limits":[
+				{"kind":"session","percent":34,"resets_at":%q},
+				{"kind":"weekly_all","percent":52,"resets_at":%q},
+				{"kind":"weekly_scoped","percent":12,"resets_at":%q,"scope":{"model":{"display_name":"Sonnet"}}}
+			]}
+		}},
+		{"type":"result","subtype":"success","is_error":false,"result":""}
+	]`,
+		now.Add(2*time.Hour).Format(time.RFC3339),
+		now.Add(72*time.Hour).Format(time.RFC3339),
+		now.Add(72*time.Hour).Format(time.RFC3339),
+	))
+
+	// Authoritative rate_limits_available: false must still NOT fall back to `-p /usage`.
+	writeClaudeUsageFixture(t, apiDir, "control", `{"rate_limits_available":false,"rate_limits":null}`)
+	writeClaudeUsageFixture(t, apiDir, "print", fmt.Sprintf("Current session: 99%% used · resets %s\n", now.Add(2*time.Hour).Format(time.RFC3339)))
+
+	n := &Node{home: home, dir: t.TempDir(), cdirs: newClaudeDirs()}
+	n.cdirs.scan = func() map[int]procEnv { return nil }
+	n.cdirs.known = []string{apiDir}
+
+	n.refreshUsageWindows(t.Context())
+	if got := readProbeCount(t, maxDir); got != 2 {
+		t.Fatalf("expected 1 control + 1 print probe for empty get_usage, got %d", got)
+	}
+	if got := readProbeCount(t, apiDir); got != 1 {
+		t.Fatalf("rate_limits_available:false triggered print fallback: count=%d, want 1", got)
+	}
+	snap := n.usageSnapshot()
+	if len(snap.Accounts) != 1 {
+		t.Fatalf("expected 1 Claude account, got %+v", snap.Accounts)
+	}
+	acct := snap.Accounts[0]
+	if acct.Name != "Claude Max" || acct.Plan != "max" || len(acct.Windows) != 3 {
+		t.Fatalf("unexpected account: %+v", acct)
+	}
+	if acct.Windows[0].Label != "5h" || acct.Windows[0].UsedPercent != 34 ||
+		acct.Windows[1].Label != "7d" || acct.Windows[1].Model != "" || acct.Windows[1].UsedPercent != 52 ||
+		acct.Windows[2].Label != "7d" || acct.Windows[2].Model != "Sonnet" || acct.Windows[2].UsedPercent != 12 {
+		t.Fatalf("unexpected windows: %+v", acct.Windows)
+	}
+}
+
+func TestClaudeCLIUsageRunsThroughLoginShellWrapper(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX interactive shell rc files")
+	}
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevCmd := claudeUsageCommand
+	claudeUsageCommand = defaultClaudeUsageCommand
+	t.Cleanup(func() { claudeUsageCommand = prevCmd })
+	prevCodex := codexUsageCLI
+	codexUsageCLI = func() (string, error) { return "", os.ErrNotExist }
+	t.Cleanup(func() { codexUsageCLI = prevCodex })
+
+	home := t.TempDir()
+	defaultDir := filepath.Join(home, ".claude")
+	customDir := filepath.Join(home, ".claude-work")
+	for _, d := range []string{defaultDir, customDir} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Write both .zshrc and .bashrc so loginShellProgram() finds the shell function wrapper on zsh and bash hosts.
+	rc := "echo 'rc-welcome-banner'\n" +
+		"export CLAUDE_CONFIG_DIR=/should/be/overridden\n" +
+		"claude() {\n" +
+		"  PERSONA_TEST_CLAUDE_WRAPPER=1 " + shellQuote(binary) + " -- \"$@\"\n" +
+		"}\n"
+	for _, name := range []string{".zshrc", ".bashrc"} {
+		if err := os.WriteFile(filepath.Join(home, name), []byte(rc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("ZDOTDIR", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("PERSONA_TEST_CLAUDE_USAGE_CLI", "1")
+	t.Setenv("PERSONA_TEST_REQUIRE_WRAPPER", "1")
+	t.Setenv("PERSONA_TEST_CLAUDE_DEFAULT_DIR", defaultDir)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	prevNow := claudeUsageNow
+	claudeUsageNow = func() time.Time { return now }
+	t.Cleanup(func() { claudeUsageNow = prevNow })
+
+	// Default dir: wrapper-gated get_usage returns rate_limits: null, falling back to -p /usage through the wrapper.
+	writeClaudeUsageFixture(t, defaultDir, "control", `{"subscription_type":"max","rate_limits_available":true,"rate_limits":null}`)
+	writeClaudeUsageFixture(t, defaultDir, "print", fmt.Sprintf("[wrapper] ok\n[{\"type\":\"assistant\",\"usage_report\":{\"session\":{\"total_cost_usd\":0,\"total_api_duration_ms\":0},\"rate_limits\":{\"limits\":[{\"kind\":\"session\",\"percent\":41,\"resets_at\":%q}]}}},{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"\"}]\n",
+		now.Add(2*time.Hour).Format(time.RFC3339),
+	))
+	// Custom dir: direct get_usage through the same wrapper.
+	writeClaudeUsageFixture(t, customDir, "control", fmt.Sprintf(`{"subscription_type":"pro","rate_limits_available":true,"rate_limits":{"five_hour":{"utilization":23,"resets_at":%q}}}`,
+		now.Add(3*time.Hour).Format(time.RFC3339),
+	))
+
+	n := &Node{home: home, dir: t.TempDir(), cdirs: newClaudeDirs()}
+	n.cdirs.scan = func() map[int]procEnv { return nil }
+	n.cdirs.known = []string{customDir}
+
+	n.refreshUsageWindows(t.Context())
+	if envSeen, err := os.ReadFile(filepath.Join(defaultDir, "fixture-config-dir-env")); err != nil || string(envSeen) != "<unset>" {
+		t.Errorf("default dir CLAUDE_CONFIG_DIR = %q (err %v), want <unset>", string(envSeen), err)
+	}
+	if envSeen, err := os.ReadFile(filepath.Join(customDir, "fixture-config-dir-env")); err != nil || string(envSeen) != customDir {
+		t.Errorf("custom dir CLAUDE_CONFIG_DIR = %q (err %v), want %q", string(envSeen), err, customDir)
+	}
+	snap := n.usageSnapshot()
+	if len(snap.Accounts) != 2 {
+		t.Fatalf("expected 2 Claude accounts via login shell wrapper, got %+v", snap.Accounts)
+	}
+	var gotMax, gotPro bool
+	for _, a := range snap.Accounts {
+		if a.Name == "Claude Max" && a.Plan == "max" && len(a.Windows) == 1 && a.Windows[0].UsedPercent == 41 {
+			gotMax = true
+		}
+		if a.Name == "Claude Pro" && a.Plan == "pro" && len(a.Windows) == 1 && a.Windows[0].UsedPercent == 23 {
+			gotPro = true
+		}
+	}
+	if !gotMax || !gotPro {
+		t.Fatalf("unexpected accounts from login shell wrapper: %+v", snap.Accounts)
+	}
+}
+
 func useFakeClaudeUsageCLI(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -574,9 +752,13 @@ func useFakeClaudeUsageCLI(t *testing.T) {
 	if err := os.WriteFile(cli, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	previous := claudeUsageCLI
-	claudeUsageCLI = func() (string, error) { return cli, nil }
-	t.Cleanup(func() { claudeUsageCLI = previous })
+	previous := claudeUsageCommand
+	claudeUsageCommand = func(ctx context.Context, _ string, env []string, args []string, _ bool) (*exec.Cmd, error) {
+		cmd := exec.CommandContext(ctx, cli, args...)
+		cmd.Env = env
+		return cmd, nil
+	}
+	t.Cleanup(func() { claudeUsageCommand = previous })
 	t.Setenv("PERSONA_TEST_CLAUDE_USAGE_CLI", "1")
 }
 
@@ -599,6 +781,9 @@ func readProbeCount(t *testing.T, dir string) int {
 // runFakeClaudeUsageCLI implements both Claude Code's stream-json control protocol and `-p /usage` for tests.
 // Invoked from TestMain before the test harness unsets CLAUDE_CONFIG_DIR.
 func runFakeClaudeUsageCLI() {
+	if os.Getenv("PERSONA_TEST_REQUIRE_WRAPPER") == "1" && os.Getenv("PERSONA_TEST_CLAUDE_WRAPPER") != "1" {
+		os.Exit(1)
+	}
 	cfgEnv, set := os.LookupEnv("CLAUDE_CONFIG_DIR")
 	dir := cfgEnv
 	if !set {
