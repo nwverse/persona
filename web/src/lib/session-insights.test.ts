@@ -1,14 +1,19 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { initI18n } from "../i18n";
 import {
   aggregateSessionTokens,
   buildSessionInsights,
   compactActionSupport,
   formatHitRate,
+  formatLatencyMs,
+  latestTtftMs,
   latestTurnDurationMs,
+  normalizeContextBreakdown,
   summarizeSessionPerformance,
+  summarizeStepTelemetry,
 } from "./session-insights";
 import { clearRateHistories, emptyRateHistory, recordTokens, saveRateHistory } from "./token-rate";
-import type { Item, Session } from "./types";
+import type { ContextBreakdown, Item, Session } from "./types";
 
 const baseSession: Session = {
   machine_id: "m1",
@@ -242,12 +247,22 @@ describe("buildSessionInsights & performance", () => {
     ];
 
     const insights = buildSessionInsights(
-      { ...baseSession, context_tokens: 78_000, context_window: 200_000 },
-      items,
       {
-        ttftMs: 420,
-        breakdown: { segments: [{ key: "system", label: "System", tokens: 12_000 }] },
+        ...baseSession,
+        context_tokens: 78_000,
+        context_window: 200_000,
+        context_breakdown: {
+          source: "exact",
+          system_and_rules: 12_000,
+          tools_and_mcp: 16_000,
+          conversation: 20_000,
+          tool_outputs: 30_000,
+          free: 122_000,
+          auto_compact_threshold: 160_000,
+        },
       },
+      items,
+      { ttftMs: 420 },
     );
 
     expect(insights.context).toMatchObject({ used: 39, left: 61, tokens: 78_000, window: 200_000 });
@@ -260,7 +275,32 @@ describe("buildSessionInsights & performance", () => {
       peakTokPerSec: 62.5,
       ttftMs: 420,
     });
-    expect(insights.breakdown?.segments).toEqual([{ key: "system", label: "System", tokens: 12_000 }]);
+    expect(insights.breakdown).toMatchObject({
+      source: "exact",
+      occupiedTokens: 78_000,
+      freeTokens: 122_000,
+      totalTokens: 200_000,
+      autoCompactThreshold: 160_000,
+      autoCompactShare: 80,
+      topConsumer: { key: "tool_outputs", tokens: 30_000 },
+    });
+    expect(insights.breakdown?.segments.map((s) => [s.key, s.tokens])).toEqual([
+      ["system_and_rules", 12_000],
+      ["tools_and_mcp", 16_000],
+      ["conversation", 20_000],
+      ["tool_outputs", 30_000],
+    ]);
+  });
+
+  it("extracts latest observed ttft_ms from items automatically and preserves 0 ms", () => {
+    const items: Item[] = [
+      { id: "a1", seq: 1, role: "assistant", kind: "text", ttft_ms: 480 },
+      { id: "a2", seq: 2, role: "assistant", kind: "text", ttft_ms: 0 },
+      { id: "a3", seq: 3, role: "assistant", kind: "text", ttft_ms: -5 },
+    ];
+    expect(latestTtftMs(items)).toBe(0);
+    const insights = buildSessionInsights(baseSession, items);
+    expect(insights.performance?.ttftMs).toBe(0);
   });
 
   it("omits performance and breakdown when data is unavailable", () => {
@@ -270,6 +310,78 @@ describe("buildSessionInsights & performance", () => {
     expect(insights.performance).toBeNull();
     expect(insights.breakdown).toBeUndefined();
     expect(summarizeSessionPerformance([], null)).toBeNull();
+  });
+});
+
+describe("normalizeContextBreakdown", () => {
+  it("validates source, strips negative values, derives headroom from contextWindow, and picks top consumer", () => {
+    expect(normalizeContextBreakdown(undefined)).toBeNull();
+    expect(normalizeContextBreakdown({ source: "bogus" as ContextBreakdown["source"], conversation: 1000 })).toBeNull();
+    expect(normalizeContextBreakdown({ source: "estimated", conversation: -10 })).toBeNull();
+
+    const est = normalizeContextBreakdown(
+      {
+        source: "estimated",
+        system_and_rules: 10_000,
+        conversation: 40_000,
+        tool_outputs: 0,
+        tools_and_mcp: -5,
+        auto_compact_threshold: 160_000,
+      },
+      200_000,
+    )!;
+    expect(est.source).toBe("estimated");
+    expect(est.segments.map((s) => [s.key, s.tokens])).toEqual([
+      ["system_and_rules", 10_000],
+      ["conversation", 40_000],
+      ["tool_outputs", 0],
+    ]);
+    expect(est.occupiedTokens).toBe(50_000);
+    expect(est.freeTokens).toBe(150_000);
+    expect(est.freeShare).toBeCloseTo(75, 4);
+    expect(est.autoCompactShare).toBeCloseTo(80, 4);
+    expect(est.topConsumer).toEqual({ key: "conversation", tokens: 40_000, usedShare: 80 });
+  });
+
+  it("leaves topConsumer null when all observed categories are zero", () => {
+    const zero = normalizeContextBreakdown({ source: "exact", conversation: 0, free: 100_000 }, 100_000)!;
+    expect(zero.topConsumer).toBeNull();
+    expect(zero.freeTokens).toBe(100_000);
+  });
+});
+
+describe("formatLatencyMs & summarizeStepTelemetry", () => {
+  it("formats sub-second latencies in ms and >= 1s in seconds", async () => {
+    await initI18n("en");
+    expect(formatLatencyMs(0)).toBe("0 ms");
+    expect(formatLatencyMs(342)).toBe("342 ms");
+    expect(formatLatencyMs(999)).toBe("999 ms");
+    expect(formatLatencyMs(1000)).toBe("1 s");
+    expect(formatLatencyMs(1450)).toBe("1.45 s");
+    expect(formatLatencyMs(12_340)).toBe("12.3 s");
+  });
+
+  it("aggregates per-step tokens, duration, and TTFT and returns null when empty", () => {
+    expect(summarizeStepTelemetry([], null)).toBeNull();
+    expect(summarizeStepTelemetry([item({ id: "t1", seq: 1 })], 0)).toBeNull();
+
+    const summary = summarizeStepTelemetry(
+      [
+        item({ id: "t1", seq: 1, ttft_ms: 210, usage: [{ model: "claude-opus-4-5", in: 800, out: 200, cache_read: 5000 }] }),
+        item({ id: "r1", seq: 2, usage: [{ id: "sub-1", model: "claude-sonnet-4-5", in: 400, out: 100 }] }),
+      ],
+      1850,
+    )!;
+    expect(summary.tokens).toEqual({
+      input: 1200,
+      output: 300,
+      cacheRead: 5000,
+      cacheWrite: 0,
+      total: 6500,
+      hasCache: true,
+    });
+    expect(summary.durationMs).toBe(1850);
+    expect(summary.ttftMs).toBe(210);
   });
 });
 
