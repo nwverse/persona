@@ -143,16 +143,20 @@ def missing_needs(root, ratchet):
 def run_command(root, ratchet):
     """(exit code, output); the command runs in its own process group so a timeout stops its children too."""
     env = dict(os.environ, **ratchet.env)
+    group = hasattr(os, "killpg")  # POSIX; elsewhere only the command itself is stopped
     try:
         process = subprocess.Popen(ratchet.command, cwd=str(root / ratchet.cwd), env=env, stdout=subprocess.PIPE,
-                                   stderr=subprocess.STDOUT, start_new_session=True)
+                                   stderr=subprocess.STDOUT, start_new_session=group)
     except OSError as error:
         return 127, str(error)
     try:
         out, _ = process.communicate(timeout=ratchet.timeout)
     except subprocess.TimeoutExpired:
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            if group:
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
         except (ProcessLookupError, PermissionError):
             process.kill()
         out, _ = process.communicate()

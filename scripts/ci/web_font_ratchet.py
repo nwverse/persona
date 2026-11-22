@@ -134,12 +134,14 @@ def base_violations(actual, baseline, merge_base):
     """Files the change took above their merge-base count while the baseline still has room (ratchet_base.held)."""
     if merge_base is None:
         return []
+    paths = sorted(path for path in merge_base.changed()
+                   if covers(path) and 0 < actual.get(path, 0) <= baseline.get(path, 0))
+    if not paths:
+        return []  # nothing the change touches has room left to rise into
     text = merge_base.texts([BASELINE_REL]).get(BASELINE_REL)
     if text is None:
         return []  # the base predates the baseline
     entries = parse_baseline(text, merge_base.label + ":" + BASELINE_REL)
-    paths = sorted(path for path in merge_base.changed()
-                   if covers(path) and 0 < actual.get(path, 0) <= baseline.get(path, 0))
     texts = merge_base.texts(paths)
     found = []
     for path in paths:

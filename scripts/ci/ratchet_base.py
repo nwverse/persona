@@ -89,7 +89,7 @@ class MergeBase:
         if self._changed is None:
             paths = set()
             for args in (["diff", "--name-only", "--no-renames", "-z", self.commit, "--"],
-                         ["ls-files", "--others", "--exclude-standard", "-z"]):
+                         ["ls-files", "--others", "--exclude-standard", "--full-name", "-z"]):
                 result = _git(self.root, args)
                 if result.returncode != 0:
                     raise BaseError("git {0} failed{1}".format(" ".join(args[:2]), _detail(result)))

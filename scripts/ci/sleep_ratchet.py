@@ -284,12 +284,14 @@ def base_violations(actual, baseline, merge_base):
     """Files the change took above their merge-base count while the baseline still has room (ratchet_base.held)."""
     if merge_base is None:
         return []
+    paths = sorted(path for path in merge_base.changed()
+                   if covers(path) and 0 < actual.get(path, 0) <= baseline.get(path, 0))
+    if not paths:
+        return []  # nothing the change touches has room left to rise into
     text = merge_base.texts([BASELINE_REL], errors="backslashreplace").get(BASELINE_REL)
     if text is None:
         return []  # the base predates the baseline: everything is the first snapshot
     entries = parse_baseline(text, merge_base.label + ":" + BASELINE_REL)
-    paths = sorted(path for path in merge_base.changed()
-                   if covers(path) and 0 < actual.get(path, 0) <= baseline.get(path, 0))
     # An entry the change raised or added is the never-raise check's (raised_against); it says so once.
     paths = [path for path in paths if baseline[path] <= entries.get(path, 0)]
     texts = merge_base.texts(paths, errors="backslashreplace")

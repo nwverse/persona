@@ -242,7 +242,7 @@ repair worker may not edit baselines (`docs/operations/main-verification.md`), s
 | Android motion | literal animation specs per file | `android/core/designsystem/tools/motion-baseline.json` | `scripts/app/android_motion_baseline.py` (Android lane, check-fast) | `--update-baseline` |
 | Android slot order | design-system components that end after their slot | `android/core/designsystem/tools/slot-order-baseline.json` | `scripts/app/android_slot_order.py` (Android lane, check-fast) | `--update-baseline` |
 
-- **Only a rise fails.** A count at or under its baseline passes; under it, the check names the files and how to lower the baseline.
+- **Only a rise fails.** A count at or under its baseline passes; under it, the check says so and how to lower the baseline.
   A change that takes sleeps, font sizes or hard-coded text out need not touch the baseline at all, which keeps baseline files out
   of most PRs and out of their conflicts. A file or entry the baseline does not have starts at zero, so a new file cannot bring any.
 - **With a base, a changed file is held to the lower of its baseline and its count at the merge base.** The sleep, web font and
@@ -253,8 +253,8 @@ repair worker may not edit baselines (`docs/operations/main-verification.md`), s
   sizes that moved to it, or a raise the sleep ratchet refuses anyway), and only the baseline holds it. On `main` the merge base is
   `HEAD`, so a full-tree run there checks only `count > baseline`. The ratchets inside `go test`, vitest and the Android scripts know
   no base and check only the baseline, as does `changed_ratchets.py` at merge time.
-- **Lowering is tidying anyone can run.** `python3 scripts/ci/lower_baselines.py` runs each ratchet's own update and keeps the result
-  only if it lowered: no raised number, no new entry, no new file (a removed entry or file is a count gone to zero). A ratchet whose
+- **Lowering is tidying anyone can run.** `python3 scripts/ci/lower_baselines.py` runs each ratchet's own update (all of the table
+  but the Inbox book readers, a Go literal lowered by hand) and keeps the result only if it lowered: no raised number, no new entry, no new file (a removed entry or file is a count gone to zero). A ratchet whose
   update fails, or would raise or add (a count above its baseline, the web font's moved file, a prompt-size move between pieces), is
   put back and reported, and the run exits 1; one whose tools are missing here (`go`, or the web's installed packages) is skipped. `--dry-run`
   writes nothing, `--only sleep,web-font` picks ratchets and `--list` names them. Run it on an up-to-date `main`, weekly or whenever
