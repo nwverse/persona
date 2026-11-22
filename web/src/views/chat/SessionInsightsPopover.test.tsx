@@ -188,13 +188,28 @@ describe("ContextMeter + lazy SessionInsightsPopover", () => {
           items={sampleItems}
           assistant
           onClose={onClose}
-          breakdown={{ segments: [{ key: "system", label: "System prompt", tokens: 8000 }] }}
+          breakdown={{
+            source: "exact",
+            system_and_rules: 8000,
+            tools_and_mcp: 12000,
+            conversation: 28000,
+            tool_outputs: 30000,
+            free: 122000,
+            auto_compact_threshold: 160000,
+          }}
           ttftMs={350}
         />,
       );
 
       const dialog = document.querySelector("[data-session-insights]")!;
-      expect(dialog.querySelector("[data-insights-breakdown]")?.textContent).toContain("System prompt");
+      expect(dialog.querySelector("[data-insights-stacked-bar]")).not.toBeNull();
+      expect(dialog.querySelector('[data-breakdown-segment="system_and_rules"]')).not.toBeNull();
+      expect(dialog.querySelector('[data-breakdown-segment="tools_and_mcp"]')).not.toBeNull();
+      expect(dialog.querySelector('[data-breakdown-segment="conversation"]')).not.toBeNull();
+      expect(dialog.querySelector('[data-breakdown-segment="tool_outputs"]')).not.toBeNull();
+      expect(dialog.querySelector("[data-breakdown-compact-marker]")).not.toBeNull();
+      expect(dialog.querySelector('[data-breakdown-source="exact"]')).not.toBeNull();
+      expect(dialog.querySelector('[data-breakdown-top-consumer="tool_outputs"]')).not.toBeNull();
       expect(dialog.querySelector("[data-insights-ttft]")?.textContent).toContain("350 ms");
 
       const compactBtn = dialog.querySelector<HTMLButtonElement>("[data-insights-compact]")!;
@@ -367,5 +382,50 @@ describe("ContextMeter + lazy SessionInsightsPopover", () => {
     expect(dialog.querySelector("[data-insights-tokens]")?.textContent).toContain("1.9k");
     expect(dialog.querySelector("[data-insights-input]")?.textContent).toBe("1.2k");
     expect(dialog.querySelector("[data-insights-output]")?.textContent).toBe("700");
+  });
+
+  it("renders session.context_breakdown (~estimated) and items[].ttft_ms automatically without overrides", async () => {
+    const anchor = { current: host };
+    const sessionWithBreakdown: Session = {
+      ...baseSession,
+      context_tokens: 100_000,
+      context_window: 200_000,
+      context_breakdown: {
+        source: "estimated",
+        system_and_rules: 15_000,
+        tools_and_mcp: 10_000,
+        conversation: 25_000,
+        tool_outputs: 50_000,
+        free: 100_000,
+        auto_compact_threshold: 160_000,
+      },
+    };
+    const itemsWithTtft: Item[] = [
+      { id: "u1", seq: 1, role: "user", kind: "text", ts: "2026-11-20T10:00:00Z", text: "go" },
+      { id: "a1", seq: 2, role: "assistant", kind: "text", ts: "2026-11-20T10:00:08Z", ttft_ms: 1450 },
+    ];
+    await mount(
+      <SessionInsightsPopover anchor={anchor} session={sessionWithBreakdown} items={itemsWithTtft} onClose={() => {}} />,
+    );
+    const dialog = document.querySelector("[data-session-insights]")!;
+    expect(dialog.querySelector('[data-breakdown-source="estimated"]')?.textContent).toContain("~");
+    expect(dialog.querySelector('[data-breakdown-row="tool_outputs"]')?.textContent).toContain("~50.0k");
+    expect(dialog.querySelector('[data-breakdown-row="free"]')?.textContent).toContain("100.0k");
+    expect(dialog.querySelector("[data-breakdown-auto-compact]")?.textContent).toContain("160.0k");
+    expect(dialog.querySelector('[data-breakdown-top-consumer="tool_outputs"]')?.textContent).toContain("50%");
+    expect(dialog.querySelector("[data-insights-ttft]")?.textContent).toBe("1.45 s");
+  });
+
+  it("preserves observed 0 ms TTFT in the performance section", async () => {
+    const anchor = { current: host };
+    await mount(
+      <SessionInsightsPopover
+        anchor={anchor}
+        session={baseSession}
+        items={[{ id: "a1", seq: 1, role: "assistant", kind: "text", ttft_ms: 0 }]}
+        onClose={() => {}}
+      />,
+    );
+    expect(document.querySelector("[data-insights-ttft]")?.textContent).toBe("0 ms");
   });
 });

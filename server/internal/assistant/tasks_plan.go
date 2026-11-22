@@ -164,6 +164,9 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if !s.placeTask(ctx, t) {
 			return "", fmt.Errorf("task %d: unknown machine %q (machines: %s)", i+1, t.Machine, s.machineIDs(ctx))
 		}
+		if m, ok := s.machineByName(ctx, t.Machine); ok && assistantWorkspace(m, t.Cwd) {
+			return "", fmt.Errorf("task %d: %w", i+1, i18n.Err("rpc-errors.agent_assistant_workspace"))
+		}
 		// Validate the tier now without pinning its model: it is resolved again at dispatch.
 		preview := *t
 		if err := s.applyTaskTier(ctx, &preview); err != nil {

@@ -139,6 +139,8 @@ type superviseSignal struct {
 	Breaker *breakerFallback `json:"breaker,omitempty"`
 	// BreakerNote is that fact as finished text, as a signal queued by an older hub carries it: shown as it is.
 	BreakerNote string `json:"breaker_note,omitempty"`
+	// ExternalSource names the source of external information arriving during reviewNeedsUser (#13112).
+	ExternalSource string `json:"external_source,omitempty"`
 }
 
 // breakerFallback is what a circuit-breaker fallback note says (prompts.BreakerNote): its kind and their facts.
@@ -201,6 +203,9 @@ func (g superviseSignal) id() string {
 	if g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
 		return g.Todo + "|" + g.Kind + ":unhandled@" + g.Key
 	}
+	if g.Kind == sigNeedsUserExternalInfo {
+		return g.Todo + "|" + g.Kind + "@" + g.Key
+	}
 	return g.Todo + "|" + g.Kind
 }
 
@@ -209,7 +214,7 @@ func (g superviseSignal) urgent() bool {
 	switch g.Kind {
 	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigPREvent, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
 		sigRecheck, sigUndecidable, sigOwnerCannot, sigEstimateDue, sigTimedOut, // the owner, an automatic deadline or a stopped task waits
-		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigTodoReady, sigPRMerged, sigParentCloseout:
+		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo:
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
@@ -791,6 +796,30 @@ func (s *Service) forgetSupervisePending(keys ...string) {
 	removed := false
 	for _, key := range keys {
 		if _, ok := r.st.SupervisePending[key]; ok {
+			delete(r.st.SupervisePending, key)
+			removed = true
+		}
+	}
+	if !removed {
+		return
+	}
+	if len(r.st.SupervisePending) == 0 {
+		r.st.SupervisePending = nil
+	}
+	s.saveRelayLocked()
+}
+
+// forgetSupervisePendingPrefix removes any durable outbox entries whose signal id begins with prefix.
+func (s *Service) forgetSupervisePendingPrefix(prefix string) {
+	r := &s.relays
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !s.relayLocked(context.Background()) {
+		return
+	}
+	removed := false
+	for key := range r.st.SupervisePending {
+		if strings.HasPrefix(key, prefix) {
 			delete(r.st.SupervisePending, key)
 			removed = true
 		}

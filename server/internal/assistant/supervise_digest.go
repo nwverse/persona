@@ -911,10 +911,34 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 			"recheck@"+a.AskedAt.UTC().Format(time.RFC3339Nano) != g.Key {
 			return prompts.SuperviseEntry{}, false // answered, or asked again, meanwhile
 		}
+	case sigNeedsUserExternalInfo:
+		if !s.needsUserExternalInfoStillHolds(t, g) {
+			return prompts.SuperviseEntry{}, false // answered, superseded, or closed meanwhile
+		}
 	case sigInbox:
-		if g.Inbox == nil || !s.inboxSignalsOn(ctx) || !s.inboxSignalHolds(t) &&
-			(!acceptedFeedback || !s.acceptedFeedbackHolds(t, g.Inbox) || s.agentSupervised(t)) {
-			return prompts.SuperviseEntry{}, false // waits for the owner's decision, or the switch went off, meanwhile
+		if g.Inbox == nil || !s.inboxSignalsOn(ctx) {
+			return prompts.SuperviseEntry{}, false // switch went off meanwhile
+		}
+		if !s.inboxSignalHolds(t) && (!acceptedFeedback || !s.acceptedFeedbackHolds(t, g.Inbox) || s.agentSupervised(t)) {
+			if needsUserWakeEligible(t) && !s.agentSupervised(t) && g.Inbox.ToAgent != "unhandled" {
+				// Task entered reviewNeedsUser while this inbox signal waited: deliver it as non-destructive external info
+				// alongside the pending needs_user summary rather than silently dropping it (#13112).
+				source, summary := formatInboxExternalInfo(*g.Inbox)
+				e := prompts.SuperviseEntry{
+					ID:           t.ID,
+					Title:        t.Title,
+					Kind:         sigNeedsUserExternalInfo,
+					DoneWhen:     v.DoneWhen,
+					Round:        v.Round,
+					Link:         todoLink(web, t.ID),
+					Quiet:        t.Quiet,
+					ExternalInfo: s.needsUserExternalInfoEntry(ctx, t, source, summary),
+				}
+				e.LastReview = s.lastReviewEntry(ctx, v)
+				s.briefEntry(ctx, t.ID, &e)
+				return e, true
+			}
+			return prompts.SuperviseEntry{}, false // waits for the owner's decision (returned) or no longer eligible
 		}
 		if g.Inbox.ToAgent == "unhandled" && !s.taskInboxUnhandled(ctx, g.Key) {
 			return prompts.SuperviseEntry{}, false // the source event was answered while its notice waited
@@ -942,6 +966,13 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	if estimateBrief != nil {
 		e.Detail = prompts.RenderEstimateDue(prompts.EstimateDue{Language: answerLanguage(string(s.botLang(ctx))),
 			Expected: estimateBrief.ExpectNow, Elapsed: g.Minutes})
+	}
+	if g.Kind == sigNeedsUserExternalInfo {
+		e.Detail = ""
+		e.ExternalInfo = s.needsUserExternalInfoEntry(ctx, t, g.ExternalSource, g.Detail)
+		e.LastReview = s.lastReviewEntry(ctx, v)
+		s.briefEntry(ctx, t.ID, &e)
+		return e, true
 	}
 	// The last review, shown only in a Fresh message (supervise_round.go): a decision reply's round confirms the decision
 	// that review put to the owner.
@@ -1079,7 +1110,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 
 // sortEntries puts what waits on a decision first.
 func sortEntries(list []prompts.SuperviseEntry) []prompts.SuperviseEntry {
-	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigRecheck: 1, sigEstimateDue: 2, sigParkedDue: 2, sigParkDecided: 2, sigIdle: 2, sigUnjudged: 2, sigAllStopped: 2, sigFailed: 3, sigStarted: 3, sigTodoReady: 3, sigPRMerged: 3, sigParentCloseout: 3, sigInterrupted: 4, sigOrphaned: 4, sigTimedOut: 4, sigReview: 5, sigStalled: 6, sigNoProgress: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
+	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigRecheck: 1, sigNeedsUserExternalInfo: 1, sigEstimateDue: 2, sigParkedDue: 2, sigParkDecided: 2, sigIdle: 2, sigUnjudged: 2, sigAllStopped: 2, sigFailed: 3, sigStarted: 3, sigTodoReady: 3, sigPRMerged: 3, sigParentCloseout: 3, sigInterrupted: 4, sigOrphaned: 4, sigTimedOut: 4, sigReview: 5, sigStalled: 6, sigNoProgress: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
 	at := func(e prompts.SuperviseEntry) int {
 		switch {
 		case e.Kind == sigCheck && e.Report == checkDecidedReport: // the owner's answer

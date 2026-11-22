@@ -612,14 +612,16 @@ private fun ChatPage(
     var forking by remember { mutableStateOf(false) }
     var rewindBusy by remember { mutableStateOf(false) }
     val actionsService = chrome.actions
+    val forkService = actionsService ?: chrome.forkActions
     val openFork = chrome.forkOpener(renderStyle)
-    val onFork: ((String) -> Unit)? = if (actionsService != null && openFork != null && session?.canFork == true && !readOnly) { itemId ->
+    val canForkHere = !readOnly || (historyReadOnly && !pageSession.managerOffline && child == null && workflowAgent == null && !key.sessionId.contains('@'))
+    val onFork: ((String) -> Unit)? = if (forkService != null && openFork != null && session?.canFork == true && !session.archived && canForkHere) { itemId ->
         val from = session
         if (!forking) {
             forking = true
             scope.launch {
                 try {
-                    val id = actionsService.fork(from, itemId)
+                    val id = forkService.fork(from, itemId)
                     notice = res.getString(R.string.chat_menu_forked)
                     try { sessions.refresh() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
                     openFork(SessionKey(from.machineId, id))
@@ -1021,6 +1023,8 @@ private fun ChatPage(
                                         onResumeInTerminal = resumeInTerminal,
                                         turnStart = runningSince,
                                         sides = childCards.sides, sideRollup = childCards.sideRollup, onOpenSide = chrome.onOpenSide,
+                                        onForkSession = if (onFork != null && session?.canFork == true) ({ onFork("") }) else null,
+                                        forking = forking,
                                         menuOpen = headerMenuOpen)
                                     // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
                                     if (tabs && session != null && onOpenSibling != null) {

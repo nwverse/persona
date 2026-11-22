@@ -141,6 +141,9 @@ func (s *Service) a2aProcess(ctx context.Context, st a2aStore, cfg assistantwire
 			return nil
 		}
 	}
+	if t.State == a2aQueued {
+		return nil
+	}
 	machine := s.logicalExecutionMachine(ctx, t.TargetMachine, t.TargetSession)
 	offline := s.computerState(machine).state == standingComputerOffline
 	if !a2aTerminal(t.State) && offline != t.Disconnected {
