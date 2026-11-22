@@ -760,7 +760,8 @@ private fun TrayOutcomeRow(entry: NeedsYouEntry.Task, host: AssistantTaskHost, e
     val failed = entry.status == TriageStatus.Failed
     val lead = host.tasks.lead(todo, host.sessions)
     val cut = Interruption.of(lead)
-    val why = if (failed) startFailureRowLine(todo.startError.orEmpty()) else interruptedWhy(lead?.turnError)
+    val why = if (failed) startFailureRowLine(todo.startError.orEmpty())
+        else if (cut?.invalid == true) cut.reason.text() else interruptedWhy(lead?.turnError)
     val retrying = TasksStore.retryKey(todo.id) in taskBusy
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(Tokens.Radius.card)).background(palette.danger.tint)
         .testTag(if (failed) "assistant-tray-failed" else "assistant-tray-interrupted")) {

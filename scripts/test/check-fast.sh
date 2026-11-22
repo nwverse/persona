@@ -59,6 +59,10 @@
 #                              directory as CI does (#3968), and every scripts/**/test_*.py that imports a changed
 #                              <name>.py from its own directory or from one it names, found at run time (a suite a
 #                              dedicated check runs schedules that check; #11026); then the table's suites
+# A change under server/ or sdk/go/ also runs the repo-wide guard step (job_go_guards: GO_GUARD_PKGS, GO_GUARD_TEST_PKGS
+# and GO_GUARD_TESTS below), the guards and cross-package contract tests that fail on code outside the touched group:
+# the architecture and link guards, the i18n and prompts packages, and the hub's and the assistant's goldens, wire
+# samples, route scopes and size budgets (#12842).
 # scripts/privacy_check.py runs on every invocation that has changes (it is a seconds-long local scan, no network).
 # The plan ends with an INFO line naming the CI lanes the change selects (python3 scripts/ci/paths.py --lanes-for, the
 # selection CI and the PR watcher read) that it runs no part of, such as android, core or desktop (#11026).
@@ -520,16 +524,37 @@ job_go() {  # $1 = a package dir (internal/foo, cmd/bar, plugins/baz) or ALL for
   in_dir server step "$TIMEOUT_GO_TEST" "$_label" "${_go[@]}" test -count=1 -timeout "${_inner}s" "$_pattern"
 }
 
-# The server's repo-wide guards: tests that read other packages' source, go list output, the migrations or sdk/go, so
-# a change anywhere under server/ or sdk/go/ can fail them while go test on the touched packages passes (#1936 broke
-# the lazyre guard on main that way). The list is curated, not every *guard*_test.go: internal/node's pathguard and
-# writeguard tests and internal/hub's ownership_guard_test.go test their own package's behaviour. GO_GUARD_PKGS run
-# whole; GO_GUARD_TESTS names the guard tests of GO_GUARD_TEST_PKGS, whose other tests are slow or need Postgres.
-GO_GUARD_PKGS=(./internal/lazyre ./internal/archguard ./internal/tzguard ./plugins)
-GO_GUARD_TEST_PKGS=(./internal/hub ./internal/assistant)
+# The server's repo-wide guards: tests that read other packages' source, go list output, the migrations or sdk/go, or
+# that pin what other packages render, so a change anywhere under server/ or sdk/go/ can fail them while go test on the
+# touched packages passes (#1936 broke the lazyre guard on main that way). A server change tests only its own group's
+# subtree (./internal/<x>/...), so these run for every one of them (#12842, #10615):
+#   - lazyre, archguard, tzguard and plugins, and the hub's and the assistant's architecture tests, which read source,
+#     go list output, the migrations or sdk/go;
+#   - internal/i18n (its tests walk the whole module for hard-coded text and for keys its call sites use) and
+#     internal/prompts (its tests walk the other packages for the code that offers each MCP tool, and read
+#     docs/assistant/prompts.md);
+#   - TestOneBuild (internal/update: no file builds differently with the release tags) and each program's link guard
+#     (cmd/persona-hub, cmd/persona-manager, cmd/persona-node: go list -deps on every platform they ship for);
+#   - the hub's and the assistant's cross-package contract tests: the prompt and MCP tool goldens (TestGolden.*), the
+#     wire samples, the route scopes and extension route bounds, the prompt and instruction size budgets, and the
+#     contracts of the model purposes, repository guidance and start paths. Their packages render, route or start what
+#     other packages define, so a change there fails them.
+# The list is curated, not every *guard*_test.go: internal/node's pathguard and writeguard tests and internal/hub's
+# ownership_guard_test.go test their own package's behaviour. GO_GUARD_PKGS run whole; GO_GUARD_TESTS names the tests of
+# GO_GUARD_TEST_PKGS that run, since their other tests are slow or need Postgres. go test -run silently matches nothing
+# once a listed test is renamed, so scripts/test/test_check_fast_guards.py fails when an entry names no func Test... of
+# those packages, or a listed package directory is gone. Every test runs with -count=1, as the other go steps do.
+GO_GUARD_PKGS=(./internal/lazyre ./internal/archguard ./internal/tzguard ./plugins ./internal/i18n ./internal/prompts)
+GO_GUARD_TEST_PKGS=(./internal/hub ./internal/assistant ./internal/update ./cmd/persona-hub ./cmd/persona-manager
+  ./cmd/persona-node)
 GO_GUARD_TESTS='^(TestHubAnswersOnlyItsOwnRoutes|TestHubDoesNotImportTheManager|TestHubCallsNoModel|TestHubStoreStaysSmall'\
 '|TestTheHubOpensNoneOfTheManagersFiles|TestStoresTouchTheirOwnTables|TestSettingsKeysAreOneSidesOwn'\
-'|TestTheLaunchersSealedFieldsAreReSealed|TestPlacesThatSealAreKnown)$'
+'|TestTheLaunchersSealedFieldsAreReSealed|TestPlacesThatSealAreKnown'\
+'|TestOneBuild|TestPersonaHubDoesNotLinkTheManager|TestPersonaManagerDoesNotLinkTheHub'\
+'|TestPersonaNodeDoesNotLinkTheHubOrTheManager'\
+'|TestGolden.*|TestNoWholeListMCPToolGoldens|TestWireSamples|TestRouteScopes|TestEveryExtensionRouteIsBounded'\
+'|TestPromptSizeRatchet|TestSupervisionPolicySizeBudget|TestModelPurposesDescribeThemselves'\
+'|TestRepositoryRetrievalGuidanceContract|TestEveryStartPathIsSupervisedOrOptedOut)$'
 
 # job_go_guards runs both guard commands, the second one also when the first failed, so one run names every failure.
 job_go_guards() {
@@ -643,7 +668,8 @@ job_migration_freeze() {
 }
 
 # job_sleep_ratchet counts fixed time.Sleep calls in Go tests. In diff mode the base is the merge-base check-fast
-# already resolved (so --base agrees); --all resolves the default branch itself.
+# already resolved (so --base agrees), which also holds each changed file to its count there. --all is a full-tree run:
+# counts are held to the baseline only, and the ratchet resolves the default branch itself for its never-raise check.
 job_sleep_ratchet() {
   [ "$HAVE_PY" -eq 1 ] || skip "python3 not found"
   if [ "$ALL" -eq 1 ]; then
