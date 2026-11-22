@@ -498,6 +498,7 @@ The main API's shared error handling keeps the `error` text and adds a stable `c
 | `terminal_not_ready` | 503 | A start's new terminal tab did not take the start command: herdr refused the typed line (`pane_send_failed`), or, in an Orca tab, the start line never showed there and its start file was never read by the end of the wait for the shell (#10588; Orca does not say whether a send arrived). Nothing ran; `retryable: true`, `delivered: none`; the tab is closed. A task start retries it once and does not count it against the launcher |
 | `node_outdated` | 409 | The node doesn't support the requested feature, e.g. file upload |
 | `too_large` | 413, or 409 mapped from node RPC | Request / file over the limit |
+| `images_over_limit` | 413 | A message carries more pictures than a message holds (#12973); `limit` (hello's `image_limits` set the message was held to) and `got.images` give the numbers; `retryable: false`, `delivered: none`. See "Pictures in a message" |
 | `timeout` | 408 / 504, often 502 for node calls | Timed out; the outcome can't be judged from this code alone |
 | `node_unreachable` | 502 / 503 | The node is offline or the connection dropped; when clearly offline, `retryable: true`, `delivered: none`; not necessarily so for a dropped connection |
 | `no_machine` / `machine_pending` / `claude_missing` / `launcher_missing` | 409 | The main chat (and other assistant chats) can't start: no computer / the computer isn't confirmed yet / Claude Code isn't installed on that computer / launcher not found. `error` is a plain-language sentence the hub writes in the request's language (naming the computer), `detail` is the raw text (the shell's error, shown only under "Details"), `action` is the suggested action (`add_computer` / `confirm_computer` / `install_claude` / `connect_model`), plus `machine_name`, `launcher` (sometimes) and `delivered: none`. `machine_pending` is defined and appears only once pending computers ship. Design: new-user onboarding plan (#287, #3339) sections 4.6, 5.2. **A start in a new terminal tab** (`POST /api/v1/sessions`, `agent_start`, a task) whose tab's shell said it can't run the launcher (`launcher_missing`) or the claude it runs (`claude_missing`) fails within seconds with the same codes plus `where: "terminal"`, `missing` (the command or path the shell named), `kind` (`not_found` / `no_such_file` / `permission_denied`), `pane_shell` (the tab's shell; absent when the node cannot tell, and the sentence says "the default shell"), `launcher_shell` and `rc_file` (where the node lists launchers) and `line` (the shell's own line); the sentence then says the terminal's shell lacks it and where the list came from (#1642, `docs/integrations/launchers.md` "The terminal's shell is another environment"). A launcher the node does not list either is plain `launcher_missing` without `where` |
@@ -507,7 +508,7 @@ The main API's shared error handling keeps the `error` text and adds a stable `c
 
 The table lists the shared handler and the main business codes; other explicit node RPC error codes are passed through too, usually mapped to 409 (`not_found` to 404, `conversation_deleted` to 410). Clients should branch on `code`, show `error` for unknown codes, and keep the old behavior when an old hub sends only `error`.
 
-APIs that take a JSON body all have a size limit, from 1 KiB to 32 MiB depending on the API (`decodeJSONBody` in the hub, and the managers' copies of it): the manager join (`POST /api/v1/bus/join`) 1 KiB; small settings, card choices (`…/choose`) and pair codes 4 KiB; device registration and prefs, notify and `POST /api/v1/admin/peers` 16 KiB; hub-to-hub pairing (`POST /api/v1/peer/pair`) 64 KiB; pin / mute / launchers / card answers (`…/resolve`) / connector replies 1 MiB; starting a session (`POST /api/v1/sessions`) 4 MiB; session messages, interrupts, keys and the other bodies the hub hands to a node as they are (git commit / push / pr, agent settings) 32 MiB, which is also the hub's cap on any request it forwards to a manager. Over the limit returns 413 `too_large`; the hub stops reading at the limit instead of reading it all. Malformed input is still 400. Some manager routes still read with a plain size cap and answer an oversized body with 400 instead, for example `PUT /api/v1/recordings/{id}` (16 MiB) and `POST /api/v1/task-plans/{id}/start` (1 MiB).
+APIs that take a JSON body all have a size limit, from 1 KiB to 32 MiB depending on the API (`decodeJSONBody` in the hub, and the managers' copies of it): the manager join (`POST /api/v1/bus/join`) 1 KiB; small settings, card choices (`…/choose`) and pair codes 4 KiB; device registration and prefs, notify and `POST /api/v1/admin/peers` 16 KiB; hub-to-hub pairing (`POST /api/v1/peer/pair`) 64 KiB; pin / mute / launchers / card answers (`…/resolve`) / connector replies 1 MiB; session messages and the starts that carry a first message's pictures (`POST /api/v1/sessions`, `POST /api/v1/assistant/conversations`, 4 MiB and a 400 for the latter before #12973), interrupts, keys and the other bodies the hub hands to a node as they are (git commit / push / pr, agent settings) 32 MiB (`proto.MessageBodyLimit`), which is also the hub's cap on any request it forwards to a manager. Over the limit returns 413 `too_large`; the hub stops reading at the limit instead of reading it all. Malformed input is still 400. Some manager routes still read with a plain size cap and answer an oversized body with 400 instead, for example `PUT /api/v1/recordings/{id}` (16 MiB) and `POST /api/v1/task-plans/{id}/start` (1 MiB).
 
 ## Portable configuration forms
 
@@ -2489,7 +2490,7 @@ Server → client:
 | --- | --- |
 | `hub_restarting` | `back_in_ms`: the hub is about to restart (deploy, `systemctl restart`, update), followed by 1001 "hub restarting". The client reconnects immediately and keeps the UI as is ([hub-restart.md](../operations/hub-restart.md)). No `event_seq`, not replayed |
 | `hub_update` | `update` (same as `GET /api/v1/hub/update`): checking, downloading, waiting for idle, restarting, confirming, rolling back; pushed whenever the state changes; after `restarting` the connection drops for a while, which is expected |
-| `hello` | `server_version`, `client_id`, `features`, `hub_id`, `hub_name`, `endpoints`, `tls_port`, `fp`, `mesh`, `channel`, `build`, `protocol`, `min_app_build` (the last four same as `/api/v1/health`), `event_stream`, `event_seq`, `resumed` (see "Event resume" below), `locale` (the user's language, feature `locale`), `push_grading` (boolean, current hub push grading switch), `message_send_state` and `todo_send_state` (each `1`: the receipt versions only the hub writes, the proof a client trusts those events by; see their rows); the first message on every WS, not yet including the negotiated heartbeat. `mesh`: `{"hubs":[{hub_id,name,online,self,center,endpoints,tls_port,fp}]}`, every hub in the linked-hub group (including itself, `self: true`; paired but currently unreachable ones `online: false`; `center: true` is the group's primary hub, which clients prefer among those in the same group); without linking, only itself. When connected to a member, hello comes from the primary (`hub_id` is the primary's) ([mesh.md](../server/mesh.md)) |
+| `hello` | `server_version`, `client_id`, `features`, `hub_id`, `hub_name`, `endpoints`, `tls_port`, `fp`, `mesh`, `channel`, `build`, `protocol`, `min_app_build` (the last four same as `/api/v1/health`), `event_stream`, `event_seq`, `resumed` (see "Event resume" below), `locale` (the user's language, feature `locale`), `push_grading` (boolean, current hub push grading switch), `image_limits` (the pictures a message may carry, see "Pictures in a message"), `message_send_state` and `todo_send_state` (each `1`: the receipt versions only the hub writes, the proof a client trusts those events by; see their rows); the first message on every WS, not yet including the negotiated heartbeat. `mesh`: `{"hubs":[{hub_id,name,online,self,center,endpoints,tls_port,fp}]}`, every hub in the linked-hub group (including itself, `self: true`; paired but currently unreachable ones `online: false`; `center: true` is the group's primary hub, which clients prefer among those in the same group); without linking, only itself. When connected to a member, hello comes from the primary (`hub_id` is the primary's) ([mesh.md](../server/mesh.md)) |
 | `push_grading` | `enabled` (boolean): hub push-grading switch toggled; open web and desktop clients update notifications, sounds, and alert badges immediately |
 | `endpoints` | `endpoints` (the full candidate list, only sent to connections that declared the capability of the same name) |
 | `client_hello_ack` | `heartbeat: {interval, pong_timeout}` (the seconds actually used after this negotiation) |
@@ -3464,6 +3465,49 @@ The foundation shared by the file page and the various previews (spreadsheets, O
 - **Fetching content**: first `GET /file?stream=1`. Text still comes paged as `text`; binary only gives `size`, `mime`, `revision`, and the content is fetched from `/file/download` as needed: media hands the URL straight to `<video>` / `<audio>` (seeking via Range), and PDF / Office / spreadsheets are fetched whole and handed to the rendering library, so large files no longer go through JSON as one base64 blob. `revision` and the download's ETag are the same value.
 - **Inline and isolation**: the hub and the web share an origin, so `inline=1` only allows images, audio/video and PDF; SVG, though inline, also carries `Content-Security-Policy: sandbox`, so when opened on its own its scripts can't run as the web page. HTML isn't inlined; for preview its text is fetched and put into a sandboxed iframe (M5).
 - **Thumbnails**: images (PNG / JPEG / GIF / WebP / BMP / TIFF) are decoded and scaled by the node itself, and SVG is drawn with oksvg (shapes only); everything else goes to the system: Quick Look on a Mac (`qlmanage`: PDF, Office, iWork, HEIC, video), and on other systems `pdftoppm` for PDF and `ffmpeg` for video if installed. System tools run one at a time with a 12-second timeout per run; after one timeout (Quick Look hangs on a locked Mac) they aren't called for 5 minutes and `no_thumbnail` is returned directly, so a screenful of files doesn't wait on each one. The node keeps the latest 128 in memory.
+
+### Pictures in a message
+
+A message carries its pictures inline (`images: [{mime, data}]`, base64) on three routes: `POST /api/v1/sessions/{mid}/{sid}/messages`,
+`POST /api/v1/sessions` (a new Agent's first message) and `POST /api/v1/assistant/conversations` (a new assistant conversation's).
+All three are held to the limits the hub publishes in hello's `image_limits` (#12973, `proto.HubImageLimits`):
+
+```json
+"image_limits": {"request_bytes": 33554432, "image_bytes": 3750000, "max_side": 1600, "per_message": 20}
+```
+
+- `request_bytes`: the body limit of the three routes (over it, 413 `too_large`). A client counts the pictures' base64, the text and some
+  room for the other fields against it.
+- `image_bytes`: what one picture's decoded bytes should stay under, 5,000,000 bytes of base64: the lowest per-image limit among the
+  Claude platforms (Amazon Bedrock; the Claude API takes 10 MB). A client compresses or scales a larger picture again. The hub does not
+  refuse one: older web clients send originals of up to 8 MB, and the runtimes scale pictures down themselves.
+- `max_side`: the long side a client scales a picture down to (JPEG, quality 0.75). A picture already within it and within
+  `image_bytes` may go as it is.
+- `per_message`: the pictures one message may carry. The hub refuses more on all three routes with 413 `images_over_limit` before
+  anything reaches a computer. Only the message's own pictures count, never those earlier in its conversation.
+- `agents` (absent today): complete sets for the sessions whose `agent` (`claude` when empty) needs other limits. A client uses
+  `agents[session.agent]` when there is one, else the top level; a conversation not started yet uses the top level.
+
+A hub without `image_limits` has the same body limit and counts no pictures, so a client uses these same numbers with it. Pictures over
+`per_message` or `request_bytes` are not dropped: a client sends them as file attachments instead ("Sending files") and says so. Videos
+are files already ("Sending videos"): they count toward neither, and their messages carry only their tags.
+
+```json
+{"error": "This message has 21 pictures; a message holds up to 20.", "code": "images_over_limit", "retryable": false, "delivered": "none",
+ "limit": {"request_bytes": 33554432, "image_bytes": 3750000, "max_side": 1600, "per_message": 20}, "got": {"images": 21}}
+```
+
+`error` is in the request's language. How the numbers were chosen (checked 2026-11-22):
+
+- Size: photos scaled to 1600 px at JPEG 0.75 come to about 440 KB (the median of the simulator's sample photos; 833 KB the largest,
+  1.4 MB a photographed page of dense text), so 20 fit in the body with room to spare.
+- Count: claude.ai takes 20 pictures a message. The Claude API takes 600 images a request (100 for models with a 200k-token context
+  window), counting those earlier in the conversation, and limits every image to 3000 px once a request has more than 20; Codex, pi,
+  opencode and the xAI API set no count of their own. Oh My Pi allows 5 for a provider its catalog does not know, and drops older
+  pictures itself.
+- History: Claude Code drops the oldest pictures of a conversation over its count before it sends, and compacts (a 413 through a
+  custom base URL ends the turn instead); Codex, opencode, Oh My Pi and Grok drop old ones too. Claude Code in a terminal and Codex get
+  the pictures as files they read (`<attached_images>` paths, `localImage`); `claude -p` and the runtime SDK get them inline.
 
 ### Sending files
 
