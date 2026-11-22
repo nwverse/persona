@@ -2,6 +2,8 @@ package persona.feature.settings
 
 import android.content.Context
 import android.content.res.Configuration
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
@@ -13,7 +15,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.AccessibilityAction
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsConfiguration
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -127,8 +131,9 @@ class AboutBuildSemanticsTest {
                 val generatedSemantics = generated.readRowSemantics()
                 assertEquals("$tag value=$value spoken label and value", nativeSemantics.text, generatedSemantics.text)
                 assertEquals("$tag value=$value content descriptions", nativeSemantics.descriptions, generatedSemantics.descriptions)
-                assertEquals("$tag value=$value click actions", nativeSemantics.clickLabels, generatedSemantics.clickLabels)
+                assertEquals("$tag value=$value click labels", nativeSemantics.clickLabels, generatedSemantics.clickLabels)
                 assertTrue("$tag value=$value generated must be read-only", generatedSemantics.clickLabels.isEmpty())
+                assertTrue("$tag value=$value native must be read-only", nativeSemantics.clickLabels.isEmpty())
                 assertEquals("$tag value=$value custom actions", nativeSemantics.customActions, generatedSemantics.customActions)
                 assertTrue("$tag value=$value generated must have no custom action", generatedSemantics.customActions.isEmpty())
                 assertTrue("$tag value=$value native must have no custom action", nativeSemantics.customActions.isEmpty())
@@ -145,6 +150,20 @@ class AboutBuildSemanticsTest {
         }
     }
 
+    @Test fun anUnlabeledChildClickCannotPassTheSubtreeReadOnlyCheck() {
+        rule.setContent {
+            Box(Modifier.testTag("clickable-fixture")) {
+                Text("Child", Modifier.clickable(onClickLabel = null) {})
+            }
+        }
+        val semantics = rule.onNodeWithTag("clickable-fixture", useUnmergedTree = true).readRowSemantics()
+        assertEquals(listOf<String?>(null), semantics.clickLabels)
+        val failure = runCatching {
+            assertTrue("An unlabeled child click must fail this read-only check", semantics.clickLabels.isEmpty())
+        }.exceptionOrNull()
+        assertTrue("An unlabeled child click must be detected even when its label is null", failure is AssertionError)
+    }
+
     private fun language(tag: String): Context = context.createConfigurationContext(
         Configuration(context.resources.configuration).apply { setLocale(Locale.forLanguageTag(tag)) })
 
@@ -154,18 +173,21 @@ class AboutBuildSemanticsTest {
         return RowSemantics(
             text = descendants.flatMap { it.config.getOrNull(SemanticsProperties.Text).orEmpty() }.map { it.text },
             descriptions = descendants.flatMap { it.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty() },
-            clickLabels = descendants.mapNotNull { it.config.getOrNull(SemanticsActions.OnClick)?.label },
+            clickLabels = descendants.mapNotNull { it.config.clickAction() }.map { it.label },
             customActions = descendants.mapNotNull { it.config.getOrNull(SemanticsActions.CustomActions) }
                 .map { actions -> actions.map { action -> action.label } },
         )
     }
+
+    private fun SemanticsConfiguration.clickAction(): AccessibilityAction<() -> Boolean>? =
+        if (contains(SemanticsActions.OnClick)) this[SemanticsActions.OnClick] else null
 
     private fun SemanticsNode.descendants(): List<SemanticsNode> = listOf(this) + children.flatMap { it.descendants() }
 
     private data class RowSemantics(
         val text: List<String>,
         val descriptions: List<String>,
-        val clickLabels: List<String>,
+        val clickLabels: List<String?>,
         val customActions: List<List<String>>,
     )
 
