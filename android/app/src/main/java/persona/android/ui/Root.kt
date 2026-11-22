@@ -936,7 +936,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                                     settingsSheetStack.add(SettingsRoute)
                                     settingsSheetStack.add(SettingsPageRoute(SettingsPage.Managers))
                                     settingsOpened = true
-                                }, headModifier = head, trailing = trailing, fallback = fallback)
+                                }, headModifier = head, hubs = session.groups.takeUnless { services.demo },
+                                trailing = trailing, fallback = fallback)
                         },
                         // Regular window: Search opens over the whole window as the open iPhone Duo (#9171).
                         fullWindowSearch = regular || merged,
