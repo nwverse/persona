@@ -15,6 +15,9 @@ import {
   watchTerminalCompaction,
   type OutgoingPayload,
 } from "./compact-resend";
+import { openPickerCommand } from "./composer-commands";
+import { onModelPicker } from "./model-switch";
+import { onPermissionPicker } from "./permissions-command";
 import { dropSession, upsertSession } from "./store";
 import { chatLines } from "./turns";
 import type { Item, Session } from "./types";
@@ -434,5 +437,28 @@ describe("waitForTerminalCompaction / watchTerminalCompaction", () => {
     );
     upsertSession(baseSession({ status: "idle", state: "idle" }));
     expect(await pending).toBe("failed");
+  });
+});
+
+describe("openPickerCommand", () => {
+  it("opens registered model or permission picker for bare commands without images", () => {
+    const modelSpy = vi.fn();
+    const permSpy = vi.fn();
+    const unsubModel = onModelPicker("box/s1", modelSpy);
+    const unsubPerm = onPermissionPicker("box/s1", permSpy);
+    try {
+      expect(openPickerCommand("box/s1", "/model", 0)).toBe(true);
+      expect(modelSpy).toHaveBeenCalledTimes(1);
+      expect(openPickerCommand("box/s1", "/permissions", 0)).toBe(true);
+      expect(permSpy).toHaveBeenCalledTimes(1);
+      // Messages with images or other commands are not intercepted.
+      expect(openPickerCommand("box/s1", "/model", 1)).toBe(false);
+      expect(openPickerCommand("box/s1", "/permissions", 1)).toBe(false);
+      expect(openPickerCommand("box/s1", "/clear", 0)).toBe(false);
+      expect(openPickerCommand("box/other", "/model", 0)).toBe(false);
+    } finally {
+      unsubModel();
+      unsubPerm();
+    }
   });
 });

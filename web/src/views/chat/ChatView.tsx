@@ -59,7 +59,7 @@ import { scrollBehavior } from "../../ui/stream/motion";
 import { segmentChanges, shiftAbove } from "./offscreen";
 import { glide } from "./glide";
 import { AGENT_COMMANDS, Composer, type Outgoing } from "./Composer";
-import { agentCommands } from "../../lib/composer-commands";
+import { agentCommands, openPickerCommand } from "../../lib/composer-commands";
 import { IMAGE_LIMIT_CODE } from "../../lib/api-errors";
 import { COMPACT_FEATURE, compactBody, compactPath } from "../../lib/compaction";
 import { canResendFailedTurn, compactResendSupport, failedTurnToResend, isImageLimitError, resolveFailedTurnPayload, snapshotTerminalCompaction, waitForAssistantCompaction, watchTerminalCompaction, type OutgoingPayload } from "../../lib/compact-resend";
@@ -2307,6 +2307,11 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         const outcome = await watcher.promise;
         if (ctl.signal.aborted || outcome !== "done") return;
       }
+      // Local composer picker commands (/model, /permissions) open their picker without marking errorRetried or posting.
+      if (openPickerCommand(draftKey, resolved.payload.text, resolved.payload.images.length)) {
+        backToComposer();
+        return;
+      }
       if (key) setErrorRetried(key);
       backToComposer();
       const went = await sendMessageNow.current(resolved.payload);
@@ -2318,7 +2323,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- backToComposer reads stable refs and fine media state
-  }, [bannerError, session, compactResend.supported, compactResend.mode, tailKey, mid, sid, deliver]);
+  }, [bannerError, session, compactResend.supported, compactResend.mode, tailKey, mid, sid, draftKey, deliver]);
 
   const page = (
     <div className="@container/session flex h-full min-w-0 flex-col">

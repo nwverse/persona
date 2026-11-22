@@ -88,6 +88,8 @@ vi.mock("../../ui/atoms", async (importOriginal) => ({
 
 const { ChatView } = await import("./ChatView");
 const { toast } = await import("../../ui/atoms");
+const { onModelPicker } = await import("../../lib/model-switch");
+const { onPermissionPicker } = await import("../../lib/permissions-command");
 const { getState, setOutbox, upsertSession } = await import("../../lib/store");
 const { resetOutboxClaimsForTests, resetRestoredForTests } = await import("../../lib/outbox");
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -540,5 +542,82 @@ describe("image-limit Compact and send again (#13045)", () => {
     await draw(true);
     expect(banner()!.textContent).toContain("这个对话里的图片太多或太大，超出了模型限制。");
     expect(banner()!.querySelector('[data-testid="compact-and-resend"]')).toBeNull();
+  });
+
+  it("opens the local /model picker instead of posting to /messages when registered", async () => {
+    const modelSpy = vi.fn();
+    const unsubModel = onModelPicker("hub/c1", modelSpy);
+    try {
+      captured.session = { ...IDLE, agent: "claude", turn_error_code: "images_too_large" };
+      transcript.items = [msg("u1", 1, "user", "/model"), msg("e1", 2, "assistant", TOO_LARGE)];
+      await draw(false);
+      act(() => banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]')!.click());
+      await flush();
+      expect(bodies.map((b) => b.text)).toEqual(["/compact"]);
+
+      captured.session = { ...captured.session, status: "working", state: "working" };
+      act(() => upsertSession(captured.session!));
+      await draw(false);
+      transcript.items = [
+        ...transcript.items,
+        { id: "c1", seq: 3, role: "assistant", kind: "notice", compact: { trigger: "manual" }, text: "上下文已压缩", ts: "2026-11-22T12:00:05Z" } as Item,
+      ];
+      captured.session = { ...captured.session, status: "idle", state: "idle", turn_error_code: undefined };
+      act(() => upsertSession(captured.session!));
+      await draw(false);
+      expect(modelSpy).toHaveBeenCalledTimes(1);
+      expect(bodies.map((b) => b.text)).toEqual(["/compact"]);
+    } finally {
+      unsubModel();
+    }
+  });
+
+  it("opens the local /permissions picker instead of posting to /messages when registered", async () => {
+    const permSpy = vi.fn();
+    const unsubPerm = onPermissionPicker("hub/c1", permSpy);
+    try {
+      captured.session = { ...IDLE, agent: "claude", turn_error_code: "images_too_large" };
+      transcript.items = [msg("u2", 10, "user", "/permissions"), msg("e2", 11, "assistant", TOO_LARGE)];
+      await draw(false);
+      act(() => banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]')!.click());
+      await flush();
+      expect(bodies.map((b) => b.text)).toEqual(["/compact"]);
+
+      captured.session = { ...captured.session, status: "working", state: "working" };
+      act(() => upsertSession(captured.session!));
+      await draw(false);
+      transcript.items = [
+        ...transcript.items,
+        { id: "c2", seq: 12, role: "assistant", kind: "notice", compact: { trigger: "manual" }, text: "上下文已压缩", ts: "2026-11-22T12:00:10Z" } as Item,
+      ];
+      captured.session = { ...captured.session, status: "idle", state: "idle", turn_error_code: undefined };
+      act(() => upsertSession(captured.session!));
+      await draw(false);
+      expect(permSpy).toHaveBeenCalledTimes(1);
+      expect(bodies.map((b) => b.text)).toEqual(["/compact"]);
+    } finally {
+      unsubPerm();
+    }
+  });
+
+  it("falls back to sending /model as text when no local model picker is registered", async () => {
+    captured.session = { ...IDLE, agent: "claude", turn_error_code: "images_too_large" };
+    transcript.items = [msg("u1", 1, "user", "/model"), msg("e1", 2, "assistant", TOO_LARGE)];
+    await draw(false);
+    act(() => banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]')!.click());
+    await flush();
+    expect(bodies.map((b) => b.text)).toEqual(["/compact"]);
+
+    captured.session = { ...captured.session, status: "working", state: "working" };
+    act(() => upsertSession(captured.session!));
+    await draw(false);
+    transcript.items = [
+      ...transcript.items,
+      { id: "c1", seq: 3, role: "assistant", kind: "notice", compact: { trigger: "manual" }, text: "上下文已压缩", ts: "2026-11-22T12:00:05Z" } as Item,
+    ];
+    captured.session = { ...captured.session, status: "idle", state: "idle", turn_error_code: undefined };
+    act(() => upsertSession(captured.session!));
+    await draw(false);
+    expect(bodies.map((b) => b.text)).toEqual(["/compact", "/model"]);
   });
 });
