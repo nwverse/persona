@@ -73,9 +73,10 @@ exec "$LARKCLI_RECOVERY_REAL" "$@"
 	if err := os.WriteFile(allow, []byte("synthetic recovery"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	// Only ordinary reads request the second attempt, even though bot settings are already loaded.
-	eventually(t, 8*time.Second, "ordinary reads retry managed profile synchronization", func() bool {
-		w.h.botAPI()
+	// Calls on the old live connector request the second attempt, even though bot settings are cached.
+	eventually(t, 8*time.Second, "ordinary CLI calls retry managed profile synchronization", func() bool {
+		c := w.h.connectors.Get("larkcli").(*cliconnector.Connector)
+		_, _ = c.Call(w.ctx, "larkcli_chats", json.RawMessage(`{}`))
 		return count() == 2
 	})
 	responsive := make(chan struct{})

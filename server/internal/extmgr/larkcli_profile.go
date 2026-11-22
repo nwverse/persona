@@ -331,12 +331,14 @@ func (h *Manager) refreshLarkCLIConnector(ctx context.Context) (err error) {
 		return errBotSettingsUnread
 	}
 	unread := h.larkCLIRecovery.preferencesUnread.Load()
+	enabled := h.connectors.Enabled(larkcliconnector.ID)
 	var cs connectorSettings
 	if unread {
 		cs, err = h.readConnectorSettings(ctx)
 		if err != nil {
 			return err
 		}
+		enabled = h.connectorOn(cs, larkcliconnector.ID)
 	}
 	if err = h.syncLarkCLIProfile(ctx); err != nil {
 		h.logf("larkcli profile sync: %v", err)
@@ -379,11 +381,11 @@ func (h *Manager) refreshLarkCLIConnector(ctx context.Context) (err error) {
 	}
 	if unread {
 		h.larkCLIRecovery.preferencesUnread.Store(false)
-		// The new watcher must see synchronization completed when SetEnabled starts it.
-		h.larkCLIRecovery.needed.Store(false)
-		if err = h.connectors.SetEnabled(larkcliconnector.ID, h.connectorOn(cs, larkcliconnector.ID)); err != nil {
-			return err
-		}
+	}
+	// Reapply off to the new pointer as well as preserving the registry's ID
+	// switch: StatusOf uses the connector instance's disabled mark.
+	if err = h.connectors.SetEnabled(larkcliconnector.ID, enabled); err != nil {
+		return err
 	}
 	return nil
 }

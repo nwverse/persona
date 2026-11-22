@@ -242,6 +242,10 @@ func TestBotLoadCLIRecoveryPreservesConnectorSettings(t *testing.T) {
 			if w.h.connectors.Enabled("larkcli") == tc.off || w.h.connectors.Feeds("larkcli", connector.FeedInbox) == tc.feedOff {
 				t.Fatal("recovery changed connector enabled/feed switches")
 			}
+			if tc.off && connector.StatusOf(w.ctx, current).State != connector.StateDisabled {
+				t.Fatal("replacement lost the connector instance's disabled status")
+			}
+
 			// Disabled connectors stay stopped throughout replacement. A direct capability call below probes the selected identity independently of that switch.
 			if tc.off {
 				raw, _ := os.ReadFile(log)
