@@ -477,7 +477,7 @@ internal fun KnowledgeDetailScreen(
                             share = { markdown ->
                                 val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, markdown)
                                     .putExtra(Intent.EXTRA_SUBJECT, entry?.name.orEmpty())
-                                runCatching { context.startActivity(Intent.createChooser(send, null)) }
+                                val _ = runCatching { context.startActivity(Intent.createChooser(send, null)) }
                             },
                         )) { at -> minutesClock(recorded, at) }
                     } }

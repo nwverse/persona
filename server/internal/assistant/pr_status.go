@@ -622,6 +622,8 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 			Detail: fmt.Sprintf("PR %s at head %s is open and has merge conflicts.", status.URL, status.HeadOID)})
 	}
 	reviewChange := !reviewRouted && parkReviewChangeRequested(held, status)
+	parkWoke := false
+	preStage := t.Stage
 	if held != nil && (terminal && (wasOpen || legacyHold || held.Evidence != nil) || reviewChange) {
 		// Typed waits reconcile terminal facts even after a failed ledger write or a restart. Legacy parks retain
 		// their transition/stage gate. A new changes-request review is actionable before other PRs resolve.
@@ -653,6 +655,7 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 			return err
 		}
 		if changed {
+			parkWoke = true
 			detail := "PR " + status.State + ": " + status.URL
 			if reviewChange {
 				detail = "PR changes requested: " + status.URL
@@ -664,6 +667,11 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 		s.setTaskStageOn(ctx, t.ID, "merge", "", "", false, status.URL)
 	}
 	if strings.EqualFold(status.State, "merged") {
+		if parkWoke {
+			s.prMergeWakeTold(ctx, []superviseSignal{{Todo: t.ID, Kind: sigPRMerged, PRURL: status.URL, Key: prMergeSignalKey(status.URL)}})
+		} else {
+			s.maybeEmitUnparkedPRMerged(ctx, t.ID, status.URL, held, parkWoke, wasOpen, preStage)
+		}
 		s.evaluateTodoAfterDependents(ctx, t.ID)
 	}
 	return nil
