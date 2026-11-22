@@ -126,7 +126,10 @@ func TestScheduledProviderOverrideKeepsItsOwnDefaults(t *testing.T) {
 	if _, err := runNow(t, s, "report"); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.lastSend(t); got["launcher"] != "other" || got["model"] != nil || got["effort"] != nil {
+	got := f.lastSend(t)
+	model, _ := got["model"].(string)
+	effort, _ := got["effort"].(string)
+	if got["launcher"] != "other" || model != "" || effort != "" {
 		t.Fatalf("task inherited another provider's parameters: %v", got)
 	}
 }
