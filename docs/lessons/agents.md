@@ -19,6 +19,10 @@
   the linked task's current participants, parking and close state, and keep the same cases on every client.
 - Error detection also runs on every ordinary session's last answer. Compare a case-insensitive prefix without
   lowercasing whole answers; an extra allocation per row broke the 8,200-session list's allocation budget.
+- A wire kind/code must drive the invalid label and full subtitle too, not only hide Continue: raw-text-only row checks
+  otherwise show an opaque error as an ordinary interruption. Apply the working/waiting replacement guard to each
+  client's separate To-dos triage as well as the Assistant tray, and recheck permanent refusal in the timed-out resume
+  path before it sends `session.start`.
 - For mock screenshots, combine `MOCK_TASKS=1 MOCK_TASKS_CUT=1 MOCK_TASKS_INVALID=1` with the mock hub. This is UI
   evidence only, not deployment or proof that a real account-sealed conversation has disappeared from Needs you.
 - Keep permanent compaction errors separate from retryable tool-search refusals when merging error handling.
