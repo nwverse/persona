@@ -251,6 +251,51 @@ describe("catalog-backed By repo projection", () => {
     expect(legacy[0].tree).toEqual([]);
   });
 
+  it("draws one section per repository when a workspace without a project shares it with session-only rows", () => {
+    const terminal = workspace("terminal", { source: "herdr", cwd: "/code/app", title: "app", project_id: undefined, project_name: undefined });
+    const herdr = session("herdr", "terminal", { space_kind: "herdr", workspace_id: "terminal", cwd: "/code/app", repo_root: "/code/app", worktree: "/code/app" });
+    const desktop = session("desktop", "project:/code/app", { space_kind: "claude_desktop", cwd: "/code/app", repo_root: "/code/app", worktree: "/code/app" });
+    const linked = session("linked", "project:/code/app", { space_kind: "claude_desktop", cwd: "/code/app/.claude/worktrees/fix", repo_root: "/code/app", worktree: "/code/app/.claude/worktrees/fix", branch: "fix" });
+    const tree = buildRepoMachineTree([herdr, desktop, linked], machines, options([terminal]));
+    expect(tree[0].repos.map((r) => [r.name, r.count])).toEqual([["app", 3]]);
+    const worktrees = tree[0].repos[0].worktrees;
+    expect(worktrees.map((w) => w.sessions.map((s) => s.session_id))).toEqual([["desktop"], ["herdr"], ["linked"]]);
+    expect(worktrees[1].workspace).toBe(terminal);
+    expect(showsWorktreeLevel(tree[0].repos[0])).toBe(true);
+    // An empty workspace joins the repository its own folder is; one whose Agents span repositories keeps its own section.
+    expect(buildRepoMachineTree([desktop], machines, options([terminal]))[0].repos.map((r) => [r.name, r.count])).toEqual([["app", 1]]);
+    const other = session("other", "terminal", { space_kind: "herdr", workspace_id: "terminal", cwd: "/code/app/vendor/lib", repo_root: "/code/app/vendor/lib", worktree: "/code/app/vendor/lib" });
+    expect(buildRepoMachineTree([herdr, other, desktop], machines, options([terminal]))[0].repos.map((r) => [r.name, r.count]).sort()).toEqual([["app", 1], ["app", 2]]);
+  });
+
+  it("never attributes an Agent with Git metadata to a workspace above its working tree", () => {
+    const home = workspace("home", { source: "herdr", cwd: "/home/me", title: "me", project_id: undefined, project_name: undefined });
+    const chat = session("chat", "codex-project:/code/app", { space_kind: "codex_app", cwd: "/home/me/.codex/worktrees/1a2b/app", repo_root: "/code/app" });
+    expect(sessionWorkspace(chat, [home])).toBeUndefined();
+    expect(sessionWorkspace({ ...chat, repo_root: undefined }, [home])).toBe(home);
+    const linked = workspace("linked", { source: "herdr", cwd: "/home/me/.codex/worktrees/1a2b/app", project_id: undefined, project_name: undefined });
+    expect(sessionWorkspace(chat, [home, linked])).toBe(linked);
+    const main = session("main", "codex-project:/code/app", { space_kind: "codex_app", cwd: "/code/app/src", repo_root: "/code/app" });
+    expect(sessionWorkspace(main, [workspace("code", { source: "herdr", cwd: "/code", project_id: undefined })])).toBeUndefined();
+    expect(sessionWorkspace(main, [workspace("app", { source: "herdr", cwd: "/code/app", project_id: undefined })])?.source_id).toBe("app");
+    const tree = buildRepoMachineTree([chat], machines, options([home]));
+    expect(tree[0].repos.find((r) => r.name === "app")?.worktrees.flatMap((w) => w.sessions)).toEqual([chat]);
+    expect(tree[0].repos.find((r) => r.name === "me")?.count ?? 0).toBe(0);
+  });
+
+  it("keeps an Agent inside its working tree when a symlinked folder leads to its cwd", () => {
+    const herdr = { source: "herdr", project_id: undefined, project_name: undefined };
+    const home = workspace("home", { ...herdr, cwd: "/home/me" });
+    const repo = workspace("repo", { ...herdr, cwd: "/home/me/code/app" });
+    const physical = workspace("physical", { ...herdr, cwd: "/data/home/me/code/app" });
+    const chat = session("chat", "codex-project:/data/home/me/code/app", {
+      space_kind: "codex_app", cwd: "/home/me/code/app/web", workspace_cwd: "/data/home/me/code/app/web", repo_root: "/data/home/me/code/app",
+    });
+    expect(sessionWorkspace(chat, [home, repo])).toBe(repo);
+    expect(sessionWorkspace(chat, [physical])).toBe(physical);
+    expect(sessionWorkspace(chat, [home])).toBeUndefined();
+  });
+
   it("retains offline/empty folder workspaces and uses session-only fallback when discovery is absent", () => {
     const offline = workspace("folder", { workspace_kind: "folder", online: false, available: false });
     expect(rows([], options([offline]))[0].target?.workspaceId).toBe("folder");

@@ -23,13 +23,13 @@ import (
 
 // mainOnlySignals are the signals the instructions' background line leaves to the main conversation; their handling
 // rules name the tools a round withholds (task_start_screen, task_start_keys, task_retry, conversation_send).
-var mainOnlySignals = []string{sigFailed, sigStarted, sigEscalated, sigLeaderStuck}
+var mainOnlySignals = []string{sigFailed, sigStarted, sigEscalated, sigLeaderStuck, sigTodoReady}
 
 // backgroundSignals are the signals digestTo sends the background supervisor for the main conversation's tasks:
 // every kind but mainOnlySignals.
 var backgroundSignals = []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigTimedOut, sigAllStopped, sigInterrupted,
 	sigPRConflict, sigDraftPR, sigReport, sigOrphaned, sigAsk, sigDecide, sigDecisionReply, sigRecheck, sigUndecidable,
-	sigOwnerCannot, sigParkedDue, sigParkDecided, sigInbox, sigOverdue, sigCheck}
+	sigOwnerCannot, sigParkedDue, sigParkedSummary, sigParkDecided, sigInbox, sigOverdue, sigCheck}
 
 // roundConnectorTools are the round's tools that come with the Lark extension (lark_search) or the lark-cli connector
 // (larkcli_search) rather than the assistant's own list.

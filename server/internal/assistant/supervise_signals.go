@@ -27,6 +27,7 @@ const (
 	sigStarted       = "started"        // its agent started after the supervisor's retry (start_remedy.go)
 	sigPRConflict    = "pr_conflict"    // the task's current open PR has merge conflicts at this head
 	sigDraftPR       = "draft_pr"       // an own linked PR is still draft, not waiting for upstream review
+	sigPREvent       = "pr_event"       // a current-head PR CI failure or review fell back from direct Agent routing
 	sigReport        = "report"         // its agent reported to the supervisor (report_to_supervisor, agent_control.go)
 	sigEscalated     = "escalated"      // its leader conversation judged it needs the user (supervise_leader.go): told the main one
 	sigOrphaned      = "orphaned"       // nobody works on it: its agents are closed or offline and nothing brings one back (tasks_orphan.go)
@@ -40,6 +41,8 @@ const (
 	// Agent's (#11587). Report says which: its check saw no progress, could not save what it saw, or the owner
 	// answered the decision it raised (checkDecided), which did not go to the Agent.
 	sigCheck = "check"
+	// sigTodoReady: an open, unstarted dependent to-do has all of its after prerequisites satisfied (todo_after_ready.go, #12606).
+	sigTodoReady = "todo_ready"
 )
 
 // sigCheck's kinds of news (superviseSignal.Report).
@@ -117,8 +120,9 @@ type superviseSignal struct {
 	Inbox *prompts.SuperviseInbox
 	// Optional routine batching keeps these in memory only, after routing and before delivery. They are never part of
 	// a persisted relay payload: once admitted, the existing queue owns delivery.
-	batchTo    string
-	batchUntil time.Time
+	batchTo     string
+	batchUntil  time.Time
+	BreakerNote string `json:"breaker_note,omitempty"` // one-time circuit-breaker fallback note appended in digestEntry
 }
 
 const (
@@ -128,6 +132,9 @@ const (
 )
 
 func (g superviseSignal) level() string {
+	if g.Kind == sigParkedSummary {
+		return supervisionInfo
+	}
 	if g.Kind == sigReport && g.Report == upReportProgress {
 		return supervisionInfo
 	}
@@ -139,6 +146,9 @@ func (g superviseSignal) level() string {
 func (g superviseSignal) id() string {
 	if g.Kind == sigDraftPR {
 		return g.Todo + "|" + g.Kind + "@" + g.PRURL
+	}
+	if g.Kind == sigPREvent {
+		return g.Todo + "|" + g.Kind + "@" + g.PRURL + ":" + g.Report
 	}
 	if g.Kind == sigReport || g.Kind == sigCheck {
 		return g.Todo + "|" + g.Kind + ":" + g.Report
@@ -161,9 +171,9 @@ func (g superviseSignal) id() string {
 // urgent: a signal that waits on a decision goes out sooner than the rest.
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
-	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
+	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigPREvent, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
 		sigRecheck, sigUndecidable, sigOwnerCannot, sigEstimateDue, sigTimedOut, // the owner, an automatic deadline or a stopped task waits
-		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult:
+		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigTodoReady:
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
@@ -208,6 +218,8 @@ type superviseBook struct {
 	// failSeen: tasks whose failed start a supervision message carried, when, and for which conversation
 	// (start_remedy.go remedyTurnEnded)
 	failSeen map[string]failSeen
+	// closeoutScanned bounds startup reconciliation; durable Automatic.Turn prevents replay across restarts.
+	closeoutScanned map[string]bool
 	// lines are the reports being paraphrased for the Progress row (report_line.go; the tests wait on them).
 	lines sync.WaitGroup
 }
@@ -284,7 +296,7 @@ func digestWait(now, last time.Time, pending []superviseSignal, p superviseTimin
 // signal records g for the supervisor, unless the same stretch of state was told already, and sees that the message
 // goes out when it is due.
 func (s *Service) signal(g superviseSignal) {
-	if g.level() == supervisionInfo {
+	if g.level() == supervisionInfo && g.Kind != sigParkedSummary {
 		return // Progress is already recorded on the task card; it never wakes the assistant.
 	}
 	if g.At.IsZero() {
@@ -332,8 +344,8 @@ func (s *Service) queueSignal(g superviseSignal) {
 					g.NotBefore = cur.NotBefore
 				}
 			}
-		} else {
-			g.At = cur.At // still waiting: it keeps its place
+		} else if g.Kind != sigParkedSummary || g.Key == cur.Key {
+			g.At = cur.At // still waiting: it keeps its place; a new summary day keeps its own date
 		}
 		if g.Ask == "" {
 			g.Ask = cur.Ask
@@ -463,7 +475,7 @@ func watchSignals(t Todo, agents []proto.Session, now time.Time, groups ...super
 			if c.State == proto.StateWorking {
 				after = stallAfter(v.ExpectMinutes)
 			}
-			if still := now.Sub(moved); !moved.IsZero() && still >= after {
+			if still := v.activeTimeSince(moved, now); !moved.IsZero() && still >= after {
 				g := base
 				g.Kind, g.Key, g.Minutes = sigStalled, c.SessionID+"@"+moved.UTC().Format(time.RFC3339), int(still.Minutes())
 				g.Detail = strings.TrimSpace(c.Activity)
@@ -526,10 +538,12 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	// Only the open tasks: everything below passes the finished ones by, and there can be thousands of them.
 	tasks := s.todosWhere(ctx, "*", func(t *Todo) bool { return t.DoneAt == nil })
 	s.pruneAllStoppedDedup(ctx)
+	s.sweepTodoAfterReady(ctx)
 	lists := machineSessions{}     // each machine listed once for all the supervised tasks (#3029)
 	history := s.planHistoryOnce() // and the plans read once, when a task's start needs them (start_remedy.go)
 	s.backfillBriefs(ctx, tasks)   // tasks from before briefs get one from what they still have (task_brief.go)
 	groups := allStoppedTaskGroups(tasks)
+	backfilled := 0
 	for _, t := range tasks {
 		if t.Supervision == nil || t.DoneAt != nil {
 			continue
@@ -542,6 +556,13 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 			t = current
 		} else {
 			continue
+		}
+		if backfilled < closeoutBackfillMost {
+			var scanned bool
+			t, scanned = s.backfillCloseout(ctx, t, lists, now)
+			if scanned {
+				backfilled++
+			}
 		}
 		group := s.allStoppedGroup(ctx, t, groups[t.ID], lists)
 		allStopped := false
@@ -566,6 +587,9 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		}
 		ownerEvidencePending := s.parkDecidedRetry(ctx, t) // a stored owner answer outranks legacy reconciliation
 		t = s.reconcileLegacyOwnerPriority(ctx, t, ownerEvidencePending)
+		if g, ok := s.automaticParkSummary(ctx, t, now.In(s.location(ctx))); ok {
+			s.signal(g)
+		}
 		if g, ok := parkDecidedSignal(t); ok { // a decision ended its parking, and no message carried that yet (parked.go)
 			s.signal(g)
 		}

@@ -58,7 +58,7 @@ func (s *Service) defaultPlanSupervisor(ctx context.Context, conversation, paren
 	if s.supervises(ctx, conversation) {
 		return "", false // the main conversation and leaders supervise their own (supervises)
 	}
-	if c, ok := s.session(ctx, s.settings(ctx).MachineID, conversation); ok && c.Assistant && !s.isBackground(ctx, conversation) {
+	if c, ok := s.session(ctx, s.settings(ctx).MachineID, conversation); ok && c.Assistant && !s.isBackgroundSession(ctx, conversation) {
 		return conversation, true
 	}
 	main := s.settings(ctx).Main
@@ -106,6 +106,14 @@ func (s *Service) planTaskSupervisor(ctx context.Context, conversation string, t
 // supervise_background.go). A successful retry remains one of the main conversation's started signals.
 func (s *Service) digestTo(cfg Settings, g superviseSignal) string {
 	own := s.ownSupervisor(cfg)
+	if g.Kind == sigTodoReady {
+		// Dependent to-do readiness wakes go to the owning supervisor conversation (Leader or Main chat), never to the
+		// background supervisor.
+		if g.To != "" && g.To != cfg.BackgroundSupervisor {
+			return g.To
+		}
+		return cfg.Main
+	}
 	if g.To != "" {
 		switch {
 		case (g.Kind == sigDecide || g.Kind == sigCheck) && g.To == cfg.Main:
@@ -158,8 +166,8 @@ func (s *Service) digestTarget(ctx context.Context, cfg Settings, g superviseSig
 	if to == "" || to == cfg.Main || to == cfg.BackgroundSupervisor || !s.runtimeWithoutSupervisionPolicy(ctx, cfg.MachineID, to) {
 		return to
 	}
-	if g.Kind == sigFailed {
-		return cfg.Main // the background supervisor has no start remedies; keep the legacy fallback for a failed start
+	if g.Kind == sigFailed || g.Kind == sigTodoReady {
+		return cfg.Main // the background supervisor has no start remedies and never receives todo_ready wakes
 	}
 	own := s.ownSupervisor(cfg)
 	s.logf("supervise: %s runs on a runtime that cannot take supervision policy: its signal goes to %s", short(to), short(own))
@@ -376,14 +384,19 @@ func (s *Service) stopCancelledAgent(ctx context.Context, id, machine, session s
 			return
 		}
 	}
-	if err := s.noteAgentArchive(ctx, row, true); err != nil {
+	changedAt, err := s.noteAgentArchiveAt(ctx, row, true)
+	if err != nil {
 		s.logf("task %s cancelled: archive agent %s/%s: %v", id, machine, short(session), err)
 		return
 	}
-	if err := s.noteAgentArchiveClosed(ctx, row, time.Now().UTC()); err != nil { // what it writes as it goes is not new work
+	row.ArchiveChangedAt = archiveChangedAt(changedAt)
+	publishMark, err := s.noteAgentArchiveClosed(ctx, row, time.Now().UTC(), false) // what it writes as it goes is not new work
+	if err != nil {
 		s.logf("task %s cancelled: archive agent %s/%s: %v", id, machine, short(session), err)
+		s.publishList(row.MachineID) // the archive itself committed; secondary metadata failure must not hide it
+	} else if publishMark != 0 {
+		s.publishListAtArchiveMark(row.MachineID, publishMark)
 	}
-	s.publishList(row.MachineID)
 	s.logf("task %s cancelled: closed and archived agent %s/%s", id, machine, short(session))
 }
 

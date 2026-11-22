@@ -19,13 +19,24 @@ type superviseFingerprint struct {
 	Hash      string    `json:"hash"`
 	At        time.Time `json:"at"`
 	Permanent bool      `json:"permanent,omitempty"`
-	// Todo keeps inactivity and unhandled-event fingerprints until the task closes.
+	// Todo bounds inactivity, daily-summary and unhandled-event fingerprints by the task's lifetime.
 	// Other non-permanent kinds retain the short semantic-deduplication window.
 	Todo string `json:"todo,omitempty"`
 }
 
 func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, string) {
-	if g.Kind == sigPRConflict || g.Kind == sigDraftPR {
+	if g.Kind == sigTodoReady {
+		// One durable wake per dependent to-do and canonical after-prerequisite set, independent of restarts or sweeps.
+		key, _ := json.Marshal([]string{g.Todo, g.Kind})
+		sum := sha256.Sum256([]byte(g.Key))
+		return string(key), hex.EncodeToString(sum[:])
+	}
+	if g.Kind == sigParkedSummary {
+		key, _ := json.Marshal([]string{g.Todo, g.Kind, g.To})
+		day, _, _ := strings.Cut(g.Key, "|")
+		return string(key), day // replacement parks and wording cannot produce a second summary that day
+	}
+	if g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPREvent {
 		// Keep every task/PR/head independently, including a head that returns after another one.
 		key, _ := json.Marshal([]string{g.Todo, g.Kind, g.Key})
 		sum := sha256.Sum256(key)
@@ -82,7 +93,7 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 // words stay the same.
 func keyIsNews(kind string) bool {
 	switch kind {
-	case sigParkedDue, sigParkDecided, sigInbox, sigOwnerCannot, sigRecheck, sigUndecidable, sigFailed, sigStarted, sigAllStopped, sigDecisionReply, sigHandoffResult, sigEstimateDue, sigOverdue, sigTimedOut,
+	case sigParkedDue, sigParkDecided, sigInbox, sigOwnerCannot, sigRecheck, sigUndecidable, sigFailed, sigStarted, sigAllStopped, sigDecisionReply, sigHandoffResult, sigEstimateDue, sigOverdue, sigTimedOut, sigTodoReady,
 		sigCheck: // a check's run, or the owner's answer to its decision: an Agent that only runs tools says the same all along
 		return true
 	}
@@ -158,11 +169,12 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 			b.resuming[id] = struct{}{}
 			pending = append(pending, id)
 		}
-		fingerprint := superviseFingerprint{Hash: hash, At: now.UTC(), Permanent: signals[i].Kind == sigPRConflict || signals[i].Kind == sigDraftPR}
-		if signals[i].Kind == sigAllStopped || keptUntilChange(signals[i]) {
+		fingerprint := superviseFingerprint{Hash: hash, At: now.UTC(), Permanent: signals[i].Kind == sigPRConflict ||
+			signals[i].Kind == sigDraftPR || signals[i].Kind == sigParkedSummary || signals[i].Kind == sigPREvent}
+		if signals[i].Kind == sigAllStopped || signals[i].Kind == sigParkedSummary || signals[i].Kind == sigPREvent || keptUntilChange(signals[i]) {
 			fingerprint.Todo = signals[i].Todo
 		}
-		if g := signals[i]; g.externalPRReview() || g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
+		if g := signals[i]; g.Kind == sigTodoReady || g.externalPRReview() || g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
 			fingerprint.Todo = g.Todo
 		}
 		next[key] = fingerprint
@@ -251,7 +263,15 @@ func (s *Service) pruneAllStoppedDedup(ctx context.Context) {
 	var remove []string
 	s.todos.mu.RLock()
 	for key, seen := range b.dedup {
-		if task := s.todos.todos[seen.Todo]; seen.Todo != "" && s.todos.loaded && (task == nil || task.DoneAt != nil) {
+		todo := seen.Todo
+		if todo == "" && seen.Permanent {
+			// Older daily summaries omitted Todo; only their exact key shape supplies the missing binding.
+			var parts []string
+			if json.Unmarshal([]byte(key), &parts) == nil && len(parts) == 3 && parts[1] == sigParkedSummary {
+				todo = parts[0]
+			}
+		}
+		if task := s.todos.todos[todo]; todo != "" && s.todos.loaded && (task == nil || task.DoneAt != nil) {
 			remove = append(remove, key)
 		}
 	}
@@ -266,6 +286,39 @@ func (s *Service) pruneAllStoppedDedup(ctx context.Context) {
 	if st := s.store(); st != nil {
 		if err := st.PutSetting(ctx, superviseDedupKey, next); err != nil {
 			s.logf("supervise: cannot prune inactivity fingerprints: %v", err)
+			return
+		}
+	}
+	b.dedup = next
+}
+
+// clearTodoReadyDedup removes the task-bound sigTodoReady deduplication entry for todoID when that to-do is reopened,
+// so a subsequent readiness transition after reopen is not suppressed by the earlier wake.
+func (s *Service) clearTodoReadyDedup(ctx context.Context, todoID string) {
+	b := &s.supervise
+	b.dedupMu.Lock()
+	defer b.dedupMu.Unlock()
+	history := b.dedup
+	if st := s.store(); st != nil {
+		loaded := map[string]superviseFingerprint{}
+		if _, err := st.Setting(ctx, superviseDedupKey, &loaded); err != nil {
+			s.logf("supervise: cannot load deduplication history for todo_ready reset (%s): %v", todoID, err)
+			return
+		}
+		history = loaded
+	}
+	if len(history) == 0 {
+		return
+	}
+	key, _ := digestFingerprint(prompts.SuperviseEntry{}, superviseSignal{Todo: todoID, Kind: sigTodoReady})
+	if _, ok := history[key]; !ok {
+		return
+	}
+	next := maps.Clone(history)
+	delete(next, key)
+	if st := s.store(); st != nil {
+		if err := st.PutSetting(ctx, superviseDedupKey, next); err != nil {
+			s.logf("supervise: cannot clear todo_ready deduplication entry for %s: %v", todoID, err)
 			return
 		}
 	}

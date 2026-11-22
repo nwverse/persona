@@ -306,6 +306,13 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		// still has the agents that were working on it.
 		s.goRecordTaskOutcome(cur, *row.DoneAt)
 		s.askTodoClosed(context.WithoutCancel(ctx), id, row.Title) // a question's to-do closed unanswered (ask_todo.go)
+		if row.StartError == "" && row.DoneBy != db.DoneByCancelled {
+			s.evaluateTodoAfterDependents(ctx, id)
+		}
+	}
+	if reopening && row.DoneAt == nil && (cur.DoneAt != nil || e.RestartWork ||
+		row.ReopenedAt != nil && (cur.ReopenedAt == nil || !row.ReopenedAt.Equal(*cur.ReopenedAt))) {
+		s.resetTodoReadyWake(ctx, id)
 	}
 	return out, nil
 }

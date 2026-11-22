@@ -44,6 +44,9 @@ const (
 // ponytail: a fixed two, a setting if someone's computer takes more.
 var modelRunSlots = make(chan struct{}, 2)
 
+// An API purpose's request answered by a launcher here; the handler zeroes the params it is handed.
+func init() { nodeRPC(proto.MethodModelRun, (*Node).modelRun) }
+
 // modelRun answers model.run. params are zeroed once read.
 func (n *Node) modelRun(ctx context.Context, params json.RawMessage) (any, error) {
 	var p proto.ModelRunParams

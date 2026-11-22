@@ -230,6 +230,8 @@ which entry every case goes to, which tasks Finished lists and which of those ar
 reviewing entry (#8678). The older Pending / Progress / Agents / To start entries
 below are the earlier presentation (#2878, #3162).
 
+- **Starting means a dispatch is in flight (Apple, #7552):** with no Agent up, an In progress to-do says Starting only when its `plan_id` names a start that has not failed, or a loaded non-dismissed plan holds it as a task with no error (including a takeover whose to-do has no `plan_id`). A plain to-do nobody dispatched says Not started with a still/offline mark and no working rank. It remains one open row, so the tray and To-dos counts are unchanged. Plan slots without a to-do keep their existing presentation.
+
 ### Background activity in In progress (#3588)
 
 A task's row and a hand-opened Agent's row use the **existing Working spinner** whenever background commands,
@@ -1213,11 +1215,12 @@ offer broadcasts `direction_offer` with `offer: null`.
   `POST /api/v1/assistant/agents/{mid}/{sid}/supervisor` makes it that conversation's supervised task (as
   `agent_supervise` does for the main chat; the card goes into that conversation). Called again with another
   conversation, it moves the task there (**Move to…**) and its card follows (the old conversation keeps its history).
-- **The main chat moves an existing task**: `agent_transfer {machine, session_id, supervisor}` uses the same Move to
-  operation as the App, without adoption. The destination is a current direction or the main conversation; transfer
-  back to undo. The task, brief, criteria, estimate, origin and Agent session stay. Its supervision and task card move;
-  no message, interruption or restart is sent. Non-main callers, owner-created to-dos, assistant sessions and Agents
-  without an open task are refused.
+- **Main or a direction lead moves an existing task**: `agent_transfer {machine, session_id, supervisor}` uses the same Move to
+  operation as the App, without adoption. Main may move any open supervised task; a current direction lead may hand off
+  only an open task it supervises (taking another supervisor's task is refused, naming the current supervisor and who
+  can move it). The destination is a current direction or the main conversation. The task, brief, criteria, estimate,
+  origin and Agent session stay. Its supervision and task card move; no message, interruption or restart is sent.
+  Other callers, owner-created to-dos, assistant sessions and Agents without an open task are refused.
 - **A leader hands out its own** `task_plan`, as before.
 
 A plan of a leader's (its own, or one the main chat handed to it) that waits for the owner's Start is a `decision`

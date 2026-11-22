@@ -23,7 +23,11 @@ func (s *Service) renderQueuedDigest(ctx context.Context, to string, list []prom
 	if len(originalFresh) > 0 {
 		fresh = originalFresh[0]
 	}
-	return prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(list), Leader: leader, Background: background,
+	level := supervisionTriage
+	if len(list) > 0 && !slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind != sigParkedSummary }) {
+		level = supervisionInfo
+	}
+	return prompts.RenderSupervise(prompts.Supervise{Level: level, Entries: sortEntries(list), Leader: leader, Background: background,
 		Fresh: fresh, Side: to != here.Main && !leader, Escalated: escalatedIn(list),
 		BackgroundEscalated: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigEscalated && e.Background }),
 		LeaderStuck:         slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigLeaderStuck }),
@@ -62,6 +66,13 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 		if t, ok := s.todoNow(g.Todo); ok && t.DoneAt == nil && g.Kind == sigNeedsYou {
 			if _, known := s.taskNeedsRecheck(ctx, t); !known {
 				return msg, false, true
+			}
+		}
+		if g.Kind == sigTodoReady {
+			if t, ok := s.todoNow(g.Todo); ok && t.DoneAt == nil {
+				if _, _, err := s.checkTodoAfterReady(ctx, t); err != nil {
+					return msg, false, true
+				}
 			}
 		}
 		if e, ok := s.digestEntry(ctx, g, web); ok {

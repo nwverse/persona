@@ -33,8 +33,12 @@ const cotItemsMost = 2000
 // cotResultMost is how much of a tool's output the agent message shows.
 const cotResultMost = 1500
 
-// cotProgress is how far a run's agent message got, in memory (under its chanLive's mu).
+// cotProgress is the native cursor: under chanLive.mu for legacy private runs,
+// owned exclusively by cotWorker for topic turns.
 type cotProgress struct {
+	// persist fences asynchronous topic writes against the run generation that owns them.
+	persist func(*channel.Run, string, string)
+
 	sent int // items of chanLive.items turned into events
 	// words are what came since the conversation's last tool call, from its first words on: the words are the process
 	// only once a call follows (until then they may be the answer), and thinking after them waits with them, so the
@@ -81,7 +85,11 @@ func (s *Service) runExt(r *channel.Run, key string) string {
 
 // setCotExt keeps one of the agent message's values on the run itself: the answer works on a copy of it, and a value
 // only the copy had would be gone when the answer is tried again after a restart.
-func (s *Service) setCotExt(r *channel.Run, key, value string) {
+func (s *Service) setCotExt(r *channel.Run, p *cotProgress, key, value string) {
+	if p.persist != nil {
+		p.persist(r, key, value)
+		return
+	}
 	if real, _ := s.channelRunByID(r.ID); real != nil && real != r {
 		s.setRunExt(real, key, value)
 	}
@@ -134,17 +142,17 @@ func (f feishuSink) cotStart(ctx context.Context, r *channel.Run, p *cotProgress
 		err = errors.New("feishu: no cot_id / message_id in the answer")
 	}
 	if err != nil {
-		if unreachable(err) {
-			return false // the hub was not reached: tried again on the next look
+		if cotNotSent(err) || unreachable(err) && !cotMaybeSent(err) {
+			return false // definitely not sent: tried again on the next look
 		}
 		s.logf("bots: agent message unavailable (%v); the process goes into the progress card's folded panel", err)
-		s.setCotExt(r, "cot_off", "1")
+		s.setCotExt(r, p, "cot_off", "1")
 		p.off = true
 		return false
 	}
 	p.cot, p.msg = res.CotID, res.MessageID
-	s.setCotExt(r, "cot", res.CotID)
-	s.setCotExt(r, "cot_msg", res.MessageID)
+	s.setCotExt(r, p, "cot", res.CotID)
+	s.setCotExt(r, p, "cot_msg", res.MessageID)
 	if to.ChatID == "" {
 		s.rememberBotThread(res.MessageID, botTargetOf(r), r.Label)
 	}
@@ -283,15 +291,23 @@ func (f feishuSink) cotPush(ctx context.Context, r *channel.Run, p *chanLive, it
 	p.cot.words, p.cot.sent = next.words, len(items)
 	if !maps.Equal(next.calls, p.cot.calls) && !finish { // at the end: kept until the end got through
 		p.cot.calls = next.calls
-		s.setCotExt(r, "cot_calls", strings.Join(slices.Sorted(maps.Keys(next.calls)), ","))
+		s.setCotExt(r, &p.cot, "cot_calls", strings.Join(slices.Sorted(maps.Keys(next.calls)), ","))
 	}
 	if para != p.cot.para {
 		p.cot.para = para
-		s.setCotExt(r, "cot_para", para)
+		s.setCotExt(r, &p.cot, "cot_para", para)
 	}
 	for len(events) > 0 {
+		if ctx.Err() != nil {
+			p.cot.queue = events
+			return true
+		}
 		chunk := events[:min(cotChunk, len(events))]
 		if err := s.cotCall(ctx, FeishuCotAppend, map[string]any{"cot_id": cot, "message_id": msg, "events": chunk}); err != nil {
+			if cotNotSent(err) {
+				p.cot.queue = events
+				return true
+			}
 			if cotMaybeSent(err) {
 				// The chunk may have reached Feishu (no reply came back): not sent again, which could show it twice;
 				// the end is made sure of with cot_complete (cotFinishNow).
@@ -308,9 +324,9 @@ func (f feishuSink) cotPush(ctx context.Context, r *channel.Run, p *chanLive, it
 				return true // not applied: tried again on the next look, from this chunk on
 			}
 			s.logf("bots: agent message: %v; the progress card takes over", err)
-			_ = s.cotCall(ctx, FeishuCotComplete, map[string]any{"cot_id": cot, "message_id": msg, "reason": "error"})
-			s.setCotExt(r, "cot_off", "1")
+			s.setCotExt(r, &p.cot, "cot_off", "1")
 			p.cot.off, p.cot.queue = true, nil
+			_ = s.cotCall(ctx, FeishuCotComplete, map[string]any{"cot_id": cot, "message_id": msg, "reason": "error"})
 			return false
 		}
 		events = events[len(chunk):]
@@ -318,8 +334,8 @@ func (f feishuSink) cotPush(ctx context.Context, r *channel.Run, p *chanLive, it
 	p.cot.queue, p.cot.done = nil, finish
 	if finish {
 		p.cot.calls = nil
-		s.setCotExt(r, "cot_calls", "")
-		s.setCotExt(r, "cot_done", "1")
+		s.setCotExt(r, &p.cot, "cot_calls", "")
+		s.setCotExt(r, &p.cot, "cot_done", "1")
 	}
 	return true
 }
@@ -343,6 +359,13 @@ func (f feishuSink) cotProgressNow(ctx context.Context, r *channel.Run) bool {
 	if p == nil {
 		return false
 	}
+	return f.cotProgressNowItems(ctx, r, p, items)
+}
+
+func (f feishuSink) cotProgressNowItems(ctx context.Context, r *channel.Run, p *chanLive, items []proto.Item) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	f.s.loadCot(&p.cot, r)
 	if p.cot.off {
 		return false
@@ -356,6 +379,9 @@ func (f feishuSink) cotProgressNow(ctx context.Context, r *channel.Run) bool {
 			return false
 		}
 	}
+	if ctx.Err() != nil {
+		return false
+	}
 	if !f.cotPush(ctx, r, p, items, false) {
 		return false
 	}
@@ -367,6 +393,13 @@ func (f feishuSink) cotProgressNow(ctx context.Context, r *channel.Run) bool {
 func (f feishuSink) cotFinishNow(ctx context.Context, r *channel.Run) bool {
 	p, items := f.s.runItems(r.ID)
 	if p == nil {
+		return false
+	}
+	return f.cotFinishNowItems(ctx, r, p, items)
+}
+
+func (f feishuSink) cotFinishNowItems(ctx context.Context, r *channel.Run, p *chanLive, items []proto.Item) bool {
+	if ctx.Err() != nil {
 		return false
 	}
 	f.s.loadCot(&p.cot, r)
@@ -394,7 +427,7 @@ func (f feishuSink) cotFinishNow(ctx context.Context, r *channel.Run) bool {
 			return true // the answer still goes out; a later look of this run cannot end it either (the run is over)
 		}
 		p.cot.queue, p.cot.done = nil, true
-		s.setCotExt(r, "cot_done", "1")
+		s.setCotExt(r, &p.cot, "cot_done", "1")
 	}
 	return true
 }
@@ -411,7 +444,7 @@ func (f feishuSink) cotEnd(ctx context.Context, cot, msg string) error {
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		err = f.s.cotCall(cctx, FeishuCotComplete, map[string]any{"cot_id": cot, "message_id": msg, "reason": "done"})
 		cancel()
-		if err == nil || !(errors.Is(err, bus.ErrOffline) || errors.Is(err, rpc.ErrClosed) || cotMaybeSent(err) || cotPassing(err)) {
+		if err == nil || !(cotNotSent(err) || errors.Is(err, bus.ErrOffline) || errors.Is(err, rpc.ErrClosed) || cotMaybeSent(err) || cotPassing(err)) {
 			return err
 		}
 	}
@@ -519,8 +552,15 @@ func cotPassing(err error) bool {
 
 // cotMaybeSent: the call went out and no reply came back (a timeout, the connection dropped after it was sent, the
 // hub got no reply from Feishu): Feishu may have applied it.
+func cotNotSent(err error) bool {
+	return errors.Is(err, rpc.ErrNotSent) || errors.Is(err, rpc.ErrNotWritten) || errors.Is(err, bus.ErrOffline) || errors.Is(err, rpc.ErrClosed) && !errors.Is(err, rpc.ErrDropped)
+}
+
 func cotMaybeSent(err error) bool {
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, rpc.ErrDropped) || feishuCode(err) == feishuTransport
+	if cotNotSent(err) {
+		return false
+	}
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, rpc.ErrDropped) || feishuCode(err) == feishuTransport
 }
 
 // feishuTransport is the code the hub gives a Feishu call that got no answer from Feishu (a timeout, a dropped

@@ -235,6 +235,7 @@ type Service struct {
 	accept         acceptBook        // acceptance.go
 	pushQuiet      quietSwitch       // push_quiet.go: the hub's low-distraction switch as last read
 	deploy         deployProbe       // deploy_check.go: is the work in the running hub
+	prEventRoute   prEventRouteBook  // pr_status_route.go: opt-in direct PR-event routing dedupe
 	parkReplies    parkReplyBook     // park_reply.go: bounded source reads for explicitly bound person replies
 
 	reviewDismissals taskReviewDismissalBook // task_review_dismissals.go
@@ -673,13 +674,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		return beforeNodeWrite(method, err)
 	}
 	p := DeviceCall{Device: device, Method: nodeMethod(method, params), Params: raw}
-	res, ok, err := s.logicalCall(ctx, device, p.Method, p.Params)
-	if !ok {
-		res, ok, err = s.localFleetDeviceCall(ctx, p)
-	} // what the hub answered before the nodes' events were the manager's
-	if !ok {
-		res, err = s.hub.DeviceCall(ctx, p)
-	}
+	res, err := s.callDevice(ctx, p)
 	// Not taken: refused before anything was typed, or it never reached the computer (relay_refusal.go).
 	taken = err == nil || !sendNotTaken(err)
 	if taskRoot != "" && (method == DeviceSessionSend || method == deviceTaskStart) {
@@ -1029,6 +1024,7 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 	go s.registerInlineTurn(context.WithoutCancel(ctx), r)
 	s.afterSettle(context.WithoutCancel(ctx), s.registerInlineTurnSettled, r.MachineID, r.SessionID)
 	if !meeting {
+		s.backgroundRoundTurnEnded(ctx, r.SessionID, time.Now())
 		s.availTurnEnded(ctx, r.MachineID, r.SessionID, time.Now()) // an assistant conversation's round (availability.go)
 		s.afterSettle(context.WithoutCancel(ctx), s.taskTurnSettled, r.MachineID, r.SessionID)
 		// A review's reviewer answered (supervise_autoreview.go, agents_session_review.go).

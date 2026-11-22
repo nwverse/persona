@@ -310,6 +310,17 @@ test('the pi-web companion lists sessions on disk, opens one to send to it, and 
   assert.deepEqual(posts[1].body, { cwd: '/w/new', type: 'prompt', message: 'hello' })
 })
 
+test('an assistant start pi-web has not written yet is refused as delivered nothing, so a switch rolls back', async (t) => {
+  const { n, host, posts } = await setup(t, { web: true, disk: [], files: {}, listDisk: true })
+  const live = piSession('s-live')
+  host.register(live.pi)
+  await live.fire('session_start')
+  await n.ready
+  await assert.rejects(n.peer.call('session.start', { cwd: '/w/new', assistant: true, permission_mode: 'default' }),
+    (error) => error.code === 'assistant_supervision_runtime' && error.data?.delivered === 'none')
+  assert.deepEqual(posts.at(-1).body, { cwd: '/w/new', type: 'ensure_session' }, 'no prompt went to pi-web')
+})
+
 test('approvals of configured tools go to the phone when it drives the session; pi\'s dialog otherwise; no answer blocks', async (t) => {
   const { n, host } = await setup(t, { approve: ['bash'], answerFirst: 'phone' })
   const a = piSession('s-x')

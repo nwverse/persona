@@ -125,6 +125,18 @@ export function gitPlaceOf(s: Pick<Session, "repo_root" | "worktree">): Repo | u
   return { repo, name: baseName(repo), worktree, main: worktree === repo };
 }
 
+/** How many folders below the top of its Git working tree a session runs, when the node says. The top is its reported
+ *  tree, else the main checkout for a cwd inside repo_root, else the cwd itself (0: a linked tree kept outside the
+ *  repository, such as a desktop app's worktree folder). Git reports physical paths, so this counts from the
+ *  node-verified physical cwd when there is one; a count, unlike a path, also holds for the cwd as given when a
+ *  symlinked folder leads to it. Undefined without Git metadata. */
+function gitTreeDepth(s: Pick<Session, "repo_root" | "worktree" | "cwd" | "workspace_cwd">): number | undefined {
+  const tree = catalogPath(s.worktree) || catalogPath(s.repo_root);
+  if (!tree) return undefined;
+  const cwd = catalogPath(s.workspace_cwd) || catalogPath(s.cwd);
+  return cwd && within(cwd, tree) ? depthOf(cwd) - depthOf(tree) : 0;
+}
+
 type Placement = Repo & { path: string; spaceId?: string; git?: boolean };
 type OrcaWorktree = { repoId: string; spaceId: string; path: string };
 
@@ -335,7 +347,9 @@ export interface RepoCatalogOptions {
 }
 
 /** Exact runtime placement always wins. Directory inference is allowed only for an unbound Agent and a unique
- *  deepest containing directory. Host-owned bindings never fall through to a different runtime at the same path. */
+ *  deepest containing directory, inside its Git working tree when the node reports one: a folder above that tree (the
+ *  home folder, a folder of repositories) holds it on disk but is not where it works. Host-owned bindings never fall
+ *  through to a different runtime at the same path. */
 export function sessionWorkspace(s: Session, catalog: readonly HostWorkspace[], manager?: string): HostWorkspace | undefined {
   if (manager && s.manager && s.manager !== manager) return undefined;
   const local = catalog.filter((w) => w.machine_id === s.machine_id);
@@ -348,12 +362,13 @@ export function sessionWorkspace(s: Session, catalog: readonly HostWorkspace[], 
     if (exact.length > 1 || s.workspace_id || host !== "codex_app") return undefined;
   }
   if (["herdr", "herdr-core", "botmux", "orca", "paseo"].includes(host)) return undefined;
+  const depth = gitTreeDepth(s);
   for (const raw of [s.cwd, s.workspace_cwd]) {
     const cwd = catalogPath(raw);
     if (!cwd) continue;
     const candidates = local.filter((w) => {
       const path = catalogPath(w.cwd);
-      if (!path || (cwd !== path && !(path === "/" ? cwd.startsWith("/") : cwd.startsWith(`${path}/`)))) return false;
+      if (!path || !within(cwd, path) || (depth !== undefined && depthOf(cwd) - depthOf(path) > depth)) return false;
       const below = cwd === path ? "" : cwd.slice(path === "/" ? 1 : path.length + 1);
       return !WORKTREE_SEGMENTS.some(([marker]) => below.startsWith(marker.slice(1)));
     });
@@ -375,6 +390,10 @@ const catalogPath = (value?: string) => {
   const clean = path.replace(/\/+$/, "") || (path.startsWith("/") ? "/" : "");
   return /^[a-z]:/i.test(clean) ? clean[0].toLowerCase() + clean.slice(1) : clean;
 };
+/** Whether `path` is `dir` or below it, both already normalized by catalogPath. */
+const within = (path: string, dir: string) => path === dir || (dir === "/" ? path.startsWith("/") : path.startsWith(`${dir}/`));
+/** How many folders deep a path normalized by catalogPath is: 0 at the root. */
+const depthOf = (path: string) => (path === "/" ? 0 : path.split("/").length - 1);
 
 /** Runtime logical spaces share a repository display row at a verified checkout. Action attribution continues
  *  to use sessionWorkspace and its native binding rules. */
@@ -478,17 +497,31 @@ function catalogRepos(sessions: Session[], machineId: string, options: RepoCatal
     }
     return node.children.length > 0 || node.directSessions!.length > 0 || (!options.hideEmpty && matches);
   };
+  // A host that names no project for a workspace (herdr) leaves it to Git: the repository its Agents agree on, else the
+  // one its own folder is. Such a workspace shares that repository's section with the other hosts' places in it and with
+  // the session-only rows below, so one repository is one section, while every place keeps its own row.
+  const repositoryPath = (root: RepoWorktree): string => {
+    const w = root.workspace!;
+    if (w.project_id) return "";
+    if (w.project_path) return catalogPath(w.project_path);
+    const roots = new Set(root.tree.map((s) => catalogPath(gitPlaceOf(s)?.repo || s.repo_root)).filter(Boolean));
+    if (roots.size > 1) return "";
+    return roots.size ? [...roots][0]! : catalogPath(repoOf(catalogPath(w.cwd)).repo);
+  };
   const repos = new Map<string, RepoTree>();
+  const byPath = new Map<string, RepoTree>();
   for (const root of top.filter(fill).sort(order)) {
     const w = root.workspace!;
+    const path = repositoryPath(root);
     const project = w.project_id || w.project_path || w.source_id;
-    const key = JSON.stringify([options.owner, options.manager, machineId, w.source, project]);
+    const key = JSON.stringify(path ? [options.owner, options.manager, machineId, "path", path] : [options.owner, options.manager, machineId, w.source, project]);
     let repo = repos.get(key);
     if (!repo) {
-      repo = { key, machineId, name: w.project_name || baseName(w.project_path || "") || root.name, repo: w.project_path || `${w.source}:${project}`, count: 0, worktrees: [] };
+      repo = { key, machineId, name: w.project_name || baseName(path || w.project_path || "") || root.name, repo: path || w.project_path || `${w.source}:${project}`, count: 0, worktrees: [] };
       // Roots are already ordered by pin, so the first member holds this repository's newest one.
       if (root.latestPinTime !== undefined) repo.latestPinTime = root.latestPinTime;
       repos.set(key, repo);
+      if (path) byPath.set(path, repo);
     }
     repo.worktrees.push(root);
     repo.count += root.tree.length;
@@ -497,7 +530,15 @@ function catalogRepos(sessions: Session[], machineId: string, options: RepoCatal
   const groupedNavigation = new Set([...nodes.values()].flatMap((node) => node.directSessions!));
   const navigation = options.navigationSessions?.filter((s) => !groupedNavigation.has(s)
     && (!query || `${s.title} ${s.cwd}`.toLocaleLowerCase().includes(query)));
-  return [...repos.values(), ...legacyNavigationRepos(unmatched, machineId, { ...options, navigationSessions: navigation })]
+  const sessionOnly: RepoTree[] = [];
+  for (const repo of legacyNavigationRepos(unmatched, machineId, { ...options, navigationSessions: navigation })) {
+    const shared = byPath.get(catalogPath(repo.repo));
+    if (!shared) { sessionOnly.push(repo); continue; }
+    shared.worktrees.push(...repo.worktrees);
+    shared.worktrees.sort(order);
+    shared.count += repo.count;
+  }
+  return [...repos.values(), ...sessionOnly]
     .sort((a, b) => byWorkspacePin(a, b) || a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
 }
 

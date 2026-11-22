@@ -270,6 +270,9 @@ type Item struct {
 	// Visualization is set on KindVisualization items: a Codex visualize marker's reference to an HTML fragment on
 	// the node. The bytes are not carried here; the session visualization route serves them after path checks.
 	Visualization *Visualization `json:"visualization,omitempty"`
+	// TTFTMS is the observed time-to-first-token in milliseconds from turn send/request start to the first
+	// assistant token/chunk during live streaming execution. Nil when not observed (such as historical replays).
+	TTFTMS *int64 `json:"ttft_ms,omitempty"`
 }
 
 type StoredItem struct {

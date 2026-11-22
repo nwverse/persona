@@ -351,7 +351,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	b := &s.supervise
 	b.mu.Lock()
 	b.init()
-	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigTimedOut, sigOrphaned, sigOverdue, sigEstimateDue, sigRecheck, sigUndecidable, sigOwnerCannot, sigParkedDue} {
+	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigAllStopped, sigTimedOut, sigOrphaned, sigOverdue, sigEstimateDue, sigRecheck, sigUndecidable, sigOwnerCannot, sigParkedDue} {
 		delete(b.pending, t.ID+"|"+k) // reviewed: what waited is answered
 	}
 	if verdict == reviewAccepted || verdict == reviewCancelled {
@@ -360,6 +360,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		delete(b.pending, t.ID+"|"+sigParkDecided)
 	}
 	b.mu.Unlock()
+	s.resetBackgroundBreakerForTodo(t.ID)
 	// How it ended against what was asked (task_brief_result.go): each criterion of the brief, as scope changes left them.
 	var result *BriefResult
 	if verdict == reviewAccepted || verdict == reviewCancelled {
@@ -700,6 +701,7 @@ func (s *Service) reviewDoneTodo(ctx context.Context, id, reason string, accepte
 			if cur, ok := s.todoNow(id); ok {
 				s.createPRFollowups(ctx, cur)
 			}
+			s.evaluateTodoAfterDependents(ctx, id)
 		}
 		if t, now := s.todoNow(id); ok && now {
 			// A side conversation's task the main conversation supervised: the planning conversation hears it ended (#4669).

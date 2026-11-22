@@ -397,6 +397,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.InboxTodoForward != nil {
 			v.InboxTodoForward = in.InboxTodoForward
 		}
+		if in.PREventsRouteToAgent != nil {
+			v.PREventsRouteToAgent = in.PREventsRouteToAgent
+		}
 		if in.InboxPost != nil {
 			v.InboxPost = in.InboxPost
 		}

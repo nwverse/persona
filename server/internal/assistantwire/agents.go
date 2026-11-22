@@ -163,6 +163,12 @@ type TriageConfig struct {
 	// RetryBaseSeconds: the first "Continue" after a transient error waits this long, each next one twice as long as
 	// the one before (a rate limit four times as long). Default 15.
 	RetryBaseSeconds int `json:"retry_base_seconds,omitempty"`
+	// AccountExhaustionMaxRetries bounds automatic continuations for coding Agents, including task-leader Agents,
+	// when the provider says no upstream account is available. All Assistant conversations keep their existing
+	// recovery: main, leader and background-supervision chats, side chats, scheduled-task and health chats, and
+	// meeting rooms. Zero (the default) disables these continuations; a positive value compares the shared consecutive
+	// transient retry count with that bound. Ordinary transient failures are not limited by this setting.
+	AccountExhaustionMaxRetries int `json:"account_exhaustion_max_retries,omitempty"`
 	// MaxWakes: wakes for one wait before asking the user. Default 6.
 	MaxWakes int `json:"max_wakes,omitempty"`
 	// SettleSeconds: how long a stopped session stays stopped before its turn is triaged. Default 15.

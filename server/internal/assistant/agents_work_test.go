@@ -244,7 +244,7 @@ func TestUnreachableAPIIsContinued(t *testing.T) {
 
 func TestTransientErrorIsContinued(t *testing.T) {
 	s, f := workService(t)
-	const errText = "API Error: 503 no eligible upstream account"
+	const errText = "API Error: 503 Service Unavailable"
 	f.setSessions("box", apiErrorTurn("s1", errText))
 	triage(t, s, "s1")
 	e := entryOf(t, s, "s1")

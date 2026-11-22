@@ -67,7 +67,14 @@ func (s *Service) failSourceTaskRun(ctx context.Context, t Task, run ScheduleRun
 	return s.failTaskRun(ctx, t, run, err, !errors.Is(err, rpc.ErrNotSent))
 }
 
+func taskRunCompatibilityEvidence(ctx context.Context, run *ScheduleRun) {
+	if devicewire.LegacyTaskExecutionUsed(ctx) {
+		run.CompatibilityFallback = devicewire.LegacyTaskExecutionFallback
+	}
+}
+
 func (s *Service) failTaskRun(ctx context.Context, t Task, run ScheduleRun, err error, unknown bool) (proto.Session, error) {
+	taskRunCompatibilityEvidence(ctx, &run)
 	run.Status, run.Error, run.DeliveryUnknown = runFailed, err.Error(), unknown
 	s.recordRun(run)
 	if !unknown && run.Execution != nil {
@@ -90,7 +97,7 @@ func taskConfigurationRefusal(err error) bool {
 		return false
 	}
 	switch message.Key {
-	case "assistant-models.err_effort_unsupported", "assistant-models.err_model_invalid":
+	case "assistant-models.err_effort_unsupported", "assistant-models.err_model_invalid", "assistant-schedule.task_execution_wait_timeout":
 		return true
 	}
 	return false

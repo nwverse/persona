@@ -699,4 +699,19 @@ class TodoTriageTest {
         val kept = withRestore(mapOf("old" to now - SHELVE_AFTER_MS - 1), "new", now)
         assertEquals(mapOf("new" to now), kept)
     }
+
+    @Test
+    fun supersededFailedStartsEarlyExitsAndStripsUrlQueryOrFragment() {
+        // No failed starts or no completed non-failed todos -> empty set via early exit.
+        assertEquals(emptySet<String>(), supersededFailedStarts(listOf(todo("open", prUrl = "https://example.com/pull/42"))))
+        assertEquals(
+            emptySet<String>(),
+            supersededFailedStarts(listOf(todo("failed", startError = "boom", prUrl = "https://example.com/pull/42#discussion"))),
+        )
+        // Matching PR URL after stripping #fragment and ?query supersedes the closed failed start.
+        val failed = todo("failed", startError = "boom", doneAt = hoursAgo(3), prUrl = "https://example.com/pull/42#issuecomment-1")
+        val done = todo("done", doneAt = hoursAgo(2), prUrl = "https://example.com/pull/42?w=1")
+        val unrelated = todo("other-failed", startError = "boom", doneAt = hoursAgo(3), prUrl = "https://example.com/pull/99?tab=files")
+        assertEquals(setOf("failed"), supersededFailedStarts(listOf(failed, done, unrelated)))
+    }
 }

@@ -58,22 +58,33 @@ type Hub struct {
 	assistantProc assistantGate
 	// deviceFinishes: device sessions that ended while a snapshot paused
 	// writes, written on resume (devicesessions.go).
-	deviceFinishesMu sync.Mutex
-	deviceFinishes   []deviceSessionFinish
-	logger           *log.Logger
-	traffic          trafficLog // privacy-safe minute counters, flushed to the journal
-	machines         []*Machine
-	byID             map[string]*Machine
+	deviceFinishesMu      sync.Mutex
+	deviceFinishesFlushMu sync.Mutex
+	deviceFinishes        []deviceSessionFinish
+	deviceFinishesRunning bool
+	testAfterFinishAppend func()
+	testAfterFinishRefuse func()
+	clientOps             clientOpsWake
+	codexPendingMu        sync.Mutex
+	codexPending          map[string]*codexSaveEntry
+	looksGoneMu           sync.Mutex
+	looksGonePending      []string
+	assistantProfileSave  assistantProfileSaveState
+	logger                *log.Logger
+	traffic               trafficLog // privacy-safe minute counters, flushed to the journal
+	machines              []*Machine
+	byID                  map[string]*Machine
 	// fs.watch: generation fences stale node writes, and forced replays survive machine-ID recreation.
-	fsWatchGenMu     sync.Mutex
-	fsWatchGen       map[string]uint64
-	fsWatchEpoch     uint64
-	fsWatchForceMu   sync.Mutex
-	fsWatchForceByID map[string]bool
-	push             *Pusher
-	agentWork        agentWork    // whether the manager is there to ask (agents_link.go)
-	store            Store        // nil in unit tests: nothing is persisted
-	lockTests        lockTestWake // wakes the lock test dispatcher when a test is scheduled (locktest.go)
+	fsWatchGenMu         sync.Mutex
+	fsWatchGen           map[string]uint64
+	fsWatchEpoch         uint64
+	fsWatchEpochDeferred atomic.Bool
+	fsWatchForceMu       sync.Mutex
+	fsWatchForceByID     map[string]bool
+	push                 *Pusher
+	agentWork            agentWork    // whether the manager is there to ask (agents_link.go)
+	store                Store        // nil in unit tests: nothing is persisted
+	lockTests            lockTestWake // wakes the lock test dispatcher when a test is scheduled (locktest.go)
 
 	terms terminals  // the terminal tab's live streams (terminal.go)
 	fulls fullRelays // the web's full herdr views (herdrclient.go)
@@ -130,6 +141,7 @@ type Hub struct {
 	// deltas: the live text of each session's message being generated, as last relayed (machine, session -> text): a
 	// client subscribing in the middle of it gets it after the backlog instead of waiting for the next token.
 	deltas     map[[2]string]string
+	ttft       hubTTFTTracker
 	phoneTools map[string]db.PhoneToolRegistration
 	calls      map[string]chan proto.ToolResult
 	wokeAt     map[string]time.Time // device -> last silent push to wake it for a tool call
@@ -330,7 +342,9 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 		return err
 	}
 	h.push = newPusher(cfg.dir, h.store, h.logf)
+	h.push.quiesce = &h.quiesce
 	h.push.web = newWebPusher(h.store, h.logf) // browsers' subscriptions and the VAPID key, in the hub's settings (#7459)
+	h.push.web.quiesce = &h.quiesce
 	h.push.traffic = h.recordTraffic
 	h.push.desktopOnline = h.desktopOnline
 	h.push.desktopOpen = h.desktopOpen

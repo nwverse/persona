@@ -50,9 +50,10 @@ type extLink struct {
 	report atomic.Pointer[extwire.Report] // the assistant's
 	// savePending is the latest assistant report not written yet. One save worker runs at a time, with at most one
 	// trailing report coalesced behind its write; the manager bus loop only replaces savePending.
-	saveMu      sync.Mutex
-	savePending *extwire.Report
-	saveRunning bool
+	saveMu          sync.Mutex
+	savePending     *extwire.Report
+	saveRunning     bool
+	saveBeforeBegin func() // tests: runs between popping savePending and calling quiesce.beginOrDefer
 	// reports are the other managers' (manager_state.go).
 	reportsMu sync.Mutex
 	reports   map[string]*extwire.Report
@@ -141,15 +142,20 @@ func (h *Hub) saveExtReports() {
 		h.ext.savePending = nil
 		h.ext.saveMu.Unlock()
 		if r != nil {
-			// A snapshot refuses new writes; keep the newest report pending
-			// and write it after resume (quiesce.go).
-			if !h.quiesce.begin() {
+			if hook := h.ext.saveBeforeBegin; hook != nil {
+				hook()
+			}
+			// A snapshot refuses new writes; publish the deferred report and
+			// clear saveRunning atomically with quiesce.mu so resume cannot
+			// observe saveRunning==true and miss it (quiesce.go).
+			if !h.quiesce.beginOrDefer(func() {
 				h.ext.saveMu.Lock()
 				if h.ext.savePending == nil {
 					h.ext.savePending = r
 				}
 				h.ext.saveRunning = false
 				h.ext.saveMu.Unlock()
+			}) {
 				return
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), extReportStoreTimeout)
@@ -604,7 +610,7 @@ func (h *Hub) dialManager(ctx context.Context, id string) (net.Conn, error) {
 	}
 	cctx, cancel := context.WithCancel(context.Background())
 	nc := websocket.NetConn(cctx, taken.conn, websocket.MessageBinary)
-	rc := &relayConn{Conn: nc, done: func() {
+	rc := &relayConn{Conn: nc, ws: taken.conn, done: func() {
 		cancel()
 		close(taken.done)
 	}}
@@ -615,6 +621,7 @@ func (h *Hub) dialManager(ctx context.Context, id string) (net.Conn, error) {
 // relayConn ends its relay when it is closed.
 type relayConn struct {
 	net.Conn
+	ws   *websocket.Conn
 	once sync.Once
 	done func()
 	// uses counts the requests the transport gave it, idleAt is that count when it last went back to the pool idle

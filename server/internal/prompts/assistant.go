@@ -950,6 +950,23 @@ type SuperviseEntry struct {
 	// LastReview: the task's last review, shown only in a Fresh message (#7315): a round that does not see the earlier
 	// ones does not ask or send back the same thing again. nil when it was never reviewed.
 	LastReview *SuperviseLastReview
+	// TodoReady: an open, unstarted dependent to-do whose after prerequisites are all satisfied (#12606).
+	TodoReady *SuperviseTodoReady
+}
+
+// SuperviseTodoReady describes an open, unstarted to-do ready to advance once all of its after prerequisites are met.
+type SuperviseTodoReady struct {
+	PartOf    string                  // parent request to-do id (when set)
+	Notes     string                  // saved notes / launch instructions on the ready to-do
+	Satisfied []SupervisePrerequisite // satisfied prerequisites, with any merged PR URLs
+}
+
+// SupervisePrerequisite is one satisfied after prerequisite carried on a todo_ready wake.
+type SupervisePrerequisite struct {
+	ID        string
+	Title     string
+	Reason    string // "done" or "pr_merged"
+	MergedPRs []string
 }
 
 // SuperviseLastReview is a task's last task_review as a Fresh supervision message repeats it: the verdict, when (local
@@ -973,7 +990,8 @@ type SuperviseInbox struct {
 	Count                        int
 	// URL is a GitHub PR's or issue's address; ToAgent is "sent" once the note reached the task's agent (InboxToAgent,
 	// #7346), "unhandled" when its bounded retry failed, "" when only the supervisor is told.
-	URL, ToAgent string
+	URL, ToAgent    string
+	AfterAcceptance bool // new feedback on a still-open PR of an accepted task
 }
 
 // InboxToAgent is the note a task's agent gets when someone else writes on the task's GitHub thread (#7346): who,
@@ -1258,6 +1276,14 @@ type HandoffTurn struct {
 
 // RenderMainHandoff is assistant/main_handoff.
 func RenderMainHandoff(h MainHandoff) string { return render("assistant/main_handoff", h) }
+
+// RenderSessionHandoff renders background for a fresh side conversation or Agent.
+func RenderSessionHandoff(summary string, recent []HandoffTurn) string {
+	return render("assistant/session_handoff", struct {
+		Summary string
+		Recent  []HandoffTurn
+	}{summary, recent})
+}
 
 // Acceptance is a deployed task, for the three lines of its "Please accept" card (assistant/acceptance_input; the system
 // prompt is assistant/acceptance; docs/extensions/bots.md "Task progress and review requests").
