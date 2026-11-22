@@ -338,16 +338,16 @@ fun PairingScreen(
         when (page) {
             PairingPage.Welcome -> {
                 item {
-                    Column(Modifier.padding(vertical = Tokens.Space.l), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = Tokens.Space.section),
+                        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        JAppMark(Tokens.Size.slimBar)
                         Text(stringResource(R.string.settings_pairing_welcome_title), style = PersonaTheme.type.largeTitle,
                             color = PersonaTheme.palette.ink, modifier = Modifier.semantics { heading() })
-                        Text(stringResource(R.string.settings_pairing_welcome_body), style = PersonaTheme.type.body, color = PersonaTheme.palette.ink2)
                     }
                 }
-                item { JGroupItem(GroupPosition.of(0, 3)) { JRow("Agents", leadingIcon = PhIcons.Robot, subtitle = stringResource(R.string.settings_pairing_welcome_agents), subtitleLines = 3) } }
-                item { JGroupItem(GroupPosition.of(1, 3)) { JRow(stringResource(R.string.settings_pairing_welcome_inbox_title), leadingIcon = PhIcons.Tray, subtitle = stringResource(R.string.settings_pairing_welcome_inbox), subtitleLines = 3) } }
-                item { JGroupItem(GroupPosition.of(2, 3)) { JRow(stringResource(R.string.settings_pairing_welcome_assistant_title), leadingIcon = PhIcons.Sparkle, subtitle = stringResource(R.string.settings_pairing_welcome_assistant), subtitleLines = 3) } }
-                item { SettingsCaption(stringResource(R.string.settings_pairing_welcome_push), Modifier.padding(vertical = Tokens.Space.m)) }
                 // A phone that already has a hub: scanning here still ends at the confirm page, which says it replaces that pairing.
                 if (paired) item {
                     JNotice(stringResource(R.string.settings_pairing_replace_body), title = stringResource(R.string.settings_pairing_replace_title),
@@ -355,15 +355,14 @@ fun PairingScreen(
                 }
                 item { PairingActions { PairingScanButton(::scanFromWelcomePage) } }
                 item { SettingsCaption(stringResource(R.string.settings_pairing_connect_body), Modifier.padding(top = Tokens.Space.m)) }
-                // Without a hub there is nothing else to see: the guide (when this build has one), then the typed and command-line ways.
                 item {
                     Column(Modifier.fillMaxWidth().padding(top = Tokens.Space.m), horizontalAlignment = Alignment.CenterHorizontally) {
+                        JTextButton(stringResource(R.string.settings_pairing_other_ways), ::showOtherWays, Modifier.fillMaxWidth())
                         guideUrl?.let { url ->
                             // Read here, inside the link host's content: outside it this is the activity's handler, which opens the system browser.
                             val links = LocalUriHandler.current
                             JTextButton(stringResource(R.string.settings_pairing_welcome_guide), { links.openUri(url) }, Modifier.fillMaxWidth())
                         }
-                        JTextButton(stringResource(R.string.settings_pairing_other_ways), ::showOtherWays, Modifier.fillMaxWidth())
                     }
                 }
             }
@@ -554,6 +553,7 @@ private fun PairingListPage(page: PairingPage, onBack: (() -> Unit)?, state: Laz
             val pad = pagePadding
             LazyColumn(
                 Modifier.fillMaxSize(), state = state,
+                verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally,
                 contentPadding = PaddingValues(start = pad, end = pad, top = insets.calculateTopPadding() + Tokens.Space.xs,
                     bottom = insets.calculateBottomPadding() + Tokens.Space.section),
                 content = content,

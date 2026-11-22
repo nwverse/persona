@@ -10,6 +10,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
@@ -80,6 +81,13 @@ class PairingWelcomeTest {
             rule.onAllNodesWithText(text(id)).assertCountEquals(0)
         }
         rule.onNodeWithText("personad hub pair").assertDoesNotExist()
+    }
+
+    @Config(qualifiers = "en-w360dp-h480dp-mdpi")
+    @Test fun scanAndAlternativeMethodsAreVisibleOnAShortPhone() {
+        show { PairingScreen(FakePairing(), sessions, onReady = {}, onDiagnostics = {}, gettingStartedUrl = guide) }
+        button(R.string.settings_pairing_scan).assertIsDisplayed()
+        button(R.string.settings_pairing_other_ways).assertIsDisplayed()
     }
 
     @Test fun withoutABuildAddressThereIsNoGuideLink() {
