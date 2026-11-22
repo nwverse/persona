@@ -56,6 +56,7 @@ func (s *Service) waitAgentReply(ctx context.Context, receipt, inputID string, w
 	wctx, cancel := context.WithTimeout(ctx, min(wait, agentWaitMost))
 	defer cancel()
 	result := agentWaitResult{State: "timeout", InputID: inputID}
+	loggedListErr := false
 	ticker := time.NewTicker(agentWaitPoll)
 	defer ticker.Stop()
 	for {
@@ -96,7 +97,7 @@ func (s *Service) waitAgentReply(ctx context.Context, receipt, inputID string, w
 					var pending struct {
 						Interactions []proto.Interaction `json:"interactions"`
 					}
-					if s.call(wctx, machine, DeviceInteractionsList, map[string]any{}, &pending) == nil {
+					if err := s.call(wctx, DeviceAll, DeviceInteractionsList, map[string]any{}, &pending); err == nil {
 						for _, ix := range pending.Interactions {
 							if ix.SessionID == session && (ix.MachineID == "" || ix.MachineID == machine) &&
 								(ix.Kind == proto.IxQuestion || ix.Kind == proto.IxElicitation) && !ix.Private &&
@@ -111,6 +112,9 @@ func (s *Service) waitAgentReply(ctx context.Context, receipt, inputID string, w
 						if result.State == "question" {
 							break
 						}
+					} else if !loggedListErr && wctx.Err() == nil {
+						loggedListErr = true
+						s.logf("assistant: agent_wait %s/%s: %s: %v", machine, session, DeviceInteractionsList, err)
 					}
 				}
 			}
