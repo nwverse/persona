@@ -83,6 +83,11 @@ func (n *Node) startCacheWarm(id, launcher string, c assistantCompaction, e mode
 	if excluded || e.Strict || e.CacheKeepalive == nil || !e.CacheKeepalive.Enabled || !e.CacheKeepalive.Valid() || proto.IsExternalLauncher(launcher) || !c.endpointKnown {
 		return nil
 	}
+	// A disconnected managed runtime can fall back to an unknown shell probe in
+	// assistantAgent. Its catalog identity still rules it out for Claude replay.
+	if managed, ok := n.managedCatalog(launcher); ok && managed.AgentType() != "claude" {
+		return nil
+	}
 	agent, err := n.assistantAgent(context.Background(), launcher)
 	if err != nil || agent != "claude" {
 		return nil

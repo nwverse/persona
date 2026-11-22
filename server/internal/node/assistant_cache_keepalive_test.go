@@ -166,10 +166,12 @@ func TestAssistantCacheProxyExcludesUnsupportedAndSpare(t *testing.T) {
 	on := &assistantwire.CacheKeepalive{Enabled: true, IntervalMinutes: 55, MaxRequests: 24}
 	f.n.setManaged([]proto.ManagedLauncher{{Name: "codex-provider", Agent: "codex"}, {Name: "other-provider", Agent: "agy"}})
 	for _, launcher := range []string{"codex-provider", "other-provider"} {
-		if p := f.n.startCacheWarm("example", launcher, c, modelExecution{CacheKeepalive: on}, false); p != nil {
-			p.Close()
-			t.Fatal("non-Claude launcher mounted a proxy")
-		}
+		t.Run(launcher, func(t *testing.T) {
+			if p := f.n.startCacheWarm("example", launcher, c, modelExecution{CacheKeepalive: on}, false); p != nil {
+				p.Close()
+				t.Fatal("non-Claude launcher mounted a proxy")
+			}
+		})
 	}
 	for _, e := range []modelExecution{{IsMain: true}, {FollowsSetting: true}, {CacheKeepalive: on, Strict: true}} {
 		if p := f.n.startCacheWarm("example", "claude", c, e, false); p != nil {
