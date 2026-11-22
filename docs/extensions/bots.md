@@ -75,6 +75,7 @@ The two complement each other and have separate switches.
   confirmed, the authorization starts by itself and shows its own QR code, so setting up both is two scans on one page.
 - Pairing (an app whose credentials were typed in): tap **Pair** in the App to get a 6-digit code (valid for 10 minutes) and send it to the bot in Lark; whoever sends it becomes the owner (its open_id and the DM's chat_id are recorded).
   When not paired, DMing it returns instructions on how to pair; 5 wrong guesses void the code, and you have to get a new one. Changing the App ID means pairing again (it's a different bot).
+  The owner and consumed code must be saved before pairing is acknowledged or messages are authorized. If saving fails, the bot asks you to send the same code again before it expires; the previous code, expiry and attempt count stay unchanged. A later failure to save the optional contact name keeps the committed binding and its previous display name.
 - Names: reading contacts needs `contact:user.base:readonly`; without that permission the owner is called by `assistant.owner` in the manager's `manager.json`, and others "someone".
 
 ## What it can do (`features`, one switch each in the App)
