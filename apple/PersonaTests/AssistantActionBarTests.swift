@@ -82,6 +82,61 @@ struct AssistantActionBarTests {
         #expect(r.running.first == .task(id: "run", status: .working, agents: 1))
     }
 
+    /// A to-do nobody dispatched stays open and counted, with the not-started rank; a real pending start keeps that rank too.
+    @Test func plainTodosKeepTheirOpenRowsAndNotStartedRank() {
+        let own = todo("own", origin: "")
+        let leader = todo("leader")
+        var pending = todo("pending")
+        pending.planID = "plan-not-loaded"
+        let working = todo("working", agent: "w")
+        let r = split([own, leader, pending, working], [session("w", "working", todo: "working")])
+        #expect(r.needsYou.isEmpty)
+        #expect(Set(ids(r.running)) == ["task:own", "task:leader", "task:pending", "task:working"])
+        #expect(r.running.contains(.task(id: "own", status: .notStarted, agents: 0)))
+        #expect(r.running.contains(.task(id: "leader", status: .notStarted, agents: 0)))
+        #expect(r.running.contains(.task(id: "pending", status: .notStarted, agents: 0)))
+        #expect(r.running.contains(.task(id: "working", status: .working, agents: 1)))
+        #expect(ActionTrayContent(r).count(.running) == 4)
+        for task in [own, leader, pending] {
+            #expect(AssistantEntries.rank(task, .notStarted) == AssistantEntries.Status.notStarted.rank)
+            #expect(AssistantEntries.rank(task, .notStarted) != AssistantEntries.Status.working.rank)
+        }
+        #expect(AssistantEntries.rank(working, .working) == AssistantEntries.Status.working.rank)
+    }
+
+    /// The web's startInFlight (#7552): plan_id is enough before its plan loads; a takeover may have none.
+    @Test func startInFlightMatchesTheWebContract() {
+        let own = todo("own", origin: "")
+        #expect(!AssistantEntries.startInFlight(own, plans: [:])) // todo_create: no plan, dispatch or error
+
+        var direct = todo("direct")
+        direct.planID = "plan-not-loaded"
+        #expect(AssistantEntries.startInFlight(direct, plans: [:]))
+        #expect(AssistantEntries.startInFlight(direct, plans: ["loaded": takeoverPlan("loaded", .started, todoID: direct.id)]))
+
+        for state in [TaskPlan.State.open, .started] {
+            let taking = takeoverPlan("taking-\(state)", state, todoID: own.id)
+            #expect(AssistantEntries.startInFlight(own, plans: [taking.id: taking]), "a \(state) takeover starts without plan_id")
+        }
+        let dismissed = takeoverPlan("dismissed", .dismissed, todoID: own.id)
+        #expect(!AssistantEntries.startInFlight(own, plans: [dismissed.id: dismissed]))
+        let unrelated = takeoverPlan("unrelated", .started, todoID: "another-todo")
+        #expect(!AssistantEntries.startInFlight(own, plans: [unrelated.id: unrelated]))
+
+        var failed = own
+        failed.startError = "launcher not found"
+        #expect(!AssistantEntries.startInFlight(failed, plans: [:]))
+        var legacy = direct
+        legacy.planID = "failed"
+        let failedPlan = takeoverPlan("failed", .started, todoID: legacy.id, error: "rpc: connection closed")
+        #expect(!AssistantEntries.startInFlight(legacy, plans: [failedPlan.id: failedPlan]))
+        let failedTakeover = takeoverPlan("failed-takeover", .started, todoID: own.id, error: "launcher not found")
+        #expect(!AssistantEntries.startInFlight(own, plans: [failedTakeover.id: failedTakeover]))
+        var done = direct
+        done.doneAt = now
+        #expect(!AssistantEntries.startInFlight(done, plans: [:]))
+    }
+
     @Test func transientReplacementWithTurnErrorOutranksOldInterruption() {
         let staleInvalid = session("old", "idle", turnError: "Context unavailable", turnErrorKind: "unrecoverable", workOn: "transient")
         let invalidOnly = todo("invalid", agent: "old")
@@ -210,6 +265,24 @@ struct AssistantActionBarTests {
     private func plan(_ id: String, _ state: TaskPlan.State, tasks: Int, at: Double) -> TaskPlan {
         TaskPlan(id: id, conversation: "main", tasks: (0..<tasks).map { PlanTask(title: "task \($0)", prompt: "p", machine: "mac", cwd: "/demo") },
                  state: state, createdAt: now - at * 60)
+    }
+
+    private func takeoverPlan(_ id: String, _ state: TaskPlan.State, todoID: String, error: String? = nil) -> TaskPlan {
+        TaskPlan(id: id, conversation: "main", tasks: [PlanTask(title: "task \(todoID)", prompt: "p", machine: "mac", cwd: "/demo",
+                                                               todoID: todoID, error: error)], state: state, createdAt: now)
+    }
+
+    /// Slots with no to-do yet keep their existing rows: an open plan waits in Needs You, never as invented open to-dos.
+    @Test func planSlotsWithoutTodosKeepTheirExistingRows() {
+        let waiting = plan("waiting", .open, tasks: 2, at: 3)
+        let started = plan("started", .started, tasks: 1, at: 2)
+        let dismissed = plan("dismissed", .dismissed, tasks: 1, at: 1)
+        let r = split([], plans: [waiting, started, dismissed])
+        #expect(r.needsYou == [.plan(id: "waiting")])
+        #expect(r.running.isEmpty && r.shelved.isEmpty)
+        let content = ActionTrayContent(r)
+        #expect(content.count(.needsYou) == 1)
+        #expect(content.count(.running) == 0)
     }
 
     /// A plan waiting for Start is one row whatever its task count; a message card waits until sent, filed or put off.

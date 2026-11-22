@@ -528,6 +528,7 @@ func TestOpeningTakesOffTheBotsMention(t *testing.T) {
 		{"@_user_1 is not the start of @_user_10", "text", `{"text":"@_user_10 看登录崩溃"}`, true, "@_user_10 看登录崩溃"},
 		{"rich text, /ai after the @", postType, postBody, false, "修登录崩溃"},
 		{"rich text, adjacent /ai", postType, strings.Replace(postBody, " /ai", "/ai", 1), false, "修登录崩溃"},
+		{"rich text, adjacent /ai in a root", postType, strings.Replace(postBody, " /ai", "/ai", 1), true, "修登录崩溃"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e := newThreadEnv(t, nil)

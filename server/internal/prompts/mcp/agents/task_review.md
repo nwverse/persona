@@ -35,7 +35,7 @@ A non-main reviewer of another supervisor's task may only accept/cancel; send ga
           "evidence": {"type": "string", "description": "what shows it is met (a link, a command's output), or what is missing"}
         }
       },
-      "description": "each criterion, met or not, with its evidence or gap; updates that done_when entry's persisted state, evidence, time and supervisor identity. Omitted entries keep their progress"
+      "description": "each criterion (met or not) with evidence/gap; updates persisted state, evidence, time, and supervisor. Omitted entries keep progress"
     },
     "note": {
       "type": "string",
@@ -44,11 +44,11 @@ A non-main reviewer of another supervisor's task may only accept/cancel; send ga
     "outcome": {
       "type": "string",
       "enum": ["done", "cannot"],
-      "description": "accepted: done (the work is done or the answer is yes), or cannot (the task found it cannot be done); default done"
+      "description": "accepted: done (work complete or answer yes) or cannot (proved impossible); default done"
     },
     "reason": {
       "type": "string",
-      "description": "accepted: the conclusion card's one sentence of why, in the user's language; default the note's first line. needs_user (required): one sentence saying what is to be decided, in the user's language. parked (required): one sentence saying what the task waits for, in the user's language; waiting on a PR: include its link"
+      "description": "one sentence in the user's language: accepted (why; default note's first line), needs_user (required: what to decide), or parked (required: what it waits for; include PR link if waiting on a PR)"
     },
     "waiting_on": {
       "type": "string",
@@ -110,11 +110,11 @@ A non-main reviewer of another supervisor's task may only accept/cancel; send ga
     },
     "user_check": {
       "type": "boolean",
-      "description": "accepted only: the user is still to look at the result themselves (a UI change someone has to see): a \"Please verify\" card waits for their \"Pass\" instead of your acceptance passing it; default false"
+      "description": "accepted only: user must inspect result (e.g. UI change); shows \"Please verify\" card awaiting \"Pass\" instead of auto-passing; default false"
     },
     "reversible": {
       "type": "boolean",
-      "description": "with deadline: whether taking recommend can be undone later. false for deleting, sending anything to other people, spending money or changing production: those are never taken by default (why_owner irreversible and visible_to_others must say false)"
+      "description": "with deadline: whether taking recommend can be undone; false for delete/external send/spend/prod change (never auto-taken; required false for irreversible/visible_to_others)"
     },
     "evidence": {
       "type": "object",
