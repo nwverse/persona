@@ -175,7 +175,8 @@ def validate_production_exclusion(android: Path) -> None:
     for production in android.rglob("*.kt"):
         relative = production.relative_to(android)
         parts = relative.parts
-        if not any(parts[index:index + 2] == ("src", "main") for index in range(len(parts) - 1)):
+        source_sets = {parts[index + 1] for index, part in enumerate(parts[:-1]) if part == "src"}
+        if not source_sets or source_sets <= {"test", "androidTest"}:
             continue
         source = production.read_text(encoding="utf-8")
         if any(fragment in kotlin_code_only(source) for fragment in ("AboutBuildSnapshot", "AboutBuildRow")):

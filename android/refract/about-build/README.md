@@ -82,7 +82,8 @@ real snapshot, and the test checks handwritten default → generated → handwri
 PackageInfo snapshot. It retains one Build row, the native Version and the full-value Commit copy action. This is
 component-hosting/rollback evidence, not dynamic package-metadata refresh, production selection or a copied page.
 The checker pins this default and strips Kotlin comments and string contents before rejecting code references to
-`AboutBuildRow` / `AboutBuildSnapshot` under production `src/main`. Mentions in comments and string literals remain
+`AboutBuildRow` / `AboutBuildSnapshot` under production source sets, including `src/main`, `src/debug` and
+`src/release`; `src/test` and `src/androidTest` remain allowed. Mentions in comments and string literals remain
 allowed; references inside string interpolation remain code and are rejected. Fixtures cover real production
 references, allowed test-source references and prose. The two rollback choices above distinguish retaining the
 inactive host from restoring the pre-#13076 host; no persisted state or migration is involved.

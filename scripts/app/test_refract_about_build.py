@@ -65,13 +65,26 @@ val kept = ordinary.length + raw.length + character.code + escaped.length
                 with self.assertRaisesRegex(ValueError, "test-only consumer"):
                     build.validate_production_exclusion(android)
 
+    def test_debug_and_release_generated_references_are_rejected(self):
+        for source_set in ("debug", "release"):
+            with self.subTest(source_set=source_set), \
+                    tempfile.TemporaryDirectory(prefix="persona-refract-build-production-") as temporary:
+                android = Path(temporary) / "android"
+                production = android / f"feature/settings/src/{source_set}/kotlin/Host.kt"
+                production.parent.mkdir(parents=True)
+                production.write_text("AboutBuildRow(AboutBuildSnapshot(\"42\").buildNumber)\n")
+                with self.assertRaisesRegex(ValueError, f"src/{source_set}/kotlin/Host.kt$"):
+                    build.validate_production_exclusion(android)
+
     def test_test_source_generated_reference_is_allowed(self):
-        with tempfile.TemporaryDirectory(prefix="persona-refract-build-production-") as temporary:
-            android = Path(temporary) / "android"
-            generated = android / "feature/settings/src/test/kotlin/Host.kt"
-            generated.parent.mkdir(parents=True)
-            generated.write_text("AboutBuildRow(AboutBuildSnapshot(\"42\").buildNumber)\n")
-            build.validate_production_exclusion(android)
+        for source_set in ("test", "androidTest"):
+            with self.subTest(source_set=source_set), \
+                    tempfile.TemporaryDirectory(prefix="persona-refract-build-production-") as temporary:
+                android = Path(temporary) / "android"
+                generated = android / f"feature/settings/src/{source_set}/kotlin/Host.kt"
+                generated.parent.mkdir(parents=True)
+                generated.write_text("AboutBuildRow(AboutBuildSnapshot(\"42\").buildNumber)\n")
+                build.validate_production_exclusion(android)
 
     def test_host_default_and_optional_slot_are_pinned(self):
         host = build.HOST.read_text(encoding="utf-8")
