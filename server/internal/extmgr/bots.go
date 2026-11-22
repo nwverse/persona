@@ -550,7 +550,10 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 			}
 		}
 		if nudge != nil {
-			h.setNudgeAfter(r.Context(), *nudge)
+			if err := h.setNudgeAfter(r.Context(), *nudge); err != nil {
+				writeErr(w, http.StatusInternalServerError, i18n.Err("hub-bots.nudge_save_failed"))
+				return
+			}
 		}
 		if reportDelay != nil || in.SourceReportFullReply != nil {
 			if err := h.setSourceReportSettings(r.Context(), reportDelay, in.SourceReportFullReply); err != nil {
