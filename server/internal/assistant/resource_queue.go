@@ -130,7 +130,7 @@ func (s *Service) resourceRows(ctx context.Context, d rq.Definition, fn func(*[]
 					if job.Slot > 0 {
 						state = "granted"
 					}
-					leases = append(leases, rq.Lease{ID: randomHex(16), Seq: externalSeq, Resource: d.ID, Key: key, State: state, External: true, ExternalRef: job.Ticket, Holder: rq.Holder{Machine: d.Mirror.Machine, Session: "runner:" + job.Ticket, Label: job.Project}, CreatedAt: now, WaitUntil: now.Add(90 * time.Minute), HeartbeatUntil: now.Add(90 * time.Second), HoldUntil: now.Add(time.Hour)})
+					leases = append(leases, rq.Lease{ID: randomHex(16), Seq: externalSeq, Resource: d.ID, Key: key, State: state, External: true, ExternalRef: job.Identity(), Holder: rq.Holder{Machine: d.Mirror.Machine, Session: "runner:" + job.Identity(), Label: job.Project}, CreatedAt: now, WaitUntil: now.Add(90 * time.Minute), HeartbeatUntil: now.Add(90 * time.Second), HoldUntil: now.Add(time.Hour)})
 				}
 			}
 		}
@@ -139,7 +139,7 @@ func (s *Service) resourceRows(ctx context.Context, d rq.Definition, fn func(*[]
 			for _, j := range snap.Queue.Running {
 				found := false
 				for _, l := range leases {
-					if l.State == "granted" && (j.Tag == l.ID || l.External && l.ExternalRef == j.Ticket) {
+					if l.State == "granted" && (j.Tag == l.ID || l.External && l.ExternalRef == j.Identity()) {
 						found = true
 						break
 					}
@@ -406,7 +406,7 @@ func (s *Service) resourceRefresh(ctx context.Context) {
 					present := false
 					for _, list := range [][]rq.Job{snap.Queue.Running, snap.Queue.Waiting} {
 						for _, j := range list {
-							if j.Ticket == l.ExternalRef {
+							if j.Identity() == l.ExternalRef {
 								present = true
 							}
 						}

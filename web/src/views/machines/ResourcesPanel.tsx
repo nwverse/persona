@@ -7,7 +7,7 @@ import { documentPage, visiblePoll } from "../../lib/visible-poll";
 import { Button, Loading } from "../../ui/atoms";
 
 export interface ResourceJob {
-  ticket: string; project: string; commit: string; groups: string[]; position?: number;
+  ticket: string; run?: string; slot?: number; project: string; commit: string; groups: string[]; position?: number;
   started_at?: string; enqueued_at?: string; duplicate_of?: string;
 }
 interface ResourceDefinition {
@@ -98,8 +98,8 @@ export function ResourceCard({ resource, now }: { resource: ResourceStatus; now:
     {jobs.length > 0 && <div className="overflow-x-auto"><table className="w-full text-left">
       <caption className="sr-only">{t("resources.queue")}</caption>
       <thead className="text-ink-2"><tr>{["ticket", "project", "commit", "groups", "waiting", "start"].map((key) => <th key={key} className="p-2 font-medium">{t(`resources.${key}`)}</th>)}</tr></thead>
-      <tbody>{jobs.map((job) => <tr key={job.ticket} className="border-t border-line">
-        <td className="p-2">{job.ticket}{job.duplicate_of && <span className="block text-attention">{t("resources.duplicate", { ticket: job.duplicate_of })}</span>}</td>
+      <tbody>{jobs.map((job, index) => <tr key={job.ticket || job.run || `${job.slot ?? "q"}-${job.position ?? index}`} className="border-t border-line">
+        <td className="p-2">{job.ticket || job.run || t("resources.unknown")}{job.duplicate_of && <span className="block text-attention">{t("resources.duplicate", { ticket: job.duplicate_of })}</span>}</td>
         <td className="p-2">{job.project}</td><td className="p-2 font-mono">{job.commit || t("resources.unknown")}</td>
         <td className="p-2">{job.groups.join(", ")}</td>
         <td className="p-2">{t("resources.seconds", { seconds: ageSeconds(job.enqueued_at ?? job.started_at, now) ?? 0 })}</td>

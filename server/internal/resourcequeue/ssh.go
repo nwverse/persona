@@ -74,6 +74,11 @@ func ReadQueue(ctx context.Context, m Mirror) (Snapshot, error) {
 	return snap, fmt.Errorf("runner queue unavailable")
 }
 func ReadResult(ctx context.Context, m Mirror, project, commit string, groups []string) (*Outcome, error) {
+	var err error
+	groups, err = NormalizeGroups(groups)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := Key(project, commit, groups); err != nil {
 		return nil, err
 	}

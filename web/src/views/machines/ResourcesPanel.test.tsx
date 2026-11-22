@@ -36,3 +36,14 @@ it.each(["en", "zh-Hans", "ja"])("renders the unknown state in %s", async (langu
   expect(host.textContent).not.toContain("resources.");
   expect(host.querySelector("[role=status]")).not.toBeNull();
 });
+it("keeps separate legacy rows whose ticket and commit are empty", () => {
+  const legacy: ResourceStatus = { ...resource, mirror_state: { unknown: false, observed_at: "2026-11-22T10:00:00Z", queue: { slots: 3, running: [
+    { ticket: "", run: "example-legacy-one", slot: 1, project: "example", commit: "", groups: ["web"] },
+    { ticket: "", run: "example-legacy-two", slot: 2, project: "example", commit: "", groups: ["web"] },
+  ], waiting: [] } } };
+  act(() => root.render(<ResourceCard resource={legacy} now={Date.parse("2026-11-22T10:00:05Z")} />));
+  expect(host.querySelectorAll("tbody tr")).toHaveLength(2);
+  expect(host.textContent).toContain("example-legacy-one");
+  expect(host.textContent).toContain("example-legacy-two");
+  expect(host.textContent).not.toContain("Same result as");
+});

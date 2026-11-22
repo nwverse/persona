@@ -139,3 +139,30 @@ func TestPriorityCancellationAndWaitTimeout(t *testing.T) {
 		t.Fatal(rows)
 	}
 }
+
+func TestV1LegacyEmptyFieldsRetainIndependentEntries(t *testing.T) {
+	raw, err := os.ReadFile("testdata/queue-v1-legacy.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue, err := ParseQueue(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queue.Running) != 3 || queue.Running[0].Ticket != "" || queue.Running[1].Commit != "" || queue.Running[1].Tag != "" {
+		t.Fatal(queue)
+	}
+	if queue.Waiting[0].DuplicateOf != "example-build-one" {
+		t.Fatal(queue.Waiting)
+	}
+	if queue.Running[1].DuplicateOf != "" || queue.Running[2].DuplicateOf != "" || queue.Waiting[1].DuplicateOf != "" {
+		t.Fatal("empty commits were coalesced")
+	}
+	if queue.Running[1].Identity() == queue.Running[2].Identity() {
+		t.Fatal("legacy entries lost their identity")
+	}
+	outcome, err := ParseResult([]byte(`{"v":1,"project":"example","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","groups":["web"],"exit":null,"run":"","finished_at":"","tag":""}`))
+	if err != nil || outcome != nil {
+		t.Fatalf("no-result response: %+v %v", outcome, err)
+	}
+}

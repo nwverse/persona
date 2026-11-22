@@ -6,6 +6,7 @@ import (
 	"errors"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -150,14 +151,11 @@ func ParseQueue(raw []byte) (*Queue, error) {
 	for _, list := range [][]Job{q.Running, q.Waiting} {
 		for i := range list {
 			j := &list[i]
-			if j.Ticket == "" {
-				return nil, errors.New("missing ticket")
-			}
 			if key, err := Key(j.Project, j.Commit, j.Groups); err == nil {
 				if first := seen[key]; first != "" {
 					j.DuplicateOf = first
 				} else {
-					seen[key] = j.Ticket
+					seen[key] = j.Identity()
 				}
 			}
 		}
@@ -169,16 +167,37 @@ func ParseResult(raw []byte) (*Outcome, error) {
 		return nil, nil
 	}
 	var fields struct {
-		V          int       `json:"v"`
-		Exit       *int      `json:"exit"`
-		Run        string    `json:"run"`
-		FinishedAt time.Time `json:"finished_at"`
+		V          int    `json:"v"`
+		Exit       *int   `json:"exit"`
+		Run        string `json:"run"`
+		FinishedAt string `json:"finished_at"`
 	}
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return nil, err
 	}
-	if fields.V != 1 || fields.Exit == nil || fields.Run == "" || fields.FinishedAt.IsZero() {
+	if fields.V != 1 {
 		return nil, errors.New("unknown result schema")
 	}
-	return &Outcome{V: 1, Exit: *fields.Exit, Run: fields.Run, FinishedAt: fields.FinishedAt}, nil
+	if fields.Exit == nil && fields.Run == "" && fields.FinishedAt == "" {
+		return nil, nil
+	}
+	finished, err := time.Parse(time.RFC3339Nano, fields.FinishedAt)
+	if err != nil || fields.Exit == nil || fields.Run == "" {
+		return nil, errors.New("unknown result schema")
+	}
+	return &Outcome{V: 1, Exit: *fields.Exit, Run: fields.Run, FinishedAt: finished}, nil
+}
+
+// Identity retains legacy entries without inventing a runner ticket or a dedupe commit.
+func (j Job) Identity() string {
+	if j.Ticket != "" {
+		return j.Ticket
+	}
+	if j.Run != "" {
+		return j.Run
+	}
+	if j.Slot > 0 {
+		return "slot-" + strconv.Itoa(j.Slot) + "-" + j.StartedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return "waiting-" + strconv.Itoa(j.Position) + "-" + j.EnqueuedAt.UTC().Format(time.RFC3339Nano)
 }
