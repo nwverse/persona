@@ -142,6 +142,7 @@ export function grantKinds(task: Pick<Task, "start_grant">): GrantKind[] {
 export interface Run {
   conversation?: "source" | "resumed" | "new";
   conversation_reason?: string;
+  compatibility_fallback?: "legacy_task_execution";
   execution?: TaskExecution;
   id: string;
   kind: string;
@@ -648,15 +649,22 @@ export function runStatusWord(r: Pick<Run, "status" | "owner_skipped">): string 
 
 /** "Run manually" / the error / "On time" / "21 seconds late" / "3 minutes late" / "2 hours late". */
 export function runDetail(r: Run): string {
-  if (r.status !== "ok") return r.owner_skipped ? runStatusWord(r) : r.error || runStatusWord(r);
-  if (r.manual) return t("lib-routines.run_manual");
-  const at = parseTime(r.at), due = parseTime(r.due);
-  if (!at || !due) return runStatusWord(r);
-  const late = (at.getTime() - due.getTime()) / 1000;
-  if (late < 5) return t("lib-routines.run_on_time");
-  if (late < 120) return t("lib-routines.late_seconds", { count: Math.round(late) });
-  if (late < 7200) return t("lib-routines.late_minutes", { count: Math.floor(late / 60) });
-  return t("lib-routines.late_hours", { count: Math.floor(late / 3600) });
+  let detail: string;
+  if (r.status !== "ok") detail = r.owner_skipped ? runStatusWord(r) : r.error || runStatusWord(r);
+  else if (r.manual) detail = t("lib-routines.run_manual");
+  else {
+    const at = parseTime(r.at), due = parseTime(r.due);
+    if (!at || !due) detail = runStatusWord(r);
+    else {
+      const late = (at.getTime() - due.getTime()) / 1000;
+      if (late < 5) detail = t("lib-routines.run_on_time");
+      else if (late < 120) detail = t("lib-routines.late_seconds", { count: Math.round(late) });
+      else if (late < 7200) detail = t("lib-routines.late_minutes", { count: Math.floor(late / 60) });
+      else detail = t("lib-routines.late_hours", { count: Math.floor(late / 3600) });
+    }
+  }
+  if (r.compatibility_fallback === "legacy_task_execution") return `${detail} · ${t("lib-routines.run_legacy_fallback")}`;
+  return detail;
 }
 
 /** Newest first, one group per day ("Today", "Yesterday", "Wed", "Nov 2"). */

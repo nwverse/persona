@@ -10,7 +10,7 @@ vi.hoisted(() => {
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
 import { initI18n } from "../i18n";
-import { openFromPage } from "../lib/handoff";
+import { handoffFrom, openFromPage } from "../lib/handoff";
 import { useRoute } from "../lib/router";
 import { refresh, reset } from "../lib/store";
 import type { Machine, Session } from "../lib/types";
@@ -103,6 +103,22 @@ describe("the sidebar on an Agent's page opened from inside a page (#12055)", ()
     await flush();
     expect(location.pathname).toBe("/s/mac/s2");
     expect(lit()).toEqual(["/todos"]);
+  });
+
+  it("clears the drill-down origin when the open Agent's own sidebar row is clicked", async () => {
+    history.replaceState(null, "", "/todos?id=t1");
+    await show();
+    act(() => openFromPage({ name: "session", mid: "mac", sid: "s1" }));
+    await flush();
+    expect(lit()).toEqual(["/todos"]);
+    const entries = history.length;
+    act(() => agentRow("s1").click());
+    await flush();
+    expect(location.pathname).toBe("/s/mac/s1");
+    expect(history.length).toBe(entries);
+    expect(handoffFrom()).toBeUndefined();
+    expect(agentRow("s1").getAttribute("aria-current")).toBe("page");
+    expect(lit()).toEqual(["/s/mac/s1"]);
   });
 
   it("lights the Agent's own row when it was picked in the sidebar or reached by a link", async () => {

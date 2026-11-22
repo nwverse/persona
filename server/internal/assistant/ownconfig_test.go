@@ -16,7 +16,7 @@ import (
 func TestOwnConfigOverTheHello(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "manager.json")
 	mine := `{"id":"x","token":"bus","assistant":{"owner":" Example ","machine":"laptop","launcher":"codex","memory_dreaming":true,"complete_agentless_todos":true,"supervision_batch_minutes":45},
-		"agents":{"triage":{"max_retries":2}},"kb":{"enabled":false,"read_only":true,"text_days":30,"ai":{"model":"k"},"attachment_days_by_source":{"chat":3650,"off":0,"neg":-1}},
+		"agents":{"triage":{"max_retries":2,"account_exhaustion_max_retries":3}},"kb":{"enabled":false,"read_only":true,"text_days":30,"ai":{"model":"k"},"attachment_days_by_source":{"chat":3650,"off":0,"neg":-1}},
 		"ai":{"base_url":"https://gateway.example.com","model":"m"},
 		"inbox":{"triage_ai":{"model":"t"},"agent":{"machine":"gone"}},"hook_timeout_minutes":0}`
 	if err := os.WriteFile(file, []byte(mine), 0o600); err != nil {
@@ -35,7 +35,7 @@ func TestOwnConfigOverTheHello(t *testing.T) {
 		*h.Assistant.SupervisionBatchMinutes != 45 {
 		t.Fatalf("assistant %+v %q %q", h.Assistant, h.Owner, h.OwnerNotes)
 	}
-	if h.Agents.Triage.MaxRetries != 2 || h.KB == nil || !h.KB.Off || !h.KB.ReadOnly || h.KB.TextDays != 30 || h.Models.KBAI == nil || h.Models.KBAI.Model != "k" {
+	if h.Agents.Triage.MaxRetries != 2 || h.Agents.Triage.AccountExhaustionMaxRetries != 3 || h.KB == nil || !h.KB.Off || !h.KB.ReadOnly || h.KB.TextDays != 30 || h.Models.KBAI == nil || h.Models.KBAI.Model != "k" {
 		t.Fatalf("agents/kb %+v %+v %+v", h.Agents, h.KB, h.Models.KBAI)
 	}
 	if len(h.KB.AttachmentDaysBySource) != 1 || h.KB.AttachmentDaysBySource["chat"] != 3650 || h.KB.AttachmentDays != 0 {

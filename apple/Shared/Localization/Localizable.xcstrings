@@ -102643,6 +102643,28 @@
       },
       "extractionState" : "manual"
     },
+    "Model changed from %@ to %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Model changed from %1$@ to %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モデルが %1$@ から %2$@ に変わりました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型已从 %1$@ 切换到 %2$@"
+          }
+        }
+      }
+    },
     "Model not connected: %@ isn't signed in" : {
       "extractionState" : "manual",
       "localizations" : {

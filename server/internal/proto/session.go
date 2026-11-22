@@ -235,6 +235,10 @@ type Session struct {
 	// optional effort metadata within the row size budget.
 	PendingEffort      *string `json:"pending_effort,omitempty"`
 	EffortChangeFailed bool    `json:"effort_change_failed,omitempty"`
+	// ContextRestartRecommended: the latest three measured requests each used over 300,000 input
+	// tokens since the last compaction. Omitted when false or the runtime has no request-level evidence.
+	// Kept with EffortChangeFailed so it fits the row's allocation size class.
+	ContextRestartRecommended bool `json:"context_restart_recommended,omitempty"`
 	// OffLauncher: Persona started this Claude Code Agent on Launcher, but the claude that runs it now was not started
 	// by Persona's command (it lacks Persona's --mcp-config): herdr's bare `claude --resume <id>` after a restart on a
 	// herdr older than 0.9.2, or a resume typed by hand (#11792). Launcher's settings, model, MCP and hooks do not
