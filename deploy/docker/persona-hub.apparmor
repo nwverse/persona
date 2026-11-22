@@ -4,13 +4,14 @@
 # 9ee3204f0d0cfa19ca2c6a7b0fcf5a2b353954ae. Changes: named profile,
 # unprivileged user namespaces, and only bubblewrap's mount operations/pivot_root.
 # Requires AppArmor 4.x userspace for the userns rule. Never loaded by the container.
-abi <abi/3.0>,
+abi <abi/4.0>,
 #include <tunables/global>
 
 profile persona-hub flags=(attach_disconnected,mediate_deleted) {
   #include <abstractions/base>
   userns,
   network,
+  network unix,
   # Disallow obsolete socket families removed from the Linux kernel.
   # AF_DECnet has no AppArmor family name, so it cannot be denied here.
   deny network ax25,

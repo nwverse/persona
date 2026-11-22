@@ -33,8 +33,10 @@ def main():
             policy = directory / "persona-hub.apparmor"
             policy.write_text((ROOT / "deploy/docker/persona-hub.apparmor").read_text())
             run(["docker", "run", "--rm", "--name", container + "-policy",
-                 "--mount", "type=bind,src=" + str(directory) + ",dst=/probe,readonly", image,
-                 "/bin/sh", "-ec", "apk add --no-cache apparmor && apparmor_parser -Q -K /probe/persona-hub.apparmor"], 120)
+                 "--mount", "type=bind,src=" + str(directory) + ",dst=/probe,readonly", "ubuntu:24.04",
+                 "/bin/sh", "-ec", "apt-get update -qq && DEBIAN_FRONTEND=noninteractive "
+                 "apt-get install -y -qq --no-install-recommends apparmor && "
+                 "apparmor_parser -Q -K /probe/persona-hub.apparmor"], 180)
             security = run(["docker", "info", "--format", "{{json .SecurityOptions}}"], 15,
                            capture_output=True, text=True)
             apparmor = ["--security-opt=apparmor=persona-hub"] if "apparmor" in security.stdout.lower() else []
