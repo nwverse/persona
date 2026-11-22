@@ -3097,7 +3097,10 @@ object ExtensionSceneShapeSerializer : KSerializer<ExtensionSceneShape> {
 
 /**
  * A box (UI version 11): at yaw 0, size[0] along +x and size[1] along +y. round rounds its corners seen from above
- * (at most half the smaller size); the app bevels its upright edges no more than half its height.
+ * (at most half the smaller size); the app bevels its upright edges no more than half its height. wall says the box
+ * is a wall, for an app's cutaway (#13036): the outer walls between the camera and the rooms are drawn low (a wall
+ * with a floor on the camera's side, between two rooms, keeps its height), what stands in one is cut to that height,
+ * and what stands tall in front of one is drawn see-through; an app without a cutaway draws it as any box.
  */
 @Serializable
 data class ExtensionSceneBox(
@@ -3110,6 +3113,7 @@ data class ExtensionSceneBox(
     val top: Double = 0.0,
     val color: String? = null,
     val material: String? = null,
+    val wall: Boolean? = null,
 ) : ExtensionSceneShape
 
 /**

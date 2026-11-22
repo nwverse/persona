@@ -2012,6 +2012,7 @@ type SceneShape struct {
 	Top      *float64    `json:"top,omitempty"`
 	Color    string      `json:"color,omitempty"`
 	Material string      `json:"material,omitempty"`
+	Wall     bool        `json:"wall,omitempty"`
 	Radius   float64     `json:"radius,omitempty"`
 	Points   [][]float64 `json:"points,omitempty"`
 }

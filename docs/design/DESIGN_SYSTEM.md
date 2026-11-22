@@ -2053,7 +2053,25 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   progress capsules, all of them at once, and Needs you neither counts nor lists it again. The cards of sessions folded
   under the conversation keep the stack and the tray as above. iOS and Android keep the stack for both until they follow.
   The stack holds the conversation's own cards alone, as one slot on the web: its first card with "2 / 6" (where it stands in the run), the next taking its place when it is answered, and what was just answered one line over it that goes 3 seconds after the last answer (details with the interaction cards in `docs/web/web.md`).
-  What the conversation's tasks ask is a card of its own above the entries (iOS `TaskQuestions`, #4339 C10): the oldest
+  **To Decide** (iOS and iPadOS, #12831): in an assistant conversation the conversation's own cards and its tasks'
+  questions and approvals are one pager over the composer (`QuestionDock`), opened from a **To Decide** entry (zh-Hans
+  待选择, `QuestionDockEntry`) first in the row of entries, drawn as they are (`DockCapsule`, the needs-you tone; the
+  selected look while the pager is open). One card at a time, the conversation's own first and then the tasks' oldest
+  first; over it, while there are two or more, the dots (a window of seven), "2 / 5" and ‹ › (a sideways swipe on the card
+  does the same; on a phone the card keeps that drag from the drawer and the Assistant | Agents strip, `SwipePageMark`). Answering a card moves on to the one that takes its place; a card that comes in never takes the pager
+  away from the one shown. The card's title row keeps View in Chat, Skip and the fold, whose chevron (and a tap on the row)
+  collapses the pager into the entry: it stays collapsed while a card the owner put away still waits, the entry saying
+  "+N" for what came since, and opens again for a fresh round. One card is drawn at a time; a question card paged
+  away or collapsed keeps its page, picks and typed answers on the device (`QuestionFormMemory`) and starts there again. Skip is not unified yet: in the pager a question read off a
+  terminal, a tool approval and a plan approval show it greyed with one line in `cautionText` saying why and what to use
+  ("Reply in Chat Instead", Deny, send it back); every other card keeps the rule below (Skip where the request can be
+  cancelled). A Needs You row for the conversation's own card closes the tray and opens the pager on that card; the
+  pager and a tray show one at a time, the pager stepping aside while a tray is open. The pager is capped as a lone
+  question card (#6277), owns the grabber (#12306), and in a voice call stays open at half the page. The three numbers
+  are To Decide (the pager's cards), Needs you (its rows) and, in an Agent's chat, "N pending". An Agent's chat keeps the
+  stack; the wrap-up chips stay chips after the entries. The two paragraphs below are the web and Android, and iOS
+  before #12831.
+  What the conversation's tasks ask is a card of its own above the entries (iOS `TaskQuestions` until #12831, #4339 C10): the oldest
   question of their Agents, under its task's name with the ask mark in the needs-you tone and, at the end of that line,
   "N more" for the tasks' other questions; it is answered there, and the next comes up once it is. The three numbers
   count three things and say so: "N pending" the conversation's own cards in the stack, "N more" the tasks' other
@@ -2083,7 +2101,12 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   line: its title, the question and, for a card of several questions, "N left". Folded, it keeps its page and its picks
   and gives the conversation its room. Where the chat finds the message the card is about (the agent's words before the
   call that asked it, `CardSource`), the open card's title row has **View in Chat**: the card folds and the chat goes to
-  that message and lights it up, as a quote's jump does. A task's question asks in another chat and has none.
+  that message and lights it up, as a quote's jump does. A task's card in the assistant's To Decide pager (iOS and
+  iPadOS, #12625) has View in Chat too: it pushes that Agent's conversation over the main one as a drill-down
+  (`AppModel.openInPage`, the sidebar's selection unchanged) and lands on the message that asked, found by the card's
+  tool use id once the chat's items are in (`MessageJump.card`, `CardSource.source`, older pages as for a link); a card
+  read off a terminal has no id and lands on that chat's newest question, or at its newest message without one. The pager
+  is left as it was: Back shows the same card, or the next if it was answered on the Agent's page.
   A child session's request (web, #5120: `folded_under`) has its parent's page as its home: shown there with the
   parent's own, "From subagent · <title>", counted once under the parent, and every link to it opens the parent.
   A lead's worker's request (web, #5180) has the lead's page as its home too. While the Team panel shows that worker,
