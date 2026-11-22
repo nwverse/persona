@@ -403,7 +403,9 @@ export function createPiHost(deps, options = {}) {
       await refreshDisk(true)
       const path = await diskPath(id)
       const running = live.get(id)
-      if (!running && !path) throw new RpcError('The prepared pi session is not yet available', 'assistant_supervision_runtime')
+      // No prompt has gone to it (the assistant's prompt is sent only after its state is recorded): nothing was
+      // delivered, so a manager preparing an engine switch rolls back instead of holding the conversation in doubt.
+      if (!running && !path) throw new RpcError('The prepared pi session is not yet available', 'assistant_supervision_runtime', { delivered: 'none' })
       recordAssistant(running?.ctx.sessionManager || deps.SessionManager.open(path), params)
       if (prompt) await send({ ...params, session_id: id, text: prompt })
     }
