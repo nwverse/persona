@@ -629,6 +629,12 @@ func (h *Hub) fleetRoutesRelayed(api *http.ServeMux) {
 			}
 		}
 		if pr.Role == roleExtension {
+			// A pending card the token is never shown (health space, private) is answered as if it did not exist, the
+			// same 404 its read routes give, before any answer is forwarded (#12216).
+			if _, hidden := h.pendingCardHiddenFromExtensions(r.PathValue("id")); hidden {
+				writeErr(w, http.StatusNotFound, errDeleteUnknown)
+				return
+			}
 			if why, mode, mid, sid := h.extensionResolveRefused(pr, r.PathValue("id"), res); why != "" { // extension_modes.go
 				h.refuseExtensionMode(w, r, pr, mid, sid, mode, why)
 				return

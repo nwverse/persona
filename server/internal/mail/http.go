@@ -111,12 +111,16 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func writeError(w http.ResponseWriter, status int, err error) {
 	var unknown *UnknownAccountError
 	var incomplete *IncompleteSearchError
+	var unreachable *UnreachableError
 	switch {
 	case errors.As(err, &unknown):
 		apierr.WriteCode(w, status, unknown.Code(), unknown)
 		return
 	case errors.As(err, &incomplete):
 		apierr.WriteCode(w, status, incomplete.Code(), incomplete)
+		return
+	case errors.As(err, &unreachable):
+		apierr.WriteCode(w, status, unreachable.Code(), unreachable)
 		return
 	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})
@@ -128,11 +132,14 @@ func statusFor(err error) int {
 	var ue userError
 	var unknown *UnknownAccountError
 	var incomplete *IncompleteSearchError
+	var unreachable *UnreachableError
 	switch {
 	case errors.As(err, &unknown):
 		return unknown.HTTPStatus()
 	case errors.As(err, &incomplete):
 		return incomplete.HTTPStatus()
+	case errors.As(err, &unreachable):
+		return unreachable.HTTPStatus()
 	case errors.As(err, &ue):
 		return http.StatusBadRequest
 	case strings.Contains(msg, "not found"),

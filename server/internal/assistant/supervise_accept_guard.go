@@ -25,22 +25,22 @@ var (
 		`no (?:measurable |visible |real )?effect|not effective|ineffective|partially (?:done|effective|working)|` +
 		`partial (?:result|fix)|mixed results?|cannot confirm|could not confirm|unable to (?:confirm|prove|verify)|` +
 		`still (?:retrieves?|shows?|fails?|wrong))\b`)
-	acceptInconclusiveZhRe = lazyre.New(`不确定|没法确定|无法确定|没有结论|得不出结论|不成立|没效果|没有效果|无效果|` +
-		`不起作用|没有作用|部分(?:有效|完成|生效|成功)|只(?:完成|做|生效|成功)了?一?半|有待(?:验证|确认)|` +
-		`仍然(?:错误|不对|失败)|还是(?:错误|不对|失败)`)
+	acceptInconclusiveZhRe = lazyre.New(`不确定|没法确定|无法确定|没有结论|得不出结论|不成立|没效果|没有效果|无效果|` + // i18n-ignore: matches the original report text
+		`不起作用|没有作用|部分(?:有效|完成|生效|成功)|只(?:完成|做|生效|成功)了?一?半|有待(?:验证|确认)|` + // i18n-ignore: matches the original report text
+		`仍然(?:错误|不对|失败)|还是(?:错误|不对|失败)`) // i18n-ignore: matches the original report text
 	// The work is blocked on something only the owner can give or decide.
 	acceptOwnerBlockerRe = lazyre.New(`(?i)\b(blocked on|waiting on the (?:owner|user)|only the (?:owner|user) (?:knows|can)|` +
 		`needs? (?:the |an? )?(?:owner|user)(?:'s)? (?:input|info|information|decision|approval|to)|` +
 		`(?:owner|user) (?:has|needs) to (?:provide|confirm|supply|choose|decide)|` +
-		`please (?:provide|confirm|share|send)\b[^。\n]{0,60}(?:id|title|time|account|link|url|address))\b`)
-	acceptOwnerBlockerZhRe = lazyre.New(`只有用户(?:知道|能|才有)|用户(?:才)?(?:知道|能|需要)(?:提供|确认|给|决定|拍板|补充)|` +
-		`要用户(?:提供|确认|决定|拍板|补充|给)|等用户(?:提供|确认|决定|拍板|回复)|` +
-		`请(?:用户|你)(?:提供|确认|给|发|补充)[^。\n]{0,40}(?:ID|id|标题|时间|账号|链接|地址)|` +
-		`卡在用户|缺(?:少|的是)用户(?:才知道)?(?:的)?(?:信息|资料)`)
+		`please (?:provide|confirm|share|send)\b[^。\n]{0,60}(?:id|title|time|account|link|url|address))\b`) // i18n-ignore: matches the original report's sentence boundaries
+	acceptOwnerBlockerZhRe = lazyre.New(`只有用户(?:知道|能|才有)|用户(?:才)?(?:知道|能|需要)(?:提供|确认|给|决定|拍板|补充)|` + // i18n-ignore: matches the original report text
+		`要用户(?:提供|确认|决定|拍板|补充|给)|等用户(?:提供|确认|决定|拍板|回复)|` + // i18n-ignore: matches the original report text
+		`请(?:用户|你)(?:提供|确认|给|发|补充)[^。\n]{0,40}(?:ID|id|标题|时间|账号|链接|地址)|` + // i18n-ignore: matches the original report text
+		`卡在用户|缺(?:少|的是)用户(?:才知道)?(?:的)?(?:信息|资料)`) // i18n-ignore: matches the original report text
 	// The agent's own closeout report (its work report's Status line) says the work is not finished or is blocked.
 	// Only an explicit non-done status matches: runtimes that write no report must never block an accept.
-	acceptCloseoutRe   = lazyre.New(`(?im)^\s*[-*]\s*Status\s*[:：]\s*(not_done|blocked|waiting|unsure)\b`)
-	acceptCloseoutZhRe = lazyre.New(`(?m)^\s*[-*]\s*状态\s*[:：]\s*(没做完|未完成|卡住|阻塞|受阻|等待中|在等)`)
+	acceptCloseoutRe   = lazyre.New(`(?im)^\s*[-*]\s*Status\s*[:：]\s*(not_done|blocked|waiting|unsure)\b`) // i18n-ignore: matches the original report's status delimiters
+	acceptCloseoutZhRe = lazyre.New(`(?m)^\s*[-*]\s*状态\s*[:：]\s*(没做完|未完成|卡住|阻塞|受阻|等待中|在等)`)                // i18n-ignore: matches the original report text
 )
 
 // acceptGuardEvidence is the text a bare-accept guard scans: what the supervisor put in the review and, best effort,

@@ -305,4 +305,5 @@ func (b *starBook) routes() {
 		}
 		apierr.WriteJSON(w, map[string]any{"removed": out})
 	}))
+	b.backupRoutes(write)
 }

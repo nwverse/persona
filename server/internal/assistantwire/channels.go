@@ -123,7 +123,9 @@ const (
 	// FeishuMessages: {message_id} → {items: [feishubot.Item]}: a message read back (a quote; a merged forward with
 	// the messages in it).
 	FeishuMessages = "feishu.messages"
-	// FeishuResource: {message_id, key, kind} → {data, mime}: an image of a message the bot received (at most 3 MB).
+	// FeishuResource: {message_id, key, kind, machine_id, as_file?} → {data, mime} for an image at most 3 MiB,
+	// or {path, mime, name} saved on the machine from the same download (over 3 MiB or as_file),
+	// or {too_large: true, name} above the 50 MiB file limit. Save failures carry CodeFeishuSave.
 	FeishuResource = "feishu.resource"
 	// FeishuSave: {message_id, key, kind, name, machine_id} → {path}: a file (or a large image) of a message saved on
 	// a machine (its temp directory, like the apps' uploads), at most 50 MB.
@@ -194,6 +196,17 @@ type FeishuMessage struct {
 	// thing the hub lets through from one; FeishuFromRead is the owner's "@bot /read …" from any group (#11803). "" for
 	// the usual two.
 	From string `json:"from,omitempty"`
+}
+
+// OwnerApprovalProof is the hub-authenticated location and exact text of an
+// owner's direct reply. It is returned only after the matching one-use owner
+// action is consumed; the assistant still has to bind ParentID to the exact
+// pending proposal card and compare Text with the configured affirmative word.
+type OwnerApprovalProof struct {
+	MessageID string `json:"message_id"`
+	ParentID  string `json:"parent_id"`
+	ChatID    string `json:"chat_id"`
+	Text      string `json:"text"`
 }
 
 // FeishuFromElsewhere is FeishuMessage.From of a message the hub took from a group chat that is not opted in: the owner's

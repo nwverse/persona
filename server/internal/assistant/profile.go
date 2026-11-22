@@ -74,6 +74,9 @@ type Settings struct {
 	IdleAutoCompact        *bool `json:"idle_auto_compact,omitempty"`
 	IdleAutoCompactMinutes *int  `json:"idle_auto_compact_minutes,omitempty"`
 	IdleAutoCompactTokens  *int  `json:"idle_auto_compact_tokens,omitempty"`
+	CacheKeepalive         *bool `json:"cache_keepalive,omitempty"`
+	CacheKeepaliveMinutes  *int  `json:"cache_keepalive_minutes,omitempty"`
+	CacheKeepaliveMax      *int  `json:"cache_keepalive_max,omitempty"`
 	IdleReleaseMinutes     *int  `json:"idle_release_minutes,omitempty"` // #12008, idle_compact_settings.go
 	// StartRequestedTasks: a task_plan task the user asked for in so many words starts without the card's "Start"
 	// (#2559). nil is on (the default).
@@ -126,6 +129,9 @@ type Settings struct {
 	// AgentTasks: every agent Persona starts is on a quiet, supervised todo (#3617, agent_tasks.go). nil is off (the
 	// default).
 	AgentTasks *bool `json:"agent_tasks,omitempty"`
+	// TaskLessons: a supervised task accepted after friction teaches its project's next Agents what it learned
+	// (#12295, task_lessons.go). nil is off (the default): no model call, no lesson written, no prompt changed.
+	TaskLessons *bool `json:"task_lessons,omitempty"`
 	// CloseEndedTerminals: when an Agent's session ends (its task is done or cancelled, it quit by itself or was told
 	// to), its terminal tab is closed too, through the "Archive and close" path (#10355, agent_terminal_close.go).
 	// nil is off (the default): the terminal stays, as since #4754.
@@ -176,6 +182,13 @@ type Settings struct {
 	// subscription's 5-hour window lasts longer in interactive use; driving the interactive program from Persona may also
 	// be read as a different kind of use than it is, so it is the owner's opt-in.
 	ClaudeInteractive *bool `json:"claude_interactive,omitempty"`
+	// OwnerReplyApproval enables exact, one-shot approval of server-prepared connector batches. It never creates an
+	// Always rule. PersistentOwnerActionCards independently keeps only reconstructable proposals pending indefinitely.
+	OwnerReplyApproval         *bool `json:"owner_reply_approval,omitempty"`
+	PersistentOwnerActionCards *bool `json:"persistent_owner_action_cards,omitempty"`
+	// An explicitly empty phrase list disables reply approval. Do not omit it when encoding Settings: an omitted field
+	// decodes as nil and would silently restore the default phrases after a write or restart.
+	OwnerApprovalPhrases []string `json:"owner_reply_approval_phrases"`
 	// LoadAllTools: every Persona tool of an assistant conversation is loaded up front, as before #7317. nil is off
 	// (the default): only the frequently used ones are, the rest wait behind ToolSearch (tool_loading.go).
 	LoadAllTools *bool `json:"load_all_tools,omitempty"`
@@ -337,6 +350,76 @@ func (s *Service) claudeInteractive(ctx context.Context) bool {
 	return v != nil && *v
 }
 
+var defaultOwnerApprovalPhrases = []string{"发", "同意"} // i18n-ignore: exact affirmative owner input, not displayed text
+
+func ownerReplyApprovalOn(v Settings) bool {
+	return v.OwnerReplyApproval != nil && *v.OwnerReplyApproval
+}
+
+func persistentOwnerActionCardsOn(v Settings) bool {
+	return v.PersistentOwnerActionCards != nil && *v.PersistentOwnerActionCards
+}
+
+// ownerApprovalPhrases returns the exact affirmative replies in effect. Nil
+// means the documented defaults; an explicitly empty list disables chat
+// approval without touching ordinary Allow/Deny cards or existing grants.
+func ownerApprovalPhrases(v Settings) ([]string, error) {
+	phrases := v.OwnerApprovalPhrases
+	if phrases == nil {
+		phrases = defaultOwnerApprovalPhrases
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(phrases))
+	if len(phrases) > 8 {
+		return nil, errors.New("owner_reply_approval_phrases accepts at most 8 phrases")
+	}
+	for _, phrase := range phrases {
+		if phrase == "" || strings.TrimSpace(phrase) != phrase || len([]rune(phrase)) > 32 || seen[phrase] {
+			return nil, errors.New("owner_reply_approval_phrases must contain unique, trimmed phrases of 1–32 characters")
+		}
+		seen[phrase] = true
+		out = append(out, phrase)
+	}
+	return out, nil
+}
+
+func ownerApprovalPhrase(v Settings, text string) bool {
+	if !ownerReplyApprovalOn(v) {
+		return false
+	}
+	phrases, err := ownerApprovalPhrases(v)
+	if err != nil {
+		return false // invalid persisted configuration fails closed
+	}
+	text = ownerApprovalFoldLatin(strings.TrimSpace(text))
+	for _, phrase := range phrases {
+		if text == ownerApprovalFoldLatin(phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+// ownerApprovalFoldLatin folds ASCII Latin capitals only. Unicode simple
+// folding would make distinct non-Latin code points (for example long s and s)
+// authorize one another, which is broader than an exact reply.
+func ownerApprovalFoldLatin(text string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + ('a' - 'A')
+		}
+		return r
+	}, text)
+}
+
+func ownerApprovalPhrasesForView(v Settings) []string {
+	phrases, err := ownerApprovalPhrases(v)
+	if err != nil {
+		return v.OwnerApprovalPhrases
+	}
+	return phrases
+}
+
 func (s *Service) interjectBackground(ctx context.Context) bool {
 	v := s.settings(ctx).InterjectBackground
 	return v != nil && *v
@@ -477,6 +560,16 @@ func (s *Service) launcherNow(ctx context.Context) string {
 	return s.settings(ctx).Launcher
 }
 
+// mainLauncherNow resolves the main-only binding without changing new-chat defaults.
+// An unreadable main override must not become permission to probe another launcher.
+func (s *Service) mainLauncherNow(ctx context.Context) string {
+	binding, err := s.resolveModel(ctx, purposeMain)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimPrefix(binding.Provider, "launcher.")
+}
+
 // profile is what the hub's features need of the settings (Snapshot.Profile); tasks are the scheduled tasks and todos
 // the open todos' agents as reported (either nil: unreadable, and Keep is left out, so the nodes keep what they list;
 // Keep is left out too when what places the directions' sessions cannot be read, directionKeep). nil when the
@@ -606,6 +699,9 @@ type assistantView struct {
 	IdleAutoCompact        bool               `json:"idle_auto_compact"`
 	IdleAutoCompactMinutes int                `json:"idle_auto_compact_minutes"`
 	IdleAutoCompactTokens  int                `json:"idle_auto_compact_tokens"`
+	CacheKeepalive         bool               `json:"cache_keepalive"`
+	CacheKeepaliveMinutes  int                `json:"cache_keepalive_minutes"`
+	CacheKeepaliveMax      int                `json:"cache_keepalive_max"`
 	IdleReleaseMinutes     int                `json:"idle_release_minutes"`
 	// StartRequestedTasks is in effect, like MainTasksQuiet.
 	StartRequestedTasks     bool   `json:"start_requested_tasks"`
@@ -640,8 +736,14 @@ type assistantView struct {
 	InterjectBackground bool `json:"interject_background"`
 	// ClaudeInteractive is in effect, like DoneNeedsDelivery.
 	ClaudeInteractive bool `json:"claude_interactive"`
+	// Exact owner-action controls are always visible with their effective values on a hub that supports them.
+	OwnerReplyApproval         bool     `json:"owner_reply_approval"`
+	PersistentOwnerActionCards bool     `json:"persistent_owner_action_cards"`
+	OwnerApprovalPhrases       []string `json:"owner_reply_approval_phrases"`
 	// AgentTasks is in effect, like DoneNeedsDelivery.
 	AgentTasks bool `json:"agent_tasks"`
+	// TaskLessons is in effect, like DoneNeedsDelivery.
+	TaskLessons bool `json:"task_lessons"`
 	// CloseEndedTerminals is in effect, like DoneNeedsDelivery.
 	CloseEndedTerminals          bool `json:"close_ended_terminals"`
 	AgentAutoNaming              bool `json:"agent_auto_naming"`
@@ -675,6 +777,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	out := assistantView{WorkspaceNamingVersion: workspacenaming.Version, EffectiveWorkspaceRules: effectiveRules, Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: recordingDaysOf(v), MinutesDays: kb.MinutesDaysFor(minutesDaysSetting(v), recordingDaysOf(v)),
 		IdleAutoCompact: s.idleAutoCompact(ctx), IdleAutoCompactMinutes: s.idleAutoCompactMinutes(ctx), IdleAutoCompactTokens: s.idleAutoCompactTokens(ctx),
+		CacheKeepalive: cacheKeepaliveOf(v).Enabled, CacheKeepaliveMinutes: cacheKeepaliveOf(v).IntervalMinutes, CacheKeepaliveMax: cacheKeepaliveOf(v).MaxRequests,
 		IdleReleaseMinutes: s.idleReleaseMinutes(ctx), MeetingAttendanceDefault: meetingAttendanceOf(v), KBTopics: quietOn(v.KBTopics),
 		MeetingTranscriptionDefault: meetingTranscriptionDefaultOf(v), MeetingGlossary: meetingGlossaryOf(v),
 		MeetingTranscriptionExtension: meetingTranscriptionExtensionOf(v), MeetingTranscriptionReady: s.transcriptionReadyNow(),
@@ -689,7 +792,11 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		ReviewSamplePercent:          s.reviewSamplePercent(ctx),
 		InterjectBackground:          v.InterjectBackground != nil && *v.InterjectBackground,
 		ClaudeInteractive:            v.ClaudeInteractive != nil && *v.ClaudeInteractive,
+		OwnerReplyApproval:           ownerReplyApprovalOn(v),
+		PersistentOwnerActionCards:   persistentOwnerActionCardsOn(v),
+		OwnerApprovalPhrases:         ownerApprovalPhrasesForView(v),
 		AgentTasks:                   v.AgentTasks != nil && *v.AgentTasks,
+		TaskLessons:                  v.TaskLessons != nil && *v.TaskLessons,
 		CloseEndedTerminals:          v.CloseEndedTerminals != nil && *v.CloseEndedTerminals,
 		AgentAutoNaming:              quietOn(v.AgentAutoNaming),
 		AgentAutoNamingMax:           agentNamingLimit(v),
@@ -827,7 +934,7 @@ func (s *Service) warm(launcher string) {
 		return // no real session exists for a prewarm's external scope
 	}
 	if launcher == "" && !picked {
-		launcher = s.launcherNow(ctx)
+		launcher = s.mainLauncherNow(ctx)
 	}
 	if _, ok := s.device(ctx, machine); !ok {
 		return
@@ -840,7 +947,7 @@ func (s *Service) warm(launcher string) {
 	if picked {
 		err = s.applyPick(ctx, params, pick)
 	} else {
-		err = s.applyModel(ctx, "assistant", params)
+		err = s.applyModel(ctx, purposeMain, params)
 	}
 	if err != nil {
 		s.logf("warm model: %v", err)

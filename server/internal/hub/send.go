@@ -137,7 +137,7 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 	if !ok {
 		return
 	}
-	if id, _ := p["client_msg_id"].(string); strings.HasPrefix(id, assistantwire.FirstMessageIDPrefix) {
+	if id, _ := p["client_msg_id"].(string); strings.HasPrefix(id, assistantwire.FirstMessageIDPrefix) || strings.HasPrefix(id, proto.A2ADeliveryPrefix) {
 		// The manager's own, for a conversation's first message (assistant start.go humanStart): never an app's, so no
 		// later message carries one (and passes for that first message). Refused before anything else is done with it.
 		writeErrCode(w, http.StatusBadRequest, "client_msg_id_reserved", i18n.Err("hub-send.reserved_id"))
@@ -357,6 +357,14 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 				}
 			}
 			writeAssistantErr(w, err)
+			return
+		}
+		if target, _ := p["owner_approval_handled"].(string); target != "" {
+			// The manager verified and resolved this exact owner-action reply. It is
+			// not a conversation turn, so no node send or model execution follows.
+			delete(p, "owner_approval_handled")
+			body, _ := json.Marshal(map[string]any{"ok": true, "approval_reply": true, "interaction_id": target})
+			writeRaw(w, http.StatusOK, append(body, '\n'))
 			return
 		}
 		if kept, _ := p["model"].(string); strings.TrimSpace(asked) != "" && kept == strings.TrimSpace(asked) {

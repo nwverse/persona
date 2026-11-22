@@ -21,6 +21,15 @@ extension AppModel {
     /// opened from elsewhere names its own, as the top bar does.
     func assistantShownName(in key: SessionKey) -> String { otherAssistant(of: key)?.name ?? assistantShownName }
 
+    /// Whose page it is, as the Assistant chat's top bar says it (#9973) and the screenshot banner shows it (#12243):
+    /// the named manager on a hub with several, else the current assistant (with one too, as the sidebar's head shows
+    /// it), else the persona's name, "Persona" only as the last fallback. `assistantShownName` keeps the persona's
+    /// name with one assistant (the composer, calls, voice captions).
+    var assistantTitleName: String { assistantManager?.name ?? currentAssistant?.name ?? persona.name }
+
+    /// The same for conversation `key`: another assistant's conversation opened from elsewhere names its own.
+    func assistantTitleName(in key: SessionKey?) -> String { key.flatMap { otherAssistant(of: $0) }?.name ?? assistantTitleName }
+
     /// Reads group's roster again. A hub without one (404) has none; one that can't be read now keeps the last.
     func refreshManagerRoster(_ group: String) async {
         guard let api = api(group) else { return }

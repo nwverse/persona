@@ -114,12 +114,15 @@ def connection_report(sessions, since, until, identity=None):
                 reason = "unknown"
             h["closes"] += 1
             h["reasons"][reason] += 1
-        h = since.replace(minute=0, second=0, microsecond=0)
-        while h < until:
-            overlap = max(0, (min(end, until, h+dt.timedelta(hours=1))-max(start, since, h)).total_seconds())
-            if overlap:
-                hours[iso(h)]["connected_seconds"] += overlap
-            h += dt.timedelta(hours=1)
+        overlap_start, overlap_end = max(start, since), min(end, until)
+        if overlap_start >= overlap_end:
+            continue
+        hour = overlap_start.replace(minute=0, second=0, microsecond=0)
+        while hour < overlap_end:
+            next_hour = hour + dt.timedelta(hours=1)
+            overlap = min(overlap_end, next_hour) - max(overlap_start, hour)
+            hours[iso(hour)]["connected_seconds"] += overlap.total_seconds()
+            hour = next_hour
     return {"hourly": [dict(hour=h, **value) for h, value in sorted(hours.items())],
             "mean_completed_in_window_seconds": sum(durations)/len(durations) if durations else None,
             "completed_in_window_count": len(durations), "heartbeat_intervals": dict(heartbeats)}

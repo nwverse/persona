@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { createOpencodeHost } from '../lib/opencode.js'
+import { registerA2A } from '../lib/a2a.js'
 
 const T0 = Date.now() - 60_000
 
@@ -94,6 +95,26 @@ async function setup(t, opts = {}) {
   t.after(() => host.stop())
   return { n, d, host }
 }
+
+test('A2A tools in OpenCode use the executing session and its cancellation signal', async (t) => {
+  const { n, d, host } = await setup(t)
+  d.session('ses_a2a')
+  const ctx = fakeCtx()
+  host.register(ctx)
+  const tools = []
+  ctx.tool = { transform: async (define) => define({ add: (tool) => tools.push(tool) }) }
+  await registerA2A(ctx, host.runtime)
+  assert.deepEqual(tools.map((tool) => tool.name), ['a2a_sessions', 'a2a_get', 'a2a_send', 'a2a_report', 'a2a_cancel'])
+  await n.ready
+  await until('OpenCode A2A session listed', () => n.last('runtime.sessions')?.sessions.some(s => s.session_id === 'ses_a2a'))
+  const report = tools.find((tool) => tool.name === 'a2a_report')
+  const args = { task_id: 'task', message_id: 'report', state: 'completed', text: 'Test result' }
+  const stop = new AbortController()
+  assert.deepEqual(await report.execute(args, { sessionID: 'ses_a2a', signal: stop.signal }), { content: 'a2a_report ran' })
+  assert.deepEqual(n.toolCalls, [{ name: 'a2a_report', args, session_id: 'ses_a2a' }])
+  n.callTool = () => ({ is_error: true, content: [{ type: 'text', text: 'refused' }] })
+  await assert.rejects(report.execute(args, { sessionID: 'ses_a2a', signal: stop.signal }), /refused/)
+})
 
 test('one runtime per process lists the recent root sessions of the database', async (t) => {
   const d = fakeDb()
@@ -716,6 +737,15 @@ test('assistant mode registers loopback MCP, hides context snapshots, enforces m
     ],
   })
   const d = fakeDb()
+  const openDb = d.openDb
+  let inventoryUnavailable = false
+  d.openDb = async () => {
+    const handle = await openDb()
+    return { ...handle, all(sql, ...params) {
+      if (inventoryUnavailable && sql.startsWith('select id, directory')) throw new Error('inventory unavailable')
+      return handle.all(sql, ...params)
+    } }
+  }
   const host = createOpencodeHost(
     { openDb: d.openDb, pid: 4252, home: '/home/u' },
     { socketPath: n.path, retryMs: 20, pushDelayMs: 5, answerFirst: 'local' },
@@ -763,6 +793,20 @@ test('assistant mode registers loopback MCP, hides context snapshots, enforces m
   assert.equal(callRes.result.content[0].text, 'todo_list ran')
   assert.equal(n.toolCalls[0].assistant, true)
   assert.equal(n.toolCalls[0].session_id, 'ses_asst_v2')
+
+  const callAssistantTool = async () => fetch(mcpAdded[0].config.url, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...mcpAdded[0].config.headers },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'todo_list', arguments: {} } }),
+  }).then((response) => response.json())
+  // A native/TUI conversation unknown to Persona can use the same directory
+  // server too. It must not inherit the sole registered Assistant's identity.
+  d.session('ses_native_other', { directory: '/home/u/.persona/assistant' })
+  assert.equal((await callAssistantTool()).result.isError, true)
+  d.db.prepare('delete from session_v2 where id = ?').run('ses_native_other')
+  inventoryUnavailable = true
+  assert.equal((await callAssistantTool()).result.isError, true)
+  assert.equal(n.toolCalls.length, 1, 'ambiguous or unavailable inventory executes no hub tools')
+  inventoryUnavailable = false
 
   // Send with context snapshot + memory_dir; reject supervision_instructions.
   await assert.rejects(
@@ -816,4 +860,156 @@ test('assistant mode registers loopback MCP, hides context snapshots, enforces m
   await until('phone asked', () => ctx.calls.some((c) => c[0] === 'permission.reply' && c[1].requestID === 'p_phone'))
   assert.equal(n.asked.length, 1)
   assert.equal(ctx.calls.at(-1)[1].decision, 'once')
+})
+
+test('plugin refuses ambiguous assistant ownership and never retargets a cached MCP token; permissions and modes stay enforced', async (t) => {
+  const n = await startFakeNode(t, {
+    tools: [
+      { name: 'todo_list', description: 'List todos', input_schema: { type: 'object', properties: {} } },
+      { name: 'mail_send', description: 'Send mail', input_schema: { type: 'object', properties: {} }, shell: ['send-mail'] },
+    ],
+  })
+  const d = fakeDb()
+  const host = createOpencodeHost(
+    { openDb: d.openDb, pid: 4253, home: '/home/u' },
+    { socketPath: n.path, retryMs: 20, pushDelayMs: 5, answerFirst: 'local' },
+  )
+  t.after(() => host.stop())
+
+  const mcpAdded = []
+  let createSeq = 0
+  const ctx = fakeCtx('/home/u/.persona/assistant')
+  ctx.model = {
+    list: async () => [
+      { providerID: 'opencode-go', id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', variants: { low: {}, high: {} } },
+    ],
+  }
+  ctx.session.create = async (args) => {
+    ctx.calls.push(['session.create', args])
+    createSeq++
+    return { id: `ses_asst_multi_${createSeq}`, title: '' }
+  }
+  ctx.session.switchModel = async (args) => {
+    ctx.calls.push(['session.switchModel', args])
+  }
+  ctx.mcp = {
+    add: async (args) => {
+      mcpAdded.push(args)
+      return {}
+    },
+  }
+  host.register(ctx)
+  await n.ready
+  assert.equal(n.hello.caps.readonly, true)
+
+  // Start two Assistant chats sharing ~/.persona/assistant.
+  const s1 = await n.peer.call('session.start', {
+    cwd: '/home/u/.persona/assistant',
+    assistant: true,
+    model: 'opencode-go/claude-sonnet-4-6',
+  })
+  const s2 = await n.peer.call('session.start', {
+    cwd: '/home/u/.persona/assistant',
+    assistant: true,
+    model: 'opencode-go/claude-sonnet-4-6',
+  })
+  assert.equal(s1.session.session_id, 'ses_asst_multi_1')
+  assert.equal(s2.session.session_id, 'ses_asst_multi_2')
+  assert.equal(mcpAdded.length, 1, 'directory route is wired once')
+
+  // A directory-scoped token cannot distinguish the two native sessions.
+  const call1 = await fetch(mcpAdded[0].config.url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...mcpAdded[0].config.headers },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'todo_list', arguments: {} } }),
+  }).then((r) => r.json())
+  assert.equal(call1.result.isError, true)
+  assert.match(call1.result.content[0].text, /ambiguous/)
+  assert.equal(n.toolCalls.length, 0)
+
+  // A new message does not establish the identity of a later MCP call.
+  await n.peer.call('session.send', {
+    session_id: 'ses_asst_multi_1',
+    text: 'back to s1',
+    assistant: true,
+    memory_dir: '/home/u/.persona/assistant/memory',
+    client_msg_id: 'cm_m1',
+  })
+  await fetch(mcpAdded[0].config.url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...mcpAdded[0].config.headers },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'todo_list', arguments: {} } }),
+  }).then((r) => r.json())
+  assert.equal(n.toolCalls.length, 0)
+
+  // Relative AGENTS.md resolves against cwd (~/.persona/assistant), NOT memory_dir, so it must NOT auto-allow!
+  n.resolve = () => ({ allow: false, message: 'denied' })
+  ctx.emit('permission.asked', { id: 'p_rel_agents', sessionID: 'ses_asst_multi_1', action: 'write', resources: ['AGENTS.md'] })
+  await until('relative AGENTS.md asked phone', () => ctx.calls.some((c) => c[0] === 'permission.reply' && c[1].requestID === 'p_rel_agents'))
+  assert.equal(n.asked.length, 1, 'relative AGENTS.md must not auto-allow as memory write')
+  assert.equal(ctx.calls.at(-1)[1].decision, 'reject')
+
+  // Shell syntax bypass (`send-mail; echo ok` and `"send-mail"`) rejected even under bypassPermissions.
+  await n.peer.call('session.modes', { session_id: 'ses_asst_multi_1', permission_mode: 'bypassPermissions' })
+  ctx.emit('permission.asked', { id: 'p_gate_semi', sessionID: 'ses_asst_multi_1', action: 'shell', resources: ['send-mail; echo ok'] })
+  await until('semicolon gate rejected', () => ctx.calls.some((c) => c[0] === 'permission.reply' && c[1].requestID === 'p_gate_semi'))
+  assert.equal(ctx.calls.at(-1)[1].decision, 'reject')
+
+  // acceptEdits auto-allows write/edit without asking phone.
+  await n.peer.call('session.modes', { session_id: 'ses_asst_multi_1', permission_mode: 'acceptEdits' })
+  ctx.emit('permission.asked', { id: 'p_accept_edit', sessionID: 'ses_asst_multi_1', action: 'edit', resources: ['/w/foo.js'] })
+  await until('acceptEdits auto-allowed', () => ctx.calls.some((c) => c[0] === 'permission.reply' && c[1].requestID === 'p_accept_edit'))
+  assert.equal(ctx.calls.at(-1)[1].decision, 'once')
+  assert.equal(n.asked.length, 1)
+
+  // Effort-only modes change calls switchModel with the current session model and variant.
+  await n.peer.call('session.modes', { session_id: 'ses_asst_multi_1', effort: 'high' })
+  const sw = ctx.calls.filter((c) => c[0] === 'session.switchModel').at(-1)
+  assert.deepEqual(sw[1].model, { providerID: 'opencode-go', id: 'claude-sonnet-4-6', variant: 'high' })
+
+  // Effort-only modes on a DB-only/restarted session (no in-memory s.model) resolves model from DB and calls switchModel.
+  d.session('ses_db_only_effort', {
+    directory: '/w/app',
+    model: JSON.stringify({ providerID: 'opencode-go', id: 'claude-sonnet-4-6' }),
+  })
+  await n.peer.call('session.modes', { session_id: 'ses_db_only_effort', effort: 'low' })
+  const swDb = ctx.calls.filter((c) => c[0] === 'session.switchModel').at(-1)
+  assert.equal(swDb[1].sessionID, 'ses_db_only_effort')
+  assert.deepEqual(swDb[1].model, { providerID: 'opencode-go', id: 'claude-sonnet-4-6', variant: 'low' })
+
+  // Effort-only modes on a session with no model in memory or DB fails closed with bad_request (never silently records effort).
+  d.session('ses_no_model_effort', { directory: '/w/app', model: null })
+  await assert.rejects(
+    n.peer.call('session.modes', { session_id: 'ses_no_model_effort', effort: 'high' }),
+    (err) => err.code === 'bad_request',
+  )
+  assert.equal(host.sessions.get('ses_no_model_effort')?.effort, undefined)
+
+  // Forgetting the owner revokes its old URL; it never gains the sibling's identity.
+  ctx.emit('session.deleted', { sessionID: 'ses_asst_multi_1' })
+  await until('s1 forgotten', () => !host.assistants.has('ses_asst_multi_1'))
+  await until('old owner token revoked', async () => (await fetch(mcpAdded[0].config.url, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...mcpAdded[0].config.headers },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'todo_list', arguments: {} } }),
+  })).status === 404)
+  assert.equal(n.toolCalls.length, 0)
+  await n.peer.call('session.send', { session_id: 'ses_asst_multi_2', text: 'continue', assistant: true, client_msg_id: 'new-route' })
+  assert.equal(mcpAdded.length, 2)
+  const siblingCall = await fetch(mcpAdded[1].config.url, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...mcpAdded[1].config.headers },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'todo_list', arguments: {} } }),
+  }).then((r) => r.json())
+  assert.equal(siblingCall.result.isError, false)
+  assert.equal(n.toolCalls.at(-1).session_id, 'ses_asst_multi_2')
+
+  // Deleting the final surviving assistant session releases the MCP route (404).
+  ctx.emit('session.deleted', { sessionID: 'ses_asst_multi_2' })
+  await until('mcp route released', async () => {
+    const r = await fetch(mcpAdded[1].config.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...mcpAdded[1].config.headers },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'ping' }),
+    })
+    return r.status === 404
+  })
 })

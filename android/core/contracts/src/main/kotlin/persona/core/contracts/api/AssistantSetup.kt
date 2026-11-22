@@ -72,6 +72,10 @@ data class AssistantConfig(
     val manager: String? = null,
     @SerialName("default_permission_mode") val defaultPermissionMode: String? = null,
     @SerialName("permission_defaults") val permissionDefaults: AssistantPermissionDefaults? = null,
+    /** Exact one-shot owner replies and persistent proposals; null hides these controls on an older hub. */
+    @SerialName("owner_reply_approval") val ownerReplyApproval: Boolean? = null,
+    @SerialName("persistent_owner_action_cards") val persistentOwnerActionCards: Boolean? = null,
+    @SerialName("owner_reply_approval_phrases") val ownerReplyApprovalPhrases: List<String>? = null,
     /** Saved ordinary-conversation order; null or empty means activity time. Unknown ids stay for clients that know them. */
     @SerialName("conversation_order") val conversationOrder: List<String>? = null,
 ) {
@@ -114,6 +118,9 @@ data class AssistantConfigUpdate(
     @SerialName("main_supervises_own_tasks") val mainSupervisesOwnTasks: Boolean? = null,
     @SerialName("close_ended_terminals") val closeEndedTerminals: Boolean? = null,
     @SerialName("default_permission_mode") val defaultPermissionMode: String? = null,
+    @SerialName("owner_reply_approval") val ownerReplyApproval: Boolean? = null,
+    @SerialName("persistent_owner_action_cards") val persistentOwnerActionCards: Boolean? = null,
+    @SerialName("owner_reply_approval_phrases") val ownerReplyApprovalPhrases: List<String>? = null,
     /** Non-null writes the saved order; [] resets to activity time. Null leaves the setting unchanged. */
     @SerialName("conversation_order") val conversationOrder: List<String>? = null,
 ) {

@@ -235,6 +235,30 @@ func (s *Service) tryForgetNonPR(ctx context.Context, t Todo, pr, repo string, n
 	return true, note, err
 }
 
+// tryForgetOwnedNonPR applies a task-owned, completed non-PR closeout even when the stale PR exists and is unmerged.
+// It removes only the disproved association, then checks all remaining delivery evidence again.
+func (s *Service) tryForgetOwnedNonPR(ctx context.Context, t Todo, pr, outcome string) (handled bool, note string, err error) {
+	replacement, noPR, err := s.reportedTaskPR(ctx, t, pr)
+	if err != nil || (!noPR && replacement == "") {
+		return false, "", nil
+	}
+	if !noPR && replacement == pr {
+		return false, "", nil
+	}
+	if err := s.forgetTaskPR(ctx, t.ID, pr, replacement); err != nil {
+		return true, "", err
+	}
+	current, ok := s.todoNow(t.ID)
+	if !ok {
+		return true, "", fmt.Errorf("task %s no longer exists", t.ID)
+	}
+	if current.PRURL != replacement {
+		return true, "", fmt.Errorf("task %s: its delivery record changed during verification; retry the review", t.ID)
+	}
+	note, err = s.acceptedDeliveryError(ctx, current, "", outcome)
+	return true, note, err
+}
+
 // checkIssueDelivery verifies that a linked repository issue is closed before closing the task.
 func (s *Service) checkIssueDelivery(ctx context.Context, t Todo, issueURL, gate string) (string, error) {
 	if m := ciIssueURL.FindStringSubmatch(issueURL); m != nil {
@@ -296,7 +320,10 @@ func (s *Service) otherHostIssueDelivery(ctx context.Context, t Todo, issueURL s
 	return "", issueOpenError(s, t, issueURL, d.State)
 }
 
-// todoLinkedDeliveryRefs reads saved repository pull_request and issue links for task id.
+// todoLinkedDeliveryRefs reads saved repository pull_request and issue links for task id. Only delivery-role links are
+// returned for gate verification; reference links are display-only. A pull_request still stored with the default
+// delivery role that the forge can prove was opened by someone else is downgraded to reference first, so a merely
+// referenced foreign PR no longer blocks acceptance.
 func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id string) (prs, issues []string, err error) {
 	if _, ok := s.store().(todoRepositoryStore); !ok {
 		return nil, nil, nil
@@ -314,7 +341,20 @@ func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id string) (prs, i
 			}
 			switch l.Kind {
 			case "pull_request":
-				prs = append(prs, u)
+				role := l.Role
+				if role == "" {
+					role = repository.LinkRoleDelivery
+				}
+				if role == repository.LinkRoleDelivery && s.provenForeignPR(ctx, u) {
+					if err := s.setTodoLinkRole(ctx, id, u, repository.LinkRoleReference); err != nil {
+						s.logf("task %s: reference role for %s not saved: %v", id, u, err)
+					} else {
+						role = repository.LinkRoleReference
+					}
+				}
+				if role == repository.LinkRoleDelivery {
+					prs = append(prs, u)
+				}
 			case "issue":
 				key := strings.ToLower(u)
 				if !seenIssue[key] {
@@ -325,6 +365,41 @@ func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id string) (prs, i
 		}
 	}
 	return prs, issues, nil
+}
+
+// provenForeignPR reports whether u is a GitHub PR the forge can prove was opened by someone other than the
+// authenticated viewer. False covers every non-provable case (non-GitHub host, unconnected forge, unknown author):
+// the delivery default must stay conservative.
+func (s *Service) provenForeignPR(ctx context.Context, u string) bool {
+	m := ciPRURL.FindStringSubmatch(u)
+	if m == nil {
+		return false
+	}
+	own, ok := s.forge().(prOwnershipForge)
+	if !ok {
+		return false
+	}
+	number, _ := strconv.Atoi(m[2])
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	owned, known, err := own.PROwnedByViewer(cctx, m[1], number)
+	if err != nil {
+		s.logf("PR %s ownership not checked: %v", u, err)
+		return false
+	}
+	return known && !owned
+}
+
+// setTodoLinkRole rewrites the role of one saved link (by canonical URL) in a single store transaction, so a
+// concurrent edit to another link cannot be reverted. It is the supported alternative to deleting a misattributed
+// link.
+func (s *Service) setTodoLinkRole(ctx context.Context, id, canonicalURL, role string) error {
+	linksStore, ok := s.store().(todoRepositoryRoleStore)
+	if !ok {
+		return repository.Problem("store_unavailable")
+	}
+	_, err := linksStore.SetTodoRepositoryLinkRole(ctx, id, canonicalURL, role)
+	return err
 }
 
 // taskIsReadonly reports whether task t was planned as a read-only task.

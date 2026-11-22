@@ -17,12 +17,12 @@ final class PageAgentPushTests: XCTestCase {
     private var app: XCUIApplication!
     private var hub = ""
     private static let main = "server/b2e4d6f8-0000-4000-8000-000000000001"
-    /// "补齐网络层的单元测试", the chat a Brief card's waiting question names.
+    /// The tests to-do's chat, named by the Brief card's waiting question.
     private static let testsAgent = "macbook/a1f3c2d4-0000-4000-8000-000000000002"
-    /// "给天气 App 加主屏幕小组件", the widget to-do's Agent and one of the weather project's.
+    /// The widget to-do's Agent and one of the weather project's.
     private static let widgetAgent = "macbook/a1f3c2d4-0000-4000-8000-000000000001"
     private static let widgetTitle = "给天气 App 加主屏幕小组件"
-    /// "排查 /orders 接口变慢": a to-do in the list and its one Agent, of the same title.
+    /// The orders to-do in the list and its one Agent, sharing a title.
     private static let ordersAgent = "server/a1f3c2d4-0000-4000-8000-000000000004"
     private static let ordersTitle = "排查 /orders 接口变慢"
 

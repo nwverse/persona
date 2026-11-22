@@ -30,6 +30,12 @@ type startPick struct {
 	ompModelDefault bool
 }
 
+// explicitLauncher says whether the start's launcher is a choice the caller made that fitLauncher must refuse rather
+// than quietly replace: the caller named the launcher itself, or an explicit tier resolved to it. A tier a
+// start-defaults policy selected for this start counts too (#12032). A launcher only the agent.new default gave has
+// neither field and still gives way to one the computer has.
+func (p startPick) explicitLauncher() bool { return p.launcher != "" || p.tier != "" }
+
 // launchPick is what task t holds of its launch now, as pickOf reads it from a start's params, with its ultracode.
 func (t *PlanTask) launchPick() startPick {
 	return startPick{launcher: strings.TrimSpace(t.Launcher), effort: strings.TrimSpace(t.Effort),
@@ -208,13 +214,22 @@ func configuredStartAgentLookup(discovered, overrides []ConfiguredLauncher) func
 // allowAll: the Agents Persona itself starts on the launcher (agent_start, a planned task, a read-only one too) run with
 // Allow all, bypassPermissions: Claude Code's, and, by the owner's decision (#8141), those whose approval is a switch
 // Allow all turns on (Paseo's providers with Auto Accept: Grok and its other ACP providers, OpenCode), which otherwise
-// ask for every tool and leave a card the assistant never answers. Codex keeps its sandbox, on Paseo as in a terminal:
-// its tasks take the settled mode (tasks_permission.go). A start a person makes (New Agent) keeps the mode they chose.
-func (a startAgent) allowAll() bool { return a.agent == "claude" || a.autoAccept }
+// ask for every tool and leave a card the assistant never answers, and the Antigravity CLI (agy), whose worker would
+// otherwise stop at its own approval prompt in the pane (--dangerously-skip-permissions, node/workagent.go). Codex keeps
+// its sandbox, on Paseo as in a terminal: its tasks take the settled mode (tasks_permission.go). A start a person makes
+// (New Agent) keeps the mode they chose.
+func (a startAgent) allowAll() bool { return a.agent == "claude" || a.agent == "agy" || a.autoAccept }
 
-// fitLauncher holds params' launcher (resolveStart's) to what computer m can start. One the caller named that m does
-// not have is refused, naming the ones it has. One a default gave (the agent.new binding, a profile, a tier) gives way
-// to one m has (launcherInstead), with that launcher's own default model and the caller's effort; note says so in the
+// allowAllOver: a task's mode gives way to Allow all, always on Claude Code and an Auto Accept provider (their planned
+// tasks run in it), only when it has none on agy, whose start runs in the mode it names (node/workagent.go).
+func (a startAgent) allowAllOver(mode string) bool {
+	return a.allowAll() && (a.agent != "agy" || mode == "")
+}
+
+// fitLauncher holds params' launcher (resolveStart's) to what computer m can start. One the caller named, or an
+// explicit tier resolved to, that m does not have is refused, naming the ones it has: both are caller choices the
+// start must not quietly replace (#12032). One a default gave (only the agent.new binding or a profile) gives way to
+// one m has (launcherInstead), with that launcher's own default model and the caller's effort; note says so in the
 // user's language, for the task's why and the tool's answer. A list that can't be read (m offline, a timeout) counts
 // as having it, as mainChatFit does: nothing is refused or replaced on a guess. What the launcher runs comes from the
 // same list, so a caller changing permissions by it does not have to ask for it again.
@@ -254,7 +269,7 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 	if slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == name }) {
 		return "", agentOf(name), nil
 	}
-	if own.launcher != "" {
+	if own.explicitLauncher() {
 		return "", startAgent{}, i18n.Err("assistant-tasks.launcher_not_on_machine", i18n.Args{
 			"machine": firstNonEmpty(m.Name, m.ID), "launcher": name, "launchers": strings.Join(launcherNamesOn(m, list), ", "),
 		})

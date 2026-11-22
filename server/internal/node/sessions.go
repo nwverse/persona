@@ -56,12 +56,16 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	}
 	n.mu.Lock()
 	agents := make(map[string]host.Agent, len(n.agents))
+	agyConversations := map[string]string{}
 	agyRuntimeIDs := map[string]string{}
 	for id, agent := range n.agents {
 		agents[id] = agent
-		if agent.Agent == agyAgent && agent.AgentStatus != proto.StatusOffline && agent.AgentStatus != proto.StatusInterrupted {
+		if agent.Agent == agyAgent {
 			if conversation := n.agyConversationLocked(id, agent.PaneID); conversation != "" {
-				agyRuntimeIDs[id] = agyAgent + "-" + conversation
+				agyConversations[id] = conversation
+				if agent.AgentStatus != proto.StatusOffline && agent.AgentStatus != proto.StatusInterrupted {
+					agyRuntimeIDs[id] = agyAgent + "-" + conversation
+				}
 			}
 		}
 	}
@@ -115,7 +119,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			s.CodexRoute, s.CodexRouteNote = n.codexRoute(id) // codex_daemon.go
 		case a.Agent == traexAgent:
 			s.Title = n.traexTitle(id) // the thread's name; the terminal title adds " | <directory>"
-			s.CodexRoute, s.CodexRouteNote = codexRouteTerminal, "TRAEX 没有共享的 app-server"
+			s.CodexRoute, s.CodexRouteNote = codexRouteTerminal, "TRAE CLI 没有共享的 app-server"
 		}
 		n.placeIn(&s, a)
 		s.Ports = n.portsOf(a.PaneID)
@@ -239,12 +243,35 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			n.mergeOpencodeRow(&s) // its conversation is the plugin's (opencode.go)
 		case a.Agent == cursorAgent || a.Agent == agyAgent:
 			// Herdr drives the pane (agent.prompt, the keys). Agy can also read its verified conversation (workagent.go).
+			// Its mode, effort and model are its start's, so no chips (session.modes refuses, workAgentCalls); every other
+			// operation stays as for a terminal row that says none. Not on a stopped one, which says none (stoppedAgent).
+			if s.Capabilities == nil && s.Status != proto.StatusOffline && s.Status != proto.StatusInterrupted {
+				s.Capabilities = &proto.SessionCapabilities{Read: true, Send: true, Interrupt: true, Approve: true, Terminal: true, Modes: proto.CanModes(false)}
+			}
+			hasRuntimeRow := false
 			if runtimeID := agyRuntimeIDs[id]; runtimeID != "" {
 				seen[runtimeID] = true
-				if s.Model == "" {
-					if runtimeRow, _, ok := n.runtimes.rowOf(runtimeID); ok {
+				if runtimeRow, _, ok := n.runtimes.rowOf(runtimeID); ok {
+					hasRuntimeRow = true
+					if s.Model == "" {
 						s.Model = runtimeRow.Model
 					}
+					if s.ContextTokens == 0 && runtimeRow.ContextTokens > 0 {
+						s.ContextTokens = runtimeRow.ContextTokens
+					}
+					if s.ContextWindow == 0 && runtimeRow.ContextWindow > 0 {
+						s.ContextWindow = runtimeRow.ContextWindow
+					}
+					if s.OutputTokens == 0 && runtimeRow.OutputTokens > 0 {
+						s.OutputTokens = runtimeRow.OutputTokens
+					}
+				}
+			}
+			if a.Agent == agyAgent {
+				if hasRuntimeRow {
+					n.resolveAgyContextWindow(&s)
+				} else {
+					n.mergeAgyTranscript(&s, agyConversations[id])
 				}
 			}
 		case otherAgent(a):
@@ -305,6 +332,8 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				}
 				s.SetAliases(aliases)
 			}
+		} else if s.Agent == agyAgent {
+			n.resolveAgyContextWindow(s)
 		}
 		seen[s.SessionID] = true
 		if j != i {
@@ -360,6 +389,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		s := &out[i]
 		if !s.Assistant && s.PaneID != "" && s.Status != proto.StatusOffline && s.Status != proto.StatusInterrupted {
 			n.observedRunning(s.SessionID)
+			n.noteGatewayRunning(s)
 		}
 		if earlier[s.SessionID] || !n.sessionScopeAllows(s.Cwd) {
 			continue
@@ -525,6 +555,43 @@ func truncatedSnippet(s string) string {
 	return s + "…"
 }
 
+const (
+	pollFailBackoffFirst = 2 * time.Second
+	pollFailBackoffMax   = 30 * time.Second
+)
+
+// hostFailBackoff throttles repeated snapshot attempts for a host that is failing to answer (for example herdr on a
+// computer where it is not installed or not running). A watcher kick or a successful snapshot resets the host at once.
+type hostFailBackoff struct {
+	gap     map[string]time.Duration
+	retryAt map[string]time.Time
+}
+
+func newHostFailBackoff() *hostFailBackoff {
+	return &hostFailBackoff{gap: map[string]time.Duration{}, retryAt: map[string]time.Time{}}
+}
+
+func (b *hostFailBackoff) skip(kind string, now time.Time, kicked bool) bool {
+	if kicked {
+		delete(b.gap, kind)
+		delete(b.retryAt, kind)
+		return false
+	}
+	until, ok := b.retryAt[kind]
+	return ok && now.Before(until)
+}
+
+func (b *hostFailBackoff) record(kind string, failed bool, now time.Time) {
+	if !failed {
+		delete(b.gap, kind)
+		delete(b.retryAt, kind)
+		return
+	}
+	next := min(max(2*b.gap[kind], pollFailBackoffFirst), pollFailBackoffMax)
+	b.gap[kind] = next
+	b.retryAt[kind] = now.Add(next)
+}
+
 // pollAgents refreshes the hosts' state every second (only the ones due) and pushes sessions.changed when anything
 // visible changes. Each watcher host is snapshotted on its own stream's changes and at most every slowSnapshot while
 // its stream is live, independently of the other hosts (the combined engine): a herdr-core event never snapshots
@@ -533,6 +600,7 @@ func (n *Node) pollAgents(ctx context.Context) {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	last := map[string]time.Time{} // host kind → its last snapshot
+	backoff := newHostFailBackoff()
 	var listed time.Time
 	for {
 		sigs := n.signalSnapshot()
@@ -540,8 +608,12 @@ func (n *Node) pollAgents(ctx context.Context) {
 		if !ok {
 			return
 		}
+		now := time.Now()
 		var due []host.Host
 		for _, h := range n.hosts.All() {
+			if backoff.skip(h.Kind(), now, kicked[h.Kind()]) {
+				continue
+			}
 			if n.hostDue(h.Kind(), last[h.Kind()], kicked[h.Kind()]) {
 				due = append(due, h)
 			}
@@ -550,10 +622,11 @@ func (n *Node) pollAgents(ctx context.Context) {
 		// running) does not stop the list: runtimes, the assistant and the transcripts do not need it. Its agents stay
 		// as last seen (refreshHosts).
 		if len(due) > 0 {
-			_ = n.refreshHosts(ctx, due...)
-			now := time.Now()
+			failed, _ := n.refreshHostsWithFailures(ctx, due...)
+			now = time.Now()
 			for _, h := range due {
 				last[h.Kind()] = now
+				backoff.record(h.Kind(), failed[h.Kind()], now)
 			}
 		}
 		list := n.sessionList(ctx, false)
