@@ -186,6 +186,12 @@ nonisolated enum TodosListLayout {
     /// the rank, `TodoFiling.ordered`).
     static func key(_ row: TodoFiled) -> String { (row.manager ?? "") + "/" + row.id }
 
+    /// The sections below Needs you, in the list's order: the ones Group by Project files under their projects'
+    /// headings. Needs you heads the list and Someday and Done today fold after the last card, so no project heading
+    /// names their rows' projects.
+    static let underProjects = [TodoListSection.working, TodoListSection.waiting, TodoListSection.todo,
+                                TodoListSection.justFinished]
+
     static func layout(_ input: Input) -> Output {
         let carried = TodoCountsFallback.carried(input.rows)
         var rows = input.rows.filter { !carried.contains($0.id) }
@@ -249,8 +255,7 @@ nonisolated enum TodosListLayout {
             groups.append(TodosListGroup(id: TodoListSection.needsYou, title: StateName.todoNeedsYou, count: needs.count,
                                          needs: true, keys: sorted(needs), folds: [canWait].compactMap { $0 }))
         }
-        let rest = [TodoListSection.working, TodoListSection.waiting, TodoListSection.todo, TodoListSection.justFinished]
-            .filter(shown.contains)
+        let rest = underProjects.filter(shown.contains)
         if input.byProject {
             groups += byProject(rest.flatMap { bySection[$0] ?? [] }, input)
         } else {
@@ -422,8 +427,8 @@ nonisolated enum TodoRowContentLogic {
         if filed.inactive { facts.append(StateName.todoInactive) }
         if let steps = view?.steps, steps.total > 0 { facts.append(words("Steps \(steps.done)/\(steps.total) [To-dos List]")) }
         // The project only beside another fact: alone it is not worth a line, and Group by Project's heading says it for
-        // every row but those Needs you keeps at the top.
-        let underItsProject = byProject && ![TodoListSection.needsYou, TodoListSection.canWait].contains(filed.section)
+        // the rows filed under it, never Needs you's at the top nor those of the Someday and Done today folds.
+        let underItsProject = byProject && TodosListLayout.underProjects.contains(filed.section)
         if !facts.isEmpty, !underItsProject, let project = item.project, !project.isEmpty {
             facts.insert(projectName(project), at: 0)
         }

@@ -3256,7 +3256,9 @@ The lens then jumped on by 33–50 ms of its 0.65 s glide in one frame, by up to
   while the pushed page is in front the list's foot inset loses the toolbar, the list is held to that shorter end, and
   the toolbar's inset comes back without moving it up again. `TodoListView.backToTheEnd` scrolls a list that rested at
   its end to its last row's top for a second after the pop, which the list cannot reach, so it stops at its end;
-  `testTheListStaysWhereItRested` swipes to the end and fails without it.
+  `testTheListStaysWhereItRested` swipes to the end and fails without it. Where the list rested is read when a scroll
+  phase ends; a move the page makes itself (`scrollTo`, a search narrowing the list) ends none, so it clears the value
+  (`TodoListSight.moved`), or Back would pull a list the page had moved to its end.
 - **A section header's id scrolls its rows to the top, not the header.** `ScrollViewProxy.scrollTo(<header id>,
   anchor: .top)` in an inset grouped `List` left the header under the navigation bar. To put a list at its top, scroll
   its first row to the foot of what is in sight (`anchor: .bottom`): the list cannot go that far up and stops at its top.

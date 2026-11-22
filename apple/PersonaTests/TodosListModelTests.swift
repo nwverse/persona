@@ -360,12 +360,41 @@ struct TodosListModelTests {
         #expect(list.choice == .all && list.groups.map(\.id) == [TodoListSection.working, TodoListSection.todo])
     }
 
-    /// Group by Project leaves a row's project off line 3 only where its heading says it: the calm list's one card and
-    /// Done's days have no project headings, so their rows keep it.
+    /// Back puts a list back at its end only while a scroll left it resting there (`TodoListView.backToTheEnd`). A
+    /// choice's scroll to the top and the search narrowing the list move it without ending a scroll phase, so the page
+    /// says so (`moved`): a to-do then opened without a touch on the list (VoiceOver, the keyboard, a link) must not pull
+    /// the list to its end on Back.
+    @Test func aListThePageMovedForgetsWhereItRested() {
+        let sight = TodoListSight()
+        sight.atEnd = true
+        sight.rested()
+        #expect(sight.restedAtEnd, "a scroll came to rest at the list's end")
+        sight.atEnd = false
+        sight.moved()
+        #expect(!sight.restedAtEnd, "a choice put the list at its top")
+        sight.atEnd = true
+        sight.moved()
+        #expect(!sight.restedAtEnd, "only a scroll's rest says the list rests at its end")
+        sight.rested()
+        #expect(sight.restedAtEnd, "the next rest at the end counts again")
+        sight.atEnd = false
+        sight.rested()
+        #expect(!sight.restedAtEnd, "a rest short of the end")
+    }
+
+    /// Group by Project leaves a row's project off line 3 only where its heading says it: the calm list's one card,
+    /// Done's days and the Someday and Done today folds after the last card have no project headings, so their rows
+    /// keep it.
     @Test func aRowKeepsItsProjectWhereNoHeadingSaysIt() async throws {
         let hub = FakeHub()
+        // A Someday row with steps, its project beside them ("Kyoto trip · Steps 1/4").
+        let someday = String(TodoViewJSON.view(TodoListSection.someday, line: "rest").dropLast()) + #","steps":{"done":1,"total":4}}"#
         hub.on("GET", "/api/v1/todos", json: Self.list([
             TodoViewJSON.row("w", extra: #""project":"kyoto""#, view: TodoViewJSON.view(TodoListSection.working, inactive: "idle")),
+            TodoViewJSON.row("s", extra: #""project":"kyoto""#, view: someday),
+            // Closed at the test clock's very moment: today in every time zone.
+            TodoViewJSON.row("t", extra: #""project":"kyoto","done_at":"2027-01-15T08:00:00Z""#,
+                             view: TodoViewJSON.view(TodoListSection.done, inactive: "idle")),
             TodoViewJSON.row("d", extra: #""project":"kyoto","done_at":"2026-11-21T08:00:00Z""#,
                              view: TodoViewJSON.view(TodoListSection.done, inactive: "idle"))]))
         hub.on("GET", "/api/v1/todos/places", json: Self.places)
@@ -379,6 +408,12 @@ struct TodosListModelTests {
         list.byProject = true
         #expect(list.groups.contains { $0.id == "project:kyoto" })
         #expect(list.row("/w")?.content.caption?.contains("Kyoto trip") == false, "its heading says it")
+        #expect(Array(list.groups.map(\.id).suffix(2)) == ["tail:" + TodoListSection.someday, "tail:" + TodoListSection.done],
+                "Someday and Done today fold after the last card: \(list.groups.map(\.id))")
+        #expect(list.row("/s")?.content.caption?.contains("Kyoto trip") == true,
+                "Someday's fold: \(list.row("/s")?.content.caption ?? "nil")")
+        #expect(list.row("/t")?.content.caption?.contains("Kyoto trip") == true,
+                "Done today's fold: \(list.row("/t")?.content.caption ?? "nil")")
         list.choice = .done
         #expect(list.row("/d")?.content.caption?.contains("Kyoto trip") == true, "Done is listed by day: no heading says it")
         #expect(!TodosListModel.grouped(true, calm: true, choice: .all, searching: false), "the calm list is one card")

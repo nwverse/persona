@@ -71,7 +71,7 @@ struct TodoListView: View {
                 if phase != .idle { model.settleArrivals() } // nothing fades in under a finger
                 // Where a scroll came to rest; not the idle a page is made in, before its rows are drawn.
                 if phase == .idle, old != .idle {
-                    sight.restedAtEnd = sight.atEnd
+                    sight.rested()
                     if let top = sight.top(in: model.groups) { workspace.rested(workspace.place, at: top, shown: shownHere) }
                 }
             }
@@ -91,6 +91,7 @@ struct TodoListView: View {
             // heading in sight (a heading's own id puts its rows at the top, the heading under the bar). Its guard line
             // starts in sight, so the subtitle waits until it scrolls away again.
             .onChange(of: model.choice) { _, _ in
+                sight.moved()
                 lines.guardGone = false
                 let target = TodosTopLines.first(offline: TodosTopLines.offline(app), hidden: model.hiddenNeeds)
                     ?? model.groups.first.map { $0.drawnKeys.first ?? TodosSectionHeader.id($0.id) }
@@ -127,6 +128,8 @@ struct TodoListView: View {
         .modifier(TodosSubtitle(model: model, lines: lines))
         .modifier(TodosViewOptions(model: model))
         .pageSearchable(text: $model.query, placement: Self.searchPlacement, prompt: String(localized: "Search To-dos [To-dos Search]"))
+        // The search narrows the list or gives it back: it no longer rests where a scroll left it.
+        .onChange(of: model.query) { _, _ in sight.moved() }
         .modifier(TodosFootBar(model: model, creating: $creating))
         .sheet(item: Binding(get: { model.dating.flatMap { key in model.item(key).map { DueTarget(key: key, item: $0) } } },
                              set: { model.dating = $0?.key })) { target in
@@ -837,8 +840,16 @@ struct TodoListEdges: Equatable {
     var covered: CGFloat = 0
     /// The list is at its very end now; it came to rest there; a finger moves it.
     var atEnd = false
-    var restedAtEnd = false
+    private(set) var restedAtEnd = false
     var scrolling = false
+
+    /// A scroll came to rest: Back from a to-do pushed over the list puts a list resting at its end there again.
+    func rested() { restedAtEnd = atEnd }
+
+    /// The page moved the list itself, which ends no scroll phase: a choice's scroll to the top, the search narrowing
+    /// the list or giving it back. Where a scroll last rested no longer holds, so Back leaves the list where it is; a
+    /// to-do opened without a touch on the list (VoiceOver, the keyboard, a link) must not put it back at its end.
+    func moved() { restedAtEnd = false }
 
     /// The first row whose middle is clear of the bars.
     func top(in groups: [TodosListGroup]) -> String? {

@@ -59,7 +59,8 @@ final class TodosListModel {
             var item: TodoItem
             var view: TodoSummary?
             var filed: TodoFiled
-            /// Under its project's heading (`TodosListModel.grouped`): line 3 leaves the project out.
+            /// The list draws project headings (`TodosListModel.grouped`): line 3 leaves the project out of a row filed
+            /// under one (`TodosListLayout.underProjects`).
             var grouped: Bool
             var projects: [TodoProject]
             /// The owner's write on it still on the device (`TodoOutbox`): a tick waiting out its Undo, a new to-do.
@@ -166,8 +167,8 @@ final class TodosListModel {
     /// Nothing to list under the current choice or search.
     var isEmpty: Bool { layout.groups.allSatisfy { $0.keys.isEmpty && $0.folds.isEmpty && $0.tail == nil } }
 
-    /// The rows sit under their project's heading: Group by Project, where the list draws the headings (not the calm
-    /// list's one card, nor under Needs You or Done, which draw one section or the days).
+    /// The list draws project headings: Group by Project, where the list draws them (not the calm list's one card, nor
+    /// under Needs You or Done, which draw one section or the days). Needs you's rows and the tail folds' sit under none.
     nonisolated static func grouped(_ byProject: Bool, calm: Bool, choice: TodosChoice, searching: Bool) -> Bool {
         byProject && !calm && (searching || TodosFilter.groupingNote(choice) == nil)
     }

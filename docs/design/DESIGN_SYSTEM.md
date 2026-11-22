@@ -939,8 +939,8 @@ The web Agent conversation header's **Session overview** list button toggles a p
     and Waiting by date) and Priority (优先级: high, then normal, then low, the hub's order inside each); Suggested is a
     sort's name only, apart from suggested steps (建议), and choosing it is the reset. Then **Group by Project**, one
     checkmarked item as Mail's Group by Sender: below Needs you, a group per project in place of the other sections, the
-    rows under a project's heading without their project on line 3 (rows with no such heading, in the calm list or
-    Done's days, keep it); never offered in the calm list, greyed under Needs You and Done with why in its section's
+    rows under a project's heading without their project on line 3 (rows with no such heading, in Needs you, the
+    Someday and Done today folds after the last card, the calm list or Done's days, keep it); never offered in the calm list, greyed under Needs You and Done with why in its section's
     heading ("Needs you is one section"), since a disabled item's own words are too faint to read on the menu. Needs
     you and Can wait keep the hub's order, deadlines first, and closed to-dos their newest first (a closed row shows
     neither a due day nor a priority), under every sort and grouping. There is no Reset View, Group By › Due Date or Show toggle: Today, Upcoming and

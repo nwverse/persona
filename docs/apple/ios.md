@@ -2147,8 +2147,9 @@ built in stages behind the hub's `todo_view`; this section grows with it.
     (Suggested, Recently Changed, Due Date, Priority), then Group by Project, a `Toggle` left out while the list is calm
     and a disabled `Button` under Needs You and Done in a `Section` headed with `TodosFilter.groupingNote` (a disabled
     item's subtitle is too faint to read); `TodosListLayout` keeps Needs you and Can wait in the hub's order and closed
-    rows newest first under every sort, and line 3 drops the project only where a project's heading is drawn
-    (`TodosListModel.grouped`). A high-priority row's title is
+    rows newest first under every sort, and line 3 drops the project only where a project's heading is drawn over
+    the row (`TodosListModel.grouped`, `TodosListLayout.underProjects`: never in Needs you or the Someday and Done
+    today folds). A high-priority row's title is
     `TodoListRow.title`, "!" in `Theme.cautionText` before it, and its spoken label says "High priority". The guard line
     (`TodosGuardLine`, `TodosListModel.hiddenNeeds`) is the first line while a choice hides what needs the owner;
     once its frame in the list is under what the bars cover (`onGeometryChange` against the list's top inset;
@@ -2185,7 +2186,10 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   made anew puts its list back there once, and a page a to-do popped back to keeps its own place. A list that rested
   at its very end is put at its end again after the pop (`TodoListView.backToTheEnd`, `TodoListEdges`): the to-do page
   has no foot toolbar, so while it is in front the list's end is that much shorter and a list at its end is held to
-  it; `testTheListStaysWhereItRested` swipes the list to its end for it. The sort and Group by
+  it; `testTheListStaysWhereItRested` swipes the list to its end for it. Only a scroll's rest says so
+  (`TodoListSight.rested`): a choice's scroll to the top and the search narrowing the list end no scroll phase, so they
+  clear it (`TodoListSight.moved`), and a to-do then opened without a touch on the list (VoiceOver, the keyboard, a
+  link) leaves the list where it is on Back. The sort and Group by
   Project are kept on the device (`todos.v1.sort`, `todos.v1.byProject`, written back from the model whenever ⋯
   changes them; a sort this build does not offer reads as Suggested); the Filter's choice and the search's words are
   not.
