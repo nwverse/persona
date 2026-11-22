@@ -2748,7 +2748,19 @@ off stops refreshes without breaking an already proxied conversation.
 The node resolves the launcher's original endpoint using its existing configuration
 resolution, then places a loopback `ANTHROPIC_BASE_URL` in that process's environment
 and final settings env. Policy or launcher settings that override it simply bypass
-the proxy and cannot produce refreshes. Ordinary API requests and streamed replies
+the proxy and cannot produce refreshes. A Persona-managed launcher's `personad launch`
+puts the provider's own `ANTHROPIC_BASE_URL` back into the process environment, so on
+such a launcher only the settings env names the proxy; check the start's settings file
+(`launcher-settings/assistant-compact-<id>.json`) or the node's loopback listeners, not
+the process environment, to see whether a conversation is proxied.
+
+The proxy is mounted only when a process starts, so the role must come with whatever
+starts it. The manager attests it on every send it makes into an existing conversation
+(`assistant.send`, `session.send`, `session.send_once`, A2A delivery): the owner's
+messages, relays, a leader's supervision digests and Inbox continuations alike. Any
+value a caller put there is replaced. A cold compaction restart reads the current role
+from `assistant.model`. A process started without the role (by an older manager)
+runs unproxied until its next start. Ordinary API requests and streamed replies
 are forwarded without changing payload bytes. Provider errors are returned as-is;
 transport failures return a generic 502 without logging upstream error text.
 
