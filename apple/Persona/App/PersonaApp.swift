@@ -18,6 +18,7 @@ struct PersonaApp: App {
                 .personaCallCover() // the call to Persona's page and the bar back to it (#9290, CallScreen.swift)
                 .urgentCallCover() // an answered urgent call's page, over everything (UrgentCallView.swift)
                 .overlay { MeetingFloatingWindow() } // a meeting recording with its room put away (#8731 V5)
+                .locationAlwaysOffer() // once, after a location read failed in the background (#13200)
                 #endif
                 #if DEBUG && os(iOS)
                 .task { ProductionContinuityShadow.shared.install() } // Lazy: no core is created until a real input arrives.
@@ -129,6 +130,7 @@ struct PersonaApp: App {
                 // call later can serve it instead of HealthKit's inaccessible-database error.
                 Task { await HealthTool.refreshSnapshot() }
                 SiriCalls.askOnce(paired: model.hub != nil) // a build with app.siri_calls only (#9290)
+                BackgroundLocation.shared.cameToFront() // offers Always once after a read refused in the background
                 #endif
             } else if new == .background {
                 #if os(iOS)
@@ -181,6 +183,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // Here, for HealthKit to wake the app after a workout (#2526); only a build with background delivery reads the
         // reports' small state file this early.
         if WorkoutReports.deliversInBackground { WorkoutReports.shared.observe() }
+        // Here too, for a launch iOS made for a significant location change: the Always session and the service are kept
+        // only a few seconds after a relaunch (#13200). Asks nothing; one manager whose level arrives in a callback.
+        BackgroundLocation.shared.launch()
         // Urgent calls' PushKit registry, when they are on: a VoIP push that launches the app reaches only one made now.
         UrgentCallPush.shared.start()
         #endif
