@@ -156,7 +156,7 @@ func TestBotLoadLiveCLIProfileRecovery(t *testing.T) {
 	w.store.recover()
 	w.advance()
 	w.h.botAPI()
-	eventually(t, time.Second, "live connector profile replacement", func() bool { return w.h.connectors.Get("larkcli").(*larkconnector.Connector).Profile() == "other" })
+	eventually(t, time.Second, "live connector profile replacement", func() bool { c := currentRecoveryCLI(w.h); return c != nil && c.Profile() == "other" })
 	if cfg, err := w.h.assistantLark(w.ctx); err != nil || cfg.CLI == nil || cfg.CLI.Profile != "other" {
 		t.Fatalf("assistant profile did not recover: %+v %v", cfg, err)
 	}
@@ -177,7 +177,7 @@ func TestBotLoadLiveCLIProfileRecovery(t *testing.T) {
 	}
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		if w.h.connectors.Get("larkcli").(*larkconnector.Connector).Profile() == "other" {
+		if c := currentRecoveryCLI(w.h); c != nil && c.Profile() == "other" {
 			return
 		}
 		time.Sleep(time.Millisecond)
@@ -234,7 +234,7 @@ func TestBotLoadCLIRecoveryPreservesConnectorSettings(t *testing.T) {
 			w.store.recover()
 			w.advance()
 			w.h.botAPI()
-			eventually(t, time.Second, "recovered connector profile", func() bool { return w.h.connectors.Get("larkcli").(*larkconnector.Connector).Profile() == tc.want })
+			eventually(t, time.Second, "recovered connector profile", func() bool { c := currentRecoveryCLI(w.h); return c != nil && c.Profile() == tc.want })
 			current := w.h.connectors.Get("larkcli").(*larkconnector.Connector)
 			if string(current.Options()) != before {
 				t.Fatalf("options lost: before=%s after=%s", before, current.Options())
@@ -300,7 +300,8 @@ func TestBotLoadManagedCLIRecoverySynchronizes(t *testing.T) {
 	w.advance()
 	w.h.botAPI()
 	eventually(t, 2*time.Second, "managed CLI synchronization and replacement", func() bool {
-		return w.h.connectors.Get("larkcli").(*larkconnector.Connector).Profile() == managedLarkCLIProfile
+		c := currentRecoveryCLI(w.h)
+		return c != nil && c.Profile() == managedLarkCLIProfile
 	})
 	raw, err := os.ReadFile(log)
 	if err != nil {

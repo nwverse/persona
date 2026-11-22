@@ -16,6 +16,12 @@ import (
 	"github.com/nwverse/persona/server/internal/lark"
 )
 
+// Registry.Remove/Add is an asynchronous replacement; polling may observe the gap.
+func currentRecoveryCLI(h *Manager) *cliconnector.Connector {
+	c, _ := h.connectors.Get("larkcli").(*cliconnector.Connector)
+	return c
+}
+
 func recoveryCLI(t *testing.T, w *botLoadWorld) string {
 	t.Helper()
 	bin, err := filepath.Abs(filepath.Join("..", "larkcli", "testdata", "fake-lark-cli.sh"))
@@ -75,7 +81,10 @@ exec "$LARKCLI_RECOVERY_REAL" "$@"
 	}
 	// Calls on the old live connector request the second attempt, even though bot settings are cached.
 	eventually(t, 8*time.Second, "ordinary CLI calls retry managed profile synchronization", func() bool {
-		c := w.h.connectors.Get("larkcli").(*cliconnector.Connector)
+		c := currentRecoveryCLI(w.h)
+		if c == nil {
+			return false
+		}
 		_, _ = c.Call(w.ctx, "larkcli_chats", json.RawMessage(`{}`))
 		return count() == 2
 	})
@@ -98,7 +107,8 @@ exec "$LARKCLI_RECOVERY_REAL" "$@"
 		t.Fatal(err)
 	}
 	eventually(t, 2*time.Second, "retried managed synchronization completes", func() bool {
-		return w.h.connectors.Get("larkcli").(*cliconnector.Connector).Profile() == managedLarkCLIProfile
+		c := currentRecoveryCLI(w.h)
+		return c != nil && c.Profile() == managedLarkCLIProfile
 	})
 
 	if got := count(); got != 2 {
@@ -128,13 +138,14 @@ func (s *dualLarkReadStore) Setting(ctx context.Context, key string, out any) (b
 
 func TestLarkCLIDualSettingsOutageRestoresDurableSwitches(t *testing.T) {
 	for _, tc := range []struct {
-		name, override, chosen string
-		enabled, missing       bool
+		name, override, chosen               string
+		enabled, missing, missingPreferences bool
 	}{
 		{name: "manual_disabled", chosen: "other"},
 		{name: "override_disabled", override: "fixed", chosen: "other"},
 		{name: "known_empty_disabled", missing: true},
 		{name: "manual_enabled", chosen: "other", enabled: true},
+		{name: "both_records_missing", enabled: true, missing: true, missingPreferences: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newBotLoadWorld(t, true, false)
@@ -147,8 +158,10 @@ func TestLarkCLIDualSettingsOutageRestoresDurableSwitches(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := w.store.botStore.PutSetting(w.ctx, connectorSettingsKey, cs); err != nil {
-				t.Fatal(err)
+			if !tc.missingPreferences {
+				if err := w.store.botStore.PutSetting(w.ctx, connectorSettingsKey, cs); err != nil {
+					t.Fatal(err)
+				}
 			}
 			st := &dualLarkReadStore{Store: w.store}
 			st.failed.Store(true)
@@ -183,10 +196,13 @@ func TestLarkCLIDualSettingsOutageRestoresDurableSwitches(t *testing.T) {
 			}
 			eventually(t, 8*time.Second, "dual-key recovery restores durable connector state", func() bool {
 				w.h.listedConnectors(w.ctx, true)
-				c := w.h.connectors.Get("larkcli").(*cliconnector.Connector)
-				return c.Profile() == want && strings.Contains(string(c.Options()), "oc_saved") && w.h.connectors.Enabled("larkcli") == tc.enabled
+				c := currentRecoveryCLI(w.h)
+				if c == nil {
+					return false
+				}
+				return c.Profile() == want && (strings.Contains(string(c.Options()), "oc_saved") != tc.missingPreferences) && w.h.connectors.Enabled("larkcli") == tc.enabled && !w.h.larkCLIRecovery.preferencesUnread.Load()
 			})
-			if w.h.connectors.Enabled("larkcli") != tc.enabled || w.h.connectors.Feeds("larkcli", connector.FeedInbox) {
+			if w.h.connectors.Enabled("larkcli") != tc.enabled || w.h.connectors.Feeds("larkcli", connector.FeedInbox) != tc.missingPreferences {
 				t.Error("recovery changed durable connector/feed switches")
 			}
 			if !tc.enabled {
@@ -194,16 +210,27 @@ func TestLarkCLIDualSettingsOutageRestoresDurableSwitches(t *testing.T) {
 					t.Fatalf("disabled connector ran during preference recovery: %s", raw)
 				}
 			} else {
-				eventually(t, time.Second, "enabled recovered connector resumes", func() bool { raw, _ := os.ReadFile(log); return strings.Contains(string(raw), "--profile other ") })
+				eventually(t, time.Second, "enabled recovered connector resumes", func() bool {
+					raw, _ := os.ReadFile(log)
+					if want == "" {
+						return len(raw) > 0 && !strings.Contains(string(raw), "--profile ")
+					}
+					return strings.Contains(string(raw), "--profile "+want+" ")
+				})
 			}
 			if st.connectorReads.Load() != initialReads+1 {
 				t.Fatalf("connector preference recovery reads: initial=%d final=%d", initialReads, st.connectorReads.Load())
 			}
 			var durable connectorSettings
-			if _, err := w.store.botStore.Setting(w.ctx, connectorSettingsKey, &durable); err != nil {
+			found, err := w.store.botStore.Setting(w.ctx, connectorSettingsKey, &durable)
+			if err != nil {
 				t.Fatal(err)
 			}
-			if durable.Switch["larkcli"] != tc.enabled || durable.Inbox["larkcli"] || !strings.Contains(string(durable.Options["larkcli"]), "oc_saved") {
+			if tc.missingPreferences {
+				if found {
+					t.Fatal("missing preferences were persisted as a quarantine")
+				}
+			} else if durable.Switch["larkcli"] != tc.enabled || durable.Inbox["larkcli"] || !strings.Contains(string(durable.Options["larkcli"]), "oc_saved") {
 				t.Fatal("recovery rewrote durable preferences")
 			}
 		})
