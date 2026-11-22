@@ -259,6 +259,8 @@ func codexSourceConfig(argv, env []string, cwd, home string) (map[string]any, er
 			profileFlag = argv[i]
 		case strings.HasPrefix(arg, "--profile="):
 			profileFlag = strings.TrimPrefix(arg, "--profile=")
+		case strings.HasPrefix(arg, "-c") && arg != "-c", strings.HasPrefix(arg, "-p") && arg != "-p":
+			return nil, errors.New("compact provider options are runtime-owned")
 		}
 	}
 	for _, override := range overrides {

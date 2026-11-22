@@ -84,6 +84,8 @@ func TestCodexModelSourceUsesEffectiveDestination(t *testing.T) {
 		{"official provider URL", "*.example.com", strings.ReplaceAll(sourceCodexProvider, "https://gw.example.com/v1", "https://api.openai.com/v1"), nil, false},
 		{"CLI overrides to official", "*.example.com", sourceCodexProvider, []string{"-c", `model_providers.custom.base_url="https://api.openai.com/v1"`}, false},
 		{"CLI overrides to gateway", "*.example.com", strings.ReplaceAll(sourceCodexProvider, "https://gw.example.com/v1", "https://api.openai.com/v1"), []string{"-c", `model_providers.custom.base_url="https://gw.example.com/v1"`}, true},
+		{"compact config override", "*.example.com", sourceCodexProvider, []string{`-cmodel_providers.custom.base_url="https://api.openai.com/v1"`}, false},
+		{"compact profile option", "*.example.com", sourceCodexProvider, []string{"-pother"}, false},
 		{"built-in provider", "*.example.com", `model_provider="openai"`, nil, false},
 		{"remote app-server", "*.example.com", sourceCodexProvider, []string{"--remote", "ws://localhost:1234"}, false},
 		{"profile selects official", "*.example.com", sourceCodexProvider + "\n[profiles.official]\nmodel_provider='openai'\n", []string{"--profile", "official"}, false},
