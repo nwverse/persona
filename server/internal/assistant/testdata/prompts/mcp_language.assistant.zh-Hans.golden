@@ -3878,7 +3878,7 @@
   },
   {
     "name": "decision_record",
-    "description": "Record entry {text,scope?,decision:{options[],selected[],rejected[],reason,reversible:bool|null}}. user_quotes need quote and source {machine,session,msg_uuid|card_id|file,line}; quotes stay inferred.",
+    "description": "Record {text,scope?,decision:{options[],selected[],rejected[],reason,reversible:bool|null}}. user_quotes[]:{quote,source:{machine,session,msg_uuid|card_id|file,line}} stay inferred.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3914,7 +3914,7 @@
   },
   {
     "name": "decisions_query",
-    "description": "List decisions with after paging. Scope filters executor, machine[], project[] and personal.",
+    "description": "Decisions; scope:{executor,machine[],project[],personal}.",
     "input_schema": {
       "type": "object",
       "properties": {

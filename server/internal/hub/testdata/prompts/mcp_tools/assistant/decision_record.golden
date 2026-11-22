@@ -1,6 +1,6 @@
 {
   "name": "decision_record",
-  "description": "Record entry {text,scope?,decision:{options[],selected[],rejected[],reason,reversible:bool|null}}. user_quotes need quote and source {machine,session,msg_uuid|card_id|file,line}; quotes stay inferred.",
+  "description": "Record {text,scope?,decision:{options[],selected[],rejected[],reason,reversible:bool|null}}. user_quotes[]:{quote,source:{machine,session,msg_uuid|card_id|file,line}} stay inferred.",
   "input_schema": {
     "type": "object",
     "required": [

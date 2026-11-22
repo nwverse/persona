@@ -1,4 +1,4 @@
-List decisions with after paging. Scope filters executor, machine[], project[] and personal.{{template "shared/mcp_language" .}}
+Decisions; scope:{executor,machine[],project[],personal}.{{template "shared/mcp_language" .}}
 
 ```json
 {"type":"object","properties":{"after":{"type":"string"},"limit":{"type":"integer"},"by":{"type":"string"},"trust":{"type":"string"},"status":{"type":"string"},"tag":{"type":"string"},"scope":{"type":"object"}},"additionalProperties":false}

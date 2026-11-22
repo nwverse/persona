@@ -1,6 +1,6 @@
 {
   "name": "decisions_query",
-  "description": "List decisions with after paging. Scope filters executor, machine[], project[] and personal.",
+  "description": "Decisions; scope:{executor,machine[],project[],personal}.",
   "input_schema": {
     "type": "object",
     "properties": {
