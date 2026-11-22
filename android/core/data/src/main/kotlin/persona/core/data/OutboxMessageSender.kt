@@ -401,8 +401,14 @@ class OutboxMessageSender(
             state == OutboxState.Sending -> opId
             else -> null
         }
-        check(if (next != null) store.transition(id, from, state, delivery.refusal?.code, next)
-            else store.transition(id, from, state, delivery.refusal?.code)) { "Message state changed" }
+        val moved = if (next != null) store.transition(id, from, state, delivery.refusal?.code, next)
+            else store.transition(id, from, state, delivery.refusal?.code)
+        if (starting && !moved) {
+            // A catch-up can observe the active composer row between its state and operation-id writes.
+            // It is the same attempt only when both already match; otherwise this is not a retry to repeat.
+            val current = store.entries.first().firstOrNull { it.clientMessageId == id }
+            check(current?.state == OutboxState.Sending && current.operationId == opId) { "Message state changed" }
+        } else check(moved) { "Message state changed" }
         // Composer retries bypass attempt(), but their fresh operation still belongs to this same visible message.
         if (state == OutboxState.Sending) receiptState.begin(attempt, entry.mainTarget)
         else receiptState.result(attempt, when (state) {
@@ -620,6 +626,16 @@ class OutboxMessageSender(
         }
         val state = classify(result)
         val error = (result as? MessageTransportResult.HubError)?.let { it.code ?: it.error }
+        val current = store.entries.first().firstOrNull { it.clientMessageId == id } ?: return state
+        // The operation that started this attempt may have been superseded by the composer's fresh retry id.
+        // Its late result must not write into the new attempt or change the visible message back to Sending.
+        if (current.operationId != entry.operationId) return current.state
+        if (state == OutboxState.Sending) {
+            // A composer completion is newer than an automatic attempt that was already in flight. Do not let
+            // that older attempt put an already settled visible message back into Sending.
+            if (current.state in settled) return current.state
+        }
+        println("outbox-settle: id=$id entryState=${entry.state} nextState=$state result=$result")
         val moved = if ((result as? MessageTransportResult.HubError)?.delivered == "none") {
             store.transition(id, from, state, error, newOperationId())
         } else store.transition(id, from, state, error)

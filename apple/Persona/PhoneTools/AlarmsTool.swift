@@ -406,7 +406,8 @@ extension AlarmsTool {
         return AlarmAttributes(presentation: presentation, metadata: PersonaAlarmData(label: label), tintColor: accent)
     }
 
-    private static func localeWeekday(_ day: String) -> Locale.Weekday? {
+    /// `mon`…`sun` as AlarmKit names the day (the Alarms and Timers page reads its schedules back with it).
+    nonisolated static func localeWeekday(_ day: String) -> Locale.Weekday? {
         switch day {
         case "mon": .monday
         case "tue": .tuesday
@@ -419,7 +420,8 @@ extension AlarmsTool {
         }
     }
 
-    private static func stateName(_ state: Alarm.State) -> String {
+    /// The state's name in `phone_alarms_list`, and `AlarmEntry.State`'s (the Alarms and Timers page).
+    nonisolated static func stateName(_ state: Alarm.State) -> String {
         switch state {
         case .scheduled: "scheduled"
         case .countdown: "countdown"

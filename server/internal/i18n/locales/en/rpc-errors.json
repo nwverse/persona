@@ -16,6 +16,7 @@
   "offline": "This computer is offline. Make sure it’s on and connected to the internet and that Persona Link is running, then try again.",
   "nothing_queued": "Nothing is queued for the agent any more.",
   "send_now_unsupported": "This agent can’t send queued messages now. They go to it in order.",
+  "queue_edit_unsupported": "This agent’s queued messages can’t be changed from here. They go to it in order.",
   "send_now_unrecognized": "Persona doesn’t recognize this Claude Code’s send-now hint, so it pressed nothing. The queued messages still go in order; to send them now, use send-now in the terminal.",
   "not_a_repository": "This folder isn’t in a Git repository.",
   "not_our_worktree": "This folder isn’t a worktree Persona made.",

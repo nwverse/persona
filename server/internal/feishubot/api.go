@@ -39,10 +39,12 @@ type Client struct {
 	domain           string
 	http             *http.Client
 
-	mu      sync.Mutex
-	token   string
-	console string // the developer console this client links out to, when not what the domain says (tests)
-	expires time.Time
+	mu         sync.Mutex
+	token      string
+	console    string // the developer console this client links out to, when not what the domain says (tests)
+	expires    time.Time
+	refresh    chan struct{}
+	generation uint64
 }
 
 func New(appID, appSecret, domain string) *Client {
@@ -74,20 +76,62 @@ func (e *APIError) Error() string {
 func tokenGone(code int) bool { return code == 99991663 || code == 99991664 || code == 99991661 }
 
 func (c *Client) tenantToken(ctx context.Context, fresh bool) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !fresh && c.token != "" && time.Now().Before(c.expires) {
-		return c.token, nil
+	var waited bool
+	var generation uint64
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		c.mu.Lock()
+		if waited {
+			// A successful exchange since we joined satisfies even a forced refresh.
+			// Failure leaves the generation unchanged, so try with our own context.
+			fresh = c.generation == generation
+		}
+		if pending := c.refresh; pending != nil {
+			waited, generation = true, c.generation
+			c.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-pending:
+				// Recheck the current exchange and cache; this result may be superseded.
+				continue
+			}
+		}
+		if !fresh && c.token != "" && time.Now().Before(c.expires) {
+			token := c.token
+			c.mu.Unlock()
+			return token, nil
+		}
+		pending := make(chan struct{})
+		c.refresh = pending
+		c.mu.Unlock()
+
+		token, expires, err := c.fetchTenantToken(ctx)
+		c.mu.Lock()
+		if err == nil {
+			c.token, c.expires = token, expires
+			c.generation++
+		}
+		c.refresh = nil
+		close(pending)
+		c.mu.Unlock()
+		return token, err
 	}
+}
+
+// fetchTenantToken performs HTTP outside the cache lock using the refreshing caller's context.
+func (c *Client) fetchTenantToken(ctx context.Context) (string, time.Time, error) {
 	body, _ := json.Marshal(map[string]string{"app_id": c.appID, "app_secret": c.appSecret})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.domain+"/open-apis/auth/v3/tenant_access_token/internal", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 	defer resp.Body.Close()
 	var out struct {
@@ -97,14 +141,12 @@ func (c *Client) tenantToken(ctx context.Context, fresh bool) (string, error) {
 		Expire int    `json:"expire"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("feishu token: HTTP %d: %w", resp.StatusCode, err)
+		return "", time.Time{}, fmt.Errorf("feishu token: HTTP %d: %w", resp.StatusCode, err)
 	}
 	if out.Code != 0 || out.Token == "" {
-		return "", &APIError{Op: "token", Code: out.Code, Msg: out.Msg}
+		return "", time.Time{}, &APIError{Op: "token", Code: out.Code, Msg: out.Msg}
 	}
-	c.token = out.Token
-	c.expires = time.Now().Add(time.Duration(max(out.Expire-300, 60)) * time.Second)
-	return c.token, nil
+	return out.Token, time.Now().Add(time.Duration(max(out.Expire-300, 60)) * time.Second), nil
 }
 
 const (
@@ -150,6 +192,7 @@ func (c *Client) callBody(ctx context.Context, op, method, path string, payload 
 		}
 		return lastErr
 	}
+	refreshed := false             // a forced refresh is allowed once, independently of transient attempts
 	forcedFresh, waits := false, 0 // forcedFresh makes the next token fetch bypass the cache (after a tokenGone answer); waits counts backoff slots used
 	for attempt := 0; attempt < callMaxAttempts; attempt++ {
 		tok, err := c.tenantToken(ctx, forcedFresh)
@@ -213,14 +256,18 @@ func (c *Client) callBody(ctx context.Context, op, method, path string, payload 
 					}
 					retry = true
 				case env.Code != 0:
-					if tokenGone(env.Code) && attempt == 0 {
-						forcedFresh = true
+					if tokenGone(env.Code) && !refreshed && attempt+1 < callMaxAttempts {
+						refreshed, forcedFresh = true, true
 						continue // one fresh token, one immediate retry, no backoff slot spent
 					}
 					lastErr = &APIError{Op: op, Code: env.Code, Msg: env.Msg}
 					// The per-chat limit is waited out only on a POST that gets here idempotent: a send or reply with a uuid,
 					// which lands once. A card update that meets it is its caller's to slow down (it sends a newer card).
 					retry = env.Code == codeRateLimited || env.Code == codeChatRateLimited && method == http.MethodPost
+				case resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices:
+					// A gateway's JSON may omit code or report zero despite rejecting the request.
+					// Keep its body out of the error and never decode it as a successful receipt.
+					lastErr = fmt.Errorf("feishu %s: HTTP %d", op, resp.StatusCode)
 				case out == nil:
 					return nil
 				case len(env.Data) > 0 && string(env.Data) != "null":
@@ -456,19 +503,30 @@ type Item struct {
 		Content string `json:"content"`
 	} `json:"body"`
 	Mentions []struct {
-		Key  string `json:"key"`
-		Name string `json:"name"`
+		Key    string `json:"key"`
+		ID     string `json:"id"`
+		IDType string `json:"id_type"`
+		Name   string `json:"name"`
 	} `json:"mentions"`
 }
 
 // At is when the message was sent.
 func (it Item) At() time.Time { return msTime(it.CreateTime) }
 
-// MentionList is the message's mentions, for ParseContent to turn its @_user_N keys back into names.
+// MentionList preserves names and typed IDs so ParseContent can resolve both placeholder keys and rich-text at nodes.
 func (it Item) MentionList() []Mention {
 	var out []Mention
 	for _, m := range it.Mentions {
-		out = append(out, Mention{Key: m.Key, Name: m.Name})
+		mention := Mention{Key: m.Key, Name: m.Name}
+		switch m.IDType {
+		case "open_id":
+			mention.ID.OpenID = m.ID
+		case "union_id":
+			mention.ID.UnionID = m.ID
+		case "user_id":
+			mention.ID.UserID = m.ID
+		}
+		out = append(out, mention)
 	}
 	return out
 }
@@ -501,6 +559,7 @@ var ErrTooLarge = errors.New("feishu download: too large")
 func (c *Client) Resource(ctx context.Context, messageID, key, kind string, limit int64) ([]byte, string, error) {
 	u := c.domain + "/open-apis/im/v1/messages/" + url.PathEscape(messageID) + "/resources/" + url.PathEscape(key) + "?type=" + url.QueryEscape(kind)
 	var lastErr error
+	refreshed := false
 	forcedFresh, waits := false, 0
 	for attempt := 0; attempt < callMaxAttempts; attempt++ {
 		tok, err := c.tenantToken(ctx, forcedFresh)
@@ -513,8 +572,8 @@ func (c *Client) Resource(ctx context.Context, messageID, key, kind string, limi
 		switch {
 		case err == nil:
 			return b, ct, nil
-		case errors.As(err, &apiErr) && tokenGone(apiErr.Code) && attempt == 0:
-			forcedFresh = true
+		case errors.As(err, &apiErr) && tokenGone(apiErr.Code) && !refreshed && attempt+1 < callMaxAttempts:
+			refreshed, forcedFresh = true, true
 			continue // one fresh token, one immediate retry, no backoff slot spent
 		case !retry:
 			return nil, "", err
