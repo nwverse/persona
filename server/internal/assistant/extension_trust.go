@@ -64,6 +64,28 @@ func (s *Service) extensionGrantOf(ctx context.Context, ext string) extensionGra
 	return extensionGrant{Owner: t.Trust == assistantwire.ExtensionTrustOwner, Categories: cats}
 }
 
+// extensionOwners are the extensions the user marked as their own, sorted (Profile.ExtensionOwners): none when the
+// store cannot tell, so the hub keeps hiding every track from every extension.
+func (s *Service) extensionOwners(ctx context.Context) []string {
+	st, ok := s.store().(extensionTrustStore)
+	if !ok {
+		return nil
+	}
+	all, err := st.ExtensionTrusts(ctx)
+	if err != nil {
+		s.logf("extension trust: read: %v", err)
+		return nil
+	}
+	var out []string
+	for id, t := range all {
+		if t.Trust == assistantwire.ExtensionTrustOwner {
+			out = append(out, id)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
 // trackUse is what everything from track space carries at least (trackFloor), for a decision made by track.
 func (s *Service) trackUse(ctx context.Context, space string) infoUse {
 	floor, known := s.trackFloor(ctx, space)
@@ -173,6 +195,7 @@ func (s *Service) extensionTrustSet(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusInternalServerError, err)
 		return
 	}
+	s.publish(context.WithoutCancel(r.Context())) // the hub learns the owners (Profile.ExtensionOwners)
 	if cats == nil {
 		cats = []string{}
 	}
