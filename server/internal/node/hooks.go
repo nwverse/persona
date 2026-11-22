@@ -189,7 +189,11 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		n.mu.Lock()
 		machine := n.machineID
 		n.mu.Unlock()
-		resp = map[string]any{"ok": true, "program": n.Program, "version": n.Version, "machine_id": machine}
+		pong := map[string]any{"ok": true, "program": n.Program, "version": n.Version}
+		if machine != "" {
+			pong["machine_id"] = machine
+		}
+		resp = pong
 	case "update.inventory":
 		var target nodeclient.UpdateInventoryTarget
 		if err := json.Unmarshal(req.Input, &target); err != nil {
