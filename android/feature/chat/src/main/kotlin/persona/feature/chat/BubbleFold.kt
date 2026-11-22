@@ -86,18 +86,39 @@ internal enum class BubbleFoldRule(val limit: Int, val shown: Int) {
             return lengths.sumOf { max(1, (it + width - 1) / width) }
         }
 
+        /**
+         * Short-circuiting check for whether [text] exceeds [limit] estimated wrapped lines at [perLine] characters per
+         * line, avoiding `split('\n')` allocations on huge pasted logs.
+         */
+        private fun exceedsLines(text: String, perLine: Int, limit: Int): Boolean {
+            val width = max(1, perLine)
+            var total = 0
+            var lineLen = 0
+            for (i in 0 until text.length) {
+                if (text[i] == '\n') {
+                    total += max(1, (lineLen + width - 1) / width)
+                    if (total > limit) return true
+                    lineLen = 0
+                } else {
+                    lineLen++
+                }
+            }
+            total += max(1, (lineLen + width - 1) / width)
+            return total > limit
+        }
+
         /** Fast-path gate: false means the message cannot exceed [limit] lines even in the narrowest bubble. */
         fun mayFold(text: String, fontScale: Float): Boolean {
             if (text.isEmpty()) return false
             val rule = of(fontScale)
-            return lines(lengths(text), perLine(NARROWEST, fontScale)) > rule.limit
+            return exceedsLines(text, perLine(NARROWEST, fontScale), rule.limit)
         }
 
         /** Initial guess before the first layout measurement, avoiding an extra recomposition on long messages. */
         fun likelyFolds(text: String, fontScale: Float): Boolean {
             if (text.isEmpty()) return false
             val rule = of(fontScale)
-            return lines(lengths(text), perLine(TYPICAL, fontScale)) > rule.limit
+            return exceedsLines(text, perLine(TYPICAL, fontScale), rule.limit)
         }
 
         /**
@@ -139,21 +160,23 @@ internal enum class BubbleFoldRule(val limit: Int, val shown: Int) {
  * Folds long user bubble text past [BubbleFoldRule.limit] rendered lines down to [BubbleFoldRule.shown] lines with a
  * bottom-line alpha fade and an in-bubble Show more / Show less toggle.
  *
- * Short messages skip measurement completely; active in-place text selection ([LocalSelectionAbove]) always renders the
- * full text so every word remains selectable.
+ * Short messages skip measurement completely; folded messages only pass a bounded prefix ([BubbleFoldRule.start],
+ * capped at `limit + 2` lines and [BubbleFoldRule.START_CHARACTERS] chars) to [content] so huge pasted logs are never
+ * fully laid out while folded; active in-place text selection ([LocalSelectionAbove]) always renders the full text so
+ * every word remains selectable.
  */
 @Composable
 internal fun BubbleFold(
     text: String,
     foldKey: String?,
     own: Boolean,
-    content: @Composable () -> Unit,
+    content: @Composable (shownText: String) -> Unit,
 ) {
     val selecting = LocalSelectionAbove.current
     val density = LocalDensity.current
     val fontScale = density.fontScale.coerceAtLeast(1f)
     if (foldKey.isNullOrBlank() || selecting || !BubbleFoldRule.mayFold(text, fontScale)) {
-        content()
+        content(text)
         return
     }
     val rule = BubbleFoldRule.of(fontScale)
@@ -169,7 +192,12 @@ internal fun BubbleFold(
         BubbleLineMetrics(shownHeight = shownHeight, pastHeight = pastHeight, fadeHeight = lineHeight)
     }
     var open by rememberSaveable(foldKey) { mutableStateOf(false) }
+    var whole by remember(foldKey, text, rule) { mutableStateOf(false) }
     var measuredLong by remember(foldKey, text, rule) { mutableStateOf(BubbleFoldRule.likelyFolds(text, fontScale)) }
+    val start = remember(text, rule, open, whole) {
+        if (!open && !whole) BubbleFoldRule.start(text, rule.limit + 2) else null
+    }
+    val shownText = start ?: text
     val folded = measuredLong && !open
     val revealAlpha by animateFloatAsState(
         targetValue = if (folded) 0f else 1f,
@@ -191,14 +219,19 @@ internal fun BubbleFold(
                 .layout { measurable, constraints ->
                     val full = measurable.measure(constraints.copy(maxHeight = Constraints.Infinity))
                     val exceeds = full.height > metrics.pastHeight
-                    if (measuredLong != exceeds) measuredLong = exceeds
+                    if (start != null && !exceeds) {
+                        // Only the bounded prefix was laid out and it did not exceed `limit`: draw whole instead.
+                        if (!whole) whole = true
+                    } else if (measuredLong != exceeds) {
+                        measuredLong = exceeds
+                    }
                     val targetHeight = if (exceeds && !open) minOf(full.height, metrics.shownHeight) else full.height
                     layout(full.width, targetHeight.coerceIn(constraints.minHeight, constraints.maxHeight)) {
                         full.placeRelative(0, 0)
                     }
                 },
         ) {
-            content()
+            content(shownText)
         }
         if (measuredLong) {
             DisableSelection {

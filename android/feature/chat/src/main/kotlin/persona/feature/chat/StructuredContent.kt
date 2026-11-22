@@ -226,9 +226,12 @@ internal fun MergedUserBubble(items: List<Item>, updates: Map<String, ChatTextUp
             }
             val foldKey = items.firstOrNull()?.id?.takeIf { it.isNotBlank() && foldText.isNotEmpty() }
             SelectableWords(target.takeIf { menu }) {
-                BubbleFold(foldText, foldKey, own = own) {
+                BubbleFold(foldText, foldKey, own = own) { shownText ->
+                    val displayParts = remember(parts, foldText, shownText) {
+                        if (shownText === foldText) parts else listOf(MessagePart.Text(shownText))
+                    }
                     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                        MessageParts(parts, true, items.firstOrNull()?.id.orEmpty(), onLastLine)
+                        MessageParts(displayParts, true, items.firstOrNull()?.id.orEmpty(), onLastLine)
                         if (streaming) StreamingCursor()
                     }
                 }

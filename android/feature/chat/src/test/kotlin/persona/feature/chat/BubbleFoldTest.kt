@@ -196,4 +196,32 @@ class BubbleFoldTest {
         }
         rule.onNodeWithTag("bubble-fold-expand").assertDoesNotExist()
     }
+
+    @Test fun hugeMessageOnlyLaysOutBoundedPrefixWhileFolded() {
+        val hugeText = (1..2_000).joinToString("\n") { "Log line $it: status ok" } + "\nTAIL_SENTINEL_2000"
+        assertTrue(BubbleFoldRule.mayFold(hugeText, 1f))
+        assertTrue(BubbleFoldRule.likelyFolds(hugeText, 1f))
+        val observed = mutableListOf<String>()
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                Column(Modifier.width(380.dp).padding(Tokens.Space.l)) {
+                    BubbleFold(hugeText, foldKey = "huge-1", own = true) { shown ->
+                        observed += shown
+                        androidx.compose.material3.Text(shown, style = PersonaTheme.type.body)
+                    }
+                }
+            }
+        }
+        rule.onNodeWithTag("bubble-fold-expand").assertIsDisplayed()
+        assertTrue("Folded path passes only a bounded prefix", observed.isNotEmpty())
+        assertTrue(
+            "Folded prefix must not exceed START_CHARACTERS or include the tail",
+            observed.all { it.length <= BubbleFoldRule.START_CHARACTERS && !it.contains("TAIL_SENTINEL_2000") },
+        )
+
+        rule.onNodeWithTag("bubble-fold-expand").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("bubble-fold-collapse").assertExists()
+        assertTrue("Expanding passes the full text including the tail", observed.last().contains("TAIL_SENTINEL_2000"))
+    }
 }
