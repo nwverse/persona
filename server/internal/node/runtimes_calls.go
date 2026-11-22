@@ -139,23 +139,25 @@ func errRuntimeUnsupported(label, what string) error {
 
 // runtimeCallParams are the parameters of a hub call about a runtime's session that the node looks at.
 type runtimeCallParams struct {
-	Force          bool          `json:"force"`
-	SessionID      string        `json:"session_id"`
-	Text           string        `json:"text"`
-	Images         []proto.Image `json:"images"`
-	SinceSeq       int           `json:"since_seq"`
-	History        string        `json:"history"`
-	FoldWork       bool          `json:"fold_work"`
-	BeforeSeq      int           `json:"before_seq"`
-	LazyImages     bool          `json:"lazy_images"`
-	UserInputs     bool          `json:"user_inputs"`
-	AfterSeq       *int          `json:"after_seq"`
-	ThroughSeq     int           `json:"through_seq"`
-	Title          *string       `json:"title"`
-	ItemID         string        `json:"item_id"`
-	PermissionMode string        `json:"permission_mode"`
-	Effort         string        `json:"effort"`
-	Model          string        `json:"model"`
+	MessageSource  *proto.MessageSource `json:"message_source"`
+	A2AWakeOnSend  bool                 `json:"a2a_wake_on_send"`
+	Force          bool                 `json:"force"`
+	SessionID      string               `json:"session_id"`
+	Text           string               `json:"text"`
+	Images         []proto.Image        `json:"images"`
+	SinceSeq       int                  `json:"since_seq"`
+	History        string               `json:"history"`
+	FoldWork       bool                 `json:"fold_work"`
+	BeforeSeq      int                  `json:"before_seq"`
+	LazyImages     bool                 `json:"lazy_images"`
+	UserInputs     bool                 `json:"user_inputs"`
+	AfterSeq       *int                 `json:"after_seq"`
+	ThroughSeq     int                  `json:"through_seq"`
+	Title          *string              `json:"title"`
+	ItemID         string               `json:"item_id"`
+	PermissionMode string               `json:"permission_mode"`
+	Effort         string               `json:"effort"`
+	Model          string               `json:"model"`
 }
 
 // runtimeHandle serves a hub call for a session a runtime lists; handled is false for methods that are not about one
@@ -296,9 +298,15 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 				}
 				retry, after = &check.record, check.after
 			}
-			return n.sendWithEcho(p.SessionID, opts.ClientMsgID, p.Text, len(p.Images), after, retry, func() error {
-				out, err := call(method, map[string]any{"session_id": p.SessionID, "text": p.Text, "images": p.Images,
-					"client_msg_id": opts.ClientMsgID})
+			return n.sendWithEcho(p.SessionID, opts.ClientMsgID, p.Text, len(p.Images), after, p.MessageSource, retry, func() error {
+				if err := n.a2aSendReady(ctx, p.SessionID); err != nil {
+					return err
+				}
+				input := map[string]any{"session_id": p.SessionID, "text": p.Text, "images": p.Images, "client_msg_id": opts.ClientMsgID}
+				if p.A2AWakeOnSend {
+					input["a2a_wake_on_send"] = true
+				}
+				out, err := call(method, input)
 				said = out
 				return err
 			})
@@ -365,6 +373,11 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 			if s.SessionID == p.SessionID {
 				info["cwd"], info["model"], info["agent"], info["last_activity"] = s.Cwd, s.Model, s.Agent, s.UpdatedAt
 				info["permission_mode"], info["effort"] = s.PermissionMode, s.Effort
+				if h.agent() == agyAgent && (s.ContextTokens > 0 || s.OutputTokens > 0) {
+					info["context_tokens"] = int(s.ContextTokens)
+					info["output_tokens"] = s.OutputTokens
+					delete(info, "usage_unknown")
+				}
 			}
 		}
 		// Not in its list (an older session it still has): what the node knows without the list.

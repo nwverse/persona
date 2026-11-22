@@ -16,8 +16,9 @@ func LauncherSupervisionPolicy(l Launcher) bool {
 	case "", "zshrc", "path", "builtin":
 		return l.Agent == "" || l.Agent == "claude" || l.Agent == "codex"
 	case "persona":
-		// Managed Codex wrappers currently bypass the native app-server adapter.
-		return l.Agent == "" || l.Agent == "claude" || l.Assistant && l.SupervisionPolicy
+		// Logical-conversation native starts use the app-server adapter for
+		// managed Codex providers as well as shell launchers.
+		return l.Agent == "" || l.Agent == "claude" || l.Agent == "codex" || l.Assistant && l.SupervisionPolicy
 	default:
 		return l.Assistant && l.SupervisionPolicy
 	}

@@ -89,6 +89,7 @@ func (n *Node) assistantInterrupt(id string) error {
 // stopAssistant cancels recovery before replacing a process. Explicit user stops additionally hold the session send
 // lock (assistantInterrupt and session.close); internal callers may already hold settings locks and must not take it.
 func (n *Node) stopAssistant(id string) {
+	n.forgetCacheWarm(id)
 	n.cancelAssistantRecovery(id)
 	n.stopAssistantProcess(id)
 }
@@ -198,9 +199,11 @@ func (n *Node) compactIdle(p *assistantProc) {
 	p.mu.Lock()
 	idle := !p.busy && !p.compacting && !p.manual
 	p.mu.Unlock()
-	if !same || !idle {
+	state, _ := n.state.get(p.id)
+	if !same || !idle || state.SegmentRetired {
 		return
 	}
+	n.forgetCacheWarm(p.id)
 	line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "/compact"}})
 	p.mu.Lock()
 	tokens := p.context
@@ -239,11 +242,13 @@ func (n *Node) reapAssistants(ctx context.Context) {
 				n.handOverAssistants()
 				return
 			}
+			n.cacheWarmPool().close()
 			n.stopAtConnectionEnd(ids, spare)
 			return
 		case <-t.C:
 		}
 		n.sweepAssistants()
+		n.sweepCacheWarm(ctx, time.Now())
 	}
 }
 
@@ -290,8 +295,9 @@ func (n *Node) sweepAssistants() {
 		n.compactIdle(p)
 	}
 	for _, id := range idle {
-		n.stopAssistant(id)
-		n.rememberTasks(id, nil) // let go on purpose: nothing to tell it after a restart
+		n.cancelAssistantRecovery(id)
+		n.stopAssistantProcess(id) // idle release preserves the independent cache snapshot
+		n.rememberTasks(id, nil)   // let go on purpose: nothing to tell it after a restart
 	}
 	if stale != nil {
 		stale.stop()

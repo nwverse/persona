@@ -179,26 +179,10 @@ func (m chanMutex) TryLock() bool {
 	}
 }
 
-// claimChannelMessage: the first time channel id's message is seen; an error while the messages seen can't be read.
+// claimChannelMessage claims a message without a thread reservation; unreadable or unwritable state stays retryable.
 func (s *Service) claimChannelMessage(id, msg string) (bool, error) {
-	c := &s.chans
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	s.loadChannelStateLocked(context.Background())
-	if !c.stLoaded {
-		return false, errChannelsUnread
-	}
-	seen := c.st.Seen[id]
-	if msg == "" || slices.Contains(seen, msg) {
-		return false, nil
-	}
-	seen = append(seen, msg)
-	if len(seen) > channelSeenKeep {
-		seen = seen[len(seen)-channelSeenKeep:]
-	}
-	c.st.Seen[id] = seen
-	s.saveChannelStateLocked()
-	return true, nil
+	admission, err := s.admitChannelMessage(id, channel.Message{ID: msg})
+	return admission != nil, err
 }
 
 var errChannelsUnread = errors.New("the channels' state could not be read")
