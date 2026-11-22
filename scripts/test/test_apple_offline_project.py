@@ -77,6 +77,45 @@ class AppleOfflineProjectTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'build must retain'):
             apple_offline_project.filtered(changed)
 
+    def test_retained_sources_dependencies_and_packages_fail_closed(self):
+        cases = {
+            'Widgets host dependency': lambda project: project['targets']['Persona']['dependencies'].remove(
+                {'target': 'PersonaWidgets'}),
+            'Notify host dependency': lambda project: project['targets']['Persona']['dependencies'].remove(
+                {'target': 'PersonaNotify'}),
+            'test sources': lambda project: project['targets']['PersonaTests'].__setitem__('sources', []),
+            'test source path': lambda project: project['targets']['PersonaTests']['sources'][0].__setitem__(
+                'path', 'PersonaTests/TypeScaleTests.swift'),
+            'test source excludes': lambda project: project['targets']['PersonaTests']['sources'][0]['excludes'].append(
+                'AboutVersion*'),
+            'host package dependency': lambda project: project['targets']['Persona']['dependencies'].remove(
+                {'package': 'PersonaCore'}),
+            'test package dependency': lambda project: project['targets']['PersonaTests']['dependencies'].remove(
+                {'package': 'PersonaCore', 'product': 'PersonaCoreTestSupport'}),
+            'package declaration': lambda project: project['packages']['MarkdownUI'].__setitem__('from', '1.0.0'),
+            'host sources': lambda project: project['targets']['Persona'].__setitem__('sources', []),
+            'test assertions': lambda project: project['schemes']['PersonaOfflineUnitTests']['test'].__setitem__(
+                'gatherCoverageData', False),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(name=name):
+                changed = deepcopy(self.project)
+                mutate(changed)
+                with self.assertRaisesRegex(ValueError, 'canonical'):
+                    apple_offline_project.filtered(changed)
+
+    def test_cli_refuses_to_materialize_a_reduced_test_graph(self):
+        changed = deepcopy(self.project)
+        changed['targets']['PersonaTests']['sources'] = []
+        with tempfile.TemporaryDirectory() as directory:
+            dump, output = Path(directory) / 'dump.json', Path(directory) / 'offline.json'
+            dump.write_text(json.dumps(changed))
+            generated = subprocess.run([sys.executable, '-I', str(SCRIPT), str(dump), str(output)],
+                                       capture_output=True, text=True, timeout=30)
+            self.assertNotEqual(generated.returncode, 0)
+            self.assertIn('canonical', generated.stderr)
+            self.assertFalse(output.exists())
+
     def test_cli_preserves_target_graph_in_the_generated_json(self):
         with tempfile.TemporaryDirectory() as directory:
             dump, output = Path(directory) / 'dump.json', Path(directory) / 'offline.json'
@@ -102,6 +141,18 @@ class AppleOfflineProjectTests(unittest.TestCase):
                                 '--type', 'json'], env=environment, check=True, stderr=subprocess.PIPE,
                                text=True, timeout=60, stdout=output)
             spec = root / 'offline.json'
+            original = json.loads(whole.read_text())
+            self.assertGreaterEqual(set(original['targets']), {
+                'Persona', 'PersonaTests', 'PersonaWidgets', 'PersonaNotify', 'PersonaWatch',
+                'PersonaWatchWidgets', 'PersonaShare', 'PersonaVision', 'PersonaUITests',
+                'AboutVersionAccessibilityHost', 'AboutVersionAccessibilityUITests',
+            })
+            self.assertEqual(original['targets']['Persona']['dependencies'][:2], [
+                {'target': 'PersonaWatch'}, {'target': 'PersonaShare'},
+            ])
+            self.assertEqual(original['schemes']['Persona']['build']['targets'], {
+                'Persona': 'all', 'PersonaTests': ['test'], 'PersonaUITests': ['test'],
+            })
             subprocess.run([sys.executable, '-I', str(SCRIPT), str(whole), str(spec)],
                            env=environment, check=True, capture_output=True, text=True, timeout=30)
             generated = subprocess.run(['xcodegen', 'generate', '--spec', str(spec), '--project-root',
@@ -127,6 +178,26 @@ class AppleOfflineProjectTests(unittest.TestCase):
             self.assertIn('BuildableName = "PersonaTests.xctest"', scheme)
             self.assertNotIn('PersonaWatch', scheme)
             self.assertNotIn('PersonaUITests', scheme)
+            whole_project = root / 'source/apple/Persona.xcodeproj'
+            generated_whole = subprocess.run(['xcodegen', 'generate', '--spec',
+                                              str(root / 'source/apple/project.yml'), '--project-root',
+                                              str(root / 'source/apple'), '--project', str(root / 'source/apple')],
+                                             env=environment, capture_output=True, text=True, timeout=60)
+            self.assertEqual(generated_whole.returncode, 0, generated_whole.stdout + generated_whole.stderr)
+            whole_pbx = (whole_project / 'project.pbxproj').read_text()
+            whole_native = whole_pbx.split('/* Begin PBXNativeTarget section */', 1)[1].split(
+                '/* End PBXNativeTarget section */', 1)[0]
+            whole_targets = re.findall(r'/\* (Persona\w*|AboutVersion\w*) \*/ = \{\n\s*isa = PBXNativeTarget;',
+                                       whole_native)
+            self.assertGreaterEqual(set(whole_targets), {
+                'Persona', 'PersonaTests', 'PersonaWidgets', 'PersonaNotify', 'PersonaWatch',
+                'PersonaWatchWidgets', 'PersonaShare', 'PersonaVision', 'PersonaUITests',
+                'AboutVersionAccessibilityHost', 'AboutVersionAccessibilityUITests',
+            })
+            whole_copy = whole_pbx.split('/* Begin PBXCopyFilesBuildPhase section */', 1)[1].split(
+                '/* End PBXCopyFilesBuildPhase section */', 1)[0]
+            for required in ('PersonaWatch', 'PersonaShare', 'PersonaWidgets', 'PersonaNotify'):
+                self.assertIn(required, whole_copy)
 
 
 if __name__ == '__main__':
