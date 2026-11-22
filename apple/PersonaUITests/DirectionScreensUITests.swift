@@ -213,6 +213,23 @@ final class DirectionScreensUITests: XCTestCase {
         target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     }
 
+    /// A row of Added Here whose spoken label (title, who placed it, where it stands) has `words` in it.
+    @MainActor private func filedRow(saying words: String) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "identifier == 'direction-page-filed' AND label CONTAINS %@", words)).firstMatch
+    }
+
+    /// Scrolls the sidebar until `row` is clear of the bar at its foot (New Chat), not merely hittable under it.
+    @MainActor private func revealAboveTheBar(_ row: XCUIElement) {
+        let bar = app.descendants(matching: .any).matching(identifier: "sidebar-new").firstMatch
+        for _ in 0..<8 {
+            guard row.exists, bar.exists, row.frame.maxY > bar.frame.minY - 8 else { return }
+            let list = sidebarList
+            guard list.exists else { return }
+            list.swipeUp(velocity: .slow)
+            usleep(400_000)
+        }
+    }
+
     /// A conversation row by the start of its title, scrolled into view.
     @MainActor private func chat(_ prefix: String) -> XCUIElement {
         let row = app.buttons.matching(identifier: "sidebar-conversation").matching(NSPredicate(format: "label BEGINSWITH %@", prefix)).firstMatch
@@ -244,10 +261,25 @@ final class DirectionScreensUITests: XCTestCase {
         app.collectionViews.firstMatch.swipeUp(velocity: .slow)
         sleep(1)
         XCTAssertEqual(app.buttons.matching(identifier: "direction-page-filed").count >= 5, true)
+        // All nine shown: the button says Show First 5, and a row says where it stands in words.
+        XCTAssertEqual(more.label, word("Show First 5", "只显示前 5 个", "最初の5件だけ表示"), "Show All 9 did not open all nine")
+        XCTAssertTrue(filedRow(saying: word("Not known yet", "还不知道", "まだ不明")).exists, "no standing in words:\n\(app.debugDescription)")
         shot("standings")
         app.collectionViews.firstMatch.swipeUp(velocity: .slow)
         sleep(1)
+        // The end of the list: the last standing, a removed computer.
+        XCTAssertTrue(filedRow(saying: word("Computer removed", "电脑已移除", "コンピューターは削除済み")).exists,
+                      "no Computer removed at the end:\n\(app.debugDescription)")
         shot("standings-end")
+        // Collapse All in Added Here's header: its rows go, the header and its count stay.
+        let fold = app.buttons["direction-page-fold"].firstMatch
+        for _ in 0..<6 where !(fold.exists && fold.isHittable) { app.collectionViews.firstMatch.swipeDown(velocity: .slow) }
+        XCTAssertTrue(fold.isHittable, "no Collapse All:\n\(app.debugDescription)")
+        fold.tap()
+        XCTAssertTrue(app.buttons.matching(identifier: "direction-page-filed").firstMatch.waitForNonExistence(timeout: 5),
+                      "Collapse All left rows:\n\(app.debugDescription)")
+        sleep(1)
+        shot("folded")
     }
 
     @MainActor func testTitleMenuEntry() {
@@ -325,6 +357,8 @@ final class DirectionScreensUITests: XCTestCase {
         shot("agent-menu")
         moveTo.tap()
         sleep(1)
+        XCTAssertTrue(app.buttons[word("On Its Own", "单独放着", "単独にする")].firstMatch.waitForExistence(timeout: 5),
+                      "the Agent's choices did not open:\n\(app.debugDescription)")
         shot("agent-choices")
     }
 
@@ -547,8 +581,9 @@ final class DirectionScreensUITests: XCTestCase {
         }
         let toggle = firstLeadToggle()
         if toggle.waitForExistence(timeout: 8), toggle.value as? String != expanded { toggle.tap() }
-        // The first lead's rows to their end, where All › would be, with the next lead under them.
-        if off != "none" && off != "manager" { _ = chat("基础设施") }
+        // The first lead's rows to their end, where All › would be, with the next lead under them: scrolled until that
+        // next row is above the New Chat bar (under the bar it still counts as hittable).
+        if off != "none" && off != "manager" { revealAboveTheBar(chat("基础设施")) }
         sleep(2)
         shot("off-sidebar-\(off)")
         // Every case has a conversation's menu to compare. 工作's own conversation (scripts/mock/direction_sessions_mock.py)
@@ -557,6 +592,11 @@ final class DirectionScreensUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 10), "no conversation to long-press:\n\(app.debugDescription)")
         row.press(forDuration: 1.2)
         sleep(1)
+        // An item both builds' conversation menus have (工作's Main Chat opens the chat itself, no menu).
+        if off != "manager" {
+            XCTAssertTrue(app.buttons[word("Rename…", "重命名…", "名前を変更…")].firstMatch.waitForExistence(timeout: 5),
+                          "the conversation's menu did not open:\n\(app.debugDescription)")
+        }
         shot("off-chat-menu-\(off)")
         // On 工作's page the press can open Main Chat itself, the drawer gone: no menu to dismiss there (a tap would
         // land on the chat's page), and no lead to look for.
@@ -579,6 +619,8 @@ final class DirectionScreensUITests: XCTestCase {
         sleep(2)
         openTitleMenu()
         sleep(1)
+        XCTAssertTrue(app.buttons[word("Knowledge", "知识库", "ナレッジ")].firstMatch.waitForExistence(timeout: 5),
+                      "the title menu did not open:\n\(app.debugDescription)")
         shot("off-title-menu-\(off)")
         dismissMenu()
         // An Agent on no to-do (Move To… would be offered with the feature on): its chat's ⋯, the same inventory as its
@@ -602,6 +644,8 @@ final class DirectionScreensUITests: XCTestCase {
         }
         more.tap()
         sleep(1)
+        XCTAssertTrue(app.buttons[word("Copy Directory", "拷贝目录", "ディレクトリをコピー")].firstMatch.waitForExistence(timeout: 5),
+                      "the Agent's menu did not open:\n\(app.debugDescription)")
         shot("off-agent-menu-\(off)")
     }
 

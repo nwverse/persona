@@ -340,7 +340,12 @@ struct AssistantView: View {
             #endif
         }
         .navigationDestination(item: $openedExtension) { ExtensionNavPage(route: $0) }
-        .navigationDestination(for: DirectionPageRoute.self) { DirectionPage(id: $0.id) }
+        // A destination does not get what the stack's root was given in a split (iPad): the page's chats are pushed
+        // over it only with the push passed here, as the Inbox's pages get it, never opened as a sidebar pick (3.5).
+        .navigationDestination(for: DirectionPageRoute.self) {
+            DirectionPage(id: $0.id)
+                .modifier(InboxDestinationEnvironment(chat: inboxChatPush, openFeishu: { navPath.wrappedValue.append($0) }))
+        }
         .navigationDestination(isPresented: $showHealth) {
             HealthView(disabled: shownStart != nil, launcher: healthLauncherPick, launcherModel: healthModelPick, mode: $starterMode, effort: $starterEffort) { text, images in
                 Task { await start(text, images, space: Session.healthSpace) }

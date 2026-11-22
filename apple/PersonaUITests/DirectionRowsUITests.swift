@@ -458,6 +458,51 @@ final class DirectionRowsUITests: XCTestCase {
         XCTAssertFalse(app.buttons["inbox.more"].firstMatch.exists, "nor to the Inbox:\n\(app.debugDescription)")
     }
 
+    // MARK: Chats opened from the page on an iPad (#12603 review, sixth look 1)
+
+    /// On an iPad, Merged: a chat opened from the page (an Added Here row, an In Progress Agent line) is pushed over it,
+    /// with ‹ back to the page, and the sidebar's selection stays the lead's.
+    @MainActor func testAPageChatIsPushedOverThePageOnAnIPadMerged() throws { try pageChatsOnAnIPad("sidebar") }
+
+    /// The same in Separate, where a pick would also move the switch to Agents.
+    @MainActor func testAPageChatIsPushedOverThePageOnAnIPadSeparate() throws { try pageChatsOnAnIPad("separate") }
+
+    @MainActor private func pageChatsOnAnIPad(_ layout: String) throws {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("the split of an iPad") }
+        try mockReset()
+        launch(Self.firstLeadOpen + ["-app.navigation", layout])
+        openFirstPage()
+        let lead = app.buttons.matching(NSPredicate(format: "identifier == 'sidebar-conversation' AND label BEGINSWITH %@",
+                                                    "Persona 产品")).firstMatch
+        XCTAssertTrue(lead.waitForExistence(timeout: 10), "no row for the lead in the sidebar:\n\(app.debugDescription)")
+        let selected = lead.isSelected
+        let page = app.descendants(matching: .any).matching(identifier: "direction-page").firstMatch
+        // The chat's own ‹ (`chevron.left`), or a navigation bar's.
+        let back = app.buttons.matching(NSPredicate(format: "identifier IN %@", ["chevron.left", "BackButton"])).firstMatch
+        func openedOverThePage(_ what: String) {
+            XCTAssertTrue(app.buttons["chat.more"].firstMatch.waitForExistence(timeout: 15), "\(what): no chat:\n\(app.debugDescription)")
+            XCTAssertTrue(back.waitForExistence(timeout: 5), "\(what): no ‹ back to the page:\n\(app.debugDescription)")
+            XCTAssertTrue(lead.exists && lead.isSelected == selected,
+                          "\(what): the sidebar's selection moved:\n\(app.debugDescription)")
+            back.tap()
+            XCTAssertTrue(page.waitForExistence(timeout: 10), "\(what): ‹ did not go back to the page:\n\(app.debugDescription)")
+        }
+        // An Added Here row.
+        let added = app.buttons.matching(NSPredicate(format: "identifier == 'direction-page-filed' AND label BEGINSWITH %@",
+                                                     "整理首页改版的设计稿")).firstMatch
+        XCTAssertTrue(added.waitForExistence(timeout: 10))
+        added.tap()
+        openedOverThePage("Added Here")
+        // An In Progress Agent line: the page's own to-do row unfolded (the sidebar draws the same rows, so in the page).
+        let toggle = page.buttons.matching(identifier: "sidebar-direction-task-toggle").firstMatch
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10), "no to-do with Agents on the page:\n\(app.debugDescription)")
+        toggle.tap()
+        let line = page.buttons.matching(identifier: "sidebar-direction-agent").firstMatch
+        XCTAssertTrue(line.waitForExistence(timeout: 5), "no Agent line on the page:\n\(app.debugDescription)")
+        line.tap()
+        openedOverThePage("In Progress")
+    }
+
     @MainActor func testTheToDosPinnedSectionsEndAsTheirRowsDo() {
         // The list view whatever an earlier test left (the calendar keeps itself per device).
         launch(["-todos.grouping", "direction", "-todos.view", "list"])

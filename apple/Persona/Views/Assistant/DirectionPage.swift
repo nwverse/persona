@@ -467,8 +467,8 @@ private struct DirectionAddedSection: View {
 }
 
 /// One session in Added Here: its dot, title and who placed it, and where it stands; a tap opens it. The standing sits
-/// beside the title while the title keeps half the row (the title cut on its line); only a word that would leave it
-/// less goes under the source line (`BesideOrUnder`).
+/// beside the title alone while the title keeps half the row (the title cut on its line), and goes under the title only
+/// otherwise (`BesideOrUnder`); who placed it is a line of its own across the row, never cut to the title's width.
 private struct DirectionAddedRow: View {
     @Environment(AppModel.self) private var model
     let row: DirectionFilings.Row
@@ -491,12 +491,16 @@ private struct DirectionAddedRow: View {
             HStack(alignment: .top, spacing: Theme.Space.s) {
                 StatusDot(state: DirectionPageLogic.dot(standing))
                     .padding(.top, Theme.Space.xs)
-                // The word beside the title while the title keeps half the row, the title cut on its line; only a
-                // word that would leave it less goes under (`BesideOrUnder`, DESIGN_SYSTEM 6.2). By measured widths,
-                // so a long title never stacks the row, and rows keep one height as the In Progress rows above do.
-                BesideOrUnder(alignment: .firstTextBaseline) {
-                    lines(title, source)
-                    if let word { standingText(word, standing) }
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                    // The word beside the title while the title keeps half the row, the title cut on its line; only
+                    // a word that would leave it less goes under it (`BesideOrUnder`, DESIGN_SYSTEM 6.2). By measured
+                    // widths, so a long title never stacks the row, and rows keep one height as In Progress's do.
+                    BesideOrUnder(alignment: .firstTextBaseline) {
+                        Text(title).font(Theme.Font.secondary).foregroundStyle(Color.primary).lineLimit(1)
+                        if let word { standingText(word, standing) }
+                    }
+                    // Who placed it across the whole row: beside a word it would be cut to the title's width.
+                    Text(source).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -515,13 +519,6 @@ private struct DirectionAddedRow: View {
                 MoveToMenu(key: row.key, title: title, state: session?.state ?? row.session.ownState ?? .unknown,
                            from: direction)
             }
-        }
-    }
-
-    private func lines(_ title: String, _ source: String) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-            Text(title).font(Theme.Font.secondary).foregroundStyle(Color.primary).lineLimit(1)
-            Text(source).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
         }
     }
 
