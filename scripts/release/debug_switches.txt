@@ -312,6 +312,7 @@ showInboxSuggestionEdit
 showInboxSuggestionStale
 showInboxTodo
 showInfo
+showIntakeSyncStatus
 showJumpPerf
 showKeyMods
 showKnowledgeDay

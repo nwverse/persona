@@ -128,6 +128,7 @@ struct PersonaApp: App {
                 // Refresh the health summary snapshot while unlocked, so a locked-phone phone_health_summary
                 // call later can serve it instead of HealthKit's inaccessible-database error.
                 Task { await HealthTool.refreshSnapshot() }
+                Task { await HealthIntakeSync.shared.refresh(model: model) }
                 SiriCalls.askOnce(paired: model.hub != nil) // a build with app.siri_calls only (#9290)
                 #endif
             } else if new == .background {
@@ -497,10 +498,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         AppModel.shared.wakeLinks(group)
         #if os(iOS)
         HomeWidgetData.shared.refresh() // the calendar, Health and the usage the widgets show, when due
+        let intakeSync = Task { await HealthIntakeSync.shared.refresh(model: .shared) }
         #endif
         nonisolated(unsafe) let done = completionHandler
         DispatchQueue.main.asyncAfter(deadline: .now() + 25) {
             #if os(iOS)
+            intakeSync.cancel()
             HomeWidgetWriter.shared.flush() // the hub woke it for the widgets (#5721), or anything they show changed
             #endif
             if UIApplication.shared.applicationState == .background { AppModel.shared.suspendLinks() }

@@ -46,6 +46,10 @@ Each call goes to one of them (`callPhoneWithWait` in `server/internal/hub/hub.g
 - Revoking the primary device's credential ends the choice: Settings › Devices shows Automatic again, and calls follow
   the automatic order.
 
+The health AI write tool's per-sample confirmation and no-deletion rule apply to `phone_health_write_sample` only.
+It never writes water or protein. Separately, explicit opt-in intake sync in Settings › Health writes and removes
+Persona's own water and protein samples; see `docs/assistant/health.md` ("Syncing to Apple Health").
+
 ## Registration and toggles
 
 | Entry | Purpose |

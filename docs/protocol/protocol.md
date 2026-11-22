@@ -247,6 +247,22 @@ not returned because it can belong to background naming. No `model_started`, exe
 is synthesized. The tool invokes no model, writes no settings, resolves no card, renames nothing and publishes no
 session list. Ordinary coding Agents, extensions and work machines cannot call it.
 
+### Health intake changes client
+
+`GET /api/v1/assistant/health/intake/changes?space=health&after=<seq>&limit=<n>` requires full device credentials
+and always targets the default manager, without a manager header or query. `after` is exclusive and nonnegative;
+`limit` defaults to 100 (1–1000). The result is `{changes: [HealthIntakeEntry], next, has_more}`. Entries are in ascending
+`seq` order, including revoked records with `deleted_at`. The stream gives current record states, so a record added
+and revoked before the read may appear only as a tombstone. `next` is the last sequence in the page, or the requested
+`after` for an empty page. Use `next` to paginate; sequence gaps are valid, and row counts are not cursors.
+
+The iPhone Apple Health sync client checkpoints each successful HealthKit operation, then commits the page's `next`
+after every entry succeeds. A failure leaves that entry unacknowledged and stops the stream for a later trigger.
+Consent and cursor belong to the selected hub; never apply another hub's changes under them. A missing cursor replays
+from zero with stable HealthKit sync identifiers. `health_intake` broadcasts invalidate totals and trigger the same
+ordered sync; their payload contains no records and is never a cursor. See `docs/assistant/health.md`
+("Syncing to Apple Health").
+
 ### Health check and feature flags
 
 `GET /api/v1/health` needs no authentication. Public sources get only:
