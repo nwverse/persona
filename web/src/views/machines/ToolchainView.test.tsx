@@ -113,6 +113,7 @@ describe("Machines toolchain view opt-in persistence", () => {
     const tcBtn = [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Toolchain");
     expect(tcBtn).toBeTruthy();
     act(() => tcBtn!.click());
+    await act(async () => { await vi.dynamicImportSettled(); });
     await flush();
 
     expect(requested.some((u) => u.includes("/api/v1/machines/dev-box/toolchain"))).toBe(true);
