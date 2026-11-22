@@ -5,13 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -86,14 +86,16 @@ func (s *Service) toolSecretStore(ctx context.Context, machine, session string, 
 			return bad("could not describe the secret storage target")
 		}
 		in.Target = desc.Target
-		input := proto.SecretHandoffInput{Agent: row.Title, MachineName: machine, StoreOperation: in.Target.Operation, Prompt: "Write the listed fields to 1Password. Values stay hidden; this approves one write only."}
+		l := s.lang(ctx)
+		operation := i18n.T(l, "assistant-secret_store."+in.Target.Operation)
+		input := proto.SecretHandoffInput{Agent: row.Title, MachineName: s.machineName(machine), StoreOperation: in.Target.Operation, Prompt: i18n.T(l, "assistant-secret_store.note")}
 		for _, f := range in.Target.Fields {
-			input.Variables = append(input.Variables, proto.SecretHandoffVariable{Name: f.Name, Provider: prov.Extension, ProviderName: prov.Name, Title: in.Target.Operation + " › " + desc.VaultName + " › " + in.Target.Title})
+			input.Variables = append(input.Variables, proto.SecretHandoffVariable{Name: f.Name, Provider: prov.Extension, ProviderName: prov.Name, Title: operation + " › " + desc.VaultName + " › " + in.Target.Title})
 		}
 		cardRaw, _ := json.Marshal(input)
 		now := time.Now().UTC()
-		ix := proto.Interaction{ID: "ix_" + randomHex(12), MachineID: machine, SessionID: session, SessionTitle: row.Title, Kind: proto.IxPermission, ToolName: proto.SecretHandoffTool, ToolTitle: "Store fields in 1Password", ToolInput: cardRaw,
-			Summary: fmt.Sprintf("%s on %s: %s 1Password item %s in %s (%d fields); approve on iPhone or web", row.Title, machine, in.Target.Operation, in.Target.Title, desc.VaultName, len(in.Target.Fields)), CreatedAt: now, ExpiresAt: now.Add(handoffCardWait)}
+		ix := proto.Interaction{ID: "ix_" + randomHex(12), MachineID: machine, SessionID: session, SessionTitle: row.Title, Kind: proto.IxPermission, ToolName: proto.SecretHandoffTool, ToolTitle: i18n.T(l, "assistant-secret_store.title"), ToolInput: cardRaw,
+			Summary: i18n.T(l, "assistant-secret_store.summary", i18n.Args{"agent": row.Title, "machine": s.machineName(machine), "operation": operation, "item": in.Target.Title, "vault": desc.VaultName, "count": len(in.Target.Fields)}), CreatedAt: now, ExpiresAt: now.Add(handoffCardWait)}
 		r, err := s.ask(ctx, ix)
 		claim, vouched := s.takeHandoffClaim(ix.ID)
 		if err != nil {
