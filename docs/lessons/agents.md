@@ -371,6 +371,8 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
 - Codex app-server `thread/loaded/list` isn't all chats (2026-11-05, #2118, 0.166): TUI creates `ephemeral: true` threads for small background tasks in the shared managed daemon
   (`threadSource: "thread_title"`, title generation), without `path` / rollout; they stay loaded and `active` after finishing. Ignoring `ephemeral` produces a row of untitled "Working" Codex entries from the same directory and second on the Agents page.
   Skip `ephemeral` before listing sessions; they also don't support `includeTurns` (returns -32600).
+  Remember the answer too (#12517): an app-server-compatible daemon kept 600 to 740 finished helper threads loaded, and reading every one on each 5 s refresh made about 100 reads a second
+  and used up the refresh's 20 s before the real threads were read. Nor read a long list in its own order, or count a read the refresh's time cut short as read: either way the same threads are cut on every refresh.
 - Use the exported `codex app-server` protocol (`codex app-server generate-ts --out <dir>`). Experimental APIs (`thread/backgroundTerminals/*`, `process/*`)
   require `--experimental` to export and `capabilities.experimentalApi: true` in `initialize` to use. Other Codex assistant pitfalls are in `assistant.md`.
   Codex assistant rollout begins with tens of KB of instructions (AGENTS.md, snapshot), with the first user message after 70 KB: scanning only the first 32 KB for a title fails (`readQuickMeta`).
