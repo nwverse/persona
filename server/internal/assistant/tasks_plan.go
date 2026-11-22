@@ -164,6 +164,9 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if !s.placeTask(ctx, t) {
 			return "", fmt.Errorf("task %d: unknown machine %q (machines: %s)", i+1, t.Machine, s.machineIDs(ctx))
 		}
+		if m, ok := s.machineByName(ctx, t.Machine); ok && assistantWorkspace(m, t.Cwd) {
+			return "", fmt.Errorf("task %d: %w", i+1, i18n.Err("rpc-errors.agent_assistant_workspace"))
+		}
 		// Validate the tier now without pinning its model: it is resolved again at dispatch.
 		preview := *t
 		if err := s.applyTaskTier(ctx, &preview); err != nil {
@@ -241,8 +244,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		return "", err
 	}
 	// A round the hub started for a scheduled task (schedule_grant.go, #8045): its plan names the schedule, so the card
-	// can offer to let it start these by itself, and that schedule's grant may start them now. Never in the health
-	// space, whose plans always wait for Start.
+	// can offer to let it start these by itself, and that schedule's grant may start them now. Never in a space that
+	// confirms what leaves it, whose plans always wait for Start.
 	if scope == nil && slices.ContainsFunc(a.Tasks, func(t PlanTask) bool { return t.UserRequested }) && s.inScheduledTurn(ctx, machine, sessionID) {
 		// A round the hub started has no message of the owner's: "the user asked for this" is only the model's word.
 		for i := range a.Tasks {
@@ -257,7 +260,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	}
 	var round Task
 	var inRound bool
-	if scope == nil && !s.inHealth(ctx, sessionID) {
+	if scope == nil && !s.selfPolicy(ctx, sessionID).ConfirmOutbound {
 		if round, inRound = s.scheduledRoundOf(ctx, machine, sessionID); inRound && round.grantEligible() && s.claudeConversation(ctx, machine, sessionID) {
 			for i := range a.Tasks { // the card offers to let this schedule start these by itself
 				a.Tasks[i].Schedule, a.Tasks[i].ScheduleTitle, a.Tasks[i].ScheduleBasis = round.ID, round.labelIn(s.lang(ctx)), round.runGrantBasis
@@ -281,9 +284,9 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			s.logf("task plan %s: feed: %v", p.ID, err)
 		}
 	}
-	// A plan from the health space hands its prompts to agents outside it: it waits for the user's "Start" on its card,
-	// whatever would start it at once, and its push names no task (health.go).
-	health := s.inHealth(ctx, sessionID)
+	// A plan from a space that confirms what leaves it hands its prompts to agents outside it: it waits for the user's
+	// "Start" on its card, whatever would start it at once; and a space that redacts names no task in its push (health.go).
+	policy := s.selfPolicy(ctx, sessionID)
 	if scope != nil { // no card: a leader's workers start at once, as part of the task the user let start
 		started, err := s.startPlan(ctx, p.ID, nil, false)
 		if err != nil {
@@ -310,7 +313,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if inRound {
 		granted = func() func(PlanTask) bool { return s.scheduleGrantCover(ctx, round, machine, sessionID) }
 	}
-	if health || slices.ContainsFunc(p.Tasks, func(task PlanTask) bool { return task.RequestGate != "" }) || !s.planStartsAtOnceUnder(ctx, p.Tasks, granted) {
+	if policy.ConfirmOutbound || slices.ContainsFunc(p.Tasks, func(task PlanTask) bool { return task.RequestGate != "" }) || !s.planStartsAtOnceUnder(ctx, p.Tasks, granted) {
 		s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSpace(ctx, s.planWithSuggestion(ctx, p, s.lang(ctx)))})
 		// A card below the answer is easy to miss: push it as well.
 		titles := make([]string, 0, len(p.Tasks))
@@ -328,8 +331,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			machineName = m.Name
 		}
 		body := strings.Join(titles, i18n.T(l, "assistant-tasks.list_sep"))
-		if health {
-			title, body = healthNotice(l)
+		if policy.Redact {
+			title, body = spaceNotice(l)
 		}
 		s.push(ctx, Notification{Subtitle: machineName, DeviceID: here, SessionID: sessionID, Title: title, Body: body})
 		if lead != "" || s.isLeader(ctx, sessionID) {
