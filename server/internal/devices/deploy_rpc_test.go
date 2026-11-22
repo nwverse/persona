@@ -191,7 +191,7 @@ func TestStaleDeployErrorClearsWhenTheNodeMatches(t *testing.T) {
 }
 
 func TestLinkedDeployCapabilities(t *testing.T) {
-	hubNodeBinary(t, "linux", "amd64")
+	hubNodeBinary(t, "linux", "amd64", "new-build")
 	for _, kind := range []string{kindLink, kindService} {
 		t.Run(kind, func(t *testing.T) {
 			_, m, _, _ := linkedDeployFixture(t, kind)
