@@ -107,6 +107,9 @@ func (s *Service) resourceRows(ctx context.Context, d rq.Definition, fn func(*[]
 						l := &leases[i]
 						if l.Key == key && (l.State == "queued" || l.State == "granted") {
 							found = true
+							if !l.External && job.Tag == l.ID && job.Run != "" {
+								l.ExternalRef = job.Run
+							}
 							if l.External {
 								if job.Slot > 0 {
 									l.State = "granted"

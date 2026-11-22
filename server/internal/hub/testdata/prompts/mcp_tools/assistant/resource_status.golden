@@ -1,0 +1,13 @@
+{
+  "name": "resource_status",
+  "description": "Read registered shared runners, queue tickets, duplicate markers and mirror freshness. An unknown or stale mirror is not a successful result.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "resource": {
+        "type": "string"
+      }
+    },
+    "required": []
+  }
+}

@@ -19,6 +19,8 @@ import (
 )
 
 var resourceCall = func(ctx context.Context, name string, args any, out any) error {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
 	raw, err := nodeclient.DialInterruptible(ctx, map[string]any{"kind": "cli.call", "name": name, "args": args, "pane": nodeclient.HookPane(os.Getenv), "codex_thread_id": os.Getenv("CODEX_THREAD_ID")})
 	if err != nil {
 		return err

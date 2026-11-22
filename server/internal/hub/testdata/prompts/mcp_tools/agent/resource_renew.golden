@@ -1,0 +1,23 @@
+{
+  "name": "resource_renew",
+  "description": "Renew this session’s granted lease using its fencing token. Stop the runner client when fenced.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "resource": {
+        "type": "string"
+      },
+      "lease_id": {
+        "type": "string"
+      },
+      "token": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "resource",
+      "lease_id",
+      "token"
+    ]
+  }
+}

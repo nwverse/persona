@@ -3,6 +3,7 @@ mail_search
 mail_read
 mail_save_attachment
 mail_send
+resource_status
 ask_user
 notify_user
 supervision_finish

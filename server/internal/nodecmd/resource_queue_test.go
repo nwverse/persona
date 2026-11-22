@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -15,6 +16,9 @@ import (
 )
 
 func TestGateNewJoinedCachedSubmitExactlyOnce(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell transport fixture")
+	}
 	for _, status := range []string{"granted", "joined", "cached"} {
 		t.Run(status, func(t *testing.T) {
 			dir := t.TempDir()
@@ -63,6 +67,9 @@ func TestGateNewJoinedCachedSubmitExactlyOnce(t *testing.T) {
 	}
 }
 func TestGateManagerUnavailableFallsBackExplicitly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell transport fixture")
+	}
 	old := resourceCall
 	t.Cleanup(func() { resourceCall = old })
 	resourceCall = func(context.Context, string, any, any) error { return errors.New("unreachable") }

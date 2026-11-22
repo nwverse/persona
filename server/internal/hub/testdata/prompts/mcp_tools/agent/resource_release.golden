@@ -1,0 +1,42 @@
+{
+  "name": "resource_release",
+  "description": "Record the exit code and result of this session’s granted lease using its fencing token.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "resource": {
+        "type": "string"
+      },
+      "lease_id": {
+        "type": "string"
+      },
+      "token": {
+        "type": "integer"
+      },
+      "outcome": {
+        "type": "object",
+        "properties": {
+          "exit": {
+            "type": "integer"
+          },
+          "run": {
+            "type": "string"
+          },
+          "output": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "exit",
+          "run"
+        ]
+      }
+    },
+    "required": [
+      "resource",
+      "lease_id",
+      "token",
+      "outcome"
+    ]
+  }
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -97,7 +98,7 @@ func TestAdmissionLimitFIFOExpiryAndExternalSlots(t *testing.T) {
 	}
 }
 func TestRunnerUnavailableAndLegacyFallback(t *testing.T) {
-	if strings.Contains(os.Getenv("GOOS"), "windows") {
+	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture")
 	}
 	dir := t.TempDir()
