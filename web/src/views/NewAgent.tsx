@@ -7,7 +7,8 @@ import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyn
 import { hubLabel } from "../lib/mesh";
 import { api, ApiError, credentialOwner, enc, errorText, getToken, isAbort, subscribeCredentialOwner } from "../lib/api";
 import { defaultManager, otherManager, useKnownDefault } from "../lib/manager-choice";
-import { pickAttachment, releaseAttachments, type LocalAttachment } from "../lib/attachments";
+import { base64File, pickAttachment, releaseAttachments, type LocalAttachment } from "../lib/attachments";
+import { MAX_PICTURE_SOURCE } from "../lib/image-limits";
 import { safeDraftRemove, safeDraftWrite, type DraftImage } from "../lib/drafts";
 import { withContexts } from "../lib/context-xml";
 import type { ContextRef } from "../lib/links";
@@ -72,12 +73,7 @@ const NewFolderButton = lazyPage(() => import("./NewAgentDesktop").then((m) => m
 const NewFolderNaming = lazyPage(() => import("./NewAgentDesktop").then((m) => m.NewFolderNaming));
 
 /** A forwarded picture (lib/drafts.ts DraftImage, base64) as a file for the first message's tray. */
-function draftImageFile(img: DraftImage): File {
-  const bin = atob(img.data);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new File([bytes], img.name, { type: img.mime });
-}
+const draftImageFile = (img: DraftImage) => base64File(img.name, img.mime, img.data);
 
 interface Dirs {
   path: string;
@@ -387,7 +383,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const addFiles = (files: FileList | File[]) => {
     const picked: LocalAttachment[] = [];
     for (const file of Array.from(files)) {
-      try { picked.push(pickAttachment(file)); }
+      try { picked.push(pickAttachment(file, MAX_PICTURE_SOURCE)); }
       catch (e) { toast(errorText(e), "error"); }
     }
     setAttachments((current) => [...current, ...picked]);

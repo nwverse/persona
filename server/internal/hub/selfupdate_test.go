@@ -727,6 +727,12 @@ func TestUpdateDownloadsEveryNodePlatformInTheRelease(t *testing.T) {
 				SHA256: hex.EncodeToString(sum[:]), BinarySHA256: hex.EncodeToString(binSum[:])}
 			served["/dl/"+name] = body
 		}
+		// A Windows build keeps its .exe (#10968): releases up to 0.9.1 left it out, and the hub kept the old one.
+		body := gz(script)
+		sum, binSum := sha256.Sum256(body), sha256.Sum256(script)
+		m.Files["windows-amd64"] = update.File{Name: "personad-windows-amd64.exe.gz", Size: int64(len(body)),
+			SHA256: hex.EncodeToString(sum[:]), BinarySHA256: hex.EncodeToString(binSum[:])}
+		served["/dl/personad-windows-amd64.exe.gz"] = body
 	})
 	p.extra = served
 	var mu sync.Mutex
@@ -779,12 +785,21 @@ func TestUpdateDownloadsEveryNodePlatformInTheRelease(t *testing.T) {
 	} else if !bytes.Equal(b, p.script) {
 		t.Fatalf("the node binary for %s is not the hub's binary: %d bytes, gzip %v", own, len(b), len(b) > 1 && b[0] == 0x1f && b[1] == 0x8b)
 	}
+	if _, err := os.Stat(filepath.Join(staged, "personad-windows-amd64.exe")); err != nil {
+		t.Fatalf("the release's Windows node build was not downloaded: %v", err)
+	}
 	// What the new hub does with them: "Redeploy" takes them from NodeBinaryDir (internal/devices nodeBinary).
+	if err := os.WriteFile(filepath.Join(nodes, "personad-windows-amd64.exe"), []byte("the old Windows build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	h.upd.updateNodes(context.Background(), staged, "")
 	for _, plat := range want {
 		if _, err := os.Stat(filepath.Join(nodes, "personad-"+plat)); err != nil {
 			t.Fatalf("no node binary for %s in NodeBinaryDir: %v", plat, err)
 		}
+	}
+	if b, err := os.ReadFile(filepath.Join(nodes, "personad-windows-amd64.exe")); err != nil || !bytes.Equal(b, script) {
+		t.Fatalf("the Windows node build was not replaced: %q %v", b, err)
 	}
 }
 

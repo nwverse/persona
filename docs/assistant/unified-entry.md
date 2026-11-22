@@ -230,6 +230,8 @@ which entry every case goes to, which tasks Finished lists and which of those ar
 reviewing entry (#8678). The older Pending / Progress / Agents / To start entries
 below are the earlier presentation (#2878, #3162).
 
+- **Starting means a dispatch is in flight (Apple, #7552):** with no Agent up, an In progress to-do says Starting only when its `plan_id` names a start that has not failed, or a loaded non-dismissed plan holds it as a task with no error (including a takeover whose to-do has no `plan_id`). A plain to-do nobody dispatched says Not started with a still/offline mark and no working rank. It remains one open row, so the tray and To-dos counts are unchanged. Plan slots without a to-do keep their existing presentation.
+
 ### Background activity in In progress (#3588)
 
 A task's row and a hand-opened Agent's row use the **existing Working spinner** whenever background commands,

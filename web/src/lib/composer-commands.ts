@@ -1,5 +1,5 @@
 // What an agent's composer offers and refuses, by what the session can do (iOS ChatView canPickModel / canClear,
-// Android canTypeClaudeCommands): the "/" list and the cap on pictures.
+// Android canTypeClaudeCommands): the "/" list. The pictures a message takes are the hub's (lib/image-limits.ts).
 import { agentName, sessionAgent } from "./agent-kind";
 import { WORKFLOWS_COMMAND } from "./background-panel";
 import { canSwitchModel } from "./model-switch";
@@ -7,9 +7,6 @@ import { hasLoop, LOOP_TEXT } from "./loop-command";
 import { sessionCan, stateOf } from "./format";
 import type { Session } from "./types";
 import { canPickPermissions, PERMISSIONS_COMMAND } from "./permissions-command";
-
-/** Pictures one message takes (iOS ChatView, MacComposerDrop.maxImages, Android ChatComposer). */
-export const MAX_IMAGES = 4;
 
 /** Rows the "/" palette lists at most (cindy's filterSlashCommands). */
 export const SLASH_LIMIT = 25;
