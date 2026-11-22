@@ -328,6 +328,7 @@ func (s *Service) patchTaskExecution(ctx context.Context, t *Task, raw map[strin
 }
 
 func (s *Service) validateTaskExecutionModel(ctx context.Context, p ModelPurpose, b ModelBinding, catalogKnown bool) error {
+	ctx = withLauncherPurpose(ctx, "assistant")
 	providers := s.modelProviders(ctx)
 	name := strings.TrimPrefix(b.Provider, "launcher.")
 	if !catalogKnown && strings.HasPrefix(b.Provider, "launcher.") && launcherName.MatchString(name) && !slices.ContainsFunc(providers, func(v ModelProvider) bool { return v.ID == b.Provider }) {
@@ -544,6 +545,9 @@ func taskConversationUnavailable(err error, id string) bool {
 
 // Use the launcher's own capability metadata when it advertises model-specific thinking levels.
 func (s *Service) checkTaskModelCapabilities(ctx context.Context, machine string, b ModelBinding) error {
+	// Scheduled conversations run on the Assistant backend, independently of the Agent engine.
+	// Its same-named provider can have a different model catalog and thinking vocabulary.
+	ctx = withLauncherPurpose(ctx, "assistant")
 	launcher := strings.TrimPrefix(b.Provider, "launcher.")
 	if b.Model != "" {
 		if err := s.pickedModelRefusal(ctx, machine, launcher, b.Model); err != nil {

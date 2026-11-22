@@ -373,6 +373,11 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 			if s.SessionID == p.SessionID {
 				info["cwd"], info["model"], info["agent"], info["last_activity"] = s.Cwd, s.Model, s.Agent, s.UpdatedAt
 				info["permission_mode"], info["effort"] = s.PermissionMode, s.Effort
+				if h.agent() == agyAgent && (s.ContextTokens > 0 || s.OutputTokens > 0) {
+					info["context_tokens"] = int(s.ContextTokens)
+					info["output_tokens"] = s.OutputTokens
+					delete(info, "usage_unknown")
+				}
 			}
 		}
 		// Not in its list (an older session it still has): what the node knows without the list.

@@ -3254,9 +3254,11 @@ accepted the input. None of these alone proves that the model has begun answerin
 - A client talking to an older hub keeps its Sending/outbox feedback until the existing HTTP and transcript evidence
   arrives. No client may pretend that local enqueue alone was a hub receipt.
 
-Apple integration uses the same event and boundaries; no Apple code changes are included in #5258. A new main
-conversation started through a creation endpoint has no target session subscription yet: keep local Sending/Preparing
-until that endpoint's existing result binds it, then use the ordinary session flow.
+Apple integration uses the same event and boundaries; no Apple code changes are included in #5258. The iOS app reads
+both events from #10465 on, each only under its current socket's hello marker
+([ios.md](../apple/ios.md) "To-dos (V1, #10465)", its "Send receipts"); its chats still show Processing after the HTTP
+answer. A new main conversation started through a creation endpoint has no target session subscription yet: keep
+local Sending/Preparing until that endpoint's existing result binds it, then use the ordinary session flow.
 
 **To-do writes (#10465).** A message to a to-do (`POST /api/v1/assistant/conversations/{id}/route {todo_id, text}`) and
 an answer to one of its asks (`POST /api/v1/todos/{id}/asks/{ask}/answer`) get the same three boundaries when they carry
