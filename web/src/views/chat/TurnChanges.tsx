@@ -8,25 +8,15 @@ import { below } from "../../lib/files";
 import { openPanel } from "../../lib/panel";
 import { REVIEW_FEATURE } from "../../lib/session-review";
 import { hubHas, useStore } from "../../lib/store";
-import type { ChangedFile, TurnChangeSet } from "../../lib/turn-changes";
+import { VISIBLE_FILES, type ChangedFile, type TurnChangeSet } from "../../lib/turn-changes";
 import { Button } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { t } from "../../i18n";
 
-/** Files listed before "Show N more files" (cindy's MAX_VISIBLE_FILES). */
-export const VISIBLE_FILES = 3;
-
-/** The card's height as drawn (Chrome, 2026-11-12), for an exchange's estimate before it is first drawn: its 4 px
- *  margins, border, the 64 px head, and the files' padding, rows and Show more row. */
-export function turnChangesHeight(c: TurnChangeSet): number {
-  const rows = Math.min(c.files.length, VISIBLE_FILES);
-  return 8 + 2 + 64 + 1 + 16 + rows * 36 + (c.files.length > VISIBLE_FILES ? 32 : 0);
-}
-
 /** "Show N more files" / "Show less": a row of its own, a finger tall on a touch screen like the files above it. */
 const LINK_ROW = "flex h-8 items-center gap-1 rounded-control px-2 text-[13px] whitespace-nowrap text-ink-2 transition-colors hover:bg-hover hover:text-ink [@media(pointer:coarse)]:h-11";
 
-export const TurnChanges = memo(function TurnChanges({ changes, mid, sid, cwd }: { changes: TurnChangeSet; mid: string; sid: string; cwd?: string }) {
+export const TurnChanges = memo(function TurnChanges({ changes, mid, sid, cwd, turn }: { changes: TurnChangeSet; mid: string; sid: string; cwd?: string; turn: string }) {
   // the session's review panel, where the hub has it (as the chat's menu and the Git panel decide)
   const reviews = useStore((s) => hubHas(s.features, REVIEW_FEATURE)) && Boolean(cwd);
   const [expanded, setExpanded] = useState(false);
@@ -45,7 +35,11 @@ export const TurnChanges = memo(function TurnChanges({ changes, mid, sid, cwd }:
           <Icon name="fileDiff" size={18} />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[14px] font-medium text-ink">{t("chat-turnchanges.title", { count: files.length })}</div>
+          <button type="button" data-open-changes onClick={() => openPanel({ kind: "changes", mid, sid, turn })}
+            className="flex max-w-full items-center gap-1 rounded-control text-[14px] font-medium text-ink hover:text-accent-ink">
+            <span className="truncate">{t("chat-turnchanges.title", { count: files.length })}</span>
+            <Icon name="chevronRight" size={13} className="shrink-0 text-ink-3" />
+          </button>
           {changes.exact && (
             <div className="mt-0.5 font-mono text-[12px] tabular-nums">
               <span className="text-diff-add-fg">+{changes.add}</span> <span className="text-diff-del-fg">-{changes.del}</span>

@@ -16,6 +16,8 @@ export const MAX_CODE_LINES = 60;
  *  compares the files on disk with (lib/session-review.ts, #151): HEAD, where the branch left the default branch, a
  *  commit (`base`: its first 8 hex digits). */
 export type DiffScope =
+  | { kind: "changes"; scope: "session" }
+  | { kind: "changes"; scope: "exchange"; turn: string }
   | { kind: "staged" }
   | { kind: "unstaged" }
   | { kind: "commit"; sha: string }
@@ -120,12 +122,18 @@ export function truncateLines(lines: readonly string[], max = MAX_CODE_LINES): {
 
 /** `staged`, `unstaged` or `commit <first 8 of the hash>`; a review's `uncommitted`, `branch since <hash>`, `since <hash>`. */
 export function diffLabel(d: DiffScope): string {
+  if (d.kind === "changes") return d.scope === "session" ? "session edits" : `exchange edits ${encodeURIComponent(d.turn)}`;
   if (d.kind === "review") return d.scope === "uncommitted" ? "uncommitted" : `${d.scope === "branch" ? "branch since" : "since"} ${d.base}`;
   return d.kind === "commit" ? `commit ${d.sha.slice(0, 8)}` : d.kind;
 }
 
 /** A `Diff:` line's value read back (diffLabel's). */
 export function parseDiffLabel(v: string): DiffScope | null {
+  if (v === "session edits") return { kind: "changes", scope: "session" };
+  const exchange = /^exchange edits (\S+)$/.exec(v);
+  if (exchange) {
+    try { return { kind: "changes", scope: "exchange", turn: decodeURIComponent(exchange[1]) }; } catch { return null; }
+  }
   const d = /^(staged|unstaged|uncommitted|commit ([0-9a-f]+)|(branch since|since) ([0-9a-f]+))$/.exec(v.trim());
   if (!d) return null;
   if (d[2]) return { kind: "commit", sha: d[2] };
@@ -286,7 +294,8 @@ function parseElementBlock(lines: string[]): DraftQuote | null {
 /** Opens the file or the diff a code comment is about at its lines; false when it does not know where (a bubble read back). */
 export function openSpot(s: CodeSpot): boolean {
   if (!s.mid) return false;
-  if (s.diff?.kind === "review") openPanel({ kind: "review", mid: s.mid, sid: s.sid ?? "", cwd: s.cwd ?? "", at: { path: s.path, line: s.from, old: s.old } });
+  if (s.diff?.kind === "changes") openPanel({ kind: "changes", mid: s.mid, sid: s.sid ?? "", scope: s.diff.scope, turn: s.diff.scope === "exchange" ? s.diff.turn : undefined, at: { path: s.path, line: s.from, to: s.to, old: s.old } });
+  else if (s.diff?.kind === "review") openPanel({ kind: "review", mid: s.mid, sid: s.sid ?? "", cwd: s.cwd ?? "", at: { path: s.path, line: s.from, old: s.old } });
   else if (s.diff) openPanel({ kind: "git", mid: s.mid, sid: s.sid ?? "", cwd: s.cwd ?? "", at: { path: s.path, diff: s.diff, line: s.from, to: s.to, old: s.old } });
   else openPanel({ kind: "file", mid: s.mid, path: s.path, cwd: s.cwd, line: s.from, to: s.to, sid: s.sid });
   return true;

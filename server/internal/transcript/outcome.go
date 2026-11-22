@@ -2,6 +2,8 @@ package transcript
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -31,9 +33,9 @@ const (
 
 // claudeToolResult is the part of a tool_result line's toolUseResult (Claude Code's own record of the call) outcomes
 // read. The record also holds the call's whole output (stdout, a Read's content) and an edited file's whole text
-// (originalFile): those are skipped, never copied. Its shape varies by tool and version (a failed call records a
-// string, an MCP call its content blocks), so UnmarshalJSON takes any value: what is not an object leaves the zero
-// value, a field of an unexpected type only that field, and the line is parsed all the same.
+// (originalFile). A bounded original file contributes only its fingerprint. The shape varies by tool and version
+// (a failed call records a string, an MCP call its content blocks), so UnmarshalJSON takes any value: a non-object
+// leaves the zero value, a field of an unexpected type only that field, and the line is parsed all the same.
 type claudeToolResult struct {
 	Interrupted              bool     `json:"interrupted"`
 	TimedOutAfterMs          *float64 `json:"timedOutAfterMs"`
@@ -63,16 +65,33 @@ type claudeToolResult struct {
 	} `json:"gitOperation"`
 	// Edit and Write: the file and Claude Code's diff of the change. Type is Write's create | update (Read's text |
 	// file_unchanged | image); Content a new file's text, of which only the lines are counted.
-	FilePath        string       `json:"filePath"`
-	Type            string       `json:"type"`
-	StructuredPatch []claudeHunk `json:"structuredPatch"`
-	Content         lineCount    `json:"content"`
+	OriginalFile    fileFingerprint `json:"originalFile"`
+	FilePath        string          `json:"filePath"`
+	Type            string          `json:"type"`
+	StructuredPatch []claudeHunk    `json:"structuredPatch"`
+	Content         lineCount       `json:"content"`
 	File            *struct {
 		StartLine  int `json:"startLine"`
 		NumLines   int `json:"numLines"`
 		TotalLines int `json:"totalLines"`
 	} `json:"file"` // Read
 	Answers map[string]string `json:"answers"` // AskUserQuestion
+}
+
+// A recorded pre-edit file can identify the exact version in Git without publishing its contents.
+type fileFingerprint string
+
+func (f *fileFingerprint) UnmarshalJSON(b []byte) error {
+	*f = ""
+	if len(b) < 2 || b[0] != '"' || len(b) > 256<<10 {
+		return nil
+	}
+	var content string
+	if err := json.Unmarshal(b, &content); err == nil {
+		sum := sha256.Sum256([]byte(content))
+		*f = fileFingerprint(hex.EncodeToString(sum[:]))
+	}
+	return nil
 }
 
 type claudeHunk struct {
@@ -228,7 +247,7 @@ func claudeOutcome(text string, isErr bool, r *claudeToolResult, denial string) 
 		}
 	}
 	if r.FilePath != "" && (r.StructuredPatch != nil || r.Type == "create") {
-		f := proto.OutcomeFile{Path: r.FilePath}
+		f := proto.OutcomeFile{Path: r.FilePath, BeforeSHA256: string(r.OriginalFile)}
 		o.Patch, o.PatchCut, f.Adds, f.Dels = claudePatch(r.StructuredPatch)
 		if r.Type == "create" {
 			f.Created = true

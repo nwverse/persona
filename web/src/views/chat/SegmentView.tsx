@@ -42,12 +42,14 @@ import { useChatContext } from "./chat-context";
 import { useFreshWords } from "./fresh-words";
 import { Icon } from "../../ui/icons";
 import { WorkGroup, WorkNodes, type WorkProps } from "./WorkGroup";
-import { TurnChanges, turnChangesHeight } from "./TurnChanges";
-import { turnChanges } from "../../lib/turn-changes";
+import { turnChanges, turnChangesHeight } from "../../lib/turn-changes";
 import type { Step } from "../../lib/turns";
 import { useCallSeeker } from "./jump";
 import { t } from "../../i18n";
 import { useMessageFeedback } from "../../lib/message-send";
+
+// The changed-files controls are needed only for an Agent exchange with file edits.
+const TurnChanges = lazy(() => import("./TurnChanges").then((m) => ({ default: m.TurnChanges })));
 
 // a finished reply's Sources row (#9132): its chunk loads only for a turn that looked something up on the web
 const TurnSources = lazy(() => import("./TurnSources").then((m) => ({ default: m.TurnSources })));
@@ -419,7 +421,9 @@ export const SegmentView = memo(function SegmentView({
       {!live && <Fragment key="before-words">{beforeWords}</Fragment>}
       {(latestItem || streaming !== undefined) && <Suspense key="latest-text" fallback={null}><LatestAnswer item={streaming === undefined ? latestItem : undefined} streaming={streaming} mid={mid} sid={sid} noCloseout={noCloseout || undefined} done={(!live && !busy) || undefined} cut={(!live && seg.cut) || undefined} usage={usage} usageMs={usageMs} /></Suspense>}
       {sourced && <Suspense key="turn-sources" fallback={null}><TurnSources steps={own} /></Suspense>}
-      {changes && <TurnChanges key="turn-changes" changes={changes} mid={mid} sid={sid} cwd={cwd} />}
+      {changes && <Suspense key="turn-changes" fallback={<div aria-hidden style={{ height: turnChangesHeight(changes) }} />}>
+        <TurnChanges turn={seg.id} changes={changes} mid={mid} sid={sid} cwd={cwd} />
+      </Suspense>}
     </section>
   );
 });

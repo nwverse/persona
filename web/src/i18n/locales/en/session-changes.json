@@ -14,5 +14,22 @@
   "retry": "Retry",
   "empty": "No edits in this scope yet",
   "resize_label": "Resize edited files",
-  "resize_title": "Drag or use arrow keys to resize; double-click or Enter to reset"
+  "resize_title": "Drag or use arrow keys to resize; double-click or Enter to reset",
+  "counts": "{add} added, {del} removed",
+  "before": "Before",
+  "after": "After",
+  "comment_line": "{side} · Comment on line {line}",
+  "copy_path": "Copy path",
+  "incomplete": "This history does not contain a complete file diff. Inspect the recorded calls below.",
+  "no_net": "These edits leave no net change.",
+  "expand_context": "Show more context",
+  "unknown_position": "Recorded excerpt · line numbers unavailable",
+  "uncaptured_range": "Choose a range within the recorded lines.",
+  "calls_one": "{count} edit call",
+  "calls_other": "{count} edit calls",
+  "viewed_count": "{viewed}/{count} viewed",
+  "find_files": "Find a file",
+  "no_newline": "No newline at end of file",
+  "display_options": "Display options",
+  "context_lines": "Context lines"
 }

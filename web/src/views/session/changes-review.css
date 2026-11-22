@@ -1,0 +1,46 @@
+/* Scope the review's specialized gutters to this lazy panel. */
+.changes-gutter {
+  position: relative;
+  flex: 0 0 4.5ch;
+  padding-inline: .5ch;
+  text-align: right;
+  color: var(--ink-3);
+  user-select: none;
+}
+.changes-gutter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.changes-gutter[data-marked="true"] {
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+.changes-gutter > svg { display: none; }
+@media (hover: hover) {
+  button.changes-gutter:hover {
+    background: var(--accent-tint);
+    color: var(--accent-ink);
+  }
+  button.changes-gutter:hover > span { visibility: hidden; }
+  button.changes-gutter:hover > svg {
+    position: absolute;
+    display: block;
+    inset: 0;
+    margin: auto;
+  }
+}
+.changes-sign { flex: 0 0 2.2ch; text-align: center; user-select: none; }
+.changes-hunk[data-wrap="true"] code { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.changes-hunk[data-wrap="false"] code { white-space: pre; }
+.changes-hunk[data-wrap="false"] > div { min-width: max-content; }
+/* Adjacent old/new targets must each fit a finger without overlapping another line or side. */
+@media (pointer: coarse) {
+  .changes-gutter { flex-basis: max(4.5ch, 2.75rem); }
+  button.changes-gutter { min-height: 2.75rem; }
+  [data-changes-panel] :is([data-review-file] header button, [data-history-toggle], [data-context-edge],
+    [data-files-strip], input[type="search"], select, [data-review-options-row] label) { min-height: 2.75rem; }
+  [data-changes-panel] :is([data-review-toolbar] button, [data-review-file] header button[aria-label]) {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+}
