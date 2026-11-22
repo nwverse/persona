@@ -19,6 +19,48 @@ Code: `server/internal/feishubot` (long connection, REST, events and message con
 `server/internal/assistant/feishu*.go` (targets, commands, sending into chats, cards, pushes, sync: Lark's side of the shared pipeline);
 prompt `server/internal/prompts/bot/message.md`; the App page `apple/Persona/Views/Settings/FeishuBotView.swift` (**Settings › Connectors › Lark Bot**). On web Settings › Connectors, the lark-cli status appears in this Lark group.
 
+## Recovering saved settings
+
+The manager treats a missing `bots.feishu` record as a fresh, disabled bot with the existing feature defaults.
+A failed storage read or JSON decode leaves the settings unknown: Settings GET/PUT and pairing requests fail,
+channel binding does not start registration, and `feishu.status` returns an error rather than an empty owner.
+The assistant therefore does not reconcile an unread pairing as an unpairing. Writes are blocked until a complete read succeeds.
+
+Later status, settings and transport lookups retry the read, at most once every five seconds per manager while it fails.
+Each storage read has a five-second deadline, shortened by the caller's earlier cancellation. Only one read runs at a time;
+it releases the bot settings mutex during storage I/O, and concurrent lookups return temporarily unavailable instead of
+waiting behind the read. A timeout starts the same cooldown, and the next eligible lookup can recover.
+There is no additional polling loop. A successful read restores the saved credentials, owner, pending pairing and switches
+and starts the enabled bot's connection under the manager's existing context; the owner does not pair again.
+Successful reads, including a genuinely missing record, are cached as before. JSON `null` and `{}` retain the existing
+defaulted-decode behavior; only an actual read/decode error leaves settings unknown. A disabled bot, a member hub or a manager
+whose context has ended keeps the connection closed. Persistently invalid records remain protected and log one failure
+per attempted read; correcting the stored record lets the next eligible lookup recover it. This does not add a reset or
+migration of invalid data, change chat permissions, or change the card-nudge defaults or timing.
+
+The lark-cli connector is registered before connector switches and options are restored, even while its profile is
+unknown. Every CLI execution, including Inbox polling and login, is gated on a known identity. A manager.json profile
+override is already authoritative during a storage outage; a genuinely empty saved configuration still selects the CLI
+default after a successful read. A saved manual profile applies even when the bot itself is disabled.
+On recovery the existing connector refresh path synchronizes the managed profile when needed and replaces the placeholder
+outside the bot settings lock, after startup has restored connector settings. Replacement preserves the connector's own
+enabled/feed switches and current options; retained old connectors refuse calls rather than reuse their Inbox caches
+for a different profile. Publication stays quarantined until the new instance has its disabled mark; only then is the
+identity gate released and an enabled connector started. Retired instances refuse process execution even when the selected
+profile name is unchanged. Assistant configuration and extension host CLI requests also fail closed while identity is unread.
+
+The connector's `connectors.settings` record is independent of `bots.feishu`: a failed read quarantines the placeholder
+with its connector and Inbox feed off, and rejects preference writes until that record can be read completely. Recovery
+reads its durable options, feed and enabled choices before starting the replacement; a missing record keeps the existing
+defaults. A manager.json profile override still works when only bot settings are unavailable, with known connector choices.
+An unavailable preferences record also gates that override until its enabled/feed policy is known.
+
+A failed managed-profile synchronization remains pending after bot settings have loaded. Ordinary bot status/transport
+lookups, connector listings and tool/CLI calls can request one recovery attempt after the shared five-second failure
+cooldown. Concurrent requests coalesce into one worker; synchronization runs outside the bot lock under the manager's
+lifetime. There is no recovery timer loop. A later successful synchronization releases the identity gate, restores the
+connector preferences and resumes its normal lifecycle.
+
 ## How it differs from Lark `/agent`
 
 | | Lark bot (this page) | Lark `/agent` (`docs/extensions/lark-agent.md`) |
@@ -75,6 +117,7 @@ The two complement each other and have separate switches.
   confirmed, the authorization starts by itself and shows its own QR code, so setting up both is two scans on one page.
 - Pairing (an app whose credentials were typed in): tap **Pair** in the App to get a 6-digit code (valid for 10 minutes) and send it to the bot in Lark; whoever sends it becomes the owner (its open_id and the DM's chat_id are recorded).
   When not paired, DMing it returns instructions on how to pair; 5 wrong guesses void the code, and you have to get a new one. Changing the App ID means pairing again (it's a different bot).
+  The owner and consumed code must be saved before pairing is acknowledged or messages are authorized. If saving fails, the bot asks you to send the same code again before it expires; the previous code, expiry and attempt count stay unchanged. A later failure to save the optional contact name keeps the committed binding and its previous display name.
 - Names: reading contacts needs `contact:user.base:readonly`; without that permission the owner is called by `assistant.owner` in the manager's `manager.json`, and others "someone".
 
 ## What it can do (`features`, one switch each in the App)
@@ -215,10 +258,12 @@ A group message never changes where the owner's pushes go: the DM's chat id (`ow
 - Only the owner counts. What anyone else writes in the group is never handed over, whatever it says; people in the group cannot drive the owner's Persona.
 - Nothing others said is read in: a quoted message and a merged forward are not expanded for a topic message (the owner may quote someone else's text, which would carry it in).
 - A card button pressed in a group counts only from the owner (the same check as in the DM) and only when the press names a chat that is the DM or on the list: a card left in a group that was switched off is dead (the toast says the chat is not turned on). The Stop button of a topic's progress card works the same way.
-- A recall in the DM is passed to the assistant; in an opted-in group only a recall of a message the hub handed to the assistant is (the event does not say whose message it was).
+- A recall cancels an owner's message still queued at the hub before it reaches the assistant. After handoff begins, the recall is passed to the assistant. In an opted-in group, the hub requires a known owner message in that exact chat and bot identity, because the event does not say whose message it was; current topic receive policies still apply. Pending redeliveries keep their original cancellation even when recent-id history rolls over; completed messages use bounded recent history, with locally canceled sources kept distinct from handed messages so a wrong-chat recall cannot use the unknown-DM fallback. Events from a replaced connection, or with a conflicting envelope App ID, are ignored.
 - The bot sends into the DM and the opted-in groups only (see "Sending" above), and, in a group that is not opted in, one text reply under a message the owner's `/ai` was taken from ("Asking from any group"), or the answer under a message the owner's `/read` was taken from ("Reading a group with /read").
 - `/read` reads what others said in a group into the main chat, as the owner and only on the owner's own request; it is handed over as other people's words, not instructions.
 - The group should still be one the owner trusts: anyone in it sees what the bot posts there (answers, progress, cards).
+
+The progress card's **Stop** acts only while its actual message is the current watched Feishu run's progress card for that exact machine and conversation. An older card left behind by a refused final edit, or a card whose run is finishing, awaiting answer delivery, recalled or replaced, returns the existing expired-card notice without interrupting later work. Concurrent redeliveries of a successfully stopped current card send one interrupt; a failed interrupt can be retried. A restored current run regains this control after its watcher resumes. Typed `/stop` keeps its conversation-level behavior described below. These are assistant-side ownership checks; the node interrupt RPC still targets a conversation and does not atomically compare a turn generation.
 
 **Open Platform permissions.** Receiving a group's messages needs one of two permissions; the code does not tell them apart:
 
@@ -297,14 +342,14 @@ These routes belong to the hub; `target` and `agents` in the response are querie
 
 Nothing, when the app is created in one authorization ("Pairing and permissions"). For an app you create yourself:
 
-1. Create an enterprise custom app and enable its **Bot** capability, and open the **Modify app info** permission (`application:application:patch`) once: with that, the rest below is done for you. When the App ID / App Secret are entered in the App, the manager configures the app through the Open Platform's server API (`feishubot/configure.go`): it opens the scopes and subscribes the events with the **long-connection** mode (`PATCH /application/v7/applications/:app_id/config`), then submits the publish, which creates the version when none is pending (`POST /application/v7/applications/:app_id/publish`). Best-effort and never blocks binding: a private deployment skips it, and a failure names the one switch left (the bot capability, the patch permission) with a link to the app's console page. The credentials step links out to the developer console; a rejected App ID / Secret is one sentence, not a code.
+1. Create an enterprise custom app and enable its **Bot** capability, and open the **Modify app info** permission (`application:application:patch`) once: with that, the rest below is done for you. When the App ID / App Secret are entered in the App, the manager configures the app through the Open Platform's server API (`feishubot/configure.go`): it opens the scopes and subscribes the events with the **long-connection** mode (`PATCH /application/v7/applications/:app_id/config`), then submits the publish, which creates the version when none is pending (`POST /application/v7/applications/:app_id/publish`). Best-effort and never blocks binding: a private deployment skips it, and a failure names the one switch left (the bot capability, the patch permission) with a link to the app's console page. The credentials step links out to the developer console; a rejected App ID / Secret is one sentence, not a code. The pairing hint retains the sanitized configuration outcome and console link through polling, code renewal and hub restarts. Polling only reads that outcome; it does not retry configuration or publish. An explicit credentials submission retries configuration, replacing the outcome; changing the App ID, secret or domain clears the previous app's guidance, and successful pairing clears it. Automatic configuration uses the receipt captured inside that credentials commit, so a newer save (even of identical credentials) cannot lend its generation to an older request. A completed unpair retires pending outcomes from the previous pairing lifecycle. Rejected credential, outcome or pairing-code writes return a localized failure and restore the previous in-memory state; a rejected unpair keeps the owner and sends no success notification.
 2. By hand (the app was not auto-configured, or a step is checked): permissions `im:message` (read / write direct messages), `im:message:send_as_bot`, `im:message.p2p_msg:readonly` (messages sent to the bot in a DM), `im:resource` (download images and files in messages); for `workbench`, `im:message.pins:write_only` and `im:message.pins:read` (pinning the home card; without them it stays unpinned and works otherwise); `cardkit:card:write` (the streaming progress card; without it progress cards are updated as messages, as before); optional `contact:user.base:readonly` (names); for topic group chats one of `im:message.group_at_msg:readonly` (messages that @ the bot) and `im:message.group_msg` (all messages in the group, a sensitive permission, usually reviewed by the enterprise admin), "Topic group chats". The auto-configure opens `im:message:send_as_bot` and `contact:user.base:readonly` only: the rest are read scopes the platform lists for review, and group messaging stays the user's decision.
 3. Events and callbacks: select **Receive events through a long connection** as the subscription method; subscribe to **Receive message v2.0** (`im.message.receive_v1`), optionally **User enters a chat with the bot** (`im.chat.access_event.bot_p2p_chat_entered_v1`, client v7.18 or newer) and **Message recalled** (`im.message.recalled_v1`: if the owner recalls a message before it is sent into the chat, it isn't sent, #4880; if already accepted and being answered, a turn answering only that message stops like /stop, changes its progress card to ‘Recalled, this turn stopped’, and sends no answer; if merged with other messages, only the recalled message is removed; already completed answers remain unchanged, #5248); subscribe to **Card interaction callback** (`card.action.trigger`). The auto-configure sets the mode and subscribes the listed events and callback, retaining the legacy first-chat subscription (`p2p_chat_create`) as well. The schema-2.0 entered-chat event triggers the pairing hint while the bot is unpaired; the legacy event is a separate schema-1.0 notification, not an alias for it.
 4. Publish a version (enterprises usually require admin review; a version already under review counts as done), then enter the App ID / App Secret in the App, enable it and pair.
 
 ## Not implemented yet / limitations
 
-- Recall: only handles messages not yet sent into the chat (queued, attachments downloading); once sent into the chat, an ongoing turn finishes answering as usual (whether to interrupt is the owner's decision, #4880). The bot can't obtain the new content of an edited message (the Open Platform provides no edit event to bots).
+- Recall: a message recalled while queued at the hub or before it enters its conversation is not sent. After acceptance, a turn answering only that message stops; a merged turn removes only the recalled message, and completed answers remain unchanged. The bot can't obtain the new content of an edited message (the Open Platform provides no edit event to bots).
 - Agent messages show tool-call titles and outputs, not arguments (tested), so describe the action in the title; progress cards show only steps and text being written.
 - Each step is one line, "verb + object" (`stepOf` in `feishu_steps.go`): commands use their description when available ("Run · Run server tests"), background commands say "Run in background"; file reads include the line range, while edits / creates / writes are separate; searches include their scope ("in src (*.go)"); subtasks include their type; to-dos show the item currently being worked on; Codex calls are already mapped to the same tools in the transcript (command → Bash, file change → Edit, create / delete separate), so they use the same wording; Persona's own MCP tools (calendar, contacts, reminders, mail, knowledge base) have their own verbs, while other tools show the tool name and the first useful argument.
 - Agents (Claude Code / Codex in herdr) have no "text being written", so progress cards show only steps.

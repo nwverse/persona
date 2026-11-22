@@ -144,6 +144,16 @@ Review follow-up: the optional projection isn't a required field for a whole pag
 - The Lark gateway's 201 receipt for a file send may contain only `fileKey/name/size`; `messageId` is optional, so don't report a sent file as failed because of it and invite a resend. In image JSON, the slashes in base64 may also all be escaped; the HTTP body limit must cover this legal encoding, while the actual image size is still limited to 7.5 MiB after decoding.
 - Unsent attachments are user data: put the private copies made after picking in Application Support, excluded from backup; not in tmp/uploads or tmp/lark-drafts, which clearing the cache deletes.
 
+## Progress-card actions need current ownership (#12702)
+
+A refused final edit can leave a progress card's Stop button visible after the answer is posted separately.
+The button's conversation identifiers say where it was created, not which turn it still owns. Compare the callback's
+actual message ID with the current watched Feishu run's `Ext["card"]`, then recheck the same run and live objects,
+card, recall and answer/finish state under the lifecycle locks after target resolution. Historical thread routing,
+stored runs awaiting watcher restoration, and runs awaiting final-answer delivery cannot authorize a stop. Keep
+successful-press deduplication with the live progress state and leave failed delivery retryable. Typed `/stop` remains
+a conversation-level request; assistant-side locking cannot provide a node-side atomic turn-generation precondition.
+
 ## Paged refresh of all chats (#530 review)
 
 - If refresh replaces only the first page while paging always lets old values win, unread counts on the tail pages go stale forever; reread the window by the number of loaded pages, replace atomically on success, and leave the cursor at the end of the window. On failure keep the old snapshot, and don't write half a batch to the cache.
