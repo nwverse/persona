@@ -156,7 +156,7 @@ type botHub struct {
 	loading   bool
 	loadErr   error
 	loadAfter time.Time
-	// pairLifecycle advances only after a committed unpair.
+	// pairLifecycle advances after a committed unpair, including an already-unpaired cancellation.
 	pairLifecycle uint64
 	set           FeishuBotSettings
 	api           *feishubot.Client
@@ -164,10 +164,10 @@ type botHub struct {
 	stop          context.CancelFunc
 	info          feishubot.BotInfo
 	base          context.Context
-	told          map[string]time.Time // sender -> last refusal
-	pairTold      map[string]time.Time // sender -> last pairing response
-	names         map[string]string
-	seen          []string
+	told          map[string]time.Time // sender -> when the bot last refused them (10-minute window)
+	pairTold      map[string]time.Time // sender -> when the pairing path last answered (short redelivery window)
+	names         map[string]string    // open id -> name
+	seen          []string             // the messages taken lately (Feishu delivers some again), memory only
 	// msgChat is the chat of the messages the bot may use, seen or sent lately (message id -> chat id): what a reply's
 	// parent is checked against (checkReplyParent), memory only.
 	msgChat idRing
@@ -258,7 +258,8 @@ func (h *Manager) saveBotSettingsLocked() error {
 	if !h.bots.loaded {
 		return errBotSettingsUnread
 	}
-	// Restore setup guidance too when an owner commit is rejected.
+	// A committed owner no longer needs setup guidance. Restore it on a rejected write so callers such as
+	// manual redemption can roll back their own owner/code transaction without losing the previous diagnosis.
 	previousConfigure := h.bots.set.Configure
 	if h.bots.set.Owner != nil {
 		h.bots.set.Configure = nil

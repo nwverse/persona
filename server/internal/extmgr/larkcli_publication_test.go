@@ -71,12 +71,12 @@ func TestLarkCLIRecoveryPublicationRejectsCallsAndRetiredInstances(t *testing.T)
 			if result := w.h.connectors.Call(w.ctx, "larkcli_chats", json.RawMessage(`{}`), nil); result.IsError {
 				t.Fatalf("normal enabled call: %+v", result)
 			}
-			before, _ := os.ReadFile(log)
-			if _, err := old.Call(w.ctx, "larkcli_chats", json.RawMessage(`{}`)); !errors.Is(err, errBotSettingsUnread) {
+			// The newly enabled Watch may log concurrently; only this retired request uses page size 37.
+			if _, err := old.Call(w.ctx, "larkcli_chats", json.RawMessage(`{"limit":37}`)); !errors.Is(err, errBotSettingsUnread) {
 				t.Errorf("retired same-profile instance ran after successful enable: %v", err)
 			}
 			after, _ := os.ReadFile(log)
-			if string(before) != string(after) {
+			if strings.Contains(string(after), "--page-size 37") {
 				t.Error("retired instance launched a CLI process")
 			}
 		})
