@@ -35,7 +35,10 @@ func botMinutesValue(raw json.RawMessage, max int, rangeKey string) (*int, error
 func (h *Manager) setNudgeAfter(ctx context.Context, minutes int) error {
 	b := &h.bots
 	b.mu.Lock()
-	h.loadBotsLocked(ctx)
+	if err := h.loadBotsLocked(ctx); err != nil {
+		b.mu.Unlock()
+		return err
+	}
 	previous := b.set.NudgeAfter
 	changed := b.set.nudgeAfter() != minutes
 	b.set.NudgeAfter = &minutes

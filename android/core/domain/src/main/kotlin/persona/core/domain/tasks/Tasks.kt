@@ -50,12 +50,13 @@ enum class TaskState(val label: CoreText, val rank: Int) {
     Failed(CoreText.of(Key.TaskFailed), 4);
 
     companion object {
-        /** [interrupted]: one of its agents stopped on a model API error (`Session.interrupted`). */
-        fun of(todo: Todo, agents: List<AgentState>, interrupted: Boolean = false): TaskState = when {
+        /** [interrupted]: one of its agents stopped on a model API error (`Session.interrupted`). A current working or
+         *  [waiting] replacement supersedes that old interruption. */
+        fun of(todo: Todo, agents: List<AgentState>, interrupted: Boolean = false, waiting: Boolean = false): TaskState = when {
             todo.doneAt != null && !todo.startError.isNullOrBlank() -> Failed
             todo.doneAt != null -> Done
             AgentState.NeedsYou in agents -> NeedsYou
-            interrupted && AgentState.Working !in agents && todo.supervision?.state != "parked" -> Interrupted
+            interrupted && AgentState.Working !in agents && !waiting && todo.supervision?.state != "parked" -> Interrupted
             AgentState.Unread in agents -> Unread
             AgentState.Working in agents -> Working
             agents.isNotEmpty() -> Followup

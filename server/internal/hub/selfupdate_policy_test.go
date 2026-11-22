@@ -87,12 +87,14 @@ func TestHubOnlyUpdateSetsAsideOldNodeBuilds(t *testing.T) {
 		}
 	}
 
-	h.cfg.AutoUpdateNodes = true // node updates on: the release's builds replace them instead (TestUpdateNodesBinariesInPlace)
+	// Node updates on: the release's builds replace them (TestUpdateNodesBinariesInPlace), and one the release does not
+	// bring goes aside all the same (TestUpdateNodesSetsAsideWhatTheReleaseDoesNotCarry).
+	h.cfg.AutoUpdateNodes = true
 	write("personad-linux-amd64", "v2 build")
 	h.version = "v3"
 	h.upd.updateNodes(context.Background(), "", "v2")
-	if _, err := os.Stat(filepath.Join(nodes, "personad-linux-amd64")); err != nil {
-		t.Fatalf("set aside with node updates on: %v", err)
+	if _, err := os.Stat(filepath.Join(nodes, "personad-linux-amd64")); !os.IsNotExist(err) {
+		t.Fatalf("the v2 build still passes for v3 with node updates on: %v", err)
 	}
 }
 

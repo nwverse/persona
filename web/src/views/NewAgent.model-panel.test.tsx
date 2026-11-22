@@ -187,11 +187,12 @@ describe("New agent's model panel (#5104)", () => {
   it("a model row sets the launcher, the model and the effort it shows, and unchecks Follow Model settings", async () => {
     await open();
     await openPanel();
-    // the row says the effort a pick applies: the one running now, which this model takes
-    expect(row("model:claude\nsonnet").querySelector("[data-row-setup]")!.textContent).toBe("高");
+    // the row says the effort a pick applies: none (the model's own), not the one running now (#12315)
+    expect(row("model:claude\nsonnet").querySelector("[data-row-setup]")!.textContent).toBe("");
     act(() => row("model:claude\nsonnet").click());
     await flush();
     expect(panel()).toBeNull();
+    // nothing sent for the effort: the pill says the one Model settings starts it with
     expect(pill().title).toBe("Claude Code · Sonnet 5 · claude · 高");
     await openPanel();
     expect(follow().getAttribute("aria-pressed")).toBe("false");
@@ -199,7 +200,8 @@ describe("New agent's model panel (#5104)", () => {
     expect(row("model:claude\ndefault").getAttribute("aria-pressed")).toBe("false");
     act(() => pill().click());
     start();
-    expect(launched[0]).toMatchObject({ launcher: "claude", model: "sonnet", effort: "high" });
+    expect(launched[0]).toMatchObject({ launcher: "claude", model: "sonnet" });
+    expect(launched[0].effort).toBeUndefined();
   });
 
   it("Follow Model settings goes back to the default after a pick", async () => {
@@ -222,13 +224,14 @@ describe("New agent's model panel (#5104)", () => {
     await pick("model:relay\nglm-5");
     await openPanel();
     await customize("model:relay\nglm-5");
-    expect(flyout()!.querySelector('[role="slider"]')!.getAttribute("aria-valuetext")).toBe("高");
+    expect(flyout()!.querySelector('[role="slider"]')!.getAttribute("aria-valuetext")).toBe("模型默认");
+    // from none, ← lands on the lowest
     await slide("ArrowLeft");
-    expect(pill().title).toBe("Claude Code · GLM 5 · relay · 中");
+    expect(pill().title).toBe("Claude Code · GLM 5 · relay · 低");
     expect(flyout()!.textContent).toContain("已自定义");
     act(() => pill().click());
     start();
-    expect(launched[0]).toMatchObject({ launcher: "relay", model: "glm-5", effort: "medium" });
+    expect(launched[0]).toMatchObject({ launcher: "relay", model: "glm-5", effort: "low" });
   });
 
   it("Reset to recommended in the flyout clears the effort again", async () => {
@@ -361,10 +364,11 @@ describe("New agent's model panel (#5104)", () => {
     await pick("model:relay\nglm-5");
     act(() => machineChip("Studio").click());
     await flush();
-    expect(pill().title).toBe("Claude Code · GLM 5 · relay · 高");
+    expect(pill().title).toBe("Claude Code · GLM 5 · relay");
     expect(q("[data-testid=new-agent-dropped]")).toBeNull();
     start();
-    expect(launched[0]).toMatchObject({ machineId: "studio", cwd: "/code/studio-app", launcher: "relay", model: "glm-5", effort: "high" });
+    expect(launched[0]).toMatchObject({ machineId: "studio", cwd: "/code/studio-app", launcher: "relay", model: "glm-5" });
+    expect(launched[0].effort).toBeUndefined();
   });
 
   it("falls back to the default on a computer without the picked launcher, and says so under the box", async () => {
@@ -392,7 +396,7 @@ describe("New agent's model panel (#5104)", () => {
     act(() => machineChip("Studio").click());
     act(() => machineChip("Mini").click());
     await flush();
-    expect(pill().title).toBe("Claude Code · GLM 5 · relay · 高");
+    expect(pill().title).toBe("Claude Code · GLM 5 · relay");
     start();
     expect(launched[0]).toMatchObject({ machineId: "mini", launcher: "relay", model: "glm-5" });
   });

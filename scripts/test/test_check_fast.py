@@ -29,15 +29,17 @@ GUARD_SUITES = ("test_doc_paths.py", "test_doc_go_paths.py", "test_doc_sections.
                 "test_apple_l10n.py", "test_docker_entrypoint.py")
 # A python3 that records each call ("<cwd>|<args>") instead of running anything.
 FAKE_PYTHON = '#!/bin/sh\nprintf "%s|%s\\n" "$PWD" "$*" >> "$FAKE_PYTHON_LOG"\n'
-# check-fast.sh, the per-path table it reads its plan from (#11535) and the helper that names a failure's rerun and
-# compares it with the merge base (#12733): what a throwaway repository needs to plan and report.
+# check-fast.sh, the per-path table it reads its plan from (#11535), the helper that names a failure's rerun and
+# compares it with the merge base (#12733), the partitioned Go runner (#12765) and the gofmt script its gofmt job runs
+# (#12894): what a throwaway repository needs to plan and report.
 CHECK_FAST_FILES = ("scripts/test/check-fast.sh", "scripts/ci/check_fast_map.py", "scripts/ci/check_fast_compare.py",
-                    "scripts/test/go_test_partitioned.py", "scripts/test/go_partitions.py")
+                    "scripts/test/go_test_partitioned.py", "scripts/test/go_partitions.py", "scripts/ci/gofmt.py")
 # A go for the --compare-main tests: TestRed fails everywhere, TestMine only outside the merge base's checkout, where
-# go also hangs when FAKE_GO_HANG names a pid file; the repo-wide guards pass. Each call is logged with its directory.
+# go also hangs when FAKE_GO_HANG names a pid file; the repo-wide guards and go vet pass. Each call is logged with its
+# directory.
 FAKE_GO_COMPARE = r"""#!/bin/sh
 printf '%s|%s\n' "$PWD" "$*" >> "$FAKE_GO_LOG"
-case "$*" in *./internal/foo*) ;; *) exit 0 ;; esac
+case "$*" in test*./internal/foo*) ;; *) exit 0 ;; esac
 case "$PWD" in
   */compare/base/*)
     if [ -n "${FAKE_GO_HANG:-}" ]; then echo $$ > "$FAKE_GO_HANG.tmp"; mv "$FAKE_GO_HANG.tmp" "$FAKE_GO_HANG"; exec sleep 60; fi
@@ -708,7 +710,8 @@ class CheckFastTableTests(unittest.TestCase):
         run = self.run_table("".join(path + "\n" for path in paths).encode())
         self.assertEqual(0, run.returncode, run.stderr)
         self.assertEqual(["web\tsuite:scripts/test/test_doc_sections.py", "unmapped",
-                          "go-package:cmd/personad\tgo-guards\tsuite:scripts/test/test_doc_sections.py",
+                          "go-package:cmd/personad\tgo-guards\tgo-vet:cmd/personad\tgo-fmt"
+                          "\tsuite:scripts/test/test_doc_sections.py",
                           "integration:pi\tsuite:scripts/test/test_doc_sections.py",
                           "web\tsuite:scripts/test/test_doc_sections.py", ""], run.stdout.decode().split("\n"))
         self.assertEqual(b"", self.run_table(b"").stdout)
@@ -730,10 +733,12 @@ class CheckFastTableTests(unittest.TestCase):
         self.assertEqual(["external-refs", "suite:scripts/test/test_doc_sections.py"],
                          checks("scripts/test/test_external_service_refs.py"))
         # server/: a package group, a file directly in plugins/ (the guards run it), anything else a build.
-        self.assertEqual(["go-package:internal/hub", "go-guards", "suite:scripts/test/test_doc_wire.py",
-                          "suite:scripts/test/test_doc_sections.py"], checks("server/internal/hub/hub.go"))
-        self.assertEqual(["go-guards", "suite:scripts/test/test_doc_sections.py"], checks("server/plugins/plugins.go"))
-        self.assertEqual(["server-build", "go-guards"], checks("server/internal/README.md")[:2])
+        self.assertEqual(["go-package:internal/hub", "go-guards", "go-vet:internal/hub", "go-fmt",
+                          "suite:scripts/test/test_doc_wire.py", "suite:scripts/test/test_doc_sections.py"],
+                         checks("server/internal/hub/hub.go"))
+        self.assertEqual(["go-guards", "go-vet:.", "go-fmt", "suite:scripts/test/test_doc_sections.py"],
+                         checks("server/plugins/plugins.go"))
+        self.assertEqual(["server-build", "go-guards", "go-vet:."], checks("server/internal/README.md")[:3])
         # A markdown file in a wire-list package is a doc first: the four doc suites, not the wire list alone.
         self.assertIn("suite:scripts/test/test_doc_paths.py", checks("server/internal/proto/README.md"))
         # name:test_* matches the file name only: a test file is not a slot caller, a file in a test_ directory is.
@@ -741,6 +746,28 @@ class CheckFastTableTests(unittest.TestCase):
         self.assertNotIn(heavy, checks("scripts/operations/test_pr_watch.py"))
         self.assertIn(heavy, checks("scripts/operations/test_tools/watch.py"))
         self.assertIn(heavy, checks("scripts/operations/pr_watch.py"))
+
+    def test_go_vet_takes_the_changed_group_and_gofmt_the_go_files_ci_formats(self):
+        # go vet checks the whole module, and the path's group for Windows: the whole module again for a path outside
+        # every group (go.mod, a file directly in plugins/, sdk/go, which the server imports). gofmt checks the .go
+        # files of the trees CI's Go formatting step covers, and nothing else (#12894).
+        checks = self.table.checks
+        for path, group in (("server/internal/foo/foo.go", "internal/foo"), ("server/cmd/personad/main.go", "cmd/personad"),
+                            ("server/plugins/wechat/x.go", "plugins/wechat"),
+                            ("server/internal/foo/testdata/a.json", "internal/foo"), ("server/go.mod", "."),
+                            ("server/plugins/plugins.go", "."), ("sdk/go/wire/x.go", ".")):
+            with self.subTest(path=path):
+                self.assertEqual(["go-vet:" + group], [c for c in checks(path) if c.startswith("go-vet")])
+        for path in ("server/internal/foo/foo.go", "server/internal/foo/testdata/x.go", "server/go.go", "sdk/go/x.go"):
+            with self.subTest(path=path):
+                self.assertIn("go-fmt", checks(path))
+        for path in ("server/go.mod", "server/internal/foo/a.json", "web/e2e/agents_hub_test.go",
+                     "sdk/templates/go/main.go", "sdk/ts/scripts/int64-oracle.go", "docs/x.go"):
+            with self.subTest(path=path):
+                self.assertNotIn("go-fmt", checks(path))
+        for path in ("web/e2e/agents_hub_test.go", "sdk/templates/go/main.go", "docs/x.md"):
+            with self.subTest(path=path):
+                self.assertEqual([], [c for c in checks(path) if c.startswith("go-vet")])
 
     def test_check_fast_and_the_table_name_the_same_checks(self):
         text = (ROOT / "scripts/test/check-fast.sh").read_text()
