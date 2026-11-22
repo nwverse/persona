@@ -23,10 +23,10 @@ import (
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connector/serve"
 	"github.com/nwverse/persona/server/internal/connectorwire"
-	"github.com/nwverse/persona/server/internal/entries"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extmgr/storage"
 	"github.com/nwverse/persona/server/internal/kbwire"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 const schemaDir = "../../../../schema/extension"
@@ -127,9 +127,9 @@ var goTypes = map[string]any{
 	"AssistantConversationsResult": assistantwire.AssistantConversationsResult{},
 	"AssistantMessagesParams":      assistantwire.AssistantMessagesParams{},
 	"AssistantMessagesResult":      assistantwire.AssistantMessagesResult{},
-	"AssistantEntriesParams":       entries.Params{},
-	"AssistantEntriesResult":       entries.Result{},
-	"AssistantEntriesChangedEvent": entries.Changed{},
+	"AssistantEntriesParams":       proto.AssistantEntriesParams{},
+	"AssistantEntriesResult":       proto.AssistantEntriesResult{},
+	"AssistantEntriesChangedEvent": proto.AssistantEntriesChanged{},
 	"AssistantMemoryParams":        assistantwire.AssistantMemoryParams{},
 	"AssistantMemoryResult":        assistantwire.AssistantMemoryResult{},
 	"AssistantDataStatusParams":    assistantwire.AssistantDataStatusParams{},

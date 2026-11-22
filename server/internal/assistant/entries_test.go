@@ -12,7 +12,6 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	ledger "github.com/nwverse/persona/server/internal/entries"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -31,11 +30,11 @@ func TestEntriesHTTPRPCAndWrongEvent(t *testing.T) {
 	e := newTodoEnv(t, database)
 	ctx := context.Background()
 	e.f.setSessions("box", proto.Session{SessionID: "main-example", Assistant: true})
-	fixture := ledger.Entry{ID: "entry-example", Type: "rule", Text: "Use the example workflow.", Scope: ledger.Scope{Executor: "system"}, By: "agent", Trust: "agent", Status: "active"}
+	fixture := proto.AssistantEntry{ID: "entry-example", Type: "rule", Text: "Use the example workflow.", Scope: proto.AssistantEntryScope{Executor: "system"}, By: "agent", Trust: "agent", Status: "active"}
 	if _, err := database.AppendAssistantEntry(ctx, fixture); err != nil {
 		t.Fatal(err)
 	}
-	var rpcOut ledger.Result
+	var rpcOut proto.AssistantEntriesResult
 	if err := askConversations(t, e.s, assistantwire.MethodAssistantEntriesList, `{"by":"agent","tag":"example"}`, &rpcOut); err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +50,7 @@ func TestEntriesHTTPRPCAndWrongEvent(t *testing.T) {
 	if err := wire.ValidateResult(assistantwire.MethodAssistantEntriesList, w.Body.Bytes()); err != nil {
 		t.Fatal(err)
 	}
-	var httpOut ledger.Result
+	var httpOut proto.AssistantEntriesResult
 	if err := json.Unmarshal(w.Body.Bytes(), &httpOut); err != nil || w.Code != 200 || !reflect.DeepEqual(rpcOut, httpOut) {
 		t.Fatalf("HTTP != RPC: %d %s / %+v %v", w.Code, w.Body.String(), rpcOut, err)
 	}
@@ -91,7 +90,7 @@ func TestEntriesPersonalInstanceBoundary(t *testing.T) {
 	database := todoTestDB(t)
 	e := newTodoEnv(t, database)
 	ctx := context.Background()
-	personal := ledger.Entry{ID: "entry-personal", Type: "preference", Text: "Prefer concise replies.", Scope: ledger.Scope{Executor: "any", Personal: true}, By: "agent", Trust: "inferred", Status: "active"}
+	personal := proto.AssistantEntry{ID: "entry-personal", Type: "preference", Text: "Prefer concise replies.", Scope: proto.AssistantEntryScope{Executor: "any", Personal: true}, By: "agent", Trust: "inferred", Status: "active"}
 	if _, err := database.AppendAssistantEntry(ctx, personal); err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +111,7 @@ func TestEntriesPersonalInstanceBoundary(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e.s.entriesDial = func(context.Context, any) ([]byte, error) { return []byte(tc.raw), tc.err }
-			var out ledger.Result
+			var out proto.AssistantEntriesResult
 			if err := askConversations(t, e.s, assistantwire.MethodAssistantEntriesList, `{"scope":{"personal":true}}`, &out); err != nil || len(out.Entries) != tc.want {
 				t.Fatalf("got %+v %v", out, err)
 			}
@@ -122,7 +121,7 @@ func TestEntriesPersonalInstanceBoundary(t *testing.T) {
 	r := httptest.NewRequest("GET", "/api/v1/assistant/entries?scope="+url.QueryEscape(`{"personal":true}`), nil)
 	r.Header.Set(RoleHeader, roleExtension)
 	e.s.ServeHTTP(w, r)
-	var out ledger.Result
+	var out proto.AssistantEntriesResult
 	_ = json.Unmarshal(w.Body.Bytes(), &out)
 	if w.Code != 403 {
 		t.Fatalf("HTTP boundary: %d %s", w.Code, w.Body.String())
@@ -140,7 +139,7 @@ func TestEntriesCardAnswerStructuredAndDefaultsExcluded(t *testing.T) {
 	if err := e.s.ledgerCardDecisions(ctx, ix, answer, "resolved"); err != nil {
 		t.Fatal(err)
 	}
-	out, err := database.ListAssistantEntries(ctx, ledger.Params{By: "user", Type: "decision"}, true)
+	out, err := database.ListAssistantEntries(ctx, proto.AssistantEntriesParams{By: "user", Type: "decision"}, true)
 	if err != nil || len(out.Entries) != 1 {
 		t.Fatalf("card result: %+v %v", out, err)
 	}
@@ -158,7 +157,7 @@ func TestEntriesCardAnswerStructuredAndDefaultsExcluded(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	out, err = database.ListAssistantEntries(ctx, ledger.Params{}, true)
+	out, err = database.ListAssistantEntries(ctx, proto.AssistantEntriesParams{}, true)
 	if err != nil || len(out.Entries) != 1 {
 		t.Fatalf("automatic answers entered as user: %+v %v", out, err)
 	}
@@ -171,7 +170,7 @@ func TestEntriesAskUserAnswerIsQueryableAndModelQuotesStayInferred(t *testing.T)
 	ix, _ := e.askLater(askLaterArgs)
 	e.mustEnd(ix.ID, `{"answers":{"Merge the release PR now?":"Wait"}}`)
 	raw, err := e.s.toolEntries(ctx, "server", "c1x1x1", "decisions_query", json.RawMessage(`{"by":"user"}`))
-	var out ledger.Result
+	var out proto.AssistantEntriesResult
 	if err != nil || json.Unmarshal([]byte(raw), &out) != nil || len(out.Entries) != 1 || out.Entries[0].Source.Card != ix.ID {
 		t.Fatalf("query after ask_user: %s %v", raw, err)
 	}
@@ -181,11 +180,11 @@ func TestEntriesAskUserAnswerIsQueryableAndModelQuotesStayInferred(t *testing.T)
 			t.Fatal(err)
 		}
 	}
-	quotes, err := database.ListAssistantEntries(ctx, ledger.Params{Trust: "inferred"}, true)
+	quotes, err := database.ListAssistantEntries(ctx, proto.AssistantEntriesParams{Trust: "inferred"}, true)
 	if err != nil || len(quotes.Entries) != 1 || quotes.Entries[0].By != "user" || quotes.Entries[0].Source.Message != "message-example" {
 		t.Fatalf("unverified user quote: %+v %v", quotes, err)
 	}
-	agent, err := database.ListAssistantEntries(ctx, ledger.Params{By: "agent", Type: "decision"}, true)
+	agent, err := database.ListAssistantEntries(ctx, proto.AssistantEntriesParams{By: "agent", Type: "decision"}, true)
 	if err != nil || len(agent.Entries) != 1 {
 		t.Fatalf("agent decision replay: %+v %v", agent, err)
 	}
@@ -213,18 +212,18 @@ func TestEntriesHTTPPersonalGrantRevocationAndCategories(t *testing.T) {
 		return []byte(`{"ok":true,"machine_id":"a-different-computer"}`), nil
 	}
 	for _, space := range []string{"", "health", "finance", "relationship"} {
-		item := ledger.Entry{ID: "entry-space-" + space, Type: "decision", Text: "Keep the example choice.", Quote: "Stage", OriginSpace: space, Category: []string{"health", "finance"}, Source: ledger.Source{Machine: "computer-example", Session: "session-example", Message: "message-example"}, Scope: ledger.Scope{Executor: "assistant", Personal: true}, By: "user", Trust: "user_verbatim", Status: "active", Decision: &ledger.Decision{Options: []string{"Stage", "Release"}, Selected: []string{"Stage"}, Rejected: []string{"Release"}, Reason: "Example rationale."}}
+		item := proto.AssistantEntry{ID: "entry-space-" + space, Type: "decision", Text: "Keep the example choice.", Quote: "Stage", OriginSpace: space, Category: []string{"health", "finance"}, Source: proto.AssistantEntrySource{Machine: "computer-example", Session: "session-example", Message: "message-example"}, Scope: proto.AssistantEntryScope{Executor: "assistant", Personal: true}, By: "user", Trust: "user_verbatim", Status: "active", Decision: &proto.AssistantEntryDecision{Options: []string{"Stage", "Release"}, Selected: []string{"Stage"}, Rejected: []string{"Release"}, Reason: "Example rationale."}}
 		if _, err := database.AppendAssistantEntry(ctx, item); err != nil {
 			t.Fatal(err)
 		}
 	}
-	get := func(id string) (int, ledger.Result) {
+	get := func(id string) (int, proto.AssistantEntriesResult) {
 		r := httptest.NewRequest("GET", "/api/v1/assistant/entries?by=user", nil)
 		r.Header.Set(RoleHeader, roleExtension)
 		r.Header.Set(ExtensionHeader, id)
 		w := httptest.NewRecorder()
 		e.s.ServeHTTP(w, r)
-		var out ledger.Result
+		var out proto.AssistantEntriesResult
 		_ = json.Unmarshal(w.Body.Bytes(), &out)
 		return w.Code, out
 	}
@@ -232,9 +231,9 @@ func TestEntriesHTTPPersonalGrantRevocationAndCategories(t *testing.T) {
 	if code != 200 || len(out.Entries) != 4 || !reflect.DeepEqual(out.Entries[0].Category, []string{"health", "finance"}) {
 		t.Fatalf("approved cross-space personal read: %d %+v", code, out)
 	}
-	rpcCtx := ledger.WithExtensionReader(ctx, "example-reader")
+	rpcCtx := assistantwire.WithEntriesReader(ctx, "example-reader")
 	value, handled, err := e.s.conversationsRequest(rpcCtx, assistantwire.MethodAssistantEntriesList, json.RawMessage(`{}`))
-	if err != nil || !handled || len(value.(ledger.Result).Entries) != 4 {
+	if err != nil || !handled || len(value.(proto.AssistantEntriesResult).Entries) != 4 {
 		t.Fatalf("authorized RPC: %+v %v", value, err)
 	}
 	code, _ = get("unapproved-reader")
@@ -271,7 +270,7 @@ func TestEntriesCollectOwnerCardAnswersAcrossSourceSpaces(t *testing.T) {
 	if err := e.s.ledgerCardDecisions(ctx, ix, proto.Resolution{Answers: map[string]string{"Keep the example reminder?": "Keep"}}, "resolved"); err != nil {
 		t.Fatal(err)
 	}
-	out, err := database.ListAssistantEntries(ctx, ledger.Params{By: "user"}, true)
+	out, err := database.ListAssistantEntries(ctx, proto.AssistantEntriesParams{By: "user"}, true)
 	if err != nil || len(out.Entries) != 1 || out.Entries[0].OriginSpace != "health" || len(out.Entries[0].Category) != 0 {
 		t.Fatalf("source/category: %+v %v", out, err)
 	}

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/nwverse/persona/server/internal/entries"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 var ErrEntryNotFound = errors.New("ledger entry not found")
@@ -16,9 +16,9 @@ var ErrEntrySuperseded = errors.New("ledger entry already has a successor")
 
 // AppendAssistantEntry serializes appends so at is an increasing, server-assigned
 // timestamp. A reader cannot miss a backdated append behind its time cursor.
-func (d *DB) AppendAssistantEntry(ctx context.Context, e entries.Entry) (entries.Entry, error) {
-	e.Normalize()
-	if err := e.Validate(); err != nil {
+func (d *DB) AppendAssistantEntry(ctx context.Context, e proto.AssistantEntry) (proto.AssistantEntry, error) {
+	NormalizeAssistantEntry(&e)
+	if err := ValidateAssistantEntry(e); err != nil {
 		return e, err
 	}
 	err := d.Transaction(ctx, func(tx pgx.Tx) error {
@@ -29,7 +29,7 @@ func (d *DB) AppendAssistantEntry(ctx context.Context, e entries.Entry) (entries
 		var existing []byte
 		err := tx.QueryRow(ctx, `SELECT body FROM assistant_entries WHERE id=$1`, e.ID).Scan(&existing)
 		if err == nil {
-			var previous entries.Entry
+			var previous proto.AssistantEntry
 			if err := json.Unmarshal(existing, &previous); err != nil {
 				return err
 			}
@@ -78,9 +78,9 @@ func (d *DB) AppendAssistantEntry(ctx context.Context, e entries.Entry) (entries
 	return e, err
 }
 
-func (d *DB) AssistantEntry(ctx context.Context, id string) (entries.Entry, error) {
+func (d *DB) AssistantEntry(ctx context.Context, id string) (proto.AssistantEntry, error) {
 	var b []byte
-	var e entries.Entry
+	var e proto.AssistantEntry
 	err := d.pool.QueryRow(ctx, `SELECT body FROM assistant_entries WHERE id=$1`, id).Scan(&b)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return e, ErrEntryNotFound
@@ -94,13 +94,13 @@ func (d *DB) AssistantEntry(ctx context.Context, id string) (entries.Entry, erro
 
 // ListAssistantEntries filters in SQL before limiting, including the caller's
 // personal-data boundary. Status is derived; the original bytes stay intact.
-func (d *DB) ListAssistantEntries(ctx context.Context, p entries.Params, personal bool) (entries.Result, error) {
-	out := entries.Result{Entries: []entries.Entry{}, After: p.After}
-	if err := p.Validate(); err != nil {
+func (d *DB) ListAssistantEntries(ctx context.Context, p proto.AssistantEntriesParams, personal bool) (proto.AssistantEntriesResult, error) {
+	out := proto.AssistantEntriesResult{Entries: []proto.AssistantEntry{}, After: p.After}
+	if err := ValidateAssistantEntriesParams(&p); err != nil {
 		return out, err
 	}
-	c, _ := entries.DecodeCursor(p.After)
-	filter := entries.ScopeFilter{}
+	c, _ := decodeAssistantEntriesCursor(p.After)
+	filter := proto.AssistantEntryScopeFilter{}
 	if p.Scope != nil {
 		filter = *p.Scope
 	}
@@ -144,7 +144,7 @@ func (d *DB) ListAssistantEntries(ctx context.Context, p entries.Params, persona
 	for rows.Next() {
 		var b []byte
 		var status string
-		var e entries.Entry
+		var e proto.AssistantEntry
 		if err := rows.Scan(&b, &status); err != nil {
 			return out, err
 		}
@@ -162,11 +162,11 @@ func (d *DB) ListAssistantEntries(ctx context.Context, p entries.Params, persona
 		out.Entries = out.Entries[:p.Limit]
 	}
 	if len(out.Entries) > 0 {
-		out.After = entries.EncodeCursor(out.Entries[len(out.Entries)-1])
+		out.After = encodeAssistantEntriesCursor(out.Entries[len(out.Entries)-1])
 	}
 	return out, nil
 }
-func cursorTime(c entries.Cursor) *time.Time {
+func cursorTime(c assistantEntriesCursor) *time.Time {
 	if c.At.IsZero() {
 		return nil
 	}

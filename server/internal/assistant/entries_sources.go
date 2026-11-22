@@ -9,8 +9,7 @@ import (
 	"slices"
 	"strings"
 
-	ledger "github.com/nwverse/persona/server/internal/entries"
-
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -48,9 +47,9 @@ func (s *Service) ledgerCardDecisions(ctx context.Context, ix proto.Interaction,
 				}
 			}
 		}
-		e := ledger.Entry{ID: entrySourceID("card", ix.MachineID, ix.ID, q.Question), Type: "decision", Text: q.Question + ": " + answer, Quote: answer,
-			OriginSpace: s.entriesSourceSpace(ctx, ix.MachineID, ix.SessionID), Source: ledger.Source{Machine: ix.MachineID, Session: ix.SessionID, Card: ix.ID}, Scope: ledger.Scope{Executor: "system", Machine: []string{ix.MachineID}, Personal: true},
-			Trust: "user_verbatim", By: "user", Status: "active", Decision: &ledger.Decision{Options: options, Selected: selected, Rejected: rejected, Reason: r.Reason, Reversible: ix.Reversible}}
+		e := proto.AssistantEntry{ID: entrySourceID("card", ix.MachineID, ix.ID, q.Question), Type: "decision", Text: q.Question + ": " + answer, Quote: answer,
+			OriginSpace: s.entriesSourceSpace(ctx, ix.MachineID, ix.SessionID), Source: proto.AssistantEntrySource{Machine: ix.MachineID, Session: ix.SessionID, Card: ix.ID}, Scope: proto.AssistantEntryScope{Executor: "system", Machine: []string{ix.MachineID}, Personal: true},
+			Trust: "user_verbatim", By: "user", Status: "active", Decision: &proto.AssistantEntryDecision{Options: options, Selected: selected, Rejected: rejected, Reason: r.Reason, Reversible: ix.Reversible}}
 		if _, err := st.AppendAssistantEntry(ctx, e); err != nil {
 			return err
 		}
@@ -72,7 +71,7 @@ func (s *Service) toolEntries(ctx context.Context, machine, session, name string
 		return "", errors.New("entries are only available in the owner's assistant conversations")
 	}
 	if name == "decisions_query" {
-		var p ledger.Params
+		var p proto.AssistantEntriesParams
 		if err := strictParams(name, args, &p); err != nil {
 			return "", err
 		}
@@ -85,8 +84,8 @@ func (s *Service) toolEntries(ctx context.Context, machine, session, name string
 		return string(b), err
 	}
 	var in struct {
-		Entry      ledger.Entry   `json:"entry"`
-		UserQuotes []ledger.Entry `json:"user_quotes"`
+		Entry      proto.AssistantEntry   `json:"entry"`
+		UserQuotes []proto.AssistantEntry `json:"user_quotes"`
 	}
 	if err := strictParams(name, args, &in); err != nil {
 		return "", err
@@ -146,14 +145,14 @@ func (s *Service) toolEntries(ctx context.Context, machine, session, name string
 		if q.OriginSpace == "" {
 			q.OriginSpace = s.entriesSourceSpace(ctx, q.Source.Machine, q.Source.Session)
 		}
-		if err := q.Validate(); err != nil {
+		if err := db.ValidateAssistantEntry(*q); err != nil {
 			return "", err
 		}
 	}
 	if e.OriginSpace == "" {
 		e.OriginSpace = s.entriesSourceSpace(ctx, e.Source.Machine, e.Source.Session)
 	}
-	if err := e.Validate(); err != nil {
+	if err := db.ValidateAssistantEntry(e); err != nil {
 		return "", err
 	}
 	if e.Supersedes != "" {
@@ -166,7 +165,7 @@ func (s *Service) toolEntries(ctx context.Context, machine, session, name string
 		}
 	}
 	// Bind replays to the complete normalized request, before the server assigns at.
-	e.Normalize()
+	db.NormalizeAssistantEntry(&e)
 	rawEntry, _ := json.Marshal(e)
 	e.ID = entrySourceID("decision", machine, session, string(rawEntry))
 	e, err = st.AppendAssistantEntry(ctx, e)

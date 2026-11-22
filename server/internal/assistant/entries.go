@@ -11,16 +11,16 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
-	ledger "github.com/nwverse/persona/server/internal/entries"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/nodeclient"
+	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 type entriesStore interface {
-	AppendAssistantEntry(context.Context, ledger.Entry) (ledger.Entry, error)
-	ListAssistantEntries(context.Context, ledger.Params, bool) (ledger.Result, error)
-	AssistantEntry(context.Context, string) (ledger.Entry, error)
+	AppendAssistantEntry(context.Context, proto.AssistantEntry) (proto.AssistantEntry, error)
+	ListAssistantEntries(context.Context, proto.AssistantEntriesParams, bool) (proto.AssistantEntriesResult, error)
+	AssistantEntry(context.Context, string) (proto.AssistantEntry, error)
 }
 
 func (s *Service) entriesDB() entriesStore {
@@ -52,13 +52,13 @@ func (s *Service) localEntriesReader(ctx context.Context) bool {
 	return err == nil && json.Unmarshal(raw, &pong) == nil && pong.OK && pong.Machine == owner
 }
 
-func (s *Service) listEntries(ctx context.Context, p ledger.Params, personal bool) (ledger.Result, error) {
-	if err := p.Validate(); err != nil {
-		return ledger.Result{}, conversationsInvalid(assistantwire.MethodAssistantEntriesList, err.Error())
+func (s *Service) listEntries(ctx context.Context, p proto.AssistantEntriesParams, personal bool) (proto.AssistantEntriesResult, error) {
+	if err := db.ValidateAssistantEntriesParams(&p); err != nil {
+		return proto.AssistantEntriesResult{}, conversationsInvalid(assistantwire.MethodAssistantEntriesList, err.Error())
 	}
 	st := s.entriesDB()
 	if st == nil {
-		return ledger.Result{}, errors.New("entries require the manager database")
+		return proto.AssistantEntriesResult{}, errors.New("entries require the manager database")
 	}
 	return st.ListAssistantEntries(ctx, p, personal)
 }
@@ -110,8 +110,8 @@ func (s *Service) entriesRoutes() {
 	})
 }
 
-func entriesQuery(r *http.Request) (ledger.Params, error) {
-	var p ledger.Params
+func entriesQuery(r *http.Request) (proto.AssistantEntriesParams, error) {
+	var p proto.AssistantEntriesParams
 	q := r.URL.Query()
 	for k, values := range q {
 		if len(values) != 1 {
@@ -145,15 +145,15 @@ func entriesQuery(r *http.Request) (ledger.Params, error) {
 			return p, errors.New("unknown ledger parameter")
 		}
 	}
-	return p, p.Validate()
+	return p, db.ValidateAssistantEntriesParams(&p)
 }
 
 // A wrong mark is an immutable copy pointing to its predecessor. The event names
 // the rejected predecessor as well as the new record so consumers retain both.
-func (s *Service) markEntryWrong(ctx context.Context, id string) (ledger.Entry, error) {
+func (s *Service) markEntryWrong(ctx context.Context, id string) (proto.AssistantEntry, error) {
 	st := s.entriesDB()
 	if st == nil {
-		return ledger.Entry{}, errors.New("entries require the manager database")
+		return proto.AssistantEntry{}, errors.New("entries require the manager database")
 	}
 	e, err := st.AssistantEntry(ctx, id)
 	if err != nil {
@@ -199,7 +199,7 @@ func (b *BusHub) EntriesReadAccess(id string) (bool, bool) {
 	return false, false
 }
 func (s *Service) extensionEntriesPersonal(ctx context.Context) (bool, error) {
-	id := ledger.ExtensionReader(ctx)
+	id := assistantwire.EntriesReader(ctx)
 	if id == "" {
 		return s.localEntriesReader(ctx), nil
 	}

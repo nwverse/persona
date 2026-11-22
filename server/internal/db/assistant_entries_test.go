@@ -4,22 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/nwverse/persona/server/internal/proto"
 	"reflect"
 	"testing"
 	"time"
-
-	"github.com/nwverse/persona/server/internal/entries"
 )
 
-func ledgerFixture(id string) entries.Entry {
-	return entries.Entry{ID: id, Type: "rule", Text: "Use the configured review workflow.", Quote: "Use the configured review workflow.",
-		Source: entries.Source{Machine: "computer-a", Session: "session-example", Message: "message-example"}, Scope: entries.Scope{Executor: "system"},
+func ledgerFixture(id string) proto.AssistantEntry {
+	return proto.AssistantEntry{ID: id, Type: "rule", Text: "Use the configured review workflow.", Quote: "Use the configured review workflow.",
+		Source: proto.AssistantEntrySource{Machine: "computer-a", Session: "session-example", Message: "message-example"}, Scope: proto.AssistantEntryScope{Executor: "system"},
 		By: "user", Trust: "user_verbatim", Status: "active"}
 }
 func TestAssistantEntriesPaginationAndFilters(t *testing.T) {
 	d := open(t)
 	ctx := context.Background()
-	add := func(e entries.Entry) entries.Entry {
+	add := func(e proto.AssistantEntry) proto.AssistantEntry {
 		t.Helper()
 		out, err := d.AppendAssistantEntry(ctx, e)
 		if err != nil {
@@ -48,13 +47,13 @@ func TestAssistantEntriesPaginationAndFilters(t *testing.T) {
 	b.Tag = []string{"seed"}
 	add(b)
 	c := ledgerFixture("entry-c")
-	c.Scope = entries.Scope{Executor: "any", Personal: true}
+	c.Scope = proto.AssistantEntryScope{Executor: "any", Personal: true}
 	add(c)
 	past := time.Now().Add(-time.Hour)
 	expired := ledgerFixture("entry-expired")
 	expired.ExpiresAt = &past
 	add(expired)
-	page := func(p entries.Params, personal bool) entries.Result {
+	page := func(p proto.AssistantEntriesParams, personal bool) proto.AssistantEntriesResult {
 		t.Helper()
 		out, err := d.ListAssistantEntries(ctx, p, personal)
 		if err != nil {
@@ -62,16 +61,16 @@ func TestAssistantEntriesPaginationAndFilters(t *testing.T) {
 		}
 		return out
 	}
-	first := page(entries.Params{Limit: 1}, true)
+	first := page(proto.AssistantEntriesParams{Limit: 1}, true)
 	if len(first.Entries) != 1 || first.Entries[0].ID != a.ID || !first.HasMore || first.After == "" {
 		t.Fatalf("first: %+v", first)
 	}
-	second := page(entries.Params{Limit: 1, After: first.After}, true)
-	third := page(entries.Params{Limit: 1, After: second.After}, true)
+	second := page(proto.AssistantEntriesParams{Limit: 1, After: first.After}, true)
+	third := page(proto.AssistantEntriesParams{Limit: 1, After: second.After}, true)
 	if second.Entries[0].ID != "entry-b" || third.Entries[0].ID != "entry-c" || third.HasMore {
 		t.Fatalf("pages: %+v %+v", second, third)
 	}
-	empty := page(entries.Params{After: third.After}, true)
+	empty := page(proto.AssistantEntriesParams{After: third.After}, true)
 	if len(empty.Entries) != 0 || empty.After != third.After {
 		t.Fatalf("empty: %+v", empty)
 	}
@@ -79,27 +78,27 @@ func TestAssistantEntriesPaginationAndFilters(t *testing.T) {
 	later := ledgerFixture("entry-later")
 	later.At = past
 	add(later)
-	if got := page(entries.Params{After: third.After}, true); len(got.Entries) != 1 || got.Entries[0].ID != "entry-later" {
+	if got := page(proto.AssistantEntriesParams{After: third.After}, true); len(got.Entries) != 1 || got.Entries[0].ID != "entry-later" {
 		t.Fatalf("incremental: %+v", got)
 	}
 	yes, no := true, false
 	for _, tc := range []struct {
 		name     string
-		p        entries.Params
+		p        proto.AssistantEntriesParams
 		personal bool
 		want     []string
 	}{
-		{"by", entries.Params{By: "agent"}, true, []string{"entry-b"}},
-		{"trust", entries.Params{Trust: "user_relayed"}, true, []string{"entry-a"}},
-		{"status", entries.Params{Status: "expired"}, true, []string{"entry-expired"}},
-		{"all", entries.Params{Status: "all", Tag: "import"}, true, []string{"entry-a"}},
-		{"tag", entries.Params{Tag: "seed"}, true, []string{"entry-b"}},
-		{"executor", entries.Params{Scope: &entries.ScopeFilter{Executor: "system"}}, true, []string{"entry-a", "entry-c", "entry-later"}},
-		{"machine", entries.Params{Scope: &entries.ScopeFilter{Machine: []string{"computer-b"}}}, false, []string{"entry-b", "entry-later"}},
-		{"project", entries.Params{Scope: &entries.ScopeFilter{Project: []string{"other-project"}}}, false, []string{"entry-b", "entry-later"}},
-		{"personal", entries.Params{Scope: &entries.ScopeFilter{Personal: &yes}}, true, []string{"entry-c"}},
-		{"private boundary", entries.Params{Scope: &entries.ScopeFilter{Personal: &yes}}, false, []string{}},
-		{"combined", entries.Params{By: "user", Trust: "user_relayed", Status: "active", Tag: "import", Scope: &entries.ScopeFilter{Executor: "system", Machine: []string{"computer-a"}, Project: []string{"project-example"}, Personal: &no}}, true, []string{"entry-a"}},
+		{"by", proto.AssistantEntriesParams{By: "agent"}, true, []string{"entry-b"}},
+		{"trust", proto.AssistantEntriesParams{Trust: "user_relayed"}, true, []string{"entry-a"}},
+		{"status", proto.AssistantEntriesParams{Status: "expired"}, true, []string{"entry-expired"}},
+		{"all", proto.AssistantEntriesParams{Status: "all", Tag: "import"}, true, []string{"entry-a"}},
+		{"tag", proto.AssistantEntriesParams{Tag: "seed"}, true, []string{"entry-b"}},
+		{"executor", proto.AssistantEntriesParams{Scope: &proto.AssistantEntryScopeFilter{Executor: "system"}}, true, []string{"entry-a", "entry-c", "entry-later"}},
+		{"machine", proto.AssistantEntriesParams{Scope: &proto.AssistantEntryScopeFilter{Machine: []string{"computer-b"}}}, false, []string{"entry-b", "entry-later"}},
+		{"project", proto.AssistantEntriesParams{Scope: &proto.AssistantEntryScopeFilter{Project: []string{"other-project"}}}, false, []string{"entry-b", "entry-later"}},
+		{"personal", proto.AssistantEntriesParams{Scope: &proto.AssistantEntryScopeFilter{Personal: &yes}}, true, []string{"entry-c"}},
+		{"private boundary", proto.AssistantEntriesParams{Scope: &proto.AssistantEntryScopeFilter{Personal: &yes}}, false, []string{}},
+		{"combined", proto.AssistantEntriesParams{By: "user", Trust: "user_relayed", Status: "active", Tag: "import", Scope: &proto.AssistantEntryScopeFilter{Executor: "system", Machine: []string{"computer-a"}, Project: []string{"project-example"}, Personal: &no}}, true, []string{"entry-a"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out := page(tc.p, tc.personal)
@@ -128,7 +127,7 @@ func TestAssistantEntriesPaginationAndFilters(t *testing.T) {
 	if !reflect.DeepEqual(original.RelayedVia, []string{"session-relay"}) || original.ExpiresAt == nil || !original.ExpiresAt.Equal(future) {
 		t.Fatalf("round trip: %+v", original)
 	}
-	for _, p := range []entries.Params{{After: "invalid"}, {By: "automation"}, {Trust: "trusted"}, {Status: "deleted"}, {Limit: 201}, {Scope: &entries.ScopeFilter{Executor: "other"}}} {
+	for _, p := range []proto.AssistantEntriesParams{{After: "invalid"}, {By: "automation"}, {Trust: "trusted"}, {Status: "deleted"}, {Limit: 201}, {Scope: &proto.AssistantEntryScopeFilter{Executor: "other"}}} {
 		if _, err := d.ListAssistantEntries(ctx, p, true); err == nil {
 			t.Errorf("accepted %+v", p)
 		}
@@ -141,7 +140,7 @@ func TestAssistantEntriesImmutableDecisionsAndLifecycle(t *testing.T) {
 	yes := true
 	e := ledgerFixture("entry-decision")
 	e.Type = "decision"
-	e.Decision = &entries.Decision{Options: []string{"Stage", "Release"}, Selected: []string{"Stage"}, Rejected: []string{"Release"}, Reason: "Keep the change reversible.", Reversible: &yes}
+	e.Decision = &proto.AssistantEntryDecision{Options: []string{"Stage", "Release"}, Selected: []string{"Stage"}, Rejected: []string{"Release"}, Reason: "Keep the change reversible.", Reversible: &yes}
 	original, err := d.AppendAssistantEntry(ctx, e)
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +168,7 @@ func TestAssistantEntriesImmutableDecisionsAndLifecycle(t *testing.T) {
 	if _, err := d.AppendAssistantEntry(ctx, replacement); err != nil {
 		t.Fatal(err)
 	}
-	list, err := d.ListAssistantEntries(ctx, entries.Params{Status: "superseded"}, true)
+	list, err := d.ListAssistantEntries(ctx, proto.AssistantEntriesParams{Status: "superseded"}, true)
 	if err != nil || len(list.Entries) != 1 || list.Entries[0].ID != e.ID {
 		t.Fatalf("superseded: %+v %v", list, err)
 	}
@@ -184,7 +183,7 @@ func TestAssistantEntriesImmutableDecisionsAndLifecycle(t *testing.T) {
 	if _, err := d.AppendAssistantEntry(ctx, wrong); err != nil {
 		t.Fatal(err)
 	}
-	list, err = d.ListAssistantEntries(ctx, entries.Params{Status: "wrong"}, true)
+	list, err = d.ListAssistantEntries(ctx, proto.AssistantEntriesParams{Status: "wrong"}, true)
 	if err != nil || len(list.Entries) != 2 {
 		t.Fatalf("wrong history: %+v %v", list, err)
 	}
@@ -194,7 +193,7 @@ func TestAssistantEntriesImmutableDecisionsAndLifecycle(t *testing.T) {
 		t.Fatalf("second successor: %v", err)
 	}
 	private := ledgerFixture("entry-personal")
-	private.Scope = entries.Scope{Executor: "any", Personal: true}
+	private.Scope = proto.AssistantEntryScope{Executor: "any", Personal: true}
 	if _, err := d.AppendAssistantEntry(ctx, private); err != nil {
 		t.Fatal(err)
 	}
