@@ -63,7 +63,7 @@ class InboxRowMetaWidthReviewTest {
         val nodes = rule.onAllNodesWithText(text, substring = true, useUnmergedTree = true).fetchSemanticsNodes()
         assertEquals("$context: one node holds $text", 1, nodes.size)
         val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
-        nodes.single().config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
+        val _ = nodes.single().config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
         return layouts.single()
     }
 

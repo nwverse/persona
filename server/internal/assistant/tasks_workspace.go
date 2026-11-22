@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -19,27 +20,39 @@ import (
 )
 
 const (
-	workspaceBackend  = "backend"
-	workspaceNew      = "new"
-	workspaceExisting = "existing"
-	workspaceNone     = "none"
-	preferExisting    = "prefer-existing"
-	preferNew         = "prefer-new"
+	workspaceBackend   = "backend"
+	workspaceContainer = "container"
+	workspaceNew       = "new"
+	workspaceExisting  = "existing"
+	workspaceNone      = "none"
+	preferExisting     = "prefer-existing"
+	preferNew          = "prefer-new"
 )
 
 // TaskWorkspace is a task-level policy, separate from its resolved checkout. The
 // object variants leave room for future repository entries without changing cwd.
 type TaskWorkspace struct {
-	Mode     string
-	Existing string
-	Branch   string
-	Backend  *BackendWorkspaceSelection
+	Mode      string
+	Existing  string
+	Queue     bool
+	Branch    string
+	Backend   *BackendWorkspaceSelection
+	Container *ContainerWorkspaceSelection
 }
 
 // BackendWorkspaceSelection references a saved naming plan for the target to-do.
 type BackendWorkspaceSelection struct {
 	OperationID string `json:"operation_id"`
 	Host        string `json:"host,omitempty"`
+}
+
+// ContainerWorkspaceSelection selects a multi-repository container backend workspace:
+// saved repository IDs to plan/prepare on the target machine, an existing saved/prepared
+// container operation_id on todo_id, or both to pin a stable operation_id.
+type ContainerWorkspaceSelection struct {
+	SelectedRepoIDs []string `json:"selected_repo_ids,omitempty"`
+	OperationID     string   `json:"operation_id,omitempty"`
+	Host            string   `json:"host,omitempty"`
 }
 
 func (w *TaskWorkspace) UnmarshalJSON(raw []byte) error {
@@ -53,9 +66,11 @@ func (w *TaskWorkspace) UnmarshalJSON(raw []byte) error {
 		return nil
 	}
 	var in struct {
-		Backend  *BackendWorkspaceSelection `json:"backend"`
-		Existing string                     `json:"existing"`
-		New      *struct {
+		Backend   *BackendWorkspaceSelection   `json:"backend"`
+		Container *ContainerWorkspaceSelection `json:"container"`
+		Existing  string                       `json:"existing"`
+		Queue     bool                         `json:"queue"`
+		New       *struct {
 			Branch string `json:"branch"`
 		} `json:"new"`
 	}
@@ -66,17 +81,52 @@ func (w *TaskWorkspace) UnmarshalJSON(raw []byte) error {
 	}
 	in.Existing = strings.TrimSpace(in.Existing)
 	if in.Backend != nil {
-		if in.New != nil || in.Existing != "" || !workspacenaming.ValidOperationID(in.Backend.OperationID) {
+		if in.Container != nil || in.New != nil || in.Existing != "" || in.Queue || !workspacenaming.ValidOperationID(in.Backend.OperationID) {
 			return fmt.Errorf("workspace.backend requires a single saved operation_id")
 		}
 		w.Mode, w.Backend = workspaceBackend, in.Backend
 		return nil
 	}
-	if in.Existing != "" && in.New == nil {
-		w.Mode, w.Existing = workspaceExisting, in.Existing
+	if in.Container != nil {
+		if in.New != nil || in.Existing != "" || in.Queue {
+			return fmt.Errorf("workspace must select exactly one of new, existing, none, backend, or container")
+		}
+		sel := &ContainerWorkspaceSelection{
+			OperationID: strings.TrimSpace(in.Container.OperationID),
+			Host:        strings.TrimSpace(in.Container.Host),
+		}
+		if sel.OperationID != "" && !workspacenaming.ValidOperationID(sel.OperationID) {
+			return fmt.Errorf("workspace.container.operation_id is invalid")
+		}
+		if len(in.Container.SelectedRepoIDs) > repository.MaxTaskRepositories {
+			return fmt.Errorf("workspace.container.selected_repo_ids exceeds maximum of %d repositories", repository.MaxTaskRepositories)
+		}
+		if len(in.Container.SelectedRepoIDs) > 0 {
+			seen := make(map[string]bool, len(in.Container.SelectedRepoIDs))
+			sel.SelectedRepoIDs = make([]string, 0, len(in.Container.SelectedRepoIDs))
+			for _, id := range in.Container.SelectedRepoIDs {
+				id = strings.TrimSpace(id)
+				if id == "" || len(id) > 80 {
+					return fmt.Errorf("workspace.container.selected_repo_ids contains an invalid repository id")
+				}
+				if seen[id] {
+					return fmt.Errorf("workspace.container.selected_repo_ids contains duplicate repository id %q", id)
+				}
+				seen[id] = true
+				sel.SelectedRepoIDs = append(sel.SelectedRepoIDs, id)
+			}
+		}
+		if len(sel.SelectedRepoIDs) == 0 && sel.OperationID == "" {
+			return fmt.Errorf("workspace.container requires selected_repo_ids or operation_id")
+		}
+		w.Mode, w.Container = workspaceContainer, sel
 		return nil
 	}
-	if in.New != nil && in.Existing == "" {
+	if in.Existing != "" && in.New == nil {
+		w.Mode, w.Existing, w.Queue = workspaceExisting, in.Existing, in.Queue
+		return nil
+	}
+	if in.New != nil && in.Existing == "" && !in.Queue {
 		w.Mode, w.Branch = workspaceNew, strings.TrimSpace(in.New.Branch)
 		return nil
 	}
@@ -87,7 +137,12 @@ func (w TaskWorkspace) MarshalJSON() ([]byte, error) {
 	switch w.Mode {
 	case workspaceBackend:
 		return json.Marshal(map[string]any{"backend": w.Backend})
+	case workspaceContainer:
+		return json.Marshal(map[string]any{"container": w.Container})
 	case workspaceExisting:
+		if w.Queue {
+			return json.Marshal(map[string]any{"existing": w.Existing, "queue": true})
+		}
 		return json.Marshal(map[string]string{"existing": w.Existing})
 	case workspaceNew:
 		if w.Branch != "" {
@@ -403,8 +458,16 @@ func (s *Service) admitTaskWorkspace(ctx context.Context, t *PlanTask) error {
 		s.resolveTaskRepo(ctx, t)
 	}
 	if t.Workspace.Mode != workspaceNone {
-		if err := s.taskWorkspaceBusy(ctx, t.Machine, t.Cwd, t.TodoID); err != nil {
-			return err
+		if owner := s.taskWorkspaceOwner(ctx, t.Machine, t.Cwd, t.TodoID, false); owner != nil {
+			if s.shouldQueueExistingWorkspace(ctx, *t, owner) {
+				return &workspaceBusyQueueError{
+					machine:    s.effectiveBoardMachine(t.Machine),
+					path:       t.Cwd,
+					ownerID:    owner.ID,
+					ownerTitle: owner.Title,
+				}
+			}
+			return i18n.ErrEnglish("assistant-tasks_workspace.busy", i18n.Args{"id": owner.ID, "title": owner.Title, "machine": t.Machine, "path": t.Cwd})
 		}
 		if t.TodoID != "" {
 			claim := s.effectiveBoardMachine(t.Machine) + "\x00" + s.taskDirKey(ctx, t.Machine)(t.Cwd)
@@ -530,13 +593,28 @@ func nodePathWithin(p, dir string) bool {
 	return p == dir || strings.HasPrefix(p, dir+"/")
 }
 
-func (s *Service) releaseTaskWorkspace(todoID string) {
+func (s *Service) releaseWorkspaceClaimsOnly(todoID string) []workspaceTarget {
+	if todoID == "" {
+		return nil
+	}
 	s.tasks.mu.Lock()
 	defer s.tasks.mu.Unlock()
+	var released []workspaceTarget
 	for key, owner := range s.tasks.workspaceClaims {
 		if owner == todoID {
 			delete(s.tasks.workspaceClaims, key)
+			if m, dir, ok := strings.Cut(key, "\x00"); ok && m != "" && dir != "" {
+				released = append(released, workspaceTarget{machine: m, path: dir})
+			}
 		}
+	}
+	return released
+}
+
+func (s *Service) releaseTaskWorkspace(todoID string) {
+	released := s.releaseWorkspaceClaimsOnly(todoID)
+	if len(released) > 0 {
+		s.drainReleasedWorkspaces(released)
 	}
 }
 

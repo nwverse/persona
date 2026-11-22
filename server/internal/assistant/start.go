@@ -56,9 +56,8 @@ var errRenameMain = i18n.Err("assistant-start.rename_main")
 var errWorkAssistant = i18n.Err("assistant-start.work_machine")
 
 // claudeMD is the assistant directory's CLAUDE.md (prompts/assistant/claude_md.md) for its machine here. Its machine
-// list is written from where the assistant actually runs: the ssh_host names are the hub machine's ssh aliases, which
-// work only for an assistant on the hub's own machine, and a link (or tailcat) machine has no ssh at all; from anywhere
-// else there is no command to give, only the Agents tools.
+// list identifies the local computer and the computers available for Agent work. The ssh_host aliases are only
+// meaningful from the hub machine.
 func (s *Service) claudeMD(ctx context.Context, here string, larkCLI bool) string {
 	return prompts.RenderAssistantClaudeMD(s.assistantPrompt(ctx, here, larkCLI, s.settings(ctx)))
 }
@@ -431,8 +430,7 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		s.putCacheKeepalive(ctx, machine, "", main, params)
 	}
 	if main && p.Space == "" && p.GuestTools == nil {
-		cfg := s.settings(ctx)
-		ctx = context.WithValue(ctx, supervisionStartup{}, cfg.MainSupervisesOwnTasks != nil && *cfg.MainSupervisesOwnTasks)
+		ctx = context.WithValue(ctx, supervisionStartup{}, true)
 	}
 	err = s.call(ctx, machine, DeviceAssistantSend, params, &res)
 	if fromSetting && (nodeOutdated(err) || profileRefused(err)) {

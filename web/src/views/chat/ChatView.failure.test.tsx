@@ -1068,6 +1068,12 @@ describe("sending in order, and with no row yet", () => {
       history.replaceState(null, "", "/persona/nope-0000");
       act(() => root.render(<ChatView mid="hub" sid="nope-0000" assistant={assistant} />));
       await flush();
+      // The exact-session read and React.lazy resolution are asynchronous: wait for the visible notice, not a fixed
+      // number of event-loop turns (which still loses under a loaded full suite).
+      await vi.waitFor(async () => {
+        await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+        expect(host.querySelector("[data-chat-not-found]")?.textContent).toContain(t("chat-notfoundnotice.body"));
+      });
       expect(host.querySelector("[data-chat-title]")?.textContent).toBe(t("chat-chatview.not_found_title"));
       expect(host.textContent).not.toContain("nope-0000");
       // The notice is a React.lazy chunk: it suspends once on its first render even when the module is in, so it is
@@ -1363,6 +1369,8 @@ describe("a message to an Agent whose computer is away", () => {
     expect(line?.className).toContain("text-red");
     const buttons = [...bubble!.querySelectorAll<HTMLButtonElement>('[role="alert"] button')];
     expect(buttons.map((b) => b.textContent)).toEqual([t("chat-outboxbubbles.retry"), t("chat-outboxbubbles.delete")]);
+    // The lazy mode-changes watcher may issue its GET after Retry; let it finish before asserting the last request.
+    await act(async () => { await vi.dynamicImportSettled(); }); await flush();
     await act(async () => buttons[0].click()); await flush();
     expect(fetched().at(-1)).toEqual({ url: "/api/v1/sessions/hub/c1/held/k1/retry", method: "POST" });
     // without the manager's words: the plain line in the page's language

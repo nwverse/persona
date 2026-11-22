@@ -1,11 +1,10 @@
 import { formatDate, t } from "../i18n";
 import { currentHeaders, noteItemManager } from "./manager-choice";
-import { acceptanceStands, linkedParkInteraction, linkedParkOwnerAsk, parkInteractionID, reviewState, type Supervision } from "./supervision";
+import { acceptanceStands, decisionDismissed, linkedParkInteraction, linkedParkOwnerAsk, parkInteractionID, reviewState, type Supervision } from "./supervision";
 import type { LineageStep, TaskBrief } from "./brief";
 import type { RuleSuggestion } from "./rule-suggestion";
 import type { TodoSummary } from "./todo-view-wire";
 import { api, ApiError, enc } from "./api";
-import { contextBody } from "./context-body";
 import { parseAPIError, retryable, unrecoverableError } from "./api-errors";
 import { stateOf } from "./format";
 import { foldedState } from "./child-sessions";
@@ -126,6 +125,9 @@ export interface Todo {
   /** "auto" when the hub marked the task done because its work was judged finished, with why (docs/assistant/todos.md "Automatic completion"). */
   done_by?: string;
   done_reason?: string;
+  /** Cancellation is closed but not completed; the hub derives both fields for current and legacy rows (#5732). */
+  cancelled_at?: string | null;
+  cancelled_reason?: string;
   /** When the user last reopened it after it was done. */
   reopened_at?: string | null;
   /** When the owner last looked at it in Just finished: Got it, or opening it (#5707, lib/todo-seen.ts); a to-do seen
@@ -180,6 +182,11 @@ export interface Todo {
   /** The hub's view of the row (#10226, docs/assistant/todo-status-sop.md "The hub's view"): read only behind
    *  Developing Persona's switches for now (features/todos/model). Unset from managers without `todo_view`. */
   view?: TodoSummary;
+}
+
+/** Whether this closed to-do was cancelled, including the legacy supervision-only representation. */
+export function isCancelled(todo: Pick<Todo, "cancelled_at" | "done_at" | "done_by" | "supervision">): boolean {
+  return Boolean(todo.cancelled_at) || todo.done_by === "cancelled" || (todo.done_by === "review" && reviewState(todo) === "cancelled");
 }
 
 /** "Nobody is working on this" and why ("closed after an error"), for an open to-do the hub found orphaned; undefined
@@ -348,12 +355,14 @@ export const TODO_TONE_CLASS: Record<TodoTone, string> = {
  *  or finished-unseen (#4896): a supervised one whose work was judged finished (#3124), or an open one whose result
  *  waits on them — to verify, to acknowledge, or to decide (its `ask`, #2056). */
 export function awaitsReview(todo: Todo, status: TodoStatus): boolean {
-  return (reviewState(todo) === "pending_review" || !!openAsk(todo)) && (status === "follow_up" || status === "unread" || status === "not_started");
+  const reviewRequired = reviewState(todo) === "pending_review" || !!openAsk(todo) || (todo.kind !== "concern" && todo.delivery?.state === "live");
+  return !todo.done_at && !acceptanceStands(todo) && !waitsForOwner(todo) && reviewRequired && (status === "follow_up" || status === "unread" || status === "not_started");
 }
 
-/** A task's place in the order: its status's rank, Awaiting review right after Needs you. */
+/** A task's place in the order: its status's rank, Awaiting review right after Needs you, Cancelled after Done. */
 export function todoRank(todo: Todo, status: TodoStatus): number {
-  return awaitsReview(todo, status) ? 2 : TODO_STATUS_RANK[status];
+  if (isCancelled(todo)) return 9;
+  return awaitsReview(todo, status) ? 2 : TODO_STATUS_RANK[shownStatus(todo, status)];
 }
 
 /** Each status's word and tone. Waiting's are the word for a wait nothing names, neutral: where the to-do and its Agents
@@ -391,15 +400,10 @@ export function isReviewDone(todo: Todo): boolean {
   return Boolean(todo.done_at) && todo.done_by === "review";
 }
 
-/** A cancelled task: its supervisor ended it without the work being accepted (the row's status line says Cancelled).
- *  Only this outcome is struck through, so an accepted or deployed one does not read as thrown away (#11677). */
-export function isCancelled(todo: Todo): boolean {
-  return isReviewDone(todo) && todo.supervision?.state === "cancelled";
-}
-
-/** Whether a finished row strikes its title through: only a cancelled to-do (#11677). A task that succeeded — accepted,
- *  deployed, ticked by the owner or auto-completed — keeps a plain muted title; the filled check and the muted tone
- *  already say it is closed. A row still open (a failed start waiting on the owner) is never struck (#3713). */
+/** Whether a finished row strikes its title through: every cancellation representation used for Cancelled filing
+ *  (#11677). A task that succeeded — accepted, deployed, ticked by the owner or auto-completed — keeps a plain muted
+ *  title; the filled check and the muted tone already say it is closed. A row still open (a failed start waiting on
+ *  the owner) is never struck (#3713). */
 export function strikesThrough(todo: Todo, open: boolean): boolean {
   return !open && isCancelled(todo);
 }
@@ -408,19 +412,30 @@ export function strikesThrough(todo: Todo, open: boolean): boolean {
  *  or asking now: it reads as accepted, not "Follow up" (#3156, docs/assistant/todo-status-sop.md "Accepted tasks").
  *  An open concern still waits for its report, so neither an accepted verdict nor its done styling applies (#3582). */
 export function acceptedAtRest(todo: Todo, status: TodoStatus): boolean {
-  return todo.kind !== "concern" && !todo.done_at && acceptanceStands(todo) && (status === "follow_up" || status === "unread" || status === "not_started" || status === "usage_limit");
+  return todo.kind !== "concern" && !todo.done_at && (!waitsForOwner(todo) || decisionDismissed(todo)) && acceptanceStands(todo) && (status === "follow_up" || status === "unread" || status === "not_started" || status === "usage_limit");
+}
+
+/** An undismissed decision only the owner can move reads Waiting for you, consistently with triage and the snapshot (#5732). */
+export function waitsForOwner(todo: Todo): boolean {
+  const outcome = openAsk(todo)?.outcome;
+  return !todo.done_at && !decisionDismissed(todo) && (reviewState(todo) === "needs_user" || outcome === "decide" || outcome === "cannot");
 }
 
 /** The status a row draws its tone and mark from: Done for an accepted task at rest, else its own. */
 export function shownStatus(todo: Todo, status: TodoStatus): TodoStatus {
-  return acceptedAtRest(todo, status) ? "done" : status;
+  if (acceptedAtRest(todo, status)) return "done";
+  if (waitsForOwner(todo)) return "needs_you";
+  return awaitsReview(todo, status) ? "unread" : status;
 }
 
 /** The status's label for this todo: "Auto-completed" for one the hub closed, "Accepted" for one its supervisor did
  *  (or accepted and nothing runs again). */
 export function todoStatusLabel(todo: Todo, status: TodoStatus): string {
+  if (isCancelled(todo)) return t("lib-todos.review_cancelled");
   if (!todo.done_at && todo.supervision?.state === "user_check") return t("assistant-tasks.review_user_check");
   if (acceptedAtRest(todo, status)) return t("lib-todos.review_done");
+  if (waitsForOwner(todo)) return t("work-entry.pending");
+  if (awaitsReview(todo, status)) return t("assistant-tasks.review_pending");
   if (status === "done" && isReviewDone(todo)) return todo.supervision?.state === "cancelled" ? t("lib-todos.review_cancelled") : t("lib-todos.review_done");
   if (status === "follow_up" && todo.supervision?.state === "parked" && todo.supervision.parked?.handoff && !openAsk(todo)) {
     return TODO_STATUS_INFO.waiting.label;
@@ -567,7 +582,7 @@ export function interruption(s?: Session): { reason: string; canContinue: boolea
 /**
  * The todo list's order, the task board's (#4896): what needs the user (Needs you, Interrupted, Awaiting review) first;
  * then the open ones by due date, earliest (an overdue one) first, those without one after (#1683); then by todoRank —
- * Failed to start, Working, Not started, Finished, Stopped, Done — then newest first. A task that did not start has
+ * Failed to start, Working, Not started, Finished, Stopped, Done, Cancelled — then newest first. A task that did not start has
  * done_at too, but it is the user's to retry or remove, so it does not sink with the done ones.
  */
 export function sortTodos(todos: Todo[], lookup?: SessionLookup): Todo[] {
@@ -783,17 +798,6 @@ export function buildTodoAgentGroups(
   return groups;
 }
 
-/**
- * The format when handing it to an agent (the same as the inbox's)
- * `<persona-context kind="context" title="To-do · <title>" url="">notes</persona-context>`
- */
-export function formatTodoContext(title: string, notes?: string): string {
-  const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  // a closing tag in the notes would end the block early (either name, #3182)
-  const body = contextBody(notes ?? "").trim();
-  return `<persona-context kind="context" title="${escape(t("lib-todos.context_title", { title }))}" url="">${body}</persona-context>`;
-}
-
 // ── Decision log (#1618, docs/assistant/todos.md "Decision records") ───────────────
 
 /** One call the user made on a todo: written by hand, or their answer to a question card of an agent on it. */
@@ -998,75 +1002,6 @@ export function isLegacySpacesRouteError(e: unknown): boolean {
 export function isSpacesSupported(todos: Todo[]): boolean {
   if (todos.length === 0) return false;
   return todos.some((t) => "spaces" in t && Array.isArray(t.spaces));
-}
-
-/**
- * Resolve the current todo ID for LinkTodoDialog target.
- * For a space, looks up from the todos list.
- * For a session, uses session.todo?.id directly so the unlink control
- * does not disappear if /todos hasn't loaded or failed (#874 item 4).
- */
-export function resolveLinkCurrentTodoId(
-  space?: { machineId: string; space: string },
-  session?: Session,
-  todos: Todo[] = [],
-): string | undefined {
-  if (space) {
-    return findTodoForSpace(todos, space.machineId, space.space)?.id;
-  }
-  return session?.todo?.id;
-}
-
-/**
- * Format agent source label:
- * - Spawned from project: "With project <space>" (resolved from via, or agent's own session lookup as fallback);
- *   "With project" if neither is available;
- * - Spawned from parent agent: "Spawned by <parent title>"; "Spawned" if parent is not in session list;
- * - Same Feishu chat as most of the todo's botmux agents: "Same chat";
- * - Manual: undefined (not labeled).
- */
-export function formatAgentSource(
-  agent: TodoAgent,
-  _spaces?: TodoSpace[],
-  lookup?: SessionLookup,
-): string | undefined {
-  if (!agent.source || agent.source === "manual") return undefined;
-
-  if (agent.source === "space") {
-    let spaceName = "";
-    if (agent.via) {
-      const slash = agent.via.indexOf("/");
-      if (slash >= 0) {
-        spaceName = agent.via.slice(slash + 1);
-      } else {
-        spaceName = agent.via;
-      }
-    }
-    if (!spaceName && lookup) {
-      const s = lookup(agent.machine_id, agent.session_id);
-      if (s?.space_name) spaceName = s.space_name;
-    }
-    return spaceName ? t("lib-todos.with_project_named", { name: spaceName }) : t("lib-todos.with_project");
-  }
-
-  if (agent.source === "spawned") {
-    if (agent.via && lookup) {
-      const slash = agent.via.indexOf("/");
-      if (slash >= 0) {
-        const mid = agent.via.slice(0, slash);
-        const sid = agent.via.slice(slash + 1);
-        const parent = lookup(mid, sid);
-        if (parent?.title) {
-          return t("lib-todos.spawned_by", { title: parent.title });
-        }
-      }
-    }
-    return t("lib-todos.spawned");
-  }
-
-  if (agent.source === "chat") return t("lib-todos.same_chat");
-
-  return undefined;
 }
 
 /** An agent going on ("Needs you" / "Working") that the main conversation's dock shows after its tasks (#1113, iOS DockAgent). */

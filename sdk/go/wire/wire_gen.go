@@ -813,9 +813,12 @@ type ChannelCapabilities struct {
 	MaxText   int    `json:"max_text,omitempty"`
 	Asks      string `json:"asks,omitempty"`
 	Push      bool   `json:"push,omitempty"`
-	Typing    bool   `json:"typing,omitempty"`
-	Progress  bool   `json:"progress,omitempty"`
-	Threads   bool   `json:"threads,omitempty"`
+	// It only replies to incoming messages or triggers and cannot send unsolicited proactive messages without reply_to;
+	// testing checks connectivity instead of calling channel.send.
+	ReplyOnly bool `json:"reply_only,omitempty"`
+	Typing    bool `json:"typing,omitempty"`
+	Progress  bool `json:"progress,omitempty"`
+	Threads   bool `json:"threads,omitempty"`
 }
 
 type EventsItem struct {
@@ -1458,6 +1461,43 @@ type SecretsResolveResult struct {
 	Value string `json:"value"`
 }
 
+// SecretStoreField: A public field name/type; never a value or source path.
+type SecretStoreField struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+}
+
+// SecretStoreTarget: the canonical public target approved on the secret storage card.
+type SecretStoreTarget struct {
+	Operation string             `json:"operation"`
+	Vault     string             `json:"vault"`
+	Item      string             `json:"item,omitempty"`
+	Title     string             `json:"title,omitempty"`
+	Category  string             `json:"category,omitempty"`
+	Fields    []SecretStoreField `json:"fields"`
+}
+
+// SecretStoreParams: secrets.store: describe metadata, prepare an expiring node HPKE key after explicit approval,
+// commit one encrypted payload.
+type SecretStoreParams struct {
+	Contribution string            `json:"contribution,omitempty"`
+	Phase        string            `json:"phase"`
+	Target       SecretStoreTarget `json:"target"`
+	Machine      string            `json:"machine"`
+	Session      string            `json:"session"`
+	KeyID        string            `json:"key_id,omitempty"`
+	Sealed       string            `json:"sealed,omitempty"`
+}
+
+// SecretStoreResult: metadata and a recipient key, or references of written fields. Never values.
+type SecretStoreResult struct {
+	Target     SecretStoreTarget `json:"target"`
+	VaultName  string            `json:"vault_name,omitempty"`
+	Key        string            `json:"key,omitempty"`
+	KeyID      string            `json:"key_id,omitempty"`
+	References map[string]string `json:"references,omitempty"`
+}
+
 // SecretsUsedEvent: secrets.used (an event to the provider, no answer): a reference it resolved was used, for the
 // usage record its own page shows. Never the value.
 type SecretsUsedEvent struct {
@@ -2009,6 +2049,7 @@ type SceneShape struct {
 	Top      *float64    `json:"top,omitempty"`
 	Color    string      `json:"color,omitempty"`
 	Material string      `json:"material,omitempty"`
+	Wall     bool        `json:"wall,omitempty"`
 	Radius   float64     `json:"radius,omitempty"`
 	Points   [][]float64 `json:"points,omitempty"`
 }
@@ -7142,6 +7183,10 @@ var newDef = map[string]func() any{
 	"SecretsDescribeResult":         func() any { return new(SecretsDescribeResult) },
 	"SecretsResolveParams":          func() any { return new(SecretsResolveParams) },
 	"SecretsResolveResult":          func() any { return new(SecretsResolveResult) },
+	"SecretStoreField":              func() any { return new(SecretStoreField) },
+	"SecretStoreTarget":             func() any { return new(SecretStoreTarget) },
+	"SecretStoreParams":             func() any { return new(SecretStoreParams) },
+	"SecretStoreResult":             func() any { return new(SecretStoreResult) },
 	"SecretsUsedEvent":              func() any { return new(SecretsUsedEvent) },
 	"ExtensionNotification":         func() any { return new(ExtensionNotification) },
 	"View":                          func() any { return new(View) },

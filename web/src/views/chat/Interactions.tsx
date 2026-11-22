@@ -742,7 +742,7 @@ function SecretHandoffCard({ ix }: { ix: Interaction }) {
   const [busy, setBusy] = useState<"allow" | "always" | "deny" | null>(null);
   const keys = useCardKeys();
   const tapGuard = useChatCardTapGuard(ix);
-  const { variables, agent, machine, cwd, prompt } = secretHandoffInput(ix.tool_input);
+  const { variables, store, agent, machine, cwd, prompt } = secretHandoffInput(ix.tool_input);
   // nothing says what would be handed over: only Deny
   const ready = variables.length > 0;
   const go = async (body: Record<string, unknown>, key: "allow" | "always" | "deny") => {
@@ -758,7 +758,7 @@ function SecretHandoffCard({ ix }: { ix: Interaction }) {
   return (
     <Card
       kicker={t("chat-interactions.permission_kicker")}
-      title={t("chat-interactions.secret_handoff_title")}
+      title={store ? ix.tool_title || ix.summary || t("chat-interactions.secret_handoff_title") : t("chat-interactions.secret_handoff_title")}
       cardKeys={keys}
       tapGuard={tapGuard}
       footer={
@@ -780,7 +780,7 @@ function SecretHandoffCard({ ix }: { ix: Interaction }) {
       }
     >
       <div className="flex flex-col gap-2">
-        <p className="text-[13px] leading-relaxed text-ink">{machine ? lead : t("chat-interactions.secret_handoff_lead_bare")}</p>
+        <p className="text-[13px] leading-relaxed text-ink">{store ? ix.summary : machine ? lead : t("chat-interactions.secret_handoff_lead_bare")}</p>
         <ul className="flex flex-col gap-1">
           {variables.map((v) => (
             <li key={v.name} data-handoff-variable className="flex min-w-0 items-baseline gap-2">

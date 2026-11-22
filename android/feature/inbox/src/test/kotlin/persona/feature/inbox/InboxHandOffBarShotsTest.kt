@@ -200,7 +200,7 @@ class InboxHandOffBarShotsTest {
                 else -> "View"
             }).assertHasClickAction()
             val layouts = mutableListOf<TextLayoutResult>()
-            rule.onNodeWithText(longTarget, useUnmergedTree = true).fetchSemanticsNode()
+            val _ = rule.onNodeWithText(longTarget, useUnmergedTree = true).fetchSemanticsNode()
                 .config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
             assertTrue("$nextStyle: the target label must ellipsize in its bounded chip",
                 layouts.single().isLineEllipsized(0))

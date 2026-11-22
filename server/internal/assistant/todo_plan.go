@@ -215,7 +215,12 @@ func (s *Service) createDirectionTodo(ctx context.Context, leader, title, notes 
 	if err != nil {
 		return Todo{}, err
 	}
-	s.superviseTodo(ctx, t.ID, leader, nil, 0)
+	if err := s.superviseTodo(ctx, t.ID, leader, nil, 0); err != nil {
+		if rerr := s.removeTodo(context.WithoutCancel(ctx), t.ID); rerr != nil {
+			s.logf("todo %s: take back after supervision failure: %v", t.ID, rerr)
+		}
+		return Todo{}, err
+	}
 	if cur, ok := s.todoNow(t.ID); ok {
 		t = cur
 	}
@@ -308,13 +313,17 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		// still has the agents that were working on it.
 		s.goRecordTaskOutcome(cur, *row.DoneAt)
 		s.askTodoClosed(context.WithoutCancel(ctx), id, row.Title) // a question's to-do closed unanswered (ask_todo.go)
-		if row.StartError == "" && row.DoneBy != db.DoneByCancelled {
+		maySatisfyAfter := row.StartError == "" && row.DoneBy != db.DoneByCancelled
+		s.onTodoWorkspaceReleased(ctx, cur, maySatisfyAfter)
+		if maySatisfyAfter {
 			s.evaluateTodoAfterDependents(ctx, id)
+			s.evaluateParentCloseoutForChild(ctx, id)
 		}
 	}
 	if reopening && row.DoneAt == nil && (cur.DoneAt != nil || e.RestartWork ||
 		row.ReopenedAt != nil && (cur.ReopenedAt == nil || !row.ReopenedAt.Equal(*cur.ReopenedAt))) {
 		s.resetTodoReadyWake(ctx, id)
+		s.resetParentCloseoutWake(ctx, id)
 	}
 	return out, nil
 }
@@ -332,6 +341,7 @@ func (s *Service) deleteTodo(ctx context.Context, id string) error {
 		return err
 	}
 	s.askTodoClosed(context.WithoutCancel(ctx), id, cur.Title) // a question's to-do deleted unanswered (ask_todo.go)
+	s.onTodoWorkspaceReleased(ctx, cur, false)
 	return nil
 }
 

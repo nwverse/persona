@@ -82,7 +82,8 @@ struct SecretHandoffForm: View {
 
     /// Who gets the values, where, and for how long.
     private func lead(_ r: SecretHandoffRequest) -> String {
-        switch (r.agent.isEmpty, r.machine.isEmpty) {
+        if r.isStore { return interaction.summary ?? "" }
+        return switch (r.agent.isEmpty, r.machine.isEmpty) {
         case (false, false): String(localized: "“\(r.agent)” on \(r.machine) gets these for this run only:")
         case (true, false): String(localized: "An Agent on \(r.machine) gets these for this run only:")
         default: String(localized: "An Agent gets these for this run only:")

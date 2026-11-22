@@ -28,4 +28,11 @@
     <string name="chat_tool_open_subagent">View sub-agent</string>
     <string name="chat_tool_no_answer">No answer</string>
     <string name="chat_computer_pill_opens">Show the steps</string>
+    <string name="chat_menu_star">Star</string>
+    <string name="chat_menu_unstar">Unstar</string>
+    <string name="chat_starred_saved">Starred</string>
+    <string name="chat_starred_saving">Saving starred message</string>
+    <string name="chat_starred_removed">Message unstarred</string>
+    <string name="chat_starred_undo">Undo</string>
+    <string name="chat_starred_failed">Couldn\'t update starred message</string>
 </resources>
