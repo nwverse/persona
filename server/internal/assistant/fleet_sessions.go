@@ -40,16 +40,10 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 	fm, hasMachine := s.fleetMachine(machine)
 	_, hasInlineStore := s.store().(inlineViewStore)
 	now := time.Now()
-	bgCfg := s.settings(context.Background())
 	for i := range list {
 		list[i].MachineID = machine
 		// A node from before titles were stripped first sends a clipped injected tag as the title.
 		list[i].Title = transcript.Title(list[i].Title)
-		if bg := bgCfg.BackgroundSupervisor; bg != "" && list[i].PaneID == "" && list[i].SessionID != "" &&
-			list[i].SessionID != bg && list[i].SessionID != bgCfg.Main &&
-			(list[i].ParentSessionID == bg || list[i].RootSessionID == bg) {
-			s.registerBackgroundRoundFork(context.Background(), machine, list[i].SessionID, bg)
-		}
 	}
 	for _, sess := range list {
 		// Any agent (herdr or headless, started by Persona or not) finishing a turn may notify the phone.

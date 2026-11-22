@@ -143,8 +143,10 @@ func (s *Service) ensureBackground(ctx context.Context) (id, gone string) {
 	b.failedAt = time.Time{}
 	b.rounds.mu.Lock()
 	b.rounds.forks = nil
+	b.rounds.forksLoaded = true
 	b.rounds.breaker = superviseBreaker{}
 	b.rounds.mu.Unlock()
+	s.saveBackgroundForks(ctx, nil)
 	return id, gone
 }
 

@@ -72,7 +72,6 @@ func (s *Service) assistantCaller(ctx context.Context, machine, session string) 
 	}
 	cfg := s.settings(ctx)
 	allowed := s.sameMachine(machine, cfg.MachineID) ||
-		s.sameMachine(machine, cfg.BackgroundSupervisorMachineID) ||
 		s.sameMachine(machine, s.hello(ctx).Models.InboxAgentMachine)
 	b := &s.startingAssistants
 	id := machine

@@ -1,9 +1,11 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -140,31 +142,81 @@ type superviseRoundReply struct {
 	TranscriptBytes int64  `json:"transcript_bytes"`
 }
 
-// backgroundRoundFork records a forked session id created by a background supervisor round (#12650).
+// backgroundRoundForksKey persists manager-attested background supervision round forks across restarts (#12650).
+const backgroundRoundForksKey = "assistant.background_round_forks"
+
+// backgroundRoundFork records a manager-attested forked session id created by a background supervisor round (#12650).
 type backgroundRoundFork struct {
-	base    string
-	machine string
-	at      time.Time
+	Base    string    `json:"base"`
+	Machine string    `json:"machine,omitempty"`
+	At      time.Time `json:"at"`
 }
 
-// maxBackgroundRoundForks caps the in-memory round fork table so long-running hubs stay bounded.
+// maxBackgroundRoundForks caps the persisted round fork table so long-running hubs stay bounded.
 const maxBackgroundRoundForks = 512
 
 // superviseRounds is what the rounds' answers say about background supervisors, in memory: the ones to replace and why,
 // the ones that are a replacement and have not started a round from their first turn yet, when a replacement was last
-// tried, whether an old node was logged, any forked round session ids, and the circuit breaker state.
+// tried, whether an old node was logged, any manager-attested forked round session ids, and the circuit breaker state.
 type superviseRounds struct {
 	mu          sync.Mutex
 	outgrown    map[string]string // background supervisor → why it is replaced at the next chance (no_anchor, oversized)
 	replacement map[string]bool   // a background supervisor started to replace another, until a round of it starts fresh
 	replacedAt  time.Time
 	oldNode     bool
-	forks       map[string]backgroundRoundFork // forked round session id → its base background supervisor
+	forks       map[string]backgroundRoundFork // manager-attested forked round session id → its base background supervisor
 	breaker     superviseBreaker               // circuit breaker / backoff for auth-denied or repeated no-op all_stopped rounds
+	forksLoaded bool
 }
 
-// registerBackgroundRoundFork records that forkID on machine is a forked round session of baseID (the background
-// supervisor), so it inherits assistant authorization and supervision tools and stays hidden from the Agents list.
+// backgroundForksLocked loads manager-attested round forks from the store once; r.mu is held.
+func (s *Service) backgroundForksLocked(ctx context.Context) bool {
+	r := &s.background.rounds
+	if r.forksLoaded {
+		return true
+	}
+	st := s.store()
+	if st == nil {
+		r.forksLoaded = true
+		return true
+	}
+	var m map[string]backgroundRoundFork
+	if _, err := st.Setting(ctx, backgroundRoundForksKey, &m); err != nil {
+		s.logf("supervise: load background round forks: %v", err)
+		return false
+	}
+	if len(m) > 0 {
+		if r.forks == nil {
+			r.forks = m
+		} else {
+			for k, v := range m {
+				if _, exists := r.forks[k]; !exists {
+					r.forks[k] = v
+				}
+			}
+		}
+	}
+	r.forksLoaded = true
+	return true
+}
+
+func (s *Service) saveBackgroundForks(ctx context.Context, forks map[string]backgroundRoundFork) {
+	st := s.store()
+	if st == nil {
+		return
+	}
+	if forks == nil {
+		forks = map[string]backgroundRoundFork{}
+	}
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := st.PutSetting(sctx, backgroundRoundForksKey, forks); err != nil {
+		s.logf("supervise: save background round forks: %v", err)
+	}
+}
+
+// registerBackgroundRoundFork records a manager-attested forkID returned for baseID (the background supervisor) on
+// machine, so it inherits assistant authorization and supervision tools and stays hidden from the Agents list.
 func (s *Service) registerBackgroundRoundFork(ctx context.Context, machine, forkID, baseID string) {
 	if forkID == "" || baseID == "" || forkID == baseID {
 		return
@@ -178,6 +230,7 @@ func (s *Service) registerBackgroundRoundFork(ctx context.Context, machine, fork
 	}
 	r := &s.background.rounds
 	r.mu.Lock()
+	s.backgroundForksLocked(ctx)
 	if r.forks == nil {
 		r.forks = map[string]backgroundRoundFork{}
 	}
@@ -185,16 +238,18 @@ func (s *Service) registerBackgroundRoundFork(ctx context.Context, machine, fork
 		oldestID := ""
 		var oldestAt time.Time
 		for id, f := range r.forks {
-			if oldestID == "" || f.at.Before(oldestAt) {
-				oldestID, oldestAt = id, f.at
+			if oldestID == "" || f.At.Before(oldestAt) {
+				oldestID, oldestAt = id, f.At
 			}
 		}
 		if oldestID != "" {
 			delete(r.forks, oldestID)
 		}
 	}
-	r.forks[forkID] = backgroundRoundFork{base: baseID, machine: machine, at: time.Now().UTC()}
+	r.forks[forkID] = backgroundRoundFork{Base: baseID, Machine: machine, At: time.Now().UTC()}
+	snapshot := maps.Clone(r.forks)
 	r.mu.Unlock()
+	s.saveBackgroundForks(ctx, snapshot)
 }
 
 // cachedBackgroundSettings returns the saved BackgroundSupervisor, BackgroundSupervisorMachineID, MachineID, and Main
@@ -224,57 +279,31 @@ func (s *Service) cachedBackgroundSettings(ctx context.Context) (base, bgMachine
 	return v.BackgroundSupervisor, v.BackgroundSupervisorMachineID, v.MachineID, v.Main
 }
 
-// backgroundForkBase reports whether id (optionally scoped to machine) is a forked round branch of the current
-// background supervisor, returning the base background supervisor id.
+// backgroundForkBase reports whether id (optionally scoped to machine) is a manager-attested forked round branch of
+// the current background supervisor, returning the base background supervisor id. Unverified ParentSessionID /
+// RootSessionID linkage from node session lists is never accepted as an authorization credential.
 func (s *Service) backgroundForkBase(ctx context.Context, machine, id string) (string, bool) {
 	if id == "" {
 		return "", false
 	}
-	base, bgMachine, cfgMachine, mainID := s.cachedBackgroundSettings(ctx)
+	base, _, _, mainID := s.cachedBackgroundSettings(ctx)
 	if base == "" || id == mainID || id == base {
 		return "", false
 	}
 	r := &s.background.rounds
 	r.mu.Lock()
+	s.backgroundForksLocked(ctx)
 	entry, found := r.forks[id]
 	r.mu.Unlock()
-	if found && entry.base == base {
-		if machine == "" || entry.machine == "" || s.sameMachine(machine, entry.machine) {
+	if found && entry.Base == base {
+		if machine == "" || entry.Machine == "" || s.sameMachine(machine, entry.Machine) {
 			return base, true
-		}
-	}
-	if s.devs == nil {
-		return "", false
-	}
-	// Also recognize a forked round branch from its node session parent/root linkage (e.g. after a manager restart).
-	checkMachine := machine
-	if checkMachine == "" {
-		checkMachine = bgMachine
-		if checkMachine == "" {
-			checkMachine = cfgMachine
-		}
-		if checkMachine == "" {
-			checkMachine = s.settings(ctx).MachineID
-		}
-	}
-	if checkMachine != "" {
-		if sess, ok := s.nodeSession(checkMachine, id); ok && sess.PaneID == "" {
-			if sess.ParentSessionID == base || sess.RootSessionID == base {
-				return base, true
-			}
-			r.mu.Lock()
-			parentFork := r.forks[sess.ParentSessionID]
-			rootFork := r.forks[sess.RootSessionID]
-			r.mu.Unlock()
-			if parentFork.base == base || rootFork.base == base {
-				return base, true
-			}
 		}
 	}
 	return "", false
 }
 
-// isBackgroundSession reports whether id is the current background supervisor or a forked round branch of it.
+// isBackgroundSession reports whether id is the current background supervisor or a manager-attested forked round branch of it.
 func (s *Service) isBackgroundSession(ctx context.Context, id string) bool {
 	if s.isBackground(ctx, id) {
 		return true
@@ -283,8 +312,8 @@ func (s *Service) isBackgroundSession(ctx context.Context, id string) bool {
 	return ok
 }
 
-// isBackgroundCallerOn reports whether session on machine is the current background supervisor or a forked round branch
-// of it running on a machine authorized for the background supervisor.
+// isBackgroundCallerOn reports whether session on machine is the current background supervisor or a manager-attested
+// forked round branch of it running on the machine authorized for the background supervisor.
 func (s *Service) isBackgroundCallerOn(ctx context.Context, machine, session string) bool {
 	if machine == "" || session == "" || s.isWorkMachine(machine) {
 		return false
@@ -294,12 +323,16 @@ func (s *Service) isBackgroundCallerOn(ctx context.Context, machine, session str
 	if base == "" || session == cfg.Main {
 		return false
 	}
+	if sess, known := s.nodeSession(machine, session); known && sess.PaneID != "" {
+		return false
+	}
 	if session != base {
 		if _, ok := s.backgroundForkBase(ctx, machine, session); !ok {
 			return false
 		}
 	}
-	if s.sameMachine(machine, cfg.BackgroundSupervisorMachineID) || s.sameMachine(machine, cfg.MachineID) {
+	bgMachine := cmp.Or(cfg.BackgroundSupervisorMachineID, cfg.MachineID)
+	if s.sameMachine(machine, bgMachine) {
 		return true
 	}
 	s.origins.mu.Lock()
@@ -320,8 +353,8 @@ func (s *Service) supervisionHoldKey(ctx context.Context, self string) string {
 	return self
 }
 
-// backgroundMatch holds a precomputed snapshot for matching the current background supervisor and its forked round
-// branches on one machine inside hot session-list loops with zero per-row settings/lock/session allocations.
+// backgroundMatch holds a precomputed snapshot for matching the current background supervisor and its manager-attested
+// forked round branches on one machine inside hot session-list loops with zero per-row settings/lock/session allocations.
 type backgroundMatch struct {
 	base  string
 	main  string
@@ -344,7 +377,7 @@ func (s *Service) backgroundMatcher(ctx context.Context, machine string) backgro
 			mainID = cfg.Main
 		}
 	}
-	authorized := s.sameMachine(machine, bgMachine) || s.sameMachine(machine, cfgMachine)
+	authorized := s.sameMachine(machine, cmp.Or(bgMachine, cfgMachine))
 	if !authorized {
 		s.origins.mu.Lock()
 		if s.originsLocked(ctx) {
@@ -360,8 +393,9 @@ func (s *Service) backgroundMatcher(ctx context.Context, machine string) backgro
 	m := backgroundMatch{base: base, main: mainID}
 	r := &s.background.rounds
 	r.mu.Lock()
+	s.backgroundForksLocked(ctx)
 	for id, entry := range r.forks {
-		if entry.base == base && (entry.machine == "" || s.sameMachine(machine, entry.machine)) {
+		if entry.Base == base && (entry.Machine == "" || s.sameMachine(machine, entry.Machine)) {
 			if m.forks == nil {
 				m.forks = map[string]struct{}{}
 			}
@@ -373,22 +407,10 @@ func (s *Service) backgroundMatcher(ctx context.Context, machine string) backgro
 }
 
 func (m backgroundMatch) isFork(sess *proto.Session) bool {
-	if m.base == "" || sess.PaneID != "" || sess.SessionID == "" || sess.SessionID == m.base || sess.SessionID == m.main {
+	if m.base == "" || len(m.forks) == 0 || sess.PaneID != "" || sess.SessionID == "" || sess.SessionID == m.base || sess.SessionID == m.main {
 		return false
 	}
-	if sess.ParentSessionID == m.base || sess.RootSessionID == m.base {
-		return true
-	}
-	if len(m.forks) == 0 {
-		return false
-	}
-	if _, ok := m.forks[sess.SessionID]; ok {
-		return true
-	}
-	if _, ok := m.forks[sess.ParentSessionID]; ok {
-		return true
-	}
-	_, ok := m.forks[sess.RootSessionID]
+	_, ok := m.forks[sess.SessionID]
 	return ok
 }
 
@@ -538,8 +560,10 @@ func (s *Service) replaceBackground(ctx context.Context, cfg Settings, old, why 
 		r.replacement[id] = true
 	}
 	r.forks = nil
+	r.forksLoaded = true
 	r.breaker = superviseBreaker{}
 	r.mu.Unlock()
+	s.saveBackgroundForks(ctx, nil)
 	// The owner's model pick for the background supervisor goes on with the conversation that does its work: a pick is
 	// never dropped behind the owner's back (model_pick.go). The old one keeps its own in the archive.
 	if pick, ok := s.modelPickOf(ctx, cfg.BackgroundSupervisorMachineID, old); ok {
