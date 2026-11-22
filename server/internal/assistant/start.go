@@ -157,8 +157,9 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 		md = s.healthClaudeMD(ctx, machine)
 	}
 	digests, files := skillDigests(plugins.Skills)
-	deny := s.spaceDenyDirs(ctx)
-	given := preparedState{md: md, skills: digests, workGuide: onDemand != "", deny: strings.Join(deny, "\x00")}
+	deny := s.trackDenyDirs(ctx)
+	denyKey, _ := json.Marshal(deny)
+	given := preparedState{md: md, skills: digests, workGuide: onDemand != "", deny: string(denyKey)}
 	if onlyChanged && !files {
 		s.preparedMu.Lock()
 		same := s.prepared[key] == given
@@ -168,7 +169,7 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 		}
 	}
 	params := map[string]any{"dir": dir, "claude_md": md,
-		"connectors": conns.Connectors, "clis": conns.CLIs, "plugin_skills": plugins.Skills, "deny_spaces": deny}
+		"connectors": conns.Connectors, "clis": conns.CLIs, "plugin_skills": plugins.Skills, "deny_dirs": deny}
 	// Older nodes read only claude_md, so they retain the complete instructions.
 	if onDemand != "" {
 		params["work_guide_md"] = onDemand + plugins.Instructions
@@ -201,7 +202,7 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 }
 
 // preparedState is what prepareSpaceIf gave a node for a directory: the CLAUDE.md, the plugin skills (skillDigests)
-// and the denied space directories (spaceDenyDirs, joined).
+// and the denied track directories (trackDenyDirs, as JSON).
 type preparedState struct {
 	md, skills, deny string
 	workGuide        bool
@@ -286,7 +287,7 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 			return proto.Session{}, refusePick(http.StatusBadRequest, i18n.Err("external-adapter.scope_required"))
 		}
 	}
-	if !s.spaceKnown(ctx, p.Space) {
+	if !s.trackKnown(ctx, p.Space) {
 		return proto.Session{}, badRequest(fmt.Errorf("space %q: not a registered space", p.Space))
 	}
 	explicitPermission := strings.TrimSpace(p.PermissionMode)
@@ -990,11 +991,11 @@ func (s *Service) startRoutes() {
 				return
 			}
 		}
-		if !s.spaceKnown(ctx, in.Space) {
+		if !s.trackKnown(ctx, in.Space) {
 			apierr.Write(w, http.StatusBadRequest, fmt.Errorf("space %q: not a registered space", in.Space))
 			return
 		}
-		if in.Space != "" && s.spacePolicy(ctx, in.Space).HideFromExtensions && r.Header.Get(RoleHeader) == roleExtension {
+		if in.Space != "" && s.trackPolicy(ctx, in.Space).HideFromExtensions && r.Header.Get(RoleHeader) == roleExtension {
 			apierr.WriteCode(w, http.StatusForbidden, "permission_denied", i18n.Err("apierr-apierr.health_start_forbidden"))
 			return
 		}

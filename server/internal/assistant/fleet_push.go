@@ -342,7 +342,7 @@ func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings)
 		return
 	}
 	place := s.pushPlace(machine, sess)
-	redact := s.spacePolicy(context.Background(), spaceOf(sess)).Redact
+	redact := s.trackPolicy(context.Background(), spaceOf(sess)).Redact
 	head, text := doneAlertIn(s.lang(context.Background()), sess, redact)
 	if report && strings.HasPrefix(head, "⚠️") && s.briefOf(id) != nil {
 		return // the scheduled-run watcher sends the one fixed-facts fallback, not this model error

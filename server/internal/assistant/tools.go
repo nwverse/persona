@@ -141,7 +141,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 	// whose policy says so writes nothing to the knowledge base, nor changes or starts what is imported into it
 	// (kb_history_status only reads).
 	if name == "kb_update" || strings.HasPrefix(name, "kb_history_") && name != "kb_history_status" {
-		if space, _ := s.selfSpace(ctx, self); s.spacePolicy(ctx, space).NoKBWrite {
+		if space, _ := s.selfSpace(ctx, self); s.trackPolicy(ctx, space).NoKBWrite {
 			if space == SpaceHealth {
 				return "", errors.New("the health space doesn't write the knowledge base: health information stays in its conversations and memory")
 			}

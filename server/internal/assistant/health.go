@@ -86,15 +86,15 @@ func runSpace(c proto.Session) string {
 
 // selfPolicy is the policy of the space conversation self runs in (the assistant's own, all off, for one that cannot
 // be told: as before, the tools that reach other conversations then reach the assistant's only).
-func (s *Service) selfPolicy(ctx context.Context, self string) SpacePolicy {
+func (s *Service) selfPolicy(ctx context.Context, self string) TrackPolicy {
 	space, _ := s.selfSpace(ctx, self)
-	return s.spacePolicy(ctx, space)
+	return s.trackPolicy(ctx, space)
 }
 
 // todoPolicy is the policy of the space a task was opened from (its origin conversation's); all off for none.
-func (s *Service) todoPolicy(ctx context.Context, t Todo) SpacePolicy {
+func (s *Service) todoPolicy(ctx context.Context, t Todo) TrackPolicy {
 	if t.Origin == "" {
-		return SpacePolicy{}
+		return TrackPolicy{}
 	}
 	return s.selfPolicy(ctx, t.Origin)
 }
@@ -114,8 +114,8 @@ func (s *Service) ixSpace(ctx context.Context, ix proto.Interaction) string {
 }
 
 // ixPolicy is the policy of the space interaction ix belongs to (ixSpace).
-func (s *Service) ixPolicy(ctx context.Context, ix proto.Interaction) SpacePolicy {
-	return s.spacePolicy(ctx, s.ixSpace(ctx, ix))
+func (s *Service) ixPolicy(ctx context.Context, ix proto.Interaction) TrackPolicy {
+	return s.trackPolicy(ctx, s.ixSpace(ctx, ix))
 }
 
 // spaceNotice is what a push or a channel says for a conversation of a space that redacts: that there is news, not the

@@ -101,7 +101,7 @@ func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, titl
 		private = reminder != nil && reminder.private
 		if !private && todo.Origin != "" {
 			space, known := s.selfSpace(ctx, todo.Origin)
-			private = !known || s.spacePolicy(ctx, space).Redact
+			private = !known || s.trackPolicy(ctx, space).Redact
 		}
 		if reminder != nil {
 			reminder.private = private // once hidden, a missing source can never restore the notes
@@ -241,7 +241,7 @@ func (s *Service) feishuMirror(ctx context.Context, machine, session string) {
 		return // its notify_user already went to Feishu
 	}
 	sess, ok := s.session(ctx, machine, session)
-	if !ok || sess.WokeByTask && !main || s.spacePolicy(ctx, spaceOf(sess)).Redact { // the runs of a space that redacts stay off Feishu (health.go)
+	if !ok || sess.WokeByTask && !main || s.trackPolicy(ctx, spaceOf(sess)).Redact { // the runs of a space that redacts stay off Feishu (health.go)
 		return
 	}
 	if s.transientRetryTurn(ctx, sess) {
@@ -475,7 +475,7 @@ func (s *Service) feishuAgentDone(machine string, sess proto.Session, head, text
 	}
 	session := sess.SessionID
 	if sess.Assistant || s.mainSessionRep(machine, session) || s.taskSessionRep(machine, session) ||
-		s.spacePolicy(ctx, spaceOf(sess)).Redact {
+		s.trackPolicy(ctx, spaceOf(sess)).Redact {
 		return
 	}
 	l := s.botLang(ctx)

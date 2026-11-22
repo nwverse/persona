@@ -860,7 +860,7 @@ func (s *Service) profileRoutes() {
 		}
 		archived := r.URL.Query().Get("archived")
 		space := r.URL.Query().Get("space")
-		if !s.spaceKnown(r.Context(), space) {
+		if !s.trackKnown(r.Context(), space) {
 			apierr.Write(w, http.StatusBadRequest, fmt.Errorf("space %q: not a registered space", space))
 			return
 		}
@@ -997,7 +997,7 @@ func (s *Service) memory(ctx context.Context, op map[string]any, out any) error 
 	}
 	space, _ := op["space"].(string)
 	delete(op, "space")
-	if !s.spaceKnown(ctx, space) {
+	if !s.trackKnown(ctx, space) {
 		return badRequest(fmt.Errorf("space %q: not a registered space", space))
 	}
 	cwd := s.spaceCwd(d, space) // a space keeps a memory of its own (docs/assistant/health.md)

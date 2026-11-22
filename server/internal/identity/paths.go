@@ -2,11 +2,13 @@ package identity
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/nwverse/persona/server/internal/compat"
 )
@@ -154,18 +156,19 @@ func IsAssistantDirOf(path, id string) bool {
 	return isStateDir(path, AssistantDirName(id)) || isStateDir(path, HealthDirName(id))
 }
 
-// SpacesDirName is the name in the state directory of manager id's spaces directory, where its spaces other than the
-// health space keep their directories (spaces/<slug>, docs/assistant/health.md): "spaces", or "spaces-<id>".
-func SpacesDirName(id string) string { return managerDirName("spaces", id) }
+// TracksDirName is the name in the state directory of manager id's tracks directory, where a new track's directory
+// goes by default (tracks/<slug>, whatever its kind, so a track that changes kind keeps it): "tracks", or
+// "tracks-<id>". A track's directory is data (its registry row's), so one made elsewhere (the health space's) stays.
+func TracksDirName(id string) string { return managerDirName("tracks", id) }
 
-// reservedSpaceSlugs name what a space must not be mistaken for: the main space, the built-in health space (registered
-// by the manager, never created), the assistant's directory, a guest, the spaces directory itself.
-var reservedSpaceSlugs = []string{"main", SpaceHealth, "assistant", "guest", "spaces"}
+// reservedTrackSlugs name what a track must not be mistaken for: the main space, the built-in health space (supplied
+// by the manager, never created), the assistant's directory, a guest, the spaces and tracks directories.
+var reservedTrackSlugs = []string{"main", SpaceHealth, "assistant", "guest", "spaces", "tracks"}
 
-// ValidSpaceSlug: slug can name a new space: a lowercase letter, then 1 to 31 lowercase letters, digits or dashes,
+// ValidTrackSlug: slug can name a new track: a lowercase letter, then 1 to 31 lowercase letters, digits or dashes,
 // and none of the reserved names.
-func ValidSpaceSlug(slug string) bool {
-	if slices.Contains(reservedSpaceSlugs, slug) || len(slug) < 2 || len(slug) > 32 || slug[0] < 'a' || slug[0] > 'z' {
+func ValidTrackSlug(slug string) bool {
+	if slices.Contains(reservedTrackSlugs, slug) || len(slug) < 2 || len(slug) > 32 || slug[0] < 'a' || slug[0] > 'z' {
 		return false
 	}
 	for _, r := range slug[1:] {
@@ -176,15 +179,64 @@ func ValidSpaceSlug(slug string) bool {
 	return true
 }
 
-// spaceDirSlug is the space whose directory path is exactly, of any manager: SpaceHealth for a health space's
-// (health, health-<id>), the slug for one in a spaces directory (spaces/<slug>, spaces-<id>/<slug>), "" for any other.
+// trackDirs are the directories of the tracks a manager named to this process (a node's assistant.prepare deny_dirs),
+// by who named them, each directory with its track's slug: a track's directory is data, never told from its path.
+var trackDirs struct {
+	sync.Mutex
+	by map[string]map[string]string
+}
+
+// SetTrackDirs keeps the track directories source (one prepared directory of a manager) names, each a clean path with
+// its slug, in place of what source named before; an empty map forgets them.
+func SetTrackDirs(source string, dirs map[string]string) {
+	trackDirs.Lock()
+	defer trackDirs.Unlock()
+	if len(dirs) == 0 {
+		delete(trackDirs.by, source)
+		return
+	}
+	if trackDirs.by == nil {
+		trackDirs.by = map[string]map[string]string{}
+	}
+	trackDirs.by[source] = maps.Clone(dirs)
+}
+
+// TrackDirs are the track directories named to this process (SetTrackDirs), each with its slug.
+func TrackDirs() map[string]string {
+	trackDirs.Lock()
+	defer trackDirs.Unlock()
+	out := map[string]string{}
+	for _, dirs := range trackDirs.by {
+		maps.Copy(out, dirs)
+	}
+	return out
+}
+
+// namedTrackDir is the slug of the named track whose directory path is exactly ("" for none).
+func namedTrackDir(path string) string {
+	trackDirs.Lock()
+	defer trackDirs.Unlock()
+	for _, dirs := range trackDirs.by {
+		if slug, ok := dirs[path]; ok {
+			return slug
+		}
+	}
+	return ""
+}
+
+// spaceDirSlug is the track whose directory path is exactly: SpaceHealth for a health space's (health, health-<id>,
+// of any manager), the slug of a track a manager named (SetTrackDirs), else the slug of one in a tracks directory
+// where a new track goes by default (tracks/<slug>, tracks-<id>/<slug>: a fallback before the manager named it,
+// which only hides more), "" for any other.
 func spaceDirSlug(path string) string {
 	if isManagerStateDir(path, SpaceHealth) {
 		return SpaceHealth
 	}
 	p := filepath.Clean(NodePath(path))
-	slug, parent := filepath.Base(p), filepath.Dir(p)
-	if ValidSpaceSlug(slug) && isManagerStateDir(parent, "spaces") {
+	if slug := namedTrackDir(p); slug != "" {
+		return slug
+	}
+	if slug := filepath.Base(p); ValidTrackSlug(slug) && isManagerStateDir(filepath.Dir(p), "tracks") {
 		return slug
 	}
 	return ""
@@ -215,8 +267,8 @@ func SpaceAt(path string) string {
 	}
 }
 
-// InSpace: path is a space's directory, of any manager, or a directory inside one (SpaceAt). A process that cannot
-// read the manager's registry (the hub, a node) treats every such space as private.
+// InSpace: path is a track's directory (the health space's, or one a manager named), or a directory inside one
+// (SpaceAt). A process that cannot read the manager's registry (the hub, a node) treats every such track as private.
 func InSpace(path string) bool { return SpaceAt(path) != "" }
 
 // InHealthSpace: path is a health space's directory, of any manager, or a directory inside one (SpaceAt). Hiding and

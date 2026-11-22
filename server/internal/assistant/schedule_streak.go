@@ -91,7 +91,7 @@ func (s *Service) pushStreak(t Task, count int, last ScheduleRun) bool {
 	}
 	l := s.lang(ctx)
 	name := t.labelIn(l)
-	if s.spacePolicy(ctx, t.Space).Redact { // the lock screen does not name a task of a space that redacts (health.go)
+	if s.trackPolicy(ctx, t.Space).Redact { // the lock screen does not name a task of a space that redacts (health.go)
 		name, _ = spaceNotice(l)
 	}
 	why := clip(oneLine(last.Error), 300)

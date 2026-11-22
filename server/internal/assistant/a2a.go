@@ -276,7 +276,7 @@ func (s *Service) a2aStart(ctx context.Context, st a2aStore, cfg assistantwire.A
 			return nil, fmt.Errorf("%w: starting a remote session requires Agent dispatch to be enabled", errA2AUnavailable)
 		}
 		dev, ok := s.machineByName(ctx, to.Machine)
-		if !ok || dev.ID != to.Machine || !a2aValidText(launch.CWD) || s.spacePolicy(ctx, identity.SpaceAt(launch.CWD)).HideFromExtensions {
+		if !ok || dev.ID != to.Machine || !a2aValidText(launch.CWD) || s.trackPolicy(ctx, identity.SpaceAt(launch.CWD)).HideFromExtensions {
 			return nil, errA2AUnavailable
 		}
 		launch.CWD = proto.ExpandHome(launch.CWD, dev.Home)

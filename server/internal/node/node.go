@@ -379,8 +379,6 @@ type Node struct {
 	assistantPrepared map[string]assistantPrepareState
 	// Keep both native skill directories and their startup instructions consistent across concurrent prepares and launches.
 	assistantSkillsMu sync.Mutex
-	// spaceDeny is the manager's latest list of space directories denied to its other conversations (healthdeny.go).
-	spaceDeny spaceDenyList
 
 	// claudeV is claude's version as last asked (agentplugin.go).
 	claudeV claudeVersionCache
@@ -2710,16 +2708,16 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			CLIs map[string]string `json:"clis"`
 			// PluginSkills are the hub's plugins' skills (nil from a hub without plugins: those kept stay).
 			PluginSkills []assistantskills.PluginSkill `json:"plugin_skills"`
-			// DenySpaces are the directories (relative to HOME, as Dir) of the spaces the assistant's other
-			// conversations' Read and Edit are denied (nodeproto.DomainSpaces, healthdeny.go); nil from a manager that
-			// does not send them: the list kept stays.
-			DenySpaces []string `json:"deny_spaces"`
+			// DenyDirs are the directories (relative to HOME, as Dir) of the tracks the assistant's other
+			// conversations' Read and Edit are denied, each with its track's slug (nodeproto.DenyDirs, healthdeny.go);
+			// nil from a manager that does not send them: the list kept stays.
+			DenyDirs []denyDir `json:"deny_dirs"`
 		}
 		if err := json.Unmarshal(params, &a); err != nil || a.Dir == "" || strings.Contains(a.Dir, "..") {
 			return nil, fmt.Errorf("bad assistant dir")
 		}
-		if a.DenySpaces != nil {
-			n.setSpaceDenyDirs(a.DenySpaces)
+		if a.DenyDirs != nil {
+			n.setDenyDirs(a.Dir, a.DenyDirs)
 		}
 		dir, err := n.preparedDir(a.Dir)
 		if err != nil {

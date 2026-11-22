@@ -73,9 +73,9 @@ func (b *convSpaceBook) learnLocked(id, space string) {
 // hides. A conversation named in two spaces is noted in the stricter (the store takes the first of them).
 func (s *Service) noteConversationSpaces(ctx context.Context, rows []db.ConversationSpace) {
 	rows = slices.DeleteFunc(slices.Clone(rows), func(r db.ConversationSpace) bool {
-		return r.SessionID == "" || r.MachineID == "" || !s.spaceKnown(ctx, r.Space)
+		return r.SessionID == "" || r.MachineID == "" || !s.trackKnown(ctx, r.Space)
 	})
-	rank := func(space string) int { return s.spacePolicy(ctx, space).strictness() }
+	rank := func(space string) int { return s.trackPolicy(ctx, space).strictness() }
 	slices.SortStableFunc(rows, func(a, b db.ConversationSpace) int { return rank(b.Space) - rank(a.Space) })
 	b := &s.convSpaces
 	b.mu.Lock()

@@ -2252,7 +2252,7 @@ func (s *Service) oneOffFailed(ctx context.Context, t Task, run ScheduleRun) {
 	}
 	l := s.lang(ctx)
 	name := t.labelIn(l)
-	if s.spacePolicy(ctx, t.Space).Redact { // the lock screen does not name a task of a space that redacts (health.go)
+	if s.trackPolicy(ctx, t.Space).Redact { // the lock screen does not name a task of a space that redacts (health.go)
 		name, _ = spaceNotice(l)
 	}
 	s.push(ctx, Notification{Title: i18n.T(l, "assistant-schedule.run_failed", i18n.Args{"name": name}), Body: clip(oneLine(run.Error), 300)})
@@ -2329,7 +2329,7 @@ func (s *Service) tellWaitingSkip(ctx context.Context, t Task, m Device) {
 	}
 	l := s.lang(ctx)
 	name := t.labelIn(l)
-	if s.spacePolicy(ctx, t.Space).Redact { // the lock screen does not name a task of a space that redacts (health.go)
+	if s.trackPolicy(ctx, t.Space).Redact { // the lock screen does not name a task of a space that redacts (health.go)
 		name, _ = spaceNotice(l)
 	}
 	s.push(ctx, Notification{Subtitle: m.Name, DeviceID: m.ID, SessionID: t.RunSessionID,
@@ -2439,7 +2439,7 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	run.Status, run.Error = runFailed, text
 	s.finishScheduledTodo(ctx, t, run)
 	name := t.labelIn(s.lang(ctx))
-	if s.spacePolicy(ctx, t.Space).Redact { // the lock screen does not name a task of a space that redacts (health.go)
+	if s.trackPolicy(ctx, t.Space).Redact { // the lock screen does not name a task of a space that redacts (health.go)
 		name, _ = spaceNotice(s.lang(ctx))
 	}
 	if briefing {

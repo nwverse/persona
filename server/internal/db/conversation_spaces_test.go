@@ -79,22 +79,23 @@ func TestConversationSpaces(t *testing.T) {
 }
 
 // The registry (#13104): empty on a new database (the manager supplies the built-in health space), and a row reads
-// back with its default categories.
-func TestSpacesRegistry(t *testing.T) {
+// back with its kind and default categories; kinds, templates and categories are the manager's to check.
+func TestTracksRegistry(t *testing.T) {
 	d, ctx := open(t), context.Background()
-	if list, err := d.Spaces(ctx); err != nil || len(list) != 0 {
+	if list, err := d.Tracks(ctx); err != nil || len(list) != 0 {
 		t.Fatalf("a new registry = %+v, %v; want empty", list, err)
 	}
-	if _, err := d.pool.Exec(ctx, `INSERT INTO assistant_spaces (slug, title, default_categories) VALUES ('qa-finance', 'QA', '{finance}')`); err != nil {
+	if _, err := d.pool.Exec(ctx, `INSERT INTO assistant_tracks (slug, title, default_categories) VALUES ('qa-finance', 'QA', '{finance}'),
+		('qa-later', '', '{someday}')`); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = d.pool.Exec(context.Background(), `DELETE FROM assistant_spaces`) })
-	list, err := d.Spaces(ctx)
-	if err != nil || len(list) != 1 {
-		t.Fatalf("spaces = %+v, %v", list, err)
+	t.Cleanup(func() { _, _ = d.pool.Exec(context.Background(), `DELETE FROM assistant_tracks`) })
+	list, err := d.Tracks(ctx)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("tracks = %+v, %v", list, err)
 	}
-	if s := list[0]; s.Slug != "qa-finance" || s.Title != "QA" || s.Template != "space" || s.Builtin || s.ArchivedAt != nil ||
-		len(s.DefaultCategories) != 1 || s.DefaultCategories[0] != "finance" {
+	if s := list[0]; s.Slug != "qa-finance" || s.Kind != "space" || s.Title != "QA" || s.Template != "space" || s.DirName != "" ||
+		s.Builtin || s.ArchivedAt != nil || len(s.DefaultCategories) != 1 || s.DefaultCategories[0] != "finance" {
 		t.Fatalf("qa-finance = %+v", s)
 	}
 }

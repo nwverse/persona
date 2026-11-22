@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/identity"
 )
 
 // The assistant's own conversations are denied the health space's directory and its Claude project directory, for
@@ -109,26 +111,35 @@ func TestHealthDenyRulesEveryManager(t *testing.T) {
 	}
 }
 
-// The spaces the manager names (assistant.prepare deny_spaces, #13104) are denied like the health space, except to a
-// conversation in that space; a name outside the state directory is dropped; a later list replaces the earlier one.
-func TestSpaceDenyDirs(t *testing.T) {
+// The tracks a manager names (assistant.prepare deny_dirs, #13104) are denied like the health space, except to a
+// conversation in that track, and a conversation in one is told as that track's; a name outside the state directory
+// or with a bad slug is dropped; a later list from the same directory replaces the earlier one.
+func TestDenyDirs(t *testing.T) {
 	n, home := testNode(t)
 	t.Setenv("HOME", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Cleanup(func() { identity.SetTrackDirs(".persona/assistant", nil) })
 	assistant := filepath.Join(home, ".persona", "assistant")
-	finance := filepath.Join(home, ".persona", "spaces", "qa-finance")
-	n.setSpaceDenyDirs([]string{".persona/spaces/qa-finance", "../elsewhere", "/etc", ".persona", ""})
-	if got := n.spaceDenyDirs(); !slices.Equal(got, []string{finance}) {
+	finance := filepath.Join(home, ".persona", "tracks", "qa-finance")
+	n.setDenyDirs(".persona/assistant", []denyDir{{".persona/tracks/qa-finance", "qa-finance"}, {"../elsewhere", "qa-x"}, {"/etc", "qa-y"},
+		{".persona", "qa-z"}, {".persona/tracks/BAD", "BAD"}})
+	if got := namedDenyDirs(); !slices.Equal(got, []string{finance}) {
 		t.Fatalf("kept %q, want only %s", got, finance)
 	}
+	if got := identity.SpaceAt(filepath.Join(finance, "notes")); got != "qa-finance" {
+		t.Fatalf("a folder in the track is told as %q", got)
+	}
 	if rules := n.healthDenyRules(assistant); !slices.Contains(rules, "Read(/"+finance+"/**)") || !slices.Contains(rules, "Edit(/"+finance+"/**)") {
-		t.Fatalf("the assistant's conversation may read the space: %q", rules)
+		t.Fatalf("the assistant's conversation may read the track: %q", rules)
 	}
 	if rules := n.healthDenyRules(finance); slices.ContainsFunc(rules, func(r string) bool { return strings.Contains(r, "qa-finance") }) {
-		t.Fatalf("a conversation of the space is denied its own: %q", rules)
+		t.Fatalf("a conversation of the track is denied its own: %q", rules)
 	}
-	n.setSpaceDenyDirs([]string{})
+	n.setDenyDirs(".persona/assistant", []denyDir{})
 	if rules := n.healthDenyRules(assistant); slices.ContainsFunc(rules, func(r string) bool { return strings.Contains(r, "qa-finance") }) {
 		t.Fatalf("an emptied list still denies: %q", rules)
+	}
+	if identity.SpaceAt(finance) != "" {
+		t.Fatal("an emptied list still tells the track")
 	}
 }

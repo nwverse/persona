@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/identity"
@@ -14,7 +13,7 @@ import (
 // healthDenyRules are the permission rules that keep an assistant conversation off the files of the spaces it is not
 // in (docs/assistant/health.md "How directories and memory are isolated", #3282): every manager's health space, found
 // here (the assistant directory's sibling, and the data directory's in case they differ), and the spaces the manager
-// names (assistant.prepare deny_spaces), each with its Claude project directories (auto memory, transcripts). Deny
+// names (assistant.prepare deny_dirs), each with its Claude project directories (auto memory, transcripts). Deny
 // rules hold over any allow rule: "Always allow in this session" and bypassPermissions included. A conversation in a
 // space is never denied its own (a health conversation gets the other managers' health spaces only). Bash is not
 // covered: a command can name a path any way it likes (the issue says what would).
@@ -51,8 +50,8 @@ func (n *Node) healthDenyRules(cwd string) []string {
 			}
 		}
 	}
-	// The spaces the manager names (assistant.prepare deny_spaces): every one but the conversation's own.
-	for _, d := range n.spaceDenyDirs() {
+	// The tracks the managers name (assistant.prepare deny_dirs): every one but the conversation's own.
+	for _, d := range namedDenyDirs() {
 		if filepath.Clean(d) != filepath.Clean(cwd) && !sameDir(d, cwd) {
 			candidates = append(candidates, d)
 		}
@@ -85,36 +84,38 @@ func (n *Node) healthDenyRules(cwd string) []string {
 	return rules
 }
 
-// spaceDenyList is the manager's latest list of space directories denied to its other conversations.
-type spaceDenyList struct {
-	mu   sync.Mutex
-	dirs []string
+// denyDir is one track directory a manager denies its other conversations (assistant.prepare deny_dirs): relative to
+// HOME, as assistant.prepare's dir, with its track's slug.
+type denyDir struct {
+	Dir   string `json:"dir"`
+	Track string `json:"track"`
 }
 
-// setSpaceDenyDirs keeps the manager's list of denied space directories (relative to HOME, as assistant.prepare's
-// dir): those that name no directory below the state directory (an absolute path, "..", the state directory itself)
-// are dropped.
-func (n *Node) setSpaceDenyDirs(rels []string) {
-	var dirs []string
-	for _, rel := range rels {
-		sub, ok := compat.StateSubpath(filepath.ToSlash(rel))
-		if !ok || sub == "" || filepath.IsAbs(rel) || strings.Contains(rel, "..") {
+// setDenyDirs keeps the track directories the manager names on preparing its directory source, in place of what it
+// named there before: the node then denies them to the manager's other conversations (healthDenyRules) and tells a
+// conversation in one as that track's (identity.SpaceAt: a track's directory is data, never told from its path).
+// One that names no directory below the state directory (an absolute path, "..", the state directory itself) or no
+// valid track is dropped.
+func (n *Node) setDenyDirs(source string, list []denyDir) {
+	dirs := map[string]string{}
+	for _, d := range list {
+		sub, ok := compat.StateSubpath(filepath.ToSlash(d.Dir))
+		if !ok || sub == "" || filepath.IsAbs(d.Dir) || strings.Contains(d.Dir, "..") || !identity.ValidTrackSlug(d.Track) {
 			continue
 		}
-		if dir := filepath.Clean(n.assistantDirOf(rel)); !slices.Contains(dirs, dir) {
-			dirs = append(dirs, dir)
-		}
+		dirs[filepath.Clean(n.assistantDirOf(d.Dir))] = d.Track
 	}
-	n.spaceDeny.mu.Lock()
-	n.spaceDeny.dirs = dirs
-	n.spaceDeny.mu.Unlock()
+	identity.SetTrackDirs(source, dirs)
 }
 
-// spaceDenyDirs is the manager's latest list of denied space directories, as absolute paths.
-func (n *Node) spaceDenyDirs() []string {
-	n.spaceDeny.mu.Lock()
-	defer n.spaceDeny.mu.Unlock()
-	return slices.Clone(n.spaceDeny.dirs)
+// namedDenyDirs are the track directories the managers named (setDenyDirs), as absolute paths.
+func namedDenyDirs() []string {
+	var out []string
+	for dir := range identity.TrackDirs() {
+		out = append(out, dir)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // healthReportRules let a health conversation write the records of the reports uploaded to it (reports/, docs/assistant/health.md

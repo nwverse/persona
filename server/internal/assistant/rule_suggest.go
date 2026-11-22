@@ -479,7 +479,7 @@ func (s *Service) ruleTodoScope(ctx context.Context, t Todo, plans map[string]*T
 			}
 		}
 	}
-	if machineID == "" || !validStandingDirectory(directory) || s.spacePolicy(ctx, identity.SpaceAt(directory)).ConfirmOutbound {
+	if machineID == "" || !validStandingDirectory(directory) || s.trackPolicy(ctx, identity.SpaceAt(directory)).ConfirmOutbound {
 		return "", "", false
 	}
 	return machineID, directory, true

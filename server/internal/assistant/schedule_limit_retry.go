@@ -171,7 +171,7 @@ func (s *Service) recoverScheduledLimitRetry(ctx context.Context, w delayedWait)
 		}
 		sc.mu.Unlock()
 	}
-	if space != "" && s.spacePolicy(ctx, space).Redact {
+	if space != "" && s.trackPolicy(ctx, space).Redact {
 		name, _ = spaceNotice(s.lang(ctx))
 	}
 	if !streak {

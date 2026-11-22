@@ -908,7 +908,7 @@ func (s *Service) extensionMirror(ctx context.Context, machine, session string) 
 		return
 	}
 	sess, ok := s.session(ctx, machine, session)
-	if !ok || sess.WokeByTask && !main || s.spacePolicy(ctx, spaceOf(sess)).Redact {
+	if !ok || sess.WokeByTask && !main || s.trackPolicy(ctx, spaceOf(sess)).Redact {
 		return // the runs of a space that redacts stay off the channels (health.go)
 	}
 	if s.transientRetryTurn(ctx, sess) {
