@@ -2,9 +2,11 @@ package assistant
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/db"
 )
 
@@ -63,5 +65,25 @@ func TestSpacePolicyFromRegistry(t *testing.T) {
 	}
 	if got := s.spacePolicy(ctx, "qa-gone"); got != strictPolicy {
 		t.Errorf("an archived space = %+v, want strict", got)
+	}
+}
+
+// The directories the node denies the assistant's other conversations (#13104): the registered spaces other than the
+// health space, archived ones too; never nil.
+func TestSpaceDenyDirs(t *testing.T) {
+	ctx := context.Background()
+	if got := newTestService(t, newFakeHub()).spaceDenyDirs(ctx); got == nil || len(got) != 0 {
+		t.Fatalf("no registered spaces: %q, want an empty list", got)
+	}
+	gone := time.Unix(1_800_000_000, 0)
+	st := &spaceRegistryStore{memStore: &memStore{}, rows: []db.Space{
+		{Slug: "health", Builtin: true},
+		{Slug: "qa-finance", Template: spaceTemplateSpace},
+		{Slug: "qa-gone", Template: spaceTemplateSpace, ArchivedAt: &gone},
+	}}
+	got := newServiceOn(t, newFakeHub(), st).spaceDenyDirs(ctx)
+	want := []string{compat.StateDir + "/spaces/qa-finance", compat.StateDir + "/spaces/qa-gone"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("deny %q, want %q", got, want)
 	}
 }

@@ -108,3 +108,27 @@ func TestHealthDenyRulesEveryManager(t *testing.T) {
 		}
 	}
 }
+
+// The spaces the manager names (assistant.prepare deny_spaces, #13104) are denied like the health space, except to a
+// conversation in that space; a name outside the state directory is dropped; a later list replaces the earlier one.
+func TestSpaceDenyDirs(t *testing.T) {
+	n, home := testNode(t)
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	assistant := filepath.Join(home, ".persona", "assistant")
+	finance := filepath.Join(home, ".persona", "spaces", "qa-finance")
+	n.setSpaceDenyDirs([]string{".persona/spaces/qa-finance", "../elsewhere", "/etc", ".persona", ""})
+	if got := n.spaceDenyDirs(); !slices.Equal(got, []string{finance}) {
+		t.Fatalf("kept %q, want only %s", got, finance)
+	}
+	if rules := n.healthDenyRules(assistant); !slices.Contains(rules, "Read(/"+finance+"/**)") || !slices.Contains(rules, "Edit(/"+finance+"/**)") {
+		t.Fatalf("the assistant's conversation may read the space: %q", rules)
+	}
+	if rules := n.healthDenyRules(finance); slices.ContainsFunc(rules, func(r string) bool { return strings.Contains(r, "qa-finance") }) {
+		t.Fatalf("a conversation of the space is denied its own: %q", rules)
+	}
+	n.setSpaceDenyDirs([]string{})
+	if rules := n.healthDenyRules(assistant); slices.ContainsFunc(rules, func(r string) bool { return strings.Contains(r, "qa-finance") }) {
+		t.Fatalf("an emptied list still denies: %q", rules)
+	}
+}

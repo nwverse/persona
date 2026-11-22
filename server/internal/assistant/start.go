@@ -157,7 +157,8 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 		md = s.healthClaudeMD(ctx, machine)
 	}
 	digests, files := skillDigests(plugins.Skills)
-	given := preparedState{md: md, skills: digests, workGuide: onDemand != ""}
+	deny := s.spaceDenyDirs(ctx)
+	given := preparedState{md: md, skills: digests, workGuide: onDemand != "", deny: strings.Join(deny, "\x00")}
 	if onlyChanged && !files {
 		s.preparedMu.Lock()
 		same := s.prepared[key] == given
@@ -167,7 +168,7 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 		}
 	}
 	params := map[string]any{"dir": dir, "claude_md": md,
-		"connectors": conns.Connectors, "clis": conns.CLIs, "plugin_skills": plugins.Skills}
+		"connectors": conns.Connectors, "clis": conns.CLIs, "plugin_skills": plugins.Skills, "deny_spaces": deny}
 	// Older nodes read only claude_md, so they retain the complete instructions.
 	if onDemand != "" {
 		params["work_guide_md"] = onDemand + plugins.Instructions
@@ -199,10 +200,11 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 	return prep.Cwd, true, nil
 }
 
-// preparedState is what prepareSpaceIf gave a node for a directory: the CLAUDE.md and the plugin skills (skillDigests).
+// preparedState is what prepareSpaceIf gave a node for a directory: the CLAUDE.md, the plugin skills (skillDigests)
+// and the denied space directories (spaceDenyDirs, joined).
 type preparedState struct {
-	md, skills string
-	workGuide  bool
+	md, skills, deny string
+	workGuide        bool
 }
 
 // skillDigests are the plugin skills of a plugins.assistant answer as prepareSpaceIf compares them, each one's plugin,

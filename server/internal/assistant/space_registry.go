@@ -2,9 +2,11 @@ package assistant
 
 import (
 	"context"
+	"path"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/identity"
 )
@@ -174,4 +176,19 @@ func (s *Service) spaceKnown(ctx context.Context, slug string) bool {
 	}
 	e, ok := s.spaceEntryOf(ctx, slug)
 	return ok && !e.Archived
+}
+
+// spaceDenyDirs are the directories, relative to a machine's home as assistant.prepare's dir, of the registered spaces
+// the assistant's other conversations' Read and Edit are denied (DenyMainRead; archived ones too: their files stay),
+// for the node to add to the health spaces it finds itself (assistant.prepare deny_spaces, nodeproto.DomainSpaces).
+// The health space is not listed: every node finds every manager's. Never nil: an empty list tells the node none is.
+func (s *Service) spaceDenyDirs(ctx context.Context) []string {
+	out := []string{}
+	for _, e := range s.spaces(ctx) {
+		if e.Builtin || !identity.ValidSpaceSlug(e.Slug) || !s.spacePolicy(ctx, e.Slug).DenyMainRead {
+			continue
+		}
+		out = append(out, path.Join(compat.StateDir, identity.SpacesDirName(s.id), e.Slug))
+	}
+	return out
 }
