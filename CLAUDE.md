@@ -201,6 +201,10 @@ People and Agents follow the same steps, each with their own GitHub account. Tem
 - Docs: `python3 scripts/test/test_doc_paths.py`, `python3 scripts/test/test_doc_go_paths.py`, `python3 scripts/test/test_doc_sections.py`
   (a section name quoted after a doc path names a current heading) and `python3 scripts/test/test_doc_wire.py`
   (every WebSocket type, feature flag, extension point and manifest field has its row). Every change: `python3 scripts/privacy_check.py`.
+- Portable count ratchets (fixed sleeps, web font sizes, prompt language, hard-coded text, prompt sizes, the Android baselines) fail
+  only when a count rises, so a PR need not lower a baseline; `python3 scripts/ci/lower_baselines.py` is tidying anyone can run
+  (`docs/operations/testing.md`, "Count ratchets"). The Apple ratchets (`TokenRatchetTests`, the perf and isolation baselines) still
+  fail on a fall.
 - Releases: `docs/operations/release.md`. After `scripts/release/release.sh` uploads, run `python3 scripts/release/asc_testflight.py wait 45 <build number>`:
   it adds the build to the internal group and to the external group with Beta App Review. Report the build number and review status only after both.
 
