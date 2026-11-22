@@ -426,7 +426,9 @@ export function createOpencodeCompanion(options = {}) {
 
   async function refreshGateRules({ throwOnError = false } = {}) {
     try {
+      if (!rt.hubConnected) throw new Error('Persona tool rules are unavailable')
       const list = await rt.tools({ assistant: true })
+      if (!rt.hubConnected) throw new Error('Persona tool rules are unavailable')
       gateShellRules = extractShellGates(list)
       gateShellRulesReady = true
     } catch (err) {
@@ -1053,7 +1055,7 @@ export function createOpencodeCompanion(options = {}) {
           ? { outcome: { outcome: 'selected', optionId: rejectOnce.optionId } }
           : { outcome: { outcome: 'cancelled' } }
       }
-      if (!gateShellRulesReady) {
+      if (!gateShellRulesReady || !rt.hubConnected) {
         return rejectOnce
           ? { outcome: { outcome: 'selected', optionId: rejectOnce.optionId } }
           : { outcome: { outcome: 'cancelled' } }

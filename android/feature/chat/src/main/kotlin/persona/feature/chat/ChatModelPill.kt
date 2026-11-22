@@ -65,23 +65,26 @@ internal class ModelLists(private val scope: CoroutineScope, private val errorTe
     /** A computer's launchers (`agent.new`), by machine; absent until read. */
     val launchers: SnapshotStateMap<String, List<AgentLauncher>> = mutableStateMapOf()
     /** What a computer runs Persona chats on (`?purpose=assistant`), by machine; absent until read. */
-    private val assistantCatalogs = mutableStateMapOf<String, JLoadable<AssistantLaunchers>>()
+    private val assistantCatalogs = mutableStateMapOf<Pair<String, Boolean>, JLoadable<AssistantLaunchers>>()
 
-    fun assistantCatalog(machine: String): JLoadable<AssistantLaunchers> = assistantCatalogs[machine] ?: JLoadable.Loading
+    private fun catalogKey(machine: String, main: Boolean) = machine to main
+    fun assistantCatalog(machine: String, main: Boolean = false): JLoadable<AssistantLaunchers> =
+        assistantCatalogs[catalogKey(machine, main)] ?: JLoadable.Loading
 
-    fun readAssistantCatalog(machine: String, fetch: suspend () -> AssistantLaunchers) {
-        val cached = assistantCatalogs[machine]
+    fun readAssistantCatalog(machine: String, main: Boolean = false, fetch: suspend () -> AssistantLaunchers) {
+        val key = catalogKey(machine, main)
+        val cached = assistantCatalogs[key]
         if (cached == JLoadable.Loading || cached?.isRefreshing == true) return
-        assistantCatalogs[machine] = (cached as? JLoadable.Loaded)?.copy(refreshing = true, failure = null) ?: JLoadable.Loading
+        assistantCatalogs[key] = (cached as? JLoadable.Loaded)?.copy(refreshing = true, failure = null) ?: JLoadable.Loading
         scope.launch {
             try {
-                assistantCatalogs[machine] = JLoadable.Loaded(readAssistantRoute(fetch))
+                assistantCatalogs[key] = JLoadable.Loaded(readAssistantRoute(fetch))
             } catch (cancelled: CancellationException) {
-                if (cached == null) assistantCatalogs.remove(machine) else assistantCatalogs[machine] = cached
+                if (cached == null) assistantCatalogs.remove(key) else assistantCatalogs[key] = cached
                 throw cancelled
             } catch (error: Exception) {
                 val message = errorText(error)
-                assistantCatalogs[machine] = if (cached is JLoadable.Loaded) cached.copy(failure = message) else JLoadable.Failed(message)
+                assistantCatalogs[key] = if (cached is JLoadable.Loaded) cached.copy(failure = message) else JLoadable.Failed(message)
             }
         }
     }
@@ -489,33 +492,38 @@ fun PersonaModelPill(
     LaunchedEffect(management) {
         try { config = management?.config() } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
     }
+    val loadedConfig = config
+    val isMain = session != null && loadedConfig?.main == session.sessionId
     fun readCatalog(refresh: Boolean = false) {
+        if (session != null && loadedConfig == null) return // Wait until the conversation's role is known.
         val api = management ?: return
-        if (machineId.isNotBlank()) lists.readAssistantCatalog(machineId) { api.assistantLauncherList(machineId, refresh) }
+        if (machineId.isNotBlank()) lists.readAssistantCatalog(machineId, main = isMain) {
+            if (isMain) api.mainAssistantLauncherList(machineId, refresh) else api.assistantLauncherList(machineId, refresh)
+        }
     }
     fun readModels(provider: String, again: Boolean = false) {
         val api = management ?: return
         if (machineId.isNotBlank()) lists.readAssistantModels(machineId, provider, again) { api.launcherModels(machineId, provider) }
     }
-    LaunchedEffect(management, machineId, session?.rev) {
+    LaunchedEffect(management, machineId, session?.rev, isMain) {
         // Hub pushes can change the effective Main chat model even while the panel is closed (#6542).
         readCatalog()
     }
-    LaunchedEffect(management, machineId, open) {
+    LaunchedEffect(management, machineId, open, isMain) {
         if (open) {
-            val previous = lists.assistantCatalog(machineId)
+            val previous = lists.assistantCatalog(machineId, main = isMain)
             readCatalog(refresh = previous is JLoadable.Failed || previous is JLoadable.Loaded && previous.failure != null)
         }
     }
     val kept = PersonaModelPanel.MODEL_PICK in features
     val shownSession = session?.let { s -> drawn?.takeIf { it.rev == s.rev }?.let { s.copy(modelPick = it.pick) } ?: s }
-    val chat = PersonaModelPanel.Chat(shownSession, isMain = session != null && config?.main == session.sessionId, kept = kept,
+    val chat = PersonaModelPanel.Chat(shownSession, isMain = isMain, kept = kept,
         config = config?.launcher, pagePick = pagePick)
     // Only the main conversation has a per-conversation model pick (#6911): a leader, the background supervisor or
     // another assistant conversation draws no pill and follows the default or what it started with. The new-chat page
     // (session null) keeps its starter pick, which goes with the main conversation's start.
     if (session != null && !chat.isMain) return
-    val catalog = lists.assistantCatalog(machineId)
+    val catalog = lists.assistantCatalog(machineId, main = isMain)
     val info = (catalog as? JLoadable.Loaded)?.value
     val setup = PersonaModelPanel.setup(chat, info)
     LaunchedEffect(management, machineId, setup.provider) {

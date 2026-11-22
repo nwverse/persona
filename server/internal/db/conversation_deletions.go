@@ -28,6 +28,35 @@ func (d *DB) PutConversationDeletion(ctx context.Context, machine, session strin
 		if _, err := tx.Exec(ctx, `UPDATE settings SET value=value || jsonb_build_object($2::text,$3::jsonb), updated_at=now() WHERE key=$1`, ConversationDeletionsKey, conversationDeletionKey(machine, session), row); err != nil {
 			return err
 		}
+		// Fence execution before deleting every physical segment. Keep only closure
+		// identities for nodes that are offline; no messages or prompts survive.
+		c, err := readLogicalConversation(ctx, tx, machine, session)
+		if err != nil {
+			return err
+		}
+		if c != nil {
+			var epoch int64
+			if err = tx.QueryRow(ctx, `SELECT epoch FROM logical_conversations WHERE machine_id=$1 AND session_id=$2 FOR UPDATE NOWAIT`, c.MachineID, c.SessionID).Scan(&epoch); err != nil {
+				return err
+			}
+			for _, seg := range c.Segments {
+				if _, err = tx.Exec(ctx, `INSERT INTO conversation_segment_closures(machine_id,session_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, seg.MachineID, seg.SessionID); err != nil {
+					return err
+				}
+				if _, err = tx.Exec(ctx, `UPDATE settings SET value=value || jsonb_build_object($2::text,$3::jsonb || jsonb_build_object('machine_id',$4::text,'session_id',$5::text,'hidden_segment',$6::boolean)) WHERE key=$1`, ConversationDeletionsKey, conversationDeletionKey(seg.MachineID, seg.SessionID), row, seg.MachineID, seg.SessionID, seg.Ordinal > 1); err != nil {
+					return err
+				}
+				if err = dropSearchConversationTx(ctx, tx, seg.MachineID, seg.SessionID); err != nil {
+					return err
+				}
+				if err = dropConversationHistoryTx(ctx, tx, seg.MachineID, seg.SessionID); err != nil {
+					return err
+				}
+			}
+			if _, err = tx.Exec(ctx, `DELETE FROM logical_conversations WHERE machine_id=$1 AND session_id=$2`, c.MachineID, c.SessionID); err != nil {
+				return err
+			}
+		}
 		if err := dropSearchConversationTx(ctx, tx, machine, session); err != nil {
 			return err
 		}
