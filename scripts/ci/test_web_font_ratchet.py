@@ -229,6 +229,20 @@ class CheckoutTests(unittest.TestCase):
         found = [violation for violation in ratchet.check(ROOT) if violation.startswith(prefixes)]
         self.assertEqual(found, [])
 
+    def test_task_editor_inbox_links_and_context_chips_use_named_font_tokens(self):
+        targets = (
+            "web/src/views/assistant/TaskPromptEditor.tsx",
+            "web/src/views/inbox/InboxTaskLinks.tsx",
+            "web/src/views/link/ContextChipList.tsx",
+        )
+        counts = ratchet.scan(ROOT)
+        self.assertEqual({path: counts.get(path, 0) for path in targets}, {path: 0 for path in targets})
+        for path in targets:
+            text = (ROOT / path).read_text()
+            self.assertNotIn("text-[11px]", text)
+            self.assertNotIn("text-[11.5px]", text)
+            self.assertNotIn("text-[12px]", text)
+
     def test_this_checkout_is_at_its_baseline(self):
         self.assertEqual(ratchet.check(ROOT), [])
 
