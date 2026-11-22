@@ -8,9 +8,10 @@ string literals are ignored. A call on a line that carries `// sleep-ok: <reason
 count; the reason must be non-empty. Whitespace and comments may sit between time, the dot,
 Sleep and the opening parenthesis, so splitting the call does not hide it.
 
-Only a rise fails. Where a base is known (--base, CI_BASE_SHA or the clone's default branch;
-scripts/ci/ratchet_base.py), a file the change touches is also held to its count at the merge
-base, so a change cannot add sleeps back into room a lower count left under the baseline.
+Only a rise fails. Where a base is given (--base, else CI_BASE_SHA; scripts/ci/ratchet_base.py),
+a file the change touches is also held to its count at the merge base, so a change cannot add
+sleeps back into room a lower count left under the baseline. With neither, as on main, only the
+baseline holds; the never-raise check below still falls back to the clone's default branch.
 A file under its baseline passes with a notice: lowering the baseline is tidying anyone can do,
 with --update here or scripts/ci/lower_baselines.py for every count ratchet. --update rewrites
 the baseline downward and drops files that no longer sleep; it refuses to raise a count or to
@@ -551,7 +552,8 @@ def update(root, base=None, env=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--base", help="base ref (default: CI_BASE_SHA, else origin/HEAD, else origin/main)")
+    parser.add_argument("--base", help="base ref (default: CI_BASE_SHA). The merge-base limit needs one; the "
+                                       "never-raise check falls back to origin/HEAD, else origin/main")
     parser.add_argument("--root", default=".", help="repository root (default: the working directory)")
     parser.add_argument("--update", action="store_true",
                         help="lower the baseline to the current counts; refuses to raise or to add a file")

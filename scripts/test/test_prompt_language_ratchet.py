@@ -205,6 +205,21 @@ class IncreaseOnlyTests(unittest.TestCase):
         result = self.run_ratchet()
         self.assertEqual(result.returncode, 0, result.stdout)
 
+    def test_the_default_branch_alone_is_no_base(self):
+        # Main verification's checkout: HEAD is the commit just merged and origin/main still names its parent. With
+        # no --base and no CI_BASE_SHA the baseline alone holds the prompts, as merge-pr.sh holds them.
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        (self.prompts / "fixed.md").write_text("用中文写")
+        self.git("commit", "-q", "-am", "drop the language branch")
+        result = subprocess.run([sys.executable, str(self.script)], cwd=self.root, env=self.env,
+                                capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        given = dict(self.env, CI_BASE_SHA="origin/main")
+        result = subprocess.run([sys.executable, str(self.script)], cwd=self.root, env=given,
+                                capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("the merge base already localizes lost it again: agents/fixed.md", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

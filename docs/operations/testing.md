@@ -246,13 +246,18 @@ repair worker may not edit baselines (`docs/operations/main-verification.md`), s
   A change that takes sleeps, font sizes or hard-coded text out need not touch the baseline at all, which keeps baseline files out
   of most PRs and out of their conflicts. A file or entry the baseline does not have starts at zero, so a new file cannot bring any.
 - **With a base, a changed file is held to the lower of its baseline and its count at the merge base.** The sleep, web font and
-  prompt-language ratchets take `--base` (default `CI_BASE_SHA`, else the clone's default branch from local refs; an explicit base
-  that does not resolve is an error) and read the merge base through `scripts/ci/ratchet_base.py`. A file the change touches may not
-  rise above its count there, even where the baseline still has room, so the slack a fall leaves under a baseline cannot be spent by
-  the next change. An entry the merge base's baseline does not have yet is the change's own (a file the web font's `--update` let take
-  sizes that moved to it, or a raise the sleep ratchet refuses anyway), and only the baseline holds it. On `main` the merge base is
-  `HEAD`, so a full-tree run there checks only `count > baseline`. The ratchets inside `go test`, vitest and the Android scripts know
-  no base and check only the baseline, as does `changed_ratchets.py` at merge time.
+  prompt-language ratchets take `--base` (default `CI_BASE_SHA`; a base that does not resolve is an error) and read the merge base
+  through `scripts/ci/ratchet_base.py`. A file the change touches may not rise above its count there, even where the baseline still
+  has room, so the slack a fall leaves under a baseline cannot be spent by the next change. An entry the merge base's baseline does
+  not have yet is the change's own (a file the web font's `--update` let take sizes that moved to it, or a raise the sleep ratchet
+  refuses anyway), and only the baseline holds it. check-fast's diff mode passes `--base`, and hosted CI sets `CI_BASE_SHA`.
+- **With no base, only the baseline holds**, so a full-tree run on `main` checks only `count > baseline`. There is no fallback to
+  the clone's `origin/main`: it is only as fresh as the last fetch, and main verification pins `HEAD` by SHA without moving it
+  (`docs/operations/main-verification.md`), so right after a merge it usually names the parent and would hold the merged files to
+  the parent's counts, a limit `merge-pr.sh` does not apply. A hosted run on `main` gets `origin/main` of its own fresh clone, so
+  its merge base is `HEAD`. The never-raise checks on the baseline files themselves keep their defaults (the clone's default
+  branch for the sleep ratchet, `origin/main` for the prompt-language ratchet). The ratchets inside `go test`, vitest and the
+  Android scripts know no base and check only the baseline, as does `changed_ratchets.py` at merge time.
 - **Lowering is tidying anyone can run.** `python3 scripts/ci/lower_baselines.py` runs each ratchet's own update (all of the table
   but the Inbox book readers, a Go literal lowered by hand) and keeps the result only if it lowered: no raised number, no new entry, no new file (a removed entry or file is a count gone to zero). A ratchet whose
   update fails, or would raise or add (a count above its baseline, the web font's moved file, a prompt-size move between pieces), is

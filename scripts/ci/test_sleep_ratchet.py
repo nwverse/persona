@@ -396,7 +396,7 @@ class GitTests(GitCase):
 
 
 class MergeBaseTests(GitCase):
-    """With a base, a file the change touches is held to the lower of its baseline and its merge-base count."""
+    """With a given base, a file the change touches is held to the lower of its baseline and its merge-base count."""
 
     def lower_on_main(self):
         # main takes the sleep out and leaves the baseline at 1: allowed now, and the room a change may not refill.
@@ -405,27 +405,48 @@ class MergeBaseTests(GitCase):
         self.git("update-ref", "refs/remotes/origin/main", "HEAD")
         self.git("checkout", "-q", "-b", "change")
 
+    def head(self):
+        return subprocess.check_output(["git", "-C", str(self.repo), "rev-parse", "HEAD"], text=True,
+                                       timeout=30).strip()
+
     def test_main_under_its_baseline_passes(self):
         self.lower_on_main()
-        code, out = self._capture([])
+        code, out = self._capture(["--base", "origin/main"])
         self.assertEqual(0, code, out)
         self.assertIn("1 file(s) under the baseline", out)
 
     def test_a_change_cannot_add_back_into_room_under_the_baseline(self):
         self.lower_on_main()
+        base = self.head()
         self.write(SERVER, source(1))
-        code, err = self._capture([])
+        code, err = self._capture(["--base", "origin/main"])
         self.assertEqual(1, code, err)
-        base = subprocess.check_output(["git", "-C", str(self.repo), "rev-parse", "HEAD"], text=True,
-                                       timeout=30).strip()
         self.assertIn(sleep_ratchet.rise_message(SERVER, 1, 0, base[:12], 1), err)
-        code, err = self._capture(["--base", "HEAD"])  # an explicit base is the same merge base here
+        os.environ["CI_BASE_SHA"] = base  # hosted CI's way of giving the same base
+        code, err = self._capture([])
         self.assertEqual(1, code, err)
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "a sleep back")
         code, err = self._capture([])
         self.assertEqual(1, code, err)
         self.assertIn("at the merge base", err)
+
+    def test_the_default_branch_alone_is_no_base(self):
+        # Main verification's checkout: HEAD is the commit just merged, and origin/main still names its parent,
+        # because the verifier pins HEAD by SHA. merge-pr.sh let the re-add in (changed_ratchets.py), so main must
+        # not fail it either: without --base or CI_BASE_SHA only the baseline holds.
+        self.lower_on_main()
+        self.write(SERVER, source(1))
+        self.git("commit", "-q", "-am", "a sleep back")
+        code, out = self._capture([])
+        self.assertEqual(0, code, out)
+        self.assertNotIn("at the merge base", out)
+        os.environ["CI_BASE_SHA"] = "HEAD"  # hosted CI on main: the base is HEAD itself
+        code, out = self._capture([])
+        self.assertEqual(0, code, out)
+        os.environ["CI_BASE_SHA"] = "origin/main"  # a base given on purpose still holds the change
+        code, err = self._capture([])
+        self.assertEqual(1, code, err)
 
     def test_without_a_base_only_the_baseline_holds(self):
         self.lower_on_main()
@@ -434,12 +455,16 @@ class MergeBaseTests(GitCase):
         self.git("update-ref", "-d", "refs/remotes/origin/main")
         code, out = self._capture([])
         self.assertEqual(0, code, out)
+        self.write(SERVER, source(2))
+        code, err = self._capture([])
+        self.assertEqual(1, code, err)
+        self.assertIn("2 time.Sleep call(s), baseline 1", err)
 
     def test_a_file_the_change_does_not_touch_keeps_its_room(self):
         # The merge base itself is under the baseline and the change leaves the file alone: nothing rose.
         self.lower_on_main()
         self.write("server/internal/demo/other_test.go", "package demo\n")
-        code, out = self._capture([])
+        code, out = self._capture(["--base", "origin/main"])
         self.assertEqual(0, code, out)
 
     def test_a_count_that_falls_on_the_branch_passes(self):
@@ -449,9 +474,14 @@ class MergeBaseTests(GitCase):
         self.git("update-ref", "refs/remotes/origin/main", "HEAD")
         self.git("checkout", "-q", "-b", "change")
         self.write(SERVER, source(2))
-        code, out = self._capture([])
+        code, out = self._capture(["--base", "origin/main"])
         self.assertEqual(0, code, out)
         self.assertIn("2 time.Sleep call(s), baseline 3", out)
+
+    def test_an_explicit_base_that_does_not_resolve_is_an_error(self):
+        code, err = self._capture(["--base", "no-such-ref"])
+        self.assertEqual(2, code, err)
+        self.assertIn("does not resolve", err)
 
 
 class RepoTests(unittest.TestCase):

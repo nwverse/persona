@@ -7,10 +7,11 @@ The committed counts (scripts/ci/web_font_baseline.json) may stay or go down, ne
 file with no entry starts at zero, so a new file cannot add one. Sizes come from the named
 roles in docs/design/task-cards.md section 4.1 (`text-xs`, `text-sm`, the `--chat-*` variables).
 
-Only a rise fails. Where a base is known (--base, CI_BASE_SHA or the clone's default branch;
-scripts/ci/ratchet_base.py), a file the change touches is also held to its count at the merge base,
-so a change cannot add sizes back into room a lower count left under the baseline; an entry the
-merge base's baseline does not have yet (a moved file --update recorded) is held to the baseline.
+Only a rise fails. Where a base is given (--base, else CI_BASE_SHA; scripts/ci/ratchet_base.py), a
+file the change touches is also held to its count at the merge base, so a change cannot add sizes
+back into room a lower count left under the baseline; an entry the merge base's baseline does not
+have yet (a moved file --update recorded) is held to the baseline. With neither, as on main, only
+the baseline holds.
 A file under its baseline passes with a notice: lowering the baseline is tidying anyone can do, with
 --update here or scripts/ci/lower_baselines.py for every count ratchet (docs/operations/testing.md,
 "Count ratchets"). --update rewrites the baseline downward and drops files that no longer have any.
@@ -214,7 +215,8 @@ def update(root):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", default=str(ROOT), help="repository root (default: this checkout)")
-    parser.add_argument("--base", help="base ref (default: CI_BASE_SHA, else origin/HEAD, else origin/main)")
+    parser.add_argument("--base", help="base ref for the merge-base limit (default: CI_BASE_SHA; with neither, "
+                                       "only the baseline holds)")
     parser.add_argument("--update", action="store_true", help="lower the baseline; refuses to raise or to add a file")
     parser.add_argument("--init", action="store_true", help="write the first baseline from the tree (only when none exists)")
     args = parser.parse_args(argv)

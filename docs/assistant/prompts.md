@@ -117,8 +117,9 @@ with the same data. Comments and quoted mentions do not qualify. The baseline re
 filenames: a new omission fails even when another file in that directory was removed. There are no source
 exemptions. The checker also compares the baseline against `CI_BASE_SHA` (otherwise `origin/main`) when it exists
 there, so editing the JSON cannot raise the allowance. Only a new omission fails: a resolved prompt still in the
-baseline passes with a notice, and a prompt the merge base already handles may not lose its language handling again
-while the baseline still lists it (`docs/operations/testing.md`, "Count ratchets"). Removing resolved entries is
+baseline passes with a notice, and with a base given (`--base` or `CI_BASE_SHA`, not the `origin/main` fallback) a
+prompt the merge base already handles may not lose its language handling again while the baseline still lists it
+(`docs/operations/testing.md`, "Count ratchets"). Removing resolved entries is
 tidying anyone can do, with `--update` (which refuses increases) or `python3 scripts/ci/lower_baselines.py`. This is
 a structural guard, not a check of translation quality, caller wiring or model behavior.
 

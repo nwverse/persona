@@ -4,12 +4,21 @@ A count ratchet fails only when a count rises (docs/operations/testing.md, "Coun
 passes, so `main` can sit under a baseline until someone runs scripts/ci/lower_baselines.py, and the baseline alone
 would then let a change add back up to it. Where a base is known, a ratchet holds each file the change touches to the
 lower of its baseline and its count at the merge base; a file the change does not touch has the merge base's count
-already. With no base (a tree outside Git, or a clone without the default branch) only the baseline applies.
+already. With no base (none given, or a tree outside Git) only the baseline applies: a full-tree run checks only
+count > baseline.
 
-The base is the one the ratchets already use: --base, else CI_BASE_SHA, else the clone's default branch from local refs
-(origin/HEAD, origin/main, origin/master). An explicit base that does not resolve is an error, never "no base": that
-would quietly drop the limit. Whether a file is at the merge base comes from the tree (git ls-tree), and a listed file
-that cannot be read is an error too: CI's guards checkout is blobless (#12753), and a failed fetch is not absence.
+A base is known only when it is given: --base, else CI_BASE_SHA. check-fast's diff mode passes --base, and hosted CI
+sets CI_BASE_SHA (on a main run, origin/main of its fresh clone, so the merge base is HEAD). There is no fallback to
+the clone's default branch, because that ref is only as fresh as the last fetch: main verification pins HEAD by SHA
+and leaves origin/main alone, and in an ordinary clone scripts/hooks/merge-pr.sh's fetch moves it to the pre-merge
+main, so right after a merge a fallback would hold the new commit to its parent's counts. merge-pr.sh does not apply
+that limit (scripts/ci/changed_ratchets.py), so the same commit on main would pass or fail depending on who fetched
+last. The never-raise checks on the baselines themselves (the sleep ratchet's ancestors, the prompt-language ratchet's
+--base) keep their own defaults.
+
+An explicit base that does not resolve is an error, never "no base": that would quietly drop the limit. Whether a file
+is at the merge base comes from the tree (git ls-tree), and a listed file that cannot be read is an error too: CI's
+guards checkout is blobless (#12753), and a failed fetch is not absence.
 
 The sleep, web font and prompt-language ratchets import it. scripts/ci/changed_ratchets.py (run by
 scripts/hooks/merge-pr.sh) and the PR watcher's guards load it through them, but use only the ratchets' counting and
@@ -44,34 +53,20 @@ def _commit(root, ref):
     return result.stdout.decode().strip() if result.returncode == 0 else None
 
 
-def _default_ref(root):
-    """The clone's default branch, local refs only: origin/HEAD, else origin/main, else origin/master."""
-    symbolic = _git(root, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"])
-    candidates = [symbolic.stdout.decode().strip()] if symbolic.returncode == 0 and symbolic.stdout.strip() else []
-    candidates += ["refs/remotes/origin/HEAD", "refs/remotes/origin/main", "refs/remotes/origin/master"]
-    for ref in candidates:
-        if _commit(root, ref):
-            return ref
-    return None
-
-
 def resolve(root, base=None, env=None):
-    """The MergeBase of HEAD and the base, or None when there is no base to hold a change to."""
+    """The MergeBase of HEAD and the given base (--base, else CI_BASE_SHA), or None when none was given."""
     env = os.environ if env is None else env
+    explicit = base or env.get("CI_BASE_SHA")
+    if not explicit:
+        return None  # never the clone's default branch: see the module docstring
     inside = _git(root, ["rev-parse", "--is-inside-work-tree"])
     if inside.returncode != 0 or inside.stdout.strip() != b"true" or not _commit(root, "HEAD"):
         return None
-    explicit = base or env.get("CI_BASE_SHA")
-    ref = explicit or _default_ref(root)
-    if not ref:
-        return None
-    target = _commit(root, ref)
+    target = _commit(root, explicit)
     merged = _git(root, ["merge-base", "HEAD", target]) if target else None
     if merged is None or merged.returncode != 0:
-        if explicit:
-            raise BaseError("base {0} does not resolve to a commit with a merge base here; refusing to skip the "
-                            "merge-base limit".format(explicit))
-        return None
+        raise BaseError("base {0} does not resolve to a commit with a merge base here; refusing to skip the "
+                        "merge-base limit".format(explicit))
     return MergeBase(root, merged.stdout.decode().strip())
 
 

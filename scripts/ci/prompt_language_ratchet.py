@@ -9,9 +9,10 @@ There are no source exemptions. --update only removes resolved entries.
 
 Only a new omission fails. A resolved prompt still in the baseline passes with a notice: lowering
 the baseline is tidying anyone can do, with --update here or scripts/ci/lower_baselines.py for
-every count ratchet (docs/operations/testing.md, "Count ratchets"). With a base, a prompt the
-baseline still lists but the merge base already handles may not lose its language handling again
-(scripts/ci/ratchet_base.py).
+every count ratchet (docs/operations/testing.md, "Count ratchets"). With a base given (--base, else
+CI_BASE_SHA), a prompt the baseline still lists but the merge base already handles may not lose its
+language handling again (scripts/ci/ratchet_base.py). With neither, as on main, the baseline alone
+holds the prompts; the check that the baseline itself was not raised still reads origin/main.
 """
 import argparse
 import json
@@ -147,16 +148,20 @@ def regained(actual, baseline, merge_base):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--update", action="store_true")
-    parser.add_argument("--base", default=os.environ.get("CI_BASE_SHA", "origin/main"))
+    parser.add_argument("--base", help="base ref (default: CI_BASE_SHA). The merge-base limit needs one; the "
+                                       "check that the baseline was not raised falls back to origin/main")
     args = parser.parse_args()
     path = ROOT / BASELINE
+    # Only a given base holds a changed prompt to the merge base: origin/main is as fresh as the last fetch, and
+    # main verification leaves it behind HEAD (scripts/ci/ratchet_base.py).
+    prior_ref = args.base if args.base is not None else os.environ.get("CI_BASE_SHA", "origin/main")
     try:
         baseline = decode_baseline(json.loads(path.read_text(encoding="utf-8")))
         actual = scan(ROOT / SOURCE)
         # Once the baseline exists upstream, editing its JSON cannot raise it.
-        if _git("cat-file", "-e", args.base).returncode:
-            raise ValueError("cannot read ratchet base " + args.base)
-        prior = base_text(args.base, BASELINE)
+        if _git("cat-file", "-e", prior_ref).returncode:
+            raise ValueError("cannot read ratchet base " + prior_ref)
+        prior = base_text(prior_ref, BASELINE)
         if prior is not None:
             lowered(baseline, decode_baseline(json.loads(prior)))
         lowered(actual, baseline)

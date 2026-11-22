@@ -119,7 +119,7 @@ class UpdateTests(unittest.TestCase):
 
 
 class MergeBaseTests(unittest.TestCase):
-    """With a base, a file the change touches is held to the lower of its baseline and its merge-base count."""
+    """With a given base, a file the change touches is held to the lower of its baseline and its merge-base count."""
 
     def setUp(self):
         self._saved_base = os.environ.pop("CI_BASE_SHA", None)
@@ -154,35 +154,51 @@ class MergeBaseTests(unittest.TestCase):
         path.write_text(text, encoding="utf-8")
 
     def test_main_under_its_baseline_passes(self):
-        self.assertEqual(ratchet.check(self.root), [])
+        self.assertEqual(ratchet.check(self.root, base="origin/main"), [])
 
     def test_a_change_cannot_add_back_into_room_under_the_baseline(self):
         self.write("web/src/a.tsx", "text-[13px] text-[12px]")
-        found = ratchet.check(self.root)
+        found = ratchet.check(self.root, base="origin/main")
         self.assertEqual(len(found), 1)
         self.assertIn("web/src/a.tsx: 2 hard-coded px font size(s), 1 at the merge base " + self.label, found[0])
         self.assertIn("(baseline 3)", found[0])
+        self.assertEqual(len(ratchet.check(self.root, env={"CI_BASE_SHA": "origin/main"})), 1)
         self.git("commit", "-q", "-am", "one back")
-        self.assertEqual(len(ratchet.check(self.root)), 1)
+        self.assertEqual(len(ratchet.check(self.root, base="origin/main")), 1)
         self.assertEqual(len(ratchet.check(self.root, base="main")), 1)
+
+    def test_the_default_branch_alone_is_no_base(self):
+        # Main verification's checkout: HEAD is the commit just merged, and origin/main still names its parent,
+        # because the verifier pins HEAD by SHA. merge-pr.sh let the re-add in (changed_ratchets.py), so main must
+        # not fail it either: without --base or CI_BASE_SHA only the baseline holds.
+        self.write("web/src/a.tsx", "text-[13px] text-[12px]")
+        self.git("commit", "-q", "-am", "one back")
+        self.assertEqual(ratchet.check(self.root, env={}), [])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(ratchet.main(["--root", str(self.root)]), 0)
+        self.assertEqual(ratchet.check(self.root, env={"CI_BASE_SHA": "HEAD"}), [])  # hosted CI on main
+        self.assertEqual(len(ratchet.check(self.root, env={"CI_BASE_SHA": "origin/main"})), 1)
 
     def test_a_hand_raised_entry_does_not_lift_the_limit(self):
         self.write("web/src/a.tsx", "text-[13px] text-[12px] text-[11px] text-[10px]")
         self.write(ratchet.BASELINE_REL, ratchet.render({"web/src/a.tsx": 4}))
-        self.assertIn("1 at the merge base", ratchet.check(self.root)[0])
+        self.assertIn("1 at the merge base", ratchet.check(self.root, base="origin/main")[0])
 
     def test_sizes_that_move_to_a_new_file_with_its_entry_pass(self):
         self.write("web/src/a.tsx", "")
         self.write("web/src/part.tsx", "text-[13px]")
-        self.assertEqual(len(ratchet.check(self.root)), 1)  # no entry yet: the new file starts at zero
+        self.assertEqual(len(ratchet.check(self.root, base="origin/main")), 1)  # no entry yet: it starts at zero
         self.assertEqual(ratchet.update(self.root), [])
         self.assertEqual(json.loads((self.root / ratchet.BASELINE_REL).read_text()), {"web/src/part.tsx": 1})
-        self.assertEqual(ratchet.check(self.root), [])
+        self.assertEqual(ratchet.check(self.root, base="origin/main"), [])
 
     def test_without_a_base_only_the_baseline_holds(self):
         self.write("web/src/a.tsx", "text-[13px] text-[12px]")
         self.git("update-ref", "-d", "refs/remotes/origin/main")
         self.assertEqual(ratchet.check(self.root), [])
+        self.write("web/src/a.tsx", "text-[13px] text-[12px] text-[11px] text-[10px]")
+        self.assertIn("4 hard-coded px font size(s), baseline 3", ratchet.check(self.root)[0])
 
     def test_an_explicit_base_that_does_not_resolve_is_an_error(self):
         with self.assertRaises(ratchet.FontError) as caught:
