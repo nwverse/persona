@@ -242,7 +242,7 @@ func (s *Service) linkInboxTaskURLs(ctx context.Context) {
 		}
 		if a := it.Agent; a != nil && a.TodoID != "" {
 			if sc := inboxScopeOf(it); sc.repo != "" {
-				if t, ok := open[a.TodoID]; ok && t.InboxItem != it.ID && !taskOfRepo(t, sc.repo) {
+				if t, ok := open[a.TodoID]; ok && t.InboxItem != it.ID && (it.TodoForward == nil || it.TodoForward.TodoID != a.TodoID) && !taskOfRepo(t, sc.repo) {
 					w := beginWrite(it)
 					unlinked = append(unlinked, it.ID+" from "+a.TodoID)
 					a.TodoID = ""

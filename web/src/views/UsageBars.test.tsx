@@ -116,8 +116,11 @@ describe("a prepaid balance in the sidebar (#11825)", () => {
     expect(renderToStaticMarkup(<UsagePopover accounts={[never]} now={NOW} />)).toContain("暂时连不上 DeepSeek");
     const kept = balanceAccount("ds", "12.34", { problem: "unreachable" });
     expect(renderToStaticMarkup(<UsagePopover accounts={[kept]} now={NOW} />)).toContain("上次的余额");
-    const refused = balanceAccount("ds", "12.34", { problem: "rejected" });
+    const refused = balanceAccount("ds", "12.34", { balance: undefined, problem: "rejected" });
     expect(renderToStaticMarkup(<UsagePopover accounts={[refused]} now={NOW} />)).toContain("Key");
+    expect(renderToStaticMarkup(<UsagePopover accounts={[refused]} now={NOW} />)).not.toContain("上次的余额");
+    const refusedKept = balanceAccount("ds", "12.34", { problem: "rejected" });
+    expect(renderToStaticMarkup(<UsagePopover accounts={[refusedKept]} now={NOW} />)).toContain("上次的余额");
   });
 });
 

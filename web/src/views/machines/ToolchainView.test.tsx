@@ -38,12 +38,16 @@ const json = (v: unknown, status = 200) =>
 let host: HTMLDivElement;
 let root: Root;
 
-const flush = async () => {
-  for (let i = 0; i < 8; i++) {
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 0));
-    });
-  }
+const waitUntil = async (predicate: () => boolean) => {
+  await vi.waitFor(
+    async () => {
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(predicate()).toBe(true);
+    },
+    { timeout: 4000 },
+  );
 };
 
 beforeEach(async () => {
@@ -97,7 +101,7 @@ describe("Machines toolchain view opt-in persistence", () => {
     storage.set("persona.machines.view", "toolchain");
 
     act(() => root.render(<Machines onToggleSidebar={() => {}} />));
-    await flush();
+    await waitUntil(() => requested.some((u) => u.includes("/metrics")));
 
     expect(requested.some((u) => u.includes("/toolchain"))).toBe(false);
     expect(host.querySelector('[data-testid="toolchain-panel"]')).toBeNull();
@@ -106,14 +110,14 @@ describe("Machines toolchain view opt-in persistence", () => {
     const capBtn = [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Capabilities");
     expect(capBtn).toBeTruthy();
     act(() => capBtn!.click());
-    await flush();
+    await waitUntil(() => storage.get("persona.machines.view") === "capabilities");
     expect(storage.get("persona.machines.view")).toBe("capabilities");
 
     // Clicking Toolchain triggers the probe on demand, but leaves storage at "capabilities".
     const tcBtn = [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Toolchain");
     expect(tcBtn).toBeTruthy();
     act(() => tcBtn!.click());
-    await flush();
+    await waitUntil(() => requested.some((u) => u.includes("/api/v1/machines/dev-box/toolchain")));
 
     expect(requested.some((u) => u.includes("/api/v1/machines/dev-box/toolchain"))).toBe(true);
     expect(storage.get("persona.machines.view")).toBe("capabilities");

@@ -3134,6 +3134,21 @@ Whoever writes a `DialTLSContext` gives the handshake its own deadline and close
 Test it by waiting for the far end to see the connection close, not by how long the request took: the request returns
 on its own deadline either way (`TestDirectStalledHandshakeIsClosed`, `TestProxyStallingInsideTheTunnelIsClosed`).
 
+## A script on a proxied machine sends the hub's token to the proxy (2026-11-21, #12493)
+
+- A machine whose environment sets `http_proxy` / `https_proxy` usually has a `no_proxy` that excludes private ranges as
+  CIDRs (`<private range>/8`). Python's `urllib` matches `no_proxy` by host name suffix and ignores CIDR entries; other
+  clients differ on this. A script that calls the hub's API by its LAN address (`http://<hub address>:18660/api/…`)
+  then goes to the proxy, `Authorization: Bearer <token>` included, in plain HTTP.
+- Seen on a hub machine: a one-off `POST /api/v1/machines/{mid}/deploy` got an HTML `403 Forbidden` back. The hub's
+  log had no such request; the proxy had answered, and it had the master token. The token had to be rotated.
+- Call the hub's API from such a machine with proxies off: `urllib.request.build_opener(urllib.request.ProxyHandler({}))`,
+  `curl --noproxy '*'`, or `env -u http_proxy -u https_proxy …`. `127.0.0.1` helps only when the hub listens there; a
+  hub.json `listen` bound to one address does not.
+- Before sending a credential, ask `GET /api/v1/health` without one and check the answer is the hub's JSON (its `commit`,
+  and `features` for a trusted source). An HTML page or any answer that is not the hub's, to a request that carried a
+  credential, means the credential left the machine: rotate it, then retry with proxies off.
+
 ## Rich-text mention boundaries are not textual whitespace (#12655)
 
 A received Lark post can place an `at` element immediately before a command's `text` element. Flattening those into
@@ -3143,3 +3158,12 @@ or ordinary text. Display names can collide; inserting spaces alone cannot estab
 Check both the manager's admission gate and the assistant's reparse of the original event, using a synthetic event,
 a recording handoff and a queue barrier. Such a test proves local handling of that event shape, not whether a live
 client inserts whitespace.
+
+## Required extension isolation must fail closed (#12994)
+
+A proxy URL in an environment variable is voluntary routing, not a sandbox. When
+the sandbox probe fails, reject the host spec before starting a process or egress
+proxy. Container images must carry bubblewrap and allow its nested user namespace
+and mounts; test the actual runtime stage as a non-root user with no outer
+capabilities. Merely finding `bwrap` on PATH or skipping an unavailable real test
+is not evidence of isolation.

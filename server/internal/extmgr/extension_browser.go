@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -12,6 +11,7 @@ import (
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -19,7 +19,7 @@ import (
 // DefaultBrowserBackend is the built-in ego lite backend name.
 const DefaultBrowserBackend = "ego"
 
-var browserSlotRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+var browserSlotRe = lazyre.New(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 
 // BrowserBackend is a pluggable cross-machine browser automation driver exposed to extensions granted browser.run
 // (#12866). The default implementation is ego lite (egoBrowserBackend); additional backends such as CDP or Playwright

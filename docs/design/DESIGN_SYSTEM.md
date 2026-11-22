@@ -471,9 +471,9 @@ on-demand model panel, not the everyday Assistant home (#6887).
   types in `ink-3`) 8 px beside the panel, right or left, or a line under the rows when neither side has room. Empty:
   **No matching commands**, 40 px, centered, `ink-3`. No key hint line. Ranking, keys and deviations: `docs/web/web.md`
   ("Input (Prompt Bar)").
-- Web skill selection (#11247): the Assistant and Agent composers use the same up-to-480 px menu for `@` and `/`.
+- Web skill selection (#11247, #12527): the Assistant and Agent composers use the same up-to-480 px menu for `@` and keyword-filtered `/<keyword>` queries; bare `/` stays command-only without dumping the skill list.
   Group headings, scrolling, the glide highlight, skill rows and the detail card come from the same picker. All enabled
-  skills in the scoped catalog can be browsed or searched. The slash menu keeps up to 25 ranked commands first.
+  skills in the scoped catalog can be browsed in `@` or searched via `/<keyword>`. The slash menu keeps up to 25 ranked commands first.
   A skill row shows its name and short description. The focused skill's detail shows the full description and the source
   supplied by the node, including any visible directory. It fits beside the list where space permits and scrolls beneath
   the list on a phone. The list fits the space around the composer and the keyboard. Selecting a skill adds an opaque
