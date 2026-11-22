@@ -59,7 +59,7 @@ func (s *Service) channelSend(ctx context.Context, id, ref, text, kind, replyTo 
 		err := s.appCall(ctx, AppChannels, ChannelsSend, params, nil)
 		var re *rpc.Error
 		if errors.As(err, &re) && re.Code == CodeCannotSend {
-			return errCannotSend
+			return cannotSendError{msg: strings.TrimSpace(re.Message)}
 		}
 		if err != nil {
 			return err
