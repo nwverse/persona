@@ -184,6 +184,35 @@ func (m *Machine) runRPCDeployment(ctx context.Context, pkg nodePackage, record 
 	m.d.changed()
 }
 
+func (d *Devices) updateHandoffGrace() time.Duration {
+	if d.opts.UpdateHandoffGrace == nil {
+		return time.Duration(proto.DefaultNodeUpdateHandoffGraceSeconds) * time.Second
+	}
+	grace := d.opts.UpdateHandoffGrace()
+	if grace < 0 {
+		return 0
+	}
+	if max := time.Duration(proto.MaxNodeUpdateHandoffGraceSeconds) * time.Second; grace > max {
+		return max
+	}
+	return grace
+}
+
+// endUpdateHandoff reopens admission after a failed or completed deployment. The flag is unknown to older nodes;
+// newer ones resume their own headless admission too. The old transport may already be gone, so this is best effort.
+func (m *Machine) endUpdateHandoff() {
+	m.mu.Lock()
+	was := m.updateHandoff
+	m.updateHandoff = false
+	m.mu.Unlock()
+	if !was {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = m.call(ctx, "sessions.list", map[string]any{"update_handoff": false}, nil)
+}
+
 func (m *Machine) performRPCDeployment(ctx context.Context, bin string, record *nodeDeployRecord) error {
 	m.mu.Lock()
 	already := m.online && m.info.Version == record.Target
@@ -191,17 +220,23 @@ func (m *Machine) performRPCDeployment(ctx context.Context, bin string, record *
 	if already {
 		return m.confirmNodeDeployment(ctx, record, nil)
 	}
+	grace := m.d.updateHandoffGrace()
+	var handoffDeadline time.Time
+	if grace > 0 {
+		handoffDeadline = time.Now().Add(grace)
+	}
+	defer m.endUpdateHandoff()
 	for {
 		if err := m.deploymentPhase(ctx, record, "waiting_idle"); err != nil {
 			return err
 		}
-		if err := m.waitNodeIdle(ctx); err != nil {
+		if err := m.waitNodeIdle(ctx, handoffDeadline); err != nil {
 			return err
 		}
-		// Waiting for idle has no deadline. Transfer/restart does, including a
-		// busy race at commit, which releases the staging transaction and waits again.
+		// Natural idle has no deadline. After the configured grace, new headless turns are refused while current work
+		// drains. Transfer/restart has its own timeout, including a busy race at commit, which waits again.
 		attempt, cancel := context.WithTimeout(ctx, 15*time.Minute)
-		err := m.sendNodeUpdate(attempt, bin, record)
+		err := m.sendNodeUpdate(attempt, bin, record, int(grace/time.Second))
 		cancel()
 		var remote *rpc.Error
 		if errors.As(err, &remote) && remote.Code == proto.CodeNodeUpdateBusy {
@@ -216,15 +251,23 @@ func (m *Machine) performRPCDeployment(ctx context.Context, bin string, record *
 	}
 }
 
-func (m *Machine) waitNodeIdle(ctx context.Context) error {
+func (m *Machine) waitNodeIdle(ctx context.Context, handoffDeadline time.Time) error {
 	for {
+		handoff := !handoffDeadline.IsZero() && !time.Now().Before(handoffDeadline)
+		params := map[string]any{}
+		m.mu.Lock()
+		if handoff {
+			m.updateHandoff = true
+			params["update_handoff"] = true
+		}
+		m.mu.Unlock()
 		var list struct {
 			Sessions   []proto.Session `json:"sessions"`
 			UpdateBusy *bool           `json:"update_busy"` // the node's own commit check (node_update_idle)
 		}
 		snapshot := new(sessionSnapshot)
 		check, cancel := context.WithTimeout(ctx, 15*time.Second)
-		err := m.callWithSnapshot(check, "sessions.list", map[string]any{}, &list, snapshot)
+		err := m.callWithSnapshot(check, "sessions.list", params, &list, snapshot)
 		cancel()
 		if err != nil {
 			return explain(i18n.Err("devices-deploy.idle_check_failed", i18n.Args{"err": err.Error()}), err)
@@ -262,7 +305,7 @@ func sessionAtWork(s proto.Session) bool {
 	return slices.ContainsFunc(s.Subagents, func(sub proto.Subagent) bool { return sub.Running })
 }
 
-func (m *Machine) sendNodeUpdate(ctx context.Context, bin string, record *nodeDeployRecord) error {
+func (m *Machine) sendNodeUpdate(ctx context.Context, bin string, record *nodeDeployRecord, handoffGraceSeconds int) error {
 	f, err := os.Open(bin)
 	if err != nil {
 		return explain(i18n.Err("devices-deploy.open_package_failed", i18n.Args{"err": err.Error()}), err)
@@ -342,7 +385,7 @@ func (m *Machine) sendNodeUpdate(ctx context.Context, bin string, record *nodeDe
 		m.mu.Unlock()
 	}()
 	commit, cancelCommit := context.WithTimeout(ctx, 30*time.Second)
-	err = peer.Call(commit, "node.update.commit", map[string]any{"id": begin.ID}, nil)
+	err = peer.Call(commit, "node.update.commit", map[string]any{"id": begin.ID, "handoff_grace_seconds": handoffGraceSeconds}, nil)
 	cancelCommit()
 	if err != nil {
 		var remote *rpc.Error

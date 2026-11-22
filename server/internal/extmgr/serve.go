@@ -236,6 +236,13 @@ func (w *localeWriter) Lang() i18n.Lang { return w.lang }
 // Unwrap preserves streaming and WebSocket access to the underlying writer.
 func (w *localeWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
+// relayIdleTimeout is longer than the hub's relayIdleFor (90 s) so the hub retires idle relay streams first.
+const relayIdleTimeout = 2 * time.Minute
+
+func (h *Manager) relayServer() *http.Server {
+	return &http.Server{Handler: h, ReadHeaderTimeout: 30 * time.Second, IdleTimeout: relayIdleTimeout}
+}
+
 // Accept is extwire.MethodAccept: the hub holds a request for the manager; it dials the relay with the id and serves
 // the request (and any after it on the same connection) there.
 func (h *Manager) Accept(ctx context.Context, id string) error {
@@ -264,7 +271,7 @@ func (h *Manager) Accept(ctx context.Context, id string) error {
 			// there, losing the answer's tail.
 			cancel()
 		}()
-		srv := &http.Server{Handler: h, ReadHeaderTimeout: 30 * time.Second}
+		srv := h.relayServer()
 		_ = srv.Serve(&oneConn{c: mine, done: make(chan struct{})})
 	}()
 	return nil

@@ -251,12 +251,15 @@ export function withWorkView(r: Route, work: boolean): Route {
 }
 
 const listeners = new Set<() => void>();
+// A replace can change a page's history state without changing its address (#12055): route readers still draw again.
+let revision = 0;
 // The address Back / Forward last landed on, until a page takes it (takeReturn) or the app navigates on: a page that
 // remembers where it was scrolled puts it back only on a return, and a fresh visit starts at the top (#5133).
 let returnedTo = "";
 if (typeof addEventListener !== "undefined") {
   addEventListener("popstate", () => {
     returnedTo = location.pathname + location.search;
+    revision++;
     listeners.forEach((l) => l());
   });
 }
@@ -272,8 +275,9 @@ export function takeReturn(): boolean {
  *  (history.state), so Back / Forward to it bring it back and other ways to the same page do not have it. */
 export function navigate(r: Route | string, replace = false, state: Record<string, unknown> | null = null) {
   const to = typeof r === "string" ? BASE + r : href(r);
-  // the query is part of the address (/s/…?view=term): the same page with another view is somewhere else
-  if (to === location.pathname + location.search) return;
+  // the query is part of the address (/s/…?view=term): the same page with another view is somewhere else.
+  // A replace still applies at the same address: reselecting a drill-down as a root clears its entry state (#12055).
+  if (to === location.pathname + location.search && !replace) return;
   returnedTo = "";
   // From inside an open overlay (a drawer's link, a sheet's action): the new page takes the overlay's entry, so Back
   // from it goes to the page under the overlay, not to a dead copy of it (#1996). A replace keeps the entry's state:
@@ -281,6 +285,7 @@ export function navigate(r: Route | string, replace = false, state: Record<strin
   if (replace) history.replaceState(state ?? history.state, "", to);
   else if (takeOverlayEntry()) history.replaceState(state, "", to);
   else history.pushState(state, "", to);
+  revision++;
   listeners.forEach((l) => l());
 }
 
@@ -290,14 +295,16 @@ export function showsSession(r: Route, mid: string, sid: string): boolean {
 }
 
 export function useRoute(): Route {
-  // The query is part of the route (/todos?id=…): a change to it alone must re-render too.
-  const at = useSyncExternalStore(
+  // The query is part of the route (/todos?id=…): a change to it alone must re-render too. The revision also covers
+  // replacing the current entry's state at an unchanged address (#12055).
+  useSyncExternalStore(
     (l) => {
       listeners.add(l);
       return () => listeners.delete(l);
     },
-    () => location.pathname + location.search,
+    () => revision,
   );
+  const at = location.pathname + location.search;
   const [path, ...query] = at.split("?");
   return parse(stripBase(path!), query.join("?"));
 }

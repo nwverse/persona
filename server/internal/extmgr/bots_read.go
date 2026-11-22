@@ -52,7 +52,7 @@ func (h *Manager) botReadGroup(api *feishubot.Client, set FeishuBotSettings, ev 
 		return false
 	}
 	// Cheap first, from the text alone: a group's ordinary messages cost no call.
-	if _, ok := feishubot.ReadCommand(feishubot.StripLeadingMentions(content.Text, msg.Mentions, nil)); !ok {
+	if _, ok := feishubot.ReadCommand(content.StripLeadingMentions(msg.Mentions, nil)); !ok {
 		return false
 	}
 	botID := h.botOpenID(api)
@@ -63,7 +63,7 @@ func (h *Manager) botReadGroup(api *feishubot.Client, set FeishuBotSettings, ev 
 	if !slices.ContainsFunc(msg.Mentions, isBot) {
 		return false
 	}
-	if _, ok := feishubot.ReadCommand(feishubot.StripLeadingMentions(content.Text, msg.Mentions, isBot)); !ok {
+	if _, ok := feishubot.ReadCommand(content.StripLeadingMentions(msg.Mentions, isBot)); !ok {
 		return false
 	}
 	h.takeAISource(msg.ChatID, msg.MessageID, botSourceRead)

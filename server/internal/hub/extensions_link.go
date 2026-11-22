@@ -604,7 +604,7 @@ func (h *Hub) dialManager(ctx context.Context, id string) (net.Conn, error) {
 	}
 	cctx, cancel := context.WithCancel(context.Background())
 	nc := websocket.NetConn(cctx, taken.conn, websocket.MessageBinary)
-	rc := &relayConn{Conn: nc, done: func() {
+	rc := &relayConn{Conn: nc, ws: taken.conn, done: func() {
 		cancel()
 		close(taken.done)
 	}}
@@ -615,6 +615,7 @@ func (h *Hub) dialManager(ctx context.Context, id string) (net.Conn, error) {
 // relayConn ends its relay when it is closed.
 type relayConn struct {
 	net.Conn
+	ws   *websocket.Conn
 	once sync.Once
 	done func()
 	// uses counts the requests the transport gave it, idleAt is that count when it last went back to the pool idle

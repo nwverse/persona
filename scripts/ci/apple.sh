@@ -303,7 +303,8 @@ fi
     mv "$watch_log/final.pending" "$watch_log/final.json"
     printf "%s\n" "observer incomplete; bounded unavailable final evidence only" > "$watch_log/observer.status.txt"
     python3 "$ci_root/scripts/ci/apple_build_watch.py" \
-      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" &
+      --output "$watch_log" --stop "$watch_log/stop" --seconds "$seconds" \
+      --derived-data "$output/ios-tests" &
     watcher=$!
     stop_watcher() {
       local code=$?
