@@ -72,9 +72,9 @@ func TestParseClaudePrintUsage(t *testing.T) {
 	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
 
 	// Verbose JSON prefers structured usage_report.rate_limits.
-	acct, ok := parseClaudePrintUsage(usageFixture(t, "claude-print-usage-verbose.json"), now)
-	if !ok || acct.Provider != "claude" || len(acct.Windows) != 2 {
-		t.Fatalf("verbose json = %+v ok=%v", acct, ok)
+	acct, ok, modelTurn := parseClaudePrintUsage(usageFixture(t, "claude-print-usage-verbose.json"), now)
+	if !ok || modelTurn || acct.Provider != "claude" || len(acct.Windows) != 2 {
+		t.Fatalf("verbose json = %+v ok=%v modelTurn=%v", acct, ok, modelTurn)
 	}
 	if acct.Windows[0].Label != "5h" || acct.Windows[0].UsedPercent != 55 || acct.Windows[0].ResetsAt == nil || acct.Windows[0].ResetsAt.Hour() != 16 {
 		t.Errorf("5h = %+v", acct.Windows[0])
@@ -84,9 +84,9 @@ func TestParseClaudePrintUsage(t *testing.T) {
 	}
 
 	// Plain text fallback (including "Last 7d · 403 requests" which must not trigger 403 denial).
-	acct, ok = parseClaudePrintUsage(usageFixture(t, "claude-print-usage.txt"), now)
-	if !ok || len(acct.Windows) != 3 {
-		t.Fatalf("plain text = %+v ok=%v", acct, ok)
+	acct, ok, modelTurn = parseClaudePrintUsage(usageFixture(t, "claude-print-usage.txt"), now)
+	if !ok || modelTurn || len(acct.Windows) != 3 {
+		t.Fatalf("plain text = %+v ok=%v modelTurn=%v", acct, ok, modelTurn)
 	}
 	if w := acct.Windows[0]; w.Label != "5h" || w.UsedPercent != 78 || w.ResetsAt == nil || !w.ResetsAt.Equal(time.Date(2026, 11, 21, 18, 30, 0, 0, time.UTC)) {
 		t.Errorf("5h text = %+v", w)
@@ -99,11 +99,19 @@ func TestParseClaudePrintUsage(t *testing.T) {
 	}
 
 	// Single JSON result object with is_error=true or auth error text is rejected.
-	if _, ok := parseClaudePrintUsage([]byte(`{"type":"result","is_error":true,"result":"Current session: 10% used"}`), now); ok {
+	if _, ok, _ := parseClaudePrintUsage([]byte(`{"type":"result","is_error":true,"result":"Current session: 10% used"}`), now); ok {
 		t.Error("is_error result parsed")
 	}
 	if _, ok := parseClaudeUsageText("Error: HTTP 401 Unauthorized\nCurrent session: 10% used", now); ok {
 		t.Error("auth error text parsed")
+	}
+
+	// Output containing an assistant model turn or nonzero API cost/duration is rejected and flagged as modelTurn.
+	if _, ok, mt := parseClaudePrintUsage([]byte(`[{"type":"assistant","message":{"role":"assistant","content":"hi"}},{"type":"result","subtype":"success","result":"Current session: 10% used"}]`), now); ok || !mt {
+		t.Errorf("assistant model turn: got ok=%v modelTurn=%v, want false, true", ok, mt)
+	}
+	if _, ok, mt := parseClaudePrintUsage([]byte(`{"type":"result","subtype":"success","total_cost_usd":0.01,"duration_api_ms":800,"result":"Current session: 10% used"}`), now); ok || !mt {
+		t.Errorf("billed result: got ok=%v modelTurn=%v, want false, true", ok, mt)
 	}
 }
 
@@ -422,9 +430,133 @@ func TestClaudeCLIUsageSkipsSpawnWhenSingleDirStatusLineIsFresh(t *testing.T) {
 	if got := readProbeCount(t, defaultDir); got != 0 {
 		t.Fatalf("expected no CLI spawn when single-dir status line is fresh, got %d", got)
 	}
-	snap := n.usageSnapshot()
-	if len(snap.Accounts) != 1 || snap.Accounts[0].Windows[0].UsedPercent != 25 {
+	if snap := n.usageSnapshot(); len(snap.Accounts) != 1 || snap.Accounts[0].Windows[0].UsedPercent != 25 {
 		t.Fatalf("unexpected snapshot: %+v", snap)
+	}
+}
+
+func TestClaudeCLIUsageInitializeFailureDoesNotFallbackAndModelTurnDisablesPrint(t *testing.T) {
+	useFakeClaudeUsageCLI(t)
+	prevCodex := codexUsageCLI
+	codexUsageCLI = func() (string, error) { return "", os.ErrNotExist }
+	t.Cleanup(func() { codexUsageCLI = prevCodex })
+
+	home := t.TempDir()
+	defaultDir := filepath.Join(home, ".claude")
+	fallbackDir := filepath.Join(home, ".claude-old")
+	for _, d := range []string{defaultDir, fallbackDir} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("PERSONA_TEST_CLAUDE_DEFAULT_DIR", defaultDir)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	prevNow := claudeUsageNow
+	claudeUsageNow = func() time.Time { return now }
+	t.Cleanup(func() { claudeUsageNow = prevNow })
+
+	// defaultDir crashes during initialize: must NOT fall back to `-p /usage`.
+	writeClaudeUsageFixture(t, defaultDir, "control", "init-crash")
+	writeClaudeUsageFixture(t, defaultDir, "print", fmt.Sprintf("Current session: 15%% used · resets %s\n", now.Add(2*time.Hour).Format(time.RFC3339)))
+
+	// fallbackDir rejects get_usage as unsupported, then `-p /usage` returns a billed model turn: must be rejected and
+	// disable further `-p /usage` fallbacks for that directory.
+	writeClaudeUsageFixture(t, fallbackDir, "control", "unsupported")
+	writeClaudeUsageFixture(t, fallbackDir, "print", `[{"type":"assistant","message":{"role":"assistant","content":"hi"}},{"type":"result","subtype":"success","total_cost_usd":0.01,"duration_api_ms":700,"result":"Current session: 50% used"}]`)
+
+	n := &Node{home: home, dir: t.TempDir(), cdirs: newClaudeDirs()}
+	n.cdirs.scan = func() map[int]procEnv { return nil }
+	n.cdirs.known = []string{fallbackDir}
+
+	n.refreshUsageWindows(t.Context())
+	if got := readProbeCount(t, defaultDir); got != 1 {
+		t.Fatalf("initialize crash triggered fallback spawn: count=%d, want 1", got)
+	}
+	if got := readProbeCount(t, fallbackDir); got != 2 {
+		t.Fatalf("expected 1 control + 1 print probe on first unsupported run, got %d", got)
+	}
+	if snap := n.usageSnapshot(); len(snap.Accounts) != 0 {
+		t.Fatalf("expected no accounts from crashed/billed probes, got %+v", snap.Accounts)
+	}
+
+	// Next active probe on fallbackDir must skip `-p /usage` now that modelTurn disabled it.
+	hist := filepath.Join(fallbackDir, "history.jsonl")
+	if err := os.WriteFile(hist, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(hist, now.Add(time.Second), now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(10 * time.Minute)
+	n.refreshUsageWindows(t.Context())
+	if got := readProbeCount(t, fallbackDir); got != 3 {
+		t.Fatalf("expected no second print fallback after modelTurn, got %d total spawns", got)
+	}
+}
+
+func TestClaudeCLIUsageRetainsNewerCLISampleAfterStatusLineAges(t *testing.T) {
+	useFakeClaudeUsageCLI(t)
+	prevCodex := codexUsageCLI
+	codexUsageCLI = func() (string, error) { return "", os.ErrNotExist }
+	t.Cleanup(func() { codexUsageCLI = prevCodex })
+
+	home := t.TempDir()
+	defaultDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(defaultDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("PERSONA_TEST_CLAUDE_DEFAULT_DIR", defaultDir)
+
+	nodeDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(nodeDir, "usage"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	prevNow := claudeUsageNow
+	claudeUsageNow = func() time.Time { return now }
+	t.Cleanup(func() { claudeUsageNow = prevNow })
+
+	resetAt := now.Add(2 * time.Hour)
+	writeClaudeUsageFixture(t, defaultDir, "control", fmt.Sprintf(`{
+		"subscription_type":"pro",
+		"rate_limits_available":true,
+		"rate_limits":{"five_hour":{"utilization":45,"resets_at":%q}}
+	}`, resetAt.Format(time.RFC3339)))
+
+	n := &Node{home: home, dir: nodeDir, cdirs: newClaudeDirs()}
+	n.cdirs.scan = func() map[int]procEnv { return nil }
+
+	// First refresh collects the newer CLI sample (45% at now).
+	n.refreshUsageWindows(t.Context())
+
+	// A fresh status-line drop (31% at now-2m) arrives for the same account.
+	statusPath := filepath.Join(nodeDir, "usage", "claude.json")
+	drop := fmt.Sprintf(`{"rate_limits":{"five_hour":{"used_percentage":31,"resets_at":%d}}}`, resetAt.Unix())
+	if err := os.WriteFile(statusPath, []byte(drop), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	statusTime := now.Add(-2 * time.Minute)
+	if err := os.Chtimes(statusPath, statusTime, statusTime); err != nil {
+		t.Fatal(err)
+	}
+	n.refreshUsageWindows(t.Context())
+
+	// While status-line is fresh (2m old <= 15m), status-line wins.
+	snap := n.usageSnapshot()
+	if len(snap.Accounts) != 1 || snap.Accounts[0].Windows[0].UsedPercent != 31 {
+		t.Fatalf("expected fresh status-line sample (31%%), got %+v", snap.Accounts)
+	}
+
+	// Once status-line ages past 15m without any new CLI probe, the preserved newer CLI sample (45%) takes over.
+	now = now.Add(20 * time.Minute)
+	snap = n.usageSnapshot()
+	if len(snap.Accounts) != 1 || snap.Accounts[0].Name != "Claude Pro" || snap.Accounts[0].Windows[0].UsedPercent != 45 {
+		t.Fatalf("expected preserved newer CLI sample (45%%) after status-line aged, got %+v", snap.Accounts)
 	}
 }
 
@@ -511,6 +643,10 @@ func runFakeClaudeUsageCLI() {
 		}
 		switch msg.Request.Subtype {
 		case "initialize":
+			body, _ := os.ReadFile(filepath.Join(dir, "fixture-control"))
+			if strings.TrimSpace(string(body)) == "init-crash" {
+				os.Exit(1)
+			}
 			_ = out.Encode(map[string]any{
 				"type": "control_response",
 				"response": map[string]any{

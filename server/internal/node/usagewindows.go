@@ -119,7 +119,6 @@ func (n *Node) refreshUsageWindows(ctx context.Context) {
 			}
 		}
 		st.accounts = mergeUsage(st.accounts, found, st.at)
-		dedupeClaudeUsage(st.accounts, st.at)
 	}
 }
 
@@ -135,14 +134,19 @@ func (n *Node) usageSnapshot() proto.UsageSnapshot {
 		st.at = time.Now()
 		st.accounts = n.collectUsageWindows(st.at, n.usageWindowCodexHomes())
 	}
-	keys := make([]string, 0, len(st.accounts))
-	for k := range st.accounts {
+	view := make(map[string]proto.UsageNodeAccount, len(st.accounts))
+	for k, a := range st.accounts {
+		view[k] = a
+	}
+	dedupeClaudeUsage(view, claudeUsageNow().UTC())
+	keys := make([]string, 0, len(view))
+	for k := range view {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	out := proto.UsageSnapshot{Enabled: true, CollectedAt: st.at, Accounts: []proto.UsageNodeAccount{}}
 	for _, k := range keys {
-		out.Accounts = append(out.Accounts, st.accounts[k])
+		out.Accounts = append(out.Accounts, view[k])
 	}
 	return out
 }

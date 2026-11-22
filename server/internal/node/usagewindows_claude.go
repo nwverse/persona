@@ -70,9 +70,10 @@ var (
 )
 
 type claudeUsageProbe struct {
-	at         time.Time
-	hasWindows bool
-	nextReset  time.Time
+	at              time.Time
+	hasWindows      bool
+	nextReset       time.Time
+	noPrintFallback bool
 }
 
 // usageWindowClaudeDirs lists existing Claude Code config directories to poll, deduplicated by real path.
@@ -107,8 +108,9 @@ func (n *Node) collectClaudeCLIUsage(ctx context.Context, dirs []string, prevPro
 	singleDirStatusFresh := len(dirs) == 1 && hasFreshClaudeStatusFile(found, now)
 
 	type target struct {
-		dir  string
-		real string
+		dir             string
+		real            string
+		noPrintFallback bool
 	}
 	var targets []target
 	for _, dir := range dirs {
@@ -118,7 +120,7 @@ func (n *Node) collectClaudeCLIUsage(ctx context.Context, dirs []string, prevPro
 		if !shouldProbeClaudeDir(now, prev, seen, active, singleDirStatusFresh) {
 			continue
 		}
-		targets = append(targets, target{dir: dir, real: real})
+		targets = append(targets, target{dir: dir, real: real, noPrintFallback: prev.noPrintFallback})
 	}
 	if len(targets) == 0 {
 		return nil
@@ -149,7 +151,7 @@ func (n *Node) collectClaudeCLIUsage(ctx context.Context, dirs []string, prevPro
 			defer cancel()
 			env := claudeUsageEnv(cli, t.dir, t.real, defaultUserDir, inheritedIsDefault)
 			sampledAt := claudeUsageNow().UTC()
-			acct, ok := readClaudeCLIUsage(readCtx, cli, env, sampledAt)
+			acct, ok, modelTurn := readClaudeCLIUsage(readCtx, cli, env, sampledAt, !t.noPrintFallback)
 			if readCtx.Err() != nil && ctx.Err() != nil {
 				return nil // canceled by disable/shutdown; do not record a probe timestamp
 			}
@@ -157,9 +159,10 @@ func (n *Node) collectClaudeCLIUsage(ctx context.Context, dirs []string, prevPro
 				real: t.real,
 				ran:  true,
 				probe: claudeUsageProbe{
-					at:         sampledAt,
-					hasWindows: ok && len(acct.Windows) > 0,
-					nextReset:  earliestWindowReset(acct.Windows),
+					at:              sampledAt,
+					hasWindows:      ok && len(acct.Windows) > 0,
+					nextReset:       earliestWindowReset(acct.Windows),
+					noPrintFallback: t.noPrintFallback || modelTurn,
 				},
 			}
 			if ok && len(acct.Windows) > 0 {
@@ -319,17 +322,18 @@ func claudeUsageNodeBin(cli string) string {
 }
 
 // readClaudeCLIUsage reads Claude Code's subscription windows from the structured stream-json `get_usage` control
-// request, falling back to `claude -p /usage --output-format json --verbose` only when the CLI does not support it.
-func readClaudeCLIUsage(ctx context.Context, cli string, env []string, now time.Time) (proto.UsageAccount, bool) {
+// request, falling back to `claude -p /usage --output-format json --verbose` only when the CLI explicitly rejects the
+// control request as unsupported.
+func readClaudeCLIUsage(ctx context.Context, cli string, env []string, now time.Time, allowPrintFallback bool) (proto.UsageAccount, bool, bool) {
 	acct, available, err := readClaudeControlUsage(ctx, cli, env, now)
 	if err == nil {
 		if !available {
-			return proto.UsageAccount{}, false
+			return proto.UsageAccount{}, false, false
 		}
-		return acct, len(acct.Windows) > 0
+		return acct, len(acct.Windows) > 0, false
 	}
-	if !errors.Is(err, errClaudeControlUnsupported) || ctx.Err() != nil {
-		return proto.UsageAccount{}, false
+	if !allowPrintFallback || !errors.Is(err, errClaudeControlUnsupported) || ctx.Err() != nil {
+		return proto.UsageAccount{}, false, false
 	}
 	return readClaudePrintUsage(ctx, cli, env, now)
 }
@@ -386,7 +390,7 @@ func readClaudeControlUsage(ctx context.Context, cli string, env []string, now t
 		if ctx.Err() != nil {
 			return proto.UsageAccount{}, false, ctx.Err()
 		}
-		return proto.UsageAccount{}, false, errClaudeControlUnsupported
+		return proto.UsageAccount{}, false, err
 	}
 	var initInfo struct {
 		Account *struct {
@@ -408,7 +412,7 @@ func readClaudeControlUsage(ctx context.Context, cli string, env []string, now t
 	}
 	acct, available, ok := parseClaudeGetUsage(usageRaw, initPlan, now)
 	if !ok {
-		return proto.UsageAccount{}, false, errClaudeControlUnsupported
+		return proto.UsageAccount{}, false, errors.New("unexpected claude get_usage response")
 	}
 	return acct, available, nil
 }
@@ -612,10 +616,10 @@ func claudeAccountName(plan string) string {
 	return "Claude " + strings.ToUpper(plan[:1]) + plan[1:]
 }
 
-func readClaudePrintUsage(ctx context.Context, cli string, env []string, now time.Time) (proto.UsageAccount, bool) {
+func readClaudePrintUsage(ctx context.Context, cli string, env []string, now time.Time) (proto.UsageAccount, bool, bool) {
 	tmp, err := os.MkdirTemp("", "persona-claude-usage-")
 	if err != nil {
-		return proto.UsageAccount{}, false
+		return proto.UsageAccount{}, false, false
 	}
 	defer os.RemoveAll(tmp)
 
@@ -635,24 +639,33 @@ func readClaudePrintUsage(ctx context.Context, cli string, env []string, now tim
 	killGroupOnCancel(cmd)
 	out, _ := cmd.Output()
 	if ctx.Err() != nil || len(bytes.TrimSpace(out)) == 0 {
-		return proto.UsageAccount{}, false
+		return proto.UsageAccount{}, false, false
 	}
 	return parseClaudePrintUsage(out, now)
 }
 
 // parseClaudePrintUsage reads the output of `claude -p /usage --output-format json --verbose`: structured
 // `usage_report.rate_limits` first, then the `result` text, and finally plain stdout if not JSON.
-func parseClaudePrintUsage(data []byte, now time.Time) (proto.UsageAccount, bool) {
+// If the output indicates a billed model turn ran (an assistant `message` or nonzero API cost/duration), it rejects
+// the response and reports modelTurn=true so the caller stops using the `-p /usage` fallback for that directory.
+func parseClaudePrintUsage(data []byte, now time.Time) (acct proto.UsageAccount, ok bool, modelTurn bool) {
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) == 0 {
-		return proto.UsageAccount{}, false
+		return proto.UsageAccount{}, false, false
 	}
 	if trimmed[0] == '[' {
 		var items []struct {
-			Type        string `json:"type"`
-			IsError     bool   `json:"is_error"`
-			Result      string `json:"result"`
-			UsageReport *struct {
+			Type          string          `json:"type"`
+			IsError       bool            `json:"is_error"`
+			Result        string          `json:"result"`
+			TotalCostUSD  float64         `json:"total_cost_usd"`
+			DurationAPIMS float64         `json:"duration_api_ms"`
+			Message       json.RawMessage `json:"message"`
+			UsageReport   *struct {
+				Session *struct {
+					TotalCostUSD       float64 `json:"total_cost_usd"`
+					TotalAPIDurationMS float64 `json:"total_api_duration_ms"`
+				} `json:"session"`
 				RateLimits *claudeRateLimitsPayload `json:"rate_limits"`
 			} `json:"usage_report"`
 		}
@@ -661,8 +674,22 @@ func parseClaudePrintUsage(data []byte, now time.Time) (proto.UsageAccount, bool
 			var isErr bool
 			var structured []proto.UsageWindow
 			for _, item := range items {
-				if item.UsageReport != nil && item.UsageReport.RateLimits != nil && len(structured) == 0 {
-					structured = parseClaudeRateLimitsPayload(item.UsageReport.RateLimits, now)
+				if item.TotalCostUSD > 0 || item.DurationAPIMS > 0 {
+					return proto.UsageAccount{}, false, true
+				}
+				if item.Type == "assistant" {
+					msg := bytes.TrimSpace(item.Message)
+					if len(msg) > 0 && !bytes.Equal(msg, []byte("null")) {
+						return proto.UsageAccount{}, false, true
+					}
+				}
+				if item.UsageReport != nil {
+					if s := item.UsageReport.Session; s != nil && (s.TotalCostUSD > 0 || s.TotalAPIDurationMS > 0) {
+						return proto.UsageAccount{}, false, true
+					}
+					if item.UsageReport.RateLimits != nil && len(structured) == 0 {
+						structured = parseClaudeRateLimitsPayload(item.UsageReport.RateLimits, now)
+					}
 				}
 				if item.Type == "result" {
 					isErr = item.IsError
@@ -670,7 +697,7 @@ func parseClaudePrintUsage(data []byte, now time.Time) (proto.UsageAccount, bool
 				}
 			}
 			if isErr {
-				return proto.UsageAccount{}, false
+				return proto.UsageAccount{}, false, false
 			}
 			if len(structured) > 0 {
 				return proto.UsageAccount{
@@ -678,28 +705,45 @@ func parseClaudePrintUsage(data []byte, now time.Time) (proto.UsageAccount, bool
 					Name:      "Claude",
 					Windows:   structured,
 					SampledAt: now.UTC(),
-				}, true
+				}, true, false
 			}
 			if resultText != "" {
-				return parseClaudeUsageText(resultText, now)
+				a, ok := parseClaudeUsageText(resultText, now)
+				return a, ok, false
 			}
-			return proto.UsageAccount{}, false
+			return proto.UsageAccount{}, false, false
 		}
 	}
 	if trimmed[0] == '{' {
 		var obj struct {
-			Type    string `json:"type"`
-			IsError bool   `json:"is_error"`
-			Result  string `json:"result"`
+			Type          string          `json:"type"`
+			IsError       bool            `json:"is_error"`
+			Result        string          `json:"result"`
+			TotalCostUSD  float64         `json:"total_cost_usd"`
+			DurationAPIMS float64         `json:"duration_api_ms"`
+			Message       json.RawMessage `json:"message"`
 		}
-		if json.Unmarshal(trimmed, &obj) == nil && obj.Type == "result" {
-			if obj.IsError {
-				return proto.UsageAccount{}, false
+		if json.Unmarshal(trimmed, &obj) == nil {
+			if obj.TotalCostUSD > 0 || obj.DurationAPIMS > 0 {
+				return proto.UsageAccount{}, false, true
 			}
-			return parseClaudeUsageText(obj.Result, now)
+			if obj.Type == "assistant" {
+				msg := bytes.TrimSpace(obj.Message)
+				if len(msg) > 0 && !bytes.Equal(msg, []byte("null")) {
+					return proto.UsageAccount{}, false, true
+				}
+			}
+			if obj.Type == "result" {
+				if obj.IsError {
+					return proto.UsageAccount{}, false, false
+				}
+				a, ok := parseClaudeUsageText(obj.Result, now)
+				return a, ok, false
+			}
 		}
 	}
-	return parseClaudeUsageText(string(trimmed), now)
+	a, ok := parseClaudeUsageText(string(trimmed), now)
+	return a, ok, false
 }
 
 // parseClaudeUsageText parses human-readable `/usage` lines into a Claude UsageAccount.
@@ -893,6 +937,9 @@ func dedupeClaudeUsage(accounts map[string]proto.UsageNodeAccount, now time.Time
 			}
 			if cliAcct.SampledAt.After(stAcct.SampledAt) {
 				delete(accounts, sk)
+			} else {
+				delete(accounts, ck)
+				break
 			}
 		}
 	}
