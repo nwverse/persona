@@ -205,6 +205,54 @@ class GenerationTransactionTests(unittest.TestCase):
             self.assertIn("Could not restore", str(caught.exception))
             self.assertNotIn("original reviewed Kotlin restored after generation failure", stderr.getvalue())
 
+    def test_failed_generate_without_entry_bytes_removes_only_new_output(self):
+        with tempfile.TemporaryDirectory(prefix="persona-refract-transaction-") as temporary:
+            generated = Path(temporary) / "AboutVersionRow.kt"
+            sibling = generated.with_name("ReviewedNeighbor.kt")
+            sibling.write_bytes(b"unrelated reviewed Kotlin\n")
+            calls = []
+
+            def partial_generation_failure(cli, mode, android_out, harmony_out, sources=(pilot.SOURCE,)):
+                calls.append((mode, sources))
+                if len(sources) == 2:
+                    raise subprocess.CalledProcessError(1, str(cli), stderr=DIAGNOSTIC)
+                generated.write_bytes(b"partial unreviewed Version output\n")
+                raise subprocess.CalledProcessError(1, str(cli), stderr="primary generator failure\n")
+
+            result, stdout, stderr = self.run_generate(generated, partial_generation_failure)
+            self.assertEqual(result, 1)
+            self.assertEqual([mode for mode, _ in calls], ["check", "generate", "generate"])
+            self.assertFalse(generated.exists())
+            self.assertEqual(sibling.read_bytes(), b"unrelated reviewed Kotlin\n")
+            self.assertLess(stderr.index("primary generator failure"), stderr.index("Refract About Version: FAILED"))
+            self.assertLess(stderr.index("Refract About Version: FAILED"),
+                            stderr.index("new unreviewed Kotlin removed after generation failure"))
+            self.assertNotIn("original reviewed Kotlin restored", stderr)
+            self.assertNotIn("secondary", stderr)
+            self.assertNotIn("PASSED", stdout)
+
+    def test_new_output_removal_failure_preserves_primary_then_secondary_diagnostics(self):
+        with tempfile.TemporaryDirectory(prefix="persona-refract-transaction-") as temporary:
+            generated = Path(temporary) / "AboutVersionRow.kt"
+
+            def partial_generation_failure(cli, mode, android_out, harmony_out, sources=(pilot.SOURCE,)):
+                if len(sources) == 2:
+                    raise subprocess.CalledProcessError(1, str(cli), stderr=DIAGNOSTIC)
+                generated.write_bytes(b"partial unreviewed Version output\n")
+                raise subprocess.CalledProcessError(1, str(cli), stderr="primary generator failure\n")
+
+            with mock.patch.object(pilot.Path, "unlink", side_effect=OSError("fixture removal failure")):
+                result, stdout, stderr = self.run_generate(generated, partial_generation_failure)
+            self.assertEqual(result, 1)
+            self.assertEqual(generated.read_bytes(), b"partial unreviewed Version output\n")
+            self.assertLess(stderr.index("primary generator failure"), stderr.index("Refract About Version: FAILED"))
+            self.assertLess(stderr.index("Refract About Version: FAILED"),
+                            stderr.index("secondary restoration failure"))
+            self.assertIn("fixture removal failure", stderr)
+            self.assertNotIn("new unreviewed Kotlin removed", stderr)
+            self.assertNotIn("original reviewed Kotlin restored", stderr)
+            self.assertNotIn("PASSED", stdout)
+
     def test_restore_failure_preserves_the_primary_error_as_secondary_context(self):
         with tempfile.TemporaryDirectory(prefix="persona-refract-transaction-") as temporary:
             generated = Path(temporary) / "AboutVersionRow.kt"
