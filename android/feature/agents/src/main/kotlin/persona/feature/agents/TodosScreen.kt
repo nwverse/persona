@@ -769,7 +769,7 @@ private fun TodoTriageRow(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(start = Tokens.Space.xxl)
-                            .then(if (url != null) Modifier.clickable { runCatching { links.openUri(url) } } else Modifier),
+                            .then(if (url != null) Modifier.clickable { val _ = runCatching { links.openUri(url) } } else Modifier),
                     )
                 }
                 Row(

@@ -142,7 +142,7 @@ class HttpVoiceExtensions(
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                 // Finish the closing handshake; the extension has said all it will say.
-                runCatching { webSocket.close(1000, null) }
+                val _ = runCatching { webSocket.close(1000, null) }
                 if (ended.compareAndSet(false, true)) listener.onClosed(code, reason)
             }
 

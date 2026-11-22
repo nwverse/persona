@@ -203,7 +203,7 @@ class PairingWelcomeTest {
         for (id in listOf(R.string.settings_pairing_scan, R.string.settings_pairing_welcome_guide, R.string.settings_pairing_other_ways)) {
             val results = mutableListOf<TextLayoutResult>()
             val node = rule.onNodeWithText(text(id), useUnmergedTree = true).fetchSemanticsNode()
-            node.config[SemanticsActions.GetTextLayoutResult].action?.invoke(results)
+            val _ = node.config[SemanticsActions.GetTextLayoutResult].action?.invoke(results)
             assertEquals(text(id), 1, results.single().lineCount)
         }
     }

@@ -435,7 +435,7 @@ class AboutVersionMatrixTest {
             it.config.getOrNull(SemanticsProperties.Text).orEmpty().any { value -> value.text == text }
         }
         val layouts = mutableListOf<TextLayoutResult>()
-        node.config[SemanticsActions.GetTextLayoutResult].action?.invoke(layouts)
+        val _ = node.config[SemanticsActions.GetTextLayoutResult].action?.invoke(layouts)
         return layouts.single()
     }
 
