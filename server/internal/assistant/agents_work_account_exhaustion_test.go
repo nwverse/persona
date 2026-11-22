@@ -104,6 +104,26 @@ func TestAccountExhaustionCancelsAlreadyQueuedContinuation(t *testing.T) {
 	}
 }
 
+// Main-chat, leader and background-supervision conversations are Assistant
+// sessions. Their continuation re-resolves the configured launcher and model,
+// so the coding-Agent account-pool budget must not change their behavior.
+func TestAssistantAccountExhaustionStillAutoContinues(t *testing.T) {
+	s, f := transientService(t)
+	c := apiErrorTurn("s1", "API Error: 503 no eligible upstream account")
+	c.Assistant = true
+	f.setSessions("box", c)
+	triage(t, s, "s1")
+
+	e := entryOf(t, s, "s1")
+	if e.WakeAt == nil || e.Work.On != proto.WaitTransient {
+		t.Fatalf("assistant transient continuation was not scheduled: %+v", e)
+	}
+	s.workTick(context.Background(), *e.WakeAt)
+	if got := f.sentToAgents(); len(got) != 1 || got[0] != "s1: 继续" {
+		t.Fatalf("assistant account-exhaustion behavior changed: sent %v", got)
+	}
+}
+
 func TestOrdinaryTransientErrorsStillAutoContinue(t *testing.T) {
 	for _, errText := range []string{
 		"API Error: 503 Service Unavailable",

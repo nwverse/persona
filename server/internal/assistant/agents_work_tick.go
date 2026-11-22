@@ -244,11 +244,15 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 		s.putWork(ctx, e)
 		return
 	}
-	if e.Work.On == proto.WaitTransient && !accountExhaustionRetryAllowed(c, e.Retries, s.triageCfg(ctx).AccountExhaustionMaxRetries) {
-		e.WakeAt, e.Work.WakeAt = nil, nil
-		e.Work.Line = clip(oneLine(workT(s.lang(ctx), "model_error", i18n.Args{"error": c.TurnError})), 60)
-		s.putWork(ctx, e)
-		return
+	if e.Work.On == proto.WaitTransient {
+		budget := s.triageCfg(ctx).AccountExhaustionMaxRetries
+		if !accountExhaustionRetryAllowed(c, e.Retries, budget) {
+			e.WakeAt, e.Work.WakeAt = nil, nil
+			e.Work.Line = clip(oneLine(workT(s.lang(ctx), "model_error", i18n.Args{"error": c.TurnError})), 60)
+			s.logf("work %s/%s: not continued: account pool exhausted (budget %d, sent %d)", k[0], short(k[1]), budget, e.Retries)
+			s.putWork(ctx, e)
+			return
+		}
 	}
 	if !sw.wakes(e.Work) && !(!sw.Enabled && sw.transientOn() && e.Work.ResetsAt != nil && s.protectedQuotaWait(ctx, k[0], c)) {
 		before := e
