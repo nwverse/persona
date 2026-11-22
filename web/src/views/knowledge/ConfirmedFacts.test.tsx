@@ -16,7 +16,11 @@ let root: Root;
 const saved = vi.fn();
 const unauthorized = vi.fn();
 const detail = (kind = "people", id = "example", pinned?: string): KBDetailResponse => ({
-  detail: { kind, id, path: "", meta: { name: "Example entry", pinned, tags: ["existing"], importance: "P1", locked_fields: ["name"] }, summary: "# Example entry\n\nInferred profile." },
+  detail: {
+    kind, id, path: "", meta: { name: "Example entry", pinned, tags: ["existing"], importance: "P1", locked_fields: ["name"] }, summary: "# Example entry\n\nInferred profile.",
+    // A topic shows its knowledge points rather than the summary rendered from them: the inferred text is a point there.
+    ...(kind === "topics" ? { points: [{ id: "p1", kind: "fact", text: "Inferred profile." }] } : {}),
+  },
 });
 const render = (kind = "people", id = "example", reloadKey = 0) => act(() => root.render(
   <EntryDetail kind={kind} id={id} reloadKey={reloadKey} onToggleSidebar={() => {}} onBack={() => {}} onOpen={() => {}} onSaved={saved} />,
@@ -75,6 +79,19 @@ describe("confirmed facts in Knowledge detail", () => {
     click("Add");
     expect(text().value).toBe("");
     expect(button("Save").disabled).toBe(true);
+  });
+
+  // audit item 70: as the dialogs' multi-line fields, ⌘↩ / Ctrl+↩ saves and Enter alone is a new line
+  it.each([{ metaKey: true }, { ctrlKey: true }])("saves on Enter with %o from the facts box, not on Enter alone", async (mod) => {
+    await load();
+    click("Add");
+    input("Prefers mornings.");
+    const press = (init: KeyboardEventInit) => act(() => { text().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init })); });
+    press({});
+    expect(writes()).toHaveLength(0);
+    press(mod);
+    expect(writes()).toHaveLength(1);
+    expect(JSON.parse(writes()[0].init.body as string)).toEqual({ pinned: "Prefers mornings." });
   });
 
   it.each(KB_KINDS)("creates, edits and clears facts for %s with field-only bodies and authoritative readback", async (kind) => {

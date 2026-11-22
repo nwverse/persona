@@ -2,6 +2,7 @@ package persona.core.data
 
 import persona.core.contracts.CoreText
 import persona.core.contracts.CoreText.Key
+import persona.core.contracts.GroupKeys
 import persona.core.contracts.InboxEvent
 import persona.core.contracts.LarkEvent
 import persona.core.contracts.SessionKey
@@ -18,8 +19,22 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 import java.time.Instant
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicInteger
 
 enum class LarkWindowSyncState { Cached, Syncing, Complete, Incomplete, Failed }
+
+/** How many of the done history's records [RealInboxRepository] keeps for changes to them (#2974). */
+private const val PAGED_BACK_KEPT = 2_000
+
+/**
+ * Window snapshots over this are skipped before reading (old versions cached whole traversed histories); new ones are
+ * trimmed under it, less [WINDOW_SNAPSHOT_ENVELOPE_BYTES] for the cursors and flags around the messages.
+ */
+internal const val WINDOW_SNAPSHOT_MAX_BYTES = 512L * 1024
+private const val WINDOW_SNAPSHOT_ENVELOPE_BYTES = 4L * 1024
+
+/** With a hub, polling only backs up its invalidation events. */
+private const val HUB_INBOX_POLL_MILLIS = 300_000L
 
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 class RealInboxRepository(
@@ -46,10 +61,16 @@ class RealInboxRepository(
     private val mainConversationOf: (suspend (String) -> persona.core.contracts.SessionKey)? = null,
     /** How long a burst of hub inbox events is collected before the one refresh it causes. */
     private val refreshWindowMillis: Long = 1_000,
+    /** Whether the hub shows source subscriptions (#2041). */
+    private val subscriptionsShownFlow: Flow<Boolean> = flowOf(false),
+    /** Whether those pages are Inbox Sources (#5278, `inbox_sources`). */
+    private val inboxSourcesShownFlow: Flow<Boolean> = flowOf(false),
     // Last, so existing callers that pass it as a trailing lambda keep compiling.
     private val download: suspend (InboxAssistantTransport, LarkPart.File) -> String,
 ) : persona.feature.inbox.InboxRepository {
     override val supportsThreadOutbox: Boolean get() = sendThread != null
+    override val subscriptionsShown: Flow<Boolean> get() = subscriptionsShownFlow
+    override val inboxSourcesShown: Flow<Boolean> get() = inboxSourcesShownFlow
     override val personaOutbox = mainConversationSender?.outbox ?: MutableStateFlow(emptyList())
     override val connectionState: Flow<ConnectionState> = hubConnection?.state ?: connection.current.map {
         if (it == null) ConnectionState.Connecting else ConnectionState.Online
@@ -64,12 +85,20 @@ class RealInboxRepository(
     private val outbox = MutableStateFlow<List<InboxPendingReply>>(emptyList())
     private val versions = mutableMapOf<String, String>()
     private val refreshLock = Mutex()
+    private val completions = InboxCompletionState(current)
+    private val cacheLock = Mutex()
+    private val reconciliation = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
     private val groupNames = InboxGroupNames()
     // The items last written to the list snapshot, so an unchanged list is not written again.
     private var savedItems: Pair<String, JsonArray>? = null
     private val sendLock = Mutex()
     private val personaLock = Mutex()
     private val personaRequests = mutableMapOf<String, String>()
+    private val agentHandOffLock = Mutex()
+    /** A synchronous read-through cache of the journal; the real outbox commits new delivery evidence before publishing. */
+    private val agentHandOffs = mutableMapOf<String, InboxAgentHandOff>()
+    /** In-flight record requests in this repository owner. */
+    private val recordingAgentHandOffs = mutableSetOf<String>()
     // Access order is maintained when a window is opened.
     private val windows = LinkedHashMap<String, Window>(16, 0.75f, true)
     private var restoredScope: String? = null
@@ -79,13 +108,15 @@ class RealInboxRepository(
         quietly { snapshots.restore<JsonObject>("${transport.scope}:inbox")?.let { data ->
             savedItems = transport.scope to JsonArray(data.array("items"))
             val records = listed(data.array("items").map { it.jsonObject }, transport)
-            if (owns(transport)) current.update { it.copy(records = records, loading = false) }
+            if (owns(transport)) completions.publish(records, data.array("items").map { it.jsonObject }, completions.epoch()) { state, restored -> state.copy(records = restored, loading = false) }
         } }
         restoredScope = transport.scope
     }
     private val windowsLock = Any()
 
-    private class Window(val transport: InboxAssistantTransport, val feedId: String, val around: Long?) {
+    /** [manager]: the one the chat is read as (the opening page's pin), on its reads, pictures and threads; null: the default. */
+    private class Window(val transport: InboxAssistantTransport, val feedId: String, val around: Long?, val manager: String? = null) {
+        val source = LarkContentSource(transport, manager)
         val state = MutableStateFlow(LarkConversation(loading = true))
         val lock = Mutex()
         var older: String? = null
@@ -106,9 +137,16 @@ class RealInboxRepository(
                 current.update { it.copy(mutes = AgentPreferences(state.mutes.spaces, state.mutes.sessions, state.mutes.allowed)) }
             }
         }
+        // Local enqueue and OutboxState are not delivery evidence. The real outbox publishes only an Accepted transport
+        // result, an Accepted reconciliation receipt, or validated transcript evidence. Its scoped stream also crosses
+        // the app's grouped MessageSender facade without making that facade part of core/contracts.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            AuthoritativeMessageDeliveries.events.collect { delivery -> agentHandOffDelivered(delivery) }
+        }
         scope.launch {
             connection.current.collectLatest { transport ->
                 refreshLock.withLock {
+                    completions.reset()
                     current.update { it.copy(records = emptyList(), loading = false, error = null,
                         contentSource = transport?.let(::LarkContentSource),
                         mutes = hubPreferences?.preferences?.value?.mutes?.let { m -> AgentPreferences(m.spaces, m.sessions, m.allowed) }
@@ -121,6 +159,17 @@ class RealInboxRepository(
                     if (transport != null) restore(transport)
                 }
                 if (transport != null) {
+                    // Watch from transport acquisition: a disconnect hidden by startup IO means the first Online
+                    // replay must retry, not coalesce, the buffered attempt. This child ends with the transport owner.
+                    val startupReconnects = AtomicInteger(0)
+                    val startupWatcher = CoroutineScope(coroutineContext).launch(start = CoroutineStart.UNDISPATCHED) {
+                        var online = false
+                        (hubConnection?.state ?: flowOf(ConnectionState.Online)).collect { state ->
+                            if (state == ConnectionState.Online) online = true
+                            else if (online) startupReconnects.incrementAndGet()
+                        }
+                    }
+                    val startupReplay = replayBufferedAgentHandOffs(transport.scope)
                     sendLock.withLock {
                         val saved = journal.update(transport.scope) { document ->
                             var restored = document.copy(outbox = document.outbox.map {
@@ -130,7 +179,7 @@ class RealInboxRepository(
                                 if (draft.text.isNotBlank() && restored.outbox.none { it.request.clientId == draft.clientId }) {
                                     restored = restored.enqueue(InboxPendingReply(
                                         ReplyTarget.Lark("thread:${key.removePrefix("lark:thread-pending:")}"),
-                                        ReplyRequest(draft.text, draft.clientId), state = "unknown"))
+                                        ReplyRequest(draft.text, draft.clientId, mentions = draft.mentions), state = "unknown"))
                                 }
                             }
                             restored
@@ -138,20 +187,34 @@ class RealInboxRepository(
                         if (owns(transport)) publishLocal(saved)
                     }
                     // One collector owns startup and reconnect recovery for this transport.
+                    var starting = true
                     (hubConnection?.state ?: flowOf(ConnectionState.Online)).collectLatest { state ->
-                        if (state == ConnectionState.Online) recoverReplies(transport)
+                        if (state == ConnectionState.Online) {
+                            val alreadyReplayed = if (starting && startupReconnects.get() == 0) startupReplay else emptySet()
+                            try {
+                                replayAgentHandOffs(transport, alreadyReplayed)
+                                recoverReplies(transport)
+                            } finally {
+                                if (starting) {
+                                    starting = false
+                                    startupWatcher.cancel()
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
         scope.launch {
-            combine(sessions.sessions, interactions.pending) { agents, waiting ->
-                agents.map { AgentSession(it) } to waiting.map {
+            combine(sessions.sessions, interactions.pending, sessions.listStatus) { agents, waiting, status ->
+                Triple(agents.map { AgentSession(it) }, waiting.map {
                     InboxInteraction(it.id, it.machineId, it.sessionId, it.createdAt,
                         agents.firstOrNull { agent -> agent.key == it.sessionKey }?.displayTitle.orEmpty(), it.summary, it.headline.shown,
                         manager = it.manager)
-                }
-            }.collect { (agents, waiting) -> current.update { it.copy(sessions = agents, interactions = waiting) } }
+                }, status.loaded)
+            }.collect { (agents, waiting, targetsReady) ->
+                current.update { it.copy(sessions = agents, interactions = waiting, targetsReady = targetsReady) }
+            }
         }
         scope.launch {
             sessions.machines.collect { machines -> current.update { it.copy(machines = machines.associate { machine -> machine.id to machine.displayName }) } }
@@ -184,18 +247,31 @@ class RealInboxRepository(
                     }
                 }
             }
-            // A burst of inbox events is one refresh: sample passes at most one event per window, and an event that comes
-            // in while a refresh runs is kept for one more refresh after it.
+            // Events and ambiguous write responses share one conflated refresh queue. An event during a refresh
+            // is retained for one follow-up, rather than queuing a whole-list request behind each swipe.
             scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                hub.events.filterIsInstance<InboxEvent>().sample(refreshWindowMillis).collect { quietly { refresh() } }
+                hub.events.filterIsInstance<InboxEvent>().collect { reconciliation.trySend(Unit) }
             }
         }
-        // Polling remains a fallback for hubs without invalidation events.
+        scope.launch {
+            for (request in reconciliation) {
+                delay(refreshWindowMillis)
+                reconciliation.tryReceive()
+                quietly { refresh() }
+            }
+        }
+        // Polling is the fallback for missed or absent invalidation events. Snapshot subscribers include the shell and
+        // capsule even with no inbox page shown, so with a hub (which refreshes on InboxEvent and reconnect) the poll is
+        // slow and starts one interval after going visible; a transport without a hub event stream polls every 15 s.
+        val pollMillis = if (hubConnection == null) 15_000L else HUB_INBOX_POLL_MILLIS
         scope.launch {
             current.subscriptionCount.map { it > 1 }.distinctUntilChanged().collectLatest { visible ->
-                if (visible) while (isActive) {
-                    try { if (online()) refresh() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
-                    delay(15_000)
+                if (visible) {
+                    if (hubConnection != null) delay(pollMillis)
+                    while (isActive) {
+                        try { if (online()) refresh() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+                        delay(pollMillis)
+                    }
                 }
             }
         }
@@ -208,6 +284,7 @@ class RealInboxRepository(
         // Only an empty list shows that it is loading: a background refresh of a shown list must not change its layout.
         current.update { if (it.records.isEmpty()) it.copy(loading = true, error = null) else it }
         try {
+            val started = completions.epoch()
             val body = transport.inbox()
             val data = body.array("items").map { it.jsonObject }
             // New items waiting for triage (#1773); an older hub sends no `triage`.
@@ -226,14 +303,10 @@ class RealInboxRepository(
             if (!owns(transport)) return@withLock
             versions.clear(); versions.putAll(newVersions)
             outbox.value = saved.outbox
-            current.update { it.copy(records = records.map { item -> withLocalStatus(item, saved) },
+            completions.publish(records.map { item -> withLocalStatus(item, saved) }, data, started) { it, merged -> it.copy(records = merged,
                 mutes = mute?.let { m -> AgentPreferences(m.strings("spaces"), m.strings("sessions"), m.strings("allowed").toSet()) } ?: it.mutes,
                 loading = false, error = null, triage = triage, refreshes = it.refreshes + 1) }
-            val items = JsonArray(data)
-            if (savedItems != transport.scope to items) {
-                snapshots.save("${transport.scope}:inbox", buildJsonObject { put("items", items) })
-                savedItems = transport.scope to items
-            }
+            persistInbox(transport)
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) {
             if (owns(transport)) current.update { it.copy(loading = false, error = DataText.of(Key.InboxRefreshFailed)) }
@@ -258,24 +331,42 @@ class RealInboxRepository(
         catch (_: Exception) { cached }
     }
 
-    override suspend fun setDone(itemId: String, done: Boolean) = refreshLock.withLock {
+    override suspend fun setDone(itemId: String, done: Boolean) {
         val transport = requireTransport()
-        val old = recordOf(itemId)
-        val shown = old?.item?.id ?: itemId
-        current.update { it.copy(records = it.records.map { record ->
-            if (record.item.id == shown) record.copy(item = record.item.copy(doneAt = if (done) Instant.now().toString() else null)) else record
-        }) }
-        try {
-            val result = asItem(old) { transport.setDone(old?.hubItemId ?: itemId, done) }
-            if (owns(transport)) replaceRecord(record(result.obj("item") ?: result, transport, old))
-        } catch (e: Exception) {
-            if (owns(transport) && old != null) replaceRecord(old)
-            throw e
+        val shown = recordOf(itemId)?.item?.id ?: itemId
+        completions.withItems(listOf("${transport.scope}:$shown")) {
+            if (!owns(transport)) throw CancellationException("Pairing changed")
+            val change = completions.begin(setOf(shown), done)
+            val old = change.before.firstOrNull() ?: pagedBackRecord(shown)
+            try {
+                val result = completions.request { asItem(old) { transport.setDone(old?.hubItemId ?: itemId, done) } }
+                if (owns(transport)) {
+                    val raw = result.obj("item") ?: result
+                    val next = record(raw, transport, old)
+                    val stamped = next.manager?.let { JsonObject(raw + ("manager" to JsonPrimitive(it))) } ?: raw
+                    completions.finish(change, listOf(next to stamped), restore = emptySet())
+                    persistInbox(transport)
+                }
+            } catch (e: Exception) {
+                if (owns(transport)) completions.finish(change)
+                throw e
+            }
         }
     }
 
-    override suspend fun inboxMutes(): List<persona.feature.inbox.InboxMute> =
-        persona.feature.inbox.inboxMutes(requireTransport().inboxMutes())
+    private suspend fun persistInbox(transport: InboxAssistantTransport) = cacheLock.withLock {
+        if (!owns(transport)) return@withLock
+        val items = completions.cachedItems()
+        if (savedItems != transport.scope to items) {
+            snapshots.save("${transport.scope}:inbox", buildJsonObject { put("items", items) })
+            if (owns(transport)) savedItems = transport.scope to items
+        }
+    }
+
+    override suspend fun inboxMutes(manager: String?): List<persona.feature.inbox.InboxMute> {
+        val transport = requireTransport()
+        return persona.feature.inbox.inboxMutes(asStamped(manager) { transport.inboxMutes() })
+    }
 
     // "Mute this repository / chat / sender": the items it covers are done at once (the hub files them too), back if it fails.
     override suspend fun mute(record: InboxRecord, option: persona.feature.inbox.InboxMuteOption) {
@@ -295,11 +386,15 @@ class RealInboxRepository(
         quietly { refresh() }
     }
 
-    override suspend fun unmute(id: String) = requireTransport().unmuteInbox(id)
-
-    override suspend fun inboxPolicies(record: InboxRecord?): List<persona.feature.inbox.InboxPolicy> {
+    override suspend fun unmute(id: String, manager: String?) {
         val transport = requireTransport()
-        return persona.feature.inbox.inboxPolicies(asItem(record) { transport.inboxPolicies() })
+        asStamped(manager) { transport.unmuteInbox(id) }
+    }
+
+    override suspend fun inboxPolicies(record: InboxRecord?, manager: String?): List<persona.feature.inbox.InboxPolicy> {
+        val transport = requireTransport()
+        val read = suspend { transport.inboxPolicies() }
+        return persona.feature.inbox.inboxPolicies(if (record != null) asItem(record, read) else asStamped(manager, read))
     }
 
     // A rule's tier reaches the open, triaged items it covers at once (the hub moves them too), back if it fails.
@@ -313,19 +408,22 @@ class RealInboxRepository(
         val id = target.policy?.id
         require(id != null || record != null) { "A new rule needs its item" }
         val default = AssistantManagerChoice.current.value.defaultId
-        fun ownerOf(r: InboxRecord?) = r?.manager?.takeIf { it.isNotBlank() && it != default } ?: ""
-        val owner = ownerOf(record)
+        fun ownerOf(manager: String?) = manager?.takeIf { it.isNotBlank() && it != default } ?: ""
+        val owner = ownerOf(target.manager)
         val moved = refreshLock.withLock {
             val before = current.value.records
-            val after = persona.feature.inbox.applyPolicyTier(before, target.source, target.option, tier) { ownerOf(it) == owner }
+            val after = persona.feature.inbox.applyPolicyTier(before, target.source, target.option, tier) { ownerOf(it.manager) == owner }
             current.update { it.copy(records = after) }
             before.zip(after).filter { (old, new) -> old !== new }
         }
+        val removing = tier == persona.feature.inbox.InboxPolicyTier.None && twin == persona.feature.inbox.InboxPolicyTwin.None
+        val send = suspend {
+            if (id != null) transport.updateInboxPolicy(id, tier.wire, twin.wire)
+            else transport.setInboxPolicy(checkNotNull(record).hubItemId, target.option.tag, tier.wire, twin.wire)
+        }
         val result = try {
-            asItem(record) {
-                if (id != null) transport.updateInboxPolicy(id, tier.wire, twin.wire)
-                else transport.setInboxPolicy(checkNotNull(record).hubItemId, target.option.tag, tier.wire, twin.wire)
-            }
+            // Opened from "Rules" (no item): removing names the manager the list read it from, even when that is the default now.
+            if (record == null && removing) asStamped(target.manager, send) else asManager(target.manager, send)
         } catch (e: Exception) {
             // Back only the ones still as this left them: a refresh meanwhile has the hub's.
             if (owns(transport)) refreshLock.withLock {
@@ -335,49 +433,115 @@ class RealInboxRepository(
             throw e
         }
         quietly { refresh() }
-        if (tier == persona.feature.inbox.InboxPolicyTier.None && twin == persona.feature.inbox.InboxPolicyTwin.None) return null
+        if (removing) return null
         return result.obj("policy")?.let { persona.feature.inbox.inboxPolicy(it) }
     }
 
-    override suspend fun removePolicy(id: String) = requireTransport().removeInboxPolicy(id)
+    override suspend fun removePolicy(id: String, manager: String?) {
+        val transport = requireTransport()
+        asStamped(manager) { transport.removeInboxPolicy(id) }
+    }
 
     override suspend fun setDone(items: List<InboxDoneTarget>, done: Boolean): InboxBulkResult =
         bulk(items, if (done) InboxBulkAction.Done else InboxBulkAction.Reopen)
 
     override suspend fun bulk(items: List<InboxDoneTarget>, action: InboxBulkAction): InboxBulkResult {
-        val done = action != InboxBulkAction.Reopen
-        val result = refreshLock.withLock {
-            val transport = requireTransport()
-            val ids = items.map { it.id }.toSet()
-            val old = current.value.records.filter { it.item.id in ids }
-            val doneAt = if (done) Instant.now().toString() else null
-            current.update { it.copy(records = it.records.map { record ->
-                if (record.item.id in ids) record.copy(item = record.item.copy(doneAt = doneAt)) else record
-            }) }
+        if (items.isEmpty()) return InboxBulkResult()
+        val transport = requireTransport()
+        return completions.withItems(items.map { "${transport.scope}:${it.id}" }) {
+            if (!owns(transport)) throw CancellationException("Pairing changed")
+            val change = completions.begin(items.map { it.id }.toSet(), action != InboxBulkAction.Reopen)
             try {
-                val outcome = bulkByManager(transport, items, action, old)
+                val outcome = completions.request { bulkByManager(transport, items, action, change.before) }
                 val result = outcome.result
                 if (owns(transport)) {
-                    outcome.changed.forEach(::replaceRecord)
-                    // Already so (another device filed it) keeps what was just shown; gone from the hub leaves the list;
-                    // one that took new messages since, or that the hub failed to write, goes back to how it was, until the refresh.
-                    val gone = result.missing.toSet()
-                    if (gone.isNotEmpty()) current.update { it.copy(records = it.records.filter { r -> r.item.id !in gone }) }
-                    old.filter { it.item.id in result.changedSince || it.item.id in result.failed }.forEach(::replaceRecord)
+                    completions.finish(change, outcome.changed, (result.changedSince + result.failed).toSet(), result.missing.toSet())
+                    // Reconcile only ambiguous results, once per burst, without delaying the action's response.
+                    if (result.changedSince.isNotEmpty() || result.unchanged.isNotEmpty() || result.failed.isNotEmpty()) {
+                        reconciliation.trySend(Unit)
+                    }
+                    persistInbox(transport)
                 }
                 result
             } catch (e: Exception) {
-                if (owns(transport)) old.forEach(::replaceRecord)
+                if (owns(transport)) completions.finish(change)
                 throw e
             }
         }
-        // The hub's own state (when, by whom) for what this request did not move itself.
-        if (result.changedSince.isNotEmpty() || result.unchanged.isNotEmpty() || result.missing.isNotEmpty() || result.failed.isNotEmpty()) quietly { refresh() }
-        return result
+    }
+
+    private val itemReadLock = Mutex()
+
+    /**
+     * One record by app or hub id: the live list first, then the done history already paged back, finally the hub's own
+     * copy. A bare id uses its noted manager, else the default, as the hub routes any other request that names no manager.
+     */
+    override suspend fun item(itemId: String): InboxRecord? = itemReadLock.withLock {
+        recordOf(itemId)?.let { return it }
+        val hubId = InboxItemKey.hubId(itemId)
+        val manager = InboxItemKey.managerOf(itemId) ?: AssistantManagerChoice.itemManager(listOf("inbox", hubId))
+        // A bare id may name an item already cached by its manager-aware app id; never alias different managers' records.
+        if (manager != null) recordOf(InboxItemKey.appId(hubId, manager))?.let { return it }
+        val transport = requireTransport()
+        val data = try {
+            asStamped(manager) { transport.item(hubId) }
+        } catch (e: Exception) {
+            if ((e as? persona.core.contracts.api.HubCodedFailure)?.status == 404) return null
+            throw e
+        }
+        if (!owns(transport)) throw CancellationException("Pairing changed")
+        val stamped = if (manager.isNullOrBlank() || data["manager"] != null) data
+            else JsonObject(data + ("manager" to JsonPrimitive(manager)))
+        val record = listed(listOf(stamped), transport).firstOrNull { it.hubItemId == InboxItemKey.hubId(itemId) } ?: return null
+        notePagedBack(transport, listOf(record))
+        return record
+    }
+
+    /**
+     * One page of a manager's done history (#2200, #2576), its items as the list's records (the app's ids, the manager
+     * stamped). Kept out of the snapshot: the inbox page merges it under Done. An old hub (404) has none.
+     */
+    override suspend fun doneHistory(manager: String?, cursor: persona.feature.inbox.InboxDoneCursor?): persona.feature.inbox.InboxDonePage {
+        val transport = requireTransport()
+        val body = try {
+            transport.doneHistory(manager?.takeIf { it.isNotBlank() }, cursor?.before, cursor?.beforeId)
+        } catch (e: UnsupportedOperationException) {
+            return persona.feature.inbox.InboxDonePage()
+        } catch (e: Exception) {
+            if ((e as? persona.core.contracts.api.HubCodedFailure)?.status == 404) return persona.feature.inbox.InboxDonePage()
+            throw e
+        }
+        if (!owns(transport)) throw CancellationException("Pairing changed")
+        val data = body.array("items").mapNotNull { it as? JsonObject }.map { item ->
+            // the page is one manager's: an item it didn't stamp is still that manager's
+            if (manager.isNullOrBlank() || item["manager"] != null) item else JsonObject(item + ("manager" to JsonPrimitive(manager)))
+        }
+        val next = body.obj("next")?.let { n -> n.string("before").takeIf { it.isNotBlank() }?.let { persona.feature.inbox.InboxDoneCursor(it, n.string("before_id").ifBlank { null }) } }
+        return persona.feature.inbox.InboxDonePage(listed(data, transport).also { notePagedBack(transport, it) }, next)
+    }
+
+    override suspend fun doneDays(manager: String?, zone: java.time.ZoneId): List<persona.feature.inbox.InboxDoneDay>? {
+        val transport = requireTransport()
+        val body = try {
+            transport.doneDays(manager?.takeIf { it.isNotBlank() }, zone.id)
+        } catch (e: UnsupportedOperationException) {
+            return null
+        } catch (e: Exception) {
+            // An old hub (404 / 405), or a zone it doesn't know (400): Done pages back from the newest as before.
+            if ((e as? persona.core.contracts.api.HubCodedFailure)?.status in setOf(400, 404, 405)) return null
+            throw e
+        }
+        if (!owns(transport)) throw CancellationException("Pairing changed")
+        return body.array("days").mapNotNull { day ->
+            val d = day as? JsonObject ?: return@mapNotNull null
+            val date = runCatching { java.time.LocalDate.parse(d.string("day")) }.getOrNull() ?: return@mapNotNull null
+            val count = (d["count"] as? JsonPrimitive)?.intOrNull ?: return@mapNotNull null
+            persona.feature.inbox.InboxDoneDay(date, count)
+        }
     }
 
     /** What the managers answered to a bulk action, in the app's ids, and the items it changed as the hub has them now. */
-    private class BulkOutcome(val result: InboxBulkResult, val changed: List<InboxRecord>)
+    private class BulkOutcome(val result: InboxBulkResult, val changed: List<Pair<InboxRecord, JsonObject>>)
 
     /**
      * Each manager files its own items (the merged list stamps them; the hub sends `/inbox/bulk` to the manager the
@@ -389,10 +553,12 @@ class RealInboxRepository(
         transport: InboxAssistantTransport, items: List<InboxDoneTarget>, action: InboxBulkAction, old: List<InboxRecord>,
     ): BulkOutcome {
         val byId = old.associateBy { it.item.id }
+        // an item paged back into Done is in no list: its own record from the history page (#2974)
+        fun known(id: String) = byId[id] ?: pagedBackRecord(id)
         val default = AssistantManagerChoice.current.value.defaultId
-        val groups = items.groupBy { byId[it.id]?.manager?.takeIf { m -> m.isNotBlank() && m != default } }
+        val groups = items.groupBy { known(it.id)?.manager?.takeIf { m -> m.isNotBlank() && m != default } }
         val answers = mutableListOf<InboxBulkResult>()
-        val changed = mutableListOf<InboxRecord>()
+        val changed = mutableListOf<Pair<InboxRecord, JsonObject>>()
         val failed = mutableListOf<String>()
         var problem: Exception? = null
         for ((manager, list) in groups) {
@@ -406,7 +572,11 @@ class RealInboxRepository(
                 val r = InboxBulkResult.from(data)
                 answers += InboxBulkResult(r.changed.map(key), r.unchanged.map(key), r.changedSince.map(key), r.missing.map(key), r.failed.map(key))
                 data.array("changed").forEach { e ->
-                    (e as? JsonObject)?.let { obj -> changed += record(obj, transport, byId[key(obj.string("id"))]) }
+                    (e as? JsonObject)?.let { obj ->
+                        val next = record(obj, transport, known(key(obj.string("id"))))
+                        val raw = next.manager?.let { JsonObject(obj + ("manager" to JsonPrimitive(it))) } ?: obj
+                        changed += next to raw
+                    }
                 }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
@@ -424,19 +594,21 @@ class RealInboxRepository(
         val transport = requireTransport()
         val document = journal.read(transport.scope)
         // A reply refused because its mail target changed must be confirmed again under a new identifier.
-        fun restored(text: String, clientId: String) =
-            if (document.outbox.any { it.request.clientId == clientId && it.state == "target_changed" }) ReplyDraft(text)
-            else ReplyDraft(text, clientId)
-        return document.drafts[target.storageKey()]?.let { restored(it.text, it.clientId).copy(ai = it.ai) }
+        fun restored(text: String, clientId: String, mentions: List<LarkMention>) =
+            if (document.outbox.any { it.request.clientId == clientId && it.state == "target_changed" })
+                ReplyDraft(text, mentions = mentions)
+            else ReplyDraft(text, clientId, mentions = mentions)
+        return document.drafts[target.storageKey()]?.let { restored(it.text, it.clientId, it.mentions).copy(ai = it.ai) }
             ?: document.outbox.lastOrNull { it.target == target && it.state != "sent" }?.let {
-                restored(it.request.text, it.request.clientId)
+                restored(it.request.text, it.request.clientId, it.request.mentions)
             }
     }
     override suspend fun saveDraft(target: ReplyTarget, draft: ReplyDraft) {
         val transport = requireTransport()
         val version = refreshLock.withLock { (target as? ReplyTarget.Inbox)?.let { versions[it.itemId] } }
         val saved = journal.update(transport.scope) {
-            it.copy(drafts = it.drafts + (target.storageKey() to InboxStoredDraft(draft.text, draft.clientId, version, draft.ai)))
+            it.copy(drafts = it.drafts + (target.storageKey() to
+                InboxStoredDraft(draft.text, draft.clientId, version, draft.ai, draft.mentions)))
         }
         if (owns(transport)) publishLocal(saved)
     }
@@ -470,6 +642,163 @@ class RealInboxRepository(
         return outcome
     }
 
+    override suspend fun inboxLine(item: InboxRecord): InboxLineage? {
+        val transport = requireTransport()
+        val body = try {
+            asItem(item) { transport.tree("inbox", item.hubItemId) }
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            if (e is UnsupportedOperationException || hubCodedFailure(e)?.status in setOf(404, 405)) return null
+            throw e
+        }
+        if (!owns(transport)) throw CancellationException("Pairing changed")
+        fun parent(data: JsonObject): InboxParentRef? {
+            val kind = data.optional("kind") ?: return null
+            val id = data.optional("id") ?: return null
+            if (kind.isBlank() || id.isBlank()) return null
+            return InboxParentRef(kind, id, data.optional("by"))
+        }
+        val node = body.obj("node")?.let(::parent) ?: InboxParentRef("inbox", item.hubItemId)
+        val ancestors = body.array("ancestors").mapNotNull { entry ->
+            (entry as? JsonObject)?.let { raw -> parent(raw)?.let { InboxLineAncestor(it, raw.obj("item")?.let { data -> lineageRecord(data, transport, item) }) } }
+        }
+        val children = body.array("children").mapNotNull { (it as? JsonObject)?.let { data -> lineageRecord(data, transport, item) } }
+        return InboxLineage(node, body.obj("item")?.let { data -> lineageRecord(data, transport, item) }, ancestors, children)
+    }
+
+    override suspend fun setInboxParent(item: InboxRecord, parent: InboxParentRef?) {
+        val transport = requireTransport()
+        val result = asItem(item) { transport.setParent(item.hubItemId, parent) }
+        if (!owns(transport)) throw CancellationException("Pairing changed")
+        val data = result.obj("item") ?: result
+        if (data.optional("id") == item.hubItemId) refreshLock.withLock {
+            replaceRecord(lineageRecord(data, transport, item))
+        }
+    }
+
+    /** A tree is one manager's line: raw hub ids become the same app ids as the merged list, never request targets. */
+    private fun lineageRecord(data: JsonObject, transport: InboxAssistantTransport, owner: InboxRecord): InboxRecord {
+        val hubId = data.string("id")
+        val appId = InboxItemKey.appId(hubId, owner.manager)
+        val previous = current.value.records.firstOrNull { it.item.id == appId } ?: owner.takeIf { it.item.id == appId }
+        val parsed = record(data, transport, previous)
+        return parsed.copy(item = parsed.item.copy(id = appId), manager = owner.manager)
+    }
+
+    private suspend fun agentHandOffDelivered(delivery: AuthoritativeMessageDelivery): String? {
+        val transport = connection.current.value ?: return null
+        val handOff = agentHandOffLock.withLock {
+            // The common path is synchronous: the pending request is cached, or the real outbox already committed and
+            // carried its metadata. Only a restored owner with neither needs to touch the journal here.
+            val candidate = agentHandOffs[delivery.clientMessageId] ?: delivery.agentHandOff
+                ?: journal.read(transport.scope).agentHandOffs.firstOrNull {
+                    it.request.operationId == delivery.clientMessageId
+                } ?: return@withLock null
+            if (candidate.scope != transport.scope || candidate.request.operationId != delivery.clientMessageId ||
+                candidate.request.text != delivery.text ||
+                GroupKeys.rawKey(candidate.session) != GroupKeys.rawKey(delivery.session)) {
+                return@withLock null
+            }
+            val carried = delivery.agentHandOff
+            if (candidate.scope != delivery.scope && (carried == null || carried.scope != candidate.scope ||
+                carried.request != candidate.request || carried.hubItemId != candidate.hubItemId ||
+                carried.manager != candidate.manager)) {
+                // Cross-hub evidence needs the original committed metadata, not merely colliding message fields.
+                return@withLock null
+            }
+            val delivered = candidate.copy(
+                delivered = true,
+                recorded = candidate.recorded || delivery.agentHandOff?.recorded == true,
+            )
+            agentHandOffs[delivery.clientMessageId] = delivered
+            // Only the originating inbox scope accepts outbox-carried metadata; the Agent may be on another hub group.
+            delivered
+        }
+        if (handOff == null) return null
+        AuthoritativeMessageDeliveries.acknowledge(delivery)
+        if (!handOff.recorded) {
+            if (!delivery.originCommitted) try {
+                // A cross-pairing target committed its outbox first. Commit the origin before its record can run.
+                journal.update(transport.scope) { saved ->
+                    val current = saved.agentHandOffs.firstOrNull { it.request.operationId == handOff.request.operationId }
+                    when {
+                        current?.recorded == true -> saved
+                        current != null -> saved.copy(agentHandOffs = saved.agentHandOffs.map {
+                            if (it.request.operationId == handOff.request.operationId) it.copy(delivered = true) else it
+                        })
+                        else -> saved.copy(agentHandOffs = saved.agentHandOffs + handOff)
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Best-effort recording still follows authoritative delivery; a journal failure stays quiet.
+            }
+            scheduleAgentHandOffRecord(handOff, transport)
+        }
+        return handOff.request.operationId
+    }
+
+    private suspend fun replayBufferedAgentHandOffs(scope: String): Set<String> {
+        val replayed = mutableSetOf<String>()
+        AuthoritativeMessageDeliveries.replay(scope).forEach { delivery ->
+            agentHandOffDelivered(delivery)?.let(replayed::add)
+        }
+        return replayed
+    }
+
+    /** Replay only durable authoritative evidence, never a restored Sent/Shown outbox state. */
+    private suspend fun replayAgentHandOffs(transport: InboxAssistantTransport, alreadyReplayed: Set<String> = emptySet()) {
+        val coalesced = alreadyReplayed + replayBufferedAgentHandOffs(transport.scope)
+        journal.reconcileAgentHandOffDeliveries(transport.scope)
+        val restored = journal.read(transport.scope).agentHandOffs
+        val pending = agentHandOffLock.withLock {
+            restored.forEach { handOff -> if (handOff.request.operationId !in agentHandOffs) {
+                agentHandOffs[handOff.request.operationId] = handOff
+            } }
+            restored.filter { it.scope == transport.scope && it.delivered && !it.recorded }.mapNotNull {
+                agentHandOffs[it.request.operationId]?.takeUnless { current -> current.recorded }
+            }
+        }
+        pending.filter { it.request.operationId !in coalesced }.forEach { scheduleAgentHandOffRecord(it, transport) }
+    }
+
+    private suspend fun scheduleAgentHandOffRecord(handOff: InboxAgentHandOff, transport: InboxAssistantTransport) {
+        if (!owns(transport)) return
+        val id = handOff.request.operationId
+        val scheduled = agentHandOffLock.withLock {
+            if (handOff.recorded || agentHandOffs[id]?.recorded == true) false else recordingAgentHandOffs.add(id)
+        }
+        if (!scheduled) return
+        scope.launch {
+            try {
+                // Use the route committed before enqueue. recordOf(null) here could send a restored manager-owned item
+                // to the default manager merely because the new owner's inbox has not loaded yet.
+                asManager(handOff.manager) {
+                    transport.recordAgentHandOff(handOff.hubItemId, handOff.session,
+                        handOff.request.targetTitle.orEmpty(), handOff.request.operationId)
+                }
+                // If the process dies after this HTTP success but before this write, delivered remains durable and
+                // replay repeats the same client_id; the hub's idempotence is the completion guard.
+                val recorded = handOff.copy(delivered = true, recorded = true)
+                agentHandOffLock.withLock { agentHandOffs[id] = recorded }
+                journal.update(transport.scope) { saved ->
+                    val current = saved.agentHandOffs.firstOrNull { it.request.operationId == id }
+                    if (current == null) saved.copy(agentHandOffs = saved.agentHandOffs + recorded)
+                    else saved.copy(agentHandOffs = saved.agentHandOffs.map {
+                        if (it.request.operationId == id) it.copy(delivered = true, recorded = true) else it
+                    })
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Recording never changes message delivery. Delivered stays durable for reconnect or process replay.
+            } finally {
+                agentHandOffLock.withLock { recordingAgentHandOffs.remove(id) }
+            }
+        }
+    }
+
     override suspend fun handOff(request: InboxHandOffRequest): SessionKey? {
         require(request.itemId.isNotBlank() && request.text.isNotBlank() && request.operationId.isNotBlank())
         scope.coroutineContext.ensureActive()
@@ -477,7 +806,38 @@ class RealInboxRepository(
         val session = request.sessionId
         if (!machine.isNullOrBlank() && !session.isNullOrBlank()) {
             val key = SessionKey(machine, session)
-            checkNotNull(messageSender) { "agent message sender not wired" }.send(key, request.text, request.operationId)
+            val transport = requireTransport()
+            val old = recordOf(request.itemId)
+            val hubItemId = old?.hubItemId ?: InboxItemKey.hubId(request.itemId)
+            val manager = old?.manager ?: InboxItemKey.managerOf(request.itemId)
+                ?: AssistantManagerChoice.itemManager(listOf("inbox", hubItemId))
+            val pending = InboxAgentHandOff(transport.scope, request, hubItemId, manager)
+            agentHandOffLock.withLock {
+                val previous = agentHandOffs[request.operationId]
+                require(previous == null || previous.scope == pending.scope && previous.request == pending.request &&
+                    previous.hubItemId == pending.hubItemId && previous.manager == pending.manager) {
+                    "Operation id reused with different parameters"
+                }
+                agentHandOffs[request.operationId] = previous ?: pending
+            }
+            val originPersisted = scope.async(start = CoroutineStart.LAZY) {
+                journal.update(transport.scope) { it.enqueue(pending) }
+                Unit
+            }
+            try {
+                withContext(InboxAgentHandOffContext(pending, originPersisted)) {
+                    checkNotNull(messageSender) { "agent message sender not wired" }.send(key, request.text, request.operationId)
+                }
+            } catch (failure: Exception) {
+                agentHandOffLock.withLock {
+                    if (agentHandOffs[request.operationId]?.delivered == false) agentHandOffs.remove(request.operationId)
+                    if (originPersisted.isActive || originPersisted.isCompleted) {
+                        journal.update(transport.scope) { it.removeUndeliveredAgentHandOff(request.operationId) }
+                    }
+                }
+                throw failure
+            }
+            // The local outbox answers at once. Only authoritative delivery evidence releases the background record.
             return key
         }
         // Main-chat hand-offs need a receipt from the item's manager, not merely a local queue entry.
@@ -546,18 +906,21 @@ class RealInboxRepository(
         if (!online()) throw IOException("sends once connected")
         try {
             val mailTarget = request.mailTarget
-            // the item replied to; a chat's send, the one record of that chat (two managers' copies of one chat: the
-            // page's pin decides)
+            // the item replied to; a chat's send, the one record of that chat. Two managers' copies of one chat, or a
+            // thread: the sending page's pins name its copy; without them (the outbox's retry), the manager it is open as here.
             val replied = when (actualTarget) {
                 is ReplyTarget.Inbox -> recordOf(actualTarget.itemId)
                 is ReplyTarget.Lark -> current.value.records.filter { it.feedId == actualTarget.feedId }.singleOrNull()
             }
+            val paged = (actualTarget as? ReplyTarget.Lark)?.let { currentCoroutineContext()[ManagerPins]?.manager(sendPath(it.feedId)) } != null
+            val opened = (actualTarget as? ReplyTarget.Lark)?.takeIf { replied == null && !paged }?.let { openedManager(it.feedId) }
+            suspend fun <T> named(block: suspend () -> T): T = if (opened != null) asManager(opened, block) else asItem(replied, block)
             val response = if (actualTarget is ReplyTarget.Lark && actualTarget.feedId.startsWith("thread:"))
-                checkNotNull(sendThread)(actualTarget.feedId.removePrefix("thread:"), request)
+                named { checkNotNull(sendThread)(actualTarget.feedId.removePrefix("thread:"), request) }
             else if (mailTarget != null && actualTarget is ReplyTarget.Inbox)
                 asItem(replied) { transport.replyMail(InboxItemKey.hubId(actualTarget.itemId), request.text, request.clientId, mailTarget) }
-            else asItem(replied) { transport.reply((actualTarget as? ReplyTarget.Inbox)?.itemId?.let(InboxItemKey::hubId),
-                (actualTarget as? ReplyTarget.Lark)?.feedId, request.text, request.clientId) }
+            else named { transport.reply((actualTarget as? ReplyTarget.Inbox)?.itemId?.let(InboxItemKey::hubId),
+                (actualTarget as? ReplyTarget.Lark)?.feedId, request.text, request.clientId, request.mentions) }
             val result = response.obj("message") ?: response
             if (response.string("state") in setOf("pending", "unknown") || result.string("state") in setOf("pending", "unknown")) {
                 val uncertain = journal.update(transport.scope) { it.transition(request.clientId, "unknown") }
@@ -607,10 +970,10 @@ class RealInboxRepository(
         }
     }
 
-    suspend fun acceptLarkWindow(feedId: String, raw: List<JsonObject>) {
+    suspend fun acceptLarkWindow(feedId: String, raw: List<JsonObject>, manager: String? = null) {
         val transport = requireTransport()
         val window = synchronized(windowsLock) {
-            windows[feedId] ?: Window(transport, feedId, null).also { windows[feedId] = it }
+            windows[feedId]?.takeIf { it.manager == manager } ?: Window(transport, feedId, null, manager).also { windows[feedId] = it }
         }
         window.raw = raw
         window.state.value = window.state.value.copy(messages = raw.map { message(it, window) })
@@ -621,9 +984,11 @@ class RealInboxRepository(
         connection.current.flatMapLatest { transport ->
             if (transport == null) flowOf(LarkConversation(error = DataText.of(Key.PairHubFirst)))
             else {
+                // The default's pin is no manager, so its page shares the unpinned pages' window.
+                val manager = currentCoroutineContext()[ManagerPins]?.manager(listOf("lark", "conversations", feedId))?.takeIf { it.isNotEmpty() }
                 val window = synchronized(windowsLock) {
-                    windows[feedId]?.takeIf { it.transport === transport && it.around == startPosition }
-                        ?: Window(transport, feedId, startPosition).also { trimWindows(7); windows[feedId] = it }
+                    windows[feedId]?.takeIf { it.transport === transport && it.around == startPosition && it.manager == manager }
+                        ?: Window(transport, feedId, startPosition, manager).also { trimWindows(7); windows[feedId] = it }
                 }
                 channelFlow {
                     synchronized(windowsLock) { window.users++ }
@@ -659,10 +1024,12 @@ class RealInboxRepository(
         idle.take((idle.size - limit).coerceAtLeast(0)).forEach { windows.remove(it.key) }
     }
 
-    private fun windowKey(window: Window) = "${window.transport.scope}:lark:${window.feedId}:${window.around}"
+    private fun windowKey(window: Window) = "${window.source.scope}:lark:${window.feedId}:${window.around}"
     private suspend fun restoreWindow(window: Window) = window.lock.withLock {
         if (window.restored) return@withLock
-        snapshots.restore<JsonObject>(windowKey(window))?.let { data ->
+        // Old versions cached whole traversed histories. A cache is only a first-paint hint: leave an oversized
+        // file untouched and fetch the latest page, with older history available through its server cursor.
+        withContext(Dispatchers.IO) { snapshots.restore<JsonObject>(windowKey(window), WINDOW_SNAPSHOT_MAX_BYTES) }?.let { data ->
             val raw = data.array("messages").map { it.jsonObject }
             val positions = raw.mapNotNull { it.number("position") }
             if (window.around == null || positions.isNotEmpty() && window.around in positions.min()..positions.max()) {
@@ -788,7 +1155,7 @@ class RealInboxRepository(
     private suspend fun reconcileReplyEchoes(transport: InboxAssistantTransport, feed: String?) {
         if (feed == null) return
         val window = synchronized(windowsLock) { windows[feed] } ?: Window(transport, feed, null)
-        var page = transport.messages(feed)
+        var page = asManager(window.manager) { transport.messages(feed) }
         val seen = mutableSetOf<String>()
         var before: String? = null
         repeat(100) {
@@ -797,7 +1164,7 @@ class RealInboxRepository(
             if (!complete(page)) throw IncompleteWindow()
             if (!page.flag("has_older") || journal.read(transport.scope).outbox.none { it.feedId == feed && it.state != "sent" }) return
             before = checkedCursor(page, true, before, seen)
-            page = transport.messages(feed, before = before)
+            page = asManager(window.manager) { transport.messages(feed, before = before) }
         }
         throw IncompleteWindow()
     }
@@ -809,6 +1176,18 @@ class RealInboxRepository(
         window.lock.withLock { if (owns(window.transport) && online()) replaceLatest(window) }
     }
     private fun window(feedId: String) = synchronized(windowsLock) { requireNotNull(windows[feedId]) }
+
+    /** Where a send to [target] (a feed, or `thread:` and its root message) goes, under /api/v1. */
+    private fun sendPath(target: String): List<String> =
+        if (target.startsWith("thread:")) listOf("lark", "messages", target.removePrefix("thread:"), "replies")
+        else listOf("lark", "conversations", target, "messages")
+
+    /** The manager the chat [target] (a feed, or `thread:` and its root message) is open as here; null: none named. */
+    private fun openedManager(target: String): String? = synchronized(windowsLock) {
+        val root = target.removePrefix("thread:").takeIf { target.startsWith("thread:") }
+        if (root == null) windows[target]?.manager
+        else windows.values.firstOrNull { window -> window.raw.any { it.optional("id") == root } }?.manager
+    }
 
     private class WindowGap : Exception()
     private class ReplyUnconfirmed : IOException()
@@ -826,7 +1205,7 @@ class RealInboxRepository(
     }
 
     private suspend fun fetch(window: Window, around: Long? = null, before: String? = null, after: String? = null): JsonObject {
-        val page = window.transport.messages(window.feedId, around, before, after)
+        val page = asManager(window.manager) { window.transport.messages(window.feedId, around, before, after) }
         if (!owns(window.transport)) throw CancellationException("Pairing changed")
         // Positions are sparse. Only authoritative pages and their cursor chain establish coverage.
         if (!complete(page)) {
@@ -942,7 +1321,7 @@ class RealInboxRepository(
             if (!owns(window.transport)) return
             val id = local.serverId!!
             quietly {
-                val copy = window.transport.larkMessage(id).obj("message")
+                val copy = asManager(window.manager) { window.transport.larkMessage(id) }.obj("message")
                 if (copy != null && copy.string("id") == id && delivered(copy)) publishLocal(journal.update(window.transport.scope) {
                     if (it.outbox.any { reply -> reply.request.clientId == local.request.clientId && reply.state == "sent" })
                         it.confirm(local.request.clientId, id, seen = true) else it
@@ -973,9 +1352,15 @@ class RealInboxRepository(
         sync.update { it + (window.feedId to if (window.state.value.verified) LarkWindowSyncState.Complete else LarkWindowSyncState.Cached) }
         if (!window.state.value.verified) return
         val start = window.around?.let { anchor -> window.raw.indexOfFirst { (it.number("position") ?: Long.MAX_VALUE) >= anchor } }
-        val offset = if (start != null && start >= 0) (start - 40).coerceIn(0, (window.raw.size - 80).coerceAtLeast(0))
+        var offset = if (start != null && start >= 0) (start - 40).coerceIn(0, (window.raw.size - 80).coerceAtLeast(0))
             else (window.raw.size - 80).coerceAtLeast(0)
-        val cached = window.raw.drop(offset).take(80)
+        var cached = window.raw.drop(offset).take(80)
+        // A snapshot over the restore limit would never be read back: drop its oldest messages until it fits.
+        val sizes = cached.map { it.toString().encodeToByteArray().size.toLong() }
+        var bytes = sizes.sum()
+        var dropped = 0
+        while (dropped < sizes.size && bytes > WINDOW_SNAPSHOT_MAX_BYTES - WINDOW_SNAPSHOT_ENVELOPE_BYTES) bytes -= sizes[dropped++]
+        if (dropped > 0) { offset += dropped; cached = cached.drop(dropped) }
         snapshots.save(windowKey(window), buildJsonObject {
             put("messages", JsonArray(cached))
             put("older_cursor", if (offset > 0) cached.firstOrNull()?.optional("position") else older)
@@ -1060,20 +1445,51 @@ class RealInboxRepository(
         return records
     }
 
-    /** The record shown with [itemId] (the app's id, InboxItemKey; or the hub's, from outside the lists). */
-    private fun recordOf(itemId: String): InboxRecord? = current.value.records.inboxRecord(itemId)
+    /**
+     * The record shown with [itemId] (the app's id, InboxItemKey; or the hub's, from outside the lists), or one the done
+     * history paged back into Done ([pagedBackRecord]).
+     */
+    private fun recordOf(itemId: String): InboxRecord? = current.value.records.inboxRecord(itemId) ?: pagedBackRecord(itemId)
+
+    /**
+     * The records the done history handed out ([doneHistory], #2576), by pairing and the app's id: none of them is in the
+     * list, so a change to one (Move back, Mark done) takes its manager and hub id from here rather than going to the
+     * default manager by the app's id (#2974). The newest [PAGED_BACK_KEPT] are kept.
+     */
+    private val pagedBack = object : LinkedHashMap<String, InboxRecord>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, InboxRecord>?) = size > PAGED_BACK_KEPT
+    }
+
+    private fun notePagedBack(transport: InboxAssistantTransport, records: List<InboxRecord>) = synchronized(pagedBack) {
+        records.forEach { pagedBack["${transport.scope}:${it.item.id}"] = it }
+    }
+
+    private fun pagedBackRecord(itemId: String): InboxRecord? {
+        val scope = connection.current.value?.scope ?: return null
+        return synchronized(pagedBack) { pagedBack["$scope:$itemId"] }
+    }
 
     /**
      * Runs requests for [record]'s item, naming its manager on each of them where they are made (RequestManager): the
      * default's names none, and so overrides what a list noted for an id another manager has too. With no record known
      * nothing is named: what the page pinned (its chat's manager) still decides.
      */
-    private suspend fun <T> asItem(record: InboxRecord?, block: suspend () -> T): T {
-        if (record == null) return block()
+    private suspend fun <T> asItem(record: InboxRecord?, block: suspend () -> T): T = asManager(record?.let { it.manager.orEmpty() }, block)
+
+    /** Runs requests naming [manager] where they are made, as [asItem] does: the default (or "") names none; null names nothing. */
+    private suspend fun <T> asManager(manager: String?, block: suspend () -> T): T {
+        if (manager == null) return block()
         val default = AssistantManagerChoice.current.value.defaultId
-        val manager = record.manager?.takeIf { it.isNotBlank() && it != default } ?: ""
-        return withContext(persona.core.contracts.api.RequestManager(manager)) { block() }
+        return withContext(persona.core.contracts.api.RequestManager(manager.takeIf { it.isNotBlank() && it != default } ?: "")) { block() }
     }
+
+    /**
+     * Runs a list's read from each manager, or a change to what it read stamped [manager] (several managers), naming it even
+     * when it is the default: the default may change between the read and the change. Unstamped (one manager): as [asManager].
+     */
+    private suspend fun <T> asStamped(manager: String?, block: suspend () -> T): T =
+        if (manager.isNullOrBlank()) asManager(manager, block)
+        else withContext(persona.core.contracts.api.RequestManager(manager)) { block() }
 
     /**
      * One item as the hub has it. An answer about one item comes from its manager alone, unstamped (only the merged
@@ -1084,12 +1500,19 @@ class RealInboxRepository(
         val agent = data.obj("agent")
         val mail = data.obj("mail")
         val moment = data.obj("moment")
+        val connector = data.obj("connector")?.let { c ->
+            c.optional("thread")?.let { thread ->
+                persona.feature.inbox.InboxConnectorRef(thread, c.optional("label"), c.flag("can_reply"), c.optional("reply_to"), c.optional("url"),
+                    c.optional("avatar_url"))
+            }
+        }
+        val connectorManager = data.optional("manager") ?: previous?.takeIf { it.hubItemId == data.string("id") }?.manager
         val event = persona.core.contracts.inboxEventFields(data)
         val fresh = InboxRecord(
             InboxItem(data.string("id"), data.string("account"), data.string("kind"), data.string("title"),
                 data.optional("sender"), data.string("preview"), data.optional("summary"), data.optional("tier"),
                 data.optional("updated_at"), data.optional("done_at"), data.optional("version"),
-                notice = moment?.optional("notice"), status = event.status, urgent = event.urgent),
+                notice = moment?.optional("notice"), status = event.status, urgent = event.urgent, where = event.where),
             sourceLabel = data.optional("account_name") ?: DataText.of(if (data.string("source") == "lark") Key.SourceLark else Key.SourceMail),
             feedId = lark?.optional("feed_id"), startPosition = lark?.number("start_position"), count = data.number("count")?.toInt() ?: 0,
             agent = agent?.let { InboxAgent(it.string("state"), it.string("draft"), it.optional("note") ?: it.string("reason"),
@@ -1106,8 +1529,9 @@ class RealInboxRepository(
                     // The hub omits direct when false: a mail the user was only copied on (or got through a list).
                     direct = it.flag("direct"))
             },
-            // Only a Feishu chat has a picture on the hub; a mail row keeps its initial, as on iOS.
-            avatar = if (data.string("source") == "lark") avatar(data.optional("avatar"), transport) else null,
+            // Feishu keeps its top-level picture; a connector's thread picture is its hub avatar path.
+            avatar = if (data.string("source") == "lark") avatar(data.optional("avatar"), transport)
+                else avatar(connector?.avatarUrl, LarkContentSource(transport, connectorManager)),
             moment = moment?.let {
                 InboxMomentRef(
                     postId = it.string("post_id"),
@@ -1123,11 +1547,7 @@ class RealInboxRepository(
                 }
             }?.toMap().orEmpty(),
             doc = persona.feature.inbox.inboxDocRef(data.obj("doc")),
-            connector = data.obj("connector")?.let { c ->
-                c.optional("thread")?.let { thread ->
-                    persona.feature.inbox.InboxConnectorRef(thread, c.optional("label"), c.flag("can_reply"), c.optional("reply_to"))
-                }
-            },
+            connector = connector,
             mutes = persona.feature.inbox.inboxMuteOptions(data),
             event = event,
             manager = data.optional("manager"),
@@ -1136,15 +1556,15 @@ class RealInboxRepository(
         return fresh.copy(item = fresh.item.copy(id = previous.item.id), manager = fresh.manager ?: previous.manager)
     }
 
-    override suspend fun momentsPost(postId: String): persona.core.contracts.LarkMomentsPost {
+    override suspend fun momentsPost(postId: String, manager: String?): persona.core.contracts.LarkMomentsPost {
         val transport = requireTransport()
-        val json = transport.momentsPost(postId)
+        val json = asManager(manager) { transport.momentsPost(postId) }
         return persona.core.contracts.JsonCodec.decodeFromJsonElement(persona.core.contracts.LarkMomentsPost.serializer(), json)
     }
 
-    override suspend fun momentsComments(postId: String): List<persona.core.contracts.LarkMomentsComment> {
+    override suspend fun momentsComments(postId: String, manager: String?): List<persona.core.contracts.LarkMomentsComment> {
         val transport = requireTransport()
-        val json = transport.momentsComments(postId)
+        val json = asManager(manager) { transport.momentsComments(postId) }
         return persona.core.contracts.JsonCodec.decodeFromJsonElement(persona.core.contracts.LarkMomentsCommentsResponse.serializer(), json).comments
     }
 
@@ -1157,8 +1577,10 @@ class RealInboxRepository(
     }
     private fun avatar(ref: String?, transport: InboxAssistantTransport) =
         larkAvatar(ref, transport.scope) { sized -> images.get("${transport.scope}:$sized") { transport.avatar(sized) } }
+    private fun avatar(ref: String?, source: LarkContentSource) =
+        larkAvatar(ref, source.scope) { sized -> images.get("${source.scope}:$sized") { source.avatar(sized) } }
     private fun message(data: JsonObject, window: Window): LarkMessage {
-        val source = LarkContentSource(window.transport)
+        val source = window.source
         val id = data.string("id")
         val external = "https://applink.feishu.cn/client/chat/open?chatId=${java.net.URLEncoder.encode(window.feedId, "UTF-8")}&messageId=${java.net.URLEncoder.encode(id, "UTF-8")}"
         val parts = if (data.flag("recalled")) listOf(LarkPart.Text(DataText.of(Key.LarkRecalled))) else data.array("parts").map { element ->
@@ -1168,14 +1590,15 @@ class RealInboxRepository(
             when (part.string("kind")) {
                 "image", "emotion" -> {
                     val ref = part.string("url")
-                    LarkPart.Image(AuthenticatedLarkImage("${window.transport.scope}:$ref") { images.get("${window.transport.scope}:$ref") { window.transport.media(ref) } },
+                    val key = "${source.scope}:$ref"
+                    LarkPart.Image(AuthenticatedLarkImage(key) { images.get(key) { source.media(ref) } },
                         width = metadata.number("width")?.toInt()?.coerceAtLeast(1) ?: 1,
                         height = metadata.number("height")?.toInt()?.coerceAtLeast(1) ?: 1)
                 }
                 "file" -> LarkPart.File(part.string("url"), metadata.optional("name") ?: text.ifBlank { DataText.of(Key.LarkFile) },
-                    metadata.optional("mimeType") ?: "application/octet-stream")
+                    metadata.optional("mimeType") ?: "application/octet-stream", source)
                 "text", "at", "code" -> LarkPart.Text(text, source)
-                "card", "interactive" -> larkInteractivePart(metadata, text, window.transport)
+                "card", "interactive" -> larkInteractivePart(metadata, text, window.transport, manager = window.manager)
                 "link" -> LarkPart.Text(listOf(text, part.string("url")).filter { it.isNotBlank() }.distinct().joinToString("\n"), source)
                 else -> LarkPart.External(text, external, if (part.string("kind") == "media") "video" else "card",
                     metadata.string("duration"))
@@ -1187,9 +1610,9 @@ class RealInboxRepository(
                 "failed" -> LarkDelivery.Failed
                 "sending", "pending" -> LarkDelivery.Sending
                 else -> LarkDelivery.Sent
-            }, avatar = avatar(data.optional("sender_avatar"), window.transport),
+            }, avatar = avatar(data.optional("sender_avatar"), source),
             replyCount = maxOf(0L, data.number("reply_count") ?: 0L, data.number("thread_reply_count") ?: 0L),
-            thread = larkThreadSource(data, window.transport, window.feedId),
+            thread = larkThreadSource(data, window.transport, window.feedId, window.manager),
             // A recalled message shows a placeholder, an encrypted one its ciphertext: neither is the sender's text.
             translatable = !data.flag("recalled") && (data["olk"] == null || data["olk"] is JsonNull))
     }

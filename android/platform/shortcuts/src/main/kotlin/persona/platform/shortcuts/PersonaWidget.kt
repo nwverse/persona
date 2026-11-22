@@ -67,6 +67,7 @@ class PersonaWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val dependencies = SurfacesDependencies.of(context)
         val feed = dependencies.fleet()
+        feed.settled()
         val sessions = dependencies.sessions()
         val look = WidgetLook.of(AppStyleStore(context).style.value)
         // Read inside the composition: while Glance keeps this session, updateAll() only recomposes it.
@@ -206,9 +207,9 @@ internal class WidgetLook private constructor(private val light: PersonaPalette,
     val itemTitle = text(type.callout.copy(fontWeight = ComposeWeight.Medium), ink)
     val caption = text(type.caption, ink2)
     val micro = text(type.micro, ink2)
-    val markSize = Tokens.Space.l
-    val dotSize = Tokens.Space.s + Tokens.Space.xxs
-    val smallDotSize = Tokens.Space.s
+    val markSize = Tokens.Space.Standard.l
+    val dotSize = Tokens.Space.Standard.s + Tokens.Space.Standard.xxs
+    val smallDotSize = Tokens.Space.Standard.s
 
     fun phase(phase: String): GlanceColor = when (phase) {
         FleetSummary.NEEDS_YOU -> needsYou

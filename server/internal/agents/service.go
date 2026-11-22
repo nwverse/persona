@@ -48,19 +48,31 @@ type Service struct {
 	srcMu     sync.RWMutex
 	sources   map[string]Source
 	order     []string
+	polls     map[string]*pollMarks // source → what the poll saw of it; a new one each time the source is added
+	listings  map[string]listing    // source → how asking it for its sessions went; guarded by srcMu
 	cache     *cache
+	flights   listFlights // session lists being asked for, shared by the callers that miss the cache together
 	listIndex sessionlist.Index
 	out       *outbox
 	prefs     *prefsStore
 	onChange  func(ids []string) // sessions whose content changed: the apps re-pull them
 	logf      func(string, ...any)
 
-	pollMu sync.Mutex
-	marks  map[string][2]int64 // id → rankTimeMs, unreadCount at the last poll
+	pollMu sync.Mutex // one poll at a time; guards every pollMarks' seen
+}
+
+// pollMarks is what the poll saw of one source's sessions at its last list: id → rankTimeMs, unreadCount. seen is
+// nil until the source first answers: that list is its baseline, since the apps were told when it was added.
+type pollMarks struct{ seen map[string][2]int64 }
+
+// listing is how asking one source for its sessions has gone since it was added.
+type listing struct {
+	answered bool   // it has listed: a failure now is an outage, not a source that is still waiting to be set up
+	failure  string // why the last ask failed, for its status; "" once it answers
 }
 
 func NewService(kv KV, onChange func(ids []string), logf func(string, ...any), sources ...Source) *Service {
-	s := &Service{sources: map[string]Source{}, cache: newCache(20 * time.Second), out: &outbox{kv: kv}, prefs: &prefsStore{kv: kv},
+	s := &Service{sources: map[string]Source{}, polls: map[string]*pollMarks{}, listings: map[string]listing{}, cache: newCache(20 * time.Second), out: &outbox{kv: kv}, prefs: &prefsStore{kv: kv},
 		onChange: onChange, logf: logf}
 	s.cache.onSessions = s.indexSessions
 	if s.onChange == nil {
@@ -72,6 +84,7 @@ func NewService(kv KV, onChange func(ids []string), logf func(string, ...any), s
 	for _, src := range sources {
 		s.sources[src.Name()] = src
 		s.order = append(s.order, src.Name())
+		s.polls[src.Name()] = &pollMarks{}
 	}
 	return s
 }
@@ -86,6 +99,7 @@ func (s *Service) Add(src Source) bool {
 	}
 	s.sources[src.Name()] = src
 	s.order = append(s.order, src.Name())
+	s.polls[src.Name()] = &pollMarks{}
 	return true
 }
 
@@ -104,17 +118,54 @@ func (s *Service) Remove(name string) {
 		return
 	}
 	delete(s.sources, name)
+	delete(s.polls, name)
+	delete(s.listings, name)
 	s.order = slices.DeleteFunc(s.order, func(n string) bool { return n == name })
 	s.srcMu.Unlock()
 	s.cache.forget(name)
 	s.onChange([]string{})
 }
 
-// many says whether there is more than one source: alone, a source's failure is the answer, as it always was.
-func (s *Service) many() bool {
+// skipsFailed says a failing source is left out of an answer about all of them: there are others to answer, or it has
+// never listed (an extension still waiting for its settings), so it has no rows to lose. A lone source that has listed
+// is having an outage: its error is the answer, and the apps keep the rows they have.
+func (s *Service) skipsFailed(name string) bool {
 	s.srcMu.RLock()
 	defer s.srcMu.RUnlock()
-	return len(s.order) > 1
+	return len(s.order) > 1 || !s.listings[name].answered
+}
+
+// noteListing records how asking src for its sessions went, after the answer is cached. A source that starts or stops
+// failing tells the apps, whose lists and hints depend on it. Only that change does: a failure whose text varies must
+// not make every re-pull announce another.
+func (s *Service) noteListing(src Source, err error) {
+	if errors.Is(err, context.Canceled) {
+		return // the one asking went away: nothing about the source
+	}
+	name := src.Name()
+	s.srcMu.Lock()
+	if s.sources[name] != src {
+		s.srcMu.Unlock()
+		return // removed, or added again, since it was asked
+	}
+	l := s.listings[name]
+	failing := l.failure != ""
+	if err != nil {
+		l.failure = err.Error()
+	} else {
+		l.answered, l.failure = true, ""
+	}
+	s.listings[name] = l
+	s.srcMu.Unlock()
+	if failing != (err != nil) {
+		s.onChange([]string{})
+	}
+}
+
+func (s *Service) listFailure(name string) string {
+	s.srcMu.RLock()
+	defer s.srcMu.RUnlock()
+	return s.listings[name].failure
 }
 
 // has says whether source is registered now.
@@ -154,6 +205,9 @@ func (s *Service) Statuses(ctx context.Context) []Status {
 	out := []Status{}
 	for _, src := range s.all() {
 		st, _ := src.Status(ctx)
+		if st.Error == "" {
+			st.Error = s.listFailure(src.Name())
+		}
 		if st.Providers == nil {
 			st.Providers = []AgentProvider{}
 		}
@@ -166,24 +220,30 @@ func (s *Service) Statuses(ctx context.Context) []Status {
 }
 
 func (s *Service) sessionsOf(ctx context.Context, src Source, fresh bool) ([]Session, error) {
-	name := src.Name()
 	if !fresh {
-		if list, ok := s.cache.getSessions(name); ok {
-			return list, nil
-		}
+		return s.listShared(ctx, src) // inflight.go
 	}
-	gen := s.cache.generation(name)
+	return s.listNow(ctx, src, s.cache.generation(src.Name()))
+}
+
+// listNow asks src for its sessions and caches the answer unless the cache was invalidated since gen.
+func (s *Service) listNow(ctx context.Context, src Source, gen int) ([]Session, error) {
 	list, err := src.Sessions(ctx)
 	if err != nil {
+		if ctx.Err() == nil && timedOut(err) { // the source's own timeout, not the asker's going away
+			s.cache.putTimeout(src.Name(), gen, err)
+		}
+		s.noteListing(src, err)
 		return nil, err
 	}
-	s.cache.putSessions(name, gen, list)
+	s.cache.putSessions(src.Name(), gen, list)
+	s.noteListing(src, nil)
 	return list, nil
 }
 
 // Sessions lists sessions of every source (or one), optionally of one provider, ordered as the sources rank them,
-// less the ones the user removed (hidden.go). Of all of them, one that fails is left out (its status says why) so
-// it does not take the others' away; asked for by name, its error is the answer.
+// less the ones the user removed (hidden.go). Of all of them, one that fails is left out (skipsFailed; its status says
+// why) so it does not take the others' away; asked for by name, its error is the answer.
 func (s *Service) Sessions(ctx context.Context, source, provider string) ([]Session, error) {
 	list, err := s.listed(ctx, source, provider)
 	if err != nil {
@@ -202,11 +262,14 @@ func (s *Service) listed(ctx context.Context, source, provider string) ([]Sessio
 			continue
 		}
 		list, err := s.sessionsOf(ctx, src, false)
-		if err != nil && source == "" && s.many() {
-			s.logf("agents: %s: sessions: %v", src.Name(), err)
-			continue
+		if errors.Is(err, context.Canceled) {
+			return nil, err
 		}
 		if err != nil {
+			s.logf("agents: %s: sessions: %v", src.Name(), err)
+			if source == "" && s.skipsFailed(src.Name()) {
+				continue
+			}
 			return nil, err
 		}
 		for _, x := range list {
@@ -225,11 +288,14 @@ func (s *Service) Search(ctx context.Context, source, q string) ([]SearchHit, er
 			continue
 		}
 		hits, err := src.Search(ctx, q)
-		if err != nil && source == "" && s.many() {
-			s.logf("agents: %s: search: %v", src.Name(), err)
-			continue
+		if errors.Is(err, context.Canceled) {
+			return nil, err
 		}
 		if err != nil {
+			s.logf("agents: %s: search: %v", src.Name(), err)
+			if source == "" && s.skipsFailed(src.Name()) {
+				continue
+			}
 			return nil, err
 		}
 		out = append(out, hits...)
@@ -434,7 +500,11 @@ func (s *Service) Outbox(ctx context.Context, id string, limit int) []OutboxEntr
 
 // Updated is a source reporting that these sessions changed (agent-bridge.updated, a send, the poll): drop
 // their cache and tell the apps. No keys means "something changed": only the list is dropped.
-func (s *Service) Updated(source string, keys []string) {
+func (s *Service) Updated(source string, keys []string) { s.report(source, keys, 0, nil) }
+
+// report drops what changed of source from the cache and tells the apps. The poll passes the list it found the
+// change in (asked at gen), which stays cached (cache.putChanged).
+func (s *Service) report(source string, keys []string, gen int, list []Session) {
 	if !s.has(source) {
 		return // gone (its plugin stopped) since: a send's follow-up has nothing left to tell
 	}
@@ -442,12 +512,17 @@ func (s *Service) Updated(source string, keys []string) {
 	for _, k := range keys {
 		ids = append(ids, source+":"+k)
 	}
-	s.cache.invalidate(source, ids)
+	if list != nil {
+		s.cache.putChanged(source, gen, list, ids)
+	} else {
+		s.cache.invalidate(source, ids)
+	}
 	s.onChange(ids)
 }
 
 // Poll is the fallback when realtime events are missing: every interval it re-lists each source and reports the
-// sessions whose rankTimeMs or unreadCount moved. The first pass only records a baseline.
+// sessions whose rankTimeMs or unreadCount moved. A source's first list (at start, or once it is added) only records
+// its baseline.
 func (s *Service) Poll(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -464,28 +539,58 @@ func (s *Service) Poll(ctx context.Context, interval time.Duration) {
 func (s *Service) PollOnce(ctx context.Context) {
 	s.pollMu.Lock()
 	defer s.pollMu.Unlock()
-	first := s.marks == nil
-	if first {
-		s.marks = map[string][2]int64{}
-	}
-	for _, src := range s.all() {
+	srcs, marks := s.pollTargets()
+	for i, src := range srcs {
 		n := src.Name()
 		gen := s.cache.generation(n)
 		list, err := src.Sessions(ctx)
 		if err != nil {
+			if ctx.Err() == nil && timedOut(err) {
+				s.cache.putTimeout(n, gen, err)
+			}
+			s.noteListing(src, err)
 			continue // the next tick tries again; the routes report errors themselves
 		}
-		var changed []string
-		for _, x := range list {
-			m := [2]int64{x.RankTimeMs, int64(x.UnreadCount)}
-			if old, ok := s.marks[x.ID]; !first && (!ok || old != m) {
-				changed = append(changed, x.SessionKey)
-			}
-			s.marks[x.ID] = m
-		}
-		s.cache.putSessions(n, gen, list)
+		changed := s.mark(n, marks[i], list)
 		if len(changed) > 0 {
-			s.Updated(n, changed)
+			s.report(n, changed, gen, list)
+		} else {
+			s.cache.putSessions(n, gen, list)
 		}
+		s.noteListing(src, nil)
 	}
+}
+
+// pollTargets is the sources in order with what the poll saw of each.
+func (s *Service) pollTargets() ([]Source, []*pollMarks) {
+	s.srcMu.RLock()
+	defer s.srcMu.RUnlock()
+	srcs, marks := make([]Source, len(s.order)), make([]*pollMarks, len(s.order))
+	for i, n := range s.order {
+		srcs[i], marks[i] = s.sources[n], s.polls[n]
+	}
+	return srcs, marks
+}
+
+// mark records list as what the poll saw of source and answers the keys of its sessions that are new or moved since
+// the last list: none on its first (the baseline), nor when the source was removed while it answered (added again,
+// it starts over). Callers hold pollMu.
+func (s *Service) mark(source string, pm *pollMarks, list []Session) []string {
+	s.srcMu.RLock()
+	current := s.polls[source] == pm
+	s.srcMu.RUnlock()
+	if !current {
+		return nil
+	}
+	seen := make(map[string][2]int64, len(list))
+	var changed []string
+	for _, x := range list {
+		m := [2]int64{x.RankTimeMs, int64(x.UnreadCount)}
+		if old, ok := pm.seen[x.ID]; pm.seen != nil && (!ok || old != m) {
+			changed = append(changed, x.SessionKey)
+		}
+		seen[x.ID] = m
+	}
+	pm.seen = seen
+	return changed
 }

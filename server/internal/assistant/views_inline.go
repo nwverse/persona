@@ -21,9 +21,6 @@ type inlineViewStore interface {
 }
 
 func (s *Service) registerInlineViews(parent context.Context, p SessionItems) {
-	if !s.hello(parent).PersonaView {
-		return
-	}
 	st, ok := s.store().(inlineViewStore)
 	if !ok {
 		return
@@ -91,9 +88,6 @@ func (s *Service) registerInlineViews(parent context.Context, p SessionItems) {
 
 // registerInlineTurn also registers cards when no app was watching the conversation during its reply.
 func (s *Service) registerInlineTurn(parent context.Context, r SessionRef) {
-	if !s.hello(parent).PersonaView {
-		return
-	}
 	if _, ok := s.store().(inlineViewStore); !ok {
 		return
 	}
@@ -109,6 +103,13 @@ func (s *Service) registerInlineTurn(parent context.Context, r SessionRef) {
 		return
 	}
 	s.registerInlineViews(ctx, SessionItems{MachineID: r.MachineID, SessionID: r.SessionID, Items: result.Items})
+}
+
+// registerInlineTurnSettled re-runs registerInlineTurn after the turn settles so runtimes that flush their native
+// transcript after TurnEnded (replacing temporary live/unexported item ids with final persisted ids) still register
+// their final persona-view blocks idempotently.
+func (s *Service) registerInlineTurnSettled(ctx context.Context, machine, sid string) {
+	s.registerInlineTurn(ctx, SessionRef{MachineID: machine, SessionID: sid})
 }
 
 func (s *Service) conversationViewBlockKeys(ctx context.Context, conversation string) ([]string, error) {

@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The first heading line of an agent's plan: the first non-empty line without Markdown markers
 /// ("### Plan" -> "Plan"), what every card and the Mac menu bar title shows. An empty plan is Plan.
@@ -22,14 +23,55 @@ nonisolated enum SecretRun {
 nonisolated extension Interaction {
     /// The password card. Its raw tool name is never shown: its title names it, its summary says what it runs.
     var isSecretRun: Bool { kind == .permission && toolName == SecretRun.tool }
+    /// The hand-off card (`SecretHandoff`): approved on the card only, never from a quick path.
+    var isSecretHandoff: Bool { kind == .permission && toolName == SecretHandoff.tool }
+}
+
+/// The hand-off card (`secret_handoff`, docs/extensions/secret-providers.md "Who may approve a hand-off"): secret values
+/// a provider holds, handed to one Agent run once the user approves on the card. Its approval says so on its own request
+/// (`feature`), the hub's condition for letting it through; every quick path is off (`Interaction.requiresInput`).
+nonisolated enum SecretHandoff {
+    static let tool = "secret_handoff"
+    /// What the card's own approval declares (`X-Persona-Features`), and nothing else does.
+    static let feature = "secret_handoff"
+}
+
+/// What a hand-off card hands over and where (its `tool_input`): never a reference or a value.
+nonisolated struct SecretHandoffRequest: Sendable {
+    nonisolated struct Variable: Sendable, Identifiable {
+        var name: String
+        /// The item as its provider describes it, after the provider's name ("1Password › GitHub token").
+        var item: String
+        var id: String { name }
+    }
+    var variables: [Variable]
+    var agent: String
+    var machine: String
+    var cwd: String
+    var prompt: String
+
+    init(_ input: JSONValue?) {
+        func text(_ v: JSONValue?) -> String { v?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
+        variables = (input?["variables"]?.array ?? []).compactMap { v in
+            let name = text(v["name"])
+            guard !name.isEmpty else { return nil }
+            let provider = text(v["provider_name"]).isEmpty ? text(v["provider"]) : text(v["provider_name"])
+            let title = text(v["title"])
+            return Variable(name: name, item: title.isEmpty ? provider : provider + " › " + title)
+        }
+        agent = text(input?["agent"])
+        machine = text(input?["machine_name"])
+        cwd = text(input?["cwd"])
+        prompt = text(input?["prompt"])
+    }
 }
 
 nonisolated extension Interaction {
     /// One line on what a needs-you card asks, chosen by its kind — the same wording on the chat card, the inbox's
     /// Needs You row and the Mac menu bar: a plan's first heading, a terminal dialog's question, a question card's
-    /// first question, and a permission card's tool with what it runs.
-    /// - Parameter includeToolName: a permission card shows `toolName: summary`; pass false to show the summary
-    ///   only and fall back to the tool name, as the inbox row does (its next line already names the card kind).
+    /// first question, a permission card's tool with what it runs, and an MCP form's or link's message.
+    /// - Parameter includeToolName: a permission card shows `toolName: permissionTarget`; pass false to show the
+    ///   target only and fall back to the tool name, as the inbox row does (its next line already names the card kind).
     ///   The password card (`isSecretRun`) shows its summary alone either way.
     /// - Returns: nil when the card carries no such text; the caller falls back to its generic title.
     func askLine(includeToolName: Bool) -> String? {
@@ -40,15 +82,21 @@ nonisolated extension Interaction {
             return PlanText.title(plan ?? "")
         case .permission:
             if includeToolName, !isSecretRun {
-                let line = [toolName, summary].compactMap { $0 }.joined(separator: permissionSeparator)
+                let line = [toolName, permissionTarget].compactMap { $0 }.joined(separator: permissionSeparator)
                 return line.isEmpty ? nil : line
             }
             // The inbox row: trim whitespace-only summaries so it never draws a blank asks line.
-            if let s = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty { return s }
+            if let s = permissionTarget?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty { return s }
             if let t = toolName?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty, !isSecretRun { return t }
             return nil
         case .screen:
+            // A command's permission prompt: the agent's words for it, else the command (#5266), not "Do you want to proceed?".
+            if let ask = screenDialog?.commandAsk { return ask.description ?? ask.command }
             return screenDialog?.question
+        case .elicitation:
+            // An MCP form's or link's message ("Please choose"); its title says which it is.
+            guard let m = elicitation?.message?.trimmingCharacters(in: .whitespacesAndNewlines), !m.isEmpty else { return nil }
+            return m
         }
     }
 
@@ -59,13 +107,107 @@ nonisolated extension Interaction {
 }
 
 nonisolated extension Interaction {
+    /// What a permission call acts on, picked the way the node's `toolSummary` and Android's `permissionSummary()` pick
+    /// it: the hub's summary; else the tool's own field (a Bash command, a file's path, a URL, a query); else the first
+    /// of a few common fields. What the list's row, the Inbox, the Mac menu bar (`askLine`) and a folded card show.
+    /// Nil when the card carries none of these.
+    var permissionTarget: String? {
+        if let s = summary, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return s }
+        guard let input = toolInput?.object, !input.isEmpty else { return nil }
+        func pick(_ keys: String...) -> String? {
+            keys.lazy.compactMap { input[$0]?.string }.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        }
+        let picked: String? = switch toolName ?? "" {
+        case "Bash": pick("command")
+        case "Edit", "Write", "Read", "MultiEdit", "NotebookEdit": pick("file_path", "notebook_path")
+        case "WebFetch": pick("url")
+        case "WebSearch": pick("query")
+        default: nil
+        }
+        return picked ?? pick("description", "command", "path", "url", "query", "prompt")
+    }
+
+    /// What a permission card shows for its call, in code type (docs/design/PRINCIPLES.md, "Progressive disclosure": a
+    /// command reads as a command, never as raw JSON): `permissionTarget`, else the input as `key: value` lines.
+    /// Nil when the card carries none of these.
+    var permissionSubject: String? {
+        if let target = permissionTarget { return target }
+        guard let input = toolInput?.object, !input.isEmpty else { return nil }
+        return input.keys.sorted().map { "\($0): \(Self.inlineText(input[$0] ?? .null))" }.joined(separator: "\n")
+    }
+
+    /// One input value on one line: strings, numbers and booleans as they read, anything nested as compact JSON.
+    private static func inlineText(_ value: JSONValue) -> String {
+        if let s = value.string { return s }
+        if case .null = value { return "null" }
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return (try? enc.encode(value)).map { String(decoding: $0, as: UTF8.self) } ?? ""
+    }
+}
+
+/// Why the app can't answer a card on a session (`Interaction.answerBlock`, #6868).
+nonisolated enum AnswerBlock: Equatable, Sendable {
+    /// Its session can be attached live (a Codex thread on a shared app-server not joined yet): joined, the app answers it.
+    case attach
+    /// Its session's source doesn't let the app answer at all: only the computer can.
+    case computer
+}
+
+nonisolated extension Interaction {
     /// A card on no session (#4059): `personad ask` run outside herdr, or before the pane's agent hooked in, has no
-    /// session the node could tie it to (docs/integrations/script-cli.md「归属」).
+    /// session the node could tie it to (docs/integrations/script-cli.md「Attribution」).
     var isSessionless: Bool { sessionID.isEmpty }
 
     /// Whether the app may answer it: a sessionless card always (no session source says no); else as its session's source
-    /// allows (`canApprove`; a read-only Codex history does not), and not while that session is unknown.
-    func canAnswer(session: Session?) -> Bool { isSessionless || session?.canApprove == true }
+    /// allows (`canApprove`; a read-only Codex history does not). A folded child's card is not blocked while its row
+    /// is still loading. Any other card whose session is unknown stays blocked.
+    func canAnswer(session: Session?) -> Bool {
+        if let session { return isSessionless || session.canApprove }
+        if let under = foldedUnder, !under.isEmpty, under != sessionID { return true }
+        return isSessionless
+    }
+
+    /// Why the app can't answer it, for the line under its greyed card (#6868; Android `approvalBlockedReason`, the
+    /// watch's `blockedReason`): nil where it can (`canAnswer`), and on a manager work card whose local defer and dismiss
+    /// still work (#6839). An attachable session keeps its live-link line.
+    func answerBlock(session: Session?) -> AnswerBlock? {
+        guard !canAnswer(session: session) else { return nil }
+        if session?.canAttach == true { return .attach }
+        return isManagerWork ? nil : .computer
+    }
+
+    /// The words a list row shows for this card: the question, else the summary, else the tool.
+    var askPreview: String? {
+        if let question = questions?.first?.question.trimmingCharacters(in: .whitespacesAndNewlines), !question.isEmpty {
+            return Fmt.plain(question)
+        }
+        if let summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty { return Fmt.plain(summary) }
+        if let tool = toolName?.trimmingCharacters(in: .whitespacesAndNewlines), !tool.isEmpty { return tool }
+        return nil
+    }
+
+    /// A manager's work card on an Agent (`persona_triage`). Its put-off choices and its dismiss send nothing to the Agent,
+    /// so they stay open once the Agent has stopped and the rest of the card can't be answered (#6839, web #6753).
+    var isManagerWork: Bool { kind == .question && toolName == "persona_triage" }
+
+    /// A choice that only clears the card on the hub: a manager work card's single-choice option marked `defer`.
+    func isLocalChoice(_ option: QuestionOption, in question: Question) -> Bool {
+        isManagerWork && !question.multiSelect && option.action == "defer"
+    }
+
+    /// An answer that sends nothing to the Agent (web `workCardLocalResolution`): on a manager work card, a bare dismiss, or
+    /// only put-off choices. Continue, retry and typed answers still need `canAnswer`.
+    func isLocalResolution(_ r: Resolution) -> Bool {
+        guard isManagerWork else { return false }
+        if r == .dismissed { return true }
+        guard r == Resolution(answers: r.answers), let answers = r.answers?.filter({ !$0.value.trimmingCharacters(in: .whitespaces).isEmpty }),
+              !answers.isEmpty else { return false }
+        return answers.allSatisfy { question, answer in
+            guard let q = questions?.first(where: { $0.question == question }) else { return false }
+            return q.options.contains { $0.label == answer.trimmingCharacters(in: .whitespaces) && isLocalChoice($0, in: q) }
+        }
+    }
 
     /// Where a sessionless card comes from, for its list row: the title the node gave it, else its directory's name.
     var sessionlessPlace: String? {

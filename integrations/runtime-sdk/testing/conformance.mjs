@@ -1,4 +1,4 @@
-// The checks every runtime's end-to-end run makes once a session is open on the "phone" (docs/integrations/runtimes.md "Acceptance checklist"):
+// The checks every runtime's end-to-end run makes once a session is open on the "phone" (docs/integrations/runtimes.md "Acceptance"):
 // a text turn (the prompt, thinking, the reply, the turn's end, paging), an approval allowed and one refused with
 // words, a question answered, live text and an interrupt, continuous pushes. A runtime's run sets up its host, the
 // node (node-harness.mjs) and the scripted model (model.mjs), opens a session, calls this, then checks what is

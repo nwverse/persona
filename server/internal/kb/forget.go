@@ -2,6 +2,7 @@ package kb
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -30,6 +31,7 @@ func (e *Engine) ForgetSource(source string, archiveSources ...string) (Forgotte
 			return Forgotten{}, fmt.Errorf("invalid archive source %q", name)
 		}
 	}
+	defer e.Store.SearchIndexPurge() // what is forgotten leaves the search index at its next update
 	e.Store.applyMu.Lock()
 	defer e.Store.applyMu.Unlock()
 	e.Store.ingestMu.Lock()
@@ -65,12 +67,18 @@ func (e *Engine) ForgetSource(source string, archiveSources ...string) (Forgotte
 		if owned(p.Connector, p.Source, p.ID) {
 			out.People = append(out.People, p.ID)
 		} else {
-			kept := slices.DeleteFunc(slices.Clone(p.Chats), func(id string) bool { return slices.Contains(out.Chats, id) })
-			if len(kept) != len(p.Chats) {
-				p.Chats = kept
-				if err := e.Store.putEntity(KindPerson, p.ID, p, &p.Tagging, true); err != nil {
-					return out, err
+			_, _, err := e.Store.updatePerson(p.ID, true, nil, func(p *Person) bool {
+				kept := slices.DeleteFunc(slices.Clone(p.Chats), func(id string) bool { return slices.Contains(out.Chats, id) })
+				removed := len(p.Excluded["chats"])
+				p.include("chats", out.Chats...) // the chats the user had removed go with them
+				if len(kept) == len(p.Chats) && len(p.Excluded["chats"]) == removed {
+					return false
 				}
+				p.Chats = kept
+				return true
+			})
+			if err != nil {
+				return out, err
 			}
 		}
 	}
@@ -79,7 +87,9 @@ func (e *Engine) ForgetSource(source string, archiveSources ...string) (Forgotte
 			continue
 		}
 		kept := slices.DeleteFunc(slices.Clone(c.People), func(id string) bool { return slices.Contains(out.People, id) })
-		if len(kept) != len(c.People) {
+		removed := len(c.Excluded["people"])
+		c.include("people", out.People...)
+		if len(kept) != len(c.People) || len(c.Excluded["people"]) != removed {
 			c.People = kept
 			if err := e.Store.putEntity(KindChat, c.ID, c, &c.Tagging, true); err != nil {
 				return out, err
@@ -106,11 +116,15 @@ func (e *Engine) ForgetSource(source string, archiveSources ...string) (Forgotte
 		}
 	}
 	goneMoment := func(m ProjectMoment) bool { return slices.Contains(out.Posts, m.ID) }
+	var cut []string // projects whose timeline lost lines
 	for _, p := range e.Store.Projects() {
 		before := entityMap(p)
 		p.Chats = slices.DeleteFunc(slices.Clone(p.Chats), func(id string) bool { return slices.Contains(out.Chats, id) })
 		p.People = slices.DeleteFunc(slices.Clone(p.People), func(id string) bool { return slices.Contains(out.People, id) })
 		p.Items = slices.DeleteFunc(slices.Clone(p.Items), func(id string) bool { return itemKeys[id] })
+		p.include("chats", out.Chats...)
+		p.include("people", out.People...)
+		p.include("items", slices.Collect(maps.Keys(itemKeys))...)
 		p.Moments = slices.DeleteFunc(slices.Clone(p.Moments), goneMoment)
 		if m := p.Merge; m != nil {
 			m.Chats = slices.DeleteFunc(m.Chats, func(id string) bool { return slices.Contains(out.Chats, id) })
@@ -143,10 +157,25 @@ func (e *Engine) ForgetSource(source string, archiveSources ...string) (Forgotte
 		if err := e.Store.putEntity(KindProject, p.Slug, p, &p.Tagging, true); err != nil {
 			return out, err
 		}
+		lines := len(e.Store.timeline(p.Slug))
 		if err := e.Store.dropLogLines(p.Slug, func(source string) bool { return names[source] }); err != nil {
 			return out, err
 		}
+		if len(e.Store.timeline(p.Slug)) != lines {
+			cut = append(cut, p.Slug)
+		}
 		out.Projects = append(out.Projects, p.Slug)
+	}
+	if err := e.forgetTrash(out.Chats, out.People, out.Posts, itemKeys, names); err != nil {
+		return out, err
+	}
+	// Knowledge points from the forgotten chats, or from timeline lines that were theirs, go too (topics.go).
+	topics, err := e.forgetTopicSources(out.Chats, cut)
+	if len(topics) > 0 {
+		out.Items[KindTopic] = topics
+	}
+	if err != nil {
+		return out, err
 	}
 	e.Store.metaMu.Lock()
 	defer e.Store.metaMu.Unlock()
@@ -246,5 +275,5 @@ func (s *Store) dropLogLines(slug string, gone func(source string) bool) (err er
 		}
 		kept = append(kept, l)
 	}
-	return writeFile(p, []byte(strings.Join(kept, "")))
+	return archiveWrite(p, []byte(strings.Join(kept, "")))
 }

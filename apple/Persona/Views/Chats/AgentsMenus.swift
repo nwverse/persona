@@ -15,11 +15,16 @@ nonisolated struct MachineChoice: Equatable, Identifiable {
     /// With several groups, with the group's name (`Machine.title`).
     var name: String
     var symbol: String
+    /// Whose it is, for the menus that list the current assistant's computers (`AssistantScope`).
+    var group: String
+    var manager: String?
 
     @MainActor init(_ m: Machine) {
         id = m.ref.path
         name = m.title
         symbol = m.symbol
+        group = m.group
+        manager = m.manager
     }
 }
 
@@ -29,44 +34,63 @@ struct AgentsListMenu: View {
     @Environment(AppModel.self) private var model
     var actions: Actions
 
-    /// Kept current by the list (`update`), read when an item is tapped.
-    @MainActor final class Actions {
-        private(set) var sections: [String] = []
-        private var foldAll: ([String]) -> Void = { _ in }
-        private var unfoldAll: () -> Void = {}
+    /// Kept current by the list (`update`), read when an item is tapped. Only `showingHidden` is observed: the menu's
+    /// reveal item names what a tap does next, and nothing else here redraws it (the menu stays out of each push's redraw).
+    @Observable @MainActor final class Actions {
+        @ObservationIgnored private(set) var sections: [String] = []
+        @ObservationIgnored private var foldAll: ([String]) -> Void = { _ in }
+        @ObservationIgnored private var unfoldAll: () -> Void = {}
         /// Not `openMonitor` / `openMachines`: a stored property's name is in the Release binary, and those are DEBUG
         /// launch arguments the release check looks for (TestFlight 50 stopped on one).
-        private var onMachines: () -> Void = {}
+        @ObservationIgnored private var onMachines: () -> Void = {}
+        @ObservationIgnored private var onTerminals: () -> Void = {}
+        private(set) var showingHidden = false
+        @ObservationIgnored private var toggleHidden: () -> Void = {}
 
         /// `sections`: the fold ids of what the list shows now.
         func update(sections: [String], foldAll: @escaping ([String]) -> Void, unfoldAll: @escaping () -> Void,
-                    onMachines: @escaping () -> Void) {
+                    onMachines: @escaping () -> Void, onTerminals: @escaping () -> Void = {},
+                    showingHidden: Bool = false, toggleHidden: @escaping () -> Void = {}) {
             self.sections = sections
             self.foldAll = foldAll
             self.unfoldAll = unfoldAll
             self.onMachines = onMachines
+            self.onTerminals = onTerminals
+            if self.showingHidden != showingHidden { self.showingHidden = showingHidden }
+            self.toggleHidden = toggleHidden
         }
 
         func collapse() { foldAll(sections) }
         func expand() { unfoldAll() }
         func machinesPage() { onMachines() }
+        func terminalsPage() { onTerminals() }
+        func toggleHiddenSessions() { toggleHidden() }
     }
 
     @StoredValue("dev.machineFilter") private var machineFilter = ""
-    @StoredValue(HubFilter.key) private var hubFilter = ""
+    @StoredValue(HubFilter.key) private var storedHubFilter = ""
+    /// The group the list shows when narrowed: the current hub's (`HubFilter.shown`, #11657).
+    private var hubFilter: String { HubFilter.shown(storedHubFilter, current: model.hub?.group) }
     @StoredValue("dev.grouping") private var grouping: DevGrouping = .standard
     /// The grouping the list shows: a stored By To-do is By Project on a hub without todos (`DevGrouping.resolved`).
-    private var shownGrouping: DevGrouping { DevGrouping.resolved(grouping, supportsTodos: TodoStore.shared.isSupported) }
+    private var shownGrouping: DevGrouping { DevGrouping.resolvedNow(grouping) }
     private var groupingChoice: Binding<DevGrouping> { Binding(get: { shownGrouping }, set: { grouping = $0 }) }
     @StoredValue("dev.sort") private var sort: AgentSort = .state
+    #if os(iOS)
+    /// The rows' style or Compact List (#2530), as Settings › Appearance › Layout sets it.
+    private let display = AgentListDisplayChoice()
+    #else
     @StoredValue("dev.compact") private var compact = false
+    #endif
 
-    /// The shell (docs/apple/ios.md「新外壳」) shows these inside its Work switch's menu: the items, without a button of their own.
+    /// The shell (docs/apple/ios.md「New shell」) shows these inside its Work switch's menu: the items, without a button of their own.
     var inline = false
 
     var body: some View {
-        // Only the machines' names and icons: not their live state, which changes with every push.
-        let machines = model.machineChoices
+        // Only the machines' names and icons: not their live state, which changes with every push. The current
+        // assistant's, as the list is its agents.
+        let scope = model.assistantScope
+        let machines = model.machineChoices.filter { scope.has($0.manager, group: $0.group) }
         let chosen = machines.first { $0.id == machineFilter }
         let hub = model.isMultiHub ? HubFilter.group(hubFilter).map { model.groupName($0) } : nil
         if inline {
@@ -83,18 +107,27 @@ struct AgentsListMenu: View {
             let _ = PerfTrace.body("ListMenu.content")
             #endif
             Picker("Group By [Agents Menus 399ee6]", selection: groupingChoice) {
-                ForEach(DevGrouping.offered(supportsTodos: TodoStore.shared.isSupported)) { g in Label(g.title, systemImage: g.symbol).tag(g) }
+                ForEach(DevGrouping.offeredNow) { g in Label(g.title, systemImage: g.symbol).tag(g) }
             }
-            if shownGrouping != .state, shownGrouping != .recent {
-                // By Status is sectioned by state, and the rows in a section are by time already; Recently Used is by time only.
+            if shownGrouping != .state, shownGrouping != .recent, shownGrouping != .app, shownGrouping != .direction {
+                // By Status is sectioned by state, and the rows in a section are by time already; Recently Used is by time
+                // only, as are By App's sections; By Pinned keeps the hub's order.
                 Picker("Sort", selection: $sort) {
                     ForEach(AgentSort.allCases) { o in Label(o.title, systemImage: o.symbol).tag(o) }
                 }
             }
+            #if os(iOS)
+            // Every grouping draws its agents this way, By Repository too (#3753).
+            Picker("Display", selection: display.binding) {
+                ForEach(AgentListDisplay.allCases) { d in Label(d.title, systemImage: d.symbol).tag(d) }
+            }
+            #else
+            // The Mac and Apple Vision Pro keep their rows (#2530): cards or Compact List.
             Picker("Display", selection: $compact) {
                 Label("Cards", systemImage: Theme.Icon.cardView).tag(false)
                 Label("Compact List [Agents Menus 06829c]", systemImage: Theme.Icon.listView).tag(true)
             }
+            #endif
             if shownGrouping != .recent {
                 Section {
                     Button {
@@ -106,14 +139,23 @@ struct AgentsListMenu: View {
                 }
             }
             if model.isMultiHub {
-                // Several groups of hubs (docs/protocol/multi-hub.md「按组筛选」): one group's agents only.
-                Picker("hub", selection: Binding(get: { hubFilter }, set: { hubFilter = $0; machineFilter = "" })) {
+                // Several groups of hubs (docs/protocol/multi-hub.md「What the user sees」): one group's agents only. That
+                // group is the current hub (#11657): picking it here makes it current, so Persona's sidebar, the Inbox and
+                // the hub's settings show it too; All Hubs leaves the current hub as it is.
+                Picker("hub", selection: Binding(get: { hubFilter }, set: { pick in
+                    storedHubFilter = pick
+                    machineFilter = ""
+                    if let g = HubFilter.group(pick) { model.selectHub(g) }
+                })) {
                     Label("All Hubs", systemImage: Theme.Icon.hubGroup).tag("")
                     ForEach(model.groupIDs, id: \.self) { g in
                         Label(model.groupName(g), systemImage: Theme.Icon.hubGroup).tag(HubFilter.value(g))
                     }
                 }
             }
+            Button(actions.showingHidden ? String(localized: "Hide directory matches") : String(localized: "Show hidden sessions")) {
+                actions.toggleHiddenSessions()
+            }.lineLimit(1)
             Picker("Machines", selection: $machineFilter) {
                 Label("All Machines", systemImage: Theme.Icon.allMachines).tag("")
                 ForEach(machines.filter { m in HubFilter.matches(hubFilter, MachineRef(path: m.id).group) }) { m in
@@ -123,6 +165,10 @@ struct AgentsListMenu: View {
             Section {
                 Button { actions.machinesPage() } label: {
                     Label("Machines", systemImage: Theme.Icon.machines)
+                }
+                // Every terminal on the computers, plain ones too (#4754): watch, type, close.
+                Button { actions.terminalsPage() } label: {
+                    Label("Terminals", systemImage: Theme.Icon.terminal)
                 }
             }
     }
@@ -146,11 +192,28 @@ struct AgentsListMenu: View {
                 .font(Theme.Font.secondaryStrong)
                 .fixedSize()
             } else {
-                ThemedIcon(shownGrouping == .standard ? "line.3.horizontal.decrease" : shownGrouping.symbol)
+                ThemedIcon(shownGrouping == .standard ? Theme.Icon.capsuleGrouping : shownGrouping.symbol)
             }
     }
 }
 
+#if os(iOS)
+/// The Sidebar layout's Agents heading's ⋯ (#10738): `AgentsListMenu` in a view graph of its own (`MenuIsland`). In the
+/// sidebar's list the list's updates reached the menu several times a second while agents worked, and SwiftUI handed its
+/// items to UIKit again each time: open and scrolled down, it jumped back to its top.
+struct SidebarAgentsListMenu: View, Equatable {
+    let actions: AgentsListMenu.Actions
+
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.actions === b.actions }
+
+    var body: some View {
+        AgentsListMenu(actions: actions)
+            .accessibilityIdentifier("sidebar-agents-menu")
+    }
+}
+#endif
+
+#if !os(iOS)
 /// A row's long-press menu in Agents. Equal while the facts it shows are: the row's session changes with every push
 /// while its agent works (a new last line), and the menu held open on it was rebuilt each time.
 struct AgentRowMenu: View, Equatable {
@@ -161,6 +224,10 @@ struct AgentRowMenu: View, Equatable {
     nonisolated let looping: Bool
     nonisolated let live: Bool
     nonisolated var terminal = true
+    /// Rename… and Close Agent… are offered (`Session.canRename`, `canClose`): a terminal's, or where the node says so
+    /// for a session without one (a runtime's, #6294).
+    nonisolated var renamable = true
+    nonisolated var closable = true
     nonisolated var attachable = false
     /// Delete Chat is offered (`Session.canDelete`).
     nonisolated var deletable = false
@@ -170,32 +237,17 @@ struct AgentRowMenu: View, Equatable {
     nonisolated var interruptible = false
     /// Mark as Seen is offered: there is something new it said.
     nonisolated var unread = false
-    nonisolated let actions: Actions
-
-    @MainActor final class Actions {
-        private var renameHandler: (Session) -> Void = { _ in }
-        private var closeHandler: (Session) -> Void = { _ in }
-        private var linkTodoHandler: (Session) -> Void = { _ in }
-        private var deleteHandler: (Session) -> Void = { _ in }
-
-        func update(rename: @escaping (Session) -> Void, close: @escaping (Session) -> Void, linkTodo: @escaping (Session) -> Void = { _ in },
-                    delete: @escaping (Session) -> Void = { _ in }) {
-            renameHandler = rename
-            closeHandler = close
-            linkTodoHandler = linkTodo
-            deleteHandler = delete
-        }
-
-        func rename(_ s: Session) { renameHandler(s) }
-        func close(_ s: Session) { closeHandler(s) }
-        func linkTodo(_ s: Session) { linkTodoHandler(s) }
-        func delete(_ s: Session) { deleteHandler(s) }
-    }
+    nonisolated var takeoverAvailable = false
+    nonisolated var continueAvailable = false
+    /// The same handlers as iOS's `AgentActionMenu` (`ChatsView.rowActions`): the list's sheets and alerts.
+    nonisolated let actions: AgentMenuHandlers
 
     nonisolated static func == (a: Self, b: Self) -> Bool {
         a.key == b.key && a.pinned == b.pinned && a.muted == b.muted && a.looping == b.looping && a.live == b.live
-            && a.terminal == b.terminal && a.attachable == b.attachable && a.deletable == b.deletable
-            && a.paneActions == b.paneActions && a.interruptible == b.interruptible && a.unread == b.unread && a.actions === b.actions
+            && a.terminal == b.terminal && a.renamable == b.renamable && a.closable == b.closable
+            && a.attachable == b.attachable && a.deletable == b.deletable
+            && a.paneActions == b.paneActions && a.interruptible == b.interruptible && a.unread == b.unread
+            && a.takeoverAvailable == b.takeoverAvailable && a.continueAvailable == b.continueAvailable && a.actions === b.actions
     }
 
     var body: some View {
@@ -220,7 +272,17 @@ struct AgentRowMenu: View, Equatable {
         if unread {
             Button { model.markSeen(key) } label: { Label("Mark as Seen", systemImage: Theme.Icon.view) }
         }
-        if terminal {
+        #if os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            if takeoverAvailable {
+                Button { if let s = now() { actions.takeover(s) } } label: { Label("Take over", systemImage: Theme.Icon.terminal) }
+            }
+            if continueAvailable {
+                Button { if let s = now() { actions.continueInNewSession(s) } } label: { Label("Continue in a new session", systemImage: Theme.Icon.compose) }
+            }
+        }
+        #endif
+        if renamable {
             Button { if let s = now() { actions.rename(s) } } label: {
                 Label(String(localized: "agent.rename", defaultValue: "Rename Agent…"), systemImage: Theme.Icon.edit)
             }
@@ -280,7 +342,7 @@ struct AgentRowMenu: View, Equatable {
         if paneActions {
             Section { AgentNodeMenuItems(now: now) }
         }
-        if live && terminal {
+        if live && closable {
             Button(role: .destructive) { if let s = now() { actions.close(s) } } label: { Label("Close Agent…", systemImage: Theme.Icon.end) }
         }
         if deletable {
@@ -292,15 +354,23 @@ struct AgentRowMenu: View, Equatable {
 }
 
 extension AgentRowMenu {
-    /// The menu of a row's agent: its long-press menu and, on iOS, its ⋯ (`AgentRowMoreButton`) are the same one. With
+    /// The menu of a row's agent, its long-press menu (on iOS the only way to it since the row's ⋯ went, #2530). With
     /// the rows' swipes gone there (#1244), Interrupt and Mark as Seen are here too.
-    @MainActor init(_ s: Session, model: AppModel, actions: Actions) {
+    @MainActor init(_ s: Session, model: AppModel, actions: AgentMenuHandlers) {
         self.init(key: s.key, pinned: model.isPinned(s.key), muted: model.isMuted(s), looping: s.loop != nil, live: s.state.isLive,
-                  terminal: s.canTerminal, attachable: s.canAttach, deletable: s.canDelete, paneActions: NodeMenu.offersPaneActions(s),
-                  interruptible: (s.state == .working || s.state == .needsYou) && s.canInterrupt, unread: s.state == .unread,
+                  terminal: s.canTerminal, renamable: s.canRename, closable: s.canClose, attachable: s.canAttach, deletable: s.canDelete,
+                  paneActions: NodeMenu.offersPaneActions(s),
+                  interruptible: (s.state == .working || s.state == .needsYou) && s.canInterrupt, unread: s.needsSeen(muted: model.isMuted(s)),
+                  takeoverAvailable: s.isCodex && !s.canSend && s.capabilities?.takeover?.canResume == true,
+                  continueAvailable: s.isCodex && !s.canSend && s.capabilities?.takeover != nil,
                   actions: actions)
     }
 }
+
+#else
+/// iOS aliases the shared definition used by the detail More menu too.
+typealias AgentRowMenu = AgentActionMenu
+#endif
 
 /// The ⋯ on a space's header in Agents: `SpaceMenuItems`, equal while what it offers is (the space, its unread agents,
 /// whether it can be renamed); the group's other fields change with every push.
@@ -314,9 +384,9 @@ struct SpaceHeaderMenu: View, Equatable {
     var open: () -> Void
     var linkTodo: (() -> Void)?
 
-    init(group: SpaceGroup, rename: @escaping () -> Void, open: @escaping () -> Void, linkTodo: (() -> Void)? = nil) {
+    init(group: SpaceGroup, isMuted: (Session) -> Bool, rename: @escaping () -> Void, open: @escaping () -> Void, linkTodo: (() -> Void)? = nil) {
         id = group.id + "|" + group.spaceID + "|" + group.name
-        unread = group.sessions.filter { $0.state == .unread }.map(\.key)
+        unread = group.sessions.filter { $0.needsSeen(muted: isMuted($0)) }.map(\.key)
         nodeActions = NodeMenu.offersSpaceActions(group)
         self.group = group
         self.rename = rename
@@ -335,29 +405,41 @@ struct SpaceHeaderMenu: View, Equatable {
 }
 
 /// The grouping, one tap away under the quick filters (#5766), in a cell without the search input. The same stored
-/// choice as the ⋯ menu's (`dev.grouping`), kept across launches. Reads nothing that a hub push changes.
-struct AgentsGroupingMenu: View {
+/// choice as the ⋯ menu's (`dev.grouping`), kept across launches. Reads nothing that a hub push changes. Equal while
+/// it is drawn the same way: in the list it sits in a `MenuIsland` (#10738), as the list's updates replaced it while open.
+struct AgentsGroupingMenu: View, Equatable {
+    var iconOnly = false
 
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.iconOnly == b.iconOnly }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StoredValue("dev.grouping") private var grouping: DevGrouping = .standard
-    private var shown: DevGrouping { DevGrouping.resolved(grouping, supportsTodos: TodoStore.shared.isSupported) }
+    private var shown: DevGrouping { DevGrouping.resolvedNow(grouping) }
 
     var body: some View {
         Menu {
             Picker("Group By [Agents Menus 399ee6]", selection: Binding(get: { shown }, set: { g in
                 Haptics.tap()
-                withAnimation(Theme.Motion.layout) { grouping = g }
+                withAnimation(reduceMotion ? nil : Theme.Motion.layout) { grouping = g }
             })) {
-                ForEach(DevGrouping.offered(supportsTodos: TodoStore.shared.isSupported)) { g in
+                ForEach(DevGrouping.offeredNow) { g in
                     Label(g.title, systemImage: g.symbol).tag(g)
                 }
             }
         } label: {
-            HStack(spacing: Theme.Space.xs) {
-                ThemedIcon(shown.symbol)
-                Text(shown.title)
-                ThemedIcon(Theme.Icon.choices).font(Theme.Font.label)
+            if iconOnly {
+                ThemedIcon(Theme.Icon.capsuleGrouping)
+                    .font(Theme.Font.secondaryMedium)
+                    .foregroundStyle(Color.primary)
+                    .tapTargetFrame()
+                    .contentShape(.rect)
+            } else {
+                HStack(spacing: Theme.Space.xs) {
+                    ThemedIcon(shown.symbol)
+                    Text(shown.title)
+                    ThemedIcon(Theme.Icon.choices).font(Theme.Font.label)
+                }
+                .agentsPill()
             }
-            .agentsPill()
         }
         .labelOnlyMenu()
         // Keep the Menu's activation independent of surrounding List content.

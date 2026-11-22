@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,28 @@ import (
 
 const triageConcurrency = 4
 
+// inboxTriageRev is the revision of the tier criteria (prompts/inbox/tiers.md). Every tiering stamps it on the item
+// (TriageRev), the model's or the rules'. Raise it when the criteria change in a way that should reach items already
+// sorted: each open "Needs you" item tiered under an older revision is sorted again once by the model (retriageStale),
+// retriagePerPass of them a pass. A rule tier given because the model failed is asked again anyway (retryRuled,
+// TestInboxFallbackIsRetried); one given with no model or a held connection stays.
+// 1: "Needs you" is only what is aimed at the owner; pushes, alerts, chatter, @all notices and requests to others or to
+// bots are FYI (#7986).
+const inboxTriageRev = 1
+
+// retriagePerPass is how many stale items one triage pass sorts again, besides the items with new content (which it
+// keeps waiting no longer than a couple of model calls). Rule-tiered items (RuleOf) get as many of their own.
+const retriagePerPass = 8
+
+// Rule-tiered items (RuleOf) are asked again on the first pass after the model answers anything, else ruledBackoffMin
+// after the last failure, the wait doubling with each pass whose retries got no answer, up to ruledBackoffMax: a model
+// that keeps failing (a removed model answers 404 to every call) costs at most retriagePerPass calls that often,
+// besides the new items each round asks about once. Variables for tests.
+var (
+	ruledBackoffMin = 10 * time.Minute
+	ruledBackoffMax = 2 * time.Hour
+)
+
 // triageInbox sorts open items whose content changed since they were last looked at into "Needs you" / "FYI" / "Noise"
 // with a one-line summary (the small-task model, inbox.triage). It runs in the background; one pass at a time.
 func (s *Service) triageInbox(ctx context.Context) {
@@ -24,15 +47,30 @@ func (s *Service) triageInbox(ctx context.Context) {
 		return
 	}
 	b.mu.Lock()
-	var todo []*InboxItem
+	var todo, stale, ruled []*InboxItem
 	for _, it := range b.items {
 		if it.open() && it.TriagedAt != it.Last && it.Context != "" {
 			if it.handled() { // what joins an event being handled follows it: its conversation decides (inbox_handle.go)
 				it.TriagedAt = it.Last
 				continue
 			}
+			if it.RuleOf == it.Last { // asked before, the model failed: retried below, a few at a time
+				if b.retryRuled(it) {
+					ruled = append(ruled, it)
+				}
+				continue
+			}
 			todo = append(todo, it)
+		} else if b.retriageStale(it, false) {
+			stale = append(stale, it)
 		}
+	}
+	todo = append(todo, b.ruledDue(ruled, time.Now())...)
+	// The oldest criteria's items go first, the newest activity first among them; each is tried once a run.
+	slices.SortFunc(stale, func(x, y *InboxItem) int { return y.UpdatedAt.Compare(x.UpdatedAt) })
+	for _, it := range stale[:min(len(stale), retriagePerPass)] {
+		b.retriaged[it.ID] = true
+		todo = append(todo, it)
 	}
 	b.mu.Unlock()
 	if len(todo) == 0 {
@@ -65,13 +103,10 @@ func (s *Service) triageInbox(ctx context.Context) {
 	}()
 }
 
-// triageOne asks the model about an item in the list whose content changed; when the model fails the item gets its
+// triage asks the model about an item in the list whose content changed; when the model fails the item gets its
 // fallback tier (and no summary). When its connection is held the item stays untriaged. An item without a fallback
-// (a connector's thing its rules leave to the model) keeps what it shows until a pass gets an answer. True when it
-// changed the item.
-func (s *Service) triageOne(ctx context.Context, it *InboxItem) bool { return s.triage(ctx, it) != nil }
-
-// triage is triageOne returning the change, settled (inbox_rollback.go); nil when the item was left as it was.
+// (a connector's thing its rules leave to the model) keeps what it shows until a pass gets an answer. It returns the
+// change, settled (inbox_rollback.go); nil when the item was left as it was.
 func (s *Service) triage(ctx context.Context, it *InboxItem) *inboxWrite {
 	last, v := s.askTriage(ctx, it, 90*time.Second)
 	if ctx.Err() != nil {
@@ -83,6 +118,22 @@ func (s *Service) triage(ctx context.Context, it *InboxItem) *inboxWrite {
 	if it.Last != last { // new messages arrived meanwhile: the next pass sees them
 		return nil
 	}
+	ruled := it.RuleOf == last
+	if v.state == "" {
+		b.ruledAnswered()
+	}
+	if ruled && (v.state != "" || !b.retryRuled(it)) {
+		return nil // still no answer (it keeps its rule tier, a later pass asks again), or the item moved on meanwhile
+	}
+	if it.TriagedAt == last { // sorted again under new criteria (retriageStale)
+		if v.state == triagePaused || v.state == triageUnconfigured || v.state == triageTimeout {
+			delete(b.retriaged, it.ID) // the model wasn't there: a later pass tries again
+			return nil
+		}
+		if !b.retriageStale(it, true) { // filed, handled or re-sorted meanwhile
+			return nil
+		}
+	}
 	w := beginWrite(it)
 	settled := func() *inboxWrite { b.settle(w); return w }
 	fallback := b.ruleTier(it)
@@ -91,15 +142,22 @@ func (s *Service) triage(ctx context.Context, it *InboxItem) *inboxWrite {
 		// The model's connection is held (quota used up, busy): not triaged, so a pass after it is back asks again.
 		// Meanwhile an untriaged item sits in its rule tier rather than in "Needs you".
 		if it.Tier == "" && fallback != "" {
-			it.Tier, it.Reason = fallback, b.byRules()
+			it.Tier, it.Reason, it.TriageRev = fallback, b.byRules(), inboxTriageRev
 			b.applyPolicyTier(it)
 			return settled()
 		}
 		return nil
 	case v.state == "":
-		it.Tier, it.Summary, it.Reason = v.tier, v.summary, v.reason
+		it.Tier, it.Reason = v.tier, v.reason
+		if !keepsWords(it) { // a title and summary the assistant or the user wrote stay
+			it.Summary = v.summary
+		}
 		it.Urgent = v.urgent && v.tier == TierAction
-	case fallback == "":
+		if it.Group != nil { // an event sorted again: its tier is the model's now, not its connector's rule
+			it.TriagedBy = "model"
+		}
+	case fallback == "" || it.TriagedAt == last:
+		// No fallback, or sorted before (retriageStale): what it shows stays.
 		return nil
 	default:
 		if v.err != nil {
@@ -108,13 +166,78 @@ func (s *Service) triage(ctx context.Context, it *InboxItem) *inboxWrite {
 		it.Tier, it.Reason = fallback, b.byRules()
 	}
 	b.applyPolicyTier(it) // the user's policy has the last word on the tier (inbox_policies.go)
-	it.TriagedAt = last
+	b.liftMerged(it)      // a merged row stays at its rows' highest tier (inbox_merge.go, #7230)
+	it.TriageRev, it.RuleOf = inboxTriageRev, ""
+	if v.state == triageFailed || v.state == triageTimeout {
+		// The model was asked and did not answer: the rule tier stands in until it does (retryRuled). Not "no model"
+		// (nothing to wait for), and not a held connection (handled above). The rule-tiered items are not asked again
+		// right after a failure: new items asking it in the meantime find out first whether it is back.
+		it.RuleOf = last
+		b.deferRuled(time.Now())
+	} else {
+		it.TriagedAt = last
+	}
 	b.noteTriaged(it)
 	// Triage can settle an item read elsewhere while it was still untriaged (not one filed while the model thought).
 	if it.Read && it.Tier != TierAction && it.open() {
 		b.file(it, time.Now(), "read")
 	}
 	return settled()
+}
+
+// retryRuled: an open item in its rule tier because the model failed on what it holds now (RuleOf), which the model
+// may still sort: not one handled, or anything the AI twin or a follow-up touched (handling, a suggestion, a due check,
+// its agent record: their tier is theirs), as retriageStale. Under b.mu.
+func (b *inboxBook) retryRuled(it *InboxItem) bool {
+	return it.open() && it.RuleOf == it.Last && it.TriagedAt != it.Last && it.Context != "" && !it.handled() &&
+		currentSuggestion(it) == nil && it.Handling == nil && it.Follow == nil && it.Agent == nil
+}
+
+// ruledAnswered: the model answered, so the rule-tiered items' turn is the next pass. Under b.mu.
+func (b *inboxBook) ruledAnswered() { b.ruledFails, b.ruledRetryAt = 0, time.Time{} }
+
+// deferRuled puts the rule-tiered items' next retry at least ruledBackoffMin after a failure at now. Under b.mu.
+func (b *inboxBook) deferRuled(now time.Time) {
+	if at := now.Add(ruledBackoffMin); at.After(b.ruledRetryAt) {
+		b.ruledRetryAt = at
+	}
+}
+
+// ruledDue is the rule-tiered items (retryRuled) this pass asks the model about again: none before b.ruledRetryAt,
+// else the newest retriagePerPass; the next ones wait twice as long as these did, unless the model answers meanwhile
+// (triage resets it). Under b.mu.
+func (b *inboxBook) ruledDue(ruled []*InboxItem, now time.Time) []*InboxItem {
+	if len(ruled) == 0 || now.Before(b.ruledRetryAt) {
+		return nil
+	}
+	slices.SortFunc(ruled, func(x, y *InboxItem) int { return y.UpdatedAt.Compare(x.UpdatedAt) })
+	wait := ruledBackoffMin << min(b.ruledFails, 16)
+	if wait <= 0 || wait > ruledBackoffMax {
+		wait = ruledBackoffMax
+	}
+	b.ruledFails++
+	b.ruledRetryAt = now.Add(wait)
+	return ruled[:min(len(ruled), retriagePerPass)]
+}
+
+// retriageStale: an open "Needs you" item whose tier was given under older criteria (inboxTriageRev), not yet sorted
+// again this run (asked: it is being, so that is not checked). Only Lark and mail items and connectors' events (a
+// connector's other items carry its rules' tier). Left out: anything the AI twin or a follow-up touched (handling, a
+// suggestion, a due check, its agent record: their Needs you is theirs), a tier a policy sets (it would set it again),
+// and items without text. Under b.mu.
+func (b *inboxBook) retriageStale(it *InboxItem, asked bool) bool {
+	if !it.open() || it.Tier != TierAction || it.TriageRev >= inboxTriageRev || it.Context == "" || it.TriagedAt != it.Last ||
+		it.handled() || currentSuggestion(it) != nil || it.Handling != nil || it.Follow != nil || it.Agent != nil ||
+		!asked && b.retriaged[it.ID] {
+		return false
+	}
+	if it.Connector != nil && it.Group == nil {
+		return false
+	}
+	if p := b.policyOf(it); p != nil && p.Tier != "" {
+		return false
+	}
+	return true
 }
 
 // Why the model gave no tier (a triage verdict's state, GET /api/v1/inbox triage.state), the most telling first.
@@ -141,14 +264,27 @@ type triageVerdict struct {
 // inbox.rules; the default criteria stay underneath). last is the Last it asked about.
 func (s *Service) askTriage(ctx context.Context, it *InboxItem, timeout time.Duration) (last string, v triageVerdict) {
 	b := &s.inbox
+	hello := s.hello(ctx)
+	language := answerLanguage(hello.Locale)
 	b.mu.Lock()
-	last, input, rules := it.Last, b.triageInput(it), strings.TrimSpace(it.Rules)
+	last, input, rules := it.Last, prompts.RenderInboxItem(b.triagePromptItem(it, language)), strings.TrimSpace(it.Rules)
 	b.mu.Unlock()
+	return last, s.triageModelIn(ctx, input, rules, timeout, hello)
+}
+
+// triageModel asks the triage model about one item's prompt input under rules (its source's; "" the Inbox's).
+func (s *Service) triageModel(ctx context.Context, input, rules string, timeout time.Duration) (v triageVerdict) {
+	return s.triageModelIn(ctx, input, rules, timeout, s.hello(ctx))
+}
+
+// triageModelIn uses the same owner/language snapshot as the input wrapper.
+func (s *Service) triageModelIn(ctx context.Context, input, rules string, timeout time.Duration, hello Hello) (v triageVerdict) {
 	if rules == "" {
 		rules = s.inboxConfig(ctx).Rules
 	}
-	hello := s.hello(ctx)
-	system := prompts.RenderInboxTriage(prompts.InboxTriage{Owner: hello.Owner, Rules: rules, Language: answerLanguage(hello.Locale)})
+	extContext, _ := s.inboxExtensionContext(ctx)
+	system := prompts.RenderInboxTriage(prompts.InboxTriage{Owner: hello.Owner, Rules: rules, Language: answerLanguage(hello.Locale),
+		Context: extContext})
 	var out struct {
 		Tier    string `json:"tier"`
 		Summary string `json:"summary"`
@@ -178,7 +314,7 @@ func (s *Service) askTriage(ctx context.Context, it *InboxItem, timeout time.Dur
 		v.state, v.why = triageFailed, i18n.T(l, "assistant-inbox_triage.failed")
 	}
 	v.err = err
-	return last, v
+	return v
 }
 
 // ruleTier is the fallback tier, without a model: people talking to me need me, groups are FYI, bots and lists are
@@ -218,13 +354,21 @@ func (b *inboxBook) ruleTier(it *InboxItem) string {
 	return TierNoise
 }
 
-// triageInput is the item as the models read it (prompts/inbox/item.md).
-func (b *inboxBook) triageInput(it *InboxItem) string {
-	return prompts.RenderInboxItem(b.promptItem(it))
+// triagePromptItem separates the latest Lark DM for triage and the no-write preview.
+func (b *inboxBook) triagePromptItem(it *InboxItem, language string) prompts.InboxItem {
+	p := b.promptItemIn(it, language)
+	if it.Connector != nil && it.Source == "larkcli" && it.Kind == KindDM {
+		p.Latest = it.Preview
+	}
+	return p
 }
 
 func (b *inboxBook) promptItem(it *InboxItem) prompts.InboxItem {
-	p := prompts.InboxItem{Kind: it.Kind, MailDirect: it.Mail != nil && it.Mail.Direct, Context: it.Context}
+	return b.promptItemIn(it, answerLanguage(string(b.userLang())))
+}
+
+func (b *inboxBook) promptItemIn(it *InboxItem, language string) prompts.InboxItem {
+	p := prompts.InboxItem{Language: language, Kind: it.Kind, MailDirect: it.Mail != nil && it.Mail.Direct, Context: it.Context}
 	if it.Connector != nil {
 		p.Source = it.Source
 		p.Described = b.kindWords(it.Source, it.Kind)
@@ -237,28 +381,44 @@ const draftModelWait = 2 * time.Minute
 
 // draftReply writes a reply to an inbox item in the user's voice (optionally following their instruction).
 func (s *Service) draftReply(ctx context.Context, id, instruction string) (string, error) {
+	hello := s.hello(ctx)
+	language := answerLanguage(hello.Locale)
 	b := &s.inbox
 	b.mu.Lock()
 	it, ok := b.items[id]
 	var item prompts.InboxItem
 	if ok {
-		item = b.promptItem(it)
+		item = b.promptItemIn(it, language)
 	}
 	b.mu.Unlock()
 	if !ok {
 		return "", errNoInboxItem
 	}
-	hello := s.hello(ctx)
-	system := prompts.RenderInboxDraft(prompts.InboxDraft{Owner: hello.Owner, Notes: strings.TrimSpace(hello.OwnerNotes),
-		Language: answerLanguage(hello.Locale)})
-	input := prompts.RenderInboxDraftInput(prompts.InboxDraftInput{Item: item, Instruction: strings.TrimSpace(instruction)})
+	extContext, neverQuote := s.inboxExtensionContext(ctx)
+	// About me as the user last edited it in the app, else the config file's (notes), as the main chat has it.
+	d := prompts.InboxDraft{Owner: hello.Owner, Notes: s.notes(ctx), Language: answerLanguage(hello.Locale), Context: extContext}
+	input := prompts.RenderInboxDraftInput(prompts.InboxDraftInput{Language: language, Item: item, Instruction: strings.TrimSpace(instruction)})
 	cctx, cancel := context.WithTimeout(ctx, draftModelWait)
 	defer cancel()
-	text, err := s.inboxModelComplete(cctx, purposeDraft, system, input, 1024)
-	if err != nil {
-		return "", err
+	// A draft that repeats a sentence an extension marked never to quote (what it keeps about people: evaluations,
+	// guesses) is written again once, told so; if that one repeats one too, there is no draft (extension_context.go).
+	for {
+		text, err := s.inboxModelComplete(cctx, purposeDraft, prompts.RenderInboxDraft(d), input, 1024)
+		if err != nil {
+			return "", err
+		}
+		text = strings.TrimSpace(text)
+		hit := quotesAny(text, neverQuote)
+		if hit == "" {
+			return text, nil
+		}
+		if d.Rewrite {
+			s.logf("inbox: draft for %s withheld: the rewrite still repeats a sentence an extension marked never to quote", id)
+			return "", errDraftWithheld
+		}
+		s.logf("inbox: draft for %s repeats a sentence an extension marked never to quote; writing it again", id)
+		d.Rewrite = true
 	}
-	return strings.TrimSpace(text), nil
 }
 
 // inboxReply serializes the replies to one inbox item and remembers the last one that went out.
@@ -296,7 +456,7 @@ type inboxReplyReq struct {
 
 // replySendID names one reply: the app's id for the send when it gave one, else the item, the text and the status
 // moves (the same reply asked again is the same send). Not the message it answers: a retry after new messages came
-// into the item (it stayed open, replyInboxAs) would go out again (#1828), as the derived Feishu clientId is.
+// into the item (it stayed open, replyInboxFrom) would go out again (#1828), as the derived Feishu clientId is.
 func replySendID(id, text, clientID string, changes []DocChange) string {
 	if validClientID(clientID) {
 		return namedClientID("send\n" + id + "\n" + strings.ToLower(clientID))
@@ -313,20 +473,11 @@ func replyInDoubt(err error) bool {
 		errors.As(err, &re) && re.Code == assistantwire.CodeAssistantInDoubt
 }
 
-// replyInbox sends text as the user's reply to the item's source — in the Feishu chat, a document's comments, a
-// Moments (company feed) post (the plugin that took Feishu over), a reply to the newest mail of the thread, a GitHub comment… (the
-// hub sends it) — and files the item as done, unless something new came into it while the reply was out.
-func (s *Service) replyInbox(ctx context.Context, id, text string, changes ...DocChange) (InboxItem, error) {
-	return s.replyInboxAs(ctx, id, text, "", changes...)
-}
-
-// replyInboxAs is replyInbox with the app's own id for the send (client_id): a retry of the same request is sent once.
-// Empty: one derived from the item and the text.
-func (s *Service) replyInboxAs(ctx context.Context, id, text, clientID string, changes ...DocChange) (InboxItem, error) {
-	return s.replyInboxDo(ctx, id, text, clientID, false, true, changes...)
-}
-
-// replyInboxFrom is replyInboxAs; fromCard: it is "Send" on a message card (sendFromCard), which does not reply to an
+// replyInboxFrom sends text as the user's reply to the item's source — in the Feishu chat, a document's comments, a
+// Moments (company feed) post (the plugin that took Feishu over), a reply to the newest mail of the thread, a GitHub
+// comment… (the hub sends it) — and files the item as done, unless something new came into it while the reply was
+// out. clientID is the app's own id for the send (client_id): a retry of the same request is sent once; empty, one is
+// derived from the item and the text. fromCard: it is "Send" on a message card (sendFromCard), which does not reply to an
 // item filed since (errInboxItemDone). Checked with the copy for the reply, so an item filed after sendFromCard
 // looked is not answered and keeps its mark (#4871).
 func (s *Service) replyInboxFrom(ctx context.Context, id, text, clientID string, fromCard bool, changes ...DocChange) (InboxItem, error) {
@@ -336,6 +487,12 @@ func (s *Service) replyInboxFrom(ctx context.Context, id, text, clientID string,
 // replyInboxDo is replyInboxFrom; file false keeps the item open (a confirmed suggestion's reply: the event waits for
 // the other side), a repeat of the reply still being answered as sent.
 func (s *Service) replyInboxDo(ctx context.Context, id, text, clientID string, fromCard, file bool, changes ...DocChange) (InboxItem, error) {
+	return s.replyInboxDoMode(ctx, id, text, clientID, fromCard, file, false, changes...)
+}
+
+// replyInboxDoMode adds the direct /reply route's waiting mode without changing the shared send-once path used by
+// handed-off suggestions. followDirect is true only for POST /api/v1/inbox/{id}/reply.
+func (s *Service) replyInboxDoMode(ctx context.Context, id, text, clientID string, fromCard, file, followDirect bool, changes ...DocChange) (InboxItem, error) {
 	b := &s.inbox
 	b.mu.Lock()
 	it, ok := b.items[id]
@@ -378,6 +535,14 @@ func (s *Service) replyInboxDo(ctx context.Context, id, text, clientID string, f
 	once := r.(*inboxReply)
 	once.mu.Lock()
 	defer once.mu.Unlock()
+	if attempt, _ := ctx.Value(suggestionReplyOnly{}).(*InboxSuggestionAttempt); attempt != nil {
+		b.mu.Lock()
+		current := b.currentReplyAttempt(it, attempt)
+		b.mu.Unlock()
+		if !current {
+			return InboxItem{}, errSuggestionStale
+		}
+	}
 	if fromCard {
 		// Another reply of the item may have been out (the phone's, a repeat): filed while this one waited for it, the
 		// item is not answered again from a card either (#5117).
@@ -407,9 +572,17 @@ func (s *Service) replyInboxDo(ctx context.Context, id, text, clientID string, f
 	if err != nil {
 		return InboxItem{}, err
 	}
+	if suggestionSendOnly(ctx) {
+		// A confirmed suggestion commits under its version/attempt/source fence after this send returns. The
+		// direct reply path must not file, mark cards sent or move a replacement suggestion in the meantime.
+		b.mu.Lock()
+		out := it.listed()
+		b.mu.Unlock()
+		return out, nil
+	}
 	now := time.Now()
 	if already {
-		if once.unsaved { // the reply filed the item but the row was not written: a repeat writes it (#4627)
+		if once.unsaved { // the reply's item was not written: a repeat writes it (#4627)
 			s.saveReplied(ctx, it, once)
 		}
 		b.mu.Lock()
@@ -418,21 +591,41 @@ func (s *Service) replyInboxDo(ctx context.Context, id, text, clientID string, f
 		s.markCardsSent(ctx, id, now, text, true)
 		return out, nil
 	}
+	var loc *time.Location
+	if followDirect {
+		loc = s.location(ctx)
+	}
 	b.mu.Lock()
 	// The reply answers what the item held when it was sent. A move that came in meanwhile (collection runs while the
 	// reply is out) is not answered: the item stays open with it, so it is not filed unseen (#1828). An item filed
 	// meanwhile (read elsewhere) is filed as replied.
 	kept := !file && it.open() || it.open() && it.Last != c.Last
+	// A direct reply with a processing conversation waits for the other side instead of filing the matter. Old-App
+	// card sends keep filing. If new messages arrived while the reply was out, the existing kept-open path is unchanged.
+	if followDirect && !fromCard && file {
+		resetInboxFollowChecks(it)
+	}
+	wait := followDirect && !fromCard && file && !kept && it.open() && it.Agent != nil && it.Agent.SessionID != ""
+	kept = kept || wait
 	once.keptOpen = kept
+	if c.Mail != nil {
+		once.clientID = text
+	}
 	b.noteSent(it, now)
 	tell := false
-	if !kept {
+	if wait {
+		it.Suggestion = nil // the user's own reply supersedes a suggestion still waiting for confirmation
+		it.Agent.SentOf = c.Last
+		b.waitForOtherSide(it, defaultInboxFollow(now), ViaUser, now, loc, true)
+		b.tell(it, inboxNote{Name: prompts.NoteSent, Text: text}, false, now)
+		tell = true
+	} else if !kept {
 		it.done(now, "replied")
 		tell = b.closeHandling(it, "replied", now) // its conversation stops
 	}
 	out := it.listed()
 	b.mu.Unlock()
-	if !kept {
+	if !kept || wait {
 		s.saveReplied(ctx, it, once)
 	} else if !file {
 		s.saveInbox(ctx, []*InboxItem{it})
@@ -445,14 +638,14 @@ func (s *Service) replyInboxDo(ctx context.Context, id, text, clientID string, f
 	return out, nil
 }
 
-// saveReplied writes the item a reply filed. The reply went out, so a failed write keeps the item filed in memory
-// (rolling it back would let a repeat send the reply again) and is remembered on the item's replies: a repeat of
-// the reply writes it then, instead of the item coming back as "Needs you" after a restart. With once.mu held.
+// saveReplied writes the item after its reply, filed or waiting. The reply went out, so a failed write keeps the item's
+// resulting state in memory (rolling it back would let a repeat send the reply again) and is remembered on the item's
+// replies: a repeat writes it then, instead of the item returning to its pre-reply state after a restart. With once.mu held.
 func (s *Service) saveReplied(ctx context.Context, it *InboxItem, once *inboxReply) {
 	failed := s.saveInbox(ctx, []*InboxItem{it})
 	once.unsaved = failed[it.ID]
 	if once.unsaved {
-		s.logf("inbox: %s was replied to but could not be saved as done", it.ID)
+		s.logf("inbox: %s was replied to but its resulting state could not be saved", it.ID)
 	}
 }
 
@@ -462,9 +655,33 @@ func (s *Service) replyMail(ctx context.Context, r inboxReplyReq) (bool, error) 
 	if m == nil || len(m.UIDs) == 0 {
 		return false, errCannotReply
 	}
+	b := &s.inbox
+	b.mu.Lock()
+	repeated := !suggestionSendOnly(ctx) && r.once.repeated(r.live, r.text)
+	b.mu.Unlock()
+	if repeated {
+		return true, nil
+	}
 	var sent assistantwire.InboxSent
 	err := s.appCall(ctx, AppInbox, inboxReplyMail, map[string]any{"account_id": m.AccountID, "uid": m.UIDs[len(m.UIDs)-1],
 		"mailbox": m.Mailbox, "text": r.text, "send_id": r.sendID}, &sent)
 	s.inboxSent(sent, r.sendID)
+	// A hub "already" can be the first answer this manager got after an in-doubt send: this manager still writes the
+	// resulting item state. Only the local repeat check above may skip that write.
 	return false, err
+}
+
+// inboxPromptOwner keeps the legacy default while naming the owner in new prompt languages.
+func inboxPromptOwner(hello Hello) string {
+	if owner := strings.TrimSpace(hello.Owner); owner != "" {
+		return owner
+	}
+	switch answerLanguage(hello.Locale) {
+	case i18n.Ja.Name():
+		return "ユーザー" // i18n-ignore: the owner's name inside a Japanese model prompt, not interface text
+	case "":
+		return "用户" // i18n-ignore: the legacy prompt's owner word, kept byte for byte
+	default:
+		return "the user"
+	}
 }

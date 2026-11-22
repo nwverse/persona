@@ -2,9 +2,7 @@
   "auto_done": "Auto-completed",
   "model_request_failed": "Model request failed",
   "unassigned": "Not on a to-do",
-  "manual": "Opened in the terminal",
-  "unassigned_hint": "On no to-do; often started from Lark, the phone or elsewhere. Right-click a row (or its ⋯) › Link to to-do… to file one.",
-  "manual_hint": "Opened directly in the terminal (herdr), not through a to-do. Right-click a row (or its ⋯) › Link to to-do… to file one.",
+  "unassigned_hint": "On no to-do: opened yourself in a terminal, or started from Lark, the phone or elsewhere. Right-click a row (or its ⋯) › Link to to-do… to file one.",
   "context_title": "To-do · {title}",
   "decision_manual": "Added by hand",
   "decision_agent_question": "Answered in an agent's question",
@@ -22,5 +20,13 @@
   "review_cancelled": "Cancelled",
   "thread_feishu": "Lark topic",
   "thread_channel": "Topic ({channel})",
-  "thread_line": "{kind} · {name}"
+  "thread_line": "{kind} · {name}",
+  "orphaned": "Nobody is working on this",
+  "orphaned_error": "closed after an error",
+  "orphaned_closed": "closed",
+  "orphaned_offline": "computer offline",
+  "create_unconfirmed": "The hub hasn't confirmed this create yet. Check its result before creating another one.",
+  "images_not_saved": "The hub didn't save the images. Your draft is still here; try again.",
+  "images_cleanup_failed": "The hub created a to-do without its images and couldn't remove it. Your draft is still here; check the to-do list.",
+  "images_unsupported": "This hub doesn't support to-do images. Update every assistant to add them."
 }

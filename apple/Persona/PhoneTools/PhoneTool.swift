@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// A phone capability Claude can call through the hub (`phone_*` MCP tools).
 struct PhoneTool {
@@ -12,15 +13,23 @@ struct PhoneTool {
 /// Groups of tools the user can switch on or off in Settings › Connectors › This iPhone (was Phone Data).
 enum PhoneDataSource: String, CaseIterable, Identifiable, Codable {
     case contacts, calendar, reminders, location, health, photos, device, clipboard, notifications
+    // iPhone system integrations (#2276–#2286): only on iOS, and off until the user turns them on.
+    case alarms, messages, calls, shortcuts, media, home
 
     var id: String { rawValue }
+
+    /// Sources that act outside Persona (an alarm, a call, a Home accessory): iPhone only.
+    static let iPhoneOnly: Set<PhoneDataSource> = [.alarms, .messages, .calls, .shortcuts, .media, .home]
 
     /// The sources this device has tools for, in order (Settings › Phone Data).
     static var onThisDevice: [PhoneDataSource] {
         #if os(macOS)
-        allCases.filter { $0 != .health } // no health data on a Mac (PhoneToolRegistry.healthTools)
+        allCases.filter { $0 != .health && !iPhoneOnly.contains($0) } // no health data on a Mac (PhoneToolRegistry.healthTools)
+        #elseif os(iOS)
+        // Home needs the HomeKit capability in the build (#2285), alarms AlarmKit (iOS 26).
+        allCases.filter { ($0 != .home || HomeAccess.isBuilt) && ($0 != .alarms || AlarmsAccess.isSupported) }
         #else
-        allCases
+        allCases.filter { !iPhoneOnly.contains($0) }
         #endif
     }
 
@@ -35,6 +44,12 @@ enum PhoneDataSource: String, CaseIterable, Identifiable, Codable {
         case .device: String(localized: "Device Info")
         case .clipboard: String(localized: "Clipboard")
         case .notifications: String(localized: "Notifications")
+        case .alarms: String(localized: "Alarms and Timers")
+        case .messages: String(localized: "Messages [Phone Data]")
+        case .calls: String(localized: "Phone and FaceTime")
+        case .shortcuts: String(localized: "Shortcuts [Phone Data]")
+        case .media: String(localized: "Music")
+        case .home: String(localized: "Home [Phone Data]")
         }
     }
 
@@ -49,6 +64,12 @@ enum PhoneDataSource: String, CaseIterable, Identifiable, Codable {
         case .device: "iphone"
         case .clipboard: Theme.Icon.paste
         case .notifications: Theme.Icon.notifications
+        case .alarms: Theme.Icon.alarmClock
+        case .messages: Theme.Icon.messagesApp
+        case .calls: Theme.Icon.phoneCall
+        case .shortcuts: Theme.Icon.shortcutsApp
+        case .media: Theme.Icon.music
+        case .home: Theme.Icon.homeAccessories
         }
     }
 
@@ -61,7 +82,7 @@ enum PhoneDataSource: String, CaseIterable, Identifiable, Codable {
         case .location: Theme.Brand.iosMaps
         case .health: Theme.Brand.iosHealth
         case .photos: Theme.Brand.iosPhotos
-        case .device, .clipboard, .notifications: nil
+        case .device, .clipboard, .notifications, .alarms, .messages, .calls, .shortcuts, .media, .home: nil
         }
     }
 
@@ -76,17 +97,45 @@ enum PhoneDataSource: String, CaseIterable, Identifiable, Codable {
         case .device: String(localized: "Battery, storage, OS version, network")
         case .clipboard: String(localized: "Read and write the clipboard")
         case .notifications: String(localized: "Let Claude send you local notifications")
+        case .alarms: String(localized: "Set alarms and timers once you confirm")
+        case .messages: String(localized: "Prepare a message for you to send yourself")
+        case .calls: String(localized: "Start a call once you confirm")
+        case .shortcuts: String(localized: "Run the shortcuts you allowed")
+        case .media: String(localized: "Play and control Apple Music")
+        case .home: String(localized: "Control accessories and scenes once you confirm")
         }
     }
 
     private var defaultsKey: String { "phoneSource.\(rawValue)" }
 
-    /// On and allowed: what the switch in Settings shows and what is declared to the hub (2026-11-01: the switch says both,
-    /// no separate Allowed label). One turned on before it was allowed stays off until it is.
-    var isActive: Bool { isEnabled && PhoneAuthorization.status(self).isUsable }
+    /// On and offered: what the switch in Settings shows and what is declared to the hub (2026-11-01: the switch says both,
+    /// no separate Allowed label). One turned on but refused stays off until it is allowed in iOS Settings.
+    var isActive: Bool { isEnabled && offered(PhoneAuthorization.status(self)) }
+
+    /// Sources whose permission iOS asks for the first time a tool uses one, while Persona is in front (#7659): their tools
+    /// are offered before iOS has asked, so "remind me…" works without a visit to Settings. Health asks only from Settings
+    /// (its sheet lists every type, and iOS never says what was allowed); the iPhone integrations stay off until turned on
+    /// (#2276–#2286). The Mac app is frozen and keeps asking only from Settings.
+    var asksWhenUsed: Bool {
+        #if os(iOS)
+        switch self {
+        case .contacts, .calendar, .reminders, .location, .photos, .notifications: true
+        default: false
+        }
+        #else
+        false
+        #endif
+    }
+
+    /// Whether a source that is on is offered to the hub with this permission state: allowed, or not asked yet when the
+    /// first use asks.
+    func offered(_ status: PhoneAuthStatus) -> Bool {
+        status.isUsable || (status == .notDetermined && asksWhenUsed)
+    }
 
     var isEnabled: Bool {
-        get { UserDefaults.standard.object(forKey: defaultsKey) as? Bool ?? true }
+        // The iPhone integrations act outside Persona: off until the user turns them on (#2276–#2286).
+        get { UserDefaults.standard.object(forKey: defaultsKey) as? Bool ?? !Self.iPhoneOnly.contains(self) }
         nonmutating set { UserDefaults.standard.set(newValue, forKey: defaultsKey) }
     }
 }

@@ -26,6 +26,7 @@ var builtinConnected = []func(h *Manager, ctx context.Context, m *Machine){
 	func(h *Manager, ctx context.Context, m *Machine) { h.tellNoLock(ctx, m) },      // cua's "Don't auto-lock while the extension is on" (computer_nolock.go)
 	func(h *Manager, ctx context.Context, m *Machine) { h.tellCursor(ctx, m) },      // cua's "Show the agent's cursor" (computer_cursor.go)
 	func(h *Manager, ctx context.Context, m *Machine) { h.refreshBrowser(ctx, m) },  // ego (browser.go)
+	func(h *Manager, ctx context.Context, m *Machine) { h.refreshIPhone(ctx, m) },   // iphone (iphone.go)
 }
 
 // reconcileNodePrograms brings a machine that just connected in line with what should run on it: the built-in
@@ -38,9 +39,9 @@ func (h *Manager) reconcileNodePrograms(ctx context.Context, m *Machine) {
 	go h.syncExtensionNodes(ctx, m) // plugins' programs on this computer (extension_nodes.go)
 }
 
-// builtinPrefixes are the extensions whose programs are built into personad (cua, ego; node/builtin.go) by the prefix of
+// builtinPrefixes are the extensions whose programs are built into personad (cua, ego, iphone; node/builtin.go) by the prefix of
 // their old method names.
-var builtinPrefixes = map[string]string{"computer.": "cua", "browser.": "ego"}
+var builtinPrefixes = map[string]string{"computer.": "cua", "browser.": "ego", "iphone.": "iphone"}
 
 // callBuiltin asks m's built-in program for method, given by its old name (computer.status, browser.cookies.list…):
 // over plugin.node.call {id, method} on a node that says it has the program (node.info's builtin_programs, #1830

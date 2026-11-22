@@ -6,23 +6,57 @@ import "strings"
 // hub an extension's token may call names one (extmgr/extension_scopes.go); a route naming none is for full tokens
 // only.
 const (
-	ScopeKBRead        = "kb.read"
-	ScopeKBWrite       = "kb.write"
+	ScopeKBRead  = "kb.read"
+	ScopeKBWrite = "kb.write"
+	// ScopeSentRead reveals which archived messages Persona sent as the user (kb.day).
+	ScopeSentRead      = "sent.read"
 	ScopeInboxRead     = "inbox.read"
 	ScopeInboxWrite    = "inbox.write"
 	ScopeAgentsRead    = "agents.read"
 	ScopeAgentsControl = "agents.control"
 	ScopeMachinesRead  = "machines.read"
-	ScopeNotify        = "notify"
-	ScopeAssistantAsk  = "assistant.ask"
-	ScopeTodosRead     = "todos.read"
-	ScopeTodosWrite    = "todos.write"
+	// ScopeBrowserRun lets an extension list browser-enabled computers (browser.machines) and run scripts inside an
+	// extension-isolated task space (browser.run) via a pluggable BrowserBackend (e.g. ego lite, future CDP). Granted
+	// by name only (#12866).
+	ScopeBrowserRun   = "browser.run"
+	ScopeNotify       = "notify"
+	ScopeAssistantAsk = "assistant.ask"
+	ScopeTodosRead    = "todos.read"
+	ScopeTodosWrite   = "todos.write"
+	// ScopeDecisionsRaise lets an explicitly authorized caller raise, poll and
+	// withdraw its own pending owner decisions. It never grants owner answers.
+	ScopeDecisionsRaise = "decisions.raise"
+	// ScopeLeadersRead: being told of the leader conversations (leader.changed) and what they report (leader.report),
+	// and listing them (GET /api/v1/assistant/leaders); #3484.
+	ScopeLeadersRead = "leaders.read"
+	// ScopeAssistantDispatchPolicy: reading and writing the assistant's dispatch policy
+	// (GET/PUT /api/v1/assistant/dispatch-policy), the organization rule for which conversations may hand out work.
+	ScopeAssistantDispatchPolicy = "assistant.dispatch_policy"
+	// ScopeAssistantStartDefaults: reading the Agent presets a task can start with on a computer and reading and
+	// writing the defaults task Agents start with (GET /api/v1/assistant/worker-presets, GET/PUT
+	// /api/v1/assistant/start-defaults).
+	ScopeAssistantStartDefaults = "assistant.start_defaults"
+	// ScopeDispatchGuard: reading and writing the explicit-target dispatch guard and narrowing the affected
+	// conversations' tool lists (GET/PUT /api/v1/assistant/dispatch-guard). Granted by name only.
+	ScopeDispatchGuard = "dispatch.guard"
+	// ScopeAgentsPermissionMode: changing the permission mode of a conversation the extension opened itself, and of no
+	// other (the hub checks who opened it: hub/extension_modes.go).
+	ScopeAgentsPermissionMode = "agents.permission_mode"
 	// ScopeModels: calling a model through the hub (model.complete) on the extension's own purpose in Settings ›
 	// Models; never a key (#6102).
 	ScopeModels = "models"
 	// ScopeAssistantRead: reading the assistant's own-space conversations, the user's and the assistant's words
 	// (assistant.conversations, assistant.messages; #1288). assistant.ask does not include it.
 	ScopeAssistantRead = "assistant.read"
+	// ScopeAssistantMemoryRead: listing the assistant's own-space memory entries (assistant.memory), read-only; the
+	// health space's memory is never included and writing it stays with full credentials.
+	ScopeAssistantMemoryRead = "assistant.memory.read"
+	// ScopeTranscription: handing the extension's own audio to the transcription the owner chose for meetings
+	// (transcription.start / audio / finish / cancel), never a key and never anyone else's audio (#8485).
+	ScopeTranscription = "transcription"
+	// ScopeMarketRefreshOwn: asking for a background read of only the marketplace the calling extension was installed
+	// from. It is never inherited through an all-scope token; the manifest must name it and the owner must approve it.
+	ScopeMarketRefreshOwn = "market.refresh_own"
 	// ScopeCallPrefix and an extension's id: calling that extension's own HTTP (/api/v1/extensions/<id>/…).
 	ScopeCallPrefix = "extensions.call:"
 )

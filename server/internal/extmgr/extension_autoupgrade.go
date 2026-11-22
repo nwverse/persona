@@ -16,7 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Plugins upgrade themselves from their markets (docs/extensions/extensions.md "Automatic upgrades"): the hub reads the registered
+// Plugins upgrade themselves from their markets (docs/extensions/extensions.md "Auto-upgrade"): the hub reads the registered
 // markets every few hours and installs a newer version of a plugin it installed from one, when the version asks for
 // nothing more than the user granted and nothing is using the plugin. One that asks for more waits for the user; one
 // that does not come up is rolled back (watchUpgrade) and not tried again. One switched off waits until it is on again:
@@ -138,17 +138,19 @@ func (h *Manager) extensionBusy(id string) string {
 	if hp := h.extensions.get(id); hp != nil && hp.proc != nil && !hp.proc.Idle() {
 		return i18n.T(h.userLang(), "hub-extension_autoupgrade.busy_extension")
 	}
+	working := func(s *proto.Session) bool {
+		return s.Assistant && (s.State == proto.StateWorking || s.Status == proto.StatusWorking)
+	}
 	for _, m := range h.machinesNow() {
-		for _, s := range h.decorated(m) {
-			if s.Assistant && (s.State == proto.StateWorking || s.Status == proto.StatusWorking) {
-				return i18n.T(h.userLang(), "hub-extension_autoupgrade.busy_assistant")
-			}
+		if h.findSession(m, working) {
+			return i18n.T(h.userLang(), "hub-extension_autoupgrade.busy_assistant")
 		}
 	}
 	return ""
 }
 
-// extensionUpgradeLoop looks for newer versions until ctx ends.
+// extensionUpgradeLoop looks for newer versions until ctx ends. Each look also drops the previews past their time, so
+// a package staged for one nobody installed leaves the disk on an idle hub too.
 func (h *Manager) extensionUpgradeLoop(ctx context.Context) {
 	u := h.extensionUpgrades()
 	if u == nil {
@@ -162,6 +164,7 @@ func (h *Manager) extensionUpgradeLoop(ctx context.Context) {
 	t := time.NewTicker(extensionUpgradeEvery)
 	defer t.Stop()
 	for {
+		h.extensions.reg.DropExpiredPreviews()
 		u.check(ctx)
 		select {
 		case <-ctx.Done():
@@ -387,6 +390,7 @@ func (u *extensionUpgrades) candidateIn(p *extension.Extension, l i18n.Lang) (up
 			}
 		}
 	}
+	saved := u.h.extensions.reg.SavedConfig(p) // kept by the upgrade: the address an added config: entry names (#8570)
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	s := u.settings
@@ -395,6 +399,8 @@ func (u *extensionUpgrades) candidateIn(p *extension.Extension, l i18n.Lang) (up
 		up.State, up.Detail = upgradeIncompatible, i18n.T(l, "hub-extension_autoupgrade.no_package", i18n.Args{"platform": extension.Platform()})
 	case engines != nil:
 		up.State, up.Detail = upgradeIncompatible, i18n.Localize(engines, l)
+	case u.h.cantRunHere(m) != nil:
+		up.State, up.Detail = upgradeIncompatible, i18n.Localize(u.h.cantRunHere(m), l)
 	case s.Skipped[id] == m.Version:
 		up.State, up.Detail = upgradeSkipped, i18n.T(l, "hub-extension_autoupgrade.skipped")
 		if s.SkippedBy[id] == skippedByUser {
@@ -407,7 +413,7 @@ func (u *extensionUpgrades) candidateIn(p *extension.Extension, l i18n.Lang) (up
 	case up.RenameFrom != "":
 		up.State, up.Detail = upgradeNeedsConsent, i18n.T(l, "extension-identity.confirmation", i18n.Args{"from": up.RenameFrom, "to": up.RenameTo})
 	case extension.MorePermissions(p, m) || extension.Digest(m) != granted(p):
-		up.State, up.AddedPermissions = upgradeNeedsConsent, extension.AddedIn(l, p.Manifest, m)
+		up.State, up.AddedPermissions = upgradeNeedsConsent, extension.AddedWith(l, p.Manifest, m, saved)
 	case bundleConsent:
 		up.State, up.Detail = upgradeNeedsConsent, i18n.T(l, "hub-extension_autoupgrade.bundle_confirmation")
 	case s.autoOff(id):
@@ -543,6 +549,9 @@ func (u *extensionUpgrades) install(ctx context.Context, p *extension.Extension,
 		h.opStep(op, extension.StepConsent, extension.StepSkipped) // nothing more than was granted: nobody is asked
 		var np *extension.Extension
 		if np, err = reg.UpgradePlan(ctx, id, pv.ID, "", nil, extensionUpgradeActor); err != nil {
+			// A refused plan keeps its preview for a retry, but nobody retries this one: the next try waits for a
+			// fresh index and previews again, so its staged package is dropped now instead of waiting to expire.
+			reg.Discard(pv.ID)
 			u.mu.Lock()
 			delete(u.inflight, key)
 			u.mu.Unlock()
@@ -643,7 +652,7 @@ func (u *extensionUpgrades) decorate(ctx context.Context, v *ExtensionView, p *e
 	}
 	u.load(ctx)
 	_, own := u.auto(p.Record.ID)
-	v.AutoUpgrade = &own
+	v.AutoUpgrade, v.Market = &own, upgradesFrom(p)
 	if !p.Record.Enabled {
 		v.AutoUpgradePaused = autoUpgradePausedDisabled
 	}

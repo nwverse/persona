@@ -4,7 +4,8 @@
 // across re-parses (matched by content), so a word that has already faded in never plays again; a remounted node
 // resumes its animation with a negative delay. Code blocks and formulas appear at once.
 //
-// While streaming, settled segments keep their span (only the animation class goes); when the stream ends the message
+// While streaming, settled segments keep their span (only the animation class goes, when the chunk is parsed again:
+// nothing is written to the page as each word ends, FadeSpan.tsx); when the stream ends the message
 // is rendered as plain Markdown again, without any of these spans. A block that fades in once (`plain`) writes its
 // settled segments as plain text instead, so taking over a timeline whose words are mostly in (shownBefore: the stream
 // it ends, or an earlier mount of the same block) costs about what plain Markdown does.
@@ -28,6 +29,9 @@ export interface WordFadeTimeline {
   settled: Set<string>;
   /** The earliest the next new segment may start; shared by every chunk of one message. */
   next: number;
+  /** When the first segment was scheduled, and how many have been since: the stream's average pace (#6651). */
+  first?: number;
+  count?: number;
   /** The clock (tests). */
   now?: () => number;
 }
@@ -51,6 +55,19 @@ export const BACKLOG_MS = 96;
 export const BACKLOG_STEP_MS = 4;
 /** No segment waits longer than this: past it a burst fades in together instead of sitting invisible. */
 export const MAX_WAIT_MS = 160;
+/**
+ * A stream's words keep to its pace (#6651): the model's text comes in bursts about 350 ms apart (up to 2 s), and at
+ * 16 ms a word each burst was in after a tenth of a second, then nothing moved until the next. Once a stream has run
+ * PACE_AFTER_MS, a word follows the last one at 1 / (PACE_SHARE × the stream's average rate) (at most PACE_MAX_STEP_MS),
+ * twice as fast once PACE_BACKLOG_MS behind, and no word waits over PACE_MAX_WAIT_MS: on recorded replies the frames
+ * without a new word over 100 ms halved, each word starting about 0.4 s after it arrived. A whole block fading in at
+ * once keeps the steps above.
+ */
+export const PACE_AFTER_MS = 500;
+export const PACE_SHARE = 0.8;
+export const PACE_MAX_STEP_MS = 60;
+export const PACE_BACKLOG_MS = 360;
+export const PACE_MAX_WAIT_MS = 600;
 
 const clock = (t: WordFadeTimeline) => (t.now ?? (() => performance.now()))();
 
@@ -83,9 +100,15 @@ export function scheduleSegment(state: WordFadeState, key: string, el: HTMLEleme
   const now = clock(t);
   let start = t.startAt.get(key);
   if (start === undefined) {
-    start = Math.min(Math.max(t.next, now), now + MAX_WAIT_MS);
+    t.first ??= now;
+    const elapsed = now - t.first;
+    const paced = elapsed > PACE_AFTER_MS && (t.count ?? 0) > 0;
+    const step = paced ? Math.min(PACE_MAX_STEP_MS, elapsed / ((t.count ?? 1) * PACE_SHARE)) : STEP_MS;
+    start = Math.min(Math.max(t.next, now), now + (paced ? PACE_MAX_WAIT_MS : MAX_WAIT_MS));
     t.startAt.set(key, start);
-    t.next = start + (start - now < BACKLOG_MS ? STEP_MS : BACKLOG_STEP_MS);
+    const behind = start - now >= (paced ? PACE_BACKLOG_MS : BACKLOG_MS);
+    t.next = start + (!behind ? step : paced ? Math.max(BACKLOG_STEP_MS, step / 2) : BACKLOG_STEP_MS);
+    t.count = (t.count ?? 0) + 1;
   }
   const delay = Math.round(start - now);
   el.style.setProperty("--wf-delay", `${delay}ms`);

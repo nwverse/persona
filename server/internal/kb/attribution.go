@@ -55,6 +55,8 @@ type ExtensionWrite struct {
 type ExtensionResult struct {
 	ID     string
 	Before map[string]json.RawMessage
+	// Ignored: the fields the update carried that its kind does not use, not applied (fields.go).
+	Ignored []IgnoredField
 }
 
 // UpdateFields are the update fields an update touches, as named in locked_fields (and "pinned").
@@ -272,9 +274,27 @@ func (e *Engine) ApplyExtension(kind, id string, u Update, w ExtensionWrite) (Ex
 		}
 	}
 	by := ExtensionWriter(w.Extension)
+	ignored := Unsupported(kind, u)
+	u = stripUnsupported(kind, u) // what the kind does not use is neither applied nor held (ExtensionResult.Ignored)
+	if err := checkProfile(u.Profile); err != nil {
+		return ExtensionResult{Ignored: ignored}, err
+	}
+	profile := u.Profile // the extension's own profile: nobody else's to conflict with (profile.go)
+	u.Profile = nil
 	e.Store.applyMu.Lock()
 	defer e.Store.applyMu.Unlock()
+	if kind == KindProject {
+		if err := e.projectSourceUpdate(id, &UserUpdate{Update: u}); err != nil {
+			return ExtensionResult{}, err
+		}
+		u = e.projectUpdate(u)
+	}
 	target := fieldRef{kind: kind, id: e.resolve(kind, id)}
+	if target.id != "" {
+		var removed []IgnoredField
+		u, removed = e.withoutRemoved(kind, target.id, u) // links the user removed are theirs to make again
+		ignored = append(ignored, removed...)
+	}
 	var refs []fieldRef
 	if u.MergeInto != "" {
 		// Folding a project away rewrites all of it: nothing on it may be held by someone else.
@@ -304,14 +324,24 @@ func (e *Engine) ApplyExtension(kind, id string, u Update, w ExtensionWrite) (Ex
 	if u.Source == "" && u.Log != "" {
 		u.Source = w.Extension
 	}
-	out, err := e.apply(kind, id, u)
+	out, err := e.apply(kind, id, UserUpdate{Update: u}, extensionEdit(u), by)
 	if err != nil || u.MergeInto != "" {
-		return ExtensionResult{ID: out, Before: before}, err
+		return ExtensionResult{ID: out, Before: before, Ignored: ignored}, err
 	}
 	if err := e.claim(kind, out, u, by, w.Evidence, w.Unlock, legacy); err != nil {
-		return ExtensionResult{ID: out, Before: before}, err
+		return ExtensionResult{ID: out, Before: before, Ignored: ignored}, err
 	}
-	return ExtensionResult{ID: out, Before: before}, nil
+	if profile != nil {
+		old, err := e.putProfile(out, by, profile)
+		before["profile"] = json.RawMessage("null")
+		if old != nil {
+			before["profile"], _ = json.Marshal(old)
+		}
+		if err != nil {
+			return ExtensionResult{ID: out, Before: before, Ignored: ignored}, err
+		}
+	}
+	return ExtensionResult{ID: out, Before: before, Ignored: ignored}, nil
 }
 
 // claim records who holds the locked fields an applied update wrote: by "" (the user) drops provenance from them;
@@ -449,6 +479,7 @@ func (s *Store) editTagging(kind, id string, edit func(*Tagging) bool) (err erro
 	set("pinned", t.Pinned, t.Pinned == "")
 	set("locked_fields", t.LockedFields, len(t.LockedFields) == 0)
 	set("provenance", t.Provenance, len(t.Provenance) == 0)
+	set("excluded", t.Excluded, len(t.Excluded) == 0)
 	before, _ := json.Marshal(current)
 	after, _ := json.Marshal(next)
 	changed = !bytes.Equal(before, after)

@@ -31,11 +31,14 @@ func serveAPIExtensionForTest() {
 	if err != nil {
 		os.Exit(1)
 	}
-	var sends atomic.Int32
+	var sends, avatarReads atomic.Int32
 	var role, caps atomic.Value
 	role.Store("")
 	caps.Store([]string(nil))
 	go http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveTestLarkAvatars(w, r, &avatarReads) {
+			return
+		}
 		if strings.HasSuffix(r.URL.Path, "/role") {
 			_ = json.NewEncoder(w).Encode(map[string]any{"role": role.Load(), "capabilities": caps.Load()})
 			return
@@ -170,7 +173,7 @@ func TestExtensionAPI(t *testing.T) {
 		}
 	}
 	if _, out := call(t, mux, "GET", "/api/v1/examplefeed/role", master, ""); out["role"] != "center" ||
-		fmt.Sprint(out["capabilities"]) != "[inbox_group]" {
+		fmt.Sprint(out["capabilities"]) != "[inbox_group inbox_group_state tool_images]" {
 		t.Fatalf("the hub's role and capabilities at initialize: %v", out)
 	}
 	// A send it declared a receipt for is kept by the hub, which relays it (hub/extensions_link.go): the report
@@ -213,7 +216,7 @@ func TestExtensionAPI(t *testing.T) {
 		t.Fatalf("an event of a type it did not declare went out: %v", b)
 	}
 
-	if md := h.extensions.extensionInstructions(); !strings.Contains(md, "The example feed is read with its skill.") {
+	if md := h.extensions.extensionInstructions(context.Background(), ""); !strings.Contains(md, "The example feed is read with its skill.") {
 		t.Fatalf("instructions: %q", md)
 	}
 	first := h.extensions.extensionSkillsFor("mac")

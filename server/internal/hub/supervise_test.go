@@ -65,7 +65,11 @@ func TestSupervisedTaskOverTheBus(t *testing.T) {
 	})
 	n.known["main-1"] = true
 	box := connectTaskNode(t, h, "box")
-	if err := store.PutSetting(ctx, "assistant", assistant.Settings{MachineID: "server", Main: "main-1", Timezone: "Asia/Shanghai"}); err != nil {
+	// The main conversation supervises its own tasks here: the background supervisor that takes them by default (#4927)
+	// is internal/assistant/supervise_background_test.go's.
+	mainSupervises := true
+	if err := store.PutSetting(ctx, "assistant", assistant.Settings{MachineID: "server", Main: "main-1", Timezone: "Asia/Shanghai",
+		MainSupervisesOwnTasks: &mainSupervises}); err != nil {
 		t.Fatal(err)
 	}
 	dialAssistant(t, h, srv.URL, true)
@@ -120,8 +124,8 @@ func TestSupervisedTaskOverTheBus(t *testing.T) {
 	}
 
 	// Handed out with what done means: the agent is told it.
-	res := mcp("task_plan", map[string]any{"tasks": []map[string]any{{"title": "部署 hub", "prompt": "把 hub 部署到测试环境并验证",
-		"machine": "box", "cwd": "/code/app", "readonly": false, "user_requested": true, "why": "部署脚本在 box 上",
+	res := mcp("task_plan", map[string]any{"tasks": []map[string]any{{"title": "部署 hub", "prompt": "把 hub 部署到测试环境并验证", "role": "worker",
+		"machine": "box", "cwd": "/code/app", "readonly": false, "permission": "bypassPermissions", "user_requested": true, "why": "部署脚本在 box 上",
 		"done_when": []string{"测试 hub 已部署并验证"}, "expect_minutes": 20}}})
 	if !strings.Contains(res, "You supervise them") {
 		t.Fatalf("task_plan: %s", res)
@@ -148,7 +152,7 @@ func TestSupervisedTaskOverTheBus(t *testing.T) {
 	agent(proto.StatusWorking, "")
 	agent(proto.StatusDone, "按 A 部署好了")
 	eventually(t, 10*time.Second, "the review message", func() bool { return len(digests()) == 2 })
-	if d := digests()[1]; !strings.Contains(d, "hub 判断做完了，等你验收（已部署）") {
+	if d := digests()[1]; !strings.Contains(d, "待逐项复核，不代表完成（已部署）") {
 		t.Fatalf("message:\n%s", d)
 	}
 	todo := todoOf()

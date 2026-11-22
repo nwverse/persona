@@ -31,6 +31,14 @@ var Routes = []string{
 	"/api/v1/imessage/",
 	"/api/v1/agents",
 	"/api/v1/agents/",
+	// The concrete Agents patterns also let scoped devices authorize against the hub's real relay mux.
+	"GET /api/v1/agents",
+	"GET /api/v1/agents/sessions",
+	"GET /api/v1/agents/sessions/{id}",
+	"GET /api/v1/agents/sessions/{id}/messages",
+	"GET /api/v1/agents/sessions/{id}/avatar",
+	"POST /api/v1/agents/sessions/{id}/messages",
+	"POST /api/v1/agents/sessions/{id}/read",
 	"/api/v1/messaging",
 	"/api/v1/messaging/",
 	"/api/v1/devices/{id}/widgets",
@@ -38,7 +46,14 @@ var Routes = []string{
 	"/api/v1/machines/{mid}/computer/",
 	"/api/v1/machines/{mid}/browser",
 	"/api/v1/machines/{mid}/browser/",
+	"/api/v1/machines/{mid}/iphone",
+	"/api/v1/machines/{mid}/iphone/",
+	"/api/v1/iphone",
+	"/api/v1/iphone/",
 	"/api/v1/error-reports",
+	"/api/v1/subscriptions",
+	"/api/v1/subscriptions/",
+	"/api/v1/avatars/", // AvatarsRoute
 }
 
 // KeptRoutes are GET routes whose last answer the hub keeps and gives while the manager is away, so the apps keep
@@ -154,7 +169,7 @@ type Report struct {
 	Machines map[string]MachineExtras `json:"machines,omitempty"`
 	// ScreenKeepAwake: a Mac whose screen the app watches stays awake meanwhile (the plugin cua's setting).
 	ScreenKeepAwake bool `json:"screen_keep_awake,omitempty"`
-	// Looks are the looks of the extensions that are on (docs/extensions/extensions.md "Looks"), with their files: the hub serves
+	// Looks are the looks of the extensions that are on (docs/extensions/extensions.md "Avatars"), with their files: the hub serves
 	// them as persona packages beside its own.
 	Looks []LookPackage `json:"looks,omitempty"`
 	// BotIdentities identify enabled bots for cross-manager conflict warnings. Never include credentials.
@@ -190,10 +205,11 @@ type APIPrefix struct {
 	Events []string `json:"events,omitempty"`
 }
 
-// MachineExtras is one machine's computer (Cua) and browser (ego) state, nil when not on.
+// MachineExtras is one machine's computer (Cua), browser (ego) and paired iPhones' (iphone) state, nil when not on.
 type MachineExtras struct {
 	Computer json.RawMessage `json:"computer,omitempty"`
 	Browser  json.RawMessage `json:"browser,omitempty"`
+	IPhone   json.RawMessage `json:"iphone,omitempty"`
 	// ScreenPort: the computer's screen may be opened (the plugin cua or ego is on for it).
 	ScreenPort bool `json:"screen_port,omitempty"`
 }
@@ -214,8 +230,38 @@ const (
 	// HubSettingsTool: {machine_id, session_id, arguments} → {text}: persona_settings on one of them (the card is the
 	// hub's: the manager asks HubWaitInteraction).
 	HubSettingsTool = "settings.tool"
+	// HubClarificationTake: {proof} → ClarificationProof: consume a one-time,
+	// card/text/conversation-bound channel clarification proof before session.send_once.
+	HubClarificationTake = "approval_clarification.take"
 	// HubKBArchives, … see the routes.
+	// HubAudit: Audit → {}: a request of an extension's token the hub refused, for that extension's audit in its manager
+	// (plugin_audit). The manager takes the actions below only.
+	HubAudit = "audit"
 )
+
+// What the hub records with HubAudit (Audit.Action).
+const (
+	// AuditPermissionModeRefused: {machine_id, session_id, reason}: a permission mode change it may not make (not a
+	// conversation it opened, without agents.permission_mode, or with more than the permission mode).
+	AuditPermissionModeRefused = "permission_mode_refused"
+	// AuditTerminalControlRefused: {route, path}: a request with terminal control characters, which an extension may
+	// not send (hub's terminal_controls.go).
+	AuditTerminalControlRefused = "terminal_control_refused"
+	// AuditSecretHandoffRefused: {interaction_id, machine_id, session_id, role, reason, device_name?}: an approval of a
+	// hand-off card from a device or client that may not give one (hub's secret_handoff.go). Extension is a provider
+	// the card hands a value from and Actor who tried ("device:<id>", "extension:<id>", "hub token"); the card's
+	// variables, references and values are not in it.
+	AuditSecretHandoffRefused = "secret_handoff_approve_refused"
+)
+
+// Audit is HubAudit's params: what extension Extension's token was refused, or (AuditSecretHandoffRefused) whose
+// approval of a card handing over a value of provider Extension was. Detail holds ids and reasons only.
+type Audit struct {
+	Extension string         `json:"extension"`
+	Action    string         `json:"action"`
+	Actor     string         `json:"actor,omitempty"`
+	Detail    map[string]any `json:"detail,omitempty"`
+}
 
 // More of the hub's apps the manager calls.
 const (
@@ -224,6 +270,10 @@ const (
 	HubPushLocalized = "push.localized"
 	// HubMailTargets: {} → {targets}: the languages the devices want mail translated into.
 	HubMailTargets = "push.mail_targets"
+	// HubTokenRevoked: {hash} → {}: the manager dropped its extension token of that hash (Authorize's): the hub ends at
+	// once what the token has open through it (the calls and WebSockets on the relay streams to the manager), as for a
+	// revoked device.
+	HubTokenRevoked = "extensions.token_revoked"
 )
 
 // MethodAccept: {id} → {}: the hub holds a request for the manager (a relayed route): it dials the relay with the id.

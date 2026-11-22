@@ -20,8 +20,15 @@ private struct TabBarHider: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: Probe, context: Context) {}
 
     final class Probe: UIViewController {
+        /// Whether the bar was away already when the page came, to leave it so: putting it back here brought it back
+        /// where the page under it kept it hidden (the open iPhone Duo's tabs before #7543, #2623: down the side again
+        /// on Back).
+        private var wasHidden: Bool?
+
         override func viewWillAppear(_ animated: Bool) {
             super.viewWillAppear(animated)
+            // Once per stay: back from a full-screen page of its own the bar is this page's hidden one.
+            if wasHidden == nil { wasHidden = tabBarController?.isTabBarHidden ?? false }
             tabBarController?.setTabBarHidden(true, animated: animated)
         }
 
@@ -29,7 +36,8 @@ private struct TabBarHider: UIViewControllerRepresentable {
             super.viewWillDisappear(animated)
             // Covered by a full-screen page of its own (the terminal): still this page, the bar stays away.
             if view.window?.rootViewController?.presentedViewController != nil { return }
-            tabBarController?.setTabBarHidden(false, animated: animated)
+            tabBarController?.setTabBarHidden(wasHidden ?? false, animated: animated)
+            wasHidden = nil
         }
     }
 }

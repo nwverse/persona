@@ -6,14 +6,15 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, enc, errorText } from "../../lib/api";
 import { clock } from "../../lib/format";
-import { cardText, emojiLabel, mergeMessages, type LarkMessage, type LarkPage, type LarkPart } from "../../lib/inbox";
+import { mergeMessages, type LarkMessage, type LarkPage, type LarkPart } from "../../lib/inbox";
+import { cardText, emojiLabel } from "../../lib/inbox-page";
 import { larkPath } from "../../lib/lark-accounts";
 import { useItemManager } from "../../lib/manager-choice";
 import { LarkTopicReplies, SHOWN, topicReplyCount, type TopicPreview } from "../../lib/lark-topic-replies";
 import { t } from "../../i18n";
 import { Button, cx, Dialog, Loading } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-import { Monogram } from "./InboxParts";
+import { MessageBar, LarkAvatar } from "./InboxParts";
 
 /** The fold: a topic taller than this shows its top under a fade (the Lark gateway folds at 320 px). */
 const FOLD = 320;
@@ -72,6 +73,7 @@ function partSummary(p: LarkPart): string {
 
 export interface LarkTopicCardProps {
   topic: LarkMessage;
+  account?: number;
   replies: LarkTopicReplies;
   /** The topic's own content (what a chat row holds, without its header). */
   children: React.ReactNode;
@@ -84,7 +86,7 @@ export interface LarkTopicCardProps {
   flash?: number;
 }
 
-export function LarkTopicCard({ topic, replies, children, onOpen, onReply, onCopy, onPin, flash }: LarkTopicCardProps) {
+export function LarkTopicCard({ topic, account, replies, children, onOpen, onReply, onCopy, onPin, flash }: LarkTopicCardProps) {
   const box = useRef<HTMLDivElement>(null);
   const [onScreen, setOnScreen] = useState(false);
   const count = topicReplyCount(topic);
@@ -123,7 +125,7 @@ export function LarkTopicCard({ topic, replies, children, onOpen, onReply, onCop
     >
       {flash !== undefined && <span key={flash} aria-hidden className="pointer-events-none absolute inset-0 -z-10 rounded-[14px] bg-accent-tint" style={{ animation: "pin-flash 1.8s ease-out both" }} />}
       <div className="flex items-center gap-2.5">
-        <Monogram name={name} size={36} src={topic.sender_avatar} />
+        <LarkAvatar name={name} size={36} avatarURL={topic.sender_avatar_url} avatar={topic.sender_avatar} account={account} />
         <div className="min-w-0">
           <p className="flex items-center gap-1.5">
             <span className={cx("truncate text-[13px] font-medium", topic.is_mine ? "text-accent-ink" : "text-ink")}>{name}</span>
@@ -138,11 +140,11 @@ export function LarkTopicCard({ topic, replies, children, onOpen, onReply, onCop
       <Fold>{children}</Fold>
       {!topic.recalled && count > 0 && <ReplyPreview topic={topic} count={count} replies={replies} open={open} />}
       {!topic.recalled && !topic.sending && (onReply || onCopy || onPin) && (
-        <div className="absolute top-2 right-2 z-10 hidden items-center gap-0.5 rounded-[6px] border border-line bg-surface/95 px-1 py-0.5 shadow-hairline backdrop-blur-sm group-hover/msg:flex">
+        <MessageBar className="top-2 right-2">
           {onReply && <HoverButton icon="quote" label={t("inbox-larktopiccard.reply")} onClick={() => onReply(topic)} />}
           {onPin && <HoverButton icon="pin" label="Pin" title={t("inbox-larktopiccard.add_pin")} onClick={() => onPin(topic)} />}
           {onCopy && <HoverButton icon="copy" title={t("inbox-larktopiccard.copy")} onClick={() => onCopy(topic)} />}
-        </div>
+        </MessageBar>
       )}
     </div>
   );

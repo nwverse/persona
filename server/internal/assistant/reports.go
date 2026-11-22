@@ -3,12 +3,16 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -20,9 +24,23 @@ import (
 // there by the bot itself (no lark-cli, nothing to approve per message). Changes within reportDelay are one card:
 // what needs the user's decision on top (each with its own answerable card below it), then each task with its stage
 // (plan → develop → review → merge → deploy → verified), a line of what happened and links to its page, its PR and its agent.
+// That is the card with report_steps on; off (the default) only goal-level changes go out (#3218, below).
 // The bot's reports switch turns it off (on by default). With only_conclusions on (#1226) the card carries only how tasks
 // ended (closed, did not start): a finished turn, waiting and interrupted stay in the task list and the briefing, and a
 // decision waiting still gets its own answerable card. A supervised task's review sends its conclusion card instead (conclusion.go).
+
+// Goal-level reports (#3218): by default the card is not a log of the work. A finished turn, an interruption, a closing
+// by the judge and the stage moving on are execution steps and are not pushed; what is pushed is a change of the task's
+// goal: reached (the conclusion card, conclusion.go, or the "Please verify" card of deployed work), waiting on the owner
+// (the decision's own answerable card) and stuck (it did not start, or its turns were cut off reportStuckAfter times in a
+// row). A stuck task's card says the goal, where it is now and one line of evidence with a link: no agent's words, no
+// stage bar. The bot's report_steps switch brings back the card as it was.
+
+// reportStuckAfter is how many interrupted turns in a row, with no finished one between, make a task stuck.
+const reportStuckAfter = 3
+
+// goalCardMaxItems bounds the stuck card; the rest are counted in a line pointing to the to-do list.
+const goalCardMaxItems = 10
 
 // reportDelay is how long a change waits for others before the card goes out (reportBook.delay overrides it).
 const reportDelay = time.Minute
@@ -113,10 +131,16 @@ func negatedBefore(pre string) bool {
 // stageOf is how far a reply says the work got (at least develop: the agent worked), and the PR it names.
 func stageOf(text string) (stage, pr string) {
 	stage = "develop"
-	if prs := prLink.FindAllString(text, -1); len(prs) > 0 {
-		pr = prs[len(prs)-1]
+	if ref := closeoutPRRef(text); ref != "" {
+		pr = prLink.FindString(ref)
+	} else if deliveryCloseout(text) == "" {
+		if prs := prLink.FindAllString(text, -1); len(prs) > 0 {
+			pr = prs[len(prs)-1]
+		}
+	}
+	if pr != "" {
 		stage = "review"
-		if mergedWords.MatchString(text) {
+		if said(mergedWords, text) {
 			stage = "merge"
 		}
 	}
@@ -126,7 +150,64 @@ func stageOf(text string) (stage, pr string) {
 	if stage == "deploy" && said(verifyWords, text) {
 		stage = "verify" // checked on what was deployed
 	}
+	if d, ok := deliveryMark(text); ok {
+		stage = "develop"
+		if st := deliveryStage(d.State); st != "" {
+			stage = st
+		}
+	}
 	return stage, pr
+}
+
+// advanceTaskReply handles progress and final answers identically, including the running-hub deploy check.
+func (s *Service) advanceTaskReply(ctx context.Context, t Todo, machine, session, text string) bool {
+	if urls := taskRepositoryReportLinks(text); len(urls) > 0 {
+		roleByURL := map[string]string{}
+		for raw := range referenceReportLinks(text, urls) {
+			roleByURL[raw] = repository.LinkRoleReference
+		}
+		if err := s.importReportedLinks(ctx, t.ID, urls, "pull_request", roleByURL); err != nil {
+			s.logf("task %s: repository links not saved: %v", t.ID, err)
+		}
+	}
+	stage, pr := stageOf(text)
+	d, marked := deliveryMark(text)
+	if changeSeen(text, d, marked) {
+		s.restage(ctx, t.ID, func(st *todoStage) { st.Change = true }) // a commit, a branch or a held delivery: code work, PR link or not
+	}
+	if pr != "" {
+		s.learnRepoRoot(ctx, machine, session, pr)
+	} else if pr = s.prFromNumber(ctx, t, machine, session, text); pr != "" && stage == "develop" && !marked {
+		stage = "review" // as stageOf has it for a linked PR (#7921)
+		if said(mergedWords, text) {
+			stage = "merge"
+		}
+	}
+	if !marked && stageIndex(stage) < stageIndex("merge") && pr == "" && t.PRURL != "" && said(mergedWords, text) {
+		stage = "merge" // later replies need not repeat the link already kept on the task
+	}
+	if stage == "develop" && pr == "" && !marked {
+		return false // most progress messages carry no new stage evidence
+	}
+	stage, deployed := s.gateDeployStage(ctx, t, stage, pr, machine, session, text)
+	if !marked && !deployed {
+		if cur, ok := s.todoNow(t.ID); ok {
+			t = cur
+		}
+		if t.Delivery != nil {
+			if st := deliveryStage(t.Delivery.State); st != "" {
+				stage = st
+			} else if t.Delivery.State == deliveryNone {
+				stage = "develop"
+			}
+		}
+	}
+	if marked && (stage == deliveryStage(d.State) || d.State == deliveryNone) {
+		d.At = time.Now().UTC()
+		s.setTaskDelivery(ctx, t.ID, d) // a held deploy check takes precedence over the agent's mark
+	}
+	s.setTaskStage(ctx, t.ID, stage, pr)
+	return deployed
 }
 
 type reportItem struct {
@@ -137,31 +218,178 @@ type reportItem struct {
 	text    string
 	ix      *proto.Interaction
 	at      time.Time
-	tries   int // sends already attempted for this change (0: the first send is pending)
+	tries   int  // sends already attempted for this change (0: the first send is pending)
+	cuts    int  // interrupted turns in a row so far, this one included (interrupted only)
+	cutOff  bool // these cuts make the task stuck: the one reaching reportStuckAfter, or a later one replacing it unsent
 }
 
 type reportBook struct {
-	mu      sync.Mutex
-	sending sync.Mutex             // serializes sendReports: a later timer must not take a batch while a post is still in flight
-	pending map[string]*reportItem // by todo id: the latest change of each
-	timer   *time.Timer
-	stages  map[string]todoStage // by todo id (reportStagesKey)
-	loaded  bool
-	delay   time.Duration // 0: reportDelay (the tests' is shorter)
-	retry   time.Duration // 0: reportRetryDelay (the tests' is shorter)
+	stageWriting sync.Mutex // serialize stage/delivery storage through todo publication
+	mu           sync.Mutex
+	sending      sync.Mutex             // serializes sendReports: a later timer must not take a batch while a post is still in flight
+	pending      map[string]*reportItem // by todo id: the latest change of each
+	timer        *time.Timer
+	stages       map[string]todoStage // by todo id (reportStagesKey)
+	loaded       bool
+	delay        time.Duration  // 0: reportDelay (the tests' is shorter)
+	retry        time.Duration  // 0: reportRetryDelay (the tests' is shorter)
+	cuts         map[string]int // by todo id: interrupted turns in a row (a finished or closed one resets it)
 }
 
 type todoStage struct {
-	Stage    string        `json:"stage"`
+	Stage string `json:"stage"`
+	Kind  string `json:"stage_kind,omitempty"`
+	// Readonly: its latest start handed it out read-only; Change: a reply showed a change made without its PR's link (a
+	// closeout's commit or branch, a delivery held at a PR or a merge). What taskStageKind keeps reading (restage).
+	Readonly bool          `json:"readonly,omitempty"`
+	Change   bool          `json:"change,omitempty"`
 	PR       string        `json:"pr,omitempty"`
-	Delivery *TodoDelivery `json:"delivery,omitempty"` // delivery.go
+	PRs      []string      `json:"prs,omitempty"`       // the PRs named before PR, newest last, at most stagePRsKept (#6507)
+	Delivery *TodoDelivery `json:"delivery,omitempty"`  // delivery.go
+	Deploy   *deployWatch  `json:"deploy,omitempty"`    // deploy_check.go: held until the running hub has the work
+	Verified bool          `json:"verified,omitempty"`  // explicit acceptance outranks delivery and reply keywords
+	Check    *TodoCheck    `json:"check,omitempty"`     // task_check.go
+	PRStatus *TodoPRStatus `json:"pr_status,omitempty"` // Observed forge facts, not a task state.
+	// EarlierPRStatus: the same facts for the PRs in PRs, by URL (#7935): work that spans several PRs waits for merge
+	// while any of them is open, not only the last one named.
+	EarlierPRStatus map[string]TodoPRStatus `json:"prs_status,omitempty"`
+}
+
+// otherPRFacts are st's facts for its earlier PRs, newest first: what Todo.OtherPRs carries.
+func (st todoStage) otherPRFacts() []TodoPRStatus {
+	var out []TodoPRStatus
+	for i := len(st.PRs) - 1; i >= 0; i-- {
+		if f, ok := st.EarlierPRStatus[st.PRs[i]]; ok && st.PRs[i] != st.PR {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 const reportStagesKey = "assistant.todo_stages"
 
+// empty: st keeps nothing (its row can go).
+func (st todoStage) empty() bool {
+	return st.Stage == "" && st.Kind == "" && !st.Readonly && !st.Change && st.PR == "" && len(st.PRs) == 0 && st.Delivery == nil &&
+		st.Deploy == nil && !st.Verified && st.Check == nil && st.PRStatus == nil && len(st.EarlierPRStatus) == 0
+}
+
+// stagePRsKept bounds a task's earlier PRs (todoStage.PRs).
+const stagePRsKept = 20
+
+// keptPRs is prs with pr moved to its end (a PR named again is the newest), at most stagePRsKept.
+func keptPRs(prs []string, pr string) []string {
+	out := append(slices.DeleteFunc(slices.Clone(prs), func(p string) bool { return p == pr }), pr)
+	return out[max(0, len(out)-stagePRsKept):]
+}
+
+// forgetTaskPR removes a non-delivery record and installs only an explicitly recovered delivery, never an
+// unproven historical reference. A confirmed no-PR result also discards that reference history and its hold.
+func (s *Service) forgetTaskPR(ctx context.Context, id, pr, replacement string) error {
+	b := &s.reports
+	b.stageWriting.Lock()
+	defer b.stageWriting.Unlock()
+	b.mu.Lock()
+	if !s.loadStagesLocked(ctx) {
+		b.mu.Unlock()
+		return fmt.Errorf("task %s: stages could not be read", id)
+	}
+	cur := b.stages[id]
+	if replacement == "" {
+		if err := s.forgetReportedPRLinks(ctx, id); err != nil {
+			b.mu.Unlock()
+			return err
+		}
+	}
+	removed := cur.PR == pr
+	history := slices.DeleteFunc(slices.Clone(cur.PRs), func(p string) bool { return p == pr })
+	changed := removed || len(history) != len(cur.PRs)
+	cur.PRs = history
+	if removed {
+		cur.PR = replacement
+		if replacement != "" {
+			cur.PRs = slices.DeleteFunc(cur.PRs, func(p string) bool { return p == replacement })
+		}
+		if cur.PR == "" {
+			cur.PRs = nil
+		}
+		if cur.PRStatus != nil && (cur.PR == "" || cur.PRStatus.URL == pr) {
+			cur.PRStatus = nil
+		}
+		if cur.PR == "" && !cur.Verified && (cur.Stage == "review" || cur.Stage == "merge") {
+			cur.Stage = "develop"
+		}
+	}
+	removedWatch := cur.Deploy != nil && (cur.Deploy.PR == pr || removed && cur.PR == "")
+	if removedWatch {
+		cur.Deploy, changed = nil, true
+	}
+	if (removed || removedWatch) && cur.Delivery != nil &&
+		(cur.Delivery.State == deliveryPR || cur.Delivery.State == deliveryMerged) {
+		cur.Delivery = nil
+	}
+	if !changed {
+		b.mu.Unlock()
+		return nil
+	}
+	stages := maps.Clone(b.stages)
+	stages[id] = cur
+	if st := s.store(); st != nil {
+		if err := st.PutSetting(ctx, reportStagesKey, stages); err != nil {
+			b.mu.Unlock()
+			return fmt.Errorf("task %s: remove non-PR: %w", id, err)
+		}
+	}
+	b.stages = stages
+	b.mu.Unlock()
+	s.todos.mu.Lock()
+	if t := s.todos.todos[id]; t != nil {
+		t.Stage, t.PRURL, t.PRs, t.Delivery, t.PRStatus = cur.Stage, cur.PR, cur.PRs, cur.Delivery, cur.PRStatus
+	}
+	s.todos.mu.Unlock()
+	s.deploy.mu.Lock()
+	delete(s.deploy.seen, id)
+	s.deploy.mu.Unlock()
+	s.todosChanged(ctx)
+	return nil
+}
+
+// forgetReportedPRLinks removes the pull-request links imported from the task's reports, while preserving issue links
+// and every other kind of evidence. Revision-checked writes fail closed if the catalog changed meanwhile.
+func (s *Service) forgetReportedPRLinks(ctx context.Context, id string) error {
+	st, ok := s.store().(todoRepositoryStore)
+	if !ok {
+		return nil
+	}
+	set, err := st.TodoRepositories(ctx, id)
+	if err != nil {
+		return fmt.Errorf("task %s: read repository links to remove a non-PR: %w", id, err)
+	}
+	for _, row := range set.Repositories {
+		kept := make([]repository.LinkInput, 0, len(row.Links))
+		changed := false
+		for _, link := range row.Links {
+			if link.Kind == "pull_request" {
+				changed = true
+				continue
+			}
+			kept = append(kept, repository.LinkInput{URL: link.CanonicalURL, Kind: link.Kind, Number: link.Number, Title: link.Title})
+		}
+		if !changed {
+			continue
+		}
+		revision := set.Revision
+		if _, err := st.SetTodoRepositoryLinks(ctx, id, row.RepoID, repository.LinksInput{ExpectedRevision: &revision, Links: kept}); err != nil {
+			return fmt.Errorf("task %s: remove non-PR repository links: %w", id, err)
+		}
+		set.Revision++
+	}
+	return nil
+}
+
 // taskReport notes a change of task t for the next card. ix: what it asks (needs).
 func (s *Service) taskReport(t Todo, state, machine string, session [2]string, text string, ix *proto.Interaction) {
-	if t.Origin == "" {
+	if t.Origin == "" || s.isLeaderRef(t.Origin) { // a task leader's worker is no task of the owner's chat (task_leader.go)
 		return
 	}
 	b := &s.reports
@@ -170,7 +398,20 @@ func (s *Service) taskReport(t Todo, state, machine string, session [2]string, t
 	if b.pending == nil {
 		b.pending = map[string]*reportItem{}
 	}
-	b.pending[t.ID] = &reportItem{todo: t.ID, state: state, machine: machine, session: session, text: text, ix: ix, at: time.Now()}
+	it := &reportItem{todo: t.ID, state: state, machine: machine, session: session, text: text, ix: ix, at: time.Now()}
+	switch state {
+	case reportInterrupted:
+		if b.cuts == nil {
+			b.cuts = map[string]int{}
+		}
+		b.cuts[t.ID]++
+		it.cuts = b.cuts[t.ID]
+		prev := b.pending[t.ID]
+		it.cutOff = it.cuts == reportStuckAfter || prev != nil && prev.cutOff // a stuck card still unsent is not lost
+	case reportDone, reportClosed:
+		delete(b.cuts, t.ID)
+	}
+	b.pending[t.ID] = it
 	if b.timer == nil {
 		d := b.delay
 		if d <= 0 {
@@ -182,7 +423,38 @@ func (s *Service) taskReport(t Todo, state, machine string, session [2]string, t
 
 // setTaskStage moves task id to stage (never back) with its PR, kept in the store and on the todo.
 func (s *Service) setTaskStage(ctx context.Context, id, stage, pr string) {
+	s.setTaskStageKind(ctx, id, stage, pr, "", false)
+}
+
+func (s *Service) setTaskStageKind(ctx context.Context, id, stage, pr, kind string, verified bool) {
+	if pr != "" {
+		if err := s.importReportedLinks(ctx, id, []string{pr}, "", nil); err != nil {
+			s.logf("task %s: repository link not saved: %v", id, err)
+		}
+	}
+	s.setTaskStageOn(ctx, id, stage, pr, kind, verified, "")
+}
+
+// setTaskStageOn is setTaskStageKind, and when onPR is set it does nothing unless, under the stage lock, the open to-do
+// and its stage still name that PR: an observation of a PR that was replaced meanwhile moves no stage (#7614 review).
+func (s *Service) setTaskStageOn(ctx context.Context, id, stage, pr, kind string, verified bool, onPR string) {
+	if !verified && stage == "verify" {
+		if t, ok := s.todoNow(id); ok && t.Supervision != nil {
+			v := t.Supervision
+			if v.state(t) == reviewRework || v.state(t) == reviewNeedsUser || userCheckAsked(t) {
+				stage = "deploy" // a keyword cannot pass a check the review left outstanding
+			}
+		}
+	}
 	b := &s.reports
+	b.stageWriting.Lock()
+	defer b.stageWriting.Unlock()
+	if onPR != "" {
+		// The to-do's PR changes only under stageWriting (below), so it is read before b.mu, in the usual lock order.
+		if t, ok := s.todoNow(id); !ok || t.DoneAt != nil || t.PRURL != onPR {
+			return
+		}
+	}
 	b.mu.Lock()
 	if !s.loadStagesLocked(ctx) {
 		b.mu.Unlock()
@@ -190,11 +462,64 @@ func (s *Service) setTaskStage(ctx context.Context, id, stage, pr string) {
 		return
 	}
 	cur := b.stages[id]
+	if onPR != "" && cur.PR != onPR {
+		b.mu.Unlock()
+		return
+	}
 	changed := false
+	if verified && !cur.Verified {
+		cur.Verified, changed = true, true
+	}
+	if stage == "unverified" {
+		// A later review requests another check: an older acceptance or keyword match is not a pass.
+		if cur.Verified {
+			cur.Verified, changed = false, true
+		}
+		stage = ""
+		if cur.Stage == "verify" {
+			cur.Stage, changed = "deploy", true
+			if cur.Delivery != nil && deliveryStage(cur.Delivery.State) != "" {
+				cur.Stage = deliveryStage(cur.Delivery.State)
+			}
+		}
+	}
+	if cur.Verified {
+		stage = "verify"
+	}
+	if pr != "" || cur.PR != "" {
+		kind = "code"
+	}
+	if kind != "" && kind != cur.Kind {
+		cur.Kind, changed = kind, true
+	}
 	if stageIndex(stage) > stageIndex(cur.Stage) {
 		cur.Stage, changed = stage, true
 	}
 	if pr != "" && pr != cur.PR {
+		if cur.PR != "" {
+			cur.PRs = keptPRs(cur.PRs, cur.PR)
+		}
+		// The facts follow their PR: the one named before keeps its own, the one named now takes any it had (#7935).
+		facts := map[string]TodoPRStatus{}
+		for u, f := range cur.EarlierPRStatus {
+			facts[u] = f
+		}
+		if cur.PRStatus != nil && cur.PRStatus.URL == cur.PR && cur.PR != "" {
+			facts[cur.PR] = *cur.PRStatus
+		}
+		cur.PRStatus = nil
+		if f, ok := facts[pr]; ok {
+			cur.PRStatus = &f
+		}
+		cur.EarlierPRStatus = nil
+		for _, u := range cur.PRs {
+			if f, ok := facts[u]; ok && u != pr {
+				if cur.EarlierPRStatus == nil {
+					cur.EarlierPRStatus = map[string]TodoPRStatus{}
+				}
+				cur.EarlierPRStatus[u] = f
+			}
+		}
 		cur.PR, changed = pr, true
 	}
 	if changed {
@@ -211,7 +536,8 @@ func (s *Service) setTaskStage(ctx context.Context, id, stage, pr string) {
 	}
 	s.todos.mu.Lock()
 	if t := s.todos.todos[id]; t != nil {
-		t.Stage, t.PRURL = cur.Stage, cur.PR
+		t.Stage, t.PRURL, t.PRs, t.StageKind, t.stageVerified = cur.Stage, cur.PR, cur.PRs, cur.Kind, cur.Verified
+		t.PRStatus, t.OtherPRs = cur.PRStatus, cur.otherPRFacts()
 	}
 	s.todos.mu.Unlock()
 	s.todosChanged(ctx)
@@ -280,6 +606,7 @@ func (s *Service) sendReports() {
 		return
 	}
 	var keep, asks []*reportItem // asks: decisions whose own card goes out without a line in the report (only_conclusions)
+	quiet := s.quietModeOn(ctx)
 	for _, it := range items {
 		t, ok := s.todoNow(it.todo)
 		if !ok {
@@ -294,7 +621,22 @@ func (s *Service) sendReports() {
 		if t.Quiet && f.Sync && it.state != reportClosed {
 			continue // told in the main conversation, whose turns the chat mirrors (sync); closing is not told there
 		}
-		if f.OnlyConclusions && !reportConclusion(it.state) {
+		if quiet {
+			// Low-distraction mode (push_quiet.go): no progress, stuck or conclusion lines in the chat; the briefing and the
+			// board have them. A decision still gets its own answerable card.
+			if it.state == reportNeeds && it.ix != nil {
+				asks = append(asks, it)
+			}
+			continue
+		}
+		if !f.ReportSteps {
+			if it.state == reportNeeds && it.ix != nil {
+				asks = append(asks, it) // the decision is the push: its own answerable card
+			}
+			if !it.stuck() {
+				continue // an execution step: a turn ended, was cut off once, or the judge closed it (#3218)
+			}
+		} else if f.OnlyConclusions && !reportConclusion(it.state) {
 			if it.state == reportNeeds && it.ix != nil {
 				asks = append(asks, it) // the decision itself still reaches the owner
 			}
@@ -315,7 +657,14 @@ func (s *Service) sendReports() {
 		}
 		return keep[i].todo < keep[j].todo // identical timestamps stay in a stable, repost-safe order
 	})
-	cards, fallbacks := s.reportCards(ctx, keep)
+	var cards []*feishubot.Card
+	var fallbacks []string
+	if f.ReportSteps {
+		cards, fallbacks = s.reportCards(ctx, keep)
+	} else {
+		c, fb := s.goalCard(ctx, keep)
+		cards, fallbacks = []*feishubot.Card{c}, []string{fb}
+	}
 	// A notifications companion takes the report (feishu_companions.go); the decisions' own cards, which answer for
 	// the owner, still go to the chat below.
 	if s.divertNotices(ctx, "report", cards, fallbacks) {
@@ -340,6 +689,67 @@ func (s *Service) postReportAsks(items []*reportItem) {
 			s.feishuInteractionAlways(*it.ix)
 		}
 	}
+}
+
+// stuck: the change says the task's goal is stuck — it did not start, or its turns were cut off reportStuckAfter times in
+// a row (told once, on the turn that makes it so).
+func (it *reportItem) stuck() bool {
+	return it.state == reportFailed || it.state == reportInterrupted && it.cutOff
+}
+
+// goalCard is the goal-level card for stuck tasks: for each, the goal, where it is now and one line of evidence with its
+// link (#3218). items are sorted; past goalCardMaxItems a line counts the rest.
+func (s *Service) goalCard(ctx context.Context, items []*reportItem) (*feishubot.Card, string) {
+	l, web := s.botLang(ctx), s.webBase(ctx)
+	names := s.feishuDirections(ctx)
+	var titles, lines []string
+	for _, it := range items[:min(len(items), goalCardMaxItems)] {
+		t, _ := s.todoNow(it.todo)
+		direction := s.feishuDirection(ctx, t, names)
+		titles = append(titles, direction+clip(oneLine(t.Title), 40))
+		if len(items) == 1 {
+			direction = "" // the header already identifies this row
+		}
+		lines = append(lines, goalLines(l, web, t, it, direction))
+	}
+	status := i18n.T(l, "assistant-reports.goal_stuck_title", i18n.Args{"n": len(items)})
+	title := reportTitle(l, titles, status)
+	c := feishubot.NewCard(title, feishubot.Red, title).Tag(i18n.T(l, "assistant-reports.tag_stuck"), feishubot.Red)
+	for i, line := range lines {
+		if i > 0 {
+			c.HR()
+		}
+		c.Markdown(line)
+	}
+	if len(items) > len(lines) {
+		c.HR()
+		c.Markdown(i18n.T(l, "assistant-reports.goal_more", i18n.Args{"n": len(items) - len(lines)}))
+	}
+	return c, i18n.T(l, "assistant-reports.goal_summary", i18n.Args{"title": status,
+		"tasks": clip(strings.Join(titles, i18n.T(l, "assistant-tasks.list_sep")), reportFallbackMax)})
+}
+
+// goalLines are a stuck task's three lines: its goal, where it is now, and the evidence — the error in a line and a link
+// (the agent's conversation, else the task's page).
+func goalLines(l i18n.Lang, web string, t Todo, it *reportItem, direction string) string {
+	now := i18n.T(l, "assistant-reports.goal_now_failed")
+	if it.state == reportInterrupted {
+		now = i18n.T(l, "assistant-reports.goal_now_cut", i18n.Args{"n": it.cuts})
+	}
+	link := todoLink(web, t.ID)
+	if it.session[1] != "" && web != "" {
+		link = sessionLink(web, it.session[0], it.session[1], false)
+	}
+	evidence := feishubot.EscapeMarkdown(clip(oneLine(it.text), 80))
+	if link != "" {
+		a := "[" + i18n.T(l, "assistant-reports.goal_open") + "](" + link + ")"
+		evidence = strings.TrimSpace(evidence + " " + a)
+	}
+	if evidence == "" {
+		evidence = i18n.T(l, "assistant-reports.goal_no_evidence")
+	}
+	return i18n.T(l, "assistant-reports.goal_lines", i18n.Args{"goal": feishubot.EscapeMarkdown(direction + clip(oneLine(t.Title), 80)),
+		"now": now, "evidence": evidence})
 }
 
 // reportConclusion says a report state tells how a task ended (closed by the judge, or did not start), the lines
@@ -368,6 +778,9 @@ func (s *Service) requeueReports(items []*reportItem) {
 	var gaveUp []string
 	for _, it := range items {
 		if cur, ok := b.pending[it.todo]; ok && cur.at.After(it.at) {
+			if it.cutOff && cur.state == reportInterrupted {
+				cur.cutOff = true // the newer cut still tells the stuck task the failed batch carried
+			}
 			continue // a newer change of this todo arrived meanwhile
 		}
 		if it.tries >= reportMaxRetries {
@@ -403,7 +816,7 @@ func (s *Service) botCardOut(id string) bool {
 }
 
 type reportEntry struct {
-	t       Todo
+	title   string
 	md      string
 	buttons []feishubot.Button
 	bytes   int // marshaled JSON length of its Markdown block plus button row
@@ -411,14 +824,20 @@ type reportEntry struct {
 
 func (s *Service) reportCards(ctx context.Context, items []*reportItem) ([]*feishubot.Card, []string) {
 	l, web, stages := s.botLang(ctx), s.webBase(ctx), s.todoStages(ctx)
+	names := s.feishuDirections(ctx)
 	es, needs := make([]reportEntry, len(items)), 0
 	for i, it := range items {
 		if it.state == reportNeeds {
 			needs++
 		}
 		t, _ := s.todoNow(it.todo)
-		md, buttons := s.reportItemView(l, web, stages, t, it)
-		es[i] = reportEntry{t: t, md: md, buttons: buttons}
+		direction := s.feishuDirection(ctx, t, names)
+		title := direction + clip(oneLine(t.Title), 40)
+		if len(items) == 1 {
+			direction = ""
+		}
+		md, buttons := s.reportItemView(l, web, stages, t, it, direction)
+		es[i] = reportEntry{title: title, md: md, buttons: buttons}
 		es[i].bytes = feishuElBytes(func(c *feishubot.Card) {
 			c.Markdown(md)
 			if len(buttons) > 0 {
@@ -450,6 +869,17 @@ func feishuElBytes(add func(*feishubot.Card)) int {
 	return n
 }
 
+// Several tasks may share a report. Name the tasks on this card in delivery
+// order, within a bounded header; the complete entries follow in the body.
+const reportTitleRunes = 140
+
+func reportTitle(l i18n.Lang, titles []string, status string) string {
+	if len(titles) == 0 {
+		return status
+	}
+	return clip(strings.Join(titles, i18n.T(l, "assistant-tasks.list_sep")), reportTitleRunes) + " · " + status
+}
+
 // reportCardHeads measures the first card (longest title, both section labels charged) and the plain later cards.
 func reportCardHeads(l i18n.Lang, needs, total int) (head1, headN int) {
 	part := i18n.T(l, "assistant-reports.part", i18n.Args{"k": total, "n": total})
@@ -457,13 +887,16 @@ func reportCardHeads(l i18n.Lang, needs, total int) (head1, headN int) {
 	if needs > 0 {
 		first = i18n.T(l, "assistant-reports.title_needs", i18n.Args{"n": needs}) + part
 	}
-	c1 := feishubot.NewCard("📋 "+first, feishubot.Orange, first)
+	c1 := reportCardStart(l, first, feishubot.Orange)
 	c1.Markdown("**" + i18n.T(l, "assistant-reports.decide") + "**")
 	c1.Markdown("**" + i18n.T(l, "assistant-reports.progress") + "**")
 	plain := i18n.T(l, "assistant-reports.title", i18n.Args{"n": total}) + part
-	cN := feishubot.NewCard("📋 "+plain, feishubot.Blue, plain)         // suffix measured with the longest part too
+	cN := reportCardStart(l, plain, feishubot.Blue)                    // suffix measured with the longest part too
 	cN.Markdown("**" + i18n.T(l, "assistant-reports.progress") + "**") // a progress label may land past card 1
-	return len(c1.JSON()), len(cN.JSON())
+	// Each escaped rune in the new header and its 60-rune chat preview costs
+	// at most six JSON bytes (e.g. a control character).
+	const titleBudget = (reportTitleRunes + 3 + 60) * 6
+	return len(c1.JSON()) + titleBudget, len(cN.JSON()) + titleBudget
 }
 
 // reportCardSegments packs entries within the budgets; an item is never cut, one always fits on an empty card.
@@ -497,8 +930,12 @@ func reportCardOne(l i18n.Lang, seg []reportEntry, k, n, off, needs, total int) 
 	if n > 1 {
 		title += i18n.T(l, "assistant-reports.part", i18n.Args{"k": k + 1, "n": n})
 	}
-	c := feishubot.NewCard("📋 "+title, template, title)
 	titles := make([]string, len(seg))
+	for i, e := range seg {
+		titles[i] = e.title
+	}
+	header := reportTitle(l, titles, title)
+	c := reportCardStart(l, header, template)
 	for i, e := range seg {
 		if i > 0 {
 			c.HR()
@@ -508,7 +945,6 @@ func reportCardOne(l i18n.Lang, seg []reportEntry, k, n, off, needs, total int) 
 		} else if g == needs && needs > 0 {
 			c.Markdown("**" + i18n.T(l, "assistant-reports.progress") + "**")
 		}
-		titles[i] = clip(oneLine(e.t.Title), 40) // same clip as the body, so every visible item fits the fallback
 		c.Markdown(e.md)
 		if len(e.buttons) > 0 {
 			c.Buttons(e.buttons...)
@@ -517,36 +953,65 @@ func reportCardOne(l i18n.Lang, seg []reportEntry, k, n, off, needs, total int) 
 	return c, title + "：" + clip(strings.Join(titles, i18n.T(l, "assistant-tasks.list_sep")), reportFallbackMax)
 }
 
+// reportCardStart is a report card's header: its title, its colour (orange while it carries decisions) and its kind.
+func reportCardStart(l i18n.Lang, title, template string) *feishubot.Card {
+	return feishubot.NewCard(title, template, title).Tag(i18n.T(l, "assistant-reports.tag_report"), feishubot.Neutral)
+}
+
+// reportStateColors are the colours of an item's state tag: waiting for the owner orange, failed or cut off red, a
+// turn finished blue (the task goes on), done green.
+var reportStateColors = map[string]string{reportNeeds: feishubot.Orange, reportFailed: feishubot.Red,
+	reportInterrupted: feishubot.Red, reportDone: feishubot.Blue, reportClosed: feishubot.Green}
+
 // reportItemView renders one item's Markdown body and its link buttons (task page, PR, agent chat).
-func (s *Service) reportItemView(l i18n.Lang, web string, stages map[string]todoStage, t Todo, it *reportItem) (string, []feishubot.Button) {
+func (s *Service) reportItemView(l i18n.Lang, web string, stages map[string]todoStage, t Todo, it *reportItem, direction string) (string, []feishubot.Button) {
 	var md strings.Builder
-	md.WriteString(i18n.T(l, "assistant-reports.state_"+it.state) + " **" + feishubot.EscapeMarkdown(clip(oneLine(t.Title), 40)) + "**")
+	color := reportStateColors[it.state]
+	if color == "" {
+		color = feishubot.Neutral
+	}
+	md.WriteString(feishubot.InlineTag(i18n.T(l, "assistant-reports.state_"+it.state), color) + " **" + feishubot.EscapeMarkdown(direction+clip(oneLine(t.Title), 40)) + "**")
 	if it.machine != "" {
 		md.WriteString(" · " + feishubot.EscapeMarkdown(it.machine))
 	}
-	md.WriteString("\n" + stageBar(l, stages[t.ID].Stage))
+	if t.StageKind != "general" {
+		if t.Stage == "" {
+			t.Stage = stages[t.ID].Stage
+		}
+		md.WriteString("\n" + stageBar(l, t.Stage, stageDone(t)))
+	}
 	if text := strings.TrimSpace(it.text); text != "" {
-		md.WriteString("\n" + feishubot.CardMarkdown(clipMarkdown(text, 300)))
+		// Charts become numbers first, as the bot's answers and the briefing card do: clipMarkdown drops a persona-card
+		// block it cannot draw down to its title, so a chart in the answer would reach the owner without its numbers.
+		md.WriteString("\n" + feishubot.CardMarkdown(clipMarkdown(feishubot.PersonaCards(text), 300)))
 	}
 	if it.state == reportNeeds {
 		md.WriteString("\n" + i18n.T(l, "assistant-reports.answer_below"))
 	}
 	var bs []feishubot.Button
 	if link := todoLink(web, t.ID); link != "" {
-		bs = append(bs, feishubot.LinkBtn(i18n.T(l, "assistant-reports.open_task"), link))
+		bs = append(bs, feishubot.PageBtn(i18n.T(l, "assistant-reports.open_task"), link))
 	}
 	if pr := stages[t.ID].PR; pr != "" {
 		bs = append(bs, feishubot.LinkBtn(i18n.T(l, "assistant-reports.open_pr"), pr))
 	}
 	if it.session[1] != "" && web != "" {
-		bs = append(bs, feishubot.LinkBtn(i18n.T(l, "assistant-reports.open_agent"), sessionLink(web, it.session[0], it.session[1], false)))
+		bs = append(bs, feishubot.PageBtn(i18n.T(l, "assistant-reports.open_agent"), sessionLink(web, it.session[0], it.session[1], false)))
 	}
 	return md.String(), bs
 }
 
-// stageBar draws the stages with the one reached marked: ✅ before it, 🔵 on it, ⚪ after (none known: all ⚪).
-func stageBar(l i18n.Lang, stage string) string {
+// stageBar draws the stages with the one reached marked: ✅ before it, 🔵 on it, ⚪ after (none known: all ⚪). done: the
+// work ended there with nothing left to deploy (stageDone): the steps it went through, then Done, all ✅.
+func stageBar(l i18n.Lang, stage string, done bool) string {
 	at := stageIndex(stage)
+	if done && at >= 0 {
+		parts := make([]string, 0, at+2)
+		for _, st := range taskStages[:at+1] {
+			parts = append(parts, "✅"+i18n.T(l, "assistant-reports.stage_"+st))
+		}
+		return strings.Join(append(parts, "✅**"+i18n.T(l, "assistant-reports.stage_done")+"**"), " → ")
+	}
 	parts := make([]string, len(taskStages))
 	for i, st := range taskStages {
 		mark := "⚪"

@@ -241,7 +241,12 @@ func (f *Fake) answerLocked(method string, p map[string]any) any {
 			},
 		}
 	case "terminal.list":
-		out := map[string]any{"terminals": slices.Clone(f.terms), "topologyRevisions": maps.Clone(f.revisions),
+		// Copies of each terminal: the answer is encoded after the lock is let go, while another request may rename one.
+		terms := make([]map[string]any, len(f.terms))
+		for i, t := range f.terms {
+			terms[i] = maps.Clone(t)
+		}
+		out := map[string]any{"terminals": terms, "topologyRevisions": maps.Clone(f.revisions),
 			"hostScope": map[string]any{"hostIds": []string{"local"}}, "totalCount": len(f.terms), "truncated": false}
 		if p["includeVisualLayouts"] != false { // absent includes them, as for older clients
 			out["visualLayouts"] = slices.Clone(f.layouts)
@@ -412,7 +417,7 @@ func validate(method string, p map[string]any) string {
 		return first(str("repo", true), str("name", false), str("branchNameOverride", false), str("baseBranch", false),
 			str("parentWorktree", false), boolean("activate"), boolean("nameWasGenerated"))
 	case "terminal.create":
-		return first(str("worktree", true), str("title", true))
+		return first(str("worktree", true), str("title", true), str("shell", false))
 	case "terminal.send":
 		if r := first(handle(), literalTrue("agentPrompt"), literalTrue("requireWriteSettlement"),
 			literalTrue("claimViewport")); r != "" {
@@ -481,6 +486,50 @@ func (f *Fake) SetAgentStatus(handle string, running bool, status string) {
 	f.mu.Lock()
 	f.agentStatus[handle] = map[string]any{"isRunningAgent": running, "status": st}
 	f.mu.Unlock()
+}
+
+// Orphan does to a terminal what Orca does about 2 s after terminal.create in a worktree its UI is not showing: the
+// UI does not adopt it, so it becomes a background terminal, orphaned, its tabId and leafId rewritten to
+// "pty:<worktreeId>@@<suffix>". Its handle and incarnation stay (#5547). It returns the new pane key.
+func (f *Fake) Orphan(handle string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	t := f.termLocked(handle)
+	if t == nil {
+		return ""
+	}
+	key := fmt.Sprintf("pty:%v@@%x", t["worktreeId"], fnv32([]byte(handle)))
+	f.replaceLocked(handle, map[string]any{"tabId": key, "leafId": key, "orphaned": true})
+	return key + ":" + key
+}
+
+// Move puts a terminal in another tab and leaf (the user dragged it), still adopted by the UI: the same handle and
+// incarnation, not orphaned.
+func (f *Fake) Move(handle, tab, leaf string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.replaceLocked(handle, map[string]any{"tabId": tab, "leafId": leaf})
+}
+
+// Update sets fields of a terminal's terminal.list entry.
+func (f *Fake) Update(handle string, fields map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.replaceLocked(handle, fields)
+}
+
+// replaceLocked replaces a terminal's entry with a copy carrying fields: terminal.list answers hold the old entries,
+// encoded outside the lock.
+func (f *Fake) replaceLocked(handle string, fields map[string]any) {
+	terms := slices.Clone(f.terms)
+	for i, t := range terms {
+		if t["handle"] == handle {
+			c := maps.Clone(t)
+			maps.Copy(c, fields)
+			terms[i] = c
+		}
+	}
+	f.terms = terms
 }
 
 // SetRevision sets a worktree's topology revision (terminal.list's topologyRevisions).

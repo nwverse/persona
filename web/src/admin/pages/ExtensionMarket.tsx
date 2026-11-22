@@ -1,4 +1,4 @@
-// Extensions › Extension markets (docs/operations/admin.md "Extensions", docs/extensions/extensions.md "Extension markets"): the markets this hub reads (add with an optional
+// Extensions › Extension markets (docs/operations/admin.md "Extensions", docs/extensions/extensions.md "Extension marketplace"): the markets this hub reads (add with an optional
 // write-only token, read again, change the token, remove) and their catalog (search, a market at a time). Installing
 // or upgrading from it previews first (POST extensions/-/catalog/preview) and goes through the page's own install /
 // upgrade with that preview's id and permissions digest: nothing installs before the user agreed to exactly that.
@@ -234,7 +234,7 @@ function MarketCatalog({ markets, onChanged }: { markets: Market[]; onChanged: (
                     ))}
                   </div>
                 )}
-                {it.problem && <p className="mt-1 text-[12px] leading-relaxed text-orange">{t("admin-pages-extensionmarket.cannot_install", { problem: it.problem })}</p>}
+                {it.problem && <p className="mt-1 text-[12px] leading-relaxed text-orange">{it.problem}</p>}
                 {canUninstall(it) && st.kind !== "upgrade" && <p className="mt-1 text-[11.5px] text-ink-3">{t("admin-pages-extensionmarket.manage_above")}</p>}
               </div>
               {(st.kind === "install" || st.kind === "upgrade") && (

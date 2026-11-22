@@ -14,7 +14,7 @@ import java.util.zip.CRC32
 class PersonaFrames(val bitmaps: List<Bitmap>, val delaysMs: IntArray)
 
 /**
- * Decodes an APNG (or a still PNG: one frame) into whole frames (docs/apple/persona.md "Package format"). Android decodes only a
+ * Decodes an APNG (or a still PNG: one frame) into whole frames (docs/apple/persona.md "Pack format"). Android decodes only a
  * PNG's first frame, so each frame's data is wrapped as a PNG of its own and composed onto the canvas by its
  * dispose and blend ops, as the APNG spec says. [fps] times the frames whose delay is 0. Null when it is not a PNG.
  */

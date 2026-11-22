@@ -25,6 +25,9 @@ nonisolated struct Persona: Identifiable, Sendable, Hashable {
     var title: String?
 
     var isBuiltin: Bool { manifest == nil }
+    /// Made by the hub from an image the user uploaded (docs/apple/persona.md "Uploading an image"): the only kind the
+    /// apps can delete.
+    var isUploaded: Bool { manifest?.isUploaded == true }
     var cardTitle: String { title ?? name }
     /// A built-in's line under its card in Settings: whose colors it is drawn in.
     var builtinNote: String { String(localized: "The app icon's colors") }
@@ -54,7 +57,7 @@ nonisolated struct Persona: Identifiable, Sendable, Hashable {
     }
 }
 
-/// persona.json, format 1 (docs/apple/persona.md「格式」).
+/// persona.json, format 1 (docs/apple/persona.md「Pack format」).
 nonisolated struct PersonaManifest: Codable, Sendable, Hashable {
     static let format = 1
 
@@ -69,10 +72,29 @@ nonisolated struct PersonaManifest: Codable, Sendable, Hashable {
     var colors: Colors?
     /// The built-in Avatar (its id) whose home screen icon this one puts on: the package's own pictures cannot be one.
     var appIconFallback: String?
+    /// Where the package came from, when its maker says (`{"kind":"upload"}`: made by the hub from an uploaded image).
+    var source: Source?
 
     enum CodingKeys: String, CodingKey {
-        case format, id, name, subtitle, about, avatar, dot, colors
+        case format, id, name, subtitle, about, avatar, dot, colors, source
         case appIconFallback = "app_icon_fallback"
+    }
+
+    /// Made by the hub from an uploaded image (`POST /api/v1/looks/uploads`).
+    var isUploaded: Bool { source?.kind == Source.upload }
+
+    /// `source`: read leniently, so a package whose `source` is something else is still listed (only `kind` is used).
+    struct Source: Codable, Sendable, Hashable {
+        static let upload = "upload"
+        var kind: String?
+
+        enum CodingKeys: String, CodingKey { case kind }
+
+        init(kind: String?) { self.kind = kind }
+
+        init(from decoder: any Decoder) throws {
+            kind = (try? decoder.container(keyedBy: CodingKeys.self)).flatMap { try? $0.decodeIfPresent(String.self, forKey: .kind) }
+        }
     }
 
     struct Avatar: Codable, Sendable, Hashable {

@@ -120,10 +120,15 @@ func TestReadOnlyCodexResume(t *testing.T) {
 			}
 			host.reset()
 			got := resumeFile(host, cwd)
-			if tc.send {
-				if _, err := request(t, n, "session.send", map[string]any{"session_id": startThread, "text": "Inspect the project"}); err != nil {
-					t.Fatal(err)
+			if tc.send { // a stopped Codex takes no messages (#4754): only the user's Resume below brings it back
+				_, err := request(t, n, "session.send", map[string]any{"session_id": startThread, "text": "Inspect the project"})
+				if code, _ := refusalOf(t, err); code != agentStopped {
+					t.Fatalf("a message to a stopped Codex: %v", err)
 				}
+				if got := host.trace("tab.create"); len(got) != 0 {
+					t.Fatalf("opened a tab: %q", got)
+				}
+				return
 			} else {
 				res, err := request(t, n, "session.start", map[string]any{
 					"resume_session_id": startThread, "launcher": "code-alias", "permission_mode": tc.mode, "prompt": "Inspect the project",
@@ -293,5 +298,37 @@ func TestReadOnlyRuntimeStartRefusesUnverifiedRuntimes(t *testing.T) {
 				t.Fatalf("start: %v, requests %v", err, host.got("session.start"))
 			}
 		})
+	}
+}
+
+// A runtime that promises read-only starts (caps.readonly, as the Paseo bridge does) gets them: the plan mode reaches
+// it as is, for a new session and a takeover alike; whether it can honor them is its to refuse (#3238).
+func TestReadOnlyRuntimeStartReachesReadonlyRuntime(t *testing.T) {
+	n, _ := runtimeNode(t)
+	if err := n.useEngine(context.Background(), proto.EnginePaseo); err != nil {
+		t.Fatal(err)
+	}
+	hello := paseoEngineHello()
+	hello["caps"].(map[string]any)["readonly"] = true
+	host := dialRuntime(t, n, hello)
+	host.answer = func(method string, params json.RawMessage) (any, error) {
+		return map[string]any{"session": map[string]any{"session_id": "paseo-readonly", "status": "idle", "cwd": "/w/app"}}, nil
+	}
+	for _, launcher := range []string{"paseo-claude", "claude", ""} {
+		if _, err := nodeCall(t, n, "session.start", map[string]any{
+			"cwd": "/w/app", "launcher": launcher, "permission_mode": "plan", "prompt": "Inspect the project",
+		}); err != nil {
+			t.Fatalf("%q: %v", launcher, err)
+		}
+	}
+	got := host.got("session.start")
+	if len(got) != 3 {
+		t.Fatalf("starts: %v", got)
+	}
+	for _, raw := range got {
+		var start map[string]any
+		if err := json.Unmarshal(raw, &start); err != nil || start["permission_mode"] != "plan" {
+			t.Fatalf("start lost the plan mode: %s (%v)", raw, err)
+		}
 	}
 }

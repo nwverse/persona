@@ -24,6 +24,7 @@ export interface ChannelCapabilities {
   max_text?: number;
   asks?: "none" | "text" | "buttons";
   push?: boolean;
+  reply_only?: boolean;
   typing?: boolean;
   progress?: boolean;
   threads?: boolean;
@@ -101,8 +102,14 @@ export function unbindChannel(id: string): Promise<ChannelDetail> {
   return api<ChannelDetail>(`/channels/${enc(id)}/binding`, { method: "DELETE" });
 }
 
-export function testChannel(id: string): Promise<unknown> {
-  return api(`/channels/${enc(id)}/test`, { method: "POST" });
+export interface ChannelTestResult {
+  ok: boolean;
+  reply_only?: boolean;
+  note?: string;
+}
+
+export function testChannel(id: string): Promise<ChannelTestResult> {
+  return api<ChannelTestResult>(`/channels/${enc(id)}/test`, { method: "POST" });
 }
 
 // ── words ────────────────────────────────────────────────
@@ -153,7 +160,7 @@ export function channelSections(list: Channel[]): { title: string; footer?: stri
 export function channelsSummary(list: Channel[]): string {
   const on = list.filter((c) => c.kind !== "app" && c.state === "connected").length;
   const bad = list.filter((c) => c.state === "error").length;
-  return bad > 0 ? t("lib-channels.summary_with_errors", { on, bad }) : t("lib-channels.summary", { count: on });
+  return bad > 0 ? t("settings-channels.summary_with_errors", { on, bad }) : t("settings-channels.summary", { count: on });
 }
 
 export function targetText(target?: ChannelTarget): string {
@@ -177,12 +184,13 @@ export function capabilityText(c: ChannelCapabilities): string[] {
   if (c.max_text) out.push(t("lib-channels.max_text", { count: c.max_text }));
   if (c.asks === "text") out.push(t("lib-channels.asks_text"));
   else if (c.asks === "buttons") out.push(t("lib-channels.asks_buttons"));
+  if (c.reply_only) out.push(t("lib-channels.reply_only"));
   if (c.typing) out.push(t("lib-channels.typing"));
   if (c.progress) out.push(t("lib-channels.progress"));
   return out;
 }
 
-export function bindTitle(c: Channel): string {
+export function bindTitle(c: Pick<Channel, "bind">): string {
   switch (c.bind) {
     case "qr":
       return t("lib-channels.bind_qr");

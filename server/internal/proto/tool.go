@@ -11,6 +11,13 @@ type Tool struct {
 	// runtime refuses them in an assistant conversation's shell, where the gate and its credentials are not
 	// (integrations/dsh), and points at the tool.
 	Shell []string `json:"shell,omitempty"`
+	// DeferLoading: an assistant tool used too rarely to send in full with every request; the manager marks them
+	// (assistant/tool_loading.go). personad mcp leaves Claude Code's alwaysLoad off such a tool, so it waits behind
+	// ToolSearch. Absent (an older manager, node or MCP server) is loaded up front, as before.
+	DeferLoading bool `json:"defer_loading,omitempty"`
+	// WorkGuideTool is discoverable on demand in an opted-in Assistant conversation.
+	// Older MCP servers ignore it and keep advertising the original tool.
+	WorkGuideTool bool `json:"work_guide_tool,omitempty"`
 }
 
 // Content is an MCP tool result content block.
@@ -29,6 +36,10 @@ type ToolResult struct {
 	ErrorKind string `json:"error_kind,omitempty"`
 	// RetryAfter is how many seconds a rate limit lasts (ErrorKind rate_limited), when it is known.
 	RetryAfter int `json:"retry_after,omitempty"`
+	// SourceDeviceName and SourceDevicePlatform identify the connected phone that executed the call. The hub fills
+	// them from that phone's registration and client hello; older hubs and queued receipts leave them absent.
+	SourceDeviceName     string `json:"source_device_name,omitempty"`
+	SourceDevicePlatform string `json:"source_device_platform,omitempty"`
 }
 
 // The kinds of a tool's failure (ToolResult.ErrorKind), as personad tool's exit codes have them.

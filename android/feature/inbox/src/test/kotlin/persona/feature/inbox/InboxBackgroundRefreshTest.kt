@@ -38,7 +38,8 @@ class InboxBackgroundRefreshTest {
         override val snapshot = MutableStateFlow(snapshot)
         val connection = MutableStateFlow(connection)
         override val connectionState = this.connection
-        override suspend fun refresh() = Unit
+        var refreshFailure: Exception? = null
+        override suspend fun refresh() { refreshFailure?.let { throw it } }
         override fun conversation(feedId: String, startPosition: Long?) = flowOf(LarkConversation())
         override suspend fun loadOlder(feedId: String) = Unit
         override suspend fun refreshConversation(feedId: String) = Unit
@@ -61,7 +62,7 @@ class InboxBackgroundRefreshTest {
     // only Agent requests (no inbox items yet) counts as shown too.
     @Test fun failedRefreshAndReconnectOverAShownListShowNoLoadingRow() {
         val inbox = FakeInbox(InboxSnapshot(records = records))
-        rule.setContent { PersonaTheme(reduceMotion = true) { InboxScreen(inbox, navigator) } }
+        rule.setContent { PersonaTheme(reduceMotion = true) { OnAll { InboxScreen(inbox, navigator) } } }
         rule.waitForIdle()
         inbox.connection.value = ConnectionState.Connecting
         inbox.snapshot.value = InboxSnapshot(records = records, loading = true)
@@ -77,9 +78,23 @@ class InboxBackgroundRefreshTest {
         assertEquals(0, count("正在读取收件箱"))
     }
 
+    @Test fun backgroundRecoveryClearsAnEarlierRefreshErrorAndRetryIsAvailable() {
+        val inbox = FakeInbox(InboxSnapshot(records = records))
+        inbox.refreshFailure = java.io.IOException("Synthetic refresh failure")
+        rule.setContent { PersonaTheme(reduceMotion = true) { OnAll { InboxScreen(inbox, navigator) } } }
+        rule.waitForIdle()
+        rule.onNodeWithText("收件箱刷新失败，请重试").assertExists()
+        rule.onNodeWithText("重试").assertExists()
+        inbox.refreshFailure = null
+        inbox.snapshot.value = inbox.snapshot.value.copy(refreshes = 1)
+        rule.waitForIdle()
+        rule.onNodeWithText("收件箱刷新失败，请重试").assertDoesNotExist()
+        rule.onNodeWithText("项目群").assertExists()
+    }
+
     @Test fun loadingRowOnlyWhileTheListIsEmpty() {
         val inbox = FakeInbox(InboxSnapshot(loading = true))
-        rule.setContent { PersonaTheme(reduceMotion = true) { InboxScreen(inbox, navigator) } }
+        rule.setContent { PersonaTheme(reduceMotion = true) { OnAll { InboxScreen(inbox, navigator) } } }
         rule.waitForIdle()
         rule.onNodeWithText("正在读取收件箱").assertExists()
         inbox.snapshot.value = InboxSnapshot(records = records)
@@ -95,7 +110,7 @@ class InboxBackgroundRefreshTest {
     @Test fun briefReconnectLeavesTheTitleAloneAndALongOneShows() {
         val inbox = FakeInbox(InboxSnapshot(records = records))
         rule.mainClock.autoAdvance = false
-        rule.setContent { PersonaTheme(reduceMotion = true) { InboxScreen(inbox, navigator) } }
+        rule.setContent { PersonaTheme(reduceMotion = true) { OnAll { InboxScreen(inbox, navigator) } } }
         rule.mainClock.advanceTimeBy(100)
         assertEquals(0, count("更新中…"))
         // Updating for half a second, as after every reconnect: nothing under the title.

@@ -8,5 +8,19 @@
   "minutes_other": "{count} min",
   "hours_minutes": "{hours} h {minutes} min",
   "hours_one": "{count} h",
-  "hours_other": "{count} h"
+  "hours_other": "{count} h",
+  "closeout_line": "{line} · {suffix}",
+  "closeout_merged_yes": "merged",
+  "closeout_merged_no": "not merged",
+  "closeout_merged_confirmed": "merged ✓",
+  "closeout_merged_contradicted": "✗ says merged, isn't",
+  "closeout_deployed_yes": "deployed",
+  "closeout_deployed_no": "not deployed",
+  "closeout_deployed_confirmed": "deployed ✓",
+  "closeout_deployed_contradicted": "✗ says deployed, isn't",
+  "closeout_blocked_on": "Blocked on: {waiting}",
+  "closeout_blocked": "Blocked",
+  "closeout_not_done_missing": "Not done: {missing}",
+  "closeout_not_done": "Not done",
+  "closeout_done": "Reported done"
 }

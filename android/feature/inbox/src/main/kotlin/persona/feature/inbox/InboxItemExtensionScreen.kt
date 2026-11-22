@@ -66,7 +66,8 @@ fun InboxItemExtensionScreen(
     var error by remember { mutableStateOf<String?>(null) }
     val res = LocalResources.current
     val heading = record?.item?.title?.takeIf { it.isNotBlank() } ?: title?.takeIf { it.isNotBlank() } ?: route.title.ifBlank { stringResource(R.string.inbox_item) }
-    JListPage(title = heading, onBack = navigator::back, largeTitle = false, refreshing = refreshing, onRefresh = onRefresh,
+    // The extension's links (a Feishu document, a Moments post) are read as the item's manager's.
+    ManagerLinks(record?.manager) { JListPage(title = heading, onBack = navigator::back, largeTitle = false, refreshing = refreshing, onRefresh = onRefresh,
         actions = {
             if (record != null) JIconButton(PhIcons.CheckCircle, stringResource(if (record.item.isDone) R.string.inbox_move_back else R.string.inbox_done), enabled = !markingDone,
                 onClick = {
@@ -90,7 +91,9 @@ fun InboxItemExtensionScreen(
             record.item.summary?.takeIf { it.isNotBlank() }?.let { summary ->
                 item("item-summary") { JNotice(summary, Modifier.padding(bottom = Tokens.Space.s), title = stringResource(R.string.inbox_ai_summary), icon = PhIcons.Sparkle) }
             }
-            item("item-ai") { InboxAiActions(onDraft = { drafting = true }, onHandOff = { handingOff = true }) }
+            item("item-ai") {
+                InboxAiActions(onDraft = { drafting = true }, onHandOff = { handingOff = true }, showHandOff = !record.isAssistantRow)
+            }
             if (!record.item.isDone) item("item-agent-draft") {
                 AgentDraftCard(record, composers, navigator, repository = repository, onEdit = { drafting = true }, keepComposer = true)
             }
@@ -101,8 +104,8 @@ fun InboxItemExtensionScreen(
         item("item-gap") { Spacer(Modifier.padding(top = Tokens.Space.m)) }
         if (loading) item("item-body-loading") { JLoading() }
         body()
-        item("item-end") { Spacer(Modifier.padding(top = Tokens.Space.xxl)) }
-    }
+        item("item-end") { Spacer(Modifier.padding(top = Tokens.Space.xl)) }
+    } }
     if (drafting && record != null) InboxDraftSheet(repository, record,
         composers.get(ReplyTarget.Inbox(record.item.id), record.agent?.takeIf { it.state == "drafted" }?.draft.orEmpty()),
         navigator, onDismiss = { drafting = false })

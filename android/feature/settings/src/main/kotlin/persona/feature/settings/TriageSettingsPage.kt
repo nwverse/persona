@@ -11,6 +11,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 
 /**
@@ -88,6 +89,40 @@ internal fun TriageSettingsPage(triage: AgentTriage?, models: ModelConfiguration
         item("actions-about") {
             SettingsCaption(stringResource(R.string.settings_triage_actions_about),
                 Modifier.padding(horizontal = pagePadding, vertical = Tokens.Space.s))
+        }
+        // The closeout choices share one group like the actions above; their captions stay outside the grouped rows.
+        // Each appears only when its hub field is present, and waits with the main triage switch and any save in flight.
+        val closeoutGroupSize = (if (sw?.closeout != null) 1 else 0) + (if (sw?.closeoutAsk != null) 1 else 0)
+        if (sw?.closeout != null) {
+            item("closeout") {
+                JGroupItem(GroupPosition.of(0, closeoutGroupSize), Modifier.padding(top = Tokens.Space.m)) {
+                    JSwitchRow(stringResource(R.string.settings_triage_closeout), sw.closeout == true, { v -> change(sw.copy(closeout = v)) },
+                        Modifier.testTag("triage-closeout"), leadingIcon = PhIcons.Checks, enabled = on && !busy)
+                }
+            }
+        }
+        if (sw?.closeoutAsk != null) {
+            item("closeout-ask") {
+                val position = if (sw.closeout != null) 1 else 0
+                val modifier = if (position == 0) Modifier.padding(top = Tokens.Space.m) else Modifier
+                JGroupItem(GroupPosition.of(position, closeoutGroupSize), modifier) {
+                    JSwitchRow(stringResource(R.string.settings_triage_closeout_ask), sw.closeoutAsk == true,
+                        { v -> change(sw.copy(closeoutAsk = v)) }, Modifier.testTag("triage-closeout-ask"),
+                        leadingIcon = PersonaIcons.conversation, enabled = on && !busy)
+                }
+            }
+        }
+        if (sw?.closeout != null) {
+            item("closeout-about") {
+                SettingsCaption(stringResource(R.string.settings_triage_closeout_about),
+                    Modifier.padding(horizontal = pagePadding, vertical = Tokens.Space.s))
+            }
+        }
+        if (sw?.closeoutAsk != null) {
+            item("closeout-ask-about") {
+                SettingsCaption(stringResource(R.string.settings_triage_closeout_ask_about),
+                    Modifier.padding(horizontal = pagePadding, vertical = Tokens.Space.s))
+            }
         }
         // Rules on the hub, no model: apart from the triage switch above (#5096).
         item("reply-reminder") {

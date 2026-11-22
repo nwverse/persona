@@ -1,4 +1,4 @@
-// Package devices is the manager's side of the user's computers (docs/server/machines.md "Who connects the computers"): it connects each one —
+// Package devices is the manager's side of the user's computers (docs/server/machines.md "Who connects to computers"): it connects each one —
 // the hub machine's own node as a child process, ssh, tailcat, a Persona Link that dialed the hub (relayed to the
 // manager as it is), a connector of kind service, a member hub's computer through that hub — keeps it connected, and
 // holds what is known of it: online, node.info, its sessions and their revs, warm start across restarts, the engine,
@@ -18,12 +18,14 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -52,9 +54,11 @@ type nodeStateStore interface {
 
 // Options are what Devices needs from the manager it runs in.
 type Options struct {
-	Hub   Host
-	Store Store // nil: nothing is kept (tests)
-	Logf  func(format string, args ...any)
+	// ProjectState lets the owning manager retain transport identities independently of computers.
+	ProjectState func(devicewire.States) devicewire.States
+	Hub          Host
+	Store        Store // nil: nothing is kept (tests)
+	Logf         func(format string, args ...any)
 	// ManagerID is the manager these devices are ("" and "assistant": the built-in one): its health space on a computer
 	// is named after it (identity.HealthDirName, healthreports.go).
 	ManagerID string
@@ -79,25 +83,48 @@ type Options struct {
 	// machine: its own ways).
 	DialNode func(machine string) func(context.Context) (net.Conn, error)
 	// Event takes a node's event (and a session list the manager passes on again) before the hub would: what is the
-	// manager's of it (the interactions, the sessions' states, the pushes: docs/server/machines.md "Who handles the computers' events"); false:
+	// manager's of it (the interactions, the sessions' states, the pushes: docs/server/machines.md "Who handles computer events"); false:
 	// the hub does not get it. nil: every event goes to the hub.
 	Event func(machine, event string, params json.RawMessage) (forward bool)
 	// Detached: a machine's node connection ended (not for another one taking over): what waited on it ends.
 	Detached func(machine string)
+	// HiddenAgentDirsChanged is told after a machine's hidden Agent folders changed (agentdirs.go), outside every
+	// lock of the devices: the assistant shows the sessions again by the new rules.
+	HiddenAgentDirsChanged func(machine string)
 	// Location is the user's time zone ("today" of the token usage); nil: the machine's.
 	Location func() *time.Location
+	// UpdateHandoffGrace bounds how long a node update waits for natural idle before refusing new headless turns.
+	// Nil uses the shared default; zero preserves the indefinite natural-idle wait.
+	UpdateHandoffGrace func() time.Duration
+	// PromptLanguage is the owner language for newly generated node-side prompt wrappers.
+	// Nil retains legacy Chinese; it is display policy, never an authority input.
+	PromptLanguage func() string
 	// ConfigFile is the manager's manager.json (internal/managerconf): its usage section (the account-pool gateways
 	// and their keys, usagegateways.go) is read and written there. "": none (tests).
 	ConfigFile string
+	// LauncherBalances reads the prepaid balances of the provider launchers the manager holds keys for (#11825,
+	// usagebalance.go). The assistant owns it, since it owns the launchers and their sealed keys. known false: the
+	// launcher list could not be read, so the last samples stay. nil: no balance source.
+	LauncherBalances func(ctx context.Context) (accounts []proto.UsageAccount, known bool)
+	// UsageExtension asks an extension (contributes.usage) about a launcher's gateway: usage.query, whose answer is the
+	// accounts to draw (usagesource.ExtensionAnswer). The extensions are the manager's, so it owns this; it holds the
+	// launcher's key and sends the extension's requests with it. nil: extension sources cannot be read.
+	UsageExtension func(ctx context.Context, extension, launcher string) (json.RawMessage, error)
 	// TailcatKey is the identity file the computers reached over tailcat trust (tunnel.LoadOrCreateHubKey); "": this
 	// machine's data directory's (tunnel.HubKeyPath).
 	TailcatKey string
+	// HeldChanged: what is held for a machine's Agents changed (held.go): its rows are published again, with
+	// HeldMessages' read anew (the assistant's publishSessions). nil: nobody draws them.
+	HeldChanged func(machine string)
 }
 
 // Devices is every computer the manager carries.
 type Devices struct {
 	opts Options
 	logf func(format string, args ...any)
+
+	transfers transfers // computer to computer file transfers running or just over (transfer.go)
+	held      heldBook  // the owner's messages held for Agents whose computer is away (held.go)
 
 	mu    sync.Mutex
 	cfg   devicewire.Config
@@ -122,12 +149,16 @@ type Devices struct {
 	byID      map[string]*Machine
 	warm      *savedWarm // taken at start, for the machines when they come
 
-	fleet    fleet
-	tailcat  tailcatDialer
-	engines  engineChoices
-	links    linkSet
-	stopping atomic.Bool
-	workers  sync.WaitGroup
+	fleet   fleet
+	tailcat tailcatDialer
+	engines engineChoices
+	// clipboard: the machines the user turned clipboard sharing on for (clipboard.go).
+	clipboard clipboardSwitches
+	// fileTransfer: the machines the user turned file transfer on for (transfer_settings.go).
+	fileTransfer fileTransferSwitches
+	links        linkSet
+	stopping     atomic.Bool
+	workers      sync.WaitGroup
 
 	// attention: the assistant's latest "Needs you" summary for Persona Link (attention.go); nil before the first.
 	attention atomic.Pointer[link.Attention]
@@ -142,16 +173,29 @@ type Devices struct {
 	reportMu  sync.Mutex
 	reportDue chan struct{}
 	lastSent  string // the last devices.state sent (stateKey), to send only changes
+	// desktopsRep is the desktops reporter (presence.go); ring is closed at the next delivery or confirmation, for
+	// LinkRang.
+	desktopsRep desktopsReporter
+	ringMu      sync.Mutex
+	ring        chan struct{}
 
 	packages nodePackages // the node builds for the machines' platforms (packages.go)
+	switches linkSwitches // the switches of ssh computers to Persona Link (link_switch.go)
 
 	metrics metricsBook // the machines' monitoring (metrics.go)
 	usage   usageBook   // their token usage (metrics.go)
-	// usageWrites: the usage notifications to store, in order (usage.go's usageLoop).
+	// usageWrites: the usage notifications to store, in order (usage.go's usageLoop); usageWait: how long it takes the
+	// ones that come after one to store them together (usageGather as New found it).
 	usageWrites chan usageWrite
+	usageWait   time.Duration
+	// metricWrites: the samples to store (metrics.go's writeMetrics); metricsWait: how long it waits for a tick's other
+	// samples (metricsGather as New found it).
+	metricWrites chan db.MachineSample
+	metricsWait  time.Duration
 
 	usageWin usageWindowsHub // subscription rate-limit windows across machines (usagewindows.go, #2432)
 	usageGW  usageGateways   // the account-pool gateways that add accounts to it (usagegateways.go, #2595)
+	usageBal usageBalances   // the launchers' prepaid balances that add accounts to it (usagebalance.go, #11825)
 
 	// reqPrefix and reqSeq make the nodes' requests' keys for the hub (devices.request), unique across managers.
 	reqPrefix string
@@ -164,7 +208,8 @@ func New(o Options) *Devices {
 		o.Logf = func(string, ...any) {}
 	}
 	d := &Devices{opts: o, logf: o.Logf, gotCh: make(chan struct{}), ready: make(chan struct{}), byID: map[string]*Machine{}, ownWait: ownListWait,
-		reportDue: make(chan struct{}, 1), usageWrites: make(chan usageWrite, 1024), reqPrefix: strconv.FormatInt(time.Now().UnixNano(), 36)}
+		reportDue: make(chan struct{}, 1), usageWrites: make(chan usageWrite, 1024), usageWait: usageGather,
+		metricWrites: make(chan db.MachineSample, metricsQueue), metricsWait: metricsGather, reqPrefix: strconv.FormatInt(time.Now().UnixNano(), 36)}
 	// The account-pool gateways' usage windows (usagegateways.go, #2595): manager.json's usage section as it is now.
 	var usage UsageConfig
 	if o.ConfigFile != "" {
@@ -176,6 +221,9 @@ func New(o Options) *Devices {
 	}
 	d.usageWin.gateways = d.usageGW.accounts
 	d.usageGW.init(usage, d.usageWin.invalidate, d.logf)
+	d.usageWin.balances = d.usageBal.accounts
+	d.usageGW.fetchExtension = o.UsageExtension
+	d.usageBal.init(o.LauncherBalances, d.usageWin.invalidate, d.logf)
 	return d
 }
 
@@ -195,12 +243,28 @@ func (d *Devices) Run(ctx context.Context) error {
 	d.mu.Unlock()
 	d.loadWarm(ctx)
 	d.loadPathUIDs(ctx)
+	d.restoreRuntimeUsage(ctx, time.Now())
 	go d.reportLoop(mctx)
 	go d.probeServices(mctx)
 	go d.measureLoop(mctx)
 	go d.metricsLoop(mctx)
+	if st := d.metricsStore(); st != nil {
+		d.workers.Add(1) // waited for below: what came before the machines stopped is stored
+		go func() {
+			defer d.workers.Done()
+			d.writeMetrics(mctx, st)
+		}()
+	}
 	go d.usageLoop(mctx)
-	go d.usageGW.run(ctx) // the account-pool gateways (usagegateways.go)
+	d.workers.Add(1)
+	go func() { defer d.workers.Done(); d.runShareIngestion(mctx) }()
+	// The messages held while their computers were away (held.go).
+	d.workers.Add(1)
+	go func() { defer d.workers.Done(); d.heldLoop(mctx) }()
+	go d.usageGW.run(ctx)   // the account-pool gateways (usagegateways.go)
+	go d.usageBal.run(mctx) // the launchers' prepaid balances (usagebalance.go, #11825)
+	// A switch to Persona Link a restart left (link_switch.go).
+	go d.resumeLinkSwitches(mctx)
 	// The hub's hand-over, or after ownListWait the manager's own list (ownlist.go) until it comes.
 	wait := time.NewTimer(d.ownWait)
 	select {
@@ -364,6 +428,20 @@ func (d *Devices) startMachines(ctx context.Context) {
 			for id := range old.watched { // what the hub watches is watched again on the new connection
 				m.watched[id], m.lastSeq[id] = true, old.lastSeq[id]
 			}
+			// So are the manager's own follows (Follow: a channel's turn), and a follow the old node did not take
+			// stays unsettled: the assistant keeps its mark and never asks again.
+			for id := range old.followed {
+				if m.followed == nil {
+					m.followed = map[string]bool{}
+				}
+				m.followed[id], m.lastSeq[id] = true, old.lastSeq[id]
+				if old.unsettled[id] {
+					if m.unsettled == nil {
+						m.unsettled = map[string]bool{}
+					}
+					m.unsettled[id] = true
+				}
+			}
 			old.mu.Unlock()
 		} else {
 			d.applyWarmLocked(m)
@@ -466,9 +544,13 @@ func (d *Devices) report(all bool) {
 	default:
 		return // the machines are not made yet; the first report follows when they are (startMachines)
 	}
+	defer d.requestDesktops(all) // a change of computers or of who may count goes with it, after it (presence.go)
 	d.reportMu.Lock()
 	defer d.reportMu.Unlock()
 	st := d.states()
+	if d.opts.ProjectState != nil {
+		st = d.opts.ProjectState(st)
+	}
 	b, err := json.Marshal(st)
 	if err != nil {
 		return
@@ -544,7 +626,13 @@ func (d *Devices) BusUp() {
 		m.mu.Lock()
 		list := slices.Clone(m.sessions)
 		has := m.online || m.warmLocked(time.Now()) || len(list) > 0
+		unknown := list == nil && !m.sessionsListed
 		m.mu.Unlock()
+		if unknown {
+			// No snapshot has arrived on the current connection: nil is unknown, not an empty snapshot.
+			// The initial forward or an existing refresh path publishes the real list once a call succeeds.
+			continue
+		}
 		if has {
 			if list == nil {
 				list = []proto.Session{}
@@ -557,8 +645,8 @@ func (d *Devices) BusUp() {
 // maxForward bounds one node message passed on to the hub: the bus takes 64 MiB a line, the wrapper included, and a
 // line it cannot take would drop the whole connection. The node's own lines have the same limit, so this only cuts
 // the last bytes; what is big on purpose (downloads, uploads, node updates, a port's bytes) comes in pieces of 1 MiB
-// at most.
-const maxForward = 60 << 20
+// at most. A var so tests change it.
+var maxForward = 60 << 20
 
 var errTooLarge = &rpc.Error{Code: "too_large", Message: "the node's answer is too large to pass on"}
 
@@ -582,11 +670,35 @@ func (d *Devices) forward(machine, event string, params any) {
 }
 
 // Call is devices.call: a call to a machine's node, coded for the hub (no_device, machine_offline, node_closed;
-// the node's own coded errors as they are).
+// the node's own coded errors as they are; held for a session.send that may be, held.go).
 func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMessage, error) {
+	out, err := d.callNode(ctx, p)
+	if err != nil {
+		return nil, wireError(err)
+	}
+	return out, nil
+}
+
+// callNode is Call with its errors as they are: a held message's delivery tells what wrote nothing apart (held.go).
+func (d *Devices) callNode(ctx context.Context, p devicewire.NodeCall) (json.RawMessage, error) {
+	if reservedOwnerControl(p.Method) {
+		return nil, errReservedOwnerControl
+	}
+	if p.Method == proto.MethodSessionSendUnseen {
+		return nil, &rpc.Error{Code: "forbidden", Message: "session.send_unseen is reserved for held-message delivery"}
+	}
+	if strings.HasPrefix(p.Method, "session.codex.takeover.") {
+		return nil, &rpc.Error{Code: "user_confirmation_required", Message: i18n.Err("codex-takeover.user_only").Error()}
+	}
 	m := d.machineByID(p.MachineID)
 	if m == nil {
 		return nil, &rpc.Error{Code: devicewire.CodeNoDevice, Message: fmt.Sprintf("no machine %q", p.MachineID)}
+	}
+	held := d.heldCallOf(ctx, m, p) // the owner's message to an Agent, kept in order or held for its computer (held.go)
+	if held != nil {
+		if err := d.holdBehind(ctx, held); err != nil {
+			return nil, err
+		}
 	}
 	if p.TimeoutMS > 0 {
 		var cancel context.CancelFunc
@@ -597,23 +709,94 @@ func (d *Devices) Call(ctx context.Context, p devicewire.NodeCall) (json.RawMess
 	if len(params) == 0 {
 		params = json.RawMessage(`{}`)
 	}
+	if p.Method == "session.send" || p.Method == "session.send_once" {
+		var err error
+		if p.Method == "session.send" {
+			params, err = d.prepareSessionSkills(params)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if params, err = ownerInputParams(p, params); err != nil {
+			return nil, err
+		}
+	} else if carriesOwnerInput(p.Method) {
+		var err error
+		params, err = rewriteOwnerInput(params, false)
+		if err != nil {
+			return nil, err
+		}
+		if p.Method == "session.interrupt" && trustedHumanInput(p) {
+			ctx = context.WithValue(ctx, ownerControlKey{}, p.Method)
+		}
+	}
+	if refusesHandoff(p.Method, params) {
+		return nil, errHandoffRefused
+	}
+	var languageErr error
+	params, languageErr = d.promptLanguageParams(p.Method, params)
+	if languageErr != nil {
+		return nil, languageErr
+	}
 	m.noteWatch(p.Method, params)
 	if p.Method == "session.unwatch" && m.follows(params) {
 		return json.RawMessage(`{}`), nil // the manager still follows it: the node keeps sending its items
 	}
+	var receipt, preparation string
+	var prepareErr error
+	params, receipt, preparation, prepareErr = d.prepareShareCall(ctx, p, params)
+	if prepareErr != nil {
+		d.observeCreationCall(p, nil, nil, preparation, prepareErr)
+		return nil, prepareErr
+	}
+	if refusesHandoff(p.Method, params) { // and on what actually goes (prepareShareCall re-marshals it)
+		return nil, errHandoffRefused
+	}
+	var snapshot *sessionSnapshot
+	if p.Method == "sessions.list" {
+		snapshot = new(sessionSnapshot)
+	}
+	modeSID, modeFrom, modeTo, recordMode := m.modeSetFrom(p, params) // the record of mode changes (mode_changes.go)
+	var nodeParams any = params
+	if p.Method == devicewire.MethodPortDial {
+		var dial devicewire.PortDial
+		if err := json.Unmarshal(params, &dial); err != nil {
+			return nil, &rpc.Error{Code: "invalid_params", Message: "port.dial: " + err.Error()}
+		}
+		dial.StreamVersion = 0
+		if p.StreamVersion == devicewire.PortStreamHalfCloseV1 {
+			dial.StreamVersion = p.StreamVersion
+		}
+		nodeParams = dial
+	}
 	var out json.RawMessage
-	err := m.call(ctx, p.Method, params, &out)
+	err := m.callWithSnapshot(ctx, p.Method, nodeParams, &out, snapshot)
+	if try, ok := ctx.Value(heldDeliveryKey{}).(*heldTry); ok {
+		try.called, try.err = true, err // a held delivery is judged on this call alone (held.go)
+	}
+	if recordMode && err == nil {
+		m.recordModeSet(p.Actor, modeSID, modeFrom, modeTo, out)
+	}
+	d.observeCreationCall(p, params, out, preparation, err)
+	if err != nil && held != nil && held.hold && heldMayHold(err) {
+		// Nothing was written: held until the node is back. Its share receipt waits for that delivery.
+		if herr := d.hold(ctx, held); herr != nil {
+			return nil, herr
+		}
+	}
+	if heldSettles(ctx, err) {
+		d.finishShareCall(ctx, p, receipt, out, err)
+	}
 	m.noteOpened(p.Method, params, err)
 	if err != nil {
-		return nil, wireError(err)
+		return nil, err
 	}
 	if p.Method == "sessions.list" { // the hub had the node list them again (its agent filters): the manager's list
 		var list struct {
 			Sessions []proto.Session `json:"sessions"`
 		}
 		if json.Unmarshal(out, &list) == nil && list.Sessions != nil {
-			m.setSessions(list.Sessions)
-			d.forward(m.cfg.ID, "sessions.changed", map[string]any{"sessions": m.sessionList()})
+			m.acceptSessionsList(snapshot, list.Sessions, true)
 		}
 	}
 	if out == nil {
@@ -646,6 +829,15 @@ func wireError(err error) error {
 // Notify is devices.notify: a one-way event to a machine's node, queued for it (notes.go): the bus's read loop goes
 // on at once.
 func (d *Devices) Notify(p devicewire.NodeEvent) {
+	if p.Event == proto.EventMCPWait {
+		var update proto.MCPWaitEvent
+		if json.Unmarshal(p.Params, &update) != nil || !proto.ValidMCPWaitCallID(update.CallID) {
+			return // correlation is optional, but an invalid id must never consume the machine's note budget
+		}
+	}
+	if strings.HasPrefix(p.Event, "session.codex.takeover.") {
+		return
+	}
 	m := d.machineByID(p.MachineID)
 	if m == nil {
 		return
@@ -672,37 +864,93 @@ func (d *Devices) Reconnect(id string) error {
 func (d *Devices) List() []Summary {
 	out := []Summary{}
 	for _, m := range d.machinesNow() {
-		m.mu.Lock()
-		s := Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
-			DataDir: m.info.DataDir, Online: m.online}
-		m.mu.Unlock()
-		s.Trust = d.machineTrust(m)
-		s.Reachable = m.reachable()
-		out = append(out, s)
+		out = append(out, d.summaryOf(m))
 	}
 	return out
 }
 
-// View is one machine with what its node said of itself (node.info), and its sessions as the node listed them.
+// summaryOf is one machine as List has it.
+func (d *Devices) summaryOf(m *Machine) Summary {
+	m.mu.Lock()
+	s := Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
+		HomeReal: m.info.HomeReal, DataDir: m.info.DataDir, Online: m.online || m.warmLocked(time.Now())}
+	m.mu.Unlock()
+	s.Trust = d.machineTrust(m)
+	s.Reachable = m.reachable()
+	return s
+}
+
+// Summary is List's entry for the machine id names (an entry another one absorbed: that one's), false when List has
+// none: the first listed machine with Canonical(id) as its id, found without the summaries of the others (their trust
+// reads every path's configuration). The fleet asks for one machine on every list a node sends.
+func (d *Devices) Summary(id string) (Summary, bool) {
+	m := d.listed(d.Canonical(id))
+	if m == nil {
+		return Summary{}, false
+	}
+	return d.summaryOf(m), true
+}
+
+// listed is the first of machinesNow with this id, read in place rather than from a copy of the list; nil when none
+// has it.
+func (d *Devices) listed(id string) *Machine {
+	f := &d.fleet
+	f.mu.Lock()
+	order := f.order // replaced whole by a regroup, never written into
+	f.mu.Unlock()
+	if order == nil {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		order = d.entries
+	}
+	for _, m := range order {
+		if m.cfg.ID == id {
+			return m
+		}
+	}
+	return nil
+}
+
+// View is one machine with what its node said of itself (node.info). Its sessions are not in it: the extensions'
+// code looks one up on every node event it takes (each port stream's data, ack and close), and copying every
+// machine's list for that was 6.3 MB a lookup at 20 machines of 200 sessions (#3197); FindSession reads them.
 type View struct {
 	Summary
-	Info     proto.NodeInfo
-	Sessions []proto.Session
+	Info proto.NodeInfo
 }
 
 // Views are the machines with their node.info (the extensions' code reads the computers' OS, programs, capabilities).
 func (d *Devices) Views() []View {
-	out := []View{}
-	for _, m := range d.machinesNow() {
+	machines := d.machinesNow()
+	out := make([]View, 0, len(machines))
+	for _, m := range machines {
 		m.mu.Lock()
 		v := View{Summary: Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
-			DataDir: m.info.DataDir, Online: m.online}, Info: m.info, Sessions: slices.Clone(m.sessions)}
+			DataDir: m.info.DataDir, Online: m.online || m.warmLocked(time.Now())}, Info: m.info}
 		m.mu.Unlock()
 		v.Trust = d.machineTrust(m)
 		v.Reachable = m.reachable()
 		out = append(out, v)
 	}
 	return out
+}
+
+// FindSession reports whether match accepts one of the sessions of the machine Views lists as id, as its node listed
+// them, stopping at the first it accepts; false when Views lists none. match reads each session in place, under the
+// machine's lock: it must not change or keep it, nor call the devices.
+func (d *Devices) FindSession(id string, match func(*proto.Session) bool) bool {
+	m := d.listed(id)
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.sessions { // by index: a range value copies every (large) session it passes
+		if match(&m.sessions[i]) {
+			return true
+		}
+	}
+	return false
 }
 
 // Relist asks a machine's node for its sessions again and passes the list on (what it leaves out changed: the
@@ -715,26 +963,72 @@ func (d *Devices) Relist(ctx context.Context, id string) error {
 	var list struct {
 		Sessions []proto.Session `json:"sessions"`
 	}
-	if err := m.call(ctx, "sessions.list", json.RawMessage(`{}`), &list); err != nil {
+	snapshot := new(sessionSnapshot)
+	if err := m.callWithSnapshot(ctx, "sessions.list", json.RawMessage(`{}`), &list, snapshot); err != nil {
 		return err
 	}
-	m.setSessions(list.Sessions)
-	d.forward(m.cfg.ID, "sessions.changed", map[string]any{"sessions": m.sessionList()})
+	m.acceptSessionsList(snapshot, list.Sessions, true)
 	return nil
 }
 
 // Summary is one machine for the assistant (assistantwire.Device).
 type Summary struct {
 	ID, Name, Kind, SSHHost, Home, DataDir, Trust string
-	Online, Reachable                             bool
+	// HomeReal is Home with its links followed, when the node says it is another path (proto.NodeInfo.HomeReal).
+	HomeReal          string
+	Online, Reachable bool
+}
+
+// Shown is how a machine's sessions are shown now, for a reader that takes them as the computer's word (the assistant's
+// direction sessions). Listed: the list is one its node gave, on this connection or kept from before it (nil and none
+// given on this connection is not known, as report has it). Until: until when the machine is shown as before while
+// its node is away (the reconnect grace, a warm start after a restart, a resident's reload); zero when it is not.
+type Shown struct {
+	Listed bool
+	Until  time.Time
+}
+
+// Shown is machine id's Shown; false when there is no such machine.
+func (d *Devices) Shown(id string) (Shown, bool) {
+	m := d.machineByID(id)
+	if m == nil {
+		return Shown{}, false
+	}
+	now := time.Now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := Shown{Listed: m.sessions != nil || m.sessionsListed}
+	if m.warmLocked(now) {
+		s.Until = m.warmUntil
+	}
+	if now.Before(m.reloadUntil) && m.reloadUntil.After(s.Until) {
+		s.Until = m.reloadUntil
+	}
+	return s, true
 }
 
 // Has reports whether id is one of the machines (an entry another one absorbed included).
 func (d *Devices) Has(id string) bool { return d.machineByID(id) != nil }
 
+// NodeAnnounced reports whether machine id's node is connected and announced capability in its handshake, never
+// assumed for an older node: the assistant checks secret_env before it shows a hand-off card.
+func (d *Devices) NodeAnnounced(id, capability string) bool {
+	m := d.machineByID(id)
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	info, connected := m.info, m.peer != nil
+	m.mu.Unlock()
+	return connected && info.Protocol > 0 && slices.Contains(info.Capabilities, capability)
+}
+
 // CallNode is a call to a machine's node from the manager itself (the assistant's device.call): errors as the
 // hub's were (apierr.ErrOffline, rpc.ErrClosed, the node's *rpc.Error).
 func (d *Devices) CallNode(ctx context.Context, id, method string, params json.RawMessage) (json.RawMessage, error) {
+	if reservedOwnerControl(method) {
+		return nil, errReservedOwnerControl
+	}
 	m := d.machineByID(id)
 	if m == nil {
 		return nil, ErrNoMachine
@@ -742,9 +1036,29 @@ func (d *Devices) CallNode(ctx context.Context, id, method string, params json.R
 	if len(params) == 0 {
 		params = json.RawMessage(`{}`)
 	}
+	if carriesOwnerInput(method) {
+		var err error
+		params, err = rewriteOwnerInput(params, false)
+		if err != nil {
+			return nil, err
+		}
+		if method == "codex.answer" && devicewire.IsOwnerAnswer(ctx) {
+			ctx = context.WithValue(ctx, ownerControlKey{}, method)
+		}
+	}
+	var languageErr error
+	params, languageErr = d.promptLanguageParams(method, params)
+	if languageErr != nil {
+		return nil, languageErr
+	}
+	actor := devicewire.ModeActorOf(ctx)
+	sid, from, to, record := m.modeSetFrom(devicewire.NodeCall{Method: method, Actor: actor}, params)
 	var out json.RawMessage
 	if err := m.call(ctx, method, params, &out); err != nil {
 		return nil, err
+	}
+	if record {
+		m.recordModeSet(actor, sid, from, to, out)
 	}
 	return out, nil
 }
@@ -761,6 +1075,17 @@ func (d *Devices) Session(id, session string) (proto.Session, bool) {
 	return m.session(session)
 }
 
+// Watched says whether the hub watches a machine's session for its apps (session.watch): an app has it open.
+func (d *Devices) Watched(id, session string) bool {
+	m := d.machineByID(id)
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.watched[session]
+}
+
 // Sessions are a machine's sessions as its node listed them; false when there is no such machine.
 func (d *Devices) Sessions(id string) ([]proto.Session, bool) {
 	m := d.machineByID(id)
@@ -768,6 +1093,17 @@ func (d *Devices) Sessions(id string) ([]proto.Session, bool) {
 		return nil, false
 	}
 	return m.sessionList(), true
+}
+
+// AppendSessions is Sessions appended to dst, the rows copied under the machine's lock; false, and dst as it came,
+// when there is no such machine. A reader that copies the same machine's list again and again passes its last copy
+// as dst[:0] and keeps one array, allocating only when the list outgrew it.
+func (d *Devices) AppendSessions(dst []proto.Session, id string) ([]proto.Session, bool) {
+	m := d.machineByID(id)
+	if m == nil {
+		return dst, false
+	}
+	return m.appendSessions(dst), true
 }
 
 // SessionsWhere are those of a machine's sessions keep accepts, copied out without the rest; false when there is no
@@ -788,6 +1124,25 @@ func (d *Devices) Canonical(id string) string {
 		return m.cfg.ID
 	}
 	return id
+}
+
+// PhysicalAliases returns the configured identities currently naming the same
+// computer. It reads the fleet directly, before projected transport identities.
+func (d *Devices) PhysicalAliases(id string) []string {
+	m := d.machineByID(id)
+	if m == nil {
+		return []string{id}
+	}
+	out := []string{id, m.cfg.ID}
+	d.fleet.mu.Lock()
+	for from, to := range d.fleet.absorbed {
+		if to == m {
+			out = append(out, from.cfg.ID)
+		}
+	}
+	d.fleet.mu.Unlock()
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // ConnectedAt is when the machine's node's current connection began (zero: none).
@@ -833,6 +1188,7 @@ func (d *Devices) Follow(ctx context.Context, machine, session string, on bool) 
 		m.followed[session] = true
 	} else {
 		delete(m.followed, session)
+		m.forgetSeqLocked(session)
 	}
 	m.mu.Unlock()
 	var err error
@@ -877,3 +1233,15 @@ func (w *wrapped) Error() string   { return w.message.Error() }
 func (w *wrapped) Unwrap() []error { return []error{w.message, w.err} }
 
 func explain(message, err error) error { return &wrapped{message: message, err: err} }
+
+// A hand-off is the manager's own, after its card (CallNode, in this process): never the hub's or another manager's
+// to ask for (Devices.Call), so nobody else can stage values or start an Agent with them.
+var errHandoffRefused = &rpc.Error{Code: devicewire.CodeHandoffRefused, Message: "secret hand-offs are made only by the manager that connects this computer"}
+
+// refusesHandoff: a hub-relayed call that would stage values or start with a ticket.
+func refusesHandoff(method string, params json.RawMessage) bool {
+	return method == proto.MethodSecretStage || devicewire.IsSessionStart(method) && startHasSecretTicket(params)
+}
+
+// ReportState republishes manager-owned transport aliases after a routing change.
+func (d *Devices) ReportState() { d.report(true) }

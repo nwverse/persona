@@ -114,7 +114,7 @@ func TestOrcaBridgeListsChats(t *testing.T) {
 		t.Fatalf("row %+v", s)
 	}
 	if s.PermissionMode != "acceptEdits" || s.Capabilities == nil || !s.Capabilities.Send || !s.Capabilities.Interrupt ||
-		s.Capabilities.Terminal {
+		s.Capabilities.Terminal || s.Capabilities.Modes == nil || !*s.Capabilities.Modes {
 		t.Fatalf("modes / capabilities %+v %+v", s.PermissionMode, s.Capabilities)
 	}
 	for id := range listed(t, n) {
@@ -315,5 +315,28 @@ func TestOrcaBridgeQuestionCard(t *testing.T) {
 	got, _ := json.Marshal(o.writes("agentSession.respondToQuestion")[0]["answers"])
 	if want := `[{"optionIds":["u","e"],"questionId":"qa"},{"optionIds":[],"other":"staging-2","questionId":"qb"}]`; string(got) != want {
 		t.Fatalf("answers %s, want %s", got, want)
+	}
+}
+
+func TestOrcaPlanModeChoiceIsAudited(t *testing.T) {
+	_, hub, o := orcaBridgeNode(t)
+	yes := true
+	hub.mu.Lock()
+	hub.resolve = func(proto.Interaction) proto.Resolution {
+		return proto.Resolution{Approve: &yes, Mode: "bypassPermissions", ModeActor: &proto.ModeActor{Kind: "device", DeviceID: "d1", DeviceName: "Phone"}}
+	}
+	hub.mu.Unlock()
+	plan := strings.Replace(orcaApproval, `"title":"Allow Bash?"`, `"title":"Approve plan?","subject":{"kind":"plan","text":"Inspect the project."}`, 1)
+	o.set("blocked", plan)
+	waitFor(t, "the mode audit", func() bool { hub.mu.Lock(); defer hub.mu.Unlock(); return len(hub.modeSets) > 0 })
+	hub.mu.Lock()
+	events := append([]proto.ModeSetEvent(nil), hub.modeSets...)
+	hub.mu.Unlock()
+	if len(events) != 1 || events[0].SessionID != orcaChatUUID || events[0].From != "acceptEdits" || events[0].To != "bypassPermissions" || events[0].Actor.DeviceID != "d1" {
+		t.Fatalf("audit: %+v", events)
+	}
+	set := o.writes("agentSession.setOption")
+	if len(set) != 1 || set[0]["value"] != "full-access" {
+		t.Fatalf("mode not applied: %+v", set)
 	}
 }

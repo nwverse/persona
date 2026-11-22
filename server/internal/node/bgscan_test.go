@@ -5,12 +5,143 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
+
+func TestNodeNamingMetadataIncremental(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	n := &Node{metas: map[string]quickMeta{}, bgScans: map[string]*bgScan{}}
+	padding := `{"type":"api-request-blob","data":"` + strings.Repeat("x", quickTail+1) + `"}` + "\n"
+	head := `{"type":"user","cwd":"/work/project","message":{"role":"user","content":"Fix the build"}}` + "\n" +
+		`{"type":"custom-title","customTitle":"Claude Code"}` + "\n" +
+		`{"type":"assistant","message":{"id":"a1","role":"assistant","content":[],"usage":{"input_tokens":1000,"output_tokens":20}}}` + "\n"
+	if err := os.WriteFile(path, []byte(head+padding+`{"type":"ai-title","aiTitle":"Generated again"}`+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	read := func() quickMeta {
+		t.Helper()
+		m := n.metas[path]
+		m.readAt = time.Time{} // advance the existing throttled refresh without waiting
+		n.metas[path] = m
+		st, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n.meta(path, st)
+	}
+	m := read()
+	if m.title != "Claude Code" || !m.titleManual || m.titleSource != "manual" || m.outputTokens != 20 {
+		t.Fatalf("historical metadata: title=%q manual=%v source=%q output=%d", m.title, m.titleManual, m.titleSource, m.outputTokens)
+	}
+	appendRows := func(rows string) {
+		t.Helper()
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		if _, err := f.WriteString(rows); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An input/context change and repeated usage do not count as new generated output.
+	appendRows(`{"type":"assistant","message":{"id":"a1","role":"assistant","content":[],"usage":{"input_tokens":8000,"output_tokens":20}}}` + "\n")
+	if got := read().outputTokens; got != 20 {
+		t.Fatalf("repeated usage output=%d", got)
+	}
+	// Output counts even when a screenshot pushes the usage fields outside the scanner's first buffer.
+	appendRows(`{"type":"assistant","message":{"id":"a2","role":"assistant","content":[{"type":"text","text":"` +
+		strings.Repeat("x", 300<<10) + `"}],"usage":{"input_tokens":9000,"output_tokens":7}}}` + "\n")
+	m = read()
+	s := proto.Session{Title: m.title}
+	setContext(&s, m)
+	if s.OutputTokens != 27 || !s.TitleManual || s.TitleSource.String() != "manual" {
+		t.Fatalf("session metadata: output=%d manual=%v source=%q", s.OutputTokens, s.TitleManual, s.TitleSource)
+	}
+	before := listKey([]proto.Session{s})
+	s.OutputTokens++
+	if before == listKey([]proto.Session{s}) {
+		t.Fatal("generated output did not change the published list key")
+	}
+	before = listKey([]proto.Session{s})
+	s.TitleSource = proto.TitleSourceAuto
+	if before == listKey([]proto.Session{s}) {
+		t.Fatal("title provenance did not change the published list key")
+	}
+}
+
+func TestNodeNamingMetadataSources(t *testing.T) {
+	for _, tc := range []struct {
+		name, rows, source string
+		output             int
+	}{
+		{"automatic", `{"type":"ai-title","aiTitle":"Generated"}` + "\n", "auto", 0},
+		{"prompt", `{"type":"user","cwd":"/work/project","message":{"role":"user","content":"Fix the build"}}` + "\n", "prompt", 0},
+		{"codex", `{"type":"session_meta","payload":{"cwd":"/work/project"}}` + "\n" + `{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"output_tokens":321},"last_token_usage":{"input_tokens":5000}}}}` + "\n", "", 321},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "session.jsonl")
+			if err := os.WriteFile(path, []byte(tc.rows), 0600); err != nil {
+				t.Fatal(err)
+			}
+			st, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			n := &Node{metas: map[string]quickMeta{}, bgScans: map[string]*bgScan{}}
+			m := n.meta(path, st)
+			s := proto.Session{Title: m.title}
+			untitled(&s, m)
+			setContext(&s, m)
+			if s.TitleManual || s.TitleSource.String() != tc.source || s.OutputTokens != tc.output {
+				t.Fatalf("source=%q manual=%v output=%d", s.TitleSource, s.TitleManual, s.OutputTokens)
+			}
+		})
+	}
+}
+
+func TestToolOnlyTitleKeepsKnownPromptProvenance(t *testing.T) {
+	s := proto.Session{Title: "◐ Claude Code"}
+	setContext(&s, quickMeta{titleSource: "prompt", outputTokens: 10})
+	if s.TitleSource != proto.TitleSourcePrompt || s.OutputTokens != 10 {
+		t.Fatal("tool fallback lost its proved transcript provenance")
+	}
+	unknown := proto.Session{Title: "◐ Claude Code"}
+	setContext(&unknown, quickMeta{})
+	if unknown.TitleSource != proto.TitleSourceUnknown || unknown.TitleManual {
+		t.Fatal("missing metadata implied known title provenance")
+	}
+}
+
+func TestIncompleteNamingScanDoesNotProveAutomaticTitle(t *testing.T) {
+	m := quickMeta{title: "Generated", titleSource: "auto", size: 100}
+	n := &Node{bgScans: map[string]*bgScan{"s": {off: 50}}}
+	n.mergeNamingMetadata("s", &m)
+	if m.titleSource != "" {
+		t.Fatal("an incomplete or failed historical scan proved automatic provenance")
+	}
+}
+
+func TestPendingNamingScanDoesNotProveAutomaticTitle(t *testing.T) {
+	m := quickMeta{title: "Generated", size: 100}
+	n := &Node{bgScans: map[string]*bgScan{"s": {pending: true, meta: transcript.Meta{Title: "Manual", TitleManual: true, TitleSource: "manual", OutputTokens: 42}}}}
+	n.mergeNamingMetadata("s", &m)
+	if m.titleSource != "" || m.outputTokens != 0 {
+		t.Fatal("pending scan published unverified metadata")
+	}
+	n.bgScans["s"].pending = false
+	n.bgScans["s"].off = m.size // the historical scan really completed, not merely stopped
+	n.mergeNamingMetadata("s", &m)
+	if m.title != "Manual" || !m.titleManual || m.titleSource != "manual" || m.outputTokens != 42 {
+		t.Fatal("completed scan did not restore historical manual title and cumulative output")
+	}
+}
 
 // The streamed background-task scan finds what parsing every short marker line finds, across a line far larger than
 // its read buffer and a last line that is only half written when one scan runs.
@@ -49,9 +180,105 @@ func TestBackgroundTasksStreamed(t *testing.T) {
 		if got := n.bgScans[path].meta.Background; !reflect.DeepEqual(got, want.Background) {
 			t.Errorf("%s: background tasks\n got %+v\nwant %+v", name, got, want.Background)
 		}
+		if got := n.bgScans[path].meta.BackgroundEnded; !reflect.DeepEqual(got, want.BackgroundEnded) {
+			t.Errorf("%s: ended background tasks\n got %+v\nwant %+v", name, got, want.BackgroundEnded)
+		}
 		if st, _ := os.Stat(path); n.bgScans[path].off != st.Size() {
 			t.Errorf("%s: scanned up to %d of %d bytes", name, n.bgScans[path].off, st.Size())
 		}
+	}
+}
+
+func TestBackgroundStopResultIncremental(t *testing.T) {
+	for _, tc := range []struct {
+		tool, input string
+	}{
+		{"TaskStop", `{"task_id":"shell"}`},
+		{"KillShell", `{"shell_id":"shell"}`},
+		{"KillBash", `{"shell_id":"shell"}`},
+	} {
+		t.Run(tc.tool, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "session.jsonl")
+			ts := time.Now().UTC().Format(time.RFC3339Nano)
+			call := func(id, tool, input string) string {
+				return `{"type":"assistant","timestamp":"` + ts + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"` + id + `","name":"` + tool + `","input":` + input + `}]}}` + "\n"
+			}
+			result := func(id, text string, isError bool) string {
+				return `{"type":"user","timestamp":"` + ts + `","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"` + id + `","content":"` + text + `","is_error":` + strconv.FormatBool(isError) + `}]}}` + "\n"
+			}
+			appendRows := func(rows string) {
+				t.Helper()
+				f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := f.WriteString(rows); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			n := &Node{bgScans: map[string]*bgScan{}}
+			rows := call("launch", "Bash", `{"command":"sleep 60","run_in_background":true}`) +
+				result("launch", "Command running in background with ID: shell. Output is being written to: /tmp/shell.out", false)
+			if err := os.WriteFile(path, []byte(rows), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tasks, _, _, _ := n.backgroundTasks(path); len(tasks) != 1 {
+				t.Fatalf("launch: %+v", tasks)
+			}
+
+			// A result names only the pending call's id. Read the call and result in separate appends.
+			appendRows(call("denied", tc.tool, tc.input))
+			n.backgroundTasks(path)
+			appendRows(result("denied", "Permission denied", true))
+			if tasks, _, _, _ := n.backgroundTasks(path); len(tasks) != 1 || len(n.bgEnded(path)) != 0 {
+				t.Fatalf("denied stop: running %+v ended %+v", tasks, n.bgEnded(path))
+			}
+			appendRows(call("stopped", tc.tool, tc.input))
+			n.backgroundTasks(path)
+			appendRows(result("stopped", "Stopped background task shell", false))
+			tasks, _, _, _ := n.backgroundTasks(path)
+			ended := n.bgEnded(path)
+			if len(tasks) != 0 || len(ended) != 1 || ended[0].Status != "stopped" || ended[0].ExitCode != nil {
+				t.Fatalf("successful stop: running %+v ended %+v", tasks, ended)
+			}
+		})
+	}
+}
+
+func TestBackgroundEndedRetention(t *testing.T) {
+	now := time.Now()
+	recent, old := now.Add(-time.Hour), now.Add(-workflowKeep-time.Hour)
+	n := &Node{bgScans: map[string]*bgScan{"s": {meta: transcript.Meta{BackgroundEnded: []proto.BackgroundTask{
+		{ID: "old", Kind: "shell", EndedAt: &old},
+		{ID: "recent", Kind: "shell", Status: "completed", EndedAt: &recent},
+	}}}}}
+	ended := n.bgEnded("s")
+	if len(ended) != 1 || ended[0].ID != "recent" {
+		t.Fatalf("retained outcomes: %+v", ended)
+	}
+	path := filepath.Join(t.TempDir(), "cached.jsonl")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.metas = map[string]quickMeta{path: {size: st.Size(), mtime: st.ModTime(), readAt: now, bgEnded: []proto.BackgroundTask{{ID: "old", EndedAt: &old}, {ID: "recent", EndedAt: &recent}}}}
+	if cached := n.meta(path, st).bgEnded; len(cached) != 1 || cached[0].ID != "recent" {
+		t.Fatalf("cached meta kept expired outcomes: %+v", cached)
+	}
+	var s proto.Session
+	n.setBackground(&s, quickMeta{bgEnded: ended})
+	if got := s.BackgroundEnded(); len(got) != 1 || got[0].ID != "recent" {
+		t.Fatalf("session outcomes: %+v", got)
+	}
+	n.bgScans["s"].pending = true
+	if got := n.bgEnded("s"); got != nil {
+		t.Fatalf("pending scan published outcomes: %+v", got)
 	}
 }
 
@@ -192,5 +419,23 @@ func TestBackgroundTasksKeepsPlan(t *testing.T) {
 	n.backgroundTasks(path)
 	if p := n.bgPlan(path); p == nil || p.Done != 4 || p.Current != "Doing e" || !p.At.Equal(time.Date(2026, 11, 6, 8, 5, 0, 0, time.UTC)) {
 		t.Fatalf("plan after the appended call: %+v", p)
+	}
+}
+
+// A foreground command backgrounded by hand (a message sent mid-turn, #3278) is background work in the session's scan
+// too, which reads only the lines that name background work: a Lark turn that ends meanwhile waits for it.
+func TestBackgroundTasksSeesManuallyBackgrounded(t *testing.T) {
+	lines := []string{
+		`{"type":"assistant","uuid":"a1","timestamp":"2026-11-10T09:25:52Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"Bash","input":{"command":"python3 slow.py","description":"Run a slow test"}}]}}`,
+		`{"type":"user","uuid":"u1","timestamp":"2026-11-10T09:26:07Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"Command was manually backgrounded by user with ID: beg3p1s7d. Output is being written to: /tmp/tasks/beg3p1s7d.output. If it is still running after 30m in the background, it will be stopped and you will be notified."}]}}`,
+	}
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n := &Node{bgScans: map[string]*bgScan{}}
+	n.backgroundTasks(path)
+	if got := n.bgScans[path].meta.Background; len(got) != 1 || got[0].ID != "beg3p1s7d" || got[0].Kind != "shell" {
+		t.Fatalf("background tasks: %+v", got)
 	}
 }

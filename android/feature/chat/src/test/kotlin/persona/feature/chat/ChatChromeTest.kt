@@ -6,6 +6,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import persona.core.contracts.Session
+import persona.core.contracts.SessionCapabilities
 import persona.core.contracts.api.ConnectionState
 import org.junit.Assert.*
 import org.junit.Test
@@ -68,6 +69,15 @@ class ChatChromeTest {
         assertNotEquals("已重命名", state.notice)
     }
 
+    // #6294: the rename dialog's note speaks of the terminal's tab and Claude's /rename; a runtime's session has neither.
+    @Test fun onlyASessionWithATerminalGetsTheRenameNote() {
+        assertEquals(R.string.chat_chrome_rename_text, chatRenameNote(Session("m", "s", paneId = "w1:p1")))
+        assertEquals(R.string.chat_chrome_rename_text_tern, chatRenameNote(Session("m", "s", paneId = "tern:1")))
+        assertEquals(R.string.chat_chrome_rename_text, chatRenameNote(null))
+        assertNull(chatRenameNote(Session("m", "s", agent = "claude", sourceKind = "runtime",
+            capabilities = SessionCapabilities(read = true, send = true, rename = true))))
+    }
+
     @Test fun companionsListATabsAgentsTogetherWithTheLauncherFirst() {
         // tab 1: this session (pane 1) split off from the launcher (pane 0), plus a third pane; tab 2: one agent
         fun pane(id: String, slot: Int, index: Int?, state: String = "idle") = Session(machineId = "machine",
@@ -97,6 +107,16 @@ class ChatChromeTest {
         assertEquals("cd -- '/workspace/project' && codex resume 'session'", current.copy(agent = "codex", sessionId = "session").resumeCommand())
         assertEquals("cd -- '/workspace/it'\"'\"'s' && claude --resume 'session'\"'\"'id'",
             current.copy(cwd = "/workspace/it's", sessionId = "session'id").resumeCommand())
+        assertTrue(spaceCompanions(
+            current.copy(spaceId = null, workspaceId = "bytedance"),
+            listOf(peer.copy(spaceId = null, workspaceId = "bytedance")),
+        ).isEmpty())
+        assertTrue(spaceCompanions(
+            current.copy(spaceId = null, spaceName = "bytedance"),
+            listOf(peer.copy(spaceId = null, spaceName = "bytedance")),
+        ).isEmpty())
+        val worker = peer.copy(sessionId = "worker", foldedUnder = "current")
+        assertEquals(listOf(peer), spaceCompanions(current, listOf(current, peer, worker)))
         assertEquals("配对已失效", connectionTitle(res, ConnectionState.Revoked))
         assertNull(connectionTitle(res, ConnectionState.Online))
     }

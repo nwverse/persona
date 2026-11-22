@@ -59,6 +59,50 @@ struct WakeReplyOrderTests {
         }
     }
 
+    /// A wake opens an exchange of its own (#9140): the answer of the turn before it stays in place while the woken
+    /// work runs, while its words stream and after they land. The wake-tail model is not restored (#2796, #3169).
+    @Test func theAnswerBeforeAWakeStaysWhileTheWokenWorkRunsStreamsAndEnds() throws {
+        var wake = item(4, .notice, role: "system", text: "Background check finished")
+        wake.wake = true
+        let old = item(3, .text, text: "The background check is running.")
+        let items = [item(1, .text, role: "user", text: "Check the forecast."),
+                     item(2, .toolUse, tool: "Bash", id: "before"), old, wake,
+                     item(5, .toolUse, tool: "Bash", id: "after")]
+        let reloaded = try JSONDecoder().decode([Item].self, from: JSONEncoder().encode(items))
+        for history in [items, reloaded] {
+            let blocks = ChatStore.rebuild(history, settled: nil).blocks
+            guard blocks.count == 2, case .turn(let asked) = blocks[0], case .turn(let turn) = blocks[1] else {
+                Issue.record("expected the asked exchange and the woken one"); return
+            }
+            #expect(asked.answer?.id == old.id)
+            #expect(turn.id == wake.id && turn.wakes.map(\.id) == [wake.id] && turn.answer == nil)
+            #expect((asked.ordered + turn.ordered).flatMap { ChatLines.transcriptItems($0) }.map(\.id) == items.map(\.id),
+                    "row grouping adds tools- IDs but does not drop the wake or its later tool call")
+            func answers(_ lines: [ChatLine]) -> [String] {
+                lines.compactMap { if case .row(.assistant(let item)) = $0.content { item.id } else { nil } }
+            }
+            var builder = ChatLines(openWork: [])
+            #expect(answers(builder.build(blocks, live: turn.id)) == [old.id])
+            let streaming = builder.build(blocks, live: turn.id, streaming: true)
+            #expect(answers(streaming) == [old.id], "the woken exchange's live words do not take the earlier answer's place")
+            // The woken work is a line of its own, and the earlier answer is no step of it.
+            let work = try #require(streaming.last { if case .work = $0.content { true } else { false } })
+            guard case .work(_, let steps, let live, _, _) = work.content else { return }
+            #expect(live && steps.map(\.id) == ["5#0"])
+            builder.openWork = [work.id]
+            #expect(!builder.build(blocks, live: turn.id, streaming: true).contains {
+                if case .workStep(_, .text(let item), _) = $0.content { return item.id == old.id }
+                return false
+            })
+            builder.openWork = []
+            #expect(answers(builder.build(blocks, live: nil, streaming: true)) == [old.id])
+            #expect(answers(builder.build(blocks, live: "another-turn", streaming: true)) == [old.id])
+            let final = item(6, .text, text: "No rain.")
+            let done = ChatStore.rebuild(history + [final], settled: nil).blocks
+            #expect(answers(builder.build(done, live: nil)) == [old.id, final.id])
+        }
+    }
+
     private static func orders(_ a: [String]) -> [[String]] {
         guard a.count > 1 else { return [a] }
         return a.indices.flatMap { i -> [[String]] in
@@ -73,7 +117,7 @@ struct WakeReplyOrderTests {
     }
 
     /// Shorter than the answer before the wake (#3783): the longest words used to be the answer, so this reply went
-    /// into the background tasks' drawer the moment its line came. The newest words are the answer now.
+    /// into the background tasks' drawer the moment its line came. It is the woken exchange's own answer now (#9140).
     @Test func aShortWokenReplyStaysOnScreenToo() async {
         await stays("构建好了。")
     }

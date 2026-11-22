@@ -2,9 +2,7 @@
   "auto_done": "自动完成",
   "model_request_failed": "模型请求失败",
   "unassigned": "没挂待办的",
-  "manual": "在终端里开的",
-  "unassigned_hint": "没挂在任何待办上，常是从飞书、手机或别的入口开的。右键一行（或点行尾的 ⋯）› 关联到待办… 可以归过去。",
-  "manual_hint": "在终端（herdr）里开的、没挂在待办上的 Agent。右键一行（或点行尾的 ⋯）› 关联到待办… 可以归过去。",
+  "unassigned_hint": "没挂在任何待办上：你自己在终端里开的，或从飞书、手机等别的入口开的。右键一行（或点行尾的 ⋯）› 关联到待办… 可以归过去。",
   "context_title": "待办 · {title}",
   "decision_manual": "手动记的",
   "decision_agent_question": "在 Agent 的提问里答的",
@@ -22,5 +20,13 @@
   "review_cancelled": "已取消",
   "thread_feishu": "飞书话题",
   "thread_channel": "话题（{channel}）",
-  "thread_line": "{kind} · {name}"
+  "thread_line": "{kind} · {name}",
+  "orphaned": "没人在做",
+  "orphaned_error": "出错后关闭",
+  "orphaned_closed": "已关闭",
+  "orphaned_offline": "电脑离线",
+  "create_unconfirmed": "Hub 还没有确认创建结果，请先查询结果，不要重复创建。",
+  "images_not_saved": "Hub 没有保存图片。你的草稿还在，请重试。",
+  "images_cleanup_failed": "Hub 创建了没有图片的待办，并且无法将其删除。你的草稿还在，请检查待办列表。",
+  "images_unsupported": "此 Hub 不支持待办图片。请更新所有助手后再添加。"
 }

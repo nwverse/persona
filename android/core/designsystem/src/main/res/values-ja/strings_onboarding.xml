@@ -7,7 +7,8 @@
     <string name="designsystem_feedback_launcher_missing">そのパソコンでこのモデルが見つかりません。削除された可能性があります。</string>
     <string name="designsystem_feedback_not_logged_in">そのパソコンの Claude Code にまだログインしていません。</string>
     <string name="designsystem_feedback_auth_failed">モデルのキーが正しくないか、期限切れです。</string>
-    <string name="designsystem_feedback_assistant_restarting">アシスタントを再起動しています。数秒で戻ります。</string>
+    <string name="designsystem_feedback_assistant_restarting">アシスタントはオフラインか再起動中です。しばらくしてから再試行してください。</string>
+    <string name="designsystem_feedback_provider_out_of_scope">このモデルプロバイダーはそのコンピューターで使う設定になっていません。設定 › モデルプロバイダー で使うコンピューターを変更できます。</string>
     <string name="designsystem_readiness_one_more_step">あと一歩</string>
     <string name="designsystem_readiness_action_add_computer">パソコンを追加</string>
     <string name="designsystem_readiness_action_confirm_computer">自分のパソコンと確認</string>
@@ -39,7 +40,7 @@
     <string name="designsystem_readiness_help_install_body">%1$s でターミナルを開き、次の行を貼り付けて Return を押してください：</string>
     <string name="designsystem_readiness_help_install_after">インストールが終わったらここに戻ってください。しばらくすると更新されます。</string>
     <string name="designsystem_readiness_help_login_title">Claude Code にログイン</string>
-    <string name="designsystem_readiness_help_login_body">%1$s でターミナルを開き、次の単語を入力して Return を押し、ブラウザで一度ログインしてください：</string>
+    <string name="designsystem_readiness_help_login_body">Persona は %1$s の Claude Code CLI を使い、Claude デスクトップアプリのログインはこれに含まれません。そのコンピュータでターミナルを開き、次のコマンドを実行して、ブラウザで一度ログインしてください：</string>
     <string name="designsystem_readiness_help_login_after">ログインしたらここに戻って、メッセージを送ってみてください。</string>
     <string name="designsystem_readiness_help_what_title">Persona にできること</string>
     <string name="designsystem_readiness_help_what_body">Persona はあなた専用のアシスタントです。パソコンとモデルをつなぐと、次のことができます：</string>

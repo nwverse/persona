@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 // Settings › Managers (docs/assistant/managers.md, the web's ManagersSettings, Android's ManagersScreen): the hub's managers, each
 // a whole assistant: where each runs, online or when it last synced, the default; renaming, making one the default,
@@ -7,7 +8,7 @@ import Observation
 // hub gives them). The hub pushes {"type":"managers"} when the roster changes (the socket asks for feature `managers`).
 
 /// One manager in the hub's roster (GET /api/v1/managers).
-nonisolated struct HubManager: Decodable, Hashable, Identifiable, Sendable {
+nonisolated struct HubManager: Codable, Hashable, Identifiable, Sendable {
     var id: String
     var name: String
     var online: Bool
@@ -26,17 +27,32 @@ nonisolated struct HubManager: Decodable, Hashable, Identifiable, Sendable {
     var lastSeen: Date?
     /// Not installed yet: when its install code runs out.
     var installing: Date?
+    /// The open items of its inbox under Needs You, as the hub's roster tells them (`inbox_needs_you`,
+    /// docs/protocol/protocol.md): nil when the hub can't tell (offline, still installing, an older hub or manager),
+    /// which counts as none. It moves with every change of that inbox, so the app keeps it apart from its rosters
+    /// (`AppModel.inboxNeedsYou`, `ManagerRoster.countless`): a roster that changed with it would draw every page that
+    /// reads one again.
+    var inboxNeedsYou: Int?
+    /// The user's choice to keep the built-in assistant out of the switcher while it isn't used (`hide`, #9055), as
+    /// Settings › Assistants shows it. Only the built-in one carries it; an older hub never does.
+    var hide: Bool = false
+    /// That choice in effect now (`hidden`): the hub sets it while `hide` is on and the built-in assistant is not the
+    /// default and has no computer. The switcher leaves it out (`AssistantSwitcherText.rows`); it still counts as
+    /// installed everywhere else (`ManagerRoster.installed`).
+    var hidden: Bool = false
 
     enum CodingKeys: String, CodingKey {
-        case id, name, online, builtin, host, os, arch, deploy, version, since, installing
-        case isDefault = "default", lastSeen = "last_seen"
+        case id, name, online, builtin, host, os, arch, deploy, version, since, installing, hide, hidden
+        case isDefault = "default", lastSeen = "last_seen", inboxNeedsYou = "inbox_needs_you"
     }
 
     init(id: String, name: String, online: Bool, isDefault: Bool = false, builtin: Bool = false, host: String? = nil, os: String? = nil,
-         arch: String? = nil, deploy: String? = nil, version: String? = nil, since: Date? = nil, lastSeen: Date? = nil, installing: Date? = nil) {
+         arch: String? = nil, deploy: String? = nil, version: String? = nil, since: Date? = nil, lastSeen: Date? = nil, installing: Date? = nil,
+         inboxNeedsYou: Int? = nil, hide: Bool = false, hidden: Bool = false) {
         (self.id, self.name, self.online, self.isDefault, self.builtin) = (id, name, online, isDefault, builtin)
         (self.host, self.os, self.arch, self.deploy, self.version) = (host, os, arch, deploy, version)
-        (self.since, self.lastSeen, self.installing) = (since, lastSeen, installing)
+        (self.since, self.lastSeen, self.installing, self.inboxNeedsYou) = (since, lastSeen, installing, inboxNeedsYou)
+        (self.hide, self.hidden) = (hide, hidden)
     }
 
     init(from decoder: Decoder) throws {
@@ -54,6 +70,10 @@ nonisolated struct HubManager: Decodable, Hashable, Identifiable, Sendable {
         since = try c.decodeIfPresent(Date.self, forKey: .since)
         lastSeen = try c.decodeIfPresent(Date.self, forKey: .lastSeen)
         installing = try c.decodeIfPresent(Date.self, forKey: .installing)
+        inboxNeedsYou = try c.decodeIfPresent(Int.self, forKey: .inboxNeedsYou)
+        // Both are left out while false.
+        hide = try c.decodeIfPresent(Bool.self, forKey: .hide) ?? false
+        hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
     }
 }
 
@@ -98,6 +118,10 @@ extension APIClient {
     }
     func makeDefaultManager(_ id: String) async throws {
         _ = try await request("PATCH", "/api/v1/managers/\(Self.pathPart(id))", body: ["default": true])
+    }
+    /// The built-in assistant out of the switcher while it isn't used (`hide` true), or back in it (#9055).
+    func hideManager(_ id: String, _ hide: Bool) async throws {
+        _ = try await request("PATCH", "/api/v1/managers/\(Self.pathPart(id))", body: ["hide": hide])
     }
     func deleteManager(_ id: String) async throws {
         _ = try await request("DELETE", "/api/v1/managers/\(Self.pathPart(id))")
@@ -167,9 +191,21 @@ enum ManagersText {
 
     /// Why Delete is off for it, or nil when it can be removed.
     static func deleteBlocked(_ m: HubManager) -> String? {
-        if m.builtin { return String(localized: "The manager the hub runs itself can't be deleted") }
-        if m.isDefault { return String(localized: "The default manager can't be deleted. Make another one the default first") }
+        if m.builtin { return String(localized: "The assistant the hub runs itself can't be deleted") }
+        if m.isDefault { return String(localized: "The default assistant can't be deleted. Make another one the default first") }
         return nil
+    }
+
+    /// Whether the built-in assistant's Show in Switcher (#9055) can't be turned off now: the default is always listed.
+    /// Turning it back on always can.
+    static func switcherLocked(_ m: HubManager) -> Bool { m.isDefault && !m.hide }
+
+    /// Under that switch: why it can't be turned off, that the choice waits while the assistant is in use, or what it does.
+    static func switcherNote(_ m: HubManager) -> String {
+        if switcherLocked(m) { return String(localized: "The default assistant is always listed. To hide this one, make another one the default first.") }
+        if m.hide, m.isDefault { return String(localized: "It's listed for now because it's the default. It's hidden again once another one is.") }
+        if m.hide, !m.hidden { return String(localized: "It's listed for now because it has a computer. It's hidden again once it has none.") }
+        return String(localized: "When off, it isn't listed where you switch assistants while it isn't used. It's listed again by itself once it becomes the default or has a computer.")
     }
 
     /// Whether a hub from before the roster answered (404 without a code of its own).
@@ -182,10 +218,11 @@ enum ManagersText {
     static func failure(_ error: Error) -> String {
         if let e = error as? APIError {
             switch e.code {
-            case "default_manager": return String(localized: "This is the default manager. Make another one the default before deleting it")
-            case "builtin_manager": return String(localized: "The hub runs this manager itself. It can't be deleted or installed elsewhere")
-            case "no_manager": return String(localized: "This manager is no longer there")
+            case "default_manager": return String(localized: "This is the default assistant. Make another one the default before deleting it")
+            case "builtin_manager": return String(localized: "The hub runs this assistant itself. It can't be deleted or installed elsewhere")
+            case "no_manager": return String(localized: "This assistant is no longer there")
             case "installing": return String(localized: "It isn't installed yet. Rename it or make it the default once it is")
+            case "builtin_in_use": return String(localized: "It's in use, as the default or with a computer, so it can't be hidden now")
             default: break
             }
             if e.status == 400 { return String(localized: "Names are 1 to 40 characters") }
@@ -221,14 +258,20 @@ enum ManagersText {
     private(set) var busy = false
     /// The last change that did not go through, in plain words.
     var failure: String?
-    var shown: Shown?
-    /// The clock the countdowns read; `tick()` moves it on.
-    private(set) var now: Date
+    var shown: Shown? {
+        didSet { if let s = shown { issued[s.id] = s.code } }
+    }
+    /// The codes this page put on screen, by manager: one still good is shown again (`showCode`).
+    @ObservationIgnored private var issued: [String: ManagerInstallCode] = [:]
+    /// The clock the countdowns read; `tick()`, `load()` and a new code move it on. Until one of them has, the deps'
+    /// clock as it reads now: the init only assigns, as a `@State` initial value's must (docs/apple/performance.md P3,
+    /// #4695), since the switcher's header makes one each time its struct is made.
+    var now: Date { readAt ?? deps.now() }
+    private var readAt: Date?
     @ObservationIgnored private let deps: Deps
 
     init(deps: Deps = .live) {
         self.deps = deps
-        now = deps.now()
     }
 
     func manager(_ id: String) -> HubManager? { managers?.first { $0.id == id } }
@@ -236,20 +279,23 @@ enum ManagersText {
     var secondsLeft: Int { shown.map { ConnectDeviceText.secondsLeft($0.code.expiresAt, now: now) } ?? 0 }
     var expired: Bool { shown != nil && secondsLeft == 0 }
 
-    func tick() { now = deps.now() }
+    func tick() { readAt = deps.now() }
 
-    func load() async {
-        guard let api = deps.api() else { return }
+    /// False when the hub's list could not be read now.
+    @discardableResult func load() async -> Bool {
+        guard let api = deps.api() else { return false }
+        defer { readAt = deps.now() }
         do {
             let list = try await api.managers()
             managers = list.managers
             error = nil
             unsupported = false
+            return true
         } catch {
             if ManagersText.unsupported(error) { unsupported = true }
             else if managers == nil { self.error = error.shown ?? String(localized: "Can't reach the hub") }
+            return false
         }
-        now = deps.now()
     }
 
     /// A new manager: its install code goes on screen. False when the hub said no (`failure` says why).
@@ -261,7 +307,7 @@ enum ManagersText {
         }
         return await change { api in
             let made = try await api.createManager(name: name)
-            self.now = self.deps.now()
+            self.readAt = self.deps.now()
             self.shown = Shown(id: made.manager.id, name: made.manager.name, code: made.installCode, neverInstalled: true)
         }
     }
@@ -270,6 +316,17 @@ enum ManagersText {
     /// an install whose code ran out.
     @discardableResult func newCode(_ m: HubManager) async -> Bool {
         await change { try await self.freshCode(api: $0, id: m.id, name: m.name, neverInstalled: m.installing != nil) }
+    }
+
+    /// How to install `m`, which is still installing (the switcher's row): the code this page made for it while it
+    /// lasts, else a new one (the hub keeps no code to show again, and a new one voids the last).
+    func showCode(_ m: HubManager) async {
+        tick()
+        if let code = issued[m.id], code.expiresAt > now {
+            shown = Shown(id: m.id, name: m.name, code: code, neverInstalled: true)
+        } else {
+            await newCode(m)
+        }
     }
 
     /// The code on screen ran out: another one for the same manager.
@@ -283,11 +340,11 @@ enum ManagersText {
     private func freshCode(api: APIClient, id: String, name: String, neverInstalled: Bool) async throws {
         do {
             let code = try await api.managerInstallCode(id)
-            now = deps.now()
+            readAt = deps.now()
             shown = Shown(id: id, name: name, code: code, neverInstalled: neverInstalled)
         } catch let e as APIError where neverInstalled && e.status == 404 && e.code == "no_manager" {
             let made = try await api.createManager(name: name)
-            now = deps.now()
+            readAt = deps.now()
             shown = Shown(id: made.manager.id, name: made.manager.name, code: made.installCode, neverInstalled: true)
         }
     }
@@ -309,8 +366,33 @@ enum ManagersText {
         await change { try await $0.deleteManager(m.id) }
     }
 
-    /// One change, then the list again (the push would bring it too; this one does not wait for it).
-    private func change(_ work: (APIClient) async throws -> Void) async -> Bool {
+    /// The built-in assistant back in the switcher (`shown`), or out of it while it isn't used (#9055): shown at once,
+    /// put back if the hub says no. The hub refuses to hide it while it is in use (409 `builtin_in_use`). An older hub
+    /// answers yes and keeps nothing: the list read after it still has the choice as it was, and the page says the hub
+    /// needs updating.
+    @discardableResult func showInSwitcher(_ m: HubManager, _ shown: Bool) async -> Bool {
+        guard !busy else { return false }
+        setHide(m.id, !shown)
+        var read = false
+        guard await change({ try await $0.hideManager(m.id, !shown) }, then: { read = $0 }) else {
+            setHide(m.id, m.hide)
+            return false
+        }
+        if read, !shown, manager(m.id)?.hide == false {
+            failure = String(localized: "This hub's version can't hide it yet. Update the hub and try again")
+            return false
+        }
+        return true
+    }
+
+    private func setHide(_ id: String, _ hide: Bool) {
+        guard let i = managers?.firstIndex(where: { $0.id == id }), managers?[i].hide != hide else { return }
+        managers?[i].hide = hide
+    }
+
+    /// One change, then the list again (the push would bring it too; this one does not wait for it); `then` hears
+    /// whether that list could be read.
+    private func change(_ work: (APIClient) async throws -> Void, then: (Bool) -> Void = { _ in }) async -> Bool {
         guard let api = deps.api() else { return false }
         busy = true
         failure = nil
@@ -321,7 +403,7 @@ enum ManagersText {
             failure = ManagersText.failure(error)
             return false
         }
-        await load()
+        then(await load())
         return true
     }
 }

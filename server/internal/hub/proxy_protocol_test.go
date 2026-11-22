@@ -18,6 +18,8 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 func TestProxyProtocolPolicy(t *testing.T) {
@@ -166,22 +168,28 @@ func TestSyncBufferWaitFor(t *testing.T) {
 	})
 }
 
+// reserveProxyPlaintext keeps a listener bound until serveHTTP takes ownership.
+func reserveProxyPlaintext(t *testing.T, h *Hub) {
+	t.Helper()
+	h.cfg.Public.TLSListen = "127.0.0.1:0"
+	reserved, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reserved.Close() }) // Also covers a startup failure before serveHTTP takes ownership.
+	h.public.testPlaintext = reserved
+	h.cfg.Listen = reserved.Addr().String()
+}
+
 // proxyTestHub is a hub with TLS on loopback, an admin UI open to 192.0.2.0/24 only, and pp as security.proxy_protocol.
 // It returns the TLS and plaintext base URLs, the pin and the hub's log.
 func proxyTestHub(t *testing.T, pp *ProxyProtocolConfig) (h *Hub, tlsURL, plainURL, pin string, logs *syncBuffer) {
 	t.Helper()
 	t.Setenv("PERSONA_ADMIN_ACCESS", "")
 	h = newPublicTestHub(t)
+	reserveProxyPlaintext(t, h)
 	logs = &syncBuffer{}
 	h.logger = log.New(logs, "", 0)
-	h.cfg.Public.TLSListen = "127.0.0.1:0"
-	// The plaintext port is not handed back by serveHTTP: take a free one.
-	free, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	h.cfg.Listen = free.Addr().String()
-	free.Close()
 	h.cfg.Security = SecurityConfig{AuthFailures: 2, ProxyProtocol: pp}
 	h.cfg.Admin = AdminConfig{Access: accessCIDRs, CIDRs: []string{"192.0.2.0/24"}}
 	h.admin.container = func() bool { return false }
@@ -356,6 +364,13 @@ func TestProxyProtocolOffOrUntrusted(t *testing.T) {
 	}
 }
 
+func TestProxyProtocolServesReservedPlaintextListener(t *testing.T) {
+	_, _, plain, _, _ := proxyTestHub(t, nil)
+	if p := mustGet(t, http.DefaultClient, plain+"/api/v1/health", ""); p.status != 200 || p.fields <= 5 {
+		t.Fatalf("reserved plaintext listener health: %+v", p)
+	}
+}
+
 func TestProxyProtocolBadConfigStopsTheHub(t *testing.T) {
 	h := newPublicTestHub(t)
 	h.cfg.Public.TLSListen = "127.0.0.1:0"
@@ -386,14 +401,15 @@ func TestDoctorProxyProtocol(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "hub.json"), b, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		var out bytes.Buffer
-		(&doctorReport{out: &out}).config(dir)
+		d := &doctorReport{l: i18n.ZhHans} // the wording the report had before it spoke other languages
+		d.config(dir)
+		out := reportText(d)
 		if tc.want == "" {
-			if strings.Contains(out.String(), "proxy_protocol") {
-				t.Fatalf("unset proxy_protocol reported:\n%s", out.String())
+			if strings.Contains(out, "proxy_protocol") {
+				t.Fatalf("unset proxy_protocol reported:\n%s", out)
 			}
-		} else if !strings.Contains(out.String(), tc.want) {
-			t.Fatalf("doctor output lacks %q:\n%s", tc.want, out.String())
+		} else if !strings.Contains(out, tc.want) {
+			t.Fatalf("doctor output lacks %q:\n%s", tc.want, out)
 		}
 	}
 }

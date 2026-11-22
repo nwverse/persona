@@ -9,6 +9,8 @@
   "address_taken": "別のマーケットがすでにこのアドレスを使っています",
   "bad_signature": "マーケットの署名が正しくありません：{err}",
   "no_package": "このハブ（{platform}）で使えるパッケージがありません",
+  "source_needs_linux": "このハブにはまだインストールできません：この種類の拡張機能（ソース拡張機能）はLinuxで動くハブでのみ実行できます。",
+  "source_needs_runtime": "このハブにはまだインストールできません：この種類の拡張機能（ソース拡張機能）には、先にハブで固定バージョンのソースランタイムを設定する必要があります（拡張機能マネージャーのmanager.jsonのextension_runtime）。",
   "bad_signature_install": "マーケットの署名が正しくないため、当面ここからはインストールもアップデートもしません：{err}",
   "not_in_market": "このマーケットに拡張機能 {id} はありません",
   "token_and_token_from": "token と token_from はどちらか一方だけ指定してください",
@@ -16,5 +18,7 @@
   "pin_rotated_pending": "公式の署名公開鍵を更新しました。新しい公開鍵でカタログの署名を検証できるまで、インストールはできません",
   "settings_load_failed": "マーケットのミラー設定を読み込めませんでした。再試行してください。",
   "settings_save_failed": "マーケットのミラー設定を保存できませんでした。再試行してください。",
-  "settings_invalid": "ミラー URL が無効です。認証情報、クエリ、フラグメントのない HTTPS URL と、完全な JSON カタログ URL を指定してください。"
+  "settings_invalid": "ミラー URL が無効です。認証情報、クエリ、フラグメントのない HTTPS URL と、完全な JSON カタログ URL を指定してください。",
+  "not_from_market": "この拡張機能はマーケットからインストールされていません",
+  "refresh_rate_limited": "このマーケットには最近再読み込みを要求済みです。しばらくしてからもう一度お試しください"
 }

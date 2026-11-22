@@ -52,6 +52,32 @@ func queueCall(t *testing.T, s *Service, method string, params map[string]any) (
 	return out, nil
 }
 
+func TestHonestPlanApprovalUsesRecordedMode(t *testing.T) {
+	yes, no := true, false
+	for _, tc := range []struct {
+		name, kind, recorded, clientMode, want string
+		approve                                *bool
+	}{
+		{"recorded mode overrides the client", proto.IxPlan, "acceptEdits", proto.ModeBypass, "acceptEdits", &yes},
+		{"recorded mode fills an omitted client mode", proto.IxPlan, proto.ModeBypass, "", proto.ModeBypass, &yes},
+		{"legacy plan keeps the client mode", proto.IxPlan, "", "acceptEdits", "acceptEdits", &yes},
+		{"legacy plan keeps an omitted mode omitted", proto.IxPlan, "", "", "", &yes},
+		{"unknown recorded mode keeps the client's choice", proto.IxPlan, "futureMode", "default", "default", &yes},
+		{"recorded plan keeps the client's choice", proto.IxPlan, "plan", "acceptEdits", "acceptEdits", &yes},
+		{"rejection is not rewritten", proto.IxPlan, "acceptEdits", proto.ModeBypass, proto.ModeBypass, &no},
+		{"an unanswered plan is not rewritten", proto.IxPlan, "acceptEdits", proto.ModeBypass, proto.ModeBypass, nil},
+		{"another kind of approval is not rewritten", proto.IxPermission, "acceptEdits", proto.ModeBypass, proto.ModeBypass, &yes},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ix := proto.Interaction{Kind: tc.kind, PlanThen: tc.recorded}
+			got := honest(ix, proto.Resolution{Approve: tc.approve, Mode: tc.clientMode})
+			if got.Mode != tc.want {
+				t.Fatalf("honest(%+v, mode %q) = mode %q, want %q", ix, tc.clientMode, got.Mode, tc.want)
+			}
+		})
+	}
+}
+
 // interactions.get is the interaction while it is pending, else how it ended; interactions.answer resolves only a
 // pending question of the session named, as the assistant's answer, and the history and the hub say so.
 func TestInteractionsQueue(t *testing.T) {
@@ -148,6 +174,10 @@ func TestResolveRoute(t *testing.T) {
 	if got := <-done; got.AnsweredBy != "" || got.Remembered || got.Answers["发吗？"] != "发" {
 		t.Fatalf("hook got %+v", got)
 	}
+	status, kept, err := ft.st.InteractionOutcome(context.Background(), ix.ID)
+	if err != nil || status != "resolved" || kept == nil || kept.AnsweredBy != "" || kept.Answers["发吗？"] != "发" {
+		t.Fatalf("an ordinary user's history answer changed: status %q, resolution %+v, err %v", status, kept, err)
+	}
 	if w := post(ix.ID, `{"answers":{"发吗？":"不发"}}`); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"already":true`) {
 		t.Fatalf("again: %d %s", w.Code, w.Body)
 	}
@@ -193,6 +223,45 @@ func TestResolveRouteRightAfterAnotherAnswer(t *testing.T) {
 	}
 }
 
+// The re-check of #10941: an extension's token that resolves a card over already is told it was answered, never the
+// answer (a health card's, or what was typed into a card's fields), right after the answer or from the history.
+func TestResolveRouteToAnExtension(t *testing.T) {
+	ft, ix, done := answerFleet(t)
+	h := ft.s.fleetHandler(http.NotFoundHandler())
+	post := func(role, body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/api/v1/interactions/"+ix.ID+"/resolve", strings.NewReader(body))
+		if role != "" {
+			r.Header.Set(RoleHeader, role)
+		}
+		h.ServeHTTP(w, r)
+		return w
+	}
+	told := func(what string, w *httptest.ResponseRecorder) {
+		t.Helper()
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"already":true`) || strings.Contains(w.Body.String(), "resolution") ||
+			strings.Contains(w.Body.String(), "不发") {
+			t.Fatalf("%s: %d %s", what, w.Code, w.Body)
+		}
+	}
+	ft.s.fleet.mu.Lock()
+	p := ft.s.fleet.interactions[ix.ID]
+	p.claimed, p.resolution = true, &proto.Resolution{Answers: map[string]string{"发吗？": "不发"}}
+	ft.s.fleet.mu.Unlock()
+	told("right after the answer", post(roleExtension, `{}`))
+	ft.s.fleet.mu.Lock()
+	p.claimed, p.resolution = false, nil
+	ft.s.fleet.mu.Unlock()
+	if w := post("", `{"answers":{"发吗？":"不发"}}`); w.Code != http.StatusOK {
+		t.Fatalf("the owner's answer: %d %s", w.Code, w.Body)
+	}
+	<-done
+	told("from the history", post(roleExtension, `{}`))
+	if w := post("", `{}`); !strings.Contains(w.Body.String(), "不发") {
+		t.Fatalf("a device is told the answer: %d %s", w.Code, w.Body)
+	}
+}
+
 // An MCP form or URL request (elicitation) is only shown while an app that takes one is connected (the hub says,
 // fleet.clients); else it goes back to the terminal at once. Its answer must be one of its actions.
 func TestElicitationNeedsAnApp(t *testing.T) {
@@ -221,8 +290,92 @@ func TestElicitationNeedsAnApp(t *testing.T) {
 		}
 		ft.waitPending(0)
 	}
-	// Its push goes only to the apps' notify events (the hub's), not APNs: the kind says it is an elicitation.
+	// Its push goes only to what can show it (the hub picks): the kind says it is an elicitation.
 	if got := ft.pushesOf(assistantwire.NotifyInput, 4, time.Second); len(got) != 4 || got[0].Interaction.Kind != proto.IxElicitation {
 		t.Fatalf("pushes %+v", got)
+	}
+}
+
+// A phone that registered for MCP forms and links by push (#2433, fleet.clients `elicitation_push`) is waited for as
+// for any card: the request waits the usual card timeout, is pushed, and its hook coming back finds it still waiting.
+// What an older hub says (no elicitation_push) hands it back at once as before, and so does a card that would not be
+// pushed: a muted agent's, a quiet task's.
+func TestElicitationWaitsForAPushedPhone(t *testing.T) {
+	ft := newFleetTestNoStore(t)
+	s := ft.s
+	ctx := context.Background()
+	ix := proto.Interaction{ID: "ix_example", MachineID: "mac", SessionID: "test-session", Kind: proto.IxElicitation,
+		MCPServerName: "example-mcp", Summary: "Please choose", Resumable: true,
+		Elicitation: &proto.Elicitation{Mode: "form", Message: "Please choose"}}
+	clients := func(raw string) { s.FleetEvent(ctx, assistantwire.EventClients, json.RawMessage(raw)) }
+	// hookFor is a hook that waits on ix until it goes away (its node's connection ends) after a moment.
+	hookFor := func() proto.Resolution {
+		hctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		defer cancel()
+		r, _ := s.waitInteraction(hctx, ix)
+		return r
+	}
+
+	clients(`{"elicitation":false}`) // an older hub's
+	if r, err := s.waitInteraction(ctx, ix); err != nil || !r.Dismiss || len(s.pendingInteractions()) != 0 {
+		t.Fatalf("an older hub, no app: back to the terminal: %+v %v", r, err)
+	}
+
+	clients(`{"elicitation":false,"elicitation_push":true}`)
+	hookFor()
+	got := ft.waitPending(1) // its hook went away: the card stays for the next one (resumeGrace)
+	if wait := time.Until(got[0].ExpiresAt); wait < 29*time.Minute || wait > 31*time.Minute {
+		t.Fatalf("waits %v, want the usual card timeout", wait)
+	}
+	if p := ft.pushesOf(assistantwire.NotifyInput, 1, time.Second); len(p) != 1 || p[0].Interaction.ID != ix.ID {
+		t.Fatalf("pushes %+v", p)
+	}
+	// The hook comes back (a node restart): the same card waits on, it is not handed back.
+	hookFor()
+	if left := ft.waitPending(1); left[0].ID != ix.ID {
+		t.Fatalf("pending %+v", left)
+	}
+	if err := s.resolve(ix.ID, proto.Resolution{Action: "accept", Content: map[string]any{"choice": "yes"}}); err != nil {
+		t.Fatal(err)
+	}
+	ft.waitPending(0)
+	// Answered on the phone, the waiting hook gets it.
+	ix2 := ix
+	ix2.ID, ix2.Resumable = "ix_example_2", false
+	done := make(chan proto.Resolution, 1)
+	go func() { r, _ := s.waitInteraction(ctx, ix2); done <- r }()
+	ft.waitPending(1)
+	if err := s.resolve(ix2.ID, proto.Resolution{Action: "accept", Content: map[string]any{"choice": "yes"}}); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-done; r.Action != "accept" || r.Dismiss {
+		t.Fatalf("resolution %+v", r)
+	}
+	ft.waitPending(0)
+
+	// Not pushed, not waited for: a muted agent's card, a quiet task's.
+	if !s.elicitationReachable(ix) {
+		t.Fatal("a phone to push")
+	}
+	b, _ := json.Marshal(assistantwire.FleetMutes{Mutes: &assistantwire.Mutes{Spaces: []string{}, Sessions: []string{"mac/test-session"}}})
+	s.FleetEvent(ctx, assistantwire.EventMutes, b)
+	if s.elicitationReachable(ix) {
+		t.Fatal("a muted agent's card is not pushed")
+	}
+	b, _ = json.Marshal(assistantwire.FleetMutes{Mutes: &assistantwire.Mutes{Spaces: []string{}, Sessions: []string{}}})
+	s.FleetEvent(ctx, assistantwire.EventMutes, b)
+	s.fleet.rep.mu.Lock()
+	s.fleet.rep.quiet = map[[2]string]bool{{"mac", "test-session"}: true}
+	s.fleet.rep.mu.Unlock()
+	if s.elicitationReachable(ix) {
+		t.Fatal("a quiet task's card is not pushed")
+	}
+	clients(`{"elicitation":true,"elicitation_push":false}`)
+	if !s.elicitationReachable(ix) {
+		t.Fatal("an app is connected: it shows there")
+	}
+	clients(`{"elicitation":false,"elicitation_push":false}`)
+	if s.elicitationReachable(ix) {
+		t.Fatal("nothing can show it")
 	}
 }

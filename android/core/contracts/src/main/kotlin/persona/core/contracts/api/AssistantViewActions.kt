@@ -3,7 +3,7 @@ package persona.core.contracts.api
 import persona.core.contracts.generated.ExtensionAssistantView
 import persona.core.contracts.generated.ExtensionViewAction
 
-// A card's answer on the hub (docs/assistant/assistant-views.md "Persisted submissions"). The requests are the generated
+// A card's answer on the hub (docs/assistant/assistant-views.md "Persistent submission"). The requests are the generated
 // ExtensionViewActionInput / ExtensionAssistantHTMLActionInput; this is what the app makes of the answers.
 
 /** What the hub answered a card's action. Any other refusal is thrown as the hub's failure. */

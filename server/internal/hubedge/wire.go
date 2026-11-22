@@ -1,4 +1,4 @@
-// Package hubedge is the hub's edge (docs/operations/hub-restart.md "Blue-green switch"): a thin process that holds the hub's
+// Package hubedge is the hub's edge (docs/operations/hub-restart.md "Blue-green switching: the hub's edge"): a thin process that holds the hub's
 // listening sockets for as long as the service runs and relays every connection, byte for byte, to the hub process
 // serving now (the active slot). A new hub binary is started next to the one serving, checks itself while the old one
 // goes on, and only then do the two hand over: the edge holds new connections back for the second or two that takes

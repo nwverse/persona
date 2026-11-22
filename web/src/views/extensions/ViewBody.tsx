@@ -11,17 +11,20 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "../../ui/remark-gfm-parse";
 import { lazyPage } from "../../lib/lazy-page";
 import { openLink } from "../../lib/links";
+import { useLinkManager } from "../../lib/manager-choice";
 import {
   blocks, initials, isHttps, numberProblem, percent, tableRows, toneOf,
   type RowIcon, type UIAction, type UIItem, type UIMore, type UISection, type UITone, type UIView,
 } from "../../lib/extension-ui";
 import { presenceStyle, usePresence, type Present } from "../../ui/motion";
 import { Rolling } from "../../ui/Rolling";
+import { scrollBehavior } from "../../ui/stream/motion";
 import { t } from "../../i18n";
 import { Button, cx, EASE, Loading, Spinner } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { Switch } from "../settings/SettingsParts";
 import { ChartFrame, LABEL_H, plotHeight } from "./ChartFrame";
+import { ExtensionChart } from "./view-sections-lazy";
 import { NEW_ICON_GLYPH } from "./icon-map";
 import { SegmentedTrack } from "../../ui/Segmented";
 import { colorOf, hue, hueTint } from "../../lib/extension-ui-v6";
@@ -29,7 +32,8 @@ import { Badge, Carousel, DateInput, glyphOf, Grid, ImageItem, MultiChoice, Mult
 
 // UI version 4's code hosting items (CodeViews.tsx, DiffReview.tsx) are their own chunks too: only an extension's code
 // review or file browser draws them, never the assistant's cards (ui/AssistantCard.tsx), which bring this file into the
-// app's first chunk (#1794). Each is drawn under CodeItem's Suspense, so the page-level one never shows.
+// app's first chunk (#1794). They load with the first such item, not at idle (lib/lazy-page.ts), and each is drawn under
+// CodeItem's Suspense, so the page-level one never shows.
 const codeViews = () => import("./CodeViews");
 const Header = lazyPage(() => codeViews().then((m) => m.Header));
 const Breadcrumb = lazyPage(() => codeViews().then((m) => m.Breadcrumb));
@@ -39,12 +43,32 @@ const CommentThread = lazyPage(() => codeViews().then((m) => m.CommentThread));
 const Composer = lazyPage(() => codeViews().then((m) => m.Composer));
 const DiffView = lazyPage(() => import("./DiffReview").then((m) => m.DiffView));
 
+// UI version 8's columns layout and a section's icon and link (ViewBody8.tsx) are a chunk of their own too: only an
+// extension's dashboard page draws them. They load with the first view that has them, not at idle, and that view shows
+// Loading meanwhile; ViewBody8 then draws it through ViewSections again, with its own head for the sections.
+const Sections8 = lazyPage<ViewHandlers & { view: UIView; embedded?: boolean; compact?: boolean }>(() => import("./ViewBody8").then((m) => m.Sections8));
+
+// UI version 10's graph canvas (ViewBody10.tsx) is a chunk of its own as well: only an extension's page or card with a
+// graph draws it, so it stays out of the first screen and the idle preload. It loads with the first view that has one;
+// meanwhile the space keeps its height and shows nothing (the graph is a canvas of its own, not a row). A compact
+// card's fallback mirrors the drawn card's own wrapper (px-4 py-3 around the 200 px preview), so the card does not
+// jump when the chunk arrives. The canvas reads whose view it is from lib/extension-owner.tsx's context.
+const GraphCanvas = lazyPage<
+  {
+    item: UIItem;
+    compact?: boolean;
+    busy: string;
+    onPress: (a: UIAction, destructive?: boolean) => void;
+    canPress?: (a: UIAction) => boolean;
+  }
+>(() => import("./ViewBody10").then((m) => m.GraphCanvas));
+
 function CodeItem({ children }: { children: ReactNode }) {
   return <Suspense fallback={<Loading />}>{children}</Suspense>;
 }
 
-// Only chart items draw it: its own chunk, fetched by the idle preload or the first chart (lib/lazy-page.ts).
-const ExtensionChart = lazyPage(() => import("./ExtensionChart").then((m) => m.ExtensionChart));
+// Only chart items draw it (ExtensionChart): registered on the first screen in view-sections-lazy.tsx, so the idle
+// preload still fetches it now that this file is a chunk of its own (#3614).
 
 const TEXT: Record<UITone, string> = { neutral: "text-ink", positive: "text-green", caution: "text-orange", danger: "text-red" };
 const BAR: Record<UITone, string> = { neutral: "bg-accent", positive: "bg-green", caution: "bg-orange", danger: "bg-red" };
@@ -70,8 +94,9 @@ export interface ViewHandlers extends V6Handlers {
   chosen?: string;
   /** The fields cannot be changed (an answered card: what was sent shows). */
   locked?: boolean;
-  /** UI version 4: an action sent with values of the component's own (a file's path, a line, a comment typed). */
-  onAct?: (a: UIAction, values?: Record<string, string>) => void;
+  /** UI version 4: an action sent with values of the component's own (a file's path, a line, a comment typed); resolves
+   *  to whether it was done when the page can tell (CodeViews.tsx, CodeHandlers.act). */
+  onAct?: (a: UIAction, values?: Record<string, string>) => void | Promise<boolean>;
   onNativeAct?: (a: UIAction, values?: Record<string, string>) => Promise<boolean>;
   /** Opt-in native stream binding: callbacks and controlled drafts belong to the stable node, not an action ID. */
   nodeHandlers?: (key: string) => ViewHandlers;
@@ -81,13 +106,21 @@ export interface ViewHandlers extends V6Handlers {
   local?: NativeLocal;
   /** Native-only vocabulary supplement; undefined delegates to the unchanged legacy drawing. */
   renderItem?: (item: UIItem, handlers: ViewHandlers) => ReactNode | undefined;
+  /** An assistant card's html component (#4215): drawn only by a caller that runs it; extensions never pass this. */
+  renderHtml?: (item: UIItem) => ReactNode;
+  /** UI version 8 (ViewBody8.tsx): a section's title with its icon and link, or undefined for the plain one. */
+  head?: (at: SectionHeadAt, handlers: ViewHandlers) => ReactNode;
 }
 
-/** Nothing acts (an assistant's card): what a press would do is never asked for. */
-export const INERT: ViewHandlers = { values: {}, setValue: () => {}, busy: "", onPress: () => {}, onChoose: () => {} };
+/** Where a section's title is drawn: the section, the kind of place it is in, and whether it heads several cards. */
+export type SectionHeadAt = { section: UISection; card?: boolean; compact?: boolean; embedded?: boolean; bare?: boolean; runs: number };
+
+export { INERT } from "./view-sections-lazy";
 
 /** A view's sections. `embedded`: inside another page (lighter); `compact`: a card (no chrome, small charts). */
 export function ViewSections({ view, embedded, compact, ...handlers }: ViewHandlers & { view: UIView; embedded?: boolean; compact?: boolean }) {
+  if (!handlers.head && (view.layout === "columns" || view.sections.some((s) => s.icon || s.link || s.columns)))
+    return <Suspense fallback={<Loading />}><Sections8 view={view} embedded={embedded} compact={compact} {...handlers} /></Suspense>;
   if (view.layout === "split" && !compact && !embedded) return <SplitSections view={view} {...handlers} />;
   return (
     <>
@@ -101,7 +134,7 @@ export function ViewSections({ view, embedded, compact, ...handlers }: ViewHandl
 /** Scrolls the page to a file's diff (a file tree without an action, on a page of diffs). */
 function revealDiff(path: string) {
   const el = [...document.querySelectorAll<HTMLElement>("[data-diff-path]")].find((e) => e.dataset.diffPath === path);
-  el?.scrollIntoView({ behavior: "smooth", block: "start" });
+  el?.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
 }
 
 /** The side pane's title on a narrow screen: its first section's, with how many files its tree has. */
@@ -157,14 +190,16 @@ interface SectionProps extends ViewHandlers {
   compact?: boolean;
   /** In a split view's side pane: no card of its own (the pane is one). */
   bare?: boolean;
+  /** UI version 8: in a card of a columns view (ViewBody8.tsx draws the card and the title): no card of its own. */
+  card?: boolean;
   /** A file was picked in the side pane. */
   onPicked?: () => void;
 }
 
 /** The components drawn as cards of their own, one under another, not inside the section's card. */
-const STANDALONE = new Set(["code", "diff", "comment_thread", "grid", "carousel"]);
+const STANDALONE = new Set(["code", "diff", "comment_thread", "grid", "carousel", "html"]);
 
-function Section({ section, embedded, compact, bare, onPicked, ...rest }: SectionProps) {
+export function Section({ section, embedded, compact, bare, card, onPicked, ...rest }: SectionProps) {
   // Section-level callbacks (including MoreLine) use the section's key under the explicit stream adapter.
   if (section.key && rest.nodeHandlers) rest = { ...rest, ...rest.nodeHandlers(section.key), nodeHandlers: rest.nodeHandlers };
   const items = section.items ?? [];
@@ -172,31 +207,36 @@ function Section({ section, embedded, compact, bare, onPicked, ...rest }: Sectio
   // runs of ordinary items share the section's card; a code, a diff or a thread is a card of its own
   const runs: { standalone: boolean; items: UIItem[] }[] = [];
   for (const it of items) {
-    const standalone = STANDALONE.has(it.type) && !compact && !bare;
+    const standalone = STANDALONE.has(it.type) && !compact && !bare && !card;
     const last = runs[runs.length - 1];
     if (last && !standalone && !last.standalone) last.items.push(it);
     else runs.push({ standalone, items: [it] });
   }
   if (!runs.length) runs.push({ standalone: false, items: [] });
+  const head = rest.head?.({ section, card, compact, embedded, bare, runs: runs.length }, rest);
   return (
     <section style={{ animation: `fade-up 280ms ${EASE} both` }} className={cx(runs.length > 1 && "flex flex-col gap-3", bare && "py-0.5")}>
-      {section.title && <h3 className={cx("font-medium text-ink-3", compact ? "px-4 pt-1 text-[11.5px]" : embedded ? "mb-1.5 px-1 text-[11.5px]" : bare ? "px-3 pt-2 pb-0.5 text-[11.5px]" : "mb-1.5 px-1 text-[12px]", runs.length > 1 && "-mb-1.5")}>{section.title}</h3>}
+      {head ?? (section.title && <h3 className={cx("font-medium text-ink-3", compact ? "px-4 pt-1 text-[11.5px]" : embedded ? "mb-1.5 px-1 text-[11.5px]" : bare ? "px-3 pt-2 pb-0.5 text-[11.5px]" : "mb-1.5 px-1 text-[12px]", runs.length > 1 && "-mb-1.5")}>{section.title}</h3>)}
       {runs.map((run, ri) =>
         run.standalone ? (
           <div key={run.items[0].key ?? `s${ri}`}>
             <Item item={run.items[0]} compact={compact} onPicked={onPicked} {...rest} />
           </div>
         ) : (
-          <Run key={run.items[0]?.key ?? `r${ri}`} items={run.items} embedded={embedded} compact={compact} bare={bare} onPicked={onPicked} more={ri === runs.length - 1 ? more : undefined} {...rest} />
+          <Run key={run.items[0]?.key ?? `r${ri}`} items={run.items} embedded={embedded} compact={compact} bare={bare || card} cols={section.columns} onPicked={onPicked} more={ri === runs.length - 1 ? more : undefined} {...rest} />
         ),
       )}
       {more && runs[runs.length - 1].standalone && <MoreLine more={more} busy={rest.busy} onMore={rest.onMore!} onObserveMore={rest.onObserveMore} preserveObserver={!!rest.nodeHandlers} divided={false} />}
-      {section.footer && <p className={cx("leading-relaxed text-ink-3", compact ? "px-4 pb-1 text-[11px]" : "mt-1.5 px-1 text-[11.5px]")}>{section.footer}</p>}
+      {section.footer && <p className={cx("leading-relaxed text-ink-3", compact ? "px-4 pb-1 text-[11px]" : card ? "px-4 pt-1.5 pb-1 text-submeta" : "mt-1.5 px-1 text-[11.5px]")}>{section.footer}</p>}
     </section>
   );
 }
 
-function Run({ items, embedded, compact, bare, onPicked, more, ...rest }: Omit<SectionProps, "section"> & { items: UIItem[]; more?: UIMore }) {
+// UI version 8: a section's rows side by side once its card is wide enough for each to keep about 18rem, everything else
+// across the whole width; side by side, rows have no hairlines between them
+const COLS: Record<number, string> = { 2: "grid @min-[36rem]:grid-cols-2", 3: "grid @min-[36rem]:grid-cols-2 @min-[54rem]:grid-cols-3" };
+
+function Run({ items, embedded, compact, bare, onPicked, more, cols, ...rest }: Omit<SectionProps, "section"> & { items: UIItem[]; more?: UIMore; cols?: number }) {
   const bs = blocks(items);
   // the first row of the run: a row after it begins the list's next entry even when the one before has more lines under
   // its row (a progress, a text: an account and its quota), so the hairline goes above it too
@@ -209,11 +249,13 @@ function Run({ items, embedded, compact, bare, onPicked, more, ...rest }: Omit<S
     const afterRow = b.kind === "item" && (nextEntry || (b.item.type === "chart" && prev === "chart"));
     // an item's key keeps it (and the list's place) when the extension draws the view again
     const key = (b.kind === "item" ? b.item.key : b.items[0]?.key) ?? `#${i}`;
-    if (b.kind === "metrics" && !rest.renderItem) return { key, draw: (style) => <Metrics key={key} items={b.items} style={style} /> };
-    if (b.kind === "metrics") return { key, draw: (style) => <div key={key} style={style}>{b.items.map((item) => <Item key={item.key} item={item} {...rest} />)}</div> };
+    // UI version 8: with rows side by side, anything else takes the whole width
+    const span = cols ? (b.kind === "item" && b.item.type === "row" ? "@min-[36rem]:border-t-0" : "col-span-full") : undefined;
+    if (b.kind === "metrics" && !rest.renderItem) return { key, draw: (style) => <Metrics key={key} items={b.items} style={style} className={span} /> };
+    if (b.kind === "metrics") return { key, draw: (style) => <div key={key} className={span} style={style}>{b.items.map((item) => <Item key={item.key} item={item} {...rest} />)}</div> };
     if (b.kind === "buttons")
       return { key, draw: (style) => (
-        <div key={key} className="flex flex-wrap items-center gap-2 px-4 py-2.5" style={style}>
+        <div key={key} className={cx("flex flex-wrap items-center gap-2 px-4 py-2.5", span)} style={style}>
           {b.items.map((it, j) => (
             <ItemButton key={it.key ?? j} item={it} busy={rest.busy} onPress={rest.onPress} nodeHandlers={rest.nodeHandlers} canPress={rest.canPress} chosen={rest.chosen} />
           ))}
@@ -221,15 +263,15 @@ function Run({ items, embedded, compact, bare, onPicked, more, ...rest }: Omit<S
       ) };
     const divided = afterRow || (b.kind === "item" && i > 0 && b.item.type === "composer");
     return { key, draw: (style) => (
-      <div key={key} className={cx(divided && "border-t border-line")} style={style}>
+      <div key={key} className={cx(divided && "border-t border-line", span)} style={style}>
         <Item item={b.item} compact={compact} onPicked={onPicked} {...rest} />
       </div>
     ) };
   });
-  const drawn = usePresence(list);
+  const drawn = usePresence(list).map(({ entry, phase }) => entry.draw(presenceStyle(phase)));
   return (
-      <div className={cx("overflow-hidden", compact || bare ? "" : embedded ? "rounded-control bg-inset shadow-hairline" : "rounded-card bg-surface shadow-card")}>
-        {drawn.map(({ entry, phase }) => entry.draw(presenceStyle(phase)))}
+      <div className={cx("overflow-hidden", compact || bare ? "" : embedded ? "rounded-control bg-inset shadow-hairline" : "rounded-card bg-surface shadow-card", !!cols && "@container")}>
+        {cols ? <div className={COLS[cols]}>{drawn}</div> : drawn}
         {more && <MoreLine more={more} busy={rest.busy} onMore={rest.onMore!} onObserveMore={rest.onObserveMore} preserveObserver={!!rest.nodeHandlers} divided={bs.length > 0} />}
       </div>
   );
@@ -275,9 +317,9 @@ function MoreLine({ more, busy, onMore, onObserveMore, divided, preserveObserver
   );
 }
 
-function Metrics({ items, style }: { items: UIItem[]; style?: React.CSSProperties }) {
+function Metrics({ items, style, className }: { items: UIItem[]; style?: React.CSSProperties; className?: string }) {
   return (
-    <div className={cx("grid gap-x-4 gap-y-3 px-4 py-3", items.length === 1 ? "grid-cols-1" : items.length === 2 ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-3")} style={style}>
+    <div className={cx("grid gap-x-4 gap-y-3 px-4 py-3", items.length === 1 ? "grid-cols-1" : items.length === 2 ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-3", className)} style={style}>
       {items.map((it, i) => (
         <div key={i} className="min-w-0">
           <div className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-3">
@@ -329,11 +371,14 @@ function Item(props: Omit<SectionProps, "section" | "embedded" | "onMore" | "bar
   return <div data-native-key={props.item.key}>{custom === undefined ? <NativeItem {...handlers} /> : custom}</div>;
 }
 
-function NativeItem({ item: it, compact, values, setValue, busy, onPress, onChoose, canPress, chosen, locked, onAct, onPicked, draft, local, nativeFetch, nativeAvailable, ...v6 }: Omit<SectionProps, "section" | "embedded" | "onMore" | "bare"> & { item: UIItem }) {
+function NativeItem({ item: it, compact, values, setValue, busy, onPress, onChoose, canPress, chosen, locked, onAct, onPicked, draft, local, nativeFetch, nativeAvailable, renderHtml, ...v6 }: Omit<SectionProps, "section" | "embedded" | "onMore" | "bare"> & { item: UIItem }) {
+  const manager = useLinkManager();
   const pressable = (a: UIAction) => (canPress ? canPress(a) : true);
   const tiles = { glyphs: ROW_ICON, busy, onPress, canPress, ...v6 };
   const code = { act: onAct ?? ((a: UIAction) => onPress(a)), busy: locked ? busy || "stream-locked" : busy, reveal: revealDiff, local, fetch: nativeFetch, canFetch: nativeAvailable };
   switch (it.type) {
+    case "html":
+      return renderHtml ? renderHtml(it) : null;
     case "header":
       return <CodeItem><Header item={it} native={!!local} /></CodeItem>;
     case "breadcrumb":
@@ -374,6 +419,18 @@ function NativeItem({ item: it, compact, values, setValue, busy, onPress, onChoo
         <div className={cx("flex items-center justify-center gap-2 px-4 text-[12.5px] text-ink-3", compact ? "py-3" : "py-6")}>
           <Spinner />
           <span className="truncate">{it.title || t("extensions-viewbody.loading")}</span>
+        </div>
+      );
+    // UI version 10: a graph is a canvas of its own (ViewBody10.tsx), drawn from its own chunk; the space keeps its
+    // height meanwhile, so the page does not jump when it comes in. The canvas itself reads whose view it is (the
+    // extension, else the page's own path) from lib/extension-owner.tsx's context, so two owners' graphs never share
+    // what a key keeps.
+    case "graph":
+      return (
+        <div className={compact ? "" : "graph-shell"}>
+          <Suspense fallback={<div className={compact ? "px-4 py-3" : "graph-canvas w-full"} aria-hidden>{compact && <div className="graph-preview" />}</div>}>
+            <GraphCanvas item={it} compact={compact} busy={busy} onPress={onPress} canPress={canPress} />
+          </Suspense>
         </div>
       );
     case "stat_grid":
@@ -435,7 +492,7 @@ function NativeItem({ item: it, compact, values, setValue, busy, onPress, onChoo
           onClick={(e) => {
             if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
             e.preventDefault();
-            openLink(it.url!, it.title);
+            openLink(it.url!, it.title, manager);
           }}
           className="flex items-center gap-3 px-4 py-2.5 whitespace-nowrap transition-colors hover:bg-hover"
         >
@@ -682,7 +739,7 @@ function Row({ item: it, busy, onPress, pressable, chosen, h }: { item: UIItem; 
       disabled={!!busy || !pressable(it.action)}
       aria-pressed={chosen ? chosen === it.action.id : undefined}
       onClick={() => onPress(it.action!)}
-      className={cx("flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-4 text-left whitespace-nowrap transition-colors enabled:hover:bg-hover", chosen === it.action.id && "bg-accent-tint", c && !slider ? "pr-2" : menu.button ? "pr-1" : "pr-4")}
+      className={cx("flex min-w-0 flex-1 w-full items-center gap-3 py-2.5 pl-4 text-left whitespace-nowrap transition-colors enabled:hover:bg-hover", chosen === it.action.id && "bg-accent-tint", c && !slider ? "pr-2" : menu.button ? "pr-1" : "pr-4")}
     >
       {body}
     </button>
@@ -719,6 +776,7 @@ function sliderText(c: NonNullable<UIItem["control"]>, h: V6Handlers): string {
 const MD_ALLOWED = ["p", "h1", "h2", "h3", "ul", "ol", "li", "strong", "em", "del", "code", "pre", "blockquote", "a", "br", "hr", "table", "thead", "tbody", "tr", "th", "td", "input"];
 
 export function ViewMarkdown({ text, compact }: { text: string; compact?: boolean }) {
+  const manager = useLinkManager();
   return (
     <div className={cx("prose-j prose-sm px-4 py-2.5 select-text", compact && "prose-compact")}>
       <ReactMarkdown
@@ -740,7 +798,7 @@ export function ViewMarkdown({ text, compact }: { text: string; compact?: boolea
                 onClick={(e) => {
                   if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
                   e.preventDefault();
-                  openLink(href);
+                  openLink(href, undefined, manager);
                 }}
               >
                 {children}

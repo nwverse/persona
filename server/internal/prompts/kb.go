@@ -6,10 +6,13 @@ import (
 	"github.com/nwverse/persona/server/internal/kbwire"
 )
 
-// KBOwner is the knowledge base models' system prompts: compressing a chat (kb/compress), rewriting a project
-// (kb/project), tagging documents, meetings and events (kb/items).
+// KBOwner supplies the owner and the language of newly generated knowledge text
+// ("English", "日本語"; "" keeps the historical Chinese bytes). Recording callers
+// choose the recording's language first; other calls use the owner's current language.
+// Original source content and existing names remain in their recorded language.
 type KBOwner struct {
-	Owner string
+	Owner    string
+	Language string
 }
 
 func RenderKBCompress(o KBOwner) string { return render("kb/compress", o) }
@@ -32,6 +35,7 @@ type KnownProject struct {
 
 // KBCompressInput is a chat's summary so far and its new messages (kb/compress_input).
 type KBCompressInput struct {
+	Language  string // Instruction language; source fields remain unchanged.
 	Pinned    string
 	People    []KBPinnedPerson
 	Name      string
@@ -48,13 +52,16 @@ func RenderKBCompressInput(in KBCompressInput) string { return render("kb/compre
 // KBPinnedPerson is a person whose confirmed facts constrain compression.
 type KBPinnedPerson struct{ Name, Pinned string }
 
-// KBProjectChat is a chat linked to a project, its summary clipped.
+// KBProjectChat is a chat linked to a project, its summary clipped, and its state at the source (open, merged, closed;
+// "" none reported) with the day it got there.
 type KBProjectChat struct {
-	ID, Summary string
+	ID, Summary    string
+	State, StateAt string
 }
 
 // KBProjectInput is a project's file, timeline and chats (kb/project_input).
 type KBProjectInput struct {
+	Language   string // Instruction language; source fields remain unchanged.
 	Pinned     string
 	Name, Kind string
 	Aliases    []string
@@ -74,6 +81,7 @@ type KBMoment struct {
 
 // KBDedupeProject is one side of a possible duplicate.
 type KBDedupeProject struct {
+	Language                     string // Instruction language; source fields remain unchanged.
 	Key                          string // "A" | "B"
 	Name, OneLine, Goal, Summary string
 	Aliases, Chats               []string
@@ -82,8 +90,9 @@ type KBDedupeProject struct {
 
 // KBDedupeInput is two projects that may be one (kb/dedupe_input); Shared is how many people they have in common.
 type KBDedupeInput struct {
-	A, B   KBDedupeProject
-	Shared int
+	Language string // Instruction language; source fields remain unchanged.
+	A, B     KBDedupeProject
+	Shared   int
 }
 
 // RenderKBDedupe is the system prompt deciding whether two projects are the same work (kb/dedupe).
@@ -92,6 +101,7 @@ func RenderKBDedupeInput(in KBDedupeInput) string { return render("kb/dedupe_inp
 
 // KBMomentsLinkInput is a project and Moments posts its keywords found (kb/moments_link_input).
 type KBMomentsLinkInput struct {
+	Language                     string // Instruction language; source fields remain unchanged.
 	Name, OneLine, Goal, Summary string
 	Aliases, Keywords            []string
 	Posts                        []KBMoment
@@ -117,6 +127,7 @@ type KBItem struct {
 
 // KBItemsInput is a batch of items to tag (kb/items_input).
 type KBItemsInput struct {
+	Language string // Instruction language; source fields remain unchanged.
 	Projects []KnownProject
 	Tags     []string
 	Items    []KBItem
@@ -137,6 +148,128 @@ type KBRecordingInput struct {
 
 func RenderKBRecordingInput(in KBRecordingInput) string { return render("kb/recording_input", in) }
 
+// RenderKBRecordingTitle is the system prompt naming a recording while it records (kb/recording_title, #8873).
+func RenderKBRecordingTitle(o KBOwner) string { return render("kb/recording_title", o) }
+
+// KBRecordingTitleInput is a recording still recording, to name (kb/recording_title_input): a meeting or a note, its
+// start in the user's zone, the minutes recorded so far, the phone's language, the title the last call gave ("" none)
+// and the transcript so far, its start and its latest part when it is long.
+type KBRecordingTitleInput struct {
+	Meeting                       bool
+	Start                         time.Time
+	Minutes                       int
+	Language, Current, Transcript string
+}
+
+func RenderKBRecordingTitleInput(in KBRecordingTitleInput) string {
+	return render("kb/recording_title_input", in)
+}
+
+// RenderKBMinutes is the system prompt for a meeting recording's minutes, or a part's notes (kb/minutes).
+func RenderKBMinutes(o KBOwner) string { return render("kb/minutes", o) }
+
+// RenderKBMinutesMerge is the system prompt merging the parts' notes of a long meeting into its minutes
+// (kb/minutes_merge).
+func RenderKBMinutesMerge(o KBOwner) string { return render("kb/minutes_merge", o) }
+
+// KBMinutesInput is a meeting recording to make minutes of (kb/minutes_input, kb/minutes_meeting): times in the user's
+// zone; Title the user's or the calendar's; Meeting the knowledge base's calendar item; Attendees and Location the
+// phone calendar's. Part of Parts (both 1 for a transcript read at once); Transcript is that part's numbered lines,
+// the meeting's photos ("[P3] … photo: …", their words only) among them.
+type KBMinutesInput struct {
+	Pinned, Title, Meeting, Location, Weekday, Language string
+	Attendees                                           []string
+	Start, End                                          time.Time
+	Minutes                                             int
+	Part, Parts                                         int
+	Transcript                                          string
+}
+
+func RenderKBMinutesInput(in KBMinutesInput) string { return render("kb/minutes_input", in) }
+
+// KBMinutesNote is an item of a part's notes: Line the transcript line it cites, or Photo the photo (Line 0 then); Who,
+// By and DueDate as the part said; Topic the title of the part's topic a point or decision is in ("" none, #6563).
+type KBMinutesNote struct {
+	Line, Photo                   int
+	Text, Who, By, DueDate, Topic string
+}
+
+// KBMinutesPart is a part's notes, From and To its first and last lines' clock times.
+type KBMinutesPart struct {
+	Part                             int
+	From, To, Where                  string
+	Attendees                        []string
+	Points, Decisions, Actions, Open []KBMinutesNote
+}
+
+// KBMinutesMergeInput is a long meeting's parts' notes to merge (kb/minutes_merge_input).
+type KBMinutesMergeInput struct {
+	Meeting KBMinutesInput
+	Parts   []KBMinutesPart
+}
+
+func RenderKBMinutesMergeInput(in KBMinutesMergeInput) string {
+	return render("kb/minutes_merge_input", in)
+}
+
+// RenderKBDayRecap is the system prompt noting one chunk (an hour at most) of an all-day recording (kb/day_recap).
+func RenderKBDayRecap(o KBOwner) string { return render("kb/day_recap", o) }
+
+// RenderKBDayRecapMerge is the system prompt merging an all-day recording's chunks' notes into the day's recap
+// (kb/day_recap_merge).
+func RenderKBDayRecapMerge(o KBOwner) string { return render("kb/day_recap_merge", o) }
+
+// KBDayRecapDay is an all-day recording as the recap's prompts name it (kb/day_recap_day): Day its date (YYYY-MM-DD)
+// in Zone, Title the user's, Part its part when above 1.
+type KBDayRecapDay struct {
+	Pinned, Title, Day, Weekday, Zone, Language string
+	Part                                        int
+}
+
+// KBDayRecapInput is one chunk of an all-day recording to note (kb/day_recap_input): From and To its first and last
+// lines' clock times, Transcript its lines ("[N] HH:MM text").
+type KBDayRecapInput struct {
+	Day                  KBDayRecapDay
+	From, To, Transcript string
+}
+
+func RenderKBDayRecapInput(in KBDayRecapInput) string { return render("kb/day_recap_input", in) }
+
+// KBDayMeeting is a meeting the knowledge base knows of on the day, numbered N for the model: one of the user's
+// meeting recordings (Kind recordings, From and To its span) or a calendar item (meetings, events: To zero).
+type KBDayMeeting struct {
+	N           int
+	Kind, Title string
+	From, To    time.Time
+}
+
+// KBDayRecapEntry is a candidate timeline entry of a chunk's notes: its first and last lines, meeting or outside.
+type KBDayRecapEntry struct {
+	FromLine, ToLine int
+	Kind, Title      string
+	Points           []KBMinutesNote
+}
+
+// KBDayRecapChunk is a chunk's notes for the merge, From and To its first and last lines' clock times.
+type KBDayRecapChunk struct {
+	From, To, Summary string
+	Entries           []KBDayRecapEntry
+	Actions           []KBMinutesNote
+}
+
+// KBDayRecapMergeInput is an all-day recording's chunks' notes to merge into its recap (kb/day_recap_merge_input),
+// with the day's known meetings; Partial: chunks from the middle of the day were left out.
+type KBDayRecapMergeInput struct {
+	Day      KBDayRecapDay
+	Meetings []KBDayMeeting
+	Chunks   []KBDayRecapChunk
+	Partial  bool
+}
+
+func RenderKBDayRecapMergeInput(in KBDayRecapMergeInput) string {
+	return render("kb/day_recap_merge_input", in)
+}
+
 // KBDigestEntry is one project or chat in the digest.
 type KBDigestEntry struct {
 	ID, Name, Importance, OneLine string
@@ -145,6 +278,7 @@ type KBDigestEntry struct {
 
 // KBDigest is the most important projects and chats, for the assistant's live snapshot (kb/digest).
 type KBDigest struct {
+	Language        string // Instruction language; source fields remain unchanged.
 	Projects, Chats []KBDigestEntry
 }
 

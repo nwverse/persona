@@ -62,6 +62,8 @@ class WiredDeviceSettings @Inject constructor(
                                     throw error
                                 }
                             }
+                            override suspend fun browserLogin(id: String, hub: String, allow: Boolean?) =
+                                checked { http.browserLogin(id, hub, allow) }
                             override suspend fun devices() = checked { http.devices() }
                             override suspend fun revoke(credentialId: String) = checked { http.revoke(credentialId) }
                             override suspend fun preferences() = checked { http.preferences() }.also { mutablePreferences.value = it }
@@ -90,6 +92,27 @@ class WiredDeviceSettings @Inject constructor(
     }
 
     override suspend fun refreshPreferences(): DeviceNotificationPreferences? = binding.value?.deviceSettings?.preferences()
+
+    override suspend fun refreshPreferencesForCatchUp(): Map<String?, DeviceNotificationPreferences> =
+        runtime.groups.value.associate { group -> group.namespace to catchUpPreferences(group) }
+
+    private suspend fun catchUpPreferences(group: GroupRuntime): DeviceNotificationPreferences {
+        val data = checkNotNull(group.data) { "Notification preferences are not ready" }
+        val connection = checkNotNull(group.connectionOrNull) { "Notification preferences are not ready" }
+        val route = connection.route.value
+        val address = route?.endpoint?.url
+        val id = data.credentials.deviceId
+        check(address != null && !id.isNullOrBlank()) { "Notification preferences are not ready" }
+        fun current() = group.active && runtime.groups.value.any { it === group } && group.data === data &&
+            group.connectionOrNull === connection && connection.route.value === route
+        val http = HttpDeviceSettings(address, data.credentials.deviceToken, id, connection.http.client, ::current)
+        return try { http.preferences() } catch (error: HubFailure) {
+            if (error.kind == HubError.PairingExpired && current()) connection.revoke()
+            throw error
+        }
+    }
+
+    override fun desktopOnline(machineId: String): Boolean? = runtime.desktopOnline(machineId)
 }
 
 /** The paired hub's device settings, which also take this phone's Settings › Translation. */

@@ -13,18 +13,27 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Token usage by machine (docs/server/machines.md「Token 用量」, #4973). The nodes meter their transcripts per minute,
+// Token usage by machine (docs/server/machines.md "Token usage", #4973). The nodes meter their transcripts per minute,
 // model and launcher (node/usage.go) for the last 26 hours; the manager keeps them in memory for the island
-// (metrics.go's usageBook) and in Postgres for the week, minute rows for 27 hours (the node's window and an hour),
-// then a row each 10 minutes. GET /api/v1/machines/{id}/usage draws a machine's range from them, GET /api/v1/metrics
-// carries each machine's last hour for its card (usageCard).
+// (metrics.go's usageBook) and in Postgres: minute rows for 27 hours (the node's window and an hour), then a row each
+// 10 minutes for the week, then a row an hour for 53 weeks (usage_history.go). GET /api/v1/machines/{id}/usage draws a
+// machine's range from them, GET /api/v1/metrics carries each machine's last hour for its card (usageCard).
 
 const (
 	usageMinutesFor = 27 * time.Hour
-	usageKeep       = 7*24*time.Hour + time.Hour // a 7-day chart starts full
+	usageKeep       = 7*24*time.Hour + time.Hour // ten-minute rows: a 7-day chart starts full
 	// usageNodeWindow is how far back a node's whole window ("full") goes (node/usage.go's usageWindow): from then on
 	// what it sent is the record.
 	usageNodeWindow = 26 * time.Hour
+	// usageGather: how long usageLoop takes the writes that come after one, to store them with it in one transaction
+	// (one commit, so one WAL flush, not one a write): each node reports on a 10 s tick of its own, so with several
+	// machines a window takes several. It waits only while another machine has written in the last usageActive (a
+	// single busy machine's writes are stored at once); a chart's finest step is a minute. usageGatherBuckets bounds a
+	// transaction when the nodes send their whole windows at once (a manager that came back).
+	usageGather        = 5 * time.Second
+	usageActive        = 25 * time.Second
+	usageGatherBuckets = 4096
+	usageWriteTimeout  = 30 * time.Second
 )
 
 type usageStore interface {
@@ -34,6 +43,16 @@ type usageStore interface {
 	UsageSeries(ctx context.Context, machine string, from, to time.Time, step int) ([]db.UsageRow, error)
 }
 
+// usageBatchStore stores several writes in one transaction, in order (db.PutUsages); a store without it gets one
+// PutUsage a write.
+type usageBatchStore interface {
+	PutUsages(ctx context.Context, writes []db.UsageWrite) (rejected []error, err error)
+}
+
+type additiveUsageStore interface {
+	AddUsage(ctx context.Context, machine string, buckets []proto.UsageBucket) error
+}
+
 func (d *Devices) usageStore() usageStore {
 	if s, ok := d.opts.Store.(usageStore); ok {
 		return s
@@ -41,26 +60,69 @@ func (d *Devices) usageStore() usageStore {
 	return nil
 }
 
+func (d *Devices) restoreRuntimeUsage(ctx context.Context, now time.Time) {
+	store, ok := d.opts.Store.(interface {
+		RecentRuntimeUsage(context.Context, time.Time) (map[string][]proto.UsageBucket, error)
+	})
+	if !ok {
+		return
+	}
+	restoreCtx, cancel := context.WithTimeout(ctx, usageWriteTimeout)
+	defer cancel()
+	buckets, err := store.RecentRuntimeUsage(restoreCtx, now.Truncate(time.Minute).Add(-usageNodeWindow))
+	if err != nil {
+		d.logf("restore recent runtime usage: %v", err)
+		return
+	}
+	d.usage.mu.Lock()
+	defer d.usage.mu.Unlock()
+	if d.usage.machines == nil {
+		d.usage.machines = map[string]*machineUsage{}
+	}
+	for machine, entries := range buckets {
+		m := d.usage.machines[machine]
+		if m == nil {
+			m = &machineUsage{buckets: map[usageKey]proto.UsageBucket{}}
+			d.usage.machines[machine] = m
+		}
+		for _, b := range entries {
+			k := usageKey{b.Minute, b.Model, b.Launcher, b.Agent}
+			if _, exists := m.buckets[k]; !exists {
+				m.buckets[k] = b
+			}
+		}
+	}
+}
+
 // usageWrite is one "usage" notification to store; written in order (a full window, then what changed).
 type usageWrite struct {
 	machine     string
 	buckets     []proto.UsageBucket
 	replaceFrom time.Time
+	add         bool
 }
 
 // onUsage takes a node's "usage" notification: the island's sums (in memory), and Postgres for the charts.
 func (d *Devices) onUsage(machine string, params json.RawMessage, now time.Time) {
-	if !d.usage.apply(machine, params, now) || d.usageStore() == nil {
-		return
-	}
 	var p struct {
 		Buckets []proto.UsageBucket `json:"buckets"`
 		Full    bool                `json:"full"`
+		Add     bool                `json:"add"`
 	}
-	if json.Unmarshal(params, &p) != nil || (len(p.Buckets) == 0 && !p.Full) {
+	if json.Unmarshal(params, &p) != nil {
 		return
 	}
-	w := usageWrite{machine: machine, buckets: p.Buckets}
+	store := d.usageStore()
+	_, additive := store.(additiveUsageStore)
+	_, batch := store.(usageBatchStore)
+	if p.Add && !additive && !batch {
+		d.logf("[%s] usage: runtime usage requires an additive store", machine)
+		return
+	}
+	if !d.usage.apply(machine, params, now) || store == nil || (len(p.Buckets) == 0 && !p.Full) {
+		return
+	}
+	w := usageWrite{machine: machine, buckets: p.Buckets, add: p.Add}
 	if p.Full {
 		w.replaceFrom = now.Add(-usageNodeWindow).Truncate(time.Minute).Add(time.Minute)
 	}
@@ -71,12 +133,14 @@ func (d *Devices) onUsage(machine string, params json.RawMessage, now time.Time)
 	}
 }
 
-// usageLoop writes the notifications in the order they came, and each minute rolls up the minute rows past 27 hours
-// and drops what is older than a week.
+// usageLoop writes the notifications in the order they came (those within usageGather of each other together, when
+// the store can), and each minute rolls up the minute rows past 27 hours and the ten-minute rows past a week, and drops
+// what is older than the history keeps (a week without it).
 func (d *Devices) usageLoop(ctx context.Context) {
 	st := d.usageStore()
 	tidy := time.NewTicker(metricsTidyEach)
 	defer tidy.Stop()
+	active := map[string]time.Time{} // when each machine's last write came
 	for {
 		select {
 		case <-ctx.Done():
@@ -85,11 +149,14 @@ func (d *Devices) usageLoop(ctx context.Context) {
 			if st == nil {
 				continue
 			}
-			wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			if err := st.PutUsage(wctx, w.machine, w.buckets, w.replaceFrom); err != nil && ctx.Err() == nil {
-				d.logf("[%s] save usage: %v", w.machine, err)
+			writes := []usageWrite{w}
+			if _, ok := st.(usageBatchStore); ok {
+				writes = d.gatherUsage(ctx, w, active)
 			}
-			cancel()
+			if ctx.Err() != nil { // stopping: as with what is queued, the nodes' next whole window (a reconnect) writes them
+				return
+			}
+			d.saveUsage(ctx, st, writes)
 		case <-tidy.C:
 			if st == nil {
 				continue
@@ -98,9 +165,99 @@ func (d *Devices) usageLoop(ctx context.Context) {
 			if _, err := st.RollupUsage(ctx, now.Add(-usageMinutesFor)); err != nil && ctx.Err() == nil {
 				d.logf("usage rollup: %v", err)
 			}
-			if _, err := st.PruneUsage(ctx, now.Add(-usageKeep)); err != nil && ctx.Err() == nil {
+			keep := usageKeep
+			if hs, ok := st.(usageHistoryStore); ok {
+				if _, err := hs.RollupUsageHours(ctx, now.Add(-usageKeep)); err != nil && ctx.Err() == nil {
+					d.logf("usage rollup by the hour: %v", err)
+				}
+				keep = usageHistoryKeep
+			}
+			if _, err := st.PruneUsage(ctx, now.Add(-keep)); err != nil && ctx.Err() == nil {
 				d.logf("usage prune: %v", err)
 			}
+		}
+	}
+}
+
+// gatherUsage is first, what is queued after it, and, while another machine wrote lately (active), the writes that
+// come within d.usageWait of it: in order, usageGatherBuckets at most. nil when ctx ended while it waited.
+func (d *Devices) gatherUsage(ctx context.Context, first usageWrite, active map[string]time.Time) []usageWrite {
+	now := time.Now()
+	others := false
+	for m, at := range active {
+		if now.Sub(at) > usageActive {
+			delete(active, m)
+		} else if m != first.machine {
+			others = true
+		}
+	}
+	active[first.machine] = now
+	writes, buckets := []usageWrite{first}, len(first.buckets)
+	var wait <-chan time.Time // nil: take only what is queued
+	if others {
+		t := time.NewTimer(d.usageWait)
+		defer t.Stop()
+		wait = t.C
+	}
+	for buckets < usageGatherBuckets {
+		var w usageWrite
+		select {
+		case w = <-d.usageWrites: // what is queued first
+		default:
+			if wait == nil {
+				return writes
+			}
+			select {
+			case w = <-d.usageWrites:
+			case <-wait:
+				return writes
+			case <-ctx.Done():
+				return nil
+			}
+		}
+		writes, buckets = append(writes, w), buckets+len(w.buckets)
+		active[w.machine] = time.Now()
+	}
+	return writes
+}
+
+// saveUsage stores writes in order: in one transaction when the store can, else one PutUsage each.
+func (d *Devices) saveUsage(ctx context.Context, st usageStore, writes []usageWrite) {
+	bs, ok := st.(usageBatchStore)
+	if !ok {
+		for _, w := range writes {
+			wctx, cancel := context.WithTimeout(ctx, usageWriteTimeout)
+			var err error
+			if w.add {
+				if add, ok := st.(additiveUsageStore); ok {
+					err = add.AddUsage(wctx, w.machine, w.buckets)
+				}
+			} else {
+				err = st.PutUsage(wctx, w.machine, w.buckets, w.replaceFrom)
+			}
+			if err != nil && ctx.Err() == nil {
+				d.logf("[%s] save usage: %v", w.machine, err)
+			}
+			cancel()
+		}
+		return
+	}
+	batch := make([]db.UsageWrite, len(writes))
+	for i, w := range writes {
+		batch[i] = db.UsageWrite{Machine: w.machine, Buckets: w.buckets, ReplaceFrom: w.replaceFrom, Add: w.add}
+	}
+	wctx, cancel := context.WithTimeout(ctx, usageWriteTimeout)
+	defer cancel()
+	rejected, err := bs.PutUsages(wctx, batch)
+	if ctx.Err() != nil {
+		return
+	}
+	for i, w := range writes {
+		if e := err; e != nil || (rejected != nil && rejected[i] != nil) {
+			if e == nil {
+				e = rejected[i]
+			}
+			d.logf("[%s] save usage: %v", w.machine, e)
 		}
 	}
 }

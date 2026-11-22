@@ -8,7 +8,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extension/host"
 )
 
-// How the extensions are running (docs/extensions/extensions.md "How they run", #1857): the hub counts each extension's calls,
+// How the extensions are running (docs/extensions/extensions.md "Runtime status", #1857): the hub counts each extension's calls,
 // errors and latency by method (the HTTP it relays by route), its runs and why they ended, and keeps the last lines of
 // its log. The counts are in 5-minute buckets: 24 hours in memory, each closed bucket written to the database once an
 // hour and kept there 7 days. The admin UI reads them (admin_extensions.go).
@@ -166,6 +166,10 @@ func (s *extensionStats) Run(event, detail string) {
 	if s == nil {
 		return
 	}
+	var reason string
+	if event == host.RunExit {
+		reason = s.redactLine(cut(detail, 300)) // before the lock, as in Log
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
@@ -177,7 +181,6 @@ func (s *extensionStats) Run(event, detail string) {
 		b.Stops++
 	case host.RunExit:
 		b.Exits++
-		reason := s.redactLocked(cut(detail, 300))
 		if b.Reasons == nil {
 			b.Reasons = map[string]int64{}
 		}

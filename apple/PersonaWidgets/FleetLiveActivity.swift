@@ -43,6 +43,10 @@ struct FleetLiveActivity: Widget {
                             if state.needsYou > 0 { IslandCellView(cell: .needsYou(state.needsYou)) }
                             if state.working > 0 { IslandCellView(cell: .working(state.working)) }
                             if state.unread > 0 { IslandCellView(cell: .unread(state.unread)) }
+                            // The minute before it ends, nothing left to count (FleetCounts).
+                            if state.showsNothing {
+                                Text(FleetText.headline(state)).font(.subheadline.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
+                            }
                         }
                         FleetStatsLine(state: state, onDark: true)
                     }
@@ -110,7 +114,7 @@ struct IslandSide: View {
                 if leading { IslandMinimal(state: state, stale: stale, limited: true, look: state.drawnLook) }
             } else {
                 if leading {
-                    // The persona, then the most urgent count (docs/apple/live-activity.md「形象」).
+                    // The persona, then the most urgent count (docs/apple/live-activity.md「Avatar」).
                     IslandLeading(state: state, stale: stale, look: state.drawnLook).padding(.leading, IslandMetrics.edge)
                 } else {
                     IslandCellView(cell: IslandCell.sides(state).right).padding(.trailing, IslandMetrics.edge)
@@ -262,7 +266,8 @@ struct FleetBar: View {
     }
 }
 
-/// Counts: 「💬 2 需要你  ⚙ 3 在工作  ● 1 未看」, the first line of the lock screen (the island's symbols).
+/// Counts: 「💬 2 需要你  ⚙ 3 在工作  ● 1 未看」, the first line of the lock screen (the island's symbols); with none,
+/// "All Caught Up".
 struct FleetCounts: View {
     var state: FleetState
     /// Numbers only (the symbols say which): when the island's numbers share the line.
@@ -288,6 +293,11 @@ struct FleetCounts: View {
             if state.needsYou > 0 { chip(Image(systemName: FleetSymbol.needsYou), "\(state.needsYou)", StateName.count(.needsYou, state.needsYou), FleetPalette.needsYou, short) }
             if state.working > 0 { chip(Image(systemName: FleetSymbol.working), "\(state.working)", StateName.count(.working, state.working), FleetPalette.working, short) }
             if state.unread > 0 { chip(Image(systemName: FleetSymbol.unread).font(.system(size: 7)), "\(state.unread)", StateName.count(.unread, state.unread), FleetPalette.unread, short) }
+            // Nothing left to count: the minute between the last request going (answered, here or on a computer) and
+            // the activity ending, beside the idle persona, rather than a bare face (#8636).
+            if state.showsNothing {
+                Text(FleetText.headline(state)).font(.subheadline.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
+            }
         }
     }
 
@@ -414,6 +424,10 @@ struct FleetLockScreen: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
+        // The system can refresh the capsule tint and content separately when the wallpaper changes.
+        .foregroundStyle(.white)
+        .environment(\.colorScheme, .dark)
+        .activityBackgroundTint(.black)
     }
 
     /// Apple Watch Smart Stack: one glance.

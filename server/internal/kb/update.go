@@ -45,6 +45,10 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 	selecting := sel != nil && facts.Selected()
 	unchanged := func() (int, error) {
 		if exists {
+			// The source can report a new URL or state without adding a message.
+			if err := e.recordChatSource(c.ID, sc); err != nil {
+				return 0, err
+			}
 			e.index(KindChat, c.ID, c.Name, c.Tagging, c.OneLine, c.LastAt)
 		}
 		return 0, nil
@@ -153,9 +157,13 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 	if err := attributeChat(c, src); err != nil {
 		return 0, err
 	}
-	for _, m := range kept {
+	for i, m := range kept {
 		if m.ID != "" {
 			r.IDs[m.ID] = m.At
+			if r.Lines == nil {
+				r.Lines = map[string]messageReceiptLine{}
+			}
+			r.Lines[m.ID] = messageReceiptLine{Hash: receiptLineHash(lines[i].Line), Mine: m.Mine}
 		}
 		e.notePerson(c, src.Name(), m)
 		c.Mine = c.Mine || m.Mine
@@ -170,6 +178,7 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 	}
 	c.Messages += len(lines)
 	c.Pending += len(lines)
+	stateChanged, _ := noteChatSource(c, sc, time.Now())
 	usual := ""
 	if selecting {
 		usual = sel.UsualRule(ret, facts)
@@ -177,6 +186,9 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 	}
 	if err := e.Store.commitIngest(c, lines, r, selecting, usual); err != nil {
 		return 0, err
+	}
+	if stateChanged {
+		e.chatStateChanged(c)
 	}
 	// After the commit: a window saved before it would say messages are stored that a failed commit never wrote.
 	if err := saveWindow(); err != nil {
@@ -198,7 +210,8 @@ type (
 
 var ErrNotFound = errors.New("not found")
 
-// Get reads one entity. recentChars bounds a chat's latest messages (0: none).
+// Get reads one entity. recentChars bounds a chat's latest messages in bytes, a recording's transcript in characters
+// (0: none).
 func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 	if kind == KindRecording {
 		id, _ = RecordingID(id) // the phone's UUID in any case
@@ -206,10 +219,12 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 	d := &Detail{Kind: kind, ID: SafeID(id)}
 	var meta string
 	switch kind {
-	case KindChat, KindPerson, KindProject, KindRecording:
+	case KindChat, KindPerson, KindProject, KindRecording, KindTopic:
 		meta = e.Store.path(kind, id, "meta.json")
 		d.Path = e.Store.path(kind, id)
-		d.Summary = e.Store.Summary(kind, id)
+		if kind != KindProject {
+			d.Summary = e.Store.Summary(kind, id)
+		}
 	case KindDoc, KindMeeting, KindEvent:
 		meta = filepath.Join(e.Store.Dir, kind, SafeID(id)+".json")
 		d.Path = meta
@@ -217,14 +232,22 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 		return nil, fmt.Errorf("unknown kind %q", kind)
 	}
 	var recording map[string][]byte
+	var meeting *Meeting
+	var hub HubTranscript
 	var raw []byte
 	var err error
+	var project *Project
 	if kind == KindRecording {
-		recording, err = e.Store.recordingSnapshot(id)
+		// Its files with its meeting.json and the hub's transcript, read together: detail.segments is the transcript of
+		// record, detail.meta has the transcription.
+		recording, meeting, hub, err = e.Store.recordSnapshot(id)
 		raw = recording["meta.json"]
 		if err == nil && raw == nil {
 			err = ErrNotFound
 		}
+	} else if kind == KindProject {
+		project, err = e.projectDetail(d)
+		raw = d.Meta
 	} else {
 		raw, err = os.ReadFile(meta)
 	}
@@ -232,21 +255,37 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 		return nil, ErrNotFound
 	}
 	d.Meta = raw
-	if kind == KindProject {
-		d.Log = e.Store.Log(id, 30)
-		if p, ok := e.Store.Project(id); ok {
-			for _, x := range p.Moments {
-				if m, ok := e.Store.MomentPost(x.ID); ok {
-					f := momentForPrompt(m, x.Note, 200, e.Store.Zone())
-					d.Moments = append(d.Moments, MomentRef{ID: m.ID, Author: f.Author, Text: f.Text, At: m.At, Comments: m.CommentCount, Note: x.Note})
-				}
+	if kind == KindRecording {
+		d.Meta = metaWithNameSource(metaWithMeeting(raw, meeting))
+	}
+	if project != nil {
+		d.Sources = e.projectSources(project, e.projectSourceLookup())
+		for _, x := range project.Moments {
+			if m, ok := e.Store.MomentPost(x.ID); ok {
+				f := momentForPrompt(m, x.Note, 200, e.Store.Zone())
+				d.Moments = append(d.Moments, MomentRef{ID: m.ID, Author: f.Author, Text: f.Text, At: m.At, Comments: m.CommentCount, Note: x.Note})
 			}
 		}
 	}
 	if kind == KindRecording {
-		var segs []RecordingSegment
-		_ = json.Unmarshal(recording["segments.json"], &segs)
-		d.Segments = nonNilSegments(segs)
+		d.Segments = nonNilSegments(recordOf(recording, meeting, hub))
+		if raw, err := os.ReadFile(e.Store.path(kind, id, "minutes.json")); err == nil && json.Valid(raw) {
+			var r Recording
+			if json.Unmarshal(recording["meta.json"], &r) == nil {
+				raw = minutesWithSpan(raw, &r, e.Store.Zone())
+			}
+			d.Minutes = raw
+		}
+		d.Meta, d.Recap = e.dayDetail(id, d.Meta)
+		if d.Summary == "" && d.Recap != nil {
+			// A trimmed day recording keeps its recap, not summary.md: its summary is the recap's.
+			var rc struct {
+				Summary string `json:"summary"`
+			}
+			if json.Unmarshal(d.Recap, &rc) == nil && rc.Summary != "" {
+				d.Summary = rc.Summary + "\n"
+			}
+		}
 		if recentChars > 0 {
 			raw := recording["transcript.md"]
 			d.Recent = clip(string(raw), recentChars)
@@ -255,18 +294,30 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 	if kind == KindChat && recentChars > 0 {
 		d.Recent = e.Store.Since(id, time.Now().AddDate(0, 0, -7), recentChars)
 	}
+	if kind == KindTopic {
+		d.Points = e.Store.TopicPoints(id)
+	}
+	if kind == KindPerson {
+		if all := e.Store.profiles(SafeID(id)); len(all) > 0 {
+			d.Profiles = all
+		}
+	}
 	var refs struct {
-		Projects []string `json:"projects"`
-		Chats    []string `json:"chats"`
-		People   []string `json:"people"`
-		Items    []string `json:"items"` // projects: "docs/<id>", "meetings/<id>", "events/<id>"
-		Where    string   `json:"where"` // docs / meetings / events: the chat they came from
+		Projects []string            `json:"projects"`
+		Chats    []string            `json:"chats"`
+		People   []string            `json:"people"`
+		Items    []string            `json:"items"` // projects: "docs/<id>", "meetings/<id>", "events/<id>"
+		Where    string              `json:"where"` // docs / meetings / events: the chat they came from
+		Excluded map[string][]string `json:"excluded"`
 	}
 	_ = json.Unmarshal(raw, &refs)
 	if refs.Where != "" {
 		refs.Chats = append(refs.Chats, refs.Where) // entries() drops it when it is not a chat ("calendar")
 	}
 	d.Links = append(e.entries(refs.Projects, refs.Chats, refs.People), e.itemEntries(refs.Items)...)
+	if x := refs.Excluded; len(x) > 0 {
+		d.Removed = append(e.entries(x["projects"], x["chats"], x["people"]), e.itemEntries(x["items"])...)
+	}
 	return d, nil
 }
 
@@ -285,8 +336,7 @@ func (e *Engine) itemEntries(refs []string) []Entry {
 			continue
 		}
 		if it, ok := e.Store.Item(kind, id); ok && it.Title != "" {
-			by[kind] = append(by[kind], Entry{Kind: kind, ID: it.ID, Name: it.Title, OneLine: it.Note, Importance: it.Importance,
-				Relevance: it.Relevance, Tags: it.Tags, Updated: it.At, Extra: it.URL})
+			by[kind] = append(by[kind], itemEntry(kind, it))
 		}
 	}
 	var out []Entry
@@ -336,22 +386,83 @@ func tagUpdate(u Update, t *Tagging) {
 	}
 }
 
+// projectUpdate keeps fields that the project branch can apply, for locking and attribution too.
+func (e *Engine) projectUpdate(u Update) Update {
+	if u.Kind != "short" && u.Kind != "long" {
+		u.Kind = ""
+	}
+	if u.Status != "active" && u.Status != "paused" && u.Status != "done" && u.Status != "ignored" {
+		u.Status = ""
+	}
+	if !importanceRe.MatchString(u.Importance) {
+		u.Importance = ""
+	}
+	if u.Relevance != nil && (*u.Relevance < 0 || *u.Relevance > 100) {
+		u.Relevance = nil
+	}
+	u.Projects, u.RemoveProjects = nil, nil
+	var chats []string
+	for _, id := range u.Chats {
+		if _, ok := e.Store.Chat(id); ok {
+			chats = append(chats, id)
+		}
+	}
+	u.Chats = chats
+	return u
+}
+
 // Apply changes one entity as the user (the app, the assistant); for projects it creates the project when it does
 // not exist (id = name or slug). Locked fields it touches become the user's: an extension's provenance on them goes.
+// The links it removes stay out of automatic writes (exclude.go); a removal locks its lists as lock says.
 func (e *Engine) Apply(kind, id string, u Update) (string, error) {
+	return e.applyUser(kind, id, UserUpdate{Update: u})
+}
+
+// applyUser is Apply with the fields only the user sends: lock_lists and allow_*.
+func (e *Engine) applyUser(kind, id string, uu UserUpdate) (string, error) {
 	if e.Store.ReadOnly() {
 		return "", ErrReadOnly
 	}
+	uu = stripAllow(kind, uu)
+	u := stripUnsupported(kind, uu.Update) // what the kind does not use is neither applied nor locked (Unsupported says it)
+	if err := checkProfile(u.Profile); err != nil {
+		return "", err
+	}
+	profile := u.Profile
+	u.Profile = nil
 	e.Store.applyMu.Lock()
 	defer e.Store.applyMu.Unlock()
-	out, err := e.apply(kind, id, u)
+	uu.Update = u
+	if kind == KindProject {
+		if err := e.projectSourceUpdate(id, &uu); err != nil {
+			return "", err
+		}
+		u = e.projectUpdate(u)
+	}
+	uu.Update = u
+	out, err := e.apply(kind, id, uu, userEdit(uu), UserWriter)
 	if err == nil && u.MergeInto == "" {
 		err = e.claim(kind, out, u, "", nil, nil)
+	}
+	if err == nil && profile != nil {
+		_, err = e.putProfile(out, UserWriter, profile)
 	}
 	return out, err
 }
 
-func (e *Engine) apply(kind, id string, u Update) (string, error) {
+// putProfile replaces writer's profile of person pid and writes the person's summary.md again; it answers the profile
+// it replaced (nil for none).
+func (e *Engine) putProfile(pid, writer string, p *PersonProfile) (*PersonProfile, error) {
+	before, err := e.Store.putProfile(pid, writer, p, time.Now())
+	if err != nil {
+		return before, err
+	}
+	e.WritePersonSummary(pid)
+	return before, nil
+}
+
+func (e *Engine) apply(kind, id string, uu UserUpdate, le linkEdit, writer string) (string, error) {
+	u := uu.Update
 	now := time.Now().UTC()
 	switch kind {
 	case KindProject:
@@ -386,6 +497,15 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 			}
 			p = &Project{Slug: Slug(name), Name: name, Kind: "short", Status: "active", Created: now}
 		}
+		if uu.ProjectMode != nil {
+			p.Mode = *uu.ProjectMode
+			if p.Mode == "full" {
+				p.Mode = ""
+			}
+		}
+		if uu.SourceURLs != nil {
+			p.SourceURLs = uu.SourceURLs
+		}
 		if u.Name != "" {
 			p.Name = u.Name
 		}
@@ -401,33 +521,43 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 		if u.MyRole != "" {
 			p.MyRole = oneLine(u.MyRole)
 		}
+		if u.Note != "" {
+			p.Note = oneLine(u.Note)
+		}
 		tagUpdate(u, &p.Tagging)
-		protectUpdate(u, &p.Tagging)
+		protectUpdate(u, &p.Tagging, le)
 		p.Aliases = addUnique(p.Aliases, u.Aliases...)
 		p.Dirs = addUnique(p.Dirs, u.Dirs...)
 		p.People = addUnique(p.People, u.People...)
+		le.linked(&p.Tagging, "people", u.People...)
 		for _, pid := range u.People {
-			if person, ok := e.Store.Person(pid); ok {
+			_, _, err := e.Store.updatePerson(pid, true, nil, func(person *Person) bool {
 				person.Projects = addUnique(person.Projects, p.Slug)
 				if u.Lock == nil || *u.Lock {
 					person.LockedFields = addUnique(person.LockedFields, "projects")
 				}
-				if err := e.Store.putEntity(KindPerson, person.ID, person, &person.Tagging, true); err != nil {
-					return "", err
-				}
+				le.linked(&person.Tagging, "projects", p.Slug)
+				return true
+			})
+			if err != nil {
+				return "", err
 			}
 		}
 		for _, cid := range u.Chats {
-			if c, ok := e.Store.Chat(cid); ok {
-				p.Chats = addUnique(p.Chats, c.ID)
+			c, ok, err := e.Store.editChat(cid, func(c *Chat) {
 				c.Projects = addUnique(c.Projects, p.Slug)
 				if u.Lock == nil || *u.Lock {
 					c.LockedFields = addUnique(c.LockedFields, "projects")
 				}
-				p.People = addUnique(p.People, c.People...)
-				if err := e.Store.putEntity(KindChat, c.ID, c, &c.Tagging, true); err != nil {
-					return "", err
-				}
+				le.linked(&c.Tagging, "projects", p.Slug)
+			})
+			if err != nil {
+				return "", err
+			}
+			if ok {
+				p.Chats = addUnique(p.Chats, c.ID)
+				le.linked(&p.Tagging, "chats", c.ID)
+				p.People = addUnique(p.People, p.kept("people", c.People)...) // not the people the user took off it
 			}
 		}
 		if u.Log != "" {
@@ -445,85 +575,121 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 		p.Aliases = removeStrings(p.Aliases, u.RemoveAliases)
 		p.People = removeStrings(p.People, u.RemovePeople)
 		p.Chats = removeStrings(p.Chats, u.RemoveChats)
+		le.removed(&p.Tagging, "people", e.existing(KindPerson, u.RemovePeople)...)
+		le.removed(&p.Tagging, "chats", e.existing(KindChat, u.RemoveChats)...)
+		le.allowed(&p.Tagging, "people", "chats")
 		p.Updated = now
 		if err := e.Store.putEntity(KindProject, p.Slug, p, &p.Tagging, true); err != nil {
 			return "", err
 		}
 		if u.Summary != "" {
-			if err := e.Store.putSummary(KindProject, p.Slug, u.Summary, true); err != nil {
+			if err := e.Store.putSummary(KindProject, p.Slug, u.Summary, true, writer); err != nil {
 				return "", err
 			}
 		}
-		if err := e.unlink(KindProject, p.Slug, u); err != nil {
+		if err := e.unlink(KindProject, p.Slug, u, le); err != nil {
 			return "", err
 		}
 		e.index(KindProject, p.Slug, p.Name, p.Tagging, p.OneLine, p.Updated)
 		return p.Slug, nil
 	case KindChat:
-		c, ok := e.Store.Chat(id)
+		var linked []*Project
+		for _, slug := range u.Projects {
+			if pr, ok := e.Store.Project(slug); ok {
+				linked = append(linked, pr)
+			}
+		}
+		// The chat is read again under chatMu and only the user's fields change: what an ingest wrote meanwhile stays.
+		c, ok, err := e.Store.editChat(id, func(c *Chat) {
+			tagUpdate(u, &c.Tagging)
+			protectUpdate(u, &c.Tagging, le)
+			if u.Name != "" {
+				c.Name = u.Name
+			}
+			for _, pr := range linked {
+				c.Projects = addUnique(c.Projects, pr.Slug)
+				le.linked(&c.Tagging, "projects", pr.Slug)
+			}
+			c.People = removeStrings(c.People, u.RemovePeople)
+			c.Projects = removeStrings(c.Projects, u.RemoveProjects)
+			le.removed(&c.Tagging, "people", e.existing(KindPerson, u.RemovePeople)...)
+			le.removed(&c.Tagging, "projects", e.existing(KindProject, u.RemoveProjects)...)
+			le.allowed(&c.Tagging, "people", "projects")
+		})
+		if err != nil {
+			return "", err
+		}
 		if !ok {
 			return "", ErrNotFound
 		}
-		tagUpdate(u, &c.Tagging)
-		protectUpdate(u, &c.Tagging)
-		if u.Name != "" {
-			c.Name = u.Name
-		}
-		for _, slug := range u.Projects {
-			if pr, ok := e.Store.Project(slug); ok {
-				c.Projects = addUnique(c.Projects, pr.Slug)
-				pr.Chats = addUnique(pr.Chats, c.ID)
-				if u.Lock == nil || *u.Lock {
-					pr.LockedFields = addUnique(pr.LockedFields, "chats")
-				}
-				if err := e.Store.putEntity(KindProject, pr.Slug, pr, &pr.Tagging, true); err != nil {
-					return "", err
-				}
+		for _, pr := range linked {
+			pr.Chats = addUnique(pr.Chats, c.ID)
+			if u.Lock == nil || *u.Lock {
+				pr.LockedFields = addUnique(pr.LockedFields, "chats")
 			}
-		}
-		c.People = removeStrings(c.People, u.RemovePeople)
-		c.Projects = removeStrings(c.Projects, u.RemoveProjects)
-		if err := e.Store.putEntity(KindChat, c.ID, c, &c.Tagging, true); err != nil {
-			return "", err
+			le.linked(&pr.Tagging, "chats", c.ID)
+			if err := e.Store.putEntity(KindProject, pr.Slug, pr, &pr.Tagging, true); err != nil {
+				return "", err
+			}
 		}
 		if u.Summary != "" {
 			if err := e.Store.putSummary(KindChat, c.ID, u.Summary, true); err != nil {
 				return "", err
 			}
 		}
-		if err := e.unlink(KindChat, c.ID, u); err != nil {
+		if err := e.unlink(KindChat, c.ID, u, le); err != nil {
 			return "", err
 		}
 		e.index(KindChat, c.ID, c.Name, c.Tagging, c.OneLine, c.LastAt)
 		return c.ID, nil
 	case KindPerson:
+		if u.Status != "" && u.Status != "active" && u.Status != "ignored" && u.Status != "self" {
+			return "", fmt.Errorf("unknown person status %q", u.Status)
+		}
 		p, ok := e.Store.Person(id)
 		if !ok {
 			return "", ErrNotFound
 		}
-		tagUpdate(u, &p.Tagging)
-		protectUpdate(u, &p.Tagging)
-		if u.Note != "" {
-			p.Note = oneLine(u.Note)
-		}
+		var linked []string
 		for _, slug := range u.Projects {
 			if pr, ok := e.Store.Project(slug); ok {
-				p.Projects = addUnique(p.Projects, pr.Slug)
+				linked = append(linked, pr.Slug)
 				pr.People = addUnique(pr.People, p.ID)
 				if u.Lock == nil || *u.Lock {
 					pr.LockedFields = addUnique(pr.LockedFields, "people")
 				}
+				le.linked(&pr.Tagging, "people", p.ID)
 				if err := e.Store.putEntity(KindProject, pr.Slug, pr, &pr.Tagging, true); err != nil {
 					return "", err
 				}
 			}
 		}
-		p.Chats = removeStrings(p.Chats, u.RemoveChats)
-		p.Projects = removeStrings(p.Projects, u.RemoveProjects)
-		if err := e.Store.putEntity(KindPerson, p.ID, p, &p.Tagging, true); err != nil {
+		// Changed on the person as read again under personMu: what the pipeline linked meanwhile stays.
+		p, _, err := e.Store.updatePerson(id, true, nil, func(p *Person) bool {
+			tagUpdate(u, &p.Tagging)
+			protectUpdate(u, &p.Tagging, le)
+			if u.Note != "" {
+				p.Note = oneLine(u.Note)
+			}
+			if u.Status != "" {
+				p.Status = u.Status
+			}
+			p.Projects = addUnique(p.Projects, linked...)
+			le.linked(&p.Tagging, "projects", linked...)
+			p.Chats = removeStrings(p.Chats, u.RemoveChats)
+			p.Projects = removeStrings(p.Projects, u.RemoveProjects)
+			le.removed(&p.Tagging, "chats", e.existing(KindChat, u.RemoveChats)...)
+			le.removed(&p.Tagging, "projects", e.existing(KindProject, u.RemoveProjects)...)
+			le.allowed(&p.Tagging, "chats", "projects")
+			return true
+		})
+		if err != nil {
 			return "", err
 		}
-		if err := e.unlink(KindPerson, p.ID, u); err != nil {
+		if p == nil {
+			return "", ErrNotFound // forgotten meanwhile
+		}
+		if err := e.unlink(KindPerson, p.ID, u, le); err != nil {
 			return "", err
 		}
 		e.WritePersonSummary(p.ID)
@@ -535,7 +701,7 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 			return "", ErrNotFound
 		}
 		tagUpdate(u, &it.Tagging)
-		protectUpdate(u, &it.Tagging)
+		protectUpdate(u, &it.Tagging, le)
 		if u.Note != "" {
 			it.Note = oneLine(u.Note)
 		}
@@ -546,20 +712,59 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 				if u.Lock == nil || *u.Lock {
 					pr.LockedFields = addUnique(pr.LockedFields, "items")
 				}
+				le.linked(&it.Tagging, "projects", pr.Slug)
+				le.linked(&pr.Tagging, "items", kind+"/"+SafeID(it.ID))
 				if err := e.Store.putEntity(KindProject, pr.Slug, pr, &pr.Tagging, true); err != nil {
 					return "", err
 				}
 			}
 		}
 		it.Projects = removeStrings(it.Projects, u.RemoveProjects)
+		le.removed(&it.Tagging, "projects", e.existing(KindProject, u.RemoveProjects)...)
+		le.allowed(&it.Tagging, "projects")
 		if err := e.Store.putEntity(kind, it.ID, it, &it.Tagging, true); err != nil {
 			return "", err
 		}
-		if err := e.unlink(kind, it.ID, u); err != nil {
+		if err := e.unlink(kind, it.ID, u, le); err != nil {
 			return "", err
 		}
 		e.index(kind, it.ID, it.Title, it.Tagging, it.Note, it.At)
 		return it.ID, nil
+	case KindTopic:
+		// The curation owns the points (topics.go); by hand the name, the one line, aliases, tags and pinned facts,
+		// which the merge reads and never overwrites.
+		if u.Summary != "" {
+			return "", errors.New("a topic's summary is written from its points: correct it with pinned facts")
+		}
+		e.Store.topicMu.Lock()
+		defer e.Store.topicMu.Unlock()
+		t, ok := e.Store.Topic(id)
+		if !ok {
+			return "", ErrNotFound
+		}
+		tagUpdate(u, &t.Tagging)
+		protectUpdate(u, &t.Tagging, le)
+		if u.Name != "" {
+			t.Name = oneLine(u.Name)
+		}
+		if u.Note != "" {
+			t.Note = oneLine(u.Note)
+		}
+		t.Aliases = removeStrings(addUnique(t.Aliases, u.Aliases...), u.RemoveAliases)
+		if err := e.Store.putEntity(KindTopic, t.Slug, t, &t.Tagging, true); err != nil {
+			return "", err
+		}
+		if u.Name != "" || u.Note != "" {
+			f, err := e.Store.topicFile(t.Slug)
+			if err != nil {
+				return "", err
+			}
+			if err := e.Store.writeTopicSummary(t, f.Points); err != nil {
+				return "", err
+			}
+		}
+		e.index(KindTopic, t.Slug, t.Name, t.Tagging, t.Note, t.Updated)
+		return t.Slug, nil
 	case KindRecording:
 		id, _ = RecordingID(id)
 		// The phone owns the content (PutRecording); by hand only the tags, the pinned facts and the projects.
@@ -570,7 +775,7 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 			return "", ErrNotFound
 		}
 		tagUpdate(u, &r.Tagging)
-		protectUpdate(u, &r.Tagging)
+		protectUpdate(u, &r.Tagging, le)
 		for _, slug := range u.Projects {
 			if pr, ok := e.Store.Project(slug); ok {
 				r.Projects = addUnique(r.Projects, pr.Slug)
@@ -578,16 +783,20 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 				if u.Lock == nil || *u.Lock {
 					pr.LockedFields = addUnique(pr.LockedFields, "items")
 				}
+				le.linked(&r.Tagging, "projects", pr.Slug)
+				le.linked(&pr.Tagging, "items", kind+"/"+r.ID)
 				if err := e.Store.putEntity(KindProject, pr.Slug, pr, &pr.Tagging, true); err != nil {
 					return "", err
 				}
 			}
 		}
 		r.Projects = removeStrings(r.Projects, u.RemoveProjects)
+		le.removed(&r.Tagging, "projects", e.existing(KindProject, u.RemoveProjects)...)
+		le.allowed(&r.Tagging, "projects")
 		if err := e.Store.putEntity(kind, r.ID, r, &r.Tagging, true); err != nil {
 			return "", err
 		}
-		if err := e.unlink(kind, r.ID, u); err != nil {
+		if err := e.unlink(kind, r.ID, u, le); err != nil {
 			return "", err
 		}
 		e.index(kind, r.ID, r.Name, r.Tagging, r.OneLine, r.StartedAt)
@@ -620,10 +829,10 @@ func (e *Engine) ProjectsForDir(machine, dir string) []*Project {
 // entries names and ranks linked entities (at most 30 chats and 30 people).
 func (e *Engine) entries(projects, chats, people []string) []Entry {
 	var out []Entry
+	catalog := e.projectSourceLookup()
 	for _, slug := range projects {
 		if p, ok := e.Store.Project(slug); ok && p.Live() {
-			out = append(out, Entry{Kind: KindProject, ID: p.Slug, Name: p.Name, OneLine: p.OneLine, Importance: p.Importance,
-				Relevance: p.Relevance, Tags: p.Tags, Updated: p.Updated, Extra: p.Kind + " · " + p.Status})
+			out = append(out, e.projectEntry(p, catalog))
 		}
 	}
 	var cs, ps []Entry
@@ -634,7 +843,7 @@ func (e *Engine) entries(projects, chats, people []string) []Entry {
 		}
 	}
 	for _, id := range people {
-		if p, ok := e.Store.Person(id); ok {
+		if p, ok := e.Store.Person(id); ok && p.Status != "ignored" && p.Status != "self" {
 			ps = append(ps, Entry{Kind: KindPerson, ID: p.ID, Name: p.Name, OneLine: p.Note, Importance: p.Importance,
 				Relevance: p.Relevance, Tags: p.Tags, Updated: p.LastSeen})
 		}

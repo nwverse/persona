@@ -89,7 +89,7 @@ func benchSubscribersHub(tb testing.TB, subscribed int) *Hub {
 		if i < subscribed {
 			c.subs[[2]string{"m1", "s1"}] = true
 		}
-		h.clients[c] = struct{}{}
+		addTestClient(h, c)
 	}
 	return h
 }

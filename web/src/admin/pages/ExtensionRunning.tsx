@@ -1,4 +1,4 @@
-// How an extension runs (docs/extensions/extensions.md "Activity", #1857): the error rate and p95 on its row, and in its details the
+// How an extension runs (docs/extensions/extensions.md "Runtime status", #1857): the error rate and p95 on its row, and in its details the
 // calls and errors, the latency, why it exited, and its log (search, follow it live, copy). A hub from before #1857 has
 // none of it (404): the rows and details show nothing of it then.
 import { formatNumber, t } from "../../i18n";

@@ -24,7 +24,7 @@ const RuntimeHeadLengthHeader = "X-Persona-Runtime-Head-Content-Length"
 
 // runtimeFetch is a bounded bridge to the existing fixed-identity proxy policy, not
 // another network policy. It is exposed only on an extension's registered unix listener.
-func (p *Proxy) runtimeFetch(w http.ResponseWriter, r *http.Request, ext string) {
+func (p *Proxy) runtimeFetch(w http.ResponseWriter, r *http.Request, ext string, chk *check) {
 	// Bound broker-owned allocations globally as well as per registration.
 	p.mu.Lock()
 	if p.runtimeActive == nil {
@@ -108,10 +108,15 @@ func (p *Proxy) runtimeFetch(w http.ResponseWriter, r *http.Request, ext string)
 	}
 	// HTTPS is forwarded by the same policy using a TLS connection after its approved dial.
 	out = out.WithContext(context.WithValue(out.Context(), runtimeFetchKey{}, true))
+	if chk != nil {
+		// Only the outer broker credential selects this immutable check. Guest JSON carries no identity or targets.
+		out = out.WithContext(context.WithValue(out.Context(), runtimeCheckKey{}, chk))
+	}
 	p.handler(ext).ServeHTTP(&boundedResponse{ResponseWriter: w, left: RuntimeBodyMost}, out)
 }
 
 type runtimeFetchKey struct{}
+type runtimeCheckKey struct{}
 
 type boundedResponse struct {
 	http.ResponseWriter
@@ -127,12 +132,17 @@ func (w *boundedResponse) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// requestLifetime binds pending HTTP, tunnels and native relays to one registration.
-// Cancellation on replacement, settings changes or revocation closes only that extension's I/O.
-func (p *Proxy) requestLifetime(parent context.Context, ext string) (context.Context, func(), bool) {
+// requestLifetime binds pending HTTP, tunnels and native relays to one registration, and to the settings check chk
+// when the request came with its credential (nil: the program's own).
+// Cancellation on replacement, settings changes or revocation closes only that extension's I/O; a check's revocation
+// or end of time closes only the I/O opened with its credential.
+func (p *Proxy) requestLifetime(parent context.Context, ext string, chk *check) (context.Context, func(), bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if _, ok := p.rules[ext]; !ok {
+		return nil, nil, false
+	}
+	if chk != nil && p.liveCheckLocked(chk.cred) != chk {
 		return nil, nil, false
 	}
 	if p.active == nil {
@@ -145,10 +155,26 @@ func (p *Proxy) requestLifetime(parent context.Context, ext string) (context.Con
 		return nil, nil, false
 	}
 	ctx, cancel := context.WithCancel(parent)
+	if chk != nil {
+		ctx, cancel = context.WithDeadline(parent, chk.expires)
+	}
 	lease := &ioLease{cancel: cancel}
 	p.active[ext][lease] = struct{}{}
+	if chk != nil {
+		chk.leases[lease] = struct{}{}
+	}
 	var once sync.Once
-	return ctx, func() { once.Do(func() { cancel(); p.mu.Lock(); delete(p.active[ext], lease); p.mu.Unlock() }) }, true
+	return ctx, func() {
+		once.Do(func() {
+			cancel()
+			p.mu.Lock()
+			delete(p.active[ext], lease)
+			if chk != nil {
+				delete(chk.leases, lease)
+			}
+			p.mu.Unlock()
+		})
+	}, true
 }
 
 type ioLease struct{ cancel context.CancelFunc }

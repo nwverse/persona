@@ -1,5 +1,6 @@
 package persona.android.di
 
+import kotlinx.serialization.builtins.ListSerializer
 import persona.android.AppText
 import persona.android.R
 import android.app.Application
@@ -36,6 +37,15 @@ object InboxModule {
     @Provides @Singleton fun inboxDetails(owner: InboxDataOwner): persona.feature.inbox.InboxRepository = owner.inbox
     @Provides @Singleton fun assistant(owner: InboxDataOwner): AssistantRepository = owner.assistant
     @Provides @Singleton fun conversations(owner: InboxDataOwner): AssistantConversations = owner.assistant
+    @Provides @Singleton fun inboxTrays(owner: InboxDataOwner): AssistantInboxTrays = owner.trays
+}
+
+/** Runs [block] in this scope; the item manager the calling page named ([ManagerPins], [RequestManager]) goes with it. */
+internal suspend fun <T> CoroutineScope.awaitAsCaller(block: suspend CoroutineScope.() -> T): T {
+    val caller = currentCoroutineContext()
+    val managers = (caller[ManagerPins] ?: kotlin.coroutines.EmptyCoroutineContext) +
+        (caller[RequestManager] ?: kotlin.coroutines.EmptyCoroutineContext)
+    return async(managers, block = block).await()
 }
 
 /** Replace all repositories and file owners together when the pairing generation changes. */
@@ -51,9 +61,10 @@ class InboxDataOwner @Inject constructor(
 ) {
     private val app = application as PersonaApp
     private data class Repositories(val data: ScopedHubData, val inbox: persona.feature.inbox.InboxRepository,
+        val handOffInbox: persona.feature.inbox.InboxRepository,
         val assistant: AssistantConversations, val mail: StateFlow<MailTransport?>,
-        val composers: ReplyComposers, val reading: LarkReadingStore, val names: GroupNames,
-        val conversations: InboxConversations)
+        val composers: ReplyComposers, val handOffBars: InboxHandOffBars, val reading: LarkReadingStore, val names: GroupNames,
+        val conversations: InboxConversations, val larkMessages: LarkMessagesRepository)
     // The inbox and Persona are the selected group's (docs/android/android.md "Multiple hubs"): its own transports speak its plain
     // ids, which are moved into the merged lists' ids on the way out. Agent requests in the inbox stay merged.
     private val current = runtime.scopedData.mapLatest { data ->
@@ -82,6 +93,8 @@ class InboxDataOwner @Inject constructor(
             var persona: AssistantConversations? = null
             val realInbox = RealInboxRepository(connection, data.inboxReplies, sessions, interactions, data.coroutineScope,
                 snapshots = snapshots, hubPreferences = preferences, hubConnection = runtime,
+                subscriptionsShownFlow = socket.serverFeatures.map { "source_subscriptions" in it }.distinctUntilChanged(),
+                inboxSourcesShownFlow = socket.serverFeatures.map { "inbox_sources" in it }.distinctUntilChanged(),
                 mainConversationSender = data.messages.inGroup(names, data.coroutineScope), actions = actions,
                 lookupReply = { target, clientId ->
                     try {
@@ -101,7 +114,7 @@ class InboxDataOwner @Inject constructor(
                         else -> OutboxState.Unknown
                     }
                 },
-                sendThread = { root, request -> transport.replyInThread(root, request.text, request.clientId) },
+                sendThread = { root, request -> transport.replyInThread(root, request.text, request.clientId, request.mentions) },
                 download = media::download,
                 // "Hand to AI" to an Agent uses the same outbox as the Agents tab, and its targets come from the merged list:
                 // the app-wide sender takes the session to its own group (by the merged id's suffix).
@@ -120,11 +133,29 @@ class InboxDataOwner @Inject constructor(
             // Persona' own transport gives plain ids, so it reads the group's own sessions and preferences; the sessions
             // as the pages show them, so a card just answered here stops saying "Needs you" on the Persona tab too (#4525).
             val assistant = RealAssistantRepository(connection, stack.repositories.shownRepository, data.coroutineScope, snapshots,
-                stack.repositories.preferences ?: preferences.takeIf { names.plain })
+                stack.repositories.preferences ?: preferences.takeIf { names.plain }, events = socket.events)
             persona = assistant.inGroup(names, data.coroutineScope)
+            // Hand-off work created in this pairing must never resolve the selected group again. This fixed view also
+            // keeps the group's namespaced targets and preferences for memory / Done after another group is selected.
+            val handOffInbox = object : persona.feature.inbox.InboxRepository by wrapped {
+                override val snapshot = if (names.plain) wrapped.snapshot else wrapped.snapshot.map { it.inGroup(names) }
+                    .stateIn(data.coroutineScope, SharingStarted.Eagerly, wrapped.snapshot.value.inGroup(names))
+                override val handOffMemory = data.listPreferences.data.map { saved ->
+                    saved[stringPreferencesKey("inbox.handOff")]?.let {
+                        runCatching { JsonCodec.decodeFromString(ListSerializer(HandOffMemoryEntry.serializer()), it) }.getOrNull()
+                    } ?: emptyList()
+                }
+                override suspend fun saveHandOffMemory(value: List<HandOffMemoryEntry>) {
+                    data.listPreferences.edit {
+                        it[stringPreferencesKey("inbox.handOff")] = JsonCodec.encodeToString(ListSerializer(HandOffMemoryEntry.serializer()), value)
+                    }
+                }
+            }
             val composers = ReplyComposers(wrapped, data.coroutineScope)
-            Repositories(data, wrapped, checkNotNull(persona), mail,
-                composers, reading, names, InboxConversations(wrapped, data.scope.path, data.coroutineScope, composers))
+            val handOffBars = InboxHandOffBars(data.coroutineScope, app.resources, handOffInbox)
+            Repositories(data, wrapped, handOffInbox, checkNotNull(persona), mail,
+                composers, handOffBars, reading, names, InboxConversations(wrapped, data.scope.path, data.coroutineScope, composers),
+                RealLarkMessagesRepository(data.scope.path, transport))
         }?.await()
     }.stateIn(app.scope, SharingStarted.Eagerly, null)
 
@@ -138,17 +169,42 @@ class InboxDataOwner @Inject constructor(
             if (active !== data) throw CancellationException("Pairing changed")
             repositories?.takeIf { it.data === data }
         }.filterNotNull().first()
-        return data.coroutineScope.async {
+        return data.coroutineScope.awaitAsCaller {
             check(runtime.scopedData.value === data) { AppText.get(R.string.app_error_switched) }
             block(repositories)
-        }.await()
+        }
     }
 
-    val inbox = object : persona.feature.inbox.InboxRepository {
+    val trays = object : AssistantInboxTrays {
+        override fun drafts(scope: String): Flow<List<AssistantInboxDraft>> = current.flatMapLatest { owner ->
+            if (owner == null || owner.data.scope.path != scope || runtime.scopedData.value !== owner.data) flowOf(emptyList())
+            else owner.inbox.snapshot.map { snapshot ->
+                snapshot.records.mapNotNull { record ->
+                    record.event.suggestion?.takeIf { it.kind == "reply" && !it.handback && it.text.isNotBlank() && !record.item.isDone }
+                        ?.let { AssistantInboxDraft(record.item.id, record.item.title, it, record.manager) }
+                }
+            }
+        }
+        override suspend fun send(scope: String, draft: AssistantInboxDraft, clientId: String): Boolean = use { owner ->
+            if (owner.data.scope.path != scope) throw CancellationException("Pairing changed")
+            val record = owner.inbox.snapshot.value.records.firstOrNull { it.item.id == draft.itemId && it.manager == draft.manager }
+            if (record?.event?.suggestion != draft.suggestion) return@use false
+            owner.inbox.actOnSuggestion(SuggestionRequest(draft.itemId, draft.suggestion.version, SuggestionAction.Confirm,
+                text = draft.suggestion.text, clientId = clientId)) == SuggestionOutcome.Done
+        }
+        override suspend fun refresh(scope: String) = use { owner ->
+            if (owner.data.scope.path != scope) throw CancellationException("Pairing changed")
+            owner.inbox.refresh()
+        }
+    }
+
+    val inbox: persona.feature.inbox.InboxRepository = object : persona.feature.inbox.InboxRepository, InboxHandOffBarOwner {
         override val supportsThreadOutbox = true
         override val conversationInbox = observe<InboxConversations?>(null) { flowOf(it.conversations) }
+        override val larkMessages = observe<LarkMessagesRepository?>(null) { flowOf(it.larkMessages) }
         override val messageReads = observe(emptySet<InboxMessageRead>()) { it.inbox.messageReads }
         override val replyComposers = observe<ReplyComposers?>(null) { flowOf(it.composers) }
+        override val handOffBars = observe<InboxHandOffBars?>(null) { flowOf(it.handOffBars) }
         override suspend fun readingStore() = use { it.reading }
         override fun replyUpdates(target: ReplyTarget) = current.flatMapLatest {
             if (it == null || runtime.scopedData.value !== it.data) emptyFlow() else it.inbox.replyUpdates(target)
@@ -170,6 +226,13 @@ class InboxDataOwner @Inject constructor(
             repositories.data.listPreferences.edit { it[stringPreferencesKey("inbox")] = JsonCodec.encodeToString(InboxPreferences.serializer(), value) }
             Unit
         }
+        // Its own key: the list's filters are saved from a copy the screen holds, which must not write an older memory back.
+        override val handOffMemory = current.flatMapLatest { repositories ->
+            repositories?.handOffInbox?.handOffMemory ?: flowOf(emptyList())
+        }
+        override suspend fun saveHandOffMemory(value: List<HandOffMemoryEntry>) = use { repositories ->
+            repositories.handOffInbox.saveHandOffMemory(value)
+        }
         override suspend fun refresh() = use { it.inbox.refresh() }
         override suspend fun refreshNow() = use { it.inbox.refreshNow() }
         override fun conversation(feedId: String, startPosition: Long?) = current.flatMapLatest {
@@ -182,7 +245,10 @@ class InboxDataOwner @Inject constructor(
         override suspend fun latestConversation(feedId: String) = use { it.inbox.latestConversation(feedId) }
         override suspend fun markVisible(feedId: String, messages: List<LarkMessage>) = use { it.inbox.markVisible(feedId, messages) }
         override suspend fun setDone(itemId: String, done: Boolean) = use { it.inbox.setDone(itemId, done) }
+        override suspend fun item(itemId: String) = use { it.inbox.item(itemId) }
         override suspend fun setDone(items: List<persona.core.contracts.api.InboxDoneTarget>, done: Boolean) = use { it.inbox.setDone(items, done) }
+        override suspend fun doneHistory(manager: String?, cursor: persona.feature.inbox.InboxDoneCursor?) = use { it.inbox.doneHistory(manager, cursor) }
+        override suspend fun doneDays(manager: String?, zone: java.time.ZoneId) = use { it.inbox.doneDays(manager, zone) }
         override suspend fun bulk(items: List<persona.core.contracts.api.InboxDoneTarget>, action: persona.core.contracts.api.InboxBulkAction) = use { it.inbox.bulk(items, action) }
         override suspend fun readDraft(target: ReplyTarget) = use { it.inbox.readDraft(target) }
         override suspend fun saveDraft(target: ReplyTarget, draft: ReplyDraft) = use { it.inbox.saveDraft(target, draft) }
@@ -195,25 +261,27 @@ class InboxDataOwner @Inject constructor(
         override suspend fun personaContext(itemId: String) = use { it.inbox.personaContext(itemId) }
         override suspend fun draftReply(itemId: String, instruction: String) = use { it.inbox.draftReply(itemId, instruction) }
         override suspend fun handOff(request: InboxHandOffRequest): persona.core.contracts.SessionKey? = use { it.inbox.handOff(request) }
-        override suspend fun momentsPost(postId: String) = use { it.inbox.momentsPost(postId) }
-        override suspend fun momentsComments(postId: String) = use { it.inbox.momentsComments(postId) }
+        override suspend fun momentsPost(postId: String, manager: String?) = use { it.inbox.momentsPost(postId, manager) }
+        override suspend fun momentsComments(postId: String, manager: String?) = use { it.inbox.momentsComments(postId, manager) }
         override suspend fun urlPreview(messageId: String, url: String) = use { it.inbox.urlPreview(messageId, url) }
         override suspend fun react(messageId: String, key: String, remove: Boolean) = use { it.inbox.react(messageId, key, remove) }
         override suspend fun cardAction(messageId: String, actionId: String) = use { it.inbox.cardAction(messageId, actionId) }
         override suspend fun userProfile(userId: String, feedId: String?) = use { it.inbox.userProfile(userId, feedId) }
+        override suspend fun larkMembers(feedId: String, query: String, limit: Int) = use { it.inbox.larkMembers(feedId, query, limit) }
         override suspend fun quickReactions() = use { it.inbox.quickReactions() }
         override suspend fun emojis() = use { it.inbox.emojis() }
-        override suspend fun inboxMutes() = use { it.inbox.inboxMutes() }
+        override suspend fun inboxMutes(manager: String?) = use { it.inbox.inboxMutes(manager) }
         override suspend fun mute(record: persona.feature.inbox.InboxRecord, option: persona.feature.inbox.InboxMuteOption) =
             use { it.inbox.mute(record, option) }
-        override suspend fun unmute(id: String) = use { it.inbox.unmute(id) }
-        override suspend fun inboxPolicies(record: persona.feature.inbox.InboxRecord?) = use { it.inbox.inboxPolicies(record) }
+        override suspend fun unmute(id: String, manager: String?) = use { it.inbox.unmute(id, manager) }
+        override suspend fun inboxPolicies(record: persona.feature.inbox.InboxRecord?, manager: String?) =
+            use { it.inbox.inboxPolicies(record, manager) }
         override suspend fun savePolicy(
             target: persona.feature.inbox.InboxPolicyTarget,
             tier: persona.feature.inbox.InboxPolicyTier,
             twin: persona.feature.inbox.InboxPolicyTwin,
         ) = use { it.inbox.savePolicy(target, tier, twin) }
-        override suspend fun removePolicy(id: String) = use { it.inbox.removePolicy(id) }
+        override suspend fun removePolicy(id: String, manager: String?) = use { it.inbox.removePolicy(id, manager) }
         override suspend fun larkChatPins(feedId: String, accountId: String?, cursor: String?) = use { it.inbox.larkChatPins(feedId, accountId, cursor) }
         override suspend fun larkPinTarget(feedId: String, messageId: String, accountId: String, topic: Boolean) = use { it.inbox.larkPinTarget(feedId, messageId, accountId, topic) }
         override suspend fun larkChangePin(feedId: String, messageId: String, pinId: String?, accountId: String?) =
@@ -225,8 +293,13 @@ class InboxDataOwner @Inject constructor(
         override val assistant = observe(AssistantSnapshot()) { it.assistant.assistant }
         override val pinned = observe(emptySet<persona.core.contracts.SessionKey>()) { it.assistant.pinned }
         override suspend fun refresh() = use { it.assistant.refresh() }
+        override suspend fun updateRecentTaskChats(value: Boolean?) = use { it.assistant.updateRecentTaskChats(value) }
+        override suspend fun recentTaskChatsUpdater() = use { it.assistant.recentTaskChatsUpdater() }
         override suspend fun mainConversationOf(manager: String) = use { it.assistant.mainConversationOf(manager) }
         override suspend fun startConversation() = use { it.assistant.startConversation() }
         override suspend fun startConversation(launcher: String) = use { it.assistant.startConversation(launcher) }
+        override suspend fun startConversation(pick: persona.core.contracts.ModelPick) = use { it.assistant.startConversation(pick) }
+        override suspend fun spaceConversations(space: String) = use { it.assistant.spaceConversations(space) }
+        override suspend fun startConversationIn(space: String) = use { it.assistant.startConversationIn(space) }
     }
 }

@@ -3,6 +3,7 @@ package persona.feature.settings
 import persona.core.designsystem.text
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -19,7 +20,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /**
- * Which terminal engine a machine uses (docs/integrations/engines.md), as on iOS `EngineSelectionView`. Right after pairing
+ * Which terminal engine a machine uses, or none (docs/integrations/engines.md), as on iOS `EngineSelectionView`. Right after pairing
  * ([pairing]) an engine must be chosen: no back, no skip, and a failed save stays on the step; from the machine page
  * it is an ordinary page that saves and goes back.
  */
@@ -49,30 +50,42 @@ fun EngineSelectionScreen(
         try { sessions.refresh() } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { }
         reading = false
     }
-    // Pairing: system back does not skip the step (2026-11-01, the user).
-    BackHandler(enabled = pairing) { }
-    BackHandler(enabled = !pairing && state.saving) { }
-    val ready = machine != null && model != null
-    JListPage(title = stringResource(if (pairing) R.string.settings_engine_title_pairing else R.string.settings_engine_title), onBack = if (pairing) null else onBack, largeTitle = false, bottomBar = if (!ready) null else ({
-        Row(Modifier.fillMaxWidth().padding(horizontal = pagePadding, vertical = Tokens.Space.s)) {
-            JButton(stringResource(if (pairing) R.string.settings_engine_confirm else R.string.settings_engine_save), {
-                val target = machine ?: return@JButton
-                scope.launch {
-                    if (model?.save(target.id) == true) {
-                        if (!pairing) feedback?.notice(Engines.saved(target).shown)
-                        onDone()
-                    }
+    fun leave() {
+        if (!pairing && model?.state?.value?.saving != true) onBack?.invoke()
+    }
+    // The first engine is required after pairing. On the ordinary page both Back controls wait for the save.
+    BackHandler(enabled = pairing || onBack != null, onBack = ::leave)
+    EnginePage(
+        title = stringResource(if (pairing) R.string.settings_engine_title_pairing else R.string.settings_engine_title),
+        onBack = if (pairing || onBack == null) null else ::leave,
+        pairing = pairing,
+        saving = state.saving,
+        bottomBar = if (machine == null || model == null) null else ({
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = pagePadding, vertical = Tokens.Space.s),
+                verticalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+            ) {
+                state.error?.let { JNotice(it.text(), status = Status.NeedsYou) }
+                val label = when {
+                    state.error != null -> R.string.settings_engine_retry
+                    pairing -> R.string.settings_engine_confirm
+                    else -> R.string.settings_engine_save
                 }
-            }, Modifier.fillMaxWidth(), loading = state.saving,
-                enabled = !state.saving && machine != null && Engines.canSelect(state.selected, machine))
-        }
-    })) {
-        if (pairing) item("heading") {
-            Column(Modifier.padding(vertical = Tokens.Space.l), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                Text(stringResource(R.string.settings_engine_heading), style = PersonaTheme.type.largeTitle, color = PersonaTheme.palette.ink)
-                Text(machine?.displayName ?: machineId, style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                JButton(stringResource(label), {
+                    scope.launch {
+                        if (model.save(machine.id)) {
+                            if (!pairing) feedback?.notice(Engines.saved(machine).shown)
+                            onDone()
+                        }
+                    }
+                }, Modifier.fillMaxWidth(), loading = state.saving,
+                    enabled = !state.saving && Engines.canSelect(state.selected, machine))
             }
+        }),
+    ) {
+        if (pairing) item("machine") {
+            Text(machine?.displayName ?: machineId, modifier = Modifier.padding(vertical = Tokens.Space.m),
+                style = PersonaTheme.type.body, color = PersonaTheme.palette.ink2)
         }
         if (machine == null || model == null) {
             if (reading) item("reading") { JLoading(text = stringResource(R.string.settings_engine_reading)) }
@@ -85,7 +98,7 @@ fun EngineSelectionScreen(
                     if (pairing) JButton(stringResource(R.string.settings_engine_continue), onDone, Modifier.fillMaxWidth())
                 }
             }
-            return@JListPage
+            return@EnginePage
         }
         if (!pairing) item("title") { JSectionHeader(machine.displayName) }
         val options = Engines.options(machine)
@@ -95,15 +108,32 @@ fun EngineSelectionScreen(
                     enabled = !state.saving && Engines.canSelect(found.id, machine)) { model.choose(found.id) }
             }
         }
-        item("footer") { SettingsCaption(Engines.footer(machine).text(), Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s)) }
-        state.error?.let { error ->
-            item("error") {
-                Column(Modifier.padding(top = Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                    JInlineStatus(error.text(), tone = InlineTone.Failed)
-                    if (pairing) SettingsCaption(stringResource(R.string.settings_engine_must_choose))
-                }
-            }
-        }
+        item("footer") { SettingsCaption(Engines.footer(machine, state.selected).text(), Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s)) }
+    }
+}
+
+@Composable
+private fun EnginePage(
+    title: String,
+    onBack: (() -> Unit)?,
+    pairing: Boolean,
+    saving: Boolean,
+    bottomBar: (@Composable () -> Unit)?,
+    content: LazyListScope.() -> Unit,
+) {
+    val disabled = onBack != null && saving
+    // The ordinary bar lays out its leading control in the same slot even when Back is disabled.
+    val usesCustomLeading = pairing || disabled
+    CompositionLocalProvider(
+        LocalHomeChrome provides if (usesCustomLeading) null else LocalHomeChrome.current,
+        LocalRootBack provides if (usesCustomLeading) null else LocalRootBack.current,
+        LocalRootLeading provides when {
+            disabled -> ({ JBackButton(enabled = false) {} })
+            pairing -> ({ if (PersonaTheme.style == AppStyle.Glass) Spacer(Modifier.width(Tokens.Space.sm)) })
+            else -> LocalRootLeading.current
+        },
+    ) {
+        JListPage(title, onBack = onBack.takeUnless { disabled }, largeTitle = false, bottomBar = bottomBar, content = content)
     }
 }
 
@@ -114,9 +144,11 @@ private fun EngineOption(found: DetectedEngine, machine: Machine, selected: Bool
         JRadio(selected, null, enabled = enabled)
         Spacer(Modifier.width(Tokens.Space.m))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
-            Text(found.name.ifBlank { found.id }, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // No terminal engine is named in the app's language, not by the hub; there is nothing to detect for it.
+            val title = if (found.id == Engines.NONE) Engines.label(found.id, machine).text() else found.name.ifBlank { found.id }
+            Text(title, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Engines.detail(found.id)?.let { Text(it.text(), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-            Text(Engines.detection(found.id, machine).text(), style = PersonaTheme.type.caption,
+            if (Engines.showsDetection(found.id)) Text(Engines.detection(found.id, machine).text(), style = PersonaTheme.type.caption,
                 color = if (found.available && machine.online) PersonaTheme.palette.tone(Tone.Positive).text else PersonaTheme.palette.ink3, maxLines = 1)
             found.note?.takeIf { it.isNotBlank() }?.let {
                 Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.cautionText, maxLines = 2, overflow = TextOverflow.Ellipsis)

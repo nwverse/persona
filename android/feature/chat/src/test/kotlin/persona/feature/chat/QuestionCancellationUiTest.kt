@@ -61,13 +61,36 @@ class QuestionCancellationUiTest {
         assertEquals(2, sent.size)
     }
 
+    /** The cards stack (iOS PendingCards): each is answered where it is, and one leaving moves none of the others. */
+    @Test fun everyCardIsInTheStackAndOneLeavingLeavesTheOthers() {
+        fun card(id: String, text: String) = question.copy(id = id,
+            questions = listOf(Question(text, options = listOf(QuestionOption("JSON"), QuestionOption("CSV")))))
+        val first = card("first", "First card?")
+        val second = card("second", "Second card?")
+        val third = card("third", "Third card?")
+        var requests by mutableStateOf(listOf(first, second, third))
+        val sent = mutableListOf<String>()
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                InteractionPanel(requests, null, 2000.dp, null, emptySet(), { ix, _ -> sent += ix.id }, null, {})
+            }
+        }
+        for (text in listOf("First card?", "Second card?", "Third card?")) rule.onAllNodesWithText(text).onFirst().assertIsDisplayed()
+        // answered on another device: the others stay where they are
+        requests = listOf(second, third)
+        rule.onAllNodesWithText("First card?").assertCountEquals(0)
+        rule.onAllNodesWithText("Second card?").onFirst().assertIsDisplayed()
+        rule.onNode(hasText("1. JSON") and hasAnyAncestor(hasTestTag("pending-card-second"))).performClick()
+        assertEquals(listOf("second"), sent)
+        rule.onNode(hasText("1. JSON") and hasAnyAncestor(hasTestTag("pending-card-third"))).performClick()
+        assertEquals(listOf("second", "third"), sent)
+    }
+
     @Test fun triageCollapseDoesNotSubmitAndLaterKeepsOriginalAnswerForServerIntent() {
-        var collapsed by mutableStateOf(false)
         val sent = mutableListOf<Resolution>()
         rule.setContent {
             PersonaTheme(reduceMotion = true) {
-                InteractionPanel(listOf(triageQuestion), null, 600.dp, null, emptySet(), { _, resolution -> sent += resolution },
-                    null, {}, collapsed = collapsed, onCollapsedChange = { collapsed = it })
+                InteractionPanel(listOf(triageQuestion), null, 600.dp, null, emptySet(), { _, resolution -> sent += resolution }, null, {})
             }
         }
         rule.onNodeWithContentDescription("Collapse").performClick()
@@ -108,7 +131,7 @@ class QuestionCancellationUiTest {
             PersonaTheme(reduceMotion = true) {
                 InteractionPanel(requests, null, 500.dp, busy, emptySet(), { ix, resolution ->
                     sent += resolution; busy = ix.id
-                }, null, {}, collapsed = true)
+                }, null, {}, folds = RequestFolds(setOf(question.id)))
             }
         }
         rule.onNodeWithContentDescription(close).performClick()
@@ -125,7 +148,7 @@ class QuestionCancellationUiTest {
         rule.setContent {
             PersonaTheme(reduceMotion = true) {
                 InteractionPanel(listOf(request), null, 500.dp, null, uncertain,
-                    { _, _ -> fail("Must not resolve") }, null, {}, collapsed = true, blockedReason = blocked)
+                    { _, _ -> fail("Must not resolve") }, null, {}, folds = RequestFolds(setOf(question.id)), blockedReason = blocked)
             }
         }
         rule.onNodeWithContentDescription(close).assertDoesNotExist()
@@ -140,12 +163,10 @@ class QuestionCancellationUiTest {
     }
 
     @Test fun collapseDoesNotAnswerAndNormalOptionStillAnswers() {
-        var collapsed by mutableStateOf(false)
         val sent = mutableListOf<Resolution>()
         rule.setContent {
             PersonaTheme(reduceMotion = true) {
-                InteractionPanel(listOf(question), null, 600.dp, null, emptySet(), { _, resolution -> sent += resolution },
-                    null, {}, collapsed = collapsed, onCollapsedChange = { collapsed = it })
+                InteractionPanel(listOf(question), null, 600.dp, null, emptySet(), { _, resolution -> sent += resolution }, null, {})
             }
         }
         rule.onNodeWithContentDescription("Collapse").performClick()

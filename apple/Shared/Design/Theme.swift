@@ -4,6 +4,7 @@ import UIKit
 #elseif os(macOS)
 import AppKit
 #endif
+import PersonaWire
 
 /// How the whole app is drawn, picked in Settings › Interface Style: panels, cards and buttons, the page they sit on, the type,
 /// the components. The colors are Theme Color (`ThemeColor`), a choice of its own; `StyleSpec` puts the two together.
@@ -39,6 +40,41 @@ nonisolated enum AppStyle: String, CaseIterable, Identifiable, Sendable {
 }
 
 nonisolated enum Theme {
+    #if os(iOS)
+    /// A split's list column slid by a finger (#4206, `SplitColumnControl`).
+    enum Split {
+        /// How much of the blur over the pictures a drag reaches (a fraction of `.systemUltraThinMaterial`'s).
+        static let dragBlur: CGFloat = 0.8
+        /// How far the finger goes, in points, before the blur is at its most: none as it lands.
+        static let blurReach: CGFloat = 80
+        /// Faster than this, in points a second, the fling decides where the column settles, not how far it went.
+        static let fling: CGFloat = 500
+        /// How long the line takes to settle out or away after the finger lets go.
+        static let settle: TimeInterval = 0.28
+        /// How long the pictures take to fade once the line has settled, the split under them as it ends.
+        static let fade: TimeInterval = 0.2
+        /// The guide line on the line between the column and the page while a finger moves it, in the theme color (as
+        /// Feishu's; measured there at about 3 pt).
+        static let guide: CGFloat = 3
+        /// How dark the system lays a page under the column over it (measured: the page at 0.8 of its light); the drag's
+        /// page picture is taken without it and darkens as the column comes out.
+        static let overDim: CGFloat = 0.2
+    }
+
+    /// By Repository's tree on iOS (#2531): a card per repository, its worktrees and their agents a level in each, every
+    /// line's mark in one column per level; the agents in the display's rows (#3753).
+    enum Tree {
+        /// A level in.
+        static let indent: CGFloat = 22
+        /// The column a line's mark sits in: the folder, a worktree's mark, an agent's state.
+        static let column: CGFloat = 18
+        /// Above and below a line's words: the line is its whole row, at least a finger's height (`RepoTreeLine`).
+        static let rowPadding = Space.sm
+        /// The agent or worktree open beside the list (regular width).
+        static let selected = Palette.systemBlue.opacity(0.1)
+    }
+    #endif
+
     /// Orca-compatible workspace cards. Scoped to repository browsing, including nested selection surfaces.
     enum WorkspaceSidebar {
         static let background = Color(light: 0xF5F5F5, dark: 0x2A2A2A)
@@ -111,9 +147,18 @@ nonisolated enum Theme {
     #else
     private static let aiTintStrength = 0.14
     #endif
+    /// A line picked out for a moment in the accent's soft ground (the transcript line a minutes item's time jumped to).
+    static var accentTint: Color { accent.opacity(aiTintStrength) }
+    /// Any color's soft ground at the AI tint's strength: behind a mark drawn in that color (a minutes topic's icon tile,
+    /// #6563), so the mark reads at 3:1 or better on it (`StyleSpecTests`).
+    static func softTint(_ color: Color) -> Color { color.opacity(aiTintStrength) }
     /// The AI color at half strength: a mark of the AI's that is at work but not the lit one (a workflow phase with
     /// agents running that the run has moved past), apart from a ring (not started) and the full dot (lit).
     static var aiMuted: Color { ai.opacity(0.5) }
+    /// Someday on a to-do's trailing swipe (#10465), beside Done's `positive`: the owner's "not now", the system's indigo,
+    /// no state's color. Close to `ai` and to Clay's accent, which never sit beside it in a row's swipe. White words on it
+    /// read at 4.5:1 or better in both appearances (`StyleSpecTests`).
+    static let somedayTint = Hue.indigo
 
     enum Role {
         static let danger = PersonaPalette.Pair(light: 0xD93A3A, dark: 0xFF5F57)
@@ -134,6 +179,9 @@ nonisolated enum Theme {
     static let loop = Color(light: 0x2E6FD0, dark: 0x5B9BFF)
     /// Count badges on rows (unread messages): white text on it is ≥ 4.5:1 in both appearances.
     static let countBadge = Color(light: 0x636366, dark: 0x636366)
+    /// The count on a tab bar's item, as the system's tab bar draws `.badge` (white on its red), the iPad's included: iPhone
+    /// Duo's tab bar (#4231).
+    static let tabBarBadge = Color.red
     static let onSolid = Color.white
 
     /// A code to scan with another app (a QR code): dark modules on a light ground in both appearances, the way
@@ -149,12 +197,32 @@ nonisolated enum Theme {
     static let monogramFill = Color(uiColor: .secondarySystemFill)
     #endif
 
+    /// A name's disc without a picture (`Monogram`) and its letter's color: the neutral disc in the label's color, or on
+    /// the Mac in a style with hued monograms (Lark, `StyleSpec.MacChrome.monogramHues`) the hue the name picks, the same
+    /// one on every launch, with a white letter. The iPhone, iPad and watch keep the neutral disc in every style.
+    static func monogram(_ name: String) -> (fill: Color, ink: Color?) {
+        #if os(macOS)
+        let hues = spec.mac.monogramHues
+        if !hues.isEmpty {
+            // FNV-1a over the name: `hashValue` is seeded per process, so a person's color would change on every launch.
+            var h: UInt32 = 2_166_136_261
+            for s in name.unicodeScalars { h = (h ^ s.value) &* 16_777_619 }
+            return (hues[Int(h % UInt32(hues.count))], onSolid)
+        }
+        #endif
+        return (monogramFill, nil)
+    }
+
     /// Diffs and Git: their own colors, text strength (≥ 4.5:1 on the code background) for signs and counts.
     enum Diff {
         static let add = Color(light: 0x1D7A4C, dark: 0x4CC38A)
         static let del = Color(light: 0xC62B33, dark: 0xFF6369)
         static let addFill = Color(light: 0x30A46C, dark: 0x4CC38A).opacity(0.14)
         static let delFill = Color(light: 0xE5484D, dark: 0xFF6369).opacity(0.12)
+        /// The words that changed inside a changed line (the chat's `DiffView`), over that line's fill: the code on
+        /// them stays ≥ 4.5:1 in both appearances (about 7:1 dark, 11:1 light).
+        static let addEmphasis = Color(light: 0x30A46C, dark: 0x4CC38A).opacity(0.32)
+        static let delEmphasis = Color(light: 0xE5484D, dark: 0xFF6369).opacity(0.30)
         /// A modified file ("M"), the way editors mark it, kept apart from the working amber.
         static let changed = Color(light: 0x8A6A00, dark: 0xE3B341)
     }
@@ -164,7 +232,7 @@ nonisolated enum Theme {
     enum Radius {
         /// A file's thumbnail in a list row, about an icon's size (the Files tab): a page's corner, not a tile's.
         static let thumbnail: CGFloat = 3
-        /// Badges, inline code, small marks.
+        /// Badges, small marks.
         static let badge: CGFloat = 6
         /// Code blocks, thumbnails, segmented controls, small tiles.
         static let control: CGFloat = 10
@@ -233,6 +301,31 @@ nonisolated enum Theme {
         static let scrim = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor.black.withAlphaComponent(0.3) : UIColor.black.withAlphaComponent(0.08) })
         /// The bar of actions next to it: light in light mode, the dark bar it always was in dark mode.
         static let bar = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 0.17, alpha: 1) : UIColor.white })
+        /// A selection handle dragged this close to a long lifted message's top or bottom edge, or past it, scrolls the
+        /// message on that way, faster the closer it gets: up to `edgeScrollSpeed` points a second (#3188).
+        static let edgeScroll: CGFloat = 44
+        static let edgeScrollSpeed: CGFloat = 900
+        /// How far a selection handle's knob reaches past the selected lines (over the first, under the last): the text
+        /// view over a lifted message's words reaches that far past them, so a knob there is in it, to be dragged (#5291),
+        /// and the edit menu stays that far off them (#6005).
+        static let handleReach: CGFloat = 16
+    }
+    #endif
+
+    #if !os(watchOS)
+    /// The crop of a new avatar (`AvatarCropView`): drawn over the photo itself, so the same in light and dark.
+    enum Crop {
+        /// Outside the circle the avatar keeps: dimmed, so the circle reads as what is kept.
+        static let outside = Color.black.opacity(0.5)
+        /// The circle's edge.
+        static let edge = Color.white.opacity(0.9)
+    }
+
+    /// A card that adds one more to a grid of cards (Settings › Appearance › Avatar › New from Photo): an empty well
+    /// with a dashed accent edge, so it reads as a place for something new rather than one of the choices.
+    enum AddCard {
+        static var edge: Color { Theme.accent.opacity(0.45) }
+        static let dash: [CGFloat] = [Theme.Space.xs, Theme.Space.xs]
     }
     #endif
 
@@ -381,6 +474,16 @@ nonisolated enum Theme {
         var extraLeading: CGFloat { max(0, lineHeight - 1.19) * size }
     }
 
+    /// How faint something is drawn that can't be acted on for now: rows that can't be picked while selecting (the
+    /// inbox's Select, #2059; the web uses the same 45%).
+    enum Fade {
+        static let unavailable: Double = 0.45
+        /// The page-colored chip on a transcript divider, as the web's bg-page/50.
+        static let dividerBackground: Double = 0.5
+        /// An offline assistant's row in the switcher's list: the whole row, still pickable (the web and Android use 55%).
+        static let offline: Double = 0.55
+    }
+
     /// How much of a rich card must intersect the scroll viewport before its isolated content runs.
     enum Visibility {
         static let richCardThreshold: Double = 0.01
@@ -415,6 +518,7 @@ nonisolated enum Theme {
     /// Small / Standard / Large and the system's text size (up to 1.6 ×, `Theme.sizeScale`); the lines stay as they are, in a
     /// plain `.frame`. Nothing on a page writes a size as a number (`TokenRatchetTests`).
     enum Size {
+        static let nonvisualProbe: CGFloat = 0
         // Lines, rules and bars: do not scale.
         static let hairline: CGFloat = 0.5
         /// The width of the small window's source layer (VNC's picture in picture, #1839): a normal size, behind the
@@ -423,14 +527,30 @@ nonisolated enum Theme {
         /// The width the small window's card is drawn at (VNCPiPCard: Connecting…, why not), in points, about the small
         /// window's own on an iPhone so its text reads at its size there.
         static let pictureInPictureCard: CGFloat = 240
+        /// A task sheet closes on a rightward swipe that starts within `edgeBackZone` of the leading edge and travels at
+        /// least `edgeBackDistance` (a sheet has no system edge-back; #5603).
+        static let edgeBackZone: CGFloat = 24
+        static let edgeBackDistance: CGFloat = 72
         static let line: CGFloat = 1
         static let lineMedium: CGFloat = 1.5
         static let rule: CGFloat = 2
         static let ruleWide: CGFloat = 2.5
         static let bar: CGFloat = 3
+        /// How much of a long quote in a reply shows while it is folded (about four lines of body text, #2984).
+        static let quoteFold: CGFloat = 104
         static let barWide: CGFloat = 4
         /// A share bar's thickness (the assistant's stacked-bar card).
         static let meter: CGFloat = 12
+        /// An Agent chat's header folded into its slim bar (Android `Tokens.Size.slimBar`).
+        static let slimBar: CGFloat = 40
+        /// How much of the conversation a lone question card keeps in view over it when it grows past half the page
+        /// (`PendingCards`, #6277): about two lines of a message, under the chat's header as it stands open (more once an
+        /// Agents header has folded to its slim bar). The card the user has to answer gets the rest. A call keeps less for
+        /// its captions (`voiceThreadRoom`).
+        static let cardThreadRoom: CGFloat = 72
+        /// The shortest a question card over the composer can be made with its grabber (#12306): its title row and the
+        /// first lines of what it asks. The tallest leaves the conversation `Theme.Space.xl` (`FooterRoom.tallestRoom`).
+        static let cardLeast: CGFloat = 150
         /// How far a sideways strip fades out at an end with more to scroll to (`.edgeFade()`): a cut-off chip reads as
         /// "more", not as a broken row.
         static let fadeEdge: CGFloat = 24
@@ -441,6 +561,9 @@ nonisolated enum Theme {
         static let dot: CGFloat = 8
         static let dotL: CGFloat = 9
         static let dotXL: CGFloat = 10
+        /// How much of its circle the working arc (◐) draws, and the line it is drawn with (#10465).
+        static let workingArcSweep: CGFloat = 0.72
+        static let workingArcLine: CGFloat = 2
         static let markXS: CGFloat = 12
         static let markS: CGFloat = 14
         static let mark: CGFloat = 15
@@ -452,6 +575,9 @@ nonisolated enum Theme {
         static let iconS: CGFloat = 22
         static let icon: CGFloat = 24
         static let iconL: CGFloat = 26
+        /// The least height the Mac's pointer is drawn at over its picture in the app's VNC (VNCPointerArt, #3075):
+        /// about the size macOS draws it on its own screen, so it reads however small the picture is.
+        static let pointer: CGFloat = 22
         static let wellXS: CGFloat = 28
         static let wellS: CGFloat = 30
         static let well: CGFloat = 32
@@ -482,8 +608,11 @@ nonisolated enum Theme {
         static let box72: CGFloat = 72
         static let box76: CGFloat = 76
         static let box80: CGFloat = 80
-        /// The height of a saved place's map in its editor: the reminder's circle and a street or two around it.
-        static let placeMap: CGFloat = 160
+        /// The height of the map in a saved place's editor: the reminder's circle with the streets around it, and room to
+        /// pan the map and tap where the place is (#4248).
+        static let placeMap: CGFloat = 220
+        /// The map a place answer draws in the chat (`PlaceMapCard`, #5543): small enough to scroll past.
+        static let chatMap: CGFloat = 160
         static let box110: CGFloat = 110
         static let box120: CGFloat = 120
         /// The longest a tab's name gets in the chat header's strip of the space's tabs: one long name cannot push the
@@ -491,6 +620,8 @@ nonisolated enum Theme {
         static let tabName: CGFloat = 120
         static let box140: CGFloat = 140
         static let box150: CGFloat = 150
+        /// A file's card above the composer (#8361): a name of about 14 characters whole, and the next card showing.
+        static let box160: CGFloat = 160
         static let box180: CGFloat = 180
         static let box200: CGFloat = 200
         static let box240: CGFloat = 240
@@ -503,11 +634,27 @@ nonisolated enum Theme {
         // Wide screens (iPad).
         /// A page meant to be read, not a list (the welcome page): no wider than this, centered.
         static let readable: CGFloat = 560
+        /// The square a new avatar is cropped in (Settings › Appearance › Avatar › New from Photo): no wider than this,
+        /// narrower when the sheet is.
+        static let avatarCrop: CGFloat = 320
         /// The widest the Agents chat header's title gets on a wide page (iPad, Mac): on an iPhone it takes all the room
         /// between the round buttons; past this a line is too long to read at a glance.
         static let headerTitle: CGFloat = 480
         /// The list column of a split on iPad: wide enough for the agents' cards and the inbox rows.
         static let sidebarMin: CGFloat = 340
+        /// The open iPhone Duo's list column, its one width (#4206), upright over the page and on its side beside it: as
+        /// wide as ChatGPT's sidebar on the open Duo (320 of its 669 pt upright, leaving the page most of its 951 pt on its
+        /// side). The system's own was about 199 pt upright and 239 on its side, too narrow for the sidebar's rows.
+        static let sidebarPhone: CGFloat = 320
+        /// The narrowest a split's page gets beside its list column (iOS, `SplitPageMin`), no narrower than a large phone's
+        /// screen: where the column would leave the page less, it lies over the page instead (the open iPhone Duo and an
+        /// iPad mini, upright). At 349 pt beside the Duo's 320 pt column the split could not settle whether the page fit,
+        /// put the column away and back on every frame, and the scene ran out of its 10 seconds (#4206).
+        static let splitPageMin: CGFloat = 400
+        /// The knowledge map's outline and detail column side by side from this width (#7251): any iPad in landscape,
+        /// a 13-inch one upright beside its sidebar, a large iPhone turned; narrower, the outline alone.
+        static let knowledgeMapTwoColumns: CGFloat = 540
+        /// The iPad's list column, its one width (#4206).
         static let sidebar: CGFloat = 400
         static let sidebarMax: CGFloat = 480
         /// The narrowest column of a card grid (Machines' cards): two side by side in an iPad's detail column.
@@ -522,21 +669,193 @@ nonisolated enum Theme {
         static let codeSideColumn: CGFloat = 300
         /// The width from which an extension's code page puts its side column beside the main one (#2961).
         static let codeSplitMin: CGFloat = 700
+        // An extension's tiles (UI version 6's grid and carousel, #827).
+        /// A grid's narrowest tile: two to a phone, more on wider screens.
+        static let tileMin: CGFloat = 150
+        /// A tile's least height.
+        static let tileHeight: CGFloat = 96
+        /// A carousel's narrow tile (scenes) and its usual one (rooms); a wide one (cameras) takes most of the width.
+        static let tileNarrow: CGFloat = 140
+        static let tileRegular: CGFloat = 200
+        /// A wide carousel tile's share of the width it scrolls in (the next one's edge shows).
+        static let tileWideShare: CGFloat = 0.8
+        // An extension's gauge tile (UI version 9, #9337).
+        static let gaugeRing: CGFloat = 96
+        static let gaugeRingCompact: CGFloat = 80
+        static let gaugeStroke: CGFloat = 9
+        // An extension's graph canvas (UI version 10, #9727): one fixed node box and its gaps.
+        static let graphNodeWidth: CGFloat = 224
+        static let graphNodeHeight: CGFloat = 64
+        static let graphNodeGap: CGFloat = 32
+        static let graphPageShare: CGFloat = 0.7
+        static let graphPageMinHeight: CGFloat = 320
+        static let graphPageMaxHeight: CGFloat = 900
+        static let graphPreviewHeight: CGFloat = 200
+        static let graphFoldChip: CGFloat = 24
+        static let graphPreviewMinScale: CGFloat = 0.01
+        static let graphZoomStep: CGFloat = 1.25
+        static let graphWheelZoomSensitivity: Double = 0.0025
+        // An extension's 3D scene (UI version 11, #12544): page share, compact preview and pin collision box.
+        static let scenePageShare: CGFloat = 0.62
+        static let scenePageMinHeight: CGFloat = 280
+        static let scenePageMaxHeight: CGFloat = 640
+        static let scenePreviewHeight: CGFloat = 200
+        /// What a page's scene adds to the model's own height: room for pins above it and the control bar below.
+        static let scenePageChrome: CGFloat = 120
+        static let sceneZoomStep: Double = 1.25
+        static let sceneWheelZoomSensitivity: Double = 0.0025
+        static let sceneOrbitSensitivity: Double = 0.45
+        static let scenePinCompactWidth: CGFloat = 44
+        static let scenePinCharWidth: CGFloat = 9
+        static let scenePinBaseWidth: CGFloat = 40
+        static let scenePinHeight: CGFloat = 32
+        // A pin pill's estimated width, for keeping pins apart: its icon, the gap before its state, the widest its
+        // text may grow, and the width of one wide (CJK) character.
+        static let scenePinIconWidth: CGFloat = 18
+        static let scenePinStateGap: CGFloat = 6
+        static let scenePinTextMaxWidth: CGFloat = 180
+        static let scenePinWideCharWidth: CGFloat = 13.5
+        static let sceneLabelHeight: CGFloat = 22
+    }
+
+    /// UI version 11's 3D `scene` component (#12544): calm architectural material defaults when a shape omits `color`,
+    /// warm and cool lamp tints, and light/dark illumination levels (dark mode dims the room lighting, never the
+    /// extension's `#RRGGBB` shape colors).
+    enum Scene {
+        static let defaultYaw: Double = 225
+        static let defaultPitch: Double = 35
+        static let defaultZoom: Double = 1
+        static let minPitch: Double = 10
+        static let maxPitch: Double = 90
+        static let minZoom: Double = 0.5
+        static let maxZoom: Double = 4.0
+        /// Pins draw above the model, nearer ones over farther ones: a pin's layer is this less its depth.
+        static let pinLayerBase: Double = 10_000
+        static let fitMargin: Double = 1.1
+        static let accessibilityYawStep: Double = 30
+        static let accessibilityPitchStep: Double = 15
+        static let matteHex: UInt32 = 0xECE7DE
+        static let woodHex: UInt32 = 0xC9A97E
+        static let tileHex: UInt32 = 0xE5E0D6
+        static let metalHex: UInt32 = 0xB8BCC2
+        static let screenHex: UInt32 = 0x1E2024
+        static let glassHex: UInt32 = 0xB8D4E3
+        static let warmLightHex: UInt32 = 0xFFDCAA
+        static let coolLightHex: UInt32 = 0xE6F2FF
+        static let sunLightHex: UInt32 = 0xFFF9EE
+        static let skyLightHex: UInt32 = 0xDDE8F8
+        static let lightAmbientIntensity: CGFloat = 260
+        static let darkAmbientIntensity: CGFloat = 180
+        static let lightKeyIntensity: CGFloat = 420
+        static let darkKeyIntensity: CGFloat = 260
+        static let lightFillIntensity: CGFloat = 140
+        static let darkFillIntensity: CGFloat = 110
+        // A lit lamp warms its corner of the room without washing light walls out to white.
+        static let lampIntensity: CGFloat = 90
+        static let lampAttenuationStart: CGFloat = 0.1
+        static let lampAttenuationEnd: CGFloat = 2.4
+        static let maxOmniLights: Int = 8
+        static let glassOpacity: CGFloat = 0.42
+        static var ground: Color { StyleSpec.current.usesGlass ? Theme.groupedCard : Theme.card }
     }
 
     /// The system's sidebar column on iPad (iOS 26, the glass styles), measured from its pixels: the split fills the
     /// status bar above the column with it (`SidebarTopFill`), which the column itself cannot draw into.
     static let systemSidebar = Color(light: 0xE6E9EE, dark: 0x191C20)
 
-    /// Motion: a state change snaps, a layout change glides. Nothing repeats except the Needs You dot, the work spinner and
-    /// the persona's dot in the Persona tab's top bar (docs/apple/persona.md), and those stop with Reduce Motion (the spinner
-    /// is the system's).
+    /// The to-dos' calendar (#2029, docs/assistant/todos.md "Calendar"): its time axis, its columns and how a to-do's
+    /// block is drawn on it.
+    enum CalendarGrid {
+        /// An hour on the time axis: a to-do's block (`Size.tapTarget` high) takes most of one, so two an hour apart
+        /// never overlap.
+        static let hour: CGFloat = 52
+        /// The column of hours at the left of a day: "09:00", "11:00 AM" and the now line's "2:20 PM" fit.
+        static let gutter: CGFloat = 60
+        /// The same on a phone's week, whose seven columns need the room: the hours alone, and the moment's "14:20".
+        static let gutterNarrow: CGFloat = 40
+        /// A day of the month grid, at the least: its date and two lines.
+        static let monthCell: CGFloat = 92
+        /// The width from which the week shows each to-do's own block with its time and state (iPad, Mac); narrower,
+        /// a block is a few characters and the to-dos due at one time share one.
+        static let wide: CGFloat = 600
+        /// A day's dots in the week strip: at most this many, the rest are counted in the day.
+        static let dots = 3
+        /// The ground of a to-do's block and chip: its state's color, this strong.
+        static let tint: Double = 0.14
+        /// A done to-do, faded.
+        static let doneFade: Double = 0.5
+        /// A day of the month grid that belongs to the month before or after.
+        static let outsideFade: Double = 0.45
+        /// A to-do being dragged, where it was (#2045): where it would land is drawn in full.
+        static let liftedFade: Double = 0.3
+        /// How far the axis scrolls each frame while a dragged to-do is held near its top or bottom edge.
+        static let autoscrollStep: CGFloat = 4
+        /// Lines a day of the month grid shows: its entries, or one fewer and "N more".
+        static let monthLines = 3
+        /// Where a new to-do's time snaps to when the empty axis is tapped, in minutes.
+        static let snapMinutes = 30
+        /// The calendar's ground under the page's controls: white on the grouped gray in the glass styles, as the list's
+        /// rows are; the style's card otherwise.
+        static var ground: Color { StyleSpec.current.usesGlass ? Theme.groupedCard : Theme.card }
+        /// The hour lines and the columns' edges; the line under the all-day row is `lineStrong`.
+        static let line = Color.primary.opacity(0.1)
+        static let lineStrong = Color.primary.opacity(0.18)
+    }
+
+    /// A heat grid (`HeatGrid`, docs/design/DESIGN_SYSTEM.md 3.15): the token calendar's squares, a day each (a column a
+    /// week) or an hour each (a row a day), in the theme color's steps from faint to full and no usage in the neutral
+    /// fill. The squares keep their size at every text size; a wider screen shows more weeks.
+    enum Heat {
+        /// A day's square and the room between two: 19 weeks across an iPhone's card.
+        static let cell: CGFloat = 13
+        static let gap: CGFloat = 3
+        static let radius: CGFloat = 3
+        /// An hour's square on the last week's grid: as wide as 24 fit, this high, this far apart.
+        static let hourHeight: CGFloat = 15
+        static let hourGap: CGFloat = 2
+        /// The fewest and the most weeks a calendar shows.
+        static let minWeeks = 8
+        static let maxWeeks = 53
+        /// The theme color's strength at each step above none (`HeatLevels`, four steps).
+        static let steps: [Double] = [0.28, 0.5, 0.75, 1]
+        /// Today's outline and the picked square's.
+        static let todayLine: CGFloat = 1.5
+        static let pickedLine: CGFloat = 2
+
+        /// A square at step `level`: 0 is no usage, 1 to 4 the theme color's steps.
+        static func fill(_ level: Int) -> Color {
+            level <= 0 ? Theme.Fill.chip : Theme.accent.opacity(steps[min(level, steps.count) - 1])
+        }
+    }
+
+    /// Motion: a state change snaps, a layout change glides. Nothing repeats except the Needs You dot, the work spinner,
+    /// the persona's dot in the Persona tab's top bar (docs/apple/persona.md), the dot of a held mic (`DictationHold`) and,
+    /// when it is turned on, the composer's glow while a reply is generating (`ComposerGlow`); those stop with Reduce Motion
+    /// (the spinner is the system's).
+    /// The Agents' owner-requested single capsule: filter choices and a fixed grouping menu.
+    enum FilterCapsule {
+        static let separatorHeight: CGFloat = 22
+        static var selection: Color { Theme.accent.opacity(0.12) }
+    }
+
     enum Motion {
         static let state = Animation.snappy(duration: 0.25)
         static let layout = Animation.smooth(duration: 0.3)
         /// Opening and closing things (a work card, a menu, a section): a state change, 0.25 s (it was the system's
         /// default snappy, 0.5 s, which trailed behind the finger).
         static let standard = state
+        /// Task-draft dismissal uses the same six-second Undo window as the web.
+        static let draftUndo: Duration = .seconds(6)
+        /// A to-do ticked, put in Someday or deleted from the list (#10465): its "Done · Undo" toast stays this long, and
+        /// the write waits as long on the device before it goes, so Undo sends nothing (`TodoOutbox`).
+        static let todoUndo: Duration = .seconds(4)
+        /// `todoUndo` while VoiceOver or Switch Control runs: the toast's Undo is out of their reach, so the rows offer it
+        /// and the write waits this long (HIG-005).
+        static let todoUndoAssistive: Duration = .seconds(20)
+        /// How long an alert that follows another waits before asking: UIKit drops a presentation made while another is
+        /// still going away, and SwiftUI took up to about 0.8 s to close one answered elsewhere (queued "already exists"
+        /// questions, #6113).
+        static let alertHandoff: Duration = .seconds(1)
         /// A block of content unfolding in place, its height growing (the Feishu pinned shelf's rows): slower than a
         /// state change so the eye can follow the rows coming in. `standard` read faster than Feishu's own (2026-11-04).
         static let expand = Animation.smooth(duration: 0.4)
@@ -550,8 +869,11 @@ nonisolated enum Theme {
         /// A compositor request, not a guaranteed upper bound on rendering frequency.
         static let breathMinimumFPS: Float = 10
         static let breathPreferredFPS: Float = 30
-        /// What opens in the chat shows itself (a mask growing down from its header, and a fade); its height does not
-        /// animate (`unfolding`). Closing folds it away first, quicker, then removes it.
+        /// One turn of the working arc (◐, a to-do being worked on, #10465), the To-dos list's only other loop: paused
+        /// off screen, still with Reduce Motion.
+        static let workingArcTurn: TimeInterval = 1
+        /// What opens in the chat fades in over the space it takes; its height does not animate (`unfolding`). What
+        /// closes there goes at once (#3005); `conceal` is for what fades away elsewhere (a menu, an inbox event).
         static let revealTime = 0.28
         static let concealTime = 0.2
         static let reveal = Animation.easeOut(duration: revealTime)
@@ -574,8 +896,197 @@ nonisolated enum Theme {
         }
         /// Something the finger dragged aside going back to its place (a message swiped to quote it): a little bounce.
         static let springBack = Animation.spring(duration: 0.3, bounce: 0.25)
+        /// iPhone Duo's tab bar (#9837, after the system's tab bar there): a glass lens leaves the chosen item for the new
+        /// one, swelling as it goes (`lensSwellTime`, to `lensSwellScale`, `lensStretch` longer along the bar than across),
+        /// glides there with a bounce (`lensGlide`, `lensGlideTime`) and shrinks and fades once it lands (`lensFadeTime`);
+        /// with Reduce Motion the items only cross-fade (`tabFade`).
+        static let lensGlide = Spring(duration: 0.45, bounce: 0.3)
+        static let lensGlideTime: TimeInterval = 0.45
+        static let lensSwellTime: TimeInterval = 0.15
+        static let lensFadeTime: TimeInterval = 0.2
+        static let lensSwellScale: CGFloat = 1.2
+        static let lensStretch: CGFloat = 0.12
+        static let tabFade = Animation.easeInOut(duration: 0.2)
         /// The stationary sidebar rises only this far as the page slides off it; no horizontal parallax or zoom.
         static let drawerLift = Theme.Space.s
+
+        // The composer, after Telegram's input panel (docs/apple/ios.md, New shell, "Input motion"): only its timings and curves.
+        /// The draft gaining or losing a line: short, so the field never trails behind the typing.
+        static let composerGrow = Animation.easeInOut(duration: 0.1)
+        /// The keyboard's own spring on iOS 26 (critically damped): the box opening as the keyboard rises moves with it.
+        static let keyboard = Animation.interpolatingSpring(mass: 1, stiffness: 555.027, damping: 47.118)
+        /// Send taking the round button's place and leaving it: it grows out of a point near the right edge.
+        static let composerSwap = Animation.timingCurve(0.38, 0.7, 0.125, 1, duration: 0.4)
+        /// What fades with the swap fades faster than it grows, and clears a slight blur.
+        static let composerSwapFade = Animation.easeInOut(duration: 0.2)
+        static let composerSwapBlur: CGFloat = 4
+        /// Where send grows from: this small, not zero, so the scale animation has a size to start at.
+        static let composerSwapFrom: CGFloat = 0.001
+        /// An icon swapped inside the round button shrinks to this and fades as the next grows from it.
+        static let composerSwapScale: CGFloat = 0.2
+        /// Send pressed down shrinks, slowly, and comes back quicker when let go.
+        static let composerPressScale: CGFloat = 0.75
+        static let composerPress = Animation.easeOut(duration: 0.4)
+        static let composerRelease = Animation.timingCurve(0.38, 0.7, 0.125, 1, duration: 0.25)
+        /// A quote bar over the field slides in by its own height while the box grows with it; it fades in quicker than
+        /// it fades out.
+        static let composerAccessory = Animation.timingCurve(0.38, 0.7, 0.125, 1, duration: 0.4)
+        static let composerAccessoryIn = Animation.easeInOut(duration: 0.15)
+        static let composerAccessoryOut = Animation.easeInOut(duration: 0.2)
+        /// Holding the mic: the circle under the finger springs up from a small one; the strip and the lock come with it.
+        static let holdAppear = Animation.spring(duration: 0.5, bounce: 0.3)
+        static let holdAppearScale: CGFloat = 0.2
+        static let holdLeave = Animation.easeOut(duration: 0.18)
+        /// The 「+」 panel (`AttachSheet`, a system sheet): switching tabs, the old page fades out over the new.
+        static let attachTabFade = Animation.easeInOut(duration: 0.23)
+        /// The tab bar's highlight sliding to the tab picked.
+        static let attachLens = Animation.timingCurve(0.38, 0.7, 0.125, 1, duration: 0.4)
+        /// The tab bar giving way to the caption and send (a cross-fade), and coming back.
+        static let attachBarSwap = Animation.interpolatingSpring(mass: 1, stiffness: 555.027, damping: 47.118)
+        /// A photo's mark: picked, it fills and bounces (0.9, 1.1, 1); let go, it empties.
+        static let attachPick = Animation.easeOut(duration: 0.21)
+        static let attachUnpick = Animation.easeIn(duration: 0.15)
+        static let attachPickSqueeze: CGFloat = 0.9
+        static let attachPickBounce: CGFloat = 1.1
+        static let attachPickSqueezeTime: TimeInterval = 0.08
+        static let attachPickBounceTime: TimeInterval = 0.13
+        static let attachPickSettleTime: TimeInterval = 0.1
+
+        /// The recording dot's blink, one way (it blinks while the finger holds, and stops with Reduce Motion).
+        static let holdBlink = Animation.easeInOut(duration: 0.5)
+        /// The composer turning into the dictation bar and back (`DictationBar`): one spring for the surface's shape, a
+        /// slight bounce coming in and none going out; the buttons come in a beat later and leave quicker.
+        static let dictationIn = Animation.spring(duration: 0.42, bounce: 0.16)
+        static let dictationOut = Animation.spring(duration: 0.32, bounce: 0)
+        static let dictationButtonsIn = Animation.spring(duration: 0.36, bounce: 0.2).delay(0.06)
+        static let dictationButtonsOut = Animation.easeOut(duration: 0.14)
+        /// How small the bar's buttons are as they come in and go.
+        static let dictationButtonFrom: CGFloat = 0.6
+    }
+
+    /// The 「+」 panel (`AttachSheet`): a system sheet at half height (detents medium and large), a grid of recent photos
+    /// and a bar at its foot (docs/apple/ios.md, New shell, "Attach panel").
+    enum Attach {
+        static let dim = 0.25
+        /// The grid: three equal square columns a point apart; the camera's cell is one of them.
+        static let columns = 3
+        static let gridSpacing: CGFloat = 1
+        /// A cell's selection mark: its size and inset from the cell's top right, the white ring round it.
+        static let badge: CGFloat = 29
+        static let badgeInset: CGFloat = 3
+        static let badgeRing: CGFloat = 1.5
+        static let badgeTarget: CGFloat = 45
+        /// The tab bar: a pill at the sheet's foot, a tab's cell, its icon. A pill for five or more tabs is the screen
+        /// less `barInset` each side.
+        static let barInset: CGFloat = 22
+        static let barHeight: CGFloat = 62
+        static let barTab: CGFloat = 72
+        static let barIcon: CGFloat = 30
+        static let barLensInset: CGFloat = 3
+        /// The pill's width for two, three and four tabs.
+        static let barWidths: [CGFloat] = [160, 240, 300]
+        static let thumbnailScale: CGFloat = 3
+        /// How many photos a page of the grid asks the library for at a time.
+        static let fetchLimit = 600
+    }
+
+    /// The image editor (`ImageEditor`, `ImageEdits`): Box, Pen and Crop over a picture on black, as Photos edits.
+    nonisolated enum ImageEdit {
+        /// A mark's line on screen: thin, medium, thick. Medium is the 3.5 pt Box and Pen drew with before there was a
+        /// choice, and the default; the line is burned in at the same width relative to the picture as it is seen.
+        static let lineWidths: [CGFloat] = [2, 3.5, 7]
+        static let defaultLineWidth = 1
+        /// Six inks, Apple's dark-mode system colors as fixed values (red, yellow, green, blue, white, black): a mark keeps
+        /// its color in the picture whatever the appearance it is later seen in.
+        static let inks: [(red: CGFloat, green: CGFloat, blue: CGFloat)] = [
+            (1, 0.271, 0.227), (1, 0.839, 0.039), (0.188, 0.820, 0.345), (0.039, 0.518, 1), (1, 1, 1), (0, 0, 0),
+        ]
+        /// The ink swatch's ring: the one picked, the others.
+        static let swatchRing: CGFloat = 3
+        static let swatchRingIdle: CGFloat = 1
+        static let swatchRingIdleOpacity = 0.4
+        /// Room left round the picture while cropping, so the handles on its edges can be taken.
+        static let cropInset: CGFloat = 28
+        /// The crop frame's line, its corner marks (length and thickness), and how far round an edge a finger takes it.
+        static let cropLine: CGFloat = 1
+        static let cropCorner: CGFloat = 20
+        static let cropCornerWidth: CGFloat = 3
+        static let cropGrab: CGFloat = 22
+        /// The smallest crop, a side on screen.
+        static let cropMinimum: CGFloat = 64
+        /// Outside the crop, dimmed; the thirds drawn inside it while it is dragged.
+        static let cropDim = 0.6
+        static let cropThirdsOpacity = 0.45
+    }
+
+    /// The composer's dictation bar (`DictationBar`, ChatGPT's): [✕] the wave [■] [↑] in the composer's capsule.
+    enum DictationBar {
+        /// A quiet column's dot, and the room from one column's centre to the next.
+        static let dot: CGFloat = 3
+        static let pitch: CGFloat = 6
+        /// The tallest a column grows at full voice, as a share of the wave's height, and the curve from level to height
+        /// (below 1: quiet speech already shows).
+        static let tallest: CGFloat = 0.72
+        static let levelCurve: CGFloat = 0.7
+        /// A new column every this long: the row slides one pitch per column (about 66 pt a second).
+        static let sampleInterval: TimeInterval = 0.09
+        /// The wave's timeline while the bar is off: it stays (no view to build again on the tap) but does nothing.
+        static let idleTick: TimeInterval = 3600
+        /// The level follows the voice up quicker than it falls back (exponential smoothing time constants, seconds).
+        static let attack: TimeInterval = 0.05
+        static let release: TimeInterval = 0.18
+        /// The microphone's loudness mapped onto 0…1 (decibels of full scale).
+        static let floorDB: Float = -50
+        static let ceilingDB: Float = -14
+        /// The oldest columns fade toward the left over this many columns, down to `oldest` of their ink.
+        static let fadeColumns = 7
+        static let oldest = 0.25
+        /// The newest column's ink as it comes in at the right edge (the wave's mask).
+        static let newest = 0.35
+        /// A column's ink, quiet and at full voice.
+        static let quietInk = 0.5
+        static let loudInk = 1.0
+        /// After the bar closed, how long ■ and ↑ keep their order before following the mic's place again: past the bar's
+        /// close (`Theme.Motion.dictationOut`, 0.32 s), so they never swap while they fade (#9619).
+        static let reorderAfter: TimeInterval = 0.4
+        /// After stop or send, how long the recognizer may take for its last words before the bar settles for what it has.
+        static let finalWait: Duration = .milliseconds(1200)
+        /// The bar's parts while it is off: drawn, but not seen. Fully transparent, SwiftUI skips drawing them, and their first
+        /// drawing (the symbols, the circles, the wave) landed on the frames right after the tap.
+        static let hiddenInk = 0.001
+        /// The composer's row under the bar leaves the accessibility tree this long after the bar opens, past its spring.
+        static let treeAfter: Duration = .milliseconds(450)
+        /// The bar's haptic generator is prepared this long after the bar opens, past the first frames of its spring.
+        static let warmAfter: Duration = .milliseconds(500)
+        /// ■ / ↑: a spinner on the button once the last words have taken this long.
+        static let spinnerAfter: Duration = .milliseconds(150)
+        /// ↑: the longest the bar waits for the send to take the draft before it closes.
+        static let sendWait: Duration = .milliseconds(160)
+        /// After the bar closes, how long before the audio session is let go (past the close's spring).
+        static let settle: Duration = .milliseconds(450)
+        /// The columns' ink is drawn in this many steps of opacity (one fill each).
+        static let inkSteps = 12
+    }
+
+    /// Hold a mic to dictate while held, slide left to drop it (`DictationHold`, `MicPress`, #9619): Telegram's thresholds
+    /// for its voice button, but a longer wait before a touch counts as a hold, and no lock (a tap keeps it on).
+    enum Hold {
+        /// A touch held this long is a hold; let go sooner it is a tap (dictation on or off). Telegram's 0.19 s took a
+        /// slow tap for a hold that ended, having heard nothing, as the finger lifted.
+        static let delay: Duration = .milliseconds(300)
+        /// While the finger is down, this far left drops what was heard.
+        static let cancelDistance: CGFloat = 150
+        /// Let go: a shorter slide counts, or a quick flick.
+        static let releaseCancelDistance: CGFloat = 100
+        static let flickSpeed: CGFloat = 400
+        /// How far the label stays put before it follows the finger, at half its pace.
+        static let labelDeadZone: CGFloat = 8
+        static let labelFollow: CGFloat = 0.5
+        static let labelFade: CGFloat = 10
+        /// The circle under the finger, and how small it gets as the finger slides toward cancel.
+        static let circle: CGFloat = 96
+        static let circleSlide: CGFloat = 300
+        static let circleSmallest: CGFloat = 0.4
     }
 
     /// Categories with no meaning beyond telling them apart (memory types).
@@ -583,13 +1094,36 @@ nonisolated enum Theme {
         static let blue = Color(light: 0x2E6FD0, dark: 0x5B9BFF)
         static let orange = Color(light: 0xB35400, dark: 0xFF9F0A)
         static let green = Color(light: 0x1D7A4C, dark: 0x4CC38A)
-        static let purple = Color(light: 0x7A5AF8, dark: 0x9D8BFF)
+        static let purple = Palette.purple
         /// System indigo.
         static let indigo = Color(light: 0x5856D6, dark: 0x5E5CE6)
         /// Health's heart (the health space, docs/assistant/health.md).
         static let pink = Color(light: 0xD62E5C, dark: 0xFF6B8B)
         /// A quiet mark: a list row's tile that is information, not a place to go.
         static let gray = Color(light: 0x8E8E93, dark: 0x636366)
+        // The rest of an extension's named colors (UI version 6, `ExtensionUIStyle.color`, #827): marks only (icons,
+        // badges' tints, tiles, chart series), never text.
+        static let red = Color(light: 0xD1342C, dark: 0xFF6961)
+        static let amber = Color(light: 0xB7791F, dark: 0xF5B342)
+        static let yellow = Color(light: 0x9A7B00, dark: 0xFFD60A)
+        static let teal = Color(light: 0x0F7C80, dark: 0x40C8C8)
+        /// A blue-gray that reads as a mark on a card (the system gray is under 3:1 there in both modes).
+        static let slate = Color(light: 0x5E6B7D, dark: 0x9AA7B8)
+        /// A meeting's summary card (#6563): the four topic tints a group's cards share, by the group's place (the first
+        /// group the first). They only tell groups apart: never a state's color (red, orange, green, yellow) or the AI's.
+        static let minutesGroups: [Color] = [blue, teal, pink, slate]
+    }
+
+    /// A permission mode's tone where the Agents header shows it (#3719), by how much the agent does without asking.
+    /// None is an agent state's color (blue, amber, green), which the same header uses for the state. Asks first is the
+    /// quiet ink (`.secondary`), drawn by the header itself.
+    enum ModeTone {
+        /// Plan Only: it reads and plans, and acts only once the plan is approved.
+        static let plans = Color(light: 0x0E7C86, dark: 0x4FD1C5)
+        /// Auto-Edit and Auto: it acts by itself within limits.
+        static var acts: Color { Hue.purple }
+        /// Allow Everything: nothing is asked, in the warning the new-agent form gives it.
+        static var allowsAll: Color { Theme.danger }
     }
 
     /// The user's own messages.
@@ -610,6 +1144,8 @@ nonisolated enum Theme {
     enum Shell {
         /// The Assistant | Agents switch's selected segment, inside its glass capsule.
         static let segment = Color(light: 0xE6E6E6, dark: 0x3A3A3C)
+        /// The dictation bar's quieter round buttons (cancel, stop): the switch's grey, under the composer's ink.
+        static var roundMuted: Color { segment }
         /// The composer's field and its expanded card.
         static let composer = Color(light: 0xFFFFFF, dark: 0x1F1F21)
         static let composerStroke = Color(light: 0xE3E3E3, dark: 0x3A3A3C)
@@ -620,9 +1156,12 @@ nonisolated enum Theme {
         static let drawer = Color(light: 0xF9F9F9, dark: 0x171717)
         /// The composer: its field's corner when it is one line (a capsule) and when it has grown into a card.
         static let composerRadius: CGFloat = 32
-        /// Reserve most of the keyboard-visible viewport for the conversation, not the draft.
-        static let composerHeightFraction: CGFloat = 0.22
-        static let composerMinimumLines = 3
+        /// The colors that travel around the composer while a reply is generating (Glow While Replying, `ComposerGlow`):
+        /// blue through violet to pink, each in its light and dark shade.
+        static let composerGlow: [Color] = [Hue.blue, Hue.indigo, Hue.purple, Hue.pink]
+        /// iPhone and iPad drafts grow through six lines before scrolling; keyboard height does not lower the cap.
+        static let composerPhoneMaximumLines = 6
+        /// The shared Mac/visionOS composer retains its existing eight-line cap.
         static let composerMaximumLines = 8
         /// Text and TextField round line heights differently; half a line distinguishes adjacent counts.
         static let composerLineTolerance: CGFloat = 0.5
@@ -631,16 +1170,55 @@ nonisolated enum Theme {
         static let switchHeight: CGFloat = 44
         /// The largest text size the top bars grow with (their buttons, the face, the switch: up to 1.35 ×): larger, the
         /// bar reached into the search field pulled out under it on Agents, whose room is a line of the system's that
-        /// does not grow with the text (`ShellNavigationClearance`).
-        static let topBarLargestTypeSize: DynamicTypeSize = .xxxLarge
+        /// does not grow with the text (`ShellNavigationClearance`). iOS 18's line is shorter (78 pt with the bar, #6730):
+        /// there the bars stop a size earlier.
+        static var topBarLargestTypeSize: DynamicTypeSize {
+            if #available(iOS 26.0, *) { .xxxLarge } else { .xxLarge }
+        }
         /// Room on Agents between the navigation bar and the search field for the top bar, which is taller (`AgentsHeader`):
         /// the height of the system's prompt line that made it before (`ShellNavigationClearance`), the same at every size.
         static let agentsRoom: CGFloat = 34
         /// The optional third segment must leave both side buttons reachable on narrow screens.
         static let compactSwitchLargestTypeSize: DynamicTypeSize = .large
-        /// A segment of the switch on iPhone Duo's side rail (`ShellSideRail`): square, a symbol over the page's name, within
-        /// the column the system's bars take beside the content.
-        static let railSegment: CGFloat = 54
+        /// The switch as iPhone Duo's tab bar on the outer display (#4231: `ShellSwitch(axis: .vertical)` in its side
+        /// column; the open Duo shows the system's tab bar): a bar of fixed
+        /// items, as the system's tab bar it stands for, so its items keep the default text size (DESIGN_SYSTEM.md 6.2), each
+        /// also shown large on a long press (the Large Content Viewer).
+        static let switchTypeSize: DynamicTypeSize = .large
+        /// A tab bar item there: the page's symbol in a `Size.well` circle over its name, a tap target wide and tall and
+        /// more, so the names fit in every language (「メッセージ」 at the least scale).
+        static let tabBarItemWidth: CGFloat = 56
+        static let tabBarItemHeight: CGFloat = 56
+        /// iPhone Duo's side column, where the system puts its bars down the side (both displays: an 84 pt safe-area
+        /// inset): the strip at the screen's edge the system's bars keep clear of. The status bar is centred on the rest of
+        /// the column (its clock 49 pt from the edge on both displays), and so is the side tab bar.
+        static let sideColumnEdge: CGFloat = 14
+        /// The side column from its foot up (`ShellSideRail`), one set of values on both displays, so the side tab bar stands
+        /// at the same height when the Duo folds or unfolds: the column's foot (the safe area's) to the lowest button, then
+        /// the face and the page's action a `sideRailSpacing` apart, then the tab bar a `sideTabBarGap` more above them. On
+        /// the open Duo, where nothing is under the bar, their room stays empty (`ShellRailButtonRoom`), so the bar's foot is
+        /// as far above the column's foot as on the outer display: the bar in the column's lower middle there too, as a tab
+        /// bar down the side of the outer display stands (the owner's reference, #4231), not a small block at the foot.
+        static let sideRailFoot: CGFloat = Space.l
+        static let sideRailSpacing: CGFloat = Space.m
+        static let sideTabBarGap: CGFloat = Space.s
+        /// A tab bar item's count there (`TabBarCount`, the system's tab bar badge: `Size.badge` tall, its number
+        /// `Font.labelHeavy`): ringed this wide in the page's color, apart from the chosen item's circle and the symbol, and
+        /// centred this far inside the top trailing corner of the symbol's `Size.well`, so it rests on the circle's rim.
+        static let tabBarBadgeRing: CGFloat = Size.lineMedium
+        static let tabBarBadgeInset: CGFloat = Space.xxs
+        /// The system's own items down that column (a page's bar items, a search at its foot), measured on iOS 27.2 on both
+        /// displays (#9837): each a 48 pt glass, Back alone, 12 pt over the rest in one glass, 4 pt apart in it; at every text
+        /// size. The first one's top is 174 pt below the safe area's on the outer display (its camera is over the status
+        /// bar there), 124 pt on the inner one; a search stands at the foot, its top 38 pt above the safe area's foot.
+        static let systemBarItem: CGFloat = 48
+        static let systemBarItemGap: CGFloat = 4
+        static let systemBarBackGap: CGFloat = 12
+        static let systemBarTopOuter: CGFloat = 174
+        static let systemBarTopInner: CGFloat = 124
+        static let systemBarFootItemTop: CGFloat = 38
+        /// The outer display is narrower than this (466 pt), the inner one wider (669 pt upright, 951 pt on its side).
+        static let outerDisplayWidest: CGFloat = 600
     }
 
     /// The page behind lists and chats.
@@ -651,8 +1229,12 @@ nonisolated enum Theme {
 
     static let primaryText = Color(light: 0x1C1C1E, dark: 0xF2F2F7)
     static let codeBackground = Color(light: 0xF3F1EC, dark: 0x1C1D21)
+    /// A reply's code block's title bar (#2984): its language and Copy, a shade off `codeBackground`.
+    static let codeBar = Color(light: 0xE8E5DE, dark: 0x27282D)
+    /// A reply's quote (#2984): its card under the accent bar, the accent faint.
+    static var quoteBackground: Color { accent.opacity(0.08) }
 
-    /// Syntax colors in the file viewer (docs/apple/ios.md「文件查看器」), on `codeBackground` in every style (it does not
+    /// Syntax colors in the file viewer (docs/apple/ios.md「File viewer」), on `codeBackground` in every style (it does not
     /// change with the style, so neither do they): GitHub's palette, every one ≥ 4.5:1 on that background in light
     /// and dark (`SyntaxPaletteTests`). Words that are none of these stay `.primary`.
     enum Syntax {
@@ -754,9 +1336,9 @@ nonisolated enum Fmt {
         }
     }
 
-    /// Model names like "deepseek/v4.1-flash-chain" → "v4.1-flash-chain".
+    /// Model names like "deepseek/v4.1-flash-chain" → "v4.1-flash-chain"; no model, including an older node's display placeholder, → nil.
     static func model(_ m: String?) -> String? {
-        guard let m, !m.isEmpty else { return nil }
+        guard let m, !m.isEmpty, m != "默认" else { return nil } // i18n-ignore: legacy wire value, never displayed
         return m.split(separator: "/").last.map(String.init) ?? m
     }
 }

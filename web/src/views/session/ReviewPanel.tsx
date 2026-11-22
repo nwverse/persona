@@ -13,6 +13,8 @@ import type { FileContent, GitCommit } from "../../lib/files";
 import { splitLines } from "../../lib/files";
 import { shortPath } from "../../lib/format";
 import { whenComposer } from "../../lib/links";
+import { openPanel, type ReviewSpot } from "../../lib/panel";
+import { relativeTo } from "../../lib/comments";
 import {
   loadReview, loadReviewFile, orderedComments, pendingComment, pendingReview, reviewDiff, reviewItems, reviewMessage, reviewQuote, reviewTotals, setPendingReview, usePendingReview,
   type GitReview, type GitReviewFile, type ReviewScope, type ReviewTarget,
@@ -25,6 +27,7 @@ import { t } from "../../i18n";
 import { DiffView, KeysHelp, ReviewBar, ReviewKeys, ReviewProvider, ReviewToolbar } from "../extensions/DiffReview";
 import { PanelHeader } from "../../ui/PanelHeader";
 import { Empty, Segmented } from "./files/parts";
+import { fileURL } from "./files/FileView";
 
 /** The panel sits beside the chat (it covers it below this width). */
 const besideChat = () => typeof matchMedia === "undefined" || matchMedia("(min-width: 1024px)").matches;
@@ -43,10 +46,19 @@ function storedTarget(session: string, scope?: ReviewScope): ReviewTarget {
 }
 
 type Failure = { code?: string; message: string };
+type LoadRequest = { owner: GitReview; generation: number };
 
-export function ReviewPanel({ mid, sid, cwd, scope, at, onClose }: { mid: string; sid: string; cwd: string; scope?: ReviewScope; at?: { path: string; line: number; old?: boolean }; onClose: () => void }) {
+/** `opened`: the panel as last opened (lib/panel.ts): an opening while the panel is already up (a changed-files card's
+ *  Review or file) brings its `scope` and `at` with it. */
+export function ReviewPanel({ mid, sid, cwd, scope, at, opened, onClose }: { mid: string; sid: string; cwd: string; scope?: ReviewScope; at?: ReviewSpot; opened?: object; onClose: () => void }) {
   const session = `${mid}/${sid}`;
   const [target, setTargetState] = useState<ReviewTarget>(() => storedTarget(session, scope));
+  const lastOpened = useRef(opened);
+  useEffect(() => {
+    if (opened === lastOpened.current) return;
+    lastOpened.current = opened;
+    if (scope && scope !== "commit") setTargetState((t) => (t.scope === scope ? t : { scope }));
+  }, [opened, scope]);
   const setTarget = (t: ReviewTarget) => {
     setTargetState(t);
     try {
@@ -56,6 +68,9 @@ export function ReviewPanel({ mid, sid, cwd, scope, at, onClose }: { mid: string
     }
   };
   const [res, setRes] = useState<GitReview | null>(null);
+  // Only an accepted summary or an effect transition changes the owner. A render must never revive a retired request.
+  const currentReview = useRef<GitReview | null>(null);
+  const activeLoad = useRef<LoadRequest | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [loading, setLoading] = useState(true);
   const [reloads, setReloads] = useState(0);
@@ -66,30 +81,58 @@ export function ReviewPanel({ mid, sid, cwd, scope, at, onClose }: { mid: string
   const [inside, setInside] = useState(false);
   const caches = useRef(new Map<string, LineCache>());
   const files = useRef(new Map<string, string[] | null>());
+  const fileReads = useRef(new Map<string, Promise<string[] | null>>());
+  const reviewGeneration = useRef(0);
   const pending = usePendingReview(session);
   const key = commentKey(mid, sid);
   const you = t("review.you");
 
   useEffect(() => {
+    const generation = ++reviewGeneration.current;
+    // The review still rendered during a transition may finish a newly clicked file load, but the new generation
+    // retires every earlier request. Accepting the summary transfers that ownership synchronously below.
+    currentReview.current = res;
+    const retireLoads = () => {
+      activeLoad.current = null;
+      setBusy((current) => current === "load" ? "" : current);
+    };
+    retireLoads();
     if (target.scope === "commit" && !target.base) return;
     const ac = new AbortController();
     setLoading(true);
     loadReview(mid, cwd, target, ac.signal)
       .then((r) => {
+        if (ac.signal.aborted || generation !== reviewGeneration.current) return;
+        currentReview.current = r;
+        retireLoads();
         setRes(r);
         setFailure(null);
         setStale(false);
         setLoaded(new Map());
         caches.current = new Map();
         files.current = new Map();
+        fileReads.current = new Map();
       })
       .catch((e) => {
-        if (isAbort(e)) return;
+        if (ac.signal.aborted || generation !== reviewGeneration.current || isAbort(e)) return;
+        currentReview.current = null;
+        retireLoads();
         setRes(null);
         setFailure({ code: e instanceof ApiError ? (e.body.code as string | undefined) : undefined, message: errorText(e) });
       })
-      .finally(() => !ac.signal.aborted && setLoading(false));
-    return () => ac.abort();
+      .finally(() => {
+        if (!ac.signal.aborted && generation === reviewGeneration.current) setLoading(false);
+      });
+    return () => {
+      if (generation === reviewGeneration.current) {
+        reviewGeneration.current += 1;
+        currentReview.current = null;
+        activeLoad.current = null;
+      }
+      ac.abort();
+    };
+    // `res` is the temporary owner still displayed during this transition, not a reason to start another summary.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mid, cwd, target.scope, target.base, reloads]);
 
   // the agent goes on working: say the files moved, read them again when asked (not under the reader's eyes)
@@ -122,33 +165,67 @@ export function ReviewPanel({ mid, sid, cwd, scope, at, onClose }: { mid: string
     [items, key, res, count, pending.note],
   );
 
-  // a comment's card brought the review back: its file and line
-  const went = useRef(false);
+  // a comment's card brought the review back: its file and line; a changed-files card's file (#5157): the file, by its
+  // full path, once the review of the scope it asked for is in. Each opening goes there once, also when the panel was
+  // already open. A card's file the review does not list, or a review that cannot be read, opens the file instead.
+  const went = useRef<ReviewSpot | undefined>(undefined);
   useEffect(() => {
-    if (!at || went.current || !res) return;
-    went.current = true;
+    if (!at || went.current === at || loading) return;
+    const showFile = () => openPanel({ kind: "file", mid, path: at.path, cwd, sid });
+    if (failure) {
+      went.current = at;
+      if (at.file) showFile();
+      return;
+    }
+    // the scope this opening asked for, once the panel has taken it and its review is in
+    const wanted = scope && scope !== "commit" ? scope : target.scope;
+    if (!res || target.scope !== wanted || res.scope !== wanted) return;
+    went.current = at;
+    const path = relativeTo(res.root, at.path);
+    if (at.file && !res.files.some((f) => f.path === path)) return showFile();
     requestAnimationFrame(() => {
-      const d = document.querySelector(`[data-diff-path="${CSS.escape(at.path)}"]`);
-      const line = d?.querySelector(`[data-ln="${at.old ? "old" : "new"}"][data-n="${at.line}"]`);
+      const d = document.querySelector(`[data-diff-path="${CSS.escape(path)}"]`);
+      const line = at.line === undefined ? null : d?.querySelector(`[data-ln="${at.old ? "old" : "new"}"][data-n="${at.line}"]`);
       (line ?? d)?.scrollIntoView({ block: line ? "center" : "start" });
     });
-  }, [at, res]);
+  }, [at, scope, res, loading, failure, target.scope, mid, sid, cwd]);
 
   /** The lines of a file on disk (the new side), read once per review. */
-  const fileLines = async (path: string): Promise<string[] | null> => {
-    if (files.current.has(path)) return files.current.get(path)!;
+  const fileLines = (path: string): Promise<string[] | null> => {
+    const cache = files.current;
+    if (cache.has(path)) return Promise.resolve(cache.get(path)!);
+    const reads = fileReads.current;
+    const pending = reads.get(path);
+    if (pending) return pending;
     const root = res?.root ?? cwd;
-    try {
-      const f = await api<FileContent>(`/machines/${enc(mid)}/file?path=${enc(`${root.replace(/\/+$/, "")}/${path}`)}&cwd=${enc(cwd)}`);
-      const lines = typeof f.text === "string" ? splitLines(f.text) : null;
-      files.current.set(path, lines);
-      return lines;
-    } catch {
-      return null;
-    }
+    const read = (async () => {
+      try {
+        let offset = 0;
+        let text = "";
+        let revision = "";
+        do {
+          const f = await api<FileContent>(fileURL(mid, `${root.replace(/\/+$/, "")}/${path}`, cwd, offset));
+          if (typeof f.text !== "string" || (revision && f.revision && revision !== f.revision)) return null;
+          revision ||= f.revision || "";
+          text += f.text;
+          const next = f.next ?? 0;
+          if ((next > 0 && next <= offset) || (!next && f.truncated)) return null;
+          offset = next;
+        } while (offset > 0);
+        const lines = splitLines(text);
+        if (files.current !== cache) return null;
+        cache.set(path, lines);
+        return lines;
+      } catch {
+        return null;
+      }
+    })();
+    reads.set(path, read);
+    void read.finally(() => reads.delete(path));
+    return read;
   };
 
-  const fetch = async (a: UIAction, v: Record<string, string> = {}): Promise<UIActionResult | null> => {
+  const fetch = async (a: UIAction, v: Record<string, string> = {}, load?: LoadRequest): Promise<UIActionResult | null> => {
     const path = v.path ?? "";
     if (a.id === "context") {
       const lines = await fileLines(path);
@@ -157,14 +234,18 @@ export function ReviewPanel({ mid, sid, cwd, scope, at, onClose }: { mid: string
     }
     if (a.id === "load") {
       const f = fileOf(path);
-      if (!f || !res) return null;
+      const owner = load?.owner ?? res;
+      const generation = load?.generation ?? reviewGeneration.current;
+      if (!f || !owner || generation !== reviewGeneration.current || owner !== currentReview.current) return null;
+      const retired = () => generation !== reviewGeneration.current || owner !== currentReview.current || Boolean(load && activeLoad.current !== load);
       try {
-        const got = await loadReviewFile(mid, cwd, res, f);
-        if (!got) return null;
+        const got = await loadReviewFile(mid, cwd, owner, f);
+        if (!got || retired()) return null;
         // too big even on its own: said, not offered again
         setLoaded((m) => new Map(m).set(path, got.big ? { ...got, hunks: [], huge: true } : got));
         return {};
       } catch (e) {
+        if (retired()) return null;
         toast(errorText(e), "error");
         return null;
       }
@@ -238,10 +319,18 @@ export function ReviewPanel({ mid, sid, cwd, scope, at, onClose }: { mid: string
         setPendingReview(session, { ...now, comments: now.comments.filter((c) => c.id !== v.thread) });
         return;
       }
-      case "load":
+      case "load": {
+        if (!res || res !== currentReview.current) return;
+        const request: LoadRequest = { owner: res, generation: reviewGeneration.current };
+        activeLoad.current = request;
         setBusy("load");
-        void fetch(a, v).finally(() => setBusy(""));
+        void fetch(a, v, request).finally(() => {
+          if (activeLoad.current !== request) return;
+          activeLoad.current = null;
+          if (request.generation === reviewGeneration.current && request.owner === currentReview.current) setBusy("");
+        });
         return;
+      }
       case "send":
         void send(v.body ?? "");
         return;
@@ -451,6 +540,8 @@ function Failed({ failure, cwd, target, onRetry, onScope }: { failure: Failure; 
   switch (failure.code) {
     case "not_git":
       return <Empty icon="git" title={t("review.not_git")} detail={shortPath(cwd)} />;
+    case "no_folder":
+      return <Empty icon="folder" title={t("review.no_folder")} detail={shortPath(cwd)} />;
     case "node_outdated":
       return <Empty icon="warning" title={t("review.outdated")} detail={t("review.outdated_detail")} />;
     case "no_default_branch":

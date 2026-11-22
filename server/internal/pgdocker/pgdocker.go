@@ -16,10 +16,20 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/osproc"
 )
 
 // Image is the Postgres image the containers run.
 const Image = "postgres:18-alpine"
+
+// ServerArgs follow Image in docker run: the container's command, postgres with the settings Persona's databases
+// get beyond PostgreSQL's defaults. The first change to a page after a checkpoint writes the whole page to the WAL,
+// and on a personal hub that is most of the WAL of a write to a random page: wal_compression=lz4 halves those page
+// images for a little CPU (Image is built with lz4), and checkpoint_timeout=15min (PostgreSQL's is 5min) writes them
+// a third as often, for a longer crash recovery. scripts/deploy/db.sh passes the same, and compose its own defaults
+// (docs/operations/docker.md "Disk writes").
+var ServerArgs = []string{"postgres", "-c", "wal_compression=lz4", "-c", "checkpoint_timeout=15min"}
 
 // User and Database are the role and database a container is made with.
 const (
@@ -88,6 +98,7 @@ func (c *Container) Create(ctx context.Context, password string) error {
 	args := []string{"run", "-d", "--name", c.Name, "--restart", "unless-stopped",
 		"-p", fmt.Sprintf("127.0.0.1:%d:5432", c.Port), "-v", c.Volume + ":/var/lib/postgresql",
 		"-e", "POSTGRES_USER=" + c.user(), "-e", "POSTGRES_PASSWORD", "-e", "POSTGRES_DB=" + c.database(), Image}
+	args = append(args, ServerArgs...)
 	if out, err := c.Run(ctx, []string{"POSTGRES_PASSWORD=" + password}, "docker", args...); err != nil {
 		return &StepError{Step: "run", Output: FirstLine(string(out))}
 	}
@@ -365,7 +376,7 @@ func RandomPassword() string {
 
 // FreeLoopbackPort is a TCP port free on 127.0.0.1 now.
 func FreeLoopbackPort() (int, error) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := osproc.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return 0, err
 	}

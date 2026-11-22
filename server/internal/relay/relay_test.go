@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -133,6 +134,105 @@ func TestLiveActivityPassesItsAPS(t *testing.T) {
 	aps["mutable-content"] = 1
 	if code, _ := call(h, "/relay/v1/push", g, PushRequest{Type: "liveactivity", Token: "abcdef0123456789abcdef0123456789", APS: aps}); code != 400 {
 		t.Fatalf("extra aps key: %d", code)
+	}
+}
+
+func registerVoIP(t *testing.T, h http.Handler) string {
+	code, out := call(h, "/relay/v1/register", "", map[string]string{"apns_token": devTok, "env": "sandbox", "topic": topic + ".voip"})
+	if code != 200 {
+		t.Fatalf("register voip: %d %v", code, out)
+	}
+	return out["grant"].(string)
+}
+
+// TestVoIPCarriesOnlyTheSealedPayload: an urgent call's push has no aps (PushKit hands it to the app, which names the
+// call from the sealed payload), goes out at priority 10 on the ".voip" topic, and expires within a minute.
+func TestVoIPCarriesOnlyTheSealedPayload(t *testing.T) {
+	s, f, h := newTest(t)
+	now := time.Unix(1_800_000_000, 0)
+	s.now = func() time.Time { return now }
+	g := registerVoIP(t, h)
+	if code, out := call(h, "/relay/v1/push", g, PushRequest{Type: "voip", Priority: "5", Sealed: sealed, CollapseID: "c0ffee"}); code != 200 {
+		t.Fatalf("push: %d %v", code, out)
+	}
+	r := f.got[0]
+	if r.Token != devTok || r.Topic != topic+".voip" || r.PushType != "voip" || r.Priority != "10" || r.CollapseID != "c0ffee" {
+		t.Fatalf("request %+v", r)
+	}
+	if r.Expiration != now.Unix()+30 {
+		t.Fatalf("expiration %d, want now+30", r.Expiration-now.Unix())
+	}
+	var p map[string]any
+	_ = json.Unmarshal(r.Body, &p)
+	if p["e"] != sealed || len(p) != 1 {
+		t.Fatalf("payload %s", r.Body)
+	}
+	for ttl, want := range map[int]int64{5: 5, 60: 60, 600: 60} {
+		if code, _ := call(h, "/relay/v1/push", g, PushRequest{Type: "voip", Sealed: sealed, TTL: ttl}); code != 200 {
+			t.Fatalf("ttl %d: %d", ttl, code)
+		}
+		if got := f.got[len(f.got)-1].Expiration - now.Unix(); got != want {
+			t.Errorf("ttl %d: expires in %d s, want %d", ttl, got, want)
+		}
+	}
+}
+
+// TestVoIPGrantsDoNotMix: a VoIP grant carries only voip pushes and an ordinary grant none, and only the served
+// bundle's ".voip" topic registers.
+func TestVoIPGrantsDoNotMix(t *testing.T) {
+	_, f, h := newTest(t)
+	voip, plain := registerVoIP(t, h), register(t, h)
+	for name, c := range map[string]struct {
+		grant string
+		req   PushRequest
+	}{
+		"alert on voip":      {voip, PushRequest{Type: "alert", Sealed: sealed}},
+		"background on voip": {voip, PushRequest{Type: "background", Sealed: sealed}},
+		"la on voip":         {voip, PushRequest{Type: "liveactivity", Token: "abcdef0123456789abcdef0123456789", APS: map[string]any{"event": "update", "content-state": map[string]any{}}}},
+		"voip on alert":      {plain, PushRequest{Type: "voip", Sealed: sealed}},
+		"voip plaintext":     {voip, PushRequest{Type: "voip", Sealed: "aGVsbG8="}},
+	} {
+		if code, _ := call(h, "/relay/v1/push", c.grant, c.req); code != 400 {
+			t.Errorf("%s: %d", name, code)
+		}
+	}
+	for _, tp := range []string{"other.app.voip", topic + ".voip.voip", topic + ".VOIP"} {
+		if code, _ := call(h, "/relay/v1/register", "", map[string]string{"apns_token": devTok, "env": "sandbox", "topic": tp}); code != 403 {
+			t.Errorf("register %s: %d", tp, code)
+		}
+	}
+	if len(f.got) != 0 {
+		t.Fatalf("sent %d", len(f.got))
+	}
+}
+
+// TestVoIPRateLimit: a device's calls have their own small budget, apart from its notifications.
+func TestVoIPRateLimit(t *testing.T) {
+	s, _, h := newTest(t)
+	now := time.Unix(1_800_000_000, 0)
+	s.now = func() time.Time { return now }
+	g := registerVoIP(t, h)
+	ok := 0
+	for range voipBurst + 4 {
+		if code, _ := call(h, "/relay/v1/push", g, PushRequest{Type: "voip", Sealed: sealed}); code == 200 {
+			ok++
+		}
+	}
+	if ok != voipBurst {
+		t.Fatalf("burst let %d calls through, want %d", ok, voipBurst)
+	}
+	now = now.Add(5 * time.Minute)
+	if code, _ := call(h, "/relay/v1/push", g, PushRequest{Type: "voip", Sealed: sealed}); code != 200 {
+		t.Fatalf("after five minutes: %d", code)
+	}
+}
+
+func TestHealthListsPushTypes(t *testing.T) {
+	_, _, h := newTest(t)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/relay/v1/health", nil))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"voip"`) {
+		t.Fatalf("health: %d %s", w.Code, w.Body)
 	}
 }
 
@@ -263,6 +363,77 @@ func TestRateLimits(t *testing.T) {
 	if regs >= regBurst+5 {
 		t.Fatal("registration not limited")
 	}
+}
+
+// TestLimiterSweepsAtMostOncePerRefill: past sweepAbove keys a new key forgets the buckets that have refilled, but not
+// again within one refill time, so a flood of new keys does not scan the whole table for each. The answers stay the same.
+func TestLimiterSweepsAtMostOncePerRefill(t *testing.T) {
+	l := newLimiter(regPerMin, regBurst)
+	add := func(prefix string, n int, at time.Time) {
+		t.Helper()
+		for i := range n {
+			if !l.allow(prefix+strconv.Itoa(i), at) {
+				t.Fatalf("new key %s%d refused", prefix, i)
+			}
+		}
+	}
+	burst := func(key string, at time.Time) (n int) {
+		for range regBurst + 5 {
+			if l.allow(key, at) {
+				n++
+			}
+		}
+		return n
+	}
+	check := func(when string, buckets int, swept time.Time) {
+		t.Helper()
+		if len(l.buckets) != buckets || !l.swept.Equal(swept) {
+			t.Fatalf("%s: %d buckets, swept at %v; want %d, %v", when, len(l.buckets), l.swept, buckets, swept)
+		}
+	}
+	t0 := time.Unix(1_800_000_000, 0)
+	add("ip:old", sweepAbove+1, t0)
+	check("filled", sweepAbove+1, time.Time{})
+
+	// The first new key past the size sweeps; every bucket is fresh, so none goes.
+	t1 := t0.Add(l.refill / 2)
+	add("ip:a", 1, t1)
+	check("first sweep", sweepAbove+2, t1)
+
+	// The old buckets have refilled, but the last sweep was less than one refill time ago: new keys do not sweep.
+	t2 := t0.Add(l.refill + time.Millisecond)
+	add("ip:b", 1000, t2)
+	check("within a refill time of the sweep", sweepAbove+1002, t1)
+	// A refilled bucket that stayed answers like the new one it would have become: a full burst.
+	if got := burst("ip:old0", t2); got != regBurst {
+		t.Fatalf("kept refilled bucket allowed %d, want %d", got, regBurst)
+	}
+
+	// One refill time after the last sweep, a new key forgets every bucket that has refilled. Kept: ip:a0 (exactly one
+	// refill time old), ip:old0 (spent at t2), the 1000 ip:b keys and ip:c0.
+	t3 := t1.Add(l.refill)
+	add("ip:c", 1, t3)
+	check("second sweep", 1003, t3)
+	if got := burst("ip:old1", t3); got != regBurst {
+		t.Fatalf("forgotten key allowed %d, want a full burst of %d", got, regBurst)
+	}
+	if got := burst("ip:old0", t3); got >= regBurst {
+		t.Fatalf("key spent half a refill time ago allowed %d, want fewer than %d", got, regBurst)
+	}
+}
+
+// BenchmarkLimiterManyFreshKeys: new keys arriving while the table is past sweepAbove and every bucket is still fresh.
+func BenchmarkLimiterManyFreshKeys(b *testing.B) {
+	l := newLimiter(regPerMin, regBurst)
+	now := time.Unix(1_800_000_000, 0)
+	for i := range sweepAbove + 1 {
+		l.allow("ip:seed"+strconv.Itoa(i), now)
+	}
+	b.ResetTimer()
+	for i := range b.N {
+		l.allow("ip:new"+strconv.Itoa(i), now)
+	}
+	b.ReportMetric(float64(len(l.buckets)), "buckets")
 }
 
 func TestProxySecret(t *testing.T) {

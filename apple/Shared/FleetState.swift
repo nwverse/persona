@@ -24,7 +24,7 @@ nonisolated struct FleetState: Codable, Hashable, Sendable {
     var stats: Stats?
     /// The persona this device's activity draws (Settings › Avatar). The widget extension cannot read the app's settings, and
     /// on a phone it did not get them from the shared keychain either (build 98): the app stamps its own updates with
-    /// it, and the hub echoes what the app told it (prefs `look`) in this device's pushes (docs/apple/live-activity.md「形象」).
+    /// it, and the hub echoes what the app told it (prefs `look`) in this device's pushes (docs/apple/live-activity.md「Avatar」).
     /// Nil from an older hub: the extension falls back to the keychain.
     var look: FleetLook?
 
@@ -452,7 +452,7 @@ nonisolated enum IslandCell: Hashable, Sendable {
     }
 }
 
-/// Which persona the Live Activity draws and in what color (docs/apple/live-activity.md「形象」): the app's choice in
+/// Which persona the Live Activity draws and in what color (docs/apple/live-activity.md「Avatar」): the app's choice in
 /// Settings › Appearance › Avatar and the accent it draws that persona in. It rides in the activity's content (`FleetState.look`),
 /// and the app also leaves it with a package's pictures in a keychain group it shares with the widget extension
 /// (LiveActivity/FleetPersona.swift: drawing, saving, reading).

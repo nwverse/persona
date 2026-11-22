@@ -11,8 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // The workbench (feishu_workbench*.go, feishu_companions.go, #1961): off, the bot is what it was; on, /home pins one
@@ -114,7 +116,7 @@ func TestWorkbenchHomeIsPinnedAndTheOnlyOne(t *testing.T) {
 	if h, _ := e.command("/home"); !h {
 		t.Fatal("/home not handled with the workbench on")
 	}
-	if js := e.postJSON(0); !strings.Contains(js, wbT(l, "home_title")) || !strings.Contains(js, `"to":"start"`) {
+	if js := e.postJSON(0); !strings.Contains(js, wbT(l, "home_title")) || !strings.Contains(js, `"value":"to=start"`) {
 		t.Fatalf("the home card: %s", js)
 	}
 	e.mu.Lock()
@@ -178,6 +180,137 @@ func TestWorkbenchButtonOnEveryCard(t *testing.T) {
 	if js := e.postJSON(-1); strings.Contains(js, `"to":"home"`) {
 		t.Fatalf("the workbench button after switching it off: %s", js)
 	}
+}
+
+// buttonPayload finds a button by its localized label anywhere in a card, including a form.
+func buttonPayload(t *testing.T, card *feishubot.Card, label string) map[string]any {
+	t.Helper()
+	var root any
+	if err := json.Unmarshal([]byte(card.JSON()), &root); err != nil {
+		t.Fatal(err)
+	}
+	var walk func(any) map[string]any
+	walk = func(node any) map[string]any {
+		switch v := node.(type) {
+		case map[string]any:
+			if v["tag"] == "button" {
+				if text, _ := v["text"].(map[string]any); text["content"] == label {
+					return v
+				}
+			}
+			for _, child := range v {
+				if found := walk(child); found != nil {
+					return found
+				}
+			}
+		case []any:
+			for _, child := range v {
+				if found := walk(child); found != nil {
+					return found
+				}
+			}
+		}
+		return nil
+	}
+	if found := walk(root); found != nil {
+		return found
+	}
+	t.Fatalf("no button %q in %s", label, card.JSON())
+	return nil
+}
+
+func behaviorPayload(t *testing.T, button map[string]any, kind string) map[string]any {
+	t.Helper()
+	behaviors, _ := button["behaviors"].([]any)
+	for _, raw := range behaviors {
+		behavior, _ := raw.(map[string]any)
+		if behavior["type"] == kind {
+			return behavior
+		}
+	}
+	t.Fatalf("no %s behavior in %v", kind, button)
+	return nil
+}
+
+// Navigation added at different times still forms one footer. Approval and form callbacks keep their own row, and the
+// card-size guard still leaves Workbench off an oversized card (#5317).
+func TestWorkbenchFooterKeepsNavigationTogether(t *testing.T) {
+	e := newWorkbenchEnv(t, workbenchOnFeatures)
+	t.Run("navigation", func(t *testing.T) {
+		card := feishubot.NewCard("", "", "answer").Note("Main chat").Buttons(feishubot.LinkBtn("Open on web", "https://example.com"))
+		e.s.workbenchStamp(context.Background(), card)
+		if got := strings.Count(card.JSON(), `"tag":"column_set"`); got != 1 {
+			t.Fatalf("navigation actions occupy %d rows: %s", got, card.JSON())
+		}
+		row := card.Body.Elements[len(card.Body.Elements)-1].(map[string]any)
+		if got := len(row["columns"].([]any)); got != 2 {
+			t.Fatalf("the shared navigation row has %d buttons: %s", got, card.JSON())
+		}
+		open := behaviorPayload(t, buttonPayload(t, card, "Open on web"), "open_url")
+		if got := open["default_url"]; got != "https://example.com" {
+			t.Fatalf("the original navigation URL changed: %v", got)
+		}
+		homeLabel := wbT(e.s.botLang(context.Background()), "stamp_home")
+		if strings.Contains(homeLabel, "\n") {
+			t.Fatalf("the localized Workbench label wraps: %q", homeLabel)
+		}
+		homeButton := buttonPayload(t, card, homeLabel)
+		if homeButton["type"] != "text" || homeButton["size"] != "small" {
+			t.Fatalf("the way back is not a small text button: %v", homeButton)
+		}
+		home := behaviorPayload(t, homeButton, "callback")
+		value, _ := home["value"].(map[string]any)
+		if value["a"] != "nav" || value["to"] != "home" {
+			t.Fatalf("the Workbench callback changed: %v", value)
+		}
+	})
+	t.Run("callbacks stay independent", func(t *testing.T) {
+		card := feishubot.NewCard("", "", "approval").Buttons(feishubot.Btn("Allow", feishubot.Primary, map[string]any{"allow": true}))
+		e.s.workbenchStamp(context.Background(), card)
+		if got := strings.Count(card.JSON(), `"tag":"column_set"`); got != 2 {
+			t.Fatalf("an approval action was merged with navigation: %s", card.JSON())
+		}
+		allow := behaviorPayload(t, buttonPayload(t, card, "Allow"), "callback")
+		if value, _ := allow["value"].(map[string]any); value["allow"] != true {
+			t.Fatalf("the approval callback changed: %v", value)
+		}
+	})
+	t.Run("mixed actions stay independent", func(t *testing.T) {
+		card := feishubot.NewCard("", "", "approval").Buttons(
+			feishubot.LinkBtn("Open on web", "https://example.com"),
+			feishubot.Btn("Allow", feishubot.Primary, map[string]any{"allow": true}))
+		e.s.workbenchStamp(context.Background(), card)
+		if got := strings.Count(card.JSON(), `"tag":"column_set"`); got != 2 {
+			t.Fatalf("a mixed action row was merged with navigation: %s", card.JSON())
+		}
+		if got := behaviorPayload(t, buttonPayload(t, card, "Open on web"), "open_url")["default_url"]; got != "https://example.com" {
+			t.Fatalf("the mixed row's URL changed: %v", got)
+		}
+		allow := behaviorPayload(t, buttonPayload(t, card, "Allow"), "callback")
+		if value, _ := allow["value"].(map[string]any); value["allow"] != true {
+			t.Fatalf("the mixed row's callback changed: %v", value)
+		}
+	})
+	t.Run("form callbacks stay independent", func(t *testing.T) {
+		card := feishubot.NewCard("", "", "form").Form("approval", nil,
+			feishubot.Submit("Send", feishubot.Primary, "send", map[string]any{"sent": true}))
+		e.s.workbenchStamp(context.Background(), card)
+		send := buttonPayload(t, card, "Send")
+		if send["form_action_type"] != "submit" {
+			t.Fatalf("the form action changed: %v", send)
+		}
+		callback := behaviorPayload(t, send, "callback")
+		if value, _ := callback["value"].(map[string]any); value["sent"] != true {
+			t.Fatalf("the form callback value changed: %v", value)
+		}
+	})
+	t.Run("size guard", func(t *testing.T) {
+		card := feishubot.NewCard("", "", "large").Markdown(strings.Repeat("x", workbenchStampMost)).Buttons(feishubot.LinkBtn("Open on web", "https://example.com"))
+		e.s.workbenchStamp(context.Background(), card)
+		if strings.Contains(card.JSON(), `"to":"home"`) {
+			t.Fatalf("the oversized card gained a workbench button: %d bytes", len(card.JSON()))
+		}
+	})
 }
 
 // /start asks for a permission mode before what to do, offering every mode the agents take; the mode picked goes to
@@ -362,5 +495,66 @@ func TestWorkbenchInboxCardFilesAnItem(t *testing.T) {
 	redrawn, _ := json.Marshal(resp.Card.Data)
 	if strings.Contains(string(redrawn), "Alex") || !strings.Contains(string(redrawn), "Sam") {
 		t.Fatalf("the redrawn card: %s", redrawn)
+	}
+}
+
+// A card names where an item came from in words: a connector's label for it, else its source's name (a subscription's
+// one row has no label, #5671), never the source's id.
+func TestWorkbenchSourceIsAName(t *testing.T) {
+	for _, c := range []struct {
+		it   InboxItem
+		want string
+	}{
+		{InboxItem{Source: "github", AccountName: "GitHub", Connector: &InboxConnector{Label: "Review requested"}}, "Review requested"},
+		{InboxItem{Source: "sub_example", AccountName: "Example group", Connector: &InboxConnector{}}, "Example group"},
+		{InboxItem{Source: "sub_example", Connector: &InboxConnector{}}, "sub_example"},
+	} {
+		if got := wbSource(i18n.En, c.it); got != c.want {
+			t.Errorf("%+v: %q, want %q", c.it, got, c.want)
+		}
+	}
+}
+
+// tokenSpanStore is the chat's store that also sums the machines' usage (db.DB's UsageSpans), with made-up spans.
+type tokenSpanStore struct {
+	Store
+	spans []db.UsageSpan
+}
+
+func (u tokenSpanStore) UsageSpans(context.Context, []time.Time, db.UsageBy) ([]db.UsageSpan, error) {
+	return u.spans, nil
+}
+
+// What waits for the owner is rows pressed whole: a card that holds something up comes down. An agent's row says its
+// state as a tag, not a coloured dot.
+func TestWorkbenchHomeRowsArePressedWhole(t *testing.T) {
+	e := newWorkbenchEnv(t, workbenchOnFeatures)
+	e.s.fleet.interactions["ix_q"] = &pending{ix: proto.Interaction{ID: "ix_q", MachineID: "box", SessionID: "ag1", Kind: proto.IxQuestion,
+		Questions: []proto.Question{{Question: "用哪个库？"}}}}
+	card, _, _ := e.s.homeCard(context.Background(), workbenchOnFeatures)
+	js := card.JSON()
+	if !strings.Contains(js, `"tag":"interactive_container"`) || !strings.Contains(js, `"value":{"a":"nav","id":"ix_q","to":"ix"}`) ||
+		!strings.Contains(js, `"content":"等你 1"`) {
+		t.Fatalf("the home card: %s", js)
+	}
+	sess := proto.Session{State: proto.StateWorking, LastText: "在跑**测试**"}
+	row := agentRowMarkdown(i18n.ZhHans, "修登录", "", "box", sess, 70)
+	if row != "<text_tag color='blue'>工作中</text_tag> **修登录** · box\n<font color='grey'>在跑测试</font>" {
+		t.Fatalf("agent row %q", row)
+	}
+	// An agent named by its herdr tab shows its other name under the label.
+	row = agentRowMarkdown(i18n.ZhHans, "登录", "修登录的测试", "box", sess, 70)
+	if row != "<text_tag color='blue'>工作中</text_tag> **登录** · box\n修登录的测试\n<font color='grey'>在跑测试</font>" {
+		t.Fatalf("agent row with a secondary name %q", row)
+	}
+}
+
+// Sending a draft goes out under the owner's name: its button asks first in Feishu's dialog, Redraft does not.
+func TestDraftCardSendAsksFirst(t *testing.T) {
+	s := newTestService(t, newFakeHub())
+	it := InboxItem{ID: "i1", Source: "lark", Title: "项目群", Sender: "张三", Preview: "明天能发吗？"}
+	js := s.draftCard(context.Background(), it, "可以，明早发。", nil, "").JSON()
+	if n := strings.Count(js, `"confirm":`); n != 1 || !strings.Contains(js, `"op":"send"`) || !strings.Contains(js, `"op":"redraft"`) {
+		t.Fatalf("the draft card asks first %d times: %s", n, js)
 	}
 }

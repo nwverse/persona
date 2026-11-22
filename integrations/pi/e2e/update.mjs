@@ -1,4 +1,4 @@
-// End-to-end check of pi's self-update (docs/integrations/pi.md "Auto-update"): a real pi-web with this package installed from a store
+// End-to-end check of pi's self-update (docs/integrations/pi.md "Automatic updates"): a real pi-web with this package installed from a store
 // (settings.json packages: <store>/current/pi — the one-time switch), the companion run from there under a supervisor
 // that starts it again when it exits (launchd's KeepAlive), DSH's llm-mock-server as the model, and a real
 // `personad node --stdio` whose packages come from a directory (PERSONA_RUNTIME_PACKAGES), so it can carry another

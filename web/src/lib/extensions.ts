@@ -10,6 +10,7 @@ import { EXTENSIONS_CHANGED } from "./extension-prompts";
 import type { Contribution, DependencyState, PackMember } from "./extension-model";
 import type { ExtensionAuth, ExtensionTool } from "./extension-auth";
 import { clock } from "./format";
+import type { SecretReference } from "./secret-reference";
 import { itemHeaders } from "./manager-choice";
 import { t } from "../i18n";
 
@@ -31,6 +32,12 @@ export interface HubExtension {
   source?: string;
   enabled?: boolean;
   description?: string;
+  /** Public catalog artwork: absolute HTTPS without URL credentials; absent on older hubs. */
+  icon_url?: string;
+  /** Cumulative package downloads across all versions, not users or Persona installations. Explicit zero is meaningful. */
+  downloads?: number;
+  /** When the package-download statistics were last updated. */
+  downloads_updated_at?: string;
   /** The extension points it contributes to, with the ids. */
   contributes?: Record<string, string[]>;
   /** What it still needs before it runs, in words. */
@@ -39,12 +46,18 @@ export interface HubExtension {
   /** An extension from a market (a hub with plugin_auto_upgrade): its own auto-upgrade switch, its newer version and what
    *  happened last with an upgrade (docs/extensions/extensions.md "Automatic upgrades"). */
   auto_upgrade?: boolean;
-  /** Why its own switch does not apply now: "disabled" while the extension is off (the switch is kept for when it is on). */
+  /** Why its own switch does not apply now (the switch is kept either way): "market_removed" once its market is no longer
+   *  registered, "disabled" while the extension is off. */
   auto_upgrade_paused?: string;
+  /** The market it upgrades from, kept after that market is removed (a hub from before it: none, though `auto_upgrade` is set). */
+  market?: string;
   upgrade?: ExtensionUpgrade;
   upgrade_note?: ExtensionUpgradeNote;
   /** An extension with a program on computers: how that program is on each machine it is switched on for. */
   nodes?: ExtensionNodeState[];
+  /** How that program is across all its machines, aggregated by the hub; the status follows it while the hub's own
+   *  process is idle, so a node-only extension does not say "stopped" while it runs on every machine. */
+  node_status?: NodeStatusSummary;
   /** An installed extension's sandbox and its connections through the hub's egress proxy (hub extension_sandbox.go). */
   sandbox?: ExtensionSandbox;
   /** An extension one signs in to (hub extension_auth, #4507): its state as the hub last knew it. */
@@ -75,7 +88,10 @@ export interface ExtensionSandbox {
   active: boolean;
   why?: string;
   trusted?: boolean;
-  egress?: { allowed: number; denied: number; last_denied?: string; denied_at?: string };
+  /** recent_denied: the last different hosts the proxy refused, the latest first (#5697). */
+  egress?: { allowed: number; denied: number; last_denied?: string; denied_at?: string; recent_denied?: { target: string; count: number; at: string }[] };
+  /** The hosts the owner allowed it in /admin (#5697): no port is any port. */
+  owner_allowed?: { host: string; port?: string; at?: string }[];
 }
 
 /** The sandbox's state in words: in effect, asked for but not in effect, or off (Android ExtensionModelText.sandbox). */
@@ -84,28 +100,57 @@ export function sandboxState(s: ExtensionSandbox): string {
   return t(s.enabled ? "lib-extensions.sandbox_inactive" : "lib-extensions.sandbox_off");
 }
 
-/** What it reached through the egress proxy: "through the egress proxy: N allowed · M refused", null without counts. */
-export function sandboxEgress(s: ExtensionSandbox): string | null {
-  const e = s.egress;
-  if (!e) return null;
-  return t("lib-extensions.sandbox_egress", {
-    allowed: t("lib-extensions.sandbox_allowed", { count: e.allowed ?? 0 }),
-    denied: t("lib-extensions.sandbox_denied", { count: e.denied ?? 0 }),
-  });
-}
-
 /** The channel an extension contributes (its first `channel` id), whose page is where it is bound. */
 export function channelOf(p: Pick<HubExtension, "contributes">): string | null {
   return p.contributes?.channel?.find((id) => id.trim() !== "") ?? null;
 }
 
-/** An extension's program on one machine (docs/extensions/extensions.md "Programs that run on computers"). */
+/** An extension's program on one machine (docs/extensions/extensions.md "Programs running on computers"). */
 export interface ExtensionNodeState {
   machine_id: string;
   version?: string;
   /** running | starting | stopped | error | missing | lease_expired | offline | outdated */
   state: string;
   error?: string;
+}
+
+/** The hub's aggregate of an extension's node program across its machines (Go ExtensionNodeStatusView). */
+export interface NodeStatusSummary {
+  total: number;
+  running: number;
+  starting: number;
+  stopped: number;
+  offline: number;
+  abnormal: number;
+}
+
+/**
+ * One line for an extension whose work happens on computers, from the hub's aggregate: "Running on 2 machines",
+ * with the abnormal or offline count when there is one. Null without a node summary, so the hub-process wording stands.
+ */
+export function nodeStatusNote(p: Pick<HubExtension, "node_status" | "status">): string | null {
+  const s = p.node_status;
+  if (!s || s.total === 0) return null;
+  const offlinePart = () => (s.offline > 0 ? ` · ${t("lib-extensions.node_offline_count", { count: s.offline })}` : "");
+  switch (p.status) {
+    case "running": {
+      const main = t("lib-extensions.node_running", { count: s.running });
+      const abnormal = s.abnormal > 0 ? ` · ${t("lib-extensions.node_abnormal_count", { count: s.abnormal })}` : "";
+      return main + abnormal + offlinePart();
+    }
+    case "error": {
+      const main = t("lib-extensions.node_abnormal_count", { count: s.abnormal });
+      return s.offline > 0 ? `${main} · ${t("lib-extensions.node_offline_count", { count: s.offline })}` : main;
+    }
+    case "starting":
+      return t("lib-extensions.node_starting", { count: s.starting }) + offlinePart();
+    case "stopped":
+      // All offline: no machine is merely stopped, so the offline count is the headline rather than "Stopped on 0".
+      if (s.stopped === 0 && s.offline > 0) return t("lib-extensions.node_offline_count", { count: s.offline });
+      return t("lib-extensions.node_stopped", { count: s.stopped }) + offlinePart();
+    default:
+      return null;
+  }
 }
 
 /** A market extension's newer version and where it stands. */
@@ -121,6 +166,8 @@ export interface ExtensionUpgrade {
   detail?: string;
   /** "user" when a skipped version is one the user rolled back from (absent: it didn't start). */
   skipped_by?: string;
+  /** The new version's ID when it changes the extension's ID (`id` stays the installed one): its market lists it under this. */
+  rename_to?: string;
 }
 
 /** What happened last with an extension's upgrade. */
@@ -157,13 +204,17 @@ export interface ExtensionField {
   max_length?: number;
   minimum?: number;
   maximum?: number;
-  /** A list's items; format machine: the hub's machines by id (of the systems in os), drawn as a switch each. */
-  items?: { type: string; enum?: ExtensionChoice[]; format?: string; os?: string[] };
+  /** A list's item schema; an entry list has one flat object with text fields. */
+  items?: ExtensionField;
   min_items?: number;
   max_items?: number;
   unique_items?: boolean;
-  /** An object's fields (a group of the form). */
+  /** An object's fields (a group of the form, or one entry's flat text fields). */
   fields?: ExtensionField[];
+  /** x-secret: one write-only secret owned by each entry of this list. */
+  secret?: { name: string; title: string; description?: string; required?: boolean; hint?: string };
+  /** True on an address whose change clears the entry's secret on save. */
+  clears_secret?: boolean;
   /** x-confirm: what to ask before a switch of it is turned on (the extension cua's "no automatic screen lock while the extension is on"). */
   confirm?: string;
 }
@@ -177,6 +228,38 @@ export interface ExtensionSecret {
   set: boolean;
   /** Its last four characters, when it is set and the extension asked for them (secrets[].hint "last4"); never more. */
   hint?: string;
+  /** It holds a provider's reference, not a value (docs/extensions/secret-providers.md). */
+  reference?: SecretReference;
+  /** A live entry's storage ID is name; these associate it with its list and display title. */
+  list?: string;
+  entry_title?: string;
+}
+
+export type { SecretReference } from "./secret-reference";
+
+/** A setting that holds one of a provider's references: another extension's secret, or a model provider's key. */
+export interface SecretUser {
+  kind: "extension" | "launcher";
+  extension?: string;
+  extension_name?: string;
+  secret?: string;
+  secret_title?: string;
+  /** A live entry's display title when secret is its host-owned storage ID. */
+  entry_title?: string;
+  launcher?: string;
+  launcher_name?: string;
+  machine?: string;
+  reference: string;
+}
+
+/** An "Always" of a hand-off card: this reference for this launcher on this computer, asked no more. */
+export interface HandoffRule {
+  id: string;
+  reference: string;
+  launcher: string;
+  machine: string;
+  by?: string;
+  at: string;
 }
 
 /** A line of what an extension may do. */
@@ -205,16 +288,28 @@ export interface HubExtensionDetail extends HubExtension {
   contributions?: Contribution[];
   depends?: DependencyState[];
   extension_pack?: PackMember[];
+  /** A pack whose Enabled switch takes its installed members along (#1830); a hub before it switches the pack alone. */
+  pack_members_follow?: boolean;
+  /** The members switching the pack off switched off: switching it back on turns these on again. */
+  pack_off?: string[];
+  /** The installed members that are on: the ones switching the pack off switches off, named in its confirmation. */
+  pack_on?: { id: string; name: string }[];
+  /** A secret provider's: the settings that hold its references, and its Always rules for hand-offs. */
+  secret_users?: SecretUser[];
+  handoff_rules?: HandoffRule[];
 }
 
 // ── the hub ─────────────────────────────────────────────
 
 const base = (id: string) => `${extRoot()}/${enc(id)}/-`;
+// Every detail-returning settings request uses the same capability flag. A response without it would hide the entry
+// editor immediately after a save or lifecycle operation.
+const withEntryLists = (path: string) => `${path}${path.includes("?") ? "&" : "?"}entry_lists=1`;
 
 type ListAnswer = { extensions?: HubExtension[]; plugins?: HubExtension[]; can_install?: boolean; markets?: boolean };
 
 export const listExtensions = () => api<ListAnswer>(extRoot()).then((r) => listOf(r));
-/** The list with what this hub allows: installing at all (a database), and markets (docs/extensions/extensions.md "Extension markets"). */
+/** The list with what this hub allows: installing at all (a database), and markets (docs/extensions/extensions.md "Extension marketplace"). */
 export const listExtensionsInfo = () =>
   api<ListAnswer>(extRoot()).then((r) => ({
     extensions: listOf(r),
@@ -223,7 +318,7 @@ export const listExtensionsInfo = () =>
   }));
 /** A detail as either kind of hub sends it, its pages' places read with the new keys. */
 export const detailOf = (d: HubExtensionDetail): HubExtensionDetail => (d.ui ? { ...d, ui: d.ui.map(placeOf) } : d);
-export const extensionDetail = (id: string) => api<HubExtensionDetail>(`${base(id)}/`).then(detailOf);
+export const extensionDetail = (id: string) => api<HubExtensionDetail>(withEntryLists(`${base(id)}/`)).then(detailOf);
 /** After a change that can start, stop or reconfigure an extension: its entries, cards and sections are asked for again. */
 export const changed = <T>(r: T): T => {
   refreshExtensionPlaces();
@@ -231,21 +326,28 @@ export const changed = <T>(r: T): T => {
   return r;
 };
 export const setExtensionEnabled = (id: string, enabled: boolean, cascade = false) =>
-  api<HubExtensionDetail>(`${base(id)}/enabled`, { method: "PUT", json: { enabled, ...(cascade ? { cascade } : {}) } }).then(detailOf).then(changed);
+  api<HubExtensionDetail>(withEntryLists(`${base(id)}/enabled`), { method: "PUT", json: { enabled, ...(cascade ? { cascade } : {}) } }).then(detailOf).then(changed);
 export const setContribution = (id: string, point: string, cid: string, enabled: boolean) =>
-  api<HubExtensionDetail>(`${base(id)}/contributions/${enc(point)}/${enc(cid)}`, { method: "PUT", json: { enabled } }).then(detailOf).then(changed);
+  api<HubExtensionDetail>(withEntryLists(`${base(id)}/contributions/${enc(point)}/${enc(cid)}`), { method: "PUT", json: { enabled } }).then(detailOf).then(changed);
 export const setExtensionAutoUpgrade = (id: string, auto: boolean) =>
-  api<HubExtensionDetail>(`${base(id)}/auto-upgrade`, { method: "PUT", json: { auto } }).then(detailOf);
+  api<HubExtensionDetail>(withEntryLists(`${base(id)}/auto-upgrade`), { method: "PUT", json: { auto } }).then(detailOf);
 /** The auto-upgrade switch for all market extensions; a hub from before it has no route (null). */
 export const extensionUpgrades = (manager?: string) =>
   api<{ auto: boolean; upgrades?: ExtensionUpgrade[] }>(`${extRoot()}/-/upgrades`, { headers: itemHeaders(manager) }).then((r) => r.auto, () => null);
 export const setExtensionUpgrades = (auto: boolean) => api<{ auto: boolean }>(`${extRoot()}/-/upgrades`, { method: "PUT", json: { auto } }).then((r) => r.auto);
 export const setExtensionConfig = (id: string, config: JsonObject) =>
-  api<HubExtensionDetail>(`${base(id)}/config`, { method: "PUT", json: { config } }).then(detailOf).then(changed);
+  api<HubExtensionDetail>(withEntryLists(`${base(id)}/config`), { method: "PUT", json: { config } }).then(detailOf).then(changed);
+/** An immediate fixed-field save, not an entry-list edit: the hub keeps its current arrays and answers with the capable form. */
+export const setExtensionConfigPreservingEntries = (id: string, config: JsonObject) =>
+  api<HubExtensionDetail>(`${withEntryLists(`${base(id)}/config`)}&preserve_entries=1`, { method: "PUT", json: { config } }).then(detailOf).then(changed);
 export const setExtensionSecret = (id: string, name: string, value: string) =>
-  api<HubExtensionDetail>(`${base(id)}/secrets/${enc(name)}`, { method: "PUT", json: { value } }).then(detailOf).then(changed);
+  api<HubExtensionDetail>(withEntryLists(`${base(id)}/secrets/${enc(name)}`), { method: "PUT", json: { value } }).then(detailOf).then(changed);
+export const setExtensionSecretReference = (id: string, name: string, reference: string) =>
+  api<HubExtensionDetail>(withEntryLists(`${base(id)}/secrets/${enc(name)}`), { method: "PUT", json: { reference } }).then(detailOf).then(changed);
+export const removeHandoffRule = (id: string, rule: string) =>
+  api<HubExtensionDetail>(withEntryLists(`${base(id)}/handoff-rules/${enc(rule)}`), { method: "DELETE" }).then(detailOf).then(changed);
 export const clearExtensionSecret = (id: string, name: string) =>
-  api<HubExtensionDetail>(`${base(id)}/secrets/${enc(name)}`, { method: "DELETE" }).then(detailOf).then(changed);
+  api<HubExtensionDetail>(withEntryLists(`${base(id)}/secrets/${enc(name)}`), { method: "DELETE" }).then(detailOf).then(changed);
 
 /** A 400 invalid_config: the field the hub refused (its dotted path, "" when it names none) and why. */
 export function configError(e: unknown): { field: string; message: string } | null {
@@ -288,11 +390,13 @@ const STATES: Record<string, string> = {
   error: t("lib-extensions.state_error"),
 };
 
-export const extensionState = (p: HubExtension) => STATES[p.status] ?? t("lib-extensions.state_unknown");
+export const extensionState = (p: HubExtension) => nodeStatusNote(p) ?? STATES[p.status] ?? t("lib-extensions.state_unknown");
 
 /** Whether an enabled extension's program runs right now (the detail page's small print); "" for any other state. */
-export const runNote = (p: HubExtension) =>
-  p.attached ? attachedNote(p) : p.status === "running" ? t("lib-extensions.running") : p.status === "stopped" ? t("lib-extensions.idle_note") : "";
+export const runNote = (p: HubExtension) => {
+  if (p.node_status) return ""; // the node status line already says where it runs
+  return p.attached ? attachedNote(p) : p.status === "running" ? t("lib-extensions.running") : p.status === "stopped" ? t("lib-extensions.idle_note") : "";
+};
 
 /** An attached extension's small print: online or offline since when, and why while it is still reconnecting (its
  *  status says no error yet); "" while it is switched off. */
@@ -334,7 +438,8 @@ export function pointText(name: string): string {
 /** The "Upgrade" group's line for a newer version: what happens to it (the App's ExtensionText.upgradeDetail). */
 export function upgradeDetail(u: ExtensionUpgrade): string {
   switch (u.state) {
-    case "needs_permission": return morePermissions(u.added_permissions ?? []);
+    // A rename is confirmed for the ID change, not for permissions (#2511).
+    case "needs_permission": return u.rename_to ? u.detail || t("lib-extension-market.rename_detail", { from: u.id, to: u.rename_to }) : morePermissions(u.added_permissions ?? []);
     case "waiting_idle": return t("lib-extensions.upgrade_waiting_idle");
     case "available": return t("lib-extensions.upgrade_available");
     case "off": return t("lib-extensions.upgrade_off");
@@ -382,6 +487,9 @@ export function listSummary(list?: HubExtension[] | null): string {
 }
 
 export const fieldLabel = (f: ExtensionField) => f.title || f.name;
+
+/** Whether flipping a switch of the field asks its x-confirm sentence first: only turning one on, and only with a sentence. */
+export const asksFirst = (f: ExtensionField, on: boolean) => on && !!f.confirm;
 
 /** The title with "(required)" when it has to be filled in and has no default to fall back to. */
 export const fieldTitle = (f: ExtensionField) => (f.required && f.default === undefined ? t("lib-extensions.field_required", { label: fieldLabel(f) }) : fieldLabel(f));
@@ -433,7 +541,19 @@ export function pickerChoices(f: ExtensionField, current: Json | undefined, mach
   return out;
 }
 
+/**
+ * The secret the header's "Still needs" line opens (#8853): the first one not set that is required or that the line
+ * names (the hub writes a missing secret's own title into needs_setup). Undefined when nothing it names is a secret to
+ * set here (a dependency, a configuration an upgrade no longer takes): the line stays plain text.
+ */
+export function setupSecret(needs: string[] | undefined, secrets: ExtensionSecret[] | undefined): ExtensionSecret | undefined {
+  if (!needs?.length) return undefined;
+  return secrets?.find((s) => !s.set && (!!s.required || needs.some((n) => !!s.title && n.includes(s.title))));
+}
+
+/** Where a reference's value comes from, in words: "From <provider> · <item>". */
 export function secretState(s: ExtensionSecret): string {
+  if (s.reference) return t("lib-extensions.from_provider", { provider: s.reference.provider_name || s.reference.provider });
   if (s.set) return s.hint ? t("lib-extensions.is_set_hint", { hint: s.hint }) : t("lib-extensions.is_set");
   return s.required ? t("lib-extensions.not_set_required") : t("lib-extensions.not_set");
 }
@@ -454,34 +574,54 @@ export function same(a: Json | undefined, b: Json | undefined): boolean {
 export function valueAt(draft: JsonObject, path: string[]): Json | undefined {
   let cur: Json | undefined = draft;
   for (const k of path) {
-    if (!cur || typeof cur !== "object" || Array.isArray(cur)) return undefined;
-    cur = cur[k];
+    if (Array.isArray(cur)) {
+      if (!/^(0|[1-9]\d*)$/.test(k)) return undefined;
+      cur = cur[Number(k)];
+    } else if (cur && typeof cur === "object") {
+      cur = cur[k];
+    } else {
+      return undefined;
+    }
   }
   return cur === null ? undefined : cur;
 }
 
-/** Sets (undefined: removes) the value at path; a group left empty goes too. */
+/** Sets (undefined: removes) the value at path; a group left empty goes too. Numeric segments address entry rows. */
 export function setAt(draft: JsonObject, path: string[], value: Json | undefined): JsonObject {
+  const next = setNested(draft, path, value);
+  return next && typeof next === "object" && !Array.isArray(next) ? next : {};
+}
+
+function setNested(current: Json | undefined, path: string[], value: Json | undefined): Json | undefined {
   const [key, ...rest] = path;
-  if (key === undefined) return draft;
-  const out: JsonObject = { ...draft };
-  let next: Json | undefined = value;
-  if (rest.length) {
-    const inner = out[key];
-    const obj = inner && typeof inner === "object" && !Array.isArray(inner) ? inner : {};
-    const set = setAt(obj, rest, value);
-    next = Object.keys(set).length ? set : undefined;
+  if (key === undefined) return value;
+  if (Array.isArray(current)) {
+    if (!/^(0|[1-9]\d*)$/.test(key)) return current;
+    const index = Number(key);
+    const out = [...current];
+    const next = rest.length ? setNested(out[index], rest, value) : value;
+    if (next === undefined) out.splice(index, 1);
+    else out[index] = next;
+    return out;
   }
-  if (next === undefined) delete out[key];
+  const out: JsonObject = current && typeof current === "object" ? { ...current } : {};
+  if (!rest.length) {
+    if (value === undefined) delete out[key];
+    else out[key] = value;
+    return out;
+  }
+  const next = setNested(out[key], rest, value);
+  if (next === undefined || (isGroup(next) && !Object.keys(next).length)) delete out[key];
   else out[key] = next;
   return out;
 }
 
-/** Without empty strings and lists the user cleared: "not set" (the schema's default applies). */
-export function compact(obj: JsonObject): JsonObject {
+/** Without empty strings and lists the user cleared: "not set" (the schema's default applies). A required entry list
+ *  named in requiredEntryLists is the exception: its explicit [] is a present, valid value the hub must receive. */
+export function compact(obj: JsonObject, requiredEntryLists?: ReadonlySet<string>): JsonObject {
   const out: JsonObject = {};
   for (const [k, v] of Object.entries(obj)) {
-    if (v === null || v === "" || (Array.isArray(v) && !v.length)) continue;
+    if (v === null || v === "" || (Array.isArray(v) && !v.length && !requiredEntryLists?.has(k))) continue;
     if (typeof v === "object" && !Array.isArray(v)) {
       const inner = compact(v);
       if (Object.keys(inner).length) out[k] = inner;
@@ -513,12 +653,80 @@ export function numberProblems(typed: Record<string, { text: string; integer: bo
 }
 
 /** Whether the draft differs from what the hub has (both read as sent: compacted). */
-export const isDirty = (draft: JsonObject, config: JsonObject | undefined) => !same(compact(draft), compact(config ?? {}));
+export const isDirty = (draft: JsonObject, config: JsonObject | undefined, requiredEntryLists?: ReadonlySet<string>) =>
+  !same(compact(draft, requiredEntryLists), compact(config ?? {}, requiredEntryLists));
+
+const isGroup = (v: Json | undefined): v is JsonObject => !!v && typeof v === "object" && !Array.isArray(v);
+
+/** What a draft changes of the configuration it was made on (both read as sent): each changed field's path and its value
+ *  in the draft (undefined: cleared). Groups are gone into, so a change is one field's, not its whole group's. */
+function draftEdits(draft: JsonObject, base: JsonObject, requiredEntryLists?: ReadonlySet<string>): { path: string[]; value: Json | undefined }[] {
+  const out: { path: string[]; value: Json | undefined }[] = [];
+  const walk = (a: JsonObject, b: JsonObject, at: string[]) => {
+    for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      const [x, y] = [a[k], b[k]];
+      if ((isGroup(x) || x === undefined) && (isGroup(y) || y === undefined)) walk(x ?? {}, y ?? {}, [...at, k]);
+      else if (!same(x, y)) out.push({ path: [...at, k], value: x });
+    }
+  };
+  walk(compact(draft, requiredEntryLists), compact(base, requiredEntryLists), []);
+  return out;
+}
+
+/** Unsaved edits made on `base` (number fields as typed, by dotted path), put on what the hub has now (`fresh`): the fields
+ *  they change keep the change, every other field takes the fresh value, so a change made elsewhere meanwhile shows and
+ *  is not saved back over. A number still being typed stays where it does not read as one yet, or is its field's change. */
+export function rebaseDraft<T extends { text: string; integer: boolean }>(
+  kept: { base: JsonObject; draft: JsonObject; typed: Record<string, T> },
+  fresh: JsonObject,
+  requiredEntryLists?: ReadonlySet<string>,
+): { draft: JsonObject; typed: Record<string, T> } {
+  const edits = draftEdits(kept.draft, kept.base, requiredEntryLists);
+  const edited = new Set(edits.map((e) => e.path.join(".")));
+  const problems = numberProblems(kept.typed);
+  return {
+    draft: edits.reduce((out, e) => setAt(out, e.path, e.value), fresh),
+    typed: Object.fromEntries(Object.entries(kept.typed).filter(([k]) => k in problems || edited.has(k))),
+  };
+}
 
 /** The items of a list field: the draft's, else the default. */
 export function listItems(draft: JsonObject, path: string[], f: ExtensionField): string[] {
   const v = valueAt(draft, path) ?? f.default;
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+}
+
+/** Dotted field path with entry indexes in the hub's validation-error form: accounts[0].address. */
+export function fieldPath(path: string[]): string {
+  return path.reduce((out, part) => (/^(0|[1-9]\d*)$/.test(part) ? `${out}[${part}]` : out ? `${out}.${part}` : part), "");
+}
+
+export function isEntryList(f: ExtensionField): boolean {
+  return f.type === "array" && f.items?.type === "object" && !!f.secret && !!f.items.fields?.length;
+}
+
+export function entryItems(draft: JsonObject, path: string[]): JsonObject[] {
+  const value = valueAt(draft, path);
+  return Array.isArray(value) ? value.filter(isGroup) : [];
+}
+
+export function entryID(entry: JsonObject): string | undefined {
+  return typeof entry._id === "string" && entry._id ? entry._id : undefined;
+}
+
+// Browser-only identity for an entry the hub has not saved yet. Object spreading preserves the enumerable symbol through
+// immutable field edits; Object.keys and JSON.stringify ignore it, so it never enters comparisons or an API payload.
+const unsavedEntryKey = Symbol("personaUnsavedEntry");
+type LocalEntry = JsonObject & { [unsavedEntryKey]?: string };
+let nextEntryKey = 0;
+export function entryKey(entry: JsonObject): string {
+  const saved = entryID(entry);
+  if (saved) return saved;
+  const local = entry as LocalEntry;
+  if (!local[unsavedEntryKey]) {
+    Object.defineProperty(local, unsavedEntryKey, { value: `new-entry-${++nextEntryKey}`, enumerable: true });
+  }
+  return local[unsavedEntryKey]!;
 }
 
 /** A machine on an extension's machine list (format machine): online or not, and for an extension that operates computers how

@@ -27,6 +27,7 @@ func (s *Service) toolAgentArchive(ctx context.Context, machine, self string, ar
 		Machine   string `json:"machine"`
 		SessionID string `json:"session_id"`
 		Close     bool   `json:"close"`
+		Force     bool   `json:"force"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %v", err)
@@ -38,6 +39,9 @@ func (s *Service) toolAgentArchive(ctx context.Context, machine, self string, ar
 	if c.Assistant {
 		return "", fmt.Errorf("that is a Persona conversation, not a coding agent: use conversation_archive / conversation_unarchive")
 	}
+	if a.Force && !archived {
+		return "", fmt.Errorf("force is only for archiving a confirmation-blocked Agent")
+	}
 	who := fmt.Sprintf("%s on %s (session %s)", agentLabel(c), am.Name, c.SessionID)
 	switch {
 	case !archived:
@@ -45,18 +49,23 @@ func (s *Service) toolAgentArchive(ctx context.Context, machine, self string, ar
 			return fmt.Sprintf("%s is not archived: it is in the Agents list already. Nothing changed.", who), nil
 		}
 		if _, err := s.setAgentArchive(ctx, am.ID, c.SessionID, false); err != nil {
-			return "", archiveToolError(who, err, false)
+			return "", archiveToolError(who, err)
 		}
 		s.logf("agent_unarchive %s on %s (from %s)", short(c.SessionID), am.ID, short(self))
 		return fmt.Sprintf("Restored %s to the Agents list. Nothing was reopened on the computer; a message to it (agent_send) resumes it.%s",
 			who, nativeArchiveWords(s.nativeArchiveAwaited(ctx, am.ID, c.SessionID))), nil
+	case a.Force:
+		if err := s.forceArchiveConfirmation(ctx, am.ID, c.SessionID); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Archived and closed %s. Pending confirmations were rejected or cancelled; nothing was approved. Its transcript was kept; agent_unarchive restores the session.", who), nil
 	case a.Close:
 		return s.archiveAndCloseTool(ctx, machine, self, am, c, who, args)
 	case c.Archived:
 		return fmt.Sprintf("%s was archived already. Nothing changed.%s", who, nativeArchiveWords(s.nativeArchiveView(am.ID, c.SessionID))), nil
 	}
 	if _, err := s.setAgentArchive(ctx, am.ID, c.SessionID, true); err != nil {
-		return "", archiveToolError(who, err, false)
+		return "", archiveToolError(who, err)
 	}
 	s.logf("agent_archive %s on %s (from %s)", short(c.SessionID), am.ID, short(self))
 	still := ""
@@ -71,7 +80,7 @@ func (s *Service) toolAgentArchive(ctx context.Context, machine, self string, ar
 // archiveAndCloseTool is agent_archive with close: refused when busy, confirmed on the phone, then archived and closed.
 func (s *Service) archiveAndCloseTool(ctx context.Context, machine, self string, am Device, c proto.Session, who string, args json.RawMessage) (string, error) {
 	if agentCloseBusy(c) {
-		return "", archiveToolError(who, archiveRefusal(0, "agent_busy", errors.New("busy")), true)
+		return "", archiveToolError(who, archiveBusyRefusal(c, true))
 	}
 	l := s.lang(ctx)
 	now := time.Now().UTC()
@@ -93,7 +102,7 @@ func (s *Service) archiveAndCloseTool(ctx context.Context, machine, self string,
 	}
 	res, err := s.archiveAndCloseAgentSession(ctx, am.ID, c.SessionID)
 	if err != nil {
-		return "", archiveToolError(who, err, true)
+		return "", archiveToolError(who, err)
 	}
 	s.logf("agent_archive close %s on %s (from %s): %s", short(c.SessionID), am.ID, short(self), res.Outcome)
 	native := nativeArchiveWords(s.nativeArchiveAwaited(ctx, am.ID, c.SessionID))
@@ -113,7 +122,7 @@ func (s *Service) archiveAndCloseTool(ctx context.Context, machine, self string,
 }
 
 // archiveToolError is a refused or failed archive in the assistant's words: nothing changed, and why.
-func archiveToolError(who string, err error, closing bool) error {
+func archiveToolError(who string, err error) error {
 	var refusal *agentArchiveError
 	if !errors.As(err, &refusal) {
 		return fmt.Errorf("the archive of %s could not be saved, nothing changed: %w", who, err)
@@ -121,12 +130,7 @@ func archiveToolError(who string, err error, closing bool) error {
 	if refusal.code != "agent_busy" {
 		return refusal.err
 	}
-	if closing {
-		return fmt.Errorf("refused: %s is busy (working, waiting for an answer, background work, a /loop, queued messages or a server it "+
-			"runs), and closing it would cut that off. Nothing changed. Wait until it is done, or archive it without close", who)
-	}
-	return fmt.Errorf("refused: %s is busy (working, waiting for an answer or running background work). Nothing changed; it can be "+
-		"archived once it is idle", who)
+	return fmt.Errorf("refused: %s. Nothing changed. %s", who, i18n.Localize(refusal.err, i18n.En))
 }
 
 // nativeArchiveWords say what the agent's own tool did with Persona's archive or restore ("" when it was not asked).

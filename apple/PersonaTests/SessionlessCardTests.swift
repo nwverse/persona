@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A card on no session (`personad ask` outside herdr, #4059) can be answered in the app, and Agents' Needs your input lists
 /// every card its badge counts.
@@ -16,10 +17,10 @@ struct SessionlessCardTests {
         )
     }
 
-    private func session(_ id: String, source: String? = nil, approve: Bool? = nil) -> Session {
+    private func session(_ id: String, source: String? = nil, approve: Bool? = nil, attach: Bool = false) -> Session {
         var extra = ""
         if let source { extra += #","source_kind":"\#(source)""# }
-        if let approve { extra += #","capabilities":{"approve":\#(approve)}"# }
+        if let approve { extra += #","capabilities":{"approve":\#(approve),"attach":\#(attach)}"# }
         let json = #"{"machine_id":"m","session_id":"\#(id)","title":"\#(id)","cwd":"/tmp/p","status":"idle","state":"needs_you"\#(extra)}"#
         do { return try JSON.decoder.decode(Session.self, from: Data(json.utf8)) } catch { fatalError("bad fixture: \(error)") }
     }
@@ -37,6 +38,18 @@ struct SessionlessCardTests {
         #expect(!card("p", kind: .permission, session: "s").canAnswer(session: nil), "its session not known yet")
     }
 
+    /// A card the app can't answer says why under it (#6868): attaching live answers it here where the session offers
+    /// that, else only the computer can; one it can answer says nothing.
+    @Test func aCardTheAppCantAnswerSaysWhy() {
+        let q = card("q", kind: .question, session: "s")
+        #expect(q.answerBlock(session: session("s")) == nil)
+        #expect(q.answerBlock(session: session("s", source: "codex_app_server", approve: true)) == nil)
+        #expect(q.answerBlock(session: session("s", source: "codex_app_server", approve: false, attach: true)) == .attach)
+        #expect(q.answerBlock(session: session("s", source: "codex_app_server", approve: false)) == .computer)
+        #expect(q.answerBlock(session: nil) == .computer, "its session not known yet: as Android says")
+        #expect(card("q", kind: .question).answerBlock(session: nil) == nil, "a sessionless card")
+    }
+
     @Test(arguments: [InteractionKind.question, .permission])
     func resolveSendsASessionlessAnswer(_ kind: InteractionKind) async {
         let hub = FakeHub()
@@ -50,14 +63,22 @@ struct SessionlessCardTests {
         #expect(model.pendingInteractions.isEmpty)
     }
 
+    /// The badge counts the section's rows (#3580): a session's two cards are one row, a sessionless card one of its own.
     @Test func theBadgeCountsWhatNeedsYouLists() {
         let model = AppModel()
         model.applySessions([MachineRef(group: "", id: "m"): [session("s")]])
-        let cards = [card("on-session", kind: .permission, session: "s"), card("script", kind: .question, cwd: "/srv/deploy")]
+        let cards = [card("on-session", kind: .permission, session: "s"), card("also-on-session", kind: .question, session: "s"),
+                     card("script", kind: .question, cwd: "/srv/deploy")]
         model.replaceInteractions("", cards)
         let listed = AgentsNeedsYou.cards(model.pendingInteractions, session: model.session)
-        #expect(listed.map(\.id).sorted() == ["on-session", "script"])
-        #expect(model.badges.agents == listed.count)
+        #expect(listed.map(\.id).sorted() == ["also-on-session", "on-session", "script"])
+        let rows = AgentsNeedsYou.rows(cards: listed, waiting: AgentsNeedsYou.waiting(model.allSessions))
+        // The device's saved agents (another run's) may wait too: machine m's rows are this test's.
+        #expect(rows.filter { $0.key.machineID == "m" }.map(\.id).sorted() == ["agent:m/s", "card:script"])
+        // The badge counts the rows the page lists: the current assistant's, where the device's saved hub has several.
+        let shown = AgentsNeedsYou.rows(cards: AgentsNeedsYou.cards(model.scopedInteractions, session: model.session),
+                                        waiting: AgentsNeedsYou.waiting(model.scoped(model.allSessions)))
+        #expect(model.badges.agents == shown.count)
     }
 
     @Test func aSessionlessRowSaysWhereItComesFrom() {

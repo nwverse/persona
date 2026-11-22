@@ -9,13 +9,58 @@ import (
 	"time"
 )
 
-// What persona-link keeps next to link.json besides the credential: the lock that says one is running, the status it
-// last reported (for `persona-link status`, which cannot ask it) and its log.
+// What persona-link keeps next to link.json besides the credential: the run lock, last reported status, route hint
+// and log.
+
+// RouteHintPath is the disposable active route cache beside link.json.
+func RouteHintPath(path string) string {
+	return strings.TrimSuffix(path, ".json") + ".route.json"
+}
+
+func readRouteHint(path string) routeHint {
+	b, err := os.ReadFile(RouteHintPath(path))
+	if err != nil {
+		return routeHint{}
+	}
+	var hint routeHint
+	if json.Unmarshal(b, &hint) != nil || !isFallbackKind(hint.Kind) || hint.Pairing == "" || hint.Network == "" {
+		removeRouteHint(path)
+		return routeHint{}
+	}
+	return hint
+}
+
+func writeRouteHint(path string, hint routeHint) error {
+	b, err := json.Marshal(hint)
+	if err != nil {
+		return err
+	}
+	file := RouteHintPath(path)
+	tmp := file + ".tmp"
+	_ = os.Remove(tmp)
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp)
+	_, err = f.Write(append(b, '\n'))
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(tmp, file)
+}
+
+func removeRouteHint(path string) {
+	_ = os.Remove(RouteHintPath(path))
+}
 
 var errBusy = errors.New("locked")
 
 // ErrRunning: another persona-link holds the run lock of this link.json.
-var ErrRunning = errors.New("这台电脑上已经有一个 Persona Link 在运行")
+var ErrRunning = newTextError("link-errors.running", nil)
 
 // LockRun takes the run lock of the link.json at path: one persona-link per computer, or two would keep taking the
 // link from each other. ErrRunning when another one has it; release gives it back (exiting does too).
@@ -43,6 +88,15 @@ var ErrLocked = errBusy
 // LockFile takes the exclusive lock of the file at path (made when missing), waiting for it when wait is true; ErrLocked
 // when another process holds it and wait is false. release gives it back; the process ending does too, however it ends.
 func LockFile(path string, wait bool) (release func(), err error) {
+	f, err := LockFileHandle(path, wait)
+	if err != nil {
+		return nil, err
+	}
+	return func() { f.Close() }, nil
+}
+
+// LockFileHandle holds the lock until the caller closes f. A duplicated descriptor retains the same lock during exec.
+func LockFileHandle(path string, wait bool) (*os.File, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
@@ -51,7 +105,7 @@ func LockFile(path string, wait bool) (release func(), err error) {
 		f.Close()
 		return nil, err
 	}
-	return func() { f.Close() }, nil
+	return f, nil
 }
 
 // Running says whether a persona-link is running with the link.json at path: whether its run lock is held. It takes the
@@ -77,11 +131,6 @@ type SavedStatus struct {
 // StatusPath is where the persona-link of the link.json at path keeps its status: link.status.json beside it.
 func StatusPath(path string) string {
 	return strings.TrimSuffix(path, ".json") + ".status.json"
-}
-
-// LogPath is persona-link's log beside the link.json at path: the menu bar app sends the helper's there too.
-func LogPath(path string) string {
-	return filepath.Join(filepath.Dir(path), "link.log")
 }
 
 // WriteStatus replaces the saved status at once (another process may read it any time). It holds no credential.

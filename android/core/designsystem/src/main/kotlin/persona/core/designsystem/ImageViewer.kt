@@ -34,8 +34,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -96,10 +94,12 @@ class ViewerImage(
     val description: String = "",
     val width: Int? = null,
     val height: Int? = null,
+    /** External pages require a tap even if the pager composes them ahead of a swipe. */
+    val askToLoad: Boolean = false,
     val load: suspend () -> ByteArray,
 ) {
     override fun equals(other: Any?): Boolean = other is ViewerImage && other.key == key &&
-        other.description == description && other.width == width && other.height == height
+        other.description == description && other.width == width && other.height == height && other.askToLoad == askToLoad
 
     override fun hashCode(): Int = (key.hashCode() * 31 + description.hashCode()) * 31 + (width ?: 0) * 7 + (height ?: 0)
 }
@@ -217,7 +217,8 @@ private fun ViewerBody(
     var pull by remember { mutableFloatStateOf(0f) }
     var settle by remember { mutableStateOf<Job?>(null) }
     var running by remember { mutableStateOf<Int?>(null) }
-    val snackbar = remember { SnackbarHostState() }
+    // The viewer is its own window, so it draws its own toast (the app's can't reach over it).
+    val toast = rememberToastState()
     val scope = rememberCoroutineScope()
     // The controls float over the picture: their glass samples the pager, not the page under this window.
     val haze = remember { HazeState() }
@@ -258,10 +259,7 @@ private fun ViewerBody(
             } finally {
                 running = null
             }
-            if (notice != null) scope.launch {
-                snackbar.currentSnackbarData?.dismiss()
-                snackbar.showSnackbar(notice)
-            }
+            if (notice != null) toast.show(FeedbackNotice(notice, style = if (notice == actionFailed) FeedbackStyle.Error else FeedbackStyle.Success))
         }
     }
 
@@ -303,12 +301,13 @@ private fun ViewerBody(
                     if (images.size > 1) Text(
                         "${page + 1} / ${images.size}",
                         style = PersonaTheme.type.labelSmall.copy(fontFeatureSettings = TabularFigures), color = palette.ink, maxLines = 1,
-                        modifier = Modifier.floatingSurface(CircleShape).padding(horizontal = 14.dp, vertical = Tokens.Space.s),
+                        modifier = Modifier.floatingSurface(CircleShape).padding(horizontal = 14.dp.dense, vertical = Tokens.Space.s),
                     )
                 }
             }
+            // Below the top bar's buttons, so the toast never covers Close.
+            JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = Tokens.Space.xxl + Tokens.Space.xxl))
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                SnackbarHost(snackbar)
                 if (actions.isNotEmpty()) AnimatedVisibility(showChrome, enter = fade, exit = vanish) {
                     ViewerBar {
                         ViewerActionRow(actions, enabled = ready[page] != null && running == null, running = running, onAction = ::perform)
@@ -386,6 +385,13 @@ private fun ViewerPage(
     pull: () -> Float,
 ) {
     val palette = PersonaTheme.palette
+    var allowed by remember(image.key, image.askToLoad) { mutableStateOf(!image.askToLoad) }
+    if (!allowed && cache[image.key] == null) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            JButton(stringResource(R.string.designsystem_load_image), { allowed = true }, icon = PhIcons.Image)
+        }
+        return
+    }
     val load by rememberUpdatedState(image.load)
     var attempt by remember(image.key) { mutableIntStateOf(0) }
     val state by produceState<ViewerPicture>(ViewerPicture.Loading, image.key, attempt, maxSide) {
@@ -410,7 +416,7 @@ private fun ViewerPage(
             JSpinner(Modifier.size(28.dp))
         }
         ViewerPicture.Failed -> Column(
-            Modifier.fillMaxSize().padding(Tokens.Space.xxl),
+            Modifier.fillMaxSize().padding(Tokens.Space.xl),
             verticalArrangement = Arrangement.spacedBy(Tokens.Space.m, Alignment.CenterVertically),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {

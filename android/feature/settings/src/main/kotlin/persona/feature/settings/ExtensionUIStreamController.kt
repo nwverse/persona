@@ -17,8 +17,9 @@ class ExtensionUIStreamController(
     extension: String,
     contribution: String,
     initialState: String = "",
-    context: ExtensionUIContext = ExtensionUIContext(uiVersion = 7, platform = "android",
-        locale = java.util.Locale.getDefault().toLanguageTag(), tz = java.util.TimeZone.getDefault().id,
+    // The pages' UI version (10): native tiles draw gauges; graph components arrive as the hub's compatible rows.
+    context: ExtensionUIContext = ExtensionUIContext(uiVersion = persona.core.hub.HttpExtensionManagement.UI_VERSION, platform = "android",
+        locale = ClientLanguage.localeTag(), tz = java.util.TimeZone.getDefault().id,
         stream = ExtensionUIStreamCapability(protocol = 1, components = NativeExtensionStreamAdapter.Components.toList())),
     dispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
     private val responseDeadlineMillis: Long = 30000,

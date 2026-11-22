@@ -144,7 +144,7 @@ nonisolated struct WorkflowRun: Codable, Identifiable, Hashable, Sendable {
     /// The phase, and where it sits among the declared ones: 「Verify 2/2」.
     var phaseLabel: String? {
         guard let p = phase, !p.isEmpty else { return nil }
-        let n = phases?.count ?? 0
+        let n = phaseCount ?? phases?.count ?? 0
         if let i = phaseIndex, i >= 1, n > 1 { return "\(p) \(i)/\(n)" }
         return p
     }
@@ -480,9 +480,24 @@ nonisolated struct Lossy<T: Decodable & Sendable>: Decodable, Sendable {
     init(from decoder: Decoder) throws { value = try? T(from: decoder) }
 }
 
+extension Session {
+    /// Nothing to look at now, but a /loop that has not fired yet, background work still running, or the hub waiting it
+    /// out (`WorkState.hubWaits`: a retry, a wake after a deploy) will wake it: new messages may come in minutes.
+    /// Waiting in the list.
+    nonisolated var isWaiting: Bool {
+        isQuiet && (listWaiting ?? (loop != nil || !(background ?? []).isEmpty || (subagents ?? []).contains(where: \.running)
+            || work?.hubWaits == true || !runningWorkflows.isEmpty))
+    }
+}
+
 nonisolated extension Session {
-    /// Its workflows still running.
-    var runningWorkflows: [WorkflowRun] { (workflows ?? []).filter(\.isRunning) }
+    /// Its workflows still running. On a summary row (`summary=1`, for example the Agents list's Recent grouping) its
+    /// `workflow_progress`, the newest running run without its agents and phases, stands for them (#5888), even when
+    /// the row kept an older complete row's `workflows` (`preservingDetails`): fresh summary counts win (#3588).
+    var runningWorkflows: [WorkflowRun] {
+        if listWaiting != nil { return listWorkflowProgress.map { $0.isRunning ? [$0] : [] } ?? [] }
+        return (workflows ?? []).filter(\.isRunning)
+    }
 
     /// The chat header's cards: the running ones, and those that ended in the last hour (what happened to it), running
     /// first; only while one runs or one just ended.
@@ -499,7 +514,10 @@ nonisolated extension Session {
     var leadWorkflow: WorkflowRun? { runningWorkflows.first }
 
     /// Working while its turn has ended, because a workflow runs (#2935; the hub counts it as working): 「工作中（后台）」.
-    var isBackgroundWorking: Bool { !assistant && state == .working && !runningWorkflows.isEmpty }
+    /// A summary row's `running_workflows` also counts a run it sends no progress for (an older runtime's background entry).
+    var isBackgroundWorking: Bool {
+        !assistant && state == .working && (!runningWorkflows.isEmpty || (listWaiting != nil && (listRunningWorkflows ?? 0) > 0))
+    }
 
     /// Background tasks to count apart from the workflows (the hub also lists a running workflow in `background`, for
     /// older apps): 「后台 N」 is these plus the running workflows.
@@ -507,18 +525,30 @@ nonisolated extension Session {
 }
 
 extension Session {
-    /// The state's word with the background marked: 「工作中（后台）」 (`AgentState.label` is the main actor's). Never
-    /// Awaiting Reply: that needs to know whether it is muted (`stateLabel(muted:)`).
+    /// Waiting and Awaiting Reply keep their existing presentation when a hub also sends the done flag.
+    nonisolated func showsJustFinished(muted: Bool) -> Bool {
+        isJustFinished(muted: muted) && !awaitsReply && !isWaiting
+    }
+
+    /// The underlying state word and its background qualifier; review words additionally require the mute preference.
     var stateLabel: String {
         if waitsInBackground { return String(localized: "Waiting in the background") }
         return isBackgroundWorking ? String(localized: "Working (Background)") : state.label
     }
-    /// `stateLabel`, and "Awaiting Reply" for a seen one waiting on the user's reply that is not muted (#5096).
-    func stateLabel(muted: Bool) -> String { awaitsYourReply(muted: muted) ? StateName.awaitsReply.text : stateLabel }
+    /// The list word, including an unmuted pending reply or recently finished turn.
+    func stateLabel(muted: Bool) -> String {
+        if awaitsYourReply(muted: muted) { return StateName.awaitsReply.text }
+        if showsJustFinished(muted: muted) { return StateName.justFinished.text }
+        return stateLabel
+    }
     /// The colors of `stateLabel`: Waiting in the Background lighter (`StatusPalette.backgroundWaiting`), else the state's.
     var stateTone: StatusTone { waitsInBackground ? StatusPalette.backgroundWaiting : state.tone }
-    /// The colors of `stateLabel(muted:)`: Awaiting Reply in its own tone (`StatusPalette.awaitingReply`), else `stateTone`.
-    func stateTone(muted: Bool) -> StatusTone { awaitsYourReply(muted: muted) ? StatusPalette.awaitingReply : stateTone }
+    /// The list tone follows the same review priority as the word.
+    func stateTone(muted: Bool) -> StatusTone {
+        if awaitsYourReply(muted: muted) { return StatusPalette.awaitingReply }
+        if showsJustFinished(muted: muted) { return StatusPalette.unread }
+        return stateTone
+    }
 }
 
 nonisolated extension WorkflowRun {

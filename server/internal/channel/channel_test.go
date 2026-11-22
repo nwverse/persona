@@ -42,15 +42,16 @@ func TestItemValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	bad := map[string]func(*Item){
-		"reserved id":  func(i *Item) { i.ID = "feishu" },
-		"uuid-like id": func(i *Item) { i.ID = "cafebabe" },
-		"no name":      func(i *Item) { i.Name = " " },
-		"kind":         func(i *Item) { i.Kind = KindApp },
-		"format":       func(i *Item) { i.Capabilities.Format = "html" },
-		"asks":         func(i *Item) { i.Capabilities.Asks = "cards" },
-		"max_text":     func(i *Item) { i.Capabilities.MaxText = 50 },
-		"bind alone":   func(i *Item) { i.Connector = "" },
-		"bind value":   func(i *Item) { i.Bind = BindNone },
+		"reserved id":     func(i *Item) { i.ID = "feishu" },
+		"uuid-like id":    func(i *Item) { i.ID = "cafebabe" },
+		"no name":         func(i *Item) { i.Name = " " },
+		"kind":            func(i *Item) { i.Kind = KindApp },
+		"format":          func(i *Item) { i.Capabilities.Format = "html" },
+		"asks":            func(i *Item) { i.Capabilities.Asks = "cards" },
+		"max_text":        func(i *Item) { i.Capabilities.MaxText = 50 },
+		"bind alone":      func(i *Item) { i.Connector = "" },
+		"bind value":      func(i *Item) { i.Bind = BindNone },
+		"reply_only+push": func(i *Item) { i.Capabilities.ReplyOnly = true; i.Capabilities.Push = true },
 	}
 	for what, f := range bad {
 		it := good
@@ -58,6 +59,36 @@ func TestItemValidate(t *testing.T) {
 		if it.Validate() == nil {
 			t.Errorf("%s: accepted", what)
 		}
+	}
+	replyOnly := good
+	replyOnly.Capabilities.ReplyOnly = true
+	if err := replyOnly.Validate(); err != nil {
+		t.Fatalf("reply_only rejected: %v", err)
+	}
+}
+
+// A mention channel is a host-supported contribution too: it answers in someone else's chat, and may opt into the
+// main conversation through its ordinary target setting. The other kinds remain invalid for an extension (#11130).
+func TestMentionItemValidate(t *testing.T) {
+	it := Item{ID: "examplechat", Name: "Example Chat", Kind: KindMention,
+		Capabilities: Capabilities{Format: FormatPlain, MaxText: 4000, Asks: AsksNone}}
+	if err := it.Validate(); err != nil {
+		t.Fatalf("a mention contribution: %v", err)
+	}
+	it.Kind = KindVoice
+	if err := it.Validate(); err == nil {
+		t.Fatal("a voice contribution was accepted as a channel plugin")
+	}
+}
+
+// /agent may have no words of its own: the owner asks from the conversation, topic and gathered context instead (#11130).
+func TestMentionMessageWithOnlyOriginIsARequest(t *testing.T) {
+	var m Message
+	if err := json.Unmarshal([]byte(`{"id":"om_empty","chat":"Release chat","topic":"Release 1.3","owner":true}`), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Empty() {
+		t.Fatal("a mention with its origin was dropped as an empty message")
 	}
 }
 
@@ -85,6 +116,9 @@ func TestPluginFeatures(t *testing.T) {
 		t.Fatal(got)
 	}
 	if got := ids(PluginFeatures("", Capabilities{Asks: AsksNone}, nil)); got != "" {
+		t.Fatal(got)
+	}
+	if got := ids(PluginFeatures("", Capabilities{Asks: AsksText, Push: true, ReplyOnly: true}, nil)); got != "asks,all_asks" {
 		t.Fatal(got)
 	}
 }
@@ -118,9 +152,49 @@ func TestRunCheck(t *testing.T) {
 	if s := r.Check(Look{Now: t0.Add(5 * time.Hour), Exists: true}); s.Do != Finish || !strings.Contains(s.Note, "先不等了") {
 		t.Fatalf("too long: %+v", s)
 	}
+	// A held run ends with a word as well: its progress card went back with its message, so an ending without a note
+	// would be a quiet one and nothing would be said anywhere.
 	held := &Run{Started: t0, Held: true}
-	if s := held.Check(Look{Now: t0.Add(3 * time.Hour), Exists: true}); s.Do != Finish || s.Note != "" || s.End != EndGaveUp {
+	if s := held.Check(Look{Now: t0.Add(3 * time.Hour), Exists: true}); s.Do != Finish || !strings.Contains(s.Note, "先不等了") || s.End != EndGaveUp {
 		t.Fatalf("held too long: %+v", s)
+	}
+}
+
+// Holding for a continuation does not move the run's original start, including when another continuation is held later.
+func TestRunHoldPreservesStarted(t *testing.T) {
+	r := &Run{Started: t0, Base: 5, MsgIDs: []string{"wechat-1"}, Probe: "original"}
+	r.Hold(10, t0.Add(time.Hour))
+	r.Hold(20, t0.Add(90*time.Minute))
+	if !r.Started.Equal(t0) {
+		t.Fatalf("Started = %v after repeated holds, want the original %v", r.Started, t0)
+	}
+}
+
+// HeldMost bounds the whole run from its original message; holding again must not renew the two-hour window.
+func TestRunHeldMostStartsAtOriginalMessage(t *testing.T) {
+	r := &Run{Started: t0}
+	r.Hold(10, t0.Add(time.Hour))
+	r.Hold(20, t0.Add(90*time.Minute))
+	step := r.Check(Look{Now: t0.Add(HeldMost + time.Second), Exists: true})
+	if step.Do != Finish || step.End != EndGaveUp {
+		t.Fatalf("past HeldMost from the original start: %+v, want Finish/EndGaveUp", step)
+	}
+}
+
+// Each hold still gets its own read and quiet-end grace, even though the absolute held deadline stays at the original
+// message. A delayed wake or late words are not cut off merely because the original turn was old.
+func TestRunHoldRenewsPerHoldGrace(t *testing.T) {
+	r := &Run{Started: t0}
+	r.Hold(10, t0.Add(time.Hour))
+	r.Hold(20, t0.Add(90*time.Minute))
+	if step := r.Check(Look{Now: t0.Add(90*time.Minute + 5*time.Second), Exists: true}); step.Do != Wait {
+		t.Fatalf("new hold did not get its read grace: %+v", step)
+	}
+	if res := r.Decide(Reading{Found: true}, Look{Now: t0.Add(90*time.Minute + 5*time.Minute)}); res != nil {
+		t.Fatalf("new hold did not get its quiet-end grace: %+v", res)
+	}
+	if res := r.Decide(Reading{Found: true}, Look{Now: t0.Add(90*time.Minute + HeldIdleMost + time.Second)}); res == nil || !res.Quiet {
+		t.Fatalf("per-hold quiet grace did not expire: %+v", res)
 	}
 }
 
@@ -159,6 +233,40 @@ func TestRunDecide(t *testing.T) {
 	}
 }
 
+// A held run's background wait can also end badly: the turn its background work started was interrupted or cut off by a
+// model API error, or its computer went offline. Its quiet ending (nothing more to say) still carries that outcome, so
+// the channel is not told the work finished when it did not (#4228).
+func TestRunDecideHeldQuietEndKeepsOutcome(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rd   Reading
+		look Look
+		want End
+	}{
+		{"done", Reading{Found: true, Last: 21}, Look{}, EndDone},
+		{"stopped", Reading{Found: true, Last: 21, Stopped: transcript.InterruptedNotice}, Look{}, EndStopped},
+		{"api error", Reading{Found: true, Last: 21, Stopped: transcript.APIErrorPrefix + "overloaded"}, Look{}, EndError},
+		{"failed turn", Reading{Found: true, Last: 21}, Look{Failed: true}, EndError},
+		{"offline", Reading{Found: true, Last: 21}, Look{Offline: true}, EndOffline},
+	} {
+		look := tc.look
+		look.Now = t0.Add(HeldIdleMost + time.Minute)
+		res := (&Run{Started: t0, Held: true}).Decide(tc.rd, look)
+		if res == nil || !res.Quiet || res.End != tc.want {
+			t.Fatalf("%s: %+v", tc.name, res)
+		}
+		if res.Held {
+			t.Fatalf("%s: a quiet ending is final: %+v", tc.name, res)
+		}
+	}
+	// Why the turn ended comes along, as on an end without words that is not quiet.
+	res := (&Run{Started: t0, Held: true}).Decide(Reading{Found: true, Last: 21, Stopped: transcript.InterruptedNotice},
+		Look{Now: t0.Add(HeldIdleMost + time.Minute)})
+	if res.Stopped != transcript.InterruptedNotice {
+		t.Fatalf("stopped: %+v", res)
+	}
+}
+
 func TestFindAndFold(t *testing.T) {
 	items := []proto.Item{{Seq: 1, Role: "user", Kind: proto.KindText, Text: "上一个"}, {Seq: 2, Role: "user", Kind: proto.KindText, Text: "第二个问题",
 		ClientMsgID: "wechat-b"}, {Seq: 3, Role: "user", Kind: proto.KindText, Text: "没有 id 的消息"}}
@@ -190,11 +298,32 @@ func TestAnswerIsTheLastWords(t *testing.T) {
 		{Role: "assistant", Kind: proto.KindText, Text: "结论一"},
 		{Role: "assistant", Kind: proto.KindText, Text: "结论二"},
 	}
+	// "先看看" is a passing line before a tool call: left out.
 	if got := Answer(items); len(got) != 2 || got[0].Text != "结论一" {
 		t.Fatalf("%+v", got)
 	}
 	if got := Answer(items[:3]); len(got) != 1 || got[0].Text != "先看看" {
 		t.Fatalf("%+v", got)
+	}
+}
+
+// A long report, a tool call, a short closing line: the answer is both, from the report on, in order (not only the
+// words after the last call).
+func TestAnswerKeepsAReportBeforeAToolCall(t *testing.T) {
+	report := "今天的进展：\n\n" + strings.Repeat("第一项已经合并，第二项在等 CI，第三项需要你决定。", 4)
+	items := []proto.Item{
+		{Role: "user", Kind: proto.KindText, Text: "汇报一下"},
+		{Role: "assistant", Kind: proto.KindText, Text: "我先查一下。"},
+		{Role: "assistant", Kind: proto.KindToolUse, ToolName: "Bash"},
+		{Role: "user", Kind: proto.KindToolResult},
+		{Role: "assistant", Kind: proto.KindText, Text: report},
+		{Role: "assistant", Kind: proto.KindToolUse, ToolName: "mcp__persona__agent_send"},
+		{Role: "user", Kind: proto.KindToolResult},
+		{Role: "assistant", Kind: proto.KindText, Text: "已经发给它了。"},
+	}
+	got := Answer(items)
+	if len(got) != 2 || got[0].Text != report || got[1].Text != "已经发给它了。" {
+		t.Fatalf("answer %+v, want the report then the closing line", got)
 	}
 }
 

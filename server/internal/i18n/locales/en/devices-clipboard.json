@@ -1,0 +1,15 @@
+{
+  "read_only": "This device can't use the computer's clipboard.",
+  "disabled": "Clipboard sharing is off for {name}. Turn it on in the computer's settings.",
+  "offline": "{name} is offline.",
+  "too_large": "The clipboard content is too large to send.",
+  "bad_image": "The image isn't a PNG or JPEG.",
+  "failed": "Couldn't reach the clipboard on {name}.",
+  "need_content": "Send text or an image.",
+  "need_enabled": "enabled is required.",
+  "reason_no_display": "This computer has no desktop session, so it has no clipboard.",
+  "reason_no_tool": "Install wl-clipboard (Wayland) or xclip (X11) on this computer to share its clipboard.",
+  "reason_no_session": "Persona runs outside your desktop session on this computer, so it can't reach the clipboard.",
+  "reason_os": "Clipboard sharing isn't available on this computer's operating system.",
+  "reason_node_outdated": "Update Persona on this computer to share its clipboard."
+}

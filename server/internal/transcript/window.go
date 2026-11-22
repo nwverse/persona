@@ -3,19 +3,28 @@ package transcript
 import (
 	"bufio"
 	"bytes"
+	"cmp"
+	"encoding/json"
+	"fmt"
 	"hash/crc32"
 	"io"
+	"maps"
 	"os"
+	"slices"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/tokenuse"
 )
 
 // Opening a big transcript cold (a node that just started, a session not opened for a while) used to parse all of it
 // to answer "the last two exchanges": 22 s for 317 MB on a busy machine, past the hub's timeout. Now a cold open of a
-// file over 2×windowBytes counts its lines (fast: no JSON) and parses only a window at the end. Pages, after_seq and
-// full texts that reach before the window parse the window before it, and so on back to the first line.
+// file over 2×windowBytes counts its lines (fast: no JSON) and parses only a window at the end. Pages and after_seq
+// that reach before the window parse the window before it, and so on back to the first line; a full text parses back
+// only to the line that names its item (findOlder).
 // Session-level Meta (turns, tokens, compactions) needs the whole file: it is worked out when first asked for
 // (Meta), outside the file's lock.
 //
@@ -23,7 +32,9 @@ import (
 // the state below, and a window starts with it as it would be — the background-task notifications already
 // shown (a repeat is dropped) and the calls they name, the reports subagents handed back before their
 // notification, and the last "! cmd" input (its output line becomes the call) are read from the earlier lines that
-// mention them, as is ultracode's pending command (its delayed attachment repeats command output).
+// mention them, as is ultracode's pending command (its delayed attachment repeats command output), and the request
+// whose usage the lines just before put on items (a reply's blocks are lines of their own; item_usage.go), and the
+// backgrounded Codex commands still running (their terminal record gives only the result, codexPendingAt).
 // Those lines are found by a byte search while counting lines, so a Claude window may start at any line; a
 // Codex rollout records an item twice only within its turn, so its windows start at a turn (task_started).
 
@@ -37,9 +48,11 @@ type window struct {
 	notif     []notifSeed
 	bash      []int // lines mentioning a "! cmd" (input or output)
 	ultracode []int // lines mentioning ultracode attachments or local command output
-	codex     bool
-	start     int             // the first window's first line: the File's meta parses from there
-	ids       map[string]bool // tasks whose earlier notifications the File's meta has seen
+	// background: lines mentioning a backgrounded Codex command (codexPendingAt); none in most rollouts.
+	background []int
+	codex      bool
+	start      int             // the first window's first line: the File's meta parses from there
+	ids        map[string]bool // tasks whose earlier notifications the File's meta has seen
 }
 
 // notifSeed is a line mentioning a background-task notification, or a subagent handing its report back, and the
@@ -54,45 +67,70 @@ var (
 	seedBash         = []byte("<bash-")
 	seedUltracode    = []byte("ultra_effort_")
 	seedStdout       = []byte("local-command-stdout")
-	seedHandback     = []byte(`"senderTaskId":"`) // a subagent's message (a hand-back among them): its id follows
+	seedHandback     = []byte(`"senderTaskId":"`)
+	seedAgent        = []byte(`"Agent"`)
+	seedTask         = []byte(`"Task"`)
+	seedAgentID      = []byte(`agentId:`)
+	seedAgentRecord  = []byte(`"agentId"`)
+	seedPeer         = []byte(`"peer"`)
+	seedBackgrounded = []byte(`"backgrounded"`)
+	// seedMarkers are what scanLines looks for; seedBackgrounded stays last (it is left out of a Claude transcript).
+	seedMarkers = [][]byte{seedNotification, seedBash, seedUltracode, seedStdout, seedHandback, seedAgent, seedTask, seedAgentID,
+		seedAgentRecord, seedPeer, seedBackgrounded}
 )
 
 // scanLines reads a file once without parsing it: where each complete line starts, which lines mention a seed marker,
 // the first line, and where the last complete line ends (what follows is a line still being written). Big blocks and
 // byte searches: a few hundred MB in a fraction of a second.
-func scanLines(fh *os.File, size int64) (starts []int64, notif []notifSeed, bash, ultracode []int, first []byte, lastNL int64, err error) {
+func scanLines(fh *os.File, size int64) (starts []int64, notif []notifSeed, bash, ultracode, background []int, first []byte, lastNL int64, err error) {
 	const block = 4 << 20
 	keep := int64(max(len(seedNotification), len(seedStdout), len(seedHandback)) - 1) // a marker split across two blocks
 	buf := make([]byte, block+keep)
 	type hit struct {
-		off       int64
-		id        string // a notification's task id; bash: "!"
-		bash      bool
-		ultracode bool
+		off        int64
+		id         string // a notification's task id; bash: "!"
+		bash       bool
+		ultracode  bool
+		background bool
 	}
 	var hits []hit
 	starts = append(starts, 0)
 	firstDone := false
+	claude := false // the first line is read and is no Codex rollout's
 	for off := int64(0); off < size; off += block {
 		n := min(block+keep, size-off)
 		if _, err := fh.ReadAt(buf[:n], off); err != nil && err != io.EOF {
-			return nil, nil, nil, nil, nil, 0, err
+			return nil, nil, nil, nil, nil, nil, 0, err
 		}
 		data := buf[:n]
 		own := min(int64(block), n) // bytes this block owns; the rest is the next block's start, read for markers
-		for _, m := range [][]byte{seedNotification, seedBash, seedUltracode, seedStdout, seedHandback} {
+		if !firstDone {
+			if j := bytes.IndexByte(data[:own], '\n'); j >= 0 {
+				first, firstDone = append(first, data[:j]...), true
+				claude = !isCodexLine(first)
+			} else {
+				first = append(first, data[:own]...)
+			}
+		}
+		markers := seedMarkers
+		if claude {
+			markers = markers[:len(markers)-1] // only a Codex rollout backgrounds commands: a Claude transcript pays nothing
+		}
+		for _, m := range markers {
 			for i := 0; ; {
 				j := bytes.Index(data[i:], m)
 				if j < 0 || int64(i+j) >= own {
 					break
 				}
-				h := hit{off: off + int64(i+j), bash: bytes.Equal(m, seedBash), ultracode: bytes.Equal(m, seedUltracode) || bytes.Equal(m, seedStdout)}
+				h := hit{off: off + int64(i+j), bash: bytes.Equal(m, seedBash), ultracode: bytes.Equal(m, seedUltracode) || bytes.Equal(m, seedStdout),
+					background: bytes.Equal(m, seedBackgrounded)}
+				// A backgrounded command's id, and whether the line is one, are read with the line (codexPendingAt).
 				if bytes.Equal(m, seedHandback) {
 					near := data[i+j+len(m) : min(len(data), i+j+len(m)+200)]
 					if z := bytes.IndexByte(near, '"'); z > 0 {
 						h.id = string(near[:z])
 					}
-				} else if !h.bash && !h.ultracode { // the task id follows the marker: "<task-notification>\n<task-id>…</task-id>"
+				} else if !h.bash && !h.ultracode && !h.background { // the task id follows the marker: "<task-notification>\n<task-id>…</task-id>"
 					near := data[i+j : min(len(data), i+j+300)]
 					if a := bytes.Index(near, []byte("<task-id>")); a >= 0 {
 						if z := bytes.Index(near[a:], []byte("</task-id>")); z > 0 {
@@ -102,13 +140,6 @@ func scanLines(fh *os.File, size int64) (starts []int64, notif []notifSeed, bash
 				}
 				hits = append(hits, h)
 				i += j + 1
-			}
-		}
-		if !firstDone {
-			if j := bytes.IndexByte(data[:own], '\n'); j >= 0 {
-				first, firstDone = append(first, data[:j]...), true
-			} else {
-				first = append(first, data[:own]...)
 			}
 		}
 		for i := int64(0); i < own; {
@@ -128,7 +159,11 @@ func scanLines(fh *os.File, size int64) (starts []int64, notif []notifSeed, bash
 			break
 		}
 		line := sort.Search(len(starts), func(i int) bool { return starts[i] > h.off }) // 1-based line holding h
-		if h.ultracode {
+		if h.background {
+			if len(background) == 0 || background[len(background)-1] != line {
+				background = append(background, line)
+			}
+		} else if h.ultracode {
 			if len(ultracode) == 0 || ultracode[len(ultracode)-1] != line {
 				ultracode = append(ultracode, line)
 			}
@@ -137,16 +172,27 @@ func scanLines(fh *os.File, size int64) (starts []int64, notif []notifSeed, bash
 				bash = append(bash, line)
 			}
 		} else {
+			length := lastNL - starts[line-1]
+			if line < len(starts) {
+				length = starts[line] - starts[line-1]
+			}
+			if length > 64<<10 {
+				var prefix [1024]byte
+				n, _ := fh.ReadAt(prefix[:], starts[line-1])
+				if seedRequestTypeRe.Match(prefix[:n]) {
+					continue
+				}
+			}
 			notif = append(notif, notifSeed{line, h.id})
 		}
 	}
-	return starts, notif, bash, ultracode, first, lastNL, nil
+	return starts, notif, bash, ultracode, background, first, lastNL, nil
 }
 
 // openWindow reads a big file cold: counts its lines, parses the window at its end. ok is false when no turn start
 // is close enough to the end to make a window worth it (the caller reads the file whole). Callers hold f.mu.
 func (f *File) openWindow(fh *os.File, size int64) (fresh []proto.Item, ok bool, err error) {
-	starts, notif, bash, ultracode, first, lastNL, err := scanLines(fh, size)
+	starts, notif, bash, ultracode, background, first, lastNL, err := scanLines(fh, size)
 	if err != nil {
 		return nil, false, err
 	}
@@ -154,7 +200,7 @@ func (f *File) openWindow(fh *os.File, size int64) (fresh []proto.Item, ok bool,
 	if n == 0 {
 		return nil, false, nil
 	}
-	w := &window{starts: starts, notif: notif, bash: bash, ultracode: ultracode, codex: isCodexLine(first)}
+	w := &window{starts: starts, notif: notif, bash: bash, ultracode: ultracode, background: background, codex: isCodexLine(first)}
 	// The window starts at the line windowBytes before the end (Codex: the turn starting there or before).
 	from := sort.Search(n, func(i int) bool { return starts[i] >= size-windowBytes })
 	b := max(from, 1)
@@ -169,13 +215,13 @@ func (f *File) openWindow(fh *os.File, size int64) (fresh []proto.Item, ok bool,
 		return nil, false, err
 	}
 	w.start, w.starts = b, starts[:b]
-	meta := f.seeded(fh, w, b, lastNL, data)
-	w.ids = map[string]bool{}
-	for _, m := range taskIDRe.FindAllSubmatch(data, -1) {
-		w.ids[string(m[1])] = true
-	}
+	// The tasks the seed read the earlier lines of, notifications and messages (senderTaskId) alike: a new line naming
+	// one of them does not read those lines again (seeNotifications), which would start its agent over as running
+	// and then drop the notification that ended it as one already shown.
+	w.ids = seedTaskIDs(data)
+	meta := f.seeded(fh, w, b, lastNL, w.ids)
 	var kept []proto.Item
-	f.cut = nil
+	f.refs = nil
 	f.tree = f.freshTree()
 	f.parseLines(data, starts[b-1], b, &meta, f.tree, &kept, &fresh)
 	tail := make([]byte, size-lastNL)
@@ -194,12 +240,12 @@ func (f *File) openWindow(fh *os.File, size int64) (fresh []proto.Item, ok bool,
 // drops it. Callers hold f.mu.
 func (f *File) seeNotifications(data []byte) {
 	w := f.win
-	if w == nil || !f.partialMeta || !bytes.Contains(data, []byte("<task-id>")) {
+	if w == nil || !f.partialMeta {
 		return
 	}
 	fresh := map[string]bool{}
-	for _, m := range taskIDRe.FindAllSubmatch(data, -1) {
-		if id := string(m[1]); !w.ids[id] {
+	for id := range seedTaskIDs(data) {
+		if !w.ids[id] {
 			fresh[id], w.ids[id] = true, true
 		}
 	}
@@ -211,8 +257,8 @@ func (f *File) seeNotifications(data []byte) {
 		return
 	}
 	defer fh.Close()
-	scratch := Meta{Sidechain: f.meta.Sidechain, Codex: w.codex, notified: f.meta.notified, taskCalls: f.meta.taskCalls,
-		handbacks: f.meta.handbacks}
+	scratch := Meta{Sidechain: f.meta.Sidechain, Codex: w.codex, notified: f.meta.notified, taskCalls: maps.Clone(f.meta.taskCalls),
+		handbacks: f.meta.handbacks, agentCalls: maps.Clone(f.meta.agentCalls)}
 	last := 0
 	for _, s := range w.notif {
 		if s.line >= w.start {
@@ -227,7 +273,23 @@ func (f *File) seeNotifications(data []byte) {
 			ParseLine(s.line, bytes.TrimRight(line, "\n"), &scratch)
 		}
 	}
-	f.meta.notified, f.meta.taskCalls, f.meta.handbacks = scratch.notified, scratch.taskCalls, scratch.handbacks
+	f.meta.notified, f.meta.handbacks = scratch.notified, scratch.handbacks
+	for id := range fresh {
+		call := scratch.taskCalls[id]
+		if call == "" {
+			continue
+		}
+		if f.meta.taskCalls == nil {
+			f.meta.taskCalls = map[string]string{}
+		}
+		f.meta.taskCalls[id] = call
+		if agent, ok := scratch.agentCalls[call]; ok {
+			if f.meta.agentCalls == nil {
+				f.meta.agentCalls = map[string]agentCall{}
+			}
+			f.meta.agentCalls[call] = agent
+		}
+	}
 }
 
 // lineStart is where line n (1-based) starts; one past the last line known gives end.
@@ -280,21 +342,17 @@ func (f *File) startsTurn(_ int, line []byte, _ bool) bool {
 	return bytes.Contains(line, []byte(`"type":"task_started"`))
 }
 
-// seeded is the parser state for a window starting at line b whose bytes are window: what the earlier lines leave
+// seeded is the parser state for a window starting at line b naming the tasks ids: what the earlier lines leave
 // behind that changes what later lines turn into. Notifications already shown (a repeat is dropped), the calls
 // they name and the reports handed back: only the earlier lines for a task the window mentions are read. The pending "! cmd": the last earlier line that is a "! cmd"
-// input or output decides it.
-func (f *File) seeded(fh *os.File, w *window, b int, end int64, window []byte) Meta {
+// input or output decides it. The request whose usage items already carry: the lines just before (seedUsage).
+func (f *File) seeded(fh *os.File, w *window, b int, end int64, ids map[string]bool) Meta {
 	readLine := func(n int) []byte {
 		line := make([]byte, w.lineStart(n+1, end)-w.starts[n-1])
 		if _, err := fh.ReadAt(line, w.starts[n-1]); err != nil && err != io.EOF {
 			return nil
 		}
 		return bytes.TrimRight(line, "\n")
-	}
-	ids := map[string]bool{}
-	for _, m := range taskIDRe.FindAllSubmatch(window, -1) {
-		ids[string(m[1])] = true
 	}
 	scratch := Meta{Sidechain: f.meta.Sidechain, Codex: w.codex}
 	last := 0
@@ -339,12 +397,134 @@ func (f *File) seeded(fh *os.File, w *window, b int, end int64, window []byte) M
 			ParseLine(n, line, &ultra)
 		}
 	}
+	size := func(n int) int64 { return w.lineStart(n+1, end) - w.starts[n-1] }
+	usage, codexTotal := f.seedUsage(seedLines{line: readLine, size: size,
+		head: func(n int, most int64) []byte {
+			head := make([]byte, min(size(n), most))
+			if _, err := fh.ReadAt(head, w.starts[n-1]); err != nil && err != io.EOF {
+				return nil
+			}
+			return head
+		},
+		tokenCount: func(before int) int {
+			at := w.lineStart(before, end)
+			return lastMentionWithin(fh, w.starts, at, max(at-seedCodexSearch, 0), [][]byte{codexTokenCount})
+		},
+	}, b, w.codex)
+	var pending map[string]bool
+	var pendingIDs []string
+	if w.codex {
+		pending, pendingIDs = f.codexPendingAt(fh, w, b, end, readLine)
+	}
+	// A subagent's own work starts at its first user line (a fork's copied context is its first two lines at most): a
+	// later window is past it. A window at the second line is past it when the first line is the subagent's prompt.
+	sawUser := b > 2
+	if b == 2 && f.meta.Sidechain {
+		if line := readLine(1); line != nil {
+			probe := Meta{Sidechain: true}
+			ParseLine(1, line, &probe)
+			sawUser = probe.sawUser
+		}
+	}
 	return Meta{Sidechain: f.meta.Sidechain, Codex: w.codex, notified: scratch.notified, taskCalls: scratch.taskCalls,
-		handbacks: scratch.handbacks, bashInput: bash,
-		Ultracode: ultra.Ultracode, UltracodeAt: ultra.UltracodeAt, UltracodeSince: ultra.UltracodeSince, ultracodeCommand: ultra.ultracodeCommand}
+		handbacks: scratch.handbacks, agentCalls: scratch.agentCalls, bashInput: bash,
+		Ultracode: ultra.Ultracode, UltracodeAt: ultra.UltracodeAt, UltracodeSince: ultra.UltracodeSince, ultracodeCommand: ultra.ultracodeCommand,
+		usage: usage, codexTotal: tokenuse.CodexTotalFrom(codexTotal), sawUser: sawUser,
+		codexPending: pending, codexPendingIDs: pendingIDs}
 }
 
+// codexPendingAt is the backgrounded Codex commands a full read has pending when it reaches line b: started in the
+// background (codexCommandLines) with no terminal record yet. A window starting with them gives only the result of
+// their terminal record, under the call an earlier window shows (#10817). Only the lines that mention such a command
+// are read: the backgrounded records scanLines found, and back from b to the turn of each command's last one, the lines
+// naming its id. That last record leaves the command pending unless a terminal record for it is in that turn (before
+// it: the repeat is dropped as one already finished; after it: it finished) or in a later turn before b. Rollouts
+// with no backgrounded command before b read nothing.
+func (f *File) codexPendingAt(fh *os.File, w *window, b int, end int64, readLine func(int) []byte) (map[string]bool, []string) {
+	last := map[string]int{} // a command's last backgrounded record before b
+	for _, n := range w.background {
+		if n >= b {
+			break
+		}
+		line := readLine(n)
+		if line == nil {
+			continue
+		}
+		items := ParseLine(n, line, &Meta{Codex: true})
+		for _, it := range items {
+			if it.Kind == proto.KindToolUse && it.ToolUseID != "" && !slices.ContainsFunc(items, func(r proto.Item) bool {
+				return r.Kind == proto.KindToolResult && r.ToolUseID == it.ToolUseID
+			}) {
+				last[it.ToolUseID] = n
+			}
+		}
+	}
+	if len(last) == 0 {
+		return nil, nil
+	}
+	turn := map[string]int{} // the line starting the turn of a command's last backgrounded record
+	floor := int64(-1)
+	var needles [][]byte
+	for id, n := range last {
+		t := max(f.findTurn(fh, w, n, w.lineStart(n+1, end), 0), 1)
+		turn[id] = t
+		if floor < 0 || w.starts[t-1] < floor {
+			floor = w.starts[t-1]
+		}
+		needles = append(needles, quoteID(id))
+	}
+	finished := map[string]bool{}
+	for at := w.starts[b-1]; at > floor && len(finished) < len(last); {
+		m := lastMentionWithin(fh, w.starts, at, floor, needles)
+		if m == 0 {
+			break
+		}
+		if line := readLine(m); line != nil {
+			for _, it := range ParseLine(m, line, &Meta{Codex: true}) {
+				if it.Kind == proto.KindToolResult && last[it.ToolUseID] > 0 && m >= turn[it.ToolUseID] {
+					finished[it.ToolUseID] = true
+				}
+			}
+		}
+		at = w.starts[m-1]
+	}
+	var ids []string
+	for id := range last {
+		if !finished[id] {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	// oldest first, as a full read queues them; the cap keeps the newest (codexPendingAdd)
+	slices.SortFunc(ids, func(a, b string) int { return cmp.Compare(last[a], last[b]) })
+	if len(ids) > codexPendingKept {
+		ids = ids[len(ids)-codexPendingKept:]
+	}
+	pending := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		pending[id] = true
+	}
+	return pending, ids
+}
+
+// codexTokenCount marks a rollout's token_count line (seedCodexTotal).
+var codexTokenCount = []byte(`"type":"token_count"`)
+
 var taskIDRe = lazyre.New(`<task-id>([^<]{1,200})</task-id>`)
+var seedRequestTypeRe = lazyre.New(`"type"\s*:\s*"(?:api-request-blob|api-request-shape|tools-used)"`)
+var peerTaskIDRe = lazyre.New(`"(?:senderTaskId|from)"\s*:\s*"([^"\\]{1,200})"`)
+
+func seedTaskIDs(data []byte) map[string]bool {
+	ids := map[string]bool{}
+	for _, re := range []*lazyre.Regexp{taskIDRe, peerTaskIDRe} {
+		for _, m := range re.FindAllSubmatch(data, -1) {
+			ids[string(m[1])] = true
+		}
+	}
+	return ids
+}
 
 // parseLines parses complete lines in data (starting at file offset pos, line number n) into meta: the stored (light)
 // items go to kept, the ones to send (light, images kept) to sent when it is not nil. Callers hold f.mu.
@@ -369,11 +549,8 @@ func (f *File) parseLines(data []byte, pos int64, n int, meta *Meta, tree *branc
 				}
 				k, cut := light(it, false)
 				*kept = append(*kept, k)
-				if cut {
-					if f.cut == nil {
-						f.cut = map[int]lineRef{}
-					}
-					f.cut[n] = lineRef{at, i}
+				if cut || it.SourceFingerprint != "" {
+					f.rememberLine(n, lineRef{at, i})
 				}
 			}
 		}
@@ -408,7 +585,7 @@ func (f *File) loadOlder() int64 {
 	if _, err := fh.ReadAt(data, w.starts[b-1]); err != nil && err != io.EOF {
 		return 0
 	}
-	meta := f.seeded(fh, w, b, end, data)
+	meta := f.seeded(fh, w, b, end, seedTaskIDs(data))
 	var older []proto.Item
 	pre := &branchTree{}
 	f.parseLines(data, w.starts[b-1], b, &meta, pre, &older, nil)
@@ -479,6 +656,124 @@ func (f *File) ensureTurns(beforeSeq, turns, maxItems int) {
 func (f *File) ensureAfter(afterSeq int) {
 	for f.base > afterSeq && f.loadOlder() > 0 {
 	}
+}
+
+// findOlder finds an item that is not among the parsed ones in the lines not parsed yet, parsing back only to the last
+// of them that names its line: the uuid or Codex item id before the id's "#<n>", quoted as JSON writes it (a Codex
+// FileChange's "<id>-<n>" is named by "<id>"), or the seq of a "line<seq>" id unless that Claude line has a uuid
+// (its items are named by the uuid). A line that names it without holding it (a child's parentUuid, a call's output)
+// sends the search further back. An id no line names loads nothing: a stale or mistyped one used to parse the whole
+// file under the lock and keep all of it. Callers hold f.mu.
+func (f *File) findOlder(id string) (proto.Item, bool, error) {
+	if f.base == 0 || f.win == nil || id == "" {
+		return proto.Item{}, false, nil
+	}
+	fh, err := os.Open(f.Path)
+	if err != nil {
+		return proto.Item{}, false, err
+	}
+	defer fh.Close()
+	stem := uuidOf(id)
+	if rest, ok := strings.CutPrefix(stem, "line"); ok {
+		if n, err := strconv.Atoi(rest); err == nil && n > 0 && strconv.Itoa(n) == rest {
+			if n <= f.base && !f.win.codex && claudeLineUUID(fh, f.win.starts, n) != "" {
+				return proto.Item{}, false, nil // a stale id: a rewind or a replaced file moved its line
+			}
+			f.ensureAfter(n - 1)
+			if n <= f.base {
+				return proto.Item{}, false, fmt.Errorf("could not read transcript line %d", n)
+			}
+			it, found := f.item(id)
+			return it, found, nil
+		}
+	}
+	needles := [][]byte{quoteID(stem)}
+	if i := strings.LastIndexByte(stem, '-'); i > 0 && i < len(stem)-1 && strings.Trim(stem[i+1:], "0123456789") == "" {
+		needles = append(needles, quoteID(stem[:i]))
+	}
+	for f.base > 0 && f.win != nil {
+		line := lastMention(fh, f.win.starts, f.win.starts[f.base], needles)
+		if line == 0 {
+			return proto.Item{}, false, nil
+		}
+		base := f.base
+		f.ensureAfter(line - 1)
+		if it, ok := f.item(id); ok {
+			return it, true, nil
+		}
+		if f.base == base { // the file changed: loadOlder parsed nothing
+			return proto.Item{}, false, nil
+		}
+	}
+	return proto.Item{}, false, nil
+}
+
+// claudeLineUUID is the uuid of line n (1-based, starts as in window) of a Claude transcript, which names the line's
+// items by it; "" when it has none or cannot be read. The caller knows the file is not a Codex rollout, so the line is
+// not tested again.
+func claudeLineUUID(fh *os.File, starts []int64, n int) string {
+	if n < 1 || n >= len(starts) {
+		return ""
+	}
+	data := make([]byte, starts[n]-starts[n-1])
+	if _, err := fh.ReadAt(data, starts[n-1]); err != nil && err != io.EOF {
+		return ""
+	}
+	var e struct {
+		UUID string `json:"uuid"`
+	}
+	if unmarshalLine(data, &e) != nil {
+		return ""
+	}
+	return e.UUID
+}
+
+// quoteID is an id as a JSON string in a transcript line (ids are plain ASCII; the escaping is for odd ones).
+func quoteID(s string) []byte {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(s)
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n"))
+}
+
+// lastMention is the line (1-based, starts as in window) holding the last of the needles found in the file's bytes
+// before end, read back a block at a time; 0 when none is (or the file cannot be read).
+func lastMention(fh *os.File, starts []int64, end int64, needles [][]byte) int {
+	return lastMentionWithin(fh, starts, end, 0, needles)
+}
+
+// lastMentionWithin is lastMention looking back only to floor.
+func lastMentionWithin(fh *os.File, starts []int64, end, floor int64, needles [][]byte) int {
+	const block = 4 << 20
+	keep := 0 // a needle split across two blocks
+	for _, n := range needles {
+		keep = max(keep, len(n)-1)
+	}
+	buf := make([]byte, min(end-floor, block+int64(keep)))
+	for hi := end; hi > floor; {
+		lo := max(hi-block, floor)
+		data := buf[:min(hi+int64(keep), end)-lo]
+		if _, err := fh.ReadAt(data, lo); err != nil && err != io.EOF {
+			return 0
+		}
+		at := -1
+		for _, n := range needles { // the last one, by forward searches: bytes.Index is much faster than LastIndex
+			for i := 0; ; {
+				j := bytes.Index(data[i:], n)
+				if j < 0 {
+					break
+				}
+				at, i = max(at, i+j), i+j+1
+			}
+		}
+		if at >= 0 {
+			off := lo + int64(at)
+			return sort.Search(len(starts), func(i int) bool { return starts[i] > off })
+		}
+		hi = lo
+	}
+	return 0
 }
 
 // fullMeta works out the session-level Meta of a file opened by its end: every line, in order, as a full read

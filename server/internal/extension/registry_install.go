@@ -63,6 +63,9 @@ func (r *Registry) Rollback(ctx context.Context, id, actor string) (*Extension, 
 		return nil, fmt.Errorf("没有装过扩展 %s", id)
 	}
 	id = old.Record.ID
+	if old.Record.AttachedPackage() {
+		return nil, i18n.Err("extension-status.attached_detach_first", i18n.Args{"id": id})
+	}
 	prev := old.Record.PreviousVersion
 	if prev == "" || old.Record.Remote != nil {
 		return nil, errors.New("没有可以回到的上一个版本")
@@ -83,6 +86,13 @@ func (r *Registry) Rollback(ctx context.Context, id, actor string) (*Extension, 
 		return nil, ErrIdentity
 	}
 	var p *Extension
+	mutation := r.settingsWrite(id)
+	defer mutation.finish()
+	var previousMutation *settingsMutation
+	if previousID != id {
+		previousMutation = r.settingsWrite(previousID)
+		defer previousMutation.finish()
+	}
 	err = func() error {
 		r.mu.Lock()
 		defer r.mu.Unlock()
@@ -108,6 +118,10 @@ func (r *Registry) Rollback(ctx context.Context, id, actor string) (*Extension, 
 			return err
 		}
 		row := snapshotExtension(cur).Record
+		row.Config, err = rollbackFixedSlots(cur.Full, m, row.Config)
+		if err != nil {
+			return err
+		}
 		row.ExpectedID, row.ExpectedVersion = cur.Record.ID, cur.Record.Version
 		row.ID, row.PreviousID = previousID, ""
 		if previousID != id && !slices.Contains(row.Aliases, id) {
@@ -141,7 +155,8 @@ func (r *Registry) Rollback(ctx context.Context, id, actor string) (*Extension, 
 	}
 	unlock()
 	r.audit(ctx, id, "rollback", actor, map[string]any{"from": old.Record.Version, "to": prev})
-	r.changed(Change{ID: p.Record.ID, Kind: "rolled_back", Old: old})
+	previousMutation.finish()
+	mutation.changed(Change{ID: p.Record.ID, Kind: "rolled_back", Old: old})
 	return p, nil
 }
 
@@ -167,6 +182,8 @@ func (r *Registry) Uninstall(ctx context.Context, id string, keepData bool, acto
 		return i18n.Err("extension-status.config_disable_only", i18n.Args{"id": id})
 	}
 	id = old.Record.ID
+	mutation := r.settingsWrite(id)
+	defer mutation.finish()
 	var trash string
 	err = func() error {
 		r.mu.Lock()
@@ -232,7 +249,7 @@ func (r *Registry) Uninstall(ctx context.Context, id string, keepData bool, acto
 	}
 	unlock()
 	r.audit(ctx, id, "uninstall", actor, map[string]any{"version": old.Record.Version, "keep_data": keepData})
-	r.changed(Change{ID: id, Kind: "removed", Old: old})
+	mutation.changed(Change{ID: id, Kind: "removed", Old: old})
 	return left
 }
 

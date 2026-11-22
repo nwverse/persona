@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -10,8 +11,10 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -20,12 +23,13 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// The channels plugins contribute (the channel extension point, docs/extensions/channels.md "How extensions contribute channels"): the program
+// The channels plugins contribute (the channel extension point, docs/extensions/channels.md "Contributing a channel"): the program
 // talks to its chat app through the hub — the owner's messages come as channels.receive, what is sent goes as
 // channels.send — and everything else is here: commands, where a message goes, the turn (channels_runs.go), what is
 // asked answered in text, pushes and the sync mirror.
 
-// channelSend sends text to channel id's owner: in pieces its messages hold, each once by its ref.
+// channelSend sends text to channel id's owner: in pieces its messages hold, each once by its ref. To a channel that
+// sends pictures, an answer's or a push's pictures on lines of their own go with the last piece (channels_images.go).
 func (s *Service) channelSend(ctx context.Context, id, ref, text, kind, replyTo string) error {
 	v, ok, err := s.pluginChannelNow(ctx, id)
 	if err != nil {
@@ -35,7 +39,11 @@ func (s *Service) channelSend(ctx context.Context, id, ref, text, kind, replyTo 
 		return fmt.Errorf("%w %s", errNoChannel, id)
 	}
 	text = strings.TrimSpace(text)
-	if text == "" {
+	var images []channel.Blob
+	if v.Capabilities.ImagesOut && (kind == channel.OutAnswer || kind == channel.OutPush) {
+		text, images = s.channelImages(ctx, id, text)
+	}
+	if text == "" && len(images) == 0 {
 		return nil
 	}
 	pieces := channel.Split(text, v.Capabilities.MaxText)
@@ -44,11 +52,14 @@ func (s *Service) channelSend(ctx context.Context, id, ref, text, kind, replyTo 
 		if len(pieces) > 1 {
 			p.Ref = fmt.Sprintf("%s#%d", ref, i)
 		}
-		err := s.appCall(ctx, AppChannels, ChannelsSend, map[string]any{"channel": id, "ref": p.Ref, "text": p.Text, "kind": p.Kind,
-			"reply_to": p.ReplyTo}, nil)
+		params := map[string]any{"channel": id, "ref": p.Ref, "text": p.Text, "kind": p.Kind, "reply_to": p.ReplyTo}
+		if i == len(pieces)-1 && len(images) > 0 {
+			params["images"] = images
+		}
+		err := s.appCall(ctx, AppChannels, ChannelsSend, params, nil)
 		var re *rpc.Error
 		if errors.As(err, &re) && re.Code == CodeCannotSend {
-			return errCannotSend
+			return cannotSendError{msg: strings.TrimSpace(re.Message)}
 		}
 		if err != nil {
 			return err
@@ -99,11 +110,18 @@ func (e extensionSink) typing(ctx context.Context, on bool) {
 // conversation the channel talks to.
 // action is the owner's action the hub handed over with it: what it answers, it answers with that.
 func (s *Service) channelReceive(id string, m channel.Message, action string) {
+	s.channelReceiveInGeneration(id, m, action, s.channelGeneration(id))
+}
+
+func (s *Service) channelReceiveInGeneration(id string, m channel.Message, action string, generation uint64) {
+	if !s.channelGenerationCurrent(id, generation) {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	text := strings.TrimSpace(m.Text)
 	if strings.HasPrefix(text, "/") && len(m.Images) == 0 && len(m.Files) == 0 {
-		handled, rest := s.channelCommand(ctx, id, m, text)
+		handled, rest := s.channelCommandInGeneration(ctx, id, m, text, generation)
 		if handled {
 			return
 		}
@@ -113,10 +131,13 @@ func (s *Service) channelReceive(id string, m channel.Message, action string) {
 		text = strings.TrimSpace(rest)
 		m.Text = text
 	}
+	if !s.channelGenerationCurrent(id, generation) {
+		return
+	}
 	if s.channelAnswerAsk(ctx, id, m, text, action) {
 		return
 	}
-	if err := s.channelForward(ctx, id, m); err != nil {
+	if err := s.channelForwardInGeneration(ctx, id, m, generation); err != nil && s.channelGenerationCurrent(id, generation) {
 		s.logf("channels: %s: send: %v", id, err)
 		_ = s.channelTell(ctx, id, m.ID, i18n.T(s.botLang(ctx), "assistant-channels_plugin.not_sent", i18n.Args{"error": clip(oneLine(err.Error()), 200)}), channel.OutNote)
 	}
@@ -125,13 +146,25 @@ func (s *Service) channelReceive(id string, m channel.Message, action string) {
 // channelCommand runs one of the commands every channel has; false (and the text to send on) for one it does not
 // know: it may be the conversation's own (/compact).
 func (s *Service) channelCommand(ctx context.Context, id string, m channel.Message, text string) (bool, string) {
+	return s.channelCommandInGeneration(ctx, id, m, text, s.channelGeneration(id))
+}
+
+func (s *Service) channelCommandInGeneration(ctx context.Context, id string, m channel.Message, text string, generation uint64) (bool, string) {
 	name, rest, _ := strings.Cut(text, " ")
 	rest = strings.TrimSpace(rest)
 	l := s.botLang(ctx)
-	reply := func(t string) { _ = s.channelTell(ctx, id, m.ID, t, channel.OutNote) }
+	reply := func(t string) {
+		if s.channelGenerationCurrent(id, generation) {
+			_ = s.channelTell(ctx, id, m.ID, t, channel.OutNote)
+		}
+	}
 	setTarget := func(t channel.Target) {
 		c := &s.chans
 		c.mu.Lock()
+		if c.generation[id] != generation {
+			c.mu.Unlock()
+			return
+		}
 		s.loadChannelsLocked(ctx)
 		s.channelPrefLocked(id).Target = &t
 		s.saveChannelsLocked()
@@ -144,14 +177,27 @@ func (s *Service) channelCommand(ctx context.Context, id string, m channel.Messa
 		setTarget(channel.Target{Kind: channel.TargetMain})
 		reply(i18n.T(l, "assistant-channels_plugin.now_to_main"))
 	case "/new", "/新对话":
-		setTarget(channel.Target{Kind: channel.TargetNew})
+		// In a thread it starts the thread over; the channel's target stays where it is.
+		thread := s.channelThreadKey(ctx, id, m)
+		if thread != "" {
+			s.unbindChannelThread(id, thread, generation)
+		} else {
+			setTarget(channel.Target{Kind: channel.TargetNew})
+		}
 		if rest == "" {
-			reply(i18n.T(l, "assistant-channels_plugin.next_is_new"))
+			if thread != "" {
+				reply(i18n.T(l, "assistant-channels_plugin.thread_next_is_new"))
+			} else {
+				reply(i18n.T(l, "assistant-channels_plugin.next_is_new"))
+			}
 			return true, ""
 		}
 		return false, rest // "/new help me…": the rest starts it
 	case "/stop", "/停":
-		rt, err := s.channelTarget(ctx, id)
+		rt, _, err := s.channelRoute(ctx, id, m)
+		if !s.channelGenerationCurrent(id, generation) {
+			return true, ""
+		}
 		switch {
 		case err != nil:
 			reply(i18n.T(l, "assistant-channels_plugin.not_stopped", i18n.Args{"error": err.Error()}))
@@ -164,6 +210,10 @@ func (s *Service) channelCommand(ctx context.Context, id string, m channel.Messa
 			}
 			c := &s.chans
 			c.mu.Lock()
+			if c.generation[id] != generation {
+				c.mu.Unlock()
+				return true, ""
+			}
 			c.st.Runs = slices.DeleteFunc(c.st.Runs, func(r *channel.Run) bool { return r.Channel == id && r.SessionID == rt.session.SessionID })
 			s.saveChannelStateLocked()
 			c.mu.Unlock()
@@ -172,17 +222,17 @@ func (s *Service) channelCommand(ctx context.Context, id string, m channel.Messa
 			reply(i18n.T(l, "assistant-channels_plugin.stopped"))
 		}
 	case "/status", "/状态":
-		reply(s.channelStatusText(ctx, id))
+		reply(s.channelStatusText(ctx, id, m))
 	default:
 		return false, text
 	}
 	return true, ""
 }
 
-func (s *Service) channelStatusText(ctx context.Context, id string) string {
+func (s *Service) channelStatusText(ctx context.Context, id string, m channel.Message) string {
 	l := s.botLang(ctx)
 	where := i18n.T(l, "assistant-channels_plugin.main_chat")
-	if rt, err := s.channelTarget(ctx, id); err == nil {
+	if rt, _, err := s.channelRoute(ctx, id, m); err == nil {
 		switch {
 		case rt.isNew && !rt.main:
 			where = i18n.T(l, "assistant-channels_plugin.next_new_chat")
@@ -203,10 +253,14 @@ func (s *Service) channelStatusText(ctx context.Context, id string) string {
 
 // channelTarget is where channel id's messages go now.
 func (s *Service) channelTarget(ctx context.Context, id string) (resolvedTarget, error) {
+	v, plugin := s.pluginChannel(ctx, id)
 	c := &s.chans
 	c.mu.Lock()
 	s.loadChannelsLocked(ctx)
 	t := channel.Target{Kind: channel.TargetMain}
+	if plugin && v.Kind == channel.KindMention {
+		t.Kind = channel.TargetNew
+	}
 	if p := s.channelPrefLocked(id); p.Target != nil {
 		t = *p.Target
 	}
@@ -230,40 +284,99 @@ func (s *Service) channelTarget(ctx context.Context, id string) (resolvedTarget,
 	return s.resolveBotTarget(ctx, botTarget{Kind: targetMain})
 }
 
+// channelThreadKey is the thread m is in when channel id keeps a conversation per thread (capabilities.threads), ""
+// when m goes to the channel's target.
+func (s *Service) channelThreadKey(ctx context.Context, id string, m channel.Message) string {
+	if v, ok := s.pluginChannel(ctx, id); !ok || !v.Capabilities.Threads {
+		return ""
+	}
+	return strings.TrimSpace(m.Thread)
+}
+
+// channelRoute is where channel id's message m goes: its thread's conversation when the channel keeps one per thread
+// (a new one for the thread's first message, or when the thread's is gone), else the channel's target. thread is the
+// thread's key, "" for the target.
+func (s *Service) channelRoute(ctx context.Context, id string, m channel.Message) (rt resolvedTarget, thread string, err error) {
+	thread = s.channelThreadKey(ctx, id, m)
+	if thread == "" {
+		rt, err = s.channelTarget(ctx, id)
+		return rt, "", err
+	}
+	if t := s.channelThreadOf(ctx, id, thread); t != nil {
+		if d, ok := s.device(ctx, t.MachineID); ok {
+			// Only a conversation its computer says is gone starts the thread over: one that can't be asked now is an
+			// error the owner is told, not a reason to lose the thread's history.
+			var res struct {
+				Session proto.Session `json:"session"`
+				OK      bool          `json:"ok"`
+			}
+			if err := s.call(ctx, d.ID, DeviceSessionGet, map[string]any{"session_id": t.SessionID}, &res); err != nil {
+				return resolvedTarget{}, thread, err
+			}
+			if res.OK {
+				sess := res.Session
+				sess.SessionID, sess.MachineID = t.SessionID, d.ID
+				main := s.settings(ctx).Main
+				return resolvedTarget{machine: d.ID, machineName: d.Name, session: sess, label: conversationName(sess, main), main: t.SessionID == main}, thread, nil
+			}
+		}
+	}
+	rt, err = s.resolveBotTarget(ctx, botTarget{Kind: targetPersona})
+	return rt, thread, err
+}
+
 // channelForward sends the owner's message to the conversation the channel talks to (starting it when there is none
 // yet) and follows its turn.
 func (s *Service) channelForward(ctx context.Context, id string, m channel.Message) error {
-	c := &s.chans
-	c.mu.Lock()
-	generation := c.generation[id]
-	c.mu.Unlock()
+	return s.channelForwardInGeneration(ctx, id, m, s.channelGeneration(id))
+}
+
+func (s *Service) channelForwardInGeneration(ctx context.Context, id string, m channel.Message, generation uint64) error {
+	if !s.channelGenerationCurrent(id, generation) {
+		return nil
+	}
 	v, ok := s.pluginChannel(ctx, id)
 	if !ok {
 		return fmt.Errorf("no channel %s", id)
 	}
+	if v.Kind == channel.KindMention && m.Owner == nil {
+		return errors.New(i18n.T(s.botLang(ctx), "assistant-channels_plugin.mention_owner_required"))
+	}
 	caps := v.Capabilities.Normalized()
-	rt, err := s.channelTarget(ctx, id)
+	rt, thread, err := s.channelRoute(ctx, id, m)
 	if err != nil {
 		return err
 	}
-	in := prompts.ChannelMessage{Persona: true, Name: v.Name, Owner: s.owner(ctx), Plain: caps.Format == channel.FormatPlain,
-		Asks: caps.Asks != channel.AsksNone, Text: strings.TrimSpace(m.Text), Quote: m.Quote, Forward: m.Forward,
+	hello := s.hello(ctx)
+	lang := i18n.Lang(hello.Locale)
+	in := prompts.ChannelMessage{Persona: true, Name: v.Name, Owner: strings.TrimSpace(hello.Owner), Plain: caps.Format == channel.FormatPlain,
+		Asks: caps.Asks != channel.AsksNone, ImagesOut: caps.ImagesOut, Public: v.Kind == channel.KindMention, Language: answerLanguage(hello.Locale),
+		Chat: m.Chat, Topic: m.Topic, Context: m.Context, Text: strings.TrimSpace(m.Text), Quote: m.Quote, Forward: m.Forward,
 		Unsupported: slices.Clone(m.Unsupported)}
 	var images []proto.Image
 	for _, img := range m.Images {
-		if len(images) < channel.ImagesMost && len(img.Data) <= channel.ImageMost {
-			mime := img.MIME
-			if !strings.HasPrefix(mime, "image/") {
-				mime = http.DetectContentType(img.Data)
-			}
-			images = append(images, proto.Image{Mime: mime, Data: base64.StdEncoding.EncodeToString(img.Data)})
+		if len(images) >= channel.ImagesMost {
+			in.Unsupported = append(in.Unsupported, i18n.T(lang, "assistant-channels_plugin.extra_images"))
 			continue
 		}
-		in.Unsupported = append(in.Unsupported, "更多的图片")
+		data, mime := img.Data, img.MIME
+		if len(data) > channel.ImageMost { // a photo sent as the original: scaled down to fit, not dropped (#11985)
+			fit, err := s.remoteImages.Fit(ctx, data, channel.ImageMost)
+			if err != nil {
+				in.Unsupported = append(in.Unsupported, i18n.T(lang, "assistant-channels_plugin.image_too_large"))
+				continue
+			}
+			data, mime = fit.Data, fit.Type
+		}
+		if !strings.HasPrefix(mime, "image/") {
+			mime = http.DetectContentType(data)
+		}
+		images = append(images, proto.Image{Mime: mime, Data: base64.StdEncoding.EncodeToString(data)})
 	}
 	for _, f := range m.Files {
 		if !caps.FilesIn || len(f.Data) > channel.FileMost || rt.machine == "" {
-			in.Unsupported = append(in.Unsupported, "文件「"+firstNonEmpty(f.Name, "未命名")+"」")
+			name := firstNonEmpty(f.Name, i18n.T(lang, "assistant-channels_plugin.unnamed"))
+			in.Unsupported = append(in.Unsupported, i18n.T(lang, "assistant-channels_plugin.unsupported_file", i18n.Args{"name": i18n.Verbatim(name)}))
 			continue
 		}
 		path, err := s.uploadBytes(ctx, rt.machine, firstNonEmpty(f.Name, "file"), f.Data)
@@ -277,16 +390,34 @@ func (s *Service) channelForward(ctx context.Context, id string, m channel.Messa
 		return nil
 	}
 	text := prompts.RenderChannelMessage(in)
-	run := &channel.Run{ID: id + "_" + m.ID, Channel: id, ReplyTo: m.ID, TargetKind: channel.TargetConversation, Label: rt.label,
+	var ext map[string]string
+	if v.Kind == channel.KindMention {
+		ext = map[string]string{"chat": m.Chat, "thread": m.Topic, "public": "1"}
+	}
+	if !s.channelGenerationCurrent(id, generation) {
+		return nil
+	}
+	run := &channel.Run{ID: id + "_" + m.ID, Channel: id, ReplyTo: m.ID, TargetKind: channel.TargetConversation, Label: rt.label, Ext: ext,
 		Started: time.Now().UTC(), Probe: channel.Probe(in.Text, append(slices.Clone(in.Files), in.Forward, in.Quote)...)}
 	if rt.isNew {
-		sess, err := s.Start(ctx, StartParams{Text: text, Images: images, Main: rt.main, Origin: OriginChannel, OriginRef: id})
+		sess, err := s.Start(ctx, StartParams{Text: text, Images: images, Main: rt.main, Origin: OriginChannel, OriginRef: id, Public: v.Kind == channel.KindMention})
 		if err != nil {
 			return fmt.Errorf("%s%w", i18n.T(s.botLang(ctx), "assistant-channels_plugin.not_started"), err)
 		}
-		if !rt.main { // /new: the chat goes on in it
+		if !s.channelGenerationCurrent(id, generation) {
+			return nil
+		}
+		if thread != "" { // the thread's first message: the thread goes on in it, the channel's target stays
+			if !s.bindChannelThread(id, thread, sess.MachineID, sess.SessionID, generation) {
+				return nil
+			}
+		} else if !rt.main { // /new: the chat goes on in it
 			c := &s.chans
 			c.mu.Lock()
+			if c.generation[id] != generation {
+				c.mu.Unlock()
+				return nil
+			}
 			s.loadChannelsLocked(ctx)
 			s.channelPrefLocked(id).Target = &channel.Target{Kind: channel.TargetConversation, MachineID: sess.MachineID, SessionID: sess.SessionID}
 			s.saveChannelsLocked()
@@ -300,16 +431,30 @@ func (s *Service) channelForward(ctx context.Context, id string, m channel.Messa
 		cid := channel.ClientMsgID(id, m.ID)
 		run.MsgIDs = []string{cid}
 		p := map[string]any{"session_id": sid, "text": text, "client_msg_id": cid}
+		if v.Kind == channel.KindMention {
+			p["public"] = true
+		}
 		if len(images) > 0 {
 			p["images"] = images
+		}
+		if !s.channelGenerationCurrent(id, generation) {
+			return nil
 		}
 		s.UserSpoke(ctx, SessionRef{MachineID: rt.machine, SessionID: sid}) // unarchived, and its title the user's to keep
 		params, err := s.SendParams(ctx, SendParams{MachineID: rt.machine, SessionID: sid, Params: p})
 		if err != nil {
 			return err
 		}
+		if !s.channelGenerationCurrent(id, generation) {
+			return nil
+		}
 		if err := s.sendOnce(ctx, rt.machine, params); err != nil {
 			return err
+		}
+		if thread != "" {
+			if !s.bindChannelThread(id, thread, rt.machine, sid, generation) {
+				return nil
+			} // the thread is still alive
 		}
 	}
 	s.startChannelRunForBinding(run, &generation)
@@ -337,10 +482,20 @@ func (s *Service) lastSeq(ctx context.Context, machine, sid string) int {
 
 // uploadBytes saves a file on a machine (its temp directory, like the app's uploads) and returns the path.
 func (s *Service) uploadBytes(ctx context.Context, machine, name string, data []byte) (string, error) {
+	return s.uploadBytesInto(ctx, machine, name, data, "")
+}
+
+// uploadBytesInto is uploadBytes into the node's dest ("": its temp directory; "terminal": uploads/terminal/<date>/,
+// swept after 7 days, node/upload_sweep.go).
+func (s *Service) uploadBytesInto(ctx context.Context, machine, name string, data []byte, dest string) (string, error) {
 	var begin struct {
 		UploadID string `json:"upload_id"`
 	}
-	if err := s.call(ctx, machine, "file.upload.begin", map[string]any{"name": name, "size": len(data)}, &begin); err != nil {
+	params := map[string]any{"name": name, "size": len(data)}
+	if dest != "" {
+		params["dest"] = dest
+	}
+	if err := s.call(ctx, machine, "file.upload.begin", params, &begin); err != nil {
 		return "", err
 	}
 	for off := 0; off < len(data); off += proto.UploadChunkBytes {
@@ -359,8 +514,8 @@ func (s *Service) uploadBytes(ctx context.Context, machine, name string, data []
 
 // --- what is asked, in text (asks: text) ---
 
-// textChannels are the plugin channels that are connected, with their settings: what asks, pushes and the mirror go
-// to.
+// textChannels are the connected IM plugin channels with their settings: what asks, pushes and the mirror go to.
+// Mention channels stay out of this proactive fan-out; only their own request/answer run uses the unified pipeline.
 func (s *Service) textChannels(ctx context.Context) []channel.View {
 	list, err := s.channelsNow(ctx)
 	if err != nil {
@@ -408,16 +563,39 @@ func (s *Service) channelDrives(ctx context.Context, id, machine, session string
 func (s *Service) channelInteraction(ix proto.Interaction) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	var to []string
 	for _, v := range s.textChannels(ctx) {
 		if v.Capabilities.Asks != channel.AsksText || !featureOn(v, channel.FeatureAsks) {
 			continue
+		}
+		if ix.Private {
+			continue // a Just me turn's card: never in a channel (meeting_justme.go)
 		}
 		// "All questions" does not take a health conversation's: only one the channel drives itself (health.go).
 		if !s.channelDrives(ctx, v.ID, ix.MachineID, ix.SessionID) && (!featureOn(v, channel.FeatureAllAsks) || s.ixInHealth(ctx, ix)) {
 			continue
 		}
-		s.askInChannel(ctx, v.ID, ix)
+		to = append(to, v.ID)
 	}
+	eachChannel(context.Background(), to, func(ctx context.Context, id string) { s.askInChannel(ctx, id, ix) })
+}
+
+// channelSendTimeout is how long one channel has for what is sent to it, the hub's retries included
+// (extmgr/channels_extension.go).
+const channelSendTimeout = 30 * time.Second
+
+// eachChannel calls send for every channel in ids at once, each with its own channelSendTimeout from parent, and
+// returns when all are done: a channel program that hangs uses up only its own time, never the next channel's.
+func eachChannel(parent context.Context, ids []string, send func(ctx context.Context, id string)) {
+	var wg sync.WaitGroup
+	for _, id := range ids {
+		wg.Go(func() {
+			ctx, cancel := context.WithTimeout(parent, channelSendTimeout)
+			defer cancel()
+			send(ctx, id)
+		})
+	}
+	wg.Wait()
 }
 
 func (s *Service) askInChannel(ctx context.Context, id string, ix proto.Interaction) {
@@ -515,7 +693,9 @@ func (s *Service) channelAnsweredElsewhere(ctx context.Context, id string, m cha
 }
 
 // channelAnswerAsk takes the owner's message as the answer to the latest thing asked in the channel; false when
-// nothing waits (or what waited was answered elsewhere): the message is then an ordinary one.
+// nothing waits (or what waited was answered elsewhere): the message is then an ordinary one. A question asked
+// without waiting (channel.Ask.Later) holds no turn and may be up for hours, so it takes only a reply that reads as
+// its answer (an option's number or name); other words answer what was asked before it, else are an ordinary message.
 func (s *Service) channelAnswerAsk(ctx context.Context, id string, m channel.Message, text, action string) bool {
 	if text == "" {
 		return false
@@ -544,8 +724,8 @@ func (s *Service) channelAnswerAsk(ctx context.Context, id string, m channel.Mes
 	})
 	var a *channel.Ask
 	for _, x := range c.st.Asks {
-		if x.Channel == id {
-			a = x // the latest one asked
+		if x.Channel == id && (!x.Later || channel.ReadsAsAnswer(x, text)) {
+			a = x // the latest one asked that this reply may answer
 		}
 	}
 	if len(c.st.Asks) != n {
@@ -628,6 +808,18 @@ func (s *Service) resolveInteraction(ctx context.Context, ch, id string, r proto
 	return res.OK, err
 }
 
+// clarifyInteraction sends a question through the channel's owner-action
+// verification without resolving the card. The explicit reply target is the
+// card's own chat/message, never the bot's currently selected conversation.
+func (s *Service) clarifyInteraction(ctx context.Context, ch, id, text, clientMsgID, action, chatID, messageID string) (bool, error) {
+	var res struct {
+		OK bool `json:"ok"`
+	}
+	err := s.appCall(ctx, AppInteractions, assistantwire.InteractionsClarify, map[string]any{"interaction_id": id,
+		"text": text, "client_msg_id": clientMsgID, "action": action, "channel": ch, "chat_id": chatID, "message_id": messageID}, &res)
+	return res.OK, err
+}
+
 // rewindLastAnswer undoes the answer ReadAnswer just took on the last question of a question ask, so a reply re-sent
 // after a failed resolve answers that question again (and the answers given before it are kept). Other ask kinds
 // record no per-question progress.
@@ -643,20 +835,62 @@ func rewindLastAnswer(a *channel.Ask) {
 
 // channelPush sends what notify_user pushed to the phone to the plugin channels with pushes on too.
 func (s *Service) channelPush(machine, session, title, body string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	_, _ = s.channelPushTo(context.Background(), machine, session, title, body, "", nil)
+}
+
+// channelPushTo is channelPush, each channel's send with its own channelSendTimeout from parent, for a push that may
+// be sent again when ref is set: it goes to every channel with ref and the channel's id (ref:id, which that channel
+// takes once: a program of several channels tells their copies apart), and to none that took is true of. It returns
+// each channel's result, by id; the error is the list's when it could not be read while the hub is away (nothing was
+// sent then).
+func (s *Service) channelPushTo(parent context.Context, machine, session, title, body, ref string, took func(id string) bool) (map[string]error, error) {
+	return s.channelPushTold(parent, machine, session, title, body, ref, took, nil)
+}
+
+// channelPushTold is channelPushTo telling r which channels the push goes to and how each send went (notify_user's
+// answer, channels_copies.go).
+func (s *Service) channelPushTold(parent context.Context, machine, session, title, body, ref string, took func(id string) bool,
+	r *copyReport) (map[string]error, error) {
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
+	if _, err := s.channelsNow(ctx); err != nil && !answered(err) {
+		r.going()
+		return nil, err
+	}
+	var to []string
+	var copies []pushCopy
 	for _, v := range s.textChannels(ctx) {
-		if v.Capabilities.Push && featureOn(v, channel.FeaturePushes) {
-			if err := s.channelTell(ctx, v.ID, "", strings.TrimSpace("🔔 "+title+"\n\n"+body), channel.OutPush); err == nil {
-				s.markPushed(v.ID, machine, session)
-			}
+		if v.Capabilities.Push && featureOn(v, channel.FeaturePushes) && (took == nil || !took(v.ID)) {
+			to = append(to, v.ID)
+			copies = append(copies, pushCopy{channel: v.ID, name: cmp.Or(v.Name, v.ID)})
 		}
 	}
+	r.going(copies...)
+	text := strings.TrimSpace("🔔 " + title + "\n\n" + body)
+	var mu sync.Mutex
+	out := map[string]error{}
+	eachChannel(parent, to, func(ctx context.Context, id string) {
+		var err error
+		if ref == "" {
+			err = s.channelTell(ctx, id, "", text, channel.OutPush)
+		} else if err = s.channelSend(ctx, id, ref+":"+id, text, channel.OutPush, ""); err != nil {
+			s.logf("channels: %s: send: %v", id, err)
+		}
+		if err == nil {
+			s.markPushed(id, machine, session)
+		}
+		r.went(id, err)
+		mu.Lock()
+		out[id] = err
+		mu.Unlock()
+	})
+	return out, nil
 }
 
 // extensionMirror sends a turn that ended without being asked for in a channel: the main conversation's to those
 // with sync on, a scheduled task's own conversation's to those with pushes on.
 func (s *Service) extensionMirror(ctx context.Context, machine, session string) {
+	parent := ctx // what each channel's send gets its own time from (eachChannel)
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	var to []channel.View
@@ -673,13 +907,18 @@ func (s *Service) extensionMirror(ctx context.Context, machine, session string) 
 	if !main && task == "" {
 		return
 	}
-	if sess, ok := s.session(ctx, machine, session); !ok || sess.WokeByTask && !main || spaceOf(sess) == SpaceHealth {
+	sess, ok := s.session(ctx, machine, session)
+	if !ok || sess.WokeByTask && !main || spaceOf(sess) == SpaceHealth {
 		return // a health task's runs stay off the channels (health.go)
+	}
+	if s.transientRetryTurn(ctx, sess) {
+		return
 	}
 	asked, answer, ok := s.channelLastTurn(ctx, machine, session)
 	if !ok {
 		return
 	}
+	var ids []string
 	for _, v := range to {
 		switch {
 		case featureOn(v, channel.FeaturePushes) && s.pushedLately(v.ID, machine, session):
@@ -691,15 +930,21 @@ func (s *Service) extensionMirror(ctx context.Context, machine, session string) 
 		default:
 			continue
 		}
-		l := s.botLang(ctx)
-		head := i18n.T(l, "assistant-channels_plugin.main_chat")
-		if !main {
-			head = i18n.T(l, "assistant-channels_plugin.scheduled_task", i18n.Args{"task": task})
-		} else if asked != "" {
-			head += i18n.T(l, "assistant-channels_plugin.asked_elsewhere", i18n.Args{"asked": clip(oneLine(stripContext(asked)), 80)})
-		}
-		_ = s.channelTell(ctx, v.ID, "", head+"\n\n"+answer, channel.OutPush)
+		ids = append(ids, v.ID)
 	}
+	if len(ids) == 0 {
+		return
+	}
+	l := s.botLang(ctx)
+	head := i18n.T(l, "assistant-channels_plugin.main_chat")
+	if !main {
+		head = i18n.T(l, "assistant-channels_plugin.scheduled_task", i18n.Args{"task": task})
+	} else if asked != "" {
+		head += i18n.T(l, "assistant-channels_plugin.asked_elsewhere", i18n.Args{"asked": clip(oneLine(stripContext(asked)), 80)})
+	}
+	eachChannel(parent, ids, func(ctx context.Context, id string) {
+		_ = s.channelTell(ctx, id, "", head+"\n\n"+answer, channel.OutPush)
+	})
 }
 
 // channelLastTurn is the conversation's last turn: what was asked and its answer (false when it has no answer).
@@ -768,12 +1013,3 @@ var (
 	contextBlockRe = lazyre.New(`(?s)<` + compat.ContextPattern() + `\b[^>]*>.*?</` + compat.ContextPattern() + `>`)
 	contextOpenRe  = lazyre.New(`<` + compat.ContextPattern() + `\b`)
 )
-
-func firstNonEmpty(s ...string) string {
-	for _, x := range s {
-		if strings.TrimSpace(x) != "" {
-			return x
-		}
-	}
-	return ""
-}

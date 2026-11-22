@@ -11,8 +11,9 @@ import androidx.datastore.tink.AeadSerializer
 import com.google.crypto.tink.Aead
 import com.google.crypto.tink.BinaryKeysetWriter
 import com.google.crypto.tink.KeysetHandle
-import com.google.crypto.tink.aead.AeadConfig
 import com.google.crypto.tink.aead.AeadKeyTemplates
+import com.google.crypto.tink.aead.AeadWrapper
+import com.google.crypto.tink.aead.AesGcmKeyManager
 import com.google.crypto.tink.integration.android.AndroidKeystoreKmsClient
 import java.io.File
 import java.io.InputStream
@@ -32,6 +33,11 @@ data class HubCredentials(
     val candidateAddresses: List<String>,
     val deviceToken: String,
     val deviceId: String? = null,
+    /**
+     * The link's proxied origins ("host:port"), checked with system trust instead of [fp] (#2622,
+     * HubPairingClient.systemTrustedOrigin). Empty in a pairing saved before it, which stays pinned throughout.
+     */
+    val systemOrigins: List<String> = emptyList(),
 ) {
     override fun toString(): String = "HubCredentials(<redacted>)"
 }
@@ -76,6 +82,20 @@ internal class EncryptedCredentials(context: Context) {
         { it.version }, ReplaceFileCorruptionHandler { EndpointOverridesDocument() },
     )
 
+    /** Like route choices, a pairing's tunnels that cannot be read are none instead of blocking the pairing. */
+    fun tunnels(path: String, scope: CoroutineScope): DataStore<TunnelsDocument> = store(
+        File(root, "$path/tunnels.enc"), scope, TunnelsDocument(), TunnelsDocument.serializer(),
+        { it.version }, ReplaceFileCorruptionHandler { TunnelsDocument() },
+    )
+
+    /**
+     * This device's SSH key. A file that cannot be read is reported, never replaced: a new key would lock the device
+     * out of every SSH server that lists the old one.
+     */
+    fun sshKey(scope: CoroutineScope): DataStore<SshKeyDocument> = store(
+        File(root, "ssh-key.enc"), scope, SshKeyDocument(), SshKeyDocument.serializer(), { it.version },
+    )
+
     private fun <T> store(
         file: File, scope: CoroutineScope, default: T, serializer: KSerializer<T>, version: (T) -> Int,
         corruption: ReplaceFileCorruptionHandler<T>? = null,
@@ -89,7 +109,7 @@ internal class EncryptedCredentials(context: Context) {
 
     @Suppress("DEPRECATION")
     private fun createAead(): Aead {
-        AeadConfig.register()
+        registerPairingAead()
         val keyset = AtomicFile(File(root, "keyset.enc"))
         val uri = ProtocolCompatibility.pairingMasterKeyUris.first()
         val handle = if (keyset.baseFile.exists() || File(root, "keyset.enc.bak").exists()) {
@@ -111,6 +131,16 @@ internal class EncryptedCredentials(context: Context) {
         }
         return handle.getPrimitive(Aead::class.java)
     }
+}
+
+/**
+ * The AEAD key managers the pairing keyset needs: it has only ever been generated as AES256_GCM, so AES-GCM and the
+ * AEAD wrapper, not all of `AeadConfig` (every AEAD key type, about 50 ms more on the start-up path). The master key
+ * from the Android Keystore is not looked up through this registry.
+ */
+internal fun registerPairingAead() {
+    AesGcmKeyManager.register(true)
+    AeadWrapper.register()
 }
 
 internal class VersionedSerializer<T>(

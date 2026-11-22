@@ -1,6 +1,7 @@
 package assistantwire
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"time"
@@ -28,6 +29,76 @@ const AdminHeader = "X-Persona-Admin"
 // RoleHeader, never the client's.
 const DeviceNameHeader = "X-Persona-Device-Name"
 
+// PersonHeader is "1" on a relayed request from a person's own full device (a device token with its own id, not the
+// hub's token or a pairing code), set by the hub like RoleHeader, never the client's: what may change a message held
+// for an Agent while its computer is away (#10661), whose delivery carries that person's provenance.
+const PersonHeader = "X-Persona-Person"
+
+// HandoffApprover is the device the hub found may approve a hand-off card (proto.SecretHandoffTool): a full device
+// whose app shows the card (docs/extensions/secret-providers.md "Who may approve a hand-off"). It travels in
+// HTTPRequest, never in a header, so no client can set it, and an older hub never sends it: a manager approves a
+// hand-off only with it.
+type HandoffApprover struct {
+	DeviceID   string `json:"device_id"`
+	DeviceName string `json:"device_name,omitempty"`
+}
+
+type handoffApproverKey struct{}
+
+// WithHandoffApprover is ctx with the device the hub found may approve a hand-off card.
+func WithHandoffApprover(ctx context.Context, a HandoffApprover) context.Context {
+	return context.WithValue(ctx, handoffApproverKey{}, a)
+}
+
+// HandoffApproverOf is the device WithHandoffApprover put on ctx; false when there is none.
+func HandoffApproverOf(ctx context.Context) (HandoffApprover, bool) {
+	a, ok := ctx.Value(handoffApproverKey{}).(HandoffApprover)
+	return a, ok && a.DeviceID != ""
+}
+
+type humanStartKey struct{}
+
+// WithHumanStart is ctx of a new conversation's start that a person's own app asked for, as the hub vouched
+// (HTTPRequest.Human): its first message counts as theirs (StartParams.Human).
+func WithHumanStart(ctx context.Context) context.Context {
+	return context.WithValue(ctx, humanStartKey{}, true)
+}
+
+// HumanStartOf reports whether WithHumanStart marked ctx.
+func HumanStartOf(ctx context.Context) bool {
+	human, _ := ctx.Value(humanStartKey{}).(bool)
+	return human
+}
+
+type clarificationProofKey struct{}
+
+// WithClarificationProof carries the opaque one-time token the hub attached to
+// an authenticated clarify request, or the extension manager attached after a
+// fresh channel owner action. It never carries a caller-supplied owner_input.
+func WithClarificationProof(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, clarificationProofKey{}, token)
+}
+
+// ClarificationProofOf returns the opaque token, empty when this is an older
+// hub/manager combination without clarification provenance.
+func ClarificationProofOf(ctx context.Context) string {
+	token, _ := ctx.Value(clarificationProofKey{}).(string)
+	return token
+}
+
+type replyInputKey struct{}
+
+// WithReplyInput marks a conversation start as a direct legacy app start for missing-reply recovery.
+func WithReplyInput(ctx context.Context) context.Context {
+	return context.WithValue(ctx, replyInputKey{}, true)
+}
+
+// ReplyInputOf reports whether WithReplyInput marked ctx.
+func ReplyInputOf(ctx context.Context) bool {
+	reply, _ := ctx.Value(replyInputKey{}).(bool)
+	return reply
+}
+
 // ToolCall is assistant.tool's params.
 type ToolCall struct {
 	Name      string          `json:"name"`
@@ -42,6 +113,13 @@ type SessionRef struct {
 	SessionID string `json:"session_id"`
 }
 
+// UserSpokeParams carries text only when the hub authenticated a person's own app.
+// Keep it out of SessionRef: session references are also used as map keys.
+type UserSpokeParams struct {
+	SessionRef
+	Text string `json:"text,omitempty"`
+}
+
 // ContextParams is assistant.context's params. MachineID is the asking node's machine: the hub sets it from the
 // node's connection, never from the node's params. With Ack the call only confirms that a message carrying those
 // view errors (ContextResult.ViewErrors) was delivered, and answers nothing.
@@ -52,8 +130,10 @@ type ContextParams struct {
 }
 
 // ContextResult is assistant.context's answer: the <persona-context> text, and the <persona-view-errors> block of the
-// conversation's rich views that failed their check and were not reported yet (docs/assistant/assistant-views.md "Feedback next turn").
+// conversation's rich views that failed their check and were not reported yet (docs/assistant/assistant-views.md "Next-turn feedback").
 // Reading it consumes nothing: the node acks Receipts once the message is delivered.
+// Receipts also carry what else the hub wants confirmed as delivered with the message (the background supervisor's
+// announcement, item_id "background_supervisor"): the node sends them all back as they are.
 type ContextResult struct {
 	Text       string             `json:"text"`
 	ViewErrors string             `json:"view_errors,omitempty"`
@@ -108,11 +188,20 @@ type MessageCard struct {
 	Sender  string `json:"sender,omitempty"`
 	Text    string `json:"text"` // the message, clipped
 	Draft   string `json:"draft"`
+	// MessageVersion and ProgressVersion identify the source message and task
+	// progress used to produce the draft, independently of its wording.
+	MessageVersion  string `json:"message_version,omitempty"`
+	ProgressVersion string `json:"progress_version,omitempty"`
 	// SentAt: the reply to the item went out (from this card or from the inbox, on any device) and Sent is what it
 	// said; set when the inbox sent the reply (the inbox is the assistant's too), never cleared, so the card stays sent
 	// when the item opens again. A card sent before that was recorded has no Sent (the draft is what went out).
 	SentAt *time.Time `json:"sent_at,omitempty"`
 	Sent   string     `json:"sent,omitempty"`
+	// Dismissal is per draft card, not inbox filing or task completion. Undo
+	// removes these two fields but retains DismissalUpdatedAt for incremental reads.
+	DismissedAt        *time.Time `json:"dismissed_at,omitempty"`
+	DismissalID        string     `json:"dismissal_id,omitempty"`
+	DismissalUpdatedAt *time.Time `json:"dismissal_updated_at,omitempty"`
 }
 
 // APIErrorMarkers start what Claude Code answers when the model call itself failed (an error card in the app). Both
@@ -138,6 +227,11 @@ const InterruptedSummary = "模型服务出错，中断了"
 // refusalMarkers, or is Claude Code's usage-limit line).
 func CutOff(answer string) bool {
 	answer = strings.TrimSpace(answer)
+	const sealedPrefix = "this conversation was compacted natively by "
+	if len(answer) >= len(sealedPrefix) && strings.EqualFold(answer[:len(sealedPrefix)], sealedPrefix) &&
+		proto.UnrecoverableTurnErrorCode(answer) != "" {
+		return true
+	}
 	return startsWithAny(answer, APIErrorMarkers) || startsWithAny(answer, refusalMarkers) || UsageLimitText(answer)
 }
 
@@ -163,6 +257,27 @@ type StartEnded struct {
 	Code      string          `json:"code,omitempty"`
 	Data      json.RawMessage `json:"data,omitempty"`
 }
+
+// ConversationSent is session.assistant_sent's params: an app's message the hub sent to the assistant's conversation
+// SessionID, and what became of it. Outcome is ConversationDelivered, ConversationFailed or ConversationUnknown (it may
+// have been typed); Code and Error are the hub's answer when it was not delivered. ClientMsgID is the message's
+// client_msg_id when it has one, so the manager settles each message by its own notice (#11392); an older hub sends
+// none.
+type ConversationSent struct {
+	MachineID   string `json:"machine_id"`
+	SessionID   string `json:"session_id"`
+	Outcome     string `json:"outcome"`
+	Code        string `json:"code,omitempty"`
+	Error       string `json:"error,omitempty"`
+	ClientMsgID string `json:"client_msg_id,omitempty"`
+}
+
+// ConversationSent's outcomes.
+const (
+	ConversationDelivered = "delivered"
+	ConversationFailed    = "failed"
+	ConversationUnknown   = "unknown"
+)
 
 // DeviceSessions is sessions.changed's params: the list as the node sent it, and when the node's connection to the hub
 // began (a new one: the node may have restarted and forgotten what it was told, e.g. the herdr todo marks).

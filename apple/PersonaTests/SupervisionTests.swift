@@ -1,6 +1,8 @@
 import Foundation
+import SwiftUI
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Supervised tasks (#3124, docs/assistant/unified-entry.md ("Supervision")) and their agents' reports (#5112): `supervision` decodes
 /// leniently, the chip, the checklist and the lines say what the web says (web/src/lib/supervision.test.ts). Tests run
@@ -98,6 +100,20 @@ struct SupervisionTests {
         #expect(res.items[2].interrupted && !res.items[3].interrupted && !review.interrupted)
     }
 
+    @Test func reportBodyAndEvidenceRemainSeparate() throws {
+        let report = try JSON.decoder.decode(FeedItem.self, from: Data(#"""
+        {"id":"report","conversation":"main","at":"2026-11-05T09:01:00Z","kind":"report","ref":"todo_1",
+         "body":{"kind":"progress","text":"Summary unchanged.\nSee https://example.com/body-link",
+                 "evidence":["https://example.com/pull/1","https://example.com/commit/abc","https://example.com/issues/1#comment",
+                             "https://example.com/actions/runs/1","/tmp/report-check.xcresult"]}}
+        """#.utf8))
+        let body = "Summary unchanged.\nSee https://example.com/body-link"
+        #expect(report.text == body)
+        #expect(ReviewText.reportLine(kind: report.reportKind ?? "", text: report.text ?? "") == body)
+        #expect(report.evidence.count == 5)
+        #expect(report.evidence.last == "/tmp/report-check.xcresult")
+    }
+
     // MARK: The chip
 
     @Test func badgeTextsAndTones() {
@@ -119,6 +135,15 @@ struct SupervisionTests {
         #expect(TodoItem(id: "t", title: "x").reviewBadge == nil)
     }
 
+    @Test func personalVerificationIsOpenUntilPass() {
+        let ledger = TaskSupervision(supervisor: "main", state: "user_check", reviews: [.init(verdict: "accepted")])
+        let waiting = sup(ledger)
+        #expect(waiting.doneAt == nil && waiting.reviewState == .userCheck && !waiting.acceptanceStands)
+        #expect(waiting.reviewBadge?.label == "待你验收" && waiting.reviewBadge?.tone == .caution)
+        let passed = sup(ledger, done: true, doneBy: "review")
+        #expect(passed.reviewState == .accepted && passed.reviewBadge?.label == "已验收")
+    }
+
     /// An accepted or cancelled task the user reopened goes on again.
     @Test func reopenedAcceptedCountsAsInProgress() {
         let accepted = TaskSupervision(supervisor: "main", doneWhen: ["A"], state: "accepted")
@@ -127,6 +152,18 @@ struct SupervisionTests {
         #expect(reopened.reviewState == .ongoing && reopened.reviewBadge?.label == "督办中")
         let cancelled = TaskSupervision(supervisor: "main", state: "cancelled")
         #expect(sup(cancelled, done: false).reviewState == .ongoing)
+    }
+
+    /// A continuation's new round (#11553): `task_plan` continues reopened an accepted task with a new Agent, and the hub
+    /// kept the acceptance in the reviews but put the ledger back to going on. The history alone never makes the to-do
+    /// accepted; more work sent to the accepted task's Agent (#3156) keeps the ledger, and the chip, accepted.
+    @Test func aContinuationShowsItsNewRoundNotTheEarlierAcceptance() {
+        let earlier = TaskSupervision.Review(verdict: "accepted", checks: [.init(criterion: "A", met: true)])
+        let continued = sup(.init(supervisor: "main", doneWhen: ["A"], state: "", reviews: [earlier]), done: false)
+        #expect(!continued.acceptanceStands && continued.reviewState == .ongoing)
+        #expect(continued.reviewBadge?.label == "督办中" && continued.reviewBadge?.tone == .neutral)
+        let standing = sup(.init(supervisor: "main", doneWhen: ["A"], state: "accepted", reviews: [earlier]), done: false)
+        #expect(standing.acceptanceStands && standing.reviewBadge?.label == "已验收")
     }
 
     @Test func statusLabelOfAReviewedTask() {
@@ -262,10 +299,11 @@ struct ChatSupervisionTests {
 
     @Test func canonicalToolNamespacesMatchTheWebExactly() {
         for bare in ["notify_user", "ask_user", "supervision_finish", "task_review"] {
-            for prefix in ["", "mcp__persona__", "mcp__plugin_persona__", "mcp__\(LegacyNames.product)__", "mcp__plugin_\(LegacyNames.product)__"] {
+            for prefix in ["", "mcp__persona__", "mcp__plugin_persona__", "mcp__\(LegacyNames.product)__", "mcp__plugin_\(LegacyNames.product)__",
+                           "mcp_persona_", "mcp_persona_0c671287_", "mcp_\(LegacyNames.product)_", "mcp_\(LegacyNames.product)_55a1c59d_"] {
                 #expect(Supervision.tool(prefix + bare) == bare)
             }
-            for prefix in ["mcp__fictional__", "mcp__persona_other__", "mcp__plugin_persona_other__", "mcp__persona__extra__"] {
+            for prefix in ["mcp__fictional__", "mcp__persona_other__", "mcp__plugin_persona_other__", "mcp__persona__extra__", "mcp_persona_other_"] {
                 #expect(Supervision.tool(prefix + bare) == nil)
             }
         }
@@ -325,21 +363,23 @@ struct ChatSupervisionTests {
         #expect(!Supervision.visible([input(4, text: "Next real request"), late], results: [use.toolUseID!: late], live: false))
     }
 
-    @Test func foldAndClientPromotionRoundTripWithTheirDistinctKeys() throws {
+    /// The item's own mark is under the hub's item key too (`proto.Item.SupervisionUser`, restored by #7160), so a page,
+    /// a cache restore and the core's replay all read the same field.
+    @Test func foldAndClientPromotionRoundTripUnderTheHubsKey() throws {
         let json = #"{"id":"fold:t2#0","seq":2,"role":"assistant","kind":"fold","fold":{"items":4,"tools":2,"thoughts":0,"through_seq":5,"through_id":"r5#0","supervision_user":true}}"#
         var folded = try JSON.decoder.decode(Item.self, from: Data(json.utf8))
         #expect(folded.fold?.supervisionUser == true && visible([input(1), folded]))
         folded.supervisionUser = true
         let data = try JSON.encoder.encode(folded)
         let value = try JSONDecoder().decode(JSONValue.self, from: data)
-        #expect(value["supervisionUser"] == .bool(true))
-        #expect(value["supervision_user"] == nil)
+        #expect(value["supervision_user"] == .bool(true))
+        #expect(value["supervisionUser"] == nil)
         #expect(value["fold"]?["supervision_user"] == .bool(true))
         #expect(try JSON.decoder.decode(Item.self, from: data) == folded)
         folded.fold?.supervisionUser = nil
         folded.supervisionUser = nil
         #expect(!visible([input(1), folded]))
-        #expect(ChatCache.folder == "chats-v14")
+        #expect(ChatCache.folder == "chats-v22")
     }
 
     @Test func queuedSupervisionAndTheNextGenuineQueuedInputAreSeparateTurns() {

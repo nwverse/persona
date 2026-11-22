@@ -21,7 +21,7 @@ private class FakeProviders(var presets: List<ProviderPreset> = emptyList()) : P
     override suspend fun add(provider: NewProvider) { added += provider; refuse?.let { throw it } }
 }
 
-/** "New model provider" (docs/integrations/launchers.md "From extension"): what is sent from each form, the name check, a refusal, older hubs. */
+/** "New model provider" (docs/integrations/launchers.md "Adding from extensions"): what is sent from each form, the name check, a refusal, older hubs. */
 // Robolectric: the words come from the app's resources, in Simplified Chinese (robolectric.properties).
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35])

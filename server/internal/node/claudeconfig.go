@@ -6,8 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // ClaudeSetting is one Claude Code /config option the app may change. Only these keys are read or written;
@@ -30,6 +33,9 @@ var claudeSettings = []ClaudeSetting{
 	// settings.json accepts only low through xhigh; max belongs to session controls.
 	// "auto" removes the key so Claude Code uses the model's default.
 	{Key: "effortLevel", Type: "enum", Options: []string{effortAuto, "low", "medium", "high", "xhigh"}, Default: effortAuto},
+	// The mode a session starts in when nothing picks one: the Agents page's "Follow" and a planned task the assistant
+	// left unset (the hub reads it for the plan card, assistant/tasks_permission.go, #3026).
+	{Key: proto.ClaudeDefaultModeSetting, Type: "enum", Options: permissionModes, Default: "default"},
 	{Key: "language", Title: "回复语言", Detail: "Claude 回答用哪种语言，比如「中文」", Type: "string", Default: ""},
 	{Key: "promptSuggestionEnabled", Title: "猜你下一句", Detail: "在输入框里先替你写出可能要说的下一句", Type: "bool", Default: true},
 	{Key: "spinnerTipsEnabled", Title: "等待时的小提示", Detail: "Claude 干活时，在终端底部显示使用小技巧", Type: "bool", Default: true},
@@ -86,7 +92,11 @@ func (n *Node) getClaudeSettings(lang i18n.Lang) ([]ClaudeSetting, error) {
 	}
 	out := make([]ClaudeSetting, len(claudeSettings))
 	for i, s := range claudeSettings {
-		s.Value = raw[s.Key]
+		s.Value = settingValue(raw, s.Key)
+		if s.Key == proto.ClaudeDefaultModeSetting {
+			s.Title = i18n.T(lang, "claude-settings.default_mode_title")
+			s.Detail = i18n.T(lang, "claude-settings.default_mode_detail")
+		}
 		if s.Key == "effortLevel" {
 			s.Title = i18n.T(lang, "claude-settings.effort_title")
 			s.Detail = i18n.T(lang, "claude-settings.effort_detail")
@@ -145,12 +155,72 @@ func (n *Node) setClaudeSetting(key string, value any) error {
 	return nil
 }
 
+// settingValue is key's value in raw (nil unset); a dotted key is one inside an object.
+func settingValue(raw map[string]any, key string) any {
+	if obj, leaf, nested := strings.Cut(key, "."); nested {
+		m, _ := raw[obj].(map[string]any)
+		return m[leaf]
+	}
+	return raw[key]
+}
+
+// agentConfigMu serializes every read-edit-write of an agent's own settings file: RPCs are handled concurrently and the
+// app lets several saves be in flight, so two unserialized edits of one file would each drop the other's change.
+var agentConfigMu sync.Mutex
+
+// writeConfigFile replaces path with data through a temp file of its own (so two writers never share one), keeping the
+// file's mode, or defMode for a new file.
+func writeConfigFile(path string, data []byte, defMode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	mode := defMode
+	if st, err := os.Stat(path); err == nil {
+		mode = st.Mode().Perm()
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.persona.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	err = f.Chmod(mode)
+	if err == nil {
+		_, err = f.Write(data)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
+}
+
 func writeSetting(path, key string, value any) error {
+	agentConfigMu.Lock()
+	defer agentConfigMu.Unlock()
 	raw, err := readSettingsFile(path)
 	if err != nil {
 		return err
 	}
-	if value == nil || value == "" {
+	if obj, leaf, nested := strings.Cut(key, "."); nested {
+		m, isObject := raw[obj].(map[string]any)
+		if raw[obj] != nil && !isObject {
+			return fmt.Errorf("%s: %s is not an object", path, obj)
+		}
+		if value == nil || value == "" {
+			delete(m, leaf) // the object stays, with whatever else it holds (permissions.allow …)
+		} else {
+			if m == nil {
+				m = map[string]any{}
+			}
+			m[leaf] = value
+			raw[obj] = m
+		}
+	} else if value == nil || value == "" {
 		delete(raw, key)
 	} else {
 		raw[key] = value
@@ -159,16 +229,5 @@ func writeSetting(path, key string, value any) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	tmp := path + ".persona.tmp"
-	mode := os.FileMode(0o644)
-	if st, err := os.Stat(path); err == nil {
-		mode = st.Mode().Perm()
-	}
-	if err := os.WriteFile(tmp, append(b, '\n'), mode); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return writeConfigFile(path, append(b, '\n'), 0o644)
 }

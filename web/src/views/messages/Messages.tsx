@@ -2,10 +2,11 @@
 // that turned on Settings › Connectors › Lark › Show messages on home, on a hub that reads Feishu (feature `lark`). Not a second Feishu: one list and the inbox's own chat view
 // (LarkThread: reading, sending, Pins), no contacts or workbench. Wide: the list (380px) and the chat side by side;
 // narrow: the chat takes the list's place, with a way back. The pinned chats sit on top as a row of faces.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { shortTime } from "../../lib/inbox";
 import { accountTitle, larkAccounts, useLarkAccounts, type LarkAccountsState } from "../../lib/lark-accounts";
-import { HIDDEN_DISPLAY, summaryText, useLarkDisplayState, type LarkMessageDisplay } from "../../lib/lark-display";
+import { useLarkDisplayState } from "../../lib/lark-display";
+import { entryOf, type LarkEntry } from "../../lib/lark-history";
 import {
   arrangeConversations, conversationPreview, filterConversations, larkChatsFor, unreadBadge, useLarkChats, useLarkHome, type LarkChatsStore,
   type LarkConversation,
@@ -16,7 +17,7 @@ import { onHubEvent, useLarkOn } from "../../lib/store";
 import { t } from "../../i18n";
 import { Button, cx, IconButton, Loading, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-import { Chip, Count, Monogram } from "../inbox/InboxParts";
+import { Chip, Count, LarkAvatar } from "../inbox/InboxParts";
 import { LarkThread } from "../inbox/LarkThread";
 
 const SETTINGS = "/settings?tab=connectors";
@@ -31,6 +32,22 @@ export function Messages({ id, onToggleSidebar }: { id?: string; onToggleSidebar
   const s = useLarkChats(larkChats);
   const [pins, setPins] = useState(false);
   const chat = useMemo(() => (id ? [...s.pinned, ...s.rows].find((c) => c.id === id) : undefined), [id, s.pinned, s.rows]);
+  // Where the opened chat lands (its first unread message), taken from its row once, when the row (or the list without
+  // it) is first there: reading moves the row's read position, and the chat must not jump to it.
+  const entryKey = `${accounts.request ?? ""}:${id ?? ""}`;
+  // A row the loaded pages do not hold is looked for further down the list first.
+  const [entry, setEntry] = useState<{ key: string; at: LarkEntry } | null>(null);
+  if (id && entry?.key !== entryKey && chat) setEntry({ key: entryKey, at: entryOf(chat) });
+  const missing = Boolean(id) && !chat && s.loaded && entry?.key !== entryKey;
+  useEffect(() => {
+    if (!missing || !id) return;
+    let live = true;
+    void larkChats.find(id).then((row) => live && setEntry((cur) => (cur?.key === entryKey ? cur : { key: entryKey, at: entryOf(row) })));
+    return () => {
+      live = false;
+    };
+  }, [missing, id, entryKey, larkChats]);
+  const landing = entry?.key === entryKey ? entry.at : null;
 
   useEffect(() => setPins(false), [id]);
   useEffect(() => {
@@ -117,10 +134,12 @@ export function Messages({ id, onToggleSidebar }: { id?: string; onToggleSidebar
         <section aria-label={t("messages-messages.chat")} className={cx("min-h-0 min-w-0 flex-1 flex-col @4xl:flex", id ? "flex" : "hidden")}>
           {id ? (
             <div className="flex h-full min-h-0 flex-col">
-              <ChatHeader chat={chat} account={accounts.selectedName} />
+              <ChatHeader chat={chat} accountName={accounts.selectedName} account={accounts.selected} />
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                <LarkThread key={`${accounts.request ?? ""}:${id}`} chat={{ feed: id, title: chat?.name || t("messages-messages.lark_chat"), topic: chat?.is_topic, account: accounts.request, group: chat?.is_group }}
-                  pinsOpen={pins} onPinsOpen={setPins} />
+                {landing ? (
+                  <LarkThread key={entryKey} chat={{ feed: id, title: chat?.name || t("messages-messages.lark_chat"), topic: chat?.is_topic, account: accounts.request,
+                    group: chat?.is_group, ...landing }} pinsOpen={pins} onPinsOpen={setPins} />
+                ) : <div className="p-5"><Loading label={t("inbox-larkthread.loading")} /></div>}
               </div>
             </div>
           ) : (
@@ -138,21 +157,22 @@ export function Messages({ id, onToggleSidebar }: { id?: string; onToggleSidebar
 
 /** The opened chat's name over it (wide only: narrow puts it in the page's title row); whose account it is while
  * more than one is signed in. */
-function ChatHeader({ chat, account }: { chat?: LarkConversation; account?: string }) {
+function ChatHeader({ chat, accountName, account }: { chat?: LarkConversation; accountName?: string; account?: number }) {
   if (!chat) return null;
   return (
     <div className="hidden shrink-0 items-center gap-3 border-b border-line px-4 py-2.5 @4xl:flex sm:px-6">
-      <Monogram name={chat.name} size={28} src={chat.avatar} />
+      <LarkAvatar name={chat.name} size={28} avatarURL={chat.avatar_url} avatar={chat.avatar} account={account} />
       <div className="min-w-0 flex-1">
         <p className="truncate text-[13.5px] font-semibold text-ink">{chat.name}</p>
-        <p className="truncate text-[11.5px] text-ink-3">{[chat.is_topic ? t("messages-messages.kind_topic") : chat.is_group ? t("messages-messages.kind_group") : t("messages-messages.kind_dm"), account].filter(Boolean).join(" · ")}</p>
+        <p className="truncate text-[11.5px] text-ink-3">{[chat.is_topic ? t("messages-messages.kind_topic") : chat.is_group ? t("messages-messages.kind_group") : t("messages-messages.kind_dm"), accountName].filter(Boolean).join(" · ")}</p>
       </div>
     </div>
   );
 }
 
 function ChatList({ selected, store: larkChats, accounts }: { selected?: string; store: LarkChatsStore; accounts: LarkAccountsState }) {
-  const display = useLarkDisplayState(accounts.request).snapshot ?? HIDDEN_DISPLAY;
+  // Keeps the account's message display settings loaded and reread after a reconnect, ready for the chat that opens.
+  useLarkDisplayState(accounts.request);
   const s = useLarkChats(larkChats);
   const [query, setQuery] = useState("");
   const end = useRef<HTMLDivElement>(null);
@@ -208,7 +228,7 @@ function ChatList({ selected, store: larkChats, accounts }: { selected?: string;
         )}
         {!s.loaded && !s.rows.length && <div className="mt-6 px-1"><Loading label={t("messages-messages.loading")} /></div>}
 
-        {!query && pinned.length > 0 && <PinnedShelf chats={pinned} selected={selected} />}
+        {!query && pinned.length > 0 && <PinnedShelf chats={pinned} selected={selected} account={accounts.selected} />}
 
         {s.loaded && !shown.length && !s.problem && (
           <div className="mt-10 flex flex-col items-center gap-2 text-center">
@@ -220,7 +240,7 @@ function ChatList({ selected, store: larkChats, accounts }: { selected?: string;
 
         {shown.length > 0 && (
           <div className="mt-3 flex flex-col gap-1.5">
-            {shown.map((c) => <ChatRow key={c.id} c={c} selected={c.id === selected} display={display} />)}
+            {shown.map((c) => <ChatRow key={c.id} c={c} account={accounts.selected} selected={c.id === selected} time={shortTime(c.updated_at)} />)}
           </div>
         )}
         {!query && s.moreProblem && (
@@ -236,7 +256,7 @@ function ChatList({ selected, store: larkChats, accounts }: { selected?: string;
 }
 
 /** "Pinned": the pinned chats, a row of faces with their names and unread counts (the Lark gateway's order). */
-function PinnedShelf({ chats, selected }: { chats: LarkConversation[]; selected?: string }) {
+function PinnedShelf({ chats, selected, account }: { chats: LarkConversation[]; selected?: string; account?: number }) {
   return (
     <section aria-label={t("messages-messages.pinned_label")} className="mt-3">
       <p className="px-1 pb-1.5 text-[12px] font-medium text-ink-3">{t("messages-messages.pinned")} <span className="text-[11.5px] tabular-nums">{chats.length}</span></p>
@@ -255,7 +275,7 @@ function PinnedShelf({ chats, selected }: { chats: LarkConversation[]; selected?
               className={cx("flex w-[64px] shrink-0 flex-col items-center gap-1 rounded-[12px] px-1 py-2 transition-colors hover:bg-hover", c.id === selected && "bg-inset shadow-[0_0_0_1.5px_var(--accent)]")}
             >
               <span className="relative">
-                <Monogram name={c.name} size={40} src={c.avatar} />
+                <LarkAvatar name={c.name} size={40} avatarURL={c.avatar_url} avatar={c.avatar} account={account} />
                 {(b.count || b.dot) && (
                   <span className="absolute -top-1 -right-1">
                     {b.count ? <Count n={b.count} accent={!b.muted} /> : <span className={cx("block size-2.5 rounded-full ring-2 ring-page", b.muted ? "bg-ink-3" : "bg-accent")} />}
@@ -271,10 +291,12 @@ function PinnedShelf({ chats, selected }: { chats: LarkConversation[]; selected?
   );
 }
 
-function ChatRow({ c, selected, display }: { c: LarkConversation; selected: boolean; display: LarkMessageDisplay }) {
+/** One chat of the list. It draws again only when its props change: a refresh keeps the object of a chat that did not
+ * change (LarkChatsStore), and the list works out the time label each time it draws, so a new day still moves it on. */
+const ChatRow = memo(function ChatRow({ c, selected, time, account }: { c: LarkConversation; selected: boolean; time: string; account?: number }) {
   const to = { name: "messages", id: c.id } as const;
   const b = unreadBadge(c);
-  const preview = conversationPreview({ ...c, preview: c.preview && summaryText(display, c.preview) });
+  const preview = conversationPreview(c);
   return (
     <a
       data-chat={c.id}
@@ -283,14 +305,14 @@ function ChatRow({ c, selected, display }: { c: LarkConversation; selected: bool
       aria-current={selected ? "page" : undefined}
       className={cx("flex scroll-my-3 gap-3 rounded-[14px] p-3 outline-offset-[-2px] transition-[background-color,box-shadow] duration-150 hover:bg-inset", selected ? "bg-inset shadow-[0_0_0_1.5px_var(--accent)]" : "bg-surface shadow-card")}
     >
-      <Monogram name={c.name} size={40} src={c.avatar} />
+      <LarkAvatar name={c.name} size={40} avatarURL={c.avatar_url} avatar={c.avatar} account={account} />
       <span className="min-w-0 flex-1">
         <span className="flex min-w-0 items-center gap-1.5">
           <span className={cx("truncate text-[13.5px]", b.count || b.dot ? "font-semibold text-ink" : "font-medium text-ink")}>{c.name}</span>
           {c.is_group && <Icon name="layers" size={11} className="shrink-0 text-ink-3" />}
           {c.muted && <Icon name="bellOff" size={11} className="shrink-0 text-ink-3" />}
           <span className="flex-1" />
-          <span className="shrink-0 text-[11.5px] text-ink-3 tabular-nums">{shortTime(c.updated_at)}</span>
+          <span className="shrink-0 text-[11.5px] text-ink-3 tabular-nums">{time}</span>
         </span>
         <span className="mt-0.5 flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-2">
@@ -302,4 +324,4 @@ function ChatRow({ c, selected, display }: { c: LarkConversation; selected: bool
       </span>
     </a>
   );
-}
+});

@@ -12,7 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// The model configuration is the assistant's (docs/assistant/model-config.md "Who owns the models"), in this process: what the
+// The model configuration is the assistant's (docs/assistant/model-config.md "Who owns models"), in this process: what the
 // extensions have for it (their providers, their voice models, which of them need "message triage", their quota
 // readers) it asks here (app.call plugins.*, answered in-process: AppCall), and what the extensions need of it (whether
 // "message triage" can be called, which launchers have a gateway, requests to a launcher's gateway sent with its key)

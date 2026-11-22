@@ -1,4 +1,4 @@
-// The terminal's find bar (docs/integrations/terminal.md "Search"): a small bar over the top of the panel with the field, how many
+// The terminal's find bar (docs/integrations/terminal.md "What search covers"): a small bar over the top of the panel with the field, how many
 // matches there are, previous / next, "Match case" and close. Enter steps to the next match, Shift+Enter to the previous,
 // Esc closes. The state is lib/terminal-search.ts's reducer; what is searched is the feed's.
 import { useEffect, useRef } from "react";

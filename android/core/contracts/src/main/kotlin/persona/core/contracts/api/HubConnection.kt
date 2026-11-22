@@ -3,12 +3,18 @@ package persona.core.contracts.api
 import persona.core.contracts.Hello
 import persona.core.contracts.ServerEvent
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.JsonObject
 
 enum class ConnectionState {
     Online, Connecting, Updating, WaitingForNetwork, NeedsLocalNetworkPermission, CertificateMismatch, Revoked,
 }
+
+/** Local authenticated socket identity, distinct even when two hellos have equal payloads. */
+data class SocketHello(val generation: Long, val hello: Hello)
+private val noCurrentHello = MutableStateFlow<SocketHello?>(null).asStateFlow()
 
 interface HubConnection {
     val state: StateFlow<ConnectionState>
@@ -29,11 +35,14 @@ interface HubConnection {
      */
     val lastHello: Hello? get() = null
 
+    /** Current identity-checked socket hello; null immediately on loss/reconnect, even during the UI's Online grace. */
+    val currentHello: StateFlow<SocketHello?> get() = noCurrentHello
+
     fun reconnect()
 
     /**
-     * Each open hub group's own state and reconnect, for callers that must act per group (#5311): [reconnect] restarts
-     * every group while [state] is only the selected one's. A single connection is its own only group.
+     * Each open hub group's own state and recovery actions, for callers that must act per group (#5311): [reconnect]
+     * restarts every group while [state] is only the selected one's. A single connection is its own only group.
      */
     val groupLinks: List<GroupLink> get() = listOf(GroupLink(state, ::reconnect))
 
@@ -41,5 +50,10 @@ interface HubConnection {
     fun send(message: JsonObject): Boolean
 }
 
-/** One hub group as [HubConnection.groupLinks] shows it. */
-class GroupLink(val state: StateFlow<ConnectionState>, val reconnect: () -> Unit)
+/**
+ * One hub group as [HubConnection.groupLinks] shows it. [wake] validates an open socket with its bounded ping/pong
+ * recovery; the two-argument constructor keeps a basic connection's wake equivalent to reconnecting it.
+ */
+class GroupLink(val state: StateFlow<ConnectionState>, val reconnect: () -> Unit, val wake: () -> Unit) {
+    constructor(state: StateFlow<ConnectionState>, reconnect: () -> Unit) : this(state, reconnect, reconnect)
+}

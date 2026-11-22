@@ -1,10 +1,73 @@
-import { t } from "../i18n";
+import { formatDate, t } from "../i18n";
 import type { Todo } from "./todos";
+import type { Interaction } from "./types";
 
 // A task the main conversation supervises (#3124, docs/assistant/unified-entry.md "Supervision"): what done means, where its review
 // stands, and the reviews so far. Only such tasks carry `supervision`; an older hub sends none.
 
-export type ReviewState = "" | "pending_review" | "rework" | "needs_user" | "accepted" | "cancelled";
+export type ReviewState = "" | "pending_review" | "user_check" | "rework" | "needs_user" | "parked" | "accepted" | "cancelled";
+
+/** What a parked task waits for (#3804, docs/assistant/todos.md "Parked tasks"): the reason in one sentence, until when,
+ *  what kind of thing it waits on, and how many times in a row it was parked with no agent turn in between. */
+export interface Parked {
+  reason: string;
+  until: string;
+  waiting_on: "owner_priority" | "someone_else" | "external_event" | "date" | "todo_handoff";
+  count: number;
+  /** Source-backed account recorded by task_review, not a provider receipt fetched by the hub. */
+  evidence?: ParkEvidence;
+  handoff?: { todo_id: string; title: string; check: string };
+}
+
+export interface ParkContact {
+  channel: string;
+  url: string;
+  sender: string;
+  sent_at: string;
+  request: string;
+  status: string;
+}
+
+export interface ParkEvidence {
+  kind: "person_reply" | "merge_review" | "external_event" | "date";
+  target: string;
+  url?: string;
+  wake: string;
+  contact?: ParkContact;
+  ready?: boolean;
+  /** external_event only: the exact pending worker interaction the hub verified for this park. */
+  interaction_id?: string;
+  /** Recording conversation, not the person who sent the request. */
+  recorded_by?: string;
+}
+
+export function parkInteractionID(todo: Todo): string | undefined {
+  const evidence = todo.supervision?.parked?.evidence;
+  if (todo.done_at || todo.supervision?.state !== "parked" || evidence?.kind !== "external_event") return undefined;
+  return evidence.interaction_id?.trim() || undefined;
+}
+
+/** The current pending interaction an external-event park names, only when its exact worker belongs to this task. */
+export function linkedParkInteraction(todo: Todo, interactions: readonly Interaction[]): Interaction | undefined {
+  const id = parkInteractionID(todo);
+  const ix = id ? interactions.find((candidate) => candidate.id === id) : undefined;
+  if (!id || !ix) return undefined;
+  return (todo.agents ?? []).some((a) => !a.dismissed_at && !a.start_error && a.machine_id === ix.machine_id && a.session_id === ix.session_id) ? ix : undefined;
+}
+
+/** The manager's current owner-ask projection of the same linked interaction, for surfaces without the pending list. */
+export function linkedParkOwnerAsk(todo: Todo): boolean {
+  const id = parkInteractionID(todo);
+  return !!id && !!todo.view?.asks?.some((ask) => ask.interaction === id);
+}
+
+/** A local copy of a to-do whose linked request is homed elsewhere; its recorded evidence is not mutated. */
+export function withoutParkInteraction(todo: Todo): Todo {
+  if (!parkInteractionID(todo)) return todo;
+  const supervision = todo.supervision!;
+  const parked = supervision.parked!;
+  return { ...todo, supervision: { ...supervision, parked: { ...parked, evidence: { ...parked.evidence!, interaction_id: undefined } } } };
+}
 
 export interface ReviewCheck {
   criterion: string;
@@ -14,26 +77,49 @@ export interface ReviewCheck {
 
 export interface TaskReview {
   at: string;
-  verdict: "accepted" | "rework" | "needs_user" | "cancelled";
+  verdict: "accepted" | "rework" | "needs_user" | "parked" | "cancelled";
   /** "reviewer": a rework the independent reviewer's findings started (#2173); absent: the supervisor's. */
   by?: string;
   round?: number;
   checks?: ReviewCheck[];
   note?: string;
+  reason?: string;
+  recommend?: string;
+  options?: { label: string; leads_to?: string }[];
+  until?: string;
+  waiting_on?: Parked["waiting_on"];
+  parks?: number;
+  evidence?: ParkEvidence;
 }
 
 export interface Supervision {
   supervisor: string;
   done_when?: string[];
+  /** Latest per-entry reports/checks. Absent on older hubs; done_when owns text and order. */
+  criteria?: CriterionStatus[];
   expect_minutes?: number;
   state?: ReviewState;
+  /** Present while `state` is "parked": what the task waits for. Absent otherwise, and on an older hub. */
+  parked?: Parked;
   round?: number;
   reviews?: TaskReview[];
   updated_at?: string;
+  /** When the task entered `pending_review`; absent in every other state, and from an older hub. The web lists every
+   *  review alike (Persona reviewing, #8678); Android and Apple read it to tell an overdue one. */
+  pending_since?: string;
   /** What its agent last reported to Persona (report_to_supervisor); kept by the hub while it runs. */
   progress?: TaskProgress;
   /** The latest independent review of its change (#2173); absent when none ran (or on an older hub). */
   auto_review?: AutoReview;
+}
+
+export interface CriterionStatus {
+  criterion: string;
+  state: "pending" | "met" | "not_met";
+  evidence?: string;
+  at?: string;
+  /** agent:<machine>/<session>, supervisor:<conversation>, or judge. */
+  by?: string;
 }
 
 /** An independent reviewer's run over a supervised task's change: its state, counts and report. */
@@ -74,30 +160,70 @@ export interface TaskProgress {
   kind: ReportKind;
   step?: number;
   steps?: number;
+  /** The agent's own words, in one line. */
   text: string;
+  /** The report paraphrased in one sentence in the user's language (#3181); absent until the hub's model wrote it, with
+   *  no model, or on an older hub. */
+  line?: string;
+  /** The report as the agent wrote it (Markdown); absent when it is `text`, or on an older hub. */
+  detail?: string;
   at?: string;
 }
 
-/** The review state that holds now: an accepted or cancelled task the user reopened goes on again. */
+/** Whether its supervisor's acceptance still stands: the latest review accepted it and no review came since. That
+ *  holds even when the hub reopened it because its agent was sent more work (#3156): the task is accepted until a new
+ *  review says otherwise (docs/assistant/todo-status-sop.md, "Accepted tasks"). */
+export function acceptanceStands(todo: { supervision?: Supervision }): boolean {
+  const sup = todo.supervision;
+  return sup?.state === "accepted" && latestReview(sup)?.verdict === "accepted";
+}
+
+/** The review state that holds now: a cancelled task reopened goes on again; an accepted one stays accepted while
+ *  its acceptance stands (acceptanceStands); a closed task no longer waits for review or stays parked. */
 export function reviewState(todo: Pick<Todo, "done_at"> & { supervision?: Supervision }): ReviewState {
   const st = todo.supervision?.state ?? "";
-  if (!todo.done_at && (st === "accepted" || st === "cancelled")) return "";
+  if (todo.done_at && st === "user_check") return "accepted";
+  if (!todo.done_at && st === "accepted" && !acceptanceStands(todo)) return "";
+  if (!todo.done_at && st === "cancelled") return "";
+  if (todo.done_at && st === "pending_review") return "";
+  if (st === "parked" && (todo.done_at || !todo.supervision?.parked)) return "";
   return st;
+}
+
+/** "Parked until Nov 14, 9:00 AM · The design team has to pick the icon set first": a parked task in a line, for its
+ *  row among the tasks in progress and for its page; undefined for a task that is not parked. */
+export function parkedLine(todo: (Pick<Todo, "done_at"> & { supervision?: Supervision }) | undefined): string | undefined {
+  const p = todo?.supervision?.parked;
+  if (!todo || !p || reviewState(todo) !== "parked") return undefined;
+  const time = formatDate(p.until, { dateStyle: "medium", timeStyle: "short" });
+  return time ? t("assistant-tasks.review_parked_until", { time, reason: p.reason }) : t("assistant-tasks.review_parked_reason", { reason: p.reason });
 }
 
 export type ReviewTone = "accent" | "red" | "orange" | "green" | "muted";
 
+/** The owner chose Don't handle on the decision round waiting now (the hub's task_review_dismissals): it no longer waits
+ *  on them, in the main conversation, on the To-dos page and in the badge alike. An answer later undoes it on the hub. */
+export function decisionDismissed(todo: Pick<Todo, "decision_review"> & { supervision?: Supervision }): boolean {
+  const r = todo.decision_review;
+  return !!r?.dismissal_id && r.review_at === (todo.supervision?.reviews?.at(-1)?.at || r.review_at);
+}
+
 /** What the state is called and how it is coloured; undefined for a task that is not supervised. */
-export function reviewBadge(todo: Pick<Todo, "done_at"> & { supervision?: Supervision }): { label: string; tone: ReviewTone } | undefined {
+export function reviewBadge(todo: Pick<Todo, "done_at" | "decision_review"> & { supervision?: Supervision }): { label: string; tone: ReviewTone } | undefined {
   const sup = todo.supervision;
   if (!sup) return undefined;
+  if (reviewState(todo) === "needs_user" && decisionDismissed(todo)) return { label: t("assistant-tasks.review_dismissed"), tone: "muted" };
   switch (reviewState(todo)) {
     case "pending_review":
       return { label: t("assistant-tasks.review_pending"), tone: "accent" };
+    case "user_check":
+      return { label: t("assistant-tasks.review_user_check"), tone: "orange" };
     case "rework":
       return { label: t("assistant-tasks.review_rework", { round: sup.round ?? 1 }), tone: "orange" };
     case "needs_user":
       return { label: t("assistant-tasks.review_needs_user"), tone: "orange" };
+    case "parked":
+      return { label: t("assistant-tasks.review_parked"), tone: "muted" };
     case "accepted":
       return { label: t("assistant-tasks.review_accepted"), tone: "green" };
     case "cancelled":
@@ -106,27 +232,39 @@ export function reviewBadge(todo: Pick<Todo, "done_at"> & { supervision?: Superv
   return { label: t("assistant-tasks.review_ongoing"), tone: "muted" };
 }
 
-export type CheckMark = "met" | "missing" | "open";
+export type CheckMark = "met" | "missing" | "open" | "unchecked";
+
+export interface ChecklistEntry {
+  criterion: string;
+  mark: CheckMark;
+  evidence?: string;
+  at?: string;
+  by?: string;
+}
 
 /**
- * Each criterion with how the latest review that judged it found it: met, missing (with its evidence or gap), or
- * open (not reviewed yet). Criteria a review judged that are not in done_when (a task without any) follow.
+ * Current criterion progress, independent of the task's acceptance. Older hubs
+ * omit criteria: retain their review-derived display, including unchecked entries
+ * added after a standing acceptance (#3156).
  */
-export function checklist(sup: Supervision | undefined): { criterion: string; mark: CheckMark; evidence?: string }[] {
+export function checklist(sup: Supervision | undefined): ChecklistEntry[] {
   if (!sup) return [];
-  const latest = new Map<string, ReviewCheck>();
-  for (const r of sup.reviews ?? []) for (const c of r.checks ?? []) latest.set(c.criterion, c);
-  const out: { criterion: string; mark: CheckMark; evidence?: string }[] = [];
-  const seen = new Set<string>();
-  for (const criterion of sup.done_when ?? []) {
-    seen.add(criterion);
-    const c = latest.get(criterion);
-    out.push({ criterion, mark: c ? (c.met ? "met" : "missing") : "open", evidence: c?.evidence || undefined });
+  const criteria = sup.done_when ?? [];
+  const current = criteria.length ? sup.criteria : undefined;
+  const latest = new Map<string, ChecklistEntry>();
+  for (const c of current ?? sup.reviews?.flatMap((r) => r.checks ?? []) ?? []) {
+    latest.set(c.criterion, {
+      criterion: c.criterion,
+      mark: "state" in c ? (c.state === "met" ? "met" : c.state === "not_met" ? "missing" : "open") : c.met ? "met" : "missing",
+      evidence: c.evidence || undefined,
+      ...("state" in c ? { at: c.at, by: c.by } : {}),
+    });
   }
-  for (const [criterion, c] of latest) {
-    if (!seen.has(criterion)) out.push({ criterion, mark: c.met ? "met" : "missing", evidence: c.evidence || undefined });
-  }
-  return out;
+  const settled = !current && acceptanceStands({ supervision: sup });
+  return [
+    ...criteria.map((criterion): ChecklistEntry => latest.get(criterion) ?? { criterion, mark: settled ? "unchecked" : "open", evidence: undefined }),
+    ...(current ? [] : [...latest.values()].filter((c) => !criteria.includes(c.criterion))),
+  ];
 }
 
 /** The latest review, if any. */
@@ -135,18 +273,27 @@ export function latestReview(sup: Supervision | undefined): TaskReview | undefin
   return list[list.length - 1];
 }
 
-/** "2/3": criteria met of all, for a card; "" without criteria. */
+/** "2/3": criteria met of all, for a card; "" without criteria. Criteria left unchecked by a standing acceptance
+ *  are not counted (an accepted task reads "5/5", not "5/8"). */
 export function checkCount(sup: Supervision | undefined): string {
-  const list = checklist(sup);
+  const list = checklist(sup).filter((c) => c.mark !== "unchecked");
   if (list.length === 0) return "";
   return `${list.filter((c) => c.mark === "met").length}/${list.length}`;
 }
 
-/** "Step 3/5 · …", "Asked Persona: …": the agent's latest report in a line for a card; undefined when it has none. */
+/** "Step 3/5 · …", "Asked Persona: …": the agent's latest report in a line for a card, in the hub's paraphrase when it
+ *  has one (#3181), else in the agent's words; undefined when it has none. */
 export function progressLine(sup: Supervision | undefined): string | undefined {
   const p = sup?.progress;
-  if (!p || !p.text) return undefined;
-  return reportLine(p.kind, p.text, p.step, p.steps);
+  const text = p?.line?.trim() || p?.text;
+  if (!p || !text) return undefined;
+  return reportLine(p.kind, text, p.step, p.steps);
+}
+
+/** The agent's latest report as it wrote it, for the task's details (Markdown); undefined when it has none. */
+export function reportText(sup: Supervision | undefined): string | undefined {
+  const p = sup?.progress;
+  return p?.detail?.trim() || p?.text?.trim() || undefined;
 }
 
 /** A report (on a card, or a feed item of kind "report") in a line. */
@@ -173,6 +320,8 @@ export function reviewVerdictLabel(verdict: string, round?: number): string {
       return t("assistant-tasks.review_rework", { round: round ?? 1 });
     case "needs_user":
       return t("assistant-tasks.review_needs_user");
+    case "parked":
+      return t("assistant-tasks.review_parked");
     case "cancelled":
       return t("assistant-tasks.review_cancelled");
   }

@@ -9,7 +9,8 @@ enum PersonaToolNames {
     nonisolated static let servers: Set<String> = ["persona", LegacyNames.product, "plugin_persona", "plugin_" + LegacyNames.product]
 
     /// The server of an MCP tool's full name ("mcp__persona__agent_read" → "persona"), nil for any other tool.
-    nonisolated static func server(_ name: String) -> String? {
+    nonisolated static func server(_ raw: String) -> String? {
+        let name = HubNaming.canonicalMCPTool(raw)
         guard name.hasPrefix("mcp__") else { return nil }
         let rest = name.dropFirst(5)
         guard let r = rest.range(of: "__", options: .backwards), r.lowerBound > rest.startIndex else { return nil }
@@ -26,8 +27,8 @@ enum PersonaToolNames {
         guard isPersona(name) else { return nil }
         let n = ToolPresentation.baseName(name)
         if let own = verbs(n) { return own }
-        // Already named by the generic table: its bare name comes back as something other than itself.
-        if ToolPresentation.verb(n) != n { return nil }
+        // Already named by the generic table, or one of the phone and mail families `ToolPresentation.verb` names.
+        if ToolPresentation.knownVerb(n) != nil || n.hasPrefix("phone_") || n.hasPrefix("mail_") { return nil }
         return fallback(n)
     }
 
@@ -39,7 +40,7 @@ enum PersonaToolNames {
 
     private static func verbs(_ n: String) -> String? {
         switch n {
-        // Agents on the user's computers (docs/assistant/assistant.md「Agents 与飞书工具」).
+        // Agents on the user's computers (docs/assistant/assistant.md「Current structure」).
         case "agent_read": String(localized: "Read Agent Chat")
         case "agent_send", "send_to_agent": String(localized: "Message Agent")
         case "agents_list", "list_agents": String(localized: "List Agents")

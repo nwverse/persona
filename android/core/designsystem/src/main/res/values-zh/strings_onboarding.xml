@@ -7,7 +7,8 @@
     <string name="designsystem_feedback_launcher_missing">在那台电脑上找不到这个模型，可能被删了。</string>
     <string name="designsystem_feedback_not_logged_in">那台电脑上的 Claude Code 还没登录。</string>
     <string name="designsystem_feedback_auth_failed">模型的 Key 不对或过期了。</string>
-    <string name="designsystem_feedback_assistant_restarting">助手正在重启，几秒后会自己好。</string>
+    <string name="designsystem_feedback_assistant_restarting">助手不在线或正在重启，请稍后重试。</string>
+    <string name="designsystem_feedback_provider_out_of_scope">这个模型供应商没有设为在那台电脑上用。可以在 设置 › 模型供应商 里改它在哪些电脑上用。</string>
     <string name="designsystem_readiness_one_more_step">还差一步</string>
     <string name="designsystem_readiness_action_add_computer">添加电脑</string>
     <string name="designsystem_readiness_action_confirm_computer">确认是我的电脑</string>
@@ -39,7 +40,7 @@
     <string name="designsystem_readiness_help_install_body">在%1$s上打开终端，粘贴下面这行，回车：</string>
     <string name="designsystem_readiness_help_install_after">装好以后回到这里，过一会儿就会变好。</string>
     <string name="designsystem_readiness_help_login_title">登录 Claude Code</string>
-    <string name="designsystem_readiness_help_login_body">在%1$s上打开终端，输入下面这个词，回车，按提示在浏览器里登录一次：</string>
+    <string name="designsystem_readiness_help_login_body">Persona 用的是%1$s上的 Claude Code 命令行，Claude 桌面版登录了也不算。在那台电脑上打开终端，运行下面这条命令，按提示在浏览器里登录一次：</string>
     <string name="designsystem_readiness_help_login_after">登录好以后回到这里，发一句试试。</string>
     <string name="designsystem_readiness_help_what_title">Persona 能做什么</string>
     <string name="designsystem_readiness_help_what_body">Persona 是你的私人助手。接好电脑和模型以后，它能：</string>

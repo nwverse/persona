@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 @Suite(.serialized)
 @MainActor
@@ -97,8 +98,8 @@ struct TodosLogicTests {
         #expect(groups[1].sessions.map(\.sessionID) == ["s_unassigned"])
     }
 
-    /// Agents opened by hand in herdr with no todo get "Started Manually", open, before Unassigned; Persona's own and other hosts' stay
-    /// in Unassigned (#2917).
+    /// Agents opened by hand in herdr with no todo get "Started Manually" before Unassigned (open here: one needs you);
+    /// Persona's own and other hosts' stay in Unassigned (#2917).
     @Test func manualHerdrAgentsGetTheirOwnSection() throws {
         func agent(_ id: String, kind: String?, byPersona: Bool, state: AgentState = .working) throws -> Session {
             let kindField = kind.map { ",\"space_kind\":\"\($0)\"" } ?? ""
@@ -124,6 +125,42 @@ struct TodosLogicTests {
         // Nothing opened by hand: no empty section.
         let none = TodosLogic.buildTodoAgentGroups(sessions: [onTodo, spawned], todos: [todo], isMuted: { _ in false })
         #expect(none.map(\.key) == ["todo:t1", "todo:none"])
+    }
+
+    /// The groups of agents on no to-do (#6458): folded below the to-dos unless one of their agents needs you, open as
+    /// the whole list, listed while empty with `keepEmpty`, each saying what it holds (no engine name), and their count
+    /// colored by the most urgent of their agents' states, in a to-do's order.
+    @Test func groupsOnNoTodoFoldSayWhatTheyHoldAndStayWhileEmpty() throws {
+        func agent(_ id: String, byPersona: Bool, state: AgentState) throws -> Session {
+            let json = #"{"machine_id":"m","session_id":"\#(id)","title":"\#(id)","cwd":"/tmp","status":"idle","state":"\#(state.rawValue)","started_by_persona":\#(byPersona),"space_kind":"herdr"}"#
+            return try JSON.decoder.decode(Session.self, from: Data(json.utf8))
+        }
+        let onTodo = try agent("on_todo", byPersona: false, state: .working)
+        let working = try agent("manual_working", byPersona: false, state: .working)
+        let unread = try agent("manual_unread", byPersona: false, state: .unread)
+        let todo = TodoItem(id: "t1", title: "Todo 1", doneAt: nil, createdAt: Date(), agents: [TodoItem.Agent(machineID: "m", sessionID: "on_todo")])
+
+        let groups = TodosLogic.buildTodoAgentGroups(sessions: [onTodo, working, unread], todos: [todo], isMuted: { _ in false })
+        #expect(groups.map(\.key) == ["todo:t1", "todo:manual"])
+        #expect(groups[1].folded)
+        #expect(groups[1].mostUrgent == .unread)
+        let hint = try #require(groups[1].hint)
+        #expect(!hint.isEmpty)
+        #expect(!hint.localizedCaseInsensitiveContains("herdr"))
+        #expect(groups[0].hint == nil)
+
+        let kept = TodosLogic.buildTodoAgentGroups(sessions: [onTodo, working, unread], todos: [todo], isMuted: { _ in false }, keepEmpty: true)
+        #expect(kept.map(\.key) == ["todo:t1", "todo:manual", "todo:none"])
+        #expect(kept[2].sessions.isEmpty)
+        #expect(kept[2].folded)
+        #expect(kept[2].mostUrgent == nil)
+        #expect(kept[2].hint != nil && kept[2].hint != kept[1].hint)
+
+        // with no to-do above them they are the whole list: open
+        let alone = TodosLogic.buildTodoAgentGroups(sessions: [working], todos: [], isMuted: { _ in false }, keepEmpty: true)
+        #expect(alone.map(\.key) == ["todo:manual", "todo:none"])
+        #expect(alone.map(\.folded) == [false, false])
+        #expect(alone[0].mostUrgent == .working)
     }
 
     /// The host from the pane ref, as the hub's host.ParsePane: herdr's ids go bare and may hold a colon (#1836).
@@ -175,6 +212,35 @@ struct TodosLogicTests {
             waited += 1
         }
         #expect(store.todos == before)
+    }
+
+    /// Got It (#5707): the mark shows at once, the hub's takes its place (PUT …/seen), Undo takes it off (DELETE), and the
+    /// list's own fields (the ask the PUT's answer leaves out) stay.
+    @Test func setSeenMarksAtOnceAndUndoTakesItOff() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/todos", json: #"{"todos":[{"id":"t1","title":"Seen","done_at":"2026-11-10T09:00:00Z","ask":{"verdict":"v","asked_at":"2026-11-10T09:00:00Z"}}]}"#)
+        hub.on("PUT", "/api/v1/todos/t1/seen", json: #"{"todo":{"id":"t1","title":"Seen","done_at":"2026-11-10T09:00:00Z","seen_at":"2026-11-10T10:00:00Z"}}"#)
+        hub.on("DELETE", "/api/v1/todos/t1/seen", json: #"{"todo":{"id":"t1","title":"Seen","done_at":"2026-11-10T09:00:00Z"}}"#)
+        let store = TodoStore.shared
+        await store.refresh(api: hub.client)
+        let task = Task { try await store.setSeen(id: "t1", true, api: hub.client) }
+        try await task.value
+        #expect(store.todo(id: "t1")?.seenAt == ISO8601DateFormatter().date(from: "2026-11-10T10:00:00Z"))
+        #expect(store.todo(id: "t1")?.ask != nil)
+        #expect(hub.sent("PUT", "/api/v1/todos/t1/seen").count == 1)
+        try await store.setSeen(id: "t1", false, api: hub.client)
+        #expect(store.todo(id: "t1")?.seenAt == nil)
+        #expect(hub.sent("DELETE", "/api/v1/todos/t1/seen").count == 1)
+    }
+
+    /// A Got It the hub refuses (no route: 404) puts the mark back as it was and says why to its caller.
+    @Test func setSeenRollsBackWhenTheWriteFails() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/todos", json: #"{"todos":[{"id":"t1","title":"Seen","done_at":"2026-11-10T09:00:00Z"}]}"#)
+        let store = TodoStore.shared
+        await store.refresh(api: hub.client)
+        await #expect(throws: APIError.self) { try await store.setSeen(id: "t1", true, api: hub.client) }
+        #expect(store.todo(id: "t1")?.seenAt == nil)
     }
 
     /// Only a 404 from GET /api/v1/todos means an old hub (the sidebar entrance hides); other failures keep it shown.
@@ -238,11 +304,11 @@ struct TodosLogicTests {
     }
 
     @Test func todoPresentationPreservesLabelsOrderAndColors() {
-        let states: [TaskState] = [.needsYou, .unread, .working, .followup, .notStarted, .done, .failed]
-        #expect(states.map(\.todoLabel) == ["需要你", "完成未看", "工作中", "待跟进", "未开始", "已完成", "没开起来"])
-        #expect(states.map(\.todoRank) == [0, 1, 2, 3, 4, 5, 6])
+        let states: [TaskState] = [.needsYou, .unread, .working, .waiting, .followup, .notStarted, .done, .failed]
+        #expect(states.map(\.todoLabel) == ["需要你", "完成未看", "工作中", "等待中", "待跟进", "未开始", "已完成", "没开起来"])
+        #expect(states.map(\.todoRank) == [0, 1, 2, 3, 4, 5, 6, 7])
         #expect(TaskState.allCases.sorted { $0.todoRank < $1.todoRank } == states)
-        let tones = [StatusPalette.needsYou, StatusPalette.unread, StatusPalette.working,
+        let tones = [StatusPalette.needsYou, StatusPalette.unread, StatusPalette.working, StatusPalette.working,
                      StatusPalette.idle, StatusPalette.idle, StatusPalette.idle, StatusPalette.idle]
         for (state, tone) in zip(states, tones) {
             #expect(state.todoTone.dot == tone.dot)
@@ -757,7 +823,7 @@ struct TodosLogicTests {
         #expect(hub.sent("GET", "/api/v1/todos").count == 1)
     }
 
-    /// A task the hub closed (docs/assistant/todos.md「自动完成」) reads 「自动完成」 with its reason; reopened or closed by the user, it does not.
+    /// A task the hub closed (docs/assistant/todos.md「Automatic completion」) reads 「自动完成」 with its reason; reopened or closed by the user, it does not.
     @Test func autoDoneTodo() throws {
         let json = """
         {"id":"t","title":"统一连接器 logo 尺寸","done_at":"2026-11-04T08:00:00Z","origin":"conv","done_by":"auto",
@@ -818,5 +884,104 @@ struct TodosLogicTests {
         let day = try body(APIClient.TodoPlanChange(due: .day("2026-12-01"), priority: "low"))
         #expect(day["due_date"] as? String == "2026-12-01" && day["priority"] as? String == "low" && day["due_at"] == nil && day["remind_at"] == nil)
         #expect(try body(APIClient.TodoPlanChange()).isEmpty)
+    }
+
+    // MARK: The V1 routes (#10465)
+
+    /// The item and places routes of a hub from before them answer 405 (`PATCH` / `DELETE /api/v1/todos/{id}` match the
+    /// path) and the others 404: both "not there". A 404 that says `todo_not_found` is the to-do gone, not the route.
+    @Test func a405IsNotThere() {
+        #expect(TodoNotThere.matches(APIError(status: 405, message: "method not allowed")))
+        #expect(TodoNotThere.matches(APIError(status: 404, message: "no route")))
+        #expect(TodoNotThere.matches(APIError(status: 404, message: "not found", fields: ["code": "not_found"])))
+        let gone = APIError(status: 404, message: "gone", fields: ["code": TodoNotThere.goneCode])
+        #expect(!TodoNotThere.matches(gone) && TodoNotThere.gone(gone))
+        #expect(!TodoNotThere.matches(APIError(status: 503, message: "offline")))
+        #expect(!TodoNotThere.matches(URLError(.notConnectedToInternet)) && !TodoNotThere.gone(URLError(.timedOut)))
+        #expect(!TodosLogic.isOldHub(APIError(status: 405, message: "x")), "the list's own route: today's rule stands")
+    }
+
+    /// One to-do read alone: its row and view, an id with a slash escaped in the path; a view that does not decode is
+    /// none, never the row lost.
+    @Test func theItemRouteReadsTheRowAndItsView() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/todos/a%2Fb", json: #"{"todo":{"id":"a/b","title":"Slash","part_of":"p","view":{"phase":"working","section":"working","reason":"agent_running","rank":2}}}"#)
+        hub.on("GET", "/api/v1/todos/bad", json: #"{"todo":{"id":"bad","title":"Bad","view":"not a view"}}"#)
+        let read = try await hub.client.todo(id: "a/b")
+        #expect(read.todo.title == "Slash" && read.todo.partOf == "p" && read.view?.section == TodoListSection.working && read.view?.rank == 2)
+        let bad = try await hub.client.todo(id: "bad")
+        #expect(bad.todo.title == "Bad" && bad.view == nil)
+        hub.on("GET", "/api/v1/todos/places", json: #"{"places":[{"id":"all","kind":"all","title":"","needs_you":1},{"id":"project:kyoto","kind":"project","title":"Kyoto","project":"kyoto","needs_you":1}],"counts":{"needs_you":1}}"#)
+        let places = try await hub.client.todoPlaces()
+        #expect(places.places.map(\.id) == ["all", "project:kyoto"] && places.counts.needsYou == 1)
+    }
+
+    /// Someday, back from Someday and Restore go to the to-do's own manager and take the answer's row; the list is read
+    /// again for its view.
+    @Test func somedayAndRestoreWrites() async throws {
+        let hub = FakeHub()
+        // The hub's list follows each write, as the confirming read finds it.
+        var marks = ""
+        hub.on("GET", "/api/v1/todos") { _ in Data(#"{"todos":[{"id":"t1","title":"Later","manager":"work"\#(marks)}]}"#.utf8) }
+        hub.on("PUT", "/api/v1/todos/t1/someday") { _ in
+            marks = #","someday_until":"2026-12-01T09:00:00Z""#
+            return Data(#"{"todo":{"id":"t1","title":"Later","someday_until":"2026-12-01T09:00:00Z"}}"#.utf8)
+        }
+        hub.on("DELETE", "/api/v1/todos/t1/someday") { _ in
+            marks = ""
+            return Data(#"{"todo":{"id":"t1","title":"Later"}}"#.utf8)
+        }
+        hub.on("PUT", "/api/v1/todos/t1/restored") { _ in
+            marks = #","restored_at":"2026-11-19T09:00:00Z""#
+            return Data(#"{"todo":{"id":"t1","title":"Later","restored_at":"2026-11-19T09:00:00Z"}}"#.utf8)
+        }
+        let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {},
+                              managers: .init(scope: { nil }, naming: { $0 }))
+        defer { store.forget() }
+        await store.refresh(api: hub.client)
+        let until = try #require(ISO8601DateFormatter().date(from: "2026-12-01T09:00:00Z"))
+        try await store.setSomeday(id: "t1", until: until, api: hub.client)
+        let put = try #require(hub.sent("PUT", "/api/v1/todos/t1/someday").first)
+        let body = try JSONSerialization.jsonObject(with: try #require(put.body)) as? [String: Any]
+        #expect(body?["until"] as? String == "2026-12-01T09:00:00Z")
+        #expect(put.headers[APIClient.managerHeader] == "work", "to its own manager")
+        #expect(store.todo(id: "t1")?.somedayUntil == until && store.todo(id: "t1")?.manager == "work")
+        #expect(hub.sent("GET", "/api/v1/todos").count == 2, "read again for the view")
+
+        try await store.setSomeday(id: "t1", until: nil, api: hub.client)
+        let noDay = try #require(hub.sent("PUT", "/api/v1/todos/t1/someday").last?.body)
+        #expect((try JSONSerialization.jsonObject(with: noDay) as? [String: Any])?.isEmpty == true, "no set day: no until")
+        try await store.clearSomeday(id: "t1", api: hub.client)
+        #expect(hub.sent("DELETE", "/api/v1/todos/t1/someday").count == 1)
+        try await store.restore(id: "t1", api: hub.client)
+        #expect(hub.sent("PUT", "/api/v1/todos/t1/restored").count == 1)
+        #expect(store.todo(id: "t1")?.restoredAt == ISO8601DateFormatter().date(from: "2026-11-19T09:00:00Z"))
+        hub.on("PUT", "/api/v1/todos/t1/restored") { _ in throw APIError(status: 404, message: "not found", fields: ["code": "not_found"]) }
+        await #expect(throws: APIError.self) { try await store.restore(id: "t1", api: hub.client) }
+        // The to-do itself gone (or another manager's): told apart from a hub without the route.
+        hub.on("PUT", "/api/v1/todos/t1/someday") { _ in
+            throw APIError(status: 404, message: "not found", fields: ["code": TodoNotThere.goneCode])
+        }
+        do {
+            try await store.setSomeday(id: "t1", until: nil, api: hub.client)
+            Issue.record("a gone to-do is refused")
+        } catch {
+            #expect(TodoNotThere.gone(error) && !TodoNotThere.matches(error))
+        }
+    }
+
+    /// A message to a to-do's work through its origin route carries its op id and, for a decision's round, its
+    /// `asked_at`, and waits longer than the hub's five-minute relay.
+    @Test func theOriginRouteCarriesItsOpID() async throws {
+        let hub = FakeHub()
+        hub.on("POST", "/api/v1/assistant/conversations/main/route", json: #"{"item":{"id":"r1","conversation":"main","at":"2026-11-18T10:01:00Z","kind":"routed","ref":"t1","body":{"text":"Hanami"}}}"#)
+        let op = UUID()
+        let item = try await hub.client.route(conversation: "main", todoID: "t1", text: "Hanami", askedAt: "2026-11-18T10:00:00Z", opID: op)
+        #expect(item.kind == .routed && item.ref == "t1")
+        let sent = try #require(hub.sent("POST", "/api/v1/assistant/conversations/main/route").first)
+        let body = try JSONSerialization.jsonObject(with: try #require(sent.body)) as? [String: Any]
+        #expect(body?["todo_id"] as? String == "t1" && body?["asked_at"] as? String == "2026-11-18T10:00:00Z")
+        #expect(sent.headers[OpRetry.header] == op.uuidString.lowercased())
+        #expect(sent.timeout > 300)
     }
 }

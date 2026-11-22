@@ -1,3 +1,3 @@
 {
-  "google_not_configured": "このハブでは Google ログインが設定されていません（Google sign-in not configured）。管理者がマネージャーの manager.json に google.client_id を追加してハブを再起動してください（初回のみの設定）。それまでは Gmail のアプリパスワードで追加できます。"
+  "google_not_configured": "このハブでは Google ログインが設定されていません（Google sign-in not configured）。管理者がアシスタントの manager.json に google.client_id を追加してハブを再起動してください（初回のみの設定）。それまでは Gmail のアプリパスワードで追加できます。"
 }

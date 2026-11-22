@@ -19,7 +19,7 @@ func TestBroadcastPerLanguage(t *testing.T) {
 			c := &client{hub: h, out: make(chan []byte, 4), acceptLang: l}
 			c.meta.features = map[string]bool{"elicitation": i == 0}
 			c.canonicalContracts.Store(true)
-			h.clients[c] = struct{}{}
+			addTestClient(h, c)
 		}
 	}
 	machines, err := json.Marshal(map[string]any{

@@ -2,26 +2,32 @@ package persona.feature.knowledge
 
 import persona.core.designsystem.text
 import persona.core.domain.sort.workLine
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
+import android.content.Intent
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.FirstBaseline
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
@@ -33,6 +39,7 @@ import androidx.compose.ui.text.withStyle
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.icons.PersonaIcons
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -48,19 +55,25 @@ import com.mikepenz.markdown.model.State as MarkdownState
 import com.mikepenz.markdown.model.parseMarkdown
 import com.mikepenz.markdown.compose.components.CurrentComponentsBridge
 import persona.core.contracts.AgentState
+import persona.core.contracts.Machine
 import persona.core.contracts.Session
 import persona.core.contracts.api.*
+import persona.core.contracts.isTraeCliId
 import persona.core.navigation.AppTab
 import persona.core.navigation.ChatRoute
 import persona.core.navigation.ConversationKind
 import persona.core.navigation.Navigator
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.URI
 import java.time.OffsetDateTime
 import androidx.annotation.StringRes
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 
 /** Timeline lines shown before "Show all", related entries of one kind before "All" (as iOS and the old app). */
 private const val LOG_SHOWN = 6
@@ -69,13 +82,17 @@ private const val LINKS_SHOWN = 4
 @Composable
 internal fun KnowledgeScreen(model: KnowledgeViewModel, navigator: Navigator) {
     val page by model.page.collectAsStateWithLifecycle()
+    // The list is the current assistant's (a model per assistant): an entry opens as its.
+    val owner = persona.core.designsystem.currentAssistant().id
     var tagMenu by remember { mutableStateOf(false) }
     var ignored by rememberSaveable(page.scope?.path) { mutableStateOf(false) }
     val search = page.filter.query.isNotBlank()
     val shown = if (search) page.groups.isNotEmpty() else page.entries.isNotEmpty()
-    JListPage(stringResource(R.string.knowledge_title), onBack = navigator::back, largeTitle = true,
+    // A regular-width root draws the sidebar button (LocalIsSidebarRoot); elsewhere this Back stays (iOS sidebarRootPage).
+    JListPage(stringResource(R.string.knowledge_title), onBack = if (LocalIsSidebarRoot.current) null else navigator::back, largeTitle = true,
         refreshing = page.loading && shown, onRefresh = model::refresh,
         actions = {
+            JIconButton(PersonaIcons.knowledgeMap, stringResource(R.string.knowledge_map_open), { navigator.navigate(KnowledgeMapRoute(owner)) })
             if (!search) JIconButton(PhIcons.FunnelSimple, page.filter.tag?.let { stringResource(R.string.knowledge_filter_tag_current, it) }
                 ?: stringResource(R.string.knowledge_filter_tag), { tagMenu = true },
                 badge = page.filter.tag != null)
@@ -95,8 +112,8 @@ internal fun KnowledgeScreen(model: KnowledgeViewModel, navigator: Navigator) {
             !page.paired -> item("unpaired") {
                 JEmptyState(stringResource(R.string.knowledge_unpaired_title), stringResource(R.string.knowledge_unpaired_text))
             }
-            search -> searchResults(page, navigator)
-            else -> listContent(page, ignored, { ignored = !ignored }, navigator, model::refresh)
+            search -> searchResults(page, navigator, owner)
+            else -> listContent(page, ignored, { ignored = !ignored }, navigator, model::refresh, owner)
         }
     }
     if (tagMenu) JActionSheet(listOf(JAction(stringResource(R.string.knowledge_all), checked = page.filter.tag == null) { model.tag(null) }) +
@@ -111,14 +128,15 @@ private fun KindChips(kind: KnowledgeKind, count: Int?, onPick: (KnowledgeKind) 
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = Tokens.Space.xs),
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
     ) {
-        KnowledgeKind.entries.forEach { option ->
+        KnowledgeKind.entries.filter { it != KnowledgeKind.Recordings }.forEach { option ->
             val on = option == kind
             JChip(option.label(), selected = on, onClick = { onPick(option) }, count = if (on) count else null)
         }
     }
 }
 
-private fun LazyListScope.listContent(page: KnowledgePage, showIgnored: Boolean, toggleIgnored: () -> Unit, navigator: Navigator, retry: () -> Unit) {
+private fun LazyListScope.listContent(page: KnowledgePage, showIgnored: Boolean, toggleIgnored: () -> Unit, navigator: Navigator, retry: () -> Unit,
+    owner: String) {
     val kind = page.filter.kind
     when {
         page.entries.isEmpty() && page.message != null -> item("error") { KnowledgeFailure(R.string.knowledge_error_title, requireNotNull(page.message), retry) }
@@ -132,11 +150,11 @@ private fun LazyListScope.listContent(page: KnowledgePage, showIgnored: Boolean,
             sections.forEach { section ->
                 item(key = "section/${section.key}", contentType = "section") {
                     JSectionHeader(section.tag?.let { "#$it" } ?: stringResource(section.title), count = section.entries.size,
-                        onClick = if (section.collapsed) toggleIgnored else null,
+                        onClick = if (section.collapsed) toggleIgnored else null, open = showIgnored, trailingIsFoldAction = true,
                         trailing = if (section.collapsed) stringResource(if (showIgnored) R.string.knowledge_collapse else R.string.knowledge_expand) else null)
                 }
                 if (!section.collapsed || showIgnored) items(section.entries, key = { "entry/${it.key}" }, contentType = { "entry" }) {
-                    KnowledgeRow(it, onClick = { navigator.open(it) })
+                    KnowledgeRow(it, onClick = { navigator.open(it, owner) })
                 }
                 section.note?.let { note -> item(key = "note/${section.key}", contentType = "note") { Note(stringResource(note)) } }
             }
@@ -144,7 +162,7 @@ private fun LazyListScope.listContent(page: KnowledgePage, showIgnored: Boolean,
     }
 }
 
-private fun LazyListScope.searchResults(page: KnowledgePage, navigator: Navigator) {
+private fun LazyListScope.searchResults(page: KnowledgePage, navigator: Navigator, owner: String) {
     val query = page.filter.query.trim()
     when {
         page.groups.isEmpty() && page.message != null -> item("error") { KnowledgeFailure(R.string.knowledge_search_error, requireNotNull(page.message), null) }
@@ -155,7 +173,7 @@ private fun LazyListScope.searchResults(page: KnowledgePage, navigator: Navigato
         else -> searchSections(page.groups).forEach { (kind, groups) ->
             item(key = "hits/${kind.wire}", contentType = "section") { JSectionHeader(kind.label(), count = groups.size) }
             items(groups, key = { "hit/${it.key}" }, contentType = { "hit" }) { group ->
-                KnowledgeRow(group.entry, metadata = group.named, name = if (group.named) group.entry.name else kind.label(), onClick = { navigator.open(group.entry) }, trailing = {
+                KnowledgeRow(group.entry, metadata = group.named, name = if (group.named) group.entry.name else kind.label(), onClick = { navigator.open(group.entry, owner) }, trailing = {
                     if (group.hits.size > 2) Text(pluralStringResource(R.plurals.knowledge_hits, group.hits.size, group.hits.size), style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3, maxLines = 1)
                 }) {
                     group.hits.take(2).forEach { hit ->
@@ -198,21 +216,69 @@ private fun KnowledgeRow(
     trailing: @Composable () -> Unit = {},
     extra: @Composable ColumnScope.() -> Unit = {},
 ) {
-    JCard(Modifier.padding(bottom = Tokens.Space.m), onClick = onClick) {
-        Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                Text(name, style = PersonaTheme.type.title, color = PersonaTheme.palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f))
-                trailing()
+    val imported = entry.imported
+    val notes = imported?.let { importedNotesTitle(it.source) }
+    JCard(Modifier.padding(bottom = Tokens.Space.m).then(
+        if (notes == null) Modifier else Modifier.semantics { stateDescription = notes }), onClick = onClick) {
+        if (imported == null) {
+            // Unmatched rows keep the layout and accessibility they had before #9994.
+            Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                KnowledgeRowContent(entry, metadata, name, trailing, extra)
             }
-            if (metadata) EntryMetadata(entry)
-            entry.oneLine?.takeIf { it.isNotBlank() && metadata }?.let {
-                Text(it, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink2, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        } else Row(verticalAlignment = Alignment.Top) {
+            KnowledgeImportedAvatar(entry)
+            Spacer(Modifier.width(Tokens.Space.m))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                KnowledgeRowContent(entry, metadata, name, trailing, extra)
             }
-            extra()
         }
     }
 }
+
+@Composable
+private fun ColumnScope.KnowledgeRowContent(
+    entry: KnowledgeEntry,
+    metadata: Boolean,
+    name: String,
+    trailing: @Composable () -> Unit,
+    extra: @Composable ColumnScope.() -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+        Text(name, style = PersonaTheme.type.title, color = PersonaTheme.palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f))
+        trailing()
+    }
+    if (metadata) EntryMetadata(entry)
+    entry.oneLine?.takeIf { it.isNotBlank() && metadata }?.let {
+        Text(it, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink2, maxLines = 3, overflow = TextOverflow.Ellipsis)
+    }
+    extra()
+}
+
+/** Only a recording that stands for an imported meeting gets this new avatar: its connector's brand on the light logo
+ * backing, or a gray link for a connector without a brand. The row's state description names the notes for TalkBack. */
+@Composable
+private fun KnowledgeImportedAvatar(entry: KnowledgeEntry) {
+    val imported = entry.imported ?: return
+    val brand = connectorBrand(imported.source.orEmpty())
+    val palette = PersonaTheme.palette
+    Box(Modifier.testTag("knowledge-imported-avatar-${entry.id}")) {
+        JAvatar(entry.name, icon = PersonaIcons.recording)
+        Box(
+            Modifier.align(Alignment.BottomEnd).offset(Tokens.Space.xs, Tokens.Space.xs).size(Tokens.Size.badge)
+                .clip(CircleShape).background(if (brand == null) palette.ink3 else palette.catalogLogoBackground)
+                .border(Tokens.Size.lineMedium, palette.background, CircleShape).clearAndSetSemantics {},
+            contentAlignment = Alignment.Center,
+        ) {
+            if (brand != null) JBrandMark(brand, Tokens.Size.markS, contentDescription = null)
+            else JIcon(PersonaIcons.link, null, size = Tokens.Size.markXS, tint = palette.onMediaBackdrop, decorative = true)
+        }
+    }
+}
+
+@Composable
+private fun importedNotesTitle(source: String?): String = stringResource(
+    if (connectorBrand(source.orEmpty()) == null) R.string.knowledge_imported_original else R.string.knowledge_imported_lark)
 
 /** Importance in its tone (P0 needs you, P1 is busy), the project's kind and status, relevance, the first tags. */
 @OptIn(ExperimentalLayoutApi::class)
@@ -260,17 +326,29 @@ internal fun KnowledgeDetailScreen(
     val page by model.page.collectAsStateWithLifecycle()
     val sending by model.sending.collectAsStateWithLifecycle()
     val tagging by model.tagging.collectAsStateWithLifecycle()
+    val minutesWork by model.minutesWork.collectAsStateWithLifecycle()
+    val meetingWork by model.meetingHandoffWork.collectAsStateWithLifecycle()
+    val handoffSheet by model.meetingHandoffSheet.collectAsStateWithLifecycle()
+    val sessionFlow = remember(model) { model.sessions?.sessions ?: flowOf(emptyList<Session>()) }
+    val machineFlow = remember(model) { model.sessions?.machines ?: flowOf(emptyList<Machine>()) }
+    val sessionRows by sessionFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val machineRows by machineFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val meetingTargets = remember(sessionRows, machineRows, model.namespace) {
+        meetingHandoffTargets(sessionRows, machineRows, model.namespace)
+    }
+    val listState = rememberLazyListState()
+    val scrolls = rememberCoroutineScope()
     var allLog by rememberSaveable(page.scope?.path) { mutableStateOf(false) }
     var recent by rememberSaveable(page.scope?.path) { mutableStateOf(false) }
     var openLinks by rememberSaveable(page.scope?.path) { mutableStateOf(listOf<String>()) }
     var editing by rememberSaveable(page.scope?.path) { mutableStateOf(false) }
+    var openPoint by remember(page.scope) { mutableStateOf<Pair<TopicPoint, List<String>>?>(null) }
     val defaultQuestion = stringResource(R.string.knowledge_question_default)
     var question by rememberSaveable(page.scope?.path) { mutableStateOf(defaultQuestion) }
     var linkMessage by remember(page.scope) { mutableStateOf<String?>(null) }
     val currentOpenLink by rememberUpdatedState(openLinkInApp)
     val context = LocalContext.current
     val resources = LocalResources.current
-    val feedback = LocalAppFeedback.current
     val uriHandler = remember(page.scope) {
         object : UriHandler {
             override fun openUri(uri: String) {
@@ -284,26 +362,44 @@ internal fun KnowledgeDetailScreen(
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(model, lifecycle, navigator) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            model.handoffs.collect { navigator.selectTab(AppTab.Persona) }
+            // The Persona page shows the current assistant's main conversation; another assistant's opens by itself.
+            model.handoffs.collect { handoff ->
+                val main = handoff.main
+                if (main == null) navigator.selectTab(AppTab.Persona)
+                else navigator.navigate(ChatRoute(main.machineId, main.sessionId, ConversationKind.Assistant))
+            }
         }
     }
     LaunchedEffect(tagging.saved) { if (tagging.saved > 0) editing = false }
+    // While the hub writes a recording's minutes, the page reads it again every few seconds (as the web's, every 5 s).
+    val minutesPending = page.detail?.meta.string("minutes_state") == "pending"
+    LaunchedEffect(minutesPending, lifecycle) {
+        if (minutesPending) lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) { delay(MinutesPollMillis); model.refresh() }
+        }
+    }
+    val minutesCopied = stringResource(R.string.knowledge_minutes_copied)
+    val copyText = rememberCopy()
     val detail = page.detail
     val entry = detail?.entry()
+    val canHand = detail?.let { meetingHandoffEligible(it, meetingTargets) } == true
+    val latestHandoff = newerMeetingHandoff(meetingWork.made, latestMeetingHandoff(detail?.meta, model.namespace))
+    val handoffOpen = handoffSheet != null
+    fun showHandoff(again: MeetingHandoff?) { model.showMeetingHandoff(again) }
     val kindName = KnowledgeKind.fromWire(detail?.kind.orEmpty())?.label().orEmpty()
     fun startAgent(detail: KnowledgeDetail) {
         val start = agentStart(detail, kindName)
         if (onNewAgent != null) { onNewAgent(start); return }
         // Until the shell can open "New session" with these filled in: the context goes on the clipboard and Agents opens.
-        (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText(resources.getString(R.string.knowledge_clip_label), start.prompt))
-        navigator.selectTab(AppTab.Agents)
-        feedback?.notice(start.cwd?.let { resources.getString(R.string.knowledge_context_copied_dir, pathTail(it)) }
+        copyText(start.prompt, start.cwd?.let { resources.getString(R.string.knowledge_context_copied_dir, pathTail(it)) }
             ?: resources.getString(R.string.knowledge_context_copied))
+        navigator.selectTab(AppTab.Agents)
     }
     CompositionLocalProvider(LocalUriHandler provides uriHandler) {
         JListPage(entry?.name ?: stringResource(R.string.knowledge_detail_title), onBack = navigator::back,
-            refreshing = page.loading && detail != null, onRefresh = model::refresh,
+            refreshing = page.loading && detail != null, onRefresh = model::refresh, state = listState,
             actions = {
+                if (canHand) JIconButton(PersonaIcons.handToAI, stringResource(R.string.knowledge_handoff_title), { showHandoff(null) })
                 JIconButton(PhIcons.Hash, stringResource(R.string.knowledge_tag_action), { model.dismissTagError(); editing = true }, enabled = detail != null)
                 JIconButton(PhIcons.ArrowClockwise, stringResource(R.string.knowledge_refresh_detail), model::refresh, enabled = !page.loading)
             }) {
@@ -335,10 +431,26 @@ internal fun KnowledgeDetailScreen(
                             linkMessage?.let { JNotice(it) }
                         }
                     }
+                    latestHandoff?.let { handoff ->
+                        item("meeting-handoff", contentType = "meeting-handoff") {
+                            MeetingHandoffRow(handoff, navigator,
+                                modifier = if (handoffOpen) Modifier.clearAndSetSemantics {} else Modifier,
+                                onRetry = if (canHand) { { showHandoff(handoff) } } else null)
+                        }
+                    }
                     agents(page.agents, navigator)
+                    if (detail.kind == KnowledgeKind.Topics.wire) topicPoints(detail, entry.name) { point, crumbs -> openPoint = point to crumbs }
                     val recording = entry.isRecording
                     val facts = if (recording) RecordingFacts.of(detail.meta) else null
                     facts?.let { recordingFacts(it) }
+                    detail.importedMeeting?.let { imported ->
+                        item("imported-notes", contentType = "row") {
+                            JGroupItem(GroupPosition.Single) {
+                                JRow(importedNotesTitle(imported.source), modifier = Modifier.testTag("knowledge-imported-notes"),
+                                    leadingIcon = PersonaIcons.link, onClick = { currentOpenLink(imported.url) })
+                            }
+                        }
+                    }
                     timeline(timeline(detail.log), allLog) { allLog = !allLog }
                     val profileText = profile(detail.summary, entry.oneLine)
                     // A card like the other sections (and iOS): bare text sat at the card edge, left of every heading.
@@ -351,10 +463,26 @@ internal fun KnowledgeDetailScreen(
                     facts?.let { recordingBookmarks(it) }
                     links(linkGroups(detail.links), openLinks, { kind ->
                         openLinks = if (kind in openLinks) openLinks - kind else openLinks + kind
-                    }, navigator)
+                    }, navigator, model.owner)
                     dirs(detail.meta.strings("dirs"))
+                    // A recording's minutes (#2738), right above its transcript as on iOS; a time scrolls to its line.
+                    val lines = transcript(detail.segments)
+                    facts?.let { recorded -> minutesView(detail, recorded)?.let { view ->
+                        recordingMinutes(view, MinutesActions(
+                            busy = minutesWork.busy || page.loading, message = minutesWork.message,
+                            make = model::makeMinutes, add = model::addMinutesTodos,
+                            copy = { markdown -> copyText(markdown, minutesCopied) },
+                            jump = { at -> segmentAt(lines, at)?.let { index -> scrolls.launch { listState.scrollToKey(segmentKey(index)) } } },
+                            dismiss = model::dismissMinutesMessage,
+                            share = { markdown ->
+                                val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, markdown)
+                                    .putExtra(Intent.EXTRA_SUBJECT, entry?.name.orEmpty())
+                                runCatching { context.startActivity(Intent.createChooser(send, null)) }
+                            },
+                        )) { at -> minutesClock(recorded, at) }
+                    } }
                     // A recording's `recent` is its transcript as text: the transcript below shows it line by line.
-                    facts?.let { recordingTranscript(it, transcript(detail.segments)) }
+                    facts?.let { recordingTranscript(it, lines) }
                     if (!recording && !detail.recent.isNullOrBlank()) {
                         item("recent-header", contentType = "section") { JSectionHeader(stringResource(R.string.knowledge_chat_history)) }
                         item("recent-toggle", contentType = "row") {
@@ -386,7 +514,15 @@ internal fun KnowledgeDetailScreen(
             }
         }
     }
+    openPoint?.let { (point, crumbs) ->
+        PointSheet(point, crumbs, detail?.links.orEmpty(), { source -> openPoint = null; navigator.open(source, model.owner) }, { openPoint = null })
+    }
     if (editing && entry != null) KnowledgeTagEditor(entry, tagging, onSave = model::saveTags, onDismiss = { editing = false })
+    if (handoffOpen && detail != null && meetingTargets.isNotEmpty()) {
+        MeetingHandoffSheet(meetingTargets, machineRows, meetingHandoffTranscriptOffered(detail), handoffSheet?.again, meetingWork,
+            onSend = model::handOff,
+            onDismiss = model::dismissMeetingHandoff)
+    }
 }
 
 /** "Agents on this project": the hub's live sessions in the project's code directories; a tap opens the conversation. */
@@ -397,7 +533,7 @@ private fun LazyListScope.agents(agents: List<Session>, navigator: Navigator) {
         val status = session.agentState.status()
         AgentRow(session.displayTitle, status, onClick = { navigator.navigate(ChatRoute(session.machineId, session.sessionId, ConversationKind.Agent)) },
             position = GroupPosition.of(index, agents.size), preview = session.workLine(java.time.Instant.now())?.text() ?: session.lastText, statusText = status.localizedLabel,
-            agent = session.agentLabel.takeIf { session.agent in setOf("codex", "traex") },
+            agent = session.agentLabel.takeIf { session.agent == "codex" || isTraeCliId(session.agent) },
             facts = listOf(RowFact(listOf(session.machineId, session.folderName).filter { it.isNotBlank() }.joinToString(" / "))))
     }
 }
@@ -500,7 +636,7 @@ private fun LazyListScope.recordingTranscript(facts: RecordingFacts, segments: L
         }
         return
     }
-    itemsIndexed(segments, key = { index, _ -> "segment/$index" }, contentType = { _, _ -> "segment" }) { index, segment ->
+    itemsIndexed(segments, key = { index, _ -> segmentKey(index) }, contentType = { _, _ -> "segment" }) { index, segment ->
         JGroupItem(GroupPosition.of(index, segments.size)) {
             JRow {
                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
@@ -543,7 +679,8 @@ private fun RecordingLength.label(): String = when (this) {
 }
 
 /** Related entries by kind, a few each with "All" for the rest. */
-private fun LazyListScope.links(groups: List<Pair<KnowledgeKind, List<KnowledgeEntry>>>, open: List<String>, toggle: (String) -> Unit, navigator: Navigator) {
+private fun LazyListScope.links(groups: List<Pair<KnowledgeKind, List<KnowledgeEntry>>>, open: List<String>, toggle: (String) -> Unit, navigator: Navigator,
+    owner: String?) {
     groups.forEach { (kind, entries) ->
         val all = kind.wire in open
         val more = entries.size > LINKS_SHOWN
@@ -552,7 +689,7 @@ private fun LazyListScope.links(groups: List<Pair<KnowledgeKind, List<KnowledgeE
         item("links-header/${kind.wire}", contentType = "section") { JSectionHeader(stringResource(kind.words.linked), count = entries.size) }
         itemsIndexed(shown, key = { _, linked -> "link/${kind.wire}/${linked.key}" }, contentType = { _, _ -> "link" }) { index, linked ->
             JGroupItem(GroupPosition.of(index, count)) {
-                JRow(linked.name, subtitle = linked.oneLine?.takeIf { it.isNotBlank() }, subtitleLines = 1, onClick = { navigator.open(linked) })
+                JRow(linked.name, subtitle = linked.oneLine?.takeIf { it.isNotBlank() }, subtitleLines = 1, onClick = { navigator.open(linked, owner) })
             }
         }
         if (more) item("links-more/${kind.wire}", contentType = "row") {
@@ -575,7 +712,7 @@ private fun LazyListScope.dirs(dirs: List<String>) {
 }
 
 @Composable
-private fun Note(text: String) {
+internal fun Note(text: String) {
     Text(text, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3,
         modifier = Modifier.padding(horizontal = rowPadding).padding(top = Tokens.Space.s, bottom = Tokens.Space.xs))
 }
@@ -605,11 +742,11 @@ private fun KnowledgeMarkdown(text: String) {
                     textLink = TextLinkStyles(SpanStyle(color = palette.accent, textDecoration = TextDecoration.Underline))),
                 components = markdownComponents(
                     orderedList = { model -> MarkdownOrderedList(model.content, model.node, depth = model.listDepth,
-                        markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = Tokens.Space.s) },
-                        listModifier = { Modifier.weight(1f).alignBy(FirstBaseline) }) },
+                        markerModifier = { firstBaselineAligned().padding(end = Tokens.Space.s) },
+                        listModifier = { firstBaselineAligned(Modifier.weight(1f)) }) },
                     unorderedList = { model -> MarkdownBulletList(model.content, model.node, depth = model.listDepth,
-                        markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = Tokens.Space.s) },
-                        listModifier = { Modifier.weight(1f).alignBy(FirstBaseline) }) },
+                        markerModifier = { firstBaselineAligned().padding(end = Tokens.Space.s) },
+                        listModifier = { firstBaselineAligned(Modifier.weight(1f)) }) },
                     codeFence = { model ->
                         MarkdownFence(model.content.substring(model.node.startOffset, model.node.endOffset)) { CurrentComponentsBridge.codeFence(model) }
                     },
@@ -618,18 +755,19 @@ private fun KnowledgeMarkdown(text: String) {
     }
 }
 
-private fun Navigator.open(entry: KnowledgeEntry) {
-    KnowledgeKind.fromWire(entry.kind)?.let { navigate(KnowledgeDetailRoute(it, entry.id)) }
+/** [entry]'s page, kept [manager]'s (the assistant whose knowledge base listed it, or the entry's page it was linked from). */
+internal fun Navigator.open(entry: KnowledgeEntry, manager: String?) {
+    KnowledgeKind.fromWire(entry.kind)?.let { navigate(KnowledgeDetailRoute(it, entry.id, manager)) }
 }
 
 @Composable
-private fun KnowledgeFailure(title: Int, message: Int, retry: (() -> Unit)?) {
+internal fun KnowledgeFailure(title: Int, message: Int, retry: (() -> Unit)?) {
     val disabled = message == R.string.knowledge_disabled_text
     RetryState(stringResource(if (disabled) R.string.knowledge_disabled_title else title),
         stringResource(message), retry.takeUnless { disabled })
 }
 
-@Composable private fun RetryState(title: String, message: String, retry: (() -> Unit)?) {
+@Composable internal fun RetryState(title: String, message: String, retry: (() -> Unit)?) {
     JEmptyState(title, message, action = retry?.let { { JButton(stringResource(R.string.knowledge_retry), it, kind = JButtonKind.Secondary) } })
 }
 
@@ -641,6 +779,8 @@ private val KnowledgeKind.words: KindWords
     get() = when (this) {
         KnowledgeKind.Projects -> KindWords(R.string.knowledge_kind_projects, R.string.knowledge_empty_projects,
             R.string.knowledge_empty_tag_projects, R.string.knowledge_linked_projects)
+        KnowledgeKind.Topics -> KindWords(R.string.knowledge_kind_topics, R.string.knowledge_empty_topics,
+            R.string.knowledge_empty_tag_topics, R.string.knowledge_linked_topics, icon = PersonaIcons.topic)
         KnowledgeKind.Chats -> KindWords(R.string.knowledge_kind_chats, R.string.knowledge_empty_chats,
             R.string.knowledge_empty_tag_chats, R.string.knowledge_linked_chats)
         KnowledgeKind.People -> KindWords(R.string.knowledge_kind_people, R.string.knowledge_empty_people,
@@ -668,3 +808,6 @@ private fun KnowledgeHitSource.label(): String = when (this) {
     KnowledgeHitSource.Transcript -> stringResource(R.string.knowledge_recording_transcript)
     is KnowledgeHitSource.File -> name
 }
+
+/** How often a recording's page reads it again while its minutes are being written. */
+internal const val MinutesPollMillis = 5_000L

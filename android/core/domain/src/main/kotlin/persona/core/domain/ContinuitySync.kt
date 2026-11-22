@@ -10,8 +10,6 @@ import persona.core.domain.ContinuityReducer.Gap
  */
 class ContinuitySync(val reducer: ContinuityReducer) {
     sealed interface Action {
-        /** Configured settling delay, not a measured latency. */
-        data class ScheduleFill(val delayMillis: Long = 1_500) : Action
         data class FetchAfter(val afterSeq: Int) : Action
         data class FetchLatest(val foldWork: Boolean = true) : Action
         data class Subscribe(val sinceSeq: Int?, val foldWork: Boolean = true) : Action
@@ -23,6 +21,16 @@ class ContinuitySync(val reducer: ContinuityReducer) {
 
     private var filling = false
     private var fillPages = 0
+    /**
+     * Gaps and rev moves heard ([settle] with a fill), and how many of them the newest read covers: a read covers what
+     * was heard when it was sent, not when it came back (#3601, the web's RevWatch #3195, iOS #3191). A move heard while
+     * a read is on its way is read again once that read ends.
+     */
+    private var heard = 0L
+    private var asked = 0L
+
+    /** A gap or rev move was heard after the newest read was sent: the chat may still miss a line. */
+    val behind: Boolean get() = heard > asked
     private var loadingOlder = false
     private var opening: Item? = null
     private var rangePages = 0
@@ -30,30 +38,39 @@ class ContinuitySync(val reducer: ContinuityReducer) {
 
     fun settle(gap: Gap): List<Action> = when (gap) {
         Gap.None -> emptyList()
-        Gap.Fill -> listOf(Action.ScheduleFill())
+        Gap.Fill -> {
+            heard++
+            continueFill()
+        }
         Gap.Reload -> listOf(Action.FetchLatest())
     }
 
-    /** Reads current coverage when the timer fires, even if a backlog already closed the gap. */
-    fun fillTimer(): List<Action> {
+    /** iOS fetches at once. An existing fill is not duplicated and re-reads current coverage on every page. */
+    fun continueFill(): List<Action> {
         if (filling) return emptyList()
         filling = true
         fillPages = 0
+        asked = heard
         return listOf(Action.FetchAfter(reducer.covered))
     }
 
     /** Catch-up pages never supply older-history pagination information to the reducer. */
     fun after(items: List<Item>, history: String?, fromSeq: Int?, toSeq: Int?, moreAfter: Boolean = false): Result {
+        val before = reducer.covered
         val gap = reducer.apply(items, history, fromSeq, toSeq, moreAfter = moreAfter)
         fillPages++
+        val progressed = reducer.covered > before || toSeq != null && toSeq > before
+        // A move heard while this page was on its way may be past it: one more page reads it.
+        val again = gap == Gap.None && behind
         val actions = when {
-            gap == Gap.Reload || gap == Gap.Fill && fillPages >= 8 -> listOf(Action.FetchLatest())
-            gap == Gap.Fill -> listOf(Action.FetchAfter(reducer.covered))
+            gap == Gap.Reload || (gap == Gap.Fill || again) && fillPages >= 8 -> listOf(Action.FetchLatest())
+            gap == Gap.Fill && progressed || again -> listOf(Action.FetchAfter(reducer.covered))
             else -> {
                 finishFill()
                 emptyList()
             }
         }
+        if (actions.isNotEmpty()) asked = heard
         return Result(gap, actions)
     }
 

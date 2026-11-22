@@ -8,6 +8,8 @@ import { t } from "../i18n";
 import { stateOf } from "./format";
 import type { Item, Session } from "./types";
 import { stateName } from "./state-labels";
+import { injectedOf } from "./injected";
+import { sourceOf } from "./message-source";
 
 export type RewindRestore = "conversation" | "code_and_conversation";
 
@@ -35,7 +37,7 @@ interface Prompt {
   raw: string;
 }
 
-const entryOf = (it: Item) => it.id.split("#")[0];
+const entryOf = (it: Pick<Item, "id">) => it.id.split("#")[0];
 
 /** Your messages in order. Images alone are a message too (Claude lists them), with no text; a message queued while
  *  Claude worked is not in the list yet. */
@@ -52,6 +54,16 @@ export function promptsOf(items: Item[]): Prompt[] {
     out.push({ id: it.id, raw: it.kind === "text" ? (it.text ?? "") : "" });
   }
   return out;
+}
+
+/** Only the actual last prompt can be recalled. Do not skip image-only, injected or incomplete inputs and rewind
+ *  an earlier turn instead. Binary images cannot be restored by the text draft path. */
+export function lastEditablePrompt(items: Item[]): Prompt | null {
+  const last = promptsOf(items).at(-1);
+  if (!last?.raw.trim()) return null;
+  const blocks = items.filter((it) => entryOf(it) === entryOf(last));
+  if (blocks.some((it) => it.kind === "image" || it.full_size || it.from || injectedOf(it) || sourceOf(it, null))) return null;
+  return last;
 }
 
 const squash = (s: string) => s.replace(/\s+/g, "");
@@ -71,7 +83,8 @@ export function rewindTarget(items: Item[], messageId: string): RewindTarget | n
 
 /** Why "Rewind to here" is off for this session ("" when it is on). Short: it is the hint on the menu row. */
 export function rewindBlock(session: Session | undefined, busy: boolean): string {
-  if (!session || session.assistant || session.source_kind || (session.agent && session.agent !== "claude")) return t("rewind.block_claude_only");
+  const supported = session?.capabilities?.rewind ?? Boolean(session && !session.source_kind && (!session.agent || session.agent === "claude"));
+  if (!session || session.assistant || !supported) return t("rewind.unsupported");
   const state = stateOf(session);
   if (state === "offline" || session.starting) return stateName("offline");
   if (state === "needs_you" || (session.pending_interactions ?? 0) > 0) return stateName("needs_you");

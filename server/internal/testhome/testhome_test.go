@@ -3,8 +3,13 @@ package testhome
 import (
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/identity"
 )
 
 // quiet is Main without the message about a write to ~/.persona, which these tests provoke on purpose.
@@ -38,6 +43,33 @@ func TestMainGivesAnEmptyHomeAndRestoresTheEnvironment(t *testing.T) {
 	}
 	if _, err := os.Stat(home); !os.IsNotExist(err) {
 		t.Fatalf("the throw-away home is still there: %v", err)
+	}
+}
+
+// PERSONA_HOME's former name goes too: with PERSONA_HOME unset, identity reads it, and a test's state directory was the
+// one it named (a Persona of an older install) instead of the throw-away home's. It comes back afterwards.
+func TestMainClearsTheFormerStateVariable(t *testing.T) {
+	_, legacy := compat.EnvNames("PERSONA_HOME")
+	t.Setenv("HOME", "/real/home")
+	t.Setenv("PERSONA_HOME", "/real/state")
+	t.Setenv(legacy, "/real/former-state")
+	t.Setenv(isolated, "")
+	_ = os.Unsetenv(isolated)
+	code := quiet(func() int {
+		home := os.Getenv("HOME")
+		if v, ok := os.LookupEnv(legacy); ok {
+			t.Errorf("%s=%q in the tests", legacy, v)
+		}
+		if got, want := identity.DataDir(home), filepath.Join(home, ".persona"); got != want {
+			t.Errorf("state directory %q, want %q", got, want)
+		}
+		return 0
+	})
+	if code != 0 {
+		t.Fatalf("exit code %d", code)
+	}
+	if os.Getenv(legacy) != "/real/former-state" {
+		t.Fatalf("not restored: %s=%q", legacy, os.Getenv(legacy))
 	}
 }
 
@@ -87,5 +119,57 @@ func TestMainLeavesAChildAlone(t *testing.T) {
 	})
 	if code != 0 {
 		t.Fatalf("exit code %d", code)
+	}
+}
+
+// The Go settings that hang off the home directory keep their values inside the run and come back afterwards.
+func TestMainPinsTheGoPathsToTheRealHome(t *testing.T) {
+	t.Setenv("HOME", "/real/home")
+	t.Setenv(isolated, "")
+	_ = os.Unsetenv(isolated)
+	t.Setenv("GOMODCACHE", "")
+	_ = os.Unsetenv("GOMODCACHE")
+	stub := map[string]string{"GOENV": "/real/home/.config/go/env", "GOMODCACHE": "/real/home/go/pkg/mod"}
+	real := goEnv
+	goEnv = func() map[string]string { return stub }
+	t.Cleanup(func() { goEnv = real })
+	code := quiet(func() int {
+		for k, v := range stub {
+			if got := os.Getenv(k); got != v {
+				t.Errorf("%s=%q inside the run, want %q", k, got, v)
+			}
+		}
+		return 0
+	})
+	if code != 0 {
+		t.Fatalf("exit code %d", code)
+	}
+	if _, ok := os.LookupEnv("GOMODCACHE"); ok {
+		t.Fatal("GOMODCACHE is still set after the run")
+	}
+}
+
+// With the real go tool, a child `go env` under the throw-away HOME reports the same module cache and env file.
+func TestMainKeepsTheGoToolsSettings(t *testing.T) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("no go tool:", err)
+	}
+	t.Setenv(isolated, "")
+	_ = os.Unsetenv(isolated)
+	query := func() string {
+		out, err := exec.Command(goBin, "env", "GOENV", "GOMODCACHE", "GOCACHE", "GOPROXY").Output()
+		if err != nil {
+			t.Fatalf("go env: %v", err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	want := query()
+	var got string
+	if code := quiet(func() int { got = query(); return 0 }); code != 0 {
+		t.Fatalf("exit code %d", code)
+	}
+	if got != want {
+		t.Fatalf("go env under the throw-away HOME:\n%s\nwant\n%s", got, want)
 	}
 }

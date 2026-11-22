@@ -50,8 +50,21 @@ export interface MessagePage {
   nextCursor?: string;
 }
 
+export interface AgentOutboxEntry {
+  clientId: string;
+  sessionId?: string;
+  preview?: string;
+  length?: number;
+  origin?: string;
+  status: string;
+  error?: string;
+  attempts?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface SendResult {
-  outbox: { clientId: string; status: string; error?: string };
+  outbox: AgentOutboxEntry;
   duplicate: boolean;
   upstream?: AgentMessage;
 }
@@ -68,6 +81,7 @@ export interface AgentSourceStatus {
   enabled: boolean;
   error?: string;
   setup?: "missing" | "disabled" | "no_accounts" | string;
+  accounts?: unknown[];
 }
 
 const SETUP_HINTS: Record<string, string> = {
@@ -76,8 +90,8 @@ const SETUP_HINTS: Record<string, string> = {
   no_accounts: t("lib-agents.setup_no_accounts"),
 };
 
-/** What to do so the sources list agents, one line per source that is not set up. */
-export const setupHints = (sources: AgentSourceStatus[]) => sources.flatMap((x) => (x.setup && SETUP_HINTS[x.setup] ? [SETUP_HINTS[x.setup]] : []));
+/** What to do so the sources list agents, or why one can't: one line per source that is not set up or is failing. */
+export const setupHints = (sources: AgentSourceStatus[]) => sources.flatMap((x) => (x.setup && SETUP_HINTS[x.setup] ? [SETUP_HINTS[x.setup]] : x.error ? [x.error] : []));
 
 export function fetchSources() {
   return api<{ sources: AgentSourceStatus[] | null }>("/agents").then((r) => r.sources ?? []);
@@ -87,6 +101,11 @@ export function fetchMessages(id: string, cursor?: string, limit = 50) {
   const q = new URLSearchParams({ limit: String(limit) });
   if (cursor) q.set("cursor", cursor);
   return api<MessagePage>(`${agentPath(id)}/messages?${q}`).then((p) => ({ ...p, messages: p.messages ?? [] }));
+}
+
+export function fetchAgentOutbox(id: string, limit = 100) {
+  const q = new URLSearchParams({ session_id: id, limit: String(limit) });
+  return api<{ outbox: AgentOutboxEntry[] | null }>(`/agents/outbox?${q}`).then((r) => ({ ...r, outbox: r.outbox ?? [] }));
 }
 
 export function sendMessage(id: string, clientId: string, text: string) {
@@ -183,25 +202,6 @@ export function providerLabel(p: string): string {
   return PROVIDER_LABEL[p] ?? (p || t("lib-agents.other"));
 }
 
-export interface ProviderGroup {
-  provider: string;
-  sessions: AgentSession[];
-  unread: number;
-}
-
-// Groups by provider (the group with the most recent session first), recent first inside; q filters on title / provider.
-export function groupSessions(list: AgentSession[], q = ""): ProviderGroup[] {
-  const needle = q.trim().toLowerCase();
-  const hit = (s: AgentSession) => !needle || s.title.toLowerCase().includes(needle) || s.provider.toLowerCase().includes(needle) || providerLabel(s.provider).toLowerCase().includes(needle);
-  const by = new Map<string, AgentSession[]>();
-  for (const s of list) if (hit(s)) (by.get(s.provider) ?? by.set(s.provider, []).get(s.provider)!).push(s);
-  const groups = [...by].map(([provider, ss]) => {
-    const sessions = ss.slice().sort((a, b) => b.rankTimeMs - a.rankTimeMs);
-    return { provider, sessions, unread: sessions.reduce((n, s) => n + (s.unreadCount || 0), 0) };
-  });
-  return groups.sort((a, b) => (b.sessions[0]?.rankTimeMs ?? 0) - (a.sessions[0]?.rankTimeMs ?? 0));
-}
-
 export const totalUnread = (list: AgentSession[]) => list.reduce((n, s) => n + (s.unreadCount || 0), 0);
 
 // Pages come back in position order with the odd swap: merge by externalId, newest copy wins, sort by position.
@@ -229,9 +229,13 @@ export const messageText = (m: AgentMessage) => m.blocks.filter((b) => b.type ==
 export interface Outgoing {
   clientId: string;
   text: string;
+  /** When the message was first typed; a same-id retry keeps it. */
   at: number;
+  /** The local or hub status change, whichever this entry last reconciled. */
+  updatedAt: number;
   status: "sending" | "sent" | "failed";
   error?: string;
+  attempts?: number;
 }
 
 // Persisted messages lose the clientId (externalId changes from local:<clientId>), so a local bubble is dropped once
@@ -249,8 +253,8 @@ export function pendingOutgoing(out: Outgoing[], messages: AgentMessage[], slack
 
 // ── session list store, refreshed on the hub's {"type":"agents"} event ─
 
-type ListState = { sessions: AgentSession[]; loaded: boolean; error: string; hints: string[] };
-let list: ListState = { sessions: [], loaded: false, error: "", hints: [] };
+type ListState = { sessions: AgentSession[]; loaded: boolean; error: string; hints: string[]; sources: AgentSourceStatus[] | null };
+let list: ListState = { sessions: [], loaded: false, error: "", hints: [], sources: null };
 const listeners = new Set<() => void>();
 const emit = (p: Partial<ListState>) => {
   list = { ...list, ...p };
@@ -259,7 +263,12 @@ const emit = (p: Partial<ListState>) => {
 
 let bounded = false;
 export const personalOrder = (a: AgentSession, b: AgentSession) => b.rankTimeMs - a.rankTimeMs || compareListIds(a.id, b.id);
-export const personalSessions = new SessionList<AgentSession>("/agents/sessions", (s) => s.id, personalOrder);
+export const AGENTS_PAGE_COUNTS_FEATURE = "agents_page_counts";
+let pageCounts = false;
+/** Set from hello: whether this hub reads a personal page's counts with it (`with_counts`, #6496), one request per
+ *  refresh instead of two. A filtered personal list follows (PagedSessionList). */
+export function setPersonalPageCounts(on: boolean) { pageCounts = on; }
+export const personalSessions = new SessionList<AgentSession>("/agents/sessions", (s) => s.id, personalOrder, undefined, undefined, { pageCounts: () => pageCounts });
 export function setAgentListMode(enabled: boolean) {
   bounded = enabled;
 }
@@ -276,31 +285,46 @@ let queued: Promise<void> | null = null;
 // Bumped by resetAgents(): a pull still on its way belongs to the previous login, so its answer (and the follow-up
 // pull queued behind it) is dropped.
 let listGen = 0;
-export function refreshAgentSessions(): Promise<void> {
-  if (bounded) {
-    const gen = listGen;
-    return Promise.all([personalSessions.load(), fetchSources().catch(() => null)])
-      .then(([, sources]) => {
-        if (gen === listGen && sources) emit({ hints: setupHints(sources) });
-      })
-      .catch((e) => { if (gen === listGen) emit({ loaded: true, error: errorText(e) }); });
-  }
+// The sources' status (GET /api/v1/agents: setup, error, accounts) is the hub asking every source's extension in turn.
+// It changes with the list, which the hub announces as an agents event with session_ids [] (a source removed, a source's
+// listing starting or stopping to fail, an extension's agentsrc.updated without keys, a hide), not with one session's
+// new message. So an event naming sessions re-reads only the list, and its pull no longer waits on every extension; the
+// status is read with it again once it is SOURCES_FRESH_MS old, for what an extension changes without saying so.
+export const SOURCES_FRESH_MS = 60_000;
+let sourcesReadAt = Number.NEGATIVE_INFINITY;
+// Whether one of the calls the queued follow-up stands for wanted the status too.
+let queuedSources = false;
+export function refreshAgentSessions(withSources = true): Promise<void> {
   if (inflight) {
     const gen = listGen;
+    queuedSources ||= withSources;
     if (!queued) {
       const next: Promise<void> = inflight.then(() => {
         // only clear our own slot: after resetAgents() a newer login may have queued its own follow-up
         if (queued === next) queued = null;
-        return gen === listGen ? refreshAgentSessions() : undefined;
+        const sources = queuedSources;
+        if (gen === listGen) queuedSources = false;
+        return gen === listGen ? refreshAgentSessions(sources) : undefined;
       });
       queued = next;
     }
     return queued;
   }
   const gen = listGen;
-  const pull: Promise<void> = Promise.all([fetchSessions(), fetchSources().catch(() => null)])
+  const read = bounded ? personalSessions.load().then(() => personalSessions.getSnapshot().rows) : fetchSessions();
+  const status =
+    withSources || Date.now() - sourcesReadAt >= SOURCES_FRESH_MS
+      ? fetchSources().then(
+          (sources) => {
+            if (gen === listGen) sourcesReadAt = Date.now();
+            return sources;
+          },
+          () => null,
+        )
+      : Promise.resolve(null);
+  const pull: Promise<void> = Promise.all([read, status])
     .then(([sessions, sources]) => {
-      if (gen === listGen) emit({ sessions, loaded: true, error: "", ...(sources ? { hints: setupHints(sources) } : {}) });
+      if (gen === listGen) emit({ sessions, loaded: true, error: "", ...(sources ? { sources, hints: setupHints(sources) } : {}) });
     })
     .catch((e) => {
       if (gen === listGen) emit({ loaded: true, error: errorText(e) });
@@ -315,7 +339,7 @@ export function refreshAgentSessions(): Promise<void> {
 // Called by the WebSocket handler: re-pull the list, and tell open sessions which ids moved (empty = all).
 export function agentsChanged(ids: string[]) {
   if (bounded) personalSessions.invalidate();
-  else void refreshAgentSessions();
+  void refreshAgentSessions(ids.length === 0);
   changedListeners.forEach((l) => l(ids));
 }
 
@@ -338,7 +362,9 @@ export function resetAgents() {
   // the next login's first pull starts right away instead of waiting behind the old one
   inflight = null;
   queued = null;
-  emit({ sessions: [], loaded: false, error: "", hints: [] });
+  queuedSources = false;
+  sourcesReadAt = Number.NEGATIVE_INFINITY;
+  emit({ sessions: [], loaded: false, error: "", hints: [], sources: null });
 }
 
 export function useAgentList(): ListState {
@@ -393,14 +419,15 @@ export interface SessionGroup {
   unread: number;
 }
 
-const DAY = 86_400_000;
+/** A session's date group by local calendar days: a day is 23 or 25 hours on the days the clocks change, so the
+ *  groups start at midnights, never at 24-hour steps back from today's (#9912). */
 export function dateBucket(ms: number, now = Date.now()): { key: string; label: string; order: number } {
   const d = new Date(now);
-  const today = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  if (ms >= today) return { key: "today", label: t("lib-agents.date_today"), order: 0 };
-  if (ms >= today - DAY) return { key: "yesterday", label: t("lib-agents.date_yesterday"), order: 1 };
-  if (ms >= today - 7 * DAY) return { key: "week", label: t("lib-agents.date_week"), order: 2 };
-  if (ms >= today - 30 * DAY) return { key: "month", label: t("lib-agents.date_month"), order: 3 };
+  const daysBack = (n: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() - n).getTime();
+  if (ms >= daysBack(0)) return { key: "today", label: t("lib-agents.date_today"), order: 0 };
+  if (ms >= daysBack(1)) return { key: "yesterday", label: t("lib-agents.date_yesterday"), order: 1 };
+  if (ms >= daysBack(7)) return { key: "week", label: t("lib-agents.date_week"), order: 2 };
+  if (ms >= daysBack(30)) return { key: "month", label: t("lib-agents.date_month"), order: 3 };
   return { key: "older", label: t("lib-agents.date_older"), order: 4 };
 }
 
@@ -537,15 +564,24 @@ export function refreshAgentPrefs(): Promise<void> {
 
 let saveSeq = 0;
 export function updateAgentPrefs(f: (p: AgentPrefs) => AgentPrefs) {
+  const before = prefs;
   const next = f(prefs);
-  prefsRev++;
+  const rev = ++prefsRev;
   emitPrefs(next);
   if (!hubPrefs) return;
   const seq = ++saveSeq;
   prefsOut++;
   api<AgentPrefs>("/agents/prefs", { method: "PUT", json: next })
     .then((p) => seq === saveSeq && emitPrefs(normalizePrefs(p)))
-    .catch(prefsGone)
+    .catch((e) => {
+      prefsGone(e);
+      if (!hubPrefs) return; // a hub without the endpoint: the change stays here only
+      // Not saved (#1880): put back what was there unless a later change came, say so, and read the hub's once the
+      // PUTs are done (an earlier change that failed too may still show under a later one's undo).
+      if (rev === prefsRev) emitPrefs(before);
+      prefsPullAfterSave = true;
+      toast(t("lib-agents.prefs_save_failed", { error: errorText(e) }), "error");
+    })
     .finally(() => {
       prefsOut--;
       if (prefsOut || !prefsPullAfterSave) return;

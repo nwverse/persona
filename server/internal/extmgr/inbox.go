@@ -120,12 +120,6 @@ func (h *Manager) kickInbox() {
 	h.inbox.signal()
 }
 
-// kickLarkChats asks for a collection of the Feishu chats soon (a Feishu realtime event arrived).
-func (h *Manager) kickLarkChats() {
-	h.inbox.init()
-	h.inbox.signal()
-}
-
 // kickedRound is the round a kick asks for: the Feishu chats, unless something else asked for every source too.
 func (b *inboxSources) kickedRound() inboxRound {
 	if b.wide.Swap(false) {
@@ -240,7 +234,7 @@ func (h *Manager) collectInbox(ctx context.Context, round inboxRound) error {
 	return nil
 }
 
-// What is kept for the manager while it is away, at most: things of one source, messages of one mail account (the
+// What is kept for the manager while it is away, at most: things of one source, messages of one mailbox (the
 // newest).
 const (
 	heldThingsMost = 2000
@@ -249,7 +243,8 @@ const (
 
 // mergeRounds is old with the newer round n over it: what n read replaces what old had of the same thing (a thread,
 // an event, a batch, a mail), what only old has stays (it left the source's window meanwhile) within heldThingsMost
-// and heldMailMost; a source n read as off, or one this code no longer has, keeps nothing.
+// and heldMailMost; a source n read as off, or one this code no longer has, keeps nothing. The mail accounts that
+// could not be read are the newest mail round's.
 func mergeRounds(old, n assistantwire.InboxRound) assistantwire.InboxRound {
 	out := n
 	if old.Round == assistantwire.RoundFull || n.Round == assistantwire.RoundFull {
@@ -286,7 +281,7 @@ func mergeRounds(old, n assistantwire.InboxRound) assistantwire.InboxRound {
 	case n.Mail == nil:
 		out.Mail = old.Mail
 	case old.Mail != nil:
-		m := &assistantwire.InboxMailRead{Accounts: slices.Clone(n.Mail.Accounts)}
+		m := &assistantwire.InboxMailRead{Accounts: slices.Clone(n.Mail.Accounts), Failed: n.Mail.Failed}
 		got := map[string]int{}
 		for i, a := range m.Accounts {
 			got[a.ID] = i
@@ -297,13 +292,42 @@ func mergeRounds(old, n assistantwire.InboxRound) assistantwire.InboxRound {
 				m.Accounts = append(m.Accounts, a) // not read this time
 				continue
 			}
-			m.Accounts[i].Messages = mergeHeld(a.Messages, m.Accounts[i].Messages, heldMailMost, func(s assistantwire.InboxMailSummary) string {
-				return s.Mailbox + "\x00" + strconv.FormatUint(uint64(s.UID), 10)
-			})
+			cur := &m.Accounts[i]
+			if cur.InboxUnavailable && !a.InboxUnavailable {
+				cur.InboxUnavailable, cur.UIDValidity, cur.Messages = false, a.UIDValidity, a.Messages
+			} else {
+				cur.UIDValidity, cur.Messages = mergeMailPage(a.UIDValidity, cur.UIDValidity, a.Messages, cur.Messages)
+			}
+			cur.Folders = slices.Clone(cur.Folders)
+			at := map[string]int{}
+			for j, f := range cur.Folders {
+				at[f.Name] = j
+			}
+			for _, f := range a.Folders {
+				if j, ok := at[f.Name]; ok {
+					dst := &cur.Folders[j]
+					dst.UIDValidity, dst.Messages = mergeMailPage(f.UIDValidity, dst.UIDValidity, f.Messages, dst.Messages)
+				} else {
+					cur.Folders = append(cur.Folders, f)
+				}
+			}
 		}
 		out.Mail = m
 	}
 	return out
+}
+
+// The same UID may be a different mail after renumbering. Do not replay a held page of the old validity.
+func mergeMailPage(oldValidity, validity uint32, old, n []assistantwire.InboxMailSummary) (uint32, []assistantwire.InboxMailSummary) {
+	if validity == 0 {
+		validity = oldValidity
+	}
+	if oldValidity != 0 && oldValidity != validity {
+		return validity, n
+	}
+	return validity, mergeHeld(old, n, heldMailMost, func(m assistantwire.InboxMailSummary) string {
+		return strconv.FormatUint(uint64(m.UID), 10)
+	})
 }
 
 // mergeHeld is what only old has, then n, the newest most of them.

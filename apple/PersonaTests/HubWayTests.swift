@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// Picking the way to a hub that has tunnels (docs/operations/network.md「经 SSH 隧道连 hub」, "Connecting to hub through
+/// Picking the way to a hub that has tunnels (docs/operations/network.md「Connecting to hub through SSH」, "Connecting to hub through
 /// a local SOCKS5 proxy"): the same steps for the SSH tunnel, the local proxy and the in-app tunnel. `HubWay.next` is
 /// pure, so each test walks through the steps by hand, telling it what each one came to.
 struct HubWayTests {
@@ -69,5 +69,31 @@ struct HubWayTests {
         let always = [tunnel, HubWay.Option(always: true, recent: false)]
         #expect(HubWay.next(always, HubWay.Seen()) == .open(1))
         #expect(HubWay.next(always, HubWay.Seen(opened: [1: true])) == .through(1, watchDirect: false))
+    }
+
+    @Test func restoringTheLastSSHDoesNotWaitForTheDirectProbe() {
+        let restoring = HubWay.Option(always: false, recent: true, recovering: true)
+        #expect(HubWay.next([restoring, tunnel], HubWay.Seen()) == .restore(0))
+        // Neither answered: continue through the other fallback ways, without repeating the failed SSH attempt.
+        #expect(HubWay.next([restoring, tunnel], HubWay.Seen(opened: [0: false], direct: false)) == .open(1))
+        // The direct address won the recovery race: the same direct result and tunnel cleanup as an ordinary pick.
+        #expect(HubWay.next([restoring], HubWay.Seen(direct: true)) == .direct)
+    }
+
+    @Test func recoveryKeepsAlwaysAndPreviouslyUnusedFallbackPriorities() {
+        let restoring = HubWay.Option(always: false, recent: true, recovering: true)
+        let always = HubWay.Option(always: true, recent: false)
+        #expect(HubWay.next([restoring, always], HubWay.Seen()) == .open(1))
+        #expect(HubWay.next([restoring, always], HubWay.Seen(opened: [1: true])) == .through(1, watchDirect: false))
+        #expect(HubWay.next([restoring, always], HubWay.Seen(opened: [1: false])) == .restore(0))
+        // Merely having a closed SSH route is not enough: the phone must have used it successfully before.
+        let unused = HubWay.Option(always: false, recent: false, recovering: true)
+        #expect(HubWay.next([unused], HubWay.Seen()) == .askDirect(warming: []))
+    }
+
+    @Test func aLiveTunnelStillReturnsToAnAnsweringDirectAddress() {
+        let routed = HubWay.Option(always: false, recent: true, recovering: false)
+        #expect(HubWay.next([routed], HubWay.Seen()) == .askDirect(warming: [0]))
+        #expect(HubWay.next([routed], HubWay.Seen(opened: [0: true], direct: true)) == .direct)
     }
 }

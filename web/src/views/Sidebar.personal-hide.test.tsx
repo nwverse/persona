@@ -43,7 +43,7 @@ beforeEach(async () => {
       return response({ ok: true });
     }
     if (path === "/api/v1/agents/sessions") return response({ sessions: listed });
-    if (path === "/api/v1/agents") return response({ sources: [] });
+    if (path === "/api/v1/agents") return response({ sources: [{ source: "example", enabled: true }] });
     return response({});
   });
   history.replaceState(null, "", "/");

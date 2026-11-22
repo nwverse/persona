@@ -26,8 +26,13 @@ import (
 const handoffsMax = 5
 
 type handoffReq struct {
-	Text     string `json:"text"`
-	ClientID string `json:"client_id"`
+	Text         string      `json:"text"`
+	ClientID     string      `json:"client_id"`
+	Session      *SessionRef `json:"session"`
+	Kind         string      `json:"kind"`
+	Title        string      `json:"title"`
+	ReusePending bool        `json:"reuse_pending,omitempty"`
+	reused       *bool
 }
 
 func (s *Service) inboxHandoffRoutes() {
@@ -40,20 +45,43 @@ func (s *Service) inboxHandoffRoutes() {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
-		if strings.TrimSpace(in.Text) == "" {
+		reused := false
+		in.reused = &reused
+		if in.Session != nil {
+			switch {
+			case strings.TrimSpace(in.Session.MachineID) == "" || strings.TrimSpace(in.Session.SessionID) == "":
+				apierr.Write(w, http.StatusBadRequest, i18n.ErrEnglish("inbox-errors.session_ref_required"))
+				return
+			case in.Kind != "agent" && in.Kind != "conversation":
+				apierr.Write(w, http.StatusBadRequest, i18n.ErrEnglish("inbox-errors.handoff_kind"))
+				return
+			case strings.TrimSpace(in.Text) != "":
+				apierr.Write(w, http.StatusBadRequest, i18n.ErrEnglish("inbox-errors.handoff_record_text"))
+				return
+			}
+		} else if strings.TrimSpace(in.Text) == "" {
 			apierr.Write(w, http.StatusBadRequest, i18n.ErrEnglish("inbox-errors.text_required"))
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 110*time.Second) // a main conversation may have to start
 		defer cancel()
-		it, to, err := s.handOff(ctx, r.PathValue("id"), in)
+		var (
+			it  InboxItem
+			to  SessionRef
+			err error
+		)
+		if in.Session != nil {
+			it, to, err = s.recordHandoff(ctx, r.PathValue("id"), in)
+		} else {
+			it, to, err = s.handOff(ctx, r.PathValue("id"), in)
+		}
 		switch {
 		case errors.Is(err, errNoInboxItem):
 			apierr.Write(w, http.StatusNotFound, err)
 		case err != nil:
 			apierr.Call(w, err)
 		default:
-			apierr.WriteJSON(w, map[string]any{"item": it, "session": to})
+			apierr.WriteJSON(w, map[string]any{"item": it, "session": to, "reused": reused})
 		}
 	})
 }
@@ -80,22 +108,119 @@ func (s *Service) handOff(ctx context.Context, id string, in handoffReq) (InboxI
 		b.mu.Unlock()
 		return InboxItem{}, SessionRef{}, errNoInboxItem
 	}
+	if in.ReusePending {
+		var to *SessionRef
+		if g := currentSuggestion(it); g != nil && g.SourceOf == suggestionReplyTarget(it) {
+			to = g.Conversation
+			if to == nil && it.Agent != nil {
+				to = &SessionRef{MachineID: it.Agent.MachineID, SessionID: it.Agent.SessionID}
+			}
+			if to == nil {
+				to = &SessionRef{}
+			}
+		} else {
+			source := suggestionReplyTarget(it)
+			for i := len(it.Handoffs) - 1; i >= 0; i-- {
+				h := it.Handoffs[i]
+				if h.PendingSuggestion && h.SourceOf == source {
+					to = &SessionRef{MachineID: h.MachineID, SessionID: h.SessionID}
+					break
+				}
+			}
+		}
+		if to != nil {
+			out, target := it.listed(), *to
+			if in.reused != nil {
+				*in.reused = true
+			}
+			b.mu.Unlock()
+			return out, target, nil
+		}
+	}
 	if h := handoffOp(it, op); h != nil {
 		out, to := it.listed(), SessionRef{MachineID: h.MachineID, SessionID: h.SessionID}
 		b.mu.Unlock()
 		return out, to, nil
 	}
 	title := clip(oneLine(it.Title), 80)
+	source := suggestionReplyTarget(it) // captured before I/O: a newer incoming message was not part of this request
 	b.mu.Unlock()
-	to, err := s.sendHandoff(ctx, prompts.RenderInboxHandoff(prompts.InboxHandoff{ID: id, Title: title, Text: text}), op)
+	to, err := s.sendHandoff(ctx, prompts.RenderInboxHandoff(prompts.InboxHandoff{Language: answerLanguage(s.hello(ctx).Locale), ID: id, Title: title, Text: text}), op)
 	if err != nil {
 		return InboxItem{}, SessionRef{}, err
 	}
 	b.mu.Lock()
 	b.noteHandoff(it, to, op, time.Now())
+	if in.ReusePending {
+		if h := handoffOp(it, op); h != nil {
+			g := currentSuggestion(it)
+			h.PendingSuggestion, h.SourceOf = g == nil || g.SourceOf != source, source
+		}
+	}
 	out := it.listed()
 	b.mu.Unlock()
 	// No rollback: the message is in the conversation. The record stays in memory and the item's next save writes it.
+	if failed := s.saveInbox(ctx, []*InboxItem{it}); failed[id] {
+		s.logf("inbox: %s was handed to %s but could not be saved; the live state stays until the next save", id, short(to.SessionID))
+	}
+	return out, to, nil
+}
+
+// recordHandoff records a hand-off the client already sent to an Agent or conversation. It sends nothing and leaves
+// the item's processing conversation and state alone. A replay answers with the originally recorded target.
+func (s *Service) recordHandoff(ctx context.Context, id string, in handoffReq) (InboxItem, SessionRef, error) {
+	b := &s.inbox
+	to := SessionRef{MachineID: strings.TrimSpace(in.Session.MachineID), SessionID: strings.TrimSpace(in.Session.SessionID)}
+	op := strings.ToLower(strings.TrimSpace(in.ClientID))
+	if !validClientID(op) {
+		op = namedClientID("inbox handoff record\n" + id + "\n" + to.MachineID + "\n" + to.SessionID + "\n" + in.Kind)
+	}
+	v, _ := b.handingOff.LoadOrStore(id, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	b.mu.Lock()
+	it := b.items[id]
+	if it == nil {
+		b.handingOff.CompareAndDelete(id, mu)
+		b.mu.Unlock()
+		return InboxItem{}, SessionRef{}, errNoInboxItem
+	}
+	if h := handoffOp(it, op); h != nil {
+		out, original := it.listed(), SessionRef{MachineID: h.MachineID, SessionID: h.SessionID}
+		b.mu.Unlock()
+		return out, original, nil
+	}
+
+	now := time.Now().UTC()
+	it.Handoffs = append(it.Handoffs, InboxHandoff{MachineID: to.MachineID, SessionID: to.SessionID, At: now, Op: op})
+	if n := len(it.Handoffs); n > handoffsMax {
+		it.Handoffs = slices.Clone(it.Handoffs[n-handoffsMax:])
+	}
+	chainKind := ChainHandling
+	namedKey, genericKey := "assistant-inbox_chain.handed_conversation", "assistant-inbox_chain.handed_conversation_generic"
+	if in.Kind == "agent" {
+		chainKind = ChainAgent
+		namedKey, genericKey = "assistant-inbox_chain.handed_agent", "assistant-inbox_chain.handed_agent_generic"
+	}
+	text := i18n.T(b.userLang(), genericKey)
+	if title := clip(oneLine(in.Title), 40); title != "" {
+		text = i18n.T(b.userLang(), namedKey, i18n.Args{"title": title})
+	}
+	linked := false
+	for _, e := range it.Chain {
+		if e.Kind == chainKind && e.Link != nil && e.Link.SessionID == to.SessionID {
+			linked = true
+			break
+		}
+	}
+	if !linked {
+		b.chainAdd(it, InboxChainEntry{Kind: chainKind, At: now, Text: text, Via: ViaUser,
+			Link: &InboxChainLink{Type: LinkSession, MachineID: to.MachineID, SessionID: to.SessionID}})
+	}
+	out := it.listed()
+	b.mu.Unlock()
+	// The client already sent the hand-off. The record stays in memory and the item's next save writes it.
 	if failed := s.saveInbox(ctx, []*InboxItem{it}); failed[id] {
 		s.logf("inbox: %s was handed to %s but could not be saved; the live state stays until the next save", id, short(to.SessionID))
 	}
@@ -173,6 +298,7 @@ func listedHandoffs(hs []InboxHandoff) []InboxHandoff {
 	out := slices.Clone(hs)
 	for i := range out {
 		out[i].Op = ""
+		out[i].PendingSuggestion, out[i].SourceOf = false, ""
 	}
 	return out
 }
@@ -208,12 +334,16 @@ func clearDraft(it *InboxItem) {
 
 // renderHandoffNote is a handling note for a conversation the item was handed to, wrapped to name the item.
 func renderHandoffNote(n inboxNote, owner, id, title string) string {
+	return renderHandoffNoteIn(n, owner, id, title, "")
+}
+
+func renderHandoffNoteIn(n inboxNote, owner, id, title, language string) string {
 	if title == "" { // the head the hub recognizes needs a title (prompts.ParseInjected)
 		title = id
 	}
-	note := prompts.RenderInboxHandlingNote(n.Name, prompts.InboxHandlingNote{Owner: owner, Text: n.Text, Edited: n.Edited,
+	note := prompts.RenderInboxHandlingNote(n.Name, prompts.InboxHandlingNote{Language: language, Owner: owner, Text: n.Text, Edited: n.Edited,
 		Context: n.Context, Machine: n.Machine, Session: n.Session, Handoff: true})
-	return prompts.RenderInboxHandoffNote(prompts.InboxHandoffNote{ID: id, Title: title, Note: note})
+	return prompts.RenderInboxHandoffNote(prompts.InboxHandoffNote{Language: language, ID: id, Title: title, Note: note})
 }
 
 // tellHandoff tells the conversation a suggestion came from what the user did with it, in the background (a request
@@ -228,7 +358,8 @@ func (s *Service) tellHandoff(ctx context.Context, id, title string, to SessionR
 		}
 		cctx, cancel := context.WithTimeout(ctx, time.Minute)
 		defer cancel()
-		text := renderHandoffNote(n, s.owner(cctx), id, title)
+		hello := s.hello(cctx)
+		text := renderHandoffNoteIn(n, inboxPromptOwner(hello), id, title, answerLanguage(hello.Locale))
 		params, err := s.sendParams(cctx, SendParams{MachineID: to.MachineID, SessionID: to.SessionID,
 			Params: map[string]any{"session_id": to.SessionID, "text": text}})
 		if err == nil {
@@ -322,7 +453,15 @@ func (s *Service) confirmHandedReply(ctx context.Context, it *InboxItem, g *Inbo
 	if !validClientID(clientID) { // the same suggestion confirmed again is the same send
 		clientID = namedClientID(fmt.Sprintf("suggestion\n%s\n%d", it.ID, g.Version))
 	}
-	out, err := s.replyInboxDo(ctx, it.ID, text, clientID, false, true, g.Changes...)
+	var out InboxItem
+	var err error
+	if target := g.MailTarget; target != nil {
+		out, err = s.replyInboxCheckedDo(ctx, it.ID, text, clientID, false, true, &target.UID, &target.Version, g.Changes...)
+	} else if it.Mail != nil {
+		err = errMailReplyTargetChanged // a pre-upgrade mail suggestion has no trustworthy target
+	} else {
+		out, err = s.replyInboxDo(ctx, it.ID, text, clientID, false, true, g.Changes...)
+	}
 	b := &s.inbox
 	if err != nil {
 		b.mu.Lock()

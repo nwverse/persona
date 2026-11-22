@@ -1,7 +1,7 @@
 import Foundation
 
 /// "The user is in the middle of something": what a page shows holds still, and what came meanwhile lands when it
-/// lets go (docs/apple/ios-state.md「第 4 步」). One policy for every page: the page only says what it is doing (`set`), the
+/// lets go (docs/apple/ios-state.md「Step 4」). One policy for every page: the page only says what it is doing (`set`), the
 /// data it shows says what is critical, and how long anything waits is decided here.
 /// - Scrolling: held from the first move until the list has rested `settle`; what waits lands after `cap` at most,
 ///   even while it still scrolls.

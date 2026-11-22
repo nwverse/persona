@@ -101,7 +101,7 @@ func TestProbeVariablesAroundAHelper(t *testing.T) {
 	if d.ContextWindow != 1000000 {
 		t.Errorf("window %d", d.ContextWindow)
 	}
-	if v, _ := env(d, "ANTHROPIC_CUSTOM_HEADERS"); v != "x-source: dogfood" {
+	if v, _ := env(d, "ANTHROPIC_CUSTOM_HEADERS"); v != "x-source: •••" {
 		t.Errorf("custom headers %q (%v)", v, d.Env)
 	}
 }
@@ -120,6 +120,19 @@ func TestProbeExportsInASubshell(t *testing.T) {
 		t.Errorf("no window set: %d", d.ContextWindow)
 	}
 	assertNoSecret(t, d, "fake-key-from-file")
+}
+
+// `command env … claude` is read like `env … claude`: the command stub used to hand env to the real /usr/bin/env, which
+// started the real claude and left the launcher unseen (#5972).
+func TestProbeCommandEnv(t *testing.T) {
+	d := probe(t, "cc_command_env")
+	if d.Agent != "claude" || d.BaseURL != "https://gw.example.com/e" || d.Auth != "ANTHROPIC_AUTH_TOKEN" {
+		t.Fatalf("%+v", d)
+	}
+	if args := strings.Join(d.Args, " "); !strings.Contains(args, "--model vendor/model-e") {
+		t.Errorf("its own --model is on the arguments: %q", args)
+	}
+	assertNoSecret(t, d, "sk-fake-command-env-0123456789")
 }
 
 func TestProbeCodex(t *testing.T) {
@@ -303,6 +316,8 @@ func TestProbeInBashAndZsh(t *testing.T) {
 				{"", "claude", []string{"--model", "m-1"}, ""},
 				{`alias claude='claude --verbose'`, "claude", []string{"--verbose", "--model", "m-1"}, ""},
 				{`envcc() { env FOO=bar claude --dangerously-skip-permissions "$@"; }`, "envcc",
+					[]string{"--dangerously-skip-permissions", "--model", "m-1"}, "bar"},
+				{`cmdenvcc() { command env FOO=bar claude --dangerously-skip-permissions "$@"; }`, "cmdenvcc",
 					[]string{"--dangerously-skip-permissions", "--model", "m-1"}, "bar"},
 				{`alias aliascc='FOO=bar claude --teammate-mode in-process'`, "aliascc",
 					[]string{"--teammate-mode", "in-process", "--model", "m-1"}, "bar"},

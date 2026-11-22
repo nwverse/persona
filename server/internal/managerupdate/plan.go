@@ -2,6 +2,7 @@
 package managerupdate
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"debug/buildinfo"
 	"encoding/hex"
@@ -18,12 +19,16 @@ import (
 )
 
 // Plan is produced by the existing release publisher, never inferred from a default manager.
-// Idle evidence covers Hub sessions only. BootstrapWindow is explicit maintenance authorization
-// for older managers that cannot report background idleness; it is not an idle assertion.
+// Idle evidence binds complete local runtime inventory to persisted manager identity.
+// BootstrapWindow is explicit maintenance authorization, not an idle assertion.
 type Plan struct {
 	Schema              int       `json:"schema"`
 	RunID               string    `json:"run_id"`
 	ManagerID           string    `json:"manager_id"`
+	Unassigned          bool      `json:"unassigned,omitempty"`
+	Main                string    `json:"main,omitempty"`
+	MachineID           string    `json:"machine_id,omitempty"`
+	MachineUID          string    `json:"machine_uid,omitempty"`
 	Dir                 string    `json:"dir"`
 	Binary              string    `json:"binary"`
 	Unit                string    `json:"unit"`
@@ -57,7 +62,20 @@ func ReadPlan(path string) (Plan, error) {
 		return p, err
 	}
 	defer f.Close()
-	d := json.NewDecoder(io.LimitReader(f, 64*1024))
+	return decodePlan(f)
+}
+
+func decodePlan(reader io.Reader) (Plan, error) {
+	var p Plan
+	const maxPlanBytes = 64 * 1024
+	data, err := io.ReadAll(io.LimitReader(reader, maxPlanBytes+1))
+	if err != nil {
+		return p, err
+	}
+	if len(data) > maxPlanBytes {
+		return p, errors.New("plan exceeds size limit")
+	}
+	d := json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()
 	if err = d.Decode(&p); err != nil {
 		return p, err
@@ -96,23 +114,47 @@ func canonical(path string) error {
 	return nil
 }
 
-func (p Plan) validateShape() error {
-	if p.Schema != 1 || !runPattern.MatchString(p.RunID) || !idPattern.MatchString(p.ManagerID) || p.ManagerID == "assistant" {
-		return errors.New("invalid schema, run ID or independent manager ID")
+// validateIdentity binds a read to the original manager without requiring a
+// release candidate, maintenance authorization or an idle result that is not yet known.
+func (p Plan) validateIdentity() error {
+	if p.Schema != 1 || !idPattern.MatchString(p.ManagerID) || p.ManagerID == "assistant" || p.UID < 0 {
+		return errors.New("invalid schema or independent manager identity")
 	}
-	if !sourcePattern.MatchString(p.Source) || p.Version == "" || p.Size <= 0 || p.UID < 0 {
+	if p.Unassigned {
+		if p.Main != "" || p.MachineID != "" || p.MachineUID != "" {
+			return errors.New("unassigned inventory identity cannot contain a main, machine or UID")
+		}
+	} else if (p.Main != "" || p.MachineID != "" || p.MachineUID != "") && (p.Main == "" || p.MachineID == "" || p.MachineUID == "") {
+		return errors.New("populated inventory identity must include main, machine and UID together")
+	}
+	for _, s := range []string{p.PreviousSHA256, p.ConfigSHA256, p.PlistSHA256} {
+		if !shaPattern.MatchString(s) {
+			return errors.New("invalid identity SHA256")
+		}
+	}
+	if !filepath.IsAbs(p.Dir) || filepath.Clean(p.Dir) != p.Dir || p.Binary != filepath.Join(p.Dir, "bin", "personad") {
+		return errors.New("target must be the independent manager directory's bin/personad")
+	}
+	if p.Unit == "" || filepath.Base(p.Unit) != p.Unit || !filepath.IsAbs(p.PlistPath) || filepath.Clean(p.PlistPath) != p.PlistPath || filepath.Base(p.PlistPath) != p.Unit+".plist" {
+		return errors.New("invalid original launchd unit")
+	}
+	return nil
+}
+
+func (p Plan) validateShape() error {
+	if err := p.validateIdentity(); err != nil {
+		return err
+	}
+	if p.Unassigned || p.Main != "" || p.MachineID != "" || p.MachineUID != "" {
+		return errors.New("inventory identity is not an activation plan")
+	}
+	if !runPattern.MatchString(p.RunID) || !sourcePattern.MatchString(p.Source) || p.Version == "" || p.Size <= 0 {
 		return errors.New("invalid release identity")
 	}
-	for _, s := range []string{p.PreviousSHA256, p.ConfigSHA256, p.PlistSHA256, p.BinarySHA256, p.IdleSnapshotSHA256} {
+	for _, s := range []string{p.BinarySHA256, p.IdleSnapshotSHA256} {
 		if !shaPattern.MatchString(s) {
 			return errors.New("invalid SHA256")
 		}
-	}
-	if p.Binary != filepath.Join(p.Dir, "bin", "personad") {
-		return errors.New("target must be the independent manager directory's bin/personad")
-	}
-	if p.Unit == "" || filepath.Base(p.Unit) != p.Unit || filepath.Base(p.PlistPath) != p.Unit+".plist" {
-		return errors.New("invalid original launchd unit")
 	}
 	return nil
 }

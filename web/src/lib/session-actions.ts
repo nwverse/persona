@@ -2,7 +2,7 @@
 // (docs/protocol/protocol.md `/mutes`, `/modes`, `/rename`; iOS Pins.togglingMute, SessionModes).
 import { t } from "../i18n";
 import type { AgentMutes } from "./agent-groups";
-import { sessionCan } from "./format";
+import { herdrTabName, sessionCan } from "./format";
 import type { Session } from "./types";
 
 export interface ModeOption {
@@ -47,11 +47,18 @@ export const BYPASS_MODE = "bypassPermissions";
 export const BYPASS_WARNING = t("lib-session-actions.bypass_warning");
 
 /** An assistant conversation (the main one too) switches to any mode, "Allow all" included: the hub restarts its
- * Claude with the new mode (#2416). Other agents keep SWITCHABLE_MODES. */
-const ASSISTANT_MODES = PERMISSION_MODES.map((m) => (m.id === BYPASS_MODE ? { ...m, detail: t("lib-session-actions.mode_bypass_permissions_assistant_detail") } : m));
+ * Claude with the new mode (#2416). So does an agent whose Claude was started with a flag that puts "Allow all" in
+ * its mode cycle (`bypass`: Session.bypass_available, or it is in that mode now; #1379). Other agents keep
+ * SWITCHABLE_MODES. */
+const ALL_MODES = PERMISSION_MODES.map((m) => (m.id === BYPASS_MODE ? { ...m, detail: t("lib-session-actions.mode_bypass_permissions_assistant_detail") } : m));
 
-export function switchableModes(assistant: boolean | undefined, agent?: string): ModeOption[] {
-  return assistant || agent === "agy" ? ASSISTANT_MODES : SWITCHABLE_MODES;
+export function switchableModes(assistant: boolean | undefined, agent?: string, bypass?: boolean): ModeOption[] {
+  return assistant || agent === "agy" || bypass ? ALL_MODES : SWITCHABLE_MODES;
+}
+
+/** Whether a running agent's Claude can be switched to "Allow all" (see switchableModes). */
+export function canSwitchToBypass(s: Session): boolean {
+  return Boolean(s.bypass_available || s.permission_mode === BYPASS_MODE);
 }
 
 export function modeTitle(id?: string): string {
@@ -62,17 +69,47 @@ export function effortTitle(id?: string): string {
   return id ? (EFFORTS.find((m) => m.id === id)?.title ?? CODEX_EFFORTS.find((m) => m.id === id)?.title ?? id) : "";
 }
 
-/** Claude Code shows the two chips (its TUI's bottom bar); Codex, a compatible CLI and runtimes have no such switches. */
+/** The two chips (Claude Code's TUI bottom bar). The node says where they work (`capabilities.modes`, #1843): a runtime
+ *  that applies them (Orca, Antigravity), never a Claude outside Persona's terminals nor an agent in a terminal whose mode
+ *  is its start's (cursor, agy: the node refuses the switch). An older node does not say, and the chips follow the agent:
+ *  Claude Code in Persona's terminals, Antigravity's runtime; Codex, agy in a terminal pane and other sources not, as on
+ *  iOS and Android (`canChangeModes`). */
 export function hasModes(s: Session | undefined): boolean {
   if (!s || s.assistant) return false;
-  if (s.agent === "agy") return true;
-  if (s.source_kind) return false;
+  if (typeof s.capabilities?.modes === "boolean") return s.capabilities.modes;
+  if (s.source_kind) return s.agent === "agy";
   return !s.agent || s.agent === "claude";
 }
 
-/** Only the effort chip: the node lists the levels it takes (`efforts`: a Codex thread on its app-server), and the phone may write to it. */
+/** A session's own approval, the first of the modes a session lists (`listedModesOf`): "Launcher default", not "Ask",
+ *  since the agent's own settings may already approve everything (#8261). */
+export const LAUNCHER_DEFAULT: ModeOption = { id: "default", title: t("lib-session-actions.mode_launcher_default"), detail: t("lib-session-actions.mode_launcher_default_detail") };
+
+/** The permission modes the composer switches a session of an agent that is not Claude Code between (#8261, the node's
+ *  `capabilities.permission_modes`): its own approval and Full access, on Paseo's Grok, OpenCode or Codex. Undefined with
+ *  fewer than two, for a Persona conversation, and where Claude Code's chips stand (`hasModes`). */
+export function listedModesOf(s: Session | undefined): string[] | undefined {
+  const modes = s?.capabilities?.permission_modes;
+  if (!s || s.assistant || hasModes(s) || !modes || modes.length < 2) return undefined;
+  return modes;
+}
+
+/** The listed mode `s` runs in: the one it reports when listed, else its own (`default`): no mode reported is its own. */
+export function listedModeNow(s: Session, listed: string[]): string {
+  return s.permission_mode && listed.includes(s.permission_mode) ? s.permission_mode : "default";
+}
+
+/** A listed mode's name and description: its own approval is "Launcher default", Full access says it can be switched
+ *  back (a switch, unlike Claude Code's start-only Full access), the rest as Claude Code names them. */
+export function listedModeOption(id: string): ModeOption {
+  if (id === "default") return LAUNCHER_DEFAULT;
+  if (id === BYPASS_MODE) return { id, title: t("lib-session-actions.mode_bypass_permissions"), detail: t("lib-session-actions.mode_bypass_listed_detail") };
+  return PERMISSION_MODES.find((m) => m.id === id) ?? { id, title: id, detail: "" };
+}
+
+/** The effort chip and its speed submenu for protocol-driven Codex threads with advertised choices. */
 export function hasEffortOnly(s: Session | undefined): boolean {
-  return Boolean(s && !s.assistant && !hasModes(s) && s.efforts?.length && sessionCan(s, "send"));
+  return Boolean(s && !s.assistant && !hasModes(s) && (s.efforts?.length || s.service_tiers?.length) && sessionCan(s, "send"));
 }
 
 /** The effort menu's choices: the session's own levels when the node lists them, Claude Code's otherwise. */
@@ -102,8 +139,15 @@ export function toggleMute(s: Pick<Session, "machine_id" | "session_id" | "space
 
 /** The rename request (iOS RenameSessionAlert): only what changed; the herdr tab only for an agent in a herdr pane.
  * Returns null when nothing changed. */
-export function renameBody(s: Session, tab: string, title: string): { tab_name?: string; title?: string } | null {
+export function renameBody(s: Session, tab: string, title: string, unified = false): { tab_name?: string; title?: string } | null {
   const t = tab.trim(), n = title.trim();
+  if (unified) {
+    if (!t) return null;
+    const cli = s.agent ?? "claude";
+    const syncTitle = cli === "claude" || cli === "codex";
+    if (t === herdrTabName(s) && (!syncTitle || t === s.title)) return null;
+    return syncTitle ? { tab_name: t, title: t } : { tab_name: t };
+  }
   const body: { tab_name?: string; title?: string } = {};
   if (!s.assistant && s.slot_id && t && t !== (s.slot_name ?? "")) body.tab_name = t;
   if (n && n !== s.title) body.title = n;

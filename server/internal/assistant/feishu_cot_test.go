@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -84,7 +85,28 @@ func cotHub(t *testing.T, refuse bool) (*Service, *[]map[string]any, *[]string) 
 	})
 	f.answerApp(AppFeishu, FeishuReact, func(json.RawMessage) (any, error) { return map[string]any{}, nil })
 	f.answerApp(AppFeishu, FeishuUnreact, func(json.RawMessage) (any, error) { return map[string]any{}, nil })
-	return newTestService(t, f), posts, &calls
+	s := newTestService(t, f)
+	t.Cleanup(func() {
+		s.chans.mu.Lock()
+		var workers []*cotWorker
+		for _, p := range s.chans.live {
+			if p.native != nil {
+				workers = append(workers, p.native)
+			}
+		}
+		s.chans.mu.Unlock()
+		for _, w := range workers {
+			w.abort()
+		}
+		for _, w := range workers {
+			select {
+			case <-w.done:
+			case <-time.After(2 * time.Second):
+				t.Error("native worker did not stop during cleanup")
+			}
+		}
+	})
+	return s, posts, &calls
 }
 
 func cotRun(s *Service) (*channel.Run, *chanLive) {
@@ -263,7 +285,7 @@ func TestFeishuCardFromTheStartAndAlwaysMoving(t *testing.T) {
 	s.chans.mu.Unlock()
 	now = now.Add(time.Second)
 	s.channelProgressTick(r.ID)
-	if len(*posts) != 2 || (*posts)[1]["update"] != true || !strings.Contains((*posts)[1]["card"].(string), "排队中… · 4 秒") {
+	if len(*posts) != 2 || (*posts)[1]["update"] != true || !strings.Contains((*posts)[1]["card"].(string), "排队中</text_tag> <font color='grey'>Persona · 4 秒") {
 		t.Fatalf("queued: %v", *posts)
 	}
 	// Its own message shows in the conversation: from there on it works, with only its own steps.
@@ -277,7 +299,7 @@ func TestFeishuCardFromTheStartAndAlwaysMoving(t *testing.T) {
 	s.chans.mu.Unlock()
 	now = now.Add(feishuProgressIdle)
 	s.channelProgressTick(r.ID)
-	if card := (*posts)[len(*posts)-1]["card"].(string); !strings.Contains(card, "处理中 · 7 秒") || !strings.Contains(card, "mine") || strings.Contains(card, "earlier turn") {
+	if card := (*posts)[len(*posts)-1]["card"].(string); !strings.Contains(card, "处理中</text_tag> <font color='grey'>Persona · 7 秒") || !strings.Contains(card, "mine") || strings.Contains(card, "earlier turn") {
 		t.Fatalf("working: %v", *posts)
 	}
 	// A held run waiting on its background work (not working): no new card.
@@ -593,22 +615,26 @@ func TestCotEndIsTriedAgain(t *testing.T) {
 	saved := cotEndTries
 	cotEndTries = []time.Duration{0, 0, 0}
 	defer func() { cotEndTries = saved }()
-	s, posts, calls := cotHub(t, false)
-	r, _ := cotRun(s)
-	withCot(s, r)
-	feishuSink{s}.progress(context.Background(), r, time.Second, nil, "")
-	s.hub.(*fakeHub).answerApp(AppFeishu, FeishuCotAppend, func(json.RawMessage) (any, error) { return nil, feishuAPIError(99991400) })
-	n := 0
-	s.hub.(*fakeHub).answerApp(AppFeishu, FeishuCotComplete, func(json.RawMessage) (any, error) {
-		n++
-		if n < 3 {
-			return nil, feishuAPIError(99991400)
-		}
-		*calls = append(*calls, "complete")
-		return map[string]any{}, nil
-	})
-	s.finishChannelRun(r, &channel.Result{Answer: "结论"})
-	if n != 3 || !strings.HasSuffix(strings.Join(*calls, " "), "complete") || len(*posts) != 1 {
-		t.Fatalf("tries %d, calls %v, posts %v", n, *calls, *posts)
+	for _, failure := range []error{feishuAPIError(99991400), rpc.NotSent(context.DeadlineExceeded), errors.Join(rpc.ErrNotWritten, context.Canceled)} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			s, posts, calls := cotHub(t, false)
+			r, _ := cotRun(s)
+			withCot(s, r)
+			feishuSink{s}.progress(context.Background(), r, time.Second, nil, "")
+			s.hub.(*fakeHub).answerApp(AppFeishu, FeishuCotAppend, func(json.RawMessage) (any, error) { return nil, feishuAPIError(99991400) })
+			n := 0
+			s.hub.(*fakeHub).answerApp(AppFeishu, FeishuCotComplete, func(json.RawMessage) (any, error) {
+				n++
+				if n < 3 {
+					return nil, failure
+				}
+				*calls = append(*calls, "complete")
+				return map[string]any{}, nil
+			})
+			s.finishChannelRun(r, &channel.Result{Answer: "结论"})
+			if n != 3 || !strings.HasSuffix(strings.Join(*calls, " "), "complete") || len(*posts) != 1 {
+				t.Fatalf("tries %d, calls %v, posts %v", n, *calls, *posts)
+			}
+		})
 	}
 }

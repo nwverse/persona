@@ -1,8 +1,9 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
-/// The plugins' UI slots (docs/extensions/extensions.md「UI 插槽」): what the hub lists and the app keeps (entries, cards, badges),
+/// The plugins' UI slots (docs/extensions/extensions.md「UI slots」): what the hub lists and the app keeps (entries, cards, badges),
 /// the new items (chart, stat_grid), refresh_after, and the plugin_ui event.
 @MainActor struct ExtensionSlotsModelTests {
     private static let all = #"""
@@ -49,6 +50,14 @@ import Testing
         #expect(m.context.size == "compact" && s.model(for: s.cards[0]) === m)
     }
 
+    @Test func slotsWithTheSameLocalIDHaveDistinctListIdentities() throws {
+        let slots = try JSON.decoder.decode([ExtensionUIPlace].self, from: Data(
+            #"[{"extension":"example-a","id":"status","title":"A","placement":"overview_card"},{"plugin":"example-b","id":"status","title":"B","placement":"overview_card"}]"#.utf8
+        ))
+        #expect(slots.map(\.id) == ["status", "status"])
+        #expect(slots.map(\.scopedID) == ["example-a/status", "example-b/status"])
+    }
+
     @Test func anOlderHubIsNotAsked() async throws {
         let hub = FakeHub()
         let s = slots(hub, features: ["plugins", "plugin_manager"])
@@ -92,7 +101,7 @@ import Testing
         #expect(hub.sent("GET", "/api/v1/extensions/-/ui").count == 1)
         #expect(hub.sent("GET", "/api/v1/plugins/-/ui").isEmpty)
         let data = Data(#"{"type":"extension_ui","extension":"example-gateway","id":"usage","badge":{"text":"4","tone":"positive"}}"#.utf8)
-        guard case .pluginBadge(let owner, let id, let badge)? = ServerEvent.decode(data) else {
+        guard case .pluginBadge(let owner, let id, let badge, _)? = ServerEvent.decode(data) else {
             Issue.record("The extension badge event was not decoded"); return
         }
         s.received(plugin: owner, id: id, badge: badge)
@@ -183,7 +192,7 @@ import Testing
         // The context: the machine, the card's size, the app's time zone, platform and UI version.
         let body = try JSON.decoder.decode(JSONValue.self, from: hub.sent("POST", "/api/v1/plugins/example-gateway/-/ui/today")[0].body ?? Data())
         #expect(body["context"]?["machine"] == .string("macbook") && body["context"]?["size"] == .string("compact"))
-        #expect(body["context"]?["ui_version"] == .number(3))
+        #expect(body["context"]?["ui_version"] == .number(11), "a card is drawn by the app's renderer (cardVersion)")
 
         // refresh_after: due that long after it was drawn; drawn again, what the user typed stays.
         #expect(v.refreshAfter == 300)
@@ -207,10 +216,10 @@ import Testing
 
     @Test func theExtensionUIEvent() throws {
         let set = ServerEvent.decode(Data(#"{"type":"plugin_ui","plugin":"example-gateway","id":"usage","badge":{"text":"3","tone":"danger"}}"#.utf8))
-        guard case .pluginBadge(let plugin, let id, let badge)? = set else { Issue.record("not decoded"); return }
+        guard case .pluginBadge(let plugin, let id, let badge, _)? = set else { Issue.record("not decoded"); return }
         #expect(plugin == "example-gateway" && id == "usage" && badge == ExtensionBadge(text: "3", tone: "danger"))
         let cleared = ServerEvent.decode(Data(#"{"type":"plugin_ui","plugin":"example-gateway","id":"usage","badge":null}"#.utf8))
-        guard case .pluginBadge(_, _, let none)? = cleared else { Issue.record("not decoded"); return }
+        guard case .pluginBadge(_, _, let none, _)? = cleared else { Issue.record("not decoded"); return }
         #expect(none == nil)
     }
 

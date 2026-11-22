@@ -1,4 +1,4 @@
-// The mock hub's "Activity" (docs/extensions/extensions.md "Activity"): counts and logs made up from the extension's id, the same on
+// The mock hub's "Activity" (docs/extensions/extensions.md "Runtime status"): counts and logs made up from the extension's id, the same on
 // every load (screenshots), and a log that follows itself with a line every few seconds.
 import { setLogFollower } from "./api";
 import type { ExtensionMetrics, ExtensionOverview, LogLine, LogsPage, MetricsOverview, MetricsWindow } from "./types";

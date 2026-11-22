@@ -16,9 +16,9 @@ import (
 func TestElicitationReachesOnlyCapableApps(t *testing.T) {
 	h := newTestHub(t)
 	legacy := &client{out: make(chan []byte, 32)}
-	h.clients[legacy] = struct{}{}
+	addTestClient(h, legacy)
 	capable := &client{out: make(chan []byte, 32)}
-	h.clients[capable] = struct{}{}
+	addTestClient(h, capable)
 	if h.hasElicitationClient() {
 		t.Fatal("no app said it takes elicitations yet")
 	}

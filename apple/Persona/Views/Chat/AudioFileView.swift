@@ -1,7 +1,7 @@
 import AVFoundation
 import SwiftUI
 
-/// Audio the file viewer plays (docs/apple/ios.md「音频」): what AVFoundation reads on the device.
+/// Audio the file viewer plays (docs/apple/ios.md「File viewer」): what AVFoundation reads on the device.
 nonisolated enum AudioFileType {
     static let extensions: Set<String> = ["mp3", "m4a", "aac", "wav", "flac", "aif", "aiff", "caf", "m4b", "oga", "ogg", "opus"]
 

@@ -77,7 +77,8 @@ import persona.core.navigation.Navigator
  * A thread that is not a chat (a pull request, a notice) or that cannot be read falls back to the item's own page.
  */
 @Composable
-internal fun ConnectorThreadScreen(repository: InboxRepository, connectors: ConnectorsManagement, route: ConnectorThreadRoute, navigator: Navigator) {
+internal fun ConnectorThreadScreen(repository: InboxRepository, connectors: ConnectorsManagement, route: ConnectorThreadRoute, navigator: Navigator,
+    pins: persona.core.contracts.api.ManagerPins? = null) {
     val inbox by repository.snapshot.collectAsStateWithLifecycle()
     val record = inbox.records.inboxRecord(route.itemId)
     val ref = record?.connector
@@ -85,7 +86,9 @@ internal fun ConnectorThreadScreen(repository: InboxRepository, connectors: Conn
         InboxItemDetailScreen(repository, InboxItemDetailRoute(route.itemId), navigator)
         return
     }
-    val model = remember(record.source, ref.thread) { ConnectorThreadModel(connectors, record.source, ref.thread) }
+    val model = remember(record.source, ref.thread, pins) {
+        ConnectorThreadModel(connectors, record.source, ref.thread, pins ?: kotlin.coroutines.EmptyCoroutineContext)
+    }
     val state by model.state.collectAsStateWithLifecycle()
     // Again when the item moves (a new message came in).
     LaunchedEffect(model, record.item.updatedAt) { model.load() }
@@ -96,7 +99,7 @@ internal fun ConnectorThreadScreen(repository: InboxRepository, connectors: Conn
         }
         page == null -> ConnectorThreadUnread(record, state.failure, navigator)
         !page.chat.isChat -> InboxItemDetailScreen(repository, InboxItemDetailRoute(route.itemId), navigator)
-        else -> ConnectorChat(record, model, state, navigator)
+        else -> ConnectorChat(record, model, state, navigator, inbox.contentSource?.transport?.replyImages)
     }
 }
 
@@ -117,7 +120,8 @@ private fun ConnectorThreadUnread(record: InboxRecord, failure: Throwable?, navi
 }
 
 @Composable
-private fun ConnectorChat(record: InboxRecord, model: ConnectorThreadModel, state: ConnectorThreadState, navigator: Navigator) {
+private fun ConnectorChat(record: InboxRecord, model: ConnectorThreadModel, state: ConnectorThreadState, navigator: Navigator,
+    imageSource: persona.core.contracts.api.ReplyImageSource?) {
     val page = state.page ?: return
     val scope = rememberCoroutineScope()
     val list = rememberLazyListState()
@@ -170,7 +174,7 @@ private fun ConnectorChat(record: InboxRecord, model: ConnectorThreadModel, stat
                         })
                     } else if (page.messages.isEmpty()) {
                         Text(stringResource(R.string.inbox_connector_empty), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3,
-                            modifier = Modifier.padding(vertical = Tokens.Space.xxl))
+                            modifier = Modifier.padding(vertical = Tokens.Space.xl))
                     }
                     problem?.let { JNotice(it, Modifier.padding(vertical = Tokens.Space.s)) }
                     if (page.chat.reply.isNullOrBlank()) {
@@ -180,7 +184,7 @@ private fun ConnectorChat(record: InboxRecord, model: ConnectorThreadModel, stat
                 }
             }
             items(page.messages, key = { it.id }) { message ->
-                ConnectorMessageRow(message, lit = message.id == lit, canReply = !page.chat.reply.isNullOrBlank(),
+                ConnectorMessageRow(message, imageSource, lit = message.id == lit, canReply = !page.chat.reply.isNullOrBlank(),
                     onQuote = { id -> jump(id) }, onReply = { replyTo = message })
             }
         }
@@ -203,6 +207,7 @@ private fun chatHeadline(chat: ConnectorThreadChat): String? {
 @Composable
 private fun ConnectorMessageRow(
     message: ConnectorThreadMessage,
+    imageSource: persona.core.contracts.api.ReplyImageSource?,
     lit: Boolean,
     canReply: Boolean,
     onQuote: (String) -> Unit,
@@ -227,14 +232,16 @@ private fun ConnectorMessageRow(
             Spacer(Modifier.height(Tokens.Space.s))
         }
         message.media.forEach { MediaPlaceholder(it) }
-        message.text?.takeIf { it.isNotBlank() }?.let { Text(it, style = PersonaTheme.type.body, color = palette.ink) }
+        message.text?.takeIf { it.isNotBlank() }?.let { text ->
+            InboxPictureText(text, imageSource)
+        }
     }
     val highlight = if (lit) Modifier.background(palette.statusSurface) else Modifier
     Box(highlight.padding(horizontal = Tokens.Space.l)) {
         if (message.mine) UserBubbleFrame(footer = footer) { body() }
         else IncomingBubbleFrame(
             author = message.sender.name.ifBlank { null }, time = time.ifEmpty { null },
-            avatar = { JAvatar(message.sender.name.ifBlank { "?" }, size = Tokens.Space.xxxl) }, footer = footer,
+            avatar = { JAvatar(message.sender.name.ifBlank { "?" }, size = Tokens.Space.xxl) }, footer = footer,
         ) { body() }
     }
 }
@@ -251,7 +258,7 @@ private fun QuoteBlock(from: String?, text: String?, onClick: (() -> Unit)?) {
             .padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.s),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.width(Tokens.Space.xxs).height(Tokens.Space.xxl).background(palette.line))
+        Box(Modifier.width(Tokens.Space.xxs).height(Tokens.Space.xl).background(palette.line))
         Spacer(Modifier.width(Tokens.Space.s))
         JIcon(PhIcons.Quotes, null, size = Tokens.Space.l, tint = palette.ink3)
         Spacer(Modifier.width(Tokens.Space.s))

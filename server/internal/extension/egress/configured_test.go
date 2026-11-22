@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -167,5 +168,114 @@ func TestConfiguredTargetRefusesInside(t *testing.T) {
 	}
 	if !strings.Contains(errNotForSettings.Error(), "metadata") {
 		t.Fatal(errNotForSettings)
+	}
+}
+
+// Through the hub's upstream proxy, a configured name is reached at the address checked: the CONNECT names that
+// address, never the name, which the proxy could resolve again to this machine or the metadata service (#3121).
+// One refused answer still refuses the name, and the proxy is not asked at all.
+func TestConfiguredDialPinsUpstreamCONNECT(t *testing.T) {
+	var mu sync.Mutex
+	var targets []string
+	answers := map[string][]net.IP{
+		"api.example.com":   {net.ParseIP("192.0.2.1")},
+		"mixed.example.com": {net.ParseIP("192.0.2.1"), net.IPv4(169, 254, 169, 254)},
+	}
+	p := &Proxy{
+		Resolve:  func(_ context.Context, host string) ([]net.IP, error) { return answers[host], nil },
+		Upstream: func(*url.URL) (*url.URL, error) { return url.Parse("http://proxy.example.com:3128") },
+		Dial: func(_ context.Context, _, addr string) (net.Conn, error) {
+			if addr != "proxy.example.com:3128" {
+				t.Errorf("dialled %s, not the proxy", addr)
+			}
+			near, far := net.Pipe()
+			go func() {
+				defer far.Close()
+				r, err := http.ReadRequest(bufio.NewReader(far))
+				if err != nil {
+					return
+				}
+				mu.Lock()
+				targets = append(targets, r.Method+" "+r.Host)
+				mu.Unlock()
+				_, _ = io.WriteString(far, "HTTP/1.1 200 Connection established\r\n\r\n")
+				_, _ = io.Copy(io.Discard, far)
+			}()
+			return near, nil
+		},
+	}
+	ctx := context.Background()
+	c, err := p.dialConfigured(ctx, "api.example.com", "443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	mu.Lock()
+	got := append([]string(nil), targets...)
+	mu.Unlock()
+	if len(got) != 1 || got[0] != "CONNECT 192.0.2.1:443" {
+		t.Fatalf("upstream asked %v, want [CONNECT 192.0.2.1:443]", got)
+	}
+	if _, err := p.dialConfigured(ctx, "mixed.example.com", "443"); !errors.Is(err, errNotForSettings) {
+		t.Fatalf("mixed answer: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(targets) != 1 {
+		t.Fatalf("upstream asked %v after a refused name", targets)
+	}
+}
+
+// A loopback address in a configured target lets through that loopback port only (via LocalHost or literal loopback),
+// and refuses other loopback ports, the proxy's own port and the hub's port.
+func TestConfiguredLoopbackTarget(t *testing.T) {
+	srv := newEcho(t)
+	_, port, err := net.SplitHostPort(srv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &Proxy{HubAddr: "127.0.0.1:18660"}
+	if err := p.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Close)
+	_, ownPort, _ := net.SplitHostPort(p.Addr())
+
+	for _, targetHost := range []string{"127.0.0.1", "localhost"} {
+		purl := p.Register("aster", Rule{Targets: []Target{{Host: targetHost, Port: port, HTTP: true}}})
+		c := client(purl)
+		resp, err := c.Get("http://" + LocalHost + ":" + port + "/me/usage")
+		if err != nil {
+			t.Fatalf("%s via LocalHost: %v", targetHost, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s via LocalHost: status %d", targetHost, resp.StatusCode)
+		}
+		for _, forbiddenPort := range []string{"9", ownPort, "18660"} {
+			resp, err := c.Get("http://" + LocalHost + ":" + forbiddenPort + "/me/usage")
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("%s port %s: status %d, want 403", targetHost, forbiddenPort, resp.StatusCode)
+			}
+		}
+	}
+	if ln6, err := net.Listen("tcp6", "[::1]:0"); err == nil {
+		srv6 := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "ok") })}
+		go srv6.Serve(ln6)
+		t.Cleanup(func() { srv6.Close() })
+		_, port6, _ := net.SplitHostPort(ln6.Addr().String())
+		purl := p.Register("aster6", Rule{Targets: []Target{{Host: "::1", Port: port6, HTTP: true}}})
+		resp, err := client(purl).Get("http://" + LocalHost + ":" + port6 + "/me/usage")
+		if err != nil {
+			t.Fatalf("::1 via LocalHost: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("::1 via LocalHost: status %d", resp.StatusCode)
+		}
 	}
 }

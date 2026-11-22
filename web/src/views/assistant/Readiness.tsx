@@ -1,19 +1,33 @@
 // What the main conversation still needs, above its composer (docs/assistant/onboarding.md 4.4): the first missing step as a card
 // (a title, one line why, one button), the "chat only" note, a refused start or send as a card with the original text under
-// "Details" (4.6), and the help those buttons and the local example questions open in place. "Add computer" and "Confirm computer" open the
+// "Error details" (4.6), and the help those buttons and the local example questions open in place (ReadinessHelp.tsx, a chunk of
+// its own). "Add computer" and "Confirm computer" open the
 // machines page's own flow (views/machines/AddComputer.tsx) in place where the hub has it (machines_add, machine_trust).
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { canAddComputer, canConfirmComputer, pendingToConfirm } from "../../lib/add-computer";
+import { mainConversationMachine } from "../../lib/feed-cache";
+import { requestModelPicker } from "../../lib/model-switch";
 import {
-  actionLabel, ADMIN_MACHINES, blockingStep, knownAction, readinessChanged, runAction, sendLabel, useReadiness, type CodedFailure, type HelpTopic,
-  type Readiness, type ReadinessStep,
+  actionLabel, blockingStep, knownAction, readinessChanged, refreshReadiness, retryWhileBlocked, runAction, sendLabel, stepActions, useReadiness, type CodedFailure,
+  type HelpTopic, type Readiness, type ReadinessStep,
 } from "../../lib/readiness";
 import { navigate } from "../../lib/router";
-import { getState, useStore } from "../../lib/store";
-import { AddComputer, type PendingComputer } from "../machines/AddComputer";
-import { Button, Collapse, copyText, cx, Dialog, IconButton } from "../../ui/atoms";
+import { getSession, getState, useStore } from "../../lib/store";
+import { assistantPickerKey } from "../chat/ModelPill";
+import type { PendingComputer } from "../machines/AddComputer";
+import { lazyDialog, lazyOverlay } from "../LazyOverlay";
+import { Button, copyText, cx } from "../../ui/atoms";
+import { ErrorDetailsText, ErrorNotice } from "../../ui/ErrorNotice";
 import { Icon, type IconName } from "../../ui/icons";
 import { t } from "../../i18n";
+
+// the machines page's dialog loads on its first open, not with the main conversation
+const AddComputer = lazyDialog(() => import("../machines/AddComputer").then((m) => m.AddComputer));
+
+/** The help a card's button or a local example question opens (ReadinessHelp.tsx): its chunk loads once something that
+ *  opens it is on screen (useReadinessGate, FailureCard), so the tap draws it at once; elsewhere on the first open. */
+export const HelpDialog = lazyOverlay(() => import("./ReadinessHelp").then((m) => m.HelpDialog));
+const preloadHelp = () => void HelpDialog.preload().catch(() => {});
 
 // ── the gate ────────────────────────────────────────────
 
@@ -29,15 +43,21 @@ export interface ReadinessGate {
   help: (topic: HelpTopic) => void;
   /** "Confirm computer": the confirm screen of the computer waiting to be confirmed (the machines page on an older hub). */
   confirm: () => void;
-  /** "Try it" is running (the hub's probe takes up to ~30 s). */
+  /** "Try it" is running (the hub gives it up to PROBE_HUB_MS: the one-word check, then the self-check). */
   probing: boolean;
+  /** The last "Try it" got no answer: why ("" none). It stands in for the try's result. */
+  probeError: string;
+  /** Another model was picked for the main chat since its model step said it can't run that one: "Try it" leads (stepActions). */
+  picked?: boolean;
+  /** "Choose another model": opens the main chat's own model panel; false when it has none (runAction then opens Settings › Models). */
+  onPickModel?: () => boolean;
   /** The help dialog and the add / confirm computer flow, to render once beside the card. */
   dialog: React.ReactNode;
 }
 
 /** The main conversation's gate: the readiness, its card's step, the send button's stand-in and the help dialog. */
 export function useReadinessGate(on = true): ReadinessGate {
-  const { readiness, probing } = useReadiness(on);
+  const { readiness, probing, probeError } = useReadiness(on);
   const [topic, setTopic] = useState<HelpTopic | null>(null);
   // the add computer flow: a new one ({}), or the one waiting to be confirmed
   const [computer, setComputer] = useState<{ confirm?: PendingComputer } | null>(null);
@@ -56,12 +76,37 @@ export function useReadinessGate(on = true): ReadinessGate {
     if (m) setComputer({ confirm: { id: m.id, name: m.name } });
     else navigate("/machines");
   };
-  const act = (id: string) => runAction(id, { launcher: step?.launcher, onHelp: help, onConfirm: confirm });
+  // the main chat's own model panel, its pill's (read on the click, as the machine list is)
+  const onPickModel = () => {
+    const a = getState().assistant;
+    return Boolean(a?.main) && requestModelPicker(assistantPickerKey(mainConversationMachine(a)!, a!.main!));
+  };
+  const act = (id: string) => runAction(id, { launcher: step?.launcher, onHelp: help, onConfirm: confirm, onPickModel });
+  // A model the main chat can't run: a pick of another one (here, in its model error's Fix it, in its pill) is what "Try it"
+  // checks next. The pick it had when the step came up, or when its last try ended, is the one already tried.
+  const route = step?.code === "model_route";
+  const pick = useStore((s) => (route && s.assistant?.main ? JSON.stringify(getSession(mainConversationMachine(s.assistant)!, s.assistant.main)?.model_pick) : ""));
+  const [[wasRoute, wasProbing, tried], setTried] = useState([route, probing, pick] as const);
+  if (wasRoute !== route || wasProbing !== probing) setTried([route, probing, probing && wasRoute === route ? tried : pick]);
+  const picked = route && pick !== tried;
+  const [main] = step ? stepActions(step, picked) : [];
+  // a step can be done without this page hearing of it: ask again while it holds the button, and at once when the user tries
+  const isBlocked = Boolean(step);
+  useEffect(() => (isBlocked ? retryWhileBlocked() : undefined), [isBlocked]);
+  // something that opens the help is on screen: a step's card, the chat-only note, a local example question
+  const helpNear = isBlocked || r?.mode === "chat_only" || Boolean(r?.suggestions?.some((x) => x.local));
+  useEffect(() => (helpNear ? preloadHelp() : undefined), [helpNear]);
   const blocked = step
     ? {
-        label: sendLabel(step),
-        onClick: step.action && knownAction(step.action.id) ? () => act(step.action!.id) : undefined,
-        onNudge: () => setNudged((n) => n + 1),
+        label: sendLabel(step, main),
+        onClick: () => {
+          void refreshReadiness({ force: true });
+          if (main) act(main);
+        },
+        onNudge: () => {
+          void refreshReadiness({ force: true });
+          setNudged((n) => n + 1);
+        },
       }
     : undefined;
   return {
@@ -72,6 +117,9 @@ export function useReadinessGate(on = true): ReadinessGate {
     help,
     confirm,
     probing: on && probing,
+    probeError: on ? probeError : "",
+    picked,
+    onPickModel,
     dialog: (
       <>
         {topic && <HelpDialog topic={topic} machine={machine} step={step} onClose={() => setTopic(null)} onAction={act} />}
@@ -102,9 +150,8 @@ function stepIcon(step: ReadinessStep): IconName {
 export function ReadinessCard({ gate }: { gate: ReadinessGate }) {
   const step = gate.step;
   if (!step) return null;
-  const act = (id: string) => runAction(id, { launcher: step.launcher, onHelp: gate.help, onConfirm: gate.confirm });
-  const main = step.action && knownAction(step.action.id) ? step.action.id : undefined;
-  const alts = (step.alt_actions ?? []).map((a) => a.id).filter((id) => knownAction(id) && id !== main);
+  const act = (id: string) => runAction(id, { launcher: step.launcher, onHelp: gate.help, onConfirm: gate.confirm, onPickModel: gate.onPickModel });
+  const [main, alts] = stepActions(step, gate.picked);
   const problem = step.state === "problem";
   const probe = gate.readiness?.probe;
   return (
@@ -125,10 +172,17 @@ export function ReadinessCard({ gate }: { gate: ReadinessGate }) {
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="text-[13.5px] font-semibold text-ink">{step.title || t("assistant-readiness.one_more_step")}</span>
         {step.detail && <span className="text-[12.5px] leading-relaxed text-ink-2">{step.detail}</span>}
-        {probe && !gate.probing && (
-          <span data-testid="readiness-probe" className={cx("text-[12.5px] leading-relaxed", probe.ok ? "text-ink-2" : "text-red")}>
-            {probe.ok ? t("assistant-readiness.probe_ok", { answer: probe.answer ?? "" }) : t("assistant-readiness.probe_failed", { error: probe.error ?? "" })}
+        {gate.probeError && !gate.probing ? (
+          <span data-testid="readiness-probe" data-failed="" className="text-[12.5px] leading-relaxed text-red">
+            {t("assistant-readiness.probe_failed", { error: gate.probeError })}
           </span>
+        ) : (
+          probe &&
+          !gate.probing && (
+            <span data-testid="readiness-probe" className={cx("text-[12.5px] leading-relaxed", probe.ok ? "text-ink-2" : "text-red")}>
+              {probe.ok ? t("assistant-readiness.probe_ok", { answer: probe.answer ?? "" }) : t("assistant-readiness.probe_failed", { error: probe.error ?? "" })}
+            </span>
+          )
         )}
         {(main || alts.length > 0) && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -165,173 +219,39 @@ export function ChatOnlyNote({ gate }: { gate: ReadinessGate }) {
 
 // ── a refused start or send ─────────────────────────────
 
-/** A start or a send that did not go: the hub's words, a button for its code, the original under "Details" (4.6). */
-/** `onRetry`: a send that did not go and is back in the box (#4270): a "Send again" button that sends the box again. */
-export function FailureCard({ failure, onClose, onHelp, onConfirm, onRetry }: { failure: CodedFailure; onClose: () => void; onHelp: (topic: HelpTopic) => void; onConfirm?: () => void; onRetry?: () => void }) {
-  const [open, setOpen] = useState(false);
+/** A start or a send that did not go: the hub's words, a button for its code, the original under "Error details" (4.6).
+ *  A send's own Retry is its failed bubble's, in the chat above: the card has none, so there is one way to send again. */
+export function FailureCard({ failure, onClose, onHelp, onConfirm }: { failure: CodedFailure; onClose: () => void; onHelp: (topic: HelpTopic) => void; onConfirm?: () => void }) {
   const action = failure.action && knownAction(failure.action) ? failure.action : undefined;
+  useEffect(() => (action ? preloadHelp() : undefined), [action]);
   const raw = [failure.detail, failure.requestId && t("assistant-readiness.request_id", { id: failure.requestId })].filter(Boolean).join("\n");
+  // the same error notice as a model error over the composer (#5313): the hub's sentence, its buttons, the original
+  // folded under Error details, and ✕
   return (
-    <div role="alert" data-testid="readiness-failure" data-code={failure.code} className="flex flex-col gap-2 rounded-card bg-red-tint px-3.5 py-3" style={{ animation: "fade-up 200ms ease-out both" }}>
-      <div className="flex items-start gap-2">
-        <Icon name="warning" size={14} stroke={2.2} className="mt-[3px] shrink-0 text-red" />
-        <span className="min-w-0 flex-1 text-[13px] leading-relaxed font-medium text-ink">{failure.error}</span>
-        <IconButton icon="x" label={t("assistant-readiness.close")} onClick={onClose} size={24} iconSize={12} />
-      </div>
-      <div className="flex flex-wrap items-center gap-1.5 pl-[22px]">
-        {onRetry && (
-          <Button tone={action ? "quiet" : "primary"} onClick={onRetry}>
-            {t("assistant-readiness.resend")}
-          </Button>
-        )}
-        {action && (
-          <Button tone="primary" onClick={() => runAction(action, { launcher: failure.launcher, onHelp, onConfirm })}>
+    <ErrorNotice
+      role="alert"
+      data-testid="readiness-failure"
+      data-code={failure.code}
+      message={failure.error}
+      onDismiss={onClose}
+      actions={
+        action && (
+          <Button tone="primary" size="sm" className="touch-hit" onClick={() => runAction(action, { launcher: failure.launcher, onHelp, onConfirm })}>
             {actionLabel(action)}
           </Button>
-        )}
-        {raw && (
-          <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)} className="flex h-8 items-center gap-1 rounded-control px-2 text-[12px] font-medium whitespace-nowrap text-ink-2 hover:bg-hover">
-            {t("assistant-readiness.details")}
-            <Icon name="chevron" size={12} stroke={2.2} className="transition-transform duration-200" style={{ transform: open ? "rotate(180deg)" : "none" }} />
-          </button>
-        )}
-      </div>
-      {raw && (
-        <Collapse open={open}>
-          <div className="flex flex-col gap-1.5 pt-0.5 pl-[22px]">
-            <pre className="max-h-48 overflow-auto rounded-[8px] bg-surface px-2.5 py-2 font-mono text-[11.5px] leading-[1.6] whitespace-pre-wrap text-ink-2 shadow-hairline [overflow-wrap:anywhere]">{raw}</pre>
-            <button type="button" onClick={() => void copyText(raw)} className="flex w-fit items-center gap-1 text-[12px] font-medium whitespace-nowrap text-accent-ink hover:underline">
+        )
+      }
+      details={
+        raw ? (
+          <div className="flex flex-col gap-1.5">
+            <ErrorDetailsText text={raw} />
+            <button type="button" onClick={() => void copyText(raw)} className="touch-hit flex w-fit items-center gap-1 text-[12px] font-medium whitespace-nowrap text-accent-ink hover:underline">
               <Icon name="copy" size={12} />
               {t("assistant-readiness.copy_details")}
             </button>
           </div>
-        </Collapse>
-      )}
-    </div>
+        ) : undefined
+      }
+    />
   );
-}
-
-// ── help ────────────────────────────────────────────────
-
-/** A command to copy in the help (what to type on that computer). */
-function Command({ text }: { text: string }) {
-  return (
-    <div className="mt-2 flex items-center gap-2 rounded-[8px] bg-inset px-2.5 py-1.5 shadow-hairline">
-      <code className="min-w-0 flex-1 font-mono text-[12px] break-all text-ink">{text}</code>
-      <IconButton icon="copy" label={t("assistant-readiness.copy")} onClick={() => void copyText(text)} size={24} iconSize={12} />
-    </div>
-  );
-}
-
-function P({ children }: { children: React.ReactNode }) {
-  return <p className="text-[13px] leading-relaxed text-ink-2">{children}</p>;
-}
-
-/** How to install Claude Code on that computer: the line to paste in its terminal (the help dialog, the provider wizard). */
-export function InstallClaudeHelp({ machine }: { machine: string }) {
-  return (
-    <div>
-      <P>{t("assistant-readiness.help_install_body", { machine: machine || t("assistant-readiness.that_computer") })}</P>
-      {/* i18n-ignore: Claude Code's own installer, typed as it is */}
-      <Command text="curl -fsSL https://claude.ai/install.sh | bash" />
-      <p className="mt-2 text-[12px] leading-relaxed text-ink-3">{t("assistant-readiness.help_install_after")}</p>
-    </div>
-  );
-}
-
-/** The help a card's button or a local example question opens (wake, install, sign in, add a computer, what Persona
- *  does, how to connect a model): local words, nothing sent to the model. */
-/** Without `onAction` the help is only words (no "Use an API key instead"). */
-export function HelpDialog({ topic, machine, step, onClose, onAction }: { topic: HelpTopic; machine: string; step: ReadinessStep | null; onClose: () => void; onAction?: (id: string) => void }) {
-  const where = machine || t("assistant-readiness.that_computer");
-  const then = (id: string) => {
-    onClose();
-    onAction?.(id);
-  };
-  const useKey = onAction ? <Button tone="secondary" onClick={() => then("connect_model")}>{t("assistant-readiness.use_api_key")}</Button> : undefined;
-  const footer = (main?: React.ReactNode) => (
-    <>
-      <Button tone="quiet" onClick={onClose}>
-        {t("assistant-readiness.got_it")}
-      </Button>
-      {main}
-    </>
-  );
-  switch (topic) {
-    case "add_computer":
-      return (
-        <Dialog open onClose={onClose} title={t("assistant-readiness.help_add_title")} footer={footer(<Button tone="primary" href={ADMIN_MACHINES} icon="external">{t("assistant-readiness.open_admin_machines")}</Button>)}>
-          <div className="flex flex-col gap-2">
-            <P>{t("assistant-readiness.help_add_why")}</P>
-            <P>{t("assistant-readiness.help_add_how")}</P>
-            <p className="text-[12px] leading-relaxed text-ink-3">{t("assistant-readiness.help_add_note")}</p>
-          </div>
-        </Dialog>
-      );
-    case "wake_computer":
-      return (
-        <Dialog open onClose={onClose} title={t("assistant-readiness.help_wake_title", { machine: where })} footer={footer()}>
-          <div className="flex flex-col gap-2">
-            <P>{t("assistant-readiness.help_wake_body", { machine: where })}</P>
-            <P>{t("assistant-readiness.help_wake_after")}</P>
-          </div>
-        </Dialog>
-      );
-    case "install_claude":
-      return (
-        <Dialog open onClose={onClose} title={t("assistant-readiness.help_install_title")} footer={footer(useKey)}>
-          <InstallClaudeHelp machine={machine} />
-        </Dialog>
-      );
-    case "login_claude":
-      return (
-        <Dialog open onClose={onClose} title={t("assistant-readiness.help_login_title")} footer={footer(useKey)}>
-          <P>{t("assistant-readiness.help_login_body", { machine: where })}</P>
-          <Command text="claude" />
-          <p className="mt-2 text-[12px] leading-relaxed text-ink-3">{t("assistant-readiness.help_login_after")}</p>
-        </Dialog>
-      );
-    case "what_can_you_do":
-      return (
-        <Dialog open onClose={onClose} title={t("assistant-readiness.help_what_title")} footer={footer(step?.action && knownAction(step.action.id) ? <Button tone="primary" onClick={() => then(step.action!.id)}>{actionLabel(step.action.id)}</Button> : undefined)}>
-          <div className="flex flex-col gap-2">
-            <P>{t("assistant-readiness.help_what_body")}</P>
-            <ul className="flex list-disc flex-col gap-1 pl-5 text-[13px] leading-relaxed text-ink-2">
-              <li>{t("assistant-readiness.help_what_computer")}</li>
-              <li>{t("assistant-readiness.help_what_data")}</li>
-              <li>{t("assistant-readiness.help_what_memory")}</li>
-            </ul>
-            {step && <p className="text-[12px] leading-relaxed text-ink-3">{t("assistant-readiness.help_what_missing", { step: step.title || sendLabel(step) })}</p>}
-          </div>
-        </Dialog>
-      );
-    case "how_to_connect_model": {
-      // an API key alone does not make the main conversation work: it still runs on a computer (#4480), so with none
-      // the first thing to do is add one
-      // only "add a computer" when there is none: an offline, unconfirmed or outdated one is the same step with its own
-      // action (wake / confirm / update), and adding a second computer would not help
-      const computerStep = step?.id === "computer" ? step : undefined;
-      const computerAction = computerStep?.action && knownAction(computerStep.action.id) ? computerStep.action.id : undefined;
-      const noComputer = computerStep !== undefined && (computerAction === "add_computer" || (!computerAction && computerStep.code === "no_machine"));
-      const main = noComputer ? "add_computer" : computerAction ?? "connect_model";
-      return (
-        <Dialog open onClose={onClose} title={t("assistant-readiness.help_model_title")} footer={footer(<Button tone="primary" onClick={() => then(main)}>{actionLabel(main)}</Button>)}>
-          <div className="flex flex-col gap-2">
-            <P>{t("assistant-readiness.help_model_body")}</P>
-            <ol className="flex list-decimal flex-col gap-1 pl-5 text-[13px] leading-relaxed text-ink-2">
-              <li>{t("assistant-readiness.help_model_key")}</li>
-              <li>{t("assistant-readiness.help_model_claude")}</li>
-            </ol>
-            <div data-testid="help-model-computer" className="flex flex-col gap-1 text-[12.5px] leading-relaxed">
-              <p className="text-ink-2">{t("assistant-readiness.help_model_computer")}</p>
-              {noComputer && <p className="font-medium text-ink">{t("assistant-readiness.help_model_no_computer")}</p>}
-              {computerStep && !noComputer && (
-                <p className="font-medium text-ink">{t("assistant-readiness.help_model_computer_not_ready", { step: computerStep.title || sendLabel(computerStep) })}</p>
-              )}
-            </div>
-          </div>
-        </Dialog>
-      );
-    }
-  }
 }

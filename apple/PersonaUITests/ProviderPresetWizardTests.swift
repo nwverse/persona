@@ -166,6 +166,32 @@ final class ProviderPresetWizardTests: XCTestCase {
         }
     }
 
+    /// A Responses direct API is testable, but cannot run the main conversation or Agents (#2223).
+    @MainActor func testDirectAPIKeyAndDone() throws {
+        for scheme in ["light", "dark"] {
+            try scenario("MOCK_READINESS=zero")
+            let app = try launch(scheme: scheme)
+            openPick(app)
+            reveal(app, "wizard.preset.builtin/grok")
+            element(app, "wizard.preset.builtin/grok").tap()
+            let key = app.secureTextFields["wizard.preset.key"].firstMatch
+            let field = key.waitForExistence(timeout: 5) ? key : app.textFields["wizard.preset.key"].firstMatch
+            XCTAssertTrue(field.waitForExistence(timeout: 5))
+            XCTAssertFalse(app.switches["wizard.assign"].exists, "a direct API must not offer assign")
+            XCTAssertTrue(text(app, "主对话和 Agent 不能用它").waitForExistence(timeout: 5), "no direct-API note:\n\(app.debugDescription)")
+            field.tap()
+            field.typeText("sk-demo-0123456789")
+            XCTAssertTrue(text(app, "连接正常").waitForExistence(timeout: 10), "a Responses key was not tested:\n\(app.debugDescription)")
+            shot(app, "direct-key-\(scheme)")
+            app.buttons["wizard.save"].tap()
+            XCTAssertTrue(element(app, "wizard.doneResult").waitForExistence(timeout: 10), "no result:\n\(app.debugDescription)")
+            XCTAssertTrue(text(app, "主对话和 Agent 不能用它").exists)
+            XCTAssertFalse(text(app, "要让主对话或 Agent 用它").exists, "the done step still asks for an incompatible model assignment")
+            shot(app, "direct-done-\(scheme)")
+            app.terminate()
+        }
+    }
+
     /// C: where each provider gives out keys; Sign Up opens its page in the app, and closing it leads to its key.
     @MainActor func testWhereToGetAModel() throws {
         for scheme in ["light", "dark"] {
@@ -176,6 +202,7 @@ final class ProviderPresetWizardTests: XCTestCase {
             element(app, "wizard.path.get").tap()
             let go = app.buttons["wizard.get.builtin/deepseek"]
             XCTAssertTrue(go.waitForExistence(timeout: 5), "no list:\n\(app.debugDescription)")
+            XCTAssertFalse(element(app, "wizard.get.builtin/grok").exists, "a direct API cannot satisfy 「Where to get a model」")
             shot(app, "get-\(scheme)")
             // The signup page opens in the app's link sheet; closing it goes on to the provider's key.
             go.tap()

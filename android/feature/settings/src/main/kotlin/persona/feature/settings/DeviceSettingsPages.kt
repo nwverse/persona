@@ -10,11 +10,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.core.contracts.api.*
 import kotlinx.coroutines.launch
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import java.time.LocalTime
+import java.time.ZoneId
+import java.time.format.TextStyle
 
 @Composable
 internal fun DevicesPage(
@@ -25,8 +29,20 @@ internal fun DevicesPage(
     /** "Connect a new device"'s hub calls (a code for another device); null where it cannot be made (demo mode). */
     connect: DeviceSettings? = null,
 ) {
+    val features = LocalHubFeatures.current
+    val feedback = LocalAppFeedback.current
+    val invalidBrowserLogin = stringResource(R.string.settings_browser_login_invalid)
+    var loginRequest by remember { mutableStateOf<BrowserLoginRequest?>(null) }
+    val scanner = androidx.activity.compose.rememberLauncherForActivityResult(com.journeyapps.barcodescanner.ScanContract()) { result ->
+        result.contents?.let { value ->
+            val request = browserLoginRequest(value)
+            if (request != null) loginRequest = request
+            else feedback?.notice(invalidBrowserLogin)
+        }
+    }
     val state by controller.state.collectAsState()
     val scope = rememberCoroutineScope()
+    loginRequest?.let { request -> if (connect != null) BrowserLoginApproval(connect, request, scope) { if (loginRequest == request) loginRequest = null } }
     var pending by remember { mutableStateOf<PairedDevice?>(null) }
     var connecting by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(controller) { if (available) controller.loadDevices() }
@@ -37,6 +53,13 @@ internal fun DevicesPage(
     JListPage(title = stringResource(R.string.settings_devices_title), onBack = onBack) {
         if (!available) item { JEmptyState(stringResource(R.string.settings_devices_unavailable), stringResource(R.string.settings_check_pairing_and_hub)) }
         else {
+            if (connect != null && "browser_qr_login" in features) item("scan-browser") {
+                JButton(stringResource(R.string.settings_browser_login_scan), {
+                    scanner.launch(com.journeyapps.barcodescanner.ScanOptions().setCaptureActivity(PairingScanActivity::class.java)
+                        .addExtra(PairingScanActivity.DisablePhoto, true)
+                        .setOrientationLocked(false).setDesiredBarcodeFormats(com.journeyapps.barcodescanner.ScanOptions.QR_CODE).setPrompt("").setBeepEnabled(false))
+                }, kind = JButtonKind.Secondary, icon = PersonaIcons.scanCode)
+            }
             if (connect != null) item("connect") {
                 JGroupItem(GroupPosition.Single, Modifier.padding(bottom = Tokens.Space.m)) {
                     JRow(stringResource(R.string.settings_onb_connect_title), leadingIcon = PhIcons.QrCode,
@@ -94,7 +117,12 @@ internal fun NotificationPreferences(
     val state by controller.state.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    LaunchedEffect(controller) { if (available) controller.loadPreferences() }
+    LaunchedEffect(controller) {
+        if (available) {
+            controller.loadPreferences()
+            controller.loadLowDistraction()
+        }
+    }
     // The system's switch for the whole app (iOS: "Notifications are off" first): read again whenever the page comes back.
     var systemOff by remember { mutableStateOf(false) }
     androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
@@ -136,6 +164,7 @@ internal fun NotificationPreferences(
                     prefs.doneDelaySeconds?.let { SettingsCaption(pluralStringResource(R.plurals.settings_notify_done_delay, it, it)) }
                 }
             }
+            if (prefs.quiet != null) quietHoursItems(controller)
             item {
                 JGroupItem(GroupPosition.of(0, 2)) {
                     JSwitchRow(stringResource(R.string.settings_notify_live), prefs.liveActivity, { scope.launch { controller.savePreferences(prefs.copy(liveActivity = it)) } }, enabled = enabled)
@@ -151,6 +180,21 @@ internal fun NotificationPreferences(
             }
         }
         if (prefs?.muteWhileDesktop != null) desktopMuteItems(controller, desktops, onDesktops)
+        else if (desktops.isNotEmpty() && onDesktops != null) item("desktops-presence") {
+            // Older hubs still expose signed-in computers even when phone muting preferences are unavailable.
+            DesktopPresenceRow(desktops, muted = false, selected = false, position = GroupPosition.Single, onClick = onDesktops)
+        }
+        // The hub's switch, for every device (#8157): after this phone's own rows.
+        val lowDistraction = state.lowDistraction?.takeIf { available }
+        if (lowDistraction != null) item("low-distraction") {
+            Column(Modifier.padding(top = Tokens.Space.m)) {
+                JGroupItem(GroupPosition.Single) {
+                    JSwitchRow(stringResource(R.string.settings_notify_low_distraction), lowDistraction, { scope.launch { controller.saveLowDistraction(it) } },
+                        subtitle = stringResource(R.string.settings_notify_low_distraction_subtitle), enabled = enabled)
+                }
+                SettingsCaption(stringResource(R.string.settings_notify_low_distraction_footer), Modifier.padding(horizontal = Tokens.Space.xs, vertical = Tokens.Space.s))
+            }
+        }
         if (available && state.preferences == null) item {
             Action(stringResource(if (state.busy) R.string.settings_reading else R.string.settings_retry_read), enabled = !state.busy) { scope.launch { controller.loadPreferences() } }
         }
@@ -158,12 +202,70 @@ internal fun NotificationPreferences(
     }
 }
 
+/**
+ * This phone's quiet hours (#1863, iOS `quietHoursSection`): a switch, then From / Until. Each change sends only `quiet`, in
+ * this phone's time zone; hours set in another zone say which until they are changed here.
+ */
+private fun LazyListScope.quietHoursItems(controller: DeviceSettingsState) {
+    item("quiet") {
+        val state by controller.state.collectAsState()
+        val scope = rememberCoroutineScope()
+        val quiet = state.preferences?.quiet ?: return@item
+        val enabled = !state.busy && !state.needsCleanup
+        // Which end is being picked: true From, false Until.
+        var picking by remember { mutableStateOf<Boolean?>(null) }
+        val rows = if (quiet.enabled) 3 else 1
+        Column(Modifier.padding(top = Tokens.Space.s)) {
+            JGroupItem(GroupPosition.of(0, rows)) {
+                JSwitchRow(stringResource(R.string.settings_notify_quiet), quiet.enabled, { on -> scope.launch { controller.saveQuietHours(quiet.copy(enabled = on)) } },
+                    subtitle = if (quiet.enabled) null else stringResource(R.string.settings_notify_quiet_off), leadingIcon = PhIcons.Moon, enabled = enabled)
+            }
+            if (quiet.enabled) {
+                JGroupItem(GroupPosition.of(1, rows)) {
+                    JRow(stringResource(R.string.settings_notify_quiet_start), value = quiet.start, enabled = enabled, onClick = { picking = true })
+                }
+                JGroupItem(GroupPosition.of(2, rows)) {
+                    JRow(stringResource(R.string.settings_notify_quiet_end), value = quiet.end, enabled = enabled, onClick = { picking = false })
+                }
+            }
+        }
+        picking?.let { start ->
+            val clock = if (start) quiet.start else quiet.end
+            JTimePickerDialog(QuietHours.minutes(clock)?.let { LocalTime.of(it / 60, it % 60) }, { time ->
+                val next = QuietHours.clock(time.hour * 60 + time.minute)
+                if (next != clock) scope.launch { controller.saveQuietHours(if (start) quiet.copy(start = next) else quiet.copy(end = next)) }
+            }, { picking = null }, title = stringResource(if (start) R.string.settings_notify_quiet_start else R.string.settings_notify_quiet_end))
+        }
+    }
+    item("quiet-note") {
+        val state by controller.state.collectAsState()
+        val zone = state.preferences?.quiet?.tz?.let { elsewhere(it) }
+        SettingsCaption(if (zone != null) stringResource(R.string.settings_notify_quiet_footer_zone, zone) else stringResource(R.string.settings_notify_quiet_footer),
+            Modifier.padding(horizontal = Tokens.Space.xs, vertical = Tokens.Space.s))
+    }
+}
+
+/** The name of [tz] when it isn't this phone's zone (the hours were set somewhere else); null when it is, or unknown. */
 @Composable
-internal fun AboutSettingsPage() {
+private fun elsewhere(tz: String): String? {
+    val zone = runCatching { ZoneId.of(tz) }.getOrNull() ?: return null
+    if (zone.id == ZoneId.systemDefault().id) return null
+    return zone.getDisplayName(TextStyle.FULL, currentLocale)
+}
+
+@Composable
+internal fun AboutSettingsPage(
+    commit: BuildCommit? = rememberBuildCommit(),
+    developing: DevelopingDiagnostics? = null,
+    onExport: () -> Unit = {},
+) {
     val context = LocalContext.current
     val info = remember(context) { context.packageManager.getPackageInfo(context.packageName, 0) }
-    JGroupItem(GroupPosition.of(0, 2)) { JRow(stringResource(R.string.settings_about_version), value = info.versionName ?: stringResource(R.string.settings_not_provided)) }
-    JGroupItem(GroupPosition.of(1, 2)) { JRow(stringResource(R.string.settings_about_build), trailing = { Text("${info.longVersionCode}", style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) }) }
+    val count = if (developing == null) 3 else 4
+    JGroupItem(GroupPosition.of(0, count)) { JRow(stringResource(R.string.settings_about_version), value = info.versionName ?: stringResource(R.string.settings_not_provided)) }
+    JGroupItem(GroupPosition.of(1, count)) { JRow(stringResource(R.string.settings_about_build), trailing = { Text("${info.longVersionCode}", style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) }) }
+    JGroupItem(GroupPosition.of(2, count)) { AboutBuildCommitRow(commit) }
+    developing?.let { DevelopingPersonaAbout(it, GroupPosition.of(3, count), onExport) }
 }
 
 @Composable

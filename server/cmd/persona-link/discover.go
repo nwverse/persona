@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/clitext"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/mdns"
 )
@@ -149,13 +151,13 @@ func discover(e *env, args []string) error {
 		}
 		s, err := strconv.ParseFloat(v, 64)
 		if err != nil || s <= 0 || s > 60 {
-			return fmt.Errorf("--wait %q：要 0 到 60 秒", v)
+			return link.NewTextError("link-cli.discover_wait_invalid", nil, i18n.Args{"value": strconv.Quote(v)})
 		}
 		wait, i = time.Duration(s*float64(time.Second)), next
 	}
 	hubs, err := browseHubs(context.Background(), wait)
 	if err != nil {
-		return fmt.Errorf("在局域网里找不了 hub（mDNS）：%w", err)
+		return link.NewTextError("link-cli.discover_failed", err)
 	}
 	if hubs == nil {
 		hubs = []foundHub{}
@@ -167,8 +169,9 @@ func discover(e *env, args []string) error {
 			return err
 		}
 	} else if len(hubs) == 0 {
-		fmt.Fprintf(e.stdout, "%s内局域网里没听到 hub（mDNS；Docker 桥接网络里的 hub 听不到）。\n", duration(wait))
+		fmt.Fprintln(e.stdout, terminalText("link-cli.discover_none", i18n.Args{"duration": duration(wait)}))
 	} else {
+		// What a hub advertises is any LAN host's text, printed above the installer's question: inert, one line per hub.
 		for _, h := range hubs {
 			name := h.Name
 			if name == "" {
@@ -176,9 +179,9 @@ func discover(e *env, args []string) error {
 			}
 			addr := ""
 			if len(h.Addresses) > 0 {
-				addr = " · " + h.Addresses[0]
+				addr = " · " + clitext.Inert(h.Addresses[0])
 			}
-			fmt.Fprintf(e.stdout, "hub「%s」%s\n", name, addr)
+			fmt.Fprintln(e.stdout, terminalText("link-cli.discover_hub", i18n.Args{"name": clitext.Inert(name), "address": addr}))
 		}
 	}
 	if len(hubs) == 0 {

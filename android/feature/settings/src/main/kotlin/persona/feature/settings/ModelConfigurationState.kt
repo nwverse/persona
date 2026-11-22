@@ -4,6 +4,7 @@ import android.content.res.Resources
 import persona.core.contracts.api.*
 import persona.core.designsystem.UiText
 import persona.core.designsystem.failureReasonText
+import persona.core.domain.models.ModelPanel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,19 +25,28 @@ internal fun summaryWords(res: Resources, purpose: ModelPurpose, providers: List
     purpose.effective.effort?.takeIf { it.isNotBlank() }?.let { res.getString(R.string.settings_src_model_effort_summary, it) },
 )
 
-/** A model-only or effort-only selection is also an explicit Lark override, even when its provider is inherited. */
-internal fun larkModelMode(res: Resources, purpose: ModelPurpose): String? =
-    if (purpose.id != "lark.agent") null else res.getString(
+/** A use of Agents the hub lets the user set apart (Lark /agent, the AI twin): it has fields of its own and follows
+ *  Agents while they are empty. Other uses of a category have no fields and stay read-only. */
+internal fun agentsOverride(purpose: ModelPurpose): Boolean =
+    purpose.parent == "agent.new" && purpose.fields.orEmpty().any { it == "provider" || it == "model" || it == "effort" }
+
+/** A model-only or effort-only selection is also an explicit override, even when its provider is inherited. */
+internal fun agentsOverrideMode(res: Resources, purpose: ModelPurpose): String? =
+    if (!agentsOverride(purpose)) null else res.getString(
         if (listOf(purpose.override.provider, purpose.override.model, purpose.override.effort).any { !it.isNullOrBlank() })
-            R.string.settings_src_model_lark_separate else R.string.settings_src_model_lark_follow
+            R.string.settings_src_model_agents_separate else R.string.settings_src_model_agents_follow
     )
 
-/** A purpose's row: what is in effect, then the hub's status or where it inherits from. */
+/** How many lines a purpose's row may take: three for what is in effect, and room for what it is for when the hub says so. */
+internal fun purposeSubtitleLines(purpose: ModelPurpose): Int = if (purpose.about != null) 6 else 3
+
+/** A purpose's row: what it is for (#5086, the hub's sentence), what is in effect, then the hub's status or where it inherits from. */
 internal fun purposeSubtitle(res: Resources, purpose: ModelPurpose, catalog: ModelCatalog): String = listOfNotNull(
+    purpose.about,
     summaryWords(res, purpose, catalog.providers).joinToString(res.getString(R.string.settings_src_model_summary_separator))
         .ifEmpty { res.getString(R.string.settings_src_state_not_configured) },
-    larkModelMode(res, purpose),
-    purpose.status?.takeIf { it.isNotBlank() } ?: purpose.inheritedFrom?.takeIf { it.isNotBlank() && purpose.id != "lark.agent" }?.let { from ->
+    agentsOverrideMode(res, purpose),
+    purpose.status?.takeIf { it.isNotBlank() } ?: purpose.inheritedFrom?.takeIf { it.isNotBlank() && !agentsOverride(purpose) }?.let { from ->
         res.getString(R.string.settings_src_model_follows, catalog.purposes.firstOrNull { it.id == from }?.displayName ?: from)
     },
 ).joinToString("\n")
@@ -52,9 +62,12 @@ internal fun providerOptions(res: Resources, purpose: ModelPurpose, providers: L
             .takeIf { chosen.isNotEmpty() && candidates.none { it.id == chosen } })
 }
 
-/** Effort is a field of launchers and of Responses APIs; a Messages API provider has none to set. */
+/** Effort is a field of launchers, Responses APIs, and Chat APIs marked chat_effort; a Messages API provider has none to set. */
 internal fun showsEffort(purpose: ModelPurpose, provider: ModelProvider?): Boolean =
-    purpose.supports("effort") && (purpose.id == "lark.agent" || !(provider?.kind == "api" && provider.api != "responses"))
+    purpose.supports("effort") && (
+        agentsOverride(purpose) ||
+            !(provider?.kind == "api" && provider.api != "responses" && !(provider.api == "chat" && provider.chatEffort))
+        )
 
 internal data class ModelCatalogState(
     val catalog: ModelCatalog? = null,
@@ -63,15 +76,39 @@ internal data class ModelCatalogState(
     val unsupported: Boolean = false,
 )
 
+/**
+ * [purposes] with [own], a use the hub's catalog leaves out, after the last one of its group (the hub's order within the
+ * group stands), or at the end when no listed use is in that group. Unchanged when the catalog lists it already.
+ */
+internal fun modelPurposesWith(purposes: List<ModelPurpose>, own: ModelPurpose): List<ModelPurpose> {
+    if (purposes.any { it.id == own.id }) return purposes
+    val last = purposes.indexOfLast { it.group == own.group }
+    return if (last < 0) purposes + own else purposes.subList(0, last + 1) + own + purposes.subList(last + 1, purposes.size)
+}
+
 internal class ModelCatalogModel(private val api: ModelConfiguration) {
     private val mutable = MutableStateFlow(ModelCatalogState())
     val state = mutable.asStateFlow()
+
+    /**
+     * The background supervisor's use (#4927, [BackgroundSupervisor.PURPOSE]). A hub since #5806 lists it in its catalog,
+     * last of its group, which is where this page always drew it: nothing more is asked for. A hub from before leaves it
+     * out, and it is read by its own id and put after the last use of its group (docs/assistant/model-config.md). A hub
+     * without it, or one that cannot answer now, lists the catalog as it is.
+     */
+    private suspend fun withBackgroundSupervisor(catalog: ModelCatalog): ModelCatalog {
+        if (catalog.purposes.any { it.id == BackgroundSupervisor.PURPOSE }) return catalog
+        val own = try { api.purpose(BackgroundSupervisor.PURPOSE).purpose }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { return catalog }
+        return if (own.id == BackgroundSupervisor.PURPOSE) catalog.copy(purposes = modelPurposesWith(catalog.purposes, own)) else catalog
+    }
 
     suspend fun load() {
         if (state.value.loading) return
         mutable.update { it.copy(loading = true) }
         try {
-            val catalog = api.catalog()
+            val catalog = withBackgroundSupervisor(api.catalog())
             mutable.update { it.copy(catalog = catalog, error = null, unsupported = false) }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: ModelConfigurationUnsupported) { mutable.update { it.copy(unsupported = true, error = null) } }
@@ -102,6 +139,25 @@ internal data class ModelPurposeState(
     /** The provider the form talks about: the chosen one, else the one in effect. */
     val provider: ModelProvider? get() = detail?.providers?.firstOrNull { it.id == (draft.provider.ifEmpty { purpose?.effective?.provider }) }
     val changed: Boolean get() = purpose?.let { draft != ModelConfigurationDraft.from(it) } == true
+    val candidateProviders: List<ModelProvider> get() = purpose?.candidateProviders(detail?.providers.orEmpty()).orEmpty()
+    val candidateChanged: Boolean get() = purpose?.let { draft.candidates?.change(it) } != null
+
+    val candidateProblem: ResText? get() {
+        val edit = draft.candidates ?: return null
+        val setting = purpose?.extensionCandidates() ?: return null
+        if (edit.mode != "custom") return null
+        val providers = candidateProviders
+        if (providers.isEmpty()) return ResText.of(R.string.settings_candidate_no_providers)
+        if (edit.custom.size !in 1..setting.most) return ResText.of(R.string.settings_candidate_count, setting.most)
+        val seen = mutableSetOf<Pair<String, String>>()
+        for (row in edit.custom) {
+            if (providers.none { it.id == row.provider }) return ResText.of(R.string.settings_candidate_choose_provider)
+            val model = row.model.trim()
+            if (model.isNotEmpty() && ModelPanel.typedModelId(model) == null) return ResText.of(R.string.settings_candidate_model_id)
+            if (!seen.add(row.provider to model)) return ResText.of(R.string.settings_candidate_duplicate)
+        }
+        return null
+    }
 
     /** The launcher provider whose /model list "Model" picks from; "": an extension's, an API's, none. */
     val listProvider: String get() = provider?.takeIf { it.kind == "launcher" && purpose?.kind != "plugin" && purpose?.supports("model") == true }?.id.orEmpty()
@@ -149,7 +205,11 @@ internal class ModelPurposeModel(private val api: ModelConfiguration, private va
             val detail = api.purpose(id)
             mutable.update { s ->
                 val usable = detail.purpose.providersFrom(detail.providers).any { it.id == providerId }
-                s.copy(detail = detail, draft = if (usable) s.draft.choosingProvider(providerId) else s.draft)
+                val oldPolicyEdited = s.candidateChanged
+                val conflict = s.conflict || oldPolicyEdited && s.purpose?.revision != detail.purpose.revision
+                val refreshed = if (oldPolicyEdited) s.draft else s.draft.copy(candidates = detail.purpose.extensionCandidates()?.draft())
+                s.copy(detail = detail, draft = if (usable) refreshed.choosingProvider(providerId) else refreshed,
+                    conflict = conflict, error = if (conflict) ResText.of(R.string.settings_src_model_conflict) else s.error)
             }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { mutable.update { it.copy(error = ResText.of(R.string.settings_src_read_failed, failureReasonText(error))) } }
@@ -176,7 +236,7 @@ internal class ModelPurposeModel(private val api: ModelConfiguration, private va
     suspend fun save(restore: Boolean = false): ResText? {
         val current = state.value
         val purpose = current.purpose ?: return null
-        if (current.busy || current.conflict) return null
+        if (current.busy || current.conflict || current.candidateChanged && (restore || current.candidateProblem != null)) return null
         mutable.update { it.copy(busy = true, error = null) }
         return try {
             when (val result = api.save(purpose, if (restore) ModelConfigurationDraft.Restore else current.draft)) {

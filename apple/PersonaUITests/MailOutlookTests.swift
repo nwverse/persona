@@ -1,6 +1,6 @@
 import XCTest
 
-/// Add Mail Account › Outlook (docs/extensions/mail.md「Outlook 接入方式」): with no client ID on the hub the field for it and the steps
+/// Add Mail Account › Outlook (docs/extensions/mail.md「Outlook: Sign In with Microsoft」): with no client ID on the hub the field for it and the steps
 /// with the redirect URI come first; a value that is no client ID is refused, a good one is saved on the hub and
 /// Sign In with Microsoft takes its place. Against scripts/mock/mock_hub.py (PERSONA_MOCK_HUB).
 final class MailOutlookTests: XCTestCase {

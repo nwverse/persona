@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // Claude Code's ultracode switch on iOS, the Mac and the watch (#1307; the server is #3427, docs/protocol/protocol.md
 // "Claude Code ultracode"; the web's lib/ultracode.ts does the same): with it on, Claude runs every substantive task as a
@@ -18,7 +19,7 @@ nonisolated enum Ultracode {
 
     // MARK: Where it shows
 
-    /// Whether a chat offers the switch: the hub has it, the agent is Claude Code (not TRAEX, Codex or a runtime's) whose
+    /// Whether a chat offers the switch: the hub has it, the agent is Claude Code (not TRAE CLI, Codex or a runtime's) whose
     /// thinking effort can change now (it takes messages, no read-only source, not offline), and it is not a Persona
     /// conversation (the main one included: the server refuses those).
     static func offered(_ s: Session?, features: Set<String>) -> Bool {
@@ -186,6 +187,7 @@ nonisolated enum Ultracode {
         }
         if let quota {
             header.append(quotaLine(quota))
+            if let age = quotaAge(quota) { header.append(age) }
             if quota.warn, quotaWarnShown(sw) { header.append(quotaWarning) }
         }
         return MenuWords(subtitle: subtitle, header: header.isEmpty ? nil : header.joined(separator: headerWraps ? "\n" : " — "))
@@ -242,13 +244,18 @@ nonisolated enum Ultracode {
         var windows: [Window]
         /// One of them is past the caution line (80%, the usage bars'): the switch says it will run out sooner.
         var warn: Bool
+        /// The numbers are out of date (the hub's mark, as on the usage bars): use only grows, so the real use may be
+        /// higher, and the line says so with when they were read (#1906).
+        var stale = false
+        var sampledAt: Date?
     }
 
-    /// The Claude subscription's 5-hour and weekly use (#2432's windows) for the line under the switch: an account read on
-    /// the computers before one only a gateway reports, a fresh sample before a stale one, then the fullest. nil without
+    /// The Claude subscription's 5-hour and weekly use (#2432's windows) for the line under the switch: a fresh sample
+    /// before a stale one (a fresh account only a gateway reports says more about now than old numbers from a computer,
+    /// #1906), then an account read on the computers before one only a gateway reports, then the fullest. nil without
     /// one: nothing is drawn. The hub merges accounts across computers, so this is the account's use, not one computer's.
     static func quota(_ accounts: [UsageAccount], now: Date = .now) -> Quota? {
-        func rank(_ a: UsageAccount) -> Int { (a.local ? 0 : 2) + (a.stale ? 1 : 0) }
+        func rank(_ a: UsageAccount) -> Int { (a.stale ? 2 : 0) + (a.local ? 0 : 1) }
         let kinds: [(Int, Quota.Kind)] = [(300, .fiveHours), (10080, .week)]
         let claude = UsageWindows.live(accounts, now: now)
             .filter { $0.provider == "claude" }
@@ -266,7 +273,14 @@ nonisolated enum Ultracode {
             return fl != fr ? fl > fr : l.offset < r.offset
         }?.element
         guard let (account, windows) = top else { return nil }
-        return Quota(name: account.name, windows: windows, warn: windows.contains { UsageWindows.isWarn($0.percent) })
+        return Quota(name: account.name, windows: windows, warn: windows.contains { UsageWindows.isWarn($0.percent) },
+                     stale: account.stale, sampledAt: account.sampledAt)
+    }
+
+    /// "Outdated · 2 hr ago" when the quota's numbers are out of date, as the usage bars say it (#1906); nil while they
+    /// are current. A line of its own under the quota, so that neither is cut off.
+    static func quotaAge(_ q: Quota, now: Date = .now) -> String? {
+        q.stale ? UsageWindows.staleLabel(q.sampledAt, now: now) : nil
     }
 
     /// The quota line, for example "Claude quota: 5h 86% · weekly 41%" (zh-Hans: 「Claude 额度：5 小时 86% · 每周 41%」).

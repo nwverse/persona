@@ -269,7 +269,7 @@ private fun ReviewComment(c: ExtensionViewComment, original: List<String>) {
     val parts = remember(c.body) { ExtensionCodeReview.splitSuggestions(c.body.orEmpty()) }
     if (parts.none { it is BodyPart.Suggestion }) return CommentLine(c)
     CommentLine(c.copy(body = null))
-    Column(Modifier.fillMaxWidth().padding(start = rowPadding + Tokens.Space.xxl + Tokens.Space.m, end = rowPadding, bottom = Tokens.Space.s)) {
+    Column(Modifier.fillMaxWidth().padding(start = rowPadding + Tokens.Space.xl + Tokens.Space.m, end = rowPadding, bottom = Tokens.Space.s)) {
         parts.forEach { p ->
             when (p) {
                 is BodyPart.Text -> ExtensionMarkdown(p.text)
@@ -380,9 +380,9 @@ private fun DiffLine(r: DiffRow, tokens: List<CodeToken>?, spans: List<CharSpan>
         else -> null
     }
     Row(Modifier.fillMaxWidth().then(if (bg != null) Modifier.background(bg) else Modifier).then(if (onTap != null) Modifier.clickable(onClick = onTap) else Modifier)) {
-        Text(r.old?.toString().orEmpty(), Modifier.widthIn(min = Tokens.Space.xxxl).padding(horizontal = Tokens.Space.xs), style = type.codeSmall, color = palette.ink3,
+        Text(r.old?.toString().orEmpty(), Modifier.widthIn(min = Tokens.Space.xxl).padding(horizontal = Tokens.Space.xs), style = type.codeSmall, color = palette.ink3,
             maxLines = 1, textAlign = TextAlign.End)
-        Text(r.new?.toString().orEmpty(), Modifier.widthIn(min = Tokens.Space.xxxl).padding(horizontal = Tokens.Space.xs), style = type.codeSmall, color = palette.ink3,
+        Text(r.new?.toString().orEmpty(), Modifier.widthIn(min = Tokens.Space.xxl).padding(horizontal = Tokens.Space.xs), style = type.codeSmall, color = palette.ink3,
             maxLines = 1, textAlign = TextAlign.End)
         Text(when (r.kind) { DiffKind.Add -> "+"; DiffKind.Del -> "−"; else -> " " }, Modifier.padding(horizontal = Tokens.Space.xs), style = type.codeSmall,
             color = when (r.kind) { DiffKind.Add -> palette.diffAdd; DiffKind.Del -> palette.diffDel; else -> palette.ink3 })
@@ -522,9 +522,10 @@ internal fun CodeDiff(item: ExtensionViewItem, state: ExtensionViewState, handle
                 var drawn = 0
                 @Composable
                 fun under(spots: List<String>) {
-                    spots.flatMap { at[it].orEmpty() }.forEach { th ->
+                    // a thread's state (folded, its reply box) goes with its id when one is added before it (#4179)
+                    spots.flatMap { at[it].orEmpty() }.forEach { th -> androidx.compose.runtime.key(th.id) {
                         Box(Modifier.width(screenWidth())) { ReviewThread(th, original(th.side, th.line, th.startLine), state, handle) }
-                    }
+                    } }
                     val b = box
                     if (b != null && ExtensionCodeText.spot(b.side, b.line) in spots) Box(Modifier.width(screenWidth()).background(palette.surfaceOpaque)) {
                         LineComposer(b, body, { body = it }, item, original(b.side, b.line, b.startLine), state.view?.review?.count ?: 0, state, handle) { box = null }
@@ -587,7 +588,7 @@ internal fun CodeDiff(item: ExtensionViewItem, state: ExtensionViewState, handle
                 if (rest.isNotEmpty()) {
                     JDivider()
                     Text(stringResource(R.string.settings_ext_code_elsewhere), Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s), style = type.caption, color = palette.ink3)
-                    rest.forEach { ReviewThread(it, emptyList(), state, handle) }
+                    rest.forEach { th -> androidx.compose.runtime.key(th.id) { ReviewThread(th, emptyList(), state, handle) } }
                 }
             }
         }

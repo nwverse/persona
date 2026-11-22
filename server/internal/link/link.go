@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // The link is a WebSocket on the hub's TLS port (or under the path of the HTTPS reverse proxy in front of it); each node
@@ -29,6 +31,13 @@ const (
 	Path       = "/api/v1/link"
 	StreamPath = "/api/v1/link/stream"
 )
+
+// StreamCompression is the permessage-deflate every stream end asks for (the hub's and the manager's, active and
+// passive Persona Link): each message compressed on its own. With context takeover each end kept a flate writer and
+// its window for the stream's life, about 0.8 MB per end while idle, to send a sixth fewer bytes. Either end asking
+// for no context takeover decides it (RFC 7692), so an older end that still asks for takeover saves too
+// (compress_interop_test.go).
+const StreamCompression = websocket.CompressionNoContextTakeover
 
 // Close codes on the link besides the standard ones (1001: the hub is stopping).
 const (
@@ -73,7 +82,7 @@ func PingTimesMS(every, timeout int64) (time.Duration, time.Duration, bool) {
 
 // Message is one JSON message on the link.
 type Message struct {
-	Type string `json:"type"` // hello | endpoints | node | open | open_failed | rename | renamed | attention
+	Type string `json:"type"` // hello | endpoints | node | open | open_failed | rename | renamed | attention | presence | rang
 	// hello (persona-link → hub, the first message): which machine, which build, and the hub URL it went to.
 	Machine string `json:"machine,omitempty"`
 	Version string `json:"version,omitempty"`
@@ -108,6 +117,14 @@ type Message struct {
 	ID string `json:"id,omitempty"`
 	// open_failed, node, renamed: why not.
 	Error string `json:"error,omitempty"`
+	// presence (persona-link → hub): whether the user is at this computer and its notifications show, and for how
+	// many more milliseconds an active one counts (PresenceInfo, presence.go). Left out: false. Older managers ignore it.
+	Active   bool  `json:"active,omitempty"`
+	Notifies bool  `json:"notifies,omitempty"`
+	TTLMS    int64 `json:"ttl_ms,omitempty"`
+	// rang (persona-link → hub): the menu bar app handed the notification of this card (its interaction id, as the
+	// summary names it) to Notification Center. Older managers ignore it.
+	InteractionID string `json:"interaction_id,omitempty"`
 }
 
 // Endpoint is a hub URL on its TLS port, or a reverse proxy's https URL with the path the hub sits under (no trailing
@@ -139,6 +156,13 @@ type Config struct {
 	Trust     string     `json:"trust,omitempty"`
 	Token     string     `json:"token"`
 	Endpoints []Endpoint `json:"endpoints"`
+	// SSH is the optional SSH tunnel for active mode (docs/operations/link.md "SSH tunnel").
+	SSH *SSH `json:"ssh,omitempty"`
+	// Proxy is an outbound HTTP(S) CONNECT proxy; "off" disables environment proxies.
+	Proxy string `json:"proxy,omitempty"`
+	// ProxyAlways: active mode goes only through the proxy; direct hub addresses and the SSH tunnel are not tried
+	// (docs/operations/link.md "Outbound proxy"). SSH.Always wins when both are set.
+	ProxyAlways bool `json:"proxy_always,omitempty"`
 	// Mode is ModeActive (also when empty: files from before passive mode) or ModePassive.
 	Mode    string   `json:"mode,omitempty"`
 	Passive *Passive `json:"passive,omitempty"`
@@ -163,6 +187,65 @@ func (c *Config) CurrentMode() string {
 	}
 	return ModeActive
 }
+
+// defaultText is canonical Link text. Errors and statuses keep this spelling on disk and on the wire; ErrorText and
+// StatusErrorText translate a copy only where a terminal shows it.
+func defaultText(key string, args ...i18n.Args) string { return i18n.T(i18n.Default, key, args...) }
+
+// textError retains its catalog key and cause, so a terminal can translate the whole error without changing Error's
+// canonical text or errors.Is / errors.As behavior.
+type textError struct {
+	key   string
+	args  i18n.Args
+	cause error
+}
+
+func newTextError(key string, cause error, args ...i18n.Args) error {
+	e := &textError{key: key, cause: cause}
+	if len(args) > 0 {
+		e.args = args[0]
+	}
+	if cause != nil {
+		if _, named := e.args["error"]; !named {
+			withCause := make(i18n.Args, len(e.args)+1)
+			for name, value := range e.args {
+				withCause[name] = value
+			}
+			withCause["error"] = cause
+			e.args = withCause
+		}
+	}
+	return e
+}
+
+// NewTextError is a command-facing Link error whose Error text stays canonical and whose Text follows the terminal.
+func NewTextError(key string, cause error, args ...i18n.Args) error {
+	return newTextError(key, cause, args...)
+}
+
+func (e *textError) Error() string { return e.Text(i18n.Default) }
+func (e *textError) Unwrap() error { return e.cause }
+func (e *textError) Text(l i18n.Lang) string {
+	args := i18n.Args{}
+	for name, value := range e.args {
+		switch value := value.(type) {
+		case error:
+			args[name] = ErrorText(l, value)
+		case interface{ Text(i18n.Lang) string }:
+			args[name] = value.Text(l)
+		default:
+			args[name] = value
+		}
+	}
+	return i18n.T(l, e.key, args)
+}
+
+// StatusText marks a canonical saved-status fragment that may be rendered by the closed StatusErrorText mapper when
+// nested inside another error. Its default-language text is always the original byte string.
+type StatusText string
+
+// Text renders only the marked fragment, never arbitrary surrounding peer or OS text.
+func (s StatusText) Text(l i18n.Lang) string { return StatusErrorText(l, string(s)) }
 
 // ErrUnpaired: link.json has no credential for active mode (never paired, or only for passive mode). It is an
 // fs.ErrNotExist, as a missing file is.
@@ -191,7 +274,7 @@ func Load(path string) (*Config, error) {
 		return nil, ErrUnpaired
 	}
 	if c.Token == "" || (c.FP == "" && c.Trust != TrustSystem) || c.Machine == "" {
-		return nil, fmt.Errorf("%s is incomplete: pair again (persona-link pair)", path)
+		return nil, newTextError("link-errors.config_incomplete", nil, i18n.Args{"path": path})
 	}
 	return c, nil
 }
@@ -205,7 +288,7 @@ func Read(path string) (*Config, error) {
 	}
 	var c Config
 	if err := json.Unmarshal(b, &c); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, newTextError("link-errors.config_read", err, i18n.Args{"path": path})
 	}
 	return &c, nil
 }
@@ -255,7 +338,7 @@ func Update(path string, change func(*Config) error) error {
 	return os.Rename(tmp, path)
 }
 
-// kindOf says what kind of address a hub URL is: the link tries lan first (docs/operations/link.md "Route choice").
+// kindOf says what kind of address a hub URL is: the link tries lan first (docs/operations/link.md "Route selection").
 func kindOf(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -331,16 +414,16 @@ func normalize(raw string, have []Endpoint) (Endpoint, error) {
 			}
 		}
 		if port == "" {
-			return Endpoint{}, fmt.Errorf("%q 没有端口：写成 https://地址:端口", raw)
+			return Endpoint{}, newTextError("link-errors.address_port_missing", nil, i18n.Args{"address": strconv.Quote(raw)})
 		}
 		raw = "https://" + net.JoinHostPort(strings.Trim(host, "[]"), port)
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return Endpoint{}, fmt.Errorf("%q 不是 https 地址：链路只走 hub 的 TLS 端口", raw)
+		return Endpoint{}, newTextError("link-errors.address_https_required", nil, i18n.Args{"address": strconv.Quote(raw)})
 	}
 	if n, err := strconv.Atoi(u.Port()); u.Port() != "" && (err != nil || n < 1 || n > 65535) {
-		return Endpoint{}, fmt.Errorf("%q 的端口不对", raw)
+		return Endpoint{}, newTextError("link-errors.address_port_invalid", nil, i18n.Args{"address": strconv.Quote(raw)})
 	}
 	u.Path = strings.TrimRight(u.Path, "/")
 	return Endpoint{URL: u.String(), Kind: kindOf(u.String()), Manual: true}, nil

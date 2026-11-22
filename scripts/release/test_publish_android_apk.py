@@ -1,5 +1,6 @@
 import argparse
 import concurrent.futures
+import gzip
 import json
 from pathlib import Path
 import subprocess
@@ -76,10 +77,17 @@ class AtomicPublicationTests(unittest.TestCase):
         atomic.publish(self.directory, stage)
         stage, _ = self.stage(42)
         self.assertEqual(atomic.publish(self.directory, stage), "already published")
-        stage, latest = self.stage(43)
+        stage, latest = self.stage(43, b"stored dex " * 4096)
         atomic.publish(self.directory, stage)
         self.assertEqual(self.current(), latest)
         self.assertTrue((self.directory / (previous["sha256"] + ".apk")).is_file())
+        # Each APK keeps a gzip copy that decodes to it, for downloads that take gzip; the old one stays with its APK.
+        for release in (previous, latest):
+            apk = self.directory / (release["sha256"] + ".apk")
+            self.assertEqual(gzip.decompress((self.directory / (apk.name + ".gz")).read_bytes()), apk.read_bytes())
+        self.assertLess((self.directory / (latest["sha256"] + ".apk.gz")).stat().st_size, latest["size"] // 10)
+        self.assertEqual(sorted(p.name for p in self.directory.iterdir()), sorted(
+            [".publish.lock", "latest.json"] + [r["sha256"] + s for r in (previous, latest) for s in (".apk", ".apk.gz")]))
 
     def test_failed_manifest_replace_preserves_current(self):
         stage, current = self.stage(42)

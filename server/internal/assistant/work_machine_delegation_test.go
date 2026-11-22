@@ -139,9 +139,11 @@ func TestInboxDoesNotResumeOnWorkMachine(t *testing.T) {
 	delegationMachineTrust(t, h.Service, "work", "work")
 	it := actionItem("event", time.Now())
 	it.Agent = &InboxAgent{State: AgentRunning, MachineID: "work", SessionID: "twin-session"}
+	h.inbox.mu.Lock()
 	h.inbox.items[it.ID] = it
+	h.inbox.mu.Unlock()
 	h.inbox.tell(it, inboxNote{Name: prompts.NoteInstructed, Text: "Private update"}, true, time.Now())
-	h.originSet(ctx, "work", "twin-session", OriginInbox, it.ID)
+	h.originSet(ctx, "work", "twin-session", OriginInbox, it.ID, "")
 	if _, found := h.conversationsByEvent(ctx)[it.ID]; found {
 		t.Fatal("work conversation eligible for adoption")
 	}
@@ -153,8 +155,10 @@ func TestInboxDoesNotResumeOnWorkMachine(t *testing.T) {
 		t.Fatalf("failure = %q", it.Handling.Error)
 	}
 	// A running twin with no pending notes must also leave the active queue.
+	h.inbox.mu.Lock()
 	it.Agent.State, it.Agent.Pending = AgentRunning, nil
 	it.Handling.State = HandlingLooking
+	h.inbox.mu.Unlock()
 	h.sweepInboxAgents(ctx, InboxAgentConfig{Enabled: true}, time.Now())
 	if it.Handling.State != HandlingFailed {
 		t.Fatalf("still active: %+v", it.Handling)

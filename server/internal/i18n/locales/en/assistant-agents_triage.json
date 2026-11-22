@@ -1,4 +1,8 @@
 {
+  "closeout_not_deployed": "Says deployed, but the running version does not have it",
+  "closeout_not_finished": "Not finished",
+  "closeout_not_finished_text": "Not finished: {text}",
+  "closeout_not_merged": "Says merged, but the pull request is not merged",
   "done": "Done",
   "waiting_for_you": "Waiting for you"
 }

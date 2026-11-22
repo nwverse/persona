@@ -1,13 +1,16 @@
 package persona.feature.chat
 
 import persona.core.contracts.Interaction
+import persona.core.contracts.JsonCodec
 import persona.core.contracts.api.InteractionGoneException
 import persona.core.contracts.api.InteractionPromptChangedException
 import persona.core.contracts.Resolution
 import persona.core.contracts.api.HubCodedFailure
 import persona.core.contracts.api.ResolveOutcome
+import persona.core.domain.CardAnswer
 import persona.core.domain.answer.AnswerAction
 import persona.core.domain.answer.AnswerBuilder
+import persona.core.domain.answer.AnswerContext
 import persona.core.domain.answer.AnswerDraft
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
@@ -69,6 +72,57 @@ class InteractionSubmissionTest {
                 java.io.IOException("reset"), IllegalStateException(HubAnswer(504))))
             assertEquals(InteractionSubmission.Unknown, submitInteraction { throw lost }.submission)
         assertEquals(InteractionSubmission.Refused, submitInteraction { throw IllegalStateException(HubAnswer(409, "x", "no")) }.submission)
+    }
+
+    // What the page's taps (ChatTaps) make of each outcome: only a withdrawn card goes, only a lost reply locks it.
+    @Test fun eachOutcomeTellsTheCardWhatHappened() {
+        assertEquals(mapOf(
+            InteractionSubmission.Answered to CardAnswer.Withdrawn,
+            InteractionSubmission.AlreadyAnswered to CardAnswer.Withdrawn,
+            InteractionSubmission.ResolvedElsewhere to CardAnswer.Withdrawn,
+            InteractionSubmission.PromptChanged to CardAnswer.Withdrawn,
+            InteractionSubmission.Refused to CardAnswer.Refused,
+            InteractionSubmission.Unknown to CardAnswer.Unconfirmed,
+        ), InteractionSubmission.entries.associateWith { InteractionReply(it).card })
+    }
+
+    @Test fun planApprovalUsesTheModeRecordedByTheHub() {
+        val request = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"plan-then","kind":"plan","plan":"1. Ship it","plan_then":"default"}""",
+        )
+        for (action in listOf(AnswerAction.ApproveAll, AnswerAction.ApproveEdits, AnswerAction.ApproveStepwise)) {
+            val result = AnswerBuilder.build(request, action, context = AnswerContext(fullPlanRead = true))
+            assertTrue(action.name, result.allowed)
+            assertEquals(action.name, Resolution(approve = true, mode = "default"), result.resolution)
+        }
+        for (recorded in listOf(null, "")) {
+            assertEquals("acceptEdits", AnswerBuilder.build(request.copy(planThen = recorded), AnswerAction.ApproveEdits).resolution?.mode)
+        }
+    }
+
+    @Test fun recordedBypassRequiresTheFullPlanRead() {
+        val request = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"plan-bypass","kind":"plan","plan":"1. Ship it","plan_then":"bypassPermissions"}""",
+        )
+        assertFalse(AnswerBuilder.build(request, AnswerAction.ApproveAll,
+            context = AnswerContext(fullPlanRead = false)).allowed)
+        val read = AnswerBuilder.build(request, AnswerAction.ApproveAll,
+            context = AnswerContext(fullPlanRead = true))
+        assertTrue(read.allowed)
+        assertEquals(Resolution(approve = true, mode = "bypassPermissions"), read.resolution)
+    }
+
+    @Test fun unknownPlanThenKeepsTheSelectedLegacyMode() {
+        val future = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"plan-future","kind":"plan","plan":"1. Ship it","plan_then":"futureMode"}""",
+        )
+        assertEquals(Resolution(approve = true, mode = "default"),
+            AnswerBuilder.build(future, AnswerAction.ApproveStepwise).resolution)
+        val plan = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"plan-again","kind":"plan","plan":"1. Ship it","plan_then":"plan"}""",
+        )
+        assertEquals(Resolution(approve = true, mode = "acceptEdits"),
+            AnswerBuilder.build(plan, AnswerAction.ApproveEdits).resolution)
     }
 
     @Test fun passwordPreservesWhitespaceOnTheWireButNeverEntersSavedDrafts() {

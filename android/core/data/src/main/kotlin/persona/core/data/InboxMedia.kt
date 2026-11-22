@@ -8,6 +8,7 @@ import android.os.ParcelFileDescriptor
 import androidx.core.content.FileProvider
 import persona.core.contracts.api.InboxAssistantTransport
 import persona.core.contracts.api.MailTransport
+import persona.feature.inbox.LarkContentSource
 import persona.feature.inbox.LarkPart
 import persona.feature.inbox.MailAttachmentTransport
 import kotlinx.coroutines.Dispatchers
@@ -59,6 +60,8 @@ class InboxMedia(
     private val context: Context,
     private val data: ScopedHubData? = null,
     private val budget: Long = data?.cacheBudgets?.inboxMedia ?: CacheBudgets().inboxMedia,
+    /** The content URI a saved download is opened by (InboxFileProvider). */
+    private val uri: (File) -> String = { FileProvider.getUriForFile(context, "${context.packageName}.inbox.files", it).toString() },
 ) {
     fun mailTransport(transport: MailTransport): MailAttachmentTransport {
         val data = requireNotNull(data) { "Mail attachments require a pairing data store" }
@@ -68,17 +71,20 @@ class InboxMedia(
         }
     }
 
+    /** [file] fetched as the manager its chat was read as ([LarkPart.File.source]), each manager's under its own name. */
     suspend fun download(transport: InboxAssistantTransport, file: LarkPart.File): String = withContext(Dispatchers.IO) {
         require(data == null || transport.scope == data.scope.path) { "Media belongs to another pairing" }
+        val source = LarkContentSource(transport, file.source?.manager)
         val safeName = file.name.substringAfterLast('/').substringAfterLast('\\')
             .replace(Regex("[^\\p{L}\\p{N}._-]"), "_").take(100).ifBlank { "file" }
-        val name = "${cacheDigest(file.ref)}-$safeName"
+        // The default's files keep the names they were saved under.
+        val key = if (source.scope == transport.scope) file.ref else "${source.scope}:${file.ref}"
+        val name = "${cacheDigest(key)}-$safeName"
         val directory = data?.inboxMediaDirectory ?: File(context.cacheDir, "inbox-downloads/${transport.scope}")
         val cache = BudgetFileCache(directory, budget)
-        fun uri(destination: File) = FileProvider.getUriForFile(context, "${context.packageName}.inbox.files", destination).toString()
         suspend fun <T> access(block: () -> T): T = if (data == null) block() else data.writeFiles(block)
         access { cache.read(name) }?.let { return@withContext uri(it) }
-        val bytes = transport.media(file.ref)
+        val bytes = source.media(file.ref)
         access { uri(cache.put(name, bytes)) }
     }
 }

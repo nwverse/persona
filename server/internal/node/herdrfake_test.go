@@ -76,7 +76,7 @@ type herdrFail struct{ Code, Message string }
 // connDeadline bounds one connection: a client that never writes its line cannot hold up the calls behind it.
 const connDeadline = 5 * time.Second
 
-func newFakeHerdr(t *testing.T) *fakeHerdr {
+func newFakeHerdr(t *testing.T, concurrent ...bool) *fakeHerdr {
 	t.Helper()
 	// Under /tmp, not $TMPDIR: macOS limits unix socket paths to 104 bytes.
 	dir, err := os.MkdirTemp("/tmp", "hf")
@@ -97,7 +97,11 @@ func newFakeHerdr(t *testing.T) *fakeHerdr {
 			if err != nil {
 				return
 			}
-			f.serveConn(c) // one at a time: the recorded order is the order the node made the calls
+			if len(concurrent) > 0 && concurrent[0] {
+				go f.serveConn(c) // a guarded close keeps an idle connection open during its last reads
+			} else {
+				f.serveConn(c) // preserve request order in tests that assert a serial trace
+			}
 		}
 	}()
 	return f
@@ -137,7 +141,9 @@ func (f *fakeHerdr) serveConn(c net.Conn) {
 		}
 		result = map[string]any{"read": map[string]any{"text": text}}
 	}
-	f.log = append(f.log, call)
+	if req.Method != "ping" { // the server's version (herdr.Client.ServerVersion): a read, not something the node did
+		f.log = append(f.log, call)
+	}
 	hooks := slices.Clone(f.hooks)
 	limit := f.replyLimit
 	f.mu.Unlock()
@@ -331,15 +337,17 @@ func agentOf(kind, session, status, pane, tab, ws, cwd, title string) map[string
 // herdrNode is a Node wired to a fresh fake herdr, with a temp home (~/.claude/projects exists, empty) and every map
 // the herdr paths touch. The two package-level caches that outlive a test (the offline list and the compatible CLI's panes and
 // statuses) are cleared before and after it; the other caches are keyed by the test's own temp paths.
-func herdrNode(t *testing.T) (*Node, *fakeHerdr, string) {
+func herdrNode(t *testing.T, concurrent ...bool) (*Node, *fakeHerdr, string) {
 	t.Helper()
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	f := newFakeHerdr(t)
+	// herdr's config is the temp home's, not one the environment points at (herdr.WorktreesDir)
+	t.Setenv("HERDR_CONFIG_PATH", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	f := newFakeHerdr(t, concurrent...)
 	n, home := testNode(t)
 	n.hosts, n.dir, n.bin = herdrHosts(&herdr.Client{Socket: f.sock}), filepath.Join(home, ".persona"), "/tmp/persona-test/personad"
 	n.panes, n.panePIDs, n.modes, n.driving = map[string]string{}, map[string]panePID{}, map[string]sessionModes{}, map[string]bool{}
 	n.files, n.metas, n.bgScans = map[string]*transcript.File{}, map[string]quickMeta{}, map[string]*bgScan{}
-	n.shellTabs = &shellTabs{} // its own sweep memory, not the process's (shelltabs.go)
 	for _, d := range []string{n.dir, filepath.Join(home, ".claude", "projects")} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			t.Fatal(err)
@@ -356,8 +364,14 @@ func herdrNode(t *testing.T) (*Node, *fakeHerdr, string) {
 	resetGlobalCaches()
 	t.Cleanup(resetGlobalCaches)
 	withFirstPromptWaits(t, 400*time.Millisecond, 3*time.Second)
-	t.Cleanup(n.firstWait.Wait) // before the waits are put back: a check still going reads them
-	t.Cleanup(n.engLists.Wait)  // before the caches are reset: an engine switch's list, still being built, reads them
+	ctx, cancel := context.WithCancel(context.Background())
+	n.firstPromptParent = ctx
+	t.Cleanup(n.engLists.Wait) // a prompt check can still request a list before it stops
+	t.Cleanup(func() {
+		cancel()           // assertions are finished; do not wait out recovery on a fake that never writes a transcript
+		n.firstWait.Wait() // before restoring waits or closing the socket used by an in-flight check
+	})
+	t.Cleanup(n.starts.close) // before firstWait, caches and the fake socket: starts can still use all of them
 	return n, f, home
 }
 
@@ -372,11 +386,17 @@ func withFirstPromptWaits(t *testing.T, wait, recover time.Duration) {
 // request runs one hub request through the node's handler; the result comes back as decoded JSON.
 func request(t *testing.T, n *Node, method string, params map[string]any) (map[string]any, error) {
 	t.Helper()
+	return requestCtx(t, context.Background(), n, method, params)
+}
+
+// requestCtx is request with ctx as the hub's call (its deadline, as the hub gives it).
+func requestCtx(t *testing.T, ctx context.Context, n *Node, method string, params map[string]any) (map[string]any, error) {
+	t.Helper()
 	b, err := json.Marshal(params)
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := n.handle(context.Background(), method, b)
+	res, err := n.handle(ctx, method, b)
 	out := map[string]any{}
 	if res != nil {
 		rb, _ := json.Marshal(res)
@@ -461,6 +481,18 @@ func withSubmitWindow(t *testing.T, window, poll time.Duration) {
 type hubPush struct {
 	Event  string          `json:"event"`
 	Params json.RawMessage `json:"params"`
+}
+
+// pollRepo keeps optional Git decoration stable before a poll test changes its transcript or workflow. Otherwise
+// a cold Git lookup can produce an unrelated sessions.changed on the next tick.
+func pollRepo(t *testing.T) string {
+	t.Helper()
+	cwd := physicalTempDir(t)
+	writeGitFile(t, filepath.Join(cwd, ".git", "HEAD"), "ref: refs/heads/main\n")
+	if got := awaitGitPlace(t, gitPlaces, cwd); got != (gitPlace{cwd, cwd, "main"}) {
+		t.Fatalf("poll repository: %+v", got)
+	}
+	return cwd
 }
 
 // pollNode runs the node's herdr poll loop (no event stream: a snapshot every tick) with a hub connection, and

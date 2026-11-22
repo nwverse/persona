@@ -56,6 +56,58 @@ private class FakeUi : ExtensionApiStub() {
 class ExtensionUiStateTest {
     private val res get() = ApplicationProvider.getApplicationContext<android.content.Context>().resources
 
+    @Test fun dateFieldsReadInTheAppLanguageNotTheSystems() {
+        // #4105: an English phone with the app in Japanese or Chinese.
+        val saved = java.util.Locale.getDefault()
+        java.util.Locale.setDefault(java.util.Locale.US)
+        try {
+            assertEquals("2026/11/11", ExtensionViewText.whenText("date", "2026-11-11", java.util.Locale.JAPANESE))
+            assertEquals("2026年11月11日", ExtensionViewText.whenText("date", "2026-11-11", java.util.Locale.SIMPLIFIED_CHINESE))
+            assertEquals("2026年11月11日 14:30", ExtensionViewText.whenText("datetime", "2026-11-11T14:30", java.util.Locale.SIMPLIFIED_CHINESE))
+            assertEquals("Nov 11, 2026", ExtensionViewText.whenText("date", "2026-11-11", java.util.Locale.ENGLISH))
+            assertEquals("14:30", ExtensionViewText.whenText("time", "14:30", java.util.Locale.JAPANESE))
+            assertEquals("soon", ExtensionViewText.whenText("date", "soon", java.util.Locale.JAPANESE))
+        } finally {
+            java.util.Locale.setDefault(saved)
+        }
+    }
+
+    @Test fun timeFieldsFollowTheAppLanguagesClock() {
+        // #4128: 24-hour in Japanese and Chinese, 12-hour in English, whatever the system language; the date part as #4105 left it.
+        val saved = java.util.Locale.getDefault()
+        java.util.Locale.setDefault(java.util.Locale.JAPAN)
+        try {
+            assertEquals("14:30", ExtensionViewText.whenText("time", "14:30", java.util.Locale.JAPANESE))
+            assertEquals("2026/11/11 14:30", ExtensionViewText.whenText("datetime", "2026-11-11T14:30", java.util.Locale.JAPANESE))
+            assertEquals("14:30", ExtensionViewText.whenText("time", "14:30", java.util.Locale.SIMPLIFIED_CHINESE))
+            assertEquals("2026年11月11日 14:30", ExtensionViewText.whenText("datetime", "2026-11-11T14:30", java.util.Locale.SIMPLIFIED_CHINESE))
+            // English puts a narrow no-break space before AM / PM on newer ICU, a plain space on older ones.
+            val time = ExtensionViewText.whenText("time", "14:30", java.util.Locale.ENGLISH)
+            assertTrue(time, time.startsWith("2:30") && time.endsWith("PM"))
+            val morning = ExtensionViewText.whenText("time", "09:05", java.util.Locale.ENGLISH)
+            assertTrue(morning, morning.startsWith("9:05") && morning.endsWith("AM"))
+            val datetime = ExtensionViewText.whenText("datetime", "2026-11-11T14:30", java.util.Locale.ENGLISH)
+            assertTrue(datetime, datetime.startsWith("Nov 11, 2026 2:30") && datetime.endsWith("PM"))
+        } finally {
+            java.util.Locale.setDefault(saved)
+        }
+    }
+
+    @Test fun anImagesViewerFollowsThePictureNotItsPlace() {
+        val picture = ExtensionImageSource(url = "https://example.com/a.png", path = "/api/v1/extensions/x/files/a")
+        // the extension's key first, then the hub's path, the address, the ref
+        assertEquals("key:hero", ExtensionViewText.imageIdentity(ExtensionViewItem("image", key = "hero", src = picture)))
+        assertEquals("path:/api/v1/extensions/x/files/a", ExtensionViewText.imageIdentity(ExtensionViewItem("image", key = " ", src = picture)))
+        assertEquals("url:https://example.com/b.png", ExtensionViewText.imageIdentity(ExtensionViewItem("image", src = ExtensionImageSource(url = "https://example.com/b.png"))))
+        assertEquals("ref:cover", ExtensionViewText.imageIdentity(ExtensionViewItem("image", src = ExtensionImageSource(ref = "cover"))))
+        // two unkeyed pictures that swap places are told apart
+        assertNotEquals(ExtensionViewText.imageIdentity(ExtensionViewItem("image", src = ExtensionImageSource(url = "https://example.com/a.png"))),
+            ExtensionViewText.imageIdentity(ExtensionViewItem("image", src = ExtensionImageSource(url = "https://example.com/b.png"))))
+        // nothing to go by: the viewer stays with its place, as before
+        assertNull(ExtensionViewText.imageIdentity(ExtensionViewItem("image", src = ExtensionImageSource())))
+        assertNull(ExtensionViewText.imageIdentity(ExtensionViewItem("image")))
+    }
+
     @Test fun tonesLinksAndItemsTheAppDraws() {
         assertEquals(Tone.Positive, ExtensionViewText.tone("positive"))
         assertEquals(Tone.Danger, ExtensionViewText.tone("danger"))
@@ -143,6 +195,40 @@ class ExtensionUiStateTest {
         assertEquals(1, api.renders.size)
     }
 
+    /** Set Up with … (#5308): `persona://ask` is taken only on the subscription pages, and refused everywhere else. */
+    @Test fun askIsTakenOnlyOnTheSubscriptionPages() = runBlocking {
+        val good = "persona://ask?text=Help%20me"
+        assertEquals("Help me", ExtensionViewText.askText(good))
+        assertEquals("Help me", ExtensionViewText.askFrom(SUBSCRIPTIONS_UI, good))
+        assertEquals("a+b", ExtensionViewText.askText("persona://ask?text=a%2Bb"))
+        assertEquals("a+b", ExtensionViewText.askText("persona://ask?text=a+b"))
+        assertEquals("hello", ExtensionViewText.askText("jarvis://ask?text=hello"))
+        assertEquals("hello", ExtensionViewText.askText("persona://ask/?text=hello"))
+        assertEquals(" hi", ExtensionViewText.askText("persona://ask?text=%20hi"))
+        assertEquals("a".repeat(ExtensionViewText.ASK_MOST), ExtensionViewText.askText("persona://ask?text=" + "a".repeat(ExtensionViewText.ASK_MOST)))
+        listOf(
+            "persona://ask?text=",
+            "persona://ask?text=%20",
+            "persona://ask/x?text=a",
+            "persona://asks?text=a",
+            "https://example.com/ask?text=a",
+            "persona://ask?text=" + "a".repeat(ExtensionViewText.ASK_MOST + 1),
+        ).forEach { assertNull(it, ExtensionViewText.askText(it)) }
+        assertNull(ExtensionViewText.askFrom("example-gateway", good))
+        assertNull(ExtensionViewText.askFrom("", good))
+        val api = FakeUi()
+        val ask = "persona://ask?text=" + java.net.URLEncoder.encode("<persona-context kind=\"context\" title=\"Source\" url=\"\">\nconnector: apps\nHelp me", "UTF-8")
+        api.answer = ExtensionUiResult(openUrl = ask)
+        val elsewhere = ExtensionViewModel(api, "example-gateway", "home")
+        elsewhere.load()
+        assertNull(elsewhere.press(ExtensionViewAction("setup")).openUrl)
+        val pages = ExtensionViewModel(api, SUBSCRIPTIONS_UI, "pages")
+        pages.load()
+        assertEquals(ask, pages.press(ExtensionViewAction("setup")).openUrl)
+        assertEquals(ExtensionViewText.askText(ask), ExtensionViewText.askFrom(SUBSCRIPTIONS_UI, ask))
+        assertNull(ExtensionViewText.askFrom("example-gateway", ask))
+    }
+
     @Test fun failuresSayWhyAndKeepTheView() = runBlocking {
         val api = FakeUi()
         val model = ExtensionViewModel(api, "example-gateway", "home")
@@ -224,6 +310,13 @@ class ExtensionUiStateTest {
         assertFalse(ExtensionViewText.drawable(chart.copy(kind = "future-chart")))
         assertFalse(ExtensionViewText.drawable(chart.copy(series = listOf(ExtensionChartSeries("空")))))
         assertEquals(JChartKind.Line, ExtensionViewText.chart(chart.copy(kind = "line"))!!.kind)
+        // In Chinese the values and the scale count in ten-thousands; the extension's own words stay as they are (#4149).
+        val chinese = ExtensionViewText.chart(chart, java.util.Locale.SIMPLIFIED_CHINESE)!!
+        assertEquals(listOf("1.2M", "80万 tokens"), chinese.series[0].displays)
+        assertEquals("12亿", chinese.axis(1_200_000_000.0))
+        assertEquals("1.2B", data.axis(1_200_000_000.0))
+        assertEquals("12億", ExtensionViewText.price(1_200_000_000.0, java.util.Locale.JAPANESE))
+        assertEquals("182.35", ExtensionViewText.price(182.35, java.util.Locale.JAPANESE))
 
         val grid = ExtensionViewItem("stat_grid", stats = listOf(ExtensionStat("今天", "1.2M", "+12%", "caution"), ExtensionStat("费用", "¥36.20", tone = "lilac")))
         assertTrue(ExtensionViewText.drawable(grid))
@@ -309,6 +402,52 @@ class ExtensionUiStateTest {
         // A day at most.
         assertEquals(1_000L + 86_400_000L, ExtensionViewText.refreshAt(ExtensionViewState(ExtensionView(refreshAfter = 1_000_000), drawnAt = 1_000L)))
         assertNull(ExtensionViewText.refreshAt(ExtensionViewState(ExtensionView(refreshAfter = 0), drawnAt = 1_000L)))
+    }
+
+    // A redraw the user did not ask for (refresh_after, ui.invalidate, back from a page pushed on it) keeps what is being
+    // typed in the view's fields, as on the web and iOS: a field the new view no longer has goes, a new one comes with its value.
+    @Test fun refreshAfterKeepsWhatIsBeingTyped() = runTest {
+        val api = FakeUi()
+        api.view = api.view.copy(refreshAfter = 30)
+        val model = ExtensionViewModel(api, "example-gateway", "home", now = { testScheduler.currentTime })
+        model.load()
+        model.edit("note", "还没发出去的话")
+        model.edit("token", "s3cret")
+        val fresh = launch { model.keepFresh() }
+        advanceTimeBy(30_500); runCurrent()
+        assertEquals(2, api.renders.size)
+        assertEquals("还没发出去的话", model.state.value.values["note"])
+        assertEquals("s3cret", model.state.value.values["token"])
+        fresh.cancel()
+    }
+
+    @Test fun anInvalidateKeepsWhatIsBeingTyped() = runTest {
+        val api = FakeUi()
+        val model = ExtensionViewModel(api, "example-gateway", "home")
+        model.load()
+        model.shown(true)
+        model.edit("note", "还没发出去的话")
+        model.edit("plan", "solo")
+        api.view = api.view.copy(sections = listOf(ExtensionViewSection(items = listOf(
+            ExtensionViewItem("field", name = "note", kind = "text", value = "扩展的新值"),
+            ExtensionViewItem("field", name = "subject", kind = "text", value = "新字段"),
+        ))))
+        model.invalidate()
+        assertEquals(2, api.renders.size)
+        assertEquals(mapOf("note" to "还没发出去的话", "subject" to "新字段"), model.state.value.values)
+    }
+
+    @Test fun comingBackFromAPushedPageKeepsWhatIsBeingTyped() = runTest {
+        val api = FakeUi()
+        val model = ExtensionViewModel(api, "example-gateway", "home")
+        model.load()
+        model.shown(true)
+        model.edit("note", "还没发出去的话")
+        model.covered()
+        model.shown(false)
+        model.shown(true)
+        assertEquals(2, api.renders.size)
+        assertEquals("还没发出去的话", model.state.value.values["note"])
     }
 
     // A machine's section for a machine the hub does not know (another hub's) is hidden, not an error.

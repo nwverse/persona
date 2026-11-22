@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
@@ -16,6 +17,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -77,12 +79,44 @@ func New(cfg Config) (*Client, error) {
 	if err != nil || !ok {
 		return nil, errors.New("key is not an EC private key")
 	}
+	if err := checkSigningKey(ek); err != nil {
+		return nil, err
+	}
 	return NewWithKey(cfg, ek), nil
+}
+
+// checkSigningKey enforces ES256's curve and 32-byte signature components before signing.
+func checkSigningKey(key *ecdsa.PrivateKey) error {
+	if key == nil || key.Curve != elliptic.P256() {
+		return errors.New("apns: signing key must use P-256 for ES256")
+	}
+	return nil
 }
 
 // NewWithKey uses a key already in memory (tests).
 func NewWithKey(cfg Config, key *ecdsa.PrivateKey) *Client {
-	return &Client{Cfg: cfg, key: key, http: &http.Client{Timeout: 15 * time.Second}}
+	return &Client{Cfg: cfg, key: key, http: &http.Client{Timeout: 15 * time.Second, Transport: NewTransport()}}
+}
+
+// Connection keepalive of NewTransport (#4800). APNs asks providers to keep one HTTP/2 connection open rather than
+// connect per notification, and the hub's relay client wants the same of the relay. http.DefaultTransport closed an
+// idle connection after 90 s, so most pushes paid TCP + TLS again (0.2-0.3 s to the relay). An idle connection now
+// lives for idleConnTimeout, and HTTP/2 pings sent after pingAfter without a frame keep it from looking idle to the
+// network in between and find a connection that died silently, which is closed when its pong is pingTimeout late.
+const (
+	idleConnTimeout = time.Hour
+	pingAfter       = time.Minute
+	pingTimeout     = 15 * time.Second
+)
+
+// NewTransport is a transport for one push service: http.DefaultTransport's settings (proxy from the environment,
+// dial and TLS handshake timeouts, HTTP/2), with connections kept between pushes. Each client gets its own, so no
+// other client's traffic shares or closes its connections.
+func NewTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.IdleConnTimeout = idleConnTimeout
+	t.HTTP2 = &http.HTTP2Config{SendPingTimeout: pingAfter, PingTimeout: pingTimeout}
+	return t
 }
 
 // token returns the cached provider token, signing a new one when there is none or it is tokenMaxAge old.
@@ -104,6 +138,9 @@ func (c *Client) resign(stale string) (string, error) {
 }
 
 func (c *Client) tokenLocked() (string, error) {
+	if err := checkSigningKey(c.key); err != nil {
+		return "", err
+	}
 	now := time.Now().Unix()
 	if c.jwt != "" && now-c.jwtIat < tokenMaxAge {
 		return c.jwt, nil
@@ -127,10 +164,13 @@ func (c *Client) tokenLocked() (string, error) {
 type Request struct {
 	Token      string // device token (hex), or a Live Activity's
 	Env        string // "sandbox" or production
-	Topic      string // bundle id; for liveactivity the ".push-type.liveactivity" suffix is added here
-	PushType   string // alert | background | liveactivity
+	Topic      string // bundle id; for liveactivity the ".push-type.liveactivity" suffix is added here, for voip ".voip"
+	PushType   string // alert | background | liveactivity | voip
 	Priority   string // "10" | "5"
 	CollapseID string
+	// Expiration is when APNs stops trying to deliver (Unix seconds); 0 sends no apns-expiration, so APNs keeps the
+	// push for a while as it chooses.
+	Expiration int64
 	Body       []byte
 }
 
@@ -180,8 +220,11 @@ func (c *Client) post(ctx context.Context, r Request, jwt string) (Result, error
 	if topic == "" {
 		topic = c.Cfg.Topic
 	}
-	if r.PushType == "liveactivity" {
+	switch {
+	case r.PushType == "liveactivity":
 		topic += ".push-type.liveactivity"
+	case r.PushType == "voip" && !strings.HasSuffix(topic, ".voip"):
+		topic += ".voip"
 	}
 	req, err := http.NewRequestWithContext(ctx, "POST", host+"/3/device/"+r.Token, bytes.NewReader(r.Body))
 	if err != nil {
@@ -194,12 +237,15 @@ func (c *Client) post(ctx context.Context, r Request, jwt string) (Result, error
 	if r.CollapseID != "" {
 		req.Header.Set("apns-collapse-id", r.CollapseID)
 	}
+	if r.Expiration > 0 {
+		req.Header.Set("apns-expiration", strconv.FormatInt(r.Expiration, 10))
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		// The APNs connection is one long-lived HTTP/2 connection, and Go does not notice when it dies
-		// silently (no health pings before Go 1.24): after the hub's proxy routing broke and came back,
-		// every push still timed out on the dead connection until the hub restarted. Drop it so the next
-		// push dials a new one.
+		// The APNs connection is one long-lived HTTP/2 connection. Health pings (NewTransport) close one that
+		// died silently within about a minute, but a push can still go out on it first: after the hub's proxy
+		// routing broke and came back, every push timed out on the dead connection until the hub restarted.
+		// Drop it so the next push dials a new one.
 		c.http.CloseIdleConnections()
 		return Result{}, err
 	}

@@ -5,7 +5,9 @@ import json
 import os
 from pathlib import Path
 import platform
+import plistlib
 import pty
+import re
 import select
 import subprocess
 import tempfile
@@ -72,12 +74,16 @@ HUB_PROGRAMS = ('persona-hub', 'persona-manager')
 
 class PersonaInstallTests(unittest.TestCase):
     def run_install(self, home, initial='fresh', extra=None, corrupt=False, link=None,
-                    node=False, answers=None, legacy_artifacts=False, script=INSTALL, system=None, programs=(), release='1'):
+                    node=False, answers=None, legacy_artifacts=False, script=INSTALL, system=None, programs=(), release='1', args=(),
+                    github_latest=False, no_python=False, release_tag=None):
         target = {'Darwin': 'darwin', 'Linux': 'linux'}[system or platform.system()] + '-' + {'arm64': 'arm64', 'aarch64': 'arm64', 'x86_64': 'amd64'}[platform.machine()]
         name = (FORMER_NAME + 'd-' if legacy_artifacts else 'personad-') + target
         with tempfile.TemporaryDirectory() as directory:
             downloads = Path(directory)
-            data = gzip.compress(b'#!/bin/sh\necho "$*" >> "$HOME/personad-calls"\nif [ "$1" = version ]; then printf "fixture-version\\n"; fi\n', mtime=0)
+            data = gzip.compress(b'#!/bin/sh\necho "$*" >> "$HOME/personad-calls"\nif [ "$1" = version ]; then printf "fixture-version\\n"; fi\n'
+                                 # the language hub setup is given (#5519)
+                                 b'if [ "$1 $2" = "hub setup" ]; then echo "${PERSONA_INSTALL_LANG-unset}" >> "$HOME/personad-setup-lang"; fi\n'
+                                 b'if [ "$1 $2" = "hub setup" ] && [ -n "$SETUP_FAILS" ]; then exit 1; fi\n', mtime=0)
             (downloads / (name + '.gz')).write_bytes(data)
             digest = '0' * 64 if corrupt else hashlib.sha256(data).hexdigest()
             sums = digest + '  ' + name + '.gz\n'
@@ -95,6 +101,8 @@ class PersonaInstallTests(unittest.TestCase):
                 (downloads / (program + '-' + target + '.gz')).write_bytes(program_data)
                 sums += hashlib.sha256(program_data).hexdigest() + '  ' + program + '-' + target + '.gz\n'
             (downloads / 'SHA256SUMS').write_text(sums)
+            if github_latest:
+                (downloads / 'latest.json').write_text(json.dumps({'version': release}))
             class Handler(SimpleHTTPRequestHandler):
                 def __init__(self, *args, **kwargs):
                     super().__init__(*args, directory=str(downloads), **kwargs)
@@ -105,7 +113,9 @@ class PersonaInstallTests(unittest.TestCase):
             thread.start()
             try:
                 env = {key: value for key, value in os.environ.items() if not key.startswith(('PERSONA_', FORMER_PREFIX))}
-                env.update({'HOME': str(home), 'PERSONA_DL': f'http://127.0.0.1:{server.server_port}',
+                env.update({'HOME': str(home),
+                            'PERSONA_DL': ('https://github.com/example/project/releases/latest/download' if github_latest
+                                           else f'http://127.0.0.1:{server.server_port}'),
                             FORMER_PREFIX + 'DL': 'https://invalid.example.test', 'PERSONA_SKIP_HERDR': '1',
                             'PERSONA_ROLE': 'hub', 'PERSONA_ADMIN_ACCESS': 'lan'})
                 # The system's tools only besides the fixtures: nothing of the machine running the tests is run.
@@ -116,13 +126,41 @@ class PersonaInstallTests(unittest.TestCase):
                     uname.write_text(f'#!/bin/sh\ncase "$1" in -s) echo {system} ;; -m) echo {platform.machine()} ;; esac\n')
                     uname.chmod(0o755)
                     env['PATH'] = f'{uname.parent}:{env["PATH"]}'
+                if github_latest:
+                    commands = downloads / 'github-commands'
+                    commands.mkdir()
+                    pinned = 'https://github.com/example/project/releases/download/' + (release_tag or 'v' + release)
+                    curl = commands / 'curl'
+                    curl.write_text(f'''#!/bin/sh
+printf '%s\n' "$2" >> "$HOME/curl-calls"
+url="$2"
+case "$url" in
+  https://github.com/example/project/releases/latest/download/latest.json) path=latest.json ;;
+  https://github.com/example/project/releases/latest/download/*) exit 22 ;;
+  {pinned}/*) path=${{url#{pinned}/}} ;;
+  *) exit 22 ;;
+esac
+exec /usr/bin/curl -fsSL "http://127.0.0.1:{server.server_port}/$path" -o "$4"
+''')
+                    curl.chmod(0o755)
+                    env['PATH'] = f'{commands}:{env["PATH"]}'
+                if no_python:
+                    blocked = downloads / 'no-python'
+                    blocked.mkdir()
+                    python = blocked / 'python3'
+                    python.write_text('#!/bin/sh\nexit 127\n')
+                    python.chmod(0o755)
+                    env['PATH'] = f'{blocked}:{env["PATH"]}'
                 for key in ('BASH_ENV', 'ENV', 'ZDOTDIR', 'XDG_CONFIG_HOME'):  # nothing of the machine's own setup
                     env.pop(key, None)
+                # Nor its language: install.sh answers in LC_ALL's, then LANG's, and the tests read English (#6938).
+                env.update({'LANG': 'C', 'LC_ALL': ''})
                 env.update(extra or {})
                 if answers is not None:  # with a terminal: install.sh asks, and these answer
-                    code, out = run_with_terminal(['sh', str(script)], env, answers)
-                    return subprocess.CompletedProcess(['sh', str(script)], code, out, out)
-                return subprocess.run(['sh', str(script)], env=env, capture_output=True, text=True, timeout=20)
+                    argv = ['sh', str(script), *args]
+                    code, out = run_with_terminal(argv, env, answers)
+                    return subprocess.CompletedProcess(argv, code, out, out)
+                return subprocess.run(['sh', str(script), *args], env=env, capture_output=True, text=True, timeout=20)
             finally:
                 server.shutdown()
                 server.server_close()
@@ -143,6 +181,185 @@ class PersonaInstallTests(unittest.TestCase):
                 self.assertEqual(os.readlink(binary.parent / (FORMER_NAME + 'd')), 'personad')
             # Hub setup is safe to repeat on upgrades.
             self.assertEqual((home / 'personad-calls').read_text().count('hub setup\n'), 2)
+
+    def test_github_latest_is_pinned_before_checksums_and_archives(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            result = self.run_install(home, release='1.2.3', github_latest=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = (home / 'curl-calls').read_text().splitlines()
+            self.assertEqual(calls[0], 'https://github.com/example/project/releases/latest/download/latest.json')
+            pinned = 'https://github.com/example/project/releases/download/v1.2.3/'
+            self.assertGreaterEqual(len(calls), 3)
+            for url in calls[1:]:
+                self.assertTrue(url.startswith(pinned), url)
+            self.assertTrue(any(url.endswith('/SHA256SUMS') for url in calls))
+            self.assertTrue(any('/personad-' in url for url in calls))
+
+    def test_github_latest_with_a_trailing_slash_is_also_pinned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            result = self.run_install(home, release='1.2.3', github_latest=True,
+                                      extra={'PERSONA_DL': 'https://github.com/example/project/releases/latest/download/'})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = (home / 'curl-calls').read_text().splitlines()
+            self.assertEqual(calls[0], 'https://github.com/example/project/releases/latest/download/latest.json')
+            for url in calls[1:]:
+                self.assertTrue(url.startswith('https://github.com/example/project/releases/download/v1.2.3/'), url)
+
+    def test_github_latest_does_not_require_python(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            script = home / 'install-no-python.sh'
+            script.write_text(INSTALL.read_text())
+            result = self.run_install(home, release='1.2.3', github_latest=True, no_python=True, script=script)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = (home / 'curl-calls').read_text().splitlines()
+            self.assertEqual(calls[0], 'https://github.com/example/project/releases/latest/download/latest.json')
+            self.assertTrue(all('/releases/download/v1.2.3/' in url for url in calls[1:]))
+
+    def test_legacy_suffixed_manifest_is_pinned_to_its_immutable_tag(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            result = self.run_install(home, release='0.7.0-202611110749', github_latest=True, release_tag='v0.7.0')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = (home / 'curl-calls').read_text().splitlines()
+            self.assertEqual(calls[0], 'https://github.com/example/project/releases/latest/download/latest.json')
+            for url in calls[1:]:
+                self.assertTrue(url.startswith('https://github.com/example/project/releases/download/v0.7.0/'), url)
+
+    def test_installer_text_catalog_has_every_language(self):
+        text = INSTALL.read_text(encoding='utf-8')
+        match = re.search(r'^INSTALL_TEXT_KEYS="([^"]+)"$', text, re.MULTILINE)
+        self.assertIsNotNone(match)
+        keys = match.group(1).split()
+        self.assertEqual(len(keys), len(set(keys)))
+        used = set(re.findall(r'(?m)^\s*(?:say|warn|prompt|fail)\s+([a-z0-9_]+)', text))
+        self.assertFalse(used - set(keys), used - set(keys))
+        for lang in ('en', 'zh-Hans', 'ja'):
+            for key in keys:
+                self.assertRegex(text, r'(?m)^\s*' + re.escape(lang + ':' + key) + r'\)', (lang, key))
+
+    def test_installer_text_preserves_placeholders_for_its_caller(self):
+        # The catalog is shared with deploy.sh: reading a format string must not consume its placeholders.
+        script = r'''
+set -eu
+install=$1
+eval "$(sed -n '/^# >>> install language/,/^# <<< install language/p' "$install")"
+set -- not-a-catalog-value
+for lang in en zh-Hans ja; do
+  INSTALL_LANG=$lang
+  for key in $INSTALL_TEXT_KEYS; do
+    text=$(install_text "$key")
+    count=$(printf '%s' "$text" | awk '{n += gsub(/%s/, "")} END {print n + 0}')
+    case $count in
+      0) ;;
+      1) [ "$(install_format "$key" one)" = "$(printf "$text" one)" ] ;;
+      2) [ "$(install_format "$key" one two)" = "$(printf "$text" one two)" ] ;;
+      3) [ "$(install_format "$key" one two three)" = "$(printf "$text" one two three)" ] ;;
+      4) [ "$(install_format "$key" one two three four)" = "$(printf "$text" one two three four)" ] ;;
+      5) [ "$(install_format "$key" one two three four five)" = "$(printf "$text" one two three four five)" ] ;;
+      *) printf 'unexpected format count: %s %s: %s\n' "$lang" "$key" "$count" >&2; exit 1 ;;
+    esac
+  done
+done
+printf 'catalog placeholders preserved in all languages\n'
+'''
+        result = subprocess.run(['sh', '-c', script, 'probe', str(INSTALL)], capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('catalog placeholders preserved', result.stdout)
+
+    def test_installer_language_from_environment_and_override(self):
+        cases = (
+            ('English', {'LANG': 'en_US.UTF-8', 'LC_ALL': ''}, (), 'installed at'),
+            ('Chinese', {'LANG': 'zh_CN.UTF-8', 'LC_ALL': ''}, (), '已安装到'),
+            ('Japanese', {'LANG': 'ja_JP.UTF-8', 'LC_ALL': ''}, (), 'インストールしました'),
+            ('LC_ALL wins', {'LANG': 'zh_CN.UTF-8', 'LC_ALL': 'ja_JP.UTF-8'}, (), 'インストールしました'),
+            ('unknown is English', {'LANG': 'fr_FR.UTF-8', 'LC_ALL': ''}, (), 'installed at'),
+            ('C is English', {'LANG': 'C', 'LC_ALL': ''}, (), 'installed at'),
+            ('split override', {'LANG': 'zh_CN.UTF-8', 'LC_ALL': ''}, ('--lang', 'ja'), 'インストールしました'),
+            ('equals override', {'LANG': 'ja_JP.UTF-8', 'LC_ALL': ''}, ('--lang=en',), 'installed at'),
+        )
+        for name, env, args, expected in cases:
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                result = self.run_install(home, extra=env, args=args)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(expected, result.stdout)
+
+    def test_hub_setup_gets_the_installer_language(self):
+        # The hub starts in the language the installer ran in (#5519): hub setup gets it in PERSONA_INSTALL_LANG, an
+        # environment variable an older personad ignores rather than refusing an unknown flag.
+        cases = (
+            ('from LANG', {'LANG': 'ja_JP.UTF-8', 'LC_ALL': ''}, (), 'ja'),
+            ('unknown is English', {'LANG': 'C', 'LC_ALL': ''}, (), 'en'),
+            ('override', {'LANG': 'en_US.UTF-8', 'LC_ALL': ''}, ('--lang', 'zh-Hans'), 'zh-Hans'),
+        )
+        for name, env, args, expected in cases:
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                result = self.run_install(home, extra=env, args=args)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((home / 'personad-setup-lang').read_text(), expected + '\n')
+
+    def test_hub_setup_hints_carry_the_installer_language(self):
+        # Someone who runs hub setup by hand from the installer's hint records the same language (#5519).
+        for lang in ('en', 'zh-Hans', 'ja'):
+            with self.subTest(lang), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                result = self.run_install(home, extra={'PERSONA_ROLE': ''}, args=('--lang', lang))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f'{home}/.persona/bin/personad hub setup --lang {lang}', result.stdout)
+            with self.subTest(lang, setup='fails'), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                result = self.run_install(home, extra={'SETUP_FAILS': '1'}, args=('--lang', lang))
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(f'{home}/.persona/bin/personad hub setup --lang {lang}', result.stderr)
+
+    def test_invalid_installer_language_stops_before_installing(self):
+        for args in (('--lang',), ('--lang', 'fr'), ('--lang=',)):
+            with self.subTest(args=args), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                result = self.run_install(home, args=args)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn('--lang', result.stderr)
+                self.assertFalse((home / '.persona').exists())
+
+    def test_installer_errors_use_selected_language(self):
+        for lang, expected in (('en', 'unknown option'), ('zh-Hans', '未知选项'), ('ja', '不明なオプション')):
+            with self.subTest(lang), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                result = self.run_install(home, args=('--lang', lang, '--not-an-option'))
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn(expected, result.stderr)
+                self.assertFalse((home / '.persona').exists())
+
+    def test_node_connection_help_keeps_its_line_breaks(self):
+        # node_connect_help is a format string with \n in it: printed through install_format, not straight from the
+        # catalog, so the terminal shows separate lines, not a literal \n (#5623). The terminal is the test's own
+        # pseudo-terminal (run_with_terminal, killed after its timeout), never the one running the tests.
+        for lang, heading in (('en', 'How should this computer connect to the hub?'), ('zh-Hans', '这台电脑怎么和 hub 连？'),
+                              ('ja', 'このコンピュータを hub にどう接続しますか？')):
+            with self.subTest(lang), tempfile.TemporaryDirectory() as directory:
+                result = self.run_install(Path(directory), link=LINK_FIXTURE, node=True, extra={'PERSONA_ROLE': 'node'},
+                                          args=('--lang', lang), answers=[('[1-2', '2')])
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertIn(heading, result.stdout)
+                self.assertNotIn('\\n', result.stdout)
+
+    def test_admin_access_prompt_uses_selected_language(self):
+        cases = (
+            ('en', 'Who can open the hub admin page'),
+            ('zh-Hans', 'hub 管理界面'),
+            ('ja', 'hub 管理画面'),
+        )
+        for lang, prompt in cases:
+            with self.subTest(lang), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                result = self.run_install(home, extra={'PERSONA_ROLE': 'hub', 'PERSONA_ADMIN_ACCESS': ''},
+                                          programs=HUB_PROGRAMS, args=('--lang', lang), answers=[(prompt, '2')])
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertIn('hub setup\n', (home / 'personad-calls').read_text())
 
     def test_node_install_adds_persona_link_and_runs_the_real_connector(self):
         # The installer executes the canonical connector directly, without a renamed-command wrapper.
@@ -179,7 +396,8 @@ class PersonaInstallTests(unittest.TestCase):
                     extra = {'PERSONA_ROLE': '', 'PERSONA_ADMIN_ACCESS': ''}
                     answers = [('跑 hub 吗', 'n'), ('连到你的 hub', ''), ('选哪个？[1-2', '1'), ('粘贴配对链接', '')]
                 result = self.run_install(home, link=LINK_FIXTURE, node=True, answers=answers,
-                                          legacy_artifacts=True, script=script, extra=extra)
+                                          legacy_artifacts=True, script=script, extra=extra,
+                                          args=('--lang', 'zh-Hans') if terminal else ())
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertTrue((state / 'bin/persona-node').is_file())
                 self.assertEqual(os.readlink(state / 'bin' / (FORMER_NAME + '-link')), 'persona-link')
@@ -188,7 +406,57 @@ class PersonaInstallTests(unittest.TestCase):
                 if terminal:
                     self.assertEqual(os.readlink(state / 'bin' / (FORMER_NAME + 'd')), 'personad')
 
-    def test_publish_fixture_indexes_node_and_compatibility_artifacts(self):
+    def test_publish_installer_downloads_from_the_compiled_update_base(self):
+        publisher = (ROOT / 'scripts/release/publish.sh').read_text()
+        self.assertIn('-X main.updateURL=$UPDATE_URL', publisher)
+        render = next(line for line in publisher.splitlines() if '--render-installer' in line)
+        update_url = 'https://releases.example.test/owner/project/releases/latest/download'
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(['bash', '-c', render], cwd=ROOT,
+                                    env=dict(os.environ, OUT=directory,
+                                             PERSONA_PUBLISH_URL='https://site.example.test', UPDATE_URL=update_url),
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            installer = (Path(directory) / 'install.sh').read_text()
+        download = next(line for line in installer.splitlines() if line.startswith('DL='))
+        self.assertEqual(download, 'DL="${PERSONA_DL:-' + update_url + '}"')
+
+    def test_tag_publication_sets_publish_version_from_the_tag(self):
+        publisher = (ROOT / 'scripts/release/publish.sh').read_text()
+        assignment = next(line for line in publisher.splitlines() if line.startswith('VERSION='))
+        result = subprocess.run(['bash', '-c', assignment + '\nprintf "%s" "$VERSION"'],
+                                env={'PATH': '/usr/bin:/bin', 'VERSION': 'wrong-version',
+                                     'PERSONA_RELEASE_VERSION': '1.2.3'},
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '1.2.3')
+
+    def test_identical_release_retry_verifies_served_manifest(self):
+        publisher = (ROOT / 'scripts/release/publish.sh').read_text()
+        start = publisher.index('curl -fsSL "$PERSONA_PUBLISH_URL/dl/latest.json"')
+        end = publisher.index('# Only current product names', start)
+        block = publisher[start:end].replace('curl -fsSL "$PERSONA_PUBLISH_URL/dl/latest.json" -o "$OUT/served.json" 2>/dev/null || : > "$OUT/served.json"', ':')
+        self.assertLess(publisher.index('for bin in "$OUT/bin"/personad-*'), publisher.index('if [ "$RETRY_SAME_BUILD" = 1 ]'))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            host = root / 'host-bin'
+            host.write_text('#!/bin/sh\ncase "$1 $2" in "release check-next") exit 1 ;; "release verify") echo "$*" >> "$CALLS"; exit 0 ;; esac\n')
+            host.chmod(0o755)
+            served = root / 'out/served.json'
+            served.parent.mkdir()
+            served.write_text(json.dumps({'build': 202611110749, 'commit': 'fixture-commit'}))
+            env = {'PATH': '/usr/bin:/bin', 'OUT': str(root / 'out'), 'BUILD': '202611110749',
+                   'COMMIT': 'fixture-commit', 'host_bin': str(host), 'CALLS': str(root / 'calls')}
+            result = subprocess.run(['bash', '-c', block], env=env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('release verify', (root / 'calls').read_text())
+            (root / 'calls').unlink()
+            env['COMMIT'] = 'different-commit'
+            result = subprocess.run(['bash', '-c', block], env=env, capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse((root / 'calls').exists())
+
+    def test_publish_fixture_indexes_only_current_product_artifacts(self):
         import shutil
         publisher = (ROOT / 'scripts/release/publish.sh').read_text()
         start = publisher.index('for bin in "$OUT/bin"/personad-*')
@@ -201,9 +469,10 @@ class PersonaInstallTests(unittest.TestCase):
             scripts.mkdir()
             shutil.copy2(ROOT / 'scripts/persona_identity.py', scripts / 'persona_identity.py')
             for name in ('personad-linux-amd64', 'persona-link-linux-amd64', 'persona-node-linux-amd64',
+                         'persona-link-windows-amd64.exe', 'persona-link-windows-arm64.exe',
                          'persona-hub-linux-amd64', 'persona-manager-linux-amd64'):
                 (binaries / name).write_bytes(('fixture ' + name).encode())
-            command = 'set -eu\nOUT=release-fixture\nVERSION=fixture\n' + publisher[start:end]
+            command = 'set -eu\nOUT=release-fixture\nVERSION=fixture\nRETRY_SAME_BUILD=0\n' + publisher[start:end]
             result = subprocess.run(['bash', '-c', command], cwd=root,
                                     env={'HOME': str(root), 'PATH': '/usr/bin:/bin'},
                                     capture_output=True, text=True, timeout=10)
@@ -211,12 +480,17 @@ class PersonaInstallTests(unittest.TestCase):
             sums = [line.split() for line in (binaries / 'SHA256SUMS').read_text().splitlines()]
             names = {name for digest, name in sums}
             self.assertIn('persona-node-linux-amd64.gz', names)
-            for current, old in (('personad', FORMER_NAME + 'd'), ('persona-link', FORMER_NAME + '-link')):
-                current_file = binaries / (current + '-linux-amd64.gz')
-                old_file = binaries / (old + '-linux-amd64.gz')
-                self.assertEqual(current_file.read_bytes(), old_file.read_bytes())
-                self.assertIn(current_file.name, names)
-                self.assertIn(old_file.name, names)
+            self.assertEqual({name for name in names if name.startswith(FORMER_NAME)}, set())
+            for current in ('personad', 'persona-link'):
+                self.assertIn(current + '-linux-amd64.gz', names)
+            for arch in ('amd64', 'arm64'):
+                self.assertIn(f'persona-link-windows-{arch}.exe.gz', names)
+            # Persona Link is still built for both Windows architectures, by the loop over the Windows programs.
+            windows = publisher[publisher.index('for t in windows/amd64 windows/arm64; do'):]
+            windows = windows[:windows.index('\n  done\ndone\n')]
+            programs = windows.splitlines()[1].strip()
+            self.assertTrue(programs.startswith('for p in ') and 'persona-link' in programs.split(), programs)
+            self.assertIn('-o "../$OUT/bin/$p-${t%/*}-${t#*/}.exe" "./cmd/$p"', windows)
             for digest, name in sums:
                 self.assertEqual(hashlib.sha256((binaries / name).read_bytes()).hexdigest(), digest)
 
@@ -229,8 +503,8 @@ class PersonaInstallTests(unittest.TestCase):
         # persona-node (it prefers it), and a switch is asked for, which does nothing on a new service.
         pair_link = 'persona://link?url=https%3A%2F%2Fhub.example.com&token=jp_x'
         pair = {'PERSONA_ROLE': 'node', 'PERSONA_PAIR': pair_link}
-        # A Mac's connector is the menu bar app, so install.sh sets up the resident node and pairs it in two calls.
-        for system, paired in (('Darwin', ['node install', 'pair ' + pair_link]), ('Linux', ['install --pair ' + pair_link])):
+        # On both Mac and Linux the same CLI pairs and installs the independent connector and node services.
+        for system, paired in (('Darwin', ['install --pair ' + pair_link]), ('Linux', ['install --pair ' + pair_link])):
             with self.subTest(system=system), tempfile.TemporaryDirectory() as directory:
                 home = Path(directory)
                 result = self.run_install(home, link=LINK_FIXTURE, node=True, extra=pair, system=system)
@@ -320,7 +594,8 @@ class PersonaInstallTests(unittest.TestCase):
             home = Path(directory)
             no_role = {'PERSONA_ROLE': '', 'PERSONA_ADMIN_ACCESS': ''}
             result = self.run_install(home, programs=HUB_PROGRAMS, extra=no_role,
-                                      answers=[('跑 hub 吗', 'y'), ('选哪个？[1-4', '')])
+                                      answers=[('跑 hub 吗', 'y'), ('选哪个？[1-4', '')],
+                                      args=('--lang', 'zh-Hans'))
             self.assertEqual(result.returncode, 0, result.stdout)
             for program in HUB_PROGRAMS:
                 self.assertTrue((home / '.persona/bin' / program).exists(), result.stdout)
@@ -398,6 +673,25 @@ class PersonaInstallTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertIn('no persona-hub', result.stderr)
 
+    def test_a_binary_property_list_is_read_quietly(self):
+        # Vendors' launchd files are often binary property lists, which are not UTF-8: the check reads past them and
+        # says nothing (the system awk on macOS, in a UTF-8 locale, stops on them and prints their bytes).
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            bin_dir = home / '.persona/bin'
+            self.assertEqual(self.run_install(home, programs=HUB_PROGRAMS).returncode, 0)
+            agent = home / 'Library/LaunchAgents/com.example.updater.plist'
+            agent.parent.mkdir(parents=True)
+            data = plistlib.dumps({'Label': 'com.example.updater', 'RunAtLoad': True,
+                                   'ProgramArguments': ['/Library/Application Support/Example/updater', 'run']},
+                                  fmt=plistlib.FMT_BINARY)
+            self.assertRaises(UnicodeDecodeError, data.decode)
+            agent.write_bytes(data)
+            result = self.run_install(home, programs=('persona-manager',), release='3')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(f'{bin_dir}/persona-hub stays as it was', result.stderr)
+            self.assertNotIn(agent.name, result.stdout + result.stderr)
+
     def test_other_computers_do_not_get_the_hubs_programs(self):
         # A device's node service, a computer that runs only an app-made manager, and one asked "not the hub": as before.
         pair = {'PERSONA_ROLE': 'node', 'PERSONA_PAIR': 'persona://link?url=https%3A%2F%2Fhub.example.com&token=jp_x'}
@@ -421,7 +715,8 @@ class PersonaInstallTests(unittest.TestCase):
         as_node = [('跑 hub 吗', 'n'), ('连到你的 hub', ''), ('选哪个？[1-2', '1'), ('粘贴配对链接', '')]
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
-            result = self.run_install(home, link=LINK_FIXTURE, node=True, extra=no_role, answers=as_node)
+            result = self.run_install(home, link=LINK_FIXTURE, node=True, extra=no_role, answers=as_node,
+                                      args=('--lang', 'zh-Hans'))
             self.assertEqual(result.returncode, 0, result.stdout)
             self.assertTrue((home / '.persona/bin/personad').exists())
             self.assertTrue((home / '.persona/bin/persona-node').exists(), result.stdout)

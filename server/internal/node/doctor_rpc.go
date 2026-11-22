@@ -6,11 +6,12 @@ import (
 	"errors"
 	"runtime"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 )
 
 // The web machine page's "What this computer can do" card asks the node for the same report `personad node doctor` prints
-// (docs/server/machines.md "Self-check"). The checks run in this process, so the sockets are looked at by the node that owns them.
+// (docs/server/machines.md "Doctor: what this computer can do"). The checks run in this process, so the sockets are looked at by the node that owns them.
 // node.doctor reads and nothing else; the only thing either method may write is what `--fix` writes
 // (writeGeneratedConfig, Persona's own generated files), and only when the caller says fix. The LaunchAgent fix is
 // the command line's alone (InsideNode).
@@ -24,7 +25,7 @@ func (n *Node) doctorOptions() DoctorOptions {
 	opts := DoctorOptions{
 		Dir: n.dir, Bin: n.bin,
 		NodeSock: nodeclient.SocketPath(), RuntimeSock: RuntimeSocketPath(),
-		ClaudeConfigDir: claudeDirOf(n.home), ClaudeVersion: claudeVersion,
+		ClaudeConfigDir: claudeDirOf(n.home), ClaudeVersion: claudeVersion, ClaudeProbe: claudeProbe,
 	}
 	if def, err := DefaultDoctorOptions(); err == nil {
 		opts.HerdrSock = def.HerdrSock
@@ -33,18 +34,31 @@ func (n *Node) doctorOptions() DoctorOptions {
 	opts.withLaunchd(n.home)
 	opts.InsideNode = true
 	if runtime.GOOS != "windows" {
-		opts.Preflight = n.preflight
+		opts.Preflight = n.preflightIn
 	}
 	return opts
 }
 
-// doctor is node.doctor ({"fix": bool, "preflight": bool}) and node.doctor.fix (always fix). The report is
-// DoctorReport as it is. "preflight": false leaves the path-access check out: the assistant's readiness only wants
-// Claude Code's version, asks every few minutes, and should neither wait for the reads nor make them each time.
+// node.doctor is the machine page's "What this computer can do": node doctor's report, read-only unless {"fix":true};
+// node.doctor.fix takes the same path as `node doctor --fix`, on Persona's own generated files only.
+func init() {
+	nodeRPC("node.doctor", func(n *Node, ctx context.Context, params json.RawMessage) (any, error) {
+		return n.doctor(ctx, params, false)
+	})
+	nodeRPC("node.doctor.fix", func(n *Node, ctx context.Context, params json.RawMessage) (any, error) {
+		return n.doctor(ctx, params, true)
+	})
+}
+
+// doctor is node.doctor ({"fix": bool, "preflight": bool, "locale": string}) and node.doctor.fix (always fix). The
+// report is DoctorReport as it is. Missing locale keeps the legacy zh-Hans wording for old hubs and machine readers.
+// "preflight": false leaves the path-access check out: the assistant's readiness only wants Claude Code's version,
+// asks every few minutes, and should neither wait for the reads nor make them each time.
 func (n *Node) doctor(ctx context.Context, params json.RawMessage, fix bool) (any, error) {
 	var a struct {
-		Fix       bool  `json:"fix"`
-		Preflight *bool `json:"preflight"`
+		Fix       bool   `json:"fix"`
+		Preflight *bool  `json:"preflight"`
+		Locale    string `json:"locale"`
 	}
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &a); err != nil {
@@ -53,6 +67,7 @@ func (n *Node) doctor(ctx context.Context, params json.RawMessage, fix bool) (an
 	}
 	opts := n.doctorOptions()
 	opts.Fix = fix || a.Fix
+	opts.Lang = i18n.Resolve(a.Locale).Or(i18n.Default)
 	if a.Preflight != nil && !*a.Preflight {
 		opts.Preflight = nil
 	}

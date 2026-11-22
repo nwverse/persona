@@ -1,8 +1,8 @@
 import SwiftUI
 
 // What Persona sent to its tasks' agents (`routed` items it wrote, #1542, docs/assistant/unified-entry.md "Messages to agents"):
-// never the user's bubble. A message on its own is one folded line on the left (`AgentSentLine`); a task's card lists every
-// one sent to it (`TaskSentList`), and the hand-off sent together with the card is drawn only there (`SentToAgents`).
+// never the user's bubble. A message on its own is one folded line on the left (`AgentSentLine`); the hand-off sent
+// together with a task's card is drawn like any other (nothing applies `SentToAgents.takenIn` now, docs/design/task-cards.md §5.1).
 
 /// One of Persona's messages to a task's agent in the conversation: a capsule like the answered and review lines, with
 /// its mark (a stop when Persona cut in first), where it went and the first line. A tap opens the whole text with Copy,
@@ -21,7 +21,7 @@ struct AgentSentLine: View {
     var body: some View {
         let text = item.text ?? ""
         VStack(alignment: .leading, spacing: 0) {
-            header(first: SentToAgents.firstLine(text))
+            header(first: ExchangeText.plain(SentToAgents.firstLine(text)))
             if open {
                 AgentSentText(text: text)
                     .padding(.horizontal, Theme.Space.m)
@@ -97,7 +97,7 @@ struct AgentSentText: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            Text(text)
+            Text(ExchangeText.linked(text)) // Markdown rendered; Copy keeps the text as sent (#2363)
                 .font(Theme.Font.secondary)
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -127,82 +127,3 @@ struct AgentSentText: View {
     }
 }
 
-/// On a task's card: what Persona sent to its agent, "N instructions sent"; a tap lists them (time and first line), and a tap
-/// on one opens its whole text. Nothing when it sent none (a task the user started from a plan).
-struct TaskSentList: View {
-    var todoID: String
-    var conversation: String
-    @State private var open = false
-    @State private var shown: String?
-    private var store: TasksStore { .shared }
-
-    var body: some View {
-        let sent = SentToAgents.sent(store.feed(conversation), todo: todoID)
-        if !sent.isEmpty {
-            VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                Button {
-                    Haptics.tap()
-                    withAnimation(Theme.Motion.state) { open.toggle() }
-                } label: {
-                    HStack(spacing: Theme.Space.xs) {
-                        ThemedIcon(Theme.Icon.routeToTask).font(Theme.Font.labelStrong)
-                        Text(String(localized: "\(sent.count) instructions sent")).lineLimit(1)
-                        ThemedIcon(Theme.Icon.disclosure)
-                            .font(Theme.Font.labelStrong)
-                            .foregroundStyle(.tertiary)
-                            .rotationEffect(.degrees(open ? 90 : 0))
-                        Spacer(minLength: 0)
-                    }
-                    .font(Theme.Font.captionMedium)
-                    .foregroundStyle(.secondary)
-                    .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("task-sent")
-                .accessibilityValue(open ? String(localized: "Expanded") : String(localized: "Collapsed [Assistant Sidebar e64447]"))
-                if open {
-                    ForEach(sent) { entry($0) }
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-            }
-        }
-    }
-
-    private func entry(_ item: FeedItem) -> some View {
-        let text = item.text ?? ""
-        let isOpen = shown == item.id
-        return VStack(alignment: .leading, spacing: Theme.Space.s) {
-            Button {
-                Haptics.tap()
-                withAnimation(Theme.Motion.state) { shown = isOpen ? nil : item.id }
-            } label: {
-                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-                    Text(AssistantScheduleText.hm(item.at))
-                        .font(Theme.Font.caption)
-                        .foregroundStyle(.tertiary)
-                        .monospacedDigit()
-                        .fixedSize()
-                    if item.interrupted {
-                        ThemedIcon(Theme.Icon.interrupt).font(Theme.Font.label).foregroundStyle(.secondary)
-                    }
-                    Text(SentToAgents.firstLine(text))
-                        .font(Theme.Font.secondary)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    ThemedIcon(Theme.Icon.disclosure)
-                        .font(Theme.Font.labelStrong)
-                        .foregroundStyle(.tertiary)
-                        .rotationEffect(.degrees(isOpen ? 90 : 0))
-                }
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("task-sent-entry")
-            if isOpen { AgentSentText(text: text).transition(.opacity) }
-        }
-        .padding(.horizontal, Theme.Space.m)
-        .padding(.vertical, Theme.Space.s)
-        .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
-    }
-}

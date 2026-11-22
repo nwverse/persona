@@ -1,8 +1,8 @@
 {
   "question": "在问你",
   "plan": "计划等你审批",
-  "permission": "等你授权",
-  "permission_for": "等你授权：{summary}",
+  "permission": "需要你授权",
+  "permission_for": "需要你授权：{summary}",
   "elicitation": "MCP 请求等你处理",
   "screen": "终端等你处理",
   "plan_for": "计划等你审批：{plan}",

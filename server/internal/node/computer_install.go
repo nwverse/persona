@@ -1,7 +1,7 @@
 package node
 
 // Installing Cua Driver and asking for its permissions from the app (computer.install, computer.grant, computer.cancel;
-// docs/extensions/computer-use.md "One-tap install"): one background job at a time, whose state comes back with computer.status.
+// docs/extensions/computer-use.md "One-tap installation"): one background job at a time, whose state comes back with computer.status.
 
 import (
 	"bytes"
@@ -94,7 +94,7 @@ func (s *jobSlot) start(kind string, run func(ctx context.Context, step func(str
 			job.State, job.Step = "done", ""
 		}
 		s.mu.Unlock()
-		if err == nil && then != nil {
+		if job.State == "done" && then != nil {
 			then()
 		}
 	}()
@@ -161,6 +161,7 @@ func installCua(ctx context.Context, step func(string)) error {
 	cmd := exec.CommandContext(ctx, "/bin/bash", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "CUA_DRIVER_RS_TELEMETRY_ENABLED=0", "CUA_DRIVER_NO_MODIFY_PATH=1")
+	killGroupOnCancel(cmd)
 	var out tailBuffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Run(); err != nil {

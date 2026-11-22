@@ -1,6 +1,6 @@
 import XCTest
 
-/// `probe.shell` (the app's `ShellShown`, docs/apple/ios-state.md「探针」): needs `-probes YES` at launch.
+/// `probe.shell` (the app's `ShellShown`, docs/apple/ios-state.md「Probes and assertions」): needs `-probes YES` at launch.
 struct ShellShown: Decodable {
     var strip, selected, tab: String
     var position: Double
@@ -88,7 +88,7 @@ extension XCUIApplication {
     }
 
     /// Taps the segment, then within `limit` seconds the strip must rest on that page with the switch and the app's
-    /// tab on it too (docs/apple/shell.md「及时」: the slide takes about 0.4 s; the rest is the probe's reads).
+    /// tab on it too (docs/apple/shell.md「Consistency and timeliness」: the slide takes about 0.4 s; the rest is the probe's reads).
     @discardableResult
     func switchTo(agents toAgents: Bool, _ what: String, limit: TimeInterval = 1.5,
                   file: StaticString = #filePath, line: UInt = #line) -> Bool {

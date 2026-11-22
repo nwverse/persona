@@ -96,12 +96,12 @@ func TestKBConnectorReadCanSubmitPosts(t *testing.T) {
 		return assistantwire.Archives{Items: []string{"example"}}, nil
 	})
 	h.s = New(Options{Hub: h, KB: &KBOptions{Dir: t.TempDir()}, Logf: testLogf(t)})
-	t.Cleanup(h.s.kbClose)
+	t.Cleanup(h.s.kbEnd)
 	setSettings(t, h.s, func(v *Settings) { v.Timezone = "UTC" })
 	e := kbEng(t, h.s)
 	done := make(chan struct{})
 	go func() {
-		h.s.kbCollectItems(context.Background(), e)
+		h.s.kbCollectItems(context.Background(), e, false)
 		close(done)
 	}()
 	select {
@@ -131,7 +131,7 @@ func TestKBForgetWaitsForItemCollection(t *testing.T) {
 	e.ModelFor = nil
 	collected := make(chan struct{})
 	go func() {
-		s.kbCollectItems(context.Background(), e)
+		s.kbCollectItems(context.Background(), e, false)
 		close(collected)
 	}()
 	<-entered

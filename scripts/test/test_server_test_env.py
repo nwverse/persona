@@ -15,6 +15,12 @@ ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("server_test_env", ROOT / "scripts/test/server_test_env.py")
 ISOLATION = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ISOLATION)
+# test-server.sh runs go test through this runner on the hub; the launcher test derives its split from it (#5666).
+RUNNER_SPEC = importlib.util.spec_from_file_location("go_test_partitioned", ROOT / "scripts/test/go_test_partitioned.py")
+RUNNER = importlib.util.module_from_spec(RUNNER_SPEC)
+RUNNER_SPEC.loader.exec_module(RUNNER)
+PARTITIONS = RUNNER.go_partitions
+NODE = "./internal/node"  # the fixture module's one partitioned package
 
 
 class ServerTestEnvironmentTests(unittest.TestCase):
@@ -147,6 +153,68 @@ class ServerTestEnvironmentTests(unittest.TestCase):
             self.assertEqual(len(homes), 1)
             self.assertFalse(homes[0].exists())
 
+    def test_go_test_runs_without_group_write_under_a_permissive_umask(self):
+        # A host whose umask is 002 (Ubuntu's default with a user's own group) must not hand it to go test: Go makes
+        # t.TempDir()'s directories and the test binary with it, and the external adapter tests refuse them (#10280).
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "hub.json"
+            config.write_text(json.dumps({"database_url": "postgres://user:synthetic@localhost/persona"}))
+            caches = {key: str(root / key.lower()) for key in ("GOCACHE", "GOMODCACHE", "GOPATH")}
+            seen = {}
+
+            def run(command, **kwargs):
+                if command[:2] == ["go", "env"]:
+                    return subprocess.CompletedProcess(command, 0, json.dumps(caches))
+                current = os.umask(0)
+                os.umask(current)
+                seen["umask"] = current  # what the test command inherits
+                for key in ("HOME", "TMPDIR", "GOTMPDIR"):
+                    seen[key] = os.stat(kwargs["env"][key]).st_mode & 0o777
+                return subprocess.CompletedProcess(command, 0)
+
+            previous = os.umask(0o002)
+            try:
+                with mock.patch.object(ISOLATION.subprocess, "run", side_effect=run):
+                    self.assertEqual(ISOLATION.run_tests(config, ["go", "test"], {"PATH": "/usr/bin"}), 0)
+                after = os.umask(0o002)
+            finally:
+                os.umask(previous)
+            self.assertEqual(seen["umask"], 0o022)
+            for key in ("HOME", "TMPDIR", "GOTMPDIR"):
+                self.assertEqual(seen[key] & 0o022, 0, f"{key} is {seen[key]:o}")
+            self.assertEqual(after, 0o002, "the runner's own umask is restored")
+
+    def test_go_flags_keep_the_effective_value_and_add_trimpath(self):
+        # The temporary HOME hides a `go env -w GOFLAGS`: the launcher resolves it first and passes it on with
+        # -trimpath, so checkouts share compiled packages (#10614).
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "hub.json"
+            config.write_text(json.dumps({"database_url": "postgres://user:synthetic@localhost/persona"}))
+            caches = {key: str(root / key.lower()) for key in ("GOCACHE", "GOMODCACHE", "GOPATH")}
+            for effective, expected in ((None, "-trimpath"), ("", "-trimpath"), ("-mod=mod", "-mod=mod -trimpath"),
+                                        ("-trimpath=false", "-trimpath=false")):
+                seen = {}
+
+                def run(command, **kwargs):
+                    if command[:2] == ["go", "env"]:
+                        seen["query"] = command
+                        values = dict(caches) if effective is None else dict(caches, GOFLAGS=effective)
+                        return subprocess.CompletedProcess(command, 0, json.dumps(values))
+                    seen["GOFLAGS"] = kwargs["env"].get("GOFLAGS")
+                    return subprocess.CompletedProcess(command, 0)
+
+                with self.subTest(effective=effective), mock.patch.object(ISOLATION.subprocess, "run", side_effect=run):
+                    self.assertEqual(ISOLATION.run_tests(config, ["go", "test"], {"PATH": "/usr/bin"}), 0)
+                    self.assertIn("GOFLAGS", seen["query"])
+                    self.assertEqual(seen["GOFLAGS"], expected)
+            result = subprocess.CompletedProcess(["go", "env"], 0, json.dumps(dict(caches, GOFLAGS=["-trimpath"])))
+            with mock.patch.object(ISOLATION.subprocess, "run", return_value=result) as run:
+                with self.assertRaises(ValueError):
+                    ISOLATION.run_tests(config, ["go", "test"], {"PATH": "/usr/bin"})
+                self.assertEqual(run.call_count, 1)
+
     def test_cache_failure_never_starts_the_test_command(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "hub.json"
@@ -169,7 +237,8 @@ class ServerTestEnvironmentTests(unittest.TestCase):
             tools = root / "tools"
             remote = root / "remote"
             profile = remote / "live-profile"
-            for path in (checkout / "scripts/test", checkout / "server", checkout / "spec", checkout / "apple",
+            for path in (checkout / "scripts/test", checkout / "scripts/mock", checkout / "server/internal/hub",
+                         checkout / "spec", checkout / "apple", checkout / "web/src/i18n/locales/en",
                          checkout / "docs", checkout / "sdk/go/ext", checkout / "sdk/go/wire/schema",
                          checkout / "sdk/templates/go", checkout / "sdk/ts/src", checkout / "sdk/ts/node_modules/typescript",
                          checkout / "schema/extension/examples/invalid", tools, profile):
@@ -178,6 +247,10 @@ class ServerTestEnvironmentTests(unittest.TestCase):
             (checkout / "sdk/ts/src/index.ts").write_text("export const fixture = true;\n")
             (checkout / "sdk/ts/node_modules/typescript/package.json").write_text('{"name":"typescript"}\n')
             (checkout / "docs/guide.md").write_text("# Fixture guide\n")
+            # kb's minutes tests read the web's locale files (web/src/i18n/locales/<lang>/*.json)
+            (checkout / "web/src/i18n/locales/en/fixture.json").write_text('{"locale":true}\n')
+            (checkout / "scripts/deploy").mkdir()
+            (checkout / "scripts/deploy/db.sh").write_text("# synthetic db script\n")
             (checkout / "sdk/templates/go/persona-extension.json").write_text('{"template":true}\n')
             sdk = checkout / "sdk/go"
             (sdk / "go.mod").write_text("module example.invalid/fixture-sdk\n")
@@ -189,8 +262,29 @@ class ServerTestEnvironmentTests(unittest.TestCase):
             (schema / "examples/invalid/View.fixture.json").write_text('{"valid":false}\n')
             schema_capture = root / "schema-sync.json"
             remote_schema = remote / ".cache/persona-test-checkout/schema/extension"
+            wire = checkout / "schema/wire"
+            wire.mkdir(parents=True)
+            (wire / "todo-view.schema.json").write_text('{"wire":true}\n')
+            wire_capture = root / "wire-sync.json"
+            remote_wire = remote / ".cache/persona-test-checkout/schema/wire"
+            configuration = checkout / "schema/configuration"
+            configuration.mkdir(parents=True)
+            (configuration / "all-types.json").write_text('{"configuration":true}\n')
+            configuration_capture = root / "configuration-sync.json"
+            remote_configuration = remote / ".cache/persona-test-checkout/schema/configuration"
+            # The Antigravity pane tests replay the integration's recorded wake fixtures (#11841).
+            agy_fixtures = checkout / "integrations/antigravity/test/fixtures"
+            agy_fixtures.mkdir(parents=True)
+            (agy_fixtures / "autonomous-wake.jsonl").write_text('{"fixture":true}\n')
+            agy_capture = root / "agy-fixtures-sync.json"
+            remote_agy = remote / ".cache/persona-test-checkout/integrations/antigravity/test/fixtures"
             shutil.copy2(ROOT / "scripts/test/test-server.sh", checkout / "scripts/test/test-server.sh")
             shutil.copy2(ROOT / "scripts/test/server_test_env.py", checkout / "scripts/test/server_test_env.py")
+            # test-server.sh stages the internal/node partition runner beside server_test_env.py (#5594).
+            runner_files = ("go_partitions.py", "go_test_partitioned.py")
+            for name in runner_files:
+                shutil.copy2(ROOT / "scripts/test" / name, checkout / "scripts/test" / name)
+            remote_checkout = remote / ".cache/persona-test-checkout"
             (checkout / "scripts/persona_config.py").write_text("print('export PERSONA_HUB_SSH=fake-hub')\n")
             identity_calls = root / "identity-calls.jsonl"
             (checkout / "scripts/persona_identity.py").write_text(
@@ -200,7 +294,6 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                 "print('export PERSONA_HOME='+shlex.quote(root))\n"
                 "if '--prepare' in sys.argv: print('test -f \"$PERSONA_HOME/hub.json\"')\n")
             (profile / "hub.json").write_text(json.dumps({"database_url": "postgres://user:synthetic@localhost/persona"}))
-            capture = root / "go-environment.json"
             cache_capture = root / "go-cache-environment.json"
             caches = {key: str(root / key.lower()) for key in ("GOCACHE", "GOMODCACHE", "GOPATH")}
 
@@ -216,9 +309,18 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                  f"command=command.replace('/usr/local/go/bin', {str(tools)!r})\n"
                  "sys.exit(subprocess.run(['bash','-c',command],env=env).returncode)\n")
             tool("rsync", "import json,os,pathlib,shutil,sys\n"
-                 "source=pathlib.Path(sys.argv[-2]); target=sys.argv[-1].split(':',1)[1]\n"
+                 "args=sys.argv[1:]\n"
+                 # operands are what is neither an option nor an --include / --exclude pattern
+                 "operands=[a for i,a in enumerate(args) if not a.startswith('-') and (not i or args[i-1] not in ('--include','--exclude'))]\n"
+                 "*sources,target=operands; target=target.split(':',1)[1]\n"
                  "destination=pathlib.Path(os.environ['HOME'])/target\n"
-                 "if source.is_file():\n destination.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(source,destination)\n"
+                 # several files into a directory: rsync a b host:dir/ keeps each name
+                 "if len(sources)>1:\n"
+                 " assert target.endswith('/') and destination.is_dir(), target\n"
+                 " for item in map(pathlib.Path,sources): assert item.is_file(), item; shutil.copy2(item,destination/item.name)\n"
+                 " sys.exit(0)\n"
+                 "source=pathlib.Path(sources[0])\n"
+                 "if source.is_file():\n assert destination.parent.is_dir(); shutil.copy2(source,destination)\n"
                  "else:\n"
                  " assert source.is_dir() and destination.parent.is_dir()\n"
                  " if '--delete' in sys.argv and destination.exists(): shutil.rmtree(destination)\n"
@@ -228,11 +330,31 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                  "if str(source)=='sdk/go':\n"
                  f" pathlib.Path({str(sdk_capture)!r}).write_text(json.dumps(sys.argv[1:]))\n"
                  "if str(source)=='schema/extension':\n"
-                 f" pathlib.Path({str(schema_capture)!r}).write_text(json.dumps(sys.argv[1:]))\n")
+                 f" pathlib.Path({str(schema_capture)!r}).write_text(json.dumps(sys.argv[1:]))\n"
+                 "if str(source)=='schema/wire':\n"
+                 f" pathlib.Path({str(wire_capture)!r}).write_text(json.dumps(sys.argv[1:]))\n"
+                 "if str(source)=='schema/configuration':\n"
+                 f" pathlib.Path({str(configuration_capture)!r}).write_text(json.dumps(sys.argv[1:]))\n"
+                 "if str(source)=='integrations/antigravity/test/fixtures':\n"
+                 f" pathlib.Path({str(agy_capture)!r}).write_text(json.dumps(sys.argv[1:]))\n")
+            packages = ["github.com/example/fixture/server/internal/example",
+                        "github.com/example/fixture/server/internal/node"]
+            node_tests = ["TestNodeA", "TestNodeB", "TestNodeC", "ExampleNode"]
+            node_listing = [*node_tests[:2], "BenchmarkNode", *node_tests[2:], "ok  fixture 0.1s"]
             tool("go", "import json,os,pathlib,sys\n"
                  "if sys.argv[1:2]==['env']:\n"
                  f" pathlib.Path({str(cache_capture)!r}).write_text(json.dumps(dict(os.environ)))\n"
                  f" print(json.dumps({caches!r})); sys.exit(0)\n"
+                 "import tempfile\n"
+                 "def record(**extra):\n"
+                 " handle,path=tempfile.mkstemp(suffix='.json',dir=os.environ['FAKE_GO_RUNS'])\n"
+                 " with os.fdopen(handle,'w') as out: json.dump({'args':sys.argv[1:],'env':dict(os.environ),**extra},out)\n"
+                 "assert pathlib.Path.cwd().name=='server'\n"
+                 # what go_test_partitioned.py lists to split the module and internal/node, whatever -list pattern it uses
+                 f"if sys.argv[1:]==['list',{RUNNER.WHOLE_MODULE!r}]:\n"
+                 f" record(); print('\\n'.join({packages!r})); sys.exit(0)\n"
+                 f"if sys.argv[1:3]==['test','-list'] and sys.argv[-1]=={NODE!r}:\n"
+                 f" record(); print('\\n'.join({node_listing!r})); sys.exit(0)\n"
                  "base=pathlib.Path.cwd().parent\n"
                  "sdk=base/'sdk/go'\n"
                  "assert (sdk/'go.mod').read_text()=='module example.invalid/fixture-sdk\\n'\n"
@@ -242,11 +364,24 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                  "assert (schema/'examples/View.fixture.json').read_text()=='{\"valid\":true}\\n'\n"
                  "assert (schema/'examples/invalid/View.fixture.json').read_text()=='{\"valid\":false}\\n'\n"
                  "assert not (schema/'stale.json').exists()\n"
+                 "wire=base/'schema/wire'\n"
+                 "assert (wire/'todo-view.schema.json').read_text()=='{\"wire\":true}\\n'\n"
+                 "assert not (wire/'stale.json').exists()\n"
+                 "configuration=base/'schema/configuration'\n"
+                 "assert (configuration/'all-types.json').read_text()=='{\"configuration\":true}\\n'\n"
+                 "assert not (configuration/'stale.json').exists()\n"
+                 "agy=base/'integrations/antigravity/test/fixtures'\n"
+                 "assert (agy/'autonomous-wake.jsonl').read_text()=='{\"fixture\":true}\\n'\n"
+                 "assert not (agy/'stale.jsonl').exists()\n"
                  "assert (base/'docs/guide.md').read_text()=='# Fixture guide\\n'\n"
+                 "assert (base/'web/src/i18n/locales/en/fixture.json').read_text()=='{\"locale\":true}\\n'\n"
                  "assert (base/'sdk/templates/go/persona-extension.json').read_text()=='{\"template\":true}\\n'\n"
                  "assert (base/'sdk/ts/src/index.ts').read_text()=='export const fixture = true;\\n'\n"
                  "assert not (base/'sdk/ts/node_modules').exists()\n"
-                 f"pathlib.Path({str(capture)!r}).write_text(json.dumps({{'args':sys.argv[1:],'env':dict(os.environ),'sdk_source':(sdk/'ext/fixture.go').read_text()}}))\n"
+                 # Read from the package directory exactly as the hub's inboxBody test helper does.
+                 "inbox_source=(base/'server/internal/hub/../../../scripts/mock/inbox_events.json').read_text()\n"
+                 "assert (base/'scripts/deploy/db.sh').read_text()=='# synthetic db script\\n'\n"
+                 "record(sdk_source=(sdk/'ext/fixture.go').read_text(),inbox_source=inbox_source)\n"
                  "sys.exit(int(os.environ.get('FAKE_GO_EXIT','0')))\n")
             environment = {
                 "PATH": str(tools) + os.pathsep + os.environ["PATH"], "HOME": str(remote),
@@ -259,24 +394,54 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                 "PGSERVICE": "live", "PGSERVICEFILE": str(profile / "service"),
                 "PGPASSFILE": str(profile / "passwords"), "PGOPTIONS": "synthetic", "PG_FUTURE_SETTING": "synthetic",
             }
-            for index, (args, expected, extra) in enumerate((
-                ([], ["test", "-count=1", "-p", "1", "./..."], {}),
-                (["-run", "TestFixture", "./internal/example"], ["test", "-count=1", "-p", "1", "-run", "TestFixture", "./internal/example"], {}),
-                ([], ["test", "-count=1", "-p", "1", "./..."], {"FAKE_GO_EXIT": "19"}),
+            # The whole module runs through the staged go_test_partitioned.py: the other packages in one go test and
+            # internal/node in go_partitions.py's three -run partitions. A -run passes through unchanged.
+            flags = ["test", "-count=1", "-p", "1"]
+            # A listing call's -list pattern is the runner's choice; compare it by its shape.
+            is_listing = lambda call: call[:1] == ["list"] or call[:2] == ["test", "-list"]
+            shape = lambda call: ["test", "-list", NODE] if call[:2] == ["test", "-list"] else call
+            listing = [["list", RUNNER.WHOLE_MODULE], ["test", "-list", NODE]]
+            whole = [[*flags, packages[0]]] + [[*flags, "-run", pattern, NODE]
+                                               for pattern in PARTITIONS.patterns(node_tests, PARTITIONS.PACKAGES[NODE])]
+            for index, (args, expected, expected_listing, extra) in enumerate((
+                ([], whole, listing, {}),
+                (["-run", "TestFixture", "./internal/example"],
+                 [[*flags, "-run", "TestFixture", "./internal/example"]], [], {}),
+                ([], whole, listing, {"FAKE_GO_EXIT": "19"}),
             )):
+                runs = root / f"go-runs-{index}"
+                runs.mkdir()
+                extra = {**extra, "FAKE_GO_RUNS": str(runs)}
                 source = f"package fixture // snapshot {index}\n"
                 (sdk / "ext/fixture.go").write_text(source)
+                inbox_source = json.dumps({"items": [{"id": f"fixture-{index}"}]}) + "\n"
+                (checkout / "scripts/mock/inbox_events.json").write_text(inbox_source)
                 if index and remote_sdk.is_dir():
                     (remote_sdk / "stale.go").write_text("package stale\n")
                 if index and remote_schema.is_dir():
                     (remote_schema / "stale.json").write_text("{}\n")
+                if index and remote_wire.is_dir():
+                    (remote_wire / "stale.json").write_text("{}\n")
+                if index and remote_configuration.is_dir():
+                    (remote_configuration / "stale.json").write_text("{}\n")
+                if index and remote_agy.is_dir():
+                    (remote_agy / "stale.jsonl").write_text("{}\n")
                 with self.subTest(args=args, extra=extra):
                     result = subprocess.run(["bash", str(checkout / "scripts/test/test-server.sh"), *args],
                                             env={**environment, **extra}, capture_output=True, text=True, timeout=30)
-                    self.assertEqual(result.returncode, int(extra.get("FAKE_GO_EXIT", "0")), result.stderr)
-                    recorded = json.loads(capture.read_text())
-                    child = recorded["env"]
-                    self.assertEqual(recorded["sdk_source"], source)
+                    self.assertEqual(result.returncode, int(extra.get("FAKE_GO_EXIT", "0")),
+                                     result.stdout + result.stderr)
+                    for name in runner_files:
+                        self.assertEqual((remote_checkout / name).read_bytes(),
+                                         (ROOT / "scripts/test" / name).read_bytes())
+                    records = [json.loads(path.read_text()) for path in runs.iterdir()]
+                    tests = [record for record in records if not is_listing(record["args"])]
+                    self.assertCountEqual([record["args"] for record in tests], expected)
+                    self.assertCountEqual([shape(record["args"]) for record in records if is_listing(record["args"])],
+                                          expected_listing)
+                    for record in tests:
+                        self.assertEqual(record["sdk_source"], source)
+                        self.assertEqual(record["inbox_source"], inbox_source)
                     self.assertEqual(json.loads(sdk_capture.read_text()),
                                      ["-a", "--delete", "sdk/go/", "fake-hub:.cache/persona-test-checkout/sdk/go/"])
                     self.assertFalse((remote_sdk / "stale.go").exists())
@@ -284,18 +449,32 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                                      ["-a", "--delete", "schema/extension/",
                                       "fake-hub:.cache/persona-test-checkout/schema/extension/"])
                     self.assertFalse((remote_schema / "stale.json").exists())
-                    # the pinned Bun lives in the hub user's ~/.local/bin, which a non-interactive shell may lack (#1947)
-                    self.assertIn(str(remote / ".local/bin"), child["PATH"].split(os.pathsep))
-                    self.assertEqual(recorded["args"], expected)
-                    self.assertEqual({key for key in child if key.startswith(("PERSONA_"))},
-                                     {"PERSONA_TEST_DATABASE_URL"})
-                    self.assertEqual(urlsplit(child["PERSONA_TEST_DATABASE_URL"]).path, "/persona_test")
-                    self.assertEqual(urlsplit(child["PERSONA_TEST_DATABASE_URL"]).netloc, "user:synthetic@localhost")
-                    self.assertFalse(any(key.startswith("PG") for key in child))
-                    self.assertEqual(child['JARVIS_TEST_DATABASE_URL'], child['PERSONA_TEST_DATABASE_URL'])
-                    self.assertNotEqual(child["HOME"], str(remote))
-                    self.assertFalse(Path(child["HOME"]).exists())
-                    self.assertFalse(any(str(profile) in value for value in child.values()))
+                    self.assertEqual(json.loads(wire_capture.read_text()),
+                                     ["-a", "--delete", "schema/wire/",
+                                      "fake-hub:.cache/persona-test-checkout/schema/wire/"])
+                    self.assertFalse((remote_wire / "stale.json").exists())
+                    self.assertEqual(json.loads(configuration_capture.read_text()),
+                                     ["-a", "--delete", "schema/configuration/",
+                                      "fake-hub:.cache/persona-test-checkout/schema/configuration/"])
+                    self.assertFalse((remote_configuration / "stale.json").exists())
+                    self.assertEqual(json.loads(agy_capture.read_text()),
+                                     ["-a", "--delete", "integrations/antigravity/test/fixtures/",
+                                      "fake-hub:.cache/persona-test-checkout/integrations/antigravity/test/fixtures/"])
+                    self.assertFalse((remote_agy / "stale.jsonl").exists())
+                    for record in records:
+                        child = record["env"]
+                        # the pinned Bun lives in the hub user's ~/.local/bin, which a non-interactive shell may lack (#1947)
+                        self.assertIn(str(remote / ".local/bin"), child["PATH"].split(os.pathsep))
+                        self.assertEqual({key for key in child if key.startswith(("PERSONA_"))},
+                                         {"PERSONA_TEST_DATABASE_URL"})
+                        self.assertEqual(urlsplit(child["PERSONA_TEST_DATABASE_URL"]).path, "/persona_test")
+                        self.assertEqual(urlsplit(child["PERSONA_TEST_DATABASE_URL"]).netloc,
+                                         "user:synthetic@localhost")
+                        self.assertFalse(any(key.startswith("PG") for key in child))
+                        self.assertEqual(child['JARVIS_TEST_DATABASE_URL'], child['PERSONA_TEST_DATABASE_URL'])
+                        self.assertNotEqual(child["HOME"], str(remote))
+                        self.assertFalse(Path(child["HOME"]).exists())
+                        self.assertFalse(any(str(profile) in value for value in child.values()))
                     cache_env = json.loads(cache_capture.read_text())
                     self.assertFalse(any(key.startswith(("PERSONA_", "PG")) for key in cache_env))
                     self.assertNotIn("synthetic-live-token", result.stdout + result.stderr)
@@ -306,8 +485,19 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                     calls = [json.loads(line) for line in identity_calls.read_text().splitlines()]
                     self.assertTrue(calls)
                     self.assertFalse([call for call in calls if "--prepare" in call], calls)
-            capture.unlink(missing_ok=True)
             cache_capture.unlink(missing_ok=True)
+            # The runs below must stop before Go: any go call would leave a record here.
+            blocked = root / "go-runs-blocked"
+            blocked.mkdir()
+            environment["FAKE_GO_RUNS"] = str(blocked)
+            # A missing local fixture must stop staging, even if the remote has an older copy.
+            (checkout / "scripts/mock/inbox_events.json").unlink()
+            result = subprocess.run(["bash", str(checkout / "scripts/test/test-server.sh")], env=environment,
+                                    capture_output=True, text=True, timeout=30)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(any(blocked.iterdir()))
+            self.assertFalse(cache_capture.exists())
+            (checkout / "scripts/mock/inbox_events.json").write_text(inbox_source)
             for source in (
                 "postgres://user:synthetic@localhost/custom",
                 "postgres://user:synthetic@localhost/persona?dbname=persona",
@@ -323,7 +513,7 @@ class ServerTestEnvironmentTests(unittest.TestCase):
                     result = subprocess.run(["bash", str(checkout / "scripts/test/test-server.sh")], env=environment,
                                             capture_output=True, text=True, timeout=30)
                     self.assertNotEqual(result.returncode, 0)
-                    self.assertFalse(capture.exists())
+                    self.assertFalse(any(blocked.iterdir()))
                     self.assertFalse(cache_capture.exists())
                     self.assertNotIn("postgres://", result.stdout + result.stderr)
                     self.assertNotIn("synthetic-live-password", result.stdout + result.stderr)
@@ -331,7 +521,7 @@ class ServerTestEnvironmentTests(unittest.TestCase):
             result = subprocess.run(["bash", str(checkout / "scripts/test/test-server.sh")], env=environment,
                                     capture_output=True, text=True, timeout=30)
             self.assertNotEqual(result.returncode, 0)
-            self.assertFalse(capture.exists())
+            self.assertFalse(any(blocked.iterdir()))
 
 
 if __name__ == "__main__":

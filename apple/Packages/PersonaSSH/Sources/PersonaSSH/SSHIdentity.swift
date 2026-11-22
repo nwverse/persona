@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 import NIOSSH
 
-/// This device's SSH key (docs/operations/network.md「经 SSH 隧道连 hub」): one Ed25519 key per device, made by the app. The app
+/// This device's SSH key (docs/operations/network.md「Connecting to hub through SSH」): one Ed25519 key per device, made by the app. The app
 /// keeps the private half in the keychain (this device only); here it is only ever turned into the lines the user
 /// pastes on the server.
 public struct SSHIdentity: Sendable {

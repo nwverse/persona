@@ -14,6 +14,7 @@ import dagger.Provides
 import javax.inject.Singleton
 import persona.core.data.HubDataStore
 import persona.core.contracts.api.DraftSnapshot
+import persona.core.contracts.api.HubManagers
 import persona.core.contracts.api.MainConversationSender
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.AssistantManagement
@@ -33,11 +34,15 @@ data class AssistantHostBindings(
     val coroutineScope: CoroutineScope,
     val phoneToolsAvailable: Boolean?,
     val machines: List<persona.core.contracts.Machine>,
+    val conversations: persona.core.contracts.api.AssistantRepository,
     val mainSender: MainConversationSender,
     val chatContent: @Composable (SessionKey, AssistantChatOptions) -> Unit,
 )
 
 val LocalAssistantHost = staticCompositionLocalOf<AssistantHostBindings?> { null }
+
+/** The selected hub's manager API, available to assistant-owned pages such as Details. */
+val LocalAssistantManagers = staticCompositionLocalOf<HubManagers?> { null }
 
 @Composable
 internal fun assistantComposerService(): ChatComposerService? {
@@ -51,7 +56,7 @@ interface AssistantAppWiring {
 }
 
 @Composable
-internal fun AssistantAppHost(navigator: Navigator, content: @Composable () -> Unit) {
+fun AssistantAppHost(navigator: Navigator, content: @Composable () -> Unit) {
     if (LocalAssistantHost.current != null) { content(); return }
     val context = LocalContext.current.applicationContext
     val dependencies = remember(context) { EntryPointAccessors.fromApplication(context, AssistantEntryPoint::class.java) }
@@ -79,14 +84,13 @@ fun ConnectedAssistant(
     val context = LocalContext.current.applicationContext
     val dependencies = remember(context) { EntryPointAccessors.fromApplication(context, AssistantEntryPoint::class.java) }
     val repository = remember(dependencies) { dependencies.assistantConversations() }
-    val pins by repository.pinned.collectAsStateWithLifecycle()
     val sessions = remember(dependencies) { dependencies.sessionsRepository() }
     val machines by sessions.machines.collectAsStateWithLifecycle()
-    AssistantScreen(navigator, repository, dependencies.messageSender(), repository::startConversation, pins,
+    AssistantScreen(navigator, repository, dependencies.messageSender(), repository::startConversation,
         machines = machines, phoneToolsAvailable = phoneToolsAvailable ?: LocalAssistantHost.current?.phoneToolsAvailable,
         management = management ?: LocalAssistantHost.current?.management,
         requestedSession = requestedSession, assistantChatContent = assistantChatContent ?: LocalAssistantHost.current?.chatContent,
-        mainConversationSender = dependencies.mainConversationSender())
+        mainConversationSender = dependencies.mainConversationSender(), mentionSessions = sessions.sessions)
 }
 
 /** All assistant entry points reuse the pairing-owned outbox, including the platform share queue. */
@@ -100,10 +104,14 @@ object AssistantSendingModule {
     ): MainConversationSender =
         object : MainConversationSender {
             override val outbox = messages.outbox
+            override val sendReceipts = messages.sendReceipts
 
-            override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?) {
+            override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?) =
+                sendToMain(text, clientMessageId, draft, null)
+
+            override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?, via: String?) {
                 val pairing = checkNotNull(data.restore()) { context.getString(R.string.assistant_pair_first) }
-                pairing.messages.sendToMain(text, clientMessageId, draft)
+                pairing.messages.sendToMain(text, clientMessageId, draft, via)
             }
 
             override suspend fun mainReplaced(previous: SessionKey) {
@@ -114,4 +122,12 @@ object AssistantSendingModule {
                 data.restore()?.messages?.mainChanged()
             }
         }
+}
+
+/** The current group's read-only access to its computers (New chat's @ lists a typed folder on the assistant's one). */
+@Composable
+internal fun assistantSessionFiles(): persona.core.contracts.api.SessionFiles? {
+    val host = LocalAssistantHost.current ?: return null
+    val wiring by chatWiringSource().current.collectAsStateWithLifecycle()
+    return wiring?.takeIf { it.scope.path == host.identity }?.files
 }

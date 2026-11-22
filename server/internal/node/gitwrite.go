@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -36,6 +37,7 @@ const (
 	gitCodeNoBranch         = "git_no_branch"         // no such branch, or a new branch's name is taken or not valid
 	gitCodeStashStale       = "git_stash_stale"       // refresh and reselect: the index no longer names the selected object
 	gitCodeStashUnsupported = "git_stash_unsupported" // safe stash mutation is unavailable on this repository
+	gitCodeStashConflicted  = "git_stash_conflicted"  // an apply / pop stopped on conflicts: the content is in the tree with markers, the entry kept (Data.files)
 	gitCodeNoStash          = "git_no_stash"          // no such stash entry, or nothing to stash
 	gitCodeFailed           = "git_failed"            // anything else git refused; its words are the message
 )
@@ -68,25 +70,25 @@ func (n *Node) gitWrite(ctx context.Context, method string, params json.RawMessa
 		return nil, err
 	}
 	switch method {
-	case "git.stage":
+	case methodGitStage:
 		return n.gitStage(ctx, p.Cwd, p.Paths, p.Unstage)
-	case "git.commit":
+	case methodGitCommit:
 		return n.gitCommit(ctx, p.Cwd, p.Message)
-	case "git.push":
+	case methodGitPush:
 		return n.gitPush(ctx, p.Cwd, p.SetUpstream)
-	case "git.branches":
+	case methodGitBranches:
 		return n.gitBranches(ctx, p.Cwd)
-	case "git.switch":
+	case methodGitSwitch:
 		return n.gitSwitch(ctx, p.Cwd, p.Branch, p.Create, p.From)
-	case "git.stash":
+	case methodGitStash:
 		index := -1
 		if p.Index != nil {
 			index = *p.Index
 		}
 		return n.gitStash(ctx, p.Cwd, p.Op, index, p.Message, p.Untracked, p.OID)
-	case "git.pr":
+	case methodGitPR:
 		return n.gitPR(ctx, p.Cwd)
-	case "git.pr_create":
+	case methodGitPRCreate:
 		return n.gitPRCreate(ctx, p.Cwd, p.Title, p.Body, p.Base, p.Draft)
 	default: // git.pr_merge
 		return n.gitPRMerge(ctx, p.Cwd, p.Number, p.Method, p.Auto, p.AutoOff)
@@ -200,7 +202,11 @@ func clipGitOutput(s string) string {
 		return -1
 	}, ansiEscape.ReplaceAllString(s, ""))
 	if len(s) > 4096 {
-		s = "…" + s[len(s)-4096:]
+		s = s[len(s)-4096:]
+		for len(s) > 0 && !utf8.RuneStart(s[0]) { // the cut fell inside a character: start after it
+			s = s[1:]
+		}
+		s = "…" + s
 	}
 	return s
 }
@@ -333,7 +339,8 @@ func (n *Node) gitPush(ctx context.Context, cwd string, setUpstream bool) (*gitR
 	return n.settled(ctx, root, &gitResult{Output: clipGitOutput(strings.TrimSpace(out))})
 }
 
-// gitBranches lists the local branches, then the remote ones without a local branch of the same name, newest first.
+// gitBranches lists the local branches, then the remote ones without a local branch of the same name, newest first,
+// and the remote's default branch when git knows it.
 func (n *Node) gitBranches(ctx context.Context, cwd string) (map[string]any, error) {
 	dir, err := n.gitDir(cwd)
 	if err != nil {
@@ -368,7 +375,16 @@ func (n *Node) gitBranches(ctx context.Context, cwd string) (map[string]any, err
 		_, name, _ := strings.Cut(b.Name, "/")
 		return names[name]
 	})
-	return map[string]any{"branches": append(local, remote...)}, nil
+	res := map[string]any{"branches": append(local, remote...)}
+	// The remote's default branch as git knows it (origin/HEAD, set by the clone or `git remote set-head`), by the name a
+	// pull request goes into: the app names it instead of "the default branch" (#7014). Left out when git doesn't know
+	// it, never guessed from the names.
+	if o, err := git(ctx, dir, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"); err == nil {
+		if _, name, ok := strings.Cut(strings.TrimSpace(o), "/"); ok && name != "" {
+			res["default"] = name
+		}
+	}
+	return res, nil
 }
 
 var branchName = lazyre.New(`^[A-Za-z0-9._/-]+$`)
@@ -528,7 +544,9 @@ func (n *Node) gitStash(ctx context.Context, cwd, op string, index int, message 
 		return nil, &rpc.Error{Code: gitCodeFailed, Message: "unknown stash op " + op}
 	}
 	out, errOut, err := gitExec(ctx, root, time.Minute, args...)
-	if err != nil {
+	if err != nil && op == "apply" {
+		return nil, stashApplyRefusal(ctx, root, out, errOut, err)
+	} else if err != nil {
 		return nil, gitRefusal("stash", out, errOut, err, nil)
 	}
 	if op == "push" && strings.Contains(out+errOut, "No local changes to save") {

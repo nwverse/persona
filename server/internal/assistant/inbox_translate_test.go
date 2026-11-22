@@ -309,7 +309,7 @@ func (h *failingMailHub) AppCall(ctx context.Context, p AppCall) (json.RawMessag
 func TestTranslateMailUnknownAccount(t *testing.T) {
 	h, _, _, translated := translateHub(t)
 	bridge := &failingMailHub{Hub: h.Service.hub}
-	h.Service.hub = bridge
+	setHub(h.Service, bridge)
 	const req = `{"account_id":"none","uid":1,"target":"zh-Hans"}`
 	unknown := &mail.UnknownAccountError{Account: "none"}
 	for _, err := range []error{unknown, fmt.Errorf("read mail: %w", unknown)} {
@@ -326,5 +326,35 @@ func TestTranslateMailUnknownAccount(t *testing.T) {
 	status, body := serveJSON(t, h.Service, "POST", "/api/v1/translate/mail", "en", req)
 	if status != http.StatusBadGateway || body["code"] != "internal" || body["error"] != i18n.T(i18n.En, "rpc-errors.failed") || body["detail"] != bridge.err.Error() {
 		t.Fatalf("other failure: %d %v", status, body)
+	}
+}
+
+func TestGoldenTranslationLanguage(t *testing.T) {
+	for _, locale := range []string{"en", "zh-Hans", "ja"} {
+		t.Run(locale, func(t *testing.T) {
+			h := newInboxHub(t)
+			h.f.hello.Locale = locale
+			model, calls := captureModel(t, `{"texts":["Bonjour"],"subject":"Avis","text":"Le 5 juin."}`)
+			h.in.mu.Lock()
+			h.in.models[purposeTranslate] = model
+			h.in.mail = &fakeMail{bodies: map[uint32]assistantwire.InboxMailMessage{7: {Subject: "Notice <X>", Text: "June 5."}}}
+			h.in.mu.Unlock()
+			ctx := context.Background()
+			texts, err := h.translateTexts(ctx, []string{"Hello <X>"}, "fr")
+			if err != nil || len(texts) != 1 || texts[0] != "Bonjour" {
+				t.Fatalf("batch: %q, %v", texts, err)
+			}
+			ref := assistantwire.InboxMailRef{AccountID: "acc1", UID: 7, Mailbox: "INBOX"}
+			mail, err := h.translateMail(ctx, ref, "fr")
+			if err != nil || mail.Subject != "Avis" || mail.Text != "Le 5 juin." {
+				t.Fatalf("mail: %+v, %v", mail, err)
+			}
+			got := calls()
+			if len(got) != 2 {
+				t.Fatalf("model calls: %d", len(got))
+			}
+			goldenCall(t, "translate_texts."+locale, got[0])
+			goldenCall(t, "translate_mail."+locale, got[1])
+		})
 	}
 }

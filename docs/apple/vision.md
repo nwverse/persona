@@ -1,7 +1,7 @@
 # visionOS App
 
 The native visionOS version of Persona (the `PersonaVision` target in `apple/`, #1687): it shares the logic layer (`Shared/`, `Persona/App`) and content views with the iOS App,
-wrapped in a visionOS shell of its own (`apple/Vision/`). The approach follows the Mac version (`docs/apple/mac.md` ("Approach")): iOS and Mac do not change how they look for visionOS.
+wrapped in a visionOS shell of its own (`apple/Vision/`). The approach follows the retired native Mac version ([mac.md](../archive/apple/mac.md), "Approach"): iOS and Mac do not change how they look for visionOS.
 
 ## Approach
 
@@ -25,6 +25,7 @@ wrapped in a visionOS shell of its own (`apple/Vision/`). The approach follows t
 | Liquid Glass | The window itself is glass: glass containers only do layout, surfaces use system materials |
 | Share › Persona (`PersonaShare`) | The same code and Info.plist, compiled as the visionOS extension target `PersonaVisionShare` and embedded in the Vision App; same bundle id as iPhone (`<bundle id>.share`) |
 | Opening relayed pushes (`PersonaNotify`, docs/operations/push-relay.md) | The same code and Info.plist, compiled as the visionOS extension target `PersonaVisionNotify` and embedded in the Vision App (#1981); same bundle id as iPhone (`<bundle id>.notify`), the `.push` keychain group shared with the app |
+| Read-only extension widgets (`PersonaWidgets`, `PersonaWatchWidgets`) | `PersonaVisionWidgets` embeds only `ExtensionSystemWidget` (#2024), sharing the App Group, credentials, cached content, configuration reports and invalidation paths with the Vision App. Supports system small, medium and large families on visionOS 26; no accessory families, Live Activities or Control Center controls. Placement and rendered content still need verification on visionOS |
 | Paste Image in the composer (`PasteImageChip`) | Same: visionOS has the system `PasteButton` and clipboard too |
 | Voice Chat's call audio (`PhoneVoiceAudio`, docs/assistant/voice.md) | Same: `AVAudioSession` play-and-record / voice-chat, voice processing, the microphone permission and keeping the screen awake during a call are shared with iPhone; `VoicePlatform.current` is `.phone`. Not on the Mac yet |
 | App icon | `AppIcon-Vision.solidimagestack` (written by `scripts/assets/make_icon.py vision`): the flat art split into two layers, the paper behind (a smooth fit of the border, opaque) and the drawing in front (the pixels that differ from the paper, with a feathered edge), the middle layer empty; visionOS wants at least two layers with content and masks the icon round |
@@ -57,5 +58,7 @@ xcrun simctl io <udid> screenshot vision.png
 - On the simulator, sign ad hoc locally (`CODE_SIGN_IDENTITY=-`): a build with `CODE_SIGNING_ALLOWED=NO` cannot read or write the keychain, so it cannot enter demo mode.
   Why: when the keychain read fails (missing entitlement), the registry counts as "unreadable" (`registryUnreadable`), and demo mode only opens when the registry is known to be empty.
   In DEBUG visionOS builds, `-openWelcome YES` treats the just-cleared registry as known empty, so demo mode works without signing too (not verified on the simulator).
-- When you change code shared by iOS / Mac, build all three: `Persona`, `PersonaMac`, `PersonaVision`.
+- When you change code shared with iOS (`Persona/`, `Shared/`), build both `Persona` and `PersonaVision` (the native Mac target is gone, #7228).
+  `scripts/ci/apple.sh` does not build `PersonaVision`, so this build is the only check: an iOS-only member or import
+  (`#if os(iOS)`, a package only the iPhone app links, such as `PersonaCore`) used from shared code breaks it (#10294).
 - On the visionOS simulator, `launch` after `simctl terminate` often shows no window (the process is there, the scene is not created): `simctl shutdown` and then `boot` first.

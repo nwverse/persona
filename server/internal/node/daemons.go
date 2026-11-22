@@ -14,7 +14,7 @@ package node
 //   - its session ids reach the hub as "<id>.<its id>" and its interaction ids are replaced, so its sessions never
 //     collide with this machine's or another runtime's — and a call about a session without its prefix (the node
 //     asking every runtime who has an unknown session) is answered by the link, never shown to the daemon;
-//   - only the protocol's caps (start, send, interrupt, rename, close), no mcp.* (phone and Persona tools), and no
+//   - only approved runtime capabilities and opt-in A2A tools for their own sessions, with no
 //     pane_id / resume_argv / transcript (a pane to claim, a command to run in the terminal engine, a transcript to read).
 
 import (
@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
 	"io"
 	"net"
@@ -83,12 +84,13 @@ const daemonMaxMessage = 64 << 20
 
 // daemonCaps are the capabilities a daemon may declare; anything a later protocol adds is off for daemons until it is
 // allowed here on purpose.
-var daemonCaps = []string{"start", "send", "interrupt", "rename", "close"}
+var daemonCaps = []string{"start", "send", "interrupt", "rename", "close", "execution", "history"}
 
 // daemonMethods are the node → runtime calls a link forwards to its daemon.
-var daemonMethods = map[string]bool{"session.items": true, "session.image": true, "session.item": true, "session.watch": true,
+var daemonMethods = map[string]bool{"session.items": true, "session.image": true, "session.item": true, "session.visualization": true,
+	"session.watch":   true,
 	"session.unwatch": true, "session.send": true, "session.interrupt": true, "session.rename": true, "session.close": true,
-	"session.start": true}
+	"session.start": true, "session.execution": true, "sessions.history": true}
 
 // daemonConfig is one daemon in daemons.json.
 type daemonConfig struct {
@@ -106,6 +108,7 @@ type daemonConfig struct {
 	// Launcher names its entry in the new-session form when it can start sessions; default ID.
 	Launcher string `json:"launcher,omitempty"`
 	Disabled bool   `json:"disabled,omitempty"`
+	A2A      bool   `json:"a2a,omitempty"`
 }
 
 // validate checks one entry; the error says which field is wrong, never a value of the token.
@@ -563,14 +566,16 @@ func (l *daemonLink) fromDaemon(ctx context.Context, method string, params json.
 			}
 			return nil, err
 		}
-		// resume_argv, handover and transcript are for runtimes on the socket: what a daemon lists offline is not
-		// resumed in a terminal here, a send it refuses is not handed to another runtime (the link turns that code
-		// away), and its sessions are not read from this machine's transcripts. launchers, modes and resume need what
-		// the link does not pass on (more launchers than the config's one, caps beyond daemonCaps).
+		// resume_argv, handover, transcript, codex_thread and unlisted_transcripts are for runtimes on the socket: what
+		// a daemon lists offline is not resumed in a terminal here, a send it refuses is not handed to another runtime
+		// (the link turns that code away), and its sessions are not read from this machine's transcripts, nor are its
+		// Codex threads or its past sessions' transcripts this machine's. launchers, modes and resume need what the link
+		// does not pass on (more launchers than the config's one, caps beyond daemonCaps), and so do workspaces (a
+		// daemon's workspaces are another machine's folders).
 		if f, ok := res["features"].([]any); ok {
 			kept := []any{}
 			for _, x := range f {
-				if !slices.Contains([]any{"resume_argv", runtimeHandover, "transcript", "launchers", "modes", "resume"}, x) {
+				if !slices.Contains([]any{"resume_argv", runtimeHandover, "transcript", "launchers", "modes", "resume", "codex_thread", "unlisted_transcripts", "workspaces"}, x) {
 					kept = append(kept, x)
 				}
 			}
@@ -602,11 +607,38 @@ func (l *daemonLink) fromDaemon(ctx context.Context, method string, params json.
 		err := l.rp.Call(ctx, "interaction.create", p, &res)
 		return res, err
 	case "mcp.tools":
+		if l.cfg.A2A {
+			return l.a2aTool(ctx, method, params)
+		}
 		return map[string]any{"tools": []any{}}, nil
 	case "mcp.call":
+		if l.cfg.A2A {
+			return l.a2aTool(ctx, method, params)
+		}
 		return nil, errUnsupportedForDaemons("Persona tools")
 	}
 	return nil, &rpc.Error{Message: "unsupported: unknown method " + method, Code: "unsupported"}
+}
+
+func (l *daemonLink) a2aTool(ctx context.Context, method string, params json.RawMessage) (any, error) {
+	var p struct {
+		Name      string          `json:"name"`
+		SessionID string          `json:"session_id"`
+		Args      json.RawMessage `json:"args"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, err
+	}
+	sid, ok := l.outer(p.SessionID)
+	if !ok {
+		return nil, errUnsupportedForDaemons("tools without an owned session")
+	}
+	if method == "mcp.call" && !assistantwire.IsA2ATool(p.Name) {
+		return nil, errUnsupportedForDaemons("non-A2A tools")
+	}
+	var res json.RawMessage
+	err := l.rp.Call(ctx, method, map[string]any{"name": p.Name, "session_id": sid, "args": p.Args}, &res)
+	return res, err
 }
 
 // hello is what the host hears: the config's id, name, agent and launcher; only the caps daemons may have.
@@ -664,12 +696,27 @@ func (l *daemonLink) row(s map[string]json.RawMessage) (map[string]json.RawMessa
 	}
 	s["session_id"] = rawJSON(outer)
 	// No terminal of this machine's, and no name but the config's (the node labels its sessions).
-	for _, k := range []string{"pane_id", "resume_argv", "transcript", "tab_id", "workspace_id", "agent_label"} {
+	for _, k := range []string{"pane_id", "resume_argv", "transcript", "codex_thread", "tab_id", "workspace_id", "agent_label"} {
 		delete(s, k)
 	}
 	var space string
 	if json.Unmarshal(s["space_id"], &space) == nil && space != "" {
 		s["space_id"] = rawJSON(l.cfg.ID + ":" + space) // the apps group by space id: not with another runtime's
+	}
+	// The session that started it (docs/integrations/runtimes.md, a row of its own with a parent) is another of the
+	// daemon's: named by its id here too, or not at all.
+	for _, k := range []string{"parent_session_id", "root_session_id", "asking_parent_session_id"} {
+		if _, named := s[k]; !named {
+			continue
+		}
+		var ref string
+		if json.Unmarshal(s[k], &ref) == nil && ref != "" {
+			if o, ok := l.outer(ref); ok {
+				s[k] = rawJSON(o)
+				continue
+			}
+		}
+		delete(s, k)
 	}
 	return s, true
 }
@@ -694,7 +741,7 @@ func (l *daemonLink) fromDaemonEvent(event string, params json.RawMessage) {
 			}
 		}
 		_ = l.rp.Notify("runtime.sessions", map[string]any{"sessions": out})
-	case "session.items", "session.delta":
+	case "session.items", "session.delta", "usage.report":
 		var p map[string]json.RawMessage
 		if json.Unmarshal(params, &p) != nil || p == nil {
 			return
@@ -729,6 +776,9 @@ func (l *daemonLink) toDaemon(ctx context.Context, method string, params json.Ra
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("bad %s: %w", method, err)
 		}
+	}
+	if method == "sessions.history" {
+		return l.historyFromDaemon(ctx, p)
 	}
 	if method != "session.start" {
 		var id string
@@ -767,6 +817,32 @@ func (l *daemonLink) toDaemon(ctx context.Context, method string, params json.Ra
 	}
 	res["session"] = rawJSON(r)
 	return res, nil
+}
+
+// historyFromDaemon forwards sessions.history (docs/protocol/protocol.md "Session history"): a window, not a session, so
+// it carries no session id to translate. Its rows come back as runtime.sessions' do (row): namespaced by the daemon's
+// id, and a row without a valid id left out.
+func (l *daemonLink) historyFromDaemon(ctx context.Context, p map[string]json.RawMessage) (any, error) {
+	cctx, cancel := context.WithTimeout(ctx, daemonCallTimeout)
+	defer cancel()
+	var res struct {
+		Rows       []map[string]json.RawMessage `json:"rows"`
+		NextCursor string                       `json:"next_cursor"`
+		Complete   bool                         `json:"complete"`
+	}
+	if err := l.dp.Call(cctx, "sessions.history", p, &res); err != nil {
+		return nil, err
+	}
+	rows := make([]map[string]json.RawMessage, 0, len(res.Rows))
+	for _, s := range res.Rows {
+		if s == nil {
+			continue
+		}
+		if r, ok := l.row(s); ok {
+			rows = append(rows, r)
+		}
+	}
+	return map[string]any{"rows": rows, "next_cursor": res.NextCursor, "complete": res.Complete}, nil
 }
 
 // toDaemonEvent passes on what the node tells every runtime (whether a hub is connected).

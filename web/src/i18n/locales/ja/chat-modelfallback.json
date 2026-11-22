@@ -1,0 +1,9 @@
+{
+  "cause_safeguards_refusal": "モデルがリクエストを拒否しました",
+  "cause_quota_exhausted": "利用枠を使い切りました",
+  "cause_rate_limited": "レート制限されました",
+  "cause_server_error": "サービスエラーです",
+  "cause_model_unavailable": "モデルを利用できません",
+  "exhausted_resets": "{time} に再び利用できます",
+  "exhausted_tried": "試したモデル：{models}"
+}

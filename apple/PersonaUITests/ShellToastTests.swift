@@ -1,6 +1,6 @@
 import XCTest
 
-/// The app's toasts in the shell (docs/apple/shell.md「连接状态和 toast」, #1053): the result of something just done (Archived, Copied…)
+/// The app's toasts in the shell (docs/apple/shell.md「Connection status and toasts」, #1053): the result of something just done (Archived, Copied…)
 /// floats over everything in a window of its own and moves nothing: the Agents list's first row, the drawer's rows and
 /// the status row stay where they are while it shows, what is under it takes the taps, and it is not under the
 /// keyboard. It used to open the status row, which pushed the pages and the drawer down and back.

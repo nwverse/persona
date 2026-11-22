@@ -4,16 +4,17 @@
 // LarkReactionPicker / LarkProfileSheet).
 import { useEffect, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
-import { emojiLabel, withToken, type LarkPart } from "../../lib/inbox";
+import { withToken, type LarkPart } from "../../lib/inbox";
+import { emojiLabel } from "../../lib/inbox-page";
 import { useItemManager, withManager } from "../../lib/manager-choice";
 import {
   cardIconName, directChat, duration, emojiCatalog, fileSize, pressCardAction, profile, profileRows, quickBar, quickReactions,
-  type CardButton, type EmojiCatalog, type LarkProfile, type LarkReaction, type ReadMark,
+  type CardButton, type EmojiCatalog, type LarkProfile, type LarkProfileRef, type LarkReaction, type ReadMark,
 } from "../../lib/lark-chat";
 import { t } from "../../i18n";
 import { Button, cx, Dialog, Loading, Spinner, toast } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
-import { Monogram } from "./InboxParts";
+import { LarkAvatar } from "./InboxParts";
 
 // ── files, voice, video ──────────────────────────────────
 
@@ -289,6 +290,9 @@ export function EmojiImage({ name, size, catalog }: { name: string; size: number
   const e = catalog?.emojis[name.toLowerCase()];
   const src = e?.url?.startsWith("/api/") ? withToken(withManager(e.url, manager)) : e?.url && /^https:/i.test(e.url) ? e.url : undefined;
   if (src) return <img src={src} alt={e?.label || name} width={size} height={size} className="shrink-0 object-contain" style={{ width: size, height: size }} />;
+  // The catalogue is still loading (its fetch only starts once reactions draw): reserve a neutral dot instead of
+  // flashing the raw "[key]" text, which made the reaction row jump when the picture replaced it.
+  if (!catalog) return <span aria-hidden className="inline-block shrink-0 rounded-full bg-field" style={{ width: size, height: size }} />;
   return <span className="text-[11px] text-ink-2">{emojiLabel(name)}</span>;
 }
 
@@ -396,7 +400,7 @@ export function ProfileDialog({
   onClose,
   onChat,
 }: {
-  who: { id: string; name: string; avatar?: string; bot?: boolean };
+  who: LarkProfileRef;
   feed?: string;
   account?: number;
   onClose: () => void;
@@ -442,7 +446,7 @@ export function ProfileDialog({
       ) : undefined}
     >
       <div className="flex items-center gap-3 pt-2">
-        <Monogram name={name} size={56} src={p?.avatarUrl || who.avatar} />
+        <LarkAvatar name={name} size={56} avatarURL={p?.avatar_url || who.avatar_url} avatar={p?.avatarUrl || who.avatar} account={account} />
         <div className="min-w-0 flex-1">
           <p className="flex items-center gap-1.5">
             <span className="truncate text-[16px] font-semibold text-ink">{name}</span>

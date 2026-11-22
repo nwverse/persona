@@ -40,7 +40,7 @@ web panel  ──WebSocket──▶  hub …/preview/connect  ──stream (stre
 - `cwd` is relative to the project (the folder holding `.claude`; `${workspaceFolder}` works), `env` is added in front of the command.
 - Each entry comes back with `listening` and the page's `title` (the same probe as port discovery). Entries that cannot be used come last with a `problem`: `no_name`, `no_port`, `not_local` (a `url` on another computer: a preview only shows this one), `no_run` (no command and no `url`), `bad_env`. A file that is not JSON or too big comes back as `error`, with no entries.
 
-**Start** (`preview.start {cwd, name, workspace, kind?}`): the panel shows the exact command (and folder, variables) and asks first. The node reads the file again (what runs is what the file says now), opens a new terminal tab in the session's workspace named after the entry, in its folder, and types the command: each word shell-quoted, `env K=V …` in front for its `env`, never a shell string from the file. The output is in that tab (the terminal page, herdr on the computer), and Ctrl-C there stops it. The panel then waits for the port: it reads `…/preview/servers` every 1.5 s for 90 s, one read at a time and none while the browser tab is hidden, and after Cancel a read still out changes nothing.
+**Start** (`preview.start {cwd, name, workspace, kind?}`): offered for a session with a workspace and a terminal (a Paseo session has neither of its own: its workspace is Paseo's). The panel shows the exact command (and folder, variables) and asks first. The node reads the file again (what runs is what the file says now), opens a new terminal tab in the session's workspace named after the entry, in its folder, and types the command: each word shell-quoted, `env K=V …` in front for its `env`, never a shell string from the file. The output is in that tab (the terminal page, herdr on the computer), and Ctrl-C there stops it. The panel then waits for the port: it reads `…/preview/servers` every 1.5 s for 90 s, one read at a time and none while the browser tab is hidden, and after Cancel a read still out changes nothing.
 
 ## A preview (`preview.go`)
 
@@ -93,10 +93,56 @@ Within the preview the address bar and links may go to any loopback port, as the
 
 `pick {on: true}` puts the tab in the inspector's "select an element" mode (`Overlay.setInspectMode`): the element under the pointer is outlined in the pictures (content, padding, margin), and a click picks it instead of clicking it. The node runs `preview_pick.js` on it and sends `picked`: a CSS `selector` (ids first, readable class names, `:nth-of-type` where needed, unique when it can be), `tag`, its `text` (300 characters), `html` (`outerHTML`, 6000 characters), `role`, `label` (aria-label), its box (`rect`), the page's `url` and `title`, and when a dev build says so the `component` that drew it and its `source` (React 18's `_debugSource`, Vue 3's `__file`, Svelte's `__svelte_meta`). The web turns it into a comment for the Agent: an `Element comment N` block in front of the next message (`docs/protocol/protocol.md` "Quote and comment blocks"), the HTML cut to 60 lines.
 
+### Typing and a phone's keyboard
+
+The web panel types into the page through a hidden text field (`web/src/views/session/PreviewPanel.tsx`): keys, an input method's text and a paste go from there as `key` / `text`. On a phone, focusing that field raises the keyboard, which shrinks the panel and so the page (a smaller `size`, and the page lays itself out again). So on a touch screen only a tap that lands on the page focuses it, once the finger lifts (until then the press may become a scroll); a finger's scroll, Pick element (cancelled there with the bar's Cancel rather than Esc) and Go in the address bar (which puts the keyboard away) leave it alone. A mouse or trackpad focuses it on the press, and after Pick and Go.
+
+- A tap on a part of the page that takes no typing still raises the keyboard: telling the two apart needs the node to say when an editable element of the page has focus.
+- A touch's `pointerup` is a user activation in the HTML standard, which is what lets iOS raise the keyboard for a focus made in it; assumed for iOS WebKit, not yet checked on a device.
+- `scripts/test/web_preview_e2e.py`'s phone step checks it at 390 with CDP touches and a stand-in for the iOS keyboard (up while a text field has focus): no focus and no smaller `size` after a scroll, Pick or Go; a tap focuses the field only after the finger lifts. `web/src/views/session/PreviewPanel.touch.test.tsx` covers the same cases and the mouse.
+
 ### Implementation notes
 
 - The tab's goroutine handles CDP events and the web's messages in order and never waits for a CDP answer that may depend on an event it has not handled yet (a navigation waits on `Fetch.requestPaused`): input and acknowledgements are sent without waiting, calls whose answer matters run on goroutines of their own and post the answer back.
 - Browsers do not report a page's title as it changes (headless Edge 156 says only `localhost:<port>`), so a script added to each document reports `document.title` through a `Runtime.addBinding` function as it changes.
 - `Page.getNavigationHistory` fails while the page is between documents; back / forward are asked again when loading stops.
 - `TestPreviewDrivesARealBrowser` (`preview_live_test.go`) drives the browser this computer has: picture, click, typing (with `Input.insertText` for an input method's text), a link elsewhere and an address elsewhere refused, a screenshot, a picked element, a local link and back, phone size. It is skipped where there is no browser, and in `-short`.
-- The web panel is described in [web.md](web.md) "Side panels › Preview". The Apple apps come next (#150): they already forward ports into a WKWebView, so they need only the server list, Start, and screenshot / pick in their WebView, with the same message formats.
+- The web panel is described in [web.md](web.md) "Side panels". The iPhone's preview is below ("iPhone").
+
+## iPhone
+
+The iPhone needs no browser on the computer: it already opens a computer's port in the link card through the port forwarding
+([ports.md](../operations/ports.md) "Forwarding"), so the page runs in the app's own WKWebView and only the server list,
+Start, a screenshot and picking are added. The iPad keeps the same card for now (a column beside the chat is a follow-up);
+the Mac app is frozen and has none of it.
+
+- **Servers**: an Agent chat's ⋯ › Preview (when its hub lists the `preview` feature) opens `PreviewChooser`
+  (`apple/Persona/Views/Link/PreviewChooser.swift`): `…/preview/servers` for the session's folder, the usable launch.json
+  entries first, then the session's own ports, then the entries that cannot be used and why; with nothing, the launch.json
+  example to copy. A running one opens in the link card (`POST …/ports/{port}/open`, then the forwarding); Another Port…
+  opens a port typed in. The card's subtitle (`MacBook :5173 · web ⌄`) opens the same list to switch.
+- **Start…**, offered as on the web only for a session with a workspace and a terminal (`PreviewLogic.canStart`: not a
+  Paseo session's), shows the command as the node runs it (`env K=V …`, each word quoted) and the folder, and asks first; then
+  `POST …/preview/start` with the session's workspace and its host kind, and a look at the servers every 1.5 s for 90 s
+  until the port answers (an Agent's port counts too). The row says what it waits for and can be cancelled; the page opens
+  once the port answers. `PreviewModel` holds this; `PreviewLogic` (`Preview.swift`) is the web's `lib/preview.ts`.
+- **The bar** under any forwarded page opened from a chat (`PreviewPage` in `PreviewBar.swift`): back, forward, where the
+  page is on the computer (`:5173/settings`), a screenshot (Visible Area through `takeSnapshot`, Whole Page drawn from the
+  page's PDF, at most 12,000 pixels high) into the message box, and Pick an Element.
+- **Picking** runs the node's own `preview_pick.js` in the page: the app bundles a copy
+  (`apple/Persona/Resources/Render/preview_pick.js`, kept equal by `scripts/test/test_preview_pick_copy.py`), injected with a
+  wrapper in the page's own world (an isolated world could not see what React, Vue or Svelte leave on the element). A tap that
+  does not scroll picks the element under it without pressing it; the element stays outlined with its selector and size, the
+  bar gives way to a line to write about it, and Add to Message puts an `Element comment N` card over the composer, the same
+  block the web writes. Its `Page:` is the computer's address (`http://localhost:5173/…`, `PortForwarder.key(for:)`), not
+  the phone's forwarded one. The pick comes back through the script handler `personaPreviewPick`, added while picking and
+  removed after: the pool's web views share one user content controller, so a handler left there would answer for every page.
+- **The accessibility text sizes** (#5114, #5172): a row's Running, Start… or Cancel goes on a line under its name and port; the bar
+  puts the address on a line of its own above its buttons; picking's banner takes up to four lines; the comment panel
+  stacks Add to Message over Cancel and has the room under the header to itself (the page folds away while it is open),
+  scrolling when it is taller than the room above the keyboard; the card's header, a bar, grows with the text up to the
+  largest standard size (xxxLarge), as the viewers' bars do, so its title and the server chooser stay readable beside its
+  buttons. The standard sizes are unchanged.
+- **Tests**: `PreviewLogicTests` / `PreviewModelTests` (the web's cases, and Start against `FakeHub`); `PreviewUITests` against
+  `MOCK_PREVIEW=1`, whose running ports forward to the mock's own page server with the made-up app (`mock_preview.forward`).
+

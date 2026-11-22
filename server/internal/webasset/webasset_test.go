@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"io"
+	"mime"
 	"os"
 	"path/filepath"
 	"slices"
@@ -11,7 +12,7 @@ import (
 	"testing"
 )
 
-// Precompress keeps only big hashed text assets gzipped, reproducibly, and the rest of the site as it was.
+// Precompress keeps only big hashed text assets and the licenses gzipped, reproducibly, and the rest of the site as it was.
 func TestPrecompress(t *testing.T) {
 	root := t.TempDir()
 	big := strings.Repeat("export const x = 1;\n", 100) // 2,000 bytes
@@ -28,6 +29,11 @@ func TestPrecompress(t *testing.T) {
 		"manifest.webmanifest":     big,
 		"third-party-licenses.txt": big,
 		"admin/assets/admin-7.js":  big,
+		"assets/App-1.js.br":       big, // the web build's brotli copy: compressed already
+	}
+	// mime.TypeByExtension also reads the system's mime.types, which may give .br a text type.
+	if err := mime.AddExtensionType(BrotliSuffix, "text/plain"); err != nil {
+		t.Fatal(err)
 	}
 	for name, body := range files {
 		p := filepath.Join(root, filepath.FromSlash(name))
@@ -42,7 +48,7 @@ func TestPrecompress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stored := []string{"assets/App-1.js", "assets/styles-2.css", "assets/pdf.worker-3.mjs", "assets/icon-4.svg"}
+	stored := []string{"assets/App-1.js", "assets/styles-2.css", "assets/pdf.worker-3.mjs", "assets/icon-4.svg", "third-party-licenses.txt"}
 	if st.Files != len(stored) || st.Before != int64(len(stored)*len(big)) || st.After >= st.Before {
 		t.Fatalf("stats %+v", st)
 	}

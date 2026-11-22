@@ -192,7 +192,8 @@ nonisolated struct NativeMigrationKeychain {
     }
 }
 
-#if !WIDGET_EXTENSION && !NATIVE_MIGRATION_STORAGE_ONLY
+// Share › Persona compiles all of Shared (Session included), so it has the envelope too.
+#if !WIDGET_EXTENSION && (!NATIVE_MIGRATION_STORAGE_ONLY || SHARE_EXTENSION)
 /// Keep the canonical synthesized session encoder, adding only the previous marker for old readers.
 nonisolated struct NativeSessionEnvelope: Encodable {
     var session: Session
@@ -237,6 +238,7 @@ struct CompatibleAskAssistantIntent: AppIntent {
     nonisolated static let persistentIdentifier = "AskPersonaIntent"
     nonisolated static let title: LocalizedStringResource = "Ask Persona"
     nonisolated static let isDiscoverable = false
+    @available(iOS 26.0, *)
     nonisolated static var supportedModes: IntentModes { .background }
     @Parameter(title: "Question [Ask Persona Intent 33a861]", requestValueDialog: "What do you want to ask Persona?")
     var question: String
@@ -257,6 +259,7 @@ struct CompatibleAssistantStatusIntent: AppIntent {
     nonisolated static let persistentIdentifier = "PersonaStatusIntent"
     nonisolated static let title: LocalizedStringResource = "Persona Status"
     nonisolated static let isDiscoverable = false
+    @available(iOS 26.0, *)
     nonisolated static var supportedModes: IntentModes { .background }
     nonisolated init() {}
     nonisolated func perform() async throws -> some IntentResult & ProvidesDialog & ReturnsValue<String> {
@@ -268,13 +271,17 @@ struct CompatibleAssistantStatusIntent: AppIntent {
 #if os(iOS)
 extension OpenPersonaAssistantIntent { nonisolated static let persistentIdentifier = "OpenJarvisAssistantIntent" }
 extension OpenPersonaAgentsIntent { nonisolated static let persistentIdentifier = "OpenJarvisAgentsIntent" }
+extension OpenPersonaDictationIntent { nonisolated static let persistentIdentifier = "OpenPersonaDictationIntent" }
 
 #if !WIDGET_EXTENSION
 struct CompatibleOpenAssistantIntent: AppIntent {
     nonisolated static let persistentIdentifier = "OpenPersonaAssistantIntent"
     nonisolated static let title: LocalizedStringResource = "Open Persona Assistant"
     nonisolated static let isDiscoverable = false
+    @available(iOS 26.0, *)
     nonisolated static var supportedModes: IntentModes { .foreground(.immediate) }
+    // iOS 18 has no supportedModes: it opens the app this way.
+    nonisolated static var openAppWhenRun: Bool { true }
     nonisolated init() {}
     nonisolated func perform() async throws -> some IntentResult { try await OpenPersonaAssistantIntent().perform() }
 }
@@ -283,7 +290,10 @@ struct CompatibleOpenAgentsIntent: AppIntent {
     nonisolated static let persistentIdentifier = "OpenPersonaAgentsIntent"
     nonisolated static let title: LocalizedStringResource = "Open Persona Agents"
     nonisolated static let isDiscoverable = false
+    @available(iOS 26.0, *)
     nonisolated static var supportedModes: IntentModes { .foreground(.immediate) }
+    // iOS 18 has no supportedModes: it opens the app this way.
+    nonisolated static var openAppWhenRun: Bool { true }
     nonisolated init() {}
     nonisolated func perform() async throws -> some IntentResult { try await OpenPersonaAgentsIntent().perform() }
 }

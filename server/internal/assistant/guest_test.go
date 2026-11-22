@@ -36,6 +36,16 @@ func (e *guestExt) ConnectorTool(name string) bool {
 	return name == "lark_chats" || name == "lark_agent_reply"
 }
 
+func (e *guestExt) ToolAccess(name string) (known, readOnly bool) {
+	switch name {
+	case "lark_chats":
+		return true, true
+	case "lark_agent_reply", "computer_run":
+		return true, false
+	}
+	return false, false
+}
+
 func (e *guestExt) AssistantSummary(context.Context, string, string) (string, bool) { return "", false }
 
 func (e *guestExt) AssistantLark(context.Context) (proto.AssistantLark, error) {
@@ -116,6 +126,97 @@ func TestGuestConversationStart(t *testing.T) {
 	}
 }
 
+// A guest's first tool discovery can happen before assistant.send answers. Its registered id and declared tools must
+// already exist at that point, not after the node has started a model with an empty list.
+func TestGuestConversationRegistersBeforeDiscovery(t *testing.T) {
+	f, s, _ := guestService(t)
+	devices := newFleetDevs()
+	devices.add("server", "server")
+	s.devs = devices
+	setHub(s, &startingPrivacyHub{Hub: f, onStart: func(p DeviceCall) error {
+		var send struct {
+			NewSessionID string `json:"new_session_id"`
+		}
+		if err := json.Unmarshal(p.Params, &send); err != nil {
+			t.Fatal(err)
+		}
+		if send.NewSessionID == "" {
+			t.Fatal("guest start has no registered session id")
+		}
+		names := func() []string {
+			raw, _ := json.Marshal(map[string]any{"assistant": true, "session_id": send.NewSessionID, "guest": true})
+			out, handled, err := s.NodeRequest(context.Background(), "server", "mcp.tools", raw)
+			if err != nil || !handled {
+				t.Fatalf("mcp.tools during start: %v handled=%v", err, handled)
+			}
+			var names []string
+			for _, tool := range out.(map[string]any)["tools"].([]proto.Tool) {
+				names = append(names, tool.Name)
+			}
+			return names
+		}()
+		if !slices.Equal(names, []string{"lark_agent_reply"}) {
+			t.Fatalf("tools during guest start: %v", names)
+		}
+		return nil
+	}})
+	w := postConversation(t, s, `{"prompt":"search","guest":{"tools":["lark_agent_reply"]}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	var out struct {
+		Session proto.Session `json:"session"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	send := f.sends[len(f.sends)-1]
+	if out.Session.SessionID == "" || send["new_session_id"] != out.Session.SessionID {
+		t.Fatalf("registered and started ids differ: %q %q", send["new_session_id"], out.Session.SessionID)
+	}
+}
+
+// A failed start must not leave a registered guest with no process behind it.
+func TestGuestConversationFailedStartForgetsRegistration(t *testing.T) {
+	f, s, _ := guestService(t)
+	f.failAssistant = errors.New("cannot start")
+	guestID := ""
+	f.onAssistantSend = func(_ *fakeHub, send map[string]any) {
+		guestID, _ = send["new_session_id"].(string)
+	}
+	w := postConversation(t, s, `{"prompt":"search","guest":{"tools":["lark_agent_reply"]}}`)
+	if w.Code == http.StatusOK {
+		t.Fatalf("start unexpectedly succeeded: %s", w.Body)
+	}
+	if guestID == "" {
+		t.Fatal("the failed guest was not started under its registered id")
+	}
+	if _, guest, err := s.guestOf(context.Background(), "server", guestID); err != nil || guest {
+		t.Fatalf("failed guest is still registered: guest=%v err=%v", guest, err)
+	}
+}
+
+// A guest keeps the purpose's launcher and model, on Claude Code's CLI: a record an older hub stored with the Agent
+// SDK runtime starts it with no runtime. Its no-built-in-tools restriction is the node's.
+func TestGuestConversationKeepsThePurposesModel(t *testing.T) {
+	f, s, _ := guestService(t)
+	if err := s.store().PutSetting(context.Background(), modelRecordKey("lark.agent"),
+		json.RawMessage(`{"revision":1,"binding":{"provider":"launcher.claude","model":"test-guest","runtime":"agentsdk"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	w := postConversation(t, s, `{"prompt":"search","purpose":"lark.agent","guest":{"tools":["lark_chats"]}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	send := f.sends[len(f.sends)-1]
+	if _, ok := send["runtime"]; ok {
+		t.Fatalf("guest runtime: %v", send["runtime"])
+	}
+	if send["launcher"] != "claude" || send["model"] != "test-guest" || send["model_fingerprint"] == nil {
+		t.Fatalf("guest lost its model binding: %v", send)
+	}
+}
+
 // guest.tools are a connector's tools only, one to eight of them; a guest is not the main conversation or in a space;
 // a node without guest conversations starts none.
 func TestGuestConversationRefusals(t *testing.T) {
@@ -127,14 +228,24 @@ func TestGuestConversationRefusals(t *testing.T) {
 		`{"prompt":"x","guest":{"tools":["phone_contacts"]}}`,
 		`{"prompt":"x","guest":{"tools":["lark_agent_reply","lark_agent_reply"]}}`,
 		`{"prompt":"x","main":true,"guest":{"tools":["lark_agent_reply"]}}`,
-		`{"prompt":"x","space":"health","guest":{"tools":["lark_agent_reply"]}}`,
 	} {
 		if w := postConversation(t, s, body); w.Code != http.StatusBadRequest {
 			t.Errorf("%s: %d %s", body, w.Code, w.Body)
 		}
 	}
+	// In the health space: an extension may start nothing there (#12097), and for anyone else a guest is not in a space.
+	inSpace := `{"prompt":"x","space":"health","guest":{"tools":["lark_agent_reply"]}}`
+	if w := postConversation(t, s, inSpace); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "permission_denied") {
+		t.Errorf("an extension's guest in the health space: %d %s", w.Code, w.Body)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/assistant/conversations", strings.NewReader(inSpace))
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "neither the main one nor in a space") {
+		t.Errorf("a guest in the health space: %d %s", w.Code, w.Body)
+	}
 	f.noGuest = true
-	w := postConversation(t, s, `{"prompt":"x","guest":{"tools":["lark_agent_reply"]}}`)
+	w = postConversation(t, s, `{"prompt":"x","guest":{"tools":["lark_agent_reply"]}}`)
 	if w.Code == http.StatusOK || !strings.Contains(w.Body.String(), "personad") {
 		t.Fatalf("an old node: %d %s", w.Code, w.Body)
 	}
@@ -229,7 +340,7 @@ func TestGuestConversationContextAndSends(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(params) != 2 || params["text"] != "more" || params["is_main"] != false {
+	if len(params) != 4 || params["text"] != "more" || params["is_main"] != false || params["supervision_instructions"] != "" || params["origin_known"] != true {
 		t.Fatalf("a guest's send params: %v", params)
 	}
 }
@@ -274,7 +385,9 @@ func TestGuestRecordUnreadable(t *testing.T) {
 	ft := newFleetTest(t)
 	s := ft.s
 	s.SetExtensions(&guestExt{})
-	ft.st.failSetting = errors.New("database down")
+	// Isolate the guest-record failure: an unreadable deletion ledger separately
+	// refuses conversation access, including an otherwise ordinary conversation.
+	ft.st.failKey(guestsKey, errors.New("database down"))
 	ctx := context.Background()
 	raw, _ := json.Marshal(map[string]any{"assistant": true, "session_id": "o1", "name": "lark_chats", "args": map[string]any{}})
 	out, _, err := s.NodeRequest(ctx, "mac", "mcp.call", raw)

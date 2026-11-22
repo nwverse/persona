@@ -27,6 +27,12 @@ func TestMain(m *testing.M) {
 		switch os.Args[1] {
 		case RunCommand:
 			os.Exit(Run(os.Args[2:], os.Stderr))
+		case AgentExecCommand:
+			if err := RunAgentExec(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			os.Exit(0)
 		case "probe":
 			os.Exit(probeInside(os.Args[2:]))
 		case "--version": // stands in for personad --version (agent_test.go)
@@ -34,6 +40,14 @@ func TestMain(m *testing.M) {
 			os.Exit(0)
 		case "agent-dial": // connects to a unix socket (agent_test.go)
 			os.Exit(agentDial(os.Args[2]))
+		case "agent-socket-read": // reads the listening socket's generation (agent_linux_test.go)
+			out, err := readAgentSocket(os.Args[2])
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			fmt.Print(out)
+			os.Exit(0)
 		}
 	}
 	os.Exit(m.Run())

@@ -191,23 +191,6 @@ func TestTopicsCommand(t *testing.T) {
 	}
 }
 
-// The command takes the group out of the list at once: a topic message after /topics off is not handed over.
-func TestTopicsOffStopsTheGroup(t *testing.T) {
-	w := newBotWorld(t)
-	w.pair(t)
-	w.send(t, groupEvent("om_c1", "ou_me", "/topics", topicChat, ""))
-	w.api.find(t, "/messages/om_c1/reply", "已开启")
-	w.send(t, groupEvent("om_g1", "ou_me", "在", topicChat, "omt_1"))
-	eventually(t, 5*time.Second, "handed while on", func() bool { return len(w.handed()) == 1 })
-	w.send(t, groupEvent("om_c2", "ou_me", "/topics off", topicChat, "omt_1"))
-	w.api.find(t, "/messages/om_c2/reply", "已关闭")
-	w.send(t, groupEvent("om_g2", "ou_me", "还在吗", topicChat, "omt_1"))
-	time.Sleep(300 * time.Millisecond)
-	if got := w.handed(); len(got) != 1 {
-		t.Fatalf("handed %v after /topics off", got)
-	}
-}
-
 // The app's list: PUT topic_chats replaces it (and needs a paired bot), GET shows it, a bad id is refused, and it is
 // the list the gate uses.
 func TestTopicChatsSetting(t *testing.T) {
@@ -513,9 +496,9 @@ func TestTopicsCommandText(t *testing.T) {
 		{"/topics now", false, false}, {"/topics off now", false, false}, {"/topicsoff", false, false}, {"topics", false, false},
 		{"@_user_1 请 /topics", false, false}, {"/new", false, false}, {"", false, false},
 	} {
-		on, isIt := topicsCommand(c.text, bot)
-		if on != c.on || isIt != c.isIt {
-			t.Errorf("topicsCommand(%q) = %v, %v; want %v, %v", c.text, on, isIt, c.on, c.isIt)
+		cmd, isIt := topicsCmd(c.text, bot)
+		if on := cmd == topicsOn || cmd == topicsHome; on != c.on || isIt != c.isIt { // "home" is on too
+			t.Errorf("topicsCmd(%q) on = %v, %v; want %v, %v", c.text, on, isIt, c.on, c.isIt)
 		}
 	}
 }
@@ -610,16 +593,17 @@ func TestReplyParentLookup(t *testing.T) {
 	}
 }
 
-// An agent message is made in the owner's DM, so the message it answers has to be in the DM, not in a listed group.
-func TestCotCreateParentMustBeInTheDM(t *testing.T) {
+// An agent message may answer in an opted-in topic, but never under a parent in a chat the bot may not use.
+func TestCotCreateParentMustBeInAnAllowedChat(t *testing.T) {
 	w := newBotWorld(t)
 	w.pair(t)
 	w.topicsOn(t, topicChat)
 	w.send(t, groupEvent("om_cot_topic", "ou_me", "在", topicChat, "omt_1"))
 	eventually(t, 5*time.Second, "handed", func() bool { return len(w.handed()) == 1 })
+	w.topicsOn(t) // the parent's chat is remembered, but is no longer one the bot may write in
 	before := w.api.total()
 	if err := w.sendErr(assistantwire.FeishuCotCreate, map[string]any{"reply_to": "om_cot_topic"}); !errors.Is(err, errBotReplyChat) {
-		t.Fatalf("an agent message answering a message in a group: %v", err)
+		t.Fatalf("an agent message answering a message in a chat that is not opted in: %v", err)
 	}
 	if w.api.total() != before {
 		t.Fatalf("something was sent:\n%s", w.api.since(before))

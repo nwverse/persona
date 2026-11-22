@@ -1,12 +1,15 @@
 // Machine details (/machines/<id>, docs/server/machines.md "App", iOS MachineDetailView): one page, the most used on top — how the
 // computer is (online, system, which hub when there are several), its agents by herdr space (a row opens the chat),
 // its values now, CPU / memory / network / load over 1, 6 or 24 hours (hover a chart to read a moment, all follow) and
-// each core now (Linux), the system, the launchers. Its engine (which one the agents come from) follows the agents. A Mac the hub's extension cua is on for gets "Computer control" after that, and "Browser" (ego lite, it
+// each core now (Linux), the system, the launchers. Its engine (which one the agents come from) follows the agents. A Mac the hub's extension cua is on for gets "Computer control" after that, and "Browser" (ego lite) while ego is on; then "iPhone control" while the extension iphone is on (a Mac or a Linux computer).
+// A Mac whose live screen can be shown (showsScreen) gets "View screen" in the top bar, the page's one way to it: it stays in view
+// while the page scrolls, and does not wait for Cua Driver, which the screen does not use.
 import { MoveToManager } from "../ManagerParts";
 import { offlineManagerOf, useRoster } from "../../lib/managers";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, enc, errorText, isAbort } from "../../lib/api";
 import { ago } from "../../lib/format";
+import { agentName, isTraeCli } from "../../lib/agent-kind";
 import {
   agentsBySpace,
   bytesAxis,
@@ -18,7 +21,6 @@ import {
   level,
   load as loadText,
   loadAxis,
-  localOffset,
   memPercent,
   percent,
   RANGE_KEYS,
@@ -26,6 +28,7 @@ import {
   rate,
   systemFacts,
   systemLine,
+  temperature,
   usedOfTotal,
   type DetailMachine,
   type DetailMetrics,
@@ -35,16 +38,23 @@ import {
 import { hubLabel, routeText } from "../../lib/mesh";
 import { machineDeployment } from "../../lib/machine-deploy";
 import { classifyConnection } from "../../lib/node-health";
+import { screenPath, showsScreen } from "../../lib/computer";
+import { osFamily } from "../../lib/machine-capabilities";
+import { openPanel } from "../../lib/panel";
 import { href, onLinkClick } from "../../lib/router";
 import { getState, refresh, useStore } from "../../lib/store";
-import type { Session } from "../../lib/types";
+import { useFullAgentSessions } from "../../lib/sessions";
+import type { Launcher, MachineLinkSwitch } from "../../lib/types";
 import { Button, cx, EASE, IconButton, Loading, toast } from "../../ui/atoms";
 import { AgentRow } from "./AgentRow";
 import { Icon } from "../../ui/icons";
+import { ProviderName } from "../../ui/ProviderName";
 import { MetricChart, type ChartSeries } from "./MetricChart";
 import { MachineDeploy } from "./MachineDeploy";
+import { homeUser, LinkSwitch } from "./LinkSwitch";
 import { BrowserSection } from "./BrowserSection";
 import { ComputerSection } from "./ComputerSection";
+import { IPhoneSection } from "./IPhoneSection";
 import { EngineSection } from "./EngineSection";
 import { openEngineSection } from "./engine-anchor";
 import { BotmuxSwitch } from "./BotmuxSwitch";
@@ -98,14 +108,7 @@ function RenameMachine({ m, onDone }: { m: DetailMachine; onDone: () => void }) 
   );
 }
 
-interface MachineLauncher {
-  name: string;
-  model?: string;
-  agent?: string;
-  agent_type?: string;
-}
-
-const NO_SESSIONS: Session[] = [];
+type MachineLauncher = Pick<Launcher, "name" | "display_name" | "model" | "agent" | "agent_type">;
 
 function initialRange(): MetricRange {
   const r = new URLSearchParams(location.search).get("range");
@@ -115,7 +118,10 @@ function initialRange(): MetricRange {
 export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleSidebar: () => void }) {
   const machines = useStore((s) => s.machines) as DetailMachine[];
   const loaded = useStore((s) => s.loaded);
-  const sessions = useStore((s) => s.sessions[mid] ?? NO_SESSIONS);
+  // Its agents, read as the Agents list reads them: a hub that pages that list pushes no sessions, so the store has none
+  // of this computer's. A child session folds into its parent (#5120): never an agent of the computer of its own.
+  const full = useFullAgentSessions();
+  const sessions = useMemo(() => full.sessions.filter((s) => s.machine_id === mid), [full.sessions, mid]);
   const m = machines.find((x) => x.id === mid);
   const online = m?.online ?? false;
   const expectedDisconnect = m ? machineDeployment(m).expectedDisconnect : false;
@@ -123,7 +129,6 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
   const [range, setRangeState] = useState<MetricRange>(initialRange);
   const [data, setData] = useState<{ metrics: DetailMetrics; range: MetricRange; at: number } | null>(null);
   const [failure, setFailure] = useState("");
-  const [hover, setHover] = useState<number | null>(null);
   const [launchers, setLaunchers] = useState<MachineLauncher[] | null>(null);
   const [launcherError, setLauncherError] = useState("");
   const [reconnecting, setReconnecting] = useState(false);
@@ -132,7 +137,6 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
 
   const setRange = (r: MetricRange) => {
     setRangeState(r);
-    setHover(null);
     history.replaceState(history.state, "", r === "1h" ? location.pathname : `${location.pathname}?range=${r}`);
   };
 
@@ -212,15 +216,15 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
   const goneWith = m ? offlineManagerOf(roster, m) : null;
   // a linked hub's computer is that hub's to give (`not_movable`): in a mesh every computer names its hub
   const selfHub = useStore((s) => s.mesh.find((x) => x.self)?.hub_id);
+  const ownHub = !m?.hub_id || !selfHub || m.hub_id === selfHub; // one of this hub's own computers
   const connFailure = m && !expectedDisconnect && !goneWith ? classifyConnection(m) : null;
   const groups = useMemo(() => (online ? agentsBySpace(sessions) : []), [online, sessions]);
   const agentCount = groups.reduce((n, g) => n + g.sessions.length, 0);
   const hub = hubLabel(m, machines);
   const route = routeText(m, machines);
   const system = data?.metrics.system ?? m?.system;
-  const tz = useMemo(() => localOffset(), []);
   // a hub that renames computers, and one of its own (a linked hub's is renamed there)
-  const canRename = useStore((s) => s.features.includes(MACHINE_RENAME_FEATURE)) && m?.kind !== "hub" && (!m?.hub_id || !selfHub || m.hub_id === selfHub);
+  const canRename = useStore((s) => s.features.includes(MACHINE_RENAME_FEATURE)) && m?.kind !== "hub" && ownHub;
   const [renaming, setRenaming] = useState(false);
 
   if (!m) {
@@ -242,7 +246,27 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
   }
 
   return (
-    <Page mid={mid} title={m.name} onToggleSidebar={onToggleSidebar} right={<span className="hidden whitespace-nowrap text-[11.5px] text-ink-3 sm:inline">{range === "1h" ? t("machines-machinedetail.refresh_10s") : t("machines-machinedetail.refresh_1m")}</span>}>
+    <Page
+      mid={mid}
+      title={m.name}
+      onToggleSidebar={onToggleSidebar}
+      right={
+        <>
+          <span className="hidden whitespace-nowrap text-[11.5px] text-ink-3 sm:inline">{range === "1h" ? t("machines-machinedetail.refresh_10s") : t("machines-machinedetail.refresh_1m")}</span>
+          {online && (
+            // the computer's files from its home, in the side panel (#5827; the iPhone's Files row)
+            <Button icon="folder" onClick={() => openPanel({ kind: "files", mid, sid: "", cwd: "~" })} title={t("machines-machinedetail.files_hint")}>
+              {t("machines-machinedetail.files")}
+            </Button>
+          )}
+          {showsScreen(m) && (
+            <Button icon="monitor" href={screenPath(mid)} title={t("machines-machinedetail.screen_hint")}>
+              {t("machines-machinedetail.screen")}
+            </Button>
+          )}
+        </>
+      }
+    >
       {/* the computer */}
       <section className="overflow-hidden rounded-card bg-surface shadow-card" style={{ animation: `fade-up 420ms ${EASE} both` }}>
         <div className="flex items-start gap-3 px-4 py-3.5">
@@ -283,7 +307,7 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
             {route && <p className="mt-0.5 truncate text-[11.5px] text-ink-3" title={t("machines-machinedetail.route_hint")}>{t("machines-machinedetail.route", { route })}</p>}
           </div>
           {/* with several managers: give it to another one (a linked hub's computer is its own hub's) */}
-          <MoveToManager machineId={m.id} manager={m.manager} movable={m.kind !== "hub" && (!m.hub_id || !selfHub || m.hub_id === selfHub)} />
+          <MoveToManager machineId={m.id} manager={m.manager} movable={m.kind !== "hub" && ownHub} />
           {!online && !expectedDisconnect && !goneWith && (
             <Button tone="secondary" icon="retry" busy={reconnecting} onClick={() => void reconnect()}>
               {reconnecting ? t("machines-machinedetail.connecting") : t("machines.reconnect")}
@@ -306,14 +330,28 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
           </div>
         )}
         {online && m.error && <p className="mx-4 mb-3.5 rounded-[8px] bg-red-tint px-2.5 py-1.5 text-[12px] text-red">{m.error}</p>}
+        {/* switching it to Persona Link (#10662), on this hub's own computer (a linked hub's switches there); while one
+            runs, its disconnect is expected (machineDeployment) */}
+        <LinkSwitch
+          machineId={m.id}
+          name={m.name}
+          state={ownHub ? m.link_switch : undefined}
+          post={() => api<{ link_switch?: MachineLinkSwitch }>(`/machines/${enc(m.id)}/link-switch`, { method: "POST" })}
+          refresh={refresh}
+          user={homeUser(m.home)}
+          className="mx-4 mb-3.5"
+        />
         <MachineDeploy machine={m} className="mb-3.5" />
       </section>
 
       {/* agents */}
       <section>
-        <Heading title="Agent" count={online ? agentCount : undefined} />
+        {/* until its agents are read, how many there are is unknown: no count, and no "No agents running" */}
+        <Heading title="Agent" count={online && full.loaded ? agentCount : undefined} />
         {groups.length === 0 ? (
-          <p className="rounded-card bg-surface px-4 py-3 text-[12.5px] text-ink-3 shadow-card">{online ? t("machines-machinedetail.no_agents") : t("machines-machinedetail.agents_offline")}</p>
+          <p className="rounded-card bg-surface px-4 py-3 text-[12.5px] text-ink-3 shadow-card" data-agents={online ? (full.loaded ? "yes" : full.error ? "failed" : "loading") : undefined}>
+            {!online ? t("machines-machinedetail.agents_offline") : full.loaded ? t("machines-machinedetail.no_agents") : full.error ? t("machines-machinedetail.agents_failed_detail") : t("machines-machinedetail.agents_loading")}
+          </p>
         ) : (
           <div className="flex flex-col gap-2.5">
             {groups.map((g, gi) => (
@@ -387,7 +425,7 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
             </div>
           )
         ) : (
-          <Monitor data={data} range={range} online={online} system={system} hover={hover} onHover={setHover} tz={tz} onRange={setRange} />
+          <Monitor data={data} range={range} online={online} system={system} onRange={setRange} />
         )}
         {data && failure && <p className="mt-2 px-1 text-[11.5px] text-red">{t("machines-machinedetail.refresh_failed", { error: failure })}</p>}
         <p className="mt-2 px-1 text-[11.5px] leading-relaxed text-ink-3">{t("machines-machinedetail.metrics_note")}</p>
@@ -396,18 +434,19 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
       {/* which engine the agents above come from (iOS engineRow) */}
       <EngineSection machine={m} heading={<Heading title={t("machines-machinedetail.engine")} />} />
 
-      {/* what this computer can do for Persona, from the node's self-check (docs/server/machines.md "Self-check") */}
+      {/* what this computer can do for Persona, from the node's self-check (docs/server/machines.md "Doctor: what this computer can do") */}
       <NodeHealth machine={m} heading={<Heading title={t("node-health.title")} />} />
 
       {m.computer && <ComputerSection mid={mid} computer={m.computer} online={online} manager={m.manager} />}
       {m.browser && <BrowserSection mid={mid} browser={m.browser} online={online} />}
+      {m.iphone && <IPhoneSection mid={mid} iphone={m.iphone} online={online} mac={osFamily(m) === "macos"} />}
 
       {/* system */}
       <section>
         <Heading title={t("machines-machinedetail.system")} />
         <div className="overflow-hidden rounded-card bg-surface shadow-card">
           <dl className="-mb-px grid grid-cols-1 md:grid-cols-2">
-            {systemFacts(system, m, Date.now() / 1000, tz).map(([k, v, mono]) => (
+            {systemFacts(system, m, Date.now() / 1000).map(([k, v, mono]) => (
               <div key={k} className="flex items-baseline gap-3 border-b border-line px-4 py-2 md:odd:border-r">
                 <dt className="w-[84px] shrink-0 whitespace-nowrap text-[12px] text-ink-3">{k}</dt>
                 <dd className={cx("min-w-0 flex-1 text-[12.5px] break-words text-ink-2 select-text", mono && "font-mono text-[12px]")}>{v}</dd>
@@ -437,8 +476,9 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
                 const kind = l.agent_type || l.agent || "claude";
                 return (
                   <div key={l.name} className="flex items-center gap-3 px-4 py-2">
-                    <span className="min-w-0 truncate font-mono text-[12.5px] text-ink">{l.name}</span>
-                    {kind !== "claude" && <span className="inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full bg-inset px-1.5 text-[11px] font-medium text-ink-2 shadow-hairline">{kind === "codex" ? "Codex" : kind === "traex" ? "TRAEX" : kind}</span>}
+                    {/* a provider's display name, its startup ID beside it (#5029); an rc alias's ID in mono, as before */}
+                    <ProviderName of={l} className="min-w-0 truncate text-[12.5px] text-ink" idClassName="min-w-0 shrink-[2] truncate text-[11.5px] text-ink-3" />
+                    {kind !== "claude" && <span className="inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full bg-inset px-1.5 text-[11px] font-medium text-ink-2 shadow-hairline">{kind === "codex" || isTraeCli(kind) ? agentName(kind) : kind}</span>}
                     <span className="flex-1" />
                     {l.model && <span className="shrink-0 truncate font-mono text-[11.5px] text-ink-3">{l.model}</span>}
                   </div>
@@ -499,41 +539,17 @@ function Monitor({
   range,
   online,
   system,
-  hover,
-  onHover,
-  tz,
   onRange,
 }: {
   data: { metrics: DetailMetrics; range: MetricRange; at: number };
   range: MetricRange;
   online: boolean;
   system: DetailMachine["system"];
-  hover: number | null;
-  onHover: (t: number | null) => void;
-  tz: number;
   onRange: (r: MetricRange) => void;
 }) {
   const { metrics } = data;
-  const r = RANGES[data.range];
-  const t1 = data.at,
-    t0 = t1 - r.secs;
   const live = online ? (metrics.latest ?? undefined) : undefined;
-  const memTotal = live?.mem_total ?? system?.memory ?? 0;
-  const memPct = memPercent(live?.mem_used, live?.mem_total);
-
-  const cpu = useMemo<ChartSeries[]>(() => [{ name: "CPU", color: "var(--accent)", read: (p) => p.cpu, now: live?.cpu }], [live?.cpu]);
-  const mem = useMemo<ChartSeries[]>(() => [{ name: t("machines-machinedetail.memory"), color: "var(--green)", read: (p) => (p.mem !== undefined && memTotal ? (100 * p.mem) / memTotal : undefined), now: memPct }], [memTotal, memPct]);
-  const net = useMemo<ChartSeries[]>(
-    () => [
-      { name: t("machines-machinedetail.download"), color: "var(--orange)", read: (p) => p.rx, now: live?.net_rx },
-      { name: t("machines-machinedetail.upload"), color: "var(--accent)", read: (p) => p.tx, now: live?.net_tx },
-    ],
-    [live?.net_rx, live?.net_tx],
-  );
-  const load = useMemo<ChartSeries[]>(() => [{ name: t("machines-machinedetail.load"), color: "var(--chart-load)", read: (p) => p.load, now: live?.load }], [live?.load]);
-  const cores = system?.cores ?? 0;
   const perCore = coresNow(metrics.latest, online);
-  const common = { points: metrics.points, t0, t1, step: r.step, hover, onHover, tz };
 
   // Nothing in the whole range (offline all along, or just started): one line instead of three empty charts.
   if (isEmpty(metrics.points))
@@ -557,14 +573,62 @@ function Monitor({
   return (
     <>
       {live && <NowTiles s={live} cores={system?.cores} />}
-      <div className={cx("grid grid-cols-1 gap-3 transition-opacity duration-200 md:grid-cols-2", data.range !== range && "opacity-60")}>
-        <MetricChart title="CPU" series={cpu} percent format={percent} axisFormat={(v) => `${v}%`} {...common} />
-        <MetricChart title={memTotal ? t("machines-machinedetail.memory_total", { total: bytesBin(memTotal).replace(/\.00 /, " ") }) : t("machines-machinedetail.memory")} series={mem} percent format={percent} axisFormat={(v) => `${v}%`} {...common} />
-        <MetricChart title={t("machines-machinedetail.network")} series={net} binary format={rate} axisFormat={bytesAxis} {...common} />
-        <MetricChart title={t("machines-machinedetail.load_1m")} series={load} format={loadText} axisFormat={loadAxis} reference={cores > 0 ? { value: cores, label: t("machines-machinedetail.cores", { count: cores }) } : undefined} {...common} />
-      </div>
+      <Charts data={data} range={range} live={live} system={system} />
       {perCore && <CoreBars cores={perCore} />}
     </>
+  );
+}
+
+const percentAxis = (v: number) => `${v}%`;
+
+/** The four charts and the moment they share. The moment lives here, not in the page: a pointer move re-renders these
+ * charts (each only its crosshair and read-out), not the tiles, the cores, the agents or the launchers. */
+function Charts({
+  data,
+  range,
+  live,
+  system,
+}: {
+  data: { metrics: DetailMetrics; range: MetricRange; at: number };
+  range: MetricRange;
+  live: NonNullable<DetailMetrics["latest"]> | undefined;
+  system: DetailMachine["system"];
+}) {
+  const { metrics } = data;
+  const r = RANGES[data.range];
+  const t1 = data.at,
+    t0 = t1 - r.secs;
+  const memTotal = live?.mem_total ?? system?.memory ?? 0;
+  const memPct = memPercent(live?.mem_used, live?.mem_total);
+
+  const cpu = useMemo<ChartSeries[]>(() => [{ name: "CPU", color: "var(--accent)", read: (p) => p.cpu, now: live?.cpu }], [live?.cpu]);
+  const mem = useMemo<ChartSeries[]>(() => [{ name: t("machines-machinedetail.memory"), color: "var(--green)", read: (p) => (p.mem !== undefined && memTotal ? (100 * p.mem) / memTotal : undefined), now: memPct }], [memTotal, memPct]);
+  const net = useMemo<ChartSeries[]>(
+    () => [
+      { name: t("machines-machinedetail.download"), color: "var(--orange)", read: (p) => p.rx, now: live?.net_rx },
+      { name: t("machines-machinedetail.upload"), color: "var(--accent)", read: (p) => p.tx, now: live?.net_tx },
+    ],
+    [live?.net_rx, live?.net_tx],
+  );
+  const load = useMemo<ChartSeries[]>(() => [{ name: t("machines-machinedetail.load"), color: "var(--chart-load)", read: (p) => p.load, now: live?.load }], [live?.load]);
+  const cores = system?.cores ?? 0;
+
+  // Picking another range lets go of the moment (React's "adjusting some state when a prop changes").
+  const [hover, setHover] = useState<number | null>(null);
+  const [hoverRange, setHoverRange] = useState(range);
+  if (hoverRange !== range) {
+    setHoverRange(range);
+    setHover(null);
+  }
+  const common = { points: metrics.points, t0, t1, step: r.step, hover, onHover: setHover };
+
+  return (
+    <div className={cx("grid grid-cols-1 gap-3 transition-opacity duration-200 md:grid-cols-2", data.range !== range && "opacity-60")}>
+      <MetricChart title="CPU" series={cpu} percent format={percent} axisFormat={percentAxis} {...common} />
+      <MetricChart title={memTotal ? t("machines-machinedetail.memory_total", { total: bytesBin(memTotal).replace(/\.00 /, " ") }) : t("machines-machinedetail.memory")} series={mem} percent format={percent} axisFormat={percentAxis} {...common} />
+      <MetricChart title={t("machines-machinedetail.network")} series={net} binary format={rate} axisFormat={bytesAxis} {...common} />
+      <MetricChart title={t("machines-machinedetail.load_1m")} series={load} format={loadText} axisFormat={loadAxis} reference={cores > 0 ? { value: cores, label: t("machines-machinedetail.cores", { count: cores }) } : undefined} {...common} />
+    </div>
   );
 }
 
@@ -581,8 +645,26 @@ function NowTiles({ s, cores }: { s: NonNullable<DetailMetrics["latest"]>; cores
     { label: t("machines-machinedetail.disk"), value: percent(diskPct), sub: s.disk_used !== undefined ? usedOfTotal(s.disk_used, s.disk_total) : undefined, frac: diskPct, lv: level(diskPct, 80, 90) },
     { label: t("machines-machinedetail.swap"), value: s.swap_total ? bytesBin(s.swap_used) : t("machines-machinedetail.swap_off"), sub: s.swap_total ? t("machines-machinedetail.swap_total", { total: bytesBin(s.swap_total) }) : undefined, frac: swapPct, lv: "normal" },
   ];
+  if (s.battery_percent !== undefined && Number.isFinite(s.battery_percent)) {
+    const charging = s.battery_charging === true;
+    tiles.push({
+      label: t("machines-machinedetail.battery"),
+      value: percent(s.battery_percent),
+      sub: charging ? t("machines-machinedetail.charging") : undefined,
+      frac: s.battery_percent,
+      lv: s.battery_percent <= 15 && !charging ? "critical" : s.battery_percent <= 25 && !charging ? "warning" : "normal",
+    });
+  }
+  if (s.temp_c !== undefined && Number.isFinite(s.temp_c)) {
+    tiles.push({
+      label: t("machines-machinedetail.temperature"),
+      value: temperature(s.temp_c),
+      frac: Math.min(100, (s.temp_c / 125) * 100),
+      lv: level(s.temp_c, 75, 90),
+    });
+  }
   return (
-    <div className="mb-3 grid grid-cols-3 gap-2 lg:grid-cols-6">
+    <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
       {tiles.map((tile) => (
         <div key={tile.label} className="min-w-0 rounded-card bg-surface px-2.5 py-2.5 shadow-card sm:px-3">
           <div className="flex items-center gap-1.5 text-[11px] text-ink-3">

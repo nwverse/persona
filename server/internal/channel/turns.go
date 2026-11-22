@@ -11,7 +11,7 @@ import (
 )
 
 // A message from a channel starts a run: the hub follows the conversation until the turn is over, then sends its
-// answer (the assistant's last words, after its last tool call) back. The rules (docs/extensions/channels.md "Following this turn"):
+// answer (the assistant's last words, after its last tool call) back. The rules (docs/extensions/channels.md "Message flow"):
 // the message is found by its client_msg_id (or a piece of its text, from older nodes); a message queued behind a
 // running turn waits for its own turn; a turn that leaves background work answers now and again when that work
 // reports back; a message sent while one waits on the same conversation is answered with it.
@@ -41,6 +41,10 @@ type Run struct {
 	Seen bool `json:"seen,omitempty"`
 	// Held: answered once; its background work goes on, and the turn that work starts is answered too.
 	Held bool `json:"held,omitempty"`
+	// HeldAt is when the current background wait began. Started stays at the original message for HeldMost; HeldAt
+	// gives each continuation its own read, idle and progress grace. Old persisted runs have only Started, which was
+	// also their last hold time, and remain compatible.
+	HeldAt time.Time `json:"held_at,omitempty"`
 	// Folded are earlier messages to the same conversation this answer covers too (sent while it worked).
 	Folded []Folded `json:"folded,omitempty"`
 	// Ext is the channel's own: the progress card, the reaction on the message.
@@ -52,10 +56,13 @@ type Run struct {
 	Recalled bool `json:"recalled,omitempty"`
 }
 
-// waitFrom is when the turn being waited on was asked for: the message, or the ask for an answer.
-func (r *Run) waitFrom() time.Time {
+// WaitFrom is when the turn being waited on was asked for: the message, the latest hold, or the ask for an answer.
+func (r *Run) WaitFrom() time.Time {
 	if r.Again.After(r.Started) {
 		return r.Again
+	}
+	if r.Held && !r.HeldAt.IsZero() {
+		return r.HeldAt
 	}
 	return r.Started
 }
@@ -70,19 +77,14 @@ func (r *Run) AskAgain(last int, msgID, probe string, now time.Time) {
 }
 
 // Queued: the run's message is not in the conversation yet, but may still come (it waits behind another turn).
-func (r *Run) Queued(now time.Time) bool { return now.Sub(r.waitFrom()) < QueuedMost }
+func (r *Run) Queued(now time.Time) bool { return now.Sub(r.WaitFrom()) < QueuedMost }
 
 // Asked: the conversation was asked again for this turn's answer (once is all).
 func (r *Run) Asked() bool { return !r.Again.IsZero() }
 
-// placeholders are what a turn may end with instead of an answer (Claude Code writes the first when a turn ends with
-// nothing to say).
-var placeholders = []string{"no response requested", "(no content)", "no content", "[no content]"}
-
 // Placeholder: text stands in for an answer the turn did not give.
 func Placeholder(text string) bool {
-	t := strings.TrimRight(strings.ToLower(strings.TrimSpace(text)), ".。!！ ")
-	return slices.Contains(placeholders, t)
+	return transcript.ReplyPlaceholder(text)
 }
 
 // Folded is an earlier message a run answers too.
@@ -195,13 +197,14 @@ const (
 type End string
 
 const (
-	EndDone     End = ""
-	EndStopped  End = "stopped"  // interrupted (/stop, the app, the terminal)
-	EndError    End = "error"    // the turn ended in a model API error
-	EndGaveUp   End = "gave_up"  // not done in RunMost (HeldMost for a held run)
-	EndGone     End = "gone"     // the conversation was closed or deleted
-	EndOffline  End = "offline"  // its machine is offline
-	EndRecalled End = "recalled" // the owner recalled the message it answers
+	EndDone      End = ""
+	EndStopped   End = "stopped"   // interrupted (/stop, the app, the terminal)
+	EndError     End = "error"     // the turn ended in a model API error
+	EndGaveUp    End = "gave_up"   // not done in RunMost (HeldMost for a held run)
+	EndGone      End = "gone"      // the conversation was closed or deleted
+	EndOffline   End = "offline"   // its machine is offline
+	EndRecalled  End = "recalled"  // the owner recalled the message it answers
+	EndUnrelated End = "unrelated" // an ordinary user turn superseded a held wait; send nothing
 )
 
 // Step is Check's verdict.
@@ -219,14 +222,14 @@ func (r *Run) Check(l Look) Step {
 	if l.Offline || !l.Exists && !l.Online {
 		gaveUp = EndOffline
 	}
-	if r.Held && age > HeldMost {
-		return Step{Do: Finish, End: gaveUp}
-	}
-	if age > RunMost {
+	// Both limits end with a word. A held run has no progress card left (it gave the card back with its message), so an
+	// ending without a note would be a quiet one: nothing would be said anywhere, and the owner would never hear that
+	// the wait is over.
+	if (r.Held && age > HeldMost) || age > RunMost {
 		return Step{Do: Finish, End: gaveUp, Note: i18n.T(l.Lang, "channel-turns.gave_up", i18n.Args{"took": Duration(l.Lang, age)})}
 	}
 	if !l.Exists {
-		if age > MissingAfter && l.Online {
+		if l.Now.Sub(r.WaitFrom()) > MissingAfter && l.Online {
 			return Step{Do: Finish, End: EndGone, Note: i18n.T(l.Lang, "channel-turns.gone")}
 		}
 		return Step{Do: Wait}
@@ -238,10 +241,10 @@ func (r *Run) Check(l Look) Step {
 	if l.Waiting {
 		return Step{Do: Wait} // waiting on the owner: what it asks goes out as an ask
 	}
-	if !r.Seen && l.Now.Sub(r.waitFrom()) < QuietGrace {
+	if !r.Seen && l.Now.Sub(r.WaitFrom()) < QuietGrace {
 		return Step{Do: Wait}
 	}
-	if l.Offline && age < OfflineGrace {
+	if l.Offline && l.Now.Sub(r.WaitFrom()) < OfflineGrace {
 		return Step{Do: Wait}
 	}
 	return Step{Do: Read}
@@ -256,6 +259,8 @@ type Reading struct {
 	Stopped string
 	// Words: the turn's items end in the assistant's words (else its last words may not be written yet).
 	Words bool
+	// Unrelated: an ordinary user turn followed a held run, rather than the background wake it was waiting for.
+	Unrelated bool
 }
 
 // Result is what to send when a run is over (or held: answered once, waiting on its background work).
@@ -265,7 +270,8 @@ type Result struct {
 	Held   bool
 	End    End // how a final one ended
 	Last   int
-	// Quiet: nothing to send (a held run whose background work ended without a word).
+	// Quiet: no answer to send (a held run whose background work ended without a word, or one superseded by an
+	// unrelated user turn). End tells those cases apart; EndUnrelated suppresses the quiet ending card too.
 	Quiet bool
 	// Stopped is why the turn ended without words, when known (Reading.Stopped).
 	Stopped string
@@ -275,17 +281,22 @@ type Result struct {
 // never gets here: the caller gives up and asks for it again (reading the whole tail would answer with the previous
 // turn's words).
 func (r *Run) Decide(rd Reading, l Look) *Result {
-	age := l.Now.Sub(r.Started)
 	held := l.Background > 0
+	if r.Held && rd.Unrelated {
+		return &Result{Quiet: true, End: EndUnrelated, Last: rd.Last}
+	}
 	if strings.TrimSpace(rd.Answer) == "" {
 		switch {
 		case held:
 			return nil
-		case r.Held && age < HeldIdleMost:
+		case r.Held && l.Now.Sub(r.WaitFrom()) < HeldIdleMost:
 			return nil
 		case r.Held:
-			return &Result{Quiet: true, Last: rd.Last} // its background work ended without more to say
-		case !r.Seen && l.Now.Sub(r.waitFrom()) < EmptyGrace:
+			// Its background work ended without more to say: a quiet end, which still says how that turn ended (it may
+			// have been interrupted or failed, or its computer gone offline), so a bad ending is not reported as done
+			// (#4228).
+			return &Result{Quiet: true, Last: rd.Last, Stopped: rd.Stopped, End: endOf(rd, l)}
+		case !r.Seen && l.Now.Sub(r.WaitFrom()) < EmptyGrace:
 			return nil // not started yet (queued behind another message, a slow start)
 		}
 	}
@@ -293,25 +304,39 @@ func (r *Run) Decide(rd Reading, l Look) *Result {
 	if strings.TrimSpace(rd.Answer) == "" {
 		res.Stopped = rd.Stopped
 	}
-	switch {
-	case held:
+	if held {
 		res.Note = i18n.T(l.Lang, "channel-turns.background", i18n.Args{"count": l.Background})
-	case rd.Stopped == transcript.InterruptedNotice:
-		res.End = EndStopped
-	case strings.HasPrefix(rd.Stopped, transcript.APIErrorPrefix) || l.Failed:
-		res.End = EndError
-	case l.Offline:
-		res.End = EndOffline // cut off by its machine going offline, words or not
+	} else {
+		res.End = endOf(rd, l)
 	}
 	return res
 }
 
-// Hold makes r wait for the turn its background work starts, from last on: answered once already.
+// endOf is how a run ended, from the signals both an end without words and a quiet one have: the turn's last notice
+// (an interruption, a model API error), the conversation's failed turn, and its machine going offline.
+func endOf(rd Reading, l Look) End {
+	switch {
+	case rd.Stopped == transcript.InterruptedNotice:
+		return EndStopped
+	case strings.HasPrefix(rd.Stopped, transcript.APIErrorPrefix) || l.Failed:
+		return EndError
+	case l.Offline:
+		return EndOffline // cut off by its machine going offline, words or not
+	}
+	return EndDone
+}
+
+// Hold makes r wait for the turn its background work starts, from last on: answered once already. Started stays at
+// the original message, so later holds cannot renew HeldMost; HeldAt restarts only the per-continuation grace periods.
 func (r *Run) Hold(last int, now time.Time) {
 	if last > r.Base {
 		r.Base = last
 	}
-	r.MsgIDs, r.Probe, r.Head, r.Seen, r.Held, r.Started, r.Folded, r.Again = nil, "", false, false, true, now, nil, time.Time{}
+	if r.Started.IsZero() {
+		r.Started = now
+	}
+	r.HeldAt = now
+	r.MsgIDs, r.Probe, r.Head, r.Seen, r.Held, r.Folded, r.Again = nil, "", false, false, true, nil, time.Time{}
 }
 
 // Find is where the run's message is in items: by its client_msg_id, else by its probe (holds says whether a user
@@ -339,26 +364,40 @@ func (r *Run) Find(items []proto.Item, holds func(proto.Item) bool) (int, bool) 
 	return 0, false
 }
 
-// Answer picks a turn's answer out of its items: the assistant's texts after its last tool call, or after the last
-// message it was given (a message taken mid-turn); without those, its last text.
+// Answer picks a turn's answer out of its items: every text the assistant wrote after the last message it was given
+// (a message taken mid-turn) or notice, in order, but the passing lines said right before a tool call
+// (transcript.AnswerParts, the rule the push body follows); without any after those, its last text. A report written
+// before a tool call is part of the answer, not only the words after the last call.
 func Answer(items []proto.Item) []proto.Item {
-	var tail []proto.Item
+	var texts []proto.Item
+	var parts []transcript.AnswerPart
 	var last *proto.Item
-	for i := range items {
-		it := items[i]
+	for i, it := range items {
 		switch {
 		case it.Role == "assistant" && it.Kind == proto.KindText && strings.TrimSpace(it.Text) != "":
-			tail = append(tail, it)
 			last = &items[i]
-		case it.Kind == proto.KindToolUse || it.Kind == proto.KindToolResult || it.Kind == proto.KindNotice ||
-			it.Role == "user" && it.Kind == proto.KindText:
-			tail = nil
+			texts = append(texts, it)
+			parts = append(parts, transcript.AnswerPart{Text: it.Text})
+		case it.Kind == proto.KindToolUse:
+			if n := len(parts); n > 0 {
+				parts[n-1].BeforeTool = true
+			}
+		case it.Kind == proto.KindNotice || it.Role == "user" && it.Kind == proto.KindText:
+			texts, parts = nil, nil
 		}
 	}
-	if len(tail) == 0 && last != nil {
-		return []proto.Item{*last}
+	if len(texts) == 0 {
+		if last != nil {
+			return []proto.Item{*last}
+		}
+		return nil
 	}
-	return tail
+	keep := transcript.AnswerParts(parts)
+	out := make([]proto.Item, 0, len(keep))
+	for _, i := range keep {
+		out = append(out, texts[i])
+	}
+	return out
 }
 
 // StoppedMost bounds the reason Stopped gives.

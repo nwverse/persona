@@ -1,7 +1,7 @@
 import SwiftUI
 
 // An inbox item of one of the hub's connectors (GitHub…), drawn the same for every source from the item's
-// `connector` block (docs/plans/plan-connectors.md「六、App 侧」). No pages for browsing the source: the thread as the hub
+// `connector` block (docs/plans/plan-connectors.md「App side」). No pages for browsing the source: the thread as the hub
 // read it, and the page itself in the app's link sheet.
 
 /// A connector's item opened: a chat app's conversation as its own page (ConnectorThreadView, a connector with
@@ -11,13 +11,17 @@ struct InboxConnectorDetailView: View {
     var item: InboxItem
     @State private var thread: ConnectorThreadModel
 
-    init(item: InboxItem) {
+    init(item: InboxItem, manager: String?) {
         self.item = item
-        _thread = State(initialValue: ConnectorThreadModel(connector: item.source, thread: item.connector?.thread ?? ""))
+        _thread = State(initialValue: ConnectorThreadModel(connector: item.source, thread: item.connector?.thread ?? "", manager: manager))
     }
 
     var body: some View {
-        if thread.loaded && (thread.unavailable || thread.chat.map { !$0.isChat && !$0.isGitHub } == true) {
+        content.environment(\.larkManager, thread.manager)
+    }
+
+    @ViewBuilder private var content: some View {
+        if thread.loaded && (thread.unavailable || thread.chat.map { !Self.isConversation($0, source: item.source) } == true) {
             InboxConnectorTextView(item: item, problem: thread.failure, reread: reread)
         } else if thread.chat?.isGitHub == true {
             GitHubThreadView(model: thread, item: item)
@@ -25,10 +29,17 @@ struct InboxConnectorDetailView: View {
                 .navigationBarTitleDisplayMode(.inline)
         } else {
             ConnectorThreadView(model: thread, source: item.accountName)
-                .navigationTitle(thread.chat?.name ?? item.title)
-                .navigationSubtitle(ThreadLayout.subtitle(thread.chat, source: item.accountName))
+                .navigationTitle(thread.chat.flatMap { $0.name.isEmpty ? nil : $0.name } ?? item.title)
+                .navigationSubtitleWhenSupported(ThreadLayout.subtitle(thread.chat, source: item.accountName))
                 .navigationBarTitleDisplayMode(.inline)
         }
+    }
+
+    /// A page drawn as a conversation: a chat's, or GitHub's thread. A Lark one from a hub that could not say its kind
+    /// (lark-cli's message list says nothing of the chat, and such a hub sent an empty kind) is a chat too, as the web
+    /// takes it: before, it opened as the item's plain text, every message of the chat run together.
+    static func isConversation(_ chat: ThreadChat, source: String) -> Bool {
+        chat.isChat || chat.isGitHub || source == "larkcli" && chat.kind.isEmpty
     }
 
     /// The text page's Retry reads the conversation page again first and says whether that page now takes the text's
@@ -55,6 +66,8 @@ struct InboxConnectorTextView: View {
     @State private var context: String?
     @State private var failure: String?
     @State private var link: LinkTarget?
+    /// A to-do, knowledge entry or computer the item's link opened (a link to one of Persona's pages, #9926).
+    @State private var hubSheet: HubLinkSheet?
     @State private var retrying = false
 
     private var connector: InboxItem.Connector? { item.connector }
@@ -70,7 +83,7 @@ struct InboxConnectorTextView: View {
                         }
                         Text([item.accountName, connector?.reference ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
                             .font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
-                        if let label = item.kindLabel {
+                        if let label = item.kindLabel, !item.isAssistantRow { // the assistant's own row: the source line already says it
                             Chip(text: label, look: item.kind == "mention" ? .tone(StatusPalette.needsYou) : .neutral)
                         }
                     }
@@ -78,9 +91,12 @@ struct InboxConnectorTextView: View {
                 }
                 .padding(.vertical, Theme.Space.xs)
                 if let url = connector?.url.flatMap(URL.init(string:)) {
-                    Button { link = LinkTarget(url: url) } label: {
-                        Label(ConnectorText.tightCJK(String(localized: "Open in \(item.accountName) [Inbox Connector Views 0e0e38]")), systemImage: Theme.Icon.safari).lineLimit(1)
+                    Button { open(url) } label: {
+                        // The assistant's own row opens its conversation in the app (#9928): a chat, not a web page.
+                        Label(item.isAssistantRow ? String(localized: "Open the Chat") : ConnectorText.tightCJK(String(localized: "Open in \(item.accountName) [Inbox Connector Views 0e0e38]")),
+                              systemImage: item.isAssistantRow ? Theme.Icon.conversation : Theme.Icon.safari).lineLimit(1)
                     }
+                    .accessibilityIdentifier("inbox.connector.open")
                 }
             } footer: {
                 if let to = connector?.replyTo, connector?.canReply == true {
@@ -94,6 +110,7 @@ struct InboxConnectorTextView: View {
                     if reread != nil { retryButton }
                 }
             }
+            if !item.onlyTitleAndSummary(context) {
             Section("Content") {
                 if let context {
                     // Nothing collected: the item's preview, as the web shows it, rather than a spinner that never ends.
@@ -104,6 +121,7 @@ struct InboxConnectorTextView: View {
                 } else {
                     ProgressView().frame(maxWidth: .infinity)
                 }
+            }
             }
         }
         .themedPage()
@@ -117,7 +135,17 @@ struct InboxConnectorTextView: View {
         .sheet(item: $link) { t in
             if let key = model.assistantMain ?? model.assistantCurrent { LinkSheet(target: t, key: key) }
         }
+        .hubLinkSheet($hubSheet)
         #endif
+    }
+
+    /// The item's page: one of Persona's own (the assistant's conversation, a to-do…) in the app, any other in the web card.
+    private func open(_ url: URL) {
+        if let opened = model.openOwnLink(url) {
+            if case .sheet(let page) = opened { hubSheet = page }
+            return
+        }
+        link = LinkTarget(url: url, manager: model.linkManager(item.manager))
     }
 
     /// Retry in place of leaving and coming back: the conversation page first (read, it replaces this page), then the text.
@@ -138,7 +166,7 @@ struct InboxConnectorTextView: View {
 
     private func load() async {
         do {
-            context = try await model.api?.inboxItem(item.id).context ?? ""
+            context = try await model.api?.manager(model.itemManager(item.manager)).inboxItem(item.id).context ?? ""
             failure = nil
         } catch {
             if error.isCancellation { return }

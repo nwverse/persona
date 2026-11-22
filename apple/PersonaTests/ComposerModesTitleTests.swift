@@ -11,6 +11,10 @@ struct ComposerModesTitleTests {
         #expect(SessionModes.modelName("claude-fable-5-1") == "Fable 5.1")
         #expect(SessionModes.modelName("opus") == "Opus")
         #expect(SessionModes.modelName("opus[1m]") == "Opus")
+        #expect(SessionModes.modelName("claude-opus-5-5[1m]") == "Opus 5.5")
+        #expect(SessionModes.modelName("claude-fable-5-2[1m]") == "Fable 5.2")
+        #expect(SessionModes.modelName("claude-sonnet-5-5[1m]") == "Sonnet 5.5")
+        #expect(SessionModes.modelName("claude-opus-5-5-20260101") == "Opus 5.5")
         #expect(SessionModes.modelName("claude-3-5-sonnet-20241022") == "Sonnet")
         #expect(SessionModes.modelName("openai/gpt-5.5") == "5.5")
         #expect(SessionModes.modelName("") == nil)
@@ -52,5 +56,15 @@ struct ComposerModesTitleTests {
         #expect(SessionModes.composerTitle(model: "gpt-5.5", effort: nil)?.spoken == "gpt-5.5")
         #expect(SessionModes.composerTitle(model: nil, effort: "很高") == .init(model: "思考", effort: "很高"))
         #expect(SessionModes.composerTitle(model: nil, effort: nil) == nil)
+    }
+
+    @Test func starterLauncherLegacyDefaultMatchesAnEmptyModel() {
+        let modes = StarterComposer.ShellModes(launcher: .constant("old"), launcherModel: .constant(nil), mode: .constant(""), effort: .constant(""))
+        let app = AppModel()
+        let legacy = StarterModesMenu.title(modes: modes, launchers: [Launcher(name: "old", model: "默认")], model: app)
+        #expect(legacy == StarterModesMenu.title(modes: modes, launchers: [Launcher(name: "old")], model: app))
+        #expect(legacy?.model != "默认")
+        let explicit = StarterModesMenu.title(modes: modes, launchers: [Launcher(name: "old", model: "claude-opus-5-5")], model: app)
+        #expect(explicit?.model == "Opus 5.5")
     }
 }

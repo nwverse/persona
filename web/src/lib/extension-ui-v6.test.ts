@@ -3,16 +3,16 @@
 import { describe, expect, it } from "vitest";
 import { fieldValues, readView, seriesColors, UI_VERSION, uiContext } from "./extension-ui";
 import {
-  arcPath, aspectRatio, candleColors, candleExtent, candleOf, colorOf, controlText, controlValue, controlsOf, hue, imageSrc, isImagePath, multilineRows, multiText, multiValues,
+  arcPath, aspectRatio, candleColors, candleExtent, candleOf, colorOf, controlText, controlValue, hue, imageSrc, isImagePath, multilineRows, multiText, multiValues,
   readControl, readRowActions, readSpark, shareText, sliderStep, slices, snap, sparkPoints, areaBands,
 } from "./extension-ui-v6";
 
 const PATH = "/api/v1/extensions/home/-/image/eyJhIjoxfQ.c2ln";
 
 describe("UI 6：版本", () => {
-  it("asks for version 6", () => {
-    expect(UI_VERSION).toBe(6);
-    expect(uiContext().ui_version).toBe(6);
+  it("asks for version 10, which has all of 6", () => {
+    expect(UI_VERSION).toBe(10);
+    expect(uiContext().ui_version).toBe(10);
   });
 });
 
@@ -105,7 +105,6 @@ describe("UI 6：读页面", () => {
     const tiles = v.sections[0].items[0].tiles!;
     expect(tiles[0].control?.kind).toBe("switch");
     expect(tiles[1].control).toBeUndefined();
-    expect([...controlsOf(v).keys()]).toEqual(["x"]);
   });
 
   it("starts a multichoice field from its value, an empty array without one", () => {

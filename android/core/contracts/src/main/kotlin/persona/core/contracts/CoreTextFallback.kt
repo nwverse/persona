@@ -3,10 +3,10 @@ package persona.core.contracts
 import javax.xml.parsers.DocumentBuilderFactory
 
 /**
- * [CoreText.words] before the app sets it: unit tests run in Simplified Chinese (docs/android/android.md "Internationalization"), and the
- * build puts core/designsystem's `values-zh/strings_core.xml` on every Android module's test classpath, so their
- * expected text keeps reading as the app shows it. Without that file (the app, before it sets the words) it is
- * English.
+ * [CoreText.words] before the app sets it: unit tests run in Simplified Chinese (docs/android/android.md "Internationalization"), and
+ * modules that apply the `persona.coretext.zh` build plugin get core/designsystem's `values-zh/strings_core.xml` on their
+ * test classpath, so their expected text keeps reading as the app shows it. Without that file (the app before it sets the
+ * words, and the tests of every other module) it is English.
  */
 internal object CoreTextFallback {
     private val table: Map<String, String>? by lazy {
@@ -34,9 +34,8 @@ internal object CoreTextFallback {
             CoreText.Key.CompactCount -> {
                 val count = (text.args.first() as Number).toLong()
                 val unit = strings["designsystem_core_compact_unit"]?.toLongOrNull() ?: 10_000
-                if (count < unit) count.toString() else String.format(strings.getValue("designsystem_core_compact_count"),
-                    java.math.BigDecimal(count).divide(java.math.BigDecimal(unit)).setScale(1, java.math.RoundingMode.HALF_UP)
-                        .stripTrailingZeros().toPlainString())
+                compactCount(count, unit, { String.format(strings.getValue("designsystem_core_compact_count"), it) },
+                    strings["designsystem_core_compact_millions"]?.let { millions -> { units: String -> String.format(millions, units) } })
             }
             else -> {
                 val name = "designsystem_core_" + text.key.name.replace(Regex("(?<!^)(?=[A-Z])"), "_").lowercase()

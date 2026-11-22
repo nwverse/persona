@@ -44,9 +44,18 @@ class HttpAgentCreationService(
         }
     }
     private fun request(vararg segments: String) = Request.Builder().url(url(*segments)).header("Authorization", "Bearer $token")
-    override suspend fun launchers(machineId: String): List<AgentLauncher> {
+    override suspend fun launchers(machineId: String): List<AgentLauncher> = launcherList(machineId).launchers
+    override suspend fun launcherList(machineId: String): AssistantLaunchers {
         val body = read(request("api", "v1", "machines", machineId, "launchers").build())
-        return JsonCodec.decodeFromJsonElement(body["launchers"] ?: JsonArray(emptyList()))
+        // Additions to New Agent's answer are independently optional: an unreadable one costs none of the launchers.
+        val unavailable = try { JsonCodec.decodeFromJsonElement<List<UnavailableLauncher>>(body["unavailable"] ?: JsonArray(emptyList())) }
+            catch (_: IllegalArgumentException) { emptyList() }
+        val tiers = try { JsonCodec.decodeFromJsonElement<List<PickerTier>>(body["tiers"] ?: JsonArray(emptyList())) }
+            catch (_: IllegalArgumentException) { emptyList() }
+        val profile = try { JsonCodec.decodeFromJsonElement<PickerTierProfile?>(body["tiers_profile"] ?: JsonNull) }
+            catch (_: IllegalArgumentException) { null }
+        return AssistantLaunchers(JsonCodec.decodeFromJsonElement(body["launchers"] ?: JsonArray(emptyList())),
+            unavailable = unavailable, tiers = tiers, tiersProfile = profile)
     }
     override suspend fun directories(machineId: String, path: String): AgentDirectories = JsonCodec.decodeFromJsonElement(read(
         request("api", "v1", "machines", machineId, "dirs")
@@ -62,6 +71,11 @@ class HttpAgentCreationService(
             outcome(read(request("api", "v1", "sessions").apply { ProtocolCompatibility.operationHeaders(operationId).forEach { (name, value) -> header(name, value) } }.post(body).build(), startHttp))
         } catch (cancelled: CancellationException) {
             throw cancelled
+        } catch (failure: HubFailure) {
+            // The manager refused the provider on this computer before anything started (docs/integrations/launchers.md
+            // "Device scope and on-demand delivery"): its words, in the request's language, are the answer.
+            if (failure.status == 409 && failure.code in ScopeRefusals && failure.message.isNotBlank())
+                AgentStartResult.Rejected(CoreText.plain(failure.message)) else AgentStartResult.Unknown
         } catch (_: Exception) {
             AgentStartResult.Unknown
         }
@@ -97,14 +111,82 @@ class HttpAgentCreationService(
         // Hubs without unified model configuration: the launcher is picked here as before.
         if (failure.status == 404) null else throw failure
     }
-    override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean): LauncherModels? = try {
+    override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean): LauncherModels? =
+        launcherModels(machineId, launcher, refresh, null)
+    override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean, host: String?): LauncherModels? = try {
         val url = url("api", "v1", "machines", machineId, "launchers", launcher, "models").newBuilder()
-            .apply { if (refresh) addQueryParameter("refresh", "1") }.build()
+            .apply {
+                if (refresh) addQueryParameter("refresh", "1")
+                if (!host.isNullOrEmpty()) addQueryParameter("host", host)
+            }.build()
         JsonCodec.decodeFromJsonElement<LauncherModels>(read(request().url(url).build(), modelsHttp))
     } catch (failure: HubFailure) {
-        // Hubs without the list: no model picker, the launcher's own model as before.
+        // Hubs without the list cannot supply suggestions or a lock reason.
         if (failure.status == 404) null else throw failure
     }
+    override suspend fun worktreeStatus(machineId: String, cwd: String, kind: String?): WorktreeStatus? = try {
+        JsonCodec.decodeFromJsonElement<WorktreeStatus>(worktree(machineId, "status", buildJsonObject {
+            put("cwd", cwd)
+            kind?.let { put("kind", it) }
+        }))
+    } catch (cancelled: CancellationException) { throw cancelled }
+    catch (_: Exception) { null } // an older node or hub, offline, an error: no worktree offered
+
+    override suspend fun addWorktree(machineId: String, cwd: String, nameHint: String, branch: String, kind: String?): WorktreeAdded =
+        JsonCodec.decodeFromJsonElement(worktree(machineId, "add", buildJsonObject {
+            put("cwd", cwd)
+            if (nameHint.isNotEmpty()) put("name_hint", nameHint)
+            branch.trim().takeIf(String::isNotEmpty)?.let { put("branch", it) }
+            kind?.let { put("kind", it) }
+        }))
+
+    override suspend fun removeWorktree(machineId: String, path: String, deleteBranch: Boolean, force: Boolean, kind: String?): WorktreeRemoved =
+        JsonCodec.decodeFromJsonElement(worktree(machineId, "remove", buildJsonObject {
+            put("path", path)
+            if (deleteBranch) put("delete_branch", true)
+            if (force) put("force", true)
+            kind?.let { put("kind", it) }
+        }))
+
+    // The catalog covers every computer of the hub: only [machineId]'s rows. An older hub (404), an offline catalog or
+    // any other failure shows no workspace choice, never an error.
+    override suspend fun workspaces(machineId: String): List<AgentWorkspace> = try {
+        workspaceCatalog(machineId).takeIf { it.complete }?.workspaces.orEmpty()
+    } catch (cancelled: CancellationException) { throw cancelled }
+    catch (_: Exception) { emptyList() }
+
+    override suspend fun workspaceCatalog(machineId: String): AgentWorkspaceCatalog {
+        val body = read(request("api", "v1", "workspaces").build())
+        val workspaces = body["workspaces"] as? JsonArray ?: throw IllegalStateException("Malformed workspace catalog")
+        val errors = when (val value = body["errors"]) {
+            null, JsonNull -> JsonArray(emptyList())
+            is JsonArray -> value
+            else -> throw IllegalStateException("Malformed workspace catalog errors")
+        }
+        // Existing hubs flatten source failures to machine_id/error; never parse their localized error text.
+        val failed = errors.any { element ->
+            val error = element as? JsonObject ?: throw IllegalStateException("Malformed workspace catalog error")
+            val errorMachine = (error["machine_id"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf(String::isNotBlank)
+                ?: throw IllegalStateException("Malformed workspace catalog error machine")
+            val source = when (val value = error["source"]) {
+                null, JsonNull -> null
+                is JsonPrimitive -> value.takeIf { it.isString }?.content ?: throw IllegalStateException("Malformed workspace catalog error source")
+                else -> throw IllegalStateException("Malformed workspace catalog error source")
+            }
+            errorMachine == machineId && (source.isNullOrBlank() || source == "paseo")
+        }
+        // Every computer's workspaces: decoded off the caller's (the form's main) thread.
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            AgentWorkspaceCatalog(JsonCodec.decodeFromJsonElement<List<AgentWorkspace>>(workspaces)
+                .filter { it.machineId == machineId }, complete = !failed)
+        }
+    }
+
+    // git can take a while on a big repository: the start's budget, not the list's.
+    private suspend fun worktree(machineId: String, action: String, body: JsonObject) = read(
+        request("api", "v1", "machines", machineId, "worktree", action).post(body.toString().toRequestBody("application/json".toMediaType())).build(),
+        startHttp)
+
     private fun outcome(body: JsonObject): AgentStartResult {
         val session = body["session"] as? JsonObject
         if (session != null) {
@@ -112,5 +194,11 @@ class HttpAgentCreationService(
             if (decoded.machineId.isNotBlank() && decoded.sessionId.isNotBlank()) return AgentStartResult.Created(decoded)
         }
         return if (body["state"]?.jsonPrimitive?.content == "pending") AgentStartResult.Pending else AgentStartResult.Unknown
+    }
+    private companion object {
+        /** A provider outside the computer's scope, or skipped there for its own service: nothing was started. */
+        val ScopeRefusals = setOf("launcher_out_of_scope", "launcher_own_service",
+            // a start that asked for ultracode where it can't run (#582): nothing started; the words say why
+            "node_outdated", "ultracode_unsupported")
     }
 }

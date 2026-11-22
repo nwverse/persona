@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -24,6 +25,7 @@ import (
 
 // runtimeHub is the hub end of a node under test: the events it got and how it answers interactions.
 type runtimeHub struct {
+	modeSets []proto.ModeSetEvent
 	mu       sync.Mutex
 	events   []string
 	lists    [][]proto.Session
@@ -33,6 +35,9 @@ type runtimeHub struct {
 	asked    []proto.Interaction
 	resolve  func(proto.Interaction) proto.Resolution
 	nodePeer *rpc.Peer
+	cancel   context.CancelFunc
+	// drop ends the link from the hub's side: the node's connection closes, as when the hub goes away.
+	drop func()
 	// answer takes the other hub calls (mcp.tools, assistant.context…); handled false: an unexpected call.
 	answer func(method string, params json.RawMessage) (res any, err error, handled bool)
 }
@@ -55,6 +60,13 @@ func runtimeNode(t *testing.T) (*Node, *runtimeHub) {
 // runtimeNodeOn is runtimeNode serving a hub connection on a resident node's shared runtime host (nil: its own socket).
 func runtimeNodeOn(t *testing.T, shared *RuntimeHost) (*Node, *runtimeHub) {
 	t.Helper()
+	return runtimeNodeTapped(t, shared, nil)
+}
+
+// runtimeNodeTapped is runtimeNodeOn writing whatever the node writes to the hub to tap first (nil: no tap). A write
+// that fails on tap fails, and the hub does not get it.
+func runtimeNodeTapped(t *testing.T, shared *RuntimeHost, tap io.Writer) (*Node, *runtimeHub) {
+	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "jb")
 	if err != nil {
 		t.Fatal(err)
@@ -74,15 +86,25 @@ func runtimeNodeOn(t *testing.T, shared *RuntimeHost) (*Node, *runtimeHub) {
 	ctx, cancel := context.WithCancel(context.Background())
 	n2hR, n2hW := io.Pipe()
 	h2nR, h2nW := io.Pipe()
-	n.peer = rpc.New("n", n2hW)
+	var toHub io.Writer = n2hW
+	if tap != nil {
+		toHub = io.MultiWriter(tap, n2hW)
+	}
+	n.peer = rpc.New("n", toHub)
 	n.peer.OnRequest = n.handle
+	peer := n.peer // served below: a test may give the node another connection later
 	hub := rpc.New("h", h2nW)
-	end := &runtimeHub{nodePeer: hub, resolve: func(proto.Interaction) proto.Resolution { return proto.Resolution{Dismiss: true} }}
+	end := &runtimeHub{nodePeer: hub, cancel: cancel, resolve: func(proto.Interaction) proto.Resolution { return proto.Resolution{Dismiss: true} },
+		drop: func() { _ = h2nW.Close() }}
 	hub.OnEvent = func(event string, params json.RawMessage) {
 		end.mu.Lock()
 		defer end.mu.Unlock()
 		end.events = append(end.events, event)
 		switch event {
+		case proto.EventModeSet:
+			var e proto.ModeSetEvent
+			_ = json.Unmarshal(params, &e)
+			end.modeSets = append(end.modeSets, e)
 		case "sessions.changed":
 			var p struct {
 				Sessions []proto.Session `json:"sessions"`
@@ -125,7 +147,7 @@ func runtimeNodeOn(t *testing.T, shared *RuntimeHost) (*Node, *runtimeHub) {
 		return nil, errors.New("unexpected hub call " + method)
 	}
 	go func() { _ = hub.Serve(ctx, n2hR) }()
-	go func() { _ = n.peer.Serve(ctx, h2nR) }()
+	go func() { _ = peer.Serve(ctx, h2nR) }()
 	if shared != nil {
 		n.runtimeSock = shared.path
 		shared.attach(n)
@@ -149,6 +171,7 @@ type fakeRuntime struct {
 	answer func(method string, params json.RawMessage) (any, error)
 	events []string       // event names the node pushed, in order
 	hubs   []bool         // runtime.hub pushes: whether a hub is connected
+	driven []string       // runtime.driven pushes: the sessions the hub started through another runtime
 	helloR map[string]any // what runtime.hello answered
 	closed chan struct{}  // closed when the connection ends (helloAt)
 }
@@ -195,6 +218,13 @@ func dialRuntimeAt(t *testing.T, path string, hello map[string]any) *fakeRuntime
 			_ = json.Unmarshal(params, &p)
 			f.hubs = append(f.hubs, p.Connected)
 		}
+		if event == "runtime.driven" {
+			var p struct {
+				SessionID string `json:"session_id"`
+			}
+			_ = json.Unmarshal(params, &p)
+			f.driven = append(f.driven, p.SessionID)
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = f.peer.Serve(ctx, c) }()
@@ -217,9 +247,31 @@ func dshHello() map[string]any {
 		"caps": map[string]any{"start": true, "send": true, "interrupt": true, "rename": true}}
 }
 
+// nodeCall is a current-manager call: an existing assistant conversation gets an explicit ordinary origin decision
+// unless the fixture sets origin_known itself. nodeCallWithoutAttestation exercises older-manager/store-error upgrades.
 func nodeCall(t *testing.T, n *Node, method string, params any) (json.RawMessage, error) {
 	t.Helper()
 	raw, _ := json.Marshal(params)
+	if method == "assistant.send" || method == "session.send" {
+		var p map[string]any
+		if json.Unmarshal(raw, &p) == nil && p["session_id"] != "" && p["session_id"] != nil {
+			if _, set := p["origin_known"]; !set {
+				p["origin_known"] = true
+				raw, _ = json.Marshal(p)
+			}
+		}
+	}
+	return nodeCallRaw(t, n, method, raw)
+}
+
+func nodeCallWithoutAttestation(t *testing.T, n *Node, method string, params any) (json.RawMessage, error) {
+	t.Helper()
+	raw, _ := json.Marshal(params)
+	return nodeCallRaw(t, n, method, raw)
+}
+
+func nodeCallRaw(t *testing.T, n *Node, method string, raw json.RawMessage) (json.RawMessage, error) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	res, err := n.handle(ctx, method, raw)
@@ -245,6 +297,48 @@ func listed(t *testing.T, n *Node) map[string]proto.Session {
 		out[s.SessionID] = s
 	}
 	return out
+}
+
+func TestRuntimeCloseCapabilityIsIndependentOfTerminal(t *testing.T) {
+	for _, allowed := range []bool{false, true} {
+		t.Run(fmt.Sprint(allowed), func(t *testing.T) {
+			n, _ := runtimeNode(t)
+			hello := dshHello()
+			hello["caps"].(map[string]any)["close"] = allowed
+			host := dialRuntime(t, n, hello)
+			_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{{"session_id": "close-capability", "status": "working"}}})
+			waitFor(t, "runtime session listed", func() bool { _, ok := listed(t, n)["close-capability"]; return ok })
+			caps := listed(t, n)["close-capability"].Capabilities
+			if caps == nil || caps.Close == nil || *caps.Close != allowed || caps.Terminal {
+				t.Fatalf("close %v listed as %+v", allowed, caps)
+			}
+		})
+	}
+}
+
+// A runtime row says whether it can be renamed (#6294): what the runtime declared, for its own sessions; a session
+// another one started never says so, whatever the runtime declared.
+func TestRuntimeRenameCapability(t *testing.T) {
+	for _, allowed := range []bool{false, true} {
+		t.Run(fmt.Sprint(allowed), func(t *testing.T) {
+			n, _ := runtimeNode(t)
+			hello := dshHello()
+			hello["caps"].(map[string]any)["rename"] = allowed
+			host := dialRuntime(t, n, hello)
+			_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{
+				{"session_id": "rename-capability", "status": "idle"},
+				{"session_id": "rename-child", "status": "idle", "is_subagent": true, "parent_session_id": "rename-capability"},
+			}})
+			waitFor(t, "runtime sessions listed", func() bool { _, ok := listed(t, n)["rename-child"]; return ok })
+			got := listed(t, n)
+			if caps := got["rename-capability"].Capabilities; caps == nil || caps.Rename == nil || *caps.Rename != allowed || caps.Terminal {
+				t.Fatalf("rename %v listed as %+v", allowed, caps)
+			}
+			if caps := got["rename-child"].Capabilities; caps == nil || caps.Rename == nil || *caps.Rename {
+				t.Fatalf("a sub-Agent's row lists rename: %+v", caps)
+			}
+		})
+	}
 }
 
 func TestRuntimeSessionsAreListedAndPushed(t *testing.T) {
@@ -419,6 +513,155 @@ func TestRuntimeSendRefusedWithoutTheCap(t *testing.T) {
 	}
 }
 
+// A row's modes capability (#1843): what the runtime declared, for a row whose agent takes Claude Code's modes or is the
+// runtime's own, never a subagent's. Rows of a runtime that did not declare it say false, not nothing.
+func TestRuntimeModesCapability(t *testing.T) {
+	for _, c := range []struct {
+		declared        bool
+		rt, rtAgent, id string
+		agent           string
+		want            bool
+	}{
+		{true, "orca", "", "session-1", "claude", true},
+		{true, "agy", "agy", "session-1", "agy", true},
+		{true, "opencode-4242", "opencode", "session-1", "opencode", true},
+		{true, "paseo", "", "session-1", "codex", false},
+		{true, "paseo", "", "session-1", "claude", true},
+		{true, "paseo", "paseo", "session-1", "paseo", false}, // Paseo's catch-all (opencode, grok, ...): its modes refuses them
+		{true, "orca", "", "session-1" + subagentSep + "a1", "claude", false},
+		{false, "dsh", "dsh", "session-1", "dsh", false},
+	} {
+		if got := runtimeModes(c.declared, c.rt, c.rtAgent, proto.Session{SessionID: c.id, Agent: c.agent}); got != c.want {
+			t.Errorf("%+v: modes %v", c, got)
+		}
+	}
+	n, _ := runtimeNode(t)
+	host := dialRuntime(t, n, map[string]any{"runtime": "dsh"})
+	_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{{"session_id": "session-4"}}})
+	waitFor(t, "listed", func() bool { _, ok := listed(t, n)["session-4"]; return ok })
+	if s := listed(t, n)["session-4"]; s.Capabilities == nil || s.Capabilities.Modes == nil || *s.Capabilities.Modes {
+		t.Fatalf("a runtime without modes lists modes false: %+v", s.Capabilities)
+	}
+}
+
+// A row narrows modes and model for its own session as it narrows rewind (#8133): an agent the runtime keeps archived
+// takes none of them (Paseo refuses them), and the efforts a row lists go with its modes. A row that says nothing keeps
+// what the runtime declared, as an older bridge's rows do; a runtime that declared no modes lists no efforts.
+func TestRuntimeRowNarrowsModesAndModel(t *testing.T) {
+	n, _ := runtimeNode(t)
+	hello := paseoHello()
+	hello["caps"].(map[string]any)["modes"] = true
+	hello["caps"].(map[string]any)["model"] = true
+	h := dialRuntime(t, n, hello)
+	archived := map[string]any{"rewind": false, "rewind_code": false, "modes": false, "model": false}
+	_ = h.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{
+		{"session_id": "live-claude", "status": "idle", "agent": "claude", "capabilities": map[string]any{"rewind": true}},
+		{"session_id": "archived-claude", "status": "offline", "agent": "claude", "capabilities": archived},
+		{"session_id": "live-grok", "status": "idle", "agent": "paseo", "efforts": []string{"low", "high"}},
+		{"session_id": "archived-grok", "status": "offline", "agent": "paseo", "efforts": []string{"low"}, "capabilities": archived},
+		{"session_id": "older-bridge", "status": "idle", "agent": "claude"},
+	}})
+	waitFor(t, "rows listed", func() bool { _, ok := listed(t, n)["older-bridge"]; return ok })
+	rows := listed(t, n)
+	caps := func(id string) (modes, model bool) {
+		c := rows[id].Capabilities
+		if c == nil || c.Modes == nil || c.Model == nil {
+			t.Fatalf("%s: modes and model said: %+v", id, c)
+		}
+		return *c.Modes, *c.Model
+	}
+	for _, c := range []struct {
+		id           string
+		modes, model bool
+		efforts      []string
+	}{
+		{"live-claude", true, true, nil},
+		{"archived-claude", false, false, nil},
+		{"live-grok", false, true, []string{"low", "high"}}, // Paseo's catch-all takes no Claude modes, its efforts all the same
+		{"archived-grok", false, false, nil},
+		{"older-bridge", true, true, nil},
+	} {
+		if modes, model := caps(c.id); modes != c.modes || model != c.model || !slices.Equal(rows[c.id].Efforts, c.efforts) {
+			t.Errorf("%s: modes %v model %v efforts %v, want %v %v %v", c.id, modes, model, rows[c.id].Efforts, c.modes, c.model, c.efforts)
+		}
+	}
+	// A runtime that declared no modes: the node refuses session.modes for its sessions, so none lists efforts.
+	other := dialRuntime(t, n, map[string]any{"runtime": "acme-cloud", "caps": map[string]any{"send": true}})
+	_ = other.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{{"session_id": "no-modes", "status": "idle", "efforts": []string{"low"},
+		"capabilities": map[string]any{"permission_modes": []string{"default", "bypassPermissions"}}}}})
+	waitFor(t, "listed", func() bool { _, ok := listed(t, n)["no-modes"]; return ok })
+	if s := listed(t, n)["no-modes"]; s.Efforts != nil || s.Capabilities.PermissionModes != 0 {
+		t.Fatalf("efforts %v, permission modes %v on a runtime without modes", s.Efforts, s.Capabilities.PermissionModes)
+	}
+}
+
+// A row of an agent that is not Claude Code lists the permission modes session.modes takes for it (#8261): Persona's
+// own, each once, beside capabilities.modes false (older apps show no Claude Code chips there). None where the Claude
+// Code chips stand or where the row takes its modes away (archived); and a switch between them reaches the runtime.
+func TestRuntimeRowListsItsPermissionModes(t *testing.T) {
+	n, _ := runtimeNode(t)
+	hello := paseoHello()
+	hello["caps"].(map[string]any)["modes"] = true
+	h := dialRuntime(t, n, hello)
+	both := []string{"default", "bypassPermissions"}
+	listedModes := map[string]any{"permission_modes": []string{"default", "yolo", "bypassPermissions", "default"}}
+	_ = h.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{
+		{"session_id": "grok", "status": "idle", "agent": "paseo", "capabilities": listedModes},
+		{"session_id": "pi", "status": "idle", "agent": "paseo", "capabilities": map[string]any{"permission_modes": []string{"default"}}},
+		{"session_id": "claude", "status": "idle", "agent": "claude", "capabilities": listedModes},
+		{"session_id": "archived", "status": "offline", "agent": "paseo",
+			"capabilities": map[string]any{"modes": false, "permission_modes": both}},
+		{"session_id": "older-bridge", "status": "idle", "agent": "paseo"},
+	}})
+	waitFor(t, "rows listed", func() bool { _, ok := listed(t, n)["older-bridge"]; return ok })
+	rows := listed(t, n)
+	for _, c := range []struct {
+		id    string
+		modes bool
+		want  []string
+	}{
+		{"grok", false, both},
+		{"pi", false, []string{"default"}},
+		{"claude", true, nil},
+		{"archived", false, nil},
+		{"older-bridge", false, nil},
+	} {
+		got := rows[c.id].Capabilities
+		if got == nil || got.Modes == nil || *got.Modes != c.modes || got.PermissionModes != proto.PermissionModeSetOf(c.want...) {
+			t.Errorf("%s: %+v, want modes %v and permission modes %v", c.id, got, c.modes, c.want)
+		}
+	}
+	if _, err := nodeCall(t, n, "session.modes", map[string]any{"session_id": "grok", "permission_mode": "bypassPermissions"}); err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	_ = json.Unmarshal(h.got("session.modes")[0], &m)
+	if m["session_id"] != "grok" || m["permission_mode"] != "bypassPermissions" {
+		t.Fatalf("modes %v", m)
+	}
+}
+
+// session.info of a runtime's session whose counts nobody gives (no transcript here) says they are unknown, so the
+// apps leave them out (#8261); the zeros stay for older apps, which decode them as required numbers.
+func TestRuntimeSessionInfoSaysItsCountsAreUnknown(t *testing.T) {
+	n, _ := runtimeNode(t)
+	h := dialRuntime(t, n, paseoHello())
+	_ = h.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{
+		{"session_id": "grok", "status": "idle", "agent": "paseo", "model": "grok-5", "permission_mode": "bypassPermissions"},
+	}})
+	waitFor(t, "listed", func() bool { _, ok := listed(t, n)["grok"]; return ok })
+	raw, err := nodeCall(t, n, "session.info", map[string]any{"session_id": "grok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var info map[string]any
+	_ = json.Unmarshal(raw, &info)
+	if info["usage_unknown"] != true || info["turns"] != float64(0) || info["context_tokens"] != float64(0) || info["model"] != "grok-5" ||
+		info["permission_mode"] != "bypassPermissions" {
+		t.Fatalf("info %s", raw)
+	}
+}
+
 func TestRuntimeItemsAndDeltasReachTheHub(t *testing.T) {
 	n, hub := runtimeNode(t)
 	host := dialRuntime(t, n, dshHello())
@@ -430,7 +673,7 @@ func TestRuntimeItemsAndDeltasReachTheHub(t *testing.T) {
 	if w := host.got("session.watch"); len(w) != 1 {
 		t.Fatal("watch not forwarded")
 	}
-	_ = host.peer.Notify("session.items", map[string]any{"session_id": "session-4", "from_seq": 5, "to_seq": 7, "history": "h",
+	_ = host.peer.Notify("session.items", map[string]any{"session_id": "session-4", "from_seq": 5, "to_seq": 7, "history": "h", "update": true,
 		"items": []proto.Item{{ID: "a", Seq: 7, Role: "assistant", Kind: proto.KindText, Text: "done"}}})
 	_ = host.peer.Notify("session.delta", map[string]any{"session_id": "session-4", "text": "do"})
 	_ = host.peer.Notify("session.items", map[string]any{"session_id": "someone-else", "to_seq": 1})
@@ -444,6 +687,12 @@ func TestRuntimeItemsAndDeltasReachTheHub(t *testing.T) {
 	defer hub.mu.Unlock()
 	if len(hub.items) != 1 {
 		t.Fatalf("items for a session the host does not list were forwarded: %d", len(hub.items))
+	}
+	var pushed struct {
+		Update bool `json:"update"`
+	}
+	if err := json.Unmarshal(hub.items[0], &pushed); err != nil || !pushed.Update {
+		t.Fatalf("in-place update flag lost: %s (%v)", hub.items[0], err)
 	}
 	if n.runtimes.watching["session-4"] != 7 {
 		t.Fatalf("watched seq %d", n.runtimes.watching["session-4"])
@@ -530,6 +779,80 @@ func TestRuntimeInteractionGoesToThePhone(t *testing.T) {
 	}
 }
 
+// A card under an id the runtime chose is resumable, as one with a tool call id is: the runtime SDK asks the next node
+// with the same card. So the hub keeps it through a hub link drop, and the drop answers node_gone (the runtime asks
+// again once a hub is back), never a dismiss: that reached the runtime before it heard the hub was gone, and the Paseo
+// bridge took a Codex or ACP card, which carries no tool call id, for one the user handed back (#8128). A card with
+// neither id is still dismissed: its next ask would be another card.
+func TestRuntimeCardSurvivesAHubLinkDrop(t *testing.T) {
+	for _, tc := range []struct {
+		name, id, toolUseID string
+		resumable           bool
+	}{
+		{name: "the runtime's own id", id: "paseo-0123456789abcdef", resumable: true},
+		{name: "a tool call id", toolUseID: "call_9", resumable: true},
+		{name: "neither", resumable: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, hub := runtimeNode(t)
+			host := dialRuntime(t, n, dshHello())
+			_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{{"session_id": "session-7", "title": "build"}}})
+			waitFor(t, "listed", func() bool { _, ok := listed(t, n)["session-7"]; return ok })
+			asked, release := make(chan struct{}), make(chan struct{})
+			t.Cleanup(func() { close(release) })
+			hub.mu.Lock()
+			hub.resolve = func(proto.Interaction) proto.Resolution { // on the phone, unanswered, until the link drops
+				close(asked)
+				<-release
+				return proto.Resolution{Dismiss: true}
+			}
+			hub.mu.Unlock()
+
+			var res proto.Resolution
+			done := make(chan error, 1)
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				ix := map[string]any{"kind": "permission", "session_id": "session-7", "tool_name": "shell", "summary": "make"}
+				if tc.id != "" {
+					ix["id"] = tc.id
+				}
+				if tc.toolUseID != "" {
+					ix["tool_use_id"] = tc.toolUseID
+				}
+				done <- host.peer.Call(ctx, "interaction.create", map[string]any{"interaction": ix}, &res)
+			}()
+			select {
+			case <-asked:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the card never reached the hub")
+			}
+			hub.mu.Lock()
+			ix := hub.asked[0]
+			hub.mu.Unlock()
+			if ix.Resumable != tc.resumable || (tc.id != "" && ix.ID != tc.id) {
+				t.Fatalf("asked %s resumable %v (want %v)", ix.ID, ix.Resumable, tc.resumable)
+			}
+
+			hub.drop() // the hub link drops under the card
+			var err error
+			select {
+			case err = <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the runtime got no answer after the hub link dropped")
+			}
+			var re *rpc.Error
+			gone := errors.As(err, &re) && re.Code == "node_gone"
+			if tc.resumable && !gone {
+				t.Fatalf("a resumable card under a dropped hub link: %v, %+v (want node_gone: the runtime asks the next hub)", err, res)
+			}
+			if !tc.resumable && (err != nil || !res.Dismiss) {
+				t.Fatalf("a card with no stable id under a dropped hub link: %v, %+v (want a dismiss)", err, res)
+			}
+		})
+	}
+}
+
 func TestRuntimeStartFromTheLauncher(t *testing.T) {
 	n, _ := runtimeNode(t)
 	host := dialRuntime(t, n, dshHello())
@@ -574,6 +897,34 @@ func TestRuntimeStartFromTheLauncher(t *testing.T) {
 	}
 	if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": "session-new", "text": "go"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRuntimeStartForwardsAntigravityImageOnlyPrompt(t *testing.T) {
+	node, _ := runtimeNode(t)
+	hello := map[string]any{"runtime": "agy", "launcher": "agy", "version": "test", "caps": map[string]any{"start": true}}
+	host := dialRuntime(t, node, hello)
+	host.answer = func(method string, params json.RawMessage) (any, error) {
+		if method == "session.start" {
+			return map[string]any{"session": proto.Session{SessionID: "agy-new", Cwd: "/work"}}, nil
+		}
+		return nil, nil
+	}
+	images := []proto.Image{{Mime: "image/png", Data: "aW1hZ2U="}}
+	_, err := nodeCall(t, node, "session.start", map[string]any{"cwd": "/work", "host": proto.EngineOrca,
+		"launcher": "agy", "client_msg_id": "start-photo", "images": images})
+	if err != nil {
+		t.Fatal(err)
+	}
+	starts := host.got("session.start")
+	var start struct {
+		Prompt      string        `json:"prompt"`
+		ClientMsgID string        `json:"client_msg_id"`
+		Images      []proto.Image `json:"images"`
+	}
+	if len(starts) != 1 || json.Unmarshal(starts[0], &start) != nil || start.Prompt != "" ||
+		start.ClientMsgID != "start-photo" || !slices.Equal(start.Images, images) {
+		t.Fatalf("runtime starts: %s", starts)
 	}
 }
 
@@ -622,7 +973,8 @@ func TestRuntimeSubagentsAndBackground(t *testing.T) {
 	_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{{
 		"session_id": "session-7", "status": "done",
 		"subagents": []map[string]any{
-			{"id": "child-1", "session_id": "whatever", "description": "Map the code", "running": true, "tool_use_id": "call-1", "started_at": started},
+			{"id": "child-1", "session_id": "whatever", "description": "Map the code", "running": true, "tool_use_id": "call-1", "started_at": started,
+				"model": strings.Repeat("m", maxRuntimeTaskText+1), "tokens": 1234},
 			{"id": "../bad", "description": "not a valid id", "running": true},
 			{"id": "child-1", "description": "the same child twice"},
 			{"id": "child-2", "description": "done already", "running": false},
@@ -638,6 +990,9 @@ func TestRuntimeSubagentsAndBackground(t *testing.T) {
 	if len(s.Subagents) != 2 || s.Subagents[0].SessionID != "session-7@child-1" || !s.Subagents[0].Running ||
 		s.Subagents[0].ToolUseID != "call-1" || !s.Subagents[0].StartedAt.Equal(started) || s.Subagents[1].SessionID != "session-7@child-2" {
 		t.Fatalf("subagents %+v", s.Subagents)
+	}
+	if a := s.Subagents[0]; a.Model != strings.Repeat("m", maxRuntimeTaskText)+"…" || a.Tokens != 1234 { // #5030: its model clipped like its text
+		t.Fatalf("subagent model %q tokens %d", a.Model, a.Tokens)
 	}
 	if len(s.Background) != 2 || s.Background[0].Kind != "agent" || s.Background[0].OutputFile != "" || s.Background[1].Kind != "shell" {
 		t.Fatalf("background %+v", s.Background)
@@ -686,8 +1041,59 @@ func TestRuntimeSubagentsAndBackground(t *testing.T) {
 	}
 }
 
+// A session of a runtime's that another of its sessions started (is_subagent, parent_session_id: an agent another
+// Paseo agent created, #4494) is listed under it, with its root filled in, however deep. One that waits for the user
+// is a row of its own while it does: it names no parent, so no app folds it away or leaves it out of a count; it names
+// the parent it asks for instead (asking_parent_session_id, #5120). The runtime's started_at is kept; what the rows
+// fold under is the manager's, whatever the runtime says.
+func TestRuntimeSessionAnotherStarted(t *testing.T) {
+	n, _ := runtimeNode(t)
+	host := dialRuntime(t, n, paseoHello())
+	rows := func(leaf string) []map[string]any {
+		return []map[string]any{
+			{"session_id": "lead", "status": "idle", "cwd": "/w/app", "started_at": "2026-11-12T08:00:00Z",
+				"folded_under": "x", "children": map[string]any{"total": 9}, "asking_parent_session_id": "y"},
+			{"session_id": "mid", "status": "idle", "cwd": "/w/app", "is_subagent": true, "parent_session_id": "lead"},
+			{"session_id": "leaf", "status": leaf, "cwd": "/w/app", "is_subagent": true, "parent_session_id": "mid", "root_session_id": "lead"},
+		}
+	}
+	_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": rows("working")})
+	waitFor(t, "listed", func() bool { _, ok := listed(t, n)["leaf"]; return ok })
+	got := listed(t, n)
+	if mid, leaf := got["mid"], got["leaf"]; !mid.IsSubagent || mid.ParentSessionID != "lead" || mid.RootSessionID != "lead" ||
+		!leaf.IsSubagent || leaf.ParentSessionID != "mid" || leaf.RootSessionID != "lead" || got["lead"].IsSubagent {
+		t.Fatalf("mid under %q (root %q), leaf under %q (root %q)", mid.ParentSessionID, mid.RootSessionID, leaf.ParentSessionID, leaf.RootSessionID)
+	}
+	if lead := got["lead"]; !lead.StartedAt().Equal(time.Date(2026, 11, 12, 8, 0, 0, 0, time.UTC)) || lead.FoldedUnder() != "" ||
+		lead.Children() != (proto.SessionChildren{}) || lead.AskingParentSessionID() != "" {
+		t.Fatalf("the runtime's started_at, and none of the rest of the hierarchy: %+v", lead.Hierarchy)
+	}
+	if leaf := got["leaf"]; leaf.AskingParentSessionID() != "" {
+		t.Fatalf("a working child asks for no parent: %+v", leaf.Hierarchy)
+	}
+
+	_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": rows("blocked")})
+	waitFor(t, "waiting for the user", func() bool { return listed(t, n)["leaf"].Status == proto.StatusBlocked })
+	got = listed(t, n)
+	if leaf := got["leaf"]; leaf.IsSubagent || leaf.ParentSessionID != "" || leaf.RootSessionID != "" {
+		t.Fatalf("a session that waits for the user still names a parent: %+v", leaf)
+	}
+	if leaf := got["leaf"]; leaf.AskingParentSessionID() != "mid" {
+		t.Fatalf("a session that waits for the user names the parent it asks for: %+v", leaf.Hierarchy)
+	}
+	if mid := got["mid"]; !mid.IsSubagent || mid.ParentSessionID != "lead" {
+		t.Fatalf("the others keep theirs: %+v", mid)
+	}
+
+	_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": rows("idle")})
+	waitFor(t, "answered: under its parent again", func() bool { s := listed(t, n)["leaf"]; return s.ParentSessionID == "mid" && s.RootSessionID == "lead" })
+	if leaf := listed(t, n)["leaf"]; leaf.AskingParentSessionID() != "" {
+		t.Fatalf("answered, it asks for no parent: %+v", leaf.Hierarchy)
+	}
+}
+
 // A runtime running another version of a package the node carries is offered the node's in the hello reply, and
-// fetches it with runtime.package; one running the same is not (docs/integrations/runtimes.md "Automatic updates").
+// fetches it with runtime.package; one running the same is not (docs/integrations/runtimes.md "Auto-update").
 func TestRuntimePackageUpdate(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(runtimepkg.OverrideEnv, dir)

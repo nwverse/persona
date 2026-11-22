@@ -9,7 +9,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-// The inbox's common rules for plugins (#1730, docs/extensions/extensions.md "Common inbox rules"). A plugin connector with an
+// The inbox's common rules for plugins (#1730, docs/extensions/extensions.md "General rules for the Inbox"). A plugin connector with an
 // inbox and no fallback of its own (capability fallback) leaves sorting to the assistant's model (inbox.triage,
 // "message triage"): its new items without a tier are not let in while the model cannot sort them (the manager's
 // inbox_admit.go). So such a plugin is not switched on while that model cannot be called, and the model is not cleared

@@ -23,19 +23,33 @@ whole word, not inside a longer one (a Go binary carries Unicode tables and mini
 up inside ordinary words); app bundles keep the strict substring match except for short alphabetic fragments inside
 word tokens of the exact SHA-256-pinned, unmodified public Mermaid resource. Complete words, nonalphabetic values,
 long values and generic IP/email checks remain active there; any changed byte falls back to strict app matching.
+--whole-short also reads every gzip member inside a file: a Go build embeds code compressed (the runtime packages,
+server/internal/runtimepkg, are gzipped tars of JavaScript; the web client's hashed assets are stored gzipped), and
+its printable strings are noise until it is inflated. Each member is scanned like the rest of the file, besides the
+file's own bytes.
 Prints the file and the kind of hit, never the value.
 For public Go builds, narrowly scoped dependency constants are classified separately from private data. This requires
-unreplaced dependencies whose build-info checksums match server/go.sum; registered personal values always win.
+a build with exactly the tags of server/build-tags.txt (the public marker and ts_omit_ feature tags), and unreplaced
+dependencies whose build-info checksums match server/go.sum; registered personal values always win.
+Two exact Go rodata contexts are classified too (#6314): larkcli's two adjacent constants that read as a banned name,
+and wireguard-go's handshake identifier (its author string), the latter only with that unreplaced dependency.
 The seven known swift-nio-ssh algorithm/certificate names are also classified as a complete original printable field
 or a complete comma-separated list; that fallback excludes URLs, surrounding context and normalized fragments.
 """
+import base64
+import datetime
 import hashlib
 import ipaddress
+import itertools
 import os
+import plistlib
 import re
 import struct
 import subprocess
 import sys
+import tarfile
+import zipfile
+import zlib
 from urllib.parse import urlsplit
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -45,6 +59,7 @@ import privacy_check as pc  # noqa: E402
 
 SKIP = {"embedded.mobileprovision", "embedded.provisionprofile", "CodeResources"}
 PRINTABLE = re.compile(rb"[\x20-\x7e]{4,}")
+PLIST_UTF16 = re.compile(rb"(?:\x00[\x20-\x7e]){4,}")
 
 # npm mermaid@12.3.0, package/dist/mermaid.min.js; verified against the registry tarball's SHA-512 integrity.
 PUBLIC_JS_SHA256 = {
@@ -80,6 +95,23 @@ SSH_ALGORITHM_NAMES = frozenset(name + "@" + domain for name, domain in (
     ("ecdsa-sha2-nistp521-cert-v01", "openssh.com"), ("ssh-ed25519-cert-v01", "openssh.com"),
 ))
 TAILSCALE_CONTACT = re.compile(r'<a href="mailto:support\+webclient@tailscale[.]com" class="link">contact us</a>')
+# persona-iphone-bridge (Rust, native/iphone-bridge): aws-lc's assembly credits ("SHA256 block transform for ARMv8,
+# CRYPTOGAMS by <…@openssl.org>", "AES GCM module for ARMv8, SPDX BSD-3-Clause by <…@arm.com>", the two authors below).
+# Upstream author strings, not accounts; only right after "by <" and before ">".
+RUST_TLS_CONSTANTS = re.compile(r"(?<=by <)(?:appro@openssl[.]org|xiaokang[.]qian@arm[.]com)(?=>)")
+# Go lays string constants out back to back in rodata. larkcli's chat-link path ends where its display name begins
+# (the path, then the display name), which reads as a banned name that neither constant holds. Exact join only.
+# The name is split here because this file must not spell it either.
+GO_ADJACENT_CONSTANTS = re.compile(r"(?<=applink[.]feishu[.]cn)/client/chat/" + "open" + "Lark via lark-cli")
+# wireguard-go's handshake identifier (device/noise-protocol.go): an upstream author string, not an account.
+WIREGUARD_IDENTIFIER = re.compile(r"(?<![A-Za-z0-9._%+-])WireGuard v1 zx2c4 Jason@zx2c4[.]com(?![.][A-Za-z])")
+WIREGUARD_MODULES = frozenset({"github.com/tailscale/wireguard-go", "golang.zx2c4.com/wireguard"})
+# Go rodata also joins the unrelated title_mail field identifier with the
+# domain constant @gmail.com. Only that exact join is not an email address.
+GO_ADJACENT_MAIL_FIELD = re.compile(r'(?<![A-Za-z0-9._%+-])title_mail@gmail[.]com(?![A-Za-z0-9._%+-])')
+# The repository identity adapter's generic SSH remote, not a person's email. Match only this exact public constant,
+# not the GitLab domain, another account or surrounding text.
+GITLAB_SSH_IDENTITY = re.compile(r'(?<![A-Za-z0-9._%+-])git@gitlab[.]com(?![A-Za-z0-9._%+-])')
 RFC1918_NETWORKS = tuple(ipaddress.ip_network((address, prefix)) for address, prefix in (
     (0x0A000000, 8), (0xAC100000, 12), (0xC0A80000, 16),
 ))
@@ -87,9 +119,27 @@ RFC1918_NETWORKS = tuple(ipaddress.ip_network((address, prefix)) for address, pr
 CLOUD_METADATA_IP = ipaddress.ip_address(0xA9FEA9FE)
 
 
-def go_dependencies(path, sums_path=None):
-    """Only classify constants from unreplaced modules recorded in both this Go executable and go.sum."""
+def public_build_tags(tags_path=None):
+    """The -tags of a published build (server/build-tags.txt): the public marker plus tailscale.com's ts_omit_ feature
+    tags, each once. A file with any other tag, or none, marks no build as public."""
+    try:
+        with open(tags_path or os.path.join(pc.ROOT, "server", "build-tags.txt")) as f:
+            tags = f.read().strip().split(",")
+    except OSError:
+        return None
+    if "public" not in tags or len(set(tags)) != len(tags) or not all(
+            tag == "public" or re.fullmatch(r"ts_omit_[a-z0-9_]+", tag) for tag in tags):
+        return None
+    return tags
+
+
+def go_dependencies(path, sums_path=None, tags_path=None):
+    """Only classify constants from unreplaced modules recorded in both this Go executable and go.sum, in a build
+    with exactly the published tags."""
     sums_path = sums_path or os.path.join(pc.ROOT, "server", "go.sum")
+    public_tags = public_build_tags(tags_path)
+    if public_tags is None:
+        return set()
     try:
         with open(sums_path) as sums:
             trusted = {tuple(line.split()) for line in sums if len(line.split()) == 3}
@@ -103,7 +153,7 @@ def go_dependencies(path, sums_path=None):
     public_build = False
     for line in result.stdout.splitlines():
         fields = line.split()
-        if fields == ["build", "-tags=public"]:
+        if fields == ["build", "-tags=" + ",".join(public_tags)]:
             public_build = True
         if fields[:1] == ["dep"] and len(fields) == 4:
             previous = fields[1]
@@ -129,7 +179,14 @@ def generic_text(text, dependencies, original_text=None):
     if original_text is None or text == original_text:
         if text in SSH_ALGORITHM_NAMES or ("," in text and all(name in SSH_ALGORITHM_NAMES for name in text.split(","))):
             return ""
+    if dependencies and "tailscale.com" in dependencies:  # a public Go build: its own adjacent constants are known
+        text = GO_ADJACENT_CONSTANTS.sub("", text)
+    if WIREGUARD_MODULES & set(dependencies):
+        text = WIREGUARD_IDENTIFIER.sub("", text)
+    text = RUST_TLS_CONSTANTS.sub("", text)
     text = pc.EMAIL.sub(lambda m: "" if binary_noise_email(m.group(1)) else m.group(0), text)
+    text = GO_ADJACENT_MAIL_FIELD.sub("", text)
+    text = GITLAB_SSH_IDENTITY.sub("", text)
     if "golang.org/x/crypto" in dependencies:
         text = GO_SSH_IDENTIFIERS.sub("", text)
     if "github.com/tailscale/web-client-prebuilt" in dependencies:
@@ -166,7 +223,8 @@ def generic_text(text, dependencies, original_text=None):
     return pc.IPV4.sub(public_address, text)
 
 
-def text_kinds(text, words, whole_short=False, dependencies=frozenset(), original_text=None, public_js=False):
+def text_kinds(text, words, whole_short=False, dependencies=frozenset(), original_text=None, public_js=False,
+               generic=True):
     kinds = set()
     for word in words:
         pinned_short = (public_js and (original_text is None or text == original_text)
@@ -180,8 +238,9 @@ def text_kinds(text, words, whole_short=False, dependencies=frozenset(), origina
                 kinds.add("private value (%d chars)" % len(word))
         elif word in text or word.lower() in text:
             kinds.add("private value (%d chars)" % len(word))
-    for word in pc.problems(generic_text(text, dependencies, original_text), []):
-        kinds.add("private IP" if pc.IPV4.fullmatch(word) else "email")
+    if generic:
+        for word in pc.problems(generic_text(text, dependencies, original_text), []):
+            kinds.add(pc.private_kind(word))
     return kinds
 
 
@@ -283,20 +342,227 @@ def signature_ranges(data):
     return ranges
 
 
-def texts(path: str, data=None):
+def plist_references(data):
+    """Only validated array/dictionary reference payloads are non-text (#3166).
+
+    Check every indexed object, including unreachable ones, before trusting any range. Unknown types, overlaps,
+    bad lengths/references and cycles fall back to raw scanning. Data, scalar payloads, gaps and offset/trailer bytes
+    are never excluded. Decode every string object too: plist_xml's root traversal misses unreachable UTF-16 strings.
+    """
+    if data[:8] != b"bplist00" or len(data) < 40:
+        return [], []
+    offset_size, ref_size, count, root, table = struct.unpack_from(">6xBBQQQ", data, len(data) - 32)
+    if (data[-32:-26] != b"\0" * 6 or offset_size not in (1, 2, 4, 8) or ref_size not in (1, 2, 4, 8)
+            or not 0 < count <= (len(data) - 32 - table) // offset_size or root >= count or table < 8
+            or count > 1 << (8 * ref_size)):
+        return [], []
+    offsets = [int.from_bytes(data[table + i * offset_size:table + (i + 1) * offset_size], "big")
+               for i in range(count)]
+    if len(set(offsets)) != count or any(not 8 <= offset < table for offset in offsets):
+        return [], []
+    spans, ranges, strings = [], [], {}
+    references = [[] for _ in offsets]
+    dictionaries = []
+    try:
+        for index, offset in enumerate(offsets):
+            marker = data[offset]
+            kind, length = marker >> 4, marker & 15
+            start = offset + 1
+            if kind in (4, 5, 6, 10, 13) and length == 15:
+                if start >= table or data[start] >> 4 != 1 or data[start] & 15 > 3:
+                    return [], []
+                width = 1 << (data[start] & 15)
+                start += 1
+                if start + width > table:
+                    return [], []
+                length = int.from_bytes(data[start:start + width], "big")
+                start += width
+            if kind == 0 and marker in (0, 8, 9, 15):
+                size = 0
+            elif kind == 1 and length <= 4:
+                size = 1 << length
+            elif (kind == 2 and length in (2, 3)) or marker == 0x33:
+                size = 1 << length
+            elif kind in (4, 5, 6):
+                size = length * (2 if kind == 6 else 1)
+            elif kind == 8:
+                size = length + 1
+            elif kind in (10, 13):
+                size = length * ref_size * (2 if kind == 13 else 1)
+            else:
+                return [], []
+            end = start + size
+            if end > table:
+                return [], []
+            spans.append((offset, end))
+            if kind in (5, 6):
+                strings[index] = data[start:end].decode("ascii" if kind == 5 else "utf-16be")
+            elif kind in (10, 13):
+                refs = [int.from_bytes(data[pos:pos + ref_size], "big") for pos in range(start, end, ref_size)]
+                if any(ref >= count for ref in refs):
+                    return [], []
+                references[index] = refs
+                if size:
+                    ranges.append((start, end))
+                if kind == 13:
+                    dictionaries.append(refs[:length])
+    except UnicodeDecodeError:
+        return [], []
+    spans.sort()
+    if any(a[1] > b[0] for a, b in zip(spans, spans[1:])):
+        return [], []
+    for keys in dictionaries:
+        if any(key not in strings for key in keys) or len({strings[key] for key in keys}) != len(keys):
+            return [], []
+    # Iterative traversal bounds work by the object/reference count, not Python's recursion limit.
+    states = [0] * count
+    for index in range(count):
+        stack = [(index, False)]
+        while stack:
+            index, exiting = stack.pop()
+            if exiting:
+                states[index] = 2
+            elif states[index] == 1:
+                return [], []
+            elif states[index] == 0:
+                states[index] = 1
+                stack.append((index, True))
+                stack.extend((ref, False) for ref in references[index])
+    return sorted(ranges), list(strings.values())
+
+
+PLIST_XML_HEAD = ('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+                  '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n')
+
+
+def plist_xml(data):
+    """The text `plutil -convert xml1` prints for a binary plist, read in text mode (a CR line end reads as LF), built
+    with plistlib so the scan is the same where plutil doesn't exist (Linux, #7571). CoreFoundation's layout: keys in
+    UTF-16 order, reals as %.17g, a UID as a CF$UID dictionary, data in base64 lines of 76 columns less 8 per tab (at
+    most 8 tabs). Empty for bytes plistlib can't read and, as plutil prints nothing for them, a cycle, a non-string
+    key or a NUL in a string."""
+    lines = [PLIST_XML_HEAD]
+    try:
+        plist_xml_lines(plistlib.loads(data, fmt=plistlib.FMT_BINARY), 0, lines, set())
+    except (ValueError, TypeError, RecursionError):  # plistlib.InvalidFileException is a ValueError
+        return ""
+    return "".join(lines) + "</plist>\n"
+
+
+def plist_xml_text(text):
+    if "\0" in text:
+        raise ValueError("a NUL in a string")
+    return (text.replace("\r\n", "\n").replace("\r", "\n")
+            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def plist_xml_lines(value, depth, lines, open_containers):
+    pad = "\t" * depth
+    if isinstance(value, plistlib.UID):
+        value = {"CF$UID": value.data}
+    if isinstance(value, (list, dict)):
+        tag = "array" if isinstance(value, list) else "dict"
+        if not value:
+            lines.append("%s<%s/>\n" % (pad, tag))
+            return
+        if id(value) in open_containers:
+            raise ValueError("a cycle")
+        open_containers.add(id(value))
+        lines.append("%s<%s>\n" % (pad, tag))
+        if tag == "array":
+            for item in value:
+                plist_xml_lines(item, depth + 1, lines, open_containers)
+        else:
+            if not all(isinstance(key, str) for key in value):
+                raise TypeError("a non-string key")
+            for key in sorted(value, key=lambda key: key.encode("utf-16-be")):
+                lines.append("%s\t<key>%s</key>\n" % (pad, plist_xml_text(key)))
+                plist_xml_lines(value[key], depth + 1, lines, open_containers)
+        lines.append("%s</%s>\n" % (pad, tag))
+        open_containers.discard(id(value))
+    elif isinstance(value, str):
+        lines.append("%s<string>%s</string>\n" % (pad, plist_xml_text(value)))
+    elif isinstance(value, bool):
+        lines.append("%s<%s/>\n" % (pad, "true" if value else "false"))
+    elif isinstance(value, int):
+        lines.append("%s<integer>%d</integer>\n" % (pad, value))
+    elif isinstance(value, float):
+        real = ("nan" if value != value else "+infinity" if value == float("inf") else
+                "-infinity" if value == float("-inf") else "0.0" if value == 0 else "%.17g" % value)
+        lines.append("%s<real>%s</real>\n" % (pad, real))
+    elif isinstance(value, datetime.datetime):
+        lines.append("%s<date>%04d-%02d-%02dT%02d:%02d:%02dZ</date>\n" % (
+            pad, value.year, value.month, value.day, value.hour, value.minute, value.second))
+    elif isinstance(value, bytes):
+        indent = min(depth, 8)
+        encoded, width = base64.b64encode(value).decode("ascii"), 76 - 8 * indent
+        lines.append("%s<data>\n" % pad)
+        lines.extend("%s%s\n" % ("\t" * indent, encoded[i:i + width]) for i in range(0, len(encoded), width))
+        lines.append("%s</data>\n" % pad)
+    else:
+        raise TypeError("an unsupported plist value")
+
+
+def texts(path: str, data=None, *, private_only=False):
     if data is None:
         with open(path, "rb") as source:
             data = source.read()
     if data[:3] == b"bvx":  # lzfse (App Intents metadata): compressed, values would be split across matches
         data = subprocess.run(["compression_tool", "-decode", "-a", "lzfse", "-i", path, "-o", "/dev/stdout"],
                               capture_output=True).stdout
+    references, strings = plist_references(data) if not private_only else ([], [])
+    binary_plist = data[:6] == b"bplist"
     # Do not truncate at the first slice's signature: later slices and trailing bytes must remain visible.
     cursor = 0
-    for start, end in signature_ranges(data) + [(len(data), len(data))]:
-        yield from (m.group(0).decode("ascii") for m in PRINTABLE.finditer(data[cursor:start]))
+    for start, end in sorted(signature_ranges(data) + references) + [(len(data), len(data))]:
+        chunk = data[cursor:start]
+        yield from (m.group(0).decode("ascii") for m in PRINTABLE.finditer(chunk))
+        if binary_plist:
+            # Keep ASCII IP/email text in UTF-16 data, gaps or malformed/unreachable objects visible too.
+            yield from (m.group(0).decode("utf-16be") for m in PLIST_UTF16.finditer(chunk))
         cursor = end
-    if data[:6] == b"bplist":
-        yield subprocess.run(["plutil", "-convert", "xml1", "-o", "-", path], capture_output=True, text=True).stdout
+    yield from strings
+    if binary_plist and not private_only:
+        yield plist_xml(data)
+
+
+GZIP_MAGIC = b"\x1f\x8b\x08"
+# A member's output bound: far above any package (runtimepkg.MaxSize, 8 MiB) or web asset, and a cap on a bomb.
+GZIP_MEMBER_LIMIT = 64 << 20
+GZIP_CHUNK = 1 << 20
+
+
+def gzip_members(data, limit=GZIP_MEMBER_LIMIT):
+    """The inflated bytes of each gzip member in data, wherever it starts. A magic that starts no valid stream yields
+    nothing; a member cut short, broken off or longer than limit yields what it inflated, so its text is still scanned.
+    The search goes on after a complete member, else from the next byte."""
+    view = memoryview(data)
+    start = data.find(GZIP_MAGIC)
+    while start >= 0:
+        inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        pieces, size, pos, end = [], 0, start, None
+        try:
+            while pos < len(data) and size < limit and not inflater.eof:
+                chunk = view[pos:pos + GZIP_CHUNK]
+                pos += len(chunk)
+                while chunk and size < limit and not inflater.eof:
+                    piece = inflater.decompress(chunk, limit - size)
+                    pieces.append(piece)
+                    size += len(piece)
+                    chunk = inflater.unconsumed_tail
+            if inflater.eof:
+                end = pos - len(inflater.unused_data)
+        except zlib.error:
+            pass
+        if size:
+            yield b"".join(pieces)
+        start = data.find(GZIP_MAGIC, end if end is not None else start + 1)
+
+
+def member_texts(data):
+    """Printable strings of every gzip member in data, read as the file's own bytes are."""
+    for member in gzip_members(data):
+        yield from (m.group(0).decode("ascii") for m in PRINTABLE.finditer(member))
 
 
 def remove_public_relay_url(text, configured_url, path="/relay"):
@@ -323,9 +589,79 @@ def remove_public_relay_url(text, configured_url, path="/relay"):
     return re.sub(r"(?<!" + boundary + ")" + re.escape(url) + r"(?!" + boundary + ")", "", text)
 
 
+def verified_public_file(path):
+    with open(path, "rb") as source:
+        return verified_public_js(path, source.read())
+
+
 def public_download_url(cfg):
+    """The update URL every published personad carries and the one path it may have: an inherited environment override,
+    then publish.update_url (a GitHub repository's releases/latest/download, say), else publish.site_url's /dl."""
+    override = os.environ.get("PERSONA_UPDATE_URL")
+    url = persona_config.update_url(cfg, override)
+    if url and (override or persona_config.get(cfg, "publish.update_url", "") not in ("", None)):
+        return url, urlsplit(url).path
+    return url, "/dl"
+
+
+def public_download_urls(cfg):
+    """Both legitimate public feeds: the update base and the site's own /dl publication feed."""
+    urls = [public_download_url(cfg)]
     site = persona_config.get(cfg, "publish.site_url", "")
-    return site.rstrip("/") + "/dl" if isinstance(site, str) and site else ""
+    if isinstance(site, str) and site.strip():
+        urls.append((site.rstrip("/") + "/dl", "/dl"))
+    return urls
+
+
+def public_archive_dependencies(path, whole_short):
+    """Only a named public CLI member gets its own verified Go dependency context, never a whole archive."""
+    if not whole_short:
+        return set()
+    name = os.path.basename(path)
+    if name in {"personad", "persona-hub", "persona-manager", "persona-node", "persona-link"}:
+        return go_dependencies(path)
+    match = re.fullmatch(r"(personad|persona-hub|persona-manager|persona-node|persona-link)(?:-windows-(?:amd64|arm64))?[.]exe", name)
+    return go_dependencies(path) if match else set()
+
+
+def archive_members(path):
+    """Yield safe, bounded executable members only, keeping archive traversal out of the release scanner."""
+    if path.endswith(".zip"):
+        with zipfile.ZipFile(path) as archive:
+            seen = set()
+            for entry in archive.infolist():
+                name = entry.filename
+                parts = name.split("/")
+                if (not name or name.startswith("/") or "\\" in name or any(part in ("", ".", "..") for part in parts)
+                        or len(parts) != 2 or name.casefold() in seen):
+                    raise ValueError("unsafe path in release ZIP")
+                seen.add(name.casefold())
+                if entry.is_dir() or entry.file_size > 512 * 1024 * 1024:
+                    continue
+                program = parts[1]
+                if program in {"personad", "persona-hub", "persona-manager", "persona-node", "persona-link"}:
+                    yield name, archive.read(entry)
+                elif re.fullmatch(r"(?:personad|persona-hub|persona-manager|persona-node|persona-link)(?:-windows-(?:amd64|arm64))?[.]exe", program):
+                    yield name, archive.read(entry)
+    elif path.endswith(".tar.gz"):
+        with tarfile.open(path, "r:gz") as archive:
+            seen = set()
+            for entry in archive:
+                name = entry.name
+                parts = name.split("/")
+                if (not name or name.startswith("/") or "\\" in name or any(part in ("", ".", "..") for part in parts)
+                        or len(parts) != 2 or name.casefold() in seen):
+                    raise ValueError("unsafe path in release archive")
+                seen.add(name.casefold())
+                if not entry.isfile() or entry.size > 512 * 1024 * 1024:
+                    continue
+                program = parts[1]
+                if program in {"personad", "persona-hub", "persona-manager", "persona-node", "persona-link", "persona-iphone-bridge"}:
+                    stream = archive.extractfile(entry)
+                    if stream is None:
+                        continue
+                    with stream:
+                        yield name, stream.read()
 
 
 def main():
@@ -340,6 +676,11 @@ def main():
     inherent = [v for v in (persona_config.get(cfg, "app.bundle_id", ""), persona_config.get(cfg, "app.team_id", "")) if v]
     words, _ = pc.terms()
     words = [w for w in words if w not in inherent]
+    # Hermes stores the same pinned public resource as strings in the main executable, not as a .js file.
+    # Its longer JavaScript tokens use the resource's existing short-word boundary; every other binary stays strict.
+    hermes_public_js = not whole_short and os.path.isfile(os.path.join(root, "Persona")) and any(
+        verified_public_file(os.path.join(dirpath, filename))
+        for dirpath, _, filenames in os.walk(root) for filename in filenames)
     bad = []
     for dirpath, dirnames, files in os.walk(root):
         dirnames[:] = [d for d in dirnames if d != "_CodeSignature"]
@@ -347,23 +688,50 @@ def main():
             if f in SKIP:
                 continue
             path = os.path.join(dirpath, f)
-            kinds = set()
-            dependencies = go_dependencies(path) if whole_short else set()
-            with open(path, "rb") as source:
-                data = source.read()
-            public_js = not whole_short and verified_public_js(path, data)
-            for t in texts(path, data):
-                original_text = t
-                if not whole_short:
-                    t = remove_public_relay_url(t, persona_config.get(cfg, "app.push_relay", ""))
-                else:  # the update URL every published personad carries (-X main.updateURL, scripts/release/publish.sh)
-                    t = remove_public_relay_url(t, public_download_url(cfg), "/dl")
-                for v in inherent:
-                    t = t.replace(v, "")
-                if modules:
-                    t = modules.sub("", t)
-                kinds.update(text_kinds(t, words, whole_short, dependencies, original_text, public_js=public_js))
-            bad += [(os.path.relpath(path, root), k) for k in sorted(kinds)]
+            members = [(path, None)]
+            archive = whole_short and path.endswith(".zip") or whole_short and path.endswith(".tar.gz") and not path.endswith("-web.tar.gz")
+            if archive:
+                try:
+                    members = [(os.path.join(dirpath, name), data) for name, data in archive_members(path)]
+                except (OSError, ValueError, zipfile.BadZipFile, tarfile.TarError) as error:
+                    bad.append((os.path.relpath(path, root), "invalid release archive"))
+                    continue
+            for member_path, member_data in members:
+                kinds = set()
+                dependencies = go_dependencies(member_path) if whole_short and not archive else set()
+                if member_data is not None and archive:
+                    # A nested member needs a real executable file for Go's metadata reader, not an archive-name exemption.
+                    import tempfile
+                    with tempfile.TemporaryDirectory(prefix="persona-release-scan-") as temporary:
+                        executable = os.path.join(temporary, os.path.basename(member_path))
+                        with open(executable, "wb") as output:
+                            output.write(member_data)
+                        dependencies = go_dependencies(executable)
+                data = member_data
+                if data is None:
+                    with open(path, "rb") as source:
+                        data = source.read()
+                public_js = (not whole_short and verified_public_js(member_path, data)) or (
+                    hermes_public_js and f == "Persona")
+                modes = (False, True) if data[:6] == b"bplist" or data[:3] == b"bvx" else (False,)
+                for private_only in modes:
+                    found = texts(member_path, data, private_only=private_only)
+                    if whole_short and not private_only:
+                        found = itertools.chain(found, member_texts(data))
+                    for t in found:
+                        original_text = t
+                        if not whole_short:
+                            t = remove_public_relay_url(t, persona_config.get(cfg, "app.push_relay", ""))
+                        else:
+                            for public_url, public_path in public_download_urls(cfg):
+                                t = remove_public_relay_url(t, public_url, public_path)
+                        for v in inherent:
+                            t = t.replace(v, "")
+                        if modules:
+                            t = modules.sub("", t)
+                        kinds.update(text_kinds(t, words, whole_short, dependencies, original_text, public_js=public_js,
+                                                generic=not private_only))
+                bad += [(os.path.relpath(member_path, root), k) for k in sorted(kinds)]
     for f, k in bad:
         print("%s: %s" % (f, k))
     if bad:

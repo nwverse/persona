@@ -45,6 +45,7 @@ func TestExtensionStatusCopies(t *testing.T) {
 			{"extension-status.sandbox_probe_dir", Args{"err": "filesystem diagnostic: permission denied"}},
 			{"extension-sandbox.probe_tmp", Args{"err": "filesystem diagnostic: permission denied"}},
 			{"extension-market_git.git_missing", nil},
+			{"extension-market_git.git_too_old", Args{"version": "2.30"}},
 		} {
 			for _, source := range []Lang{En, ZhHans, Ja} {
 				text := T(source, tc.key, tc.args)
@@ -114,6 +115,39 @@ func TestExtensionOperationAndPreviewProjection(t *testing.T) {
 		}
 		if !strings.Contains(string(projected), `"error_detail":"SDK error: invalid package"`) || !strings.Contains(string(projected), `"error_details":{"example-machine":"SSH diagnostic: refused"}`) || !strings.Contains(string(projected), `"description":"permissions.hub_api is the old way`) {
 			t.Fatalf("raw diagnostic/author content lost: %s", projected)
+		}
+	}
+}
+
+// Why a source extension can't be checked or started on this hub is the hub's own text, shown in the client's
+// language instead of the generic failure (#5639).
+func TestSourceRuntimeReasonsAreShown(t *testing.T) {
+	for _, key := range []string{"extension-source.runtime_required", "extension-source.validator_unavailable"} {
+		text, raw := ExtensionFailureText(En, T(ZhHans, key), "extension-status.failed")
+		if text != T(En, key) || raw != "" {
+			t.Errorf("%s: %q / %q", key, text, raw)
+		}
+	}
+}
+
+// A cached startup refusal stays specific and localized, including raw kernel diagnostics.
+func TestExtensionSandboxStartupFailureText(t *testing.T) {
+	for _, source := range []Lang{En, ZhHans, Ja} {
+		for _, target := range []Lang{En, ZhHans, Ja} {
+			for _, mount := range []bool{false, true} {
+				cause := func(l Lang) string {
+					if mount {
+						return T(l, "extension-status.sandbox_mount", Args{"err": "operation not permitted"})
+					}
+					return T(l, "extension-status.sandbox_no_bwrap")
+				}
+				text := T(source, "hub-extension_sandbox.start_blocked", Args{"why": cause(source)})
+				want := T(target, "hub-extension_sandbox.start_blocked", Args{"why": cause(target)})
+				summary, detail := ExtensionFailureText(target, text, "extension-status.failed")
+				if summary != want || detail != "" {
+					t.Fatalf("%s to %s: %q / %q, want %q", source, target, summary, detail, want)
+				}
+			}
 		}
 	}
 }

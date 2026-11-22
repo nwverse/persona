@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from compose_cli import skip_without_compose
 from test_persona_install import PersonaInstallTests
 from test_persona_script_identity import identity, executable, environment
 
@@ -206,16 +207,9 @@ class DeploymentRollingCompatibilityTests(unittest.TestCase):
             self.assertTrue((profile / "bin/personad").is_file())
             self.assertFalse((home / '.persona').exists())
 
-    def test_artifact_aliases_are_byte_identical_and_command_aliases_do_not_loop(self):
+    def test_command_aliases_do_not_loop(self):
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory)
-            for prefix in ("personad-", "persona-link-", "personad-wechat-"):
-                file = directory / (prefix + "linux-amd64.gz")
-                file.write_bytes(gzip.compress(b"fixture-program", mtime=0))
-            identity.artifact_aliases(directory)
-            for file in directory.glob("person*.gz"):
-                old = file.name.replace("personad-", FORMER + "d-", 1).replace("persona-link-", FORMER + "-link-", 1)
-                self.assertEqual((directory / old).read_bytes(), file.read_bytes())
             executable(directory / "personad", "#!/bin/sh\nexit 0\n")
             identity.command_aliases(directory)
             identity.command_aliases(directory)
@@ -261,8 +255,8 @@ class DeploymentRollingCompatibilityTests(unittest.TestCase):
                     state = home / "state with spaces"
                     binaries = state / "bin"
                     binaries.mkdir(parents=True)
-                    current = binaries / "personad-wechat"
-                    old = binaries / (FORMER + "d-wechat")
+                    current = binaries / "personad-examplechat"
+                    old = binaries / (FORMER + "d-examplechat")
                     if layout == "old":
                         executable(old, "#!/bin/sh\nprintf old\n")
                     elif layout == "loop":
@@ -270,13 +264,14 @@ class DeploymentRollingCompatibilityTests(unittest.TestCase):
                     current.symlink_to(old.name)
                     script = r'''set -eu
 LDFLAGS=fixture
+TAGS=fixture
 PERSONA_HUB_SSH=unused
 is_here() { [ "$MODE" = local ]; }
 state_root() { printf '%s' "$PERSONA_HOME"; }
-go() { printf '#!/bin/sh\nprintf new\n' > bin/personad-wechat-linux-amd64; chmod 755 bin/personad-wechat-linux-amd64; }
+go() { printf '#!/bin/sh\nprintf new\n' > bin/personad-examplechat-linux-amd64; chmod 755 bin/personad-examplechat-linux-amd64; }
 persona_alias_binaries() { python3 ../scripts/persona_identity.py --alias-binaries "$1"; }
 remote_state() { eval "$2"; }
-''' + function + 'install_program fixture linux-amd64 personad-wechat\n'
+''' + function + 'install_program fixture linux-amd64 personad-examplechat\n'
                     env = environment(home)
                     env.update(MODE=mode, PERSONA_HOME=str(state))
                     result = subprocess.run(["bash", "--noprofile", "--norc"], input=script,
@@ -288,9 +283,6 @@ remote_state() { eval "$2"; }
                     self.assertTrue(old.samefile(current))
 
     def test_compose_config_offline_uses_one_project_database_and_both_environment_names(self):
-        import shutil
-        if not shutil.which('docker'):
-            self.skipTest('Docker Compose is unavailable; no containers are started by this check')
         for canonical in (False, True):
             with self.subTest(canonical=canonical), tempfile.TemporaryDirectory() as directory:
                 env = {'PATH': os.environ['PATH'], 'HOME': directory,
@@ -298,13 +290,12 @@ remote_state() { eval "$2"; }
                        PREFIX + 'PUBLIC_URL': 'https://old.example.test', PREFIX + 'PORT': '19060'}
                 if os.environ.get('PERSONA_TEST_DOCKER_CONFIG'):
                     env['DOCKER_CONFIG'] = os.environ['PERSONA_TEST_DOCKER_CONFIG']
+                skip_without_compose(self, env)
                 if canonical:
                     env.update(PERSONA_IMAGE='example.invalid/fixture-new:2', PERSONA_DB_PASSWORD='new456',
                                PERSONA_PUBLIC_URL='https://new.example.test', PERSONA_PORT='19061')
                 result = subprocess.run(['docker', 'compose', '-f', str(ROOT / 'deploy/docker/compose.yaml'),
                                          'config', '--format', 'json'], env=env, capture_output=True, text=True, timeout=15)
-                if 'is not a docker command' in result.stderr:
-                    self.skipTest('Docker Compose is unavailable')
                 self.assertEqual(result.returncode, 0, result.stderr)
                 config = json.loads(result.stdout)
                 self.assertEqual(config['name'], FORMER)
@@ -318,9 +309,6 @@ remote_state() { eval "$2"; }
                 self.assertEqual(hub['image'], 'example.invalid/fixture-new:2' if canonical else 'example.invalid/fixture-old:1')
 
     def test_compose_config_needs_one_image_spelling(self):
-        import shutil
-        if not shutil.which('docker'):
-            self.skipTest('Docker Compose is unavailable; no containers are started by this check')
         for image in ('example.invalid/fixture-new:2', None):
             with self.subTest(image=image), tempfile.TemporaryDirectory() as directory:
                 env = {'PATH': os.environ['PATH'], 'HOME': directory,
@@ -329,10 +317,9 @@ remote_state() { eval "$2"; }
                     env['DOCKER_CONFIG'] = os.environ['PERSONA_TEST_DOCKER_CONFIG']
                 if image:
                     env['PERSONA_IMAGE'] = image
+                skip_without_compose(self, env)
                 result = subprocess.run(['docker', 'compose', '-f', str(ROOT / 'deploy/docker/compose.yaml'),
                                          'config', '--format', 'json'], env=env, capture_output=True, text=True, timeout=15)
-                if 'is not a docker command' in result.stderr:
-                    self.skipTest('Docker Compose is unavailable')
                 if image:
                     # The former spelling unset: Compose before 5.0.2 still evaluated a required check inside the default.
                     self.assertEqual(result.returncode, 0, result.stderr)

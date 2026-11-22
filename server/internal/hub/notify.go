@@ -11,7 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/bus"
 )
 
-// When a "finished" push is worth sending (docs/server/server.md "Pushes"). Borrowed from Ovis (github.com/devswha/ovis,
+// When a "finished" push is worth sending (docs/server/server.md "Push policy"). Borrowed from Ovis (github.com/devswha/ovis,
 // server/push.ts, MIT): a push is for someone away from the computer, so
 //   - wait a while after the turn ends; if the agent resumes, or the user looks at it (herdr idle, or opened in the
 //     app), nothing is sent;
@@ -79,6 +79,9 @@ type NotifyPrefs struct {
 	// `personad notify`) skips this device; the hub's own (pairing, a computer joining, updates) and the Live Activity
 	// are no manager's and still come.
 	MutedManagers []string `json:"muted_managers"`
+	// Widgets: the app has Persona's Home Screen widgets (#5664): while it is not open, the hub
+	// wakes it to write them again when the agents' counts change (widget_wake.go). Set by the app; false from an older one.
+	Widgets bool `json:"widgets,omitempty"`
 }
 
 // maxMutedManagers bounds what a device may store: far more managers than anyone runs. A write keeps only the
@@ -102,7 +105,7 @@ func (h *Hub) rosterManagers(ctx context.Context, ids []string) []string {
 		}
 		ctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		idents, err := s.BusIdentities(ctx)
+		idents, err := h.busIdentities(ctx, s)
 		if err != nil {
 			return out
 		}

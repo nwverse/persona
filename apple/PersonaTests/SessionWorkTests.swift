@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A stopped session's work state as the lists show it (`Session.work`, docs/assistant/agent-work.md; the web's lib/work.ts).
 @MainActor
@@ -26,6 +27,24 @@ struct SessionWorkTests {
         #expect(w.wakeAt == now.addingTimeInterval(600))
         #expect(w.attempts == 1 && w.max == 6)
         #expect(w.agent?.sessionID == "x" && w.agent?.label == "登录页")
+    }
+
+    @Test func justFinishedNamesOnlyUnmutedIdleWorkAndKeepsItsConclusion() throws {
+        let done = #"{"phase":"done","line":"Merged","just_finished":true}"#
+        var row = try session(work: done)
+        #expect(row.isJustFinished(muted: false) && !row.isJustFinished(muted: true))
+        #expect(row.stateLabel(muted: false) == StateName.justFinished.text)
+        #expect(row.stateTone(muted: false).dot == StatusPalette.unread.dot)
+        #expect(row.stateLabel(muted: true) == StateName.seen.text)
+        #expect(row.listPreview(muted: false) == "✓ Merged")
+        #expect(!AgentFilter.unread.matches(row, muted: false))
+        for state in ["unread", "working", "needs_you", "offline"] {
+            #expect(try !session(state: state, work: done).isJustFinished(muted: false))
+        }
+        #expect(try !session(work: #"{"phase":"done"}"#).isJustFinished(muted: false))
+        #expect(try !session(work: #"{"phase":"done","just_finished":false}"#).isJustFinished(muted: false))
+        row.markLocallySeen()
+        #expect(!row.needsSeen() && row.state == .idle && row.work?.line == "Merged")
     }
 
     @Test func anOddWorkStateNeverDropsTheSession() throws {
@@ -86,5 +105,18 @@ struct SessionWorkTests {
         #expect(order.stays(wake))
         #expect(order.rank(done) == AgentListOrder.stateKeys.firstIndex(of: "idle"))
         #expect(!order.stays(done))
+    }
+
+    /// A closeout on the work state (#3612): the row keeps its line and says where merged and deployed stand after it;
+    /// a turn the hub could not call finished (an empty phase with a line) shows that line, a broken claim marked.
+    @Test func aCloseoutAddsWhereItStandsToTheLine() throws {
+        let done = try session(work: #"{"phase":"done","line":"已合并 PR #12，测试全过","closeout":{"status":"done","merged":"yes","deployed":"yes","checked":{"merged":"yes"}}}"#)
+        #expect(done.workLine(now: now) == "✓ 已合并 PR #12，测试全过")
+        #expect(done.listPreview(muted: false) == "✓ 已合并 PR #12，测试全过 · 已合并 ✓ · 已部署")
+        let unfinished = try session(state: "unread", work: #"{"phase":"","line":"自述已合并，但 PR 还没合并","closeout":{"status":"done","merged":"yes","checked":{"merged":"no"}}}"#)
+        #expect(unfinished.work?.notFinished == true && unfinished.work?.hubWaits == false)
+        #expect(unfinished.listPreview(muted: false) == "自述已合并，但 PR 还没合并 · ✗ 说已合并，实际没有")
+        let waking = try session(work: #"{"phase":"blocked","on":"external","line":"等部署","wake_at":"\#(at(9))","closeout":{"status":"blocked","merged":"yes"}}"#)
+        #expect(waking.closeoutPreview(now: now) == "等部署（9 分钟后叫醒） · 已合并")
     }
 }

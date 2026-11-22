@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 )
 
-// The personal agents' wire shapes: what a source answers and the apps read (docs/protocol/protocol.md "Personal agents"), the same
+// The personal agents' wire shapes: what a source answers and the apps read (docs/protocol/protocol.md "Personal Agent source status"), the same
 // fields every source uses (they began as the Lark gateway's agent-bridge's, which a plugin serves now).
 
 // AgentMaxText is the longest message a source accepts (characters, as JavaScript counts them).

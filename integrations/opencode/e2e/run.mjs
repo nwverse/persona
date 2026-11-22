@@ -1,4 +1,4 @@
-// End-to-end acceptance of the opencode plugin (docs/integrations/opencode.md "End-to-end verification"): a real `opencode serve` in a throwaway
+// End-to-end acceptance of the opencode plugin (docs/integrations/opencode.md "Verification"): a real `opencode serve` in a throwaway
 // config / data / state directory with this plugin, a scripted model (mock-llm.mjs, no real model call), and a real
 // `personad node` in an isolated HOME that plays the hub's side. Nothing outside the temp directory is touched; the
 // user's own opencode server, config and database are never opened.

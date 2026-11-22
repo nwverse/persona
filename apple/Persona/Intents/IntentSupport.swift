@@ -3,7 +3,7 @@ import Foundation
 
 // Siri / Shortcuts entry points. Every intent talks to the hubs directly (HubStore + APIClient), so the app does not
 // have to be in the foreground; only OpenSessionIntent runs inside the app and moves its navigation. With several
-// groups of hubs (docs/protocol/multi-hub.md「Siri」) they see every group: machines and sessions carry their group, the status
+// groups of hubs (docs/protocol/multi-hub.md「Watch, Siri, Mac, and demo mode」) they see every group: machines and sessions carry their group, the status
 // adds the groups up, and whatever acts goes to the group of what it acts on.
 
 /// Everything the intents say out loud. Pure functions, so the tests can pin the wording without a hub.
@@ -39,10 +39,13 @@ nonisolated enum IntentText {
             return String(localized: "A plan is waiting for your approval")
         case .permission:
             if let s = ix.summary, !s.isEmpty { return s }
-            if let tool = ix.toolName, !tool.isEmpty { return String(localized: "\(tool) is asking for permission") }
+            if let tool = ix.toolDisplayName, !tool.isEmpty { return String(localized: "\(tool) is asking for permission") }
             return String(localized: "A permission request is waiting for you")
         case .screen:
             return String(localized: "The terminal is waiting for your input")
+        case .elicitation:
+            if let m = ix.askLine(includeToolName: false) { return m }
+            return String(localized: "An MCP request is waiting for you")
         }
     }
 
@@ -58,6 +61,7 @@ nonisolated enum IntentText {
         switch kind {
         case .question: String(localized: "This is a question. Open Persona to answer it.")
         case .screen: String(localized: "The terminal is waiting for your input. Open Persona.")
+        case .elicitation: String(localized: "This MCP request needs the app. Open Persona to answer it.")
         case .plan, .permission: String(localized: "Open Persona to handle this.")
         }
     }
@@ -155,6 +159,15 @@ nonisolated enum IntentSupport {
         return all.first { $0.group == group } ?? all[0]
     }
 
+    /// The hub group the app has selected (`hub.group`), "" when none was picked yet.
+    static func selectedGroup(_ defaults: UserDefaults = .standard) -> String {
+        defaults.string(forKey: IntentText.hubGroupKey) ?? ""
+    }
+
+    /// The client of the group the app has selected: where the To-dos and Personal Agents pages read, so what Siri
+    /// says and sends matches them (and the Spotlight index). The first group's when it is gone.
+    static func selectedClient() throws -> APIClient { try client(group: selectedGroup()) }
+
     /// Every group's machines; with several groups each named with its group ("MacBook · Work").
     static func machines() async throws -> [Machine] {
         let all = try clients()
@@ -167,11 +180,18 @@ nonisolated enum IntentSupport {
         return out
     }
 
-    /// Every group's sessions, or one group's.
+    /// Every group's sessions, or one group's, as the Agents list has them: a side session folded into its parent's
+    /// chat (`folded`).
     static func sessions(group: String? = nil) async throws -> [Session] {
         var out: [Session] = []
         for api in try clients() where group == nil || api.group == group { out += try await api.sessions() }
-        return out
+        return folded(out)
+    }
+
+    /// A side session lives in its parent's chat (#7944, `SideFold`): Siri and Shortcuts list, count and send to the
+    /// parent, in its folded state, never the side. By what each hub's last hello said (intents read no hello).
+    static func folded(_ sessions: [Session]) -> [Session] {
+        SideFold.fold(sessions, groups: SideFold.rememberedGroups(Set(sessions.map(\.group)))).listed
     }
 
     /// Every group's pending interactions.

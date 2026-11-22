@@ -26,16 +26,9 @@ struct InboxPolicySheet: View {
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button { dismiss() } label: { Text("Cancel").lineLimit(1) }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button { save() } label: {
-                        if model.busy { ProgressView().controlSize(.small) } else { Text("Save").lineLimit(1) }
-                    }
-                    .disabled(!model.canSave)
-                    .accessibilityIdentifier("inbox.policy.save")
-                }
+                SheetClose { dismiss() }
+                SheetConfirm(id: "inbox.policy.save", name: String(localized: "Save"), disabled: !model.canSave,
+                             busy: model.busy) { save() }
             }
             .task { await model.load() }
         }
@@ -109,8 +102,8 @@ struct InboxRuleButtons: View {
     }
 }
 
-/// Rules (the Inbox's More menu, beside Muted): every source's rules, newest first. A tap edits one; a swipe or a long
-/// press removes it.
+/// Rules (the Inbox's More menu, beside Muted): every source's rules, newest first; with several managers, the current
+/// assistant's. A tap edits one; a swipe or a long press removes it.
 struct InboxRulesView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var model: InboxRulesModel
@@ -126,7 +119,7 @@ struct InboxRulesView: View {
                 }
                 .listStyle(.plain)
                 .overlay {
-                    if rules.isEmpty {
+                    if model.isEmpty {
                         EmptyStateView(symbol: Theme.Icon.inboxRule, title: String(localized: "No Rules [Inbox Policy]"), message: Self.hint)
                     }
                 }
@@ -140,12 +133,10 @@ struct InboxRulesView: View {
             .macSheetDone { dismiss() }
             #else
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button { dismiss() } label: { Text("Done [Extension System Presentation c0b3fb]").lineLimit(1) }
-                }
+                SheetClose { dismiss() }
             }
             #endif
-            .task {
+            .task(id: model.readKey) {
                 await model.load()
                 #if DEBUG
                 // `-openInboxRule edit`: Edit on the newest rule, prefilled (screenshots).

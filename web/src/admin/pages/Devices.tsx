@@ -12,6 +12,7 @@ import type { Device, PhonePair } from "../types";
 import { devDialog } from "../router";
 import { useShared } from "../store";
 import { Card, ConfirmButton, CopyValue, EmptyState, ErrorBox, Loader, PageHeader, Qr, Tag, useLoad } from "../parts";
+import { PasswordLoginSettings } from "./PasswordLogin";
 
 const KIND_ICON: Record<string, AdminIconName> = { phone: "phone", watch: "pulse", link: "link", web: "web", other: "web" };
 
@@ -35,6 +36,7 @@ export function Devices() {
           )
         }
       />
+      {!member && <PasswordLoginSettings />}
       {member && (refused || !data) ? (
         <Card>
           <EmptyState icon="mesh" title={mesh?.role === "member" ? t("admin-pages-devices.managed_by_named", { name: centerName(mesh) }) : t("admin-pages-devices.managed_by_primary")}>
@@ -50,7 +52,7 @@ export function Devices() {
               {t("admin-pages-devices.empty_detail")}
             </EmptyState>
           ) : (
-            data.map((d) => <DeviceRow key={d.id} d={d} onRevoked={() => set(data.filter((x) => x.id !== d.id))} />)
+            data.map((d) => <DeviceRow key={d.id} d={d} onRevoked={() => set((cur) => cur?.filter((x) => x.id !== d.id))} />)
           )}
         </Card>
       )}

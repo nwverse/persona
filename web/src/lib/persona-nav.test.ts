@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { firstAndCurrent, NAV_PAGES, otherConversations, extensionNavKey, sidebarActiveKey } from "./persona-nav";
+import { firstAndCurrent, NAV_PAGES, extensionNavKey, sidebarActiveKey, sidebarRoute } from "./persona-nav";
 import { href, parse, routePath } from "./router";
-import type { Session } from "./types";
-
-const conv = (id: string, updated: string) => ({ machine_id: "hub", session_id: id, updated_at: updated }) as Session;
 
 describe("Persona is the front door (#1239)", () => {
   it("opens the main conversation at / and at the old /persona and /persona links", () => {
@@ -21,10 +18,10 @@ describe("Persona is the front door (#1239)", () => {
     expect(href({ name: "persona-new" })).toBe("/persona/new");
   });
 
-  it("moves 总览 to /overview and keeps unknown paths on it", () => {
+  it("moves 总览 to /overview; an unknown path says it is no page (web usability audit item 42)", () => {
     expect(parse("/overview")).toEqual({ name: "home" });
     expect(href({ name: "home" })).toBe("/overview");
-    expect(parse("/no-such-page")).toEqual({ name: "home" });
+    expect(parse("/no-such-page")).toEqual({ name: "not-found", path: "/no-such-page" });
   });
 
   it("keeps the other old links", () => {
@@ -49,20 +46,33 @@ describe("Persona is the front door (#1239)", () => {
     expect(sidebarActiveKey({ name: "session", mid: "mac", sid: "s" }, "main")).toBe("s:mac/s");
   });
 
-  it("lists the other conversations newest first without the main one", () => {
-    const list = [conv("main", "2026-11-04T10:00:00Z"), conv("a", "2026-11-03T10:00:00Z"), conv("b", "2026-11-04T09:00:00Z")];
-    expect(otherConversations(list, "main").map((c) => c.session_id)).toEqual(["b", "a"]);
-    expect(otherConversations(list, undefined).map((c) => c.session_id)).toEqual(["main", "b", "a"]);
-    expect(otherConversations(list, "main", 1).map((c) => c.session_id)).toEqual(["b"]);
+  it("keeps the row of the page an Agent's page was opened from, a drill-down (#12055, #9971)", () => {
+    const agent = { name: "session", mid: "mac", sid: "s" } as const;
+    // a to-do's Agent rows and hand-off, a knowledge project's Agents and a meeting's hand-off, the workflow board
+    expect(sidebarActiveKey(agent, "main", "/todos?id=t1")).toBe("todos");
+    expect(sidebarActiveKey(agent, "main", "/todos?view=calendar&mode=week&id=t1")).toBe("todos");
+    expect(sidebarActiveKey(agent, "main", "/kb/projects/p1")).toBe("kb");
+    expect(sidebarActiveKey(agent, "main", "/kb/recordings/r1")).toBe("kb");
+    expect(sidebarActiveKey(agent, "main", "/workspace-board")).toBe("workspace-board");
+    // a Persona conversation's card with How Agents open = Full page: the conversation's own row
+    expect(sidebarActiveKey(agent, "main", "/")).toBe("persona");
+    expect(sidebarActiveKey(agent, "main", "/persona/main")).toBe("persona");
+    expect(sidebarActiveKey(agent, "main", "/persona/c2?machine=mac")).toBe("j:c2");
+    // an Agent opened from another Agent's page keeps that Agent's row
+    expect(sidebarActiveKey(agent, "main", "/s/mac/first")).toBe("s:mac/first");
+    // a tab's page follows where it came from too
+    expect(sidebarActiveKey({ name: "tab", mid: "mac", space: "w", slot: "1", sid: "s" }, "main", "/todos?id=t1")).toBe("todos");
+    expect(sidebarRoute(agent, "/todos?id=t1")).toEqual({ name: "todos", id: "t1" });
   });
 
-  it("keeps the open conversation listed when it is older than the recent ones (#2283)", () => {
-    const list = [conv("main", "2026-11-03"), conv("a", "2026-11-01"), conv("b", "2026-11-02"), conv("c", "2026-10-30")];
-    expect(otherConversations(list, "main", 1, "c").map((c) => c.session_id)).toEqual(["b", "c"]);
-    // already among the recent ones, or not a conversation at all: the list is as before
-    expect(otherConversations(list, "main", 2, "b").map((c) => c.session_id)).toEqual(["b", "a"]);
-    expect(otherConversations(list, "main", 1, "main").map((c) => c.session_id)).toEqual(["b"]);
-    expect(otherConversations(list, "main", 1, "gone").map((c) => c.session_id)).toEqual(["b"]);
+  it("lights an Agent's own row when nothing opened it, and every other page its own whatever it carries", () => {
+    const agent = { name: "session", mid: "mac", sid: "s" } as const;
+    expect(sidebarActiveKey(agent, "main")).toBe("s:mac/s");
+    expect(sidebarActiveKey(agent, "main", undefined)).toBe("s:mac/s");
+    expect(sidebarRoute(agent)).toBe(agent);
+    // only an Agent's page is a drill-down here: a to-do opened from a conversation lights To-dos, not the conversation
+    expect(sidebarActiveKey({ name: "todos", id: "t1" }, "main", "/persona/c2")).toBe("todos");
+    expect(sidebarActiveKey({ name: "persona", sid: "c2" }, "main", "/todos")).toBe("j:c2");
   });
 
   it("shortens a list to its first n and the open item after them (#2283)", () => {
@@ -73,16 +83,16 @@ describe("Persona is the front door (#1239)", () => {
   });
 
   it("orders the pages under Persona like the app", () => {
-    expect(NAV_PAGES).toEqual(["home", "inbox", "health", "messages", "workspace-board", "todos", "routines", "kb", "machines", "terminal", "settings"]);
+    expect(NAV_PAGES).toEqual(["home", "inbox", "health", "messages", "starred", "workspace-board", "todos", "routines", "kb", "machines", "terminal", "settings"]);
   });
 });
 
-describe("an extension's page (docs/extensions/extensions.md「UI 插槽」 nav_page)", () => {
+describe("an extension's page (docs/extensions/extensions.md「UI slots」 nav_page)", () => {
   it("has its own link and lights its own sidebar row", () => {
     expect(parse("/extension/example-gateway/usage")).toEqual({ name: "extension", extension: "example-gateway", ui: "usage" });
     expect(href({ name: "extension", extension: "a b", ui: "c/d" })).toBe("/extension/a%20b/c%2Fd");
     expect(parse(href({ name: "extension", extension: "a b", ui: "c/d" }))).toEqual({ name: "extension", extension: "a b", ui: "c/d" });
-    expect(parse("/extension/only-one")).toEqual({ name: "home" });
+    expect(parse("/extension/only-one")).toEqual({ name: "not-found", path: "/extension/only-one" });
     expect(sidebarActiveKey({ name: "extension", extension: "g", ui: "usage" })).toBe(extensionNavKey("g", "usage"));
     expect(extensionNavKey("g", "usage")).toBe("p:g/usage");
   });

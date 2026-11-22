@@ -1,8 +1,10 @@
 package persona.feature.agents
 
 import persona.core.contracts.Session
+import persona.core.contracts.SessionCapabilities
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.*
+import persona.core.domain.sort.AgentSession
 import persona.core.domain.sort.resumeCommand
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.CompletableDeferred
@@ -106,6 +108,40 @@ class AgentOperationsTest {
         assertTrue(operations.state.value.uncertain.isNotEmpty())
         assertEquals(listOf(session.key), operations.reconcile(emptyList(), complete = true))
         assertTrue(operations.state.value.uncertain.isEmpty())
+    }
+
+    /** A Tern space is one of Tern's sessions and a Tern pane's tab a Tern tab; the dialogs say so (iOS SpaceRenameForm). */
+    @Test fun renameDialogsNameTernForItsSpacesAndTabs() {
+        val herdr = Session("machine", "session", paneId = "w1:p1", spaceKind = "herdr", spaceId = "w1", spaceName = "app")
+        val tern = herdr.copy(paneId = "tern:201863462919", spaceKind = "tern", spaceId = "4")
+        val words = listOf(renameNote(tern, space = true), renameNote(herdr, space = true), renameNote(tern, space = false),
+            renameNote(herdr, space = false), tabNameLabel(tern), tabNameLabel(herdr))
+        assertEquals(listOf(R.string.agents_dialog_rename_space_text_tern, R.string.agents_dialog_rename_space_text,
+            R.string.agents_dialog_rename_text_tern, R.string.agents_dialog_rename_text,
+            R.string.agents_dialog_tab_name_tern, R.string.agents_dialog_tab_name), words)
+        assertEquals("real, distinct resource ids", words.size, words.toSet().size)
+    }
+
+    /** A runtime's session (#6294) has no tab and no Claude's /rename to speak of: its rename says nothing more. */
+    @Test fun aSessionWithoutATerminalRenamesWithoutANote() {
+        val paseo = Session("machine", "paseo", sourceKind = "runtime", agent = "claude", spaceKind = "paseo", slotName = "release",
+            capabilities = SessionCapabilities(read = true, send = true, rename = true))
+        assertNull(renameNote(paseo, space = false))
+        assertEquals(R.string.agents_dialog_rename_text, renameNote(Session("machine", "s", paneId = "w1:p1"), space = false))
+    }
+
+    /** Swiping closes where the node says it can (#6294), else in a terminal pane, as before; never while busy or offline. */
+    @Test fun swipingClosesWhereTheNodeSaysItCan() {
+        val paseo = Session("machine", "paseo", status = "idle", sourceKind = "runtime", agent = "claude",
+            capabilities = SessionCapabilities(read = true, send = true, close = true))
+        fun swipe(session: Session, busy: Boolean = false) = closeSwipe(AgentSession(session), busy) {}
+        assertNotNull(swipe(paseo))
+        assertNull(swipe(paseo, busy = true))
+        assertNull(swipe(paseo.copy(status = "offline")))
+        assertNull(swipe(paseo.copy(capabilities = paseo.capabilities!!.copy(close = false))))
+        assertNull("an older node says nothing", swipe(paseo.copy(capabilities = SessionCapabilities(read = true, send = true))))
+        assertNotNull(swipe(Session("machine", "s", status = "idle", paneId = "w1:p1")))
+        assertNull(swipe(Session("machine", "s", status = "idle", assistant = true)))
     }
 
     private class FakeOperations : AgentOperations {

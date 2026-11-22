@@ -3,7 +3,6 @@ package persona.core.data
 import com.google.crypto.tink.Aead
 import com.google.crypto.tink.BinaryKeysetWriter
 import com.google.crypto.tink.KeysetHandle
-import com.google.crypto.tink.aead.AeadConfig
 import com.google.crypto.tink.aead.AeadKeyTemplates
 import java.io.ByteArrayOutputStream
 import java.security.GeneralSecurityException
@@ -16,7 +15,7 @@ import persona.core.contracts.ProtocolCompatibility
 class CredentialKeysetTest {
     private val uris = ProtocolCompatibility.pairingMasterKeyUris
 
-    @Before fun register() = AeadConfig.register()
+    @Before fun register() = registerPairingAead()
 
     @Test fun bothWrappingKeysRetainOldAndCurrentPairingsAcrossRepeatedStarts() {
         val masters = uris.associateWith { newHandle().getPrimitive(Aead::class.java) }

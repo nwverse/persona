@@ -90,11 +90,42 @@ describe("Markdown table copy button", () => {
     const html = renderToStaticMarkup(createElement(Markdown, { text: md }));
     const doc = new DOMParser().parseFromString(html, "text/html");
     const button = doc.querySelector("button");
-    expect(button?.getAttribute("aria-label")).toBe("拷贝表格");
-    expect(button?.className).toContain("opacity-0");
-    expect(button?.className).toContain("group-hover/table:opacity-100");
-    expect(button?.className).toContain("focus-visible:opacity-100");
+    expect(button?.getAttribute("aria-label")).toBe("复制表格");
+    // it shows with the cap it sits on (audit item 77): on hover, and while the button has the keyboard's focus, not
+    // after a click (a clicked button keeps the focus, and the cap would stay over the header taking no clicks)
+    const cap = button?.closest("[data-table-copy]");
+    expect(cap?.className).toContain("opacity-0");
+    expect(cap?.className).toContain("group-hover/table:opacity-100");
+    expect(cap?.className).toContain("has-[:focus-visible]:opacity-100");
+    expect(cap?.className).not.toContain("focus-within");
+    expect(button?.className).toContain("focus-visible:pointer-events-auto");
     expect(doc.querySelector("table button")).toBeNull();
+  });
+
+  it("places the button from the ResizeObserver's first report, not with a layout read as the table mounts (#2905)", async () => {
+    const reports: ResizeObserverCallback[] = [];
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(cb: ResizeObserverCallback) {
+        reports.push(cb);
+      }
+      observe() {}
+      disconnect() {}
+    });
+    const read = vi.spyOn(HTMLElement.prototype, "offsetTop", "get").mockReturnValue(30);
+    const { act } = await import("react");
+    const { createRoot } = await import("react-dom/client");
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    act(() => root.render(createElement(Markdown, { text: md })));
+    const cap = host.querySelector<HTMLElement>(".md-table > [data-table-copy]")!;
+    expect(read).not.toHaveBeenCalled();
+    expect(cap.style.top).toBe("");
+    act(() => reports[0]([], {} as ResizeObserver));
+    // the cap lies on the header row, the button inset in it
+    expect(cap.style.top).toBe("30px");
+    expect(cap.querySelector("button")).not.toBeNull();
+    act(() => root.unmount());
   });
 
   it("converts the rendered table: header, link label, inline code, pipes, empty cells", () => {

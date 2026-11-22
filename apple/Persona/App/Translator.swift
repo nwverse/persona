@@ -2,7 +2,7 @@ import Foundation
 import NaturalLanguage
 import Observation
 
-// Settings › Translation (docs/apple/ios.md「翻译」): when it is on, content not in the target language is translated by the hub
+// Settings › Translation (docs/apple/ios.md「Translation」): when it is on, content not in the target language is translated by the hub
 // (its small-task model). The scope is mail (on by default) and the Feishu chats picked in settings (none by default:
 // there are too many messages). Whether a text needs it is decided here, on the device, with NaturalLanguage.
 

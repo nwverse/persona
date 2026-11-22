@@ -6,12 +6,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -31,6 +35,7 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 	case "kb_search":
 		a := struct {
 			Query    string `json:"query"`
+			Kind     string `json:"kind"`
 			Messages *bool  `json:"messages"`
 			Limit    int    `json:"limit"`
 		}{}
@@ -38,7 +43,16 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		if a.Limit <= 0 {
 			a.Limit = 40
 		}
-		hits := e.Search(a.Query, a.Messages == nil || *a.Messages, min(a.Limit, 200))
+		messages, limit := a.Messages == nil || *a.Messages, min(a.Limit, 200)
+		var hits []kb.Hit
+		switch {
+		case a.Kind == "":
+			hits = e.Search(a.Query, messages, limit, profileSkip(ctx)...)
+		case kbRPCKind(a.Kind):
+			hits = e.SearchKind(a.Query, a.Kind, messages, limit, profileSkip(ctx)...)
+		default:
+			return "", fmt.Errorf("kind %q: one of projects, chats, people, docs, meetings, events, recordings, topics", a.Kind)
+		}
 		if len(hits) == 0 {
 			// A neutral, localized line: it can be relayed to the owner, so it never names the store's disk path.
 			l := s.lang(ctx)
@@ -62,16 +76,30 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 			a.Limit = 30
 		}
 		items := e.List(a.Kind, a.Tag)
+		if a.Kind == kb.KindRecording {
+			items = s.recordingLines(ctx, e, items, a.Limit)
+		}
 		if len(items) > a.Limit {
 			items = items[:a.Limit]
+		}
+		if a.Kind == kb.KindMeeting || a.Kind == kb.KindEvent { // when it is (or was), so "last week's" can be told
+			loc := s.location(ctx)
+			for i, x := range items {
+				if !x.Updated.IsZero() {
+					items[i].Extra = strings.TrimSpace(x.Updated.In(loc).Format("2006-01-02 15:04") + " " + x.Extra)
+				}
+			}
 		}
 		if len(items) == 0 {
 			return i18n.T(s.lang(ctx), "assistant-kb_tools.list_empty"), nil
 		}
 		var b strings.Builder
+		lang := s.lang(ctx)
 		for _, x := range items {
-			fmt.Fprintf(&b, "- %s · %s [%s 相关%d] %s %s%s\n", x.ID, x.Name, orDash(x.Importance), x.Relevance,
+			fmt.Fprintf(&b, "- %s · %s [%s 相关%d] %s %s%s", x.ID, x.Name, orDash(x.Importance), x.Relevance,
 				strings.Join(x.Tags, ","), x.Extra, prefix(" — ", x.OneLine))
+			writeProjectReview(&b, lang, x.ProjectMode, x.Freshness, x.Sources, true)
+			b.WriteByte('\n')
 		}
 		return b.String(), nil
 	case "kb_get":
@@ -87,16 +115,29 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		if err != nil {
 			return "", fmt.Errorf("%s/%s: %w", a.Kind, a.ID, err)
 		}
-		// meta.json as the file has it (one edited by hand into something else: its text, as it is).
-		meta := []byte(d.Meta)
+		// The public metadata, with a project's people folded to the first few (kb_get_fit.go).
+		meta, folded := []byte(d.Meta), ""
+		if a.Kind == kb.KindProject {
+			meta, folded = foldPeople(meta, d.Links, filepath.Join(d.Path, "meta.json"))
+		}
 		var indented bytes.Buffer
-		if json.Valid(d.Meta) && json.Indent(&indented, bytes.TrimSpace(d.Meta), "", "  ") == nil {
+		if json.Valid(meta) && json.Indent(&indented, bytes.TrimSpace(meta), "", "  ") == nil {
 			meta = append(indented.Bytes(), '\n')
 		}
 		var b strings.Builder
-		fmt.Fprintf(&b, "Path: %s\n\nmeta.json:\n%s\n", d.Path, meta)
+		var review strings.Builder
+		writeProjectReview(&review, s.lang(ctx), d.ProjectMode, d.Freshness, d.Sources, false)
+		if review.Len() > 0 && estTokens(d.Summary)+estTokens(string(meta))+estTokens(review.String()) > kbGetMaxTokens/2 {
+			b.WriteString(review.String())
+			b.WriteString("\n\n")
+			review.Reset()
+		}
+		fmt.Fprintf(&b, "Path: %s\n\nmeta.json:\n%s%s\n", d.Path, meta, folded)
 		if d.Summary != "" {
 			fmt.Fprintf(&b, "\nsummary.md:\n%s\n", d.Summary)
+		}
+		if review.Len() > 0 {
+			fmt.Fprintf(&b, "\n%s\n", review.String())
 		}
 		if len(d.Log) > 0 {
 			fmt.Fprintf(&b, "\nlog.md (latest):\n%s\n", strings.Join(d.Log, "\n"))
@@ -108,10 +149,49 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 				fmt.Fprintf(&b, "- %s %s · %d comments · %s — %s\n", m.ID, m.At.In(loc).Format("2006-01-02"), m.Comments, m.Note, m.Text)
 			}
 		}
-		if d.Recent != "" {
+		if len(d.Minutes) > 0 { // a meeting's minutes, before the transcript the 12k cut may end early
+			var m kb.Minutes
+			if json.Unmarshal(d.Minutes, &m) == nil && m.Markdown != "" {
+				fmt.Fprintf(&b, "\nminutes.md:\n%s\n", m.Markdown)
+				b.WriteString(s.minutesActionLines(ctx, d.ID, &m))
+			}
+		}
+		if len(d.Recap) > 0 { // an all-day recording's recap (kb_day.go): a whole day's transcript is far past the cut
+			var rc kb.DayRecap
+			if json.Unmarshal(d.Recap, &rc) == nil && rc.Markdown != "" {
+				fmt.Fprintf(&b, "\nrecap.md:\n%s\n", rc.Markdown)
+				b.WriteString(s.recapActionLines(ctx, d.ID, &rc))
+			}
+		}
+		// A meeting's photos, their words (photos.md): after the minutes' action items, before the transcript.
+		if a.Kind == kb.KindRecording {
+			if photos := e.PhotosMarkdown(d.ID); photos != "" {
+				fmt.Fprintf(&b, "\nphotos.md:\n%s", photos)
+			}
+		}
+		if a.Kind == kb.KindMeeting || a.Kind == kb.KindEvent {
+			b.WriteString(s.recordingsAt(ctx, e, a.Kind, d.ID))
+		}
+		var trimmed struct {
+			At   *time.Time `json:"trimmed_at"`
+			Kind string     `json:"kind"`
+		}
+		switch {
+		case a.Kind != kb.KindRecording || json.Unmarshal(d.Meta, &trimmed) != nil || trimmed.At == nil:
+		case trimmed.Kind == kb.RecordingDay:
+			fmt.Fprintf(&b, "\ntranscript.md: expired %s (assistant.recording_days); only the recap above is kept, until "+
+				"assistant.minutes_days after the day (0 means forever, the default), and it can't be written again.\n", trimmed.At.In(s.location(ctx)).Format("2006-01-02"))
+		default:
+			fmt.Fprintf(&b, "\ntranscript.md: expired %s (assistant.recording_days); only the minutes above are kept, until "+
+				"assistant.minutes_days after the meeting (0 means forever, the default), and they can't be made again.\n", trimmed.At.In(s.location(ctx)).Format("2006-01-02"))
+		}
+		switch {
+		case d.Recent != "" && a.Kind == kb.KindRecording:
+			fmt.Fprintf(&b, "\ntranscript.md:\n%s\n", d.Recent)
+		case d.Recent != "":
 			fmt.Fprintf(&b, "\nMessages, last 7 days:\n%s\n", d.Recent)
 		}
-		return b.String(), nil
+		return fitKBGet(b.String(), d.Path), nil
 	case "kb_update":
 		if e.Store.ReadOnly() {
 			return "", kb.ErrReadOnly
@@ -121,9 +201,13 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 			ID   string `json:"id"`
 			kb.UserUpdate
 		}
-		if err := json.Unmarshal(args, &a); err != nil {
+		if err := kbDecodeParams(name, args, &a); err != nil {
 			return "", err
 		}
+		if a.LockLists == nil { // a removal keeps out just that link; locking a whole list is the user's choice in the app
+			a.LockLists = new(false)
+		}
+		ignored := kb.UserUnsupported(a.Kind, a.UserUpdate)
 		id, err := e.ApplyUser(a.Kind, a.ID, a.UserUpdate)
 		if err != nil {
 			return "", err
@@ -131,9 +215,59 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		if a.Unmerge {
 			return "Unmerged " + a.Kind + "/" + id + ".", nil
 		}
-		return "Saved " + a.Kind + "/" + id + ".", nil
+		out := "Saved " + a.Kind + "/" + id + "."
+		for _, f := range ignored { // said, so the model does not take a dropped field for written
+			out += "\nNot saved: " + f.Field + " (" + f.Reason + ")."
+		}
+		return out, nil
 	}
 	return "", fmt.Errorf("unknown tool %s", name)
+}
+
+// writeProjectReview gives tools the same review state as the wire. The list
+// shows the timeline positions and counts, while detail includes each input revision.
+func writeProjectReview(b *strings.Builder, lang i18n.Lang, mode string, freshness *kbwire.ProjectFreshness, sources []kbwire.ProjectSource, compact bool) {
+	if mode == "" && freshness == nil && len(sources) == 0 {
+		return
+	}
+	if compact {
+		summary := &kbwire.ProjectFreshness{}
+		if freshness != nil {
+			summary.NeedsReview, summary.TimelineEnd = freshness.NeedsReview, freshness.TimelineEnd
+			summary.Fields = make(map[string]kbwire.ProjectFieldFreshness, len(freshness.Fields))
+			for name, field := range freshness.Fields {
+				if field.Cutoff != nil {
+					cutoff := *field.Cutoff
+					cutoff.Sources = nil
+					field.Cutoff = &cutoff
+				}
+				summary.Fields[name] = field
+			}
+			freshness = summary
+		}
+		var linked []kbwire.ProjectSource
+		for _, source := range sources {
+			if source.URL != "" || source.DeliveryState != "" {
+				source.Refs = nil
+				linked = append(linked, source)
+			}
+		}
+		sources = linked
+		if mode == "" && freshness == nil && len(sources) == 0 {
+			return
+		}
+		b.WriteString(" · ")
+	}
+	if freshness != nil && freshness.NeedsReview {
+		b.WriteString(i18n.T(lang, "assistant-kb_tools.needs_review"))
+		b.WriteByte(' ')
+	}
+	raw, _ := json.Marshal(struct {
+		Mode      string                   `json:"project_mode,omitempty"`
+		Freshness *kbwire.ProjectFreshness `json:"freshness,omitempty"`
+		Sources   []kbwire.ProjectSource   `json:"sources,omitempty"`
+	}{mode, freshness, sources})
+	b.Write(raw)
 }
 
 func orDash(s string) string {
@@ -161,6 +295,7 @@ func (s *Service) toolInteractionAnswer(ctx context.Context, self string, args j
 		SessionID     string          `json:"session_id"`
 		InteractionID string          `json:"interaction_id"`
 		Answers       json.RawMessage `json:"answers"`
+		Reason        string          `json:"reason"`
 	}
 	_ = json.Unmarshal(args, &a)
 	am, c, err := s.findAgent(ctx, a.Machine, a.SessionID)
@@ -183,6 +318,11 @@ func (s *Service) toolInteractionAnswer(ctx context.Context, self string, args j
 		return "", interactionEnded(id, got.Status)
 	}
 	ix := got.Interaction
+	if ix.Kind == proto.IxScreen {
+		// A terminal dialog (Claude's Bypass Permissions confirmation, a safety check): its card offers the user its
+		// choices; it is never answered for them.
+		return "", fmt.Errorf("interaction %s is a screen (a terminal dialog), only the user can answer it in the app, where its card offers its choices", ix.ID)
+	}
 	if ix.Kind != proto.IxQuestion {
 		return "", fmt.Errorf("interaction %s is a %s (approval), only the user can answer it in the app", ix.ID, ix.Kind)
 	}
@@ -196,16 +336,21 @@ func (s *Service) toolInteractionAnswer(ctx context.Context, self string, args j
 	if err != nil {
 		return "", err
 	}
+	// A card handed to this conversation before the user (ask_route.go): its answer is the task's decision.
+	todo, routed := s.routedTo(ix.ID, self, s.isMain(ctx, self))
 	var res struct {
 		OK     bool   `json:"ok"`
 		Status string `json:"status"`
 	}
 	if err := s.appCall(ctx, AppInteractions, assistantwire.InteractionsAnswer, map[string]any{"machine_id": ix.MachineID,
-		"session_id": ix.SessionID, "interaction_id": ix.ID, "answers": answers}, &res); err != nil {
+		"session_id": ix.SessionID, "interaction_id": ix.ID, "answers": answers, "reason": clip(oneLine(a.Reason), 120)}, &res); err != nil {
 		return "", err
 	}
 	if !res.OK {
 		return "", interactionEnded(ix.ID, res.Status)
+	}
+	if routed {
+		s.askAnswered(ctx, todo, self, ix, answers, a.Reason)
 	}
 	var b strings.Builder
 	b.WriteString("Answered for the user:\n")
@@ -232,8 +377,9 @@ func interactionEnded(id, status string) error {
 }
 
 // interactionAnswers checks a question's answers against the questions themselves: every question answered, by the
-// wording it was asked, with options it offers. A multi-select takes several labels and becomes the app's own form,
-// "A, B". Free text is refused: the user answers that in the app, or through agent_send.
+// wording it was asked, with options it offers (an option written out with its description counts as its label,
+// optionLabel). A multi-select takes several labels and becomes the app's own form, "A, B". Free text is refused: the
+// user answers that in the app, or through agent_send.
 func interactionAnswers(ix proto.Interaction, args json.RawMessage) (map[string]string, error) {
 	var raw map[string]json.RawMessage
 	if len(args) == 0 || json.Unmarshal(args, &raw) != nil {
@@ -261,7 +407,7 @@ func interactionAnswers(ix proto.Interaction, args json.RawMessage) (map[string]
 				return nil, fmt.Errorf("%q takes an option label or an array of them (options: %s)", q.Question, optionLabels(q))
 			}
 			if !q.MultiSelect {
-				answers[q.Question] = one
+				answers[q.Question] = optionLabel(q, one)
 			} else {
 				many = []string{one}
 			}
@@ -269,6 +415,9 @@ func interactionAnswers(ix proto.Interaction, args json.RawMessage) (map[string]
 		if many != nil {
 			if !q.MultiSelect && len(many) > 1 {
 				return nil, fmt.Errorf("%q takes one option; pick one of: %s", q.Question, optionLabels(q))
+			}
+			for i, a := range many {
+				many[i] = optionLabel(q, a)
 			}
 			answers[q.Question] = strings.Join(many, ", ")
 		}
@@ -301,6 +450,109 @@ func checkOptions(q proto.Question, answer string) error {
 	return nil
 }
 
+// optionLabel is the label of the option answer names: answer itself when it is a label. The delegation input lists
+// an option as "label：description" (prompts/agents/delegate_input.md), and a model sometimes copies the whole line
+// (#3929), so an answer that writes out exactly one option, its label and then its own description, is that option's
+// label too: with "：", ":" or a dash between them, or the description in brackets, and spaces or quotes around the
+// label or the whole answer. Anything else, the model's own words after a label or text that reads as two options,
+// comes back as it is, for checkOptions to refuse.
+func optionLabel(q proto.Question, answer string) string {
+	for _, o := range q.Options {
+		if o.Label == answer {
+			return answer
+		}
+	}
+	label := ""
+	for _, o := range q.Options {
+		if !writesOut(answer, o) {
+			continue
+		}
+		if label != "" && label != o.Label {
+			return answer
+		}
+		label = o.Label
+	}
+	if label == "" {
+		return answer
+	}
+	return label
+}
+
+// labelSeparators may come between an option's label and its description; a longer one before its prefix.
+var labelSeparators = []string{"——", "--", "：", ":", "—", "–", "－", "-"} // i18n-ignore: punctuation matched in a model's answer
+
+// descBrackets may hold the description after an option's label.
+var descBrackets = [][2]string{{"（", "）"}, {"(", ")"}} // i18n-ignore: punctuation matched in a model's answer
+
+// labelQuotes may wrap an option's label, or a whole answer.
+var labelQuotes = [][2]string{{`"`, `"`}, {"'", "'"}, {"`", "`"}, {"“", "”"}, {"‘", "’"}, {"「", "」"}, {"『", "』"}} // i18n-ignore: punctuation matched in a model's answer
+
+// writesOut: answer is option o written out, its label alone or followed by its own description.
+func writesOut(answer string, o proto.QuestionOption) bool {
+	label := strings.TrimSpace(o.Label)
+	if label == "" {
+		return false
+	}
+	s := unquoted(answer)
+	if s == label {
+		return true
+	}
+	desc := plainDescription(o.Description)
+	if desc == "" {
+		return false
+	}
+	rest, ok := cutLabel(s, label)
+	if !ok {
+		return false
+	}
+	rest = strings.TrimSpace(rest)
+	for _, sep := range labelSeparators {
+		if d, ok := strings.CutPrefix(rest, sep); ok {
+			return plainDescription(d) == desc
+		}
+	}
+	for _, b := range descBrackets {
+		if d, ok := strings.CutPrefix(rest, b[0]); ok {
+			d, ok = strings.CutSuffix(d, b[1])
+			return ok && plainDescription(d) == desc
+		}
+	}
+	return false
+}
+
+// unquoted is s without the spaces and quotes around it.
+func unquoted(s string) string {
+	s = strings.TrimSpace(s)
+	for again := true; again; {
+		again = false
+		for _, p := range labelQuotes {
+			if len(s) > len(p[0])+len(p[1]) && strings.HasPrefix(s, p[0]) && strings.HasSuffix(s, p[1]) {
+				s, again = strings.TrimSpace(s[len(p[0]):len(s)-len(p[1])]), true
+				break
+			}
+		}
+	}
+	return s
+}
+
+// cutLabel is what follows label at the start of s, the label bare or in quotes.
+func cutLabel(s, label string) (string, bool) {
+	if rest, ok := strings.CutPrefix(s, label); ok {
+		return rest, true
+	}
+	for _, p := range labelQuotes {
+		if rest, ok := strings.CutPrefix(s, p[0]+label+p[1]); ok {
+			return rest, true
+		}
+	}
+	return "", false
+}
+
+// plainDescription is an option's description as compared: its words one space apart, no full stop at the end.
+func plainDescription(s string) string {
+	return strings.TrimRight(strings.Join(strings.Fields(s), " "), "。.") // i18n-ignore: punctuation matched in a model's answer
+}
+
 func optionLabels(q proto.Question) string {
 	labels := make([]string, len(q.Options))
 	for i, o := range q.Options {
@@ -331,8 +583,9 @@ func draftPlaceholder(text string) string {
 // it waits on the item for the user to send.
 func (s *Service) toolInboxDraft(ctx context.Context, self string, args json.RawMessage) (string, error) {
 	var a struct {
-		Text, Note string
-		Changes    []DocChange
+		Text, Note     string
+		Changes        []DocChange
+		ProcessingTurn string `json:"processing_turn"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil || strings.TrimSpace(a.Text) == "" {
 		return "", errors.New("text is required")
@@ -341,7 +594,7 @@ func (s *Service) toolInboxDraft(ctx context.Context, self string, args json.Raw
 	if p := draftPlaceholder(a.Text); p != "" {
 		return "", fmt.Errorf("the draft leaves %s to fill in, and it goes out as it is: leave out what you could not find (say so in note) and submit again", p)
 	}
-	itemID, refused, err := s.inboxDraft(ctx, self, strings.TrimSpace(a.Text), clip(strings.TrimSpace(a.Note), 600), a.Changes)
+	itemID, refused, err := s.inboxDraft(ctx, self, strings.TrimSpace(a.Text), clip(strings.TrimSpace(a.Note), 600), a.Changes, a.ProcessingTurn)
 	if err != nil { // not kept: the event is back where the turn found it, so the draft can be handed in again
 		return "", err
 	}
@@ -353,4 +606,64 @@ func (s *Service) toolInboxDraft(ctx context.Context, self string, args json.Raw
 		return "", fmt.Errorf("change %+v is not one the item lists (ref, field and one of its values)", *refused)
 	}
 	return "The draft is in the user's inbox; they will send it. You're done.", nil
+}
+
+// recordingsAt is what kb_get adds to calendar item kind/id (meetings or events, id as stored): the recordings matched
+// to it by time (kb/minutes.go matchRecordings), as their calendar item or their imported meeting (#8872), which hold
+// its minutes; "" when there are none.
+func (s *Service) recordingsAt(ctx context.Context, e *kb.Engine, kind, id string) string {
+	var at []kb.Entry
+	for _, r := range e.Store.Recordings() {
+		if matchedAt(r.Meeting, kind, id) || matchedAt(r.ImportedMeeting, kind, id) {
+			at = append(at, kb.Entry{Kind: kb.KindRecording, ID: r.ID, Name: r.Name, Updated: r.StartedAt})
+		}
+	}
+	if len(at) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\nRecorded at it (kb_get kind=recordings for the minutes and the transcript):\n")
+	for _, x := range s.recordingLines(ctx, e, at, 10) {
+		fmt.Fprintf(&b, "- %s · %s %s\n", x.ID, x.Name, x.Extra)
+	}
+	return b.String()
+}
+
+// matchedAt says whether ref names calendar item kind/id (id as stored).
+func matchedAt(ref *kb.MeetingRef, kind, id string) bool {
+	return ref != nil && ref.Kind == kind && kb.SafeID(ref.ID) == id
+}
+
+// recordingLines is kb_list's first limit recordings newest first (what "the meeting just now" asks for), each saying
+// when it started, for how long, and whether it has minutes.
+func (s *Service) recordingLines(ctx context.Context, e *kb.Engine, items []kb.Entry, limit int) []kb.Entry {
+	loc := s.location(ctx)
+	sort.SliceStable(items, func(i, j int) bool { return items[i].Updated.After(items[j].Updated) })
+	items = items[:min(limit, len(items))]
+	for i, x := range items {
+		r, ok := e.Store.Recording(x.ID)
+		if !ok {
+			continue
+		}
+		extra := r.StartedAt.In(loc).Format("2006-01-02 15:04") + " " + strconv.Itoa(int(r.Duration/60)) + "min " + r.Device
+		switch r.MinutesState {
+		case kb.MinutesReady:
+			extra += " minutes"
+		case kb.MinutesPending:
+			extra += " minutes-pending"
+		case kb.MinutesFailed:
+			extra += " minutes-failed"
+		}
+		if r.Kind == kb.RecordingDay { // an all-day recording (kb_day.go): its recap, not minutes
+			extra += " all-day"
+			if r.RecapState != "" {
+				extra += " recap-" + r.RecapState
+			}
+		}
+		if r.Trimmed() {
+			extra += " transcript-expired"
+		}
+		items[i].Extra = extra
+	}
+	return items
 }

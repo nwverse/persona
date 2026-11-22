@@ -9,6 +9,8 @@ vi.hoisted(() => {
 });
 
 let fail = true;
+// the hub's Done day counts (#2967): null for none, as a read that fails
+let doneDays: { day: string; count: number }[] | null = null;
 // the hub's mail accounts: one by default (a source is connected, an empty inbox is "All caught up"); [] for none
 let mailAccounts: { id: string; email: string }[] = [{ id: "a1", email: "me@example.com" }];
 const calls: string[] = [];
@@ -17,6 +19,7 @@ vi.mock("../../lib/api", async (orig) => ({
   api: (path: string) => {
     calls.push(path);
     if (path === "/mail/accounts") return Promise.resolve({ accounts: mailAccounts });
+    if (path.startsWith("/inbox/done/days") && doneDays) return Promise.resolve({ days: doneDays });
     return path.startsWith("/inbox") && fail ? Promise.reject(new TypeError("Failed to fetch")) : Promise.resolve({});
   },
 }));
@@ -45,6 +48,7 @@ beforeEach(() => {
   resetInboxForTests();
   resetMailForTests();
   mailAccounts = [{ id: "a1", email: "me@example.com" }];
+  doneDays = null;
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -53,6 +57,24 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+});
+
+describe("收件箱：列表不会横向滚动", () => {
+  // overflow-y alone made the list scroll sideways whenever something inside was wider than the 380px column, cutting
+  // off every card (#3262): the scroller clips x, and a source's long name truncates in its chip instead of widening it.
+  it("clips the x axis on its scroller, and a chip's long name truncates", async () => {
+    fail = false;
+    mailAccounts = [{ id: "a1", email: "a-very-long-mailbox-name-for-the-office@example.com" }];
+    act(() => root.render(<InboxList />));
+    await flush();
+    const scroller = host.querySelector(".overflow-x-clip");
+    expect(scroller).not.toBeNull();
+    expect(scroller?.className).toContain("overflow-y-auto");
+    const chip = host.querySelector("button[aria-pressed]");
+    expect(chip?.className).toContain("text-ellipsis");
+    expect(chip?.className).toContain("min-w-0");
+    expect(chip?.className).toContain("max-w-full");
+  });
 });
 
 describe("收件箱：还没接入消息来源", () => {
@@ -87,6 +109,22 @@ describe("收件箱：首次加载失败", () => {
     expect(calls.filter((c) => c.startsWith("/inbox")).length).toBe(before + 1);
     expect(host.querySelector("[data-inbox-failed]")).toBeNull();
     expect(host.textContent).toContain("都处理完了");
+  });
+
+  // the section bar (#9053): Done chosen, with its day counts from the hub, still says the list couldn't be read, as the
+  // stacked page said it over Done
+  it("says so over Done when Done is chosen and has its days", async () => {
+    fail = true;
+    const today = new Date();
+    doneDays = [{ day: `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`, count: 3 }];
+    act(() => root.render(<InboxList />));
+    await flush();
+    const done = host.querySelector<HTMLButtonElement>('[data-bar-choice="done"]');
+    expect(done).not.toBeNull();
+    act(() => done!.click());
+    await flush();
+    expect(host.querySelector('[data-section="done"]')).not.toBeNull();
+    expect(host.querySelector("[data-inbox-failed]")?.textContent).toContain("收件箱没能加载");
   });
 
   it("with agents waiting the list is not empty: the error is one red line over it, no failed empty state", async () => {

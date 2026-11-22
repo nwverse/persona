@@ -5,6 +5,7 @@ package persona.core.contracts.api
 import persona.core.contracts.CoreText.Key
 import persona.core.contracts.CoreText
 import persona.core.contracts.Machine
+import persona.core.contracts.MachineLinkSwitch
 import persona.core.contracts.WireSerializer
 import kotlinx.serialization.KeepGeneratedSerializer
 import kotlinx.serialization.SerialName
@@ -16,8 +17,14 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 
 /**
+ * [MachineManagement.setEngine]'s choice for a computer with no terminal engine, as iOS `MachineEngine.noEngine`. Not a hub engine
+ * id: the hub is sent the empty host set instead (docs/integrations/engines.md "Host sets").
+ */
+const val NO_TERMINAL_ENGINE = "none"
+
+/**
  * What the app changes on a machine (docs/protocol/protocol.md "REST"): its launchers, reconnecting and redeploying its node,
- * its terminal engine, whether botmux's sessions are listed, and its whitelisted Claude Code and Codex settings. Bound to the active pairing; every call goes to the
+ * its terminal engine, whether botmux's sessions are listed, and its whitelisted Claude Code, Codex and Antigravity settings. Bound to the active pairing; every call goes to the
  * hub that is paired when it is made.
  */
 interface MachineManagement {
@@ -34,6 +41,12 @@ interface MachineManagement {
     suspend fun reconnect(machineId: String)
 
     /**
+     * `POST /api/v1/machines/{id}/link-switch`: starts the confirmed SSH to Persona Link switch once.
+     * The accepted state and subsequent machine-list snapshots carry authoritative progress.
+     */
+    suspend fun startLinkSwitch(machineId: String): MachineLinkSwitch = throw UnsupportedOperationException("link switch")
+
+    /**
      * `PUT /api/v1/machines/{id}/name {"name"}` (hubs with feature `machine_rename`, docs/protocol/protocol.md "Renaming a
      * computer"): "" is the id again; returns the name the hub calls the computer now. Every client gets it with `machines`.
      */
@@ -48,7 +61,10 @@ interface MachineManagement {
     /** `POST /api/v1/machines/{id}/herdr/start`: an explicit start, independent of the autostart setting. */
     suspend fun startHerdr(machineId: String): HerdrState
 
-    /** `PUT /api/v1/machines/{id}/engine`: allowed offline (applied when it connects); returns the updated machine. */
+    /**
+     * `PUT /api/v1/machines/{id}/engine`: allowed offline (applied when it connects); returns the updated machine.
+     * [NO_TERMINAL_ENGINE] is saved as the empty host set, only for a hub that reports `engine_hosts`.
+     */
     suspend fun setEngine(machineId: String, engine: String): Machine
 
     /**
@@ -72,11 +88,32 @@ interface MachineManagement {
     /** `PUT /api/v1/machines/{id}/codex-settings`: [value] [JsonNull] removes the key, back to Codex's default. */
     suspend fun setCodexSetting(machineId: String, key: String, value: JsonElement): List<ClaudeSetting>
 
+    /** `GET /api/v1/machines/{id}/agy-settings`: the whitelisted `~/.gemini/antigravity-cli/settings.json` options, the same shape as Claude's. */
+    suspend fun agySettings(machineId: String): List<ClaudeSetting> = throw UnsupportedOperationException("agy settings")
+
+    /** `PUT /api/v1/machines/{id}/agy-settings`: [value] [JsonNull] removes the key, back to Antigravity's default. */
+    suspend fun setAgySetting(machineId: String, key: String, value: JsonElement): List<ClaudeSetting> =
+        throw UnsupportedOperationException("agy settings")
+
     /** `GET /api/v1/machines/{id}/claude-dirs`: its Claude Code config directories and the blocked patterns. */
     suspend fun claudeDirs(machineId: String): ClaudeDirsState = throw UnsupportedOperationException()
 
     /** `PUT /api/v1/machines/{id}/claude-dirs/blocked`: the whole list of patterns; the hub answers the new state. */
     suspend fun setBlockedClaudeDirs(machineId: String, blocked: List<String>): ClaudeDirsState = throw UnsupportedOperationException()
+
+    /**
+     * `GET /api/v1/machines/{id}/claude-live-replies`: whether the Claude Code sessions Persona starts on this
+     * computer send their replies while Claude writes them (#1309, #9178). Null when the hub has no such route
+     * (404, an older hub): the switch is hidden.
+     */
+    suspend fun claudeLiveReplies(machineId: String): Boolean? = null
+
+    /**
+     * `PUT /api/v1/machines/{id}/claude-live-replies {"on"}`: saved at once, and the hub tells the node; returns the
+     * setting in force.
+     */
+    suspend fun setClaudeLiveReplies(machineId: String, on: Boolean): Boolean =
+        throw UnsupportedOperationException("claude live replies")
 
     /** `GET /api/v1/machines/{id}/doctor`: what `personad node doctor` finds there (full devices only). */
     suspend fun doctor(machineId: String): DoctorReport = throw UnsupportedOperationException("doctor")
@@ -97,6 +134,9 @@ interface MachineManagement {
 
     /** `GET /api/v1/usage/windows` of the selected hub: the subscription accounts and their windows (#2432). */
     suspend fun usageWindows(): List<UsageAccount> = emptyList()
+
+    /** [usageWindows] of the hub [machineId] belongs to (ultracode's quota line in New Agent, #582); with one hub, the same. */
+    suspend fun usageWindows(machineId: String): List<UsageAccount> = usageWindows()
 
     /**
      * Move to…: `POST /api/v1/managers/{manager}/machines {"machine_id"}` gives the computer to another manager

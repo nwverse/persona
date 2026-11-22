@@ -2,11 +2,16 @@ package persona.core.hub
 
 
 import persona.core.contracts.JsonCodec
+import persona.core.contracts.api.SUBSCRIPTIONS_UI
+import persona.core.contracts.api.SubscriptionSummaryLine
 import persona.core.contracts.api.HubExtension
 import persona.core.contracts.api.ExtensionCatalog
 import persona.core.contracts.api.ExtensionConfigRejected
 import persona.core.contracts.api.ExtensionDependent
 import persona.core.contracts.api.ExtensionHasDependents
+import persona.core.contracts.api.ExtensionFailedMember
+import persona.core.contracts.api.ExtensionPartialUninstall
+import persona.core.contracts.api.ExtensionRemoval
 import persona.core.contracts.api.ExtensionDetail
 import persona.core.contracts.api.ExtensionListing
 import persona.core.contracts.api.ExtensionManagement
@@ -37,10 +42,12 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -55,19 +62,29 @@ import okhttp3.Response
  * (`plugins`, `plugin`, `plugin_name`): [legacy] is that hub (its hello has no `extensions` feature). The types read both.
  */
 class HttpExtensionManagement internal constructor(
-    private val request: suspend (String, String, RequestBody?) -> Response,
+    private val request: suspend (String, String, RequestBody?, Long?) -> Response,
     override val available: Flow<Boolean> = flowOf(true),
     /** The app's side of every view's context: time zone, language, platform, UI version (read on each call). */
     private val device: () -> ExtensionUiContext = { deviceContext() },
     /** The hub answers only under `/api/v1/plugins` (before #1844). */
     private val legacy: Boolean = false,
     private val streamConnection: OkHttpHubConnection? = null,
+    private val iconBase: () -> String? = { streamConnection?.route?.value?.endpoint?.url },
 ) : ExtensionManagement {
+    internal constructor(
+        request: suspend (String, String, RequestBody?) -> Response,
+        available: Flow<Boolean> = flowOf(true),
+        device: () -> ExtensionUiContext = { deviceContext() },
+        legacy: Boolean = false,
+        streamConnection: OkHttpHubConnection? = null,
+        iconBase: () -> String? = { streamConnection?.route?.value?.endpoint?.url },
+    ) : this({ path, method, body, _ -> request(path, method, body) }, available, device, legacy, streamConnection, iconBase)
+
     override val nativeStream = streamConnection?.let { connection ->
         extensionStreamBindings(connection) { "paired" to "primary" }
     } ?: flowOf(null)
-    constructor(connection: OkHttpHubConnection, available: Flow<Boolean>, legacy: Boolean = false) : this({ path, method, body ->
-        connection.request(path, method, body)
+    constructor(connection: OkHttpHubConnection, available: Flow<Boolean>, legacy: Boolean = false) : this({ path, method, body, timeout ->
+        connection.request(path, method, body, buffered = !persona.core.contracts.api.ExtensionIconPath.matches(path), readTimeoutSeconds = timeout)
     }, available, legacy = legacy, streamConnection = connection)
 
     private val base = if (legacy) "api/v1/plugins" else "api/v1/extensions"
@@ -83,6 +100,13 @@ class HttpExtensionManagement internal constructor(
     }
 
     override suspend fun extension(id: String) = detail(call(path(id, "-", ""), "GET"))
+
+    override fun adminNetworkUrl(id: String): String? = iconBase()?.toHttpUrlOrNull()?.newBuilder()
+        ?.addPathSegments("admin/extensions")
+        ?.query(null)
+        ?.addEncodedQueryParameter("extension", java.net.URLEncoder.encode(id, "UTF-8").replace("+", "%20"))
+        ?.fragment("network")
+        ?.build()?.toString()
 
     override suspend fun setEnabled(id: String, enabled: Boolean, cascade: Boolean) =
         detail(call(path(id, "-", "enabled"), "PUT", buildJsonObject { put("enabled", enabled); if (cascade) put("cascade", true) }))
@@ -109,8 +133,14 @@ class HttpExtensionManagement internal constructor(
     override suspend fun setSecret(id: String, name: String, value: String) =
         detail(call(path(id, "-", "secrets", secret(name)), "PUT", buildJsonObject { put("value", value) }))
 
+    override suspend fun setSecretReference(id: String, name: String, reference: String) =
+        detail(call(path(id, "-", "secrets", secret(name)), "PUT", buildJsonObject { put("reference", reference) }))
+
     override suspend fun clearSecret(id: String, name: String) =
         detail(call(path(id, "-", "secrets", secret(name)), "DELETE"))
+
+    override suspend fun removeHandoffRule(id: String, rule: String) =
+        detail(call(path(id, "-", "handoff-rules", this@HttpExtensionManagement.id(rule)), "DELETE"))
 
     // ---- declarative UI (docs/extensions/extensions.md "Declarative UI")
 
@@ -136,6 +166,41 @@ class HttpExtensionManagement internal constructor(
         extension: String, ui: String, action: String, context: ExtensionUiContext?, state: String?, values: Map<String, String>?,
     ): ExtensionUiResult = read(uiCall(extension, ui, uiBody(context, state, action, values)), ExtensionUiResult.serializer())
 
+    /** Resolve only an exact icon route on the current connection, retaining its raw path for validation. */
+    override fun iconPath(value: String): String? {
+        if (persona.core.contracts.api.ExtensionIconPath.matches(value)) return value
+        // URI keeps raw dot/percent segments intact. Do not authorize a URL after normalization.
+        return runCatching {
+            val target = java.net.URI(value)
+            val base = java.net.URI(iconBase() ?: return null)
+            fun port(uri: java.net.URI) = if (uri.port != -1) uri.port else if (uri.scheme == "https") 443 else 80
+            if (target.scheme !in setOf("https", "http") || target.scheme != base.scheme || target.host == null ||
+                !target.host.equals(base.host, ignoreCase = true) || port(target) != port(base) ||
+                target.rawUserInfo != null || target.rawFragment != null) return null
+            val prefix = base.rawPath.orEmpty().trimEnd('/')
+            val raw = target.rawPath.orEmpty() + (target.rawQuery?.let { "?$it" } ?: "")
+            if (!raw.startsWith("$prefix/api/v1/")) return null
+            raw.removePrefix(prefix).takeIf(persona.core.contracts.api.ExtensionIconPath::matches)
+        }.getOrNull()
+    }
+
+    /** Catalog icons have their own allowlist; the signed ui.image route stays unchanged. */
+    override suspend fun icon(path: String): ByteArray = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        require(persona.core.contracts.api.ExtensionIconPath.matches(path)) { "Invalid extension icon path" }
+        request(path, "GET", null, null).use { response ->
+            if (!response.isSuccessful) throw HubFailure.from(response)
+            val type = response.header("Content-Type").orEmpty().substringBefore(';').trim().lowercase()
+            if (type != "image/png") throw HubFailure(HubError.Protocol)
+            val body = response.body ?: throw HubFailure(HubError.Protocol)
+            if (body.contentLength() > MaxIconBytes) throw HubFailure(HubError.Protocol)
+            body.source().use { source ->
+                source.request(MaxIconBytes + 1L)
+                if (source.buffer.size > MaxIconBytes) throw HubFailure(HubError.Protocol)
+                source.buffer.readByteArray().takeIf { it.isNotEmpty() } ?: throw HubFailure(HubError.Protocol)
+            }
+        }
+    }
+
     /**
      * A picture the extension serves (UI version 6) at the path the hub signed for it. Only a path of the hub's own image
      * route is asked for (the device's credentials go to the hub and nowhere else); only a PNG, JPEG, WebP or GIF of at
@@ -144,7 +209,7 @@ class HttpExtensionManagement internal constructor(
     override suspend fun uiImage(path: String): ByteArray {
         require(isImagePath(path)) { "Invalid image path" }
         return try {
-            request(path, "GET", null).use { response ->
+            request(path, "GET", null, null).use { response ->
                 if (!response.isSuccessful) throw HubFailure.from(response)
                 val type = response.header("Content-Type").orEmpty().substringBefore(';').trim().lowercase()
                 if (type !in ImageTypes) throw HubFailure(HubError.Protocol)
@@ -180,6 +245,9 @@ class HttpExtensionManagement internal constructor(
             (context?.locale ?: app.locale)?.takeIf { it.isNotEmpty() }?.let { put("locale", it) }
             (context?.platform ?: app.platform)?.takeIf { it.isNotEmpty() }?.let { put("platform", it) }
             (context?.uiVersion ?: app.uiVersion)?.let { put("ui_version", it) }
+            // Inbox Sources (#5278, #5661): the key itself, even "", says this app opens Set Up with ….
+            // Only those pages set it. Empty is not dropped: without the key the pages leave the row out.
+            context?.assistant?.let { put("assistant", it) }
         }
         state?.takeIf { it.isNotEmpty() }?.let { put("state", it) }
         action?.let { put("action", it) }
@@ -192,7 +260,9 @@ class HttpExtensionManagement internal constructor(
      * and answer: [ExtensionUiForbidden].
      */
     private suspend fun uiCall(extension: String, ui: String, body: JsonObject): String = try {
-        call(path(extension, "-", "ui", id(ui)), "POST", body)
+        // the source subscription pages (#2041) are the manager's own, drawn and pressed as an extension's page
+        call(if (extension == SUBSCRIPTIONS_UI) "/api/v1/subscriptions/-/ui" else path(extension, "-", "ui", id(ui)), "POST", body,
+            readTimeoutSeconds = UI_READ_TIMEOUT_SECONDS)
     } catch (failure: HubFailure) {
         if (failure.status == 404 && failure.code == "unsupported") throw ExtensionUiUnsupported()
         if (failure.status == 404 && failure.code == "not_found") throw ExtensionUiNotFound(failure.message)
@@ -243,10 +313,14 @@ class HttpExtensionManagement internal constructor(
     override suspend fun upgrade(id: String, preview: ExtensionPreview): ExtensionDetail =
         detail(call(path(id, "-", "upgrade"), "POST", agreed(preview)))
 
-    override suspend fun uninstall(id: String, keepData: Boolean, cascade: Boolean) {
-        val query = listOfNotNull("keep_data=1".takeIf { keepData }, "cascade=1".takeIf { cascade }).joinToString("&")
-        call(path(id, "-", "") + if (query.isNotEmpty()) "?$query" else "", "DELETE")
+    override suspend fun uninstall(id: String, keepData: Boolean, cascade: Boolean, members: Boolean): ExtensionRemoval {
+        val query = uninstallQuery(keepData, cascade, members).joinToString("&")
+        val body = call(path(id, "-", "") + if (query.isNotEmpty()) "?$query" else "", "DELETE")
+        return runCatching { JsonCodec.decodeFromString<ExtensionRemoval>(body) }.getOrDefault(ExtensionRemoval())
     }
+
+    private fun uninstallQuery(keepData: Boolean, cascade: Boolean, members: Boolean) =
+        listOfNotNull("keep_data=1".takeIf { keepData }, "cascade=1".takeIf { cascade }, "members=1".takeIf { members })
 
     // ---- signing in (#4507): the extension's own sign-in, a step at a time; the values go to the extension only.
 
@@ -273,8 +347,8 @@ class HttpExtensionManagement internal constructor(
         return accepted(call(if (upgradeOf != null) path(upgradeOf, "-", "upgrade") else hubPath("install"), "POST", body))
     }
 
-    override suspend fun startUninstall(id: String, keepData: Boolean, cascade: Boolean): ExtensionOperation {
-        val query = listOfNotNull("async=1", "keep_data=1".takeIf { keepData }, "cascade=1".takeIf { cascade }).joinToString("&")
+    override suspend fun startUninstall(id: String, keepData: Boolean, cascade: Boolean, members: Boolean): ExtensionOperation {
+        val query = (listOf("async=1") + uninstallQuery(keepData, cascade, members)).joinToString("&")
         return accepted(call(path(id, "-", "") + "?$query", "DELETE"))
     }
 
@@ -335,8 +409,14 @@ class HttpExtensionManagement internal constructor(
     catch (error: IllegalArgumentException) { throw HubFailure(HubError.Protocol, cause = error) }
 
     // The pairing's connection throws a HubFailure for a status that is not 2xx; a bare request returns it.
-    private suspend fun call(path: String, method: String, body: JsonObject? = null): String = try {
-        request(path, method, body?.toString()?.toRequestBody(json)).use { response ->
+    override suspend fun subscriptionSummary(): List<SubscriptionSummaryLine> {
+        val body = JsonCodec.parseToJsonElement(call("/api/v1/subscriptions/summary", "GET")) as? JsonObject ?: return emptyList()
+        val lines = body["connectors"] as? JsonArray ?: return emptyList()
+        return lines.mapNotNull { runCatching { JsonCodec.decodeFromJsonElement(SubscriptionSummaryLine.serializer(), it) }.getOrNull() }
+    }
+
+    private suspend fun call(path: String, method: String, body: JsonObject? = null, readTimeoutSeconds: Long? = null): String = try {
+        request(path, method, body?.toString()?.toRequestBody(json), readTimeoutSeconds).use { response ->
             if (!response.isSuccessful) throw HubFailure.from(response)
             response.body?.string().orEmpty()
         }
@@ -355,6 +435,15 @@ class HttpExtensionManagement internal constructor(
             val list = runCatching { (JsonCodec.parseToJsonElement(failure.body.orEmpty()) as? JsonObject)?.get("dependents") as? JsonArray }.getOrNull()
             ExtensionHasDependents(list?.let { runCatching { JsonCodec.decodeFromJsonElement(ListSerializer(ExtensionDependent.serializer()), it) }.getOrNull() }.orEmpty(),
                 failure.message)
+        }
+        // A pack's members partly uninstalled (#1154): which went, which didn't and why, which weren't tried.
+        failure.status == 409 && failure.code == "partial_uninstall" -> {
+            val body = runCatching { JsonCodec.parseToJsonElement(failure.body.orEmpty()) as? JsonObject }.getOrNull()
+            fun ids(key: String) = (body?.get(key) as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+            val failed = (body?.get("failed_members") as? JsonArray)?.let {
+                runCatching { JsonCodec.decodeFromJsonElement(ListSerializer(ExtensionFailedMember.serializer()), it) }.getOrNull()
+            }.orEmpty()
+            ExtensionPartialUninstall(ids("removed_members"), failed, ids("remaining_members"), failure.message)
         }
         else -> null
     }
@@ -390,19 +479,25 @@ class HttpExtensionManagement internal constructor(
          * code hosting components (header, breadcrumb, file tree, code, diff, comments, composer), tabs, split views and
          * an action's values; 5 code review (a diff's hidden lines, viewed marks, drafts and the review's bar, #3136); 6
          * pictures, controls in rows, candlesticks / areas / donuts / pies and sparks, a row's actions, grids and carousels,
-         * date / time / multichoice / multiline fields, title styles, named colours and more icons (#5464).
+         * date / time / multichoice / multiline fields, title styles, named colours and more icons (#5464); 7 a section's
+         * key, which only the native stream reads; 8 the columns layout of a dashboard page and a section's span, icon,
+         * link and rows side by side (#9158); 9 gauge rings on grid and carousel tiles (#9337); 10 native graph canvases
+         * (#9727). The native stream sends the same version, but its components still exclude graphs and receive rows.
          */
-        const val UI_VERSION = 6
+        const val UI_VERSION = 10
+        /** Exceeds the hub's 20 s uiTimeout (server/internal/extmgr/extension_ui.go) and matches iOS APIClient / ExtensionUIStreamController (30 s). */
+        internal const val UI_READ_TIMEOUT_SECONDS = 30L
 
         /** The hub's own picture route (UI version 6), the one path a view's picture is fetched from with credentials. */
         private val ImagePath = Regex("/api/v1/extensions/[A-Za-z0-9_-]{1,64}/-/image/[A-Za-z0-9_.-]{1,1900}")
         fun isImagePath(path: String?): Boolean = path != null && ImagePath.matches(path)
         private val ImageTypes = setOf("image/png", "image/jpeg", "image/webp", "image/gif")
         /** The hub takes at most 4 MB from an extension; a little room over it. */
+        private const val MaxIconBytes = 2L * 1024 * 1024
         const val MaxImageBytes = 5L * 1024 * 1024
 
-        /** This phone's time zone (IANA) and language (a BCP 47 tag), the platform and the UI version it draws. */
-        fun deviceContext() = ExtensionUiContext(tz = java.util.TimeZone.getDefault().id, locale = java.util.Locale.getDefault().toLanguageTag(),
+        /** This phone's time zone (IANA) and the app's language with the phone's region (a BCP 47 tag), the platform and the UI version it draws. */
+        fun deviceContext() = ExtensionUiContext(tz = java.util.TimeZone.getDefault().id, locale = persona.core.contracts.ClientLanguage.localeTag(),
             platform = "android", uiVersion = UI_VERSION)
 
         private val json = "application/json; charset=utf-8".toMediaType()

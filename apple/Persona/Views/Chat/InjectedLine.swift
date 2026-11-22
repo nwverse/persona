@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// A message Persona typed in for the model (a task's notice, a scheduled run, a wake-up…; `Injected`,
-/// docs/protocol/protocol.md「Persona 注入的消息」): one centered line — an icon and `line` — where a user bubble would be,
+/// docs/protocol/protocol.md「Messages injected by Persona」): one centered line — an icon and `line` — where a user bubble would be,
 /// never its words. A task's notice opens the task (in an assistant conversation: the todo the hub named, else the
 /// newest one of that title the conversation opened); a scheduled run's line opens under it to what the task asks.
 /// The same look as web and Android (#2399).

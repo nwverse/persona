@@ -1,5 +1,5 @@
 # The methods of hub.Store. Kept by TestHubStoreStaysSmall (hub/architecture_guard_test.go): business tables are the
-# manager's, see docs/server/architecture.md「hub 只做沟通中心」. Edit by hand, one method a line.
+# manager's, see docs/server/architecture.md「The hub is only a communication center」. Edit by hand, one method a line.
 CreateLockTest
 LockTest
 DueLockTests
@@ -34,6 +34,7 @@ LiveActivities
 SaveLiveActivity
 # Atomic push delivery budget only; no manager business state or device registration fields.
 ClaimLiveActivityStart
+HoldLiveActivityStart
 Setting
 PutSetting
 TakeSetting
@@ -45,3 +46,16 @@ TouchDeviceToken
 CreatePairToken
 PairTokenByHash
 RedeemPairToken
+# Switching an ssh computer to Persona Link: its pairing code and credential only.
+MachineLinkInUse
+RevokeLinkPair
+
+# Durable delivery receipts for confirmed phone writes; phone data stays on the phone.
+EnqueuePhoneWrite
+PhoneWrites
+QueuedPhoneWrites
+ClaimPhoneWrite
+FinishPhoneWrite
+CancelPhoneWrite
+RecoverPhoneWrites
+FindQueuedPhoneWrite

@@ -1,4 +1,5 @@
 from contextlib import redirect_stderr
+import hashlib
 import importlib.util
 import io
 import json
@@ -22,6 +23,7 @@ PUBLIC_URL = "https://registry.npmjs.org/sample/-/sample-1.0.0.tgz"
 UNAPPROVED_URL = "https://registry.example.invalid/sample/-/sample-1.0.0.tgz"
 # Split so the repository scan of this file does not flag it.
 PRIVATE_IP = "10." + "20.30.40"
+PUBLIC_ATTRIBUTION_EMAIL = "author@" + "thirdparty.org"
 
 
 def lockfile(source=PUBLIC_URL, version=3, link=False):
@@ -201,6 +203,12 @@ class AddressHintTests(unittest.TestCase):
         for address in (email, "x9@" + "9-x.io", "a.%@" + "-x.io"):  # every class the hint takes on either side of @
             self.assertEqual(pc.problems("mail " + address + " now", []), [address])
         self.assertEqual(pc.problems("mail " + email + " now", [], emails=False), [])
+
+    def test_personal_company_and_attribution_emails_are_not_allowlisted(self):
+        # #5747: #5559 allow-listed whole domains, which would also let an employee's personal company address through.
+        for address in ("employee.name@" + "bytedance.com", "noreply@" + "moonshot.cn", "noreply@" + "moonshot.ai"):
+            with self.subTest(address=address):
+                self.assertEqual(pc.problems("Co-Authored-By: Someone <" + address + ">", []), [address])
 
     def test_lines_without_the_hint_have_no_addresses(self):
         for line in ["@Override", "a @ b.io", "v1.2", "1. 2. 3. 4", "x@ example", "end."]:
@@ -448,6 +456,8 @@ class OrdinaryWordTests(unittest.TestCase):
         labels = pc.profile_labels((root / "scripts/persona_config.py").read_text(), "provisioning_profiles")
         labels |= pc.profile_labels((root / "scripts/test/fixtures/deployment/persona_config.py.fixture").read_text(), "export_options")
         self.assertIn("Persona Share App Store", labels)
+        # The SiriKit extension's default, set only with app.siri_calls on (#9290): pinning it is as generic as the rest.
+        self.assertIn("Persona Call Intents App Store", labels)
         self.assertGreater(len(labels), 5)  # The public historical fixture contributes its literal labels too.
         with patch.object(pc, "public_profile_labels", return_value=frozenset(labels)):
             for label in labels:
@@ -543,6 +553,71 @@ class OrdinaryWordTests(unittest.TestCase):
         config["lan_host"] = "attic.lan"
         config["profile"] = "Zorb Share Prod"
         self.assertEqual(self.scan(config, "Cellar\n")[2], {self.WORD})
+
+
+class AppIdentifierTests(unittest.TestCase):
+    """An app identifier (a reverse-DNS value held only under a bundle_id, application_id or app_group key) matches as a
+    whole identifier: what the apps derive from it with dots still matches, a longer identifier that only starts the
+    same way (a public default committed on purpose) does not (#9461)."""
+
+    BUNDLE = "com.someone.app"  # a made-up bundle id
+    DERIVED = ["com.someone.app", "group.com.someone.app", "com.someone.app.watchkitapp.widgets",
+               "ABCDE12345.com.someone.app", "COM.SOMEONE.APP", '"com.someone.app"', "(com.someone.app)",
+               "apple/com.someone.app.plist", "com.someone.app/"]
+    LONGER = ["com.someone.appd", "com.someone.app-node", "com.someone.app_test", "com.someone.apps.x",
+              "net.com.someone.appx", "xcom.someone.app", "my-com.someone.app"]
+
+    def scan(self, config, words=""):
+        """pc.term_sources() with only this config and private-words.txt on the machine."""
+        with tempfile.TemporaryDirectory(prefix="privacy-check-test-") as temp:
+            home = Path(temp)
+            directory = home / ".config/persona"
+            directory.mkdir(parents=True)
+            (directory / "config.json").write_text(json.dumps(config))
+            (directory / "private-words.txt").write_text(words)
+            env = {k: v for k, v in os.environ.items() if k not in pc.CONFIG_ENV}
+            env["XDG_CONFIG_HOME"] = str(home / ".config")
+            with patch.object(pc, "HOME", str(home)), patch.object(pc, "ROOT", str(home)), \
+                    patch.dict(os.environ, env, clear=True):
+                return list(pc.term_sources()[0])
+
+    def hits(self, words, text):
+        return pc.problems("see " + text + " here", words)
+
+    def test_derived_identifiers_match_and_longer_ones_do_not(self):
+        words = self.scan({"app": {"bundle_id": self.BUNDLE}})
+        self.assertIn(self.BUNDLE, words)
+        for text in self.DERIVED:
+            with self.subTest(text=text):
+                self.assertEqual(self.hits(words, text), [self.BUNDLE])
+        for text in self.LONGER:
+            with self.subTest(text=text):
+                self.assertEqual(self.hits(words, text), [])
+        self.assertEqual(pc.problems("apple/" + self.BUNDLE + ".plist", words), [self.BUNDLE])
+
+    def test_every_app_identifier_key_counts(self):
+        for section, key, value in [("app", "watch_widget_bundle_id", "com.someone.widgetkit"),
+                                    ("app", "app_group", "group.com.someone.shared"),
+                                    ("app", "watch_app_group", "group.com.someone.watch"),
+                                    ("android", "application_id", "com.someone.droid")]:
+            with self.subTest(key=key):
+                words = self.scan({section: {key: value}})
+                self.assertIn(value, words)
+                self.assertEqual(self.hits(words, value + ".debug"), [value])
+                self.assertEqual(self.hits(words, value + "d"), [])
+
+    def test_the_same_value_elsewhere_keeps_the_substring_match(self):
+        for config, listed in [({"app": {"bundle_id": self.BUNDLE}, "hosts": [self.BUNDLE]}, ""),
+                               ({"app": {"bundle_id": self.BUNDLE}}, self.BUNDLE + "\n")]:
+            with self.subTest(config=config, listed=listed):
+                words = self.scan(config, listed)
+                self.assertEqual(self.hits(words, self.BUNDLE + "d"), [self.BUNDLE])
+
+    def test_other_values_keep_their_matching(self):
+        # a dotted host under another key, and an app-identifier key holding something that is no reverse-DNS id
+        words = self.scan({"lan_host": "build.someone.net", "app": {"bundle_id": "someoneapp"}})
+        self.assertEqual(self.hits(words, "xbuild.someone.network"), ["build.someone.net"])
+        self.assertEqual(self.hits(words, "someoneapps"), ["someoneapp"])
 
 
 class NpmLockTests(unittest.TestCase):
@@ -655,6 +730,77 @@ class PrivacyCheckIntegrationTests(unittest.TestCase):
     def write_lock(self, source=PUBLIC_URL):
         self.lock.write_text(json.dumps(lockfile(source), indent=2) + "\n")
 
+    def write_public_attribution_bundle(self, notice_text=None):
+        ssh = self.repo / "harmony/native/ssh"
+        notice = ssh / "licenses/sample-1.0.0/LICENSE-MIT"
+        sdk_notice = ssh / "licenses/sdk-runtime/component/license.txt"
+        html = self.repo / "harmony/entry/src/main/resources/rawfile/native-ssh-licenses.html"
+        manifest = ssh / "licenses/public-attribution.json"
+        notice.parent.mkdir(parents=True, exist_ok=True)
+        sdk_notice.parent.mkdir(parents=True, exist_ok=True)
+        html.parent.mkdir(parents=True, exist_ok=True)
+        notice_bytes = (notice_text if notice_text is not None else
+                        "Copyright sample authors.\nContact: " + PUBLIC_ATTRIBUTION_EMAIL + "\n").encode()
+        sdk_bytes = b"SDK runtime attribution.\n"
+        html_bytes = ("Offline contact: " + PUBLIC_ATTRIBUTION_EMAIL + "\n").encode()
+        notice.write_bytes(notice_bytes)
+        sdk_notice.write_bytes(sdk_bytes)
+        html.write_bytes(html_bytes)
+
+        cargo_inventory = [{
+            "name": "sample",
+            "version": "1.0.0",
+            "authors": [PUBLIC_ATTRIBUTION_EMAIL],
+            "notices": [{
+                "path": "licenses/sample-1.0.0/LICENSE-MIT",
+                "sha256": hashlib.sha256(notice_bytes).hexdigest(),
+            }],
+        }]
+        supplemental_inventory = {
+            "schema_version": 1,
+            "items": [{
+                "name": "SDK runtime",
+                "version": "1.0.0",
+                "authors": [PUBLIC_ATTRIBUTION_EMAIL],
+                "notices": [{
+                    "path": "licenses/sdk-runtime/component/license.txt",
+                    "sha256": hashlib.sha256(sdk_bytes).hexdigest(),
+                }],
+            }],
+        }
+        inventory_paths = [
+            "harmony/native/ssh/licenses/locked-inventory.json",
+            "harmony/native/ssh/licenses/sdk-runtime/supplemental-inventory.json",
+        ]
+        inventory_bytes = [
+            (json.dumps(cargo_inventory, sort_keys=True, indent=2) + "\n").encode(),
+            (json.dumps(supplemental_inventory, sort_keys=True, indent=2) + "\n").encode(),
+        ]
+        for path, data in zip(inventory_paths, inventory_bytes):
+            target = self.repo / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+
+        manifest_data = {
+            "schema_version": 1,
+            "inventories": [{
+                "path": path,
+                "sha256": hashlib.sha256(data).hexdigest(),
+            } for path, data in zip(inventory_paths, inventory_bytes)],
+            "notices": sorted([
+                {"path": "harmony/native/ssh/licenses/sample-1.0.0/LICENSE-MIT",
+                 "sha256": hashlib.sha256(notice_bytes).hexdigest()},
+                {"path": "harmony/native/ssh/licenses/sdk-runtime/component/license.txt",
+                 "sha256": hashlib.sha256(sdk_bytes).hexdigest()},
+            ], key=lambda item: item["path"]),
+            "generated_html": {
+                "path": "harmony/entry/src/main/resources/rawfile/native-ssh-licenses.html",
+                "sha256": hashlib.sha256(html_bytes).hexdigest(),
+            },
+        }
+        manifest.write_text(json.dumps(manifest_data, sort_keys=True, indent=2) + "\n")
+        return notice, manifest
+
     def scan(self, *args):
         return self.run_command(sys.executable, str(self.repo / "scripts/privacy_check.py"), *args)
 
@@ -687,6 +833,54 @@ class PrivacyCheckIntegrationTests(unittest.TestCase):
         self.git("add", "web/package-lock.json")
         result = self.scan()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_full_scan_matches_an_app_identifier_as_a_whole_identifier(self):
+        # #9461: a private bundle id no longer fails the whole-repo scan on a longer public identifier that starts the
+        # same way; what is derived from it with dots still does, and the report never carries the value.
+        config = self.home / ".config/persona/config.json"
+        config.parent.mkdir(parents=True)
+        config.write_text(json.dumps({"app": {"bundle_id": "com.someone.app"}}))
+        (self.repo / "signing.go").write_text('// defaults: com.someone.appd, com.someone.app-node\n')
+        self.git("add", "signing.go")
+        result = self.scan()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        (self.repo / "entitlements.txt").write_text("group.com.someone.app\n")
+        self.git("add", "entitlements.txt")
+        result = self.scan()
+        self.assertNotEqual(result.returncode, 0)
+        output = result.stdout + result.stderr
+        self.assertIn("entitlements.txt:1: private value (15 chars) from config app.bundle_id", output)
+        self.assertNotIn("signing.go", output)
+        self.assertNotIn("com.someone", output)
+
+    def test_public_site_address_is_allowed_only_in_public_entry_points(self):
+        config = self.home / ".config/persona/config.json"
+        config.parent.mkdir(parents=True)
+        config.write_text(json.dumps({"publish": {"site_url": "https://public-site.notexample.com",
+                                                    "privacy_url": "https://privacy.notexample.com"},
+                                      "lan_host": "hub.notexample.com"}))
+        for path in pc.PUBLIC_SITE_DOCS | {"site/public/index.html"}:
+            target = self.repo / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("Install from https://public-site.notexample.com.\n")
+        (self.repo / "notes.md").write_text(
+            "https://public-site.notexample.com https://privacy.notexample.com hub.notexample.com\n")
+        (self.repo / "README.md").write_text(
+            (self.repo / "README.md").read_text() +
+            "Private privacy host: https://privacy.notexample.com; private hub: hub.notexample.com.\n")
+        # A name that only starts with an allowed doc does not share its allowance (and carries no value itself, so
+        # the report can name it without disclosing anything).
+        (self.repo / "README.md.bak").write_text("Install from https://public-site.notexample.com.\n")
+        self.git("add", ".")
+        result = self.scan()
+        self.assertNotEqual(result.returncode, 0)
+        output = result.stdout + result.stderr
+        self.assertIn("notes.md:1: private value", output)
+        self.assertIn("README.md:2: private value", output)
+        self.assertIn("README.md.bak:1: private value", output)
+        for path in pc.PUBLIC_SITE_DOCS | {"site/public/index.html"}:
+            self.assertNotIn(path + ":1:", output)
+        self.assertNotIn("notexample", output)
 
     def test_config_loopback_is_not_flagged_but_private_ip_is(self):
         config = self.home / ".config/persona/config.json"
@@ -847,6 +1041,87 @@ class PrivacyCheckIntegrationTests(unittest.TestCase):
         self.assertIn("commit message:1: private value", output)
         self.assertNotIn(marker, output)
 
+    def test_pinned_public_attribution_suppresses_only_email_pattern(self):
+        words = self.home / ".config/persona/private-words.txt"
+        words.parent.mkdir(parents=True)
+        words.write_text("secretbox\n")
+        notice, _ = self.write_public_attribution_bundle(
+            "Copyright sample authors.\nContact: " + PUBLIC_ATTRIBUTION_EMAIL + "\nsecretbox at " + PRIVATE_IP + "\n")
+        self.git("add", "harmony")
+
+        result = self.scan()
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("LICENSE-MIT:3: private value", output)
+        self.assertIn("LICENSE-MIT:3: private IP", output)
+        self.assertNotIn("LICENSE-MIT:2: email", output)
+        self.assertNotIn(PUBLIC_ATTRIBUTION_EMAIL, output)
+
+    def test_changed_notice_bytes_do_not_receive_email_exemption(self):
+        notice, _ = self.write_public_attribution_bundle()
+        self.git("add", "harmony")
+        with notice.open("a") as source:
+            source.write("Contact: " + PUBLIC_ATTRIBUTION_EMAIL + "\n")
+        self.git("add", str(notice.relative_to(self.repo)))
+
+        result = self.scan()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("LICENSE-MIT:3: email", result.stdout)
+        self.assertNotIn(PUBLIC_ATTRIBUTION_EMAIL, result.stdout + result.stderr)
+
+    def test_outside_path_and_invalid_manifest_do_not_receive_exemption(self):
+        _, manifest = self.write_public_attribution_bundle()
+        outside = self.repo / "harmony/entry/src/main/ets/components/OutsideAttribution.ets"
+        outside.parent.mkdir(parents=True, exist_ok=True)
+        outside.write_text("Contact: " + PUBLIC_ATTRIBUTION_EMAIL + "\n")
+        data = json.loads(manifest.read_text())
+        data["notices"].append({
+            "path": "harmony/entry/src/main/ets/components/OutsideAttribution.ets",
+            "sha256": hashlib.sha256(outside.read_bytes()).hexdigest(),
+        })
+        data["notices"].sort(key=lambda item: item["path"])
+        manifest.write_text(json.dumps(data, sort_keys=True, indent=2) + "\n")
+        self.git("add", "harmony")
+
+        result = self.scan()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("OutsideAttribution.ets:1: email", result.stdout)
+
+        manifest.write_text("{ invalid json\n")
+        result = self.scan()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("LICENSE-MIT:2: email", result.stdout)
+
+    def test_symlinked_notice_does_not_receive_email_exemption(self):
+        notice, _ = self.write_public_attribution_bundle()
+        external = self.root / PUBLIC_ATTRIBUTION_EMAIL
+        external.write_text("not a repository file\n")
+        notice.unlink()
+        notice.symlink_to(os.path.relpath(external, notice.parent))
+        self.git("add", "-A")
+
+        result = self.scan()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("LICENSE-MIT:1: email", result.stdout)
+        self.assertNotIn(PUBLIC_ATTRIBUTION_EMAIL, result.stdout + result.stderr)
+
+    def test_staged_and_range_scans_use_their_git_snapshot_manifest(self):
+        notice, manifest = self.write_public_attribution_bundle()
+        self.git("add", "harmony")
+        self.git("commit", "-q", "--no-verify", "-m", "base attribution bundle")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+
+        self.write_public_attribution_bundle(
+            "Copyright sample authors.\nContact: " + PUBLIC_ATTRIBUTION_EMAIL + "\nUpdated attribution.\n")
+        self.git("add", "harmony")
+        manifest.write_text("{ invalid worktree version\n")
+
+        staged = self.scan("--staged")
+        self.assertEqual(staged.returncode, 0, staged.stdout + staged.stderr)
+        self.git("commit", "-q", "--no-verify", "-m", "update attribution bundle")
+        ranged = self.scan("--range", "origin/main..HEAD")
+        self.assertEqual(ranged.returncode, 0, ranged.stdout + ranged.stderr)
+
     @unittest.skipUnless(shutil.which("npm"), "npm unavailable")
     def test_web_prebuild_blocks_unapproved_lockfile(self):
         shutil.copy2(SCRIPTS.parent / "web/package.json", self.repo / "web/package.json")
@@ -854,6 +1129,192 @@ class PrivacyCheckIntegrationTests(unittest.TestCase):
         self.git("add", "web")
         result = self.run_command("npm", "--prefix", "web", "run", "prebuild")
         self.assert_blocked(result)
+
+
+class PublicAdministratorTests(unittest.TestCase):
+    # Synthetic public login; no private configuration values belong in fixtures.
+    LOGIN = "public-admin"
+    REFERENCES = {
+        ".github/CODEOWNERS": "/docs/SUPER_RULES.md @public-admin\n",
+        "CLAUDE.md": "GitHub issue and explicit approval from administrator `public-admin` in that issue before editing or opening a PR.\n",
+        "docs/README.md": "file require explicit approval from administrator `public-admin` in a GitHub issue before editing or opening a linked PR.\n",
+        "docs/SUPER_RULES.md": (
+            "   Wait for administrator `public-admin` to explicitly approve the proposed change in that issue. Only after that approval\n"
+            "   open the issue and wait for `public-admin`'s explicit approval before proceeding.\n"
+        ),
+    }
+
+    def setUp(self):
+        PrivacyCheckIntegrationTests.setUp(self)
+        for path, text in self.REFERENCES.items():
+            target = self.repo / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text)
+        self.git("add", *self.REFERENCES)
+        self.git("commit", "-qm", "Publish governance references")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.config = self.home / ".config/persona/config.json"
+        self.config.parent.mkdir(parents=True)
+        self.write_config()
+
+    def write_config(self, first_name=LOGIN, extra=None):
+        config = {"app_store": {"external": {"review": {"first_name": first_name}},
+                                "testers": [{"first_name": first_name}]}}
+        if extra:
+            config.update(extra)
+        self.config.write_text(json.dumps(config))
+
+    run_command = PrivacyCheckIntegrationTests.run_command
+    git = PrivacyCheckIntegrationTests.git
+    scan = PrivacyCheckIntegrationTests.scan
+
+    def assert_private(self, result, path=None):
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("private value", result.stdout)
+        if path:
+            self.assertIn(path + ":", result.stdout)
+        self.assertNotIn(self.LOGIN, result.stdout + result.stderr)
+
+    def test_exact_published_references_allow_full_staged_range_and_commit(self):
+        result = self.scan()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for path, text in self.REFERENCES.items():
+            # Line numbers are not authority; exact governance text and path are.
+            (self.repo / path).write_text("\n" + text)
+        self.git("add", *self.REFERENCES)
+        result = self.scan("--staged")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.git("commit", "-qm", "Add governance spacing")  # Real pre-commit and commit-msg hooks.
+        result = self.scan("--range", "origin/main..HEAD")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_missing_published_evidence_reproduces_all_five_hits(self):
+        self.git("update-ref", "-d", "refs/remotes/origin/main")
+        result = self.scan()
+        self.assert_private(result)
+        self.assertIn("5 hit(s)", result.stderr)
+        for path in self.REFERENCES:
+            self.assertIn(path + ":", result.stdout)
+
+    def test_worktree_and_index_cannot_publish_their_own_new_login(self):
+        new_login = "new-admin"
+        self.write_config(new_login)
+        for path, text in self.REFERENCES.items():
+            (self.repo / path).write_text(text.replace(self.LOGIN, new_login))
+        self.git("add", *self.REFERENCES)
+        for args in ((), ("--staged",)):
+            with self.subTest(args=args):
+                result = self.scan(*args)
+                self.assert_private(result)
+                self.assertIn("5 hit(s)", result.stderr)
+                self.assertNotIn(new_login, result.stdout + result.stderr)
+
+    def test_true_private_first_name_remains_blocked_in_every_governance_path(self):
+        private_name = "PrivatePerson"
+        self.write_config(private_name)
+        for path, text in self.REFERENCES.items():
+            (self.repo / path).write_text(text.replace(self.LOGIN, private_name))
+        result = self.scan()
+        self.assert_private(result)
+        self.assertIn("5 hit(s)", result.stderr)
+        self.assertNotIn(private_name, result.stdout + result.stderr)
+
+    def test_same_login_leaks_outside_exact_published_lines_are_blocked(self):
+        for path, text in self.REFERENCES.items():
+            with self.subTest(path=path):
+                target = self.repo / path
+                for changed in (text + "Private contact: " + self.LOGIN + "\n",
+                                text.splitlines()[0] + " " + self.LOGIN + "\n",
+                                text.upper()):
+                    target.write_text(changed)
+                    self.assert_private(self.scan(), path)
+                target.write_text(text)
+        # Even an exact approved line does not gain authority in an unrelated file.
+        (self.repo / "notes.txt").write_text(self.REFERENCES["CLAUDE.md"])
+        self.git("add", "notes.txt")
+        self.assert_private(self.scan(), "notes.txt")
+
+    def test_other_config_and_explicit_word_sources_override_public_first_name(self):
+        for extra in ({"machines": [{"id": self.LOGIN}]}, {"last_name": self.LOGIN}):
+            with self.subTest(extra=extra):
+                self.write_config(extra=extra)
+                self.assert_private(self.scan())
+        self.write_config()
+        listed = self.home / ".config/persona/private-words.txt"
+        for value in (self.LOGIN, self.LOGIN.upper()):
+            with self.subTest(value=value):
+                listed.write_text(value + "\n")
+                self.assert_private(self.scan())
+
+    def test_other_private_words_on_an_authorized_line_are_not_hidden(self):
+        self.write_config(extra={"last_name": "administrator"})
+        result = self.scan()
+        self.assert_private(result, "CLAUDE.md")
+        self.assertIn("config last_name", result.stdout)
+        self.assertNotIn("first_name", result.stdout)
+
+    def test_only_published_template_lines_are_authorized(self):
+        (self.repo / "CLAUDE.md").write_text("Unrelated published text.\n")
+        self.git("-c", "core.hooksPath=", "commit", "-qam", "Remove one reference")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        (self.repo / "CLAUDE.md").write_text(self.REFERENCES["CLAUDE.md"])
+        self.assert_private(self.scan(), "CLAUDE.md")
+
+    def test_messages_paths_and_range_snapshots_remain_private(self):
+        message = self.repo / ".git/test-message"
+        message.write_text(self.REFERENCES["CLAUDE.md"])
+        self.assert_private(self.scan("--message", str(message)), "commit message")
+        target = self.repo / (self.LOGIN + ".txt")
+        target.write_text("No personal content.\n")
+        self.git("add", target.name)
+        result = self.scan("--staged")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(":path: private value", result.stdout)
+        self.git("-c", "core.hooksPath=", "commit", "-qm", "Test " + self.LOGIN)
+        target.unlink()  # Range mode must read the committed path, not this safe worktree.
+        result = self.scan("--range", "origin/main..HEAD")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(":path: private value", result.stdout)
+        self.assertIn(" message:", result.stdout)
+
+    def test_staged_and_range_content_cannot_use_safe_worktree_as_authority(self):
+        target = self.repo / "CLAUDE.md"
+        target.write_text(self.REFERENCES["CLAUDE.md"] + "Private contact: " + self.LOGIN + "\n")
+        self.git("add", "CLAUDE.md")
+        target.write_text(self.REFERENCES["CLAUDE.md"])
+        self.assert_private(self.scan("--staged"), "CLAUDE.md")
+        self.git("-c", "core.hooksPath=", "commit", "-qm", "Test private reference")
+        self.assert_private(self.scan("--range", "origin/main..HEAD"), "CLAUDE.md")
+        self.assertEqual(self.scan().returncode, 0)
+
+    def test_symlink_text_cannot_become_an_authorized_governance_reference(self):
+        target = self.repo / "CLAUDE.md"
+        target.unlink()
+        target.symlink_to(self.REFERENCES["CLAUDE.md"].rstrip("\n"))
+        self.assert_private(self.scan(), "CLAUDE.md")
+        self.git("add", "CLAUDE.md")
+        self.assert_private(self.scan("--staged"), "CLAUDE.md")
+        self.git("-c", "core.hooksPath=", "commit", "-qm", "Test reference symlink")
+        target.unlink()
+        target.write_text(self.REFERENCES["CLAUDE.md"])
+        self.assert_private(self.scan("--range", "origin/main..HEAD"), "CLAUDE.md")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        # Even a published symlink is not prose authority for the regular worktree file.
+        self.assert_private(self.scan(), "CLAUDE.md")
+
+    def test_ambiguous_published_owner_does_not_authorize_any_reference(self):
+        target = self.repo / ".github/CODEOWNERS"
+        target.write_text(self.REFERENCES[".github/CODEOWNERS"].rstrip("\n") + " @another-admin\n")
+        self.git("-c", "core.hooksPath=", "commit", "-qam", "Test multiple owners")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.assert_private(self.scan())
+
+    def test_unreadable_published_evidence_fails_closed(self):
+        errors = (OSError("unavailable"), subprocess.CalledProcessError(1, "git"),
+                  subprocess.TimeoutExpired("git", 10))
+        for error in errors:
+            with self.subTest(error=type(error).__name__), patch.object(pc.subprocess, "run", side_effect=error):
+                self.assertEqual(pc.public_admin_lines(), {})
 
 
 class WhatGitRecordsTests(unittest.TestCase):
@@ -1131,6 +1592,46 @@ class RangeAndPushTests(unittest.TestCase):
                 self.assert_refused_cleanly(result, "refs/heads/" + branch)
                 self.assertIn(hit + ": private value", result.stderr)
 
+    SHOTS_HINT = ('pre-push: refused %s: screenshots never get a branch of their own; show them in the PR '
+                  '(docs/operations/collaboration.md, "Screenshots in PRs")')
+
+    def remote_has(self, remote, ref):
+        return self.run_command("git", "--git-dir", str(remote), "rev-parse", "--verify", "-q", ref).returncode == 0
+
+    def test_pre_push_refuses_screenshot_branches_with_one_line(self):
+        remote = self.root / "remote.git"
+        self.run_command("git", "init", "-q", "--bare", str(remote))
+        self.commit("clean.md", "nothing private here\n")
+        self.orphan("shots", "a clean picture\n")
+        for source, ref in (("shots", "refs/heads/artifacts/12-screenshots"), ("shots", "refs/heads/pr-assets/12"),
+                            ("topic", "refs/heads/pr-assets/12/dark"), ("topic", "refs/heads/artifacts/x")):
+            with self.subTest(ref=ref):
+                result = self.run_command("git", "push", "-q", str(remote), "%s:%s" % (source, ref))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual([l for l in result.stderr.splitlines() if l.startswith("pre-push:")],
+                                 [self.SHOTS_HINT % ref])
+                self.assertFalse(self.remote_has(remote, ref))
+        # One screenshot branch fails the whole push, without the privacy line for the clean branch beside it.
+        result = self.run_command("git", "push", "-q", str(remote), "topic", "shots:refs/heads/pr-assets/13")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual([l for l in result.stderr.splitlines() if l.startswith("pre-push:")],
+                         [self.SHOTS_HINT % "refs/heads/pr-assets/13"])
+        self.assertFalse(self.remote_has(remote, "refs/heads/topic"))
+
+    def test_pre_push_lets_other_branches_and_screenshot_branch_deletions_through(self):
+        remote = self.root / "remote.git"
+        self.run_command("git", "init", "-q", "--bare", str(remote))
+        self.commit("clean.md", "nothing private here\n")
+        for ref in ("refs/heads/fix/12-pr-assets", "refs/heads/docs/artifacts/12", "refs/heads/artifacts"):
+            with self.subTest(ref=ref):
+                result = self.run_command("git", "push", "-q", str(remote), "topic:" + ref)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue(self.remote_has(remote, ref))
+        self.git("push", "--no-verify", "-q", str(remote), "topic:refs/heads/pr-assets/12")  # one made before the rule
+        result = self.run_command("git", "push", "-q", str(remote), ":refs/heads/pr-assets/12")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.remote_has(remote, "refs/heads/pr-assets/12"))
+
     def test_range_with_unrelated_ends_scans_the_whole_head(self):
         self.orphan("shots", "a clean picture\n", message="clean")
         self.assertEqual(self.scan("--range", "HEAD..shots").returncode, 0)
@@ -1263,9 +1764,56 @@ class GitBatchTests(unittest.TestCase):
         names = [name for name in self.payloads if "\n" not in name]
         with patch.object(pc, "ROOT", str(self.repo)), patch.object(pc.subprocess, "run", wraps=subprocess.run) as run:
             self.assertEqual(pc.git_file_data(names, "HEAD:"), {name: self.payloads[name] for name in names})
-        self.assertEqual(run.call_count, 1)
+        # Git before 2.36 refuses -z first and is asked again one per line (#3224): still not one process per file
+        takes_z = subprocess.run(["git", "cat-file", "--batch", "-z"], cwd=self.repo, input=b"", capture_output=True).returncode != 129
+        self.assertEqual(run.call_count, 1 if takes_z else 2)
         self.assertIn("--batch", run.call_args.args[0])
         self.assertEqual(run.call_args.kwargs["timeout"], 120)
+
+    def old_git_path(self):
+        """A PATH whose git refuses `cat-file -z` as Git before 2.36 does (exit 129) and is the real Git otherwise."""
+        real = shutil.which("git")
+        stand_in = self.root / "old-git"
+        stand_in.mkdir()
+        script = stand_in / "git"
+        script.write_text("#!/bin/sh\ncat=\nfor a in \"$@\"; do\n  [ \"$a\" = cat-file ] && cat=1\n"
+                          "  if [ -n \"$cat\" ] && [ \"$a\" = -z ]; then echo \"error: unknown switch \\`z'\" >&2; exit 129; fi\n"
+                          f"done\nexec '{real}' \"$@\"\n")
+        script.chmod(0o755)
+        return str(stand_in) + os.pathsep + os.environ.get("PATH", "")
+
+    def test_git_without_cat_file_z_reads_the_same_objects(self):
+        # #3224: Git 2.30 (Debian 11) has no -z for cat-file; the requests go one per line instead
+        names = [name for name in self.payloads if "\n" not in name]
+        with patch.dict(os.environ, {"PATH": self.old_git_path()}), patch.object(pc, "ROOT", str(self.repo)), \
+                patch.object(pc.subprocess, "run", wraps=subprocess.run) as run:
+            for prefix in (":", "HEAD:"):
+                with self.subTest(prefix=prefix):
+                    self.assertEqual(pc.git_file_data(list(self.payloads) + ["missing.txt"], prefix), self.payloads)
+        batches = [c.args[0] for c in run.call_args_list if "cat-file" in c.args[0]]
+        self.assertEqual(batches, [["git", "-C", str(self.repo), "cat-file", "--batch", "-z"],
+                                   ["git", "-C", str(self.repo), "cat-file", "--batch"]] * 2)
+        self.assertEqual(run.call_args_list[1].kwargs["input"], b"".join(b":" + n.encode() + b"\n" for n in names + ["missing.txt"]))
+
+    def test_commit_and_merge_scans_complete_with_git_without_cat_file_z(self):
+        # the pre-commit hook's --staged scan and merge-pr.sh's --range scan both read the objects in one batch
+        env = dict(self.env, PATH=self.old_git_path())
+        (self.repo / "next.md").write_text("next\n")
+        self.git("add", "next.md")
+        for args in (("--staged",), ("--range", "HEAD~1..HEAD")):
+            if args[0] == "--range":
+                self.git("commit", "-q", "--no-verify", "-m", "next")
+            with self.subTest(args=args):
+                result = self.run_command(sys.executable, str(self.repo / "scripts/privacy_check.py"), *args, env=env)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("privacy_check: clean", result.stdout + result.stderr)
+
+    def test_other_batch_failures_are_not_retried(self):
+        failed = subprocess.CalledProcessError(128, ["git"], stderr=b"fatal: not a git repository")
+        with patch.object(pc.subprocess, "run", side_effect=failed) as run:
+            with self.assertRaises(subprocess.CalledProcessError):
+                pc.git_file_data(["one.txt"], "HEAD:")
+        self.assertEqual(run.call_count, 1)
 
     def test_truncated_or_invalid_batch_output_is_rejected(self):
         for output in (b"", b"invalid\n", b"oid blob 5\nabc\n", b"oid blob 0\nx", b"oid blob 0\n\nextra"):

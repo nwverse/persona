@@ -96,7 +96,7 @@ func testManager(t *testing.T) (*Manager, []byte, *atomic.Int32) {
 		t.Fatal(err)
 	}
 	count := new(atomic.Int32)
-	m := &Manager{exe: exe, version: "old", timeout: time.Hour, restart: func() { count.Add(1) }, startWatch: func(string, string, string) error { return nil }}
+	m := &Manager{exe: exe, version: "old", timeout: time.Hour, restart: func(string) { count.Add(1) }, startWatch: func(string, string, string) error { return nil }}
 	t.Cleanup(m.Close)
 	return m, data, count
 }
@@ -175,6 +175,35 @@ func TestVerifiedCommitResponseAndExactConfirmation(t *testing.T) {
 	}
 	if _, err := os.Stat(p.Backup); !os.IsNotExist(err) {
 		t.Fatal("confirmed backup remains")
+	}
+}
+
+func TestRepeatedCommitReturnsPreflightFailureWithoutCancelingRollback(t *testing.T) {
+	m, data, restarts := testManager(t)
+	oldHash := hash(t, m.exe)
+	target := spec(data, "next")
+	id := receive(t, m, data, target)
+	if _, err := m.Commit(t.Context(), id, nil); err != nil {
+		t.Fatal(err)
+	}
+	m.ResponseWritten(id)
+	reason := errors.New("exit status 23")
+	m.PreflightFailed(id, reason)
+	if again := receive(t, m, data, target); again != id {
+		t.Fatalf("upload ID = %q, want %q", again, id)
+	}
+	if _, err := m.Commit(t.Context(), id, nil); err != reason {
+		t.Fatalf("commit error = %v, want %v", err, reason)
+	}
+	if err := m.Abort(id); err == nil {
+		t.Fatal("abort accepted after the candidate was installed")
+	}
+	p, err := loadPending(markerPath(m.exe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restarts.Load() != 1 || hash(t, p.Backup) != oldHash || hash(t, m.exe) != target.SHA256 {
+		t.Fatal("failed preflight disturbed the rollback transaction")
 	}
 }
 
@@ -782,6 +811,22 @@ func call(t *testing.T, p *rpc.Peer, method string, params, result any) {
 		t.Fatalf("%s: %v", method, err)
 	}
 }
+
+// procState is pid's state and start time (fields 3 and 22 of /proc/<pid>/stat), both "" when it is gone or there is
+// no /proc.
+func procState(pid int) (state, start string) {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return "", ""
+	}
+	s := string(b)
+	f := strings.Fields(s[strings.LastIndexByte(s, ')')+1:])
+	if len(f) < 20 {
+		return "", ""
+	}
+	return f[0], f[19]
+}
+
 func waitFor(t *testing.T, timeout time.Duration, predicate func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -798,7 +843,7 @@ func TestCapabilityRequiresResidentSupervisor(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XPC_SERVICE_NAME", "")
 	t.Setenv("INVOCATION_ID", "")
-	if ok, reason := New("old", func() {}, Options{}).Capability(); ok || reason == "" {
+	if ok, reason := New("old", func(string) {}, Options{}).Capability(); ok || reason == "" {
 		t.Fatal("unsupervised node advertised safe update")
 	}
 	var m *Manager
@@ -924,7 +969,7 @@ func TestDeclaredSupervisorEnablesUpdatesWithoutServiceManager(t *testing.T) {
 	t.Setenv("XPC_SERVICE_NAME", "")
 	t.Setenv("INVOCATION_ID", "")
 	onlyPS(t, "")
-	declared := New("old", func() {}, Options{Supervised: true})
+	declared := New("old", func(string) {}, Options{Supervised: true})
 	t.Cleanup(declared.Close)
 	if ok, reason := declared.Capability(); !ok {
 		t.Fatalf("a node whose supervisor said so cannot take updates: %s", reason)
@@ -932,7 +977,7 @@ func TestDeclaredSupervisorEnablesUpdatesWithoutServiceManager(t *testing.T) {
 	if declared.Executable() == "" {
 		t.Fatal("no executable resolved")
 	}
-	undeclared := New("old", func() {}, Options{})
+	undeclared := New("old", func(string) {}, Options{})
 	t.Cleanup(undeclared.Close)
 	if ok, _ := undeclared.Capability(); ok {
 		t.Fatal("a node nobody restarts advertised safe update")
@@ -952,7 +997,7 @@ func TestDeclaredSupervisorNeedsPsThatReportsStartTimes(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			onlyPS(t, script)
-			m := New("old", func() {}, Options{Supervised: true})
+			m := New("old", func(string) {}, Options{Supervised: true})
 			t.Cleanup(m.Close)
 			if ok, reason := m.Capability(); ok || reason != psNoStart {
 				t.Fatalf("got %v %q, want the ps reason", ok, reason)
@@ -1090,6 +1135,7 @@ func TestDeclaredSupervisorUpdateConfirmsOrRollsBack(t *testing.T) {
 			if p.WatchPID < 2 || p.WatchStart == "" {
 				t.Fatal("the detached watchdog did not record itself")
 			}
+			_, watchBirth := procState(p.WatchPID) // while it runs: the pid names it as long as this start does
 			if outcome != "confirmed" {
 				if err := locked(exe, func() error {
 					p, err := loadPending(markerPath(exe))
@@ -1124,6 +1170,22 @@ func TestDeclaredSupervisorUpdateConfirmsOrRollsBack(t *testing.T) {
 				}
 				if pid, starts := s.current(); pid != firstPID || starts != 1 {
 					t.Fatalf("the supervisor restarted the node (%d starts)", starts)
+				}
+				// The watchdog the old image started is the new image's child, and exits now that the update is confirmed.
+				// Only the new image can reap it (osproc.ReapInherited); unreaped, it stays a zombie as long as the node runs.
+				if runtime.GOOS == "linux" {
+					if watchBirth == "" {
+						t.Fatalf("the watchdog %d did not run", p.WatchPID)
+					}
+					deadline := time.Now().Add(10 * time.Second)
+					tick := time.NewTicker(20 * time.Millisecond)
+					defer tick.Stop()
+					for state, start := procState(p.WatchPID); start == watchBirth; state, start = procState(p.WatchPID) {
+						if time.Now().After(deadline) {
+							t.Fatalf("the watchdog %d was not reaped 10s after the exec: state %s", p.WatchPID, state)
+						}
+						<-tick.C
+					}
 				}
 				data, err := os.ReadFile(next)
 				if err != nil {

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -47,16 +49,37 @@ const (
 	RolledMetricStep = 60
 )
 
+const insertMetricSQL = `INSERT INTO machine_metrics (machine_id, ts, step, cpu, load, mem_used, mem_total,
+		swap_used, swap_total, net_rx, net_tx, disk_used, disk_total, battery_percent, temp_c)
+	VALUES ($1, to_timestamp($2), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+	ON CONFLICT (machine_id, ts, step) DO UPDATE SET cpu = $4, load = $5, mem_used = $6, mem_total = $7,
+		swap_used = $8, swap_total = $9, net_rx = $10, net_tx = $11, disk_used = $12, disk_total = $13,
+		battery_percent = $14, temp_c = $15`
+
+func insertMetricArgs(machine string, s proto.MetricSample) []any {
+	return []any{machine, s.T, RawMetricStep, s.CPU, s.Load, s.MemUsed, s.MemTotal, s.SwapUsed, s.SwapTotal, s.NetRx, s.NetTx,
+		s.DiskUsed, s.DiskTotal, s.BatteryPercent, s.TempC}
+}
+
 // InsertMetric stores a node's sample as a raw row (a repeat of the same second replaces it).
 func (d *DB) InsertMetric(ctx context.Context, machine string, s proto.MetricSample) error {
-	_, err := d.pool.Exec(ctx, `INSERT INTO machine_metrics (machine_id, ts, step, cpu, load, mem_used, mem_total,
-			swap_used, swap_total, net_rx, net_tx, disk_used, disk_total)
-		VALUES ($1, to_timestamp($2), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		ON CONFLICT (machine_id, ts, step) DO UPDATE SET cpu = $4, load = $5, mem_used = $6, mem_total = $7,
-			swap_used = $8, swap_total = $9, net_rx = $10, net_tx = $11, disk_used = $12, disk_total = $13`,
-		machine, s.T, RawMetricStep, s.CPU, s.Load, s.MemUsed, s.MemTotal, s.SwapUsed, s.SwapTotal, s.NetRx, s.NetTx,
-		s.DiskUsed, s.DiskTotal)
+	_, err := d.pool.Exec(ctx, insertMetricSQL, insertMetricArgs(machine, s)...)
 	return err
+}
+
+// MachineSample is one machine's sample, for InsertMetrics.
+type MachineSample struct {
+	Machine string
+	Sample  proto.MetricSample
+}
+
+// InsertMetrics stores samples of several machines (the nodes sample on the same tick) as InsertMetric does, in one
+// transaction: one commit, so one WAL flush, instead of one a machine. One machine's bad sample does not cost the
+// others theirs: rejected[i] is the error samples[i] got (writeAll).
+func (d *DB) InsertMetrics(ctx context.Context, samples []MachineSample) (rejected []error, err error) {
+	return d.writeAll(ctx, len(samples), func(b *pgx.Batch, i int) {
+		b.Queue(insertMetricSQL, insertMetricArgs(samples[i].Machine, samples[i].Sample)...)
+	})
 }
 
 // rollupMetricsSQL moves the raw rows before $1 (Unix seconds) into one row a machine and minute of step $2. The raw
@@ -67,10 +90,10 @@ const rollupMetricsSQL = `WITH moved AS (
 		DELETE FROM machine_metrics WHERE step = 10 AND ts < to_timestamp($1) RETURNING *
 	)
 	INSERT INTO machine_metrics (machine_id, ts, step, cpu, load, mem_used, mem_total, swap_used, swap_total,
-		net_rx, net_tx, disk_used, disk_total)
+		net_rx, net_tx, disk_used, disk_total, battery_percent, temp_c)
 	SELECT machine_id, date_bin('1 minute', ts, timestamptz 'epoch'), $2, avg(cpu), avg(load), avg(mem_used)::bigint,
 		max(mem_total), avg(swap_used)::bigint, max(swap_total), avg(net_rx), avg(net_tx), avg(disk_used)::bigint,
-		max(disk_total)
+		max(disk_total), avg(battery_percent), avg(temp_c)
 	FROM moved GROUP BY 1, 2
 	ON CONFLICT (machine_id, ts, step) DO NOTHING`
 
@@ -106,7 +129,9 @@ const (
 			sum(swap_used::float8 * step) / sum(step),
 			sum(net_rx::float8 * step) / nullif(sum(step) FILTER (WHERE net_rx IS NOT NULL), 0),
 			sum(net_tx::float8 * step) / nullif(sum(step) FILTER (WHERE net_tx IS NOT NULL), 0),
-			sum(disk_used::float8 * step) / sum(step)
+			sum(disk_used::float8 * step) / sum(step),
+			sum(battery_percent::float8 * step) / nullif(sum(step) FILTER (WHERE battery_percent IS NOT NULL), 0),
+			sum(temp_c::float8 * step) / nullif(sum(step) FILTER (WHERE temp_c IS NOT NULL), 0)
 		FROM machine_metrics
 		WHERE ts >= to_timestamp($1) AND ts < to_timestamp($2)`
 	metricSeriesSQL = metricSeriesSelect + `
@@ -133,7 +158,7 @@ func (d *DB) MetricSeries(ctx context.Context, machines []string, from, to time.
 	for rows.Next() {
 		var id string
 		var p proto.MetricPoint
-		if err := rows.Scan(&id, &p.T, &p.CPU, &p.Load, &p.Mem, &p.Swap, &p.Rx, &p.Tx, &p.Disk); err != nil {
+		if err := rows.Scan(&id, &p.T, &p.CPU, &p.Load, &p.Mem, &p.Swap, &p.Rx, &p.Tx, &p.Disk, &p.BatteryPercent, &p.TempC); err != nil {
 			return nil, err
 		}
 		out[id] = append(out[id], p)

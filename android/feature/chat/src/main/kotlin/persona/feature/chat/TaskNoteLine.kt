@@ -20,6 +20,8 @@ import androidx.compose.ui.res.stringResource
 import persona.core.designsystem.JTextButton
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Tokens
+import persona.core.designsystem.rememberOpenEdge
+import persona.core.designsystem.unfolding
 import persona.core.designsystem.WorkState
 import persona.core.designsystem.text
 import persona.core.designsystem.WorkStep as TimelineStep
@@ -43,28 +45,36 @@ internal val LocalChatJumpToCall = staticCompositionLocalOf<((toolUseId: String,
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun TaskNoteLine(item: LineItem, last: Boolean = false) {
+internal fun TaskNoteLine(item: LineItem, last: Boolean = false, onFullText: ((persona.core.contracts.Item) -> Unit)? = null) {
     val note = item.task ?: return
     val index = LocalChatTaskIndex.current
     val text = remember(item, index) { index.note(item) }
     val jump = LocalChatJumpToCall.current
     val openPath = LocalChatRowActions.current?.openPath
+    val body = if (item.kind == "tool_result") item.text?.takeIf(String::isNotBlank) ?: note.detail else note.detail
     var open by rememberSaveable(item.id) { mutableStateOf(false) }
+    // The note's detail fades in place (TaskNoteRow.swift:182, ChatPin.swift:707-726).
+    val edge = rememberOpenEdge(item.id)
+    val revealing = edge.revealing(open)
     Column(Modifier.fillMaxWidth()) {
         TimelineStep(taskNoteIcon(note), text.subject,
             detail = listOfNotNull(text.label.text(), text.outcome?.text()).joinToString(" · "),
             state = when {
                 note.failed -> WorkState.Failed
                 note.status == "waiting" -> WorkState.Waiting
+                note.kind == "agent" && !note.terminal -> WorkState.Running
                 else -> WorkState.Done
             },
             last = last, onClick = { open = !open })
-        if (open) Column(Modifier.fillMaxWidth().padding(start = Tokens.Space.m),
+        if (open) Column(Modifier.unfolding(revealing).fillMaxWidth().padding(start = Tokens.Space.m),
             verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
             when (note.kind) {
                 "shell" -> CodeText("$ " + (note.detail ?: note.title))
-                "agent" -> note.detail?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2) }
+                "agent" -> body?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2) }
                 else -> note.detail?.let { CodeText(it) }
+            }
+            if (note.kind == "agent" && body != null) {
+                ToolReaderActions(null, body, onFullText?.takeIf { item.item.fullSize != null }?.let { read -> { read(item.item) } })
             }
             if (note.kind == "monitor" && (note.status == "event" || note.detail == null) && note.title != text.subject) {
                 Text(note.title, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 2)

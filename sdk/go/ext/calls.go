@@ -61,6 +61,11 @@ type Empty = wire.Empty
 // connector.<method>, with the connector's id as the contribution.
 const ConnectorNamespace = "connector"
 
+// RepositoryNamespace is the repository_providers extension point's: the manager asks repo.parse, repo.check, repo.link
+// and the optional repo.describe and repo.pr_status (schema/extension/repository.schema.json), with the repository_providers item's id as the
+// contribution. A provider answers them with ext.Methods under this namespace.
+const RepositoryNamespace = "repo"
+
 // SentNamespace is the hub's own namespace for the sent-as-user ledger: RecordSent is sent.record.
 const SentNamespace = "sent"
 
@@ -205,6 +210,30 @@ func (h *Hub) AssistantConversations(ctx context.Context, p wire.AssistantConver
 // AssistantMessages is one conversation's messages after a seq, in time order; continue with NextSeq while set.
 func (h *Hub) AssistantMessages(ctx context.Context, p wire.AssistantMessagesParams) (wire.AssistantMessagesResult, error) {
 	return callHub[wire.AssistantMessagesResult](ctx, h, "assistant.messages", p)
+}
+
+// AssistantMemory lists the assistant's memory entries (docs/extensions/extensions.md "Assistant memory"): the
+// permission assistant.memory.read, read-only, only the assistant's own space; IncludeContent adds their text.
+func (h *Hub) AssistantMemory(ctx context.Context, p wire.AssistantMemoryParams) (wire.AssistantMemoryResult, error) {
+	return callHub[wire.AssistantMemoryResult](ctx, h, "assistant.memory", p)
+}
+
+// AssistantDataStatus is what the assistant reads now of this extension's data contributions, what waits to be adopted
+// and why a file is not used (docs/extensions/extensions.md "Assistant content from the data directory"). No
+// permission: only the extension's own.
+func (h *Hub) AssistantDataStatus(ctx context.Context) (wire.AssistantDataStatusResult, error) {
+	return callHub[wire.AssistantDataStatusResult](ctx, h, "assistant.data_status", wire.AssistantDataStatusParams{})
+}
+
+// BrowserMachines lists computers that have a browser backend enabled (permission browser.run; #12866).
+func (h *Hub) BrowserMachines(ctx context.Context, p wire.BrowserMachinesParams) (wire.BrowserMachinesResult, error) {
+	return callHub[wire.BrowserMachinesResult](ctx, h, "browser.machines", p)
+}
+
+// BrowserRun runs a script inside an extension-isolated browser task space on a paired computer (permission
+// browser.run; #12866).
+func (h *Hub) BrowserRun(ctx context.Context, p wire.BrowserRunParams) (wire.BrowserRunResult, error) {
+	return callHub[wire.BrowserRunResult](ctx, h, "browser.run", p)
 }
 
 func callHub[R any](ctx context.Context, h *Hub, method string, params any) (R, error) {

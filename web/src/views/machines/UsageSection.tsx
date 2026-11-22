@@ -1,10 +1,11 @@
 // A machine's token usage on its page (docs/server/machines.md "Token usage charts", #4973), as in the apps: the range, model
 // and launcher filters, the range's sums, throughput per minute (every token, or the four kinds stacked; a legend entry
 // hides its kind: cache reads are often nine tenths of it), the cache hit rate, and each model's and launcher's share.
-// Hovering either chart (or ← → on it) shows that moment in both; the legend then says that moment's values.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+// Hovering either chart (or ← → on it) shows that moment in both; the legend then says that moment's values. The areas
+// and lines are memoized layers, so a move redraws the crosshair and the read-outs only.
+import { memo, useEffect, useMemo, useState } from "react";
 import { api, ApiError, enc, errorText, isAbort } from "../../lib/api";
-import { hm, scale, timeAt, yAxis } from "../../lib/machine-detail";
+import { clockTicks, hm, scale, timeAt, yAxis } from "../../lib/machine-detail";
 import {
   formatTokens,
   hitRate,
@@ -12,8 +13,6 @@ import {
   nearestStep,
   offlineRuns,
   percentText,
-  perMinute,
-  stackLayers,
   totalTokens,
   UNKNOWN_LAUNCHER,
   USAGE_COLOR,
@@ -24,8 +23,11 @@ import {
   type UsagePoint,
   type UsageRange,
 } from "../../lib/tokens";
+import { perMinute, stackLayers } from "../../lib/usage-rate";
 import { Button, cx, Loading } from "../../ui/atoms";
 import { t } from "../../i18n";
+import { useWidth } from "../../lib/use-width";
+import { namedLauncher, providerIdNote, providerLabel, providerTitle, useProviderNames } from "../../lib/provider-names";
 
 const H = 150;
 const HIT_H = 84;
@@ -36,33 +38,17 @@ const TOP = 6;
 const kindName = (k: UsageKind) => t(`machines-usage.kind_${k}`);
 const launcherName = (name: string) => (name === "" ? t("machines-usage.other_launcher") : name);
 
-function useWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] {
-  const ref = useRef<T>(null);
-  const [w, setW] = useState(0);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    setW(el.clientWidth);
-    const ro = new ResizeObserver(([e]) => setW(Math.round(e.contentRect.width)));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  return [ref, w];
-}
-
-/** Round times for the x axis: hours, or days for the week. */
-function ticksFor(t0: number, t1: number, range: UsageRange, tz: number, count: number): number[] {
+/** Round times for the x axis on the local clock: hours, or midnights for the week (each day on its own clock: a week
+ * can cross a daylight-saving change). */
+function ticksFor(t0: number, t1: number, range: UsageRange, count: number): number[] {
   const span = t1 - t0;
   const unit = range === "7d" ? 86400 : [3600, 2 * 3600, 3 * 3600, 6 * 3600, 900, 1800].find((u) => span / u <= count) ?? 6 * 3600;
   const step = range === "1h" ? [600, 900, 1200, 1800].find((u) => span / u <= count) ?? 1800 : unit;
-  const first = Math.ceil((t0 + tz) / step) * step - tz;
-  const out: number[] = [];
-  for (let x = first; x <= t1; x += step) out.push(x);
-  return out;
+  return clockTicks(t0, t1, step);
 }
 
-function dayLabel(tSec: number, tz: number): string {
-  return new Date((tSec + tz) * 1000).toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" });
+function dayLabel(tSec: number): string {
+  return new Date(tSec * 1000).toLocaleDateString(undefined, { weekday: "short" });
 }
 
 export function UsageSection({ mid, heading }: { mid: string; heading: (right: React.ReactNode) => React.ReactNode }) {
@@ -85,7 +71,10 @@ function UsageReport({ mid, heading }: { mid: string; heading: (right: React.Rea
   const current = status.scope === scope ? status : { pending: true, failure: "", unsupported: false };
   const data = accepted?.scope === scope && !current.unsupported ? accepted.data : null;
   const [hover, setHover] = useState<number | null>(null);
-  const tz = -new Date().getTimezoneOffset() * 60;
+  // a launcher by the provider's display name, its startup ID as secondary text (#5029); "" is the report's Other
+  const names = useProviderNames();
+  const launcherOf = (name: string) => (name === "" ? { name: launcherName(name) } : namedLauncher(name, names));
+  const launcherLabel = (name: string) => providerLabel(launcherOf(name));
 
   useEffect(() => {
     let dead = false;
@@ -103,7 +92,7 @@ function UsageReport({ mid, heading }: { mid: string; heading: (right: React.Rea
       try {
         const r = await api<{ usage: MachineUsage }>(`/machines/${enc(mid)}/usage?${q}`, { signal: request.signal });
         if (!active()) return;
-        const report = { ...r.usage, points: r.usage.points ?? [], models: r.usage.models ?? [], launchers: r.usage.launchers ?? [] };
+        const report = { ...r.usage, points: r.usage.points ?? [], models: r.usage.models ?? [], launchers: r.usage.launchers ?? [], at: Date.now() / 1000 };
         setAccepted({ scope, data: report });
         setCatalog(report);
         setStatus({ scope, pending: false, failure: "", unsupported: false });
@@ -127,7 +116,7 @@ function UsageReport({ mid, heading }: { mid: string; heading: (right: React.Rea
     };
   }, [mid, range, model, launcher, scope, retry]);
 
-  const kinds = stacked ? USAGE_KINDS.filter((k) => !hidden.has(k)) : [];
+  const kinds = useMemo(() => (stacked ? USAGE_KINDS.filter((k) => !hidden.has(k)) : []), [stacked, hidden]);
   const picked = data && hover !== null ? nearestStep(data, hover) : undefined;
   const toggle = (k: UsageKind) =>
     setHidden((h) => {
@@ -174,7 +163,8 @@ function UsageReport({ mid, heading }: { mid: string; heading: (right: React.Rea
               label={t("machines-usage.launcher")}
               all={t("machines-usage.all_launchers")}
               value={launcher}
-              options={(catalog?.launchers ?? []).map((l) => ({ value: l.name, label: launcherName(l.name) }))}
+              options={(catalog?.launchers ?? []).map((l) => ({ value: l.name, label: launcherLabel(l.name) }))}
+              labelOf={launcherLabel}
               onChange={setLauncher}
               disabled={catalog?.launchers_known === false}
             />
@@ -211,12 +201,12 @@ function UsageReport({ mid, heading }: { mid: string; heading: (right: React.Rea
               <div className="mt-3 flex items-baseline gap-2">
                 <h3 className="text-[12.5px] font-medium text-ink-2">{t("machines-usage.throughput")}</h3>
                 <span className="flex-1" />
-                <span className="font-mono text-[11px] text-ink-3 tabular-nums">{picked ? stamp(picked.t, data.range, tz) : t("machines-usage.per_minute")}</span>
+                <span className="font-mono text-[11px] text-ink-3 tabular-nums">{picked ? stamp(picked.t, data.range) : t("machines-usage.per_minute")}</span>
                 <span className="text-[14px] font-medium text-ink tabular-nums">
                   {t("machines-usage.per_minute_value", { n: formatTokens(shownNow(data, picked, stacked ? kinds : USAGE_KINDS)) })}
                 </span>
               </div>
-              <Throughput data={data} kinds={kinds} hover={hover} onHover={setHover} tz={tz} model={model} launcher={launcher} onClear={() => (setModel(null), setLauncher(null))} />
+              <Throughput data={data} kinds={kinds} hover={hover} onHover={setHover} model={model} launcher={launcher} onClear={() => (setModel(null), setLauncher(null))} />
               {stacked && <Legend data={data} picked={picked} hidden={hidden} onToggle={toggle} />}
               {data.points.some((p) => p.gap) && <p className="mt-1.5 text-[11.5px] text-ink-3">{t("machines-usage.offline_note")}</p>}
               <div className="mt-3 flex items-baseline gap-2">
@@ -224,7 +214,7 @@ function UsageReport({ mid, heading }: { mid: string; heading: (right: React.Rea
                 <span className="flex-1" />
                 <span className="text-[14px] font-medium text-ink tabular-nums">{percentText(picked ? hitRate(picked) : hitRate(data.total))}</span>
               </div>
-              <HitRate data={data} hover={hover} onHover={setHover} tz={tz} />
+              <HitRate data={data} hover={hover} onHover={setHover} />
               <p className="mt-1 text-[11.5px] text-ink-3">{t("machines-usage.hit_rate_note")}</p>
             </>
           )}
@@ -232,7 +222,7 @@ function UsageReport({ mid, heading }: { mid: string; heading: (right: React.Rea
         {data && <div className="flex flex-col gap-3">
           <Shares title={t("machines-usage.by_model")} shares={data.models.map((m) => ({ key: m.name, label: m.name, tokens: m }))} selected={model} onPick={(k) => setModel(model === k ? null : k)} />
           {data.launchers_known && (
-            <Shares title={t("machines-usage.by_launcher")} shares={data.launchers.map((l) => ({ key: l.name, label: launcherName(l.name), tokens: l }))} selected={launcher} onPick={(k) => setLauncher(launcher === k ? null : k)} />
+            <Shares title={t("machines-usage.by_launcher")} shares={data.launchers.map((l) => ({ key: l.name, label: providerTitle(launcherOf(l.name)), note: providerIdNote(launcherOf(l.name)), tokens: l }))} selected={launcher} onPick={(k) => setLauncher(launcher === k ? null : k)} />
           )}
         </div>}
       </div>
@@ -240,14 +230,14 @@ function UsageReport({ mid, heading }: { mid: string; heading: (right: React.Rea
   );
 }
 
-function stamp(tSec: number, range: UsageRange, tz: number): string {
-  return range === "7d" ? `${dayLabel(tSec, tz)} ${hm(tSec, tz)}` : hm(tSec, tz);
+function stamp(tSec: number, range: UsageRange): string {
+  return range === "7d" ? `${dayLabel(tSec)} ${hm(tSec)}` : hm(tSec);
 }
 
 /** The per-minute number by the throughput title: the held moment's, or the latest step's, of the kinds shown. */
 function shownNow(data: MachineUsage, picked: UsagePoint | undefined, kinds: UsageKind[]): number {
   const at = picked ?? [...data.points].reverse().find((p) => !p.gap);
-  return perMinute(kinds.reduce((s, k) => s + (at?.[k] ?? 0), 0), data.step);
+  return at ? perMinute(kinds.reduce((s, k) => s + (at[k] ?? 0), 0), data, at.t) : 0;
 }
 
 function Totals({ data }: { data: MachineUsage }) {
@@ -269,11 +259,13 @@ function Totals({ data }: { data: MachineUsage }) {
   );
 }
 
-function Filter({ label, all, value, options, onChange, disabled }: {
+function Filter({ label, all, value, options, labelOf = launcherName, onChange, disabled }: {
   label: string;
   all: string;
   value: string | null;
   options: { value: string; label: string }[];
+  /** What a picked value no longer in `options` is called. */
+  labelOf?: (value: string) => string;
   onChange: (v: string | null) => void;
   disabled?: boolean;
 }) {
@@ -287,7 +279,7 @@ function Filter({ label, all, value, options, onChange, disabled }: {
         onChange={(e) => onChange(e.target.value === "\u0000all" ? null : e.target.value)}
       >
         <option value={"\u0000all"}>{all}</option>
-        {value !== null && !options.some((o) => o.value === value) && <option value={value}>{value === "" ? launcherName(value) : value}</option>}
+        {value !== null && !options.some((o) => o.value === value) && <option value={value}>{labelOf(value)}</option>}
         {options.map((o) => (
           <option key={o.value} value={o.value}>
             {o.label}
@@ -304,7 +296,7 @@ function Legend({ data, picked, hidden, onToggle }: { data: MachineUsage; picked
     <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1">
       {USAGE_KINDS.map((k) => {
         const off = hidden.has(k);
-        const v = picked ? formatTokens(perMinute(picked[k] ?? 0, data.step)) : formatTokens(data.total[k] ?? 0);
+        const v = picked ? formatTokens(perMinute(picked[k] ?? 0, data, picked.t)) : formatTokens(data.total[k] ?? 0);
         return (
           <button
             key={k}
@@ -325,12 +317,11 @@ function Legend({ data, picked, hidden, onToggle }: { data: MachineUsage; picked
 }
 
 /** Tokens per minute: the kinds stacked from the bottom, or every token as one line when kinds is empty. */
-function Throughput({ data, kinds, hover, onHover, tz, model, launcher, onClear }: {
+function Throughput({ data, kinds, hover, onHover, model, launcher, onClear }: {
   data: MachineUsage;
   kinds: UsageKind[];
   hover: number | null;
   onHover: (t: number | null) => void;
-  tz: number;
   model: string | null;
   launcher: string | null;
   onClear: () => void;
@@ -340,18 +331,15 @@ function Throughput({ data, kinds, hover, onHover, tz, model, launcher, onClear 
   const t0 = data.points[0]?.t ?? 0;
   const t1 = (data.points[data.points.length - 1]?.t ?? t0) + data.step;
   const layers = useMemo(() => stackLayers(data, kinds.length ? kinds : USAGE_KINDS), [data, kinds]);
-  const tops = layers.length ? layers[layers.length - 1].points.map((p) => p.y1) : [];
-  const axis = yAxis(Math.max(1, ...tops));
+  const tops = useMemo(() => (layers.length ? layers[layers.length - 1].points.map((p) => p.y1) : []), [layers]);
+  const axis = useMemo(() => yAxis(Math.max(1, ...tops)), [tops]);
   const x = scale(t0, t1, 0, W);
   const y = scale(0, axis.top, H, TOP);
   const picked = hover !== null ? nearestStep(data, hover) : undefined;
-  const ticks = ticksFor(t0, t1, data.range, tz, W < 360 ? 3 : 5);
+  const ticks = useMemo(() => ticksFor(t0, t1, data.range, W < 360 ? 3 : 5), [t0, t1, data.range, W]);
   const empty = totalTokens(data.total) === 0;
   // Each step's point at its middle, so a bar of time reads as the step it sums.
   const mid = (tt: number) => x(tt + data.step / 2);
-  const area = (pts: { t: number; y0: number; y1: number }[]) =>
-    pts.map((p) => `${mid(p.t).toFixed(1)},${y(p.y1).toFixed(1)}`).join(" ") + " " +
-    [...pts].reverse().map((p) => `${mid(p.t).toFixed(1)},${y(p.y0).toFixed(1)}`).join(" ");
   const summary = t("machines-usage.chart_summary", { total: formatTokens(totalTokens(data.total)), peak: formatTokens(Math.max(0, ...tops)) });
 
   return (
@@ -359,19 +347,9 @@ function Throughput({ data, kinds, hover, onHover, tz, model, launcher, onClear 
       {width > 0 && (
         <svg width={width} height={H + AXIS_H} role="img" aria-label={summary} tabIndex={0} onKeyDown={(e) => keyHover(e, data, picked, onHover)} onBlur={() => onHover(null)} className="block rounded-[4px] outline-none focus-visible:shadow-[0_0_0_2px_var(--accent)]">
           <Grid axis={axis} y={y} W={W} format={formatTokens} />
-          <XTicks ticks={ticks} x={x} W={W} range={data.range} tz={tz} hoverX={picked ? mid(picked.t) : null} />
-          {offlineRuns(data).map(([a, b]) => (
-            <rect key={a} x={x(a)} y={TOP} width={Math.max(1, x(b) - x(a))} height={H - TOP} fill="var(--ink)" fillOpacity={0.05} />
-          ))}
-          {kinds.length
-            ? layers.map((l) => <polygon key={l.kind} points={area(l.points)} fill={USAGE_COLOR[l.kind]} fillOpacity={0.88} stroke="var(--surface)" strokeWidth={1} strokeLinejoin="round" />)
-            : (
-              <g>
-                <polygon points={area(layers[layers.length - 1].points.map((p) => ({ ...p, y0: 0 })))} fill={USAGE_COLOR.in} fillOpacity={0.12} />
-                <polyline points={tops.map((v, i) => `${mid(data.points[i].t).toFixed(1)},${y(v).toFixed(1)}`).join(" ")} fill="none" stroke={USAGE_COLOR.in} strokeWidth={2} strokeLinejoin="round" />
-              </g>
-            )}
-          <Crosshair at={picked ? mid(picked.t) : null} H={H} label={picked ? stamp(picked.t, data.range, tz) : ""} W={W} />
+          <XTicks ticks={ticks} x={x} W={W} range={data.range} hoverX={picked ? mid(picked.t) : null} />
+          <ThroughputLayers data={data} layers={layers} tops={tops} stacked={kinds.length > 0} t0={t0} t1={t1} W={W} top={axis.top} />
+          <Crosshair at={picked ? mid(picked.t) : null} H={H} label={picked ? stamp(picked.t, data.range) : ""} W={W} />
           <rect x={0} y={0} width={W} height={H + AXIS_H} fill="transparent" onPointerMove={(e) => pointer(e, t0, t1, data, onHover)} onPointerDown={(e) => pointer(e, t0, t1, data, onHover)} onPointerLeave={() => onHover(null)} style={{ touchAction: "pan-y" }} />
         </svg>
       )}
@@ -392,18 +370,19 @@ function Throughput({ data, kinds, hover, onHover, tz, model, launcher, onClear 
   );
 }
 
-function HitRate({ data, hover, onHover, tz }: { data: MachineUsage; hover: number | null; onHover: (t: number | null) => void; tz: number }) {
+function HitRate({ data, hover, onHover }: { data: MachineUsage; hover: number | null; onHover: (t: number | null) => void }) {
   const [box, width] = useWidth<HTMLDivElement>();
   const W = Math.max(0, width - AXIS_W);
   const t0 = data.points[0]?.t ?? 0;
   const t1 = (data.points[data.points.length - 1]?.t ?? t0) + data.step;
-  const runs = hitRuns(data);
-  const low = Math.min(0.5, Math.floor(Math.min(1, ...runs.flat().map((p) => p.v)) * 10) / 10);
+  const runs = useMemo(() => hitRuns(data), [data]);
+  const low = useMemo(() => Math.min(0.5, Math.floor(Math.min(1, ...runs.flat().map((p) => p.v)) * 10) / 10), [runs]);
   const x = scale(t0, t1, 0, W);
   const y = scale(low, 1, HIT_H, TOP);
   const mid = (tt: number) => x(tt + data.step / 2);
   const picked = hover !== null ? nearestStep(data, hover) : undefined;
   const ticks = [low, (low + 1) / 2, 1];
+  const times = useMemo(() => ticksFor(t0, t1, data.range, W < 360 ? 3 : 5), [t0, t1, data.range, W]);
   return (
     <div ref={box} className="relative mt-1">
       {width > 0 && (
@@ -414,14 +393,8 @@ function HitRate({ data, hover, onHover, tz }: { data: MachineUsage; hover: numb
               <text x={W + 6} y={y(v)} dy="0.35em" fontSize={10.5} fill="var(--ink-3)" className="tabular-nums">{percentText(v)}</text>
             </g>
           ))}
-          <XTicks ticks={ticksFor(t0, t1, data.range, tz, W < 360 ? 3 : 5)} x={x} W={W} range={data.range} tz={tz} H={HIT_H} />
-          {runs.map((r, i) =>
-            r.length === 1 ? (
-              <circle key={i} cx={mid(r[0].t)} cy={y(r[0].v)} r={1.5} fill={USAGE_COLOR.cache_read} />
-            ) : (
-              <polyline key={i} points={r.map((p) => `${mid(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ")} fill="none" stroke={USAGE_COLOR.cache_read} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-            ),
-          )}
+          <XTicks ticks={times} x={x} W={W} range={data.range} H={HIT_H} />
+          <HitRateLine runs={runs} step={data.step} t0={t0} t1={t1} W={W} low={low} />
           {picked && hitRate(picked) !== undefined && (picked.req ?? 0) >= 3 && (
             <g pointerEvents="none">
               <line x1={mid(picked.t)} x2={mid(picked.t)} y1={TOP} y2={HIT_H} stroke="var(--ink-3)" strokeWidth={1} shapeRendering="crispEdges" />
@@ -435,6 +408,59 @@ function HitRate({ data, hover, onHover, tz }: { data: MachineUsage; hover: numb
     </div>
   );
 }
+
+/** The offline steps' shade and the kinds stacked (or every token as one line): two toFixed a point and side, so they are
+ * memoized and a hover does not build them again. */
+const ThroughputLayers = memo(function ThroughputLayers({ data, layers, tops, stacked, t0, t1, W, top }: {
+  data: MachineUsage;
+  layers: ReturnType<typeof stackLayers>;
+  tops: number[];
+  stacked: boolean;
+  t0: number;
+  t1: number;
+  W: number;
+  top: number;
+}) {
+  const x = scale(t0, t1, 0, W);
+  const y = scale(0, top, H, TOP);
+  const mid = (tt: number) => x(tt + data.step / 2);
+  const area = (pts: { t: number; y0: number; y1: number }[]) =>
+    pts.map((p) => `${mid(p.t).toFixed(1)},${y(p.y1).toFixed(1)}`).join(" ") + " " +
+    [...pts].reverse().map((p) => `${mid(p.t).toFixed(1)},${y(p.y0).toFixed(1)}`).join(" ");
+  return (
+    <>
+      {offlineRuns(data).map(([a, b]) => (
+        <rect key={a} x={x(a)} y={TOP} width={Math.max(1, x(b) - x(a))} height={H - TOP} fill="var(--ink)" fillOpacity={0.05} />
+      ))}
+      {stacked
+        ? layers.map((l) => <polygon key={l.kind} points={area(l.points)} fill={USAGE_COLOR[l.kind]} fillOpacity={0.88} stroke="var(--surface)" strokeWidth={1} strokeLinejoin="round" />)
+        : (
+          <g>
+            <polygon points={area(layers[layers.length - 1].points.map((p) => ({ ...p, y0: 0 })))} fill={USAGE_COLOR.in} fillOpacity={0.12} />
+            <polyline points={tops.map((v, i) => `${mid(data.points[i].t).toFixed(1)},${y(v).toFixed(1)}`).join(" ")} fill="none" stroke={USAGE_COLOR.in} strokeWidth={2} strokeLinejoin="round" />
+          </g>
+        )}
+    </>
+  );
+});
+
+/** The hit rate's runs, memoized like the throughput's layers. */
+const HitRateLine = memo(function HitRateLine({ runs, step, t0, t1, W, low }: { runs: { t: number; v: number }[][]; step: number; t0: number; t1: number; W: number; low: number }) {
+  const x = scale(t0, t1, 0, W);
+  const y = scale(low, 1, HIT_H, TOP);
+  const mid = (tt: number) => x(tt + step / 2);
+  return (
+    <>
+      {runs.map((r, i) =>
+        r.length === 1 ? (
+          <circle key={i} cx={mid(r[0].t)} cy={y(r[0].v)} r={1.5} fill={USAGE_COLOR.cache_read} />
+        ) : (
+          <polyline key={i} points={r.map((p) => `${mid(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ")} fill="none" stroke={USAGE_COLOR.cache_read} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+        ),
+      )}
+    </>
+  );
+});
 
 function pointer(e: React.PointerEvent<SVGRectElement>, t0: number, t1: number, data: MachineUsage, onHover: (t: number | null) => void) {
   const r = e.currentTarget.getBoundingClientRect();
@@ -464,7 +490,7 @@ function Grid({ axis, y, W, format }: { axis: { top: number; ticks: number[] }; 
   );
 }
 
-function XTicks({ ticks, x, W, range, tz, H: h = H, hoverX = null }: { ticks: number[]; x: (v: number) => number; W: number; range: UsageRange; tz: number; H?: number; hoverX?: number | null }) {
+function XTicks({ ticks, x, W, range, H: h = H, hoverX = null }: { ticks: number[]; x: (v: number) => number; W: number; range: UsageRange; H?: number; hoverX?: number | null }) {
   return (
     <>
       {ticks.map((tt) => {
@@ -476,7 +502,7 @@ function XTicks({ ticks, x, W, range, tz, H: h = H, hoverX = null }: { ticks: nu
           <g key={tt}>
             <line x1={tx} x2={tx} y1={TOP} y2={h} stroke="var(--line)" strokeWidth={1} shapeRendering="crispEdges" />
             <text visibility={covered ? "hidden" : undefined} x={anchor === "start" ? 0 : anchor === "end" ? W : tx} y={h + 14} textAnchor={anchor} fontSize={10.5} fill="var(--ink-3)" className="tabular-nums">
-              {range === "7d" ? dayLabel(tt, tz) : hm(tt, tz)}
+              {range === "7d" ? dayLabel(tt) : hm(tt)}
             </text>
           </g>
         );
@@ -497,7 +523,8 @@ function Crosshair({ at, H: h, label, W }: { at: number | null; H: number; label
   );
 }
 
-function Shares({ title, shares, selected, onPick }: { title: string; shares: { key: string; label: string; tokens: MachineUsage["total"] }[]; selected: string | null; onPick: (k: string) => void }) {
+/** `note`: a launcher's startup ID beside its display name (#5029); a label without one is an ID or a model, in mono. */
+function Shares({ title, shares, selected, onPick }: { title: string; shares: { key: string; label: string; note?: string; tokens: MachineUsage["total"] }[]; selected: string | null; onPick: (k: string) => void }) {
   const top = Math.max(1, ...shares.map((s) => totalTokens(s.tokens)));
   return (
     <div className="rounded-card bg-surface px-4 pt-3 pb-1.5 shadow-card">
@@ -508,7 +535,10 @@ function Shares({ title, shares, selected, onPick }: { title: string; shares: { 
         return (
           <button key={s.key} type="button" onClick={() => onPick(s.key)} aria-pressed={selected === s.key} className={cx("block w-full rounded-[6px] py-2 text-left hover:bg-inset/60", i > 0 && "border-t border-line")}>
             <div className="flex items-baseline gap-2">
-              <span className={cx("min-w-0 flex-1 truncate font-mono text-[12px]", selected === s.key ? "text-accent" : "text-ink")}>{s.label}</span>
+              <span className={cx("min-w-0 flex-1 truncate text-[12px]", !s.note && "font-mono", selected === s.key ? "text-accent" : "text-ink")}>
+                {s.label}
+                {s.note && <> <span className="font-mono text-[11px] text-ink-3">{s.note}</span></>}
+              </span>
               <span className="text-[12.5px] font-medium text-ink tabular-nums">{formatTokens(totalTokens(s.tokens))}</span>
             </div>
             <div className="mt-1.5 flex items-center gap-2">

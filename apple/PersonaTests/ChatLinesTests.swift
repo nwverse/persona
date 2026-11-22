@@ -73,23 +73,19 @@ struct ChatLinesTests {
                 == ["user", "work", "answer"])
     }
 
-    /// A running subagent's card stays in view under its folded work line (#5602), by the id it has once the line is
-    /// open; open, it is one of the steps, not a second time.
-    @Test func aRunningSubagentStaysOutOfItsFoldedLine() {
+    /// Running subagents stay inside the summary too, and remain inspectable after completion.
+    @Test func aRunningSubagentFoldsWithItsWorkLine() {
         let items = [item(1, .text, role: "user", text: "拆给子 Agent"), item(2, .toolUse, tool: "Agent", id: "a"),
                      item(3, .toolUse, tool: "Bash", id: "b"), item(4, .toolResult, role: "user", text: "ok", id: "b")]
         var lines = ChatLines(openWork: [])
-        lines.showsFolded = { c, _ in c.name == "Agent" && c.result == nil }
-        let closed = lines.build(blocks(items), live: nil)
-        #expect(kinds(closed) == ["user", "work", "agent"])
+        let closed = lines.build(blocks(items), live: "1#0")
+        #expect(kinds(closed) == ["user", "work"])
         lines.openWork = [closed[1].id]
-        let open = lines.build(blocks(items), live: nil)
-        #expect(kinds(open) == ["user", "work", "step", "step", "end"])
-        #expect(open[2].id == closed[2].id)
-        // Done: it folds with the line.
+        #expect(kinds(lines.build(blocks(items), live: "1#0")) == ["user", "work", "step", "step", "end"])
+        let done = blocks(items + [item(5, .toolResult, role: "user", text: "42 passed", id: "a")])
+        #expect(kinds(lines.build(done, live: nil)) == ["user", "work", "step", "step", "end"])
         lines.openWork = []
-        #expect(kinds(lines.build(blocks(items + [item(5, .toolResult, role: "user", text: "42 passed", id: "a")]), live: nil))
-                == ["user", "work"])
+        #expect(kinds(lines.build(done, live: nil)) == ["user", "work"])
     }
 
     /// Subagents launched one after another share one line, their cards in a grid (#5602); one alone stays a step.
@@ -99,13 +95,12 @@ struct ChatLinesTests {
                      item(3, .toolUse, tool: "Agent", id: "b"), item(4, .toolUse, tool: "Task", id: "c"),
                      item(5, .toolUse, tool: "Bash", id: "d"), item(6, .toolUse, tool: "Agent", id: "e")]
         var lines = ChatLines(openWork: [], chipRuns: chips)
-        lines.showsFolded = { c, _ in c.use.toolUseID != "b" && c.name != "Bash" }
         let closed = lines.build(blocks(items), live: nil)
-        #expect(kinds(closed) == ["user", "work", "agents2", "agent"])
+        #expect(kinds(closed) == ["user", "work"])
         lines.openWork = [closed[1].id]
         let open = lines.build(blocks(items), live: nil)
         #expect(kinds(open) == ["user", "work", "agents3", "step", "step", "end"])
-        #expect(open[2].id == closed[2].id)
+        #expect(open[2].id == closed[1].id + "/agents-2#0")
     }
 
     @Test func beautifulUIFoldsToolCallsInARowIntoOneRun() {
@@ -168,37 +163,97 @@ struct ChatLinesTests {
         #expect(kinds(ChatLines(openWork: []).build(b, live: nil, streaming: true)) == ["user", "work", "answer"])
     }
 
-    /// The assistant's running work line starts open: each tool call is a line as it comes (#1614). Ended, the line
-    /// is folded again and opens to every call; the Agents chat (no `opensLive`) folds it while it runs, as before.
-    @Test func theAssistantListsARunningTurnsToolCallsThenFoldsThem() {
+    /// Every style defaults to folded execution; manual choices survive live updates and completion.
+    @Test func aRunningTurnStaysFoldedAndManualExpansionSurvivesCompletion() {
         let running = [item(1, .text, role: "user", text: "查一下"), item(2, .toolUse, tool: "Bash", id: "a"),
                        item(3, .toolResult, role: "user", text: "ok", id: "a"), item(4, .toolUse, tool: "Read", id: "b")]
         let b = blocks(running)
         guard case .turn(let t) = b.last else { Issue.record("expected a turn"); return }
         var lines = ChatLines(openWork: [])
-        #expect(kinds(lines.build(b, live: t.id)) == ["user", "work"], "the Agents chat folds a running line")
-        lines.opensLive = true
         let live = lines.build(b, live: t.id)
-        #expect(kinds(live) == ["user", "work", "step", "step", "end"], "both calls listed, the second still running")
-        // The next call joins the open list as it starts.
+        #expect(kinds(live) == ["user", "work"])
+        lines.openWork = [live[1].id]
+        #expect(kinds(lines.build(b, live: t.id)) == ["user", "work", "step", "step", "end"])
         let more = blocks(running + [item(5, .toolResult, role: "user", text: "ok", id: "b"), item(6, .toolUse, tool: "Grep", id: "c")])
         #expect(kinds(lines.build(more, live: t.id)) == ["user", "work", "step", "step", "step", "end"])
-        // Ended: one folded line, and opened it holds all three calls.
         let done = blocks(running + [item(5, .toolResult, role: "user", text: "ok", id: "b"), item(6, .toolUse, tool: "Grep", id: "c"),
                                      item(7, .toolResult, role: "user", text: "ok", id: "c"), item(8, .text, text: "查好了")])
-        let folded = lines.build(done, live: nil)
-        #expect(kinds(folded) == ["user", "work", "answer"])
-        lines.openWork = [folded[1].id]
         #expect(kinds(lines.build(done, live: nil)) == ["user", "work", "step", "step", "step", "end", "answer"])
-        // Folded by the user while it runs (the chat flips it in `openWork`), it stays folded until the turn ends.
-        lines.openWork = [live[1].id]
-        #expect(kinds(lines.build(b, live: t.id)) == ["user", "work"])
-        // The wake drawer's running work line keeps folding, as it always has; a tap still opens it.
         lines.openWork = []
-        let drawer = ChatLines.drawerWork + t.id
-        #expect(!lines.isOpen(drawer, live: true))
-        lines.openWork = [drawer]
-        #expect(lines.isOpen(drawer, live: true))
+        #expect(kinds(lines.build(done, live: nil)) == ["user", "work", "answer"])
+        #expect(kinds(ChatLines(openWork: []).build(done, live: nil)) == ["user", "work", "answer"], "reloaded history defaults to folded")
+    }
+
+    /// #9140: the work a background task woke the agent for is an exchange of its own. It opens with the notice and
+    /// has its own work line; the answer of the turn before it stays in place while that work runs, streams and ends.
+    @Test func aWakeOpensItsOwnWorkLineAndLeavesTheAnswerBeforeIt() {
+        var wake = item(4, .notice, role: "system", text: "Forecast check")
+        wake.wake = true
+        let before = [item(1, .text, role: "user", text: "Will it rain?"),
+                      item(2, .toolUse, tool: "Bash", id: "a"),
+                      item(3, .text, text: "The forecast check is running.")]
+        // Woken, nothing of the new work here yet: a live work line under the notice, under the id it keeps.
+        let woken = blocks(before + [wake])
+        guard case .turn(let first) = woken.last else { Issue.record("expected a turn"); return }
+        #expect(first.id == wake.id && first.users.isEmpty)
+        let started = ChatLines(openWork: []).build(woken, live: first.id)
+        #expect(kinds(started) == ["user", "work", "answer", "row", "work"])
+        #expect(started[2].holds("3#0"))
+        guard case .work(let wokenID, let none, let liveNow, _, _) = started[4].content else { Issue.record("expected the woken work line"); return }
+        #expect(none.isEmpty && liveNow)
+
+        let items = before + [wake, item(5, .toolUse, tool: "Bash", id: "b")]
+        let b = blocks(items)
+        guard case .turn(let t) = b.last else { Issue.record("expected a turn"); return }
+        let running = ChatLines(openWork: []).build(b, live: t.id)
+        #expect(kinds(running) == ["user", "work", "answer", "row", "work"], "the previous answer stays in place")
+        #expect(running[2].holds("3#0"))
+        let streaming = ChatLines(openWork: []).build(b, live: t.id, streaming: true)
+        #expect(kinds(streaming) == ["user", "work", "answer", "row", "work"], "live words belong to the woken exchange, not to the answer before it")
+        #expect(streaming[2].holds("3#0"))
+        guard case .work(_, let earlier, let earlierLive, _, _) = running[1].content,
+              case .work(let id, let work, let live, _, _) = running[4].content else {
+            Issue.record("expected two work lines")
+            return
+        }
+        #expect(id == wokenID, "the woken work line keeps its id from before its first step")
+        #expect(!earlierLive && live)
+        #expect(earlier.map(\.id) == ["2#0"] && work.map(\.id) == ["5#0"])
+        // Nothing opens by itself; opened, the woken work shows its own steps only.
+        let open = ChatLines(openWork: [id]).build(b, live: t.id, streaming: true)
+        #expect(kinds(open) == ["user", "work", "answer", "row", "work", "step", "end"])
+
+        let complete = blocks(items + [item(6, .text, text: "No rain; keep the plan.")])
+        let done = ChatLines(openWork: []).build(complete, live: nil)
+        #expect(kinds(done) == ["user", "work", "answer", "row", "work", "answer"])
+        #expect(done[2].holds("3#0") && done.last?.holds("6#0") == true)
+        guard case .work(let doneID, _, _, _, _) = done[4].content else { Issue.record("expected the woken work line"); return }
+        #expect(doneID == id)
+    }
+
+    @Test func liveNarrationReplacesThePreviousSegmentAndOnlyTheFinalAnswerRemains() {
+        let running = [item(1, .text, role: "user", text: "Check the synthetic change"),
+                       item(2, .text, text: "First narration"), item(3, .toolUse, tool: "Read", id: "a"),
+                       item(4, .toolResult, role: "user", text: "ok", id: "a")]
+        var renderer = ChatLines(openWork: [])
+        let first = renderer.build(blocks(running), live: "1#0")
+        let latest = renderer.build(blocks(running + [item(5, .text, text: "Latest narration")]), live: "1#0")
+        #expect(kinds(first) == ["user", "work", "answer"])
+        #expect(kinds(latest) == ["user", "work", "answer"])
+        #expect(latest.last?.holds("5#0") == true)
+        #expect(!latest.contains { $0.holds("2#0") })
+        let done = blocks(running + [item(5, .text, text: "Latest narration"),
+                                    item(6, .toolUse, tool: "Bash", id: "b"),
+                                    item(7, .toolResult, role: "user", text: "ok", id: "b"),
+                                    item(8, .text, text: "Final result")])
+        let folded = renderer.build(done, live: nil)
+        #expect(kinds(folded) == ["user", "work", "answer"])
+        #expect(folded.last?.holds("8#0") == true)
+        renderer.openWork = [folded[1].id]
+        let open = renderer.build(done, live: nil)
+        #expect(kinds(open) == ["user", "work", "step", "step", "step", "step", "end", "answer"])
+        #expect(open.contains { if case .workStep(_, .text(let i), _) = $0.content { i.text == "First narration" } else { false } })
+        #expect(open.contains { if case .workStep(_, .text(let i), _) = $0.content { i.text == "Latest narration" } else { false } })
     }
 
     @Test func theRunningTurnShowsEachMessage() {
@@ -368,6 +423,29 @@ struct ChatLinesTests {
         #expect(!work.contains(where: ChatLines.isCompaction))
     }
 
+    @Test(arguments: [false, true])
+    func compactionAfterLatestNarrationStillFoldsWhenToolsFollowIt(active: Bool) {
+        var boundary = notice(5, ChatStore.compactedText)
+        boundary.compact = Compaction(trigger: "auto", preTokens: 167_000)
+        var failed = item(7, .toolResult, role: "user", text: "Synthetic failure", id: "b")
+        failed.isError = true
+        let items = [item(1, .text, role: "user", text: "Check the synthetic change"),
+                     item(2, .toolUse, tool: "Read", id: "a"), item(3, .toolResult, role: "user", text: "ok", id: "a"),
+                     item(4, .text, text: "Latest narration"), boundary,
+                     item(6, .toolUse, tool: "Bash", id: "b"), failed]
+        let b = blocks(items)
+        var renderer = ChatLines(openWork: [])
+        let live = active ? "1#0" : nil
+        let closed = renderer.build(b, live: live)
+        #expect(kinds(closed) == ["user", "work", "answer"])
+        #expect(compactRows(closed).isEmpty)
+        #expect(closed.last?.holds("4#0") == true)
+        guard case .work(let id, let work, _, _, _) = closed[1].content else { Issue.record("Missing work summary"); return }
+        #expect(work.filter(ChatLines.isCompaction).count == 1)
+        renderer.openWork = [id]
+        #expect(kinds(renderer.build(b, live: live)) == ["user", "work", "step", "step", "step", "end", "answer"])
+    }
+
     /// A message that failed to send sits before the first message sent after it, not under everything (#6023); one with
     /// nothing after it, one without a time and one still on its way stay at the end, in the order they were written.
     @Test func aFailedMessageSitsWhereItWasWritten() {
@@ -467,5 +545,83 @@ struct ChatLinesTests {
         #expect(ChatLines.placeFailed(lines, [late]).before == [lines[1].id: [late]])
         let next = PendingMessage(text: "next day", images: [], state: .failed, createdAt: day2.addingTimeInterval(3600))
         #expect(ChatLines.placeFailed(lines, [next]).before == ["imgs": [next]])
+    }
+
+    // MARK: Permission mode change lines (#10297)
+
+    private func sent(_ seq: Int, at: Date, role: String = "user") -> Item {
+        Item(id: "\(seq)#0", seq: seq, ts: at, role: role, kind: .text, text: role == "user" ? "问题\(seq)" : "回答\(seq)",
+             toolUseID: nil, toolName: nil, toolInput: nil, isError: nil, image: nil)
+    }
+
+    private func modeChange(_ at: Date, _ kind: String = "set", to: String = "acceptEdits", applied: String? = "now",
+                            reason: String? = nil, from: String? = "default", who: String? = "Phone") -> APIClient.ModeChange {
+        APIClient.ModeChange(kind: kind, from: from, to: to, applied: applied, actorKind: who == nil ? "hub" : "device",
+                             deviceName: who, reason: reason, at: at)
+    }
+
+    private func modeIDs(_ lines: [ChatLine]) -> [String] {
+        lines.map { line in if case .modeChange = line.content { "mode" } else { line.id } }
+    }
+
+    @Test func modeChangesGoAtTheEndOfTheExchangeTheyHappenedIn() {
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let lines = ChatLines(openWork: []).build(blocks([sent(1, at: t0), sent(2, at: t0.addingTimeInterval(60), role: "assistant"),
+                                                          sent(3, at: t0.addingTimeInterval(600)), sent(4, at: t0.addingTimeInterval(660), role: "assistant")]), live: nil)
+        let merged = ChatLines.mergeModeChanges(lines, [modeChange(t0.addingTimeInterval(120)), modeChange(t0.addingTimeInterval(900), to: "plan"),
+                                                        modeChange(t0.addingTimeInterval(-60), to: "auto")])
+        // before the first message, after the first exchange (never between its message and answer), after the last.
+        // Built a part at a time: one chained sum of five arrays is more than Xcode 26.3's type checker takes (#10519).
+        var expected: [String] = ["mode"]
+        expected += modeIDs(Array(lines.prefix(2)))
+        expected.append("mode")
+        expected += modeIDs(Array(lines.dropFirst(2)))
+        expected.append("mode")
+        #expect(modeIDs(merged) == expected)
+        #expect(Set(merged.map(\.id)).count == merged.count)
+        // the last line Retry and the error cards ask about is not a mode change
+        #expect(ChatLines.lastOfChat(merged)?.id == lines.last?.id)
+        // older history still to load: a change from before the first loaded item waits for it
+        let held = ChatLines.mergeModeChanges(lines, [modeChange(t0.addingTimeInterval(-60))], earliest: t0)
+        #expect(held.map(\.id) == lines.map(\.id))
+        // nothing to place them by: an empty chat keeps its placeholder
+        #expect(ChatLines.mergeModeChanges([], [modeChange(t0)]).isEmpty)
+    }
+
+    @Test func modeChangeIDsSurviveTheListGrowingOrLosingItsOldest() {
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let lines = ChatLines(openWork: []).build(blocks([sent(1, at: t0)]), live: nil)
+        let twice = [modeChange(t0.addingTimeInterval(5)), modeChange(t0.addingTimeInterval(5)), modeChange(t0.addingTimeInterval(9))]
+        let before = ChatLines.mergeModeChanges(lines, twice).map(\.id)
+        let after = ChatLines.mergeModeChanges(lines, Array(twice.dropFirst())).map(\.id)
+        #expect(Set(before).count == before.count)
+        #expect(after.last == before.last)
+    }
+
+    /// Tests run in zh-Hans: the modes in 「」, a restart's outcome with why, no colon without one.
+    @Test func modeChangeWords() {
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let auto = SessionModes.modeLabel("acceptEdits") ?? "", all = SessionModes.modeLabel("bypassPermissions") ?? ""
+        let start = SessionModes.modeLabel("default") ?? ""
+        #expect(ModeChangeWords.label(modeChange(t0), session: nil) == "Phone 把权限模式从「\(start)」改成了「\(auto)」")
+        #expect(ModeChangeWords.label(modeChange(t0, from: nil), session: nil) == "Phone 把权限模式改成了「\(auto)」")
+        #expect(ModeChangeWords.label(modeChange(t0, to: "bypassPermissions", applied: "restart"), session: nil)
+                == "Phone 选了「\(all)」，这一轮结束后会重启会话再切过去")
+        #expect(ModeChangeWords.label(modeChange(t0, who: nil), session: nil).hasPrefix("hub 把权限模式"))
+        func outcome(_ kind: String, _ reason: String?) -> String {
+            ModeChangeWords.label(modeChange(t0, kind, to: "bypassPermissions", applied: nil, reason: reason, from: nil), session: nil)
+        }
+        #expect(outcome("restart_done", nil) == "已重启，切到了「\(all)」")
+        #expect(outcome("restart_done", "already_in") == "已经是「\(all)」了，不用重启")
+        #expect(outcome("restart_dropped", "process_replaced") == "已取消，不会重启到「\(all)」：会话换了进程")
+        #expect(outcome("restart_dropped", "process_exited") == "已取消，不会重启到「\(all)」：原进程已经退出")
+        #expect(outcome("restart_dropped", "replaced") == "已取消，不会重启到「\(all)」：被另一次切换取代")
+        // the mode it runs in picked again (#11089): called off, not replaced
+        #expect(outcome("restart_dropped", "cancelled") == "已取消，不会重启到「\(all)」：会话保持当前模式")
+        // a code this app does not know yet (a newer node): the plain line
+        #expect(outcome("restart_dropped", "some_later_code") == "已取消，不会重启到「\(all)」")
+        #expect(outcome("restart_failed", "start_failed") == "没能重启到「\(all)」：新进程没起来，会话按原来的模式继续")
+        #expect(outcome("restart_failed", nil) == "没能重启到「\(all)」")
+        #expect(outcome("restart_dropped", "claude 4101, the process it was picked for, has exited") == "已取消，不会重启到「\(all)」")
     }
 }

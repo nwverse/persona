@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// A connector's inbox thread as a conversation page (#1054): pages of messages going back, a quote's message reached,
 /// a reply through the hub (which asks on the phone), what the page shows when the thread cannot be read. Made-up
@@ -42,6 +43,43 @@ struct ConnectorThreadTests {
         #expect(await !m.loadOlder())
         #expect(await !m.reach("0"))
         #expect(hub.sent("GET", "/api/v1/connectors/telegram/thread").map { $0.query["thread"] } == ["u1", "u1", "u1"])
+    }
+
+    @Test func conversationPictureFieldsSurvivePageDecoding() throws {
+        // An old app can still read the source ref; an updated app also sees each distinct hub path.
+        let page = try JSON.decoder.decode(ThreadPage.self, from: Data(#"""
+        {"chat":{"id":"demo","kind":"issue","name":"Layout","avatar":"room","avatar_url":"/api/v1/avatars/github/cm9vbQ",
+                 "author":{"name":"Author","avatar":"author","avatar_url":"/api/v1/avatars/github/YXV0aG9y"}},
+         "messages":[{"id":"1","at":"2026-11-03T09:00:00Z","sender":{"name":"Reviewer","avatar":"reviewer","avatar_url":"/api/v1/avatars/github/cmV2aWV3ZXI"}}]}
+        """#.utf8))
+        #expect(page.chat.avatar == "room")
+        #expect(page.chat.avatarURL == "/api/v1/avatars/github/cm9vbQ")
+        let author = try #require(page.chat.author)
+        #expect(author.avatar == "author")
+        #expect(author.picture(in: "github", manager: nil) == "/api/v1/avatars/github/YXV0aG9y")
+        let sender = try #require(page.messages.first?.sender)
+        #expect(sender.avatar == "reviewer")
+        let studio = try #require(sender.picture(in: "github", manager: "studio"))
+        let garden = try #require(sender.picture(in: "github", manager: "garden"))
+        #expect(studio == "/api/v1/avatars/github/cmV2aWV3ZXI?manager=studio")
+        #expect(LarkMedia.cacheKey(studio, size: 64) != LarkMedia.cacheKey(garden, size: 64))
+        let legacy = try JSON.decoder.decode(ThreadPerson.self, from: Data(#"{"name":"Guest","avatar":"a.u1.501"}"#.utf8))
+        #expect(legacy.picture(in: "telegram", manager: "studio") == "/api/v1/connectors/telegram/media?ref=a.u1.501&manager=studio")
+        #expect(ThreadPerson(name: "Guest").picture(in: "telegram", manager: nil) == nil)
+    }
+
+    @Test func conversationReadsAndRepliesUseTheItemsManager() async throws {
+        let hub = hub()
+        let path = "/api/v1/connectors/telegram/thread"
+        hub.on("POST", path + "/reply") { _ in Data(#"{"ok":true}"#.utf8) }
+        let thread = ConnectorThreadModel(connector: "telegram", thread: "u1", manager: "studio", api: { hub.client })
+        await thread.load()
+        #expect(await thread.loadOlder())
+        #expect(await thread.reply("Hello", to: nil))
+        let reads = hub.sent("GET", path)
+        let replies = hub.sent("POST", path + "/reply")
+        #expect(reads.count == 3 && replies.count == 1)
+        #expect((reads + replies).allSatisfy { $0.headers[APIClient.managerHeader] == "studio" })
     }
 
     /// The reply goes to the hub with the thread's action and the message it answers, then the newest page is read again.
@@ -93,6 +131,35 @@ struct ConnectorThreadTests {
         await tg.load()
         #expect(tg.unavailable)
         #expect(tg.failure == "Telegram 限流：还要 248 秒")
+    }
+
+    /// An item with no conversation of its own (#5537): a subscription's (its source is the subscription) or a
+    /// connector's without threads. The hub answers a page that is none; an older hub said no such connector (404) or
+    /// none to open (409 without a code). None of them is an error to show over the content; signed out still is.
+    @Test func noConversation() async throws {
+        let hub = FakeHub()
+        let path = "/api/v1/connectors/sub_example1/thread"
+        hub.on("GET", path, json: #"{"chat":{"id":"sub:sub_example1:t1","name":"","kind":"none"},"messages":[]}"#)
+        let none = ConnectorThreadModel(connector: "sub_example1", thread: "sub:sub_example1:t1", api: { hub.client })
+        await none.load()
+        #expect(none.loaded && !none.unavailable && none.failure == nil && none.messages.isEmpty)
+        #expect(none.chat?.isChat == false && none.chat?.isGitHub == false)
+
+        for older in [APIError(status: 404, message: #"no connector "sub_example1""#),
+                      APIError(status: 409, message: "Example has no conversations to open")] {
+            hub.on("GET", path) { _ in throw older }
+            let m = ConnectorThreadModel(connector: "sub_example1", thread: "sub:sub_example1:t1", api: { hub.client })
+            await m.load()
+            #expect(m.loaded && m.unavailable)
+            #expect(m.failure == nil, "\(older.status) said over the content")
+        }
+
+        hub.on("GET", "/api/v1/connectors/telegram/thread") { _ in
+            throw APIError(status: 409, message: "Telegram: not signed in", fields: ["code": "unavailable"])
+        }
+        let signedOut = ConnectorThreadModel(connector: "telegram", thread: "u1", api: { hub.client })
+        await signedOut.load()
+        #expect(signedOut.unavailable && signedOut.failure == "Telegram: not signed in")
     }
 
     /// The fields of a page decode as the hub sends them: media, a quote, an event.
@@ -162,6 +229,32 @@ struct ConnectorThreadTests {
         #expect(ThreadLayout.endsRun(late, before: nil))
     }
 
+    /// A Lark conversation's words: lark-cli writes one interactive message as a `<card title="…">` envelope and a post
+    /// as Markdown; both are drawn rather than shown with their marks, a picture's image key as [Image]. Words that only
+    /// hold a card, and another connector's card-like words, stay as they are.
+    @Test func larkRichText() throws {
+        func parse(_ text: String, markdown: Bool = true, lark: Bool = true) -> ThreadRichText? {
+            ThreadRichText.parse(text, markdown: markdown, larkCard: lark, image: "[图片]")
+        }
+        #expect(parse("<card title=\"示例通知\">\n**第一项** 已完成\n![Image](img_example)\n</card>") == ThreadRichText(cardTitle: "示例通知", body: "**第一项** 已完成\n[图片]"))
+        #expect(parse("<card>\n示例正文\n</card>", markdown: false) == ThreadRichText(cardTitle: "", body: "示例正文"))
+        #expect(parse("**示例** ![Image](img_v3_example) ![x](https://example.com/a.png)") == ThreadRichText(cardTitle: nil, body: "**示例** [图片] ![x](https://example.com/a.png)"))
+        #expect(parse("示例 <card>里面</card>", markdown: false) == nil)
+        #expect(parse("<card title=\"a\"><card>b</card></card>", markdown: false) == nil)
+        #expect(parse("<card>示例</card>", markdown: false, lark: false) == nil)
+        #expect(parse("**示例** ![Image](key)", lark: false) == ThreadRichText(cardTitle: nil, body: "**示例** ![Image](key)"))
+    }
+
+    /// A Lark item opens as its conversation: a hub that could not say the chat's kind (lark-cli's message list says
+    /// nothing of it) sent an empty kind, and the item opened as its plain text, every message run together.
+    @Test func larkPageIsAConversation() {
+        func chat(_ kind: String) -> ThreadChat { ThreadChat(id: "larkcli:chat:oc_example", name: "", kind: kind) }
+        #expect(InboxConnectorDetailView.isConversation(chat(""), source: "larkcli"))
+        #expect(InboxConnectorDetailView.isConversation(chat("group"), source: "larkcli"))
+        #expect(!InboxConnectorDetailView.isConversation(chat(""), source: "examplechat"))
+        #expect(!InboxConnectorDetailView.isConversation(chat("none"), source: "larkcli"))
+    }
+
     /// The watch lists a connector's item under its connector's name and the label the connector gave it (#2727).
     @Test func watchSourceLine() throws {
         func item(_ connector: String, name: String = "Example Chat") throws -> InboxItem {
@@ -175,6 +268,25 @@ struct ConnectorThreadTests {
         #expect(WatchInboxText.connectorSource(try item(#"{"thread":"primary.example-group"}"#)) == "Example Chat")
         #expect(WatchInboxText.connectorSource(try item(#"{"thread":"t"}"#, name: "")) == "examplechat")
         #expect(try item(#"{"thread":"t","label":"转账"}"#).kindLabel == "转账") // the row's tag on the phone: the connector's word
+    }
+
+    /// A connector row's picture is the avatars route's path (#10923), apart from Feishu's `avatar`; an older hub sends
+    /// none and the row keeps its initial. `ChatAvatar` asks at one of the sizes the route draws.
+    @Test func connectorRowPicture() throws {
+        func item(_ connector: String) throws -> InboxItem {
+            try JSON.decoder.decode(InboxItem.self, from: Data(#"""
+            {"id":"telegram:1","source":"telegram","kind":"dm","account":"telegram","account_name":"Telegram","title":"示例用户",
+             "preview":"","count":1,"avatar":"/api/v1/lark/media/k","connector":\#(connector)}
+            """#.utf8))
+        }
+        let pictured = try item(#"{"thread":"u1","avatar_url":"/api/v1/avatars/telegram/YS51MS41MDE"}"#)
+        #expect(pictured.connector?.avatarURL == "/api/v1/avatars/telegram/YS51MS41MDE")
+        #expect(pictured.avatar == "/api/v1/lark/media/k")
+        #expect(try item(#"{"thread":"u1"}"#).connector?.avatarURL == nil)
+        #expect(ChatAvatar.edge(pixels: 120) == 128)
+        #expect(ChatAvatar.edge(pixels: 64) == 64)
+        #expect(ChatAvatar.edge(pixels: 80) == 128)
+        #expect(ChatAvatar.edge(pixels: 2000) == 512)
     }
 }
 

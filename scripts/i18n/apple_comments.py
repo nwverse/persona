@@ -168,7 +168,8 @@ def check():
         bad += len(found)
     if bad:
         print(f"\n{bad} comment(s) under apple/ have Chinese / Japanese text outside 「…」: write them in English "
-              "(keep 「…」 only for a Chinese doc heading or text the code matches word for word).")
+              "(keep 「…」 only for a Chinese doc heading that still exists, which test_doc_sections.py checks, or text the "
+              "code matches word for word).")
         return 1
     print("OK: the comments under apple/ are in English")
     return 0

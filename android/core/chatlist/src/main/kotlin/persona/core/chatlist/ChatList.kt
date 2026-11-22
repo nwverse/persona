@@ -1,19 +1,17 @@
 package persona.core.chatlist
 
-import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDownward
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -31,9 +29,15 @@ class ChatListState internal constructor(
     internal val store: ChatAnchorStore?,
     initial: ChatReadingPosition,
 ) {
+    /** The reading anchor. Scrolling writes a new offset into it every frame: composition reads [expanded] and [followsEnd]. */
     var position by mutableStateOf(initial)
         internal set
-    val followsEnd get() = position.followsEnd
+    // Derived, so a reader is invalidated only when the value changes, not by every offset written while scrolling (#4039).
+    private val followsEndState = derivedStateOf { position.followsEnd }
+    private val expandedState = derivedStateOf { position.expanded }
+    val followsEnd: Boolean get() = followsEndState.value
+    /** The open work groups. */
+    val expanded: Set<String> get() = expandedState.value
     var restored by mutableStateOf(false)
         internal set
     var programmaticScroll by mutableStateOf(false)
@@ -42,6 +46,9 @@ class ChatListState internal constructor(
     internal var epoch by mutableIntStateOf(0)
     internal var latestRequest by mutableIntStateOf(0)
     internal var rowIds: List<String> = emptyList()
+        set(value) { if (value !== field) { field = value; rowIdSet = null } }
+    /** [rowIds] as a set, built once per list: [capture] runs every frame of a scroll. */
+    private var rowIdSet: Set<String>? = null
     internal val lastLineExtents = mutableMapOf<String, Int>()
 
     fun setExpanded(ids: Set<String>) { position = position.copy(expanded = ids) }
@@ -57,7 +64,8 @@ class ChatListState internal constructor(
 
     internal fun capture() {
         if (!restored || programmaticScroll) return
-        val top = list.layoutInfo.visibleItemsInfo.filter { it.key in rowIds }.maxByOrNull { it.index }
+        val rows = rowIdSet ?: rowIds.toHashSet().also { rowIdSet = it }
+        val top = list.layoutInfo.visibleItemsInfo.filter { it.key in rows }.maxByOrNull { it.index }
         position = position.copy(rowId = top?.key as? String ?: position.rowId,
             offsetPx = top?.let { -it.offset } ?: position.offsetPx)
     }
@@ -97,6 +105,8 @@ fun ChatListEffects(
     onFollow: () -> Unit,
     loadOlder: suspend () -> Unit,
     canFollowEnd: Boolean = true,
+    /** Previously persisted message keys mapped to stable presentation slots. */
+    rowAliases: Map<String, String> = emptyMap(),
 ) {
     val latestRows by rememberUpdatedState(rowIds)
     val freeze by rememberUpdatedState(onFreeze)
@@ -105,6 +115,8 @@ fun ChatListEffects(
     val older by rememberUpdatedState(hasOlder)
     val loading by rememberUpdatedState(loadingOlder)
     val atLatest by rememberUpdatedState(canFollowEnd)
+    val focusManager by rememberUpdatedState(LocalFocusManager.current)
+    val keyboard by rememberUpdatedState(LocalSoftwareKeyboardController.current)
     SideEffect { state.rowIds = rowIds }
     val owner = LocalLifecycleOwner.current
     val lifecycle by owner.lifecycle.currentStateAsState()
@@ -123,6 +135,12 @@ fun ChatListEffects(
     LaunchedEffect(state) {
         state.list.interactionSource.interactions.collect { interaction ->
             if (interaction is DragInteraction.Start) {
+                // As on iOS (`ChatView`'s `.interacting` scroll phase): a real drag on the conversation puts the keyboard
+                // away and takes the focus from whatever field has it, a request card's too. Only a finger past the touch
+                // slop starts a DragInteraction: a tap and a scroll the app starts (following the newest message, a jump)
+                // do not, and they leave the keyboard up (#4210).
+                focusManager.clearFocus()
+                keyboard?.hide()
                 state.epoch++
                 state.dragged = true
                 state.restored = true
@@ -131,11 +149,12 @@ fun ChatListEffects(
             }
         }
     }
-    LaunchedEffect(state, ready, rowIds, foreground, state.epoch) {
+    LaunchedEffect(state, ready, rowIds, rowAliases, foreground, state.epoch) {
         if (!foreground || !ready || state.restored || state.dragged) return@LaunchedEffect
         if (rowIds.isEmpty()) { state.restored = true; return@LaunchedEffect }
         val saved = state.position
-        val target = entry ?: saved.rowId?.takeUnless { saved.followsEnd }?.let { ChatListEntry(it, offsetPx = saved.offsetPx) }
+        val target = (entry ?: saved.rowId?.takeUnless { saved.followsEnd }?.let { ChatListEntry(it, offsetPx = saved.offsetPx) })
+            ?.let { it.copy(rowId = rowAliases[it.rowId] ?: it.rowId) }
         val targetIndex = target?.let { rowIds.indexOf(it.rowId) } ?: -1
         state.programmaticScroll = true
         try {
@@ -207,16 +226,4 @@ fun ChatList(
 ) {
     LazyColumn(state = state.list, reverseLayout = true, modifier = modifier,
         contentPadding = contentPadding, verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
-}
-
-@Composable
-fun ReturnToLatestButton(state: ChatListState, newMessages: Int? = null, hasMoreNewer: Boolean = false, modifier: Modifier = Modifier) {
-    if (state.followsEnd) return
-    FilledTonalButton(onClick = state::returnToLatest, modifier = modifier) {
-        Icon(Icons.Default.ArrowDownward, stringResource(R.string.chatlist_return_to_latest))
-        newMessages?.takeIf { it > 0 }?.let {
-            Spacer(Modifier.width(4.dp))
-            Text("$it${if (hasMoreNewer) "+" else ""}", maxLines = 1)
-        }
-    }
 }

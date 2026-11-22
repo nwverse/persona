@@ -3,7 +3,8 @@
 // tiles, new fields (date, time, datetime, multichoice, multiline), named colors, and the new charts' geometry
 // (area, candlestick, donut, pie, sparks). What is drawn is in views/extensions; the reading and the arithmetic here.
 import { withToken } from "./inbox";
-import { isHttps, readAction, type ChartSeries, type UIAction, type UITone, type UIView } from "./extension-ui";
+import { isHttps, isObject, readAction } from "./extension-ui-read";
+import type { ChartSeries, UIAction, UITone } from "./extension-ui";
 
 // ── named colors ────────────────────────────────────────
 
@@ -120,9 +121,16 @@ export interface UITile {
   control?: UIRowControl;
   actions?: UIRowAction[];
   action?: UIAction;
+  /** UI version 9 (#9337): the tile is a ring filled to ratio, its value (and unit) in the centre. */
+  gauge?: UIGauge;
 }
 
-const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+/** A tile's ring (UI version 9): ratio 0 to 1 (held to it where drawn), a short unit under the value, a named color. */
+export interface UIGauge {
+  ratio: number;
+  unit?: unknown;
+  color?: UIColor | string;
+}
 
 /** A control the web can draw (a known kind, a name and an action); undefined otherwise. */
 export function readControl(raw: unknown): UIRowControl | undefined {
@@ -177,6 +185,9 @@ function readTile(raw: unknown): UITile[] {
   const spark = readSpark(raw.spark);
   if (spark) t.spark = spark;
   else delete t.spark;
+  // a gauge with a finite ratio, or the tile is drawn without one; where it is drawn (lazily) the ratio is held to 0–1,
+  // and a unit or a color that is not a known word is left out, so this first-screen reader stays small
+  if (!isObject(t.gauge) || !Number.isFinite(t.gauge.ratio)) delete t.gauge;
   return [t];
 }
 
@@ -199,17 +210,6 @@ export function readV6(out: Record<string, unknown>, raw: Record<string, unknown
   }
   if (Array.isArray(raw.stats)) out.stats = raw.stats.map((st) => (isObject(st) && "spark" in st ? { ...st, spark: readSpark(st.spark) } : st));
   if (Array.isArray(raw.tiles)) out.tiles = raw.tiles.flatMap(readTile).slice(0, raw.type === "carousel" ? 20 : 60);
-}
-
-/** Every control of a view, by its name: what to show for it and what the extension last drew. */
-export function controlsOf(view: UIView | null | undefined): Map<string, UIRowControl> {
-  const out = new Map<string, UIRowControl>();
-  for (const s of view?.sections ?? [])
-    for (const it of s.items ?? []) {
-      if (it.control) out.set(it.control.name, it.control);
-      for (const t of it.tiles ?? []) if (t.control) out.set(t.control.name, t.control);
-    }
-  return out;
 }
 
 /** A control's value as the extension drew it, as sent on the wire: a switch "true" / "false", else the number. */

@@ -1,6 +1,6 @@
 import XCTest
 
-/// The assistant's conversations titled by the hub 「MMDD | 类型 | 主题」 (docs/assistant/assistant.md「对话标题」) in the drawer,
+/// The assistant's conversations titled by the hub 「MMDD | 类型 | 主题」 (docs/assistant/assistant.md「Chat titles」) in the drawer,
 /// a topic too long for it cut at the end, and Rename… in a conversation's long-press menu (the user's title is then
 /// the hub's for good). Against scripts/mock/mock_hub.py with MOCK_TITLES=1 (PERSONA_MOCK_HUB), which records renames at
 /// /mock/renamed.

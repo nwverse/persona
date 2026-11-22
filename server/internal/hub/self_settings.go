@@ -8,18 +8,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/extwire"
-	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The hub's own settings persona_settings offers (docs/assistant/assistant.md "Operating Persona itself", 2026-11-01): the tool is the
-// assistant's (its own settings are its own: "About me", its launcher, …), which lists these (app.call settings.list) and
-// hands the actions on them to the hub (app.tool persona_settings). One registry: each setting says what it is, how to
-// read it and how a change is made. Reads are free; every change is a card on the phone that says what changes (before
-// → after) and is applied only when approved. What the card needs filled in (a password) is typed on the phone and
-// never passes through the model. Some things are never here: the hub's and devices' tokens, pairing, which machines
-// the hub reaches, permission modes.
+// The hub's own settings persona_settings offers (docs/assistant/assistant.md "Current structure", the "Control Persona
+// itself" row): the tool is the assistant's (its own settings are its own: "About me", its launcher, …), which lists
+// these (app.call settings.list) and hands the actions on them to the hub (app.tool persona_settings). One registry:
+// each setting says what it is, how to read it and how a change is made. Reads are free; every change is a card on the
+// phone that says what changes (before → after) and is applied only when approved. What the card needs filled in (a
+// password) is typed on the phone and never passes through the model. Some things are never here: the hub's and
+// devices' tokens, pairing, which machines the hub reaches, permission modes.
 
 // selfSetting is one thing Persona may change. A value setting has set; a list has add / remove.
 type selfSetting struct {
@@ -59,11 +59,15 @@ func (h *Hub) selfSettings() []selfSetting {
 	if h.store != nil {
 		out = append(out, h.blockedClaudeDirsSetting())
 	}
+	if h.push != nil && h.push.store != nil { // the switch lives in hub_settings
+		out = append(out, h.pushGradingSelfSetting())
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].key < out[j].key })
 	return out
 }
 
-func (h *Hub) toolPersonaSettings(ctx context.Context, from string, m *Machine, sessionID string, args json.RawMessage) (string, error) {
+func (h *Hub) toolPersonaSettings(ctx context.Context, from string, m *Machine, sessionID string, args json.RawMessage,
+	report func(proto.MCPWaitKind)) (string, error) {
 	var a struct {
 		Action string          `json:"action"`
 		Key    string          `json:"key"`
@@ -83,32 +87,28 @@ func (h *Hub) toolPersonaSettings(ctx context.Context, from string, m *Machine, 
 	if s == nil {
 		for _, ms := range h.managerSettings(ctx, from) { // the caller's (mail, the sources' own rules): it does the change
 			if ms.Key == a.Key {
-				var res struct {
-					Text string `json:"text"`
-				}
-				if err := h.extCallTo(ctx, from, extwire.HubSettingsTool, map[string]any{"machine_id": m.cfg.ID, "session_id": sessionID,
-					"arguments": args}, &res); err != nil {
-					return "", err
-				}
-				return res.Text, nil
+				return h.managerSettingsTool(ctx, from, a.Action, map[string]any{"machine_id": m.cfg.ID, "session_id": sessionID,
+					"arguments": args})
 			}
 		}
 		return "", fmt.Errorf("no setting %q (action list shows them)", a.Key)
 	}
-	var change *selfChange
-	var err error
-	switch {
-	case a.Action == "get":
-		return s.get(ctx)
-	case a.Action == "set" && s.set != nil:
-		change, err = s.set(ctx, a.Value)
-	case a.Action == "add" && s.add != nil:
-		change, err = s.add(ctx, a.Value)
-	case a.Action == "remove" && s.remove != nil:
-		change, err = s.remove(ctx, a.ID)
-	default:
-		return "", fmt.Errorf("%s does not take %q (it takes %s)", s.key, a.Action, strings.Join(s.actions(), ", "))
+	build := func(ctx context.Context) (*selfChange, error) {
+		switch {
+		case a.Action == "set" && s.set != nil:
+			return s.set(ctx, a.Value)
+		case a.Action == "add" && s.add != nil:
+			return s.add(ctx, a.Value)
+		case a.Action == "remove" && s.remove != nil:
+			return s.remove(ctx, a.ID)
+		default:
+			return nil, fmt.Errorf("%s does not take %q (it takes %s)", s.key, a.Action, strings.Join(s.actions(), ", "))
+		}
 	}
+	if a.Action == "get" {
+		return s.get(ctx)
+	}
+	change, err := build(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -119,19 +119,23 @@ func (h *Hub) toolPersonaSettings(ctx context.Context, from string, m *Machine, 
 	ix := proto.Interaction{ID: "ix_" + randomHex(6), MachineID: m.cfg.ID, SessionID: sessionID, Kind: proto.IxPermission,
 		ToolName: "persona_settings", Summary: change.summary, ToolInput: shown, Fields: change.fields, SessionTitle: "Persona",
 		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(15 * time.Minute).UTC()}
-	r, err := h.waitInteraction(ctx, ix)
-	if err != nil {
-		return "", err
-	}
-	if r.Allow == nil || !*r.Allow {
-		return "The user declined on the phone: nothing changed.", nil
-	}
-	for _, f := range change.fields {
-		if !f.Optional && strings.TrimSpace(r.Values[f.Key]) == "" {
-			return "", fmt.Errorf("%s was left empty on the phone: nothing changed", f.Label)
-		}
-	}
-	return change.apply(ctx, r.Values)
+	original := *change
+	out, err := h.waitPreparedSetting(ctx, from, ix, m.cfg.ID+"\x00"+sessionID+"\x00"+s.key,
+		func(ctx context.Context, r proto.Resolution) (string, error) {
+			// Rebuild from current state and execute only that fresh operation. The
+			// closure shown before a question may have captured a stale before/after.
+			fresh, err := build(ctx)
+			if err != nil || fresh == nil || fresh.apply == nil || fresh.summary != original.summary {
+				return "", approval.ErrStale
+			}
+			for _, f := range fresh.fields {
+				if !f.Optional && strings.TrimSpace(r.Values[f.Key]) == "" {
+					return "", fmt.Errorf("%s was left empty on the phone: nothing changed", f.Label)
+				}
+			}
+			return fresh.apply(ctx, r.Values)
+		}, report)
+	return out.Text, err
 }
 
 func orNone(s string) string {
@@ -141,22 +145,28 @@ func orNone(s string) string {
 	return s
 }
 
-// ss is a hub-self_settings text in l.
-func ss(l i18n.Lang, name string, args ...i18n.Args) string {
-	return i18n.T(l, "hub-self_settings."+name, args...)
-}
-
-// clipped is a value as the card shows it, in l.
-func clipped(l i18n.Lang, s string) string {
-	if strings.TrimSpace(s) == "" {
-		return ss(l, "none")
+// managerSettingsTool hands persona_settings on one of manager id's own settings to it (extwire.HubSettingsTool) and
+// answers what it says. A change is a card the manager shows, waits for (its own fifteen minutes) and then makes; the
+// hub only passes the call on. So it waits as long as its caller does, not callBus's two minutes: those told the
+// assistant the change had failed while the card stayed on the phone and was still applied when approved later
+// (#5907). When the caller stops waiting, so does the manager, which withdraws its card (serveBus's Cancels). Reading
+// (get) shows no card and keeps the two minutes.
+func (h *Hub) managerSettingsTool(ctx context.Context, id, action string, params any) (string, error) {
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return "", err
 	}
-	return clip(oneLine(s), 120)
-}
-
-// changeSummary is the card's "change title: before → after".
-func changeSummary(l i18n.Lang, title, before, after string) string {
-	return ss(l, "change", i18n.Args{"title": title, "before": clipped(l, before), "after": clipped(l, after)})
+	call := h.callBus
+	if action != "get" {
+		call = h.callBusAsIs
+	}
+	var res struct {
+		Text string `json:"text"`
+	}
+	if err := call(ctx, id, extwire.MethodHubCall, extwire.HubCall{Method: extwire.HubSettingsTool, Params: raw}, &res); err != nil {
+		return "", err
+	}
+	return res.Text, nil
 }
 
 // managerSettings are the manager's persona_settings entries (none while it is away).

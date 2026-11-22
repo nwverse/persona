@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/nodeclient"
@@ -152,6 +154,12 @@ func TestAskFallsBackToTheTerminal(t *testing.T) {
 	if r = ask(down(), true, "\n", "Go on?"); r.code != ExitDenied {
 		t.Fatalf("default is no: %+v", r)
 	}
+	if r = ask(down(), true, "n\n", "Go on?"); r.code != ExitDenied || r.out != "" {
+		t.Fatalf("no: %+v", r)
+	}
+	if r = ask(down(), true, "", "Go on?"); r.code != ExitDenied || r.out != "" {
+		t.Fatalf("end of input at [y/N]: %+v", r)
+	}
 	// Nobody to type: unreachable, say so.
 	if r = ask(down(), false, "y\n", "Go on?"); r.code != ExitUnreachable || !strings.Contains(r.errOut, "Persona node") {
 		t.Fatalf("not a terminal: %+v", r)
@@ -191,7 +199,64 @@ func TestAskInterrupted(t *testing.T) {
 	}
 }
 
+// silentTerminal is a terminal nobody types at: Read says it started, then blocks until the test ends.
+type silentTerminal struct {
+	started, release chan struct{}
+	once             sync.Once
+}
+
+func (s *silentTerminal) Read([]byte) (int, error) {
+	s.once.Do(func() { close(s.started) })
+	<-s.release
+	return 0, io.EOF
+}
+
+// Ctrl-C at the terminal's question ends ask with 130 instead of waiting for a line that never comes.
+func TestAskInterruptedAtTheTerminal(t *testing.T) {
+	for name, tc := range map[string]struct {
+		args   []string
+		prompt string
+	}{
+		"y/N":     {[]string{"deploy?"}, "[y/N] "},
+		"options": {[]string{"Deploy where?", "--options", "staging,prod"}, "> "},
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := &silentTerminal{started: make(chan struct{}), release: make(chan struct{})}
+			t.Cleanup(func() { close(in.release) })
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			f := &fake{err: fmt.Errorf("%w: no such file", nodeclient.ErrNoNode)}
+			var out, errOut bytes.Buffer
+			done := make(chan int, 1)
+			go func() { done <- f.runner(true).Ask(ctx, tc.args, in, &out, &errOut) }()
+
+			deadline := time.After(5 * time.Second)
+			select {
+			case <-in.started:
+			case code := <-done:
+				t.Fatalf("ask ended with %d before reading the terminal; err %q", code, errOut.String())
+			case <-deadline:
+				t.Fatal("ask never read the terminal")
+			}
+			cancel() // Ctrl-C
+			select {
+			case code := <-done:
+				if code != ExitInterrupted || out.Len() != 0 {
+					t.Fatalf("exit %d out %q err %q, want exit %d and no answer", code, out.String(), errOut.String(), ExitInterrupted)
+				}
+				// The shell's prompt starts on a line of its own, not after the question's.
+				if !strings.HasSuffix(errOut.String(), tc.prompt+"\n") {
+					t.Fatalf("err %q, want it to end with %q", errOut.String(), tc.prompt+"\n")
+				}
+			case <-deadline:
+				t.Fatal("ask kept waiting at the terminal prompt after Ctrl-C")
+			}
+		})
+	}
+}
+
 func TestNotifyBestEffort(t *testing.T) {
+	setScriptTerminal(t, "zh-Hans")
 	f := &fake{reply: `{"sent":true}`}
 	if r := notify(f, "Build done", "all green", "--silent", "--error"); r.code != 0 || r.out != "" || r.errOut != "" {
 		t.Fatalf("%+v", r)
@@ -245,18 +310,19 @@ func TestNotifyUnsentReasons(t *testing.T) {
 		{i18n.ZhHans, "filtered", "没发出去：通知设置或在线的桌面客户端使所有可用设备都跳过了这条通知"},
 		{i18n.Ja, "filtered", "送信できませんでした：通知設定または接続中のデスクトップアプリにより、利用可能なすべてのデバイスでこの通知が抑制されました"},
 		// Existing and future reasons keep their machine-readable value in the diagnostic.
-		{"", "muted", "没发出去：hub 没有发送：muted"},
+		{i18n.ZhHans, "muted", "没发出去：hub 没有发送：muted"},
 		{i18n.En, "future_reason", "Not sent: The hub did not send it: future_reason"},
 	} {
 		for _, strict := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/%s/strict=%t", tc.lang, tc.reason, strict), func(t *testing.T) {
+				setScriptTerminal(t, string(tc.lang))
 				f := &fake{reply: fmt.Sprintf(`{"sent":false,"reason":%q}`, tc.reason)}
 				args, wantCode := []string{"Build done"}, ExitOK
 				if strict {
 					args, wantCode = append(args, "--strict"), ExitDenied
 				}
 				var out, errOut bytes.Buffer
-				code := f.runner(false).Notify(i18n.With(context.Background(), tc.lang), args, &out, &errOut)
+				code := f.runner(false).Notify(context.Background(), args, &out, &errOut)
 				if code != wantCode || out.Len() != 0 || errOut.String() != "personad notify: "+tc.wantText+"\n" {
 					t.Fatalf("exit %d, out %q, err %q; want exit %d, empty stdout and diagnostic %q", code, out.String(), errOut.String(), wantCode, tc.wantText)
 				}

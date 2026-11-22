@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -337,29 +339,29 @@ func TestBriefShowsFailuresBeforeALongListOfDoneTasks(t *testing.T) {
 	}
 }
 
-// Only the turn of the run itself gets the card. A message the owner sends into the routine's conversation later is
-// answered as any other, and a turn that stopped on an error is answered as it was before: the run is tried again with
-// facts of its own.
+// Only the turn of the run itself gets the normal card. A message the owner sends into the routine's conversation later is
+// answered as any other. A failed model turn does not mirror its raw error: the scheduled-run watcher sends the fixed-facts
+// fallback once instead (briefing_fallback_test.go), and a later successful retry has facts of its own.
 func TestBriefCardIsForTheRunsOwnTurnOnly(t *testing.T) {
 	e := newBriefRunEnv(t, true)
 	setSession := func(s proto.Session) { e.f.setSessions("server", s) }
 
 	setSession(proto.Session{SessionID: e.sess.SessionID, Assistant: true, TurnError: "API Error: 529"})
 	e.mirror()
-	if cards := e.cards(); len(cards) != 1 || strings.Contains(cards[0], "等你处理") {
-		t.Fatalf("a turn that failed got the briefing: %q", cards)
+	if cards := e.cards(); len(cards) != 0 {
+		t.Fatalf("a failed turn mirrored its raw error instead of waiting for the facts fallback: %q", cards)
 	}
 
 	setSession(proto.Session{SessionID: e.sess.SessionID, Assistant: true})
 	e.f.setItems(proto.Item{ID: "u2", Role: "user", Kind: proto.KindText, Text: "第二条是什么意思？"}, proto.Item{ID: "a2", Role: "assistant", Kind: proto.KindText, Text: "是说登录页崩溃。"})
 	e.mirror()
-	if cards := e.cards(); len(cards) != 2 || strings.Contains(cards[1], "等你处理") {
+	if cards := e.cards(); len(cards) != 1 || strings.Contains(cards[0], "等你处理") {
 		t.Fatalf("a message of the owner's got the briefing: %q", cards)
 	}
 
 	e.f.setItems(proto.Item{ID: "u3", Role: "user", Kind: proto.KindText, Text: "⏰ 早报"}, proto.Item{ID: "a3", Role: "assistant", Kind: proto.KindText, Text: briefSummary})
 	e.mirror()
-	if cards := e.cards(); len(cards) != 3 || !strings.Contains(cards[2], "等你处理（2）") {
+	if cards := e.cards(); len(cards) != 2 || !strings.Contains(cards[1], "等你处理（2）") {
 		t.Fatalf("the run's own turn lost its briefing to the others: %q", cards)
 	}
 }
@@ -420,5 +422,100 @@ func TestBriefRoutineWithoutACardTellsTheModelToListTheRows(t *testing.T) {
 	sent, _ := newBriefRunEnvWith(t, true, func(e *briefRunEnv) { e.features(FeishuFeatures{Main: true}) }).f.lastSend(t)["text"].(string)
 	if !strings.Contains(sent, "这次不会发飞书卡片") || strings.Contains(sent, "你不用再逐条列") || !strings.Contains(sent, "旧的问题") {
 		t.Errorf("a run without a card:\n%s", sent)
+	}
+}
+
+func TestBriefCardsKeepEveryOwnerWaitWithinPhysicalBudget(t *testing.T) {
+	f := &briefFacts{l: i18n.En, loc: time.UTC, At: time.Date(2026, 11, 18, 8, 0, 0, 0, time.UTC), web: "https://example.com"}
+	d := prompts.BriefDirection{Name: "Main", Open: 220, Link: "https://example.com/main"}
+	for i := 0; i < 220; i++ {
+		d.Waits = append(d.Waits, prompts.BriefWait{
+			Kind: "needs_user", TodoID: fmt.Sprintf("todo-%03d", i),
+			Line: fmt.Sprintf("Owner wait %03d %s", i, strings.Repeat("x", 140)),
+			Link: fmt.Sprintf("https://example.com/todos/%03d", i),
+		})
+	}
+	f.Directions = []prompts.BriefDirection{d}
+	const header = "Model unavailable; these are the computed facts"
+	card, plain, _ := (&Service{}).briefCardWithHeader(f, "Morning briefing", "", header)
+	card.Buttons(feishubot.Btn("Open", feishubot.Default, map[string]any{"a": "open"}))
+	cards := splitBriefAnswerCards(card, plain, header)
+	if len(cards) < 2 {
+		t.Fatalf("the oversized fixture produced %d card, want continuations", len(cards))
+	}
+	var all strings.Builder
+	for i, c := range cards {
+		if n := len(c.card.JSON()); n > reportCardMaxBytes {
+			t.Errorf("card %d is %d bytes, limit %d", i, n, reportCardMaxBytes)
+		}
+		if n := len(c.card.Body.Elements); n > reportCardMaxElements {
+			t.Errorf("card %d has %d elements, limit %d", i, n, reportCardMaxElements)
+		}
+		all.WriteString(briefCardElementText(c.card, ""))
+		if !strings.HasPrefix(c.fallback, header) {
+			t.Errorf("card %d plain substitute does not start with the fixed header", i)
+		}
+	}
+	if !strings.HasPrefix(plain, header+"\n") {
+		t.Fatalf("the phone fallback's first line changed: %q", plain[:min(len(plain), 100)])
+	}
+	last := -1
+	rendered := all.String()
+	for i, w := range d.Waits {
+		row := feishubot.EscapeMarkdown(w.Line) + briefLink(f.l, w.Link)
+		if n := strings.Count(rendered, row); n != 1 {
+			t.Fatalf("owner row %d occurs %d times in the rich cards, want exactly once", i, n)
+		}
+		at := strings.Index(rendered, row)
+		if at <= last {
+			t.Fatalf("owner row %d is out of order", i)
+		}
+		last = at
+		if n := strings.Count(plain, w.Line); n != 1 {
+			t.Fatalf("owner row %d occurs %d times in the phone fallback, want exactly once", i, n)
+		}
+	}
+}
+
+// The answer the card quotes is cut as Markdown: a code block the cut lands in is closed and an emphasis or link the cut
+// lands in is dropped, so the quoted answer does not turn the rest of itself into code or show half a marker.
+func TestBriefCardQuotesItsAnswerAsMarkdown(t *testing.T) {
+	f := &briefFacts{l: i18n.En, loc: time.UTC, At: time.Date(2026, 11, 11, 8, 0, 0, 0, time.UTC)}
+	card := func(answer string) string {
+		t.Helper()
+		c, _, _ := (&Service{}).briefCard(f, "Morning brief", answer)
+		return cardMarkdown(t, c)
+	}
+	long := func(s string) string {
+		t.Helper()
+		if n := len([]rune(s)); n <= briefAnswerRunes {
+			t.Fatalf("the fixture is %d runes, not over %d", n, briefAnswerRunes)
+		}
+		return s
+	}
+	prose := strings.Repeat("Nothing needs you this morning. ", 44) // 1408 runes, so the cut lands inside the marker
+
+	code := card(long("**Today**\n\n```\n" + strings.Repeat("log line\n", 200) + "```\n\nAll good.\n"))
+	if n := strings.Count(code, "```"); n%2 != 0 {
+		t.Errorf("%d fence lines, so the block swallows the rest of the answer: %q", n, code[max(0, len(code)-160):])
+	}
+	if !strings.HasSuffix(code, "…") {
+		t.Errorf("the cut is not marked with an ellipsis: %q", code[max(0, len(code)-160):])
+	}
+
+	bold := card(long(prose + "**" + strings.Repeat("still to come ", 15)))
+	if n := strings.Count(bold, "**"); n%2 != 0 {
+		t.Errorf("%d emphasis markers, so the cut left one open: %q", n, bold[max(0, len(bold)-160):])
+	}
+	link := card(long(prose + "[the long page](https://example.com/notes/2026/11/" + strings.Repeat("a", 80) + ")"))
+	if strings.Contains(link, "example.com") {
+		t.Errorf("half a link is left in the answer: %q", link[max(0, len(link)-160):])
+	}
+
+	// A chart the model drew is still drawn as numbers on the card: cutting must not leave it as the block clipMarkdown
+	// would drop it to.
+	chart := card(long("```persona-card\n" + `{"type":"line","title":"Sleep this week","unit":"h","points":[{"label":"Mon","value":7.2},{"label":"Tue","value":6.5}]}` + "\n```\n\n" + strings.Repeat("Nothing needs you this morning. ", 44)))
+	if strings.Contains(chart, "persona-card") || !strings.Contains(chart, "Mon") || !strings.Contains(chart, "7.2") {
+		t.Errorf("the chart is not drawn as numbers: %q", chart[max(0, len(chart)-200):])
 	}
 }

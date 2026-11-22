@@ -277,12 +277,17 @@ func TestDaemonIsARuntimeUnderTheConfigNames(t *testing.T) {
 		{"session_id": "s1", "title": "fix", "cwd": "/w", "status": "working", "space_id": "/w", "space_name": "w",
 			"pane_id": "w1:p1", "resume_argv": []string{"sh", "-c", "touch /tmp/pwned"}},
 		{"session_id": "../bad", "status": "done"},
-		{"session_id": "s3", "agent": "dsh", "agent_label": "Claude Code"}, // a platform running DSH, naming itself
-		{"session_id": "s4", "agent": "claude"},
+		// A platform running DSH, naming itself; and a session one of its own started, with a parent that is not its own.
+		{"session_id": "s3", "agent": "dsh", "agent_label": "Claude Code", "is_subagent": true, "parent_session_id": "../bad", "root_session_id": 7},
+		{"session_id": "s4", "agent": "claude", "is_subagent": true, "parent_session_id": "s1", "root_session_id": "s1"},
 	}})
 	waitFor(t, "listed", func() bool { _, ok := listed(t, n)["acme.s1"]; return ok })
 	if s3, s4 := listed(t, n)["acme.s3"], listed(t, n)["acme.s4"]; s3.Agent != "dsh" || s3.AgentLabel != "Acme" || s4.Agent != "claude" || s4.AgentLabel != "" {
 		t.Fatalf("labels: %+v / %+v (the config's name, except for Claude Code)", s3, s4)
+	}
+	// The session that started another is named by the id it has here; one that is not the daemon's is not named.
+	if s3, s4 := listed(t, n)["acme.s3"], listed(t, n)["acme.s4"]; s4.ParentSessionID != "acme.s1" || s4.RootSessionID != "acme.s1" || s3.ParentSessionID != "" || s3.RootSessionID != "" {
+		t.Fatalf("parents: s4 under %q (root %q), s3 under %q (root %q)", s4.ParentSessionID, s4.RootSessionID, s3.ParentSessionID, s3.RootSessionID)
 	}
 	s := listed(t, n)["acme.s1"]
 	if s.Agent != "acme" || s.AgentLabel != "Acme" || s.SpaceKind != "acme" || s.SourceInstanceID != "acme" || s.SpaceID != "acme:/w" || s.PaneID != "" {
@@ -305,7 +310,7 @@ func TestDaemonIsARuntimeUnderTheConfigNames(t *testing.T) {
 		t.Fatalf("a daemon ran the assistant, or chose its own instance: %+v", hello)
 	}
 	res, _, _ := d.hellod()
-	if f, _ := json.Marshal(res["features"]); string(f) != `["prefer_running","start_params"]` {
+	if f, _ := json.Marshal(res["features"]); string(f) != `["prefer_running","start_params","usage"]` {
 		t.Fatalf("features told to the daemon: %s", f)
 	}
 
@@ -476,6 +481,85 @@ func TestDaemonStaysInItsCorner(t *testing.T) {
 	var re *rpc.Error
 	if !errors.As(err, &re) || re.Code != "unsupported" {
 		t.Fatalf("mcp.call: %v", err)
+	}
+}
+
+func TestA2ADaemonToolsBindToListedSession(t *testing.T) {
+	d := startFakeDaemon(t, "tok", map[string]any{"runtime": "x", "caps": map[string]any{"send": true}})
+	rh, _ := daemonHost(t, map[string]any{"id": "daemon", "url": d.url(), "token": "tok", "a2a": true})
+	n, hub := runtimeNodeOn(t, rh)
+	seen := make(chan string, 2)
+	hub.mu.Lock()
+	hub.answer = func(method string, params json.RawMessage) (any, error, bool) {
+		var p struct {
+			SessionID string `json:"session_id"`
+			Assistant bool   `json:"assistant"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err, true
+		}
+		if p.Assistant {
+			return nil, errors.New("daemon escalated to assistant"), true
+		}
+		switch method {
+		case "mcp.tools":
+			seen <- p.SessionID
+			return map[string]any{"tools": []proto.Tool{{Name: "a2a_get"}, {Name: "phone_contacts"}}}, nil, true
+		case "mcp.call":
+			seen <- p.SessionID
+			return proto.TextResult("ok", false), nil, true
+		default:
+			return nil, nil, false
+		}
+	}
+	hub.mu.Unlock()
+	d.push(t, "runtime.sessions", map[string]any{"sessions": []map[string]any{{"session_id": "s1", "status": "idle"}}})
+	waitFor(t, "session listed", func() bool {
+		_, ok := listed(t, n)["daemon.s1"]
+		return ok
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	peer := d.current()
+	var tools struct{ Tools []proto.Tool }
+	if err := peer.Call(ctx, "mcp.tools", map[string]any{"session_id": "s1", "assistant": true}, &tools); err != nil ||
+		len(tools.Tools) != 1 || tools.Tools[0].Name != "a2a_get" {
+		t.Fatalf("tools: %+v %v", tools, err)
+	}
+	var result proto.ToolResult
+	if err := peer.Call(ctx, "mcp.call", map[string]any{"session_id": "s1", "name": "a2a_get", "assistant": true}, &result); err != nil || result.IsError {
+		t.Fatalf("scoped call: %+v %v", result, err)
+	}
+	if err := peer.Call(ctx, "mcp.call", map[string]any{"session_id": "s1", "name": "phone_contacts"}, nil); rpcCode(err) != "unsupported" {
+		t.Fatalf("phone tool through daemon: %v", err)
+	}
+	if err := peer.Call(ctx, "mcp.call", map[string]any{"session_id": "other.session", "name": "a2a_get"}, &result); err != nil || !result.IsError {
+		t.Fatalf("call on unlisted session: %+v %v", result, err)
+	}
+	for range 2 {
+		if session := <-seen; session != "daemon.s1" {
+			t.Fatalf("wrong session on manager request: %q", session)
+		}
+	}
+	send := map[string]any{"session_id": "daemon.s1", "text": "A2A message", "client_msg_id": "a2a-test"}
+	if _, err := nodeCall(t, n, "session.a2a.send", send); err != nil {
+		t.Fatalf("idle daemon could not receive A2A: %v", err)
+	}
+	got := d.got("session.send")
+	var delivered struct {
+		SessionID string `json:"session_id"`
+		ClientID  string `json:"client_msg_id"`
+	}
+	if len(got) != 1 || json.Unmarshal(got[0], &delivered) != nil || delivered.SessionID != "s1" || delivered.ClientID != "a2a-test" {
+		t.Fatalf("daemon send: %v", got)
+	}
+	d.push(t, "runtime.sessions", map[string]any{"sessions": []map[string]any{{"session_id": "s1", "status": "working"}}})
+	waitFor(t, "session busy", func() bool { return listed(t, n)["daemon.s1"].Status == proto.StatusWorking })
+	if _, err := nodeCall(t, n, "session.a2a.send", send); rpcCode(err) != "a2a_session_busy" {
+		t.Fatalf("busy daemon was not deferred: %v", err)
+	}
+	if len(d.got("session.send")) != 1 {
+		t.Fatal("busy daemon received a second send")
 	}
 }
 

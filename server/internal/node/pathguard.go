@@ -14,7 +14,6 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/identity"
-	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // What a client may look at by a path a conversation names (fs.stat, file.read, fs.list, downloads): anything the
@@ -25,6 +24,8 @@ import (
 var (
 	errICloud    = errors.New("iCloud Drive files are not readable remotely")
 	errOffLimits = errors.New("this path holds secrets and is not readable remotely")
+	// errTooManyLinks: more than maxLinks links on the way (a loop of links): the file tree calls such a link broken.
+	errTooManyLinks = errors.New("too many links")
 )
 
 // maxLinks bounds the links one path may go through (a loop of links ends here).
@@ -45,10 +46,6 @@ var secretFiles = []string{
 
 // keyNames are private keys by their usual names, wherever they are.
 var keyNames = map[string]bool{"id_rsa": true, "id_dsa": true, "id_ecdsa": true, "id_ed25519": true, "id_ecdsa_sk": true, "id_ed25519_sk": true}
-
-// hubKeyExt matches key files in the hub's folder, including backup suffixes. The list of the data folder's secrets is
-// shared with the agent sandbox (identity/secrets.go).
-var hubKeyExt = lazyre.New(identity.DataKeyPattern)
 
 // procSecrets are what Linux's /proc holds besides the processes' own folders that hands out a secret: the kernel's
 // memory, its log, its symbols' addresses, the keyrings' entries and the page tables (#4172).
@@ -109,6 +106,9 @@ func (n *Node) offLimits(path string) error {
 // certs/dev.pem below it is the project's own.
 func dataSecret(rel string) bool {
 	parts := strings.Split(rel, "/")
+	if len(parts) > 0 && parts[0] == "task-workspaces" {
+		return true
+	}
 	if len(parts) > 2 && parts[0] == "managers" {
 		parts = parts[2:]
 	}
@@ -123,15 +123,7 @@ func dataSecret(rel string) bool {
 		return false
 	}
 	base := parts[0]
-	if hubKeyExt.MatchString(base) {
-		return true
-	}
-	for _, name := range identity.DataSecrets {
-		if strings.HasPrefix(base, name) {
-			return true
-		}
-	}
-	return false
+	return identity.DataSecretName(base)
 }
 
 // offLimitsResolved is offLimits for a path whose folders are real ones (links already followed up to its last
@@ -378,7 +370,7 @@ func (n *Node) realPath(path string) (string, error) {
 			return "", errOffLimits
 		}
 		if links++; links > maxLinks {
-			return "", fmt.Errorf("too many links: %s", path)
+			return "", fmt.Errorf("%w: %s", errTooManyLinks, path)
 		}
 		target, err := os.Readlink(next)
 		if err != nil {
@@ -397,10 +389,12 @@ func splitPath(p string) []string {
 	return strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == filepath.Separator })
 }
 
-// absPath makes a path absolute against the node's own working directory (a relative path asked with no cwd).
+// absPath makes a path absolute against the node's own working directory (a relative path asked with no cwd), with
+// Windows short names spelled out (longPath). The file tools resolve every client path through here, so the guard and
+// the operations see the names the entries have.
 func absPath(p string) string {
 	if a, err := filepath.Abs(p); err == nil {
-		return a
+		return longPath(a)
 	}
 	return p
 }

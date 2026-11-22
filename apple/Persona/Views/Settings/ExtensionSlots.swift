@@ -1,8 +1,9 @@
 import BeautifulUI
 import Observation
 import SwiftUI
+import PersonaWire
 
-// The UI slots (docs/extensions/extensions.md「UI 插槽」): where plugins put their declarative UI beyond their own settings.
+// The UI slots (docs/extensions/extensions.md「UI slots」): where plugins put their declarative UI beyond their own settings.
 //
 // | placement        | iPhone / iPad                                             | Mac                                   |
 // | ---------------- | --------------------------------------------------------- | ------------------------------------- |
@@ -28,10 +29,13 @@ import SwiftUI
     @ObservationIgnored private var reloadGeneration = 0
     @ObservationIgnored private let deps: ExtensionViewModel.Deps
     @ObservationIgnored private let features: () -> Set<String>
+    let manager: String?
 
-    init(deps: ExtensionViewModel.Deps = .live, features: @escaping () -> Set<String> = { AppModel.shared.hubFeatures }) {
+    init(deps: ExtensionViewModel.Deps = .live, features: @escaping () -> Set<String> = { AppModel.shared.hubFeatures },
+         manager: String? = nil) {
         self.deps = deps
         self.features = features
+        self.manager = manager
     }
 
     /// The hub has the slots (and so the context, charts and badges).
@@ -48,7 +52,7 @@ import SwiftUI
             cards = []
             cardModels = [:]
         }
-        guard available, let api = deps.api() else {
+        guard available, let api = deps.api()?.manager(manager) else {
             pages = []
             cards = []
             cardModels = [:]
@@ -66,7 +70,7 @@ import SwiftUI
             if next != cards { cards = next }
             var models = cardModels.filter { k, _ in next.contains { Self.key($0) == k } }
             for c in next where models[Self.key(c)] == nil {
-                models[Self.key(c)] = ExtensionViewModel(plugin: c.owner, ui: c.id, context: .here(size: "compact"), deps: deps)
+                models[Self.key(c)] = ExtensionViewModel(plugin: c.owner, ui: c.id, context: .here(size: "compact"), deps: deps, manager: manager)
             }
             cardModels = models
         }
@@ -81,7 +85,7 @@ import SwiftUI
     /// A card's model, kept while the card is listed (a card drawn again keeps its state).
     func model(for card: ExtensionUIPlace) -> ExtensionViewModel {
         cardModels[Self.key(card)]
-            ?? ExtensionViewModel(plugin: card.owner, ui: card.id, context: .here(size: "compact"), deps: deps)
+            ?? ExtensionViewModel(plugin: card.owner, ui: card.id, context: .here(size: "compact"), deps: deps, manager: manager)
     }
 
     /// The cards' models, for the page that pushes what they ask for.
@@ -101,7 +105,14 @@ import SwiftUI
         return (count, count == 0 && badges.contains { Int($0.text) == nil })
     }
 
-    static func key(_ p: ExtensionUIPlace) -> String { p.owner + "/" + p.id }
+    /// `total` as the ways to Settings show it (its tab, the drawer's button), for one that is read naming none (the
+    /// default assistant's, as `shared` is): only while the default is current. Settings shows the current assistant's
+    /// entries (Extensions), so with another one current these would point at nothing there.
+    func settingsTotal(_ model: AppModel) -> (count: Int, dot: Bool) {
+        model.assistantManagerID == nil ? total : (0, false)
+    }
+
+    static func key(_ p: ExtensionUIPlace) -> String { p.scopedID }
 
     /// What the lists depend on: which hub (paired again with another, or another group picked) and whether it has slots.
     nonisolated struct Source: Hashable, Sendable {
@@ -153,7 +164,7 @@ struct ExtensionBadgeView: View {
         if let n = Int(badge.text), n > 0 {
             CountBadge(count: n, look: .solid(badge.tone == nil || badge.tone == "neutral" ? Theme.countBadge : ExtensionUIStyle.tone(badge.tone)))
         } else {
-            Chip(text: badge.text, look: badge.tone == nil || badge.tone == "neutral" ? .neutral : .tint(ExtensionUIStyle.tone(badge.tone)))
+            Chip(text: badge.text, look: ExtensionUIStyle.badge(badge))
                 .lineLimit(1)
         }
     }
@@ -162,10 +173,12 @@ struct ExtensionBadgeView: View {
 /// What the plugins' entries' badges add up to, on a way to Settings that is not its tab (the shell drawer's Settings button):
 /// the sum as a count badge, only words a dot, nothing without badges.
 struct ExtensionSettingsBadge: View {
+    @Environment(AppModel.self) private var model
+
     var body: some View {
-        let total = ExtensionSlots.shared.total
+        let total = ExtensionSlots.shared.settingsTotal(model)
         if total.count > 0 {
-            CountBadge(count: total.count, look: .solid(Theme.countBadge))
+            CountBadge(count: total.count, look: .neutral)
                 .offset(x: Theme.Space.xs, y: -Theme.Space.xs)
         } else if total.dot {
             Circle().fill(Theme.countBadge).scaledFrame(width: Theme.Size.dot, height: Theme.Size.dot)
@@ -181,19 +194,19 @@ struct ExtensionSlotsSettingsSection: View {
     @Environment(AppModel.self) private var model
     /// Where the cards' links open: the page's (`pluginLinks` on the page, not on a section of its list).
     @Binding var link: LinkTarget?
-    private var slots: ExtensionSlots { .shared }
+    var slots: ExtensionSlots = .shared
 
     var body: some View {
         if slots.available {
-            ExtensionCardsSection(link: $link)
+            ExtensionCardsSection(link: $link, slots: slots)
             if !slots.pages.isEmpty {
                 Section {
                     Group {
-                        ForEach(slots.pages) { page in
-                            NavigationLink(value: SettingsPage.pluginPage(plugin: page.owner, ui: page.id, title: page.title)) {
+                        ForEach(slots.pages, id: \.scopedID) { page in
+                            NavigationLink(value: SettingsPage.pluginPage(plugin: page.owner, ui: page.id, title: page.title, manager: slots.manager)) {
                                 ExtensionNavRow(place: page)
                             }
-                            .settingsListRow(SettingsPage.pluginPage(plugin: page.owner, ui: page.id, title: page.title))
+                            .settingsListRow(SettingsPage.pluginPage(plugin: page.owner, ui: page.id, title: page.title, manager: slots.manager))
                             .accessibilityIdentifier("plugin-nav-\(page.owner)-\(page.id)")
                         }
                     }
@@ -235,14 +248,14 @@ struct ExtensionCardsSection: View {
     /// Where the cards' links open: the page's. On a Mac the link panel lays the page out beside it, which a list's
     /// section cannot hold (the card came out as its title alone).
     @Binding var link: LinkTarget?
-    private var slots: ExtensionSlots { .shared }
+    var slots: ExtensionSlots = .shared
 
     var body: some View {
-        ForEach(slots.cards) { card in
+        ForEach(slots.cards, id: \.scopedID) { card in
             Section {
                 ExtensionCard(card: card, model: slots.model(for: card), link: $link) {
                     if let (ui, title) = slots.opened(by: card) {
-                        model.settingsPath.append(SettingsPage.pluginPage(plugin: card.owner, ui: ui, title: title))
+                        model.settingsPath.append(SettingsPage.pluginPage(plugin: card.owner, ui: ui, title: title, manager: slots.manager))
                     }
                 }
                 .accessibilityIdentifier("plugin-card-\(card.owner)-\(card.id)")
@@ -260,6 +273,17 @@ struct ExtensionCard: View {
     var open: () -> Void
 
     private var opens: Bool { card.opens?.isEmpty == false }
+    /// A graph or 3D scene preview owns its tap (full screen). The card's title keeps the card's ordinary page-opening path.
+    private var graphPreview: Bool {
+        model.view?.sections.contains { section in
+            section.items.contains { item in
+                switch item {
+                case .graph, .scene: true
+                default: false
+                }
+            }
+        } == true
+    }
 
     var body: some View {
         if !model.unsupported {
@@ -269,12 +293,12 @@ struct ExtensionCard: View {
 
     private var content: some View {
             VStack(alignment: .leading, spacing: Theme.Space.m) {
-                HStack(spacing: Theme.Space.s) {
-                    Text(model.view?.title ?? card.title).font(Theme.Font.labelStrong).lineLimit(1)
-                    Spacer(minLength: Theme.Space.s)
-                    if opens {
-                        ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
-                    }
+                if opens && graphPreview {
+                    Button(action: open) { title }
+                        .buttonStyle(.plain)
+                        .tapTargetOutset(.vertical)
+                } else {
+                    title
                 }
                 if let v = model.view {
                     ExtensionViewStack(view: v, model: model, cards: false, link: $link)
@@ -296,11 +320,37 @@ struct ExtensionCard: View {
             }
             .padding(.vertical, Theme.Space.xs)
             .contentShape(.rect)
-            .onTapGesture { if opens { open() } }
+            .modifier(ExtensionCardOpenGesture(enabled: opens && !graphPreview, action: open))
             .accessibilityElement(children: .contain)
-            .accessibilityAddTraits(opens ? .isButton : [])
+            .accessibilityAddTraits(opens && !graphPreview ? .isButton : [])
             .task { if model.view == nil { await model.load() } }
             .pluginRefresh(model)
+    }
+
+    private var title: some View {
+        HStack(spacing: Theme.Space.s) {
+            Text(model.view?.title ?? card.title).font(Theme.Font.labelStrong).lineLimit(1)
+            Spacer(minLength: Theme.Space.s)
+            if opens {
+                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+            }
+        }
+        .contentShape(.rect)
+    }
+}
+
+/// Installs a card's page-opening gesture only where the whole card opens. A graph card instead has a title button and
+/// a full-screen preview button; even a disabled parent gesture would compete with those nested controls in a list.
+private struct ExtensionCardOpenGesture: ViewModifier {
+    var enabled: Bool
+    var action: () -> Void
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if enabled {
+            content.onTapGesture(perform: action)
+        } else {
+            content
+        }
     }
 }
 
@@ -345,7 +395,7 @@ struct ExtensionMachineSections: View {
     @Binding var link: LinkTarget?
 
     var body: some View {
-        ForEach(page.places) { place in
+        ForEach(page.places, id: \.scopedID) { place in
             if let m = page.models[ExtensionSlots.key(place)], !m.unsupported {
                 ExtensionMachineSection(place: place, model: m, link: $link)
             }
@@ -364,6 +414,7 @@ private struct ExtensionMachineSection: View {
                 .padding(.horizontal, Theme.Space.xs)
             if let v = model.view {
                 ExtensionViewStack(view: v, model: model, link: $link)
+                    .environment(\.pluginUICompact, true)
             } else if let e = model.error {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
                     Label(e, systemImage: Theme.Icon.error).font(Theme.Font.label).foregroundStyle(Theme.danger)
@@ -421,6 +472,6 @@ private struct ExtensionRefresh: ViewModifier {
 }
 
 extension View {
-    /// Draws `model`'s View again after its `refresh_after` while on screen (docs/extensions/extensions.md「UI 插槽」, refreshing).
+    /// Draws `model`'s View again after its `refresh_after` while on screen (docs/extensions/extensions.md「UI slots」, refreshing).
     func pluginRefresh(_ model: ExtensionViewModel) -> some View { modifier(ExtensionRefresh(model: model)) }
 }

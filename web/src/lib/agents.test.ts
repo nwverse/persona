@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { addSection, agentPath, arrangeSessions, assignSection, blockView, emptyPrefs, groupSessions, isDefaultView, mergeMessages, normalizePrefs, pendingOutgoing, removeSection, resetView, setView, setupHints, toggleProvider, togglePin, totalUnread, viewOf, type AgentMessage, type AgentSession, type Outgoing } from "./agents";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { addSection, agentPath, arrangeSessions, assignSection, blockView, dateBucket, emptyPrefs, isDefaultView, mergeMessages, normalizePrefs, pendingOutgoing, removeSection, resetView, setView, setupHints, toggleProvider, togglePin, totalUnread, viewOf, type AgentMessage, type AgentSession, type Outgoing } from "./agents";
 
 const s = (id: string, provider: string, rank: number, unread = 0, title = id): AgentSession => ({ id, source: "lark-bridge", sessionKey: id, provider, title, canSend: true, unreadCount: unread, rankTimeMs: rank });
 const m = (id: string, pos: number, role = "assistant", text = id, t = pos * 1000): AgentMessage => ({ externalId: id, role, blocks: [{ type: "text", text }], createTimeMs: t, position: pos });
@@ -7,22 +7,6 @@ const m = (id: string, pos: number, role = "assistant", text = id, t = pos * 100
 describe("agentPath", () => {
   it("encodes the whole id, '/' and ':' included", () => {
     expect(agentPath("lark-bridge:agent:grok_bot:a1:u-1/")).toBe("/agents/sessions/lark-bridge%3Aagent%3Agrok_bot%3Aa1%3Au-1%2F");
-  });
-});
-
-describe("groupSessions", () => {
-  const list = [s("a", "muse", 5, 1), s("b", "grok_bot", 9, 2), s("c", "grok_bot", 3, 0, "Weekly report"), s("d", "muse", 1, 4)];
-  it("groups by provider, the most recent group and session first, with unread sums", () => {
-    const g = groupSessions(list);
-    expect(g.map((x) => x.provider)).toEqual(["grok_bot", "muse"]);
-    expect(g[0].sessions.map((x) => x.id)).toEqual(["b", "c"]);
-    expect(g[1].unread).toBe(5);
-    expect(totalUnread(list)).toBe(7);
-  });
-  it("filters by title or provider", () => {
-    expect(groupSessions(list, "weekly").flatMap((x) => x.sessions.map((y) => y.id))).toEqual(["c"]);
-    expect(groupSessions(list, "MUSE").flatMap((x) => x.sessions.map((y) => y.id))).toEqual(["a", "d"]);
-    expect(groupSessions(list, "grok bot")).toHaveLength(1);
   });
 });
 
@@ -49,7 +33,7 @@ describe("blockView", () => {
 });
 
 describe("pendingOutgoing", () => {
-  const o = (clientId: string, text: string, status: Outgoing["status"], at = 10_000): Outgoing => ({ clientId, text, at, status });
+  const o = (clientId: string, text: string, status: Outgoing["status"], at = 10_000): Outgoing => ({ clientId, text, at, updatedAt: at, status });
   it("drops a sent bubble once the persisted user message shows up, keeps failed / unmatched ones", () => {
     const out = [o("1", "hello", "sent"), o("2", "hello", "sent"), o("3", "x", "failed"), o("4", "later", "sent")];
     const msgs = [m("t1", 1, "user", "hello", 11_000), m("t2", 2, "assistant", "later", 12_000)];
@@ -79,6 +63,7 @@ describe("arrangeSessions", () => {
   it("sorts by unread or name and can skip grouping", () => {
     expect(ids(arrangeSessions(list, { ...emptyPrefs(), view: { group: "none", sort: "unread" } }, "", now))).toEqual([["b", "a", "c", "d"]]);
     expect(ids(arrangeSessions(list, { ...emptyPrefs(), view: { group: "none", sort: "name" } }, "", now))).toEqual([["a", "b", "c", "d"]]);
+    expect(totalUnread(list)).toBe(4);
   });
   it("filters by show mode, providers and query", () => {
     const flat = (v: object, q = "") => ids(arrangeSessions(list, { ...emptyPrefs(), view: { group: "none", ...v } }, q, now)).flat();
@@ -86,6 +71,8 @@ describe("arrangeSessions", () => {
     expect(flat({ show: "sendable" })).toEqual(["a", "b", "c"]);
     expect(flat({ providers: ["muse"] })).toEqual(["a", "d"]);
     expect(flat({}, "char")).toEqual(["c"]);
+    expect(flat({}, "MUSE")).toEqual(["a", "d"]); // the provider, whatever the case
+    expect(flat({}, "grok bot")).toEqual(["b", "c"]); // its label
   });
   it("custom sections come after pins; removing one frees its sessions", () => {
     let p = addSection(emptyPrefs(), "工作", "w");
@@ -114,6 +101,11 @@ describe("arrangeSessions", () => {
 });
 
 describe("setupHints", () => {
+  it("gives a failing source's own reason, and prefers a setup hint", () => {
+    expect(setupHints([{ source: "a", enabled: true, error: "Not configured yet" }])).toEqual(["Not configured yet"]);
+    expect(setupHints([{ source: "b", enabled: true, setup: "no_accounts", error: "x" }])).not.toContain("x");
+  });
+
   it("says what to do for each source that is not set up, nothing for a ready one", () => {
     const h = setupHints([
       { source: "a", enabled: false, setup: "disabled" },
@@ -124,5 +116,50 @@ describe("setupHints", () => {
     expect(h).toHaveLength(2);
     expect(h[0]).toContain("扩展");
     expect(h[1]).toContain("账号");
+  });
+});
+
+describe("date groups by calendar day (#9912)", () => {
+  // A calendar day is 23 or 25 hours on the days the clocks change; the groups count days, not 24-hour steps.
+  const savedTZ = process.env.TZ;
+  beforeAll(() => {
+    process.env.TZ = "America/New_York";
+  });
+  afterAll(() => {
+    if (savedTZ === undefined) delete process.env.TZ;
+    else process.env.TZ = savedTZ;
+  });
+  const at = (month: number, date: number, h = 0, m = 0) => new Date(2026, month, date, h, m).getTime();
+  const key = (ms: number, now: number) => dateBucket(ms, now).key;
+
+  it("after the clocks go forward, two days ago is not yesterday", () => {
+    const now = at(2, 9, 12); // Mon 2026-03-09; Sun 03-08 had 23 hours
+    expect(key(at(2, 9, 0, 10), now)).toBe("today");
+    expect(key(at(2, 8, 0, 30), now)).toBe("yesterday");
+    expect(key(at(2, 7, 23, 30), now)).toBe("week");
+  });
+
+  it("after the clocks go back, the first hour of yesterday is yesterday", () => {
+    const now = at(10, 2, 12); // Mon 2026-11-02; Sun 11-01 had 25 hours
+    expect(key(at(10, 1, 0, 30), now)).toBe("yesterday");
+    expect(key(at(10, 1, 23, 30), now)).toBe("yesterday");
+    expect(key(at(9, 31, 23, 30), now)).toBe("week");
+  });
+
+  it("the last 7 and 30 days start at a midnight across a change too", () => {
+    expect(key(at(2, 7, 0, 30), at(2, 14, 12))).toBe("week");
+    expect(key(at(2, 6, 23, 30), at(2, 14, 12))).toBe("month");
+    expect(key(at(1, 18, 0, 30), at(2, 20, 12))).toBe("month");
+    expect(key(at(1, 17, 23, 30), at(2, 20, 12))).toBe("older");
+  });
+
+  it("an ordinary week reads the same", () => {
+    const now = at(5, 10, 12); // Wed 2026-06-10
+    expect(key(at(5, 9, 0, 0), now)).toBe("yesterday");
+    expect(key(at(5, 8, 23, 59), now)).toBe("week");
+    expect(key(at(5, 3, 0, 0), now)).toBe("week");
+    expect(key(at(5, 2, 23, 59), now)).toBe("month");
+    expect(key(at(4, 11, 0, 0), now)).toBe("month");
+    expect(key(at(4, 10, 23, 59), now)).toBe("older");
   });
 });

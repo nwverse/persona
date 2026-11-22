@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The shell's two pages side by side, Assistant on the left and Agents on the right like the switch over them
-/// (docs/apple/ios.md「新外壳」): a drag to the left on Assistant brings Agents in under the finger, a drag to the right on Agents
+/// (docs/apple/ios.md「New shell」): a drag to the left on Assistant brings Agents in under the finger, a drag to the right on Agents
 /// brings Assistant back, and the switch's pill follows. The whole strip reads drawer | Assistant | Agents: on Assistant a drag to the
 /// right still opens the drawer (`DrawerPan` decides which one a drag is).
 ///
@@ -18,6 +18,14 @@ import SwiftUI
     }
     /// A drag or a settle is under way: both pages are on screen until it ends.
     private(set) var moving = false
+    /// An interrupted drag is settling back, but its page may already take the next tap. The moving strip itself
+    /// (`goal == nil`, no finger down) is interrupted too; `touching` and `goal` stay unobserved, so the ordinary
+    /// release does not redraw the pages before `letGo` has chosen where it settles.
+    private(set) var restoringInput = false
+    var restoresPageInput: Bool { restoringInput || (moving && goal == nil && !touching) }
+    /// The only page an interrupted drag may expose before it settles: where that drag started, not the page nearest
+    /// the abandoned position. A drag past halfway must not expose its destination while cancelling back.
+    var recoveryPage: Int { Int(dragStart.rounded()) }
     /// The strip came to rest under a finger already down: the moving bar stays in its place until the finger lets go,
     /// so a tap that began on its switch still lands (`ShellMovingBar`). Taken away, the switch under the finger took
     /// nothing: a tap on Agents as the strip came back to Assistant was lost (`ShellRaceTests`).
@@ -39,14 +47,40 @@ import SwiftUI
     /// The page at rest (or nearest).
     var page: Int { min(pageCount - 1, max(0, Int(position.rounded()))) }
 
+    /// The moving bar stands in for the pages' own (`ShellMovingBar`, `ShellBarAtRest`) while the strip moves, or while a
+    /// finger that was down as it came to rest stays (`lingering`). In the side column (iPhone Duo, `rail`) it also stays
+    /// until the tab bar's lens has glided (`TabBarGlide`, #10270): the strip comes to rest about 0.55 s into the lens's
+    /// 0.65 s, and the pages' own rails put back then (their glass and menus) held up a frame of its fade by 33–42 ms on
+    /// the simulator. Once the lens is gone, nothing moves as they come back.
+    func standsIn(rail: Bool) -> Bool { moving || lingering || (rail && TabBarGlide.shared.running) }
+
     /// A finger came down on the window, or the last one let go.
     func fingers(down: Bool) {
+        // A new tap must not land on the page that an abandoned drag left out of reach. Keep it in reach while
+        // cancelling back to the drag's start; an actual new drag clears this again in `dragBegan`.
+        let abandoned = down && moving && goal == nil && !touching
+        // Record the new finger before cancelling: if the strip is already at its start, `rest` returns at once and
+        // must leave the moving switch in place until this finger lets go (`lingering`).
         touching = down
-        if !down, lingering {
-            #if DEBUG
-            ShellTrace.shared.note("bar let go")
-            #endif
-            lingering = false
+        if abandoned {
+            restoringInput = true
+            cancel()
+        }
+        if !down {
+            if lingering {
+                #if DEBUG
+                ShellTrace.shared.note("bar let go")
+                #endif
+                lingering = false
+            }
+            guard moving, goal == nil else { return }
+            // `letGo` normally chooses the goal in this same event. Only a drag whose recognizer never ended needs
+            // cancelling; checking on the next turn keeps an ordinary release on its chosen page.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, moving, goal == nil, !touching else { return }
+                restoringInput = true
+                cancel()
+            }
         }
     }
 
@@ -59,6 +93,26 @@ import SwiftUI
             lingering = true
         }
         moving = false
+        restoringInput = false
+    }
+
+    /// The spring is over, but the destination's own bar has not necessarily laid out at the strip's resting offset yet.
+    /// Keep the stationary moving bar (and only its switch) taking taps through two main-queue turns, so SwiftUI can
+    /// commit that transparent bar's layout before it takes over. Otherwise the first build of Assistant can put its bar
+    /// back about 30 pt out of place, and a tap meant for Agents lands on New Chat or nowhere (#10227). A new slide changes
+    /// `serial`, cancelling this handoff; immediate routes still call `rest()` directly. The settle fallback uses this
+    /// handoff too, whether the completion arrived just before it or was lost.
+    private func restAfterPageLayout() {
+        let mine = serial
+        DispatchQueue.main.async { [weak self] in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, serial == mine, moving else { return }
+                #if DEBUG
+                ShellTrace.shared.note("bar ready \(position)")
+                #endif
+                rest()
+            }
+        }
     }
 
     func dragBegan() {
@@ -68,6 +122,7 @@ import SwiftUI
         serial += 1
         goal = nil
         dragStart = position
+        restoringInput = false
         moving = true
         began()
     }
@@ -140,9 +195,15 @@ import SwiftUI
     }
     #endif
 
-    /// The drag was taken away (a call, the system): back to where it started.
+    /// The drag was taken away (a call, the system): back to where it started. A newer slide owns the strip already.
     func cancel() {
+        guard goal == nil else { return }
+        if moving && !touching { restoringInput = true }
+        let target = Int(dragStart.rounded())
         settle(at: dragStart.rounded(), velocity: 0)
+        // Ordinarily this is already the selected page. Reassert the drag's starting page just as a release that
+        // returns there does, so selection, strip and input converge on one page again.
+        settled(target)
     }
 
     private func settle(at target: CGFloat, velocity: CGFloat) {
@@ -168,7 +229,7 @@ import SwiftUI
             ShellTrace.shared.note("settled \(target) current=\(self?.serial == mine)")
             #endif
             guard let self, serial == mine else { return }
-            rest()
+            restAfterPageLayout()
         }
         // `.removed` waits for every view that took the animation, and one out of the window (under a pushed page) never
         // runs it: opening an agent from the inbox the slide never ended (2026-11-03, `ShellBarAtRest`, `PagerPill`).
@@ -178,7 +239,7 @@ import SwiftUI
             #if DEBUG
             ShellTrace.shared.note("settle lost \(target)")
             #endif
-            rest()
+            restAfterPageLayout()
         }
     }
 
@@ -204,19 +265,31 @@ struct ShellPageSlide: ViewModifier {
     let shell: ShellState
     /// 0 = Assistant, 1 = Agents.
     let index: Int
+    /// iPhone Duo's bars down the side (`shellRailEdge`): the pages cross-fade in place there instead of sliding. A page
+    /// that moved sideways under those bars, by any means (an offset, a render-only transform, under a mask), made both
+    /// pages' navigation controllers lay out again on every frame: about 27 ms a frame, 140 ms of hitches a second through
+    /// a switch on the simulator; in place it is 58 ms and 2.8 ms, as on any iPhone (2026-11-09). A drag fades with the finger.
+    @Environment(\.shellRailEdge) private var railEdge
 
     func body(content: Content) -> some View {
         let pager = shell.pager
         let p = pager.position
-        let shown = pager.moving ? abs(CGFloat(index) - p) < 1 : index == pager.page
-        let inReach = !pager.moving && index == pager.page && index == shell.page
+        let delta: CGFloat = CGFloat(index) - p
+        let distance: CGFloat = abs(delta)
+        let shown = pager.moving ? distance < 1 : index == pager.page
+        let inReach = (!pager.moving && index == pager.page && index == shell.page)
+            || (pager.restoresPageInput && index == pager.recoveryPage)
+        let offset: CGFloat = pager.moving && railEdge == nil ? delta * pager.width : 0
+        let opacity: CGFloat = railEdge != nil && pager.moving
+            ? max(CGFloat(0), CGFloat(1) - distance)
+            : (shown ? CGFloat(1) : CGFloat(0))
         content
             // The page behind is never taken out of the window, so `onDisappear` does not fire for it: `tabIsActive`
             // tells its polling and read reports to stop (docs/apple/ios.md「只在前台做的事」). The page in front, so a drag
             // that does not settle on the other page does not restart them.
             .environment(\.tabIsActive, index == shell.page)
-            .offset(x: pager.moving ? (CGFloat(index) - p) * pager.width : 0)
-            .opacity(shown ? 1 : 0)
+            .offset(x: offset)
+            .opacity(opacity)
             .allowsHitTesting(inReach)
             .accessibilityHidden(!inReach)
             .zIndex(index == pager.page ? 1 : 0)
@@ -232,12 +305,13 @@ struct ShellPageSlide: ViewModifier {
 /// offered first hit neither segment (`ShellSwitchTests`). It comes back, transparent, as soon as a slide starts.
 struct ShellBarAtRest: ViewModifier {
     @Environment(\.shell) private var shell
+    @Environment(\.shellRailEdge) private var railEdge
     /// The bar's page on the strip: 0 = Assistant, 1 = Agents.
     let page: Int
 
     func body(content: Content) -> some View {
         if let pager = shell?.pager {
-            let standIn = pager.moving || pager.lingering
+            let standIn = pager.standsIn(rail: railEdge != nil)
             // The bar comes and goes with `pager.page`, which a slide changes in its animated transaction, and a page pushed
             // over it (now or before the spring ends) takes it out of the window, where that transition never runs: the
             // slide waited for it (`ShellPager.settle`). Opening an agent from the inbox, pushed on Assistant, left the strip

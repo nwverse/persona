@@ -5,7 +5,7 @@ import UIKit
 import ActivityKit
 #endif
 
-/// Moving the app (docs/operations/runtime-cli.md「导航和风格」): `reset`, `navigate`, `set-style`, `set-appearance`, `defaults`.
+/// Moving the app (docs/operations/runtime-cli.md「Navigation and styles」): `reset`, `navigate`, `set-style`, `set-appearance`, `defaults`.
 extension RuntimeCLI {
     static let navigationCommands: [String: Command] = [
         "reset": { a in await reset(a) },

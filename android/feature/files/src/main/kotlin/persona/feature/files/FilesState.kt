@@ -4,11 +4,13 @@ import persona.core.contracts.api.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import persona.core.hub.HubFailure
 
 enum class FilesPane { Files, Git }
 
@@ -178,7 +180,8 @@ class FilesController(
         if (now.directoryError != null || now.directoryLoading) directory()
         if (now.gitError || now.gitLoading) refreshGit()
         else if (now.moreError || now.moreLoading) { moreJob?.cancel(); mutable.update { it.copy(moreLoading = false) }; more() }
-        if (now.stack.isNotEmpty() && now.content == null && now.diff == null && now.commit == null) reload()
+        // A page already shown (a comparison too) stays as it is: only one that failed or is still on its way is read again.
+        if (now.stack.isNotEmpty() && now.content == null && now.diff == null && now.commit == null && now.compare == null) reload()
     }
 
     /** Into a folder: below the top it extends the breadcrumb; anywhere else it becomes the top. */
@@ -354,6 +357,93 @@ class FilesController(
             catch (error: Exception) {
                 if (generation == previewGeneration) mutable.update { it.copy(previewError = describe(error)) }
             }
+        }
+    }
+
+    /** Whether this machine's hub offers file changes (`file_edit`). */
+    val editsFiles: Boolean get() = api.editsFiles(machineId)
+
+    private val mutableMove = MutableStateFlow<FileMove?>(null)
+    internal val moveStatus = mutableMove.asStateFlow()
+
+    /** The picker browses on the same machine without changing the folder behind it. */
+    internal fun destinationBrowser(scope: CoroutineScope) = FilesController(api, machineId, cwd, scope, describe)
+
+    internal fun move(source: MoveSource, directory: String, report: (FileEdit) -> Unit) {
+        if (!editsFiles || mutableMove.value != null || !source.canMoveInto(directory)) return
+        sendMove(source, directory, null, report)
+    }
+
+    internal fun answerMove(conflict: FileMove.Conflict, policy: SessionMoveConflictPolicy?, report: (FileEdit) -> Unit) {
+        if (mutableMove.value !== conflict) return
+        if (policy == null) mutableMove.value = null
+        else sendMove(conflict.source, conflict.directory, policy, report)
+    }
+
+    private fun sendMove(source: MoveSource, directory: String, policy: SessionMoveConflictPolicy?, report: (FileEdit) -> Unit) {
+        mutableMove.value = FileMove.Pending
+        edits.launch {
+            val moved = try {
+                api.move(machineId, cwd, source.path, directory, policy)
+            } catch (cancelled: CancellationException) {
+                mutableMove.value = null
+                throw cancelled
+            } catch (error: Exception) {
+                val refusal = editRefusal(error, FilesPaths.name(source.path))
+                if (policy == null && HubFailure.from(error).status == 409 && refusal is EditRefusal.Exists) {
+                    mutableMove.value = FileMove.Conflict(source, directory, refusal.name)
+                } else {
+                    mutableMove.value = null
+                    report(FileEdit.Failed(refusal))
+                }
+                return@launch
+            }
+            // A folder move can invalidate listings and previews at every path beneath it.
+            listings.clear()
+            contents.clear()
+            directory()
+            refreshGit()
+            mutableMove.value = null
+            report(FileEdit.Moved(FilesPaths.name(moved.to), FilesPaths.name(directory)))
+        }
+    }
+
+    /**
+     * Renames [path] to [name] in its folder (`files/rename`), then reads the folder shown again (iOS `FolderEdits.rename`).
+     * A name the machine can't take is said without asking it; the same name sends nothing.
+     */
+    internal fun rename(path: String, name: String, report: (FileEdit) -> Unit) {
+        val wanted = name.trim()
+        nameProblem(wanted)?.let { report(FileEdit.Invalid(it)); return }
+        if (wanted == FilesPaths.name(path)) return
+        edit(wanted, restoring = false, report) { api.rename(machineId, cwd, path, wanted); FileEdit.Renamed }
+    }
+
+    /** Moves [paths] to the machine's trash (`files/trash`), then reads the folder again; the report carries Undo's ids. */
+    internal fun trash(paths: List<String>, report: (FileEdit) -> Unit) {
+        if (paths.isEmpty()) return
+        edit(null, restoring = false, report) { FileEdit.Trashed(paths, api.trash(machineId, cwd, paths).map { it.trashId }) }
+    }
+
+    /** Undo: puts back what [trash] took (`files/restore`), then reads the folder again. [name] is what a 409 `exists` names. */
+    internal fun restore(trashIds: List<String>, name: String, report: (FileEdit) -> Unit) {
+        if (trashIds.isEmpty()) return
+        edit(name, restoring = true, report) { api.restore(machineId, trashIds); FileEdit.Restored }
+    }
+
+    /**
+     * Where changes run: on the page's dispatcher but not in its job, so one runs to its end when the page closes
+     * meanwhile. The machine may already have done it, and the window's toast still says so, with Undo, as iOS's task does.
+     */
+    private val edits = CoroutineScope(scope.coroutineContext.minusKey(Job) + SupervisorJob())
+
+    /** Runs a change in [edits], reads the folder again when it happened, and reports it. */
+    private fun edit(name: String?, restoring: Boolean, report: (FileEdit) -> Unit, work: suspend () -> FileEdit) {
+        edits.launch {
+            val result = try { work() } catch (cancelled: CancellationException) { throw cancelled }
+                catch (error: Exception) { FileEdit.Failed(editRefusal(error, name), restoring) }
+            if (result !is FileEdit.Failed) directory()
+            report(result)
         }
     }
 

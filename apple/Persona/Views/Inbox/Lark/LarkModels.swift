@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // MARK: - Feishu (Lark gateway) wire types
 
@@ -6,6 +7,8 @@ nonisolated struct LarkConversation: Codable, Identifiable, Hashable, Sendable {
     var id: String
     var name: String
     var avatar: String?
+    var avatarURL: String?
+    var picture: String? { avatarURL ?? avatar }
     var isGroup: Bool
     var isTopic: Bool?
     var unread: Int
@@ -25,13 +28,14 @@ nonisolated struct LarkConversation: Codable, Identifiable, Hashable, Sendable {
     var mentionPosition: String?
     /// Client only: open the chat at this message (a flagged message) instead of the first unread.
     var focus: String?
-    /// Client only: the Feishu account the chat is in, sent as `ol_account` (docs/extensions/feishu.md「多账号」); nil: the hub's
+    /// Client only: the Feishu account the chat is in, sent as `ol_account` (docs/extensions/feishu.md「Multiple accounts」); nil: the hub's
     /// own. Kept in the caches.
     var account: Int?
     /// Client only: whose account it is, shown beside Lark while more than one is signed in.
     var accountName: String?
 
     enum CodingKeys: String, CodingKey {
+        case avatarURL = "avatar_url"
         case id, name, avatar, unread, muted, pinned, flagged, done, tags, preview
         case account = "ol_account", accountName = "account_name"
         case isGroup = "is_group", isTopic = "is_topic", markedUnread = "marked_unread", atMe = "at_me", atAll = "at_all"
@@ -66,8 +70,11 @@ nonisolated struct LarkConversation: Codable, Identifiable, Hashable, Sendable {
 }
 
 extension LarkMessage {
-    /// The StateCache name of a chat's latest page (the chat paints from it before the network answers).
-    nonisolated static func cacheName(_ c: LarkConversation) -> String { "lark-chat-" + c.key }
+    /// The StateCache name of a chat's latest page (the chat paints from it before the network answers). A named
+    /// manager's page keeps its own under the same prefix, which `LarkSync.displayChanged` clears.
+    nonisolated static func cacheName(_ c: LarkConversation, manager: String? = nil) -> String {
+        "lark-chat-" + c.key + (manager.map { "@" + $0 } ?? "")
+    }
 }
 
 /// One Feishu account signed in on the hub's Lark gateway (`GET /api/v1/lark/accounts`).
@@ -75,6 +82,8 @@ nonisolated struct LarkAccount: Codable, Identifiable, Hashable, Sendable {
     var id: Int
     var name: String?
     var avatar: String?
+    var avatarURL: String?
+    var picture: String? { avatarURL ?? avatar }
     var tenant: String?
     var signedIn: Bool
     var primary: Bool?
@@ -82,6 +91,7 @@ nonisolated struct LarkAccount: Codable, Identifiable, Hashable, Sendable {
     var quarantined: Bool?
 
     enum CodingKeys: String, CodingKey {
+        case avatarURL = "avatar_url"
         case id, name, avatar, tenant, primary, unread, quarantined
         case signedIn = "signed_in"
     }
@@ -94,12 +104,13 @@ nonisolated struct LarkFlaggedMessage: Codable, Identifiable, Hashable, Sendable
     var feedID: String
     var chatName: String
     var chatAvatar: String?
+    var chatAvatarURL: String?
     var flaggedAt: Date?
     var message: LarkMessage
     var id: String { message.id }
 
     enum CodingKeys: String, CodingKey {
-        case message
+        case message, chatAvatarURL = "chat_avatar_url"
         case feedID = "feed_id", chatName = "chat_name", chatAvatar = "chat_avatar", flaggedAt = "flagged_at"
     }
 }
@@ -178,6 +189,8 @@ nonisolated struct LarkMessage: Codable, Identifiable, Hashable, Sendable {
     var senderID: String?
     var senderName: String
     var senderAvatar: String?
+    var senderAvatarURL: String?
+    var senderPicture: String? { senderAvatarURL ?? senderAvatar }
     var senderType: String?
     var isMine: Bool
     var type: String
@@ -203,6 +216,7 @@ nonisolated struct LarkMessage: Codable, Identifiable, Hashable, Sendable {
         case id, position, type, text, recalled, retained, edited, parts, reactions, olk, deleted, decorations
         case canPin = "can_pin", canUnpin = "can_unpin", threadID = "thread_id", threadKind = "thread_kind"
         case editHistory = "edit_history"
+        case senderAvatarURL = "sender_avatar_url"
         case senderID = "sender_id", senderName = "sender_name", senderAvatar = "sender_avatar", senderType = "sender_type"
         case isMine = "is_mine", createdAt = "created_at", replyCount = "reply_count"
         case threadReplyCount = "thread_reply_count", replyTo = "reply_to"
@@ -235,11 +249,18 @@ nonisolated struct LarkForwardedMessage: Decodable, Identifiable, Hashable, Send
 }
 
 extension APIClient {
-    struct LarkConversations: Decodable {
+    nonisolated struct LarkConversations: Decodable, Sendable {
         var conversations: [LarkConversation]
         var nextCursor: String?
         var accountID: String? = nil
         enum CodingKeys: String, CodingKey { case conversations; case nextCursor = "next_cursor", accountID = "account_id" }
+
+        /// Filter one generic page without losing its account stamp or the way to older matching chats.
+        func unreadOnly() -> Self {
+            var page = self
+            page.conversations = conversations.filter { $0.badge > 0 }
+            return page
+        }
     }
     nonisolated struct LarkMessages: Decodable, Sendable {
         var messages: [LarkMessage]
@@ -308,9 +329,13 @@ extension APIClient {
         return try await get("/api/v1/lark/conversations", query: ["scope": scope, "cursor": cursor ?? "", "limit": "60"])
     }
     /// The browser opts into account checks without changing inbox or prefetch reads.
-    func larkConversationPage(cursor: String?, accountID: String) async throws -> LarkConversations {
-        if let source = messagingSource { return try await messagingConversations(source, cursor: cursor, pinned: false) }
-        return try await get("/api/v1/lark/conversations", query: ["scope": "chats", "cursor": cursor ?? "", "limit": "60",
+    func larkConversationPage(cursor: String?, accountID: String, scope: String = "chats") async throws -> LarkConversations {
+        if let source = messagingSource {
+            let page = try await messagingConversations(source, cursor: cursor, pinned: false)
+            // The generic messaging contract has no scope parameter. Keep its cursor even on a read-only page.
+            return scope == "unread" ? page.unreadOnly() : page
+        }
+        return try await get("/api/v1/lark/conversations", query: ["scope": scope, "cursor": cursor ?? "", "limit": "60",
             "account_bound": "1", "account_id": accountID])
     }
     func larkPinnedSnapshot() async throws -> LarkConversations {
@@ -404,7 +429,7 @@ extension APIClient {
                     guard var o = raw as? [String: Any] else { return raw }
                     o["members"] = (o["members"] as? [[String: Any]] ?? []).map { m in
                         var x: [String: Any] = ["user_id": m["id"] ?? "", "name": m["name"] ?? ""]
-                        if let a = m["avatar"] { x["avatar"] = MessagingShape.media(a, source: source, account: account) }
+                        x["avatar"] = MessagingShape.avatar(m, source: source, account: account)
                         return x
                     }
                     return o
@@ -542,6 +567,14 @@ nonisolated struct LarkProfile: Decodable, Sendable {
     var anotherName: String?
     var groupNickname: String?
     var avatarUrl: String?
+    var avatar: String?
+    var avatarURL: String?
+    var picture: String? { avatarURL ?? avatarUrl ?? avatar }
+    enum CodingKeys: String, CodingKey {
+        case displayName, enName, alias, anotherName, groupNickname, avatarUrl, avatar, coverUrl, description, medalName
+        case timezone, userType, customStatus, workStatus, relation, fields, actions
+        case avatarURL = "avatar_url"
+    }
     var coverUrl: String?
     var description: String?
     var medalName: String?

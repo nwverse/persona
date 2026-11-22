@@ -13,12 +13,23 @@ import dagger.hilt.components.SingletonComponent
 data class ChatChromeBindings(
     val covered: Boolean = false,
     val requestId: String? = null,
+    /** A child link opens its parent's work summary and this card. */
+    val childSessionId: String? = null,
     val onFiles: (() -> Unit)? = null,
     val onGit: (() -> Unit)? = null,
     val gitLabel: String = "Git",
     val actions: ChatActions? = null,
     val connection: HubConnection? = null,
+    /** Worktree status and removal for Close Agent / Delete Chat (#4532), by the group's own machine ids; null: none offered. */
+    val worktrees: (() -> persona.core.contracts.api.AgentCreationService?)? = null,
     val onOpenSession: ((SessionKey) -> Unit)? = null,
+    /**
+     * Opens a side session's own chat over this one (#7944, `ChatRoute.side`): from the header's Side sessions, and
+     * when a link to a side landed on its parent. Null: sides are not offered.
+     */
+    val onOpenSide: ((SessionKey) -> Unit)? = null,
+    /** The waiting pane became a thread: replace this page's route, preserving its Back destination. */
+    val onFollowSession: ((SessionKey) -> Unit)? = null,
     /**
      * The cards other agents wait on you with, in the Persona home's order, and how one opens: its chat with that card
      * first. With both, an agent's chat that has just answered its last card offers the next one (#4325).
@@ -31,6 +42,8 @@ data class ChatChromeBindings(
     val renamer: SessionRenamer? = null,
     /** Read-only access to the session's machine: the photos sent with messages (`<attached_images>`) load from it. */
     val files: SessionFiles? = null,
+    /** The hub group identity for scoping local machine-file caches across multi-hub sessions. */
+    val hubScope: String = "",
     /** Opens the session's machine's ports on the phone (docs/operations/ports.md); null: port links open as plain pages. */
     val ports: persona.core.contracts.api.PortOpener? = null,
     /**
@@ -38,11 +51,29 @@ data class ChatChromeBindings(
      * it names one; null: paths are not offered.
      */
     val onOpenPath: ((path: String, line: Int?) -> Unit)? = null,
-    /** "Hand to Persona" on a message: hands the given text to the main Persona conversation; null: not offered. */
-    val onHandToPersona: ((String) -> Unit)? = null,
     /** The assistant conversation's tasks (docs/assistant/unified-entry.md); null for an agent's chat. */
     val tasks: persona.core.domain.tasks.TasksStore? = null,
     val onOpenTodo: ((String) -> Unit)? = null,
+    val assistantManagement: persona.core.contracts.api.AssistantManagement? = null,
+    val inboxTrays: persona.core.contracts.api.AssistantInboxTrays? = null,
+    val inboxScope: String? = null,
+    val agentShares: (() -> persona.core.contracts.api.AgentShares)? = null,
+    /** Opens what fixes a turn's model error ([TurnErrorFix]): the model's set-up, or the [launcher]'s provider; null: no button. */
+    val onFixModel: ((action: persona.core.designsystem.ReadinessActionId, launcher: String?, manager: String?) -> Unit)? = null,
+    /**
+     * Opens the settings page a briefing's recommended mechanism is turned on at (#5085), for the conversation's
+     * [manager]; null: the recommended-setup rows have no button.
+     */
+    val onOpenSetup: ((page: persona.core.contracts.BriefSetupPage, manager: String?) -> Unit)? = null,
+    /** The manager's main conversation id, when known before [tasks] or [assistantManagement] resolves. */
+    val mainConversation: String? = null,
+    /**
+     * The hub's leader (direction) conversations for this manager (#6595): their patrol, supervision and relayed
+     * rounds fold like the main conversation's. Empty from an older hub or a non-assistant surface.
+     */
+    val leaderConversations: Set<String> = emptySet(),
+    /** Parent/child rows resolved for a cold link outside the root page; not list membership. */
+    val lookupRows: List<persona.core.contracts.Session> = emptyList(),
 )
 
 /** Where a branch made by "Branch to new chat" opens: an assistant's branch is an assistant conversation, an agent's an agent chat. */

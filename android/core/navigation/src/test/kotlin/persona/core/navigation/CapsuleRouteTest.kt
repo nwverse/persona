@@ -6,7 +6,7 @@ import org.junit.Test
 class CapsuleRouteTest {
     @Test fun opensTheContributingExtensionsPageWithItsState() {
         val destination = Router().parse(RouteInput.DeepLink("persona://open?target=extension&extension=sample&ui=details&title=Usage&state=next%2Fpage"))
-        assertEquals(AppTab.Settings, destination?.tab)
+        assertEquals(AppTab.Persona, destination?.tab)
         assertEquals(ExtensionUiRoute("sample", "details", "Usage", "next/page"), destination?.key)
     }
     @Test fun refusesMissingOrBlankExtensionIdentity() {

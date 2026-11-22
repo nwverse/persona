@@ -39,6 +39,11 @@ data class ExtensionManifest(
     val publisher: String? = null,
     val homepage: String? = null,
     /**
+     * Source-only square PNG artwork: 256–4096 pixels, at most 2 MiB. Catalog entry icon carries this path; strip it
+     * from packaged and runtime manifests for compatibility.
+     */
+    val icon: String? = null,
+    /**
      * What the market shows and searches (docs "Extension market"): at most 16, each 1 to 24 characters. Packages and
      * indexes carry the manifest without them (hubs before tags refuse an unknown field); the index entry carries
      * them instead.
@@ -67,8 +72,8 @@ data class ExtensionManifest(
      */
     @SerialName("extension_pack") val extensionPack: List<ExtensionPackMember>? = null,
     /**
-     * The configuration's JSON Schema, in the subset every app draws as a form (docs "Configuration: the form
-     * subset").
+     * The configuration's JSON Schema, in the settings-form subset (docs "Configuration: the form subset"). Capable
+     * clients draw declared entry lists after opting in; other clients receive compatibility projections.
      */
     val configuration: JsonElement? = null,
     val secrets: List<ExtensionSecretSpec>? = null,
@@ -83,6 +88,20 @@ data class ExtensionManifest(
      */
     val tools: List<ExtensionToolSpec>? = null,
     val auth: ExtensionAuthSpec? = null,
+    /**
+     * Configured host CLI integrations the program may use through a bounded, read-only typed RPC. IDs never name an
+     * executable; writes and arbitrary command lines are not part of this contract.
+     */
+    @SerialName("host_integrations") val hostIntegrations: List<ExtensionHostIntegrationSpec>? = null,
+)
+
+/**
+ * A configured CLI integration, selected by a closed ID rather than by an extension-provided executable.
+ */
+@Serializable
+data class ExtensionHostIntegrationSpec(
+    val id: String = "",
+    val version: String = "",
 )
 
 /**
@@ -371,9 +390,13 @@ data class ExtensionStoragePermission(
 data class ExtensionContributes(
     val connectors: List<ExtensionConnectorItem>? = null,
     val voice: List<ExtensionNamedItem>? = null,
+    val transcription: List<ExtensionNamedItem>? = null,
+    val speech: List<ExtensionNamedItem>? = null,
     val computer: List<ExtensionNamedItem>? = null,
     val browser: List<ExtensionNamedItem>? = null,
+    val iphone: List<ExtensionNamedItem>? = null,
     val quota: List<ExtensionQuotaItem>? = null,
+    val usage: List<ExtensionUsageItem>? = null,
     val providers: List<ExtensionProviderItem>? = null,
     val api: List<ExtensionAPIItem>? = null,
     val assistant: List<ExtensionAssistantItem>? = null,
@@ -392,6 +415,8 @@ data class ExtensionContributes(
     val tunnels: List<ExtensionTunnelItem>? = null,
     @SerialName("error_reports") val errorReports: List<ExtensionErrorReportsItem>? = null,
     @SerialName("auth_relay") val authRelay: List<ExtensionAuthRelayItem>? = null,
+    @SerialName("secret_providers") val secretProviders: List<ExtensionSecretProviderItem>? = null,
+    @SerialName("repository_providers") val repositoryProviders: List<ExtensionRepositoryProviderItem>? = null,
     val messaging: List<ExtensionMessagingItem>? = null,
     /** Extra keys stay at this object's level on the wire; declared fields always win. */
     val additionalProperties: Map<String, JsonElement> = emptyMap(),
@@ -401,9 +426,13 @@ data class ExtensionContributes(
 private data class ExtensionContributesKnown(
     val connectors: List<ExtensionConnectorItem>? = null,
     val voice: List<ExtensionNamedItem>? = null,
+    val transcription: List<ExtensionNamedItem>? = null,
+    val speech: List<ExtensionNamedItem>? = null,
     val computer: List<ExtensionNamedItem>? = null,
     val browser: List<ExtensionNamedItem>? = null,
+    val iphone: List<ExtensionNamedItem>? = null,
     val quota: List<ExtensionQuotaItem>? = null,
+    val usage: List<ExtensionUsageItem>? = null,
     val providers: List<ExtensionProviderItem>? = null,
     val api: List<ExtensionAPIItem>? = null,
     val assistant: List<ExtensionAssistantItem>? = null,
@@ -422,12 +451,14 @@ private data class ExtensionContributesKnown(
     val tunnels: List<ExtensionTunnelItem>? = null,
     @SerialName("error_reports") val errorReports: List<ExtensionErrorReportsItem>? = null,
     @SerialName("auth_relay") val authRelay: List<ExtensionAuthRelayItem>? = null,
+    @SerialName("secret_providers") val secretProviders: List<ExtensionSecretProviderItem>? = null,
+    @SerialName("repository_providers") val repositoryProviders: List<ExtensionRepositoryProviderItem>? = null,
     val messaging: List<ExtensionMessagingItem>? = null,
 )
 
 object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
     private val known = ExtensionContributesKnown.serializer()
-    private val keys = setOf<String>("connectors", "voice", "computer", "browser", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "messaging")
+    private val keys = setOf<String>("connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "messaging")
     override val descriptor: SerialDescriptor = known.descriptor
 
     override fun deserialize(decoder: Decoder): ExtensionContributes {
@@ -438,9 +469,13 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
         return ExtensionContributes(
             connectors = fields.connectors,
             voice = fields.voice,
+            transcription = fields.transcription,
+            speech = fields.speech,
             computer = fields.computer,
             browser = fields.browser,
+            iphone = fields.iphone,
             quota = fields.quota,
+            usage = fields.usage,
             providers = fields.providers,
             api = fields.api,
             assistant = fields.assistant,
@@ -459,6 +494,8 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             tunnels = fields.tunnels,
             errorReports = fields.errorReports,
             authRelay = fields.authRelay,
+            secretProviders = fields.secretProviders,
+            repositoryProviders = fields.repositoryProviders,
             messaging = fields.messaging,
             additionalProperties = obj.filterKeys { it !in keys },
         )
@@ -469,9 +506,13 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
         val fields = ExtensionContributesKnown(
             connectors = value.connectors,
             voice = value.voice,
+            transcription = value.transcription,
+            speech = value.speech,
             computer = value.computer,
             browser = value.browser,
+            iphone = value.iphone,
             quota = value.quota,
+            usage = value.usage,
             providers = value.providers,
             api = value.api,
             assistant = value.assistant,
@@ -490,6 +531,8 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             tunnels = value.tunnels,
             errorReports = value.errorReports,
             authRelay = value.authRelay,
+            secretProviders = value.secretProviders,
+            repositoryProviders = value.repositoryProviders,
             messaging = value.messaging,
         )
         val obj = output.json.encodeToJsonElement(known, fields) as JsonObject
@@ -499,16 +542,29 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
 
 /**
  * A skill (docs "Declarative contributions"): a directory of the package with SKILL.md, put in with the assistant's
- * skills.
+ * skills. With source data (docs "Assistant content from the data directory"): a directory of the extension's data
+ * directory whose subdirectories with a SKILL.md are skills its program writes (Markdown files only, 256 KB and 32
+ * skills per extension).
  */
 @Serializable
 data class ExtensionSkillItem(
     val id: String = "",
     /**
-     * The directory, relative to the package.
+     * The directory, relative to the package (or to the data directory with source data).
      */
     val dir: String = "",
+    val source: String? = null,
 )
+
+/**
+ * Where a skill's or a prompt's files are: package (the default) or data, the extension's data directory, which its
+ * program writes and upgrades keep.
+ */
+object ExtensionContentSource {
+    const val PACKAGE = "package"
+    const val DATA = "data"
+    val ALL = listOf("package", "data")
+}
 
 /**
  * Values of PromptKind.
@@ -516,21 +572,36 @@ data class ExtensionSkillItem(
 object ExtensionPromptKind {
     const val INSTRUCTIONS = "instructions"
     const val QUICK = "quick"
-    val ALL = listOf("instructions", "quick")
+    const val PROJECT_CONTEXT = "project_context"
+    const val INBOX_CONTEXT = "inbox_context"
+    val ALL = listOf("instructions", "quick", "project_context", "inbox_context")
 }
 
 /**
- * A prompt: instructions (a .md of the package added to the assistant's CLAUDE.md) or quick (a template the apps
- * offer in the message box).
+ * A prompt: instructions (a .md of the package, or with source data of the data directory, added to the assistant's
+ * CLAUDE.md), quick (a template the apps offer in the message box), project_context (a directory of the data
+ * directory whose <project slug>.md files go into a new Agent's project background) or inbox_context (a .md of the
+ * data directory added to the Inbox's triage and draft prompts).
  */
 @Serializable
 data class ExtensionPromptItem(
     val id: String = "",
     val kind: String = "",
+    val source: String? = null,
     /**
-     * instructions: the .md file.
+     * instructions: the .md file (with source data: at most 6 KB, adopted at most once a day); inbox_context: the .md
+     * file (1 KB used).
      */
     val file: String? = null,
+    /**
+     * project_context: the directory of <project slug>.md files (1.5 KB of each used).
+     */
+    val dir: String? = null,
+    /**
+     * inbox_context: a text file of sentences, one a line, a draft must not repeat word for word (64 KB used); only
+     * checked, never in a prompt.
+     */
+    @SerialName("never_quote") val neverQuote: String? = null,
     /**
      * quick: what the apps show.
      */
@@ -646,7 +717,7 @@ data class ExtensionLookAvatar(
 )
 
 /**
- * An appearance's colors, #RRGGBB (docs/apple/persona.md "Palettes", the apps' PersonaPalette).
+ * An appearance's colors, #RRGGBB (docs/apple/persona.md "Color scheme", the apps' PersonaPalette).
  */
 @Serializable
 data class ExtensionLookPalette(
@@ -697,8 +768,8 @@ data class ExtensionLookDot(
 )
 
 /**
- * A look (docs/extensions/extensions.md "Looks"): Persona's name, face, colors and dot, served as a persona package.
- * app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
+ * A look (docs/extensions/extensions.md "Avatars"): Persona's name, face, colors and dot, served as a persona
+ * package. app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
  */
 @Serializable
 data class ExtensionLookItem(
@@ -745,6 +816,84 @@ data class ExtensionAuthRelayItem(
 )
 
 /**
+ * Secret values it supplies for references of its schemes (op://vault/item/field): the manager calls secrets.describe
+ * and secrets.resolve when a setting holds such a reference or the user approves handing one to an Agent run. Needs
+ * the program to speak the protocol. A scheme another installed extension claims fails the install.
+ */
+@Serializable
+data class ExtensionSecretProviderItem(
+    val id: String = "",
+    /**
+     * Whose secrets these are, in a few words (1Password): the settings say From <name>.
+     */
+    val name: String = "",
+    /**
+     * The reference schemes it resolves, without :// (op).
+     */
+    val schemes: List<String> = emptyList(),
+)
+
+/**
+ * A code-hosting source on the exact hosts it names, for the repository catalog and a to-do's repositories and links
+ * there: the manager asks the program (repo.parse, repo.check, repo.link, repo.describe; repository.schema.json) and
+ * re-checks every answer. Needs the program to speak the protocol. A host another installed extension claims, on or
+ * off, fails the install, and so does one host in two items.
+ */
+@Serializable
+data class ExtensionRepositoryProviderItem(
+    val id: String = "",
+    /**
+     * What the source is called (Acme Code): the catalog and a to-do's repositories show it. Not only spaces, no
+     * control characters.
+     */
+    val name: String = "",
+    /**
+     * The exact host names whose addresses it reads (code.example.com): lowercase, no scheme, port, path or wildcard,
+     * not an IP address, and not a host the built-in GitHub and GitLab read.
+     */
+    val hosts: List<String> = emptyList(),
+    /**
+     * What it calls the link kinds it names (each at most once; the others keep their usual words). Only relabels:
+     * the kinds stay issue and pull_request.
+     */
+    @SerialName("link_kinds") val linkKinds: List<ExtensionRepositoryLinkLabel>? = null,
+    /**
+     * What else the program answers (#11584): pr_status, the state of a pull request for delivery checks
+     * (repo.pr_status). Without it the manager reads repo.describe's state. Each at most once.
+     */
+    val capabilities: List<String>? = null,
+)
+
+/**
+ * A repository provider's optional answer: pr_status (repo.pr_status).
+ */
+object ExtensionRepositoryCapability {
+    const val PR_STATUS = "pr_status"
+    val ALL = listOf("pr_status")
+}
+
+/**
+ * The word a repository provider shows for one kind of its links (MR for a pull_request).
+ */
+@Serializable
+data class ExtensionRepositoryLinkLabel(
+    val kind: String = "",
+    /**
+     * Not only spaces, no control characters.
+     */
+    val label: String = "",
+)
+
+/**
+ * The kinds of a to-do's links to a repository: an issue, or a pull request (a merge request).
+ */
+object ExtensionRepositoryLinkKind {
+    const val ISSUE = "issue"
+    const val PULL_REQUEST = "pull_request"
+    val ALL = listOf("issue", "pull_request")
+}
+
+/**
  * It is given the error and crash reports of the hub and the user's devices (error_reports.deliver): needs the
  * program to speak the protocol, on_startup and permissions.error_reports.
  */
@@ -759,7 +908,8 @@ data class ExtensionErrorReportsItem(
 
 /**
  * A tunnel the apps can reach this hub through when its own addresses do not answer (docs "In-app tunnels"): an
- * in-app tunnel core built into the app, going to the configuration's target_host and target_port.
+ * in-app tunnel core built into the app, going to the configuration's target_host and target_port; an optional
+ * integer ssh_port is the hub machine's SSH port, for an SSH tunnel the app dials through this tunnel.
  */
 @Serializable
 data class ExtensionTunnelItem(
@@ -830,7 +980,7 @@ data class ExtensionConnectorItem(
 )
 
 /**
- * A contribution with only an id and a name: voice, computer, browser.
+ * A contribution with only an id and a name: voice, transcription, speech, computer, browser.
  */
 @Serializable
 data class ExtensionNamedItem(
@@ -840,6 +990,13 @@ data class ExtensionNamedItem(
 
 @Serializable
 data class ExtensionQuotaItem(
+    val id: String = "",
+    val name: String = "",
+    val hosts: List<String>? = null,
+)
+
+@Serializable
+data class ExtensionUsageItem(
     val id: String = "",
     val name: String = "",
     val hosts: List<String>? = null,
@@ -942,6 +1099,11 @@ data class ExtensionUIItem(
      */
     val icon: String? = null,
     /**
+     * nav_page only: the icon's named color in the sidebar, the same colors as a row's icon_color, drawn only while
+     * the owner chose Colored sidebar icons (#10822); without it the icon stays the sidebar's neutral ink.
+     */
+    @SerialName("icon_color") val iconColor: String? = null,
+    /**
      * overview_card, capsule_card and widget only: a nav_page or extension_page of the same extension.
      */
     val opens: String? = null,
@@ -957,6 +1119,20 @@ data class ExtensionUIItem(
      * widget only: how often the widget is drawn again on its own (30 when not said).
      */
     @SerialName("refresh_minutes") val refreshMinutes: Int? = null,
+    /**
+     * nav_page only: the sidebar group the page goes in unless the user put it elsewhere (#9071). Title translated in
+     * l10n's groups.
+     */
+    val group: ExtensionUIGroup? = null,
+)
+
+/**
+ * A sidebar group a nav_page names (docs "UI slots"): pages of any extension naming the same id share it.
+ */
+@Serializable
+data class ExtensionUIGroup(
+    val id: String = "",
+    val title: String = "",
 )
 
 @Serializable
@@ -980,12 +1156,22 @@ data class ExtensionChannelItem(
 @Serializable
 data class ExtensionChannelCapabilities(
     @SerialName("images_in") val imagesIn: Boolean? = null,
+    /**
+     * It can send pictures: the hub puts an answer's pictures in channel.send's images instead of leaving them as
+     * Markdown in the text.
+     */
+    @SerialName("images_out") val imagesOut: Boolean? = null,
     @SerialName("files_in") val filesIn: Boolean? = null,
     @SerialName("voice_in") val voiceIn: Boolean? = null,
     val format: String? = null,
     @SerialName("max_text") val maxText: Int? = null,
     val asks: String? = null,
     val push: Boolean? = null,
+    /**
+     * It only replies to incoming messages or triggers and cannot send unsolicited proactive messages without
+     * reply_to; testing checks connectivity instead of calling channel.send.
+     */
+    @SerialName("reply_only") val replyOnly: Boolean? = null,
     val typing: Boolean? = null,
     val progress: Boolean? = null,
     val threads: Boolean? = null,
@@ -1157,6 +1343,36 @@ data class ExtensionAuthPrompt(
 )
 
 /**
+ * settings.check (manifest settings_check): the configuration and secrets as a change would leave them, before the
+ * hub saves it. The program answers whether they work (SettingsCheckResult) within 10 seconds.
+ */
+@Serializable
+data class ExtensionSettingsCheckParams(
+    /**
+     * The whole configuration as it would be saved, the schema's defaults filled in.
+     */
+    val config: JsonElement = JsonNull,
+    val secrets: Map<String, String> = emptyMap(),
+    /**
+     * The egress proxy URL for this check only, when the program runs behind the proxy and a config: entry of
+     * permissions.network names an address: requests sent through it reach the addresses this configuration names,
+     * its ordinary requests only the saved ones. It stops working once the check answers. Absent: use the program's
+     * ordinary proxy (an older hub sends none).
+     */
+    val proxy: String? = null,
+)
+
+/**
+ * settings.check's answer: ok, or why not in one sentence for the owner (the hub takes every secret out of it and
+ * cuts it to 300 characters).
+ */
+@Serializable
+data class ExtensionSettingsCheckResult(
+    val ok: Boolean = false,
+    val error: String? = null,
+)
+
+/**
  * Values of HubRole.
  */
 object ExtensionHubRole {
@@ -1170,7 +1386,9 @@ object ExtensionHubRole {
  */
 object ExtensionHubCapability {
     const val INBOX_GROUP = "inbox_group"
-    val ALL = listOf("inbox_group")
+    const val INBOX_GROUP_STATE = "inbox_group_state"
+    const val TOOL_IMAGES = "tool_images"
+    val ALL = listOf("inbox_group", "inbox_group_state", "tool_images")
 }
 
 /**
@@ -1402,6 +1620,14 @@ data class ExtensionUIPlace(
     val opens: String? = null,
     val badge: ExtensionBadge? = null,
     val connector: String? = null,
+    /**
+     * A nav_page's sidebar group, its title in the request's language (#9071).
+     */
+    val group: ExtensionUIGroup? = null,
+    /**
+     * A nav_page's icon color as its manifest names it, drawn only with Colored sidebar icons (#10822).
+     */
+    @SerialName("icon_color") val iconColor: String? = null,
 )
 
 @Serializable
@@ -1733,6 +1959,72 @@ data class ExtensionAuthRelayResult(
 )
 
 /**
+ * What a secret value is resolved for: kind extension (an extension's secret, id its id), launcher (a launcher's or
+ * model provider's key, id its name, machine the computer it goes to) or agent_run (handed to one Agent run after the
+ * user approved it on the phone, id the variable's name, machine and session the Agent's).
+ */
+@Serializable
+data class ExtensionSecretPurpose(
+    val kind: String = "",
+    val id: String = "",
+    val machine: String? = null,
+    val session: String? = null,
+)
+
+/**
+ * secrets.describe's parameters: a reference of one of the contribution's schemes.
+ */
+@Serializable
+data class ExtensionSecretsDescribeParams(
+    val contribution: String = "",
+    val reference: String = "",
+)
+
+/**
+ * What secrets.describe answers: words for people (the item and field), never a value.
+ */
+@Serializable
+data class ExtensionSecretsDescribeResult(
+    val title: String = "",
+    val detail: String? = null,
+)
+
+/**
+ * secrets.resolve's parameters: the reference and what it is resolved for. Only the manager calls it.
+ */
+@Serializable
+data class ExtensionSecretsResolveParams(
+    val contribution: String = "",
+    val reference: String = "",
+    val purpose: ExtensionSecretPurpose = ExtensionSecretPurpose(),
+)
+
+/**
+ * What secrets.resolve answers: the value, at most 16 KB. Errors: not_found, not_signed_in, rate_limited
+ * (data.retry_after), refused.
+ */
+@Serializable
+data class ExtensionSecretsResolveResult(
+    val value: String = "",
+)
+
+/**
+ * secrets.used (an event to the provider, no answer): a reference it resolved was used, for the usage record its own
+ * page shows. Never the value.
+ */
+@Serializable
+data class ExtensionSecretsUsedEvent(
+    val contribution: String = "",
+    val reference: String = "",
+    val purpose: ExtensionSecretPurpose = ExtensionSecretPurpose(),
+    val at: String = "",
+    /**
+     * settings (a reference saved in Settings), rule (an Always rule) or the approving device's id.
+     */
+    @SerialName("approved_by") val approvedBy: String? = null,
+)
+
+/**
  * extension_notification in an extension's alert push: whose it is, the page a tap opens (ui with state) and its
  * buttons (category ext.<extension>.<hash of the action ids>, registered by the app as it meets it).
  */
@@ -1766,6 +2058,15 @@ object ExtensionTextStyle {
     const val TITLE = "title"
     const val HEADLINE = "headline"
     val ALL = listOf("body", "secondary", "caption", "code", "title", "headline")
+}
+
+/**
+ * A progress drawing hint: bar (the default) or ring.
+ */
+object ExtensionProgressStyle {
+    const val BAR = "bar"
+    const val RING = "ring"
+    val ALL = listOf("bar", "ring")
 }
 
 /**
@@ -1899,8 +2200,9 @@ object ExtensionPlatform {
 
 /**
  * The fixed icon set: a nav_page's icon, a row's, an empty state's (UI version 3 for the last two and the icons after
- * money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's). Each app
- * draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is its old name).
+ * money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's; 8 a
+ * section's). Each app draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is
+ * its old name).
  */
 object ExtensionNavIcon {
     const val PLUGIN = "plugin"
@@ -1947,6 +2249,7 @@ object ExtensionNavIcon {
     const val PAUSE = "pause"
     const val STOP = "stop"
     const val SPEAKER = "speaker"
+    const val MUSIC = "music"
     const val TV = "tv"
     const val PLUG = "plug"
     const val BATTERY = "battery"
@@ -1975,7 +2278,7 @@ object ExtensionNavIcon {
     const val REFRESH = "refresh"
     const val SHARE = "share"
     const val INFO = "info"
-    val ALL = listOf("plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "extension", "person", "chat", "mail", "link", "folder", "star", "check", "warning", "clock", "tag", "search", "settings", "branch", "commit", "code", "pull_request", "merge", "file", "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play", "pause", "stop", "speaker", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car", "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit", "refresh", "share", "info")
+    val ALL = listOf("plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "extension", "person", "chat", "mail", "link", "folder", "star", "check", "warning", "clock", "tag", "search", "settings", "branch", "commit", "code", "pull_request", "merge", "file", "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play", "pause", "stop", "speaker", "music", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car", "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit", "refresh", "share", "info")
 }
 
 @Serializable
@@ -2017,6 +2320,18 @@ data class ExtensionSection(
     val items: List<ExtensionComponent> = emptyList(),
     val more: ExtensionMore? = null,
     val pane: String? = null,
+    val span: String? = null,
+    /**
+     * Drawn before the title.
+     */
+    val icon: String? = null,
+    @SerialName("icon_color") val iconColor: String? = null,
+    val link: ExtensionSectionLink? = null,
+    /**
+     * How many rows sit side by side in the section on a wide screen (UI version 8), in reading order; one on a
+     * narrow screen and when absent. Other components keep the whole width.
+     */
+    val columns: Int? = null,
 )
 
 /**
@@ -2030,8 +2345,8 @@ sealed interface ExtensionComponent {
     data class Unknown(override val type: String, val raw: JsonObject = JsonObject(emptyMap())) : ExtensionComponent
 
     companion object {
-        val TYPES = listOf("text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel")
-        val SINCE = mapOf("text" to 1, "metric" to 1, "progress" to 1, "row" to 1, "button" to 1, "link" to 1, "field" to 1, "divider" to 1, "chart" to 2, "stat_grid" to 2, "segmented" to 2, "markdown" to 3, "table" to 3, "empty" to 3, "loading" to 3, "html" to 4, "header" to 4, "breadcrumb" to 4, "file_tree" to 4, "code" to 4, "diff" to 4, "comment_thread" to 4, "composer" to 4, "image" to 6, "grid" to 6, "carousel" to 6)
+        val TYPES = listOf("text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel", "graph", "scene")
+        val SINCE = mapOf("text" to 1, "metric" to 1, "progress" to 1, "row" to 1, "button" to 1, "link" to 1, "field" to 1, "divider" to 1, "chart" to 2, "stat_grid" to 2, "segmented" to 2, "markdown" to 3, "table" to 3, "empty" to 3, "loading" to 3, "html" to 4, "header" to 4, "breadcrumb" to 4, "file_tree" to 4, "code" to 4, "diff" to 4, "comment_thread" to 4, "composer" to 4, "image" to 6, "grid" to 6, "carousel" to 6, "graph" to 10, "scene" to 11)
     }
 }
 
@@ -2071,6 +2386,8 @@ object ExtensionComponentSerializer : KSerializer<ExtensionComponent> {
                 "image" -> input.json.decodeFromJsonElement(ExtensionImageComponent.serializer(), obj)
                 "grid" -> input.json.decodeFromJsonElement(ExtensionGridComponent.serializer(), obj)
                 "carousel" -> input.json.decodeFromJsonElement(ExtensionCarouselComponent.serializer(), obj)
+                "graph" -> input.json.decodeFromJsonElement(ExtensionGraphComponent.serializer(), obj)
+                "scene" -> input.json.decodeFromJsonElement(ExtensionSceneComponent.serializer(), obj)
                 else -> ExtensionComponent.Unknown(tag, obj)
             }
         } catch (_: SerializationException) {
@@ -2109,6 +2426,8 @@ object ExtensionComponentSerializer : KSerializer<ExtensionComponent> {
             is ExtensionImageComponent -> output.json.encodeToJsonElement(ExtensionImageComponent.serializer(), value) as JsonObject
             is ExtensionGridComponent -> output.json.encodeToJsonElement(ExtensionGridComponent.serializer(), value) as JsonObject
             is ExtensionCarouselComponent -> output.json.encodeToJsonElement(ExtensionCarouselComponent.serializer(), value) as JsonObject
+            is ExtensionGraphComponent -> output.json.encodeToJsonElement(ExtensionGraphComponent.serializer(), value) as JsonObject
+            is ExtensionSceneComponent -> output.json.encodeToJsonElement(ExtensionSceneComponent.serializer(), value) as JsonObject
             is ExtensionComponent.Unknown -> value.raw
         }
         output.encodeJsonElement(JsonObject(obj + ("type" to JsonPrimitive(value.type))))
@@ -2143,7 +2462,7 @@ data class ExtensionMetricComponent(
 ) : ExtensionComponent
 
 /**
- * A bar filled to ratio (0 to 1).
+ * Progress toward a goal, filled to ratio (0 to 1).
  */
 @Serializable
 data class ExtensionProgressComponent(
@@ -2151,6 +2470,12 @@ data class ExtensionProgressComponent(
     val key: String? = null,
     val label: String = "",
     val ratio: Double = 0.0,
+    /**
+     * A drawing hint; omitted means bar. Apple Home Screen widgets (small, medium and large) draw ring as a ring;
+     * other surfaces draw a bar. Apps that do not recognize this field keep drawing a bar. Native stream does not
+     * accept this field.
+     */
+    val style: String? = null,
     val detail: String? = null,
     val tone: String? = null,
 ) : ExtensionComponent
@@ -2554,6 +2879,339 @@ data class ExtensionCarouselComponent(
 ) : ExtensionComponent
 
 /**
+ * Nodes joined by edges, drawn as a canvas the person can pan, zoom, fit and open full screen (UI version 10): work
+ * split into parts, a plan's steps, a family of things. The app lays it out (layout, direction) and draws each node
+ * with its own design system; tapping a node does its action, as a row's (or opens its in-place inspector first on
+ * the web when the node carries facts, detail or links, with the action inside); a node with children folds them.
+ * Each node counts as a component of the page. The hub refuses ids that repeat, an edge naming an unknown node or
+ * itself, a repeated edge, a cycle, a second parent in a tree, and selected or folded naming an unknown node. In a
+ * card it is a still preview that opens full screen. An older app gets a row per node in reading order, indented.
+ */
+@Serializable
+data class ExtensionGraphComponent(
+    override val type: String = "graph",
+    /**
+     * Keeps the person's pan, zoom and folding across redraws of the page.
+     */
+    val key: String? = null,
+    val nodes: List<ExtensionGraphNode> = emptyList(),
+    val edges: List<ExtensionGraphEdge>? = null,
+    val layout: String? = null,
+    val direction: String? = null,
+    /**
+     * A node's id: drawn as selected, and the canvas opens centred on it.
+     */
+    val selected: String? = null,
+    /**
+     * Ids of nodes whose children start folded. Once the person folds or unfolds one, the app keeps their choice for
+     * this key.
+     */
+    val folded: List<String>? = null,
+) : ExtensionComponent
+
+/**
+ * One node of a graph (UI version 10): a box with a title, a state line, a badge, an icon and a progress bar, in
+ * tone's role color or color's named color (never both), with optional timing and inspector details.
+ */
+@Serializable
+data class ExtensionGraphNode(
+    val id: String = "",
+    val title: String = "",
+    val subtitle: String? = null,
+    val badge: ExtensionBadge? = null,
+    val tone: String? = null,
+    val color: String? = null,
+    val icon: String? = null,
+    /**
+     * A thin bar along the node's foot, 0 to 1.
+     */
+    val progress: Double? = null,
+    /**
+     * Nodes with the same parents and the same group sit next to each other inside one frame titled with it (the same
+     * task tried several ways).
+     */
+    val group: String? = null,
+    val action: ExtensionAction? = null,
+    /**
+     * Unix timestamp in seconds when this node started.
+     */
+    @SerialName("started_at") val startedAt: Double? = null,
+    /**
+     * Unix timestamp in seconds when this node ended; omitted while still running.
+     */
+    @SerialName("ended_at") val endedAt: Double? = null,
+    /**
+     * Short label/value readings shown in the node inspector.
+     */
+    val facts: List<ExtensionFact>? = null,
+    /**
+     * Plain-text summary, verifier feedback or error shown in the node inspector.
+     */
+    val detail: String? = null,
+    /**
+     * HTTPS links shown in the node inspector (for example work and verifier sessions across attempts).
+     */
+    val links: List<ExtensionGraphNodeLink>? = null,
+)
+
+/**
+ * An https link shown in a graph node's inspector (UI version 10).
+ */
+@Serializable
+data class ExtensionGraphNodeLink(
+    val title: String = "",
+    val url: String = "",
+)
+
+/**
+ * An edge from one node to another (UI version 10): from is the parent, to the child.
+ */
+@Serializable
+data class ExtensionGraphEdge(
+    val from: String = "",
+    val to: String = "",
+)
+
+/**
+ * tree (the default): every node has at most one parent, children under it, a parent centred over its children.
+ * layered: a node may have several parents; each node sits one layer past its furthest parent (a plan whose steps
+ * wait for several others).
+ */
+object ExtensionGraphLayout {
+    const val TREE = "tree"
+    const val LAYERED = "layered"
+    val ALL = listOf("tree", "layered")
+}
+
+/**
+ * right (the default): roots at the start, children after them, so a wide fan-out reads down the screen like an
+ * outline. down: roots at the top, children below.
+ */
+object ExtensionGraphDirection {
+    const val RIGHT = "right"
+    const val DOWN = "down"
+    val ALL = listOf("right", "down")
+}
+
+/**
+ * A small 3D model the person can turn, zoom and tap (UI version 11): a home with its rooms and furniture as simple
+ * shapes, each device pinned where it is with its state, and a light in the model for lamps that are on. The app
+ * builds it with its own engine; the extension sends shapes, never a model file or code. Metres; plan coordinates [x,
+ * y] with x east and y north, heights up from the floor; angles in degrees counter-clockwise from +x seen from above.
+ * Each pin counts as a component of the page; a view has at most one scene. In a card it is a still preview that
+ * opens full screen. An older app gets the poster as an image, or without one a row per pin.
+ */
+@Serializable
+data class ExtensionSceneComponent(
+    override val type: String = "scene",
+    /**
+     * Keeps the person's camera across redraws of the page.
+     */
+    val key: String? = null,
+    /**
+     * What the model shows, in a sentence: read out first, and shown when it cannot be drawn.
+     */
+    val alt: String = "",
+    val caption: String? = null,
+    /**
+     * A picture of the model for an older app (an image in its place) and for share as image. Without it an older app
+     * gets a row per pin.
+     */
+    val poster: ExtensionImageSource? = null,
+    val camera: ExtensionSceneCamera? = null,
+    val shapes: List<ExtensionSceneShape> = emptyList(),
+    val labels: List<ExtensionSceneLabel>? = null,
+    val pins: List<ExtensionScenePin>? = null,
+) : ExtensionComponent
+
+/**
+ * Where the model is first seen from (UI version 11), orthographic, around the centre of the shapes' bounding box.
+ * Each field has its default when absent.
+ */
+@Serializable
+data class ExtensionSceneCamera(
+    /**
+     * The camera's direction from the centre, in degrees counter-clockwise from +x (east): 225 (the default) stands
+     * south-west, looking north-east.
+     */
+    val yaw: Double? = null,
+    /**
+     * Degrees above the floor plane: 35 by default, 90 straight down.
+     */
+    val pitch: Double? = null,
+    /**
+     * 1 (the default) fits the shapes' bounding box in the view; 2 draws it twice as large.
+     */
+    val zoom: Double? = null,
+)
+
+/**
+ * One shape of a scene (UI version 11), told apart by kind: a box, a cylinder or a prism, standing from bottom to top
+ * (metres above the floor, at least 0.005 apart). Without color, the material's own.
+ */
+@Serializable(with = ExtensionSceneShapeSerializer::class)
+sealed interface ExtensionSceneShape {
+    val kind: String
+
+    /** A kind this app does not know, or a variant it could not read: skipped when drawn. */
+    data class Unknown(override val kind: String, val raw: JsonObject = JsonObject(emptyMap())) : ExtensionSceneShape
+
+    companion object {
+        val KINDS = listOf("box", "cylinder", "prism")
+    }
+}
+
+object ExtensionSceneShapeSerializer : KSerializer<ExtensionSceneShape> {
+    override val descriptor: SerialDescriptor = JsonElement.serializer().descriptor
+
+    override fun deserialize(decoder: Decoder): ExtensionSceneShape {
+        val input = decoder as? JsonDecoder ?: throw SerializationException("ExtensionSceneShape needs JSON")
+        val obj = input.decodeJsonElement() as? JsonObject
+            ?: return ExtensionSceneShape.Unknown("")
+        val tag = (obj["kind"] as? JsonPrimitive)?.contentOrNull ?: ""
+        return try {
+            when (tag) {
+                "box" -> input.json.decodeFromJsonElement(ExtensionSceneBox.serializer(), obj)
+                "cylinder" -> input.json.decodeFromJsonElement(ExtensionSceneCylinder.serializer(), obj)
+                "prism" -> input.json.decodeFromJsonElement(ExtensionScenePrism.serializer(), obj)
+                else -> ExtensionSceneShape.Unknown(tag, obj)
+            }
+        } catch (_: SerializationException) {
+            ExtensionSceneShape.Unknown(tag, obj)
+        } catch (_: IllegalArgumentException) {
+            ExtensionSceneShape.Unknown(tag, obj)
+        }
+    }
+
+    override fun serialize(encoder: Encoder, value: ExtensionSceneShape) {
+        val output = encoder as? JsonEncoder ?: throw SerializationException("ExtensionSceneShape needs JSON")
+        val obj = when (value) {
+            is ExtensionSceneBox -> output.json.encodeToJsonElement(ExtensionSceneBox.serializer(), value) as JsonObject
+            is ExtensionSceneCylinder -> output.json.encodeToJsonElement(ExtensionSceneCylinder.serializer(), value) as JsonObject
+            is ExtensionScenePrism -> output.json.encodeToJsonElement(ExtensionScenePrism.serializer(), value) as JsonObject
+            is ExtensionSceneShape.Unknown -> value.raw
+        }
+        output.encodeJsonElement(JsonObject(obj + ("kind" to JsonPrimitive(value.kind))))
+    }
+}
+
+/**
+ * A box (UI version 11): at yaw 0, size[0] along +x and size[1] along +y. round rounds its corners seen from above
+ * (at most half the smaller size); the app bevels its upright edges no more than half its height.
+ */
+@Serializable
+data class ExtensionSceneBox(
+    override val kind: String = "box",
+    val center: List<Double> = emptyList(),
+    val size: List<Double> = emptyList(),
+    val yaw: Double? = null,
+    val round: Double? = null,
+    val bottom: Double = 0.0,
+    val top: Double = 0.0,
+    val color: String? = null,
+    val material: String? = null,
+) : ExtensionSceneShape
+
+/**
+ * An upright cylinder (UI version 11): a round table's top, a stool, a lamp's stem.
+ */
+@Serializable
+data class ExtensionSceneCylinder(
+    override val kind: String = "cylinder",
+    val center: List<Double> = emptyList(),
+    val radius: Double = 0.0,
+    val bottom: Double = 0.0,
+    val top: Double = 0.0,
+    val color: String? = null,
+    val material: String? = null,
+) : ExtensionSceneShape
+
+/**
+ * A floor plan's polygon raised from bottom to top (UI version 11): a room's floor, an L-shaped counter. The hub
+ * refuses a polygon that is not simple: a point twice, an edge shorter than 0.005, an edge folding back, edges that
+ * touch, an area under 0.0001.
+ */
+@Serializable
+data class ExtensionScenePrism(
+    override val kind: String = "prism",
+    val points: List<List<Double>> = emptyList(),
+    val bottom: Double = 0.0,
+    val top: Double = 0.0,
+    val color: String? = null,
+    val material: String? = null,
+) : ExtensionSceneShape
+
+/**
+ * How a shape's surface looks (UI version 11): matte (the default), glass (see-through), metal, screen (dark and
+ * glossy), tile and wood (the app's own pattern, in metres, in the shape's color).
+ */
+object ExtensionSceneMaterial {
+    const val MATTE = "matte"
+    const val GLASS = "glass"
+    const val METAL = "metal"
+    const val SCREEN = "screen"
+    const val TILE = "tile"
+    const val WOOD = "wood"
+    val ALL = listOf("matte", "glass", "metal", "screen", "tile", "wood")
+}
+
+/**
+ * A quiet name on the floor (UI version 11): a room's. Not tappable and not a component of the page; read out after
+ * alt.
+ */
+@Serializable
+data class ExtensionSceneLabel(
+    val text: String = "",
+    val at: List<Double> = emptyList(),
+    val height: Double? = null,
+)
+
+/**
+ * A device in the model (UI version 11): a pin at its place with its label and state, in tone's role color or color's
+ * named color (never both); with light on, the model lights up around it. Tapping it does its action, as a tile's.
+ * state is required when a tone other than neutral, a color or a light that is on says something, so it never rides
+ * on color or light alone. A scene has at most 16 pins with a light on.
+ */
+@Serializable
+data class ExtensionScenePin(
+    val id: String = "",
+    val at: List<Double> = emptyList(),
+    /**
+     * Metres above the floor: a ceiling lamp's 2.4, an AC's 2.2. 0 when absent.
+     */
+    val height: Double? = null,
+    val label: String = "",
+    /**
+     * In plain words: On, Off, 26 °C.
+     */
+    val state: String? = null,
+    val icon: String? = null,
+    val tone: String? = null,
+    val color: String? = null,
+    val light: ExtensionSceneLight? = null,
+    val action: ExtensionAction? = null,
+)
+
+/**
+ * A lamp's light (UI version 11): when on, the model is lit around the pin, warm or cool. Off (the default) adds no
+ * light.
+ */
+@Serializable
+data class ExtensionSceneLight(
+    val on: Boolean? = null,
+    val warmth: String? = null,
+)
+
+/**
+ * warm (the default): a lamp's yellow light; cool: a white one.
+ */
+object ExtensionSceneWarmth {
+    const val WARM = "warm"
+    const val COOL = "cool"
+    val ALL = listOf("warm", "cool")
+}
+
+/**
  * Where a picture comes from (UI version 6): an https url the app loads without credentials, or a ref the extension
  * serves itself (ui.image) through the hub; exactly one. path is written by the hub only, for a ref: its own address,
  * which the app loads with its device credentials. An extension that writes path is refused.
@@ -2700,17 +3358,43 @@ data class ExtensionTile(
     val control: ExtensionRowControl? = null,
     val actions: List<ExtensionRowAction>? = null,
     val action: ExtensionAction? = null,
+    /**
+     * Draws the tile as a ring (UI version 9): never with an image or a spark.
+     */
+    val gauge: ExtensionGauge? = null,
+)
+
+/**
+ * A tile's ring (UI version 9), for a quota or a usage: filled to ratio, with the tile's value and the unit in its
+ * centre (the percentage when the tile has no value), the title below. Without color, the tile's color, else the
+ * app's accent. An older app gets the tile without it: the unit after the value, the percentage in the subtitle, the
+ * color as the tile's.
+ */
+@Serializable
+data class ExtensionGauge(
+    /**
+     * How full the ring is, 0 to 1.
+     */
+    val ratio: Double = 0.0,
+    /**
+     * A short word under the value (USD, GB, h), as a control's unit.
+     */
+    val unit: String? = null,
+    val color: String? = null,
 )
 
 /**
  * stack: sections one under another. split: on a wide screen the side pane's sections in a column at the start, the
  * rest beside it, each scrolling on its own; on a narrow one the side pane folds into a bar on top that opens as a
- * sheet.
+ * sheet. columns (UI version 8): on a wide screen the sections are cards in a grid, two columns or three when there
+ * is room, in reading order (left to right, then down), each row as tall as its tallest card; on a narrow one a
+ * single column, as stack. An older app gets stack.
  */
 object ExtensionLayout {
     const val STACK = "stack"
     const val SPLIT = "split"
-    val ALL = listOf("stack", "split")
+    const val COLUMNS = "columns"
+    val ALL = listOf("stack", "split", "columns")
 }
 
 /**
@@ -2721,6 +3405,26 @@ object ExtensionPane {
     const val SIDE = "side"
     val ALL = listOf("main", "side")
 }
+
+/**
+ * How much of a row of a columns view a section takes (UI version 8): full, the whole row; absent, one column. Other
+ * layouts ignore it.
+ */
+object ExtensionSectionSpan {
+    const val FULL = "full"
+    val ALL = listOf("full")
+}
+
+/**
+ * A link beside a section's title (UI version 8), such as the page that has all of it: pressing it calls ui.action
+ * with action (which may answer with a push) or pushes action.push. An older app on a full page gets it as the
+ * section's last row.
+ */
+@Serializable
+data class ExtensionSectionLink(
+    val title: String = "",
+    val action: ExtensionAction = ExtensionAction(),
+)
 
 /**
  * Values of FileStatus.
@@ -3282,14 +3986,15 @@ data class ExtensionReview(
 )
 
 /**
- * Values of PersonaCardKind.
+ * ring: one day's total and its parts (a donut); stacked_bar: parts side by side to compare (days, people).
  */
 object ExtensionPersonaCardKind {
     const val STAT = "stat"
     const val STACKED_BAR = "stacked_bar"
     const val LINE = "line"
     const val BAR = "bar"
-    val ALL = listOf("stat", "stacked_bar", "line", "bar")
+    const val RING = "ring"
+    val ALL = listOf("stat", "stacked_bar", "line", "bar", "ring")
 }
 
 /**
@@ -3462,6 +4167,10 @@ data class ExtensionMessagingAccount(
     val id: String = "",
     val name: String? = null,
     val avatar: String? = null,
+    /**
+     * Hub-supplied avatar path derived from avatar. Old sources supply only avatar.
+     */
+    @SerialName("avatar_url") val avatarUrl: String? = null,
     val tenant: String? = null,
     @SerialName("signed_in") val signedIn: Boolean = false,
     val unread: Int? = null,
@@ -3489,6 +4198,10 @@ data class ExtensionMessagingConversation(
     val id: String = "",
     val name: String = "",
     val avatar: String? = null,
+    /**
+     * Hub-supplied avatar path derived from avatar. Old sources supply only avatar.
+     */
+    @SerialName("avatar_url") val avatarUrl: String? = null,
     val kind: String = "",
     val unread: Int = 0,
     @SerialName("marked_unread") val markedUnread: Boolean? = null,
@@ -3515,6 +4228,10 @@ data class ExtensionMessagingPerson(
     val id: String? = null,
     val name: String = "",
     val avatar: String? = null,
+    /**
+     * Hub-supplied avatar path derived from avatar. Old sources supply only avatar.
+     */
+    @SerialName("avatar_url") val avatarUrl: String? = null,
     val kind: String? = null,
 )
 
@@ -4067,6 +4784,10 @@ data class ExtensionMessagingProfile(
     val id: String = "",
     val name: String = "",
     val avatar: String? = null,
+    /**
+     * Hub-supplied avatar path derived from avatar. Old sources supply only avatar.
+     */
+    @SerialName("avatar_url") val avatarUrl: String? = null,
     val cover: String? = null,
     val kind: String? = null,
     val subtitle: String? = null,

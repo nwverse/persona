@@ -9,13 +9,14 @@ struct PersonaStatusIntent: AppIntent {
         categoryName: "Status",
         searchKeywords: ["Status", "pending [Persona Status Intent f81ff5]", "pending [Persona Status Intent 999a45]"]
     )
+    @available(iOS 26.0, *)
     nonisolated static var supportedModes: IntentModes { .background }
 
     nonisolated init() {}
 
     nonisolated func perform() async throws -> some IntentResult & ProvidesDialog & ReturnsValue<String> {
         do {
-            // Every group added up (docs/protocol/multi-hub.md「Siri」).
+            // Every group added up (docs/protocol/multi-hub.md「Watch, Siri, Mac, and demo mode」).
             async let sessionsRequest = IntentSupport.sessions()
             async let interactionsRequest = IntentSupport.interactions()
             async let mutesRequest = IntentSupport.mutes()

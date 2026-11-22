@@ -16,6 +16,7 @@ describe("api's read timeout", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it("gives up on a read the hub never answers, saying so", async () => {
@@ -33,6 +34,56 @@ describe("api's read timeout", () => {
     expect(isAbort(e)).toBe(false);
     expect(errorText(e)).toBe((e as Error).message);
   });
+
+  it("asks again through a gap, and leaves the hub's own answers and writes alone", async () => {
+    vi.stubEnv("MODE", "production"); // the retries are off under Vitest
+    const answer = () => ({ ok: true, status: 200, text: async () => "{}" });
+    const fetcher = vi.fn().mockRejectedValueOnce(new TypeError("flaky link")).mockResolvedValueOnce({ ok: false, status: 502, text: async () => "<html>" }).mockResolvedValueOnce(answer());
+    vi.stubGlobal("fetch", fetcher);
+    const read = api("/settings");
+    await vi.advanceTimersByTimeAsync(1300);
+    await read;
+    expect(fetcher).toHaveBeenCalledTimes(3);
+
+    const coded = vi.fn().mockResolvedValue({ ok: false, status: 502, text: async () => '{"error":"x","code":"machine_offline"}' });
+    vi.stubGlobal("fetch", coded);
+    await expect(api("/settings")).rejects.toMatchObject({ status: 502 });
+    expect(coded).toHaveBeenCalledTimes(1);
+
+    const write = vi.fn().mockRejectedValue(new TypeError("flaky link"));
+    vi.stubGlobal("fetch", write);
+    await expect(api("/todos", { method: "POST", json: {} })).rejects.toBeInstanceOf(TypeError);
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up after the last try, or with the time limit if that comes first", async () => {
+    vi.stubEnv("MODE", "production");
+    const down = vi.fn().mockRejectedValue(new TypeError("flaky link"));
+    vi.stubGlobal("fetch", down);
+    const out = api("/settings").catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(1300);
+    expect(await out).toBeInstanceOf(TypeError);
+    expect(down).toHaveBeenCalledTimes(3);
+
+    const late = api("/settings", { timeout: 200 }).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await late).toBeInstanceOf(HubTimeoutError);
+  });
+
+  it.each(["kb_disabled", "kb_unavailable", "kb_read_only", "assistant_offline", "internal"])(
+    "does not retry a knowledge refusal with production read retries enabled: %s", async (code) => {
+      vi.stubEnv("MODE", "production");
+      const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+        code, error: "Request failed", detail: "the knowledge base is off",
+      }), { status: code === "kb_read_only" ? 403 : 503 }));
+      vi.stubGlobal("fetch", fetcher);
+      await expect(api("/kb/projects")).rejects.toMatchObject({
+        code: code === "internal" ? "kb_disabled" : code,
+      });
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("lets a write wait as long as it takes", async () => {
     vi.stubGlobal("fetch", vi.fn(hang));

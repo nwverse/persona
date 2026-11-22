@@ -3,7 +3,9 @@ package hub
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -24,7 +26,24 @@ const deletedSessionsKey = "sessions.deleted"
 type deletedBook struct {
 	mu     sync.Mutex
 	loaded bool
-	m      map[string]time.Time // "machine/session id" → when it was deleted
+	m      map[string]time.Time // "machine/session id" → when it was deleted, as saved
+	// m split at the first "/": machine → session id → when. Every push looks up its machine here instead of going
+	// through all the notes, which never expire. The maps are replaced, never changed, so readers keep theirs.
+	byMachine map[string]map[string]time.Time
+}
+
+// notesByMachine is deletedBook.byMachine for the notes m.
+func notesByMachine(m map[string]time.Time) map[string]map[string]time.Time {
+	out := map[string]map[string]time.Time{}
+	for k, t := range m {
+		if machine, sid, ok := strings.Cut(k, "/"); ok {
+			if out[machine] == nil {
+				out[machine] = map[string]time.Time{}
+			}
+			out[machine][sid] = t
+		}
+	}
+	return out
 }
 
 // deletedLocked reads the notes once; b.mu is held. A failed read leaves them unloaded (nothing is saved over them).
@@ -43,11 +62,12 @@ func (h *Hub) deletedLocked(ctx context.Context) bool {
 	if m == nil {
 		m = map[string]time.Time{}
 	}
-	b.m, b.loaded = m, true
+	b.m, b.byMachine, b.loaded = m, notesByMachine(m), true
 	return true
 }
 
-// deletedAt is when each deleted session of machine was deleted, by session id.
+// deletedAt is when each deleted session of machine was deleted, by session id (nil: none). Read only: it is the
+// book's own map, which nobody changes.
 func (h *Hub) deletedAt(machine string) map[string]time.Time {
 	b := &h.deleted
 	b.mu.Lock()
@@ -55,6 +75,10 @@ func (h *Hub) deletedAt(machine string) map[string]time.Time {
 	if !h.deletedLocked(context.Background()) {
 		return nil
 	}
+	if !strings.Contains(machine, "/") {
+		return b.byMachine[machine]
+	}
+	// hub.json does not forbid a "/" in a machine id; byMachine splits such notes at its first "/", so go through them.
 	var out map[string]time.Time
 	prefix := machine + "/"
 	for k, t := range b.m {
@@ -82,7 +106,7 @@ func stillDeleted(s proto.Session, at time.Time) bool {
 // sessionHiddenByDeletion applies the same precedence to normal and archived lists.
 func sessionHiddenByDeletion(s proto.Session, deleted map[string]time.Time) bool {
 	at, ok := deleted[s.SessionID]
-	return ok && !s.ArchiveChangedAt.After(at) && stillDeleted(s, at)
+	return ok && (s.ArchiveChangedAt == nil || !s.ArchiveChangedAt.After(at)) && stillDeleted(s, at)
 }
 
 // shown is list (a machine's decorated sessions) without the ones the user deleted: what the apps get. When none is
@@ -90,7 +114,9 @@ func sessionHiddenByDeletion(s proto.Session, deleted map[string]time.Time) bool
 // ~200 KB on every push. list is never changed.
 func (h *Hub) shown(machine string, list []proto.Session) []proto.Session {
 	del := h.deletedAt(machine)
-	hidden := func(s *proto.Session) bool { return s.Archived && !s.Assistant || sessionHiddenByDeletion(*s, del) }
+	hidden := func(s *proto.Session) bool {
+		return s.IsDeleted() || s.Archived && !s.Assistant || sessionHiddenByDeletion(*s, del)
+	}
 	for i := range list {
 		if !hidden(&list[i]) {
 			continue
@@ -111,6 +137,7 @@ var (
 	errDeleteRunning   = i18n.Err("hub-deleted_sessions.running")
 	errDeleteAssistant = i18n.Err("hub-deleted_sessions.assistant")
 	errDeleteUnknown   = i18n.Err("hub-deleted_sessions.unknown")
+	errDeleteHeld      = i18n.Err("hub-deleted_sessions.held")
 )
 
 // deleteSession is DELETE /api/v1/sessions/{mid}/{sid}: take an offline session out of the apps' lists.
@@ -131,6 +158,11 @@ func (h *Hub) deleteSession(w http.ResponseWriter, r *http.Request, m *Machine) 
 	case s.Starting || s.Status == proto.StatusWorking || s.Status == proto.StatusBlocked:
 		writeErr(w, http.StatusConflict, errDeleteRunning)
 		return
+	case holdsMessages(s):
+		// Its computer's manager would send them once the computer is back, and the first would start it again: the
+		// owner deletes those first (#10661).
+		writeErr(w, http.StatusConflict, errDeleteHeld)
+		return
 	}
 	if err := h.noteDeleted(r.Context(), m.cfg.ID, id, time.Now().UTC()); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -138,6 +170,11 @@ func (h *Hub) deleteSession(w http.ResponseWriter, r *http.Request, m *Machine) 
 	}
 	h.sessionsChanged(m) // the apps get the list without it now
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+// holdsMessages: s's row shows messages held for it while its computer is away (proto.UndeliveredMessage.Computer).
+func holdsMessages(s proto.Session) bool {
+	return s.Undelivered != nil && slices.ContainsFunc(*s.Undelivered, func(u proto.UndeliveredMessage) bool { return u.Computer != "" })
 }
 
 // noteDeleted keeps deletion timestamps without expiry. A manager may retain
@@ -157,10 +194,18 @@ func (h *Hub) noteDeleted(ctx context.Context, machine, id string, at time.Time)
 	for k, t := range b.m {
 		next[k] = t
 	}
-	next[machine+"/"+id] = at
+	key := machine + "/" + id
+	next[key] = at
+	byMachine := make(map[string]map[string]time.Time, len(b.byMachine)+1)
+	maps.Copy(byMachine, b.byMachine)
+	mk, sid, _ := strings.Cut(key, "/") // as notesByMachine splits it
+	mine := make(map[string]time.Time, len(byMachine[mk])+1)
+	maps.Copy(mine, byMachine[mk])
+	mine[sid] = at
+	byMachine[mk] = mine
 	if err := h.store.PutSetting(ctx, deletedSessionsKey, next); err != nil {
 		return err
 	}
-	b.m = next
+	b.m, b.byMachine = next, byMachine
 	return nil
 }

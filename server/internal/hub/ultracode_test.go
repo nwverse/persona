@@ -17,6 +17,7 @@ func TestSessionModesSplitsUltracode(t *testing.T) {
 		methods    []string
 		params     []map[string]any
 	}{
+		{"speed", `{"service_tier":"priority"}`, []string{"session.speed"}, []map[string]any{{"session_id": "s1", "service_tier": "priority"}}},
 		{"on", `{"ultracode":true}`, []string{"session.ultracode"}, []map[string]any{{"session_id": "s1", "ultracode": true}}},
 		{"off", `{"ultracode":false}`, []string{"session.ultracode"}, []map[string]any{{"session_id": "s1", "ultracode": false}}},
 		{"after model and effort", `{"model":"opus","effort":"low","permission_mode":"auto","ultracode":true,"session_id":"wrong"}`,
@@ -105,5 +106,25 @@ func TestSessionStartForwardsUltracode(t *testing.T) {
 				t.Fatalf("node got %v", got)
 			}
 		})
+	}
+}
+
+func TestSessionSpeedValidation(t *testing.T) {
+	for _, body := range []string{`{"service_tier":true}`, `{"service_tier":""}`, `{"service_tier":"priority","effort":"low"}`} {
+		h := newTestHub(t)
+		calls := 0
+		modelsNode(t, h, MachineConfig{ID: "box"}, func(method string, p map[string]any) (any, error) { calls++; return nil, nil })
+		w := modelsRequest(h, "POST", "/api/v1/sessions/box/s1/modes", body)
+		if w.Code != http.StatusBadRequest || calls != 0 {
+			t.Fatalf("%s: %d calls=%d", body, w.Code, calls)
+		}
+	}
+	h := newTestHub(t)
+	modelsNode(t, h, MachineConfig{ID: "box"}, func(method string, p map[string]any) (any, error) {
+		return nil, errors.New("unknown method session.speed")
+	})
+	w := modelsRequest(h, "POST", "/api/v1/sessions/box/s1/modes", `{"service_tier":"priority"}`)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "node_outdated") {
+		t.Fatalf("%d %s", w.Code, w.Body)
 	}
 }

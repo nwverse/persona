@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The agents of one herdr tab as one group (#2320, `TabPanes`): their order, the Started It, which ones share a tab, and
 /// how the Agents list and the chat's tabs show them. The same rules as the web's `herdr-tree.ts`.
@@ -21,11 +22,6 @@ struct TabPanesTests {
         if let agent { o["agent"] = agent }
         if let updated { o["updated_at"] = updated }
         return try JSON.decoder.decode(Session.self, from: JSONSerialization.data(withJSONObject: o))
-    }
-
-    @Test func decodesPaneIndexAndLeavesItOutWhenAbsent() throws {
-        #expect(try session("a", place: 2).paneIndex == 2)
-        #expect(try session("a").paneIndex == nil)
     }
 
     @Test func paneNumbersFollowHerdrsCounting() throws {

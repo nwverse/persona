@@ -1,7 +1,7 @@
 import BeautifulUI
 import SwiftUI
 
-/// The voice conversation's orb (docs/assistant/voice.md「设计系统」), in the middle of the voice bar: the fast layer (the realtime
+/// The voice conversation's orb (docs/assistant/voice.md「Design system」), in the middle of the voice bar: the fast layer (the realtime
 /// voice model) at a glance. It breathes slowly while it listens, swells with the voice it hears, beats with its own voice
 /// while Persona speaks, and a ring laps it while the call connects or the bound conversation works. With Reduce Motion
 /// (or in Low Power Mode, as `PersonaDot`) every phase is a still frame, and Reduce Motion swaps one phase for the next

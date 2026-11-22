@@ -3,6 +3,7 @@ package extmgr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sync"
 	"time"
@@ -85,8 +86,11 @@ func (h *Manager) syncNodesFor(ctx context.Context, op *extOp, p *extension.Exte
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			h.syncExtensionNodes(ctx, m) // after the one the change started (one at a time per machine)
+			syncErr := h.syncExtensionNodes(ctx, m) // after the one the change started (one at a time per machine)
 			why := ""
+			if syncErr != nil {
+				why = syncErr.Error()
+			}
 			for _, st := range ps.nodes.views(id) {
 				if st.MachineID == m.cfg.ID && st.Error != "" {
 					why = st.Error
@@ -131,17 +135,23 @@ func (h *Manager) launch(ctx context.Context, job previewJob, from *extOp, async
 		op.consented, op.consentedBundle = from.consented, from.consentedBundle
 	}
 	h.extensions.ops.mu.Unlock()
+	asked := ctx
 	if async {
 		ctx = context.WithoutCancel(ctx)
 	}
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancelCause(ctx)
 	h.extensions.ops.mu.Lock()
 	op.cancel = cancel
 	h.extensions.ops.mu.Unlock()
 	do := func() (*extension.Preview, error) {
-		defer cancel()
+		defer cancel(nil)
 		pv, err := job.run(extension.WithProgress(ctx, h.progress(op)))
 		if err != nil {
+			if !async && asked.Err() != nil && errors.Is(err, context.Canceled) && !errors.Is(context.Cause(ctx), extension.ErrUserCanceled) {
+				// The app stopped waiting (a phone's request timed out on a slow download, #3692): its package
+				// goes on downloading into the cache, and asking again picks it up.
+				err = i18n.Err("hub-extension_operations.client_left")
+			}
 			h.opFail(op, err)
 			return nil, err
 		}

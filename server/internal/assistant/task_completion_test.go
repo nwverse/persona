@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -50,7 +51,7 @@ func TestTaskCompletionLimitContinueNeedsNoReport(t *testing.T) {
 			ctx := context.Background()
 			s.superviseTodo(ctx, todo.ID, "conv1", []string{"Login regression test passes"}, 0)
 			s.taskWorking(ctx, "box", "s1")
-			continuation := proto.Item{Kind: proto.KindText, Role: "user", Text: prompts.RenderAgentLimitContinue()}
+			continuation := proto.Item{Kind: proto.KindText, Role: "user", Text: prompts.RenderAgentLimitContinue("")}
 			if parsed {
 				continuation.Injected = prompts.ParseInjected(continuation.Text)
 			}
@@ -188,7 +189,7 @@ func TestTaskCompletionSideTurnNeedsFreshTaskReport(t *testing.T) {
 
 func TestTaskCompletionDoneReportFreshness(t *testing.T) {
 	at := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	for _, name := range []string{"current", "missing tool time", "missing turn boundary", "before side request", "before reopen", "before criteria update", "progress only", "untrusted tool namespace", "report is not a verdict"} {
+	for _, name := range []string{"current", "canonical tool namespace", "legacy tool namespace", "missing tool time", "missing turn boundary", "before side request", "before reopen", "before criteria update", "progress only", "untrusted tool namespace", "report is not a verdict"} {
 		t.Run(name, func(t *testing.T) {
 			work := at.Add(-time.Second)
 			todo := Todo{Title: "Fix login", CreatedAt: at.Add(-time.Hour), Supervision: &Supervision{
@@ -203,6 +204,12 @@ func TestTaskCompletionDoneReportFreshness(t *testing.T) {
 			want := false
 			switch name {
 			case "current":
+				want = true
+			case "canonical tool namespace":
+				items[1].ToolName = "mcp__persona__report_to_supervisor"
+				want = true
+			case "legacy tool namespace":
+				items[1].ToolName = "mcp__" + compat.MCPServer + "__report_to_supervisor"
 				want = true
 			case "missing tool time":
 				items[1].TS = time.Time{}
@@ -364,7 +371,10 @@ func TestTaskCompletionWaitsForTheAnswerAfterATool(t *testing.T) {
 			final.Status, final.LastText, final.UpdatedAt = finalStatus, "Delivery verified", time.Now()
 			f.setSessions("box", final)
 			s.setSessions("box", []proto.Session{final})
-			waitFor(t, "completion after the final session update", func() bool { return todoNow(s, todo.ID).DoneAt != nil })
+			waitFor(t, "completion after the final session update", func() bool {
+				c := todoNow(s, todo.ID).Check
+				return c != nil && c.Verdict == verdictDone
+			})
 			f.mu.Lock()
 			judged := f.judged
 			f.mu.Unlock()
@@ -399,7 +409,10 @@ func TestTaskCompletionReconcilesAnAnswerArrivingDuringTheRead(t *testing.T) {
 		s.setSessions("box", []proto.Session{final})
 	}})
 	s.taskTurnEnded(ctx, "box", "s1")
-	waitFor(t, "completion without another session update", func() bool { return todoNow(s, todo.ID).DoneAt != nil })
+	waitFor(t, "completion without another session update", func() bool {
+		c := todoNow(s, todo.ID).Check
+		return c != nil && c.Verdict == verdictDone
+	})
 }
 
 func TestAutoDoneSkipRecognizesCancellation(t *testing.T) {
@@ -530,6 +543,9 @@ func TestReassignedAbortedAgentSettledDoesNotCompleteTask(t *testing.T) {
 
 	s.taskTurnEnded(ctx, "box", "s2")
 
-	// Now the task SHOULD complete properly by the real agent!
-	waitFor(t, "task completion by active agent", func() bool { return todoNow(s, todo.ID).DoneAt != nil })
+	// Now the active agent's work is judged done and delivered for review; the released agent never reached this point.
+	waitFor(t, "task completion by active agent", func() bool {
+		c := todoNow(s, todo.ID).Check
+		return c != nil && c.Verdict == verdictDone
+	})
 }

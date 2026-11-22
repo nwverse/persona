@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// One "thing" in the unified inbox (docs/assistant/inbox.md): the new messages in a Feishu chat or a mail thread, with the
 /// hub's AI triage and whether it has been dealt with. Mirrors hub/inbox.go `InboxItem`.
@@ -9,26 +10,34 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     var account: String
     var accountName: String
     var title: String
+    /// Where the matter happens: a chat name, the other person in a direct chat, or a repository. Older hubs leave it out.
+    var `where`: String? = nil
     var sender: String?
     var avatar: String?
+    var avatarURL: String?
     var preview: String
     var count: Int
     var startedAt: Date?
     var updatedAt: Date?
     var tier: String?
     var summary: String?
+    /// An assistant row's text as Markdown, its line breaks kept (#9041): the detail draws it. Its `summary` and
+    /// `preview` are the same words without the marks; older hubs leave it out.
+    var body: String? = nil
     var reason: String?
     var read: Bool?
+    /// Navigation counts only unread Needs you items; reading never files them.
+    var isUnreadAction: Bool { read != true && !isDone && triage == .action }
     var doneAt: Date?
     var doneBy: String?
     var lark: Lark?
     var mail: Mail?
-    /// A Feishu document's @me / comment: the rows about the user with their status columns (docs/assistant/inbox.md「云文档」).
+    /// A Feishu document's @me / comment: the rows about the user with their status columns (docs/assistant/inbox.md「Docs: mentions in sheets, bases, and documents」).
     var doc: Doc?
     /// New foreign mail translated by the hub as it came in, by target language (subject and preview here; the body
     /// comes with the mail).
     var translations: [String: Translated]?
-    /// A Moments post where someone commented on, replied to or @ed the user (docs/assistant/inbox.md「公司圈」).
+    /// A Moments post where someone commented on, replied to or @ed the user (docs/assistant/inbox.md「Moments」).
     var moment: Moment?
     /// Only in GET /api/v1/inbox/{id}: the conversation as text.
     var context: String?
@@ -41,8 +50,14 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     /// What it holds now, as the hub listed it: a bulk Done sends it back so an item that took new messages since
     /// is left open (older hubs leave it out).
     var version: String?
-    /// What it grew out of (docs/assistant/inbox.md「thread line」, #2128): another item, a todo or an agent session; older hubs leave it out.
+    /// What it grew out of (docs/assistant/inbox.md「Relationships: parents and children」, #2128): another item, a todo or an agent session; older hubs leave it out.
     var parent: InboxParent?
+    /// The manager it belongs to, as the hub stamps a merged list (docs/protocol/protocol.md "Per-manager routing"); nil
+    /// from a hub before managers. What is done to it goes to that manager (`APIClient.manager(_:)`).
+    var manager: String?
+    /// Its place in the list: each manager numbers its own items, so two managers may both have an `id`.
+    var key: String { Self.key(id: id, manager: manager) }
+    static func key(id: String, manager: String?) -> String { manager.map { "\($0)\u{0}\(id)" } ?? id }
     /// Inbox phase 1 (docs/assistant/inbox.md): the section the hub put an open item in (action | working | fyi | noise;
     /// nil from an older hub: the list goes by `tier`), urgent (someone waits), the manager's recap, the processing
     /// conversation, the current suggestion, the chain and related items. Older hubs leave them all out.
@@ -51,8 +66,63 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     var recap: String?
     var handling: Handling?
     var suggestion: Suggestion?
+    /// What the matter waits on and when to look again. `now` is the manager's state key; clients put it in words.
+    var follow: Follow? = nil
+    var now: String? = nil
     var chain: [ChainEntry]?
+    /// A done item listed with only its newest chain entry (the app asks with `chain=last`, #4742): how many it has.
+    /// GET /api/v1/inbox/{id} has them all (InboxChainSection reads it when the item opens). nil: `chain` is all of it.
+    var chainCount: Int?
     var related: [Related]?
+    /// The conversations it was handed to with Hand to AI's main chat (#1194), oldest first: they may write back to
+    /// it, and the main conversation offers "Wrap up" for it (#5932). Older hubs leave it out.
+    var handoffs: [Handoff]?
+    /// The rows merged into this one by hand (#6480); the hub hides them from every list.
+    var mergedFrom: [MergeRef]?
+
+    /// One row merged into another: where it came from.
+    nonisolated struct MergeRef: Codable, Hashable, Sendable {
+        var id: String
+        var source: String
+        var accountName: String?
+        var title: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id, source, title
+            case accountName = "account_name"
+        }
+    }
+
+    /// The follow-up facts a client reads (spec/fixtures/inbox/now.json); the manager keeps the counters and due flag.
+    nonisolated struct Follow: Codable, Hashable, Sendable {
+        var who: String?
+        var next: String?
+        var checkAt: Date?
+
+        init(who: String? = nil, next: String? = nil, checkAt: Date? = nil) {
+            self.who = who
+            self.next = next
+            self.checkAt = checkAt
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case who, next
+            case checkAt = "check_at"
+        }
+    }
+
+    /// One hand-off of the item to a conversation (POST /api/v1/inbox/{id}/handoff).
+    nonisolated struct Handoff: Codable, Hashable, Sendable {
+        var machineID: String
+        var sessionID: String
+        var at: Date?
+
+        enum CodingKeys: String, CodingKey {
+            case at
+            case machineID = "machine_id"
+            case sessionID = "session_id"
+        }
+    }
 
     /// One thing an item can be muted by: a repository, a chat or a sender of its source.
     nonisolated struct MuteOption: Codable, Hashable, Sendable {
@@ -91,10 +161,14 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
         /// Where a reply goes and who sees it (「评论到 example-org/example-repo#12（仓库可见的人都能看到）」).
         var replyTo: String?
         var canReply: Bool?
+        /// The thread's picture as the hub's avatars route serves it (`ChatAvatar`, docs/protocol/protocol.md "Avatars"):
+        /// the other person of a private chat, a group's own. Apart from the item's `avatar` (Feishu's URL); nil draws the
+        /// initial (an older hub, a connector that sends none).
+        var avatarURL: String?
 
         enum CodingKeys: String, CodingKey {
             case thread, label, url
-            case openURL = "open_url", replyTo = "reply_to", canReply = "can_reply"
+            case openURL = "open_url", replyTo = "reply_to", canReply = "can_reply", avatarURL = "avatar_url"
         }
 
         /// The thread as people write it (example-org/example-repo#12), nil when it is only an id.
@@ -242,12 +316,18 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
 
     nonisolated struct Mail: Codable, Hashable, Sendable {
         var accountID: String
-        var mailbox: String
+        var mailbox: String?
         var uids: [UInt32]
         var messageID: String?
         var from: MailAddress?
         var direct: Bool?
         var thread: String?
+
+        /// INBOX is the implicit source on older hubs. Preserve every other folder's spelling and hierarchy.
+        var sourceMailbox: String? {
+            guard let mailbox, !mailbox.isEmpty, mailbox.lowercased() != "inbox" else { return nil }
+            return mailbox
+        }
 
         enum CodingKeys: String, CodingKey {
             case mailbox, uids, from, direct, thread
@@ -256,12 +336,17 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, source, kind, account, title, sender, avatar, preview, count, tier, summary, reason, read, lark, mail, doc, moment, context, agent, translations, connector, mutes, version, parent
-        case status, urgent, recap, handling, suggestion, chain, related
+        case avatarURL = "avatar_url"
+        case id, source, kind, account, title, `where`, sender, avatar, preview, count, tier, summary, body, reason, read, lark, mail, doc, moment, context, agent, translations, connector, mutes, version, parent
+        case status, urgent, recap, handling, suggestion, follow, now, chain, related, manager, handoffs
+        case mergedFrom = "merged_from"
         case accountName = "account_name", startedAt = "started_at", updatedAt = "updated_at", doneAt = "done_at", doneBy = "done_by"
+        case chainCount = "chain_count"
     }
 
     var isDone: Bool { doneAt != nil }
+    /// Listed with part of its chain: the rest is read when it opens.
+    var chainCut: Bool { (chainCount ?? 0) > (chain?.count ?? 0) }
     var isLark: Bool { source == "lark" }
 
     /// The list's sections of open items, in order: Needs You, In Progress (the AI or an Agent on it, or waiting for the
@@ -271,7 +356,7 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
         var title: String {
             switch self {
             case .action: StateName.needsYou.text
-            case .working: String(localized: "Active")
+            case .working: String(localized: "In Progress")
             case .fyi: String(localized: "FYI")
             case .noise: String(localized: "Collapsed [Readiness Card ee6046]")
             }
@@ -371,6 +456,16 @@ nonisolated struct InboxTriageStatus: Codable, Hashable, Sendable {
         var state: String
         var reason: String?
         var waiting: Int
+        /// timeout | rate_limited | login_refused | failed: this round could not read the source, so its items may be old.
+        var readError: String? = nil
+        /// The failed read in the hub's words; older hubs may omit it.
+        var readReason: String? = nil
+
+        private enum CodingKeys: String, CodingKey {
+            case source, name, state, reason, waiting
+            case readError = "read_error"
+            case readReason = "read_reason"
+        }
     }
 }
 
@@ -378,6 +473,66 @@ nonisolated struct InboxTriageStatus: Codable, Hashable, Sendable {
 nonisolated struct InboxListing: Decodable, Sendable {
     var items: [InboxItem]
     var triage: InboxTriageStatus?
+    /// Asked with `since` (docs/protocol/protocol.md "Inbox delta", #4740): what names this list for the next one; nil
+    /// from a hub without deltas.
+    var cursor: String?
+    /// A delta: `items` are only the ones added or changed since the cursor asked with, `removed` the ones gone.
+    var delta: Bool?
+    var removed: [Removed]?
+    /// What `since` says before the app holds a cursor: one no list has, so the hub answers the whole list and its cursor
+    /// (an empty value would not be sent at all).
+    static let noCursor = "0"
+
+    nonisolated struct Removed: Decodable, Sendable, Hashable {
+        var id: String
+        var manager: String?
+        var key: String { InboxItem.key(id: id, manager: manager) }
+    }
+
+    /// `held` with this delta applied: changed items in place, new ones in, removed ones out, then in the hub's order
+    /// (each manager's items together, the managers as they came; newest first, by id among items of the same moment).
+    func applied(to held: [InboxItem]) -> [InboxItem] {
+        let gone = Set((removed ?? []).map(\.key))
+        var changed: [String: InboxItem] = [:]
+        for it in items where changed[it.key] == nil { changed[it.key] = it }
+        var out = held.compactMap { it -> InboxItem? in
+            guard !gone.contains(it.key) else { return nil }
+            return changed.removeValue(forKey: it.key) ?? it
+        }
+        out += items.filter { changed.removeValue(forKey: $0.key) != nil }
+        var managers: [String: Int] = [:]
+        for it in out where managers[it.manager ?? ""] == nil { managers[it.manager ?? ""] = managers.count }
+        return out.sorted { a, b in
+            let ma = managers[a.manager ?? ""] ?? 0, mb = managers[b.manager ?? ""] ?? 0
+            if ma != mb { return ma < mb }
+            let ta = a.updatedAt ?? .distantPast, tb = b.updatedAt ?? .distantPast
+            return ta != tb ? ta > tb : a.id < b.id
+        }
+    }
+}
+
+/// A page of the hub's done history (GET /api/v1/inbox/done, #2200): done items older than the list's few days, newest
+/// done first; `next` is where the following page starts, present when this one is full.
+nonisolated struct InboxDonePage: Decodable, Sendable {
+    nonisolated struct Cursor: Codable, Sendable, Equatable {
+        var before: String
+        var beforeID: String
+        enum CodingKeys: String, CodingKey {
+            case before
+            case beforeID = "before_id"
+        }
+    }
+    var items: [InboxItem]
+    var next: Cursor?
+}
+
+/// GET /api/v1/inbox/done/days' answer (#2967): the done items per calendar day in the zone asked for.
+nonisolated struct InboxDoneDays: Decodable, Sendable {
+    nonisolated struct Day: Decodable, Sendable {
+        var day: String
+        var count: Int
+    }
+    var days: [Day]
 }
 
 extension APIClient {
@@ -398,6 +553,52 @@ extension APIClient {
         try await Self.decodeInbox(request("GET", "/api/v1/inbox", query: connectors ? ["sources": "all"] : [:]))
     }
 
+    /// The list again, sending the tag of the one held as `If-None-Match`: nil when it is still the hub's (304), and
+    /// nothing is downloaded or decoded. Without a tag it sends one no answer has, so the hub tags its answer
+    /// (docs/protocol/protocol.md "Inbox validator", #4739). Old hubs answer the whole list every time, untagged.
+    func inboxListing(connectors: Bool, etag: String?) async throws -> (listing: InboxListing?, etag: String?) {
+        let answer = try await conditionalGet("/api/v1/inbox", query: connectors ? ["sources": "all"] : [:],
+                                              etag: etag ?? Self.noInboxTag)
+        guard let data = answer.data else { return (nil, etag) }
+        return (try await Self.decodeInbox(data), answer.etag)
+    }
+
+    /// The list asked with `since` (docs/protocol/protocol.md "Inbox delta", #4740): a cursor of a list this app holds, or
+    /// `InboxListing.noCursor` for the whole list and its cursor. A hub without deltas answers the whole list, no cursor.
+    /// Done items come with their newest chain entry alone (`chain=last`, #4742): about half of a busy hub's list was
+    /// done items' chains, which are drawn only once an item opens. An older hub ignores it.
+    func inboxListing(connectors: Bool, since: String) async throws -> InboxListing {
+        var query = ["since": since, "chain": "last"]
+        if connectors { query["sources"] = "all" }
+        return try await Self.decodeInbox(request("GET", "/api/v1/inbox", query: query))
+    }
+
+    /// The tag a client sends before it has one (as the web app does): no answer has it.
+    nonisolated static let noInboxTag = #"W/"i1-""#
+
+    /// A page of done items older than the list's (GET /api/v1/inbox/done, #2200), from `after` (nil: the newest).
+    /// `before` without a cursor is a moment: the items done before it (a Done group's end, #2969).
+    func inboxDone(after cursor: InboxDonePage.Cursor?, before moment: Date? = nil, limit: Int = 100, connectors: Bool = false) async throws -> InboxDonePage {
+        var query = ["limit": String(limit)]
+        if connectors { query["sources"] = "all" }
+        if let cursor {
+            query["before"] = cursor.before
+            query["before_id"] = cursor.beforeID
+        } else if let moment {
+            query["before"] = moment.formatted(.iso8601)
+        }
+        return try await JSON.decoder.decode(InboxDonePage.self, from: request("GET", "/api/v1/inbox/done", query: query))
+    }
+
+    /// The done items per calendar day in `zone` (GET /api/v1/inbox/done/days, #2967): "YYYY-MM-DD" → count. 404 on a
+    /// hub from before them.
+    func inboxDoneDays(zone: String, connectors: Bool = false) async throws -> [String: Int] {
+        var query = ["tz": zone]
+        if connectors { query["sources"] = "all" }
+        let page = try JSON.decoder.decode(InboxDoneDays.self, from: try await request("GET", "/api/v1/inbox/done/days", query: query))
+        return Dictionary(page.days.map { ($0.day, $0.count) }, uniquingKeysWith: +)
+    }
+
     /// Collects Feishu and mail now, then lists.
     func refreshInbox(connectors: Bool = false) async throws -> InboxListing {
         try await Self.decodeInbox(request("POST", "/api/v1/inbox/refresh", query: connectors ? ["sources": "all"] : [:],
@@ -413,6 +614,29 @@ extension APIClient {
     /// An item's Thread (#2128): what it hangs under and what hangs under it. Older hubs answer 404.
     func inboxTree(_ kind: String, _ id: String) async throws -> InboxTree {
         try await get(Self.inboxTreePath(kind, id))
+    }
+
+    /// The body of PUT /api/v1/inbox/{id}/parent is the parent object itself, or JSON null; it is never wrapped in
+    /// a `parent` field. An optional passed straight to `request` would instead leave the body empty.
+    private nonisolated struct InboxParentBody: Encodable, Sendable {
+        /// Only the value is encoded; this property name never appears in the JSON body.
+        var node: InboxParent?
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.singleValueContainer()
+            if let node {
+                try container.encode(node)
+            } else {
+                try container.encodeNil()
+            }
+        }
+    }
+
+    /// Hangs an item under another item, a to-do or an Agent session, or removes that relationship with nil.
+    /// The hub answers with the changed item.
+    func setInboxParent(_ id: String, _ parent: InboxParent?) async throws -> InboxItem {
+        let data = try await request("PUT", "/api/v1/inbox/" + id + "/parent", body: InboxParentBody(node: parent))
+        return try JSON.decoder.decode(InboxItem.self, from: data)
     }
 
     /// `/api/v1/inbox/tree/<kind>/<id>`: each segment escaped (an id may carry '#', a space…), a session's slash kept
@@ -436,7 +660,7 @@ extension APIClient {
                        as: InboxBulkResult.self)
     }
 
-    /// Clear All (`POST /api/v1/inbox/bulk`, docs/assistant/inbox.md「全部清理」): `action` is `dismiss` (the hub takes `done` too),
+    /// Clear All (`POST /api/v1/inbox/bulk`, docs/assistant/inbox.md「Clean up all」): `action` is `dismiss` (the hub takes `done` too),
     /// each item with the version it was listed at (the hub leaves one that took new messages since: `skipped`, changed).
     func bulkInbox(_ action: String, _ items: [InboxItem]) async throws -> InboxBulkReply {
         try await post("/api/v1/inbox/bulk",
@@ -504,6 +728,18 @@ extension APIClient {
     private struct InboxHandoffBody: Encodable { var text: String; var clientID: String
         enum CodingKeys: String, CodingKey { case text, clientID = "client_id" }
     }
+    private nonisolated struct InboxHandoffRecordBody: Encodable, Sendable {
+        struct Session: Encodable, Sendable {
+            var machineID: String
+            var sessionID: String
+            enum CodingKeys: String, CodingKey { case machineID = "machine_id", sessionID = "session_id" }
+        }
+        var session: Session
+        var kind: InboxHandoffRecordKind
+        var title: String
+        var clientID: String
+        enum CodingKeys: String, CodingKey { case session, kind, title, clientID = "client_id" }
+    }
     private nonisolated struct InboxHandoffResponse: Decodable, Sendable {
         struct Ref: Decodable, Sendable { var machineID: String; var sessionID: String
             enum CodingKeys: String, CodingKey { case machineID = "machine_id", sessionID = "session_id" }
@@ -550,10 +786,26 @@ extension APIClient {
         return InboxHandoffAnswer(item: r.item, session: SessionKey(group: group, machineID: r.session.machineID, sessionID: r.session.sessionID))
     }
 
+    /// Records a new conversation or Agent hand-off after the client delivered its message. With no `text`, this only
+    /// links the session to the item; it never sends another message. Older hubs may answer 400 / 404 / 405, which the
+    /// caller treats as an unavailable record rather than a failed hand-off.
+    func inboxHandoffRecord(_ id: String, session: SessionKey, kind: InboxHandoffRecordKind, title: String, clientID: UUID) async throws {
+        try await post("/api/v1/inbox/" + id + "/handoff",
+                       body: InboxHandoffRecordBody(
+                        session: .init(machineID: session.machineID, sessionID: session.sessionID),
+                        kind: kind, title: title, clientID: clientID.uuidString.lowercased()))
+    }
+
     /// Moves one row's status in the document; the item comes back read again.
     func inboxDocStatus(_ id: String, _ change: InboxItem.DocChange) async throws -> InboxItem {
         try await post("/api/v1/inbox/" + id + "/doc/status", body: change, timeout: 60, as: InboxItem.self)
     }
+}
+
+/// The destination recorded for an already-delivered hand-off.
+nonisolated enum InboxHandoffRecordKind: String, Encodable, Hashable, Sendable {
+    case agent
+    case conversation
 }
 
 /// What `POST /api/v1/inbox/{id}/handoff` answers: the item (nil from a hub that leaves it out) and the conversation it
@@ -572,6 +824,8 @@ nonisolated struct InboxMute: Codable, Identifiable, Hashable, Sendable {
     var value: String
     var name: String
     var createdAt: Date?
+    /// Whose mute it is (several managers: each keeps its own, and the Muted list stamps it); nil: the default's.
+    var manager: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, source, tag, value, name
@@ -628,6 +882,8 @@ nonisolated struct InboxPolicy: Decodable, Identifiable, Hashable, Sendable {
     var twin: Twin
     var createdAt: Date?
     var updatedAt: Date?
+    /// Whose rule it is (several managers: each keeps its own, and the Rules list stamps it); nil: the default's.
+    var manager: String?
 
     enum CodingKeys: String, CodingKey {
         case id, source, tag, value, name, tier, twin
@@ -742,8 +998,29 @@ nonisolated struct InboxBulkResult: Decodable, Sendable, Equatable {
     nonisolated struct Skip: Decodable, Sendable, Equatable {
         var id: String
         var reason: String
+        /// The manager that was asked (`stamped`); its answer names none.
+        var manager: String? = nil
+        var key: String { InboxItem.key(id: id, manager: manager) }
+
+        enum CodingKeys: String, CodingKey { case id, reason }
     }
     var changed: [InboxItem]
     var unchanged: [String]
     var skipped: [Skip]
+
+    static let none = InboxBulkResult(changed: [], unchanged: [], skipped: [])
+
+    /// The answer of the manager asked, its items stamped with it as its list stamped them (`InboxItem.key`).
+    func stamped(_ manager: String?) -> InboxBulkResult {
+        guard let manager else { return self }
+        return InboxBulkResult(changed: changed.map { var it = $0; it.manager = it.manager ?? manager; return it },
+                               unchanged: unchanged,
+                               skipped: skipped.map { var s = $0; s.manager = manager; return s })
+    }
+
+    mutating func add(_ other: InboxBulkResult) {
+        changed += other.changed
+        unchanged += other.unchanged
+        skipped += other.skipped
+    }
 }

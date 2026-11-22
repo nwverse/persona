@@ -12,6 +12,31 @@ import org.junit.Test
 
 /** New agents follow the "New Agent" model configuration and start in the background (docs/protocol/protocol.md "New session"). */
 class AgentCreationModelTest {
+    @Test fun ompUsesTheOrdinarySessionEndpointWithOnlyTheChosenModel() = runBlocking {
+        MockWebServer().use { server ->
+            val service = HttpAgentCreationService("hub/pairing", server.url("/").toString(), "test-token", OkHttpClient())
+            server.enqueue(MockResponse().setBody("""{"agent":"omp","models":[],"locked":"Pinned on this computer"}"""))
+            assertEquals("Pinned on this computer", service.launcherModels("box", "omp", false, "herdr")?.locked)
+            assertEquals("/api/v1/machines/box/launchers/omp/models?host=herdr", server.takeRequest().path)
+            for ((launcher, model) in listOf("omp" to null, "omp" to "openai/gpt-5.2", "" to null)) {
+                server.enqueue(MockResponse().setBody("""{"session":{"machine_id":"box","session_id":"created"}}"""))
+                val start = AgentStartRequest("box", "/project", launcher, workspaceId = "workspace", agentType = "omp", model = model)
+                service.start(start, java.util.UUID.randomUUID().toString())
+                val post = server.takeRequest()
+                assertEquals("POST", post.method)
+                assertEquals("/api/v1/sessions", post.path)
+                assertEquals(buildJsonObject {
+                    put("machine_id", "box")
+                    put("cwd", "/project")
+                    put("launcher", launcher)
+                    put("workspace_id", "workspace")
+                    put("agent_type", "omp")
+                    model?.let { put("model", it) }
+                }, JsonCodec.parseToJsonElement(post.body.readUtf8()))
+            }
+        }
+    }
+
     @Test fun anAsyncStartWithoutLauncherFollowsTheConfigurationAndCarriesTheNameHint() = runBlocking {
         MockWebServer().use { server ->
             val service = HttpAgentCreationService("hub/pairing", server.url("/").toString(), "test-token", OkHttpClient())
@@ -112,6 +137,48 @@ class AgentCreationModelTest {
             server.enqueue(MockResponse().setBody("""{"session":{"machine_id":"mac","session_id":"b"}}"""))
             service.start(AgentStartRequest("mac", "/code", "claude"), "00000000-0000-4000-8000-000000000005")
             assertFalse(JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject.containsKey("model"))
+        }
+    }
+
+    /** A new agent's own worktree (#4532): status, add and remove, their bodies, and an older hub's status is none. */
+    @Test fun worktreesAreAskedForMadeAndRemoved() = runBlocking {
+        MockWebServer().use { server ->
+            val service = HttpAgentCreationService("hub/pairing", server.url("/").toString(), "test-token", OkHttpClient())
+            server.enqueue(MockResponse().setBody("""{"worktree":true,"ours":true,"path":"/wt/x","branch":"persona/x","root":"/code",
+                "main_branch":"main","checkouts":"/wt","dirty":2,"unmerged":1,"extra":true}"""))
+            assertEquals(WorktreeStatus(true, true, "/wt/x", "persona/x", "/code", "main", "/wt", 2, 1), service.worktreeStatus("mac", "/wt/x"))
+            server.takeRequest().let {
+                assertEquals("/api/v1/machines/mac/worktree/status", it.path)
+                assertEquals("""{"cwd":"/wt/x"}""", it.body.readUtf8())
+            }
+            server.enqueue(MockResponse().setResponseCode(404).setBody("404 page not found"))
+            assertNull(service.worktreeStatus("mac", "/code"))
+            server.takeRequest()
+            server.enqueue(MockResponse().setBody("""{"path":"/wt/persona-fix","branch":"persona/fix","root":"/code"}"""))
+            assertEquals(WorktreeAdded("/wt/persona-fix", "persona/fix", "/code"), service.addWorktree("mac", "/code", "Fix it", " "))
+            assertEquals(buildJsonObject { put("cwd", "/code"); put("name_hint", "Fix it") },
+                JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()))
+            server.enqueue(MockResponse().setBody("""{"removed":true,"branch_deleted":true}"""))
+            assertEquals(WorktreeRemoved(true, true), service.removeWorktree("mac", "/wt/x", deleteBranch = true, force = false))
+            server.takeRequest().let {
+                assertEquals("/api/v1/machines/mac/worktree/remove", it.path)
+                assertEquals(buildJsonObject { put("path", "/wt/x"); put("delete_branch", true) }, JsonCodec.parseToJsonElement(it.body.readUtf8()))
+            }
+            server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"a live agent is in it","code":"worktree_in_use"}"""))
+            assertEquals("worktree_in_use", (runCatching { service.removeWorktree("mac", "/wt/x", false, false) }.exceptionOrNull() as HubFailure).code)
+            server.takeRequest()
+            // The engine the agent opens in or ran in, which makes and removes its worktree, goes as the kind.
+            server.enqueue(MockResponse().setBody("""{"worktree":true,"ours":false,"path":"/wt/x","dirty":0,"unmerged":0}"""))
+            service.worktreeStatus("mac", "/wt/x", "paseo")
+            assertEquals(buildJsonObject { put("cwd", "/wt/x"); put("kind", "paseo") }, JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()))
+            // Paseo makes it as a workspace of its own, which the start goes into (#8856)
+            server.enqueue(MockResponse().setBody("""{"path":"/p/persona-fix","branch":"persona/fix","root":"/code","workspace_id":"ws-made"}"""))
+            assertEquals(WorktreeAdded("/p/persona-fix", "persona/fix", "/code", "ws-made"), service.addWorktree("mac", "/code", "Fix it", "", "paseo"))
+            assertEquals(buildJsonObject { put("cwd", "/code"); put("name_hint", "Fix it"); put("kind", "paseo") },
+                JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()))
+            server.enqueue(MockResponse().setBody("""{"removed":true,"branch_deleted":false}"""))
+            service.removeWorktree("mac", "/p/persona-fix", deleteBranch = false, force = false, kind = "paseo")
+            assertEquals(buildJsonObject { put("path", "/p/persona-fix"); put("kind", "paseo") }, JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()))
         }
     }
 }

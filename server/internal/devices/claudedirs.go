@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/devicewire"
@@ -27,6 +28,15 @@ func claudeDirsBlockedKey(machine string) string { return "claude_dirs_blocked/"
 func (m *Machine) blockedClaudeDirs(ctx context.Context) []string {
 	out, _ := m.readBlockedClaudeDirs(ctx)
 	return out
+}
+
+// blockedClaudeDirsParam is node.configure's claude_dirs_blocked: never null, which the node reads as "leave the
+// patterns as they are", so lifting the last pattern would leave its directory blocked there.
+func (m *Machine) blockedClaudeDirsParam(ctx context.Context) []string {
+	if out := m.blockedClaudeDirs(ctx); out != nil {
+		return out
+	}
+	return []string{}
 }
 
 // readBlockedClaudeDirs is blockedClaudeDirs with the read error, for the writers that must not act on a list they
@@ -68,6 +78,44 @@ func (m *Machine) claudeDirs(ctx context.Context) []string {
 	return slices.DeleteFunc(dirs, func(d string) bool { return proto.ClaudeDirBlocked(d, home, blocked) })
 }
 
+// withClaudeDirs is a node.configure's params with the config directories added when they name neither claude_dirs
+// nor keep_sessions: the node takes such a call's (absent) directories as none (node/node.go node.configure), so a
+// per-machine switch (botmux, herdr autostart) or an extension's agent filters would make it forget them until it
+// reconnects. Params that are not a JSON object go as they are.
+func (m *Machine) withClaudeDirs(ctx context.Context, params any) any {
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return params
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return params
+	}
+	_, dirs := fields["claude_dirs"]
+	_, keep := fields["keep_sessions"]
+	if dirs || keep {
+		return params
+	}
+	list, err := json.Marshal(m.claudeDirs(ctx))
+	if err != nil {
+		return params
+	}
+	if fields == nil { // null: the node reads it as {}
+		fields = map[string]json.RawMessage{}
+	}
+	fields["claude_dirs"] = list
+	return fields
+}
+
+// extraPath is hub.json's machines[].extra_path for node.configure: [] when unset, so a list taken out of hub.json
+// leaves the node's PATH too (#10127).
+func (m *Machine) extraPath() []string {
+	if m.cfg.ExtraPath == nil {
+		return []string{}
+	}
+	return m.cfg.ExtraPath
+}
+
 // usageWindows is hub.json's machines[].usage_windows: the machine's node reads the agents' subscription rate-limit
 // windows unless it says false (#2432).
 func (m *Machine) usageWindows() bool { return m.cfg.UsageWindows == nil || *m.cfg.UsageWindows }
@@ -79,9 +127,10 @@ func (m *Machine) usageWindows() bool { return m.cfg.UsageWindows == nil || *m.c
 // with their keys; not on a machine the hub says is another manager's now).
 func (m *Machine) configureNode(ctx context.Context, peer *rpc.Peer, hub *devicewire.ConnectedReply, own bool) {
 	params := map[string]any{"machine_id": m.cfg.ID, "claude_dirs": m.claudeDirs(ctx),
-		"claude_dirs_blocked": m.blockedClaudeDirs(ctx), "botmux": m.botmux(ctx), "claude_start_dir": m.cfg.ClaudeStartDir,
+		"claude_dirs_blocked": m.blockedClaudeDirsParam(ctx), "agent_dirs_blocked": m.blockedAgentDirsParam(ctx),
+		"botmux": m.botmux(ctx), "claude_start_dir": m.cfg.ClaudeStartDir,
 		"herdr_autostart": m.herdrAutostart(ctx), "herdr_autoinstall": m.cfg.HerdrAutoinstall, "claude_global_hooks": m.cfg.ClaudeGlobalHooks,
-		"usage_windows": m.usageWindows(), "claude_live_replies": m.liveReplies(ctx)}
+		"usage_windows": m.usageWindows(), "claude_live_replies": m.liveReplies(ctx), "extra_path": m.extraPath()}
 	// The sessions it lists however quiet are the assistant's to say (its profile); before it said, the node keeps
 	// what it has.
 	if keep, ok := m.d.keptOn(m.cfg.ID); ok {
@@ -97,6 +146,11 @@ func (m *Machine) configureNode(ctx context.Context, peer *rpc.Peer, hub *device
 			}
 		}
 	}
+	// A reconnect to an older hub must clear the previous hub's capabilities,
+	// including when the manager kept this node connection alive across the reconnect.
+	if _, ok := params["hub_features"]; !ok {
+		params["hub_features"] = []string{}
+	}
 	_ = peer.Call(ctx, "node.configure", params, nil)
 	var calls []devicewire.NodeCall
 	if hub != nil {
@@ -110,7 +164,14 @@ func (m *Machine) configureNode(ctx context.Context, peer *rpc.Peer, hub *device
 		if len(p) == 0 {
 			p = json.RawMessage(`{}`)
 		}
-		if err := peer.Call(ctx, c.Method, p, nil); err != nil {
+		err := peer.Call(ctx, c.Method, p, nil)
+		if f := c.Fallback; err != nil && f != nil && strings.Contains(err.Error(), "unknown method") {
+			if len(f.Params) == 0 {
+				f.Params = json.RawMessage(`{}`)
+			}
+			err = peer.Call(ctx, f.Method, f.Params, nil)
+		}
+		if err != nil {
 			m.d.logf("[%s] %s: %v", m.cfg.ID, c.Method, err)
 		}
 	}
@@ -125,7 +186,12 @@ func (m *Machine) rememberClaudeDirs(params json.RawMessage) {
 	if json.Unmarshal(params, &p) != nil || m.d.opts.Store == nil {
 		return
 	}
-	ctx := context.Background()
+	// On the node's read loop: the store calls are bounded like state.put's (nodeStoreWait), and the wait for
+	// claudeDirsMu counts against that bound, but the wait itself is not cut short: a blocked-patterns save holds the
+	// lock for its store calls, which only its request's context bounds. Dirs missed come again only with the node's
+	// next report (nodeStoreWait).
+	ctx, cancel := m.storeCtx()
+	defer cancel()
 	// Held across the reads and the write: a setBlockedClaudeDirs in between would have its pruning undone.
 	m.claudeDirsMu.Lock()
 	defer m.claudeDirsMu.Unlock()
@@ -234,16 +300,17 @@ func (m *Machine) reconfigureClaudeDirs(ctx context.Context) {
 	// botmux too: this can come between the connection and its own node.configure, and the session list that follows
 	// must not be the node's first word on it (an older hub's, node/hostbotmux.go useBotmux).
 	if err := m.call(ctx, "node.configure", map[string]any{"claude_dirs": m.claudeDirs(ctx),
-		"claude_dirs_blocked": m.blockedClaudeDirs(ctx), "botmux": m.botmux(ctx)}, nil); err != nil {
+		"claude_dirs_blocked": m.blockedClaudeDirsParam(ctx), "agent_dirs_blocked": m.blockedAgentDirsParam(ctx),
+		"botmux": m.botmux(ctx)}, nil); err != nil {
 		m.d.logf("[%s] configure claude dirs: %v", m.cfg.ID, err)
 		return
 	}
 	var list struct {
 		Sessions []proto.Session `json:"sessions"`
 	}
-	if err := m.call(ctx, "sessions.list", map[string]any{}, &list); err == nil {
-		m.setSessions(list.Sessions)
-		m.d.forward(m.cfg.ID, "sessions.changed", map[string]any{"sessions": m.sessionList()})
+	snapshot := new(sessionSnapshot)
+	if err := m.callWithSnapshot(ctx, "sessions.list", map[string]any{}, &list, snapshot); err == nil {
+		m.acceptSessionsList(snapshot, list.Sessions, true)
 	}
 }
 

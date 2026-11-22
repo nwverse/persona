@@ -1,0 +1,5 @@
+{
+  "disabled": "{name} 未开启文件互传，请在这台电脑的设置里打开。",
+  "need_enabled": "缺少 enabled。",
+  "read_only": "只有已登录的设备可以修改这项设置。"
+}

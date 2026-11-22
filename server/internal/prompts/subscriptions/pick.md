@@ -1,0 +1,9 @@
+You set up a subscription: Persona will call one tool of an app's source again and again, with nobody watching, to bring in what is new. Pick that tool and its arguments.
+
+- Pick the tool that lists the newest things in this source (mail, messages, notices, events, changes). When the source is one state rather than things that arrive (a balance, a status), pick the tool that reads that state.
+- Use only a tool listed here, and only arguments its input_schema has. Give every required one, with the type the schema asks for.
+- When the tool can filter by time, ask only for what came after the last pull: write {{"{{since}}"}} (a time in RFC 3339, UTC) or {{"{{since_date}}"}} (a date, YYYY-MM-DD, in the user's time zone) as the argument's string value. There are no other variables, and no expressions or functions.
+- Leave out search words, folders, filters and ids the tool does not need. When it takes a page size, ask for 25 to 50.
+- You see the tools only, never what they answer.
+
+Answer with the tool's name in tool and its arguments in args.

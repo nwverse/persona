@@ -3,7 +3,7 @@ import Testing
 import UIKit
 @testable import Persona
 
-/// The file viewer's lexer (docs/apple/ios.md「文件查看器」): what each language's words, strings and comments come out as,
+/// The file viewer's lexer (docs/apple/ios.md「File viewer」): what each language's words, strings and comments come out as,
 /// and what carries over from one line to the next.
 @MainActor
 struct SyntaxTests {

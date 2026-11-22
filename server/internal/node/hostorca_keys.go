@@ -19,9 +19,10 @@ var orcaTildeKeys = map[string]int{"insert": 2, "delete": 3, "pageup": 5, "paged
 // orcaSS3Keys are F1–F4: SS3 P–S unmodified, CSI 1;<m> P–S modified.
 var orcaSS3Keys = map[string]byte{"f1": 'P', "f2": 'Q', "f3": 'R', "f4": 'S'}
 
-// orcaPlainKeys are keys whose bytes do not follow the xterm modifier scheme, by their full name.
+// orcaPlainKeys are keys whose bytes do not follow the xterm modifier scheme, by their full name. ctrl+enter has no
+// legacy bytes: it is the CSI u form, which Claude Code reads as its send-now (#2467).
 var orcaPlainKeys = map[string]string{
-	"enter": "\r", "return": "\r", "shift+enter": "\x1b\r", "alt+enter": "\x1b\r", "ctrl+j": "\n",
+	"enter": "\r", "return": "\r", "shift+enter": "\x1b\r", "alt+enter": "\x1b\r", "ctrl+enter": "\x1b[13;5u", "ctrl+j": "\n",
 	"esc": "\x1b", "escape": "\x1b", "alt+esc": "\x1b\x1b",
 	"tab": "\t", "shift+tab": "\x1b[Z", "backtab": "\x1b[Z", "alt+tab": "\x1b\t",
 	"backspace": "\x7f", "alt+backspace": "\x1b\x7f", "ctrl+backspace": "\x08",

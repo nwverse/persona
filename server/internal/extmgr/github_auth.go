@@ -17,7 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Where GitHub's token comes from, as the user picks it in Settings › Connectors › GitHub (docs/extensions/connectors.md "2 · 7"): a
+// Where GitHub's token comes from, as the user picks it in Settings › Connectors › GitHub (docs/extensions/connectors.md "Login supports"): a
 // computer's gh login or the device flow. The choice is kept in settings ("github_auth"); hub.json's
 // github.auth.from_machine is only the default until the user chooses.
 
@@ -156,7 +156,7 @@ func (h *Manager) githubAuthNow(ctx context.Context, c *github.Connector, ext *p
 	defer cancel()
 	var wg sync.WaitGroup
 	for i, m := range ms {
-		out[i] = githubMachine{ID: m.cfg.ID, Name: m.cfg.Name}
+		out[i] = githubMachine{ID: m.cfg.ID, Name: m.name()}
 		if out[i].Name == "" {
 			out[i].Name = m.cfg.ID
 		}

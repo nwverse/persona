@@ -18,7 +18,7 @@ import persona.core.contracts.generated.ExtensionView as WireView
 import persona.core.contracts.api.ExtensionView
 import java.net.URI
 
-// An assistant's card (docs/assistant/assistant-views.md "Cards reuse extension Views" "Actions and multiple pages"): the extensions' View with the
+// An assistant's card (docs/assistant/assistant-views.md "Cards reuse extension View" "Actions and multiple pages"): the extensions' View with the
 // assistant's own fields. Read with the generated wire types and checked as `CheckAssistantView` does in
 // `sdk/go/wire/assistantview.go`; a card that fails is drawn as its fallback, never half.
 
@@ -50,6 +50,9 @@ data class AssistantCard(
     val html: List<AssistantHtml>,
 ) {
     fun page(name: String?): ExtensionView? = if (name == null) root else pages[name]
+
+    /** Whether a picture of the reply draws it (Share as a picture, #7261): an HTML page on its first page only runs live. */
+    val drawsInPicture: Boolean get() = html.none { it.page == null }
 
     /**
      * The field names [action] sends, as the hub's `viewReplyMessage` takes them: every field of its page when it

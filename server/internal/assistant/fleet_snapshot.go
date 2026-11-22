@@ -20,6 +20,7 @@ func (s *Service) fleetTakeSnapshot(snap Snapshot) {
 	r := &s.fleet.rep
 	r.mu.Lock()
 	oldSessions, oldWork, oldOn, oldLinks, oldQuiet, oldMarks := r.sessions, r.work, r.workOn, r.links, r.quiet, r.marks
+	oldCompleted := r.completed
 	views := make(map[string]SessionView, len(snap.Sessions))
 	for _, v := range snap.Sessions {
 		views[v.SessionID] = v
@@ -36,6 +37,10 @@ func (s *Service) fleetTakeSnapshot(snap Snapshot) {
 		r.links = map[[2]string]TodoLink{}
 		for _, l := range t.Links {
 			r.links[[2]string{l.MachineID, l.SessionID}] = l
+		}
+		r.completed = map[[2]string]TodoLink{}
+		for _, l := range t.Completed {
+			r.completed[[2]string{l.MachineID, l.SessionID}] = l
 		}
 		r.quiet = map[[2]string]bool{}
 		for _, q := range t.Quiet {
@@ -90,8 +95,20 @@ func (s *Service) fleetTakeSnapshot(snap Snapshot) {
 			add(k[0])
 		}
 	}
-	for k := range oldLinks {
-		if _, ok := r.links[k]; !ok {
+	var left []SessionRef // the agents that left the open task they had (silent_turns.go quietTasksLeft)
+	for k, o := range oldLinks {
+		if l, ok := r.links[k]; !ok || l.TodoID != o.TodoID {
+			add(k[0])
+			left = append(left, SessionRef{MachineID: k[0], SessionID: k[1]})
+		}
+	}
+	for k, l := range r.completed {
+		if o, ok := oldCompleted[k]; !ok || o != l {
+			add(k[0])
+		}
+	}
+	for k := range oldCompleted {
+		if _, ok := r.completed[k]; !ok {
 			add(k[0])
 		}
 	}
@@ -116,7 +133,16 @@ func (s *Service) fleetTakeSnapshot(snap Snapshot) {
 		}
 	}
 	r.mu.Unlock()
-	s.askOnPhone(snap.Interactions)
+	s.quietTasksLeft(left) // before the lists are told: the rows go without it
+	// Apply interactions in the same order as their snapshot sequence numbers.
+	// A publisher superseded while applying the rest of its snapshot must not
+	// withdraw or restart a card from the current snapshot. Unsequenced direct
+	// applications are authoritative.
+	s.pubMu.Lock()
+	if snap.Seq == 0 || snap.Seq == s.seq {
+		s.askOnPhone(snap.Interactions)
+	}
+	s.pubMu.Unlock()
 	for _, mid := range changed {
 		s.sessionsChanged(mid)
 	}
@@ -133,7 +159,8 @@ func changedMachines(old, now map[string]SessionView) []string {
 	}
 	for id, v := range now {
 		o, ok := old[id]
-		if !ok || o.Title != v.Title || o.Archived != v.Archived || o.Origin != v.Origin || o.OriginRef != v.OriginRef || !slices.Equal(o.Queued, v.Queued) || o.MachineID != v.MachineID {
+		if !ok || o.Title != v.Title || o.Archived != v.Archived || !slices.Equal(o.Tags, v.Tags) || o.Origin != v.Origin || o.OriginRef != v.OriginRef || !slices.Equal(o.Queued, v.Queued) || o.MachineID != v.MachineID ||
+			!sameModelPick(o.ModelPick, v.ModelPick) {
 			add(v.MachineID)
 			if ok {
 				add(o.MachineID)
@@ -146,6 +173,11 @@ func changedMachines(old, now map[string]SessionView) []string {
 		}
 	}
 	return out
+}
+
+// sameModelPick: a and b are the same pick, or both none.
+func sameModelPick(a, b *proto.ModelPick) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
 }
 
 func sameJSON(a, b any) bool {
@@ -162,7 +194,9 @@ func (s *Service) quietSession(mid, sid string) bool {
 	return r.quiet[[2]string{mid, sid}]
 }
 
-// withTask names, on an interaction sent to clients, the task its agent works for (the watch and the cards show it).
+// withTask names, on an interaction sent to clients, the task its agent works for (the watch and the cards show it),
+// and the session its agent is folded under, whose chat shows the card, and why (a tab's worker, a side session), and
+// the side session it belongs to when it folds through one, whose chat the card is in (fleet_fold.go).
 func (s *Service) withTask(ix proto.Interaction) proto.Interaction {
 	r := &s.fleet.rep
 	r.mu.RLock()
@@ -171,6 +205,7 @@ func (s *Service) withTask(ix proto.Interaction) proto.Interaction {
 	if ok && l.Task {
 		ix.TaskTitle = l.Title
 	}
+	ix.FoldedUnder, ix.FoldedAs, ix.FoldedSide = s.foldedUnder(ix.MachineID, ix.SessionID)
 	return ix
 }
 

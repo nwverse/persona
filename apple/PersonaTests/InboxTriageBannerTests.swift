@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The inbox's banner about new items waiting for triage (#1773): the hub's status as the list brings it, the words
 /// (the hub's reason, else the state's), one source named or several, Set Up only when no model is set up and the
@@ -84,5 +85,26 @@ import Testing
         }
         #expect(!InboxTriageText.configurable(nil, mayChangeSettings: true))
         #expect(InboxTriageText.purpose == "inbox.triage")
+    }
+
+    @Test func sourcesNotReadThisRoundAreNamed() throws {
+        let t = try status(#"""
+        {"state":"ok","waiting":0,"sources":[
+          {"source":"ext-chat","name":"示例聊天","state":"ok","waiting":0,"read_error":"timeout","read_reason":"这一轮没读到：超时了"},
+          {"source":"ext-tracker","name":"","state":"ok","waiting":0,"read_error":"rate_limited"},
+          {"source":"github","name":"GitHub","state":"ok","waiting":0}
+        ]}
+        """#)
+        #expect(t.sources?.map(\.readError) == ["timeout", "rate_limited", nil])
+        #expect(InboxTriageText.line(t) == nil, "a failed read is apart from the waiting-for-triage banner")
+        #expect(InboxTriageText.unread(t) == "示例聊天：这一轮没读到：超时了\next-tracker：这一轮没读到，列表可能不全")
+    }
+
+    @Test func theUnreadNoticeClearsAfterAGoodRead() throws {
+        let recovered = try status(#"{"state":"ok","waiting":0,"sources":[{"source":"ext-chat","name":"示例聊天","state":"ok","waiting":0}]}"#)
+        #expect(InboxTriageText.unread(recovered) == nil)
+        #expect(InboxTriageText.unread(nil) == nil)
+        let blank = try status(#"{"state":"ok","waiting":0,"sources":[{"source":"x","state":"ok","waiting":0,"read_error":"  "}]}"#)
+        #expect(InboxTriageText.unread(blank) == nil)
     }
 }

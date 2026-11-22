@@ -3,7 +3,7 @@ import Testing
 import UIKit
 @testable import Persona
 
-/// Settings › Appearance › Light & Dark (ColorSchemeChoice, docs/apple/ios.md「设计语言」): what it reads, and what it does to the windows.
+/// Settings › Appearance › Light & Dark (ColorSchemeChoice, docs/apple/ios.md「Design language」): what it reads, and what it does to the windows.
 @MainActor struct ColorSchemeChoiceTests {
     @Test func followsTheSystemUnlessPicked() {
         let d = UserDefaults.standard

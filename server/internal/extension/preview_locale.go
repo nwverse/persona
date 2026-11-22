@@ -13,10 +13,16 @@ func (pv *Preview) In(l i18n.Lang) *Preview {
 		return pv
 	}
 	out := *pv
+	if pv.Manifest != nil && pv.l10n != nil {
+		// a copy of the manifest with the name and description in l (#897); the one approved is pv.Manifest's
+		m := *pv.Manifest
+		m.Name, m.Description = pv.l10n.Name(l, m.Name), pv.l10n.Description(l, m.Description)
+		out.Manifest = &m
+	}
 	if pv.Manifest != nil {
-		out.Permissions = ExplainIn(l, pv.Manifest)
+		out.Permissions = ExplainWith(l, pv.Manifest, pv.config)
 		if pv.previous != nil {
-			out.AddedPermissions = AddedIn(l, pv.previous, pv.Manifest)
+			out.AddedPermissions = AddedWith(l, pv.previous, pv.Manifest, pv.config)
 		}
 	}
 	if pv.RenameFrom != "" && pv.Manifest != nil {

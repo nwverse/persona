@@ -10,7 +10,7 @@ import (
 	"github.com/nwverse/persona/server/internal/kbwire"
 )
 
-// Identity hints (docs/extensions/connectors.md "2 · 6"): who a sender is in a form two sources can share — an email address,
+// Identity hints (docs/extensions/connectors.md "Sender identity hints"): who a sender is in a form two sources can share — an email address,
 // a phone number, a GitHub login — so the same person can later be recognised across them. Only an HMAC of each,
 // under the hub's own key (Engine.HandleKey), is kept: in the person's handles.json, never in meta.json, so no tool
 // or prompt shows them (they mean nothing to a model). Merging people is not done here.
@@ -65,7 +65,8 @@ func (s *Store) PersonHandles(id string) []string {
 	return out
 }
 
-// addHandles keeps a person's new hints, hashed (only ever added); it reports whether any was new.
+// addHandles keeps a person's new hints, hashed (only ever added); it reports whether any was new. Callers hold
+// personMu (notePerson's updatePerson), so two senders' hints for one person do not overwrite each other.
 func (e *Engine) addHandles(personID string, hs []Handle) bool {
 	if len(e.HandleKey) == 0 || len(hs) == 0 {
 		return false

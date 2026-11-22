@@ -49,6 +49,9 @@ func (s *Service) toolModelProfile(ctx context.Context, self, name string, args 
 }
 
 func (s *Service) applyStartTier(ctx context.Context, params map[string]any) error {
+	if _, err := validateStartSpeed(params); err != nil {
+		return err
+	}
 	tier, _ := params["tier"].(string)
 	delete(params, "tier") // node runtimes need only the resolved fields
 	if tier == "" {
@@ -61,8 +64,20 @@ func (s *Service) applyStartTier(ctx context.Context, params map[string]any) err
 	launcher, _ := params["launcher"].(string)
 	model, _ := params["model"].(string)
 	effort, _ := params["effort"].(string)
-	layTier(t, &launcher, &model, &effort)
-	params["launcher"], params["model"], params["effort"] = launcher, model, effort
+	speed, _ := params["speed"].(string)
+	mode, _ := params["permission_mode"].(string)
+	if layTier(t, &launcher, &model, &effort) {
+		if speed == "" && (model == "" || model == t.Model) {
+			speed = t.Speed
+		}
+		if mode == "" && t.PermissionMode != "" {
+			mode = t.PermissionMode
+		}
+	}
+	params["launcher"], params["model"], params["effort"], params["speed"] = launcher, model, effort, speed
+	if mode != "" {
+		params["permission_mode"] = mode
+	}
 	return nil
 }
 
@@ -81,13 +96,17 @@ func layTier(t ModelTier, launcher, model, effort *string) bool {
 }
 
 func (s *Service) applyTaskTier(ctx context.Context, t *PlanTask) error {
-	p := map[string]any{"tier": t.Tier, "launcher": t.Launcher, "model": t.Model, "effort": t.Effort}
+	p := map[string]any{"tier": t.Tier, "launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "speed": t.Speed, "permission_mode": t.Permission}
 	if err := s.applyStartTier(ctx, p); err != nil {
 		return err
 	}
 	t.Launcher, _ = p["launcher"].(string)
 	t.Model, _ = p["model"].(string)
 	t.Effort, _ = p["effort"].(string)
+	t.Speed, _ = p["speed"].(string)
+	if mode, _ := p["permission_mode"].(string); mode != "" && !t.Readonly {
+		t.Permission = mode
+	}
 	return nil
 }
 
@@ -108,7 +127,7 @@ func (s *Service) modelProfileContext(ctx context.Context) *prompts.SnapshotProf
 	out := &prompts.SnapshotProfile{ID: p.ID, Name: p.Name}
 	for _, name := range slices.Sorted(maps.Keys(p.Tiers)) {
 		t := p.Tiers[name]
-		out.Tiers = append(out.Tiers, prompts.SnapshotTier{Name: name, Launcher: t.Launcher, Model: t.Model, Effort: t.Effort, Description: t.Description})
+		out.Tiers = append(out.Tiers, prompts.SnapshotTier{Name: name, Launcher: t.Launcher, Model: t.Model, Effort: t.Effort, Speed: t.Speed, PermissionMode: t.PermissionMode, Description: t.Description})
 	}
 	return out
 }

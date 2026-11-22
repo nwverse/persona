@@ -3,6 +3,7 @@ package extmgr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extwire"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/streams"
@@ -51,13 +53,25 @@ func TestExtensionIdentityChecksConfiguredNodesBeforeCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	legacy, calls := extensionNodeMachine(t, h, "legacy-node", "linux", "amd64", false, false)
-	_, _ = extensionNodeMachine(t, h, "modern-node", "linux", "amd64", false)
-	if err := reg.SetConfig(t.Context(), "example-helper", json.RawMessage(`{"computers":["legacy-node"]}`), "test"); err != nil {
-		t.Fatal(err)
+	modern, _ := extensionNodeMachine(t, h, "modern-node", "linux", "amd64", false)
+	check := func(computers string) error {
+		t.Helper()
+		if err := reg.SetConfig(t.Context(), "example-helper", json.RawMessage(`{"computers":`+computers+`}`), "test"); err != nil {
+			t.Fatal(err)
+		}
+		return h.checkRenameNodeCapabilities(t.Context(), reg.SnapshotExact("example-helper"))
 	}
-	if err := h.checkRenameNodeCapabilities(t.Context(), reg.SnapshotExact("example-helper")); err == nil {
-		t.Fatal("legacy configured node did not block identity commit")
+	refused := func(err error, key, want string) {
+		t.Helper()
+		var m *i18n.Message
+		if !errors.As(err, &m) || m.Key != key {
+			t.Fatalf("refusal %v, want %s", err, key)
+		}
+		if text := m.Text(i18n.En); !strings.Contains(text, want) {
+			t.Fatalf("refusal does not name %q: %s", want, text)
+		}
 	}
+	refused(check(`["legacy-node"]`), "extension-identity.node_outdated", "Update the node on legacy-node ")
 	for _, call := range calls() {
 		if call.Method != "plugin.node.identity" {
 			t.Fatal("capability preflight mutated a legacy node")
@@ -66,14 +80,19 @@ func TestExtensionIdentityChecksConfiguredNodesBeforeCommit(t *testing.T) {
 	legacy.mu.Lock()
 	legacy.online = false
 	legacy.mu.Unlock()
-	if err := h.checkRenameNodeCapabilities(t.Context(), reg.SnapshotExact("example-helper")); err == nil {
-		t.Fatal("offline configured node did not block identity commit")
+	refused(check(`["legacy-node"]`), "extension-identity.node_unreachable", "Can't reach legacy-node. Connect it,")
+	// A picked ID the fleet no longer has (removed, or from before the hub moved) is not a node to wait for (#2510).
+	if err := check(`["modern-node","gone-node"]`); err != nil {
+		t.Fatalf("a machine ID that is not a computer blocked the identity change: %v", err)
 	}
-	if err := reg.SetConfig(t.Context(), "example-helper", json.RawMessage(`{"computers":["modern-node"]}`), "test"); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.checkRenameNodeCapabilities(t.Context(), reg.SnapshotExact("example-helper")); err != nil {
-		t.Fatal(err)
+	refused(check(`["gone-node","legacy-node","modern-node"]`), "extension-identity.node_unreachable", "Can't reach legacy-node.")
+	// A node whose link dropped before it answered the probe is not reported as outdated.
+	modern.mu.Lock()
+	modern.peer = nil
+	modern.mu.Unlock()
+	refused(check(`["legacy-node","modern-node"]`), "extension-identity.node_unreachable", "Can't reach legacy-node, modern-node. Connect them,")
+	if text := i18n.Localize(check(`["legacy-node","modern-node"]`), i18n.ZhHans); !strings.Contains(text, "legacy-node、modern-node") {
+		t.Fatalf("zh-Hans list: %s", text)
 	}
 }
 

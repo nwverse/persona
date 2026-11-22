@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/extmgr"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -22,7 +24,9 @@ import (
 const (
 	launchersManagedKey = "launchers.managed" // []storedLauncher
 	launchersHiddenKey  = "launchers.hidden"  // []string: ~/.zshrc launcher names hidden in Persona
-	launchersZshrcKey   = "launchers.zshrc"   // map machine id → []proto.Launcher, the last list seen
+	// launchersMachineKeysKey: []machineKey, a provider's key for one computer (models_launchers_scope.go).
+	launchersMachineKeysKey = "launchers.machine_keys"
+	launchersZshrcKey       = "launchers.zshrc" // map machine id → []proto.Launcher, the last list seen
 	// launchersMetaKey: map machine id → launcherMeta (its shell, rc file, when its list last came in).
 	launchersMetaKey = "launchers.zshrc.meta"
 )
@@ -63,31 +67,38 @@ type storedLauncher struct {
 	EnvSealed     string `json:"env_sealed,omitempty"` // Env (#5953) sealed the same way; Env itself is never stored
 	Preset        string `json:"preset,omitempty"`     // the preset (built-in or a plugin's) it was added from
 	// DisplayName is what the apps call it (any language, "Zhipu GLM"); Name stays the ASCII id the launch uses.
-	DisplayName string    `json:"display_name,omitempty"`
-	Created     time.Time `json:"created"`
-	Updated     time.Time `json:"updated"`
+	DisplayName string `json:"display_name,omitempty"`
+	// Share and ScopeMachines are its device scope (models_launchers_scope.go): "all", "selected", "none"; "" is a
+	// record from before scopes, every confirmed computer as then.
+	Share         string   `json:"share,omitempty"`
+	ScopeMachines []string `json:"scope_machines,omitempty"`
+	// ViaMachine (kind api): the computer whose node sends this connection's requests (models_via.go); "" the manager.
+	ViaMachine string    `json:"via_machine,omitempty"`
+	Created    time.Time `json:"created"`
+	Updated    time.Time `json:"updated"`
 }
 
 // LauncherView is one launcher for the app: where it comes from, which machines have it; never the key.
 type LauncherView struct {
-	Kind                   string   `json:"kind,omitempty"`
-	Agent                  string   `json:"agent,omitempty"`
-	API                    string   `json:"api,omitempty"`
-	Name                   string   `json:"name"`
-	DisplayName            string   `json:"display_name,omitempty"` // managed: the name shown, "" shows Name
-	Source                 string   `json:"source"`                 // zshrc (an rc file's) | persona | agy | builtin (plain claude)
-	BaseURL                string   `json:"base_url,omitempty"`
-	Model                  string   `json:"model,omitempty"`
-	SmallModel             string   `json:"small_model,omitempty"`
-	SubagentModel          string   `json:"subagent_model,omitempty"`
-	CustomModel            string   `json:"custom_model,omitempty"`
-	CustomModelName        string   `json:"custom_model_name,omitempty"`
-	CustomModelDescription string   `json:"custom_model_description,omitempty"`
-	Args                   []string `json:"args,omitempty"`
-	HasKey                 bool     `json:"has_key,omitempty"`
-	Auth                   string   `json:"auth,omitempty"`     // managed: api_key (x-api-key) or bearer
-	Machines               []string `json:"machines,omitempty"` // zshrc: the machines whose rc file defines it; builtin: that have claude
-	Hidden                 bool     `json:"hidden,omitempty"`
+	Kind                   string                  `json:"kind,omitempty"`
+	Agent                  string                  `json:"agent,omitempty"`
+	API                    string                  `json:"api,omitempty"`
+	Name                   string                  `json:"name"`
+	DisplayName            string                  `json:"display_name,omitempty"` // managed: the name shown, "" shows Name
+	Source                 string                  `json:"source"`                 // zshrc (an rc file's) | persona | agy | builtin (plain claude)
+	BaseURL                string                  `json:"base_url,omitempty"`
+	Model                  string                  `json:"model,omitempty"`
+	SmallModel             string                  `json:"small_model,omitempty"`
+	SubagentModel          string                  `json:"subagent_model,omitempty"`
+	CustomModel            string                  `json:"custom_model,omitempty"`
+	CustomModelName        string                  `json:"custom_model_name,omitempty"`
+	CustomModelDescription string                  `json:"custom_model_description,omitempty"`
+	Args                   []string                `json:"args,omitempty"`
+	HasKey                 bool                    `json:"has_key,omitempty"`
+	Auth                   string                  `json:"auth,omitempty"`     // managed: api_key (x-api-key) or bearer
+	Machines               []string                `json:"machines,omitempty"` // zshrc: the machines whose rc file defines it; builtin: that have claude
+	Hidden                 bool                    `json:"hidden,omitempty"`
+	PermissionModes        proto.PermissionModeSet `json:"permission_modes,omitempty"`
 	// RCFiles (source zshrc only): the files it was found in (~/.zshrc, ~/.bashrc: each machine's login shell's), for the group title.
 	RCFiles []string `json:"rc_files,omitempty"`
 	// Stale (zshrc, builtin): the machines of Machines that did not answer this time (offline, timed out, failed):
@@ -95,7 +106,7 @@ type LauncherView struct {
 	Stale []string `json:"stale,omitempty"`
 	// Versions (builtin): Claude Code's version on each machine that said.
 	Versions map[string]string `json:"versions,omitempty"`
-	// Managed only (#2455, proto.ManagedLauncher's fields): never the headers themselves, only has_headers.
+	// Managed only (#2455, proto.ManagedLauncher's fields): never header values, only has_headers and header_names.
 	Models        []proto.ProviderModel `json:"models,omitempty"`
 	OpusModel     string                `json:"opus_model,omitempty"`
 	SonnetModel   string                `json:"sonnet_model,omitempty"`
@@ -103,19 +114,44 @@ type LauncherView struct {
 	FableModel    string                `json:"fable_model,omitempty"`
 	SubagentForce bool                  `json:"subagent_force,omitempty"`
 	HasHeaders    bool                  `json:"has_headers,omitempty"`
-	HasEnv        bool                  `json:"has_env,omitempty"` // never the environment itself
-	Proxy         string                `json:"proxy,omitempty"`
-	NoProxy       string                `json:"no_proxy,omitempty"`
-	TimeoutMS     int                   `json:"timeout_ms,omitempty"`
-	CompactWindow int                   `json:"compact_window,omitempty"`
-	MaxContext    int                   `json:"max_context,omitempty"`
-	Effort        string                `json:"effort,omitempty"`
+	// HeaderNames identifies configured fields without returning their secret values.
+	HeaderNames   []string `json:"header_names,omitempty"`
+	HasEnv        bool     `json:"has_env,omitempty"` // never the environment itself
+	Proxy         string   `json:"proxy,omitempty"`
+	NoProxy       string   `json:"no_proxy,omitempty"`
+	TimeoutMS     int      `json:"timeout_ms,omitempty"`
+	CompactWindow int      `json:"compact_window,omitempty"`
+	MaxContext    int      `json:"max_context,omitempty"`
+	Effort        string   `json:"effort,omitempty"`
 	// Origin is ManagedLauncher.Source ("" made by hand, "zshrc:<alias>@<machine>", "preset:<id>"); "source" is taken.
 	Origin string `json:"origin,omitempty"`
+	// Managed only: the device scope (docs/integrations/launchers.md "Device scope and on-demand delivery"). LegacyScope:
+	// saved before scopes, read as all (work computers too) + push + use. KeyMachines: the computers with a key of their own.
+	Share         string   `json:"share,omitempty"`
+	ScopeMachines []string `json:"scope_machines,omitempty"`
+	Delivery      string   `json:"delivery,omitempty"`
+	OwnService    string   `json:"own_service,omitempty"`
+	KeyMachines   []string `json:"key_machines,omitempty"`
+	LegacyScope   bool     `json:"legacy_scope,omitempty"`
+	// Pi (managed): pi can use it too on the computers in its scope (proto.ManagedLauncher.PiAPI,
+	// docs/integrations/pi.md "Persona's model providers").
+	Pi bool `json:"pi,omitempty"`
+	// ViaMachine (managed, kind api): the computer that sends its requests; "" this manager (models_via.go).
+	ViaMachine string `json:"via_machine,omitempty"`
+	// KeyReference (managed): the key is a reference to a provider extension's secret: the reference and what it
+	// names, never the value (launcher_secrets.go). MachineKeyReferences: the same for the computers' own keys.
+	KeyReference         *extmgr.SecretReferenceView            `json:"key_reference,omitempty"`
+	MachineKeyReferences map[string]*extmgr.SecretReferenceView `json:"machine_key_references,omitempty"`
+	keySealed            string                                 // the stored key, for withKeyReferences
 	// Definition per machine (zshrc launchers, detail only): the function body, secrets masked.
 	Definitions map[string]string `json:"definitions,omitempty"`
 	// Details per machine (zshrc launchers, detail only): what the launcher really sets when run (node/launcherprobe.go).
 	Details map[string]proto.LauncherDetail `json:"details,omitempty"`
+	// Internal provenance for model.run admission (never serialized): whether this view came from a verified built-in
+	// Antigravity companion, and which machines in Machines have a model.run-compatible entry (non-nil when built from
+	// machine snapshots).
+	builtinCompanion bool
+	modelRunMachines []string
 }
 
 // launcherView is a managed launcher for the app: never the key or the headers.
@@ -125,7 +161,23 @@ func launcherView(l storedLauncher) LauncherView {
 		CustomModelDescription: l.CustomModelDescription, Args: l.Args, HasKey: l.KeySealed != "", Auth: l.Auth,
 		Models: l.Models, OpusModel: l.OpusModel, SonnetModel: l.SonnetModel, HaikuModel: l.HaikuModel, FableModel: l.FableModel,
 		SubagentForce: l.SubagentForce, HasHeaders: l.HeadersSealed != "", HasEnv: l.EnvSealed != "", Proxy: l.Proxy, NoProxy: l.NoProxy, TimeoutMS: l.TimeoutMS,
-		CompactWindow: l.CompactWindow, MaxContext: l.MaxContext, Effort: l.Effort, Origin: l.Source}
+		CompactWindow: l.CompactWindow, MaxContext: l.MaxContext, Effort: l.Effort, Origin: l.Source,
+		Share: l.share(), ScopeMachines: l.ScopeMachines, Delivery: l.delivery(), OwnService: l.ownService(), LegacyScope: l.Share == "",
+		Pi: l.PiAPI() != "" && l.share() != shareNone, ViaMachine: l.ViaMachine, keySealed: l.KeySealed}
+}
+
+// launcherView adds the only header metadata safe to reopen in an editor: field names, never their values. An
+// unreadable sealed record keeps HasHeaders so the owner can replace or clear it without a value being exposed.
+func (s *Service) launcherView(l storedLauncher) LauncherView {
+	v := launcherView(l)
+	if v.HasHeaders {
+		if raw, err := s.openKey(l.HeadersSealed); err == nil {
+			for _, header := range parseHeaders(raw) {
+				v.HeaderNames = append(v.HeaderNames, header[0])
+			}
+		}
+	}
+	return v
 }
 
 var managedLauncherName = lazyre.New(`^[A-Za-z_][A-Za-z0-9_-]*$`)
@@ -204,14 +256,27 @@ func memoSetting(ctx context.Context, st Store, key string, out any) (bool, erro
 }
 
 func (s *Service) storedLaunchers(ctx context.Context) []storedLauncher {
+	list, _ := s.storedLaunchersKnown(ctx)
+	return list
+}
+
+// storedLaunchersKnown is storedLaunchers with whether the list is really known: false means the setting could not be
+// read, which is not the same as no managed launcher. Callers that judge whether a launcher still exists must not read
+// an unknown list as "it is gone": a message would be refused as launcher_missing while the provider is still
+// configured (#4437). No database configured counts as no managed launchers, as storedLaunchers always did.
+func (s *Service) storedLaunchersKnown(ctx context.Context) ([]storedLauncher, bool) {
 	if list, ok := ctx.Value(managedSnapshotKey{}).([]storedLauncher); ok {
-		return list
+		return list, true
+	}
+	st := s.store()
+	if st == nil {
+		return nil, true // no database configured: no managed launchers, as before
 	}
 	var list []storedLauncher
-	if st := s.store(); st != nil {
-		_, _ = memoSetting(ctx, st, launchersManagedKey, &list)
+	if _, err := memoSetting(ctx, st, launchersManagedKey, &list); err != nil {
+		return nil, false
 	}
-	return list
+	return list, true
 }
 
 var errManagedLaunchersRead = errors.New("managed provider configuration unavailable")
@@ -235,12 +300,35 @@ func (s *Service) readStoredLaunchers(ctx context.Context) (list []storedLaunche
 	return list, nil
 }
 
+// readHiddenLaunchers reads launchers.hidden from the store itself (never a request's memo) for a change to it, made
+// under models.mu so no other hide or restore is lost; a failed read fails the change instead of emptying the list.
+func (s *Service) readHiddenLaunchers(ctx context.Context) ([]string, error) {
+	st := s.store()
+	if st == nil {
+		return nil, i18n.Err("assistant-models.err_no_database")
+	}
+	var list []string
+	_, err := st.Setting(ctx, launchersHiddenKey, &list)
+	return list, err
+}
+
 func (s *Service) hiddenLaunchers(ctx context.Context) []string {
 	var list []string
 	if st := s.store(); st != nil {
 		_, _ = memoSetting(ctx, st, launchersHiddenKey, &list)
 	}
+	if n, _ := ctx.Value(unhiddenKey{}).(string); n != "" && slices.Contains(list, n) {
+		list = slices.DeleteFunc(slices.Clone(list), func(h string) bool { return h == n })
+	}
 	return list
+}
+
+type unhiddenKey struct{}
+
+// withUnhidden has hiddenLaunchers leave name out: a launcher that a configuration or a conversation still names keeps
+// running when it is hidden, as the hide route says; hiding takes it out of the pickers only (#4659).
+func withUnhidden(ctx context.Context, name string) context.Context {
+	return context.WithValue(ctx, unhiddenKey{}, name)
 }
 
 func (s *Service) putSetting(ctx context.Context, key string, v any) error {

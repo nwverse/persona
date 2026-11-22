@@ -14,7 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
-// The extensions' agent filters (docs/extensions/extensions.md "Agent filters", #2428): sessions another platform runs on this
+// The extensions' agent filters (docs/extensions/extensions.md "Agent filtering", #2428): sessions another platform runs on this
 // computer (a cloud agent platform's chats and automations start codex and claude here, hundreds a week) are left out of the list, by
 // marks in the head of their files. The assistant's sessions and the kept ones never go; neither do agents in a host
 // (herdr's panes, runtimes): the filters are for transcripts found on disk only.

@@ -17,7 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
-// A Codex pane on a shared app-server (docs/integrations/codex.md "Sessions on a daemon"): joined on its own, then its messages, async
+// A Codex pane on a shared app-server (docs/integrations/codex.md "Sessions on the daemon"): joined on its own, then its messages, async
 // answers and approvals go through the protocol; against the synthetic app-server of codex_remote_test.go.
 
 // daemonPane is a node with a live Codex pane whose thread (remoteRaw) a connected app-server runs.

@@ -105,6 +105,7 @@ internal data class TaskDraft(
     val continues: Boolean = false,
     val permissionMode: String = "",
     val push: String = "",
+    val inbox: String = "",
 ) {
     val pushesOnlyAsked: Boolean get() = push == ScheduledTask.PUSH_ASKED
     /** "Push when done" set to [value]: only its alerts leaves "Continue the original chat" (the hub runs such a task in its own conversation). */
@@ -161,7 +162,7 @@ internal fun ScheduledTask.draft() = TaskDraft(
     title = title, prompt = prompt, repeat = repeat, at = parseTime(at),
     time = normalizeTime(time?.takeIf { it.isNotBlank() } ?: "09:00"), weekdays = weekdays,
     everyMinutes = everyMinutes.takeIf { it > 0 } ?: DefaultInterval, enabled = enabled,
-    continues = !sessionId.isNullOrBlank(), permissionMode = permissionMode.orEmpty(), push = push.orEmpty(),
+    continues = !sessionId.isNullOrBlank(), permissionMode = permissionMode.orEmpty(), push = push.orEmpty(), inbox = inbox.orEmpty(),
 )
 
 /**
@@ -176,6 +177,7 @@ internal fun ScheduledTask.applying(draft: TaskDraft): ScheduledTask = draft.nor
         everyMinutes = if (it.repeat == TaskRepeat.Interval) it.everyMinutes else 0, enabled = it.enabled,
         sessionId = sessionId.takeIf { _ -> it.continues && !it.pushesOnlyAsked }, permissionMode = it.permissionMode.ifBlank { null },
         push = it.push.takeIf { p -> p.isNotEmpty() || push != null },
+        inbox = it.inbox.takeIf { p -> p.isNotEmpty() || inbox != null },
     )
 }
 
@@ -186,7 +188,7 @@ internal fun ScheduledTask.patched(from: TaskDraft, to: TaskDraft): ScheduledTas
     val mine = draft().normalized()
     fun <T> pick(get: (TaskDraft) -> T): T = if (get(before) != get(after)) get(after) else get(mine)
     val ruleChanged = before.repeat != after.repeat
-    return applying(TaskDraft(
+    val patched = applying(TaskDraft(
         title = pick { it.title }, prompt = pick { it.prompt },
         repeat = pick { it.repeat },
         at = if (ruleChanged) after.at else pick { it.at },
@@ -194,7 +196,10 @@ internal fun ScheduledTask.patched(from: TaskDraft, to: TaskDraft): ScheduledTas
         weekdays = if (ruleChanged) after.weekdays else pick { it.weekdays },
         everyMinutes = if (ruleChanged) after.everyMinutes else pick { it.everyMinutes },
         enabled = pick { it.enabled }, continues = pick { it.continues }, permissionMode = pick { it.permissionMode }, push = pick { it.push },
+        inbox = pick { it.inbox },
     ))
+    // Unlike the other task fields, the hub's contract is to send inbox only when this edit changed it.
+    return patched.copy(inbox = patched.inbox.takeIf { before.inbox != after.inbox })
 }
 
 /** One edit to a task, written with its own request. */
@@ -210,8 +215,13 @@ internal sealed interface TaskChange {
 
     /** [from] is the task as the editor opened it, [to] what is on screen now. */
     data class Edit(override val id: String, val from: TaskDraft, val to: TaskDraft) : TaskChange {
-        override fun satisfiedBy(tasks: List<ScheduledTask>) =
-            tasks.firstOrNull { it.id == id }?.let { it.patched(from, to).draft().sameAs(it.draft()) } == true
+        override fun satisfiedBy(tasks: List<ScheduledTask>) = tasks.firstOrNull { it.id == id }?.let { current ->
+            val wanted = current.patched(from, to)
+            val expected = wanted.draft()
+            val actual = current.draft()
+            // Null omits an unchanged inbox in the request, so the value the hub kept cannot contradict this edit.
+            expected.copy(inbox = actual.inbox.takeIf { wanted.inbox == null } ?: expected.inbox).sameAs(actual)
+        } == true
     }
 
     data class Add(val draft: TaskDraft) : TaskChange {
@@ -292,12 +302,20 @@ internal class ProactiveStore(
     /** Says failures in the page's language. */
     private val say: ProactiveText,
     private val clock: () -> Instant = Instant::now,
+    /** Where a message goes when no page is listening to [messages] (a write that failed after the page was left). */
+    private val unheard: (String) -> Unit = {},
 ) {
     private val mutable = MutableStateFlow(ProactiveState())
     val state: StateFlow<ProactiveState> = mutable.asStateFlow()
     private val notices = MutableSharedFlow<String>(extraBufferCapacity = 4, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     /** Failures and confirmations worth telling the user about, in words for this page. */
     val messages: SharedFlow<String> = notices.asSharedFlow()
+    private val started = MutableSharedFlow<SessionKey>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    /**
+     * The conversation a "Run now" started, for the page to open. Without replay: a run that finishes after the page
+     * was left is not kept for later, so nothing pulls the user away from where they went (it is in the history).
+     */
+    val runsToOpen: SharedFlow<SessionKey> = started.asSharedFlow()
     private val writes = Mutex()
     private var tokens = 0L
 
@@ -385,7 +403,7 @@ internal class ProactiveStore(
                         val latest = attempt { api.tasks() }.getOrNull()
                             ?.also { list -> mutable.update { it.copy(tasks = Loadable(list), readAt = clock()) } }
                         val base = (latest ?: mutable.value.tasks.value)?.firstOrNull { it.id == change.id } ?: throw TaskGoneException()
-                        val next = if (change is TaskChange.Toggle) base.copy(enabled = change.enabled)
+                        val next = if (change is TaskChange.Toggle) base.copy(enabled = change.enabled, inbox = null)
                             else (change as TaskChange.Edit).let { base.patched(it.from, it.to) }
                         api.saveTask(next).also(::put)
                     }
@@ -409,20 +427,28 @@ internal class ProactiveStore(
         return result
     }
 
+    /** "Run now" from the page: the run goes on after the page is left, but only a page still collecting [runsToOpen] opens it. */
+    fun runNow(id: String): Job = scope.launch { run(id).onSuccess { key -> started.tryEmit(key) } }
+
     /** "New chat next time": the hub forgets the task's own conversation, so the next run starts one. */
     suspend fun fresh(id: String): Result<ScheduledTask> {
         mutable.update { it.copy(busy = it.busy + "fresh:$id") }
         val result = try { attempt { api.freshTask(id) } } finally { mutable.update { it.copy(busy = it.busy - "fresh:$id") } }
         result.onSuccess { task ->
             put(task)
-            notices.tryEmit(say.string(R.string.assistant_proactive_fresh_done))
+            tell(say.string(R.string.assistant_proactive_fresh_done))
         }.onFailure { report(R.string.assistant_proactive_not_saved, it) }
         return result
     }
 
     /** [what] is a sentence with the reason as `%1$s` ("Couldn't save: %1$s"). */
     private fun report(@StringRes what: Int, error: Throwable) {
-        notices.tryEmit(say.string(what, failureReason(say, error)))
+        tell(say.string(what, failureReason(say, error)))
+    }
+
+    /** To the page when it is listening; otherwise (it was left while a write went on) to [unheard], not dropped. */
+    private fun tell(message: String) {
+        if (notices.subscriptionCount.value == 0 || !notices.tryEmit(message)) unheard(message)
     }
 }
 

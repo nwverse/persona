@@ -6,5 +6,19 @@
   "line_when": "{line}（{when}）",
   "minutes_other": "{count} 分钟",
   "hours_minutes": "{hours} 小时 {minutes} 分",
-  "hours_other": "{count} 小时"
+  "hours_other": "{count} 小时",
+  "closeout_line": "{line} · {suffix}",
+  "closeout_merged_yes": "已合并",
+  "closeout_merged_no": "未合并",
+  "closeout_merged_confirmed": "已合并 ✓",
+  "closeout_merged_contradicted": "✗ 说已合并，实际没有",
+  "closeout_deployed_yes": "已部署",
+  "closeout_deployed_no": "未部署",
+  "closeout_deployed_confirmed": "已部署 ✓",
+  "closeout_deployed_contradicted": "✗ 说已部署，实际没有",
+  "closeout_blocked_on": "卡在：{waiting}",
+  "closeout_blocked": "卡住了",
+  "closeout_not_done_missing": "没做完：{missing}",
+  "closeout_not_done": "没做完",
+  "closeout_done": "自述已完成"
 }

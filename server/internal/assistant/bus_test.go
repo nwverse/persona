@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -102,5 +103,87 @@ func TestBusSnapshotWaitsForTheConnection(t *testing.T) {
 	case <-snapshots:
 	case <-time.After(5 * time.Second):
 		t.Fatal("no snapshot reached the hub after connecting")
+	}
+}
+
+// The hub's own manager offers the hub no compression (bus.Client.Uncompressed): its child, and the built-in manager's
+// service dialing the hub's local address. A manager elsewhere, or one made in the app, compresses as before (a
+// manager's own service is DeployService too, manager/service.go).
+func TestBusHubUncompressedOnTheHubsMachine(t *testing.T) {
+	for _, c := range []struct {
+		deploy, id, hub string
+		want            bool
+	}{
+		{"child", "", "http://127.0.0.1:18660", true},
+		{"child", "", "http://198.51.100.5:18660", true},
+		{DeployService, "", "http://127.0.0.1:18660", true},
+		{DeployService, assistantwire.AssistantID, "http://localhost:18660", true},
+		{DeployService, assistantwire.AssistantID, "http://[::1]:18660", true},
+		{DeployService, assistantwire.AssistantID, "https://203.0.113.7:18661", false},
+		{DeployService, "m_1", "http://127.0.0.1:18660", false},
+		{"external", "", "http://127.0.0.1:18660", false},
+		{"docker", "", "http://127.0.0.1:18660", false},
+	} {
+		b := NewBusHub(BusOptions{ID: c.id, Deploy: c.deploy, Hub: c.hub, Token: "t"})
+		if b.client.Uncompressed != c.want {
+			t.Errorf("%+v: Uncompressed %v", c, b.client.Uncompressed)
+		}
+	}
+}
+
+// A switch to Persona Link that stops waiting for the hub's begin (its time ran out, devices link_switch.go) tells the
+// hub so (rpc.cancel), which ends the begin's handler: the hub gives it up instead of switching the computer for a
+// manager that no longer waits.
+func TestBusCancelsALinkSwitchBeginGivenUp(t *testing.T) {
+	cancelled := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		conn := bus.NewConn(r.Context(), ws)
+		p := rpc.New("h", conn)
+		p.OnRequest = func(ctx context.Context, method string, _ json.RawMessage) (any, error) {
+			switch method {
+			case assistantwire.MethodHello, assistantwire.MethodSnapshot:
+				return map[string]any{}, nil
+			case devicewire.MethodLinkSwitchBegin:
+				select {
+				case <-ctx.Done():
+					cancelled <- struct{}{}
+				case <-time.After(10 * time.Second):
+				}
+				return nil, ctx.Err()
+			}
+			return nil, &rpc.Error{Code: "not_found", Message: method}
+		}
+		_ = p.Serve(r.Context(), conn)
+	}))
+	defer srv.Close()
+
+	b := NewBusHub(BusOptions{Hub: srv.URL, Token: "jb_x", Logf: testLogf(t)})
+	st := &memStore{}
+	svc := New(Options{Hub: b, Store: func() Store { return st }, Logf: testLogf(t)})
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- b.Serve(ctx, svc) }()
+	defer func() {
+		cancel()
+		<-served
+	}()
+	wctx, wcancel := context.WithTimeout(ctx, 5*time.Second)
+	defer wcancel()
+	if err := b.Wait(wctx); err != nil {
+		t.Fatal(err)
+	}
+	cctx, ccancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer ccancel()
+	if err := b.Client().Call(cctx, devicewire.MethodLinkSwitchBegin, devicewire.LinkSwitchBegin{MachineID: "box", Operation: "ls_1"}, nil); err == nil {
+		t.Fatal("begin answered")
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the hub's begin was not told the manager gave it up")
 	}
 }

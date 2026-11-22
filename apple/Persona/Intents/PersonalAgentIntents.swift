@@ -62,7 +62,7 @@ struct PersonalAgentEntityQuery: EntityQuery, EntityStringQuery {
 
     private static func all() async throws -> [PersonalAgentEntity] {
         do {
-            return try await IntentSupport.client().personalAgentSessions().map(PersonalAgentEntity.init)
+            return try await IntentSupport.selectedClient().personalAgentSessions().map(PersonalAgentEntity.init)
         } catch {
             throw IntentFailureSentence(IntentFailure.sentence(for: error, host: IntentSupport.host()))
         }
@@ -77,6 +77,7 @@ struct AgentTaskIntent: AppIntent {
         categoryName: "Personal Agents",
         searchKeywords: ["Agent", "Personal Agents", "Tasks", "have it do", "task"]
     )
+    @available(iOS 26.0, *)
     nonisolated static var supportedModes: IntentModes { .background }
 
     @Parameter(title: "Session")
@@ -97,7 +98,7 @@ struct AgentTaskIntent: AppIntent {
         let body = task.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { throw IntentFailureSentence(String(localized: "What should the agent do?")) }
         do {
-            let api = try IntentSupport.client()
+            let api = try IntentSupport.selectedClient()
             let target: PersonalAgentEntity
             if let agent { target = agent } else {
                 let all = try await api.personalAgentSessions().map(PersonalAgentEntity.init)
@@ -126,13 +127,14 @@ struct AgentsStatusIntent: AppIntent {
         categoryName: "Personal Agents",
         searchKeywords: ["Agent", "Unread [Personal Agent Intents 4d0680]", "Recent", "unread"]
     )
+    @available(iOS 26.0, *)
     nonisolated static var supportedModes: IntentModes { .background }
 
     nonisolated init() {}
 
     nonisolated func perform() async throws -> some IntentResult & ProvidesDialog & ReturnsValue<String> {
         do {
-            let all = try await IntentSupport.client().personalAgentSessions().map(PersonalAgentEntity.init)
+            let all = try await IntentSupport.selectedClient().personalAgentSessions().map(PersonalAgentEntity.init)
             let text = PersonalAgentIntentText.status(all)
             return .result(value: text, dialog: IntentSupport.dialog(text))
         } catch {
@@ -144,7 +146,10 @@ struct AgentsStatusIntent: AppIntent {
 /// Opens the app on one personal agent's conversation (Spotlight results and the dialog buttons land here).
 struct OpenPersonalAgentIntent: OpenIntent {
     nonisolated static let title: LocalizedStringResource = "Open Personal Agent"
+    @available(iOS 26.0, *)
     nonisolated static var supportedModes: IntentModes { .foreground(.immediate) }
+    // iOS 18 has no supportedModes: it opens the app this way.
+    nonisolated static var openAppWhenRun: Bool { true }
 
     @Parameter(title: "Session")
     var target: PersonalAgentEntity

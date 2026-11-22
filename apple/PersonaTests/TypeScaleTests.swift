@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-/// The app's text uses `Theme.Font` levels and its vertical spacing `Theme.Space` (docs/apple/ios.md「设计语言」). These read
+/// The app's text uses `Theme.Font` levels and its vertical spacing `Theme.Space` (docs/apple/ios.md「Design language」). These read
 /// the sources (apple/Persona, next to this file on the Mac the tests run from) so a system text style or a size written
 /// on a page fails here instead of slowly coming back.
 struct TypeScaleTests {

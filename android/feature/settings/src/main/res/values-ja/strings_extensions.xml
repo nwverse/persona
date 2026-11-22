@@ -5,19 +5,22 @@
     <string name="settings_ext_dep_disabled">先に有効化が必要</string>
     <string name="settings_ext_dep_old">バージョン不足（現在%1$s）</string>
     <string name="settings_ext_dep_unknown">状態不明。もう一度プレビューしてください</string>
+    <string name="settings_ext_dep_unknown_installed">状態不明。詳細を更新してください</string>
     <string name="settings_ext_sandbox_active">サンドボックス有効</string>
     <string name="settings_ext_sandbox_inactive">サンドボックスを要求済みですが、現在は無効です</string>
     <string name="settings_ext_sandbox_off">サンドボックス未使用</string>
     <string name="settings_ext_sandbox_title">実行の分離</string>
     <string name="settings_ext_sandbox_note">サンドボックスが分離するのは、ハブが実行するインストール済みの拡張機能だけです。有効かどうかは上の実際の状態に従います。変更はハブのマシンか管理画面でのみ行えます。</string>
-    <string name="settings_ext_sandbox_egress">外部通信プロキシ経由：%1$s・%2$s</string>
+    <string name="settings_ext_sandbox_footer">アドレスの許可とサンドボックスの切り替えは管理画面で行います（管理者パスワードが必要です）。</string>
+    <string name="settings_ext_sandbox_network">ネットワーク</string>
     <plurals name="settings_ext_sandbox_allowed">
-        <item quantity="other">許可%d回</item>
+        <item quantity="other">許可 %d</item>
     </plurals>
-    <plurals name="settings_ext_sandbox_denied">
-        <item quantity="other">拒否%d回</item>
+    <plurals name="settings_ext_sandbox_blocked">
+        <item quantity="other">ブロック %d</item>
     </plurals>
-    <string name="settings_ext_sandbox_last_denied">最後の拒否：%1$s</string>
+    <string name="settings_ext_sandbox_blocked_sentence">%1$sが%2$sに接続しようとしましたが、申請したアドレスに含まれていないためブロックされました。</string>
+    <string name="settings_ext_sandbox_go_admin">管理画面で許可</string>
     <string name="settings_ext_depends">依存関係</string>
     <string name="settings_ext_pack_members">パックのメンバー</string>
     <string name="settings_ext_pack_note">インストール済みでバージョンが足りているメンバーは再インストールしません。以下は今回一緒にインストールまたはアップグレードする拡張機能です。</string>
@@ -65,6 +68,7 @@
     <string name="settings_ext_state_error">エラー</string>
     <string name="settings_ext_state_unknown">状態不明</string>
     <string name="settings_ext_run_pack">パック自体はプログラムを実行しません。メンバーはそれぞれ有効化、設定、アンインストールします。</string>
+    <string name="settings_ext_run_pack_members_follow">パック自体はプログラムを実行しません。メンバーはそれぞれ設定、アンインストールします。</string>
     <string name="settings_ext_run_running">実行中</string>
     <string name="settings_ext_run_idle">未実行。必要になると自動で起動します</string>
     <string name="settings_ext_source_builtin">組み込み</string>
@@ -130,6 +134,7 @@
     <string name="settings_ext_card_value">値</string>
     <string name="settings_ext_card_total">合計</string>
     <string name="settings_ext_card_other">その他</string>
+    <string name="settings_ext_card_remaining">残り</string>
     <string name="settings_ext_card_current">現在</string>
     <string name="settings_ext_not_chosen">未選択</string>
     <string name="settings_ext_search">検索</string>
@@ -154,9 +159,15 @@
     <string name="settings_ext_list_footer">拡張機能のインストール、アップグレード、アンインストールはハブのマシン上（personad extension）でのみ行えます。ここではオン/オフの切り替え、設定の変更、シークレットの入力ができます。</string>
     <string name="settings_ext_save">保存</string>
     <string name="settings_ext_saved_restart">保存しました。拡張機能が再起動します</string>
-    <string name="settings_ext_read_only">この拡張機能はマネージャーのmanager.jsonに書かれています。オン/オフと設定はそこで変更し、変更後にマネージャーを再起動してください。</string>
+    <string name="settings_ext_read_only">この拡張機能はアシスタントのmanager.jsonに書かれています。オン/オフと設定はそこで変更し、変更後にアシスタントを再起動してください。</string>
     <string name="settings_ext_enabled">有効</string>
     <string name="settings_ext_enabled_note">無効にすると実行が停止し、提供しているコネクタなども一緒にオフになります。設定とシークレットは保持されます。</string>
+    <string name="settings_ext_enable_footer_pack">パックをオフにすると、メンバーもオフになり、実行が止まります。パックをオンに戻すと、パックがオフにしたメンバーもオンに戻ります。自分で個別にオン・オフしたメンバーはそのままです。</string>
+    <string name="settings_ext_enable_footer_pack_off">パックをオンに戻すと、%1$s もオンに戻ります。自分で個別にオン・オフしたメンバーはそのままです。</string>
+    <string name="settings_ext_enable_footer_pack_alone">パックをオフにしても、オフになるのはパック自体だけです。メンバーはそれぞれのページでオン・オフしてください。</string>
+    <string name="settings_ext_disable_pack_title">「%1$s」とそのメンバーをオフにしますか？</string>
+    <string name="settings_ext_disable_pack_body">メンバーも一緒にオフになります：%1$s。オフにするだけで、アンインストールはしません。設定とデータは保持されます。パックをオンに戻すと、これらもオンに戻ります。</string>
+    <string name="settings_ext_disable_all">まとめて無効化</string>
     <string name="settings_ext_unavailable">読み込めません</string>
     <string name="settings_ext_still_needed">未設定：%1$s</string>
     <string name="settings_ext_channel_link">これはチャットチャネルです</string>
@@ -175,6 +186,9 @@
     <string name="settings_ext_contributions_note">1つをオフにしても拡張機能の権限は減りません。ほかの提供機能はそのまま動き、変更後に拡張機能が再起動します。</string>
     <string name="settings_ext_permissions_note">インストール時に同意した内容です。新しいバージョンでさらに必要になる場合は、アップグレード前に再度確認します。</string>
     <string name="settings_ext_about_version">バージョン</string>
+    <plurals name="settings_ext_downloads">
+        <item quantity="other">%1$s回ダウンロード</item>
+    </plurals>
     <string name="settings_ext_about_previous">前のバージョン</string>
     <string name="settings_ext_about_source">ソース</string>
     <string name="settings_ext_about_publisher">発行元</string>
@@ -224,6 +238,12 @@
     <string name="settings_ext_preview_again">再プレビュー</string>
     <string name="settings_ext_uninstall_title">%1$sをアンインストールしますか？</string>
     <string name="settings_ext_uninstall_text">停止して設定とシークレットを削除します。提供しているコネクタも一緒に削除されます。</string>
+    <string name="settings_ext_uninstall_keep_result">パッケージも削除されますが、データフォルダはハブのマシンに残ります。手動でのクリーンアップが必要な項目は、アンインストール後に一覧表示されます。</string>
+    <string name="settings_ext_uninstall_delete_data_result">パッケージとデータフォルダも削除されます。手動でのクリーンアップが必要な項目は、アンインストール後に一覧表示されます。</string>
+    <string name="settings_ext_removal_warnings_text">アンインストールは完了しました。一部の項目は手動でクリーンアップする必要があります。</string>
+    <string name="settings_ext_removal_warnings_header">手動クリーンアップが必要な項目</string>
+    <string name="settings_ext_removal_copy">警告をすべてコピー</string>
+    <string name="settings_ext_removal_done">OK</string>
     <string name="settings_ext_dependents_title">依存する拡張機能も無効にしますか？</string>
     <string name="settings_ext_dependents_text">%1$sは%2$sに依存しているため、一緒に無効になります。</string>
     <string name="settings_ext_dependents_unnamed">他の拡張機能が%1$sに依存しているため、一緒に無効になります。</string>
@@ -248,6 +268,10 @@
     <string name="settings_ext_token_changed">トークンを変更しました</string>
     <string name="settings_ext_remove_market_title">%1$sを削除しますか？</string>
     <string name="settings_ext_remove_market_text">ハブはこのマーケットを読まなくなります。そこからインストールした拡張機能は残りますが、同じアドレスでマーケットを追加し直すまでアップグレードされません。</string>
+    <plurals name="settings_ext_remove_market_affected">
+        <item quantity="other">ハブはこのマーケットを読まなくなります。そこからインストールした%1$d件の拡張機能は残りますが、同じアドレスでマーケットを追加し直すまでアップグレードされません。</item>
+    </plurals>
+    <string name="settings_ext_remove_market_unused">ハブはこのマーケットを読まなくなります。このマーケットからインストールした拡張機能はありません。</string>
     <string name="settings_ext_remove">削除</string>
     <string name="settings_ext_market_removed">マーケットを削除しました</string>
     <string name="settings_ext_market_address">アドレス</string>
@@ -287,6 +311,7 @@
     <string name="settings_ext_auto_upgrade_off_failed">自動アップグレードをオフにできませんでした：%1$s</string>
     <string name="settings_ext_upgrade_waiting_idle">拡張機能がアイドルのときに自動で更新します</string>
     <string name="settings_ext_upgrade_available">後で自動で更新します</string>
+    <string name="settings_ext_upgrade_rename">拡張機能の ID が %1$s から %2$s に変わります。確認が必要です。設定とデータはそのまま保持されます。</string>
     <string name="settings_ext_upgrade_off">自動更新はオフです</string>
     <string name="settings_ext_upgrade_skipped">前回の更新後に起動しなかったため%1$sに戻しました。このバージョンには自動更新しません</string>
     <string name="settings_ext_upgrade_skipped_user">このバージョンから%1$sにロールバックしたため、このバージョンには自動更新しません</string>
@@ -313,6 +338,19 @@
     <!-- Removing from the extension's own page -->
     <string name="settings_ext_market_installed_note">この拡張機能はマーケットからインストールされました。アンインストール後もマーケットから再インストールできます。</string>
     <string name="settings_ext_keep_data_hint">再インストールしたときに続きから使えます。</string>
+    <string name="settings_ext_uninstall_members">パックのメンバーも一緒にアンインストール</string>
+    <string name="settings_ext_uninstall_members_hint">%1$s。チェックしない場合はそのまま残ります。</string>
+    <string name="settings_ext_uninstalled_with_members">%1$sとメンバーをアンインストールしました</string>
+    <string name="settings_ext_uninstalled_members_unknown">%1$sをアンインストールしました。メンバーの結果は返されませんでした</string>
+    <string name="settings_ext_partial_title">パックの一部だけアンインストールされました</string>
+    <string name="settings_ext_partial_text">%1$sはまだインストールされています。アンインストール済みのメンバーは元に戻りません。もう一度お試しください。</string>
+    <string name="settings_ext_partial_removed">アンインストール済み：%1$s</string>
+    <string name="settings_ext_partial_failed">アンインストールできなかったもの：%1$s</string>
+    <string name="settings_ext_partial_failed_item">%1$s（%2$s）</string>
+    <string name="settings_ext_partial_remaining">未処理でインストールされたまま：%1$s</string>
+    <plurals name="settings_ext_uninstalled_members">
+        <item quantity="other">%1$sをアンインストールしました。メンバー%2$d件もアンインストールしました</item>
+    </plurals>
     <!-- The machine list (format machine) -->
     <string name="settings_ext_machine_online">オンライン</string>
     <string name="settings_ext_machine_offline">オフライン</string>
@@ -323,6 +361,9 @@
     <string name="settings_ext_cua_ready">Cua使用可能</string>
     <string name="settings_ext_cua_installed">Cuaインストール済み</string>
     <string name="settings_ext_machine_not_found">マシンが見つかりません</string>
+    <string name="settings_ext_machine_missing">%1$s（このマシンはありません）</string>
+    <string name="settings_ext_launcher_missing">%1$s（このランチャーはありません）</string>
+    <string name="settings_ext_launchers_loading">ランチャーを読み込み中…</string>
     <string name="settings_ext_no_mac">このハブにはまだ Mac がありません。</string>
     <string name="settings_ext_no_machine">このハブにはまだマシンがありません。</string>
     <string name="settings_ext_turn_on_title">「%1$s」をオンにしますか？</string>
@@ -343,4 +384,57 @@
     <string name="settings_ext_open_image">画像を表示</string>
     <string name="settings_ext_chosen_count">%1$d 件選択</string>
     <string name="settings_ext_pick_time">時刻</string>
+    <!-- Source subscriptions (#2041): the entry rows -->
+    <string name="settings_subscriptions_title">購読</string>
+    <string name="settings_subscriptions_row">購読</string>
+    <string name="settings_subscriptions_counts_on">%1$d 件オン</string>
+    <string name="settings_subscriptions_counts_failing">%1$d 件オン · %2$d 件エラー</string>
+    <string name="settings_subscriptions_counts_none">購読できます</string>
+    <string name="settings_ext_notification_expired">この通知は有効期限切れです。拡張機能のページで再試行してください。</string>
+    <string name="settings_ext_notification_wrong_scope">元のハブまたはアシスタントが見つかりません。再接続して拡張機能のページで再試行してください。</string>
+    <string name="settings_ext_notification_unlock">この通知の操作を実行するには、スマートフォンのロックを解除してください。</string>
+    <plurals name="settings_ext_node_running">
+        <item quantity="other">%1$d台のマシンで実行中</item>
+    </plurals>
+    <plurals name="settings_ext_node_abnormal">
+        <item quantity="other">%1$d台のマシンに異常があります</item>
+    </plurals>
+    <plurals name="settings_ext_node_offline">
+        <item quantity="other">%1$d台がオフライン</item>
+    </plurals>
+    <plurals name="settings_ext_node_starting">
+        <item quantity="other">%1$d台のマシンで起動中</item>
+    </plurals>
+    <plurals name="settings_ext_node_stopped">
+        <item quantity="other">%1$d台のマシンで停止中</item>
+    </plurals>
+    <string name="settings_ext_graph">グラフ</string>
+    <string name="settings_ext_graph_zoom_out">縮小</string>
+    <string name="settings_ext_graph_zoom_in">拡大</string>
+    <string name="settings_ext_graph_fit">全体を表示</string>
+    <string name="settings_ext_graph_full_screen">全画面</string>
+    <string name="settings_ext_graph_open">グラフを全画面で開く</string>
+    <string name="settings_ext_graph_fold">折りたたむ</string>
+    <plurals name="settings_ext_graph_show_hidden">
+        <item quantity="other">%1$d 件の非表示ノードを表示</item>
+    </plurals>
+    <string name="settings_ext_graph_under">上位: %1$s</string>
+    <string name="settings_ext_graph_progress">%1$d%%</string>
+    <string name="settings_ext_use_reference">参照を使う</string>
+    <string name="settings_ext_reference_placeholder">op://vault/item/field</string>
+    <string name="settings_ext_reference_hint">この拡張機能が必要なときにプロバイダーが値を渡します。Persona は参照だけを保存します。</string>
+    <string name="settings_ext_from_provider">%1$sから</string>
+    <string name="settings_ext_secret_from_provider">%1$sから: %2$s</string>
+    <string name="settings_ext_secret_reference_saved">%1$sは参照を使うようになりました</string>
+    <string name="settings_ext_users_title">使用中</string>
+    <string name="settings_ext_users_footer">これらの設定はこのプロバイダーから値を取ります。設定を保存すると、その後も値を取ることを許可したことになります。</string>
+    <string name="settings_ext_user_launcher">「%1$s」のキー</string>
+    <string name="settings_ext_user_launcher_machine">%2$sの「%1$s」のキー</string>
+    <string name="settings_ext_rules_title">Agent に常に渡す</string>
+    <string name="settings_ext_rules_footer">このコンピュータでこのランチャーを使い、あなたが自分で始めた Agent は確認なしで値を受け取ります。</string>
+    <string name="settings_ext_rule_label">%2$sの「%1$s」</string>
+    <string name="settings_ext_rule_remove">削除</string>
+    <string name="settings_ext_rule_remove_title">このルールを削除しますか？</string>
+    <string name="settings_ext_rule_remove_body">次に%2$sの%1$sが必要とするとき、もう一度承認します。</string>
+    <string name="settings_ext_rule_removed">ルールを削除しました</string>
 </resources>

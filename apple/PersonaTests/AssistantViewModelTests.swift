@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 @MainActor
 struct AssistantViewModelTests {
@@ -106,6 +107,37 @@ struct AssistantViewModelTests {
         _ = await model.perform(AssistantViewModel.actions(card)[0])
         #expect(model.selected("submit") && model.attempt == nil && model.values["task"] == "已选结果")
     }
+    @Test func graphNodeActionsNavigateInsideTheAssistantCard() async {
+        let push = ExtensionAction(id: "node-details", push: ExtensionPush(page: "details"))
+        let graph = ExtensionGraphComponent(key: "work", nodes: [
+            ExtensionGraphNode(id: "node", title: "Node", action: push)
+        ])
+        let details = ExtensionView(sections: [ExtensionSection(items: [.text(ExtensionTextComponent(text: "Details"))])])
+        let card = ExtensionView(sections: [ExtensionSection(items: [.graph(graph)])], pages: ["details": details])
+        #expect(AssistantViewModel.actions(card).contains(push))
+        let model = AssistantViewModel(key: "view_example", scope: scope, view: card, store: AssistantViewsStore(),
+            deps: .init(send: { _ in Issue.record("a graph push sent a reply"); throw CancellationError() }))
+        _ = await model.perform(push)
+        #expect(model.page == "details")
+    }
+
+    @Test func scenePinActionsNavigateInsideTheAssistantCard() async {
+        let push = ExtensionAction(id: "pin-details", push: ExtensionPush(page: "details"))
+        let scene = ExtensionSceneComponent(
+            key: "home",
+            alt: "Two-room home",
+            shapes: [.box(ExtensionSceneBox(center: [0, 0], size: [4, 3], bottom: 0, top: 0.1))],
+            pins: [ExtensionScenePin(id: "lamp", at: [0, 0], height: 2.2, label: "Ceiling lamp", state: "On", action: push)]
+        )
+        let details = ExtensionView(sections: [ExtensionSection(items: [.text(ExtensionTextComponent(text: "Lamp details"))])])
+        let card = ExtensionView(sections: [ExtensionSection(items: [.scene(scene)])], pages: ["details": details])
+        #expect(AssistantViewModel.actions(card).contains(push))
+        let model = AssistantViewModel(key: "view_example", scope: scope, view: card, store: AssistantViewsStore(),
+            deps: .init(send: { _ in Issue.record("a scene pin push sent a reply"); throw CancellationError() }))
+        _ = await model.perform(push)
+        #expect(model.page == "details")
+    }
+
     @Test func navigationStaysInsideTheCardAndDropsRemovedPages() async {
         let push = ExtensionAction(id: "details", push: ExtensionPush(page: "details"))
         let pop = ExtensionAction(id: "back", pop: true)
@@ -190,8 +222,11 @@ struct AssistantViewModelTests {
         #expect(inputs.count == 2 && inputs[0].confirmed && inputs[0].expectedVersion == 7)
     }
     @Test func unsupportedGeneratedComponentsUseFallbackRatherThanBlankCards() {
+        let future = #"{"fallback":"文字说明","sections":[{"items":[{"type":"hologram","title":"新组件"}]}]}"#
+        #expect(AssistantRichMarkdown.decode(future) == nil)
+        // A card is drawn at `ExtensionUIContext.cardVersion` (11, #12544): UI version 4's header is drawn, not left out.
         let header = #"{"fallback":"文字说明","sections":[{"items":[{"type":"header","title":"新组件"}]}]}"#
-        #expect(AssistantRichMarkdown.decode(header) == nil)
+        #expect(AssistantRichMarkdown.decode(header) != nil)
         var card = view()
         card.sections[0].items.append(.html(ExtensionHtmlComponent(key: "drawing", html: "<p>方案</p>")))
         #expect(AssistantRichMarkdown.supports(card))

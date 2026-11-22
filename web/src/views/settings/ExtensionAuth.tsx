@@ -1,4 +1,4 @@
-// An extension's sign-in (#4507, docs/protocol/protocol.md "Extension sign-in"): the "Sign in" group on its detail (state, "Sign in" / "Sign in again",
+// An extension's sign-in (#4507, docs/protocol/protocol.md): the "Sign in" group on its detail (state, "Sign in" / "Sign in again",
 // "Sign out") and the dialog of steps the extension's program asks for: fields to fill in, a device code (a link to open,
 // the code to enter, and the link's QR code for another phone), or a QR code to scan. A device code / QR step is asked
 // again every interval (lib/extension-auth.ts pollAuth) until it is done or another step comes. The rules and words are

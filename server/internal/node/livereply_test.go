@@ -103,7 +103,7 @@ func withLiveHub(t *testing.T, n *Node) *liveEvents {
 }
 
 // replyNode is a node with the session's transcript (its prompt so far) read once, as a watch's first read does; watched
-// says whether the hub watches it. The transcript then goes on only when the test calls n.refresh, as watchLoop would.
+// says whether the hub watches it. The transcript then goes on only when the test calls n.refresh, as the watch pump would.
 func replyNode(t *testing.T, watched bool) (*Node, *transcript.File, string, *liveEvents) {
 	t.Helper()
 	n := codexTestNode(t)
@@ -632,7 +632,7 @@ func TestLiveRepliesSettingMovesTheResumeCommand(t *testing.T) {
 	n.holdResume(context.Background(), launch, "w1:p4", sidB, agentLaunch{Agent: "codex", Launcher: "cx"})
 	waitCalls(t, f, "pane.report_agent_session", 2)
 	cmd := func(display bool) string {
-		c := "HERDR_AGENT=claude claude --resume " + startID + " --mcp-config " + filepath.Join(n.dir, "mcp.json") + " --plugin-dir " + hooks
+		c := "HERDR_AGENT=claude claude --resume " + startID + " --mcp-config " + filepath.Join(n.dir, "mcp.json") + " --allowedTools " + ownToolsRule + " --plugin-dir " + hooks
 		if display {
 			c += " --plugin-dir " + live
 		}

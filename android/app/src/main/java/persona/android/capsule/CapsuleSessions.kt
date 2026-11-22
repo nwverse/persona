@@ -2,6 +2,8 @@ package persona.android.capsule
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.ensureActive
@@ -19,6 +21,10 @@ import persona.core.domain.inbox.buildInboxList
 import persona.core.domain.sort.AgentPreferences
 import persona.core.domain.sort.AgentSession
 import persona.core.domain.sort.canSend
+import persona.core.domain.sort.foldedSubtasks
+import persona.core.domain.sort.foldRows
+import persona.core.domain.sort.isNestedSubtask
+import persona.core.domain.sort.isFoldedSide
 import persona.core.navigation.RequestRef
 import persona.feature.agents.AgentsPreferencesSnapshot
 import persona.feature.agents.listSession
@@ -37,22 +43,42 @@ internal const val InboxSection = "inbox"
 internal const val AgentGroupPrefix = "agent|"
 internal const val LarkGroup = "lark"
 
-internal fun capsuleUnreadSessions(sessions: List<Session>, preferences: AgentsPreferencesSnapshot): List<Session> =
-    capsuleNotifiableUnreadSessions(sessions, preferences).filterNot { it.assistant }
+internal fun capsuleUnreadSessions(sessions: List<Session>, preferences: AgentsPreferencesSnapshot, hierarchy: Boolean = false): List<Session> =
+    capsuleNotifiableUnreadSessions(sessions, preferences, hierarchy).filterNot { it.assistant }
 
-private fun capsuleNotifiableUnreadSessions(sessions: List<Session>, preferences: AgentsPreferencesSnapshot): List<Session> =
-    sessions.distinctBy { it.key }.filter { session ->
-        !session.quiet && session.listSession(preferences).let {
-            it.state == AgentState.Unread && !preferences.mutes.mutes(it)
+/**
+ * The Unread list, its count, the badge and the completion notices: unseen, not quiet, not muted, and no subtask the
+ * Agents list folds under its parent, whose Unread count leaves it out too (#4769). It is read there, under its parent.
+ */
+private fun capsuleNotifiableUnreadSessions(sessions: List<Session>, preferences: AgentsPreferencesSnapshot, hierarchy: Boolean = false): List<Session> =
+    foldRows(sessions.distinctBy { it.key }.map { it.listSession(preferences) }, hierarchy).filter { row ->
+        !row.session.quiet && row.let {
+            it.state == AgentState.Unread && !it.isNestedSubtask && !preferences.mutes.mutes(it)
         }
-    }.sortedByDescending { it.updatedAt.orEmpty() }
+    }.map { it.session }.sortedByDescending { it.updatedAt.orEmpty() }
+
+/**
+ * What goes on, which keeps the capsule shown "When tasks are running": every session that needs the user, works, or is
+ * unread, not quiet and not muted (the main chat even when muted). A subtask is left out as the Unread list and the
+ * main chat's dock leave it out (#4769): an unread one always, a working one while a session above it is listed too.
+ */
+private fun capsuleActivity(sessions: List<Session>, main: SessionKey?, requests: List<Interaction>,
+    preferences: AgentsPreferencesSnapshot, hierarchy: Boolean = false): List<CapsuleEntry> {
+    val rows = foldRows(sessions.map { it.listSession(preferences) }, hierarchy)
+    val going = rows.filter { row -> !row.session.quiet && (!preferences.mutes.mutes(row) || row.session.key == main) }
+        .map { row -> row to capsuleEntry(row.session, requests) }
+        .filter { (row, entry) -> entry.state != CapsuleState.Idle && !(entry.state == CapsuleState.Done && row.isNestedSubtask) }
+    val listed = going.mapTo(HashSet()) { (row, _) -> row.id }
+    val folded = foldedSubtasks(rows) { it.id in listed }
+    return going.filterNot { (row, _) -> row.id in folded }.map { it.second }.sortedBy { it.state.ordinal }
+}
 
 private fun capsuleEntry(session: Session, requests: List<Interaction> = emptyList(), id: String = capsuleId(session.key)): CapsuleEntry {
-    val pending = requests.filter { it.sessionKey == session.key }
+    val pending = requests.filter { it.homeKey == session.key }
     val state = when {
-        pending.isNotEmpty() || session.agentState == AgentState.NeedsYou -> CapsuleState.NeedsYou
-        session.agentState == AgentState.Working -> CapsuleState.Working
-        session.agentState == AgentState.Unread -> CapsuleState.Done
+        pending.isNotEmpty() || session.foldedState == AgentState.NeedsYou -> CapsuleState.NeedsYou
+        session.foldedState == AgentState.Working -> CapsuleState.Working
+        session.foldedState == AgentState.Unread -> CapsuleState.Done
         else -> CapsuleState.Idle
     }
     return CapsuleEntry(id, session.displayTitle,
@@ -126,7 +152,13 @@ internal class CapsuleSessions(
     private val openConversation: (SessionKey?, Boolean) -> Unit,
     /** A request outside any session (#5308): there is no conversation to open, only its card (#4808). */
     private val openCard: (RequestRef) -> Unit,
+    private val computationContext: CoroutineContext = EmptyCoroutineContext,
 ) : CapsuleContentSource {
+    private fun hierarchy(machineId: String) = session.sessions.supportsFeature(machineId, "sessions_hierarchy")
+    private fun unreadSessions(rows: List<Session>, preferences: AgentsPreferencesSnapshot) =
+        rows.groupBy { GroupKeys.namespaceOf(it.machineId) }.values.flatMap {
+            capsuleNotifiableUnreadSessions(it, preferences, hierarchy(it.first().machineId))
+        }.sortedByDescending { it.updatedAt.orEmpty() }
     private val selectedSection = MutableStateFlow<String?>(null)
     private val selected = MutableStateFlow<Session?>(null)
     private val expanded = MutableStateFlow(false)
@@ -150,13 +182,10 @@ internal class CapsuleSessions(
     // parsed, sorted and grouped) is built from the latest of them only, never once per queued change.
     private val catalog = combine(agents, session.inbox.snapshot) { data, snapshot -> data to snapshot }.conflate().map { (data, snapshot) ->
         val inbox = capsuleInbox(snapshot)
-        val activity = data.sessions.filter { current ->
-            !current.quiet && (!data.preferences.mutes.mutes(AgentSession(current)) || current.key == data.main)
-        }.map { current ->
-            val projected = current.listSession(data.preferences)
-            capsuleEntry(projected.session, data.requests)
-        }.filter { it.state != CapsuleState.Idle }.sortedBy { it.state.ordinal }
-        CapsuleCatalog(data.sessions, data.main, capsuleUnreadSessions(data.sessions, data.preferences).map { capsuleEntry(it) },
+        val activity = data.sessions.groupBy { GroupKeys.namespaceOf(it.machineId) }.values.flatMap {
+            capsuleActivity(it, data.main, data.requests, data.preferences, hierarchy(it.first().machineId))
+        }.sortedBy { it.state.ordinal }
+        CapsuleCatalog(data.sessions, data.main, unreadSessions(data.sessions, data.preferences).filterNot { it.assistant }.map { capsuleEntry(it) },
             data.sessions.firstOrNull { it.key == data.main }?.let { capsuleEntry(it, data.requests, MainEntry).copy(title = AppText.get(R.string.app_main_chat)) }
                 ?: mainPlaceholder(), inbox, activity,
             inbox.entries.filter { entry ->
@@ -167,7 +196,7 @@ internal class CapsuleSessions(
                     } ?: !data.preferences.mutes.mutes(target.key.path, null)
                 }
             })
-    }.stateIn(scope, SharingStarted.Eagerly, CapsuleCatalog())
+    }.flowOn(computationContext).stateIn(scope, SharingStarted.Eagerly, CapsuleCatalog())
     private val selection = combine(catalog, selectedSection, selected) { data, section, chosen ->
         val entrance = section ?: if (data.unread.isNotEmpty()) UnreadSection else MainSection
         when (entrance) {
@@ -202,7 +231,8 @@ internal class CapsuleSessions(
                 DeliveryState.WaitingForNetwork -> "\n" + AppText.get(R.string.app_capsule_waiting_network)
                 DeliveryState.Queued -> "\n" + AppText.get(R.string.app_capsule_queued)
                 DeliveryState.Unknown, DeliveryState.NeedsConfirmation, DeliveryState.Verifying -> "\n" + AppText.get(R.string.app_capsule_unconfirmed)
-                DeliveryState.Refused, DeliveryState.Rejected -> "\n" + (it.error ?: AppText.get(R.string.app_capsule_not_sent))
+                // The hub's code is not words: the chat says why and offers Retry (#2821).
+                DeliveryState.Refused, DeliveryState.Rejected -> "\n" + AppText.get(R.string.app_capsule_not_sent)
                 else -> "\n" + AppText.get(R.string.app_capsule_sending)
             }, true) }
         CapsuleContent(entries = target.entries, selectedId = target.id, messages = history + pending,
@@ -222,7 +252,7 @@ internal class CapsuleSessions(
             val preferences = data.preferences
             val merged = data.sessions
             val current = merged.filterNot { it.machineId in snapshots } + snapshots.values.flatten()
-            val unread = capsuleNotifiableUnreadSessions(current, preferences)
+            val unread = unreadSessions(current, preferences)
             val selected = target.key?.let { key -> current.firstOrNull { it.key == key } }
             Triple(unread, pending?.takeIf { notice -> unread.any { capsuleId(it.key) == notice.targetId } },
                 selected?.listSession(preferences)?.state == AgentState.Unread)
@@ -309,10 +339,16 @@ internal class CapsuleSessions(
 
     private suspend fun acceptNotices(event: SessionsEvent, completed: List<Session>, preferences: AgentsPreferencesSnapshot, restore: Boolean) {
         noticeSnapshots.value = noticeSnapshots.value + (event.machineId to event.sessions)
-        fun eligible(target: Session) = !target.interrupted && capsuleNotifiableUnreadSessions(listOf(target), preferences).isNotEmpty()
+        val eligibleKeys = unreadSessions(event.sessions, preferences).mapTo(HashSet()) { it.key }
+        fun eligible(target: Session) = !target.interrupted && target.key in eligibleKeys
         val changed = noticeMemory.observe(event).filter(::eligible)
-        val notices = completed.filter(::eligible).map { it to CapsuleNoticeKind.Completed } +
-            changed.filter { target -> completed.none { it.key == target.key } }.map { it to CapsuleNoticeKind.NewMessage }
+        // A side session that finished (#7944) is no row of its own: its parent's row, unread with it, says so.
+        val byKey = event.sessions.associateBy { it.key }
+        val finished = completed.map { done ->
+            done.foldedUnder?.takeIf { done.isFoldedSide }?.let { byKey[SessionKey(done.machineId, it)] } ?: done
+        }.distinctBy { it.key }
+        val notices = finished.filter(::eligible).map { it to CapsuleNoticeKind.Completed } +
+            changed.filter { target -> finished.none { it.key == target.key } }.map { it to CapsuleNoticeKind.NewMessage }
         val prior = noticeMemory.pending
         if (prior != null && event.sessions.any { capsuleId(it.key) == prior.targetId }) {
             val target = event.sessions.first { capsuleId(it.key) == prior.targetId }

@@ -88,6 +88,20 @@ class ExtensionSettingsStateTest {
         assertEquals(JsonPrimitive("Draft"), model.state.value.draft["folder"])
     }
 
+    /** A renamed extension is in its market under its new ID (#2511): Check for updates finds it there. */
+    @Test fun updateCheckFindsARenamedExtension() = runBlocking {
+        val api = object : ExtensionApiStub() {
+            override suspend fun extension(id: String) = installed
+            override suspend fun catalog(query: String, market: String?, refresh: Boolean) = ExtensionCatalog(markets = listOf(ExtensionMarket("example")),
+                extensions = listOf(CatalogExtension("example", id = "notes-next", version = "2.0.0", upgradable = true, replaces = "notes", renameFrom = "notes")))
+        }
+        val model = ExtensionModel(api, "notes", res); model.load()
+        model.checkForUpdates()
+        assertNull(model.state.value.updates.error)
+        assertEquals("notes-next", model.state.value.updates.candidate?.id)
+        assertTrue(ExtensionText.upgradeDetail(res, ExtensionUpgrade(id = "notes", state = "needs_permission", renameTo = "notes-next")).contains("notes-next"))
+    }
+
     @Test fun missingOrFailedMarketsAreNotReportedAsUpToDate() = runBlocking {
         var response = ExtensionCatalog()
         val api = object : ExtensionApiStub() {

@@ -1,21 +1,33 @@
 plugins {
     id("persona.android.library")
+    // Its tests expect CoreText in Simplified Chinese (CoreTextFallback).
+    id("persona.coretext.zh")
     id("persona.compose")
     id("persona.hilt")
 }
 
 android {
     namespace = "persona.feature.agents"
-    testOptions { unitTests { isIncludeAndroidResources = true } }
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            all {
+                // RecentSetupsFixtureTest reads spec/fixtures/recents: persona.android.library passes the repository root.
+                // The screens' screenshots (the to-dos calendar's day, week and month in three styles, dark and light)
+                // share one test process; retain the bounded heap they need rather than the 512 MB default, as feature/settings does.
+                it.maxHeapSize = "1g"
+            }
+        }
+    }
 }
 
 dependencies {
     implementation(project(":core:contracts"))
     implementation(project(":feature:chat"))
     implementation(project(":core:domain"))
+    implementation(project(":core:data"))
     implementation(project(":core:designsystem"))
     implementation(project(":core:navigation"))
-    implementation(libs.compose.icons)
     implementation(libs.androidx.lifecycle.compose)
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:${libs.versions.lifecycle.get()}")
     implementation(libs.androidx.activity)

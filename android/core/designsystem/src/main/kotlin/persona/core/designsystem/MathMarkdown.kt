@@ -4,7 +4,7 @@ import java.net.URLDecoder
 import java.net.URLEncoder
 
 /**
- * Formulas in Markdown (docs/android/android.md "File viewer" › "Formulas and diagrams", iOS `MathMarkdown.swift`), rewritten into what the Markdown
+ * Formulas in Markdown (docs/android/android.md "Files and Git in chat" › "Formulas and diagrams", iOS `MathMarkdown.swift`), rewritten into what the Markdown
  * renderer can carry before it parses:
  * - display math — `$$…$$` and `\[…\]` on lines of their own, or a line that is one formula — becomes a ```math fence
  *   (drawn by [RenderedFence]);

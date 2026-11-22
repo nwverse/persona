@@ -12,6 +12,7 @@ builds on are listed in ALLOWED_REPOS with the reason; adding one there is a del
 any service's internals lives here: such a list would itself describe what it guards.
 """
 from pathlib import Path
+import os
 import re
 import subprocess
 import tempfile
@@ -21,7 +22,16 @@ from unittest.mock import patch
 from compatibility_identifiers import registered_external_ref
 
 
-ROOT = Path(__file__).resolve().parents[2]
+def _source_root():
+    configured = os.environ.get("PERSONA_CI_SOURCE_ROOT")
+    if configured:
+        if not Path(configured).is_absolute():
+            raise ValueError("PERSONA_CI_SOURCE_ROOT must be absolute")
+        return Path(configured)
+    return Path(__file__).resolve().parents[2]
+
+
+ROOT = _source_root()
 
 # The organisation followed by a slash and any repository other than Persona's own: issue refs, bare URLs, blob links.
 REPO_REF = re.compile(r"\bnwverse/(?!persona\b)([\w.-]+)", re.IGNORECASE)
@@ -33,11 +43,18 @@ REPOSITORY_PATH = re.compile(r"(?<![\w/])(?:server|apple|android|site|web|schema
 # Repositories Persona depends on in the open; the docs and code cite them as sources.
 ALLOWED_REPOS = {
     "contribution": "the public contribution board Persona tiers are read from (persona_tiers.go)",
+    # #9694: a source-pinned compile-time generator for one Android-only read-only About Version experiment.
+    "refract": "public compile-time source for the bounded Android About Version generation experiment (#9694)",
 }
 # Not repository references: keys in the hub's own Persona file store.
 ALLOWED_IN_FILE = {
     ("server/internal/hub/persona_tiers_test.go", "tiers"),
     ("server/internal/hub/persona_tiers_test.go", "dot"),
+    # pet: the built-in Milk Frog's art in the organisation's persona package, which the watch's answer-only token reads
+    # (#4910, #5069).
+    ("server/internal/hub/devicetokens.go", "pet"),
+    ("server/internal/hub/devicetokens_test.go", "pet"),
+    ("docs/protocol/protocol.md", "pet"),
 }
 
 
@@ -93,6 +110,12 @@ class ExternalServiceRefTests(unittest.TestCase):
         self.assertEqual([], hits('"publisher": "' + org + '"'))
         self.assertEqual([], hits("github.com/" + org + "/persona/server"))
         self.assertEqual([], hits("see #1420 and the service's public API reference"))
+
+    def test_a_persona_store_key_passes_only_where_it_is_listed(self):
+        org = "nwverse"
+        route = "GET /api/v1/personas/" + org + "/pet/pet.json"
+        self.assertEqual([], hits(route, path="server/internal/hub/devicetokens.go"))
+        self.assertEqual([(1, org + "/pet")], hits(route, path="server/internal/hub/other.go"))
 
     def test_existing_local_paths_are_not_repository_references(self):
         org = "nwverse"

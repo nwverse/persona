@@ -35,8 +35,7 @@ import persona.core.contracts.Machine
 import persona.core.contracts.Session
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
-import persona.core.navigation.SettingsPage
-import persona.core.navigation.SettingsPageRoute
+import persona.core.navigation.ModelPurposeRoute
 import java.io.File
 
 /**
@@ -118,7 +117,7 @@ class ReadinessMainShotsTest {
         source = current
         rule.waitForIdle()
         rule.onNodeWithText("接上模型").performClick()
-        assertEquals(SettingsPageRoute(SettingsPage.Providers), opened.last())
+        assertEquals(ModelPurposeRoute("assistant"), opened.last())
         // "Try it" runs the hub's one-word check and shows its answer.
         rule.onAllNodesWithText("试一句").onLast().performClick()
         rule.waitForIdle()

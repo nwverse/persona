@@ -1,38 +1,31 @@
 import BeautifulUI
 import SwiftUI
 
-// The composer's dictation and stop buttons, the shell's (docs/apple/ios.md「新外壳」): every composer draws these two, so an
+// The composer's dictation and stop buttons, the shell's (docs/apple/ios.md「New shell」): every composer draws these two, so an
 // agent's chat and the assistant's look and behave alike (#1079). Each is a size up like the shell's chrome
-// (`shellScaled`), wherever it sits. A field outside the composer dictates with the same tap (`FieldMicButton`).
+// (`shellScaled`), wherever it sits. A field outside the composer dictates with the same tap (`FieldMicButton`). Every mic
+// takes a touch the same way (`MicPress`, #9619): a tap turns dictation on or off, a hold dictates while held.
 
-/// Speech to text into the draft: what is heard goes after what was typed; a second tap ends it. The composer owns the
-/// `Dictation` (sending, stopping and leaving the page end it too).
+/// Speech to text into the draft: what is heard goes after what was typed; a second tap ends it, and held it dictates
+/// until the finger lifts (`WritingMicPress`). The composer owns the `Dictation` (sending, stopping and leaving the page
+/// end it too).
 struct ComposerMicButton: View {
     let dictation: Dictation
     @Binding var text: String
     var id = "composer-mic"
-    @Environment(\.buiTheme) private var theme
+    /// What tells dictation the language spoken besides the draft: the owner's recent messages in this chat.
+    var hints: () -> [String] = { [] }
 
     var body: some View {
-        Button { dictation.toggle(into: $text) } label: {
-            ThemedIcon(dictation.isListening ? Theme.Icon.dictating : Theme.Icon.dictate)
-                .font(Theme.Font.heading)
-                .fontWeight(.medium)
-                .foregroundStyle(dictation.isListening ? Theme.accent : ComposerInk.icon(theme))
-                .symbolEffect(.pulse, isActive: dictation.isListening)
-                .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
-                .contentShape(.circle)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(dictation.isListening ? String(localized: "Stop Dictation") : String(localized: "Dictate"))
-        .accessibilityIdentifier(id)
-        .shellScaled()
+        ComposerMicFace(listening: dictation.isListening)
+            .modifier(WritingMicPress(dictation: dictation, text: $text, id: id, hints: hints))
+            .shellScaled()
     }
 }
 
-/// The mic of a text field outside the composer (a to-do's notes, #2188): the composer's tap, drawn like the text buttons
-/// beside it (the caller gives the font and color). `willStart` runs just before listening starts, for a field that has
-/// to open first. The view owns the `Dictation`: saving, cancelling and leaving end it.
+/// The mic of a text field outside the composer (a to-do's notes, #2188): the composer's tap and hold, drawn like the
+/// text buttons beside it (the caller gives the font and color). `willStart` runs just before listening starts, for a
+/// field that has to open first. The view owns the `Dictation`: saving, cancelling and leaving end it.
 struct FieldMicButton: View {
     let dictation: Dictation
     @Binding var text: String
@@ -40,33 +33,74 @@ struct FieldMicButton: View {
     var willStart: () -> Void = {}
 
     var body: some View {
-        Button {
-            if !dictation.isListening { willStart() }
-            dictation.toggle(into: $text)
-        } label: {
-            ThemedIcon(dictation.isListening ? Theme.Icon.dictating : Theme.Icon.dictate)
-                .symbolEffect(.pulse, isActive: dictation.isListening)
-                .padding(.horizontal, Theme.Space.xs)
-                .contentShape(.rect)
-        }
-        .buttonStyle(.borderless)
-        .accessibilityLabel(dictation.isListening ? String(localized: "Stop Dictation") : String(localized: "Dictate"))
-        .accessibilityIdentifier(id)
+        ThemedIcon(dictation.isListening ? Theme.Icon.dictating : Theme.Icon.dictate)
+            .symbolEffect(.pulse, isActive: dictation.isListening)
+            .padding(.horizontal, Theme.Space.xs)
+            .contentShape(.rect)
+            .modifier(WritingMicPress(dictation: dictation, text: $text, id: id, willStart: willStart))
+    }
+}
+
+/// The tap and the hold of a mic that writes into its text as it hears (`ComposerMicButton`, `FieldMicButton`, #9619):
+/// a tap turns dictation on or off (`Dictation.toggle`); a hold dictates until the finger lifts, and a slide left puts
+/// back what the text held when it began.
+private struct WritingMicPress: ViewModifier {
+    let dictation: Dictation
+    @Binding var text: String
+    var id: String
+    var hints: () -> [String] = { [] }
+    var willStart: () -> Void = {}
+    /// The text as the hold began.
+    @State private var before: String?
+
+    func body(content: Content) -> some View {
+        content
+            .modifier(MicPress(holds: !dictation.isListening, tap: tapped, began: {
+                willStart()
+                before = text
+                Haptics.tap()
+                dictation.toggle(into: $text, hints: hints)
+            }, ended: { outcome in
+                dictation.stop()
+                if outcome == .cancel, let before { text = before }
+                before = nil
+            }))
+            .micAccessibility(listening: dictation.isListening, id: id, tap: tapped)
+    }
+
+    private func tapped() {
+        if !dictation.isListening { willStart() }
+        dictation.toggle(into: $text, hints: hints)
     }
 }
 
 extension Dictation {
     /// A mic's tap: a second one ends it; otherwise what is heard goes after what `text` holds, and why it could not
-    /// start shows as a toast.
-    func toggle(into text: Binding<String>) {
+    /// start shows as a toast. The draft and `hints` tell it the language spoken (`DictationLanguage`).
+    func toggle(into text: Binding<String>, hints: () -> [String] = { [] }, onFailure: (() -> Void)? = nil) {
         if isListening { stop(); return }
         let typed = text.wrappedValue
         let base = typed.isEmpty || typed.last?.isWhitespace == true ? typed : typed + " "
-        Task {
-            if let problem = await start(update: { heard in text.wrappedValue = base + heard }) {
-                AppModel.shared.toast = Toast(problem, style: .error)
-            }
+        start(hints: [typed] + hints(), update: { heard in text.wrappedValue = base + heard }) { problem in
+            AppModel.shared.toast = Toast(problem, style: .error)
+            onFailure?()
         }
+    }
+}
+
+/// The mic's face: the composer's ink, or the accent and a pulse while it listens.
+struct ComposerMicFace: View {
+    var listening: Bool
+    @Environment(\.buiTheme) private var theme
+
+    var body: some View {
+        ThemedIcon(listening ? Theme.Icon.dictating : Theme.Icon.dictate)
+            .font(Theme.Font.heading)
+            .fontWeight(.medium)
+            .foregroundStyle(listening ? Theme.accent : ComposerInk.icon(theme))
+            .symbolEffect(.pulse, isActive: listening)
+            .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+            .contentShape(.circle)
     }
 }
 
@@ -75,20 +109,41 @@ struct ComposerRoundButton: View {
     var symbol: String
     var label: String
     var id: String
+    /// Shrinks while pressed (Telegram's send); the others keep the plain button's press.
+    var pressScales = false
+    /// The quieter grey circle with the ink's symbol (the dictation bar's cancel and stop), under the ink one.
+    var muted = false
+    /// Working on it: a spinner in the symbol's place.
+    var busy = false
     var action: () -> Void
     @Environment(\.buiTheme) private var theme
 
+    private var symbolInk: Color {
+        if muted { return AppStyle.current.usesBeautifulUI ? theme.colors.ink : Theme.Shell.ink }
+        return AppStyle.current.usesBeautifulUI ? theme.colors.canvas : Theme.Shell.inkText
+    }
+
+    private var fill: Color {
+        if muted { return AppStyle.current.usesBeautifulUI ? theme.colors.inset : Theme.Shell.roundMuted }
+        return AppStyle.current.usesBeautifulUI ? theme.colors.ink : Theme.Shell.ink
+    }
+
     var body: some View {
         Button(action: action) {
-            ThemedIcon(symbol)
-                .font(Theme.Font.bodyHeavy)
-                .foregroundStyle(AppStyle.current.usesBeautifulUI ? theme.colors.canvas : Theme.Shell.inkText)
+            ZStack {
+                if busy {
+                    ProgressView().tint(symbolInk)
+                } else {
+                    ThemedIcon(symbol).font(Theme.Font.bodyHeavy)
+                }
+            }
+                .foregroundStyle(symbolInk)
                 .scaledFrame(width: Theme.Size.wellL, height: Theme.Size.wellL)
-                .background(AppStyle.current.usesBeautifulUI ? theme.colors.ink : Theme.Shell.ink, in: .circle)
+                .background(fill, in: .circle)
                 .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
                 .contentShape(.circle)
         }
-        .buttonStyle(.plain)
+        .modifier(ComposerPress(scales: pressScales))
         .accessibilityLabel(label)
         .accessibilityIdentifier(id)
         .shellScaled()
@@ -104,16 +159,18 @@ extension ComposerRoundButton {
 }
 
 /// Voice Chat from the composer (docs/assistant/voice.md 6.1, `Theme.Icon.voiceChannel`): in send's place a round ink button like
-/// send; beside stop (the agent works) a plain icon like dictation's.
+/// send; beside stop (the agent works) a plain icon like dictation's. `label`: what a tap does, for VoiceOver (#9887: the
+/// conversation's phone icon calls it on the iPhone or shows its call, `VoiceEntry.iconLabel`); Voice Chat by default.
 struct ComposerVoiceButton: View {
     var round: Bool
     var id = "composer-voice"
+    var label = String(localized: "Voice Chat")
     var action: () -> Void
     @Environment(\.buiTheme) private var theme
 
     var body: some View {
         if round {
-            ComposerRoundButton(symbol: Theme.Icon.voiceChannel, label: String(localized: "Voice Chat"), id: id, action: action)
+            ComposerRoundButton(symbol: Theme.Icon.voiceChannel, label: label, id: id, action: action)
         } else {
             Button(action: action) {
                 ThemedIcon(Theme.Icon.voiceChannel)
@@ -124,11 +181,59 @@ struct ComposerVoiceButton: View {
                     .contentShape(.circle)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Voice Chat")
+            .accessibilityLabel(label)
             .accessibilityIdentifier(id)
             .shellScaled()
             .transition(.scale.combined(with: .opacity))
         }
+    }
+}
+
+/// The round button's press: the plain button's, or shrinking slowly and coming back quicker (`Theme.Motion.composerPress`).
+private struct ComposerPress: ViewModifier {
+    var scales: Bool
+
+    func body(content: Content) -> some View {
+        if scales { content.buttonStyle(ShrinkingPress()) } else { content.buttonStyle(.plain) }
+    }
+
+    private struct ShrinkingPress: ButtonStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label
+                .scaleEffect(configuration.isPressed ? Theme.Motion.composerPressScale : 1)
+                .animation(configuration.isPressed ? Theme.Motion.composerPress : Theme.Motion.composerRelease, value: configuration.isPressed)
+        }
+    }
+}
+
+extension AnyTransition {
+    /// Send coming into the round button's place (Telegram's): it grows out of a point by the right edge, clearing a
+    /// slight blur, and fades in quicker than it grows (`Theme.Motion.composerSwap`).
+    static var composerSend: AnyTransition {
+        .modifier(active: ComposerSwapGrowth(scale: Theme.Motion.composerSwapFrom, blur: Theme.Motion.composerSwapBlur),
+                  identity: ComposerSwapGrowth(scale: 1, blur: 0))
+            .combined(with: .opacity.animation(Theme.Motion.composerSwapFade))
+    }
+
+    /// What send takes the place of, or gives it back to: it shrinks a little and fades.
+    static var composerSwapped: AnyTransition {
+        .scale(scale: Theme.Motion.composerSwapScale).combined(with: .opacity.animation(Theme.Motion.composerSwapFade))
+    }
+
+    /// A bar over the composer's field (quotes): it slides in by its own height from under the box's top edge, which
+    /// clips it, fading in quicker than it fades out.
+    static var composerAccessory: AnyTransition {
+        .asymmetric(insertion: .move(edge: .top).combined(with: .opacity.animation(Theme.Motion.composerAccessoryIn)),
+                    removal: .move(edge: .top).combined(with: .opacity.animation(Theme.Motion.composerAccessoryOut)))
+    }
+}
+
+private struct ComposerSwapGrowth: ViewModifier {
+    var scale: CGFloat
+    var blur: CGFloat
+
+    func body(content: Content) -> some View {
+        content.scaleEffect(scale, anchor: .trailing).blur(radius: blur)
     }
 }
 

@@ -71,6 +71,15 @@ class HttpDeviceSettings(
         return decode(request("devices", preferenceDeviceId, "prefs"))
     }
 
+    override suspend fun lowDistraction(): Boolean? = try {
+        request("push", "ln-mode")["enabled"]?.jsonPrimitive?.booleanOrNull == true
+    } catch (failure: HubFailure) {
+        if (failure.status == 404 || failure.status == 405) null else throw failure // an older hub has no switch
+    }
+
+    override suspend fun saveLowDistraction(on: Boolean): Boolean =
+        request("push", "ln-mode", method = "PUT", body = buildJsonObject { put("enabled", on) })["enabled"]?.jsonPrimitive?.booleanOrNull == true
+
     override suspend fun savePreferences(preferences: DeviceNotificationPreferences): DeviceNotificationPreferences {
         require(preferenceDeviceId.isNotBlank())
         // Leave island and future server fields untouched.
@@ -81,6 +90,21 @@ class HttpDeviceSettings(
             put("live_activity", preferences.liveActivity)
             preferences.muteWhileDesktop?.let { put("mute_while_desktop", it) }
         }))
+    }
+
+    override suspend fun browserLogin(id: String, hub: String, allow: Boolean?): BrowserLoginDetails {
+        val data = request("auth", "browser-login", "approve", method = "POST", body = buildJsonObject {
+            put("id", id); put("hub", hub); allow?.let { put("allow", it) }
+            if (allow == true) put("show_number", true)
+        })
+        return BrowserLoginDetails(
+            name = data.getValue("name").jsonPrimitive.content,
+            source = data.getValue("source").jsonPrimitive.content,
+            ageSeconds = data.getValue("age_seconds").jsonPrimitive.int,
+            state = data.text("state"),
+            network = data.text("network"),
+            number = data.text("number"),
+        )
     }
 
     override suspend fun pairCode(): AppPairCode {
@@ -97,6 +121,19 @@ class HttpDeviceSettings(
             put("muted_managers", JsonArray(ids.distinct().map(::JsonPrimitive)))
         })
         return mutedManagers(answer) ?: throw HubFailure(HubError.Protocol)
+    }
+
+    override suspend fun saveQuietHours(quiet: QuietHours): QuietHours {
+        require(preferenceDeviceId.isNotBlank())
+        val answer = request("devices", preferenceDeviceId, "prefs", method = "PUT", body = buildJsonObject {
+            put("quiet", buildJsonObject {
+                put("enabled", quiet.enabled)
+                put("start", quiet.start)
+                put("end", quiet.end)
+                quiet.tz?.takeIf(String::isNotBlank)?.let { put("tz", it) }
+            })
+        })
+        return quietHours(answer) ?: throw HubFailure(HubError.Protocol)
     }
 
     /** Tells the hub this device's Settings › Translation (only that field: the rest of its prefs stay as they are). */
@@ -121,6 +158,7 @@ class HttpDeviceSettings(
         liveActivity = data["live_activity"]?.jsonPrimitive?.booleanOrNull ?: true,
         muteWhileDesktop = data["mute_while_desktop"]?.jsonPrimitive?.booleanOrNull,
         mutedManagers = mutedManagers(data),
+        quiet = quietHours(data),
         translate = (data["translate"] as? JsonObject)?.let {
             runCatching { JsonCodec.decodeFromJsonElement(HubTranslatePrefs.serializer(), it) }.getOrNull()
         },
@@ -131,6 +169,17 @@ class HttpDeviceSettings(
         is JsonArray -> value.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank) }
         JsonNull -> emptyList()
         else -> null
+    }
+
+    /** `quiet` (an object from a hub that has it, empty times while never set); null from an older hub. */
+    private fun quietHours(data: JsonObject): QuietHours? {
+        val value = data["quiet"] as? JsonObject ?: return null
+        return QuietHours(
+            enabled = (value["enabled"] as? JsonPrimitive)?.booleanOrNull ?: false,
+            start = value.text("start")?.takeIf { QuietHours.minutes(it) != null } ?: QuietHours.DEFAULT_START,
+            end = value.text("end")?.takeIf { QuietHours.minutes(it) != null } ?: QuietHours.DEFAULT_END,
+            tz = value.text("tz")?.takeIf(String::isNotBlank),
+        )
     }
 
     private fun JsonObject.text(key: String) = (this[key] as? JsonPrimitive)?.contentOrNull

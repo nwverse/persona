@@ -10,6 +10,20 @@ import org.junit.Test
 class PaneSplitTest {
     private fun flat(at: Float) = PaneHinge(at, at)
 
+    @Test fun regularColumnsOverlayUntilThePageKeepsItsMinimumWidth() {
+        for (width in listOf(600f, 673f, 720f, 840f, 1000f)) {
+            val expected = if (width < 720f) ColumnPlacement.Over else ColumnPlacement.Beside
+            assertEquals("no fold at $width dp", expected, columnPlacement(width, emptyList()))
+            assertEquals("flat fold at $width dp", expected, columnPlacement(width, listOf(flat(width / 2))))
+            // The existing hinge rule requires 280dp left and 320dp right. A separating fold at that position
+            // keeps both panes safe even when the right half is below the ordinary 400dp page minimum.
+            val separating = PaneHinge(280f, 280f, separating = true)
+            assertEquals("separating fold at $width dp", ColumnPlacement.Beside, columnPlacement(width, listOf(separating)))
+        }
+        assertEquals(ColumnPlacement.Over, columnPlacement(719f, emptyList()))
+        assertEquals(ColumnPlacement.Over, columnPlacement(673f, listOf(PaneHinge(150f, 160f, separating = true))))
+    }
+
     @Test fun theDetailGetsMostOfAnInnerScreen() {
         // A book-style foldable's inner screen, 770.67 dp, the fold flat down the middle: not halves any more.
         val s = paneSplit(770.67f, listOf(flat(385.33f)), null)
@@ -79,6 +93,12 @@ class PaneSplitTest {
         assertEquals(480f, dragRange(800f, canCollapse = false).endInclusive, 0.01f)
     }
 
+    @Test fun overlayMinimumDoesNotChangeSavedSharesOrNarrowPaneDragging() {
+        assertEquals(896f, paneSplit(1280f, emptyList(), 0.7f).left, 0.01f)
+        assertEquals(353f, dragRange(673f, canCollapse = false).endInclusive, 0.01f)
+        assertEquals(680f, maxLeft(1000f), 0.01f)
+    }
+
     @Test fun aDragTicksOnceAtAFoldAndAtTheClosingPoint() {
         val ticks = DragTicks()
         assertFalse(ticks.reached(300f, listOf(385f), canCollapse = true))
@@ -88,5 +108,23 @@ class PaneSplitTest {
         assertTrue(ticks.reached(200f, listOf(385f), canCollapse = true))
         assertFalse(ticks.reached(150f, listOf(385f), canCollapse = true))
         assertFalse("a tab that keeps its list never ticks for closing", DragTicks().reached(200f, emptyList(), canCollapse = false))
+    }
+
+    @Test fun theSidebarColumnIsAListWideAndNoWiderThanTheDrawer() {
+        // An open foldable upright (the page keeps 400dp), on its side, and a tablet on its side; the page starts where
+        // the column ends. The narrowest regular window still gets a list-wide column.
+        assertEquals(SidebarSplit(301f, 301f), sidebarSplit(701f, emptyList()))
+        assertEquals(SidebarSplit(280f, 280f), sidebarSplit(600f, emptyList()))
+        assertEquals(SidebarSplit(320f, 320f), sidebarSplit(841f, emptyList()))
+        assertEquals(SidebarSplit(PaneSplits.SidebarMax, PaneSplits.SidebarMax), sidebarSplit(1280f, emptyList()))
+        // A flat fold is barely there: the column does not move to it.
+        assertEquals(SidebarSplit(320f, 320f), sidebarSplit(841f, listOf(flat(420f))))
+    }
+
+    @Test fun halfOpenTheSidebarAndThePageKeepClearOfTheFold() {
+        // Book posture: the column ends where the fold begins, the page starts past it.
+        assertEquals(SidebarSplit(410f, 430f), sidebarSplit(841f, listOf(PaneHinge(410f, 430f, separating = true))))
+        // A separating fold too near an edge for a column on each side is ignored.
+        assertEquals(SidebarSplit(320f, 320f), sidebarSplit(841f, listOf(PaneHinge(150f, 160f, separating = true))))
     }
 }

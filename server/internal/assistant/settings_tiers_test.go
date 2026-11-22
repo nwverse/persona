@@ -290,6 +290,16 @@ func TestPickerTiers(t *testing.T) {
 	if string(out["tiers_profile"]) != `{"id":"economy","name":"Economy"}` {
 		t.Fatalf("tiers_profile: %s", out["tiers_profile"])
 	}
+	// Hidden in Model providers, fast still runs (#4661): its tier stays among the presets, though fast leaves the list.
+	if err := s.putSetting(context.Background(), launchersHiddenKey, []string{"fast"}); err != nil {
+		t.Fatal(err)
+	}
+	if out := get("/api/v1/machines/server/launchers"); !strings.Contains(string(out["tiers"]), `"review"`) || strings.Contains(string(out["launchers"]), `"fast"`) {
+		t.Fatalf("hidden fast: tiers %s launchers %s", out["tiers"], out["launchers"])
+	}
+	if err := s.putSetting(context.Background(), launchersHiddenKey, []string{}); err != nil {
+		t.Fatal(err)
+	}
 	if out := get("/api/v1/machines/server/launchers?purpose=assistant"); out["tiers"] != nil {
 		t.Fatal("the main chat's picker got the Agents' presets")
 	}
@@ -336,7 +346,7 @@ func TestProfileEditTellsTheApps(t *testing.T) {
 func TestGoldenAssistantSnapshotTiers(t *testing.T) {
 	golden(t, "assistant_snapshot.tiers", prompts.RenderSnapshot(prompts.Snapshot{Now: time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC), Zone: "UTC",
 		ModelProfile: &prompts.SnapshotProfile{ID: "performance", Name: "Performance", Tiers: []prompts.SnapshotTier{
-			{Name: "review", Launcher: "gw", Model: "gw/model-x", Effort: "high", Description: "Code review and design"},
+			{Name: "review", Launcher: "gw", Model: "gw/model-x", Effort: "high", Speed: "fast", Description: "Code review and design"},
 			{Name: "standard", Launcher: "claude"},
 		}}}))
 }

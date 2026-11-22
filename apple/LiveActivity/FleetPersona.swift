@@ -100,7 +100,7 @@ nonisolated extension FleetState {
 /// the avatar only when a state has none. Each at every size the activity draws a face (compact, minimal / limited,
 /// expanded, lock screen), points × 3 pixels: a phone may not draw a Live Activity whose picture is larger than where
 /// it shows (an image decoded at 1× is as many points as it has pixels), and the simulator draws anything
-/// (docs/apple/live-activity.md「为什么 build 98 还不对」). Each is a file of its own, read only when drawn.
+/// (docs/apple/live-activity.md「Why build 98 was still wrong」). Each is a file of its own, read only when drawn.
 nonisolated struct FleetFaces: Hashable, Sendable {
     /// One picture at each size: points → PNG.
     typealias Picture = [Int: Data]
@@ -110,8 +110,17 @@ nonisolated struct FleetFaces: Hashable, Sendable {
     var states: [String: Picture]
     var avatar: Picture?
 
-    /// The sizes the activity draws a face at, in points: compact 22, minimal / limited 24, expanded and lock screen 26.
-    static let sizes = Set([IslandMetrics.face, IslandMetrics.limitedContent, IslandMetrics.expandedFace, IslandMetrics.lockFace].map { Int($0) }).sorted()
+    /// The sizes the activity draws a face at, in points: compact 22, minimal / limited 24, expanded and lock screen 26;
+    /// and the Home Screen widgets' larger ones (`widgetSizes`).
+    static let sizes = Set([IslandMetrics.face, IslandMetrics.limitedContent, IslandMetrics.expandedFace, IslandMetrics.lockFace].map { Int($0) }
+                           + widgetSizes).sorted()
+    #if os(iOS)
+    /// The widgets' faces past the island's: the Lock Screen's 40 and the empty states' 46 (their corner's 22 is the
+    /// island's), docs/apple/home-widgets.md「The persona, as an accent」.
+    static let widgetSizes = [HomeWidgetTokens.faceLock, HomeWidgetTokens.faceEmpty].map { Int($0) }
+    #else
+    static let widgetSizes: [Int] = []
+    #endif
     /// Pixels a point: every iPhone with a Dynamic Island.
     static let scale: CGFloat = 3
 
@@ -174,7 +183,7 @@ nonisolated struct FleetLookStore: Sendable {
     static let avatarName = "avatar"
 
     /// The island's log (Console: subsystem `persona`, category `island`): every write on either side and every read
-    /// that fails, so a phone that draws the wrong persona says which step failed (docs/apple/live-activity.md「诊断」).
+    /// that fails, so a phone that draws the wrong persona says which step failed (docs/apple/live-activity.md「Diagnostics」).
     static let log = Logger(subsystem: "persona", category: "island")
 
     /// `Fleet/` in the container; nil when this bundle has none (not signed with the group: nothing is saved, and the
@@ -224,10 +233,11 @@ nonisolated struct FleetLookStore: Sendable {
         return error == nil
     }
 
-    /// The package's directory: its id and rev with anything but letters, digits, `.`, `-` and `_` as `_`, and `_3x`
-    /// (a picture at each face size: the ones an older build made, all at 4 KB, are made again, #349).
+    /// The package's directory: its id and rev with anything but letters, digits, `.`, `-` and `_` as `_`, and `_3xw`
+    /// (a picture at each face size, the widgets' too: the ones an older build made, all at 4 KB (#349) or without the
+    /// widgets' sizes (`_3x`), are made again).
     static func folder(_ package: String) -> String {
-        String(package.map { $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) ? $0 : "_" }) + "_3x"
+        String(package.map { $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) ? $0 : "_" }) + "_3xw"
     }
 
     func hasFaces(_ package: String) -> Bool {
@@ -424,7 +434,7 @@ nonisolated enum FleetPersona {
 }
 
 /// The persona on the activity: its still frame for the state (a Live Activity runs no timelines or repeating
-/// effects, docs/apple/live-activity.md「坑」), changing with a cross-fade when the state does. A package draws its picture
+/// effects, docs/apple/live-activity.md「Pitfalls」), changing with a cross-fade when the state does. A package draws its picture
 /// for the state; a state it has no frames for gets the built-ins' cue (the red ring, gray when offline). Its
 /// drawing in its color while the faces cannot be read.
 struct FleetFace: View {

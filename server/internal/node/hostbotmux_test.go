@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -33,12 +34,15 @@ const (
 type fakeBotmux struct {
 	mu       sync.Mutex
 	rows     []map[string]any
-	offline  bool  // no daemon answers
-	fail     error // observe fails
+	offline  bool             // no daemon answers
+	fail     error            // observe fails
+	more     []map[string]any // daemons listed after bmxApp's
+	exit     error            // returned with the snapshot: botmux exits 1 when a daemon's probe failed
 	observes int
 	block    chan struct{} // observe waits on it (nil: answers at once)
 	token    string        // the dashboard's current token
 	told     string        // the token `dashboard current` prints
+	hides    bool          // botmux 3.58+: the loopback link only with botmuxShowLink (else: a botmux without the flag)
 	status   int           // the trigger's reply status (0: 200)
 	triggers []map[string]any
 	srv      *httptest.Server
@@ -94,13 +98,27 @@ func (f *fakeBotmux) run(_ context.Context, args ...string) ([]byte, error) {
 		if f.offline {
 			status = "daemon_offline"
 		}
-		return json.Marshal(map[string]any{"schemaVersion": 1, "daemons": []any{
-			map[string]any{"larkAppId": bmxApp, "probe": map[string]any{"status": status}, "sessions": f.rows},
-		}})
+		daemons := []any{map[string]any{"larkAppId": bmxApp, "probe": map[string]any{"status": status}, "sessions": f.rows}}
+		for _, d := range f.more {
+			daemons = append(daemons, d)
+		}
+		out, err := json.Marshal(map[string]any{"schemaVersion": 1, "observedAt": time.Now().UnixMilli(), "daemons": daemons})
+		if err != nil {
+			return nil, err
+		}
+		return out, f.exit
 	case "dashboard current":
 		port := f.srv.URL[strings.LastIndex(f.srv.URL, ":")+1:]
-		return []byte("http://192.0.2.1:" + port + "/?t=" + f.told + "\n工作台: http://192.0.2.1:" + port +
-			"/workbench?t=" + f.told + "\n⚠️ 安全提示\n"), nil
+		if f.hides {
+			return []byte(bmxHidden), nil
+		}
+		return []byte(bmxOldDashboard(port, f.told)), nil
+	case "dashboard current " + botmuxShowLink:
+		port := f.srv.URL[strings.LastIndex(f.srv.URL, ":")+1:]
+		if f.hides {
+			return []byte(bmxShown(port, f.told)), nil
+		}
+		return []byte(bmxUsage), errors.New("exit status 1")
 	}
 	return nil, fmt.Errorf("unexpected botmux %v", args)
 }
@@ -372,6 +390,7 @@ func TestBotmuxTooOldIsReused(t *testing.T) {
 // claude --resume in herdr) — with the dashboard's token, asked of botmux again once it was rotated.
 func TestBotmuxReplyIsDeliveredByBotmux(t *testing.T) {
 	n, f, fh, home := bmxNode(t)
+	f.hides = true // botmux 3.58: the loopback link only when asked for
 	f.rows = []map[string]any{
 		bmxRow(sidA, "claude-code", "alive", "working", false, "a"),
 		bmxRow(sidE, "claude-code", "not_running", "unknown", false, "parked"),
@@ -432,15 +451,15 @@ func TestNodeHostsAddBotmuxWhenInstalled(t *testing.T) {
 	old := botmuxBin
 	t.Cleanup(func() { botmuxBin = old })
 	botmuxBin = func() string { return "" }
-	if hs := nodeHosts(proto.EngineHerdr, true, nil); len(hs) != 1 {
+	if hs := nodeHosts(proto.EngineHerdr, true, nil); len(hs) != 2 || hs[1].Kind() != host.Tmux {
 		t.Fatalf("without botmux: %d hosts", len(hs))
 	}
 	botmuxBin = func() string { return "/opt/botmux/bin/botmux" }
 	hs := nodeHosts(proto.EngineHerdrBoth, true, nil)
-	if len(hs) != 3 || hs[0].Kind() != host.Herdr || hs[2].Kind() != host.Botmux {
+	if len(hs) != 4 || hs[0].Kind() != host.Herdr || hs[2].Kind() != host.Tmux || hs[3].Kind() != host.Botmux {
 		t.Fatalf("with botmux: %v", hs)
 	}
-	if hs := nodeHosts(proto.EngineHerdrBoth, false, nil); len(hs) != 2 {
+	if hs := nodeHosts(proto.EngineHerdrBoth, false, nil); len(hs) != 3 {
 		t.Fatalf("botmux not wanted: %v", hs)
 	}
 	if defaultHostKind(proto.EngineHerdrBoth) != host.Herdr {
@@ -467,6 +486,101 @@ func TestBotmuxFailedObserveKeepsSessions(t *testing.T) {
 	_, err := h.Agents(context.Background())
 	if err == nil || errors.Is(err, host.ErrNotRunning) {
 		t.Fatalf("a failed observe = %v, want an error that is not ErrNotRunning", err)
+	}
+}
+
+// botmux exits 1 when one daemon's probe failed and still prints every daemon's answer (#8949): the sessions of the
+// daemons that answered are listed and take messages; the failed daemon's stay as last listed, and a message to one is
+// refused with its probe error, nothing posted. Only when no daemon answered is the observe a failure.
+func TestBotmuxPartialObserveListsTheDaemonsThatAnswered(t *testing.T) {
+	n, f, _, home := bmxNode(t)
+	h := n.hosts.Get(host.Botmux).(*botmuxHost)
+	var logs []string
+	h.logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+	const other = "cli_other_app"
+	rowB := bmxRow(sidB, "claude-code", "alive", "idle", false, "b")
+	rowB["identity"] = map[string]any{"sessionId": sidB, "larkAppId": other}
+	f.rows = []map[string]any{bmxRow(sidA, "claude-code", "alive", "idle", false, "a")}
+	answered := map[string]any{"larkAppId": other, "probe": map[string]any{"status": "ok", "source": "daemon-ipc"}, "sessions": []any{rowB}}
+	f.more = []map[string]any{answered}
+	for _, id := range []string{sidA, sidB} {
+		writeTranscript(t, home, bmxCwd, id, time.Now().Add(-time.Minute), `{"type":"user","message":{"role":"user","content":"hi"}}`)
+	}
+	listSessions(t, n)
+
+	// The other bot does not answer in time.
+	f.mu.Lock()
+	f.more = []map[string]any{{"larkAppId": other, "sessions": []any{},
+		"probe": map[string]any{"status": "unreachable", "source": "daemon-ipc", "larkAppId": other, "error": "timeout after 5000ms"}}}
+	f.exit = errors.New("exit status 1")
+	f.mu.Unlock()
+	h.at = time.Time{}
+	agents, err := h.Agents(context.Background())
+	if err != nil {
+		t.Fatalf("a partial observe failed: %v", err)
+	}
+	listed := map[string]bool{}
+	for _, a := range agents {
+		listed[host.ParsePane(a.PaneID).ID] = true
+	}
+	if !listed[sidA] || !listed[sidB] {
+		t.Fatalf("listed %v, want both: the answering bot's and the other's as last listed", listed)
+	}
+	if err := n.send(context.Background(), sidA, "继续", nil, sendOpts{}); err != nil {
+		t.Fatalf("a send to the answering bot's session: %v", err)
+	}
+	err = n.send(context.Background(), sidB, "接着做", nil, sendOpts{})
+	if refusalCode(err) != notDelivered || !strings.Contains(err.Error(), "unreachable: timeout after 5000ms") {
+		t.Fatalf("a send to the failed bot's session = %v", err)
+	}
+	if got := f.sent(); len(got) != 1 || got[0]["target"].(map[string]any)["sessionId"] != sidA {
+		t.Fatalf("triggers %v, want only the answering bot's", got)
+	}
+	h.at = time.Time{}
+	if _, err := h.Agents(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if want := "botmux: listing the daemons that answered; not answering: " + other + " unreachable: timeout after 5000ms"; len(logs) != 1 || logs[0] != want {
+		t.Fatalf("logs %q, want once: %q", logs, want)
+	}
+
+	// It answers again.
+	f.mu.Lock()
+	f.more, f.exit = []map[string]any{answered}, nil
+	f.mu.Unlock()
+	h.at = time.Time{}
+	if err := n.send(context.Background(), sidB, "接着做", nil, sendOpts{}); err != nil {
+		t.Fatalf("a send once the bot answers: %v", err)
+	}
+	if len(logs) != 2 || logs[1] != "botmux: every daemon answers again" {
+		t.Fatalf("logs %q", logs)
+	}
+
+	// No daemon answers: the observe failed (the node keeps its list), saying why.
+	f.mu.Lock()
+	f.offline, f.more, f.exit = true, []map[string]any{{"larkAppId": other, "probe": map[string]any{"status": "unauthorized"}, "sessions": []any{}}}, errors.New("exit status 1")
+	f.mu.Unlock()
+	h.at = time.Time{}
+	if _, err := h.Agents(context.Background()); err == nil || errors.Is(err, host.ErrNotRunning) || !strings.Contains(err.Error(), other+" unauthorized") {
+		t.Fatalf("no daemon answered = %v", err)
+	}
+
+	// A daemon that did not answer and cannot be named: its sessions cannot be told apart, so the observe failed.
+	f.mu.Lock()
+	f.offline, f.more = false, []map[string]any{{"probe": map[string]any{"status": "unreachable"}, "sessions": []any{}}}
+	f.mu.Unlock()
+	h.at = time.Time{}
+	if _, err := h.Agents(context.Background()); err == nil || errors.Is(err, host.ErrNotRunning) {
+		t.Fatalf("an unnamed daemon failed = %v", err)
+	}
+
+	// No snapshot: the CLI's stderr says why.
+	f.mu.Lock()
+	f.fail = &exec.ExitError{Stderr: []byte("botmux: cannot read the daemon registry\n")}
+	f.mu.Unlock()
+	h.at = time.Time{}
+	if _, err := h.Agents(context.Background()); err == nil || !strings.Contains(err.Error(), "cannot read the daemon registry") {
+		t.Fatalf("no snapshot = %v", err)
 	}
 }
 
@@ -1153,5 +1267,101 @@ func TestBotmuxDataDir(t *testing.T) {
 	t.Setenv("SESSION_DATA_DIR", "/env/data")
 	if got := botmuxDataDir(); got != "/env/data" {
 		t.Fatalf("env = %q", got)
+	}
+}
+
+// The output of `botmux dashboard current` as botmux prints it (with fake hosts and tokens): before 3.58 the loopback
+// link comes first; 3.58 prints https workbench links and hides the loopback one unless asked with botmuxShowLink.
+func bmxOldDashboard(port, token string) string {
+	return "http://192.0.2.1:" + port + "/?t=" + token + "\n工作台: http://192.0.2.1:" + port + "/workbench?t=" + token +
+		"\n⚠️ 安全提示\n"
+}
+
+const bmxHidden = "https://dash.example.com/\n工作台: https://dash.example.com/workbench\n" +
+	"本地直连(平台异常时可用): 已隐藏——它带 token，等同管理员密码。需要时加 --i-am-the-owner-show-token-link\n⚠️ 安全提示\n"
+
+func bmxShown(port, token string) string {
+	return "https://dash.example.com/\n工作台: https://dash.example.com/workbench\n" +
+		"本地直连(平台异常时可用): http://localhost:" + port + "/?t=" + token + "\n  ⚠️ 上面这条带 token\n⚠️ 安全提示\n"
+}
+
+const bmxUsage = "用法:\n  botmux dashboard current   获取当前 Dashboard 登录 URL\n"
+
+// TestBotmuxDashboardLink: the loopback link and its token are read from both output formats; the https workbench
+// links and the hidden line are not a link.
+func TestBotmuxDashboardLink(t *testing.T) {
+	for _, c := range []struct{ name, out, base, token string }{
+		{"before 3.58", bmxOldDashboard("4100", "fake-old_1"), "http://127.0.0.1:4100", "fake-old_1"},
+		{"3.58 shown", bmxShown("9001", "fake-new_2"), "http://127.0.0.1:9001", "fake-new_2"},
+		{"3.58 hidden", bmxHidden, "", ""},
+		{"usage", bmxUsage, "", ""},
+	} {
+		base, token := dashboardLink([]byte(c.out))
+		if base != c.base || token != c.token {
+			t.Errorf("%s: %q %q, want %q %q", c.name, base, token, c.base, c.token)
+		}
+	}
+}
+
+// TestBotmuxDashboardFormats: botmux 3.58 is asked with botmuxShowLink; an older botmux that rejects the flag is asked
+// again without it; a botmux that hides the link either way is an error that names the flag and not the token.
+func TestBotmuxDashboardFormats(t *testing.T) {
+	const secret = "fake-secret-token"
+	for _, c := range []struct {
+		name  string
+		run   func(args ...string) ([]byte, error)
+		base  string
+		calls int
+		err   string
+	}{
+		{"3.58", func(args ...string) ([]byte, error) {
+			if len(args) == 3 && args[2] == botmuxShowLink {
+				return []byte(bmxShown("9001", secret)), nil
+			}
+			return []byte(bmxHidden), nil
+		}, "http://127.0.0.1:9001", 1, ""},
+		{"before 3.58, flag rejected", func(args ...string) ([]byte, error) {
+			if len(args) == 3 {
+				return []byte(bmxUsage), errors.New("exit status 1")
+			}
+			return []byte(bmxOldDashboard("4100", secret)), nil
+		}, "http://127.0.0.1:4100", 2, ""},
+		{"before 3.58, flag ignored", func(args ...string) ([]byte, error) {
+			if len(args) == 3 {
+				return []byte(bmxUsage), nil
+			}
+			return []byte(bmxOldDashboard("4100", secret)), nil
+		}, "http://127.0.0.1:4100", 2, ""},
+		{"hidden either way", func(args ...string) ([]byte, error) {
+			return []byte(bmxHidden), nil
+		}, "", 2, botmuxShowLink},
+		{"no botmux", func(args ...string) ([]byte, error) {
+			return nil, errors.New("exec: not found")
+		}, "", 2, "not found"},
+	} {
+		calls := 0
+		h := &botmuxHost{run: func(_ context.Context, args ...string) ([]byte, error) {
+			calls++
+			if len(args) < 2 || args[0] != "dashboard" || args[1] != "current" {
+				t.Fatalf("%s: unexpected botmux %v", c.name, args)
+			}
+			return c.run(args...)
+		}}
+		base, token, err := h.dashboard(context.Background(), true)
+		if calls != c.calls {
+			t.Errorf("%s: botmux ran %d times, want %d", c.name, calls, c.calls)
+		}
+		if c.err != "" {
+			if err == nil || !strings.Contains(err.Error(), c.err) || strings.Contains(err.Error(), secret) {
+				t.Errorf("%s: err %v, want one naming %q", c.name, err, c.err)
+			}
+			continue
+		}
+		if err != nil || base != c.base || token != secret {
+			t.Errorf("%s: %q %q %v, want %q and the token", c.name, base, token, err, c.base)
+		}
+		if b, tk, _ := h.dashboard(context.Background(), false); b != base || tk != token || calls != c.calls {
+			t.Errorf("%s: not kept until fresh", c.name)
+		}
 	}
 }

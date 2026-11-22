@@ -1,7 +1,7 @@
 import Darwin
 import XCTest
 
-/// The image viewer (docs/apple/ios.md「图片查看器」): every button of its bars inside the screen (they ran off both sides on an
+/// The image viewer (docs/apple/ios.md「Information architecture」): every button of its bars inside the screen (they ran off both sides on an
 /// iPhone, 2026-11-05), a tap hides and shows the bars, a pull down closes it. Run it on the narrowest phone too (SE).
 ///   PORT=18831 MOCK_TURN_IMAGES=many python3 scripts/mock/mock_hub.py &
 ///   TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18831 xcodebuild test … -only-testing:PersonaUITests/ImageViewerTests
@@ -49,7 +49,10 @@ final class ImageViewerTests: XCTestCase {
 
     @MainActor func testTapHidesTheBarsAndPullDownCloses() throws {
         let app = open()
+        HomeScreen.dismissIconNote()
         let close = app.buttons["viewer-close"]
+        XCTAssertTrue(app.descendants(matching: .any)["viewer-page-1"].waitForExistence(timeout: 20), "the current picture did not load:\n\(app.debugDescription)")
+        XCTAssertTrue(waitUntil { close.isHittable }, "Close was not hittable before the first tap")
         let middle = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         middle.tap()
         XCTAssertTrue(waitUntil { !close.isHittable }, "the bars stayed after a tap")
@@ -73,14 +76,14 @@ final class ImageViewerTests: XCTestCase {
         var step = 0
         func check(_ what: String) {
             step += 1
-            let aligned = waitUntil(4) { self.pageOffset(app) == 0 }
+            let aligned = waitUntil(4) { Self.pageOffset(app) == 0 }
             if !aligned || step % 6 == 0 || what.hasPrefix("zoomed") {
                 let shot = XCTAttachment(screenshot: app.screenshot())
                 shot.name = String(format: "paging-%02d-%@", step, what)
                 shot.lifetime = .keepAlways
                 add(shot)
             }
-            XCTAssertTrue(aligned, "\(what): the page stopped \(pageOffset(app).map { "\($0)" } ?? "?") pt off a whole page (\(title.label))")
+            XCTAssertTrue(aligned, "\(what): the page stopped \(Self.pageOffset(app).map { "\($0)" } ?? "?") pt off a whole page (\(title.label))")
             // The bars sit where they belong: the title in the middle of the screen.
             XCTAssertEqual(title.frame.midX, win.frame.midX, accuracy: 2, "\(what): the title capsule moved")
         }
@@ -451,7 +454,7 @@ final class ImageViewerTests: XCTestCase {
     }
 
     /// How far the page under the middle of the screen is from lying exactly on it, in points (0: a whole page).
-    @MainActor private func pageOffset(_ app: XCUIApplication) -> CGFloat? {
+    @MainActor private static func pageOffset(_ app: XCUIApplication) -> CGFloat? {
         let screen = app.windows.firstMatch.frame
         let pages = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'viewer-page-'"))
         for p in pages.allElementsBoundByIndex {
@@ -463,7 +466,7 @@ final class ImageViewerTests: XCTestCase {
         return nil
     }
 
-    private func waitUntil(_ timeout: TimeInterval = 5, _ ok: @escaping () -> Bool) -> Bool {
+    @MainActor private func waitUntil(_ timeout: TimeInterval = 5, _ ok: () -> Bool) -> Bool {
         let end = Date().addingTimeInterval(timeout)
         while Date() < end {
             if ok() { return true }

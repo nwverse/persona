@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -26,7 +27,7 @@ func TestSnapshotIsNowAndDoesNotWait(t *testing.T) {
 	s.live.at = time.Now().Add(-10 * time.Minute)
 
 	start := time.Now()
-	got := s.contextSnapshot(ctx)
+	got := s.contextSnapshot(ctx, "", false)
 	if d := time.Since(start); d > snapshotWait+time.Second {
 		t.Fatalf("waited %v for a slow source", d)
 	}
@@ -36,6 +37,36 @@ func TestSnapshotIsNowAndDoesNotWait(t *testing.T) {
 	}
 	if !strings.Contains(got, "发布群（2 条）") {
 		t.Fatalf("the earlier snapshot's chats are gone:\n%s", got)
+	}
+}
+
+// A snapshot asks the connectors for their live state once and takes both the unread chats and the rest of today's
+// meetings from that answer: each ask has every connector program build its whole state (#2885).
+func TestSnapshotAsksTheConnectorsOnce(t *testing.T) {
+	f := newFakeHub()
+	f.settings = &Settings{Timezone: "Asia/Shanghai"}
+	now := time.Now()
+	f.liveStates = []any{connector.SnapshotData{
+		Chats:    &connector.SnapshotChats{AtMe: []connector.SnapshotChat{{Name: "发布群", Unread: 2, Preview: "明天上线"}}},
+		Meetings: []connector.SnapshotMeeting{{Start: now.Add(time.Hour), End: now.Add(2 * time.Hour), Title: "周会"}, {Start: now.Add(-2 * time.Hour), End: now.Add(-time.Hour), Title: "早会"}},
+	}}
+	s := newStorelessService(t, f)
+
+	done := make(chan struct{})
+	s.takeSnapshot(done)
+	<-done
+	f.mu.Lock()
+	asks := f.snapshotAsks
+	f.mu.Unlock()
+	if asks != 1 {
+		t.Fatalf("asked the connectors %d times for one snapshot, want 1", asks)
+	}
+	snap := s.live.snap
+	if snap.Chats == nil || len(snap.Chats.AtMe) != 1 || snap.Chats.AtMe[0].Name != "发布群" || snap.Chats.AtMe[0].Preview != "明天上线" {
+		t.Fatalf("chats: %+v", snap.Chats)
+	}
+	if snap.Calendar == nil || len(snap.Calendar.Events) != 1 || snap.Calendar.Events[0].Title != "周会" {
+		t.Fatalf("calendar (the meeting that is over left out): %+v", snap.Calendar)
 	}
 }
 
@@ -83,7 +114,7 @@ func TestGoldenSnapshotAndAgentsListUltracode(t *testing.T) {
 		proto.Session{SessionID: "assistant", Title: "主对话", State: proto.StateWorking, Assistant: true, Ultracode: &on})
 	s := newStorelessService(t, f)
 	snap := prompts.Snapshot{Now: time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC), Zone: "UTC"}
-	snap.Needs, snap.Unread, snap.Awaiting, snap.Waiting, snap.Done, snap.Muted, snap.Working, snap.Workflows = s.snapshotAgents(context.Background(),
+	snap.Needs, snap.Unread, snap.Awaiting, snap.Waiting, snap.Done, snap.Muted, snap.Working = s.snapshotAgents(context.Background(),
 		[]Device{{ID: "box", Name: "电脑", Online: true}}, "")
 	if len(snap.Needs) != 1 || snap.Needs[0].Ultracode != "on" || len(snap.Unread) != 1 || snap.Unread[0].Ultracode != "off" ||
 		len(snap.Working) != 2 || snap.Working[0].Ultracode != "" || snap.Working[1].Ultracode != "on" {

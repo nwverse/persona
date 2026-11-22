@@ -118,11 +118,29 @@ type fakeHub struct {
 	refuse atomic.Bool
 	plain  atomic.Bool // refuse with a 401 that says nothing about the token (not CodeTokenRevoked)
 	dials  atomic.Int32
-	mu     sync.Mutex
-	conns  []*websocket.Conn
+	// sick answers /api/v1/health with a 503; healths counts the health requests of a Go client (a probe).
+	sick    atomic.Bool
+	healths atomic.Int32
+	// compress accepts as the hub does (internal/hub/bus.go: permessage-deflate when the client offers it).
+	compress bool
+	mu       sync.Mutex
+	conns    []*websocket.Conn
+	exts     []string // each connection's agreed extensions (Sec-WebSocket-Extensions)
 }
 
 func (f *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == healthPath { // as the hub's: no credential, {"ok": true}
+		if strings.HasPrefix(r.UserAgent(), "Go-http-client/") { // the client's probe, not another program's port scan
+			f.healths.Add(1)
+		}
+		if f.sick.Load() {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"hub_id":"h"}`))
+		return
+	}
 	// Only the client's dials count: other programs on this machine probe local ports too (a node's port scan in
 	// another package's tests, user agent persona-ports), and one could land on this server's.
 	if r.URL.Path != Path || r.Header.Get("Authorization") == "" {
@@ -140,12 +158,17 @@ func (f *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"error":"invalid token","code":"` + code + `"}`))
 		return
 	}
-	ws, err := websocket.Accept(w, r, nil)
+	opts := &websocket.AcceptOptions{}
+	if f.compress {
+		opts.CompressionMode = websocket.CompressionContextTakeover
+	}
+	ws, err := websocket.Accept(w, r, opts)
 	if err != nil {
 		return
 	}
 	f.mu.Lock()
 	f.conns = append(f.conns, ws)
+	f.exts = append(f.exts, w.Header().Get("Sec-WebSocket-Extensions"))
 	f.mu.Unlock()
 	conn := NewConn(r.Context(), ws)
 	p := rpc.New("h", conn)
@@ -222,6 +245,36 @@ func TestClientReconnectsAndBacksOffOnRejection(t *testing.T) {
 	cancel()
 	if err := <-ran; !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run returned %v", err)
+	}
+}
+
+// An Uncompressed client (the hub's own manager) offers no permessage-deflate, so a hub that compresses when offered
+// does not; any other client still offers it.
+func TestClientUncompressed(t *testing.T) {
+	for uncompressed, want := range map[bool]string{false: "permessage-deflate", true: ""} {
+		f := &fakeHub{compress: true}
+		srv := httptest.NewServer(f)
+		c := &Client{Hub: srv.URL, Token: "t", HelloMethod: "manager.hello", HelloParams: func() any { return nil },
+			OnHello: func(json.RawMessage) error { return nil }, Uncompressed: uncompressed}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ran := make(chan error, 1)
+		go func() { ran <- c.Run(ctx) }()
+		if err := c.Wait(ctx); err != nil {
+			t.Fatal(err)
+		}
+		var out struct{ Method string }
+		if err := c.Call(ctx, "ping", nil, &out); err != nil || out.Method != "ping" {
+			t.Fatalf("ping: %+v %v", out, err)
+		}
+		f.mu.Lock()
+		got := f.exts[0]
+		f.mu.Unlock()
+		if !strings.HasPrefix(got, want) || want == "" && got != "" {
+			t.Errorf("Uncompressed %v: the hub agreed %q, want %q", uncompressed, got, want)
+		}
+		cancel()
+		<-ran
+		srv.Close()
 	}
 }
 

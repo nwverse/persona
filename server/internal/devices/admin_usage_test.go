@@ -275,6 +275,59 @@ func TestAdminUsageSourceTestIsOneReadOnlyRead(t *testing.T) {
 	}
 }
 
+// relay_key (#12311): a relay read with an ordinary API key. Like relay it needs its key and is called "Relay" when
+// unnamed; its test says when the relay shares no account quota with the key, rather than a bare zero.
+func TestAdminUsageRelayKeySource(t *testing.T) {
+	h, c := usageTestDevices(t, `{"token":"t"}`)
+	shared := true
+	gate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+usageTestKey || r.URL.Path != "/me/usage" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if !shared {
+			fmt.Fprint(w, `{"account_quota_shared":false,"accounts":[]}`)
+			return
+		}
+		at := time.Now().UTC().Format(time.RFC3339)
+		fmt.Fprintf(w, `{"account_quota_shared":true,"accounts":[{"account_id":"a","provider":"codex","plan":"pro","windows":[{"kind":"weekly","used_ratio":0.04,"checked_at":%q}]},{"account_id":"b","provider":"deepseek","windows":[{"kind":"balance_cny","remaining":52,"checked_at":%[1]q}]}]}`, at)
+	}))
+	t.Cleanup(gate.Close)
+
+	if status, out, _ := c.do("POST", "/api/v1/admin/usage-sources", `{"type":"relay_key","url":"`+gate.URL+`"}`); status != 400 || out["code"] != "key_required" {
+		t.Fatalf("no key: %d %v", status, out)
+	}
+	_, out, _ := c.do("POST", "/api/v1/admin/usage-sources/test", `{"type":"relay_key","url":"`+gate.URL+`/v1","key":"`+usageTestKey+`"}`)
+	if out["ok"] != true || out["accounts"] != float64(1) || out["windows"] != float64(1) || out["listed"] != float64(2) || out["quota_hidden"] != nil {
+		t.Fatalf("test: %v", out)
+	}
+	shared = false
+	if _, out, _ = c.do("POST", "/api/v1/admin/usage-sources/test", `{"type":"relay_key","url":"`+gate.URL+`","key":"`+usageTestKey+`"}`); out["ok"] != true || out["quota_hidden"] != true || out["accounts"] != float64(0) {
+		t.Fatalf("not shared: %v", out)
+	}
+	// the management API is not what this type reads: a relay key is turned away there
+	if _, out, _ = c.do("POST", "/api/v1/admin/usage-sources/test", `{"type":"relay","url":"`+gate.URL+`","key":"`+usageTestKey+`"}`); out["ok"] != false || out["code"] != usagesource.CodeUnauthorized {
+		t.Fatalf("relay with a key: %v", out)
+	}
+
+	status, out, w := c.do("POST", "/api/v1/admin/usage-sources", `{"type":"relay_key","url":"`+gate.URL+`/v1","key":"`+usageTestKey+`"}`)
+	src, _ := out["source"].(map[string]any)
+	if status != 200 || src["name"] != "Relay" || src["type"] != "relay_key" || src["url"] != gate.URL+"/v1" || src["has_key"] != true {
+		t.Fatalf("add: %d %v", status, out)
+	}
+	if strings.Contains(w.Body.String(), usageTestKey) {
+		t.Error("key in the answer")
+	}
+	if e := usageFile(t, h)["sources"].([]any)[0].(map[string]any); e["type"] != "relay_key" || e["key"] != usageTestKey {
+		t.Fatalf("manager.json: %v", e)
+	}
+	// another type is another reading of the address: the key is typed again
+	id := src["id"].(string)
+	if status, out, _ = c.do("PUT", "/api/v1/admin/usage-sources/"+id, `{"type":"relay"}`); status != 400 || out["code"] != "key_required" {
+		t.Fatalf("type change keeps no key: %d %v", status, out)
+	}
+}
+
 func TestAdminUsageSourceTestKeySelection(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -338,6 +391,73 @@ func TestAdminUsageSourceTestKeySelection(t *testing.T) {
 				t.Errorf("test changed the saved key in memory: %+v", got)
 			}
 		})
+	}
+}
+
+// The key goes with its address only when there is a key (#1844): a source without one changes address or type freely.
+func TestAdminUsageKeylessSourceMovesFreely(t *testing.T) {
+	h, c := usageTestDevices(t, `{"token":"t"}`)
+	code, out, _ := c.do("POST", "/api/v1/admin/usage-sources", `{"type":"generic","name":"Pool","url":"https://pool.example.com/usage"}`)
+	src, _ := out["source"].(map[string]any)
+	if code != 200 || src == nil || src["has_key"] != false {
+		t.Fatalf("add: %d %v", code, out)
+	}
+	id := src["id"].(string)
+	if code, out, _ = c.do("PUT", "/api/v1/admin/usage-sources/"+id, `{"name":"Pool","type":"generic","url":"https://other.example.com/usage"}`); code != 200 {
+		t.Fatalf("keyless move: %d %v", code, out)
+	}
+	if entry := usageFile(t, h)["sources"].([]any)[0].(map[string]any); entry["url"] != "https://other.example.com/usage" || entry["key"] != nil {
+		t.Fatalf("entry: %v", entry)
+	}
+	// a relay still needs a key, saved or not
+	if code, out, _ = c.do("PUT", "/api/v1/admin/usage-sources/"+id, `{"type":"relay"}`); code != 400 || out["code"] != "key_required" {
+		t.Fatalf("to relay without a key: %d %v", code, out)
+	}
+	// and a saved key still does not follow a new address
+	if code, out, _ = c.do("PUT", "/api/v1/admin/usage-sources/"+id, `{"key":"`+usageTestKey+`"}`); code != 200 {
+		t.Fatalf("add a key: %d %v", code, out)
+	}
+	if code, out, _ = c.do("PUT", "/api/v1/admin/usage-sources/"+id, `{"url":"https://third.example.com/usage"}`); code != 400 || out["code"] != "key_required" {
+		t.Fatalf("keyed move: %d %v", code, out)
+	}
+	if entry := usageFile(t, h)["sources"].([]any)[0].(map[string]any); entry["url"] != "https://other.example.com/usage" || entry["key"] != usageTestKey {
+		t.Fatalf("rejected move written: %v", entry)
+	}
+}
+
+// An address written by hand in manager.json that the hub would write differently (a trailing slash) is still the same
+// address (#1844): the enable switch, a save with nothing changed and Test connection all keep the saved key.
+func TestAdminUsageHandWrittenAddressIsNotAMove(t *testing.T) {
+	const saved = `{"token":"t","usage":{"sources":[` +
+		`{"id":"keyed","name":"Keyed","type":"generic","url":"https://pool.example.com/","key":"` + usageTestKey + `"},` +
+		`{"id":"keyless","name":"Keyless","type":"generic","url":"https://free.example.com/usage/"}]}}`
+	h, c := usageTestDevices(t, saved)
+	for _, id := range []string{"keyed", "keyless"} {
+		if code, out, _ := c.do("PUT", "/api/v1/admin/usage-sources/"+id, `{"enabled":false}`); code != 200 {
+			t.Fatalf("%s: toggle: %d %v", id, code, out)
+		}
+	}
+	if code, out, _ := c.do("PUT", "/api/v1/admin/usage-sources/keyed", `{"name":"Keyed","type":"generic","url":"https://pool.example.com"}`); code != 200 {
+		t.Fatalf("save unchanged: %d %v", code, out)
+	}
+	if code, out, _ := c.do("PUT", "/api/v1/admin/usage-sources/keyless", `{"name":"Keyless","type":"generic","url":"https://free.example.com/usage"}`); code != 200 {
+		t.Fatalf("keyless save unchanged: %d %v", code, out)
+	}
+	got := h.usageGW.config().Sources
+	if len(got) != 2 || got[0].Key != usageTestKey || got[0].on() || got[1].on() {
+		t.Fatalf("saved: %+v", got)
+	}
+
+	// Test connection with the saved key, on a source whose address is still the hand-written one
+	h2, c2 := usageTestDevices(t, saved)
+	h2.usageConfigNow()
+	var tried string
+	h2.usageGW.fetch = func(_ context.Context, cfg usagesource.Config, _ time.Time) (usagesource.Result, error) {
+		tried = cfg.Key
+		return usagesource.Result{}, nil
+	}
+	if code, out, _ := c2.do("POST", "/api/v1/admin/usage-sources/test", `{"id":"keyed","type":"generic","url":"https://pool.example.com"}`); code != 200 || out["ok"] != true || tried != usageTestKey {
+		t.Fatalf("test: %d %v key=%q", code, out, tried)
 	}
 }
 

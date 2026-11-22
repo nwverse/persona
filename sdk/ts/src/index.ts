@@ -2,7 +2,7 @@ import { extensionEnv, hubEnv } from './compat.js';
 import { ExactJSON } from './exact-json.ts';
 export { ExactJSON, JSONIntegerError } from './exact-json.ts';
 export { ExtensionStorage, storageBytes, storageValue } from './storage.ts';
-// Persona extension SDK for TypeScript (docs/extensions/extensions.md "Writing an extension: SDK, templates and CLI"): an extension program's side of
+// Persona extension SDK for TypeScript (docs/extensions/extensions.md "Writing extensions: SDK, templates and command line"): an extension program's side of
 // the process protocol, for Bun. Build the program with `bun build --compile` into one executable per platform:
 // the package holds only that, and the hub needs no runtime.
 //
@@ -111,10 +111,19 @@ export interface Program {
   namespaces?: Record<string, Handler>;
   /** Pages by ui contribution id (widgets too: placement widget, drawn per family; see isWidget). */
   ui?: Record<string, Page | ComponentPage>;
-  /** Shortcuts by contribution id: shortcut.run goes to them (docs/extensions/extensions.md "System-level places"). */
+  /** Shortcuts by contribution id: shortcut.run goes to them (docs/extensions/extensions.md "System-level placements"). */
   shortcuts?: Record<string, (req: ShortcutRequest) => wire.ShortcutResult | void | Promise<wire.ShortcutResult | void>>;
   /** If set, served on the hub's socket (runtime.http in the manifest) by main(). */
   fetch?(req: Request): Response | Promise<Response>;
+}
+
+/**
+ * Returns a fetch for one settings.check. Only requests made through it carry the check's proxy; ordinary fetch and
+ * overlapping checks keep their own authority. An older hub's missing proxy leaves ordinary fetch behavior unchanged.
+ */
+export function settingsCheckFetch(params: wire.SettingsCheckParams): (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> {
+  const proxy = params.proxy;
+  return (input, init) => globalThis.fetch(input, proxy ? ({ ...init, proxy } as RequestInit & { proxy: string }) : init);
 }
 
 /** Initialization RPC metadata; direct initializer calls have no raw frame and receive undefined. */
@@ -562,11 +571,10 @@ export function env() {
   };
 }
 
-/** The manifest as the program answers it to a hub: without `tags`, the market's (nwverse/persona#2424), which hubs
- * from before them refuse as an unknown field. */
+/** Omit source-only tags and icon metadata so strict older hubs accept runtime manifests. */
 function answeredManifest(m: unknown): unknown {
-  if (m === null || typeof m !== "object" || Array.isArray(m) || !("tags" in m)) return m;
-  const { tags: _tags, ...rest } = m as Record<string, unknown>;
+  if (m === null || typeof m !== "object" || Array.isArray(m) || !("tags" in m || "icon" in m)) return m;
+  const { tags: _tags, icon: _icon, ...rest } = m as Record<string, unknown>;
   return rest;
 }
 
@@ -611,6 +619,9 @@ export async function main(prog: Program) {
   // A last frame without a trailing newline is still a request (Go's bufio.Scanner returns it too).
   const last = (buf + decoder.decode()).trim();
   if (last) conn.line(last);
+  // Start accepted requests before closing the hub; a queued handler may need to issue its own hub call at EOF.
+  await Promise.resolve();
+  await Promise.resolve();
   await conn.shutdown();
   // rpc: none (only HTTP): the hub sends nothing on stdin; serve until it stops the program.
   if (server && !spoke) return;

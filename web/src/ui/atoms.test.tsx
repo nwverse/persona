@@ -3,7 +3,7 @@ import { useState } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { stateColor } from "../lib/format";
 import type { AgentState } from "../lib/types";
-import { Button, copyText, Dialog, IconButton, Loading, Menu, StatePill, useMenu } from "./atoms";
+import { Button, Collapse, copyText, Dialog, IconButton, Loading, Menu, StatePill, useMenu } from "./atoms";
 import { markOf } from "./StatusMark";
 import { STATE_LABEL } from "../lib/state-labels";
 
@@ -126,6 +126,8 @@ describe("dialog", () => {
     const html = renderDialog(<button type="button">启动</button>);
     expect(html).toContain('class="min-h-0 flex-1 overflow-y-auto overscroll-contain');
     expect(html).toMatch(/flex shrink-0 [^"]* max-sm:pb-\[calc\(10px\+env\(safe-area-inset-bottom\)\)\]">.*启动/);
+    // marked for the toasts on a phone, which keep clear of it
+    expect(html).toMatch(/<div data-dialog-footer="true" class="flex shrink-0 [^"]*">.*启动/);
     // without a footer the body keeps the safe area
     expect(renderDialog()).toContain("max-sm:pb-[calc(16px+env(safe-area-inset-bottom))]");
   });
@@ -192,11 +194,11 @@ describe("menu with the new row kinds", () => {
     expect(html).not.toContain("menuitem");
     expect(html.match(/data-menu-note/g)).toHaveLength(2);
     expect(html).toContain("78K / 200K tokens");
-    expect(render([{ key: "a", label: "拷贝目录", onSelect: () => {} }])).toContain('role="menu"');
+    expect(render([{ key: "a", label: "复制目录", onSelect: () => {} }])).toContain('role="menu"');
   });
 
   it("is the same markup as before for a plain row", () => {
-    const html = render([{ key: "a", label: "拷贝目录", icon: "folder", onSelect: () => {} }]);
+    const html = render([{ key: "a", label: "复制目录", icon: "folder", onSelect: () => {} }]);
     expect(html).not.toContain("aria-haspopup");
     expect(html).not.toContain("aria-keyshortcuts");
     expect(html).not.toContain("bg-red-tint");
@@ -211,7 +213,7 @@ describe("menu with the new row kinds", () => {
     expect(html).toMatch(/class="block break-words">Plan only</);
     expect(html).not.toContain("truncate");
     // a row without a detail keeps its one truncating line and no description
-    const plain = render([{ key: "a", label: "拷贝目录", hint: "⌘C", checked: false, onSelect: () => {} }]);
+    const plain = render([{ key: "a", label: "复制目录", hint: "⌘C", checked: false, onSelect: () => {} }]);
     expect(plain).toContain("truncate");
     expect(plain).not.toContain("aria-describedby");
   });
@@ -236,6 +238,25 @@ describe("menu with the new row kinds", () => {
 
   it("opens at a pointer with no anchor", () => {
     expect(render([{ key: "a", label: "复制", onSelect: () => {} }], { point: { x: 10, y: 20 } })).toContain("复制");
+  });
+});
+
+describe("Collapse", () => {
+  // A grid item's automatic minimum size is its content's min-content: without min-w-0 one child that cannot break
+  // (a long URL) widens the grid's whole column past its container (#3262, the Inbox list scrolling sideways).
+  it("its content can never widen the grid: the item carries min-w-0 whether open, unclipped or closed", () => {
+    for (const html of [
+      renderToStaticMarkup(<Collapse open><div>内容</div></Collapse>),
+      renderToStaticMarkup(<Collapse open unclipped><div>内容</div></Collapse>),
+      renderToStaticMarkup(<Collapse open={false}><div>内容</div></Collapse>),
+    ]) {
+      expect(html).toContain("min-w-0");
+    }
+  });
+
+  it("an open unclipped one drops its clip, a closed one keeps it", () => {
+    expect(renderToStaticMarkup(<Collapse open unclipped><div>x</div></Collapse>)).not.toContain("overflow-hidden");
+    expect(renderToStaticMarkup(<Collapse open={false}><div>x</div></Collapse>)).toContain("overflow-hidden");
   });
 });
 

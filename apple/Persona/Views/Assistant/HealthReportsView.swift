@@ -1,9 +1,9 @@
 import SwiftUI
 
-// Health Reports (docs/assistant/health.md「体检报告」, #4998): what was uploaded to the health space's reports/. A report opens as the
+// Health Reports (docs/assistant/health.md「Checkup reports」, #4998): what was uploaded to the health space's reports/. A report opens as the
 // record the health conversation wrote or as the original, and deleting takes both. The web's HealthReports.
 
-/// The reports' state and what it asks the hub (MVVM, docs/apple/ios.md「逻辑层的选型」).
+/// The reports' state and what it asks the hub (MVVM, docs/apple/ios.md「Data flow」).
 @Observable final class HealthReportsModel {
     private(set) var reports: [APIClient.HealthReport] = []
     private(set) var loaded = false
@@ -65,10 +65,11 @@ struct HealthReportsView: View {
             }
             #endif
             .sheet(item: $file) { FileViewer(ref: $0) }
-            .confirmationDialog(
+            .accessibleConfirmationDialog(
                 "Delete this report?",
                 isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
                 titleVisibility: .visible,
+                hasCancel: true,
                 presenting: deleting
             ) { report in
                 Button("Delete for good", role: .destructive) { Task { await page.delete(report) } }

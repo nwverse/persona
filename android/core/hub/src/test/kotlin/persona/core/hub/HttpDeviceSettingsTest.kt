@@ -3,6 +3,7 @@ package persona.core.hub
 import persona.core.contracts.JsonCodec
 import persona.core.contracts.api.DoneNotification
 import persona.core.contracts.api.HubTranslatePrefs
+import persona.core.contracts.api.QuietHours
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -54,6 +55,29 @@ class HttpDeviceSettingsTest {
         }
     }
 
+    // 设置 › 通知 › 低打扰模式 (#8157): the hub's switch is read and written at its own route; an older hub has none.
+    @Test fun lowDistractionIsTheHubsSwitch() = runBlocking {
+        MockWebServer().use { server ->
+            val api = HttpDeviceSettings(server.url("/").toString(), "example-token", "phone", OkHttpClient())
+            server.enqueue(MockResponse().setBody("""{"enabled":false}"""))
+            assertEquals(false, api.lowDistraction())
+            assertEquals("/api/v1/push/ln-mode", (server.takeRequest().path).zhAny())
+            server.enqueue(MockResponse().setBody("""{"enabled":true}"""))
+            assertEquals(true, api.saveLowDistraction(true))
+            val put = server.takeRequest()
+            assertEquals("PUT", (put.method).zhAny())
+            assertEquals("/api/v1/push/ln-mode", (put.path).zhAny())
+            val body = JsonCodec.parseToJsonElement(put.body.readUtf8()).jsonObject
+            assertEquals(setOf("enabled"), body.keys)
+            assertTrue(body.getValue("enabled").jsonPrimitive.boolean)
+            server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":"not found"}"""))
+            assertNull(api.lowDistraction())
+            server.takeRequest()
+            server.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"push settings are not available"}"""))
+            try { api.lowDistraction(); fail("A hub that does not answer is not an older hub") } catch (_: HubFailure) { }
+        }
+    }
+
     @Test fun translatePrefsAreReadAndWrittenWithEveryField() = runBlocking {
         MockWebServer().use { server ->
             val api = HttpDeviceSettings(server.url("/").toString(), "example-token", "phone", OkHttpClient())
@@ -102,6 +126,35 @@ class HttpDeviceSettingsTest {
             // An older hub: no list.
             server.enqueue(MockResponse().setBody("""{"input":true,"done":"long"}"""))
             assertNull(api.preferences().mutedManagers)
+        }
+    }
+
+    @Test fun quietHoursAreReadAndWrittenAlone() = runBlocking {
+        MockWebServer().use { server ->
+            val api = HttpDeviceSettings(server.url("/").toString(), "example-token", "phone", OkHttpClient())
+            // Never set: the hub's empty times read as the defaults.
+            server.enqueue(MockResponse().setBody("""{"input":true,"done":"long","quiet":{"enabled":false,"start":"","end":""}}"""))
+            assertEquals(QuietHours(), api.preferences().quiet)
+            server.takeRequest()
+            server.enqueue(MockResponse().setBody("""{"input":true,"done":"long","quiet":{"enabled":true,"start":"22:30","end":"06:45","tz":"Asia/Tokyo"}}"""))
+            assertEquals(QuietHours(true, "22:30", "06:45", "Asia/Tokyo"), api.saveQuietHours(QuietHours(true, "22:30", "06:45", "Asia/Tokyo")))
+            val put = server.takeRequest()
+            assertEquals("PUT", put.method)
+            assertEquals("/api/v1/devices/phone/prefs", put.path)
+            val body = JsonCodec.parseToJsonElement(put.body.readUtf8()).jsonObject
+            // A partial update: only the window, so the other switches stay as they are.
+            assertEquals(setOf("quiet"), body.keys)
+            val quiet = body.getValue("quiet").jsonObject
+            assertEquals(setOf("enabled", "start", "end", "tz"), quiet.keys)
+            assertTrue(quiet.getValue("enabled").jsonPrimitive.boolean)
+            assertEquals("06:45", quiet.getValue("end").jsonPrimitive.content)
+            // The whole-prefs save leaves the window out.
+            server.enqueue(MockResponse().setBody("""{"input":true,"done":"long","quiet":{"enabled":true,"start":"22:30","end":"06:45"}}"""))
+            api.savePreferences(persona.core.contracts.api.DeviceNotificationPreferences(quiet = QuietHours()))
+            assertFalse("quiet" in JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject.keys)
+            // An older hub: no window, so no section.
+            server.enqueue(MockResponse().setBody("""{"input":true,"done":"long"}"""))
+            assertNull(api.preferences().quiet)
         }
     }
 }

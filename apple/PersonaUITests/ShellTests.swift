@@ -1,6 +1,6 @@
 import XCTest
 
-/// The ChatGPT-style shell on an iPhone (docs/apple/ios.md「新外壳」), in Demo Mode: no tab bar; Assistant | Agents; the drawer with
+/// The ChatGPT-style shell on an iPhone (docs/apple/ios.md「New shell」), in Demo Mode: no tab bar; Assistant | Agents; the drawer with
 /// Inbox / Settings; the empty chat lists what needs the user; the composer grows while typing.
 final class ShellTests: XCTestCase {
     private var app: XCUIApplication!

@@ -5,8 +5,11 @@
 // gone, the connector not the extension's now (403 / 404) — the item's own body is drawn as if there were no extension; when
 // the extension fails, the own body too, with a line saying so and a retry. A press that opens the item's source
 // (persona://inbox/<item>/source, "View in chat") shows the own body — the chat at the item's first message — with a way
-// back to the extension's page, which stays as it was.
+// back to the extension's page, which stays as it was. That source page has a same-address history entry too, so browser
+// Back and the page's back button both return to the extension.
 import { useEffect, useMemo, useState } from "react";
+import { useCloseOnBack } from "../../lib/back-close";
+import { ExtensionOwnerScope } from "../../lib/extension-owner";
 import { ApiError, errorText } from "../../lib/api";
 import type { InboxItem } from "../../lib/inbox";
 import type { UIPlace } from "../../lib/extension-ui";
@@ -30,6 +33,7 @@ export function InboxExtensionBody({ item, place, own, onOwn }: { item: InboxIte
   const [source, setSource] = useState(false); // the extension opened the item's own source page
   const [n, setN] = useState(0);
   const context = useMemo(() => ({ item: item.id }), [item.id]);
+  useCloseOnBack(source, () => setSource(false));
   const ownShown = !!fallback || source;
   useEffect(() => onOwn?.(ownShown), [ownShown, onOwn]);
   if (fallback && "quiet" in fallback) return <>{own()}</>;
@@ -69,20 +73,24 @@ export function InboxExtensionBody({ item, place, own, onOwn }: { item: InboxIte
         </div>
       )}
       <ExtensionPage hidden={source} place={place}>
-        <ExtensionUI
-          key={n}
-          extension={place.extension}
-          ui={place.id}
-          context={context}
-          manager={item.manager}
-          bare
-          title={place.title}
-          revision={item.version}
-          onUnsupported={() => setFallback({ quiet: true })}
-          onMissing={() => setFallback({ quiet: true })}
-          onFailed={(e) => setFallback(fallbackOf(e))}
-          onOpenSource={() => setSource(true)}
-        />
+        {/* the extension's own id scopes what a graph's `key` keeps (lib/extension-owner.tsx), so this page's
+            graphs never share their pan, zoom and folds with another surface's */}
+        <ExtensionOwnerScope owner={place.extension}>
+          <ExtensionUI
+            key={n}
+            extension={place.extension}
+            ui={place.id}
+            context={context}
+            manager={item.manager}
+            bare
+            title={place.title}
+            revision={item.version}
+            onUnsupported={() => setFallback({ quiet: true })}
+            onMissing={() => setFallback({ quiet: true })}
+            onFailed={(e) => setFallback(fallbackOf(e))}
+            onOpenSource={() => setSource(true)}
+          />
+        </ExtensionOwnerScope>
       </ExtensionPage>
     </>
   );

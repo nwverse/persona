@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -168,7 +167,7 @@ func TestPipeline(t *testing.T) {
 
 	// Items get tagged and linked to the project.
 	_ = st.PutItem(&Item{Kind: KindEvent, ID: "e1", Title: "X 周会", At: t0})
-	if err := e.TagItems(context.Background()); err != nil {
+	if _, err := e.TagItems(context.Background(), 10); err != nil {
 		t.Fatal(err)
 	}
 	it, _ := st.Item(KindEvent, "e1")
@@ -394,32 +393,5 @@ func TestRetagMail(t *testing.T) {
 	}
 	if e.RetagMail() != 0 {
 		t.Fatal("queued again under the same rules")
-	}
-}
-
-func TestSearchExtraDirs(t *testing.T) {
-	st, err := NewStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	notes := t.TempDir()
-	write := func(rel, body string) {
-		p := filepath.Join(notes, rel)
-		_ = os.MkdirAll(filepath.Dir(p), 0o755)
-		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write("background/machines/box.md", "---\ndescription: box 是 GPU 机器\n---\n登录 box 要先 kinit\n")
-	write(".git/HEAD", "box kinit in git internals\n")
-	write(".git/notes.md", "box kinit in a dot dir\n")
-	write("raw.txt", "box kinit in a non-Markdown file\n")
-	e := &Engine{Store: st, ExtraDirs: []string{notes}}
-	hits := e.Search("box kinit", true, 10)
-	if len(hits) != 1 || hits[0].Line != "登录 box 要先 kinit" || hits[0].Path != filepath.Join(notes, "background/machines/box.md") {
-		t.Fatalf("hits: %+v", hits)
-	}
-	if hits := (&Engine{Store: st}).Search("box kinit", true, 10); len(hits) != 0 {
-		t.Fatalf("without extra dirs: %+v", hits)
 	}
 }

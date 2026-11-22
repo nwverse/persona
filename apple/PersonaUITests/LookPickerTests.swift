@@ -1,6 +1,6 @@
 import XCTest
 
-/// Settings › Appearance's three choices of how the app looks (docs/apple/ios.md「设计语言」): Avatar, Theme Color and Interface Style, each on its own page
+/// Settings › Appearance's three choices of how the app looks (docs/apple/ios.md「Design language」): Avatar, Theme Color and Interface Style, each on its own page
 /// and apart from the others. Against scripts/mock/mock_hub.py started with MOCK_PERSONAS=builtin and PERSONA_MOCK_HUB. Screenshots go to PERSONA_LOOK_SHOTS when set (the appearance is the simulator's).
 final class LookPickerTests: XCTestCase {
     private var hub: String!

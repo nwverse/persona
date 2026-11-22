@@ -26,7 +26,9 @@ interface Box {
 const DOT = 16;
 const FLASH_MS = 1400;
 
-export function CommentMarks({ scroller }: { scroller: RefObject<HTMLDivElement | null> }) {
+/** `jump`: brings words into view `topOffset` px from the top and keeps them there while the exchanges around them are
+ *  drawn (ChatView landRow); without it, the scroller's own smooth scroll. */
+export function CommentMarks({ scroller, jump }: { scroller: RefObject<HTMLDivElement | null>; jump?: (words: Range, topOffset: number) => void }) {
   const chat = useChatActions();
   const key = chat?.draftKey ?? "";
   const can = Boolean(chat?.canCompose);
@@ -176,18 +178,23 @@ export function CommentMarks({ scroller }: { scroller: RefObject<HTMLDivElement 
   }, [marks, measure, scroller]);
 
   // the card's click: scroll to the words and pulse them
+  const marksNow = useRef(marks);
+  marksNow.current = marks;
   useEffect(
     () =>
       onJumpToComment((id) => {
         const box = boxesNow.current.find((b) => b.id === id);
         const el = scroller.current;
         if (!box || !el) return false;
-        el.scrollTo({ top: Math.max(0, box.rects[0].y - el.clientHeight / 3), behavior: scrollBehavior() });
+        const anchor = marksNow.current.find((m) => m.id === id)?.anchor;
+        const words = jump && anchor ? rangeFor(el, anchor) : null;
+        if (words && jump) jump(words, -el.clientHeight / 3);
+        else el.scrollTo({ top: Math.max(0, box.rects[0].y - el.clientHeight / 3), behavior: scrollBehavior() });
         setFlash(id);
         window.setTimeout(() => setFlash((f) => (f === id ? null : f)), FLASH_MS);
         return true;
       }),
-    [scroller],
+    [scroller, jump],
   );
 
   return (

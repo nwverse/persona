@@ -1,9 +1,14 @@
 package extmgr
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,13 +17,44 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/extension/egress"
 	pserve "github.com/nwverse/persona/server/internal/extension/serve"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
+// runtimeCheckFetch is the source guest's bounded broker call in this test binary. The socket fixes the extension;
+// only the check's credential accompanies this one request, and an empty proxy models an ordinary fetch.
+func runtimeCheckFetch(ctx context.Context, socket, proxy, target string) (int, error) {
+	raw, _ := json.Marshal(map[string]any{"url": target, "method": http.MethodGet, "headers": map[string]string{}, "body": ""})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://source"+egress.RuntimeFetchPath, bytes.NewReader(raw))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if proxy != "" {
+		u, err := url.Parse(proxy)
+		if err != nil || u.User == nil {
+			return 0, fmt.Errorf("invalid check proxy %q", proxy)
+		}
+		cred, _ := u.User.Password()
+		req.Header.Set("Proxy-Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(egress.User+":"+cred)))
+	}
+	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+	}}
+	defer transport.CloseIdleConnections()
+	resp, err := (&http.Client{Transport: transport}).Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode, nil
+}
+
 // serveSettingsCheckExtensionForTest answers settings.check as a gateway extension would (#5906): a key with "echo"
 // in it is refused with the key in the words (whole and cut short), "boom" as an RPC error quoting it, "slow" not in
-// time; anything else works.
+// time; anything else works. The check's proxy (#8459) goes to the file CHECK_PROXY_OUT names, when it names one,
+// and a gateway_url with "refuse" in it is refused with the proxy in the words.
 func serveSettingsCheckExtensionForTest() {
 	_ = pserve.Serve(context.Background(), os.Stdin, os.Stdout, pserve.Program{ID: "example-gateway", Version: "1.0.0",
 		Namespaces: map[string]pserve.Handler{
@@ -29,9 +65,26 @@ func serveSettingsCheckExtensionForTest() {
 				var in struct {
 					Config  map[string]any    `json:"config"`
 					Secrets map[string]string `json:"secrets"`
+					Proxy   string            `json:"proxy"`
 				}
 				_ = json.Unmarshal(params, &in)
+				if out := os.Getenv("CHECK_PROXY_OUT"); out != "" {
+					_ = os.WriteFile(out, []byte(in.Proxy), 0o600)
+				}
+				if u, _ := in.Config["gateway_url"].(string); strings.Contains(u, "refuse") {
+					return map[string]any{"ok": false, "error": "unreachable through " + in.Proxy}, nil
+				}
 				key := in.Secrets["key"]
+				if socket, _ := in.Config["broker_socket"].(string); socket != "" {
+					gateway, _ := in.Config["gateway_url"].(string)
+					status, err := runtimeCheckFetch(context.Background(), socket, in.Proxy, gateway)
+					if err != nil {
+						return map[string]any{"ok": false, "error": "candidate fetch failed: " + err.Error()}, nil
+					}
+					if status != http.StatusOK {
+						return map[string]any{"ok": false, "error": fmt.Sprintf("candidate returned %d for %s through %s", status, key, in.Proxy)}, nil
+					}
+				}
 				switch {
 				case strings.Contains(key, "echo"):
 					return map[string]any{"ok": false, "error": "网关不认这把 Key " + key + "（前缀 " + key[:10] + "，后缀 " + key[len(key)-8:] + "）"}, nil

@@ -23,6 +23,7 @@ fi
 _env=$(python3 scripts/persona_config.py env) || exit $?
 eval "$_env"; unset _env
 python3 scripts/persona_config.py xcconfig
+native/app-core/scripts/build-apple.sh
 echo "Building with $(xcodebuild -version | head -1) (config \"xcode\" picks another, docs/operations/config.md)"
 # No private values in what is about to ship from this tree (CLAUDE.md).
 python3 scripts/privacy_check.py
@@ -44,11 +45,17 @@ AUTH=(-allowProvisioningUpdates -authenticationKeyPath "$ASC_KEY_PATH" -authenti
 
 mkdir -p "$OUT"
 cd apple
+# The whole project, whatever the shell exported: the switch that leaves the watch app and the share extension out is for
+# sim.sh's development builds only (apple/lean-dev-build.yml).
+unset PERSONA_LEAN_DEV_BUILD
 xcodegen generate -q
 cd ..
 
+# Package.resolved is a pinned superset that includes the opt-in Meta SDK. Do not let an optional overlay rewrite its
+# originHash or pins in the tracked worktree; with the pin already present, both configurations use the same resolved file.
 xcodebuild -project apple/Persona.xcodeproj -scheme Persona -configuration Release \
   -destination 'generic/platform=iOS' -archivePath "$ARCHIVE" -derivedDataPath "$OUT/DerivedData" \
+  -disableAutomaticPackageResolution \
   CURRENT_PROJECT_VERSION="$BUILD" "${AUTH[@]}" clean archive | grep -E "error:|ARCHIVE (SUCCEEDED|FAILED)"
 
 APP="$ARCHIVE/Products/Applications/Persona.app"
@@ -60,18 +67,17 @@ if [ -d "$WATCH" ]; then python3 scripts/release/check_bundle_strings.py "$WATCH
 python3 scripts/release/check_bundle_privacy.py "$APP"
 # Siri / Shortcuts only see the intents if their metadata was extracted at build time.
 [ -f "$APP/Metadata.appintents/extract.actionsdata" ] || { echo "missing AppIntents metadata in $APP"; exit 1; }
-# Release must not contain the DEBUG-only simulator switches (apple/Persona/App/PersonaApp.swift).
-if strings "$APP/Persona" | grep -qxE '(pairURL|openMachineFiles|showFolderUpload|showFilesDrop|openProviderWizard|scrollTrace|scrollTracePath|unfoldTrace|showUnfoldLab|showSearchTrace|searchTracePath|openSession|showNewChat|showNewMain|openAssistant|openAssistantSidebar|newAssistant|openFirstImage|openViewedImage|showViewerChromeHidden|showViewerInfo|showViewerDecodeDelay|showViewerDecodeDuringPan|showViewerPagingProbe|showDocCommentReply|showDocCommentDraft|openTerminalPane|showPad|showKeyMods|focusTerminalInput|openShortcutsPanel|openTerminalSettings|openTerminalTips|showInfo|loadAll|showFromSeq|showLark|larkTop|larkFocus|inboxDrawer|larkProfile|larkPicker|larkMoments|openWorkbench|addMail|dropUsers|openPane|simulateTap|showMenu|showRewind|openFilePath|openFileLine|jumpEnd|showOldest|openAllWork|showSupervisionOpen|openAgent|focusComposer|openSlashMenu|terminalPages|openEditor|openLinkURL|openChatInfo|openChatInfoPage|openChatInfoFrom|openThreadAt|openPeople|openMomentsTab|openMailLabel|openPeopleQuery|openFeishuDoc|openFeishuDocHeading|showFeishuDocSheet|openFeishuWikiSpace|openFeishuWikiNode|showFeishuWikiUpdates|openSearch|openSearchTab|openSearchFeed|openSearchFilter|openSearchFirst|openCalendarDate|openCalendarEvent|showCalendarNow|showDetailBottom|openMeeting|openMinutes|showMinutesTab|showMinutesPlaying|showMinutesSearch|openTask|openTaskScope|openOKR|showWorkBottom|showFeishuDocTableEnd|openMailThread|showMailAttachment|showMailBottom|showCloseAgent|showDeleteSession|openSpaceFromChat|openOverSpace|showHerdrStart|showShareCard|showCompactChrome|showWakeDrawer|showSampleQuestion|showRecapDrawer|openAssistantPage|showAutoScroll|showScrollToOldest|openStorage|showFoldProbe|showBlankLanding|openInboxFirst|showInboxAction|showInboxMutes|showInboxSuggestionEdit|showInboxSuggestionStale|openMachinePage|showAsUnread|showEdgeScrub|showSampleScreen|showTestNotification|openNotificationSettings|showPushHealth|openSendMessage|openUploadDemo|showReportUpload|showReportDelete|openReportRecord|showFleetSample|fleetDetails|fleetIsland|showFleetCount|openIslandSettings|openIslandDiagnostics|showConnection|showConnectionCycle|showToasts|simulateOffline|openConnectionDetails|openSendDelay|openMonitor|openAgentsFresh|openChatsFresh|openImagesFresh|openRecapsFresh|openScreenFresh|showLarkSendFresh|perfCounts|openWelcome|openMonitorRange|openMonitorScrub|openMachines|openMachineDetail|openDevices|openConnectDevice|openConnectorMail|openConnectorFeishu|openConnectorBot|openConnectorGitHub|openConnectorTelegram|openConnectorPlugin|openConnectorMessages|openMessagesChats|openMessagesChat|openConnectorDevice|showFullOutput|showComposerPhoto|showFreezeProbe|showScrollState|showChatDump|showClearConfirm|showCleanUpConfirm|showPromptMenu|openModelLaunchers|openModelConfiguration|openModelPurpose|showModelSearch|showDeleteConfirm|showLauncherCheck|openModelLauncher|showKnowledgeEntry|showKnowledgeSearch|showKnowledgeLower|showKnowledgeKind|openFromDoneNotice|holdChromeOpen|showErrorDetails|openPersona|showPersonaState|openTranslationSettings|openTriageSettings|openLauncherPage|openLauncherEditor|openAppearance|showFilePerf|showFileAutoScroll|showFileAutoScrollSpeed|showSpaceTabs|showDrawerProbe|showDrawerAutoDrag|openInboxItem|openInboxAsk|openShellPage|showShellPagerAt|showDesktopSample|openDesktopSheet|showSamplePermission|showSampleCodexApproval|showSampleCodexQuestion|showKnowledgeDay|showToolDetails|showSubagentDetails|showMailAskClaude|openPairSheet|openPairSSH|openPairLink|openPairLinkTimes|showPerfGlide|showPerfChurn|showPerfChanges|showPerfSeconds|showPerfSpeed|showPerfPoint|showPerfQuit|showPerfOut|showPerfDelay|showPerfRun|showPerfSections|showPerfRounds|openEngineStep|showPushKey|showRunsOpen|showPlanSheet|openQuietSpaces|showHomeState|openCodexSettings|openClaudeSettings|showPagePerf|showFrameProbe|showPopFrames|openRecording|showRecordingSample|openHubUpdate|openManagers|openManagerPage|showManagerCode|openSentAsYou|openSkills|openPlugins|openPlugin|openPluginPage|openPluginMarket|openPluginMarkets|openMarketPlugin|openExtensions|openExtension|openExtensionPage|openExtensionManager|openExtensionMarket|openExtensionMarkets|openMarketExtension|openChannels|openChannel|openHub|openHubs|openSSHTunnel|seedSSHTunnel|seedSSHKey|openLocalProxy|seedLocalProxy|pairURL2|pairURL3|showLarkAttachmentDraft|showLarkQuoteDraft|showLarkThreadAttachmentDraft|showContexts|showSampleQuotes|showTaskDetail|showTaskBoard|openTodoDetail|showTodoHandoff|openMacSection|openMacPluginPage|openMacExtensionPage|showAgentInfo|openMacTodo|showDoneTodos|openTodoTitled|showModelConfigSheet|showDiscardConfirm|showUnlockWithoutAuth|showPiPSource|showSampleHTMLCard|showHealthTrends|showMacHover|showMacKeyScript|openMacListFocus|showMacDropCover|showTerminalUpload|showVoiceOrbs|showVoiceSample|openVoice|showLoopDraft|showLookBlink|showAddComputer|wizardPreset|wizardKey|showRemovalWarnings|openChangeAnswer|openLauncherPicker|showLauncherHelp|openLauncherDetails|showRunAgentHere|showRunHereLauncher|showInboxRules|openInboxRule)'; then
-  echo "DEBUG switches found in the Release binary" >&2; exit 1
-fi
-# Nor the runtime CLI (apple/Persona/Debug/, docs/operations/runtime-cli.md): its switches, its type, the accessibility hook it turns on.
-if strings "$APP/Persona" | grep -qE 'runtimeCLI|RuntimeCLI|_AXSSet(Automation|ReduceMotion)Enabled'; then
-  echo "the runtime CLI found in the Release binary" >&2; exit 1
-fi
+# Release must not contain the DEBUG-only simulator switches (apple/Persona/App/PersonaApp.swift and the pages they open),
+# listed one per line in scripts/release/debug_switches.txt, nor the runtime CLI (apple/Persona/Debug/,
+# docs/operations/runtime-cli.md): its switches, its type, the accessibility hooks it turns on. One read of all of
+# `strings`: piped into `grep -q` under pipefail, an early match passed (#10616, #10654).
+python3 scripts/release/debug_switches.py check "$APP/Persona"
 
 # Every bundle signed with its target's keychain groups (the app shares the Live Activity's persona with PersonaWidgets,
 # the push key with PersonaNotify): build 92 shipped without them (docs/operations/release.md "entitlements").
 python3 scripts/release/entitlements.py check "$ARCHIVE"
+# An iPhone app on a Mac must not strongly bind a symbol the Mac's frameworks lack (dyld stops before app code).
+python3 scripts/release/check_mac_imports.py "$APP/Persona"
 
 OPTS=$(mktemp -t export).plist
 if [ -n "$EXPORT_ONLY" ]; then
@@ -111,5 +117,5 @@ fi
 # The same release of personad for anyone to install (publish.sh, docs/operations/release.md "Publishing personad"), versioned with this
 # build's number. Not with NO_UPLOAD or NO_PUBLISH, nor when the config has no publish.site_url.
 if [ -z "${NO_UPLOAD:-}" ] && [ -z "${NO_PUBLISH:-}" ] && [ -n "${PERSONA_PUBLISH_URL:-}" ]; then
-  VERSION="$(git describe --always --dirty 2>/dev/null || echo dev)-$BUILD" ./scripts/release/publish.sh
+  VERSION="$(git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev)-$BUILD" ./scripts/release/publish.sh
 fi

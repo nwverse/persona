@@ -88,7 +88,7 @@ class ChatStateTest {
         val store = listOf(user) + work + answer
         val closed = timeline.lines(store, false, emptySet()).lines.filterIsInstance<ChatLine.Work>().single()
         assertEquals(2, closed.steps.size)
-        assertEquals("做了 2 步", workSummary(res, closed, null))
+        assertEquals("工具 2", workSummary(res, closed, null))
         val open = timeline.lines(store, false, setOf(closed.id)).lines
         assertEquals(2, open.filterIsInstance<ChatLine.Step>().size)
         assertEquals(2, open.filterIsInstance<ChatLine.End>().single().count)
@@ -130,6 +130,47 @@ class ChatStateTest {
         assertFalse(awaitingDelivered(listOf(sent), "blocked", false))
         assertFalse(awaitingDelivered(listOf(sent), "idle", true))
         assertFalse(awaitingDelivered(listOf(sent.copy(state = DeliveryState.Sending)), "idle", false))
+    }
+
+    // #2483: the turn's line and the header go by the same word. A question a hook holds keeps herdr's status at working while
+    // the hub's state says needs you; one of the session's own requests counts before that state arrives; a task agent's
+    // request is the header's alone, as this turn may still be at work.
+    @Test fun theTurnWaitsOnYouWheneverTheHeaderSaysSoForThisSession() {
+        val key = SessionKey("machine", "session")
+        val working = Session(machineId = "machine", sessionId = "session", status = "working")
+        val own = Interaction("own", machineId = "machine", sessionId = "session", kind = "question")
+        val task = Interaction("task", machineId = "machine", sessionId = "task-agent", kind = "permission")
+        val snapshot = ChatSnapshot(loading = false)
+        for ((session, requests, turn, header) in listOf(
+            WaitCase(working, emptyList(), turn = false, header = StatusKind.Working),
+            WaitCase(working.copy(state = "needs_you"), emptyList(), turn = true, header = StatusKind.NeedsYou),
+            WaitCase(working, listOf(own), turn = true, header = StatusKind.NeedsYou),
+            WaitCase(working, listOf(task), turn = false, header = StatusKind.NeedsYou),
+            WaitCase(working.copy(status = "blocked", state = null), emptyList(), turn = true, header = StatusKind.NeedsYou),
+        )) {
+            val case = "${session.status}/${session.state} ${requests.map { it.id }}"
+            assertEquals(case, turn, turnWaitsOnYou(session, key, requests))
+            assertEquals(case, header, chatStatus(res, snapshot, session, null, emptyList(), requests, false)?.kind)
+        }
+    }
+
+    private data class WaitCase(val session: Session, val requests: List<Interaction>, val turn: Boolean, val header: StatusKind)
+
+    @Test fun messageReceiptsOverrideOnlyTheirOwnLocalSendAndNeverManufactureRuntimeWork() {
+        val session = Session("machine", "session", status = "idle")
+        val message = OutboxMessage("client", session.key, "hello", DeliveryState.Sending)
+        val receipt = MessageSendReceipt(session.key, "client", "processing", java.time.Instant.parse("2026-11-12T10:00:00Z"))
+        val snapshot = ChatSnapshot(loading = false)
+        fun state(receipts: List<MessageSendReceipt>, local: String? = "client") =
+            chatStatusState(res, snapshot, session, null, listOf(message), emptyList(), false,
+                submittingId = local, receipts = receipts)
+        assertEquals(StatusKind.Submitting, resolveStatusLine(state(emptyList()))?.kind)
+        assertEquals(StatusKind.Processing, resolveStatusLine(state(listOf(receipt)))?.kind)
+        assertFalse(state(listOf(receipt)).working)
+        assertEquals("idle", session.status)
+        assertEquals(StatusKind.Submitting, resolveStatusLine(state(listOf(receipt.copy(clientMessageId = "another"))))?.kind)
+        assertEquals(StatusKind.Unconfirmed, resolveStatusLine(state(listOf(receipt.copy(state = "unknown"))))?.kind)
+        assertNull(resolveStatusLine(state(listOf(receipt.copy(state = "failed")))))
     }
 
     @Test fun statusPriorityAndApprovalRulesUseDomainPolicy() {

@@ -21,6 +21,9 @@ WKWebView ─ http://localhost:5173 ─▶ local 127.0.0.1:5173 (App listens)
 - **Who owns it**: for each live Agent's pane, take the process the host reports (herdr's foreground process; the first one is claude / codex itself),
   walk all its descendants, and add the processes on the same terminal (tty) (including ones adopted by init after `npm run dev &` and the outer shell exiting).
   Listeners belonging to claude / codex themselves (IDE bridge, MCP) do not count.
+  The host is asked for a pane's foreground processes only when the pane is new or its first process has changed (#5515): while that process is still in the
+  process table with the same parent, terminal and name, the last answer is used again, less any other process in it that exited or whose pid now names a different process (a reused pid could belong to another pane). A shell first (the Agent not started yet) is asked for on every scan,
+  so claude starting under it is not taken for one of the pane's servers. Before this, every scan made one herdr call per pane (about 10 calls/s with 40 Agents at work).
 - **How it scans**: on Linux it reads `/proc` directly (`/proc/*/stat` for the process tree; LISTEN sockets in `/proc/net/tcp{,6}` are matched to process fds by inode),
   with no child processes. On macOS it uses `ps -Ao pid=,ppid=,tty=,comm=` plus `lsof -a -p <these processes> -nP -iTCP -sTCP:LISTEN -Fpcn`.
   `lsof` exits 1 when one of the pids has exited / is a zombie but still prints results, so results are used as-is; when a scan really fails, the same error is logged only once.
@@ -29,6 +32,7 @@ WKWebView ─ http://localhost:5173 ─▶ local 127.0.0.1:5173 (App listens)
   `GetExtendedTcpTable` (`TCP_TABLE_OWNER_PID_LISTENER`, one table each for IPv4 and IPv6), in `server/internal/node/ports_windows.go`.
   Windows has no controlling terminal, so ownership is by process tree only. After a parent exits, Windows still reports its pid, and pids get reused, so when the parent started later than the child
   (or its start time can't be read) the parent-child link is ignored, so a new process doesn't "adopt" someone else's children.
+  Git Bash breaks that tree (#9815): MSYS2 emulates `fork`, and for `cd x && cmd` the forked copy that runs `cmd` as a new Windows process exits, so `cmd`'s parent pid names a process that is gone. The scan reads every listener anyway, so a listener no pane's tree owns has its process's engine pane variables read (`ORCA_PANE_KEY`, `HERDR_PANE_ID`…, which MSYS passes on; cached per process) and counts for the pane they name when that pane is being scanned. The pane's agent itself stays out, as from the tree (`paneListeners`). On a machine with about 650 processes and 65 listening sockets a scan took 15 ms without that and 18 ms with it.
 - **What counts**: for each `pid:port`, send one `GET /` (`Host: localhost:port`, which dev servers' host checks accept). Only ones that answer with HTTP are listed,
   and the home page's `<title>` (up to 60 characters) is captured along the way. One that accepts the connection but says nothing for 3 seconds (next dev compiling for the first time) is listed without a title and asked again on the next scan, up to 5 times.
   Ones that don't answer with HTTP (ssh, databases) are not listed. Results are cached per `pid:port` and dropped when the process or port goes away.
@@ -44,6 +48,11 @@ WKWebView ─ http://localhost:5173 ─▶ local 127.0.0.1:5173 (App listens)
 - "This machine" is the machine the session runs on (for assistant chats, the hub machine).
 - These show up in: Agent replies (a row of badges under the message), Bash tool output (under the output once expanded), the top of the session (`Session.ports`),
   and when tapping such a link itself in a message or the terminal (`ChatActions.openLink` checks for port links first). These links are no longer preloaded (preloading would open the phone's own localhost).
+- A link to one of the hub's own pages (`/s/…`, `/todos`, `/persona/…`; a hub on the agent's machine) is no dev server: it gets no badge and opens as that page (#2696).
+- The web (#504) recognizes the same links (`web/src/lib/port-links.ts`) and draws the badges under an agent's finished answer (`views/chat/PortChips.tsx`): `:5173` with the page's
+  title, "Stopped" and dimmed once nothing listens there. A port some agent on that machine lists (`Session.ports`) is live; any other is asked about with `GET …/ports/{port}`
+  (`lib/port-presence.ts`: a live answer is kept a minute, a gone one 30 s, no answer 20 s). A badge, or the link itself, opens the page in the **Preview** panel ([preview.md](../web/preview.md)),
+  only on a hub with `preview` and for an agent's session with a working folder; assistant conversations get none.
 ## Forwarding
 
 ### Why "listen locally on the phone"
@@ -60,9 +69,13 @@ redirects / cookies need no rewriting. No DNS changes, no new ports: it uses the
 
 ### Phone (`apple/Persona/Code/PortForwarder.swift`)
 
-- One forward per (machine, port): first bind the same port number on `127.0.0.1`; if it's taken (another forward on the phone, or an existing program on the Mac running the simulator), pick a random one.
+- One forward per (group, machine, port), since machine ids are only unique within a group: first bind the same port number on `127.0.0.1`; if it's taken (another forward on the phone, or an existing program on the Mac running the simulator), pick a random one.
   Then bind the same number on `::1` (`localhost` resolves to ::1 first; without it WebKit falls back to 127.0.0.1 anyway). Only loopback is bound, so nobody on the LAN can connect.
 - Each incoming connection opens a `wss://<hub>/api/v1/machines/{mid}/ports/{port}/connect` (`Authorization: Bearer <device token>`).
+  The hub address, route and token are read when each connection arrives, not when the forward starts (#1886): the group's current hub
+  (the one its socket is on), `HubTransport`'s tunnel route at that moment, and the current device token. After a switch between a tunnel
+  and a direct address, to another hub of the group, or a re-pairing, a reload or HMR reconnect goes the new way. Disconnecting a group,
+  removing its last hub or unpairing closes its forwards (`AppModel.forgetGroups` / `unpair`).
   Each side "finishes sending the previous chunk before reading the next", so a slow side holds back a fast one instead of piling up in memory.
 - The listener stays up. If it breaks after the App is suspended, it is rebuilt on next open (reusing the old number when possible; the page's HMR reconnects by itself).
 - Before opening, ask the hub: if the port is in some Agent's `ports`, open it directly; otherwise `POST …/open` (the user explicitly tapped it). If nothing is listening, show "Nothing is listening on port :N anymore",
@@ -72,15 +85,16 @@ redirects / cookies need no rewriting. No DNS changes, no new ports: it uses the
   it is reloaded when taken out (unless it is still loading), otherwise you'd see the page as it was when last closed (2026-11-05, #1934). The refresh button in the top bar (`link-reload`) uses `reloadFromOrigin`
   to fetch again; native Lark pages don't have it.
 - The Mac App uses the same code; the sandbox needs `com.apple.security.network.server` (listening on loopback only).
-- Android (#2144): `core/hub/PortForwarder.kt` likewise listens on 127.0.0.1 and ::1 with one WebSocket per connection; see `docs/android/android.md` ("Port forwarding").
+- Android (#2144): `core/hub/PortForwarder.kt` likewise listens on 127.0.0.1 and ::1 with one WebSocket per connection; see `docs/android/android.md` ("Terminal and links").
 
 ### hub (`server/internal/hub/ports.go`) and streams (`server/internal/streams`)
 
 - `…/connect` checks first, then upgrades: the port must be in the `ports` of some session on that machine, or the user must have `POST …/open`ed it within 24 hours; otherwise 403.
   Then it registers a stream and asks the node to `port.dial`. If that fails it returns 404 (not yet upgraded, so the App gets the status code); only on success does it upgrade to WebSocket.
-- A stream is just `stream.data / stream.ack / stream.close` events on the hub↔node JSON-RPC connection (`docs/protocol/protocol.md`). Each direction allows at most 512 KB
+- A stream uses `stream.data`, `stream.ack` and `stream.close` events on the hub↔node JSON-RPC connection (`docs/protocol/protocol.md`). Each direction allows at most 512 KB
   unacknowledged; at that point the sender waits. A large file from a page can't fill the connection and starve other RPCs, and a slow reader can't make the other end buffer without limit.
   Event handling (`Mux.Event`) never blocks, because it runs in the RPC read loop.
+- TCP endpoints that negotiate stream version 1 can send `stream.eof` to half-close one direction. The App's binary WebSocket path uses full close.
 - At most 64 streams per machine at once (a page typically uses about 6); when a machine disconnects all its streams are closed.
 - The slow-request log skips `…/connect` (it is long by nature).
 

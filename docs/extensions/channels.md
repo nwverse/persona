@@ -22,9 +22,9 @@ The WeChat extension contributes a connector `wechat`, but that connector only h
 | Persona App: iOS, Mac, Android, web | Each client's chat page, `POST /api/v1/sessions/{m}/{s}/messages` (`client_msg_id` is a random id) | The one the user picked in the App | Live stream (WebSocket) | Cards, answered in place | Channel `app` |
 | Apple Watch | The watch App, via the same hub API | Main chat / the one picked | Same as above | Notification buttons, cards on the watch | One client of channel `app` |
 | Siri / Shortcuts (Ask Persona) | `apple/Persona/Intents` (`docs/apple/siri.md`) | Main chat | The App polls `items` for up to 24 seconds and reads out the last words | None | One client of channel `app` (its own polling is a second copy of "wait for the turn to finish", see "Not done yet") |
-| WeChat bot | Built-in extension `wechat` (`server/plugins/wechat`, `docs/extensions/wechat.md`, #1447) | Main chat, or a chat started with `/new` | The extension checks the session through the hub API every 2 seconds, takes this turn's answer, and sends text | Text round trip (reply with a number, allow / deny) | Channel `wechat` (contributed by the extension) |
+| WeChat bot | Public marketplace extension `wechat` (`nwverse/persona-extensions`, `docs/extensions/wechat.md`) | Main chat, or a chat started with `/new` | The shared channel pipeline tracks this turn and calls the extension's `channel.send` | Text round trip (reply with a number, allow / deny) | Channel `wechat` (contributed by the extension) |
 | Lark bot | Sending and receiving in the hub (`hub/bots*.go`, `feishubot/`), chat logic in the assistant (`assistant/feishu*.go`, `docs/extensions/bots.md`) | Main chat, a `/new` chat, the Agent picked with `/agents`, or the chat bound to the message being replied to | The hub watches the session internally, replies right away with a progress card refreshed every 3 seconds, and writes the answer into that card at the end (process folded); turns for which an old version created an agent message still finish the old way | Card buttons | Channel `feishu` (built in) |
-| `/agent` in Lark | In the extension that connects Lark (since #1571; previously the hub's lark_agent.go, lark_agent_docs.go; `docs/extensions/lark-agent.md`) | A new headless chat per request / thread | The Agent calls `lark_agent_reply` and replies to that message / comment **as me** | None | Not in the hub's channel list (since #1571 no longer a built-in channel; `GET /api/v1/channels` doesn't list it); `lark_agent` is still a reserved id that extension channels can't use |
+| `/agent` in Lark | In the extension that connects Lark (since #1571; previously the hub's lark_agent.go, lark_agent_docs.go; `docs/extensions/lark-agent.md`) | A new headless chat per request / thread by default; with the mention channel's explicit `target: {kind: "main"}`, the owner's main chat through the unified pipeline | The Agent calls `lark_agent_reply` in the default mode; a main-chat turn returns through the extension's ordinary `channel.send` reply path, to the original request | None | `mention` channel; the host accepts the contribution and its optional main target, while the extension chooses when to adopt it |
 | Voice | The `voice` extension in the manager's manager.json, the built-in voice extension (`server/internal/voice`, `docs/extensions/extensions.md` ("Voice")) | The voice model speaks for itself; things to hand to the main chat are sent into the main chat through the hub API | Audio | None | Channel `voice` (the `voice` extension point contributed by an extension; listed but not using the pipeline below) |
 | Telegram | The **connector** of the `telegram` extension (extension market `nwverse/persona-extensions`; the user's own account, MTProto, #1704) | — | — | — | **Not a channel**: only a data source. There's no Telegram chat bot yet; if built, it would be an extension channel (Bot API), see "Not done yet" |
 | Mail | Connector `mail` | Inbox | The AI twin drafts, one tap sends | — | Not a channel (data source) |
@@ -33,8 +33,7 @@ The WeChat extension contributes a connector `wechat`, but that connector only h
 | Extension `assistant`, `api`, `events`, `hub_api` | `docs/extensions/extensions.md` | — | — | — | Not channels but the parts channels are assembled from; the first WeChat version was built from `connectors` + `hub_api` + `events` |
 
 Conclusion: **there are three implementations of "outside messages go into a chat and the answer goes back"**: the Lark bot (then in the hub, bots_runs.go), the WeChat bot (then in a plugin, wechat/turns.go,
-whose comments say the rules follow the Lark bot), and Siri (in the App). `/agent` and voice have different shapes (one replies as me with a new chat each time; the other is a model itself);
-they're listed in the channel table but don't go through the unified pipeline.
+whose comments say the rules follow the Lark bot), and Siri (in the App). `/agent` was a fourth shape (one replies as me with a new chat each time), and voice is a model itself. The host now also lets a `mention` channel opt into the unified pipeline with `target: {kind: "main"}`; without that explicit target its extension-owned new-chat behavior is unchanged.
 
 > The bots_runs.go and wechat/turns.go from the inventory have been deleted: since #1521 both the Lark bot and the WeChat bot use the unified pipeline (now in `assistant/channels_runs.go`; reading this turn's answer from the chat is in `channel/read.go`, #3497). Since #2079 the Lark bot's chat logic lives in the assistant (`assistant/feishu.go`), and the hub only sends and receives (`extmgr/bots.go`, `bots_chat.go`).
 
@@ -73,10 +72,10 @@ they're listed in the channel table but don't go through the unified pipeline.
 | `state` | `connected` (bound, receiving messages), `not_connected` (not bound / configured), `error` (`error` contains the reason, one human-readable sentence), `disabled` (off), `not_installed` (market entry) |
 | `account` | Bound account `{id?, name}`: display only (WeChat uses the last few characters of the id from iLink; Lark uses the owner's name), no phone number or email |
 | `capabilities` | See the table below |
-| `target` | Which chat messages go to: `{kind: "main"}` (main chat, default), `{kind: "conversation", machine_id, session_id, title}` (a particular chat), `{kind: "new"}` (the next message starts a new chat, then becomes `conversation`). The Lark bot also has `{kind: "agent", …}` (the Agent selected with `/agents`) |
-| `features` | Features this channel can toggle individually, a list of `{id, title, description, on}`: the App draws switches from this list, even for unknown features. For the Lark bot: `main`, `cards`, `all_cards`, `pushes`, `sync`, `agents`, `reports`, `board`, `only_conclusions` (`docs/extensions/bots.md` ("What it can do")); extension channels uniformly use `asks` (Questions and approvals), `all_asks` (All agents' questions), `pushes` (Send notifications here too), `sync` (Sync main chat turns started elsewhere), shown according to capabilities |
+| `target` | Which chat messages go to: `{kind: "main"}` (main chat, default for `im`), `{kind: "conversation", machine_id, session_id, title}` (a particular chat), `{kind: "new"}` (the next message starts a new chat, then becomes `conversation`). A `mention` channel defaults to `new`; only its explicit `target: {kind: "main"}` opts it into the owner's main chat. The Lark bot also has `{kind: "agent", …}` (the Agent selected with `/agents`) |
+| `features` | Features this channel can toggle individually, a list of `{id, title, description, on}`: the App draws switches from this list, even for unknown features. For the Lark bot: `main`, `cards`, `all_cards`, `pushes`, `sync`, `agents`, `reports`, `board`, `only_conclusions`, `report_steps`, `answer_new_card`, `topic_cot`, `workbench` (`docs/extensions/bots.md` ("What it can do")); extension channels uniformly use `asks` (Questions and approvals), `all_asks` (All agents' questions), `pushes` (Send notifications here too), `sync` (Sync main chat turns started elsewhere), shown according to capabilities |
 | `bind` | How to bind: `qr` (scan a QR code), `code` (the App gives a pairing code to send to the bot in IM), `fields` (enter credentials, possibly followed by a `code` step), `none` (no binding needed: `app`, `voice`), `config` (only configurable in the manager's manager.json; no channel uses it since #1571) |
-| `owner` | Not in the API: **who can use it** is always the one person who bound it (the WeChat account that scanned, the paired Lark account). Only that person's messages go into chats; others receive only "This bot only works for the person who bound it" (once per person per 10 minutes), and groups are never handled. Identifying the owner is the channel's job (only it understands IM identities); the hub receives only the owner's messages |
+| `owner` | Not in the API: **who can use it** is always the one person who bound it (the WeChat account that scanned, the paired Lark account). Only that person's messages go into chats; others receive only "This bot only works for the person who bound it" (once per person per 10 minutes), and groups are never handled. Identifying the owner is the channel's job (only it understands IM identities). A mention message additionally attests this with `owner: true`; `false` or an omitted attestation is refused on the main-chat path. A non-owner request stays in the extension's separate guest conversation and never reaches the owner's main chat |
 
 **Capabilities** (`channel.Capabilities`):
 
@@ -84,15 +83,17 @@ they're listed in the channel table but don't go through the unified pipeline.
 | --- | --- | --- |
 | Receive text | Always available | — |
 | `images_in` | Boolean | Receive images (up to 4, sent into the chat as image attachments) |
+| `images_out` | Boolean | Send pictures (#11986): in an answer or a push, each picture on a line of its own (`![alt](https://…)`, the block images the apps draw) is fetched through `remoteimage` with the same checks as the apps' remote images (the open internet only), drawn at 2048 px (smaller when that is over 3 MB), and sent in the last piece's `images` (at most 4, JPEG or PNG); its line leaves the text. Pictures in code, inline ones and the ones past 4 stay or become text, and one that can't be fetched or shown (HEIC, AVIF) becomes "Image: <alt> <address>". The hub's instructions tell Persona it may send pictures that way. Without it the text keeps its Markdown images and the hub drops `images` before the program |
 | `files_in` | Boolean | Receive files: the hub saves them to a temporary directory on the computer hosting the chat and writes the path into the message (as the Lark bot has always done); if unavailable, the message says "A file ‘…’ was sent, but can't be handed over yet" |
 | `voice_in` | Boolean | Receive voice (the channel supplies transcribed text) |
 | `format` | `markdown` / `plain` | The format of answers delivered to the user. The hub always sends Markdown; the channel converts it to what the IM understands (WeChat removes images, strikethrough… keeps bold and code; Lark cards unchanged); for `plain` channels, the hub's instructions to Persona request "plain text, conclusion first" |
 | `max_text` | Character count; 0 is unlimited | The hub splits the answer accordingly, never in the middle of a code block (`channel.Split`) |
 | `asks` | `none` / `text` / `buttons` | Agent questions and approvals: for `text`, the hub renders text and reads the user's next message as an answer (`channel.AskText`, `channel.ReadAnswer`; rules in "Questions and approvals"); for `buttons`, the channel draws them itself (Lark cards), and the hub tells it what to ask and when to withdraw |
 | `push` | Boolean | Whether it can proactively send to the user (rather than reply to a message): pushes, sync, and questions all need it |
+| `reply_only` | Boolean | Only replies to incoming messages or triggers and cannot send unsolicited proactive messages without `reply_to` (cannot be combined with `push`); `POST /api/v1/channels/{id}/test` checks connectivity instead of calling `channel.send` |
 | `typing` | Boolean | Whether it has "typing": the hub calls it every 5 seconds during a turn |
 | `progress` | Boolean | Whether it can send a message and edit it later (progress card): if a turn isn't done after 5 seconds, the hub sends progress, edits at most every 3 seconds, and writes the answer into the same message |
-| `threads` | Boolean | Replying to a bot message sends to the chat bound to that message (the Lark bot's `/agents`) |
+| `threads` | Boolean | Lark bot: replying to a bot message sends to the chat bound to that message (`/agents`). Extension channel: a message carrying `thread` goes to that thread's own chat ("Message flow" step 5, #11939) |
 
 ## 3. Unified pipeline (owned by the assistant)
 
@@ -137,26 +138,28 @@ While the assistant process is restarting or disconnected from hub, **receivers 
 
 ### Message flow
 
-1. **Receive**: the channel hands an owner's message to hub (Lark's persistent connection, an extension's `channel.receive`), and hub hands it to the assistant (`feishu.message`, `channels.receive`): `{id, text, images, files, quote, forward, reply_to, unsupported}`.
+1. **Receive**: the channel hands an owner's message to hub (Lark's persistent connection, an extension's `channel.receive`), and hub hands it to the assistant (`feishu.message`, `channels.receive`): `{id, text, chat?, topic?, context?, owner?, images, files, quote, forward, reply_to, thread?, unsupported}`. `chat` / `topic` locate a mention request and `context` carries its extension-gathered history as data. Receipt is acknowledged once the request is accepted and queued, before the model turn; a busy main chat uses the ordinary message queue. Lark's OnIt → DONE reaction remains the extension's own receipt UI.
 2. **Deduplicate**: handle `<channel>-<message id>` only once (IM redelivers); this same id is `client_msg_id`, sharing the App's `sent_messages` deduplication, so retries aren't typed twice.
 3. **Commands**: treat a leading `/` as a command first; the pipeline implements `/help`, `/new [first message]`, `/main`, `/stop`, `/status` uniformly. Channels can add their own (the Lark bot's `/list`, `/agents`, `/start`).
    Send unknown commands into the chat unchanged (they might belong to the chat, such as `/compact`).
+   In a thread of an extension channel with `threads`, `/new` starts the thread over (its next message opens a new chat) and `/stop` and `/status` act on the thread's chat; none of them moves the channel's `target`.
 4. **Answer a question**: if this channel has a pending text question (`asks: text`) still in hub's pending list (`interactions.list`), this message is its answer. Drop questions already answered elsewhere and treat this as an ordinary message.
 5. **Target**: if replying to a target-bound message (`threads`), send to that target; otherwise send to the channel's `target`. If main chat doesn't exist yet, create a chat and set it as main chat; a chat created by `new` becomes the target afterward.
+   An extension channel with `threads` keeps a chat per thread: a message carrying `thread` goes to that thread's chat, and the thread's first message starts a new one (never the main chat; the channel's `target` stays as it is). A thread whose chat is gone, or that went quiet for 30 days, starts a new chat; at most 500 threads are kept per channel (`channels` setting, `threads`). A message without `thread`, or from a channel without `threads`, goes to the `target`.
 6. **Assemble content**: prepend a `<persona-context>` explaining which channel this came from, that the answer goes back there, and the format to use (prompt `prompts/channel/message.md`; the Lark bot keeps its own `bot/message.md`);
-   put quoted messages and merged-forward chat records in separate `<persona-context>` blocks; images become attachments; files follow `files_in`.
+   put quoted messages and merged-forward chat records in separate `<persona-context>` blocks; images become attachments; files follow `files_in`. A mention uses `prompts/channel/mention_message.md` instead: its chat, topic and gathered context are data blocks, and the turn is explicitly public. The prompt does not disclose private context from other chats, sessions, mail or health unless the owner's request explicitly asks for the specific information. The internal per-message `public` marker also suppresses the owner's live snapshot for that input only; it never changes the main conversation's origin or later private turns.
 7. **Send**: Persona chats use `session.send` (main chat follows the model selected in Settings), `client_msg_id = <channel>-<message id>`.
 8. **Track the turn** (a run, stored in the database; assistant or hub restarts resume waiting): the rules are the ones formerly implemented separately by the Lark and WeChat bots, now in `channel.Check`. If a turn is stopped before the Agent writes text (only an "Interrupted" or model-service error notice follows), once all messages have arrived it ends directly as "Stopped / Error", rather than treating it as queued and waiting the full 10 minutes (#4505); a turn that ends with only a turn_duration (no text, not stopped) ends the same way (#4895). In these two wordless cases a folded message still queued (`Queued=true`) does not count as arrived, so the run does not end early; in a turn that answered, a queued message the Agent took in mid-turn counts as arrived as usual (#4895); model-service errors still being retried don't count.
    Reading answers uses `channel.ReadTurn` (page to the transcript end, read full long items, split merged messages into per-message `RunAnswer`). The caller supplies an `ItemSource` for the chat source:
    the assistant uses the bus (`session.items` / `session.item`), the voice extension uses hub HTTP (`…/items?after_seq=`, `…/items/{iid}/full`, #3489); there is only one set of rules:
-   - Find this message in the transcript using `client_msg_id` (or a beginning-text `probe` for old nodes lacking it), then take the answer after the last tool call following it;
+   - Find this message in the transcript using `client_msg_id` (or a beginning-text `probe` for old nodes lacking it), then take its answer (`channel.Answer`: every assistant text after it, in order, except a passing line said right before a tool call, `transcript.AnswerParts`; the last text always);
      the first message of a new chat (`/new`, or when main chat doesn't exist; sent via `assistant.send`, without `client_msg_id`) reads from the chat start. If another message arrives before it finishes and merges into one run, record `head`: the section from the start to before the next message is its answer (#4746); the first message in a voice-created chat has only `probe` with `base` equal to 0, and records `head` the same way;
    - Wait while the session is working or awaiting a user answer; start searching only after 20 seconds without seeing work. If this message is still not found after `QueuedMost` (10 minutes), stop waiting, end this turn as `gave_up`, and tell the user "Couldn't confirm the message arrived; please send it again"; don't substitute the chat's last words (they finish the previous turn, #4455 / #4504; voice likewise, #4630);
    - Another message arrives before the same chat finishes: combine the two into one answer. Wait until all these messages have entered the chat and the last turn ends, then answer with each message's own answer (text after it and before the next), joined in chat order;
      chat order need not be send order (a backlog handed over together by extensions on hub startup; the first message must start the chat, so later ones may enter first). If the chat accepts the next message mid-turn and carries on working, the earlier section has no conclusion; the answer is in the later section.
      When deciding whether the earlier section ended with an answer, skip thinking, empty text, turn-duration (`TurnDuration`), and context-compaction notices. These do not explain how the turn ended and must not discard an already-answered earlier section (#4120). Tool calls, errors, interruptions, background tasks, and other notices still follow the original end-boundary rules.
      Old node items lack `client_msg_id` and can't be distinguished, so keep taking only the last words;
-   - Background tasks remain: answer once with "N background tasks are still running; I'll tell you when they're done", then answer again after the background-report turn ends (wait up to 2 more hours);
+   - Background tasks remain: answer once with "N background tasks are still running; I'll tell you when they're done", then answer again after the background-report turn ends (a turn started by an item with `wake`). If ordinary user input from another surface starts the next turn instead, end the held run quietly: post neither that turn's answer nor a new quiet-ending card, and close any progress card already opened without carrying the unrelated text. The two-hour held limit starts at the original channel message and is not renewed by later continuations;
    - After 4 hours without finishing, stop waiting and tell the user to look in the App; also notify if the chat has disappeared (3 minutes).
    - While running: send progress if `progress` is supported (latest 4 steps, text being written, elapsed time), and call "typing" if `typing` is supported.
 9. **Send back**: split the answer by `max_text` and send it back; with `progress`, write it into the progress message. Don't send this turn's phone "completion" notification (the result is already in the channel), or send it again through `sync`.
@@ -166,7 +169,7 @@ While the assistant process is restarting or disconnected from hub, **receivers 
 - **Which channel receives them**: a channel "drives" the chat if it is the channel's target, has a run waiting on it, or has a thread binding from the last 24 hours (`threads`), and `asks` is on;
   with `all_asks` on, all Agents' questions are sent. Questions from other Agents on the computers still only appear in the App.
 - **`asks: buttons`** (Lark bot): the assistant draws cards, and button answers use the same hub `resolve` (`interactions.resolve`).
-- **`asks: text`** (WeChat, future Telegram): the assistant renders text (`channel.AskText`), and the user's next message is the answer (`channel.ReadAnswer`):
+- **`asks: text`** (WeChat, future Telegram): the assistant renders text (`channel.AskText`), and the user's next message is the answer (`channel.ReadAnswer`). The one exception is the assistant's `ask_user` raised with `wait: false` (`channel.Ask.Later`): no turn waits on it, so only a reply that names one of its options answers it, and other words are an ordinary message (`docs/assistant/assistant.md`, "Asking without holding the turn"). The rules:
 
   | Card | How to answer |
   | --- | --- |
@@ -182,7 +185,7 @@ While the assistant process is restarting or disconnected from hub, **receivers 
 
 ### Push and sync
 
-With `push`, a channel can enable `pushes` (send a copy when `notify_user` pushes to the phone; also send scheduled-task chat answers) and `sync` (send the answer when a main chat turn started outside this channel ends).
+With `push`, a channel can enable `pushes` (send a copy when `notify_user` pushes to the phone, not when the hub's push grading held it for the briefing; also send scheduled-task chat answers) and `sync` (send the answer when a main chat turn started outside this channel ends).
 The Lark bot already had both; extension channels use the same switches, off by default.
 
 When a `notify_user` copy reaches a channel with `pushes` on, that channel skips the main-chat or scheduled-task mirror
@@ -198,7 +201,7 @@ A channel with `pushes` off and `sync` on still receives main-chat mirrors.
   Clients recognize the channel by prefix: if the prefix (before the first `-`) matches a channel id from `GET /api/v1/channels`, that's its source; the chat page draws "From WeChat" below the message.
   The App sends UUIDs, whose first segment is 8 hexadecimal characters, so channel ids must not be 8 hex characters (rejected at registration). Messages the voice extension hands to main chat use `voice-<random id>`.
 - **Per chat**: sessions have `channels` (channels that have sent messages into this chat, most recent first, `proto.Session.Channels`; recorded by the assistant and reported in its snapshot, drawn by the manager's fleet), shown as small channel icons in the chat list;
-  headless chats started by `/agent` use `lark_agent`. Old Apps don't recognize this field and display as before.
+  only channel messages fill it: a chat an extension opens (Lark `/agent` among them) has none (its `origin` says where it came from, `docs/protocol/protocol.md` "Origin of assistant chats"). Old Apps don't recognize this field and display as before.
 - Each turn's run records its channel; `GET /api/v1/channels/{id}` includes "how many answers and questions are pending".
 
 ### Queuing, deduplication, concurrency
@@ -236,7 +239,7 @@ So add an explicit `channel` extension point: **the extension only talks to the 
 | --- | --- |
 | `id` | `^[a-z][a-z0-9_]{0,31}$`, not 8 hexadecimal characters; must not collide with built-ins (`app`, `feishu`, `lark_agent`) or other extensions' channels |
 | `name` | 1–40 characters |
-| `kind` | `im` (extensions can currently contribute only IM bots) |
+| `kind` | `im` (a bot in a third-party IM) or `"kind": "mention"` (the owner invokes Persona in someone else's chat and the answer appears as the owner). A mention can opt into the unified main-chat pipeline through its channel target; its extension keeps the default per-request chat behavior until then |
 | `connector` | Optional: a connector id contributed by the same extension. Binding (`login`: QR scan, entering a token), status, and account come from it; the channel follows its switch (the process only runs while it is on). Without it, `on_startup` is required and there is no binding step |
 | `capabilities` | The table above; `format` and `asks` must use values from that table, `max_text` must be at least 0 |
 
@@ -248,16 +251,16 @@ Requires a process that speaks the protocol (`NeedsRPC`). Version 1.
 
 | Method | Parameters | Returns |
 | --- | --- | --- |
-| `channel.receive` | `{contribution, message: {id, text?, images?: [{mime, data}], files?: [{name, mime, data}], quote?, forward?, reply_to?, unsupported?: [string]}}` | `{}`: hub accepted it (deduplicated and queued for handling, not waiting for the turn). Hand over only the owner's messages |
+| `channel.receive` | `{contribution, message: {id, text?, chat?, topic?, context?, owner?, images?: [{mime, data}], files?: [{name, mime, data}], quote?, forward?, reply_to?, thread?, unsupported?: [string]}}` | `{}`: hub accepted it (deduplicated and queued for handling, not waiting for the turn). A mention request must carry `owner: true`; false or omitted is refused on the main-chat path. Non-owner requests use a guest conversation instead. `chat` / `topic` and gathered `context` are inserted as escaped context, never as the owner's instructions. `thread` is an opaque key that only routes (step 5) |
 | `channel.status` | `{contribution, state, error?, account?}` | `{}`: channels without a connector report their own state; channels with `connector` don't need this call |
 
-`data` is base64. Up to 4 images, 3 MB each; files up to 50 MB each. Oversized ones are dropped with an explanation in the message. When hub hands a message to the assistant over the bus, images and files total at most 40 MB (a bus message is 64 MB, with base64 data); ones that don't fit become "Image / file ‘…’ (too large)".
+`data` is base64. Up to 4 images, 3 MB each: a larger picture (a photo sent as the original) is scaled down to fit, not dropped (decoded once, turned upright by its EXIF orientation and drawn at the largest of the remote-image sizes, at most 2048 px, that fits; `Fetcher.Fit` in `server/internal/remoteimage`, within the same decode slots as the remote-image fetches, JPEG, or PNG when it has transparency), and only one that can't be decoded or still doesn't fit is dropped with a note in the message (#11985). Files up to 50 MB each; larger ones are dropped with an explanation in the message. When hub hands a message to the assistant over the bus, images and files total at most 40 MB (a bus message is 64 MB, with base64 data); ones that don't fit become "Image / file ‘…’ (too large)".
 
 **hub calls extension**:
 
 | Method | Parameters | Returns |
 | --- | --- | --- |
-| `channel.send` | `{contribution, ref, text, kind, reply_to?}`: `text` is Markdown (already split by `max_text`), `kind` is `answer` / `note` / `ask` / `push` | `{message_id?}`; if sending is impossible (no conversation it can send to yet), return error code `cannot_send` |
+| `channel.send` | `{contribution, ref, text, kind, reply_to?, images?}`: `text` is Markdown (already split by `max_text`), `kind` is `answer` / `note` / `ask` / `push`; `images` (`[{mime, data}]`, only with `images_out`) are pictures to send after the text, and `text` may then be empty | `{message_id?}`; if sending is impossible (no conversation it can send to yet), return error code `cannot_send` |
 | `channel.typing` | `{contribution, on}` | `{}` (called only with `typing`) |
 | `channel.edit` | `{contribution, message_id, text}` | `{}` (called only with `progress`) |
 
@@ -265,13 +268,13 @@ Errors beyond the error code include only `message`, never content or secrets. I
 
 **Conformance tests**: `channel/conformance.Check(t, manifest, run, init)`, in addition to process-extension protocol checks: each channel in the manifest returns "sent" or `cannot_send` from `channel.send`;
 the same `ref` twice returns the same result (sent only once); `channel.typing` is accepted; requests without `ref` aren't; unknown channels return `no_contribution`, unknown methods `unknown_method`.
-The WeChat extension runs it (`TestWeChatProgramIsAChannel` in `extmgr/wechat_test.go`).
+The WeChat extension runs the SDK's channel conformance tests in its own repository.
 
 ### Writing a channel extension
 
 Every call above is described in `schema/extension/channel.schema.json` (its `x-methods`), with the SDKs' types generated from it. With the Go SDK alone: answer the `channel` namespace with `ext.Methods{"send": ext.Method(…), "typing": …}.For(<channel id>)`, hand over the owner's messages with `ext.Hub.ChannelReceive`, refuse with `ext.CannotSend` while there is nowhere to send to, and test it with `exttest.CheckChannels` (the conformance checks above, every message held to the schema). `channel/conformance.Check` holds every message both ways to the schema too.
 
-In the server's own tree, use `connector/serve.MainWith`; the connector implements `channel.Transport` (`Send`, optional `Typing`, `Edit`), and calls the `channel.Hub.Receive` supplied by `serve` on incoming messages.
+Public extensions, including WeChat, use the SDK's `ext.Serve` with these methods and `ext.Hub.ChannelReceive`. `connector/serve`'s runner is left only for the conformance kit and tests.
 Other languages follow the protocol above, one JSON line per message (`docs/extensions/extensions.md` ("Process extension protocol")).
 
 ## 5. Compatibility and migration
@@ -293,9 +296,9 @@ Other languages follow the protocol above, one JSON line per message (`docs/exte
 | GET | `/api/v1/channels` | `{channels: [View]}`: built-ins, extension-contributed channels (installed, including disabled ones), and not-yet-installed market entries with `channel` contributions. Ordered by `app`, connected, not connected, market |
 | GET | `/api/v1/channels/{id}` | `View` plus `waiting: {answers, asks}`, `conversations` (the channel's recent chats, up to 5: `{machine_id, session_id, title, at}`), `settings_url` (for channels like the Lark bot with a full settings page of their own, linked by the App) |
 | PUT | `/api/v1/channels/{id}` | `{enabled?, target?, features?: {id: bool}}`, changes only supplied fields; returns `View`. `target.kind` is `main` / `new` / `conversation` (with `machine_id`, `session_id`; must be an assistant chat) |
-| POST | `/api/v1/channels/{id}/bind` | `{step?, values?}` → `connector.Prompt` (the step-by-step login in `docs/extensions/connectors.md`: fields, QR scan `qr`, pairing code `pair_code`). Empty `step` starts over. Extension channels forward to their connector; Lark bot: one step for App ID / Secret if no credentials, then a pairing code once they exist |
+| POST | `/api/v1/channels/{id}/bind` | `{step?, values?}` → `connector.Prompt` (the step-by-step login in `docs/extensions/connectors.md`: fields, QR scan `qr`, pairing code `pair_code`). Empty `step` starts over. Extension channels forward to their connector; Lark bot: one step for App ID / Secret if no credentials, then a pairing code once they exist. A step's `Prompt` may carry `link` + `link_text`: the page shows a button that opens the provider's console (the Lark bot's credentials step links to the developer console, and after the credentials verify, the bot's scopes, events, long-connection mode and publish are configured through the platform's server API — `docs/extensions/bots.md` "What to do on the Open Platform") |
 | DELETE | `/api/v1/channels/{id}/binding` | Unbind: connector logout for extension channels; unpair for the Lark bot. Clears runs and pending questions together, as signing out of the channel's connector does |
-| POST | `/api/v1/channels/{id}/test` | Send a test message to **the owner themselves** (only the bound person) |
+| POST | `/api/v1/channels/{id}/test` | Send a test message to **the owner themselves** (only the bound person) → `{"ok": true}`, or for a `reply_only` channel verify connectivity without calling `channel.send` → `{"ok": true, "reply_only": true, "note": "…"}`. Returns `409 not_connected` when offline/disabled, `409 cannot_send` when the channel reports `cannot_send`, and `502` on upstream send failures |
 
 Read-only devices can only GET. These APIs exist only when `/health` and hello's `features` include `channels`. Since 2026-11-04, except for `POST …/bind`, these routes belong to the assistant (`assistantwire.Routes`, forwarded unchanged by hub):
 if the assistant is disconnected, return `503 assistant_offline`; fields are unchanged. For the transport half (channel list and states, switches, unbinding, test messages), it asks hub (`channels.list`, `channels.enable`, `channels.unbind`, `feishu.configure`, `feishu.test`).
@@ -312,11 +315,11 @@ if the assistant is disconnected, return `503 assistant_offline`; fields are unc
   - Binding: when unbound, a "Bind" button follows `bind` steps (QR code displayed with "Save QR Code"; pairing code displays 6 digits and waits for the other side to send it; fields use a form). Once bound, shows the account and "Unbind" (confirmation first).
   - "Send Messages To": main chat / new chat (starts on the next message) / select a chat (recent assistant chats).
   - Feature switches: drawn from `features`.
-  - "Send Test Message" (only to yourself).
+  - "Send Test Message" (only to yourself), or "Check Connection" for `reply_only` channels (checks readiness without sending a proactive message).
   - With `settings_url` (Lark bot), an extra "More Settings" row opens the old page.
 - **Connector page**: existing WeChat connector and Lark bot entries in Settings › Connectors remain; a top explanation says it's a chat channel and links to "Settings › Channels". Apple says "Set it up in Settings › Channels". Binding on the channel page and login on the connector page use the same API; either works identically.
 - **Chat page**: a small "From WeChat" line below channel-origin user messages (channel icon + name, secondary color); no marker for App-origin messages.
-- **Chat list**: if session `channels` is nonempty, show a small icon of the most recent channel beside the title.
+- **Chat list**: if session `channels` is nonempty, show a small icon of the most recent channel beside the title. A chat an extension opened (`origin` `lark_agent` / `extension`) shows its source's mark there instead (on the web, iOS, iPadOS and Android the opening extension's own icon when it has one, #10358), and its first message gets "From Lark /agent" / "From an extension" (there "From <that extension>" while its icon is drawn) (iOS, iPadOS, the web and Android; #4203; `docs/protocol/protocol.md` "Origin of assistant chats", #3758).
 
 ## 8. Steps
 
@@ -331,7 +334,7 @@ if the assistant is disconnected, return `503 assistant_offline`; fields are unc
 
 - **Telegram bot** (Bot API, different from the current Telegram connector): with the `channel` extension point, only sending and receiving need to be written; deferred.
 - **Siri polling**: "Ask Persona" waits for the turn to finish in the App itself (24 seconds), not through hub's pipeline. To use it, hub would add a long-poll API to "send one message, wait for its answer, then return", called by Siri.
-- **Lark `/agent`, voice**: different shapes, listed in the channel table, configured where they were (manager.json, extension page), not using this pipeline.
-- One owner per channel; group chats in channels are not handled.
+- **Voice**: a different shape, listed in the channel table and configured where it was, not using this pipeline. Lark `/agent` can now use the host's `mention` contract and explicit main target; the Lark extension's adoption of that contract is outside this host change.
+- One owner per channel; group chats in `im` channels are not handled. A public mention turn is the exception: only the owner's own request enters main, while a non-owner request uses a guest conversation.
 - Once `text` questions have been answered elsewhere, already-sent text can't be withdrawn.
 - Extension channel `progress` (send progress, then edit it with `channel.edit`): in the protocol, but the pipeline still draws progress cards only for the Lark bot; extension channels currently only have "typing".

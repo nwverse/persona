@@ -8,6 +8,8 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.Assert.*
 import org.junit.Test
+import persona.core.contracts.api.SessionMoveConflictPolicy
+import persona.core.contracts.api.SessionMovedFile
 
 class HubSessionFilesTest {
     @Test fun fileAndGitRequestsEncodePathsAndAcceptEmptyAndPartialResponses() = runBlocking {
@@ -167,12 +169,13 @@ class HubSessionFilesTest {
         answer = """{"status":{"is_repo":true}}"""
         assertFalse(api.pull("machine", "/workspace").updated)
 
-        status = 502
-        answer = """{"error":"工作区有未提交的改动，请先在电脑上提交或 stash 后再拉取"}"""
+        // A refusal as the hub answers it (#1888): a 409 with the reason in the app's language, the node's words as the detail.
+        status = 409
+        answer = """{"code":"uncommitted_changes","delivered":"none","error":"工作区有未提交的改动，请先在电脑上提交或 stash，再拉取。","detail":"the working tree has uncommitted changes: commit or stash them first"}"""
         try { api.pull("machine", "/workspace"); fail("Expected HTTP failure") }
         catch (failure: HubFailure) {
-            assertEquals(502, failure.status)
-            assertEquals("工作区有未提交的改动，请先在电脑上提交或 stash 后再拉取", failure.message)
+            assertEquals(409, failure.status)
+            assertEquals("工作区有未提交的改动，请先在电脑上提交或 stash，再拉取。", failure.message)
         }
     }
 
@@ -202,5 +205,89 @@ class HubSessionFilesTest {
         assertFalse(missing.exists())
         assertEquals(listOf("song.mp3"), (java.io.File(dir, "a").list()!!.toList()).zhAny())
         dir.deleteRecursively()
+    }
+
+    @Test fun fileEditsPostTheirBodiesAndDecodeTheAnswers(): Unit = runBlocking {
+        val posts = mutableListOf<Pair<String, String>>()
+        var status = 200
+        var answer = """{"path":"~/proj/b c.txt"}"""
+        val api = HubSessionFiles({ error("GET used for a change") }, post = { _, _ -> error("pull's POST used for a change") },
+            editPost = { path, body ->
+                posts += path to body
+                val response = Response.Builder().request(Request.Builder().url("https://example.com$path").build()).protocol(Protocol.HTTP_1_1)
+                    .code(status).message("response").body(answer.toResponseBody()).build()
+                // As OkHttpHubConnection.request: any status but 2xx arrives as a HubFailure.
+                if (status !in 200..299) response.use { throw HubFailure.from(it) }
+                response
+            })
+        assertEquals("~/proj/b c.txt", api.rename("machine/segment", "/w/中文 &", "~/proj/a.txt", "b c.txt"))
+        assertEquals("/api/v1/machines/machine%2Fsegment/files/rename", posts.last().first)
+        assertEquals("""{"path":"~/proj/a.txt","cwd":"/w/中文 &","name":"b c.txt"}""", posts.last().second)
+
+        answer = """{"trashed":[{"path":"~/d/b.txt","trash_id":"t1"},{"path":"~/d/c","trash_id":"t2"}],"future":1}"""
+        assertEquals(listOf("t1", "t2"), api.trash("m", "/w", listOf("~/d/b.txt", "~/d/c")).map { it.trashId })
+        assertEquals("/api/v1/machines/m/files/trash", posts.last().first)
+        assertEquals("""{"paths":["~/d/b.txt","~/d/c"],"cwd":"/w"}""", posts.last().second)
+        answer = """{"trashed":null}"""
+        assertTrue(api.trash("m", "/w", listOf("a")).isEmpty())
+
+        answer = """{"restored":[{"path":"~/d/b.txt"}]}"""
+        assertEquals(listOf("~/d/b.txt"), api.restore("m", listOf("t1")))
+        assertEquals("/api/v1/machines/m/files/restore", posts.last().first)
+        assertEquals("""{"trash_ids":["t1"]}""", posts.last().second)
+
+        // The machine's refusals keep their code: outside the home, a taken name, an old node, an old hub without the routes.
+        for ((code, body) in listOf(409 to """{"error":"only the home","code":"read_only"}""", 409 to """{"error":"taken","code":"exists","name":"b"}""",
+                409 to """{"error":"personad on box is too old","code":"node_outdated"}""", 404 to "404 page not found")) {
+            status = code; answer = body
+            try { api.rename("m", "/w", "/etc/hosts", "b"); fail("Expected a refusal") }
+            catch (failure: HubFailure) {
+                assertEquals(code, failure.status)
+                assertEquals(Regex("\"code\":\"(\\w+)\"").find(body)?.groupValues?.get(1), failure.code)
+            }
+        }
+        // A dropped connection stays the connection's failure.
+        val offline = HubSessionFiles({ error("unused") }, editPost = { _, _ -> throw HubFailure(HubError.Timeout) })
+        try { offline.trash("m", "/w", listOf("a")); fail("Expected a timeout") }
+        catch (failure: HubFailure) { assertEquals(HubError.Timeout, failure.kind) }
+        assertTrue(HubSessionFiles.EDIT_TIMEOUT_SECONDS > 120)
+    }
+
+    @Test fun editsAreOfferedByTheHubsFileEditFeature() {
+        var features = emptySet<String>()
+        val api = HubSessionFiles({ error("unused") }, features = { features })
+        // No list yet (an older hub's hello): offered, and the answer tells (iOS FolderEdits.available).
+        assertTrue(api.editsFiles("m"))
+        features = setOf("git_blob", "upload_dir")
+        assertFalse(api.editsFiles("m"))
+        features = setOf("git_blob", "file_edit")
+        assertTrue(api.editsFiles("m"))
+    }
+
+    @Test fun movePostsOnePathAndOnlyAnExplicitConflictPolicy(): Unit = runBlocking {
+        val posts = mutableListOf<Pair<String, String>>()
+        val api = HubSessionFiles({ error("GET used for a change") }, editPost = { path, body ->
+            posts += path to body
+            val initial = posts.size == 1
+            val answer = if (initial) """{"error":"taken","code":"exists","name":"a.txt"}"""
+                else """{"moved":[{"from":"~/a.txt","to":"~/b c/a 2.txt"}]}"""
+            Response.Builder().request(Request.Builder().url("https://example.com$path").build())
+                .protocol(Protocol.HTTP_1_1).code(if (initial) 409 else 200).message("response").body(answer.toResponseBody()).build()
+        })
+        try { api.move("machine/segment", "/w", "~/a.txt", "~/b c"); fail("Expected conflict") }
+        catch (failure: HubFailure) {
+            assertEquals(409, failure.status)
+            assertEquals("exists", failure.code)
+        }
+        assertEquals(1, posts.size)
+        for (policy in listOf(SessionMoveConflictPolicy.KeepBoth, SessionMoveConflictPolicy.Replace)) {
+            assertEquals(SessionMovedFile("~/a.txt", "~/b c/a 2.txt"), api.move("machine/segment", "/w", "~/a.txt", "~/b c", policy))
+        }
+        assertEquals(List(3) { "/api/v1/machines/machine%2Fsegment/files/move" }, posts.map { it.first })
+        assertEquals(listOf(
+            """{"paths":["~/a.txt"],"cwd":"/w","dir":"~/b c"}""",
+            """{"paths":["~/a.txt"],"cwd":"/w","dir":"~/b c","conflict":"keep"}""",
+            """{"paths":["~/a.txt"],"cwd":"/w","dir":"~/b c","conflict":"replace"}""",
+        ), posts.map { it.second })
     }
 }

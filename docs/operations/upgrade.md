@@ -4,6 +4,11 @@ The hub and the built-in manager now run as two programs. A new install gets the
 
 This guide takes an existing install to the split layout. A person or an agent can follow it step by step: every step has a check, and a way back. The details are in [managers.md](../assistant/managers.md) ("The built-in manager as its own service"), [docker.md](docker.md) ("The hub and the built-in manager in one container"), [server.md](../server/server.md) ("Programs", "The default manager's own database") and [hub-update.md](hub-update.md).
 
+## hub.json → manager.json
+
+The manager's own sections of the configuration moved out of `hub.json` into `manager.json`. Nothing reads `hub.json`'s copies any more; the reference for what belongs where now is [config.md](config.md) ("Who owns a setting", "manager.json"). This section keeps the move itself and the rollback checks, for an install that went through it.
+
+
 ## Which section is yours
 
 | Your hub | How to tell | Section |
@@ -161,7 +166,7 @@ launchctl kickstart -k gui/$(id -u)/com.persona.hub          # macOS
 
 ### Step 1: update to a build with the split
 
-Update as usual: the automatic update, **Update now** in the apps, the install command again with `--hub`, or a direct deploy. The hub's self-update swaps `personad`, `persona-hub` and `persona-manager` together, and rolls them back by itself when the new version doesn't start ([hub-update.md](hub-update.md)). The install command and a direct deploy install the three together too, on the computer that runs the hub. The install command also runs `hub setup` again, which keeps an existing install's mode and says how to switch. On Linux that rerun also moves the hub's service to `persona-hub run` and restarts it, and says so (on a Mac the hub and the built-in manager stay on `personad` for now, and setup says that); the automatic update and a direct deploy leave the service on `personad` until setup runs ([server.md](../server/server.md) ("Programs")).
+Update as usual: the automatic update, **Update now** in the apps, the install command again with `--hub`, or a direct deploy. The hub's self-update swaps `personad`, `persona-hub` and `persona-manager` together, and rolls them back by itself when the new version doesn't start ([hub-update.md](hub-update.md)). The install command and a direct deploy install the three together too, on the computer that runs the hub. The install command also runs `hub setup` again, which keeps an existing install's mode and says how to switch. On Linux that rerun also moves the hub's service to `persona-hub run` and restarts it, and says so (on a Mac whose agents already run `personad`, they stay on it, and setup says that: Full Disk Access lists `personad`, and moving would need another program added there); the automatic update and a direct deploy leave the service on `personad` until setup runs ([server.md](../server/server.md) ("Programs")).
 
 **Check:**
 
@@ -200,7 +205,7 @@ Setup checks first that the service can be installed, and changes nothing when i
 1. sets `assistant.mode` to `service`;
 2. restarts the hub's service, moved to `persona-hub run` on Linux if it still ran `personad`;
 3. binds the built-in manager with a one-time code, passed in the environment and never on a command line;
-4. installs its service: on Linux `persona-manager-assistant.service`, running `persona-manager assistant`; on a Mac the launchd agent `com.persona.manager.assistant`, running `personad assistant`;
+4. installs its service: on Linux `persona-manager-assistant.service`, running `persona-manager assistant`; on a Mac the launchd agent `com.persona.manager.assistant`, running `personad assistant` while the hub's agent runs `personad` (an installed Mac), else `persona-manager assistant`;
 5. waits up to 90 seconds for it on the hub's bus.
 
 Without `--json` it prints one line per step.
@@ -267,7 +272,7 @@ Instead of setup, with the same result:
 ### Going back to a build from before the split
 
 1. Go back to child mode (above). A build from before the split doesn't start a service-mode built-in manager, and nothing else would.
-2. Put the hub's service back on `personad`, with this build still in place: `PERSONA_SPLIT_PROGRAMS=0 "$PD" hub setup` (Linux; a Mac's agent runs `personad` already). A build from before the split has no `persona-hub` to run.
+2. Put the hub's service back on `personad`, with this build still in place: `PERSONA_SPLIT_PROGRAMS=0 "$PD" hub setup` (on a Mac installed before the split the agent runs `personad` already). A build from before the split has no `persona-hub` to run.
 3. Put `bin/` back (step 1's way back) and restart the hub's service.
 
 **Check:** `expect '"online":true'`, and `managers` shows one line. The build from just before the split already has the built-in manager's own database and runs on it. An older build, from before that database, finds the manager's data only as it was when it moved: see the known limits. Restore the databases only when the older build doesn't start.
@@ -384,7 +389,7 @@ Whatever the type, the upgrade is done when all of these hold:
 ## Known limits
 
 - **Nothing switches by itself.** Existing installs stay in child mode until switched, and child mode stays supported.
-- **Some services stay on `personad`.** Setup on Linux and the image move the hub and the built-in manager to `persona-hub` and `persona-manager`, but a Mac's agents (until a later change moves them together with the node of the hub's computer), a service under the former name, the managers made in the app, and anything run with `PERSONA_SPLIT_PROGRAMS=0` (Linux and Docker) keep `personad`. The node of the hub's computer runs as `personad` too ([server.md](../server/server.md) ("Programs")).
+- **Some services stay on `personad`.** Setup (on Linux and on a new Mac) and the image move the hub and the built-in manager to `persona-hub` and `persona-manager`, but a Mac's agents that already ran `personad`, a service under the former name, the managers made in the app, and anything run with `PERSONA_SPLIT_PROGRAMS=0` keep `personad`. The node of the hub's computer runs as `personad` too ([server.md](../server/server.md) ("Programs")).
 - **The first update that brings `persona-hub` and `persona-manager`:** if it rolls back, only `personad` goes back, because the old watchdog doesn't know the two. They stay behind, don't match the hub's version, and aren't started until the next update. The install command installs the three on the computer that runs the hub; a release without the two (from before the split) leaves them as they were, at another version than `personad`. When a service runs one of them, neither the install command nor the hub's self-update installs such a release ([hub-update.md](hub-update.md) ("Programs swapped together with personad")).
 - **A service left installed after going back to child mode** waits, refused by the hub, instead of running next to its child. Short overlaps remain while a refused service shuts down and a child starts. Remove it with `manager uninstall --builtin`.
 - **One built-in manager per data directory.** A second one exits 2, kept out by a lock on Linux and macOS. In Docker, if the hub's container still runs its own (no `PERSONA_BUILTIN_MANAGER: separate`) while a manager container runs, one of them keeps exiting 2 and trying again.
@@ -397,3 +402,13 @@ Whatever the type, the upgrade is done when all of these hold:
   - The programs get the hub's shutdown budget and a second more to stop: 9 seconds by default. A longer `shutdown_timeout_seconds` needs a longer `stop_grace_period` in compose, and the supervisor reads it when the container starts.
   - With Docker Compose 2.39, `compose.yaml`'s `image:` line also needs the image variable under its former name set in `.env`, not only `PERSONA_IMAGE`.
 - **No service manager, and Windows:** the built-in manager's service needs a systemd user instance (Linux) or launchd (macOS). Elsewhere the hub keeps its child, or you run the built-in manager yourself (above). Windows computers (Persona Link and their nodes) are not affected by the split.
+
+### The move, its backups and its warnings
+
+- **Upgrading**: the first time the built-in manager starts with this version it copies `lark`, `lark_gate`, `connector_gate`, `github`, `imessage`, `google`, `microsoft`, `bots`, `extensions`, `plugins`, `trusted_extension_markets`, `usage`, `sent_ledger_days`, `sent_recall_hours`, `agents`, `kb`, `ai`, `inbox`, `hook_timeout_minutes` and four keys of `assistant` (`owner`, `notes`, `machine`, `launcher`; the rest of `assistant` stays the hub's) out of `hub.json` into its `manager.json`, once: `moved_from_hub_json` in `manager.json` records which sections it took over and when, and `hub.json.before-manager-json-<time>` beside it (0600) is a copy of those sections as `hub.json` had them (only those: the hub's token and database password stay out of the manager's directory; any whole copy an earlier build left in that directory is cut down to the manager's sections at the next start that reads the marker: while a broken marker or a `manager.json` that doesn't read keeps the manager from starting, old copies are not cut down yet). A section `manager.json` already has keeps its value there, and when `hub.json`'s differs the manager says so at start (`configuration: …: hub.json's copy differs …`); a section `hub.json` doesn't have isn't recorded, so if one appears there later (an older build switched back wrote it) the next start moves it too. The same goes for sections added to the list later: a manager that moved the connector sections with an earlier build moves `agents`, `kb`, `ai`, `inbox`, `hook_timeout_minutes` and the `assistant` keys at its next start. A built-in manager the hub did not start (`assistant.external`) leaves the sections the hello used to carry out of its own move and takes them from the hub's `hub.json` instead, which the hub hands it at the handshake ([managers.md](../assistant/managers.md) ("Configuration")).
+
+- **Switching a manager made in the app back to an older build**: the older build reads its sections from a `hub.json` in that manager's directory, not from `manager.json`, so what was moved or changed since is not seen there. Its `personad manager join` and `install` rewrite `manager.json` whole, keeping only who the manager is, so the sections and the marker are gone when this version runs again: copy `manager.json` aside before running either on an older build, and put its sections back afterwards (the `hub.json.before-manager-json-*` copies have them only as they were when they moved, and a manager that never had a `hub.json` has none). The older `personad manager run` and `status` also count `managers/assistant` (the built-in manager's directory) as a manager made in the app: give `--dir` to pick the manager.
+
+- **Switching back to the build just before this one** (the one that knew only the connector sections' move): its clean-up of the move's copies keeps only whole sections, so it cuts the `assistant` keys out of this version's copies. Nothing is lost (`hub.json` and `manager.json` still have them), but this version then says at start that `hub.json`'s `assistant.*` changed after they moved, until `hub.json`'s `assistant` keys are removed.
+
+`hub.json` itself is not changed, so an older build switched back still finds what it read before; changes made after the move (in the app's admin pages or by hand in `manager.json`) are in `manager.json` only, and the older build does not see them. Nothing reads `hub.json`'s copies any more: when one of them is edited by hand after the move, the manager says at start (`configuration: hub.json's … changed after they moved …`) that the change belongs in `manager.json`. They can be deleted from `hub.json` once no older build will run.

@@ -17,7 +17,7 @@ import (
 func (n *Node) editQueue(ctx context.Context, id string, keep []int) ([]string, error) {
 	pane, err := n.paneFor(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, n.paneless(id, "queue_edit_unsupported", "its queue is on its own screen, in no pane Persona can type in", err)
 	}
 	p := n.transcriptPath(id)
 	if p == "" {
@@ -55,43 +55,77 @@ func (n *Node) editQueue(ctx context.Context, id string, keep []int) ([]string, 
 	return queue, nil
 }
 
-// sendNowHint is what Claude Code (2.1.31x) shows under a queued message: its own "send now" (#6088).
-const sendNowHint = "ctrl+x ctrl+s to send now"
+// paneless is a queue call's error when paneFor found no pane: a refusal with code for a session a claude outside
+// Persona's panes has open in none (Claude's desktop app, a background session), whose queued messages still go in
+// order at its next step (#12789); err itself for any other session, such as one no claude has open.
+func (n *Node) paneless(id, code, why string, err error) error {
+	if c, ok := n.outsideClaude(id); ok && outsidePane(c) == "" {
+		return refusal(code, why, nil)
+	}
+	return err
+}
 
-// offersSendNow: the screen shows a queued message with Claude Code's send-now beside it.
+// offersSendNow: the screen shows a queued message with a send-now Persona knows how to press (sendNowOffer,
+// sendnow_hint.go).
 func offersSendNow(screen string) bool {
-	return strings.Contains(strings.Join(strings.Fields(screen), " "), sendNowHint)
+	_, keys := sendNowOffer(screen)
+	return keys != nil
 }
 
 // sendNowWait is how long the node looks for the send-now hint to go once the key is pressed.
 var sendNowWait = 3 * time.Second
 
-// sendQueuedNow gives the agent what waits in Claude Code's queue now (#6088), with Claude Code's own send-now (ctrl+x
-// ctrl+s): a command the agent runs moves to the background and goes on, a reply it is writing is asked again with the
-// message (measured on 2.1.319; Esc would stop the command). Pressed only while the screen offers it: that is the queue
-// right now (the transcript says a message was taken about a second late, and a key pressed then would hit a turn that
-// already has it), and an older Claude without it offers nothing.
+// sendNowScrollWait is how long the node waits for a scrolled-up Claude Code to be back at its end.
+var sendNowScrollWait = time.Second
+
+// sendQueuedNow gives the agent what waits in Claude Code's queue now (#6088), with Claude Code's own send-now, the keys
+// its hint names: a command the agent runs moves to the background and goes on, a reply it is writing is asked again
+// with the message (measured on 2.1.319, 2.1.311 and 2.1.321; Esc would stop the command). Pressed only while the
+// screen offers it: that is the queue right now (the transcript says a message was taken about a second late, and a key
+// pressed then would hit a turn that already has it), and an older Claude without it offers nothing.
 func (n *Node) sendQueuedNow(ctx context.Context, id string) error {
 	if a, ok := n.agent(id); ok && a.Agent != "claude" {
 		return refusal("send_now_unsupported", "only Claude Code can send queued messages now", nil)
 	}
 	pane, err := n.paneFor(ctx, id)
 	if err != nil {
-		return err
+		return n.paneless(id, "send_now_unsupported", "its send-now is a key on its own screen, in no pane Persona can press it in", err)
 	}
 	screen, err := n.readPane(ctx, pane, "visible", 80)
 	if err != nil {
 		return err
 	}
-	if !offersSendNow(screen) {
+	// A fullscreen Claude Code scrolled up shows older lines, with the queued message and its hint off screen (#4537):
+	// back to the end with its own scroll key, which sends nothing, and the hint is read there.
+	if jump, ok := scrolledUp(screen); ok && n.sendKeys(ctx, pane, jump...) == nil {
+		for deadline := time.Now().Add(sendNowScrollWait); time.Now().Before(deadline); {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(100 * time.Millisecond):
+			}
+			if s, err := n.readPane(ctx, pane, "visible", 80); err == nil {
+				screen = s
+				if _, still := scrolledUp(s); !still {
+					break
+				}
+			}
+		}
+	}
+	hint, keys := sendNowOffer(screen)
+	if keys == nil {
+		// Something is queued but its hint is not one Persona can press: nothing pressed, and no guess at the keys.
+		if hint != "" {
+			return refusal("send_now_unrecognized", fmt.Sprintf("the screen offers send-now as %q, keys Persona cannot press", hint), nil)
+		}
 		if p := n.transcriptPath(id); p != "" {
 			if st, err := os.Stat(p); err == nil && len(n.meta(p, st).queue) > 0 {
-				return refusal("send_now_unsupported", "this Claude Code shows no send-now for its queued messages (update it)", nil)
+				return refusal("send_now_unrecognized", "messages are queued but the screen shows no send-now hint Persona knows", nil)
 			}
 		}
 		return refusal("nothing_queued", "nothing is queued for the agent any more", nil)
 	}
-	if err := n.sendKeys(ctx, pane, "ctrl+x", "ctrl+s"); err != nil {
+	if err := n.sendKeys(ctx, pane, keys...); err != nil {
 		return err
 	}
 	for deadline := time.Now().Add(sendNowWait); time.Now().Before(deadline); {

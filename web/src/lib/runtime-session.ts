@@ -1,7 +1,7 @@
 // Complete metadata for one active chat. List projection/cursors never become chat detail state.
 import { useEffect, useState } from "react";
 import { api, ApiError, errorText, sessionPath } from "./api";
-import { applyCompleteSessions, getSession, getState, onHubEvent, useStore } from "./store";
+import { applyCompleteSessions, getSession, getState, markConversationDeleted, onHubEvent, subscribe, useStore } from "./store";
 import { SESSIONS_LOOKUP_FEATURE } from "./runtime-list";
 import type { ListPage } from "./session-list";
 import type { Session } from "./types";
@@ -10,6 +10,11 @@ import { t } from "../i18n";
 export class UnsupportedSessionLookup extends Error {}
 
 export async function exactSession(mid: string, sid: string, signal?: AbortSignal): Promise<Session | undefined> {
+  return (await exactLookup(mid, sid, signal)).row;
+}
+
+/** exactSession's row, and the revision of the index it was read at. */
+async function exactLookup(mid: string, sid: string, signal?: AbortSignal): Promise<{ row: Session | undefined; revision: string }> {
   const params = new URLSearchParams({ summary: "0", limit: "50", machine_id: mid, session_id: sid });
   let page: ListPage<Session>;
   try { page = await api<ListPage<Session>>(`/sessions?${params}`, { signal }); }
@@ -25,10 +30,21 @@ export async function exactSession(mid: string, sid: string, signal?: AbortSigna
   }
   const row = page.sessions[0];
   if (row && (row.machine_id !== mid || row.session_id !== sid || typeof row.waiting === "boolean")) throw new UnsupportedSessionLookup(t("runtime-session.invalid_lookup"));
-  return row;
+  return { row, revision: page.revision };
 }
 
-export interface DetailState { loading: boolean; error: string; missing: boolean; legacy: boolean }
+/** A `sessions_list` hint; `since` and `changed` only from a hub that was asked for them (SESSIONS_LIST_CHANGES_FEATURE). */
+export interface ListHint { revision?: unknown; since?: unknown; changed?: unknown }
+
+/** `ready`: an answer (the full row, or the legacy route's) arrived for this chat at least once. */
+export interface DetailState { loading: boolean; error: string; missing: boolean; legacy: boolean; ready?: boolean }
+
+/** The wait before a failed read's quiet retry: 2 s, doubling, then every minute. */
+const detailRetryMs = (failures: number) => Math.min(60_000, 2_000 * 2 ** Math.max(0, failures - 1));
+
+/** Reads again after the exact lookup found no row: a runtime that is reconnecting or restarting lists its sessions
+ *  again within moments. 2 s doubling, five times (about a minute), then only a list hint, a reconnect or Retry reads. */
+export const MISSING_RETRIES = 5;
 
 /** One request in flight, one trailing invalidation, and no writes from a prior chat/login generation. */
 export class SessionDetailLoader {
@@ -38,6 +54,15 @@ export class SessionDetailLoader {
   private queued = false;
   private controller?: AbortController;
   private legacy = false;
+  private last = "";
+  private gone = false;
+  private failures = 0;
+  /** Lookups in a row that found no row (MISSING_RETRIES). */
+  private misses = 0;
+  private ready = false;
+  private retryTimer?: ReturnType<typeof setTimeout>;
+  /** The index revision the exact lookup's last answer stands at: "" when there is none to build on. */
+  private at = "";
   constructor(
     private mid: string,
     private sid: string,
@@ -54,16 +79,25 @@ export class SessionDetailLoader {
       do {
         if (this.stopped || generation !== this.generation) return;
         this.queued = false;
+        this.at = "";
         this.controller = new AbortController();
-        this.emit({ loading: true, error: "", missing: false, legacy: this.legacy || !this.lookup() });
+        // an earlier failure's words, or "no such session", stay until an answer replaces them
+        this.emit({ loading: true, error: this.last, missing: this.gone, legacy: this.legacy || !this.lookup(), ready: this.ready });
         if (this.stopped || generation !== this.generation) return;
         try {
           if (this.lookup() && !this.legacy) {
-            const row = await exactSession(this.mid, this.sid, this.controller.signal);
+            const { row, revision } = await exactLookup(this.mid, this.sid, this.controller.signal);
             if (this.stopped || generation !== this.generation) return;
             if (row) this.commit(row);
             if (this.stopped || generation !== this.generation) return;
-            this.emit({ loading: false, error: row ? "" : t("runtime-session.missing"), missing: !row, legacy: false });
+            this.answered();
+            this.at = revision;
+            this.gone = !row;
+            this.last = row ? "" : t("runtime-session.missing");
+            if (row) this.ready = true;
+            this.emit({ loading: false, error: this.last, missing: this.gone, legacy: false, ready: this.ready });
+            if (row) this.misses = 0;
+            else this.missed();
           } else {
             await this.readLegacy(generation);
           }
@@ -72,9 +106,9 @@ export class SessionDetailLoader {
           if (error instanceof UnsupportedSessionLookup) {
             this.legacy = true;
             await this.readLegacy(generation).catch((failure) => {
-              if (!this.stopped && generation === this.generation) this.emit({ loading: false, error: errorText(failure), missing: false, legacy: true });
+              if (!this.stopped && generation === this.generation) this.failed(failure, true);
             });
-          } else this.emit({ loading: false, error: errorText(error), missing: false, legacy: this.legacy || !this.lookup() });
+          } else this.failed(error, this.legacy || !this.lookup());
         }
       } while (this.queued && !this.stopped && generation === this.generation);
     }).finally(() => { if (this.inFlight === task) this.inFlight = undefined; });
@@ -84,16 +118,68 @@ export class SessionDetailLoader {
   private async readLegacy(generation: number) {
     const cached = this.cache();
     if (cached && typeof cached.waiting !== "boolean") {
-      this.emit({ loading: false, error: "", missing: false, legacy: true });
+      this.answered();
+      this.ready = true;
+      this.emit({ loading: false, error: "", missing: false, legacy: true, ready: true });
       return;
     }
     // Older/unlisted chats already use this configuration route and the transcript. Never refetch /sessions here.
     await api(`${sessionPath(this.mid, this.sid)}/info`, { signal: this.controller?.signal });
-    if (!this.stopped && generation === this.generation) this.emit({ loading: false, error: cached ? "" : t("runtime-session.metadata_unavailable"), missing: false, legacy: true });
+    if (this.stopped || generation !== this.generation) return;
+    this.answered();
+    this.ready = true;
+    this.emit({ loading: false, error: cached ? "" : t("runtime-session.metadata_unavailable"), missing: false, legacy: true, ready: true });
+  }
+  private answered() {
+    this.last = "";
+    this.gone = false;
+    this.failures = 0;
+    clearTimeout(this.retryTimer);
+  }
+  /** No row this time: the chat may be back in a moment (a runtime reconnecting), so ask again a few times. */
+  private missed() {
+    if (this.misses >= MISSING_RETRIES) return;
+    this.retryTimer = setTimeout(() => void this.load(), detailRetryMs(++this.misses));
+  }
+  private failed(error: unknown, legacy: boolean) {
+    if (error instanceof ApiError && error.code === "conversation_deleted") {
+      markConversationDeleted(this.mid, this.sid);
+      this.stop();
+      return;
+    }
+    this.last = errorText(error);
+    this.emit({ loading: false, error: this.last, missing: this.gone, legacy, ready: this.ready });
+    clearTimeout(this.retryTimer);
+    this.retryTimer = setTimeout(() => void this.load(), detailRetryMs(++this.failures));
+  }
+  /** A `sessions_list` hint: read again, unless it starts where the last answer stands (`since`) and its `changed` does
+   *  not name this chat. Then another session changed, the answer still holds, and it stands at the hint's revision
+   *  (#6685). A hint without them (an older hub, a change too big to list), a gap, or a read still out reads. */
+  hint(msg?: ListHint) {
+    if (!this.inFlight && this.at !== "" && msg?.since === this.at && typeof msg.revision === "string" && Array.isArray(msg.changed)
+      && !msg.changed.some((id) => Array.isArray(id) && id[0] === this.mid && id[1] === this.sid)) {
+      this.at = msg.revision;
+      return;
+    }
+    void this.load();
+  }
+  /** The person's Retry: read now, and give a chat that is still missing its few quiet retries again. */
+  retry() {
+    if (this.stopped) return Promise.resolve();
+    clearTimeout(this.retryTimer);
+    this.misses = 0;
+    return this.load();
+  }
+  /** Read without the exact lookup: an older hub, or one that turned the lookup down. */
+  get onLegacy() {
+    return this.legacy || !this.lookup();
   }
   restart() {
     if (this.stopped) return;
     this.generation++;
+    clearTimeout(this.retryTimer);
+    this.failures = 0;
+    this.misses = 0;
     this.controller?.abort();
     this.inFlight = undefined;
     this.queued = false;
@@ -103,6 +189,7 @@ export class SessionDetailLoader {
   stop() {
     this.stopped = true;
     this.generation++;
+    clearTimeout(this.retryTimer);
     this.queued = false;
     this.controller?.abort();
   }
@@ -119,14 +206,26 @@ export function useRuntimeSession(mid: string, sid: string, enabled = true) {
     const loader = new SessionDetailLoader(mid, sid, () => getState().features.includes(SESSIONS_LOOKUP_FEATURE), () => getSession(mid, sid), (row) => applyCompleteSessions([row]), setDetail);
     let live = true;
     const read = () => { if (live && document.visibilityState !== "hidden") void loader.load(); };
-    setRetry(() => read);
+    setRetry(() => () => { if (live) void loader.retry(); });
     read();
     const offHello = onHubEvent("hello", () => { if (live && document.visibilityState !== "hidden") void loader.restart(); });
-    const offList = onHubEvent("sessions_list", read);
+    const offList = onHubEvent("sessions_list", (msg) => { if (live && document.visibilityState !== "hidden") loader.hint(msg as ListHint); });
+    // Without the exact lookup only the list carries this chat's row, and on a cold open it can land after the first read
+    // (an older hub pushes `sessions`, not `sessions_list`). Read once more when it does, so the "no details" notice goes
+    // as the sidebar shows the chat (#2450). Watched only until the row is there; the list itself is never asked for.
+    let offRow: () => void = () => {};
+    if (!getSession(mid, sid)) {
+      offRow = subscribe(() => {
+        if (!getSession(mid, sid)) return;
+        offRow();
+        if (loader.onLegacy) read();
+      });
+    }
     const visible = () => { if (document.visibilityState === "visible") read(); };
     document.addEventListener("visibilitychange", visible);
-    return () => { live = false; loader.stop(); offHello(); offList(); document.removeEventListener("visibilitychange", visible); };
+    return () => { live = false; loader.stop(); offHello(); offList(); offRow(); document.removeEventListener("visibilitychange", visible); };
   }, [mid, sid, lookup, online, enabled]);
   const unavailable = detail.missing ? { ...session, machine_id: mid, session_id: sid, title: session?.title ?? sid, cwd: session?.cwd ?? "", status: "idle", state: "unknown", read_only_reason: detail.error } as Session : session;
-  return { session: unavailable, detail, retry };
+  // `known`: this browser had a row for it, so a chat the hub no longer has still has something of it to show
+  return { session: unavailable, detail, retry, known: Boolean(session) };
 }

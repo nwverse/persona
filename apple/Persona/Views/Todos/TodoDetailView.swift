@@ -5,7 +5,15 @@ struct TodoDetailView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.tabIsActive) private var inFront
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.shownAsSheet) private var shownAsSheet
+    /// An Agent this page opens, pushed over it with Back to it (#12006).
+    @State private var pushedAgent: SessionKey?
     var todoID: String
+    /// In an existing value-based stack, lineage buttons append here. Sheet presentations leave it nil and use their
+    /// own NavigationLink destination below.
+    var openDetail: ((TodoDetailRoute) -> Void)? = nil
+    /// Not `openAgent`: a stored property's name stays in the Release binary, and that is a DEBUG launch switch (#8306).
+    var onOpenAgent: ((SessionKey) -> Void)? = nil
 
     @State private var store = TodoStore.shared
     @State private var text = TodoEditorText()
@@ -30,6 +38,19 @@ struct TodoDetailView: View {
         store.todo(id: todoID)
     }
 
+    /// Marks the to-do seen when it is in Just finished and the hub keeps seen marks; a failure leaves it there.
+    private func seeIfJustFinished() async {
+        guard let todo = currentTodo, model.hubFeatures.contains(TodoSeen.feature) else { return }
+        // no restores read (UserDefaults, P2): a restore only takes a to-do out of Shelved, never into Just finished; the
+        // sessions as they are now, not watched (an action, AllSessionsReadersTests)
+        let lookup = TodosLogic.makeSessionLookup(model.sessionsNow)
+        let t = TodoTriageLogic.triage(todo, lookup: lookup, now: .now,
+                                       superseded: TodoTriageLogic.supersededFailedStarts(store.todos).contains(todo.id),
+                                       calendar: TodoCalendar.userCalendar)
+        guard t.section == .justDone else { return }
+        try? await store.setSeen(id: todo.id, true, after: t.last)
+    }
+
     var body: some View {
         Group {
             if let todo = currentTodo {
@@ -43,6 +64,9 @@ struct TodoDetailView: View {
         }
         .detailTitle(currentTodo?.title ?? String(localized: "To-Do Details"))
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(for: TodoDetailRoute.self) { route in
+            TodoDetailView(todoID: route.id, openDetail: openDetail, onOpenAgent: onOpenAgent)
+        }
         .pageToolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
@@ -56,9 +80,12 @@ struct TodoDetailView: View {
                 }
             }
         }
+        .pushedAgentChat($pushedAgent)
         .sheet(isPresented: $showHandoff) {
             if let todo = currentTodo {
-                TodoHandoffSheet(todo: todo)
+                // The Agent it is handed to is pushed over this page; with nothing to push on, it opens as before (#12006).
+                TodoHandoffSheet(todo: todo, onOpenAgent: onOpenAgent == nil && pageAgentPush(inSheet: shownAsSheet, { _ in }) == nil
+                                 ? nil : { openAgent($0) })
             }
         }
         .sheet(item: $decisions.form) { form in
@@ -103,6 +130,11 @@ struct TodoDetailView: View {
             if !focused { commitTitle() }
         }
         .onDisappear { commitTitle() }
+        #if !os(macOS)
+        // Opening a Just finished to-do is seeing it (#5707): it is filed under Done, where the list has it on the way
+        // back. Nothing is said: the user did not ask for it. Not on the Mac, whose list stays beside the page.
+        .task(id: currentTodo != nil) { await seeIfJustFinished() }
+        #endif
         // A tab switch hides the page without onDisappear: the mic must not go on listening behind it.
         .onTabVisibility(appear: {}, disappear: stopDictation)
         .onAppear {
@@ -137,8 +169,9 @@ struct TodoDetailView: View {
         }
     }
 
+    /// Ends dictation, and a start still asking for permission with it (#3407).
     private func stopDictation() {
-        if dictation.isListening { dictation.stop() }
+        dictation.stop()
     }
 
     /// Deletes the todo and leaves its page; a failed delete keeps the page and shows the error.
@@ -171,24 +204,50 @@ struct TodoDetailView: View {
                         .focused($titleFocused)
                         .onSubmit { commitTitle() }
 
-                    HStack(spacing: Theme.Space.sm) {
-                        Chip(text: todo.statusLabel(status), look: .tone(status.todoTone))
-                        Text("·")
-                            .foregroundStyle(.secondary)
-                        Text("\(activeAgents.count) agents")
-                            .font(Theme.Font.caption)
-                            .foregroundStyle(.secondary)
-                        if let d = todo.createdAt {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: Theme.Space.sm) {
+                            Chip(text: todo.statusLabel(status), look: .tone(todo.shownState(status).todoTone))
                             Text("·")
                                 .foregroundStyle(.secondary)
-                            Text("Created \(Fmt.relative(d))")
+                            Text("\(activeAgents.count) agents")
                                 .font(Theme.Font.caption)
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            if let d = todo.createdAt {
+                                Text("·")
+                                    .foregroundStyle(.secondary)
+                                Text("Created \(Fmt.relative(d))")
+                                    .font(Theme.Font.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                        .fixedSize()
+                        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                            Chip(text: todo.statusLabel(status), look: .tone(todo.shownState(status).todoTone))
+                            Text("\(activeAgents.count) agents")
+                                .font(Theme.Font.caption)
+                                .foregroundStyle(.secondary)
+                            if let d = todo.createdAt {
+                                Text("Created \(Fmt.relative(d))")
+                                    .font(Theme.Font.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
 
+                    if let reason = todo.cancellationReason, !reason.isEmpty {
+                        Text(String(localized: "Cancelled: \(reason) [Todo Detail]"))
+                            .font(Theme.Font.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    // Nobody is working on it (#3618): under its state.
+                    OrphanedLine(todo: todo, state: status)
+
                     if todo.autoDone {
-                        // The hub closed it (docs/assistant/todos.md「自动完成」): say why, and how to undo it.
+                        // The hub closed it (docs/assistant/todos.md「Automatic completion」): say why, and how to undo it.
                         Text(todo.autoDoneReason.map { String(localized: "The agent stopped and the work looked finished, so it was marked done: \($0). If it isn't, tap “Reopen”.") }
                              ?? String(localized: "The agent stopped and the work looked finished, so it was marked done. If it isn't, tap “Reopen”."))
                             .font(Theme.Font.caption)
@@ -204,6 +263,10 @@ struct TodoDetailView: View {
             if todo.supervision != nil {
                 // A task the main conversation supervises (#3124): its criteria as the latest review found them.
                 Section { ReviewChecklist(todo: todo).padding(.vertical, Theme.Space.xs) }
+            }
+
+            if let lineage = todo.lineage, !lineage.isEmpty {
+                TodoLineageSection(steps: lineage, openDetail: openDetail)
             }
 
             stageSection(todo)
@@ -251,6 +314,7 @@ struct TodoDetailView: View {
 
                     if isEditingNotes {
                         TextField(String(localized: "To-do notes"), text: $editingNotesText, axis: .vertical)
+                            .readingContent()
                             .lineLimit(3...8)
                             .textFieldStyle(.plain)
                             .accessibilityIdentifier("todo.notes.field")
@@ -258,6 +322,7 @@ struct TodoDetailView: View {
                             .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
                     } else if !text.notes.isEmpty {
                         Text(text.notes)
+                            .readingContent()
                             .font(Theme.Font.body)
                             .foregroundStyle(Color.primary)
                     } else {
@@ -279,7 +344,8 @@ struct TodoDetailView: View {
 
             Section {
                 if activeAgents.isEmpty {
-                    Text("No agents are running. Tap “Hand to Agent” below to assign one.")
+                    Text(todo.isDone ? String(localized: "No agents on it now. Reopen it to hand it to an agent.")
+                                     : String(localized: "No agents are running. Tap “Hand to Agent” below to assign one."))
                         .font(Theme.Font.secondary)
                         .foregroundStyle(.secondary)
                         .padding(.vertical, Theme.Space.xs)
@@ -309,7 +375,9 @@ struct TodoDetailView: View {
             }
         }
         .themedPage()
-        .safeAreaInset(edge: .bottom) {
+        // The buttons float over the notes, which scroll on behind them and blur under them, with no band of page
+        // color (on one they sat on a white strip, #9008).
+        .floatingFooter(over: Theme.groupedPage) {
             bottomBar(todo)
         }
         #if DEBUG
@@ -335,7 +403,7 @@ struct TodoDetailView: View {
             Section {
                 VStack(alignment: .leading, spacing: Theme.Space.m) {
                     if let stage {
-                        TodoStageBar(stage: stage)
+                        TodoStageBar(stage: stage, done: todo.stageDone)
                     }
                     if let pr {
                         Button { link = LinkTarget(url: pr) } label: {
@@ -376,8 +444,7 @@ struct TodoDetailView: View {
         }()
 
         return Button {
-            dismiss()
-            openTodoAgentChat(key, in: model)
+            openAgent(key)
         } label: {
             HStack(alignment: .top, spacing: Theme.Space.m) {
                 if isFailed {
@@ -463,44 +530,148 @@ struct TodoDetailView: View {
     }
 
     private func bottomBar(_ todo: TodoItem) -> some View {
-        HStack(spacing: Theme.Space.m) {
+        // Side by side while both labels fit whole, else one above the other, Hand to Agent first (#6151): side by side
+        // they were cut to "Hand to A…" from xxLarge.
+        // Two pills floating over the notes, the Sidebar layout's foot's (`floatingPill`, #4206): 46 pt as its New
+        // Chat, apart from each other, with nothing behind them but the notes' blur. On a wide page (an iPad) the row
+        // is no wider than a readable page, centered, as the Inbox's hand-off bar. At the large control size across
+        // the whole page they were 61 pt tall and on an iPad 380 pt wide each, on a white strip (#9008).
+        StackingButtonRow(spacing: Theme.Space.m, stackedSpacing: Theme.Space.s) {
+            bottomButtons(todo)
+        }
+        .frame(maxWidth: Theme.Size.readable)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, Theme.Space.page)
+        .padding(.vertical, Theme.Space.s)
+    }
+
+    /// Hand to Agent the Theme Color's pill, the one solid button; Done / Reopen the glass one. Each label is measured
+    /// at its full size (`minimumScale: 1`): with the row's 0.8 allowance "Hand to Agent" stayed beside Done at
+    /// xxxLarge, cut to "Hand to Age…" instead of shrunk (#9008).
+    @ViewBuilder private func bottomButtons(_ todo: TodoItem) -> some View {
+        // A done to-do can't be handed over (the hub refuses, #1856): Reopen comes first.
+        if !todo.isDone {
             Button {
                 showHandoff = true
             } label: {
                 HStack(spacing: Theme.Space.xs) {
                     ThemedIcon(Theme.Icon.handToAI)
-                    Text("Hand to Agent").lineLimit(1).minimumScaleFactor(0.8)
+                    // Its own string (#6151): the sheet's title keeps the longer Japanese, which the half-width button cut off.
+                    Text("Hand to Agent [To-do Page Button]").buttonLabelLine(minimumScale: 1)
                 }
-                .font(Theme.Font.heading)
-                .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
+                .floatingPill(prominent: true)
             }
-            .themedButton(prominent: true)
-            .controlSize(.large)
-
-            Button {
-                store.toggleDone(todo)
-            } label: {
-                HStack(spacing: Theme.Space.xs) {
-                    ThemedIcon(todo.isDone ? Theme.Icon.undo : Theme.Icon.done)
-                    Text(todo.isDone ? String(localized: "Reopen") : String(localized: "Done [Extension System Presentation c0b3fb]")).lineLimit(1).minimumScaleFactor(0.8)
-                }
-                .font(Theme.Font.heading)
-                .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
-            }
-            .themedButton(prominent: false)
-            .controlSize(.large)
+            .buttonStyle(.plain)
+            .accessibilityShowsLargeContentViewer()
+            .accessibilityIdentifier("todo.handToAgent")
         }
-        .padding(.horizontal, Theme.Space.page)
-        .padding(.vertical, Theme.Space.s)
-        .background(Theme.pageBackground)
+
+        Button {
+            store.toggleDone(todo)
+        } label: {
+            HStack(spacing: Theme.Space.xs) {
+                ThemedIcon(todo.isDone ? Theme.Icon.undo : Theme.Icon.done)
+                Text(todo.isDone ? String(localized: "Reopen") : String(localized: "Done [Extension System Presentation c0b3fb]")).buttonLabelLine(minimumScale: 1)
+            }
+            .floatingPill(prominent: false)
+        }
+        .buttonStyle(.plain)
+        .accessibilityShowsLargeContentViewer()
+        .accessibilityIdentifier("todo.toggleDone")
+    }
+}
+
+/// The two directions of a task hand-off; each non-current card opens in the same detail stack (#5732).
+private struct TodoLineageSection: View {
+    let steps: [TodoLineageStep]
+    let openDetail: ((TodoDetailRoute) -> Void)?
+
+    var body: some View {
+        Section(String(localized: "Who Worked on It [Todo Detail]")) {
+            ForEach(steps) { step in
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    HStack(spacing: Theme.Space.s) {
+                        if step.current == true {
+                            Text(step.title ?? step.todoID)
+                                .font(Theme.Font.bodyStrong)
+                            Text(String(localized: "Current Task [Todo Detail]"))
+                                .font(Theme.Font.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            routeLink(TodoDetailRoute(id: step.todoID), identifier: "todo.lineage.open.\(step.todoID)") {
+                                Text(step.title ?? step.todoID)
+                                    .font(Theme.Font.body)
+                                    .foregroundStyle(Theme.accent)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                    if let why = step.why, !why.isEmpty {
+                        Text(why)
+                            .font(Theme.Font.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let id = step.continues {
+                        lineageLink(id: id, continues: true)
+                    }
+                    if let id = step.supersededBy {
+                        lineageLink(id: id, continues: false)
+                    }
+                }
+                .padding(.vertical, Theme.Space.xs)
+            }
+        }
+    }
+
+    private func title(_ id: String) -> String {
+        steps.first(where: { $0.todoID == id })?.title ?? id
+    }
+
+    @ViewBuilder private func lineageLink(id: String, continues: Bool) -> some View {
+        let name = title(id)
+        routeLink(TodoDetailRoute(id: id), identifier: "todo.lineage.\(continues ? "continues" : "superseded").\(id)") {
+            Text(continues
+                 ? String(localized: "Continues From \(name) [Todo Detail]")
+                 : String(localized: "Continued By \(name) [Todo Detail]"))
+                .font(Theme.Font.captionStrong)
+                .foregroundStyle(Theme.accent)
+                .lineLimit(1)
+        }
+    }
+
+    /// A button uses the path injected by the containing stack. NavigationLink is only for a sheet's own stack.
+    @ViewBuilder private func routeLink<Label: View>(_ route: TodoDetailRoute, identifier: String,
+                                                     @ViewBuilder label: () -> Label) -> some View {
+        if let openDetail {
+            Button(action: { openDetail(route) }, label: label)
+                .buttonStyle(.plain)
+                .accessibilityIdentifier(identifier)
+        } else {
+            NavigationLink(value: route, label: label)
+                .buttonStyle(.plain)
+                .accessibilityIdentifier(identifier)
+        }
+    }
+}
+
+extension TodoDetailView {
+    /// An Agent of this to-do (a row, or the one it was just handed to): pushed over this page with Back to it, a drill-down
+    /// (#12006). In a sheet (or on the Mac) the page goes and the Agent opens as before.
+    func openAgent(_ key: SessionKey) {
+        if let onOpenAgent { return onOpenAgent(key) }
+        let push = pageAgentPush(inSheet: shownAsSheet) { pushedAgent = $0 }
+        if push == nil { dismiss() }
+        openTodoAgentChat(key, in: model, push: push)
     }
 }
 
 /// Opens an Agent's chat from a todo. On Mac the todos section gives way first, as it does for every other way into a
-/// chat (`MacShellState.willOpen`); the hand-off sheet and the todo's Agent rows share this.
-@MainActor func openTodoAgentChat(_ key: SessionKey, in model: AppModel) {
+/// chat (`MacShellState.willOpen`); the hand-off sheet and the todo's Agent rows share this. `push`: the stack of the page
+/// it is opened from, which it goes on top of (`AppModel.openInPage`); nil from the sidebar.
+@MainActor func openTodoAgentChat(_ key: SessionKey, in model: AppModel, push: ((SessionKey) -> Void)? = nil) {
     #if os(macOS)
     MacShellState.shared.willOpen()
     #endif
-    model.open(key)
+    model.openInPage(key, push: push)
 }

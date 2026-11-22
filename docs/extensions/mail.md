@@ -13,8 +13,8 @@ Gmail uses "Sign In with Google" (OAuth2 + XOAUTH2) and additionally supports se
 | Inbox browsing | Paged by UID descending (`before_uid`), `limit` messages at a time; when viewing a single account the result carries `next_before_uid` (the `before_uid` of the next page). Summaries are fetched newest first in batches of 50; when this operation has less than 6 s left before the 20 s timeout, no further batch is fetched and the page ends early (`has_more` + `next_before_uid`). This keeps 163 from timing out when old mail is slow to fetch |
 | Search | Gmail uses `X-GM-RAW` (supports `from:`, `subject:`, `has:attachment`, `newer_than:7d`, etc.); other providers use `SEARCH TEXT`. When the server returns 0 results or refuses (NO / BAD), fall back to matching headers locally (`headers_only`): from `before_uid` backwards, fetch ENVELOPEs 100 at a time; every space-separated word must appear in the subject, or in the name or address of the sender or a To / Cc recipient (case-insensitive, body not checked). One page looks at most at 2000 messages and 6 s (counted from the start of this IMAP operation, including connecting, SELECT, and the server's empty search; retries after connection errors don't restart the clock; when time is up, finish the current batch and stop; at least one batch per page). If not done, `has_more`, and `next_before_uid` is where to continue (`messages` may be empty then). 163's server does no keyword search, so it relies entirely on this step |
 | Summary | Fetch only a 2048-byte body snippet instead of the whole message; the summary is the first 160 characters of the body |
-| Unified inbox | Without `account_id`, fetch every account's INBOX concurrently and merge by date descending |
-| Reading | Fetch the full text with `BODY.PEEK`; go-message parses plain text / HTML / attachment metadata; it does **not** mark the message as read |
+| Unified inbox | Without `account_id`, fetch every account's INBOX concurrently and merge by date descending. If any account fails, the whole request fails without returning partial messages; retry or query an individual account |
+| Reading | Fetch the full text with `BODY.PEEK`; go-message parses plain text / HTML / attachment metadata; it does **not** mark the message as read. A part marked `attachment` is an attachment even when its parameters don't parse, and so is a named file marked `inline` that is neither text nor an image (Apple Mail and iOS Mail send files that way); inline text and images stay part of the body, and the list's paperclip follows the same rule |
 | Attachment download | A stable ID tied to MIME order, metadata, and decoded content; reads are authorized by account, mailbox, and UID; a plain `BODY.PEEK` is decoded as a stream into a temp file, with HTTP Range support; doesn't mark as read and needs no extra IMAP extensions |
 | Read / starred | Only changes the two flags `\Seen` and `\Flagged` |
 | Sending | go-message builds the MIME, UTF-8, with Chinese subjects and names encoded per RFC 2047; supports `in_reply_to` / `references` for threading |
@@ -60,8 +60,9 @@ App                         hub                                Google
 - Credentials: `{client_id, refresh_token}` are encrypted with AES-GCM and stored in `mail_accounts.oauth_enc`; the access token is cached in memory only and refreshed 1 minute before expiry.
 - Receiving: IMAP `AUTHENTICATE XOAUTH2`; the temporary connection for Gmail search uses XOAUTH2 too.
 - **Gmail traffic goes through a proxy**: the author's hub machine can only reach a few of Google's IPv4 addresses (`imap.gmail.com` / `smtp.gmail.com` mostly resolve to 173.194.x.x,
-  and 443 / 993 / 465 / 587 all time out; HTTPS only works because it goes over IPv6). `google.proxy` in the manager's `manager.json` (`http://[user:pass@]host:port`)
+  and 443 / 993 / 465 / 587 all time out; HTTPS only works because it goes over IPv6). `google.proxy` in the manager's `manager.json` (`http://[user:pass@]host:port` CONNECT, or `socks5://[user:pass@]host:port`; SOCKS5 resolves the name at the proxy)
   sends Gmail accounts' IMAP / SMTP (HTTP CONNECT tunnel), Google token exchange, and the Gmail API all through the proxy; other providers still connect directly.
+- **Add-account guidance and errors (#9389)**: when a hub has no `google.client_id`, Gmail is added with an app password (2-Step Verification on, made at `myaccount.google.com/apppasswords`); iCloud needs an app-specific password (`account.apple.com`), like QQ / NetEase's authorization codes. The iOS form shows the steps and a link beside the password (`CodeGuide`), and a rejected login repeats them (`PasswordGuide`, `mail-preset.json`). A failed connection test tells "cannot reach the server" (timeout, DNS, TLS, refused, proxy refused) apart from a rejected login (`connect_error.go`, `mail-connect.json`): it names the hub's machine and says the password is not the problem, HTTP 400 instead of a raw 502 / 504. The proxy (`google.proxy`) only covers Gmail, takes `http://` (CONNECT) or `socks5://` and does not read `https_proxy`; a proxy per account or for other providers needs a stored setting and is a follow-up. The web and Android add forms do not show the Gmail / iCloud steps yet.
 - **Sending uses the Gmail API** (`POST gmail.googleapis.com/gmail/v1/users/me/messages/send`, raw MIME), not SMTP:
   this machine can't reach `smtp.gmail.com` (both 465 / 587 time out, tested 2026-10-25), while HTTPS to Google works; the `https://mail.google.com/` scope also covers the Gmail API
   (the Gmail API is enabled in the project). Bcc works by prepending a `Bcc:` header to the raw message, which Gmail strips on delivery; Gmail files sent mail into "Sent" itself.
@@ -114,7 +115,7 @@ the flow survives process death: the awaited `state` is stored in SharedPreferen
   If not, either add an Android / Web type client on the hub (Web needs a client secret and an https callback), or keep using app-specific passwords.
 - When the user returns from the browser directly (without authorizing), no callback within 1.5 s of returning to the page counts as cancelled.
 
-## Outlook: Sign In with Microsoft (OAuth2 + XOAUTH2, 2026-11-03)
+## Outlook: Sign In with Microsoft (OAuth2 + XOAUTH2)
 
 Personal Outlook.com / Hotmail and work or school Microsoft 365 mailboxes all use this: in the App, **Add Mail Account › Outlook**, tap "Sign In with Microsoft" →
 the system browser opens Microsoft sign-in and authorization → back to the App → the account is added, no password. It works like Gmail (previous section), with these differences:
@@ -170,7 +171,7 @@ the system browser opens Microsoft sign-in and authorization → back to the App
 | SMTP auth disabled (`5.7.139 SmtpClientAuthentication is disabled`) | Ask your admin to turn on "Authenticated SMTP" for your mailbox in the Microsoft 365 admin center; receiving is unaffected |
 | Authorization expired or revoked (`invalid_grant` on refresh: `AADSTS70008`, `50173`, MFA required again, etc.) | Tap "Sign In with Microsoft" again in the App and pick the same mailbox; the account is updated in place (ID unchanged) |
 
-## Letting Persona add it (2026-11-01)
+## Letting Persona add it
 
 The App's "Add Mail Account" page dropped "AI one-tap add" (paste some text for the model to recognize; `POST /api/v1/ai/mail-account` is gone too). Now you just tell Persona
 "add a mail account for me": the assistant adds it through `mail.accounts` of `persona_settings` (`hub/self_settings.go`, assistant only), a card on the phone asks the user for the password / authorization code,
@@ -247,9 +248,14 @@ the managers never put it in logs or error messages.
 - Each account caches one logged-in IMAP connection, closed after 10 minutes unused (swept every 30 s). That is longer than both the Inbox mail round (3 minutes) and the knowledge base mail round (6 minutes),
   so the next round reuses the previous round's login instead of redoing TCP + TLS + LOGIN every round (before #2627 it was 2 minutes, and the connection was always already closed when a round started); RFC 3501 servers' idle auto-logout is no shorter than 30 minutes.
 - A connection idle for more than 1 minute is sent `NOOP` before reuse; with no reply in 5 s it is closed and reconnected, so an idle connection silently forgotten by NAT or a firewall doesn't make the round hang the full 20 s before timing out.
+  A cached connection that already ended (the server hung up, or go-imap's reader stopped on a reply it couldn't read) is replaced without a `NOOP`, and the log says why it had ended.
 - Commands on one connection are serialized per account (IMAP's `SELECT` state is per connection; concurrent use would clash).
   Waiting in the queue uses the caller's ctx: on cancel or timeout it leaves the queue and reports `ctx.Err()`, without running or touching the connection (before #2344, abandoned requests still waited their turn, then closed the account's connection on the way out, forcing every live request behind them to reconnect). The operation's own 20 s only starts once it gets its turn, so a slow mailbox ahead doesn't eat into its time.
-- Network operations time out after 20 s; on transport-level errors (not the service's NO/BAD) the connection is dropped and retried once, to survive servers that disconnect on their own.
+- Network operations time out after 20 s. An operation logs in at most twice (#12808): when connecting fails with anything but the server's answer, or the connection ends under a step (the server hung up, a read or write failed, a reply couldn't be parsed), the connection is dropped and the operation runs once more on a new login, inside the same 20 s.
+  A timeout, a caller that gave up, a NO / BAD, or any other error on a connection that is still up is not retried.
+  go-imap completes a command as soon as its tagged answer arrives, so a server that hangs up right after answering (QQ Mail does after a keyword `UID SEARCH`) makes the *next* command fail: over TLS the bare `use of closed network connection`. A search therefore keeps the UIDs it found, and its retry only runs `SELECT` and the fetch (when `UIDVALIDITY` is unchanged); searching again would end the new connection too.
+  Every failed try writes one line: `mail: <account id>: <operation> failed at <step> (try N of 2, reconnecting | giving up): <raw error>`, plus `; the connection had ended (<why>)` when it had (go-imap's read error, or none: the server closed it). A refused login is logged when it starts or its answer changes, not on every round.
+  When the last try couldn't reach the server either, the caller gets `UnreachableError` (code `mail_unreachable`, HTTP 502, localized `mail-errors.unreachable`: the mailbox couldn't be reached even after reconnecting once, try again later), never the raw transport error; `mail_search` and `mail_read` answer it in the caller's language.
 - Account `status` (#4722): a rejected login (wrong password / authorization code, Google or Microsoft authorization revoked or expired, XOAUTH2 answered with NO) is recorded as `error`, with `error` holding the reason (truncated to 300 characters, no password); the next successful login (or signing in again to add the same mailbox) sets it back to `ok`.
   Temporary errors such as timeouts, connection failures, DNS, server busy (`UNAVAILABLE`), or token endpoint 5xx don't change the status; a NO on some command after login (folder doesn't exist) doesn't count either. It is kept in memory only, not in the database: after a hub restart it shows `ok` first, and is flagged again if the next read round (at most 3 minutes) fails.
 - All the work for a page has to fit in those 20 s (`withConnAt` hands the deadline to `listOne`, unchanged across retries): local header matching runs at most until 6 s after the operation starts, and summaries are fetched 50 per batch, with no further batch once less than 6 s remain before the deadline. A page that hits the limit ends early with `next_before_uid` instead of timing out.
@@ -276,8 +282,10 @@ download route takes.
   files 0600. `dir` must be a plain relative subfolder (`bills/2026-10`): no absolute path, `~`, `..`, hidden folders,
   backslashes, colons or control characters; it is checked before anything is fetched. Folders are created one by one and
   each must resolve inside the root, so a symlink pointing out of it is refused.
-- **File names**: the sender's name is cleaned to one plain name (path parts dropped, control characters and `:` replaced,
-  leading dots removed, cut to 200 bytes on a character boundary keeping the extension; empty becomes `attachment`).
+- **File names**: the sender's name is decoded (RFC 2047 words, RFC 2231 values in any charset, also from headers with
+  unquoted or malformed parameters that Go's MIME parser rejects), then cleaned to one plain name (path parts dropped,
+  control characters and `:` replaced, leading dots removed, cut to 200 bytes on a character boundary keeping the
+  extension; empty becomes `attachment`).
   Files are created with `O_EXCL`, so an existing file (or a symlink at that name) is never written through:
   the next free `name (2).ext` … `name (99).ext` is used instead.
 - The node writes into its own data directory, which the agent sandbox leaves readable (only its secrets are closed).

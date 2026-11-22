@@ -38,10 +38,16 @@ type Prompt struct {
 	URL      string `json:"url,omitempty"`
 	UserCode string `json:"user_code,omitempty"`
 	Interval int    `json:"interval,omitempty"`
-	// QR is URL's QR code for PromptQRCode: the hub fills it in on the way to the app (a connector leaves it out).
+	// QR is URL's QR code for PromptQRCode, and for a PromptDeviceCode whose URL carries UserCode as its user_code
+	// (scanning it needs nothing typed): the hub fills it in on the way to the app (a connector leaves it out).
 	QR *QRCode `json:"qr,omitempty"`
 	// Hint is for people: where the code went ("The code was sent to your other Telegram device"), the password's hint.
 	Hint string `json:"hint,omitempty"`
+	// Link is an absolute URL where what this step asks for is done ("the provider's console, to create the app");
+	// LinkText is the button's label. Empty Link means no link (an old hub, or a step that needs none). The app opens
+	// it in a new tab; it never navigates itself there.
+	Link     string `json:"link,omitempty"`
+	LinkText string `json:"link_text,omitempty"`
 	// Error is what was wrong with the values just given ("Wrong code"), for people: the same step is asked again.
 	Error string `json:"error,omitempty"`
 	Done  bool   `json:"done,omitempty"`

@@ -1,7 +1,7 @@
 import Foundation
 import PDFKit
 
-/// The text of a document, cut into the units a person thinks of it in (docs/apple/ios.md「对比」): PDF pages, a Word
+/// The text of a document, cut into the units a person thinks of it in (docs/apple/ios.md「Compare」): PDF pages, a Word
 /// document's pages (split at its page breaks), slides with their notes, a workbook's sheets. Two versions are
 /// compared line by line on this (`TextCompare`), as the web's comparison does.
 public nonisolated enum DocumentText {

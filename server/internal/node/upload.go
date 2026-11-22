@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,7 +25,8 @@ import (
 // Files sent from the phone to an agent (docs/protocol/protocol.md "Sending files"): the hub streams the upload in chunks
 // (file.upload.begin / chunk / end; one JSON line per chunk, never the whole file), the node writes it to a hidden
 // part file in the temp directory and, once every byte is there, renames it to the original name plus a timestamp.
-// The app puts the returned absolute path in the input box.
+// Apps that know dest=attachment (#8361) send chat files to be kept instead (beginAttachment), and the message carries
+// each path in a <persona-file> tag.
 
 // uploadIdle is how long an upload may go without a chunk before its part file is removed (the hub died mid-way).
 const uploadIdle = 2 * time.Minute
@@ -205,7 +207,7 @@ func (u *uploads) chunk(id string, offset int64, data []byte) (got int64, err er
 // beginInto opens an upload into a folder of the home (dest=dir) under the file's own name, shortened as a numbered
 // copy's is when the file system cannot take it. With no conflict policy a taken name is refused here already, before
 // any byte is sent.
-func (n *Node) beginInto(dir, cwd, name, conflict string, size int64) (string, error) {
+func (n *Node) beginInto(dir, cwd, name, conflict string, size, limit int64) (string, error) {
 	switch conflict {
 	case "", proto.UploadConflictReplace, proto.UploadConflictKeep:
 	default:
@@ -231,13 +233,77 @@ func (n *Node) beginInto(dir, cwd, name, conflict string, size int64) (string, e
 			return "", errExists(clean)
 		}
 	}
-	id, err := n.ups.beginIn(real, clean, size, proto.MaxDirUploadBytes, false)
+	id, err := n.ups.beginIn(real, clean, size, limit, false)
 	if err != nil {
 		return "", err
 	}
 	if up := n.ups.lookup(id); up != nil {
 		up.mu.Lock()
 		up.into, up.shown, up.conflict = true, shown, conflict
+		up.mu.Unlock()
+	}
+	return id, nil
+}
+
+// beginInbox opens an upload into the machine's receive folder (dest=inbox, docs/protocol/file-transfer.md): dir is the
+// folder the hub's config names for this machine ("": proto.DefaultInboxDir), "~/" or absolute, and only a folder
+// the phone may write to (writeguard.go). It is made when missing. The file keeps its name; a taken one gets " 2",
+// " 3"… (conflict keep), so nothing there is ever replaced.
+func (n *Node) beginInbox(dir, name string, size int64) (string, error) {
+	if strings.TrimSpace(dir) == "" {
+		dir = proto.DefaultInboxDir
+	}
+	dir = strings.TrimSpace(dir)
+	if dir != "~" && !strings.HasPrefix(dir, "~/") && !filepath.IsAbs(dir) {
+		return "", fmt.Errorf("the receive folder must be absolute or start with ~/: %q", dir)
+	}
+	if n.home == "" {
+		return "", errReadOnly(dir)
+	}
+	want := filepath.Clean(dir)
+	if dir == "~" || strings.HasPrefix(dir, "~/") {
+		want = filepath.Join(n.home, strings.TrimPrefix(dir, "~"))
+	}
+	// Checked before anything is made, with the links of the part that exists resolved (realPath answers the rest
+	// as named): a folder out of bounds is never created, not even empty. writableDir checks again once it exists.
+	real, err := n.realPath(want)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", explainDenied(want, n.home, err)
+	}
+	if err := n.writable(real); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		return "", err
+	}
+	return n.beginInto(want, "", name, proto.UploadConflictKeep, size, proto.MaxInboxUploadBytes)
+}
+
+// attachmentDir is where a chat attachment is kept (dest=attachment): beside the pictures the chat sent that day
+// (saveImages), in the node's own folder, which agents may read (agentsandbox.go) and nothing sweeps.
+func attachmentDir(nodeDir string, now time.Time) string {
+	return filepath.Join(nodeDir, "uploads", now.Format("2006-01-02"))
+}
+
+// beginAttachment opens an upload of a file sent with a chat message, kept for good (dest=attachment): its own name
+// in attachmentDir, a taken one numbered " 2", " 3"… so nothing there is ever replaced.
+func (n *Node) beginAttachment(name string, size int64, now time.Time) (string, error) {
+	dir := attachmentDir(n.dir, now)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	clean := cleanName(name)
+	if _, err := os.Lstat(filepath.Join(dir, clean)); errors.Is(err, syscall.ENAMETOOLONG) {
+		stem, ext := splitName(clean)
+		clean = stem + ext
+	}
+	id, err := n.ups.beginIn(dir, clean, size, proto.MaxUploadBytes, false)
+	if err != nil {
+		return "", err
+	}
+	if up := n.ups.lookup(id); up != nil {
+		up.mu.Lock()
+		up.into, up.shown, up.conflict = true, dir, proto.UploadConflictKeep
 		up.mu.Unlock()
 	}
 	return id, nil
@@ -507,11 +573,11 @@ func (n *Node) uploadCall(method string, params json.RawMessage) (any, error) {
 	var p struct {
 		UploadID string `json:"upload_id"`
 		Name     string `json:"name"`
-		Dest     string `json:"dest"` // "terminal": a paste into a terminal (uploadDir); "health": a report (healthReportsDir); "dir": Dir; "" the temp directory
+		Dest     string `json:"dest"` // "terminal": a paste into a terminal (terminalUploadDir); "file": a task's file for its conversation (fileUploadDir); "health": a report (healthReportsDir); "dir": Dir; "inbox": the receive folder; "attachment": a chat attachment kept (attachmentDir); "" the temp directory
 		// HealthDir: dest=health, the manager's health space ("health-<id>"; "": the built-in's), echoed back so the hub
 		// can tell a node that does not know it (and would put the report in the built-in's).
 		HealthDir string `json:"health_dir"`
-		Dir       string `json:"dir"`      // dest=dir: the folder, ~/ or relative to Cwd
+		Dir       string `json:"dir"`      // dest=dir: the folder, ~/ or relative to Cwd; dest=inbox: the receive folder ("": the default)
 		Cwd       string `json:"cwd"`      // dest=dir
 		Conflict  string `json:"conflict"` // dest=dir: proto.UploadConflict*
 		Size      int64  `json:"size"`
@@ -522,7 +588,7 @@ func (n *Node) uploadCall(method string, params json.RawMessage) (any, error) {
 		return nil, fmt.Errorf("bad params: %w", err)
 	}
 	switch method {
-	case "file.upload.begin":
+	case methodFileUploadBegin:
 		var id string
 		var err error
 		switch p.Dest {
@@ -533,6 +599,11 @@ func (n *Node) uploadCall(method string, params json.RawMessage) (any, error) {
 			if err = os.MkdirAll(dir, 0o700); err == nil {
 				id, err = n.ups.beginIn(dir, p.Name, p.Size, proto.MaxTerminalUploadBytes, true)
 			}
+		case proto.UploadDestFile:
+			dir := fileUploadDir(n.dir, time.Now())
+			if err = os.MkdirAll(dir, 0o700); err == nil {
+				id, err = n.ups.beginIn(dir, p.Name, p.Size, proto.MaxFileUploadBytes, true)
+			}
 		case proto.UploadDestHealth:
 			var dir string
 			if dir, err = healthReportsDirOf(n.home, p.HealthDir); err == nil {
@@ -541,7 +612,11 @@ func (n *Node) uploadCall(method string, params json.RawMessage) (any, error) {
 				}
 			}
 		case proto.UploadDestDir:
-			id, err = n.beginInto(p.Dir, p.Cwd, p.Name, p.Conflict, p.Size)
+			id, err = n.beginInto(p.Dir, p.Cwd, p.Name, p.Conflict, p.Size, proto.MaxDirUploadBytes)
+		case proto.UploadDestInbox:
+			id, err = n.beginInbox(p.Dir, p.Name, p.Size)
+		case proto.UploadDestAttachment:
+			id, err = n.beginAttachment(p.Name, p.Size, time.Now())
 		default:
 			err = fmt.Errorf("unknown upload destination %q", p.Dest)
 		}
@@ -549,27 +624,27 @@ func (n *Node) uploadCall(method string, params json.RawMessage) (any, error) {
 			return nil, err
 		}
 		res := map[string]any{"upload_id": id, "chunk_bytes": proto.UploadChunkBytes}
-		if p.Dest == proto.UploadDestDir {
+		if p.Dest == proto.UploadDestDir || p.Dest == proto.UploadDestInbox || p.Dest == proto.UploadDestFile || p.Dest == proto.UploadDestAttachment {
 			res["dest"] = p.Dest // the hub checks it: a node from before dest=dir would quietly use the temp directory
 		}
 		if p.Dest == proto.UploadDestHealth && p.HealthDir != "" {
 			res["health_dir"] = p.HealthDir // the same for another manager's health space
 		}
 		return res, nil
-	case "file.upload.chunk":
+	case methodFileUploadChunk:
 		got, err := n.ups.chunk(p.UploadID, p.Offset, p.Data)
 		if err != nil {
 			return nil, err
 		}
 		return map[string]any{"received": got}, nil
-	case "file.upload.end":
+	case methodFileUploadEnd:
 		path, size, err := n.ups.end(p.UploadID, time.Now())
 		if err != nil {
 			return nil, err
 		}
 		n.logger.Printf("file from the phone: %s (%d bytes)", path, size)
 		return proto.UploadedFile{Path: path, Name: filepath.Base(path), Size: size}, nil
-	case "file.upload.abort":
+	case methodFileUploadAbort:
 		n.ups.abort(p.UploadID)
 		return map[string]any{"ok": true}, nil
 	}

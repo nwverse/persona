@@ -1,8 +1,6 @@
 package persona.feature.settings
 
 import persona.core.designsystem.text
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
@@ -17,6 +15,7 @@ import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -32,6 +31,7 @@ import kotlinx.coroutines.launch
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.icons.PersonaIcons
 import java.time.Instant
 
 /**
@@ -102,7 +102,7 @@ internal fun MailAccountsPage(
                             onClick = { actionAccount = a },
                             trailing = {
                                 if (testingId == a.id) {
-                                    JSpinner(stroke = Tokens.Space.xxs)
+                                    JSpinner(stroke = Tokens.Space.Standard.xxs)
                                 } else {
                                     JIconButton(PhIcons.DotsThreeVertical, stringResource(R.string.settings_src_more), onClick = { actionAccount = a })
                                 }
@@ -146,6 +146,8 @@ internal fun MailAccountsPage(
                                 feedback?.notice(res.getString(R.string.settings_src_mail_test_unreachable, r?.error ?: res.getString(R.string.settings_src_unknown_error)))
                             }
                             load()
+                        } catch (e: CancellationException) {
+                            throw e
                         } catch (e: Exception) {
                             feedback?.notice(e.message ?: res.getString(R.string.settings_src_mail_test_failed))
                         } finally {
@@ -178,6 +180,8 @@ internal fun MailAccountsPage(
                         connectors?.deleteMailAccount(targetId)
                         load()
                         feedback?.notice(res.getString(R.string.settings_src_deleted))
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         feedback?.notice(res.getString(R.string.settings_src_mail_delete_failed, e.message.orEmpty()))
                     }
@@ -460,6 +464,8 @@ internal fun FeishuConnectorPage(
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var displayPage by remember { mutableStateOf(false) }
+    val homePreference = LocalAppStyleStore.current
+    val homeMessages = homePreference?.larkHomeMessages?.collectAsState()?.value ?: false
     if (displayPage) { LarkMessageDisplayPage(connectors, onBack = { displayPage = false }); return }
 
     fun load() {
@@ -510,7 +516,7 @@ internal fun FeishuConnectorPage(
                     trailing = {
                         Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
                             JStatusDot(statusDot)
-                            if (loading) JSpinner(stroke = Tokens.Space.xxs)
+                            if (loading) JSpinner(stroke = Tokens.Space.Standard.xxs)
                         }
                     },
                 )
@@ -557,12 +563,32 @@ internal fun FeishuConnectorPage(
             }
             item("accounts-caption") {
                 SettingsCaption(
-                    stringResource(R.string.settings_src_lark_accounts_caption),
+                    stringResource(
+                        if (homeMessages) R.string.settings_src_lark_accounts_caption_default
+                        else R.string.settings_src_lark_accounts_caption
+                    ),
                     Modifier.padding(horizontal = pagePadding, vertical = Tokens.Space.s),
                 )
             }
         }
 
+        // Demo has no conversation repository, so it must not offer a destination that can only say "unavailable".
+        if (homePreference != null && connectors != null) {
+            item("home-messages") {
+                JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.l)) {
+                    JSwitchRow(
+                        title = stringResource(R.string.settings_src_lark_home_messages),
+                        checked = homeMessages,
+                        onCheckedChange = homePreference::setLarkHomeMessages,
+                        modifier = Modifier.testTag("settings.lark.homeMessages"),
+                        subtitle = stringResource(R.string.settings_src_lark_home_messages_detail),
+                        leadingIcon = PersonaIcons.messagesApp,
+                        subtitleLines = Int.MAX_VALUE,
+                        titleLines = 2,
+                    )
+                }
+            }
+        }
         item("display") {
             JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.l)) {
                 JRow(stringResource(R.string.settings_src_display_title), leadingIcon = PhIcons.Eye, onClick = { displayPage = true })
@@ -615,9 +641,8 @@ internal fun ConnectorSignInStep(
 ) {
     val localScope = rememberCoroutineScope()
     val scope = pageScope ?: localScope
-    val context = LocalContext.current
+    val copy = rememberCopy()
     val res = LocalResources.current
-    val feedback = LocalAppFeedback.current
     val uri = LocalUriHandler.current
     Column(Modifier.fillMaxWidth().padding(top = Tokens.Space.xs), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
         prompt.hint?.takeIf { it.isNotBlank() }?.let {
@@ -647,11 +672,7 @@ internal fun ConnectorSignInStep(
                 if (code.isNotEmpty()) Row(Modifier.padding(start = rowPadding), verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                     JCodeDisplay(code, Modifier.weight(1f))
-                    JIconButton(PhIcons.Copy, stringResource(R.string.settings_src_connector_copy_code), {
-                        context.getSystemService(ClipboardManager::class.java)
-                            ?.setPrimaryClip(ClipData.newPlainText(res.getString(R.string.settings_src_connector_code_clip), code))
-                        feedback?.notice(res.getString(R.string.settings_src_copied))
-                    })
+                    JIconButton(PhIcons.Copy, stringResource(R.string.settings_src_connector_copy_code), { copy(code, null) })
                 }
                 if (rows.isNotEmpty()) {
                     JQrCode(rows, Modifier.align(Alignment.CenterHorizontally), label = stringResource(R.string.settings_src_connector_qr_label, name))
@@ -673,11 +694,7 @@ internal fun ConnectorSignInStep(
                 if (code.isNotEmpty()) Row(Modifier.padding(start = rowPadding), verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                     JCodeDisplay(code, Modifier.weight(1f))
-                    JIconButton(PhIcons.Copy, stringResource(R.string.settings_src_connector_copy_code), {
-                        context.getSystemService(ClipboardManager::class.java)
-                            ?.setPrimaryClip(ClipData.newPlainText(res.getString(R.string.settings_src_connector_code_clip), code))
-                        feedback?.notice(res.getString(R.string.settings_src_copied))
-                    })
+                    JIconButton(PhIcons.Copy, stringResource(R.string.settings_src_connector_copy_code), { copy(code, null) })
                 }
                 // A pair code is sent to the bot from the chat app, not authorized on a page (as on Settings › Channels).
                 SignInWaiting(if (prompt.kind == "pair_code") stringResource(R.string.settings_src_channel_waiting_send, name)

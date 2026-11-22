@@ -8,7 +8,7 @@ describe("normalizeHubURL", () => {
     expect(normalizeHubURL("http://192.0.2.10:18660")).toEqual({ url: "http://192.0.2.10:18660" });
     expect(normalizeHubURL("HTTPS://Hub.Example.COM:8443")).toEqual({ url: "https://hub.example.com:8443" });
     expect(normalizeHubURL("http://[2001:db8::10]:18660")).toEqual({ url: "http://[2001:db8::10]:18660" });
-    // the sub-path a reverse proxy serves the hub under (docs/web/web.md "Sub-path")
+    // the sub-path a reverse proxy serves the hub under (docs/web/web.md "Subpaths")
     expect(normalizeHubURL("https://hub.example.com/persona-hub/")).toEqual({ url: "https://hub.example.com/persona-hub" });
     expect(normalizeHubURL("https://hub.example.com/persona")).toEqual({ url: "https://hub.example.com/persona" });
     expect(normalizeHubURL("https://hub.example.com/x/../hub")).toEqual({ url: "https://hub.example.com/hub" });
@@ -28,6 +28,33 @@ describe("normalizeHubURL", () => {
     expect(normalizeHubURL("https://hub.example.com/#token=x")).toEqual({ error: noPath });
     expect(normalizeHubURL("https://hub.example.com/a%20b")).toEqual({ error: noPath });
     expect(normalizeHubURL("https://")).toEqual({ error: "不是一个地址" });
+  });
+  // audit item 67: Chrome's URL parser keeps a host with spaces, escaped ("not%20a%20url"), where Node and jsdom refuse it
+  it("refuses text that is not a host, even where the browser's URL parser lets it through", () => {
+    expect(normalizeHubURL("not a url")).toEqual({ error: "不是一个地址" });
+    expect(normalizeHubURL("https://hub .example.com")).toEqual({ error: "不是一个地址" });
+    class ChromeURL extends URL {
+      constructor(input: string | URL, base?: string | URL) {
+        const s = String(input);
+        if (/^https:\/\/[^/]*(\s|%)/.test(s)) {
+          super("https://placeholder.invalid");
+          Object.defineProperty(this, "hostname", { value: s.slice("https://".length).replace(/\s/g, "%20") });
+          return;
+        }
+        super(input, base);
+      }
+    }
+    vi.stubGlobal("URL", ChromeURL);
+    try {
+      expect(normalizeHubURL("not%20a%20url")).toEqual({ error: "不是一个地址" });
+      expect(normalizeHubURL("https://not%20a%20url")).toEqual({ error: "不是一个地址" });
+      // still taken: names with "_", a trailing dot, another script's name as URL spells it
+      expect(normalizeHubURL("my_hub.example.com")).toEqual({ url: "https://my_hub.example.com" });
+      expect(normalizeHubURL("hub.example.com.")).toEqual({ url: "https://hub.example.com." });
+      expect(normalizeHubURL("https://例子.example")).toEqual({ url: "https://xn--fsqu00a.example" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

@@ -1,6 +1,6 @@
 import Foundation
 
-// Live Files / Git (#2439, #3089; docs/protocol/protocol.md「文件自动刷新」): the panes tell the hub which folders they show, the hub
+// Live Files / Git (#2439, #3089; docs/protocol/protocol.md「File auto-refresh」): the panes tell the hub which folders they show, the hub
 // watches them on the computer and pushes `fs_changed`; a pane refreshes what changed after a short debounce (200 ms,
 // as on the web, web/src/lib/fs-live.ts). One socket message per session folder replaces the whole set, so the Files
 // and the Git pane of the same folder (or two windows on the Mac) are merged into it. A pane that is not in front

@@ -13,6 +13,8 @@ import org.junit.Before
 import org.junit.Test
 import persona.core.contracts.Machine
 import persona.core.contracts.api.*
+import persona.core.domain.engines.Engines
+import persona.core.domain.usage.*
 import java.time.Instant
 
 /** "What this computer can do" as features (web lib/node-health.ts) and "Subscription limits"'s arithmetic (web lib/usage-windows.ts). */
@@ -38,6 +40,27 @@ class MachineHealthTest {
         assertEquals(HealthNote.Plain("do this"), features.getValue("other").note)
         assertEquals(2, attentionCount(features.values.toList()))
         assertEquals(listOf("claude-settings.json"), fixableChecks(report).map { it.name })
+    }
+
+    /** No terminal engine keeps `engine` herdr (the empty host set); the features are judged by the choice, not by herdr. */
+    @Test fun aMachineWithNoTerminalEngineIsNotJudgedByHerdr() {
+        val herdrMachine = Machine("desk", engine = "herdr", engineHosts = listOf("herdr"))
+        val none = herdrMachine.copy(engineHosts = emptyList())
+        val warn = DoctorReport(checks = listOf(check("node.sock"), check("command-paths"), check("herdr", "warn")))
+        val fail = DoctorReport(checks = listOf(check("node.sock"), check("command-paths"), check("herdr", "fail")))
+        fun terminal(report: DoctorReport, machine: Machine) = deriveFeatures(report, Engines.judged(machine)).first { it.id == "terminal" }
+        assertEquals(FeatureState.Broken, terminal(warn, herdrMachine).state)
+        assertEquals(FeatureState.Off, terminal(warn, none).state)
+        assertEquals(FeatureState.Broken, terminal(fail, herdrMachine).state)
+        assertEquals(FeatureState.Off, terminal(fail, none).state)
+        // The check itself is still reported as found; only the feature's state follows the choice.
+        assertEquals(listOf("herdr"), terminal(fail, none).checks.map { it.name })
+        assertEquals("nothing needs attention for it", 0, attentionCount(listOf(terminal(warn, none))))
+        // A machine that does have herdr, or a hub with no host sets, stays as before.
+        assertEquals(FeatureState.Broken, terminal(warn, herdrMachine.copy(engineHosts = null)).state)
+        assertEquals(FeatureState.Ready, terminal(DoctorReport(checks = listOf(check("herdr"))), none).state)
+        // Choosing herdr again brings the judgement back.
+        assertEquals(FeatureState.Broken, terminal(warn, none.copy(engineHosts = listOf("herdr"))).state)
     }
 
     @Test fun unavailableSelfChecksSayWhy() {
@@ -108,6 +131,35 @@ class MachineHealthTest {
         collecting.cancel()
     }
 
+    /** A failed refresh keeps the last answer, which ages by its stale_at; only a hub without the route (404) empties it (#1905). */
+    @Test fun aFailedUsageRefreshKeepsTheLastAnswer() = runTest {
+        val account = UsageAccount("a", "codex", "Codex Pro", sampledAt = "2026-11-05T11:00:00Z", staleAt = "2026-11-05T11:30:00Z",
+            windows = listOf(UsageWindow("7d", 10080, 40.0)))
+        var answer = 0
+        val api = object : Api() {
+            override suspend fun usageWindows(): List<UsageAccount> = when (answer++) {
+                0 -> listOf(account)
+                1 -> throw persona.core.hub.HubFailure(persona.core.hub.HubError.Server, "the assistant can't be reached", 503, "assistant_offline")
+                2 -> throw java.io.IOException("no network")
+                else -> throw persona.core.hub.HubFailure(persona.core.hub.HubError.Server, "not found", 404)
+            }
+        }
+        val model = MachineHealthViewModel(api)
+        val polling = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { model.pollUsage() }
+        assertEquals(listOf(account), model.state.value.usage)
+        testScheduler.advanceTimeBy(60_001)
+        assertEquals("the assistant away", listOf(account), model.state.value.usage)
+        testScheduler.advanceTimeBy(60_000)
+        assertEquals("no network", listOf(account), model.state.value.usage)
+        testScheduler.advanceTimeBy(60_000)
+        assertEquals("an older hub: nothing to show", emptyList<UsageAccount>(), model.state.value.usage)
+        polling.cancel()
+        // and the kept answer turns stale on its own time
+        assertFalse(liveAccounts(listOf(account), Instant.parse("2026-11-05T11:29:59Z")).single().stale)
+        assertTrue(liveAccounts(listOf(account), Instant.parse("2026-11-05T11:30:00Z")).single().stale)
+        assertFalse("an older hub sends no stale_at", liveAccounts(listOf(account.copy(staleAt = null)), Instant.parse("2026-11-05T13:00:00Z")).single().stale)
+    }
+
     @Test fun anOldNodeIsUnavailableNotAFailure() = runTest {
         val api = object : Api() {
             override suspend fun doctor(machineId: String): DoctorReport =
@@ -141,6 +193,35 @@ class MachineHealthTest {
         model.browserFromList(null)
         assertNull(model.state.value.browser)
         assertFalse(model.watchesBrowser(online = true))
+    }
+
+    /** Back in front the page asks at once: a job that ended while it was hidden shows now, not after the first pause, and stops the watch. */
+    @Test fun aWatchBackInFrontReadsAtOnce() = runTest {
+        val running = persona.core.contracts.MachineBrowser(enabled = true, installed = false, job = persona.core.contracts.MachineJob("install", "running"))
+        var reads = 0
+        var answer = running
+        val api = object : Api() {
+            override suspend fun browser(machineId: String): persona.core.contracts.MachineBrowser { reads++; return answer }
+        }
+        val model = MachineHealthViewModel(api)
+        model.browserFromList(running)
+        val first = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { model.watchBrowser("m") { model.watchesBrowser(online = true) } }
+        assertEquals("the first start waits: what is shown is fresh", 0, reads)
+        testScheduler.advanceTimeBy(2_001)
+        assertEquals(1, reads)
+        first.cancel() // the page is hidden; the install ends meanwhile
+        answer = running.copy(installed = true, job = persona.core.contracts.MachineJob("install", "done"))
+        testScheduler.advanceTimeBy(60_000)
+        assertEquals("nothing is asked while hidden", 1, reads)
+        val again = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            model.watchBrowser("m", readFirst = true) { model.watchesBrowser(online = true) }
+        }
+        assertEquals(2, reads)
+        assertEquals("done", model.state.value.browser?.job?.state)
+        assertFalse(model.watchesBrowser(online = true))
+        assertTrue("the watch ends with the job", again.isCompleted)
+        testScheduler.advanceTimeBy(10_000)
+        assertEquals(2, reads)
     }
 
     /** An offline machine's card says why and what to do, read from the hub's error (web classifyConnection, #4463). */

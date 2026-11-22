@@ -10,12 +10,19 @@ import { api, ApiError, enc } from "./api";
 import { itemHeaders } from "./manager-choice";
 import { extRoot } from "./extension-api";
 import { areaBands, colorOf, hue, imageLoadable, readV6 } from "./extension-ui-v6";
+import { isHttps, isObject, readAction, readPush } from "./extension-ui-read";
 import { t } from "../i18n";
 import type { Comment, Hunk, Thread, TreeEntry } from "./code-view";
 import type { UIColor, UIImageSource, UIRowAction, UIRowControl, UISpark, UITile } from "./extension-ui-v6";
+import { SUBSCRIPTIONS_UI } from "./subscriptions-ui";
 
-/** The UI version the web draws (context.ui_version). */
-export const UI_VERSION = 6;
+export { isHttps };
+
+/**
+ * The UI version the web draws (context.ui_version): all of 10, the graph canvas (views/extensions/ViewBody10.tsx),
+ * the columns layout's (views/extensions/ViewBody8.tsx) and a tile's gauge (views/extensions/ViewBody9.tsx) too.
+ */
+export const UI_VERSION = 10;
 
 export type UITone = "neutral" | "positive" | "caution" | "danger";
 
@@ -46,7 +53,7 @@ export interface UIChoice {
 
 /** One item of a section; which fields it has depends on `type`. */
 export interface UIItem {
-  type: "text" | "metric" | "progress" | "row" | "button" | "link" | "field" | "divider" | "chart" | "stat_grid" | "segmented" | string;
+  type: "text" | "metric" | "progress" | "row" | "button" | "link" | "field" | "divider" | "chart" | "stat_grid" | "segmented" | "graph" | string;
   text?: string;
   /** text: body | secondary | caption | code */
   style?: string;
@@ -152,6 +159,12 @@ export interface UIItem {
   /** field: date, time, datetime limits */
   earliest?: string;
   latest?: string;
+  /** UI version 10 (#9727), graph: its nodes, edges, folds, layout, direction and the node drawn as selected (its id) */
+  nodes?: UIGraphNode[];
+  edges?: { from: string; to: string }[];
+  folded?: string[];
+  layout?: UIGraph["layout"];
+  direction?: UIGraph["direction"];
 }
 
 /** A view's tabs on top (UI version 4): choosing one sends {name: value} (with the search's q) at once. */
@@ -216,6 +229,73 @@ export interface UIStat {
   spark?: UISpark;
 }
 
+// ── UI version 10: a graph ───────────────────────────────
+
+/** One label/value reading of a node's inspector (UI version 10). */
+export interface UIFact {
+  label?: string;
+  value: string;
+  icon?: string;
+}
+
+/** One https link of a node's inspector (UI version 10): a title and a credential-free https url. */
+export interface UIGraphNodeLink {
+  title: string;
+  url: string;
+}
+
+/** Only a credential-free https url opens from a node's inspector. Unlike isHttps it also refuses a url carrying
+ *  username and password, which would otherwise be shown in the page and leaked to the site. */
+export function isGraphLink(url?: string): boolean {
+  if (!url) return false;
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" && u.hostname !== "" && u.username === "" && u.password === "";
+  } catch {
+    return false;
+  }
+}
+
+/** One node of a graph (UI version 10, #9727): a box with a title, a state line, a badge, an icon and a progress bar. */
+export interface UIGraphNode {
+  id: string;
+  title: string;
+  subtitle?: string;
+  badge?: { text: string; tone?: UITone; color?: UIColor };
+  /** A role color (never with color): colors the node's edge bar and state dot, never its text. */
+  tone?: UITone;
+  /** A named color (never with tone). */
+  color?: UIColor;
+  icon?: string;
+  /** A thin bar along the node's foot, 0 to 1. */
+  progress?: number;
+  group?: string;
+  action?: UIAction;
+  /** Unix seconds when the node started and ended; ended is omitted while it is still running. */
+  started_at?: number;
+  ended_at?: number;
+  /** Short label/value readings shown in the node's inspector. */
+  facts?: UIFact[];
+  /** A plain-text summary, verifier feedback or an error, shown in the node's inspector. */
+  detail?: string;
+  /** Session and verifier links shown in the node's inspector. */
+  links?: UIGraphNodeLink[];
+}
+
+/** A graph component (UI version 10): nodes joined by edges, laid out by the app (lib/graph-layout.ts). */
+export interface UIGraph {
+  /** Keeps the person's pan, zoom and folding across redraws of the page. */
+  key?: string;
+  nodes: UIGraphNode[];
+  edges: { from: string; to: string }[];
+  layout?: "tree" | "layered" | string;
+  direction?: "right" | "down" | string;
+  /** A node's id: drawn as selected, and the canvas opens centred on it. */
+  selected?: string;
+  /** The ids of nodes whose children start folded; the person's own folds for this key take over. */
+  folded?: string[];
+}
+
 export interface UISection {
   title?: string;
   footer?: string;
@@ -224,6 +304,21 @@ export interface UISection {
   more?: UIMore;
   /** UI version 4: in a split view, side is the column at the start (the file tree) */
   pane?: "main" | "side" | string;
+  /** UI version 8: in a columns view, full takes the whole row */
+  span?: "full" | string;
+  /** UI version 8: an icon before the title (from the row icons), in its color */
+  icon?: string;
+  icon_color?: UIColor;
+  /** UI version 8: a link beside the title */
+  link?: UISectionLink;
+  /** UI version 8: how many rows sit side by side on a wide screen (2 or 3; absent, one) */
+  columns?: number;
+}
+
+/** A link beside a section's title (UI version 8): pressed, it does its action like a row's. */
+export interface UISectionLink {
+  title: string;
+  action: UIAction;
 }
 
 export interface UIView {
@@ -237,7 +332,8 @@ export interface UIView {
   filter?: UIFilter;
   /** UI version 4 */
   tabs?: UITabs;
-  layout?: "stack" | "split" | string;
+  /** UI version 4: split; 8: columns */
+  layout?: "stack" | "split" | "columns" | string;
   /** UI version 5: the pending review's bar */
   review?: UIReview;
 }
@@ -271,6 +367,10 @@ export interface UIPlace {
   badge?: UIBadge | null;
   /** The connector whose inbox items an inbox_item draws (the items' `source`). */
   connector?: string;
+  /** The sidebar group a nav_page goes in unless the user put it elsewhere (#9071), its title in the app's language. */
+  group?: { id: string; title: string };
+  /** A nav_page's icon color (a named Color), drawn only with Colored sidebar icons (#10822); colorOf reads it. */
+  icon_color?: string;
 }
 
 export interface UIBadge {
@@ -297,6 +397,9 @@ export interface UIContext {
   machine?: string;
   item?: string;
   size?: "compact" | "full";
+  /** The assistant's name as the composer shows it ("Ask {name}…"), sent only to the manager's own subscription pages,
+   *  which name their Set Up with … after it (docs/extensions/subscriptions.md "Pages"). */
+  assistant?: string;
 }
 
 /** What the web says with every render and action (docs/extensions/extensions.md "Context"): time zone, language, platform, UI version. */
@@ -323,6 +426,7 @@ export function uiContext(context?: UIContext): UIContextSent {
   if (context?.machine) out.machine = context.machine;
   if (context?.item) out.item = context.item;
   if (context?.size) out.size = context.size;
+  if (context?.assistant) out.assistant = context.assistant;
   return out;
 }
 
@@ -344,7 +448,9 @@ export function placeOf(u: UIPlace & { plugin?: string; plugin_name?: string }):
   return { ...rest, extension: u.extension ?? plugin ?? "", ...((u.extension_name ?? plugin_name) ? { extension_name: u.extension_name ?? plugin_name } : {}) };
 }
 
-const uiPath = (extension: string, ui: string) => `${extRoot()}/${enc(extension)}/-/ui/${enc(ui)}`;
+// The subscription pages (#2041) are the manager's own, drawn and pressed like an extension's page under a reserved id.
+const uiPath = (extension: string, ui: string) =>
+  extension === SUBSCRIPTIONS_UI ? "/subscriptions/-/ui" : `${extRoot()}/${enc(extension)}/-/ui/${enc(ui)}`;
 
 /** Draws the view (no action). A view that does not read at all is an error; unknown items are left out. `manager`:
  *  whose extension it is (another manager's inbox item, or computer); none: the default's. */
@@ -381,16 +487,6 @@ export const toneOf = (t?: string): UITone => (t && TONES.includes(t) ? (t as UI
 export function percent(ratio?: number): number {
   if (typeof ratio !== "number" || !Number.isFinite(ratio)) return 0;
   return Math.round(Math.min(1, Math.max(0, ratio)) * 1000) / 10;
-}
-
-/** Only https links open (the hub checks too). */
-export function isHttps(url?: string): boolean {
-  if (!url) return false;
-  try {
-    return new URL(url).protocol === "https:";
-  } catch {
-    return false;
-  }
 }
 
 /** The fields of a view, by name, as they start: what the extension filled in (never a secret's), toggles "true" / "false". */
@@ -446,15 +542,19 @@ export function blocks(items: UIItem[]): UIBlock[] {
 /**
  * What to do after a press: the view to show (new, or "reload" to draw again), a word to say, a link to open; `source`:
  * open the inbox item's own source page (an inbox_item's open_url persona://inbox/<item>/source, for the item it is
- * drawn for); `settings`: the in-app path of an extension's own settings (open_url persona://settings/extensions/<id>).
+ * drawn for); `settings`: the in-app path of an extension's own settings (open_url persona://settings/extensions/<id>);
+ * `ask`: the text for the assistant's main conversation (open_url persona://ask?text=…), taken only from the manager's
+ * own subscription pages (`extension` SUBSCRIPTIONS_UI, docs/extensions/subscriptions.md "Pages").
  */
 export function outcome(
   r: UIActionResult,
   item?: string,
-): { view?: UIView; items?: UIItem[]; reload: boolean; toast?: string; url?: string; source?: true; settings?: string; push?: UIPush; pop?: true } {
+  extension?: string,
+): { view?: UIView; items?: UIItem[]; reload: boolean; toast?: string; url?: string; source?: true; settings?: string; ask?: string; push?: UIPush; pop?: true } {
   const url = r.open_url && isHttps(r.open_url) ? r.open_url : undefined;
   const source = !!item && !!r.open_url && inboxSourceItem(r.open_url) === item;
   const settings = r.open_url ? extensionSettingsHref(r.open_url) : undefined;
+  const ask = extension === SUBSCRIPTIONS_UI && r.open_url ? askText(r.open_url) : undefined;
   const push = readPush(r.push);
   const pop = r.pop === true && !push;
   return {
@@ -466,9 +566,19 @@ export function outcome(
     url,
     ...(source ? { source: true as const } : {}),
     ...(settings ? { settings } : {}),
+    ...(ask ? { ask } : {}),
     ...(push ? { push } : {}),
     ...(pop ? { pop: true as const } : {}),
   };
+}
+
+/** The text of a persona://ask?text=… link (an older name's scheme too, as other in-app links); undefined for any other
+ *  link or an empty text. At most 8000 characters: the pages name a source, they don't carry its content. */
+export function askText(link: string): string | undefined {
+  const c = canonicalAppURL(link);
+  if (!c.startsWith("persona://ask?")) return undefined;
+  const text = new URLSearchParams(c.slice("persona://ask?".length)).get("text") ?? "";
+  return text.trim() && text.length <= 8000 ? text : undefined;
 }
 
 /** How deep the pages pushed on one another go (docs/extensions/extensions.md "Page navigation"): a push past it replaces the top one. */
@@ -491,7 +601,7 @@ export function pushPage(stack: readonly UIPage[], push: UIPush, ui: string): UI
 /** The icons UI version 6 adds (docs/extensions/extensions.md "UI version 6"), on a row, a metric, a tile, a row action and a nav_page. */
 export const NEW_ICONS_6 = [
   "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play",
-  "pause", "stop", "speaker", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car",
+  "pause", "stop", "speaker", "music", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car",
   "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit",
   "refresh", "share", "info",
 ] as const;
@@ -565,9 +675,8 @@ export const KNOWN_ITEMS: readonly string[] = [
   "markdown", "table", "empty", "loading", // UI version 3
   "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", // UI version 4
   "image", "grid", "carousel", // UI version 6
+  "graph", // UI version 10
 ];
-
-const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** An item the web can draw: a known type with what it needs to be drawn at all (a chart with points, a grid with stats). */
 function drawable(it: unknown): it is UIItem {
@@ -606,6 +715,9 @@ function drawable(it: unknown): it is UIItem {
     case "grid":
     case "carousel":
       return Array.isArray(it.tiles) && it.tiles.some((t) => isObject(t) && typeof t.title === "string" && !!t.title);
+    // UI version 10: a graph with nodes that read at all; the rest of the reading is readGraph's
+    case "graph":
+      return Array.isArray(it.nodes) && it.nodes.some((n: Record<string, unknown>) => isObject(n) && typeof n.id === "string" && typeof n.title === "string" && !!n.title);
     default:
       return true;
   }
@@ -615,13 +727,16 @@ function drawable(it: unknown): it is UIItem {
  * The view as the web draws it: items it does not know left out, a section they emptied gone (one with a footer
  * stays), like the hub does for an older app. Only a view that does not read at all is an error.
  */
-export function readView(raw: unknown): UIView {
+/** `html`: keep html components (an assistant card that runs them, #4215); an extension's view never draws one. */
+export function readView(raw: unknown, opts: { html?: boolean } = {}): UIView {
   if (!isObject(raw) || !Array.isArray(raw.sections)) throw new Error(t("lib-extension-ui.unreadable_view"));
   const sections: UISection[] = [];
+  // an html component's own checks are the card's (ui/HtmlCard.tsx)
+  const keeps = (it: unknown): it is UIItem => drawable(it) || (!!opts.html && (it as UIItem)?.type === "html");
   for (const s of raw.sections) {
     if (!isObject(s)) continue;
     const items = Array.isArray(s.items) ? s.items : [];
-    const kept = items.filter(drawable).map(readItem);
+    const kept = items.filter(keeps).map(readItem);
     const footer = typeof s.footer === "string" ? s.footer : undefined;
     const more = isObject(s.more) && readAction(s.more.action) ? { ...(typeof s.more.title === "string" && s.more.title ? { title: s.more.title } : {}), action: readAction(s.more.action)! } : undefined;
     if (items.length > 0 && kept.length === 0 && !footer && !more) continue;
@@ -632,6 +747,7 @@ export function readView(raw: unknown): UIView {
       ...(typeof s.key === "string" && s.key ? { key: s.key } : {}),
       ...(more ? { more } : {}),
       ...(s.pane === "side" ? { pane: "side" } : {}),
+      ...readSection8(s),
     });
   }
   const view: UIView = { sections };
@@ -645,7 +761,7 @@ export function readView(raw: unknown): UIView {
       ...(typeof raw.search.value === "string" ? { value: raw.search.value } : {}),
     };
   }
-  if (raw.layout === "split") view.layout = "split";
+  if (raw.layout === "split" || raw.layout === "columns") view.layout = raw.layout;
   const tb = raw.tabs;
   if (isObject(tb) && typeof tb.name === "string" && tb.name && readAction(tb.action) && Array.isArray(tb.items)) {
     const items = tb.items.flatMap((i) =>
@@ -684,31 +800,83 @@ export function readView(raw: unknown): UIView {
   return view;
 }
 
-/** An action as the web uses it (an id at least), its push read too; undefined when it is not one. */
-export function readAction(raw: unknown): UIAction | undefined {
-  if (!isObject(raw) || typeof raw.id !== "string" || !raw.id) return undefined;
-  const a: UIAction = { id: raw.id };
-  if (typeof raw.confirm === "string") a.confirm = raw.confirm;
-  if (raw.submit === true) a.submit = true;
-  const p = readPush(raw.push);
-  if (p) a.push = p;
-  if (isObject(raw.values)) {
-    const values = Object.fromEntries(Object.entries(raw.values).filter((e): e is [string, string] => typeof e[1] === "string"));
-    if (Object.keys(values).length) a.values = values;
-  }
-  return a;
+/** A section's fields of UI version 8 (views/extensions/ViewBody8.tsx draws them): its span, icon and icon color, link, and columns. */
+function readSection8(s: Record<string, unknown>): Partial<UISection> {
+  const out: Partial<UISection> = {};
+  for (const k of ["span", "icon", "icon_color"]) if (typeof s[k] === "string" && s[k]) (out as Record<string, unknown>)[k] = s[k];
+  if (typeof s.columns === "number" && s.columns > 1) out.columns = Math.min(3, Math.floor(s.columns));
+  const l = s.link;
+  if (isObject(l) && typeof l.title === "string" && l.title && readAction(l.action)) out.link = { title: l.title, action: readAction(l.action)! };
+  return out;
 }
 
-/** A push as the web keeps it: the state as text (an extension may send an object: it gets it back as JSON). */
-export function readPush(raw: unknown): UIPush | undefined {
-  if (raw === true) return {};
-  if (!isObject(raw)) return undefined;
-  const p: UIPush = {};
-  if (typeof raw.state === "string") p.state = raw.state;
-  else if (raw.state !== undefined && raw.state !== null) p.state = JSON.stringify(raw.state);
-  if (typeof raw.title === "string" && raw.title) p.title = raw.title;
-  if (typeof raw.ui === "string" && raw.ui) p.ui = raw.ui;
-  return p;
+/**
+ * A graph as the web draws it (UI version 10, #9727): the hub has already checked the ids, edges and folds; what does
+ * not read here is left out node by node, never drawn half. An edge whose ends are both kept stays; a `selected` or a
+ * `folded` id that is gone is dropped. The tone and the color are kept as sent (never both; the drawing holds a
+ * progress to 0–1 and leaves an unknown color or icon out).
+ */
+export function readGraph(raw: unknown): UIGraph | undefined {
+  if (!isObject(raw) || !Array.isArray(raw.nodes)) return undefined;
+  const byId = new Map<string, UIGraphNode>();
+  for (const n of raw.nodes) {
+    if (!isObject(n) || typeof n.id !== "string" || !n.id || typeof n.title !== "string" || !n.title) continue;
+    const node: UIGraphNode = { id: n.id, title: n.title };
+    if (typeof n.subtitle === "string") node.subtitle = n.subtitle;
+    if (isObject(n.badge) && typeof n.badge.text === "string" && n.badge.text)
+      node.badge = { text: n.badge.text, ...(typeof n.badge.tone === "string" ? { tone: toneOf(n.badge.tone as string) } : {}), ...(colorOf(n.badge.color as string) ? { color: colorOf(n.badge.color as string)! } : {}) };
+    if (TONES.includes(n.tone as string)) node.tone = n.tone as UITone;
+    if (colorOf(n.color as string)) node.color = colorOf(n.color as string)!;
+    if (typeof n.icon === "string") node.icon = n.icon;
+    if (typeof n.progress === "number" && Number.isFinite(n.progress)) node.progress = n.progress;
+    if (typeof n.group === "string" && n.group) node.group = n.group;
+    // UI version 10's inspector fields: the timing, the readings, the summary and the links, each as it reads.
+    // Character bounds count Unicode code points (Array.from), matching the hub's utf8.RuneCountInString.
+    const runeLen = (s: string) => Array.from(s).length;
+    const runeSlice = (s: string, max: number) => Array.from(s).slice(0, max).join("");
+    if (typeof n.started_at === "number" && Number.isFinite(n.started_at) && n.started_at >= 0) node.started_at = n.started_at;
+    if (typeof n.ended_at === "number" && Number.isFinite(n.ended_at) && n.ended_at >= 0 && (node.started_at === undefined || n.ended_at >= node.started_at)) node.ended_at = n.ended_at;
+    if (Array.isArray(n.facts)) {
+      const facts = n.facts
+        .filter((f): f is Record<string, unknown> => isObject(f) && typeof f.value === "string" && !!f.value && runeLen(f.value) <= 2000)
+        .slice(0, 8)
+        .map((f) => ({
+          ...(typeof f.label === "string" && runeLen(f.label) <= 200 ? { label: f.label } : {}),
+          value: f.value as string,
+          ...(typeof f.icon === "string" ? { icon: f.icon } : {}),
+        }));
+      if (facts.length) node.facts = facts;
+    }
+    if (typeof n.detail === "string" && n.detail.length > 0) node.detail = runeSlice(n.detail, 2000);
+    if (Array.isArray(n.links)) {
+      const links = n.links
+        .filter(
+          (l): l is Record<string, unknown> =>
+            isObject(l) && typeof l.title === "string" && !!l.title && runeLen(l.title) <= 80 && typeof l.url === "string" && runeLen(l.url) <= 2000 && isGraphLink(l.url),
+        )
+        .slice(0, 8)
+        .map((l) => ({ title: l.title as string, url: l.url as string }));
+      if (links.length) node.links = links;
+    }
+    const action = readAction(n.action);
+    if (action) node.action = action;
+    byId.set(node.id, node);
+  }
+  if (!byId.size) return undefined;
+  const edges: { from: string; to: string }[] = [];
+  for (const e of Array.isArray(raw.edges) ? raw.edges : []) {
+    if (!isObject(e) || typeof e.from !== "string" || typeof e.to !== "string") continue;
+    if (e.from === e.to || !byId.has(e.from) || !byId.has(e.to)) continue;
+    if (edges.some((x) => x.from === e.from && x.to === e.to)) continue;
+    edges.push({ from: e.from, to: e.to });
+  }
+  const out: UIGraph = { nodes: [...byId.values()], edges };
+  if (typeof raw.key === "string" && raw.key) out.key = raw.key;
+  if (raw.layout === "tree" || raw.layout === "layered") out.layout = raw.layout;
+  if (raw.direction === "right" || raw.direction === "down") out.direction = raw.direction;
+  if (typeof raw.selected === "string" && byId.has(raw.selected)) out.selected = raw.selected;
+  if (Array.isArray(raw.folded)) out.folded = raw.folded.filter((f) => typeof f === "string" && byId.has(f));
+  return out;
 }
 
 /** An item with its actions read; an empty's button (`action: {title, action}`) under `button`. */
@@ -722,6 +890,20 @@ function readItem(it: UIItem): UIItem {
   }
   const out: UIItem = { ...it };
   if (isObject(raw.action)) out.action = readAction(raw.action);
+  // UI version 10: a graph's nodes, edges and folds, read as a view's actions are
+  if (it.type === "graph") {
+    const graph = readGraph(raw);
+    if (graph) out.nodes = graph.nodes as unknown as UIItem["nodes"];
+    else delete out.nodes;
+    out.edges = graph?.edges as unknown as UIItem["edges"];
+    out.folded = graph?.folded as unknown as UIItem["folded"];
+    if (graph?.layout) out.layout = graph.layout as UIItem["layout"];
+    else delete out.layout;
+    if (graph?.direction) out.direction = graph.direction as unknown as UIItem["direction"];
+    else delete out.direction;
+    if (graph?.selected) out.selected = graph.selected;
+    else delete out.selected;
+  }
   // UI version 4: the other places an action sits, each read the same way
   for (const k of ["expand", "load", "comment", "reply", "context", "mark_viewed", "draft"] as const) if (k in raw) out[k] = readAction(raw[k]);
   // UI version 6: a row's control and extra actions, a grid's or a carousel's tiles
@@ -936,4 +1118,30 @@ export function seriesColors(series: ChartSeries[]): string[] {
 export function sliceColors(n: number): string[] {
   const more = ["teal", "amber", "indigo", "orange"];
   return Array.from({ length: n }, (_, i) => (i < 4 ? `var(--series-${i + 1})` : `var(--hue-${more[(i - 4) % more.length]})`));
+}
+
+/** One segment of a single category's horizontal share bar: its series index, value and share of the total (0…1). */
+export interface SharePart {
+  series: number;
+  value: number;
+  ratio: number;
+}
+
+/**
+ * Whether a stacked bar chart is one category's shares — every series holds exactly one point, all values finite and
+ * non-negative and the total positive. A persona-card stacked_bar is always this shape (a single day's parts), so it
+ * reads as a horizontal segmented bar rather than a lone column; a chart with two or more categories stays columns for
+ * the comparison. The same rule on every app (docs/extensions/extensions.md "New items" chart; issue #5386).
+ */
+export function stackedShare(item: Pick<UIItem, "kind" | "stacked" | "series">): SharePart[] | null {
+  const series = item.series ?? [];
+  if (item.kind !== "bar" || !item.stacked || series.length === 0) return null;
+  if (series.some((s) => s.points.length !== 1)) return null;
+  const values = series.map((s) => s.points[0].value);
+  if (values.some((v) => !Number.isFinite(v) || v < 0)) return null;
+  const total = values.reduce((a, b) => a + b, 0);
+  if (total <= 0) return null;
+  const scale = Number.isFinite(total) ? 1 : Math.max(...values);
+  const scaledTotal = values.reduce((a, b) => a + b / scale, 0);
+  return values.map((value, i) => ({ series: i, value, ratio: value / scale / scaledTotal }));
 }

@@ -8,7 +8,9 @@
 
 `svg` puts the app icon's own picture (AppIcon.appiconset) in the banner; it needs Pillow. `shoot` drives a DEBUG
 build on an owned, booted stock simulator named Persona README, using language-specific synthetic data in temporary
-app copies, never a real hub. It captures both languages and appearances under <dir>/en and <dir>/zh-CN, then
+app copies, never a real hub. Build that app with the build setting PERSONA_STAMP_COMMIT=YES (`xcodebuild … build
+PERSONA_STAMP_COMMIT=YES`): Debug builds are not stamped otherwise (#10713), and the capture's provenance then names no
+commit. It captures both languages and appearances under <dir>/en and <dir>/zh-CN, then
 clears transient Runtime CLI state and shuts down the simulator. Stills and videos remain in the capture directory.
 `hero` needs ffmpeg and Pillow; it puts the demo in the middle phone and four still screens beside it, and writes
 hero-<theme>.webp for English shots or hero-<theme>.zh-CN.webp when given `zh-CN`. A bilingual capture directory
@@ -116,15 +118,24 @@ def banner(theme, lang="en"):
 # (file name, kind, product); the README puts each kind on its own line.
 BADGES = [
     ("iphone", "client", "iPhone"),
-    ("apple-watch", "client", "Apple Watch"),
-    ("mac", "client", "Mac"),
-    ("vision-pro", "client", "Vision Pro"),
-    ("android", "client", "Android"),
+    ("ipad", "client", "iPad"),
     ("web", "client", "Web"),
+    ("android", "client", "Android"),
+    ("apple-watch", "client", "Apple Watch"),
+    ("vision-pro", "client", "Vision Pro"),
+    ("mac", "client", "Mac"),
+    ("carplay", "client", "CarPlay voice"),
     ("claude-code", "agent", "Claude Code"),
     ("codex", "agent", "Codex"),
+    ("opencode", "agent", "opencode"),
+    ("pi", "agent", "pi"),
+    ("dsh", "agent", "DSH"),
+    ("antigravity", "agent", "Antigravity CLI"),
     ("herdr", "engine", "herdr"),
     ("orca", "engine", "Orca"),
+    ("herdr-app", "engine", "Herdr App"),
+    ("paseo", "engine", "Paseo"),
+    ("cindy", "engine", "Cindy"),
 ]
 
 VERDANA = {  # advance widths at 11px, shields.io's metric for Verdana

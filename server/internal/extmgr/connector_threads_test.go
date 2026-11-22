@@ -1,10 +1,12 @@
 package extmgr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,7 +18,9 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/subscriptions"
 )
 
 // threadsConnector is a chat app with one made-up conversation of 40 messages, a picture, a reply action, and a
@@ -78,7 +82,7 @@ func (c *threadsConnector) Media(_ context.Context, ref string) (connector.Media
 	if ref == "photo:missing" {
 		return connector.Media{}, errors.New("没有这张图")
 	}
-	return connector.Media{Mime: "image/png", Data: []byte("made-up png " + ref)}, nil
+	return connector.Media{Mime: "image/png", Data: connectorTestPNG()}, nil
 }
 
 func (*threadsConnector) Actions() []proto.Tool { return []proto.Tool{{Name: "example_send"}} }
@@ -108,6 +112,88 @@ func threadsHubWith(t *testing.T, rules []connector.Rule) (*Manager, *threadsCon
 		t.Fatal(err)
 	}
 	return h, c, h.routes()
+}
+
+type avatarPageConnector struct {
+	*pictureConnector
+	source string
+	page   connector.ThreadPage
+}
+
+func (c *avatarPageConnector) ID() string { return c.source }
+
+func (c *avatarPageConnector) Thread(context.Context, string, string, int) (connector.ThreadPage, error) {
+	return c.page, nil
+}
+
+func TestConnectorThreadAvatarURLs(t *testing.T) {
+	for _, source := range []string{"telegram", "github"} {
+		t.Run(source, func(t *testing.T) {
+			h := newTestManager(t)
+			h.store = newMemStore()
+			h.connectors = connector.NewRegistry(nil)
+			c := &avatarPageConnector{pictureConnector: &pictureConnector{}, source: source}
+			c.state.Store(connector.StateOK)
+			// Read the same shape an external connector can return, including unknown fields.
+			if err := json.Unmarshal([]byte(`{
+              "chat":{"id":"demo","avatar":"a.u1.501","avatar_url":"/plugin-path","author":{"name":"Author","avatar":"avatar:author:1","avatar_url":"/plugin-path"}},
+              "messages":[
+                {"id":"1","text":"Review","sender":{"name":"Reviewer","avatar":"https://example.com/avatar.png","avatar_url":"/plugin-path"}},
+                {"id":"2","sender":{"name":"Guest","avatar_url":"/plugin-path"}}
+              ],"before":"older"
+            }`), &c.page); err != nil {
+				t.Fatal(err)
+			}
+			original, err := json.Marshal(c.page)
+			if err != nil || bytes.Contains(original, []byte(`"avatar_url"`)) {
+				t.Fatalf("connector page contains a hub field: %s, %v", original, err)
+			}
+			if err := h.addConnector(c); err != nil {
+				t.Fatal(err)
+			}
+			mux := h.routes()
+			token := deviceToken("phone", roleFull)
+			code, out := call(t, mux, "GET", "/api/v1/connectors/"+source+"/thread?thread=demo", token, "")
+			if code != http.StatusOK {
+				t.Fatalf("thread: %d %v", code, out)
+			}
+			chat := out["chat"].(map[string]any)
+			messages := out["messages"].([]any)
+			check := func(row map[string]any, ref string) {
+				t.Helper()
+				if row["avatar"] != ref || row["avatar_url"] != extwire.AvatarURL(source, ref) {
+					t.Errorf("avatar: %v, want %q and its %s hub path", row, ref, source)
+				}
+			}
+			check(chat, "a.u1.501")
+			check(chat["author"].(map[string]any), "avatar:author:1")
+			check(messages[0].(map[string]any)["sender"].(map[string]any), "https://example.com/avatar.png")
+			if out["before"] != "older" || messages[0].(map[string]any)["text"] != "Review" {
+				t.Fatalf("missing thread data in the app response: %v", out)
+			}
+			if after, err := json.Marshal(c.page); err != nil || !bytes.Equal(original, after) {
+				t.Fatalf("the app response changed the connector's page: %s, %v", after, err)
+			}
+			if guest := messages[1].(map[string]any)["sender"].(map[string]any); guest["avatar"] != nil || guest["avatar_url"] != nil {
+				t.Errorf("guest without a picture: %v", guest)
+			}
+			if c.fetched.Load() != 0 {
+				t.Fatal("listing the thread fetched an image")
+			}
+			path, _ := chat["avatar_url"].(string)
+			if path == "" {
+				t.Fatal("no chat picture to open")
+			}
+			req := httptest.NewRequest("GET", path+"?size=80", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, req)
+			cfg, format, err := image.DecodeConfig(w.Body)
+			if w.Code != http.StatusOK || err != nil || format != "jpeg" || cfg.Width != 128 || cfg.Height != 128 || c.fetched.Load() != 1 {
+				t.Fatalf("opening the listed picture: %d, %s %v, %v, media reads %d", w.Code, format, cfg, err, c.fetched.Load())
+			}
+		})
+	}
 }
 
 // A thread reads a page at a time, newest first, each page going back from the one before; the app is told why it
@@ -144,12 +230,58 @@ func TestConnectorThreadPages(t *testing.T) {
 		t.Fatalf("rate limited: %d %v", code, out)
 	}
 	c.state.Store(connector.StateNotSignedIn)
-	if code, _ := call(t, mux, "GET", "/api/v1/connectors/example/thread?thread=u1", h.cfg.Token, ""); code != 409 {
-		t.Fatalf("signed out: %d", code)
+	if code, out := call(t, mux, "GET", "/api/v1/connectors/example/thread?thread=u1", h.cfg.Token, ""); code != 409 || out["code"] != "unavailable" {
+		t.Fatalf("signed out: %d %v", code, out)
 	}
-	_ = h.addConnector(&exampleConnector{})
-	if code, _ := call(t, h.routes(), "GET", "/api/v1/connectors/example/thread?thread=u1", h.cfg.Token, ""); code != 409 && code != 404 {
-		t.Fatalf("a connector without threads: %d", code)
+}
+
+// An Inbox item with no conversation of its own (#5537) reads as a page that is not one, with no messages: a
+// subscription's item (its source is the subscription, not a connector; deleted since or not) and a connector's
+// without threads. The apps show what the hub collected for it, older ones too, with no error card. Replies and media
+// still say there is none; an id that is neither is still no connector.
+func TestThreadWithoutConversation(t *testing.T) {
+	ctx := context.Background()
+	h := newTestManager(t)
+	h.store = newMemStore()
+	h.connectors = connector.NewRegistry(nil)
+	if err := h.addConnector(&exampleConnector{}); err != nil {
+		t.Fatal(err)
+	}
+	store := subscriptions.NewMemStore()
+	h.subs = subscriptions.New(subscriptions.Options{Store: store})
+	if err := store.CreateSubscription(ctx, subscriptions.Subscription{ID: "sub_example1", Connector: "mail", Label: "示例邮件"}); err != nil {
+		t.Fatal(err)
+	}
+	mux := h.routes()
+	none := func(path, thread string) {
+		t.Helper()
+		code, out := call(t, mux, "GET", path, h.cfg.Token, "")
+		chat, _ := out["chat"].(map[string]any)
+		if msgs, ok := out["messages"].([]any); code != 200 || !ok || len(msgs) != 0 || chat["kind"] != connector.ThreadKindNone || chat["id"] != thread ||
+			out["before"] != nil {
+			t.Fatalf("%s: %d %v", path, code, out)
+		}
+		if _, ok := chat["name"]; !ok {
+			t.Fatalf("%s: chat without a name (older apps need one): %v", path, chat)
+		}
+	}
+	none("/api/v1/connectors/sub_example1/thread?thread=sub:sub_example1:t1&limit=30", "sub:sub_example1:t1")
+	none("/api/v1/connectors/sub_example1/thread?thread=other", "other")
+	none("/api/v1/connectors/sub_gone/thread?thread=sub:sub_gone:t1", "sub:sub_gone:t1")
+	none("/api/v1/connectors/example/thread?thread=example-org/example-repo%2312", "example-org/example-repo#12")
+	for _, c := range []struct {
+		method, path, body string
+		code               int
+	}{
+		{"GET", "/api/v1/connectors/nope/thread?thread=u1", "", 404},
+		{"GET", "/api/v1/connectors/nope/thread?thread=sub:sub_example1:t1", "", 404},
+		{"GET", "/api/v1/connectors/sub_example1/media?ref=avatar:u1:1", "", 404},
+		{"POST", "/api/v1/connectors/sub_example1/thread/reply", `{"thread":"sub:sub_example1:t1","action":"x","text":"好的"}`, 404},
+		{"POST", "/api/v1/connectors/example/thread/reply", `{"thread":"t1","action":"example_send","text":"好的"}`, 409},
+	} {
+		if code, _ := call(t, mux, c.method, c.path, h.cfg.Token, c.body); code != c.code {
+			t.Errorf("%s %s: %d, want %d", c.method, c.path, code, c.code)
+		}
 	}
 }
 
@@ -170,7 +302,7 @@ func TestConnectorMedia(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if w := get("avatar:u1:1"); w.Code != 200 || w.Body.String() != "made-up png avatar:u1:1" || w.Header().Get("Content-Type") != "image/png" ||
+			if w := get("avatar:u1:1"); w.Code != 200 || !bytes.Equal(w.Body.Bytes(), connectorTestPNG()) || w.Header().Get("Content-Type") != "image/png" ||
 				!strings.Contains(w.Header().Get("Cache-Control"), "immutable") {
 				t.Errorf("%d %q %v", w.Code, w.Body.String(), w.Header())
 			}

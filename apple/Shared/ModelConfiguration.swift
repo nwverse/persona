@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The hub owns the purpose catalog and inheritance; clients edit only supported fields.
 nonisolated struct ModelBinding: Codable, Hashable, Sendable {
@@ -35,14 +36,28 @@ nonisolated struct ModelPurpose: Codable, Hashable, Identifiable, Sendable {
     var providerIDs: [String]?
     /// The runtimes Main Chat can run on (`cli`, `agentsdk`); nil for every other use and on an older hub.
     var runtimes: [String]?
+    /// What the use is for, in a sentence in the request's language (#5086, #5806): wording only. Every built-in use
+    /// has one; a task's, an extension's and a voice plugin's have none, and a hub from before sends none.
+    var description: String?
+    /// A detailed extension purpose may expose the hub's ordered candidate policy.
+    var candidates: ExtensionModelCandidates?
+
+    var isExtensionPurpose: Bool { id.hasPrefix("extension.") && kind == "api" }
+    var extensionCandidates: ExtensionModelCandidates? { isExtensionPurpose && hasWritableFields ? candidates : nil }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, group, kind, parent, override, effective, revision, status, limit, fields, uses, runtimes
+        case id, name, group, kind, parent, override, effective, revision, status, limit, fields, uses, runtimes, description, candidates
         case categoryID = "category_id"
         case machineID = "machine_id", inheritedFrom = "inherited_from", providerIDs = "provider_ids"
     }
 
     func supports(_ field: String) -> Bool { (fields ?? ["provider", "model"]).contains(field) }
+
+    /// The sentence to draw under the name; nil when the hub sent none or only blanks.
+    var purposeNote: String? {
+        guard let text = description?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        return text
+    }
 
     /// Explicit capabilities allow a child to own a binding without pretending to be a category.
     var hasWritableFields: Bool {
@@ -50,8 +65,61 @@ nonisolated struct ModelPurpose: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+nonisolated struct ExtensionModelCandidates: Codable, Hashable, Sendable {
+    struct Entry: Codable, Hashable {
+        var model: String
+        var provider: String?
+        var providerName: String?
+        var available: Bool
+        var problem: String?
+        /// The saved model before resolving the provider default. Older hubs only send the resolved model.
+        var configuredModel: String?
+        enum CodingKeys: String, CodingKey {
+            case model, provider, available, problem
+            case providerName = "provider_name", configuredModel = "configured_model"
+        }
+    }
+
+    struct Request: Codable, Hashable, Identifiable {
+        var models: [Entry]
+        var id: [String] { models.map(\.model) }
+        var lastUsed: Date
+        enum CodingKeys: String, CodingKey { case models, lastUsed = "last_used" }
+    }
+
+    var mode: String
+    var custom: [Entry]
+    var requested: [Request]
+    var modes: [String]
+    var most: Int
+    var directProviderIDs: [String]?
+    enum CodingKeys: String, CodingKey { case mode, custom, requested, modes, most, directProviderIDs = "direct_provider_ids" }
+
+    var selection: ModelCandidateSelection {
+        .init(mode: mode, custom: mode == "custom" ? custom.map {
+            .init(provider: $0.provider ?? "", model: $0.configuredModel ?? $0.model)
+        } : [])
+    }
+}
+
+nonisolated struct ModelCandidateSelection: Equatable, Sendable, Encodable {
+    struct Choice: Hashable, Sendable, Encodable {
+        var provider: String
+        var model: String
+    }
+    var mode: String
+    var custom: [Choice]
+    var hasDuplicates: Bool { Set(custom).count != custom.count }
+    enum CodingKeys: String, CodingKey { case mode, custom }
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(mode, forKey: .mode)
+        if mode == "custom" { try container.encode(custom, forKey: .custom) }
+    }
+}
+
 /// The hub stopped calling a connection after the upstream said its quota is used up or it is busy, until `until`
-/// (docs/assistant/model-config.md「上游限流」).
+/// (docs/assistant/model-config.md「Upstream rate limits」).
 nonisolated struct ModelLimit: Codable, Hashable, Sendable {
     var reason: String // quota | busy
     var until: Date
@@ -104,11 +172,16 @@ nonisolated struct ModelConfigurationPatch: Encodable, Sendable {
     var binding: ModelBinding
     var fields: [String]
 
-    enum CodingKeys: String, CodingKey { case revision, provider, model, effort, runtime }
+    var candidates: ModelCandidateSelection? = nil
+    enum CodingKeys: String, CodingKey { case revision, provider, model, effort, runtime, candidates }
 
     func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(revision, forKey: .revision)
+        if let candidates {
+            if candidates.mode == "extension" { try c.encodeNil(forKey: .candidates) }
+            else { try c.encode(candidates, forKey: .candidates) }
+        }
         for (field, value, key) in [("provider", binding.provider, CodingKeys.provider),
                                     ("model", binding.model, CodingKeys.model), ("effort", binding.effort, CodingKeys.effort),
                                     ("runtime", binding.runtime, CodingKeys.runtime)] where fields.contains(field) {

@@ -19,6 +19,23 @@ func fakeClaudeHome(t *testing.T, script string) {
 	if _, err := exec.LookPath("zsh"); err != nil {
 		t.Skip("no zsh")
 	}
+	fakeClaudeHomeFiles(t, script)
+}
+
+// fakeClaudeHomeBash uses the assistant's production bash fallback for a regression that must execute without zsh.
+func fakeClaudeHomeBash(t *testing.T, script string) {
+	t.Helper()
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Fatalf("no bash: %v", err)
+	}
+	fakeClaudeHomeFiles(t, script)
+	// Only here: the launcher profile probe dates every shell file it reads (assistant_profile_probe.go), and the
+	// zsh fixtures settle only ~/.zshrc, so a fresh ~/.bashrc beside it would read as a profile still being edited.
+	_ = os.WriteFile(filepath.Join(os.Getenv("HOME"), ".bashrc"), nil, 0o600)
+}
+
+func fakeClaudeHomeFiles(t *testing.T, script string) {
+	t.Helper()
 	home := t.TempDir()
 	bin := filepath.Join(home, "bin")
 	if err := os.MkdirAll(bin, 0o700); err != nil {
@@ -36,6 +53,16 @@ func fakeClaudeHome(t *testing.T, script string) {
 	t.Setenv("HOME", home)
 	t.Setenv("ZDOTDIR", home)
 	t.Setenv("PATH", bin+":/usr/bin:/bin")
+	// The launcher assertions are about what the launcher declares, not what the developer's own shell exports (a
+	// gateway of its own included: tool search follows it, #10365).
+	for _, k := range []string{"CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_CODE_MAX_CONTEXT_TOKENS", "ENABLE_TOOL_SEARCH", "ANTHROPIC_BASE_URL"} {
+		t.Setenv(k, "")
+		os.Unsetenv(k)
+	}
+	// Nor the machine's managed Claude Code policy (claudeEndpoint reads its env first).
+	managed := claudeManagedSettingsFiles
+	claudeManagedSettingsFiles = func() []string { return nil }
+	t.Cleanup(func() { claudeManagedSettingsFiles = managed })
 }
 
 // A launcher that exits before reading the message (its node socket gone: "no persona node") lost it: the send says
@@ -61,7 +88,11 @@ func TestAssistantSendFailsWhenTheLauncherDoesNotStart(t *testing.T) {
 
 // One that starts answers as before, as soon as its first line comes out.
 func TestAssistantSendReturnsOnceTheProcessStarted(t *testing.T) {
-	fakeClaudeHome(t, "read line\necho '{\"type\":\"system\",\"subtype\":\"init\"}'\nsleep 30\n")
+	fakeClaudeHome(t, `case " $* " in *" auth status "*) echo '{"loggedIn":true}'; exit 0 ;; esac
+read line
+echo '{"type":"system","subtype":"init"}'
+sleep 30
+`)
 	n := codexTestNode(t)
 	withFakeHub(t, n)
 	start := time.Now()
@@ -141,5 +172,55 @@ func TestSockGoneTellsADeadReplacementFromALiveOne(t *testing.T) {
 	_ = os.Remove(nodeclient.SocketPath())
 	if why := n.sockGone(); why != "vanished" {
 		t.Fatalf("a removed socket: %q", why)
+	}
+}
+
+// A conversation's process read its directory's CLAUDE.md when it started: once the hub writes a new one (new prompts
+// after an upgrade), the next message resumes it in a fresh process; while it is unchanged the process is kept.
+func TestAssistantSendRestartsForNewInstructions(t *testing.T) {
+	fakeClaudeHome(t, "echo '{\"type\":\"system\",\"subtype\":\"init\"}'\nwhile read line; do echo '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"ok\"}'; done\n")
+	n := codexTestNode(t)
+	withFakeHub(t, n)
+	cwd := t.TempDir()
+	md := filepath.Join(cwd, "CLAUDE.md")
+	if err := os.WriteFile(md, []byte("stacked_bar"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	id, err := n.assistantSend(ctx, "", cwd, "claude", "hello", nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { n.stopAssistant(id) }()
+	proc := func() *assistantProc {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		return n.procs[id]
+	}
+	idle := func(p *assistantProc) {
+		t.Helper()
+		waitFor(t, "the turn to end", func() bool {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			return !p.busy
+		})
+	}
+	first := proc()
+	idle(first)
+	if _, err := n.assistantSend(ctx, id, "", "", "again", nil, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if proc() != first {
+		t.Fatal("restarted with the same CLAUDE.md")
+	}
+	idle(first)
+	if err := os.WriteFile(md, []byte("ring"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.assistantSend(ctx, id, "", "", "today's calories", nil, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if p := proc(); p == first || p == nil || p.instructions != instructionsDigest(cwd) {
+		t.Fatal("kept the process that read the old CLAUDE.md")
 	}
 }

@@ -32,6 +32,9 @@ import (
 // The default manager: the assistant the hub starts (assistantwire.AssistantID), unless the user picked another.
 const managerDefaultKey = "managers.default"
 
+// managerBuiltinHideKey: the user asked to keep the built-in manager out of the switcher while it is not used (#9055).
+const managerBuiltinHideKey = "managers.builtin_hide"
+
 // installCodeTTL is how long an install code is good for; it works once.
 const installCodeTTL = 10 * time.Minute
 
@@ -69,7 +72,13 @@ type managerInfo struct {
 	Online  bool   `json:"online"`
 	Default bool   `json:"default,omitempty"`
 	// Builtin: the assistant this hub starts beside itself; it cannot be removed (hub.json assistant.external).
-	Builtin  bool       `json:"builtin,omitempty"`
+	Builtin bool `json:"builtin,omitempty"`
+	// Hide (the built-in manager only): the user asked to keep it out of the switcher while it is not used (PATCH
+	// {"hide"}). Hidden: that is in effect, and the apps leave it out of the switcher. Not while it is the default, owns
+	// a machine or has something in its inbox that needs the user: a machine that falls back to it (its manager
+	// removed) shows it again by itself (#9055).
+	Hide     bool       `json:"hide,omitempty"`
+	Hidden   bool       `json:"hidden,omitempty"`
 	Host     string     `json:"host,omitempty"`
 	OS       string     `json:"os,omitempty"`
 	Arch     string     `json:"arch,omitempty"`
@@ -83,6 +92,10 @@ type managerInfo struct {
 	// NeedsUpdate: it is online with a build from before manager.json (no config.own in its hello): the hello no
 	// longer carries the manager's defaults, so it runs on its built-in ones until it is updated.
 	NeedsUpdate bool `json:"needs_update,omitempty"`
+	// InboxNeedsYou: how many open items of its inbox are in "Needs you", as it last said on this connection
+	// (inbox.needs_you). Absent: not known (it is away or being installed, a build from before it reported one, or
+	// its stored items could not be read).
+	InboxNeedsYou *int `json:"inbox_needs_you,omitempty"`
 }
 
 // defaultManager is the manager the entries that belong to none go to (Siri, the shortcuts, the assistant page as
@@ -122,15 +135,17 @@ func (h *Hub) managerList(ctx context.Context) ([]managerInfo, error) {
 	if s == nil {
 		return nil, errors.New("no database")
 	}
-	idents, err := s.BusIdentities(ctx)
+	idents, err := h.busIdentities(ctx, s)
 	if err != nil {
 		return nil, err
 	}
-	def := h.defaultManager(ctx)
+	def := h.defaultOwner(ctx)
+	hide := h.builtinHide(ctx)
 	live := map[string]busPresence{}
 	for _, p := range h.busRoster() {
 		live[p.ID] = p
 	}
+	needsYou := h.inboxNeedsYou()
 	out := []managerInfo{}
 	for _, b := range idents {
 		if b.Role != bus.RoleManager {
@@ -143,6 +158,14 @@ func (h *Hub) managerList(ctx context.Context) ([]managerInfo, error) {
 			m.Online, m.Since = true, &since
 			m.Host, m.OS, m.Arch, m.Deploy, m.Version = p.Host, p.OS, p.Arch, p.Deploy, p.Version
 			m.NeedsUpdate = !slices.Contains(p.Capabilities, assistantwire.CapabilityConfigOwn)
+			m.InboxNeedsYou = needsYou[b.ID]
+		}
+		if m.Builtin {
+			// Not hidden while it is used: the default, a computer of its own, or something in its inbox that needs
+			// the user (else the apps would mark that something waits where the switcher cannot go).
+			waiting := m.InboxNeedsYou != nil && *m.InboxNeedsYou > 0
+			m.Hide = hide
+			m.Hidden = hide && !m.Default && !waiting && !h.managerOwnsMachine(b.ID)
 		}
 		out = append(out, m)
 	}
@@ -169,6 +192,33 @@ func (h *Hub) managerList(ctx context.Context) ([]managerInfo, error) {
 	return out, nil
 }
 
+// builtinHide: the user asked to keep the built-in manager out of the switcher (managerInfo.Hide); false when the
+// store cannot say.
+func (h *Hub) builtinHide(ctx context.Context) bool {
+	s := h.managerStore()
+	if s == nil {
+		return false
+	}
+	var hide bool
+	ok, err := s.Setting(ctx, managerBuiltinHideKey, &hide)
+	return err == nil && ok && hide
+}
+
+// managerOwnsMachine: a machine of hub.json's, or one the apps see (a member hub's), is manager id's (machineOwner).
+func (h *Hub) managerOwnsMachine(id string) bool {
+	for _, mc := range h.cfgEntries() {
+		if h.machineOwner(mc.ID) == id {
+			return true
+		}
+	}
+	for _, m := range h.machinesNow() {
+		if h.machineOwner(m.cfg.ID) == id {
+			return true
+		}
+	}
+	return false
+}
+
 // builtinManager: id is the assistant this hub starts itself.
 func (h *Hub) builtinManager(id string) bool {
 	return id == assistantwire.AssistantID && !h.cfg.Assistant.External
@@ -179,6 +229,12 @@ func (h *Hub) builtinManager(id string) bool {
 // anyway.
 func (h *Hub) managersChanged() {
 	h.ownersChanged() // the default may be another one now (ownership.go)
+	h.tellManagers()
+}
+
+// tellManagers is managersChanged's push alone: what the roster says of a manager moved (its inbox's "Needs you"
+// count), not who is in it or which is the default, so nothing kept of those is forgotten.
+func (h *Hub) tellManagers() {
 	b := []byte(`{"type":"managers"}`)
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -187,6 +243,57 @@ func (h *Hub) managersChanged() {
 			c.queue(b)
 		}
 	}
+}
+
+// The inbox's "Needs you" count of each manager (docs/assistant/managers.md "What the hub keeps of each manager"): the
+// inbox is the manager's, so it counts and says the number (inbox.needs_you, after its handshake and on every change),
+// and the hub keeps the last one of the connection for the roster. A number that differs from the one before tells
+// the apps to read the roster again, once for the numbers that change within inboxNeedsYouPushDelay: a round's items
+// triaged one by one move the count a step each, and the apps reload more than the roster on that push.
+func init() {
+	handleBusEvent(assistantwire.EventInboxNeedsYou, func(h *Hub, c *busConn, params json.RawMessage) {
+		var p struct {
+			Count *int `json:"count"` // absent is no count, not 0
+		}
+		if json.Unmarshal(params, &p) != nil || p.Count == nil || *p.Count < 0 || c.ident.Role != bus.RoleManager {
+			return
+		}
+		h.bus.mu.Lock()
+		same := c.inboxNeedsYou != nil && *c.inboxNeedsYou == *p.Count
+		c.inboxNeedsYou = p.Count
+		push := !same && !h.bus.needsYouPush
+		if push {
+			h.bus.needsYouPush = true
+		}
+		delay := cmp.Or(h.bus.needsYouDelay, inboxNeedsYouPushDelay)
+		h.bus.mu.Unlock()
+		if push {
+			time.AfterFunc(delay, func() {
+				h.bus.mu.Lock()
+				h.bus.needsYouPush = false // before the push: a count that changes from here on gets its own
+				h.bus.mu.Unlock()
+				h.tellManagers()
+			})
+		}
+	})
+}
+
+// inboxNeedsYouPushDelay is how long after a manager's inbox count changed the apps are told: the changes within it
+// are one push, and the roster they then read has the newest numbers.
+const inboxNeedsYouPushDelay = time.Second
+
+// inboxNeedsYou is the count each connected manager reported on its connection, by id; none for one that has not.
+func (h *Hub) inboxNeedsYou() map[string]*int {
+	out := map[string]*int{}
+	h.bus.mu.Lock()
+	defer h.bus.mu.Unlock()
+	for id, c := range h.bus.current {
+		if c.inboxNeedsYou != nil {
+			n := *c.inboxNeedsYou
+			out[id] = &n
+		}
+	}
+	return out
 }
 
 // newInstallCode makes a one-time code for manager id (a new one, or one moving to another place) and keeps its hash.
@@ -375,7 +482,7 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 			writeErr(w, http.StatusServiceUnavailable, err)
 			return
 		}
-		out := map[string]any{"managers": list, "default": h.defaultManager(r.Context())}
+		out := map[string]any{"managers": list, "default": h.defaultOwner(r.Context())}
 		if conflicts := h.managerBotConflicts(list); len(conflicts) > 0 {
 			out["bot_conflicts"] = conflicts
 		}
@@ -435,12 +542,14 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 		}
 		writeJSON(w, map[string]any{"code": code, "expires_at": until, "commands": h.managerCommands(r, id, code)})
 	})
-	// {"name"?, "default"?: true}: rename it, make it the default.
+	// {"name"?, "default"?: true, "hide"?}: rename it, make it the default, keep the built-in one out of the switcher
+	// while it is not used (#9055).
 	api.HandleFunc("PATCH /api/v1/managers/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		var req struct {
 			Name    *string `json:"name"`
 			Default *bool   `json:"default"`
+			Hide    *bool   `json:"hide"`
 		}
 		if err := decodeJSONBody(w, r, &req, 4<<10); err != nil {
 			writeBodyErr(w, err, err)
@@ -455,6 +564,17 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 			return
 		}
 		s := h.managerStore()
+		if req.Hide != nil {
+			if !info.Builtin {
+				writeErr(w, http.StatusBadRequest, errors.New("only the built-in assistant can be hidden"))
+				return
+			}
+			// Hidden only while it is not used: not the default (nor made it now), owning no machine.
+			if *req.Hide && (info.Default || req.Default != nil && *req.Default || h.managerOwnsMachine(id)) {
+				writeErrCode(w, http.StatusConflict, "builtin_in_use", errors.New("the built-in assistant is the default or has a computer"))
+				return
+			}
+		}
 		if req.Name != nil {
 			name, err := managerName(*req.Name)
 			if err != nil {
@@ -472,6 +592,12 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 				return
 			}
 			if err := s.PutSetting(r.Context(), managerDefaultKey, id); err != nil {
+				writeErr(w, http.StatusInternalServerError, err)
+				return
+			}
+		}
+		if req.Hide != nil {
+			if err := s.PutSetting(r.Context(), managerBuiltinHideKey, *req.Hide); err != nil {
 				writeErr(w, http.StatusInternalServerError, err)
 				return
 			}
@@ -503,6 +629,8 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 			writeErrCode(w, http.StatusServiceUnavailable, "owners_unknown", err)
 		case errors.Is(err, errKeeperAway): // the manager that keeps it, or the one it goes to, is away (machines_kept.go)
 			writeErrCode(w, http.StatusServiceUnavailable, "assistant_offline", err)
+		case errors.Is(err, errLinkSwitchInProgress): // 409 link_switch_in_progress (link_switch.go)
+			writeAddMachineErr(w, err)
 		case err != nil:
 			writeErr(w, http.StatusInternalServerError, err)
 		default:
@@ -576,6 +704,12 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 		// are done; the ones after find it gone (ownership_moves.go).
 		drop := r.URL.Query().Get("drop_machines") == "1"
 		err := h.removingManager(func() error {
+			// Not while one of its computers switches, and none begins until it is removed (link_switch.go).
+			release, err := h.holdManagerLinkSwitch(r.Context(), id)
+			if err != nil {
+				return err
+			}
+			defer release()
 			// What it keeps in its own list is in its manager.json only (machines_kept.go): moved away first, or
 			// dropped on purpose. Checked with the moves held off, from a record that was read.
 			if keeps, known := h.keepsAnyKnown(r.Context(), id); !drop && (keeps || !known) {
@@ -595,6 +729,9 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 			return nil
 		})
 		switch {
+		case errors.Is(err, errLinkSwitchInProgress): // 409 link_switch_in_progress
+			writeAddMachineErr(w, err)
+			return
 		case errors.Is(err, errKeepsMachines):
 			writeErrCode(w, http.StatusConflict, "keeps_machines", i18n.Err("hub-admin_machines.keeps_machines"))
 			return
@@ -674,6 +811,13 @@ func (h *Hub) managerJoinRoutes(mux *http.ServeMux) {
 			h.securityError(w, r, http.StatusTooManyRequests, "rate_limited", 0)
 			return
 		}
+		// Trading a code issues a bus token in the hub's database, before the
+		// code is spent: refused while a snapshot pauses writes.
+		if !h.quiesce.begin() {
+			writeErr(w, http.StatusServiceUnavailable, i18n.Err("hub-selfupdate.err_quiesced"))
+			return
+		}
+		defer h.quiesce.end()
 		var req struct {
 			Code string `json:"code"`
 			// Builtin: the joiner binds the built-in manager's own service (persona-manager join --builtin). A code

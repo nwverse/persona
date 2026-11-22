@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"net/http"
 	"slices"
 	"sort"
@@ -25,18 +26,43 @@ import (
 // fleetDevs is the manager's device layer for the fleet's tests: machines with the sessions their nodes list, and a
 // node whose calls a test answers.
 type fleetDevs struct {
-	mu       sync.Mutex
-	machines map[string]*fleetNode
-	order    []string
-	usage    assistantwire.UsageSummary
+	mu           sync.Mutex
+	machines     map[string]*fleetNode
+	order        []string
+	usage        assistantwire.UsageSummary
+	capacity     proto.CapacitySnapshot // what CapacitySnapshot answers (capacity_test.go)
+	gatewayRetry func(source, provider string, now time.Time) time.Time
 	// attention is every Persona Link summary handed over (SetAttention), in order.
 	attention []link.Attention
+	// linkDesktop: the manager has a Persona Link desktop; confirmed: the cards its app confirmed it handed to
+	// Notification Center (confirm; LinkRang).
+	linkDesktop bool
+	confirmed   map[string]bool
+	// watched: the sessions an app has open (Watched), by machine and session.
+	watched map[[2]string]bool
+	// held: the owner's messages held for machines' Agents while their computer is away (HeldMessages), by machine and
+	// session; heldAsked and heldLang: how many times HeldMessages was called for a machine and in what language last
+	// (counted, not listed: the allocation tests decorate through it); heldActs: every HeldRetry / HeldDelete
+	// ("retry <session>/<message>"); heldErr: what those answer for a message they find.
+	held      map[string]map[string][]proto.UndeliveredMessage
+	heldAsked map[string]int
+	heldLang  map[string]i18n.Lang
+	heldActs  []string
+	heldErr   error
 }
 
 type fleetNode struct {
 	name, home, trust string
+	homeReal          string // home with its links followed, when the node says it is another path
 	sessions          []proto.Session
+	lists             int // how many times its whole list was read (Sessions)
 	connected         time.Time
+	// away: its node is not connected (Summary and List say not reachable); its sessions stay as last listed.
+	away bool
+	// shownUntil: shown as before until then while its node is away (Shown, devices.Shown.Until); unlisted: its node
+	// has given no list on this connection yet (Shown's Listed false).
+	shownUntil time.Time
+	unlisted   bool
 	// call answers the node's methods (nil: {}); calls are the ones it got.
 	call  func(method string, params json.RawMessage) (any, error)
 	calls []fleetCall
@@ -121,7 +147,7 @@ func (d *fleetDevs) List() []devices.Summary {
 	var out []devices.Summary
 	for _, id := range d.order {
 		n := d.machines[id]
-		out = append(out, devices.Summary{ID: id, Name: n.name, Home: n.home, Trust: n.trust, Online: true, Reachable: true})
+		out = append(out, devices.Summary{ID: id, Name: n.name, Home: n.home, HomeReal: n.homeReal, Trust: n.trust, Online: !n.away, Reachable: !n.away})
 	}
 	return out
 }
@@ -132,6 +158,28 @@ func (d *fleetDevs) MachineResources(string) (*proto.Machine, *proto.MetricSampl
 
 func (d *fleetDevs) Canonical(id string) string { return id }
 
+// Summary is List's entry for id, found without the others as the devices do.
+func (d *fleetDevs) Summary(id string) (devices.Summary, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	n := d.machines[id]
+	if n == nil || !slices.Contains(d.order, id) {
+		return devices.Summary{}, false
+	}
+	return devices.Summary{ID: id, Name: n.name, Home: n.home, HomeReal: n.homeReal, Trust: n.trust, Online: !n.away, Reachable: !n.away}, true
+}
+
+// Shown is the node's shownUntil and unlisted, as the devices say them.
+func (d *fleetDevs) Shown(id string) (devices.Shown, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	n := d.machines[id]
+	if n == nil {
+		return devices.Shown{}, false
+	}
+	return devices.Shown{Listed: !n.unlisted, Until: n.shownUntil}, true
+}
+
 func (d *fleetDevs) Sessions(id string) ([]proto.Session, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -139,7 +187,19 @@ func (d *fleetDevs) Sessions(id string) ([]proto.Session, bool) {
 	if n == nil {
 		return nil, false
 	}
+	n.lists++
 	return append([]proto.Session(nil), n.sessions...), true
+}
+
+// AppendSessions copies the list into dst's array, as the devices do.
+func (d *fleetDevs) AppendSessions(dst []proto.Session, id string) ([]proto.Session, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	n := d.machines[id]
+	if n == nil {
+		return dst, false
+	}
+	return append(dst, n.sessions...), true
 }
 
 // SessionsWhere copies out only what keep accepts, as the devices do: a benchmark of a view then counts no copy of the
@@ -195,10 +255,55 @@ func (d *fleetDevs) Usage() assistantwire.UsageSummary {
 	return d.usage
 }
 
+func (d *fleetDevs) CapacitySnapshot(context.Context) proto.CapacitySnapshot {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.capacity
+}
+
+func (d *fleetDevs) GatewayRetryAt(source, provider string, now time.Time) time.Time {
+	if d.gatewayRetry != nil {
+		return d.gatewayRetry(source, provider, now)
+	}
+	return time.Time{}
+}
+
 func (d *fleetDevs) SetAttention(a link.Attention) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.attention = append(d.attention, a)
+}
+
+// confirm is the Persona Link desktop's app confirming it handed these cards' notifications to Notification Center.
+func (d *fleetDevs) confirm(cards ...string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.confirmed == nil {
+		d.confirmed = map[string]bool{}
+	}
+	for _, c := range cards {
+		d.confirmed[c] = true
+	}
+}
+
+// LinkRang is the devices' (internal/devices LinkRang): true once the desktop's app confirmed card, false at once
+// without a desktop, and when the time is up or ctx ends.
+func (d *fleetDevs) LinkRang(ctx context.Context, card string, within time.Duration) bool {
+	ctx, cancel := context.WithTimeout(ctx, within)
+	defer cancel()
+	for {
+		d.mu.Lock()
+		on, rang := d.linkDesktop, d.confirmed[card]
+		d.mu.Unlock()
+		if !on || rang {
+			return rang
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
 }
 
 // handedAttention is every summary handed over so far.
@@ -244,6 +349,20 @@ func (m *fleetMem) InsertInteraction(ctx context.Context, ix proto.Interaction) 
 	return nil
 }
 
+func (m *fleetMem) MarkInteractionResumable(_ context.Context, id string) (bool, error) {
+	m.fmu.Lock()
+	defer m.fmu.Unlock()
+	if m.status[id] != "pending" {
+		return false, nil
+	}
+	for i := range m.recs {
+		if m.recs[i].Interaction.ID == id {
+			m.recs[i].Interaction.Resumable = true
+		}
+	}
+	return true, nil
+}
+
 func (m *fleetMem) FinishInteraction(_ context.Context, id, status string, res *proto.Resolution) error {
 	m.fmu.Lock()
 	defer m.fmu.Unlock()
@@ -274,6 +393,40 @@ func (m *fleetMem) Interactions(_ context.Context, machine, session string, _ in
 		}
 	}
 	return out, nil
+}
+
+// InteractionsPage is db.InteractionsPage over the kept records, by their interaction's CreatedAt.
+func (m *fleetMem) InteractionsPage(_ context.Context, q db.InteractionQuery) (db.InteractionPage, error) {
+	m.fmu.Lock()
+	defer m.fmu.Unlock()
+	if q.Limit <= 0 || q.Limit > 500 {
+		q.Limit = 100
+	}
+	var all []db.InteractionRecord
+	for _, r := range m.recs {
+		ix := r.Interaction
+		if q.Machine != "" && ix.MachineID != q.Machine || q.Session != "" && ix.SessionID != q.Session || q.Kind != "" && ix.Kind != q.Kind ||
+			!q.Since.IsZero() && ix.CreatedAt.Before(q.Since) {
+			continue
+		}
+		if !q.Before.IsZero() && !(ix.CreatedAt.Before(q.Before) || q.BeforeID != "" && ix.CreatedAt.Equal(q.Before) && ix.ID < q.BeforeID) {
+			continue
+		}
+		all = append(all, r)
+	}
+	sort.Slice(all, func(i, j int) bool {
+		a, b := all[i].Interaction, all[j].Interaction
+		if a.CreatedAt.Equal(b.CreatedAt) {
+			return a.ID > b.ID
+		}
+		return a.CreatedAt.After(b.CreatedAt)
+	})
+	page := db.InteractionPage{Records: all[:min(len(all), q.Limit)]}
+	if len(all) >= q.Limit {
+		last := all[q.Limit-1].Interaction
+		page.NextBefore, page.NextBeforeID = &last.CreatedAt, last.ID
+	}
+	return page, nil
 }
 
 func (m *fleetMem) AllowAlways(_ context.Context, session, _ string, keys []string) error {
@@ -320,11 +473,12 @@ var _ fleetStore = (*fleetMem)(nil)
 
 // fleetTest is a manager with the fleet on: s, its devices d, its hub f, its store st.
 type fleetTest struct {
-	t  *testing.T
-	s  *Service
-	d  *fleetDevs
-	f  *fakeHub
-	st *fleetMem
+	t      *testing.T
+	s      *Service
+	d      *fleetDevs
+	f      *fakeHub
+	st     *fleetMem
+	cancel context.CancelFunc
 }
 
 // newFleetTest is a manager carrying the machine "mac" (named "Mac") with a store, on a fake hub.
@@ -436,3 +590,64 @@ var errNode = errors.New("the node refused")
 func init() { _ = apierr.ErrOffline }
 
 func (d *fleetDevs) Follow(context.Context, string, string, bool) error { return nil }
+
+func (d *fleetDevs) Watched(id, session string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.watched[[2]string{id, session}]
+}
+
+// watch has an app open machine id's session (on) or close it.
+func (d *fleetDevs) watch(id, session string, on bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.watched == nil {
+		d.watched = map[[2]string]bool{}
+	}
+	d.watched[[2]string{id, session}] = on
+}
+
+// HeldMessages are the messages the test holds for machine's Agents (held), as the devices' index answers them; the
+// calls are counted (heldAsked, heldLang).
+func (d *fleetDevs) HeldMessages(machine string, lang i18n.Lang) map[string][]proto.UndeliveredMessage {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.heldAsked == nil {
+		d.heldAsked, d.heldLang = map[string]int{}, map[string]i18n.Lang{}
+	}
+	d.heldAsked[machine]++
+	d.heldLang[machine] = lang
+	var out map[string][]proto.UndeliveredMessage
+	for sid, list := range d.held[machine] {
+		if out == nil {
+			out = map[string][]proto.UndeliveredMessage{}
+		}
+		out[sid] = slices.Clone(list)
+	}
+	return out
+}
+
+func (d *fleetDevs) HeldRetry(_ context.Context, sid, msg string) (bool, error) {
+	return d.heldAct("retry", sid, msg)
+}
+
+func (d *fleetDevs) HeldDelete(_ context.Context, sid, msg string) (bool, error) {
+	return d.heldAct("delete", sid, msg)
+}
+
+// heldAct notes Retry or Delete (what) on held message msg of session sid, found on any machine or not; one found is
+// answered heldErr, and a Delete that succeeds takes it away.
+func (d *fleetDevs) heldAct(what, sid, msg string) (bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.heldActs = append(d.heldActs, what+" "+sid+"/"+msg)
+	for _, bySession := range d.held {
+		if i := slices.IndexFunc(bySession[sid], func(m proto.UndeliveredMessage) bool { return m.ID == msg }); i >= 0 {
+			if what == "delete" && d.heldErr == nil {
+				bySession[sid] = slices.Delete(slices.Clone(bySession[sid]), i, i+1)
+			}
+			return true, d.heldErr
+		}
+	}
+	return false, nil
+}

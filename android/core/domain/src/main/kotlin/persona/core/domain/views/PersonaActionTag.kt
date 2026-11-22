@@ -6,7 +6,7 @@ import persona.core.contracts.JsonCodec
 import persona.core.domain.decodeXmlEntities
 
 /**
- * The tag the hub ends a card's answer with (docs/assistant/assistant-views.md "Persisted submissions"):
+ * The tag the hub ends a card's answer with (docs/assistant/assistant-views.md "Persistent submission"):
  * `\n<persona-action view="…" action="…">{"values":{…}}</persona-action>`. Only that exact tag at the very end is
  * read (the attributes XML-escaped, the JSON one object of string values): text that merely looks like one, or one
  * anywhere else, is what the user wrote and stays.

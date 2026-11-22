@@ -1,6 +1,6 @@
 import XCTest
 
-/// Searching Agents in the ChatGPT-style shell (docs/apple/ios.md「新外壳」): the shell's top bar (☰, Assistant | Agents, New Session)
+/// Searching Agents in the ChatGPT-style shell (docs/apple/ios.md「New shell」): the shell's top bar (☰, Assistant | Agents, New Session)
 /// floats over the navigation bar, and the active search field rises into that bar. Drawn together they covered each
 /// other (TestFlight 70): while searching the top bar makes way, and comes back on Cancel.
 final class ShellSearchTests: XCTestCase {

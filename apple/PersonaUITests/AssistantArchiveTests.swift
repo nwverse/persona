@@ -1,6 +1,6 @@
 import XCTest
 
-/// Archiving Persona's conversations (docs/assistant/assistant.md「管理自己的对话」): a conversation in the sidebar swipes left to
+/// Archiving Persona's conversations (docs/assistant/assistant.md「Managing its own conversations」): a conversation in the sidebar swipes left to
 /// Archive (the open drawer leaves the drag to the row), it shows up under Archived, and a swipe there brings it back. In
 /// the shell, on demo data.
 final class AssistantArchiveTests: XCTestCase {
@@ -63,7 +63,7 @@ final class AssistantArchiveTests: XCTestCase {
         XCTAssertTrue(archived.waitForNonExistence(timeout: 5), "\(layout): still archived")
         XCTAssertTrue(app.staticTexts["没有归档的对话"].waitForExistence(timeout: 3), "\(layout): no empty state")
         shot("\(layout) archived empty")
-        app.buttons["完成"].firstMatch.tap()
+        app.buttons["sheet-close"].firstMatch.tap()
         XCTAssertTrue(conversation("帮我约周五").waitForExistence(timeout: 5), "\(layout): not back in the list")
         XCTAssertFalse(app.buttons["sidebar-archived"].exists, "\(layout): 已归档 with nothing in it")
     }

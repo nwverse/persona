@@ -2,5 +2,9 @@
   "assistant_required": "Update the assistant before using this renamed extension's stored model or knowledge ownership. Existing settings are preserved.",
   "invalid": "Invalid extension identity transition.",
   "node_required": "Update this computer's node before changing the extension identity. Its existing data is preserved.",
+  "node_unreachable_one": "Can't reach {machines}. Connect it, or remove it from this extension's computers, before changing the extension identity. Existing data is preserved.",
+  "node_unreachable_other": "Can't reach {machines}. Connect them, or remove them from this extension's computers, before changing the extension identity. Existing data is preserved.",
+  "node_outdated": "Update the node on {machines} before changing the extension identity. Existing data is preserved.",
+  "list_separator": ", ",
   "confirmation": "This update changes the extension ID from {from} to {to}. Explicit confirmation is required; settings and data stay with the same installation."
 }

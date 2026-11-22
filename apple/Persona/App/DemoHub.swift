@@ -1,6 +1,7 @@
 import Foundation
+import PersonaWire
 
-/// Demo Mode (docs/apple/ios.md「体验模式」): a made-up hub inside the app, for someone without one (App Review, a friend
+/// Demo Mode (docs/apple/ios.md「Demo mode」): a made-up hub inside the app, for someone without one (App Review, a friend
 /// with the TestFlight link). It sits under the data layer, so no page knows: `APIClient.request` and `LiveConnection`
 /// hand the demo config's traffic to it, and it answers with the hub's JSON. The data is scripts/mock/mock_hub.py's, written
 /// to Resources/Demo.json by scripts/mock/make_demo_data.py, with times moved to now. Nothing leaves the phone: what would
@@ -33,8 +34,12 @@ final class DemoHub {
     private let providers = DemoProviders()
     /// Settings › Claude Code › Blocked Config Folders: machine id → the rules typed in the demo (it has no other directories).
     private var blockedClaudeDirs: [String: [JSONValue]] = [:]
+    /// Settings › Agent › Hidden Agent Folders: machine id → the rules saved in the demo.
+    private var hiddenAgentDirs: [String: [JSONValue]] = [:]
     /// Settings › Claude Code › Live Replies, by machine (on unless turned off, as on a hub).
     private var liveReplies: [String: Bool] = [:]
+    /// Settings › Knowledge Selection: what was saved in the demo (nil: the hub's defaults).
+    private var kbSelection: JSONValue?
     private var memory: [JSONValue] = []
     private var prefs: JSONValue = .object([:])
     private var pins: JSONValue = .object([:])
@@ -93,13 +98,23 @@ final class DemoHub {
         tokens = all["tokens"]?.array ?? []
     }
 
-    /// "@rel:<seconds>" → that moment as an ISO date, "@unix:<seconds>" → Unix seconds (make_demo_data.py).
+    /// "@rel:<seconds>" → that moment as an ISO date, "@unix:<seconds>" → Unix seconds, "@day:<days>@<HH:MM>" → that
+    /// clock time so many days from today (a to-do due at 18:00, #2029), "@date:<days>" → that day as "yyyy-MM-dd"
+    /// (make_demo_data.py).
     private static func resolve(_ v: JSONValue, now: Date) -> JSONValue {
         switch v {
         case .object(let o): return .object(o.mapValues { resolve($0, now: now) })
         case .array(let a): return .array(a.map { resolve($0, now: now) })
         case .string(let s) where s.hasPrefix("@rel:"):
             return .string(iso(now.addingTimeInterval(Double(s.dropFirst(5)) ?? 0)))
+        case .string(let s) where s.hasPrefix("@day:"):
+            let parts = s.dropFirst(5).split(separator: "@")
+            let clock = parts.dropFirst().first?.split(separator: ":").compactMap { Int($0) } ?? []
+            let day = Calendar.current.date(byAdding: .day, value: Int(parts.first ?? "") ?? 0, to: now) ?? now
+            let at = Calendar.current.date(bySettingHour: clock.first ?? 0, minute: clock.dropFirst().first ?? 0, second: 0, of: day) ?? day
+            return .string(iso(at))
+        case .string(let s) where s.hasPrefix("@date:"):
+            return .string(TodoPlanText.day(Calendar.current.date(byAdding: .day, value: Int(s.dropFirst(6)) ?? 0, to: now) ?? now))
         case .string(let s) where s.hasPrefix("@unix:"):
             return .number((now.timeIntervalSince1970 + (Double(s.dropFirst(6)) ?? 0)).rounded())
         default: return v
@@ -115,10 +130,10 @@ final class DemoHub {
              "resets_at": .string(iso(now.addingTimeInterval(left)))]
         }
         let accounts: [JSONValue] = [
-            ["id": "claude-demo", "provider": "claude", "name": "Claude", "plan": "Max", "local": true,
+            ["id": "claude-demo", "provider": "claude", "name": "Claude", "plan": "Max", "local": true, "machines": ["MacBook"],
              "sampled_at": .string(iso(now.addingTimeInterval(-20))),
              "windows": .array([win("5h", 300, 72, 80 * 60), win("7d", 10080, 38, (2 * 24 + 6) * 3600)])],
-            ["id": "codex-demo", "provider": "codex", "name": "Codex Pro", "plan": "pro", "local": true,
+            ["id": "codex-demo", "provider": "codex", "name": "Codex Pro", "plan": "pro", "local": true, "machines": ["MacBook"],
              "sampled_at": .string(iso(now.addingTimeInterval(-240))),
              "windows": .array([win("5h", 300, 18, 3 * 3600), win("7d", 10080, 64, (3 * 24 + 2) * 3600)])],
         ]
@@ -187,6 +202,8 @@ final class DemoHub {
             }), "step": 60]
         case ["sessions"]: return ["sessions": .array(sessions)]
         case ["usage", "windows"]: return Self.usageWindows()
+        case ["usage", "days"]: return Self.usageDays(min(max(Int(q["days"] ?? "") ?? 140, 1), 371))
+        case ["usage", "hours"]: return usageHours(min(max(Int(q["days"] ?? "") ?? 7, 1), 7))
         case ["interactions"]: return ["interactions": .array(interactions)]
         case ["interactions", "history"]: return ["interactions": .array([])]
         case ["auth", "tokens"]: return ["tokens": .array(tokens), "current": "dev_phone"]
@@ -220,6 +237,7 @@ final class DemoHub {
         case ["lark", "flags"]: return ["conversations": .array([]), "messages": .array([])]
         case ["lark", "emojis"]: return ["emojis": .object([:])]
         case ["kb-search"]: return DemoKnowledgeSearch.answer(q["q"] ?? "", kb: data["kb"])
+        case ["kb", "selection"]: return kbSelection ?? Self.defaultKBSelection()
         case ["lark", "reactions", "quick"]: return ["keys": .array([])]
         default: break
         }
@@ -242,7 +260,7 @@ final class DemoHub {
             case "dirs":
                 guard online(id) else { throw APIError(status: 503, message: "\(id): machine is offline") }
                 return data["dirs"] ?? .object([:])
-            case "claude-settings", "codex-settings": return ["settings": .array([])]
+            case "claude-settings", "codex-settings", "agy-settings": return ["settings": .array([])]
             case "claude-dirs": return claudeDirsState(id)
             case "claude-live-replies": return ["on": .bool(liveReplies[id] ?? true)]
             #if os(macOS)
@@ -254,6 +272,8 @@ final class DemoHub {
             #endif
             default: throw notFound()
             }
+        case ("machines", 4) where p[2] == "agent-dirs" && p[3] == "hidden":
+            return ["rules": .array(hiddenAgentDirs[p[1]] ?? [])]
         #if os(macOS)
         case ("machines", 4) where p[2] == "fs" && p[3] == "find": // ⌘K's Files: a made-up checkout
             return ["cwd": .string(q["cwd"] ?? ""), "truncated": false, "source": "git",
@@ -287,6 +307,25 @@ final class DemoHub {
             return it
         default: throw notFound()
         }
+    }
+
+    /// The selection a hub starts with (the hub's `kb.Defaults`): mentions, the owner's own messages and direct chats
+    /// stored, every document rule on, no per-item settings.
+    private static func defaultKBSelection() -> JSONValue {
+        func rules(_ names: [String], on: Set<String>) -> JSONValue {
+            .object(Dictionary(uniqueKeysWithValues: names.map { ($0, JSONValue.object(["on": .bool(on.contains($0))])) }))
+        }
+        func order(_ levels: [[String]]) -> JSONValue { .array(levels.map { level in .array(level.map { .string($0) }) }) }
+        let messages = KBSelection.Part.messages.ruleNames
+        let docs = KBSelection.Part.docs.ruleNames
+        let messageLevels = [["mentions", "mine"]] + messages.dropFirst(2).map { [$0] }
+        return .object([
+            "version": .number(1),
+            "messages": .object(["order": order(messageLevels), "rules": rules(messages, on: ["mentions", "mine", "dm"])]),
+            "docs": .object(["order": order([["mentions", "comment_mentions"], ["authored"], ["viewed"]]), "rules": rules(docs, on: Set(docs))]),
+            "items": .array([]),
+            "history": .object([:]),
+        ])
     }
 
     private func sessionGet(_ k: SessionKey, _ what: String, _ q: [String: String]) throws -> JSONValue {
@@ -493,6 +532,9 @@ final class DemoHub {
             guard let on = body["on"]?.bool else { throw refuse() }
             liveReplies[p[1]] = on
             return ["on": .bool(on)]
+        case ("machines", 4) where p[2] == "agent-dirs" && p[3] == "hidden" && method == "PUT":
+            hiddenAgentDirs[p[1]] = body["rules"]?.array ?? []
+            return ["rules": .array(hiddenAgentDirs[p[1]] ?? [])]
         case ("machines", 4) where p[2] == "claude-dirs" && p[3] == "blocked" && method == "PUT":
             blockedClaudeDirs[p[1]] = body["blocked"]?.array ?? []
             return claudeDirsState(p[1])
@@ -508,6 +550,9 @@ final class DemoHub {
             broadcast(["type": "machines", "machines": .array(machines)])
             return machines[i]
         case ("machines", 3) where p[2] == "reconnect": return ["ok": true]
+        case ("kb", 2) where p[1] == "selection" && method == "PUT":
+            kbSelection = body
+            return body
         case ("kb", _): return ["ok": true]
         default: throw refuse()
         }
@@ -634,7 +679,7 @@ final class DemoHub {
         sockets.removeAll { $0.socket == nil }
         sockets.append(WeakSocket(socket: s))
         s.send(["type": "hello", "server_version": "demo", "client_id": "demo",
-                "features": ["file_upload", "terminal_stream", "task_push"]])
+                "features": ["file_upload", "terminal_stream", "task_push", "task_inbox", .string(ProviderScopeForm.feature)]])
         s.send(["type": "machines", "machines": .array(machines)])
         for m in Set(sessions.compactMap { $0["machine_id"]?.string }).sorted() {
             s.send(["type": "sessions", "machine_id": .string(m), "sessions": .array(sessions.filter { $0["machine_id"]?.string == m })])
@@ -849,6 +894,88 @@ final class DemoHub {
          "out": .number(Double(t.output)), "req": .number(Double(t.requests))]
     }
 
+    /// A made-up day of every computer's tokens for the token calendar (#9506), fixed by its date: quieter weekends, a
+    /// few days off, busier lately, cache reads most of it; `part` of it for today.
+    private static func usageDay(_ day: Date, part: Double = 1) -> UsageTokens {
+        let cal = Calendar.current
+        let n = UInt64(max(0, Int(day.timeIntervalSince1970 / 86400)))
+        var x = n &* 0x9E37_79B9_7F4A_7C15
+        x ^= x >> 29
+        x = x &* 0xBF58_476D_1CE4_E5B9
+        x ^= x >> 32
+        let h = Double(x % 10_000) / 10_000
+        guard h >= 0.08 else { return UsageTokens() }
+        let ago = Double(cal.dateComponents([.day], from: day, to: .now).day ?? 0)
+        let weekend = cal.isDateInWeekend(day) ? 0.3 : 1
+        let total = weekend * (0.45 + 0.55 * max(0, 1 - ago / 150)) * pow(h, 1.7) * 6e9 * part
+        return UsageTokens(input: Int64(total * 0.0006), cacheWrite: Int64(total * 0.031), cacheRead: Int64(total * 0.9642),
+                           output: Int64(total * 0.0042), requests: Int(total / 2.5e6))
+    }
+
+    /// GET /api/v1/usage/days: the last n days in the phone's zone, the last today so far.
+    private static func usageDays(_ n: Int) -> JSONValue {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: .now)
+        let part = Date.now.timeIntervalSince(today) / 86400
+        let days: [JSONValue] = (0..<n).reversed().compactMap { i in
+            guard let d = cal.date(byAdding: .day, value: -i, to: today) else { return nil }
+            var o = json(usageDay(d, part: i == 0 ? part : 1))
+            o["date"] = .string(TokenCalendarLayout.key(d, cal))
+            return .object(o)
+        }
+        return ["usage": ["zone": .string(TimeZone.current.identifier), "days": .array(days), "stored": true]]
+    }
+
+    /// GET /api/v1/usage/hours: the last n days by the hour (busy afternoons and evenings), each computer's share.
+    private func usageHours(_ n: Int) -> JSONValue {
+        let cal = Calendar.current
+        let start = cal.date(byAdding: .day, value: -(n - 1), to: cal.startOfDay(for: .now)) ?? .now
+        var hours: [JSONValue] = []
+        var total = UsageTokens()
+        var t = start
+        while t <= .now {
+            let hour = cal.component(.hour, from: t)
+            let shape = (8...23).contains(hour) ? max(0, sin(Double.pi * Double(hour - 8) / 16)) : 0.03
+            let f = shape * (0.6 + 0.8 * Double((hour * 37 + cal.component(.day, from: t) * 11) % 10) / 10) / 11
+            let w = Self.usageDay(cal.startOfDay(for: t))
+            let row = UsageTokens(input: Int64(Double(w.input) * f), cacheWrite: Int64(Double(w.cacheWrite) * f),
+                                  cacheRead: Int64(Double(w.cacheRead) * f), output: Int64(Double(w.output) * f),
+                                  requests: Int(Double(w.requests) * f))
+            total = total + row
+            var o = Self.json(row)
+            o["t"] = .number(t.timeIntervalSince1970)
+            o["date"] = .string(TokenCalendarLayout.key(t, cal))
+            o["hour"] = .number(Double(hour))
+            hours.append(.object(o))
+            t = t.addingTimeInterval(3600)
+        }
+        let weights = Self.usageMix.mapValues { $0.scale }
+        let all = weights.values.reduce(0, +)
+        let shares: [JSONValue] = machines.compactMap { m -> (Double, JSONValue)? in
+            guard let id = m["id"]?.string, let w = weights[id] else { return nil }
+            let f = w / all
+            var o = Self.json(UsageTokens(input: Int64(Double(total.input) * f), cacheWrite: Int64(Double(total.cacheWrite) * f),
+                                          cacheRead: Int64(Double(total.cacheRead) * f), output: Int64(Double(total.output) * f),
+                                          requests: Int(Double(total.requests) * f)))
+            o["id"] = .string(id)
+            o["name"] = m["name"] ?? .string(id)
+            return (w, .object(o))
+        }.sorted { $0.0 > $1.0 }.map { $0.1 }
+        // Each agent's share (#9984), largest first; "" is usage kept before the hub counted agents apart.
+        let agents: [JSONValue] = Self.usageAgentMix.map { agent, f in
+            var o = Self.json(UsageTokens(input: Int64(Double(total.input) * f), cacheWrite: Int64(Double(total.cacheWrite) * f),
+                                          cacheRead: Int64(Double(total.cacheRead) * f), output: Int64(Double(total.output) * f),
+                                          requests: Int(Double(total.requests) * f)))
+            o["agent"] = .string(agent)
+            return .object(o)
+        }
+        return ["usage": ["zone": .string(TimeZone.current.identifier), "hours": .array(hours), "machines": .array(shares),
+                          "agents": .array(agents), "total": .object(Self.json(total)), "stored": true]]
+    }
+
+    /// The agents' shares of the demo's usage, largest first.
+    private static let usageAgentMix: [(String, Double)] = [("claude", 0.62), ("codex", 0.21), ("opencode", 0.08), ("pi", 0.05), ("", 0.04)]
+
     /// GET /api/v1/machines/{id}/usage, like the manager's.
     private func usage(_ mid: String, range: String, model: String?, launcher: String?) -> JSONValue {
         let (span, step) = ["1h": (3600, 60), "7d": (7 * 86400, 3600)][range] ?? (86400, 600)
@@ -1008,9 +1135,9 @@ final class DemoSocket: LocalSocket {
 
 nonisolated extension JSONValue: ExpressibleByStringLiteral, ExpressibleByBooleanLiteral, ExpressibleByIntegerLiteral,
     ExpressibleByDictionaryLiteral, ExpressibleByArrayLiteral {
-    init(stringLiteral value: String) { self = .string(value) }
-    init(booleanLiteral value: Bool) { self = .bool(value) }
-    init(integerLiteral value: Int) { self = .number(Double(value)) }
-    init(dictionaryLiteral elements: (String, JSONValue)...) { self = .object(Dictionary(elements, uniquingKeysWith: { $1 })) }
-    init(arrayLiteral elements: JSONValue...) { self = .array(elements) }
+    public init(stringLiteral value: String) { self = .string(value) }
+    public init(booleanLiteral value: Bool) { self = .bool(value) }
+    public init(integerLiteral value: Int) { self = .number(Double(value)) }
+    public init(dictionaryLiteral elements: (String, JSONValue)...) { self = .object(Dictionary(elements, uniquingKeysWith: { $1 })) }
+    public init(arrayLiteral elements: JSONValue...) { self = .array(elements) }
 }

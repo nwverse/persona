@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 // Each item pushed to the open conversation renders ChatView again (its transcript changed). The header and the composer
 // around it did not change, so they stay put: counted through a leaf each one draws (the header's "Session info" dialog,
-// the composer's context chips, the composer footer's mode chips).
-import { act } from "react";
+// the composer's context chips, the composer's permission picker).
+import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   globalThis.IntersectionObserver ??= class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } } as unknown as typeof IntersectionObserver;
@@ -18,9 +18,14 @@ vi.mock("./SessionDialogs", async (load) => {
   const { createElement } = await import("react");
   return {
     ...real,
-    SessionInfoDialog: (p: Parameters<typeof real.SessionInfoDialog>[0]) => (renders.info++, createElement(real.SessionInfoDialog, p)),
-    ModeChips: (p: Parameters<typeof real.ModeChips>[0]) => (renders.modes++, createElement(real.ModeChips, p)),
+    // a lazy dialog now (its chunk loads on its first open): still drawn by the header on each of its renders
+    SessionInfoDialog: (p: ComponentProps<typeof real.SessionInfoDialog>) => (renders.info++, createElement(real.SessionInfoDialog, p)),
   };
+});
+vi.mock("./PermissionPicker", async (load) => {
+  const real = await load<typeof import("./PermissionPicker")>();
+  const { createElement } = await import("react");
+  return { ...real, PermissionPicker: (p: Parameters<typeof real.PermissionPicker>[0]) => (renders.modes++, createElement(real.PermissionPicker, p)) };
 });
 vi.mock("../link/ContextChips", async (load) => {
   const real = await load<typeof import("../link/ContextChips")>();
@@ -35,12 +40,27 @@ vi.mock("../../lib/store", async (load) => ({
     return () => live.listeners.delete(l);
   },
 }));
+// every render of the agent's persisted words (Answer draws them through Markdown with `fade` given, set or not): counted
+const words = vi.hoisted(() => [] as { text: string; fade?: boolean }[]);
+vi.mock("../../ui/Markdown", async (load) => {
+  const real = await load<typeof import("../../ui/Markdown")>();
+  const { createElement } = await import("react");
+  return { ...real, Markdown: (p: ComponentProps<typeof real.Markdown>) => ("fade" in p && words.push({ text: p.text, fade: p.fade }), createElement(real.Markdown, p)) };
+});
+// every message's actions ask for the chat's actions each time they render: counted
+const asks = vi.hoisted(() => ({ n: 0 }));
+vi.mock("./chat-actions", async (load) => {
+  const real = await load<typeof import("./chat-actions")>();
+  return { ...real, useChatActions: () => (asks.n++, real.useChatActions()) };
+});
 vi.mock("../../lib/panel", async (load) => ({ ...(await load<typeof import("../../lib/panel")>()), usePanel: () => null }));
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }) }));
 
-import { applyCompleteSessions, reset, type ItemsEvent } from "../../lib/store";
-import { ago } from "../../lib/format";
+import { applyCompleteSessions, getState, reset, type ItemsEvent } from "../../lib/store";
 import { whenComposer } from "../../lib/links";
+import { closePanel, getPanel, openPanel } from "../../lib/panel";
+import { currentPlatform } from "../../lib/shortcuts";
+import { useShortcuts } from "../../lib/use-shortcuts";
 import type { Item, Session } from "../../lib/types";
 import { t } from "../../i18n";
 import { ChatView } from "./ChatView";
@@ -58,8 +78,17 @@ const zero = () => Object.assign(renders, { info: 0, chips: 0, modes: 0 });
 
 let host: HTMLDivElement;
 let root: Root;
+let opened = "";
 let fetcher: ReturnType<typeof vi.fn>;
+// An agent's header loads its compare menu lazily (ChatView: import("../../lib/compare-runs")) and draws again when it
+// is in. Loaded here first, it is in before a test counts renders: cold, under a full parallel run, it came in during the
+// pushes and counted as one of their renders.
+beforeAll(async () => {
+  await import("../../lib/compare-runs");
+});
+
 beforeEach(() => {
+  opened = "";
   localStorage.clear();
   // the first page has one reply already, so the assistant's face starts from what the pushes keep showing
   fetcher = vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items: [item(0)], to_seq: 0 } : {}), { status: 200, headers: { "Content-Type": "application/json" } })));
@@ -70,6 +99,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   act(() => root.unmount());
+  act(() => closePanel());
   host.remove();
   live.listeners.clear();
   reset();
@@ -77,10 +107,18 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function open(view: React.ReactElement, session = row()) {
+async function open(view: React.ReactElement<{ assistant?: boolean }>, session = row()) {
   act(() => applyCompleteSessions([session]));
+  if (opened && opened !== session.session_id) {
+    // A different conversation is a fresh mount: its predecessor's transcript cleanup must not count in this measurement.
+    act(() => root.unmount());
+    root = createRoot(host);
+  }
+  opened = session.session_id;
   act(() => root.render(view));
   for (let i = 0; i < 6; i++) await settle();
+  const title = view.props.assistant && getState().assistant?.main === session.session_id ? "Persona" : "Checks";
+  await vi.waitFor(() => expect(host.querySelector("h1")?.textContent).toBe(title)); // session-derived props are stable
   expect(live.listeners.size).toBeGreaterThan(0);
   expect(renders.info).toBeGreaterThan(0);
   expect(renders.chips).toBeGreaterThan(0);
@@ -88,6 +126,40 @@ async function open(view: React.ReactElement, session = row()) {
   zero();
 }
 const posted = (path: string) => fetcher.mock.calls.filter(([url, init]) => String(url).endsWith(path) && (init as RequestInit | undefined)?.method === "POST");
+
+it("a completed task remains a labelled, clickable owner, not a prompt to link it again", async () => {
+  const router = await import("../../lib/router");
+  const navigate = vi.spyOn(router, "navigate").mockImplementation(() => {});
+  try {
+    await open(<ChatView mid="mac" sid="s1" inPage />, row({
+      status: "idle", state: "idle", completed_todo: { id: "done-task", title: "Completed example task" },
+    }));
+    act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`)!.click());
+    await settle();
+    const menu = document.querySelector('[role="menu"]')!;
+    const label = t("chat-chatview.todo_completed_label", { title: "Completed example task" });
+    expect(menu.textContent).toContain(label);
+    expect(menu.textContent).not.toContain(t("chat-chatview.link_todo"));
+    expect(menu.textContent).not.toContain(t("chat-chatview.relink_todo"));
+    const item = [...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => item.textContent?.includes(label))!;
+    act(() => item.click());
+    expect(navigate).toHaveBeenCalledWith("/todos?id=done-task");
+  } finally {
+    navigate.mockRestore();
+  }
+});
+
+// Rename…, Rename space… and Delete… open dialogs from a chunk of their own (#10382): the ⋯ menu starts it as it opens, so
+// the click draws the dialog in its own render, with no wait for the chunk and no empty frame.
+it("the ⋯ menu starts the Rename and Delete dialogs' chunk, so Rename… draws its dialog on the click", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`)!.click());
+  await import("./SessionMenuDialogs"); // the chunk the menu asked for, in
+  await settle();
+  const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((i) => i.textContent?.includes(t("chat-chatview.rename")))!;
+  act(() => item.click());
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain(t("chat-sessiondialogs.session_name"));
+});
 
 it("an agent's page: pushed items leave its header and composer alone, a session change still reaches them", async () => {
   await open(<ChatView mid="mac" sid="s1" inPage />);
@@ -99,6 +171,47 @@ it("an agent's page: pushed items leave its header and composer alone, a session
   await settle();
   expect(renders.info).toBeGreaterThan(0);
   expect(renders.modes).toBeGreaterThan(0);
+});
+
+it("a pushed reply renders its own words once, mounting them fading, and no other words", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  for (let seq = 1; seq <= 3; seq++) await push(seq);
+  words.length = 0;
+  await push(4);
+  expect(words).toEqual([{ text: "row 4", fade: true }]);
+});
+
+// the first page: this many exchanges, a question and its reply each
+const serve = (exchanges: number) => {
+  const items = Array.from({ length: exchanges }, (_, i) => [item(2 * i, { role: "user", text: `ask ${i}` }), item(2 * i + 1)]).flat();
+  fetcher.mockImplementation((url: string) => Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items, to_seq: items.length - 1 } : {}), { status: 200, headers: { "Content-Type": "application/json" } })));
+};
+
+it("a turn starting or ending renders the message actions of its own exchange only", async () => {
+  const flip = async (sid: string, exchanges: number) => {
+    serve(exchanges);
+    await open(<ChatView mid="mac" sid={sid} inPage />, row({ session_id: sid }));
+    const counts: number[] = [];
+    for (const state of ["idle", "working"] as const) {
+      asks.n = 0;
+      act(() => applyCompleteSessions([row({ session_id: sid, status: state, state })]));
+      await settle();
+      counts.push(asks.n);
+    }
+    return counts;
+  };
+  const one = await flip("s1", 1);
+  // Both ending and starting still update the current exchange; neither scales with finished history.
+  for (const count of one) expect(count).toBeGreaterThan(0);
+  expect(await flip("s2", 6)).toEqual(one);
+});
+
+it("finished exchanges before the last two skip drawing while off screen, from a guessed height", async () => {
+  serve(5);
+  await open(<ChatView mid="mac" sid="s1" inPage />, row({ status: "idle", state: "idle" }));
+  const sections = [...host.querySelectorAll<HTMLElement>("section[data-segment]")];
+  expect(sections.map((s) => s.classList.contains("seg-cv"))).toEqual([true, true, true, false, false]);
+  expect(sections[0].style.getPropertyValue("--seg-est")).toMatch(/^[1-9]\d*px$/);
 });
 
 it("the assistant: the header draws again only when what its face reads changes", async () => {
@@ -113,17 +226,104 @@ it("the assistant: the header draws again only when what its face reads changes"
   expect(renders.chips).toBe(0);
 });
 
-it("a Persona conversation's subtitle: its age moves on with the clock while nothing is pushed", async () => {
-  // only the clock and intervals are fake: the pushes and fetches above still settle on real timeouts
-  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
-  const updated = new Date(Date.now() - 10_000).toISOString();
-  await open(<ChatView mid="mac" sid="s1" assistant />, row({ updated_at: updated }));
-  const header = () => host.querySelector("header")?.textContent ?? "";
-  expect(header()).toContain(t("lib-format.just_now"));
+it("the main conversation's composer has the model pill, without an effort chip (#5032, #5033)", async () => {
+  getState().assistant = { machine_id: "mac", launcher: "claude", main: "s1", conversations: [] };
+  await open(<ChatView mid="mac" sid="s1" assistant />);
+  expect(host.querySelector("button[data-model-pill]")).not.toBeNull();
+  expect(host.querySelector(`button[title="${t("chat-sessioninfo.effort")}"]`)).toBeNull(); // no effort chip
+});
 
-  act(() => vi.advanceTimersByTime(3 * 60_000));
-  expect(ago(updated)).not.toBe(t("lib-format.just_now"));
-  expect(header()).toContain(ago(updated));
+it("a Persona conversation that is not the main one has the model pill too, as the hub keeps its pick (#9248)", async () => {
+  getState().assistant = { machine_id: "mac", launcher: "claude", main: "other", conversations: [] };
+  await open(<ChatView mid="mac" sid="s1" assistant />);
+  expect(host.querySelector("button[data-model-pill]")).not.toBeNull();
+});
+
+it("an Agent's session has its own model pill", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  expect(host.querySelector("[data-model-pill]")).not.toBeNull();
+});
+
+it("the top bar is one line (#5421): a Persona conversation's has no subtitle", async () => {
+  await open(<ChatView mid="mac" sid="s1" assistant />, row({ updated_at: new Date(Date.now() - 10_000).toISOString() }));
+  const header = host.querySelector("header")!;
+  expect(header.textContent).not.toContain(t("lib-format.just_now"));
+  expect(header.querySelector("h1")?.textContent).toBe("Checks");
+});
+
+it("double-clicking the title renames it in place: Enter saves the title alone, Esc leaves it and the Agent running (#5421)", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  const title = () => host.querySelector<HTMLElement>("[data-chat-title]");
+  const field = () => host.querySelector<HTMLInputElement>("[data-chat-title-input]");
+  const type = (value: string) => {
+    const input = field()!;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  const key = (k: string) => field()!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+
+  act(() => title()!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+  expect(field()).not.toBeNull();
+  expect(field()!.value).toBe("Checks");
+  act(() => type("Network tests"));
+  act(() => key("Escape"));
+  await settle();
+  expect(field()).toBeNull();
+  expect(posted("/sessions/mac/s1/rename")).toHaveLength(0);
+  // Esc in the field did not also stop the working Agent
+  expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(0);
+
+  act(() => title()!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+  act(() => type("Network tests"));
+  await act(async () => {
+    key("Enter");
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  const renamed = posted("/sessions/mac/s1/rename");
+  expect(renamed).toHaveLength(1);
+  expect(JSON.parse(String((renamed[0][1] as RequestInit).body))).toEqual({ title: "Network tests" });
+  expect(title()?.textContent).toBe("Network tests");
+});
+
+it("an in-place rename shows the new title at once and puts the old one back when the save fails (#5421)", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  let fail!: () => void;
+  fetcher.mockImplementation((url: string, init?: RequestInit) =>
+    String(url).endsWith("/rename") && init?.method === "POST"
+      ? new Promise((_, reject) => (fail = () => reject(new TypeError("offline"))))
+      : Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items: [item(0)], to_seq: 0 } : {}), { status: 200, headers: { "Content-Type": "application/json" } })),
+  );
+  const title = () => host.querySelector<HTMLElement>("[data-chat-title]");
+  act(() => title()!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+  const input = host.querySelector<HTMLInputElement>("[data-chat-title-input]")!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Network tests");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  act(() => void input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+  await settle();
+  expect(title()?.textContent).toBe("Network tests");
+  await act(async () => {
+    fail();
+    for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(title()?.textContent).toBe("Checks");
+});
+
+it("/workflows opens the Background tasks panel at the latest run instead of going to the Agent (#5421)", async () => {
+  const { getPanel, openPanel } = await import("../../lib/panel");
+  const runs = [
+    { task_id: "old", status: "completed", started_at: "2026-11-12T01:00:00Z" },
+    { task_id: "new", status: "running", running: true, started_at: "2026-11-12T02:00:00Z" },
+  ] as Session["workflows"];
+  await open(<ChatView mid="mac" sid="s1" inPage />, row({ workflows: runs }));
+  await act(async () => {
+    whenComposer("mac/s1", (c) => void c.send("/workflows"));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(posted("/sessions/mac/s1/messages")).toHaveLength(0);
+  expect(getPanel()).toEqual({ kind: "background", mid: "mac", sid: "s1", run: "new" });
+  act(() => openPanel(null));
 });
 
 it("after the pushes, sending and stopping still go out", async () => {
@@ -144,4 +344,127 @@ it("after the pushes, sending and stopping still go out", async () => {
     await new Promise((r) => setTimeout(r, 0));
   });
   expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(1);
+  expect(new Headers((posted("/sessions/mac/s1/interrupt")[0][1] as RequestInit).headers).get("X-Persona-Op-Id")).toBeTruthy();
+
+  // still working: the button says it is stopping and takes no second press, until the turn is over
+  const pressed = () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-composer.stopping")}"]`);
+  expect(pressed()?.disabled).toBe(true);
+  act(() => dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+  await settle();
+  expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(1);
+  act(() => applyCompleteSessions([row({ status: "idle", state: "idle" })]));
+  await settle();
+  expect(pressed()).toBeNull();
+});
+
+it("toggles the session overview and leaves it open while using the chat", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  const trigger = host.querySelector<HTMLButtonElement>("[data-session-overview-trigger]")!;
+  const composer = host.querySelector<HTMLTextAreaElement>("textarea")!;
+  expect(trigger.getAttribute("aria-pressed")).toBe("false");
+  await act(async () => {
+    trigger.click();
+    await import("./SessionOverview");
+  });
+  const overview = document.getElementById(trigger.getAttribute("aria-controls")!);
+  expect(overview?.tagName).toBe("ASIDE");
+  expect(overview?.textContent).toContain(t("chat-sessionoverview.environment"));
+  expect(trigger.getAttribute("aria-pressed")).toBe("true");
+  act(() => composer.click());
+  expect(overview?.isConnected).toBe(true);
+  act(() => overview!.querySelector("button")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(0);
+  expect(overview?.isConnected).toBe(true);
+  act(() => trigger.click());
+  expect(trigger.getAttribute("aria-pressed")).toBe("false");
+  expect(overview?.isConnected).toBe(false);
+  expect(host.querySelector("textarea")).toBe(composer);
+});
+
+function ShortcutChat({ chat = true }: { chat?: boolean }) {
+  const pane = chat ? { mid: "mac", sid: "s1" } : undefined;
+  useShortcuts({ route: chat ? { name: "session", mid: "mac", sid: "s1" } : { name: "home" }, pane, narrow: false, toggleDrawer: () => {} });
+  return chat ? <ChatView mid="mac" sid="s1" inPage /> : null;
+}
+
+const pressB = () => act(() => void dispatchEvent(new KeyboardEvent("keydown", {
+  key: "b", code: "KeyB", bubbles: true, cancelable: true,
+  ...(currentPlatform() === "mac" ? { metaKey: true } : { ctrlKey: true }),
+})));
+const overviewDetail = { kind: "background", mid: "mac", sid: "s1", run: "w1", from: "overview" } as const;
+const filesPanel = { kind: "files", mid: "mac", sid: "s1", cwd: "/code" } as const;
+
+async function openShortcutOverview() {
+  const workflows = [{ task_id: "w1", name: "Overview run", status: "running", running: true, started_at: "2026-11-12T02:00:00Z" }] as Session["workflows"];
+  await open(<ShortcutChat />, row({ workflows }));
+  const trigger = host.querySelector<HTMLButtonElement>("[data-session-overview-trigger]")!;
+  await act(async () => {
+    trigger.click();
+    await import("./SessionOverview");
+  });
+  await settle();
+  return trigger;
+}
+
+function openOverviewRun() {
+  act(() => host.querySelector<HTMLButtonElement>('[data-session-overview] [data-bg-run="w1"] [data-bg-row-button]')!.click());
+  expect(getPanel()).toEqual(overviewDetail);
+}
+
+it("does not reopen a remembered overview detail after its origin closes", async () => {
+  const trigger = await openShortcutOverview();
+  openOverviewRun();
+  pressB();
+  expect(getPanel()).toBeNull();
+  act(() => trigger.click());
+  expect(trigger.getAttribute("aria-pressed")).toBe("false");
+  pressB();
+  expect(getPanel()).toEqual(filesPanel);
+});
+
+it("reopens an overview detail with Cmd+B only while its origin stays open", async () => {
+  const trigger = await openShortcutOverview();
+  openOverviewRun();
+  pressB();
+  expect(getPanel()).toBeNull();
+  pressB();
+  expect(getPanel()).toEqual(overviewDetail);
+  act(() => trigger.click());
+  expect(getPanel()).toBeNull();
+  pressB();
+  expect(getPanel()).toEqual(filesPanel);
+});
+
+it("forgets a remembered overview detail when its conversation unmounts", async () => {
+  await openShortcutOverview();
+  openOverviewRun();
+  pressB();
+  expect(getPanel()).toBeNull();
+  act(() => root.render(<ShortcutChat chat={false} />));
+  pressB();
+  expect(getPanel()).toBeNull();
+});
+
+it("keeps a list-origin detail in Cmd+B memory when the overview closes", async () => {
+  const trigger = await openShortcutOverview();
+  openOverviewRun();
+  const listed = { kind: "background", mid: "mac", sid: "s1", run: "w1" } as const;
+  act(() => openPanel(listed)); // a chat card replaces the overview detail with its list-origin equivalent
+  pressB();
+  expect(getPanel()).toBeNull();
+  act(() => trigger.click());
+  expect(trigger.getAttribute("aria-pressed")).toBe("false");
+  pressB();
+  expect(getPanel()).toEqual(listed);
+});
+
+it("a stop the hub lost track of is not reported as done, and can be pressed again", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  fetcher.mockImplementationOnce(() => Promise.resolve(new Response(JSON.stringify({ state: "unknown" }), { status: 202 })));
+  await act(async () => {
+    host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-composer.interrupt")}"]`)!.click();
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(1);
+  expect(host.querySelector(`button[aria-label="${t("chat-composer.interrupt")}"]`)).toBeTruthy();
 });

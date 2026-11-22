@@ -2,7 +2,7 @@ import XCTest
 
 /// /loop in an agent's composer (#2601, as on the web): the quick commands offer it to a Claude agent and picking it
 /// only puts `/loop ` in the box, with a line over it saying what is still missing; a Codex agent's have no /loop.
-/// The quick commands are in the composer's + menu in every style.
+/// The quick commands are in the composer's + menu, and on the iPhone in its + panel's More tab (AttachSheet).
 /// Demo Mode (Demo.json): a Claude agent at rest and the Codex one at work.
 final class LoopCommandUITests: XCTestCase {
     private let claude = "macbook/a1f3c2d4-0000-4000-8000-000000000006"
@@ -31,6 +31,8 @@ final class LoopCommandUITests: XCTestCase {
         if !draft.isEmpty { field.typeText(draft) }
         plus.tap()
         XCTAssertTrue(app.buttons["照片"].waitForExistence(timeout: 5), "the + menu did not open")
+        let more = app.buttons["attach-tab-more"].firstMatch
+        if more.waitForExistence(timeout: 2) { more.tap() } // the iPhone's panel: the commands are in More
         return (app.buttons["定时重复 /loop"], app.buttons["汇报进展"])
     }
 

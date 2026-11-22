@@ -12,10 +12,42 @@ import (
 // A message can carry <persona-context kind="…" title="…" url="…"> blocks: context picked on the phone, or everything
 // a Feishu /agent request hands its agent (prompts/lark). The tag is being renamed <persona-context> (#3182): readers
 // take either name. The apps show only the text outside the blocks as what the
-// user wrote and fold the blocks into one row (docs/extensions/lark-agent.md "How the app shows it").
+// user wrote and fold the blocks into one row (docs/extensions/lark-agent.md "How it shows in the App").
 
 // contextBlockRe is one attributed block (the bare snapshot, ContextRe, is dropped before this).
 var contextBlockRe = lazyre.New(`(?s)(<` + compat.ContextPattern() + `\b[^>]*>)(.*?)(</` + compat.ContextPattern() + `>)`)
+
+var contextAttrRe = lazyre.New(`\s+(\w+)="([^"]*)"`)
+
+const interjectTitle = "插话" // i18n-ignore: canonical model-context title, not UI copy.
+
+// StripInterject removes the node's model-only mid-turn acknowledgement note
+// from presentation and echo matching. Keep owner-selected context inspectable;
+// the input written to the model is unchanged. The canonical title is pinned by
+// node.TestInterjectNote and recognized by the clients for older servers.
+func StripInterject(s string) string {
+	// Ordinary snapshots can be large. Avoid scanning and copying their blocks
+	// unless the canonical title (possibly encoded as numeric entities) can occur.
+	if !strings.Contains(s, "-context") || (!strings.Contains(s, interjectTitle) && !strings.Contains(s, "&#")) {
+		return s
+	}
+	return contextBlockRe.ReplaceAllStringFunc(s, func(block string) string {
+		kind, title := "context", ""
+		head := block[:strings.IndexByte(block, '>')]
+		for _, attr := range contextAttrRe.FindAllStringSubmatch(head, -1) {
+			switch attr[1] {
+			case "kind":
+				kind = html.UnescapeString(attr[2])
+			case "title":
+				title = html.UnescapeString(attr[2])
+			}
+		}
+		if kind == "context" && title == interjectTitle {
+			return ""
+		}
+		return block
+	})
+}
 
 // legacyLarkAgentRe is a Feishu /agent prompt as hub wrote it before the instructions moved into a block: an intro line,
 // then a request heading (what was asked), a context heading (blocks, plus a loose line or two), and a how-to heading (the rules).
@@ -24,6 +56,11 @@ var legacyLarkAgentRe = lazyre.New(`(?s)^([^\n]*(?:用 /agent 叫你|又(?:发|�
 // legacyLarkAgent rewrites an old Feishu /agent prompt into today's shape, so conversations started before the change
 // show the same way: the instructions and context in blocks, the request outside them.
 func legacyLarkAgent(s string) string {
+	// Every user message's text comes through here, and the regexp's submatch search grows faster than the text
+	// (about 30 µs for 1 KB, 300 µs for 4 KB): text without the headings it needs is left as it is first.
+	if !strings.Contains(s, "## 请求") || !strings.Contains(s, "## 怎么做") {
+		return s
+	}
 	m := legacyLarkAgentRe.FindStringSubmatch(s)
 	if m == nil {
 		return s

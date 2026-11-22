@@ -1,4 +1,4 @@
-// "What this computer can do" (docs/server/machines.md "Self-check", Moshi's Doctor tab): what `personad node doctor` finds on a computer,
+// "What this computer can do" (docs/server/machines.md "Doctor: what this computer can do", Moshi's Doctor tab): what `personad node doctor` finds on a computer,
 // read as features. The node reports individual checks (server/internal/node/doctor.go, DoctorReport as it is); a person
 // wants to know whether phone approvals work, so each feature below is a set of those checks and takes the worst
 // state among them. The raw list stays one click away. Also what the machine card says about a connection that failed.

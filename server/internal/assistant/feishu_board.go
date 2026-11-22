@@ -19,7 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
-// The standing board (#6052, docs/extensions/bots.md "The board"): with the bot's `board` switch on, /tasks keeps one card in the
+// The standing board (#6052, docs/extensions/bots.md "The waiting-for-you board"): with the bot's `board` switch on, /tasks keeps one card in the
 // owner's chat that lists everything waiting for them, and edits that card in place instead of sending another. It is
 // edited again, about boardSettle after a card opens or ends or a to-do enters or leaves "Please verify", and once
 // when the assistant connects to the hub. Only a card that can no longer be edited (Feishu allows boardEditFor after
@@ -266,6 +266,9 @@ type boardRow struct {
 	from     string
 	link     string
 	nudged   bool // the bot nudged under its card in the chat (feishu_nudge.go, #6084)
+	// machine and session are the chat a card or a question that can wait came from, empty when it came from none; the
+	// apps open it from the brief item (briefing_feed.go).
+	machine, session string
 	// asked is when the "Please verify" ask of a to-do waiting to be verified was made (its card, if it has one, went out then) (zero: the row is not one); id is the to-do.
 	asked time.Time
 }
@@ -274,7 +277,7 @@ type boardRow struct {
 // waiting first, then the to-dos waiting for the owner to verify them, the longest waiting first.
 func (s *Service) boardRows(ctx context.Context, l i18n.Lang, web string, now time.Time) []boardRow {
 	var rows []boardRow
-	for _, ix := range s.pendingInteractions() {
+	for _, ix := range s.visiblePendingInteractions() {
 		if s.interactionEnded(ix.ID) { // over, though its entry is still being taken away
 			continue
 		}
@@ -283,7 +286,8 @@ func (s *Service) boardRows(ctx context.Context, l i18n.Lang, web string, now ti
 			link = sessionLink(web, ix.MachineID, ix.SessionID, s.sessionAssistantLocal(ix.MachineID, ix.SessionID))
 		}
 		rows = append(rows, boardRow{blocking: true, waited: boardWaited(now, ix.CreatedAt), id: ix.ID,
-			summary: boardSummary(l, ix), from: s.boardFrom(l, ix.MachineID, ix.SessionID, ix.SessionTitle), link: link, nudged: s.cardNudged(ix.ID)})
+			summary: boardSummary(l, ix), from: s.boardFrom(l, ix.MachineID, ix.SessionID, ix.SessionTitle), link: link, nudged: s.cardNudged(ix.ID),
+			machine: ix.MachineID, session: ix.SessionID})
 	}
 	for _, a := range s.awaitingAcceptance(ctx) {
 		summary := i18n.T(l, "assistant-feishu_cards.board_verify", i18n.Args{"title": clip(oneLine(a.title), 40)})
@@ -368,8 +372,15 @@ type awaitingAccept struct {
 
 // awaitingAcceptance are the to-dos whose "Please verify" ask is up (with a card or without, NoCard) and not passed: the ones that can still be passed
 // (not closed by the owner or a review, not asked before the latest reopen), in the order they were asked. Read only:
-// the sweeps that forget the ended ones are the reminders' and the snapshot's.
+// the sweeps that forget the ended ones are the reminders' and the snapshot's. A decision returned to its supervisor is
+// kept in the book but is not an owner row until a fresh review re-issues it.
 func (s *Service) awaitingAcceptance(ctx context.Context) []awaitingAccept {
+	return s.acceptanceRounds(ctx, false)
+}
+
+// acceptanceRounds reads open asks. includeReturned is for the recheck sweep itself; every owner-facing projection
+// leaves returned rounds out, including legacy undecidable reviews and rechecks persisted by an older release.
+func (s *Service) acceptanceRounds(ctx context.Context, includeReturned bool) []awaitingAccept {
 	b := &s.accept
 	b.mu.Lock()
 	if !s.loadAcceptLocked(ctx) {
@@ -387,6 +398,9 @@ func (s *Service) awaitingAcceptance(ctx context.Context) []awaitingAccept {
 	for id, a := range asks {
 		t, ok := s.todoNow(id)
 		if !ok || acceptAskEnded(&a, t) || acceptAskStale(&a, t) {
+			continue
+		}
+		if !includeReturned && (!a.RecheckAt.IsZero() || ownerDecisionReturned(t.Supervision)) {
 			continue
 		}
 		out = append(out, awaitingAccept{todo: id, title: t.Title, machine: a.MachineID, session: a.SessionID, since: a.AskedAt, ask: a})

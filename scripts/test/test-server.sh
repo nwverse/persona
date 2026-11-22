@@ -10,7 +10,7 @@ D=".cache/persona-test-$(basename "$PWD")"
 # Resolve the hub's state directory, never prepare it: a test run must not create it or its old-name alias (#1424). The
 # resolver exports _PERSONA_STATE_DIR, so db.sh uses that one too.
 python3 scripts/persona_identity.py --service hub --prefix scripts/deploy/db.sh | ssh "$H" 'bash -s' >/dev/null
-ssh "$H" "mkdir -p ~/$D/sdk ~/$D/schema"
+ssh "$H" "mkdir -p ~/$D/sdk ~/$D/schema ~/$D/scripts/mock ~/$D/scripts/deploy ~/$D/web/src/i18n ~/$D/integrations/antigravity/test"
 rsync -a --delete --exclude bin server/ "$H":"$D/server/"
 # Go's local SDK replacement must keep the same sibling path as in this checkout, including embedded schemas.
 rsync -a --delete sdk/go/ "$H":"$D/sdk/go/"
@@ -21,17 +21,32 @@ rsync -a --delete sdk/templates/ "$H":"$D/sdk/templates/"
 rsync -a --delete --exclude node_modules sdk/ts/ "$H":"$D/sdk/ts/"
 # Extension conformance tests read the source schemas' valid and invalid examples outside the Go module.
 rsync -a --delete schema/extension/ "$H":"$D/schema/extension/"
+# The wire type tests (assistantwire, todo projection) read the generated wire schemas from ../../../schema/wire (#10307).
+rsync -a --delete schema/wire/ "$H":"$D/schema/wire/"
+# The configuration form tests read the portable definitions from ../../../schema/configuration (#10028).
+rsync -a --delete schema/configuration/ "$H":"$D/schema/configuration/"
 # Wire, continuity and resolution tests read the shared fixtures next to server/ (../../../spec from a package),
 # and the resolution ones check the apps' Swift sources against them.
 rsync -a --delete spec/ "$H":"$D/spec/"
+# The Antigravity pane tests (internal/node agypane_test.go) replay the integration's recorded wake fixtures from
+# ../../../integrations/antigravity/test/fixtures (#11841).
+rsync -a --delete integrations/antigravity/test/fixtures/ "$H":"$D/integrations/antigravity/test/fixtures/"
+# Hub inbox list tests read this shared mock fixture from ../../../scripts/mock.
+rsync -a scripts/mock/inbox_events.json "$H":"$D/scripts/mock/inbox_events.json"
+# pgdocker's server-args test compares the container with this deployment script next to the Go module (#3575).
+rsync -a scripts/deploy/db.sh "$H":"$D/scripts/deploy/db.sh"
 rsync -a --delete --prune-empty-dirs --include '*/' --include '*.swift' --exclude '*' apple/ "$H":"$D/apple/"
 # Some tests read docs next to the code they describe (docs/**/*.md).
 rsync -a --delete --prune-empty-dirs --include '*/' --include '*.md' --exclude '*' docs/ "$H":"$D/docs/"
+# kb's minutes tests compare their section names with the web's locale files (web/src/i18n/locales/<lang>/*.json).
+rsync -a --delete --prune-empty-dirs --include '*/' --include '*.json' --exclude '*' web/src/i18n/locales/ "$H":"$D/web/src/i18n/locales/"
 rsync -a scripts/test/server_test_env.py "$H":"$D/server_test_env.py"
+# internal/node runs in the partitions CI and the release build use: serially it outgrew Go's ten-minute -timeout (#5594).
+rsync -a scripts/test/go_partitions.py scripts/test/go_test_partitioned.py "$H":"$D/"
 RESOLVER=$(python3 scripts/persona_identity.py --service hub --prefix -)
 # The recovered service root is only for locating the database configuration, never the Go test environment.
 # ~/.local/bin: the pinned Bun (docs/operations/testing.md), which a non-interactive shell may not have on PATH (#1947).
 ssh "$H" "$RESOLVER
 cd ~/$D/server && export PATH=\$PATH:\$HOME/.local/bin:/opt/homebrew/bin:/usr/local/go/bin && \
   python3 -I ../server_test_env.py --database-file \"\$PERSONA_HOME/hub.json\" -- \
-  ${GOCMD:-go test -count=1 -p 1} ${*:-./...}"
+  python3 -I ../go_test_partitioned.py ${GOCMD:-go test -count=1 -p 1} ${*:-./...}"

@@ -85,4 +85,79 @@ class DeviceSettingsStateTest {
         assertFalse(controller.state.value.needsCleanup)
         assertNull(controller.state.value.preferences)
     }
+
+    // Quiet hours (#1863): only the window goes, in this phone's zone; a failed save puts the old one back.
+    @Test fun quietHoursSaveAloneInThisPhonesZoneAndRollBack() = runBlocking {
+        val sent = mutableListOf<QuietHours>()
+        var fail = false
+        val api = object : DeviceSettings {
+            override suspend fun devices() = PairedDevices(emptyList(), null)
+            override suspend fun preferences() = DeviceNotificationPreferences(quiet = QuietHours(tz = "Asia/Tokyo"))
+            override suspend fun savePreferences(preferences: DeviceNotificationPreferences) = error("Not the whole prefs")
+            override suspend fun revoke(credentialId: String) = Unit
+            override suspend fun saveQuietHours(quiet: QuietHours): QuietHours {
+                if (fail) error("Save failed")
+                sent += quiet
+                return quiet
+            }
+        }
+        val controller = DeviceSettingsState(api) {}
+        controller.loadPreferences()
+        controller.saveQuietHours(QuietHours(enabled = true, tz = "Asia/Tokyo"), zone = "Europe/Berlin")
+        assertEquals(listOf(QuietHours(true, "23:00", "07:00", "Europe/Berlin")), sent)
+        assertEquals(sent.last(), controller.state.value.preferences!!.quiet)
+        fail = true
+        controller.saveQuietHours(sent.last().copy(start = "22:00"), zone = "Europe/Berlin")
+        assertEquals("23:00", controller.state.value.preferences!!.quiet!!.start)
+        assertNotNull(controller.state.value.message)
+        // A hub without quiet hours has no section, and nothing is sent.
+        val older = DeviceSettingsState(object : DeviceSettings by api {
+            override suspend fun preferences() = DeviceNotificationPreferences()
+        }) {}
+        older.loadPreferences()
+        fail = false
+        older.saveQuietHours(QuietHours(enabled = true))
+        assertEquals(1, sent.size)
+    }
+
+    // 设置 › 通知 › 低打扰模式 (#8157): read after this phone's prefs, shown at once when changed, put back when the hub
+    // refuses; a hub without the switch (null) shows no row and takes no write.
+    @Test fun lowDistractionFollowsTheHubAndGoesBackWhenRefused() = runBlocking {
+        var hub: Boolean? = false
+        var refuse = false
+        val writes = mutableListOf<Boolean>()
+        val api = object : DeviceSettings {
+            override suspend fun devices() = PairedDevices(emptyList(), null)
+            override suspend fun preferences() = DeviceNotificationPreferences()
+            override suspend fun savePreferences(preferences: DeviceNotificationPreferences) = preferences
+            override suspend fun revoke(credentialId: String) = Unit
+            override suspend fun lowDistraction() = hub
+            override suspend fun saveLowDistraction(on: Boolean): Boolean {
+                writes += on
+                if (refuse) error("Save failed")
+                hub = on
+                return on
+            }
+        }
+        val controller = DeviceSettingsState(api) {}
+        assertNull(controller.state.value.lowDistraction)
+        controller.loadLowDistraction()
+        assertEquals(false, controller.state.value.lowDistraction)
+        controller.saveLowDistraction(true)
+        assertEquals(true, controller.state.value.lowDistraction)
+        assertEquals(listOf(true), writes)
+        controller.saveLowDistraction(true) // already on: nothing to send
+        assertEquals(listOf(true), writes)
+        refuse = true
+        controller.saveLowDistraction(false)
+        assertEquals(true, controller.state.value.lowDistraction)
+        assertNotNull(controller.state.value.message)
+
+        hub = null
+        val older = DeviceSettingsState(api) {}
+        older.loadLowDistraction()
+        assertNull(older.state.value.lowDistraction)
+        older.saveLowDistraction(true)
+        assertEquals(listOf(true, false), writes)
+    }
 }

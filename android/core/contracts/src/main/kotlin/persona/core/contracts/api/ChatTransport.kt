@@ -17,6 +17,8 @@ interface ChatTransport {
     suspend fun sessionCounts(filter: SessionListFilter = SessionListFilter()): SessionListCounts =
         throw SessionListsUnsupported()
     suspend fun items(session: SessionKey, query: ItemsQuery): ItemsResponse
+    /** The session's recorded permission mode changes, oldest first; empty where the hub has no such record. */
+    suspend fun modeChanges(session: SessionKey): List<ModeChange> = emptyList()
     suspend fun interactions(): List<Interaction>
     suspend fun resolve(id: String, resolution: Resolution)
     /** [resolve], with what the hub said about it (a card answered already carries the answer that took effect). */
@@ -24,8 +26,20 @@ interface ChatTransport {
         resolve(id, resolution)
         return ResolveOutcome()
     }
+    /** The transport adds the hand-off feature header only for this explicit full-card approval. */
+    suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean): ResolveOutcome =
+        resolveOutcome(id, resolution)
+    /** An authenticated exact reply to a server-owned proposal; never an ordinary model message or card resolution. */
+    suspend fun replyOwnerApproval(interaction: Interaction, phrase: String): Unit =
+        throw UnsupportedOperationException("Exact owner replies unavailable")
     suspend fun image(session: SessionKey, itemId: String): ByteArray
     suspend fun fullItem(session: SessionKey, itemId: String): Item
+    /**
+     * Change Answer (POST /api/v1/interactions/{id}/reanswer `{answers}`, with the card's [manager]): the user's answers to a
+     * question the assistant answered go to the Agent as a message. Not retried: the hub sends the same answer once.
+     */
+    suspend fun reanswer(id: String, answers: Map<String, String>, manager: String?): Unit =
+        throw UnsupportedOperationException("Change Answer unavailable")
 }
 
 data class ItemsQuery(

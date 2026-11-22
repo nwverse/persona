@@ -1,9 +1,7 @@
 package kb
 
 import (
-	"crypto/sha256"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -11,11 +9,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"golang.org/x/text/unicode/norm"
-
-	"github.com/nwverse/persona/server/internal/kbwire"
 )
 
 // Searching for the app (docs/assistant/knowledge.md "Search"): results are entries, not lines. Every line containing all the
@@ -86,19 +81,47 @@ func matcher(query string) func(string) bool {
 // is not: a person's hashed identity hints (handles.json, handles.go), a connector's cursor (cursors/<source>.json),
 // history imports' progress (history/, history.go), the selection's bookkeeping (select/, a chat's retention.json),
 // the Moments verdicts of a project (moments-judged.json, moments_link.go) and recording undo snapshots mean nothing
-// to a model, and the hints are kept out of every tool and prompt.
+// to a model, and the hints are kept out of every tool and prompt. Nor are a topic's points.json and a source's
+// distill mark (.topics.json, topics.go). A meeting's live log (live.json, live.go) is never
+// searched: other people's words said while Persona attended, and the questions asked of it. Nor is photos.json
+// (recording_photos.go: digests, deletions; photos.md has the photos' words), and the photos themselves are in
+// attachments/, which the walk never enters (nor a hub-mode meeting's audio, attachments/audio/). Nor is
+// hub_segments.json (hub_segments.go): transcript.md, rendered from the transcript of record, is the searched text.
+// Nor is live ingestion's bookkeeping in a chat (ingest.go): the receipts
+// (.receipts.json: the source, every message's id and time, one long line), the intent of a write in progress
+// (.ingest.json) and the zone the days are in (messages/.zone, zone.go). Profile files are read before any day, so a
+// query of digits, a date or the source's name matched every chat's receipts and filled the limit (#5991). Nor is the
+// search index itself (.search/, search_index.go).
 func searchable(rel string) bool {
 	parts := strings.Split(filepath.ToSlash(rel), "/")
 	switch {
-	case parts[0] == "cursors" || parts[0] == "history" || parts[0] == selectDir:
+	case parts[0] == "cursors" || parts[0] == "history" || parts[0] == selectDir || parts[0] == trashDirName || parts[0] == SearchIndexDir:
 		return false
-	case len(parts) == 3 && parts[0] == KindChat && parts[2] == retentionFile:
+	case len(parts) == 3 && parts[0] == KindChat && (parts[2] == retentionFile || parts[2] == ingestReceipts || parts[2] == ingestJournal):
 		return false
-	case len(parts) == 3 && parts[0] == KindRecording && parts[2] == recordingJournal:
+	case len(parts) == 4 && parts[0] == KindChat && parts[2] == "messages" && parts[3] == zoneFile:
 		return false
+	case len(parts) == 3 && parts[0] == KindRecording && (parts[2] == recordingJournal || parts[2] == "minutes.json"):
+		return false // minutes.md has the minutes' text
+	case len(parts) == 3 && parts[0] == KindRecording && (parts[2] == recapFile || parts[2] == recapNotesFile):
+		return false // recap.md has the recap's text; the notes are the model's, unchecked (day_recap.go)
+	case len(parts) >= 3 && parts[0] == KindRecording && strings.HasPrefix(parts[2], liveFile):
+		return false // live.json, and its temporary file while it is replaced
+	case len(parts) >= 3 && parts[0] == KindRecording && strings.HasPrefix(parts[2], meetingFile):
+		return false // meeting.json (meeting.go): the manager's bookkeeping of the room and the mark
+	case len(parts) >= 3 && parts[0] == KindRecording && strings.HasPrefix(parts[2], photosFile):
+		return false // photos.json (recording_photos.go): digests and deletions; photos.md has the photos' words
+	case len(parts) >= 3 && parts[0] == KindRecording && strings.HasPrefix(parts[2], hubSegmentsFile):
+		return false // hub_segments.json and its temporary file: transcript.md has the transcript of record
 	case len(parts) == 3 && parts[0] == KindPerson && parts[2] == "handles.json":
 		return false
+	case len(parts) == 3 && parts[0] == KindPerson && parts[2] == profilesFile:
+		return false // summary.md shows the profiles, each line labelled with its part (profile.go)
 	case len(parts) == 3 && parts[0] == KindProject && parts[2] == "moments-judged.json":
+		return false
+	case len(parts) == 3 && parts[0] == KindTopic && parts[2] == topicPointsFile:
+		return false // summary.md has the points' text; the candidates waiting in it are the model's, unchecked
+	case len(parts) == 3 && parts[2] == topicMarkFile:
 		return false
 	}
 	return true
@@ -111,7 +134,7 @@ func entryOf(rel string) (kind, id string, ok bool) {
 		return "", "", false
 	}
 	switch parts[0] {
-	case KindChat, KindPerson, KindProject, KindRecording:
+	case KindChat, KindPerson, KindProject, KindRecording, KindTopic:
 		if len(parts) < 3 {
 			return "", "", false
 		}
@@ -140,7 +163,9 @@ func shown(kind, rel string) bool {
 		day, ok := strings.CutPrefix(rest, "messages/")
 		return kind == KindChat && ok && strings.HasSuffix(day, ".md") && !strings.Contains(day, "/")
 	case KindRecording:
-		return rest == "summary.md" || rest == "transcript.md" || rest == "meta.json"
+		return rest == "summary.md" || rest == "minutes.md" || rest == recapMarkdown || rest == "transcript.md" || rest == photosText || rest == "meta.json"
+	case KindTopic:
+		return rest == "summary.md" || rest == "meta.json"
 	case KindDoc, KindMeeting, KindEvent:
 		return true // entryOf already keeps only <kind>/<id>.json
 	}
@@ -160,60 +185,76 @@ func (e *Engine) Find(query string, limit int) []Result {
 	// line break or a space (no canonical decomposition holds one), so trimming a line does not change how it folds.
 	// The two spaces NFC does change (U+2000, U+2001) cannot be in such a file: they would have changed its fold.
 	matchFolded := func(t string) bool { return hasAll(t, ws) }
-	// Files are looked at in parallel (the archive is ~25 MB); what each found is added in file order, so the lines
-	// kept for an entry are its profile's first, then the newest days'. The app searches as the user types, so a
-	// file unchanged since the last search is not read again (findCache): one stat each instead of read + lowercase.
+	// read is what one file gives: its first lines that match and how many do.
+	read := func(c *findText, rel string) (found []Found, count int) {
+		if !hasAll(c.lower, ws) {
+			return nil, 0
+		}
+		m := match
+		if c.same {
+			m = matchFolded
+		}
+		return fileFound(c.raw, rel, m)
+	}
+	// Every file is looked at, in parallel: one stat each, which is all most of them cost. The search index
+	// (search_index.go) rules out the files that cannot hold every word, as long as they are as it read them; the
+	// others are read, through findCache (the app searches as the user types, so a file unchanged since the last
+	// search is not read again). Without an index, or for the files it does not have, that is every file.
 	all := e.files().all
+	filter := e.searchFilter(ws)
+	gen := e.find.begin()
+	const (
+		findSkip = iota // not a file of an entry, gone, or ruled out by the index
+		findRead        // to read
+		findDone        // read already: a recording's uploaded files, which are not read from disk (searchText)
+	)
+	state := make([]uint8, len(all))
+	stats := make([]fileStat, len(all))
 	type fileHits struct {
-		key   string
-		stat  fileStat
 		found []Found // what fileFound keeps
 		count int
 	}
-	per := make([]fileHits, len(all))
-	gen := e.find.begin()
-	var next atomic.Int64
-	var wg sync.WaitGroup
-	for range max(1, min(8, runtime.NumCPU())) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				i := int(next.Add(1) - 1)
-				if i >= len(all) {
-					return
+	var early sync.Map // by index: the fileHits of the findDone files
+	workers := max(1, min(8, runtime.NumCPU()))
+	// unread: a file that is there was not read, so its cached text was not seen by this search.
+	var unread atomic.Bool
+	each(len(all), workers, func(i int) {
+		f := all[i]
+		if f.kind == "" { // a file Matches does not read (shown)
+			return
+		}
+		if recordingViewFile(f.rel) {
+			c, st, ok := e.searchText(f.path, gen, recording)
+			stats[i], state[i] = st, findDone
+			if ok {
+				var fh fileHits
+				if fh.found, fh.count = read(c, f.rel); fh.count > 0 {
+					early.Store(i, fh)
 				}
-				f := all[i]
-				p, rel, kind, id := f.path, f.rel, f.kind, f.id // kind is "" for a file Matches does not read (shown)
-				if kind == "" {
-					continue
-				}
-				fh := fileHits{key: kind + "/" + id}
-				c, st, ok := e.searchText(p, gen, recording)
-				fh.stat = st
-				if ok && hasAll(c.lower, ws) {
-					m := match
-					if c.same {
-						m = matchFolded
-					}
-					fh.found, fh.count = fileFound(c.raw, rel, m)
-				}
-				per[i] = fh
 			}
-		}()
-	}
-	wg.Wait()
-	e.find.prune(gen)
+			return
+		}
+		st := statFile(f.path)
+		if !st.ok {
+			return
+		}
+		stats[i] = fileStat{path: f.path, mod: st.mod, size: st.size}
+		if filter != nil && filter.skip(f.rel, st) {
+			unread.Store(true)
+			return
+		}
+		state[i] = findRead
+	})
 	// The entries the lists show depend only on the JSON files (meta.json, docs/<id>.json): kept while none changed.
 	var metas []fileStat
-	for i, fh := range per {
-		if fh.key != "" && strings.HasSuffix(all[i].path, ".json") {
-			metas = append(metas, fh.stat)
+	for i, f := range all {
+		if f.kind != "" && strings.HasSuffix(f.path, ".json") {
+			metas = append(metas, stats[i])
 		}
 	}
 	known := e.find.entries(metas, func() map[string]Entry {
 		known := map[string]Entry{}
-		for _, k := range []string{KindProject, KindChat, KindPerson, KindDoc, KindMeeting, KindEvent} {
+		for _, k := range []string{KindProject, KindChat, KindPerson, KindDoc, KindMeeting, KindEvent, KindTopic} {
 			for _, en := range e.List(k, "") {
 				known[k+"/"+en.ID] = en
 			}
@@ -226,27 +267,109 @@ func (e *Engine) Find(query string, limit int) []Result {
 		}
 		return known
 	})
-	by := map[string]*Result{}
-	for _, fh := range per {
-		if fh.count == 0 {
+	// The files to read, by entry and in file order, so the lines kept for an entry are its profile's first, then
+	// the newest days'. Files of an entry the lists do not show (a doc without a title yet) are not read: there
+	// would be nothing to open.
+	type entryFiles struct {
+		key   string
+		res   *Result
+		files []int // indices in all
+		next  int   // files[:next] are read
+		batch int
+	}
+	type entryKey struct{ kind, id string }
+	groups := map[entryKey]*entryFiles{}
+	var order []*entryFiles
+	for i, f := range all {
+		if state[i] == findSkip {
 			continue
 		}
-		en, ok := known[fh.key]
-		if !ok {
-			continue // an entry the lists do not show (a doc without a title yet): nothing to open
+		g := groups[entryKey{f.kind, f.id}]
+		if g == nil {
+			g = &entryFiles{key: f.kind + "/" + f.id, batch: 16}
+			groups[entryKey{f.kind, f.id}] = g
+			if _, ok := known[g.key]; ok {
+				order = append(order, g)
+			}
 		}
-		r := by[fh.key]
-		if r == nil {
-			r = &Result{Entry: en}
-			by[fh.key] = r
+		g.files = append(g.files, i)
+	}
+	by := map[string]*Result{}
+	// add counts one file's lines for its entry, and reports whether the entry is settled: at foundCap lines with
+	// every line it shows, nothing a later file has changes it.
+	add := func(g *entryFiles, fh fileHits) bool {
+		if fh.count == 0 {
+			return false
 		}
+		if g.res == nil {
+			g.res = &Result{Entry: known[g.key]}
+			by[g.key] = g.res
+		}
+		r := g.res
 		r.Count = min(foundCap, r.Count+fh.count)
 		for _, f := range fh.found {
 			if len(r.Hits) < hitsPerResult && !hasLine(r.Hits, f.Line) {
 				r.Hits = append(r.Hits, f)
 			}
 		}
+		return r.Count >= foundCap && len(r.Hits) == hitsPerResult
 	}
+	// Read in rounds: of every entry not settled yet its next files, a few at first and more each round, so an
+	// entry with a line on every day costs its newest days, and one with none is read through in a few rounds.
+	type task struct {
+		g *entryFiles
+		i int
+	}
+	var tasks []task
+	var hits []fileHits
+	for len(order) > 0 {
+		tasks = tasks[:0]
+		for _, g := range order {
+			for _, i := range g.files[g.next:min(len(g.files), g.next+g.batch)] {
+				tasks = append(tasks, task{g, i})
+			}
+		}
+		hits = append(hits[:0], make([]fileHits, len(tasks))...)
+		each(len(tasks), workers, func(n int) {
+			i := tasks[n].i
+			if state[i] == findDone {
+				if fh, ok := early.Load(i); ok {
+					hits[n] = fh.(fileHits)
+				}
+				return
+			}
+			if c, ok := e.find.textAt(all[i].path, gen, stats[i]); ok {
+				hits[n].found, hits[n].count = read(c, all[i].rel)
+			}
+		})
+		n := 0
+		left := order[:0]
+		for _, g := range order {
+			end := min(len(g.files), g.next+g.batch)
+			settled := false
+			for ; g.next < end; g.next, n = g.next+1, n+1 {
+				settled = settled || add(g, hits[n])
+			}
+			if g.batch = min(4*g.batch, 4096); !settled && g.next < len(g.files) {
+				left = append(left, g)
+			} else if g.next < len(g.files) {
+				unread.Store(true)
+			}
+		}
+		order = left
+	}
+	if unread.Load() {
+		// The files not read (ruled out by the index, or of an entry settled before them) are still as the cache
+		// has them when their stat is the cached one: prune leaves their texts, and drops those of files gone.
+		e.find.seen(gen, func(yield func(fileStat) bool) {
+			for i := range all {
+				if stats[i].path != "" && !yield(stats[i]) {
+					return
+				}
+			}
+		})
+	}
+	e.find.prune(gen)
 	// Names: an entry whose name matches is found even when no file line does.
 	for key, en := range known {
 		if match(en.Name) {
@@ -315,8 +438,9 @@ func (e *Engine) walkLocked() *dirWalk {
 		for i := range ents {
 			switch d := &ents[i]; {
 			case d.dir:
-				// Attachments hold no text; history/ and select/ are bookkeeping, not searched (see searchable).
-				if d.name != "attachments" && d.rel != "history" && d.rel != selectDir {
+				// Attachments hold no text; history/, select/ and the search index are bookkeeping, not searched (see
+				// searchable).
+				if d.name != "attachments" && d.rel != "history" && d.rel != selectDir && d.rel != SearchIndexDir {
 					walk(d.path, d.rel)
 				}
 			case d.day:
@@ -386,11 +510,11 @@ func (e *Engine) searchFiles() *searchOrder {
 func sortHits(h []Found) []Found {
 	rank := func(f Found) int {
 		switch {
-		case strings.HasSuffix(f.Path, "/summary.md"):
+		case strings.HasSuffix(f.Path, "/summary.md"), strings.HasSuffix(f.Path, "/minutes.md"), strings.HasSuffix(f.Path, "/"+recapMarkdown):
 			return 0
 		case strings.HasSuffix(f.Path, "/log.md"):
 			return 1
-		case strings.Contains(f.Path, "/messages/"), strings.HasSuffix(f.Path, "/transcript.md"):
+		case strings.Contains(f.Path, "/messages/"), strings.HasSuffix(f.Path, "/transcript.md"), strings.HasSuffix(f.Path, "/"+photosText):
 			return 2
 		}
 		return 3
@@ -432,404 +556,4 @@ func fileFound(raw, rel string, match func(string) bool) (found []Found, count i
 		}
 	}
 	return found, min(count, foundCap)
-}
-
-// Match is one place in an entry that matched: the line, and for a message the ones around it.
-type Match struct {
-	Path string `json:"path"`
-	N    int    `json:"n"`
-	Line string `json:"line"`
-	// Day is a message's day ("2006-01-02"); Before / After the messages next to it that day (continuation lines
-	// folded into their message).
-	Day    string   `json:"day,omitempty"`
-	Before []string `json:"before,omitempty"`
-	After  []string `json:"after,omitempty"`
-}
-
-// Matches returns the places in one entry matching query: the profile, timeline and metadata, then messages, newest
-// day first; at most limit.
-func (e *Engine) Matches(kind, id, query string, limit int) []Match {
-	if kind == KindRecording {
-		id, _ = RecordingID(id)
-	}
-	var recording map[string][]byte
-	if kind == KindRecording {
-		recording, _ = e.Store.recordingSnapshot(id)
-	}
-	match := matcher(query)
-	if match == nil {
-		return nil
-	}
-	var out []Match
-	ws := words(query)
-	look := func(p string, msgs bool) {
-		var raw []byte
-		var err error
-		if kind == KindRecording && filepath.Base(p) != "summary.md" {
-			raw = recording[filepath.Base(p)]
-		} else {
-			raw, err = os.ReadFile(p)
-		}
-		if err != nil || !hasAll(fold(string(raw)), ws) {
-			return
-		}
-		rel, _ := filepath.Rel(e.Store.Dir, p)
-		rel = filepath.ToSlash(rel)
-		if !msgs {
-			for i, l := range strings.Split(string(raw), "\n") {
-				if len(out) >= limit {
-					return
-				}
-				if t := strings.TrimSpace(l); t != "" && !strings.HasPrefix(t, "# ") && match(t) {
-					out = append(out, Match{Path: rel, N: i + 1, Line: clip(t, 600)})
-				}
-			}
-			return
-		}
-		day := strings.TrimSuffix(filepath.Base(p), ".md")
-		ms := messages(string(raw))
-		// Newest first within the day too, as the days are.
-		for i := len(ms) - 1; i >= 0; i-- {
-			if len(out) >= limit {
-				return
-			}
-			m := ms[i]
-			if !match(m.text) {
-				continue
-			}
-			mt := Match{Path: rel, N: m.n, Line: clip(m.text, 1200), Day: day}
-			for j := max(0, i-2); j < i; j++ {
-				mt.Before = append(mt.Before, clip(ms[j].text, 300))
-			}
-			for j := i + 1; j < min(len(ms), i+3); j++ {
-				mt.After = append(mt.After, clip(ms[j].text, 300))
-			}
-			out = append(out, mt)
-		}
-	}
-	switch kind {
-	case KindChat, KindPerson, KindProject:
-		for _, f := range []string{"summary.md", "log.md", "meta.json"} {
-			look(e.Store.path(kind, id, f), false)
-		}
-		if kind == KindChat {
-			// The app opens a result right after a Find, whose cache (findCache.text) holds the chat's days: a day
-			// without every word costs a stat there instead of a read and a fold, which for a rare word would be every
-			// day the chat has. The days that have them are read again by look, as before. Like Search, this leaves
-			// pruning to Find.
-			gen := e.find.begin()
-			days := e.Store.Days(id)
-			for i := len(days) - 1; i >= 0 && len(out) < limit; i-- {
-				p := e.Store.path(KindChat, id, "messages", days[i]+".md")
-				if t, _, ok := e.find.text(p, gen); !ok || !hasAll(t.lower, ws) {
-					continue
-				}
-				look(p, true)
-			}
-		}
-	case KindRecording:
-		for _, f := range []string{"summary.md", "transcript.md", "meta.json"} {
-			look(e.Store.path(kind, id, f), false)
-		}
-	case KindDoc, KindMeeting, KindEvent:
-		look(filepath.Join(e.Store.Dir, kind, SafeID(id)+".json"), false)
-	}
-	return out
-}
-
-type message struct {
-	n    int // line number of its first line (1-based)
-	text string
-}
-
-// messages splits a day file into messages: "- HH:MM name: text" and the indented lines that continue it.
-// Other lines (blank lines, headings) do not end a message.
-func messages(raw string) []message {
-	var out []message
-	// The last message's continuation lines, joined into its text once it ends: appending each one to the text
-	// would copy the whole message again per line, quadratic in a long paste.
-	var more []string
-	end := func() {
-		if len(more) > 0 {
-			m := &out[len(out)-1]
-			m.text = m.text + "\n" + strings.Join(more, "\n")
-			more = more[:0]
-		}
-	}
-	for i, l := range strings.Split(raw, "\n") {
-		switch {
-		case strings.HasPrefix(l, "- "):
-			end()
-			out = append(out, message{n: i + 1, text: strings.TrimPrefix(l, "- ")})
-		case strings.HasPrefix(l, "  ") && len(out) > 0:
-			more = append(more, strings.TrimSpace(l))
-		}
-	}
-	end()
-	return out
-}
-
-// Defined in the contract package kbwire (docs/server/architecture.md "Contract packages"); the old names stay.
-type DayMessage = kbwire.DayMessage
-
-// Day returns a chat's messages of one day ("2006-01-02") and the days before and after it that have any.
-func (e *Engine) Day(chatID, day string) (msgs []DayMessage, prev, next string, err error) {
-	if _, perr := time.Parse("2006-01-02", day); perr != nil {
-		return nil, "", "", ErrNotFound
-	}
-	raw, rerr := os.ReadFile(e.Store.path(KindChat, chatID, "messages", day+".md"))
-	if rerr != nil {
-		return nil, "", "", ErrNotFound
-	}
-	for _, m := range messages(string(raw)) {
-		msgs = append(msgs, DayMessage{N: m.n, Text: m.text})
-	}
-	for _, d := range e.Store.Days(chatID) {
-		if d < day {
-			prev = d
-		} else if d > day && next == "" {
-			next = d
-		}
-	}
-	return msgs, prev, next, nil
-}
-
-// findCacheBytes bounds what findCache keeps of the files' text (raw and lowercased); files beyond it are read every
-// time, as without the cache.
-const findCacheBytes = 64 << 20
-
-// findSettle: a file changed this recently is not kept. A write within the same mtime tick and of the same size
-// would otherwise go unseen; once the mtime is this old, any later write gives a newer one.
-const findSettle = 2 * time.Second
-
-// fileStat is what tells a file changed.
-type fileStat struct {
-	path    string
-	content [32]byte // accepted recording bytes can differ from physical files under a journal
-	mod     int64    // UnixNano
-	size    int64
-}
-
-func settling(st fileStat) bool { return time.Since(time.Unix(0, st.mod)) < findSettle }
-
-type findText struct {
-	stat  fileStat
-	raw   string
-	lower string // raw folded (fold): the same string unless raw has upper case or decomposed text
-	same  bool   // lower == raw, so Find matches the lines as written (see matchFolded)
-	gen   uint64 // the last search that saw the file (prune drops the ones no search saw since)
-}
-
-// findCache is what Find keeps between searches: each file's text, and the entries of the lists while no JSON file
-// changed. Everything is checked against a fresh stat on every search, so results are those of reading every file.
-type findCache struct {
-	mu    sync.Mutex
-	gen   uint64
-	texts map[string]*findText
-	bytes int
-	// metas: the stats of the JSON files known was built from (sorted by path as files lists them).
-	metas []fileStat
-	known map[string]Entry
-
-	// The walk (files): each directory's listing while its mtime holds (adding, removing or renaming an entry
-	// changes it), and the sorted result while no listing changed.
-	walkMu  sync.Mutex
-	walkGen uint64
-	dirs    map[string]*dirListing
-	walked  bool
-	walk    *dirWalk
-	scratch [2][]*dirEnt // the files and days a walk gathers, reused by the next one
-}
-
-// dirWalk is what one walk of the data dir found (files). Shared and read-only, but for search, which the first
-// Search after the walk fills in with walkMu held (searchFiles).
-type dirWalk struct {
-	files    []*dirEnt // profile files, as walked
-	days     []*dirEnt // message days, newest first (stable: same-named days as walked)
-	all      []*dirEnt // files then days: what Find looks at
-	walkDays []*dirEnt // the days as walked
-	search   *searchOrder
-}
-
-type dirListing struct {
-	stat fileStat
-	ents []dirEnt
-	gen  uint64
-}
-
-// dirEnt is a directory's child with what the searches would otherwise work out for every file on every search.
-type dirEnt struct {
-	name string
-	dir  bool
-	path string // the directory's path joined with name
-	rel  string // relative to the data dir, with slashes
-	// kind and id: the entry of a file Find reads (entryOf, shown); "" for any other file.
-	kind, id string
-	// day: under a messages/ directory. moment: under moments/posts/ (Search reads the .md ones last). file: any
-	// other file a search may read: searchable, .md or .json and not a recording's segments.json (transcript.md has
-	// the same text), or a Moments .md.
-	day, file, moment bool
-}
-
-func newDirEnt(dir, rel, name string, isDir bool) dirEnt {
-	d := dirEnt{dir: isDir, path: filepath.Join(dir, name), rel: name}
-	if rel != "" {
-		d.rel = rel + "/" + name
-	}
-	d.name = d.rel[len(d.rel)-len(name):] // one string kept, not two
-	if isDir {
-		return d
-	}
-	d.day, d.moment = under(d.rel, "/messages/"), under(d.rel, "/moments/posts/")
-	md := strings.HasSuffix(name, ".md")
-	d.file = !d.day && (d.moment && md || name != "segments.json" && searchable(d.rel) && (md || strings.HasSuffix(name, ".json")))
-	if kind, id, ok := entryOf(d.rel); ok && shown(kind, d.rel) {
-		d.kind, d.id = kind, id
-	}
-	return d
-}
-
-// under reports whether rel (with slashes) is in a directory named as sub ("/messages/") at any depth.
-func under(rel, sub string) bool {
-	return strings.HasPrefix(rel, sub[1:]) || strings.Contains(rel, sub)
-}
-
-// listDir returns a directory's entries sorted by name, and whether they were read now rather than kept; rel is the
-// directory's path relative to the data dir ("" for itself). Called with walkMu held.
-func (c *findCache) listDir(dir, rel string) ([]dirEnt, bool) {
-	fi, err := os.Stat(dir)
-	if err != nil {
-		return nil, true
-	}
-	st := fileStat{path: dir, mod: fi.ModTime().UnixNano(), size: fi.Size()}
-	if l := c.dirs[dir]; l != nil && l.stat == st {
-		l.gen = c.walkGen
-		return l.ents, false
-	}
-	des, err := os.ReadDir(dir)
-	ents := make([]dirEnt, len(des))
-	for i, d := range des {
-		ents[i] = newDirEnt(dir, rel, d.Name(), d.IsDir())
-	}
-	delete(c.dirs, dir)
-	if err == nil && !settling(st) {
-		if c.dirs == nil {
-			c.dirs = map[string]*dirListing{}
-		}
-		c.dirs[dir] = &dirListing{stat: st, ents: ents, gen: c.walkGen}
-	}
-	return ents, true
-}
-
-func (c *findCache) begin() uint64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.gen++
-	return c.gen
-}
-
-// Recording text bypasses the disk cache: a journal may mask a newer physical
-// file without changing that file's stat. Other archive files keep their cache.
-func (e *Engine) searchText(p string, gen uint64, recording map[string]map[string][]byte) (*findText, fileStat, bool) {
-	rel, err := filepath.Rel(e.Store.Dir, p)
-	if err == nil {
-		parts := strings.Split(filepath.ToSlash(rel), "/")
-		if len(parts) == 3 && parts[0] == KindRecording && (parts[2] == "meta.json" || parts[2] == "transcript.md") {
-			raw := recording[parts[1]][parts[2]]
-			if raw == nil {
-				return nil, fileStat{}, false
-			}
-			st := fileStat{path: p, size: int64(len(raw)), content: sha256.Sum256(raw)}
-			text := string(raw)
-			t := &findText{stat: st, raw: text, lower: fold(text)}
-			t.same = t.lower == t.raw
-			return t, st, true
-		}
-	}
-	return e.find.text(p, gen)
-}
-
-// text returns a file's text and its stat, from the cache while the file is unchanged.
-func (c *findCache) text(p string, gen uint64) (*findText, fileStat, bool) {
-	fi, err := os.Stat(p)
-	if err != nil {
-		return nil, fileStat{}, false
-	}
-	st := fileStat{path: p, mod: fi.ModTime().UnixNano(), size: fi.Size()}
-	c.mu.Lock()
-	t := c.texts[p]
-	if t != nil && t.stat == st {
-		t.gen = gen
-		c.mu.Unlock()
-		return t, st, true
-	}
-	c.mu.Unlock()
-	raw, err := os.ReadFile(p)
-	if err != nil {
-		return nil, st, false
-	}
-	s := string(raw)
-	t = &findText{stat: st, raw: s, lower: fold(s), gen: gen}
-	t.same = t.lower == t.raw
-	if int64(len(raw)) != st.size || settling(st) {
-		return t, st, true // changing while read, or just now: used once, not kept
-	}
-	n := t.cost()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if old := c.texts[p]; old != nil {
-		c.bytes -= old.cost()
-		delete(c.texts, p)
-	}
-	if c.bytes+n <= findCacheBytes {
-		if c.texts == nil {
-			c.texts = map[string]*findText{}
-		}
-		c.texts[p] = t
-		c.bytes += n
-	}
-	return t, st, true
-}
-
-// cost is the bytes a cached text holds (folding returns the same string when nothing changes; a decomposed or
-// mixed-case file keeps a second, folded copy).
-func (t *findText) cost() int {
-	if t.lower == t.raw {
-		return len(t.raw)
-	}
-	return len(t.raw) + len(t.lower)
-}
-
-// prune drops the files the search gen and those after it did not see (deleted, or no longer searched).
-func (c *findCache) prune(gen uint64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for p, t := range c.texts {
-		if t.gen < gen {
-			c.bytes -= t.cost()
-			delete(c.texts, p)
-		}
-	}
-}
-
-// entries returns the lists' entries, built again by list unless metas (the JSON files' stats now) are those they
-// were built from. The map is shared: callers only read it.
-func (c *findCache) entries(metas []fileStat, list func() map[string]Entry) map[string]Entry {
-	c.mu.Lock()
-	if c.known != nil && slices.Equal(c.metas, metas) {
-		known := c.known
-		c.mu.Unlock()
-		return known
-	}
-	c.mu.Unlock()
-	known := list()
-	for _, m := range metas {
-		if settling(m) {
-			return known // a file just written: build again next time
-		}
-	}
-	c.mu.Lock()
-	c.metas, c.known = metas, known
-	c.mu.Unlock()
-	return known
 }

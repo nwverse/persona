@@ -11,14 +11,16 @@ interface Deferred {
   reject: (e: unknown) => void;
 }
 const calls: Deferred[] = [];
-vi.mock("./api", () => ({
+vi.mock("./api", async (original) => ({
+  ...(await original<typeof import("./api")>()),
   api: () =>
     new Promise((resolve, reject) => {
       calls.push({ resolve, reject });
     }),
 }));
 
-import { useUsageWindows } from "./usage-windows";
+import { useUsageWindows, useUsageWindowsReady } from "./usage-windows";
+import { ApiError } from "./api";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -26,7 +28,8 @@ const account = (id: string): UsageAccount => ({ id, provider: "claude", name: i
 
 function Bars() {
   const accounts = useUsageWindows();
-  return <p>{accounts.map((a) => a.id).join(",")}</p>;
+  const ready = useUsageWindowsReady();
+  return <p data-ready={String(ready)}>{accounts.map((a) => a.id).join(",")}</p>;
 }
 
 let root: Root | undefined;
@@ -52,6 +55,15 @@ const backToFront = () => act(() => document.dispatchEvent(new Event("visibility
 const settle = async (f: () => void) => act(async () => f());
 
 describe("useUsageWindows", () => {
+  it("shares the request and response across consumers", async () => {
+    act(() => root!.render(<><Bars /><Bars /></>));
+    expect(calls).toHaveLength(1);
+    await settle(() => calls[0].resolve({ accounts: [account("A")] }));
+    expect(Array.from(host.querySelectorAll("p"), (p) => p.textContent)).toEqual(["A", "A"]);
+    backToFront();
+    expect(calls).toHaveLength(2);
+  });
+
   it("keeps the newer reply when the older one lands after it", async () => {
     expect(calls).toHaveLength(1); // the mount's request, still out
     backToFront();
@@ -69,11 +81,14 @@ describe("useUsageWindows", () => {
     expect(host.textContent).toBe("B");
   });
 
-  it("still applies a failure of the newest request", async () => {
+  it("clears the bars only on a 404: an older hub has no such route, anything else keeps them", async () => {
     await settle(() => calls[0].resolve({ accounts: [account("A")] }));
     expect(host.textContent).toBe("A");
     backToFront();
-    await settle(() => calls[1].reject(new Error("no such route")));
+    await settle(() => calls[1].reject(new TypeError("flaky link")));
+    expect(host.textContent).toBe("A");
+    backToFront();
+    await settle(() => calls[2].reject(new ApiError(404, "no such route", {})));
     expect(host.textContent).toBe("");
   });
 
@@ -82,6 +97,19 @@ describe("useUsageWindows", () => {
     root = undefined;
     await settle(() => calls[0].resolve({ accounts: [account("A")] }));
     expect(host.textContent).toBe("");
+  });
+
+  it("gates useUsageWindowsReady on a supported (non-404) response", async () => {
+    const ready = () => host.querySelector("p")?.getAttribute("data-ready");
+    expect(ready()).toBe("false");
+    await settle(() => calls[0].reject(new ApiError(503, "assistant_offline", {})));
+    expect(ready()).toBe("false");
+    backToFront();
+    await settle(() => calls[1].resolve({ accounts: [] }));
+    expect(ready()).toBe("true");
+    backToFront();
+    await settle(() => calls[2].reject(new ApiError(404, "no such route", {})));
+    expect(ready()).toBe("false");
   });
 
   it("does not ask while the tab is hidden", () => {

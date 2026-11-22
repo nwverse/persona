@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.captureToImage
@@ -22,11 +23,13 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.isRoot
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.JsonObject
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -49,16 +52,18 @@ import java.io.File
 class SettingsCoreShotsTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
 
+    private val longHubAddress = "https://hub.example.com:65535/this/is/a/very/long/hub/address/that/wraps/on/a/phone"
+
     private fun out(): File = File(System.getProperty("persona.shots") ?: "build/i18n-shots").also { it.mkdirs() }
 
     @Config(sdk = [35], qualifiers = "zh-w400dp-h2600dp-xhdpi")
-    @Test fun simplifiedChinese() = shots("zh", settings = "设置", diagnostics = "连接诊断")
+    @Test fun simplifiedChinese() = shots("zh", settings = "设置", diagnostics = "连接", quiet = "免打扰时段")
 
     @Config(sdk = [35], qualifiers = "en-w400dp-h2600dp-xhdpi")
-    @Test fun english() = shots("en", settings = "Settings", diagnostics = "Connection diagnostics")
+    @Test fun english() = shots("en", settings = "Settings", diagnostics = "Connection", quiet = "Quiet hours")
 
     @Config(sdk = [35], qualifiers = "ja-w400dp-h2600dp-xhdpi")
-    @Test fun japanese() = shots("ja", settings = "設定", diagnostics = "接続の診断")
+    @Test fun japanese() = shots("ja", settings = "設定", diagnostics = "接続", quiet = "おやすみ時間")
 
     private class Live(sample: ConnectionDiagnostics) : HubConnection, ConnectionDiagnosticsSource {
         override val state = MutableStateFlow(ConnectionState.Online)
@@ -79,7 +84,8 @@ class SettingsCoreShotsTest {
             revoked = listOf(PairedDevice("old", "iPhone", "iphone", "full", platform = "ios", revokedAt = "2026-10-20T10:00:00Z")),
         )
         override suspend fun revoke(credentialId: String) = Unit
-        override suspend fun preferences() = DeviceNotificationPreferences(longTurnSeconds = 120, doneDelaySeconds = 1)
+        override suspend fun preferences() = DeviceNotificationPreferences(longTurnSeconds = 120, doneDelaySeconds = 1,
+            quiet = QuietHours(enabled = true, tz = "Pacific/Auckland"))
         override suspend fun savePreferences(preferences: DeviceNotificationPreferences) = preferences
     }
 
@@ -97,11 +103,11 @@ class SettingsCoreShotsTest {
     }
 
     private class Triage : AgentTriage {
-        override suspend fun switches() = TriageSwitches(enabled = true, decide = true)
+        override suspend fun switches() = TriageSwitches(enabled = true, decide = true, closeout = true)
         override suspend fun put(value: TriageSwitches) = value
     }
 
-    private fun shots(language: String, settings: String, diagnostics: String) {
+    private fun shots(language: String, settings: String, diagnostics: String, quiet: String) {
         val resources = rule.activity.resources
         val demo = demoSettingsServices(resources)
         val sample = kotlinx.coroutines.runBlocking { demo.diagnostics!!.read() }.copy(
@@ -120,7 +126,7 @@ class SettingsCoreShotsTest {
         val paired = demo.copy(
             pairing = object : PairingService by demo.pairing { override val isPaired = MutableStateFlow(true) },
             connection = live, liveDiagnostics = live, endpoints = null, demo = false, diagnostics = history,
-            deviceSettings = Devices(), hubAddress = "https://hub.example.com", capsule = Capsule(),
+            deviceSettings = Devices(), hubAddress = longHubAddress, capsule = Capsule(),
             translation = Translation(), triage = Triage(),
         )
         // (name, services, page)
@@ -147,14 +153,24 @@ class SettingsCoreShotsTest {
         }
         val cjk = Regex("[\\u3040-\\u30ff\\u3400-\\u9fff]")
         for (p in pages) {
-            val variants = if (p.first == "list") AppStyle.entries.flatMap { s -> listOf(s to false, s to true) }
+            val variants = if (p.first == "list" || p.first == "triage") AppStyle.entries.flatMap { s -> listOf(s to false, s to true) }
                 else listOf(AppStyle.Glass to false, AppStyle.Glass to true)
             for ((s, d) in variants) {
                 page = p; style = s; dark = d
                 rule.mainClock.advanceTimeBy(2_000)
                 rule.waitForIdle()
                 if (p.first.startsWith("list")) rule.onNodeWithText(settings).assertExists()
+                if (p.first == "diagnostics") {
+                    rule.onNodeWithTag("settings-hub-address-selection").assertExists()
+                    val address = rule.onNodeWithText(longHubAddress, useUnmergedTree = true).assertExists()
+                    val layouts = mutableListOf<TextLayoutResult>()
+                    address.fetchSemanticsNode().config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
+                    val layout = layouts.single()
+                    assertTrue("hub address must wrap in $s, dark=$d", layout.lineCount > 1)
+                    assertFalse("hub address clipped in $s, dark=$d", layout.hasVisualOverflow)
+                }
                 if (p.first == "diagnostics") rule.onNodeWithText(diagnostics).assertExists()
+                if (p.first == "notify") rule.onNodeWithText(quiet).assertExists()
                 val texts = rule.onAllNodes(isRoot()).fetchSemanticsNodes().flatMap { root ->
                     fun walk(node: androidx.compose.ui.semantics.SemanticsNode): List<String> =
                         node.config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } + node.children.flatMap(::walk)

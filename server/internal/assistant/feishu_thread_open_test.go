@@ -81,7 +81,7 @@ func TestTopicRootOpensATodo(t *testing.T) {
 	}
 
 	notes := topicNotes(e.f)
-	want := e.said("thread_open_done", i18n.Args{"title": todo.Title}) + "\nhttps://hub.example.com/todos?id=" + todo.ID
+	want := e.said("thread_open_done", i18n.Args{"title": todo.Title}) + "\nhttps://hub.example.com/todos/" + todo.ID
 	if len(notes) != 1 || notes[0]["text"] != want || notes[0]["chat_id"] != testChat || notes[0]["in_thread"] != true || notes[0]["reply_to"] != "om_r1" {
 		t.Fatalf("notes %v, want %q into the topic as a reply", notes, want)
 	}
@@ -183,17 +183,52 @@ func TestNotAnAICommandIsAWord(t *testing.T) {
 	}
 }
 
-// "/ai" with nothing after it, on its own or as a topic's first message, has nothing to name a to-do by: it asks for the words.
-func TestAICommandWithNoWordsAsksForThem(t *testing.T) {
-	for _, ev := range []feishubot.MessageEvent{topicEvent("om_e1", "/ai"), topicEvent("om_e2", "/ai   "), rootEvent("om_e3", "/ai")} {
-		e := newThreadEnv(t, nil)
-		e.deliver(ev)
-		if todoCount(e.s) != 0 || len(handoffs(e.f)) != 0 {
-			t.Fatalf("%q: %d todos, %d sent on", ev.Message.Content, todoCount(e.s), len(handoffs(e.f)))
-		}
-		if got := lastNote(t, e.f); got != e.said("thread_open_needs_text") {
-			t.Fatalf("%q: note %q", ev.Message.Content, got)
-		}
+// A message without words has nothing to name a to-do by: the topic is asked for words, nothing is made or sent on.
+// "/ai" with nothing after it, on its own or as a topic's first message, is one. So is a topic opened with a picture or a
+// merged forward alone (nothing is downloaded) or blank text. Only a text or a rich-text message has words: voice, a
+// shared group, a shared card, a location, a card, a file, a message of a type not known (the content has a placeholder
+// like "[语音消息]" for them) and a rich text of only pictures open nothing too.
+func TestMessageWithoutWordsOpensNoTodo(t *testing.T) {
+	root := func(id, kind, content string) feishubot.MessageEvent {
+		ev := rootEvent(id, "")
+		ev.Message.MessageType, ev.Message.Content = kind, content
+		return ev
+	}
+	for _, c := range []struct {
+		name       string
+		ev         feishubot.MessageEvent
+		noDownload bool
+	}{
+		{"/ai in a topic", topicEvent("om_e1", "/ai"), false},
+		{"/ai and spaces in a topic", topicEvent("om_e2", "/ai   "), false},
+		{"/ai as a topic's first message", rootEvent("om_e3", "/ai"), false},
+		{"image", root("om_i1", "image", `{"image_key":"img_test"}`), true},
+		{"merge_forward", root("om_i1", "merge_forward", `{}`), true},
+		{"blank text", root("om_i1", "text", `{"text":"   "}`), true},
+		{"audio", root("om_v1", "audio", `{"file_key":"f_test"}`), false},
+		{"share_chat", root("om_v1", "share_chat", `{"chat_id":"oc_other"}`), false},
+		{"share_user", root("om_v1", "share_user", `{"user_id":"ou_other"}`), false},
+		{"location", root("om_v1", "location", `{"name":"某处","longitude":"1","latitude":"2"}`), false},
+		{"interactive", root("om_v1", "interactive", `{"title":"一张卡片"}`), false},
+		{"file", root("om_v1", "file", `{"file_key":"f_test","file_name":"a.txt"}`), false},
+		{"a_new_type", root("om_v1", "a_new_type", `{"text":"看起来像文字"}`), false},
+		{"post of only a picture", root("om_v1", "post", `{"title":"","content":[[{"tag":"img","image_key":"img_test"}]]}`), false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := newThreadEnv(t, nil)
+			e.deliver(c.ev)
+			if todoCount(e.s) != 0 || len(handoffs(e.f)) != 0 {
+				t.Fatalf("%q: %d todos, %d sent on", c.ev.Message.Content, todoCount(e.s), len(handoffs(e.f)))
+			}
+			if got := lastNote(t, e.f); got != e.said("thread_open_needs_text") {
+				t.Fatalf("%q: note %q", c.ev.Message.Content, got)
+			}
+			if c.noDownload {
+				if got := e.f.appParams(AppFeishu, FeishuResource); len(got) != 0 {
+					t.Fatalf("something was downloaded: %v", got)
+				}
+			}
+		})
 	}
 }
 
@@ -293,32 +328,6 @@ func TestOnlyTheOwnerOpensATodo(t *testing.T) {
 	}
 }
 
-// A topic opened with a picture or a merged forward alone has nothing to name a to-do by: it is told so, nothing is made
-// or sent on, nothing is downloaded.
-func TestPictureOrForwardAloneOpensNothing(t *testing.T) {
-	for _, c := range []struct{ kind, content string }{
-		{"image", `{"image_key":"img_test"}`},
-		{"merge_forward", `{}`},
-		{"text", `{"text":"   "}`},
-	} {
-		t.Run(c.kind, func(t *testing.T) {
-			e := newThreadEnv(t, nil)
-			ev := rootEvent("om_i1", "")
-			ev.Message.MessageType, ev.Message.Content = c.kind, c.content
-			e.deliver(ev)
-			if todoCount(e.s) != 0 || len(handoffs(e.f)) != 0 {
-				t.Fatalf("%d todos, %d sent on", todoCount(e.s), len(handoffs(e.f)))
-			}
-			if got := lastNote(t, e.f); got != e.said("thread_open_needs_text") {
-				t.Fatalf("note %q", got)
-			}
-			if got := e.f.appParams(AppFeishu, FeishuResource); len(got) != 0 {
-				t.Fatalf("something was downloaded: %v", got)
-			}
-		})
-	}
-}
-
 // With no one to give it to, no to-do is made, whatever the reason (the main switch off, no main conversation yet, the
 // main conversation gone): the topic is told, nothing is sent on, the main conversation's feed shows no task.
 func TestNoOneToTakeItMeansNoTodo(t *testing.T) {
@@ -391,6 +400,28 @@ func TestTakenTopicLeavesNoTodoBehind(t *testing.T) {
 	}
 	if got := feedRefs(e.s, "m1", feedTask); len(got) != len(cardsBefore) {
 		t.Fatalf("task cards %v, were %v", got, cardsBefore)
+	}
+}
+
+func TestThreadOpenStopsWhenSupervisionCannotBeStored(t *testing.T) {
+	database := failingSupervisionStore{DB: todoTestDB(t)}
+	e := newThreadEnv(t, database)
+	cardsBefore := feedRefs(e.s, "m1", feedTask)
+	e.deliver(rootEvent("om_supervision_down", "发版"))
+	if got := todoCount(e.s); got != 0 {
+		t.Fatalf("failed supervision left %d todos in memory", got)
+	}
+	if rows, err := database.ListTodos(context.Background()); err != nil || len(rows) != 0 {
+		t.Fatalf("failed supervision left stored todos %+v, %v", rows, err)
+	}
+	if got := handoffs(e.f); len(got) != 0 {
+		t.Fatalf("thread open was delivered without a supervision ledger: %+v", got)
+	}
+	if got := feedRefs(e.s, "m1", feedTask); len(got) != len(cardsBefore) {
+		t.Fatalf("task cards %v, were %v", got, cardsBefore)
+	}
+	if got := lastNote(t, e.f); !strings.Contains(got, "injected supervision write failure") {
+		t.Fatalf("the topic did not get the supervision failure: %q", got)
 	}
 }
 
@@ -470,7 +501,7 @@ func TestOpenedLineLinksOnlyWithAWebAddress(t *testing.T) {
 			line := e.said("thread_open_done", i18n.Args{"title": "发版"})
 			want := line
 			if c.wantLink {
-				want += "\n" + strings.TrimRight(c.url, "/") + "/todos?id=" + todo.ID
+				want += "\n" + strings.TrimRight(c.url, "/") + "/todos/" + todo.ID
 			}
 			if got := lastNote(t, e.f); got != want {
 				t.Fatalf("note %q, want %q", got, want)
@@ -491,7 +522,7 @@ func TestPrivateChatNeverOpensATodoFromATopic(t *testing.T) {
 
 // withMentions puts mentions on ev: the bot as @_user_1 and a colleague as @_user_2 (named), @_user_3 (no name known).
 func withMentions(ev feishubot.MessageEvent) feishubot.MessageEvent {
-	ev.Message.Mentions = []feishubot.Mention{{Key: "@_user_1", Name: "示例机器人"}, {Key: "@_user_2", Name: "小王"}, {Key: "@_user_3"}}
+	ev.Message.Mentions = []feishubot.Mention{{Key: "@_user_1", Name: "示例机器人", ID: feishubot.UserID{OpenID: "ou_bot"}}, {Key: "@_user_2", Name: "小王"}, {Key: "@_user_3"}}
 	return ev
 }
 
@@ -518,6 +549,8 @@ func TestOpeningTakesOffTheBotsMention(t *testing.T) {
 		{"an @ with no name stays as it stands", "text", `{"text":"@_user_1 让 @_user_3 看登录崩溃"}`, true, "让 @_user_3 看登录崩溃"},
 		{"@_user_1 is not the start of @_user_10", "text", `{"text":"@_user_10 看登录崩溃"}`, true, "@_user_10 看登录崩溃"},
 		{"rich text, /ai after the @", postType, postBody, false, "修登录崩溃"},
+		{"rich text, adjacent /ai", postType, strings.Replace(postBody, " /ai", "/ai", 1), false, "修登录崩溃"},
+		{"rich text, adjacent /ai in a root", postType, strings.Replace(postBody, " /ai", "/ai", 1), true, "修登录崩溃"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e := newThreadEnv(t, nil)
@@ -562,35 +595,6 @@ func TestMentionAloneOpensNothingAndAICommandBehindOneIsAnswered(t *testing.T) {
 	notes = topicNotes(e.f)
 	if len(notes) != 4 || notes[2]["text"] != e.said("thread_done") || notes[3]["text"] != e.said("thread_done") || todoCount(e.s) != 1 {
 		t.Fatalf("%d todos, notes %v", todoCount(e.s), notes)
-	}
-}
-
-// Only a text or a rich-text message has words. Voice, a shared group, a shared card, a location, a card, a file, a
-// message of a type not known (the content has a placeholder like "[语音消息]" for them) and a rich text of only pictures
-// open nothing: the topic is asked for words, nothing is made or sent on.
-func TestOnlyWordsOpenATodo(t *testing.T) {
-	for _, c := range []struct{ kind, content string }{
-		{"audio", `{"file_key":"f_test"}`},
-		{"share_chat", `{"chat_id":"oc_other"}`},
-		{"share_user", `{"user_id":"ou_other"}`},
-		{"location", `{"name":"某处","longitude":"1","latitude":"2"}`},
-		{"interactive", `{"title":"一张卡片"}`},
-		{"file", `{"file_key":"f_test","file_name":"a.txt"}`},
-		{"a_new_type", `{"text":"看起来像文字"}`},
-		{"post", `{"title":"","content":[[{"tag":"img","image_key":"img_test"}]]}`},
-	} {
-		t.Run(c.kind, func(t *testing.T) {
-			e := newThreadEnv(t, nil)
-			ev := rootEvent("om_v1", "")
-			ev.Message.MessageType, ev.Message.Content = c.kind, c.content
-			e.deliver(ev)
-			if todoCount(e.s) != 0 || len(handoffs(e.f)) != 0 {
-				t.Fatalf("%d todos, %d sent on", todoCount(e.s), len(handoffs(e.f)))
-			}
-			if got := lastNote(t, e.f); got != e.said("thread_open_needs_text") {
-				t.Fatalf("note %q", got)
-			}
-		})
 	}
 }
 

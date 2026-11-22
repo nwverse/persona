@@ -112,6 +112,8 @@ func (h *Manager) migrateIMessage(ctx context.Context) {
 // applyIMessage makes the connector read the Mac it should (imessageMachine): registered with it, taken out when
 // there is none, made again when the Mac changed.
 func (h *Manager) applyIMessage() {
+	_ = h.imessageSettingsMu.lock(context.Background())
+	defer h.imessageSettingsMu.unlock()
 	want := h.imessageMachine()
 	cur := h.imessage()
 	if cur != nil && want != "" && cur.Machine() == want {
@@ -159,7 +161,7 @@ func (h *Manager) imessageOneMac(raw json.RawMessage) *extension.FieldError {
 	}
 	name := other
 	if m := h.localMachine(other); m != nil {
-		name = m.cfg.Name
+		name = m.name()
 	}
 	return &extension.FieldError{Path: "machines", Message: i18n.T(h.userLang(), "hub-imessage_extension.one_mac", i18n.Args{"name": name})}
 }

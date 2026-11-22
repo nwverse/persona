@@ -1,5 +1,322 @@
 # Lessons: Android
 
+## A delayed settings GET must not undo an acknowledged PUT (#12680)
+
+A pull-to-refresh can remain pending while a settings switch is saved. Protecting the credential form alone does not
+protect the hub status: an older GET can still restore the previous switch value or replace a save's error. In the Lark
+bot model, reserve each read's sequence and save generation before suspension; invalidate earlier reads when saving
+starts, and ignore reads begun during a save. Keep loading ownership separate so an older completion cannot stop a
+newer refresh's indicator. A fresh read after success, failure or cancellation must still work. Test the causal order
+with `CompletableDeferred` in the real model's fake API, including both response orders and exact PUT counts; do not
+infer the race from network timing or disable the switch for the whole refresh.
+
+## A false pairing snapshot can mean restoration is still pending (#4055)
+
+Removing a main-thread restore changes more than the first suspend call. A `StateFlow<Boolean>` whose initial value is
+`false` does not distinguish an empty startup snapshot from a real unpair. Gate both one-shot decisions and collectors on
+the appropriate readiness barrier: pairing restoration and, for a persisted fleet, its snapshot becoming visible. A
+collector started early can stop a service or erase a saved snapshot before the pairing arrives. An available initial
+network must not dial before the group's data and reconciliation collectors exist. Keep broadcast `goAsync` results pending
+until the barrier and the original action complete, and preserve the foreground service's promote-before-stop ordering. A
+deferred tile click launches a foreground routing activity through `startActivityAndCollapse` while the tile service is
+alive; that activity waits for restoration and performs the final route. A raw `Context.startActivity()` after the tile
+service is destroyed can be blocked by background-activity-start restrictions. An undispatched coroutine start keeps
+demo/test implementations with a no-op restore synchronous while allowing the real restore to suspend.
+
+## A cancelled SSH start must still report a rejected host key (#10101)
+
+Cancelling the coroutine waiting for JSch does not prove that its queued dial never ran or that the SSH thread has finished. Register a new session and check `closed` in one lock with `close()`; check the explicit late flag before starting queued blocking work, and pass a failure which arrives after cancellation to the tunnel's configuration-scoped block. Otherwise the next retry dials a host key which already failed the pin check. Keep the original no-redial connection assertion, test late success separately from late failure, and run the whole `core:hub` suite: this ordering may not reproduce in an isolated class. Do not replace the cancelled attempt's host-key error with a generic stopped state.
+
+A failed SSH start can leave a live local forwarding listener even after the session disconnects. A later OkHttp health probe then reaches the SSH server and looks like a second dial despite no new `HubWays.open()`. Close every listener in `Session.portForwardingL`, not only the port already assigned to `localPort`; the listener may exist before `start()` returns. Assert both the original no-redial test and that closing before port publication refuses a new probe.
+
+A refused-key failure can become visible while its `HubWays` start is still unwinding. `unblock` must invalidate that pending attempt and fence late callbacks from older epochs; otherwise the old `NotAuthorized` is written back after the user acts, and every reconnect refuses to dial. Do not replace this with an ordinary epoch check for every late failure: `close(forget = false)` also bumps the epoch, and #10101 requires a late changed-host-key failure after that close to keep blocking redial. The explicit-unblock fence is separate, and a failure from the new post-unblock epoch must still publish normally. Verify with the complete connection-class loop: a stale-block timeout shows `Down(NotAuthorized)`, no second SSH handshake and no login, while an isolated pass proves nothing (#10140).
+
+## Device drag evidence needs a live touch sequence and a real test count
+
+`View.startDragAndDrop` is not a standalone drag-event factory. Inject `ACTION_DOWN` first, start the drag during that same touch sequence, then inject move and up events with the same `downTime`. Include `DRAG_FLAG_GLOBAL | DRAG_FLAG_GLOBAL_URI_READ` for content URIs that need a read grant. Without the down event, WindowManager can log `perform drag` with touch `(0,0)` and immediately unregister the drag input channel; a helper that then returns success without checking imported state creates empty negative-test passes. Assert both that the system drag started and that the expected attachment or non-import outcome reached the draft.
+
+A Gradle `connectedDebugAndroidTest` invocation can print `BUILD SUCCESSFUL` and write a zero-test XML when its additional-output collector loses the adb device. That is not a passing device test. Check the suite's actual test count, or install the built test APK through the intended adb server and run `am instrument` directly; require the final `OK (N tests)` line with the expected count. Do not hide a missing-device failure behind the Gradle task's exit status.
+## Rust continuity frames are not input acknowledgements (#7448)
+
+A worker can emit a fetch before it publishes a patch. Use #7554's `Ack`/`acked` to distinguish an applied no-op from
+queued work, and read `ChatPatch.verified` rather than deriving coverage uncertainty in Kotlin. Submit each input and
+Ack adjacently; state wakes are chat-targeted and the Ack's ordered global wake closes that input's effect batch.
+Collect effects and drain the patch in the same driver critical section, or an Ack can overtake its effect handoff.
+
+Give every asynchronous older/fold input its own bounded completion slot, remove it on timeout/cancellation, and carry `fold_id`
+through range responses and failures. Never let a late effect use a newer call's slot. Compare a response's history
+generation against submitted inputs under the same input mutex, not against the still-old displayed frame. Start
+fold cleanup protection before any suspension after reserving its ID, and bind initialization waiters to the driver
+scope so closing before the first frame cancels them. A queued async fill belongs
+to its applied callback chain. Before successful response queueing, its request owner must release the gate on failure
+or cancellation, including cancellation after HTTP returns. Queue acknowledgement is neither successful content nor
+completion of a later reconciliation: preserve errors across ordinary Acks and give each reconciliation a receipt.
+A content Ack can also be older than a transport failure: record the error's input boundary and clear it only for a
+later successful content input. Check whether a fill response settled before scanning coverage on an Ack-only frame.
+Bound overtaken-After follow-ups by progress and a request budget. Keep synchronous repository methods separate:
+retain their original state-lock sections, requests mutex, return values and error publication. Do not send Kotlin
+through asynchronous receipt timeouts, operation slots or history generations. Finish older's gate and clear its
+loading flag in the same state-lock section; a failed read receipt restores the snapshot it took under that lock.
+Fold expansion returns the downloaded items, not a filter of the current reducer, since a push can remove its fold.
+Keep synchronous coverage checks at their original repository call sites, using one captured adapter state.
+The adapter must not repeat those scans or scan history for controls and intermediate range pages.
+Rejected effects have no owner; record and broadcast diagnostics without cancelling another chat. Immediate test-only flush/drain schedulers do not prove
+these races: use real JNI with independently controlled worker completion, frames and transport.
+
+## Verify intermittent test failures with the whole module
+
+A WebSocket listener's terminal callback is asynchronous; closing the owning `OkHttpClient` can stop its dispatcher before that callback records a drop. Record the terminal diagnostics event through the socket's own atomic guard in `close()` before cancelling the socket, not only in a later coroutine finally or callback. Keep `onClosing` / `onFailure` / the runner cleanup on the same guard so a socket still contributes exactly one drop. Test that `close()` records it before returning and keep an advertised endpoint list identical to the initial configuration when a topology change is not the behavior under test (#11548).
+
+Do not assert a process-wide diagnostics sink has zero drops immediately before calling `close()`: cancelling the socket lets its runner cleanup record the legitimate drop before that assertion evaluates. This is not a spontaneous disconnect or a timeout. Assert the connected count, the synchronous drop after close and exactly one drop in total, and isolate each test's sink so it does not attribute another test's connection to the current one.
+
+Do not run Linux and macOS Gradle processes against the same checkout's `build/` directories at once. The other process can replace compiled classes and test reports while tests run, producing unrelated `NoClassDefFoundError` failures and undeletable reports. Stop those runs, remove only the affected disposable outputs and use an isolated `GRADLE_USER_HOME` when shared caches are also suspect.
+
+An intermittent test is not verified by repeatedly running only its own class. In the hand-off recording tests, background work wrote the reply journal on `Dispatchers.IO` while the test deleted its directory, and the race appeared only under whole-module concurrency; `advanceUntilIdle()` drains the test scheduler but not those IO threads, so `cancelAndJoin()` the repository's scope before cleanup and run the whole module.
+
+Buffered hand-off evidence is acknowledged before its recording runs, leaving the journal delivered but unrecorded until that request completes. Coalesce the buffered operation IDs with the same recovery pass's journal scan, not with a permanent attempted tombstone: a later reconnect or process owner must still retry. If a disconnect during startup IO starts another recovery generation, watch hub state from transport acquisition rather than subscribing after the blocking write. Hold the journal mutex to force a failed buffered record before the scan, and use the following reply-recovery lookup as the completion barrier (#9868).
+
+## Robolectric photo decoding needs real bitmap support and a main-looper resume
+
+`ImageDecoder`'s Robolectric shadow is not a real PNG decoder. For behavior tests of a production photo path, use `BitmapFactory` and a file-backed test `ContentProvider`, not a mocked decoder result. When production decodes on `Dispatchers.IO`, Compose `waitUntil` alone may never run the continuation queued on Android's main looper: pump `shadowOf(Looper.getMainLooper()).idle()` inside the wait condition. Assert the exact terminal error or result and that retry is enabled again, never a transient "Reading…" label (#11057).
+
+## A Robolectric FileProvider keeps the cache directory of the test that first used it (#9365)
+
+`FileProvider` takes the folders it serves the first time it is asked and keeps them for the life of the instance (`mLocalPathStrategy`); the
+static `sCache` only feeds that first binding and `getUriForFile`. Robolectric creates the provider when something first asks the content
+resolver for its authority, and forgets it after each test. A job an earlier test left on `Dispatchers.IO` can be that first asker once its test
+is over: when `NewAgentAttachmentsShotsTest`'s trip test ends, the photo's thumbnail is still decoding inside `FileProvider.getType` (every run), and
+`ImageDecoder` asks the content resolver again when its first open fails (a provider that emptied the registry and threw `FileNotFoundException` found a
+new `FileProvider` registered afterwards). A provider bound to another test's cache directory deletes nothing: `delete` returns 0, the page's `runCatching`
+hides it, and a cancelled camera's file stays. No wait helps: with such a provider registered by hand, the folder was still full after a 3 s `waitUntil`.
+
+Emptying `sCache` in `@Before` is not enough. Also register the manifest's provider there (`Robolectric.buildContentProvider(FileProvider::class.java).create()`)
+and make one harmless call (a `delete` of a file that is not there) so it takes its folders under this test; it replaces whatever was registered, and
+nothing creates another one later. `Robolectric.setupContentProvider(FileProvider::class.java, authority)` is not that: it builds a bare `ProviderInfo`
+and `FileProvider.attachInfo` throws `Provider must grant uri permissions`. And before choosing a wait for a file a page deletes, read where it deletes:
+the camera's cancel callback does it at once on the main thread, while `discard` runs on `Dispatchers.IO`.
+
+## Selecting a message's words in place: what `SelectionContainer` leaves to you (#4210 T5)
+
+`rememberSelectionState()` and `SelectionContainer(state, …)` are public in Compose Foundation 1.12: `selectAll()`, `clear()`
+and the read-only `selectedTexts` / `getSelectableTexts()` are all a select-in-place needs. Nothing starts from the word under a
+point (`select` takes a range of the container's text, and the Markdown renderer exposes no text layouts to find an offset by), so
+Select takes the whole message and a long press on a word picks that word. The words register as the container is laid out, and a
+later change of those words releases a selection that was already made (`updateTextLayout` calls `notifySelectableChange`, and
+`onSelectableChangeCallback` calls `onRelease`), including after composition has seen the selection. A position change does not
+(`notifyPositionChange`). Wait until `getSelectableTexts()` lists the same non-blank words for a couple of frames before `selectAll()`. A list that
+changes after that take is not done: wait for it to hold again and take the whole of it, even when the earlier selection was
+not released (a blank or partial first node does not count as the message). Keep doing that until the frame bound. A finger
+on the message is the user (a tap, a long press) and is not taken back. The toolbar's Copy is the user as well:
+Foundation 1.12.1 `SelectionManager.toolbarCopy` is `copy()` then `onRelease()`, and the touch-mode context-menu Copy
+does the same (`copy` then `onRelease` when `isInTouchMode`, which starts true). An empty selection whose words did not
+change is that release. Do not `selectAll` again, or the settle frames never see an empty selection and the message stays
+selecting (#8728). When the bound runs out with nothing really selected,
+end the selection. Stopping at the first stable reading leaves a later change: the message stays selecting, and Copy does
+nothing (#8728). A message with
+no words never lists any, and must not be left selecting.
+
+- A `SelectionContainer` inside another takes its text out of the outer one: a code block that opens its own was missing from a
+  select-all. A block joins by checking `LocalSelectionAbove` (`SelectableOnItsOwn`); buttons, title bars and cards are wrapped in
+  `DisableSelection`, or "Copy" and the language name are copied with the code.
+- A selection over rendered Markdown copies one selectable a line: a list item's marker is a text of its own ("•", newline, the item),
+  a table cell a line, and the thin spaces that pad inline code come out in a terminal as a character the shell takes for a word. Copy goes
+  through `LocalClipboard`, so a wrapper clipboard cleans what the container copies (`pickedWords`); Quote reads `selectedTexts` and cleans the same way.
+- Wrapping content in a container only while something is selected rebuilds it and loses what it remembers (an opened quote, an unfolded
+  code block). Keep it as one `movableContentOf` that moves between the two places, with a test that opens something first.
+- Don't end the selection the moment `selectedTexts` is empty: a long press on another word lets go of the old words before it picks
+  the new ones. Wait a few frames, counted with `withFrameNanos`; a `delay` inside a `LaunchedEffect` is not driven by `waitForIdle`
+  or `mainClock.advanceTimeBy` in these tests.
+- Robolectric: a long press that lands on a glyph starts the platform Magnifier, which throws (`Magnifier.dismiss`, no Surface); long press blank
+  space, or assert the long-click semantics instead. The handles are roots of their own (`onRoot()` finds three), so send keys to
+  `onAllNodes(isRoot()).onFirst()`. The floating menu is not drawn, but `LocalTextContextMenuToolbarProvider` takes `data()` of what it would show,
+  and a `TextContextMenuItem.onClick` can be run.
+- A tap outside the selected message ends the selection without taking the tap from what it hit: watch it from the page in
+  `PointerEventPass.Initial` with `awaitFirstDown(requireUnconsumed = false)` and consume nothing; a move past the touch slop is a scroll,
+  not a tap, so the chat can be scrolled while words are selected.
+
+## Explicit home selection is not detail-stack restoration (#5638)
+
+Keeping visited tabs composed prevents loading flashes, but keeping their entire back stacks can make the Agents
+home control reopen a session instead of its list. Treat explicit Agents selection separately from a targeted session
+entry: remove only destinations above the existing Agents root, and preserve Assistant's current conversation.
+Do not route task entries or notification/session links through that reset. Exercise the production home control after
+those entry paths and after a restored stack; a navigator test that expects the old detail to survive a tab selection
+can accidentally pin the bug rather than prevent it.
+
+## A drag on the chat list hides the keyboard; Robolectric hands the focus back (#4210)
+
+`ChatListEffects` clears the focus and hides the keyboard on the list's `DragInteraction.Start`, which only a finger past the touch slop starts. Do not use `isScrollInProgress` for this: it is also true while the page's own `scrollToItem` or `animateScrollToItem` runs (following the newest message while someone types, a jump to a message, a search hit), and those must leave the keyboard up. A bare touch is not enough either, since it may still be a tap on a field inside the list (iOS tells the two apart as `.tracking` and `.interacting`).
+
+Test it by what the page asks of the focus manager and the keyboard controller, wrapped around the real ones (`KeyboardProbe`), and by the field losing focus once, not by the field staying unfocused: Robolectric is not in touch mode, where Android gives the focus straight back to the first field after `clearFocus()`, and in one test every second drag did. Aim the swipe at a message in the middle of the page: a swipe injected on the last message of the semantics tree never reached an Agent chat's list, because the top bar is drawn over it. Check that a test of this kind fails without the change; the tests that guard a tap, a long press and a scroll the page starts pass either way, by design.
+
+## Keep a worktree fixed while Gradle verifies it (#5233)
+
+Do not merge main or edit source while a multi-task Gradle invocation is running in that worktree. Earlier tasks can
+compile the old contracts and later tasks read newly merged tests, producing misleading missing-field and constructor
+errors. Finish or stop that invocation first, update the branch, then verify the fixed revision. A failure is not an
+inherited main defect until a clean, independent main worktree reproduces it.
+
+## A cache key that differs in every worktree (#10712)
+
+Gradle hashes an input as written, so an absolute path in one gives every checkout its own cache key and a second
+worktree at the same commit rebuilds and retests everything. Nothing warns about it. The ones this build had:
+
+- `Test.systemProperty("persona.repo.root", <path>)` and the native library's path. Pass a path through
+  `jvmArgumentProviders` (`android/build-logic/convention/src/main/kotlin/persona/buildlogic/TestArguments.kt`):
+  `@Internal` for a location, or `@InputFiles` with `PathSensitivity.NONE` when the file's contents are the input.
+- `-Xfriend-paths=<build dir>` in `freeCompilerArgs`. Use the Kotlin compile task's `friendPaths` instead: Kotlin keys
+  it by each friend's path relative to the module's build directory (the classpath tracks the contents). Keep the friends
+  to project outputs with a non-transitive configuration; a jar from the Gradle cache sits at a different relative path
+  in every checkout, so a transitive friend list still splits the key.
+- An `Exec` task's `commandLine` / `args` set at configuration time, and KSP's `arg(key, "$projectDir/…")`. Set the
+  command line inside `exec()`, and give KSP a `CommandLineArgumentProvider` with a relative fingerprint.
+- `inputs.files(…)` without `withPathSensitivity(…)`: its default is `ABSOLUTE`.
+
+To check, run one task in two worktrees at one commit with `--info` and look for `FROM-CACHE`; with
+`-Dorg.gradle.caching.debug=true` Gradle prints each input property's hash, and the one that differs is the culprit.
+
+Two more traps from the same change. Reading a source file at configuration time (to find which fixtures a module's
+tests read, say) makes it a configuration-cache input, so editing a test discards the configuration; do such a scan
+in a task whose output feeds the test task's inputs, as `fixtureReferences` does. And a Kotlin package named
+`persona.build` lives in `persona/build/`, which `android/.gitignore`'s `build/` rule hides: the build compiles it
+locally and the commit leaves it out.
+
+Shared keys also change what a cache hit leaves behind. Robolectric screenshot tests write PNGs to `build/<name>-shots/`,
+which no task declares; while each checkout had its own keys, a new worktree's first test run always drew them. Once
+keys match, a new worktree's test task can come `FROM-CACHE` with no pictures, and a reused one keeps an older run's. An
+undeclared output is only safe where the task cannot be restored, so `--tests` runs (how screenshots are captured)
+skip the build cache (`android/build-logic/convention/src/main/kotlin/persona/buildlogic/TestRuns.kt`), and a
+whole-suite capture adds `--rerun`.
+
+## Reusing an onboarding checklist for ordinary settings (#5233)
+
+Reusing the full phone-check list is not enough: an ordinary Notifications and background page must also suppress
+assistant/computer setup, skipped-computer summaries and first-run completion/dismissal actions. Otherwise leaving
+settings can clear first-run pending state or dismiss assistant setup. Keep these behaviors behind an explicit
+`backgroundOnly` mode with an unchanged default for onboarding. Preserve old route names separately from new home
+labels, and test owner-switch closure and parent Back navigation after adding a group page.
+
+## A design-system signature change compiles every caller (#4145)
+
+#4124 added a `Boolean` after `JSectionHeader`'s composable slot. A caller passing the slot as a trailing lambda then bound it to the `Boolean`, and `main` stopped compiling for every Android build. No hosted CI runs on PRs, so the module's own build passing was not enough. Before merging a change to a `core/designsystem` component's parameters, compile `:app:compileDebugKotlin` (every feature's main code) and the test code of the modules that call it. Keep a composable slot last; `scripts/app/android_slot_order.py` checks that (#4146).
+
+## A swipe's actions for a screen reader go on the row's own node (#4210)
+
+TalkBack focuses a Compose node that merges its descendants (a clickable row) or a leaf, not an ancestor that only carries custom actions, and a merging parent leaves a clickable child separate. So `JSwipeActions` cannot put the actions on its own container: it provides them through a composition local, and the row applies `swipeActionSemantics()` on the node that carries its click. Apply it in every branch that draws the row's click: `MessageItem` draws a Glass Needs You item through `JCard` and the others through its own `click` modifier, and a first version that covered only the second left the most important rows without the action. Test it on the merged node (`config[SemanticsActions.CustomActions]` of the node found by its text and `hasClickAction()`), in each state the swipe can be absent: busy, picking, done.
+
+In a test, a row with no swipe takes a held sideways drag as a press that moves: after the long-press time (400 ms) it opens what its long press opens (a selection, a sheet), so keep a drag that must show nothing well under it, and do not read `onClick` counts after a fast swipe on such a row: a sideways drag that nobody consumes and ends on the row counts as a tap. The color of a revealed action can be read from the captured image at the row's end edge, outside the icon's padding (Robolectric native graphics, a flat fill).
+
+## Adaptive evidence must survive serialization, re-chunking and cleanup
+
+A new `@Serializable` type in an Android module also needs `org.jetbrains.kotlin.plugin.serialization` in that module. The encoder's missing-serializer exception can otherwise disappear behind a `runCatching`, leaving an empty evidence file while production calls look successful. Robolectric also returns PID 0 by default: use `ShadowProcess.setPid` for tests of real positive-PID validation rather than weakening the production check.
+
+When a lazy item is a row chunked by the current column count, a width change can expose the new row key together with the old absolute item index. Keep the previous stable key, index, pixel offset and grid start, and restore the previous row's leftmost machine after re-chunking; testing only unchanged-column keys does not catch this. Cover 1→2→3→1 columns with a nonzero offset. Shared Go wire golden files contain wire input, not a client's presentation fixture: register the input through the production encoder and keep ordering, metrics and expected card presentation under Android test resources.
+
+`adb shell am start --es` creates a String extra, not a Boolean. A debug entry that reads `getBooleanExtra("debug.automation", false)` therefore never enables the probe when passed `--es debug.automation true`; use `--ez` for that Boolean. Only the initial launch needs DebugEntryActivity: subsequent debug opens must target MainActivity directly so `onNewIntent` applies the route without restarting the process. `mCurrentRotation=ROTATION_90` and `mCommittedState=Optional[DeviceState{name='…'}]` are normal platform output forms, not missing evidence; parse their names and the current `cur=WxH` rather than assuming numeric or physical-size fields.
+
+A live scene has not passed until its own cleanup has passed. Poll assertions for fresh Compose/probe evidence, print the final PASS only after cleanup, and preserve the original failure while making any additional cleanup failure visible. Shell cleanup must check its own ADB/reverse/mock/clock operations too; `|| true` and a PASS printed before the EXIT trap hide real leftover device state.
+
+## Receipt navigation inside task details (#3841)
+
+A receipt reused inside task details must not invoke the same task-sheet destination again: assigning the same Compose state produces no visible change. Resolve the task's existing lead binding and open its Agent page after dismissing the sheet. Keep missing-target feedback inside that sheet; generic operation feedback discards arbitrary exception messages and a snackbar behind a modal does not prove the explanation is visible. Exercise the receipt button independently of the footer and verify the real navigation stack in addition to callback tests.
+
+## Reuse only fully started tunnels and never probe a replacement through the old connection (#3844)
+
+A local proxy listener can report `listening` before `HubWays` has passed the start's final epoch and identity checks. A reconnect could reuse that half-started handle, after which the cancelled start closed its listener and the health probe fell back to a direct route. Mark a `Running` handle ready only after those checks. Independently, a replacement tunnel can bind the same loopback address: a pooled HTTP connection still points at the old listener, so SSH and proxy health probes must use a fresh connection pool. Do not hide either race by weakening the Always assertion or disabling the intentional direct fallback.
+
+## Late receipts must settle manual review (#3748)
+
+The review timeout does not invalidate the hub's later operation receipt. Include the manual-review state in the
+compare-and-set sources for a confirmed successful receipt, without resending the message or accepting an unknown
+outcome. Keep discarded messages outside that source set so a lookup that finishes later cannot undo the user's choice.
+
+## Reply-draft dismissal is a card decision, not task completion (#3743)
+
+Use the feed card's id and its exact original `body.draft` for dismissal; edited text belongs only to Send. Never mark the
+Inbox item done, remove the task or close its Agent to hide a draft. Later is local and card-scoped too, so new progress on
+the same source item remains visible. Apply the hub's complete returned item, rather than merging body fields: Undo removes
+`dismissed_at` and `dismissal_id`. Fence reads captured before a mutation, and reject a late Undo receipt when newer progress
+already changed that card. Retain its captured assistant manager across selection changes. Use the shell's existing Undo
+snackbar, with only Send primary; large-text and narrow action groups stack primary-first through `DraftDecisionButtons`.
+Exclude persistently dismissed cards from the oldest-unsent read anchor, but retain dynamically filed cards. Undo catch-up
+uses the retained `dismissal_updated_at`. Stable pagination starts with `paginate=1` and continues with only the opaque
+`cursor`, never a newer `since`; a captured-owner reader pins the whole range. `next_cursor` alone decides completion
+(missing means an older hub, empty means EOF), not the number of items. Bound the range to 64 pages and reject repeated
+cursors. Publish only a complete range under its original mutation fence, and restart incomplete reads without advancing.
+A snackbar action can pass semantic visibility assertions while its text is invisible. `JAppSnackbarHost` uses the inverse
+message-text role for its action, not the accent; inspect light/dark images and test contrast on the actual inverse surface.
+
+## Large-font screenshots need Compose density, not just configuration (#3588)
+
+Setting `LocalConfiguration.fontScale` alone can leave the rendered Compose text at the original size. Override
+`LocalDensity` with the same font scale, assert that default/large pixels differ, and inspect the real page's capture.
+A decorative mark inside a clickable row may be merged into that row's semantics: assert its test tag with the
+unmerged tree, not by dropping the visual assertion. With a frozen Compose clock, a Robolectric `performScrollTo`
+can keep waiting for a choreographer frame and fill the trace-recording heap; keep the requested rows visible in a
+bounded real-page fixture and test state transitions on the same row instead of hiding the failure with more heap.
+
+## A chat's loading means the hub has not answered, not that the cache was read (#8321)
+
+`HubChatRepository.publish` set `loading = false` on every publish, and the first publish is the disk cache's. An uncached chat
+was therefore an empty one ("No messages yet") for as long as its first page took, and a page refused until a watch loads it
+(Paseo's `not_loaded`) showed the error instead of the skeleton. Loading is a fact about the hub: nothing shown and no answer for
+the chat yet (a page, items, the hub's error). Keep it on the entry and derive the snapshot's `loading` from it in `publish`,
+since every metadata event publishes again. The same goes for an error that must outlive those publishes: `state.update` errors
+(the existing `ChatSyncFailed`) are gone at the next session-list event, so a wait's own failure goes in `eventError`, which
+only items clear. In tests, let the repository's collectors settle before opening the chat: a list publish that lands after
+the open's first read hides what that read published.
+
+## Snapshot subscriptions are not page visibility
+
+The shell, badges and floating capsule can collect a repository snapshot without its page being visible. Do not use subscriber
+counts to activate a fast full-list network poller when the hub already pushes invalidations and refreshes on reconnect; a slow poll is enough to back up a missed event. Likewise,
+session-list metadata updates should not prefetch every recent chat's message bodies. Keep message synchronization tied to
+observers and reuse immutable transcript projections across metadata-only events; background allocation can make the UI
+thread wait for garbage collection even when parsing itself runs on an IO dispatcher.
+
+## Installed extension details need their own dependency metadata (#1315)
+
+Decoding dependency and pack fields in an installation preview does not retain them in the installed detail's separate
+decoder. Keep both there and use that manager-bound response for inspection; a pack's declared member constraints are
+not proof that its members are installed or ready. Missing fields on older hubs hide the sections, while unknown
+dependency states remain explicit and ask to refresh details rather than preview another installation.
+
+## Latest chat text needs both a stable slot and fresh Markdown (#2602)
+
+Changing only default-open flags leaves Agent running-step previews visible. Remove the preview and tool-card exceptions, keep every call in the manual trace, and key the outside reply by its turn slot rather than its changing message ID. Preserve the actual ID for menus, jumps and receipts. `produceState` retains its previous value when keys change: a stable slot can therefore briefly draw the predecessor's parsed Markdown even after the text has changed. Carry the parse's source identity and render it only when it matches the current source; show the new plain text while parsing. A regression must render running → new text → completed under the same key, not just compare pure line lists. Test every conversation type × style × appearance, manual toggles, completion folding and restored hub-fold loading. A background wake continues the same genuine user exchange: do not truncate ordered/process rows after its latest reply or divert tail tools into a noninteractive drawer. A wake after an away recap must mark the real reopened turn live, not add a second empty working placeholder.
+
+## `-dontobfuscate` does not keep every name (#2441, #2840)
+
+When D8 or R8 desugars a Kotlin lambda, it may rename the implementation method to `$r8$lambda$<hash>`, whatever the
+obfuscation flags say, and an optimizing R8 also inlines, merges and outlines methods. Frames from the release then need
+`mapping.txt`, which the release worker keeps gzipped with each build (`mapping-<unsigned sha256>.txt.gz`). Class names
+need more than the flag once R8 optimizes: class merging folded thrown exceptions into other classes, five of persona's
+(`CoreTextException`, `ChannelRejected`, ...) and 25 of the libraries' (a lateinit crash came out as
+`coil3.network.HttpException`, a closed channel as jsoup's `SelectorParseException`), and seven nested exceptions lost
+the InnerClass annotation that gives them their simple names, so the type and `javaClass.simpleName` in error reports
+and in messages that fall back to the simple name would have changed. A rule for `persona.**` is not enough: those print
+whatever was thrown, so `-keepnames class * extends java.lang.Throwable` keeps every Throwable's name. R8 keeps the
+annotation only when it keeps the names of both the nested class and its outer class: the rules also keep persona's
+outer classes, and either rule alone did not; library exceptions nested in a class that is no Throwable (jsoup's
+`Selector$SelectorParseException`) still report as `Outer$Inner`. The shrink check cannot see a merged class in the
+dex, so it reads R8's `seeds.txt` (the rule lists every Throwable as one): it fails on a listed class that is neither in
+the dex nor in `usage.txt`, and on a Throwable in the dex that `seeds.txt` leaves out, which means the rule narrowed.
+State what R8 keeps from the built dex, `seeds.txt` and `usage.txt`, not from the flags' names. And pin the switches
+themselves: the shrink check passes an unshrunk APK by design and hosted CI builds no release, so
+`scripts/release/test_check_android_shrink.py` asserts `isMinifyEnabled = true` and the rules that keep names.
+
+## Inbox writes must not wait behind full-list reads (#2545)
+
+A grouped conversation swipe used the explicit bulk-cleanup path, so each success emitted its own Undo notice (deliberately exempt
+from feedback deduplication). Use silent completion for row gestures and a stable inline retry for failed writes; retain Undo for explicit
+bulk cleanup. A failure of the subsequent read must not turn an accepted write into a failed action. Keep writes independent of the
+full-refresh lock, bound concurrent requests, serialize overlapping item targets, and conflate invalidations and ambiguous responses.
+Record local write generations so a list captured before a write cannot resurrect its rows. A different incoming message version must
+still win over both a write response and rollback. Persist confirmed results with their manager identity, never speculative marks.
+Test delayed reads, delayed writes, new messages during writes, pairing replacement, duplicate manager IDs and cache-only restoration.
+Virtual-clock request timings prove ordering and request counts, not phone frame times or production latency. Run filesystem-backed
+restoration waits with a real timeout: a virtual timeout can fire before the IO dispatcher gets a turn.
+
 ## Host-owned lifecycle controls need real application wiring (#2397)
 
 A fake `ExtensionManagement` can make Auto-upgrade tests pass while the application's handwritten facade silently uses the interface's
@@ -39,6 +356,10 @@ stream fixtures. Fixture screenshots do not establish live transport routing; ve
 
 A bounded, filtered session list cannot establish that a task has no agent. Keep navigation from the durable todo binding even when its session is outside the window; request exact metadata only for watched task agents and never add those rows to the paged list. Refresh that metadata on list invalidations and reconnect. Serialize todo reads so an older unbound or completed snapshot cannot overwrite a later linked or reopened snapshot in memory or on disk. A metadata failure falls back to the binding and never starts another agent.
 
+## Every list of sessions takes the subtask rule, not only the Agents list (#4769)
+
+#4686 made an agent another Paseo agent created a subtask, folded under its creator and left out of the Agents list's counts, but the floating capsule and the main chat's dock each filtered the session list by state on their own: an orchestrator with five working reviewers was six dock rows, and every finished Codex subagent an unread capsule entry with its own notice. A new place that lists or counts sessions by state takes the same rule from `CodexTaskForest.kt`: `isNestedSubtask` for a count, `foldedSubtasks` for a flat list that draws rows of its own (left out only while the list shows the session above it). Do not write a second parent lookup; the forest's (parent session, then the Codex thread, then the root, on the same computer) is the one the Agents list uses. Test with a runtime subtask, a Codex subagent and a subtask that needs the user, beside a list without subtasks that must stay as it was.
+
 ## Completion edges must retain evidence of the current run (#2124)
 
 Comparing only adjacent Working → Unread snapshots misses Working → NeedsYou → Unread; a turn can finish directly after waiting for a question or permission midway through work. Retain a current-run marker through NeedsYou and consume it at completion; clear it on Idle, removal, or disconnect. A rev-only change is not a new completion, and old unread versions must not replay when unmuted.
@@ -51,12 +372,44 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 
 ## UI and Compose
 
+- Composer growth needs a real field-bounds test, not only a formula test (#5648). The old viewport-share rule
+  showed seven lines on a 400 × 640 dp Native JVM Compose render and could shrink to three with the keyboard up.
+  Assistant and Agents now share the fixed six-line `ComposerGrowLines` token. Test short and tall viewports,
+  wrapped text, and large text; a manual swipe's bitmap must stay unchanged across idle cursor-blink frames,
+  while typing and selection movement must restore the visible caret. Native renders do not verify a real IME.
+  Full-screen dialogs own another Android view: override system font scale with `RuntimeEnvironment.setFontScale`
+  as well as Compose's density, complete the Activity recreation before mounting the fixture, and assert the dialog's
+  actual text-layout density before labelling a capture large. Inspect its rendered line height and pixels too.
+
+- **A big page must not read a state that changes on every scroll frame** (#4039). `ChatListState.position` holds the
+  reading anchor's pixel offset, written each frame; `ChatPage` read `position.expanded`, so a scroll re-ran the whole
+  page (about 1,000 lines, chat-length lists rebuilt) once per frame. Read such parts through `derivedStateOf`
+  (`ChatListState.expanded`, `followsEnd`) and count recompositions in a real composition (Robolectric, `Recomposer` +
+  `BroadcastFrameClock`, `ChatListStateTest`): `SnapshotStateObserver` handles derived states differently from
+  composition, and a plain JVM test cannot compose (Compose calls `android.os.Trace`).
+- **A control meant to "look like the chips" must be the chip** (#2956). #2920 rebuilt the Assistant entries as a new row
+  (44 dp, control radius, its own padding) next to `JChip` (36 dp, chip radius), and they visibly grew. Draw such controls
+  with `JChip` / `JChipTokens`, add an optional parameter for what is missing (`dot`), and assert the rendered height
+  against `JChipTokens.height` in a Robolectric test.
+- A settings sheet must register every settings child, including Assistant configuration (#2589). Otherwise that row closes the sheet and returns to the home instead of Settings. Accepted external links must dismiss shell overlays before navigating, so their destination is actually visible. A drawer's accessibility semantics fence does not block hardware-keyboard focus; prevent focus from entering the obscured main content as well.
+- **A closed focus fence must stay neutral** (#9170). An ancestor's `focusProperties { canFocus = true }` overrides a descendant overlay's restriction. A closed drawer must leave that property unset; write `false` only while it obscures the page. Test the production drawer → column nesting, including clearing existing page focus, explicit focus requests and `FocusDirection.Next` traversal under the scrim.
+- **A list's replacement navigator belongs only to its list entry** (#9170). Wrapping all of `agentsEntries` also wraps shared to-do pages opened on Persona; a stale overlay flag then discards the earlier Agents detail. Clear transient overlays on tab changes, give only `AgentsRoute` the list navigator, and replace the detail only for detail destinations. Other actions push normally, so Back still reaches the earlier chat. Test the cross-tab path through the real shell.
+- System-font TextStyle can leave lineHeight unspecified (#2589). Converting it directly through Density throws before the composer renders. Measure the actual font line with TextMeasurer when no Sp line height is provided; retain explicit style line heights where present, and test normal and large system text. Do not invent a global content line-height multiplier merely to satisfy a layout calculation.
+- Same navigation labels do not establish iPhone visual parity (#2589). Pin the iPhone default style, language, appearance, text size and source revision; distinguish custom app chrome from system List, sheet, font and icon behavior. Own the side drawer and settings sheet at shell scope, and distinguish closing Settings from popping a settings child. Keep Android's legal assets and contrast floors; adjust text hues rather than weakening tests to copy a lower-contrast system accent.
+- Native reference capture must prove which page is visible (#2589). Retained off-screen pages can expose matching accessibility controls; `exists` and `isHittable` alone are not page-state evidence. Use the shell's actual-page probe and observed visible control coordinates, drive the welcome-to-Demo transition explicitly, and inspect the exported image before labeling it as a home/sidebar/settings reference. A successful compile or an incorrectly named image is not screenshot acceptance.
+
+- A shared sidebar must own its data/view lifetime outside the Assistant page (#2589). Navigation 3 can dispose the Assistant root while one of its secondary pages is open; publishing a composable lambda from that root and popping hidden pages to recover it silently discards drafts. Render the sidebar from the shell snapshot, keep its saveable state at shell scope, and only change navigation after an explicit destination selection.
+- After moving Settings/Inbox from tabs into secondary pages, wide-pane collapse policy must follow the visible list, not the originating primary tab (#2589). Otherwise an Agents list hidden beside a chat can also hide a later Settings subpage. Update the splitter's policy dynamically, mask the saved collapse choice for non-collapsible lists, and preserve it when returning to Agents.
+- Removing a navigation enum does not necessarily reject old saved state (#2589): `JsonCodec` coerces unknown enum values to field defaults, so an old Inbox/Settings tab can become Assistant while restoring the rest of the old shell. Use a strict codec for navigation positions when the whole old position must be ignored, and assert that loading does not rewrite the file.
+- Home-navigation removal includes appearance previews and screenshot fixtures (#2589). Hiding a dock in the app still leaves misleading four-tab previews if they build their own old navigation. Remove the obsolete dock/rail components and tab-only strings, render the real shared switcher in previews, and verify Settings by tapping the sidebar gear from both primary pages.
+
 - `activity-alias` does not inherit its target Activity's metadata (2026-11-03, #758). After retaining the old launcher alias, reading `componentName` returned empty alias metadata, so the DEBUG launch adapter did not load and mock hub, style, and light / dark arguments were ignored. Query canonical `MainActivity` metadata, retaining the original key and single launcher; Release still must not register the DEBUG adapter. Screenshot scripts must verify pairing, actual mock requests, and every subprocess exit code. A welcome page or a successful later `printf` exit is not screenshot acceptance.
 
 - Android's `AndroidView` does not clip to its layout bounds. A View calling `drawColor` in `onDraw` covers siblings above it (the terminal toolbar was entirely covered by the background); add `Modifier.clipToBounds()`.
 - A full-page Compose `Dialog(usePlatformDefaultWidth = false)` does not extend under system bars by default, leaving gray strips at the status bar and gesture bar (the scrim behind it).
   After adding `decorFitsSystemWindows = false`, the dialog's status-bar icons still do not follow the Activity and remain white on a light page (seen on historical sessions). Use `JFullScreen` for all full-page overlays.
 - Glass-page scroll edges assume the page starts at the screen top. A `JPage` embedded below another UI (a Lark document in a link card) has no top bar, and top blur obscures its first content line. Do not draw a top edge without a top bar (`PageFrame`).
+- The blurred top edge reaches 28dp below the bar, and a plain `JPage` draws it all the time. Controls kept still at the content top (the to-dos List / Calendar and Day / Week / Month toggles) sat inside that band; on a phone some frames drew it at full strength to a hard line, hiding the top half of their text (#6159). Robolectric does not render the blur, so screenshots there look fine. Pass `JPage(underTop = …)` with what can actually be under the bar.
 - Haze blurs content at about 0.78× resolution by default. Pages with many overlays (chat top bar, task bar, status row, input bar) doubled frame time on a phone. Setting `LocalHazePerformanceMode`
   to `Performance` (0.25×) produced no visible screenshot difference (`PersonaTheme`). The simulator GPU is emulated; glass takes over 100 ms per frame. Measure performance only on physical devices (`scripts/diag/android_scroll_perf.py`).
 - Several causes of Android page-switch flicker (isolated frame by frame 2026-11-01): ① Nav3 `NavDisplay` composes only the current tab; changing `key(selected)` rebuilds the whole page, flashing empty state, spinner,
@@ -70,9 +423,20 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
   closed / unfolded (`emu posture 1` / `3`) really switch screens. Foldables have two displays; `screencap -p` first prints a multi-display warning, so trim the PNG from `\x89PNG`.
   Emulators with hardware keyboards are not in touch mode. Compose initially focuses the first input, opening the soft keyboard automatically; `MainActivity` uses `stateAlwaysHidden`.
   The `NavDisplay` overload taking one `sceneStrategy` fails type inference alongside transition lambdas; use `sceneStrategies = listOf(...)`. In this version, `ExitTransition.KeepUntilTransitionsFinished` is internal.
+- Foldable captures on the android-37 `google_apis_playstore` Pixel Fold image (2026-11-10, #2951): `adb emu fold` / `adb emu unfold` switch screens, and folding locks the outer one,
+  so run `locksettings set-disabled true` and `svc power stayon true` first, or every capture is the lock screen. Android 17 asks for local network access before the mock hub pairs:
+  `pm grant <package> android.permission.ACCESS_LOCAL_NETWORK` after `pm clear`. The image is a production build without `adb root`, so `SHOTS_FROZEN` cannot set its clock:
+  live timers ("Working, step 7, 38 min") and relative times differ between two runs; compare the rest pixel for pixel and check those regions by eye.
+  On macOS 27 the adb 37.0.1 server aborts now and then (`libunwind: stepWithCompactEncoding - invalid compact unwind encoding`), mostly around stopping and starting the
+  debuggable app, with or without `adb reverse`. A server started from a sandboxed command also dies with that command. What held up: a private server
+  (`ANDROID_ADB_SERVER_PORT` / `-P`, with `ADB_LOCAL_TRANSPORT_MAX_PORT` covering the emulator's port) restarted in a `nohup` loop, every adb call waiting for the port and retried once,
+  and the mock reached through a relay inside the emulator instead of `adb reverse` (forwards die with the server): `nc -4 -s 127.0.0.1 -p <port> -L nc -4 <emulator's host alias> <port>` (the address the emulator gives the host's loopback).
+  `debug.mockAddress` accepts only 127.0.0.1. Check every capture: a step lost to a restart leaves the previous page on screen.
 - Pages' own `PersonaTheme` wrappers default to `isSystemInDarkTheme()`; passing `darkTheme` only at the root does not override them. DEBUG-fixed light / dark mode must change `LocalConfiguration` uiMode (`MainActivity.AppearanceOverride`), or dark screenshots mix in light pages.
 - Kotlin trailing lambdas match only the final function parameter. After adding an optional function parameter to `AppNavigator`, existing `AppNavigator(...) { group tabs by session }` calls silently bound to the new parameter. Put new function parameters last, and name parameters at call sites.
+- Do not key a feedback effect to a phase that also carries a one-shot navigation acknowledgement. Clearing `openRequested` after a successful hand-off otherwise replays the success toast and haptic. Observe navigation with the full phase, but key presentation to a copy without the transient open flag (`InboxHandOffBar`).
 - Do not use `Modifier.alpha` for changing opacity in Compose. At 1 it adds no layer, so switching adds / removes a graphicsLayer in the modifier chain. After `clip` + `background`, removing the layer in Compose UI 1.12.1 stops drawing that background (Android `JButton` lost everything but text when enabled). The design system uses `Modifier.stableAlpha` (`docs/android/android.md`, "Lessons").
+- `Modifier.clip` on a frame also clips touches (2026-11-10, DS-06). Compose gives any control smaller than 48 dp a 48 dp touch target, even past its own clip, but a clipping parent at least 48 dp across rejects every touch outside itself first: the 36 dp segments inside `JSegmented`'s clipped Glass capsule and Board frame lost the taps just above them, while unclipped buttons, chips and switches kept the full 48 dp. A frame that only needs to keep its children's drawing inside its shape uses `clipDrawing`. Test touch targets with real text metrics (`@GraphicsMode(NATIVE)`): Robolectric's legacy text measurement drew the segments 53-61 dp tall and hid the miss (`TouchTargetTest`, which also checks that a tap just past 48 dp misses).
 - material3-adaptive `ListDetailSceneStrategy.detailPane()` returns new metadata without `equals` every time, so equality comparisons always fail (Android two-column left selection never highlighted). Identify detail pages by route type (`ShellPanes.kt`).
 - A container with `height(IntrinsicSize.Min)` (to stretch a left color block) crashes as soon as it contains a lazy list or `BoxWithConstraints`
   ("Asking for intrinsic measurements of SubcomposeLayout layouts is not supported," seen in board-style Lark chats). Draw edge color blocks with `drawBehind` (`Modifier.holder`).
@@ -88,6 +452,7 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - `JSegmented` must not be inside `horizontalScroll`. Each board-style segment uses `weight(1f, fill = false)`; infinite scroll width shrinks all segments away, leaving a vertical line (plugin-page `segmented`, #1451, found only with Robolectric screenshots; glass and morning were fine). A horizontal row must receive finite parent width.
 - Plugin UI can be screenshotted on the JVM. `feature:settings` `PluginSlotsShotsTest` uses Robolectric native rendering (`@GraphicsMode(NATIVE)`) and `captureToImage()` to save PNGs, with working Chinese fonts and no emulator. Inspect new pure Compose components this way first.
 - Screenshot-test comments suggesting `-Dpersona.shots=<dir>` do not pass that property to the test JVM through `./gradlew … -D` (convention plugins do not forward it; 2026-11-05, Inbox phase 1). PNGs still go to the module's `build/<name>-shots/`; copy them afterward for another location. Pure `LocalizedFormats` functions (time formatting) throw `RuntimeException` in ordinary JUnit because they use Android `DateFormat`; add `@RunWith(AndroidJUnit4::class)` and run with Robolectric.
+- A large Robolectric run can exhaust the default temporary filesystem even when Gradle's own temporary directory is elsewhere (#2878). `GRADLE_OPTS=-Djava.io.tmpdir=...` configures Gradle, not every forked test JVM. Set `JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=<task-owned directory>` as well so the test processes use the intended filesystem. Keep the original failure result, rerun the full checks, and do not delete another task's caches or reduce test coverage to hide the resource failure.
 - In Robolectric screenshot tests, with `rule.mainClock.autoAdvance = false` (spinners / timers never stop), changing `mutableStateOf` (such as `dark = true`) then calling `advanceTimeByFrame()` may not recompose: snapshot changes are not applied yet, so the dark screenshot is still light (#3350's first pair was identical). After changing state, call `Snapshot.sendApplyNotifications()` before advancing frames, and assert that the images' pixels differ (`LiveTurnShotsTest`).
 - Under Robolectric, Compose `captureToImage()` on a dialog root can crop the Activity bitmap instead of drawing the dialog. Assertions that the dialog text exists and light/dark pixels differ do not catch this. Draw the actual shown dialog's window decor into the native bitmap, then inspect the image for the title, body and actions.
 - In Compose tests, `Modifier.clickable(enabled = false)` still has an OnClick semantic action. `assertHasNoClickAction()` cannot assert disabled behavior; use `assertIsNotEnabled()` (`ComposerPartsTest`).
@@ -95,6 +460,11 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - In an anonymous `BaseInputConnection`, `override fun getEditable() = editable` with an outer field also named `editable` resolves first to the object's own `getEditable()` (the property corresponding to the Java getter). It recurses, causing stack-overflow crashes as soon as the IME connects (`finishComposingText` → `getEditable`; terminal keyboard, 2026-11-02). Do not give outer fields framework-getter names (renamed to `buffer`). JVM unit tests cannot catch this; tap the keyboard on an emulator.
 - A status card above the terminal ("Taking over…") changes terminal height on both appearance and disappearance, causing two extra pane reflows during takeover and duplicating buffered scrollback. Put changing status in one line below the title; terminal height should change only with the keyboard.
 - Keep a field out of Autofill on the text field's own semantics node (2026-11-09, #1581). Compose's `AndroidAutofillManager` reads each node's own configuration, so `contentDataType = ContentDataType.None` on a wrapping `Column` leaves the `BasicTextField` node autofillable: the service still fills it and offers to save what was typed. Set it through the `BasicTextField` modifier (`JTextField(autofill = false)`, `JSecretField`). On that node it stops the autofill session (no view-entered or value-change notifications, autofill type NONE in the view structure); the save-on-removal commit follows only nodes with a `ContentType`, which such a field must not set. Assert `SemanticsProperties.ContentDataType == ContentDataType.None` on the `hasSetTextAction()` node.
+- The `BackHandler` registered last wins, and handlers register in composition order, not by nesting (2026-11-09, #2481). `SettingsScreen` composes its routed-back handler after `when (page)`, so on a destination that opens straight on a page (Settings › Pairing, `initialPage = "pair"`) it outranked that page's own steps, and Back from the manual form or the confirm page left the page with the typed address. Add hub worked only because its page is switched in later and registers after the host. A host fallback that should yield to a page goes before the page or is turned off for it. Test the host the way the shell wires it (`onBack` set): in place (no `onBack`) the fallback is composed before the page and the bug does not show.
+- Drag `ACTION_DRAG_STARTED` commonly exposes `ClipDescription` but not `ClipData`, and `text/plain` can mean either a plain-text drag or a `.txt` file. Use MIME only to register a candidate target; on DROP, import only `content` / `file` URIs and leave a text-only payload to the text field. Hold `DragAndDropPermissions` until the app-owned copy finishes. If a coroutine can be cancelled after the copy returns but before its result is attached, the result can be discarded and the private file orphaned: finish each item's copy, attach that result, then check cancellation before the next item.
+- A large-window wrapper must not move the wrapped composer between a direct compact call and a different large-window parent: that disposes its upload effects and any presentation-scoped cleanup. Keep one visually neutral composition identity and condition only key / drag modifiers and CompositionLocal values. Draft-owned file cleanup follows global draft snapshots, not whether the large-window presentation exists. Expanded-editor Escape and Send also have different collapse semantics: Escape restores field focus, while Send must not increment the field's focus request.
+- A strip that fades its edges must place what the user chose out of the fade (#9121). Scrolling a chosen chip wider than the strip to the start of the content put its first word inside the 32 dp leading fade, dimmed to about half, and the clock icon was nearly gone. `JAgentFilterCapsule` moves such a chip to where the clear middle (the strip less a fade at each end) begins, and centres one that fits in it; the middle is tested with real widths at 200% text (`AgentFilterCapsuleTest`), and the screenshots show the longest label chosen at 200% in every language.
+- Three Compose test traps when proving a label is whole (#9121). `TextLayoutResult.didOverflowWidth` is true for any one-line `Text` laid out with no width limit (a `LazyRow` item, `softWrap = false`), because the paragraph is laid out at the maximum constraint: compare the layout's width with `multiParagraph.maxIntrinsicWidth`, check `isLineEllipsized(0)` and the text itself. `SemanticsNode.boundsInRoot` is clipped to a scrolling parent, so a chip wider than its strip reports the strip's width and a "fits in the strip" assertion passes by construction: use `positionInRoot` and `size`. `Modifier.clearAndSetSemantics { }` on a `Text` itself removes the `Text`'s own semantics even from the unmerged tree, so a test cannot read its layout; put the modifier on a wrapper (`Box`), which clears the merged tree and keeps the unmerged one. A shot test that must run unchanged on `main` too, for a before/after comparison, uses only test tags and public API; capture `main` first in the same worktree by restoring the sources with `git checkout -- <files>` (never `git stash`), then the branch.
 
 ## Native extension streams (#5956)
 
@@ -121,17 +491,39 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 
 ## Testing
 
+- Robolectric resolves Compose's `ComponentActivity` from the variant's binary `apk-for-local-test.ap_`, not only the standalone unit-test manifest (#9867). `testImplementation(ui-test-manifest)` can therefore leave release unable to launch the activity even when `processReleaseUnitTestManifest` declares it; debug may instead receive it through a `debugImplementation` main dependency. When the shipped release must stay clean, wrap the Compose rule in an outer test rule that calls `ShadowPackageManager.addActivityIfNotPresent`: an ordinary `@Before` runs after the Compose rule launches its activity. Check both variants and the shipped release manifest and runtime classpath.
+- A complete Robolectric run can still have no heap headroom (#8339): 205 chat classes finished with 498 MiB live after a full GC on the 512 MiB default, followed by repeated full GCs. Near-end shallow histograms were led by Robolectric resource/theme tables (265.7 MiB) and Compose objects (82.0 MiB); they do not establish GC roots or native bitmap ownership. Measure the whole task with GC logs and a live class histogram before changing test lifetimes or choosing `maxHeapSize`; one class cannot expose growth across the shared test process.
+- `feature:inbox` hit the same wall when a page-shots class joined it (#9053): the class passed alone, and the full run (118 classes) died near its end with "Test process encountered an unexpected problem" and full GCs stuck at 510 MiB live, the live histogram again led by Robolectric resource/theme tables (255 MiB) and Compose (91 MiB). Given 1 GiB, main's run without the class already kept about 580 MiB in use after collections, so a module that passes on the default may have no room left for one more screenshot class. A scratch init script that adds `-Xlog:gc` to one `Test` task, and `jcmd <pid> GC.class_histogram` on the stuck test JVM, give the evidence in one run.
+
+- A shot diff against `main` needs the images' own noise first (2026-11-12, #4339). `android_shots_diff.py` on one run of `main` and one of a branch with no relevant change calls hundreds of the ~1,700 images different: live clocks ("21:30"), a shimmer, the dither of dark Brief and Board, text heights that jump by 4 px between two runs of the same code. Run each side at least twice (`clean…UnitTest` and `--no-build-cache`, or Gradle replays the results without redrawing a picture), take the pixels that differ between two runs of one side as that image's noise, and count only the differences outside it, with a pixel of margin; what is left is what the change drew, and it is looked at by eye. Shots drawn by tests whose class name does not end in `ShotsTest` need a `--tests` pattern of their own.
+
+- A fixture time fed to code that reads the real clock is a time bomb (2026-11-12, #5530). The Assistant's trays build In progress with `System.currentTimeMillis()`, and an open task that hasn't moved for 48 hours, with nothing running, is shelved (`SHELVE_AFTER_MS`). `AssistantTraysShotsTest` and `CloseoutShotsTest` pinned their tasks to `2026-11-10T08:00:00Z`. They passed on the day they merged and failed from 2026-11-12T08:00Z on every commit, so a bisect over the day's merges pointed at nothing. Build such times from `Instant.now()` (as the chat shot tests do), or pass the code a fixed `now` when it takes one (`TodosScreen(now = …)`). To see whether a test will break later, move its date literals back N days in a scratch copy and run it: to code that reads the real clock, that is the same test N days later.
+
+## Isolate retained screenshots by invocation
+
+Treat `persona.shots` and fixed screenshot defaults as shared base directories, not the current run's output directory.
+Use `Files.createTempDirectory(base, "run-")` to atomically allocate a fresh child and report its absolute path for PR
+evidence. Do not clear the base, reuse a timestamp-only child or maintain a mutable `latest` link: another task may own
+those files. A new empty run directory excludes removed scenarios without deleting siblings. Keep bitmap comparisons in
+memory; output isolation must not become a reason to compare against a file another invocation could replace.
+
+- A screenshot test's fake image loader is global state (#2546). `SingletonImageLoader.setUnsafe` survives into later Robolectric classes using the same sandbox. Reset the singleton and shut down the test-owned loader in teardown. Otherwise a later image-fallback assertion can fail because it receives a successful synthetic bitmap; running only that later class hides the leak. Reproduce with the showcase and native-stream classes together, and retain the original fallback assertion.
+
 - `OkHttpHubConnection` publishes `Revoked` before it reports the last refusing hub through `onMemberRevoked`, outside the lock (HubGroupConnectionTest). A test that reads the callback list right after seeing `Revoked` can miss that last entry under load; one hosted run failed `theConnectionIsRevokedOnlyWhenNoHubOfTheGroupIsLeft` this way while main passed. Widening the gap with a temporary sleep before that report fails the old test every time (`but was:<[(hub-a, true), (hub-b, true)]>`). Production consumers launch their cleanup asynchronously and reach the same end state in either order, so the test now waits for the report it asserts, then checks the exact list.
 
 - Closing a `ServerSocket` that another thread is blocked accepting on does not free its port when `close()` returns (PortForwarder, #3483). The JDK only wakes the accepting thread; the port is released after that thread leaves `accept`. On a busy 2-CPU runner the next pairing's forwarder then found the number still taken and bound another one, failing `aClosedOpenerFreesItsPortForTheNext` on two hosted runs while it passed on a 64-CPU machine. A bare JVM probe on 2 CPUs failed an immediate rebind 18/300 times idle and about 200 to 260/300 under load, 0/300 after joining the accept thread. `Forward.close()` now joins its accept threads (bounded). Reproduce with the Gradle run pinned to two busy CPUs (`taskset -c 0,1` plus busy loops); `closeReturnsOnlyOnceItsPortIsFree` fails at once on the old code there. A test failing only on hosted runners can be a real bug; an earlier retry of the probed port here was the wrong diagnosis.
 
 - A resident node discovers development servers with `GET /`. On a queue-based MockWebServer, that unrelated request can consume the API response prepared for the test; the real request then reads the next fixture or times out. Recognize only the exact discovery request (method, root path, and either generation's probe User-Agent) in the compatibility test helper, without consuming a queued response or returning that probe from `takeRequest`. Keep ordinary root requests, API requests, error responses, and all existing assertions unchanged. Do not stop the resident node or increase timeouts to hide the race; reproduce it with a synthetic listener and rerun the complete suite after isolating its fixtures.
 
+- A `LazyColumn` in a Robolectric Compose test composes only the items its viewport reaches (2026-11-09, #1902). In `UsageWindowsListTest` the third account card under the default window never existed, so `onNodeWithText(...).assertExists()` failed although the list held it. Check what the screen draws with the items the test window shows (or give the test a taller qualifier, as `MachinesParityShotsTest` does with `h3000dp`), and check pure mapping such as `problemText` directly.
+
 - Robolectric tests must not leave background work running (2026-11-08, #1254). Robolectric 4.17 loads its native runtime once per sandbox: upfront for SDK 35 and later, lazily for older SDKs on whichever thread first uses native SQLite or graphics. Each load opens `fonts/` and `hyphen-data/` of the shared `nativeruntime-dist-compat` jar with `FileSystems.newFileSystem(URI)`, which is registered JVM-wide. `ForegroundRecoveryRegressionTest` (SDK 34) started the real WorkManager, whose default executor kept querying Room after the test. That lazy load overlapped the next class's SDK 35 load, and whichever SDK 35 test ran first failed with `FileSystemAlreadyExistsException`. It reproduces only when the android-all jars are already cached, as on CI. Tests that reach WorkManager call `WorkManagerTestInitHelper.initializeTestWorkManager` (`work-testing`) and `closeWorkDatabase()` after the test. Moving the failing test to another class only moves the failure.
 
 - Tests of `OkHttpHubConnection.events` wait for events, not time (2026-11-08, #1254). `events` is hot, and the connection's forwarding coroutine hands each event over after the socket's loop queued it, on its own schedule. Await the subscription (`onSubscription`) before the hub sends. Skip the first socket's hello: it can still reach a subscriber that subscribed after Online. Wait for `onReady` to know the connection handled a socket's hello: a socket that did not resume dropped earlier sockets' queued events by then, while a resumed one calls `onReady` too and keeps forwarding them. Online stays up through a restart's grace, and `lastHello` is set before earlier sockets' events stop being forwarded. Watch a subscriber that never blocks to see which event is being handed over, and end with one more event rather than a delay to show nothing else came (`HubSlowSubscriberTest`).
 
 - Internationalization cleanup (#2453): localized Compose components do not prove that background feedback is localized. Fixed-language fallbacks such as `OperationFeedback.message` and `PendingStatus.label` can leak Chinese through view models, state objects and snackbars. Remove the old APIs and resolve `UiText` with the current page's resources. In contrast, pure JVM `CoreText.shown` already uses the translator injected by the App; `joinToString` alone is not evidence of missing translations. Exempt only the design system's developer catalog, not all of `src/debug`, and test that ordinary debug Kotlin, XML and similarly named directories still fail the check. Robolectric Native renders Chinese and Japanese glyphs but is not simulator acceptance; assert that light and dark screenshots differ.
+
+- A settings hierarchy migration has two compatibility surfaces (#2521): serialized `NavKey` values and standalone `rememberSaveable` page strings. Keep both old values readable and restore the new parent without replacing the leaf's identity. Exercise cold/warm external intents and Back, not only a DEBUG direct-open alias. A loaded ledger can put its introduction after dozens of rows: use the visible filter/list as the emulator readiness marker, not an off-screen footer.
 
 - Settings-entry migration screenshots must not just hand-build identically named `JRow`s (2026-11-05, #2196). Old channel screenshots drew "Extensions → Channels" themselves and could not detect misplaced entries after Settings changed. Render the real `SettingsScreen` with minimal fake services and navigation callbacks; check separate sections, ordering, click targets, two-column selection, missing capabilities, and demo mode. When removing the "Meet Persona" entry, first find the actual label (Android's `Persona` under Assistant); do not delete the main chat or the profile page still used by top bars / launchers. Open and inspect Robolectric Native images, explicitly stating that they are not emulator screenshots. After cleaning wrapper imports, rebuild after automatically merging the latest `main`: another PR may make a retained page use a dependency previously used only by the wrapper (#2192's main-chat migration callback reused `LocalAssistantHost`). No textual Git conflict does not mean dependencies remain complete.
 
@@ -153,6 +545,7 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - Decode images with `ImageDecoder` (corrects EXIF orientation), not `BitmapFactory` (ignores it, displaying camera originals sideways). Bitmaps to draw into / reencode need `ALLOCATOR_SOFTWARE`; hardware bitmaps cannot be drawn into software Canvas. Flatten transparent areas onto white before saving JPEG: JPEG has no alpha, and the encoder otherwise makes them black (`jpegBytes`).
 - `Offset` is a value class with bitwise equality. `coerceIn(-0f, 0f)` can produce `-0f`, unequal to `Offset.Zero`. Return `0f` directly when no range exists (`ImageMath.clampPan`); use tolerance for computed floating-point offsets in tests.
 - Robolectric's default window is 320×470 dp (2026-11-09, #1581). `performClick` taps the node's centre; a node laid out below the window (a tall card set straight into `setContent`, no scroll container) gets nothing, and the test fails as if the button ignored the tap. Give the test a window that fits (`@Config(qualifiers = "zh-w400dp-h1200dp")`) or bring the node into view with `performScrollTo()` first.
+- A Compose dialog that holds a text field never gets idle under Robolectric unless the window is Robolectric's default 320×470 dp (2026-11-12, #4339). A bare `Dialog { BasicTextField(…) }` hung every finder for 60 seconds (`AppNotIdleException`, once an `OutOfMemoryError`) with `w400dp-h1200dp`, `w400dp-h900dp`, `w360dp-h800dp` and `w400dp-h480dp` alike, focusable or not, and passed at the default size; a dialog without the field and the field without the dialog were fine. Test and shoot such a dialog (the history's Rename…, `ConversationRenameTest`) in a class whose qualifiers leave the size alone (`zh-xhdpi`), and reach rows below the window with `performScrollToNode`. On a device the same dialog works (the Agents rename dialog is the same pair).
 
 ## System capabilities
 
@@ -161,7 +554,9 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - PendingIntent identity depends only on action, data, component, and categories, not extras or flags. If Allow on the persistent notification uses the same data URI as a Needs you notification, Android treats them as identical (one mutable with reply input, one immutable) and the later one overwrites the earlier. Persistent-notification buttons use their own `persona-notify://ongoing/…`.
 - Foreground-service `onStartCommand` runs more than once: the App starts it each time it returns to the foreground, and each call needs `startForeground`. Use the notification currently displayed (`HubService.shown`), not one recomputed from current data. Recomputing omits "after 5 minutes with only Unread remaining, fall back to the connection row," so a collapsed "1 finished" reappears. The collector sees no state change, cannot correct it, and it persists until the next fleet change (reproduced on an emulator 2026-11-02).
 - Do not update a foreground-service notification when stopping it. During unpairing, connection state and notification preferences change first (the App posted "Waiting for network" twice), then the service stops and `stopForeground(REMOVE)` removes the notification. System notification handling is async (emulator call stacks confirmed both posts before onDestroy); the final update lands after removal and becomes an ordinary persistent notification that cannot be swiped away and has no owner left (reproduced twice, remained twice). `HubService.show` no longer updates while unpaired.
-- For notification buttons requiring unlock (`setAuthenticationRequired(true)`), tapping on the lock screen and entering a PIN makes SystemUI send the PendingIntent immediately while `KeyguardManager.isDeviceLocked` remains true (one Android 15 emulator observation; false about 0.8 seconds later). Checking immediately rejects lock-screen Allow / Approve every time with "Unlock first." Persistent-service Resume is silently swallowed too; phone-tool confirmation Allow is dropped and returned to Claude as denial after 90 seconds. Allow unlock to settle before checking (`lockedAfterUnlockSettles`, one copy each in `:platform:notify` and `:platform:phonetools`, waits up to 3 seconds; still locked then means locked).
+- For notification buttons requiring unlock (`setAuthenticationRequired(true)`), tapping on the lock screen and entering a PIN makes SystemUI send the PendingIntent immediately while `KeyguardManager.isDeviceLocked` remains true (one Android 15 emulator observation; false about 0.8 seconds later). Checking immediately rejects lock-screen Allow / Approve every time with "Unlock first." Persistent-service Resume is silently swallowed too; phone-tool confirmation Allow is dropped and returned to Claude as denial after 90 seconds. Allow unlock to settle before checking (`lockedAfterUnlockSettles`, one copy each in `:platform:notify` and `:platform:phonetools`, waits up to 3 seconds; still locked then means locked). Extension foreground pages apply the same settle before their token claim on API 30 and newer, then retry on resume rather than relying only on the API 31 notification-action flag.
+- A same-tag system notification replacement retires executable capabilities even when its new payload is ordinary, has no buttons, fails validation or cannot prove its source. Retire the exact tag before those early returns and inside atomic batch registration; restricting removal to a successful batch or the current group leaves old PendingIntents able to claim an action that is no longer on screen.
+- A notification that waits for an answer needs a delete intent, or a swipe / "Clear all" reaches nobody: the phone-tool write confirmation had none, so a dismissed one kept the call (and, the registry being serial, every other phone call) waiting the full 90 seconds and then reported "nobody answered" (#3861). The system also sends the delete intent when its own `setTimeoutAfter` fires (an app's `cancel` sends none), so make the system timeout a little longer than the in-app one, or a timeout reads as a dismissal (`PhoneConfirmations.NOTIFICATION_GRACE_MILLIS`).
 - Phone tools: hub merges same-named tools from phones into one definition (the longer description wins), but may route calls to any phone declaring the tool (`phoneClient`). If Android definitions differ from iOS, Claude invokes Android with iOS arguments (a new version rejected out-of-range `limit` as an error). Match iOS definitions verbatim, guarded by exported fixtures (`PhoneToolCatalogTest`).
 
 - Stopping a service started by `startForegroundService` before it calls `startForeground` (its own `stopSelf` or external `stopService`) crashes the App with `ForegroundServiceDidNotStartInTimeException`. Under load the gap grows, and a brief "Unpaired" during pairing hits it. `HubService` always enters the foreground before deciding whether to stay, and stops only after foreground entry (`ForegroundStarts`, `docs/android/android.md`).
@@ -177,6 +572,7 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 
 ## Contracts and wiring
 
+- A `@WireEnum` value missing from its list decodes as `"unknown"`, silently (#4035). Android handled the hub's `notify` kind `reply` (Awaiting reply) in every policy and test, but the tests built `NotifyEvent("reply", …)` by constructor, so none went through the decoder, and the reminder never posted. When a new kind or state reaches the wire, add it to the `@WireEnum` and test it from the raw JSON (`ServerEvent.decode`), not from a constructed event.
 - When adding interface methods with default implementations (`ChatActions.editQueue` / `info`, `AgentOperations.attachSession`), `by delegate` wrappers forward automatically, but handwritten forwarding objects do not. `trackActions` in `core:data` and the anonymous `AgentOperations` in App `AgentsWiringModule` forward method by method; missing a new method silently uses its default ("Not integrated yet") without compilation errors. When adding methods, use `git grep ': ChatActions\b\|object : AgentOperations'` to update all handwritten forwarding.
 - Claude Code transcripts do not retain `client_msg_id` (2026-11-03, #895). A user item's ID is Claude's own UUID; neither hub nor node rewrites it. With hub `client_ops`, Android previously matched "already in the transcript" only by ID, leaving every Claude Code message at "Delivered, waiting for transcript." Match pending messages to transcript entries by text (`MessageEcho`, same rules as iOS `PendingMessage.arrived`: normalization, computer clock up to 2 minutes behind, prefix match for truncation), only for sent / uncertain messages, and one pending message per transcript entry. Every new item (events, paging, gap repair) is reconciled with the outbox (`HubChatRepository` `transcript`).
 - Delivery does not guarantee an identical user message in the transcript (2026-11-03, #950). Phone `/compact` appears only as a compaction notice; Codex writes queued messages only at turn end. Waiting only for an echo leaves bubbles forever. iOS (`settleSend`) and web dismiss 60 seconds after delivery once the session is not working (wait at most another 15 minutes); Android does the same (`OutboxMessageSender.sentGraceMillis`, `connectActivity`). Do not add constructor parameters after `now`: callers pass the clock as a trailing lambda.
@@ -193,7 +589,13 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - Multi-hub session keys add `~<group id>` to non-primary-group machine IDs rather than a field to `SessionKey`. Too many routes, deep links, notifications, and legacy-data paths construct keys; missing one mixes groups. Embedding the suffix in the machine ID carries it everywhere. The cost is translating every machine-ID-bearing API in the facade (`GroupNames`); remember new APIs (`docs/android/android.md`, "Multiple hubs").
 - Closing OkHttp clients can perform network I/O: `connectionPool.evictAll()` writes TLS close_notify, causing `NetworkOnMainThreadException` on the main thread. Pairing closed `HubPairingClient` in a main-thread `finally`; the exception came after credentials were saved and hid success. The pairing page said "Connection incomplete," while a forced restart showed it had paired (#955). Plaintext connection close does not write to the network, so LAN-only plaintext never exposed this. `HubHttpClient.close()` now schedules pool cleanup on the dispatcher's own thread; custom clients must not `evictAll` on the caller's thread.
 
+## Stable task rows and Compose subscriptions (#2878)
+
+Stable task-card upserts are identity hints, not newer than live to-dos by definition. Reopened tasks keep raw accepted supervision ledgers; require an actual completion timestamp before drawing a success check. Cancelled and failed-start to-dos also carry `done_at`, so check their reason/state first. Read PRs from the live `pr_url` as well as audit receipts, and keep unknown step totals indeterminate rather than making up a percentage. Collect manager-choice StateFlows in Compose; a direct `.value` read silently leaves owner-scoped trays stale.
+
 ## Emulators and physical devices
+
+- A headless x86 emulator without KVM can finish booting long before its first visible window is drawn. Wait with a deadline for both boot completion and a focused window, then inspect the image. With emulator 37.2 / API 35 / software SwiftShader, guest `adb exec-out screencap -p` returned an all-black PNG while the launcher was visibly rendered in the host framebuffer (#2878). `adb -s <owned emulator> emu screenrecord screenshot <host output path>` captured the actual emulator display. Label this source accurately, retain the failed guest captures, and never treat a black screenshot or a Native JVM component image as emulator acceptance. This does not measure physical-device performance.
 
 - Do not cold-start with `am force-stop` / `am start -S` when testing persistent notifications. Android records a user force-stop (`ApplicationExitInfo.REASON_USER_REQUESTED`), and the next launch treats the background connection as stopped by you. The persistent service will not start until Resume is tapped on the notification. To get a fresh process only, use `adb shell run-as <package> kill -9 <pid>` (Android quickly restarts the persistent service; `am start -W` usually reports WARM).
 - With a running timer in the notification tray (chronometer when the persistent notification has only working Agents), `uiautomator dump` never reaches idle and fails; inspect screenshots instead.
@@ -207,7 +609,7 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - `debug.mockAddress` pairs silently (`platformPairing.pair`, bypassing the pairing page), hiding post-pairing steps (engine selection, readiness checklist). To inspect those, open the pairing page with `persona://pair?url=…&token=mock`, then tap Confirm pairing.
 - To make a save fail, do not rely on `adb reverse --remove` to disconnect the mock: established long-lived OkHttp pooled connections still work and requests succeed. Use mock failure switches (`MOCK_ENGINE_ERROR`, `MOCK_MODEL_CONFLICT`, `MOCK_DEPLOY_ERROR`).
 - **Do not send a `persona://pair` deep link to an App already paired with the user's hub.** It opens root pairing; confirmation makes `HubDataStore.pair` discard the old pairing and write the new one.
-  Add a test hub through Settings › Hub › Add hub (a new group, preserving the old). With the readiness checklist unfinished, both deep-link and Add hub pairing pages stop there first and ignore the link.
+  Add a test hub through Settings › Hub › Add hub (a new group, preserving the old). An unfinished first-run checklist no longer blocks a pairing link: it goes to its confirm page (it used to stop at the checklist and drop the link). Add hub was never affected: its pairing service reports unpaired, so it always starts at the connect choices.
 - **`adb shell input text` is corrupted by Chinese IMEs**: WeChat Input and Gboard in pinyin mode reorder characters, turn `?` full-width, swallow `=` / `_`, and convert letters to Chinese characters.
   For ASCII such as links, temporarily `ime set` an IME that does not process keystrokes (such as an enabled `com.google.android.gms/.autofill.service.AutofillInputMethodServiceProxy`),
   then immediately restore the value recorded from `settings get secure default_input_method`. The pairing address field parses as soon as it starts with `persona://`; type the latter half of a long link first, then prepend `persona://`.
@@ -225,9 +627,17 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 ## Wide-screen two-column layout and Persona page
 
 - material3-adaptive 1.3.0 Navigation 3 list-detail scenes (`rememberListDetailSceneStrategy`) accept a divider through `paneExpansionState` and `paneExpansionDragHandle`. But library `Modifier.paneExpansionDraggable` calls `settleToAnchorIfNeeded` on release: with anchors, it always snaps to the nearest; without them, it stays at release. It cannot snap only within 28dp of the fold, and readings such as `firstPaneWidth` are internal. For custom snapping / collapse, implement the handle's `draggable` yourself, calling `setFirstPaneWidth(px)` each frame (remeasures panes without recomposing pages), then writing frame by frame with `animate` on release. Once expansion state has a specified width, it overrides fold avoidance from `PaneScaffoldDirective.excludedBounds`. For a separating fold, `clear()` it and omit the handle, returning fold-based layout to the library (`ThreePaneScaffold.kt` measure source). Downloading Google Maven `-sources.jar` is the quickest way to inspect these library behaviors.
+- Extension pages must keep the stack they were opened from. `restoreSecondaryParents` used to insert `SettingsRoute` before every `ExtensionUiRoute`, so an Assistant or Inbox extension's next push unexpectedly returned to Settings. Settings-owned stacks already contain that parent; do not invent it for extension pages, and test deep links, internal pushes and each source's Back separately.
 - Root-page bottom dock and keyboard (#867): the shell reserves dock height (`ChromeInsets.bottom` for glass, a dock row in Column for morning / board), while the page's `imePadding()` adds the whole keyboard height. The input then floats one dock-height above the keyboard (about 460px on a vivo foldable). Treat the reserved dock space as consumed inset: wrap glass root pages in `consumeWindowInsets(PaddingValues(bottom = …))`; Column root pages use `recalculateWindowInsets()` to recompute for their position, excluding the dock portion from IME inset. `imePadding()` then adds only the keyboard portion beyond the dock and follows animation continuously, without reading IME height or hiding the dock. Check input-bottom to keyboard-top distance in all three styles.
 - Dismiss keyboard on blank taps (#2626): `JPage` content and `JSheet` attach `dismissKeyboardOnBlankTap()`. In the Final phase, if children have not consumed the tap, clear focus and hide the IME; the modifier itself does not consume events, preserving links, buttons, long presses, and scrolling. Sharing sheets outside `JPage` integrate separately. All three `ComposerFrame` styles use `keepsKeyboardOnTap()` to consume padding taps not handled by children (with `onBlankTap`, focus the input and show the keyboard; chat, Inbox reply, connector reply, and Lark-document comment inputs use this, #894, #4093). An empty pointer modifier blocks lower siblings only; ancestor listeners in nested `JPage` still see unconsumed events. Regression tests must include nested pages, real link callbacks, and actual scroll displacement. For long-press-only content (message context menus), do not use `detectTapGestures(onLongPress = …)`: it consumes every short tap's down / up, and Agent replies span the whole row, so nearly every assistant-chat tap is consumed and the keyboard never dismisses (#3056). Use design-system `onLongPress(key) { … }`, consuming only after a long press triggers. Test real message rows (`MessageContent` + long-press menu); a hand-built `detectTapGestures` card misses it.
 - Focus and paste menu survive tab changes (#894): visited tabs remain composed, merely unplaced, retaining input focus; keyboard and long-press paste menus float over the new tab. The shell uses `ReleaseTextInputOnChange(selected)` to dismiss selection menus, clear focus, and hide the keyboard only on an actual tab change, not first display.
+- Open foldable / tablet layout (#2951): the list-detail scene shows two panes only when the back stack's trailing entries give it a list and a detail. A detail pushed over a page
+  without pane metadata (Computers over the Assistant page) leaves it one pane, and the strategy returns null, so the single-pane scene draws it full width; no empty list pane appears.
+  `PaneScaffoldDirective.copy` has no parameter for `shouldAutoFocusCurrentDestination` and may return its default (focus moves into the shown pane): build a narrower directive with the constructor.
+  `JSettingsSheet` passes `Modifier.fillMaxSize()` to `ModalBottomSheet`, which comes before Material's `widthIn(max = 640.dp)`, so the sheet already spans a wide window.
+  The shared sidebar is composed in two places in a regular window (the drawer on Agents, the column inside the Assistant root, which stays composed behind Agents): two `SaveableStateProvider`s
+  with the same key composed at once throw, so each place has its own key. The column keeps the page at the same position in the composition whether or not it is shown
+  (`JSidebarColumn`), so folding and unfolding never dispose the Assistant page.
 - With `setFirstPaneWidth(0)`, the library places only the second pane (list stays composed at size 0), and puts the handle at the left edge (`horizontalPartitionSpacerSize / 2` from it). The collapsed handle remains draggable to restore the pane.
 - Hub pins (`sessions` in `/api/v1/pins`) contain both pinned Agent sessions and pinned Persona chats. Unpin all in Persona history must remove only Persona's chats, not clear all pins.
 - Recognize handoff-chat titles from `<persona-context … title="X">` before truncation. The old App truncated the last message to 30 characters first; long-title tags became unrecognizable and leaked partial raw tags into history.
@@ -245,12 +655,18 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 
 - Codex file changes become `Edit` with only `diff` in hub (`server/internal/transcript/codex.go`), but `diff` is not always unified diff. When FileChange has no `unified_diff` (new files), hub supplies the entire file body without `@@`. Unified-diff parsing discards it all (lines not starting with `+`, `-`, or space are treated as headers). Check for `@@` first; without it, render all-added / all-deleted according to `change` (`patchDiff`).
 - The chat page's per-row capabilities (`LocalChatRowActions`) must keep the same object during streaming. Every reader (nearly every row) recomposes when the object changes. Message-dependent data (the chat's image list) should be a function read when opened, not a `remember` key (`pictures` in `ChatScreen`).
+- An LRU exactly as large as the set that is warmed into it in order misses every entry once anything else is put in (#3050). The chat's Markdown cache held 80 entries and the page's prewarm parsed the latest 80 replies in order, on every snapshot. One extra key (a thinking block, a card segment, a plan, a recap, a row scrolled into view) evicted the oldest reply; the next cycle parsed that reply again and so evicted the next one, all the way round: 80 of 80 misses per cycle, about 272 ms at 16 KB replies on a desktop JVM. Keep the warmed set apart from what else comes in: the prewarm names its ids (`ChatMarkdownCache.keep`) and every other id shares a budget of its own, so no number of other keys evicts a warmed one; test the miss count after one and after many extra keys, not only the hit after a single prewarm. Two callers of the same key must also agree on its value: the row parsed `PathLinks.markdown(text, linkable)` while the prewarm parsed the raw text under the same key, so they replaced each other's entry and both parsed on every update.
+- A streaming Markdown reply can reuse the parse of its start only up to a block nothing after it can change (#3050, `ChatMarkdownStream`). A paragraph followed by `===` becomes a heading, a list or a block quote goes on (or lazily on) after a blank line, an indented line after a blank line can continue a list item, and a reference-link definition anywhere turns `[text][label]` earlier into a link. So only a paragraph, a heading, a rule or a closed code fence followed by a blank line is settled, a definition parses the whole text, and the test compares the tree (each node's type and offsets) and the links with a whole parse at every prefix and at many cuts of a corpus, not just the rendered text.
+- A test named for a cost rule has to count that cost, not only check the result (#3282). The stream tests counted only whole parses: a change that left `ChatMarkdownStream`'s boundary where the first parse put it made every step parse nearly the whole reply again as its tail, and all 11 stream and cache tests still passed while the bench lost its gain. Count what the rule saves (here, the characters each step parses again: from its first top-level node that is not one the step before kept), and check a kept result by identity (`assertSame`), since doing all the work again returns equal values. Try the change that undoes the gain before trusting the test, and the change that breaks the rule: letting a list settle, or letting a single line feed settle a paragraph, also passed the every-prefix gate until its corpus held a list that goes on after a blank line and a paragraph with a rule-like line under it.
 
-- Pixel-by-pixel screenshots (`SHOTS_*` in `android.sh shots`; `docs/android/android.md`, "Before / after pixel comparison"): after SystemUI demo mode hides mobile networking on Android 15, a satellite icon appears about 5 seconds later. Neither demo commands nor `icon_blacklist` removes it; wait for it before every capture. `adb root` restarts adbd and loses existing `adb reverse`; root before forwarding. macOS `sips -Z` changes the original image; copy first before viewing. macOS bash 3.2 with `set -u` errors on empty-array expansion; use `${arr[@]+"${arr[@]}"}`.
+- Stable streaming rendering needs identity for the AST nodes, content object, components and annotator, not only equal values. Expose the parser's settled count and update one streaming state on the UI thread; whole and final parses discard it. For incremental ancillary scans, partition the initial whole scan by source offsets and assert every-prefix equality plus exact scanned suffixes. Independent per-block results get global card numbering, path limits and web/bare port ordering wrong.
+- Pixel-by-pixel screenshots (`SHOTS_*` in `android.sh shots`; `docs/android/android.md`, "Pixel-exact before/after comparison"): after SystemUI demo mode hides mobile networking on Android 15, a satellite icon appears about 5 seconds later. Neither demo commands nor `icon_blacklist` removes it; wait for it before every capture. `adb root` restarts adbd and loses existing `adb reverse`; root before forwarding. macOS `sips -Z` changes the original image; copy first before viewing. macOS bash 3.2 with `set -u` errors on empty-array expansion; use `${arr[@]+"${arr[@]}"}`.
 - Homebrew Android SDK is at `/opt/homebrew/share/android-commandlinetools`, not `~/Library/Android/sdk`, and default Java is JDK 8. Before `android.sh`, set `ANDROID_HOME` to it and `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`. Custom AVDs need a separate `ANDROID_AVD_HOME`; do not touch other running emulators. If the first-launch readiness checklist blocks access, run `android.sh shots` once to clear data, pair, and skip readiness, then switch to your mock with `DebugEntryActivity --es debug.mockAddress …`.
+- On a host with little free disk, Android 36 can replace a smaller `disk.dataPartition.size` or `-partition-size` with its 6 GB default at every launch. The SDK's own tools can prepare a bounded sparse data image instead: `emulator/qemu-img create -f raw <owned AVD>/userdata-qemu.img 1536M`, then `emulator/bin64/mkfs.ext4 -F <same image>`, and boot without `-wipe-data` (which would delete it). A blank qcow2 only gets past the host-space check and then leaves `/data` read-only because it has no ext4 filesystem; kernel logs showing `invalid magic` and encryption-key failures identify this case. Use an even ADB port in the supported 5554–5584 range. Stopping the local SSH wrapper does not necessarily stop a remote mock hub: find its PID by listening port, verify its cwd, and kill only that PID.
 
 - Multiple hubs (#634): when integrating a service invoked by machine ID, do not use the current-pairing connection (`ConnectionRuntime.scopedData` / `connectionFor`). Page machine IDs come from the merged list; other groups carry `~<group id>`. Sending to the selected group's hub merely yields "Machine not found," or worse, changes another machine if both groups have the same ID.
   Find the group through `GroupStacks.use(GroupKeys.namespaceOf(id))`, strip suffixes there with `inGroup(names)`, and add them back to returned machines. Only one-per-hub services (model configuration, voice, Inbox) follow the selected group.
+- A pairing-lived timer must not retain a repository facade whose every call resolves the currently selected group again. Selecting another hub does not necessarily cancel the old group's coroutine scope, so a delayed Inbox hand-off could otherwise read, send, save memory and mark Done in different groups. Bind each `InboxHandOffBars` store to the fixed per-pairing repository and preferences at construction; test two live scopes with the same item id before the timer, during hand-off and during Done.
 - History pages must also reconcile transcripts (#899). An unchanged final item ID does not mean no new transcript entries. Backward paging and gap repair can add user messages without changing the tail. Trigger the outbox transcript callback on full-record changes, not only the last item, or early delivered bubbles may disappear only after reopening the page.
 
 ## Connection and TLS
@@ -393,3 +809,270 @@ An update card can retain metadata for hours. A content-addressed file on disk i
 Separate metadata, download, verification, permission and installer failures. Log the stage and exception class without transport messages that could contain credentials. Returning from unknown-source settings requires checking the actual grant before continuing; a result code alone does not establish permission. A committed PackageInstaller session only proves handoff, never installation success. A signing receipt or publication message also does not prove the online verifier ran: retain and inspect its terminal result.
 
 - A renderer version bump also changes negative fixtures: a newly supported field, chart or icon can no longer stand for an unknown value. Assert its concrete v6 meaning and retain a separate unknown-value rejection case; keep the advertised device version pinned to the delivered contract (#828).
+
+## Preserve business failures at the HTTP boundary (#1915)
+
+Normalize a narrowly identified legacy knowledge refusal in `HubFailure`, where the response's request path is still known. Keep disabled/read-only recovery non-retryable and map shared feedback by code, not an arbitrary server sentence. Knowledge list/search/detail and edit feedback must agree. Preserve request IDs for reports; resource checks do not prove that JVM tests, native rendering or all-style screenshots passed.
+
+- A committed PackageInstaller session may remain sealed after its confirmation page disappears, including across an APK upgrade. Only its installer UID can abandon it. Offer an explicit, confirmed recovery action from Settings even when no newer APK is available; recheck ownership, package and the confirmed session IDs before cancellation. Do not cancel a new session that appeared after confirmation or clear pairing data to recover an installer task.
+
+- PackageInstaller deliberately withholds its sender's background Activity launch privileges. An activity PendingIntent callback must opt in on the creator side for current targets; without it, a task record may exist with no resumed Activity and the sealed session never reaches system confirmation. Use API 36's visible-only creator mode, the compatible explicit mode on API 34/35, and guard the API on older devices. Do not grant always-background launch just to save a final toast. If the user leaves before confirmation, retain the explicit pending-session cancellation path in Settings; verify success using the installed package version.
+
+## Hidden tabs and unread windows still own work
+
+- A composed but unplaced tab still inherits the activity lifecycle: lifecycle-aware collectors and pollers keep running after switching away. Give each primary tab its own lifecycle capped at CREATED while hidden; keep composition for navigation and scroll restoration.
+- Three unread chat windows can still hold tens of thousands of messages if older snapshots contain full histories. Skip oversized window snapshots before reading/decoding them, preserving the file and server history cursors, and trim new snapshots under the same limit so a fresh cache is never one the reader skips.
+- Bounding one cache does not bound another: the inbox has a repository window snapshot and a feature-side Lark window cache. Turning the three-window unread prefetch back on after bounding only the first one brought back main-thread GC waits of about 15 s per two minutes and an out-of-memory crash in the second. Measure a prefetch change on a device with real data before shipping it.
+- Stopping a closed chat's sync at once makes every tab switch a cold open, and a message sent from a chat the user then left never sees its echo. Release a closed chat after a delay, keep the most recently closed idle entries, and keep syncing chats the outbox still waits on.
+- A capsule started on Main must move catalog transformations off Main explicitly; conflate alone only removes queued inputs, not main-thread work.
+- Full adb meminfo can invoke app-side Explicit GC and amplify the stall being measured. Compare natural GC with meminfo --local and exclude profiling/dumpheap intervals from acceptance readings.
+
+## Wait for local listener shutdown before reusing its port
+
+On the JVM, closing a server socket with a blocked accept can defer the actual descriptor close until that I/O exits. A preferred-port restart immediately after close can then collide with its own old listener and choose a fallback. Register the accept worker under the same lifecycle lock as close, close the socket first, then wait for the worker with a bounded deadline. Preserve interruption and report a shutdown deadline without adding a new exception to synchronous close callers; keep independently occupied-port fallback distinct from listener shutdown.
+
+## Keep streaming Markdown geometry stable (#3843)
+
+Keep a message's last rendered parse while its next parse runs; switching to raw text for every delta changes list and code-block geometry twice. Reset that retained state when the message identity or cache changes, and include stream completion in the parse effect keys. The Markdown renderer also defaults to a text-size spring: chat text should use its measured size immediately, without animating every line wrap.
+
+Measure pending and parsed frames with the real chat row and reverse list. A fixed scroll index and offset can still accompany visible height oscillation. Replay both Assistant and Agent styles, completion, rapid deltas, history reading and return-to-latest. Check selection and exact copied text in the APK as well. Write a PASS evidence file only after every assertion has completed; cleanup must not turn an earlier failure into a successful verdict.
+
+## Bound divider settling frames (#4756)
+
+A non-bouncy spring can still overshoot with a fling velocity. Clamp every divider animation frame to the current drag range before writing PaneExpansionState; negative widths can collide with its unset sentinel. Exercise the production splitter in a measured two-pane scaffold at both edges, including collapse and expand. State-only tests miss the visible width reset.
+
+## Pairing fixtures must follow the default sign-in page (#4623)
+
+Skipping onboarding does not skip password sign-in. Tests of manual or scan pairing must select the localized pairing alternative from that default page before using the existing controls. Keep initial-link fixtures on their direct confirmation path, and retain back-stack, field-retention, invalid-input and screenshot assertions rather than changing the product default to fit older fixtures.
+
+## Extension notification source and replacement identity
+
+Merged `NotifyEvent`s carry a hub group's namespace in a non-empty machine or alert id; an event with neither does not prove that it came from the selected group. Only accept an unscoped extension alert when one open group makes its origin unambiguous, and bind the action's HTTP adapter to the captured `ScopedHubData` rather than reading the selected connection again after the claim. A notification body and its buttons share one replacement tag but must coexist: validate and replace them as one batch, not one record at a time, or the last button invalidates the body and every earlier button.
+
+## A box that animates its size must already have its final width (#4339)
+
+`Modifier.animateContentSize` animates both axes. The composer's @ list sat in a wrapper `Column` as wide as its content, so while the list had no rows the wrapper was 0 by 0, and when rows came the list swept in diagonally from a corner. A settled screenshot and a test on the final tree both looked right; only frames taken with `mainClock.autoAdvance = false` and `advanceTimeBy` showed it. Give the wrapper `fillMaxWidth()` so its width is the constraint's and only its height moves, and review a motion by its frames (`NewChatMentionsMotionShotsTest`), not by its last picture.
+
+## First-message handoff must cross decorators and filtered lists (#4999)
+
+The composer decorator posts messages itself, so handling a successful response only in its underlying transport misses the production send and manual-refusal retry paths. Share the successful-response handler with the decorator and test that path. Keep a start/send receipt's session metadata separately from a paged list's membership: a newly started idle pane, or its working thread, may be excluded by the current filter. Bind a send reply to its exact previous waiting session; scanning old receipts by pane can select an earlier run after the pane is reused. For a terminal first message, match the same computer and pane only in current rows. If the current list excludes the thread, keep the waiting page without fetching extra pages. Never infer the new thread from its directory.
+
+## Resolve horizontal window insets with layout direction
+
+Compose `WindowInsets.getLeft` and `getRight` require both `Density` and `LayoutDirection`; only the vertical getters take density alone. Pass `LocalLayoutDirection.current` instead of copying the vertical call shape. Test pointer or popup clamping with asymmetric physical insets in both directions: LTR and RTL resolve different left/right values, while the resulting bounds and menu origin remain physical window coordinates.
+
+## Route shortcut help through the focused input and its dialog
+
+Compose `FocusOwner` is internal even though `LocalFocusManager` may implement it at runtime; production code must use public focus-state APIs rather than casting to it. A text field can also consume Ctrl+/ before a parent's `onKeyEvent`, while changing the parent to `onPreviewKeyEvent` would steal keys from a terminal. Shared text inputs therefore handle only the help chord themselves and leave every other key on the ordinary path. When the input belongs to a sheet or dialog, propagate a stable help-owner token and render the help dialog from that layer; opening it only from the main shell puts it behind the sheet that received the shortcut. Test both an editor that consumes the chord and a terminal-style child that must retain it.
+
+## Keep adaptive Settings in one dialog composition
+
+Moving a `movableContentOf` between a bottom-sheet dialog and a separate centered dialog did not preserve non-saveable state in the integrated runtime, despite the API's movable-state machinery. Keep one `JSheet`, one presentation frame and one content invocation, then change only the transparent container and card geometry. This preserves markers, running effects, drafts and list state in both directions. Window presentation changes can still clear the focused child even when composition survives: record that focus was inside the content focus group, request the unchanged parent and use public `FocusDirection.Enter` to restore its child. A host surrounding a dialog must not auto-focus itself when it cannot see that dialog's focused child.
+
+## A swap inside a slot the frame moves between rows must be movable content (#4210 T3)
+
+`ComposerFrame` draws its trailing content in the field's row while the composer is closed and in a second row once it opens (`expanded = focused || hasContent`), so the content is disposed in one place and composed in the other. An `AnimatedContent` inside it then starts again in its last state: a draft written while the box was not focused (as `ChatComposerSwapTest` writes it) opens the composer and gives the slot its new button in the same frame, and the swap was drawn in its final frame, which only a test with the clock paused showed (`send is 48.0 dp in its first frame`). On Glass the frame now invokes `trailing` through `movableContentWithReceiverOf` (the latest lambda through `rememberUpdatedState`), which moves the composition state, running transitions included, with it; a test flips `expanded` and the content in one frame, and again in the middle of the swap, and fails without it (`ComposerActionSlotTest`, `ChatComposerSwapTest`). More learned on the way:
+- Put everything a button draws in the `AnimatedContent` state (a data class without lambdas, keyed by `contentKey` on its kind) and read the taps through `rememberUpdatedState`. Compose 1.12 recomposes the content that is leaving with the latest values its lambda captures (probed: a text read from a state and from a plain parameter both changed on the leaving content), so a send that was loading would turn into a fresh, enabled one while it shrinks; what is in the state it left with stays. A change of look with the same kind happens in place, and a state that held a lambda would either start a swap on every recomposition or keep calling a stale callback.
+- The leaving button is composed for the whole exit: make it inert (`clickable(enabled = false)`) and `hideFromAccessibility()`, or a tap on the stop that is leaving would still interrupt the Agent. Test finders still find a hidden node, so the test asserts `assertIsNotEnabled()` and the `HideFromAccessibility` property, and taps its centre.
+- Drive scale, fade and blur from `transition.animateFloat` inside the content, with `EnterTransition.None` and `ExitTransition.None` on the `ContentTransform`: the content stays until those animations finish, and the order is yours. `Modifier.blur` outside the scaling `graphicsLayer` keeps its radius while the button is small, as SwiftUI's `scaleEffect(…).blur(…)` does; inside it the blur shrinks with the scale. `SizeTransform(clip = false)` keeps the slot's width glide from clipping the blur. A node's `boundsInRoot` follows the layer's scale, so a motion test can read the size from semantics; an entering animation starts one frame after the change and a leaving one up to two.
+- Pass a lambda, not a reference to a local function: `::send` compared equal to the reference from the last composition whatever each captured (a probe: `make(1) == make(2)` is true for `::f` of a local `fun f` in `make(x)`), so `ComposerActionSlot` and `SendButton` were skipped and the button kept calling the `send` from before a quote joined New chat's draft, which then went without it. Six assistant tests that tap Send failed on it (`NewChatMentionsTest`, `AssistantDraftScopeTest`, `AssistantSwitchingShotsTest`) while the design-system and chat tests passed; run the callers' suites after moving a button's call site, not only the module's own.
+- Robolectric's native graphics do draw `Modifier.blur`, a render effect (the edge of the disc ramps over about 12 px at 80 ms), so its frames show it; Haze's glass is the blur the lesson above says it does not draw. Press feedback scales the circle inside the 48 dp button and leaves the button alone, so the touch target does not move under the finger.
+
+## Bound attachment errors so Retry stays reachable
+
+A file attachment's unbounded error text can make its row taller than the preview's 140 dp scrolling area, leaving the vertically centered Retry button clipped at large text sizes. Cap file errors at two lines with ellipsis, matching the photo error rule, and verify Retry with English, Simplified Chinese and Japanese resource environments. Changing only `LocalConfiguration` in a running Robolectric composition does not reliably switch those resources; use separate qualifiers for each language.
+
+## Keep expanded-composer send and Escape focus states separate
+
+A movable small composer field can remain composed and focused behind the expanded editor, so `onFocusChanged` may not fire again when the editor closes. Preserving `focusRequest` alone therefore leaves `state.focused` stale after a hardware send, while the following Escape cannot restore it through another callback. Use separate collapse actions: sending preserves the request count and clears the focused state; Escape follows the ordinary focus request and restores it. Target key injection at the expanded input's own tag when both nodes report focus.
+
+A one-shot picker request cannot depend on a control whose composition ends when the same send clears the draft and focus. Keep that control's owner composed for the whole picker lifetime, not merely until `onOpenHandled` consumes the request; disposing it then also disposes the menu or sheet. Test the actual popup or dialog and its dismissal for every style, not only the request callback (#11405).
+
+## A registering surface must not take focus from a child that already has it
+
+`hardwareShortcutDismiss` registered its surface and requested focus on itself whenever a large window attached its shortcut controller. When a compact window became large with the second Settings field focused, that request moved focus to the surface, and the later focus restoration entered the first field. Robolectric did not show it; a real window did. Track focus inside the surface in every window size and request it only when no child holds it. Verify focus changes on a device with real touch and key events (`SettingsFocusInstrumentedTest`).
+
+## Reading a text baseline in a Row can crash while the window changes size
+
+`alignBy(FirstBaseline)` on a list marker and its text threw a `NullPointerException` from `LookaheadDelegate.getAlignmentLinesOwner` in the measure pass when a tablet window changed size or density with a plan card open in an Agents chat; every page is laid out under a lookahead pass, and a child can be asked for its baseline before its lookahead state exists. The crash is on the Compose release we ship (the same on `main`), Robolectric never reproduced it, and an emulator `wm size` / `wm density` change with the plan fixture did every time. Use `firstBaselineAligned` (`BaselineAlignment.kt`) for baseline alignment in a Row: it keeps the baseline and falls back to the Row's own alignment for the one frame that cannot read it. `scripts/app/android_adaptive_scenes/agent-plan-card-resize.json` is the device regression.
+
+## The Settings sheet crashed when its window crossed the regular-width boundary twice in a few frames
+
+With the Settings card open, a tablet window that went below 600dp and back to a regular width within a fraction of a second (`wm size` then `wm density`, or a free window's edge dragged across the boundary) threw `ArrayIndexOutOfBoundsException` from `SlotWriter.isNode` in `Operation.DetermineMovableContentNodeIndex`. The same crash happened on a clean `main`. It is not the shell's own `movableContentOf` calls: replacing the Settings content, the composer's trailing slot and the message words with plain calls left it unchanged. Navigation 3 wraps every page's content in movable content (`SceneSetupNavEntryDecorator`), and the list-detail strategy hands a one-pane window to the single-page scene, so narrowing the window moved every page between two scenes inside the sheet's dialog window. Without Settings open, the Agents list-detail scene survived the same changes. Bisecting on the device: a plain call instead of the nested `NavDisplay`, or the default single-page strategy, never crashed; removing the nested `BoxWithConstraints`, or the pane animations, did not help.
+
+`SettingsSheetPanes` keeps one list-detail scene in a window that has ever been regular (`shouldHandleSinglePaneLayout`, latched by `RegularWindowLatch`), so narrowing only changes the scaffold's geometry and pages never change scenes. A window that was never regular, every phone, still uses the single-page scene and looks and animates as before. Robolectric and a Compose harness with the same sheet and scenes did not reproduce it; an emulator whose real display size and density change did, every time. `scripts/app/android_settings_window_flip.py` is the device regression: it changes the display of a tablet emulator while the real Settings page is open and checks the process id and the log. Report its round counts, not a rate.
+## Compose test: state delegates need imports, and one rule takes one setContent (#6969)
+
+Two failures that only show at `compileDebugUnitTestKotlin` / first composition, both from writing a fresh Robolectric test:
+- A `by mutableStateOf(...)` property needs `androidx.compose.runtime.getValue` and `setValue` imports even when `mutableStateOf` itself is spelled fully-qualified; without them the error is "Type 'MutableState<…>' has no method 'getValue(…)'". `assertExists()` / `assertDoesNotExist()` in Compose UI Test 1.12 are member-style calls on `SemanticsNodeInteraction` with no import (the drawer shots already call them unimported); importing `androidx.compose.ui.test.assertExists` fails as an unresolved reference.
+- A `createComposeRule()` rule can host `setContent {}` only once. To change what the screen shows mid-test (a different `active` session, a swapped roster), keep the input in a `mutableStateOf` read inside the single content lambda and reassign the state, then `waitForIdle()`; a second `rule.setContent {}` throws "Activity has already set content".
+
+## Headless Android unit tests on a constrained, IPv6-only CI box (#6969)
+
+Running `./gradlew` Robolectric/JVM tests on a container without Android Studio needs explicit setup:
+- Toolchain is JDK 21 (AGP pins `gradle-daemon-jvm.properties toolchainVersion=21`); a machine whose default `java` is 8 fails sdkmanager with `UnsupportedClassVersionError`. Point `JAVA_HOME` at a 21 JDK.
+- Install the SDK via `cmdline-tools`; the platform package carries a minor suffix (`platforms;android-37.0`, not `android-37`). In the Android project, create the untracked `local.properties` file with `sdk.dir` pointing to the installed SDK.
+- On an IPv6-only NAT64 network curl works but the JVM throws "Network is unreachable" (it defaults to an IPv4 socket): set `_JAVA_OPTIONS=-Djava.net.preferIPv6Addresses=true` for both sdkmanager and Gradle dependency downloads.
+- In a small memory cgroup the default `-Xmx4g` daemon is OOM-killed. Constrain it: `GRADLE_OPTS="-Xmx1600m -Dorg.gradle.workers.max=1 -Dkotlin.compiler.execution.strategy=in-process"`, `--no-daemon`, and an **Groovy-syntax** init script setting every `Test` task `maxHeapSize`/`maxParallelForks = 1`. A Kotlin-syntax init (`Test::class.java`) fails with "No such property: java" — and the failure is easy to misread as a pass, so always confirm `BUILD SUCCESSFUL` and the test-results XML, never just the shell's exit code.
+- Pure-Kotlin modules (`core:domain`, `core:contracts`) expose the JVM `test` task; Android library modules expose `testDebugUnitTest`.
+
+## The app's Inbox object must forward every repository member that has a default body
+
+`InboxModule.inbox` implements `InboxRepository` by hand and forwards each call to the paired repository. A member with a default body (`doneHistory`, `doneDays`) compiles without an override and silently answers empty, so Done never loaded its older history in the app although the real repository, the transport and the mock hub all supported it; unit tests on the real repository could not see it. When a default-bodied member is added to `InboxRepository`, forward it in `InboxModule` too, and check on a device (or the mock hub's request log) that the request is made.
+
+## Under imePadding, a size read in composition recomposes on every keyboard frame (#8334)
+
+With edge-to-edge and `adjustResize` the IME inset changes on every frame of the keyboard's slide, so everything under an
+`imePadding()` is measured smaller each frame. That is cheap as layout and expensive as composition: Compose 1.12's
+`BoxWithConstraints` subcomposes its content again whenever its constraints change, so a page body inside one ran in full
+per frame, and reading `WindowInsets.ime` (or `safeDrawing`, which includes it) in composition does the same to its scope.
+Keep sizes under the keyboard out of composition: `onSizeChanged` into a state read inside `derivedStateOf`, a layout
+modifier or an effect (`snapshotFlow`), and derive booleans such as "keyboard up". `ChatImeRecompositionTest` dispatches the
+inset in steps with `ViewCompat.dispatchApplyWindowInsets` and counts recompose scopes with a `CompositionObserver` set on
+the root composition, which also sees subcompositions; the caller's file and line come from a stack trace in `onScopeEnter`.
+`JPage`'s `SubcomposeLayout` still subcomposes some slots per measure (about 16 scopes a frame), left for later.
+
+## A failed read over an empty cache is not an empty page
+
+A page that keeps its last answer while it reloads has four things to say, and mixing them up shows wrong facts: a spinner for a first read, the content (with a pull indicator) while it reloads, one line above the kept content when the reload failed, and the whole-page failure with Retry only when there is nothing to show. The trap is the cached empty list: with `value.isEmpty()` and an error, drawing the empty state tells an offline user that they have nothing. `jLoadableContent` treats a loaded empty value that carries a failure as a failure. A retry must also leave the failure state at once: the Hub version page kept its error on screen for the whole retry until the model got a `loading` flag that the page maps back to the spinner.
+
+## A folded diff's rows are not its lines
+
+`DiffView` shows an edit's long runs of unchanged lines as one row each until Show All, so the preview's row index is no
+longer the line's index (it used to be, when the preview was just the first 40 lines). Anything that jumps to a line
+(`DiffNavigation`'s next / previous change) must wait until the list is open in full (`totalItemsCount == lines.size`)
+before `scrollToItem(line index)`, and the lazy list's keys must come from the line's place in the whole diff (`l<index>`,
+`f<first folded index>`), not from the row's position, or a growing diff re-keys its rows and the open state and scroll
+position drift. Word ranges are in the line's own UTF-16 offsets: widen tabs piece by piece (`diffText`), never on the
+whole line first.
+
+Pixel assertions need a pixel that is really inside the row: the last few pixels at a clipped rounded edge can be the parent's
+background, even when the row's center has the expected tint. Compose's `Color` constructor also quantizes alpha to eight
+bits, so a token written as `0.14` reads back as `36 / 255`; compare rendered alpha with that quantization in mind.
+
+## A build value a library page needs, without threading it through the shell
+
+The pairing page lives in `feature:settings` but the build config (application id, OAuth scheme, the getting-started address) belongs to `:app`, and a library has no `BuildConfig` of its own. Pass such a value as a Gradle property into a manifest placeholder, carry it in a `<meta-data>`, and read it with `PackageManager.getApplicationInfo(..., GET_META_DATA)` in the library (`GettingStarted.kt`). Give the placeholder a marker default (`"unset"`) that the parser refuses, so a build without the value hides the feature instead of showing a dead link, and keep the value out of the code, docs and tests (tests inject a placeholder address through a parameter).
+
+A page shown before any shell exists (pairing, first run) is outside `ShellLinkHost`, so its links would leave the app through the system handler. Wrap the page itself in `ChatLinkHost` (`PairingLinkHost` in `PairingScreen.kt`, only where the page has no shell around it) so they open in the same in-app card as everywhere else, without touching `Root.kt`. Read `LocalUriHandler.current` inside the host's content, never above it: a handler read in the page's own body is the activity's and the tap goes to the system browser. Wrap only when the page has a link to open: the host starts a WebView pool and warms the renderer as soon as it is composed.
+
+The password page added below the welcome page needs its own Back step (`passwordEntry = false`), or the generic welcome
+back jumps over the connect choices. A WebView feature check is not enough for an optional appearance setting: Robolectric
+can report algorithmic darkening as supported and then throw `UnsupportedOperationException` when it is set. Ignore that
+failure for the optional setting rather than losing the whole link card.
+
+## A held list page: read its controls from the live page, let what needs the user through, and hold again
+
+The Agents list holds the page it drew while it scrolls (`AgentsFeedHold.kt`). Four things went wrong in the first version, and
+each is a rule for the next one:
+
+- Everything the screen derives to decide whether the hold still applies, and what the pill compares, must come from the page
+  the hub last sent. Taken from the drawn page, a tapped fold or a changed grouping would never release the hold, since the held
+  page still shows the old setting.
+- What needs the user (and what is offline) must not wait with the rest. Holding the whole page left a row saying Working
+  after it needed the user, and a pill is no substitute for a row that says so. `landCritical` gives those rows their state and
+  leaves the order and the rest of the page held; it is a copy of a few fields, not a second projection.
+- A release is not the end of the scroll. A release by the cap, a changed control or a fetched page, with the list still moving,
+  must hold again from the page that landed, or every later push lands under the finger until the next gesture. The
+  `isScrollInProgress` flow only reports a change, so the code that releases has to re-hold itself. The same goes for a scroll
+  the screen starts itself (the jump to the latest): it is not the user reading and holds nothing, and a user who takes the list
+  over mid-way gets a hold from that moment.
+- Which page is held must not be Compose state read where the page is drawn. A state read there composes the whole screen at the
+  start and end of every scroll, the moment the finger is most sensitive; keep it a plain field and bump one counter only when a
+  landing changes what is drawn.
+
+A paged list also needs its own exit: a fetched page appends rows that were never live, so it lands at once, but only when the old
+window is the start of the new one in the same order (`growsPage`); a session a push put in front is a live insertion. Write the
+release conditions as pure functions (`holdsAgainst`, `landCritical`) so each can be tested without a list. A restoration test must
+change the hub's data when the old screen is taken down (`DisposableEffect.onDispose`), not while it is alive, or the old screen
+saves the new place and the test passes on the wrong thing.
+
+A computer's state is read both from `page.machines` and from the `AgentMachineGroup` in `page.list.machines`; landing only
+one leaves the group header's online dot stale. Remove a group whose last urgent row left, using the same parent/child rule
+as `retainOpenedRows`, or an empty heading remains. Repeated jumps to the latest overlap: a Boolean programmatic-scroll
+flag is cleared by the first coroutine to finish while the second is still moving. Count the jumps (or fence their jobs)
+so only the last one restores user-scroll handling. With a frozen Compose test clock, a state mutation can need one frame
+to invalidate and another to apply composition and side effects; advance both before asserting. For a restoration test,
+hold a real `state.scroll` open until the snapshot observer sees it instead of using an instantaneous `scrollToItem`.
+
+Process restoration and live-read anchoring are two owners of the same list and must be tested together. The lazy list first
+restores its own index; the live observer can take a reading anchor there and then undo the subsequent key-based restore with
+a well-intentioned offset correction. `RestoreAgentReadingPosition` reports while its restore is pending, and
+`KeepAgentReadingPosition` clears its anchor and issues no correction during that interval. Testing `RestoreAgentReadingPosition`
+alone passes while the production composition still returns to another row; composing both makes the old failure reproducible.
+
+`am kill` stops background processes, not an app held important by a foreground service: check the PID instead of assuming the
+command created process death. On a rooted test emulator, a direct signal after state saving can exercise retained-task
+restoration without `force-stop` clearing the task; record that distinction and keep the same-PID `am kill` attempt as a
+no-op, not as restoration evidence.
+
+A joined flow can say "loaded" about a list it has not caught up with. The Agents page joined the hub's latest status to a
+page built on a throttled context, so a status that turned loaded right after a build was reported with that build's empty
+rows: on a loaded emulator under CPU load, the saved row was missing from a list that said it was in, and the restore gave up
+and opened at the top (one failure in 64 recorded runs of the old build; logs showed loaded with no tree rows, the rows 266 ms
+later in that single run, not a measure of delay). Stamp loaded on the page from the status it was built from, and make the
+restore keep the saved place for a bounded time after a loaded list without the row, so a late row is still put back. Test the
+old order directly (rows after a loaded line, a status flipping right after the first build) rather than lengthening a wait.
+
+## Cleanup warnings are acknowledged per operation, not consumed on arrival
+
+A hub retry of an extension uninstall creates a new operation id, so it needs the same in-flight pairing phase as the first
+start: cache matching pushes, join them to the response's id, and let an early terminal packet beat the older running
+response. Relisting after reconnect must leave bounded terminal tombstones for every listed uninstall, including success
+and cancellation; otherwise an older running packet revives the operation and a later duplicate success notifies again.
+Historical tombstones never notify.
+
+Warnings that arrive while another operation's sheet is up are not shown, but they are not consumed either. Keep cumulative
+warnings separate from the lines actually acknowledged with OK, and queue a notice per operation. Present the next one only
+after the current OK and while no newer operation is running. Test early success on first start and retry, historical
+success/failure/cancellation followed by old running packets, and two successful operations whose late warnings overlap.
+
+## Shadow comparisons require equivalent contracts (#7448)
+
+A shared field name does not imply shared semantics: Kotlin continuity's per-input `verified` can be true for restored
+cache while Rust's `ChatPatch.verified` stays false until a fresh baseline. Compare common state and request fields;
+cover intentionally different verification semantics with explicit real-JNI tests rather than rebuilding the Rust
+state machine locally. Rejection is driver-level and uncorrelated: signal it without payloads, preserve it across
+multiple synchronous applies in one accept, and check it even when creation or accept also throws. A private shadow
+may stop on that signal without affecting Kotlin or another chat's work.
+
+A strict comparison of a retained draft also flags a difference that is only representation, and neither side is the
+reference until the iOS oracle says so (#9238). Android's answer builder removes a question's Other entry on a single
+choice; iOS's `QuestionForm.pick` and the core keep it as an empty string. Answers, pages and resolutions agree, and iOS
+reads both alike, but Android draws its Other field while the key exists, so the core's draft can't be stored as it is.
+Changing the core to match Android would have moved it away from iOS. The shared `expected` objects carry answers, not
+the draft, so nothing could decide this until `TestResolutionFixturesIOS` began reporting the draft each click leaves.
+
+## An offline computer can still have a readable workspace catalog (#9317)
+
+The workspace catalog is read from the hub, which persists its last successful node inventory. Skipping the hub read
+when a computer is offline loses pinned empty workspaces on a cold app launch. Read the hub and mark those rows
+unavailable using the computer's current state. A complete response replaces the old rows, including an empty list.
+
+An HTTP success may still carry per-machine discovery errors alongside useful cached rows. Preserve that partial
+status through service wrappers: merge returned rows into the prior list by machine/source/source ID, keeping missing
+prior rows until a complete refresh. Translate the identities in partial results just as in successful ones. A malformed
+or missing workspace list is a failure, not evidence that every workspace disappeared.
+
+## The NDK prebuilt host directory follows the OS (#9327)
+
+Choose `darwin-x86_64` on macOS and `linux-x86_64` on Linux for the release `llvm-readelf` check and the Gradle `ndkHost` / `ndkTools` inputs; NDK 29 has no `linux-x86_64` tree on a Mac, so a hard-coded path fails that check after the libraries build.
+
+## Cap a page's bottom bar on the bar, not on the row in it (#9009)
+
+`PageFrame` already limits whatever a page passes as `bottomBar` to `ReadingWidth + 40.dp` (800dp) and centers it, so two
+buttons weighted across it were each about 370dp wide on a tablet or an unfolded screen. A narrower cap for one page goes on
+the bar itself, `JBottomBar(Modifier.widthIn(max = Tokens.Size.readable))`: `JBottomBar` applies the modifier first and its own
+`fillMaxWidth()` after it, so on a wide window the bar is exactly the cap and the frame centers it. A `widthIn` on the row inside
+leaves Glass's capsule, and the hairline strip in Brief and Board, 800dp wide around a narrow row. `ReadingWidth` (760dp) is no cap here, the frame's own is
+almost as wide; `Tokens.Size.readable` (560dp, iOS's) is what a bar of a few buttons gets.
+
+A cap can cut a label the uncapped bar showed whole: in a fixed 560dp the Japanese 「エージェントに任せる」 was ellipsized from 1.3 times
+the text size in Glass, 1.5 in Brief and Board (every label was whole at 370dp). Scale the cap with `LocalDensity.current.fontScale`, as `ToolDetails` does its `box120`.
+
+Test it with a method-level `@Config(qualifiers = "en-w840dp-h700dp-xhdpi")` (the window is what `PageFrame` measures) and the
+buttons' `getUnclippedBoundsInRoot()`, in every style and with a one-button state too (`TodoBottomBarWidthTest`). A label's cut is
+`isLineEllipsized(0)` on its text node's layout under `@GraphicsMode(NATIVE)`: `hasVisualOverflow` was true for every `JButton` label
+(`softWrap = false`), cut or not. Draw each language at each text size (`LocalDensity` with the font scale, not the configuration). To
+draw `main` for a side-by-side, run a shots test that does not name the new token in a worktree of `main`: the same file draws both
+sides, and `android_shots_diff.py` shows a phone's pictures identical and the difference on a wide one only inside the bar.

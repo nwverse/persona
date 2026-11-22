@@ -3,7 +3,6 @@ package assistant
 import (
 	"context"
 	"fmt"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -14,7 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The todos and the machines' session lists (sessions.changed, docs/assistant/todos.md "Attaching whole groups and automatically", "Following spawned agents", "herdr marks and reconciling"):
+// The todos and the machines' session lists (sessions.changed, docs/assistant/todos.md "Whole-project linking and automatic linking", "Following spawned agents", "herdr marks and reconciling"):
 // an online agent in a workspace linked to a todo, or spawned by an agent of one, joins it; the herdr panes of the
 // agents that work for open todos carry the persona_todo marks (the node keeps them, todo.sync_session_tokens); the
 // links keep the agents' titles and start errors for when they are gone from the lists. And what the hub shows of the
@@ -22,8 +21,13 @@ import (
 
 // Node methods the todos call through device.call.
 const (
-	deviceTodoTokens    = "todo.sync_session_tokens" // {tokens: {session_id: {name: value}}} → {}
-	deviceSessionRetire = "session.retire"           // {session_id} → {closed} (tasks_close.go)
+	deviceTodoTokens = "todo.sync_session_tokens" // {tokens: {session_id: {name: value}}} → {}
+	// {session_id, close_terminal: true} → {closed}: the user's "Archive and close" (agent_archive_close.go); without
+	// close_terminal a node since #4754 only stops the agent.
+	deviceSessionRetire = "session.retire"
+	// {session_id, retire?} → {stopped}: the agent quits, its terminal stays (tasks_close.go, tasks_idle.go,
+	// supervise_leader.go; node retire.go). A node before #4754 does not know it: a refusal, nothing closed.
+	deviceSessionStop = "session.stop"
 )
 
 // todosSessionsChanged: machine's node sent its session list.
@@ -116,16 +120,128 @@ func (b *todoBook) linkedNow(key [2]string) bool {
 	return false
 }
 
+// delayedDoneCreationStore is the database's guarded automatic link for an exact done creation-id. Stores without it
+// must not fall back to the manual upsert, which could override a newer manual membership.
+type delayedDoneCreationStore interface {
+	AutoLinkUnlinkedTodoAgentOfDoneTask(ctx context.Context, todoID, machineID, sessionID, title, cwd, agent, startError, source, via string, linkedAt time.Time) (bool, []string, error)
+}
+
+// linkDelayedDoneCreation handles a session whose persisted creation id names a card closed after its start outcome
+// became unknown. It is not a general done-card auto-link: only that exact identity qualifies, prior/dismissed links are
+// left alone, and the session does not fall through to workspace or chat adoption. handled means the done identity was
+// recognized (including an already linked session), so the ordinary open-todo passes must skip it; linked reports a new
+// retained link whose change notifications the outer autoLinkTodos caller publishes with the others.
+func (s *Service) linkDelayedDoneCreation(machine string, c proto.Session, creationID, startError string) (handled, linked bool) {
+	key := [2]string{machine, c.SessionID}
+	s.todos.writing.Lock()
+	s.todos.mu.RLock()
+	target := s.todos.todos[creationID]
+	done := target != nil && target.DoneAt != nil
+	eligible := done && s.todos.activeBySession[key] == ""
+	if eligible {
+		for _, a := range target.Agents {
+			if a.MachineID == machine && a.SessionID == c.SessionID {
+				eligible = false // automatic links are never reactivated, including dismissed ones
+				break
+			}
+		}
+	}
+	s.todos.mu.RUnlock()
+	if !done {
+		s.todos.writing.Unlock()
+		return false, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if !eligible {
+		s.todos.writing.Unlock()
+		s.retractStartUnknown(ctx, creationID)
+		return true, false
+	}
+	linked, err := s.writeDelayedDoneCreation(ctx, creationID, machine, c, startError, time.Now().UTC())
+	s.todos.writing.Unlock()
+	if err != nil {
+		s.logf("todos: delayed creation-id link %s on %s/%s: %v", creationID, machine, c.SessionID, err)
+	}
+	// The exact done identity is confirmed on every handled path, not only after insertion. The provisional unknown
+	// result is stale even when membership was already present, dismissed, or guarded by a newer manual choice (#5732).
+	s.retractStartUnknown(ctx, creationID)
+	return true, linked
+}
+
+// writeDelayedDoneCreation persists an exact done creation-id with the same guards as every other automatic link.
+// todoBook.writing is held. The database commits first; memory mirrors only an actual insert and its released ids, so a
+// newer manual membership that made the guarded insert a no-op is never overridden locally either.
+func (s *Service) writeDelayedDoneCreation(ctx context.Context, todoID, machine string, c proto.Session, startError string, linkedAt time.Time) (bool, error) {
+	st := s.todoDB()
+	if st == nil {
+		if err := s.writeTodoAgentLink(ctx, todoID, machine, c.SessionID, c.Title, c.Cwd, c.Agent, startError, "assistant_start", todoID, true); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	safe, ok := st.(delayedDoneCreationStore)
+	if !ok {
+		return false, fmt.Errorf("store lacks guarded done creation-id auto-link")
+	}
+	inserted, released, err := safe.AutoLinkUnlinkedTodoAgentOfDoneTask(ctx, todoID, machine, c.SessionID, c.Title, c.Cwd, c.Agent, startError, "assistant_start", todoID, linkedAt)
+	if err != nil || !inserted {
+		return false, err
+	}
+	s.todos.mu.Lock()
+	defer s.todos.mu.Unlock()
+	for _, oid := range released {
+		other := s.todos.todos[oid]
+		if other == nil {
+			continue
+		}
+		for i := range other.Agents {
+			a := &other.Agents[i]
+			if a.MachineID == machine && a.SessionID == c.SessionID && a.ReleasedAt == nil {
+				a.ReleasedAt = &linkedAt
+				other.UpdatedAt = linkedAt
+			}
+		}
+	}
+	target := s.todos.todos[todoID]
+	if target != nil {
+		// The guarded insert proved no target row existed. Keep that rule in memory too: no dismissed row is revived.
+		found := false
+		for _, a := range target.Agents {
+			found = found || a.MachineID == machine && a.SessionID == c.SessionID
+		}
+		if !found {
+			target.Agents = append(target.Agents, TodoAgent{MachineID: machine, SessionID: c.SessionID, LinkedAt: linkedAt, Title: c.Title,
+				Cwd: c.Cwd, Agent: c.Agent, StartError: startError, Source: "assistant_start", Via: todoID})
+			target.UpdatedAt = linkedAt
+		}
+	}
+	return true, nil
+}
+
 // autoLinkTodos links the online agents of machine that join a todo on their own: spawned by an agent of an open todo
 // (persona_from, the session's spawn_from), or in a workspace linked to one; never one that works for another todo
-// now, or that was ever on the todo (dismissed included). Memory first, so the report says it at once; the store
-// after, undone when it fails. True when any was linked.
+// now, or that was ever on the todo (dismissed included). Open-todo links are memory first, so the report says them at
+// once, then go to the store and are undone when it fails; the delayed done-creation path above uses the direct durable
+// write shared with the immediate start confirmations. True when any was linked, so the caller publishes every change.
 func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
+	startErrors := s.startErrorsOf(machine, sessions)
+	doneCreations := map[[2]string]bool{}
+	doneLinked := false
+	for _, c := range sessions {
+		if c.Status == proto.StatusOffline {
+			continue
+		}
+		if creationID := c.CreationID(); creationID != "" {
+			handled, linked := s.linkDelayedDoneCreation(machine, c, creationID, startErrors.of(c))
+			doneCreations[[2]string{machine, c.SessionID}] = handled
+			doneLinked = doneLinked || linked
+		}
+	}
+
 	s.todos.writing.Lock()
-	defer s.todos.writing.Unlock()
 	now := time.Now().UTC()
 	var pending []pendingAutoLink
-	startErrors := s.startErrorsOf(machine, sessions)
 
 	s.todos.mu.Lock()
 	link := func(c proto.Session, target *Todo, source, via string) {
@@ -161,15 +277,26 @@ func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
 			continue
 		}
 		key := [2]string{machine, c.SessionID}
+		if doneCreations[key] {
+			continue
+		}
 
-		// 1. Spawned derivation: <todo_id>@<parent machine>/<parent session>
+		// 1. Assistant start: a to-do made before session.start carries the same creation id. This links an
+		// unanswered start without guessing from cwd or adopting a manually opened session (#5732).
+		if creationID := c.CreationID(); creationID != "" && s.todos.activeBySession[key] == "" {
+			if target, ok := s.todos.todos[creationID]; ok && target.DoneAt == nil {
+				link(c, target, "assistant_start", creationID)
+			}
+		}
+
+		// 2. Spawned derivation: <todo_id>@<parent machine>/<parent session>
 		if todoID, parent, ok := strings.Cut(c.SpawnFrom, "@"); ok && s.todos.activeBySession[key] == "" {
 			if target, ok := s.todos.todos[todoID]; ok && target.DoneAt == nil {
 				link(c, target, "spawned", parent)
 			}
 		}
 
-		// 2. Space auto link
+		// 3. Space auto link
 		if s.todos.activeBySession[key] == "" {
 			if spKey := sessionSpaceKey(machine, c); spKey != "" {
 				if targetID, ok := s.todos.spacesByKey[spKey]; ok {
@@ -199,6 +326,7 @@ func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
 		}
 	}
 	s.todos.mu.Unlock()
+	s.todos.writing.Unlock()
 
 	if len(pending) > 0 {
 		if st := s.todoDB(); st != nil {
@@ -235,6 +363,9 @@ func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
 						item.agent, item.startError, item.source, item.via, item.linkedAt)
 					if err == nil && inserted {
 						s.todos.writing.Unlock()
+						if item.source == "assistant_start" {
+							s.retractStartUnknown(ctx, item.todoID)
+						}
 						continue
 					}
 					// The store has it otherwise (an error, a row memory did not know of: one just dismissed, or a link by hand since).
@@ -251,9 +382,17 @@ func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
 					s.todosChanged(ctx)
 				}
 			}()
+		} else {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			for _, item := range pending {
+				if item.source == "assistant_start" {
+					s.retractStartUnknown(ctx, item.todoID)
+				}
+			}
 		}
 	}
-	return len(pending) > 0
+	return doneLinked || len(pending) > 0
 }
 
 // updateTodoAgentSnapshots keeps the title and start error of the agents that work for todos as their sessions now
@@ -345,7 +484,7 @@ func (s *Service) nodeConnected(machine string, at time.Time) {
 // tokenSync is one machine's marks: its latest session list, what its node was last told, one send at a time.
 type tokenSync struct {
 	mu       sync.Mutex
-	sessions []proto.Session
+	sessions []tokenRow // nil: no list from its node since the assistant started
 	dirty    bool
 	sending  bool
 	last     map[string]map[string]string
@@ -375,7 +514,7 @@ func (s *Service) syncTodoTokens(machine string, sessions []proto.Session) {
 	ts := s.tokenSyncOf(machine)
 	ts.mu.Lock()
 	if sessions != nil {
-		ts.sessions = slices.Clone(sessions)
+		ts.sessions = tokenRows(sessions)
 	}
 	ts.dirty = true
 	if ts.sending {
@@ -403,7 +542,7 @@ func (s *Service) syncTodoTokens(machine string, sessions []proto.Session) {
 				if err != nil {
 					continue
 				}
-				list = got
+				list = tokenRows(got)
 			}
 
 			expected := s.expectedTodoTokens(machine, list)
@@ -463,10 +602,26 @@ func (s *Service) syncLinkedTodoTokens() {
 	}
 }
 
+// tokenRow is what of a session its marks are worked out from (expectedTodoTokens): a list of these is kept for each
+// machine while the todos are loaded, not a copy of its whole sessions.
+type tokenRow struct {
+	SessionID, Status, PaneID, SpaceKind string
+}
+
+// tokenRows are list's token rows; non-nil for a non-nil list, even an empty one.
+func tokenRows(list []proto.Session) []tokenRow {
+	out := make([]tokenRow, 0, len(list))
+	for i := range list { // by index: a range value copies every (large) session it passes
+		out = append(out, tokenRow{SessionID: list[i].SessionID, Status: list[i].Status, PaneID: list[i].PaneID,
+			SpaceKind: list[i].SpaceKind})
+	}
+	return out
+}
+
 // expectedTodoTokens are the marks of machine's online herdr panes whose agents work for open todos, by session id
 // (#873).
-func (s *Service) expectedTodoTokens(machine string, list []proto.Session) map[string]map[string]string {
-	byID := make(map[string]proto.Session, len(list))
+func (s *Service) expectedTodoTokens(machine string, list []tokenRow) map[string]map[string]string {
+	byID := make(map[string]tokenRow, len(list))
 	for _, c := range list {
 		byID[c.SessionID] = c
 	}
@@ -550,11 +705,34 @@ func (s *Service) todoReport(ctx context.Context) *TodoReport {
 			r.Links = append(r.Links, TodoLink{MachineID: key[0], SessionID: key[1], TodoID: t.ID, Title: t.Title, Task: t.Origin != ""})
 		}
 	}
+	completed := map[[2]string]*Todo{}
+	for _, t := range s.todos.todos {
+		// CompletedTodo is a "Completed" navigation label, not a closed-row dump: cancellation is a separate outcome (#5732).
+		if t.DoneAt == nil || t.Cancelled() {
+			continue
+		}
+		for _, a := range t.Agents {
+			key := [2]string{a.MachineID, a.SessionID}
+			if a.DismissedAt != nil || s.todos.activeBySession[key] != "" {
+				continue
+			}
+			old := completed[key]
+			if old == nil || t.DoneAt.After(*old.DoneAt) || t.DoneAt.Equal(*old.DoneAt) && t.ID > old.ID {
+				completed[key] = t
+			}
+		}
+	}
+	for key, t := range completed {
+		r.Completed = append(r.Completed, TodoLink{MachineID: key[0], SessionID: key[1], TodoID: t.ID, Title: t.Title})
+	}
 	for key := range s.quietSessionsLocked(now) {
 		r.Quiet = append(r.Quiet, SessionRef{MachineID: key[0], SessionID: key[1]})
 	}
 	sort.Slice(r.Links, func(i, j int) bool {
 		return r.Links[i].MachineID+"/"+r.Links[i].SessionID < r.Links[j].MachineID+"/"+r.Links[j].SessionID
+	})
+	sort.Slice(r.Completed, func(i, j int) bool {
+		return r.Completed[i].MachineID+"/"+r.Completed[i].SessionID < r.Completed[j].MachineID+"/"+r.Completed[j].SessionID
 	})
 	sort.Slice(r.Quiet, func(i, j int) bool {
 		return r.Quiet[i].MachineID+"/"+r.Quiet[i].SessionID < r.Quiet[j].MachineID+"/"+r.Quiet[j].SessionID

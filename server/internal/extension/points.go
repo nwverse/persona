@@ -33,6 +33,13 @@ type Point struct {
 
 var connectorID = lazyre.New(`^[a-z][a-z0-9]*$`)
 
+// schemePattern is a secret_providers scheme (op), reservedSchemes the ones no provider may claim: addresses and the
+// app's own links, which a secret field never holds as a reference.
+var (
+	schemePattern   = lazyre.New(`^[a-z][a-z0-9+.-]{0,15}$`)
+	reservedSchemes = []string{"http", "https", "file", "data", "persona", "about", "javascript"}
+)
+
 // ConnectorItem is a contribution to connectors: the connector protocol's manifest (docs/protocol/connector-protocol.md), known
 // before the program ever runs.
 type ConnectorItem struct {
@@ -73,6 +80,22 @@ type VoiceItem struct {
 	Name string `json:"name,omitempty"`
 }
 
+// TranscriptionItem is a contribution to transcription: transcribing a meeting's audio on the hub for the manager
+// (docs/assistant/meeting-minutes.md "The `transcription` extension point"). Only the manager dials it, over the
+// extension's own socket under /transcription/<id>/ (extwire.TranscriptionProtocol); the apps' forward never reaches it.
+type TranscriptionItem struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
+// SpeechItem is a contribution to speech: reading a text aloud for the apps (docs/extensions/extensions.md "Speech"), over
+// the extension's own socket under /speech/<id>/ with the voice extension's read-aloud contract (a meeting answer the
+// iPhone says aloud).
+type SpeechItem struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
 // ComputerItem is a contribution to computer: operating the user's computers for the assistant (the built-in plugin
 // cua, docs/extensions/computer-use.md).
 type ComputerItem struct {
@@ -81,7 +104,7 @@ type ComputerItem struct {
 }
 
 // ShortcutItem is a contribution to shortcuts: an action of the extension the system runs — Shortcuts and Siri on
-// iPhone, Mac and Apple Watch (docs/extensions/extensions.md "System-level places"). The hub asks shortcut.run with its values.
+// iPhone, Mac and Apple Watch (docs/extensions/extensions.md "System-level placements"). The hub asks shortcut.run with its values.
 type (
 	ShortcutItem  = wire.ShortcutItem
 	ShortcutParam = wire.ShortcutParam
@@ -126,6 +149,16 @@ type QuotaItem struct {
 	Hosts []string `json:"hosts,omitempty"`
 }
 
+// UsageItem is a contribution to usage: a gateway whose accounts' subscription usage the plugin turns into the usage
+// bars' accounts and windows (docs/extensions/extensions.md "Usage").
+type UsageItem struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Hosts are the gateways' host names it reads ("*.example.com" allowed); empty: it may be pointed at any launcher's
+	// gateway and answers unsupported for one that is not its.
+	Hosts []string `json:"hosts,omitempty"`
+}
+
 // AgentSourceItem is a contribution to agent_sources: a source of personal agents' sessions in the Agents tab, next
 // to the hub's own (docs/extensions/extensions.md "Personal Agent sources"). Its id is the source part of the sessions' ids
 // (<id>:<sessionKey>).
@@ -165,7 +198,7 @@ type (
 )
 
 // APIItem is a contribution to api: a part of the app's API the plugin serves on its HTTP side, under /api/v1/<prefix>/
-// (docs/extensions/extensions.md "App API").
+// (docs/extensions/extensions.md "App endpoints").
 type APIItem struct {
 	ID     string `json:"id"`
 	Prefix string `json:"prefix"`
@@ -239,6 +272,25 @@ type GateFile struct {
 	Tool       *proto.GateTool    `json:"tool,omitempty"`
 	// Auth is how the node's proxy puts the credentials on a request (#1317); without it ProxyAuth decides.
 	Auth *GateFileAuth `json:"auth,omitempty"`
+	// SocketEnv names the one of env holding the extension's unix socket on the manager's machine: the gate is
+	// relayed (proto.CommandGate.Relay, #12904), its calls going node → manager → socket, so that it works from an
+	// assistant on another computer too. It needs base_env (the address the script calls when it is given one) and
+	// one secret (the token, put on the request as Auth, or Authorization: Bearer, says).
+	SocketEnv string `json:"socket_env,omitempty"`
+}
+
+// RelayAuth is how the manager puts a relayed gate's credentials on a call to its socket: the declared auth, or
+// Authorization: Bearer ${<the one secret>}. Nil for a gate that is not relayed.
+func (g *GateFile) RelayAuth() *proto.GateAuth {
+	switch {
+	case g.SocketEnv == "":
+		return nil
+	case g.Auth != nil && !g.Auth.Env:
+		return &proto.GateAuth{Header: g.Auth.Header, Value: g.Auth.Value}
+	case len(g.Secret) == 1:
+		return &proto.GateAuth{Header: "Authorization", Value: "Bearer ${" + g.Secret[0] + "}"}
+	}
+	return nil
 }
 
 // GateFileAuth is a gate file's auth: the header and its value (${NAME} for one of env), or env: the script needs its
@@ -297,6 +349,20 @@ func ParseGate(raw []byte) (*GateFile, error) {
 	}
 	if g.BaseEnv != "" && !slices.Contains(g.Env, g.BaseEnv) {
 		return nil, errors.New("gate base_env is not one of env")
+	}
+	if g.SocketEnv != "" {
+		switch {
+		case !slices.Contains(g.Env, g.SocketEnv):
+			return nil, errors.New("gate socket_env is not one of env")
+		case g.BaseEnv == "" || g.SocketEnv == g.BaseEnv:
+			return nil, errors.New("gate socket_env: needs base_env, the address the script calls instead")
+		case slices.Contains(g.Secret, g.SocketEnv):
+			return nil, errors.New("gate socket_env is a secret")
+		case g.Auth != nil && g.Auth.Env:
+			return nil, errors.New("gate socket_env: the credentials go on the call, not into the environment")
+		case g.Auth == nil && (len(g.Secret) != 1 || !slices.Contains(g.Env, g.Secret[0])):
+			return nil, errors.New("gate socket_env: one secret among env, or an auth saying how they go")
+		}
 	}
 	if a := g.Auth; a != nil {
 		switch {
@@ -417,6 +483,24 @@ var Points = map[string]Point{
 			}
 		}
 		return q.ID, nil
+	}},
+	"usage": {Name: "usage", Namespace: "usage", Version: 1, NeedsRPC: true, Item: func(raw json.RawMessage) (string, error) {
+		var u UsageItem
+		if err := strict(raw, &u); err != nil {
+			return "", err
+		}
+		if !idPattern.MatchString(u.ID) {
+			return u.ID, fmt.Errorf("usage id %q: a-z0-9_-", u.ID)
+		}
+		if u.Name == "" {
+			return u.ID, errors.New("usage " + u.ID + ": no name")
+		}
+		for _, h := range u.Hosts {
+			if !hostPattern.MatchString(h) {
+				return u.ID, fmt.Errorf("usage %s: %q is not a host name", u.ID, h)
+			}
+		}
+		return u.ID, nil
 	}},
 	"agent_sources": {Name: "agent_sources", Namespace: "agentsrc", Version: 1, NeedsRPC: true, Item: func(raw json.RawMessage) (string, error) {
 		var a AgentSourceItem
@@ -588,6 +672,12 @@ var Points = map[string]Point{
 		if u.Icon != "" && (u.Placement != "nav_page" || !slices.Contains(UIIcons, u.Icon)) {
 			return u.ID, fmt.Errorf("ui %s: only a nav_page has an icon, one of %s", u.ID, strings.Join(UIIcons, ", "))
 		}
+		if u.IconColor != "" && (u.Placement != "nav_page" || !slices.Contains(wire.Colors, u.IconColor)) {
+			return u.ID, fmt.Errorf("ui %s: only a nav_page has an icon_color, one of %s", u.ID, strings.Join(wire.Colors, ", "))
+		}
+		if g := u.Group; g != nil && (u.Placement != "nav_page" || !uiGroupID.MatchString(g.ID) || g.Title == "" || utf8.RuneCountInString(g.Title) > 40) {
+			return u.ID, fmt.Errorf("ui %s: only a nav_page names a group, its id a-z0-9- (at most 32) and its title 1 to 40 characters", u.ID)
+		}
 		if u.Opens != "" && u.Placement != "overview_card" && u.Placement != "capsule_card" && u.Placement != "widget" {
 			return u.ID, fmt.Errorf("ui %s: only an overview_card, capsule_card or widget opens a page", u.ID)
 		}
@@ -679,6 +769,42 @@ var Points = map[string]Point{
 		}
 		return a.ID, nil
 	}},
+	// secret_providers: values for references of its schemes (op://…), resolved when a setting holding one is used or
+	// the user approves handing one to an Agent run (secrets.describe / secrets.resolve, docs/extensions/secret-providers.md).
+	"secret_providers": {Name: "secret_providers", Namespace: "secrets", Version: 1, NeedsRPC: true, Item: func(raw json.RawMessage) (string, error) {
+		var p SecretProviderItem
+		if err := strict(raw, &p); err != nil {
+			return "", err
+		}
+		if !idPattern.MatchString(p.ID) {
+			return p.ID, fmt.Errorf("secret_providers id %q: a-z0-9_-", p.ID)
+		}
+		if strings.TrimSpace(p.Name) == "" || utf8.RuneCountInString(p.Name) > 80 {
+			return p.ID, fmt.Errorf("secret_providers %s: a name of 1 to 80 characters", p.ID)
+		}
+		if len(p.Schemes) == 0 || len(p.Schemes) > 4 {
+			return p.ID, fmt.Errorf("secret_providers %s: 1 to 4 schemes", p.ID)
+		}
+		for i, s := range p.Schemes {
+			if !schemePattern.MatchString(s) || slices.Contains(reservedSchemes, s) {
+				return p.ID, fmt.Errorf("secret_providers %s: scheme %q: a-z0-9+.- starting with a letter, at most 16, not %s", p.ID, s,
+					strings.Join(reservedSchemes, ", "))
+			}
+			if slices.Contains(p.Schemes[:i], s) {
+				return p.ID, fmt.Errorf("secret_providers %s: scheme %q twice", p.ID, s)
+			}
+		}
+		return p.ID, nil
+	}},
+	// repository_providers: a code-hosting source for the repository catalog and a to-do's repositories and links on the
+	// exact hosts it names (repo.parse / repo.check / repo.link / repo.describe, docs/extensions/repository-providers.md).
+	"repository_providers": {Name: "repository_providers", Namespace: "repo", Version: 1, NeedsRPC: true, Item: func(raw json.RawMessage) (string, error) {
+		var p RepositoryProviderItem
+		if err := strict(raw, &p); err != nil {
+			return "", err
+		}
+		return p.ID, checkRepositoryProvider(p)
+	}},
 	"voice": {Name: "voice", Namespace: "voice", Version: 1, NeedsHTTP: true, Item: func(raw json.RawMessage) (string, error) {
 		var v VoiceItem
 		if err := strict(raw, &v); err != nil {
@@ -686,6 +812,30 @@ var Points = map[string]Point{
 		}
 		if !idPattern.MatchString(v.ID) {
 			return v.ID, fmt.Errorf("voice id %q: a-z0-9_-", v.ID)
+		}
+		return v.ID, nil
+	}},
+	// transcription: a meeting's audio to text, for the manager only (TranscriptionItem); served over the program's
+	// HTTP socket like voice.
+	"transcription": {Name: "transcription", Namespace: "transcription", Version: 1, NeedsHTTP: true, Item: func(raw json.RawMessage) (string, error) {
+		var v TranscriptionItem
+		if err := strict(raw, &v); err != nil {
+			return "", err
+		}
+		if !idPattern.MatchString(v.ID) {
+			return v.ID, fmt.Errorf("transcription id %q: a-z0-9_-", v.ID)
+		}
+		return v.ID, nil
+	}},
+	// speech: a text read aloud for the apps (SpeechItem); served over the program's HTTP socket, reached through the
+	// apps' forward to the extension.
+	"speech": {Name: "speech", Namespace: "speech", Version: 1, NeedsHTTP: true, Item: func(raw json.RawMessage) (string, error) {
+		var v SpeechItem
+		if err := strict(raw, &v); err != nil {
+			return "", err
+		}
+		if !idPattern.MatchString(v.ID) {
+			return v.ID, fmt.Errorf("speech id %q: a-z0-9_-", v.ID)
 		}
 		return v.ID, nil
 	}},
@@ -699,7 +849,7 @@ var Points = map[string]Point{
 		}
 		return c.ID, nil
 	}},
-	// channel: a way to talk to Persona, a chat app's bot (docs/extensions/channels.md "How extensions contribute channels"). The hub follows the
+	// channel: a way to talk to Persona, a chat app's bot (docs/extensions/channels.md "Contributing a channel"). The hub follows the
 	// turns; the program only talks to the chat app.
 	"channel": {Name: "channel", Namespace: "channel", Version: 1, NeedsRPC: true, Item: func(raw json.RawMessage) (string, error) {
 		var c channel.Item
@@ -715,6 +865,18 @@ var Points = map[string]Point{
 			return "", err
 		}
 		return s.ID, checkShortcut(s)
+	}},
+	// iphone: operating the iPhones paired with the user's Macs over RemotePairing (only the built-in iphone,
+	// docs/extensions/iphone.md); the same contribution as computer's: an id and a name.
+	"iphone": {Name: "iphone", Namespace: "iphone", Version: 1, Item: func(raw json.RawMessage) (string, error) {
+		var c ComputerItem
+		if err := strict(raw, &c); err != nil {
+			return "", err
+		}
+		if !idPattern.MatchString(c.ID) {
+			return c.ID, fmt.Errorf("iphone id %q: a-z0-9_-", c.ID)
+		}
+		return c.ID, nil
 	}},
 	"computer": {Name: "computer", Namespace: "computer", Version: 1, Item: func(raw json.RawMessage) (string, error) {
 		var c ComputerItem

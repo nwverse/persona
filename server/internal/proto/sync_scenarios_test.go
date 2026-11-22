@@ -174,6 +174,35 @@ type syncRequest struct {
 	Post     string `json:"post,omitempty"`
 	ID       string `json:"id,omitempty"`
 	NewOp    bool   `json:"new_op,omitempty"`
+	// OneOf: any one of these requests, where the protocol allows several ways (#2770): a send's retry or its op's
+	// receipt, the rest from a replay's cap or the whole gap read on reconnect.
+	OneOf []syncRequest `json:"one_of,omitempty"`
+}
+
+// validRequest: one request as a view's `requests` names it, or (not inside another) a one_of of two or more.
+func validRequest(r syncRequest, nested bool) bool {
+	if r.OneOf != nil {
+		if nested || len(r.OneOf) < 2 || r.Get != "" || r.WS != "" || r.Post != "" || r.ID != "" || r.NewOp || r.AfterSeq != nil || r.SinceSeq != nil {
+			return false
+		}
+		for _, o := range r.OneOf {
+			if !validRequest(o, true) {
+				return false
+			}
+		}
+		return true
+	}
+	switch {
+	case r.Get == "/items":
+		return r.WS == "" && r.Post == "" && r.ID == "" && !r.NewOp && r.SinceSeq == nil
+	case r.Get == "/ops": // an op's receipt, by the write's id in the case
+		return r.WS == "" && r.Post == "" && r.ID != "" && !r.NewOp && r.AfterSeq == nil && r.SinceSeq == nil
+	case r.WS == "subscribe":
+		return r.Get == "" && r.Post == "" && r.ID == "" && !r.NewOp && r.AfterSeq == nil
+	case r.Post == "messages" || r.Post == "resolve" || r.Post == "conversations":
+		return r.Get == "" && r.WS == "" && (r.ID != "") != r.NewOp && r.AfterSeq == nil && r.SinceSeq == nil
+	}
+	return false
 }
 
 // The frames a step may deliver, as the hub writes them (hub/http.go, hub/elicitation.go, hub/sessions_push.go).
@@ -644,12 +673,15 @@ func applyHubChange(t *testing.T, where string, c syncCase, h *syncTruth, ch *sy
 		h.note(h.lines)
 	}
 	if len(ch.Append) > 0 {
-		last := h.toSeq
+		last, lastLine := h.toSeq, ""
 		for _, it := range ch.Append {
-			if it.Seq <= last {
+			// The blocks of one transcript line share its seq (a message with a picture: "#1" image, "#2" text).
+			line, _, _ := strings.Cut(it.ID, "#")
+			sameLine := lastLine != "" && line == lastLine && it.Seq == last
+			if it.Seq <= last && !sameLine {
 				t.Fatalf("%s: appended line %q at seq %d, the hub had read up to %d", where, it.ID, it.Seq, h.toSeq)
 			}
-			last = it.Seq
+			last, lastLine = it.Seq, line
 		}
 		h.lines = append(h.lines, ch.Append...)
 		if last > h.toSeq {
@@ -944,10 +976,7 @@ func checkView(t *testing.T, where string, d *syncDeviceState, v syncView, end b
 		t.Errorf("%s: status %q", where, *v.Status)
 	}
 	for _, r := range v.Requests {
-		ok := (r.Get == "/items" && r.WS == "" && r.Post == "") ||
-			(r.WS == "subscribe" && r.Get == "" && r.Post == "") ||
-			((r.Post == "messages" || r.Post == "resolve" || r.Post == "conversations") && r.Get == "" && r.WS == "" && (r.ID != "") != r.NewOp)
-		if !ok {
+		if !validRequest(r, false) {
 			t.Errorf("%s: request %s", where, jsonString(r))
 		}
 	}
@@ -958,7 +987,8 @@ func checkView(t *testing.T, where string, d *syncDeviceState, v syncView, end b
 
 // truthMessages is what a device shows once everything settled: each turn's user message and its answer (the agent's
 // last words in it), the device's failed sends where they were sent, and its accepted sends the transcript does not
-// have yet at the bottom.
+// have yet at the bottom. A background task's notice that woke the idle agent starts a turn as a message does
+// (Item.Wake): the turn before it keeps its answer (#9140).
 func truthMessages(h *syncTruth, d *syncDeviceState) []syncMessage {
 	type entry struct {
 		at  int
@@ -970,6 +1000,8 @@ func truthMessages(h *syncTruth, d *syncDeviceState) []syncMessage {
 		switch {
 		case it.Role == "user" && it.Kind == "text" && it.Injected == nil && it.From == "":
 			out = append(out, entry{it.Seq, syncMessage{From: "user", Text: it.Text, State: "shown"}})
+			answer = -1
+		case it.Wake:
 			answer = -1
 		case it.Role == "assistant" && it.Kind == "text":
 			if answer >= 0 {
@@ -1026,4 +1058,29 @@ func sameJSON(a, b any) bool {
 func jsonString(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+// A view's requests: one_of takes two or more plain requests (#2770); an op's receipt names the write.
+func TestSyncRequestShapes(t *testing.T) {
+	for _, c := range []struct {
+		raw string
+		ok  bool
+	}{
+		{`{"get":"/items","after_seq":4}`, true},
+		{`{"get":"/ops","id":"m1"}`, true},
+		{`{"get":"/ops"}`, false},
+		{`{"get":"/ops","id":"m1","after_seq":4}`, false},
+		{`{"one_of":[{"post":"messages","id":"m1"},{"get":"/ops","id":"m1"}]}`, true},
+		{`{"one_of":[{"get":"/items","after_seq":12}]}`, false},
+		{`{"one_of":[{"get":"/items"},{"one_of":[{"get":"/items"},{"ws":"subscribe"}]}]}`, false},
+		{`{"one_of":[{"get":"/items"},{"ws":"subscribe"}],"get":"/items"}`, false},
+	} {
+		var r syncRequest
+		if err := json.Unmarshal([]byte(c.raw), &r); err != nil {
+			t.Fatal(err)
+		}
+		if got := validRequest(r, false); got != c.ok {
+			t.Errorf("%s: valid %v, want %v", c.raw, got, c.ok)
+		}
+	}
 }

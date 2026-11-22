@@ -3,7 +3,7 @@ import SwiftUI
 // What "Always allow" opened in an assistant conversation, one revoke per row, in Session Info (#5867,
 // docs/assistant/assistant.md「Always allow in this session」). The web's AlwaysPermissions.
 
-/// The conversation's grants and what it asks the hub (MVVM, docs/apple/ios.md「逻辑层的选型」).
+/// The conversation's grants and what it asks the hub (MVVM, docs/apple/ios.md「Data flow」).
 @Observable final class AlwaysGrantsModel {
     /// Nil until the hub answers.
     private(set) var grants: [APIClient.AlwaysGrant]?
@@ -120,7 +120,7 @@ private struct AlwaysGrantRow: View {
                 .tint(Theme.danger)
                 .disabled(busy)
                 .accessibilityIdentifier("always-grant-revoke")
-                .confirmationDialog("Revoke this permission?", isPresented: $confirming, titleVisibility: .visible) {
+                .accessibleConfirmationDialog("Revoke this permission?", isPresented: $confirming, titleVisibility: .visible) {
                     Button("Revoke", role: .destructive) { Task { await revoke() } }
                 } message: {
                     Text("Revoking stops the current response to clear its permissions. Send another message to continue.")

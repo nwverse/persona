@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -82,19 +83,25 @@ const (
 
 // Capabilities are what a channel can do (docs/extensions/channels.md "Capabilities"). Taking text is a given.
 type Capabilities struct {
-	ImagesIn bool   `json:"images_in,omitempty"`
-	FilesIn  bool   `json:"files_in,omitempty"`
-	VoiceIn  bool   `json:"voice_in,omitempty"`
-	Format   Format `json:"format,omitempty"`
+	ImagesIn bool `json:"images_in,omitempty"`
+	// ImagesOut: it can send pictures; an answer's pictures go in SendParams.Images (at most ImagesMost of ImageMost).
+	ImagesOut bool   `json:"images_out,omitempty"`
+	FilesIn   bool   `json:"files_in,omitempty"`
+	VoiceIn   bool   `json:"voice_in,omitempty"`
+	Format    Format `json:"format,omitempty"`
 	// MaxText is how many characters one message holds (0: no limit): the hub splits an answer to fit.
 	MaxText int  `json:"max_text,omitempty"`
 	Asks    Asks `json:"asks,omitempty"`
 	// Push: it can send to the owner unprompted (pushes, sync, what is asked).
-	Push   bool `json:"push,omitempty"`
-	Typing bool `json:"typing,omitempty"`
+	Push bool `json:"push,omitempty"`
+	// ReplyOnly: it only replies to incoming messages or triggers and never sends unsolicited proactive messages
+	// (without reply_to); testing checks connectivity instead of calling channel.send.
+	ReplyOnly bool `json:"reply_only,omitempty"`
+	Typing    bool `json:"typing,omitempty"`
 	// Progress: it can post a message and change it (a progress card the answer goes into).
 	Progress bool `json:"progress,omitempty"`
-	// Threads: a reply to one of the bot's messages goes to that message's conversation.
+	// Threads: a reply to one of the bot's messages goes to that message's conversation (the Feishu bot); an
+	// extension channel's message carrying Thread goes to that thread's own conversation.
 	Threads bool `json:"threads,omitempty"`
 }
 
@@ -164,7 +171,7 @@ func PluginFeatures(l i18n.Lang, c Capabilities, on map[string]bool) []Feature {
 		add(FeatureAsks)
 		add(FeatureAllAsks)
 	}
-	if c.Push {
+	if c.Push && !c.ReplyOnly {
 		add(FeaturePushes)
 		add(FeatureSync)
 	}
@@ -241,7 +248,7 @@ func ValidID(id string) bool { return idPattern.MatchString(id) && !uuidHead.Mat
 var Reserved = []string{App, Feishu, LarkAgent, "voice", "siri", "watch", "web"}
 
 // ClientMsgID is the client_msg_id a channel's message goes into a conversation with: the source mark the apps read
-// (docs/extensions/channels.md "Source marks"), and the hub's once-only guard for a message the chat app delivers again.
+// (docs/extensions/channels.md "Source markers"), and the hub's once-only guard for a message the chat app delivers again.
 func ClientMsgID(channel, messageID string) string { return channel + "-" + messageID }
 
 // FromClientMsgID is the channel a client_msg_id says its message came from, when it is one of known ("" when not).
@@ -275,12 +282,12 @@ func (it Item) Validate() error {
 	switch {
 	case !ValidID(it.ID):
 		return fmt.Errorf("channel id %q: a-z0-9_, a letter first, at most 32, not 8 hex digits", it.ID)
-	case contains(Reserved, it.ID):
+	case slices.Contains(Reserved, it.ID):
 		return fmt.Errorf("channel id %q is the hub's own", it.ID)
 	case strings.TrimSpace(it.Name) == "" || utf8.RuneCountInString(it.Name) > 40:
 		return fmt.Errorf("channel %s: name, 1 to 40 characters", it.ID)
-	case it.Kind != KindIM:
-		return fmt.Errorf("channel %s: kind is im (a plugin contributes chat app bots)", it.ID)
+	case it.Kind != KindIM && it.Kind != KindMention:
+		return fmt.Errorf("channel %s: kind is im or mention", it.ID)
 	case it.Connector != "" && !idPattern.MatchString(it.Connector):
 		return fmt.Errorf("channel %s: connector %q is not a connector id", it.ID, it.Connector)
 	case it.Bind != "" && it.Bind != BindQR && it.Bind != BindCode && it.Bind != BindFields:
@@ -309,6 +316,9 @@ func (c Capabilities) Validate() error {
 	if c.MaxText > 0 && c.MaxText < 200 {
 		return errors.New("capabilities.max_text below 200: an answer would come in too many pieces")
 	}
+	if c.ReplyOnly && c.Push {
+		return errors.New("capabilities.reply_only cannot be combined with capabilities.push")
+	}
 	return nil
 }
 
@@ -321,15 +331,6 @@ func (c Capabilities) Normalized() Capabilities {
 		c.Asks = AsksNone
 	}
 	return c
-}
-
-func contains(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }
 
 // --- the plugin protocol's channel namespace (docs/extensions/channels.md "Protocol") ---
@@ -353,11 +354,16 @@ const CodeCannotSend = "cannot_send"
 type Message struct {
 	ID          string   `json:"id"`
 	Text        string   `json:"text,omitempty"`
+	Chat        string   `json:"chat,omitempty"`
+	Topic       string   `json:"topic,omitempty"`
+	Context     string   `json:"context,omitempty"`
+	Owner       *bool    `json:"owner,omitempty"`
 	Images      []Blob   `json:"images,omitempty"`
 	Files       []Blob   `json:"files,omitempty"`
 	Quote       string   `json:"quote,omitempty"`
 	Forward     string   `json:"forward,omitempty"`
 	ReplyTo     string   `json:"reply_to,omitempty"`
+	Thread      string   `json:"thread,omitempty"` // the chat app's thread, an opaque key (Capabilities.Threads)
 	Unsupported []string `json:"unsupported,omitempty"`
 }
 
@@ -377,8 +383,8 @@ const (
 
 // Empty says whether m has nothing to send on.
 func (m Message) Empty() bool {
-	return strings.TrimSpace(m.Text) == "" && len(m.Images) == 0 && len(m.Files) == 0 && m.Quote == "" && m.Forward == "" &&
-		len(m.Unsupported) == 0
+	return strings.TrimSpace(m.Text) == "" && strings.TrimSpace(m.Context) == "" && strings.TrimSpace(m.Chat) == "" && strings.TrimSpace(m.Topic) == "" &&
+		len(m.Images) == 0 && len(m.Files) == 0 && m.Quote == "" && m.Forward == "" && len(m.Unsupported) == 0
 }
 
 // Out kinds: what a message the hub sends is.
@@ -407,6 +413,8 @@ type (
 		Text    string `json:"text"`
 		Kind    string `json:"kind"`
 		ReplyTo string `json:"reply_to,omitempty"`
+		// Images are sent after Text, only to a channel with ImagesOut.
+		Images []Blob `json:"images,omitempty"`
 	}
 	SendResult struct {
 		MessageID string `json:"message_id,omitempty"`

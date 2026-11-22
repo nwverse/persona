@@ -30,9 +30,9 @@ func TestModelConfigSpeaksTheRequestLanguage(t *testing.T) {
 		return res
 	}
 	for _, c := range []struct{ lang, name, group, use, child string }{
-		{"", "主对话", "默认模型", "定时任务", "信息处理"},
-		{"en-US", "Main chat", "Default models", "Scheduled tasks", "Processing"},
-		{"ja", "メインチャット", "デフォルトのモデル", "定期タスク", "情報処理"},
+		{"", "对话默认值", "默认模型", "定时任务", "跟「信息筛选」同一个接入"},
+		{"en-US", "Conversation defaults", "Default models", "Scheduled tasks", "Same connection as triage"},
+		{"ja", "会話の既定値", "デフォルトのモデル", "定期タスク", "振り分けと同じ接続"},
 	} {
 		res := get("/api/v1/model-config", c.lang)
 		if res.Status != 200 {
@@ -45,7 +45,7 @@ func TestModelConfigSpeaksTheRequestLanguage(t *testing.T) {
 			t.Fatal(err)
 		}
 		p := out.Purposes[0]
-		if p.ID != "assistant" || p.Name != c.name || p.Group != c.group || len(p.Uses) != 2 || p.Uses[1].Name != c.use {
+		if p.ID != "assistant" || p.Name != c.name || p.Group != c.group || len(p.Uses) != 3 || p.Uses[1].Name != c.use {
 			t.Fatalf("%q: %+v", c.lang, p)
 		}
 		var detail struct {
@@ -54,7 +54,7 @@ func TestModelConfigSpeaksTheRequestLanguage(t *testing.T) {
 		if err := json.Unmarshal(get("/api/v1/model-config/purposes/translate", c.lang).Body, &detail); err != nil {
 			t.Fatal(err)
 		}
-		if detail.Purpose.InheritedFrom != c.child {
+		if !strings.HasPrefix(detail.Purpose.InheritedFrom, c.child) || detail.Purpose.CategoryID != "translate" {
 			t.Fatalf("%q: inherited from %q", c.lang, detail.Purpose.InheritedFrom)
 		}
 	}

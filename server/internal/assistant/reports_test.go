@@ -15,8 +15,15 @@ import (
 // testReportDelay is the tests' reportDelay: short, set on each service (never the shared constant).
 const testReportDelay = 50 * time.Millisecond
 
-// reportService is a task service whose Feishu bot is paired, with reports on (or off), recording the posts.
+// reportService is a task service whose Feishu bot is paired, with reports on (or off) and the execution steps on (the
+// card as it was before #3218), recording the posts.
 func reportService(t *testing.T, on bool) (*Service, *fakeHub, func() []string) {
+	t.Helper()
+	return reportServiceWith(t, FeishuFeatures{Main: true, Cards: true, Reports: on, ReportSteps: true})
+}
+
+// reportServiceWith is reportService with the bot's switches as given.
+func reportServiceWith(t *testing.T, feats FeishuFeatures) (*Service, *fakeHub, func() []string) {
 	t.Helper()
 	s, f := newTaskService(t)
 	s.reports.mu.Lock()
@@ -26,7 +33,7 @@ func reportService(t *testing.T, on bool) (*Service, *fakeHub, func() []string) 
 	var posts []string
 	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_me", PublicURL: "https://hub.example.com",
-			Features: FeishuFeatures{Main: true, Cards: true, Reports: on}}, nil
+			Features: feats}, nil
 	})
 	f.answerApp(AppFeishu, FeishuPost, func(p json.RawMessage) (any, error) {
 		var m struct {
@@ -55,7 +62,7 @@ func TestTaskDoneIsReportedInFeishu(t *testing.T) {
 	waitFor(t, "the report", func() bool { return len(posts()) == 1 })
 	card := posts()[0]
 	for _, want := range []string{"修登录崩溃", "✅开发", "🔵**合入**", "⚪部署", "已合并",
-		"https://hub.example.com/todos?id=" + todo.ID, "https://github.com/o/r/pull/901", "https://hub.example.com/s/box/s1"} {
+		"https://hub.example.com/todos/" + todo.ID, "https://github.com/o/r/pull/901", "https://hub.example.com/s/box/s1"} {
 		if !strings.Contains(card, want) {
 			t.Errorf("card lacks %q:\n%s", want, card)
 		}
@@ -66,6 +73,27 @@ func TestTaskDoneIsReportedInFeishu(t *testing.T) {
 	time.Sleep(4 * testReportDelay)
 	if n := len(posts()); n != 1 {
 		t.Fatalf("%d posts", n)
+	}
+}
+
+// A chart in the Agent's answer (persona-card, #3140) is drawn on the report card as its numbers, never cut down to
+// the title alone: the owner reads this card in Lark (#4093).
+func TestTaskReportDrawsAChartAsNumbers(t *testing.T) {
+	s, f, posts := reportService(t, true)
+	startedTask(t, s, f)
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	agentTurn(s, f, proto.StatusDone, "睡眠这一周\n\n```persona-card\n"+
+		`{"type":"line","title":"Sleep this week","unit":"h","points":[{"label":"Mon","value":7.2},{"label":"Tue","value":6.5}]}`+
+		"\n```\n\n睡得比上周多点。", 0)
+	waitFor(t, "the report", func() bool { return len(posts()) == 1 })
+	card := posts()[0]
+	for _, want := range []string{"Sleep this week", "Mon", "7.2", "Tue", "6.5", "睡得比上周多点"} {
+		if !strings.Contains(card, want) {
+			t.Errorf("the chart is not drawn as numbers: the card lacks %q:\n%s", want, card)
+		}
+	}
+	if strings.Contains(card, "persona-card") || strings.Contains(card, `\"type\"`) {
+		t.Errorf("the chart block is left on the card as it was written:\n%s", card)
 	}
 }
 
@@ -121,8 +149,18 @@ func TestStageOf(t *testing.T) {
 			t.Errorf("stageOf(%q) = %q, want %q", text, got, want)
 		}
 	}
-	if got := stageBar("zh-Hans", ""); strings.Contains(got, "✅") || strings.Contains(got, "🔵") {
+	if got := stageBar("zh-Hans", "", false); strings.Contains(got, "✅") || strings.Contains(got, "🔵") {
 		t.Errorf("no stage: %s", got)
+	}
+	if got := stageBar("zh-Hans", "", true); strings.Contains(got, "✅") || strings.Contains(got, "完成") {
+		t.Errorf("no stage, done: %s", got) // nothing reached: the plain strip, never a Done of nothing
+	}
+	// Done after the steps taken (#11590): no current step, nothing claimed past Develop.
+	if got, want := stageBar("en", "develop", true), "✅Plan → ✅Build → ✅**Done**"; got != want {
+		t.Errorf("done at develop = %s, want %s", got, want)
+	}
+	if got := stageBar("en", "develop", false); !strings.Contains(got, "🔵**Build**") || !strings.Contains(got, "⚪Verified") {
+		t.Errorf("open at develop = %s", got)
 	}
 	_ = context.Background
 }
@@ -180,7 +218,7 @@ func failingPosts(f *fakeHub, alwaysFail bool) (posts func() []string, reportAtt
 		_ = json.Unmarshal(p, &m)
 		mu.Lock()
 		got = append(got, m.Card)
-		isReport := strings.Contains(m.Card, `"content":"📋 `)
+		isReport := strings.Contains(m.Card, `"content":"汇报"}`)
 		if isReport {
 			attempts++
 		}
@@ -275,7 +313,7 @@ func TestTaskReportDroppedWhenBotNotReady(t *testing.T) {
 	}
 	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_me", PublicURL: "https://hub.example.com",
-			Features: FeishuFeatures{Main: true, Cards: true, Reports: true}}, nil
+			Features: FeishuFeatures{Main: true, Cards: true, Reports: true, ReportSteps: true}}, nil
 	})
 	time.Sleep(6 * testReportDelay)
 	if got := posts(); len(got) != 0 {
@@ -359,7 +397,7 @@ func TestTaskReportMergesChangeArrivedDuringPost(t *testing.T) {
 		_ = json.Unmarshal(p, &m)
 		mu.Lock()
 		got = append(got, m.Card)
-		firstReport := strings.Contains(m.Card, `"content":"📋 `)
+		firstReport := strings.Contains(m.Card, `"content":"汇报"}`)
 		if firstReport {
 			attempts++
 		}

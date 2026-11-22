@@ -57,7 +57,7 @@ internal object ExtensionIcons {
     fun of(name: String?): PhIcon = when (name) {
         "chart" -> PhIcons.ChartBar
         "gauge" -> PhIcons.Gauge
-        "list" -> PhIcons.ListChecks
+        "list" -> PhIcons.List
         "bell" -> PhIcons.BellSimple
         "doc" -> PhIcons.FileText
         "calendar" -> PhIcons.CalendarBlank
@@ -98,6 +98,7 @@ internal object ExtensionIcons {
         "pause" -> PhIcons.Pause
         "stop" -> PhIcons.Stop
         "speaker" -> PhIcons.SpeakerHigh
+        "music" -> PhIcons.MusicNote
         "tv" -> PhIcons.Television
         "plug" -> PhIcons.Plug
         "battery" -> PhIcons.BatteryHigh
@@ -137,7 +138,7 @@ internal fun RowAvatar(item: ExtensionViewItem, handle: ExtensionViewHandle) {
     val painter = model?.let { if (it is ExtensionHubPicture && handle.pictures != null) rememberAsyncImagePainter(it, handle.pictures) else if (it is String) rememberAsyncImagePainter(it) else null }
     // The letters stand in until the picture has loaded, and when it never does.
     val loaded = painter?.state?.collectAsState()?.value is coil3.compose.AsyncImagePainter.State.Success
-    JAvatar(ExtensionViewText.initials(item), size = Tokens.Space.xxxl, image = painter?.takeIf { loaded })
+    JAvatar(ExtensionViewText.initials(item), size = Tokens.Space.xxl, image = painter?.takeIf { loaded })
 }
 
 @Composable
@@ -316,7 +317,7 @@ internal fun ExtensionTabs(tabs: persona.core.contracts.api.ExtensionViewTabs, v
                         tab.badge?.takeIf { it.isNotBlank() }?.let { Spacer(Modifier.width(Tokens.Space.xs)); JTag(it) }
                         if (on && state.acting == tabs.action.id) { Spacer(Modifier.width(Tokens.Space.xs)); JSpinner() }
                     }
-                    Box(Modifier.width(Tokens.Space.xxl).height(Tokens.Space.xxs).clip(RoundedCornerShape(Tokens.Space.xxs)).then(if (on) Modifier.background(palette.accent) else Modifier))
+                    Box(Modifier.width(Tokens.Space.xl).height(Tokens.Space.xxs).clip(RoundedCornerShape(Tokens.Space.xxs)).then(if (on) Modifier.background(palette.accent) else Modifier))
                 }
             }
         }
@@ -340,13 +341,17 @@ internal fun SidePane(sections: List<persona.core.contracts.api.ExtensionViewSec
                 trailing = { JIcon(if (open) PhIcons.CaretUp else PhIcons.CaretDown, null, size = Tokens.Space.l, tint = palette.ink3) },
                 onClick = { open = !open })
         }
-        if (open) sections.flatMap { it.items }.filter { handle.nativeItem != null || ExtensionViewText.drawable(it) }.forEach { item ->
-            val itemHandle = handle.forNode?.invoke(item.key.orEmpty()) ?: handle
-            val content: @Composable () -> Unit = {
-                if (item.type == "file_tree") CodeFileTree(item, state, itemHandle, Modifier.padding(top = Tokens.Space.s), onPicked = { open = false })
-                else StandaloneItem(item, state, itemHandle, first = false)
+        if (open) sections.forEach { section ->
+            // UI version 8: a side section's icon and link, which the bar's title leaves out
+            if (ExtensionColumns.head(section)) SectionHead(section, state, section.key?.let { handle.forNode?.invoke(it) } ?: handle)
+            section.items.filter { handle.nativeItem != null || ExtensionViewText.drawable(it) }.forEach { item ->
+                val itemHandle = handle.forNode?.invoke(item.key.orEmpty()) ?: handle
+                val content: @Composable () -> Unit = {
+                    if (item.type == "file_tree") CodeFileTree(item, state, itemHandle, Modifier.padding(top = Tokens.Space.s), onPicked = { open = false })
+                    else StandaloneItem(item, state, itemHandle, first = false)
+                }
+                if (handle.forNode != null) key(item.key) { content() } else content()
             }
-            if (handle.forNode != null) key(item.key) { content() } else content()
         }
     }
 }

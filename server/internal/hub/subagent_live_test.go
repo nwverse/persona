@@ -37,7 +37,7 @@ func TestSubagentSubscriptionIsWatchedAndHearsThePushes(t *testing.T) {
 			})
 			h.devices.absorbed = map[string]string{"alias": "canonical"}
 			c := &client{out: make(chan []byte, 16), subs: map[[2]string]bool{}}
-			h.clients[c] = struct{}{}
+			addTestClient(h, c)
 			sub := func(kind string) {
 				h.onClientMessage(context.Background(), c, []byte(`{"type":"`+kind+`","machine_id":"`+asked+`","session_id":"`+subagentSID+`"}`))
 			}

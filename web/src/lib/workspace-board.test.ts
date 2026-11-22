@@ -1,6 +1,7 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
-import { BoardModel, boundCard, cardSessions, columnCards, directory, sameDirectory, selectedColumn, optimisticBoard, type BoardCard, type BoardState, type Workspace } from "./workspace-board";
+import { BoardModel, boardUnsupported, boundCard, cardSessions, columnCards, directory, sameDirectory, selectedColumn, optimisticBoard, type BoardCard, type BoardState, type Workspace } from "./workspace-board";
 import { href, parse } from "./router";
 import type { Session } from "./types";
 const card = (id: string, patch: Partial<BoardCard> = {}): BoardCard => ({ id, machine_id: "computer", workspace_id: `space-${id}`, title: id, cwd: `/projects/${id}`, source: "directory", column_id: "todo", pinned: false, archived: false, ...patch });
@@ -106,12 +107,63 @@ describe("workspace board HTTP contract", () => {
   it("retains cards when discovery fails and describes unsupported hubs", async () => {
     const model = new BoardModel((async (path: string) => { if (path === "/workspaces") throw new Error("node unsupported"); return initial(); }) as never);
     await model.refresh(); expect(model.snapshot().board?.cards).toHaveLength(4); expect(model.snapshot().discoveryError).toContain("unsupported");
-    const old = new BoardModel((async () => { throw new ApiError(503, "unsupported", {}); }) as never); await old.refresh(); expect(old.snapshot().error).toContain("更新 hub");
+    const old = new BoardModel((async () => { throw new ApiError(503, "unsupported", { code: "not_supported" }); }) as never); await old.refresh(); expect(old.snapshot().error).toContain("更新 hub"); expect(old.snapshot().unsupported).toBe(true);
+    const older = new BoardModel((async () => { throw new ApiError(404, "Not Found", { code: "not_found" }); }) as never); await older.refresh(); expect(older.snapshot().unsupported).toBe(true);
+  });
+  it("tells a manager that is away (503 assistant_offline) from a hub without the board: Retry helps, updating does not", async () => {
+    let away = true;
+    const model = new BoardModel((async (path: string) => { if (path === "/workspaces") return { workspaces: [] }; if (away) throw new ApiError(503, "assistant offline", { code: "assistant_offline" }); return initial(); }) as never);
+    await model.refresh();
+    expect(model.snapshot().unsupported).toBe(false);
+    expect(model.snapshot().error).not.toContain("更新 hub");
+    expect(boardUnsupported(new ApiError(503, "x", {}))).toBe(false); // a proxy's 503, with no code: passes too
+    away = false; await model.refresh();
+    expect(model.snapshot()).toMatchObject({ error: "", unsupported: false });
+    expect(model.snapshot().board?.cards).toHaveLength(4);
   });
   it("does not let an in-flight GET overwrite a completed mutation", async () => {
     const stale = deferred<BoardState>(); let reads = 0;
     const model = new BoardModel((async (path: string, init?: unknown) => { if (path === "/workspaces") return { workspaces: [] }; if (init) return { ...initial(), revision: 4 }; return ++reads === 1 ? initial() : stale.promise; }) as never);
     await model.refresh(); const pending = model.refresh(); await model.mutate({ action: "move_card", id: "a", column_id: "done" }); stale.resolve(initial()); await pending;
     expect(model.snapshot().board?.revision).toBe(4);
+  });
+});
+
+describe("workspace board polling", () => {
+  const discovery = () => ({ workspaces: [{ id: "w", machine_id: "computer", source: "directory", source_id: "w", title: "w", cwd: "/projects/w" }] });
+  /** Every read returns freshly parsed JSON, as the network does. */
+  const polled = (board: () => BoardState) => new BoardModel((async (path: string) => path === "/workspaces" ? discovery() : board()) as never);
+  const counted = (model: BoardModel) => { let n = 0; model.subscribe(() => { n++; }); return () => n; };
+  it("an unchanged poll notifies no one and keeps every object", async () => {
+    const model = polled(initial); await model.refresh();
+    const before = model.snapshot(), notified = counted(model);
+    await model.refresh();
+    expect(notified()).toBe(0);
+    expect(model.snapshot()).toBe(before); expect(model.snapshot().board).toBe(before.board); expect(model.snapshot().discovery).toBe(before.discovery);
+  });
+  it("a card edit on the same revision notifies once and replaces only the board", async () => {
+    let title = "a";
+    const model = polled(() => { const b = initial(); b.cards[0].title = title; return b; }); await model.refresh();
+    const before = model.snapshot(), notified = counted(model);
+    title = "renamed"; await model.refresh();
+    expect(notified()).toBe(1);
+    expect(model.snapshot().board).not.toBe(before.board); expect(model.snapshot().board?.cards[0].title).toBe("renamed");
+    expect(model.snapshot().discovery).toBe(before.discovery);
+  });
+  it("a can_write flip on the same revision updates readonly in one notification", async () => {
+    let canWrite = true;
+    const model = polled(() => ({ ...initial(), can_write: canWrite })); await model.refresh();
+    const notified = counted(model);
+    canWrite = false; await model.refresh();
+    expect(notified()).toBe(1); expect(model.snapshot().readonly).toBe(true); expect(model.snapshot().board?.can_write).toBe(false);
+  });
+  it("a repeated error stays quiet and a recovered read clears it", async () => {
+    let fail = true;
+    const model = polled(() => { if (fail) throw new ApiError(500, "storage failed", {}); return initial(); }); await model.refresh();
+    const error = model.snapshot().error, notified = counted(model);
+    expect(error).not.toBe("");
+    await model.refresh(); expect(notified()).toBe(0); expect(model.snapshot().error).toBe(error);
+    fail = false; await model.refresh();
+    expect(notified()).toBe(1); expect(model.snapshot().error).toBe(""); expect(model.snapshot().board).toEqual(initial());
   });
 });

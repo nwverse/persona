@@ -1,10 +1,10 @@
 // Messages that are not plain bubbles (iOS MergedUserBubble / PeerMessage / LoopTickRow): a finished exchange's several
 // messages in one bubble, a message another Claude session sent, and a /loop waking the agent again.
+import { openTask } from "../../lib/handoff";
 import { useState } from "react";
 import { clock } from "../../lib/format";
 import { splitQuotes } from "../../lib/drafts";
 import { taskOfInjected } from "../../lib/injected";
-import { openPanel } from "../../lib/panel";
 import { getSession, useStore } from "../../lib/store";
 import type { Injected } from "../../lib/types";
 import type { UserMessage } from "../../lib/turns";
@@ -23,7 +23,7 @@ import { t } from "../../i18n";
 export function MergedBubble({ msg, mid, sid }: { msg: UserMessage; mid: string; sid: string }) {
   const parts = msg.parts ?? [msg.text];
   return (
-    <div className="flex flex-col items-end gap-1.5 pl-[12%]">
+    <div className="flex flex-col items-end gap-1.5 pl-[12%]" data-items={msg.id} data-source-fingerprint={msg.rawInput?.[0]?.source_fingerprint}>
       {msg.images.length > 0 && (
         <div className="flex flex-wrap justify-end gap-1.5">
           {msg.images.map((im) => (
@@ -33,7 +33,7 @@ export function MergedBubble({ msg, mid, sid }: { msg: UserMessage; mid: string;
       )}
       {msg.photos && <AttachedPhotos paths={msg.photos} mid={mid} sid={sid} />}
       {msg.files && <FileCards files={msg.files} mid={mid} />}
-      <MessageActions text={parts.join("\n\n")} isUser ts={msg.ts} side className="max-w-full">
+      <MessageActions text={parts.join("\n\n")} isUser ts={msg.ts} side starSource={{ mid, sid, item: msg.id, fingerprint: msg.rawInput?.[0]?.source_fingerprint, userInputs: msg.rawInput, merged: true }} className="max-w-full">
         <div className="flex max-w-full flex-col gap-2 rounded-[14px] bg-user-bubble px-3.5 py-2 text-[length:var(--chat-secondary)] leading-[1.55] text-ink" title={clock(msg.ts)} aria-label={t("chat-messages.message_count", { count: parts.length })}>
           {parts.map((part, i) => (
             <div key={i} className="flex flex-col gap-2">
@@ -116,7 +116,7 @@ function injectedIcon(n: Injected): { name: IconName; tone: string } {
 }
 
 /** A message Persona typed in for the model (a task's notice, a scheduled run…): one centered line, never its words.
- *  A task's opens the task; a scheduled run's shows what the task asks. docs/protocol/protocol.md "Messages Persona injects". */
+ *  A task's opens the task; a scheduled run's shows what the task asks. docs/protocol/protocol.md "Messages injected by Persona". */
 export function InjectedHint({ msg, sid }: { msg: UserMessage; sid: string }) {
   const n = msg.injected!;
   const todos = useStore((s) => s.todos);
@@ -135,7 +135,7 @@ export function InjectedHint({ msg, sid }: { msg: UserMessage; sid: string }) {
   return (
     <div className="flex flex-col items-center gap-2" data-injected={n.kind}>
       {todo ? (
-        <button type="button" className={cx(pill, "hover:bg-hover")} onClick={() => openPanel({ kind: "task", todo })} aria-label={t("chat-messages.open_task", { line: n.line })}>
+        <button type="button" className={cx(pill, "hover:bg-hover")} onClick={() => openTask(todo)} aria-label={t("chat-messages.open_task", { line: n.line })}>
           {body}
         </button>
       ) : n.detail ? (

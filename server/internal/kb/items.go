@@ -1,17 +1,20 @@
 package kb
 
 import (
+	"cmp"
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // ItemSource lists documents, meetings and calendar events (Feishu through the Lark extension).
@@ -121,24 +124,44 @@ type itemTags struct {
 	} `json:"items"`
 }
 
-// TagItems tags documents, meetings and events that are new or changed, 40 per call.
-func (e *Engine) TagItems(ctx context.Context) error {
+// tagItemsBatch is how many items one tagging call reads.
+const tagItemsBatch = 40
+
+// TagItems tags documents, meetings and events that are new or changed, tagItemsBatch per call and at most max calls
+// per run; more reports that untagged ones are left for the next round: the cap was reached, the connection is paused or
+// the run ended (not when no model is set up: the next collection asks again). The items of a batch whose call failed
+// wait (retryWait, per item) and the next batch goes on, so a batch the model keeps failing on costs a call now and then
+// rather than every run, and does not hold back the rest; an item changed since (what the model reads of it) is tried
+// at once. A paused connection or no model returns its error at once without counting.
+func (e *Engine) TagItems(ctx context.Context, max int) (more bool, err error) {
 	if e.Model == nil {
-		return nil
+		return false, nil
 	}
+	now := time.Now()
 	var todo []*Item
+	due := map[string]bool{}
 	for _, k := range []string{KindEvent, KindMeeting, KindDoc} {
 		for _, it := range e.Store.Items(k) {
 			if it.TaggedAt.IsZero() && it.Title != "" && !it.Locked {
+				key := it.Kind + "/" + it.ID
+				due[key] = true
+				if e.retries().items.waits(key, itemAbout(it), now) {
+					continue
+				}
 				todo = append(todo, it)
 			}
 		}
 	}
-	for len(todo) > 0 && ctx.Err() == nil {
-		batch := todo[:min(40, len(todo))]
+	e.retries().items.keep(due) // tagged, locked or gone in the meantime
+	for calls := 0; len(todo) > 0 && ctx.Err() == nil; calls++ {
+		if calls >= max {
+			return true, nil
+		}
+		batch := todo[:min(tagItemsBatch, len(todo))]
 		todo = todo[len(batch):]
 		byID := map[string]*Item{}
-		in := prompts.KBItemsInput{Projects: e.knownProjects(), Tags: e.TopTags(40)}
+		owner := e.knowledgeOwner()
+		in := prompts.KBItemsInput{Language: owner.Language, Projects: e.knownProjects(), Tags: e.TopTags(40)}
 		for _, it := range batch {
 			key := it.Kind + "/" + it.ID
 			byID[key] = it
@@ -154,10 +177,21 @@ func (e *Engine) TagItems(ctx context.Context) error {
 		}
 		var out itemTags
 		cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-		err := e.modelFor("kb.items").JSONMax(cctx, prompts.RenderKBItems(prompts.KBOwner{Owner: e.Owner}), prompts.RenderKBItemsInput(in), 6000, &out)
+		err := e.modelFor("kb.items").JSONMax(cctx, prompts.RenderKBItems(owner), prompts.RenderKBItemsInput(in), 6000, &out)
 		cancel()
 		if err != nil {
-			return err
+			if deferred(ctx, err) {
+				return !ai.IsNotConfigured(err), err
+			}
+			var f projectRetry
+			for _, it := range batch {
+				f = e.retries().items.fail(it.Kind+"/"+it.ID, itemAbout(it))
+			}
+			e.logf("tag items: %v (%d item(s), failed %d time(s) in a row, next try in %s)", err, len(batch), f.failures, retryWait(f.failures))
+			continue
+		}
+		for _, it := range batch {
+			e.retries().items.clear(it.Kind + "/" + it.ID)
 		}
 		e.Store.applyMu.Lock()
 		now := time.Now().UTC()
@@ -191,7 +225,12 @@ func (e *Engine) TagItems(ctx context.Context) error {
 			}
 		}
 	}
-	return nil
+	return len(todo) > 0, nil // the run ended with some not tried
+}
+
+// itemAbout is what the model reads of an item to tag it: an item changed since a failure is tried at once.
+func itemAbout(it *Item) string {
+	return it.Title + "\x00" + it.At.UTC().Format(time.RFC3339) + "\x00" + it.Where + "\x00" + it.Pinned
 }
 
 // --- reading ---
@@ -204,49 +243,20 @@ type (
 
 // Search finds lines containing every word of the query (case-insensitive) in summaries, metadata, timelines, the
 // Markdown of the ExtraDirs and (when messages is set) the message archive; newest message days first. At most limit
-// hits.
-func (e *Engine) Search(query string, messages bool, limit int) []Hit {
-	match := matcher(query)
-	if match == nil || limit <= 0 {
+// hits. A line skip says yes to is passed over (not a hit, and not counted against limit).
+func (e *Engine) Search(query string, messages bool, limit int, skip ...func(line string) bool) []Hit {
+	s := e.newSearcher(query, limit, true)
+	if s == nil {
 		return nil
 	}
-	ws := words(query)
-	// Files come through Find's cache (findCache.text): a file unchanged since an earlier search is one stat, not a
-	// read and a fold, and one without every word is skipped whole. Search stops at limit, so it leaves the pruning
-	// of files no longer there to Find, which sees them all; the cache is bounded either way (findCacheBytes).
-	recording := e.Store.recordingSearchView()
-	gen := e.find.begin()
-	var hits []Hit
-	scan := func(p string) {
-		if len(hits) >= limit {
-			return
-		}
-		t, _, ok := e.searchText(p, gen, recording)
-		if !ok || !hasAll(t.lower, ws) {
-			return
-		}
-		rel, err := filepath.Rel(e.Store.Dir, p)
-		if err != nil || strings.HasPrefix(rel, "..") {
-			rel = p
-		}
-		for _, l := range strings.Split(t.raw, "\n") {
-			if len(hits) >= limit {
-				return
-			}
-			if match(l) {
-				hits = append(hits, Hit{Path: rel, Line: clip(strings.TrimSpace(l), 300)})
-			}
-		}
-	}
+	s.skip = skip
 	// The data dir's files come from Find's walk (searchFiles), kept while no directory changed: profile files, the
 	// ExtraDirs, the message days newest first, then the Moments archive (moments.go), thousands of posts read after
 	// everything else so they never crowd it out.
 	o := e.searchFiles()
-	for _, d := range o.files {
-		scan(d.path)
-	}
+	s.scanAll(o.files)
 	for _, dir := range e.ExtraDirs {
-		if len(hits) >= limit {
+		if s.full() {
 			break
 		}
 		_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
@@ -257,47 +267,197 @@ func (e *Engine) Search(query string, messages bool, limit int) []Hit {
 				return filepath.SkipDir // .git and the like
 			}
 			if !d.IsDir() && strings.HasSuffix(p, ".md") {
-				scan(p)
+				s.scan(p)
 			}
 			return nil
 		})
 	}
 	if messages {
-		for _, d := range o.days {
-			if len(hits) >= limit {
-				break
-			}
-			scan(d.path)
-		}
+		s.scanAll(o.days)
 	}
-	for _, d := range o.moments {
-		if len(hits) >= limit {
-			break
-		}
-		scan(d.path)
-	}
-	return hits
+	s.scanAll(o.moments)
+	return s.hits
 }
 
-// clip cuts s to its first n runes plus an ellipsis; a string of at most n runes comes back as it is, without a copy.
-// Ranging over s steps through the same runes as []rune(s) (one U+FFFD per invalid byte), so the cut lands where it
-// always did: a valid prefix is cut at its byte offset, and one with invalid bytes still has them replaced.
-func clip(s string, n int) string {
-	if len(s) <= n { // n bytes are at most n runes
-		return s
+// SearchKind is Search within one kind of entry (projects, chats, people, docs, meetings, events, recordings): the
+// files under that kind's directory, by entry, those whose name has every word of the query first, then as List ranks
+// them (the walk alone goes by id, and a recording's id is random, so "last week's" one could come after older ones);
+// with messages, the chats' message days after them, newest first. Never the ExtraDirs or the Moments posts. Nil for
+// any other kind. skip as for Search.
+func (e *Engine) SearchKind(query, kind string, messages bool, limit int, skip ...func(line string) bool) []Hit {
+	switch kind {
+	case KindProject, KindChat, KindPerson, KindDoc, KindMeeting, KindEvent, KindRecording, KindTopic:
+	default:
+		return nil
 	}
-	runes := 0
-	for i := range s {
-		if runes == n { // rune n+1 starts at i
-			if utf8.ValidString(s[:i]) {
-				return s[:i] + "…"
-			}
-			return string([]rune(s[:i])) + "…"
+	s := e.newSearcher(query, limit, kind == KindRecording)
+	if s == nil {
+		return nil
+	}
+	s.skip = skip
+	list := e.List(kind, "")
+	if kind == KindRecording { // kb_list's order for recordings, newest first (List ranks them by the model's importance)
+		start := map[string]time.Time{}
+		for _, r := range e.Store.Recordings() {
+			start[SafeID(r.ID)] = r.StartedAt
 		}
-		runes++
+		sort.SliceStable(list, func(i, j int) bool { return start[SafeID(list[i].ID)].After(start[SafeID(list[j].ID)]) })
 	}
+	rank := make(map[string]int, len(list))
+	for i, en := range list {
+		r := i
+		if !s.match(en.Name) {
+			r += len(list)
+		}
+		rank[SafeID(en.ID)] = r
+	}
+	o := e.searchFiles()
+	type ranked struct {
+		d    *dirEnt
+		rank int
+	}
+	var files []ranked
+	for _, d := range o.files {
+		if !strings.HasPrefix(d.rel, kind+"/") {
+			continue
+		}
+		r := 2 * len(list) // a file of no listed entry (a doc without a title yet): last
+		if _, id, ok := entryOf(d.rel); ok {
+			if i, ok := rank[id]; ok {
+				r = i
+			}
+		}
+		files = append(files, ranked{d, r})
+	}
+	sort.SliceStable(files, func(i, j int) bool { return files[i].rank < files[j].rank })
+	inOrder := make([]*dirEnt, len(files))
+	for i, f := range files {
+		inOrder[i] = f.d
+	}
+	s.scanAll(inOrder)
+	if messages && kind == KindChat {
+		// Every day is a chat's: o.days are the files under a messages/ directory, which only chats have.
+		s.scanAll(o.days, func(d *dirEnt) bool { return strings.HasPrefix(d.rel, kind+"/") })
+	}
+	return s.hits
+}
+
+// searcher gathers the hits of Search and SearchKind: the lines with every word of the query, at most limit.
+type searcher struct {
+	e         *Engine
+	match     func(string) bool
+	ws        []string
+	gen       uint64
+	recording map[string]map[string][]byte
+	limit     int
+	hits      []Hit
+	skip      []func(line string) bool // lines never to give (Search's skip)
+	// filter is the search index asked this query (search_index.go); nil without one, and every file is read.
+	filter *searchFilter
+}
+
+// newSearcher starts a search; nil when there is nothing to find. Files come through Find's cache (findCache.text): a
+// file unchanged since an earlier search is one stat, not a read and a fold, and one without every word is skipped
+// whole. A search stops at limit, so it leaves the pruning of files no longer there to Find, which sees them all; the
+// cache is bounded either way (findCacheBytes). recordings: the search may read recordings' files, whose accepted
+// text is read once for it (recordingSearchView).
+func (e *Engine) newSearcher(query string, limit int, recordings bool) *searcher {
+	match := matcher(query)
+	if match == nil || limit <= 0 {
+		return nil
+	}
+	s := &searcher{e: e, match: match, ws: words(query), limit: limit}
+	if recordings {
+		s.recording = e.Store.recordingSearchView()
+	}
+	s.filter = e.searchFilter(s.ws)
+	s.gen = e.find.begin()
 	return s
 }
+
+// scanAll scans the files of the data dir in l, in order, until the limit; only those keep says yes to, when it is
+// given. With a search index the files it rules out are passed over without being read: a stretch of files at a
+// time is looked at (a stat each, in parallel), a short one first and longer ones as the search goes on without
+// filling the limit, then the files left of it are scanned in order. A query no file has costs the stats alone.
+func (s *searcher) scanAll(l []*dirEnt, keep ...func(*dirEnt) bool) {
+	want := func(d *dirEnt) bool { return len(keep) == 0 || keep[0](d) }
+	if s.filter == nil {
+		for _, d := range l {
+			if s.full() {
+				return
+			}
+			if want(d) {
+				s.scan(d.path)
+			}
+		}
+		return
+	}
+	workers := max(1, min(8, runtime.NumCPU()))
+	var out []bool
+	for n := 64; len(l) > 0 && !s.full(); n = min(2*n, 8192) {
+		part := l[:min(n, len(l))]
+		l = l[len(part):]
+		out = append(out[:0], make([]bool, len(part))...)
+		each(len(part), workers, func(i int) {
+			d := part[i]
+			if !want(d) {
+				out[i] = true
+				return
+			}
+			if recordingViewFile(d.rel) {
+				return // not read from disk (searchText): the index does not have it
+			}
+			// A file that is gone is left to scan, which finds it so.
+			st := statFile(d.path)
+			out[i] = st.ok && s.filter.skip(d.rel, st)
+		})
+		for i, d := range part {
+			if s.full() {
+				return
+			}
+			if !out[i] {
+				s.scan(d.path)
+			}
+		}
+	}
+}
+
+func (s *searcher) full() bool { return len(s.hits) >= s.limit }
+
+// scan adds the lines of file p that match, until the limit.
+func (s *searcher) scan(p string) {
+	if s.full() {
+		return
+	}
+	t, _, ok := s.e.searchText(p, s.gen, s.recording)
+	if !ok || !hasAll(t.lower, s.ws) {
+		return
+	}
+	rel, err := filepath.Rel(s.e.Store.Dir, p)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		rel = p
+	}
+	for _, l := range strings.Split(t.raw, "\n") {
+		if s.full() {
+			return
+		}
+		if s.match(l) && !s.skipped(l) {
+			s.hits = append(s.hits, Hit{Path: rel, Line: clip(strings.TrimSpace(l), 300)})
+		}
+	}
+}
+
+func (s *searcher) skipped(l string) bool {
+	for _, f := range s.skip {
+		if f(l) {
+			return true
+		}
+	}
+	return false
+}
+
+// clip cuts s to its first n runes plus an ellipsis (textfmt.Clip).
+var clip = textfmt.Clip
 
 // Rank orders by importance, then relevance, then recency.
 func Rank(list []Entry) {
@@ -335,10 +495,10 @@ func (e *Engine) List(kind, tag string) []Entry {
 	}
 	switch kind {
 	case KindProject:
+		catalog := e.projectSourceLookup()
 		for _, p := range e.Store.Projects() {
 			if has(p.Tags) && p.Live() {
-				out = append(out, Entry{Kind: kind, ID: p.Slug, Name: p.Name, OneLine: p.OneLine, Importance: p.Importance,
-					Relevance: p.Relevance, Tags: p.Tags, Updated: p.Updated, Extra: p.Kind + " · " + p.Status})
+				out = append(out, e.projectEntry(p, catalog))
 			}
 		}
 	case KindChat:
@@ -350,7 +510,7 @@ func (e *Engine) List(kind, tag string) []Entry {
 		}
 	case KindPerson:
 		for _, p := range e.Store.People() {
-			if has(p.Tags) {
+			if p.Status != "ignored" && has(p.Tags) {
 				out = append(out, Entry{Kind: kind, ID: p.ID, Name: p.Name, OneLine: p.Note, Importance: p.Importance,
 					Relevance: p.Relevance, Tags: p.Tags, Updated: p.LastSeen})
 			}
@@ -358,8 +518,7 @@ func (e *Engine) List(kind, tag string) []Entry {
 	case KindDoc, KindMeeting, KindEvent:
 		for _, it := range e.Store.Items(kind) {
 			if has(it.Tags) && it.Title != "" {
-				out = append(out, Entry{Kind: kind, ID: it.ID, Name: it.Title, OneLine: it.Note, Importance: it.Importance,
-					Relevance: it.Relevance, Tags: it.Tags, Updated: it.At, Extra: it.URL})
+				out = append(out, itemEntry(kind, it))
 			}
 		}
 	case KindRecording:
@@ -368,28 +527,61 @@ func (e *Engine) List(kind, tag string) []Entry {
 				out = append(out, recordingEntry(r))
 			}
 		}
+	case KindTopic:
+		return e.listTopics(has) // the biggest first: topics carry no importance of their own
 	}
 	Rank(out)
 	return out
 }
 
-// recordingEntry is a recording as lists show it: Extra is the device it was made on.
+// itemEntry is a document, meeting or event of kind as lists and links show it: Extra is its link, Source the connector
+// that supplied it (#8872).
+func itemEntry(kind string, it *Item) Entry {
+	return Entry{Kind: kind, ID: it.ID, Name: it.Title, OneLine: it.Note, Importance: it.Importance,
+		Relevance: it.Relevance, Tags: it.Tags, Updated: it.At, Extra: it.URL, Source: it.Source}
+}
+
+// recordingEntry is a recording as lists show it: Extra is the device it was made on, RecordingKind its kind (a
+// recording stored before kinds is a note, as an upload without one is), MeetingID its imported meeting's id (#8872).
 func recordingEntry(r *Recording) Entry {
-	return Entry{Kind: KindRecording, ID: r.ID, Name: r.Name, OneLine: r.OneLine, Importance: r.Importance,
-		Relevance: r.Relevance, Tags: r.Tags, Updated: r.StartedAt, Extra: r.Device}
+	e := Entry{Kind: KindRecording, ID: r.ID, Name: r.Name, OneLine: r.OneLine, Importance: r.Importance,
+		Relevance: r.Relevance, Tags: r.Tags, Updated: r.StartedAt, Extra: r.Device, RecordingKind: cmp.Or(r.Kind, RecordingNote)}
+	if r.ImportedMeeting != nil {
+		e.MeetingID = r.ImportedMeeting.ID
+	}
+	return e
 }
 
 // Prompt is a short Markdown digest of the most important projects and chats, for the assistant's live snapshot.
 func (e *Engine) Prompt(projects, chats int) string {
-	var d prompts.KBDigest
+	d := prompts.KBDigest{Language: e.knowledgeOwner().Language}
+	// What has ended stays out (#9427): a done project, one whose chats have all ended at their source though it is not
+	// finished yet, and a chat that ended there (a pull request merged or closed).
 	for _, p := range e.List(KindProject, "") {
-		if len(d.Projects) >= projects || strings.HasSuffix(p.Extra, "done") || strings.HasSuffix(p.Extra, "ignored") {
+		if len(d.Projects) >= projects {
+			break
+		}
+		if strings.HasSuffix(p.Extra, "done") || strings.HasSuffix(p.Extra, "ignored") {
 			continue
+		}
+		if pr, ok := e.Store.Project(p.ID); ok {
+			if ended, _ := e.projectEnded(pr); ended {
+				continue
+			}
+		}
+		if p.ProjectMode == referenceOnly || p.Freshness != nil && p.Freshness.Fields["one_line"].NeedsReview {
+			p.OneLine = ""
 		}
 		d.Projects = append(d.Projects, digestEntry(p))
 	}
 	for _, c := range e.List(KindChat, "") {
-		if len(d.Chats) >= chats || c.Importance == "P3" {
+		if len(d.Chats) >= chats {
+			break
+		}
+		if c.Importance == "P3" {
+			continue
+		}
+		if ch, ok := e.Store.Chat(c.ID); ok && ch.Ended() {
 			continue
 		}
 		d.Chats = append(d.Chats, digestEntry(c))

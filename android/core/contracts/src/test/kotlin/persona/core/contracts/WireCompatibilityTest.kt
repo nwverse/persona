@@ -62,12 +62,19 @@ class WireCompatibilityTest {
         assertEquals("示例任务", (notify.subtitle).zhAny())
         assertEquals("待确认", (notify.body).zhAny())
         assertEquals("ix_example", (notify.interactionId).zhAny())
+        assertFalse(notify.quiet)
         assertEquals(notify, ServerEvent.decode(JsonCodec.encodeToString<ServerEvent>(notify)))
-        for (kind in listOf("done", "assistant")) {
+        // Inside the device's quiet hours (#1863) the hub marks a card `quiet`.
+        val hushed = ServerEvent.decode("""{"type":"notify","kind":"interaction","machine_id":"m1","session_id":"s1","interaction_id":"ix_example","quiet":true}""") as NotifyEvent
+        assertTrue(hushed.quiet)
+        assertEquals(hushed, ServerEvent.decode(JsonCodec.encodeToString<ServerEvent>(hushed)))
+        // Every kind the hub's notifyWSFrom sends besides interaction and alert ("reply": Awaiting reply, #4035).
+        for (kind in listOf("done", "assistant", "reply")) {
             val event = ServerEvent.decode("""{"type":"notify","kind":"$kind","machine_id":"m1","session_id":"s1","body":"示例"}""") as NotifyEvent
             assertEquals(kind, event.kind)
             assertNull(event.interactionId)
         }
+        assertEquals("unknown", (ServerEvent.decode("""{"type":"notify","kind":"future","machine_id":"m1","session_id":"s1"}""") as NotifyEvent).kind)
 
         val session = JsonCodec.decodeFromString<Session>("""{"session_id":"s1","title":"保留","status":"working","background":[{"id":false}],"loop":{"ticks":"bad","prompt":"保留"},"updated_at":"1999-12-31T23:59:59Z","rev":42}""")
         // An optional nested field is dropped at its own boundary, without deleting its valid siblings.

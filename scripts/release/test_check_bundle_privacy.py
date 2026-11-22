@@ -1,14 +1,21 @@
 from contextlib import redirect_stdout
+import datetime
+import gzip
 import hashlib
 import io
 import ipaddress
+import os
 from pathlib import Path
+import plistlib
+import shutil
 import struct
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
+import zipfile
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -102,6 +109,22 @@ class BinaryNoiseEmailTests(unittest.TestCase):
                 self.assertIn("email", cbp.text_kinds(local + "@" + domain, ()))
 
 
+class RustBridgeConstantTests(unittest.TestCase):
+    """persona-iphone-bridge's upstream credits are public in their exact context, and only there."""
+
+    def test_aws_lc_credits_are_classified(self):
+        for text in ("SHA256 block transform for ARMv8, CRYPTOGAMS by <" + "appro@" + "openssl.org>",
+                     "AES GCM module for ARMv8, SPDX BSD-3-Clause by <" + "xiaokang.qian@" + "arm.com>"):
+            with self.subTest(text=text):
+                self.assertEqual(cbp.text_kinds(text, ()), set())
+
+    def test_the_same_addresses_elsewhere_still_count(self):
+        for text in ("mail " + "appro@" + "openssl.org", "<" + "xiaokang.qian@" + "arm.com>",
+                     "by <" + "person@" + "openssl.org>", "by <" + "appro@" + "openssl.org.cn>"):
+            with self.subTest(text=text):
+                self.assertIn("email", cbp.text_kinds(text, ()))
+
+
 class PublicConstantTests(unittest.TestCase):
     def kinds(self, text, words=(), dependencies=DEPENDENCIES):
         return cbp.text_kinds(text, words, whole_short=True, dependencies=dependencies)
@@ -159,7 +182,22 @@ class PublicConstantTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertIn("email", self.kinds(text))
 
-    def test_full_rfc1918_networks_are_not_host_addresses(self):
+    def test_adjacent_public_mail_field_is_not_an_email(self):
+        field = "title_mail@" + "gmail.com"
+        self.assertEqual(self.kinds("constant" + field + "nextConstant"), set())
+        self.assertIn("email", self.kinds(field + ".cn"))
+        self.assertIn(f"private value ({len(field)} chars)", self.kinds(field, words=(field,)))
+
+    def test_gitlab_ssh_identity_is_not_an_email_or_a_domain_exemption(self):
+        identity = "git@" + "gitlab.com"
+        self.assertEqual(self.kinds(identity + "/-/issues/not_member"), set())
+        self.assertEqual(self.kinds("prefix" + identity + "suffix"), set())
+        for text in ("person@" + "gitlab.com", identity + ".cn", "git+owner@" + "gitlab.com",
+                     "prefix-" + identity, identity + "-user"):
+            with self.subTest(text=text):
+                self.assertIn("email", self.kinds(text))
+        self.assertIn(f"private value ({len(identity)} chars)", self.kinds(identity, words=(identity,)))
+
         for network in NETWORKS:
             with self.subTest(network=str(network)):
                 self.assertEqual(self.kinds("constant" + str(network) + "nextConstant"), set())
@@ -208,6 +246,39 @@ class PublicConstantTests(unittest.TestCase):
         self.assertEqual(self.kinds(text, words=("secret-placeholder",)),
                          {"email", "private IP", "private value (18 chars)"})
 
+    def test_adjacent_go_constants_are_not_a_banned_name_or_email(self):
+        join = "applink.feishu.cn/client/chat/" + "open" + "Lark" + " via lark-cli"
+        self.assertEqual(self.kinds("edit_titlerecipe.other_tool" + join + "devices.reconnect"), set())
+        # The wrong dependency set, other joins and look-alikes still count, and the kind is named truthfully.
+        banned = self.kinds("x" + join + "y", dependencies=())
+        self.assertEqual(len(banned), 1)
+        self.assertTrue(next(iter(banned)).startswith("banned name"))
+        for text in (join.replace("feishu.cn", "example.cn"), join.replace(" via lark-cli", ""),
+                     "chat/open" + "Lark via other", join + " open" + "Lark"):
+            with self.subTest(text=text):
+                self.assertTrue(self.kinds(text))
+        # Gmail's source-domain constants next to a field name are not addresses; other domains still are.
+        gmail = "title_mail@" + "gmail.com" + "extension. updated" + "@googlemail.com" + "no extension"
+        self.assertEqual(self.kinds(gmail), set())
+        self.assertIn("email", self.kinds("title_mail@" + "company.com"))
+
+    def test_wireguard_identifier_needs_its_dependency_and_exact_text(self):
+        identifier = "WireGuard v1 zx2c4 Jason@" + "zx2c4.com"
+        text = "byte string" + identifier + "Received message with unknown type"
+        for dependency in ("github.com/tailscale/wireguard-go", "golang.zx2c4.com/wireguard"):
+            self.assertEqual(self.kinds(text, dependencies={dependency}), set())
+        spaced = "byte string " + identifier + " Received"
+        self.assertEqual(self.kinds(spaced, dependencies={"golang.zx2c4.com/wireguard"}), set())
+        for dependencies in (frozenset(), DEPENDENCIES):
+            self.assertIn("email", self.kinds(spaced, dependencies=dependencies))
+        wireguard = {"github.com/tailscale/wireguard-go"}
+        for other in ("Jason@" + "zx2c4.com", "WireGuard v1 zx2c4 Other@" + "zx2c4.com", identifier + ".cn",
+                      "x" + identifier, identifier.replace("zx2c4.com", "zx2c4.io")):
+            with self.subTest(text=other):
+                self.assertIn("email", self.kinds(other, dependencies=wireguard))
+        self.assertIn("private value (%d chars)" % len(identifier),
+                      self.kinds(text, words=(identifier,), dependencies=wireguard))
+
     def test_short_word_matching_remains_unchanged(self):
         self.assertEqual(self.kinds("foobar", words=("foo",)), set())
         self.assertEqual(self.kinds("FOO foo", words=("foo",)), {"private value (3 chars)"})
@@ -218,11 +289,13 @@ class PinnedPublicJSTests(unittest.TestCase):
     filename = "mermaid.min.js"
     fixture = b'const label = "remarkable";\n'
 
-    def scan(self, data, words=("mark",), filename=None, pin=None, extra=None):
+    def scan(self, data, words=("mark",), filename=None, pin=None, extra=None, hermes=None):
         with tempfile.TemporaryDirectory(prefix="bundle-privacy-js-") as directory:
             (Path(directory) / (filename or self.filename)).write_bytes(data)
             if extra is not None:
                 (Path(directory) / "private.js").write_bytes(extra)
+            if hermes is not None:
+                (Path(directory) / "Persona").write_bytes(hermes)
             output = io.StringIO()
             pins = {self.filename: pin or hashlib.sha256(self.fixture).hexdigest()}
             with patch.object(sys, "argv", ["check_bundle_privacy.py", directory]), \
@@ -287,6 +360,24 @@ class PinnedPublicJSTests(unittest.TestCase):
         self.assertNotIn(EMAIL, output)
         self.assertNotIn(address, output)
 
+    def test_hermes_tokens_share_the_pinned_resource_boundary(self):
+        # A longer JavaScript token contains the short fragment, but a complete short word still fails.
+        code, output = self.scan(self.fixture, hermes=b'["remarkable", (e) => { call(e); }]')
+        self.assertEqual(code, 0, output)
+        code, output = self.scan(self.fixture, hermes=b'["mark", "remarkable"]')
+        self.assertNotEqual(code, 0)
+        self.assertIn("Persona: private value (4 chars)", output)
+
+    def test_hermes_boundary_requires_the_unmodified_resource(self):
+        for data in (self.fixture + b" ", self.fixture[:-1], b"unrelated"):
+            with self.subTest(bytes=len(data)):
+                code, output = self.scan(data, hermes=b'["remarkable"]')
+                self.assertNotEqual(code, 0)
+                self.assertIn("Persona: private value (4 chars)", output)
+        code, output = self.scan(self.fixture, pin="0" * 64, hermes=b'["remarkable"]')
+        self.assertNotEqual(code, 0)
+        self.assertIn("Persona: private value (4 chars)", output)
+
     def test_other_files_remain_strict_even_next_to_a_pinned_resource(self):
         code, output = self.scan(self.fixture, extra=self.fixture)
         self.assertNotEqual(code, 0)
@@ -328,18 +419,38 @@ class GoDependenciesTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.sums = Path(self.temp.name) / "go.sum"
         self.sums.write_text("golang.org/x/crypto v1.0.0 h1:placeholder\n")
-        self.build_info = "\tdep\tgolang.org/x/crypto\tv1.0.0\th1:placeholder\n\tbuild\t-tags=public\n"
+        self.tags = Path(self.temp.name) / "build-tags.txt"
+        self.tags.write_text("public,ts_omit_aws,ts_omit_ssh\n")
+        self.build_info = ("\tdep\tgolang.org/x/crypto\tv1.0.0\th1:placeholder\n"
+                           "\tbuild\t-tags=public,ts_omit_aws,ts_omit_ssh\n")
 
     def dependencies(self, text, returncode=0):
         result = subprocess.CompletedProcess([], returncode, stdout=text)
         with patch.object(cbp.subprocess, "run", return_value=result):
-            return cbp.go_dependencies("binary", str(self.sums))
+            return cbp.go_dependencies("binary", str(self.sums), str(self.tags))
 
     def test_checksum_and_public_build_are_required(self):
         self.assertEqual(self.dependencies(self.build_info), {"golang.org/x/crypto"})
         self.assertEqual(self.dependencies(self.build_info.replace("h1:placeholder", "h1:other")), set())
         self.assertEqual(self.dependencies(self.build_info.replace("v1.0.0", "v2.0.0")), set())
-        self.assertEqual(self.dependencies(self.build_info.replace("-tags=public", "-tags=debug")), set())
+
+    def test_only_the_exact_published_tags_mark_a_public_build(self):
+        for tags in ("public", "debug", "public,ts_omit_aws", "public,ts_omit_aws,ts_omit_ssh,debug",
+                     "public,ts_omit_aws,ts_omit_ssh,ts_omit_ssh", "ts_omit_aws,ts_omit_ssh"):
+            with self.subTest(tags=tags):
+                info = self.build_info.replace("-tags=public,ts_omit_aws,ts_omit_ssh", "-tags=" + tags)
+                self.assertEqual(self.dependencies(info), set())
+        # The file itself may hold only the marker and ts_omit_ feature tags.
+        for line in ("public,ts_omit_aws,ts_omit_ssh,debug", "ts_omit_aws,ts_omit_ssh", "public,public"):
+            with self.subTest(file=line):
+                self.tags.write_text(line + "\n")
+                self.assertEqual(self.dependencies(self.build_info.replace(
+                    "-tags=public,ts_omit_aws,ts_omit_ssh", "-tags=" + line)), set())
+        self.tags.unlink()
+        self.assertEqual(self.dependencies(self.build_info), set())
+
+    def test_the_checked_in_tags_file_is_a_public_tag_set(self):
+        self.assertIsNotNone(cbp.public_build_tags())
 
     def test_module_replacements_are_not_trusted(self):
         replaced = self.build_info.replace("\n\tbuild", "\n\t=>\t./local-module\t(devel)\n\tbuild")
@@ -356,15 +467,36 @@ class GoDependenciesTests(unittest.TestCase):
         for error in (FileNotFoundError(), subprocess.TimeoutExpired("go", 10)):
             with self.subTest(error=type(error).__name__):
                 with patch.object(cbp.subprocess, "run", side_effect=error):
-                    self.assertEqual(cbp.go_dependencies("binary", str(self.sums)), set())
+                    self.assertEqual(cbp.go_dependencies("binary", str(self.sums), str(self.tags)), set())
         self.sums.unlink()
-        self.assertEqual(cbp.go_dependencies("binary", str(self.sums)), set())
+        self.assertEqual(cbp.go_dependencies("binary", str(self.sums), str(self.tags)), set())
 
 
-class BundleScanIntegrationTests(unittest.TestCase):
+    def test_archive_members_preserve_public_go_context_and_reject_unsafe_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            exe = root / "personad"
+            exe.write_bytes(b"public binary")
+            with patch.object(cbp, "go_dependencies", return_value={"tailscale.com"}):
+                with tarfile.open(root / "release.tar.gz", "w:gz") as archive:
+                    archive.add(exe, arcname="Persona-0.6.0-linux-amd64/personad")
+                members = list(cbp.archive_members(str(root / "release.tar.gz")))
+                self.assertEqual(members, [("Persona-0.6.0-linux-amd64/personad", b"public binary")])
+                with zipfile.ZipFile(root / "release.zip", "w") as archive:
+                    archive.write(exe, "Persona-0.6.0-windows-amd64/personad.exe")
+                    archive.writestr("Persona-0.6.0-windows-amd64/persona-link-windows-amd64.exe", b"link")
+                self.assertEqual(len(list(cbp.archive_members(str(root / "release.zip")))), 2)
+                with tarfile.open(root / "unsafe.tar.gz", "w:gz") as archive:
+                    archive.add(exe, arcname="../outside")
+                with self.assertRaisesRegex(ValueError, "unsafe path"):
+                    list(cbp.archive_members(str(root / "unsafe.tar.gz")))
+                self.assertEqual(cbp.public_archive_dependencies("personad", True), {"tailscale.com"})
+                self.assertEqual(cbp.public_archive_dependencies("other.exe", True), set())
+                self.assertEqual(cbp.public_archive_dependencies("other", True), set())
+
     def scan(self, text, words=(), public=True, config=None, dependencies=DEPENDENCIES):
         with tempfile.TemporaryDirectory(prefix="bundle-privacy-test-") as directory:
-            (Path(directory) / "binary").write_bytes(text.encode())
+            (Path(directory) / "binary").write_bytes(text if isinstance(text, bytes) else text.encode())
             output = io.StringIO()
             args = ["check_bundle_privacy.py"] + (["--whole-short"] if public else []) + [directory]
             with patch.object(sys, "argv", args), patch.object(cbp.pc, "module_paths", return_value=None), \
@@ -421,6 +553,38 @@ class BundleScanIntegrationTests(unittest.TestCase):
         self.assertNotIn(EMAIL, output)
         self.assertNotIn(address, output)
 
+    def test_gzip_members_in_a_binary_are_scanned_inflated(self):
+        # A Go build embeds the runtime packages as gzipped tars (server/internal/runtimepkg): their text must count.
+        def member(text):
+            archive = io.BytesIO()
+            with tarfile.open(fileobj=archive, mode="w") as tar:
+                data = text.encode()
+                info = tarfile.TarInfo("runtime-sdk/lib/runtime.js")
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+            return gzip.compress(archive.getvalue(), compresslevel=9, mtime=0)
+
+        word = "privatehost"
+        plain = member("const a = 1;\n" * 50)
+        # Filler that does not compress to nothing, so half the member still holds the start of the file.
+        long = member("// " + word + " " + "".join("%x" % i for i in range(3000)))
+        for name, data in (
+                ("alone", member("export const host = '" + word + "'")),
+                ("inside a binary", b"\x7fELF\x00" * 64 + member("// " + word) + b"\x00\x1f\x8b\x08junk" * 8),
+                ("after another member", plain + member("// " + word)),
+                ("cut short", long[:len(long) // 2])):
+            with self.subTest(name):
+                self.assertNotIn(word.encode(), data)
+                code, output = self.scan(data, words=(word,))
+                self.assertNotEqual(code, 0)
+                self.assertIn("private value", output)
+                self.assertNotIn(word, output)
+        code, output = self.scan(member("mail " + EMAIL))
+        self.assertNotEqual(code, 0)
+        self.assertIn("email", output)
+        code, output = self.scan(plain + b"\x1f\x8b\x08\x00" * 4, words=(word,))
+        self.assertEqual(code, 0, output)
+
     def test_app_accepts_only_the_exact_configured_public_relay_url(self):
         relay = "https://relay.example.test/relay"
         config = {"app": {"push_relay": relay}}
@@ -472,6 +636,39 @@ class BundleScanIntegrationTests(unittest.TestCase):
             with self.subTest(site=bad):
                 code, _ = self.scan(bad + "/dl", words=(bad + "/dl",), config={"publish": {"site_url": bad}})
                 self.assertNotEqual(code, 0)
+
+    def test_published_binary_accepts_the_configured_update_url_and_site_feed(self):
+        # publish.update_url (#4522): the binaries carry it, while the site itself still legitimately serves /dl.
+        url = "https://releases.example.test/owner/repo/releases/latest/download"
+        words = ("releases.example.test", "site.example.test")
+        config = {"publish": {"site_url": "https://site.example.test", "update_url": url + "/"}}
+        code, output = self.scan(url + "\nhttps://site.example.test/dl", words=words, config=config)
+        self.assertEqual(code, 0, output)
+        for text in (url + "/private", url + "?token=placeholder", "https://releases.example.test/owner",
+                     "person@releases.example.test"):
+            with self.subTest(text=text):
+                code, output = self.scan(text, words=words + ("site.example.test",), config=config)
+                self.assertNotEqual(code, 0)
+                self.assertIn("private value", output)
+
+    def test_published_binary_scan_uses_the_inherited_update_url_override(self):
+        configured = "https://configured.example.test/releases/latest/download"
+        override = "https://override.example.test/releases/latest/download"
+        config = {"publish": {"update_url": configured}}
+        with patch.dict(os.environ, {"PERSONA_UPDATE_URL": override}):
+            code, output = self.scan(override, words=("override.example.test",), config=config)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(cbp.public_download_url(config), (override, "/releases/latest/download"))
+
+    def test_published_binary_scan_allows_override_and_site_dl_feeds(self):
+        configured = "https://configured.example.test/releases/latest/download"
+        override = "https://override.example.test/releases/latest/download"
+        site = "https://site.example.test"
+        config = {"publish": {"site_url": site, "update_url": configured}}
+        with patch.dict(os.environ, {"PERSONA_UPDATE_URL": override}):
+            code, output = self.scan(override + "\n" + site + "/dl", words=("override.example.test", "site.example.test"), config=config)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(cbp.public_download_urls(config), [(override, "/releases/latest/download"), (site + "/dl", "/dl")])
 
     def test_the_app_ssh_algorithm_names_are_not_emails(self):
         names = "\n".join(a + "@" + d for a, d in (("aes256-gcm", "openssh.com"), ("curve25519-sha256", "libssh.org"),
@@ -556,6 +753,303 @@ class MacBundleTests(unittest.TestCase):
         fat = b"\xca\xfe\xba\xbe" + b"\0" * 60 + b"second slice " + value.encode()
         code, output = self.scan({"MacOS/Persona": fat}, (value,))
         self.assertNotEqual(code, 0, output)
+
+
+# Every kind of value `plutil -convert xml1` prints, and the text it prints for them (macOS 27.2), read as text like the
+# scan used to: key order by UTF-16 code unit, reals as %.17g, a UID as CF$UID, data lines of 68 columns at one tab and
+# 12 columns at the 8-tab cap, CR LF read as LF.
+EVERY_VALUE = {
+    "text": "a & b < c > d\r\ne",
+    "\U0001f600": True,
+    "\uffef": False,
+    "numbers": [-1, 2 ** 64 - 1, 0.1, -0.0, float("inf"), 1e300],
+    "date": datetime.datetime(2026, 11, 14, 10, 19, 52, 500000),
+    "data": bytes(range(52)),
+    "deep": [[[[[[[[bytes(range(12))]]]]]]]],
+    "archive": plistlib.UID(7),
+    "empty": [[], {}],
+}
+EVERY_VALUE_XML = (
+    '<?xml version="1.0" encoding="UTF-8"?>\n'
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+    '<plist version="1.0">\n'
+    "<dict>\n"
+    "\t<key>archive</key>\n"
+    "\t<dict>\n"
+    "\t\t<key>CF$UID</key>\n"
+    "\t\t<integer>7</integer>\n"
+    "\t</dict>\n"
+    "\t<key>data</key>\n"
+    "\t<data>\n"
+    "\tAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEy\n"
+    "\tMw==\n"
+    "\t</data>\n"
+    "\t<key>date</key>\n"
+    "\t<date>2026-11-14T10:19:52Z</date>\n"
+    "\t<key>deep</key>\n"
+    "\t<array>\n"
+    "\t\t<array>\n"
+    "\t\t\t<array>\n"
+    "\t\t\t\t<array>\n"
+    "\t\t\t\t\t<array>\n"
+    "\t\t\t\t\t\t<array>\n"
+    "\t\t\t\t\t\t\t<array>\n"
+    "\t\t\t\t\t\t\t\t<array>\n"
+    "\t\t\t\t\t\t\t\t\t<data>\n"
+    "\t\t\t\t\t\t\t\tAAECAwQFBgcI\n"
+    "\t\t\t\t\t\t\t\tCQoL\n"
+    "\t\t\t\t\t\t\t\t\t</data>\n"
+    "\t\t\t\t\t\t\t\t</array>\n"
+    "\t\t\t\t\t\t\t</array>\n"
+    "\t\t\t\t\t\t</array>\n"
+    "\t\t\t\t\t</array>\n"
+    "\t\t\t\t</array>\n"
+    "\t\t\t</array>\n"
+    "\t\t</array>\n"
+    "\t</array>\n"
+    "\t<key>empty</key>\n"
+    "\t<array>\n"
+    "\t\t<array/>\n"
+    "\t\t<dict/>\n"
+    "\t</array>\n"
+    "\t<key>numbers</key>\n"
+    "\t<array>\n"
+    "\t\t<integer>-1</integer>\n"
+    "\t\t<integer>18446744073709551615</integer>\n"
+    "\t\t<real>0.10000000000000001</real>\n"
+    "\t\t<real>0.0</real>\n"
+    "\t\t<real>+infinity</real>\n"
+    "\t\t<real>1.0000000000000001e+300</real>\n"
+    "\t</array>\n"
+    "\t<key>text</key>\n"
+    "\t<string>a &amp; b &lt; c &gt; d\n"
+    "e</string>\n"
+    "\t<key>\U0001f600</key>\n"
+    "\t<true/>\n"
+    "\t<key>\uffef</key>\n"
+    "\t<false/>\n"
+    "</dict>\n"
+    "</plist>\n"
+)
+
+
+class BinaryPlistTests(unittest.TestCase):
+    address = str(ipaddress.ip_address(0x0A01010B))
+
+    @staticmethod
+    def marker(kind, length):
+        return bytes([kind << 4 | length]) if length < 15 else bytes([kind << 4 | 15, 0x12]) + struct.pack(">I", length)
+
+    @classmethod
+    def string(cls, text, utf16=False):
+        data = text.encode("utf-16be" if utf16 else "ascii")
+        return cls.marker(6 if utf16 else 5, len(data) // (2 if utf16 else 1)) + data
+
+    @staticmethod
+    def plist(objects, width=2, *, before=b"", padding=b"", offset_padding=b"", tail=b""):
+        data = bytearray(b"bplist00" + before)
+        offsets = []
+        for obj in objects:
+            offsets.append(len(data))
+            data.extend(obj + b"\0")  # Separate object text, rather than creating one enormous printable field.
+        data.extend(padding)
+        table = len(data)
+        data.extend(b"".join(struct.pack(">I", offset) for offset in offsets) + offset_padding)
+        return bytes(data) + struct.pack(">6xBBQQQ", 4, width, len(objects), 0, table) + tail
+
+    @classmethod
+    def reference_objects(cls, text, kind=10, width=2):
+        raw = text.encode()
+        raw += b"\0" * (-len(raw) % width)
+        refs = [int.from_bytes(raw[i:i + width], "big") for i in range(0, len(raw), width)]
+        keys = b"".join(i.to_bytes(width, "big") for i in range(1, len(refs) + 1)) if kind == 13 else b""
+        root = cls.marker(kind, len(refs)) + keys + raw
+        # Unique string objects make dictionary keys valid too; the large indexes are deliberate, not text values.
+        return [root] + [cls.string("item%d" % i) for i in range(1, max(refs) + 1)]
+
+    def scan(self, data, words=()):
+        with tempfile.TemporaryDirectory(prefix="bundle-privacy-plist-") as directory:
+            path = Path(directory) / "Localizable.strings"
+            path.write_bytes(data)
+            output = io.StringIO()
+            with patch.object(sys, "argv", ["check_bundle_privacy.py", directory]), \
+                    patch.object(cbp.pc, "module_paths", return_value=None), \
+                    patch.object(cbp.pc, "terms", return_value=(words, set())), \
+                    patch.object(cbp.persona_config, "load", return_value={}), redirect_stdout(output):
+                try:
+                    cbp.main()
+                except SystemExit as error:
+                    return error.code, output.getvalue()
+            return 0, output.getvalue()
+
+    def test_valid_reference_bytes_are_not_generic_addresses(self):
+        for kind in (10, 13):
+            for width in (1, 2):
+                for text in (self.address, EMAIL) if width == 1 else (self.address,):
+                    with self.subTest(kind=kind, width=width, length=len(text)):
+                        data = self.plist(self.reference_objects(text, kind, width), width)
+                        self.assertIsInstance(plistlib.loads(data), list if kind == 10 else dict)
+                        ranges, strings = cbp.plist_references(data)
+                        self.assertTrue(ranges)
+                        self.assertFalse(any(cbp.pc.problems(value, []) for value in strings))
+                        self.assertTrue(any(text.encode() in match.group() for match in cbp.PRINTABLE.finditer(data)))
+                        code, output = self.scan(data)
+                        self.assertEqual(code, 0, output)
+
+    def test_real_ascii_and_utf16_keys_and_values_still_fail(self):
+        for utf16 in (False, True):
+            for text, kind in ((self.address, "private IP"), (EMAIL, "email")):
+                for as_key in (False, True):
+                    with self.subTest(utf16=utf16, kind=kind, as_key=as_key):
+                        values = (text, "safe") if as_key else ("safe", text)
+                        data = self.plist([b"\xd1\x00\x01\x00\x02", *(self.string(v, utf16) for v in values)])
+                        self.assertTrue(cbp.plist_references(data)[0])
+                        code, output = self.scan(data)
+                        self.assertNotEqual(code, 0)
+                        self.assertIn(kind, output)
+                        self.assertNotIn(text, output)
+
+    def test_unreferenced_strings_and_data_are_not_hidden(self):
+        for text, kind in ((self.address, "private IP"), (EMAIL, "email")):
+            for obj in (self.string(text), self.string(text, True), self.marker(4, len(text)) + text.encode()):
+                with self.subTest(kind=kind, marker=obj[0]):
+                    objects = self.reference_objects(self.address) + [obj]
+                    data = self.plist(objects)
+                    self.assertTrue(cbp.plist_references(data)[0])
+                    code, output = self.scan(data)
+                    self.assertNotEqual(code, 0)
+                    self.assertIn(kind, output)
+                    self.assertNotIn(text, output)
+
+    def test_referenced_data_and_padding_and_trailing_bytes_still_fail(self):
+        for text, kind in ((self.address, "private IP"), (EMAIL, "email")):
+            raw = b"\0" + text.encode() + b"\0"
+            objects = self.reference_objects(self.address)
+            samples = [self.plist(objects, **{location: raw}) for location in
+                       ("before", "padding", "offset_padding", "tail")]
+            samples.append(self.plist([b"\xa1\x00\x01", self.marker(4, len(raw)) + raw]))
+            for index, data in enumerate(samples):
+                with self.subTest(kind=kind, location=index):
+                    code, output = self.scan(data)
+                    self.assertNotEqual(code, 0)
+                    self.assertIn(kind, output)
+                    self.assertNotIn(text, output)
+
+    def test_configured_values_still_match_reference_bytes_and_strings(self):
+        for text in (self.address, EMAIL, "private-placeholder"):
+            reference_data = tuple(self.plist(self.reference_objects(text, width=width), width=width)
+                                   for width in ((1, 2) if text == self.address else (1,)))
+            for data in (*reference_data, self.plist([self.string(text)]), self.plist([self.string(text, True)])):
+                with self.subTest(length=len(text), bytes=len(data)):
+                    code, output = self.scan(data, (text,))
+                    self.assertNotEqual(code, 0)
+                    self.assertIn("private value (%d chars)" % len(text), output)
+                    self.assertNotIn(text, output)
+
+    def test_malformed_references_and_objects_do_not_exclude_any_bytes(self):
+        objects = self.reference_objects(self.address)
+        # Keep the pseudo-address in valid-looking references while invalidating other parts of the structure.
+        samples = [self.plist(objects + [b"\xa1\xff\xff"]),  # out-of-range unreachable reference
+                   self.plist(objects + [b"\xa1" + len(objects).to_bytes(2, "big")]),  # unreachable self-cycle
+                   self.plist(objects + [b"\x7f"]),  # unsupported object
+                   self.plist(objects + [b"\x5f\x14"]),  # invalid extended length
+                   self.plist(objects + [b"\x5e"]),  # truncated object
+                   self.plist(objects + [b"\xd1\x00\x00\x00\x01"])]  # non-string dictionary key
+        original = self.plist(objects)
+        table = struct.unpack_from(">Q", original, len(original) - 8)[0]
+        for offset, replacement in ((len(original) - 26, b"\0"),  # bad offset width
+                                    (len(original) - 25, b"\0"),  # bad reference width
+                                    (len(original) - 16, struct.pack(">Q", len(objects))),  # bad root
+                                    (table + 4, struct.pack(">I", 8)),  # duplicate offsets
+                                    (table + 4, struct.pack(">I", 9)),  # overlapping objects
+                                    (table + 4, struct.pack(">I", table))):  # out-of-bounds offset
+            samples.append(original[:offset] + replacement + original[offset + len(replacement):])
+        samples.extend((original[:-1], original + b"trailing"))
+        for index, data in enumerate(samples):
+            with self.subTest(mutation=index):
+                self.assertEqual(cbp.plist_references(data)[0], [])
+                code, output = self.scan(data)
+                self.assertNotEqual(code, 0)
+                self.assertIn("private IP", output)
+                self.assertNotIn(self.address, output)
+
+    def test_malformed_plists_and_raw_data_do_not_hide_utf16_addresses(self):
+        for text, kind in ((self.address, "private IP"), (EMAIL, "email")):
+            raw = text.encode("utf-16be")
+            samples = (self.plist([b"\xa1\xff\xff", self.string(text, True)]),
+                       b"bplist00" + self.string(text, True),
+                       self.plist([b"\xa1\x00\x01", self.marker(4, len(raw)) + raw]),
+                       self.plist(self.reference_objects(self.address), padding=raw))
+            for index, data in enumerate(samples):
+                with self.subTest(kind=kind, location=index):
+                    code, output = self.scan(data)
+                    self.assertNotEqual(code, 0)
+                    self.assertIn(kind, output)
+                    self.assertNotIn(text, output)
+
+    def test_binary_plist_scanning_uses_the_supplied_snapshot(self):
+        with tempfile.TemporaryDirectory(prefix="bundle-privacy-plist-snapshot-") as directory:
+            path = Path(directory) / "Localizable.strings"
+            path.write_bytes(self.plist([self.string("safe")]))
+            snapshot = self.plist([self.string(self.address, True)])
+            self.assertTrue(any("private IP" in cbp.text_kinds(text, ()) for text in cbp.texts(str(path), snapshot)))
+
+    def odd_plists(self):
+        """Plists the scan reads differently: unvalidated object tables, values without printable bytes, empty XML."""
+        unreachable = b"\x7f"  # an unsupported object no reference reaches: the object table doesn't validate
+        return {
+            "integer": self.plist([b"\xd1\x00\x01\x00\x02", self.string("port"), b"\x11\x20\xfb", unreachable]),
+            "UTF-16": self.plist([b"\xd1\x00\x01\x00\x02", self.string("name"), self.string("\u5f20\u4e09", True),
+                                  unreachable]),
+            "float32": self.plist([b"\xa1\x00\x01", b"\x22" + struct.pack(">f", 0.1)]),
+            "16-byte integer": self.plist([b"\xa1\x00\x01", b"\x14" + bytes(15) + b"\x05"]),
+            "shared object": self.plist([b"\xa2\x00\x01\x00\x01", self.string("twice")]),
+            "cycle": self.plist([b"\xa1\x00\x01", b"\xa1\x00\x00"]),
+            "integer key": self.plist([b"\xd1\x00\x01\x00\x02", b"\x10\x05", self.string("value")]),
+            "NUL": self.plist([self.string("a\0b")]),
+            "set": self.plist([b"\xc1\x00\x01", self.string("member")]),
+            "not a plist": b"bplist00" + bytes(40),
+        }
+
+    def test_the_xml_view_is_plutils_text_without_plutil(self):
+        """#7571: plutil is macOS only; the XML view is the text the scan read from `plutil -convert xml1` before."""
+        for sort_keys in (True, False):
+            with self.subTest(sort_keys=sort_keys):
+                data = plistlib.dumps(EVERY_VALUE, fmt=plistlib.FMT_BINARY, sort_keys=sort_keys)
+                self.assertEqual(cbp.plist_xml(data), EVERY_VALUE_XML)
+        plists = self.odd_plists()
+        self.assertEqual(cbp.plist_xml(plists["integer"]).count("<integer>8443</integer>"), 1)
+        self.assertEqual(cbp.plist_xml(plists["float32"]).count("<real>0.10000000149011612</real>"), 1)
+        self.assertEqual(cbp.plist_xml(plists["shared object"]).count("<string>twice</string>"), 2)
+        for name in ("cycle", "integer key", "NUL", "set", "not a plist"):
+            with self.subTest(name=name):
+                self.assertEqual(cbp.plist_xml(plists[name]), "")
+
+    # The reference is macOS's plutil: swift-corelibs-foundation's Linux plutil reads a string with NUL and refuses
+    # some values macOS prints.
+    @unittest.skipUnless(sys.platform == "darwin" and shutil.which("plutil"), "plutil is macOS only")
+    def test_the_xml_view_matches_plutil(self):
+        samples = dict(self.odd_plists(), every=plistlib.dumps(EVERY_VALUE, fmt=plistlib.FMT_BINARY, sort_keys=False))
+        with tempfile.TemporaryDirectory(prefix="bundle-privacy-plutil-") as directory:
+            for name, data in samples.items():
+                with self.subTest(name=name):
+                    path = Path(directory) / "Info.plist"
+                    path.write_bytes(data)
+                    printed = subprocess.run(["plutil", "-convert", "xml1", "-o", "-", str(path)],
+                                             capture_output=True, text=True).stdout
+                    self.assertEqual(cbp.plist_xml(data), printed)
+
+    def test_values_only_the_xml_view_decodes_still_fail(self):
+        # An integer has no printable bytes, and a UTF-16 value outside ASCII reads only decoded: with an object table
+        # that doesn't validate, the XML view is the one text that holds them.
+        plists = self.odd_plists()
+        for word, name in (("8443", "integer"), ("\u5f20\u4e09", "UTF-16")):
+            with self.subTest(name=name):
+                self.assertEqual(cbp.plist_references(plists[name]), ([], []))
+                code, output = self.scan(plists[name], (word,))
+                self.assertNotEqual(code, 0)
+                self.assertIn("private value (%d chars)" % len(word), output)
+                self.assertNotIn(word, output)
 
 
 class MachOSignatureTests(unittest.TestCase):

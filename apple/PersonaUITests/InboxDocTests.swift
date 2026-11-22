@@ -1,6 +1,6 @@
 import XCTest
 
-/// Feishu documents in the inbox (docs/assistant/inbox.md「云文档」): a row's status menu moves the status in the document, and
+/// Feishu documents in the inbox (docs/assistant/inbox.md「Docs: mentions in sheets, bases, and documents」): a row's status menu moves the status in the document, and
 /// Send on the AI twin's draft makes its proposed move with the comment. Against scripts/mock/mock_hub.py with MOCK_DOCS=1
 /// (PERSONA_MOCK_HUB), which records replies at /mock/sent and keeps the rows' status.
 final class InboxDocTests: XCTestCase {

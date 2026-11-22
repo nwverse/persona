@@ -1,8 +1,12 @@
 import { api, ApiError, errorText } from "./api";
 import { t } from "../i18n";
 import { sameValue } from "./stable-lines";
+import { mergeStableRows, type StableRowOrder } from "./side-sessions";
 
 export const SESSIONS_LIST_FEATURE = "sessions_list";
+/** Asked for in the WebSocket URL: a `sessions_list` hint after a change also says the revision before it (`since`)
+ *  and which rows changed (`changed`), so an open chat reads its row only when it is one of them (#6685). */
+export const SESSIONS_LIST_CHANGES_FEATURE = "sessions_list_changes";
 export const PAGE_SIZE = 50;
 /** UTF-8 lexical order follows Unicode code points, not locale or JavaScript's surrogate-unit order. */
 export function compareListIds(a: string, b: string): number {
@@ -16,29 +20,72 @@ export function compareListIds(a: string, b: string): number {
   return a.length - b.length;
 }
 const JOURNAL_LIMIT = 16_384;
-const FILTER_KEYS = ["state", "machine_id", "project", "group", "source", "provider", "q"] as const;
+const validCounts = (counts: ListCounts | undefined): counts is ListCounts => !!counts && typeof counts.total === "number" &&
+  typeof counts.revision === "string" && !!counts.machine && !!counts.project && !!counts.group && !!counts.state;
+// todo: `sessions_todo` (#6662), a to-do's id or "none"; waiting, pane_source and exclude_pane_source: the sidebar's
+// quick filters (`sessions_quick_filters`, #6662); just_finished: the Just finished rows or the other seen ones
+// (`sessions_just_finished`, #9751)
+const FILTER_KEYS = ["state", "machine_id", "project", "group", "source", "provider", "q", "parent_session_id", "todo", "waiting", "pane_source", "exclude_pane_source", "just_finished"] as const;
+/** The filters that take several values, each a machine and value pair spelled as a JSON array (`sessions_catalog`,
+ * docs/protocol/protocol.md "Projects and spaces"): the rows at any of the places, in any of the spaces. */
+const PAIR_KEYS = ["place", "space"] as const;
 
-export type ListFilters = Partial<Record<typeof FILTER_KEYS[number], string>>;
+export type ListFilters = Partial<Record<typeof FILTER_KEYS[number], string>> & Partial<Record<typeof PAIR_KEYS[number], readonly string[]>>;
+/** A machine and value pair as `place` and `space` take it. */
+export const listPair = (machineId: string, value: string) => JSON.stringify([machineId, value]);
+/** How many pairs one of those filters takes; the hub refuses more. */
+export const LIST_PAIRS_MAX = 64;
+
+/** A read's query for `filters` in a stable order, so the same scope reached through different filters compares
+ * equal: `extra` first (`counts=1`), then each filter by key, a pair filter's values sorted. */
+export function filterQuery(filters: ListFilters, extra: Record<string, string> = { counts: "1" }): string {
+  const params = new URLSearchParams(extra);
+  for (const [key, value] of Object.entries(filters).sort(([a], [b]) => a.localeCompare(b))) {
+    if (typeof value === "string") { if (value) params.set(key, value); }
+    else for (const pair of [...new Set(value ?? [])].sort(compareListIds)) params.append(key, pair);
+  }
+  return params.toString();
+}
 export interface ListCounts {
   total: number;
   machine: Record<string, number>;
+  /** Non-offline Agent roots by computer. Missing on older hubs or without roots=1. */
+  active_agents_by_machine?: Record<string, number>;
   project: Record<string, number>;
   group: Record<string, number>;
   state: Record<string, number>;
+  /** By open to-do, "" for none (`sessions_todo`, #6662); absent from an older hub. */
+  todo?: Record<string, number>;
+  /** By where the session was opened (`sessions_pane_source`): terminal, feishu, desktop, unknown. */
+  pane_source?: Record<string, number>;
+  /** How many of `state.working` only wait in the background (#6045); absent when none. */
+  background_waiting?: number;
+  /** How many of `state.idle` are Just finished (#9751, `sessions_just_finished`); absent when none. */
+  just_finished?: number;
+  /** How many of `state.needs_you` only wait on held non-interrupting cards (P1/P2) for push grading. */
+  held_needs?: number;
   revision: string;
 }
 export interface ListPage<T> {
   sessions: T[];
   remove: string[];
+  /** Delta rows created after the baseline, not existing rows that only changed or entered the filter. Current hubs
+   *  always send the array, including empty; an older hub omits it. */
+  added?: string[];
   has_more: boolean;
   next_cursor?: string;
   revision: string;
   total: number;
+  /** Only when the read asked `with_counts=1` (`sessions_page_counts`): what `counts=1` with the same filters returns. */
+  counts?: ListCounts;
 }
 export interface ListSnapshot<T> {
   rows: T[];
   loaded: boolean;
   loading: boolean;
+  /** A page someone asked for is being read (Load more, infinite scroll). A background refresh sets only `loading`, so
+   *  a Load more stays where it is while the list refreshes, and a click then queues its page (#9215). */
+  loadingMore: boolean;
   error: string | null;
   total: number;
   counts: ListCounts | null;
@@ -46,13 +93,35 @@ export interface ListSnapshot<T> {
   supported: boolean | null;
 }
 
+export interface SessionListPresentation<T> extends StableRowOrder<T> {
+  /** Keeps a side session under its loaded parent while the stable order is retained. */
+  parentOf?: (row: T) => string | undefined;
+}
+
 export interface SessionListOptions<T> {
+  /** Retains presented rows across transport refreshes and sorts admitted rows by current structural placement. */
+  presentation?: SessionListPresentation<T>;
+  /** Side data refreshed with a coalesced list read, never once per raw hint. */
+  onRefresh?: () => void;
   summary?: boolean;
   /** Receives only this completed delta's net changes, including unloaded identities. Must not throw. */
   onDelta?: (upsert: T[], remove: string[]) => void;
+  /** Whether the hub answers `with_counts=1` (`sessions_page_counts`, #4858): a refresh then reads its counts with the
+   * page, one request instead of two. A page that comes back without them still gets the separate counts read. */
+  pageCounts?: () => boolean;
+  /** Read the list without the child sessions folded under a listed one (`roots=1`, `sessions_hierarchy`, #5120): rows,
+   * totals and counts then hold each parent once, counted by its folded state. Only for a hub that advertises it. */
+  roots?: boolean;
+  /** false: the list's counts are never read (its snapshot's `counts` stays null). For a list that only shows rows,
+   * as one group's section does: its group's numbers come from the read that named the groups. */
+  counts?: boolean;
 }
 
-type PreparedDelta<T> = { overlay: Map<string, T | null>; changes: Map<string, T | null>; revision: string; total: number };
+/** What a `sessions_list` hint says of the change it follows (`sessions_list_changes`, #6685): the revision before it,
+ *  the one it reaches, and the rows changed in between as `[machine_id, session_id]`. */
+export interface ListChangeHint { revision?: unknown; since?: unknown; changed?: unknown }
+
+type PreparedDelta<T> = { overlay: Map<string, T | null>; changes: Map<string, T | null>; added?: Set<string>; revision: string; total: number; counts?: ListCounts };
 type Work = { generation: number; load: boolean; more: boolean; kind: "load" | "more" | null; promise?: Promise<void> };
 class Rebaseline extends Error {}
 
@@ -61,37 +130,70 @@ class Rebaseline extends Error {}
  * Rejected reads also set `error`; invalidation is fire-and-forget and records errors without rejecting globally.
  */
 export class SessionList<T> {
-  private snapshot: ListSnapshot<T> = this.empty();
+  protected snapshot: ListSnapshot<T> = this.empty();
   private listeners = new Set<() => void>();
   private filters: ListFilters = {};
   private generation = 0;
-  private work: Work = { generation: 0, load: false, more: false, kind: null };
+  protected work: Work = { generation: 0, load: false, more: false, kind: null };
   // The frozen cursor never follows the delta checkpoint. Counts are not a row checkpoint either.
-  private cursor?: string;
+  protected cursor?: string;
   private frozenRevision?: string;
-  private checkpoint?: string;
+  protected checkpoint?: string;
   private frozen = new Map<string, T>();
   // Including unmaterialized identities is essential: a later frozen page may carry their stale copies.
   private overlay = new Map<string, T | null>();
   private prefixSize = PAGE_SIZE;
-  private invalidationQueued = false;
+  protected invalidationQueued = false;
+  /** The next scheduled invalidation's read, shared by every hint in its window (`invalidate`). */
+  private invalidationTimer?: ReturnType<typeof setTimeout>;
+  /** When the last invalidation's read went out, then when it came back (0 when none): a hint inside the window waits
+   *  for the window's end. */
+  protected invalidatedAt = 0;
   private lastFailure: "load" | "more" = "load";
   private summary: boolean;
+  private roots: boolean;
   private onDelta?: (upsert: T[], remove: string[]) => void;
+  private pageCounts: () => boolean;
+  private counted: boolean;
+  private onRefresh?: () => void;
+  private presentation?: SessionListPresentation<T>;
+  private presented: readonly T[] = [];
+  // Remember admission after a filter exit removes the row. A later filter entrance is not a creation in the hub's
+  // `added` markers, but an identity already presented in this baseline belongs in the list again.
+  private admitted = new Set<string>();
+  private transport: T[] = [];
 
   constructor(
     private path: string,
     private identity: (row: T) => string,
     private compare: (a: T, b: T) => number,
     private onRows?: (rows: T[]) => void,
-    private removeIdentity: (id: string) => string = (id) => id,
+    protected removeIdentity: (id: string) => string = (id) => id,
     options: SessionListOptions<T> = {},
   ) {
+    this.onRefresh = options.onRefresh;
+    this.presentation = options.presentation;
     this.summary = options.summary ?? true;
+    this.roots = options.roots ?? false;
     this.onDelta = options.onDelta;
+    this.pageCounts = options.pageCounts ?? (() => false);
+    this.counted = options.counts ?? true;
   }
 
   isSummary(): boolean { return this.summary; }
+  /** Whether every read sends `roots=1`: a list or counts read over the same collection sends it too. */
+  isRoots(): boolean { return this.roots; }
+  /** For a list over the same collection, e.g. a filtered copy of this one. */
+  usesPageCounts(): boolean { return this.pageCounts(); }
+
+  /** Give an already shared root the same stable presentation as its filtered copies, without replacing its baseline. */
+  setPresentation(presentation: SessionListPresentation<T>): void {
+    if (this.presentation === presentation) return;
+    this.presentation = presentation;
+    if (!this.snapshot.loaded) return;
+    const rows = this.snapshot.supported === false ? this.complete(this.snapshot.rows) : this.visible();
+    this.publish({ rows });
+  }
 
   /** Changing projection invalidates its bound cursors, but preserves filters and does not start a read. */
   setSummary(value: boolean): void {
@@ -100,7 +202,16 @@ export class SessionList<T> {
     this.reset();
   }
 
+  /** Leaving the folded children out (or taking them back) changes every row, total and cursor: like setSummary. */
+  setRoots(value: boolean): void {
+    if (this.roots === value) return;
+    this.roots = value;
+    this.reset();
+  }
+
   getSnapshot = (): ListSnapshot<T> => this.snapshot;
+  /** The newest-first loaded prefix, before stable presentation retains or reorders rows. Activity windows read this. */
+  getTransportRows(): readonly T[] { return this.transport; }
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
@@ -109,6 +220,8 @@ export class SessionList<T> {
   setFilters(filters: ListFilters): Promise<void> {
     const next: ListFilters = {};
     for (const key of FILTER_KEYS) if (filters[key]) next[key] = filters[key];
+    // the same pairs in another order are the same filter: the hub binds a cursor to them as a set
+    for (const key of PAIR_KEYS) if (filters[key]?.length) next[key] = [...new Set(filters[key])].sort(compareListIds);
     if (!sameValue(next, this.filters)) {
       this.filters = next;
       this.reset();
@@ -129,19 +242,36 @@ export class SessionList<T> {
 
   retry(): Promise<void> {
     // A delta failure must not be mistaken for a next-page failure just because a frozen cursor still exists.
-    return this.lastFailure === "more" && this.snapshot.counts ? this.more() : this.load();
+    return this.lastFailure === "more" && (this.snapshot.counts || !this.counted) ? this.more() : this.load();
   }
 
+  /** A hint burst from a busy fleet (every working agent's update broadcasts a sessions_list notice) must not become
+   *  a read per hint: the hints of one 2 s window share its read, also while a read is out (docs/design/PRINCIPLES.md,
+   *  fast and local-first). A hint read at once whenever a read was out kept a busy fleet's list reading back to back:
+   *  `loading` never cleared, so Load more stayed hidden and a queued page never ran. A grouped list's section also
+   *  passes over hints naming none of its rows (lib/section-list.ts, #9176). */
   invalidate(): void {
     if (this.invalidationQueued) return;
     this.invalidationQueued = true;
     const generation = this.generation;
     queueMicrotask(() => {
-      if (!this.current(generation)) return;
+      if (!this.current(generation) || !this.invalidationQueued) return;
+      // inside the last read's window (none yet: invalidatedAt 0 is long past)
+      const wait = this.invalidatedAt + 2_000 - Date.now();
+      if (wait > 0) {
+        // invalidationQueued stays set: further hints of this window return at once. The window's end clears it
+        // first, or its own invalidate would return at once too and no hint would ever read again.
+        this.invalidationTimer = setTimeout(() => {
+          this.invalidationTimer = undefined;
+          this.invalidationQueued = false;
+          this.invalidate();
+        }, wait);
+        return;
+      }
       this.invalidationQueued = false;
-      // Unlike an explicit duplicate load, a hint during a read needs one trailing read.
-      this.work.load = true;
-      void this.enqueue("load").catch(() => {});
+      this.invalidatedAt = Date.now();
+      if (this.work.promise) this.work.load = true; // a window that ends during a read: one trailing read after it
+      else this.load().catch(() => {});
     });
   }
 
@@ -150,11 +280,14 @@ export class SessionList<T> {
     this.generation++;
     this.work = { generation: this.generation, load: false, more: false, kind: null };
     this.invalidationQueued = false;
+    clearTimeout(this.invalidationTimer); // undefined (none pending) is a no-op
+    this.invalidationTimer = undefined;
+    this.invalidatedAt = 0;
     this.clearBaseline();
   }
 
   private empty(): ListSnapshot<T> {
-    return { rows: [], loaded: false, loading: false, error: null, total: 0, counts: null, hasMore: false, supported: null };
+    return { rows: [], loaded: false, loading: false, loadingMore: false, error: null, total: 0, counts: null, hasMore: false, supported: null };
   }
 
   private clearBaseline(): void {
@@ -164,6 +297,9 @@ export class SessionList<T> {
     this.frozen = new Map();
     this.overlay = new Map();
     this.prefixSize = PAGE_SIZE;
+    this.presented = [];
+    this.admitted = new Set();
+    this.transport = [];
     this.publish(this.empty());
   }
 
@@ -189,11 +325,18 @@ export class SessionList<T> {
       this.publish({ loading: true, error: null });
       try {
         while (this.current(work.generation) && (work.load || work.more)) {
-          const next = work.load ? "load" : "more";
+          // a page someone asked for goes before a refresh: the frozen cursor does not depend on the checkpoint
+          const next = work.more ? "more" : "load";
           work[next] = false;
           work.kind = next;
-          if (next === "load") await this.refresh(work.generation);
-          else await this.readMore(work.generation);
+          this.publish({ loadingMore: next === "more" });
+          if (next === "more") await this.readMore(work.generation);
+          else {
+            await this.refresh(work.generation);
+            // the next window counts from when this read came back, not when it went out: a slow read still leaves
+            // the list idle between a busy fleet's reads
+            if (this.invalidatedAt && this.current(work.generation)) this.invalidatedAt = Date.now();
+          }
         }
       } catch (error) {
         if (!this.current(work.generation)) return;
@@ -204,7 +347,7 @@ export class SessionList<T> {
       } finally {
         work.kind = null;
         work.promise = undefined;
-        if (this.current(work.generation)) this.publish({ loading: false });
+        if (this.current(work.generation)) this.publish({ loading: false, loadingMore: false });
       }
     });
     return work.promise;
@@ -213,8 +356,10 @@ export class SessionList<T> {
   private query(extra: Record<string, string>): string {
     const [path, existing = ""] = this.path.split("?");
     const params = new URLSearchParams(existing);
-    for (const key of [...FILTER_KEYS, "summary", "limit", "counts", "cursor", "since"]) params.delete(key);
+    for (const key of [...FILTER_KEYS, ...PAIR_KEYS, "summary", "limit", "counts", "with_counts", "cursor", "since", "roots"]) params.delete(key);
     for (const key of FILTER_KEYS) if (this.filters[key]) params.set(key, this.filters[key]!);
+    for (const key of PAIR_KEYS) for (const pair of this.filters[key] ?? []) params.append(key, pair);
+    if (this.roots) params.set("roots", "1");
     for (const [key, value] of Object.entries(extra)) params.set(key, value);
     return `${path}?${params}`;
   }
@@ -244,7 +389,7 @@ export class SessionList<T> {
     if (!this.current(generation)) return null;
     if (typeof response.has_more !== "boolean" || typeof response.revision !== "string" || typeof response.total !== "number" || !Array.isArray(response.remove)) {
       const rows = Array.isArray(response.sessions) ? response.sessions : [];
-      this.publish({ rows: this.stabilize(rows), loaded: true, supported: false, total: rows.length, hasMore: false });
+      this.publish({ rows: this.complete(rows), loaded: true, supported: false, total: rows.length, hasMore: false });
       return null;
     }
     if (!Array.isArray(response.sessions) || !response.revision || (response.has_more && !response.next_cursor)) {
@@ -254,13 +399,12 @@ export class SessionList<T> {
   }
 
   private async readCounts(generation: number): Promise<void> {
+    if (!this.counted) return;
     try {
       const counts = await api<ListCounts>(this.query({ counts: "1" }));
       if (!this.current(generation)) return;
       // Legacy hubs may ignore counts and answer with sessions. Never use that as a row baseline.
-      if (typeof counts.total === "number" && typeof counts.revision === "string" && counts.machine && counts.project && counts.group && counts.state) {
-        this.publish({ counts });
-      }
+      if (validCounts(counts)) this.publish({ counts });
     } catch (error) {
       if (!this.current(generation)) return;
       if (!this.unsupported(error)) throw error;
@@ -268,10 +412,21 @@ export class SessionList<T> {
     }
   }
 
+  /** The counts that came with a page (`with_counts`), to be published with the page's rows: rows and counts read
+   *  together are shown together, so nothing on screen counts one read's rows by another's (lib/seen-outbox.ts
+   *  heldCounts compares them). The separate read when they did not come, published when it answers. */
+  private async pageCountsOrRead(generation: number, page: ListPage<T>): Promise<ListCounts | undefined> {
+    if (validCounts(page.counts)) return page.counts;
+    await this.readCounts(generation);
+    return undefined;
+  }
+
   private async refresh(generation: number, retry = true): Promise<void> {
+    this.onRefresh?.();
+    const withCounts = this.counted && this.pageCounts();
     const results = await Promise.allSettled([
-      this.checkpoint && this.snapshot.supported !== false ? this.readDelta(generation) : this.readFirst(generation),
-      this.readCounts(generation),
+      this.checkpoint && this.snapshot.supported !== false ? this.readDelta(generation, withCounts) : this.readFirst(generation, withCounts),
+      withCounts ? undefined : this.readCounts(generation),
     ]);
     if (!this.current(generation)) return;
     const errors = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
@@ -290,30 +445,38 @@ export class SessionList<T> {
     if (result.status === "fulfilled" && result.value) this.commitDelta(generation, result.value);
   }
 
-  private async readFirst(generation: number): Promise<void> {
-    const page = await this.page(generation);
+  private async readFirst(generation: number, withCounts = false): Promise<void> {
+    const page = await this.page(generation, withCounts ? { with_counts: "1" } : {});
     if (!page || !this.current(generation)) return;
+    const counts = withCounts ? await this.pageCountsOrRead(generation, page) : undefined;
+    if (!this.current(generation)) return;
     this.frozen = new Map(page.sessions.map((row) => [this.identity(row), row]));
     this.overlay = new Map();
     this.prefixSize = PAGE_SIZE;
     this.cursor = page.has_more ? page.next_cursor : undefined;
     this.frozenRevision = page.revision;
     this.checkpoint = page.revision;
-    this.publish({ rows: this.visible(), loaded: true, supported: this.snapshot.supported !== false, total: page.total, hasMore: !!this.cursor });
+    this.publish({ rows: this.visible(true), loaded: true, supported: this.snapshot.supported !== false, total: page.total, hasMore: !!this.cursor, ...(counts ? { counts } : {}) });
   }
 
-  private async readDelta(generation: number): Promise<PreparedDelta<T> | null> {
+  private async readDelta(generation: number, withCounts = false): Promise<PreparedDelta<T> | null> {
     const since = this.checkpoint!;
     const overlay = new Map(this.overlay);
     const changes = new Map<string, T | null>();
+    let added: Set<string> | undefined = new Set();
     let cursor: string | undefined;
     let target = since;
     let first = true;
     let total = this.snapshot.total;
+    let counts: ListCounts | undefined;
     const cursors = new Set<string>();
     do {
-      const page = await this.page(generation, { since, ...(cursor ? { cursor } : {}) });
+      const page = await this.page(generation, { since, ...(cursor ? { cursor } : {}), ...(first && withCounts ? { with_counts: "1" } : {}) });
       if (!page || !this.current(generation)) return null;
+      if (first && withCounts) {
+        counts = await this.pageCountsOrRead(generation, page);
+        if (!this.current(generation)) return null;
+      }
       if (!first && target !== page.revision) throw new Error(t("paged-agents.inconsistent_delta"));
       first = false;
       target = page.revision;
@@ -328,12 +491,16 @@ export class SessionList<T> {
         overlay.set(id, row);
         changes.set(id, row);
       }
+      // Current hubs send an array on every delta page, including an empty one. Absence is the older-hub capability
+      // gap, not an empty set: retain the legacy behavior and admit the delta's new transport identities.
+      if (Array.isArray(page.added)) for (const id of page.added) added?.add(this.removeIdentity(id));
+      else added = undefined;
       if (overlay.size > JOURNAL_LIMIT) throw new Rebaseline();
       cursor = page.has_more ? page.next_cursor : undefined;
       if (cursor && cursors.has(cursor)) throw new Error(t("paged-agents.repeated_cursor"));
       if (cursor) cursors.add(cursor);
     } while (cursor);
-    return { overlay, changes, revision: target, total };
+    return { overlay, changes, added, revision: target, total, counts };
   }
 
   private commitDelta(generation: number, delta: PreparedDelta<T>): void {
@@ -341,8 +508,8 @@ export class SessionList<T> {
     if (!this.current(generation)) return;
     this.overlay = delta.overlay;
     this.checkpoint = delta.revision;
-    const rows = this.visible();
-    this.publish({ rows, total: delta.total, hasMore: !!this.cursor || this.candidateCount() > this.prefixSize });
+    const rows = this.visible(false, delta.added);
+    this.publish({ rows, total: delta.total, hasMore: !!this.cursor || this.candidateCount() > this.prefixSize, ...(delta.counts ? { counts: delta.counts } : {}) });
     // Publishing may synchronously reset/switch the list through onRows or a subscriber.
     if (!this.current(generation) || !this.onDelta) return;
     const upsert: T[] = [];
@@ -361,10 +528,7 @@ export class SessionList<T> {
       try { page = await this.page(generation, { cursor: this.cursor }); }
       catch (error) {
         if (!this.expired(error)) throw error;
-        this.clearBaseline();
-        if (!this.current(generation)) return;
-        this.publish({ loading: true });
-        await this.refresh(generation, false);
+        await this.reread(generation, this.prefixSize + PAGE_SIZE);
         return;
       }
       if (!page || !this.current(generation)) return;
@@ -377,7 +541,37 @@ export class SessionList<T> {
     this.publish({ rows: this.visible(), hasMore: !!this.cursor || this.candidateCount() > this.prefixSize });
   }
 
-  private candidates(): Map<string, T> {
+  /** An expired frozen cursor: read a fresh view at least `depth` rows deep and swap it in at once, so the rows on
+   * screen stay put instead of falling back to the first page (#4410). A revision change mid-read fails, without retry. */
+  private async reread(generation: number, depth: number): Promise<void> {
+    const frozen = new Map<string, T>();
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    const readRows = async (): Promise<ListPage<T> | null> => {
+      let first: ListPage<T> | null = null;
+      do {
+        const page = await this.page(generation, cursor ? { cursor } : {});
+        if (!page || !this.current(generation)) return null;
+        if (first && page.revision !== first.revision) throw new Error(t("paged-agents.inconsistent_page"));
+        first ??= page;
+        for (const row of page.sessions) frozen.set(this.identity(row), row);
+        cursor = page.has_more ? page.next_cursor : undefined;
+        if (cursor && cursors.has(cursor)) throw new Error(t("paged-agents.repeated_cursor"));
+        if (cursor) cursors.add(cursor);
+      } while (cursor && frozen.size < depth);
+      return first;
+    };
+    const [first] = await Promise.all([readRows(), this.readCounts(generation)]);
+    if (!first || !this.current(generation)) return;
+    this.frozen = frozen;
+    this.overlay = new Map();
+    this.cursor = cursor;
+    this.frozenRevision = this.checkpoint = first.revision;
+    this.prefixSize = depth;
+    this.publish({ rows: this.visible(), total: first.total, hasMore: !!cursor || frozen.size > depth });
+  }
+
+  protected candidates(): Map<string, T> {
     const rows = new Map(this.frozen);
     for (const [id, row] of this.overlay) {
       if (row === null) rows.delete(id);
@@ -388,11 +582,28 @@ export class SessionList<T> {
 
   private candidateCount(): number { return this.candidates().size; }
 
-  private visible(): T[] {
-    return this.stabilize([...this.candidates().values()].sort(this.compare).slice(0, this.prefixSize));
+  private visible(resetPresentation = false, added?: ReadonlySet<string>): T[] {
+    const candidates = this.candidates();
+    const transport = [...candidates.values()].sort(this.compare).slice(0, this.prefixSize);
+    this.transport = this.stabilize(transport);
+    if (!this.presentation) return this.transport;
+    if (resetPresentation) this.presented = [];
+    const admitted = added === undefined ? undefined : new Set([...added, ...this.admitted]);
+    this.presented = mergeStableRows(this.presented, transport, candidates, this.identity, this.presentation, this.presentation.parentOf, admitted);
+    for (const row of this.presented) this.admitted.add(this.identity(row));
+    return this.stabilize(this.presented);
   }
 
-  private stabilize(rows: T[]): T[] {
+  /** An older hub's complete, unpaginated answer has no transport window to retain. */
+  private complete(rows: T[]): T[] {
+    this.transport = this.stabilize(rows);
+    if (!this.presentation) return this.transport;
+    const candidates = new Map(rows.map((row) => [this.identity(row), row]));
+    this.presented = mergeStableRows([], rows, candidates, this.identity, this.presentation, this.presentation.parentOf);
+    return this.stabilize(this.presented);
+  }
+
+  private stabilize(rows: readonly T[]): T[] {
     const old = new Map(this.snapshot.rows.map((row) => [this.identity(row), row]));
     const next = rows.map((row) => {
       const had = old.get(this.identity(row));

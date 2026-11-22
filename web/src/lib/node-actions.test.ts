@@ -1,8 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MenuItem } from "../ui/menu-model";
-import { canChangeHost, machineNode, nodeActions, sessionNode, termPaneNode, termSpaceNode, termTabNode, type MenuNode, type NodeActionDeps } from "./node-actions";
+import { canChangeHost, canRenameIn, gitOutcomeText, machineNode, nodeActions, sessionNode, termPaneNode, termSpaceNode, termTabNode, type MenuNode, type NodeActionDeps } from "./node-actions";
 import { buildTerminalTree, shellsOnly, type PanesResponse } from "./terminals";
 import type { Session } from "./types";
+import zhNode from "../i18n/locales/zh-Hans/lib-node-actions.json";
+import enNode from "../i18n/locales/en/lib-node-actions.json";
+import jaNode from "../i18n/locales/ja/lib-node-actions.json";
+import zhWorktree from "../i18n/locales/zh-Hans/worktree-actions.json";
+import enWorktree from "../i18n/locales/en/worktree-actions.json";
+import jaWorktree from "../i18n/locales/ja/worktree-actions.json";
+import zhAgent from "../i18n/locales/zh-Hans/agentmenus.json";
+import enAgent from "../i18n/locales/en/agentmenus.json";
+import jaAgent from "../i18n/locales/ja/agentmenus.json";
+import zhChat from "../i18n/locales/zh-Hans/chat-chatview.json";
+import enChat from "../i18n/locales/en/chat-chatview.json";
+import jaChat from "../i18n/locales/ja/chat-chatview.json";
 
 function deps(over: Partial<NodeActionDeps> = {}): NodeActionDeps {
   return {
@@ -11,6 +23,7 @@ function deps(over: Partial<NodeActionDeps> = {}): NodeActionDeps {
     renameTab: vi.fn(async () => {}),
     launchers: vi.fn(async () => [{ name: "claude" }, { name: "work", model: "m1" }, { name: "cx", agent: "codex" }]),
     newAgent: vi.fn(),
+    openSession: vi.fn(),
     copy: vi.fn(),
     notify: vi.fn(),
     changed: vi.fn(),
@@ -79,7 +92,7 @@ describe("splitting and running an agent", () => {
   });
 
   it("lists the launchers that start Claude Code when the submenu opens, and starts the one picked in the pane", async () => {
-    const d = deps();
+    const d = deps({ post: vi.fn(async () => ({ session_id: "s9" })) });
     const agent = by(nodeActions(tab, d), "node-agent");
     expect(typeof agent.children).toBe("function");
     const list = await (agent.children as () => Promise<MenuItem[]>)();
@@ -87,6 +100,66 @@ describe("splitting and running an agent", () => {
     expect(list[1].hint).toBe("m1");
     await list[1].onSelect();
     expect(d.post).toHaveBeenCalledWith("m1", "panes/agent", { pane: "w1:p2", launcher: "work" });
+    expect(d.notify).toHaveBeenCalledWith(expect.any(String), "ok");
+    expect(d.changed).toHaveBeenCalled();
+    // the agent it started opens, as New agent's does (#3287)
+    expect(d.openSession).toHaveBeenCalledWith("m1", "s9");
+  });
+
+  it("offers Codex launchers where the computer starts them in the user's pane (run_here, #5504), and only those", async () => {
+    const d = deps({
+      post: vi.fn(async () => ({ session_id: "c0de0000-0000-4000-8000-000000000009" })),
+      launchers: vi.fn(async () => [
+        { name: "claude" },
+        { name: "codex", agent: "codex", agent_type: "codex", prompt_optional: true, run_here: true, model: "gpt-6" },
+        { name: "cx_old", agent: "codex", prompt_optional: true }, // a computer that keeps no pane when a start fails
+        { name: "cx_cfg", agent_type: "codex", run_here: false },
+      ]),
+    });
+    const list = await (by(nodeActions(tab, d), "node-agent").children as () => Promise<MenuItem[]>)();
+    expect(list.map((i) => i.label)).toEqual(["claude", "codex"]);
+    await list[1].onSelect();
+    expect(d.post).toHaveBeenCalledWith("m1", "panes/agent", { pane: "w1:p2", launcher: "codex" });
+    // its waiting row opens, where the first message goes (docs/integrations/codex.md "Starting without a first message")
+    expect(d.openSession).toHaveBeenCalledWith("m1", "c0de0000-0000-4000-8000-000000000009");
+  });
+
+  it("never offers a launcher that starts the session in a desktop app (#5480): a shell would run nothing", async () => {
+    const d = deps({
+      launchers: vi.fn(async () => [
+        { name: "claude" },
+        { name: "claude-desktop", agent: "claude", source: "claude_desktop" },
+        { name: "codex-app", agent: "codex", source: "codex_app", run_here: true },
+      ]),
+    });
+    const list = await (by(nodeActions(tab, d), "node-agent").children as () => Promise<MenuItem[]>)();
+    expect(list.map((i) => i.label)).toEqual(["claude"]);
+  });
+
+  it("names a provider by its display name, its ID before the model at the row's end; an rc alias by its ID (#5029)", async () => {
+    const d = deps({ launchers: vi.fn(async () => [{ name: "relay-example-com", display_name: "我的中转 站", model: "glm-5" }, { name: "cc_glm" }]) });
+    const list = await (by(nodeActions(tab, d), "node-agent").children as () => Promise<MenuItem[]>)();
+    expect(list.map((i) => [i.label, i.hint])).toEqual([["我的中转 站", "relay-example-com · glm-5"], ["cc_glm", undefined]]);
+    await list[0].onSelect();
+    expect(d.post).toHaveBeenCalledWith("m1", "panes/agent", { pane: "w1:p2", launcher: "relay-example-com" });
+    expect(d.notify).toHaveBeenCalledWith("已在窗格里启动 我的中转 站", "ok");
+  });
+
+  it("stays where it is when the answer names no session", async () => {
+    for (const answer of [{}, { session_id: "" }, undefined]) {
+      const d = deps({ post: vi.fn(async () => answer) });
+      const list = await (by(nodeActions(tab, d), "node-agent").children as () => Promise<MenuItem[]>)();
+      await list[0].onSelect();
+      expect(d.notify).toHaveBeenCalledWith(expect.any(String), "ok");
+      expect(d.openSession).not.toHaveBeenCalled();
+    }
+  });
+
+  it("opens nothing when the start fails", async () => {
+    const d = deps({ post: vi.fn(async () => Promise.reject(new Error("pane busy"))) });
+    const list = await (by(nodeActions(tab, d), "node-agent").children as () => Promise<MenuItem[]>)();
+    await expect(list[0].onSelect()).rejects.toThrow("pane busy");
+    expect(d.openSession).not.toHaveBeenCalled();
   });
 
   it("says why a launcher this computer's terminal can't run, after the usable ones, and still lets it run (#1643)", async () => {
@@ -131,6 +204,26 @@ describe("git", () => {
     expect(d.notify).toHaveBeenCalledWith("推送：已是最新", "ok");
   });
 
+  it("says what came of it in the app's language, or an older node's own words (#1888)", async () => {
+    const d = deps({ post: vi.fn(async () => ({ outcome: "pushed", message: "Pushed" })) });
+    await (by(nodeActions(tab, d), "node-git").children as MenuItem[])[1].onSelect();
+    expect(d.notify).toHaveBeenCalledWith("推送：已推送", "ok");
+    expect(gitOutcomeText({ outcome: "nothing_to_push", message: "No commits to push" })).toBe("没有要推送的提交");
+    expect(gitOutcomeText({ outcome: "a_new_outcome", message: "node words" })).toBe("node words");
+    expect(gitOutcomeText(undefined)).toBe("完成");
+  });
+
+  it("push asks first and says where it goes and that it is never forced; pull and fetch run at once (#1883)", () => {
+    const ops = by(nodeActions(tab, deps()), "node-git").children as MenuItem[];
+    const [pull, push, fetch] = ops;
+    expect(push.confirm).toBe("确认推送");
+    expect(push.confirmDetail).toBe("main 会推到它的上游分支。不会强制推送：远端有更新的提交时会停下并说明。");
+    expect(pull.confirm).toBeUndefined();
+    expect(fetch.confirm).toBeUndefined();
+    const noBranch = by(nodeActions({ ...tab, branch: undefined }, deps()), "node-git").children as MenuItem[];
+    expect(noBranch[1].confirmDetail).toBe("当前分支会推到它的上游分支。不会强制推送：远端有更新的提交时会停下并说明。");
+  });
+
   it("a workspace without a pane is named by its id and host", async () => {
     const d = deps();
     const ws: MenuNode = { kind: "workspace", mid: "m1", host: "herdr", workspaceId: "w1", label: "proj" };
@@ -156,6 +249,33 @@ describe("read-only items", () => {
     (by(items, "node-git").children as MenuItem[]).find((i) => i.key === "node-copy-branch")!.onSelect();
     expect(d.copy).toHaveBeenLastCalledWith("feat/x");
   });
+  it("says one verb and ID, and names the id by what it is, never by the engine (herdr) behind it", () => {
+    const d = deps();
+    const space: MenuNode = { kind: "workspace", mid: "m1", host: "herdr", label: "proj", workspaceId: "w1", cwd: "/home/me/proj" };
+    const labels = (node: MenuNode) => nodeActions(node, d).filter((i) => i.icon === "copy").map((i) => i.label);
+    expect(labels(pane)).toEqual(["复制目录路径", "复制会话 ID", "复制窗格 ID"]);
+    expect(labels(tab)).toEqual(["复制目录路径", "复制标签页 ID"]);
+    expect(labels(space)).toEqual(["复制目录路径", "复制空间 ID"]);
+    expect(labels({ kind: "machine", mid: "m1" })).toEqual(["复制机器 ID"]);
+    // the same values as before: only the words changed
+    by(nodeActions(tab, d), "node-copy-id").onSelect();
+    expect(d.copy).toHaveBeenLastCalledWith("w1:t2");
+    by(nodeActions(space, d), "node-copy-id").onSelect();
+    expect(d.copy).toHaveBeenLastCalledWith("w1");
+    for (const node of [pane, tab, space]) for (const label of labels(node)) expect(label).not.toMatch(/herdr|拷贝|\bid\b/);
+  });
+  it("copies a folder's path in the same words in every menu of the Agents list and a chat, in every language", () => {
+    const languages = [
+      { node: zhNode, worktree: zhWorktree, agent: zhAgent, chat: zhChat },
+      { node: enNode, worktree: enWorktree, agent: enAgent, chat: enChat },
+      { node: jaNode, worktree: jaWorktree, agent: jaAgent, chat: jaChat },
+    ];
+    for (const { node, worktree, agent, chat } of languages) {
+      expect(new Set([node.copy_path, worktree.copy_path, agent.copy_folder, chat.copy_folder]).size).toBe(1);
+    }
+    // the By repository grouping's worktree menu, beside the node menus, says their verb
+    expect([zhWorktree.copy_name, zhWorktree.copy_path, zhNode.copy_path]).toEqual(["复制工作树名称", "复制目录路径", "复制目录路径"]);
+  });
   it("leaves out what is not known", () => {
     const k = keys(nodeActions({ kind: "pane", mid: "m1", paneId: "w1:p3", agent: "" }, deps()));
     expect(k).not.toContain("node-copy-path");
@@ -177,6 +297,43 @@ describe("read-only items", () => {
   });
 });
 
+describe("closing a pane (#7125)", () => {
+  const shell: MenuNode = { kind: "pane", mid: "m1", host: "herdr", workspaceId: "w1", tabId: "w1:t2", paneId: "w1:p4", agent: "", cwd: "/home/me/proj", branch: "main" };
+  const agent: MenuNode = { ...shell, paneId: "w1:p3", sessionId: "sid-1", agent: "claude" };
+  it("sits with the pane's own actions, right after New pane, not in a danger group at the bottom", () => {
+    const items = nodeActions(shell, deps());
+    expect(keys(items)).toEqual(["node-split", "node-close-pane", "node-agent", "node-git", "node-copy-path", "node-copy-id"]);
+    expect(by(items, "node-close-pane")).toMatchObject({ danger: true, closes: true, confirm: "确认关闭", inline: true });
+    expect(by(items, "node-close-pane").divider).toBeFalsy();
+  });
+  it("a shell's pane closes after the menu's second click, as before", async () => {
+    const d = deps({ closeAgent: vi.fn(() => undefined) });
+    await by(nodeActions(shell, d), "node-close-pane").onSelect();
+    expect(d.post).toHaveBeenCalledWith("m1", "panes/close", { pane: "w1:p4" });
+    expect(d.closeAgent).not.toHaveBeenCalled();
+  });
+  it("an agent's pane asks with the agent's Close… instead, so a busy agent is never closed by the second click alone", () => {
+    const open = vi.fn();
+    const d = deps({ closeAgent: vi.fn(() => ({ onSelect: open })) });
+    const close = by(nodeActions(agent, d), "node-close-pane");
+    expect(d.closeAgent).toHaveBeenCalledWith("m1", "sid-1");
+    expect(close.confirm).toBeUndefined();
+    expect(close.inline).toBeUndefined();
+    close.onSelect();
+    expect(open).toHaveBeenCalledOnce();
+    expect(d.post).not.toHaveBeenCalled();
+  });
+  it("stays disabled, saying why, where the agent's Close… is", () => {
+    const d = deps({ closeAgent: () => ({ onSelect: () => {}, disabled: true, detail: "正忙" }) });
+    expect(by(nodeActions(agent, d), "node-close-pane")).toMatchObject({ disabled: true, detail: "正忙" });
+  });
+  it("closes the pane as a shell's when the page doesn't list the agent's session", async () => {
+    const d = deps({ closeAgent: () => undefined });
+    await by(nodeActions(agent, d), "node-close-pane").onSelect();
+    expect(d.post).toHaveBeenCalledWith("m1", "panes/close", { pane: "w1:p3" });
+  });
+});
+
 describe("what a computer that cannot be changed is offered", () => {
   it("an offline machine or another host's node only copies", () => {
     for (const node of [{ ...tab, online: false }, { ...tab, host: "orca" }, { ...tab, host: "botmux" }]) {
@@ -186,6 +343,31 @@ describe("what a computer that cannot be changed is offered", () => {
     expect(canChangeHost(undefined)).toBe(true);
     expect(canChangeHost("herdr")).toBe(true);
     expect(canChangeHost("herdr-core")).toBe(false);
+  });
+});
+
+describe("a Tern node (#2154)", () => {
+  const ternTab: MenuNode = { ...tab, host: "tern", workspaceId: "s1", tabId: "t2", paneId: "tern:5" };
+  const ternSpace: MenuNode = { kind: "workspace", mid: "m1", host: "tern", label: "proj", workspaceId: "s1", cwd: "/home/me/proj", branch: "main", canWorktree: true };
+
+  it("renames its tabs and workspaces, and is not asked to split, run an agent, git, close or make a worktree", async () => {
+    const d = deps({ newWorktree: vi.fn() });
+    expect(keys(nodeActions(ternTab, d))).toEqual(["node-rename", "node-copy-path", "node-copy-id", "node-copy-branch"]);
+    expect(keys(nodeActions(ternSpace, d))).toEqual(["node-new-agent", "node-rename", "node-copy-path", "node-copy-id", "node-copy-branch"]);
+    await by(nodeActions(ternTab, d), "node-rename").rename!.commit("deploy");
+    expect(d.renameTab).toHaveBeenCalledWith(ternTab, "deploy");
+    await by(nodeActions(ternSpace, d), "node-rename").rename!.commit("docs");
+    expect(d.renameWorkspace).toHaveBeenCalledWith(ternSpace, "docs");
+  });
+
+  it("renames nothing while its machine is offline; the other hosts still rename nothing", () => {
+    expect(keys(nodeActions({ ...ternTab, online: false }, deps()))).not.toContain("node-rename");
+    for (const host of ["orca", "herdr-core", "botmux"]) expect(keys(nodeActions({ ...ternTab, host }, deps()))).not.toContain("node-rename");
+    expect(canRenameIn("tern")).toBe(true);
+    expect(canRenameIn("rex")).toBe(true);
+    expect(canRenameIn(undefined)).toBe(true);
+    expect(canChangeHost("tern")).toBe(false);
+    expect(canChangeHost("rex")).toBe(false);
   });
 });
 
@@ -289,5 +471,17 @@ describe("the nodes of the two trees", () => {
     expect(shells[0].tabs.map((t) => t.label)).toEqual(["shell", "split"]);
     expect(shells[0].tabs.flatMap((t) => t.panes.map((p) => p.pane))).toEqual(["w1:p2", "w1:p3", "w1:p4"]);
     expect(shellsOnly([{ ...sp, tabs: [sp.tabs[0]] }])).toEqual([]);
+  });
+});
+
+
+describe("session menus keep pane operations in the terminal toolbar (#10239)", () => {
+  it.each(["herdr", "orca", "tern", "botmux"])("removes pane controls for a %s session", (host) => {
+    const node = sessionNode({ machine_id: "m1", session_id: "s1", pane_id: "w1:p1", space_kind: host, cwd: "/project" } as Session, true);
+    const items = keys(nodeActions(node, deps()));
+    for (const key of ["node-split", "node-close-pane", "node-copy-id"]) expect(items).not.toContain(key);
+    expect(items).toContain("node-copy-session");
+    if (host === "herdr") expect(items).toContain("node-git");
+    expect(keys(nodeActions({ ...node, paneId: undefined }, deps()))).not.toContain("node-split");
   });
 });

@@ -20,8 +20,9 @@ import { useMedia } from "../../lib/viewport";
 import { t } from "../../i18n";
 import { Button, cx, Dialog, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
+import { scrollBehavior } from "../../ui/stream/motion";
 import { Pill } from "../settings/SettingsParts";
-import { Avatar, Box, card, LH, LoadLine, MARK, PILL, type CodeHandlers } from "./CodeViews";
+import { Avatar, Box, card, LH, LoadLine, MARK, PILL, whenDone, type CodeHandlers } from "./CodeViews";
 import { ViewMarkdown } from "./ViewBody";
 import { ReviewContext, useReview, type ReviewApi } from "./review-context";
 import { scopeLocal, useNativeState, type NativeLocal } from "./native-state";
@@ -62,33 +63,45 @@ export function ReviewProvider({ view, page, fetch, children, local, nativeCache
     }
   });
   const cache = useRef(new Map<string, LineCache>());
+  // each mark_viewed sent gets a number; a path's latest one on this page is the only one whose failure takes it back
+  const marking = useRef({ n: 0, latest: new Map<string, number>() });
   useEffect(() => {
     setOver(new Map());
     cache.current = new Map();
+    marking.current.latest = new Map();
   }, [page]);
   const index = useMemo(() => indexOf(view), [view]);
   const fetchRef = useRef(fetch);
   fetchRef.current = fetch;
   const api = useMemo<ReviewApi>(() => {
     const localId = (d: UIItem) => changeId(d.path ?? "", d.revision, d.hunks);
+    const viewed = (path: string) => {
+      const d = index.diffs.get(path);
+      const o = local && d ? nativeOver[localId(d)] : over.get(path);
+      if (o !== undefined) return o;
+      if (local && d) return !!d.viewed;
+      if (d && !d.mark_viewed) return here.has(localId(d));
+      return d ? !!d.viewed : !!index.entries.get(path);
+    };
     return {
       fetch: (a, v) => fetchRef.current(a, v),
-      viewed: (path) => {
-        const d = index.diffs.get(path);
-        const o = local && d ? nativeOver[localId(d)] : over.get(path);
-        if (o !== undefined) return o;
-        if (local && d) return !!d.viewed;
-        if (d && !d.mark_viewed) return here.has(localId(d));
-        return d ? !!d.viewed : !!index.entries.get(path);
-      },
+      viewed,
       setViewed: (path, v) => {
         const d = index.diffs.get(path);
         if (local && d) setNativeOver((m) => ({ ...m, [localId(d)]: v }));
         else setOver((m) => new Map(m).set(path, v));
         // Native mark_viewed dispatch belongs to the displayed diff's handler, never this provider's latest index.
         if (local) return;
-        if (d?.mark_viewed) void fetchRef.current(d.mark_viewed, { path, viewed: String(v) });
-        else if (d) {
+        // rejected by the extension: the mark it had goes back, as on the native path (DiffView's setViewed), unless
+        // it was changed again since or the page is another one (its marks start afresh)
+        if (d?.mark_viewed) {
+          const was = viewed(path); // this render's mark, from before the change
+          const mine = ++marking.current.n;
+          marking.current.latest.set(path, mine);
+          void fetchRef.current(d.mark_viewed, { path, viewed: String(v) }).then((r) => {
+            if (!r && marking.current.latest.get(path) === mine) setOver((m) => new Map(m).set(path, was));
+          });
+        } else if (d) {
           setViewedHere(localId(d), v);
           setHere(viewedHere());
         }
@@ -115,9 +128,9 @@ export function ReviewProvider({ view, page, fetch, children, local, nativeCache
   return <ReviewContext.Provider value={api}>{children}</ReviewContext.Provider>;
 }
 
-/** Scrolls to an element, under the sticky file head. */
+/** Scrolls to an element, under the sticky file head (straight there under reduced motion). */
 function goTo(el: Element | undefined) {
-  el?.scrollIntoView({ behavior: "smooth", block: "start" });
+  el?.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
 }
 
 /** The elements of a kind on the page, and the one after or before the top of the screen. */
@@ -154,11 +167,11 @@ export function useReviewKeys(on: boolean, help: () => void) {
           break;
         case "next-change":
         case "prev-change":
-          step("[data-change]", cmd === "next-change")?.scrollIntoView({ behavior: "smooth", block: "center" });
+          step("[data-change]", cmd === "next-change")?.scrollIntoView({ behavior: scrollBehavior(), block: "center" });
           break;
         case "next-thread":
         case "prev-thread":
-          step("[data-unresolved]", cmd === "next-thread")?.scrollIntoView({ behavior: "smooth", block: "center" });
+          step("[data-unresolved]", cmd === "next-thread")?.scrollIntoView({ behavior: scrollBehavior(), block: "center" });
           break;
         case "whitespace":
           setWhitespace(!whitespace);
@@ -262,7 +275,9 @@ export function ReviewToolbar({ view, onHelp }: { view: UIView; onHelp: () => vo
       {open > 0 && (
         <button
           type="button"
-          onClick={() => step("[data-unresolved]", true)?.scrollIntoView({ behavior: "smooth", block: "center" }) ?? document.querySelector("[data-unresolved]")?.scrollIntoView({ behavior: "smooth", block: "center" })}
+          // the next one, past the last the first: picked, then scrolled to once (scrollIntoView answers undefined, so
+          // `a?.scrollIntoView() ?? b?.scrollIntoView()` would run both and always end on the first)
+          onClick={() => (step("[data-unresolved]", true) ?? document.querySelector("[data-unresolved]"))?.scrollIntoView({ behavior: scrollBehavior(), block: "center" })}
           className="flex h-7 items-center gap-1.5 rounded-[8px] px-2 whitespace-nowrap text-orange transition-colors hover:bg-hover"
           title={t("extensions-review.next_open")}
         >
@@ -299,10 +314,8 @@ const BUTTON_TONE = { neutral: "secondary", positive: "accent", caution: "second
 function ReviewForm({ view, act, busy, done }: { view: UIView; done?: () => void } & Pick<CodeHandlers, "act" | "busy">) {
   const r = view.review!;
   const [body, setBody] = useState(r.value ?? "");
-  const press = (a: UIAction) => {
-    act(a, { [r.name]: body });
-    done?.();
-  };
+  // closed (and the summary gone) only once it has been taken
+  const press = (a: UIAction) => whenDone(act(a, { [r.name]: body }), () => done?.());
   return (
     <div className="flex flex-col gap-2.5">
       <Box value={body} onChange={setBody} placeholder={r.placeholder || t("extensions-review.summary")} onSubmit={() => r.buttons[0] && press(r.buttons[0].action)} disabled={!!busy} />
@@ -578,8 +591,10 @@ function ThreadCard({ thread, act, busy, original, local }: { thread: Thread; or
   const range = thread.start_line && thread.start_line < thread.line ? `${thread.start_line}–${thread.line}` : "";
   const send = () => {
     if (!body.trim() || !thread.reply) return;
-    act(thread.reply as UIAction, { ...(thread.id ? { thread: thread.id } : {}), body: body.trim() });
-    if (!local) { setBody(""); setReplying(false); }
+    // kept until it has gone: a reply that failed stays to send again
+    whenDone(act(thread.reply as UIAction, { ...(thread.id ? { thread: thread.id } : {}), body: body.trim() }), () => {
+      if (!local) { setBody(""); setReplying(false); }
+    });
   };
   return (
     <div
@@ -672,8 +687,10 @@ function LineComposer({ pick, body, setBody, item, act, busy, original, onCancel
   });
   const go = (a: UIAction | undefined) => {
     if (!a || !body.trim()) return;
-    act(a, values(body.trim()));
-    if (!local) { onCancel(); setBody(""); }
+    // kept until it has gone: a comment that failed stays to send again
+    whenDone(act(a, values(body.trim())), () => {
+      if (!local) { onCancel(); setBody(""); }
+    });
   };
   const draftFirst = !!item.draft && drafts > 0;
   const primary = draftFirst ? item.draft : item.comment;

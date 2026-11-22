@@ -32,11 +32,13 @@ type apnsConfig = apns.Config
 type Pusher struct {
 	dir     string
 	store   Store
+	quiesce *writeQuiescer
 	logf    func(string, ...any)
 	traffic func(trafficKey, int64, time.Duration)
 	// direct: the hub's own APNs key. Set, every push goes straight to APNs as before; nil, through the relay.
 	direct *apns.Client
-	relay  *http.Client
+	// relay posts to the devices' relays over connections kept between pushes (apns.NewTransport, #4800).
+	relay *http.Client
 	// retryWaits: how long a push the relay did not take for a reason that may pass waits before each further try
 	// (postRelayRetrying); tests shorten them.
 	retryWaits []time.Duration
@@ -52,6 +54,15 @@ type Pusher struct {
 	// desktopOpen: the desktop app with this push device id is connected (Hub.desktopOpen); it posts its own
 	// notifications for agents then (the Mac's MacAttentionWatcher).
 	desktopOpen func(device string) bool
+	// web pushes to the browsers that turned Web Push on (webpush.go, #7459).
+	web *webPusher
+	// devicesChanged runs after a device was registered, forgotten or reloaded, or its settings changed (Hub:
+	// fleet.clients, whether a phone would be pushed an MCP form). It may run under the Pusher's locks: it must not block.
+	devicesChanged func()
+
+	// sends counts the APNs and relay posts still on their way (sendBuiltWith, sendLiveActivity): each runs in its own
+	// goroutine and logs when it ends, so whoever closes what they post to (a test's fake APNs) waits for them first.
+	sends sync.WaitGroup
 
 	mu sync.Mutex
 	// sendMu lets maintenance skip an active transport instead of retiring a
@@ -68,20 +79,49 @@ type Pusher struct {
 	acceptedDirty map[string]bool
 	// withdrawals: where each card's push went, to take it back when the card is over (push_withdraw.go).
 	withdrawals withdrawals
-	saveMu      sync.Mutex // one device row write at a time, always the latest state (save, setPrefs)
+	saveMu      sync.Mutex // one device row write at a time, always the latest state (register, setPrefsBy, renewal, forget, maintenance)
 	// storeTimeout bounds each device row write, which never runs under mu; tests shorten it.
 	storeTimeout time.Duration
 	// prefsEdit holds one change of a device's settings from its read to its write (editPrefs); taken before saveMu
 	// and mu, never by a push.
 	prefsEdit sync.Mutex
+
+	// gradingMu guards the low-distraction mode state (push_grading.go): the cached switch, the per-key push times for the
+	// 12-hour rule, the held-push list and the delivered-push counts.
+	gradingMu         sync.Mutex
+	gradingCached     *bool
+	gradingCachedAt   time.Time
+	gradingRefreshing bool
+	gradingVersion    uint64 // bumped by setPushGrading, so a refresh that read before it does not undo it
+	gradingLastAlert  map[string]time.Time
+	intercepts        []heldPushRecord
+	sent              []pushSent
+	heldDirty         bool // the held-push list changed since the last save
+	// sentPending are the delivered pushes not yet appended to the store's record (pushSentStore); sentPrunedAt is
+	// when its last sweep ran.
+	sentPending  []pushSent
+	sentPrunedAt time.Time
+	// The hub.push_sent setting a build from before the table reads (mirrorSent): sentMirrorable once this hub read
+	// both at start, sentMirrorDue while it holds pushes the setting lacks, sentMirroredAt its last write.
+	sentMirrorable bool
+	sentMirrorDue  bool
+	sentMirroredAt time.Time
+	sentMirrorMu   sync.Mutex
+	gradingWriting bool // the one saver goroutine is running
+
+	maintenanceWake     chan struct{}
+	maintenanceDeferred bool
+	pendingForgets      []Device
 }
 
 // deviceStoreTimeout: how long a device row write may take before it gives up (the pool has no statement_timeout).
 const deviceStoreTimeout = 5 * time.Second
 
 func newPusher(dir string, store Store, logf func(string, ...any)) *Pusher {
-	p := &Pusher{dir: dir, store: store, logf: logf, devices: map[string]Device{}, replaced: map[string]string{}, failed: map[string]pushFailure{}, withdrawals: newWithdrawals(), relay: &http.Client{Timeout: 20 * time.Second},
-		retryWaits: []time.Duration{time.Second, 4 * time.Second}, now: time.Now, storeTimeout: deviceStoreTimeout}
+	p := &Pusher{dir: dir, store: store, logf: logf, devices: map[string]Device{}, replaced: map[string]string{}, failed: map[string]pushFailure{}, withdrawals: newWithdrawals(), relay: &http.Client{Timeout: 20 * time.Second, Transport: apns.NewTransport()},
+		retryWaits: []time.Duration{time.Second, 4 * time.Second}, now: time.Now, storeTimeout: deviceStoreTimeout,
+		// Web Push in memory here; the hub gives it the store when it starts (hub.go): a test's store may have no settings.
+		web: newWebPusher(nil, logf)}
 	if store != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), deviceStoreTimeout)
 		if _, err := store.ReconcilePushDevices(ctx, p.now().UTC(), pushDeviceMaxIdle); err != nil {
@@ -96,6 +136,7 @@ func newPusher(dir string, store Store, logf func(string, ...any)) *Pusher {
 		}
 		cancel()
 	}
+	p.loadPushGradingState() // the grading switch and held pushes survive restarts (hub_settings), whether or not APNs is configured
 	b, err := os.ReadFile(filepath.Join(dir, "apns.json"))
 	if err != nil {
 		logf("push: no %s, pushing through each phone's relay (docs/operations/push-relay.md)", filepath.Join(dir, "apns.json"))
@@ -134,6 +175,10 @@ func validRelayURL(s string) bool {
 }
 
 func (p *Pusher) register(d Device) error {
+	return p.registerContext(context.Background(), d)
+}
+
+func (p *Pusher) registerContext(ctx context.Context, d Device) error {
 	d.UpdatedAt = p.now().UTC()
 	d.RegisteredAt = d.UpdatedAt
 	d.Registering = true
@@ -148,6 +193,7 @@ func (p *Pusher) register(d Device) error {
 		d.RelayError = ""
 	}
 	d.RelayError = clipRelayError(d.RelayError)
+	cleanVoIP(&d)
 	d.Features = cleanFeatures(d.Features)
 	p.mu.Lock()
 	cur := p.devices[d.DeviceID]
@@ -167,10 +213,11 @@ func (p *Pusher) register(d Device) error {
 	p.mu.Unlock()
 	// Publish only after the ownership check and duplicate retirement commit.
 	// A failed enrollment must not expose an unpersisted APNs target to sends.
-	if err := p.writeDevice(d); err != nil {
+	if err := p.writeDeviceIn(ctx, d); err != nil {
 		return err
 	}
 	d.Registering = false
+	defer p.changed() // after mu is let go
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if d.APNSToken != cur.APNSToken || d.RelayURL != cur.RelayURL {
@@ -191,30 +238,6 @@ func (p *Pusher) register(d Device) error {
 	return nil
 }
 
-// save writes a device's current row (whatever the latest register / renewal left), one write at a time.
-func (p *Pusher) save(id string) error {
-	if p.store == nil {
-		return nil
-	}
-	p.saveMu.Lock()
-	defer p.saveMu.Unlock()
-	return p.saveLocked(id)
-}
-
-// saveLocked requires saveMu; renewal and maintenance already hold it.
-func (p *Pusher) saveLocked(id string) error {
-	if p.store == nil {
-		return nil
-	}
-	p.mu.Lock()
-	d, ok := p.devices[id]
-	p.mu.Unlock()
-	if !ok {
-		return nil
-	}
-	return p.writeDevice(d)
-}
-
 // writeDevice requires saveMu and never publishes a failed write.
 func (p *Pusher) writeDevice(d Device) error {
 	return p.writeDeviceIn(context.Background(), d)
@@ -223,6 +246,12 @@ func (p *Pusher) writeDevice(d Device) error {
 func (p *Pusher) writeDeviceIn(parent context.Context, d Device) error {
 	if p.store == nil {
 		return nil
+	}
+	if !quiesceHeld(parent) {
+		if !p.quiesce.begin() {
+			return i18n.Err("hub-selfupdate.err_quiesced")
+		}
+		defer p.quiesce.end()
 	}
 	ctx, cancel := context.WithTimeout(parent, p.storeTimeout)
 	defer cancel()
@@ -244,6 +273,22 @@ func (p *Pusher) reachable(d Device) bool {
 		return d.APNSToken != ""
 	}
 	return p.relayed(d)
+}
+
+// routed: a push to the device with this credential (or push registration id) can go somewhere. APNs keeps its alerts
+// while it is away, so the hub keeps none of its WebSocket's for it (notifyring.go).
+func (p *Pusher) routed(id string) bool {
+	if p == nil || id == "" {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, d := range p.devices {
+		if (d.DeviceID == id || d.CredentialID == id) && p.reachable(d) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Pusher) currentPushTarget(d Device) bool {
@@ -277,6 +322,15 @@ func (p *Pusher) signedOut(credential string) {
 		p.forget(d)
 		p.logf("device %s signed out: no more pushes", d.Name)
 	}
+	p.web.signedOut(credential)
+}
+
+// webPusher is p's Web Push (nil for a nil Pusher).
+func (p *Pusher) webPusher() *webPusher {
+	if p == nil {
+		return nil
+	}
+	return p.web
 }
 
 // forget drops a device, whatever token it has now (signedOut), with all of its push bookkeeping: a push accepted
@@ -290,6 +344,7 @@ func (p *Pusher) forget(d Device) {
 	delete(p.replaced, d.DeviceID)
 	delete(p.acceptedDirty, d.DeviceID)
 	p.mu.Unlock()
+	p.changed()
 	p.deleteRow(d)
 }
 
@@ -311,6 +366,14 @@ func (p *Pusher) deleteRow(d Device) {
 // grant), and that late answer must not delete the new registration and its settings. Under saveMu, so a save of a
 // newer registration is not undone by the delete that follows it, or the other way round.
 func (p *Pusher) forgetIfCurrent(d Device) {
+	if !p.quiesce.beginOrDefer(func() {
+		p.mu.Lock()
+		p.pendingForgets = append(p.pendingForgets, d)
+		p.mu.Unlock()
+	}) {
+		return
+	}
+	defer p.quiesce.end()
 	p.saveMu.Lock()
 	defer p.saveMu.Unlock()
 	p.mu.Lock()
@@ -338,6 +401,7 @@ func (p *Pusher) forgetIfCurrent(d Device) {
 					}
 				}
 				p.mu.Unlock()
+				p.changed()
 			} else {
 				p.logf("reload push registration after late gone: %v", readErr)
 			}
@@ -353,6 +417,14 @@ func (p *Pusher) forgetIfCurrent(d Device) {
 	delete(p.replaced, d.DeviceID)
 	delete(p.acceptedDirty, d.DeviceID)
 	p.mu.Unlock()
+	p.changed()
+}
+
+// changed tells devicesChanged (nil: nobody) the devices or their settings may differ now.
+func (p *Pusher) changed() {
+	if p.devicesChanged != nil {
+		p.devicesChanged()
+	}
 }
 
 // prefs is a device's notification settings (defaults when it never set any).
@@ -362,11 +434,9 @@ func (p *Pusher) prefs(id string) NotifyPrefs {
 	return devicePrefs(p.devices[id].Prefs)
 }
 
-// setPrefs stores a device's notification settings (also for a device that has not registered a token yet).
-func (p *Pusher) setPrefs(id string, prefs NotifyPrefs) error { return p.setPrefsBy(id, "", prefs) }
-
-// setPrefsBy is setPrefs written with a device token (`credential`): a device that has none recorded takes it, so
-// revoking the token forgets a device only its prefs made (a browser's Settings › Notifications, which never registers a push token).
+// setPrefsBy stores a device's notification settings (also for a device that has not registered a token yet),
+// written with a device token (`credential`): a device that has none recorded takes it, so revoking the token
+// forgets a device only its prefs made (a browser's Settings › Notifications, which never registers a push token).
 // The row is written under saveMu, not mu: a slow database holds this one save (up to storeTimeout), not every
 // other device's settings and every push. The settings take effect once the row is written.
 func (p *Pusher) setPrefsBy(id, credential string, prefs NotifyPrefs) error {
@@ -392,6 +462,7 @@ func (p *Pusher) setPrefsBy(id, credential string, prefs NotifyPrefs) error {
 	}
 	d.Prefs = raw
 	p.devices[id] = d
+	p.changed() // "Needs you" and Phone Muted decide whether an MCP form would be pushed
 	return nil
 }
 

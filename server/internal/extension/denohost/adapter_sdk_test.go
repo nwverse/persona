@@ -20,7 +20,8 @@ func TestTrustedAdapterMatchesOfficialSDK(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "adapter.mjs")
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bun, "build", "adapter.ts", "--target=browser", "--minify", "--outfile", output)
+	// The flags of scripts/gen/deno_adapter.sh: no identifier minification, so a type-only SDK edit leaves the bytes (#6001).
+	cmd := exec.CommandContext(ctx, bun, "build", "adapter.ts", "--target=browser", "--minify-syntax", "--minify-whitespace", "--outfile", output)
 	if raw, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("generate trusted adapter: %v %s", err, raw)
 	}
@@ -37,7 +38,7 @@ func TestTrustedAdapterMatchesOfficialSDK(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(generated, embedded) {
-		t.Fatal("trusted adapter is stale: run scripts/gen/deno_adapter.sh with the portable runtime CI's Bun version")
+		t.Fatal("trusted adapter is stale: run scripts/gen/deno_adapter.sh with the bun-version pinned in .github/workflows/server-test.yml")
 	}
 	t.Log("PASS generated trusted adapter matches the official SDK and installed bytes")
 }

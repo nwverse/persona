@@ -2,6 +2,7 @@ package persona.core.hub
 
 import persona.core.contracts.api.InboxAssistantTransport
 import persona.core.contracts.api.LarkConversationTransport
+import persona.core.contracts.api.LarkMention
 import persona.core.contracts.api.LarkThreadTransport
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.*
@@ -20,6 +21,8 @@ class HttpLarkConversationTransport(
 ) : LarkConversationTransport, LarkThreadTransport, LarkThreadReplyTransport, InboxAssistantTransport by delegate {
     override suspend fun replyInThread(messageId: String, text: String, clientId: String) =
         (delegate as LarkThreadReplyTransport).replyInThread(messageId, text, clientId)
+    override suspend fun replyInThread(messageId: String, text: String, clientId: String, mentions: List<LarkMention>) =
+        (delegate as LarkThreadReplyTransport).replyInThread(messageId, text, clientId, mentions)
     override suspend fun thread(messageId: String, before: String?) =
         (delegate as LarkThreadTransport).thread(messageId, before)
     private val base = baseUrl.toHttpUrl()
@@ -30,7 +33,7 @@ class HttpLarkConversationTransport(
         require(feedId.isNotBlank() && position >= 0)
         if (!isCurrent()) throw CancellationException("Pairing changed")
         val url = base.newBuilder().addPathSegments("api/v1/lark/conversations")
-            .addPathSegment(feedId).addPathSegment("read").build()
+            .addPathSegment(feedId).addPathSegment("read").build().withRequestManager()
         val body = buildJsonObject {
             // The extension (and the web client) carry positions as strings; a number fails to decode there and
             // every read came back 400 "position is required", so no Feishu message was ever marked read from Android.
@@ -50,7 +53,7 @@ class HttpLarkConversationTransport(
         require(messageId.isNotBlank() && key.isNotBlank())
         if (!isCurrent()) throw CancellationException("Pairing changed")
         val url = base.newBuilder().addPathSegments("api/v1/lark/messages")
-            .addPathSegment(messageId).addPathSegment("reactions").build()
+            .addPathSegment(messageId).addPathSegment("reactions").build().withRequestManager()
         val body = buildJsonObject {
             put("key", key)
             put("remove", remove)
@@ -67,7 +70,7 @@ class HttpLarkConversationTransport(
         require(messageId.isNotBlank() && actionId.isNotBlank())
         if (!isCurrent()) throw CancellationException("Pairing changed")
         val url = base.newBuilder().addPathSegments("api/v1/lark/messages")
-            .addPathSegment(messageId).addPathSegments("card-actions").addPathSegment(actionId).build()
+            .addPathSegment(messageId).addPathSegments("card-actions").addPathSegment(actionId).build().withRequestManager()
         val request = Request.Builder().url(url).header("Authorization", "Bearer $token")
             .post("{}".toRequestBody("application/json".toMediaType())).build()
         http.newCall(request).awaitResponse().use {
@@ -82,7 +85,7 @@ class HttpLarkConversationTransport(
         val urlBuilder = base.newBuilder().addPathSegments("api/v1/lark/users")
             .addPathSegment(userId)
         if (!feedId.isNullOrBlank()) urlBuilder.addQueryParameter("feed_id", feedId)
-        val request = Request.Builder().url(urlBuilder.build()).header("Authorization", "Bearer $token").get().build()
+        val request = Request.Builder().url(urlBuilder.build().withRequestManager()).header("Authorization", "Bearer $token").get().build()
         return http.newCall(request).awaitResponse().use {
             if (!isCurrent()) throw CancellationException("Pairing changed")
             if (!it.isSuccessful) throw HubFailure.from(it)

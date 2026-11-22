@@ -3,7 +3,7 @@
 A case is a function taking a `T`. `run(cases, setup, runs, launch)` launches the app once, calls `setup(t)` before each
 case (no relaunch: the mock is reset and the app moved back to where the case starts), times every case, prints one line
 per run and a summary, and exits non-zero when any run failed. A failed run leaves the screen as it was then in
-CLITEST_OUT (default <tmp>/clitest)/<time>/<case>-<run>/: `dump`. docs/operations/runtime-cli.md "UI cases written with the CLI".
+CLITEST_OUT (default <tmp>/clitest)/<time>/<case>-<run>/: `dump`. docs/operations/runtime-cli.md "UI tests written with the CLI".
 """
 import base64
 import json

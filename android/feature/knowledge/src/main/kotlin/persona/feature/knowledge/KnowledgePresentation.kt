@@ -3,6 +3,9 @@ package persona.feature.knowledge
 import persona.core.contracts.Session
 import persona.core.contracts.contextBody
 import persona.core.contracts.api.*
+import persona.core.domain.sort.AgentSession
+import persona.core.domain.sort.foldedSubtasks
+import persona.core.domain.sort.foldRows
 import kotlinx.serialization.json.*
 import androidx.annotation.StringRes
 import java.time.Instant
@@ -54,6 +57,34 @@ internal fun projectSections(entries: List<KnowledgeEntry>): List<KnowledgeSecti
 /** The other kinds keep the hub's order (importance, then relevance); a tag names the section. */
 internal fun kindSections(entries: List<KnowledgeEntry>, tag: String?): List<KnowledgeSection> =
     if (entries.isEmpty()) emptyList() else listOf(KnowledgeSection(R.string.knowledge_section_ranked, entries, tag = tag))
+
+/** Meetings and Persona's recordings share one list (#9994). A recording the hub matched to an imported meeting keeps
+ * that meeting on its own row, and the imported row goes. Recordings without a listed match stay exactly as they are. */
+internal fun mergeMeetingLists(meetings: KnowledgeList, recordings: KnowledgeList): KnowledgeList {
+    val byId = meetings.items.distinctBy { it.id }.associateBy { it.id }
+    val covered = mutableSetOf<String>()
+    val recs = recordings.items.map { recording ->
+        val imported = recording.meetingId?.let(byId::get) ?: return@map recording
+        covered += imported.id
+        recording.copy(imported = imported)
+    }
+    return KnowledgeList(meetings.items.filterNot { it.id in covered } + recs,
+        (meetings.tags.orEmpty() + recordings.tags.orEmpty()).distinct())
+}
+
+/** The imported meeting whose own notes a recording's page opens (#9994). */
+internal data class KnowledgeImportedMeeting(val id: String, val url: String, val source: String?)
+
+/** `meta.imported_meeting` names the meeting; its resolved link carries the notes' URL and connector. */
+internal val KnowledgeDetail.importedMeeting: KnowledgeImportedMeeting?
+    get() {
+        if (kind != KnowledgeKind.Recordings.wire) return null
+        val reference = meta?.get("imported_meeting") as? JsonObject ?: return null
+        val id = reference.string("id").takeIf { it.isNotBlank() } ?: return null
+        val link = links.orEmpty().firstOrNull { it.kind == KnowledgeKind.Meetings.wire && it.id == id } ?: return null
+        val url = link.extra?.trim().takeUnless { it.isNullOrEmpty() } ?: return null
+        return KnowledgeImportedMeeting(id, url, link.source)
+    }
 
 /** A project's `extra` is "short|long · active|paused|done|ignored"; missing halves read as short and active. */
 internal val KnowledgeEntry.projectKind: String
@@ -229,8 +260,17 @@ internal fun pathTail(path: String, keep: Int = 3): String {
 /** The tag editor's text as tags: split on any whitespace, empty ones dropped. */
 internal fun parseTags(text: String): List<String> = text.split(Regex("\\s+")).filter { it.isNotEmpty() }
 
-/** Only live sessions that are not Persona itself can work on a project. */
-internal fun projectAgents(agents: List<Session>?): List<Session> = agents.orEmpty().filter { !it.assistant && it.isLive }
+/**
+ * Only live sessions that are not Persona itself can work on a project. A subtask the Agents list folds under its parent
+ * is no row of its own while that parent is listed here too, as in the main chat's dock (#4769, `foldedSubtasks`).
+ */
+internal fun projectAgents(agents: List<Session>?, hierarchy: Boolean = false): List<Session> {
+    val rows = foldRows(agents.orEmpty().map(::AgentSession), hierarchy)
+    val live = rows.map { it.session }.filter { !it.assistant && it.isLive }
+    val listed = live.mapTo(HashSet()) { it.key.path }
+    val folded = foldedSubtasks(rows) { it.id in listed }
+    return live.filterNot { it.key.path in folded }
+}
 
 internal fun KnowledgeDetail.entry(): KnowledgeEntry {
     val recording = kind == KnowledgeKind.Recordings.wire
@@ -240,6 +280,7 @@ internal fun KnowledgeDetail.entry(): KnowledgeEntry {
     val extra = when (kind) {
         KnowledgeKind.Projects.wire -> "${meta.string("kind").ifBlank { "short" }} · ${meta.string("status").ifBlank { "active" }}"
         KnowledgeKind.Recordings.wire -> meta.string("device")
+        KnowledgeKind.Topics.wire -> points?.size?.toString().orEmpty()
         else -> meta.string("kind")
     }
     // A recording lists as when it was made, as the hub's list does.
@@ -318,9 +359,9 @@ internal data class RecordingFacts(
     }
 }
 
-/** The transcript's lines that say something, in time order. */
+/** The transcript's lines that say something, in time order; Persona's echo (#5905) is not the meeting's, hidden as on the web and iOS. */
 internal fun transcript(segments: List<KnowledgeSegment>?): List<KnowledgeSegment> =
-    segments.orEmpty().filter { it.text.isNotBlank() }.sortedBy { it.start }
+    segments.orEmpty().filter { !it.echo && it.text.isNotBlank() }.sortedBy { it.start }
 
 internal fun JsonObject?.string(key: String): String = (this?.get(key) as? JsonPrimitive)?.contentOrNull.orEmpty()
 internal fun JsonObject?.strings(key: String): List<String> = (this?.get(key) as? JsonArray)

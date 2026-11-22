@@ -56,23 +56,6 @@ func handleBus(method string, fn busCall) {
 	busMethods[method] = fn
 }
 
-// handleBusCall registers fn for method with the codec around it: params decoded into P (invalid_params when they
-// do not fit), fn's answer encoded as the result. It is how a hub function with its own types is put on the bus, e.g.
-// the assistant's boundary:
-//
-//	handleBusCall("device.call", func(h *Hub, ctx context.Context, p assistant.DeviceCall) (json.RawMessage, error) {
-//		return assistantLink{h}.DeviceCall(ctx, p)
-//	})
-func handleBusCall[P, R any](method string, fn func(h *Hub, ctx context.Context, p P) (R, error)) {
-	handleBus(method, func(h *Hub, ctx context.Context, _ *busConn, params json.RawMessage) (any, error) {
-		var p P
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: method + ": " + err.Error()}
-		}
-		return fn(h, ctx, p)
-	})
-}
-
 // handleBusEvent registers what takes event (a one-way message) once a connection said its handshake; unregistered
 // events are dropped.
 func handleBusEvent(event string, fn busEvent) {
@@ -120,6 +103,20 @@ type busState struct {
 	saidOld map[string]bool
 	// rosterGen numbers the roster changes (busRosterChanged): an older list never goes out after a newer one.
 	rosterGen atomic.Uint64
+	// needsYouPush: a managers push for a changed inbox count is on its way (managers.go, inboxNeedsYouPushDelay);
+	// under mu. needsYouDelay is that delay for tests; zero is inboxNeedsYouPushDelay.
+	needsYouPush  bool
+	needsYouDelay time.Duration
+	// seen holds per-identity serialized SeeBusIdentity persistence state (including deferred writes during quiesce).
+	seenMu sync.Mutex
+	seen   map[string]*busSeenEntry
+}
+
+type busSeenEntry struct {
+	mu      sync.Mutex // serializes SeeBusIdentity writes for this identity
+	pending bool
+	where   *db.BusIdentity
+	gen     uint64
 }
 
 // busConn is one service connection.
@@ -133,6 +130,8 @@ type busConn struct {
 
 	// mutesSettled: its first word after the handshake was heard, and the mutes went once more (fleet_link.go).
 	mutesSettled atomic.Bool
+	// clientsSettled: likewise, and it was told what the apps can take (fleet.clients, clientsSettle).
+	clientsSettled atomic.Bool
 
 	// proofKey is the key of its manager's proofs that a request with one of its extensions' tokens came through it
 	// (extwire.ProofKey of the token it connected with, extensions_proof.go): made from the token as it connects, kept
@@ -143,6 +142,9 @@ type busConn struct {
 	presence busPresence
 	replaced bool // a newer connection of the identity took over
 	ended    bool
+	// inboxNeedsYou is the inbox's "Needs you" count it reported on this connection (inbox.needs_you, managers.go);
+	// nil: none yet. It goes with the connection, so the roster never shows the count of a manager that is away.
+	inboxNeedsYou *int
 
 	// roster is the managers event on its way to it (sendRoster): the newest list, its number and the one sent last.
 	roster struct {
@@ -287,8 +289,12 @@ func (h *Hub) serveBus(w http.ResponseWriter, r *http.Request) {
 	tok, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ") // the one busCaller took
 	c := &busConn{ident: ident, proofKey: extwire.ProofKey(tok), ws: ws, peer: rpc.New("h", conn), helloed: make(chan struct{})}
 	// A card the hub's own feature asks (fleet.ask) is withdrawn when that feature stops waiting (a tool call whose
-	// caller went away, #2597).
-	c.peer.Cancels = map[string]bool{assistantwire.MethodFleetAsk: true}
+	// caller went away, #2597). So is what the manager does for one of the hub's features (extensions.hub_call): a
+	// persona_settings change of one of its own settings is a card it holds and a change it makes, and untold it kept
+	// the card up and made the change on a later approval, after the assistant had heard the call failed (#5907). A
+	// devices.file_call's long file copy / zip likewise stops when the hub's caller goes away (#6113). Ordinary
+	// devices.call methods run on: their node may not support cancellation, so stopping the manager would be ambiguous.
+	c.peer.Cancels = map[string]bool{assistantwire.MethodFleetAsk: true, assistantwire.MethodFleetAskPrepared: true, extwire.MethodHubCall: true, devicewire.MethodFileCall: true}
 	c.peer.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
 		return h.busRequest(ctx, c, method, params)
 	}
@@ -339,6 +345,7 @@ func (h *Hub) busRequest(ctx context.Context, c *busConn, method string, params 
 		return nil, &rpc.Error{Code: bus.CodeStaleConnection, Message: "say " + busHello + " on the current connection first"}
 	}
 	h.mutesSettle(c)
+	h.clientsSettle(c)
 	fn, ok := busMethods[method]
 	if !ok {
 		return nil, &rpc.Error{Code: bus.CodeUnknownMethod, Message: "unknown method " + clip(method, 80)}
@@ -351,6 +358,7 @@ func (h *Hub) busEvent(c *busConn, event string, params json.RawMessage) {
 		return // before the handshake, or replaced: not heard
 	}
 	h.mutesSettle(c)
+	h.clientsSettle(c)
 	if f := busEvents[event]; f != nil {
 		f(h, c, params)
 	}
@@ -502,6 +510,9 @@ func (h *Hub) busEnded(c *busConn) {
 		delete(h.bus.current, c.ident.ID)
 	}
 	h.bus.mu.Unlock()
+	// Each of its connections, a replaced one too: a token its manager dropped while this one went could not be told.
+	h.dropLeftManager(c.ident.ID)
+	h.retireRelays(c.ident.ID, c) // its idle relay streams (extensions_relays.go)
 	if current {
 		h.extLost.lost(c.ident.ID, time.Now()) // its extensions may still call for a while (extensions_proof.go)
 		h.logf("bus: [%s] disconnected", c.ident.ID)
@@ -547,7 +558,7 @@ func (h *Hub) busManagers(ctx context.Context) []busManagerBrief {
 	if s == nil {
 		return out
 	}
-	list, err := s.BusIdentities(ctx)
+	list, err := h.busIdentities(ctx, s)
 	if err != nil {
 		h.logf("bus: identities: %v", err)
 	}
@@ -563,6 +574,7 @@ func (h *Hub) busManagers(ctx context.Context) []busManagerBrief {
 // left (busEnded) until its keepalive hangs up.
 func (h *Hub) busRosterChanged(ctx context.Context, except *busConn) {
 	gen := h.bus.rosterGen.Add(1) // before the list: the list of a later change sees every change before it
+	h.forgetIdentities()          // and it is read afresh
 	list := h.busManagers(ctx)
 	h.bus.mu.Lock()
 	var to []*busConn
@@ -681,10 +693,106 @@ func (h *Hub) stopBus() []*busConn {
 // busSeen keeps in the roster that identity id is connected now (where: its handshake's place) or just dropped, and
 // tells the apps (managers.go).
 func (h *Hub) busSeen(ctx context.Context, id string, where *db.BusIdentity) {
-	if s := h.managerStore(); s != nil {
-		if err := s.SeeBusIdentity(ctx, id, where); err != nil {
-			h.logf("bus: [%s] roster: %v", id, err)
+	if h.managerStore() != nil {
+		var cp *db.BusIdentity
+		if where != nil {
+			v := *where
+			cp = &v
 		}
+		h.bus.seenMu.Lock()
+		if h.bus.seen == nil {
+			h.bus.seen = map[string]*busSeenEntry{}
+		}
+		e := h.bus.seen[id]
+		if e == nil {
+			e = &busSeenEntry{}
+			h.bus.seen[id] = e
+		}
+		e.where = cp
+		e.pending = true
+		e.gen++
+		wantGen := e.gen
+		h.bus.seenMu.Unlock()
+		h.flushBusSeen(ctx, id, e, wantGen)
 	}
 	h.managersChanged()
+}
+
+func (h *Hub) flushBusSeen(ctx context.Context, id string, e *busSeenEntry, wantGen uint64) {
+	if h.managerStore() == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	first := true
+	for {
+		h.bus.seenMu.Lock()
+		if !e.pending {
+			h.bus.seenMu.Unlock()
+			return
+		}
+		where := e.where
+		gen := e.gen
+		e.pending = false
+		h.bus.seenMu.Unlock()
+		if !h.quiesce.beginOrDefer(func() {
+			h.bus.seenMu.Lock()
+			if e.gen == gen {
+				e.pending = true
+			}
+			h.bus.seenMu.Unlock()
+		}) {
+			return
+		}
+		useCallerCtx := first && wantGen != 0 && gen == wantGen && ctx != nil && ctx.Err() == nil
+		first = false
+		s := h.managerStore()
+		if s != nil {
+			var wctx context.Context
+			var cancel context.CancelFunc
+			if useCallerCtx {
+				wctx = ctx
+			} else {
+				// Coalesced trailing writes and resumed/overwritten writes get a
+				// fresh bounded context instead of inheriting an older caller's
+				// expiring or canceled context.
+				wctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+			}
+			if err := s.SeeBusIdentity(wctx, id, where); err != nil {
+				h.logf("bus: [%s] roster: %v", id, err)
+			}
+			if cancel != nil {
+				cancel()
+			}
+		}
+		h.quiesce.end()
+	}
+}
+
+func (h *Hub) resumeBusSeen() {
+	if h.managerStore() == nil {
+		return
+	}
+	type item struct {
+		id string
+		e  *busSeenEntry
+	}
+	h.bus.seenMu.Lock()
+	var todo []item
+	for id, e := range h.bus.seen {
+		if e.pending {
+			todo = append(todo, item{id: id, e: e})
+		}
+	}
+	h.bus.seenMu.Unlock()
+	if len(todo) == 0 {
+		return
+	}
+	h.nodeWorkers.Add(1)
+	go func() {
+		defer h.nodeWorkers.Done()
+		for _, it := range todo {
+			h.flushBusSeen(nil, it.id, it.e, 0)
+		}
+	}()
 }

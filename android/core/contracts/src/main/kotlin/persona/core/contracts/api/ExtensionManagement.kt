@@ -10,6 +10,13 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
+/** Canonical and pre-rename hello features for explicit extension-secret references. */
+const val ExtensionSecretReferencesFeature = "extension_secret_references"
+const val LegacyExtensionSecretReferencesFeature = "plugin_secret_references"
+
+fun supportsExtensionSecretReferences(features: Set<String>): Boolean =
+    ExtensionSecretReferencesFeature in features || LegacyExtensionSecretReferencesFeature in features
+
 /**
  * Settings › Extensions (docs/extensions/extensions.md "Hub API" "App: Settings › Extensions"): the hub's extensions, each one's switch, its
  * configuration (a form drawn from its schema) and its secrets, write-only; the pages extensions draw ([ExtensionUi]); and
@@ -29,6 +36,21 @@ interface ExtensionManagement : ExtensionUi, ExtensionMarkets {
     /** Badge changes the hub pushes (`extension_ui` events) for nav pages. */
     val uiEvents: Flow<persona.core.contracts.ExtensionUiEvent> get() = kotlinx.coroutines.flow.emptyFlow()
 
+    /**
+     * Whether the hub shows source subscriptions (#2041, `source_subscriptions` in its features: they deliver to the Inbox and
+     * the knowledge base): only then the entry rows show. The pages are drawn as an extension's under [SUBSCRIPTIONS_UI].
+     */
+    val subscriptionsAvailable: Flow<Boolean> get() = kotlinx.coroutines.flow.flowOf(false)
+
+    /**
+     * Whether those pages are Inbox Sources (#5278, `inbox_sources`): the Settings row shows, and the Inbox menu
+     * uses that name, only then. An older hub keeps the Subscriptions entry.
+     */
+    val inboxSourcesAvailable: Flow<Boolean> get() = kotlinx.coroutines.flow.flowOf(false)
+
+    /** `GET /api/v1/subscriptions/summary`: each connector's counts, for the entry rows. */
+    suspend fun subscriptionSummary(): List<SubscriptionSummaryLine> = emptyList()
+
     /** `GET /api/v1/extensions`. */
     suspend fun extensions(): List<HubExtension>
 
@@ -37,6 +59,9 @@ interface ExtensionManagement : ExtensionUi, ExtensionMarkets {
 
     /** `GET /api/v1/extensions/{id}/-/`. */
     suspend fun extension(id: String): ExtensionDetail
+
+    /** The paired hub's network settings for this extension; null until its browser address is known. */
+    fun adminNetworkUrl(id: String): String? = null
 
     /**
      * `PUT /api/v1/extensions/{id}/-/enabled`. Switching off one others depend on is a [ExtensionHasDependents] unless
@@ -55,11 +80,22 @@ interface ExtensionManagement : ExtensionUi, ExtensionMarkets {
     /** `PUT /api/v1/extensions/{id}/-/config`, the whole configuration; a field the hub refuses is a [ExtensionConfigRejected]. */
     suspend fun setConfig(id: String, config: JsonObject): ExtensionDetail
 
+    /** Whether this hub accepts explicit references in extension secret fields (`extension_secret_references`). */
+    val secretReferencesAvailable: Flow<Boolean> get() = kotlinx.coroutines.flow.flowOf(false)
+
     /** `PUT /api/v1/extensions/{id}/-/secrets/{name}`; the value is never read back. */
     suspend fun setSecret(id: String, name: String, value: String): ExtensionDetail
 
+    /** The same secret write, explicitly holding a provider reference rather than a value. */
+    suspend fun setSecretReference(id: String, name: String, reference: String): ExtensionDetail =
+        throw UnsupportedOperationException("Secret references unsupported by this hub")
+
     /** `DELETE /api/v1/extensions/{id}/-/secrets/{name}`. */
     suspend fun clearSecret(id: String, name: String): ExtensionDetail
+
+    /** Remove one provider's remembered hand-off rule, returning its refreshed detail. */
+    suspend fun removeHandoffRule(id: String, rule: String): ExtensionDetail =
+        throw UnsupportedOperationException("Hand-off rules unsupported by this hub")
 
     /** `PUT /api/v1/extensions/{id}/-/auto-upgrade`: a market extension's own auto-upgrade switch (docs/extensions/extensions.md "Auto-upgrade"). */
     suspend fun setAutoUpgrade(id: String, auto: Boolean): ExtensionDetail =
@@ -93,6 +129,18 @@ class ExtensionConfigRejected(val field: String, message: String) : Exception(me
 /** 409 `has_dependents`: enabled extensions depend on it (deepest first); asked, the call goes on with `cascade`. */
 class ExtensionHasDependents(val dependents: List<ExtensionDependent>, message: String) : Exception(message)
 
+/**
+ * 409 `partial_uninstall` (#1154): some of a pack's members were uninstalled and some were not, so the pack is still
+ * installed. Nothing was put back: [removed] stay uninstalled, [failed] say why, [remaining] were not tried.
+ */
+class ExtensionPartialUninstall(
+    val removed: List<String>, val failed: List<ExtensionFailedMember>, val remaining: List<String>, message: String,
+) : Exception(message)
+
+/** A pack member a `partial_uninstall` couldn't remove, and the hub's reason. */
+@Serializable
+data class ExtensionFailedMember(val id: String = "", val error: String = "", val detail: String? = null)
+
 /** One extension of a `has_dependents` answer. */
 @Serializable
 data class ExtensionDependent(val id: String = "", val name: String = "") {
@@ -110,7 +158,10 @@ data class ExtensionField(
     val default: JsonElement? = null,
     val required: Boolean? = null,
     val enum: List<ExtensionChoice>? = null,
+    /** `uri | email | hostname`, or `machine` (one of the hub's machines, of the systems in [os]) / `launcher` (one of its launchers), both picked from a list. */
     val format: String? = null,
+    /** x-os of a `machine` field: the systems its machine may run (none is any). */
+    val os: List<String>? = null,
     val pattern: String? = null,
     @SerialName("min_length") val minLength: Int? = null,
     @SerialName("max_length") val maxLength: Int? = null,
@@ -125,10 +176,18 @@ data class ExtensionField(
     val fields: List<ExtensionField>? = null,
     /** x-confirm: what to ask before a switch of it is turned on (a boolean, or a machine of a machine list). */
     val confirm: String? = null,
+    /** x-step: an integer stepper's increment, not a constraint on typed or saved values. */
+    val step: Long? = null,
 ) {
     val label: String get() = title?.takeIf { it.isNotBlank() } ?: name
     /** The default it falls back to, when there is one (JSON null is none). */
     val fallback: JsonElement? get() = default?.takeIf { it != JsonNull }
+    /** One of the hub's machines, picked from them by name (a string of format machine without choices of its own). */
+    val picksMachine: Boolean get() = type == "string" && enum == null && format == "machine"
+    /** One of the hub's launchers, picked from them (a string of format launcher without choices of its own). */
+    val picksLauncher: Boolean get() = type == "string" && enum == null && format == "launcher"
+    /** Whether flipping a switch of it asks [confirm] first: only turning one on, and only with a sentence. */
+    fun asksFirst(on: Boolean): Boolean = on && !confirm.isNullOrBlank()
 }
 
 /**
@@ -159,9 +218,36 @@ data class ExtensionSecret(
     val description: String? = null,
     val required: Boolean? = null,
     val set: Boolean = false,
+    /** A provider reference when this secret does not hold an ordinary value. */
+    val reference: SecretReference? = null,
 ) {
     val label: String get() = title.ifBlank { name }
 }
+
+/** One extension secret or launcher key that uses a provider's reference. */
+@Serializable
+data class ExtensionSecretUser(
+    val kind: String = "",
+    val extension: String = "",
+    @SerialName("extension_name") val extensionName: String = "",
+    val secret: String = "",
+    @SerialName("secret_title") val secretTitle: String = "",
+    val launcher: String = "",
+    @SerialName("launcher_name") val launcherName: String = "",
+    val machine: String = "",
+    val reference: String = "",
+)
+
+/** One remembered Always grant for a reference, launcher and computer. */
+@Serializable
+data class HandoffRule(
+    val id: String = "",
+    val reference: String = "",
+    val launcher: String = "",
+    val machine: String = "",
+    val by: String? = null,
+    val at: String = "",
+)
 
 /** A line of what an extension may do (`permissions`). */
 @Serializable
@@ -185,6 +271,18 @@ data class ExtensionDetail(
     val contributions: List<ExtensionContribution>? = null,
     /** The field (format machine) that picks the computers its program runs on; their rows say how it is there. */
     val nodeMachines: String? = null,
+    val depends: List<ExtensionDependency> = emptyList(),
+    val extensionPack: List<ExtensionPackMember> = emptyList(),
+    /** New hubs switch a pack's installed members with it; absent means an older hub switches only the pack. */
+    val packMembersFollow: Boolean = false,
+    /** Installed enabled members that switching the pack off would switch off. */
+    val packOn: List<ExtensionDependent> = emptyList(),
+    /** Members the pack switched off, which switching it back on restores. */
+    val packOff: List<String> = emptyList(),
+    /** A secret provider's references used by extension secrets and launcher keys. */
+    val secretUsers: List<ExtensionSecretUser> = emptyList(),
+    /** A secret provider's remembered hand-off rules, including on read-only providers. */
+    val handoffRules: List<HandoffRule> = emptyList(),
 ) {
     /** Installed from an extension market (`market:<market>/<extension>`): a phone may upgrade and remove it. */
     val fromMarket: Boolean get() = origin?.startsWith("market:") == true
@@ -203,6 +301,13 @@ data class ExtensionDetail(
         val ui: List<ExtensionUiPlace> = emptyList(),
         val contributions: List<ExtensionContribution>? = null,
         @SerialName("node_machines") val nodeMachines: String? = null,
+        val depends: List<ExtensionDependency> = emptyList(),
+        @SerialName("extension_pack") val extensionPack: List<ExtensionPackMember> = emptyList(),
+        @SerialName("pack_members_follow") val packMembersFollow: Boolean = false,
+        @SerialName("pack_on") val packOn: List<ExtensionDependent> = emptyList(),
+        @SerialName("pack_off") val packOff: List<String> = emptyList(),
+        @SerialName("secret_users") val secretUsers: List<ExtensionSecretUser> = emptyList(),
+        @SerialName("handoff_rules") val handoffRules: List<HandoffRule> = emptyList(),
     )
 
     @Serializable
@@ -218,7 +323,32 @@ data class ExtensionDetail(
                 extra.form?.fields.orEmpty(), extra.config ?: JsonObject(emptyMap()), extra.secrets, extra.permissions,
                 extra.ui.filter { it.placement.isEmpty() || it.placement == "extension_page" || it.placement == "plugin_page" || it.placement == "nav_page" },
                 extra.contributions, extra.nodeMachines?.takeIf { it.isNotBlank() },
+                extra.depends, extra.extensionPack, extra.packMembersFollow, extra.packOn, extra.packOff,
+                extra.secretUsers, extra.handoffRules,
             )
         }
     }
+}
+
+/**
+ * The id the source subscription pages (#2041) are drawn under as an extension's page: no extension can have it (ids never
+ * start with "-"); the hub answers them at `POST /api/v1/subscriptions/-/ui`.
+ */
+const val SUBSCRIPTIONS_UI = "-subscriptions"
+
+/** One connector's line of `GET /api/v1/subscriptions/summary`; [subscribable] is null until its catalog was read. */
+@Serializable
+data class SubscriptionSummaryLine(
+    val connector: String,
+    val extension: String = "",
+    val subscribable: Boolean? = null,
+    val on: Int = 0,
+    val failing: Int = 0,
+)
+
+/** How many are on and failing for the lines one entry row stands for; null when none can be subscribed (the row is hidden). */
+fun List<SubscriptionSummaryLine>.subscriptionCounts(pick: (SubscriptionSummaryLine) -> Boolean): Pair<Int, Int>? {
+    val mine = filter(pick)
+    if (mine.none { it.subscribable == true || it.on > 0 }) return null
+    return mine.sumOf { it.on } to mine.sumOf { it.failing }
 }

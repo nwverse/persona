@@ -24,6 +24,20 @@ func claudeMDHub(devices ...Device) *fakeHub {
 	return f
 }
 
+// The secretary's instructions never send new task_plan work to a leader for acceptance (#5732).
+func TestAssistantInstructionsKeepNewTaskReviewWithMain(t *testing.T) {
+	f := claudeMDHub(Device{ID: "server", Name: "服务器", Kind: "local"})
+	s := newTestService(t, f)
+	s.kb.dir = "<hub>/data"
+	text := s.claudeMD(context.Background(), "server", false)
+	if strings.Contains(text, "交给那个主管督办") || strings.Contains(text, "任务的验收和返工由它做") {
+		t.Fatal("the assistant is still told to delegate new task_plan acceptance to a leader")
+	}
+	if !strings.Contains(text, "新任务统一由主对话督办") {
+		t.Fatal("the assistant instructions do not state universal main supervision")
+	}
+}
+
 // The CLAUDE.md the assistant writes into its directory from what the hub tells it (claudeMD, prepare).
 func TestGoldenAssistantClaudeMD(t *testing.T) {
 	ctx := context.Background()
@@ -42,10 +56,6 @@ func TestGoldenAssistantClaudeMD(t *testing.T) {
 	golden(t, "assistant_claude_md.bare", s.claudeMD(ctx, "server", false))
 	// lark-cli (docs/plans/plan-lark-cli.md).
 	golden(t, "assistant_claude_md.lark_cli", s.claudeMD(ctx, "server", true))
-	// hub.json assistant.persona_view: cards are persona-view, the extensions' components (#1850).
-	bare.hello.PersonaView = true
-	golden(t, "assistant_claude_md.persona_view", s.claudeMD(ctx, "server", false))
-	bare.hello.PersonaView = false
 
 	// prepare writes it with what the hub says of lark-cli, for the machine it prepares.
 	bare.larkCLI = true
@@ -62,7 +72,7 @@ func TestGoldenAssistantViewRepair(t *testing.T) {
 }
 
 func TestAssistantRichViewPromptExamplesAreValid(t *testing.T) {
-	text := prompts.RenderAssistantClaudeMD(prompts.AssistantClaudeMD{PersonaView: true})
+	text := prompts.RenderAssistantClaudeMD(prompts.AssistantClaudeMD{})
 	blocks := wire.AssistantViewBlocks(text)
 	if len(blocks) != 2 {
 		t.Fatalf("prompt has %d examples, want 2", len(blocks))
@@ -134,22 +144,47 @@ func TestAssistantMachinesFromWhereItRuns(t *testing.T) {
 		}
 		return out
 	}
-	here, ssh, noCommand := "就是你所在的这台机器", "`ssh box-alias '<命令>'`", "不能直接在它上面执行命令"
+	here, ssh, agent := "就是你所在的这台机器", "SSH 别名 `box-alias`，工作交给 Agent", "交给这台电脑上的 Agent"
 	for _, tc := range []struct {
 		at   string
 		want map[string]string
 	}{
-		{"server", map[string]string{"server": here, "box": ssh, "laptop": noCommand}},
-		{"box", map[string]string{"server": noCommand, "box": here, "laptop": noCommand}},
-		{"laptop", map[string]string{"server": noCommand, "box": noCommand, "laptop": here}},
+		{"server", map[string]string{"server": here, "box": ssh, "laptop": agent}},
+		{"box", map[string]string{"server": agent, "box": here, "laptop": agent}},
+		{"laptop", map[string]string{"server": agent, "box": agent, "laptop": here}},
 	} {
 		got := lines(tc.at)
 		for id, want := range tc.want {
 			if !strings.Contains(got[id], want) {
 				t.Errorf("assistant on %s, line for %s = %q, want %q", tc.at, id, got[id], want)
 			}
-			if tc.at != "server" && strings.Contains(got[id], "ssh ") {
-				t.Errorf("assistant on %s is told to ssh: %q", tc.at, got[id])
+			if strings.Contains(got[id], "`ssh ") {
+				t.Errorf("assistant on %s is given an ssh command: %q", tc.at, got[id])
+			}
+		}
+	}
+}
+
+func TestAssistantClaudeMDDelegationBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		locale   string
+		quick    string
+		dispatch string
+		source   string
+	}{
+		{"", "本机跑命令、读文件只限一两次调用", "改代码或多步工作用 `task_plan`", "到源码所在的电脑和目录查"},
+		{"zh-Hans", "本机跑命令、读文件只限一两次调用", "改代码或多步工作用 `task_plan`", "到源码所在的电脑和目录查"},
+		{"en", "only for quick local checks (one or two calls", "Use `task_plan` for code changes", "Use the computer and directory with the source checkout"},
+		{"ja", "手元で 1〜2 回の呼び出しで済む確認に限る", "`task_plan` で Agent に任せる", "ソースのチェックアウト先のコンピュータとディレクトリを指定する"},
+	} {
+		for _, guide := range []bool{false, true} {
+			got := prompts.RenderAssistantClaudeMD(prompts.AssistantClaudeMD{
+				Language: answerLanguage(tc.locale), WorkGuide: guide,
+			})
+			for _, want := range []string{tc.quick, tc.dispatch, "`readonly: true`", tc.source} {
+				if !strings.Contains(got, want) {
+					t.Errorf("locale %q, work guide %t: missing %q", tc.locale, guide, want)
+				}
 			}
 		}
 	}
@@ -167,7 +202,7 @@ func TestGoldenMainHandoff(t *testing.T) {
 }
 
 // The CLAUDE.md asks for the user's language (docs/protocol/i18n.md); zh-Hans, or a hub that says none, keeps it as it was.
-func TestAssistantClaudeMDLanguage(t *testing.T) {
+func TestGoldenAssistantClaudeMDLanguage(t *testing.T) {
 	ctx := context.Background()
 	f := claudeMDHub(Device{ID: "server", Name: "服务器", Kind: "local"})
 	s := newTestService(t, f)
@@ -186,5 +221,46 @@ func TestAssistantClaudeMDLanguage(t *testing.T) {
 		if !strings.Contains(got, want) || strings.Contains(got, "；用中文。") {
 			t.Fatalf("%s: no %q", locale, want)
 		}
+		// The header contains both the response language and the relay acknowledgement rule.
+		header, _, _ := strings.Cut(got, "\n## ")
+		golden(t, "assistant_relay_instructions."+locale, strings.TrimSpace(header))
+	}
+}
+
+// Content the user must read completely belongs in the final response in every locale and in the health space:
+// progress notes between tool calls may reach the client only as summaries.
+func TestAssistantClaudeMDFinalResponseCompleteness(t *testing.T) {
+	ctx := context.Background()
+	f := claudeMDHub(Device{ID: "server", Name: "服务器", Kind: "local"})
+	s := newTestService(t, f)
+	s.kb.dir = "<hub>/data"
+	const rule = "需要用户完整读到的决定确认、清单、数字、代码或长段内容，放在本轮最后的正式回复里，不要只写在工具调用之间的进度说明里。"
+	for _, locale := range []string{"", "zh-Hans", "en", "ja"} {
+		f.hello.Locale = locale
+		if got := s.claudeMD(ctx, "server", false); !strings.Contains(got, rule) {
+			t.Errorf("locale %q: no final-response completeness rule", locale)
+		}
+		if got := s.healthClaudeMD(ctx, "server"); !strings.Contains(got, rule) {
+			t.Errorf("health locale %q: no final-response completeness rule", locale)
+		}
+	}
+}
+
+// Process text, the lines between tool calls, is in the user's language too (#4883: the only line a Chinese owner saw
+// in six minutes of work was English), in every language the CLAUDE.md is written for, and in the health space's.
+func TestAssistantClaudeMDProcessTextLanguage(t *testing.T) {
+	ctx := context.Background()
+	f := claudeMDHub(Device{ID: "server", Name: "服务器", Kind: "local"})
+	s := newTestService(t, f)
+	s.kb.dir = "<hub>/data"
+	const rule = "工作中写给用户看的每一句（工具调用之间的说明、进度、在等什么）也用这种语言，不因为读的代码、日志或资料是英文就改用英文。"
+	for _, locale := range []string{"", "zh-Hans", "en", "ja"} {
+		f.hello.Locale = locale
+		if got := s.claudeMD(ctx, "server", false); !strings.Contains(got, rule) {
+			t.Errorf("locale %q: no process-text language rule", locale)
+		}
+	}
+	if !strings.Contains(s.healthClaudeMD(ctx, "server"), rule) {
+		t.Error("health CLAUDE.md: no process-text language rule")
 	}
 }

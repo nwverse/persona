@@ -9,11 +9,15 @@ const (
 	codeModelUnavailable    = "model_unavailable"    // not fatal: the app's model is gone, the default one is used instead
 	codeUpstreamForbidden   = "upstream_forbidden"   // fatal: the service refused the key (401, 403)
 	codeUpstreamUnavailable = "upstream_unavailable" // fatal: the service is down for the moment (503, or says so)
-	codeUpstreamFailed      = "upstream_failed"      // fatal: the session dropped and reconnecting did not work
+	codeUpstreamFailed      = "upstream_failed"      // fatal: the session failed, or a call's reconnects did not work
 	codeTargetGone          = "target_gone"          // fatal: the conversation to bind is not listed
 	codeTargetReadOnly      = "target_read_only"     // fatal: it can only be read
 	codeTargetForbidden     = "target_forbidden"     // fatal: this caller may not bind one (another extension)
 	codeMachineOffline      = "machine_offline"      // not fatal: its computer is offline, what is said waits for it
+	// A meeting call's (meeting.go): fatal, its target is not its recording's room, or that room is not ready.
+	codeNotMeetingRoom = "not_meeting_room"
+	// fatal: an ordinary call bound to a meeting's room, which takes only meeting calls.
+	codeMeetingRoom = "meeting_room"
 )
 
 // infoProtocol is the voice wire this plugin speaks (docs/assistant/voice.md "Version negotiation"): 1 is the frames of

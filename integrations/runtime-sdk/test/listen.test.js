@@ -4,12 +4,13 @@ import { createHash, randomBytes } from 'node:crypto'
 import { createServer, request } from 'node:http'
 import { connect } from 'node:net'
 import { spawn } from 'node:child_process'
-import { once } from 'node:events'
+import { EventEmitter, once } from 'node:events'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRuntime, Peer, SUBPROTOCOL } from '../index.js'
+import { WsConnection } from '../lib/listen.js'
 import { until } from '../testing/fake-node.js'
 
 // The node's end of a daemon connection: a WebSocket client wrapped as the socket wire.js's Peer reads, so the test
@@ -137,7 +138,8 @@ test('a listening runtime serves its endpoint: the node dials in with the token 
   t.after(() => n.ws.close())
   await until('hello', () => n.hello, 3000)
   assert.equal(n.hello.runtime, 'toy')
-  assert.deepEqual(n.hello.caps, { start: false, send: true, interrupt: false, rename: false, close: false, assistant: false })
+  assert.deepEqual(n.hello.caps, { start: false, send: true, interrupt: false, rename: false, close: false, assistant: false,
+    queue_edit: false, queue_send_now: false })
   await until('the list', () => n.last('runtime.sessions'), 3000)
   await n.peer.call('session.send', { session_id: 's1', text: 'over the websocket', client_msg_id: 'm-1' })
   assert.equal(sent[0].text, 'over the websocket')
@@ -167,6 +169,77 @@ test('a wrong token, a missing subprotocol or another path is refused before the
   assert.ok(logs.some((l) => /refused a connection/.test(l)))
   assert.ok(!logs.some((l) => l.includes('tok-')), 'no token in the log')
   assert.equal(rt.connected, false)
+})
+
+async function exerciseThrowingToken(t, { mounted }) {
+  const { driver } = toy()
+  const thrownSecret = 'callback-thrown-secret-8672'
+  const fileContents = 'token-file-contents-8672'
+  const validToken = 'restored-token-8672'
+  const wrongBearer = 'wrong-bearer-8672'
+  const logs = []
+  const acceptReturns = []
+  let calls = 0
+  let failure = new Error(`token callback failed with ${thrownSecret}; file contents: ${fileContents}`)
+  const token = () => {
+    calls++
+    if (failure) throw failure
+    return validToken
+  }
+  const rt = createRuntime(driver, {
+    runtime: 'toy', refreshMs: 0, log: (message) => logs.push(message),
+    ...(mounted ? { listen: true, token } : { listen: { port: 0, token } }),
+  })
+  t.after(() => rt.stop())
+  let url
+  if (mounted) {
+    assert.equal(await rt.start(), undefined)
+    const server = createServer((req, res) => res.end('the daemon\'s own API'))
+    server.on('upgrade', (req, socket, head) => {
+      if (req.url === '/api/persona') acceptReturns.push(rt.accept(req, socket, head))
+      else socket.destroy()
+    })
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+    t.after(() => server.close())
+    url = `ws://127.0.0.1:${server.address().port}/api/persona`
+  } else {
+    const { port } = await rt.start()
+    url = `ws://127.0.0.1:${port}/persona/runtime`
+  }
+
+  assert.equal(await refusedStatus(url, { token: wrongBearer }), 401)
+  assert.equal(calls, 1)
+  assert.equal(rt.connected, false, 'a failed token read must not adopt the connection')
+  if (mounted) assert.deepEqual(acceptReturns, [false])
+
+  failure = undefined
+  const n = dialNode(url, { token: validToken })
+  t.after(() => n.ws.close())
+  await until('hello after the token callback recovers', () => n.hello, 3000)
+  assert.equal(n.hello.runtime, 'toy')
+  assert.equal(calls, 2, 'the callback runs again for the next upgrade')
+  assert.equal(rt.connected, true)
+  n.ws.close()
+  await until('the recovered node disconnected', () => n.closed && !rt.connected, 3000)
+
+  assert.equal(await refusedStatus(url, { token: wrongBearer }), 401)
+  assert.equal(calls, 3, 'even a wrong bearer reads the current expected token')
+  assert.equal(rt.connected, false, 'a wrong bearer must not adopt a connection')
+  if (mounted) assert.deepEqual(acceptReturns, [false, true, false])
+
+  const diagnostic = logs.join('\n')
+  assert.ok(logs.some((line) => /refused a connection/.test(line)))
+  for (const secret of [thrownSecret, fileContents, validToken, wrongBearer]) {
+    assert.ok(!diagnostic.includes(secret), `the diagnostic exposed ${secret}`)
+  }
+}
+
+test('an SDK-owned listener refuses a throwing token callback and recovers on a later upgrade', async (t) => {
+  await exerciseThrowingToken(t, { mounted: false })
+})
+
+test('mounted accept() returns false for a throwing token callback and recovers on a later upgrade', async (t) => {
+  await exerciseThrowingToken(t, { mounted: true })
 })
 
 test('a newer connection from the node replaces the last one', async (t) => {
@@ -212,7 +285,15 @@ test('mounted on the runtime\'s own HTTP server through accept(), with a token r
 // unmasked frames).
 function frame(op, payload, { fin = true, mask = true } = {}) {
   const n = payload.length
-  const head = n < 126 ? Buffer.from([(fin ? 0x80 : 0) | op, (mask ? 0x80 : 0) | n]) : Buffer.from([(fin ? 0x80 : 0) | op, (mask ? 0x80 : 0) | 126, n >> 8, n & 0xff])
+  const b0 = (fin ? 0x80 : 0) | op
+  const m = mask ? 0x80 : 0
+  let head
+  if (n < 126) head = Buffer.from([b0, m | n])
+  else if (n < 65536) head = Buffer.from([b0, m | 126, n >> 8, n & 0xff])
+  else {
+    head = Buffer.from([b0, m | 127, 0, 0, 0, 0, 0, 0, 0, 0])
+    head.writeBigUInt64BE(BigInt(n), 2)
+  }
   if (!mask) return Buffer.concat([head, payload])
   const key = randomBytes(4)
   const body = Buffer.from(payload)
@@ -265,4 +346,75 @@ test('fragmented messages, pings between them, and an unmasked frame', async (t)
   await until('closed with 1002', () => c.peek().length >= 4 && c.peek()[0] === 0x88, 3000)
   assert.equal(c.peek().readUInt16BE(2), 1002)
   await until('disconnected', () => !rt.connected, 3000)
+})
+
+// A socket stand-in for WsConnection: the test emits the chunks and reads what the connection writes back.
+function fakeSocket() {
+  const sock = new EventEmitter()
+  sock.written = []
+  sock.write = (b) => { sock.written.push(Buffer.from(b)); return true }
+  sock.end = () => {}
+  sock.destroy = () => { sock.destroyed = true }
+  sock.setNoDelay = () => {}
+  return sock
+}
+
+test('a 32 MiB message in 64 KiB chunks is put together with one copy, not a copy of everything so far per chunk', (t) => {
+  const payload = Buffer.alloc(32 * 1024 * 1024, '{"text":"0123456789abcdef"}')
+  const wire = frame(0x1, payload)
+  const sock = fakeSocket()
+  const c = new WsConnection(sock)
+  const got = []
+  c.on('data', (m) => got.push(m))
+  const concat = Buffer.concat
+  t.after(() => { Buffer.concat = concat })
+  let copied = 0
+  Buffer.concat = (list, n) => {
+    const b = concat(list, n)
+    copied += b.length
+    return b
+  }
+  for (let i = 0; i < wire.length; i += 64 * 1024) sock.emit('data', wire.subarray(i, i + 64 * 1024))
+  Buffer.concat = concat
+  assert.equal(got.length, 1)
+  assert.ok(got[0] === `${payload.toString('utf8')}\n`, 'the message arrives intact')
+  assert.ok(copied <= 3 * payload.length, `copied ${copied} bytes for a ${payload.length}-byte message`)
+})
+
+test('a frame split at any byte, or a ping between two fragments, still gives the same message and a pong', async () => {
+  // Multi-byte characters, and over 125 bytes so the length takes 16 bits; byte 50 is inside a two-byte character.
+  const text = Buffer.from(`{"text":"${'\u00e9\u{1F600}\u00fc'.repeat(30)}"}`)
+  const one = frame(0x1, text)
+  const fragmented = Buffer.concat([frame(0x1, text.subarray(0, 50), { fin: false }), frame(0x9, Buffer.from('hi')), frame(0x0, text.subarray(50))])
+  const big = Buffer.alloc(70_000, 'abc\u00e9')
+  const long = frame(0x1, big) // a 64-bit length
+  const pong = Buffer.from([0x8a, 2, ...Buffer.from('hi')]).toString('hex')
+  const before = [one, fragmented, long].map((b) => b.toString('hex'))
+  const run = async (wire, cuts, { head = false } = {}) => {
+    const sock = fakeSocket()
+    const pieces = []
+    let at = 0
+    for (const cut of [...cuts, wire.length]) {
+      pieces.push(wire.subarray(at, cut))
+      at = cut
+    }
+    const c = new WsConnection(sock, head ? pieces.shift() : undefined)
+    const got = []
+    c.on('data', (m) => got.push(m))
+    if (head) await new Promise((r) => setImmediate(r)) // what came with the upgrade is read first
+    for (const p of pieces) sock.emit('data', p)
+    return { got, sock }
+  }
+  for (const wire of [one, fragmented]) {
+    for (let cut = 1; cut < wire.length; cut++) {
+      const { got, sock } = await run(wire, [cut], { head: cut % 2 === 0 })
+      assert.deepEqual(got, [`${text.toString('utf8')}\n`], `split at ${cut}`)
+      if (wire === fragmented) assert.ok(sock.written.some((b) => b.toString('hex') === pong), `a pong, split at ${cut}`)
+    }
+    const bytes = Array.from({ length: wire.length - 1 }, (_, i) => i + 1)
+    assert.deepEqual((await run(wire, bytes)).got, [`${text.toString('utf8')}\n`], 'a byte at a time')
+  }
+  const header = Array.from({ length: 20 }, (_, i) => i + 1) // the 10-byte header and the mask one byte at a time
+  assert.deepEqual((await run(long, header)).got, [`${big.toString('utf8')}\n`])
+  assert.deepEqual([one, fragmented, long].map((b) => b.toString('hex')), before, 'the chunks fed in are not changed')
 })

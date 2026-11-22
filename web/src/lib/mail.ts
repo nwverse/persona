@@ -4,7 +4,6 @@
 import { t } from "../i18n";
 import { useEffect, useState } from "react";
 import { api, enc } from "./api";
-import type { MailAccount } from "./inbox";
 import { itemHeaders, useItemManager } from "./manager-choice";
 
 export interface MailAddress {
@@ -152,6 +151,12 @@ export function markMailSeen(accountID: string, uid: number, mailbox: string, ma
 
 // ── accounts ─────────────────────────────────────────────
 
+export interface MailAccount {
+  id: string;
+  name?: string;
+  email: string;
+}
+
 // by manager ("": the default's): each manager keeps its own mail accounts
 const known = new Map<string, MailAccount[]>();
 const inFlight = new Map<string, Promise<MailAccount[]>>();
@@ -175,10 +180,12 @@ export function loadMailAccounts(manager?: string): Promise<MailAccount[]> {
   return p;
 }
 
-/** The accounts of the manager whose item is shown (ItemManager; none: the default's), the last known ones at once and
- *  the hub's answer when it comes. */
-export function useMailAccounts(): MailAccount[] {
-  const manager = useItemManager();
+/** The accounts of the manager whose item is shown (ItemManager; none: the default's), or of `owner.manager` when given
+ *  (a new mail on the Inbox page: the current assistant's), the last known ones at once and the hub's answer when it
+ *  comes. */
+export function useMailAccounts(owner?: { manager: string | undefined }): MailAccount[] {
+  const shown = useItemManager();
+  const manager = owner ? owner.manager : shown;
   const key = accountsKey(manager);
   const [state, setState] = useState(() => ({ key, list: known.get(key) ?? [] }));
   useEffect(() => {

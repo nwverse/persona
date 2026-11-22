@@ -13,9 +13,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import kotlinx.coroutines.launch
 import persona.core.contracts.GroupKeys
 import persona.core.contracts.Machine
+import persona.core.contracts.TraeCliDisplayName
 import persona.core.contracts.api.HubLauncher
 import persona.core.contracts.api.LauncherCheck
+import persona.core.contracts.api.LauncherImportResult
 import persona.core.contracts.api.ProviderSetup
+import persona.core.contracts.isTraeCliId
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
 
@@ -82,7 +85,16 @@ internal fun ProvidersPage(
                 if (query.isBlank() || groups.managed.isNotEmpty()) {
                     item("managed") { JSectionHeader(stringResource(R.string.settings_providers_managed), count = groups.managed.size) }
                     if (groups.managed.isEmpty()) item("managed-empty") { SettingsCaption(stringResource(R.string.settings_providers_managed_empty), Modifier.padding(horizontal = Tokens.Space.xs)) }
-                    launcherRows("managed", groups.managed, name, selected, onOpen) { menu = it }
+                    // By harness (Claude Code, Codex, …, direct API) once there is more than one; one alone needs no labels.
+                    val harnesses = harnessGroups(groups.managed)
+                    if (harnesses.size > 1) harnesses.forEach { (harness, list) ->
+                        item("managed-h-$harness") {
+                            Text(harnessName(harness) ?: stringResource(R.string.settings_pscope_harness_api),
+                                Modifier.padding(start = rowPadding, end = rowPadding, top = Tokens.Space.m, bottom = Tokens.Space.xs),
+                                style = PersonaTheme.type.labelSmall, color = PersonaTheme.palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        launcherRows("managed-$harness", list, name, selected, onOpen) { menu = it }
+                    } else launcherRows("managed", groups.managed, name, selected, onOpen) { menu = it }
                     if (groups.managed.isNotEmpty()) item("managed-note") {
                         SettingsCaption(stringResource(R.string.settings_providers_managed_note), Modifier.padding(horizontal = Tokens.Space.xs, vertical = Tokens.Space.s))
                     }
@@ -100,7 +112,7 @@ internal fun ProvidersPage(
                     item("hidden") {
                         JSectionHeader(stringResource(R.string.settings_providers_hidden), count = groups.hidden.size,
                             trailing = stringResource(if (open) R.string.settings_providers_fold else R.string.settings_providers_unfold),
-                            onClick = if (query.isBlank()) ({ showHidden = !showHidden }) else null)
+                            onClick = if (query.isBlank()) ({ showHidden = !showHidden }) else null, open = open, trailingIsFoldAction = true)
                     }
                     if (open) {
                         launcherRows("hidden", groups.hidden, name, selected, onOpen) { menu = it }
@@ -121,10 +133,10 @@ internal fun ProvidersPage(
             l.managed -> JAction(stringResource(R.string.settings_providers_delete), PhIcons.Trash, destructive = true) { deleting = l }
             l.hidden -> JAction(stringResource(R.string.settings_providers_restore), PhIcons.Eye) { scope.launch { model.setHidden(l, false) } }
             else -> JAction(stringResource(R.string.settings_providers_hide), PhIcons.Prohibit) { scope.launch { model.setHidden(l, true) } }
-        }), { menu = null }, title = l.name)
+        }), { menu = null }, title = l.settingsTitle)
     }
     deleting?.let { l ->
-        JDialog(onDismiss = { deleting = null }, title = stringResource(R.string.settings_providers_delete_title, l.name),
+        JDialog(onDismiss = { deleting = null }, title = stringResource(R.string.settings_providers_delete_title, l.settingsTitle),
             text = stringResource(R.string.settings_providers_delete_text), destructive = true,
             confirm = stringResource(R.string.settings_providers_delete) to { deleting = null; scope.launch { model.delete(l) }; Unit })
     }
@@ -146,10 +158,10 @@ private fun androidx.compose.foundation.lazy.LazyListScope.launcherRows(
 private fun LauncherRow(l: HubLauncher, machineName: (String) -> String, selected: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
     val palette = PersonaTheme.palette
     val machines = l.machines.joinToString(stringResource(R.string.settings_providers_list_sep), transform = machineName)
-    JRow(selected = selected, onClick = onClick, onLongClick = onLongClick, onClickLabel = l.name) {
+    JRow(selected = selected, onClick = onClick, onLongClick = onLongClick, onClickLabel = l.settingsTitle) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
             Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                Text(l.name, Modifier.weight(1f, fill = false), style = PersonaTheme.type.code, color = if (l.hidden) palette.ink3 else palette.ink,
+                Text(l.settingsTitle, Modifier.weight(1f, fill = false), style = PersonaTheme.type.code, color = if (l.hidden) palette.ink3 else palette.ink,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (l.managed) JTag("Persona", status = Status.Working)
                 if (l.isApi) JTag(stringResource(R.string.settings_providers_api_tag))
@@ -167,19 +179,31 @@ private fun LauncherRow(l: HubLauncher, machineName: (String) -> String, selecte
  */
 @Composable
 internal fun ProviderDetailPage(providers: ProviderSetup?, name: String, machines: List<Machine>, onBack: () -> Unit) {
+    val fallbackTitle = if (isTraeCliId(name)) TraeCliDisplayName else name
     if (providers == null) {
-        JListPage(title = name, onBack = onBack) { item { JNotice(stringResource(R.string.settings_providers_demo)) } }
+        JListPage(title = fallbackTitle, onBack = onBack) { item { JNotice(stringResource(R.string.settings_providers_demo)) } }
         return
     }
     val model = remember(providers, name) { ProviderDetailModel(providers, name) }
     val state by model.state.collectAsState()
     val scope = rememberCoroutineScope()
     var confirm by remember { mutableStateOf(false) }
+    // Editing in place: the form ("form"), or its "Computers" page by itself ("computers").
+    var editing by rememberSaveable(name) { mutableStateOf<String?>(ProviderEditPreview.take()) }
     LaunchedEffect(model) { model.load() }
     LaunchedEffect(state.gone) { if (state.gone) onBack() }
     val label = { id: String -> machineLabel(machines, id) }
+    val stored = state.launcher
+    if (editing != null && stored != null && stored.managed) {
+        NewProviderPage(providers, onBack = { editing = null }, onSaved = { editing = null; scope.launch { model.load() } },
+            existing = stored, machines = machines, startAtComputers = editing == "computers")
+        return
+    }
     val facts = state.launcher?.let { providerFacts(it, label) }.orEmpty()
-    JListPage(title = name, onBack = onBack) {
+    val title = stored?.settingsTitle ?: fallbackTitle
+    JListPage(title = title, onBack = onBack, actions = {
+        if (stored?.managed == true) JIconButton(PhIcons.PencilSimple, stringResource(R.string.settings_pedit_edit), { editing = "form" })
+    }) {
         val l = state.launcher
         when {
             l == null && state.error != null -> item("error") {
@@ -193,9 +217,29 @@ internal fun ProviderDetailPage(providers: ProviderSetup?, name: String, machine
                     item("fact-$index") {
                         JGroupItem(GroupPosition.of(index, facts.size)) {
                             JRow(title, trailing = {
-                                Text(value, Modifier.widthIn(max = Tokens.Space.xxxl * 6), style = if (mono) PersonaTheme.type.code else PersonaTheme.type.callout,
+                                Text(value, Modifier.widthIn(max = Tokens.Space.xxl * 6), style = if (mono) PersonaTheme.type.code else PersonaTheme.type.callout,
                                     color = PersonaTheme.palette.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             })
+                        }
+                    }
+                }
+                if (l.hasScope) {
+                    // Where it runs and which computers have a key of their own (docs/integrations/launchers.md "Device scope and on-demand delivery").
+                    val keyed = l.keyMachines
+                    val rows = if (keyed.isEmpty()) 1 else 2
+                    item("scope-header") { JSectionHeader(stringResource(R.string.settings_pscope_title)) }
+                    item("scope") {
+                        JGroupItem(GroupPosition.of(0, rows)) {
+                            JRow(stringResource(R.string.settings_pscope_share), leadingIcon = PhIcons.Laptop, subtitle = scopeSummaryText(l, machines),
+                                subtitleLines = 3, onClick = { editing = "computers" })
+                        }
+                    }
+                    if (keyed.isNotEmpty()) item("scope-keys") {
+                        JGroupItem(GroupPosition.of(1, rows)) {
+                            JRow(stringResource(R.string.settings_pscope_machine_keys), leadingIcon = PhIcons.Key,
+                                subtitle = keyed.joinToString(stringResource(R.string.settings_providers_list_sep), transform = label),
+                                value = pluralStringResource(R.plurals.settings_pscope_machine_keys_count, keyed.size, keyed.size),
+                                onClick = { editing = "computers" })
                         }
                     }
                 }
@@ -236,7 +280,7 @@ internal fun ProviderDetailPage(providers: ProviderSetup?, name: String, machine
                 }
                 state.notice?.let { notice -> item("notice") { JNotice(notice.text(), Modifier.padding(top = Tokens.Space.m), status = Status.NeedsYou) } }
                 item("action") {
-                    Box(Modifier.padding(top = Tokens.Space.xl)) {
+                    Box(Modifier.padding(top = Tokens.Space.section)) {
                         if (l.hidden) JButton(stringResource(R.string.settings_providers_restore), { scope.launch { model.restore() } }, Modifier.fillMaxWidth(),
                             kind = JButtonKind.Secondary, enabled = !state.busy, loading = state.busy)
                         else JButton(stringResource(if (l.managed) R.string.settings_providers_delete else R.string.settings_providers_hide_long), { confirm = true },
@@ -248,7 +292,7 @@ internal fun ProviderDetailPage(providers: ProviderSetup?, name: String, machine
     }
     val l = state.launcher
     if (confirm && l != null) JDialog(onDismiss = { confirm = false },
-        title = stringResource(if (l.managed) R.string.settings_providers_delete_title else R.string.settings_providers_hide_title, l.name),
+        title = stringResource(if (l.managed) R.string.settings_providers_delete_title else R.string.settings_providers_hide_title, l.settingsTitle),
         text = stringResource(if (l.managed) R.string.settings_providers_delete_text else R.string.settings_providers_hidden_note), destructive = l.managed,
         confirm = stringResource(if (l.managed) R.string.settings_providers_delete else R.string.settings_providers_hide) to { confirm = false; scope.launch { model.remove() }; Unit })
 }
@@ -271,7 +315,8 @@ private fun providerFacts(l: HubLauncher, machineName: (String) -> String): List
     if (l.models.size > 1) add(stringResource(R.string.settings_providers_models) to l.models.joinToString(stringResource(R.string.settings_providers_list_sep)) { it.id })
     if (l.hasHeaders) add(stringResource(R.string.settings_providers_headers) to stringResource(R.string.settings_providers_set_hidden))
     if (l.hasEnv) add(stringResource(R.string.settings_providers_env) to stringResource(R.string.settings_providers_set_hidden))
-    if (l.managed) add("API Key" to stringResource(if (l.hasKey) R.string.settings_providers_set_hidden else R.string.settings_providers_unset))
+    if (l.managed) add("API Key" to (l.keyReference?.let { providerReferenceState(LocalResources.current, it) }
+        ?: stringResource(if (l.hasKey) R.string.settings_providers_set_hidden else R.string.settings_providers_unset)))
     if (l.managed && l.api != "responses") add(stringResource(R.string.settings_providers_auth) to if (l.auth == "bearer") "Bearer" else "x-api-key")
     if (l.args.isNotEmpty()) add(stringResource(R.string.settings_providers_args) to l.args.joinToString(" "))
     if (l.machines.isNotEmpty()) add(stringResource(R.string.settings_providers_machines) to l.machines.joinToString(stringResource(R.string.settings_providers_list_sep), transform = machineName))
@@ -293,7 +338,7 @@ private fun CheckRow(place: String, asked: Boolean, check: LauncherCheck?, failu
     }
     JRow(place, subtitle = subtitle, leadingIcon = PhIcons.Laptop, subtitleLines = 3, trailing = {
         when {
-            asked && check == null -> JSpinner(Modifier.size(Tokens.Space.l))
+            asked && check == null -> JSpinner(Modifier.size(Tokens.Space.Standard.l))
             check != null -> JTag(if (check.ok) stringResource(R.string.settings_providers_check_ms, check.millis) else stringResource(R.string.settings_providers_check_failed),
                 status = if (check.ok) Status.Unread else Status.NeedsYou)
             else -> {}
@@ -307,13 +352,24 @@ private fun CheckRow(place: String, asked: Boolean, check: LauncherCheck?, failu
  * through the phone.
  */
 @Composable
-internal fun ProviderImportPage(providers: ProviderSetup, machines: List<Machine>, onBack: () -> Unit, onDone: () -> Unit) {
-    val model = remember(providers) { ProviderImportModel(providers) }
+internal fun ProviderImportPage(
+    providers: ProviderSetup, machines: List<Machine>, onBack: () -> Unit, onDone: (LauncherImportResult) -> Unit,
+    initialMachine: String? = null, initialAlias: String? = null,
+) {
+    val model = remember(providers, initialMachine, initialAlias) { ProviderImportModel(providers) }
     val state by model.state.collectAsState()
     val scope = rememberCoroutineScope()
-    val online = machines.filter { it.online }
+    // The current assistant's computers alone: the hub reads another assistant's through that one, not this one.
+    val assistant = currentAssistant()
+    val online = machines.filter { it.online && assistant.ownsOn(it.id, it.manager) }
+    LaunchedEffect(model) {
+        if (initialAlias != null && !initialMachine.isNullOrBlank()) {
+            model.choose(initialMachine, initialAlias)
+            model.load()
+        }
+    }
     LaunchedEffect(online.map { it.id }) {
-        if (state.machine.isBlank()) (online.firstOrNull { it.kind == "local" } ?: online.firstOrNull())?.let { model.choose(GroupKeys.raw(it.id)) }
+        if (initialAlias == null && state.machine.isBlank()) (online.firstOrNull { it.kind == "local" } ?: online.firstOrNull())?.let { model.choose(GroupKeys.raw(it.id)) }
     }
     var picking by remember { mutableStateOf(false) }
     JListPage(title = stringResource(R.string.settings_providers_import), onBack = onBack, bottomBar = {
@@ -323,16 +379,20 @@ internal fun ProviderImportPage(providers: ProviderSetup, machines: List<Machine
                     Modifier.fillMaxWidth(), enabled = state.machine.isNotBlank() && state.phase == ImportPhase.Machine, loading = state.phase == ImportPhase.Loading)
                 ImportPhase.Preview, ImportPhase.Importing -> JButton(pluralStringResource(R.plurals.settings_providers_import_n, state.picked.size, state.picked.size),
                     { scope.launch { model.runImport() } }, Modifier.fillMaxWidth(), enabled = state.canImport, loading = state.phase == ImportPhase.Importing)
-                ImportPhase.Done -> JButton(stringResource(R.string.settings_providers_import_done), onDone, Modifier.fillMaxWidth())
+                ImportPhase.Done -> JButton(stringResource(R.string.settings_providers_import_done), { state.result?.let(onDone) }, Modifier.fillMaxWidth(), enabled = state.result != null)
             }
         }
     }) {
-        item("intro") { SettingsCaption(stringResource(R.string.settings_providers_import_intro), Modifier.padding(horizontal = Tokens.Space.xs, vertical = Tokens.Space.s)) }
+        item("intro") {
+            val intro = initialAlias?.let { stringResource(R.string.settings_paste_alias_import_intro, it) } ?: stringResource(R.string.settings_providers_import_intro)
+            SettingsCaption(intro, Modifier.padding(horizontal = Tokens.Space.xs, vertical = Tokens.Space.s))
+        }
         item("machine") {
             JGroupItem(GroupPosition.Single) {
                 JRow(stringResource(R.string.settings_src_claude_machine), leadingIcon = PhIcons.Laptop,
                     value = state.machine.takeIf { it.isNotBlank() }?.let { machineLabel(machines, it) } ?: stringResource(R.string.settings_src_claude_no_online),
-                    enabled = online.isNotEmpty() && state.phase in setOf(ImportPhase.Machine, ImportPhase.Preview, ImportPhase.Done), onClick = { picking = true })
+                    enabled = initialAlias == null && online.isNotEmpty() && state.phase in setOf(ImportPhase.Machine, ImportPhase.Preview, ImportPhase.Done),
+                    onClick = if (initialAlias == null) ({ picking = true }) else null)
             }
         }
         state.error?.let { error -> item("error") { JNotice(error.text(), Modifier.padding(top = Tokens.Space.m), status = Status.NeedsYou) } }

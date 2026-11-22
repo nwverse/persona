@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_update_pending_cancel">取消待处理安装</string>
+    <string name="settings_update_pending_confirm">取消待处理的 Persona 更新？配对和应用数据会保留，之后可以重新下载更新。</string>
+    <string name="settings_update_pending_cancelled">已取消待处理安装，可以重试更新。</string>
+    <string name="settings_update_pending_failed">无法检查或取消待处理安装，请重试。</string>
+</resources>

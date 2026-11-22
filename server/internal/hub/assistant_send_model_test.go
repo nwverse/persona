@@ -27,6 +27,7 @@ func TestAFollowUpKeepsItsConversationsLauncher(t *testing.T) {
 	putModel(t, h, "assistant", assistantwire.ModelBinding{Provider: "launcher.conv", Effort: "high"})
 	putModel(t, h, "agent.new", assistantwire.ModelBinding{Provider: "launcher.agents"})
 	n.m.mu.Lock()
+	n.m.online = true // runTask's execution guard sees this in-process peer as an online machine.
 	n.m.sessions = []proto.Session{
 		{SessionID: "main", Launcher: "claude", Model: "stale", Assistant: true, Status: proto.StatusOffline},
 		{SessionID: "side", Launcher: "side-l", Model: "side-m", Assistant: true, Status: proto.StatusOffline},
@@ -34,6 +35,9 @@ func TestAFollowUpKeepsItsConversationsLauncher(t *testing.T) {
 		{SessionID: "daily", Launcher: "claude", Assistant: true, Status: proto.StatusOffline},
 	}
 	n.m.mu.Unlock()
+	n.mu.Lock()
+	n.known["main"], n.known["side"], n.known["daily"] = true, true, true
+	n.mu.Unlock()
 	seedTasks(t, h,
 		assistant.Task{ID: "fu_main", Prompt: "会前准备", Repeat: "once", Enabled: true, MachineID: "server", SessionID: "main", CreatedBy: "assistant"},
 		assistant.Task{ID: "fu_side", Prompt: "再看一眼", Repeat: "once", Enabled: true, MachineID: "server", SessionID: "side", CreatedBy: "assistant"},
@@ -98,9 +102,11 @@ func TestAssistantModelIsWhatThePhonesMessageRunsOn(t *testing.T) {
 	if p["launcher"] != "conv" || p["model"] != nil || p["effort"] != "high" || p["model_fingerprint"] == nil || p["model_fingerprint"] != phone["model_fingerprint"] || p["is_main"] != true || phone["is_main"] != true {
 		t.Fatalf("assistant.model = %v, the phone's message runs on %v", p, phone)
 	}
-	// Another conversation the hub doesn't list yet (the node just started) keeps its own: nothing to say.
+	// Another conversation the hub doesn't list yet (the node just started) keeps its own: no model to say, and an
+	// explicitly empty supervision role, not an ordinary conversation's manual (#8251).
 	params, _ = json.Marshal(map[string]any{"session_id": "side"})
-	if got, err := nodeAsks(ctx, n.m, "assistant.model", params); err != nil || len(got.(map[string]any)) != 1 || got.(map[string]any)["is_main"] != false {
+	if got, err := nodeAsks(ctx, n.m, "assistant.model", params); err != nil || len(got.(map[string]any)) != 2 ||
+		got.(map[string]any)["is_main"] != false || got.(map[string]any)["supervision_instructions"] != "" {
 		t.Fatalf("an unlisted conversation: %v %v", got, err)
 	}
 }

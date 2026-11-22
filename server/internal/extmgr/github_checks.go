@@ -43,3 +43,22 @@ func (h *Manager) PRChecks(ctx context.Context, repo string, number int) (github
 	snapshot, err := c.PRChecks(ctx, repo, number)
 	return snapshot, c.PRChecksRateReset(), true, err
 }
+
+// GitHubGet reads path (a GitHub REST path) into out with the built-in GitHub connector, when it is enabled, signed in
+// and on github.com; ok false when there is none to read with (the caller reads some other way). The assistant's deploy
+// check uses it (assistant deploy_check.go, #3205).
+func (h *Manager) GitHubGet(ctx context.Context, path string, out any) (bool, error) {
+	if !h.ready(ctx) || h.connectors == nil || !h.connectors.Enabled("github") {
+		return false, nil
+	}
+	registered := h.connectors.Get("github")
+	if registered == nil || !githubChecksPublicHost(registered) {
+		return false, nil
+	}
+	c, builtin := registered.(*github.Connector)
+	if !builtin || c.Status(ctx).State != connector.StateOK {
+		return false, nil
+	}
+	_, err := c.Get(ctx, path, out)
+	return true, err
+}

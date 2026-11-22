@@ -18,7 +18,7 @@ import (
 // Extensions are the registry's rows.
 func (d *DB) Extensions(ctx context.Context) ([]extension.Record, error) {
 	rows, err := d.pool.Query(ctx, `SELECT id, source, origin, version, previous_version, manifest, granted, granted_digest, enabled,
-		config, remote, disabled_contributions, installed_at, updated_at, market_key, previous_origin, previous_market_key, public_id, previous_id,
+		config, remote, disabled_contributions, installed_at, updated_at, market_key, previous_origin, previous_market_key, public_id, previous_id, pack_off,
  ARRAY(SELECT name FROM plugin_identities WHERE plugin = plugins.id AND name <> COALESCE(NULLIF(public_id, ''), plugins.id) ORDER BY name)
  FROM plugins ORDER BY id`)
 	if err != nil {
@@ -28,10 +28,10 @@ func (d *DB) Extensions(ctx context.Context) ([]extension.Record, error) {
 	var out []extension.Record
 	for rows.Next() {
 		var r extension.Record
-		var granted, remote, disabled []byte
+		var granted, remote, disabled, packOff []byte
 		var publicID string
 		if err := rows.Scan(&r.ID, &r.Source, &r.Origin, &r.Version, &r.PreviousVersion, &r.Manifest, &granted, &r.GrantedDigest, &r.Enabled,
-			&r.Config, &remote, &disabled, &r.InstalledAt, &r.UpdatedAt, &r.MarketKey, &r.PreviousOrigin, &r.PreviousMarketKey, &publicID, &r.PreviousID, &r.Aliases); err != nil {
+			&r.Config, &remote, &disabled, &r.InstalledAt, &r.UpdatedAt, &r.MarketKey, &r.PreviousOrigin, &r.PreviousMarketKey, &publicID, &r.PreviousID, &packOff, &r.Aliases); err != nil {
 			return nil, err
 		}
 		if publicID != "" {
@@ -45,6 +45,12 @@ func (d *DB) Extensions(ctx context.Context) ([]extension.Record, error) {
 		}
 		if err := json.Unmarshal(disabled, &r.DisabledContributions); err != nil {
 			return nil, err
+		}
+		if err := json.Unmarshal(packOff, &r.PackOff); err != nil {
+			return nil, err
+		}
+		if len(r.PackOff) == 0 {
+			r.PackOff = nil
 		}
 		if len(remote) > 0 && string(remote) != "null" {
 			r.Remote = &extension.Remote{}
@@ -67,7 +73,7 @@ type extensionExecutor interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
-// PutExtensionPlan changes all records atomically, without deleting or rewriting any existing secrets.
+// PutExtensionPlan changes all records and their requested secret deletions atomically.
 func (d *DB) PutExtensionPlan(ctx context.Context, records []extension.Record) error {
 	ordered := slices.Clone(records)
 	slices.SortFunc(ordered, func(a, b extension.Record) int { return strings.Compare(a.StorageKey(), b.StorageKey()) })
@@ -83,6 +89,13 @@ func (d *DB) PutExtensionPlan(ctx context.Context, records []extension.Record) e
 	for _, record := range ordered {
 		if err = putExtension(ctx, tx, record); err != nil {
 			return err
+		}
+		names := slices.Clone(record.DeleteSecrets)
+		slices.Sort(names)
+		for _, name := range names {
+			if _, err = tx.Exec(ctx, `DELETE FROM plugin_secrets WHERE plugin = $1 AND name = $2`, record.StorageKey(), name); err != nil {
+				return err
+			}
 		}
 	}
 	return extensionCommitResult(tx.Commit(ctx))
@@ -104,7 +117,22 @@ func extensionCommitResult(err error) error {
 func putExtension(ctx context.Context, executor extensionExecutor, r extension.Record) error {
 	if r.ExpectedID != "" {
 		var id, version string
-		if err := executor.QueryRow(ctx, `SELECT COALESCE(NULLIF(public_id, ''), id), version FROM plugins WHERE id = $1 FOR UPDATE`, r.StorageKey()).Scan(&id, &version); err != nil {
+		var err error
+		if r.ExpectedConfig != nil {
+			expected := r.ExpectedConfig
+			if len(expected) == 0 {
+				expected = json.RawMessage(`{}`)
+			}
+			var same bool
+			err = executor.QueryRow(ctx, `SELECT COALESCE(NULLIF(public_id, ''), id), version,
+				COALESCE(config, '{}'::jsonb) = $2::jsonb FROM plugins WHERE id = $1 FOR UPDATE`, r.StorageKey(), []byte(expected)).Scan(&id, &version, &same)
+			if err == nil && !same {
+				return extension.ErrSettingsMoved
+			}
+		} else {
+			err = executor.QueryRow(ctx, `SELECT COALESCE(NULLIF(public_id, ''), id), version FROM plugins WHERE id = $1 FOR UPDATE`, r.StorageKey()).Scan(&id, &version)
+		}
+		if err != nil {
 			return err
 		}
 		if id != r.ExpectedID || version != r.ExpectedVersion {
@@ -133,19 +161,27 @@ func putExtension(ctx context.Context, executor extensionExecutor, r extension.R
 	if err != nil {
 		return err
 	}
+	packOff := r.PackOff
+	if packOff == nil {
+		packOff = []string{}
+	}
+	packOffJSON, err := json.Marshal(packOff)
+	if err != nil {
+		return err
+	}
 	publicID := ""
 	if r.StorageID != "" {
 		publicID = r.ID
 	}
 	tag, err := executor.Exec(ctx, `INSERT INTO plugins (id, source, origin, version, previous_version, manifest, granted, granted_digest, enabled,
-		config, remote, installed_at, updated_at, disabled_contributions, market_key, previous_origin, previous_market_key, public_id, previous_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+		config, remote, installed_at, updated_at, disabled_contributions, market_key, previous_origin, previous_market_key, public_id, previous_id, pack_off)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $23)
 		ON CONFLICT (id) DO UPDATE SET source = $2, origin = $3, version = $4, previous_version = $5, manifest = $6, granted = $7,
 		granted_digest = $8, enabled = $9, config = $10, remote = $11, updated_at = $13, disabled_contributions = $14, market_key = $15,
-		previous_origin = $16, previous_market_key = $17, public_id = $18, previous_id = $19
+		previous_origin = $16, previous_market_key = $17, public_id = $18, previous_id = $19, pack_off = $23
  WHERE NOT $22 AND ($20 = '' OR COALESCE(NULLIF(plugins.public_id, ''), plugins.id) = $20 AND plugins.version = $21)`,
 		r.StorageKey(), r.Source, r.Origin, r.Version, r.PreviousVersion, []byte(r.Manifest), granted, r.GrantedDigest, r.Enabled,
-		[]byte(config), remote, r.InstalledAt, r.UpdatedAt, off, r.MarketKey, r.PreviousOrigin, r.PreviousMarketKey, publicID, r.PreviousID, r.ExpectedID, r.ExpectedVersion, r.NewInstallation)
+		[]byte(config), remote, r.InstalledAt, r.UpdatedAt, off, r.MarketKey, r.PreviousOrigin, r.PreviousMarketKey, publicID, r.PreviousID, r.ExpectedID, r.ExpectedVersion, r.NewInstallation, packOffJSON)
 	if err != nil {
 		return err
 	}

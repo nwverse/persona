@@ -3,34 +3,45 @@
 package osproc
 
 import (
-	"bytes"
 	"errors"
-	"fmt"
 	"os"
-	"strings"
 	"syscall"
 
+	"github.com/nwverse/persona/server/internal/procinfo"
 	"golang.org/x/sys/unix"
 )
 
 // identify reads the process's start time from /proc (field 22 of stat, clock
 // ticks since boot): a resolution a reused pid cannot land in twice.
 func identify(pid int) ProcIdentity {
-	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	id, _ := identifyKnown(pid)
+	return id
+}
+
+func identifyKnown(pid int) (ProcIdentity, bool) {
+	return identifyFromStat(pid, procinfo.Stat)
+}
+
+func identifyFromStat(pid int, stat func(int) ([]string, error)) (ProcIdentity, bool) {
+	fields, err := stat(pid)
 	if err != nil {
-		return ProcIdentity{}
+		if os.IsNotExist(err) {
+			// A missing pid is conclusive only when procfs itself is readable.
+			// A missing or masked procfs must still allow the portable fallback.
+			self, selfErr := stat(os.Getpid())
+			return ProcIdentity{}, selfErr == nil && len(self) >= 20
+		}
+		return ProcIdentity{}, false
 	}
-	// The comm field can hold spaces and parentheses; every field after it
-	// follows its last ')'. starttime is field 22, the 20th from state (3).
-	rest := bytes.LastIndexByte(b, ')')
-	if rest < 0 || rest+2 >= len(b) {
-		return ProcIdentity{}
+	// Stat locates state after the last ')' in comm, which can itself contain
+	// spaces and parentheses. A zombie retains its start time but cannot run.
+	if len(fields) > 0 && (fields[0] == "Z" || fields[0] == "X") {
+		return ProcIdentity{}, true
 	}
-	fields := strings.Fields(string(b[rest+2:]))
 	if len(fields) < 20 {
-		return ProcIdentity{}
+		return ProcIdentity{}, false
 	}
-	return ProcIdentity{Start: "ticks:" + fields[19]}
+	return ProcIdentity{Start: "ticks:" + fields[19]}, true
 }
 
 // killPinned pins the instance with a pidfd and signals that: a pid reused

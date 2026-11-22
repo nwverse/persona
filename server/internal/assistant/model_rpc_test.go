@@ -329,3 +329,70 @@ func TestReplySchemaSubset(t *testing.T) {
 		t.Fatal("no JSON decoded")
 	}
 }
+
+// The manager's own calls (models.purpose_complete): only its built-in purposes, on Information processing's model,
+// with model.complete's schema check and retry.
+func TestPurposeCompleteRunsTheManagersPurposeOnInformationProcessing(t *testing.T) {
+	s, f, calls := extensionModelService(t, `{"tool":"x"`, `{"tool":"list","args":{}}`)
+	call := func(purpose string, params assistantwire.ModelCompleteParams) (assistantwire.ModelCompleteResult, error) {
+		raw, _ := json.Marshal(assistantwire.PurposeComplete{Purpose: purpose, Params: params})
+		out, ok, err := s.modelsRequest(context.Background(), assistantwire.MethodModelsPurposeComplete, raw)
+		var res assistantwire.ModelCompleteResult
+		if !ok {
+			return res, errors.New("not answered")
+		}
+		if err != nil {
+			return res, err
+		}
+		b, _ := json.Marshal(out)
+		_ = json.Unmarshal(b, &res)
+		return res, nil
+	}
+	params := assistantwire.ModelCompleteParams{System: "pick a tool", Messages: []assistantwire.ModelMessage{{Role: "user", Content: "tools"}},
+		JSONSchema: json.RawMessage(`{"type":"object","properties":{"tool":{"type":"string"},"args":{"type":"object"}},"required":["tool","args"]}`),
+		Label:      "subscription pick"}
+	p := purposeOf(t, s, assistantwire.PurposeSubscriptionRecipe)
+	if p.CategoryID != "kb" || p.Kind != "api" || p.Effective.Model != "kb-model" || p.Name != "订阅方式起草" {
+		t.Fatalf("purpose %+v", p)
+	}
+	res, err := call(assistantwire.PurposeSubscriptionRecipe, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(res.JSON) != `{"args":{},"tool":"list"}` || res.Usage.Requests != 2 {
+		t.Fatalf("result %+v %s", res, res.JSON)
+	}
+	if c := calls(); len(c) != 2 || c[0].Model != "kb-model" || !strings.Contains(c[0].System, "pick a tool") || len(c[1].Messages) != 3 {
+		t.Fatalf("upstream got %+v", c)
+	}
+	for _, purpose := range []string{"kb", "assistant", "extension.kb-curator", ""} {
+		if _, err := call(purpose, params); rpcCode(err) != bus.CodeInvalidParams {
+			t.Errorf("purpose %q: %v", purpose, err)
+		}
+	}
+	if _, err := call(assistantwire.PurposeSubscriptionRecipe, assistantwire.ModelCompleteParams{}); rpcCode(err) != bus.CodeInvalidParams {
+		t.Fatalf("no messages: %v", err)
+	}
+	if len(calls()) != 2 {
+		t.Fatal("a refused call went out")
+	}
+	// models.usable names what it runs on, for the consent before a sample goes there.
+	usable := func() map[string]any {
+		raw, _ := json.Marshal(map[string]string{"purpose": assistantwire.PurposeSubscriptionRecipe})
+		out, ok, err := s.modelsRequest(context.Background(), assistantwire.MethodModelsUsable, raw)
+		if !ok || err != nil {
+			t.Fatalf("models.usable: %v %v", ok, err)
+		}
+		return out.(map[string]any)
+	}
+	if u := usable(); u["usable"] != true || u["model"] != "kb-model" || u["provider"] == "" || u["provider"] == p.Effective.Provider {
+		t.Fatalf("models.usable %v: want the connection's display name, not its id %q", u, p.Effective.Provider)
+	}
+	f.hello.Models.AI = ai.Config{}
+	if _, err := call(assistantwire.PurposeSubscriptionRecipe, params); rpcCode(err) != assistantwire.CodeModelUnavailable {
+		t.Fatalf("nothing set up: %v", err)
+	}
+	if u := usable(); u["usable"] != false || u["provider"] != nil {
+		t.Fatalf("models.usable with nothing set up: %v", u)
+	}
+}

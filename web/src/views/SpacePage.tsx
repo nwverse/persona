@@ -10,12 +10,15 @@ import { isSpacePinned } from "../lib/pins";
 import { href, navigate, onLinkClick, type Route } from "../lib/router";
 import { spaceTodos, spaceView } from "../lib/space-page";
 import { useStore } from "../lib/store";
-import { makeSessionLookup, todoStatus, todoStatusLabel, TODO_STATUS_INFO } from "../lib/todos";
+import { retryAgentList, useFullAgentSessions } from "../lib/sessions";
+import { makeSessionLookup, todoStatus, type TodoTone } from "../lib/todos";
+import { todoLook, waitOf } from "../lib/todo-wait-reason";
 import type { Session } from "../lib/types";
 import { shortPath } from "../lib/format";
 import { Button, cx, EASE, IconButton, Loading } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { MarkSeenDialog, SpaceMenu } from "./AgentMenus";
+import { Tag } from "./assistant/parts";
 import { RenameSpaceDialog } from "./chat/SessionDialogs";
 import { LinkTodoDialog, type LinkTargetSpace } from "./LinkTodoDialog";
 import { AgentRow } from "./machines/AgentRow";
@@ -23,20 +26,22 @@ import { Empty } from "./session/files/parts";
 import { t } from "../i18n";
 import { markAllSeenLabel, stateCount } from "../lib/state-labels";
 
-const NO_SESSIONS: Session[] = [];
-
-const TONE: Record<(typeof TODO_STATUS_INFO)[keyof typeof TODO_STATUS_INFO]["tone"], string> = {
+const TONE: Record<TodoTone, string> = {
   red: "bg-red-tint text-red",
   green: "bg-green-tint text-green",
   amber: "bg-orange-tint text-orange",
   idle: "bg-field text-ink-2",
   off: "bg-field text-ink-3",
+  attention: "bg-field text-attention",
 };
 
 export function SpacePage({ mid, space, onToggleSidebar }: { mid: string; space: string; onToggleSidebar: () => void }) {
   const machines = useStore((s) => s.machines);
   const loaded = useStore((s) => s.loaded);
-  const sessions = useStore((s) => s.sessions[mid] ?? NO_SESSIONS);
+  // The computer's agents, read as its page reads them (MachineDetail): a hub that pages its Agents list pushes no
+  // sessions, so the store has none of them. A child session folds into its parent (#5120): never a row of its own.
+  const full = useFullAgentSessions();
+  const sessions = useMemo(() => full.sessions.filter((s) => s.machine_id === mid), [full.sessions, mid]);
   const pins = useStore((s) => s.pins);
   const mutes = useStore((s) => s.mutes);
   const todos = useStore((s) => s.todos);
@@ -93,8 +98,23 @@ export function SpacePage({ mid, space, onToggleSidebar }: { mid: string; space:
     return (
       <div className="flex h-full flex-col">
         {header}
-        {!loaded || renamedTo ? (
+        {/* not found only once the agents are read: until then (or while they can't be) nobody knows */}
+        {!loaded || renamedTo || (!full.loaded && !full.error) ? (
           <div className="flex flex-1 items-center justify-center"><Loading /></div>
+        ) : !full.loaded ? (
+          <div className="flex min-h-0 flex-1 flex-col pb-[10vh]" data-agents="failed">
+            <Empty
+              icon="alertCircle"
+              title={t("space-page.agents_failed_title")}
+              detail={t("space-page.agents_failed_detail")}
+              action={
+                <span className="flex items-center gap-2">
+                  <Button tone="secondary" icon="retry" onClick={retryAgentList}>{t("space-page.retry")}</Button>
+                  <Button tone="quiet" icon="machine" onClick={() => navigate(machineRoute)}>{t("space-page.back_to_machine_button")}</Button>
+                </span>
+              }
+            />
+          </div>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col pb-[10vh]">
             <Empty
@@ -179,13 +199,16 @@ export function SpacePage({ mid, space, onToggleSidebar }: { mid: string; space:
                   {linked.map((x) => {
                     const to: Route = { name: "todos", id: x.id };
                     const status = x.todo ? todoStatus(x.todo, lookup) : undefined;
+                    // a waiting one's word says what it waits on, attention only on the owner (#11090)
+                    const look = x.todo && status ? todoLook(x.todo, status, waitOf(x.todo, status, lookup), status) : undefined;
                     return (
                       <a key={x.id} href={href(to)} onClick={(e) => onLinkClick(e, to)} className="group flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-hover">
                         <Icon name="todo" size={14} className="shrink-0 text-ink-3" />
                         <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">{x.title}</span>
                         <span className="shrink-0 text-[11.5px] whitespace-nowrap text-ink-3">{x.via === "space" ? t("space-page.todo_via_space") : t("space-page.todo_via_agent")}</span>
-                        {status && x.todo && (
-                          <span className={cx("inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full px-1.5 text-[11px] font-medium", TONE[TODO_STATUS_INFO[status].tone])}>{todoStatusLabel(x.todo, status)}</span>
+                        {x.todo?.kind === "concern" && <Tag><span data-testid="todo-concern">{t("todos.concern")}</span></Tag>}
+                        {look && (
+                          <span className={cx("inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full px-1.5 text-[11px] font-medium", TONE[look.tone])}>{look.label}</span>
                         )}
                         <Icon name="chevronRight" size={13} stroke={2.2} className="shrink-0 text-ink-3 transition-transform duration-150 group-hover:translate-x-0.5" />
                       </a>

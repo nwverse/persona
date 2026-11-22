@@ -18,6 +18,10 @@ func TestMissedRunsAcrossTodayBriefAndSnapshot(t *testing.T) {
 		{"manual busy skip then success", []ScheduleRun{{Status: runSkipped, Manual: true}, {Status: runOK}}, 0},
 		{"manual failure alone", []ScheduleRun{{Status: runFailed, Manual: true}}, 0},
 		{"manual skip alone", []ScheduleRun{{Status: runSkipped, Manual: true}}, 0},
+		{"owner skip alone", []ScheduleRun{{Status: runSkipped, OwnerSkipped: true}}, 0},
+		{"owner skip after failure", []ScheduleRun{{Status: runFailed}, {Status: runSkipped, OwnerSkipped: true}}, 1},
+		{"condition skip alone", []ScheduleRun{{Status: runSkipped, ConditionSkipped: true}}, 0},
+		{"condition skip after failure", []ScheduleRun{{Status: runFailed}, {Status: runSkipped, ConditionSkipped: true}}, 1},
 		{"retry still fails", []ScheduleRun{{Status: runFailed}, {Status: runFailed}}, 2},
 		{"success before new failure", []ScheduleRun{{Status: runOK}, {Status: runFailed}}, 1},
 		{"other task succeeds", []ScheduleRun{{Status: runFailed}, {RefID: "other", Status: runOK}}, 1},
@@ -43,7 +47,7 @@ func TestMissedRunsAcrossTodayBriefAndSnapshot(t *testing.T) {
 			if len(failed) != tc.want || total != tc.want {
 				t.Fatalf("Today: %v, total %d, want %d", failed, total, tc.want)
 			}
-			_, _, _, misses, total := e.s.snapshotSchedule(ctx, loc, now)
+			_, _, _, _, misses, total := e.s.snapshotSchedule(ctx, loc, now)
 			if len(misses) != tc.want || total != tc.want {
 				t.Fatalf("snapshot: %v, total %d, want %d", misses, total, tc.want)
 			}

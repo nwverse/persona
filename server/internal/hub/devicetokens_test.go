@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/screen"
@@ -54,9 +55,12 @@ func (s *tokenStore) DeviceTokens(context.Context) ([]db.DeviceToken, error) {
 func (s *tokenStore) RevokeDeviceToken(_ context.Context, id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, t := range s.rows {
+	for hash, t := range s.rows {
 		if t.ID == id && !s.rev[id] {
 			s.rev[id] = true
+			now := time.Now()
+			t.RevokedAt = &now
+			s.rows[hash] = t
 			return true, nil
 		}
 	}
@@ -64,6 +68,66 @@ func (s *tokenStore) RevokeDeviceToken(_ context.Context, id string) (bool, erro
 }
 
 func (s *tokenStore) TouchDeviceToken(context.Context, string) error { return nil }
+
+func TestDeviceRevocationReachesEveryManager(t *testing.T) {
+	h := newTestHub(t)
+	h.store = &tokenStore{rows: map[string]db.DeviceToken{
+		"first": {ID: "dev_first"},
+		"other": {ID: "dev_other"},
+	}, rev: map[string]bool{}}
+	h.bus.idents = &memIdents{}
+	mux := http.NewServeMux()
+	h.busRoutes(mux)
+	h.tokenRoutes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	events := make(chan bus.DeviceCredential, 2)
+	for _, id := range []string{"assistant", "another-manager"} {
+		m := connectGuardManager(t, h, srv.URL, id, func(string, json.RawMessage) (any, error) { return map[string]any{}, nil })
+		m.mu.Lock()
+		m.onEvent = func(event string, raw json.RawMessage) {
+			if event == bus.EventCredentialRevoked {
+				var p bus.DeviceCredential
+				if err := json.Unmarshal(raw, &p); err != nil {
+					t.Error(err)
+				}
+				events <- p
+			}
+		}
+		m.mu.Unlock()
+	}
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/api/v1/auth/tokens/dev_first", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("sign out: %d %s", w.Code, w.Body)
+	}
+	for range 2 {
+		select {
+		case p := <-events:
+			if p.ID != "dev_first" {
+				t.Fatalf("revoked credential: %+v", p)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("a manager missed the revocation event")
+		}
+	}
+
+	// A fresh hub has no in-memory revocation and can still answer a manager that missed the event.
+	fresh := newTestHub(t)
+	fresh.store = h.store
+	fresh.bus.idents = &memIdents{}
+	freshMux := http.NewServeMux()
+	fresh.busRoutes(freshMux)
+	freshSrv := httptest.NewServer(freshMux)
+	t.Cleanup(freshSrv.Close)
+	m := connectGuardManager(t, fresh, freshSrv.URL, "assistant", func(string, json.RawMessage) (any, error) { return map[string]any{}, nil })
+	for credential, want := range map[string]bool{"dev_first": true, "dev_other": false} {
+		var status bus.CredentialStatus
+		if err := m.call(t, bus.MethodCredentialRevoked, bus.DeviceCredential{ID: credential}, &status); err != nil || status.Revoked != want {
+			t.Fatalf("status for %s: %+v, %v", credential, status, err)
+		}
+	}
+}
 
 // pausedTokenStore returns the snapshot read before revocation only after the test releases it.
 type pausedTokenStore struct {
@@ -187,6 +251,7 @@ func call(t *testing.T, h http.Handler, method, path, token, body string) (int, 
 func TestDeviceTokens(t *testing.T) {
 	h := newTestHub(t)
 	h.store = &tokenStore{memStore: *newMemStore(), rows: map[string]db.DeviceToken{}, rev: map[string]bool{}}
+	h.builtinLooks = builtinPersonaFS() // the Milk Frog the watch fetches below
 	mux := h.routes()
 	master := h.cfg.Token
 
@@ -237,10 +302,14 @@ func TestDeviceTokens(t *testing.T) {
 	if code != 200 || len(list["tokens"].([]any)) != 2 {
 		t.Fatalf("%d %v", code, list)
 	}
-	for _, p := range []string{"/api/v1/ws", "/api/v1/auth/tokens", "/api/v1/machines/m/file"} {
+	for _, p := range []string{"/api/v1/ws", "/api/v1/auth/tokens", "/api/v1/machines/m/file", "/api/v1/personas/nwverse/persona.json"} {
 		if code, _ := call(t, mux, "GET", p, watchTok, ""); code != http.StatusForbidden {
 			t.Fatalf("watch GET %s: %d", p, code)
 		}
+	}
+	// The Milk Frog's art reaches the watch through the whole chain, auth and the package's own file check (#4869).
+	if code, pet := call(t, mux, "GET", "/api/v1/personas/nwverse/pet/pet.json", watchTok, ""); code != 200 || pet["clips"] == nil {
+		t.Fatalf("watch GET the frog's manifest: %d %v", code, pet)
 	}
 }
 
@@ -265,7 +334,21 @@ func TestAnswerRoleOnlyWhatTheWatchDoes(t *testing.T) {
 		{"POST", "/api/v1/inbox/x/draft", true},
 		{"POST", "/api/v1/inbox/x/reply", true},
 		{"POST", "/api/v1/inbox/x/suggestion", true}, // what it may do with it the manager checks
+		// The Milk Frog's art for the watch's row and face (WatchPetPack.fetch), and nothing else of any package.
+		{"GET", "/api/v1/personas/nwverse/pet/pet.json", true},
+		{"GET", "/api/v1/personas/nwverse/pet/face-needs_you.png", true},
+		{"GET", "/api/v1/personas/nwverse/pet/working.png", true},
 
+		{"GET", "/api/v1/personas", false},
+		{"GET", "/api/v1/personas/nwverse/persona.json", false},
+		{"GET", "/api/v1/personas/nwverse/pet/", false},
+		{"GET", "/api/v1/personas/nwverse/pet/..", false},
+		{"GET", "/api/v1/personas/nwverse/pet/.hidden.png", false},
+		{"GET", "/api/v1/personas/nwverse/pet/sub/x.png", false},
+		{"GET", "/api/v1/personas/nwverse/pet/notes.txt", false},
+		{"GET", "/api/v1/personas/u-0123abcd/pet/pet.json", false}, // an uploaded look
+		{"GET", "/api/v1/personas/other/pet/pet.json", false},
+		{"POST", "/api/v1/personas/nwverse/pet/pet.json", false},
 		{"GET", "/api/v1/ws", false},
 		{"GET", "/api/v1/machines/m/file", false},
 		{"GET", "/api/v1/machines/m/file/download", false},
@@ -283,6 +366,8 @@ func TestAnswerRoleOnlyWhatTheWatchDoes(t *testing.T) {
 		{"GET", "/api/v1/devices/x/prefs", false},
 		{"GET", "/api/v1/devices/x/sessions", false},
 		{"GET", "/api/v1/inbox/x", false},
+		{"GET", "/api/v1/inbox/done", false}, // the done items' history: the watch lists only the inbox
+		{"GET", "/api/v1/inbox/done/days?tz=UTC", false},
 		{"POST", "/api/v1/inbox/x/handoff", false}, // it writes in the main conversation
 		{"GET", "/api/v1/inbox/mutes", false},
 		{"GET", "/api/v1/plugins/x/y", false},
@@ -345,6 +430,7 @@ func TestAnswerRoleAnswersCardsWithoutTyping(t *testing.T) {
 		{`{"keys":["0"]}`, http.StatusForbidden},
 		{`{"keys":["1","enter"]}`, http.StatusForbidden},
 		{`{"allow":true,"always":true}`, http.StatusForbidden},
+		{`{"allow":true,"edited_text":"changed"}`, http.StatusForbidden},
 		{`{"allow":true,"values":{"k":"v"}}`, http.StatusForbidden},
 		{`{"allow":false,"message":"m"}`, http.StatusForbidden},
 		{`{"action":"accept"}`, http.StatusForbidden},

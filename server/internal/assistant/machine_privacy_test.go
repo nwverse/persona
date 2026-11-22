@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -29,7 +30,10 @@ func (f *privacyHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, e
 	return f.fakeHub.AppCall(ctx, p)
 }
 
-type privacyExt struct{ guestExt }
+type privacyExt struct {
+	guestExt
+	lark proto.AssistantLark
+}
 
 func (e *privacyExt) AgentTools(_ context.Context, assistant bool) ([]proto.Tool, []proto.Tool) {
 	agents := []proto.Tool{{Name: "mail_search"}}
@@ -50,7 +54,7 @@ func (e *privacyExt) CallTool(ctx context.Context, machine, session, name string
 }
 func (e *privacyExt) AssistantLark(context.Context) (proto.AssistantLark, error) {
 	e.called = append(e.called, "assistant.lark")
-	return proto.AssistantLark{}, nil
+	return e.lark, nil
 }
 
 func privacyService(t *testing.T) (*Service, *fleetDevs, *privacyHub, *privacyExt) {
@@ -134,12 +138,70 @@ func TestAssistantMachineAuthorization(t *testing.T) {
 			}
 		})
 	}
+	ext.lark = proto.AssistantLark{
+		Rules:      []proto.LarkRule{{Method: "CLI", Path: "/im/+messages-send", Action: "confirm"}},
+		CLI:        &proto.LarkCLI{Bin: "/opt/lark/bin/lark-cli", Profile: "manager-profile"},
+		Prefer:     "cli",
+		Gates:      []proto.CommandGate{{Command: "gated", Secret: []string{"GATED_TOKEN"}}},
+		MCPServers: []proto.AssistantMCPServer{{ID: "ext", Command: "ext-mcp"}},
+	}
+	if got, err := s.assistantLark(ctx, "server"); err != nil || !reflect.DeepEqual(got, ext.lark) {
+		t.Fatalf("assistant's machine: %+v %v", got, err)
+	}
+	// Another personal machine: the rules and lark-cli's name for its gate (#5479); never the command gates, the
+	// extensions' MCP servers or the manager computer's profile.
+	want := proto.AssistantLark{Rules: ext.lark.Rules, CLI: &proto.LarkCLI{Bin: "lark-cli"}}
+	if got, err := s.assistantLark(ctx, "other"); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("other machine: %+v %v", got, err)
+	}
+	ext.lark.CLI = &proto.LarkCLI{} // the default name stays the default, not filepath.Base's "."
+	if got, _ := s.assistantLark(ctx, "other"); got.CLI == nil || got.CLI.Bin != "" {
+		t.Fatalf("other machine, default bin: %+v", got.CLI)
+	}
 	before := len(ext.called)
-	s.assistantLark(ctx, "server")
-	s.assistantLark(ctx, "other")
-	s.assistantLark(ctx, "work")
-	if len(ext.called) != before+1 {
-		t.Fatal("assistant.lark machine boundary changed")
+	if got, err := s.assistantLark(ctx, "work"); err != nil || !reflect.DeepEqual(got, proto.AssistantLark{}) || len(ext.called) != before {
+		t.Fatalf("work machine: %+v %v", got, err)
+	}
+}
+
+// Another manager's assistant tools are for its conversations in its own assistant and health directories on the
+// machine (identity.AssistantDirName): a conversation listed in the built-in manager's ~/.persona/assistant, where a
+// later message used to move it (#11047), is not its assistant, nor one in a third manager's directory, a pane or an
+// ordinary session. The node keeps the conversation in its directory; the check stays as strict as it is.
+func TestAnotherManagerAssistantToolsFollowItsDirectory(t *testing.T) {
+	f := &privacyHub{fakeHub: newFakeHub().withMachine()}
+	f.hello.Assistant.Machines = []string{"server"}
+	d := newFleetDevs()
+	d.add("server", "server")
+	s := New(Options{ID: "m-0a1b2c3d", Hub: f, Devices: d, Logf: t.Logf})
+	s.SetExtensions(&privacyExt{})
+	d.setSessions("server", []proto.Session{
+		{SessionID: "own", Cwd: "/home/u/.persona/assistant-m-0a1b2c3d"},
+		{SessionID: "own-health", Cwd: "/home/u/.persona/health-m-0a1b2c3d"},
+		{SessionID: "built-in", Cwd: "/home/u/.persona/assistant"},
+		{SessionID: "third", Cwd: "/home/u/.persona/assistant-m-99999999"},
+		{SessionID: "pane", Cwd: "/home/u/.persona/assistant-m-0a1b2c3d", PaneID: "pane-1"},
+		{SessionID: "ordinary", Cwd: "/code/example"},
+	})
+	for _, test := range []struct {
+		session string
+		allowed bool
+	}{
+		{"own", true}, {"own-health", true},
+		{"built-in", false}, {"third", false}, {"pane", false}, {"ordinary", false},
+	} {
+		t.Run(test.session, func(t *testing.T) {
+			if got := s.assistantCaller(context.Background(), "server", test.session); got != test.allowed {
+				t.Fatalf("assistantCaller=%v, want %v", got, test.allowed)
+			}
+			names := privacyTools(t, s, "server", test.session, true)
+			if got := slices.Contains(names, "kb_search"); got != test.allowed {
+				t.Fatalf("assistant tools=%v: %v", got, names)
+			}
+			if res := privacyCall(t, s, "server", test.session, "lark_chats", true); res.IsError == test.allowed {
+				t.Fatalf("call=%+v", res)
+			}
+		})
 	}
 }
 
@@ -188,7 +250,7 @@ func TestExplicitAssistantStartAuthority(t *testing.T) {
 	if !s.assistantCaller(ctx, "other", "") {
 		t.Fatal("explicit start cannot bootstrap")
 	}
-	s.originSet(ctx, "other", "started", OriginUser, "")
+	s.originSet(ctx, "other", "started", OriginUser, "", "")
 	finish()
 	if s.assistantCaller(ctx, "other", "") || !s.assistantCaller(ctx, "other", "started") {
 		t.Fatal("start authority not scoped to the recorded session")

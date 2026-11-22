@@ -19,13 +19,21 @@ import (
 	"github.com/nwverse/persona/server/internal/orcart"
 	"github.com/nwverse/persona/server/internal/orcart/orcarttest"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rexcli"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/terncli"
 )
 
 // Orca as the machine's engine (hostorca.go, engine.go), driven through the node's requests against a fake Orca
 // runtime socket (orcarttest) and a fake process table. No test here talks to a real Orca.
 
 func TestMain(m *testing.M) {
+	if os.Getenv("NODE_TEST_LAUNCH") == "1" { // the real managed-launch path, before the test harness clears its environment
+		if err := Launch(context.Background(), os.Args[2], os.Args[3:], ""); err != nil {
+			panic(err)
+		}
+		os.Exit(0)
+	}
 	if mode := os.Getenv("NODE_TEST_PLUGIN"); mode != "" { // the test binary as a plugin's program (plugins_test.go)
 		runTestPlugin(mode)
 	}
@@ -41,6 +49,10 @@ func TestMain(m *testing.M) {
 		preflightChild(os.Args[1:], os.Stdout)
 		os.Exit(0)
 	}
+	// A plain run of the whole package: its tests in concurrent processes of this binary (partition_test.go, #5734).
+	if code, ran := runPartitioned(); ran {
+		os.Exit(code)
+	}
 	// Nor `node doctor` as the preflight's child: the test binary again, in that mode, given long enough to come up
 	// under the whole server suite's load (#1110); only a child that never starts waits that long.
 	preflightChildCmd = func(string) ([]string, []string) {
@@ -52,13 +64,37 @@ func TestMain(m *testing.M) {
 	os.Setenv("ORCA_USER_DATA_PATH", "/tmp/persona-test-no-orca")
 	// Nor the user's botmux: a node registers no botmux host unless a test gives it one.
 	botmuxBin = func() string { return "" }
+	// Nor the user's Tern: no tern binary is found (a test that wants one gives its client a fake).
+	ternClient = func() *terncli.Client { return &terncli.Client{Bin: func() string { return "" }} }
+	// Nor the user's Rex: no rex binary is found (a test that wants one gives its client a fake).
+	rexClient = func() *rexcli.Client { return &rexcli.Client{Bin: func() string { return "" }} }
 	// Nor the user's gh outside the test's PATH (ghpath.go).
 	ghFallbackDirs = func() []string { return nil }
+	// Nor the user's Codex catalog: a model recovery on a Codex list runs no `codex debug models` (a test that wants
+	// windows gives its own, assistant_fallback_window.go).
+	codexDebugModels = func(context.Context, *Node, string) ([]byte, error) { return nil, errors.New("no codex in tests") }
+	// Subscription usage tests provide their own app-server instead of polling a real account.
+	codexUsageCLI = func() (string, error) { return "", errors.New("no codex in tests") }
+	// Nor the ChatGPT app's bundled codex: a test that wants one sets its own (codex_bundled_test.go).
+	bundledCodexCLI = func() string { return "" }
 	// Nor the user's Paseo: its home points nowhere (a test that wants one sets its own).
 	os.Setenv("PASEO_HOME", "/tmp/persona-test-no-paseo")
+	// Nor the user's Cindy: its home points nowhere (a test that wants one sets its own).
+	os.Setenv("CINDY_HOME", "/tmp/persona-test-no-cindy")
+	// Nor the user's T3 Code: its home points nowhere and its command line is not found (a test that wants one sets
+	// its own).
+	os.Setenv("T3CODE_HOME", "/tmp/persona-test-no-t3code")
+	t3codeBin = func() string { return "" }
 	// Nor the user's Claude config directory (claude under a profile, or these tests run from inside a Claude Code
 	// session): the node's own default is then ~/.claude of the test's home (#2140; a test that wants one sets its own).
 	os.Unsetenv("CLAUDE_CONFIG_DIR")
+	// Nor the user's state directory (these tests run from inside a Persona conversation, or a shell that set it): the
+	// state directory of a test's node is the one under its own home. A PERSONA_HOME, or its former name, left in the
+	// environment won over it, and the health uploads' tests wrote their fake reports into the user's real health
+	// space. A test that wants one sets its own.
+	for _, k := range []string{"PERSONA_HOME", legacyEnv("PERSONA_HOME")} {
+		os.Unsetenv(k)
+	}
 	// Nor the user's login shell: herdr's panes run zsh, whatever the machine's is (a test that wants another sets it).
 	herdrPaneShell = func() string { return "/bin/zsh" }
 	// A send looks at the box once after typing and confirms nothing: most fakes never write what was typed into the
@@ -112,6 +148,7 @@ func orcaNode(t *testing.T) (*Node, *fakeHerdr, *orcarttest.Fake, *fakeProcs, st
 	h.scan = procs.scan
 	n.hosts = host.NewRegistry(h)
 	n.eng.name = proto.EngineOrca
+	t.Cleanup(n.starts.close) // before the fake Orca runtime closes
 	return n, f, o, procs, home
 }
 
@@ -271,6 +308,62 @@ func TestOrcaSendChecksForADialogThenPrompts(t *testing.T) {
 	}
 	if tr := o.Trace("terminal.send"); len(tr) != 0 {
 		t.Errorf("typed into a dialog: %v", tr)
+	}
+}
+
+func TestOrcaSendsToForegroundTraeCLI(t *testing.T) {
+	for _, executable := range []string{"traecli", "traex"} {
+		t.Run(executable, func(t *testing.T) {
+			n, _, o, procs, home := orcaNode(t)
+			const pane = "tab1:leaf1"
+			command := "/opt/bin/" + executable
+			pid := os.Getpid() // the writer lock must name a live process owned by this user
+			writeTraexOwner(t, home, threadMain, pid)
+			traexCache.Lock()
+			previous, present := traexCache.panes[pid]
+			traexCache.panes[pid] = "orca:" + pane
+			traexCache.Unlock()
+			t.Cleanup(func() {
+				traexCache.Lock()
+				defer traexCache.Unlock()
+				if present {
+					traexCache.panes[pid] = previous
+				} else {
+					delete(traexCache.panes, pid)
+				}
+			})
+			o.SetTerminals(orcaTerm("term_1", "tab1", "leaf1", traexAgent))
+			o.SetScreen("term_1", "› Ask Codex to do anything\n")
+			setProcess := func(state string) {
+				args := fmt.Sprintf("%d %s 01:00 %s", pid, state, command)
+				env := fmt.Sprintf("%d %s ORCA_PANE_KEY=%s", pid, command, pane)
+				procs.set(pane, parseOrcaPSEnv(env, parseOrcaPSArgs(args, time.Now()), nil)[pane]...)
+			}
+			setProcess("S+")
+			if s := byID(listSessions(t, n))[threadMain]; s.Agent != traexAgent || s.PaneID != "orca:"+pane {
+				t.Fatalf("TRAE CLI conversation is not bound to its terminal: %+v", s)
+			}
+			o.Reset()
+
+			req := map[string]any{"session_id": threadMain, "text": "hello"}
+			if _, err := request(t, n, "session.send", req); err != nil {
+				t.Fatalf("send to foreground TRAE CLI: %v", err)
+			}
+			if writes := o.Writes(); len(writes) != 2 || writes[0].Text != "\x1b[200~hello\x1b[201~" || writes[1].Text != "\r" {
+				t.Fatalf("expected a bracketed paste and a separate submit, got %+v", writes)
+			}
+
+			o.Reset()
+			setProcess("S") // the same process and pane still exist, but TRAE CLI no longer owns the foreground group
+			if _, err := request(t, n, "session.send", req); err == nil {
+				t.Fatal("the background TRAE CLI process accepted a send")
+			} else if code, data := refusalOf(t, err); code != "not_delivered" || data["delivered"] != "none" {
+				t.Fatalf("expected a refusal before typing, got %v", err)
+			}
+			if writes := o.Writes(); len(writes) != 0 {
+				t.Fatalf("wrote into the terminal without TRAE CLI in front: %+v", writes)
+			}
+		})
 	}
 }
 
@@ -563,7 +656,7 @@ func TestOrcaEngineUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	h, ok := n.hosts.Get(host.Orca).(*orcaHost)
-	if !ok || len(n.hosts.All()) != 1 {
+	if !ok || len(n.hosts.All()) != 2 || n.hosts.All()[1].Kind() != host.Tmux {
 		t.Fatalf("hosts %v", hostKinds(n))
 	}
 	if m := byID(listSessions(t, n)); m[sidB].PaneID != "orca:tab1:leaf1" || m[sidB].Status != proto.StatusWorking ||
@@ -805,9 +898,10 @@ func TestOrcaPromptSubmitFails(t *testing.T) {
 	}
 }
 
-// A session that is not running on an engine that cannot resume it (Herdr App), or that Orca does not resume (no
-// Claude transcript), is refused, nothing typed, with a reason: its claude not in front when its pane is still there
-// (suspended), else not running — not "unsupported". Orca resumes a Claude session whose pane is gone (#5548).
+// A session that is not running that Orca does not resume (no Claude transcript) is refused, nothing typed, with a
+// reason: its claude not in front when its pane is still there (suspended), else not running — not "unsupported".
+// A message to a stopped agent is refused (#4754); the user's Resume (session.start) brings back a Claude session
+// whose pane is gone on Orca (#5548), and on Herdr App as herdr does (#2532).
 func TestNotRunningOnAnEngineWithoutResume(t *testing.T) {
 	n, o, procs := orcaSession(t)
 	n.claudeStart, n.claudeReady = 200*time.Millisecond, 200*time.Millisecond
@@ -824,14 +918,19 @@ func TestNotRunningOnAnEngineWithoutResume(t *testing.T) {
 	if w := o.Writes(); len(w) != 0 {
 		t.Errorf("wrote %+v", w)
 	}
-	o.SetTerminals() // the terminal closed: resumed in a new one, with the launcher that started it
+	o.SetTerminals() // the terminal closed: a message is refused, Resume brings it back in a new one with its launcher
 	n.state.mu.Lock()
 	st := n.state.Sessions[sidA]
 	st.Launcher = "claude-gpt"
 	n.state.Sessions[sidA] = st
 	n.state.mu.Unlock()
-	_, _ = request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "hello"})
-	if s := strings.Join(o.Trace("terminal.send"), "\n"); !strings.Contains(s, "--resume "+sidA) || !strings.Contains(s, "claude-gpt") {
+	_, err = request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "hello"})
+	if code, _ := refusalOf(t, err); code != agentStopped {
+		t.Fatalf("a message to a stopped agent: %v", err)
+	}
+	starts := orcaTypedStarts(o)
+	_, _ = request(t, n, "session.start", map[string]any{"resume_session_id": sidA})
+	if s := strings.Join(starts(), "\n"); !strings.Contains(s, "--resume "+sidA) || !strings.Contains(s, "claude-gpt") {
 		t.Fatalf("gone: not resumed with its launcher; calls %v", o.Trace())
 	}
 	const unknown = "0e000000-0000-4000-8000-0000000000ff" // no Claude transcript: not Orca's to resume
@@ -846,20 +945,31 @@ func TestNotRunningOnAnEngineWithoutResume(t *testing.T) {
 	n.state.mu.Unlock()
 	o.Reset()
 	_, err = request(t, n, "session.send", map[string]any{"session_id": cx, "text": "hello"})
-	if code, _ := refusalOf(t, err); code != "not_running" {
+	if code, _ := refusalOf(t, err); code != agentStopped {
 		t.Fatalf("codex: %v", err)
 	}
 	if c := o.Trace("terminal.create", "terminal.send"); len(c) != 0 {
 		t.Errorf("codex resumed in Orca: %v", c)
 	}
 
+	// Herdr App resumes it as herdr does (#2532): a new tab, its launcher with --resume through the start file.
 	hn, hc := hcSession(t)
+	hn.claudeStart, hn.claudeReady = 200*time.Millisecond, 200*time.Millisecond // the fake shell never runs claude
+	hc.doc = appDoc(hcCwd)
+	var typed string
+	hc.handle("terminal.send", func(p map[string]any) any {
+		typed, _ = startFileCommand(str(p["text"]))
+		return map[string]any{}
+	})
 	hc.setTerminals()
 	time.Sleep(time.Second) // past the failed-list cache
 	listSessions(t, hn)
-	_, err = request(t, hn, "session.send", map[string]any{"session_id": sidA, "text": "hello"})
-	if code, _ := refusalOf(t, err); code != "not_running" || !strings.Contains(err.Error(), "Herdr App") {
+	_, err = request(t, hn, "session.start", map[string]any{"resume_session_id": sidA})
+	if isRefusal(err, "not_running") {
 		t.Fatalf("herdr-core: %v", err)
+	}
+	if r := hc.trace("terminal.run"); len(r) != 1 || !strings.Contains(typed, "--resume "+sidA) {
+		t.Fatalf("herdr-core: not resumed in a new tab: runs %v, typed %q (%v)", r, typed, err)
 	}
 }
 
@@ -939,7 +1049,7 @@ func TestOrcaKeyBytes(t *testing.T) {
 		"shift+right": "\x1b[1;2C", "ctrl+up": "\x1b[1;5A", "f1": "\x1bOP", "f5": "\x1b[15~", "f12": "\x1b[24~",
 		"shift+f1": "\x1b[1;2P", "delete": "\x1b[3~", "insert": "\x1b[2~", "pageup": "\x1b[5~", "home": "\x1b[H",
 		"alt+backspace": "\x1b\x7f", "alt+space": "\x1b ", "alt+tab": "\x1b\t", "shift+a": "A", "alt+2": "\x1b2",
-		"shift+enter": "\x1b\r", "ctrl+a": "\x01", "esc": "\x1b",
+		"shift+enter": "\x1b\r", "ctrl+enter": "\x1b[13;5u", "ctrl+a": "\x01", "esc": "\x1b",
 	} {
 		if got, ok := orcaKeyBytes(k); !ok || got != want {
 			t.Errorf("%s = %q, want %q", k, got, want)

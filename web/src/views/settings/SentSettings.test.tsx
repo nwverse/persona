@@ -310,6 +310,25 @@ describe("设置 › 以你的名义发出", () => {
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
+  it("shows an edited send's original and actual text separately, each copyable", async () => {
+    await loaded([row(2, {
+      text: "The edited text actually sent",
+      let_through: { kind: "card", interaction_id: "ix-2", edited_from: "The original approval text" },
+    })]);
+    expect(rowOf("Subject 2")!.parentElement!.textContent).toContain("已编辑");
+    await click(rowOf("Subject 2"));
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain("原始正文");
+    expect(dialog.textContent).toContain("The original approval text");
+    expect(dialog.textContent).toContain("实际发送正文");
+    expect(dialog.textContent).toContain("The edited text actually sent");
+    const copies = [...dialog.querySelectorAll("button")].filter((b) => b.textContent?.trim() === "复制正文");
+    expect(copies).toHaveLength(2);
+    await click(copies[0]);
+    await click(copies[1]);
+    expect(copied).toEqual(["The original approval text", "The edited text actually sent"]);
+  });
+
   it("notes that a text of exactly 4000 characters was cut, and one of 3999 was not", async () => {
     await loaded([row(2, { text: "y".repeat(4000) }), row(3, { text: "z".repeat(3999) })]);
     await click(rowOf("Subject 2"));
@@ -407,5 +426,39 @@ describe("设置 › 以你的名义发出", () => {
     expect(dialog.querySelector("pre")?.textContent).toBe(markup);
     expect(dialog.textContent).toContain("<img src=x onerror=alert(3)>");
     expect(document.querySelector("img")).toBeNull();
+  });
+});
+
+describe("recall", () => {
+  const recalls = () => calls.filter((c) => c.path.endsWith("/recall"));
+
+  it("is offered only when the hub says so, asks first, then shows the recalled row and reads the list again", async () => {
+    await loaded([row(5, { connector: "github", target: { ref: "o/r#1" }, can_recall: true }), row(4, { target: { to: ["b@example.com"], subject: "Old" } })]);
+    await click(rowOf("Old"));
+    expect(button("撤回…")).toBeUndefined();
+    await click(button("完成"));
+    await act(async () => void (await new Promise((r) => setTimeout(r, 300))));
+    await click(rowOf("o/r#1"));
+    await click(button("撤回…"));
+    expect(recalls()).toHaveLength(0); // asked first
+    expect(text()).toContain("撤回这条消息");
+    await click(button("撤回消息"));
+    expect(recalls().map((c) => c.path)).toEqual(["/connectors/sent/5/recall"]);
+    const before = reads().length;
+    await answer(recalls()[0], { ok: true, item: row(5, { connector: "github", target: { ref: "o/r#1" }, recalled_at: minutesAgo(0), can_recall: false }) });
+    expect(button("撤回…")).toBeUndefined();
+    expect(text()).toContain("已于");
+    expect(reads().length).toBe(before + 1); // the list is read again
+  });
+
+  it("shows why the hub refused and reads the list again", async () => {
+    await loaded([row(5, { connector: "github", target: { ref: "o/r#1" }, can_recall: true })]);
+    await click(rowOf("o/r#1"));
+    await click(button("撤回…"));
+    await click(button("撤回消息"));
+    const before = reads().length;
+    await refuse(recalls()[0], new ApiError(409, "too old", { error: "too old", code: "too_old" }));
+    expect(text()).toContain("太久");
+    expect(reads().length).toBe(before + 1);
   });
 });

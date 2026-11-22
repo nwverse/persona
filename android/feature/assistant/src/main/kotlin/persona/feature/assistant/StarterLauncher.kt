@@ -9,21 +9,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.res.stringResource
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.AgentLauncher
+import persona.core.contracts.api.launcherModel
 import persona.core.designsystem.JAction
 import persona.core.designsystem.JActionSheet
 import persona.core.designsystem.JChip
 import persona.core.designsystem.icons.PhIcons
 
-/** Runs Claude Code or Codex: what the assistant can use (web `runsAssistant`, iOS `Launcher.runsAssistant`). */
-internal fun runsAssistant(launcher: AgentLauncher): Boolean =
-    launcher.baseUrl != "(traex)" && launcher.agentType in setOf("claude", "codex")
-
-/** The model a launcher names, short: the last part of a gateway's `provider/model`. */
-internal fun launcherModel(launcher: AgentLauncher): String? = launcher.model?.substringAfterLast('/')?.takeIf(String::isNotBlank)
-
 /**
  * The new conversation's launcher (iOS StarterComposer's model menu, web StarterLauncherChip): a chip over the home's
- * composer with what it starts with, "Default: X" until one is [picked] for this conversation alone ("X · This time only"). A
+ * composer with what it starts with, "Default: X" until one is [picked] for this conversation alone (then just "X", drawn selected:
+ * the pick stays with the conversation, so no one-off mark, #7513). A
  * tap lists the default and the assistant machine's [launchers] (null while they load; [failed] when they could not).
  */
 @Composable
@@ -36,7 +31,7 @@ internal fun StarterLauncherChip(
     var open by remember { mutableStateOf(false) }
     val defaultLabel = defaultName?.takeIf(String::isNotBlank)?.let { stringResource(R.string.assistant_launcher_default_named, it) }
         ?: stringResource(R.string.assistant_launcher_default)
-    val label = picked?.let { stringResource(R.string.assistant_launcher_once, it) } ?: defaultLabel
+    val label = picked ?: defaultLabel
     // Always tappable-looking: a chip without onClick is a smaller quiet label, so it would shrink on every send.
     JChip(label, onClick = { if (enabled) { open = true; onOpen() } }, icon = PhIcons.RocketLaunch, selected = picked != null)
     if (!open) return

@@ -260,21 +260,35 @@ class WorkflowShotsTest {
     private fun result(id: String, text: String) = Item("$id-r", kind = "tool_result", role = "user", text = text, toolUseId = id).asLineItem()
     private fun call(id: String, name: String, input: JsonObject = buildJsonObject {}) = WorkItem.Tool(ToolCall(use(id, name, input), result(id, "ok"), emptyList()))
 
-    @Test
-    fun drawsTheCardInTheChat() {
+    @Test fun drawsTheCardInsideTheExpandedChatTrace() = captureChatTrace("")
+
+    @Test @Config(fontScale = 2f)
+    fun drawsTheCardInsideTheExpandedChatTraceAtLargestText() = captureChatTrace("-large")
+
+    private fun captureChatTrace(scale: String) {
+        var openedRun: Workflow? = null
         val read = call("r1", "Read", buildJsonObject { put("file_path", "/w/WeatherWidget/Provider.swift") })
         val launch = call("toolu_wf_run", "Workflow", buildJsonObject { put("name", "widget-review") })
         val reply = Item("r#0", kind = "text", role = "assistant", text = "widget-review is running in the background; I will go on when it reports back.")
         var dark by mutableStateOf(false)
+        var readOnly by mutableStateOf(false)
+        var canOpenBackground by mutableStateOf(true)
+        val session = lead.copy(workflows = listOf(running))
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true) {
                 val context = LocalContext.current
                 val loader = remember { ImageLoader.Builder(context).build() }
-                val folds = remember { WorkflowFolds() }
-                CompositionLocalProvider(LocalChatWorkflows provides ChatWorkflows(mapOf("toolu_wf_run" to running), folds) {}) {
+                val open: ((BackgroundDestination) -> Unit)? = if (canOpenBackground) ({ destination ->
+                    openedRun = session.workflows.orEmpty().firstOrNull { it.backgroundId() == (destination as? BackgroundDestination.Run)?.id }
+                }) else null
+                val subagents = rememberChatPageSubagents(session.key, ChatChromeBindings(), readOnly, session, open)
+                CompositionLocalProvider(LocalChatWorkflows provides subagents.workflowCards) {
                     Column(Modifier.testTag("shot").width(400.dp).background(PersonaTheme.palette.background).padding(Tokens.Space.l)) {
-                        ChatLineContent(ChatLine.Work("w-1", listOf(read, launch), live = false, start = null, end = null, open = false),
+                        ChatLineContent(ChatLine.Work("w-1", listOf(read, launch), live = false, start = null, end = null, open = true),
                             SessionKey("mac", "lead"), loader, recordedDuration = 75, onToggle = {}, onFold = {}, folding = emptySet(),
+                            foldErrors = emptyMap(), onFullText = {})
+                        ChatLineContent(ChatLine.Step("w-1", launch, first = false),
+                            SessionKey("mac", "lead"), loader, recordedDuration = null, onToggle = {}, onFold = {}, folding = emptySet(),
                             foldErrors = emptyMap(), onFullText = {})
                         MessageContent(reply, user = false)
                     }
@@ -285,8 +299,22 @@ class WorkflowShotsTest {
             rule.runOnIdle { dark = nextDark }
             rule.waitForIdle()
             rule.onNodeWithText("当前 Verify：verify:a11y").assertIsDisplayed()
-            shot("workflow-chat-glass-${if (nextDark) "dark" else "light"}")
+            shot("workflow-chat-glass-${if (nextDark) "dark" else "light"}$scale")
         }
+        val open = rule.onNodeWithText("在后台任务中打开")
+        open.performClick()
+        assertEquals(running.runId, openedRun?.runId)
+        rule.runOnIdle { readOnly = true; openedRun = null }
+        for (nextDark in listOf(false, true)) {
+            rule.runOnIdle { dark = nextDark }
+            open.assertIsDisplayed()
+            shot("workflow-chat-read-only-glass-${if (nextDark) "dark" else "light"}$scale")
+        }
+        open.performClick()
+        assertEquals(running.runId, openedRun?.runId)
+        rule.runOnIdle { canOpenBackground = false }
+        open.assertDoesNotExist()
+        rule.onNodeWithTag("workflow-call").assertIsDisplayed()
     }
 
     @Test
@@ -308,12 +336,11 @@ class WorkflowShotsTest {
                 }
             }
         }
-        // a folded line keeps the card in the open, under its summary
-        rule.onAllNodesWithTag("workflow-call").assertCountEquals(1)
-        rule.onNodeWithText("widget-review").assertIsDisplayed()
-        // running: once, under "Working…", not again among the newest steps
+        // Tool-backed cards stay inside the summary for completed and running turns alike.
+        rule.onAllNodesWithTag("workflow-call").assertCountEquals(0)
+        rule.onNodeWithText("widget-review").assertDoesNotExist()
         rule.runOnIdle { line = ChatLine.Work("w-1", listOf(read, launch), live = true, start = null, end = null, open = false) }
-        rule.onAllNodesWithTag("workflow-call").assertCountEquals(1)
+        rule.onAllNodesWithTag("workflow-call").assertCountEquals(0)
         // the line open: the card is in its own place among the steps, and not under the line too
         rule.runOnIdle { line = ChatLine.Work("w-1", listOf(read, launch), live = false, start = null, end = null, open = true) }
         rule.onAllNodesWithTag("workflow-call").assertCountEquals(0)

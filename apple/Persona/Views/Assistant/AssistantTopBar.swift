@@ -1,13 +1,14 @@
 import SwiftUI
+import PersonaWire
 
-/// The Persona tab's top bar (docs/apple/ios.md「Persona 顶栏和侧边栏」), floating over the conversation with a fog under it
+/// The Persona tab's top bar (docs/apple/ios.md「Persona top bar and sidebar」), floating over the conversation with a fog under it
 /// instead of a solid bar: Chat History (the sidebar) on the left, Persona's face and name in the middle, New Chat on the right.
 /// The face opens a menu: Knowledge, Details (the profile), the copy items (the working directory, a block of facts to
 /// paste to another agent, the session id), the launcher, the session info card, Interrupt. While the hub is out of reach
 /// the name pill shows the spinner and Waiting for Network / Connecting… / Updating….
 struct AssistantTopBar: View {
     @Environment(AppModel.self) private var model
-    /// In the shell (docs/apple/ios.md「新外壳」) the middle is the Assistant | Agents switch; its Assistant opens this bar's menu.
+    /// In the shell (docs/apple/ios.md「New shell」) the middle is the Assistant | Agents switch; its Assistant opens this bar's menu.
     @Environment(\.shell) private var shell
     /// The system's bars down the side (iPhone Duo): the shell's bar is the side rail there.
     @Environment(\.shellRailEdge) private var railEdge
@@ -15,6 +16,19 @@ struct AssistantTopBar: View {
     var key: SessionKey?
     /// The sidebar is a column beside the conversation (a wide display): the button shows or hides it.
     var sidebarIsColumn = false
+    /// The column is out. On a phone's tabs (iPhone Duo open) its own button folds it, at its top, so this one is only
+    /// there to bring it back (#2623).
+    var sidebarShown = false
+    /// The Sidebar layout (#6332): with its column folded away, the button carries how many Agents need the user (the
+    /// sidebar is where they are); off elsewhere.
+    var sidebarCounts = false
+    /// The Sidebar layout on a phone (#6332): the face opens the drawer, the conversation's name is the middle
+    /// (`drawerRow`); off elsewhere.
+    var drawerTitle = false
+    /// The sidebar beside the page has New Chat at its foot (the Sidebar layout's column on the iPad and the open iPhone
+    /// Duo, the iPad's Persona column): its one entry (#4206, the owner), so the page has none, the column out or away.
+    /// A phone keeps this one.
+    var newChatInSidebar = false
     var openSidebar: () -> Void
     var newConversation: () -> Void
     var openKnowledge: () -> Void
@@ -40,7 +54,10 @@ struct AssistantTopBar: View {
     static let height: CGFloat = 70
     #endif
     /// How far below the bar the fog fades out.
-    static let fade: CGFloat = 30
+    static let fade: CGFloat = 44
+    /// How far below the safe area's top the fog stays solid: just past the round buttons and the switch, so a line of
+    /// text is hidden under the controls and starts fading right below them.
+    static let fogSolid: CGFloat = height - Theme.Space.l
     /// What the page leaves free at its top for the bar: little while it is the side rail (iPhone Duo, `ShellSideRail`),
     /// where the column beside the content holds it.
     static func room(_ railEdge: HorizontalEdge?) -> CGFloat {
@@ -86,7 +103,7 @@ struct AssistantTopBar: View {
             .sheet(isPresented: Binding(get: { typingFor != nil && key != nil }, set: { if !$0 { typingFor = nil } }),
                    onDismiss: { Task { await loadModelOptions() } }) {
                 if let l = typingFor {
-                    TypedModelSheet(machine: model.hubRef(machineID), launcher: l, initial: typedPick(l),
+                    TypedModelSheet(machine: model.hubRef(machineID), launcher: l, purpose: "assistant", initial: typedPick(l),
                                     note: String(localized: "This chat uses it from the next message.")) { id in pick(l, model: id) }
                 }
             }
@@ -95,8 +112,10 @@ struct AssistantTopBar: View {
                 if UserDefaults.standard.bool(forKey: "showInfo") { try? await Task.sleep(for: .seconds(2)); showInfo = true }
             }
             #endif
-        .task(id: model.hubRef(machineID)) {
-            launchers = ((try? await model.launchers(model.hubRef(machineID))) ?? []).filter(\.runsAssistant)
+        .task(id: "\(model.hubRef(machineID).path)|\(model.assistantLauncherRequestRevision)") {
+            if let answer = try? await model.assistantLaunchers(model.hubRef(machineID)), !Task.isCancelled {
+                launchers = answer.launchers.filter(\.runsAssistant)
+            }
             await loadModelOptions()
         }
     }
@@ -104,10 +123,52 @@ struct AssistantTopBar: View {
     @ViewBuilder private var bar: some View {
         #if os(macOS)
         if shell != nil { shellBar } else if AppStyle.current.usesBeautifulUI { classicBar } else { macBar }
+        #elseif os(iOS)
+        if shell != nil { shellBar } else if drawerTitle { drawerRow } else { classicBar }
         #else
         if shell != nil { shellBar } else { classicBar }
         #endif
     }
+
+    #if os(iOS)
+    /// The Sidebar layout's bar on a phone (#6332), the shell's without the switch: the persona's face opens the drawer
+    /// (the inbox's mark on it, how many Agents need the user at its corner), the conversation's name in the middle with
+    /// the face's menu (Knowledge, details, copy…), New Chat.
+    private var drawerRow: some View {
+        let link = model.connection.shown
+        return HStack(alignment: .top) {
+            ShellPersonaButton(id: "assistant-sidebar-button", action: openSidebar)
+                .overlay(alignment: .topTrailing) { SidebarWaitingBadge() }
+            Spacer(minLength: Theme.Space.s)
+            Menu { menuItems(link) } label: {
+                Self.pill {
+                    if link != .online {
+                        ConnectionLabel(phase: link, compact: true)
+                    } else {
+                        Text(name).font(Theme.Font.bodyStrong).lineLimit(1)
+                        ThemedIcon(Theme.Icon.expand).font(Theme.Font.label).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .accessibilityLabel(link != .online ? String(localized: "\(name), \(ConnectionLabel.text(link, hubRestarting: model.hubUpdate?.restarting == true))") : name)
+            .accessibilityHint("Knowledge, details, copy directory and chat info")
+            .accessibilityIdentifier("persona-avatar")
+            .connectionDetails($showLink)
+            Spacer(minLength: Theme.Space.s)
+            ShellCircleButton(symbol: Theme.Icon.compose, label: String(localized: "New Chat [Quick Actions ea4b29]"), id: "assistant-new", action: newConversation)
+                .disabled(key == nil)
+                .opacity(key == nil ? 0.4 : 1)
+        }
+        .shellTopBarScaled()
+        .padding(.horizontal, Theme.Space.l)
+        .padding(.top, Theme.Space.xxs)
+        .frame(height: Self.height, alignment: .top)
+        .barScreenshotBanner(name: ownName)
+        .background(alignment: .top) { BarFog(solid: Self.fogSolid, fade: Self.fade) }
+    }
+    #endif
 
     #if os(macOS)
     /// The Mac's (#2113): the title bar's row of the conversation's column, as the Agents chat's (`macTitleRow`):
@@ -206,28 +267,47 @@ struct AssistantTopBar: View {
         .padding(.horizontal, Theme.Space.l)
         .padding(.top, Theme.Space.xxs)
         .frame(height: Self.height, alignment: .top)
-        .background(alignment: .top) { BarFog(solid: Self.height - 6, fade: Self.fade) }
+        .barScreenshotBanner(name: ownName)
+        .background(alignment: .top) { BarFog(solid: Self.fogSolid, fade: Self.fade) }
         .connectionDetails($showLink)
         .modifier(ShellBarAtRest(page: 0)) // ShellMovingBar stands in while the strip slides
     }
 
     private var classicBar: some View {
-        HStack(alignment: .top) {
-            GlassEffectContainer {
-                Self.circle(sidebarIsColumn ? Theme.Icon.sidebar : Theme.Icon.sidebarMenu, label: String(localized: "Chat History [Shell Components 60636b]"), id: "assistant-sidebar-button") {
-                    Haptics.tap()
-                    openSidebar()
+        // Beside the one sidebar's column (#4206) the column's own button folds it, at its top: this one only brings it
+        // back, and is not there while the column is out. Left out, not faded: a glass button made see-through (or slid
+        // away) while the split moved its columns left the page taking no touches at all on iPhone Duo open
+        // (2026-11-10).
+        let sidebarButtonShown = !(sidebarCounts && sidebarIsColumn && sidebarShown)
+        return HStack(alignment: .top) {
+            if !sidebarButtonShown && newChatInSidebar {
+                // Its room kept, empty, as New Chat's on the other side: the face stays in the middle.
+                Color.clear.scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget).accessibilityHidden(true)
+            }
+            if sidebarButtonShown {
+                GlassGroup {
+                    Self.circle(sidebarIsColumn ? Theme.Icon.sidebar : Theme.Icon.sidebarMenu, label: String(localized: "Chat History [Shell Components 60636b]"), id: "assistant-sidebar-button") {
+                        Haptics.tap()
+                        openSidebar()
+                    }
                 }
+                .overlay(alignment: .topTrailing) { if sidebarCounts && !sidebarShown { SidebarWaitingBadge() } }
+                .transition(.identity)
             }
             Spacer(minLength: 8)
-            face
+            if faceInColumn { namePill } else { face }
             Spacer(minLength: 8)
-            GlassEffectContainer {
-                Self.circle(Theme.Icon.compose, label: String(localized: "New Chat [Quick Actions ea4b29]"), id: "assistant-new") {
-                    Haptics.tap()
-                    newConversation()
+            if newChatInSidebar {
+                // Its room kept, empty, so the face stays in the middle.
+                Color.clear.scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget).accessibilityHidden(true)
+            } else {
+                GlassGroup {
+                    Self.circle(Theme.Icon.compose, label: String(localized: "New Chat [Quick Actions ea4b29]"), id: "assistant-new") {
+                        Haptics.tap()
+                        newConversation()
+                    }
+                    .disabled(key == nil)
                 }
-                .disabled(key == nil)
             }
         }
         .padding(.horizontal, Theme.Space.l)
@@ -238,10 +318,11 @@ struct AssistantTopBar: View {
         #endif
         .padding(.top, Self.topInset)
         .frame(height: Self.height, alignment: .top)
+        .barScreenshotBanner(name: ownName)
         .background(alignment: .top) {
             // Solid down to the bar's bottom edge, fading out below it (fading under the pill let the messages show
             // through the name).
-            BarFog(solid: Self.height - 6, fade: Self.fade)
+            BarFog(solid: Self.fogSolid, fade: Self.fade)
         }
     }
 
@@ -260,28 +341,84 @@ struct AssistantTopBar: View {
         .accessibilityIdentifier(id)
     }
 
+    /// The sidebar column is out beside the page and its head draws the persona's face (the assistant switcher): the
+    /// bar's middle is then the name pill alone, so the screen shows the face once (#9973). With the column folded the
+    /// face comes back. Only where the column stands beside the page (the iPad, the open iPhone Duo).
+    private var faceInColumn: Bool {
+        #if os(iOS)
+        sidebarIsColumn && sidebarShown && model.showsAssistantSwitcher
+        #else
+        false
+        #endif
+    }
+
+    /// The name pill without the face (`faceInColumn`), as the phone's Sidebar layout bar draws it (`drawerRow`), with
+    /// the face's menu: the hub picker with several hubs, Knowledge, Details, the copies, the launcher, Interrupt. A
+    /// copy's confirmation shows in it for a moment, as on the Mac's bar.
+    private var namePill: some View {
+        let link = model.connection.shown
+        return HStack(spacing: Theme.Space.flush) {
+            Menu { menuItems(link) } label: {
+                Self.pill {
+                    if let hint {
+                        ThemedIcon(Theme.Icon.successFilled).foregroundStyle(Theme.positive)
+                        Text(hint).font(Theme.Font.bodyStrong).lineLimit(1)
+                    } else if link != .online {
+                        ConnectionLabel(phase: link, compact: true)
+                    } else {
+                        Text(name).font(Theme.Font.bodyStrong).lineLimit(1)
+                        ThemedIcon(Theme.Icon.expand).font(Theme.Font.label).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .accessibilityLabel(link != .online ? String(localized: "\(name), \(ConnectionLabel.text(link, hubRestarting: model.hubUpdate?.restarting == true))") : name)
+            .accessibilityHint("Knowledge, details, copy directory and chat info")
+            .accessibilityIdentifier("persona-avatar")
+            .connectionDetails($showLink)
+        }
+        .animation(Theme.Motion.standard, value: hint)
+        .task(id: hint) { await clearHint() }
+    }
+
+    /// The capsule of a name pill: one line, at most 240 pt, a finger's height.
+    static func pill<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        HStack(spacing: Theme.Space.xs) { content() }
+            .padding(.horizontal, Theme.Space.l)
+            .scaledFrame(height: Theme.Size.tapTarget)
+            .scaledFrame(maxWidth: Theme.Size.box240)
+            .fixedSize()
+            // Not the glass `surface`: inside a Menu's label it spreads over the whole label (the face's menu).
+            .background(.regularMaterial, in: .capsule)
+            .contentShape(.capsule)
+    }
+
     /// The face over the name pill; both are the menu's button. A copy's confirmation covers the pill for a moment
     /// (beside the menu, not on it: anything attached to a Menu becomes part of its button and its label).
     private var face: some View {
         ZStack(alignment: .bottom) {
             menu
-            if let hint {
-                HStack(spacing: Theme.Space.xs) {
-                    ThemedIcon(Theme.Icon.successFilled).foregroundStyle(Theme.positive)
-                    Text(hint).lineLimit(1)
-                }
-                .font(Theme.Font.labelStrong)
-                .padding(.horizontal, Theme.Space.m)
-                .scaledFrame(height: Theme.Size.icon)
-                .fixedSize()
-                .background(.regularMaterial, in: .capsule)
-                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
-                .allowsHitTesting(false)
-                .transition(.opacity)
-            }
+            if let hint { hintPill(hint) }
         }
         .animation(Theme.Motion.standard, value: hint)
         .task(id: hint) { await clearHint() }
+    }
+
+    /// A copy's confirmation, in a pill of its own.
+    private func hintPill(_ hint: String) -> some View {
+        HStack(spacing: Theme.Space.xs) {
+            ThemedIcon(Theme.Icon.successFilled).foregroundStyle(Theme.positive)
+            Text(hint).lineLimit(1)
+        }
+        .font(Theme.Font.labelStrong)
+        .padding(.horizontal, Theme.Space.m)
+        .scaledFrame(height: Theme.Size.icon)
+        .fixedSize()
+        .background(.regularMaterial, in: .capsule)
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+        .allowsHitTesting(false)
+        .transition(.opacity)
     }
 
     /// A multi-line closure in the modifier chain slows the release build's type-check (docs/lessons/ios.md): a method instead.
@@ -324,14 +461,19 @@ struct AssistantTopBar: View {
         .connectionDetails($showLink)
     }
 
-    /// The pill's name: the persona's (Persona's) on the main conversation and the new-conversation page, a side
-    /// conversation's title.
+    /// The pill's name: the assistant's on the main conversation and the new-conversation page, a side conversation's
+    /// title.
     private var name: String {
-        let persona = model.persona.name
-        guard let key, key != model.assistantMain else { return persona }
+        let own = ownName
+        guard let key, key != model.assistantMain else { return own }
         let t = session?.title ?? ""
-        return t.isEmpty || t == "Claude Code" ? persona : t
+        return t.isEmpty || t == "Claude Code" ? own : t
     }
+
+    /// Whose page it is: the current assistant's name, as the sidebar's head says it (with one assistant too, #9973;
+    /// the face stays the persona's, picked in Appearance); another assistant's conversation opened from elsewhere
+    /// names its own.
+    private var ownName: String { model.assistantTitleName(in: key) }
 
     /// The conversation's launcher (the next message uses it) or, on the new-conversation page, the default one.
     /// The model picked for the next message here, nil: the launcher's default.
@@ -398,43 +540,27 @@ struct AssistantTopBar: View {
     /// Each launcher's /model list; a failure just leaves the submenu without entries.
     private func loadModelOptions() async {
         let machine = model.hubRef(machineID)
-        guard let api = model.api(machine.group), !launchers.isEmpty else { return }
+        guard let api = model.api(machine.group), !launchers.isEmpty, !Task.isCancelled else { return }
         await withTaskGroup(of: (String, [AgentModelOption]?).self) { group in
             for l in launchers {
-                group.addTask { (l.name, try? await api.launcherModels(machine: machine.id, launcher: l.name)) }
+                group.addTask { (l.name, try? await api.launcherModels(machine: machine.id, launcher: l.name, purpose: "assistant")) }
             }
             // An empty answer counts too (the last typed ID forgotten); a failed one keeps what was there.
             for await (name, options) in group {
-                if let options { modelOptions[name] = options }
+                if let options, !Task.isCancelled { modelOptions[name] = options }
             }
         }
     }
 
-    private var launcher: String {
-        // The main conversation follows Settings › Assistant (the hub sends it there), side ones keep their own.
-        if let key, key == model.assistantMain, let l = model.assistantLaunchers[key] ?? model.assistantConfig?.launcher { return l }
-        if let key { return model.assistantLaunchers[key] ?? session?.launcher ?? model.assistantConfig?.launcher ?? "claude" }
-        return model.assistantConfig?.launcher ?? "claude"
-    }
+    private var launcher: String { AssistantCopyText.launcher(key, in: model) }
 
-    private var cwd: String {
-        if let c = session?.cwd, !c.isEmpty { return c }
-        if let c = model.assistantConfig?.cwd, !c.isEmpty { return c }
-        return "~/.persona/assistant"
-    }
+    private var cwd: String { AssistantCopyText.cwd(key, in: model) }
 
     @ViewBuilder private func menuItems(_ link: ConnectionStatus.Phase) -> some View {
-        if model.isMultiHub, let current = model.hub?.group {
-            // Several groups of hubs: each has its own Persona (docs/protocol/multi-hub.md「hub 级页面」); pick whose.
-            Section("hub") {
-                Picker("hub", selection: Binding(get: { current }, set: { model.selectHub($0) })) {
-                    ForEach(model.groupIDs, id: \.self) { g in
-                        Label(model.groupName(g), systemImage: Theme.Icon.hubGroup).tag(g)
-                    }
-                }
-            }
-        }
+        // Only this conversation's things: the hub is picked in the sidebar's assistant switcher, with its assistants (#12594).
         Section(menuTitle) {
+            // A leader conversation's first item: the page of everything under its direction (#11516).
+            DirectionPageMenuItem(key: key)
             // The Agent SDK could not run here (#2455): it says so, and why.
             if session?.runtimeFallback?.isEmpty == false,
                let r = AssistantRuntime.status(runtime: session?.runtime, fallback: session?.runtimeFallback) {
@@ -463,8 +589,8 @@ struct AssistantTopBar: View {
                 Button { copy(ChatTrace.shared.text(key), String(localized: "Diagnostics copied")) } label: { Label(String(localized: "Copy Diagnostics"), systemImage: Theme.Icon.diagnostics) }
             }
         }
-        if model.canCompact(key) || model.canStartNewMain(key) {
-            Section { MainConversationMenu(key: key) } // Compact context, New Main Chat… (#1762)
+        if model.canCompact(key) || model.canClearMain(key) || model.canStartNewMain(key) {
+            Section { MainConversationMenu(key: key) } // Compact context, Clear context, New Main Chat… (#1762, #5100)
         }
         if let key {
             Section {
@@ -501,9 +627,8 @@ struct AssistantTopBar: View {
                                 }
                             } label: {
                                 let title = [l.name, Fmt.model(l.model)].compactMap { $0 }.joined(separator: " · ")
-                                if l.name == launcher, model.assistantLaunchers[key] != nil {
-                                    Label { Text(title); Text("Just Once") } icon: { ThemedIcon(Theme.Icon.done) }
-                                } else if l.name == launcher { Label(title, systemImage: Theme.Icon.done) } else { Text(title) }
+                                // No "Just Once": the pick stays with this chat, from the next message on (#7513).
+                                if l.name == launcher { Label(title, systemImage: Theme.Icon.done) } else { Text(title) }
                             }
                             // A nested menu keeps the items it was first built with: the list read after the bar
                             // came up, an ID typed or forgotten since, or another pick builds it again.
@@ -534,16 +659,11 @@ struct AssistantTopBar: View {
     private var baseMenuTitle: String {
         guard let key else { return String(localized: "New chat · \(launcher)") }
 
-        let title = name == model.persona.name && key == model.assistantMain ? String(localized: "Main Chat") : name
+        let title = name == ownName && key == model.assistantMain ? String(localized: "Main Chat") : name
         return [title, launcher, Fmt.model(pickedModel ?? session?.model)].compactMap { $0 }.joined(separator: " · ")
     }
 
-    private var infoText: String {
-        AssistantCopyText.info(title: session.map { $0.title.isEmpty || $0.title == "Claude Code" ? nil : $0.title } ?? nil,
-                               isMain: key != nil && key == model.assistantMain, sessionID: key?.sessionID,
-                               machine: model.machine(model.hubRef(machineID))?.name, machineID: machineID, cwd: cwd,
-                               launcher: launcher, model: Fmt.model(session?.model))
-    }
+    private var infoText: String { AssistantCopyText.info(key, in: model) }
 
     private func copy(_ text: String, _ done: String) {
         UIPasteboard.general.string = text
@@ -554,7 +674,33 @@ struct AssistantTopBar: View {
 }
 
 /// What Copy Info puts on the clipboard: enough for another agent (or the user at a terminal) to find this conversation.
+/// The face's menu copies it, and on iPhone Duo open the main conversation's row (#2623).
 nonisolated enum AssistantCopyText {
+    /// The conversation's launcher (the next message uses it) or, with none (the new-conversation page), the default one.
+    @MainActor static func launcher(_ key: SessionKey?, in model: AppModel) -> String {
+        // The main conversation follows Settings › Assistant (the hub sends it there), side ones keep their own.
+        if let key, key == model.assistantMain, let l = model.assistantLaunchers[key] ?? model.assistantConfig?.launcher { return l }
+        if let key { return model.assistantLaunchers[key] ?? model.session(key)?.launcher ?? model.assistantConfig?.launcher ?? "claude" }
+        return model.assistantConfig?.launcher ?? "claude"
+    }
+
+    /// Where the conversation runs.
+    @MainActor static func cwd(_ key: SessionKey?, in model: AppModel) -> String {
+        if let c = key.flatMap({ model.session($0) })?.cwd, !c.isEmpty { return c }
+        if let c = model.assistantConfig?.cwd, !c.isEmpty { return c }
+        return "~/.persona/assistant"
+    }
+
+    /// Copy Info's text for the conversation.
+    @MainActor static func info(_ key: SessionKey?, in model: AppModel) -> String {
+        let session = key.flatMap { model.session($0) }
+        let machineID = model.assistantMachineID(key)
+        return info(title: session.map { $0.title.isEmpty || $0.title == "Claude Code" ? nil : $0.title } ?? nil,
+                    isMain: key != nil && key == model.assistantMain, sessionID: key?.sessionID,
+                    machine: model.machine(model.hubRef(machineID))?.name, machineID: machineID, cwd: cwd(key, in: model),
+                    launcher: launcher(key, in: model), model: Fmt.model(session?.model))
+    }
+
     static func info(title: String?, isMain: Bool, sessionID: String?, machine: String?, machineID: String, cwd: String,
                      launcher: String, model: String?) -> String {
         var lines: [String] = []
@@ -591,7 +737,7 @@ extension AppModel {
         key?.machineID ?? assistantConfig?.machineID ?? hubMachineID
     }
 
-    /// What the persona's face shows for Persona's conversation `key` (docs/apple/persona.md「状态」): Offline when the hub or
+    /// What the persona's face shows for Persona's conversation `key` (docs/apple/persona.md「States」): Offline when the hub or
     /// Persona's machine is out of reach, Waiting for you when the conversation waits on the user, Thinking / Working while a turn
     /// runs (thinking until it writes or calls a tool), else Idle. Read only by the face's own view (`TopBarDot`,
     /// `ShellPersonaButton`): every hub push changes what it reads. `inFront`: the page's `tabIsActive`; behind another
@@ -615,6 +761,26 @@ extension AppModel {
 /// `TopFog` behind a floating bar, as its background: from the top of the screen (under the status bar) down to `solid`
 /// below the safe area's top, then fading out over `fade`, and across the whole width. On iPhone Duo's outer screen
 /// the status bar stands at the side: a fog only as wide as the page stopped beside it, a hard edge (#283).
+private extension View {
+    /// What a screenshot shows of the bar (#9508): the assistant's avatar and `name` (the bar's own for whose page it
+    /// is, #12243), and Persona's repository at the right (#10172), in its row of buttons, down to where the fog starts to fade (the fog under both carries on
+    /// below). Under the bar the page's color with the fog's own over it, so at rest the bar looks as it did; under the
+    /// banner the page's color alone.
+    func barScreenshotBanner(name: String) -> some View {
+        screenshotBanner(solid: AssistantTopBar.fogSolid, fade: Theme.Space.m) {
+            ZStack {
+                Theme.pageBackground
+                Rectangle().fill(.regularMaterial)
+                Theme.pageBackground.opacity(0.82)
+            }
+        } bannerBackdrop: {
+            Theme.pageBackground
+        } banner: {
+            ScreenshotBannerContent(row: (AssistantTopBar.topInset, Theme.Size.tapTarget), name: name)
+        }
+    }
+}
+
 struct BarFog: View {
     var solid: CGFloat
     var fade: CGFloat
@@ -631,20 +797,30 @@ struct BarFog: View {
 }
 
 /// The fog under a floating bar: the page's own color, blurred, solid for `solidHeight` and then fading out over
-/// `fadeHeight` (the content scrolls under it and shows through only below the bar).
+/// `fadeHeight` (the content scrolls under it and shows through only below the bar). Both layers fade along an eased
+/// curve, so the end of the solid part leaves no line across the text; the blur fades out over the first half only, so
+/// a line half under the fog dims rather than shows a smeared copy of itself (#2909).
 struct TopFog: View {
     var solidHeight: CGFloat
     var fadeHeight: CGFloat
 
     var body: some View {
-        let solid = solidHeight / max(solidHeight + fadeHeight, 1)
+        let total = max(solidHeight + fadeHeight, 1)
+        let solid = solidHeight / total
+        let fade = fadeHeight / total
         ZStack {
             Rectangle().fill(.regularMaterial)
+                .mask(Self.easedMask(from: solid, over: fade / 2))
             Theme.pageBackground.opacity(0.82)
+                .mask(Self.easedMask(from: solid, over: fade))
         }
-        .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: solid),
-                                     .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    /// Opaque down to `start`, then out to clear over `length` (unit points) along the eased curve the chat's footer fog
+    /// shares (`EasedFade`).
+    private static func easedMask(from start: CGFloat, over length: CGFloat) -> LinearGradient {
+        LinearGradient(stops: EasedFade.stops(.black, from: start, over: length), startPoint: .top, endPoint: .bottom)
     }
 }

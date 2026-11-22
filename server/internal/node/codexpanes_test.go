@@ -53,6 +53,7 @@ var turnAfterTurn = []string{
 // six weeks earlier, still written to in its first day's directory, outside the two weeks node looked at — showed a
 // finished thread, idle, its new turn nowhere. Each pane's title names its thread.
 func TestCodexPanesAreFoundByTheThreadInTheirTitle(t *testing.T) {
+	withCodexWaits(t)
 	n, home := testNode(t)
 	n.metas, n.bgScans, n.panes, n.panePIDs = map[string]quickMeta{}, map[string]*bgScan{}, map[string]string{}, map[string]panePID{}
 	now := time.Now()
@@ -83,13 +84,19 @@ func TestCodexPanesAreFoundByTheThreadInTheirTitle(t *testing.T) {
 	}
 	resumed := pane("w:p5", "参考时区替换能力 | repo", proto.StatusWorking)
 	resumed.AgentSession = &host.AgentSession{Kind: "id", Value: staleStart} // a /resume in Codex since
+	n.panes["w:p9"] = staleStart
 	n.setAgents([]host.Agent{
-		pane("w:p1", "repo", proto.StatusIdle), // a new thread: no name, guessed after the named ones
-		pane("w:p2", "补测多客户端请求特征 | repo", proto.StatusIdle),
-		pane("w:p3", "一个很长很长的线程名字会... | repo", proto.StatusIdle),
+		pane("w:p9", "Unrecognised current title | repo", proto.StatusBlocked),
+		pane("w:p1", "repo", proto.StatusIdle), // no thread name or identity yet
+		pane("w:p2", "[ . ] Action Required | 补测多客户端请求特征 | repo", proto.StatusBlocked),
+		pane("w:p3", "[ ! ] Action Required | 一个很长很长的线程名字会... | repo", proto.StatusBlocked),
 		resumed,
 	})
-	want := map[string]string{"w:p5": oldThread, "w:p2": newThread, "w:p3": longName, "w:p1": otherNew}
+	wait := n.codexWaitOf("w:p1")
+	if wait == nil || !isCodexWaitID(wait.id) {
+		t.Fatal("the unnamed pane needs its own waiting row")
+	}
+	want := map[string]string{"w:p5": oldThread, "w:p2": newThread, "w:p3": longName, "w:p1": wait.id}
 	for id, a := range n.agents {
 		if want[a.PaneID] != id {
 			t.Errorf("pane %s shows %s, want %s", a.PaneID, id, want[a.PaneID])
@@ -97,6 +104,10 @@ func TestCodexPanesAreFoundByTheThreadInTheirTitle(t *testing.T) {
 	}
 	if len(n.agents) != len(want) {
 		t.Fatalf("%d panes mapped, want %d: %v", len(n.agents), len(want), n.agents)
+	}
+	// A named pane that cannot be identified must not acquire another thread from this directory.
+	if id := n.codexSession(pane("w:p9", "Unknown title | repo", proto.StatusBlocked), nil); id != "" {
+		t.Fatalf("unrecognised named pane was assigned another conversation: %s", id)
 	}
 
 	// The working pane's session is listed working, with the new turn readable.

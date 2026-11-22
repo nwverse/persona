@@ -4,7 +4,8 @@
 //
 // Scenarios: login (any other name) · setup / setup-local / setup-remote · app (a lone hub, older computers, a restart
 // pending) · nopeers (a hub without the mesh API) · center (the center of a group: members, computers with several
-// paths, a service computer, one to pair again, one only a member has, an old ssh one) · member / member-offline (a
+// paths, a service computer, one to pair again, one only a member has, an old ssh one, a Linux ssh one to switch to
+// Persona Link: its name containing "fail" fails and rolls back) · member / member-offline (a
 // member hub, its center reachable or not; member-stale: the page still thinks the center is up, the hub knows better
 // and answers set-center with confirm_required) · empty (nothing but the hub's own machine). Adding computers works in every
 // signed-in scenario: a connector link containing "fail" fails to pair. Extensions: a built-in one, two installed (one
@@ -13,7 +14,7 @@
 import { setTransport } from "./api";
 import { installMockFollower, mockLogs, mockMetrics, mockOverview } from "./mock-metrics";
 import type { CatalogItem, Market } from "../lib/extension-market";
-import type { UsageSource, UsageSources, AdminMachine, AdminExtension, AssistantCards, AdminState, Device, DiscoveredHub, MeshView, MetricsWindow, NetworkView, Overview, Peer, PermissionLine, ExtensionPreview } from "./types";
+import type { UsageSource, UsageSources, AdminMachine, AdminExtension, AdminState, Device, DiscoveredHub, MeshView, MetricsWindow, NetworkView, Overview, Peer, PermissionLine, ExtensionPreview } from "./types";
 
 const SELF = "0d9e8f7a-6b5c-4d3e-8f2a-1b0c9d8e7f6a";
 const OFFICE = "6f1c2a9e-0b7d-4c55-9e3a-2b8f41d07c11";
@@ -47,6 +48,25 @@ function fakeQr(n = 29): string[] {
   return grid.map((row) => row.join(""));
 }
 
+// A switch to Persona Link (#10662) walking its phases on the machine itself, as the hub's list would report them; the
+// page polls faster while one runs. A computer whose name contains "fail" fails installing and is put back on ssh.
+function switchToLink(machine: AdminMachine) {
+  const fails = /fail/i.test(machine.name);
+  const at = (phase: NonNullable<AdminMachine["link_switch"]>["phase"], extra: Partial<NonNullable<AdminMachine["link_switch"]>> = {}) => {
+    machine.link_switch = { available: false, reason: "in_progress", phase, at: new Date().toISOString(), ...extra };
+  };
+  at("checking");
+  const steps: [number, () => void][] = fails
+    ? [[2500, () => at("installing")], [5000, () => at("rolling_back", { error: "transfer_failed" })], [8000, () => (machine.link_switch = { available: true, phase: "failed", error: "transfer_failed", at: new Date().toISOString() })]]
+    : [
+        [2500, () => at("installing")],
+        [5000, () => (at("connecting"), Object.assign(machine, { kind: "link", online: false, transport: undefined }))],
+        [8000, () => (Object.assign(machine, { online: true, transport: "link", link: { version: VERSION, since: new Date().toISOString() } }), (machine.link_switch = { available: false, phase: "succeeded", at: new Date().toISOString() }))],
+      ];
+  for (const [ms, step] of steps) setTimeout(step, ms);
+  return machine.link_switch;
+}
+
 export function installMock(scenario: string) {
   const member = scenario.startsWith("member");
   const state: AdminState = {
@@ -60,14 +80,18 @@ export function installMock(scenario: string) {
   };
   let restart = { required: scenario === "app", reasons: scenario === "app" ? ["添加电脑「studio」", "TLS 监听改成 :18662"] : [] };
   const startedAt = iso(60 * 26 + 17);
-  // Usage sources (docs/server/usage-windows.md"Account-pool gateways"): one Relay that works, one generic that does not answer. Any key
-  // other than "wrong" tests fine; an address containing "dead" does not connect. The key is never given back.
+  // Usage sources (docs/server/usage-windows.md"Account-pool gateways"): one Relay that works, one relay read with an API key
+  // (#12311), one generic that does not answer. Any key other than "wrong" tests fine (a relay_key test with the key "hidden"
+  // answers that the relay shares no allowances with it); an address containing "dead" does not connect. The key is never given back.
   const usage: UsageSources = {
     enabled: true,
     poll_minutes: 5,
     limit: 8,
+    hidden_providers: [],
+    providers: ["claude", "codex", "kimi"],
     sources: [
       { id: "src-1a2b3c4d", name: "Relay", type: "relay", url: "https://gateway.example.com", has_key: true, enabled: true, status: { ok_at: iso(2), tried_at: iso(2), seen: { accounts: 12, windows: 31, listed: 14, providers: { codex: 8, claude: 4 } } } },
+      { id: "src-9c0d1e2f", name: "Shared relay", type: "relay_key", url: "https://relay.example.com/v1", has_key: true, enabled: true, status: { ok_at: iso(3), tried_at: iso(3), seen: { accounts: 7, windows: 20, listed: 9, providers: { claude: 5, codex: 1, antigravity: 1 } } } },
       { id: "src-5e6f7a8b", name: "Team pool", type: "generic", url: "https://pool.example.com/persona/usage", has_key: true, enabled: true, status: { ok_at: iso(95), tried_at: iso(1), error: "unreachable", seen: { accounts: 3, windows: 5, listed: 3, providers: { kimi: 3 } } } },
     ],
   };
@@ -103,6 +127,12 @@ export function installMock(scenario: string) {
           {
             id: "laptop", name: "旧笔记本", kind: "ssh", ssh_host: "laptop", online: true, transport: "ssh", node_version: "v1.3.9-4-gdef5678", node_mismatch: true, os: "darwin", state: "active", hub_id: SELF,
             paths: [{ via: "ssh", hub_id: SELF, id: "laptop", ok: true, rtt_ms: 15, active: true }],
+            link_switch: { available: false, reason: "unsupported_os" },
+          },
+          {
+            id: "build-box", name: "Build box", kind: "ssh", ssh_host: "build-box", online: true, transport: "ssh", node_version: VERSION, os: "linux", state: "active", hub_id: SELF,
+            paths: [{ via: "ssh", hub_id: SELF, id: "build-box", ok: true, rtt_ms: 6, active: true }],
+            link_switch: { available: true },
           },
         ]
       : member
@@ -159,7 +189,6 @@ export function installMock(scenario: string) {
     { hub_id: "a24d77c0-91e2-4f1b-8f2d-5c0b3e6a9d42", name: "书房 NAS", addresses: ["https://192.0.2.20:18662", "https://[2001:db8::20]:18662"], fp: "q3J8pX0m-Vb7kQ2sT9yH4eW1rL6uN5cD8fG0aZ3iK7o", version: "v1.4.0" },
     { hub_id: "c8e1f5b3-2d6a-4e9f-b7c0-1a3d5f7e9b24", name: "客厅迷你主机", addresses: ["https://192.0.2.31:18662"], fp: "M2nB5vC8xZ1aS4dF7gH0jK3lQ6wE9rT2yU5iO8pA1sD", version: "v1.3.8" },
   ];
-  const assistant: AssistantCards = { persona_view: false };
   const network: NetworkView = {
     listen: ":18660",
     public_url: "http://hub.example.com:18660",
@@ -218,7 +247,7 @@ export function installMock(scenario: string) {
   };
   let pending: ExtensionPreview | null = null;
 
-  // Markets (docs/extensions/extensions.md "Extension markets"): a public site and a private GitHub repository (token set, one warning); the
+  // Markets (docs/extensions/extensions.md "Extension marketplace"): a public site and a private GitHub repository (token set, one warning); the
   // catalog has an extension to install, two installed ones with an upgrade, a built-in one, and one this hub cannot install.
   // A spec containing "fail" is not read; "private" without a token asks for one.
   const MA = "3f2a9c1d0b";
@@ -321,6 +350,12 @@ export function installMock(scenario: string) {
             { level: "ok", item: "明文 listen", detail: ":18660；仅供内网或 VPN 使用" },
             { level: "ok", item: "public.tls_listen", detail: ":18662（配置值，尚未验证 TLS 监听）" },
             { level: "ok", item: "TLS 证书", detail: "SPKI SHA-256 钉扎值 Xk3v9QeR2mT8…；到期时间 2027-10-01T00:00:00Z" },
+            {
+              level: "ok",
+              item: "候选地址",
+              detail:
+                "已读取运行中的 hub 当前发布列表（不代表外部可达）\nhttps://[2001:db8::2]:18662（ipv6，端口 18662，发现时间 2026-11-13T08:00:00Z）\nhttps://192.0.2.10:18662（lan，端口 18662，发现时间 2026-11-13T08:00:00Z）",
+            },
             { level: "problem", item: "本机 IPv6", detail: "没有可确认稳定的全局 IPv6；请检查运营商 IPv6 和网卡地址" },
             { level: "info", item: "外部可达性", detail: "未验证。本机连自己的地址走环回，不能证明公网可达。" },
           ],
@@ -417,6 +452,7 @@ export function installMock(scenario: string) {
       case "PUT /usage-sources":
         if (typeof body.enabled === "boolean") usage.enabled = body.enabled;
         if (typeof body.poll_minutes === "number") usage.poll_minutes = body.poll_minutes;
+        if (Array.isArray(body.hidden_providers)) usage.hidden_providers = body.hidden_providers as string[];
         return json(usage);
       case "POST /usage-sources": {
         if (usage.sources.length >= usage.limit) return fail(409, "too_many", "最多 8 个来源");
@@ -432,6 +468,8 @@ export function installMock(scenario: string) {
         const saved = body.id ? usageSource(String(body.id)) : undefined;
         const key = body.key || (saved && saved.url === url ? "saved" : "");
         if (!key || key === "wrong") return json({ ok: false, code: "unauthorized" });
+        if (body.type === "relay_key")
+          return json(key === "hidden" ? { ok: true, accounts: 0, windows: 0, listed: 0, providers: {}, quota_hidden: true } : { ok: true, accounts: 7, windows: 20, listed: 9, providers: { claude: 5, codex: 1, antigravity: 1 } });
         return json({ ok: true, accounts: 12, windows: 31, listed: 14, providers: { codex: 8, claude: 4 } });
       }
       case "GET /mesh":
@@ -442,12 +480,6 @@ export function installMock(scenario: string) {
       case "POST /devices/pair":
         if (mesh.role === "member") return memberHub();
         return json({ pair_url: "persona://pair?url=http%3A%2F%2Fhub.example.com%3A18660&token=jp_mock", url: network.public_url, expires_at: later(10), fp: network.tls?.fp, qr: { size: 29, rows: fakeQr() } });
-      case "GET /assistant":
-        return json(assistant);
-      case "PUT /assistant":
-        if (typeof body.persona_view !== "boolean") return fail(400, "bad_request");
-        assistant.persona_view = body.persona_view;
-        return json(assistant);
       case "GET /network":
         return json({ ...network, restart });
       case "PUT /network/access":
@@ -523,6 +555,10 @@ export function installMock(scenario: string) {
         return json({ ok: true, name: machine.name });
       }
       if (m[2] === "/reconnect") return json({ ok: true });
+      if (m[2] === "/link-switch" && method === "POST") {
+        if (!machine.link_switch?.available) return fail(409, machine.link_switch?.reason || "unknown");
+        return json({ link_switch: switchToLink(machine) }, 202);
+      }
       if (m[2] === "/link-pair") return json({ pair_url: `persona://link?url=https%3A%2F%2Fhub.example.com%3A18662&machine=${id}&token=jp_mock`, expires_at: later(10), command: `persona-link pair 'persona://link?…&machine=${id}'` });
     }
     const mk = /^\/extensions\/-\/markets\/([^/?]+)(\/[a-z]+)?$/.exec(path);
@@ -539,7 +575,7 @@ export function installMock(scenario: string) {
       markets = markets.map((x) => (x.id === m.id ? read : x));
       return json(read);
     }
-    // How they run (docs/extensions/extensions.md "Activity").
+    // How they run (docs/extensions/extensions.md "Runtime status").
     const query = new URLSearchParams(path.split("?")[1] ?? "");
     const win = (query.get("window") || "24h") as MetricsWindow;
     if (key === "GET /extensions/-/metrics") return json(mockOverview(extensions.map((x) => x.id), win));

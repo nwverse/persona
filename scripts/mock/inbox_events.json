@@ -1,5 +1,5 @@
 {
- "_comment": "Inbox phase-1 events (docs/assistant/inbox.md「事件、处理链条、建议」): one item per state, for MOCK_INBOX_EVENTS=1. Times are shifted so `as_of` is now.",
+ "_comment": "Inbox phase-1 events (docs/assistant/inbox.md「Events and handling chain」): one item per state, for MOCK_INBOX_EVENTS=1. Times are shifted so `as_of` is now.",
  "as_of": "2026-11-05T10:10:00Z",
  "items": [
   {

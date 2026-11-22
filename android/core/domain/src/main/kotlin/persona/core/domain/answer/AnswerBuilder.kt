@@ -7,8 +7,8 @@ import persona.core.contracts.SecretRunRequest
 
 enum class AnswerAction(val wire: String) {
     ApproveAll("approve_all"), ApproveEdits("approve_edits"), ApproveStepwise("approve_stepwise"), Reject("reject"), Allow("allow"),
-    Deny("deny"), Always("always"), CancelQuestion("cancel_question"), Dismiss("dismiss"), PickOption("pick_option"),
-    Advance("advance"), Submit("submit"), ScreenOption("screen_option"),
+    Deny("deny"), Always("always"), OwnerReply("owner_reply"), CancelQuestion("cancel_question"), Dismiss("dismiss"), PickOption("pick_option"),
+    Advance("advance"), Submit("submit"), ScreenOption("screen_option"), ScreenSubmit("screen_submit"),
     TerminalText("terminal_text"), TerminalKeys("terminal_keys"), SubmitElicitation("submit_elicitation"),
     DeclineElicitation("decline_elicitation"), CancelElicitation("cancel_elicitation"),
 }
@@ -31,6 +31,8 @@ data class AnswerDraft(
     val other: Map<String, String> = emptyMap(),
     val optionIndex: Int = 0,
     val option: String = "",
+    /** A checkbox dialog's ticked option keys, sent whole by [AnswerAction.ScreenSubmit]. */
+    val selected: Set<String> = emptySet(),
     val text: String = "",
     val keys: List<String> = emptyList(),
     val fields: kotlinx.serialization.json.JsonObject = kotlinx.serialization.json.JsonObject(emptyMap()),
@@ -38,6 +40,11 @@ data class AnswerDraft(
     val openedElicitationUrl: String? = null,
     /** A password card's typed password, from its own form at the moment of Run; never written to the draft journal. */
     val password: String = "",
+    /**
+     * A fields card's values by declared key ([hasFieldsForm], #4641), from its own form at the moment of Allow; never
+     * written to the draft journal (some are secrets).
+     */
+    val values: Map<String, String> = emptyMap(),
 )
 
 data class AnswerResult(
@@ -47,13 +54,31 @@ data class AnswerResult(
     val nextPage: Int? = null,
 )
 
+@kotlinx.serialization.Serializable
 data class OptionDisplay(val text: String, val recommended: Boolean)
 
+/** Existing production call sites stay exactly as they were. */
 object AnswerBuilder {
+    @JvmStatic fun display(label: String): OptionDisplay = AnswerAdapters.current().display(label)
+
+    @JvmStatic fun build(
+        interaction: Interaction,
+        action: AnswerAction,
+        draft: AnswerDraft = AnswerDraft(),
+        context: AnswerContext = AnswerContext(),
+    ): AnswerResult = AnswerAdapters.current().build(interaction, action, draft, context)
+}
+
+/** The unmodified production behavior behind [AnswerAdapter]. */
+internal object KotlinAnswerBuilder {
     fun display(label: String): OptionDisplay {
         val suffix = listOf("(Recommended)", "（推荐）", "(推荐)").firstOrNull(label::endsWith) // i18n-ignore: marks the agent writes on its options
         return if (suffix == null) OptionDisplay(label, false)
-        else OptionDisplay(label.dropLast(suffix.length).trim(), true)
+        // QuestionOption.display uses CoreFoundation .whitespaces, including U+200B but not newlines.
+        else OptionDisplay(label.dropLast(suffix.length).trim {
+            it == ' ' || it == '\t' || it == '\u00a0' || it == '\u1680' ||
+                it in '\u2000'..'\u200b' || it == '\u202f' || it == '\u205f' || it == '\u3000'
+        }, true)
     }
 
     /** Both entry policy and form validation must pass before a Resolution is produced. */
@@ -66,9 +91,24 @@ object AnswerBuilder {
         fun blocked() = AnswerResult(false, draft = draft)
         fun resolved(resolution: Resolution) = AnswerResult(true, resolution, draft)
         if (context.state != "pending" || context.sending) return blocked()
+        if (interaction.isSecretHandoff) {
+            when (action) {
+                AnswerAction.Allow, AnswerAction.Always -> {
+                    if (context.entry != AnswerEntry.Conversation || context.locked || draft != AnswerDraft() ||
+                        interaction.secretHandoff?.variables?.isNotEmpty() != true ||
+                        (action == AnswerAction.Always && interaction.alwaysLabel.isNullOrBlank())) return blocked()
+                    return resolved(Resolution(allow = true, always = if (action == AnswerAction.Always) true else null))
+                }
+                AnswerAction.Deny -> if (draft != AnswerDraft(message = draft.message) || draft.message.length > 4000) return blocked()
+                else -> return blocked()
+            }
+        }
         // A password card takes only its own two answers (#1581); no other card's answer carries a typed password.
         val passwordRulesMet = if (interaction.isSecretRun) secretRunAnswer(action, draft, context) else draft.password.isEmpty()
         if (!passwordRulesMet) return blocked()
+        // A fields card's values go only with its own Allow in the conversation; no other answer carries any.
+        if (draft.values.isNotEmpty() && !(interaction.hasFieldsForm && action == AnswerAction.Allow &&
+                context.entry == AnswerEntry.Conversation)) return blocked()
         if (action in setOf(AnswerAction.SubmitElicitation, AnswerAction.DeclineElicitation, AnswerAction.CancelElicitation)) {
             if (interaction.kind != "elicitation" || context.entry != AnswerEntry.Conversation || context.locked) return blocked()
             return when (action) {
@@ -86,6 +126,12 @@ object AnswerBuilder {
                 }
             }
         }
+        if (action == AnswerAction.OwnerReply) {
+            val phrase = interaction.ownerApprovalPhrase
+            if (context.entry != AnswerEntry.Conversation || context.locked || phrase == null ||
+                draft.feedback.isNotEmpty() || draft.message.isNotEmpty() || draft.password.isNotEmpty() || draft.values.isNotEmpty()) return blocked()
+            return resolved(Resolution(allow = true, ownerApprovalPhrase = phrase))
+        }
         if (action == AnswerAction.CancelQuestion) {
             if (interaction.kind != "question" || interaction.canCancel != true ||
                 context.entry != AnswerEntry.Conversation || context.locked) return blocked()
@@ -94,9 +140,9 @@ object AnswerBuilder {
         val policyId = when (action) {
             AnswerAction.PickOption, AnswerAction.Advance, AnswerAction.Submit ->
                 if (context.entry == AnswerEntry.Notification) ApprovalAction.ChooseOption else ApprovalAction.Answer
-            AnswerAction.ScreenOption, AnswerAction.TerminalText, AnswerAction.TerminalKeys ->
+            AnswerAction.ScreenOption, AnswerAction.ScreenSubmit, AnswerAction.TerminalText, AnswerAction.TerminalKeys ->
                 if (context.entry == AnswerEntry.Notification) ApprovalAction.ChooseOption else ApprovalAction.ScreenAnswer
-            AnswerAction.SubmitElicitation, AnswerAction.DeclineElicitation, AnswerAction.CancelElicitation -> return blocked()
+            AnswerAction.SubmitElicitation, AnswerAction.DeclineElicitation, AnswerAction.CancelElicitation, AnswerAction.OwnerReply -> return blocked()
             else -> ApprovalAction.entries.single { it.wire == action.wire }
         }
         val policy = ApprovalPolicy.actions(context.entry, interaction.kind, context.locked)
@@ -111,6 +157,7 @@ object AnswerBuilder {
                 AnswerRequirement.SingleQuestionSingleChoice -> interaction.questions?.let {
                     it.size == 1 && !it.single().multiSelect
                 } != true
+                AnswerRequirement.QuestionNotIrreversible -> interaction.reversible == false
                 AnswerRequirement.PlainDialogOption -> action != AnswerAction.ScreenOption ||
                     screenOptions(interaction).firstOrNull { it.key == draft.option }?.kind != ScreenOptionKind.Plain
                 AnswerRequirement.AlwaysOffered -> !interaction.offersAlways
@@ -120,10 +167,11 @@ object AnswerBuilder {
         // Reasons and feedback are mutually exclusive with approval across all entries.
         if (action in listOf(AnswerAction.ApproveAll, AnswerAction.ApproveEdits, AnswerAction.ApproveStepwise) &&
             (context.rejecting || draft.feedback.isNotEmpty())) return blocked()
-        // Allowing a card with fields needs their values: only a password card's Run carries one (checked above); other
-        // cards with fields have no form here (#4987).
-        if (action in listOf(AnswerAction.Allow, AnswerAction.Always) &&
-            (draft.message.isNotEmpty() || (interaction.needsFieldValues && draft.password.isEmpty()))) return blocked()
+        // Allowing a card with fields needs their values: a password card's Run carries its password (checked above), any
+        // other's Fill In & Allow every required field (#4641). Such a card is never allowed for good: no Always.
+        if (action in listOf(AnswerAction.Allow, AnswerAction.Always) && (draft.message.isNotEmpty() ||
+                (interaction.isSecretRun && draft.password.isEmpty()) ||
+                (interaction.hasFieldsForm && (action == AnswerAction.Always || !fieldsFilled(interaction, draft))))) return blocked()
         if (action == AnswerAction.Deny && draft.message.length > 4000) return blocked()
         if (context.entry == AnswerEntry.Notification && policyId == ApprovalAction.ChooseOption) {
             val validOption = when (action) {
@@ -137,26 +185,43 @@ object AnswerBuilder {
         }
 
         return when (action) {
-            AnswerAction.ApproveAll, AnswerAction.ApproveEdits, AnswerAction.ApproveStepwise -> resolved(Resolution(approve = true, mode = policy.mode))
+            AnswerAction.ApproveAll, AnswerAction.ApproveEdits, AnswerAction.ApproveStepwise -> resolved(Resolution(
+                approve = true, mode = interaction.recordedPlanThen ?: policy.mode))
             AnswerAction.Reject -> resolved(Resolution(approve = false, feedback =
                 if (context.entry == AnswerEntry.Notification) draft.feedback.trim() else draft.feedback))
             AnswerAction.Allow -> resolved(Resolution(allow = true,
-                values = draft.password.takeIf { it.isNotEmpty() }?.let { mapOf(SecretRunRequest.PASSWORD to it) }))
+                values = draft.password.takeIf { it.isNotEmpty() }?.let { mapOf(SecretRunRequest.PASSWORD to it) }
+                    ?: draft.values.filterValues(String::isNotEmpty).takeIf { it.isNotEmpty() }))
             AnswerAction.Always -> resolved(Resolution(allow = true, always = true))
             AnswerAction.Deny -> {
                 if (policy.input == "none" && draft.message.isNotEmpty()) return blocked()
                 resolved(Resolution(allow = false, message = draft.message.takeIf { it.isNotEmpty() }))
             }
-            AnswerAction.CancelQuestion -> blocked() // handled before the answer policy
+            AnswerAction.CancelQuestion, AnswerAction.OwnerReply -> blocked() // handled before the answer policy
             AnswerAction.Dismiss -> resolved(Resolution(dismiss = true))
             AnswerAction.PickOption, AnswerAction.Advance, AnswerAction.Submit -> question(interaction.questions.orEmpty(), action, draft)
             AnswerAction.ScreenOption -> {
                 val option = screenOptions(interaction).firstOrNull { it.key == draft.option } ?: return blocked()
+                // A checkbox dialog: the tap ticks or unticks, and ScreenSubmit sends the whole set.
+                // "Chat about this" still goes as it is, as dialogMulti presses it.
+                if (interaction.dialog?.multi == true && option.kind != ScreenOptionKind.Chat) {
+                    if (option.kind != ScreenOptionKind.Plain) return blocked()
+                    val selected = if (option.key in draft.selected) draft.selected - option.key else draft.selected + option.key
+                    return AnswerResult(true, draft = draft.copy(selected = selected))
+                }
                 val text = draft.text.trim().takeIf { option.kind == ScreenOptionKind.TypeSomething }
                 if (option.kind == ScreenOptionKind.TypeSomething && text.isNullOrEmpty()) return blocked()
                 resolved(if (interaction.dialog != null) Resolution(option = option.key, text = text)
                     else if (text != null) Resolution(preKeys = listOf(option.key), text = text, keys = listOf("enter"))
                     else Resolution(keys = listOf(option.key)))
+            }
+            AnswerAction.ScreenSubmit -> {
+                val dialog = interaction.dialog ?: return blocked()
+                if (!dialog.multi) return blocked()
+                val options = screenOptions(interaction).map { it.key }.filter { it in draft.selected }
+                val text = draft.text.trim().takeIf { it.isNotEmpty() }
+                if (options.isEmpty() && text == null) return blocked()
+                resolved(Resolution(options = options, text = text))
             }
             AnswerAction.TerminalText -> if (draft.text.isEmpty()) blocked()
                 else resolved(Resolution(text = draft.text, keys = listOf("enter")))
@@ -176,6 +241,13 @@ object AnswerBuilder {
             draft == AnswerDraft(password = draft.password)
         AnswerAction.Deny -> draft.message.isEmpty() && draft.password.isEmpty()
         else -> false
+    }
+
+    /** Every required field has something besides spaces, and nothing is filled in for a key the card does not declare. */
+    private fun fieldsFilled(interaction: Interaction, draft: AnswerDraft): Boolean {
+        val fields = interaction.fields.orEmpty()
+        return fields.all { it.optional || draft.values[it.key].orEmpty().isNotBlank() } &&
+            draft.values.keys.all { key -> fields.any { it.key == key } }
     }
 
     private fun question(questions: List<Question>, action: AnswerAction, draft: AnswerDraft): AnswerResult {

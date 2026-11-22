@@ -10,7 +10,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-// ContributionView is one contribution of an extension and its switch (docs/extensions/extensions.md "Contribution switches").
+// ContributionView is one contribution of an extension and its switch (docs/extensions/extensions.md "Turning contributions on and off").
 type ContributionView struct {
 	Point   string `json:"point"`
 	ID      string `json:"id"`

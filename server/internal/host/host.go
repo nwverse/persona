@@ -23,11 +23,20 @@ const (
 	HerdrCore = "herdr-core"
 	// Botmux is botmux, the Feishu topic ↔ AI CLI bridge: a pane is a botmux session, its id the session id.
 	Botmux = "botmux"
+	// Tern is Tern, Stencil's multiplexing terminal: a pane is a Tern block, its id the block's number (what Tern puts in
+	// the block's processes as TERN_PANE).
+	Tern = "tern"
+	// Rex is Rex, a multiplexing terminal: a pane is a terminal block, its id the block's full ID ("block:<uuid>", what
+	// Rex puts in the block's processes as REX_BLOCK).
+	Rex = "rex"
+	// Tmux is a tmux server the user opened: a pane is tmux's own id ("%11"), read and typed into through the tmux
+	// command. No space, slot or agent comes from it: a session running there is listed by claudebg.go (#2562).
+	Tmux = "tmux"
 )
 
 // Kinds are the host kinds a stored pane may be prefixed with; the list is fixed, not what a machine registers, so
 // a stored pane means the same everywhere.
-var Kinds = []string{Herdr, Orca, HerdrCore, Botmux}
+var Kinds = []string{Herdr, Orca, HerdrCore, Botmux, Tern, Rex, Tmux}
 
 // Host is what every terminal host provides. Pane ids in what it returns (Agent.PaneID, Created.Pane) are PaneRefs
 // of its own kind; the PaneRefs it is given are always of its kind.
@@ -118,6 +127,15 @@ type Launcher interface {
 	NameAgent(ctx context.Context, pane PaneRef, name string) error
 }
 
+// EnvLauncher is a Launcher that can start the new pane's shell with extra environment ("KEY=VALUE"): herdr's
+// workspace.create / tab.create env, the Herdr App's terminal.run env. The node opens an Agent's terminal this way so
+// the shell's own startup files can tell it from one the user opened (PERSONA_AGENT, #10111) and skip the questions
+// that would stop the start (#10365).
+type EnvLauncher interface {
+	CreateSpaceEnv(ctx context.Context, cwd, label string, env []string) (*Created, error)
+	CreateSlotEnv(ctx context.Context, space, cwd, label string, env []string) (*Created, error)
+}
+
 // Organizer renames and closes.
 type Organizer interface {
 	RenameSpace(ctx context.Context, space, name string) error
@@ -202,7 +220,7 @@ type FocusState struct {
 }
 
 // Focuser moves and reports the focus a host shares among its clients (herdr: pane.focus, and the focus events with
-// the snapshot's focused_* ids). The web's full herdr view follows it and moves it (docs/integrations/terminal.md "Focus sync").
+// the snapshot's focused_* ids). The web's full herdr view follows it and moves it (docs/integrations/terminal.md "Focus synchronization").
 type Focuser interface {
 	// Focused is what the host shows now; Pane is empty when the host does not say.
 	Focused(ctx context.Context) (FocusState, error)
@@ -244,6 +262,13 @@ type MouseEvent struct {
 // Mouser is a Control that takes mouse events beyond Click (herdr: terminal.mouse; docs/integrations/terminal.md "Mouse").
 type Mouser interface {
 	Mouse(MouseEvent) error
+}
+
+// Releaser is a Control that can end at a size: the pane resized to cols × rows, then given back (herdr: CloseAt). herdr
+// lays a released pane out at its own client's size only while one is attached, so the node gives back the size the
+// pane had before it took it (docs/integrations/terminal.md section 11).
+type Releaser interface {
+	CloseAt(cols, rows int)
 }
 
 // Redrawer is a Control that can be asked for a whole frame of the screen as it is, the programs seeing no change
@@ -299,11 +324,14 @@ type ReadOpts struct {
 	ANSI bool
 }
 
-// AgentSession is what an agent integration in the host reported about the pane's session (Kind "id": Value is the
-// session id; Kind "path": Value is the session's file, as herdr's pi integration reports it).
+// AgentSession is what an agent integration in the host reported about the pane's session. Source identifies the
+// reporting integration and Agent names the agent. Kind "id" carries the session ID in Value. Kind "path" carries
+// the session's file, as herdr's pi integration reports it.
 type AgentSession struct {
-	Kind  string
-	Value string
+	Source string
+	Agent  string
+	Kind   string
+	Value  string
 }
 
 // Agent is one pane as the node sees it: where it is, and the agent running in it with its state and session when the
@@ -321,6 +349,10 @@ type Agent struct {
 	// PaneID is the pane as a PaneRef string (String): a herdr pane id as is ("@<session>:<id>" for a named herdr
 	// session's, herdr.QualifyID).
 	PaneID string
+	// ParentPaneID is the pane that started this one as a PaneRef string (String), "" when the host says it belongs to
+	// none. A host that knows its panes' parent (herdr-core's terminal.parent) reports it: the node draws the session
+	// under its parent's while both are listed (linkHerdrChildren).
+	ParentPaneID string
 	// TabID, WorkspaceID: the host's slot and space ids.
 	TabID       string
 	WorkspaceID string
@@ -428,6 +460,8 @@ type Created struct {
 	SpaceID string // set by CreateSpace
 	SlotID  string
 	Pane    PaneRef
+	// Shell is the shell actually opened by the host, when reported by its launch API.
+	Shell string
 	// Path and Branch: the checkout CreateWorktree made, when the host chose them rather than taking the asked ones
 	// (Orca puts it under its own workspace directory); empty when they are the asked ones.
 	Path, Branch string

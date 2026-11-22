@@ -3,13 +3,15 @@ package assistant
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,6 +23,8 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 
+	approvalops "github.com/nwverse/persona/server/internal/approval"
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/db"
@@ -104,9 +108,8 @@ func MainWith(ctx context.Context, build update.Build, stdin io.Reader, h MainHo
 		if token == "" {
 			return errors.New("no bus token: set PERSONA_ASSISTANT_TOKEN (personad hub assistant-token prints one)")
 		}
-		hub = strings.TrimSpace(identity.Getenv("PERSONA_ASSISTANT_HUB"))
-		if hub == "" {
-			hub = localHubURL(cfg.Listen)
+		if hub, fingerprint, err = externalHub(deploy, cfg.Listen); err != nil {
+			return err
 		}
 	}
 	home := identity.HomeDir()
@@ -182,7 +185,7 @@ func moveFiles(home string, logf func(string, ...any)) {
 }
 
 // moveConfig takes the manager's sections out of the hub.json in hubDir into its manager.json, once
-// (managerconf.Move), says what it did, and reads the configuration the extensions, connectors and bots run with
+// (managerconf.MoveExcept), says what it did, and reads the configuration the extensions, connectors and bots run with
 // (extmgr.LoadConfig), which run hands on as it is. A failed move, or a configuration that does not read, is an error
 // the manager does not start with: it would run without its sections, the user's gate rules (lark_gate,
 // connector_gate) among them, and the node would fall back to its own, which let every read through. Whatever starts
@@ -335,15 +338,16 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		stop()
 		<-keyDone
 	}()
-	// The user's computers are the manager's: it connects them itself (internal/devices, docs/server/machines.md "Who connects the computers").
+	// The user's computers are the manager's: it connects them itself (internal/devices, docs/server/machines.md "Who connects to computers").
 	var bh *BusHub
 	var svc *Service
 	var ext *extmgr.Manager
 	// ConfigFile: its usage section (the account-pool gateways and their keys) is the devices', read and written there.
 	devs := devices.New(devices.Options{Store: database, ConfigFile: o.ConfigFile, TailcatKey: o.TailcatKey, ManagerID: o.ID,
-		Logf: log.New(stderr, "devices: ", log.LstdFlags).Printf,
+		Logf:         log.New(stderr, "devices: ", log.LstdFlags).Printf,
+		ProjectState: func(st devicewire.States) devicewire.States { return svc.logicalProjectStates(st) },
 		Answer: func(ctx context.Context, machine, method string, params json.RawMessage) (any, bool, error) {
-			if !waitsOnPerson(method) { // a tool call, a write the gate forwarded: idle (idle.go) waits for it
+			if !waitsOnPerson(method) && method != "mcp.tools" { // discovery watches reconnect after restart; actual tool calls hold idle
 				svc.nodeAnswering.Add(1)
 				defer svc.nodeAnswering.Add(-1)
 			}
@@ -355,13 +359,18 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 			}
 			return svc.NodeRequest(ctx, machine, method, params) // the interactions, the MCP tools (fleet_events.go)
 		},
-		Event:    func(machine, event string, params json.RawMessage) bool { return svc.NodeEvent(machine, event, params) },
-		Detached: func(machine string) { svc.NodeDetached(machine) },
-		Location: func() *time.Location { return svc.location(context.Background()) },
+		Event:                  func(machine, event string, params json.RawMessage) bool { return svc.NodeEvent(machine, event, params) },
+		Detached:               func(machine string) { svc.NodeDetached(machine) },
+		HiddenAgentDirsChanged: func(machine string) { svc.HiddenAgentDirsChanged(machine) },
+		Location:               func() *time.Location { return svc.location(context.Background()) },
+		UpdateHandoffGrace:     func() time.Duration { return nodeUpdateHandoffGraceOf(svc.hello(context.Background())) },
+		PromptLanguage:         func() string { return answerLanguage(svc.hello(context.Background()).Locale) },
 		// The extensions' part of a node's connection and its events (internal/extmgr).
 		Own:         func(ctx context.Context, machine string) map[string]json.RawMessage { return ext.Own(ctx, machine) },
 		OnConnected: func(machine string) { ext.NodeConnected(machine) },
 		OnEvent:     func(machine, event string, params json.RawMessage) bool { return ext.NodeEvent(machine, event, params) },
+		// The messages held for a machine's Agents changed (devices held.go): its rows again, nothing else of a list.
+		HeldChanged: func(machine string) { svc.publishSessions(machine) },
 		// A node's new connection gets the launchers added in Persona, with their keys (models_launchers_push.go).
 		// Not one waiting to be confirmed: it gets them when it is (trustChanged, machine_trust.go).
 		NodeCalls: func(ctx context.Context, machine string) []devicewire.NodeCall {
@@ -371,7 +380,16 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 			return bus.DialAt(ctx, hub, token, httpClient, devicewire.RelayPath, query)
 		},
 		Connected: func() bool { return bh.Client().Peer() != nil },
-		Hub:       lazyHost{c: func() *bus.Client { return bh.Client() }}})
+		// The official DeepSeek launchers' prepaid balances (#11825): the manager holds their sealed keys.
+		LauncherBalances: func(ctx context.Context) ([]proto.UsageAccount, bool) { return svc.LauncherBalances(ctx) },
+		// Usage sources of type extension (#12402): the extensions are made below; ext is read when a source is due.
+		UsageExtension: func(ctx context.Context, id, launcher string) (json.RawMessage, error) {
+			if ext == nil {
+				return nil, errors.New("extensions are not running")
+			}
+			return ext.UsageQuery(ctx, id, launcher)
+		},
+		Hub: lazyHost{c: func() *bus.Client { return bh.Client() }}})
 	// The extensions, connectors and bots (internal/extmgr): the data directory here, its own sections in manager.json
 	// (as moveConfig read and checked them) and its own secret.key.
 	ext = extmgr.New(extmgr.Options{Dir: home, ConfigFile: o.ConfigFile, Config: o.ExtConfig, SecretKey: o.SecretKey,
@@ -381,10 +399,22 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		Assistant: func(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
 			return bh.Answer(ctx, method, params)
 		},
-		AssistantEvent:   func(event string, params json.RawMessage) { bh.TellLocal(event, params) },
-		AssistantTools:   func() []proto.Tool { return svc.toolsNow() },
-		AssistantMachine: func() string { return svc.mainMachine(context.Background()) },
-		Ask:              func(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) { return svc.AskCard(ctx, ix) },
+		AssistantEvent: func(event string, params json.RawMessage) { bh.TellLocal(event, params) },
+		// A meeting's audio socket (assistantwire.SocketRoutes): svc is made below, before the extensions run.
+		AssistantSocket: func(w http.ResponseWriter, r *http.Request) { svc.ServeSocket(w, r) },
+		TranscriptionChanged: func() {
+			if svc != nil {
+				svc.transcriptionReadinessChanged()
+			}
+		},
+		AssistantTools: func() []proto.Tool { return svc.toolsNow() },
+		// The model providers' keys that are references, for their provider extensions' details (launcher_secrets.go).
+		LauncherReferences: func(ctx context.Context) []extmgr.LauncherReference { return svc.launcherReferences(ctx) },
+		AssistantMachine:   func() string { return svc.mainMachine(context.Background()) },
+		Ask:                func(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) { return svc.AskCard(ctx, ix) },
+		AskPrepared: func(ctx context.Context, ix proto.Interaction, op approvalops.Operation) (approvalops.Outcome, error) {
+			return svc.AskPreparedCard(ctx, ix, op)
+		},
 		DialRelay: func(ctx context.Context, query string) (*websocket.Conn, error) {
 			return bus.DialAt(ctx, hub, token, httpClient, devicewire.RelayPath, query)
 		},
@@ -403,10 +433,14 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		Logf: logf, Devices: devs, Extensions: ext, StopWhenRevoked: o.StopWhenRevoked, StopWhenRejected: o.TokenFirst})
 	// The knowledge base in its directory, kept as its manager.json's kb section says (over the hub's hello). The model
 	// providers' keys are sealed with its own secret.key.
-	svc = New(Options{Hub: bh, Store: func() Store { return database }, Logf: logf, Devices: devs,
+	assistantStore := repositorystore.New(database)
+	svc = New(Options{Hub: bh, Store: func() Store { return assistantStore }, Logf: logf, Devices: devs,
 		KB: &KBOptions{Dir: o.KBDir, KeyDir: o.HandlesDir}, SecretKey: o.SecretKey,
-		Trust: devs, ID: o.ID})
+		Trust: devs, AgentDirs: devs, ID: o.ID, Build: version, RepositoryConfig: o.ConfigFile,
+		RemoteImageCache: filepath.Join(home, "cache", "remote-images")})
 	svc.SetExtensions(ext) // the connectors', Cua's and ego's tools, in this process (fleet_tools.go)
+	// When the north star's recording began (north_star.go).
+	go svc.northStarStarted(ctx)
 	if o.Ready != nil {
 		o.Ready(func(ctx context.Context) (bool, string) { return managerIdle(ctx, bh, svc, ext) })
 	}
@@ -488,16 +522,31 @@ func readHubConfig() (hubConfig, error) {
 	return cfg, nil
 }
 
-// localHubURL is the hub on this machine, from its listen address.
-func localHubURL(listen string) string {
-	host, port, err := net.SplitHostPort(listen)
-	if err != nil {
-		return "http://127.0.0.1:18660"
+// externalHub is the hub an assistant the hub didn't bind connects to, and its TLS pin. PERSONA_ASSISTANT_HUB is the
+// hub (the one on this machine, from listen, without it). PERSONA_ASSISTANT_FINGERPRINT pins an https hub's public key,
+// the fp `personad hub pair` prints (docs/operations/network.md): what an assistant elsewhere (assistant.external)
+// needs to reach a hub with its own self-signed certificate, as a manager's manager.json has it (#1255). Without it
+// the system's CAs are trusted. The hub's own child dials its local address and takes no pin.
+func externalHub(deploy, listen string) (hub, fingerprint string, err error) {
+	hub = strings.TrimSpace(identity.Getenv("PERSONA_ASSISTANT_HUB"))
+	if hub == "" {
+		hub = managerconf.LocalHubURL(listen)
 	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
+	if deploy == "child" {
+		return hub, "", nil
 	}
-	return "http://" + net.JoinHostPort(host, port)
+	fingerprint = strings.TrimSpace(identity.Getenv("PERSONA_ASSISTANT_FINGERPRINT"))
+	if fingerprint == "" {
+		return hub, "", nil
+	}
+	if sum, err := base64.RawURLEncoding.DecodeString(fingerprint); err != nil || len(sum) != sha256.Size {
+		return "", "", errors.New("PERSONA_ASSISTANT_FINGERPRINT is not a hub fingerprint: 43 characters of base64url, " +
+			"the fp personad hub pair prints")
+	}
+	if u, err := url.Parse(hub); err != nil || u.Scheme != "https" {
+		return "", "", fmt.Errorf("PERSONA_ASSISTANT_FINGERPRINT pins an https hub, and PERSONA_ASSISTANT_HUB is %q", hub)
+	}
+	return hub, fingerprint, nil
 }
 
 // errorTee is the manager process's log writer: lines go to stderr, and its error lines become the manager's error

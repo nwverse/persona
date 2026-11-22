@@ -1,11 +1,11 @@
 package hub
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // #2429: the machine page's "What this computer can do" card shows what `personad node doctor` finds on a computer (docs/server/machines.md
@@ -14,22 +14,24 @@ import (
 // before the node hears of it. GET only reads: the hub never sends fix to node.doctor, so a query string cannot ask
 // for a write. The old node that does not know the method answers "unknown method", which the web turns into "Update node".
 
-// nodeDoctor relays method (no parameters) to the machine's node and returns the report as it is.
+// nodeDoctor relays method to the machine's node and returns the report as it is. Only an explicit Accept-Language
+// opts into localized prose; a header-less request keeps the legacy empty params and zh-Hans report. In particular,
+// the user language learned from another device must not change an old reader's response.
 func (h *Hub) nodeDoctor(method string, timeout time.Duration) http.HandlerFunc {
 	return h.withMachine(func(w http.ResponseWriter, r *http.Request, m *Machine) {
 		if principalOf(r.Context()).Role != roleFull {
 			writeErr(w, http.StatusForbidden, errors.New("a computer's self-check needs a full device"))
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), timeout)
-		defer cancel()
-		var out json.RawMessage
-		if err := m.call(ctx, method, map[string]any{}, &out); err != nil {
-			callErr(w, err)
+		params := map[string]any{}
+		if lang := i18n.FromRequest(r); lang != "" {
+			params["locale"] = string(lang)
+		}
+		out, ok := h.callNode(w, r, m, method, params, timeout, "", nil)
+		if !ok {
 			return
 		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_, _ = w.Write(out)
+		writeRawJSON(w, out)
 	})
 }
 

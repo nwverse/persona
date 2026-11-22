@@ -19,7 +19,8 @@ nonisolated enum FleetActions {
     static func run(_ action: Action, _ interactionID: String) async {
         do {
             let (named, id) = FleetMerge.split(interactionID)
-            try await HubStore.client(group: named).resolve(id, resolution(action))
+            let r = resolution(action)
+            try await AppModel.shared.outside(HubStore.client(group: named)) { try await $0.resolve(id, r) }
             await LiveActivityController.shared.resolvedLocally(interactionID)
         } catch {
             if (error as? APIError)?.status == 410 { // already settled elsewhere: just drop it from the activity

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The local proxy route (docs/operations/network.md "Connecting to hub through a local SOCKS5 proxy"): what is kept with
 /// the pairing and what it defaults to, and the forward itself, through a SOCKS5 proxy to a hub started here on the
@@ -272,6 +273,58 @@ struct LocalProxyRouteTests {
             #expect(HubTransport.via(hub.config.url)?.host() == "127.0.0.1" && LocalProxies.shared.routed.contains(id))
             #expect(LocalProxies.shared.watchesDirect(id) == !always, "always: \(always)")
         }
+    }
+
+    /// A button pressed while the app is in the background (#3142): the sockets and their tunnels are closed, so the
+    /// request picks the group's way itself, reaches the hub only the proxy reaches, and the proxy closes again
+    /// afterwards, kept as the way to start first next time.
+    @MainActor @Test func aButtonInTheBackgroundGoesThroughTheProxy() async throws {
+        let (fake, proxy) = try await hubAndProxy()
+        defer { fake.stop(); proxy.stop() }
+        var hub = PairedHub(id: "rt-button", config: ServerConfig(url: URL(string: "http://rt-button.invalid:18660")!, token: "t"))
+        hub.localProxy = LocalProxyRoute(port: proxy.port, targetHost: "127.0.0.1", targetPort: fake.port)
+        defer { LocalProxies.shared.close(hub.id) }
+        // The group's socket as it is in the background: built for this registry (not the keychain's) and suspended.
+        let m = model(hub)
+        m.buildLinks()
+        m.link(hub.group)?.live.suspended = true
+        let body = try await m.outside(APIClient(config: hub.config, group: hub.group)) { api in
+            let (data, _) = try await APIClient.uncachedSession.data(from: api.url("/api/v1/health"))
+            return String(decoding: data, as: UTF8.self)
+        }
+        #expect(body.contains(#""hub_id":"hub-test""#))
+        #expect(HubTransport.via(hub.config.url) == nil && !LocalProxies.shared.routed.contains(hub.id))
+        #expect(LocalProxies.shared.recent.contains(hub.id))
+    }
+
+    /// A call to Persona goes on in the background through the proxy (#9290): a button pressed outside the app for the
+    /// same group leaves the proxy open when it is done, and so does going to the background; the call's end closes it.
+    @MainActor @Test func aButtonInTheBackgroundLeavesALiveCallsProxyOpen() async throws {
+        let (fake, proxy) = try await hubAndProxy()
+        defer { fake.stop(); proxy.stop() }
+        var hub = PairedHub(id: "rt-call", config: ServerConfig(url: URL(string: "http://rt-call.invalid:18660")!, token: "t"))
+        hub.localProxy = LocalProxyRoute(port: proxy.port, targetHost: "127.0.0.1", targetPort: fake.port)
+        defer { LocalProxies.shared.close(hub.id) }
+        let m = model(hub)
+        m.buildLinks()
+        // The call's voice, on the group's main conversation.
+        let rig = VoiceRig()
+        let calls = VoiceCalls()
+        m.voiceCallsForTests = calls
+        let voice = rig.call(SessionKey(group: hub.group, machineID: "m1", sessionID: "s1"), surface: .call)
+        await calls.begin(voice)
+        #expect(await m.tunnelRoute(hub.group) == hub.config && LocalProxies.shared.routed.contains(hub.id))
+        m.link(hub.group)?.live.suspended = true
+        m.closeTunnelsForBackground()
+        #expect(LocalProxies.shared.routed.contains(hub.id), "the background leaves the call's proxy")
+        _ = try await m.outside(APIClient(config: hub.config, group: hub.group)) { api in
+            let (data, _) = try await APIClient.uncachedSession.data(from: api.url("/api/v1/health"))
+            return String(decoding: data, as: UTF8.self)
+        }
+        #expect(LocalProxies.shared.routed.contains(hub.id), "the button done leaves the call's proxy")
+        voice.end(.user)
+        m.callEnded(group: hub.group)
+        #expect(!LocalProxies.shared.routed.contains(hub.id), "the call over, in the background its proxy closes")
     }
 
     /// The hub answers directly: straight to it, and the proxy started meanwhile (it was the last way) closes.

@@ -85,12 +85,48 @@ describe("an agent's live text", () => {
     expect(tr.streaming).toBe("");
   });
 
+  it("keeps the final delta visible across the empty end marker until its transcript item lands", async () => {
+    await delta("Closing words.");
+    await delta("");
+    expect(tr.streaming).toBe("Closing words.");
+    expect(tr.streamEnded).toBe(true);
+    items([said(6, "Closing words.")], 5);
+    expect(tr.streaming).toBe("");
+    expect(tr.items.at(-1)?.text).toBe("Closing words.");
+  });
+
+  it("drops an ended preview when a new exchange opens", async () => {
+    await delta("Unpersisted.");
+    await delta("");
+    items([{ ...prompt, id: "u6", seq: 6 }], 5);
+    expect(tr.streaming).toBe("");
+  });
+
   it("does not show again what the reply's item already holds", async () => {
     items([said(6, "Mountain 1: peaks.\nMountain 2: snow.")], 5);
     await delta("Mountain 1: peaks.\n"); // late: the transcript was first
     expect(tr.streaming).toBe("");
     await delta("Mountain 1: peaks.\nMountain 2: snow.");
     expect(tr.streaming).toBe("");
+  });
+
+  it("retires landed live words before a new user message or later tool result arrives", async () => {
+    await delta("The previous reply.");
+    items([said(6, "The previous reply.")], 5);
+    expect(tr.streaming).toBe("");
+    items([{ ...prompt, id: "u7#0", seq: 7, text: "Check the risks." }, ...call(8)], 6);
+    expect(tr.streaming).toBe("");
+    await delta("The new reply.");
+    expect(tr.streaming).toBe("The new reply.");
+  });
+
+  it("retires a replay that was already landed before its delta arrived", async () => {
+    items([said(6, "The previous reply.")], 5);
+    await delta("The previous reply.");
+    items([{ ...prompt, id: "u7#0", seq: 7, text: "Check the risks." }], 6);
+    expect(tr.streaming).toBe("");
+    await delta("The previous reply.");
+    expect(tr.streaming).toBe("The previous reply.");
   });
 
   it("shows what goes past the words it has, and the next message", async () => {

@@ -185,7 +185,7 @@ func answerOutbound(t *testing.T, s *Service, self, tool, says string, allow boo
 	}()
 }
 
-// What leaves the health space leaves with the user knowing (docs/assistant/health.md "Sharing out", #3194): notify_user says there is
+// What leaves the health space leaves with the user knowing (docs/assistant/health.md "Outbound", #3194): notify_user says there is
 // news, not the news; a hand-off to a coding agent is confirmed on the phone each time; the schedule tools see only
 // the space's own tasks. The assistant's own conversations are as before.
 func TestHealthSpaceOutbound(t *testing.T) {
@@ -193,6 +193,8 @@ func TestHealthSpaceOutbound(t *testing.T) {
 	f := healthHub()
 	f.sessions["server"] = append(f.sessions["server"], proto.Session{SessionID: "code-0000-0000", Cwd: "/home/me/src/app", Agent: "claude",
 		Status: proto.StatusIdle, Title: "app"})
+	f.sessions["server"] = append(f.sessions["server"], proto.Session{SessionID: "health-agent", Cwd: "/home/me/.persona/health/work", Agent: "claude",
+		Status: proto.StatusIdle, Title: "health Agent"})
 	s := newTestService(t, f)
 	setSettings(t, s, func(v *Settings) { v.MachineID, v.Main = "server", "main-0000-0000" })
 
@@ -209,12 +211,12 @@ func TestHealthSpaceOutbound(t *testing.T) {
 	t.Run("phone_notify", testHealthPhoneNotify)
 
 	answerOutbound(t, s, "sleep-000-0000", "agent_send", "睡眠数据", false)
-	out, isErr := spaceTool(t, s, "sleep-000-0000", "agent_send", `{"session_id":"code-0000-0000","text":"把我的睡眠数据画成图"}`)
+	out, isErr := spaceTool(t, s, "sleep-000-0000", "agent_send", `{"session_id":"health-agent","text":"把我的睡眠数据画成图"}`)
 	if isErr || !strings.Contains(out, "declined") || len(f.agentSent) != 0 {
 		t.Fatalf("declined agent_send: %s, sent %v", out, f.agentSent)
 	}
 	answerOutbound(t, s, "sleep-000-0000", "agent_send", "睡眠数据", true)
-	if out, isErr := spaceTool(t, s, "sleep-000-0000", "agent_send", `{"session_id":"code-0000-0000","text":"把我的睡眠数据画成图"}`); isErr || len(f.agentSent) != 1 {
+	if out, isErr := spaceTool(t, s, "sleep-000-0000", "agent_send", `{"session_id":"health-agent","text":"把我的睡眠数据画成图"}`); isErr || len(f.agentSent) != 1 {
 		t.Fatalf("allowed agent_send: %s, sent %v", out, f.agentSent)
 	}
 	if out, isErr := spaceTool(t, s, "work-0000-0000", "agent_send", `{"session_id":"code-0000-0000","text":"跑一下测试"}`); isErr || len(f.agentSent) != 2 {
@@ -322,7 +324,7 @@ func testHealthPhoneNotify(t *testing.T) {
 }
 
 // The health space's CLAUDE.md says which chart goes with which numbers (#3140): line for the last days' steps and
-// sleep, bar for each meal's calories, stacked_bar for how the day's calories are split, stat for one number, a table
+// sleep, bar for each meal's calories, ring for how the day's calories are split (#3069, not stacked_bar), stat for one number, a table
 // for the details, the conclusion in the text. Each example it gives is a card every app draws.
 func TestHealthClaudeMDTeachesCharts(t *testing.T) {
 	md := newTestService(t, healthHub()).healthClaudeMD(context.Background(), "server")
@@ -338,10 +340,13 @@ func TestHealthClaudeMDTeachesCharts(t *testing.T) {
 		}
 		kinds[c.Type] = true
 	}
-	for _, k := range []string{"line", "bar", "stacked_bar", "stat"} {
+	for _, k := range []string{"line", "bar", "ring", "stat"} {
 		if !kinds[k] {
 			t.Errorf("no %s example", k)
 		}
+	}
+	if kinds["stacked_bar"] {
+		t.Error("a stacked_bar example: one day's split is a ring")
 	}
 	for _, want := range []string{"近 7 天", "每餐", "全天", "单个", "表格", "正文", "飞书"} {
 		if !strings.Contains(md, want) {

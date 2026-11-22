@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -53,10 +54,16 @@ type Preview struct {
 	previous              *Manifest // immutable consent baseline captured when the preview was staged
 	source                Source
 	marketSpec, marketKey string
-	verifiedMarketKey     string // verified entry and package, separate from the mutable market's pin
-	fingerprint           string // all staged package bytes/modes as approved at preview
-	root                  string // the staged package
+	verifiedMarketKey     string       // verified entry and package, separate from the mutable market's pin
+	fingerprint           string       // all staged package bytes/modes as approved at preview
+	root                  string       // the staged package
+	l10n                  Translations // its translations, for the name and description shown (In)
 	staging               string
+	// config is the upgraded extension's saved settings at preview after any declared fixed-slot migration: the
+	// addresses its "config:" lines name. migrationBase and migrating make installation reject configuration drift.
+	config        json.RawMessage
+	migrationBase json.RawMessage
+	migrating     bool
 }
 
 // MarketTrust is the market address and trusted public key pinned at preview time; it adds no protocol field.
@@ -188,7 +195,7 @@ func MorePermissions(cur *Extension, m *Manifest) bool {
 		len(NewTools(was, m)) > 0 || len(newSecrets(was, m)) > 0 ||
 		slices.ContainsFunc(m.Topics(), func(t string) bool { return !slices.Contains(was.Topics(), t) }) ||
 		slices.ContainsFunc(m.Surfaces(), func(t string) bool { return !slices.Contains(was.Surfaces(), t) }) ||
-		len(newChannels(was, m)) > 0 || len(newSendsAsUser(was, m)) > 0 ||
+		len(newChannels(was, m)) > 0 || len(newSendsAsUser(was, m)) > 0 || len(newRepositoryHosts(was, m)) > 0 ||
 		slices.ContainsFunc(m.ContributesTo(), func(t string) bool { return !slices.Contains(was.ContributesTo(), t) })
 }
 
@@ -282,6 +289,11 @@ func (r *Registry) previewIdentity(ctx context.Context, src Source, upgrade, ren
 	}
 	pv.Manifest, pv.Digest, pv.Permissions = m, Digest(m), Explain(m)
 	pv.Warnings = m.Lint()
+	if pv.root != "" {
+		var warnings []string
+		pv.l10n, warnings = ReadTranslations(pv.root)
+		pv.Warnings = append(pv.Warnings, warnings...)
+	}
 	pv.Depends = r.DependenciesContext(ctx, m)
 	fail := func(err error) (*Preview, error) {
 		if pv.staging != "" {
@@ -329,6 +341,8 @@ func (r *Registry) previewIdentity(ctx context.Context, src Source, upgrade, ren
 		return fail(fmt.Errorf("这个包是 %s，不是 %s", m.ID, upgrade))
 	case upgrade != "" && (cur == nil || cur.Record.Source != SourceInstalled):
 		return fail(i18n.Err("extension-status.upgrade_not_installed", i18n.Args{"id": upgrade}))
+	case upgrade != "" && cur.Record.AttachedPackage():
+		return fail(i18n.Err("extension-status.attached_detach_first", i18n.Args{"id": cur.Record.ID}))
 	case upgrade != "" && !NewerVersion(m.Version, cur.Record.Version):
 		return fail(fmt.Errorf("%s 不比已装的 %s 新", m.Version, cur.Record.Version))
 	}
@@ -350,7 +364,21 @@ func (r *Registry) previewIdentity(ctx context.Context, src Source, upgrade, ren
 		pv.Upgrade, pv.From = true, cur.Record.Version
 		pv.MorePermissions = MorePermissions(cur, m)
 		pv.previous = cur.Full
-		pv.AddedPermissions = Added(cur.Full, m)
+		pv.migrationBase = compactConfig(cur.Record.Config)
+		sealed, err := r.store.ExtensionSecrets(ctx, cur.Record.StorageKey())
+		if err != nil {
+			return fail(err)
+		}
+		pv.config, pv.migrating, err = migrateFixedSlots(cur.Full, m, pv.migrationBase, sealed)
+		if err != nil {
+			return fail(err)
+		}
+		nextSchema, _ := ParseSchema(m.Configuration)
+		if err := checkEntrySecretNamespace(m, nextSchema, pv.config); err != nil {
+			return fail(err)
+		}
+		pv.Permissions = ExplainWith(i18n.Default, m, pv.config)
+		pv.AddedPermissions = AddedWith(i18n.Default, cur.Full, m, pv.config)
 	}
 	r.previews[pv.ID] = pv
 	return pv, nil // the check is done when the hub has resolved its bundle too (it says so)
@@ -464,6 +492,11 @@ func (r *Registry) conflictsCandidates(m *Manifest, candidates []*Manifest) erro
 			if who, ok := r.reserved[point][id]; ok {
 				errs = append(errs, fmt.Errorf("%s 里的 %q 已经是 %s 的", point, id, who))
 			}
+			// UI routes, contribution switches and page state already name the owning extension.
+			// Only IDs inside that manifest must be unique (checked by Manifest.Validate).
+			if point == "ui" {
+				continue
+			}
 			for otherID, other := range owners {
 				if otherID != m.ID && slices.Contains(other.Items(point), id) {
 					errs = append(errs, fmt.Errorf("%s 里的 %q 已经是扩展 %s 的", point, id, otherID))
@@ -471,7 +504,33 @@ func (r *Registry) conflictsCandidates(m *Manifest, candidates []*Manifest) erro
 			}
 		}
 	}
+	errs = append(errs, claimClashes(m, owners)...)
 	return errors.Join(errs...)
+}
+
+// claimClashes are what m claims that only one installed extension may, and another of owners (installed manifests by
+// extension id) already does: a secret reference scheme (a reference names its provider by it) and a repository host
+// (an address on it goes to its provider). An extension that is off, has a problem or has the contribution switched off
+// keeps its claims. Preview, rollback and dev install ask through conflictsCandidates; validatePlan asks again when the
+// plan commits, so a claim made between the preview and the commit, or by another package of the plan, is refused too.
+func claimClashes(m *Manifest, owners map[string]*Manifest) []error {
+	ids := slices.Sorted(maps.Keys(owners))
+	var errs []error
+	for _, scheme := range m.Schemes() {
+		for _, otherID := range ids {
+			if other := owners[otherID]; otherID != m.ID && other != nil && slices.Contains(other.Schemes(), scheme) {
+				errs = append(errs, fmt.Errorf("secret_providers: the scheme %q is already extension %s's", scheme, otherID))
+			}
+		}
+	}
+	for _, host := range m.RepositoryHosts() {
+		for _, otherID := range ids {
+			if other := owners[otherID]; otherID != m.ID && other != nil && slices.Contains(other.RepositoryHosts(), host) {
+				errs = append(errs, fmt.Errorf("repository_providers: the host %q is already extension %s's", host, otherID))
+			}
+		}
+	}
+	return errs
 }
 
 // The manifest actually read from the package overrides the planned one with the same ID; the market's description

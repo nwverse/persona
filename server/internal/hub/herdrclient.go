@@ -33,7 +33,7 @@ import (
 // herdr_focus {machine_id, workspace_id, tab_id, pane_id, session_id?, source, mine}: herdr's focus moved. source:
 // "client" (a full view was just typed into), "persona" (a herdr_focus asked for it), "other" (the computer's own
 // window, anything else); mine: the view this goes to is the one that did it. A view follows only a change that is
-// its own (docs/integrations/terminal.md "Focus sync").
+// its own (docs/integrations/terminal.md "Focus synchronization").
 //
 // Only a full device may open one: the client can do anything on that computer's herdr (run in any pane, close them).
 // An answer-only device is refused, and the extension tokens cannot reach the WebSocket at all.

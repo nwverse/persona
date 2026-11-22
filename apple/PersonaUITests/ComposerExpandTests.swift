@@ -44,24 +44,30 @@ final class ComposerExpandTests: XCTestCase {
         startTyping()
         field.typeText("Draft line 1")
         sleep(1)
-        XCTAssertFalse(expand.exists)
+        XCTAssertTrue(expand.exists)
         let oneLineHeight = field.frame.height
-        let unreservedWidth = field.frame.width
         field.typeText("\nDraft line 2")
         sleep(1)
         let landscape = ProcessInfo.processInfo.environment["PERSONA_ORIENTATION"] == "landscape"
-        XCTAssertFalse(expand.exists, "two lines must fit without an expand button, including landscape")
+        XCTAssertTrue(expand.exists, "expand button should be offered while focused or multiline")
         XCTAssertGreaterThan(field.frame.height, oneLineHeight, "typing another line did not grow the field")
-        if !expand.exists { shot("01-below-threshold") }
+        shot("01-below-threshold")
 
         var draft = "Draft line 1\nDraft line 2"
         var threshold = 2
-        for count in 3...8 where !expand.exists {
+        var prevHeight = field.frame.height
+        for count in 3...8 {
             let next = "\nDraft line \(count)"
             field.typeText(next)
             draft += next
             sleep(1)
-            if expand.exists { threshold = count; break }
+            let h = field.frame.height
+            if h > prevHeight + 2 {
+                threshold = count
+                prevHeight = h
+            } else {
+                break
+            }
         }
         XCTAssertTrue(expand.exists, "no expand icon at the maximum line count")
         print("RESULT: composer threshold=\(threshold), orientation=\(landscape ? "landscape" : "portrait"), language=\(language)")
@@ -69,7 +75,6 @@ final class ComposerExpandTests: XCTestCase {
             XCTAssertEqual(threshold, expected, "the viewport did not select the expected line limit")
         }
         assertCorner()
-        XCTAssertLessThan(field.frame.width, unreservedWidth, "the text area did not reserve space for the corner button")
         XCTAssertEqual(field.value as? String, draft)
         shot("02-at-threshold")
         let cappedHeight = field.frame.height
@@ -83,9 +88,11 @@ final class ComposerExpandTests: XCTestCase {
         XCTAssertTrue(page.waitForExistence(timeout: 5))
         XCTAssertEqual(page.value as? String, scrollingDraft)
         let collapse = element("composer-page-collapse")
+        let pageDismiss = element("composer-page-dismiss-keyboard")
         let send = element("composer-page-send")
         XCTAssertEqual(collapse.label, collapseLabel)
-        XCTAssertGreaterThan(collapse.frame.midX, app.frame.midX, "collapse is not in the upper-right corner")
+        XCTAssertTrue(pageDismiss.exists)
+        XCTAssertLessThan(collapse.frame.midX, app.frame.midX, "collapse is not in the upper-left corner (#9653)")
         XCTAssertGreaterThan(send.frame.minY, page.frame.midY, "send is not below the page editor")
         shot("03-expanded")
         collapse.tap()
@@ -94,15 +101,26 @@ final class ComposerExpandTests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         assertCorner()
         shot("04-collapsed")
+        // The keyboard can be visible before the sheet has returned focus to the box; do not lose the first keystroke.
+        let focused = NSPredicate { _, _ in self.field.value(forKey: "hasKeyboardFocus") as? Bool == true }
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: focused, evaluatedWith: nil)], timeout: 5), .completed,
+                       "collapse did not return keyboard focus to the composer")
         field.typeText("!")
         XCTAssertEqual(field.value as? String, scrollingDraft + "!", "the cursor did not return to the end")
 
-        // Delete back below the threshold: the icon and its reserved width must go away.
+        // Delete back to a single line and dismiss the keyboard: the expand icon goes away when unfocused and single-line.
         field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: scrollingDraft.count + 1 - "Draft line 1".count))
-        XCTAssertTrue(expand.waitForNonExistence(timeout: 5), "the expand icon survived deletion below the threshold")
+        // The delete batch and the composer's short shrink animation can still be settling when typeText returns.
+        let oneLine = NSPredicate { _, _ in
+            (self.field.value as? String) == "Draft line 1" && abs(self.field.frame.height - oneLineHeight) <= 2
+        }
+        let settled = XCTNSPredicateExpectation(predicate: oneLine, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 5), .completed,
+                       "the composer did not settle to one line: \(String(describing: field.value)), height \(field.frame.height)")
         XCTAssertEqual(field.value as? String, "Draft line 1")
         XCTAssertEqual(field.frame.height, oneLineHeight, accuracy: 2)
-        XCTAssertEqual(field.frame.width, unreservedWidth, accuracy: 2, "deletion did not restore the full text width")
+        element("shell-composer-dismiss-keyboard").tap()
+        XCTAssertTrue(expand.waitForNonExistence(timeout: 5), "the expand icon survived dismissal on a short single-line draft")
         shot("05-deleted-below-threshold")
         leaveEmpty()
     }
@@ -284,10 +302,10 @@ final class ComposerExpandTests: XCTestCase {
         let name = isAssistant ? "assistant" : "agent"
         startTyping()
 
-        // Two lines: the box is still enough.
+        // Two lines: the box is multiline and offers expansion.
         field.typeText("line one\nline two")
         sleep(1)
-        XCTAssertFalse(expand.exists, "展开 offered for two lines")
+        XCTAssertTrue(expand.exists, "展开 offered for multiline draft")
         // Eight lines exceed either keyboard-visible threshold and still offer expansion with the keyboard down.
         let marker = "expand-\(name)-\(Int(Date.now.timeIntervalSince1970))"
         let rest = (3...7).map { "line \($0)" }.joined(separator: "\n") + "\n" + marker

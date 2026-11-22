@@ -9,6 +9,9 @@ import (
 	"testing"
 )
 
+// Move is MoveExcept with nothing dropped.
+func Move(hubDir, file string) (Report, error) { return MoveExcept(hubDir, file, nil) }
+
 // oldHubJSON is a hub.json of the layout before manager.json: the hub's own keys and every manager section.
 const oldHubJSON = `{
   "listen": ":18660",
@@ -16,7 +19,9 @@ const oldHubJSON = `{
   "database_url": "postgres://u:p@[fd00::20]:5432/persona",
   "machines": [{"id": "server", "kind": "local"}],
   "assistant": {"owner": "Example", "notes": "- Code is in ~/code", "machine": "server", "launcher": "claude",
-    "external": false, "persona_view": true},
+    "external": false, "persona_view": true, "memory_dreaming": true, "complete_agentless_todos": true,
+    "supervision_batch_minutes": 45, "task_execution_wait_seconds": 45,
+    "task_execution_legacy_fallback": false, "node_update_handoff_grace_seconds": 30},
   "agents": {"triage": {"max_retries": 2}},
   "kb": {"enabled": false, "text_days": 30},
   "ai": {"base_url": "https://gateway.example.com", "model": "m"},
@@ -34,6 +39,7 @@ const oldHubJSON = `{
   "extensions": [{"id": "example"}],
   "plugins": [{"id": "older"}],
   "trusted_extension_markets": ["https://market.example.com"],
+  "extension_market": {"proxy": "socks5://[fd00::20]:1080"},
   "extension_runtime": {"path": "/runtime/deno", "version": "2.9.6", "sha256": "example-digest"},
   "ui_page_sessions": {"principal": 4, "extension": 32, "runtime": 128},
   "usage": {"sources": [{"id": "relay", "key": "secret-key"}]},
@@ -98,8 +104,8 @@ func TestMoveTakesTheManagerSectionsOnce(t *testing.T) {
 			t.Errorf("manager.json took the hub's %s", k)
 		}
 	}
-	// assistant is split: the manager's keys moved, the hub's (external, persona_view) did not.
-	if compact(t, mine["assistant"]) != `{"launcher":"claude","machine":"server","notes":"- Code is in ~/code","owner":"Example"}` {
+	// assistant is split: the manager's keys moved, the rest (external, the retired persona_view) did not.
+	if compact(t, mine["assistant"]) != `{"complete_agentless_todos":true,"launcher":"claude","machine":"server","memory_dreaming":true,"node_update_handoff_grace_seconds":30,"notes":"- Code is in ~/code","owner":"Example","supervision_batch_minutes":45,"task_execution_legacy_fallback":false,"task_execution_wait_seconds":45}` {
 		t.Errorf("manager.json's assistant %s", mine["assistant"])
 	}
 	if b, _ := os.ReadFile(hubPath); string(b) != oldHubJSON {

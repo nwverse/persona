@@ -33,6 +33,11 @@ interface ModelConfiguration {
                 kotlinx.coroutines.withContext(owner) { source.save(purpose, draft) }
             override suspend fun providerModels(provider: String, refresh: Boolean, machine: String?) =
                 kotlinx.coroutines.withContext(owner) { source.providerModels(provider, refresh, machine) }
+            override suspend fun profiles() = kotlinx.coroutines.withContext(owner) { source.profiles() }
+            override suspend fun applyProfile(id: String) = kotlinx.coroutines.withContext(owner) { source.applyProfile(id) }
+            override suspend fun rollbackProfile() = kotlinx.coroutines.withContext(owner) { source.rollbackProfile() }
+            override suspend fun saveProfile(id: String, input: ModelProfileSaveInput) =
+                kotlinx.coroutines.withContext(owner) { source.saveProfile(id, input) }
         }
     }
 
@@ -52,6 +57,18 @@ interface ModelConfiguration {
      */
     // No default body: a wrapper that forgot to pass it on answered "no list" without a word (the DI one did).
     suspend fun providerModels(provider: String, refresh: Boolean = false, machine: String? = null): ProviderModels?
+
+    /** `GET /api/v1/model-profiles`; null when an older hub does not expose model profiles (404). */
+    suspend fun profiles(): ModelProfilesView? = null
+
+    /** `POST /api/v1/model-profiles/{id}/apply`: switches to profile [id] atomically. */
+    suspend fun applyProfile(id: String): ModelProfilesView = throw ModelConfigurationUnsupported()
+
+    /** `POST /api/v1/model-profiles/rollback`: rolls back the most recent profile switch. */
+    suspend fun rollbackProfile(): ModelProfilesView = throw ModelConfigurationUnsupported()
+
+    /** `PUT /api/v1/model-profiles/{id}` with revision; 409 returns [ModelProfileSave.Conflict]. */
+    suspend fun saveProfile(id: String, input: ModelProfileSaveInput): ModelProfileSave = throw ModelConfigurationUnsupported()
 }
 
 /** [LauncherModels] for model configuration, and the machine whose CLI answered. */
@@ -81,6 +98,7 @@ data class ModelBinding(
     @SerialName("provider") val provider: String? = null,
     @SerialName("model") val model: String? = null,
     @SerialName("effort") val effort: String? = null,
+    @SerialName("permission_mode") val permissionMode: String? = null,
 )
 
 @KeepGeneratedSerializer
@@ -90,12 +108,17 @@ data class ModelProvider(
     @SerialName("name") val name: String = "",
     /** launcher | api | extension. */
     @SerialName("kind") val kind: String = "launcher",
-    /** messages | responses, for API providers. */
+    /** messages | responses | chat, for API providers. */
     @SerialName("api") val api: String? = null,
     @SerialName("model") val model: String? = null,
     @SerialName("machines") val machines: List<String> = emptyList(),
     @SerialName("hidden") val hidden: Boolean = false,
     @SerialName("has_key") val hasKey: Boolean = false,
+    @SerialName("source") val source: String? = null,
+    @SerialName("agent") val agent: String? = null,
+    @SerialName("chat_effort") val chatEffort: Boolean = false,
+    @SerialName("effort") val effort: String? = null,
+    @SerialName("permission_modes") val permissionModes: List<String>? = null,
 ) {
     val displayName: String get() = name.ifBlank { id }
 }
@@ -106,6 +129,8 @@ data class ModelPurpose(
     @SerialName("id") val id: String,
     @SerialName("name") val name: String = "",
     @SerialName("group") val group: String = "",
+    /** What the purpose is for, one sentence in the request's language (#5086); a task's, an extension's and an older hub's have none. */
+    @SerialName("description") val description: String? = null,
     /** launcher | api | extension. */
     @SerialName("kind") val kind: String = "launcher",
     @SerialName("parent") val parent: String? = null,
@@ -120,8 +145,13 @@ data class ModelPurpose(
     @SerialName("fields") val fields: List<String>? = null,
     /** The providers it can use; without the list, the providers of the same kind. */
     @SerialName("provider_ids") val providerIds: List<String>? = null,
+    /** Candidate chains for an extension's own purpose. Older hubs omit this field. */
+    val candidates: ModelCandidates? = null,
 ) {
     val displayName: String get() = name.ifBlank { id }
+
+    /** [description] when it says something. */
+    val about: String? get() = description?.trim()?.takeIf(String::isNotEmpty)
 
     fun supports(field: String): Boolean = field in (fields ?: listOf("provider", "model"))
 
@@ -160,14 +190,28 @@ data class ModelPurposeDetail(
  */
 data class ModelConfigurationDraft(
     val provider: String = "", val model: String = "", val effort: String = "", val clearsRuntime: Boolean = false,
+    val candidates: CandidateDraft? = null, val permissionMode: String = "",
 ) {
-    fun choosingProvider(id: String): ModelConfigurationDraft = if (id == provider) this else ModelConfigurationDraft(provider = id)
+    fun choosingProvider(id: String): ModelConfigurationDraft =
+        if (id == provider) this else copy(provider = id, model = "", effort = "", permissionMode = "", clearsRuntime = false)
 
     /** The PATCH body: the revision, and only the fields [purpose] takes; blank ones go as null (restore inheritance). */
     fun patch(purpose: ModelPurpose): JsonObject = buildJsonObject {
         put("revision", purpose.revision)
-        for ((key, value) in listOf("provider" to provider, "model" to model, "effort" to effort)) {
-            if (purpose.supports(key)) put(key, value.trim().takeIf { it.isNotEmpty() }?.let(::JsonPrimitive) ?: JsonNull)
+        val change = candidates?.change(purpose)
+        if (change != null) put("candidates", change)
+        val binding = purpose.override
+        val bindingChanged = provider.trim() != binding.provider.orEmpty() ||
+            model.trim() != binding.model.orEmpty() ||
+            effort.trim() != binding.effort.orEmpty() ||
+            permissionMode.trim() != binding.permissionMode.orEmpty()
+        if (change == null || clearsRuntime || bindingChanged) {
+            for ((key, value) in listOf("provider" to provider, "model" to model, "effort" to effort)) {
+                if (purpose.supports(key)) put(key, value.trim().takeIf { it.isNotEmpty() }?.let(::JsonPrimitive) ?: JsonNull)
+            }
+            if (purpose.kind == "launcher" && purpose.supports("permission_mode")) {
+                put("permission_mode", permissionMode.trim().takeIf { it.isNotEmpty() }?.let(::JsonPrimitive) ?: JsonNull)
+            }
         }
         if (clearsRuntime && purpose.supports("runtime")) put("runtime", JsonNull)
     }
@@ -178,6 +222,8 @@ data class ModelConfigurationDraft(
 
         fun from(purpose: ModelPurpose) = ModelConfigurationDraft(
             purpose.override.provider.orEmpty(), purpose.override.model.orEmpty(), purpose.override.effort.orEmpty(),
+            candidates = purpose.extensionCandidates()?.draft(),
+            permissionMode = purpose.override.permissionMode.orEmpty(),
         )
     }
 }

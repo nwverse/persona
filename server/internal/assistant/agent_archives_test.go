@@ -1,9 +1,12 @@
 package assistant
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -45,6 +48,31 @@ func archiveRows(t *testing.T, s *Service) []proto.Session {
 		t.Fatal(err)
 	}
 	return body.Sessions
+}
+
+func TestArchiveSnapshotKeepsStopCauseWithoutLiveControls(t *testing.T) {
+	for _, cause := range []proto.StopCause{
+		proto.StopTaskCompleted, proto.StopIdle, proto.StopRestart, proto.StopUser, proto.StopUnknown, "future-cause",
+	} {
+		t.Run(string(cause), func(t *testing.T) {
+			c := stoppedBoxAgent("stop0001")
+			c.SourceKind = "codex_history"
+			c.Capabilities = &proto.SessionCapabilities{
+				Read: true, Send: true, Terminal: true, Attach: true, Interrupt: true, Approve: true,
+				StopCause: cause, Modes: proto.CanModes(true), Model: proto.CanModes(true),
+			}
+			snapshot := archiveSnapshot(c)
+			want := &proto.SessionCapabilities{Read: true, Terminal: true, StopCause: cause}
+			if !reflect.DeepEqual(snapshot.Capabilities, want) || !stoppedAgent(snapshot) {
+				t.Fatalf("lost stopped provenance or retained live controls: %+v", snapshot.Capabilities)
+			}
+		})
+	}
+	c := stoppedBoxAgent("stop0001")
+	c.Capabilities = nil
+	if got := archiveSnapshot(c).Capabilities; !reflect.DeepEqual(got, &proto.SessionCapabilities{Read: true}) {
+		t.Fatalf("snapshot inferred capabilities: %+v", got)
+	}
 }
 
 func TestAgentSessionArchivesPersistAndRestore(t *testing.T) {
@@ -240,5 +268,104 @@ func TestAgentSessionArchiveServiceHTTP(t *testing.T) {
 		if row.Archived {
 			t.Fatalf("HTTP restore missing from inventory: %+v", row)
 		}
+	}
+}
+
+// decoratedSession decorates one listed row on its own, and finds an archived row its node no longer lists; either
+// way it is the row the whole decorated list has (#2472).
+func TestDecoratedSessionIsTheListsRow(t *testing.T) {
+	ft, rows := archiveTestService(t)
+	if w := archiveRequest(ft.s, "mac", "codex-session", roleFull, true); w.Code != 200 {
+		t.Fatalf("archive: %d %s", w.Code, w.Body)
+	}
+	done := proto.Session{MachineID: "mac", SessionID: "done-session", Agent: "claude", Status: proto.StatusDone, PaneID: "p1",
+		Title: "Fix the login", LastText: "Fixed. Shall I push it to beta?", UpdatedAt: time.Now()}
+	ft.s.markSeen(context.Background(), "mac", "claude-session")
+	for _, listed := range [][]proto.Session{{rows[0], rows[1], done}, {rows[0], done}} { // then codex's row is gone
+		ft.d.setSessions("mac", slices.Clone(listed))
+		for _, want := range ft.s.decorated("mac") {
+			got, ok := ft.s.decoratedSession("mac", want.SessionID)
+			if !ok || !reflect.DeepEqual(got, want) {
+				t.Fatalf("%s (listed %d): decoratedSession\n%+v\nthe list's row\n%+v", want.SessionID, len(listed), got, want)
+			}
+		}
+	}
+	if got, ok := ft.s.decoratedSession("mac", "codex-session"); !ok || !got.Archived {
+		t.Fatalf("the archived row the node no longer lists: %+v (found %v)", got, ok)
+	}
+}
+
+// A list read while an agent still waited on the user does not undo the archive written after it (#4372): a reader
+// (a list publish, the archived list, another archive) that read its list before the agent was closed and archived,
+// and got the archive's lock only after, must not take that old busy row for new activity. Activity read after the
+// archive still restores it.
+func TestAgentSessionArchiveIgnoresAListReadBeforeIt(t *testing.T) {
+	ft, row := closeTestService(t, func(s *proto.Session) {
+		s.Status, s.State = proto.StatusBlocked, proto.StateNeedsYou
+	})
+	s, ctx := ft.s, context.Background()
+	mark := s.archiveMark()
+	stale := s.decoratedUnarchived("mac") // the reader reads the list: the agent still waits on the user
+	closed := row
+	closed.Status, closed.State, closed.PaneID = proto.StatusOffline, proto.StateOffline, ""
+	ft.d.setSessions("mac", []proto.Session{closed}) // its node lists it closed
+	if err := s.noteAgentArchive(ctx, closed, true); err != nil {
+		t.Fatal(err)
+	}
+	// Only now does the reader get the archive's lock.
+	list, changed, err := s.archivedSessions(ctx, "mac", stale, mark)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed || len(list) != 1 || !list[0].Archived {
+		t.Fatalf("the old list showed it restored: changed=%v %+v", changed, list)
+	}
+	if !archivedIDs(t, s)[row.SessionID] {
+		t.Fatal("a list read before the archive restored it")
+	}
+	ft.d.setSessions("mac", []proto.Session{row}) // asking the user again, read after the archive
+	if archivedIDs(t, s)[row.SessionID] {
+		t.Fatal("activity after the archive did not restore it")
+	}
+}
+
+// A conversation archived under an id it went by before (a Paseo agent's transcript, or an earlier fork of it, which
+// it was listed under before #6709) is not repeated in Archived or the inventory while a row names that id among its
+// aliases (#8131): the row listed under its own id now is the conversation. The record stays: once no row names the
+// id, it is listed again. A record under another id, and one on another machine, are not touched.
+func TestArchiveUnderAnAliasIsTheListedRow(t *testing.T) {
+	const transcript, fork = "5d510000-0000-4000-8000-0000000000e1", "5d510000-0000-4000-8000-0000000000e0"
+	ft, rows := archiveTestService(t)
+	s, ctx := ft.s, context.Background()
+	old := time.Now().Add(-48 * time.Hour)
+	for _, sid := range []string{transcript, fork} { // archived while the node listed the conversation under these ids
+		if err := s.noteAgentArchive(ctx, proto.Session{MachineID: "mac", SessionID: sid, Agent: "claude", Title: "Fix the build",
+			Status: proto.StatusOffline, State: proto.StateOffline, UpdatedAt: old}, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.noteAgentArchive(ctx, rows[1], true); err != nil { // an Agent archived under its own id
+		t.Fatal(err)
+	}
+	if got := archivedIDs(t, s); !got[transcript] || !got[fork] || !got[rows[1].SessionID] {
+		t.Fatalf("archived %v", got)
+	}
+
+	live := proto.Session{MachineID: "mac", SessionID: "paseo-e1", Agent: "claude", Title: "Fix the build", Status: proto.StatusIdle,
+		State: proto.StateIdle, UpdatedAt: time.Now(), SourceKind: proto.SourceRuntime}
+	live.SetAliases([]string{transcript, fork})
+	ft.d.setSessions("mac", []proto.Session{rows[0], rows[1], live})
+	if got := archivedIDs(t, s); got[transcript] || got[fork] || !got[rows[1].SessionID] || len(got) != 1 {
+		t.Fatalf("Archived while a row names the conversation's other ids: %v", got)
+	}
+	for _, row := range s.decorated("mac") {
+		if row.SessionID == transcript || row.SessionID == fork {
+			t.Fatalf("the inventory repeats the conversation: %+v", row)
+		}
+	}
+
+	ft.d.setSessions("mac", []proto.Session{rows[0], rows[1]}) // no row names them any more
+	if got := archivedIDs(t, s); !got[transcript] || !got[fork] {
+		t.Fatalf("the records went with the row that named them: %v", got)
 	}
 }

@@ -4,7 +4,7 @@
 // jsdom's click() sends no pointerdown: `press` sends both, in order.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
@@ -13,6 +13,7 @@ vi.hoisted(() => {
   css.escape ??= (s: string) => s.replace(/[^\w-]/g, (c) => `\\${c}`);
 });
 import { t } from "../i18n";
+import { loadPages } from "../lib/lazy-page";
 import { connect, refresh, reset } from "../lib/store";
 import type { PanesResponse } from "../lib/terminals";
 import type { Session } from "../lib/types";
@@ -43,7 +44,7 @@ const panes: PanesResponse = {
   }],
 };
 const answers: Record<string, unknown> = {
-  "/api/v1/assistant": { machine_id: "hub", online: true, main: "main", conversations: [main, pinned] },
+  "/api/v1/assistant": { machine_id: "hub", online: true, main: "main", leaders: ["pinned"], conversations: [main, pinned] },
   "/api/v1/sessions": { sessions: [main, pinned, agent, lead, split] },
   "/api/v1/machines": { machines: [{ id: "hub", name: "Hub", online: true }, { id: "mac", name: "MacBook", online: true }] },
   "/api/v1/machines/mac/panes": panes,
@@ -58,7 +59,7 @@ const flush = async () => {
 const menus = () => document.querySelectorAll('[role="menu"]');
 const link = (text: string) => [...host.querySelectorAll("a")].find((a) => a.textContent?.includes(text));
 // the ⋯ next to a row's link (not inside it: a button cannot sit in a link)
-const more = (row: Element | undefined) => row?.parentElement?.querySelector<HTMLButtonElement>(':scope > button[aria-haspopup="menu"]') ?? null;
+const more = (row: Element | undefined) => row?.closest(".group\\/row")?.querySelector<HTMLButtonElement>("button[aria-haspopup=\"menu\"]") ?? null;
 // a press as a browser sends it: pointerdown, then (a separate task) the click
 const press = async (el: Element) => {
   act(() => void el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerType: "mouse" })));
@@ -109,29 +110,29 @@ describe("a sidebar row's ⋯", () => {
     expect(button).not.toBeNull();
 
     await press(button!);
-    expect(menus()).toHaveLength(1);
+    await vi.waitFor(() => expect(menus()).toHaveLength(1));
 
     await press(more(row())!);
-    expect(menus()).toHaveLength(0);
+    await vi.waitFor(() => expect(menus()).toHaveLength(0));
 
     // and opens it again on a third
     await press(more(row())!);
-    expect(menus()).toHaveLength(1);
+    await vi.waitFor(() => expect(menus()).toHaveLength(1));
   });
 
   it("moves the menu to another row's ⋯, and a press elsewhere still closes it", async () => {
     await renderSidebar();
     await press(more(personaRow())!);
-    expect(menus()).toHaveLength(1);
+    await vi.waitFor(() => expect(menus()).toHaveLength(1));
     expect(menus()[0].textContent).toContain(t("conversation-menu.end"));
 
     await press(more(link("Release notes"))!);
-    expect(menus()).toHaveLength(1);
-    expect(menus()[0].textContent).toContain(t("conversation-menu.unpin"));
+    await vi.waitFor(() => expect(menus()).toHaveLength(1));
+    expect(menus()[0].textContent).toContain(t("conversation-menu.end_leader"));
 
     act(() => void document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 })));
     await flush();
-    expect(menus()).toHaveLength(0);
+    await vi.waitFor(() => expect(menus()).toHaveLength(0));
   });
 
   it("on a right-clicked row's ⋯ moves the menu there instead of closing it", async () => {
@@ -139,17 +140,19 @@ describe("a sidebar row's ⋯", () => {
     const row = link("Release notes")!;
     act(() => void row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 })));
     await flush();
-    expect(menus()).toHaveLength(1);
+    await vi.waitFor(() => expect(menus()).toHaveLength(1));
 
     await press(more(row)!);
-    expect(menus()).toHaveLength(1);
+    await vi.waitFor(() => expect(menus()).toHaveLength(1));
     await press(more(row)!);
-    expect(menus()).toHaveLength(0);
+    await vi.waitFor(() => expect(menus()).toHaveLength(0));
   });
 });
 
 // The paged Agents list (a hub with sessions_list and nothing pinned or grouped): its rows' ⋯ toggles the same way.
 describe("a paged Agents row's ⋯", () => {
+  // its sections are a chunk of their own (PagedSessionList)
+  beforeAll(() => loadPages(), 60_000);
   class FakeSocket {
     static last: FakeSocket | null = null;
     readyState = 0;
@@ -161,7 +164,8 @@ describe("a paged Agents row's ⋯", () => {
   }
 
   it("opens the row's menu and closes it on a second press", async () => {
-    localStorage.removeItem("persona.agentGrouping");
+    // by state: a grouping the paged list draws (#6662), its Working section open on the row
+    localStorage.setItem("persona.agentGrouping", "state");
     localStorage.removeItem("sidebar.terminals");
     vi.stubGlobal("WebSocket", FakeSocket);
     // the list draws only the rows in view of its scroller: give it one with a size (jsdom has no layout)
@@ -179,19 +183,20 @@ describe("a paged Agents row's ⋯", () => {
       const socket = FakeSocket.last!;
       socket.readyState = 1;
       socket.onopen?.();
-      socket.onmessage?.({ data: JSON.stringify({ type: "hello", features: ["sessions_list", "sessions_lookup"] }) });
+      socket.onmessage?.({ data: JSON.stringify({ type: "hello", features: ["sessions_list", "sessions_lookup", "sessions_agents_only"] }) });
     });
     await flush();
     act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
     await flush();
-    // the paged list: no grouping control
-    expect(host.querySelector(`[role="radiogroup"][aria-label="${t("sidebar.grouping_header")}"]`)).toBeNull();
+    // the paged list, under the complete list's grouping bar
+    expect(host.querySelector("[data-paged-sessions]")).not.toBeNull();
+    expect(host.querySelector(`[role="radiogroup"][aria-label="${t("sidebar.grouping_header")}"]`)).not.toBeNull();
     const button = more(link("Build docs"));
     expect(button).not.toBeNull();
 
     await press(button!);
-    expect(menus()).toHaveLength(1);
+    await vi.waitFor(() => expect(menus()).toHaveLength(1));
     await press(more(link("Build docs"))!);
-    expect(menus()).toHaveLength(0);
+    await vi.waitFor(() => expect(menus()).toHaveLength(0));
   });
 });

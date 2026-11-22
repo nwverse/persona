@@ -1,8 +1,9 @@
 #!/bin/bash
 # Publish personad for anyone to install (docs/operations/release.md "Publishing personad"): build the four binaries with the web client
 # inside (no skills in them: those live in each machine's ~/.persona/skills), and the connector persona-link for the
-# same four (the node service, docs/operations/link.md), check them for private values, write the release manifest latest.json
-# (every file's sha256, docs/operations/hub-update.md "Publishing"), then deploy the site/ worker with dl/ and install.sh added, at the
+# same four, plus Windows amd64 and arm64 (the node service, docs/operations/link.md), check them for private values,
+# write the release manifest latest.json
+# (every file's sha256, docs/operations/hub-update.md "Public publishing"), then deploy the site/ worker with dl/ and install.sh added, at the
 # config's publish.site_url. Every hub of the release channel updates itself to it. The worker also runs the push
 # relay (/relay/*): it is deployed with it.
 #
@@ -19,30 +20,38 @@
 # (#2541). A release goes to one of two slots, <slot>/<name>, the one not served now; the deploy then switches dl/SLOT
 # (a static file, deployed with latest.json) to it. The slot left keeps the release before until the next one, so a
 # download that started before the deploy finishes. Only the newest version is served there. Every release also goes
-# to release/<version>/ (its node builds and its manifest as manifest.json), kept: a hub's manager fetches the node build
-# of the hub's own version from there (dl/<version>/…, docs/operations/node-update.md), a Docker image's version too (X.Y.Z, when
-# the release is the tag vX.Y.Z). release.sh runs this after uploading to TestFlight.
+# to release/<version>/ (its node and connector builds and its manifest as manifest.json), kept: a hub's manager
+# fetches those builds of the hub's own version from there (dl/<version>/…, docs/operations/node-update.md), a Docker
+# image's version too (X.Y.Z, when the release is the tag vX.Y.Z). release.sh runs this after uploading to TestFlight.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 _env=$(python3 scripts/persona_config.py env) || exit $?
 eval "$_env"; unset _env
 [ -n "$PERSONA_PUBLISH_URL" ] || { echo "publish.site_url is not set in the config (docs/operations/config.md)" >&2; exit 2; }
 WRANGLER="${PERSONA_WRANGLER:-}"
+SITE_LANGUAGE_CHECK="${PERSONA_SITE_LANGUAGE_CHECK:-$PWD/scripts/release/site_language_check.sh}"
+SITE_LANGUAGE_FAILED=""
 DL_BUCKET="${PERSONA_DL_BUCKET:-persona-dl}" # the r2_buckets binding DL in site/wrangler.jsonc
 # wr <dir> <args…>: wrangler in <dir> (a copy of site/, for its account).
 wr() { local dir="$1"; shift; (cd "$dir" && if [ -n "$WRANGLER" ]; then "$WRANGLER" "$@"; else npx wrangler "$@"; fi); }
-# check_served <SHA256SUMS> <slot>: what the site serves now is that release: dl/SLOT, and every download at its size.
+# check_served <SHA256SUMS> <slot>: what the site serves now is that release: dl/SLOT, and every download's sha256.
 check_served() {
-  local sums="$1" slot="$2" dir name size got
+  local sums="$1" slot="$2" dir name expected size got actual
   dir="$(dirname "$sums")"
   [ "$(curl -fsSL "$PERSONA_PUBLISH_URL/dl/SLOT" 2>/dev/null)" = "$slot" ] || { echo "served dl/SLOT is not $slot" >&2; return 1; }
-  while read -r _ name; do
+  while read -r expected name; do
     size=""
     [ -f "$dir/$name" ] && size="$(wc -c <"$dir/$name" | tr -d ' ')"
     got="$(curl -fsSI "$PERSONA_PUBLISH_URL/dl/$name" | tr -d '\r' | awk 'tolower($1)=="content-length:"{print $2}')"
     [ -n "$got" ] || { echo "served dl/$name is missing" >&2; return 1; }
     [ -z "$size" ] || [ "$got" = "$size" ] || { echo "served dl/$name is $got bytes, not $size" >&2; return 1; }
+    actual="$(served_sha256 "$PERSONA_PUBLISH_URL/dl/$name" "$got")" || { echo "served dl/$name could not be downloaded" >&2; return 1; }
+    [ "$actual" = "$expected" ] || { echo "served dl/$name has sha256 $actual, not $expected" >&2; return 1; }
   done < "$sums"
+}
+# served_sha256 <url> <size>: hash the served bytes themselves, bounded by the HEAD's size and five minutes.
+served_sha256() {
+  curl -fsSL --max-time 300 --max-filesize "$2" "$1" | shasum -a 256 | awk '{print $1}'
 }
 # settled <what> <command…>: the command passes now, or within about two minutes. Right after a deploy the site can
 # still serve the release before for a while (the entry and the edge cache; three releases on 2026-11-06, #5698).
@@ -56,34 +65,66 @@ settled() {
   "$@" || { echo "$what still differs about two minutes after the deploy" >&2; return 1; }
 }
 served_is() { [ "$(curl -fsSL "$PERSONA_PUBLISH_URL/dl/$1" 2>/dev/null)" = "$(cat "$2")" ]; }
-# node_archives <dir>: the node builds among the downloads (personad-<os>-<arch>.gz, persona-node-<os>-<arch>.gz),
-# the only ones a manager fetches from dl/<version>/.
+# node_archives <dir>: the node builds among the downloads (personad-<os>-<arch>.gz, persona-node-<os>-<arch>.gz), the
+# connector's (persona-link-<os>-<arch>.gz, which a switch of an ssh computer to Persona Link sends it) and the iPhone
+# helper's (persona-iphone-bridge-<os>-<arch>.gz), the only ones fetched from dl/<version>/.
 node_archives() {
   local gz
   for gz in "$1"/*.gz; do
-    [[ "${gz##*/}" =~ ^(personad|persona-node)-(linux|darwin)-(amd64|arm64)\.gz$ ]] && printf '%s\n' "$gz"
+    [[ "${gz##*/}" =~ ^(personad|persona-node|persona-link|persona-iphone-bridge)-(linux|darwin|windows)-(amd64|arm64)(\.exe)?\.gz$ ]] && printf '%s\n' "$gz"
   done
   return 0
 }
-# check_versioned <dir> <version>: dl/<version>/ serves that release: its manifest, and every node build at its size.
+# check_versioned <dir> <version>: dl/<version>/ serves that release: its exact manifest, and every node build's sha256.
 check_versioned() {
-  local dir="$1" v="$2" gz size got
+  local dir="$1" v="$2" gz size got expected actual
   curl -fsSL "$PERSONA_PUBLISH_URL/dl/$v/manifest.json" | cmp -s - "$dir/latest.json" || { echo "served dl/$v/manifest.json differs" >&2; return 1; }
   while IFS= read -r gz; do
     size="$(wc -c <"$gz" | tr -d ' ')"
     got="$(curl -fsSI "$PERSONA_PUBLISH_URL/dl/$v/${gz##*/}" | tr -d '\r' | awk 'tolower($1)=="content-length:"{print $2}')"
     [ "$got" = "$size" ] || { echo "served dl/$v/${gz##*/} is ${got:-missing}, not $size bytes" >&2; return 1; }
+    expected="$(shasum -a 256 "$gz" | awk '{print $1}')"
+    actual="$(served_sha256 "$PERSONA_PUBLISH_URL/dl/$v/${gz##*/}" "$size")" || { echo "served dl/$v/${gz##*/} could not be downloaded" >&2; return 1; }
+    [ "$actual" = "$expected" ] || { echo "served dl/$v/${gz##*/} has sha256 $actual, not $expected" >&2; return 1; }
   done < <(node_archives "$dir")
 }
 same_as_served() { curl -fsSL "$PERSONA_PUBLISH_URL/$1" | cmp -s - "$2"; }
-# deploy_site <dir>: deploy that copy of site/ (with dl/ and install.sh in it), the log in <dir>/../deploy.log.
+# relay_ok: the push relay the site runs (/relay/*, docs/operations/push-relay.md) answers its health check with ok and
+# apns both true. Its settings are secrets of the Worker, kept under the Worker's name: deployed under a new name, the
+# site answers 503 "push relay not configured" and no phone gets a push (#1263, docs/operations/site.md).
+relay_ok() {
+  curl -fsS --max-time 10 "$PERSONA_PUBLISH_URL/relay/v1/health" 2>/dev/null | python3 -c '
+import json, sys
+health = json.load(sys.stdin)
+sys.exit(0 if isinstance(health, dict) and health.get("ok") is True and health.get("apns") is True else 1)' 2>/dev/null
+}
+# deploy_site <dir>: deploy that copy of site/ (with dl/ and install.sh in it), the log in <dir>/../deploy.log. A push
+# relay that worked before the deploy must still work after it; a site that runs none gets only a note. A language-check
+# failure is loud but deferred: every normal post-deploy release check still runs before site_language_result fails.
 deploy_site() {
-  local dir="$1" log="$1/../deploy.log"
+  local dir="$1" log="$1/../deploy.log" relay_before=""
+  relay_ok && relay_before=1
   # cf's OAuth token lasts about an hour and wrangler does not renew it; any cf call that finds it stale does (twice a
   # release failed here with "Authentication error" until `cf auth whoami` ran).
   command -v cf >/dev/null && cf auth whoami >/dev/null 2>&1 || true
   wr "$dir" deploy >"$log" 2>&1 \
     || { tail -20 "$log" >&2; echo "deploy failed; see $log (only run cf auth login for authentication errors)" >&2; exit 1; }
+  if [ -z "$relay_before" ]; then
+    echo "note: $PERSONA_PUBLISH_URL/relay/v1/health was not healthy before this deploy either (docs/operations/push-relay.md)" >&2
+  else
+    settled "the push relay's health check" relay_ok \
+      || { echo "the push relay worked before this deploy and does not now: check the Worker's secrets (docs/operations/site.md)" >&2; exit 1; }
+  fi
+  if ! "$SITE_LANGUAGE_CHECK" "$PERSONA_PUBLISH_URL"; then
+    SITE_LANGUAGE_FAILED=1
+    printf '\n*** SITE LANGUAGE CHECK FAILED ***\nThe external entry may be caching one visitor\x27s language for everyone. Fix its cache as documented in docs/operations/site.md, "Current routing". Other release checks will still run.\n\n' >&2
+  fi
+  return 0
+}
+site_language_result() {
+  [ -z "${SITE_LANGUAGE_FAILED:-}" ] && return 0
+  echo "publish failed the site language check after completing the other release checks (docs/operations/site.md, \"Current routing\")" >&2
+  return 1
 }
 
 # SITE_ONLY: no new build. The release served now (VERSION, SHA256SUMS, latest.json, SLOT and install.sh) is fetched
@@ -116,16 +157,20 @@ if [ -n "${SITE_ONLY:-}" ]; then
   done
   settled "served install.sh" same_as_served install.sh "$OUT/install.sh" || exit 1
   settled "the served downloads" check_served "$OUT/dl/SHA256SUMS" "$SLOT" || exit 1
+  site_language_result || exit 1
   echo "site deployed with personad $VERSION unchanged: $PERSONA_PUBLISH_URL"
   exit 0
 fi
 
-# The build number orders releases (UTC YYYYMMDDHHMM): hubs install only a larger one.
-BUILD="$(date -u +%Y%m%d%H%M)"
-VERSION="${VERSION:-$(git describe --always --dirty 2>/dev/null || echo dev)-$BUILD}"
+# The build number orders releases (UTC YYYYMMDDHHMM): hubs install only a larger one. A release-PR workflow pins it
+# in its immutable plan so a retry verifies exactly the same downloads; ordinary builds keep the current UTC minute.
+BUILD="${PERSONA_RELEASE_BUILD:-$(date -u +%Y%m%d%H%M)}"
+[[ "$BUILD" =~ ^[0-9]{12}$ ]] || { echo "PERSONA_RELEASE_BUILD must be UTC YYYYMMDDHHMM" >&2; exit 2; }
+# The nearest vX.Y.Z tag, a lightweight one too, as deploy.sh names its builds (#7201).
+VERSION="${PERSONA_RELEASE_VERSION:-${VERSION:-$(git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev)-$BUILD}}"
 COMMIT="$(git rev-parse HEAD)"
 # A release is the committed code: latest.json says which commit and lists every one it contains, and a hub
-# installs a release by itself only when its own commit is among them (docs/operations/hub-update.md "No rollback"). Published with
+# installs a release by itself only when its own commit is among them (docs/operations/hub-update.md "No regression"). Published with
 # changes not committed, every hub running it would wait for a person from then on. The binaries say which commit
 # they are (STAMP, "-dirty" only in a NO_DEPLOY build).
 STAMP="$COMMIT"
@@ -158,39 +203,76 @@ left="$(find "$WEBDIST/assets" -type f -size +1023c \( -name '*.js' -o -name '*.
 
 # Public dependency constants are classified by build-info checksums; verify the actual module cache before building.
 (cd server && go mod verify)
-LDFLAGS="-s -w -X main.version=$VERSION -X main.channel=release -X main.build=$BUILD -X main.commit=$STAMP -X main.updateURL=$PERSONA_PUBLISH_URL/dl"
+# Where the binaries look for their updates: the config's publish.update_url, else this site's dl/
+# (scripts/persona_config.py update_url; a GitHub repository's releases/latest/download works as it is). A hub's
+# hub.json update.url replaces it at run time (docs/operations/hub-update.md "Update source").
+UPDATE_URL="${PERSONA_UPDATE_URL:-$PERSONA_PUBLISH_URL/dl}"
+[ "$UPDATE_URL" = "$PERSONA_PUBLISH_URL/dl" ] \
+  || echo "note: these binaries look for updates at $UPDATE_URL (publish.update_url), not at the $PERSONA_PUBLISH_URL/dl this publishes to" >&2
+LDFLAGS="-s -w -X main.version=$VERSION -X main.channel=release -X main.build=$BUILD -X main.commit=$STAMP -X main.updateURL=$UPDATE_URL"
 # The runtime packages personad carries (the DSH plugin's code, docs/integrations/runtimes.md "Auto-update"), from integrations/.
 (cd server && go generate ./internal/runtimepkg)
-# -tags public changes no code (no file builds differently with it, TestOneBuild): it marks the binary for
-# check_bundle_privacy.py, which then knows the dependency constants it may skip.
+# The tags are server/build-tags.txt (server/internal/buildtags). No persona file builds differently with any of them
+# (TestOneBuild). The public marker marks the binary for check_bundle_privacy.py, which then knows the dependency
+# constants it may skip. The ts_omit_ tags leave out the tailscale.com features persona never uses.
+TAGS="$(cat server/build-tags.txt)"
 for t in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
-  (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags public -trimpath -ldflags "$LDFLAGS" \
+  (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
     -o "../$OUT/bin/personad-${t%/*}-${t#*/}" ./cmd/personad)
-  (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags public -trimpath -ldflags "$LDFLAGS" \
+  (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
     -o "../$OUT/bin/persona-link-${t%/*}-${t#*/}" ./cmd/persona-link)
   # The device's own program (cmd/persona-node): install.sh --node puts it at ~/.persona/bin/persona-node. It is in
   # SHA256SUMS, and in latest.json under nodes (a hub's own update still swaps personad alone; its manager fetches
   # persona-node from dl/<version>/ for a device that runs it, docs/operations/node-update.md "Node packages").
-  (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags public -trimpath -ldflags "$LDFLAGS" \
+  (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
     -o "../$OUT/bin/persona-node-${t%/*}-${t#*/}" ./cmd/persona-node)
 done
-# The programs released with personad (update.ProgramNames): built the same way, on the same platforms; a hub swaps
-# them with personad. personad-wechat is the WeChat bot (docs/extensions/wechat.md), a plugin of its own. (Telegram's connector is
-# an extension now, released from the extension market: #1704.)
-for t in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
-  for p in wechat; do
-    (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags public -trimpath -ldflags "$LDFLAGS" \
-      -o "../$OUT/bin/personad-$p-${t%/*}-${t#*/}" "./cmd/personad-$p")
+# The Windows connector and resident-node programs run natively on Windows. They are node downloads, not a native hub:
+# Windows personad is listed under Files so the manager can send it to a node; a hub never selects another OS for its
+# own self-update. The connector and persona-node keep their separate Links and Nodes entries.
+for t in windows/amd64 windows/arm64; do
+  for p in personad persona-link persona-node; do
+    (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
+      -o "../$OUT/bin/$p-${t%/*}-${t#*/}.exe" "./cmd/$p")
   done
+done
+# The hub and manager programs are released and swapped together with personad (update.ProgramNames).
+for t in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
   # The hub's and the manager's own programs (docs/server/server.md "Programs"): the same code as personad's hub and
   # manager commands, each without the other's.
   for p in persona-hub persona-manager; do
-    (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags public -trimpath -ldflags "$LDFLAGS" \
+    (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
       -o "../$OUT/bin/$p-${t%/*}-${t#*/}" "./cmd/$p")
   done
 done
+# The iPhone helper (persona-iphone-bridge, Rust, native/iphone-bridge) for each platform this machine can build: in
+# latest.json under helpers (only the builds that are here, all of which go up with the rest below) and kept with the
+# node builds under dl/<version>/, where a computer's node fetches it when the app installs it
+# (docs/extensions/iphone-bridge.md "Releases"). Never in the release's way: a platform it can't build here (no Rust
+# target, no zig) or a build that fails is left out with a note, and the release goes on without it. Cargo's build
+# directory is kept between runs.
+CARGO_TARGET_DIR="${PERSONA_BRIDGE_TARGET:-$HOME/.cache/persona/iphone-bridge-target}" \
+  native/iphone-bridge/release.sh "$OUT/bin" || echo "note: some persona-iphone-bridge builds failed; this release goes without them" >&2
+# adhoc_identifiers <dir>: the darwin builds in dir, signed ad hoc again under their program's identifier
+# (com.nwverse.personad, com.nwverse.persona-node, ...) in place of the a.out Go's linker always writes. Only the name
+# changes: an ad-hoc signature's designated requirement stays the build's cdhash, so keeping macOS privacy permissions
+# across updates takes a certificate on the node's Mac (docs/operations/mac-node-signing.md). Only on a Mac, which has
+# codesign; builds made elsewhere keep a.out.
+adhoc_identifiers() {
+  local f prog
+  [ "$(uname -s)" = Darwin ] && command -v codesign >/dev/null 2>&1 || return 0
+  for f in "$1"/*-darwin-amd64 "$1"/*-darwin-arm64; do
+    [ -f "$f" ] || continue
+    prog=${f##*/}
+    prog=${prog%-darwin-*}
+    codesign --force --sign - --identifier "com.nwverse.$prog" "$f" 2>/dev/null ||
+      echo "note: $f keeps the Go linker's ad-hoc identifier a.out (codesign failed)" >&2
+  done
+}
+# Before anything hashes or packs them.
+adhoc_identifiers "$OUT/bin"
 cleanup
-python3 scripts/persona_identity.py --render-installer scripts/deploy/install.sh "$OUT/install.sh" "$PERSONA_PUBLISH_URL/dl"
+python3 scripts/persona_identity.py --render-installer scripts/deploy/install.sh "$OUT/install.sh" "$UPDATE_URL"
 
 # Anyone can download these: no private values in them (CLAUDE.md), and no copied skill (only the built-in ones
 # assistantskills.Redistributable lists; a copied skill lives in the user's ~/.persona/skills or comes with its
@@ -202,30 +284,47 @@ python3 scripts/release/check_bundle_skills.py "$OUT/bin/persona-manager-linux-a
 host_bin="$OUT/bin/personad-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
 [ "$("$host_bin" version)" = "$VERSION" ] || { echo "the built personad does not report $VERSION" >&2; exit 1; }
 host_link="$OUT/bin/persona-link-${host_bin##*/personad-}"
-[ "$("$host_link" version)" = "$VERSION" ] || { echo "the built persona-link does not report $VERSION" >&2; exit 1; }
+[ "$("$host_link" version -v)" = "$("$host_bin" version -v)" ] || { echo "persona-link is not the same build as personad" >&2; exit 1; }
 host_node="$OUT/bin/persona-node-${host_bin##*/personad-}"
 [ "$("$host_node" version -v)" = "$("$host_bin" version -v)" ] || { echo "persona-node is not the same build as personad" >&2; exit 1; }
 "$host_bin" version -v | grep -qx "channel release, build $BUILD" || { echo "the built personad is not release build $BUILD" >&2; exit 1; }
-for p in personad-wechat persona-hub persona-manager; do
+for p in persona-hub persona-manager; do
   host_p="$OUT/bin/$p-${host_bin##*/personad-}"
   [ "$("$host_p" version -v)" = "$("$host_bin" version -v)" ] || { echo "$p is not the same build as personad" >&2; exit 1; }
 done
 
 # Releases only move forward: a larger build number than the one served, and the served commit an ancestor of this one.
 curl -fsSL "$PERSONA_PUBLISH_URL/dl/latest.json" -o "$OUT/served.json" 2>/dev/null || : > "$OUT/served.json"
-"$host_bin" release check-next "$OUT/served.json" --build "$BUILD" --commit "$COMMIT" || exit 1
+RETRY_SAME_BUILD=0
+if ! "$host_bin" release check-next "$OUT/served.json" --build "$BUILD" --commit "$COMMIT"; then
+  # A retry of the exact same commit/build is allowed only after the served manifest verifies against these bytes.
+  if [ -s "$OUT/served.json" ] \
+    && [ "$(python3 -c 'import json; print(json.load(open("'"$OUT"'/served.json"))["build"])' 2>/dev/null)" = "$BUILD" ] \
+    && [ "$(python3 -c 'import json; print(json.load(open("'"$OUT"'/served.json"))["commit"])' 2>/dev/null)" = "$COMMIT" ]; then
+    RETRY_SAME_BUILD=1
+  else
+    exit 1
+  fi
+fi
 
 # The privacy scan checked the raw binaries; only the gzipped ones are published (to the bucket, see above).
-for bin in "$OUT/bin"/personad-* "$OUT/bin"/persona-link-* "$OUT/bin"/persona-node-* "$OUT/bin"/persona-hub-* "$OUT/bin"/persona-manager-*; do
+for bin in "$OUT/bin"/personad-* "$OUT/bin"/persona-link-* "$OUT/bin"/persona-node-* "$OUT/bin"/persona-hub-* "$OUT/bin"/persona-manager-* \
+  "$OUT/bin"/persona-iphone-bridge-*; do
+  [ -f "$bin" ] || continue # no helper built here
   gzip -n -9 -c "$bin" > "$bin.gz"
 done
-python3 scripts/persona_identity.py --artifact-aliases "$OUT/bin"
-# Include the device node and compatibility copies in the same verified download index.
+if [ "$RETRY_SAME_BUILD" = 1 ]; then
+  "$host_bin" release verify --dir "$OUT/bin" --manifest "$OUT/served.json"
+fi
+# Only current product names are public downloads; command compatibility stays inside installed services.
 (cd "$OUT/bin" && shasum -a 256 *.gz > SHA256SUMS && printf '%s\n' "$VERSION" > VERSION)
 
 # The manifest hubs update from: version, build number, commit and every download's sha256 (not signed, the user's
 # call: it guards against a broken download over HTTPS, docs/operations/hub-update.md "Security").
-"$host_bin" release manifest --dir "$OUT/bin" --version "$VERSION" --build "$BUILD" --commit "$COMMIT" --out "$OUT/bin/latest.json"
+"$host_bin" release manifest --dir "$OUT/bin" --version "$VERSION" --build "$BUILD" --commit "$COMMIT" --channel "${RELEASE_CHANNEL:-release}" --out "$OUT/bin/latest.json"
+# The latest.json about to go up, read back against the downloads it lists: sizes and sha256s, this machine's binaries
+# run (version -v), the others' build number. A manifest of another build than its binaries (v0.2.1, #4522) stops here.
+"$host_bin" release verify --dir "$OUT/bin" --manifest "$OUT/bin/latest.json"
 
 # The site with dl/ and install.sh added, deployed from a copy (site/ in the tree stays as committed).
 rm -rf "$OUT/site"
@@ -260,9 +359,9 @@ for gz in "$PWD/$OUT/bin/"*.gz; do
   put_at "$SLOT/${gz##*/}" "$gz" application/gzip
 done
 # The versioned copies, kept: release/<version>/ (and release/X.Y.Z/ when the release is the tag vX.Y.Z, the version
-# of the Docker image built from that tag), the node builds and the manifest only: a manager fetches a node build from
-# there (docs/operations/node-update.md). The tag is looked up among all the commit's tags (release.sh tags it testflight/<build>
-# too, and a lightweight vX.Y.Z is not what git describe picks).
+# of the Docker image built from that tag), the node_archives builds and the manifest only: a manager fetches a node
+# build or the connector from there (docs/operations/node-update.md). The tag is looked up among all the commit's tags
+# (release.sh tags it testflight/<build> too).
 VERSIONS=("$VERSION")
 # A build with changes not committed (-dirty) is not the tag's release, and gets no alias.
 if [[ "$VERSION" != *-dirty* ]] && tag="$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)" && [ -n "$tag" ]; then
@@ -287,4 +386,5 @@ settled "the served downloads" check_served "$OUT/bin/SHA256SUMS" "$SLOT" || exi
 for v in "${VERSIONS[@]}"; do
   settled "dl/$v/" check_versioned "$OUT/bin" "$v" || exit 1
 done
+site_language_result || exit 1
 echo "personad $VERSION published: curl -fsSL $PERSONA_PUBLISH_URL/install.sh | sh"

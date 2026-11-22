@@ -9,6 +9,23 @@ import (
 	"testing"
 )
 
+// ParseView reads and checks a View a plugin answered with.
+func ParseView(raw json.RawMessage) (*View, error) {
+	var v View
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, err
+	}
+	if v.Sections == nil {
+		v.Sections = []Section{}
+	}
+	for i := range v.Sections {
+		if v.Sections[i].Items == nil {
+			v.Sections[i].Items = []UIElem{}
+		}
+	}
+	return &v, CheckView(&v)
+}
+
 // CheckView agrees with the schema's examples of views: each one holds, each one under invalid/ is refused.
 func TestCheckViewAgreesWithTheSchema(t *testing.T) {
 	for _, dir := range []string{"", "invalid"} {

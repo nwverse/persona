@@ -11,6 +11,7 @@ import persona.core.contracts.api.ImportedProvider
 import persona.core.contracts.api.LauncherCheck
 import persona.core.contracts.api.LauncherImportResult
 import persona.core.contracts.api.ProviderSetup
+import persona.core.contracts.isTraeCliId
 import persona.core.designsystem.UiText
 import persona.core.designsystem.failureReasonText
 import persona.core.hub.HubFailure
@@ -24,12 +25,15 @@ internal data class ProviderGroups(val managed: List<HubLauncher>, val zshrc: Li
         fun of(list: List<HubLauncher>, query: String = "", machineName: (String) -> String = { it }): ProviderGroups {
             val q = query.trim()
             val shown = if (q.isEmpty()) list else list.filter { l ->
-                (listOfNotNull(l.name, l.model, l.smallModel, l.baseUrl) + l.machines.map(machineName)).any { it.contains(q, ignoreCase = true) }
+                (listOfNotNull(l.name, l.settingsTitle, l.model, l.smallModel, l.baseUrl) + l.machines.map(machineName)).any { it.contains(q, ignoreCase = true) }
             }
             return ProviderGroups(shown.filter { it.managed }, shown.filter { !it.managed && !it.hidden }, shown.filter { !it.managed && it.hidden })
         }
     }
 }
+
+internal val HubLauncher.settingsTitle: String
+    get() = if (isTraeCliId(name) || isTraeCliId(harness)) title else name
 
 /** A gateway's host, for the row (the whole address is on the provider's page). */
 internal fun providerHost(baseUrl: String?): String? =
@@ -80,7 +84,7 @@ internal class ProvidersModel(private val api: ProviderSetup) {
         return try { call(); true }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) {
-            mutable.update { it.copy(launchers = before, notice = ResText.of(R.string.settings_providers_change_failed, launcher.name, failureReasonText(error))) }
+            mutable.update { it.copy(launchers = before, notice = ResText.of(R.string.settings_providers_change_failed, launcher.settingsTitle, failureReasonText(error))) }
             false
         }
     }
@@ -154,6 +158,7 @@ internal enum class ImportPhase { Machine, Loading, Preview, Importing, Done }
 internal data class ProviderImportUiState(
     val phase: ImportPhase = ImportPhase.Machine,
     val machine: String = "",
+    val alias: String? = null,
     val providers: List<ImportedProvider> = emptyList(),
     val picked: Set<String> = emptySet(),
     val result: LauncherImportResult? = null,
@@ -166,7 +171,7 @@ internal class ProviderImportModel(private val api: ProviderSetup) {
     private val mutable = MutableStateFlow(ProviderImportUiState())
     val state = mutable.asStateFlow()
 
-    fun choose(machine: String) = mutable.update { it.copy(machine = machine) }
+    fun choose(machine: String, alias: String? = null) = mutable.update { it.copy(machine = machine, alias = alias) }
 
     fun toggle(name: String) = mutable.update { s -> s.copy(picked = if (name in s.picked) s.picked - name else s.picked + name) }
 
@@ -175,7 +180,7 @@ internal class ProviderImportModel(private val api: ProviderSetup) {
         val machine = state.value.machine.takeIf { it.isNotBlank() } ?: return
         mutable.update { it.copy(phase = ImportPhase.Loading, error = null) }
         try {
-            val found = api.importPreview(machine)
+            val found = api.importPreview(machine, state.value.alias)
             mutable.update { it.copy(phase = ImportPhase.Preview, providers = found, picked = found.map { p -> p.name }.toSet()) }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) {
@@ -193,7 +198,7 @@ internal class ProviderImportModel(private val api: ProviderSetup) {
         mutable.update { it.copy(phase = ImportPhase.Importing, error = null) }
         try {
             // In the order the hub listed them.
-            val result = api.import(s.machine, s.providers.map { it.name }.filter { it in s.picked })
+            val result = api.import(s.machine, s.providers.map { it.name }.filter { it in s.picked }, s.alias)
             mutable.update { it.copy(phase = ImportPhase.Done, result = result) }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) {
@@ -201,5 +206,5 @@ internal class ProviderImportModel(private val api: ProviderSetup) {
         }
     }
 
-    fun restart() = mutable.update { ProviderImportUiState(machine = it.machine) }
+    fun restart() = mutable.update { ProviderImportUiState(machine = it.machine, alias = it.alias) }
 }

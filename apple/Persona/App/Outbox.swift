@@ -1,18 +1,21 @@
 import Foundation
+import PersonaWire
 
-// Messages written while the hub is out of reach (docs/apple/ios.md「连接状态」): they stay in their chat as pending bubbles
+// Messages written while the hub is out of reach (docs/apple/ios.md「Connection status」): they stay in their chat as pending bubbles
 // with a clock (Sends when connected) and go out by themselves once the app is connected and caught up, in the order they
 // were written. Kept on disk too, so quitting the app (or iOS ending it in the background) does not lose them.
 // Sent bubbles live here too: they stay until the transcript's copy arrives (`settleSend`, `showSent`), on disk as well.
 
 nonisolated enum SendOutcome: Equatable, Sendable {
-    case sent, failed, waiting
+    /// kept: it did not go in, and the assistant keeps it to send by itself (#10194): the bubble left the outbox for the
+    /// row's `undelivered`, and the chat's Processing ends as for a failure (nothing runs for it now).
+    case sent, failed, waiting, kept, effortWaiting
 
     var state: PendingMessage.State {
         switch self {
         case .sent: .sent
-        case .failed: .failed
-        case .waiting: .waiting
+        case .failed, .kept: .failed
+        case .waiting, .effortWaiting: .waiting
         }
     }
 }
@@ -31,6 +34,7 @@ extension AppModel {
         guard !chat(key).items.contains(where: { PendingMessage.tied($0, to: id) == true }) else { return }
         let msg = PendingMessage(id: id, text: text, images: images)
         chat(key).pending.append(msg)
+        chat(key).beginSendFeedback(msg)
         settleSend(key, msg.id, .sent)
     }
 
@@ -40,6 +44,8 @@ extension AppModel {
     @discardableResult
     func settleSend(_ key: SessionKey, _ id: UUID, _ outcome: SendOutcome) -> SendOutcome? {
         let store = chat(key)
+        // Echo can remove the pending bubble before the HTTP response. Its acknowledgement must not disappear.
+        store.settleSendFeedback(id, state: outcome.state)
         guard let i = store.pending.firstIndex(where: { $0.id == id }) else { return nil }
         let linkUp = outboxLinkUp(key.group)
         let wait = OutboxWait.next(outcome, since: store.pending[i].stalledSince, now: .now, linkUp: linkUp)
@@ -54,6 +60,7 @@ extension AppModel {
             }
             toast = Toast(String(localized: "Waiting messages weren't sent: their chat wasn't found on the hub."), style: .error)
         }
+        if wait.outcome == .sent { _ = completeInboxHandOff(key, store.pending[i]) }
         saveOutbox()
         switch wait.outcome {
         case .sent:
@@ -66,13 +73,32 @@ extension AppModel {
                 }
                 store.pending.removeAll { $0.id == id }
             }
-        case .waiting where linkUp:
-            // The socket looks fine but the request got no answer (a weak network), or the chat is not in the session
-            // list yet: try again shortly.
+        case .waiting where linkUp, .effortWaiting where linkUp:
+            // Retry transient failures or a refusal that beat the session update. Known effort changes wait for
+            // the session update instead of spending the retry budget.
             retryOutboxSoon(key.group)
         default: break
         }
         return wait.outcome
+    }
+
+    /// Files a delivered Agent hand-off once, including one restored from disk. `filed` means the Done write was
+    /// initiated; InboxStore still rolls it back if that write fails. Returns whether this message carried a filing intent.
+    func completeInboxHandOff(_ key: SessionKey, _ msg: PendingMessage) -> Bool {
+        guard var handOff = msg.inboxHandOff else { return false }
+        if let i = chat(key).pending.firstIndex(where: { $0.id == msg.id }) {
+            if chat(key).pending[i].inboxHandOff?.filed == true { return true }
+            handOff.filed = true
+            chat(key).pending[i].inboxHandOff = handOff
+        }
+        #if DEBUG
+        if let done = inboxHandOffDoneForTests {
+            done(handOff)
+            return true
+        }
+        #endif
+        InboxStore.shared.setDone(id: handOff.itemID, manager: handOff.manager, done: true)
+        return true
     }
 
     /// The group's socket is connected and answering: a send that comes back waiting then is not an outage.
@@ -108,7 +134,9 @@ extension AppModel {
     /// first fetches its latest messages: one that did arrive before the link broke is in the transcript and drops
     /// out (ChatStore.apply).
     func flushOutbox() {
-        let waiting = chats.filter { $0.value.pending.contains { $0.state == .waiting } }.map(\.key)
+        let waiting = chats.compactMap { key, store in
+            outboxCanFlush(key, store) ? key : nil
+        }
         let batches = OutboxFlush.batches(waiting, ready: { self.isLive($0) }, busy: flushingOutbox)
         for (group, keys) in batches {
             flushingOutbox.insert(group)
@@ -116,26 +144,90 @@ extension AppModel {
                 defer { flushingOutbox.remove(group) }
                 for key in keys {
                     let store = chat(key)
+                    guard outboxCanFlush(key, store) else { continue }
                     // A paged session list holds only the pages loaded: ask for this chat's row (no-op otherwise).
                     if session(key) == nil { await refreshSessionDetail(key) }
                     if !isSubscribed(key) {
                         if store.loadedOnce { await fill(key) } else { await loadInitial(key) }
                     }
-                    for msg in store.pending where msg.state == .waiting {
-                        guard isLive(group) else { break }
-                        // Gone, failed with an earlier one, or resent by hand meanwhile: not this pass's to send.
-                        guard let i = store.pending.firstIndex(where: { $0.id == msg.id }), store.pending[i].state == .waiting else { continue }
+                    while isLive(group), outboxCanFlush(key, store),
+                          let i = store.pending.firstIndex(where: { $0.state == .waiting }) {
+                        if store.pending[i].refused == true, let effort = store.pending[i].requiredEffort {
+                            if latest(key)?.effort != effort {
+                                // The refusal may have arrived before the node's session update. Keep that receipt
+                                // until an exact read or a later push confirms the effort.
+                                let id = store.pending[i].id
+                                await refreshSessionDetail(key, force: true)
+                                guard outboxCanFlush(key, store) else { break }
+                                if let message = store.pending.first(where: { $0.id == id && $0.state == .waiting }),
+                                   let required = message.requiredEffort, latest(key)?.effort != required {
+                                    noteFailure(key, id, String(localized: "Thinking effort could not be confirmed. Choose it again before resending."))
+                                    settleSend(key, id, .waiting)
+                                    break
+                                }
+                                continue
+                            }
+                            store.pending[i].id = UUID()
+                            store.pending[i].refused = nil
+                            saveOutbox()
+                        }
                         store.pending[i].state = .sending
+                        let msg = store.pending[i]
+                        store.beginSendFeedback(msg)
                         let settled = settleSend(key, msg.id, await sendPending(key, msg))
-                        if settled == .waiting { break } // keep the order: the rest go after it
+                        if settled == .waiting || settled == .effortWaiting { break }
                     }
                 }
                 // A retry that came due during this pass found the group busy: what still waits goes again shortly.
-                if outboxLinkUp(group), chats.contains(where: { $0.key.group == group && $0.value.pending.contains { $0.state == .waiting } }) {
+                if outboxLinkUp(group), chats.contains(where: { $0.key.group == group && outboxCanFlush($0.key, $0.value) }) {
                     retryOutboxSoon(group)
                 }
             }
         }
+    }
+
+    func canKeepOutboxEffort(_ key: SessionKey, effort: String) -> Bool {
+        existingChat(key)?.pending.contains { message in
+            guard message.onlyHere, message.mayHaveArrived != true, let required = message.requiredEffort else { return false }
+            return message.state == .failed || required != effort
+        } == true
+    }
+
+    /// Cancel an active change on the node. If the change was lost, the user's choice can instead update the outbox.
+    func keepCurrentEffort(_ key: SessionKey, effort: String) async {
+        guard effortRequests[key] == nil, let row = latest(key), row.effort == effort else { return }
+        if row.pendingEffort != nil {
+            await setModes(key, effort: effort)
+        } else if canKeepOutboxEffort(key, effort: effort), allowSend(key) {
+            updateOutboxEffort(key, to: effort, includeFailed: true)
+            flushOutbox()
+        }
+    }
+
+    /// A later choice also applies to the messages still waiting behind the earlier one.
+    func updateOutboxEffort(_ key: SessionKey, to effort: String, includeFailed: Bool = false) {
+        guard let store = existingChat(key) else { return }
+        var changed = false
+        for i in store.pending.indices {
+            let message = store.pending[i]
+            guard message.mayHaveArrived != true else { continue }
+            if includeFailed && message.state == .failed && message.requiredEffort != nil {
+                store.pending[i].state = .waiting
+                store.pending[i].failure = nil
+                store.pending[i].stalledSince = nil
+            } else {
+                guard message.state == .waiting, message.requiredEffort != effort else { continue }
+            }
+            store.pending[i].requiredEffort = effort
+            changed = true
+        }
+        if changed { saveOutbox() }
+    }
+
+    private func outboxCanFlush(_ key: SessionKey, _ store: ChatStore) -> Bool {
+        guard store.pending.contains(where: { $0.state == .waiting }),
+              effortRequests[key] == nil, latest(key)?.pendingEffort == nil else { return false }
+        return !store.pending.contains { $0.state == .sending && $0.requiredEffort != nil }
     }
 
     private static let outboxName = "outbox"

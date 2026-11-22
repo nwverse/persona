@@ -5,15 +5,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
+
+type assistantProfileSaveState struct {
+	mu      sync.Mutex
+	writeMu sync.Mutex // serializes normal and resumed PutSetting writes
+	pending *assistantwire.Profile
+	gen     uint64
+}
 
 // The assistant's settings are its own (internal/assistant, profile.go): the hub keeps the profile it last reported
 // (Snapshot.Profile) for its own features — the model configuration runs the main chat on the assistant's machine, a phone's
@@ -59,9 +66,68 @@ func (h *Hub) keepAssistantProfile(ctx context.Context, p *assistantwire.Profile
 	if h.store == nil || p == nil {
 		return
 	}
-	if err := h.store.PutSetting(ctx, assistantProfileKey, p); err != nil {
-		h.logf("assistant: keep the profile: %v", err)
+	cp := *p
+	h.assistantProfileSave.mu.Lock()
+	h.assistantProfileSave.pending = &cp
+	h.assistantProfileSave.gen++
+	h.assistantProfileSave.mu.Unlock()
+	h.flushAssistantProfile(ctx)
+}
+
+func (h *Hub) flushAssistantProfile(ctx context.Context) {
+	if h.store == nil {
+		return
 	}
+	h.assistantProfileSave.writeMu.Lock()
+	defer h.assistantProfileSave.writeMu.Unlock()
+	for {
+		h.assistantProfileSave.mu.Lock()
+		p := h.assistantProfileSave.pending
+		gen := h.assistantProfileSave.gen
+		h.assistantProfileSave.pending = nil
+		h.assistantProfileSave.mu.Unlock()
+		if p == nil {
+			return
+		}
+		if !h.quiesce.beginOrDefer(func() {
+			h.assistantProfileSave.mu.Lock()
+			if h.assistantProfileSave.gen == gen {
+				h.assistantProfileSave.pending = p
+			}
+			h.assistantProfileSave.mu.Unlock()
+		}) {
+			return
+		}
+		wctx := ctx
+		var cancel context.CancelFunc
+		if wctx == nil || wctx.Err() != nil {
+			wctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+		}
+		if err := h.store.PutSetting(wctx, assistantProfileKey, p); err != nil {
+			h.logf("assistant: keep the profile: %v", err)
+		}
+		if cancel != nil {
+			cancel()
+		}
+		h.quiesce.end()
+	}
+}
+
+func (h *Hub) resumeAssistantProfile() {
+	if h.store == nil {
+		return
+	}
+	h.assistantProfileSave.mu.Lock()
+	hasPending := h.assistantProfileSave.pending != nil
+	h.assistantProfileSave.mu.Unlock()
+	if !hasPending {
+		return
+	}
+	h.nodeWorkers.Add(1)
+	go func() {
+		defer h.nodeWorkers.Done()
+		h.flushAssistantProfile(nil)
+	}()
 }
 
 // assistantProfile is the assistant's settings as it last reported them (or as the hub kept them from before a
@@ -125,37 +191,68 @@ func (a assistantRemote) Start(ctx context.Context, p assistantwire.StartParams)
 // runs it on (assistant.send_params).
 func (a assistantRemote) SendParams(ctx context.Context, machine, session string, params map[string]any) (map[string]any, error) {
 	var res struct {
-		Params map[string]any `json:"params"`
+		Params       map[string]any `json:"params"`
+		LauncherNote string         `json:"launcher_note"` // the main chat ran on another launcher, and why (#4659)
 	}
 	err := a.call(ctx, assistantwire.MethodSendParams, assistantwire.SendParams{MachineID: machine, SessionID: session, Params: params,
-		Lang: string(a.h.contextLang(ctx))}, &res)
+		Lang: string(a.h.contextLang(ctx)), Human: personSent(ctx), ReplyInput: legacyAppOwner(ctx)}, &res)
 	if err != nil {
 		return nil, err
 	}
 	if res.Params == nil {
 		res.Params = map[string]any{}
 	}
+	if res.LauncherNote != "" {
+		res.Params[launcherNoteParam] = res.LauncherNote // taken out again by assistantSend: never sent to the node
+	}
 	return res.Params, nil
 }
 
-// Rename has the assistant rename its conversation session on machine for the user (assistant.rename).
-func (a assistantRemote) Rename(ctx context.Context, machine, session string, params map[string]any) (json.RawMessage, error) {
+// launcherNoteParam carries the manager's launcher_note from SendParams to assistantSend.
+const launcherNoteParam = "launcher_note"
+
+// Rename has the assistant rename its conversation session on machine (assistant.rename): for the user, or for
+// extension ext ("" for anyone else), whose title the assistant takes as a hint.
+func (a assistantRemote) Rename(ctx context.Context, machine, session string, params map[string]any, ext string) (json.RawMessage, error) {
 	var out json.RawMessage
-	err := a.call(ctx, assistantwire.MethodRename, assistantwire.RenameParams{MachineID: machine, SessionID: session, Params: params}, &out)
+	err := a.call(ctx, assistantwire.MethodRename, assistantwire.RenameParams{MachineID: machine, SessionID: session, Params: params,
+		Extension: ext}, &out)
 	return out, err
 }
 
-// assistantSend fills p, a message for the assistant's conversation sid on m, as the assistant runs it.
-func (h *Hub) assistantSend(ctx context.Context, m *Machine, sid string, p map[string]any) error {
+// assistantSend fills p, a message for the assistant's conversation sid on m, as the assistant runs it. note is the
+// manager's word that it runs on another launcher than the one configured (#4659), for the app.
+func (h *Hub) assistantSend(ctx context.Context, m *Machine, sid string, p map[string]any) (note string, err error) {
+	sendTimingOf(ctx).mark("params_started", true)
 	out, err := h.asstOf(h.sessionOwner(m.cfg.ID, sid)).SendParams(ctx, m.cfg.ID, sid, p)
+	sendTimingOf(ctx).mark("params_done", err == nil)
 	if err != nil {
-		return err
+		return "", err
 	}
+	note, _ = out[launcherNoteParam].(string)
+	delete(out, launcherNoteParam)
 	clear(p)
 	for k, v := range out {
 		p[k] = v
 	}
-	return nil
+	return note, nil
+}
+
+// withLauncherNote adds the manager's launcher_note to a delivered send's answer (a JSON object), for the app to show.
+func withLauncherNote(status int, body []byte, note string) []byte {
+	var out map[string]any
+	if note == "" || status != http.StatusOK || json.Unmarshal(body, &out) != nil {
+		return body
+	}
+	if out == nil {
+		out = map[string]any{}
+	}
+	out["launcher_note"] = note
+	b, err := json.Marshal(out)
+	if err != nil {
+		return body
+	}
+	return append(b, '\n')
 }
 
 // writeAssistantErr answers an app's request the assistant could not take: 503 assistant_offline while it is not
@@ -170,6 +267,9 @@ func writeAssistantErr(w http.ResponseWriter, err error) {
 		case assistantwire.CodeBadRequest:
 			writeErr(w, http.StatusBadRequest, errors.New(re.Message))
 			return
+		case assistantwire.CodeMeetingEnded: // a message into a meeting's room that ended: write in its follow-up
+			writeErrCode(w, http.StatusConflict, assistantwire.CodeMeetingEnded, errors.New(re.Message))
+			return
 		case assistantwire.CodeMachineOffline: // as the hub's own call to that machine would answer
 			callErr(w, fmt.Errorf("%s: %w", re.Message, errOffline))
 			return
@@ -182,23 +282,28 @@ func writeAssistantErr(w http.ResponseWriter, err error) {
 }
 
 // renameSession is POST /api/v1/sessions/{mid}/{sid}/rename ({"title", "tab_name"}): the node renames the tab and /
-// or the session; an assistant conversation is the assistant's to rename (assistant.rename).
+// or the session; an assistant conversation is the assistant's to rename (assistant.rename), told when an extension's
+// token asks, whose title is then only a hint.
 func (h *Hub) renameSession(w http.ResponseWriter, r *http.Request, m *Machine) {
-	p := map[string]any{}
-	if err := decodeJSONBody(w, r, &p, 1<<20); err != nil && !errors.Is(err, io.EOF) {
-		writeBodyErr(w, err, err)
-		return
-	}
-	if p == nil {
-		writeErr(w, http.StatusBadRequest, errors.New("request body must be a JSON object"))
+	p, ok := optionalObject(w, r, 1<<20)
+	if !ok {
 		return
 	}
 	sid := r.PathValue("sid")
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	out := json.RawMessage(`{"ok":true}`)
-	if s, _ := m.session(sid); m.isAssistant(s) {
-		res, err := h.asstOf(h.sessionOwner(m.cfg.ID, sid)).Rename(ctx, m.cfg.ID, sid, p)
+	owner := h.sessionOwner(m.cfg.ID, sid)
+	sess, _ := m.session(sid)
+	// Ordinary extension calls keep the existing node authorization boundary.
+	// Older managers cannot record ordinary Agent titles; preserve their native path.
+	recordAgent := principalOf(r.Context()).Role != roleExtension && h.archiveManagerHas(owner, assistantwire.CapabilityAgentNaming) == http.StatusOK
+	if (p["title"] != nil || p["tab_name"] != nil) && (m.isAssistant(sess) || recordAgent) {
+		ext := ""
+		if pr := principalOf(r.Context()); pr.Role == roleExtension {
+			ext = pr.Extension
+		}
+		res, err := h.asstOf(h.sessionOwner(m.cfg.ID, sid)).Rename(ctx, m.cfg.ID, sid, p, ext)
 		if err != nil {
 			writeAssistantErr(w, err)
 			return

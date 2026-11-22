@@ -3,17 +3,33 @@ package assistant
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/modelretry"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // ---- acting ----
+
+// accountExhaustionRetryAllowed applies the separate, opt-in budget for an
+// exhausted upstream account pool to coding Agents, including task-leader
+// Agents. Every Assistant conversation keeps its existing mechanical recovery:
+// main chat, leader and background-supervision conversations, side chats,
+// scheduled-task and health chats, and meeting rooms. Only the first three
+// re-resolve their launcher and model on protected continuations. retries
+// counts continuations already sent in the transient run.
+func accountExhaustionRetryAllowed(c proto.Session, retries, limit int) bool {
+	if c.Assistant {
+		return true
+	}
+	return !modelretry.AccountExhausted(c.TurnError) || retries < max(limit, 0)
+}
 
 // actOn decides what the manager does about e's work state and records it on e (wake_at, a card). It sends nothing:
 // the tick does, after checking again.
@@ -21,30 +37,46 @@ func (s *Service) actOn(ctx context.Context, v *workView, machine string, c prot
 	cfg, sw := s.triageCfg(ctx), s.triageSwitches(ctx)
 	l := s.lang(ctx)
 	w := &e.Work
+	if proto.UnrecoverableTurnErrorCode(c.TurnError) != "" || c.TurnErrorKind == proto.TurnErrorUnrecoverable {
+		e.WakeAt, w.WakeAt = nil, nil
+		return // An invalid conversation needs a replacement, not a retry card or a scheduled Continue.
+	}
 	now := time.Now()
 	k := [2]string{e.MachineID, e.SessionID}
+	s.workWould(k, "") // of the stop before this one
 	if w.Phase != proto.WorkBlocked || c.ReadOnlyReason != "" {
 		return // nothing to do, or nothing Persona may send it
 	}
+	s.approveByTask(ctx, k, w, sw.Wake) // a step its task asked for: no card, the wake below (agents_work_authorized.go)
 	switch w.On {
 	case proto.WaitTransient:
-		if !sw.AutoContinue {
+		if !sw.transientOn() {
 			w.Line = clip(oneLine(workT(l, "model_error", i18n.Args{"error": w.Wait})), 60)
 			return
 		}
-		if e.Retries >= maxRetries(cfg) {
-			*w = proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser, TurnAt: w.TurnAt, At: w.At, By: w.By,
-				Line: workT(l, "retries_line", i18n.Args{"n": e.Retries}),
-				Questions: []proto.Question{{Question: workT(l, "retries_ask", i18n.Args{"n": e.Retries, "error": clip(w.Wait, 300)}),
-					Header: workT(l, "header_model"), Options: []proto.QuestionOption{{Label: answerLabel(l, answerRetry)}, {Label: answerLabel(l, answerSkip)}}}}}
-			break
+		if !accountExhaustionRetryAllowed(c, e.Retries, cfg.AccountExhaustionMaxRetries) {
+			e.WakeAt, w.WakeAt = nil, nil
+			w.Line = clip(oneLine(workT(l, "model_error", i18n.Args{"error": w.Wait})), 60)
+			s.logf("work %s/%s: not continued: account pool exhausted (budget %d, sent %d)", machine, short(c.SessionID),
+				cfg.AccountExhaustionMaxRetries, e.Retries)
+			return
 		}
-		at := now.Add(retryBackoff[min(e.Retries, len(retryBackoff)-1)]).UTC()
-		e.WakeAt, w.WakeAt, w.Attempts, w.Max = &at, &at, e.Retries, maxRetries(cfg)
+		after := modelretry.Delay(time.Duration(min(cmp0(cfg.RetryBaseSeconds, 15), 1800))*time.Second, e.Retries, rateLimitError(c.TurnError))
+		at := now.Add(after).UTC()
+		e.WakeAt, w.WakeAt, w.Attempts, w.Max = &at, &at, e.Retries, 0
+		s.logf("work %s/%s: auto-continue: transient model error, attempt %d in %s: %s", e.MachineID, short(e.SessionID),
+			e.Retries+1, after, clip(w.Wait, 120))
 		return
 	case proto.WaitExternal, proto.WaitAgent:
 		if w.ResetsAt != nil {
-			if !actOnLimit(c, e, sw.AutoContinue, l, now) {
+			autoContinue := sw.AutoContinue
+			if !sw.Enabled && s.protectedQuotaWait(ctx, machine, c) {
+				autoContinue = sw.transientOn() // mechanical quota recovery is independent of semantic triage
+			}
+			if !actOnLimit(c, e, autoContinue, l, now) {
+				if sw.Enabled && !sw.AutoContinue && !c.TurnErrorResumes {
+					s.workWould(k, handAutoContinue) // only the switch kept it from being continued at the reset
+				}
 				return
 			}
 			break
@@ -56,13 +88,12 @@ func (s *Service) actOn(ctx context.Context, v *workView, machine string, c prot
 		a, approved := s.work.approved[k]
 		s.work.mu.Unlock()
 		if risky(w.Then) && !(approved && a.covers(w)) {
-			*w = proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser, TurnAt: w.TurnAt, At: w.At, By: w.By, Wait: w.Wait, Then: w.Then,
-				Line: clip(oneLine(workT(l, "risky_line", i18n.Args{"wait": w.Wait, "then": w.Then})), 60),
-				Questions: []proto.Question{{Question: workT(l, "risky_ask", i18n.Args{"wait": w.Wait, "then": w.Then}), Header: workT(l, "header_risky"),
-					Options: []proto.QuestionOption{{Label: answerLabel(l, answerGo), Description: workT(l, "answer_go_about")}, {Label: answerLabel(l, answerHold)}}}}}
-			break
+			return // no automatic external action, and no card for a step the agent did not ask about
 		}
 		if !sw.Wake {
+			if sw.Enabled {
+				s.workWould(k, handWake) // a named wait with no risky step: only the switch kept it from being woken
+			}
 			return
 		}
 		if e.Wakes >= maxWakes(cfg) {
@@ -76,8 +107,16 @@ func (s *Service) actOn(ctx context.Context, v *workView, machine string, c prot
 		e.WakeAt, w.WakeAt, w.Attempts, w.Max = &at, &at, e.Wakes, maxWakes(cfg)
 		return
 	}
-	// On the user: a card.
-	if w.On != proto.WaitUser || !sw.Decide || v.isMuted(machine, c.SessionID) {
+	// Missing evidence is not a user decision. Authorization links have their own relay and manual card path.
+	if w.On == proto.WaitUser && w.By == "model" && len(w.Questions) == 0 && w.Link == nil {
+		*w = proto.WorkState{TurnAt: w.TurnAt, At: w.At, By: w.By, Artifacts: w.Artifacts}
+		return
+	}
+	// On the user: a card. Without the triage none: the session shows its error and the apps' Retry as before.
+	if w.On != proto.WaitUser || !sw.Enabled || !sw.Decide || v.isMuted(machine, c.SessionID) {
+		if w.On == proto.WaitUser && sw.Enabled && !sw.Decide && w.Link == nil && !v.isMuted(machine, c.SessionID) {
+			s.workWould(k, handDecide) // only the switch kept this stop from being a card
+		}
 		return
 	}
 	if len(w.Questions) == 0 {
@@ -155,7 +194,65 @@ func workCard(machine string, c proto.Session, w proto.WorkState, id string) pro
 	if c.Agent != "" && c.Agent != "claude" {
 		ix.Agent, ix.AgentLabel = c.Agent, c.AgentLabel
 	}
+	return markWorkCardDefers(ix)
+}
+
+// markWorkCardDefers makes the answers the manager settles without messaging the agent explicit to clients. Built-in
+// labels and restored legacy cards predate option actions; marking them here keeps those cards dismissible too.
+func markWorkCardDefers(ix proto.Interaction) proto.Interaction {
+	ix.Questions = append([]proto.Question(nil), ix.Questions...)
+	for i, q := range ix.Questions {
+		q.Options = append([]proto.QuestionOption(nil), q.Options...)
+		for j, o := range q.Options {
+			if o.Action != "" || q.MultiSelect {
+				continue
+			}
+			local := deferredWorkOption(q, o.Label)
+			switch canonicalAnswer(o.Label) {
+			case answerSkip, answerNotNow, answerStop, answerHold:
+				local = true
+			}
+			if local {
+				q.Options[j].Action = proto.QuestionOptionDefer
+			}
+		}
+		ix.Questions[i] = q
+	}
 	return ix
+}
+
+// workResolutionSends reports whether this answer reaches sendToSession. Dismiss, defer and an external wait finish
+// in the manager; continue, retry and custom answers need a running agent. resolveAnswer uses this before claiming a
+// card, so a stopped agent refuses only the answers that would send it a message.
+func workResolutionSends(ix proto.Interaction, r proto.Resolution) bool {
+	if r.Cancel || r.Dismiss {
+		return false
+	}
+	items := 0
+	only := map[string]bool{}
+	for _, q := range ix.Questions {
+		a := strings.TrimSpace(r.Answers[q.Question])
+		if a == "" {
+			continue
+		}
+		items++
+		if deferredWorkOption(q, a) {
+			only[answerSkip] = true
+		} else {
+			only[canonicalAnswer(a)] = true
+		}
+	}
+	if items == 0 {
+		return false
+	}
+	if len(only) == 1 {
+		for _, a := range []string{answerSkip, answerNotNow, answerStop, answerHold, answerWait} {
+			if only[a] {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // openCard puts w's questions on a card for c (the next snapshot carries it). Returns the card's id.
@@ -181,7 +278,8 @@ func errGone(id string) error {
 // workAnswer is manager.action for one of the cards (false: id is none of them). What the agent is to hear goes to it;
 // the answers the manager acts on itself ("Not now", "Wait a bit"…) do not. The work is read back first: an answer the hub kept
 // while the manager was away comes right after it is back. When the agent cannot be sent the answer (its machine just
-// went away) the card goes up again, under a new id. A repeated callback while an answer is being sent is answered OK
+// went away) the card goes up again, under a new id; when its computer no longer has the session, the card goes
+// (sessionNotFound). A repeated callback while an answer is being sent is answered OK
 // and delivered once: the send can take until its timeout, and the entry still names the card until it comes back.
 func (s *Service) workAnswer(ctx context.Context, id string, r proto.Resolution) (bool, error) {
 	if !strings.HasPrefix(id, workCardPrefix) {
@@ -269,9 +367,9 @@ func (s *Service) workAnswer(ctx context.Context, id string, r proto.Resolution)
 			out = append(out, agentAnswerItem{it.question, it.answer})
 		}
 		if r.AnsweredBy == proto.AnsweredByAssistant {
-			return renderDelegatedAnswer(out, r.Reason)
+			return renderDelegatedAnswer(out, r.Reason, answerLanguage(s.hello(ctx).Locale))
 		}
-		return renderAnswer(out)
+		return renderAnswer(out, answerLanguage(s.hello(ctx).Locale))
 	}
 	if !only[answerGo] {
 		s.work.mu.Lock()
@@ -312,6 +410,17 @@ func (s *Service) workAnswer(ctx context.Context, id string, r proto.Resolution)
 		text = render()
 	}
 	if err := s.sendToSession(ctx, ix.MachineID, ix.SessionID, text); err != nil {
+		if sessionNotFound(err) {
+			// Its computer has no such session any more (deleted there, or listed under another id since): put up again,
+			// the card could never be answered. It goes, and the answer with it (#6709).
+			s.logf("work %s/%s: the answer did not go, the session is no longer on its computer: the card goes: %v", ix.MachineID, short(ix.SessionID), err)
+			s.workEvent(ix.MachineID, ix.SessionID, "answer_failed", map[string]any{"error": clip(err.Error(), 200), "gone": true})
+			s.work.mu.Lock()
+			delete(s.work.approved, key)
+			s.work.mu.Unlock()
+			done(nil)
+			return true, nil
+		}
 		s.logf("work %s/%s: the answer did not go, the card is up again: %v", ix.MachineID, short(ix.SessionID), err)
 		s.workEvent(ix.MachineID, ix.SessionID, "answer_failed", map[string]any{"error": clip(err.Error(), 200)})
 		s.work.mu.Lock()
@@ -336,13 +445,76 @@ func (s *Service) workAnswer(ctx context.Context, id string, r proto.Resolution)
 
 type agentAnswerItem struct{ question, answer string }
 
+// codeSessionNotFound is what a node, or the runtime it asks, answers for a session it does not have.
+const codeSessionNotFound = "not_found"
+
+// sessionNotFound: err says the session is not on its computer (not that the computer or its engine is away).
+func sessionNotFound(err error) bool {
+	var re *rpc.Error
+	return errors.As(err, &re) && re.Code == codeSessionNotFound
+}
+
 // sendToSession sends text to sid as the manager (the next working is its doing, not the user's).
 func (s *Service) sendToSession(ctx context.Context, machine, sid, text string) error {
+	return s.sendWorkText(ctx, machine, sid, text, false)
+}
+
+// sendWorkText resolves a model only for a quota continuation; ordinary manager messages retain their send path.
+func (s *Service) sendWorkText(ctx context.Context, machine, sid, text string, quotaContinuation bool) error {
 	s.work.mu.Lock()
 	s.work.init()
 	s.work.sent[[2]string{machine, sid}] = time.Now()
 	s.work.mu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	return s.call(ctx, machine, DeviceSessionSend, map[string]any{"session_id": sid, "text": text}, nil)
+	params := map[string]any{"session_id": sid, "text": text}
+	if quotaContinuation {
+		if err := s.protectedContinuationModel(ctx, machine, sid, params); err != nil {
+			return err
+		}
+	}
+	return s.call(ctx, machine, DeviceSessionSend, params, nil)
+}
+
+// sendModelRetry ties uncertain delivery retries to one message, rather than
+// submitting another continuation after a lost acknowledgement.
+func (s *Service) sendModelRetry(ctx context.Context, e db.SessionWork, text string) error {
+	s.work.mu.Lock()
+	s.work.init()
+	s.work.sent[[2]string{e.MachineID, e.SessionID}] = time.Now()
+	s.work.mu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	// PostgreSQL timestamps retain microseconds. Use that same precision before
+	// and after loading a due row so a crash cannot change its once-only send ID.
+	id := fmt.Sprintf("model-retry:%s:%d:%d", e.SessionID, e.TurnAt.Truncate(time.Microsecond).UnixNano(), e.Retries)
+	params := map[string]any{"session_id": e.SessionID, "text": text, "client_msg_id": id}
+	if err := s.protectedContinuationModel(ctx, e.MachineID, e.SessionID, params); err != nil {
+		return err
+	}
+	return s.call(ctx, e.MachineID, DeviceSessionSendOnce, params, nil)
+}
+
+// protectedContinuationModel re-resolves owner-facing conversations on a continuation after a quota/service failure.
+// Worker sends keep their existing execution. A pre-upgrade observed fallback is never a configured choice.
+func (s *Service) protectedContinuationModel(ctx context.Context, machine, sid string, params map[string]any) error {
+	if s.protectedModelConversation(ctx, machine, sid) {
+		return s.sendModel(ctx, machine, sid, params, s.lang(ctx))
+	}
+	return nil
+}
+
+func (s *Service) protectedModelConversation(ctx context.Context, machine, sid string) bool {
+	cfg := s.settings(ctx)
+	return cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine || s.isLeader(ctx, sid) || s.isBackground(ctx, sid)
+}
+
+// protectedQuotaWait admits only mechanical quota waits to assistant work tracking. Other assistant failures never
+// enter the worker's semantic triage or automatic actions. A runtime's own continuation must remain undisturbed.
+func (s *Service) protectedQuotaWait(ctx context.Context, machine string, c proto.Session) bool {
+	if !c.Assistant || c.TurnErrorKind != proto.TurnErrorUsageLimit || !s.protectedModelConversation(ctx, machine, c.SessionID) {
+		return false
+	}
+	_, reset := usageLimitReset(c)
+	return reset || c.TurnErrorResumes
 }

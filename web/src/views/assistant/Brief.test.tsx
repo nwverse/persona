@@ -5,11 +5,24 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../lib/api";
-import type { FeedItem } from "../../lib/feed";
+import { askRow, briefBody, type BriefRow, type FeedItem } from "../../lib/feed";
+import type { TodoAsk } from "../../lib/todos";
 
 const api = vi.hoisted(() => vi.fn());
 vi.mock("../../lib/api", async (orig) => ({ ...(await orig<typeof import("../../lib/api")>()), api }));
+const toast = vi.hoisted(() => vi.fn());
+vi.mock("../../ui/atoms", async (orig) => ({ ...(await orig<typeof import("../../ui/atoms")>()), toast }));
 import { FeedLineView } from "./Tasks";
+import { AcceptRow, meta } from "./Brief";
+import { getState, reset } from "../../lib/store";
+import { loadPages } from "../../lib/lazy-page";
+import { setAgentOpenMode } from "../../lib/agent-open";
+import { handoffFrom } from "../../lib/handoff";
+import { closePanel, getPanel } from "../../lib/panel";
+import { t } from "../../i18n";
+
+// the week's setup block is its own chunk (BriefSetup.tsx): in before any test draws it
+await loadPages();
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -17,6 +30,7 @@ let root: Root;
 let host: HTMLDivElement;
 beforeEach(() => {
   api.mockReset();
+  toast.mockReset();
   api.mockResolvedValue({});
   host = document.createElement("div");
   document.body.append(host);
@@ -48,6 +62,9 @@ const item = (b: Record<string, unknown> = body()): FeedItem => ({ id: "f1", con
 
 function draw(it: FeedItem) {
   act(() => root.render(<FeedLineView item={it} />));
+}
+function drawDecision(row: BriefRow) {
+  act(() => root.render(<AcceptRow row={row} stacked />));
 }
 const rows = (kind: string) => [...host.querySelectorAll(`[data-brief-row=${kind}]`)];
 
@@ -105,6 +122,48 @@ describe("a brief item", () => {
     expect(host.querySelector<HTMLAnchorElement>("a[href='https://hub.example/s/box/ag7']")).not.toBeNull(); // the Agent's chat
   });
 
+  describe("Open on a waiting or later row that names its chat (#12055)", () => {
+    const open = (title: string) => host.querySelector<HTMLButtonElement>(`button[title="${t("assistant-brief.open_row", { title })}"]`)!;
+    const waiting = { id: "ix1", title: "先发预发还是直接上线？", link: "https://hub.example/s/box/ag1", waited_s: 60, machine_id: "box", session_id: "ag1" };
+    const later = { id: "lt_1", title: "图标要不要换？", link: "https://hub.example/s/box/ag7", waited_s: 60, machine_id: "box", session_id: "ag7" };
+    afterEach(() => {
+      setAgentOpenMode("panel");
+      closePanel();
+      reset();
+      history.replaceState(null, "", "/");
+    });
+
+    it("opens the Agent in the app, not the hub's link in a new tab: the side panel by default", () => {
+      history.replaceState(null, "", "/persona/c1");
+      draw(item(body({ waiting: [waiting], later: [later], later_total: 1 })));
+      expect(host.querySelector("a[href^='https://hub.example/']")).toBeNull();
+      act(() => open(waiting.title).click());
+      expect(getPanel()).toEqual({ kind: "agent", mid: "box", sid: "ag1" });
+      act(() => open(later.title).click());
+      expect(getPanel()).toEqual({ kind: "agent", mid: "box", sid: "ag7" });
+      expect(location.pathname).toBe("/persona/c1");
+    });
+
+    it("set to Full page, opens the Agent's page with the way back to this conversation, as the task rows do", () => {
+      setAgentOpenMode("page");
+      history.replaceState(null, "", "/persona/c1");
+      draw(item(body({ waiting: [waiting] })));
+      act(() => open(waiting.title).click());
+      expect(getPanel()).toBeNull();
+      expect(location.pathname).toBe("/s/box/ag1");
+      expect(handoffFrom()).toEqual({ path: "/persona/c1" });
+    });
+
+    it("opens a card waiting in a Persona conversation as that conversation's page", () => {
+      Object.assign(getState(), { assistant: { ...getState().assistant!, machine_id: "box", main: "main-1", conversations: [{ machine_id: "box", session_id: "c9", title: "Trip", cwd: "", status: "idle" }] } });
+      history.replaceState(null, "", "/persona/c1");
+      draw(item(body({ waiting: [{ ...waiting, session_id: "c9", link: "https://hub.example/persona/c9" }] })));
+      act(() => open(waiting.title).click());
+      expect(getPanel()).toBeNull();
+      expect(location.pathname).toBe("/persona/c9");
+    });
+  });
+
   it("has no such section without questions, as for a hub that does not know them", () => {
     draw(item());
     expect(host.textContent).not.toContain("晚点答");
@@ -153,6 +212,14 @@ describe("a brief item", () => {
     expect([...host.querySelectorAll("button")].some((b) => b.textContent === "通过")).toBe(false);
   });
 
+  it("says when the decision is recorded for the supervisor because no Agent can take it", async () => {
+    api.mockResolvedValueOnce({ ok: true, delivered: "none" });
+    drawDecision({ id: "todo_stopped", title: "Demo rollout", outcome: "decide", recommend: "Stage it", waited_s: 60, asked_at: ASKED });
+    const take = [...rows("accept")[0].querySelectorAll("button")].find((b) => b.textContent === "按推荐来")!;
+    await act(async () => take.click());
+    expect(host.querySelector("[data-brief-accepted=recorded]")?.textContent).toBe("已记下，Agent 已停，督办会接手");
+  });
+
   it("a round that is over (409) says it was handled; another failure keeps the button for a retry", async () => {
     draw(item());
     api.mockRejectedValueOnce(new ApiError(409, "已经处理过了", {}));
@@ -186,11 +253,159 @@ describe("a brief item", () => {
     expect(api).toHaveBeenCalledWith("/todos/todo_d1/accept", { method: "POST", json: { asked_at: ASKED } });
     expect(decide.querySelector("[data-brief-accepted=accepted]")?.textContent).toBe("已按推荐来");
     expect(none.textContent).toContain("用哪个库");
-    expect([...none.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["打开"]); // nothing to take
+    expect([...none.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["打开"]); // a historical snapshot cannot finish a newer run
+    expect(host.textContent).not.toContain("直接完成");
+  });
+
+  it("offers direct completion in live Pending even without a recommendation", () => {
+    drawDecision({ id: "todo_no_recommendation", title: "Synthetic decision", outcome: "decide", waited_s: 60, asked_at: ASKED });
+    expect([...rows("accept")[0].querySelectorAll("button")].map((b) => b.textContent)).toEqual(["打开", "直接完成"]);
+  });
+
+  it("finishes a decision using PATCH only, then clears its ask and shows the completion receipt", async () => {
+    const ask = { outcome: "decide" as const, verdict: "Choose the rollout", recommend: "Use a staged rollout", asked_at: ASKED };
+    const todo = { id: "todo_finish", title: "Demo rollout", created_at: ASKED, updated_at: ASKED, ask };
+    const before = getState().todos;
+    getState().todos = [todo];
+    const finished = { ...todo, done_at: ASKED, ask: undefined };
+    // JSON omits cleared optional fields, as the hub does.
+    api.mockImplementation(async (path, opts) => opts?.method === "PATCH" ? { todo: JSON.parse(JSON.stringify(finished)) } : path === "/todos" ? { todos: [finished] } : {});
+    try {
+      drawDecision({ ...todo, ...ask, waited_s: 60 });
+      const buttons = [...rows("accept")[0].querySelectorAll("button")];
+      expect(buttons.map((b) => b.textContent)).toEqual(["打开", "直接完成", "按推荐来"]);
+      expect(buttons[1].classList).toContain("shadow-btn");
+      expect(buttons[2].classList).toContain("bg-ink");
+      await act(async () => buttons[1].click());
+      expect(api.mock.calls.filter(([, opts]) => opts?.method && opts.method !== "GET")).toEqual([["/todos/todo_finish", { method: "PATCH", json: { done: true } }]]);
+      expect(getState().todos[0].done_at).toBe(ASKED);
+      expect(getState().todos[0].ask).toBeUndefined();
+      expect(host.querySelector("[data-brief-accepted=finished]")?.textContent).toBe("已完成，不再交给 Agent");
+      expect(toast).toHaveBeenCalledWith("已完成，不再交给 Agent", "ok");
+      expect([...rows("accept")[0].querySelectorAll("button")].map((b) => b.textContent)).toEqual(["打开"]);
+    } finally {
+      getState().todos = before;
+    }
+  });
+
+  it("keeps both decision actions disabled during completion, rejects a mixed double-click, and lets a failure retry", async () => {
+    drawDecision({ id: "todo_finish", title: "Demo rollout", outcome: "decide", recommend: "Stage it", waited_s: 60, asked_at: ASKED });
+    let reject!: (e: unknown) => void;
+    api.mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+    const buttons = [...rows("accept")[0].querySelectorAll("button")];
+    act(() => { buttons[1].click(); buttons[2].click(); buttons[1].click(); });
+    expect(api).toHaveBeenCalledTimes(1);
+    expect(buttons[1].disabled).toBe(true);
+    expect(buttons[2].disabled).toBe(true);
+    await act(async () => reject(new ApiError(500, "Synthetic save failure", {})));
+    expect(host.querySelector("[data-brief-accepted]")).toBeNull();
+    expect(buttons[1].disabled).toBe(false);
+    expect(buttons[2].disabled).toBe(false);
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining("Synthetic save failure"), "error");
+    api.mockRejectedValueOnce(new ApiError(500, "Synthetic retry failure", {}));
+    await act(async () => buttons[1].click());
+    expect(api).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not finish while recommendation delivery is in flight", async () => {
+    drawDecision({ id: "todo_finish", title: "Demo rollout", outcome: "decide", recommend: "Stage it", waited_s: 60, asked_at: ASKED });
+    api.mockImplementationOnce(() => new Promise(() => {}));
+    const buttons = [...rows("accept")[0].querySelectorAll("button")];
+    act(() => { buttons[2].click(); buttons[1].click(); });
+    expect(api.mock.calls).toEqual([["/todos/todo_finish/accept", { method: "POST", json: { asked_at: ASKED } }]]);
+    expect(buttons[1].disabled).toBe(true);
   });
 
   it("has no Accept button for a task that has no round to name", () => {
     draw(item(body({ accept: [{ id: "todo_v3", title: "没有轮次", waited_s: 60 }] })));
     expect([...host.querySelectorAll("button")].find((b) => b.textContent === "通过")?.disabled).toBe(true);
+  });
+
+  it("draws the week's recommended setup as the hub worded it, and only opens settings", () => {
+    draw(item(body({ setup: [
+      { id: "triage_wake", setting: "agents.triage.wake", count: 3, text: "Session triage, \"Wake on schedule\": 3 times …" },
+      { id: "leaders", setting: "assistant.leaders", count: 12, minutes: 31, text: "Leader conversations: 12 of the main chat's rounds (31 min) …" },
+    ] })));
+    const setup = rows("setup");
+    expect(setup.map((r) => r.querySelector("div")?.textContent)).toEqual([
+      "Session triage, \"Wake on schedule\": 3 times …",
+      "Leader conversations: 12 of the main chat's rounds (31 min) …",
+    ]);
+    // Only a mechanism with a settings page in this app gets a button, and the button calls nothing on the hub.
+    expect(setup.map((r) => r.querySelectorAll("button").length)).toEqual([1, 0]);
+    act(() => setup[0].querySelector("button")!.click());
+    expect(api).not.toHaveBeenCalled();
+    expect(location.search).toBe("?tab=persona");
+  });
+
+  it("opens the background supervisor's model purpose from the lower-tier line, and changes nothing", () => {
+    draw(item(body({ setup: [
+      { id: "supervisor_tier", setting: "assistant.supervise", count: 24, text: "A lower tier for the background supervisor: … 24 acceptances on big-model …" },
+    ] })));
+    const setup = rows("setup");
+    expect(setup.map((r) => r.querySelector("div")?.textContent)).toEqual(["A lower tier for the background supervisor: … 24 acceptances on big-model …"]);
+    expect(setup[0].querySelectorAll("button").length).toBe(1);
+    act(() => setup[0].querySelector("button")!.click());
+    expect(api).not.toHaveBeenCalled();
+    expect(location.search).toBe("?tab=models&purpose=assistant.supervise");
+  });
+
+  it("has no setup section on a briefing without the block", () => {
+    draw(item(body()));
+    expect(rows("setup")).toEqual([]);
+  });
+});
+
+// A row's meta line is "waited · nudged · from" and only text goes into it: a to-do's `ask.from` is an object (where the
+// task came from), and a hub row's fields are not checked by TypeScript, so a field of another type once read
+// "[object Object]" in the Needs you tray.
+describe("a row's meta line", () => {
+  const ASK: TodoAsk = {
+    outcome: "decide", verdict: "🤔 要你拍板：旧接口留不留", recommend: "先合入", asked_at: ASKED,
+    from: { conversation: "c1", title: "发版群", main: true, at: ASKED, message: "今天能发吗", by_assistant: false, started_by: "me" },
+  };
+
+  it("never carries a to-do's ask.from into its accept row", () => {
+    const row = askRow({ id: "todo_1", title: "检查 PR" }, ASK, Date.parse(ASKED) + 12.5 * 3_600_000);
+    expect(row.from).toBeUndefined();
+    drawDecision(row);
+    const meta = host.querySelector("[data-brief-meta]")!.textContent!;
+    expect(meta).toBe("已等 12 小时 30 分");
+    expect(host.textContent).not.toContain("[object Object]");
+    expect(host.querySelector("[data-brief-recommend]")!.textContent).toContain("先合入");
+  });
+
+  it("drops a wire field that is not text before any row draws it", () => {
+    const wire = body({
+      accept: [{ id: "todo_v1", title: "改设置页", from: { conversation: "c1" }, detail: ["x"], verdict: 3, recommend: {}, waited_s: 60, nudged: {}, asked_at: ASKED }, { title: "no id" }, "nope"],
+      waiting: [{ id: "ix1", title: "问题", from: 7, waited_s: "soon" }],
+    });
+    const got = briefBody(item(wire))!;
+    expect(got.accept).toEqual([{ id: "todo_v1", title: "改设置页", waited_s: 60, asked_at: ASKED }]);
+    expect(got.waiting).toEqual([{ id: "ix1", title: "问题", waited_s: 0 }]);
+    draw(item(wire));
+    expect(host.textContent).not.toContain("[object Object]");
+  });
+
+  // The tray of a web build from before #3403 drew `{ id, title, waited_s, ...todo.ask }`: the live row read
+  // "已等 38 小时 3 分 · [object Object]" (#11794). That row does not compile any more; the tray builds it with askRow.
+  it("cannot be handed a to-do's ask spread into a row: the live row's shape is a type error", () => {
+    const waited_s = 38 * 3600 + 3 * 60;
+    // @ts-expect-error -- ask.from is an object, BriefRow.from is text: spreading the ask into a row does not compile
+    const spread: BriefRow = { id: "todo_ce", title: "搭 persona PR watcher", waited_s, ...ASK };
+    expect(typeof spread.from).toBe("object");
+    const row = askRow({ id: "todo_ce", title: "搭 persona PR watcher" }, ASK, Date.parse(ASKED) + waited_s * 1000);
+    expect(meta(row)).toBe("已等 38 小时 3 分");
+    drawDecision(row);
+    expect(host.querySelector("[data-brief-meta]")!.textContent).toBe("已等 38 小时 3 分");
+    expect(host.textContent).not.toContain("[object Object]");
+  });
+
+  it("keeps the fields a row is declared with", () => {
+    const got = briefBody(item(body()))!;
+    expect(got.waiting[0]).toEqual({ id: "ix1", title: "先发预发还是直接上线？", from: "来自 Agent「登录修复」", link: "https://hub.example/s/box/ag1", waited_s: 4800, nudged: true });
+    // the chat a waiting or later row came from, which Open opens in the app (#12055)
+    expect(briefBody(item(body({ waiting: [{ id: "ix2", title: "x", waited_s: 1, machine_id: "box", session_id: "ag1" }] })))!.waiting[0]).toMatchObject({ machine_id: "box", session_id: "ag1" });
+    expect(briefBody(item(body({ waiting: [{ id: "ix3", title: "x", waited_s: 1, machine_id: 7, session_id: {} }] })))!.waiting[0]).toEqual({ id: "ix3", title: "x", waited_s: 1 });
   });
 });

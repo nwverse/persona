@@ -18,6 +18,10 @@ const (
 	auditBotPaired      = "bot_paired"       // {open_id}: whoever sent the code is the owner now
 	auditBotPairGuessed = "bot_pair_guessed" // {fails}: the pairing was dropped after too many wrong codes
 	auditBotUnpaired    = "bot_unpaired"     // the owner was removed
+
+	auditBotSourceReportDelay     = "bot_source_report_delay"      // {minutes}: source-group preview window
+	auditBotSourceReportFullReply = "bot_source_report_full_reply" // {enabled}: forward the final answer
+
 	// {chat_id}: a group chat the owner opted in, or took out again (the /topics command, or the app's list).
 	auditBotTopicChatAdded   = "bot_topic_chat_added"
 	auditBotTopicChatRemoved = "bot_topic_chat_removed"
@@ -25,6 +29,8 @@ const (
 	auditBotTopicHome = "bot_topic_home"
 	// {chat_id}: the owner's "@bot /ai …" was taken from a group chat that is not opted in (#6146). Never the words.
 	auditBotAITaken = "bot_ai_taken"
+	// {chat_id}: the owner's "@bot /read …" was taken from a group chat (#11803). Never the words.
+	auditBotReadTaken = "bot_read_taken"
 )
 
 // botRecord is an audit record of the bot's, written once its lock is let go.

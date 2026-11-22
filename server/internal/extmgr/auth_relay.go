@@ -72,6 +72,6 @@ func heldAuthRelay(r wire.AuthRelayResult) wire.AuthRelayResult {
 	if !slices.Contains(wire.AuthRelayReasons, r.Reason) || r.Status == wire.AuthRelayStatusDone {
 		r.Reason = ""
 	}
-	r.App = clipRunes(strings.Join(strings.Fields(r.App), " "), 79) // with its …, the schema's 80
+	r.App = clip(strings.Join(strings.Fields(r.App), " "), 79) // with its …, the schema's 80
 	return r
 }

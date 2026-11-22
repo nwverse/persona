@@ -27,12 +27,15 @@ import java.time.Instant
  */
 internal fun spaceTabs(session: Session?, sessions: List<Session>): List<Session> {
     if (session == null) return emptyList()
-    val space = session.spaceId?.takeIf(String::isNotBlank) ?: session.workspaceId?.takeIf(String::isNotBlank) ?: return emptyList()
+    val space = session.spaceId?.takeIf(String::isNotBlank) ?: return emptyList()
+    val listed = (sessions + session).mapTo(HashSet()) { it.key }
     val byPane = LinkedHashMap<String, Session>()
     val rest = mutableListOf<Session>()
     for (other in sessions + session) {
         if (other.machineId != session.machineId || other.assistant || other.agentState == AgentState.Offline) continue
-        if ((other.spaceId?.takeIf(String::isNotBlank) ?: other.workspaceId) != space) continue
+        if (other.spaceId?.takeIf(String::isNotBlank) != space) continue
+        if (other.key != session.key &&
+            other.foldedUnder?.takeIf(String::isNotBlank)?.let { SessionKey(other.machineId, it) in listed } == true) continue
         val pane = other.paneId?.takeIf(String::isNotBlank)
         if (pane == null) { if (rest.none { it.key == other.key }) rest += other; continue }
         val had = byPane[pane]
@@ -75,18 +78,26 @@ internal fun Session.status(): Status = Status.entries.firstOrNull { it.name == 
 
 /**
  * Under the chat's title (iOS `SiblingTabs`): the space's tabs as chips with their state's dot, the current one
- * selected; it opens scrolled to the current one. ⋯ lists them all with their state. Nothing when the space has one
- * tab or there is no way to switch.
+ * selected; it opens scrolled to the current one. ⋯ lists them all with their state. The caller provides the tabs
+ * of the current space and shows the strip only when there is a tab to switch to.
  */
 @Composable
-internal fun ChatSiblingTabs(session: Session?, sessions: List<Session>, onOpenSession: ((SessionKey) -> Unit)?) {
-    val tabs = remember(session, sessions) { spaceTabs(session, sessions) }
+internal fun ChatSiblingTabs(
+    session: Session, tabs: List<Session>, onOpenSession: (SessionKey) -> Unit,
+    /** At the row's end, after ⋯: the loop and background pill on Glass (iOS `contextRow`, #4339 C8). */
+    trailing: (@Composable () -> Unit)? = null,
+) {
     val labels = remember(tabs) { siblingTabs(tabs) }
-    if (session == null || onOpenSession == null || tabs.size <= 1) return
     var all by remember { mutableStateOf(false) }
-    val list = rememberLazyListState()
     val at = tabs.indexOfFirst { it.key == session.key }
-    LaunchedEffect(session.key) { if (at > 0) list.animateScrollToItem(at - 1) }
+    val list = rememberLazyListState(initialFirstVisibleItemIndex = (at - 1).coerceAtLeast(0))
+    var anchoredSession by remember { mutableStateOf(session.key) }
+    LaunchedEffect(session.key) {
+        if (anchoredSession != session.key) {
+            anchoredSession = session.key
+            if (at >= 0) list.animateScrollToItem((at - 1).coerceAtLeast(0))
+        }
+    }
     val waiting = tabs.any { it.key != session.key && it.agentState == AgentState.NeedsYou }
     Row(
         Modifier.fillMaxWidth().padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xs),
@@ -105,6 +116,7 @@ internal fun ChatSiblingTabs(session: Session?, sessions: List<Session>, onOpenS
         }
         JIconButton(PhIcons.DotsThree, pluralStringResource(if (waiting) R.plurals.chat_tabs_all_waiting else R.plurals.chat_tabs_all, tabs.size, tabs.size),
             { all = true }, badge = waiting)
+        trailing?.invoke()
     }
     if (all) JSheet(onDismiss = { all = false }, title = pluralStringResource(R.plurals.chat_tabs_sheet_title, tabs.size, tabs.size), scrollable = true) {
         labels.forEach { label ->

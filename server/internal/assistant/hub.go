@@ -22,12 +22,15 @@ type Hub interface {
 	// Hello is manager.hello's answer: hub.json's assistant section (the defaults of the assistant's own settings) and
 	// the machines. BusHub keeps the last one and takes manager.updated.
 	Hello(ctx context.Context) (Hello, error)
-	// DeviceCall is device.call {device, method, params}: a call to one of the user's machines (DeviceMethod*).
+	// DeviceCall is device.call {device, method, params}: a call to one of the user's machines (assistantwire.Device*).
 	DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error)
+	// CredentialRevoked checks the original sender before a kept message is delivered.
+	CredentialRevoked(ctx context.Context, id string) (bool, error)
 	// AppCall is app.call {app_id, method, params}: a call to an app the hub runs (App*).
 	AppCall(ctx context.Context, p AppCall) (json.RawMessage, error)
-	// NotifyRequest is notify.request {notification} → {ok}: a push for the user (nil error is ok).
-	NotifyRequest(ctx context.Context, p NotifyRequest) error
+	// NotifyRequest is notify.request {notification} → {ok, held?, reason?}: a push for the user. Held/reason say ln
+	// mode kept it for the briefing instead of alerting the phone.
+	NotifyRequest(ctx context.Context, p NotifyRequest) (NotifyResult, error)
 	// Broadcast is ws.broadcast {message}: a live update the apps get as it is (assistant_schedule, assistant_feed,
 	// task_plan). One way: nothing comes back.
 	Broadcast(ctx context.Context, b Broadcast)
@@ -46,11 +49,14 @@ type (
 	Placement           = assistantwire.Placement
 	DeviceCall          = assistantwire.DeviceCall
 	Device              = assistantwire.Device
+	ClientApp           = assistantwire.ClientApp
 	ConfiguredLauncher  = assistantwire.ConfiguredLauncher
+	LauncherRecovery    = assistantwire.LauncherRecovery
 	HubModels           = assistantwire.HubModels
 	AppCall             = assistantwire.AppCall
 	ModelBinding        = assistantwire.ModelBinding
 	NotifyRequest       = assistantwire.NotifyRequest
+	NotifyResult        = assistantwire.NotifyResult
 	Notification        = assistantwire.Notification
 	Broadcast           = assistantwire.Broadcast
 	Snapshot            = assistantwire.Snapshot
@@ -68,6 +74,7 @@ type (
 	MessageCard         = assistantwire.MessageCard
 	DeviceSessions      = assistantwire.DeviceSessions
 	StartEnded          = assistantwire.StartEnded
+	ConversationSent    = assistantwire.ConversationSent
 	HTTPRequest         = assistantwire.HTTPRequest
 	HTTPResponse        = assistantwire.HTTPResponse
 	Profile             = assistantwire.Profile
@@ -111,6 +118,10 @@ const (
 	FeishuPost            = assistantwire.FeishuPost
 	FeishuText            = assistantwire.FeishuText
 	FeishuUpdateCard      = assistantwire.FeishuUpdateCard
+	FeishuCardCreate      = assistantwire.FeishuCardCreate
+	FeishuCardUpdate      = assistantwire.FeishuCardUpdate
+	FeishuCardStream      = assistantwire.FeishuCardStream
+	FeishuCardSettings    = assistantwire.FeishuCardSettings
 	FeishuPin             = assistantwire.FeishuPin
 	FeishuRecall          = assistantwire.FeishuRecall
 	FeishuCotCreate       = assistantwire.FeishuCotCreate
@@ -119,6 +130,7 @@ const (
 	CodeFeishuAPI         = assistantwire.CodeFeishuAPI
 	CodeChatDenied        = assistantwire.CodeChatDenied
 	FeishuFromElsewhere   = assistantwire.FeishuFromElsewhere
+	FeishuFromRead        = assistantwire.FeishuFromRead
 	FeishuReact           = assistantwire.FeishuReact
 	FeishuUnreact         = assistantwire.FeishuUnreact
 	FeishuMessages        = assistantwire.FeishuMessages
@@ -155,6 +167,8 @@ const (
 	DeviceSessionRename      = assistantwire.DeviceSessionRename
 	DeviceAssistantSend      = assistantwire.DeviceAssistantSend
 	DeviceSessionSend        = assistantwire.DeviceSessionSend
+	DeviceSessionModes       = assistantwire.DeviceSessionModes
+	DeviceSessionSwitch      = assistantwire.DeviceSessionSwitch
 	DeviceSessionStart       = assistantwire.DeviceSessionStart
 	DeviceWorktreePrepare    = assistantwire.DeviceWorktreePrepare
 	DeviceWorktreeCreate     = assistantwire.DeviceWorktreeCreate
@@ -174,6 +188,8 @@ const (
 	AppPlugins               = assistantwire.AppPlugins
 	PluginsAssistant         = assistantwire.PluginsAssistant
 	PluginsSkillsNeed        = assistantwire.PluginsSkillsNeed
+	PluginsProjectContext    = assistantwire.PluginsProjectContext
+	PluginsInboxContext      = assistantwire.PluginsInboxContext
 	SettingsList             = assistantwire.SettingsList
 	AppConnectors            = assistantwire.AppConnectors
 	ConnectorsSnapshots      = assistantwire.ConnectorsSnapshots
@@ -208,6 +224,8 @@ const (
 	EventStartEnded          = assistantwire.EventStartEnded
 	CodeNoDevice             = assistantwire.CodeNoDevice
 	CodeMachineOffline       = assistantwire.CodeMachineOffline
+	CodeNodeClosed           = assistantwire.CodeNodeClosed
+	CodeMeetingEnded         = assistantwire.CodeMeetingEnded
 	CodeStaleSnapshot        = assistantwire.CodeStaleSnapshot
 	CodeAssistantOffline     = assistantwire.CodeAssistantOffline
 	DeviceAll                = assistantwire.DeviceAll
@@ -217,8 +235,12 @@ const (
 	AssistantID              = assistantwire.AssistantID
 )
 
-// DeviceAssistantGuestPrepare makes a guest conversation's directory (guest.go).
-const DeviceAssistantGuestPrepare = assistantwire.DeviceAssistantGuestPrepare
+// DeviceAssistantGuestPrepare makes a guest conversation's directory (guest.go); DeviceAssistantGuestDelete removes a
+// meeting's room (meeting_room.go).
+const (
+	DeviceAssistantGuestPrepare = assistantwire.DeviceAssistantGuestPrepare
+	DeviceAssistantGuestDelete  = assistantwire.DeviceAssistantGuestDelete
+)
 
 var (
 	ErrNoDevice      = assistantwire.ErrNoDevice

@@ -6,7 +6,7 @@ import UIKit
 
 /// Simulator profiling for the sidebar's drag (`-showDrawerProbe YES`): every decision `DrawerPan` makes about a touch
 /// (why it did or did not start), and while a drag and its settle run, every frame's interval and the main thread's busy
-/// time in it. Appended to Documents/drawer-probe.jsonl for scripts to read (docs/operations/testing.md「侧边栏拖动」).
+/// time in it. Appended to Documents/drawer-probe.jsonl for scripts to read (docs/operations/testing.md「Sidebar dragging」).
 @MainActor final class DrawerProbe: NSObject {
     static let shared = DrawerProbe()
     static let on = UserDefaults.standard.bool(forKey: "showDrawerProbe")

@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -61,6 +62,9 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 		for kind, d := range src.Kinds {
 			b.kinds[src.ID+"/"+kind] = d
 		}
+		if src.Via != "" {
+			b.vias[src.ID] = inboxVia{connector: src.Via, source: src.ViaSource, chats: src.Chats}
+		}
 	}
 	b.srcMu.Unlock()
 	b.mu.Lock()
@@ -84,6 +88,7 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	readsChanged := b.recordReads(r)
 	batch := b.batch
 	batch.registered = r.Names
+	// Done past inboxForget leaves memory; its row stays as history until purgeInboxHistory (below) deletes it.
 	for id, it := range b.items {
 		if it.DoneAt != nil && time.Since(*it.DoneAt) > inboxForget {
 			b.drop(id)
@@ -96,6 +101,7 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 		b.roundWrite(it)
 	}
 	changed = append(changed, b.roundMuted(b.applyMutes(now))...)
+	changed = b.followMerged(append(changed, b.releaseMembers()...), now)
 	changed, todo := b.sortBatch(batch, changed, now)
 	b.applyRuledPolicies(changed)
 	b.settleRound()
@@ -103,17 +109,26 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	b.batch = nil
 	b.mu.Unlock()
 	s.saveInboxUndo(ctx, changed, s.undoWrites(ws, "what the round changed"))
+	if st := s.inboxDB(); st != nil {
+		s.purgeInboxHistory(ctx, st, now)
+	}
 	if readsChanged && len(changed) == 0 {
 		s.inboxChanged(ctx, nil) // nothing came in, but which sources could be read did (saveInbox tells otherwise)
 	}
+	if s.inboxTodoForwardOn(ctx) {
+		s.forwardInboxSoon(ctx)
+	}
 	s.triageInbox(ctx)
+	s.settleInbox(ctx) // "Needs you" events the owner answered in the source, or that were closed there (inbox_settle.go)
 	s.translateInbox(ctx)
 	s.admitInbox(ctx, batch, todo)
 	return nil
 }
 
 // recordReads keeps which of a round's sources could not be read, under b.mu: a source read now (or off) is cleared,
-// one that failed is marked, one the hub no longer has goes, the others keep theirs. It says whether that changed.
+// one that failed is marked, one the hub no longer has goes, the others keep theirs. The mail accounts are a mail
+// round's (those it names as failed; a round without mail keeps them, and they go with mail itself). It says whether
+// that changed.
 func (b *inboxBook) recordReads(r assistantwire.InboxRound) bool {
 	next := map[string]string{}
 	for id, code := range b.readErrs {
@@ -133,10 +148,32 @@ func (b *inboxBook) recordReads(r assistantwire.InboxRound) bool {
 		changed = changed || b.readErrs[id] != code
 	}
 	b.readErrs = next
-	return changed
+	mailChanged := b.recordMailReads(r)
+	return changed || mailChanged
 }
 
 // ---- the connectors' ----
+
+// withoutCounts are a source's generic things with no extra.count, for one that does not say what it means there
+// (InboxSource.Counts): each of their moves counts one, as it always did.
+func withoutCounts(things []connector.InboxThing) []connector.InboxThing {
+	var out []connector.InboxThing
+	for i, t := range things {
+		if t.Extra == nil || t.Extra.Count == 0 {
+			continue
+		}
+		if out == nil {
+			out = slices.Clone(things)
+		}
+		x := *t.Extra
+		x.Count = 0
+		out[i].Extra = &x
+	}
+	if out == nil {
+		return things
+	}
+	return out
+}
 
 // collectSource applies one connector's things: its batches go to be related to events (in the background), a
 // migrated connector's things with extra keep the items' own blocks, the others become generic items; then the open
@@ -147,8 +184,11 @@ func (s *Service) collectSource(ctx context.Context, src assistantwire.InboxSour
 	if len(src.Things) == 0 && !src.Settles {
 		return nil
 	}
-	// Batches of new messages go to the model, not the list.
-	things := s.relateBatches(ctx, src, src.Things)
+	// The conversations that wrote into a batch's chat as the user hear of it (chat_reply.go); the batch goes on as it is.
+	s.tellChatWriters(ctx, src)
+	// State reports update their existing events; batches of new messages go to the model, not the list.
+	things, changed := s.applyGroupStates(ctx, src, src.Things)
+	things = s.relateBatches(ctx, src, things)
 	var own []connector.InboxThing // a migrated connector's things that keep the inbox's own item shape
 	if src.Migrated {
 		generic := things[:0:0]
@@ -161,7 +201,9 @@ func (s *Service) collectSource(ctx context.Context, src assistantwire.InboxSour
 		}
 		things = generic
 	}
-	var changed []*InboxItem
+	if !src.Counts {
+		things = withoutCounts(things)
+	}
 	b.mu.Lock()
 	changed = append(changed, b.applyConnector(src.ID, src.Name, things, time.Now())...)
 	changed = append(changed, b.applyMigrated(src.ID, own, time.Now())...)

@@ -1,6 +1,6 @@
 import Foundation
 
-/// What the main conversation still needs (docs/assistant/onboarding.md 4.4, 5.1; docs/protocol/protocol.md「主对话就绪度」): the hub works it
+/// What the main conversation still needs (docs/assistant/onboarding.md 4.4, 5.1; docs/protocol/protocol.md「Main chat readiness」): the hub works it
 /// out (`GET /api/v1/assistant/readiness`, feature `assistant_readiness`) and every client draws the same thing from it —
 /// in `setup` a card over the composer with the first missing step, the send button saying what to do first, example
 /// questions that open local help. Every enum-like field is a String: a newer hub's value decodes and is shown as
@@ -24,11 +24,14 @@ nonisolated struct AssistantReadiness: Codable, Hashable, Sendable {
         var version: String?
         var title: String?
         var detail: String?
+        /// A rate limit's main turn time, health-only reset window, or other newest evidence time.
+        var occurrence: String?
         var action: Action?
         var altActions: [Action]?
 
         enum CodingKeys: String, CodingKey {
             case id, state, code, machine, launcher, version, title, detail, action
+            case occurrence
             case altActions = "alt_actions"
         }
 
@@ -128,8 +131,11 @@ nonisolated struct AssistantReadiness: Codable, Hashable, Sendable {
         return s
     }
 
-    /// The steps of computer / claude / model still to do (Settings's 「还有 N 步」).
-    var stepsLeft: Int { Self.blocking.compactMap { step($0) }.filter { $0.state != "ok" && $0.state != "skipped" }.count }
+    /// The steps of computer / claude / model still to do (Settings's 「还有 N 步」): only the ones that block, like
+    /// `blockingStep` and the hub's readinessBlocks; unknown / checking and a rate limit leave nothing to do (5.1).
+    var stepsToDo: [Step] { Self.blocking.compactMap { step($0) }.filter { !$0.passes && $0.code != "rate_limited" } }
+
+    var stepsLeft: Int { stepsToDo.count }
 
     /// The main conversation already runs: its computer, Claude Code and model all check out.
     var claudeWorks: Bool { Self.blocking.allSatisfy { step($0)?.state == "ok" } }
@@ -141,7 +147,7 @@ nonisolated struct AssistantReadiness: Codable, Hashable, Sendable {
     static func knows(action id: String?) -> Bool { id.map(knownActions.contains) ?? false }
 }
 
-/// A start or a send the hub refused with a code (docs/assistant/onboarding.md 5.2, docs/protocol/protocol.md「错误体」): drawn as a card
+/// A start or a send the hub refused with a code (docs/assistant/onboarding.md 5.2, docs/protocol/protocol.md「Error body」): drawn as a card
 /// with the hub's words and a button for its code, never a toast. Anything else keeps today's toast.
 nonisolated struct CodedFailure: Hashable, Sendable, Identifiable {
     var code: String
@@ -194,10 +200,29 @@ nonisolated struct TurnErrorFix: Hashable, Sendable {
     var detail: String
     var action: String
 
-    init?(code: String?) {
+    init?(code: String?, launcher: String? = nil) {
+        let owner = launcher?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let owner, !owner.isEmpty {
+            switch code {
+            case "not_logged_in":
+                self.init(title: String(localized: "Model not connected: \(owner) isn't signed in"), detail: String(localized: "The Claude desktop app's sign-in doesn't count for it. Run claude auth login in a terminal on that computer, or use an API key instead."), action: "connect_model")
+                return
+            case "auth_failed":
+                self.init(title: String(localized: "Model not connected: the key for \(owner) is wrong"), detail: String(localized: "The key is wrong or has expired; use one that works."), action: "edit_provider")
+                return
+            case "model_route":
+                self.init(title: String(localized: "Model not connected: this model isn't available on \(owner)"), detail: String(localized: "The model name is wrong, or the model isn't available right now; try another one."), action: "connect_model")
+                return
+            default:
+                return nil
+            }
+        }
         switch code {
         case "not_logged_in":
-            self.init(title: String(localized: "Model not connected: Claude Code isn't signed in"), detail: String(localized: "Sign in once on that computer, or use an API key instead."), action: "connect_model")
+            // The CLI the conversation runs, not the Claude desktop app, whose sign-in it does not share (#9366).
+            self.init(title: String(localized: "Model not connected: Claude Code CLI isn't signed in"),
+                      detail: String(localized: "The Claude desktop app's sign-in doesn't count for it. Run claude auth login in a terminal on that computer, or use an API key instead."),
+                      action: "connect_model")
         case "auth_failed":
             self.init(title: String(localized: "Model not connected: the key is wrong"), detail: String(localized: "The key is wrong or has expired; use one that works."), action: "edit_provider")
         case "model_route":

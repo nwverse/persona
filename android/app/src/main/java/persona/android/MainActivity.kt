@@ -1,19 +1,22 @@
 package persona.android
 
 import androidx.compose.ui.res.stringResource
-import android.Manifest
+import android.annotation.SuppressLint
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
+import android.view.KeyEvent
+import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
@@ -36,6 +39,7 @@ import persona.android.platform.PlatformPairing
 import persona.android.platform.PlatformRoot
 import persona.android.ui.AppServices
 import persona.android.ui.AppearanceOverride
+import persona.feature.assistant.conversationOpeningSource
 import persona.core.contracts.LarkFeatures
 import persona.core.contracts.api.HubConnection
 import persona.core.designsystem.GlassThrottle
@@ -43,11 +47,15 @@ import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.LocalAppStyleStore
 import persona.core.designsystem.LocalGlassLevel
 import persona.core.designsystem.LocalPersonaDesign
+import persona.core.designsystem.dense
+import persona.core.designsystem.keepAmbientLightMoving
 import persona.core.navigation.*
+import persona.feature.settings.ProviderImportRequests
 import persona.feature.settings.SettingsServices
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
@@ -59,8 +67,10 @@ class MainActivity : ComponentActivity() {
     override fun attachBaseContext(base: android.content.Context) = super.attachBaseContext(persona.core.designsystem.AppLanguages.wrap(base))
 
     @Inject lateinit var settingsServices: SettingsServices
-    /** The hubs' channels, for the "From WeChat" marks on messages and conversations (docs/extensions/channels.md "Source marks"). */
+    /** The hubs' channels, for the "From WeChat" marks on messages and conversations (docs/extensions/channels.md "Source markers"). */
     @Inject lateinit var channelDirectory: persona.core.contracts.api.ChannelDirectory
+    /** The installed extensions' icons, for the marks of conversations an extension opened (#10358). */
+    @Inject lateinit var openerIcons: persona.feature.assistant.OpenerIcons
     @Inject lateinit var connection: HubConnection
     @Inject lateinit var shell: AppServices
     @Inject lateinit var platformPairing: PlatformPairing
@@ -73,7 +83,6 @@ class MainActivity : ComponentActivity() {
     /** Only a debug launch adapter overrides the system appearance. */
     private val darkTheme = mutableStateOf<Boolean?>(null)
 
-    private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
     /** Installed only by the debug manifest; release builds have no launch adapter or developer pages. */
     private val launchAdapter: LaunchAdapter? by lazy {
         // A legacy launcher alias does not inherit target metadata; always query the canonical Activity.
@@ -94,12 +103,13 @@ class MainActivity : ComponentActivity() {
             shell.posture.value = input.posture
             input.style?.let { (application as PersonaApp).appearance.setStyle(it) }
         }
-        if (Build.VERSION.SDK_INT >= 33 && !shell.automation && !shell.demoSaved()) {
-            askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
         val app = application as PersonaApp
         lifecycleScope.launch { shell.restoreDemo() }
-        persona.android.platform.GlassFrameMonitor.attach(this) { !shell.automation }
+        persona.android.platform.GlassFrameMonitor.attach(
+            this,
+            deviceLevel = { app.appearance.deviceLevel(app.appearance.glass.value) },
+            enabled = { !shell.automation },
+        )
         managerRoster.start()
         setContent {
             val scheme by app.appearance.scheme.collectAsStateWithLifecycle()
@@ -126,12 +136,15 @@ class MainActivity : ComponentActivity() {
                 LocalDeveloperTools provides launchAdapter?.tools,
                 persona.core.designsystem.LocalLanguageHost provides this@MainActivity,
                 persona.core.designsystem.LocalChannels provides channels,
+                persona.feature.assistant.LocalOpenerIcons provides openerIcons,
+                persona.feature.chat.LocalOpeningMessageSource provides ::conversationOpeningSource,
                 persona.core.designsystem.LocalLarkFeatures provides lark,
                 persona.core.designsystem.LocalHubFeatures provides features,
                 persona.core.designsystem.LocalManagerRoster provides managers,
                 persona.core.designsystem.LocalManagerGroup provides managerGroup,
                 persona.feature.inbox.LocalTranslator provides translator,
                 LocalAppStyleStore provides app.appearance,
+                persona.core.designsystem.LocalStarPrompt provides app.starPrompt,
                 LocalGlassLevel provides glassLevel,
                 LocalPersonaDesign provides face,
                 persona.core.designsystem.LocalPersonaStore provides app.personas,
@@ -151,13 +164,14 @@ class MainActivity : ComponentActivity() {
                     val ready by app.pairingReady.collectAsStateWithLifecycle()
                     val failed by app.pairingRestoreError.collectAsStateWithLifecycle()
                     val capsuleFullScreen by capsules.fullScreen.collectAsStateWithLifecycle()
-                    if (ready && capsuleFullScreen) persona.android.capsule.CapsuleFullScreen(capsules) {
+                    val capsulePresentation by capsules.presentation.collectAsStateWithLifecycle()
+                    if (ready && capsuleFullScreen && capsulePresentation != null) persona.android.capsule.CapsuleFullScreen(capsules) {
                         capsules.returnToCapsule()
                         moveTaskToBack(true)
                     }
                     else if (ready) PlatformRoot(hub = hub, openNavigation = openNavigation, services = settingsServices, shell = shell)
                     else Surface(Modifier.fillMaxSize()) {
-                        Column(Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp)) {
+                        Column(Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp.dense)) {
                             if (failed) {
                                 Text(stringResource(R.string.app_pairing_unreadable))
                                 TextButton(onClick = app::restorePairing) { Text(stringResource(R.string.app_retry), maxLines = 1) }
@@ -171,18 +185,51 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        keepAmbientLightMoving()
         setIntent(intent)
-        if (intent.data != null || intent.hasExtra(EXTRA_SESSION) || intent.hasExtra("debug.openTab")) capsules.leaveFullScreen()
         handle(intent)
     }
 
     override fun onStart() {
         super.onStart()
-        (application as PersonaApp).hub.value?.kick()
+        val app = application as PersonaApp
+        lifecycleScope.launch {
+            app.pairingReady.first { it }
+            app.hub.value?.kick()
+        }
+    }
+
+    // Input that reaches this window keeps Glass's ambient light moving; five seconds after the last it holds still
+    // (AmbientClock). Dialogs and bottom sheets are windows of their own: input there does not arrive here, so the
+    // light behind their scrim stops five seconds after the input that opened them, on purpose.
+    override fun onResume() {
+        super.onResume()
+        keepAmbientLightMoving()
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        keepAmbientLightMoving()
+        return super.dispatchTouchEvent(ev)
+    }
+
+    // Overridden only to note when the user last pressed a key; it calls super as before, so behaviour is unchanged.
+    // Lint's RestrictedApi check is about calling ComponentActivity.dispatchKeyEvent from outside its library.
+    @SuppressLint("RestrictedApi")
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        keepAmbientLightMoving()
+        return super.dispatchKeyEvent(event)
+    }
+
+    /** Mouse wheels, touchpads and hovering pointers on tablets and foldables. */
+    override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
+        keepAmbientLightMoving()
+        return super.dispatchGenericMotionEvent(ev)
     }
 
     private fun handle(intent: Intent?) {
         if (intent == null) return
+        val launchInput = launchAdapter?.read(intent)
+        if (leavesCapsuleFullScreen(intent, launchInput != null)) capsules.leaveFullScreen()
         intent.getStringExtra(EXTRA_CAPSULE_URL)?.let { url ->
             val target = android.net.Uri.parse(url)
             if (target.scheme == "https" && !target.host.isNullOrBlank()) pendingCapsuleUrl.value = url
@@ -192,7 +239,7 @@ class MainActivity : ComponentActivity() {
             pendingLockTest.value = true
             intent.removeExtra(LockScreenTests.EXTRA_LOCK_TEST)
         }
-        launchAdapter?.read(intent)?.let { input ->
+        launchInput?.let { input ->
             darkTheme.value = input.darkTheme
             shell.automation = input.automation
             shell.posture.value = input.posture
@@ -219,8 +266,18 @@ class MainActivity : ComponentActivity() {
             openNavigation.value = { it.parse(RouteInput.Notification(session)) }
         }
         val uri = intent.data ?: return
+        if (uri.host == "password-login") {
+            persona.android.platform.PasswordBrowserLogin.complete(uri)
+            return
+        }
         if (uri.host == "pair") {
             pendingPairLink.value = uri.toString()
+            return
+        }
+        if (uri.scheme == "persona" && uri.host == "provider" && uri.path == "/import") {
+            // A gateway's or a shared provider import link (#5428): the providers page reads it through the hub.
+            ProviderImportRequests.pending.value = uri.toString()
+            openNavigation.value = focusing { router -> router.parse(RouteInput.Internal(SettingsPageRoute(SettingsPage.Providers))) }
             return
         }
         val link = uri.toString()
@@ -248,7 +305,20 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_SESSION = "session"
         const val EXTRA_CAPSULE_URL = "persona.capsule.url"
         val pendingCapsuleUrl = mutableStateOf<String?>(null)
+        /** A message link waiting for its hub group and replacement session; survives the shell's identity change. */
+        val pendingHubLink = mutableStateOf<String?>(null)
         /** A pairing link the activity was opened with, for the pairing screen to confirm. */
         val pendingPairLink = mutableStateOf<String?>(null)
     }
 }
+
+/** Explicit notification, deep-link, capsule URL, lock-test and debug intents exit any lingering full-screen capsule mode. */
+internal fun leavesCapsuleFullScreen(intent: Intent?, hasLaunchInput: Boolean = false): Boolean =
+    intent != null && (
+        hasLaunchInput ||
+            intent.data != null ||
+            intent.hasExtra(MainActivity.EXTRA_SESSION) ||
+            intent.hasExtra(MainActivity.EXTRA_CAPSULE_URL) ||
+            intent.getBooleanExtra(LockScreenTests.EXTRA_LOCK_TEST, false) ||
+            intent.hasExtra("debug.openTab")
+        )

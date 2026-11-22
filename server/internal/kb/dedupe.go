@@ -17,7 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
-// Project dedupe (docs/assistant/knowledge.md "Project dedupe"). The same work is often discussed in several groups under different
+// Project dedupe (docs/assistant/knowledge.md "Project deduplication"). The same work is often discussed in several groups under different
 // names, and a chat's compression only sees project names: each group grew its own project (2026-11-01: two names
 // for the same work with no word in common, 10 people in common). Pairs of live projects that share people, chats
 // or name words go to the model with both profiles; the ones it calls the same are merged. Each pair's verdict is
@@ -153,7 +153,11 @@ func (e *Engine) DedupeProjects(ctx context.Context, max int) int {
 	verdicts := e.Store.dedupeVerdicts()
 	asked, merged := 0, 0
 	gone := map[string]bool{} // merged away this run: their other pairs are stale
-	for _, c := range dedupeCandidates(e.Store.Projects()) {
+	projects := e.Store.Projects()
+	for _, p := range projects {
+		p.People = e.externalPeople(p.People)
+	}
+	for _, c := range dedupeCandidates(projects) {
 		if asked >= max || ctx.Err() != nil {
 			break
 		}
@@ -163,6 +167,9 @@ func (e *Engine) DedupeProjects(ctx context.Context, max int) int {
 		// One side named in the shown form of the other (「X（a、b）」 and X) is a copied listing, not a second project
 		// to judge: the model kept the copy and merged the real one into it (#5824).
 		if isShownFormOf(c.a.Name, c.b.Name) || isShownFormOf(c.b.Name, c.a.Name) {
+			continue
+		}
+		if e.shareProjectSource(c.a, c.b) {
 			continue
 		}
 		key := pairKey(c.a.Slug, c.b.Slug)
@@ -198,6 +205,7 @@ func (e *Engine) DedupeProjects(ctx context.Context, max int) int {
 }
 
 func (e *Engine) judgeDuplicate(ctx context.Context, c dedupeCandidate) (same, keepA bool, reason string, err error) {
+	owner := e.knowledgeOwner()
 	side := func(key string, p *Project) prompts.KBDedupeProject {
 		var chats []string
 		for i, id := range p.Chats {
@@ -208,10 +216,10 @@ func (e *Engine) judgeDuplicate(ctx context.Context, c dedupeCandidate) (same, k
 				chats = append(chats, ch.Name)
 			}
 		}
-		return prompts.KBDedupeProject{Key: key, Name: p.Name, Aliases: p.Aliases, OneLine: p.OneLine, Goal: p.Goal,
+		return prompts.KBDedupeProject{Language: owner.Language, Key: key, Name: p.Name, Aliases: p.Aliases, OneLine: p.OneLine, Goal: p.Goal,
 			Summary: clip(e.Store.Summary(KindProject, p.Slug), 1500), Chats: chats, People: len(p.People)}
 	}
-	in := prompts.RenderKBDedupeInput(prompts.KBDedupeInput{A: side("A", c.a), B: side("B", c.b), Shared: c.shared})
+	in := prompts.RenderKBDedupeInput(prompts.KBDedupeInput{Language: owner.Language, A: side("A", c.a), B: side("B", c.b), Shared: c.shared})
 	var d struct {
 		Same   bool   `json:"same"`
 		Sure   bool   `json:"sure"`
@@ -220,7 +228,7 @@ func (e *Engine) judgeDuplicate(ctx context.Context, c dedupeCandidate) (same, k
 	}
 	cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	if err := e.modelFor("kb.dedupe").JSONMax(cctx, prompts.RenderKBDedupe(prompts.KBOwner{Owner: e.Owner}), in, 600, &d); err != nil {
+	if err := e.modelFor("kb.dedupe").JSONMax(cctx, prompts.RenderKBDedupe(owner), in, 600, &d); err != nil {
 		return false, false, "", err
 	}
 	reason = oneLine(d.Reason)
@@ -233,9 +241,13 @@ func (e *Engine) judgeDuplicate(ctx context.Context, c dedupeCandidate) (same, k
 
 // hedgeWords in a "same" verdict's reason mean the model doubts it (merges whose reasons read "whether the direction is the same is doubtful",
 // #2546).
-var hedgeWords = []string{"存疑", "不确定", "拿不准", "不一定", "待确认", "或许", "也许", "似乎", "不太像", "可能不是"}
+var hedgeWords = []string{"存疑", "不确定", "拿不准", "不一定", "待确认", "或许", "也许", "似乎", "不太像", "可能不是",
+	"uncertain", "unsure", "unclear", "doubt", "not sure", "not certain", "cannot tell", "can't tell", "maybe", "perhaps", "might", "may be", "may not", "possibly", "probably", "seems",
+	"not the same", "not same", "not identical", "different project", "different work", "distinct projects",
+	"不確か", "不明", "確信でき", "判断でき", "疑問", "疑わし", "かもしれ", "おそらく", "可能性"}
 
 func hedged(reason string) bool {
+	reason = strings.ReplaceAll(strings.ToLower(reason), "’", "'")
 	for _, w := range hedgeWords {
 		if strings.Contains(reason, w) {
 			return true
@@ -254,7 +266,9 @@ func (e *Engine) MergeProjects(keepSlug, dropSlug, why string) error {
 	return e.mergeProjects(keepSlug, dropSlug, why, false)
 }
 
-func protectedProject(p *Project) bool { return p.Pinned != "" || p.Locked || len(p.LockedFields) > 0 }
+func protectedProject(p *Project) bool {
+	return p.referenceOnly() || len(p.SourceURLs) > 0 || p.Pinned != "" || p.Locked || len(p.LockedFields) > 0
+}
 
 func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) error {
 	if keepSlug == dropSlug {
@@ -268,9 +282,15 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 	if !ok || !drop.Live() {
 		return fmt.Errorf("%s: %w", dropSlug, ErrNotFound)
 	}
+	if keep.referenceOnly() || drop.referenceOnly() {
+		return fmt.Errorf("%w: cannot merge projects", ErrReferenceOnly)
+	}
 	if !manual {
 		if protectedProject(keep) || protectedProject(drop) {
 			return errors.New("automatic merge would change a protected project")
+		}
+		if e.shareProjectSource(keep, drop) {
+			return errors.New("automatic merge would fold separate views of a shared source")
 		}
 		for _, id := range drop.Chats {
 			if c, ok := e.Store.Chat(id); ok && c.fieldLocked("projects") {
@@ -304,9 +324,17 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 		keep.Aliases = append(keep.Aliases, a)
 	}
 	addProjectAliases(keep, drop.Aliases, taken)
-	keep.People = addUnique(keep.People, drop.People...)
-	keep.Chats = addUnique(keep.Chats, drop.Chats...)
-	keep.Items = addUnique(keep.Items, drop.Items...)
+	// Not what the user took off keep; and what they took off drop stays off keep, unless keep has it (rec.Excluded).
+	keep.People = addUnique(keep.People, keep.kept("people", drop.People)...)
+	keep.Chats = addUnique(keep.Chats, keep.kept("chats", drop.Chats)...)
+	keep.Items = addUnique(keep.Items, keep.kept("items", drop.Items)...)
+	for _, list := range []string{"people", "chats", "items"} {
+		for _, id := range drop.Excluded[list] {
+			if !slices.Contains(*keep.list(list), id) && !keep.excludes(list, id) {
+				rec.exclude(list, id)
+			}
+		}
+	}
 	keep.Dirs = addUnique(keep.Dirs, drop.Dirs...)
 	keep.Keywords = addUnique(keep.Keywords, drop.Keywords...)
 	keep.Moments = mergeMoments(keep.Moments, drop.Moments)
@@ -368,6 +396,17 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 	if err := e.Store.putEntity(KindProject, keep.Slug, keep, &keep.Tagging, manual); err != nil {
 		return err
 	}
+	if len(rec.Excluded) > 0 { // tagging only: an automatic merge's write keeps keep's own exclusions as they were
+		err := e.Store.editTagging(KindProject, keep.Slug, func(t *Tagging) bool {
+			for list, ids := range rec.Excluded {
+				t.exclude(list, ids...)
+			}
+			return true
+		})
+		if err != nil {
+			return err
+		}
+	}
 	if mergedSummary != "" {
 		if err := e.Store.putSummary(KindProject, keep.Slug, mergedSummary, true); err != nil {
 			return err
@@ -375,20 +414,27 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 	}
 	// Who named drop names keep.
 	swap := func(ref string, list []string) ([]string, bool) {
+		to := keep.Slug
+		if list, member := refList(ref); keep.excludes(list, member) {
+			to = "" // the user took it off keep: it stops naming drop and does not name keep
+		}
 		changed := false
 		var out []string
 		for _, s := range list {
 			if s == drop.Slug {
-				s, changed = keep.Slug, true
+				s, changed = to, true
 			}
 			out = addUnique(out, s)
 		}
-		if changed && !slices.Contains(list, keep.Slug) {
+		if changed && to != "" && !slices.Contains(list, keep.Slug) {
 			rec.Moved = append(rec.Moved, ref)
 		}
 		return out, changed
 	}
 	if err := e.relinkRefs(drop, manual, swap); err != nil {
+		return err
+	}
+	if err := e.excludeBack(keep.Slug, rec.Excluded, true); err != nil {
 		return err
 	}
 	drop.Status, drop.MergedInto, drop.Merge, drop.Dirty = "merged", keep.Slug, rec, false
@@ -412,6 +458,44 @@ func projectRefs(p *Project) []string {
 	return append(refs, p.Items...)
 }
 
+// refList is the list of a project's that names ref ("<kind>/<id>"), and the id it names it by there.
+func refList(ref string) (list, member string) {
+	kind, id, _ := strings.Cut(ref, "/")
+	switch kind {
+	case KindChat:
+		return "chats", id
+	case KindPerson:
+		return "people", id
+	}
+	return "items", ref
+}
+
+// excludeBack records (on) or lifts the reverse side of exclusions a merge gave the project slug: each chat, person
+// and item in links stops (or may again) name it (exclude.go). Tagging only, so an automatic merge records it too.
+func (e *Engine) excludeBack(slug string, links map[string][]string, on bool) error {
+	for _, list := range []string{"people", "chats", "items"} {
+		for _, member := range links[list] {
+			kind, id := list, member
+			if list == "items" {
+				kind, id, _ = strings.Cut(member, "/")
+			}
+			err := e.Store.editTagging(kind, id, func(t *Tagging) bool {
+				had := t.excludes("projects", slug)
+				if on {
+					t.exclude("projects", slug)
+				} else {
+					t.include("projects", slug)
+				}
+				return had != on
+			})
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // relinkRefs gives each of p's chats, people and items the projects f makes of its own, and writes the ones f changes.
 func (e *Engine) relinkRefs(p *Project, manual bool, f func(ref string, projects []string) ([]string, bool)) error {
 	for _, ref := range projectRefs(p) {
@@ -421,17 +505,42 @@ func (e *Engine) relinkRefs(p *Project, manual bool, f func(ref string, projects
 		var list *[]string
 		switch kind {
 		case KindChat:
-			c, ok := e.Store.Chat(id)
-			if !ok {
-				continue
+			// Under chatMu (editChatAs): an ingest's pending count and last message time written meanwhile stay.
+			if _, _, err := e.Store.editChatAs(id, manual, func(c *Chat) {
+				if l, changed := f(ref, c.Projects); changed {
+					c.Projects = l
+				}
+			}); err != nil {
+				return err
 			}
-			v, t, list = c, &c.Tagging, &c.Projects
+			continue
+		case KindRecording:
+			// Under recMu, like every other read-compare-write of a recording: an upload or a trim meanwhile stays.
+			e.Store.recMu.Lock()
+			var err error
+			if r, ok := e.Store.Recording(id); ok {
+				if l, changed := f(ref, r.Projects); changed {
+					r.Projects = l
+					err = e.Store.putEntity(KindRecording, r.ID, r, &r.Tagging, manual)
+				}
+			}
+			e.Store.recMu.Unlock()
+			if err != nil {
+				return err
+			}
+			continue
 		case KindPerson:
-			per, ok := e.Store.Person(id)
-			if !ok {
-				continue
+			// Read again under personMu: chats or handles the pipeline links meanwhile stay.
+			if _, _, err := e.Store.updatePerson(id, manual, nil, func(per *Person) bool {
+				l, changed := f(ref, per.Projects)
+				if changed {
+					per.Projects = l
+				}
+				return changed
+			}); err != nil {
+				return err
 			}
-			v, t, list = per, &per.Tagging, &per.Projects
+			continue
 		default:
 			it, ok := e.Store.Item(kind, id)
 			if !ok {

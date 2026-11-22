@@ -2,12 +2,14 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/extwire"
 )
 
 // inboxConnector is a connector with an inbox, on made-up data.
@@ -364,5 +366,171 @@ func TestMigratedThingsWithoutABlockAreGeneric(t *testing.T) {
 	}
 	if h.inbox.ruleTier(items[0]) != TierAction {
 		t.Fatalf("rule tier %s", h.inbox.ruleTier(items[0]))
+	}
+}
+
+func TestRenamedConnectorRenamesItsItems(t *testing.T) {
+	h := newInboxHub(t)
+	now := time.Now()
+	apply := func(name string, things ...connector.InboxThing) []*InboxItem {
+		h.inbox.mu.Lock()
+		defer h.inbox.mu.Unlock()
+		return h.inbox.applyConnector("example", name, things, now)
+	}
+	other := thing("b1", now.Add(-time.Hour))
+	other.Thread = "example-org/example-repo#13"
+	apply("Old name", thing("a1", now.Add(-time.Hour)), other)
+	// One thread moves in the same round as the rename: it is listed once.
+	moved := thing("a2", now)
+	ch := apply("New name", moved)
+	if len(ch) != 2 {
+		t.Fatalf("changed %d, want both items once", len(ch))
+	}
+	h.inbox.mu.Lock()
+	for _, it := range h.inbox.items {
+		if it.Source == "example" && it.AccountName != "New name" {
+			t.Errorf("%s keeps account name %q", it.ID, it.AccountName)
+		}
+	}
+	h.inbox.mu.Unlock()
+	if ch := apply("New name"); len(ch) != 0 {
+		t.Fatalf("an unchanged name changed %d items", len(ch))
+	}
+}
+
+// A thing's picture (#10923) is kept on the item's connector block and listed as the avatars route's path, apart from
+// Feishu's avatar and never as the source's value: a new picture shows on the open item without a move, an older thing
+// never puts an earlier one back, and a value that names none (too long, http://) is none.
+func TestConnectorThingsPictureIsTheOpenItems(t *testing.T) {
+	h := newInboxHub(t)
+	now := time.Now()
+	apply := func(things ...connector.InboxThing) []*InboxItem {
+		h.inbox.mu.Lock()
+		defer h.inbox.mu.Unlock()
+		return h.inbox.applyConnector("example", "Example", things, now)
+	}
+	pictured := func(last, avatar string, at time.Time) connector.InboxThing {
+		th := thing(last, at)
+		th.Avatar = avatar
+		return th
+	}
+	avatar := func() (string, int) {
+		h.inbox.mu.Lock()
+		defer h.inbox.mu.Unlock()
+		items := openItems(h)
+		if len(items) != 1 || items[0].Connector == nil {
+			t.Fatalf("open items %d", len(items))
+		}
+		return items[0].Connector.Avatar, items[0].Count
+	}
+	moved := now.Add(-time.Hour)
+	if ch := apply(pictured("a", "a.u1.501", moved)); len(ch) != 1 {
+		t.Fatalf("changed %d", len(ch))
+	}
+	if got, _ := avatar(); got != "a.u1.501" {
+		t.Fatalf("avatar %q", got)
+	}
+	// The same move, a new picture: the open item takes it, and nothing else moves.
+	if ch := apply(pictured("a", "a.u1.502", moved)); len(ch) != 1 {
+		t.Fatalf("a new picture changed %d", len(ch))
+	}
+	if got, count := avatar(); got != "a.u1.502" || count != 1 {
+		t.Fatalf("avatar %q, count %d", got, count)
+	}
+	if ch := apply(pictured("a", "a.u1.502", moved)); len(ch) != 0 {
+		t.Fatalf("the same picture changed %d", len(ch))
+	}
+	// An earlier move read again (a connector restarted) says nothing of the picture.
+	if ch := apply(pictured("z", "a.u1.400", moved.Add(-time.Minute))); len(ch) != 0 {
+		t.Fatalf("an older thing changed %d", len(ch))
+	}
+	if got, _ := avatar(); got != "a.u1.502" {
+		t.Fatalf("an older thing put back %q", got)
+	}
+	// A ref is a name, not a picture: one past AvatarValueMost is none, and the row draws the initial; so is an address
+	// the hub does not fetch.
+	apply(pictured("a", "a."+strings.Repeat("x", extwire.AvatarValueMost), moved))
+	if got, _ := avatar(); got != "" {
+		t.Fatalf("an over-long ref kept: %d bytes", len(got))
+	}
+	apply(pictured("a", "https://avatars.example.com/u/1?v=4", moved))
+	apply(pictured("a", "http://avatars.example.com/u/1", moved))
+	if got, _ := avatar(); got != "" {
+		t.Fatalf("an http address kept: %q", got)
+	}
+	// A connector that sends none (older ones) leaves the block without one: listed with no "avatar" key.
+	apply(pictured("b", "a.c2.900", now))
+	h.inbox.mu.Lock()
+	var listed InboxItem
+	for _, it := range openItems(h) {
+		listed = it.listed()
+	}
+	h.inbox.mu.Unlock()
+	b, err := json.Marshal(listed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Avatar    *string `json:"avatar"`
+		Connector struct {
+			Avatar    *string `json:"avatar"`
+			AvatarURL string  `json:"avatar_url"`
+		} `json:"connector"`
+	}
+	if err := json.Unmarshal(b, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire.Connector.AvatarURL != "/api/v1/avatars/example/YS5jMi45MDA" || wire.Connector.Avatar != nil || wire.Avatar != nil {
+		t.Fatalf("listed %s", b)
+	}
+	// Kept as the source named it: the route's path is made when listed.
+	if got, _ := avatar(); got != "a.c2.900" {
+		t.Fatalf("kept %q", got)
+	}
+	if ch := apply(pictured("c", "", now.Add(time.Minute))); len(ch) != 1 {
+		t.Fatalf("changed %d", len(ch))
+	}
+	if got, _ := avatar(); got != "" {
+		t.Fatalf("a thing without a picture kept %q", got)
+	}
+}
+
+// A subscription's row of several items (#5671) says how many a move brings (extra.count, InboxSource.Counts): the
+// item counts them as a chat row counts its unread messages. Another source's extra.count means nothing there: each
+// of its moves counts one.
+func TestAMoveCountsWhatItBringsWhereTheSourceSaysSo(t *testing.T) {
+	now := time.Now()
+	move := func(last string, at time.Time, n int) connector.InboxThing {
+		t := thing(last, at)
+		t.Tier, t.Extra = "", &connector.ThingExtra{RuleTier: string(TierFYI), Count: n}
+		return t
+	}
+	for _, counts := range []bool{true, false} {
+		h := newInboxHub(t)
+		collect := func(th connector.InboxThing) {
+			h.collectSource(context.Background(), assistantwire.InboxSource{ID: "sub_a", Name: "Notices", Extension: true, Counts: counts,
+				Things: []connector.InboxThing{th}})
+		}
+		collect(move("a", now.Add(-time.Hour), 3))
+		items := openItems(h)
+		if len(items) != 1 {
+			t.Fatalf("counts %v: %d items", counts, len(items))
+		}
+		it := items[0]
+		want := map[bool][2]int{true: {3, 5}, false: {1, 2}}[counts]
+		if it.Count != want[0] {
+			t.Fatalf("counts %v: a new item of a move of three counts %d, want %d", counts, it.Count, want[0])
+		}
+		collect(move("b", now.Add(-time.Minute), 2))
+		collect(move("b", now.Add(-time.Minute), 2)) // the same move again adds nothing
+		if it.Count != want[1] {
+			t.Fatalf("counts %v: after a move of two %d, want %d", counts, it.Count, want[1])
+		}
+		if counts {
+			last := it.Chain[len(it.Chain)-1]
+			if last.Kind != ChainReceived || last.Count != want[1] {
+				t.Fatalf("the merged received entry: %+v", last)
+			}
+		}
 	}
 }

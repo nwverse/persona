@@ -5,6 +5,7 @@
   "search_placeholder": "チャットを検索",
   "no_match": "一致するチャットはありません",
   "empty": "個人エージェントのチャットはまだありません",
+  "sources_unavailable": "一部の個人エージェントを現在表示できません",
   "group_all": "すべて",
   "pin": "ピン留め",
   "unpin": "ピン留めを解除",
@@ -21,5 +22,6 @@
   "reacted": "リアクション",
   "no_detail": "詳細はありません",
   "composer_placeholder": "このエージェントにメッセージ（Enterで送信、Shift+Enterで改行）",
-  "send": "送信"
+  "send": "送信",
+  "restore": "元に戻す"
 }

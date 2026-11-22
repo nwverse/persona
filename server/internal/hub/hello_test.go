@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 func TestHealthSourceDisclosure(t *testing.T) {
@@ -38,9 +39,9 @@ func TestHealthSourceDisclosure(t *testing.T) {
 			if len(body) != 5 {
 				t.Fatalf("public health leaked metadata: %v", body)
 			}
-		} else if len(body) != 12 || body["version"] != h.version || body["features"] == nil || body["protocol"] == nil ||
-			body["min_app_build"] == nil || body["update"] == nil {
-			// version, features, and the update fields (channel, build, protocol, min_app_build, update)
+		} else if len(body) != 13 || body["version"] != h.version || body["features"] == nil || body["protocol"] == nil ||
+			body["min_app_build"] == nil || body["update"] == nil || body["commit"] == nil {
+			// version, features, the update fields (channel, build, protocol, min_app_build, update) and the commit
 			t.Fatalf("LAN health lost legacy fields: %v", body)
 		}
 	}
@@ -52,6 +53,10 @@ func TestHealthSourceDisclosure(t *testing.T) {
 	}
 }
 
+// iosEnvelopeKeys are the keys the iOS app's socket Envelope (apple/Shared/LiveConnection.swift) already types: a new
+// top-level hello key must not be one of them.
+var iosEnvelopeKeys = strings.Fields("type machine_id session_id machines sessions items backlog has_more more_after history from_seq to_seq text status interaction id call_id name args event message last_assistant_message error revs feed_ids fleet features epoch seq full cols rows data unsupported state")
+
 func TestHelloCompatibility(t *testing.T) {
 	h := newPublicTestHub(t)
 	h.public.port, h.public.fp = 19443, "test-pin"
@@ -61,8 +66,11 @@ func TestHelloCompatibility(t *testing.T) {
 		t.Fatal("legacy hello fields changed")
 	}
 	features := hello["features"].([]string)
-	if !slices.Contains(features, "tls") || !slices.Contains(features, "endpoints") {
+	if !slices.Contains(features, "tls") || !slices.Contains(features, "endpoints") || !slices.Contains(features, proto.FeatureMessageSendState) {
 		t.Fatal("new capabilities were not declared")
+	}
+	if version, ok := hello[proto.FeatureMessageSendState].(int); !ok || version != proto.MessageSendStateVersion {
+		t.Fatal("hello did not carry the hub-authored receipt version")
 	}
 	if hello["hub_id"] != h.hubID() || hello["tls_port"] != 19443 || hello["fp"] != "test-pin" || len(hello["endpoints"].([]Endpoint)) != 1 {
 		t.Fatal("missing public connection metadata")
@@ -79,9 +87,8 @@ func TestHelloCompatibility(t *testing.T) {
 		t.Fatal("public_url without one configured")
 	}
 	// The existing iOS Envelope must not see a new value under an already typed key.
-	known := strings.Fields("type machine_id session_id machines sessions items backlog has_more more_after history from_seq to_seq text status interaction id call_id name args event message last_assistant_message error revs feed_ids fleet features epoch seq full cols rows data unsupported state")
-	for _, key := range []string{"hub_id", "endpoints", "tls_port", "fp", "public_url"} {
-		if slices.Contains(known, key) {
+	for _, key := range []string{"hub_id", "endpoints", "tls_port", "fp", "public_url", "push_grading", proto.FeatureMessageSendState} {
+		if slices.Contains(iosEnvelopeKeys, key) {
 			t.Fatalf("new hello field collides with iOS Envelope: %s", key)
 		}
 	}
@@ -139,16 +146,20 @@ func TestPublicDisabledKeepsPlaintextAndLegacyWebSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	var hello struct {
-		Type          string     `json:"type"`
-		Features      []string   `json:"features"`
-		HubID         string     `json:"hub_id"`
-		Endpoints     []Endpoint `json:"endpoints"`
-		Port          int        `json:"tls_port"`
-		Pin           string     `json:"fp"`
-		ServerVersion string     `json:"server_version"`
+		Type             string     `json:"type"`
+		Features         []string   `json:"features"`
+		HubID            string     `json:"hub_id"`
+		Endpoints        []Endpoint `json:"endpoints"`
+		Port             int        `json:"tls_port"`
+		Pin              string     `json:"fp"`
+		ServerVersion    string     `json:"server_version"`
+		MessageSendState int        `json:"message_send_state"`
 	}
 	if err := json.Unmarshal(data, &hello); err != nil || hello.Type != "hello" || hello.Port != 0 || hello.Pin != "" || hello.HubID != h.hubID() || hello.ServerVersion != h.version {
 		t.Fatalf("legacy WebSocket hello: %s, %v", data, err)
+	}
+	if !slices.Contains(hello.Features, proto.FeatureMessageSendState) || hello.MessageSendState != proto.MessageSendStateVersion {
+		t.Fatal("authenticated socket hello did not declare hub-owned receipts")
 	}
 	if hello.Endpoints == nil || len(hello.Endpoints) != 1 || hello.Endpoints[0].URL != h.cfg.PublicURL {
 		t.Fatal("old public_url was not preserved as a single plaintext candidate")

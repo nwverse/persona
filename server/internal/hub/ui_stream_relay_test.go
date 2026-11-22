@@ -14,7 +14,7 @@ func TestUIStreamRelayKeepsResumeSequenceHubOwned(t *testing.T) {
 			h := newTestHub(t)
 			app := &client{hub: h, role: roleFull, device: "example-device", uiConnection: "example-connection", out: make(chan []byte, 4), urlFeatures: map[string]bool{extwire.FeatureUIStream: true}, uiManagers: map[string]bool{assistantwire.AssistantID: true}}
 			other := &client{hub: h, role: roleFull, device: "example-device", uiConnection: "other-connection", out: make(chan []byte, 4), urlFeatures: map[string]bool{extwire.FeatureUIStream: true}, uiManagers: map[string]bool{assistantwire.AssistantID: true}}
-			h.clients[app], h.clients[other] = struct{}{}, struct{}{}
+			addTestClient(h, app, other)
 			body, err := json.Marshal(map[string]any{"type": "extension_ui_stream", "kind": kind, "manager": "forged-manager", "event_seq": 999999, "payload": map[string]any{"event_seq": 7, "text": "Example page data"}})
 			if err != nil {
 				t.Fatal(err)
@@ -58,7 +58,7 @@ func TestUIStreamRelayRetainsRecipientGuards(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			h := newTestHub(t)
 			app := &client{hub: h, role: roleFull, device: "example-device", uiConnection: "example-connection", out: make(chan []byte, 4), urlFeatures: map[string]bool{extwire.FeatureUIStream: true}, uiManagers: map[string]bool{assistantwire.AssistantID: true}}
-			h.clients[app] = struct{}{}
+			addTestClient(h, app)
 			target := extwire.UITarget{Who: h.uiPrincipal(app), Envelope: json.RawMessage(`{"type":"extension_ui_stream","kind":"snapshot","event_seq":999999}`)}
 			switch name {
 			case "hub":

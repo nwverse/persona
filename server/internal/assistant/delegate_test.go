@@ -147,7 +147,7 @@ func TestDelegateLeavesSomeAsTheyAre(t *testing.T) {
 
 // The assistant's answer to one of the manager's cards reaches the agent saying it is the assistant's, and why.
 func TestDelegatedAnswerToTheAgent(t *testing.T) {
-	golden(t, "agent_answer.delegated", renderDelegatedAnswer([]agentAnswerItem{{"用哪个方案？", "用 D4"}}, "D4 是 Agent 推荐的，和任务不冲突"))
+	golden(t, "agent_answer.delegated", renderDelegatedAnswer([]agentAnswerItem{{"用哪个方案？", "用 D4"}}, "D4 是 Agent 推荐的，和任务不冲突", ""))
 }
 
 // "Answering questions" is a category of its own: by default on the triage's connection with Opus when that connection serves Claude
@@ -192,5 +192,51 @@ func TestDelegateModel(t *testing.T) {
 		if p, _ := s.modelPurpose(ctx, "agent.delegate", s.modelProviders(ctx)); p.InheritedFrom != "" {
 			t.Fatalf("%s: a connection of the user's: inherited from %q", tc.triage, p.InheritedFrom)
 		}
+	}
+}
+
+// styleQuestion asks how to write new tests, the way the agent's card lists it: one option with a description.
+func styleQuestion() proto.Interaction {
+	return proto.Interaction{ID: "ix_3", MachineID: "box", SessionID: "s1", Kind: proto.IxQuestion,
+		Questions: []proto.Question{{Question: "新测试写成表驱动还是每个用例一个函数？", Options: []proto.QuestionOption{
+			{Label: "表驱动", Description: "和这个包现有的测试一致"}, {Label: "每个用例一个函数"}}}},
+		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(30 * time.Minute).UTC()}
+}
+
+// The delegation input lists an option as "label：description", and the model sometimes copies the whole line (#3929).
+// That names the option: the answer is its label, and a red line is still the user's.
+func TestDelegateResultTakesAnOptionWrittenOut(t *testing.T) {
+	now := time.Now()
+	deploy := proto.Interaction{ID: "ix_4", MachineID: "box", SessionID: "s1", Kind: proto.IxQuestion,
+		Questions: []proto.Question{{Question: "现在部署吗？", Options: []proto.QuestionOption{
+			{Label: "部署", Description: "推到线上"}, {Label: "先不部署"}}}},
+		CreatedAt: now.UTC(), ExpiresAt: now.Add(30 * time.Minute).UTC()}
+	for _, tc := range []struct {
+		name   string
+		ix     proto.Interaction
+		answer string // the model's
+		want   string // "": left to the user
+		rec    string
+	}{
+		{"label：description", styleQuestion(), "表驱动：和这个包现有的测试一致", "表驱动", ""},
+		{"a description with a colon of its own", branchQuestion(), "feat/x：推荐：任务就在这上面", "feat/x", ""},
+		{"its own reason after the label", styleQuestion(), "表驱动：更好维护", "", ""},
+		{"a red line written out", deploy, "部署：推到线上", "", "部署"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := tc.ix.Questions[0].Question
+			out := delegateOut{Decision: "answer", Reason: "和现有的一致", Answers: map[string]json.RawMessage{}}
+			out.Answers[q], _ = json.Marshal(tc.answer)
+			res := delegateResult(tc.ix, out, now)
+			if tc.want != "" {
+				if !res.Answer || res.Answers[q] != tc.want || res.Ask != nil {
+					t.Fatalf("got %+v, want the answer %q", res, tc.want)
+				}
+				return
+			}
+			if res.Answer || res.Ask == nil || res.Ask.Recommend != tc.rec {
+				t.Fatalf("got %+v, want it left to the user recommending %q", res, tc.rec)
+			}
+		})
 	}
 }

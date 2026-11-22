@@ -1,4 +1,4 @@
-// The hubs this browser goes between (#1014, docs/web/web.md "Switching hubs"). Each hub serves its own page and keeps its own
+// The hubs this browser goes between (#1014, docs/web/web.md "Switch hub"). Each hub serves its own page and keeps its own
 // sign-in on its own origin (no CORS, no token ever crosses origins), so switching is opening the other hub's page.
 // The list holds names and addresses only and lives in this origin's localStorage; a switch carries it along in the
 // address (`#hubs=`, never sent to a server) so the next hub's page knows the same hubs. Each page keeps its own copy,
@@ -9,7 +9,7 @@ import { BASE } from "./base";
 
 export interface SavedHub {
   /** The hub's origin, `scheme://host[:port]` as `URL.origin` writes it, plus the sub-path a reverse proxy serves it
-   * under (`https://<domain>/<prefix>`, docs/web/web.md "Sub-path"), without a trailing slash. */
+   * under (`https://<domain>/<prefix>`, docs/web/web.md "Subpaths"), without a trailing slash. */
   url: string;
   /** The hub's own name (hello's `hub_name`), refreshed whenever this browser opens it. */
   name?: string;
@@ -33,7 +33,7 @@ export const MAX_HUBS = 20;
 export const MAX_REMOVED = 50;
 
 // The first segments of the page's own routes (lib/router.ts) and the hub's own paths.
-const PAGE_SEGMENTS = new Set(["s", "t", "j", "a", "overview", "history", "assistant", "inbox", "messages", "routines", "kb", "machines", "terminal", "agents", "settings", "todos", "extension", "plugin", "workspace-board", "screen", "api", "admin", "assets"]);
+const PAGE_SEGMENTS = new Set(["s", "t", "j", "a", "overview", "history", "assistant", "inbox", "messages", "starred", "routines", "kb", "machines", "terminal", "agents", "settings", "todos", "extension", "plugin", "workspace-board", "screen", "api", "admin", "assets"]);
 
 /** This page's hub: its origin and the sub-path it is served under. */
 export const here = () => (typeof location === "undefined" ? "" : location.origin + BASE);
@@ -43,6 +43,8 @@ export const here = () => (typeof location === "undefined" ? "" : location.origi
 export function normalizeHubURL(input: string): { url: string } | { error: string } {
   const raw = input.trim();
   if (!raw) return { error: t("lib-hubs.url_empty") };
+  // An address has no spaces. Chrome's parser takes "not a url" as the host "not%20a%20url" (others refuse it).
+  if (/\s/.test(raw)) return { error: t("lib-hubs.url_invalid") };
   let u: URL;
   try {
     u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`);
@@ -52,7 +54,9 @@ export function normalizeHubURL(input: string): { url: string } | { error: strin
   if (u.protocol !== "http:" && u.protocol !== "https:") return { error: t("lib-hubs.url_scheme") };
   if (u.username || u.password) return { error: t("lib-hubs.url_credentials") };
   if (u.search || u.hash) return { error: t("lib-hubs.url_path") };
-  if (!u.hostname) return { error: t("lib-hubs.url_invalid") };
+  // A host is a name (letters, digits, "-", "_", dots; another script's letters come out of URL as xn--…), an IPv4
+  // address or a bracketed IPv6 one: nothing escaped (%), which Chrome lets through.
+  if (!/^(\[[0-9a-f:.]+\]|[a-z0-9_-]+(\.[a-z0-9_-]+)*\.?)$/i.test(u.hostname)) return { error: t("lib-hubs.url_invalid") };
   const path = u.pathname.replace(/\/+$/, "");
   // only plain path segments, what the hub takes as X-Forwarded-Prefix (URL has already resolved any "..")
   if (path && !/^(\/[A-Za-z0-9._~-]+)+$/.test(path)) return { error: t("lib-hubs.url_path") };

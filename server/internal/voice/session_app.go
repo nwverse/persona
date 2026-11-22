@@ -22,6 +22,14 @@ func (c *conversation) readApp() {
 		if typ == websocket.MessageBinary {
 			ms, now := meanSquare(b), time.Now()
 			c.mu.Lock()
+			if !c.talkGate(len(b)) { // a meeting call outside a Talk span: the model hears none of it (meeting.go)
+				c.mu.Unlock()
+				continue
+			}
+			if c.sus.onHold { // the user is on another call: none of it is for the model, nor kept for the wake (suspend.go)
+				c.mu.Unlock()
+				continue
+			}
 			up, ready, w := c.up, c.ready, c.w
 			voiced := c.pace.heard(now, ms)
 			held := c.held(b, voiced) // paused or waking: kept for the next session (suspend.go)
@@ -31,7 +39,7 @@ func (c *conversation) readApp() {
 			}
 			c.mu.Unlock()
 			if !held && ready && len(b) > 0 {
-				_ = writeJSON(c.ctx, up, w.audio(b))
+				_ = c.writeUp(up, w.audio(b)) // a stuck session: its reader sees the close and lost runs
 			}
 			continue
 		}
@@ -40,9 +48,13 @@ func (c *conversation) readApp() {
 			Text       string `json:"text"`
 			ID         string `json:"id"`
 			ClearDraft string `json:"clear_draft"`
+			On         bool   `json:"on"`
 		}
 		if json.Unmarshal(b, &msg) != nil {
 			continue
+		}
+		if c.dictation {
+			continue // dictation takes microphone audio only: no call controls, typed turns, holds or resends
 		}
 		switch msg.Type {
 		case "interrupt":
@@ -72,6 +84,10 @@ func (c *conversation) readApp() {
 			if !held && !c.sendUp(-1, w.text(text)) {
 				c.fail("语音会话还没连上，这句没发出去", false)
 			}
+		case "talk":
+			c.talkFrame(msg.On) // a Talk span opens or closes (meeting.go)
+		case "hold":
+			c.holdFrame(msg.On) // the call goes on hold or comes back (suspend.go, #9290)
 		case "resend":
 			// The user tapped "Resend" / "Clear and send" under a run a 409 refused (protocol 2): their own act, not the model's,
 			// so not held to the user-speech gate.

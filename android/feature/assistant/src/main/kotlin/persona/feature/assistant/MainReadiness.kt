@@ -13,6 +13,7 @@ import persona.core.designsystem.ReadinessActionId
 import persona.core.designsystem.hubAnswer
 import persona.core.domain.SetupFailureCodes
 import persona.core.navigation.ModelProviderRoute
+import persona.core.navigation.ModelPurposeRoute
 import persona.core.navigation.AddComputerRoute
 import androidx.navigation3.runtime.NavKey
 import persona.core.navigation.SettingsPage
@@ -51,10 +52,10 @@ internal class MainReadiness(private val load: suspend (probe: Boolean) -> Assis
 }
 
 /** Where a readiness button goes on the phone; null for one that opens help in place or runs here ("Try a message"). */
-internal fun ReadinessActionId.destination(launcher: String?, machine: String? = null): NavKey? = when (this) {
+internal fun ReadinessActionId.destination(launcher: String?, machine: String? = null, manager: String? = null): NavKey? = when (this) {
     ReadinessActionId.AddComputer -> AddComputerRoute()
     ReadinessActionId.ConfirmComputer -> AddComputerRoute(confirm = machine.orEmpty())
-    ReadinessActionId.ConnectModel -> SettingsPageRoute(SettingsPage.Providers)
+    ReadinessActionId.ConnectModel -> ModelPurposeRoute("assistant", manager)
     ReadinessActionId.EditProvider -> launcher?.takeIf(String::isNotBlank)?.let(::ModelProviderRoute)
         ?: SettingsPageRoute(SettingsPage.Providers)
     else -> null

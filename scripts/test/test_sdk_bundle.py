@@ -2,7 +2,9 @@
 """sdk/go/bundle/sdk.tar.gz (what `personad extension new` writes extensions from) is up to date with sdk/ts and
 sdk/templates, and scripts/gen/sync-sdk.sh copies a usable SDK."""
 
+import hashlib
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -23,6 +25,24 @@ class SDKBundle(unittest.TestCase):
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
 
+    def test_generator_is_stable_across_python_versions(self):
+        interpreters = [sys.executable]
+        for name in ("python3.13", "python3.12"):
+            path = shutil.which(name)
+            if path:
+                interpreters.append(path)
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); import sdk_bundle; "
+                "import hashlib; print(hashlib.sha256(sdk_bundle.build()).hexdigest())")
+        digests = {}
+        for interpreter in dict.fromkeys(interpreters):
+            r = subprocess.run([interpreter, "-I", "-c", code, os.path.join(ROOT, "scripts", "gen")],
+                               capture_output=True, text=True, timeout=30)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            digests[interpreter] = r.stdout.strip()
+        self.assertEqual(len(set(digests.values())), 1, digests)
+        with open(os.path.join(ROOT, "sdk", "go", "bundle", "sdk.tar.gz"), "rb") as bundle:
+            self.assertEqual(hashlib.sha256(bundle.read()).hexdigest(), next(iter(digests.values())))
+
     def test_sync_copies_both_sdks(self):
         with tempfile.TemporaryDirectory() as dest:
             r = subprocess.run(["sh", os.path.join(ROOT, "scripts", "gen", "sync-sdk.sh"), dest], capture_output=True, text=True)
@@ -31,6 +51,7 @@ class SDKBundle(unittest.TestCase):
                       "sdk/ts/src/index.ts", "sdk/ts/src/wire.ts", "sdk/VERSION",
                       "sdk/ts/package-lock.json", "sdk/ts/tsconfig.ui.json", "sdk/ts/tsconfig.negative.json",
                       "sdk/ts/scripts/check-portable.ts", "sdk/ts/scripts/portable-ui.mjs",
+                      "sdk/ts/.gitignore",
                       "sdk/ts/scripts/check-negative-types.ts", "sdk/ts/typechecks/native.tsx",
                       "sdk/ts/scripts/check-source-bundle.mjs", "sdk/ts/scripts/source-authoring-worker.mjs",
                       "sdk/ts/scripts/source-authoring-tests.mjs", "sdk/ts/README.md",
@@ -105,6 +126,16 @@ class SDKBundle(unittest.TestCase):
                     self.assertTrue(os.path.isfile(os.path.join(dest, "sdk/ts/scripts/check-portable.ts")))
                 else:
                     self.assertTrue(os.path.isfile(os.path.join(dest, "sdk/go/ext/ext.go")))
+
+
+    def test_sync_refuses_an_unknown_selector_without_touching_the_destination(self):
+        for selected in ("golang", "go,ts"):
+            with self.subTest(selected=selected), tempfile.TemporaryDirectory() as dest:
+                r = subprocess.run(["sh", os.path.join(ROOT, "scripts", "gen", "sync-sdk.sh"), dest, selected],
+                                   capture_output=True, text=True, timeout=30)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("usage: scripts/gen/sync-sdk.sh", r.stderr)
+                self.assertEqual(os.listdir(dest), [])
 
 
 if __name__ == "__main__":

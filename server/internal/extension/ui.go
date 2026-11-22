@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Declarative UI (docs/extensions/extensions.md "Declarative UI"): a plugin never runs code in the apps. It answers ui.render with a View
@@ -30,6 +31,9 @@ type UIItem struct {
 	Hosts     []string `json:"hosts,omitempty"`
 	// Icon is a nav_page's icon, from UIIcons (each app draws its own); the default when empty.
 	Icon string `json:"icon,omitempty"`
+	// IconColor is a nav_page's icon color, one of wire.Colors as a row's icon_color: drawn only while the owner chose
+	// Colored sidebar icons (#10822, docs/extensions/extensions.md "UI slots"); the sidebar's neutral ink when empty.
+	IconColor string `json:"icon_color,omitempty"`
 	// Opens is the ui (a nav_page or extension_page of the same extension) a compact card or widget opens when
 	// tapped.
 	Opens string `json:"opens,omitempty"`
@@ -39,7 +43,19 @@ type UIItem struct {
 	// its own (WidgetRefreshDefault when 0). A widget's only.
 	Families       []string `json:"families,omitempty"`
 	RefreshMinutes int      `json:"refresh_minutes,omitempty"`
+	// Group is the sidebar group a nav_page goes in unless the user put it elsewhere (#9071, docs/extensions/extensions.md
+	// "UI slots"): pages of any extension naming the same id share it. Its title is translated in l10n's groups.
+	Group *UIGroup `json:"group,omitempty"`
 }
+
+// UIGroup is a sidebar group a nav_page names: its id (a-z, 0-9, -) and its title in the manifest's language.
+type UIGroup struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+// uiGroupID is a group id's shape.
+var uiGroupID = lazyre.New(`^[a-z][a-z0-9-]{0,31}$`)
 
 // Refresh is how often widget u is drawn again on its own.
 func (u UIItem) Refresh() time.Duration {
@@ -76,13 +92,13 @@ var UISlots = []UISlot{
 	// inbox_item draws the body of an inbox item from the plugin's connector (its own header stays the app's): the
 	// same items a plugin's connector brought in, with the hub's triage on them. Drawn with UI version 2's items.
 	{Name: "inbox_item", Size: SizeFull, Context: "item", Shown: true, Since: 2},
-	// widget is drawn outside the app (docs/extensions/extensions.md "System-level places"): a home screen widget, a Lock Screen or watch
+	// widget is drawn outside the app (docs/extensions/extensions.md "System-level placements"): a home screen widget, a Lock Screen or watch
 	// face complication. The size it is asked for is the family (FitWidget holds the view to it); the apps list
 	// widgets on their own (GET /api/v1/extensions/-/widgets), not with the slots drawn in the app.
 	{Name: "widget", Size: WidgetFamilySmall, Shown: true, Since: 3},
 }
 
-// Widgets: the families a widget is drawn at and how often it is drawn again (docs/extensions/extensions.md "System-level places").
+// Widgets: the families a widget is drawn at and how often it is drawn again (docs/extensions/extensions.md "System-level placements").
 const (
 	WidgetFamilySmall    = wire.WidgetFamilySmall
 	WidgetRefreshDefault = 30 // minutes
@@ -123,9 +139,11 @@ var (
 // generated files, drafts of a pending review and its bar, resolving threads, a code's line links, and an action
 // answering with lines or with components in place; 6 pictures, controls in rows, candlestick, area, donut and pie
 // charts and sparks, a row's extra actions, grids and carousels, date, time, multiple choice and multi-line fields,
-// title styles, named colors and more icons (#5464). An app says which it draws (context.ui_version, 1 when it says
-// nothing); the hub leaves out of a View what the app does not know, or draws it with what it knows (Fit).
-const UIVersion = 6
+// title styles, named colors and more icons (#5464); 7 a section's key for the native stream (#5956), which needs no
+// downgrade; 8 the columns layout, a section's span, icon, link and columns (#9158); 9 a tile's gauge (#9337); 10 a
+// graph (#9727); 11 a scene (#12544). An app says which it draws (context.ui_version, 1 when it says nothing); the hub leaves out of a View
+// what the app does not know, or draws it with what it knows (Fit).
+const UIVersion = 11
 
 // PageSlot says whether placement is the extension's own page: extension_page, or plugin_page as it was called.
 func PageSlot(placement string) bool {
@@ -222,6 +240,18 @@ type ErrorReportsItem = wire.ErrorReportsItem
 // AuthRelayItem is a contribution to auth_relay: the authorization links (hosts and paths) it completes.
 type AuthRelayItem = wire.AuthRelayItem
 
+// SecretProviderItem is a contribution to secret_providers: the reference schemes whose values it supplies
+// (docs/extensions/secret-providers.md).
+type SecretProviderItem = wire.SecretProviderItem
+
+// RepositoryProviderItem is a contribution to repository_providers: a code-hosting source on the exact hosts it names
+// (docs/extensions/repository-providers.md).
+type RepositoryProviderItem = wire.RepositoryProviderItem
+
+// RepositoryLinkLabel is what a repository provider calls one kind of its links (wire.RepositoryLinkKinds), "MR" for a
+// pull_request: it only relabels.
+type RepositoryLinkLabel = wire.RepositoryLinkLabel
+
 // Events this hub has.
 var (
 	// EventTopics are the events by topic; how the install screen says each is extension-permissions.event_<topic with
@@ -234,15 +264,19 @@ var (
 		"agent.finished":  true,
 		"todo.changed":    true,
 		"todo.decision":   true,
+		"leader.changed":  true,
+		"leader.report":   true,
 	}
 
 	// EventScopes are the hub scopes an event needs besides the subscription: only an extension granted the scope
 	// (or the legacy full-hub grant) is told. A topic not listed needs none.
 	EventScopes = map[string]string{
-		"kb.changed":    ScopeKBRead,
-		"kb.forgotten":  ScopeKBRead,
-		"todo.changed":  ScopeTodosRead,
-		"todo.decision": ScopeTodosRead,
+		"kb.changed":     ScopeKBRead,
+		"kb.forgotten":   ScopeKBRead,
+		"todo.changed":   ScopeTodosRead,
+		"todo.decision":  ScopeTodosRead,
+		"leader.changed": ScopeLeadersRead,
+		"leader.report":  ScopeLeadersRead,
 	}
 )
 
@@ -331,20 +365,3 @@ var tones = append([]string{""}, wire.Tones...)
 func CheckView(v *View) error { return wire.CheckView(v) }
 
 func Actions(v *View) []*UIAction { return wire.Actions(v) }
-
-// ParseView reads and checks a View a plugin answered with.
-func ParseView(raw json.RawMessage) (*View, error) {
-	var v View
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return nil, err
-	}
-	if v.Sections == nil {
-		v.Sections = []Section{}
-	}
-	for i := range v.Sections {
-		if v.Sections[i].Items == nil {
-			v.Sections[i].Items = []UIElem{}
-		}
-	}
-	return &v, CheckView(&v)
-}

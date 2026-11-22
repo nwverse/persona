@@ -39,9 +39,12 @@ type Client struct {
 	domain           string
 	http             *http.Client
 
-	mu      sync.Mutex
-	token   string
-	expires time.Time
+	mu         sync.Mutex
+	token      string
+	console    string // the developer console this client links out to, when not what the domain says (tests)
+	expires    time.Time
+	refresh    chan struct{}
+	generation uint64
 }
 
 func New(appID, appSecret, domain string) *Client {
@@ -55,6 +58,8 @@ func (c *Client) WithHTTP(h *http.Client) *Client {
 }
 
 func (c *Client) AppID() string { return c.appID }
+
+func (c *Client) Domain() string { return c.domain }
 
 // APIError is Feishu's {code, msg} for a failed call.
 type APIError struct {
@@ -71,20 +76,62 @@ func (e *APIError) Error() string {
 func tokenGone(code int) bool { return code == 99991663 || code == 99991664 || code == 99991661 }
 
 func (c *Client) tenantToken(ctx context.Context, fresh bool) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !fresh && c.token != "" && time.Now().Before(c.expires) {
-		return c.token, nil
+	var waited bool
+	var generation uint64
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		c.mu.Lock()
+		if waited {
+			// A successful exchange since we joined satisfies even a forced refresh.
+			// Failure leaves the generation unchanged, so try with our own context.
+			fresh = c.generation == generation
+		}
+		if pending := c.refresh; pending != nil {
+			waited, generation = true, c.generation
+			c.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-pending:
+				// Recheck the current exchange and cache; this result may be superseded.
+				continue
+			}
+		}
+		if !fresh && c.token != "" && time.Now().Before(c.expires) {
+			token := c.token
+			c.mu.Unlock()
+			return token, nil
+		}
+		pending := make(chan struct{})
+		c.refresh = pending
+		c.mu.Unlock()
+
+		token, expires, err := c.fetchTenantToken(ctx)
+		c.mu.Lock()
+		if err == nil {
+			c.token, c.expires = token, expires
+			c.generation++
+		}
+		c.refresh = nil
+		close(pending)
+		c.mu.Unlock()
+		return token, err
 	}
+}
+
+// fetchTenantToken performs HTTP outside the cache lock using the refreshing caller's context.
+func (c *Client) fetchTenantToken(ctx context.Context) (string, time.Time, error) {
 	body, _ := json.Marshal(map[string]string{"app_id": c.appID, "app_secret": c.appSecret})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.domain+"/open-apis/auth/v3/tenant_access_token/internal", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 	defer resp.Body.Close()
 	var out struct {
@@ -94,20 +141,20 @@ func (c *Client) tenantToken(ctx context.Context, fresh bool) (string, error) {
 		Expire int    `json:"expire"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("feishu token: HTTP %d: %w", resp.StatusCode, err)
+		return "", time.Time{}, fmt.Errorf("feishu token: HTTP %d: %w", resp.StatusCode, err)
 	}
 	if out.Code != 0 || out.Token == "" {
-		return "", &APIError{Op: "token", Code: out.Code, Msg: out.Msg}
+		return "", time.Time{}, &APIError{Op: "token", Code: out.Code, Msg: out.Msg}
 	}
-	c.token = out.Token
-	c.expires = time.Now().Add(time.Duration(max(out.Expire-300, 60)) * time.Second)
-	return c.token, nil
+	return out.Token, time.Now().Add(time.Duration(max(out.Expire-300, 60)) * time.Second), nil
 }
 
 const (
-	codeRateLimited  = 99991400         // the open platform's rate-limit body code
-	callMaxAttempts  = 3                // includes the first attempt; callSleep is swapped in tests, so no t.Parallel here
-	callMaxRetryWait = 60 * time.Second // a server Retry-After longer than this ends the retries instead of hanging on it
+	codeRateLimited     = 99991400         // the open platform's rate-limit body code
+	codeChatRateLimited = 230020           // 5 messages a second into one chat or to one user; also a message updated too often
+	chatLimitWindow     = time.Second      // 230020's window: a retry waits at least this long
+	callMaxAttempts     = 3                // includes the first attempt; callSleep is swapped in tests, so no t.Parallel here
+	callMaxRetryWait    = 60 * time.Second // a server-requested wait longer than this ends the retries instead of hanging on it
 )
 
 var (
@@ -134,6 +181,10 @@ func (c *Client) callRetry(ctx context.Context, op, method, path string, in, out
 	if in != nil {
 		payload, _ = json.Marshal(in)
 	}
+	return c.callBody(ctx, op, method, path, payload, "application/json; charset=utf-8", out, idempotent)
+}
+
+func (c *Client) callBody(ctx context.Context, op, method, path string, payload []byte, contentType string, out any, idempotent bool) error {
 	var lastErr error
 	giveUp := func() error {
 		if e := ctx.Err(); e != nil {
@@ -141,6 +192,7 @@ func (c *Client) callRetry(ctx context.Context, op, method, path string, in, out
 		}
 		return lastErr
 	}
+	refreshed := false             // a forced refresh is allowed once, independently of transient attempts
 	forcedFresh, waits := false, 0 // forcedFresh makes the next token fetch bypass the cache (after a tokenGone answer); waits counts backoff slots used
 	for attempt := 0; attempt < callMaxAttempts; attempt++ {
 		tok, err := c.tenantToken(ctx, forcedFresh)
@@ -164,7 +216,7 @@ func (c *Client) callRetry(ctx context.Context, op, method, path string, in, out
 		}
 		req.Header.Set("Authorization", "Bearer "+tok)
 		if payload != nil {
-			req.Header.Set("Content-Type", "application/json; charset=utf-8")
+			req.Header.Set("Content-Type", contentType)
 		}
 		retry, after := false, time.Duration(0)
 		resp, err := c.http.Do(req)
@@ -175,7 +227,7 @@ func (c *Client) callRetry(ctx context.Context, op, method, path string, in, out
 			}
 			lastErr, retry = err, true
 		default:
-			after = retryAfterDelay(resp.Header.Get("Retry-After"))
+			after = retryWait(resp.Header, resp.StatusCode, 0)
 			raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 			resp.Body.Close()
 			switch {
@@ -190,7 +242,9 @@ func (c *Client) callRetry(ctx context.Context, op, method, path string, in, out
 					Msg  string          `json:"msg"`
 					Data json.RawMessage `json:"data"`
 				}
-				switch jerr := json.Unmarshal(raw, &env); {
+				jerr := json.Unmarshal(raw, &env)
+				after = retryWait(resp.Header, resp.StatusCode, env.Code)
+				switch {
 				case jerr != nil: // a gateway's HTML page on 429/5xx is transient; other non-JSON answers fail at once
 					lastErr = fmt.Errorf("feishu %s: HTTP %d: %w", op, resp.StatusCode, jerr)
 					retry = resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
@@ -202,12 +256,18 @@ func (c *Client) callRetry(ctx context.Context, op, method, path string, in, out
 					}
 					retry = true
 				case env.Code != 0:
-					if tokenGone(env.Code) && attempt == 0 {
-						forcedFresh = true
+					if tokenGone(env.Code) && !refreshed && attempt+1 < callMaxAttempts {
+						refreshed, forcedFresh = true, true
 						continue // one fresh token, one immediate retry, no backoff slot spent
 					}
 					lastErr = &APIError{Op: op, Code: env.Code, Msg: env.Msg}
-					retry = env.Code == codeRateLimited
+					// The per-chat limit is waited out only on a POST that gets here idempotent: a send or reply with a uuid,
+					// which lands once. A card update that meets it is its caller's to slow down (it sends a newer card).
+					retry = env.Code == codeRateLimited || env.Code == codeChatRateLimited && method == http.MethodPost
+				case resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices:
+					// A gateway's JSON may omit code or report zero despite rejecting the request.
+					// Keep its body out of the error and never decode it as a successful receipt.
+					lastErr = fmt.Errorf("feishu %s: HTTP %d", op, resp.StatusCode)
 				case out == nil:
 					return nil
 				case len(env.Data) > 0 && string(env.Data) != "null":
@@ -217,6 +277,9 @@ func (c *Client) callRetry(ctx context.Context, op, method, path string, in, out
 				}
 			}
 		}
+		if updatesMessage(method) {
+			after = 0 // the short backoff only: a longer wait the server names is the caller's (updatesMessage)
+		}
 		if !idempotent || !retry || !c.waitRetry(ctx, attempt, waits, after) {
 			return giveUp()
 		}
@@ -225,14 +288,45 @@ func (c *Client) callRetry(ctx context.Context, op, method, path string, in, out
 	return lastErr
 }
 
-// waitRetry applies +/-25% jittered backoff (or a larger server Retry-After) and reports whether to try once more.
+// updatesMessage: a card update (PATCH) or an agent message's append (PUT). Such a call is retried on the short backoff
+// only and does not sit out a longer wait the server names (x-ogw-ratelimit-reset, Retry-After): once the tries are
+// used up, its caller gets the rate-limit error, backs off on RateLimited and sends what is newest by then. The
+// progress tick makes these calls while it holds the run's progress lock, so waiting out a throttle window here would
+// hold back the run's answer.
+func updatesMessage(method string) bool {
+	return method == http.MethodPatch || method == http.MethodPut
+}
+
+// waitRetry applies +/-25% jittered backoff (or a longer wait the server asked for) and reports whether to try once more.
+// A wait that would outlast ctx's deadline is not started: the caller gets the last answer's error (a rate limit it can
+// back off on) now, rather than a bare deadline error once the wait has used up its time.
 func (c *Client) waitRetry(ctx context.Context, attempt, n int, after time.Duration) bool {
 	if attempt+1 >= callMaxAttempts || n >= len(callBackoff) || after > callMaxRetryWait {
 		return false
 	}
 	base := callBackoff[n]
-	d := base*3/4 + time.Duration(rand.Int64N(int64(base/2)))
-	return callSleep(ctx, max(d, after)) == nil // the server's throttle window wins over the short jittered backoff
+	d := max(base*3/4+time.Duration(rand.Int64N(int64(base/2))), after) // the server's throttle window wins over the short backoff
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < d {
+		return false
+	}
+	return callSleep(ctx, d) == nil
+}
+
+// retryWait is the least wait before an answer is tried again. A throttled answer (HTTP 429, or code 99991400 on the
+// older APIs' 400) names it in x-ogw-ratelimit-reset, the seconds until the gateway's window resets; a standard
+// Retry-After counts when it is longer. The per-chat send limit's window is a second.
+// https://open.feishu.cn/document/server-docs/api-call-guide/frequency-control
+func retryWait(h http.Header, status, code int) time.Duration {
+	after := retryAfterDelay(h.Get("Retry-After"))
+	if status == http.StatusTooManyRequests || code == codeRateLimited {
+		if secs, err := strconv.Atoi(strings.TrimSpace(h.Get("X-Ogw-Ratelimit-Reset"))); err == nil && secs > 0 {
+			after = max(after, time.Duration(secs)*time.Second)
+		}
+	}
+	if code == codeChatRateLimited {
+		after = max(after, chatLimitWindow)
+	}
+	return after
 }
 
 // retryAfterDelay parses a standard Retry-After header: delta seconds or an HTTP date.
@@ -267,11 +361,13 @@ func (c *Client) BotInfo(ctx context.Context) (BotInfo, error) {
 const (
 	TypeText        = "text"
 	TypePost        = "post"
+	TypeFile        = "file"
 	TypeInteractive = "interactive"
 )
 
 type sent struct {
 	MessageID string `json:"message_id"`
+	ChatID    string `json:"chat_id"`
 }
 
 // Send posts a message to a user (idType "open_id") or into a chat ("chat_id"); uuid (≤ 50 chars, may be "") makes
@@ -285,6 +381,18 @@ func (c *Client) Send(ctx context.Context, idType, id, msgType, content, uuid st
 	// uuid makes a retried send land once: with it, transient failures are retried; without it, a POST is not.
 	err := c.callRetry(ctx, "send", http.MethodPost, "/open-apis/im/v1/messages?receive_id_type="+url.QueryEscape(idType), in, &out, uuid != "")
 	return out.MessageID, err
+}
+
+// SendUser posts a message to a user by open id, and gives the chat it landed in: the bot's private chat with them,
+// which the platform makes on the first message.
+func (c *Client) SendUser(ctx context.Context, openID, msgType, content, uuid string) (messageID, chatID string, err error) {
+	var out sent
+	in := map[string]any{"receive_id": openID, "msg_type": msgType, "content": content}
+	if uuid != "" {
+		in["uuid"] = uuid
+	}
+	err = c.callRetry(ctx, "send", http.MethodPost, "/open-apis/im/v1/messages?receive_id_type=open_id", in, &out, uuid != "")
+	return out.MessageID, out.ChatID, err
 }
 
 // Reply answers a message (quoting it); inThread puts the answer in the message's thread.
@@ -395,19 +503,30 @@ type Item struct {
 		Content string `json:"content"`
 	} `json:"body"`
 	Mentions []struct {
-		Key  string `json:"key"`
-		Name string `json:"name"`
+		Key    string `json:"key"`
+		ID     string `json:"id"`
+		IDType string `json:"id_type"`
+		Name   string `json:"name"`
 	} `json:"mentions"`
 }
 
 // At is when the message was sent.
 func (it Item) At() time.Time { return msTime(it.CreateTime) }
 
-// MentionList is the message's mentions, for ParseContent to turn its @_user_N keys back into names.
+// MentionList preserves names and typed IDs so ParseContent can resolve both placeholder keys and rich-text at nodes.
 func (it Item) MentionList() []Mention {
 	var out []Mention
 	for _, m := range it.Mentions {
-		out = append(out, Mention{Key: m.Key, Name: m.Name})
+		mention := Mention{Key: m.Key, Name: m.Name}
+		switch m.IDType {
+		case "open_id":
+			mention.ID.OpenID = m.ID
+		case "union_id":
+			mention.ID.UnionID = m.ID
+		case "user_id":
+			mention.ID.UserID = m.ID
+		}
+		out = append(out, mention)
 	}
 	return out
 }
@@ -435,54 +554,81 @@ func (c *Client) UserName(ctx context.Context, openID string) (string, error) {
 var ErrTooLarge = errors.New("feishu download: too large")
 
 // Resource downloads an image or file of a message the bot received (kind "image" or "file"); at most limit bytes.
+// It is a GET, so like call it tries again on a throttled answer, a server failure or a dropped connection, and renews
+// a stale token once. https://open.feishu.cn/document/server-docs/im-v1/message/get-2
 func (c *Client) Resource(ctx context.Context, messageID, key, kind string, limit int64) ([]byte, string, error) {
-	for attempt := 0; ; attempt++ {
-		tok, err := c.tenantToken(ctx, attempt > 0)
+	u := c.domain + "/open-apis/im/v1/messages/" + url.PathEscape(messageID) + "/resources/" + url.PathEscape(key) + "?type=" + url.QueryEscape(kind)
+	var lastErr error
+	refreshed := false
+	forcedFresh, waits := false, 0
+	for attempt := 0; attempt < callMaxAttempts; attempt++ {
+		tok, err := c.tenantToken(ctx, forcedFresh)
 		if err != nil {
 			return nil, "", err
 		}
-		u := c.domain + "/open-apis/im/v1/messages/" + url.PathEscape(messageID) + "/resources/" + url.PathEscape(key) + "?type=" + url.QueryEscape(kind)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-		if err != nil {
+		forcedFresh = false
+		b, ct, retry, after, err := c.resourceOnce(ctx, u, tok, limit)
+		var apiErr *APIError
+		switch {
+		case err == nil:
+			return b, ct, nil
+		case errors.As(err, &apiErr) && tokenGone(apiErr.Code) && !refreshed && attempt+1 < callMaxAttempts:
+			refreshed, forcedFresh = true, true
+			continue // one fresh token, one immediate retry, no backoff slot spent
+		case !retry:
 			return nil, "", err
 		}
-		req.Header.Set("Authorization", "Bearer "+tok)
-		resp, err := c.http.Do(req)
-		if err != nil {
-			return nil, "", err
-		}
-		ct := resp.Header.Get("Content-Type")
-		// Only a non-200 answer is an error. A 200 is the file whatever its type (a .json file the user sent comes
-		// labeled application/json), as in the official SDK, which never reads a 200 download as an error.
-		if resp.StatusCode != http.StatusOK {
-			var env struct {
-				Code int    `json:"code"`
-				Msg  string `json:"msg"`
+		lastErr = err
+		if !c.waitRetry(ctx, attempt, waits, after) {
+			if e := ctx.Err(); e != nil {
+				return nil, "", e // a cancel during the wait wins over the stored error
 			}
-			_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&env)
-			resp.Body.Close()
-			if tokenGone(env.Code) && attempt == 0 {
-				continue
-			}
-			if env.Code == 0 {
-				env.Code, env.Msg = resp.StatusCode, http.StatusText(resp.StatusCode)
-			}
-			return nil, "", &APIError{Op: "download", Code: env.Code, Msg: env.Msg}
-		}
-		if resp.ContentLength > limit { // said up front: refused without downloading it
-			resp.Body.Close()
-			return nil, "", fmt.Errorf("%w: larger than %d MB", ErrTooLarge, limit>>20)
-		}
-		b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
-		resp.Body.Close()
-		if err != nil {
 			return nil, "", err
 		}
-		if int64(len(b)) > limit {
-			return nil, "", fmt.Errorf("%w: larger than %d MB", ErrTooLarge, limit>>20)
-		}
-		return b, ct, nil
+		waits++
 	}
+	return nil, "", lastErr
+}
+
+// resourceOnce makes one download. retry: the failure may pass (a throttle, a server failure, the connection); after:
+// the wait the server asked for first.
+func (c *Client) resourceOnce(ctx context.Context, u, tok string, limit int64) (b []byte, ct string, retry bool, after time.Duration, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, "", false, 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, "", ctx.Err() == nil, 0, err // a done context: retrying cannot help
+	}
+	defer resp.Body.Close()
+	// Only a non-200 answer is an error. A 200 is the file whatever its type (a .json file the user sent comes
+	// labeled application/json), as in the official SDK, which never reads a 200 download as an error.
+	if resp.StatusCode != http.StatusOK {
+		var env struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&env)
+		retry = resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 || env.Code == codeRateLimited
+		after = retryWait(resp.Header, resp.StatusCode, env.Code)
+		if env.Code == 0 {
+			env.Code, env.Msg = resp.StatusCode, http.StatusText(resp.StatusCode)
+		}
+		return nil, "", retry, after, &APIError{Op: "download", Code: env.Code, Msg: env.Msg}
+	}
+	if resp.ContentLength > limit { // said up front: refused without downloading it
+		return nil, "", false, 0, fmt.Errorf("%w: larger than %d MB", ErrTooLarge, limit>>20)
+	}
+	b, err = io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, "", ctx.Err() == nil, 0, err
+	}
+	if int64(len(b)) > limit {
+		return nil, "", false, 0, fmt.Errorf("%w: larger than %d MB", ErrTooLarge, limit>>20)
+	}
+	return b, resp.Header.Get("Content-Type"), false, 0, nil
 }
 
 // Refused: Feishu will not take this message however often it is sent (the card's content refused, the bot not in
@@ -495,11 +641,11 @@ func Refused(err error) bool {
 	return false
 }
 
-// RateLimited: Feishu refused the call for coming too often (230020: a message updated too often; 99991400: the
-// app's rate limit; HTTP 429).
+// RateLimited: Feishu refused the call for coming too often (230020: too many messages into one chat, or a message
+// updated too often; 230429: the operation's frequency limit; 99991400: the app's rate limit; HTTP 429).
 func RateLimited(err error) bool {
 	switch errorCode(err) {
-	case 230020, 99991400, http.StatusTooManyRequests:
+	case 230020, 230429, 99991400, http.StatusTooManyRequests:
 		return true
 	}
 	return err != nil && strings.Contains(err.Error(), "HTTP 429")

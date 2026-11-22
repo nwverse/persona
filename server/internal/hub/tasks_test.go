@@ -26,6 +26,8 @@ type taskNode struct {
 	starts []map[string]any
 	sends  []map[string]any
 	n      int
+	// nextID: when non-empty, the next session.start uses this id before returning to s1, s2…
+	nextID string
 	// failStart: session.start answers this error instead of a session.
 	failStart error
 	// gate: when set, session.start waits for it to close (a start that takes a while).
@@ -67,6 +69,9 @@ func connectTaskNode(t *testing.T, h *Hub, id string) *taskNode {
 			}
 			tn.n++
 			sid := "s" + string(rune('0'+tn.n))
+			if tn.nextID != "" {
+				sid, tn.nextID = tn.nextID, ""
+			}
 			return map[string]any{"session": proto.Session{SessionID: sid, Cwd: p["cwd"].(string), Agent: "claude"}}, nil
 		case "session.send":
 			tn.sends = append(tn.sends, p)
@@ -151,10 +156,16 @@ func taskLine(h *Hub, todo Todo) string {
 }
 
 func planArgs(readonly bool) json.RawMessage {
-	raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{{
+	task := map[string]any{
 		"title": "修登录崩溃", "prompt": "iPad 横屏时登录页崩溃，修好并补测试", "machine": "box", "cwd": "/code/app",
-		"readonly": readonly, "why": "这个仓库最近在 box 上", "permission": "acceptEdits",
-	}}})
+		"role": "worker", "readonly": readonly, "why": "这个仓库最近在 box 上", "permission": "bypassPermissions",
+		// What task_plan requires of a brief (#3822): a read-only task's goal and how long it should take.
+		"goal": "登录页横屏不再崩溃", "expect_minutes": 10,
+	}
+	if !readonly { // a writable task also says what done means
+		task["done_when"] = []string{"修好并补了测试"}
+	}
+	raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{task}})
 	return raw
 }
 
@@ -187,15 +198,18 @@ func TestTaskPlanReadOnlyStartsAtOnce(t *testing.T) {
 		t.Fatalf("todo = %+v", todo)
 	}
 	starts, _ := tn.calls()
-	if len(starts) != 1 || starts[0]["prompt"] != "iPad 横屏时登录页崩溃，修好并补测试" || starts[0]["cwd"] != "/code/app" ||
-		starts[0]["permission_mode"] != "plan" {
+	wantPrompt := "iPad 横屏时登录页崩溃，修好并补测试\n\n本任务只读：不改项目文件、不提交、不对外写入"
+	if prompt, _ := starts[0]["prompt"].(string); len(starts) != 1 ||
+		!strings.HasPrefix(prompt, wantPrompt+"\n\nPersona task handoffs:") ||
+		!strings.Contains(prompt, "file: <这台电脑上的绝对路径>") ||
+		starts[0]["cwd"] != "/code/app" || starts[0]["permission_mode"] != "bypassPermissions" {
 		t.Fatalf("session.start = %+v", starts)
 	}
 	if got := strings.Join(feedKinds(h, "conv1"), ","); got != "plan,task" {
 		t.Fatalf("feed = %s", got)
 	}
 	p := loadPlan(h, todo.PlanID)
-	if p.State != "started" || p.Tasks[0].TodoID != todo.ID || p.Tasks[0].Permission != "plan" {
+	if p.State != "started" || p.Tasks[0].TodoID != todo.ID || p.Tasks[0].Permission != "bypassPermissions" {
 		t.Fatalf("plan = %+v", p)
 	}
 }
@@ -381,6 +395,16 @@ func TestTaskRetryFailsAgain(t *testing.T) {
 		t.Fatalf("%d receipts", n)
 	}
 	// It can be retried again after the check recovers; a finished retry is not still marked as starting.
+	// The second failure is within the automatic recheck's throttle window.
+	// Exercise the supported explicit health check instead of waiting for a
+	// second automatic probe that the policy deliberately does not schedule.
+	r := todoRequest("POST", "/api/v1/launchers/health/check?machine=box&launcher=claude", nil)
+	r.Header.Set("Authorization", "Bearer "+h.cfg.Token)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("explicit recovery check: %d %s", w.Code, w.Body)
+	}
 	waitForTaskLauncherRecovery(t, h)
 	if w := retryReq(h, mux, todo.ID); w.Code != http.StatusOK {
 		t.Fatalf("retry again: %d %s", w.Code, w.Body)
@@ -628,7 +652,7 @@ func TestTaskAnsweredAndRouted(t *testing.T) {
 	}
 }
 
-// todoState is a task's state as far as its todo tells it (docs/assistant/todos.md "How state is computed"): failed, done, not started.
+// todoState is a task's state as far as its todo tells it (docs/assistant/todos.md "State calculation rules"): failed, done, not started.
 func todoState(t Todo) string {
 	switch {
 	case t.DoneAt != nil && t.StartError != "":

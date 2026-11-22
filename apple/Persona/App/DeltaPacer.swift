@@ -4,7 +4,7 @@ import Foundation
 /// each one re-laid the reply 12 times a second while it streamed. The first delta of a pause draws at once, then at
 /// most one every `every` (5 a second), always the newest text; what is kept is dropped when the reply lands in the
 /// transcript, the stream is cleared, or the socket resets, so an old text never comes back over the final message.
-/// A streamed reply is not critical (docs/apple/ios-state.md「及时」): questions, approvals and errors are other events.
+/// A streamed reply is not critical (docs/apple/ios-state.md「Timely」): questions, approvals and errors are other events.
 nonisolated struct DeltaPacer {
     static let every: TimeInterval = 0.2
 

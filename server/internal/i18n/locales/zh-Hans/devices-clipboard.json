@@ -1,0 +1,15 @@
+{
+  "read_only": "这台设备不能使用电脑的剪贴板",
+  "disabled": "{name} 没有打开剪贴板共享，请在这台电脑的设置里打开",
+  "offline": "{name} 不在线",
+  "too_large": "剪贴板内容太大，发不了",
+  "bad_image": "图片不是 PNG 或 JPEG",
+  "failed": "没能读写 {name} 的剪贴板",
+  "need_content": "需要文字或图片",
+  "need_enabled": "需要 enabled",
+  "reason_no_display": "这台电脑没有图形桌面，没有剪贴板",
+  "reason_no_tool": "在这台电脑上装 wl-clipboard（Wayland）或 xclip（X11）后才能共享剪贴板",
+  "reason_no_session": "Persona 在这台电脑上不在你的桌面会话里运行，读不到剪贴板",
+  "reason_os": "这台电脑的系统不支持剪贴板共享",
+  "reason_node_outdated": "更新这台电脑上的 Persona 后才能共享剪贴板"
+}

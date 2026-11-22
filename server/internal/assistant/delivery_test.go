@@ -69,8 +69,8 @@ func deliveryOn(t *testing.T, s *Service) {
 	}
 }
 
-// With done_needs_delivery on, a task done as asked but stopped at a PR stays open with where it is held, is listed
-// for the user's nod, and closes once the work is live; off (the default) it closes as before.
+// With done_needs_delivery on, a task done as asked but stopped at a PR stays open with where it is held. Live work is
+// delivered for review too: neither it nor the default (delivery off) closes the todo without the owner (#5732).
 func TestAutoFinishHoldsUndeliveredWork(t *testing.T) {
 	s, f := newTaskService(t)
 	deliveryOn(t, s)
@@ -102,8 +102,8 @@ func TestAutoFinishHoldsUndeliveredWork(t *testing.T) {
 		Text: "已合并并部署，接口实测返回 200\n交付：已上线并实测；卡点：无；谁来解：无"})
 	f.judge = `{"verdict":"done","reason":"已上线","delivery":"live"}`
 	s.autoFinishTask(todoNow(s, "todo_d"), time.Now(), true)
-	if got := todoNow(s, "todo_d"); got.DoneAt == nil || got.Delivery.State != deliveryLive {
-		t.Fatalf("live work not closed: %+v", got)
+	if got := todoNow(s, "todo_d"); got.DoneAt != nil || got.Delivery.State != deliveryLive || got.Check == nil || got.Check.Verdict != verdictDone {
+		t.Fatalf("live work not delivered for review: %+v", got)
 	}
 	if a := s.snapshotApprovals(context.Background(), ""); len(a) != 0 {
 		t.Fatalf("a closed task still waits for a nod: %+v", a)
@@ -116,7 +116,7 @@ func TestAutoFinishHoldsUndeliveredWork(t *testing.T) {
 	f2.setItems(proto.Item{Kind: proto.KindText, Role: "assistant", Text: "PR https://github.com/o/r/pull/7 已合并"})
 	f2.judge = `{"verdict":"done","reason":"已合并"}`
 	s2.autoFinishTask(todoNow(s2, "todo_o"), now, true)
-	if got := todoNow(s2, "todo_o"); got.DoneAt == nil || got.Delivery != nil {
+	if got := todoNow(s2, "todo_o"); got.DoneAt != nil || got.Delivery != nil || got.Check == nil || got.Check.Verdict != verdictDone {
 		t.Fatalf("by default (off): %+v", got)
 	}
 }
@@ -129,7 +129,7 @@ func TestTaskPromptCarriesTheDeliveryStandard(t *testing.T) {
 	if _, _, err := s.startTaskAgent(ctx, &PlanTask{Title: "修", Prompt: "修好登录", Machine: "box", Cwd: "/code/app"}, false); err != nil {
 		t.Fatal(err)
 	}
-	if p, _ := f.starts[0]["prompt"].(string); p != "修好登录" {
+	if p, _ := f.starts[0]["prompt"].(string); !strings.HasPrefix(p, "修好登录") || !strings.Contains(p, "file: <这台电脑上的绝对路径>") || strings.Contains(p, "交付：") {
 		t.Fatalf("off by default, yet the prompt is %q", p)
 	}
 	f.starts = nil
@@ -145,7 +145,7 @@ func TestTaskPromptCarriesTheDeliveryStandard(t *testing.T) {
 	}
 	edit, _ := f.starts[0]["prompt"].(string)
 	read, _ := f.starts[1]["prompt"].(string)
-	if !strings.HasPrefix(edit, "修好登录\n\n") || !strings.Contains(edit, "交付：<已上线并实测") || read != "查一下" {
+	if !strings.HasPrefix(edit, "修好登录") || !strings.Contains(edit, "交付：<已上线并实测") || !strings.HasPrefix(read, "查一下\n\n本任务只读：不改项目文件、不提交、不对外写入") {
 		t.Fatalf("prompts:\n%s\n---\n%s", edit, read)
 	}
 }

@@ -1,7 +1,9 @@
 import AVFoundation
 import BeautifulUI
+import OSLog
 import Speech
 import SwiftUI
+import PersonaWire
 
 /// The composer's box, shared by an agent's chat (`Composer`) and a new assistant conversation (`StarterComposer`):
 /// BeautifulUI's prompt bar laid out as a toolbar. The draft is on top; under it + (photos, camera, files), @, /, the
@@ -26,6 +28,9 @@ struct PromptComposer: View {
     var models: [PromptModel] = []
     /// The model shown; `pickModel` gets the one picked from the menu.
     var modelID = ""
+    /// A direct action instead of the catalog menu, with the effective model as its button title (#6542).
+    var assistantModelName: String? = nil
+    var assistantPick: (() -> Void)? = nil
     var pickModel: (String) -> Void = { _ in }
     var onAttach: (PromptSource) -> Void
     /// True when the caller took the mention (a quoted session); otherwise its `insert` is typed.
@@ -34,6 +39,9 @@ struct PromptComposer: View {
     var onCommand: (PromptCommand) -> Bool = { _ in false }
     /// What goes with the message, quoted over the draft inside the bar's surface (#986).
     var quotes: Binding<[ContextRef]>? = nil
+    /// The new assistant's one-shot control request; other prompt composers leave both of these nil.
+    var dictationRequest: DictationRequest? = nil
+    var takeDictation: ((DictationRequest) -> Bool)? = nil
     var send: () -> Void
 
     @State private var bar = PromptBarModel(selectedModelID: "")
@@ -76,6 +84,8 @@ struct PromptComposer: View {
         o.onAttachSource = onAttach
         o.onPickSource = onMention
         o.onPickCommand = onCommand
+        o.modelAction = assistantPick
+        o.modelActionTitle = assistantModelName
         return VStack(alignment: .leading, spacing: 0) {
             if let quotes, !quotes.wrappedValue.isEmpty {
                 QuoteBar(refs: quotes)
@@ -84,6 +94,13 @@ struct PromptComposer: View {
             }
             PromptBar(model: bar, sources: mentionRows, commands: commands, models: models, placeholder: placeholder,
                       options: o, onSend: { _ in if !disabled { stopDictation(); commitTyped(); send() } })
+                #if os(iOS)
+                // Return Key Sends (#8178): as the bar's send, which empties the draft after; not while its @ or / list is up.
+                .returnSends(text: $text, canSend: !disabled && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasAttachments),
+                             paused: bar.token != nil || bar.isSourceMenuOpen || bar.isModelMenuOpen) {
+                    stopDictation(); commitTyped(); send(); text = ""
+                }
+                #endif
                 #if os(iOS) || os(visionOS)
                 .mask { SendCutout(cut: stopping, control: Self.control, inset: Self.barInset).fill(style: FillStyle(eoFill: true)) }
                 .overlay(alignment: .bottomTrailing) { sharedButtons }
@@ -103,6 +120,13 @@ struct PromptComposer: View {
             .onChange(of: bar.token?.kind == .mention) { _, open in if open { mentionRows = mentions() } }
             .onChange(of: dictation.isListening) { _, on in bar.isListening = on }
             .onDisappear { stopDictation() }
+            #if os(iOS)
+            .tabActiveTask(id: dictationRequest) {
+                guard let request = dictationRequest, takeDictation?(request) == true else { return }
+                guard !dictation.isListening else { return }
+                dictation.toggle(into: $text, onFailure: { focused.wrappedValue = true })
+            }
+            #endif
             #if DEBUG
             .task { await debugMenu() }
             #endif
@@ -151,15 +175,14 @@ struct PromptComposer: View {
     private func toggleDictation() {
         if dictation.isListening { stopDictation(); return }
         let base = text.isEmpty || text.last?.isWhitespace == true ? text : text + " "
-        Task {
-            if let problem = await dictation.start(update: { heard in text = base + heard }) {
-                AppModel.shared.toast = Toast(problem, style: .error)
-            }
+        dictation.start(hints: [text], update: { heard in text = base + heard }) { problem in
+            AppModel.shared.toast = Toast(problem, style: .error)
         }
     }
     #endif
 
-    private func stopDictation() { if dictation.isListening { dictation.stop() } }
+    /// Ends dictation, and a start still asking for permission with it (#3407).
+    private func stopDictation() { dictation.stop() }
 
     /// The keyboard's composition confirmed into the draft before it goes (`TypedText`, #2203).
     private func commitTyped() {
@@ -186,7 +209,7 @@ struct PromptComposer: View {
 /// What the composer's menus offer.
 enum PromptItems {
     static func attachments(camera: Bool, glasses: Bool = false) -> [PromptSource] {
-        var out = [PromptSource(id: "photo", name: String(localized: "Photos"), detail: String(localized: "Photos or videos, up to 4"), icon: .symbol(Theme.Icon.photos), kind: .attach)]
+        var out = [PromptSource(id: "photo", name: String(localized: "Photos"), detail: String(localized: "Photos or videos"), icon: .symbol(Theme.Icon.photos), kind: .attach)]
         if camera { out.append(PromptSource(id: "camera", name: String(localized: "Take Photo [Chat View 6e3a10]"), detail: String(localized: "Take one with the camera"), icon: .symbol("camera"), kind: .attach)) }
         if glasses { out.append(PromptSource(id: "glasses", name: String(localized: "Glasses Photo"), detail: String(localized: "Take one with the Meta glasses"), icon: .symbol(Theme.Icon.glasses), kind: .attach)) }
         out.append(PromptSource(id: "file", name: String(localized: "Files"), detail: String(localized: "Uploads to that computer and inserts the path"), icon: .symbol("doc"), kind: .attach))
@@ -195,10 +218,32 @@ enum PromptItems {
 
     /// Persona' quick messages under short "/" words (picking one types its message, sent with send), then Claude
     /// Code's own commands.
-    static func commands(clear: Bool, loop: Bool = false) -> [PromptCommand] {
+    static func commands(clear: Bool, loop: Bool = false, permissions: Bool = false) -> [PromptCommand] {
         var out = SlashCommand.commands(loop: loop).map { PromptCommand($0.word, detail: $0.detail, insert: $0.text) }
+        // Persona's own (#6513): the composer opens the mode list for it (`onCommand`), nothing is typed or sent.
+        if permissions { out.append(PromptCommand(SessionModes.permissionsCommand, detail: String(localized: "Switch permission mode"))) }
         if clear { out.append(PromptCommand("/clear", detail: String(localized: "Clear context and start a new session"))) }
         return out
+    }
+
+    /// The user's saved prompts (#9436) as commands: picking one types its text. Each has its own id (`saved:…`), as a
+    /// saved prompt may share its name with a command.
+    static func saved(_ prompts: [SavedPrompt]) -> [PromptCommand] {
+        prompts.map { PromptCommand("/" + $0.name, detail: SlashMenuRow.savedDetail, insert: $0.text, id: "saved:\($0.id)") }
+    }
+
+    /// Persona's own commands the chat runs when picked in the bar, instead of typing them.
+    enum OwnCommand: Equatable { case loop, permissions, clear }
+
+    /// Which of Persona's own commands a row picked in the bar is, by its id (#11410): a saved prompt's is `saved:…`, so
+    /// one named `permissions`, `loop` or `clear` types its text. `/permissions` only where the mode list is offered.
+    static func ownCommand(_ command: PromptCommand, permissions offered: Bool) -> OwnCommand? {
+        switch command.id {
+        case SlashCommand.loop.word: .loop
+        case SessionModes.permissionsCommand: offered ? .permissions : nil
+        case MainClearCommand.word: .clear
+        default: nil
+        }
     }
 
     /// Claude Code's `/model` aliases: picking one sends `/model <alias>` to the session.
@@ -212,31 +257,54 @@ enum PromptItems {
     /// The model menu's last row (#1644): opens the field for a model ID typed by hand (`SessionTypedModelSheet`).
     static let otherModel = PromptModel(id: "persona.typed-model", name: String(localized: "Other Model…"), tag: String(localized: "Type a model ID"))
 
-    /// What a session runs, as its model menu's selection: the alias its model reads as ("claude-opus-…" → opus),
-    /// "default" while nothing is known; any other model (one typed by hand, #1644) is its own ID, so no alias is
-    /// ticked for it and picking Default switches back.
-    static func runningModelID(_ model: String?) -> String {
+    /// What a session runs, as its model menu's selection. With the launcher's list (`RunningModelLists`, #3754): the row
+    /// with that ID, else the alias that stands for it (opus → claude-opus-…; Default last, as nothing was picked then).
+    /// Without it, the fixed aliases: the one its model reads as ("claude-opus-…" → opus). "default" while nothing is
+    /// known; any other model (one typed by hand, #1644) is its own ID, so no row is ticked for it and Default switches back.
+    static func runningModelID(_ model: String?, list: [AgentModel]? = nil) -> String {
         let m = (model ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         // Not a model ID (Claude's `<synthetic>`): nothing known.
         guard ModelID.isValid(m) else { return "default" }
-        return ["opus", "sonnet", "haiku"].first { m.lowercased().contains($0) } ?? m
+        guard let list, !list.isEmpty else {
+            return ["opus", "sonnet", "haiku"].first { m.lowercased().contains($0) } ?? m
+        }
+        if let row = list.first(where: { $0.id.caseInsensitiveCompare(m) == .orderedSame }) { return row.id }
+        if let alias = list.first(where: { !$0.isDefault && $0.resolved == m }) ?? list.first(where: { $0.resolved == m }) {
+            return alias.id
+        }
+        return m
     }
 
-    /// The model a session runs when the aliases don't name it (a typed ID); nil: one of them does, or nothing is known.
-    static func unlistedModel(_ model: String?) -> String? {
-        let id = runningModelID(model)
+    /// The model a session runs when its menu doesn't name it (a typed ID); nil: a row does, or nothing is known.
+    static func unlistedModel(_ model: String?, list: [AgentModel]? = nil) -> String? {
+        let id = runningModelID(model, list: list)
+        if let list, !list.isEmpty { return list.contains { $0.id == id } || id == "default" ? nil : id }
         return claudeModels.contains { $0.id == id } ? nil : id
     }
 
-    /// A running session's model menu: the aliases, then the model it runs when they don't name it, by its ID (the one
-    /// ticked; a menu row has no room for a second line saying it).
-    static func runningModels(_ model: String?) -> [PromptModel] {
-        claudeModels + (unlistedModel(model).map { [PromptModel(id: $0, name: $0, tag: String(localized: "Current"))] } ?? [])
+    /// A running session's model menu: the launcher's list when it has been read (New Agent's rows for that launcher:
+    /// Default, the agent's models with their versions, the IDs typed before, #3754), else the fixed aliases; then the
+    /// model it runs when the menu doesn't name it, by its ID (the one ticked; a menu row has no room for a second line
+    /// saying it).
+    static func runningModels(_ model: String?, list: [AgentModel]? = nil) -> [PromptModel] {
+        let rows = list.flatMap { $0.isEmpty ? nil : $0.map { PromptModel(id: $0.id, name: menuName($0), tag: $0.detail ?? "") } }
+        return (rows ?? claudeModels)
+            + (unlistedModel(model, list: list).map { [PromptModel(id: $0, name: $0, tag: String(localized: "Current"))] } ?? [])
+    }
+
+    /// A list row's name in a running session's menu: an alias says the version it stands for ("Opus" → "Opus 5.5",
+    /// from its `resolved`), so it reads apart from the versions beside it; Default, typed IDs and models that name
+    /// their version keep their name. A menu row has room for one line only.
+    static func menuName(_ m: AgentModel) -> String {
+        guard !m.isDefault, !m.custom, let resolved = m.resolved, resolved != m.id,
+              let version = SessionModes.modelName(resolved), version != resolved,
+              !m.displayName.localizedCaseInsensitiveContains(version) else { return m.displayName }
+        return version
     }
 
     /// BeautifulUI's model menu for a running session: `runningModels` (the button names the ticked one), then "Other Model…".
-    static func composerModels(running model: String?) -> [PromptModel] {
-        runningModels(model) + [otherModel]
+    static func composerModels(running model: String?, list: [AgentModel]? = nil) -> [PromptModel] {
+        runningModels(model, list: list) + [otherModel]
     }
 
     /// What picking a row of a running Claude Code session's model menu does where the pick is typed as `/model`
@@ -248,28 +316,22 @@ enum PromptItems {
         case send(String)
     }
 
-    static func modelPick(_ picked: String, running model: String?) -> ModelPick {
+    static func modelPick(_ picked: String, running model: String?, list: [AgentModel]? = nil) -> ModelPick {
         if picked == otherModel.id { return .typeID }
-        if picked == runningModelID(model) { return .keep }
+        if picked == runningModelID(model, list: list) { return .keep }
         return .send("/model \(picked)")
     }
 
     /// Files the chat's tools read or wrote, newest first: picking one types `@path` (relative to the session's
     /// folder), which Claude Code and Codex read as that file.
     static func files(_ items: [Item], cwd: String) -> [PromptSource] {
-        var seen = Set<String>()
-        var out: [PromptSource] = []
-        for it in items.reversed() where it.kind == .toolUse {
-            guard let path = it.toolInput?["file_path"]?.string ?? it.toolInput?["notebook_path"]?.string,
-                  !path.isEmpty, seen.insert(path).inserted else { continue }
+        MentionRows.usedPaths(items).map { path in
             let rel = !cwd.isEmpty && path.hasPrefix(cwd + "/") ? String(path.dropFirst(cwd.count + 1)) : path
             let name = (rel as NSString).lastPathComponent
             let dir = (rel as NSString).deletingLastPathComponent
-            out.append(PromptSource(id: "file:" + path, name: name, detail: dir.isEmpty ? String(localized: "Used in this session") : dir,
-                                    icon: .symbol(Theme.Icon.document), insert: "@\(rel) "))
-            if out.count == 12 { break }
+            return PromptSource(id: "file:" + path, name: name, detail: dir.isEmpty ? String(localized: "Used in this session") : dir,
+                                icon: .symbol(Theme.Icon.document), insert: "@\(rel) ")
         }
-        return out
     }
 
     /// Other agents' sessions, most recently active first: picking one quotes it (title, folder, state, its last
@@ -287,6 +349,11 @@ enum PromptItems {
     /// The quote for a picked session (`ContextRef`, sent as a `<persona-context>` tag before the message).
     static func quote(_ source: PromptSource, in all: [Session]) -> ContextRef? {
         guard source.id.hasPrefix("session:"), let s = all.first(where: { "session:" + $0.id == source.id }) else { return nil }
+        return quote(s)
+    }
+
+    /// A session's quote: its title, agent and folder, and its last words (the shell composer's @ list, #2319, too).
+    static func quote(_ s: Session) -> ContextRef {
         var lines = ["另一个会话：\(s.displayTitle)（\(s.agentLabel)）", "目录：\(s.cwd)"] // i18n-ignore
         if let last = s.lastText?.trimmingCharacters(in: .whitespacesAndNewlines), !last.isEmpty {
             lines.append("它最近说：\(String(last.prefix(600)))") // i18n-ignore
@@ -306,43 +373,121 @@ final class Dictation {
     @ObservationIgnored private var update: ((String) -> Void)?
     @ObservationIgnored private let microphoneOwner = UUID()
     @ObservationIgnored private var listeningRun = UUID()
+    /// The newest start's turn, taken when it was asked for: a start whose turn has passed (a newer start, or `stop()`,
+    /// while it waited for permission) ends without listening (#3407).
+    @ObservationIgnored private var startTurn = UUID()
+    /// Stands in for asking the person for the microphone and speech recognition (tests hold a start inside that wait);
+    /// nil asks the system.
+    @ObservationIgnored var permission: (() async -> Bool)?
+    /// Why dictation does not start now: a system call is live (`LiveCallGate`), and dictation's own audio session would
+    /// cut the call's microphone. Nil while it may. The tests' own stands in for the gate.
+    @ObservationIgnored var callGate: () -> String? = { LiveCallGate.dictationRefusal }
+    /// Why a start now would be refused at once (the call is on), for the mic's tap and hold to say before anything opens.
+    var callRefusal: String? { callGate() }
+    #if DEBUG
+    /// `-showDictationSample "<words>"`: hears these words, one every beat, instead of the microphone (simulators
+    /// may have none), for screenshots and recordings of the composer's mic. Without `permission` nothing is asked.
+    @ObservationIgnored var sample = UserDefaults.standard.string(forKey: "showDictationSample")
+    #endif
+    /// The microphone's loudness, for the dictation bar's wave; nothing observes it (`DictationMeter`).
+    @ObservationIgnored let meter = DictationMeter()
+    /// Everything heard so far in this run, as the last update gave it.
+    @ObservationIgnored private(set) var heard = ""
+    /// `finish()` is waiting for the recognizer's last words; set when they came.
+    @ObservationIgnored private var finishing = false
+    @ObservationIgnored private var gotFinal = false
 
-    /// A recognizer for the app's interface language (its region when supported, else any region of it);
-    /// Chinese, and languages speech recognition does not know, use zh-CN as before.
-    private static func recognizer() -> SFSpeechRecognizer? {
-        let fallback = Locale(identifier: "zh-CN") // i18n-ignore
-        let language = Locale(identifier: Bundle.main.preferredLocalizations.first ?? "zh-Hans").language.languageCode?.identifier
-        guard let language, language != "zh" else { return SFSpeechRecognizer(locale: fallback) }
-        let supported = SFSpeechRecognizer.supportedLocales()
-        if let region = Locale.current.region?.identifier,
-           let match = supported.first(where: { $0.language.languageCode?.identifier == language && $0.region?.identifier == region }) {
-            return SFSpeechRecognizer(locale: match)
-        }
-        if let match = supported.sorted(by: { $0.identifier < $1.identifier }).first(where: { $0.language.languageCode?.identifier == language }) {
-            return SFSpeechRecognizer(locale: match)
-        }
-        return SFSpeechRecognizer(locale: fallback)
+    /// A recognizer for the language the owner speaks (`DictationLanguage`): their choice, else the language of `hints`
+    /// (the draft and their recent messages in this chat), else the last sure choice, else the interface language.
+    /// A sure choice is remembered for the next chat, written only when it changed.
+    private static func recognizer(hints: [String]) -> SFSpeechRecognizer? {
+        let defaults = UserDefaults.standard
+        let context = DictationLanguage.Context(
+            choice: defaults.string(forKey: DictationLanguage.choiceKey), texts: hints,
+            recent: defaults.string(forKey: DictationLanguage.recentKey),
+            interface: Bundle.main.preferredLocalizations.first ?? "zh-Hans", preferred: Locale.preferredLanguages,
+            region: Locale.current.region?.identifier, supported: SFSpeechRecognizer.supportedLocales().map(\.identifier))
+        let pick = DictationLanguage.pick(context)
+        if pick.sure, pick.locale != context.recent { defaults.set(pick.locale, forKey: DictationLanguage.recentKey) }
+        Self.log.info("dictation in \(pick.locale, privacy: .public) (\(String(describing: pick.source), privacy: .public))")
+        return SFSpeechRecognizer(locale: Locale(identifier: pick.locale))
     }
 
-    /// Starts listening; `update` gets the whole transcript so far. Returns what went wrong, if it could not start.
-    func start(update: @escaping (String) -> Void) async -> String? {
+    private static let log = Logger(subsystem: "persona", category: "dictation")
+
+    /// Starts listening; `update` gets the whole transcript so far. `hints` are what tells the language spoken: the
+    /// draft, then the owner's recent messages in this chat, newest first. `failed` gets what went wrong, if it could not
+    /// start. The start takes its turn now, in the caller's step, and then waits for permission: the person's newest
+    /// action decides. A start asked for after it, or `stop()`, ends it in that wait: it never listens and says nothing
+    /// (a tap, then a hold, or a send, while the system still asks; #3407). A newer start takes over from an older one
+    /// already listening, which would otherwise hold the microphone and fail it as in use.
+    func start(hints: [String] = [], update: @escaping (String) -> Void, failed: @escaping (String) -> Void = { _ in }) {
+        // A live system call keeps the microphone and its audio session: refused at once, nothing opens, the call goes on.
+        if let refusal = callGate() {
+            failed(refusal)
+            return
+        }
+        let turn = UUID()
+        startTurn = turn
+        heard = ""
+        meter.reset()
+        Task {
+            if let problem = await listen(turn, hints: hints, update: update) { failed(problem) }
+        }
+    }
+
+    /// `start`'s work in its task: what went wrong, or nil when it listens or its turn passed while it waited.
+    private func listen(_ turn: UUID, hints: [String], update: @escaping (String) -> Void) async -> String? {
+        #if DEBUG
+        let sample = self.sample.flatMap { $0.isEmpty ? nil : $0 }
+        #else
+        let sample: String? = nil
+        #endif
+        #if os(iOS) || os(visionOS)
+        if sample == nil, RecordingCapture.shared.state != .idle { return String(localized: "A recording is in progress. Stop it before dictating.") }
+        #endif
+        var granted = true
+        if let permission { granted = await permission() } else if sample == nil { granted = await Self.allowed() }
+        guard startTurn == turn else { return nil }
+        // A system call that went live during that wait (an urgent call answered) keeps the microphone and its session:
+        // refused, nothing claimed or opened (the call manager's voice does not claim `RecordingMicrophone`).
+        if let refusal = callGate() { return refusal }
+        guard granted else { return String(localized: "No access to the microphone or speech recognition. Turn it on in Settings › Persona.") }
+        if isListening { stopListening() }
+        #if DEBUG
+        if let sample { return startSample(sample, update: update) }
+        #endif
         #if os(iOS) || os(visionOS)
         guard RecordingCapture.shared.state == .idle else { return String(localized: "A recording is in progress. Stop it before dictating.") }
         #endif
-        guard await Self.allowed() else { return String(localized: "No access to the microphone or speech recognition. Turn it on in Settings › Persona.") }
-        #if os(iOS) || os(visionOS)
-        guard RecordingCapture.shared.state == .idle else { return String(localized: "A recording is in progress. Stop it before dictating.") }
-        #endif
-        guard let recognizer = Self.recognizer(), recognizer.isAvailable else {
+        guard let recognizer = Self.recognizer(hints: hints), recognizer.isAvailable else {
             return String(localized: "Speech recognition isn't available right now")
         }
         guard RecordingMicrophone.shared.claim(microphoneOwner) else { return String(localized: "The microphone is in use. Stop the recording or dictation first.") }
         #if os(iOS) || os(visionOS) // a Mac has no audio session to configure: the engine takes the input as it is
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.record, mode: .measurement, options: .duckOthers)
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
-        } catch {
+        // On the audio session's queue, after any deactivation a closing bar left there (`stop(settling:)`), and in order
+        // with a system call's own category (`LiveCallGate.sessionQueue`): a call that went live before this block runs
+        // has the session, and this touches nothing.
+        let opened: SessionOpening = await withCheckedContinuation { c in
+            Self.audioQueue.async {
+                guard !LiveCallGate.liveNow else { return c.resume(returning: .call) }
+                do {
+                    let session = AVAudioSession.sharedInstance()
+                    try session.setCategory(.record, mode: .measurement, options: .duckOthers)
+                    try session.setActive(true, options: .notifyOthersOnDeactivation)
+                    c.resume(returning: .opened)
+                } catch {
+                    c.resume(returning: .failed)
+                }
+            }
+        }
+        // A call live now has the session (its category was queued after this one's): the microphone goes back and the
+        // session stays as the call has it.
+        if opened == .call || callGate() != nil {
+            RecordingMicrophone.shared.release(microphoneOwner)
+            return callGate() ?? LiveCallGate.dictationLine
+        }
+        guard opened == .opened else {
             RecordingMicrophone.shared.release(microphoneOwner)
             return String(localized: "Couldn't open the microphone")
         }
@@ -350,12 +495,12 @@ final class Dictation {
         let engine = AVAudioEngine()
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
-        Self.tap(engine.inputNode, into: request)
+        Self.tap(engine.inputNode, into: request, meter: meter)
         engine.prepare()
         do { try engine.start() } catch {
             engine.inputNode.removeTap(onBus: 0)
             #if os(iOS) || os(visionOS)
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            if callGate() == nil { try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
             #endif
             RecordingMicrophone.shared.release(microphoneOwner)
             return String(localized: "Couldn't open the microphone")
@@ -368,14 +513,79 @@ final class Dictation {
         task = Self.recognize(recognizer, request) { [weak self] heard, done in
             Task { @MainActor in
                 guard let self, self.listeningRun == run else { return }
-                if let heard { self.update?(heard) }
-                if done { self.stop() }
+                if let heard {
+                    self.heard = heard
+                    self.update?(heard)
+                }
+                if done {
+                    if self.finishing { self.gotFinal = true } else { self.stop() }
+                }
             }
         }
         return nil
     }
 
-    func stop() {
+    #if os(iOS) || os(visionOS)
+    /// How dictation's session opening went on the audio session's queue: opened, failed, or not tried because a system
+    /// call is live.
+    private nonisolated enum SessionOpening: Sendable { case opened, failed, call }
+    #endif
+
+    #if DEBUG
+    private func startSample(_ sample: String, update: @escaping (String) -> Void) -> String? {
+        guard RecordingMicrophone.shared.claim(microphoneOwner) else { return String(localized: "The microphone is in use. Stop the recording or dictation first.") }
+        self.update = update
+        meter.reset(synthetic: true)
+        isListening = true
+        listeningRun = UUID(); let run = listeningRun
+        let words = sample.split(separator: " ").map(String.init)
+        Task { @MainActor [weak self] in
+            for count in 1...max(1, words.count) {
+                try? await Task.sleep(for: .milliseconds(350))
+                guard let self, self.listeningRun == run else { return }
+                self.heard = words.prefix(count).joined(separator: " ")
+                self.update?(self.heard)
+            }
+        }
+        return nil
+    }
+    #endif
+
+    /// Stops listening and returns everything heard: the microphone closes at once, then the recognizer gets up to
+    /// `Theme.DictationBar.finalWait` for its last words (the dictation bar's stop and send, which show "Transcribing").
+    func finish(settling: Bool = false) async -> String {
+        startTurn = UUID()
+        guard isListening else { return heard }
+        if engine != nil, task != nil {
+            finishing = true
+            gotFinal = false
+            engine?.stop()
+            engine?.inputNode.removeTap(onBus: 0)
+            request?.endAudio()
+            meter.reset()
+            let deadline = ContinuousClock.now + Theme.DictationBar.finalWait
+            while !gotFinal, isListening, ContinuousClock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(30))
+            }
+            finishing = false
+        }
+        let words = heard
+        stopListening(settling: settling)
+        return words
+    }
+
+    /// Ends dictation, and a start still waiting for permission (its turn passes). `settling`: the audio session is let
+    /// go a moment later, off the main thread, when the microphone is still free then; giving it up blocks for about
+    /// 50 ms, a dropped frame in the middle of the dictation bar closing. Callers that hand the audio to something else
+    /// straight away (a voice call) stop without settling.
+    func stop(settling: Bool = false) {
+        startTurn = UUID()
+        stopListening(settling: settling)
+    }
+
+    private func stopListening(settling: Bool = false) {
+        finishing = false
+        meter.reset()
         guard RecordingMicrophone.shared.release(microphoneOwner) else { return }
         listeningRun = UUID()
         engine?.stop()
@@ -388,13 +598,32 @@ final class Dictation {
         update = nil
         isListening = false
         #if os(iOS) || os(visionOS)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        // A system call that went live while dictating (an urgent call answered) has the session now: it stays active.
+        guard callGate() == nil else { return }
+        if settling {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: Theme.DictationBar.settle)
+                // Someone took the microphone meanwhile, or a call went live: theirs now.
+                guard RecordingMicrophone.shared.isFree, (self?.callGate() ?? LiveCallGate.dictationRefusal) == nil else { return }
+                Self.audioQueue.async {
+                    guard !LiveCallGate.liveNow else { return }
+                    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+                }
+            }
+        } else {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
         #endif
     }
 
+    #if os(iOS) || os(visionOS)
+    /// Dictation's audio session calls, in order, off the main thread, on the queue a system call sets its category on.
+    private static var audioQueue: DispatchQueue { LiveCallGate.sessionQueue }
+    #endif
+
     private static func allowed() async -> Bool {
         let speech = await withCheckedContinuation { c in
-            // Answered on a background queue: `@Sendable` keeps the block off the main actor (BackgroundCallbackTests).
+            // Answered on a background queue: `@Sendable` keeps the block off the main actor (test_apple_background_callbacks.py).
             SFSpeechRecognizer.requestAuthorization { @Sendable in c.resume(returning: $0) }
         }
         guard speech == .authorized else { return false }
@@ -403,9 +632,11 @@ final class Dictation {
 
     // The audio tap and the recognizer call back off the main thread: their closures are made here, outside the
     // main actor, so they are not taken for main-actor code.
-    nonisolated private static func tap(_ input: AVAudioInputNode, into request: SFSpeechAudioBufferRecognitionRequest) {
+    nonisolated private static func tap(_ input: AVAudioInputNode, into request: SFSpeechAudioBufferRecognitionRequest,
+                                        meter: DictationMeter) {
         input.installTap(onBus: 0, bufferSize: 1024, format: input.outputFormat(forBus: 0)) { buffer, _ in
             request.append(buffer)
+            meter.take(buffer)
         }
     }
 

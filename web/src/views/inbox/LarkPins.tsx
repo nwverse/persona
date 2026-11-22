@@ -1,4 +1,4 @@
-// The Pin list of a Feishu chat (iOS LarkChatPinsView, docs/extensions/lark-migration.md "Pin messages in a chat"), over the chat.
+// The Pin list of a Feishu chat (iOS LarkChatPinsView, docs/extensions/lark-migration.md "Pinned messages in chats"), over the chat.
 // Reading it marks the chat's Pins read in the Lark gateway, so it is read when opened, when a Pin changes and when the hub
 // says the chat changed while it is open; nothing reads it ahead of time. Pages come in as the list nears its end.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
@@ -12,7 +12,7 @@ import { onHubEvent } from "../../lib/store";
 import { t } from "../../i18n";
 import { Button, cx, Dialog, IconButton, Loading, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-import { Monogram } from "./InboxParts";
+import { LarkAvatar } from "./InboxParts";
 
 export function LarkPinsDialog({ feed, topic, account, onClose, onOpen }: {
   feed: string;
@@ -99,6 +99,7 @@ export function LarkPinsDialog({ feed, topic, account, onClose, onOpen }: {
               {s.items.map((p) => (
                 <li key={p.id}>
                   <PinRow
+                    account={account}
                     display={display}
                     pin={p}
                     locating={s.locating === p.id}
@@ -131,8 +132,9 @@ export function LarkPinsDialog({ feed, topic, account, onClose, onOpen }: {
   );
 }
 
-function PinRow({ pin, display, locating, disabled, removable, confirming, onOpen, onRemove, onCancel, onConfirm }: {
+function PinRow({ pin, account, display, locating, disabled, removable, confirming, onOpen, onRemove, onCancel, onConfirm }: {
   pin: ChatPin;
+  account?: number;
   display: LarkMessageDisplay;
   locating: boolean;
   disabled: boolean;
@@ -167,7 +169,7 @@ function PinRow({ pin, display, locating, disabled, removable, confirming, onOpe
         title={gone ? undefined : t("inbox-larkpins.view_in_chat")}
         className="flex min-w-0 flex-1 items-start gap-2.5 rounded-[10px] px-2 py-2 text-left transition-colors enabled:hover:bg-hover disabled:cursor-default"
       >
-        {m ? <Monogram name={name} size={28} src={m.sender_avatar} /> : <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-field text-ink-3"><Icon name="pin" size={13} /></span>}
+        {m ? <LarkAvatar name={name} size={28} avatarURL={m.sender_avatar_url} avatar={m.sender_avatar} account={account} /> : <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-field text-ink-3"><Icon name="pin" size={13} /></span>}
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-center gap-2">
             {name && <span className="truncate text-[12.5px] font-medium text-ink">{name}</span>}

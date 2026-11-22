@@ -1,6 +1,6 @@
 import XCTest
 
-/// The hub's line over the Agents list and Settings › hub (docs/operations/hub-update.md「App 里」). Each button on the line takes only
+/// The hub's line over the Agents list and Settings › hub (docs/operations/hub-update.md「In the App」). Each button on the line takes only
 /// its own taps (it sits in a list row that opens the hub page), and an update waiting for busy agents shows them and
 /// asks before Update Now. Against scripts/mock/mock_hub.py (any MOCK_HUB_UPDATE; each test sets its own mode):
 ///   TEST_RUNNER_PERSONA_HUB_UPDATE_HUB=http://127.0.0.1:<port>

@@ -108,8 +108,8 @@ func (c *conversation) nudgeDue(now time.Time) bool {
 	switch {
 	case o.at.IsZero() || o.nudged:
 		return false
-	case c.closed || !c.ready || c.up == nil || c.sus.state != "":
-		return false // no session to nudge (reconnecting, paused, waking), or the call is over
+	case c.closed || !c.ready || c.up == nil || c.sus.state != "" || c.sus.onHold:
+		return false // no session to nudge (reconnecting, paused, waking), the call is on hold, or it is over
 	case c.gate.echoes || c.askCur != "" || len(c.queue) > 0:
 		return false
 	case !o.result && c.worked():
@@ -124,6 +124,10 @@ func (c *conversation) nudgeDue(now time.Time) bool {
 // maybeNudge nudges the model once when it owes the user an answer and has said nothing (nudgeDue).
 func (c *conversation) maybeNudge(now time.Time) {
 	c.mu.Lock()
+	if c.dictation {
+		c.mu.Unlock()
+		return // no answer is owed in transcription-only mode
+	}
 	if !c.nudgeDue(now) {
 		c.mu.Unlock()
 		return

@@ -1,15 +1,16 @@
 // Small pieces the inbox pages share: avatars (chat, mail, document, Moments) with their source mark, tags, counts,
-// the AI twin's draft card, a document row's status menu, and the few glyphs the shared icon set does not have.
-import { useState, type CSSProperties, type ReactNode } from "react";
-import {
-  agentDraft, docChangeLine, isDone, isLark, itemKey, movingKey, setDocStatus, useInbox, withToken,
-  type DocRow, type DocStatus, type InboxItem,
-} from "../../lib/inbox";
+// the AI twin's draft card, a document row's status menu, a chat list's hold on its newest message, and the few glyphs
+// the shared icon set does not have.
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { agentDraft, docChangeKey, isDone, isLark, itemKey, keptChanges, movingKey, setDocStatus, useDroppedChanges, useInbox, useUnsentReply, withToken, type DocChange, type DocRow, type DocStatus, type InboxItem } from "../../lib/inbox";
+import { docChangeLine } from "../../lib/inbox-page";
 import { connectorBrand } from "../../lib/connectors";
-import { hubMediaURL } from "../../lib/lark-summary";
-import { useItemManager, withManager } from "../../lib/manager-choice";
+import { larkAvatarSrc } from "../../lib/lark-summary";
+import { useItemManager, useShownManager, withManager } from "../../lib/manager-choice";
+import { managerOf, useRoster } from "../../lib/managers";
 import { t } from "../../i18n";
 import { Button, cx, Menu, Spinner, useMenu } from "../../ui/atoms";
+import { AssistantAvatar } from "../../ui/AssistantAvatar";
 import { BrandMark } from "../../ui/BrandMark";
 import { Icon } from "../../ui/icons";
 import { useClamped } from "../../ui/use-clamped";
@@ -66,14 +67,24 @@ function hash(s: string) {
   return Math.abs(h);
 }
 
+type MonogramProps = { name: string; size?: number; square?: boolean; neutral?: boolean; src?: string; avatarURL?: string; manager?: string };
+
+function avatarPixels(size: number): number {
+  return Math.ceil(size * (globalThis.devicePixelRatio || 1));
+}
+
 /** `manager`: whose item the picture is of (a list row's; inside an item's view, ItemManager tells), so its URL names
  *  that manager (docs/assistant/managers.md "Clients"). */
-export function Monogram({ name, size = 40, square, neutral, src, manager }: { name: string; size?: number; square?: boolean; neutral?: boolean; src?: string; manager?: string }) {
+export function Monogram({ name, size = 40, square, neutral, src, avatarURL, manager }: MonogramProps) {
   const owner = useItemManager();
-  // The picture that failed to load: the letter instead of a broken image, until src changes.
+  // Feishu paths already name their account; the requested size belongs to the same query.
+  const picture = avatarURL?.startsWith("/api/v1/avatars/")
+    ? `${avatarURL}${avatarURL.includes("?") ? "&" : "?"}size=${avatarPixels(size)}`
+    : src;
+  const path = picture && withManager(picture, manager ?? owner);
   const [failed, setFailed] = useState<string>();
   const shape = square ? "rounded-[10px]" : "rounded-full";
-  if (src && failed !== src) return <img src={withToken(withManager(src, manager ?? owner))} alt="" width={size} height={size} onError={() => setFailed(src)} className={cx("shrink-0 object-cover shadow-hairline", shape)} style={{ width: size, height: size }} />;
+  if (path && failed !== path) return <img src={withToken(path)} alt="" width={size} height={size} onError={() => setFailed(path)} className={cx("shrink-0 object-cover shadow-hairline", shape)} style={{ width: size, height: size }} />;
   const first = [...name.trim()][0] ?? "?";
   return (
     <span aria-hidden className={cx("flex shrink-0 items-center justify-center font-semibold", shape)} style={{ width: size, height: size, fontSize: Math.round(size * 0.4), ...(neutral ? MONO[3] : MONO[hash(name) % MONO.length]) }}>
@@ -82,9 +93,29 @@ export function Monogram({ name, size = 40, square, neutral, src, manager }: { n
   );
 }
 
+/** A gateway from before the shared avatars route has its own thumbnail sizes and account selector. */
+export function LarkAvatar({ avatar, avatarURL, account, size = 40, ...rest }: Omit<MonogramProps, "src"> & { avatar?: string; account?: number }) {
+  const src = avatar && !avatarURL?.startsWith("/api/v1/avatars/") ? larkAvatarSrc(avatar, account, avatarPixels(size)) : undefined;
+  return <Monogram {...rest} size={size} avatarURL={avatarURL} src={src} />;
+}
+
 /** The 40px avatar of a row: chat / sender, or a tinted square for a document or a Moments post; a small mark of
  * where it came from in the corner (Feishu's own, mail a neutral gray). */
+/** The assistant's own row wears the assistant's avatar (the one at the sidebar's head), with no source badge. */
+function AssistantItemAvatar({ it, size }: { it: InboxItem; size: number }) {
+  const roster = useRoster();
+  const shown = useShownManager();
+  const id = it.manager ?? shown ?? "";
+  const m = managerOf(roster, id);
+  return (
+    <span className="shrink-0" style={{ opacity: isDone(it) ? 0.6 : 1 }}>
+      <AssistantAvatar id={m?.id ?? id} name={m?.name ?? it.account_name} isDefault={(m?.id ?? id) === roster?.default} size={size} />
+    </span>
+  );
+}
+
 export function ItemAvatar({ it, size = 40 }: { it: InboxItem; size?: number }) {
+  if (it.source === "assistant") return <AssistantItemAvatar it={it} size={size} />;
   const icon = Math.round(size * 0.45);
   let face: ReactNode;
   if (it.doc) {
@@ -100,9 +131,12 @@ export function ItemAvatar({ it, size = 40 }: { it: InboxItem; size?: number }) 
       </span>
     );
   } else if (isLark(it)) {
-    face = <Monogram name={it.title} size={size} square={it.lark?.is_group} src={hubMediaURL(it.avatar)} manager={it.manager} />;
+    face = <LarkAvatar name={it.title} size={size} square={it.lark?.is_group} avatarURL={it.avatar_url} avatar={it.avatar} account={it.lark?.ol_account ?? it.lark?.account_id} manager={it.manager} />;
   } else {
-    face = <Monogram name={it.sender || it.title} size={size} neutral />;
+    // A connector's thread picture (the other person, a group's own) from the hub's avatars route, asked at the pixels
+    // drawn (the route rounds up to the sizes it draws; the browser keeps it, `immutable`); the initial without one or
+    // when it cannot be loaded. Inline: the row is on the first screen.
+    face = <Monogram name={it.sender || it.title} size={size} neutral avatarURL={it.connector?.avatar_url} manager={it.manager} />;
   }
   const badge = Math.max(14, Math.round(size * 0.42));
   // A connector's own mark on white in the corner; one without a mark a neutral gray, like mail.
@@ -143,7 +177,42 @@ export function Tag({ children, urgent }: { children: ReactNode; urgent?: boolea
   );
 }
 
-/** A filter or choice that turns on and off: the inbox's sources and kinds, the "Messages" page's Feishu accounts. */
+/** A message's action bar, over its top right corner: on hover with a mouse; with no hover, a ⋯ there that folds the
+ *  buttons out and back. */
+export function MessageBar({ className, children }: { className: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={cx("absolute z-10 hidden items-center gap-0.5 rounded-[6px] border border-line bg-surface/95 px-1 py-0.5 shadow-hairline backdrop-blur-sm group-hover/msg:flex [@media(hover:none)]:flex", !open && "[@media(hover:none)]:px-0", className)}>
+      <div className={cx("contents", !open && "[@media(hover:none)]:hidden")} onClick={() => setOpen(false)}>{children}</div>
+      <button type="button" aria-label={t("chat-messageactions.more")} title={t("chat-messageactions.more")} aria-expanded={open} onClick={() => setOpen(!open)} className="touch-hit hidden size-5 items-center justify-center rounded text-ink-3 [@media(hover:none)]:flex">
+        <Icon name="more" size={12} />
+      </button>
+    </div>
+  );
+}
+
+/** A chat's list at its newest message keeps it in view when the list's box gets shorter (the keyboard, a longer draft)
+ *  or its messages grow by themselves (a picture loading). `follows()` is asked at each resize whether to; `mounted`
+ *  starts watching once the list is drawn. */
+export function useFollowEnd(scroller: RefObject<HTMLElement | null>, follows: () => boolean, mounted = true) {
+  const latest = useRef(follows);
+  latest.current = follows;
+  useEffect(() => {
+    const el = scroller.current;
+    const content = el?.firstElementChild;
+    if (!el || !content || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      if (latest.current()) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(el);
+    ro.observe(content);
+    return () => ro.disconnect();
+  }, [scroller, mounted]);
+}
+
+/** A filter or choice that turns on and off: the inbox's sources and kinds, the "Messages" page's Feishu accounts.
+ *  One line: a source's name is the connector's own and may be long, so it truncates inside the column rather than
+ *  widening the list's scroller (#3262). */
 export function Chip({ on, onClick, children, title }: { on: boolean; onClick: () => void; children: ReactNode; title?: string }) {
   return (
     <button
@@ -151,7 +220,7 @@ export function Chip({ on, onClick, children, title }: { on: boolean; onClick: (
       title={title}
       aria-pressed={on}
       onClick={onClick}
-      className={cx("h-7 rounded-control px-2.5 text-[12px] whitespace-nowrap transition-colors duration-150", on ? "bg-ink font-medium text-surface" : "bg-surface text-ink-2 shadow-btn hover:bg-hover hover:text-ink")}
+      className={cx("h-7 min-w-0 max-w-full overflow-hidden text-ellipsis rounded-control px-2.5 text-[12px] whitespace-nowrap transition-colors duration-150", on ? "bg-ink font-medium text-surface" : "bg-surface text-ink-2 shadow-btn hover:bg-hover hover:text-ink")}
     >
       {children}
     </button>
@@ -166,21 +235,33 @@ export function Count({ n, accent }: { n: number; accent?: boolean }) {
   );
 }
 
-/** The AI twin's reply under a row: "Send" sends it as it is, "Edit" opens it in the draft dialog. */
-export function DraftCard({ it, onEdit, onSend }: { it: InboxItem; onEdit: () => void; onSend: () => void }) {
+/**
+ * The AI twin's reply under a row, as "Send" sends it: the edit the draft dialog kept (closed without Cancel, or a
+ * Rewrite) in place of the AI's text, and only the proposed changes left ticked there, marked "Edited" when either
+ * differs from the AI's. "Edit" opens it in the draft dialog. `onSend` gets the text and changes shown.
+ */
+export function DraftCard({ it, onEdit, onSend }: { it: InboxItem; onEdit: () => void; onSend: (text: string, changes: DocChange[]) => void }) {
   const draft = agentDraft(it);
-  const sending = useInbox((s) => s.sending.includes(itemKey(it)));
+  const key = itemKey(it);
+  const sending = useInbox((s) => s.sending.includes(key));
+  const kept = useUnsentReply(key);
+  const dropped = useDroppedChanges(key);
   // the four lines may cut it: "Show all" shows the rest in place, so it is read before "Send" (#4742)
   const [open, setOpen] = useState(false);
-  const { ref: textRef, cut: long } = useClamped<HTMLParagraphElement>(open);
+  const text = kept ?? draft ?? "";
+  const { ref: textRef, cut: long } = useClamped<HTMLParagraphElement>(open, "y", text);
   if (!draft) return null;
+  const changes = keptChanges(it, dropped);
+  // as sent: a failed send keeps the text trimmed, and the AI's own draft with a trailing newline is not an edit
+  const edited = (kept !== undefined && kept.trim() !== draft.trim()) || dropped.length > 0;
   return (
     <div className="rounded-[10px] bg-inset p-3 shadow-hairline">
       <p className="flex items-center text-[11.5px] font-medium text-accent-ink">
         <Spark />
         {t("inbox-inboxparts.draft_title")}
+        {edited && <span data-draft-edited className="ml-1.5 font-normal whitespace-nowrap text-ink-3">{t("inbox-inboxparts.draft_edited")}</span>}
       </p>
-      <p ref={textRef} className={cx("mt-1.5 text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink", !open && "line-clamp-4")} data-draft-text>{draft}</p>
+      <p ref={textRef} className={cx("mt-1.5 text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink", !open && "line-clamp-4")} data-draft-text>{text}</p>
       {long && (
         <button
           type="button"
@@ -195,15 +276,15 @@ export function DraftCard({ it, onEdit, onSend }: { it: InboxItem; onEdit: () =>
           {open ? t("inbox-inboxparts.draft_collapse") : t("inbox-inboxparts.draft_expand")}
         </button>
       )}
-      {(it.agent?.changes ?? []).map((c) => (
-        <p key={`${c.ref}|${c.field}`} className="mt-1 flex items-center gap-1.5 truncate text-[11.5px] text-ink-2">
+      {changes.map((c) => (
+        <p key={docChangeKey(c)} className="mt-1 flex items-center gap-1.5 truncate text-[11.5px] text-ink-2">
           <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3" />
           <span className="truncate">{docChangeLine(c, it.doc)}</span>
         </p>
       ))}
       <div className="mt-2.5 flex justify-end gap-2">
         <Button tone="secondary" onClick={onEdit}>{t("inbox-inboxparts.edit")}</Button>
-        <Button tone="accent" icon="send" busy={sending} onClick={onSend} title={t("inbox-inboxparts.send_draft")}>{t("inbox-inboxparts.send")}</Button>
+        <Button tone="accent" icon="send" busy={sending} disabled={!text.trim() && !changes.length} onClick={() => onSend(text.trim(), changes)} title={t("inbox-inboxparts.send_draft")}>{t("inbox-inboxparts.send")}</Button>
       </div>
     </div>
   );
@@ -254,6 +335,7 @@ export function StatusMenu({ it, row, status, showName }: { it: InboxItem; row: 
           anchor={menu.anchor}
           onClose={menu.close}
           header={status.name}
+          headerAsWritten
           width={180}
           items={status.options.map((o) => ({ key: o.name, label: o.name, checked: o.name === status.value, onSelect: () => void setDocStatus(it, row, status, o.name) }))}
         />

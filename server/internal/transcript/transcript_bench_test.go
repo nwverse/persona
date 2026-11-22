@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // benchTranscript writes a Claude transcript of about size bytes shaped like a real session's: each line carries the
@@ -52,8 +54,16 @@ func BenchmarkRefreshCold(b *testing.B) {
 	}
 }
 
+// Bounds for TestToolUseResultNotCopied, both far below the 1 MB a copied toolUseResult would cost. The line measures
+// about 2.9 KB, the narrow outcome decode of toolUseResult (claudeToolResult, outcome.go) included; -race instruments
+// every allocation and measures about 7 to 10 KB.
+const (
+	toolUseResultAllocBound     = 4 << 10
+	toolUseResultRaceAllocBound = 32 << 10
+)
+
 // A tool's own copy of its output (toolUseResult) is skipped, not copied: a line carrying 1 MB there and a short
-// tool_result allocates about 2.6 KB measured, where copying the field took over 1 MB.
+// tool_result allocates a few KB, where copying the field took over 1 MB.
 func TestToolUseResultNotCopied(t *testing.T) {
 	line := []byte(`{"type":"user","uuid":"r1","message":{"role":"user","content":[{"type":"tool_result",` +
 		`"tool_use_id":"toolu_1","content":"ok"}]},"toolUseResult":{"stdout":"` + strings.Repeat("x", 1<<20) + `"}}`)
@@ -68,7 +78,68 @@ func TestToolUseResultNotCopied(t *testing.T) {
 		parseLine(1, line, &Meta{})
 	}
 	runtime.ReadMemStats(&after)
-	if per := (after.TotalAlloc - before.TotalAlloc) / runs; per > 2718 {
-		t.Fatalf("parsing the line allocated %d bytes, want at most 2718", per)
+	bound := uint64(toolUseResultAllocBound)
+	if raceEnabled {
+		bound = toolUseResultRaceAllocBound
 	}
+	if per := (after.TotalAlloc - before.TotalAlloc) / runs; per > bound {
+		t.Fatalf("parsing the line allocated %d bytes, want at most %d", per, bound)
+	}
+}
+
+// raceEnabled: built with -race, whose instrumentation allocates on its own (race_test.go).
+var raceEnabled bool
+
+// The light copy a node keeps of a long result (File.items) holds its page and its outcome, not the output: an outcome's
+// tail and saved-output path are copied out, never slices that keep the whole output alive.
+func TestLightResultRetainsNoOutput(t *testing.T) {
+	out := strings.Repeat("compiling a package\n", 1<<20/20) + "error: the cause" // about 1 MB
+	lines := []struct {
+		line  string
+		codex bool
+	}{
+		{resultLine(quote("Exit code 1\n"+out), true, `"toolUseResult":"Error: Exit code 1"`), false},
+		{resultLine(quote("<persisted-output>\nOutput too large. Full output saved to: /work/tool-results/b1.txt\n\n"+out), false, ""), false},
+		{`{"type":"user","uuid":"b1","message":{"role":"user","content":` + quote("<bash-stdout>"+out+"</bash-stdout><bash-stderr></bash-stderr>") + `}}`, false},
+		{`{"timestamp":"2026-10-26T05:06:06.000Z","type":"event_msg","payload":{"type":"item_completed","item":` +
+			`{"type":"CommandExecution","id":"e1","command":["/bin/zsh","-lc","make"],"status":"failed","aggregated_output":` +
+			quote(out) + `,"exit_code":1}}}`, true},
+	}
+	parse := func(kept *[]proto.Item) {
+		for i, l := range lines {
+			for _, it := range ParseLine(i+1, []byte(l.line), &Meta{Codex: l.codex}) {
+				k, _ := light(it, false)
+				*kept = append(*kept, k)
+			}
+		}
+	}
+	parse(new([]proto.Item)) // compiles the patterns parsing needs, kept for good
+	const runs = 4
+	kept := make([]proto.Item, 0, runs*2*len(lines))
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range runs {
+		parse(&kept)
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	results, persisted := 0, 0
+	for _, it := range kept {
+		if it.Kind == proto.KindToolResult && it.Outcome != nil && it.Outcome.Tail != "" {
+			results++
+			if it.Outcome.Persisted != nil {
+				persisted++
+			}
+		}
+	}
+	if results != runs*len(lines) || persisted != runs {
+		t.Fatalf("%d results with a tail and %d with a saved output, want %d and %d", results, persisted, runs*len(lines), runs)
+	}
+	// A page is about 4 KB and a tail at most 2 KB; a kept output would be 1 MB.
+	if per := (int64(after.HeapAlloc) - int64(before.HeapAlloc)) / int64(results); per > 64<<10 {
+		t.Fatalf("each kept result holds %d bytes, want at most %d", per, 64<<10)
+	}
+	runtime.KeepAlive(kept)
+	runtime.KeepAlive(lines) // the input too: freed by the second GC, it would offset what is kept
 }

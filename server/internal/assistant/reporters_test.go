@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -76,7 +77,8 @@ func TestStopReportingStopsItsTasks(t *testing.T) {
 		t.Fatalf("interrupted %q", got)
 	}
 	agentTurn(s, f, proto.StatusDone, "停在一半", 0)
-	time.Sleep(10 * quietNoticeDelay)
+	// Force the delayed quiet-notice path: after /stop it has no pending notice to send.
+	s.sendQuietNotice(onlyTodo(s).ID)
 	if n := f.sentTo("lark1"); n != 0 {
 		t.Fatalf("the stopped conversation got %d notice(s)", n)
 	}
@@ -118,6 +120,34 @@ func TestStopReportingStopsItsTasks(t *testing.T) {
 	}
 }
 
+// A reporting conversation whose turn ended while a background command still runs is interrupted by a stop: for an
+// assistant conversation that ends its process with the command, which would otherwise wake it later (#8960).
+func TestStopReportingStopsItsBackgroundWork(t *testing.T) {
+	s, f := reportingWithTask(t)
+	bg := []proto.BackgroundTask{{ID: "b1", Kind: "shell", Command: "sleep 90", StartedAt: time.Now()}}
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "lark1", MachineID: "server", Assistant: true, Status: proto.StatusIdle, Background: bg})
+	w := serve(s, "POST", "/api/v1/assistant/conversations/lark1/stop", "")
+	var res stopResult
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil || w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if !res.Conversation || res.Already || !slices.Contains(f.interrupted(), "server/lark1") {
+		t.Fatalf("result = %+v, interrupted %q", res, f.interrupted())
+	}
+
+	// A TUI agent's interrupt is Escape in its terminal and stops no background command: an idle one is not sent it (#3793).
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "lark1", MachineID: "server", Status: proto.StatusIdle, Background: bg})
+	before := len(f.interrupted())
+	if w := serve(s, "POST", "/api/v1/assistant/conversations/lark1/stop", ""); w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if got := f.interrupted()[before:]; slices.Contains(got, "server/lark1") {
+		t.Fatalf("an idle TUI agent was interrupted: %q", got)
+	}
+}
+
 // Notices already queued behind the conversation's turn go when it is stopped.
 func TestStopReportingDropsQueuedNotices(t *testing.T) {
 	s, f := reportingWithTask(t)
@@ -131,6 +161,54 @@ func TestStopReportingDropsQueuedNotices(t *testing.T) {
 	}
 	if q, _ := s.queuedRelays(); len(q["lark1"]) != 0 {
 		t.Fatalf("still queued: %q", q["lark1"])
+	}
+}
+
+// A supervision signal already gathered when /stop arrives is dropped with the reporting conversation's notices;
+// it must not surface in main after the digest timer fires (#3308, #5732).
+func TestStopReportingDropsPendingSupervision(t *testing.T) {
+	s, f := reportingWithTask(t)
+	todo := onlyTodo(s)
+	s.signal(superviseSignal{Todo: todo.ID, Kind: sigUnjudged, Key: "before-stop", Detail: "ready"})
+	if w := serve(s, "POST", "/api/v1/assistant/conversations/lark1/stop", ""); w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	waitFor(t, "the digest timer after stop", func() bool {
+		s.supervise.mu.Lock()
+		defer s.supervise.mu.Unlock()
+		return s.supervise.timer == nil
+	})
+	// The timer clears its handle before checking the now-empty pending list. Wait for that callback to finish too.
+	s.supervise.dedupMu.Lock()
+	s.supervise.dedupMu.Unlock()
+	if got := f.notices(); len(got) != 0 {
+		t.Fatalf("pending supervision reached main after stop: %q", got)
+	}
+	s.supervise.mu.Lock()
+	_, pending := s.supervise.pending[todo.ID+"|"+sigUnjudged]
+	s.supervise.mu.Unlock()
+	if pending {
+		t.Fatal("the stopped task's signal is still pending")
+	}
+}
+
+// The relay queue survives a manager restart even though supervise.queued does not. /stop must still remove the old
+// persisted supervision message for the stopped reporter's task (#5732).
+func TestStopReportingDropsSupervisionQueuedBeforeRestart(t *testing.T) {
+	s, _ := reportingWithTask(t)
+	todo := onlyTodo(s)
+	if s.queueRelay("conv1", relayMsg{From: superviseTool, Tool: superviseTool, Text: "📋 督办 " + todo.ID, At: time.Now().UTC()}) == 0 {
+		t.Fatal("could not queue the legacy supervision message")
+	}
+	// A restart loses this in-memory index, but not the persisted relay queue above.
+	s.supervise.mu.Lock()
+	s.supervise.queued = nil
+	s.supervise.mu.Unlock()
+	if w := serve(s, "POST", "/api/v1/assistant/conversations/lark1/stop", ""); w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if q, _ := s.queuedRelays(); len(q["conv1"]) != 0 {
+		t.Fatalf("the stopped task's pre-restart supervision is still queued: %q", q["conv1"])
 	}
 }
 
@@ -161,5 +239,39 @@ func TestStopNotAReportingConversation(t *testing.T) {
 	s, _ := newQuietService(t)
 	if w := serve(s, "POST", "/api/v1/assistant/conversations/conv1/stop", ""); w.Code != 404 {
 		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+}
+
+// Clearing the main conversation's context (#5095) closes its own process only: a Feishu request it reports on is not
+// stopped, so the Agents working on the tasks it handed out go on (unlike the Stop button above).
+func TestClearMainLeavesItsTasksRunning(t *testing.T) {
+	s, f := reportingWithTask(t)
+	ctx := context.Background()
+	if _, err := s.updateSettings(ctx, func(v *Settings) error {
+		v.MachineID, v.Main, v.MainMachineID = "server", "lark1", "server"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w := serve(s, "POST", "/api/v1/assistant/main/clear", `{"expect":"lark1"}`)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"archived":"lark1"`) {
+		t.Fatalf("clear: %d %s", w.Code, w.Body)
+	}
+	if got := f.interrupted(); len(got) != 0 {
+		t.Fatalf("interrupted %q", got)
+	}
+	if s.reporterStopped(ctx, "lark1") {
+		t.Fatal("the reporting conversation was stopped")
+	}
+	f.mu.Lock()
+	closed := 0
+	for _, c := range f.calls {
+		if c.Method == "session.close" && strings.Contains(string(c.Params), `"lark1"`) {
+			closed++
+		}
+	}
+	f.mu.Unlock()
+	if closed != 1 {
+		t.Fatalf("session.close for lark1: %d", closed)
 	}
 }

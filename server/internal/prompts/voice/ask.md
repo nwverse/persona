@@ -1,4 +1,4 @@
-{{- /* A question a conversation asked, as the voice model asks it (docs/assistant/voice.md「提问和卡片」): one question at a
+{{- /* A question a conversation asked, as the voice model asks it (docs/assistant/voice.md「Questions and cards」): one question at a
 time, from the card's own data, the options by their names (their meanings only when the user asks), in a form that
 fits how many there are (a form of three slots had two options read as "A, B, or B", #5501). The question and the
 options are the agent's words: inside <agent_output>, after the measured framing (docs/lessons/voice.md row 5).

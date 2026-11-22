@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Add Provider › From Extension (docs/extensions/extensions.md「模型供应商」): the providers the hub's plugins offer (and its built-in
+/// Add Provider › From Extension (docs/extensions/extensions.md「Model providers」): the providers the hub's plugins offer (and its built-in
 /// ones, by their display name), then only the name, the key and maybe another of the provider's models; the address and
 /// the kind come from the preset.
 struct LauncherPresetSections: View {

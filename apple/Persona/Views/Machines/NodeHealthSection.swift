@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// What This Computer Can Do on a machine's page (#3018, the web's NodeHealth, docs/server/machines.md「自检」): the node's
+/// What This Computer Can Do on a machine's page (#3018, the web's NodeHealth, docs/server/machines.md「Doctor: what this computer can do」): the node's
 /// self-check, first as features (Approval Cards on Phone, Status and Notifications, Terminal and Engine, …) with Ready /
 /// Partly Working / Problem / Off, then every check behind Show All Checks. It checks when the page opens, when the
 /// computer comes online and on Check Again; Repair (after one confirmation) has the node write its own generated files again and re-check. No polling.
@@ -28,7 +28,7 @@ struct NodeHealthSection: View {
             guard machine.online else { m.reset(); return }
             await m.check()
         }
-        .confirmationDialog("Regenerate Persona's Files", isPresented: $confirmsFix, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Regenerate Persona's Files", isPresented: $confirmsFix, titleVisibility: .visible, hasCancel: true) {
             Button("Repair") { Task { await fix() } }
             Button("Cancel", role: .cancel) {}
         } message: {

@@ -1,6 +1,7 @@
 import MarkdownUI
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 // The native document reader: Markdown export first (fast, faithful tables and lists); when the owner forbids export,
 // the JSON node tree rendered natively. Around the text: title, where it lives, who edited it, read count, the cached
@@ -32,8 +33,9 @@ final class FeishuDocsReaderModel {
     var summary: FeishuDocsAISummary?
     var loading = false
 
-    func load(url: String, title: String?) async {
-        guard let api = AppModel.shared.api else { error = String(localized: "Not connected to a hub yet"); return }
+    /// `api`: the client of the manager the document is read through (`FeishuDocReader.manager`).
+    func load(url: String, title: String?, api: APIClient?) async {
+        guard let api else { error = String(localized: "Not connected to a hub yet"); return }
         loading = true
         defer { loading = false }
         async let header: FeishuDocsHeader? = try? api.feishuDocsGet("documents/header", query: ["url": url])
@@ -94,6 +96,8 @@ final class FeishuDocsReaderModel {
 struct FeishuDocReader: View {
     var url: String
     var title: String?
+    /// The manager it reads through (`FeishuRoute.doc`): every request and picture names it; nil: the default's.
+    var manager: String? = nil
 
     @Environment(\.feishuOpen) private var open
     @Environment(AppModel.self) private var app
@@ -126,7 +130,7 @@ struct FeishuDocReader: View {
                                     // the whole of it, paragraph style and all.
                                     .modifier(FeishuDocsMarkdownComments(comment: comment, copyable: copyAllowed))
                                     .markdownTheme(.feishuDocs)
-                                    .markdownImageProvider(FeishuDocsImageProvider(open: { openImage($0, in: body.images) }))
+                                    .markdownImageProvider(FeishuDocsImageProvider(manager: manager, open: { openImage($0, in: body.images) }))
                                     .modifier(FeishuDocsSelectable(enabled: copyAllowed && comment == nil))
                                     .id(chunk.id)
                             }
@@ -138,11 +142,11 @@ struct FeishuDocReader: View {
                         treeRows(view)
                         footer
                     case .unsupported(let u):
-                        FeishuDocsUnsupportedView(info: u, url: url)
+                        FeishuDocsUnsupportedView(info: u, url: url, manager: manager)
                     case nil:
                         if let e = model.error {
                             EmptyStateView(symbol: Theme.Icon.missingFile, title: String(localized: "Can't open this doc"), message: e,
-                                           action: (String(localized: "Retry [Components b8784c]"), { Task { await model.load(url: url, title: title) } }))
+                                           action: (String(localized: "Retry [Components b8784c]"), { Task { await model.load(url: url, title: title, api: api) } }))
                                 .padding(.top, 60)
                             Button("Open in Lark [Feishu Doc Reader 76d0eb]") { FeishuDocsLinks.openInFeishu(url) }
                                 .lineLimit(1).frame(maxWidth: .infinity)
@@ -167,9 +171,9 @@ struct FeishuDocReader: View {
         .navigationTitle(showTitle ? docTitle : "")
         .navigationBarTitleDisplayMode(.inline)
         .pageToolbar { toolbar }
-        .refreshable { await model.load(url: url, title: title) }
+        .refreshable { await model.load(url: url, title: title, api: api) }
         .task {
-            if model.content == nil { await model.load(url: url, title: title) }
+            if model.content == nil { await model.load(url: url, title: title, api: api) }
             #if DEBUG
             // Simulator automation: `-openFeishuDocHeading <n>` scrolls to the n-th outline entry, `-showFeishuDocSheet outline|comments` opens a sheet.
             let n = UserDefaults.standard.integer(forKey: "openFeishuDocHeading")
@@ -185,7 +189,7 @@ struct FeishuDocReader: View {
             #endif
         }
         .environment(\.openURL, OpenURLAction { link in handle(link) })
-        .environment(\.feishuDocsContext, FeishuDocsRenderContext(images: images, selectable: copyAllowed, openImage: { openImage($0, in: images) }))
+        .environment(\.feishuDocsContext, FeishuDocsRenderContext(images: images, selectable: copyAllowed, openImage: { openImage($0, in: images) }, manager: manager))
         .environment(\.feishuDocComment, comment)
         .sheet(isPresented: $showOutline) {
             FeishuDocsOutlineSheet(items: outline) { item in
@@ -198,21 +202,26 @@ struct FeishuDocReader: View {
             #endif
         }
         .sheet(isPresented: $showComments) {
-            NavigationStack { FeishuDocsCommentsView(url: url, title: docTitle) }
+            NavigationStack { FeishuDocsCommentsView(url: url, title: docTitle, manager: manager) }
                 .presentationDetents([.large])
                 #if os(macOS)
                 .macSheet()
                 #endif
         }
         .sheet(item: $passage) { p in
-            NavigationStack { FeishuDocsCommentsView(url: url, title: docTitle, passage: .passage(quote: p.quote, blockID: p.blockID)) }
+            NavigationStack { FeishuDocsCommentsView(url: url, title: docTitle, passage: .passage(quote: p.quote, blockID: p.blockID), manager: manager) }
                 .presentationDetents([.large])
                 #if os(macOS)
                 .macSheet()
                 #endif
         }
-        .fullScreenCover(item: $gallery) { g in ImageViewer(urls: g.urls, index: g.index) }
+        .fullScreenCover(item: $gallery) { g in ImageViewer(urls: g.urls.map(media), index: g.index) }
     }
+
+    private var api: APIClient? { app.api?.manager(manager) }
+
+    /// A picture's or file's URL as this reader's manager reads it.
+    private func media(_ url: String) -> String { LarkMedia.url(url, manager: manager) }
 
     // MARK: Header
 
@@ -236,10 +245,11 @@ struct FeishuDocReader: View {
             HStack(spacing: Theme.Space.s) {
                 if let owner = model.info?.owner ?? treeOwner {
                     Button {
-                        if let id = owner.id { open?(.profile(LarkPersonRef(id: id, name: owner.name, avatar: owner.avatarUrl))) }
+                        if let id = owner.id { open?(.profile(LarkPersonRef(id: id, name: owner.name, avatar: owner.avatarUrl), manager: manager)) }
                     } label: {
                         HStack(spacing: Theme.Space.sm) {
                             LarkAvatarImage(name: owner.name, url: owner.avatarUrl, size: 22)
+                                .environment(\.larkManager, manager)
                             Text(owner.name).font(Theme.Font.captionMedium).foregroundStyle(.primary).lineLimit(1)
                         }
                     }
@@ -397,12 +407,12 @@ struct FeishuDocReader: View {
     private func handle(_ link: URL) -> OpenURLAction.Result {
         if link.scheme == feishuDocsUserScheme, let id = link.host() {
             let name = URLComponents(url: link, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "name" }?.value ?? ""
-            open?(.profile(LarkPersonRef(id: id, name: name)))
+            open?(.profile(LarkPersonRef(id: id, name: name), manager: manager))
             return .handled
         }
         if link.scheme == nil, link.path.hasPrefix("/messenger/") { return .discarded }
         if let open, FeishuLinks.isDoc(link) {
-            open(.doc(url: link.absoluteString, title: nil))
+            open(.doc(url: link.absoluteString, title: nil, manager: manager))
             return .handled
         }
         #if os(macOS)
@@ -421,8 +431,8 @@ struct FeishuDocReader: View {
                 Button { showComments = true } label: {
                     Image(systemName: Theme.Icon.conversation)
                         .overlay(alignment: .topTrailing) {
-                            if let n = model.info?.comments, n > 0 {
-                                Text(n > 99 ? "99+" : "\(n)")
+                            if let n = model.info?.comments, let text = CountBadge.text(n) {
+                                Text(text)
                                     .font(.system(size: 9, weight: .bold).monospacedDigit()) // type-scale: glyph (a count on an icon)
                                     .foregroundStyle(.white)
                                     .padding(.horizontal, Theme.Space.xs)
@@ -437,7 +447,7 @@ struct FeishuDocReader: View {
             Menu {
                 FeishuDocsLinkMenu(url: url)
                 Divider()
-                Button { Task { await model.load(url: url, title: title) } } label: { Label("Refresh", systemImage: Theme.Icon.retry) }
+                Button { Task { await model.load(url: url, title: title, api: api) } } label: { Label("Refresh", systemImage: Theme.Icon.retry) }
             } label: { Image(systemName: Theme.Icon.more) }
             .accessibilityLabel("More")
         }
@@ -493,14 +503,15 @@ private struct FeishuDocsSelectable: ViewModifier {
     }
 }
 
-/// Markdown images through the hub, tappable into the gallery.
+/// Markdown images through the hub (as `manager` reads them), tappable into the gallery.
 struct FeishuDocsImageProvider: ImageProvider {
+    var manager: String? = nil
     var open: (String) -> Void
 
     func makeImage(url: URL?) -> some View {
         let src = url?.absoluteString ?? ""
         return Button { open(src) } label: {
-            LarkRemoteImage(url: src, maxPixel: 1600, contentMode: .fit)
+            LarkRemoteImage(url: LarkMedia.url(src, manager: manager), maxPixel: 1600, contentMode: .fit)
                 .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.box60)
                 .clipShape(.rect(cornerRadius: Theme.Radius.control, style: .continuous))
         }
@@ -565,12 +576,14 @@ struct FeishuDocsSkeleton: View {
 struct FeishuDocsUnsupportedView: View {
     var info: FeishuDocsUnsupported
     var url: String
+    /// The manager the reader reads through: the preview and the download name it.
+    var manager: String? = nil
     @State private var request: (url: String, name: String)?
     @State private var gallery: FeishuDocsGallery?
 
     var body: some View {
         VStack(spacing: Theme.Space.l) {
-            if let image = info.image {
+            if let image = info.image.map({ LarkMedia.url($0, manager: manager) }) {
                 Button { gallery = FeishuDocsGallery(urls: [image], index: 0) } label: {
                     LarkRemoteImage(url: image, maxPixel: 2000, contentMode: .fit)
                         .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.box200)
@@ -589,7 +602,7 @@ struct FeishuDocsUnsupportedView: View {
             VStack(spacing: Theme.Space.m) {
                 if let f = info.file {
                     Button {
-                        request = ("/api/v1/lark/raw/documents/drive/files/\(f.token)/download", info.title)
+                        request = (LarkMedia.url("/api/v1/lark/raw/documents/drive/files/\(f.token)/download", manager: manager), info.title)
                     } label: {
                         Label("Preview File", systemImage: Theme.Icon.view).lineLimit(1).scaledFrame(minWidth: Theme.Size.box180)
                     }
@@ -632,7 +645,7 @@ struct FeishuDocsOutlineSheet: View {
             .listStyle(.plain)
             .navigationTitle("Folder [Task Views 52daa7]")
             .navigationBarTitleDisplayMode(.inline)
-            .macSheetDone { dismiss() }
+            .sheetDone { dismiss() }
         }
     }
 }

@@ -31,12 +31,15 @@ type Record struct {
 	StorageID  string   `json:"storage_id,omitempty"`
 	PreviousID string   `json:"previous_id,omitempty"`
 	Aliases    []string `json:"aliases,omitempty"`
-	// ExpectedID and ExpectedVersion are transaction-only compare-and-swap guards.
-	ExpectedID      string `json:"-"`
-	ExpectedVersion string `json:"-"`
-	NewInstallation bool   `json:"-"`
-	Source          string `json:"source"`
-	Origin          string `json:"origin,omitempty"`
+	// ExpectedID, ExpectedVersion and ExpectedConfig are transaction-only compare-and-swap guards.
+	ExpectedID      string          `json:"-"`
+	ExpectedVersion string          `json:"-"`
+	ExpectedConfig  json.RawMessage `json:"-"`
+	// DeleteSecrets removes these sealed rows in the same transaction as the record write.
+	DeleteSecrets   []string `json:"-"`
+	NewInstallation bool     `json:"-"`
+	Source          string   `json:"source"`
+	Origin          string   `json:"origin,omitempty"`
 	// MarketKey is the verified official key captured from this installed package's
 	// catalog entry, never inferred from the market's current mutable identity.
 	MarketKey       string `json:"market_key,omitempty"`
@@ -55,15 +58,27 @@ type Record struct {
 	Remote            *Remote         `json:"remote,omitempty"`
 	// DisabledContributions are the contributions the user switched off ("<point>/<id>", docs/extensions/extensions.md "Contribution switches"):
 	// they do not take effect while the rest of the extension runs. A connector's switch is the connector's own.
-	DisabledContributions []string  `json:"disabled_contributions,omitempty"`
-	InstalledAt           time.Time `json:"installed_at"`
-	UpdatedAt             time.Time `json:"updated_at"`
+	DisabledContributions []string `json:"disabled_contributions,omitempty"`
+	// PackOff, on an extension pack, are the members switching the pack off switched off (docs/extensions/extensions.md
+	// "Dependencies, exports and packs", #1830): switching the pack back on turns these on again and no others.
+	PackOff     []string  `json:"pack_off,omitempty"`
+	InstalledAt time.Time `json:"installed_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // Remote is a plugin that runs elsewhere and is reached on these sockets.
 type Remote struct {
 	RPCSocket  string `json:"rpc_socket,omitempty"`
 	HTTPSocket string `json:"http_socket,omitempty"`
+	// Package: it is the installed package's program, attached (Attach); the package stays. Without it, the extension
+	// was installed from remote: and has no package.
+	Package bool `json:"package,omitempty"`
+}
+
+// AttachedPackage: an installed package whose program runs on its own and is reached on Remote's sockets (Attach). Its
+// package stays installed and still takes effect (skills, instructions, gates); Detach runs it from there again.
+func (r Record) AttachedPackage() bool {
+	return r.Source == SourceInstalled && r.Remote != nil && r.Remote.Package
 }
 
 // Store keeps the registry (the hub's Postgres: tables plugins, plugin_secrets, plugin_audit).
@@ -94,8 +109,10 @@ type Extension struct {
 	Manifest *Manifest
 	Full     *Manifest
 	Schema   *Schema
-	// Dir is the package's directory ("" for a remote or hub.json plugin).
+	// Dir is the package's directory ("" for one installed from remote: or a hub.json plugin).
 	Dir string
+	// L10n are the package's translations of its manifest's text (l10n.go), read with it; never changed after.
+	L10n Translations
 	// Problem is why it cannot run on this hub (engines, a missing package); it is then not started.
 	Problem  string
 	Warnings []string
@@ -119,7 +136,7 @@ func (p *Extension) ProblemText(l i18n.Lang) string {
 // Change is what the registry tells the hub after it changed a plugin.
 type Change struct {
 	ID   string
-	Kind string // installed | upgraded | rolled_back | removed | enabled | disabled | config | secret
+	Kind string // installed | upgraded | rolled_back | removed | enabled | disabled | config | secret | attached | detached
 	// Old is the plugin before the change (removed, upgraded, rolled back).
 	Old *Extension
 }
@@ -162,14 +179,19 @@ type Registry struct {
 	planProblem error      // while a commit confirmation or package recovery is unresolved, no new writes; wait for a reload
 	mu          sync.Mutex
 	extensions  map[string]*Extension
-	reserved    map[string]map[string]string // point → contribution id → who has it (the hub's own)
-	previews    map[string]*Preview
-	now         func() time.Time
+	// settingsEpoch is odd while a mutation is active and even after its last overlapping mutation finishes.
+	settingsEpoch  map[string]uint64
+	settingsActive map[string]int
+	reserved       map[string]map[string]string // point → contribution id → who has it (the hub's own)
+	previews       map[string]*Preview
+	now            func() time.Time
 	// yields: built-in plugins an installed one of the same id takes the place of (Yields); yielded: those put aside.
 	yields  map[string]bool
 	yielded map[string]*Extension
 	// devSecrets are the secrets of the extensions being written (SourceDev), in memory only.
 	devSecrets map[string]map[string]string
+	// refSchemes: the schemes each extension's secrets reference, by id (secret_refs.go), noted at each read.
+	refSchemes map[string][]string
 	// keptOff are built-in extensions held off whatever their rows say (KeepOff).
 	keptOff map[string]*keptOff
 }
@@ -233,8 +255,10 @@ func (r *Registry) AddHubJSON(m *Manifest, legacy any, enabled bool) error {
 		return fmt.Errorf("plugin %q: duplicate id", m.ID)
 	}
 	raw, _ := json.Marshal(m)
+	mutation := r.settingsWriteLocked(m.ID)
 	r.extensions[m.ID] = &Extension{Record: Record{ID: m.ID, Source: SourceHubJSON, Version: m.Version, Manifest: raw,
 		Granted: m.Permissions, GrantedDigest: Digest(m), Enabled: enabled}, Manifest: m, Full: m, Legacy: legacy}
+	mutation.finishLocked()
 	return nil
 }
 
@@ -251,8 +275,22 @@ func (r *Registry) AddBuiltin(m *Manifest, dir string, enabled bool) error {
 		return fmt.Errorf("plugin %q: duplicate id", m.ID)
 	}
 	raw, _ := json.Marshal(m)
+	mutation := r.settingsWriteLocked(m.ID)
 	r.extensions[m.ID] = &Extension{Record: Record{ID: m.ID, Source: SourceBuiltin, Version: m.Version, Manifest: raw,
 		Granted: m.Permissions, GrantedDigest: Digest(m), Enabled: enabled}, Manifest: m, Full: m, Schema: schema, Dir: dir}
+	mutation.finishLocked()
+	return nil
+}
+
+// AddBuiltinTranslated is AddBuiltin for a manifest written in English, with its text in the other languages (a
+// built-in has no package to read l10n/ from).
+func (r *Registry) AddBuiltinTranslated(m *Manifest, dir string, enabled bool, ts Translations) error {
+	if err := r.AddBuiltin(m, dir, enabled); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.extensions[m.ID].L10n = ts
 	return nil
 }
 
@@ -297,6 +335,7 @@ func (r *Registry) Load(ctx context.Context) error {
 		cur := r.extensions[row.ID]
 		switch {
 		case row.Source == SourceBuiltin && cur != nil && cur.Record.Source == SourceBuiltin:
+			mutation := r.settingsWriteLocked(row.ID)
 			cur.Record.Enabled, cur.Record.Config = row.Enabled, row.Config
 			if k := r.keptOff[row.ID]; k != nil {
 				k.row, cur.Record.Enabled = row.Enabled, false
@@ -304,11 +343,16 @@ func (r *Registry) Load(ctx context.Context) error {
 			cur.Record.DisabledContributions = row.DisabledContributions
 			cur.Manifest = cur.Full.Without(row.DisabledContributions)
 			cur.Record.InstalledAt, cur.Record.UpdatedAt = row.InstalledAt, row.UpdatedAt
+			mutation.finishLocked()
 		case row.Source == SourceInstalled && cur == nil:
+			mutation := r.settingsWriteLocked(row.ID)
 			r.extensions[row.ID] = r.fromRow(row)
+			mutation.finishLocked()
 		case row.Source == SourceInstalled && r.yielding(cur):
+			mutation := r.settingsWriteLocked(row.ID)
 			r.yielded[row.ID] = cur
 			r.extensions[row.ID] = r.fromRow(row)
+			mutation.finishLocked()
 		}
 	}
 	return nil
@@ -317,6 +361,7 @@ func (r *Registry) Load(ctx context.Context) error {
 // fromRow is an installed plugin as its row says.
 func (r *Registry) fromRow(row Record) *Extension {
 	row.ExpectedID, row.ExpectedVersion, row.NewInstallation = "", "", false
+	row.ExpectedConfig, row.DeleteSecrets = nil, nil
 	p := &Extension{Record: row}
 	m, err := Parse(row.Manifest)
 	if err != nil {
@@ -330,11 +375,19 @@ func (r *Registry) fromRow(row Record) *Extension {
 	}
 	p.Full, p.Manifest = m, m.Without(row.DisabledContributions)
 	p.Schema, _ = ParseSchema(m.Configuration)
-	if row.Remote == nil {
+	if err := checkEntrySecretNamespace(m, p.Schema, row.Config); err != nil {
+		p.problemErr = err
+		p.Problem = err.Error()
+	}
+	if row.Remote == nil || row.AttachedPackage() {
 		p.Dir = r.installedDir(row.StorageKey(), row.Version)
 		if !hasManifest(p.Dir) {
 			p.problemErr = i18n.Err("extension-status.package_missing", i18n.Args{"path": p.Dir})
 			p.Problem = p.problemErr.Error()
+		} else {
+			var warnings []string
+			p.L10n, warnings = ReadTranslations(p.Dir)
+			p.Warnings = append(p.Warnings, warnings...)
 		}
 	}
 	if w, err := CheckEngines(m, r.build); err != nil {
@@ -394,6 +447,8 @@ func snapshotExtension(p *Extension) *Extension {
 	out := *p
 	out.Record.Manifest = slices.Clone(p.Record.Manifest)
 	out.Record.Config = slices.Clone(p.Record.Config)
+	out.Record.ExpectedConfig = slices.Clone(p.Record.ExpectedConfig)
+	out.Record.DeleteSecrets = slices.Clone(p.Record.DeleteSecrets)
 	out.Record.Aliases = slices.Clone(p.Record.Aliases)
 	out.Record.Granted.Network = slices.Clone(p.Record.Granted.Network)
 	out.Record.Granted.Hub = slices.Clone(p.Record.Granted.Hub)
@@ -404,6 +459,7 @@ func snapshotExtension(p *Extension) *Extension {
 		out.Record.Granted.Storage = &storage
 	}
 	out.Record.DisabledContributions = slices.Clone(p.Record.DisabledContributions)
+	out.Record.PackOff = slices.Clone(p.Record.PackOff)
 	if p.Record.Remote != nil {
 		remote := *p.Record.Remote
 		out.Record.Remote = &remote
@@ -413,13 +469,14 @@ func snapshotExtension(p *Extension) *Extension {
 }
 
 // HubScopeAllowed checks the live permission record while holding the registry lock. Callers must not read the
-// pointer returned by Get to authorize a request: SetEnabled can change its record concurrently.
+// pointer returned by Get to authorize a request: SetEnabled can change its record concurrently. The legacy full-hub
+// grant covers every scope but the ones only granted by name (InEveryScope).
 func (r *Registry) HubScopeAllowed(id, scope string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	p := r.extensions[id]
 	return p != nil && p.Record.Enabled && p.Problem == "" &&
-		(p.Record.Granted.FullHub() || slices.Contains(p.Record.Granted.Hub, scope))
+		((p.Record.Granted.FullHub() && InEveryScope(scope)) || slices.Contains(p.Record.Granted.Hub, scope))
 }
 
 // HubScopeGranted is HubScopeAllowed without the legacy full-hub grant: the user granted scope itself. For what
@@ -447,7 +504,8 @@ func (r *Registry) SendsAsUser(id, contribution string) bool {
 }
 
 // EventSubscribers snapshots the enabled, compatible extensions subscribed to topic. A nonempty scope additionally
-// requires that actual grant (or the legacy full-hub grant); an empty scope preserves the other event topics' rules.
+// requires that actual grant (or the legacy full-hub grant, where InEveryScope); an empty scope preserves the other
+// event topics' rules.
 func (r *Registry) EventSubscribers(topic, scope string) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -456,7 +514,7 @@ func (r *Registry) EventSubscribers(topic, scope string) []string {
 		if !p.Record.Enabled || p.Problem != "" || p.Manifest == nil {
 			continue
 		}
-		if scope != "" && !p.Record.Granted.FullHub() && !slices.Contains(p.Record.Granted.Hub, scope) {
+		if scope != "" && !(p.Record.Granted.FullHub() && InEveryScope(scope)) && !slices.Contains(p.Record.Granted.Hub, scope) {
 			continue
 		}
 		if slices.Contains(p.Manifest.Topics(), topic) {
@@ -526,7 +584,16 @@ func (r *Registry) write(ctx context.Context, row Record) error {
 	if row.Source == SourceInstalled {
 		row.ExpectedID, row.ExpectedVersion = row.ID, row.Version
 	}
-	err := r.store.PutExtension(ctx, row)
+	var err error
+	if len(row.DeleteSecrets) > 0 {
+		store, ok := r.store.(PlanStore)
+		if !ok {
+			return fmt.Errorf("the store cannot delete secrets with the configuration")
+		}
+		err = store.PutExtensionPlan(ctx, []Record{row})
+	} else {
+		err = r.store.PutExtension(ctx, row)
+	}
 	var unknown *CommitUnknownError
 	if errors.As(err, &unknown) {
 		r.planProblem = err
@@ -550,8 +617,60 @@ func (r *Registry) audit(ctx context.Context, id, action, actor string, detail a
 	_ = r.store.AddExtensionAudit(ctx, id, action, actor, b)
 }
 
-func (r *Registry) changed(c Change) {
-	if r.OnChange != nil {
-		r.OnChange(c)
+// settingsMutation fences one visible registry mutation. Its completion closes the seqlock before OnChange runs.
+type settingsMutation struct {
+	registry *Registry
+	id       string
+	once     sync.Once
+}
+
+func (r *Registry) settingsWrite(id string) *settingsMutation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.settingsWriteLocked(id)
+}
+
+// settingsWriteLocked starts before the first store write or in-memory change. Overlapping operations after their
+// operation lock is released stay in one odd epoch until the last one finishes.
+func (r *Registry) settingsWriteLocked(id string) *settingsMutation {
+	if r.settingsEpoch == nil {
+		r.settingsEpoch = map[string]uint64{}
+	}
+	if r.settingsActive == nil {
+		r.settingsActive = map[string]int{}
+	}
+	if r.settingsActive[id] == 0 {
+		r.settingsEpoch[id]++
+	}
+	r.settingsActive[id]++
+	return &settingsMutation{registry: r, id: id}
+}
+
+func (m *settingsMutation) finishLocked() {
+	if m == nil {
+		return
+	}
+	m.once.Do(func() {
+		r := m.registry
+		r.settingsActive[m.id]--
+		if r.settingsActive[m.id] == 0 {
+			r.settingsEpoch[m.id]++
+		}
+	})
+}
+
+func (m *settingsMutation) finish() {
+	if m == nil {
+		return
+	}
+	m.registry.mu.Lock()
+	m.finishLocked()
+	m.registry.mu.Unlock()
+}
+
+func (m *settingsMutation) changed(c Change) {
+	m.finish()
+	if m.registry.OnChange != nil {
+		m.registry.OnChange(c)
 	}
 }

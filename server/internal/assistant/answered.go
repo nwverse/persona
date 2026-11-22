@@ -3,12 +3,12 @@ package assistant
 import (
 	"context"
 	"encoding/json"
-	"github.com/nwverse/persona/server/internal/compat"
 	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -84,7 +84,7 @@ func interactionQuestion(l i18n.Lang, ix proto.Interaction) string {
 	case ix.Kind == proto.IxElicitation && ix.Elicitation != nil && ix.Elicitation.Message != "":
 		return clip(oneLine(ix.Elicitation.Message), answeredLineMax)
 	case ix.ToolName != "":
-		return answeredT(l, "use_tool", i18n.Args{"tool": ix.ToolName})
+		return answeredT(l, "use_tool", i18n.Args{"tool": ixToolName(ix)})
 	}
 	return answeredT(l, "needs_you")
 }
@@ -263,9 +263,19 @@ func fieldValues(l i18n.Lang, ix proto.Interaction, r proto.Resolution) []string
 // secretName is a field or property name that holds a credential whatever the card says about it.
 var secretName = lazyre.New(`(?i)pass|secret|token|credential|api[_-]?key|private|otp|pin\b`)
 
+// ixToolName is the tool a card asks about, for a sentence: the manager's name for people on its own tools' cards
+// (proto.Interaction.ToolTitle), else toolDisplayName.
+func ixToolName(ix proto.Interaction) string {
+	if ix.ToolTitle != "" {
+		return ix.ToolTitle
+	}
+	return toolDisplayName(ix.ToolName)
+}
+
 // toolDisplayName is a tool's name for a sentence: an MCP tool as "Persona · mail send" (Persona's own server keeps
 // its old id persona, which allow lists and hooks match), others as written.
 func toolDisplayName(name string) string {
+	name = compat.CanonicalMCPToolName(name)
 	rest, ok := strings.CutPrefix(name, "mcp__")
 	if !ok {
 		return name
@@ -290,7 +300,7 @@ func toolDisplayName(name string) string {
 func permissionQuestion(l i18n.Lang, ix proto.Interaction) string {
 	var lines []string
 	if ix.ToolName != "" {
-		lines = append(lines, answeredT(l, "use_tool", i18n.Args{"tool": toolDisplayName(ix.ToolName)}))
+		lines = append(lines, answeredT(l, "use_tool", i18n.Args{"tool": ixToolName(ix)}))
 	}
 	if s := strings.TrimSpace(ix.Summary); s != "" {
 		lines = append(lines, s)

@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/extwire"
 )
 
 // The inbox items of connectors (GitHub…): their things become items with one generic block the apps draw without
@@ -14,12 +16,19 @@ import (
 
 // InboxConnector is an item's thread in a connector, and how it is answered.
 type InboxConnector struct {
-	Thread   string `json:"thread"`
-	Label    string `json:"label,omitempty"`    // the row's tag: "Review requested"
-	URL      string `json:"url,omitempty"`      // the thread on the web, opened in the app
-	OpenURL  string `json:"open_url,omitempty"` // a link the system opens (sms:…), not the app
-	ReplyTo  string `json:"reply_to,omitempty"` // where a reply goes and who sees it
-	CanReply bool   `json:"can_reply,omitempty"`
+	Thread      string `json:"thread"`
+	Label       string `json:"label,omitempty"` // the row's tag: "Review requested"
+	URL         string `json:"url,omitempty"`   // the thread on the web, opened in the app
+	ThreadState string `json:"thread_state,omitempty"`
+	OpenURL     string `json:"open_url,omitempty"` // a link the system opens (sms:…), not the app
+	ReplyTo     string `json:"reply_to,omitempty"` // where a reply goes and who sees it
+	CanReply    bool   `json:"can_reply,omitempty"`
+	// Avatar is the thread's picture as its connector names it (InboxThing.Avatar: a media ref or an https address),
+	// kept, not listed. AvatarURL is what the apps load it from instead, listed only: the avatars route's path
+	// (extwire.AvatarURL, docs/protocol/protocol.md "Avatars"); without one they draw the initial. Both apart from the
+	// item's own Avatar (Feishu's URL).
+	Avatar    string `json:"avatar,omitempty"`
+	AvatarURL string `json:"avatar_url,omitempty"`
 	// RuleTier is the connector's tier for triage without a model.
 	RuleTier string `json:"rule_tier,omitempty"`
 	// Tags are what the thread is about (its repository, chat, sender…): what it can be muted by.
@@ -73,7 +82,17 @@ func (s *Service) settleConnector(ctx context.Context, id string) []*InboxItem {
 // applyConnector turns a connector's things into items, under b.mu: one open item per thread gathers its later
 // moves until it is done; a move after that starts a new item; a thing that is over closes its open item.
 func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThing, now time.Time) []*InboxItem {
-	var changed []*InboxItem
+	var changed, renamed []*InboxItem
+	if name != "" {
+		// A connector renamed (a new localized name, say) renames its items too, not only the ones that move next.
+		for _, it := range b.items {
+			if it.Source == id && it.Connector != nil && it.AccountName != name {
+				b.roundWrite(it)
+				it.AccountName = name
+				renamed = append(renamed, it)
+			}
+		}
+	}
 	index := b.threads(func(it *InboxItem) (string, bool) {
 		if it.Source != id || it.Connector == nil {
 			return "", false
@@ -94,7 +113,7 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 			if open.Last != t.Last && (t.At.IsZero() || !t.At.Before(open.UpdatedAt)) {
 				prev := seenOf(open)
 				b.roundWrite(open)
-				open.Count++
+				open.Count += moveCount(t)
 				fillConnectorItem(open, t)
 				b.noteReceived(open, prev, nil)
 				if t.Tier != "" {
@@ -109,6 +128,15 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 				setRuleTier(open, t)
 				b.noteTriaged(open)
 				changed = append(changed, open)
+			}
+			// The thread's picture is the conversation's now, not a move's: a new one (or a connector that began to send
+			// one) shows on the open item at once. An older thing says nothing of it, as of the rest.
+			if av := thingAvatar(t); open.Connector != nil && open.Connector.Avatar != av && (t.At.IsZero() || !t.At.Before(open.UpdatedAt)) {
+				b.roundWrite(open)
+				open.Connector.Avatar = av
+				if !containsItem(changed, open) {
+					changed = append(changed, open)
+				}
 			}
 			// Read elsewhere counts only for the item's newest move: an older thing read (a connector restarted after it
 			// moved the item to a later step it was not notified of) says nothing of whether that step was seen.
@@ -133,7 +161,7 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 		if b.has(itemID) {
 			continue // this move started an item already (one handled since): adding it again would replace that item
 		}
-		it := &InboxItem{ID: itemID, Source: id, Account: id, AccountName: name, StartedAt: t.At, Count: 1}
+		it := &InboxItem{ID: itemID, Source: id, Account: id, AccountName: name, StartedAt: t.At, Count: moveCount(t)}
 		fillConnectorItem(it, t)
 		b.noteReceived(it, inboxSeen{}, nil)
 		if t.Tier != "" {
@@ -144,6 +172,11 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 		b.roundNew(it)
 		index.note(it)
 		changed = append(changed, it)
+	}
+	for _, it := range renamed {
+		if !containsItem(changed, it) {
+			changed = append(changed, it)
+		}
 	}
 	return changed
 }
@@ -157,6 +190,9 @@ func (b *inboxBook) settleThing(open *InboxItem, t connector.InboxThing, now tim
 		return false
 	}
 	b.roundWrite(open)
+	if t.ThreadState != "" && open.Connector != nil {
+		open.Connector.ThreadState = t.ThreadState
+	}
 	if t.Done == connector.DoneReplied {
 		b.noteSelfReplied(open, now)
 		open.done(now, t.Done)
@@ -171,23 +207,53 @@ func (b *inboxBook) settleThing(open *InboxItem, t connector.InboxThing, now tim
 	return true
 }
 
+// moveCount is how many messages a thing's move brings: its extra.count where its source says what that is
+// (InboxSource.Counts; collectSource clears it elsewhere), else one.
+func moveCount(t connector.InboxThing) int {
+	if t.Extra != nil && t.Extra.Count > 1 {
+		return t.Extra.Count
+	}
+	return 1
+}
+
 func fillConnectorItem(it *InboxItem, t connector.InboxThing) {
 	it.Kind, it.Title, it.Sender, it.Preview, it.Context = t.Kind, t.Title, t.Sender, t.Preview, t.Context
 	it.UpdatedAt, it.Last, it.Rules = t.At, t.Last, t.Rules
+	// A connector may use the existing document block while it is still a
+	// generic connector source (lark-cli does this for read-only comments). The
+	// generic connector block remains present for source/thread bookkeeping, but
+	// clients render the document block first and can open its comment link.
+	it.Doc = nil
+	if t.Extra != nil && len(t.Extra.Doc) > 0 {
+		_ = json.Unmarshal(t.Extra.Doc, &it.Doc)
+	}
 	rule := t.Tier
 	if rule == "" && t.Extra != nil && connector.Tier(t.Extra.RuleTier).Known() {
 		rule = connector.Tier(t.Extra.RuleTier) // its fallback (capability fallback): the model still sorts it first
 	}
-	it.Connector = &InboxConnector{Thread: t.Thread, Label: t.Label, URL: t.URL, OpenURL: t.OpenURL, ReplyTo: t.ReplyTo, CanReply: t.CanReply, RuleTier: string(rule), Tags: t.Tags}
+	it.Connector = &InboxConnector{Thread: t.Thread, Label: t.Label, URL: t.URL, ThreadState: t.ThreadState, OpenURL: t.OpenURL, ReplyTo: t.ReplyTo, CanReply: t.CanReply,
+		Avatar: thingAvatar(t), RuleTier: string(rule), Tags: t.Tags}
+	if where := whereOf(t.Tags); where != "" {
+		it.Where = where
+	}
 	if t.Tier != "" {
 		setRuleTier(it, t)
 	}
 }
 
+// thingAvatar is the thing's picture the item keeps: none for a value that names none (extwire.AvatarUsable: empty,
+// past extwire.AvatarValueMost, an http:// address).
+func thingAvatar(t connector.InboxThing) string {
+	if !extwire.AvatarUsable(t.Avatar) {
+		return ""
+	}
+	return t.Avatar
+}
+
 // setRuleTier gives an item the tier its connector's rules decided: triage leaves it alone (it is triaged at this
 // move), the reason is the rule.
 func setRuleTier(it *InboxItem, t connector.InboxThing) {
-	it.Tier, it.Reason, it.TriagedAt = string(t.Tier), t.Why, it.Last
+	it.Tier, it.Reason, it.TriagedAt, it.TriageRev = string(t.Tier), t.Why, it.Last, inboxTriageRev
 	if it.Connector != nil {
 		it.Connector.RuleTier = string(t.Tier)
 	}
@@ -208,7 +274,7 @@ func (s *Service) replyConnectorItem(ctx context.Context, r inboxReplyReq) (alre
 	c := r.item
 	b := &s.inbox
 	b.mu.Lock()
-	sent := r.once.repeated(r.live, r.text)
+	sent := !suggestionSendOnly(ctx) && r.once.repeated(r.live, r.text)
 	b.mu.Unlock()
 	if sent {
 		return true, nil

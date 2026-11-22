@@ -1,5 +1,7 @@
 plugins {
     id("persona.android.library")
+    // Its tests expect CoreText in Simplified Chinese (CoreTextFallback).
+    id("persona.coretext.zh")
     id("persona.hilt")
 }
 
@@ -9,9 +11,6 @@ android {
     sourceSets.getByName("test").kotlin.srcDir("src/sharedTest/kotlin")
     sourceSets.getByName("androidTest").kotlin.srcDir("src/sharedTest/kotlin")
     testOptions.unitTests.isIncludeAndroidResources = true
-    testOptions.unitTests.all {
-        it.systemProperty("persona.repo.root", rootProject.projectDir.parentFile.absolutePath)
-    }
 }
 
 dependencies {

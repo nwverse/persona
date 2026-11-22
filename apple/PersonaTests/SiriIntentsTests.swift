@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Pure logic behind AskPersonaIntent / AgentTaskIntent / AgentsStatusIntent.
 struct SiriIntentsTests {
@@ -63,6 +64,17 @@ struct SiriIntentsTests {
         #expect(s.id == "ob:agent:x:a1:main" && s.source == "ob" && s.sessionKey == "agent:x:a1:main")
         #expect(s.title == "日程" && s.provider == "claude" && s.unreadCount == 2 && !s.canSend)
         #expect(PersonalAgentEntity(id: "plain", title: "甲").session.sessionKey == "plain")
+    }
+
+    /// The personal Agent intents and New To-Do go to the group the app shows (#1924): the key Make Current Hub writes.
+    @MainActor @Test func intentsReadTheGroupTheAppSelected() throws {
+        let name = "SiriIntentsTests." + UUID().uuidString
+        let d = try #require(UserDefaults(suiteName: name))
+        defer { d.removePersistentDomain(forName: name) }
+        #expect(IntentText.hubGroupKey == AppModel.hubGroupKey)
+        #expect(IntentSupport.selectedGroup(d) == "")
+        d.set("work", forKey: AppModel.hubGroupKey)
+        #expect(IntentSupport.selectedGroup(d) == "work")
     }
 
     @Test func sentWording() {

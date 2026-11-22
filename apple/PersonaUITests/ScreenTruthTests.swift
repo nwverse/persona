@@ -1,6 +1,6 @@
 import XCTest
 
-/// What the screen shows is the hub's truth, soon enough (docs/apple/ios-state.md「真实性与及时性」; the user: holding back
+/// What the screen shows is the hub's truth, soon enough (docs/apple/ios-state.md「Truth and timeliness」; the user: holding back
 /// updates must not leave the screen saying something that is no longer so). The Agents list exports what it shows
 /// (`probe.agents-list`: each agent's state and last line, the questions), the mock says what it holds (`/mock/truth`)
 /// and changes one thing at a time (`/mock/bump`):

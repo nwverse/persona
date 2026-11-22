@@ -27,13 +27,23 @@ data class Subagent(
     @WireTime @SerialName("started_at") val startedAt: String? = null,
     @WireTime @SerialName("updated_at") val updatedAt: String? = null,
     @SerialName("last_text") val lastText: String? = null,
+    /**
+     * How many tool calls it made and its latest one, the model it ran on (its own transcript's, never the one its call
+     * asked for) and its latest reply's tokens; the subagent that launched it ([parentId], absent when the session did).
+     * Each absent from older hubs (docs/protocol/protocol.md, a session's `subagents`).
+     */
+    val steps: Int? = null,
+    @SerialName("last_tool") val lastTool: WorkflowTool? = null,
+    val model: String? = null,
+    val tokens: Long? = null,
+    @SerialName("parent_id") val parentId: String? = null,
 )
 
 @KeepGeneratedSerializer
 @Serializable(with = TaskNoteSerializer::class)
 data class TaskNote(
     @WireEnum("shell", "monitor", "agent", "task", "unknown") val kind: String = "unknown",
-    @WireEnum("completed", "failed", "killed", "stopped", "event", "ended", "waiting", "unknown") val status: String = "unknown",
+    @WireEnum("running", "completed", "failed", "killed", "stopped", "event", "ended", "waiting", "unknown") val status: String = "unknown",
     val title: String = "",
     @SerialName("task_id") val taskId: String? = null,
     @SerialName("tool_use_id") val toolUseId: String? = null,
@@ -50,6 +60,31 @@ data class Fold(
     @SerialName("through_seq") val throughSeq: Int = 0,
     @SerialName("through_id") val throughId: String = "",
     val tasks: List<FoldTaskSnapshot> = emptyList(),
+    /** The folded run belongs to a supervision round the user must see (`fold_supervision.go`); older hubs omit it. */
+    @SerialName("supervision_user") val supervisionUser: Boolean? = null,
+    /** The images this run of work looked at (docs/protocol/protocol.md, "Images viewed this turn"); older hubs omit it. */
+    val images: List<FoldImage> = emptyList(),
+    /** What the folded items used (#5426). Omitted when none of them carried usage, and from older nodes. */
+    val usage: List<TokenUsage> = emptyList(),
+)
+
+/**
+ * An image a folded run looked at (`fold.images`, docs/protocol/protocol.md "Images viewed this turn"): its image item
+ * ([itemId], absent for a picture file Read opened whose result kept no image), the call and tool, where it came from
+ * (`read`, `screenshot`, `browser`, `mcp`, `tool`), the file Read read, the machine a screenshot named, and its shape.
+ */
+@Serializable
+data class FoldImage(
+    @SerialName("item_id") val itemId: String? = null,
+    @SerialName("tool_use_id") val toolUseId: String = "",
+    val tool: String = "",
+    val source: String = "tool",
+    val path: String? = null,
+    val machine: String? = null,
+    val mime: String? = null,
+    val size: Int? = null,
+    val width: Int? = null,
+    val height: Int? = null,
 )
 
 @Serializable
@@ -155,6 +190,9 @@ data class InboxItem(
     val suggestion: InboxSuggestion? = null,
     val chain: List<InboxChainEntry> = emptyList(),
     val related: List<InboxRelated> = emptyList(),
+    val where: String? = null,
+    val follow: InboxFollow? = null,
+    val now: String? = null,
 )
 
 @KeepGeneratedSerializer
@@ -345,6 +383,34 @@ data class Health(
 @Serializable(with = HeartbeatSerializer::class)
 data class Heartbeat(val interval: Int, @SerialName("pong_timeout") val pongTimeout: Int)
 
+/** The limits for one message's pictures, from hello or an images_over_limit refusal. Absent on older hubs. */
+@KeepGeneratedSerializer
+@Serializable(with = ImageLimitsSerializer::class)
+data class ImageLimits(
+    @SerialName("request_bytes") val requestBytes: Long = 32 * 1024 * 1024,
+    @SerialName("image_bytes") val imageBytes: Long = 3_750_000,
+    @SerialName("max_side") val maxSide: Int = 1600,
+    @SerialName("per_message") val perMessage: Int = 20,
+)
+
+/** The hub's default set and any per-Agent overrides, not a second definition of its default limits. */
+@KeepGeneratedSerializer
+@Serializable(with = ImageLimitsTableSerializer::class)
+data class ImageLimitsTable(
+    @SerialName("request_bytes") val requestBytes: Long = 32 * 1024 * 1024,
+    @SerialName("image_bytes") val imageBytes: Long = 3_750_000,
+    @SerialName("max_side") val maxSide: Int = 1600,
+    @SerialName("per_message") val perMessage: Int = 20,
+    val agents: Map<String, ImageLimits> = emptyMap(),
+) {
+    fun forAgent(agent: String): ImageLimits = agents[agent.ifEmpty { "claude" }]
+        ?: ImageLimits(requestBytes, imageBytes, maxSide, perMessage)
+}
+
+@KeepGeneratedSerializer
+@Serializable(with = ImageCountSerializer::class)
+data class ImageCount(val images: Int = 0)
+
 /** Keep refusal details flat and preserve absent delivery/retry information as null. */
 @KeepGeneratedSerializer
 @Serializable(with = ErrorBodySerializer::class)
@@ -357,6 +423,9 @@ data class ErrorBody(
     val field: String? = null, val message: String? = null,
     /** What the node said when the hub put [error] in the app's language (#5514); a structured detail reads as absent. */
     val detail: String? = null,
+    /** The limit the hub applied and how many pictures the message carried for an images_over_limit refusal. */
+    val limit: ImageLimits? = null,
+    val got: ImageCount? = null,
 )
 
 object MachineSystemSerializer : WireSerializer<MachineSystem>(MachineSystem.generatedSerializer())
@@ -398,6 +467,9 @@ object EndpointsResponseSerializer : WireSerializer<EndpointsResponse>(Endpoints
 object HealthSerializer : WireSerializer<Health>(Health.generatedSerializer())
 object HeartbeatSerializer : WireSerializer<Heartbeat>(Heartbeat.generatedSerializer())
 object ErrorBodySerializer : WireSerializer<ErrorBody>(ErrorBody.generatedSerializer())
+object ImageLimitsSerializer : WireSerializer<ImageLimits>(ImageLimits.generatedSerializer())
+object ImageLimitsTableSerializer : WireSerializer<ImageLimitsTable>(ImageLimitsTable.generatedSerializer())
+object ImageCountSerializer : WireSerializer<ImageCount>(ImageCount.generatedSerializer())
 
 /** Where a [Workflow] run stands; a status this app does not know reads as [Completed] (docs/protocol/protocol.md). */
 enum class WorkflowStatus { Running, Completed, Failed, Killed, Stalled }
@@ -498,7 +570,7 @@ data class WorkflowAgent(
     val calls: Int? = null,
 )
 
-/** A [WorkflowAgent]'s latest tool call: its [name] and what it does ([summary], in the reader's language). */
+/** A [WorkflowAgent]'s or a [Subagent]'s latest tool call: its [name] and what it does ([summary], in the reader's language). */
 @KeepGeneratedSerializer
 @Serializable(with = WorkflowToolSerializer::class)
 data class WorkflowTool(

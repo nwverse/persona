@@ -1,7 +1,7 @@
 # /agent in Lark
 
 > **Since 2026-11-04 (#1520, extensions step 3, 3c)**: the whole path that connects Lark through the Lark gateway (the App's `/api/v1/lark/…`, the Lark sources of the Inbox and knowledge base, Moments,
-> the assistant's `ol` gate and credentials, /agent, personal Agents) is no longer in the open-source repository; it is provided by the extension that connects Lark (`docs/extensions/extensions.md`, `docs/plans/plan-extensions.md` ("Step 3")).
+> the assistant's `ol` gate and credentials, /agent, personal Agents) is no longer in the open-source repository; it is provided by the extension that connects Lark (`docs/extensions/extensions.md`, `docs/plans/plan-extensions.md` ("Step 3 plan: moving the Lark gateway into an extension")).
 > The behavior described below is provided by the extension unchanged; the hub source files mentioned here (`hub/lark*.go`, the `internal/lark` client…) have been deleted. The open-source version keeps only the official lark-cli, the Lark bot and Lark Mail.
 
 In any Lark conversation (group chat, direct chat, a topic in a topic group, a thread reply in a regular group) or in a document comment, when **I send** a message starting with `/agent`, the hub immediately starts an Agent to handle it.
@@ -33,7 +33,7 @@ When the Lark extension's Agent feature is enabled, either of these triggers can
 
 Document comments still use the prefix trigger, controlled by `agent_trigger_prefix`; self-mentions trigger requests only in chat messages.
 
-## Context handed to the Agent (`larkAgentContext`)
+## Context handed to the Agent
 
 This is the biggest difference from the listener in herdr: a request can come from anywhere and the Agent starts knowing nothing, so the hub gathers context first and puts it in the first message (`<persona-context>` tags):
 
@@ -58,7 +58,8 @@ and the tags collapse into one line next to the bubble, "Context · N items", fo
 
 ## How it runs
 
-- Like the Inbox's AI twin, it is a headless Agent in the assistant's directory (`assistant.send`), so it has all the assistant's tools. New requests open with `purpose: "lark.agent"`: configure its provider / launcher, model, and effort under **Settings › Model configuration › Lark /agent** (`docs/assistant/model-config.md`). With no newly saved override, or after restoring following, it inherits **Agents** (`agent.new`), not the main chat or old `lark_agent.launcher` / extension launcher defaults. Retired per-purpose records remain inert; only new user saves use the independent override namespace (#5921). The resolved launcher, model, and effort are passed to the node before it starts the conversation. Existing topic conversations retain their running settings; saving applies to new `/agent` conversations. The chat appears in the history of the "Persona" tab, where you can open it to see what it looked up; no "done" notification is pushed when it finishes (the result is the reply in Lark).
+- Like the Inbox's AI twin, it is a headless Agent in the assistant's directory (`assistant.send`), so it has all the assistant's tools. New requests open with `purpose: "lark.agent"`: configure its provider / launcher, model, and effort under **Settings › Model configuration › Lark /agent** (`docs/assistant/model-config.md`). With no newly saved override, or after restoring following, it inherits **Agents** (`agent.new`), not the main chat or old `lark_agent.launcher` / extension launcher defaults. Retired per-purpose records remain inert; only new user saves use the independent override namespace (#5921). The resolved launcher, model, and effort are passed to the node before it starts the conversation. Existing topic conversations retain their running settings; saving applies to new `/agent` conversations. The chat appears in the history of the "Persona" tab, under **Auto Chats › Lark /agent** (`origin: lark_agent`, `docs/protocol/protocol.md` "Origin of assistant chats"), where you can open it to see what it looked up; no "done" notification is pushed when it finishes (the result is the reply in Lark).
+  It is named like any other chat, "MMDD | kind | topic" after its first turn: the title the extension gives it ("/agent · <chat> · <request>") shows until then and is only a hint for the model (#3758, `docs/assistant/assistant.md` "Chat titles"). This needs the extension to call the hub with its own scoped token: with the hub's full token the chat counts as the user's and keeps the extension's title.
 - On receiving a request it first reacts to the message with the "OnIt" emoji, and switches it to "DONE" after replying.
 - The Agent submits its answer with the MCP tool `lark_agent_reply` (accepted only from the chat started for that request); the hub sends it with the Lark gateway's `POST /messages/:id/replies`
   (`editorType: markdown`, `replyMode: thread` inside a topic). If the turn ends before the Agent's first reply without calling the tool, the hub sends its last reply paragraph.
@@ -69,7 +70,8 @@ and the tags collapse into one line next to the bubble, "Context · N items", fo
   After the first reply, a turn that ends without calling the tool sends nothing (whether and what to send is the Agent's call). The prompt asks it to send only meaningful progress and results.
 - **Dispatched tasks**: the extension opens the chat with `report_tasks: true`. Tasks this chat dispatches with `task_plan` / `agent_start` behave like the main chat's
   "quiet tasks" (`docs/assistant/unified-entry.md`): no separate pushes; finished, waiting for the user, interrupted, failed to start are all delivered as task notices (`Reporting` in `prompts/assistant/task_notice.md`)
-  into this /agent chat (queued after the current turn if it is busy); it then sends the result to the topic with `lark_agent_reply`.
+  into this /agent chat (queued after the current turn if it is busy); it then sends the result to the topic with `lark_agent_reply`. With `assistant.agent_tasks` on, an Agent's
+  `report_to_supervisor` also returns through this chat's notice path, without adding a supervision ledger or changing these task notices.
   The registration lives in `assistant.task_reporters` in the settings table (14 days) and survives hub restarts.
 - **Stopping (#3308)**: sending `/stop` (also `/停止`, `/停`, optionally preceded by an @mention) in the request's topic, or quoting the request (or its reply), stops that request,
   even right after it was sent while the context is still being read. Only my own messages count (as with `/agent`, the request can only be mine, so the requester is me); others' are ignored, with no "not allowed" reply (replying that to a colleague in my name would be odd).
@@ -109,6 +111,16 @@ assistant ("turn on /agent in Lark"), which changes them through `persona_settin
 Once the extension that connects Lark through the Lark gateway is enabled, /agent is handled by the extension: the hub's own live events and /agent stop, and `lark_agent_reply` gives way to the extension's connector tool of the same name (with one extra parameter `request`: the request's message / comment id).
 The extension uses the hub's public API: `POST /api/v1/assistant/conversations` with `purpose: "lark.agent"` and the configured machine (`machine_id`) to open a chat, `POST /api/v1/sessions/{m}/{s}/messages` to continue the same topic,
 and `GET /api/v1/kb/chats/{id}/context` to get what the knowledge base knows about this conversation / project. Configuration lives in the extension (`agent`, `agent_launcher`, `agent_machine`); `lark_agent` in hub.json no longer takes effect.
+
+## Optional main-chat answers (#11130)
+
+The host offers an opt-in `mention` channel contract for the extension to adopt; this host change does not rewrite the extension's current per-request chats. With the channel's explicit `target: {kind: "main"}`, an owner's `/agent` request uses the unified `channel.receive` pipeline and the owner's main chat instead. Without that target, today's new chat per request or topic remains the default.
+
+The extension supplies `chat`, `topic`, the quoted message and gathered `context` with each request. They enter the main turn as escaped context, and the unified run reads the answer from that turn and returns it through the extension's existing `channel.send` reply path with the original request in `reply_to`. A busy main chat queues the request normally; `channel.receive` acknowledges accepted work before the model turn, while the extension remains responsible for the OnIt → DONE reactions.
+
+A mention turn is public even though it runs in main. Its localized prompt says not to reveal private context from other chats, sessions, mail or health unless the owner's request explicitly asks for the specific information, and the per-turn internal `public` marker suppresses the owner's live snapshot for that input only. It does not change the main conversation's origin or any later private turn.
+
+The main-chat receive path requires `owner: true`; a false or missing attestation is refused. Every non-owner request keeps using a separate guest conversation and never enters the owner's main chat. Proactive push/sync copies and approval fan-out are not enabled for mention channels by this contract.
 
 ## Not done yet
 

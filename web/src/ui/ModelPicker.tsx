@@ -3,8 +3,9 @@
 // agent" also lists the IDs typed before (each can be forgotten) and "Other model…", a field for a model ID (#1644).
 import { useEffect, useState } from "react";
 import type { ModelBinding } from "../lib/model-config";
-import { customModel, defaultDetail, defaultModel, modelDetail, modelName, modelRows, type AgentModel, type LauncherModels } from "../lib/launcher-models";
-import { cleanModelId, typedModelProblem } from "../lib/model-id";
+import { customModel, defaultDetail, defaultModel, listedModel, modelDetail, modelName, modelRows, type AgentModel, type LauncherModels } from "../lib/launcher-models";
+import { cleanModelId } from "../lib/model-id";
+import { typedModelProblem } from "../lib/model-id-input";
 import { Collapse, cx, IconButton, Spinner } from "./atoms";
 import { Icon } from "./icons";
 import { ModelIdField } from "./ModelIdField";
@@ -17,12 +18,14 @@ export interface ModelList {
   error?: string;
 }
 
-export function ModelPicker({ models, model, followed = {}, ownModel, open, onToggle, query, onQuery, search, onPick, onReload, custom, typing, onForget, failedNote }: {
+export function ModelPicker({ models, model, followed = {}, defaultLabel, ownModel, open, onToggle, query, onQuery, search, onPick, onReload, custom, typing, onForget, failedNote }: {
   models: ModelList;
   /** The pick's id; "": "Default". */
   model: string;
   /** "Models"' binding when it is what runs with no pick ("New agent" following it). */
   followed?: ModelBinding;
+  /** Names the source of the default when a caller inherits another configuration. */
+  defaultLabel?: string;
   /** What the launcher passes as its own --model (shown when it is locked). */
   ownModel?: string;
   open: boolean;
@@ -45,7 +48,8 @@ export function ModelPicker({ models, model, followed = {}, ownModel, open, onTo
   const all = models.list?.models ?? [];
   const locked = models.list?.locked;
   const loading = models.status === "loading";
-  const picked = all.find((m) => m.id === model);
+  // a model saved as a spelling the hub folded into another row (`opus` under the concrete model's id) is that row's
+  const picked = model ? listedModel(all, model) : undefined;
   const unlisted = !picked && model ? model : ""; // "Models"' id from before, or one typed in
   const { showDefault, rows } = modelRows(all, query, followed);
   const own = rows.filter((m) => !m.custom);
@@ -53,7 +57,7 @@ export function ModelPicker({ models, model, followed = {}, ownModel, open, onTo
   const takesTyped = custom || typing;
   const typed = takesTyped ? customModel(all, query) : "";
   // what is typed in the search, when it is no model's and the hub wouldn't take it as one: why
-  const typedProblem = takesTyped && !rows.length && !all.some((m) => m.id === cleanModelId(query)) ? typedModelProblem(query) : "";
+  const typedProblem = takesTyped && !rows.length && !listedModel(all, cleanModelId(query)) ? typedModelProblem(query) : "";
   const [entering, setEntering] = useState(false);
   useEffect(() => {
     if (!open) setEntering(false);
@@ -82,7 +86,7 @@ export function ModelPicker({ models, model, followed = {}, ownModel, open, onTo
         title={picked?.description ?? (picked || unlisted ? undefined : defaultModel(all)?.description)}
         className="flex h-9 w-full items-center gap-2 rounded-control bg-inset px-3 text-left shadow-hairline outline-none transition-colors enabled:hover:bg-hover focus-visible:shadow-[0_0_0_1px_var(--line-strong)] disabled:cursor-not-allowed"
       >
-        <span className={cx("max-w-[60%] shrink-0 truncate text-[12.5px]", locked ? "text-ink-3" : "text-ink", unlisted && "font-mono")}>{picked ? modelName(picked) : unlisted ? modelName({ id: unlisted }) : t("ui-modelpicker.default")}</span>
+        <span className={cx("max-w-[60%] shrink-0 truncate text-[12.5px]", locked ? "text-ink-3" : "text-ink", unlisted && "font-mono")}>{picked ? modelName(picked) : unlisted ? modelName({ id: unlisted }) : defaultLabel || t("ui-modelpicker.default")}</span>
         {loading && !all.length ? (
           <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[11.5px] text-ink-3"><Spinner size={10} /><span className="truncate">{t("ui-modelpicker.loading")}</span></span>
         ) : models.status === "error" && !unlisted && !typing ? (
@@ -128,11 +132,11 @@ export function ModelPicker({ models, model, followed = {}, ownModel, open, onTo
             )}
             <IconButton icon="retry" label={t("ui-modelpicker.reload")} size={24} iconSize={12} disabled={loading} onClick={onReload} />
           </div>
-          <div role="listbox" aria-label={t("ui-modelpicker.list_label")} className="max-h-60 overflow-y-auto p-1">
-            {showDefault && <ModelRow name={t("ui-modelpicker.default")} detail={defaultDetail(all, followed)} note={defaultModel(all)?.description} selected={!picked && !unlisted} onPick={() => onPick("")} />}
+          <div role="listbox" aria-label={t("ui-modelpicker.list_label")} className="max-h-[min(50vh,360px)] overflow-y-auto p-1">
+            {showDefault && <ModelRow name={defaultLabel || t("ui-modelpicker.default")} detail={defaultDetail(all, followed)} note={defaultModel(all)?.description} selected={!picked && !unlisted} onPick={() => onPick("")} />}
             {unlisted && !query.trim() && <ModelRow name={modelName({ id: unlisted })} note={typing ? t("ui-modelpicker.typed") : t("ui-modelpicker.current_unlisted")} selected onPick={() => onPick(unlisted)} mono />}
             {own.map((m) => (
-              <ModelRow key={m.id} name={modelName(m)} detail={modelDetail(m)} note={m.description} selected={m.id === model} onPick={() => onPick(m.id)} />
+              <ModelRow key={m.id} name={modelName(m)} detail={modelDetail(m)} note={m.description} selected={m === picked} onPick={() => onPick(m.id)} />
             ))}
             {remembered.length > 0 && (
               <div role="presentation" className="px-2 pt-2 pb-1 text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase">{t("ui-modelpicker.typed_before")}</div>

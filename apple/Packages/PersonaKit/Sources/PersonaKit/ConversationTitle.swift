@@ -1,6 +1,6 @@
 import Foundation
 
-/// An assistant conversation's title in the hub's format 「MMDD | 类型 | 主题」 (docs/assistant/assistant.md「对话标题」), split so
+/// An assistant conversation's title in the hub's format 「MMDD | 类型 | 主题」 (docs/assistant/assistant.md「Chat titles」), split so
 /// the list can show the topic first; nil for any other title (the user's own, an older conversation's).
 public nonisolated struct ConversationTitle: Equatable, Sendable {
     public var head: String   // "1101 | fix | "

@@ -10,29 +10,49 @@ import subprocess
 import sys
 import tempfile
 
+from node_artifacts import node_files
+
 
 def run(args, cwd, env=None):
     print('+', ' '.join(map(str, args)), flush=True)
     subprocess.run(args, cwd=cwd, env=env, check=True)
 
 
-def package_release(binary, bin_dir, out, platforms, version, build, sha, root):
+def run_together(commands, cwd, env=None):
+    """Start every command at once and wait for all of them; fail with the first that failed."""
+    for args in commands:
+        print('+', ' '.join(map(str, args)), flush=True)
+    processes = [(args, subprocess.Popen(args, cwd=cwd, env=env)) for args in commands]
+    failed = [(args, process.wait()) for args, process in processes]
+    for args, status in failed:
+        if status:
+            raise subprocess.CalledProcessError(status, args)
+
+
+def package_release(binary, bin_dir, out, platforms, version, build, sha, root, *, publish_nodes=False):
     # A retry may leave old content-addressed files in out; only this build's
     # canonical platform names belong in the manifest generator input.
     with tempfile.TemporaryDirectory(prefix='.packages-', dir=out) as directory:
         packages = Path(directory)
-        for platform in platforms:
-            with (bin_dir / ('personad-' + platform)).open('rb') as src, \
-                    gzip.open(packages / ('personad-' + platform + '.gz'), 'wb') as dest:
-                shutil.copyfileobj(src, dest)
+        programs = ('personad', 'persona-node') if publish_nodes else ('personad',)
+        for program in programs:
+            for platform in platforms:
+                name = f'{program}-{platform}'
+                with (bin_dir / name).open('rb') as src, gzip.open(packages / (name + '.gz'), 'wb') as dest:
+                    shutil.copyfileobj(src, dest)
         run([str(binary), 'release', 'manifest', '--dir', str(packages), '--version', version,
              '--build', build, '--commit', sha, '--out', str(packages / 'manifest.json')], root)
         manifest = json.loads((packages / 'manifest.json').read_text())
-        for platform, artifact in manifest['files'].items():
-            name = f'personad-{platform}-{artifact["sha256"]}.gz'
+        for program, platform, artifact in node_files(manifest):
+            name = f'{program}-{platform}-{artifact["sha256"]}.gz'
             os.replace(packages / artifact['name'], out / name)
             artifact['name'] = name
         return manifest
+
+
+def build_tags(root):
+    """The -tags value every program is built with: server/build-tags.txt (server/internal/buildtags)."""
+    return (root / 'server/build-tags.txt').read_text().strip()
 
 
 def write_json(path, value):
@@ -67,7 +87,15 @@ def main():
     test_env.update(caches)
     with tempfile.TemporaryDirectory(prefix='hub-release-tests-') as home:
         test_env.update(HOME=home, ZDOTDIR=home)
-        run(['go', 'test', '-count=1', './...'], root / 'server', test_env)
+        # internal/node's and internal/assistant's serial runs outgrew Go's ten-minute -timeout: they run in
+        # partitions beside the other packages, split exactly as CI's shards split them (scripts/test/go_partitions.py).
+        import go_partitions
+        others, parts = go_partitions.split(subprocess.check_output(['go', 'list', './...'], cwd=root / 'server',
+                                                                    env=test_env, text=True).split())
+        run_together([['go', 'test', '-count=1', *others]] +
+                     [['go', 'test', '-count=1', '-run', pattern, package] for package in parts
+                      for pattern in go_partitions.list_patterns(root / 'server', package, test_env)],
+                     root / 'server', test_env)
         run(['go', 'test', '-race', '-count=1', './internal/hubedge', './internal/update',
              './internal/devices'], root / 'server', test_env)
     for suite in sorted((root / 'scripts').rglob('test_*.py')):
@@ -75,8 +103,12 @@ def main():
             run([sys.executable, '-B', '-m', 'unittest', '-v', suite.stem], suite.parent)
     run(['npm', 'test'], root / 'integrations/runtime-sdk')
     run(['npm', 'ci', '--no-audit', '--no-fund', '--registry', os.environ.get('PERSONA_NPM_REGISTRY', 'https://registry.npmjs.org/')], root / 'web')
-    for script in ['typecheck', 'test', 'build']:
-        run(['npm', 'run', script], root / 'web')
+    run(['npm', 'run', 'typecheck'], root / 'web')
+    # Vitest starts a jsdom worker per core, and every worker's imports go through the one Vite process: on a
+    # 64-core release machine, lazy chunks and 5-second tests time out at random. Eight workers pass every time,
+    # in about three minutes.
+    run(['npm', 'run', 'test', '--', f'--maxWorkers={min(8, os.cpu_count() or 1)}'], root / 'web')
+    run(['npm', 'run', 'build'], root / 'web')
     version = f'master-{sha[:12]}-{args.build}'
     webdist = root / 'server/internal/hub/webdist'
     try:
@@ -86,25 +118,29 @@ def main():
         run(['python3', 'scripts/release/check_bundle_privacy.py', '--whole-short', str(webdist)], root)
         run(['go', 'run', './internal/webasset/precompress', 'internal/hub/webdist'], root / 'server')
         run(['go', 'generate', './internal/runtimepkg'], root / 'server')
+        tags = build_tags(root)
         flags = (f'-s -w -X main.version={version} -X main.channel=release '
                  f'-X main.build={args.build} -X main.commit={sha} -X main.updateURL={args.update_url}')
         bin_dir = out / 'bin'
         bin_dir.mkdir(exist_ok=True)
         binary = bin_dir / 'personad-linux-amd64'
-        env = dict(os.environ, GOOS='linux', GOARCH='amd64', CGO_ENABLED='0')
-        run(['go', 'build', '-tags', 'public', '-trimpath', '-ldflags', flags,
-             '-o', str(binary), './cmd/personad'], root / 'server', env)
         platforms = ['linux-amd64']
         if args.publish_nodes or args.publish_managers:
-            darwin = bin_dir / 'personad-darwin-arm64'
-            run(['go', 'build', '-tags', 'public', '-trimpath', '-ldflags', flags,
-                 '-o', str(darwin), './cmd/personad'], root / 'server',
-                dict(os.environ, GOOS='darwin', GOARCH='arm64', CGO_ENABLED='0'))
             platforms.append('darwin-arm64')
+        programs = ('personad', 'persona-node') if args.publish_nodes else ('personad',)
+        for program in programs:
+            for platform in platforms:
+                system, arch = platform.split('-')
+                env = dict(os.environ, GOOS=system, GOARCH=arch, CGO_ENABLED='0')
+                run(['go', 'build', '-tags', tags, '-trimpath', '-ldflags', flags,
+                     '-o', str(bin_dir / f'{program}-{platform}'), f'./cmd/{program}'], root / 'server', env)
         run(['python3', 'scripts/release/check_bundle_privacy.py', '--whole-short', str(bin_dir)], root)
-        manifest = package_release(binary, bin_dir, out, platforms, version, args.build, sha, root)
+        manifest = package_release(binary, bin_dir, out, platforms, version, args.build, sha, root,
+                                   publish_nodes=args.publish_nodes)
         if args.publish_nodes:
             write_json(out / 'node-manifest.json', manifest)
+            # Only the node publisher uploads these archives. Keep Hub and Manager manifests scoped to their files.
+            manifest.pop('nodes', None)
         if args.publish_managers:
             write_json(out / 'manager-manifest.json', manifest)
         manifest['files'] = {'linux-amd64': manifest['files']['linux-amd64']}

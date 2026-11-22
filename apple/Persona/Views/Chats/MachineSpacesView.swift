@@ -15,7 +15,8 @@ struct MachineSpacesView: View {
 
     var body: some View {
         let machine = model.machine(ref)
-        let sessions = model.allSessions.filter { $0.machineRef == ref && $0.state.isLive && !$0.assistant }
+        // A folded child is its parent's. A subtask the hub did not fold is too (`Session.isNestedSubtask`).
+        let sessions = ChildSessions.fold(model.allSessions).filter { $0.machineRef == ref && $0.state.isLive && !$0.assistant && !$0.isNestedSubtask }
         let groups = SpaceGroup.build(sessions)
         let pinned = groups.filter { model.isPinned($0) }
         // A space with an agent waiting on the user's reply (Awaiting Reply) is not idle (`AgentListOrder.isQuiet`).
@@ -46,7 +47,7 @@ struct MachineSpacesView: View {
             if groups.isEmpty {
                 Section {
                     EmptyStateView(symbol: machine?.symbol ?? Theme.Icon.machine, title: String(localized: "No agents running [Machine Spaces View e5db75]"),
-                                   message: machine?.online == false ? String(localized: "This machine is offline.") : String(localized: "Start Claude, Codex, or TRAEX in herdr on this machine and it shows up here."))
+                                   message: machine?.online == false ? String(localized: "This machine is offline.") : String(localized: "Start Claude, Codex, or TRAE CLI in herdr on this machine and it shows up here."))
                 }
                 .listRowBackground(Color.clear)
             }

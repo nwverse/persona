@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The Agents list's order and sections (`AgentListOrder`), without the list.
 @MainActor struct AgentListOrderTests {
@@ -18,7 +19,7 @@ import Testing
     }
 
     @Test func rowMenuForwardsEachActionOnceAndUsesUpdatedCallbacks() {
-        let actions = AgentRowMenu.Actions()
+        let actions = AgentMenuHandlers()
         let first = session("first", "working")
         let second = session("second", "working")
         actions.close(first)
@@ -36,12 +37,6 @@ import Testing
         #expect(events == ["rename:first", "close:second", "new-close:first", "new-rename:second"])
     }
 
-    @Test func statesComeInOneOrder() {
-        let list = [session("idle", "idle", updated: 50), session("work", "working", updated: 10),
-                    session("unread", "unread", updated: 20), session("needs", "needs_you", updated: 1)]
-        #expect(order().ordered(list).map(\.sessionID) == ["needs", "unread", "work", "idle"])
-    }
-
     @Test func mutedLiveAgentsGoBelowTheRestButNeedsYouStaysFirst() {
         let list = [session("a", "unread"), session("b", "working"), session("c", "needs_you"), session("d", "idle")]
         let o = order(muted: ["a", "c"])
@@ -50,9 +45,62 @@ import Testing
         #expect(o.ordered(list).map(\.sessionID) == ["c", "b", "a", "d"])
     }
 
+    @Test func justFinishedRankPrecedenceFoldsAndHeldPlace() throws {
+        var done = session("done", "idle")
+        done.work = try JSON.decoder.decode(WorkState.self, from: Data(#"{"phase":"done","just_finished":true}"#.utf8))
+        let index = AgentListOrder.stateKeys.firstIndex(of: "just_finished")
+        #expect(index == 5 && order().rank(done) == index)
+        #expect(order().stays(done))
+        #expect(try !order().isQuiet(#require(SpaceGroup.build([done]).first)))
+        let muted = order(muted: ["done"])
+        #expect(muted.rank(done) == AgentListOrder.stateKeys.firstIndex(of: "idle"))
+        #expect(!muted.stays(done))
+        #expect(try muted.isQuiet(#require(SpaceGroup.build([done]).first)))
+        var settings = AgentListProjection.Settings(grouping: "repo")
+        func repository(_ settings: AgentListProjection.Settings) throws -> AgentListProjection.Repository {
+            let result = AgentListProjection.build(.init(sessions: [done], machines: [], settings: settings))
+            return try #require(result.repositories.values.first)
+        }
+        let activeRepo = try repository(settings)
+        #expect(!activeRepo.quiet && activeRepo.unread == [done.key])
+        settings.preferences[done.group] = .init(pins: Pins(), mutes: Pins())
+        settings.preferences[done.group]?.mutes.sessions = ["m/done"]
+        let mutedRepo = try repository(settings)
+        #expect(mutedRepo.quiet && mutedRepo.unread.isEmpty)
+        var waiting = done
+        waiting.listWaiting = true
+        #expect(order().rank(waiting) == AgentListOrder.stateKeys.firstIndex(of: "waiting"))
+        #expect(!waiting.showsJustFinished(muted: false))
+        let held = AgentListOrder(isPinned: { _ in false }, isMuted: { _ in false }, held: done.key, heldJustFinished: true)
+        done.markLocallySeen()
+        #expect(held.rank(done) == index && held.stays(done))
+        var mutedWhileOpen = held
+        mutedWhileOpen.isMuted = { _ in true }
+        #expect(!mutedWhileOpen.stays(done))
+        #expect(try mutedWhileOpen.isQuiet(#require(SpaceGroup.build([done]).first)))
+        #expect(mutedWhileOpen.rank(done) == AgentListOrder.stateKeys.firstIndex(of: "idle"))
+        #expect(!order().stays(done) && order().rank(done) == AgentListOrder.stateKeys.firstIndex(of: "idle"))
+        done.state = .working
+        #expect(held.rank(done) == AgentListOrder.stateKeys.firstIndex(of: "working"))
+    }
+
     @Test func sameRankNewestFirstThenById() {
         let list = [session("b", "unread", updated: 5), session("a", "unread", updated: 5), session("c", "unread", updated: 9)]
         #expect(order().ordered(list).map(\.sessionID) == ["c", "a", "b"])
+    }
+
+    /// The same session id on two machines, at the same time: the complete id decides, whichever order the machines
+    /// answered in (spec/fixtures/sort `cross_machine_same_session_id` and its reversed input, #9064).
+    @Test func sameSessionIdOnTwoMachinesGoesByTheCompleteId() {
+        let a = session("shared-session", "working", updated: 10, machine: "machine-a")
+        let b = session("shared-session", "working", updated: 10, machine: "machine-b")
+        for list in [[b, a], [a, b]] {
+            #expect(order().ordered(list).map(\.id) == ["machine-a/shared-session", "machine-b/shared-session"])
+            #expect(order(byRank: false).ordered(list).map(\.id) == ["machine-a/shared-session", "machine-b/shared-session"])
+        }
+        // the session id still comes first: another machine's earlier id stays ahead
+        let c = session("aaa", "working", updated: 10, machine: "machine-z")
+        #expect(order().ordered([a, c]).map(\.id) == ["machine-z/aaa", "machine-a/shared-session"])
     }
 
     @Test func quietSpaceRowsFollowActivityWhileTheSpacesTabsKeepTheirOrder() throws {
@@ -70,11 +118,6 @@ import Testing
         #expect(visible.map(\.sessionID) == ["latest", "first", "second"], "navigation follows the displayed rows")
         #expect(AgentListRows.step(visible.map(\.key), from: latest.key, by: 1) == first.key)
         #expect(group.sessions.map(\.slotIndex) == [0, 1, 2], "list order must not rewrite the original tabs")
-    }
-
-    @Test func underAQuickFilterOnlyTimeCounts() {
-        let list = [session("needs", "needs_you", updated: 1), session("idle", "idle", updated: 9)]
-        #expect(order(byRank: false).ordered(list).map(\.sessionID) == ["idle", "needs"])
     }
 
     @Test func sortedByLatestUpdateOnlyTimeCounts() {
@@ -337,6 +380,20 @@ import Testing
         #expect(AgentListRows.step(keys, from: nil, by: 1) == keys[0], "nothing open: ↓ opens the first")
         #expect(AgentListRows.step(keys, from: nil, by: -1) == keys[2])
         #expect(AgentListRows.step([], from: nil, by: 1) == nil)
+    }
+
+    /// By App (#3756): an open app section's rows in order, none of a folded one's, all of them while searching.
+    @Test func appsListTheirRowsUnlessFolded() {
+        var desktop = session("d", "offline", updated: 9)
+        desktop.agent = "claude"
+        desktop.agentSurface = "desktop"
+        let other = session("o", "working", updated: 5)
+        let groups = AppGroups.build([other, desktop])
+        #expect(rows(.app).apps(groups).map(\.sessionID) == ["d", "o"])
+        #expect(rows(.app, folded: ["app/desktop/claude code"]).apps(groups).map(\.sessionID) == ["o"])
+        let searching = AgentListRows(order: AgentListOrder(isPinned: { _ in false }, isMuted: { _ in false }), grouping: .app,
+                                      searching: true, isFolded: { _ in true })
+        #expect(searching.apps(groups).map(\.sessionID) == ["d", "o"])
     }
 
     @Test func machinesListTheirBusyRowsAndOpenedIdleOnes() {

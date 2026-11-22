@@ -90,14 +90,68 @@ export function forwardedText(m: Meta): string {
   return text.replace(/\*\*|__|`/g, "").replace(/\s+/g, " ").trim();
 }
 
-/** Lark gateway media paths (old /api/media/, agent API /agent/v1/media/) mapped onto the hub's /api/v1/lark/media/.
- * Forwarded messages carry them, and so do inbox items stored before the extension rewrote them (#1353). */
+// Hosts that serve Lark's signed `static-resource` picture links (avatars, read-state pictures). Kept in sync with the
+// Lark connector server's CDN host check: only a link from one of these is ever rewritten.
+const LARK_CDN_HOST = /(?:^|\.)(?:feishucdn\.com|larksuitecdn\.com|feishu\.cn|larksuite\.com|larkoffice\.com)$/i;
+const RESOURCE_KEY = /^[a-zA-Z0-9_./:+-]{1,500}$/;
+const LARK_MEDIA = "/api/v1/lark/media/";
+
+/** The media key inside a Lark `static-resource` CDN URL, or undefined when `s` is not one. A signed link expires and
+ * only a Lark browser session can fetch it, so it is replaced by the hub's own media route rather than rendered. */
+export function larkStaticResourceKey(s: string): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(s);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== "https:" || !LARK_CDN_HOST.test(url.hostname)) return undefined;
+  const match = /\/static-resource\/v1\/([^/~?]+)/.exec(url.pathname);
+  if (!match?.[1]) return undefined;
+  let key: string;
+  try {
+    key = decodeURIComponent(match[1]);
+  } catch {
+    return undefined;
+  }
+  return RESOURCE_KEY.test(key) ? key : undefined;
+}
+
+/** A Lark picture URL the hub can serve itself: the gateway's media paths and a signed Lark CDN link both become the
+ * hub's `/api/v1/lark/media/<key>`; anything else is returned unchanged. Forwarded messages carry the gateway paths,
+ * and so do inbox items stored before the extension rewrote them (#1353); older rows keep the expiring CDN link the
+ * connector stored before its agent boundary learned to proxy these, which is why that rewrite lives here too. */
 export function hubMediaURL(s: string | undefined): string | undefined {
   if (!s) return undefined;
   for (const prefix of ["/api/media/", "/agent/v1/media/"]) {
-    if (s.startsWith(prefix)) return "/api/v1/lark/media/" + s.slice(prefix.length);
+    if (s.startsWith(prefix)) return LARK_MEDIA + s.slice(prefix.length);
   }
+  const key = larkStaticResourceKey(s);
+  if (key) return LARK_MEDIA + encodeURIComponent(key);
   return s;
+}
+
+/** Read older Feishu portraits through the same account's media route. Some gateways only return a bare key. */
+export function larkAvatarSrc(avatar: string | undefined, account: number | undefined, pixels: number): string | undefined {
+  if (!avatar) return;
+  let key = avatar;
+  if (avatar.startsWith("/") || avatar.includes("://")) {
+    const path = hubMediaURL(avatar);
+    if (!path?.startsWith(LARK_MEDIA)) return;
+    const [raw, query] = path.slice(LARK_MEDIA.length).split("?");
+    try { key = decodeURIComponent(raw); } catch { return; }
+    if (account === undefined && query) {
+      const hint = new URLSearchParams(query).get("ol_account");
+      if (hint) {
+        if (!/^\+?\d+$/.test(hint)) return;
+        account = Number(hint);
+      }
+    }
+  }
+  if (!RESOURCE_KEY.test(key) || key.split("/").some((p) => !p || p === "." || p === "..")) return;
+  if (account !== undefined && (!Number.isInteger(account) || account < 1 || account > 999_999_999)) return;
+  const size = Math.min(624, Math.max(24, Math.ceil(pixels / 24) * 24));
+  return LARK_MEDIA + encodeURIComponent(key) + (account ? `?ol_account=${account}&` : "?") + `size=${size}`;
 }
 
 export type SummaryTone = "accent" | "red" | "orange" | "green";

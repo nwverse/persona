@@ -1,4 +1,4 @@
-// End-to-end check of the DSH companion (docs/integrations/dsh.md "While DSH is not running"): a real `dsh web` with the plugin (isolated
+// End-to-end check of the DSH companion (docs/integrations/dsh.md "When DSH is not running"): a real `dsh web` with the plugin (isolated
 // DSH_HOME, DSH's own mock model) runs a turn and stops; the companion then lists that session from the store as
 // offline and pages it; a message from the "phone" wakes DSH through the configured command and is handed over to
 // the plugin, which runs it and takes the session back. A real `personad node --stdio` sits in between (the harness

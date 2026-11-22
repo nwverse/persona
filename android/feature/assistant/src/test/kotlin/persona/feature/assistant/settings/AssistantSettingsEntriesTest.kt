@@ -54,6 +54,9 @@ class AssistantSettingsEntriesTest {
         override val assistant = MutableStateFlow(AssistantSnapshot())
         override val outbox = MutableStateFlow(emptyList<OutboxMessage>())
         override suspend fun refresh() = Unit
+        override suspend fun updateRecentTaskChats(value: Boolean?) {
+            assistant.value = assistant.value.copy(recentTaskChats = value)
+        }
         override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) = error("No sends in settings")
         override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?) = error("No sends in settings")
     }
@@ -64,8 +67,8 @@ class AssistantSettingsEntriesTest {
         override suspend fun save(key: DraftKey, text: String, expectedVersion: Long) = error("No draft saves in settings")
     }
 
-    @Test fun settingsNavigationHasNoOwnerRowForEitherBackendOrLegacyResponse() = entries(inPlace = false)
-    @Test fun assistantProfileHasNoOwnerRowForEitherBackendOrLegacyResponse() = entries(inPlace = true)
+    @Test fun settingsNavigationShowsManagerIdentityAndTheReadOnlyFallback() = entries(inPlace = false)
+    @Test fun assistantProfileShowsManagerIdentityAndTheReadOnlyFallback() = entries(inPlace = true)
 
     private fun entries(inPlace: Boolean) {
         val conversations = Conversations()
@@ -78,11 +81,11 @@ class AssistantSettingsEntriesTest {
                 val scope = rememberCoroutineScope()
                 val legacy = scenario !in listOf("claude", "codex")
                 val config = AssistantConfig(manager = "assistant".takeUnless { legacy },
-                    launcher = if (scenario == "codex") "codex" else "claude", timezone = "Asia/Shanghai",
+                    launcher = if (scenario == "codex") "codex" else "claude", timezone = "Asia/Shanghai", recentTaskChats = false,
                     permissionDefaults = if (legacy) null else
                         AssistantPermissionDefaults(1, "assistant", AssistantPermissionDefaults.MODES))
                 val management = remember(scenario) { AssistantSettingsManagerTest.Hub(mutableMapOf("assistant" to config)) }
-                val host = AssistantHostBindings("test/settings", management, drafts, scope, null, emptyList(), conversations, { _, _ -> })
+                val host = AssistantHostBindings("test/settings", management, drafts, scope, null, emptyList(), conversations, conversations, { _, _ -> })
                 val shownRoster = when (scenario) {
                     "no-roster" -> null
                     "single" -> roster.copy(managers = roster.managers.take(1))
@@ -93,7 +96,7 @@ class AssistantSettingsEntriesTest {
                         key(scenario) {
                             if (inPlace) AssistantScreen(navigator, conversations, conversations,
                                 startConversation = { error("No conversation starts in settings") }, management = management,
-                                composerService = null, draftRepository = null, assistantChatContent = null)
+                                composerService = null, draftRepository = null, assistantChatContent = null, mentionFiles = null)
                             else entryProvider<NavKey> { assistantEntries(navigator) }(AssistantSettingsRoute).Content()
                         }
                     }
@@ -107,10 +110,14 @@ class AssistantSettingsEntriesTest {
             for (s in AppStyle.entries) for (night in listOf(false, true)) {
                 rule.runOnIdle { style = s; dark = night }
                 rule.waitForIdle()
-                // One navigation title and one switcher chip. The deleted owner row added two more matches.
-                val switching = response !in listOf("no-roster", "single")
-                rule.onAllNodesWithText("助手", useUnmergedTree = true).assertCountEquals(if (switching) 2 else 1)
-                rule.onAllNodesWithText("工作", useUnmergedTree = true).assertCountEquals(if (switching) 1 else 0)
+                // One navigation title, then the current manager's identity. A single-manager roster is still renameable;
+                // only a hub without the roster keeps the persona-pack name and a read-only identity.
+                rule.onAllNodesWithText("助手资料", useUnmergedTree = true).assertCountEquals(1)
+                val hasRoster = response != "no-roster"
+                rule.onAllNodesWithText(if (hasRoster) "助手" else "Persona", useUnmergedTree = true).assertCountEquals(1)
+                rule.onAllNodesWithText(if (hasRoster) "Persona" else "助手", useUnmergedTree = true).assertCountEquals(0)
+                rule.onAllNodesWithText("工作", useUnmergedTree = true).assertCountEquals(0)
+                rule.onAllNodesWithText("改名", useUnmergedTree = true).assertCountEquals(if (hasRoster) 1 else 0)
                 val permission = rule.onAllNodesWithText("新会话默认权限").onLast()
                 if (response in listOf("claude", "codex")) permission.assertIsEnabled() else permission.assertIsNotEnabled()
                 val image = rule.onNodeWithTag("entry-shot").captureToImage().asAndroidBitmap()
@@ -119,6 +126,9 @@ class AssistantSettingsEntriesTest {
                 File(out, name).outputStream().use { check(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
             }
         }
+        rule.onNodeWithText("显示定时任务的对话").performScrollTo().performClick()
+        rule.waitForIdle()
+        assertEquals(true, conversations.assistant.value.recentTaskChats)
         assertEquals(emptyList<OutboxMessage>(), conversations.outbox.value)
     }
 }

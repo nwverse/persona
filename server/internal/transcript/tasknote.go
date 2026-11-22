@@ -80,16 +80,28 @@ func taskNote(xml string) (*proto.TaskNote, string) {
 		}
 	}
 	n.Title = oneLine(full, noteTitleLen)
+	detailLimit := pageOutputLen
+	if n.Kind == "agent" {
+		detailLimit = maxTextLen
+	}
 	switch {
 	case firstTag(xml, "event") != "":
 		n.Detail = clipTo(html.UnescapeString(firstTag(xml, "event")), pageOutputLen)
 	case firstTag(xml, "result") != "":
-		n.Detail = clipTo(html.UnescapeString(firstTag(xml, "result")), pageOutputLen)
+		n.Detail = clipTo(html.UnescapeString(firstTag(xml, "result")), detailLimit)
 	case n.Title != strings.TrimSpace(full):
 		n.Detail = clipTo(full, pageOutputLen) // a long or multi-line command: the title is its first line
 	}
+	// Each field is a piece of xml, which would be kept whole for as long as any of them is (Meta.taskCalls keeps the
+	// ids for the node's lifetime): copied, they keep only themselves.
+	for _, f := range []*string{&n.TaskID, &n.ToolUseID, &n.OutputFile, &n.Status, &n.Title, &n.Detail} {
+		*f = strings.Clone(*f)
+	}
 	return n, noteText(n)
 }
+
+// BackgroundTaskUpdate identifies the generic task notice on its way from a node or runtime to the hub.
+const BackgroundTaskUpdate = "后台任务有更新"
 
 // noteText is the notice's one line: "Background command done · <title>", "Monitor event · <the event's first line>"… (in Chinese).
 func noteText(n *proto.TaskNote) string {
@@ -132,7 +144,7 @@ func noteText(n *proto.TaskNote) string {
 		}
 	default:
 		if n.Title == "" {
-			return "后台任务有更新"
+			return BackgroundTaskUpdate
 		}
 		return n.Title
 	}

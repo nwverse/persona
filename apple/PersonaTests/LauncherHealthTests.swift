@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// New Agent's launchers with their health on the computer (#1643, docs/server/launcher-health.md): decoded when the hub
 /// sends it and not needed when it does not, grayed out with why when blocked, never left out, and not picked by default.
@@ -44,6 +45,13 @@ import Testing
         let ls = try launchers(#"{"launchers":[{"name":"a","health":{"kind":"auth"}},{"name":"b","health":"blocked"},{"name":"c","health":null}]}"#)
         #expect(ls.map(\.name) == ["a", "b", "c"])
         #expect(ls.allSatisfy { $0.health == nil })
+    }
+
+    @Test func aCodexThatStartsWithoutAFirstMessage() throws {
+        // #4961: a computer that opens Codex with no first message says so; an older one doesn't, and needs one.
+        let ls = try launchers(#"{"launchers":[{"name":"claude"},{"name":"codex","agent":"codex","prompt_optional":true},{"name":"old","agent":"codex"}]}"#)
+        #expect(ls.map(\.promptOptional) == [nil, true, nil])
+        #expect(ls.map(\.needsFirstMessage) == [false, false, true])
     }
 
     @Test func throughTheAPIClient() async throws {

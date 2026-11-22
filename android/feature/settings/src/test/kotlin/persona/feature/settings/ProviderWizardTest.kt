@@ -3,8 +3,10 @@ package persona.feature.settings
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import org.junit.Assert.*
 import org.junit.Test
@@ -26,6 +28,8 @@ class ProviderWizardTest {
 
     private class Hub(val presets: List<ProviderPreset>) : ProviderSetup {
         override val builtinPresets = flowOf(true)
+        val referencesAvailable = MutableStateFlow(true)
+        override val secretReferencesAvailable = referencesAvailable
         val owners = mutableListOf<String?>()
         private suspend fun noteOwner() { owners += kotlinx.coroutines.currentCoroutineContext()[RequestManager]?.id }
         val created = mutableListOf<NewProvider>()
@@ -157,15 +161,89 @@ class ProviderWizardTest {
         assertNull(model.state.value.keyTest)
     }
 
-    @Test fun aResponsesPresetIsNotTestedAndTheGatewayGoesToTheForm() = runBlocking {
+    @Test fun aPresetReferenceSkipsTheKeyTestAndCreatesOnlyAReference() = runBlocking {
+        val hub = Hub(listOf(deepseek))
+        val model = NewProviderModel(hub)
+        model.load(hubNames = true)
+        model.choose(deepseek.id)
+        model.editKey(model.state.value.draft.copy(apiKey = "op://Dev/DeepSeek/key", apiKeyByReference = true))
+        model.testKey()
+        assertTrue("an unresolved reference is never sent to the model gateway", hub.tests.isEmpty())
+        assertTrue(model.saveKey())
+        val created = hub.created.single()
+        assertNull(created.apiKey)
+        assertEquals("op://Dev/DeepSeek/key", created.apiKeyReference)
+        assertEquals(deepseek.id, created.preset)
+    }
+
+    @Test fun changingPresetsCannotReclassifyAReferenceAsAnOrdinaryKey() = runBlocking {
+        val hub = Hub(listOf(deepseek, responses))
+        val model = NewProviderModel(hub)
+        model.load(hubNames = true)
+        model.choose(deepseek.id)
+        model.editKey(model.state.value.draft.copy(apiKey = "op://Dev/DeepSeek/key", apiKeyByReference = true))
+        model.choose(responses.id)
+        assertFalse(model.state.value.draft.apiKeyByReference)
+        assertEquals("", model.state.value.draft.apiKey)
+        model.testKey()
+        assertTrue(hub.tests.isEmpty())
+
+        model.editKey(model.state.value.draft.copy(apiKey = "sk-example-key"))
+        model.testKey()
+        assertEquals("sk-example-key", hub.tests.single().apiKey)
+        assertTrue(model.saveKey())
+        assertEquals("sk-example-key", hub.created.single().apiKey)
+        assertNull(hub.created.single().apiKeyReference)
+    }
+
+    @Test fun aPresetReferenceSaveRechecksTheLiveGate() = runBlocking {
+        val hub = Hub(listOf(deepseek))
+        val model = NewProviderModel(hub)
+        model.load(hubNames = true)
+        model.choose(deepseek.id)
+        model.editKey(model.state.value.draft.copy(apiKey = "op://Dev/DeepSeek/key", apiKeyByReference = true))
+        hub.referencesAvailable.value = false
+        assertFalse(model.saveKey())
+        assertTrue(hub.created.isEmpty())
+        assertFalse(model.state.value.draft.apiKeyByReference)
+        assertEquals("", model.state.value.draft.apiKey)
+        assertEquals(R.string.settings_provider_reference_unavailable, model.state.value.error?.id)
+    }
+
+    @Test fun directApiProtocolsMatchTheHubKeyTestAndClaudeCompatibility() {
+        val presets = listOf(null, "", "messages", "responses", "chat", "future").map {
+            ProviderPreset("example/$it", "example", kind = "api", api = it)
+        }
+        assertEquals(listOf(true, true, true, true, true, false), presets.map { it.testable })
+        assertEquals(listOf(true, true, true, false, false, false), presets.map { it.runsClaude })
+    }
+
+    @Test fun aDirectApiDoesNotWaitForReadinessOrAssign() = runBlocking {
+        val hub = Hub(listOf(responses))
+        val readinessAnswer = CompletableDeferred<AssistantReadiness>()
+        val model = NewProviderModel(hub) { readinessAnswer.await() }
+        val asking = async { model.loadReadiness() }
+        yield()
+        model.load(hubNames = true)
+        model.choose("example/api")
+        model.setAssign(true) // Even an explicit choice is meaningless for a direct API.
+        model.editKey(model.state.value.draft.copy(apiKey = "sk-example-key"))
+        withTimeout(1_000) { assertTrue("a direct API must not wait for readiness", model.saveKey()) }
+        assertNull(hub.created.single().assign)
+        assertFalse(model.state.value.added!!.asked)
+        assertFalse(model.state.value.added!!.noClaudeBefore)
+        asking.cancel()
+    }
+
+    @Test fun aResponsesPresetIsTestedAndTheGatewayGoesToTheForm() = runBlocking {
         val hub = Hub(listOf(responses))
         val model = NewProviderModel(hub)
         model.load(hubNames = true)
         model.choose("example/api")
-        assertFalse(responses.testable)
+        assertTrue(responses.testable)
         model.editKey(model.state.value.draft.copy(apiKey = "sk-example-key"))
         model.testKey()
-        assertTrue(hub.tests.isEmpty())
+        assertEquals(ProviderProbe(preset = "example/api", apiKey = "sk-example-key", auth = "api_key"), hub.tests.single())
         model.backToPick()
         assertEquals(WizardStep.Pick, model.state.value.step)
         model.choose(null)

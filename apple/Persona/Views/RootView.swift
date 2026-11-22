@@ -4,47 +4,116 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
-    /// The system's text size, before Small / Standard / Large moves it.
-    @Environment(\.dynamicTypeSize) private var systemTypeSize
+    /// The system's text size, before Small / Standard / Large moves it. On iOS the windows' own size is capped
+    /// (`WindowTextSize`), so the environment no longer says what the system's is once that has run: the system's is
+    /// read from UIKit and kept here; until then the environment's is the system's.
+    @Environment(\.dynamicTypeSize) private var environmentTypeSize
+    #if os(iOS)
+    @State private var systemSize: DynamicTypeSize?
+    private var systemTypeSize: DynamicTypeSize { systemSize ?? environmentTypeSize }
+    #else
+    private var systemTypeSize: DynamicTypeSize { environmentTypeSize }
+    #endif
     /// How far down the toasts outside the shell's window start: below the navigation bar's buttons, as the shell's do,
     /// not on them (the owner asked, #138: a toast covered Back). The Mac's stay at the top of the window.
     private var toastClearance: CGFloat {
         #if os(iOS)
-        ShellNavigationClearance.needed(at: model.textSize.applied(to: systemTypeSize))
+        ShellNavigationClearance.needed(at: Theme.interfaceTypeSize(model.textSize.applied(to: systemTypeSize)))
         #else
         0
         #endif
     }
     @Environment(\.horizontalSizeClass) private var widthClass
+    #if os(iOS)
+    /// The Agents page's New Session sheet (`\.newAgentShown`), here so a fold or an unfold keeps it (#2836).
+    @State private var newAgentShown = false
+    /// The tree this window shows now (`\.shownTree`).
+    @State private var shownTree = ShownTree()
+    @Environment(\.scenePhase) private var phase
+    /// The window's width class when the app was last the active one: what its pages keep while it is away (#2836,
+    /// `heldWidthClass`).
+    @State private var activeWidthClass: UserInterfaceSizeClass?
+    #endif
     #if DEBUG
-    /// `-swapTreeAt <seconds>`: the width class goes compact for a moment that long after launch, as iOS may set it for
-    /// its snapshots when the app goes to the background (iPhone Duo open): the tree swap that follows, on any simulator.
+    /// `-swapTreeAt <seconds>`: the shell for a moment that long after launch and back, the tree swap a fold and an
+    /// unfold make, on any simulator; only this view's choice flips, as before #2836 (a real fold changes the pages' own
+    /// width class too). With `-swapTreeAway YES` the whole app's width class flips instead, from above this view
+    /// (`TreeSwapFlip`), while the app counts as away, as while iOS takes its snapshots: nothing is built again
+    /// (`heldWidthClass`, `probe.tree-inner`). With `-swapTreeWhole YES` the whole app's flips while it is active: a real
+    /// fold and unfold, the pages' own width class with it (#2836).
     @State private var flipped = false
+    /// The flips it made, and the swaps between the shell and the tabs (`probe.tree`, `-probes YES`): a test that needs
+    /// the tree built again checks it was (#2626), one that needs it kept checks it was not (#2836).
+    @State private var swaps = TreeSwaps()
+    /// `-swapTreeAway YES`: the app counts as away while the width is flipped.
+    @State private var away = false
     #else
     private let flipped = false
+    private let away = false
     #endif
 
-    /// The iPhone-width shell; regular-width and other platforms keep their own navigation.
+    #if os(iOS)
+    /// Settings › Appearance › Sidebar (#6332, #4206): Merged or Separate; empty, nothing picked (`NavigationLayout.effective`).
+    @StoredValue(NavigationLayout.key) private var navigation = ""
+    #endif
+
+    /// The Sidebar layout instead of the shell or the tabs (#6332): one root at every width, the drawer on a phone's
+    /// width and the column beside the page at regular width (`ChatsView` under `\.unifiedSidebar`).
+    private var usesSidebar: Bool {
+        #if os(iOS)
+        // Nothing picked: Merged where wide, the shell at compact width (#4206).
+        NavigationLayout.offered
+            && NavigationLayout.effective(picked: navigation, regular: !((heldWidthClass ?? widthClass) == .compact || flipped)) == .sidebar
+        #else
+        false
+        #endif
+    }
+
+    /// The shell is the root: the iPhone's width in the Separate layout.
+    private var showsShell: Bool { usesShell && !usesSidebar }
+
+    /// The iPhone-width shell; regular-width and other platforms keep their own navigation. In the Sidebar layout the
+    /// same width is its drawer's (`showsShell`).
     private var usesShell: Bool {
         #if os(visionOS)
         // Apple Vision Pro keeps the tabs, as the system's ornament (VisionShell), whatever the window's width.
         return false
         #elseif os(iOS)
-        return widthClass == .compact || flipped
+        return (heldWidthClass ?? widthClass) == .compact || flipped
         #else
         return false
         #endif
     }
 
+    #if os(iOS)
+    /// The width class the app's pages are given instead of the window's (#2836); nil, the window's. iOS snapshots an app
+    /// on its way to the background in other widths (iPhone Duo open: the outer screen's), and the whole tree was built
+    /// again for it (the shell for the tabs, a stack for a split, a drawer for a column), losing what each part kept (an
+    /// open sheet such as New Agent with what was typed in it, uploads under way, what was picked); and again on the way
+    /// back. While the app is away, its pages keep the width class it had while it was the active one; back, they take
+    /// the window's (folded meanwhile, the shell). Read in the same update as the phase: a width that changes with it
+    /// does not get a turn.
+    private var heldWidthClass: UserInterfaceSizeClass? { isAway ? activeWidthClass : nil }
+
+    /// Not the active app (inactive, in the background), or a test says so (`-swapTreeAway`).
+    private var isAway: Bool { phase != .active || away }
+    #endif
+
+    /// The shell or the tabs are on screen: not the welcome page, the engine step, the checklist after pairing (the same
+    /// branches as `body`) or an extension's page in their place.
+    private var pagesShown: Bool {
+        model.isPaired && model.pairingEngineMachine == nil && !model.showsChecklist && model.extensionOpen == nil
+    }
+
     /// The shell is on screen, and with it its toast window (`ToastWindow`): not on the welcome page, the engine step or
     /// the checklist after pairing (the same branches as `body`).
-    private var shellShown: Bool { usesShell && model.isPaired && model.pairingEngineMachine == nil && !model.showsChecklist }
+    private var shellShown: Bool { showsShell && model.isPaired && model.pairingEngineMachine == nil && !model.showsChecklist }
 
     /// The tabs are on screen at regular width (iPad, iPhone Duo open), with a toast window of
     /// their own (`ToastWindowHook`): the same branches as `body`, with no extension page in the app's place.
     private var tabsToastWindow: Bool {
         #if os(iOS)
-        !usesShell && model.isPaired && model.pairingEngineMachine == nil && !model.showsChecklist && model.extensionOpen == nil
+        !showsShell && model.isPaired && model.pairingEngineMachine == nil && !model.showsChecklist && model.extensionOpen == nil
         #else
         false
         #endif
@@ -68,7 +137,9 @@ struct RootView: View {
                 #if os(visionOS)
                 RootTabs().visionShell()
                 #elseif os(iOS)
-                if usesShell { ShellView() } else { RootTabs().background { ToastWindowHook() } }
+                if usesSidebar { SidebarRoot().background { ToastWindowHook() }.modifier(BuiltTreeRoot()) }
+                else if usesShell { ShellView().modifier(BuiltTreeRoot()) }
+                else { RootTabs().background { ToastWindowHook() }.modifier(BuiltTreeRoot()) }
                 #else
                 RootTabs()
                 #endif
@@ -76,10 +147,13 @@ struct RootView: View {
                 WelcomeView()
             }
         }
+        #if DEBUG && os(iOS)
+        .background { InnerWidthProbe() } // below the held width class, across the branches
+        #endif
         .task(id: model.checklistPending && model.hubFeatures.contains(AssistantReadiness.feature)) {
             if model.checklistPending { await model.refreshReadiness() }
         }
-        // The plugins' main-navigation entries and cards, for Settings' badge (docs/extensions/extensions.md「UI 插槽」).
+        // The plugins' main-navigation entries and cards, for Settings' badge (docs/extensions/extensions.md「UI slots」).
         .task(id: ExtensionSlots.source(model)) {
             let hub = ExtensionSlots.source(model).hub
             await ExtensionSlots.shared.reload(for: hub)
@@ -90,15 +164,55 @@ struct RootView: View {
         .extensionSystemPresentation()
         // A new style, Theme Color or persona rebuilds the whole tree (tokens are static); the open tab and chat are remembered.
         .id(model.look)
+        #if os(iOS)
+        // The Agents page's New Session, presented here, above the shell / tabs swap: a fold or an unfold while it is open
+        // builds the page again, and the sheet went with it, what was typed in it too (#2836). It still goes when something
+        // else takes the pages' place (the welcome page after unpairing, an extension's page), as it went with the page.
+        .environment(\.newAgentShown, $newAgentShown)
+        .sheet(isPresented: $newAgentShown) {
+            NewChatView { session in
+                newAgentShown = false
+                model.selectedTab = .chats
+                model.openChat = session.key
+            }
+            .id(model.look) // outlives RootView's rebuild for a new look, as Settings' sheet does
+        }
+        .onChange(of: pagesShown) { _, shown in if !shown { newAgentShown = false } }
+        // Which tree is shown: one built before, still alive a moment after a swap, leaves the window to it.
+        .environment(\.shownTree, shownTree)
+        // While the app is away its pages keep the width class it had while it was the active one (#2836): the widths iOS
+        // snapshots it in on its way to the background build nothing again.
+        .transformEnvironment(\.horizontalSizeClass) { width in if let held = heldWidthClass { width = held } }
+        .onChange(of: widthClass, initial: true) { _, now in if !isAway { activeWidthClass = now } }
+        .onChange(of: isAway) { _, nowAway in if !nowAway { activeWidthClass = widthClass } }
+        #endif
         #if DEBUG
         .task {
             let at = UserDefaults.standard.double(forKey: "swapTreeAt")
             guard at > 0 else { return }
             try? await Task.sleep(for: .seconds(at))
-            flipped = true
-            try? await Task.sleep(for: .seconds(1))
-            flipped = false
+            if UserDefaults.standard.bool(forKey: "swapTreeAway") {
+                away = true
+                try? await Task.sleep(for: .milliseconds(200)) // away first, as the snapshots come after the phase
+                TreeSwapDebug.shared.compact = true
+                try? await Task.sleep(for: .seconds(1))
+                TreeSwapDebug.shared.compact = false
+                try? await Task.sleep(for: .milliseconds(200))
+                away = false
+            } else if UserDefaults.standard.bool(forKey: "swapTreeWhole") {
+                TreeSwapDebug.shared.compact = true
+                try? await Task.sleep(for: .seconds(1))
+                TreeSwapDebug.shared.compact = false
+            } else {
+                flipped = true
+                try? await Task.sleep(for: .seconds(1))
+                flipped = false
+            }
+            swaps.count += 1
         }
+        .onChange(of: showsShell) { swaps.rebuilt += 1 }
+        .screenProbe("tree", swaps)
+        .confirmationDialogLabelProbe()
         // LookBlink drives UIWindowScene overrides, so it only exists on iOS and visionOS.
         #if os(iOS) || os(visionOS)
         .task { await LookBlink.run() }
@@ -106,8 +220,10 @@ struct RootView: View {
         #endif
         .tint(Theme.accent)
         .fontDesign(model.style.fontDesign)
-        .dynamicTypeSize(model.textSize.applied(to: systemTypeSize))
-        .environment(\.shellBaseTypeSize, model.textSize.applied(to: systemTypeSize))
+        // The interface stops at xxxLarge; reading content takes the chosen size on to AX5 (`readingContent()`).
+        .dynamicTypeSize(Theme.interfaceTypeSize(model.textSize.applied(to: systemTypeSize)))
+        .environment(\.shellBaseTypeSize, Theme.interfaceTypeSize(model.textSize.applied(to: systemTypeSize)))
+        .environment(\.readingTypeSize, model.textSize.applied(to: systemTypeSize))
         .buiTheme(.persona())
         // No scroll bars anywhere (2026-10-31, the user: they look bad); the environment reaches every ScrollView,
         // List and sheet below. UIKit scroll views (MonoTextView, the terminal, web views) turn theirs off themselves.
@@ -119,9 +235,24 @@ struct RootView: View {
         .overlay(alignment: .top) { if overlayToasts { ToastOverlay().padding(.top, toastClearance) } }
         #if os(iOS) || os(visionOS)
         // Settings › Appearance › Light & Dark on this scene's window (and any other open one) as it first shows.
-        .onAppear { model.colorScheme.apply() }
+        .onAppear {
+            model.colorScheme.apply()
+            #if DEBUG || PERF_SIGNPOST
+            PerfTrace.firstFrame()
+            #endif
+        }
+        #if os(iOS)
+        // The interface's cap on the windows' text size, so sheets and covers are capped too (`WindowTextSize`).
+        .onAppear { WindowTextSize.apply(); systemSize = WindowTextSize.system }
+        .onReceive(NotificationCenter.default.publisher(for: UIContentSizeCategory.didChangeNotification)) { _ in
+            WindowTextSize.apply(); systemSize = WindowTextSize.system
+        }
+        #endif
         // The Theme Color on the windows too, for what UIKit draws in the window's tint (Settings' row icons, `WindowTint`).
         .onChange(of: model.look, initial: true) { WindowTint.apply() }
+        #endif
+        #if DEBUG || PERF_SIGNPOST
+        .task { MainThreadWatchdog.shared.start() }
         #endif
         #if DEBUG
         .overlay(alignment: .bottomTrailing) { PerfCountProbe() }
@@ -133,8 +264,14 @@ struct RootView: View {
             }
         }
         .screenProbe("connection", ConnectionShown(shown: "\(model.connection.shown)", network: model.connection.networkUp))
+        #if os(iOS)
+        // Hub transcription's store (#3862 phase 5): the mode, the socket, the hub's lines and the fallback, for UI tests;
+        // a view of its own, so its changes redraw only it.
+        .overlay(alignment: .topLeading) { if ScreenProbe.enabled { MeetingTranscriptionProbe() } }
+        #endif
         .htmlCardSample()
         .voiceOrbSample()
+        .closeoutSample()
         .healthTrendsSample()
         #endif
         .alert("Claude Wants to Act on Your iPhone", isPresented: Binding(
@@ -164,16 +301,26 @@ struct RootView: View {
     @Environment(AppModel.self) private var model
     #if os(iOS)
     @State private var pad = PadRouter()
+    /// The Separate layout's tabs in the new look (#4206): each its own part of the one sidebar's column, its own
+    /// selection, beside its own page.
+    @State private var personaPart = UnifiedSidebar(part: .persona)
+    @State private var agentsPart = UnifiedSidebar(part: .agents)
+    /// Where the system puts its bars down the side (the open iPhone Duo on its side): the columns' top margin there.
+    @State private var barEdge: HorizontalEdge?
     #endif
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("RootTabs")
         #endif
-        @Bindable var model = model
-        TabView(selection: $model.selectedTab) {
+        TabView(selection: Binding(get: { model.selectedTab }, set: { model.selectHomeTab($0) })) {
+            #if os(iOS)
+            AssistantRootTab(part: personaPart)
+            AgentsRootTab(part: agentsPart)
+            #else
             AssistantRootTab()
             AgentsRootTab()
+            #endif
             #if os(iOS) || os(visionOS)
             if LarkHomePreference.shared.shows { FeishuRootTab() }
             #endif
@@ -183,12 +330,37 @@ struct RootView: View {
             #endif
         }
         #if os(iOS)
+        .environment(\.splitSideBars, barEdge != nil) // the columns' top margin under side bars (#4853)
+        .readsVerticalBarEdge($barEdge)
         .modifier(PadRoutes(router: pad))
+        .onAppear { agentsPart.linedUpWith = personaPart } // one head line on both tabs (#8596)
         #endif
     }
 }
 
 #if os(iOS)
+/// The Sidebar layout at regular width (Settings › Appearance › Navigation, #6332; docs/apple/ios.md「Sidebar layout」): the
+/// Agents page's split with the whole sidebar as its list column (`UnifiedSidebarColumn`) and the Persona conversation
+/// as the page beside it, every pick in the sidebar opening over that. The iPad's routes and Settings as the tabs'
+/// (`PadRouter`, `PadRoutes`), with a route to Persona going back to the conversation.
+@MainActor private struct SidebarRoot: View {
+    @State private var pad = PadRouter(unified: true)
+    @State private var unified = UnifiedSidebar()
+    /// Where the system puts its bars down the side (the open iPhone Duo on its side); nil across the top.
+    @State private var barEdge: HorizontalEdge?
+
+    var body: some View {
+        #if DEBUG || PERF_SIGNPOST
+        let _ = PerfTrace.body("SidebarRoot")
+        #endif
+        ChatsView()
+            .environment(\.unifiedSidebar, unified)
+            .environment(\.splitSideBars, barEdge != nil) // the columns' top margin there (#4853)
+            .readsVerticalBarEdge($barEdge)
+            .modifier(PadRoutes(router: pad))
+    }
+}
+
 /// Where the iPad's routes to Inbox and Settings land without their tabs: every route in the app still
 /// sets `AppModel.selectedTab` (notifications, Siri, the inbox's rows…). `.mail` opens the inbox on the Persona tab's page,
 /// beside its sidebar; `.settings` the sheet, over the tab that was in front. As the iPhone's shell does (`ShellState.route`).
@@ -197,6 +369,16 @@ struct RootView: View {
     private(set) var request: (page: ShellPage, serial: Int)?
     /// The tab in front, for Settings to go back to.
     @ObservationIgnored private var front = AppTab.assistant
+    /// The Sidebar layout (#6332): no tabs, one page beside the sidebar. A route to Persona goes back to the conversation
+    /// (an Agent's chat or a place may be in front), and Messages opens beside the sidebar.
+    @ObservationIgnored let unified: Bool
+    /// Set while this router sets the tab itself: that new tab is only noted, not routed again (Inbox, then Persona,
+    /// would otherwise go back from the inbox it just opened).
+    @ObservationIgnored private var settingTab = false
+
+    init(unified: Bool = false) {
+        self.unified = unified
+    }
 
     func show(_ page: ShellPage) {
         request = (page, (request?.serial ?? 0) + 1)
@@ -213,38 +395,65 @@ struct RootView: View {
     }
 
     func route(_ t: AppTab, in model: AppModel) {
+        if settingTab { front = t; return }
         switch t {
         case .mail:
             show(.inbox)
             front = .assistant
-            model.selectedTab = .assistant
+            setTab(.assistant, in: model)
         case .settings:
             model.shellSettings = true
-            model.selectedTab = front
+            setTab(front, in: model)
+        case .assistant where unified:
+            front = t
+            show(.conversation)
+        case .feishu where unified:
+            show(.messages)
+            front = .assistant
+            setTab(.assistant, in: model)
         default:
             front = t
         }
     }
+
+    private func setTab(_ t: AppTab, in model: AppModel) {
+        settingTab = true
+        model.selectedTab = t
+        settingTab = false
+    }
 }
 
-/// The iPad's routes (`PadRouter`) and its Settings sheet, on the tabs.
+/// The iPad's routes (`PadRouter`) and its Settings, on the tabs: a sheet on the iPad; on a phone (iPhone Duo open) the
+/// whole window, one column across, as ChatGPT shows its account page there, not a sheet over half of it (#3701). At a
+/// phone's own width (the Sidebar layout's drawer, #6332) the sheet the shell shows it in.
 private struct PadRoutes: ViewModifier {
     @Environment(AppModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var width
     let router: PadRouter
+    private let phone = UIDevice.current.userInterfaceIdiom == .phone
+    private var cover: Bool { phone && width == .regular }
 
     func body(content: Content) -> some View {
         @Bindable var model = model
         content
             .environment(\.padRouter, router)
-            .sheet(isPresented: $model.shellSettings) {
-                // The sheet outlives RootView's rebuild for a new look, so its identity follows the look too.
-                SettingsView()
-                    .environment(\.settingsSheet, true)
-                    .id(model.look)
-                    .presentationSizing(.page)
+            .sheet(isPresented: cover ? .constant(false) : $model.shellSettings) { settings.presentationSizing(.page) }
+            .fullScreenCover(isPresented: cover ? $model.shellSettings : .constant(false)) {
+                settings
+                    .environment(\.horizontalSizeClass, .compact)
+                    .accessibilityAction(.escape) { model.shellSettings = false } // VoiceOver's scrub, as on a sheet
             }
             .onAppear { router.attach(to: model) }
-            .onDisappear { router.detach(from: model) }
+            // Not for Settings' cover, which takes the tabs off the window: a route asked meanwhile (Settings itself, from
+            // an extension's link) waited for it to close and opened it again.
+            .onDisappear { if !model.shellSettings { router.detach(from: model) } }
+    }
+
+    /// It outlives RootView's rebuild for a new look, so its identity follows the look too.
+    private var settings: some View {
+        SettingsView()
+            .environment(\.settingsSheet, true)
+            .id(model.look)
     }
 }
 
@@ -252,7 +461,42 @@ extension EnvironmentValues {
     /// Set on the iPad's tabs, where Inbox and Settings live in Persona's sidebar; nil elsewhere.
     @Entry var padRouter: PadRouter?
 }
+
 #endif
+
+/// One tree RootView builds: the shell or the tabs, built again by a fold or an unfold, and by a new look.
+@MainActor final class BuiltTree {}
+
+/// The tree a window shows now (RootView's; nil: none yet). The trees built before it live on a moment after a fold or an
+/// unfold swapped the shell and the tabs (seconds, on an iPad), or a new look built them again: they leave what is asked
+/// of the window to the shown one (#2836: the old Agents page took the chat the new one opened again, and opened it where
+/// no one saw it).
+@MainActor final class ShownTree {
+    var tree: BuiltTree?
+}
+
+#if os(iOS)
+/// The tree under it as one `BuiltTree` (`\.builtTree`), the window's shown one from its appearing.
+private struct BuiltTreeRoot: ViewModifier {
+    @Environment(\.shownTree) private var shown
+    @State private var tree = BuiltTree()
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.builtTree, tree)
+            .onAppear { shown?.tree = tree }
+    }
+}
+#endif
+
+extension EnvironmentValues {
+    /// RootView's `ShownTree`, and the tree a page is in: whether it is the one shown.
+    @Entry var shownTree: ShownTree? = nil
+    @Entry var builtTree: BuiltTree? = nil
+    /// The Agents page's New Session sheet, presented by RootView on iOS (it outlives the tree a fold or an unfold builds
+    /// again, #2836); nil, the page presents its own.
+    @Entry var newAgentShown: Binding<Bool>? = nil
+}
 
 /// A tab's page, drawn again only by what it reads itself. Each tab's badge (the agents waiting, the inbox's Needs You) is read
 /// by its `Tab`, and the hub changes them with nearly every push: without this the `Tab` built its page again each time,
@@ -269,6 +513,10 @@ private struct TabPage<Page: View>: View, Equatable {
 
 @MainActor private struct AssistantRootTab: TabContent {
     @Environment(AppModel.self) private var model
+    #if os(iOS)
+    /// The Persona tab's part of the one sidebar (#4206).
+    let part: UnifiedSidebar
+    #endif
 
     var body: some TabContent<AppTab> {
         #if DEBUG || PERF_SIGNPOST
@@ -276,8 +524,16 @@ private struct TabPage<Page: View>: View, Equatable {
         #endif
         Tab("Persona", systemImage: Theme.Icon.ai, value: AppTab.assistant) {
             TabPage {
+                #if os(iOS)
+                // The Separate layout in the new look (#4206): the one sidebar's column with Persona's part, Persona's
+                // page beside it (the Agents page's split, as the Sidebar layout's), the system's tab bar kept.
+                ChatsView()
+                    .environment(\.unifiedSidebar, part)
+                    .modifier(TabActivityScope(tab: .assistant))
+                #else
                 AssistantView()
                     .modifier(TabActivityScope(tab: .assistant))
+                #endif
                 #if PERF_SIGNPOST
                     .modifier(PerfTabMount("assistant"))
                 #endif
@@ -290,6 +546,10 @@ private struct TabPage<Page: View>: View, Equatable {
 
 @MainActor private struct AgentsRootTab: TabContent {
     @Environment(AppModel.self) private var model
+    #if os(iOS)
+    /// The Agents tab's part of the one sidebar (#4206).
+    let part: UnifiedSidebar
+    #endif
 
     var body: some TabContent<AppTab> {
         #if DEBUG || PERF_SIGNPOST
@@ -298,6 +558,10 @@ private struct TabPage<Page: View>: View, Equatable {
         Tab("Agents", systemImage: Theme.Icon.agents, value: AppTab.chats) {
             TabPage {
                 ChatsView()
+                #if os(iOS)
+                    // The Separate layout in the new look (#4206): the one sidebar's column with the Agents' part.
+                    .environment(\.unifiedSidebar, part)
+                #endif
                     .modifier(TabActivityScope(tab: .chats))
                 #if PERF_SIGNPOST
                     .modifier(PerfTabMount("agents"))
@@ -324,7 +588,7 @@ private struct TabPage<Page: View>: View, Equatable {
             }
             .equatable()
         }
-        .badge(InboxStore.shared.actionCount)
+        .badge(InboxStore.shared.unreadCount)
     }
 }
 
@@ -345,14 +609,15 @@ private struct TabPage<Page: View>: View, Equatable {
             }
             .equatable()
         }
-        .badge(badge) // Demo Mode is left from Settings; the plugins' entries are on it (docs/extensions/extensions.md「UI 插槽」, badges)
+        .badge(badge) // Demo Mode is left from Settings; the plugins' entries are on it (docs/extensions/extensions.md「UI slots」, badges)
     }
 
-    /// Demo; else what the plugins' main-navigation entries' badges add up to (only words: a dot).
+    /// Demo; else what the plugins' main-navigation entries' badges add up to (only words: a dot), while Settings shows
+    /// them (the default assistant current).
     private var badge: Text? {
         if model.isDemo { return Text("Demo") }
-        let total = ExtensionSlots.shared.total
-        if total.count > 0 { return Text(total.count > 99 ? "99+" : "\(total.count)") }
+        let total = ExtensionSlots.shared.settingsTotal(model)
+        if let text = CountBadge.text(total.count) { return Text(text) }
         return total.dot ? Text("•") : nil
     }
 }
@@ -369,8 +634,60 @@ nonisolated struct ConnectionShown: Encodable, Equatable {
 @MainActor private struct FeishuRootTab: TabContent {
     var body: some TabContent<AppTab> {
         Tab(String(localized: "Messages [Quote Views 4da199]"), systemImage: Theme.Icon.feishuChats, value: AppTab.feishu) {
-            TabPage { LarkConversationsView().modifier(TabActivityScope(tab: .feishu)) }.equatable()
+            TabPage {
+                // No Assistant | Agents switch drawn on the pages: the system's tab bar switches the tabs, on the iPad and
+                // on the open iPhone Duo alike.
+                LarkConversationsView().modifier(TabActivityScope(tab: .feishu))
+            }
+            .equatable()
         }
     }
 }
+#endif
+
+#if DEBUG
+/// `probe.tree`: how many times `-swapTreeAt` flipped the width class (`count`), and how many times the tree went between
+/// the shell and the tabs (`rebuilt`: twice for a flip while the app is active, not at all while it is away).
+struct TreeSwaps: Encodable, Equatable {
+    var count = 0
+    var rebuilt = 0
+}
+
+/// `-swapTreeAway YES`'s flip, for the whole app (#2836): `TreeSwapFlip` gives RootView a compact width class while it is
+/// set, as iOS does for its snapshots (iOS only; the Mac's RootView has no shell to swap).
+@MainActor @Observable final class TreeSwapDebug {
+    static let shared = TreeSwapDebug()
+    var compact = false
+}
+
+#if os(iOS)
+/// Above RootView (PersonaApp): `TreeSwapDebug`'s flip.
+struct TreeSwapFlip: ViewModifier {
+    @State private var debug = TreeSwapDebug.shared
+
+    func body(content: Content) -> some View {
+        let compact = debug.compact
+        content.transformEnvironment(\.horizontalSizeClass) { width in if compact { width = .compact } }
+    }
+}
+
+/// `probe.tree-inner`: how many times the pages below RootView saw their width class change; none while the app is away,
+/// whatever RootView's own does (#2836).
+private struct InnerWidthProbe: View {
+    @Environment(\.horizontalSizeClass) private var width
+    @State private var seen = InnerWidthChanges()
+
+    var body: some View {
+        Color.clear
+            .frame(width: Theme.Size.line, height: Theme.Size.line)
+            .allowsHitTesting(false)
+            .onChange(of: width) { seen.count += 1 }
+            .screenProbe("tree-inner", seen)
+    }
+}
+
+struct InnerWidthChanges: Encodable, Equatable {
+    var count = 0
+}
+#endif
 #endif

@@ -17,6 +17,7 @@ import (
 type cancelHub struct {
 	mu        sync.Mutex
 	asked     []string
+	toolIDs   []string
 	cancelled []string
 }
 
@@ -26,7 +27,13 @@ func (h *cancelHub) counts() (asked, cancelled int) {
 	return len(h.asked), len(h.cancelled)
 }
 
-func withCancelHub(t *testing.T, n *Node) *cancelHub {
+func (h *cancelHub) toolUseIDs() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.toolIDs...)
+}
+
+func withCancelHub(t testing.TB, n *Node) *cancelHub {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	n2hR, n2hW := io.Pipe()
@@ -44,6 +51,7 @@ func withCancelHub(t *testing.T, n *Node) *cancelHub {
 		_ = json.Unmarshal(params, &p)
 		h.mu.Lock()
 		h.asked = append(h.asked, p.Interaction.ID)
+		h.toolIDs = append(h.toolIDs, p.Interaction.ToolUseID)
 		h.mu.Unlock()
 		<-ctx.Done() // nobody on the phone answers
 		return nil, ctx.Err()
@@ -99,7 +107,7 @@ func runHookAsync(t *testing.T, n *Node, in map[string]any) <-chan any {
 // process group): the node sees the claude gone and withdraws the card instead of holding it until nodeclient.HookTimeout (#4344).
 func TestHookCardEndsWithItsClaude(t *testing.T) {
 	question := map[string]any{
-		"hook_event_name": "PreToolUse", "session_id": decidedSession, "tool_name": "AskUserQuestion",
+		"hook_event_name": "PermissionRequest", "session_id": decidedSession, "tool_name": "AskUserQuestion",
 		"tool_input": map[string]any{"questions": []any{map[string]any{"question": "Which?", "header": "Pick",
 			"options": []any{map[string]any{"label": "A"}, map[string]any{"label": "B"}}}}},
 	}

@@ -3,6 +3,7 @@ import CryptoKit
 import ImageIO
 import QuickLook
 import SwiftUI
+import PersonaWire
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -15,20 +16,28 @@ final class LarkMedia {
 
     /// Bumped whenever an inline emoji image arrives, so text that drew `[label]` redraws with the picture.
     private(set) var emojiVersion = 0
-    private(set) var emojis: [String: APIClient.LarkEmojis.Emoji] = [:]
-    /// The picker's sections (Default, provider…), keys in order.
-    private(set) var emojiGroups: [APIClient.LarkEmojis.Group] = []
-    /// The user's quick reactions (most used first).
-    private(set) var quickReactions: [String] = ["THUMBSUP", "OK", "DONE", "HEART", "SMILE", "LAUGH", "SURPRISED"]
+    /// Each manager's emoji, by manager ("" the default's): each manager reads its own Lark (docs/assistant/managers.md
+    /// "Clients").
+    private(set) var catalogs: [String: EmojiCatalog] = [:]
+
+    /// What the emoji of one manager's Lark are.
+    struct EmojiCatalog {
+        var emojis: [String: APIClient.LarkEmojis.Emoji] = [:]
+        /// The picker's sections (Default, provider…), keys in order.
+        var groups: [APIClient.LarkEmojis.Group] = []
+        /// The user's quick reactions (most used first).
+        var quickReactions: [String] = ["THUMBSUP", "OK", "DONE", "HEART", "SMILE", "LAUGH", "SURPRISED"]
+    }
 
     @ObservationIgnored private let images = NSCache<NSString, UIImage>()
     @ObservationIgnored private var inflight: [String: Task<UIImage?, Never>] = [:]
     @ObservationIgnored private var emojiImages: [String: UIImage] = [:]
     @ObservationIgnored private var emojiLoading = Set<String>()
-    @ObservationIgnored private var catalogTask: Task<Void, Never>?
+    @ObservationIgnored private var catalogTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private let dir = URL.cachesDirectory.appending(path: "lark-media", directoryHint: .isDirectory)
 
-    private init() { images.totalCostLimit = 120 << 20 }
+    /// The app uses `shared` only; tests make their own.
+    init() { images.totalCostLimit = 120 << 20 }
 
     /// Settings › Storage cleared the files: drop the decoded copies too (emoji stay, they are tiny and on every page).
     func clearMemory() { images.removeAllObjects() }
@@ -36,8 +45,8 @@ final class LarkMedia {
     // MARK: Bytes
 
     /// Raw bytes of a media URL (hub-relative or absolute), from disk when seen before.
-    func data(_ url: String, size: Int? = nil) async throws -> Data {
-        let key = cacheKey(url, size: size)
+    func data(_ url: String, size: Int? = nil, using origin: APIClient? = nil) async throws -> Data {
+        let key = Self.cacheKey(url, size: size, origin: origin)
         let file = dir.appending(path: key)
         if let d = await Task.detached(priority: .userInitiated, operation: { try? Data(contentsOf: file) }).value { return d }
         let d: Data
@@ -47,7 +56,7 @@ final class LarkMedia {
             guard ((resp as? HTTPURLResponse)?.statusCode ?? 200) < 400 else { throw URLError(.badServerResponse) }
             d = body
         } else {
-            guard var api = AppModel.shared.api else { throw URLError(.userAuthenticationRequired) }
+            guard var api = origin ?? AppModel.shared.api else { throw URLError(.userAuthenticationRequired) }
             api.session = APIClient.uncachedSession
             var path = url
             var query: [String: String] = [:]
@@ -81,15 +90,17 @@ final class LarkMedia {
 
     // MARK: Images
 
-    func cached(_ url: String, size: Int? = nil) -> UIImage? { images.object(forKey: cacheKey(url, size: size) as NSString) }
+    func cached(_ url: String, size: Int? = nil, using origin: APIClient? = nil) -> UIImage? {
+        images.object(forKey: Self.cacheKey(url, size: size, origin: origin) as NSString)
+    }
 
     /// Decoded image, downsampled to `maxPixel` on its long edge (thumbnails are fetched at `size` when the hub can).
-    func image(_ url: String, size: Int? = nil, maxPixel: CGFloat = 1600) async -> UIImage? {
-        let key = cacheKey(url, size: size)
+    func image(_ url: String, size: Int? = nil, maxPixel: CGFloat = 1600, using origin: APIClient? = nil) async -> UIImage? {
+        let key = Self.cacheKey(url, size: size, origin: origin)
         if let img = images.object(forKey: key as NSString) { return img }
         if let t = inflight[key] { return await t.value }
         let t = Task<UIImage?, Never> {
-            guard let d = try? await self.data(url, size: size) else { return nil }
+            guard let d = try? await self.data(url, size: size, using: origin) else { return nil }
             return await Task.detached(priority: .userInitiated) { Self.decode(d, maxPixel: maxPixel) }.value
         }
         inflight[key] = t
@@ -111,41 +122,90 @@ final class LarkMedia {
         #endif
     }
 
-    private func cacheKey(_ url: String, size: Int?) -> String {
-        let digest = SHA256.hash(data: Data((url + "#" + String(size ?? 0)).utf8))
+    private func cacheKey(_ url: String, size: Int?) -> String { Self.cacheKey(url, size: size) }
+
+    /// The name the bytes of `url` are kept under: a URL that names a manager (`url(_:manager:)`) is its own entry.
+    nonisolated static func cacheKey(_ url: String, size: Int?, origin: APIClient? = nil) -> String {
+        let resource = url + "#" + String(size ?? 0)
+        let key: String
+        if let origin {
+            key = [origin.group, origin.config.url.absoluteString, origin.managerID ?? "", resource].joined(separator: "\0")
+        } else {
+            key = resource
+        }
+        let digest = SHA256.hash(data: Data(key.utf8))
         return digest.prefix(16).map { String(format: "%02x", $0) }.joined()
     }
 
+    /// `url` as manager `manager` reads it (docs/assistant/managers.md "Clients"): a hub path gets `manager=`, as a picture
+    /// or file loaded by URL can't send the header. As it is for nil (the default's, nothing named), a full URL (a CDN's)
+    /// and one that names a manager already.
+    nonisolated static func url(_ url: String, manager: String?) -> String {
+        guard let manager, !manager.isEmpty, url.hasPrefix("/"), !url.hasPrefix("//"),
+              URLComponents(string: url)?.queryItems?.contains(where: { $0.name == "manager" }) != true else { return url }
+        let hash = url.firstIndex(of: "#") ?? url.endIndex
+        var head = String(url[..<hash])
+        head += head.contains("?") ? "&" : "?"
+        let value = manager.addingPercentEncoding(withAllowedCharacters: unreserved) ?? manager
+        return head + "manager=" + value + String(url[hash...])
+    }
+
+    /// Where the player streams `url` from: a hub path under the hub's address with its query kept, a named manager's as
+    /// `url(_:manager:)` names it (AVPlayer sends no header but the bearer), through the hub's tunnel or proxy when the
+    /// app routes it there (HubTransport); a full URL as it is.
+    nonisolated static func streamURL(_ url: String, hub: URL, manager: String?) -> URL {
+        guard url.hasPrefix("/") else { return URL(string: url) ?? hub }
+        guard !url.hasPrefix("//"), let named = URLComponents(string: Self.url(url, manager: manager)),
+              var c = URLComponents(url: hub, resolvingAgainstBaseURL: false) else { return HubTransport.resolve(hub.appending(path: url), hub: hub) }
+        var base = c.percentEncodedPath
+        while base.hasSuffix("/") { base.removeLast() }
+        c.percentEncodedPath = base + named.percentEncodedPath
+        c.percentEncodedQuery = named.percentEncodedQuery
+        return HubTransport.resolve(c.url ?? hub.appending(path: url), hub: hub)
+    }
+
+    private nonisolated static let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+
     // MARK: Emoji
 
-    /// Loads the emoji catalogue once (key → image URL), so reactions and inline emoji can be drawn.
-    func loadEmojiCatalog() {
-        guard catalogTask == nil else { return }
-        catalogTask = Task {
-            guard let api = AppModel.shared.api, let r = try? await api.larkEmojis() else { catalogTask = nil; return }
-            emojis = r.emojis
-            emojiGroups = r.groups ?? []
+    /// Loads manager `manager`'s emoji catalogue once (key → image URL), so reactions and inline emoji can be drawn; nil:
+    /// the default's. Read through `api` (the group the page talks to), the hub-level link's when nil.
+    @discardableResult
+    func loadEmojiCatalog(manager: String? = nil, using api: APIClient? = nil) -> Task<Void, Never>? {
+        let slot = manager ?? ""
+        if let t = catalogTasks[slot] { return t }
+        guard let api = (api ?? AppModel.shared.api)?.manager(manager) else { return nil }
+        let t = Task {
+            guard let r = try? await api.larkEmojis() else { catalogTasks[slot] = nil; return }
+            catalogs[slot, default: EmojiCatalog()].emojis = r.emojis
+            catalogs[slot]?.groups = r.groups ?? []
             emojiVersion += 1
-            if let q = try? await api.larkQuickReactions(), !q.isEmpty { quickReactions = q }
+            if let q = try? await api.larkQuickReactions(), !q.isEmpty { catalogs[slot]?.quickReactions = q }
             // The long-press bar's pictures, ahead of the first long press: a context menu is drawn once when it opens,
             // so one opened before they loaded showed [HEART]-style codes, and only the three of them that fit (#1627).
-            for key in LarkQuickReactions.bar(quickReactions) { _ = emojiImage(key, points: LarkMedia.barPoints) }
+            for key in LarkQuickReactions.bar(catalog(manager).quickReactions) { _ = emojiImage(key, points: LarkMedia.barPoints, manager: manager) }
         }
+        catalogTasks[slot] = t
+        return t
     }
 
     /// The long-press bar's emoji size (LarkChatView's menu).
     static let barPoints: CGFloat = 28
 
-    func emoji(_ key: String) -> APIClient.LarkEmojis.Emoji? { emojis[key.lowercased()] }
+    /// Manager `manager`'s catalogue (nil: the default's); empty, with the stock quick reactions, until it loads.
+    func catalog(_ manager: String?) -> EmojiCatalog { catalogs[manager ?? ""] ?? EmojiCatalog() }
 
-    /// An emoji drawn at `points` for inline text, or nil while it loads (a redraw follows via `emojiVersion`).
-    func emojiImage(_ key: String, points: CGFloat) -> UIImage? {
-        let k = key.lowercased() + "@" + String(Int(points))
+    func emoji(_ key: String, manager: String? = nil) -> APIClient.LarkEmojis.Emoji? { catalog(manager).emojis[key.lowercased()] }
+
+    /// An emoji of manager `manager`'s catalogue drawn at `points` for inline text, or nil while it loads (a redraw follows
+    /// via `emojiVersion`).
+    func emojiImage(_ key: String, points: CGFloat, manager: String? = nil) -> UIImage? {
+        let k = key.lowercased() + "@" + String(Int(points)) + (manager.map { "@" + $0 } ?? "")
         if let img = emojiImages[k] { return img }
-        guard let url = emoji(key)?.url, !emojiLoading.contains(k) else { return nil }
+        guard let url = emoji(key, manager: manager)?.url, !emojiLoading.contains(k) else { return nil }
         emojiLoading.insert(k)
         Task {
-            if let img = await image(url, maxPixel: 96) {
+            if let img = await image(Self.url(url, manager: manager), maxPixel: 96) {
                 emojiImages[k] = Self.fitted(img, points: points)
                 emojiVersion += 1
             }
@@ -164,7 +224,8 @@ final class LarkMedia {
     }
 }
 
-/// An image from Feishu with a quiet placeholder while it loads and a broken-image mark when it fails.
+/// An image from Feishu with a quiet placeholder while it loads and a broken-image mark when it fails. In a chat, a hub
+/// path is loaded through the chat's manager (`larkManager`, `LarkMedia.url(_:manager:)`), avatars too.
 struct LarkRemoteImage: View {
     var url: String
     var size: Int? = nil
@@ -172,16 +233,18 @@ struct LarkRemoteImage: View {
     var contentMode: ContentMode = .fill
     /// Called when the image cannot be loaded, for callers that draw something else instead of the broken mark.
     var onFailure: (() -> Void)? = nil
+    @Environment(\.larkManager) private var manager
     @State private var image: UIImage?
     @State private var failed = false
 
     var body: some View {
+        let url = LarkMedia.url(self.url, manager: manager)
         ZStack {
             if let image {
                 Image(uiImage: image).resizable().aspectRatio(contentMode: contentMode)
             } else if failed {
                 Rectangle().fill(Color.primary.opacity(0.05))
-                    .overlay { Image(systemName: "photo.badge.exclamationmark").font(Theme.Font.title).foregroundStyle(.tertiary) }
+                    .overlay { Image(systemName: Theme.Icon.brokenImage).font(Theme.Font.title).foregroundStyle(.tertiary) }
             } else {
                 Rectangle().fill(Color.primary.opacity(0.05)).overlay { ProgressView().controlSize(.small) }
             }
@@ -201,38 +264,92 @@ nonisolated func larkThumbEdge(points: CGFloat) -> Int? {
     return edge > 0 && edge <= 624 ? edge : nil
 }
 
-/// Person or chat avatar: the real picture when there is one, otherwise (none, or it failed to load) the initial.
-/// `size` is at the default text size; the avatar grows with the text like the rest of the design system's sizes.
+/// A Feishu row owns the account, hub and manager used to resolve its picture. ChatAvatar draws and caches it.
 struct LarkAvatarImage: View {
     var name: String
     var url: String?
-    var isGroup = false
+    var account: Int?
     var size: CGFloat = Theme.Size.wellL
+    var origin: APIClient?
     @Environment(\.dynamicTypeSize) private var typeSize
-    /// The URL that failed to load: the initial instead of a broken picture.
-    @State private var failedURL: String?
+    @Environment(\.larkAccount) private var chatAccount
+    @Environment(\.larkManager) private var manager
+    @Environment(\.larkGroup) private var group
 
     var body: some View {
-        if let url, !url.isEmpty, failedURL != url {
-            let points = size * Theme.sizeScale(typeSize)
-            LarkRemoteImage(url: url, size: url.hasPrefix("/") ? larkThumbEdge(points: points) : nil, maxPixel: points * 3) {
-                failedURL = url
+        let slot = Self.slot(account) ?? Self.slot(chatAccount)
+        let api = origin ?? AppModel.shared.larkAPI(group: group, manager: manager, account: slot)
+        let picture = api.flatMap { api in url.flatMap { Self.cachedPicture($0, using: api, account: slot) } }
+        ChatAvatar(url: picture, name: name, size: size * Theme.sizeScale(typeSize), origin: api)
+    }
+
+    /// Cached rows from older hubs can contain a gateway path or a signed Feishu CDN link. Resolve the key through
+    /// this row's hub. Registered messaging sources retain their own media and account namespaces.
+    static func cachedPicture(_ raw: String, using api: APIClient, account: Int? = nil) -> String? {
+        guard !raw.isEmpty, let url = URLComponents(string: raw), url.fragment == nil else { return nil }
+        let path: String?
+        if raw.hasPrefix("/api/v1/avatars/lark/"), let slot = url.queryItems?.first(where: { $0.name == "lark_account" }) {
+            let key = url.percentEncodedPath.dropFirst("/api/v1/avatars/lark/".count)
+            guard let number = Self.slot(slot.value.flatMap(Int.init)), !key.isEmpty, key.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }) else { return nil }
+            path = url.percentEncodedPath + "?lark_account=" + String(number)
+        } else if !(raw.hasPrefix("media/") && api.messagingSource != nil),
+                  let legacy = legacyPath(raw, url: url, account: account ?? api.larkAccount) {
+            // Native keys and known Feishu CDN references can share a manager with a messaging source.
+            path = legacy
+        } else if let source = api.messagingSource {
+            if raw.hasPrefix("/api/v1/messaging/" + source + "/media/") || raw.hasPrefix("/api/v1/avatars/" + source + "/") {
+                // A stored row's manager is supplied by the owning API client on every request.
+                var named = url
+                named.queryItems = url.queryItems?.filter { $0.name != "manager" && $0.name != "size" }
+                if named.queryItems?.isEmpty == true { named.queryItems = nil }
+                path = named.string
+            } else {
+                path = MessagingShape.avatar(["avatar": raw], source: source, account: account.map(String.init))
             }
-            .scaledFrame(width: size, height: size)
-            .clipShape(.circle)
-            .overlay(Circle().strokeBorder(Color.primary.opacity(0.06)))
         } else {
-            LarkAvatar(name: name, isGroup: isGroup, size: size)
+            return nil
         }
+        return path.map { LarkMedia.url($0, manager: api.managerID) }
+    }
+
+    private static func slot(_ number: Int?) -> Int? {
+        guard let number, (1...999_999_999).contains(number) else { return nil }
+        return number
+    }
+
+    private static let legacyMediaPrefixes = ["/api/v1/lark/media/", "/agent/v1/media/", "/api/media/"]
+
+    private static func legacyPath(_ raw: String, url: URLComponents, account: Int?) -> String? {
+        let key: String
+        var slot = Self.slot(account)
+        if let prefix = legacyMediaPrefixes.first(where: raw.hasPrefix) {
+            guard let value = String(url.percentEncodedPath.dropFirst(prefix.count)).removingPercentEncoding else { return nil }
+            key = value
+            if slot == nil, let value = url.queryItems?.first(where: { $0.name == "ol_account" })?.value { slot = Self.slot(Int(value)) }
+        } else if url.scheme?.lowercased() == "https", url.user == nil, url.password == nil, let host = url.host?.lowercased(),
+                  ["feishucdn.com", "larksuitecdn.com", "feishu.cn", "larksuite.com", "larkoffice.com"].contains(where: { host == $0 || host.hasSuffix("." + $0) }),
+                  let range = url.percentEncodedPath.range(of: "/static-resource/v1/"),
+                  let value = url.percentEncodedPath[range.upperBound...].prefix(while: { $0 != "/" && $0 != "~" }).removingPercentEncoding {
+            key = value
+        } else {
+            key = raw
+        }
+        let parts = key.split(separator: "/", omittingEmptySubsequences: false)
+        guard !key.isEmpty, key.utf8.count <= 500, parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }),
+              key.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "_./:+-".contains($0)) }),
+              let encoded = key.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) else { return nil }
+        return "/api/v1/lark/media/" + encoded + (slot.map { "?ol_account=\($0)" } ?? "")
     }
 }
 
 // MARK: - Viewers
 
-/// Plays a Feishu video or voice message through the hub (the bearer header rides on the asset request).
+/// Plays a Feishu video or voice message through the hub (the bearer header rides on the asset request), in a chat
+/// through the chat's manager (`larkManager`).
 struct LarkPlayerView: View {
     var url: String
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.larkManager) private var manager
     @State private var player: AVPlayer?
 
     var body: some View {
@@ -243,7 +360,10 @@ struct LarkPlayerView: View {
             } else {
                 ProgressView().tint(.white).frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            Button { dismiss() } label: { Image(systemName: Theme.Icon.close).font(Theme.Font.heading).scaledFrame(width: Theme.Size.avatar, height: Theme.Size.avatar) }
+            Button { dismiss() } label: {
+                ThemedIcon(Theme.Icon.close).font(Theme.Font.heading).sheetBarLabel()
+                    .scaledFrame(width: Theme.Size.avatar, height: Theme.Size.avatar)
+            }
                 .themedButton()
                 .clipShape(.circle)
                 .padding(Theme.Space.l)
@@ -251,8 +371,10 @@ struct LarkPlayerView: View {
         }
         .task {
             guard let cfg = AppModel.shared.config else { return }
-            let full = url.hasPrefix("/") ? cfg.url.appending(path: url) : (URL(string: url) ?? cfg.url)
-            let asset = AVURLAsset(url: full, options: ["AVURLAssetHTTPHeaderFieldsKey": ["Authorization": "Bearer \(cfg.token)"]])
+            let full = LarkMedia.streamURL(url, hub: cfg.url, manager: manager)
+            var auth = URLRequest(url: full)
+            cfg.authorize(&auth) // the Access token only when `full` is on the hub's own address
+            let asset = AVURLAsset(url: full, options: ["AVURLAssetHTTPHeaderFieldsKey": auth.allHTTPHeaderFields ?? [:]])
             let p = AVPlayer(playerItem: AVPlayerItem(asset: asset))
             player = p
             p.play()
@@ -261,9 +383,11 @@ struct LarkPlayerView: View {
     }
 }
 
-/// Downloads a Feishu file and opens it in Quick Look (which also offers share / save to Files).
+/// Downloads a Feishu file and opens it in Quick Look (which also offers share / save to Files), in a chat through the
+/// chat's manager (`larkManager`).
 struct LarkFileOpener: ViewModifier {
     @Binding var request: (url: String, name: String)?
+    @Environment(\.larkManager) private var manager
     @State private var local: URL?
     @State private var loading = false
 
@@ -279,33 +403,11 @@ struct LarkFileOpener: ViewModifier {
                 guard let r = request else { return }
                 request = nil
                 loading = true
+                let url = LarkMedia.url(r.url, manager: manager)
                 Task {
                     defer { loading = false }
-                    do { local = try await LarkMedia.shared.file(r.url, name: r.name) } catch { AppModel.shared.show(error) }
+                    do { local = try await LarkMedia.shared.file(url, name: r.name) } catch { AppModel.shared.show(error) }
                 }
             }
-    }
-}
-
-/// A chat or person without a picture: the design system's `Monogram` (the name's first letter on the neutral disc),
-/// sized like `LarkAvatarImage`.
-struct LarkAvatar: View {
-    var name: String
-    var isGroup: Bool
-    var size: CGFloat = Theme.Size.tapTarget
-    @Environment(\.dynamicTypeSize) private var typeSize
-
-    var body: some View {
-        Monogram(name: name, size: size * Theme.sizeScale(typeSize), fill: Theme.monogramFill, font: Self.font(size))
-    }
-
-    /// The letter's text level for an avatar `size` points across at the default text size: about 0.4 of it, as before.
-    static func font(_ size: CGFloat) -> Font {
-        switch size {
-        case Theme.Size.avatar...: Theme.Font.heading
-        case Theme.Size.wellS...: Theme.Font.secondaryStrong
-        case Theme.Size.icon...: Theme.Font.captionStrong
-        default: Theme.Font.labelStrong
-        }
     }
 }

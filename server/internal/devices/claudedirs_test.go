@@ -34,9 +34,13 @@ func (f *dirsNode) handle(_ context.Context, method string, params json.RawMessa
 		var c map[string]json.RawMessage
 		_ = json.Unmarshal(params, &c)
 		f.configure = append(f.configure, c)
-		if raw, ok := c["claude_dirs_blocked"]; ok {
-			f.blocked = nil
-			_ = json.Unmarshal(raw, &f.blocked)
+		// Like the node (node.go node.configure): absent or null leaves the patterns as they are.
+		var p struct {
+			Blocked *[]string `json:"claude_dirs_blocked"`
+		}
+		_ = json.Unmarshal(params, &p)
+		if p.Blocked != nil {
+			f.blocked = *p.Blocked
 		}
 		return map[string]any{}, nil
 	case "sessions.list":
@@ -169,6 +173,51 @@ func TestBlockClaudeDirs(t *testing.T) {
 	}
 }
 
+// Lifting the last pattern tells the node [] (null would leave it blocking): the directory reads unblocked, its
+// sessions are listed again, on the next connection too.
+func TestUnblockLastClaudeDir(t *testing.T) {
+	_, _, m, mux := dirsHub(t)
+	ctx := context.Background()
+	f := connectDirsNode(t, m)
+	if code, _ := put(t, mux, "/api/v1/machines/m1/claude-dirs/blocked", `{"blocked":["~/.automation/claude-a"]}`); code != 200 {
+		t.Fatalf("block = %d", code)
+	}
+	if ids := listedIDs(m); !slices.Equal(ids, []string{"work"}) {
+		t.Fatalf("blocked sessions %v", ids)
+	}
+
+	code, out := put(t, mux, "/api/v1/machines/m1/claude-dirs/blocked", `{"blocked":[]}`)
+	if code != 200 {
+		t.Fatalf("unblock = %d %v", code, out)
+	}
+	f.mu.Lock()
+	last := f.configure[len(f.configure)-1]
+	f.mu.Unlock()
+	if string(last["claude_dirs_blocked"]) != `[]` {
+		t.Fatalf("node told claude_dirs_blocked %s", last["claude_dirs_blocked"])
+	}
+	if ids := listedIDs(m); !slices.Equal(ids, []string{"bot", "work"}) {
+		t.Fatalf("unblocked sessions %v", ids)
+	}
+	st := m.claudeDirsState(ctx)
+	if len(st.Blocked) != 0 {
+		t.Fatalf("patterns %v", st.Blocked)
+	}
+	for _, d := range st.Dirs {
+		if d.Blocked {
+			t.Fatalf("%s still blocked: %+v", d.Path, st.Dirs)
+		}
+	}
+
+	m.configureNode(ctx, m.peer, nil, true)
+	f.mu.Lock()
+	last = f.configure[len(f.configure)-1]
+	f.mu.Unlock()
+	if string(last["claude_dirs_blocked"]) != `[]` {
+		t.Fatalf("configure on connect: claude_dirs_blocked %s", last["claude_dirs_blocked"])
+	}
+}
+
 func TestBlockClaudeDirsRefusesBadPatterns(t *testing.T) {
 	_, _, _, mux := dirsHub(t)
 	for _, body := range []string{`{"blocked":["relative/dir"]}`, `{"blocked":["~/["]}`, `nope`} {
@@ -228,20 +277,34 @@ func TestConfigureNodeSaysBotmux(t *testing.T) {
 	}
 }
 
-// Connecting tells the node whether it may start herdr's server when it is not running (#1879): yes unless hub.json
-// says machines[].herdr_autostart false.
-func TestConfigureNodeSaysHerdrAutostart(t *testing.T) {
-	_, _, m, _ := dirsHub(t)
-	f := connectDirsNode(t, m)
-	ctx := context.Background()
-	m.configureNode(ctx, m.peer, nil, true)
+// hub.json machines[] switches reach the node on every connect, each going from its default to the configured value:
+// herdr_autostart (#1879) and usage_windows (#2432) are on unless they say false; claude_global_hooks is off unless set, and
+// the node needs the false to take the entries out again.
+func TestConfigureNodeSaysMachineSwitches(t *testing.T) {
 	off := false
-	m.cfg.HerdrAutostart = &off
-	m.configureNode(ctx, m.peer, nil, true)
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.configure) != 2 || string(f.configure[0]["herdr_autostart"]) != "true" || string(f.configure[1]["herdr_autostart"]) != "false" {
-		t.Fatalf("herdr_autostart in node.configure: %v", f.configure)
+	for _, tc := range []struct {
+		name          string
+		set           func(*MachineConfig)
+		key           string
+		before, after string
+	}{
+		{"herdr_autostart", func(c *MachineConfig) { c.HerdrAutostart = &off }, "herdr_autostart", "true", "false"},
+		{"claude_global_hooks", func(c *MachineConfig) { c.ClaudeGlobalHooks = true }, "claude_global_hooks", "false", "true"},
+		{"usage_windows", func(c *MachineConfig) { c.UsageWindows = &off }, "usage_windows", "true", "false"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, m, _ := dirsHub(t)
+			f := connectDirsNode(t, m)
+			ctx := context.Background()
+			m.configureNode(ctx, m.peer, nil, true)
+			tc.set(&m.cfg)
+			m.configureNode(ctx, m.peer, nil, true)
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if len(f.configure) != 2 || string(f.configure[0][tc.key]) != tc.before || string(f.configure[1][tc.key]) != tc.after {
+				t.Fatalf("%s in node.configure: %v", tc.key, f.configure)
+			}
+		})
 	}
 }
 
@@ -264,35 +327,20 @@ func TestConfigureNodeSaysClaudeStartDir(t *testing.T) {
 	}
 }
 
-// hub.json machines[].claude_global_hooks reaches the node on every connect, off unless set: the node needs the false
-// to take the entries out again.
-func TestConfigureNodeSaysClaudeGlobalHooks(t *testing.T) {
+// hub.json machines[].extra_path reaches the node on connect (#10127); unset it is [], so a list taken out of hub.json
+// is taken out of the node's PATH on the next connect.
+func TestConfigureNodeSaysExtraPath(t *testing.T) {
 	_, _, m, _ := dirsHub(t)
 	f := connectDirsNode(t, m)
 	ctx := context.Background()
 	m.configureNode(ctx, m.peer, nil, true)
-	m.cfg.ClaudeGlobalHooks = true
+	m.cfg.ExtraPath = []string{"~/.cargo/bin", "/opt/tools/bin"}
 	m.configureNode(ctx, m.peer, nil, true)
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(f.configure) != 2 || string(f.configure[0]["claude_global_hooks"]) != "false" || string(f.configure[1]["claude_global_hooks"]) != "true" {
-		t.Fatalf("claude_global_hooks in node.configure: %v", f.configure)
-	}
-}
-
-// hub.json machines[].usage_windows reaches the node on every connect: on unless it says false (#2432).
-func TestConfigureNodeSaysUsageWindows(t *testing.T) {
-	_, _, m, _ := dirsHub(t)
-	f := connectDirsNode(t, m)
-	ctx := context.Background()
-	m.configureNode(ctx, m.peer, nil, true)
-	off := false
-	m.cfg.UsageWindows = &off
-	m.configureNode(ctx, m.peer, nil, true)
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.configure) != 2 || string(f.configure[0]["usage_windows"]) != "true" || string(f.configure[1]["usage_windows"]) != "false" {
-		t.Fatalf("usage_windows in node.configure: %v", f.configure)
+	if len(f.configure) != 2 || string(f.configure[0]["extra_path"]) != `[]` ||
+		string(f.configure[1]["extra_path"]) != `["~/.cargo/bin","/opt/tools/bin"]` {
+		t.Fatalf("extra_path in node.configure: %v", f.configure)
 	}
 }
 
@@ -448,5 +496,73 @@ func TestBlockClaudeDirsDuringRemember(t *testing.T) {
 	_, _ = st.Setting(ctx, claudeDirsKey("m1"), &seen)
 	if !slices.Equal(seen, []string{"/home/me/.config/cc/keep", "/home/me/.config/cc/new"}) {
 		t.Fatalf("remembered %v", seen)
+	}
+}
+
+// A node.configure that names neither claude_dirs nor keep_sessions makes the node forget its config directories
+// (node/node.go): the hub adds them to every such call, whoever makes it — the botmux and herdr switches, an
+// extension's agent filters through CallNode — and leaves a call that says what is kept as it is.
+func TestConfigureKeepsClaudeDirs(t *testing.T) {
+	h := newTestDevices(t)
+	ctx := context.Background()
+	m, seen := herdrMac(t, h, "mac", false)
+	m.cfg.ClaudeConfigDirs = []string{"/home/me/.config/cc/work"}
+	m.cfg.ClaudeStartDir = "/home/me/.persona/claude"
+	if err := h.opts.Store.PutSetting(ctx, claudeDirsKey("mac"), []string{"/home/me/.config/cc/found"}); err != nil {
+		t.Fatal(err)
+	}
+	want := m.claudeDirs(ctx)
+	if len(want) != 3 {
+		t.Fatalf("configured, start and remembered dirs: %v", want)
+	}
+	mux := h.Handler(http.NotFoundHandler())
+	if code, _ := call(t, mux, "PUT", "/api/v1/machines/mac/botmux", `{"on": false}`); code != 200 {
+		t.Fatalf("botmux: %d", code)
+	}
+	if code, _ := call(t, mux, "PUT", "/api/v1/machines/mac/herdr", `{"autostart": false}`); code != 200 {
+		t.Fatalf("herdr: %d", code)
+	}
+	if _, err := h.CallNode(ctx, "mac", "node.configure", json.RawMessage(`{"agent_filters":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.CallNode(ctx, "mac", "node.configure", json.RawMessage(`{"keep_sessions":["s1"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	configures := func() []map[string]any {
+		var out []map[string]any
+		for _, c := range seen() {
+			if c["method"] == "node.configure" {
+				out = append(out, c)
+			}
+		}
+		return out
+	}
+	eventually(t, 2*time.Second, "four node.configure calls", func() bool { return len(configures()) == 4 })
+	dirsOf := func(c map[string]any) []string {
+		var out []string
+		for _, d := range c["claude_dirs"].([]any) {
+			out = append(out, d.(string))
+		}
+		return out
+	}
+	for _, key := range []string{"botmux", "herdr_autostart", "agent_filters"} {
+		i := slices.IndexFunc(configures(), func(c map[string]any) bool { _, ok := c[key]; return ok })
+		if i < 0 {
+			t.Fatalf("no node.configure with %s: %v", key, configures())
+		}
+		c := configures()[i]
+		if _, ok := c["claude_dirs"]; !ok {
+			t.Fatalf("%s: the node would forget its dirs: %v", key, c)
+		}
+		if got := dirsOf(c); !slices.Equal(got, want) {
+			t.Fatalf("%s: claude_dirs %v, want %v", key, got, want)
+		}
+	}
+	i := slices.IndexFunc(configures(), func(c map[string]any) bool { _, ok := c["keep_sessions"]; return ok })
+	if i < 0 {
+		t.Fatalf("no node.configure with keep_sessions: %v", configures())
+	}
+	if _, ok := configures()[i]["claude_dirs"]; ok {
+		t.Fatalf("a call that only changes what is kept got dirs: %v", configures()[i])
 	}
 }

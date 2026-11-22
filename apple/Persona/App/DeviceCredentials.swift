@@ -4,7 +4,7 @@ import SwiftUI
 import WatchConnectivity
 #endif
 
-// One credential per device (docs/protocol/protocol.md「鉴权」): the pairing token opens everything, so right after pairing the
+// One credential per device (docs/protocol/protocol.md「Authentication」): the pairing token opens everything, so right after pairing the
 // phone trades it for a token of its own and stops keeping it, and gets the watch an answer-only one. A lost device is
 // then revoked alone in Settings › Devices instead of re-pairing everything. Against an older hub (no /auth/tokens) the
 // pairing token stays, as before; the next launch tries again.
@@ -46,7 +46,7 @@ extension AppModel {
         #endif
         for paired in registry.hubs where paired.deviceID == nil {
             let old = paired.config
-            guard let t = try? await APIClient(config: old).createToken(name: UIDevice.current.name, kind: Self.credentialKind) else { continue }
+            guard let t = try? await APIClient(config: old).createToken(name: UIDevice.current.name, kind: Self.credentialKind), t.role == "full" else { continue }
             adoptDeviceToken(hub: paired.id, old: old.token, token: t.token, deviceID: t.id)
         }
         #if canImport(WatchConnectivity)
@@ -79,6 +79,15 @@ extension AppModel {
         for link in links where !link.isDemo { link.live.renewCredential(from: old, to: token) }
     }
 
+    /// Settings › Devices revoked the watch's credential `id` at `group`'s hub (#1871): the registry forgets it, and the
+    /// watch gets a new one (or, with none issued, the group is missing and the watch drops the revoked one).
+    func watchCredentialRevoked(_ id: String, group: String) async {
+        guard let r = DeviceCredentialTrade.forgettingWatch(registry, id: id, group: group) else { return }
+        registry = r
+        saveRegistry(r)
+        await upgradeCredentials()
+    }
+
     /// Nothing kept about this device's credentials outside the registry any more (the registry goes with `unpair`).
     func forgetDeviceCredentials() {
         UserDefaults.standard.removeObject(forKey: HubStore.legacyDeviceIDKey)
@@ -105,6 +114,16 @@ nonisolated enum DeviceCredentialTrade {
         var out = r
         out.hubs[i].watch = ServerConfig(url: expected.config.url, token: token.token)
         out.hubs[i].watchDeviceID = token.id
+        return out
+    }
+
+    /// The registry once the watch credential `id` of a hub of `group` was revoked: that hub keeps no watch credential,
+    /// so `issueWatchToken` issues a new one; nil when no hub of the group holds it.
+    static func forgettingWatch(_ r: HubRegistry, id: String, group: String) -> HubRegistry? {
+        guard !id.isEmpty, let i = r.hubs.firstIndex(where: { $0.group == group && $0.watchDeviceID == id }) else { return nil }
+        var out = r
+        out.hubs[i].watch = nil
+        out.hubs[i].watchDeviceID = nil
         return out
     }
 
@@ -145,18 +164,30 @@ nonisolated enum DeviceCredentialTrade {
 /// Settings › Devices: every device with its own credential, revocable one by one.
 struct DevicesView: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var tokens: [APIClient.DeviceToken] = []
     @State private var current: String?
     /// Per credential, how the hub pushes to its device (#5998); empty from an older hub.
     @State private var push: [String: APIClient.PushRoute] = [:]
+    /// Which device takes the phone tools' calls, and the choices it lists (`PhonePrimaryChoices`); nil from an older hub.
+    @State private var phone: APIClient.PhonePrimary?
+    @State private var phoneOptions: [PhonePrimaryChoices.Option] = []
+    /// A choice is on its way to the hub: one save at a time.
+    @State private var savingPhone = false
     @State private var loaded = false
     @State private var revoking: APIClient.DeviceToken?
     @State private var connecting = false
+    /// Scan Browser Sign-in Code open (#10293).
+    @State private var scanningBrowser = false
 
     var body: some View {
         SettingsForm {
             Section {
+                if canApproveBrowsers {
+                    Button { scanningBrowser = true } label: {
+                        Label("Scan Browser Sign-in Code", systemImage: Theme.Icon.scanCode).lineLimit(1)
+                    }
+                    .accessibilityIdentifier("devices.scanBrowser")
+                }
                 Button { connecting = true } label: {
                     Label("Connect New Device", systemImage: Theme.Icon.pairing).lineLimit(1)
                 }
@@ -168,6 +199,22 @@ struct DevicesView: View {
                 ForEach(tokens.filter { $0.revokedAt == nil }) { t in row(t) }
             } footer: {
                 Text("Each device has its own credentials. If you lose one, revoke just that one; the others keep working. A watch can only view and answer; it can't change settings or start and stop agents.")
+            }
+            if PhonePrimaryChoices.isShown(phone) {
+                Section {
+                    Picker(selection: Binding(
+                        get: { PhonePrimaryChoices.selection(phone: phone, options: phoneOptions) },
+                        set: { id in Task { await choosePhone(id) } }
+                    )) {
+                        ForEach(phoneOptions) { o in Text(optionTitle(o)).tag(o.id) }
+                    } label: {
+                        Text("Primary Device").lineLimit(1)
+                    }
+                    .disabled(savingPhone)
+                    .accessibilityIdentifier("devices.phonePrimary")
+                } footer: {
+                    Text("When Persona needs your phone (your location, Health, reminders), it asks this device first. If it can't be reached, another of your devices answers and Persona says which. Automatic uses the device you used most recently.")
+                }
             }
             let revoked = tokens.filter { $0.revokedAt != nil }
             if !revoked.isEmpty {
@@ -189,18 +236,43 @@ struct DevicesView: View {
         .sheet(isPresented: $connecting, onDismiss: { Task { await load() } }) {
             ConnectDeviceSheet { Task { await load() } }
         }
+        .sheet(isPresented: $scanningBrowser, onDismiss: { Task { await load() } }) {
+            BrowserLoginSheet()
+        }
         #if DEBUG
         .task { // `-openConnectDevice YES | web`: Connect New Device open (on Browser), for screenshots
             if UserDefaults.standard.string(forKey: "openConnectDevice") != nil { try? await Task.sleep(for: .seconds(1)); connecting = true }
         }
+        .task { // `-showBrowserLoginSample lan | internet | unknown | number | signedIn | voided | expired`: that step, sample data
+            guard BrowserLoginSample.current != nil else { return }
+            try? await Task.sleep(for: .seconds(1))
+            scanningBrowser = true
+        }
         #endif
-        .confirmationDialog(revoking.map { String(localized: "Revoke “\($0.name)”?") } ?? "", isPresented: Binding(
+        .accessibleConfirmationDialog(revoking.map { String(localized: "Revoke “\($0.name)”?") } ?? "", isPresented: Binding(
             get: { revoking != nil }, set: { if !$0 { revoking = nil } }
         ), titleVisibility: .visible, presenting: revoking) { t in
             Button(t.id == current ? String(localized: "Revoke and Unpair") : String(localized: "action.revoke", defaultValue: "Revoke"), role: .destructive) { Task { await revoke(t) } }
         } message: { t in
             Text(t.id == current ? Self.revokeSelfNote : String(localized: "That device disconnects right away and has to be paired again."))
         }
+    }
+
+    #if DEBUG
+    /// `-showBrowserLoginSample`, read once.
+    private static let browserSampleOn = UserDefaults.standard.string(forKey: "showBrowserLoginSample") != nil
+    #endif
+
+    /// The hub matches a number (`browser_qr_match`): only then can this device approve a browser.
+    private var canApproveBrowsers: Bool {
+        #if DEBUG
+        if Self.browserSampleOn { return true }
+        #endif
+        #if os(iOS) || os(visionOS)
+        return model.hubFeatures.contains(APIClient.browserQRMatchFeature)
+        #else
+        return false
+        #endif
     }
 
     #if os(macOS)
@@ -225,19 +297,21 @@ struct DevicesView: View {
                 }
                 Text(detail(t)).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
                 if t.revokedAt == nil, let route = push[t.id] { DevicePushLine(route: route) }
-                // At the accessibility text sizes under the words: beside them, a chip and Revoke made the watch's row
-                // wider than its card (#1796).
-                if t.revokedAt == nil, typeSize.isAccessibilitySize { revokeButton(t) }
             }
             Spacer(minLength: 0)
-            if t.revokedAt == nil, !typeSize.isAccessibilitySize { revokeButton(t) }
+            if t.revokedAt == nil { revokeButton(t) }
         }
     }
 
-    private func revokeButton(_ t: APIClient.DeviceToken) -> some View {
-        Button(String(localized: "action.revoke", defaultValue: "Revoke"), role: .destructive) { revoking = t }
-            .buttonStyle(.borderless)
-            .lineLimit(1)
+    @ViewBuilder private func revokeButton(_ t: APIClient.DeviceToken) -> some View {
+        if t.id == current, model.hubSignOut == .group(model.hub?.group ?? "") {
+            RowProgress() // Revoke and Unpair signing this device out of the group's hubs
+        } else {
+            Button(String(localized: "action.revoke", defaultValue: "Revoke"), role: .destructive) { revoking = t }
+                .buttonStyle(.borderless)
+                .lineLimit(1)
+                .disabled(model.hubSignOut != nil)
+        }
     }
 
     private func detail(_ t: APIClient.DeviceToken) -> String {
@@ -246,11 +320,39 @@ struct DevicesView: View {
         return String(localized: "Added \(t.createdAt?.formatted(date: .abbreviated, time: .shortened) ?? "")")
     }
 
+    private func optionTitle(_ o: PhonePrimaryChoices.Option) -> String {
+        guard let device = o.device else { return String(localized: "Automatic") }
+        return o.isCurrent ? String(localized: "\(device.name) · This Device") : device.name
+    }
+
+    /// The page's phone choice and the options listed for it, together.
+    private func apply(phone new: APIClient.PhonePrimary?) {
+        phone = new
+        phoneOptions = PhonePrimaryChoices.options(phone: new, tokens: tokens, current: current)
+    }
+
+    /// The choice shows at once; the hub's answer then replaces it, and a failure puts the old one back.
+    private func choosePhone(_ id: String) async {
+        guard !savingPhone, let api = model.api,
+              id != PhonePrimaryChoices.selection(phone: phone, options: phoneOptions) else { return }
+        let before = phone
+        savingPhone = true
+        apply(phone: PhonePrimaryChoices.choosing(id, in: phone))
+        do {
+            apply(phone: try await api.setPhonePrimary(id))
+        } catch {
+            apply(phone: before)
+            model.show(error)
+        }
+        savingPhone = false
+    }
+
     private func load() async {
         guard let api = model.api else { return }
         do {
             let r = try await api.deviceTokens()
             (tokens, current, push) = (r.tokens, r.current, r.push ?? [:])
+            apply(phone: savingPhone ? phone : r.phone) // a save on its way answers for itself
         } catch {
             model.show(error)
         }
@@ -258,12 +360,14 @@ struct DevicesView: View {
     }
 
     private func revoke(_ t: APIClient.DeviceToken) async {
+        // This device's own credential at the hub-level group's hub: the group's hubs sign it out (its watch's
+        // credential first, which needs this one) and the group goes; the others stay.
+        if t.id == current { await model.disconnectGroup(model.hub?.group ?? ""); return }
         guard let api = model.api else { return }
         do {
             try await api.revokeToken(t.id)
             Haptics.success()
-            // This device's own credential at the hub-level group's hub: that group goes (the others stay).
-            if t.id == current { model.removeGroup(model.hub?.group ?? ""); return }
+            await model.watchCredentialRevoked(t.id, group: model.hub?.group ?? "")
             await load()
         } catch {
             model.show(error)

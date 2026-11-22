@@ -1,6 +1,6 @@
 import XCTest
 
-/// What This Computer Can Do on a machine's page (#3018, docs/server/machines.md「自检」), against scripts/mock/mock_hub.py started with
+/// What This Computer Can Do on a machine's page (#3018, docs/server/machines.md「Doctor: what this computer can do」), against scripts/mock/mock_hub.py started with
 /// MOCK_DOCTOR=stale (hooks and MCP files out of date; Repair puts them right):
 ///   TEST_RUNNER_PERSONA_DOCTOR_HUB=http://127.0.0.1:<port>
 /// TEST_RUNNER_PERSONA_SHOTS=<dir> also saves a screenshot of each step there.

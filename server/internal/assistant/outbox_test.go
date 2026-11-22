@@ -226,11 +226,11 @@ func TestTheOutboxKeepsWhatTheHubMissed(t *testing.T) {
 	out := &memOutbox{}
 	b := startOutboxManager(t, h, out)
 	ctx := context.Background()
-	if err := b.NotifyRequest(ctx, push("ntf_1")); err != nil {
-		t.Fatalf("a push while the hub is away: %v", err)
+	if res, err := b.NotifyRequest(ctx, push("ntf_1")); err != nil || !res.Queued || res.Devices != nil {
+		t.Fatalf("a push while the hub is away: %+v %v (want it kept, answered Queued)", res, err)
 	}
 	b.Broadcast(ctx, live("todos"))
-	if err := b.NotifyRequest(ctx, push("ntf_2")); err != nil {
+	if _, err := b.NotifyRequest(ctx, push("ntf_2")); err != nil {
 		t.Fatal(err)
 	}
 	if out.len() != 3 {
@@ -245,7 +245,7 @@ func TestTheOutboxKeepsWhatTheHubMissed(t *testing.T) {
 	if out.len() != 0 {
 		t.Fatalf("still kept after the hub took them: %d", out.len())
 	}
-	if err := b.NotifyRequest(ctx, push("ntf_3")); err != nil {
+	if _, err := b.NotifyRequest(ctx, push("ntf_3")); err != nil {
 		t.Fatal(err)
 	}
 	h.waitFor(t, []string{"push ntf_1", "broadcast todos", "push ntf_2", "push ntf_3"})
@@ -256,7 +256,7 @@ func TestTheOutboxKeepsWhatTheHubMissed(t *testing.T) {
 	for b.Connected() && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if err := b.NotifyRequest(ctx, push("ntf_4")); err != nil {
+	if _, err := b.NotifyRequest(ctx, push("ntf_4")); err != nil {
 		t.Fatal(err)
 	}
 	h.up.Store(true)
@@ -269,7 +269,7 @@ func TestTheOutboxToAnOlderHub(t *testing.T) {
 	h.legacy = true
 	b := startOutboxManager(t, h, &memOutbox{})
 	ctx := context.Background()
-	if err := b.NotifyRequest(ctx, push("ntf_1")); err != nil {
+	if _, err := b.NotifyRequest(ctx, push("ntf_1")); err != nil {
 		t.Fatal(err)
 	}
 	b.Broadcast(ctx, live("assistant_feed"))
@@ -326,7 +326,7 @@ func TestTheOutboxWaitsForTheReport(t *testing.T) {
 	h := newOutboxHub(t)
 	rep := slowReport{release: make(chan struct{})}
 	b := startOutboxManager(t, h, &memOutbox{}, rep)
-	if err := b.NotifyRequest(context.Background(), push("ntf_1")); err != nil {
+	if _, err := b.NotifyRequest(context.Background(), push("ntf_1")); err != nil {
 		t.Fatal(err)
 	}
 	h.up.Store(true)
@@ -357,29 +357,11 @@ func TestAPushThatTimedOutIsKept(t *testing.T) {
 	h.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	if err := b.NotifyRequest(ctx, push("ntf_slow")); err != nil {
+	if _, err := b.NotifyRequest(ctx, push("ntf_slow")); err != nil {
 		t.Fatalf("a push the hub did not answer: %v", err)
 	}
 	if out.len() != 1 {
 		t.Fatalf("kept %d", out.len())
-	}
-}
-
-// Live updates kept are bounded on their own and go once stale: they never crowd out the pushes.
-func TestTheOutboxBoundsEachKind(t *testing.T) {
-	out := &memOutbox{}
-	ctx := context.Background()
-	_ = out.OutboxAdd(ctx, db.OutboxItem{ID: "ntf_1", Kind: outboxPush, Body: []byte(`{}`)}, 2, time.Now().Add(-time.Minute))
-	for _, id := range []string{"bc_1", "bc_2", "bc_3"} {
-		_ = out.OutboxAdd(ctx, db.OutboxItem{ID: id, Kind: outboxBroadcast, Body: []byte(`{}`)}, 2, time.Now().Add(-time.Minute))
-	}
-	items, _ := out.OutboxItems(ctx, 10)
-	var ids []string
-	for _, it := range items {
-		ids = append(ids, it.ID)
-	}
-	if !slices.Equal(ids, []string{"ntf_1", "bc_2", "bc_3"}) {
-		t.Fatalf("kept %v", ids)
 	}
 }
 

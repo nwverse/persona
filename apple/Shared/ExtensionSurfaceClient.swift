@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 nonisolated struct ExtensionSurfaceProjection: Sendable {
     var key: ExtensionSurfaceKey
@@ -74,6 +75,7 @@ nonisolated struct ExtensionSurfaceClient: Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = method ?? (body == nil ? "GET" : "POST")
         request.setValue("Bearer \(credential.token)", forHTTPHeaderField: "Authorization")
+        CloudflareAccess.apply(credential.access, to: &request, hub: credential.url)
         clientMetadata.apply(to: &request)
         request.setValue(ExtensionUIContext.appLocale, forHTTPHeaderField: "Accept-Language")
         if let body {
@@ -89,6 +91,8 @@ nonisolated struct ExtensionSurfaceClient: Sendable {
             let result = try await ExtensionSurfaceSession.session.data(for: request)
             data = result.0; response = result.1
         }
+        // Access, not the hub, turned it away (its own 403 included): not a revoked pairing.
+        try CloudflareAccessError.check(response, body: data, access: credential.access)
         guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
             throw ExtensionSurfaceHTTPError(status: (response as? HTTPURLResponse)?.statusCode ?? 0)
         }
@@ -110,10 +114,12 @@ nonisolated struct ExtensionSurfaceClient: Sendable {
             async let widgets = widgetCatalog(enabled: features.contains("extension_widgets"))
             async let shortcuts = shortcutCatalog(enabled: features.contains("extension_shortcuts"))
             let (w, s) = try await (widgets, shortcuts)
+            // Answers that arrive after the app went to the background are dropped, not written (#11360).
+            try Task.checkCancellation()
             try store.catalog(group: group, expected: expected, widgets: w.widgets, shortcuts: s.shortcuts)
             return features
         } catch {
-            if let error = error as? ExtensionSurfaceHTTPError, [401, 403].contains(error.status) {
+            if !Task.isCancelled, let error = error as? ExtensionSurfaceHTTPError, [401, 403].contains(error.status) {
                 try? store.revoke(group, generation: expected.generation)
             }
             throw error
@@ -146,6 +152,7 @@ nonisolated struct ExtensionSurfaceClient: Sendable {
         guard let endpoint = url.url else { throw URLError(.badURL) }
         var request = URLRequest(url: endpoint, timeoutInterval: 15)
         request.setValue("Bearer \(credential.token)", forHTTPHeaderField: "Authorization")
+        CloudflareAccess.apply(credential.access, to: &request, hub: credential.url)
         clientMetadata.apply(to: &request)
         if let helloTransport { return try await helloTransport(request) }
         let socket = ExtensionSurfaceSession.session.webSocketTask(with: request)
@@ -173,6 +180,7 @@ nonisolated struct ExtensionSurfaceClient: Sendable {
             guard hello.type == "hello" else { throw URLError(.cannotParseResponse) }
             return Set(hello.features)
         } catch {
+            try CloudflareAccessError.check(socket.response, access: credential.access)
             if let response = socket.response as? HTTPURLResponse, [401, 403].contains(response.statusCode) {
                 throw ExtensionSurfaceHTTPError(status: response.statusCode)
             }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/dialogwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -31,6 +32,83 @@ func runTool(s *Service, self, name string, args any) (string, error) {
 }
 
 // ---- kb_* ----
+
+func TestKBProjectNoteRoundTrip(t *testing.T) {
+	s := newKBService(t, newFakeHub())
+	out, err := runTool(s, "c1", "kb_update", map[string]any{
+		"kind": "projects", "id": "Project note", "note": "  First line\n second line  ",
+		"project_kind": "invalid", "status": "invalid", "projects": []string{"other"},
+		"importance": "invalid", "relevance": 101,
+		"chats": []string{"missing"},
+	})
+	// A project does not use projects: said, not dropped silently. Invalid values of fields it does use are still
+	// dropped as before (projectUpdate).
+	if err != nil || out != "Saved projects/project-note.\nNot saved: projects (projects entries do not use projects)." {
+		t.Fatalf("update: %q %v", out, err)
+	}
+	out, err = runTool(s, "c1", "kb_get", map[string]any{"kind": "projects", "id": "Project note"})
+	if err != nil || !strings.Contains(out, `"note": "First line second line"`) {
+		t.Fatalf("get note: %q %v", out, err)
+	}
+	if !strings.Contains(out, "\"locked_fields\": [\n    \"note\"\n  ]") || strings.Contains(out, `"locked": true`) {
+		t.Fatalf("get locks: %q", out)
+	}
+}
+
+// kb_update takes a wrong person or chat off a project for good, and only that link: the lists stay open to the
+// pipeline, which no longer brings the removed ones back (#10333).
+func TestKBUpdateRemovesOneLink(t *testing.T) {
+	s := newKBService(t, newFakeHub())
+	e := kbEng(t, s)
+	_ = e.Store.PutPerson(&kb.Person{ID: "alice", Name: "alice", Projects: []string{"billing-migration"}})
+	_ = e.Store.PutChat(&kb.Chat{ID: "team-chat", Name: "team-chat", Kind: "group", Projects: []string{"billing-migration"}})
+	_ = e.Store.PutProject(&kb.Project{Slug: "billing-migration", Name: "billing-migration", Status: "active",
+		People: []string{"alice"}, Chats: []string{"team-chat"}})
+	out, err := runTool(s, "c1", "kb_update", map[string]any{"kind": "projects", "id": "billing-migration",
+		"remove_people": []string{"alice"}, "remove_chats": []string{"team-chat"}})
+	if err != nil || out != "Saved projects/billing-migration." {
+		t.Fatalf("update: %q %v", out, err)
+	}
+	p, _ := e.Store.Project("billing-migration")
+	if len(p.People)+len(p.Chats)+len(p.LockedFields) != 0 || len(p.Excluded["people"]) != 1 || len(p.Excluded["chats"]) != 1 {
+		t.Fatalf("project after the removal: people %v, chats %v, locked %v, excluded %v", p.People, p.Chats, p.LockedFields, p.Excluded)
+	}
+	p.People, p.Chats = []string{"alice", "bob"}, []string{"team-chat", "new-chat"}
+	_ = e.Store.PutProject(p)
+	if p, _ = e.Store.Project("billing-migration"); strings.Join(p.People, ",") != "bob" || strings.Join(p.Chats, ",") != "new-chat" {
+		t.Fatalf("pipeline after the removal: people %v, chats %v", p.People, p.Chats)
+	}
+}
+
+// The app's PUT takes lock_lists and allow_*: a removal that does not lock, the detail naming what was removed, and
+// allowing it again; an allow_* list the kind has no list for is said, not applied.
+func TestKBRouteRemovesOneLinkAndAllowsItAgain(t *testing.T) {
+	s := newKBService(t, newFakeHub())
+	e := kbEng(t, s)
+	_ = e.Store.PutPerson(&kb.Person{ID: "alice", Name: "alice", Projects: []string{"billing-migration"}})
+	_ = e.Store.PutProject(&kb.Project{Slug: "billing-migration", Name: "billing-migration", Status: "active", People: []string{"alice"}})
+	path := "/api/v1/kb/projects/billing-migration"
+	if w := boardCall(s, "PUT", path, `{"remove_people":["alice"],"lock_lists":false}`, roleFull); w.Code != 200 {
+		t.Fatalf("remove: HTTP %d %s", w.Code, w.Body)
+	}
+	w := boardCall(s, "GET", path, "", roleFull)
+	var got struct {
+		Detail struct {
+			Meta    map[string]any `json:"meta"`
+			Removed []kb.Entry     `json:"removed"`
+		} `json:"detail"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || len(got.Detail.Removed) != 1 || got.Detail.Removed[0].ID != "alice" || got.Detail.Meta["locked_fields"] != nil {
+		t.Fatalf("detail: %v %s", err, w.Body)
+	}
+	w = boardCall(s, "PUT", path, `{"allow_people":["alice"],"allow_projects":["other"]}`, roleFull)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"field":"allow_projects"`) {
+		t.Fatalf("allow: HTTP %d %s", w.Code, w.Body)
+	}
+	if p, _ := e.Store.Project("billing-migration"); len(p.Excluded) != 0 || len(p.People) != 0 {
+		t.Fatalf("after allowing: people %v, excluded %v", p.People, p.Excluded)
+	}
+}
 
 // The kb_* tools read the assistant's knowledge base and write what the model reads: defaults and caps of their
 // arguments, the lines, the list, an entry with its meta.json as the file has it and dates in the user's zone.
@@ -225,6 +303,9 @@ func TestInteractionAnswerRefusesApprovals(t *testing.T) {
 		{Kind: proto.IxPermission, ToolName: "Bash", Summary: "rm -rf"},
 		{Kind: proto.IxPlan, Plan: "1. do it"},
 		{Kind: proto.IxScreen},
+		// Claude Code's Bypass Permissions confirmation read off the terminal: the user's choice, never the assistant's.
+		{Kind: proto.IxScreen, Dialog: &dialogwire.Dialog{Question: "WARNING: Claude Code running in Bypass Permissions mode",
+			Options: []dialogwire.Option{{Key: "1", Label: "No, exit", Keys: []string{"enter"}}, {Key: "2", Label: "Yes, I accept", Keys: []string{"down", "enter"}}}}},
 	} {
 		s, _, q, _ := answerService(t)
 		ix.ID, ix.MachineID, ix.SessionID = "ix_"+ix.Kind, "mac", "abcdef12-agent"
@@ -413,5 +494,75 @@ func TestInboxDraftRules(t *testing.T) {
 	if _, err := runTool(s, "s1", "inbox_draft", map[string]any{"text": "hi", "changes": []map[string]string{{"ref": "r1", "field": "状态", "value": "作废"}}}); err == nil ||
 		err.Error() != "change {Ref:r1 Field:状态 Value:作废} is not one the item lists (ref, field and one of its values)" {
 		t.Fatalf("a change the item does not offer: %v", err)
+	}
+}
+
+// An answer that writes out exactly one option, its label then that option's own description ("label：description" as
+// the delegation input lists it, or ":", a dash, the description in brackets, with quotes or padding), is that option's
+// label (#3929). Anything else stays refused: another description or the model's own words after the label, a
+// description alone, two options, a separator with nothing after it, or text that fits two options at once.
+func TestInteractionAnswersTakeAnOptionWrittenOut(t *testing.T) {
+	style := proto.Question{Question: "测试用哪种写法？", Options: []proto.QuestionOption{
+		{Label: "表驱动", Description: "和这个包现有的测试一致"},
+		{Label: "每个用例一个函数", Description: "失败时更好定位"},
+		{Label: "不写"}}}
+	twoReadings := proto.Question{Question: "哪个？", Options: []proto.QuestionOption{
+		{Label: "A", Description: "B：C"}, {Label: "A：B", Description: "C"}}}
+	commas := proto.Question{Question: "缓存策略？", Options: []proto.QuestionOption{
+		{Label: "LRU", Description: "简单, 够用"}, {Label: "TTL"}}}
+	pick := proto.Question{Question: "改哪些？", MultiSelect: true, Options: []proto.QuestionOption{
+		{Label: "iOS", Description: "先修崩溃"}, {Label: "Android", Description: "再修列表"}, {Label: "Web"}}}
+	ask := func(q proto.Question) proto.Interaction {
+		return proto.Interaction{Kind: proto.IxQuestion, Questions: []proto.Question{q}}
+	}
+	for _, tc := range []struct {
+		q    proto.Question
+		in   any
+		want string // "": refused
+	}{
+		{style, "表驱动", "表驱动"},
+		{style, "表驱动：和这个包现有的测试一致", "表驱动"},
+		{style, "表驱动: 和这个包现有的测试一致", "表驱动"},
+		{style, "表驱动:和这个包现有的测试一致", "表驱动"},
+		{style, "表驱动 - 和这个包现有的测试一致", "表驱动"},
+		{style, "表驱动 —— 和这个包现有的测试一致", "表驱动"},
+		{style, "表驱动 — 和这个包现有的测试一致", "表驱动"},
+		{style, "表驱动（和这个包现有的测试一致）", "表驱动"},
+		{style, "表驱动 (和这个包现有的测试一致)", "表驱动"},
+		{style, "  表驱动：和这个包现有的测试一致\n", "表驱动"},
+		{style, "表驱动：和这个包现有的测试一致。", "表驱动"},
+		{style, "「表驱动」：和这个包现有的测试一致", "表驱动"},
+		{style, `"表驱动": 和这个包现有的测试一致`, "表驱动"},
+		{style, "“表驱动：和这个包现有的测试一致”", "表驱动"},
+		{style, " 「表驱动」 ", "表驱动"},
+		{style, "每个用例一个函数：失败时更好定位", "每个用例一个函数"},
+		{commas, "LRU：简单, 够用", "LRU"},
+		{pick, []string{"iOS：先修崩溃", "Web"}, "iOS, Web"},
+		{pick, "Android（再修列表）", "Android"},
+
+		{style, "表驱动：更好维护", ""},
+		{style, "表驱动：失败时更好定位", ""},
+		{style, "表驱动和这个包现有的测试一致", ""},
+		{style, "表驱动：", ""},
+		{style, "不写：", ""},
+		{style, "不写：没必要", ""},
+		{style, "和这个包现有的测试一致", ""},
+		{style, "表驱", ""},
+		{style, "表驱动：和这个包现有的测试一致；每个用例一个函数：失败时更好定位", ""},
+		{style, "表驱动（和这个包现有的测试一致", ""},
+		{twoReadings, "A：B：C", ""},
+		{pick, []string{"iOS：先修崩溃", "Web：顺手"}, ""},
+	} {
+		raw, _ := json.Marshal(map[string]any{tc.q.Question: tc.in})
+		got, err := interactionAnswers(ask(tc.q), raw)
+		if tc.want == "" {
+			if err == nil {
+				t.Errorf("%q: answered %q, want it refused", tc.in, got[tc.q.Question])
+			}
+			continue
+		}
+		if err != nil || got[tc.q.Question] != tc.want {
+			t.Errorf("%q: got %q %v, want %q", tc.in, got[tc.q.Question], err, tc.want)
+		}
 	}
 }

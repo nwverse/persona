@@ -60,7 +60,7 @@ type machineTrust struct {
 	mu      sync.Mutex
 	pending map[string]time.Time // machine id -> since
 	// leaving is the computers rejected or expired that the manager still reports: no row is a confirmed computer, so
-	// until it lets them go they are kept out as a pending one is (applyDeviceStates drops them from here).
+	// until it lets them go they are kept out as a pending one is (applyDeviceStatesFrom drops them from here).
 	leaving map[string]bool
 	// unknown: the pending computers could not be read (loadMachineTrust); every computer is kept out until they are.
 	// A hub that never read them (tests that do not run it) has none.
@@ -271,6 +271,28 @@ func (h *Hub) rejectMachine(ctx context.Context, id, actor, action string) error
 	return nil
 }
 
+// dropPending ends a pending computer that went without a reject (dropped with the manager that kept it,
+// ownership_moves.go releaseMachines), as rejectMachine ends one: its Persona Link credentials and pairing codes are
+// revoked, and its row and its place among the pending go. A failure is logged; the expiry removes it later.
+func (h *Hub) dropPending(ctx context.Context, id, why string) {
+	ts := h.trustStore()
+	if ts == nil || !h.machinePending(id) {
+		return
+	}
+	revoked, err := h.revokeComputer(ctx, id)
+	if err == nil {
+		err = ts.ForgetMachineTrust(ctx, id)
+	}
+	if err != nil {
+		h.logf("[%s] %s, but it still waits to be confirmed: %v", id, why, err)
+		return
+	}
+	h.setPendingLocal(id, time.Time{}, false)
+	detail, _ := json.Marshal(map[string]any{"credentials_revoked": revoked, "why": why})
+	h.machineAudit(ctx, id, "remove", "hub", detail)
+	h.broadcastMachines()
+}
+
 // machineAudit writes one audit row; a failure is logged, the change stands.
 func (h *Hub) machineAudit(ctx context.Context, id, action, actor string, detail json.RawMessage) {
 	ts := h.trustStore()
@@ -299,7 +321,14 @@ func (h *Hub) expirePending(ctx context.Context, now time.Time) {
 	t.mu.Unlock()
 	slices.Sort(due)
 	for _, id := range due {
-		if err := h.rejectMachine(ctx, id, "hub", "expire"); err != nil && !errors.Is(err, errNotPending) {
+		// Rejecting a computer writes the trust rows; its audit, and hub.json's
+		// machine entry: left for the next sweep while a snapshot pauses writes.
+		if !h.quiesce.begin() {
+			return
+		}
+		err := h.rejectMachine(ctx, id, "hub", "expire")
+		h.quiesce.end()
+		if err != nil && !errors.Is(err, errNotPending) {
 			h.logf("[%s] remove after waiting a day to be confirmed: %v", id, err)
 		}
 	}
@@ -312,6 +341,9 @@ func (h *Hub) machineTrustLoop(ctx context.Context) {
 			wait = trustRetryEvery
 		} else {
 			h.expirePending(ctx, time.Now())
+		}
+		if !h.retryMachineAssignments(ctx) {
+			wait = trustRetryEvery
 		}
 		select {
 		case <-ctx.Done():
@@ -396,7 +428,9 @@ const (
 // machineErrorCode is the code for what s shows (kind is its hub.json entry's): "" when none fits.
 func machineErrorCode(s proto.Machine, kind string) string {
 	if s.Online {
-		if s.NodeMismatch && kind != "local" && s.CanDeploy != nil && !*s.CanDeploy {
+		// A compatible node that could take an update but for which the hub has no build now is not outdated:
+		// deploy_reason says what to supply (#10566). One this hub cannot drive still needs its own upgrade.
+		if s.NodeMismatch && kind != "local" && s.CanDeploy != nil && !*s.CanDeploy && (!s.DeployNoPackage || s.NodeIncompatible != "") {
 			return errCodeNodeOutdated
 		}
 		return ""

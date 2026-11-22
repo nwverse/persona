@@ -305,6 +305,20 @@ final class CustomModelUITests: XCTestCase {
         clearDraft()
     }
 
+    /// A running session's model menu is its launcher's list (#3754): the rows New Agent offers for it (Fable, the
+    /// gateway's models), not only Default / Opus / Sonnet / Haiku; the alias it runs is ticked.
+    @MainActor func testARunningSessionsMenuIsTheLaunchersList() throws {
+        launch(["-ui.oldLayout", "NO", "-openSession", review])
+        modesButton().tap()
+        see(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Fable")).firstMatch, "Fable in the model menu")
+        see(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "glm-5.3")).firstMatch, "a gateway model in the model menu")
+        let opus = see(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Opus 5.5")).firstMatch, "the alias it runs")
+        XCTAssertTrue(opus.isSelected, "the alias it runs isn't ticked")
+        shot("session-list-menu")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap() // the menu closes
+        clearDraft()
+    }
+
     // MARK: The Persona chat
 
     /// The launcher menu: the IDs typed before under the launcher's models, and "Other Model…" for the next message.
@@ -340,5 +354,17 @@ final class CustomModelUITests: XCTestCase {
         shot("chat-typed")
         app.buttons["typedModel.use"].tap()
         see(labelled("vendor/model-y"), "the toast naming it")
+    }
+
+    /// Every row in the main chat's model sheet names its launcher, not just the section header.
+    @MainActor func testTheMainChatsModelRowsNameTheirLauncher() throws {
+        launch(["-tab", "assistant", "-openAssistant", "server/b2e4d6f8-0000-4000-8000-000000000001"])
+        let pill = modesButton()
+        pill.tap()
+        see(app.buttons["sessionModes.assistantModel"], "the main chat's model sheet").tap()
+        let row = see(app.buttons["assistantModel.claude.opus"], "the Opus row")
+        shot("assistant-model-launcher")
+        let detail = app.staticTexts["claude · opus → claude-opus-5-5"].firstMatch
+        XCTAssertTrue(detail.waitForExistence(timeout: 2), row.label)
     }
 }

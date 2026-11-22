@@ -8,14 +8,19 @@ import type { TermPane, TermSpace, TermTab } from "./terminals";
 import type { Launcher, Machine, Session } from "./types";
 import { copyText, toast } from "../ui/atoms";
 import { openNewAgent } from "./new-agent";
-import { openNewWorktree } from "./worktree";
+import { navigate } from "./router";
+import { openNewWorktree } from "./worktree-request";
 import type { MenuItem } from "../ui/menu-model";
 import { launcherBlock, usableFirst } from "./launcher-health";
+import { providerIdNote, providerTitle } from "./provider-names";
+import { closeListedAgent } from "./close-agent";
 
 export type NodeKind = "machine" | "workspace" | "tab" | "pane";
 
 export interface MenuNode {
   kind: NodeKind;
+  /** Session rows describe the conversation, never operations on its terminal pane. */
+  sessionOnly?: boolean;
   mid: string;
   /** The machine is online; a node of one that is away is only copied from. */
   online?: boolean;
@@ -39,7 +44,7 @@ export interface MenuNode {
   canWorktree?: boolean;
   /** The node's fold: the row it hangs under folds and opens (the sidebar's and the terminal page's `fold:` keys). */
   fold?: { folded: boolean; toggle: () => void };
-  /** "New terminal" in this workspace (the terminal page). */
+  /** "New terminal" in this workspace, or on this computer when it has no workspace yet (the terminal page). */
   onOpenShell?: () => void;
   /** Read the list again (the terminal page). */
   onRefresh?: () => void;
@@ -56,10 +61,16 @@ export interface NodeActionDeps {
   newAgent: (mid: string, cwd: string) => void;
   /** "New worktree…" for this workspace (the dialog, #2431); a deps without it leaves the item out. */
   newWorktree?: (node: MenuNode) => void;
+  /** Opens a session's chat: the agent "Run agent here" started, as "New agent" opens the one it starts (#3287). */
+  openSession: (mid: string, sid: string) => void;
   copy: (text: string) => void;
   notify: (text: string, tone: "ok" | "error" | "info") => void;
   /** The tree changed on the computer: read it again. */
   changed: () => void;
+  /** "Close pane" on a pane an agent runs in (#7125): the agent's "Close…" (lib/close-agent.ts), which says what
+   *  closing interrupts, instead of the menu's second click. Undefined (a session this page doesn't list, or nothing
+   *  to close it with): the pane closes as a shell's does. */
+  closeAgent?: (mid: string, sid: string) => Pick<MenuItem, "onSelect" | "disabled" | "detail"> | undefined;
 }
 
 export function defaultNodeDeps(changed: () => void = () => {}): NodeActionDeps {
@@ -73,9 +84,11 @@ export function defaultNodeDeps(changed: () => void = () => {}): NodeActionDeps 
     launchers: (mid) => api<{ launchers: Launcher[] }>(`/machines/${enc(mid)}/launchers`).then((r) => r.launchers ?? []),
     newAgent: (mid, cwd) => openNewAgent({ machineId: mid, cwd }),
     newWorktree: (node) => openNewWorktree(node, changed),
+    openSession: (mid, sid) => navigate({ name: "session", mid, sid }),
     copy: (text) => void copyText(text),
     notify: (text, tone) => toast(text, tone),
     changed,
+    closeAgent: closeListedAgent,
   };
 }
 
@@ -84,11 +97,20 @@ export interface NodeActionOptions {
   omit?: readonly string[];
 }
 
-/** Closing, splitting, renaming and git are herdr's: another host (Orca, herdr-core, botmux) is not asked to do them. */
+/** Closing, splitting, git and running an agent in a shell are herdr's: another host (Orca, herdr-core, Tern, Rex, botmux) is
+ *  not asked to do them. */
 export const canChangeHost = (host: string | undefined) => !host || host === "herdr";
 
-/** Only the agents a launcher starts the way "New agent" does without a first message: Claude Code. */
-export const launchableHere = (l: Launcher) => (l.agent_type || l.agent || "claude") === "claude";
+/** Renaming a workspace or a tab is herdr's, Tern's and Rex's (the capability table in docs/integrations/engines.md). */
+export const canRenameIn = (host: string | undefined) => canChangeHost(host) || host === "tern" || host === "rex";
+
+/** Claude Code, and a launcher the computer says it starts in a pane the user picked, keeping that pane when the start
+ *  fails (`run_here`: its Codex launchers, #5504). An older computer's failed Codex start closes its pane, here the
+ *  user's own shell (#5275): there Codex starts from "New agent" in a tab of its own. Never one that starts the session
+ *  in a desktop app (#5480, lib/desktop-start.ts's sources, spelled out here so that module stays off the first screen):
+ *  typed into a shell it would run nothing, and the computer refuses it. */
+export const launchableHere = (l: Launcher) =>
+  l.source !== "claude_desktop" && l.source !== "codex_app" && (l.run_here || (l.agent_type || l.agent || "claude") === "claude");
 
 export const GIT_OPS = [
   { op: "pull", label: t("lib-node-actions.git_pull"), accel: "p", done: "lib-node-actions.git_pull_done" },
@@ -96,11 +118,34 @@ export const GIT_OPS = [
   { op: "fetch", label: t("lib-node-actions.git_fetch"), accel: "f", done: "lib-node-actions.git_fetch_done" },
 ] as const;
 
-/** The menu items of a node, in groups (a hairline between them): fold and open, rename, make and run, copy, close. */
+/** What `panes/git` answers: what came of it (#1888) and the node's own one-line summary, all an older node sends. */
+export interface PaneGitResult {
+  op?: string;
+  outcome?: string;
+  message?: string;
+}
+
+/** What `panes/agent` answers: the session it started in the pane (`docs/protocol/protocol.md`). */
+export interface PaneAgentResult {
+  session_id?: string;
+}
+
+const GIT_OUTCOMES = new Set(["fetched", "up_to_date", "pulled", "nothing_to_push", "pushed"]);
+
+/** What a node menu's Git ▸ Pull / Push / Fetch did, in the app's language; an outcome this app doesn't know (an older
+ *  node sends none) shows the node's own words. */
+export function gitOutcomeText(res: PaneGitResult | undefined): string {
+  if (res?.outcome && GIT_OUTCOMES.has(res.outcome)) return t(`lib-node-actions.git_outcome_${res.outcome}`);
+  return res?.message || t("lib-node-actions.git_done_fallback");
+}
+
+/** The menu items of a node, in groups (a hairline between them): fold and open, rename, make, run and close a pane, copy,
+ *  close a tab. */
 export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActionOptions = {}): MenuItem[] {
   const { mid } = node;
   const online = node.online !== false;
   const writes = online && canChangeHost(node.host);
+  const renames = online && canRenameIn(node.host);
   const kind = node.host ? { kind: node.host } : {};
   const fail = (key: string, e: unknown) => new Error(t(key, { error: errorText(e) }));
 
@@ -121,14 +166,14 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
   group(
     node.fold && { key: "node-fold", label: node.fold.folded ? t("lib-node-actions.expand") : t("lib-node-actions.collapse"), icon: node.fold.folded ? "arrowDown" : "chevron", accel: "z", onSelect: node.fold.toggle },
     node.kind === "workspace" && online && Boolean(node.cwd) && { key: "node-new-agent", label: t("lib-node-actions.new_agent"), icon: "agent", accel: "n", onSelect: () => deps.newAgent(mid, node.cwd!) },
-    node.kind === "workspace" && online && node.onOpenShell && { key: "node-shell", label: t("lib-node-actions.new_terminal"), icon: "terminal", accel: "t", onSelect: node.onOpenShell },
+    (node.kind === "workspace" || node.kind === "machine") && online && node.onOpenShell && { key: "node-shell", label: t("lib-node-actions.new_terminal"), icon: "terminal", accel: "t", onSelect: node.onOpenShell },
     node.kind === "machine" && node.onRefresh && { key: "node-refresh", label: t("lib-node-actions.refresh"), icon: "retry", accel: "r", onSelect: node.onRefresh },
   );
 
   // ── rename ──
   const renameValue = node.label ?? "";
   group(
-    node.kind === "workspace" && writes && Boolean(node.workspaceId) && {
+    node.kind === "workspace" && renames && Boolean(node.workspaceId) && {
       key: "node-rename",
       label: t("lib-node-actions.rename"),
       icon: "pencil",
@@ -144,7 +189,7 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
         },
       },
     },
-    node.kind === "tab" && writes && Boolean(node.tabId) && {
+    node.kind === "tab" && renames && Boolean(node.tabId) && {
       key: "node-rename",
       label: t("lib-node-actions.rename"),
       icon: "pencil",
@@ -162,7 +207,7 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
     },
   );
 
-  // ── make and run: split, an agent here, git ──
+  // ── make, run and close: a worktree, split, close the pane, an agent here, git ──
   const split = (direction: "right" | "down", label: string, accel: string): MenuItem => ({
     key: `node-split-${direction}`,
     label,
@@ -174,14 +219,20 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
       deps.changed();
     },
   });
+  // a push sends the branch off the computer: it asks first, as the Git panel's Push does (#1883); pull and fetch run at once
+  const pushAsk = {
+    confirm: t("lib-node-actions.git_push_confirm"),
+    confirmDetail: node.branch ? t("lib-node-actions.git_push_confirm_detail", { branch: node.branch }) : t("lib-node-actions.git_push_confirm_detail_current"),
+  };
   const git = (op: (typeof GIT_OPS)[number]): MenuItem => ({
     key: `node-git-${op.op}`,
     label: op.label,
     accel: op.accel,
+    ...(op.op === "push" ? pushAsk : {}),
     inline: true,
     onSelect: async () => {
-      const res = (await deps.post(mid, "panes/git", { op: op.op, ...gitTarget }).catch((e) => Promise.reject(new Error(errorText(e))))) as { message?: string } | undefined;
-      deps.notify(t(op.done, { message: res?.message ?? t("lib-node-actions.git_done_fallback") }), "ok");
+      const res = (await deps.post(mid, "panes/git", { op: op.op, ...gitTarget }).catch((e) => Promise.reject(new Error(errorText(e))))) as PaneGitResult | undefined;
+      deps.notify(t(op.done, { message: gitOutcomeText(res) }), "ok");
       deps.changed();
     },
   });
@@ -189,21 +240,44 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
     const block = launcherBlock(l);
     return {
       key: `node-agent-${l.name}`,
-      label: l.name,
-      hint: l.model,
+      // a provider by its display name, its startup ID at the row's end before the model (#5029); an rc alias by its ID
+      label: providerTitle(l),
+      hint: [providerIdNote(l), l.model].filter(Boolean).join(" · ") || undefined,
       // the pane's shell is a terminal's too: what "New agent" grays out is said here before it is chosen, after the
       // ones that can start (#1643); still a choice, as on iOS and New agent's "Try anyway": a start that works clears it
       ...(block ? { detail: block.reason, divider: i > 0 && !launcherBlock(all[i - 1]) } : {}),
       inline: true,
       onSelect: async () => {
-        await deps.post(mid, "panes/agent", { pane: node.paneId, launcher: l.name }).catch((e) => Promise.reject(fail("lib-node-actions.start_failed", e)));
-        deps.notify(t("lib-node-actions.started_in_pane", { name: l.name }), "ok");
+        const res = (await deps.post(mid, "panes/agent", { pane: node.paneId, launcher: l.name }).catch((e) => Promise.reject(fail("lib-node-actions.start_failed", e)))) as PaneAgentResult | undefined;
+        deps.notify(t("lib-node-actions.started_in_pane", { name: providerTitle(l) }), "ok");
         deps.changed();
+        // into the new agent's chat, as "New agent" opens the one it starts (#3287); an answer naming none stays here
+        const sid = res?.session_id?.trim();
+        if (sid) deps.openSession(mid, sid);
       },
     };
   };
   const gitMenu = writes && node.kind !== "machine" && Boolean(gitTarget);
   const newWorktree = deps.newWorktree;
+  // a pane closes with the pane's own actions, next to New pane (#7125); one an agent runs in asks as the agent's
+  // Close… does, so a busy agent is never closed by the menu's second click alone
+  const agentClose = node.kind === "pane" && node.sessionId ? deps.closeAgent?.(mid, node.sessionId) : undefined;
+  const closePane: MenuItem = {
+    key: "node-close-pane",
+    label: t("lib-node-actions.close_pane"),
+    icon: "x",
+    danger: true,
+    closes: true,
+    ...(agentClose ?? {
+      confirm: t("lib-node-actions.close_confirm"),
+      inline: true,
+      onSelect: async () => {
+        await deps.post(mid, "panes/close", { pane: node.paneId }).catch((e) => Promise.reject(fail("lib-node-actions.close_failed", e)));
+        deps.notify(t("lib-node-actions.pane_closed"), "ok");
+        deps.changed();
+      },
+    }),
+  };
   group(
     node.kind === "workspace" && writes && node.canWorktree && Boolean(node.workspaceId) && newWorktree && {
       key: "node-worktree",
@@ -220,6 +294,7 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
       onSelect: noop,
       children: [split("right", t("lib-node-actions.split_right"), "r"), split("down", t("lib-node-actions.split_down"), "d")],
     },
+    node.kind === "pane" && writes && Boolean(node.paneId) && closePane,
     writes && isShell && Boolean(node.paneId) && {
       key: "node-agent",
       label: t("lib-node-actions.run_agent_here"),
@@ -240,16 +315,19 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
   );
 
   // ── copy ──
-  const herdrId = node.kind === "pane" ? node.paneId : node.kind === "tab" ? node.tabId : node.kind === "workspace" ? node.workspaceId : undefined;
+  // the engine's own id of the space, tab or pane, named by what it is: a menu never says the engine's name
+  const [engineId, engineIdLabel] = node.kind === "pane" ? [node.paneId, t("lib-node-actions.copy_pane_id")]
+    : node.kind === "tab" ? [node.tabId, t("lib-node-actions.copy_tab_id")]
+    : node.kind === "workspace" ? [node.workspaceId, t("lib-node-actions.copy_workspace_id")] : [undefined, ""];
   group(
     node.kind !== "machine" && copy("node-copy-path", t("lib-node-actions.copy_path"), "c", node.cwd),
     node.kind !== "machine" && node.kind !== "workspace" && copy("node-copy-session", t("lib-node-actions.copy_session_id"), "s", node.sessionId),
-    node.kind !== "machine" && copy("node-copy-id", t("lib-node-actions.copy_herdr_id"), "i", herdrId),
+    node.kind !== "machine" && copy("node-copy-id", engineIdLabel, "i", engineId),
     node.kind !== "machine" && !gitMenu && copy("node-copy-branch", t("lib-node-actions.copy_branch"), "b", node.branch),
     node.kind === "machine" && copy("node-copy-machine", t("lib-node-actions.copy_machine_id"), "i", mid),
   );
 
-  // ── close ──
+  // ── close the tab ──
   group(
     node.kind === "tab" && writes && Boolean(node.tabId) && {
       key: "node-close-tab",
@@ -265,23 +343,10 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
         deps.changed();
       },
     },
-    node.kind === "pane" && writes && Boolean(node.paneId) && {
-      key: "node-close-pane",
-      label: t("lib-node-actions.close_pane"),
-      icon: "x",
-      danger: true,
-      closes: true,
-      confirm: t("lib-node-actions.close_confirm"),
-      inline: true,
-      onSelect: async () => {
-        await deps.post(mid, "panes/close", { pane: node.paneId }).catch((e) => Promise.reject(fail("lib-node-actions.close_failed", e)));
-        deps.notify(t("lib-node-actions.pane_closed"), "ok");
-        deps.changed();
-      },
-    },
   );
 
   const omit = new Set(opts.omit);
+  if (node.sessionOnly) for (const key of ["node-split", "node-close-pane", "node-copy-id"]) omit.add(key);
   return groups
     .map((g) => g.filter((it) => !omit.has(it.key)))
     .filter((g) => g.length)
@@ -299,6 +364,7 @@ export function machineNode(m: Machine, extra: Partial<MenuNode> = {}): MenuNode
 export function sessionNode(s: Session, online: boolean, extra: Partial<MenuNode> = {}): MenuNode {
   return {
     kind: "pane",
+    sessionOnly: true,
     mid: s.machine_id,
     online,
     host: s.space_kind,

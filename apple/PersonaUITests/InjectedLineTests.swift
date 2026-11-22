@@ -1,6 +1,6 @@
 import XCTest
 
-/// Messages Persona typed in for the model in the main conversation (#2358, docs/protocol/protocol.md「Persona 注入的消息」): a
+/// Messages Persona typed in for the model in the main conversation (#2358, docs/protocol/protocol.md「Messages injected by Persona」): a
 /// task's notice and a scheduled run are each one centered line, never a bubble with the model's instructions; the
 /// notice opens its task, the run's line opens to what the task asks. Against scripts/mock/mock_hub.py with
 /// MOCK_TASKS=1 MOCK_INJECTED=1 MOCK_TASKS_NO_ASKS=1 MOCK_TASKS_AT=14 (the lines at the bottom) (PERSONA_MOCK_HUB). With

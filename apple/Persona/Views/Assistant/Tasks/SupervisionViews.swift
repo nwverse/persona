@@ -63,7 +63,8 @@ struct ReviewChecklist: View {
     }
 }
 
-/// One criterion: met (a check), missing (a cross) or not reviewed yet (a clock), with its evidence or gap below.
+/// One criterion: met (a check), missing (a cross), not reviewed yet (a clock) or added after a standing acceptance and
+/// not checked (a dash), with its evidence or gap below.
 private struct CriterionRow: View {
     var item: ReviewCheckItem
 
@@ -96,6 +97,7 @@ private struct CriterionRow: View {
         case .met: Theme.Icon.done
         case .missing: Theme.Icon.unmet
         case .open: Theme.Icon.time
+        case .unchecked: Theme.Icon.notChecked
         }
     }
 
@@ -103,7 +105,7 @@ private struct CriterionRow: View {
         switch item.mark {
         case .met: Theme.positive
         case .missing: Theme.danger
-        case .open: .secondary
+        case .open, .unchecked: .secondary
         }
     }
 
@@ -112,113 +114,33 @@ private struct CriterionRow: View {
         case .met: String(localized: "Met")
         case .missing: String(localized: "Missing")
         case .open: String(localized: "Not reviewed yet")
+        case .unchecked: String(localized: "Not checked")
         }
     }
 }
 
-/// What the task's agent last told Persona, under the card's current step (only while the task is open).
-struct TaskProgressLine: View {
-    var line: String
+/// "Nobody is working on this · closed after an error" (#3618, docs/assistant/todos.md "Nobody is working on this"): an
+/// open task every agent of which is gone, with nothing set to bring one back. Drawn where the task's supervision
+/// state is (its to-do row, its page; the task board says it in its subtitle), in the caution color with the warning
+/// mark; not while the task waits for the user, which is not waiting on an agent. The native Mac app is frozen and does
+/// not draw it.
+struct OrphanedLine: View {
+    var todo: TodoItem
+    var state: TaskState
 
     var body: some View {
-        Label {
-            Text(line).lineLimit(1)
-        } icon: {
-            ThemedIcon(Theme.Icon.reported).font(Theme.Font.labelStrong)
-        }
-        .labelStyle(.titleAndIcon)
-        .font(Theme.Font.caption)
-        .foregroundStyle(.secondary)
-        .accessibilityIdentifier("task-progress-line")
-    }
-}
-
-/// A review in the conversation (feed kind `review`): a capsule like the answered line, with the task (a tap opens it),
-/// the verdict and the supervisor's note.
-struct ReviewFeedLine: View {
-    var item: FeedItem
-    var taskTitle: String
-    private var store: TasksStore { .shared }
-
-    var body: some View {
-        HStack(spacing: Theme.Space.s) {
-            ThemedIcon(Theme.Icon.supervised).font(Theme.Font.labelStrong)
-            HStack(spacing: Theme.Space.xs) {
-                if let id = item.ref, store.todos[id] != nil {
-                    Button { store.detailTask = id } label: { Text(taskTitle).lineLimit(1) }
-                        .buttonStyle(.plain)
-                        .layoutPriority(1)
-                } else {
-                    Text(taskTitle).lineLimit(1).layoutPriority(1)
-                }
-                Text("· \(ReviewText.verdict(item.verdict ?? "", round: item.round))")
-                    .font(Theme.Font.captionStrong)
-                    .lineLimit(1)
-                    .fixedSize()
-                if let note = item.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
-                    Text(note).lineLimit(1)
-                }
+        #if !os(macOS)
+        if state != .needsYou, let line = todo.orphanedLine {
+            // Not a `Label`: in a list row its icon takes the row's icon column, far from the words.
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
+                ThemedIcon(Theme.Icon.error).font(Theme.Font.labelStrong)
+                Text(line).lineLimit(2)
             }
+            .font(Theme.Font.caption)
+            .foregroundStyle(Theme.cautionText)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("task-orphaned-line")
         }
-        .font(Theme.Font.caption)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, Theme.Space.m)
-        .padding(.vertical, Theme.Space.sm)
-        .background(Theme.Fill.chip, in: .capsule)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("review-line")
-        .accessibilityAction(named: "Open Task") { if let id = item.ref, store.todos[id] != nil { store.detailTask = id } }
-    }
-}
-
-/// A supervised task's agent reported to Persona (feed kind `report`: a question, a block, a finish): who, what it said
-/// in a bubble (newlines kept), and its evidence below. On the left, as the agent's words, not the user's.
-struct ReportFeedLine: View {
-    /// At most this many evidence lines, like the web.
-    static let evidenceShown = 8
-
-    var item: FeedItem
-    var taskTitle: String
-    private var store: TasksStore { .shared }
-
-    var body: some View {
-        let kind = item.reportKind ?? ""
-        let attention = ReviewText.reportWantsAttention(kind)
-        VStack(alignment: .leading, spacing: Theme.Space.xs) {
-            Button {
-                if let id = item.ref, store.todos[id] != nil { store.detailTask = id }
-            } label: {
-                Label("“\(taskTitle)” reported to Persona", systemImage: Theme.Icon.reported)
-                    .font(Theme.Font.captionMedium)
-                    .foregroundStyle(attention ? Theme.cautionText : .secondary)
-                    .lineLimit(1)
-            }
-            .buttonStyle(.plain)
-            .disabled(item.ref.flatMap { store.todos[$0] } == nil)
-            Text(ReviewText.reportLine(kind: kind, text: item.text ?? "", step: item.step, steps: item.steps))
-                .font(Theme.Font.body)
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-                .padding(.horizontal, Theme.Space.m)
-                .padding(.vertical, Theme.Space.s)
-                .background(Theme.Fill.chip, in: .rect(cornerRadius: Theme.Radius.bubble, style: .continuous))
-            let evidence = item.evidence.prefix(Self.evidenceShown)
-            if !evidence.isEmpty {
-                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    ForEach(Array(evidence.enumerated()), id: \.offset) { _, e in
-                        Text("· \(e)").lineLimit(1).truncationMode(.middle)
-                    }
-                }
-                .font(Theme.Font.caption)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .padding(.leading, Theme.Space.xs)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.trailing, Theme.Space.xxl)
-        .accessibilityIdentifier("report-line")
+        #endif
     }
 }

@@ -75,6 +75,23 @@ func TestBackgroundTaskNotices(t *testing.T) {
 	if ev.Task.TaskID != notes[2].Task.TaskID || ev.Task.Title != notes[2].Task.Title {
 		t.Fatal("a Monitor's event and its end carry its task id and description")
 	}
+	if len(meta.Background) != 0 || len(meta.BackgroundEnded) != 3 {
+		t.Fatalf("final background state: running %+v ended %+v", meta.Background, meta.BackgroundEnded)
+	}
+	for _, notice := range notes[2:] {
+		found := false
+		for _, ended := range meta.BackgroundEnded {
+			if ended.ID == notice.Task.TaskID {
+				found = true
+				if ended.Status != "ended" || ended.OutputFile == "" || ended.OutputFile != notice.Task.OutputFile {
+					t.Fatalf("retained Monitor: %+v, notice %+v", ended, notice.Task)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("Monitor %s has no retained outcome", notice.Task.TaskID)
+		}
+	}
 }
 
 // Completed workflow notifications were observed as both user messages and queued-command attachments.
@@ -307,18 +324,17 @@ func TestHandedBackNotificationNamesTheSubagentsCall(t *testing.T) {
 		return out
 	}
 	got := notices(append(launch, waiting, handback, done)...)
-	if len(got) != 2 || got[0].Status != "waiting" || got[1].Status != "completed" {
-		t.Fatalf("notices %+v, want waiting then completed", got)
+	if len(got) != 4 || got[0].Status != "running" || got[1].Status != "waiting" || got[2].Status != "completed" || got[3].Status != "completed" {
+		t.Fatalf("results %+v, want launch, waiting, handback, completion", got)
 	}
-	if got[0].ToolUseID != "toolu_launch" || got[0].Detail != "" {
-		t.Errorf("waiting %+v: want the call, and no detail (Claude Code's note to the session)", got[0])
+	if got[1].ToolUseID != "toolu_launch" || got[1].Detail != "" {
+		t.Errorf("waiting %+v: want the call and no harness detail", got[1])
 	}
-	if got[1].ToolUseID != "toolu_launch" || got[1].Detail != "## Summary\n\nAll tests pass." {
-		t.Errorf("completed %+v: want the call and the report", got[1])
+	if got[2].ToolUseID != "toolu_launch" || got[2].Detail != "## Summary\n\nAll tests pass." || got[3].Detail != "" {
+		t.Errorf("completed %+v: the handback holds the report and the notice does not repeat it", got[2:])
 	}
-	// a task no earlier notification named the call of gets none
-	if got := notices(append(launch, handback, done)...); len(got) != 1 || got[0].ToolUseID != "" {
-		t.Errorf("no earlier notification: %+v", got)
+	if got := notices(append(launch, handback, done)...); len(got) != 3 || got[2].ToolUseID != "toolu_launch" {
+		t.Errorf("launch receipt associates the call without an earlier notification: %+v", got)
 	}
 }
 
@@ -364,16 +380,16 @@ func TestHandedBackNotificationNamesTheCallAcrossWindows(t *testing.T) {
 	if windowed.base == 0 {
 		t.Fatal("the file was not read in a window")
 	}
-	const want = "completed:toolu_launch:## Summary\n\nAll tests pass."
+	const want = "completed:toolu_launch:"
 	if got := calls(fresh); len(got) != 1 || got[0] != want {
-		t.Fatalf("the window's notices %q, want the call and the report from the lines before the window", got)
+		t.Fatalf("the window's results %q, want the original call's completion", got)
 	}
 	windowBytes = 1 << 40
 	whole := NewFile(p)
 	if _, _, err := whole.RefreshSpan(); err != nil {
 		t.Fatal(err)
 	}
-	if got := calls(allItems(whole)); len(got) != 2 || got[0] != "waiting:toolu_launch:" || got[1] != want {
+	if got := calls(allItems(whole)); len(got) != 3 || got[0] != "waiting:toolu_launch:" || got[1] != "completed:toolu_launch:## Summary\n\nAll tests pass." || got[2] != want {
 		t.Fatalf("whole read %q", got)
 	}
 }

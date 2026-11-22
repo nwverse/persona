@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Two of Settings › Appearance's three choices of how the app looks (docs/apple/ios.md「设计语言」), each apart from the others: Theme Color
+// Two of Settings › Appearance's three choices of how the app looks (docs/apple/ios.md「Design language」), each apart from the others: Theme Color
 // (`ThemeColorPicker`) and Interface Style (`StylePicker`); the third is Avatar (`PersonaPicker`). A choice rebuilds the view tree
 // (`AppModel.look`); Appearance stays open because the settings path is AppModel's.
 
@@ -8,7 +8,6 @@ import SwiftUI
 /// when the persona brings colors, then the styles' own colors, each a disc of its accent.
 struct ThemeColorPicker: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     /// Match Avatar only when the persona brings colors, or when it is the choice already (so the choice stays in sight).
     private var options: [ThemeColor] {
@@ -16,9 +15,9 @@ struct ThemeColorPicker: View {
         return [.style] + (persona ? [.persona] : []) + ThemeColor.presets
     }
 
-    /// Four a row; three at accessibility sizes.
+    /// Four a row.
     private var columns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: Theme.Space.s, alignment: .top), count: typeSize.isAccessibilitySize ? 3 : 4)
+        Array(repeating: GridItem(.flexible(), spacing: Theme.Space.s, alignment: .top), count: 4)
     }
 
     var body: some View {
@@ -143,11 +142,10 @@ private struct LookSample: View {
 /// last two were off a 402 pt screen with nothing saying so.
 struct StylePicker: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.dynamicTypeSize) private var typeSize
 
-    /// Three previews a row; two at accessibility sizes, where three cut every name.
+    /// Three previews a row.
     private var columns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: typeSize.isAccessibilitySize ? 2 : 3)
+        Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: 3)
     }
 
     var body: some View {

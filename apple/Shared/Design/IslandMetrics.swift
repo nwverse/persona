@@ -4,7 +4,7 @@ import SwiftUI
 /// Dynamic Island. A table of its own because the widget extension builds this file but not `Theme`. The island's type has fixed
 /// sizes: the system gives its regions in points, whatever the text size.
 nonisolated enum IslandMetrics {
-    // MARK: What the system gives (measured on the iOS 27 simulators, docs/apple/live-activity.md「和其他 App 共用灵动岛」)
+    // MARK: What the system gives (measured on the iOS 27 simulators, docs/apple/live-activity.md「Sharing the Dynamic Island with other apps」)
 
     /// A compact side limited in width (`isDynamicIslandLimitedInWidth`: another app's activity beside ours on iPhone 18
     /// Pro / Pro Max, landscape, iPhone Duo), and the minimal island in landscape: a 28 pt square, drawn as a circle.
@@ -42,7 +42,7 @@ nonisolated enum IslandMetrics {
     static let smallGap: CGFloat = 1
     /// A compact side's inset from the island's rounded end.
     static let edge: CGFloat = 2
-    /// The persona on the compact island's left side (docs/apple/live-activity.md「形象」), and the gap to its count.
+    /// The persona on the compact island's left side (docs/apple/live-activity.md「Avatar」), and the gap to its count.
     static let face: CGFloat = 22
     static let faceGap: CGFloat = 4
     /// The persona in the expanded island's corner and on the lock screen (a hub package's pictures are made at every
@@ -62,6 +62,39 @@ nonisolated enum IslandMetrics {
     static let packedRowGap: CGFloat = 4
     /// Above the expanded island's rows, below its corners.
     static let rowsTop: CGFloat = 4
+
+    // MARK: The recording activity (docs/apple/live-activity.md「Recording」)
+
+    /// The compact island's time: room for "1:23:45" at `timerNumber` (a two-hour meeting), no more.
+    static let recordingTimerWidth: CGFloat = 54
+    /// The expanded island's and the Lock Screen's time, at `.title3`: "1:23:45" whole. Fixed, as `Text(timerInterval:)`
+    /// takes all the width it is offered.
+    static let recordingExpandedTimerWidth: CGFloat = 92
+    /// Between the Lock Screen's and the expanded island's buttons.
+    static let buttonGap: CGFloat = 10
+    /// The meeting's End (#8731 V4): a link that opens the meeting and asks first, drawn as the capsule the other buttons
+    /// are (the system's bordered capsule at the regular size).
+    static let recordingButtonHeight: CGFloat = 34
+    /// The box around Persona's answer (#8731 V4): its inset and its corners.
+    static let recordingAnswerInset: CGFloat = 6
+    static let recordingAnswerRadius: CGFloat = 10
+    /// The expanded island's button row's inset from its sides (#5819): the row sits at the island's bottom, where the
+    /// corners round in, and with Ask Persona taking the width the Stop capsule ran into the right corner and was cut.
+    static let recordingIslandButtonsInset: CGFloat = 12
+    /// The Lock Screen's inset from the activity's edges.
+    static let lockPadding: CGFloat = 16
+
+    // MARK: Alarms and timers (docs/apple/live-activity.md「Alarms and timers (AlarmKit)」)
+
+    /// The compact island's countdown: room for "1:23:45" at `timerNumber`, no more.
+    static let alarmTimerWidth: CGFloat = 54
+    /// The expanded island's countdown, at `.title3`: "1:23:45" whole.
+    static let alarmExpandedTimerWidth: CGFloat = 92
+    /// The Lock Screen's countdown, at `.title2` (capped at the default text size there): "1:23:45" whole, with margin.
+    /// Fixed, as `Text(timerInterval:)` takes all the width it is offered.
+    static let alarmLockTimerWidth: CGFloat = 100
+    /// The expanded island's button row's inset from its sides, so the capsules clear the rounded bottom corners.
+    static let alarmIslandButtonsInset: CGFloat = 12
 
     // MARK: The settings page's picture of the island
 

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"slices"
@@ -26,21 +28,34 @@ var mergedLists = map[string]string{
 	"GET /api/v1/connectors": "connectors",
 }
 
+// pagedLists are list routes paged by a cursor (route → the array that is the list): a cursor is one manager's, so
+// these are never merged. The manager the request names answers, else the default (pagedList); each item gets
+// "manager" as in a merged list, so it is reached the same way. The apps ask each manager and merge the pages.
+var pagedLists = map[string]string{
+	"GET /api/v1/inbox/done": "items",
+}
+
 // listAnswer is one manager's answer to a list request.
 type listAnswer struct {
 	id     string
 	status int
 	header http.Header
 	body   []byte
+	// localize: a 2xx inbox list as its manager gave it, localized as it is merged (inbox_forms.go); nil when the body
+	// is as the app reads it.
+	localize *inboxLocalize
+	// scanned: the merge's scan of body, when mergeList took it first to read the todos' ids; nil when not yet scanned.
+	scanned *scannedAnswer
 }
 
 func (a listAnswer) ok() bool { return a.status >= 200 && a.status < 300 }
 
 // bufferedWriter keeps what a handler writes (a manager's answer to a list request).
 type bufferedWriter struct {
-	header http.Header
-	status int
-	body   bytes.Buffer
+	header   http.Header
+	status   int
+	body     bytes.Buffer
+	localize *inboxLocalize // what its listAnswer gets (forwardInboxList)
 }
 
 func newBufferedWriter() *bufferedWriter { return &bufferedWriter{header: http.Header{}} }
@@ -75,14 +90,15 @@ func (h *Hub) listManagers(ctx context.Context) []string {
 }
 
 // retainedListManagers also asks installed offline managers, so relayTo can serve their retained GET answers.
-// Identities, never cache keys, decide who still belongs to the roster. An unreadable roster fails closed.
+// Identities, never cache keys, decide who still belongs to the roster (kept a moment, busIdentities). An
+// unreadable roster fails closed.
 func (h *Hub) retainedListManagers(ctx context.Context) ([]string, error) {
 	present := map[string]bool{}
 	if h.builtinManager(assistantwire.AssistantID) {
 		present[assistantwire.AssistantID] = true
 	}
 	if s := h.busStore(); s != nil {
-		idents, err := s.BusIdentities(ctx)
+		idents, err := h.busIdentities(ctx, s)
 		if err != nil {
 			return nil, err
 		}
@@ -97,7 +113,7 @@ func (h *Hub) retainedListManagers(ctx context.Context) ([]string, error) {
 			present[p.ID] = true
 		}
 	}
-	def, err := h.defaultManagerOrErr(ctx)
+	def, err := h.defaultOwnerOrErr(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -114,66 +130,323 @@ func (h *Hub) retainedListManagers(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
-// mergeList answers a list request: a request for a manager (one it names, an extension's: its own, impliedManager) gets
-// that manager's answer, else every manager is asked (ask, one after the other: the managers are few) and the lists under key merged, the default's first. Every
-// item is stamped with its manager. A manager that does not answer is left out; when none does, the default's
-// answer is given as it is.
-func (h *Hub) mergeList(w http.ResponseWriter, r *http.Request, key string, ask func(w http.ResponseWriter, r *http.Request, id string)) {
+// mergedAsk are the managers a merged request asks (mergeList) and the body each is asked with: the one the request is
+// for (one it names, an extension's: its own, impliedManager), else every manager (listManagers; for a kept route also
+// the installed offline ones, retainedListManagers). False when it answered.
+func (h *Hub) mergedAsk(w http.ResponseWriter, r *http.Request) ([]string, []byte, bool) {
 	ids := []string{}
 	named, err := impliedManager(r)
 	if err != nil {
 		writeErrCode(w, http.StatusForbidden, codeOtherManager, err)
-		return
+		return nil, nil, false
 	}
 	if named != "" {
 		id, ok := h.owner(w, r, h.byRequest)
 		if !ok {
-			return
+			return nil, nil, false
 		}
 		ids = append(ids, id)
 	} else if r.Method == http.MethodGet && slices.Contains(extwire.KeptRoutes, r.URL.Path) {
 		ids, err = h.retainedListManagers(r.Context())
 		if err != nil {
 			writeErr(w, http.StatusServiceUnavailable, err)
-			return
+			return nil, nil, false
 		}
 	} else {
 		ids = h.listManagers(r.Context())
 	}
 	if len(ids) == 0 {
 		writeErrCode(w, http.StatusServiceUnavailable, assistantwire.CodeAssistantOffline, errAssistantOffline)
-		return
+		return nil, nil, false
 	}
 	body, err := readBody(w, r)
 	if err != nil {
+		return nil, nil, false
+	}
+	return ids, body, true
+}
+
+// mergeList answers a list request: a request for a manager (one it names, an extension's: its own, impliedManager) gets
+// that manager's answer, else every manager is asked (ask, one after the other: the managers are few) and the lists under key merged, the default's first. Every
+// item is stamped with its manager. A manager that does not answer is left out; when none does, the default's
+// answer is given as it is.
+func (h *Hub) mergeList(w http.ResponseWriter, r *http.Request, key string, ask func(w http.ResponseWriter, r *http.Request, id string)) {
+	ids, body, ok := h.mergedAsk(w, r)
+	if !ok {
 		return
 	}
 	var answers []listAnswer
 	for _, id := range ids {
 		bw := newBufferedWriter()
-		ask(bw, withBody(r, body), id)
-		ans := listAnswer{id: id, status: cmp.Or(bw.status, http.StatusOK), header: bw.header, body: bw.body.Bytes()}
+		asked := withBody(r, body)
+		if key == "todos" {
+			asked.Header.Del("If-None-Match") // the merged list's validator is the hub's: a manager's 304 would leave its todos out
+		}
+		ask(bw, asked, id)
+		ans := listAnswer{id: id, status: cmp.Or(bw.status, http.StatusOK), header: bw.header, body: bw.body.Bytes(), localize: bw.localize}
 		if key == "todos" && ans.ok() {
-			var t struct {
-				Todos []struct {
-					ID string `json:"id"`
-				} `json:"todos"`
-			}
-			if json.Unmarshal(ans.body, &t) == nil {
-				for _, td := range t.Todos {
-					if td.ID != "" {
-						h.noteTodoOwner(td.ID, id)
-					}
-				}
-			}
+			h.noteTodoOwners(&ans)
 		}
 		answers = append(answers, ans)
+	}
+	if key == "todos" {
+		writeTaggedList(w, r, key, answers, todoListSums(answers)) // the counts added up (todo_view.go)
+		return
 	}
 	writeMerged(w, key, answers)
 }
 
-// writeMerged writes answers merged (see mergeList).
+// writeTaggedList is writeMerged with a validator, for the to-dos (#9590): the merged list is the same bytes while
+// nothing it lists changed, and most "todos" events change nothing it lists (a mark, a done to-do's note), yet each
+// had every app read the whole list again (about 200 KB on a busy hub). A 200 carries ETag W/"t1-<the first 128 bits
+// of the SHA-256 of its bytes>"; a request whose If-None-Match names it gets 304 with the 200's headers and no body.
+// set are top-level members written instead of the default's (writeMergedSet), so the tag covers them too.
+func writeTaggedList(w http.ResponseWriter, r *http.Request, key string, answers []listAnswer, set map[string]json.RawMessage) {
+	out := newBufferedWriter()
+	writeMergedSet(out, key, answers, set)
+	status := cmp.Or(out.status, http.StatusOK)
+	hd := w.Header()
+	for k, v := range out.header {
+		hd[k] = slices.Clone(v)
+	}
+	if status == http.StatusOK {
+		sum := sha256.Sum256(out.body.Bytes())
+		tag := `W/"t1-` + hex.EncodeToString(sum[:16]) + `"`
+		hd.Set("ETag", tag)
+		if inm := r.Header.Values("If-None-Match"); len(inm) > 0 && tagMatches(inm, tag) {
+			hd.Del("Content-Length")
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write(out.body.Bytes())
+}
+
+// noteTodoOwners notes a's manager as the owner of each todo in a, a 2xx answer to a todos list. It reads the ids from
+// the scan the merge then writes a from, where that scan alone says what decodedTodoIDs reads, else by decoding.
+func (h *Hub) noteTodoOwners(a *listAnswer) {
+	s, use := scanAnswer(a.body, "todos")
+	a.scanned = &scannedAnswer{s: s, use: use}
+	if ids, ok := scannedTodoIDs(s, use); ok {
+		for _, id := range ids {
+			if len(id) > 0 {
+				h.noteTodoOwner(string(id), a.id)
+			}
+		}
+		return
+	}
+	for _, id := range decodedTodoIDs(a.body) {
+		if id != "" {
+			h.noteTodoOwner(id, a.id)
+		}
+	}
+}
+
+// decodedTodoIDs are the ids of a todos list's items as encoding/json reads them, "" for an item without one; none
+// when the body does not decode.
+func decodedTodoIDs(body []byte) []string {
+	var t struct {
+		Todos []struct {
+			ID string `json:"id"`
+		} `json:"todos"`
+	}
+	if json.Unmarshal(body, &t) != nil {
+		return nil
+	}
+	ids := make([]string, len(t.Todos))
+	for i, td := range t.Todos {
+		ids[i] = td.ID
+	}
+	return ids
+}
+
+// pagedList answers a request on one of pagedLists: the one manager's answer (the one it names, an extension's own,
+// else the default), each item under key stamped with it; the rest of the answer (the cursor) as it is.
+func (h *Hub) pagedList(w http.ResponseWriter, r *http.Request, key string, ask func(w http.ResponseWriter, r *http.Request, id string)) {
+	id, ok := h.owner(w, r, h.byRequest)
+	if !ok {
+		return
+	}
+	bw := newBufferedWriter()
+	ask(bw, r, id)
+	writeMerged(w, key, []listAnswer{{id: id, status: cmp.Or(bw.status, http.StatusOK), header: bw.header, body: bw.body.Bytes(), localize: bw.localize}})
+}
+
+// writeMerged writes answers merged (see mergeList): the top level of the first answer that is a JSON object (the
+// default's, unless it failed), its list under key holding every such answer's items stamped with their manager, keys
+// sorted, as encoding/json writes a map. An inbox answer its relay left to be localized here (listAnswer.localize)
+// reads as InboxJSON on its whole body would have made it. Nobody answered that way: the default's answer as it is.
+//
+// Its bytes are those of decoding each answer and encoding it again (writeDecoded), written from one scan of each
+// (writeScanned, merged_scan.go): 400 inbox items took 13 ms and 6.9 MB that way, about 3.5 ms and 0.5 MB this way.
 func writeMerged(w http.ResponseWriter, key string, answers []listAnswer) {
+	writeMergedSet(w, key, answers, nil)
+}
+
+// writeMergedSet is writeMerged with the top-level members of set (a JSON value by key, never key itself) written
+// instead of the default's, or beside them when it has none: what the hub adds up over the managers (the to-dos'
+// counts). Nobody answered: the default's answer as it is, without them.
+func writeMergedSet(w http.ResponseWriter, key string, answers []listAnswer, set map[string]json.RawMessage) {
+	if writeScanned(w, key, answers, set) {
+		return
+	}
+	for i := range answers {
+		answers[i].localizeWhole()
+	}
+	writeDecoded(w, key, answers, set)
+}
+
+// writeScanned is writeMergedSet from a scan of each answer; false, having written nothing, when an answer is one only
+// decoding reads right (scanDecode) or nobody answered.
+func writeScanned(w http.ResponseWriter, key string, answers []listAnswer, set map[string]json.RawMessage) bool {
+	type part struct {
+		id    string
+		items []scannedItem
+	}
+	var base *listAnswer
+	var top []jsonMember
+	var parts []part
+	size := 0
+	for i := range answers {
+		a := &answers[i]
+		if !a.ok() {
+			continue
+		}
+		s, use := a.scan(key)
+		switch use {
+		case scanSkip:
+			continue
+		case scanDecode:
+			return false
+		}
+		if base == nil {
+			base, top = a, withMembers(s.members, set)
+			for _, m := range top {
+				size += len(m.key) + len(m.val) + len(`"":,`)
+			}
+		}
+		parts = append(parts, part{a.id, s.items})
+		for _, it := range s.items {
+			size += len(it.raw) + len(`{"manager":"",},`) + len(a.id)
+		}
+	}
+	if base == nil {
+		return false
+	}
+	out := make([]byte, 0, size+len(key)+8)
+	out = append(out, '{')
+	listAt, _ := slices.BinarySearchFunc(top, key, func(m jsonMember, key string) int { return cmp.Compare(string(m.key), key) })
+	for j := 0; j <= len(top); j++ {
+		if j == listAt {
+			if len(out) > 1 {
+				out = append(out, ',')
+			}
+			out = append(out, '"')
+			out = append(out, key...)
+			out = append(out, `":[`...)
+			first := true
+			for _, p := range parts {
+				var quoted [64]byte
+				idJSON := appendJSONID(quoted[:0], p.id)
+				for _, it := range p.items {
+					if !first {
+						out = append(out, ',')
+					}
+					first = false
+					var ok bool
+					if out, ok = appendStamped(out, it, p.id, idJSON); !ok {
+						return false
+					}
+				}
+			}
+			out = append(out, ']')
+		}
+		if j == len(top) {
+			break
+		}
+		if len(out) > 1 {
+			out = append(out, ',')
+		}
+		m := top[j]
+		out = append(out, '"')
+		out = append(out, m.key...)
+		out = append(out, '"', ':')
+		if m.asIs {
+			out = append(out, m.val...)
+			continue
+		}
+		var b bytes.Buffer
+		enc := json.NewEncoder(&b)
+		enc.SetEscapeHTML(false)
+		if enc.Encode(json.RawMessage(m.val)) != nil {
+			return false
+		}
+		out = append(out, bytes.TrimSuffix(b.Bytes(), []byte{'\n'})...)
+	}
+	out = append(out, '}', '\n')
+	copyHeader(w.Header(), base.header)
+	w.Header().Del("Content-Length")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(base.status)
+	_, _ = w.Write(out)
+	return true
+}
+
+// withMembers is members (sorted by key, as an answerScan has them) with set's written instead of the ones of the same
+// key, or in their place by key; members itself when set is empty, else a copy. A member of set is encoded as
+// encoding/json writes a RawMessage, as writeDecoded writes it.
+func withMembers(members []jsonMember, set map[string]json.RawMessage) []jsonMember {
+	if len(set) == 0 {
+		return members
+	}
+	out := slices.Clone(members)
+	for k, v := range set {
+		m := jsonMember{key: []byte(k), val: v}
+		i, found := slices.BinarySearchFunc(out, m.key, func(x jsonMember, key []byte) int { return bytes.Compare(x.key, key) })
+		if found {
+			out[i] = m
+		} else {
+			out = slices.Insert(out, i, m)
+		}
+	}
+	return out
+}
+
+// appendJSONID appends id as json.Marshal writes it, quoting it by hand when nothing in it is escaped.
+func appendJSONID(out []byte, id string) []byte {
+	for i := 0; i < len(id); i++ {
+		if c := id[i]; c < 0x20 || c > 0x7e || c == '"' || c == '\\' || c == '<' || c == '>' || c == '&' {
+			b, _ := json.Marshal(id)
+			return append(out, b...)
+		}
+	}
+	out = append(out, '"')
+	out = append(out, id...)
+	return append(out, '"')
+}
+
+// appendStamped appends item with "manager": id as json.Marshal writes stampManager's item in a list.
+func appendStamped(out []byte, it scannedItem, id string, idJSON []byte) ([]byte, bool) {
+	switch it.shape {
+	case itemAsIs:
+		return append(out, it.raw...), true
+	case itemStamp:
+		out = append(out, `{"manager":`...)
+		out = append(out, idJSON...)
+		if it.raw[1] == '}' {
+			return append(out, '}'), true
+		}
+		out = append(out, ',')
+		return append(out, it.raw[1:]...), true
+	}
+	b, err := json.Marshal(json.RawMessage(stampManager(it.raw, id)))
+	return append(out, b...), err == nil
+}
+
+// writeDecoded is writeMergedSet by decoding each answer and encoding the merge again. A body that is not a JSON object
+// (null included) is no answer.
+func writeDecoded(w http.ResponseWriter, key string, answers []listAnswer, set map[string]json.RawMessage) {
 	var base *listAnswer
 	var items []json.RawMessage
 	var top map[string]json.RawMessage
@@ -183,7 +456,7 @@ func writeMerged(w http.ResponseWriter, key string, answers []listAnswer) {
 			continue
 		}
 		var t map[string]json.RawMessage
-		if json.Unmarshal(a.body, &t) != nil {
+		if json.Unmarshal(a.body, &t) != nil || t == nil {
 			continue
 		}
 		raw, has := t[key]
@@ -210,6 +483,9 @@ func writeMerged(w http.ResponseWriter, key string, answers []listAnswer) {
 	}
 	list, _ := json.Marshal(items)
 	top[key] = list
+	for k, v := range set {
+		top[k] = v
+	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)

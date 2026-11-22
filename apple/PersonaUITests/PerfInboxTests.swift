@@ -2,17 +2,34 @@ import XCTest
 
 /// The inbox, Feishu chats and topic groups, the Feishu messages page and mail (#5730).
 /// Mock (`scripts/app/perf-test.sh`, suite `inbox`): MOCK_LARK=1 MOCK_LARK_RICH=1 MOCK_LARK_TOPIC=1 MOCK_INBOX_EXTRA=150
-/// MOCK_MAIL=1 MOCK_AGENTS=1.
+/// MOCK_MAIL=1 MOCK_AGENTS=1 MOCK_MANAGERS=0 (one assistant, so 「周末徒步群」 is in the list; on the default roster it
+/// belongs to 「工作」).
 final class PerfInboxTests: PerfTestCase {
     private let lark = ["-demo.on", "NO", "-integrations.lark.enabled", "YES"]
 
     @MainActor private func openInbox(_ extra: [String] = []) {
-        launch(["-dev.openChat", "", "-tab", "mail", "-inbox.kind", "", "-inbox.source", ""] + lark + extra)
+        // the whole stacked page, as measured before the section bar (#9053), the group chat (FYI) in it
+        launch(["-dev.openChat", "", "-tab", "mail", "-inbox.kind", "", "-inbox.source", "", "-showInboxSection", "all"] + lark + extra)
         sleep(2)
     }
 
     @MainActor private func openItem(_ id: String) {
         launch(["-dev.openChat", "", "-tab", "mail", "-inbox.kind", "", "-inbox.source", "", "-openInboxItem", id] + lark)
+        expandSource()
+    }
+
+    @MainActor private func expandSource() {
+        see(app.buttons["inbox.detail.source"].firstMatch, "the original source control", timeout: 30).tapCenter()
+    }
+
+    /// The list is lazy: rows below Needs You's waiting Agents are not in the tree until they come on screen.
+    @MainActor private func inboxRow(_ title: String, _ what: String) -> XCUIElement {
+        see(app.buttons["inbox.more"], "the inbox toolbar", timeout: 20)
+        let row = text(title)
+        for _ in 0..<16 where !row.waitForExistence(timeout: 1) {
+            app.swipeUp()
+        }
+        return see(row, what, timeout: 5)
     }
 
     // MARK: Inbox
@@ -43,11 +60,11 @@ final class PerfInboxTests: PerfTestCase {
 
     /// Inbox → the Feishu group chat → back.
     @MainActor func testOpenFeishuChatFromInbox() throws {
-        openInbox()
-        let row = see(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "周末徒步群")).firstMatch, "the group's row",
-                      timeout: 20)
+        openInbox(["-inbox.kind", "group"])
+        let row = inboxRow("周末徒步群", "the group's row")
         measureTransition {
             row.tap()
+            expandSource()
             wait(app.textFields["lark.box"], timeout: 15)
             sleep(2)
             back()
@@ -79,6 +96,15 @@ final class PerfInboxTests: PerfTestCase {
         measureTyping(see(app.textFields["lark.box"], "the Feishu composer", timeout: 30), text: "周六早上八点在地铁站集合，记得带水")
     }
 
+    /// A picked photo's thumbnail beside the composer, redrawn with every typed character.
+    @MainActor func testLarkAttachmentTyping() throws {
+        launch(["-dev.openChat", "", "-tab", "mail", "-inbox.kind", "", "-inbox.source", "",
+                "-openInboxItem", "lark:f2:200", "-showLarkAttachmentDraft", "photo", "-showLarkSendFresh", "YES"] + lark)
+        expandSource()
+        see(app.buttons["移除 照片.jpg"], "the picked photo", timeout: 30)
+        measureTyping(see(app.textFields["lark.box"], "the Feishu composer", timeout: 30), text: "周六早上八点在地铁站集合，记得带水")
+    }
+
     /// A topic group's cards (a non-lazy stack) scrolled.
     @MainActor func testFeishuTopicGroupScroll() throws {
         openItem("lark:f4:405")
@@ -107,9 +133,15 @@ final class PerfInboxTests: PerfTestCase {
     // MARK: Feishu messages page
 
     @MainActor private func openMessages() -> XCUIElement {
-        launch(["-dev.openChat", "", "-tab", "feishu", "-larkTop", "NO"] + lark)
+        launch(["-dev.openChat", "", "-tab", "feishu", "-app.tab", "feishu", "-larkTop", "NO"] + lark)
+        let list = app.buttons["feishu-chat-f3"]
+        if list.waitForExistence(timeout: 5) { return list }
         let entry = app.buttons["shell-feishu"].firstMatch
-        if entry.waitForExistence(timeout: 20) { entry.tapCenter() }
+        if entry.waitForExistence(timeout: 20) {
+            entry.tapCenter()
+        } else if app.buttons["sidebar-messages"].firstMatch.waitForExistence(timeout: 5) {
+            app.buttons["sidebar-messages"].firstMatch.tapCenter()
+        }
         return see(app.buttons["feishu-chat-f3"], "the conversation list", timeout: 20)
     }
 
@@ -146,11 +178,11 @@ final class PerfInboxTests: PerfTestCase {
 
     /// Inbox → a mail → back (a new WKWebView each time).
     @MainActor func testOpenMailFromInbox() throws {
-        openInbox()
-        let row = see(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "下周的分享")).firstMatch, "the mail's row",
-                      timeout: 20)
+        openInbox(["-inbox.kind", "mail"])
+        let row = inboxRow("下周的分享", "the mail's row")
         measureTransition {
             row.tap()
+            expandSource()
             sleep(3)
             back()
             wait(row)

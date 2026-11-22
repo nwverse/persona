@@ -12,6 +12,8 @@ import java.util.UUID
 import persona.core.contracts.SessionKey
 import persona.core.contracts.LarkReaction
 import persona.core.contracts.api.ConnectionState
+import persona.core.contracts.api.LarkMember
+import persona.core.contracts.api.LarkMention
 import persona.core.contracts.api.MailTransport
 import persona.core.contracts.api.OutboxMessage
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,21 +24,34 @@ private val emptyReplyComposers: StateFlow<ReplyComposers?> = MutableStateFlow(n
 private val disconnectedMail: StateFlow<MailTransport?> = MutableStateFlow(null)
 private val emptyPersonaOutbox: StateFlow<List<OutboxMessage>> = MutableStateFlow(emptyList())
 private val emptyConversationInbox: StateFlow<InboxConversations?> = MutableStateFlow(null)
+private val emptyLarkMessages: StateFlow<LarkMessagesRepository?> = MutableStateFlow(null)
 private val emptyMessageReads: StateFlow<Set<InboxMessageRead>> = MutableStateFlow(emptySet())
 
 /** Feature capabilities until the shared repository contract exposes inbox details. */
 interface InboxRepository : persona.core.contracts.api.InboxRepository {
     val conversationInbox: StateFlow<InboxConversations?> get() = emptyConversationInbox
+    /** Optional all-chats browser; null in demo mode, lightweight fakes and while a real pairing assembles DI.
+     * No request is made merely by creating it. */
+    val larkMessages: StateFlow<LarkMessagesRepository?> get() = emptyLarkMessages
     val messageReads: StateFlow<Set<InboxMessageRead>> get() = emptyMessageReads
     val supportsThreadOutbox: Boolean get() = false
     val replyComposers: StateFlow<ReplyComposers?> get() = emptyReplyComposers
     suspend fun readingStore(): LarkReadingStore? = null
     val snapshot: StateFlow<InboxSnapshot>
+    /** The listed or paged-back record, else one read by id from the hub; null only when every lookup answers 404. */
+    suspend fun item(itemId: String): InboxRecord? = throw UnsupportedOperationException("Inbox item lookup unavailable")
     val mailTransport: StateFlow<MailTransport?> get() = disconnectedMail
     val personaOutbox: StateFlow<List<OutboxMessage>> get() = emptyPersonaOutbox
     val connectionState: Flow<ConnectionState> get() = flowOf(ConnectionState.Connecting)
     val preferences: Flow<InboxPreferences> get() = flowOf(InboxPreferences())
+    /** Whether the hub shows source subscriptions (#2041, `source_subscriptions`): their entry joins the Inbox's other settings. */
+    val subscriptionsShown: Flow<Boolean> get() = flowOf(false)
+    /** Whether those pages are Inbox Sources (#5278, `inbox_sources`): the menu uses that name only then. */
+    val inboxSourcesShown: Flow<Boolean> get() = flowOf(false)
     suspend fun savePreferences(value: InboxPreferences) = Unit
+    /** Where Hand to AI last sent each source's items (#2121, [InboxHandOffMemory]): the group's own, latest first. */
+    val handOffMemory: Flow<List<HandOffMemoryEntry>> get() = flowOf(emptyList())
+    suspend fun saveHandOffMemory(value: List<HandOffMemoryEntry>) = Unit
     suspend fun refreshNow() = refresh()
     suspend fun askPersona(itemId: String, action: InboxAiAction) {
         error("Persona entry is not connected")
@@ -56,6 +71,12 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
      */
     suspend fun actOnSuggestion(request: SuggestionRequest): SuggestionOutcome =
         error("建议尚未接入") // i18n-ignore: developer error for a repository without the hub
+
+    /** The item's ancestry and direct children; null from a hub without the tree route. */
+    suspend fun inboxLine(item: InboxRecord): InboxLineage? = error("Inbox tree unavailable")
+    /** Clears or sets an item's parent, then applies the returned item to the snapshot. Call [inboxLine] again for the new line. */
+    suspend fun setInboxParent(item: InboxRecord, parent: persona.core.contracts.api.InboxParentRef?): Unit =
+        error("Inbox parent route unavailable")
 
     /** "Hand to AI": the item as context with what to do, queued for Persona's main conversation or a running Agent. */
     suspend fun handOff(request: InboxHandOffRequest): SessionKey? = error("交给 AI 尚未接入") // i18n-ignore: developer error for a repository without the hub
@@ -81,6 +102,14 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
     suspend fun setDone(items: List<persona.core.contracts.api.InboxDoneTarget>, done: Boolean): InboxBulkResult =
         bulk(items, if (done) persona.core.contracts.api.InboxBulkAction.Done else persona.core.contracts.api.InboxBulkAction.Reopen)
     /** Clean up all (dismiss) / Mark all as seen / Clear all (done) / Move back (reopen) over [items] in one request ([setDone] is its done / reopen). */
+    /**
+     * One page of [manager]'s done history (#2200, #2576; null: the default manager), newest done first, after [cursor]
+     * (null: from the newest). A hub without history answers an empty page with no next.
+     */
+    suspend fun doneHistory(manager: String?, cursor: InboxDoneCursor?): InboxDonePage = InboxDonePage()
+
+    /** [manager]'s done items per day in [zone] (#2967), newest first; null from a hub that doesn't count them. */
+    suspend fun doneDays(manager: String?, zone: java.time.ZoneId): List<InboxDoneDay>? = null
     suspend fun bulk(items: List<persona.core.contracts.api.InboxDoneTarget>, action: persona.core.contracts.api.InboxBulkAction): InboxBulkResult =
         error("批量处理尚未接入") // i18n-ignore: developer error for a repository without the hub
     suspend fun readDraft(target: ReplyTarget): ReplyDraft?
@@ -96,31 +125,42 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
     /** Download authenticated media and return a content URI suitable for a read grant. */
     suspend fun downloadFile(file: LarkPart.File): String
 
-    suspend fun momentsPost(postId: String): persona.core.contracts.LarkMomentsPost = error("Moments post unavailable")
-    suspend fun momentsComments(postId: String): List<persona.core.contracts.LarkMomentsComment> = emptyList()
+    /** A Moments post, read through [manager] (the chat or item its link was opened from; the default's, or null, names none). */
+    suspend fun momentsPost(postId: String, manager: String? = null): persona.core.contracts.LarkMomentsPost = error("Moments post unavailable")
+    suspend fun momentsComments(postId: String, manager: String? = null): List<persona.core.contracts.LarkMomentsComment> = emptyList()
     suspend fun urlPreview(messageId: String, url: String): persona.core.contracts.LarkUrlPreview? = null
     suspend fun react(messageId: String, key: String, remove: Boolean) = Unit
     suspend fun cardAction(messageId: String, actionId: String) = Unit
     suspend fun userProfile(userId: String, feedId: String? = null): kotlinx.serialization.json.JsonObject? = null
+    suspend fun larkMembers(feedId: String, query: String, limit: Int = 30): List<LarkMember> = emptyList()
     suspend fun quickReactions(): List<String> = emptyList()
     suspend fun emojis(): kotlinx.serialization.json.JsonObject? = null
 
-    /** "Muted" (docs/assistant/inbox.md "Mute"): what the user muted, in every source, newest first. */
-    suspend fun inboxMutes(): List<InboxMute> = error("静音尚未接入") // i18n-ignore: developer error for a repository without the hub
+    /**
+     * "Muted" (docs/assistant/inbox.md "Muting"): what the user muted, in every source, newest first; [manager]'s (each
+     * keeps its own; named even when it is the default, which may move before an Unmute), else the default's.
+     */
+    suspend fun inboxMutes(manager: String? = null): List<InboxMute> = error("静音尚未接入") // i18n-ignore: developer error for a repository without the hub
     /** "Mute this repository / chat / sender": the item and the open ones of its source it covers are done at once; a failure puts them back. */
     suspend fun mute(record: InboxRecord, option: InboxMuteOption): Unit = error("静音尚未接入") // i18n-ignore: developer error
-    suspend fun unmute(id: String): Unit = error("静音尚未接入") // i18n-ignore: developer error
+    /** Takes a mute back on [manager] (the one "Muted" read it from), else the default. */
+    suspend fun unmute(id: String, manager: String? = null): Unit = error("静音尚未接入") // i18n-ignore: developer error
 
-    /** "Rules" (docs/assistant/inbox.md "Policies"): every source's rules, newest first; [record]'s manager's, else the default's. */
-    suspend fun inboxPolicies(record: InboxRecord? = null): List<InboxPolicy> = error("Inbox policies unavailable")
+    /**
+     * "Rules" (docs/assistant/inbox.md "Policies"): every source's rules, newest first; [record]'s manager's, else
+     * [manager]'s (each keeps its own; named even when it is the default, which may move before a Remove), else the
+     * default's.
+     */
+    suspend fun inboxPolicies(record: InboxRecord? = null, manager: String? = null): List<InboxPolicy> = error("Inbox policies unavailable")
     /**
      * Sets [target]'s rule (POST from its item, PATCH when it has one): the open, triaged items it covers take [tier] at
-     * once, back if it fails. Setting neither part removes it. Returns the hub's rule, null when removed.
+     * once, back if it fails. Setting neither part removes it; removing one opened from "Rules" names the manager it was
+     * read from even when that is the default now. Returns the hub's rule, null when removed.
      */
     suspend fun savePolicy(target: InboxPolicyTarget, tier: InboxPolicyTier, twin: InboxPolicyTwin): InboxPolicy? =
         error("Inbox policies unavailable")
-    /** Removes a rule by its id ("Rules" › Remove). */
-    suspend fun removePolicy(id: String): Unit = error("Inbox policies unavailable")
+    /** Removes a rule by its id ("Rules" › Remove) on [manager] (the one "Rules" read it from), else the default. */
+    suspend fun removePolicy(id: String, manager: String? = null): Unit = error("Inbox policies unavailable")
 
     /** A chat's "Pinned messages", a page at a time ([accountId] null: the hub's current account, which the page names). */
     suspend fun larkChatPins(feedId: String, accountId: String?, cursor: String?): LarkChatPinsPage = error("Chat pins unavailable")
@@ -142,6 +182,8 @@ data class InboxSnapshot(
     val loading: Boolean = false,
     val error: String? = null,
     val contentSource: LarkContentSource? = null,
+    /** Whether the session catalog has completed its first load; an empty catalog before then is not "agent gone". */
+    val targetsReady: Boolean = false,
     /** Machine names by id, for saying where an Agent runs. */
     val machines: Map<String, String> = emptyMap(),
     /** How triage stands: new items waiting outside the list (#1773); null from an older hub. */
@@ -191,9 +233,29 @@ data class InboxRecord(
     /** A hub connector's item (not Feishu's, not mail): it opens as its connector's thread. */
     val isConnector: Boolean get() = connector != null && !isLark && !isMail && moment == null
 
+    /** A conversation the assistant itself put into the Inbox. */
+    val isAssistantRow: Boolean get() = source == "assistant"
+
+    /** Its preview already starts with the summary, so the row draws that text once. */
+    val repeatsSummary: Boolean get() {
+        if (!isAssistantRow) return false
+        val summary = item.summary?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+        val preview = item.preview.trim()
+        return preview.isNotEmpty() && preview.startsWith(summary)
+    }
+
     val isLark: Boolean get() = feedId != null || source == "lark"
     /** A mail item: only these open the mail page; the kind says it too in records cached without their source. */
     val isMail: Boolean get() = mail != null || source == "mail" || (source.isEmpty() && item.kind == "mail")
+
+    /** The assistant's text adds nothing beyond the title and summary already on its page. */
+    fun onlyTitleAndSummary(context: String?): Boolean {
+        if (!isAssistantRow) return false
+        val summary = item.summary?.takeIf { it.isNotBlank() } ?: return false
+        fun flat(text: String) = text.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+        val text = flat(context ?: item.preview)
+        return text.isEmpty() || text == flat("${item.title} $summary") || text == flat(summary)
+    }
 
     /** The item's id on the hub (its requests name it there; [InboxItemKey]). */
     val hubItemId: String get() = InboxItemKey.hubId(item.id)
@@ -213,6 +275,9 @@ object InboxItemKey {
 
     fun hubId(key: String): String = key.substringBefore(SEPARATOR)
 
+    /** The manager an app id carries, or null for a bare hub id and for the default manager. */
+    fun managerOf(key: String): String? = key.substringAfter(SEPARATOR, "").takeIf { it.isNotBlank() }
+
     /** The app's id of the item [hubId] of [manager] (null: unstamped). */
     fun appId(hubId: String, manager: String?): String =
         if (manager.isNullOrBlank() || manager == persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER) hubId else of(hubId, manager)
@@ -227,7 +292,8 @@ fun List<InboxRecord>.inboxRecord(id: String?): InboxRecord? =
 
 /**
  * An item's `connector` block (docs/protocol/protocol.md "Inbox"): the [thread] its connector reads it as, the [label] the
- * connector gave it (the row's tag, its words: "Direct message", "@me", "Transfer"…), and whether and where a reply goes.
+ * connector gave it (the row's tag, its words: "Direct message", "@me", "Transfer"…), whether and where a reply goes, and
+ * the hub's [avatarUrl] for the thread's picture.
  */
 @Serializable
 data class InboxConnectorRef(
@@ -235,6 +301,9 @@ data class InboxConnectorRef(
     val label: String? = null,
     val canReply: Boolean = false,
     val replyTo: String? = null,
+    /** The source page; for the assistant's own row, its conversation in the web app. */
+    val url: String? = null,
+    @SerialName("avatar_url") val avatarUrl: String? = null,
 )
 
 /** A Moments post reference on an inbox item. */
@@ -272,12 +341,21 @@ sealed interface ReplyTarget {
 }
 
 @Serializable
-data class ReplyRequest(val text: String, @SerialName("client_id") val clientId: String,
-    val mailTarget: persona.core.contracts.api.MailReplyTarget? = null)
+data class ReplyRequest(
+    val text: String,
+    @SerialName("client_id") val clientId: String,
+    val mailTarget: persona.core.contracts.api.MailReplyTarget? = null,
+    val mentions: List<LarkMention> = emptyList(),
+)
 
 /** [ai]: the text came from AI (the AI twin, or "AI draft"); sending it asks first, sending the user's own words does not. */
 @Serializable
-data class ReplyDraft(val text: String, val clientId: String = UUID.randomUUID().toString(), val ai: Boolean = false)
+data class ReplyDraft(
+    val text: String,
+    val clientId: String = UUID.randomUUID().toString(),
+    val ai: Boolean = false,
+    val mentions: List<LarkMention> = emptyList(),
+)
 
 data class LarkConversation(
     val title: String = "",
@@ -359,7 +437,7 @@ sealed interface LarkPart {
     data class Card(val content: LarkCardContent, val source: LarkContentSource, val messageId: String? = null) : LarkPart
     // Models may carry an authenticated Coil ImageRequest supplied by the data layer.
     data class Image(val model: Any, val description: String = "", val width: Int = 1, val height: Int = 1) : LarkPart
-    data class File(val ref: String, val name: String, val mimeType: String = "application/octet-stream") : LarkPart
+    data class File(val ref: String, val name: String, val mimeType: String = "application/octet-stream", val source: LarkContentSource? = null) : LarkPart
     data class External(val title: String, val larkUrl: String, val kind: String, val duration: String = "", val cover: Image? = null) : LarkPart
     data class Code(val code: String, val language: String = "") : LarkPart
     data class Audio(val ref: String, val durationMs: Long, val source: LarkContentSource? = null) : LarkPart
@@ -380,9 +458,26 @@ data class InboxPreferences(
     val source: String = "",
     val kind: String = "",
     val query: String = "",
+    /**
+     * The old bays' choice ("action", "", "done"). No longer read: the section bar opens on Needs you each time and keeps
+     * its choice only while the Inbox is open (#9053). Kept so the stored JSON reads the same in older versions.
+     */
     val section: String = "",
     val expanded: List<String> = listOf("action", "fyi"),
+    /** Needs you, FYI and Collapsed grouped by source or by time (#2576, persona.core.domain.inbox.InboxGroups). */
+    val grouping: String = persona.core.domain.inbox.InboxGroups.SOURCE,
+    /** The groups opened or folded against how they start, as "section/key" (InboxGroups.isOpen). */
+    val folds: List<String> = emptyList(),
 )
+
+/** Where a manager's done history goes on: after the entry done at [before] with id [beforeId] (the hub's `next`). */
+data class InboxDoneCursor(val before: String, val beforeId: String?)
+
+/** A page of done history: its items as records (the app's ids), and where the next page starts (null: none). */
+/** How many items were done on [day] (#2967). */
+data class InboxDoneDay(val day: java.time.LocalDate, val count: Int)
+
+data class InboxDonePage(val records: List<InboxRecord> = emptyList(), val next: InboxDoneCursor? = null)
 
 enum class InboxAiAction { Summarize, DraftReply, Handoff }
 @Serializable
@@ -397,7 +492,8 @@ enum class ReplyDelivery { Ready, Queued, WaitingForNetwork, Sending, Unknown, V
 
 /**
  * One "Hand to AI". No [machineId] / [sessionId]: Persona's main conversation. [operationId] stays the same while the same
- * text goes to the same place, so a retry after an unclear failure is not queued twice.
+ * text goes to the same place, so a retry after an unclear failure is not queued twice. [targetTitle] is the Agent's display
+ * title, sent only when recording its accepted hand-off on the item.
  */
 @Serializable
 data class InboxHandOffRequest(
@@ -406,6 +502,7 @@ data class InboxHandOffRequest(
     val machineId: String? = null,
     val sessionId: String? = null,
     val operationId: String = UUID.randomUUID().toString(),
+    val targetTitle: String? = null,
 )
 
 /**

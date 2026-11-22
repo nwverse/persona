@@ -20,6 +20,11 @@
   "push_new": "{branch} is not on the remote yet: it is created on origin under the same name and tracked from now on.",
   "push_gone": "{upstream} was deleted on the remote: pushing creates it again from {branch}.",
   "push_never_force": "Never forced: if the remote has newer commits, the push stops and says so.",
+  "pull": "Pull",
+  "pulling": "Pulling",
+  "pulled": "Pulled the latest commits",
+  "pull_current": "Already up to date",
+  "pull_hint": "Fast-forwards to the upstream: never merges, rebases or overwrites local changes",
   "branches": "Branches",
   "branch_search": "Find or name a branch",
   "branch_create": "Create branch {branch} from here",
@@ -74,5 +79,6 @@
   "stash_refresh": "Refresh",
   "stash_old_node": "Update Persona on this computer to apply, pop or drop stashes safely.",
   "refused_git_stash_stale": "The stash list changed. Refresh and select the stash again.",
+  "refused_git_stash_conflicted": "Applied with conflicts in these files: resolve them, then commit. The stash is kept.",
   "refused_git_stash_unsupported": "Safe stash removal is unavailable for this repository."
 }

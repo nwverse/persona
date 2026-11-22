@@ -23,7 +23,8 @@ type bgScan struct {
 	mu      sync.Mutex
 	off     int64
 	meta    transcript.Meta
-	pending bool // the first read of a big transcript is running in the background
+	pending bool   // the first read of a big transcript is running in the background
+	seen    bgSeen // the file read, for the next connection of a resident node (carry.go)
 }
 
 // bgSyncLimit: up to this much unread transcript is scanned for background tasks right away. More than that (the
@@ -34,9 +35,11 @@ var bgSyncLimit int64 = 4 << 20
 // bgSlot lets one big first read run at a time.
 var bgSlot = make(chan struct{}, 1)
 
+// bgMarkers name the lines that can start or finish a background task; scanBackground looks for them together with
+// transcript's goal, ultracode and plan markers (bgMatch).
 var bgMarkers = [][]byte{[]byte("ScheduleWakeup"), []byte("Next wakeup scheduled"), []byte("CronCreate"), []byte("CronDelete"),
-	[]byte("run_in_background"), []byte("in background with ID"), []byte("moved to the background"), []byte("Async agent launched"),
-	[]byte("task-notification"), []byte(`"name":"Agent"`), []byte(`"name":"Task"`), []byte(`"TaskStop"`), []byte(`"KillShell"`),
+	[]byte("run_in_background"), []byte("in background with ID"), []byte("moved to the background"), []byte("manually ba"), []byte("Async agent launched"),
+	[]byte("task-notification"), []byte(`"name":"Agent"`), []byte(`"name":"Task"`), []byte(`"TaskStop"`), []byte(`"Kill`),
 	[]byte(`"name":"Workflow"`), []byte("Workflow launched in background"), []byte(`"name":"Monitor"`), []byte("Monitor started")}
 
 func (n *Node) backgroundTasks(path string) (tasks []proto.BackgroundTask, loop *proto.LoopInfo, goal *proto.GoalInfo, pending bool) {
@@ -54,15 +57,18 @@ func (n *Node) backgroundTasks(path string) (tasks []proto.BackgroundTask, loop 
 		if errors.Is(err, fs.ErrNotExist) { // deleted: the scan would stay for the node's whole uptime
 			n.forgetBgScan(path, sc)
 		}
+		sc.checkCarried(nil, nil)
 		return nil, nil, nil, false
 	}
 	defer f.Close()
 	st, err := f.Stat()
 	if err != nil {
+		sc.checkCarried(nil, nil)
 		return nil, nil, nil, false
 	}
+	sc.checkCarried(f, st)
 	if st.Size() < sc.off { // rewritten
-		sc.off, sc.meta = 0, transcript.Meta{}
+		sc.off, sc.meta, sc.seen = 0, transcript.Meta{}, bgSeen{}
 	}
 	if sc.pending {
 		return nil, nil, nil, true
@@ -73,6 +79,7 @@ func (n *Node) backgroundTasks(path string) (tasks []proto.BackgroundTask, loop 
 		return nil, nil, nil, true
 	}
 	scanBackground(f, &sc.off, &sc.meta, st.Size())
+	sc.seen.note(f, st, sc.off)
 	for _, t := range sc.meta.Background {
 		// Older ones are surely gone (claude restarted); a Monitor past its expiry has stopped.
 		if time.Since(t.StartedAt) < 24*time.Hour && (t.ExpiresAt == nil || time.Now().Before(*t.ExpiresAt)) {
@@ -109,6 +116,32 @@ func (n *Node) bgWorkflows(path string) ([]proto.Workflow, map[string]string) {
 	return slices.Clone(sc.meta.Workflows), maps.Clone(sc.meta.WorkflowScripts)
 }
 
+// bgEnded returns retained shell / Monitor outcomes from the last backgroundTasks scan, oldest first.
+func (n *Node) bgEnded(path string) []proto.BackgroundTask {
+	n.mu.Lock()
+	sc := n.bgScans[path]
+	n.mu.Unlock()
+	if sc == nil {
+		return nil
+	}
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	if sc.pending {
+		return nil
+	}
+	return recentBackgroundEnded(sc.meta.BackgroundEnded)
+}
+
+func recentBackgroundEnded(tasks []proto.BackgroundTask) []proto.BackgroundTask {
+	var ended []proto.BackgroundTask
+	for _, t := range tasks {
+		if t.EndedAt != nil && time.Since(*t.EndedAt) < workflowKeep {
+			ended = append(ended, t)
+		}
+	}
+	return ended
+}
+
 // bgPlan is the plan the last backgroundTasks scan of path found (transcript.Meta.Plan), nil while a big first read runs.
 func (n *Node) bgPlan(path string) *proto.PlanInfo {
 	n.mu.Lock()
@@ -136,18 +169,21 @@ func scanBackground(f *os.File, off *int64, m *transcript.Meta, size int64) {
 	r := bgReaders.Get().(*bufio.Reader)
 	r.Reset(io.NewSectionReader(f, *off, size-*off))
 	defer func() {
-		r.Reset(nil) // drop the file; the lines read are only used before this returns
+		r.Reset(nil) // drop the file; what m keeps of a line is a copy (below)
 		bgReaders.Put(r)
 	}()
 	at, long := *off, false
 	var refusalLine []byte
+	match := bgMatch()
 	for {
 		line, err := r.ReadSlice('\n')
 		at += int64(len(line))
 		if err == bufio.ErrBufferFull {
 			// While a fallback is active, a large reply can switch back and a large prompt can end a turn-scoped
-			// fallback. Keep those rows whole; request blobs only repeat history and are still skipped.
-			if !long && (m.ModelFallback != nil || bytes.Contains(line, []byte("model_refusal_"))) &&
+			// fallback. Keep those rows and compaction boundaries whole; request blobs only repeat history.
+			if !long && (m.ModelFallback != nil || bytes.Contains(line, []byte("model_refusal_")) ||
+				bytes.Contains(line, []byte(`"type":"assistant"`)) || bytes.Contains(line, []byte(`"type":"compacted"`)) ||
+				bytes.Contains(line, []byte(`"compact_boundary"`))) &&
 				!bytes.Contains(line, []byte(`"type":"api-request-blob"`)) {
 				refusalLine = append(refusalLine[:0], line...)
 			} else if refusalLine != nil {
@@ -160,15 +196,22 @@ func scanBackground(f *os.File, off *int64, m *transcript.Meta, size int64) {
 			return
 		}
 		// api-request blobs repeat everything; skip them
-		// A plan tool's result line does not name the tool: it is the line with the call's id.
-		if !long && len(line) <= 64<<10 && (containsAny(line, bgMarkers) || containsAny(line, transcript.GoalMarkers) || containsAny(line, transcript.UltracodeMarkers) ||
-			containsAny(line, transcript.PlanMarkers) || containsAny(line, m.PlanPending())) {
-			transcript.ParseLine(0, bytes.TrimSuffix(line, []byte("\n")), m)
+		// The static markers (bgMarkers and transcript's goal, ultracode and plan ones) in one pass over the line (bgmatch.go).
+		// Plan and Stop result lines do not name the tool: they hold the call's id.
+		if !long && len(line) <= 64<<10 && (match.match(line) || containsAny(line, m.PlanPending()) || containsAny(line, m.BackgroundPending())) {
+			// A copy: m outlives this scan, and the parser keeps the line it was given (the tree's raw record, #8407),
+			// which here would be the pooled buffer, holding another transcript's lines by the next look (#8440).
+			transcript.ParseLine(0, bytes.Clone(bytes.TrimSuffix(line, []byte("\n"))), m)
 		} else if !long {
 			m.ObserveModelFallback(bytes.TrimSuffix(line, []byte("\n")))
 		} else if refusalLine != nil {
 			refusalLine = append(refusalLine, line...)
 			m.ObserveModelFallback(bytes.TrimSuffix(refusalLine, []byte("\n")))
+		}
+		if !long {
+			m.ObserveNamingMetadata(line)
+		} else if refusalLine != nil {
+			m.ObserveNamingMetadata(refusalLine)
 		}
 		refusalLine = nil
 		long = false
@@ -182,12 +225,17 @@ func (n *Node) scanBackgroundLater(path string, sc *bgScan, size int64) {
 	defer func() { <-bgSlot }()
 	var off int64
 	var m transcript.Meta
+	var seen bgSeen
 	if f, err := os.Open(path); err == nil {
 		scanBackground(f, &off, &m, size)
+		if st, err := f.Stat(); err == nil {
+			seen.note(f, st, off)
+		}
 		f.Close()
 	}
 	sc.mu.Lock()
-	sc.off, sc.meta, sc.pending = off, m, false
+	seen.carried = sc.seen.carried // handed to the next connection's Node meanwhile: checked on its first use there
+	sc.off, sc.meta, sc.seen, sc.pending = off, m, seen, false
 	sc.mu.Unlock()
 }
 

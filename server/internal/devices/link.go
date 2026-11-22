@@ -44,11 +44,21 @@ type mgrLink struct {
 	address string          // the hub URL it went to
 	since   time.Time
 	// attention: its hello listed link.FeatureAttention. attMu keeps the summary's sends one at a time; attReady: the
-	// endpoints went out (the summary follows them); attSent: the Rev it was sent last (attention.go).
+	// endpoints went out (the summary follows them; attention.go). held: what Persona Link holds of it, the Rev it took
+	// last included (heldMu, never held for a send; presence.go).
 	attention bool
 	attMu     sync.Mutex
 	attReady  bool
-	attSent   string
+	heldMu    sync.Mutex
+	held      summaryHeld
+	// What it is told of the computer's resident node (tellNode): nodeMu guards the newest, nodeRev counting them, and is
+	// never held for a send; nodeSendMu keeps the sends one at a time, each the newest not sent yet (nodeSent), so the
+	// last Persona Link reads is the newest however the goroutines telling it interleave.
+	nodeMu     sync.Mutex
+	node       link.Message
+	nodeRev    uint64
+	nodeSendMu sync.Mutex
+	nodeSent   uint64
 	// ctx ends with the link, and every stream on it with it; its cause says why.
 	ctx    context.Context
 	cancel context.CancelCauseFunc
@@ -146,6 +156,7 @@ func (d *Devices) acceptLink(conn *websocket.Conn, a devicewire.Accept) {
 	d.logf("[%s] link up: Persona Link %s via %s from %s", m.cfg.ID, l.version, l.address, a.Source)
 	_ = l.send(d.linkEndpoints(m.cfg.ID))
 	l.readyForAttention()
+	d.tellNewLink(l)
 	// The read loop is not bound to l.ctx: a link closed with a reason (replaced) still sends its close frame.
 	for {
 		_, data, err := conn.Read(context.Background())
@@ -162,6 +173,10 @@ func (d *Devices) acceptLink(conn *websocket.Conn, a devicewire.Accept) {
 			l.deliver(msg.ID, linkStream{err: fmt.Errorf("Persona Link: %s", textfmt.Clip(msg.Error, 300))})
 		case "rename":
 			go d.linkRename(l, msg)
+		case "presence":
+			m.takePresence(l, msg)
+		case "rang":
+			m.takeRang(l, msg.InteractionID)
 		}
 	}
 	cause := context.Cause(ctx)
@@ -336,6 +351,7 @@ func (m *Machine) setLink(l *mgrLink) *mgrLink {
 	m.mu.Lock()
 	old := m.link
 	m.link, m.linkDown = l, nil
+	m.presence = nil // the old link's: the new one says its own (a command-line Link never does)
 	m.mu.Unlock()
 	for _, ch := range []chan struct{}{m.linkUp, m.kick} {
 		select {
@@ -365,6 +381,7 @@ func (m *Machine) dropLink(l *mgrLink, cause error) {
 		return
 	}
 	m.link, m.linkDown = nil, cause
+	m.presence = nil // the summary cannot reach this computer now: it no longer stands in for the phone
 	if !m.online && cause != nil {
 		m.err = cause.Error()
 	}
@@ -410,11 +427,54 @@ func (m *Machine) dialLink(ctx context.Context) (*nodePipe, error) {
 }
 
 // tellLink says on the machine's link whether the manager got through to the resident node: Persona Link shows it.
-func (m *Machine) tellLink(online bool, err string) {
+// still, when not nil, is checked as the link takes the state (tellNode).
+func (m *Machine) tellLink(online bool, err string, still func() bool) {
 	if m.cfg.Kind != kindLink {
 		return
 	}
 	if l := m.currentLink(); l != nil {
-		go func() { _ = l.send(link.Message{Type: "node", Online: online, Error: textfmt.Clip(err, 300)}) }()
+		l.tellNode(online, err, still)
 	}
+}
+
+// tellNode has l say whether the manager got through to the computer's resident node, without waiting for the send.
+// still, when not nil, says whether that is still so; it is asked under nodeMu, so a change after it was asked tells l
+// after this, and its state is the one that stays. Never called under a machine's mu: still takes one.
+func (l *mgrLink) tellNode(online bool, err string, still func() bool) {
+	l.nodeMu.Lock()
+	if still != nil && !still() {
+		l.nodeMu.Unlock()
+		return
+	}
+	l.node = link.Message{Type: "node", Online: online, Error: textfmt.Clip(err, 300)}
+	l.nodeRev++
+	l.nodeMu.Unlock()
+	go l.sendNode()
+}
+
+// sendNode sends the newest state tellNode took, unless it went out already.
+func (l *mgrLink) sendNode() {
+	l.nodeSendMu.Lock()
+	defer l.nodeSendMu.Unlock()
+	l.nodeMu.Lock()
+	msg, rev := l.node, l.nodeRev
+	l.nodeMu.Unlock()
+	if rev == l.nodeSent {
+		return
+	}
+	l.nodeSent = rev
+	_ = l.send(msg)
+}
+
+// tellNewLink tells a link that just came that the manager is through to the computer's resident node, when it is:
+// a link hears otherwise only when the node's connection changes (tellLinks), and one that came back while the node
+// stayed connected (a connection resumed, or another path to the computer) would show the node unknown for good
+// (#11262). A node not connected yet is the run loop's to tell, which the link woke (setLink); one waiting to be
+// resumed is resumeConn's.
+func (d *Devices) tellNewLink(l *mgrLink) {
+	owner := d.machineByID(l.m.cfg.ID) // the machine that has this entry's computer (paths_group.go)
+	if owner == nil {
+		return
+	}
+	l.tellNode(true, "", func() bool { return owner.nodeConnected(nil) })
 }

@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.asStateFlow
 data class DeviceSettingsUiState(
     val devices: PairedDevices? = null,
     val preferences: DeviceNotificationPreferences? = null,
+    /** The hub's low-distraction switch (#8157), for every device; null until read and on a hub without it. */
+    val lowDistraction: Boolean? = null,
     val busy: Boolean = false,
     val message: SettingsUiText? = null,
     val needsCleanup: Boolean = false,
@@ -32,6 +34,27 @@ class DeviceSettingsState(private val api: DeviceSettings?, private val unpair: 
         mutable.value = mutable.value.copy(preferences = requireNotNull(api).preferences())
     }
 
+    /** Reads the hub's low-distraction switch; a hub without it, or one that does not answer, shows no row. */
+    suspend fun loadLowDistraction() {
+        val on = try { api?.lowDistraction() } catch (error: CancellationException) { throw error } catch (_: Exception) { null }
+        mutable.value = mutable.value.copy(lowDistraction = on)
+    }
+
+    /** Shown at once; the hub's answer then stands, and a refusal puts the switch back and says so. */
+    suspend fun saveLowDistraction(on: Boolean) {
+        val previous = mutable.value.lowDistraction
+        if (mutable.value.busy || previous == null || previous == on) return
+        perform(R.string.settings_notify_low_distraction_save_failed) {
+            mutable.value = mutable.value.copy(lowDistraction = on)
+            try {
+                mutable.value = mutable.value.copy(lowDistraction = requireNotNull(api).saveLowDistraction(on))
+            } catch (error: Exception) {
+                mutable.value = mutable.value.copy(lowDistraction = previous)
+                throw error
+            }
+        }
+    }
+
     suspend fun savePreferences(next: DeviceNotificationPreferences) {
         if (mutable.value.busy || mutable.value.preferences == null) return
         val previous = mutable.value.preferences
@@ -39,6 +62,23 @@ class DeviceSettingsState(private val api: DeviceSettings?, private val unpair: 
             mutable.value = mutable.value.copy(preferences = next)
             try {
                 mutable.value = mutable.value.copy(preferences = requireNotNull(api).savePreferences(next))
+            } catch (error: Exception) {
+                mutable.value = mutable.value.copy(preferences = previous)
+                throw error
+            }
+        }
+    }
+
+    /** Only `quiet` goes, in this phone's time zone [zone] (as the web and iOS save it): the other prefs stay as they are. */
+    suspend fun saveQuietHours(next: QuietHours, zone: String = java.time.ZoneId.systemDefault().id) {
+        val previous = mutable.value.preferences
+        if (mutable.value.busy || previous?.quiet == null) return
+        val quiet = next.copy(tz = zone)
+        perform(R.string.settings_notify_prefs_save_failed) {
+            mutable.value = mutable.value.copy(preferences = previous.copy(quiet = quiet))
+            try {
+                val saved = requireNotNull(api).saveQuietHours(quiet)
+                mutable.value = mutable.value.copy(preferences = mutable.value.preferences?.copy(quiet = saved))
             } catch (error: Exception) {
                 mutable.value = mutable.value.copy(preferences = previous)
                 throw error

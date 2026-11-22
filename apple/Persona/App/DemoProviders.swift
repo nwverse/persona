@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 // i18n-ignore-file: demo mode stand-in for the hub: its made-up replies and errors, as the hub words them
 
 /// Demo Mode's Settings › Model Providers (#2455): a provider kept in Persona, two from a made-up ~/.zshrc and a wrapper script on
@@ -23,7 +24,8 @@ final class DemoProviders {
         managed = ["demo_gateway": [
             "name": "demo_gateway", "source": "persona", "kind": "launcher", "api": "messages", "base_url": "https://gateway.example.com",
             "model": "glm-5", "has_key": true, "auth": "bearer", "has_headers": true,
-            "models": [Self.catalog[3], Self.catalog[4]]
+            "models": [Self.catalog[3], Self.catalog[4]],
+            "share": "all", "delivery": "on_demand", "own_service": "skip"
         ]]
         order = ["demo_gateway"]
     }
@@ -89,6 +91,7 @@ final class DemoProviders {
             let headers = l.removeValue(forKey: "headers")
             l["source"] = "persona"
             l["has_key"] = .bool(key?.isEmpty == false || old["has_key"]?.bool == true)
+            Self.scope(&l, old: old, isNew: method == "POST")
             switch headers {
             case .some(.string(let h)): l["has_headers"] = .bool(!h.isEmpty)
             default: l["has_headers"] = old["has_headers"] ?? false
@@ -102,6 +105,24 @@ final class DemoProviders {
             return ["ok": true]
         default: return nil
         }
+    }
+
+    /// Like the hub's device scope (#2333): a new provider gets all + on demand + skip (use for a direct API or with
+    /// `assign`), a change keeps what it leaves out, and per-computer keys come back only as `key_machines`.
+    private static func scope(_ l: inout [String: JSONValue], old: [String: JSONValue], isNew: Bool) {
+        let defaults: [String: JSONValue] = isNew
+            ? ["share": "all", "delivery": "on_demand",
+               "own_service": .string(l["kind"]?.string == "api" || l["assign"] != nil ? "use" : "skip")]
+            : old.filter { ["share", "scope_machines", "delivery", "own_service"].contains($0.key) }
+        for (k, v) in defaults where l[k] == nil { l[k] = v }
+        if l["share"]?.string == "none" || (l["scope_machines"]?.array ?? []).isEmpty { l["scope_machines"] = nil }
+        var keyed = old["key_machines"]?.array?.compactMap(\.string) ?? []
+        for (id, key) in l.removeValue(forKey: "machine_keys")?.object ?? [:] {
+            keyed.removeAll { $0 == id }
+            if key.string?.isEmpty == false { keyed.append(id) }
+        }
+        l["key_machines"] = keyed.isEmpty ? nil : .array(keyed.sorted().map { .string($0) })
+        l["assign"] = nil
     }
 
     private func preview(_ machine: String) throws -> JSONValue {

@@ -1,7 +1,7 @@
 import XCTest
 
 /// The machine pages against a real hub: a local test hub (fake HOME, its own database, an isolated herdr session;
-/// docs/operations/testing.md「机器页面」), never the one in use, since this reconnects machines and starts a session.
+/// docs/operations/testing.md「Machine pages」), never the one in use, since this reconnects machines and starts a session.
 ///   TEST_RUNNER_PERSONA_LIVE_MACHINES_HUB=http://127.0.0.1:<port> TEST_RUNNER_PERSONA_LIVE_MACHINES_TOKEN=<token>
 /// The hub needs one online `local` machine and one ssh machine that cannot connect.
 final class MachinePagesLiveTests: XCTestCase {

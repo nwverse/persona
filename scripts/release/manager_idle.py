@@ -77,7 +77,7 @@ def _idle(row):
         raise ValueError('Manager session has pending or unknown interactions')
 
 
-def collect(root, target, api, require_idle=True, clock=time.monotonic):
+def collect(root, target, api, require_idle=True, clock=time.monotonic, identity_only=False):
     """Double-read inventories; only return a digest after complete stable reads.
 
     Each underlying HTTP request is independently bounded by the publisher API.
@@ -85,6 +85,9 @@ def collect(root, target, api, require_idle=True, clock=time.monotonic):
     read never receives a fresh timestamp or digest.
     """
     started = clock()
+    target_empty = target['main'] == '' and target['machine_id'] == ''
+    if not target_empty and (not target['main'] or not target['machine_id']):
+        raise ValueError('Manager main and machine must be populated together or explicitly empty together')
 
     def read(path):
         if clock() - started >= MAX_ACQUISITION_SECONDS:
@@ -109,12 +112,24 @@ def collect(root, target, api, require_idle=True, clock=time.monotonic):
             raise SnapshotPending('Exact independent manager is reconnecting')
         profile = read('assistant?' + urlencode({'manager': mid, 'archived': 'true'}))
         for field, expected in (('manager', mid), ('main', target['main']), ('machine_id', target['machine_id'])):
+            if target_empty and field != 'manager':
+                if profile.get(field) not in (None, ''):
+                    raise ValueError('Empty manager acquired a main or machine assignment')
+                continue
             if not profile.get(field):
                 raise SnapshotPending('Scoped assistant identity has not resynced')
             if profile[field] != expected:
                 raise ValueError('Scoped assistant identity conflicts with the original target')
+        if target_empty and _rows(profile, 'conversations'):
+            raise ValueError('Empty manager has conversation or activity state')
         machines = _rows(read('machines'), 'machines')
         owned = [m for m in machines if m.get('manager') == mid]
+        if target_empty:
+            if owned:
+                raise ValueError('Empty manager acquired an owned machine')
+            identity = dict(manager=mid, main='', machine_id='', machines=[])
+            revisions = {'assistant': _coverage(profile), 'machines': {}}
+            return manager, identity, [], revisions
         ids = [m.get('id') for m in owned]
         if not owned or any(not i for i in ids) or len(set(ids)) != len(ids):
             raise ValueError('Owned machine inventory is absent or ambiguous')
@@ -122,6 +137,10 @@ def collect(root, target, api, require_idle=True, clock=time.monotonic):
             raise ValueError('Original machine ownership conflicts with the manager')
         if any(m.get('online') is not True or not m.get('machine_uid') for m in owned):
             raise SnapshotPending('Target machine identities must be known and online')
+        if identity_only:
+            identity = dict(manager=mid, main=profile['main'], machine_id=profile['machine_id'],
+                            machines=sorted((m['id'], m['machine_uid']) for m in owned))
+            return manager, identity, [], {}
         inventory = {}
         revisions = {'assistant': _coverage(profile), 'machines': {}}
 
@@ -175,6 +194,8 @@ def collect(root, target, api, require_idle=True, clock=time.monotonic):
     elapsed = clock() - started
     if not 0 <= elapsed < MAX_ACQUISITION_SECONDS:
         raise TimeoutError('Manager inventory acquisition budget expired')
+    if identity_only:
+        return final[0], final[1], None
     evidence = dict(schema=1, identity=final[1], rows=final[2], revisions=final[3], complete_reads=2,
                     acquisition_seconds=elapsed, completed_at=dt.datetime.now(dt.timezone.utc).isoformat())
     return final[0], final[1], hashlib.sha256(canonical(evidence)).hexdigest()

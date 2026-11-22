@@ -53,6 +53,16 @@ func wantCode(t *testing.T, err error, code string) {
 	}
 }
 
+// skipOnRecycleBin skips the rest of a test that puts files in the system's trash and looks for them in its folder. On
+// Windows the trash is the user's own Recycle Bin, which names what it keeps itself; trash_windows_test.go covers it
+// there and puts back all it recycles.
+func skipOnRecycleBin(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the trash is the user's Recycle Bin here (trash_windows_test.go)")
+	}
+}
+
 func notThere(t *testing.T, path string) {
 	t.Helper()
 	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
@@ -191,6 +201,7 @@ func TestMoveFiles(t *testing.T) {
 		t.Fatal("keep did not keep both")
 	}
 
+	skipOnRecycleBin(t)
 	makeFile(t, filepath.Join(home, "proj", "b.txt"), "newer b")
 	if _, err := editCall(t, n, "file.move", map[string]any{"paths": []string{"~/proj/b.txt"}, "dir": "~/dest", "conflict": "replace"}); err != nil {
 		t.Fatal(err)
@@ -222,6 +233,7 @@ func TestMoveFiles(t *testing.T) {
 // A replace whose rename fails (the source went away after the request checked it) puts the destination back instead
 // of leaving it in the trash (#1968).
 func TestReplaceMoveFailureKeepsDestination(t *testing.T) {
+	skipOnRecycleBin(t)
 	t.Setenv("XDG_DATA_HOME", "")
 	n, home := writeNode(t)
 	makeFile(t, filepath.Join(home, "proj", "report.txt"), "new")
@@ -249,6 +261,7 @@ func TestReplaceMoveFailureKeepsDestination(t *testing.T) {
 // Trash and restore round-trip through the id alone (a fresh node puts it back), a name the trash already has gets a
 // number, Linux writes a .trashinfo, and a name taken meanwhile refuses the restore.
 func TestTrashAndRestore(t *testing.T) {
+	skipOnRecycleBin(t)
 	t.Setenv("XDG_DATA_HOME", "")
 	n, home := writeNode(t)
 	makeFile(t, filepath.Join(home, "proj", "a.txt"), "first")
@@ -269,7 +282,8 @@ func TestTrashAndRestore(t *testing.T) {
 	}
 	if runtime.GOOS == "linux" {
 		ti := fileText(t, filepath.Join(info, "a.txt.trashinfo"))
-		if !strings.Contains(ti, "[Trash Info]\nPath="+filepath.Join(home, "proj", "a.txt")) || !strings.Contains(ti, "DeletionDate=") {
+		// The file's path as the node resolved it (entry's realPath; on macOS /var is /private/var, #9138).
+		if !strings.Contains(ti, "[Trash Info]\nPath="+filepath.Join(resolved(t, home), "proj", "a.txt")) || !strings.Contains(ti, "DeletionDate=") {
 			t.Fatalf("trashinfo: %q", ti)
 		}
 	}
@@ -311,6 +325,7 @@ func TestTrashAndRestore(t *testing.T) {
 
 // A made-up trash id can't take a file out of the trash into a place the guard keeps, or reach outside the trash.
 func TestRestoreChecksTheGuard(t *testing.T) {
+	skipOnRecycleBin(t)
 	t.Setenv("XDG_DATA_HOME", "")
 	n, home := writeNode(t)
 	files, _, _ := n.trashDirs()
@@ -330,5 +345,53 @@ func TestRestoreChecksTheGuard(t *testing.T) {
 	}
 	if fileText(t, filepath.Join(files, "evil")) != "e" {
 		t.Fatal("the trashed file moved")
+	}
+}
+
+// A trash batch that fails partway puts back what it already moved instead of leaving it in the trash with no id to
+// undo it by (#3123): on Linux a 255-byte name can't get its .trashinfo.
+func TestTrashBatchFailurePutsBack(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the .trashinfo name limit is Linux's")
+	}
+	t.Setenv("XDG_DATA_HOME", "")
+	n, home := writeNode(t)
+	long := strings.Repeat("l", 255)
+	makeFile(t, filepath.Join(home, "proj", "a.txt"), "a")
+	makeFile(t, filepath.Join(home, "proj", long), "long")
+	_, err := editCall(t, n, "file.trash", map[string]any{"paths": []string{"a.txt", long}, "cwd": home + "/proj"})
+	if err == nil || !strings.Contains(err.Error(), "too long for the trash") {
+		t.Fatalf("a batch with a name too long for the trash: %v", err)
+	}
+	if fileText(t, filepath.Join(home, "proj", "a.txt")) != "a" || fileText(t, filepath.Join(home, "proj", long)) != "long" {
+		t.Fatal("a failed trash batch left files out of place")
+	}
+	files, info, _ := n.trashDirs()
+	for _, dir := range []string{files, info} {
+		left, err := os.ReadDir(dir)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		if len(left) != 0 {
+			t.Fatalf("left in %s: %v", dir, left)
+		}
+	}
+
+	// What can't go back (its name was taken meanwhile) is named, with the ids the app needs to offer Undo.
+	id, err := n.toTrash(filepath.Join(home, "proj", "a.txt"), "a.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	makeFile(t, filepath.Join(home, "proj", "a.txt"), "new a")
+	err = n.undoTrash([]map[string]string{{"path": "a.txt", "trash_id": id}}, errors.New("b.txt failed"))
+	var re *rpc.Error
+	if !errors.As(err, &re) || re.Message != "b.txt failed; a.txt is still in the trash" {
+		t.Fatalf("a restore that failed: %v", err)
+	}
+	if want, _ := json.Marshal(map[string]any{"trashed": []map[string]string{{"path": "a.txt", "trash_id": id}}}); string(re.Data) != string(want) {
+		t.Fatalf("data: %s", re.Data)
+	}
+	if fileText(t, filepath.Join(files, "a.txt")) != "a" || fileText(t, filepath.Join(home, "proj", "a.txt")) != "new a" {
+		t.Fatal("a refused restore moved something")
 	}
 }

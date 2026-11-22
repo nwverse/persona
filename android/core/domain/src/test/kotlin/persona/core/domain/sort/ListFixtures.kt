@@ -9,22 +9,26 @@ internal data class ListFixture(val name: String, val operation: String, val inp
     override fun toString() = name
 }
 
-internal fun listFixtures(domain: String): List<Array<Any>> {
+/** The list cases in [path], spelled out as "spec/fixtures/<domain>" so the build declares that domain as an input. */
+internal fun listFixtures(path: String): List<Array<Any>> {
     val root = System.getProperty("persona.repo.root") ?: error("persona.repo.root is required")
-    val directory = File(root, "spec/fixtures/$domain")
+    val directory = File(root, path)
     check(directory.isDirectory) { "Missing fixtures: $directory" }
     val files = directory.listFiles { file -> file.extension == "json" }!!.sortedBy { it.name }
     check(files.isNotEmpty()) { "No fixtures: $directory" }
-    return files.flatMap { file ->
-        val document = JsonCodec.parseToJsonElement(file.readText()).jsonObject
-        check(document.getValue("schema_version").jsonPrimitive.int == 1)
-        val cases = document.objects("cases")
-        check(cases.isNotEmpty()) { "No cases: $file" }
-        cases.map { case -> arrayOf<Any>(ListFixture(
-            "${file.name}/${case.string("name")}", document.string("operation"),
-            case.getValue("input").jsonObject, case.getValue("expected"),
-        )) }
-    }
+    // Only list fixtures ({schema_version, operation, cases}); the directory also holds other shared rules that their own
+    // tests read (spec/fixtures/inbox/handoff_memory.json, #2725).
+    return files.mapNotNull { file -> JsonCodec.parseToJsonElement(file.readText()).jsonObject.takeIf { "cases" in it }?.let { file to it } }
+        .also { check(it.isNotEmpty()) { "No list fixtures: $directory" } }
+        .flatMap { (file, document) ->
+            check(document.getValue("schema_version").jsonPrimitive.int == 1)
+            val cases = document.objects("cases")
+            check(cases.isNotEmpty()) { "No cases: $file" }
+            cases.map { case -> arrayOf<Any>(ListFixture(
+                "${file.name}/${case.string("name")}", document.string("operation"),
+                case.getValue("input").jsonObject, case.getValue("expected"),
+            )) }
+        }
 }
 
 internal fun JsonObject.optional(key: String): String? = (get(key) as? JsonPrimitive)?.contentOrNull

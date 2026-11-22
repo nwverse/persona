@@ -1,6 +1,6 @@
 import XCTest
 
-/// More › Clear All (docs/assistant/inbox.md「全部清理」): the menu says what it covers (the Lark filter here) and how many; one bulk
+/// More › Clear All (docs/assistant/inbox.md「Clean up all」): the menu says what it covers (the Lark filter here) and how many; one bulk
 /// request files them all as dismissed, with their versions; the toast's Undo brings them back. Against
 /// scripts/mock/mock_hub.py (PERSONA_MOCK_HUB), which keeps the bulk requests at /mock/inbox_bulk (each test counts the
 /// ones it adds, so both run against one mock). `TEST_RUNNER_PERSONA_SHOTS=<dir>` also writes the screenshots there.
@@ -24,7 +24,8 @@ final class InboxMarkAllTests: XCTestCase {
         }
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        launch(app, pair: pair, args: ["-tab", "mail", "-inbox.kind", "", "-inbox.source", "feishu"])
+        // the Lark filter's first row is FYI: every section stacked (the section bar's All, #9053)
+        launch(app, pair: pair, args: ["-tab", "mail", "-inbox.kind", "", "-inbox.source", "feishu", "-showInboxSection", "all"])
         func shot(_ name: String) {
             let image = app.screenshot()
             let a = XCTAttachment(screenshot: image)

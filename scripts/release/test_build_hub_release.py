@@ -19,49 +19,67 @@ class PackageReleaseTests(unittest.TestCase):
             binaries = out / 'bin'
             binaries.mkdir()
             platforms = ['linux-amd64', 'darwin-arm64']
-            for platform in platforms:
-                (binaries / ('personad-' + platform)).write_bytes(platform.encode())
-            stale = out / ('personad-linux-amd64-' + 'a' * 64 + '.gz')
+            programs = ['personad', 'persona-node']
+            for program in programs:
+                for platform in platforms:
+                    name = f'{program}-{platform}'
+                    (binaries / name).write_bytes(name.encode())
+            stale = out / ('persona-node-linux-amd64-' + 'a' * 64 + '.gz')
             stale.write_bytes(b'interrupted old build')
 
             def generate(args, root):
                 source = Path(args[args.index('--dir') + 1])
                 self.assertEqual({p.name for p in source.iterdir()},
-                                 {'personad-' + p + '.gz' for p in platforms})
+                                 {f'{program}-{platform}.gz' for program in programs for platform in platforms})
                 files = {}
-                for platform in platforms:
-                    name = 'personad-' + platform + '.gz'
-                    data = (source / name).read_bytes()
-                    files[platform] = {'name': name, 'size': len(data),
-                        'sha256': hashlib.sha256(data).hexdigest(),
-                        'binary_sha256': hashlib.sha256(gzip.decompress(data)).hexdigest()}
-                (source / 'manifest.json').write_text(json.dumps({'files': files}))
+                for program in programs:
+                    files[program] = {}
+                    for platform in platforms:
+                        name = f'{program}-{platform}.gz'
+                        data = (source / name).read_bytes()
+                        files[program][platform] = {'name': name, 'size': len(data),
+                            'sha256': hashlib.sha256(data).hexdigest(),
+                            'binary_sha256': hashlib.sha256(gzip.decompress(data)).hexdigest()}
+                manifest = {'files': files['personad'], 'nodes': {'persona-node': files['persona-node']}}
+                (source / 'manifest.json').write_text(json.dumps(manifest))
 
             with patch.object(builder, 'run', generate):
-                manifest = builder.package_release(binaries / 'personad-linux-amd64',
-                    binaries, out, platforms, 'fixture', '202611070001', 'a' * 40, out)
-            self.assertEqual(set(manifest['files']), set(platforms))
+                manifest = builder.package_release(binaries / 'personad-linux-amd64', binaries, out,
+                    platforms, 'fixture', '202611070001', 'a' * 40, out, publish_nodes=True)
             self.assertEqual(stale.read_bytes(), b'interrupted old build')
             self.assertFalse(list(out.glob('.packages-*')))
-            for platform, artifact in manifest['files'].items():
-                self.assertEqual(gzip.decompress((out / artifact['name']).read_bytes()), platform.encode())
+            for program, artifacts in [('personad', manifest['files']), ('persona-node', manifest['nodes']['persona-node'])]:
+                self.assertEqual(set(artifacts), set(platforms))
+                for platform, artifact in artifacts.items():
+                    name = f'{program}-{platform}'
+                    self.assertEqual(artifact['name'], f'{name}-{artifact["sha256"]}.gz')
+                    self.assertEqual(gzip.decompress((out / artifact['name']).read_bytes()), name.encode())
 
 
 class ManagerPackageScopeTests(unittest.TestCase):
-    def build(self, manager=False, parent_environment=None):
+    def build(self, manager=False, parent_environment=None, nodes=False):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         webdist = root / 'server/internal/hub/webdist'
         webdist.mkdir(parents=True)
         (webdist / 'README.md').write_text('fixture')
+        (root / 'server/build-tags.txt').write_text('public,ts_omit_fixture\n')
         out = root / 'artifacts'
         calls = []
         manifest = dict(version='master-' + 'a' * 12 + '-202611070001',
                         build=202611070001, commit='a' * 40,
                         files={'linux-amd64': {}, 'darwin-arm64': {}})
 
+        if nodes:
+            manifest['nodes'] = {'persona-node': {'linux-amd64': {}, 'darwin-arm64': {}}}
+
         def output(args, cwd, **kwargs):
+            if args[:3] == ['go', 'test', '-list']:
+                return 'TestA\nTestB\nTestC\nBenchmarkD\nok  \texample/server/internal/node\t0.1s\n'
+            if args[:2] == ['go', 'list']:
+                return ('example/server/internal/assistant\nexample/server/internal/hub\nexample/server/internal/node\n'
+                        'example/server/internal/node/sub\n')
             if args[:2] == ['go', 'env']:
                 return b'{"GOCACHE":"/example/cache","GOMODCACHE":"/example/mod","GOPATH":"/example/go"}'
             return 'a' * 40 if args[1] == 'rev-parse' else b''
@@ -72,15 +90,23 @@ class ManagerPackageScopeTests(unittest.TestCase):
         isolation = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(isolation)
         environment.clean_environment = isolation.clean_environment
+        partitions_spec = importlib.util.spec_from_file_location(
+            'go_partitions', Path(__file__).resolve().parents[1] / 'test/go_partitions.py')
+        partitions = importlib.util.module_from_spec(partitions_spec)
+        partitions_spec.loader.exec_module(partitions)
         argv = ['builder', '--out', str(out), '--build', '202611070001',
                 '--update-url', 'https://example.invalid/dl']
         if manager:
             argv.append('--publish-managers')
-        with patch('sys.argv', argv), patch.dict('sys.modules', server_test_env=environment), \
+        if nodes:
+            argv.append('--publish-nodes')
+        with patch('sys.argv', argv), patch.dict('sys.modules', server_test_env=environment, go_partitions=partitions), \
                 patch.dict(builder.os.environ, parent_environment or {}), \
                 patch.object(builder, '__file__', str(root / 'scripts/release/build_hub_release.py')), \
                 patch.object(builder.subprocess, 'check_output', output), \
                 patch.object(builder, 'run', lambda args, cwd, env=None: calls.append((args, env))), \
+                patch.object(builder, 'run_together',
+                             lambda commands, cwd, env=None: calls.extend((args, env) for args in commands)), \
                 patch.object(builder.shutil, 'copytree'), \
                 patch.object(builder, 'package_release', return_value=manifest) as package:
             builder.main()
@@ -92,7 +118,7 @@ class ManagerPackageScopeTests(unittest.TestCase):
             'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy')}
         _, calls, _ = self.build(parent_environment=proxies)
         tests = [env for args, env in calls if args[:2] == ['go', 'test']]
-        self.assertEqual(len(tests), 2)
+        self.assertEqual(len(tests), 8)  # the other packages, three assistant and three node partitions, the race run
         for environment in tests:
             self.assertFalse(set(proxies) & set(environment))
         # Network preparation and production artifact construction retain the
@@ -106,6 +132,20 @@ class ManagerPackageScopeTests(unittest.TestCase):
         preparation = [env for args, env in calls if args[:2] in (['go', 'mod'], ['go', 'vet'])]
         self.assertEqual(preparation, [None, None])
 
+    def test_node_and_assistant_tests_run_in_partitions_beside_the_other_packages(self):
+        _, calls, _ = self.build()
+        tests = [args for args, _ in calls if args[:3] == ['go', 'test', '-count=1']]
+        self.assertEqual(tests[0], ['go', 'test', '-count=1', 'example/server/internal/hub',
+                                    'example/server/internal/node/sub'])
+        self.assertEqual(tests[1:7], [['go', 'test', '-count=1', '-run', '^(TestA)$', './internal/assistant'],
+                                      ['go', 'test', '-count=1', '-run', '^(TestB)$', './internal/assistant'],
+                                      ['go', 'test', '-count=1', '-run', '^(TestC)$', './internal/assistant'],
+                                      ['go', 'test', '-count=1', '-run', '^(TestA)$', './internal/node'],
+                                      ['go', 'test', '-count=1', '-run', '^(TestB)$', './internal/node'],
+                                      ['go', 'test', '-count=1', '-run', '^(TestC)$', './internal/node']])
+        environments = [env for args, env in calls if args[:2] == ['go', 'test']]
+        self.assertTrue(all(env is environments[0] for env in environments))  # one clean test environment
+
     def test_manager_build_has_two_platforms_and_no_node_manifest(self):
         out, calls, platforms = self.build(manager=True)
         self.assertEqual(platforms, ['linux-amd64', 'darwin-arm64'])
@@ -115,6 +155,7 @@ class ManagerPackageScopeTests(unittest.TestCase):
         self.assertFalse((out / 'node-manifest.json').exists())
         builds = [(args, env) for args, env in calls if args[:2] == ['go', 'build']]
         self.assertEqual([env['GOOS'] for args, env in builds], ['linux', 'darwin'])
+        self.assertEqual([args[args.index('-tags') + 1] for args, env in builds], ['public,ts_omit_fixture'] * 2)
         self.assertEqual(builds[0][0][builds[0][0].index('-ldflags') + 1],
                          builds[1][0][builds[1][0].index('-ldflags') + 1])
         self.assertTrue(any(args[:2] == ['go', 'vet'] for args, _ in calls))
@@ -124,12 +165,33 @@ class ManagerPackageScopeTests(unittest.TestCase):
     def test_web_client_is_scanned_as_built_then_precompressed_before_go_build(self):
         out, calls, _ = self.build()
         args = [args for args, _ in calls]
-        webdist = str(out.parent / 'server/internal/hub/webdist')
+        # The builder resolves its root (Path(__file__).resolve()): resolve here too, or macOS's /var → /private/var
+        # temporary directory reads as another path.
+        webdist = str((out.parent / 'server/internal/hub/webdist').resolve())
         scan = args.index(['python3', 'scripts/release/check_bundle_privacy.py', '--whole-short', webdist])
         precompress = args.index(['go', 'run', './internal/webasset/precompress', 'internal/hub/webdist'])
         build = next(i for i, a in enumerate(args) if a[:2] == ['go', 'build'])
         self.assertLess(scan, precompress)
         self.assertLess(precompress, build)
+
+    def test_node_build_includes_both_programs_without_expanding_other_manifests(self):
+        for manager in (False, True):
+            with self.subTest(manager=manager):
+                out, calls, platforms = self.build(manager=manager, nodes=True)
+                builds = [(args, env) for args, env in calls if args[:2] == ['go', 'build']]
+                self.assertEqual([(args[-1], env['GOOS'], env['GOARCH']) for args, env in builds], [
+                    (f'./cmd/{program}', system, arch) for program in ('personad', 'persona-node')
+                    for system, arch in [('linux', 'amd64'), ('darwin', 'arm64')]])
+                self.assertTrue(all(env['CGO_ENABLED'] == '0' for _, env in builds))
+                for flag in ('-tags', '-ldflags'):
+                    self.assertEqual(len({args[args.index(flag) + 1] for args, _ in builds}), 1)
+                nodes = json.loads((out / 'node-manifest.json').read_text())
+                self.assertEqual(set(nodes['nodes']['persona-node']), set(platforms))
+                self.assertNotIn('nodes', json.loads((out / 'latest.json').read_text()))
+                if manager:
+                    self.assertNotIn('nodes', json.loads((out / 'manager-manifest.json').read_text()))
+                else:
+                    self.assertFalse((out / 'manager-manifest.json').exists())
 
     def test_default_hub_build_retains_single_platform(self):
         out, calls, platforms = self.build()

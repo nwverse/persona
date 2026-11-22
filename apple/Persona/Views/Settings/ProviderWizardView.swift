@@ -4,6 +4,7 @@ import SwiftUI
 enum ProviderWizardStep: String, Hashable, Identifiable {
     /// Choose Provider (adding).
     case pick
+    case paste
     /// Connect (editing starts here).
     case connect
     /// Choose Models.
@@ -31,10 +32,17 @@ enum ProviderWizardStep: String, Hashable, Identifiable {
 /// model" sit beside them, and the import / other connection types under Advanced.
 struct ProviderWizard: View {
     @Environment(AppModel.self) private var model
+    private let requestScope = AssistantSettingsRequestScope(AppModel.shared)
     @Environment(\.dismiss) private var dismiss
     var saved: () async -> Void
     @State private var wizard: ProviderWizardModel
     @State private var imports: LauncherImportModel
+    let launchers: [LauncherView]
+    @State private var paste = ProviderPasteModel()
+    @State private var pasteStart: ProviderWizardStep?
+    @State private var pasteOwner: ProviderImportOwner?
+    @State private var openingMatch = false
+    @State private var matchUnavailable = false
     @State private var step: ProviderWizardStep
     private let start: ProviderWizardStep
     /// Other Connection Types: the older form in this sheet.
@@ -53,10 +61,15 @@ struct ProviderWizard: View {
     @State private var link: LinkTarget?
     /// The preset whose Sign Up page is open: once it closes, its key is next.
     @State private var signingUp: String?
+    /// The Computers page, pushed without its row (`showComputers`, DEBUG screenshots).
+    @State private var computersOpen = false
 
     init(existing: LauncherView? = nil, start: ProviderWizardStep? = nil, saved: @escaping () async -> Void = {},
-         wizard: ProviderWizardModel? = nil, imports: LauncherImportModel? = nil) {
+         wizard: ProviderWizardModel? = nil, imports: LauncherImportModel? = nil, showComputers: Bool = false,
+         launchers: [LauncherView] = []) {
         self.saved = saved
+        self.launchers = launchers
+        _computersOpen = State(initialValue: showComputers)
         let first = start ?? (existing == nil ? .pick : .connect)
         self.start = first
         _step = State(initialValue: first)
@@ -72,6 +85,8 @@ struct ProviderWizard: View {
                 Form {
                     switch step {
                     case .pick: pickSections
+                    case .paste:
+                        ProviderPasteSections(paste: paste, matchUnavailable: matchUnavailable)
                     case .connect: connectSections
                     case .models: modelSections
                     case .importZshrc: LauncherImportSections(imports: imports, machines: importMachines)
@@ -81,25 +96,36 @@ struct ProviderWizard: View {
                     case .getModel: getModelSections
                     }
                 }
+                .task(id: step == .paste ? paste.revision : nil) {
+                    guard step == .paste, pasteOwner == activeOwner else { return }
+                    matchUnavailable = false
+                    await paste.read(using: requestScope.api(model))
+                }
                 .pluginLinks($link)
+                .navigationDestination(isPresented: $computersOpen) { computersPage }
                 .onChange(of: link) { _, now in
                     // Back from a Sign Up page: its key is next.
                     guard now == nil, let id = signingUp else { return }
                     signingUp = nil
                     pickPreset(id, from: .getModel)
                 }
+                .onChange(of: activeOwner) { _, _ in
+                    if pasteOwner != nil || imports.alias != nil { dismiss() }
+                }
                 .navigationTitle(title)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbar }
-                // Cancel on the first step (a Mac asks first once something is typed); Back after it.
+                // ✕ on the first step (a Mac asks first once something is typed); Back after it. Finished, the bar's own ✕
+                // (a wizard that starts on the import ends on its first step).
                 .sheetCancel(unsaved: !wizard.name.isEmpty || !wizard.apiKey.isEmpty || !wizard.presetKey.isEmpty,
-                             when: step == start) { dismiss() }
+                             when: step == start && !finished) { dismiss() }
                 .animation(Theme.Motion.standard, value: step)
                 // Again once the hub's features are in (a sheet opened while connecting starts without them).
                 .task(id: wizard.presetsFlow) {
                     // The toggle's default reads the readiness: ask for a fresh one alongside the presets.
                     if wizard.presetsFlow, model.hubFeatures.contains(AssistantReadiness.feature) {
-                        Task { await model.readiness.refresh(api: model.api) }
+                        let api = requestScope.api(model)
+                        Task { await model.readiness.refresh(api: api) }
                     }
                     await wizard.loadPresets()
                     #if DEBUG
@@ -113,8 +139,18 @@ struct ProviderWizard: View {
         }
     }
 
+    /// The Computers page of the provider being edited: the preset's kind on the key step, else the stored provider's.
+    private var computersPage: some View {
+        @Bindable var wizard = wizard
+        let presetStep = step == .key
+        return ProviderComputersPage(scope: $wizard.scope, old: presetStep ? nil : wizard.existing,
+                                     kind: presetStep ? wizard.preset?.kind ?? "launcher" : wizard.providerKind,
+                                     agent: presetStep ? nil : wizard.providerAgent, assign: presetStep && wizard.preset?.runsClaude != false && wizard.assign)
+    }
+
     private var title: String {
         switch step {
+        case .paste: String(localized: "Paste a configuration")
         case .importZshrc: String(localized: "Import from ~/.zshrc")
         default: wizard.isNew ? String(localized: "Add Provider") : String(localized: "Edit \(wizard.existing?.name ?? "")")
         }
@@ -129,57 +165,127 @@ struct ProviderWizard: View {
     // MARK: Bar
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
-        if step != start && step != .done {
-            ToolbarItem(placement: .cancellationAction) {
+        leadingItem
+        saveItem
+        wordItem
+    }
+
+    /// Finished: only the way out, ✕ at the leading corner (#9653). Between steps: Back there.
+    @ToolbarContentBuilder private var leadingItem: some ToolbarContent {
+        if finished {
+            SheetClose(id: "wizard.done") { dismiss() }
+        } else if showsBack {
+            ToolbarItem(placement: .topBarLeading) {
                 Button("Back [Provider Wizard View da336f]") { back() }.lineLimit(1).accessibilityIdentifier("wizard.back")
-            }
-        }
-        ToolbarItem(placement: .confirmationAction) {
-            switch step {
-            case .pick: EmptyView()
-            case .connect:
-                Button("Next [Inbox Line acfc4e]") { Task { await toModels() } }.lineLimit(1)
-                    .disabled(!wizard.connectionReady || wizard.discovering)
-                    .accessibilityIdentifier("wizard.next")
-            case .models:
-                Button { Task { await save() } } label: {
-                    if wizard.saving { ProgressView() } else { Text("Save").lineLimit(1) }
-                }
-                .disabled(!wizard.canSave)
-                .accessibilityIdentifier("wizard.save")
-            case .key:
-                Button { Task { await savePreset() } } label: {
-                    if wizard.saving { ProgressView() } else { Text("Save").lineLimit(1) }
-                }
-                .disabled(!wizard.canSavePreset)
-                .accessibilityIdentifier("wizard.save")
-            case .done:
-                Button("Done [Extension System Presentation c0b3fb]") { dismiss() }.lineLimit(1).accessibilityIdentifier("wizard.done")
-            case .claude:
-                if wizard.claudeTry?.ok == true {
-                    Button("Done [Extension System Presentation c0b3fb]") { dismiss() }.lineLimit(1).accessibilityIdentifier("wizard.done")
-                }
-            case .getModel: EmptyView()
-            case .importZshrc:
-                switch imports.phase {
-                case .preview, .importing:
-                    Button("Import") { Task { await runImport() } }.lineLimit(1)
-                        .disabled(!imports.canImport).accessibilityIdentifier("import.confirm")
-                case .done:
-                    Button("Done [Extension System Presentation c0b3fb]") { dismiss() }.lineLimit(1).accessibilityIdentifier("import.done")
-                default: EmptyView()
-                }
             }
         }
     }
 
-    private func back() {
+    /// Save as the ✓ (#9653).
+    @ToolbarContentBuilder private var saveItem: some ToolbarContent {
+        if savesHere {
+            SheetConfirm(id: "wizard.save", disabled: !canSaveHere, busy: wizard.saving) { Task { await saveHere() } }
+        }
+    }
+
+    /// Next and Import stay words: they say more than ✓.
+    @ToolbarContentBuilder private var wordItem: some ToolbarContent {
+        if step == .connect || step == .paste || importsReady {
+            ToolbarItem(placement: .confirmationAction) { wordButton }
+        }
+    }
+
+    @ViewBuilder private var wordButton: some View {
+        if step == .paste {
+            Button("Continue") { Task { await continuePaste() } }
+                .disabled(paste.action == nil || openingMatch)
+                .accessibilityIdentifier("wizard.paste.continue")
+        } else if step == .connect {
+            Button("Next [Inbox Line acfc4e]") { Task { await toModels() } }.lineLimit(1)
+                .disabled(!wizard.connectionReady || wizard.discovering)
+                .accessibilityIdentifier("wizard.next")
+        } else {
+            Button("Import") { Task { await runImport() } }.lineLimit(1)
+                .disabled(!imports.canImport).accessibilityIdentifier("import.confirm")
+        }
+    }
+
+    private var savesHere: Bool { step == .models || step == .key }
+    private var canSaveHere: Bool { step == .models ? wizard.canSave : wizard.canSavePreset }
+
+    private func saveHere() async {
+        if step == .models { await save() } else { await savePreset() }
+    }
+
+    private var showsBack: Bool { step != start && step != .done }
+
+    /// The import's list is up: Import takes what is ticked.
+    private var importsReady: Bool {
+        step == .importZshrc && (imports.phase == .preview || imports.phase == .importing)
+    }
+
+    private var activeOwner: ProviderImportOwner {
+        ProviderImportOwner(group: model.hub?.group ?? "", manager: model.assistantManagerID)
+    }
+
+    /// Nothing left to do but leave: saved, a working Claude sign-in, or an import done.
+    private var finished: Bool {
         switch step {
+        case .done: true
+        case .claude: wizard.claudeTry?.ok == true
+        case .importZshrc: imports.phase == .done
+        default: false
+        }
+    }
+
+    private func back() {
+        if step == pasteStart {
+            wizard = ProviderWizardModel()
+            pasteStart = nil
+            step = .paste
+            return
+        }
+        switch step {
+        case .paste:
+            paste = ProviderPasteModel()
+            pasteOwner = nil
+            step = .pick
+        case .importZshrc where imports.alias != nil:
+            imports = LauncherImportModel()
+            step = .pick
         case .models: step = .connect
         case .importZshrc where imports.phase == .preview: imports.restart()
         case .key: step = keyFrom
         default: step = .pick
         }
+    }
+
+    private func continuePaste() async {
+        guard !openingMatch, let draft = paste.draft, let action = paste.action else { return }
+        let revision = paste.revision
+        let selected = paste.selected
+        let owner = ProviderImportOwner(group: requestScope.group, manager: requestScope.manager)
+        guard pasteOwner == owner, activeOwner == owner else { return }
+        let existing: LauncherView?
+        let next: ProviderWizardStep
+        switch action {
+        case .add:
+            existing = nil
+            next = .connect
+        case .merge(let name), .replaceKey(let name):
+            openingMatch = true
+            defer { openingMatch = false }
+            existing = try? await requestScope.api(model)?.launcher(name)
+            guard step == .paste, paste.revision == revision, paste.selected == selected, paste.action == action,
+                  activeOwner == owner else { return }
+            guard let existing, existing.managed, existing.name == name else { matchUnavailable = true; return }
+            next = action == .merge(name) ? .models : .connect
+        }
+        let form = ProviderWizardModel(existing: existing)
+        form.applyPaste(draft, action: action)
+        wizard = form
+        pasteStart = next
+        step = next
     }
 
     /// Next from Connect: a new provider reads the gateway's models first (once), so the next step has them.
@@ -223,6 +329,48 @@ struct ProviderWizard: View {
 
     @ViewBuilder private var pickSections: some View {
         if wizard.presetsFlow { presetPickSections } else { legacyPickSections }
+        #if os(iOS)
+        if model.hubFeatures.contains(ProviderPasteModel.feature),
+           activeOwner == ProviderImportOwner(group: requestScope.group, manager: requestScope.manager) {
+            Section {
+                Button {
+                    pasteOwner = activeOwner
+                    step = .paste
+                } label: { Label("Paste a configuration", systemImage: Theme.Icon.paste) }
+                .accessibilityIdentifier("wizard.paste")
+            }
+            let aliases = FoundProviderAlias.available(launchers, machines: requestScope.machines(model))
+            if !aliases.isEmpty {
+                Section("Found on your computers") {
+                    ForEach(aliases) { alias in
+                        Button {
+                            let scope = requestScope
+                            let app = model
+                            let selected = LauncherImportModel(deps: .init(api: { scope.api(app) }))
+                            selected.machine = alias.machine
+                            selected.alias = alias.name
+                            imports = selected
+                            step = .importZshrc
+                            Task { await selected.load() }
+                        } label: {
+                            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                                Text(verbatim: alias.name).font(Theme.Font.heading).foregroundStyle(.primary)
+                                let computer = alias.computer
+                                let location = alias.online ? computer : String(localized: "On \(computer) (offline)")
+                                Text(verbatim: [location, alias.host].compactMap { $0 }.joined(separator: " · "))
+                                    .font(Theme.Font.label).foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!alias.online)
+                        .accessibilityIdentifier("wizard.alias.\(alias.name)")
+                    }
+                }
+            }
+        }
+        #endif
     }
 
     /// An older hub's first step, as it was: Anthropic official (written into the app), a gateway, the import, other ways.
@@ -254,7 +402,7 @@ struct ProviderWizard: View {
     }
 
     /// No computer yet: nothing to read a ~/.zshrc on (the import would wait for one forever).
-    private var noComputer: Bool { model.hubMachines.isEmpty }
+    private var noComputer: Bool { requestScope.machines(model).isEmpty }
 
     /// A hub with built-in presets: its providers in its order, the gateway typed by hand last; the two side paths;
     /// the import and the other ways under Advanced.
@@ -330,7 +478,9 @@ struct ProviderWizard: View {
                     }
                 }
                 .accessibilityElement(children: .combine)
-                SecretField(String(localized: "Paste the API key"), filled: String(localized: "Filled in"), text: $wizard.presetKey, identifier: "wizard.preset.key")
+                ProviderKeyField(title: String(localized: "Paste the API key"), filled: String(localized: "Filled in"), text: $wizard.presetKey,
+                                 byReference: $wizard.presetKeyByReference, references: wizard.keyReferences, identifier: "wizard.preset.key",
+                                 explainedBelow: true)
                     .onChange(of: wizard.presetKey) { wizard.keyChanged() }
                 if let url = p.signup {
                     Button { link = LinkTarget(url: url) } label: {
@@ -339,19 +489,39 @@ struct ProviderWizard: View {
                     .accessibilityIdentifier("wizard.preset.signup")
                 }
             } header: { stepHeader(2, String(localized: "Paste the key")) } footer: {
-                Text([p.keyHint, String(localized: "The key is stored encrypted on the hub and never sent back to clients.")].compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: "\n"))
+                Text([p.keyHint, wizard.presetKeyByReference ? String(localized: "The hub keeps only the reference and fetches the key from its provider when it's needed.")
+                      : String(localized: "The key is stored encrypted on the hub and never sent back to clients.")].compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: "\n"))
             }
-            Section {
-                keyTestRow(p)
-            } header: { Text("Test") } footer: {
-                if p.testable { Text("Once pasted, it's tested once: a very short request that may cost a little.") }
-            }
-            Section {
-                Toggle(isOn: Binding(get: { wizard.assign }, set: { wizard.assignChoice = $0 })) {
-                    Text("Use it for the main conversation and new agents").lineLimit(2)
+            if wizard.presetKeyByReference {
+                Section {
+                    Text("Checked when you save it: the reference must resolve. The connection test runs after that.")
+                        .font(Theme.Font.secondary).foregroundStyle(.secondary)
+                } header: { Text("Test") }
+            } else {
+                Section {
+                    keyTestRow(p)
+                } header: { Text("Test") } footer: {
+                    if p.testable { Text("Once pasted, it's tested once: a very short request that may cost a little.") }
                 }
-                .accessibilityIdentifier("wizard.assign")
-            } footer: { Text("Only changes what nobody has set; models you picked stay.") }
+            }
+            if p.runsClaude {
+                Section {
+                    Toggle(isOn: Binding(get: { wizard.assign }, set: { wizard.assignChoice = $0 })) {
+                        Text("Use it for the main conversation and new agents").lineLimit(2)
+                    }
+                    .accessibilityIdentifier("wizard.assign")
+                } footer: { Text("Only changes what nobody has set; models you picked stay.") }
+            } else {
+                Section {
+                    Text("The main chat and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models.")
+                        .font(Theme.Font.secondary).foregroundStyle(.secondary)
+                }
+            }
+            if wizard.scopeShown {
+                Section {
+                    ProviderComputersRow(scope: $wizard.scope, old: nil, kind: p.kind, assign: p.runsClaude && wizard.assign)
+                } footer: { Text("Which computers can run it and get its key.") }
+            }
             Section {
                 DisclosureGroup(isExpanded: $showPresetMore) { presetMoreFields(p) } label: {
                     HStack {
@@ -370,7 +540,7 @@ struct ProviderWizard: View {
 
     @ViewBuilder private func keyTestRow(_ p: LauncherPreset) -> some View {
         if !p.testable {
-            Text("A Responses API key can't be tested here; save it and use it.").font(Theme.Font.label).foregroundStyle(.secondary)
+            Text("This API protocol's key can't be tested here; save it and use it.").font(Theme.Font.label).foregroundStyle(.secondary)
         } else if wizard.keyTesting {
             HStack(spacing: Theme.Space.s) {
                 ProgressView()
@@ -433,7 +603,10 @@ struct ProviderWizard: View {
                 ForEach(summary.kept, id: \.self) { k in
                     Text(k).font(Theme.Font.secondary).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
-                if summary.assigned.isEmpty {
+                if let p = wizard.preset, !p.runsClaude {
+                    Text("The main chat and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models.")
+                        .font(Theme.Font.secondary).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                } else if summary.assigned.isEmpty {
                     Text("To use it for the main conversation or agents, pick it in Model Settings.").font(Theme.Font.secondary).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
@@ -574,11 +747,28 @@ struct ProviderWizard: View {
                 }
                 .lineLimit(1)
             }
-            SecretField(wizard.hasStoredKey ? String(localized: "API Key (leave empty to keep)") : "API Key", filled: String(localized: "Filled in"), text: $wizard.apiKey,
-                        identifier: "wizard.key")
+            ProviderKeyField(title: wizard.hasStoredKey ? String(localized: "API Key (leave empty to keep)") : "API Key", filled: String(localized: "Filled in"),
+                             text: $wizard.apiKey, byReference: $wizard.apiKeyByReference, references: wizard.keyReferences,
+                             stored: wizard.existing?.keyReference, identifier: "wizard.key", explainedBelow: true)
         } header: { Text("Gateway") } footer: {
-            Text(wizard.kind == .anthropic ? String(localized: "The key is stored encrypted on the hub, handed to the computer only at launch, and never sent back to apps.")
-                 : String(localized: "Choose Bearer if the gateway only accepts Authorization: Bearer (ANTHROPIC_AUTH_TOKEN). The key is stored encrypted on the hub and never sent back to apps."))
+            switch (wizard.kind == .anthropic, wizard.apiKeyByReference) {
+            case (true, false): Text(String(localized: "The key is stored encrypted on the hub, handed to the computer only at launch, and never sent back to apps."))
+            case (true, true): Text(String(localized: "The hub keeps only the reference and fetches the key from its provider when it's needed. The key is handed to the computer only at launch and never sent back to apps."))
+            case (false, false): Text(String(localized: "Choose Bearer if the gateway only accepts Authorization: Bearer (ANTHROPIC_AUTH_TOKEN). The key is stored encrypted on the hub and never sent back to apps."))
+            case (false, true): Text(String(localized: "Choose Bearer if the gateway only accepts Authorization: Bearer (ANTHROPIC_AUTH_TOKEN). The hub keeps only the reference and fetches the key from its provider when it's needed."))
+            }
+        }
+        if wizard.isAPI {
+            Section {
+                Picker("Send Through", selection: $wizard.viaMachine) {
+                    Text("The Hub Itself").tag("")
+                    ForEach(wizard.viaChoices, id: \.id) { m in Text(m.name).tag(m.id) }
+                }
+                .lineLimit(1)
+                .accessibilityIdentifier("wizard.via")
+            } footer: {
+                Text("Which machine sends this connection’s requests. Choose one of your computers when the hub can’t reach the provider and that computer can; it must be online when a request goes out.")
+            }
         }
         Section {
             Button { Task { await wizard.runTest() } } label: {
@@ -599,13 +789,17 @@ struct ProviderWizard: View {
                     }
                 }
             }
-            .disabled(!wizard.connectionReady || wizard.discovering)
+            .disabled(!wizard.connectionReady || wizard.discovering || wizard.referencePending)
             .accessibilityIdentifier("wizard.discover")
             if let e = wizard.discoverError {
                 Text(e).font(Theme.Font.label).foregroundStyle(Theme.danger).lineLimit(4)
             }
         } header: { Text("Check") } footer: {
-            Text("Testing the connection sends a real, very small request (\(wizard.testModel.isEmpty ? String(localized: "get the model list first") : wizard.testModel)), which may cost a little.")
+            if wizard.referencePending {
+                Text("Checked when you save it: the reference must resolve. The connection test runs after that.")
+            } else {
+                Text("Testing the connection sends a real, very small request (\(wizard.testModel.isEmpty ? String(localized: "get the model list first") : wizard.testModel)), which may cost a little.")
+            }
         }
     }
 
@@ -722,6 +916,11 @@ struct ProviderWizard: View {
                 }
                 .lineLimit(1)
             }
+            // Where it runs and when its key travels (#2333), the same kind of row; only on a hub that takes scopes.
+            if wizard.scopeShown {
+                ProviderComputersRow(scope: $wizard.scope, old: wizard.existing, kind: wizard.providerKind,
+                                     agent: wizard.providerAgent)
+            }
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 TextField(wizard.hasStoredHeaders ? String(localized: "Headers set (hidden; leave empty to keep)") : String(localized: "Headers, one Name: value per line"),
                           text: $wizard.headers, axis: .vertical)
@@ -777,11 +976,12 @@ struct ProviderWizard: View {
 
     /// The machines to import from: the hub group's, online first.
     private var importMachines: [Machine] {
-        model.hubMachines.sorted { ($0.online ? 0 : 1, $0.name) < ($1.online ? 0 : 1, $1.name) }
+        requestScope.machines(model).sorted { ($0.online ? 0 : 1, $0.name) < ($1.online ? 0 : 1, $1.name) }
     }
 
     #if DEBUG
-    /// `-openProviderWizard connect|models` fills the form in with made-up values (screenshots); `key` / `done` take the
+    /// `-openProviderWizard connect|models` fills the form in with made-up values (screenshots; `-openProviderComputers new`
+    /// then opens its Computers page); `key` / `done` take the
     /// first built-in preset (`-wizardPreset <id>` another) with a made-up key (`-wizardKey <key>`: the mock hub
     /// refuses one with "bad" in it), `done` saves it; `claude` tries the main conversation.
     private func debugFill() async {
@@ -803,6 +1003,8 @@ struct ProviderWizard: View {
         wizard.baseURL = "https://gateway.example.com"
         wizard.apiKey = "sk-test-demo"
         if want == "models" { await toModels() }
+        // `-openProviderComputers new` on top: the new provider's Computers page.
+        if want == "models", ProviderComputersDemo.state == "new" { computersOpen = true }
     }
     #endif
 }
@@ -901,7 +1103,17 @@ struct LauncherImportSections: View {
 
     var body: some View {
         switch imports.phase {
-        case .machine, .loading: machineSection
+        case .machine, .loading:
+            if let alias = imports.alias {
+                Section {
+                    if let error = imports.error {
+                        LoadProblem(text: error)
+                        Button("Try again") { Task { await imports.load() } }
+                    } else {
+                        ProgressView()
+                    }
+                } header: { Text(verbatim: alias) }
+            } else { machineSection }
         case .preview, .importing: previewSections
         case .done: resultSection
         }

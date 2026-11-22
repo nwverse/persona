@@ -37,6 +37,12 @@ type ExtensionDetail struct {
 	Contributions []ContributionView          `json:"contributions,omitempty"`
 	Depends       []extension.DependencyState `json:"depends,omitempty"`
 	ExtensionPack []extension.PackMember      `json:"extension_pack,omitempty"`
+	// PackMembersFollow, on a pack, says its Enabled switch switches its installed members too (#1830); a hub without it
+	// switches the pack alone. PackOff are the members switching it off switched off, the ones switching it on turns on;
+	// PackOn the installed members that are on, the ones switching it off would switch off.
+	PackMembersFollow bool            `json:"pack_members_follow,omitempty"`
+	PackOff           []string        `json:"pack_off,omitempty"`
+	PackOn            []DependentView `json:"pack_on,omitempty"`
 	// NodeMachines is the field of Form that picks the computers its program runs on (an extension with one,
 	// docs/extensions/extensions.md "Programs that run on computers"): the apps show that program's state on each (Nodes) in the
 	// field's rows.
@@ -45,6 +51,14 @@ type ExtensionDetail struct {
 	// another host deletes its key, docs/extensions/extensions.md "Built-in voice extension"; a line in Warnings says so too). An
 	// error answer carries it too when they went before the configuration could not be saved.
 	SecretsCleared []string `json:"secrets_cleared,omitempty"`
+	// SecretUsers: for a secret provider, the other extensions' secrets that hold its references (secret_refs.go).
+	SecretUsers []SecretUserView `json:"secret_users,omitempty"`
+	// HandoffRules: for a secret provider, the Always rules of hand-offs of its values (secret_handoff_rules.go).
+	HandoffRules []HandoffRuleView `json:"handoff_rules,omitempty"`
+	// DataDir is its data directory on the manager's machine, the one its program is given there (an attached package
+	// keeps it): for the master token over loopback and the admin UI only, never a device; none for one installed from
+	// remote:, one from hub.json or manager.json, or one with no program on the manager.
+	DataDir string `json:"data_dir,omitempty"`
 }
 
 // ExtensionSecretView is a declared secret and whether it has a value (never the value).
@@ -54,23 +68,80 @@ type ExtensionSecretView struct {
 	Description string `json:"description,omitempty"`
 	Required    bool   `json:"required,omitempty"`
 	Set         bool   `json:"set"`
+	// List and EntryTitle associate a live entry secret with its list; Name is its stable entry/storage ID.
+	List       string `json:"list,omitempty"`
+	EntryTitle string `json:"entry_title,omitempty"`
 	// Hint is a set secret's last four characters, when its spec asks (hint "last4", #5906); never more of it.
 	Hint string `json:"hint,omitempty"`
+	// Reference: the secret holds a reference, not a value (secret_refs.go); never a hint then.
+	Reference *SecretReferenceView `json:"reference,omitempty"`
+}
+
+// switched is the detail a switch answers, with what did not follow it (switchExtension).
+func (ps *extensions) switched(ctx context.Context, id string, warnings []string) ExtensionDetail {
+	d := ps.detail(ctx, ps.reg.Snapshot(id))
+	if len(warnings) > 0 {
+		d.Warnings = append(slices.Clone(d.Warnings), warnings...)
+	}
+	return d
+}
+
+func entryNetworkForm(form *extension.Schema, m *extension.Manifest) *extension.Schema {
+	if form == nil {
+		return nil
+	}
+	out := *form
+	out.Fields = slices.Clone(form.Fields)
+	for i := range out.Fields {
+		list := &out.Fields[i]
+		if !list.EntryList() || list.Items == nil {
+			continue
+		}
+		item := *list.Items
+		item.Fields = slices.Clone(list.Items.Fields)
+		list.Items = &item
+		for _, network := range m.Permissions.ConfiguredNetworks() {
+			if network.Malformed || network.List != list.Name {
+				continue
+			}
+			for j := range list.Items.Fields {
+				if list.Items.Fields[j].Name == network.Field {
+					list.Items.Fields[j].ClearsSecret = true
+				}
+			}
+		}
+	}
+	return &out
 }
 
 func (ps *extensions) detail(ctx context.Context, p *extension.Extension) ExtensionDetail {
 	m := p.Full
+	l := ps.h.contextLang(ctx)
+	form := p.L10n.Schema(l, p.Schema)  // the form's text in the request's language (#897); p.Schema is shared
+	form = withoutIPhonePhones(p, form) // each iPhone's own consent, never set from a form (iphone.go)
+	form = entryNetworkForm(form, m)
 	d := ExtensionDetail{ExtensionView: ps.view(ctx, p), Publisher: m.Publisher, Homepage: m.Homepage, Origin: p.Record.Origin,
-		PreviousVersion: p.Record.PreviousVersion, ReadOnly: p.ReadOnly(), Form: p.Schema, Permissions: extension.ExplainWith(ps.h.contextLang(ctx), m, ps.reg.Config(p)),
+		PreviousVersion: p.Record.PreviousVersion, ReadOnly: p.ReadOnly(), Form: form, Permissions: extension.ExplainWith(l, m, ps.reg.Config(p)),
 		Contributions: ps.contributionViews(p), Depends: ps.reg.DependenciesContext(ctx, m), ExtensionPack: m.ExtensionPack}
+	if m.IsPack() {
+		d.PackMembersFollow = true
+		if cur := ps.reg.Snapshot(p.Record.ID); cur != nil {
+			d.PackOff = cur.Record.PackOff
+		}
+		d.PackOn = ps.packMembersOn(p)
+	}
 	if d.Permissions == nil {
 		d.Permissions = []extension.PermissionLine{}
 	}
+	if who := principalOf(ctx); (who.Owner || who.Admin) && p.Legacy == nil && m.Runtime != nil &&
+		(p.Record.Remote == nil || p.Record.AttachedPackage()) {
+		d.DataDir = ps.reg.DataDir(p.Record.ID)
+	}
 	if m.NodeProgram() != nil { // not cua / ego / imessage: built in, their machines show as they always did
 		d.NodeMachines = m.Node.Machines
-		d.Form = nodeConfirmForm(ps.h.contextLang(ctx), p.Schema, m)
+		d.Form = nodeConfirmForm(l, form, m, d.Name)
 	}
-	for _, u := range ps.uiPlaces("", "") {
+	for _, u := range ps.localizeUI(l, ps.uiPlaces("", "")) {
 		if u.Extension == p.Record.ID && extension.FullPage(u.Placement) {
 			d.UI = append(d.UI, u)
 		}
@@ -81,16 +152,73 @@ func (ps *extensions) detail(ctx context.Context, p *extension.Extension) Extens
 			d.Config = json.RawMessage(`{}`)
 		}
 		set := ps.reg.SecretsSet(ctx, p)
-		var plain map[string]string // read only when a secret is shown by its end
-		for _, s := range m.Secrets {
-			if s.Hint != "" && set[s.Name] && plain == nil {
+		var plain map[string]string // read when a secret is set: shown by its end, or a reference
+		loadPlain := func() {
+			if plain == nil {
 				plain, _ = ps.reg.Secrets(ctx, p.Record.ID)
 			}
-			d.Secrets = append(d.Secrets, ExtensionSecretView{Name: s.Name, Title: s.Title, Description: s.Description, Required: s.Required, Set: set[s.Name],
-				Hint: extension.SecretHint(s, plain[s.Name])})
 		}
+		for _, s := range m.Secrets {
+			if set[s.Name] {
+				loadPlain()
+			}
+			shown := p.L10n.Secret(l, s)
+			view := ExtensionSecretView{Name: s.Name, Title: shown.Title, Description: shown.Description, Required: s.Required, Set: set[s.Name]}
+			if ref, ok := extension.ReferenceOf(plain[s.Name]); ok {
+				view.Reference = ps.secretReferenceView(ctx, ref)
+			} else {
+				view.Hint = extension.SecretHint(s, plain[s.Name])
+			}
+			d.Secrets = append(d.Secrets, view)
+		}
+		if form != nil {
+			var config map[string]json.RawMessage
+			_ = json.Unmarshal(d.Config, &config)
+			for _, f := range form.EntryListFields() {
+				var entries []map[string]json.RawMessage
+				_ = json.Unmarshal(config[f.Name], &entries)
+				for _, entry := range entries {
+					var id string
+					if json.Unmarshal(entry["_id"], &id) != nil || id == "" {
+						continue
+					}
+					if set[id] {
+						loadPlain()
+					}
+					spec := *f.Secret
+					view := ExtensionSecretView{Name: id, Title: spec.Title, Description: spec.Description, Required: spec.Required,
+						Set: set[id], List: f.Name, EntryTitle: extensionEntryTitle(f, entry)}
+					if ref, ok := extension.ReferenceOf(plain[id]); ok {
+						view.Reference = ps.secretReferenceView(ctx, ref)
+					} else {
+						view.Hint = extension.SecretHint(spec, plain[id])
+					}
+					d.Secrets = append(d.Secrets, view)
+				}
+			}
+		}
+		d.SecretUsers = ps.secretUsers(ctx, p, l)
+		ps.h.volcDetail(ctx, p, &d) // its meetings switch is the assistant's choice (volc_extension.go)
+	}
+	if p.Full != nil && len(p.Full.SecretProviders()) > 0 { // a read-only provider's rules apply all the same
+		d.HandoffRules = ps.h.handoffRulesOf(ctx, p.Record.ID)
 	}
 	return d
+}
+
+func extensionEntryTitle(list extension.Field, entry map[string]json.RawMessage) string {
+	for pass := range 2 {
+		for _, field := range list.Items.Fields {
+			if pass == 0 && field.Name != "name" {
+				continue
+			}
+			var value string
+			if json.Unmarshal(entry[field.Name], &value) == nil && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value)
+			}
+		}
+	}
+	return ""
 }
 
 // actorOr is actor, or def for the master token over loopback.
@@ -126,6 +254,7 @@ func readExtensionJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 func (h *Manager) extensionRoutes(api *http.ServeMux) {
 	h.extensionUIRoutes(api)
 	h.extensionImageRoutes(api)
+	h.extensionLogoRoutes(api)
 	h.extensionSystemRoutes(api)
 	h.marketRoutes(api)
 	h.operationRoutes(api)
@@ -166,6 +295,7 @@ func (h *Manager) extensionRoutes(api *http.ServeMux) {
 		}
 	}
 	h.authRoutes(api, full)
+	h.assistantDataRoutes(api, full)
 	// Installing, upgrading and removing run or delete code on this machine: the master token over loopback only.
 	owner := func(f http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -181,7 +311,7 @@ func (h *Manager) extensionRoutes(api *http.ServeMux) {
 		}
 	}
 	// marketOr is owner for installing, upgrading, rolling back and removing, or a device with full rights when it is a
-	// plugin of a registered market (its package pinned by the market's index; docs/extensions/extensions.md "Extension markets").
+	// plugin of a registered market (its package pinned by the market's index; docs/extensions/extensions.md "Extension marketplace").
 	marketOr := func(w http.ResponseWriter, r *http.Request, ofMarket func() bool) bool {
 		if ps() == nil {
 			writeExtensionResponseError(w, r, http.StatusServiceUnavailable, "no_plugins", i18n.ErrEnglish("extension-status.not_set_up"))
@@ -205,14 +335,11 @@ func (h *Manager) extensionRoutes(api *http.ServeMux) {
 		if !readExtensionJSON(w, r, &in) {
 			return
 		}
-		if !in.Enabled && !h.takeDependents(w, r, p.Record.ID, in.Cascade) {
+		warnings, ok := h.switchExtension(w, r, p, in.Enabled, in.Cascade, actor(r))
+		if !ok {
 			return
 		}
-		if err := ps().reg.SetEnabled(r.Context(), p.Record.ID, in.Enabled, actor(r)); err != nil {
-			writeExtensionChangeError(w, r, http.StatusConflict, "read_only", err)
-			return
-		}
-		writeExtensionJSON(w, r, detailOut(r, ps().detail(r.Context(), ps().reg.Get(p.Record.ID))))
+		writeExtensionJSON(w, r, detailOut(r, ps().switched(r.Context(), p.Record.ID, warnings)))
 	}))
 	api.HandleFunc("PUT /api/v1/extensions/{id}/-/config", full(func(w http.ResponseWriter, r *http.Request, p *extension.Extension) {
 		var in struct {
@@ -231,9 +358,33 @@ func (h *Manager) extensionRoutes(api *http.ServeMux) {
 				return
 			}
 		}
-		// Secrets bound to the old configuration go first (the voice extension's key, moved to another host:
-		// voice_extension.go); said in the answer, an error's too.
-		cleared, err := ps().reg.SetConfigClearing(r.Context(), p.Record.ID, in.Config, actor(r))
+		// The iPhones that consented are each iPhone's own word, kept as stored (iphone.go).
+		kept, err := h.keepIPhonePhones(p, in.Config)
+		if err != nil { // never the request's own phones: refused, not passed on
+			writeExtensionResponseError(w, r, http.StatusInternalServerError, "internal", err)
+			return
+		}
+		in.Config = kept
+		if isVolc(p) { // its meetings switch sets the assistant's choice and is not saved with it (volc_extension.go)
+			rest, changed, err := h.volcConfigWrite(r.Context(), p, in.Config)
+			if err != nil {
+				writeExtensionResponseError(w, r, http.StatusServiceUnavailable, "assistant_offline", err)
+				return
+			}
+			if !changed {
+				writeExtensionJSON(w, r, detailOut(r, ps().detail(r.Context(), ps().reg.Get(p.Record.ID))))
+				return
+			}
+			in.Config = rest
+		}
+		// Only an opted-in full editor may change entry lists. An immediate save can explicitly preserve them while
+		// still receiving the opted-in detail; older full-config drafts always preserve the hub's current arrays.
+		var cleared []string
+		if r.URL.Query().Get("entry_lists") == "1" && r.URL.Query().Get("preserve_entries") != "1" {
+			cleared, err = ps().reg.SetConfigClearing(r.Context(), p.Record.ID, in.Config, actor(r))
+		} else {
+			cleared, err = ps().reg.SetConfigPreservingEntries(r.Context(), p.Record.ID, in.Config, actor(r))
+		}
 		if err != nil {
 			var fe *extension.FieldError
 			if errors.As(err, &fe) {
@@ -277,11 +428,25 @@ func (h *Manager) extensionRoutes(api *http.ServeMux) {
 	api.HandleFunc("PUT /api/v1/extensions/{id}/-/secrets/{name}", full(func(w http.ResponseWriter, r *http.Request, p *extension.Extension) {
 		var in struct {
 			Value string `json:"value"`
+			// Reference instead of a value (op://…): the owner's standing approval to hand this extension its value.
+			Reference string `json:"reference"`
 		}
 		if !readExtensionJSON(w, r, &in) {
 			return
 		}
-		if err := ps().reg.SetSecret(r.Context(), p.Record.ID, r.PathValue("name"), in.Value, actor(r)); err != nil {
+		set := func() error {
+			return ps().reg.SetSecret(r.Context(), p.Record.ID, r.PathValue("name"), in.Value, actor(r))
+		}
+		switch {
+		case in.Reference != "" && in.Value != "":
+			writeExtensionResponseError(w, r, http.StatusBadRequest, "invalid_secret", i18n.Err("extension-status.secret_value_or_reference"))
+			return
+		case in.Reference != "":
+			set = func() error {
+				return ps().reg.SetSecretReference(r.Context(), p.Record.ID, r.PathValue("name"), in.Reference, actor(r))
+			}
+		}
+		if err := set(); err != nil {
 			code := "invalid_secret"
 			if errors.As(err, new(keyNeedsURLError)) { // the voice extension's key is for an address (voice_extension.go)
 				code = "needs_url"
@@ -292,6 +457,20 @@ func (h *Manager) extensionRoutes(api *http.ServeMux) {
 			writeExtensionResponseError(w, r, http.StatusBadRequest, code, err)
 			return
 		}
+		writeExtensionJSON(w, r, detailOut(r, ps().detail(r.Context(), ps().reg.Get(p.Record.ID))))
+	}))
+	// An Always rule of a hand-off of the provider's values (secret_handoff_rules.go): removed, the next hand-off asks.
+	api.HandleFunc("DELETE /api/v1/extensions/{id}/-/handoff-rules/{rule}", full(func(w http.ResponseWriter, r *http.Request, p *extension.Extension) {
+		n, err := h.removeHandoffRules(r.Context(), p.Record.ID, r.PathValue("rule"))
+		if err != nil {
+			writeExtensionResponseError(w, r, http.StatusServiceUnavailable, "rules_unavailable", err)
+			return
+		}
+		if n == 0 {
+			writeExtensionResponseError(w, r, http.StatusNotFound, "no_rule", i18n.Err("hub-extension_routes.no_handoff_rule"))
+			return
+		}
+		h.logf("plugin %s: hand-off rule %s removed by %s", p.Record.ID, r.PathValue("rule"), actor(r)) // a rule's id: hex
 		writeExtensionJSON(w, r, detailOut(r, ps().detail(r.Context(), ps().reg.Get(p.Record.ID))))
 	}))
 	api.HandleFunc("DELETE /api/v1/extensions/{id}/-/secrets/{name}", full(func(w http.ResponseWriter, r *http.Request, p *extension.Extension) {
@@ -382,6 +561,30 @@ func (h *Manager) extensionRoutes(api *http.ServeMux) {
 		h.extensionUpgrades().rolledBackByUser(r.Context(), p.Record.ID, left)
 		writeExtensionJSON(w, r, detailOut(r, ps().detail(r.Context(), p)))
 	})
+	// An installed package attached to its program running on its own, and back (extension.Registry.Attach): from this
+	// machine only, as installing from remote: is (it names sockets here).
+	api.HandleFunc("POST /api/v1/extensions/{id}/-/attach", owner(func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Source string `json:"source"` // remote:rpc=<socket>,http=<socket>
+		}
+		if !readExtensionJSON(w, r, &in) {
+			return
+		}
+		p, err := ps().reg.Attach(r.Context(), r.PathValue("id"), in.Source, actorOr(r, "personad extension"))
+		if err != nil {
+			writeExtensionResponseError(w, r, http.StatusBadRequest, "attach_failed", err)
+			return
+		}
+		writeExtensionJSON(w, r, detailOut(r, ps().detail(r.Context(), p)))
+	}))
+	api.HandleFunc("POST /api/v1/extensions/{id}/-/detach", owner(func(w http.ResponseWriter, r *http.Request) {
+		p, err := ps().reg.Detach(r.Context(), r.PathValue("id"), actorOr(r, "personad extension"))
+		if err != nil {
+			writeExtensionResponseError(w, r, http.StatusBadRequest, "detach_failed", err)
+			return
+		}
+		writeExtensionJSON(w, r, detailOut(r, ps().detail(r.Context(), p)))
+	}))
 	api.HandleFunc("DELETE /api/v1/extensions/{id}/-/{$}", func(w http.ResponseWriter, r *http.Request) {
 		if !marketOr(w, r, fromMarket(r)) {
 			return
@@ -407,7 +610,8 @@ func (h *Manager) extensionRoutes(api *http.ServeMux) {
 			hp = ps().get(id)
 		}
 		rest := strings.TrimPrefix(r.URL.Path, "/api/v1/extensions/"+id)
-		if hp == nil || hp.proxy == nil || hp.proc == nil || strings.HasPrefix(rest, "/-/") {
+		// /transcription/ is the manager's only (transcription.go): a meeting's audio never comes from an app.
+		if hp == nil || hp.proxy == nil || hp.proc == nil || strings.HasPrefix(rest, "/-/") || transcriptionPath(rest) {
 			writeExtensionResponseError(w, r, http.StatusNotFound, "not_found", errNoExtension)
 			return
 		}
@@ -434,7 +638,7 @@ func (ps *extensions) listCtx(ctx context.Context) []ExtensionView {
 // nodeConfirmForm is the form with the computers' field asking before a machine is switched on (x-confirm), unless the
 // manifest asks something of its own: switching one on starts a program there (plan "7" "Showing permissions"). A copy:
 // the plugin's own schema is shared.
-func nodeConfirmForm(l i18n.Lang, s *extension.Schema, m *extension.Manifest) *extension.Schema {
+func nodeConfirmForm(l i18n.Lang, s *extension.Schema, m *extension.Manifest, name string) *extension.Schema {
 	if s == nil {
 		return nil
 	}
@@ -442,7 +646,7 @@ func nodeConfirmForm(l i18n.Lang, s *extension.Schema, m *extension.Manifest) *e
 	out.Fields = slices.Clone(s.Fields)
 	for i := range out.Fields {
 		if out.Fields[i].Name == m.Node.Machines && out.Fields[i].Confirm == "" {
-			out.Fields[i].Confirm = i18n.T(l, "hub-extension_routes.node_confirm", i18n.Args{"name": m.Name})
+			out.Fields[i].Confirm = i18n.T(l, "hub-extension_routes.node_confirm", i18n.Args{"name": name})
 		}
 	}
 	return &out

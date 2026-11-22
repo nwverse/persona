@@ -14,6 +14,7 @@ const (
 	LarkThroughRule   = "rule"                // a rule of the gate allowed it
 	LarkThroughAlways = "conversation_always" // "Always allow in this conversation" covered it, no card was shown
 	LarkThroughCard   = "card"                // the user (or the assistant for them) allowed it on a card
+	LarkThroughBypass = "permission_mode"     // the assistant conversation runs in bypassPermissions
 )
 
 // LarkSent is one write the gate proxy forwarded and the API answered with a 2xx. Which machine it happened on is not
@@ -44,6 +45,8 @@ type LarkLetThrough struct {
 	// is empty when the user did, AnsweredByAssistant when the assistant did for them.
 	InteractionID string `json:"interaction_id,omitempty"`
 	AnsweredBy    string `json:"answered_by,omitempty"`
+	// EditedFrom is the card's original outgoing text when Allow carried edited_text; Text keeps the sent version.
+	EditedFrom string `json:"edited_from,omitempty"`
 }
 
 // writtenFields are the fields of a write's arguments or body that connectors usually put their text in, in the

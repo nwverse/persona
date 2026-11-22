@@ -9,7 +9,7 @@ nonisolated struct SyntaxState: Equatable, Sendable {
     var continued = false
 }
 
-/// Colors source a line at a time (docs/apple/ios.md「文件查看器」): one pass over the line's UTF-8 bytes, words looked up
+/// Colors source a line at a time (docs/apple/ios.md「File viewer」): one pass over the line's UTF-8 bytes, words looked up
 /// by a hash of their bytes. No regular expressions and no String per word: a few MB take a fraction of a second,
 /// off the main thread (`CodeDocument.highlight`).
 nonisolated struct SyntaxLexer {

@@ -64,7 +64,7 @@ internal fun FeishuBotPage(api: FeishuBotSettings?, onBack: () -> Unit) {
             Column {
                 JGroupItem(GroupPosition(first = true, last = false), Modifier.padding(top = Tokens.Space.s)) {
                     JRow(status?.botName?.takeIf(String::isNotBlank) ?: stringResource(R.string.settings_feishu_bot_title),
-                        leading = { JBrandMark(Brand.Lark, Tokens.Space.xxl) },
+                        leading = { JBrandMark(Brand.Lark, Tokens.Space.xl) },
                         trailing = { JStateLabel(feishuBotState(res, status, state.loading), feishuBotStatus(status),
                             problem = status?.enabled == true && !status.connected && !status.error.isNullOrBlank()) })
                 }
@@ -84,10 +84,10 @@ internal fun FeishuBotPage(api: FeishuBotSettings?, onBack: () -> Unit) {
         item("credentials") {
             Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                 JSectionHeader(stringResource(R.string.settings_feishu_bot_credentials))
-                JTextField(state.appId, { model.edit(appId = it) }, Modifier.fillMaxWidth(), label = "App ID",
+                JTextField(state.appId, { model.edit(appId = it) }, Modifier.fillMaxWidth(), label = "App ID", // i18n-ignore: the Feishu / Lark console's own name, same on iOS / web
                     placeholder = stringResource(R.string.settings_feishu_bot_required), singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, autoCorrectEnabled = false))
-                JTextField(state.appSecret, { model.edit(appSecret = it) }, Modifier.fillMaxWidth(), label = "App Secret",
+                JTextField(state.appSecret, { model.edit(appSecret = it) }, Modifier.fillMaxWidth(), label = "App Secret", // i18n-ignore: the Feishu / Lark console's own name, same on iOS / web
                     placeholder = stringResource(if (state.needsSecret) R.string.settings_feishu_bot_required else R.string.settings_feishu_bot_secret_saved),
                     supportingText = if (state.appSecret.isNotEmpty()) stringResource(R.string.settings_feishu_bot_secret_filled) else null,
                     singleLine = true, visualTransformation = PasswordVisualTransformation(),

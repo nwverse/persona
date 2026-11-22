@@ -14,6 +14,8 @@ import persona.core.contracts.Machine
 import persona.core.contracts.MachineBrowser
 import persona.core.contracts.api.DoctorCheck
 import persona.core.contracts.api.UsageAccount
+import persona.core.domain.engines.Engines
+import persona.core.domain.usage.*
 import persona.core.contracts.api.UsageWindow
 import persona.core.contracts.parseTime
 import persona.core.designsystem.*
@@ -77,7 +79,7 @@ internal fun LazyListScope.machineHealth(
         }
         doctor is DoctorLoad.Report -> {
             val report = doctor.report
-            val features = deriveFeatures(report, machine.engine)
+            val features = deriveFeatures(report, Engines.judged(machine))
             val attention = attentionCount(features)
             val fixable = fixableChecks(report)
             val info = infoChecks(report)
@@ -265,7 +267,7 @@ private fun BrowserSteps(steps: List<Pair<Boolean, String>>) {
 
 // ───────────────────────────── Subscription limits
 
-private fun shown(percent: Double) = "${percent.coerceIn(0.0, 100.0).toInt()}%"
+internal fun usagePercent(percent: Double) = "${percent.coerceIn(0.0, 100.0).toInt()}%"
 
 @Composable
 private fun resetText(resetsAt: String?, now: Instant): String? = when (val r = resetIn(resetsAt, now)) {
@@ -307,7 +309,8 @@ internal fun LazyListScope.usageWindows(accounts: List<UsageAccount>, now: Insta
 @Composable
 private fun UsageAccountCard(a: UsageAccount, now: Instant) {
     val palette = PersonaTheme.palette
-    val sources = listOfNotNull(stringResource(R.string.machines_usage_source_local).takeIf { a.local }) + a.sources
+    // The computers that read it by name; never "this computer", which reads as the phone in hand (#1907).
+    val sources = a.machines.ifEmpty { listOfNotNull(stringResource(R.string.machines_usage_source_local).takeIf { a.local }) } + a.sources
     val plan = planNote(a)
     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
@@ -318,23 +321,20 @@ private fun UsageAccountCard(a: UsageAccount, now: Instant) {
         }
         val line = listOfNotNull(plan.takeIf { it.isNotEmpty() }, sources.takeIf { it.isNotEmpty() }?.joinToString(" · ")).joinToString(" · ")
         if (line.isNotEmpty()) Text(line, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        when (a.problem) {
-            "unreachable" -> Text(stringResource(R.string.machines_usage_problem_unreachable), style = PersonaTheme.type.caption, color = palette.cautionText)
-            "error" -> Text(stringResource(R.string.machines_usage_problem_error), style = PersonaTheme.type.caption, color = palette.cautionText)
-        }
-        a.windows.forEach { WindowRow(it, now) }
+        problemText(a.problem)?.let { Text(stringResource(it), style = PersonaTheme.type.caption, color = palette.cautionText) }
+        a.windows.forEach { WindowRow(it, now, a.stale) }
     }
 }
 
 @Composable
-private fun WindowRow(w: UsageWindow, now: Instant) {
+private fun WindowRow(w: UsageWindow, now: Instant, stale: Boolean) {
     val palette = PersonaTheme.palette
-    val p = pace(w, now)
+    val p = pace(w, now, stale)
     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
         w.model?.takeIf { it.isNotBlank() }?.let { Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
             Text(w.label, style = PersonaTheme.type.caption, color = palette.ink2)
-            Text(shown(w.usedPercent), style = PersonaTheme.type.label, color = if (isWarn(w.usedPercent)) palette.cautionText else palette.ink)
+            Text(usagePercent(w.usedPercent), style = PersonaTheme.type.label, color = if (isWarn(w.usedPercent)) palette.cautionText else palette.ink)
             if (p != null && p.state != PaceState.On) Text(stringResource(if (p.state == PaceState.Over) R.string.machines_usage_pace_over
                 else R.string.machines_usage_pace_under), style = PersonaTheme.type.caption,
                 color = if (p.state == PaceState.Over) palette.cautionText else palette.tone(Tone.Positive).text, maxLines = 1)

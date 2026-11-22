@@ -1,4 +1,4 @@
-// The look's icon (#3200, docs/extensions/extensions.md "Looks"): the picture the page's mark (AppMark: the sidebar's header, the
+// The look's icon (#3200, docs/extensions/extensions.md "Avatars"): the picture the page's mark (AppMark: the sidebar's header, the
 // sign-in page) and the tab's favicon show for the chosen look. Mochi, the default, is the app icon itself (the files
 // in public/); another look uses its package's PNG or SVG, light and dark, made into a 128 px PNG. The last one is kept
 // in localStorage, so the sign-in page and the first paint show it before the

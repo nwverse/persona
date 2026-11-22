@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-// Pressing a card's actions (docs/assistant/assistant-views.md "Persisted submits"): a form is submitted once with the values typed, a
+// Pressing a card's actions (docs/assistant/assistant-views.md "Persistent submission"): a form is submitted once with the values typed, a
 // confirm asks natively first, a card that changed under the submit (409 view_changed) keeps the draft and asks again at
 // the new version, a live update redraws in place without taking the field being typed in, and push / pop move within
 // the card. The hub is a fake one (fetch), the data made up.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 vi.hoisted(() => {
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
@@ -13,6 +13,10 @@ import { AssistantCard, CardConversation, CardItem, LiveCard, VIEWS_FEATURE } fr
 import { applyBlock, applyView, conversationCards, getDraft, resetCards } from "../lib/assistant-views";
 import { getState } from "../lib/store";
 import type { AssistantView } from "../lib/extension-wire";
+import { loadPages } from "../lib/lazy-page";
+
+// The cards draw the renderer through a lazy chunk (#3614); these tests draw without waiting for it.
+beforeAll(() => loadPages(), 60_000);
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

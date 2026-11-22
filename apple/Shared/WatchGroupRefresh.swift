@@ -1,6 +1,6 @@
 import Foundation
 
-/// One hub group's last successful watch fetch (docs/protocol/multi-hub.md「手表」): the live sessions, pending cards and
+/// One hub group's last successful watch fetch (docs/protocol/multi-hub.md「Watch, Siri, Mac, and demo mode」): the live sessions, pending cards and
 /// machines its own hub returned. A failed refresh keeps the group's last value, so a group's cards are never
 /// replaced with nothing just because that group did not answer this time (#4369).
 nonisolated struct WatchGroupData: Equatable, Sendable {

@@ -26,6 +26,16 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
+// forgetTodoOwner drops a to-do's cached owner (the hub itself keeps them; the test checks the cache it reads).
+func (h *Hub) forgetTodoOwner(id string) {
+	if id == "" {
+		return
+	}
+	h.todoOwnersMu.Lock()
+	delete(h.todoOwners, id)
+	h.todoOwnersMu.Unlock()
+}
+
 // guardManager is a manager on the bus that answers the hub's calls with answer and keeps a log of them; onEvent
 // (f.mu), when set, is told the hub's events (heard).
 type guardManager struct {

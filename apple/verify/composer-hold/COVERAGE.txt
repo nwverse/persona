@@ -1,0 +1,5 @@
+193a64ffd489ca1f993c079ae903383298d4c3562e3c6f1fc45df57af8fb455d ../../Persona/DesignSystem/ComposerHoldMic.swift ComposerHold begin/finish, the mic gesture
+e2f47ac1f507427892b82d901994c7612d533b9818435a7582248117067dc2af ../../Persona/Views/Chat/PromptComposer.swift Dictation.start/stop
+a1c41bdca2633e86fc4b45dd3c19e7fdfe8e79d9c86f060eddfac46d17dc6f5f ../../Persona/DesignSystem/ComposerButtons.swift Dictation.toggle
+35256cdbcc6c5633186832f12c6ffe8ce0e295e672299c62d2d529f0e73c4853 ../../Persona/DesignSystem/ShellComposerBar.swift send ends dictation
+eab127f811cdc3f1869e61579996895693a92a38c5b87b7128c95db008a66770 ../../Shared/Recording/RecordingMicrophone.swift claim/release

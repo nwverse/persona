@@ -68,23 +68,40 @@ func TestSendToAnExitedAgentIsRefused(t *testing.T) {
 }
 
 // An agent herdr does not detect (a compatible CLI) in front, its shell behind it: the text goes as a paste (an escape in it
-// cannot end the paste early), then enter.
+// cannot end the paste early), then enter. herdr's own paste (agent.prompt) gets it inert too.
 func TestPromptFallbackPastesSafelyBeforeEnter(t *testing.T) {
 	n, f, _ := herdrNode(t)
 	f.reply("agent.prompt", herdrFail{Code: "agent_not_found", Message: "unrecognized agent"})
 	f.reply("pane.process_info", foreground([2]string{"zsh", "-zsh"}, [2]string{"node", "traex"}))
 	const pane = "w1:p1"
-	const text = "line one\n\x1b[201~echo unsafe\n\x1b[200~line two"
+	const text = "line one\n\x1b[201~echo unsafe\n\x1b[200~line two\x7f"
 	if err := n.prompt(context.Background(), pane, text); err != nil {
 		t.Fatal(err)
 	}
 	assertTrace(t, f.trace(), []string{
-		call("agent.prompt", map[string]any{"target": pane, "text": text}),
+		call("agent.prompt", map[string]any{"target": pane, "text": "line one\n<ESC>[201~echo unsafe\n<ESC>[200~line two<U+007F>"}),
 		call("pane.process_info", map[string]any{"pane_id": pane}),
 		call("pane.send_text", map[string]any{"pane_id": pane,
-			"text": "\x1b[200~line one\n<ESC>[201~echo unsafe\n<ESC>[200~line two\x1b[201~"}),
+			"text": "\x1b[200~line one\n<ESC>[201~echo unsafe\n<ESC>[200~line two<U+007F>\x1b[201~"}),
 		sendKeys(pane, "enter"),
 	})
+}
+
+// In a paste only newline, carriage return and tab stay controls: an escape, which could end the paste and press the
+// keys after it, any other C0, DEL and C1 are shown instead, and bytes that are not UTF-8 are replaced.
+func TestInertControls(t *testing.T) {
+	for in, want := range map[string]string{
+		"fix the build":             "fix the build",
+		"一\n二\r\n\t三 🙂 <ESC>":       "一\n二\r\n\t三 🙂 <ESC>",
+		"go\x1b[201~\x1b[Z":         "go<ESC>[201~<ESC>[Z",
+		"a\x00b\x03c\x08d\x7fe":     "a<U+0000>b<U+0003>c<U+0008>d<U+007F>e",
+		"a\u0085b\u009b201~\u009bZ": "a<U+0085>b<U+009B>201~<U+009B>Z",
+		"a\x9b201~\xff":             "a\uFFFD201~\uFFFD",
+	} {
+		if got := inertControls(in); got != want {
+			t.Errorf("%q: %q, want %q", in, got, want)
+		}
+	}
 }
 
 func TestFindBlock(t *testing.T) {

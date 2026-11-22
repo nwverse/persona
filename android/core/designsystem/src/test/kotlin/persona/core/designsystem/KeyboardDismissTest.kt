@@ -120,6 +120,22 @@ class KeyboardDismissTest {
         }
     }
 
+    @Test fun blankTapReportsAnIntentionalFocusClear() {
+        var clears = 0
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true) {
+                var text by remember { mutableStateOf("") }
+                Column(Modifier.fillMaxSize().dismissKeyboardOnBlankTap { clears++ }) {
+                    BasicTextField(text, { text = it }, Modifier.fillMaxWidth())
+                    Box(Modifier.fillMaxWidth().weight(1f).testTag("clear-signal-blank"))
+                }
+            }
+        }
+        rule.onNodeWithTag("clear-signal-blank").performTouchInput { click(center) }
+        rule.waitForIdle()
+        assertEquals(1, clears)
+    }
+
     @Test fun tapOnTheFieldKeepsFocus() {
         setPage()
         rule.onNodeWithTag("field").performTouchInput { click() }
@@ -134,7 +150,7 @@ class KeyboardDismissTest {
             style = each
             rule.waitForIdle()
             focusField()
-            rule.onNodeWithTag("composer").performTouchInput { click(centerLeft.copy(x = 20f)) }
+            rule.onNodeWithTag("composer").performTouchInput { click(centerLeft.copy(x = 14f)) }
             rule.waitForIdle()
             assertTrue("composer padding keeps focus inside nested pages in $style", focused)
         }
@@ -150,7 +166,8 @@ class KeyboardDismissTest {
             rule.waitForIdle()
             assertFalse(focused)
             val before = blankTaps
-            rule.onNodeWithTag("composer").performTouchInput { click(centerLeft.copy(x = 20f)) }
+            // Left of the inner field's horizontal inset in all styles, clear of any leading action.
+            rule.onNodeWithTag("composer").performTouchInput { click(centerLeft.copy(x = 14f)) }
             rule.waitForIdle()
             assertEquals("one blank tap in $style", before + 1, blankTaps)
             assertTrue("composer padding focuses the field in $style", focused)

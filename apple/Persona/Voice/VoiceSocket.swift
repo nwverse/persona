@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// What came in on the call's socket.
 nonisolated enum VoiceSocketEvent: Equatable, Sendable {
@@ -46,6 +47,7 @@ nonisolated final class HubVoiceSocket: VoiceSocket, @unchecked Sendable {
 
     init(request: URLRequest, session: URLSession) {
         task = session.webSocketTask(with: request)
+        task.delegate = HubRedirects.shared
         task.maximumMessageSize = 16 << 20
     }
 

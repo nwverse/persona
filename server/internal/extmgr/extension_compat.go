@@ -160,6 +160,10 @@ type legacyUIPlace struct {
 	Opens         string           `json:"opens,omitempty"`
 	Badge         *extension.Badge `json:"badge,omitempty"`
 	Connector     string           `json:"connector,omitempty"`
+	// Group as on the new path: an app old enough for these keys reads no group and ignores it
+	Group *extension.UIGroup `json:"group,omitempty"`
+	// IconColor as on the new path; such an app ignores it too
+	IconColor string `json:"icon_color,omitempty"`
 }
 
 func legacyUIPlaces(us []UIPlace) []legacyUIPlace {
@@ -187,8 +191,17 @@ type legacyDetail struct {
 	UI []legacyUIPlace `json:"ui,omitempty"`
 }
 
-// detailOut is d for r: the old keys under an old path.
+// detailOut is d for r: the old keys under an old path. Entry-list editors require an explicit capability opt-in;
+// raw configuration stays intact, but older clients cannot turn object entries into destructive string-list controls.
 func detailOut(r *http.Request, d ExtensionDetail) any {
+	if r.URL.Query().Get("entry_lists") != "1" {
+		if d.Form != nil {
+			form := *d.Form
+			form.Fields = slices.DeleteFunc(slices.Clone(d.Form.Fields), func(f extension.Field) bool { return f.EntryList() })
+			d.Form = &form
+		}
+		d.Secrets = slices.DeleteFunc(slices.Clone(d.Secrets), func(s ExtensionSecretView) bool { return s.List != "" })
+	}
 	if !legacyExtensionRequest(r) {
 		return d
 	}
@@ -201,19 +214,20 @@ func detailOut(r *http.Request, d ExtensionDetail) any {
 
 // legacyMarketView is MarketView as the old paths have always answered it.
 type legacyMarketView struct {
-	ID          string              `json:"id"`
-	Spec        string              `json:"spec"`
-	Name        string              `json:"name"`
-	Description string              `json:"description,omitempty"`
-	Homepage    string              `json:"homepage,omitempty"`
-	HasToken    bool                `json:"has_token"`
-	Extensions  int                 `json:"plugins"`
-	Warnings    []string            `json:"warnings"`
-	Error       string              `json:"error,omitempty"`
-	FetchedAt   *time.Time          `json:"fetched_at,omitempty"`
-	AddedAt     time.Time           `json:"added_at"`
-	Official    bool                `json:"official,omitempty"`
-	Signature   MarketSignatureView `json:"signature"`
+	ID                 string              `json:"id"`
+	Spec               string              `json:"spec"`
+	Name               string              `json:"name"`
+	Description        string              `json:"description,omitempty"`
+	Homepage           string              `json:"homepage,omitempty"`
+	DownloadsUpdatedAt string              `json:"downloads_updated_at,omitempty"`
+	HasToken           bool                `json:"has_token"`
+	Extensions         int                 `json:"plugins"`
+	Warnings           []string            `json:"warnings"`
+	Error              string              `json:"error,omitempty"`
+	FetchedAt          *time.Time          `json:"fetched_at,omitempty"`
+	AddedAt            time.Time           `json:"added_at"`
+	Official           bool                `json:"official,omitempty"`
+	Signature          MarketSignatureView `json:"signature"`
 }
 
 // marketOut is v for r: the old keys under an old path.
@@ -290,8 +304,11 @@ func withExtensionEnv(env []string) []string {
 }
 
 // extensionConfigs are hub.json's extensions: "extensions", then the old "plugins" (an id in both is taken from
-// "extensions").
+// "extensions"). Legacy entries warn once at manager startup and keep this merge behavior for one release.
 func (c *Config) extensionConfigs(logf func(string, ...any)) []ExtensionConfig {
+	if len(c.LegacyExtensions) > 0 {
+		logf("manager.json: plugins is deprecated; use extensions instead (plugins will stop being read after the one-release warning window)")
+	}
 	out := slices.Clone(c.Extensions)
 	for _, e := range c.LegacyExtensions {
 		if slices.ContainsFunc(out, func(x ExtensionConfig) bool { return x.ID == e.ID }) {

@@ -38,12 +38,17 @@ type WorkState struct {
 	Link     *WorkLink  `json:"link,omitempty"`  // a link the user must open in time (on user)
 	// Artifacts are what the work produced (done): PRs, commits, documents, builds.
 	Artifacts []WorkArtifact `json:"artifacts,omitempty"`
+	// Closeout is the record the agent ended the turn with, when it wrote one (docs/assistant/agent-work.md "Closeout").
+	Closeout *Closeout `json:"closeout,omitempty"`
 	// CI is the manager's durable watch of the pull request this turn awaits.
 	CI *WorkCI `json:"ci,omitempty"`
 	// RetiredAt marks a todo retirement; RetiredTurnAt is the stopped turn as
 	// reported by its node, when it could be read at retirement.
 	RetiredAt     *time.Time `json:"retired_at,omitempty"`
 	RetiredTurnAt *time.Time `json:"retired_turn_at,omitempty"`
+	// CloseoutAsk is the manager's own note of the status question for this turn (docs/assistant/agent-work.md
+	// "Closeout"): "pending" while it is scheduled, "sent" once it went. Never sent to the apps.
+	CloseoutAsk string `json:"closeout_ask,omitempty"`
 	// Questions are what the user is to decide (on user), as the card asks them.
 	Questions []Question `json:"questions,omitempty"`
 	// InteractionID is the card the hub made for a decision (on user), while it is pending.
@@ -51,11 +56,58 @@ type WorkState struct {
 	// Deferred: the user put the decision off on its card (Skip for now, Not now, Stop waiting, Hold off, or closed it): the agent is no
 	// Awaiting Reply for it and is not reminded of (#5096).
 	Deferred bool `json:"deferred,omitempty"`
+	// JustFinished: the triage found this turn done before anybody looked at it, and the turn ended less than the
+	// manager's window ago (agents.triage.just_finished_hours, 3 by default). The apps list it as Just finished, apart
+	// from the seen ones, until it is seen, a new turn starts or the window passes (docs/protocol/agent-states.md "Just
+	// finished", #9751). Only on the manager's lists, never stored.
+	JustFinished bool `json:"just_finished,omitempty"`
 	// TurnAt is the end of the turn this state is about (the session's updated_at then); At when it was found, By how:
 	// "rule" or "model".
 	TurnAt time.Time `json:"turn_at,omitzero"`
 	At     time.Time `json:"at,omitzero"`
 	By     string    `json:"by,omitempty"`
+}
+
+// A closeout's status, and its answers on merged and deployed.
+const (
+	CloseoutDone    = "done"
+	CloseoutNotDone = "not_done"
+	CloseoutBlocked = "blocked"
+	CloseoutYes     = "yes"
+	CloseoutNo      = "no"
+)
+
+// Closeout is what an agent says of its own work as a turn ends: the agent's claim, not something the hub checked.
+// Its artifacts are the work state's (WorkState.Artifacts).
+type Closeout struct {
+	// Delivery, Unblock: explicit delivery disposition and the party responsible for its gate.
+	Delivery string `json:"delivery,omitempty"`
+	Unblock  string `json:"unblock,omitempty"`
+	Status   string `json:"status"` // done, not_done or blocked
+	// Waiting: who or what a blocked turn waits for.
+	Waiting string `json:"waiting,omitempty"`
+	// Did: what changed, at most three sentences.
+	Did []string `json:"did,omitempty"`
+	// Merged, Deployed: "yes", "no", or empty when it does not apply or was not said.
+	Merged   string `json:"merged,omitempty"`
+	Deployed string `json:"deployed,omitempty"`
+	// Verified: what was run or measured, with its reading; "untested" is an answer.
+	Verified string `json:"verified,omitempty"`
+	// Next is one optional follow-up the owner may choose after a completed turn.
+	Next string `json:"next,omitempty"`
+	// Missing: what it still needs from the user or someone else.
+	Missing string `json:"missing,omitempty"`
+	// Checked is what the hub found when it looked at the closeout's pull request itself; nil when it had nothing to
+	// look at or could not tell.
+	Checked *CloseoutChecked `json:"checked,omitempty"`
+}
+
+// CloseoutChecked: "yes" or "no" where the hub could tell, empty where it could not. Deployed is about the running
+// hub, so it is only ever known for the hub's own repository.
+type CloseoutChecked struct {
+	Merged          string `json:"merged,omitempty"`
+	Deployed        string `json:"deployed,omitempty"`
+	LocalDeployment bool   `json:"local_deployment,omitempty"` // the running build names the PR independently of its upstream merge
 }
 
 // WorkCI records the target and fallback across manager restarts.

@@ -51,6 +51,7 @@ func TestJSONCallsMessagesAPI(t *testing.T) {
 }
 
 func TestMessagesAPIWithBearer(t *testing.T) {
+	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/" { // a node's port probe (node/ports.go), not this test's client
 			http.NotFound(w, r)
@@ -59,6 +60,7 @@ func TestMessagesAPIWithBearer(t *testing.T) {
 		if r.Header.Get("authorization") != "Bearer k" || r.Header.Get("x-api-key") != "" {
 			t.Errorf("a bearer gateway gets only Authorization: %q, x-api-key %q", r.Header.Get("authorization"), r.Header.Get("x-api-key"))
 		}
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		_ = json.NewEncoder(w).Encode(map[string]any{"content": []any{map[string]any{"type": "text", "text": "ok"}}})
 	}))
 	defer srv.Close()
@@ -66,47 +68,141 @@ func TestMessagesAPIWithBearer(t *testing.T) {
 	if err != nil || text != "ok" {
 		t.Fatalf("text = %q, %v", text, err)
 	}
+	if _, present := gotBody["thinking"]; present {
+		t.Fatalf("no effort must leave thinking unset, got %+v", gotBody["thinking"])
+	}
+	if _, present := gotBody["output_config"]; present {
+		t.Fatalf("no effort must leave output_config unset, got %+v", gotBody["output_config"])
+	}
 }
 
-func TestJSONCallsResponsesAPI(t *testing.T) {
+func TestMessagesAPIWithThinkingDisabled(t *testing.T) {
+	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && r.URL.Path == "/" { // a node's port probe (node/ports.go), not this test's client
+		if r.Method == http.MethodGet && r.URL.Path == "/" {
 			http.NotFound(w, r)
 			return
 		}
-		var req struct {
-			Stream bool `json:"stream"`
-			Input  []struct {
-				Role    string `json:"role"`
-				Content string `json:"content"`
-			} `json:"input"`
-			Reasoning struct {
-				Effort string `json:"effort"`
-			} `json:"reasoning"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		if r.URL.Path != "/openai/v1/responses" || r.Header.Get("Authorization") != "Bearer k" || !req.Stream ||
-			len(req.Input) != 2 || req.Input[0].Role != "developer" || !strings.HasPrefix(req.Input[0].Content, "sys") ||
-			req.Input[1].Content != "user" || req.Reasoning.Effort != "low" {
-			t.Errorf("bad request %s %s %+v", r.URL.Path, r.Header.Get("Authorization"), req)
-		}
-		w.Header().Set("content-type", "text/event-stream")
-		for _, ev := range []string{
-			`{"type":"response.created"}`,
-			`{"type":"response.output_text.delta","delta":"{\"email\":"}`,
-			`{"type":"response.output_text.delta","delta":"\"a@b.c\"}"}`,
-			`{"type":"response.completed"}`,
-		} {
-			_, _ = w.Write([]byte("event: x\ndata: " + ev + "\n\n"))
-		}
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]any{"content": []any{map[string]any{"type": "text", "text": "ok"}}})
 	}))
 	defer srv.Close()
 	keyFile := filepath.Join(t.TempDir(), "key")
 	_ = os.WriteFile(keyFile, []byte("k\n"), 0o600)
-	c := New(Config{API: "responses", BaseURL: srv.URL + "/openai", APIKeyFile: keyFile, Model: "m", ReasoningEffort: "low"})
-	var out struct{ Email string }
-	if err := c.JSON(context.Background(), "sys", "user", &out); err != nil || out.Email != "a@b.c" {
-		t.Fatalf("out = %+v, %v", out, err)
+	c := New(Config{BaseURL: srv.URL, APIKeyFile: keyFile, Model: "m", ReasoningEffort: "off"})
+	text, err := c.Complete(context.Background(), "sys", "user", 16)
+	if err != nil || text != "ok" {
+		t.Fatalf("Complete = %q, %v", text, err)
+	}
+	thinking, _ := gotBody["thinking"].(map[string]any)
+	if thinking == nil || thinking["type"] != "disabled" {
+		t.Fatalf("expected thinking disabled, got %+v", gotBody["thinking"])
+	}
+}
+
+func TestMessagesAPIWithThinkingDisabledUsesSupportedFallback(t *testing.T) {
+	for _, tc := range []struct{ model, thinking string }{
+		{model: "claude-opus-5-5"},
+		{model: "claude-sonnet-5-5", thinking: "between_tools"},
+		{model: "claude-fable-5-1"},
+		{model: "claude-mythos-preview"},
+	} {
+		t.Run(tc.model, func(t *testing.T) {
+			var gotBody map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&gotBody)
+				_ = json.NewEncoder(w).Encode(map[string]any{"content": []any{map[string]any{"type": "text", "text": "ok"}}})
+			}))
+			defer srv.Close()
+			c := New(Config{BaseURL: srv.URL, APIKey: "k", Model: tc.model, ReasoningEffort: "off"})
+			if text, err := c.Complete(context.Background(), "sys", "user", 16); err != nil || text != "ok" {
+				t.Fatalf("Complete = %q, %v", text, err)
+			}
+			thinking, present := gotBody["thinking"].(map[string]any)
+			if tc.thinking == "" && present {
+				t.Fatalf("%s rejects disabled thinking, got %+v", tc.model, gotBody["thinking"])
+			}
+			if tc.thinking != "" && (!present || thinking["type"] != tc.thinking) {
+				t.Fatalf("expected %s for %s, got %+v", tc.thinking, tc.model, gotBody["thinking"])
+			}
+			outputConfig, _ := gotBody["output_config"].(map[string]any)
+			if outputConfig == nil || outputConfig["effort"] != "low" {
+				t.Fatalf("expected low effort fallback for %s, got %+v", tc.model, gotBody["output_config"])
+			}
+		})
+	}
+}
+
+func TestMessagesAPIWithThinkingEffort(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]any{"content": []any{map[string]any{"type": "text", "text": "ok"}}})
+	}))
+	defer srv.Close()
+	keyFile := filepath.Join(t.TempDir(), "key")
+	_ = os.WriteFile(keyFile, []byte("k\n"), 0o600)
+	c := New(Config{BaseURL: srv.URL, APIKeyFile: keyFile, Model: "m", ReasoningEffort: "low"})
+	text, err := c.Complete(context.Background(), "sys", "user", 16)
+	if err != nil || text != "ok" {
+		t.Fatalf("Complete = %q, %v", text, err)
+	}
+	outputConfig, _ := gotBody["output_config"].(map[string]any)
+	if outputConfig == nil || outputConfig["effort"] != "low" {
+		t.Fatalf("expected output_config effort low, got %+v", gotBody["output_config"])
+	}
+}
+
+func TestJSONCallsResponsesAPI(t *testing.T) {
+	for _, tc := range []struct{ name, effort, want string }{
+		{name: "explicit effort", effort: "low", want: "low"},
+		{name: "thinking disabled", effort: "off", want: "none"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && r.URL.Path == "/" { // a node's port probe (node/ports.go), not this test's client
+					http.NotFound(w, r)
+					return
+				}
+				var req struct {
+					Stream bool `json:"stream"`
+					Input  []struct {
+						Role    string `json:"role"`
+						Content string `json:"content"`
+					} `json:"input"`
+					Reasoning struct {
+						Effort string `json:"effort"`
+					} `json:"reasoning"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&req)
+				if r.URL.Path != "/openai/v1/responses" || r.Header.Get("Authorization") != "Bearer k" || !req.Stream ||
+					len(req.Input) != 2 || req.Input[0].Role != "developer" || !strings.HasPrefix(req.Input[0].Content, "sys") ||
+					req.Input[1].Content != "user" || req.Reasoning.Effort != tc.want {
+					t.Errorf("bad request %s %s %+v", r.URL.Path, r.Header.Get("Authorization"), req)
+				}
+				w.Header().Set("content-type", "text/event-stream")
+				for _, ev := range []string{
+					`{"type":"response.created"}`,
+					`{"type":"response.output_text.delta","delta":"{\"email\":"}`,
+					`{"type":"response.output_text.delta","delta":"\"a@b.c\"}"}`,
+					`{"type":"response.completed"}`,
+				} {
+					_, _ = w.Write([]byte("event: x\ndata: " + ev + "\n\n"))
+				}
+			}))
+			defer srv.Close()
+			keyFile := filepath.Join(t.TempDir(), "key")
+			_ = os.WriteFile(keyFile, []byte("k\n"), 0o600)
+			c := New(Config{API: "responses", BaseURL: srv.URL + "/openai", APIKeyFile: keyFile, Model: "m", ReasoningEffort: tc.effort})
+			var out struct{ Email string }
+			if err := c.JSON(context.Background(), "sys", "user", &out); err != nil || out.Email != "a@b.c" {
+				t.Fatalf("out = %+v, %v", out, err)
+			}
+		})
 	}
 }
 
@@ -174,14 +270,25 @@ func TestJSONMaxSaysTheReplyWasCutOff(t *testing.T) {
 	}
 }
 
-func TestJSONMaxTakesACompleteObjectFromACutOffReply(t *testing.T) {
-	c, seen := truncatingServer(t, map[string]any{"text": `{"summary":"done"} and then some more chatter that ran o`, "stop": "max_tokens"})
-	var out struct{ Summary string }
-	if err := c.JSONMax(context.Background(), "sys", "user", 100, &out); err != nil || out.Summary != "done" {
-		t.Fatalf("out = %+v, %v", out, err)
-	}
-	if len(*seen) != 1 {
-		t.Errorf("requests = %v, want no retry", *seen)
+func TestJSONMaxTakesAUsableReplyWithoutRetry(t *testing.T) {
+	for _, tc := range []struct {
+		name, text, stop, want string
+	}{
+		{"a complete object from a cut-off reply", `{"summary":"done"} and then some more chatter that ran o`, "max_tokens", "done"},
+		{"a quote escaped as in JavaScript", `{"summary":"it\'s done"}`, "end_turn", "it's done"},
+		// A model writing a summary in paragraphs puts the line breaks into the string as they are, not as \n (#4872).
+		{"a line break typed into a string (#4872)", "{\"summary\":\"第一段\n\n第二段\"}", "end_turn", "第一段\n\n第二段"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, seen := truncatingServer(t, map[string]any{"text": tc.text, "stop": tc.stop})
+			var out struct{ Summary string }
+			if err := c.JSONMax(context.Background(), "sys", "user", 100, &out); err != nil || out.Summary != tc.want {
+				t.Fatalf("out = %+v, %v", out, err)
+			}
+			if len(*seen) != 1 {
+				t.Errorf("requests = %v, want no retry", *seen)
+			}
+		})
 	}
 }
 
@@ -204,29 +311,6 @@ func TestJSONMaxSaysTheModelRefused(t *testing.T) {
 	err := c.JSONMax(context.Background(), "sys", "user", 100, &out)
 	if !errors.Is(err, ErrRefused) {
 		t.Fatalf("err = %v, want ErrRefused", err)
-	}
-	if len(*seen) != 1 {
-		t.Errorf("requests = %v, want one", *seen)
-	}
-}
-
-func TestJSONMaxTakesAQuoteEscapedAsInJavaScript(t *testing.T) {
-	c, seen := truncatingServer(t, map[string]any{"text": `{"summary":"it\'s done"}`, "stop": "end_turn"})
-	var out struct{ Summary string }
-	if err := c.JSONMax(context.Background(), "sys", "user", 100, &out); err != nil || out.Summary != "it's done" {
-		t.Fatalf("out = %+v, %v", out, err)
-	}
-	if len(*seen) != 1 {
-		t.Errorf("requests = %v, want one", *seen)
-	}
-}
-
-// A model writing a summary in paragraphs puts the line breaks into the string as they are, not as \n (#4872).
-func TestJSONMaxTakesALineBreakTypedIntoAString(t *testing.T) {
-	c, seen := truncatingServer(t, map[string]any{"text": "{\"summary\":\"第一段\n\n第二段\"}", "stop": "end_turn"})
-	var out struct{ Summary string }
-	if err := c.JSONMax(context.Background(), "sys", "user", 100, &out); err != nil || out.Summary != "第一段\n\n第二段" {
-		t.Fatalf("out = %+v, %v", out, err)
 	}
 	if len(*seen) != 1 {
 		t.Errorf("requests = %v, want one", *seen)

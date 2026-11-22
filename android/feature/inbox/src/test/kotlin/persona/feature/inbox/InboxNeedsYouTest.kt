@@ -1,11 +1,13 @@
 package persona.feature.inbox
 
+import persona.core.domain.inbox.InboxBar
 import persona.core.domain.inbox.InboxItem
+import persona.core.domain.inbox.InboxListSettings
 import persona.core.domain.inbox.buildInboxList
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/** The tab's badge counts what the inbox page shows in "Needs you": not what the AI twin is on (#4848). */
+/** Pending counts match "Needs you" without including work already taken by the AI twin. */
 class InboxNeedsYouTest {
     private fun record(id: String, state: String? = null, tier: String = "action") = InboxRecord(
         InboxItem(id, kind = "dm", title = id, tier = tier, updatedAt = "2026-11-02T10:00:00Z"),
@@ -23,11 +25,21 @@ class InboxNeedsYouTest {
         assertEquals("a reply, a draft to look at, a failed hand-off", 3, needsYouCount(list, records))
     }
 
-    @Test fun theBadgeAndThePageCountTheSame() {
+    @Test fun thePendingCountsMatchThePage() {
         val list = buildInboxList(records.map { it.item })
         val byId = records.associateBy { it.item.id }
         val page = needsYouCount(list) { byId[it.id]?.agentWorking == true }
         assertEquals(page, needsYouCount(list, records))
+    }
+
+    @Test fun theSectionBarCountsTheSameNeedsYou() {
+        // #9053: the bar's Needs you counts the rows the list shows there, the AI twin's In progress (DESIGN_SYSTEM 4.8).
+        val list = buildInboxList(records.map { it.item })
+        val byId = records.associateBy { it.item.id }
+        val shown = inboxDisplayGroups(list, persona.core.contracts.CoreText.plain("In progress")) { byId[it.id]?.agentWorking == true }
+        val bar = InboxBar.bar(shown, InboxBar.ACTION, InboxListSettings())
+        assertEquals(needsYouCount(list, records), bar.choices.first { it.id == InboxBar.ACTION }.count)
+        assertEquals(3, bar.choices.first { it.id == InboxBar.WORKING }.count)
     }
 
     @Test fun aHubThatSaysInProgressCountsTheSame() {

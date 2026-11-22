@@ -1,12 +1,25 @@
 // One knowledge entry (/kb/<kind>/<id>): its tile, name, badges, one line and tags, "Ask Persona"; then the places a
-// search found, the Agents on a project, the timeline, the profile, Moments, related entries by kind, code directories,
+// search found, the Agents on a project, the timeline, a project's lessons from finished tasks, the profile, Moments, related entries by kind, code directories,
 // a chat's last 7 days and the folder (docs/apple/ios.md "Information architecture", knowledge base). "Tag" in the header.
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { api, credentialOwner, enc, errorText, getToken, isAbort, subscribeCredentialOwner } from "../../lib/api";
-import { defaultManager, MANAGER_HEADER, useKnownDefault } from "../../lib/manager-choice";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { api, ApiError, credentialOwner, enc, errorText, getToken, isAbort, subscribeCredentialOwner } from "../../lib/api";
+import { MANAGER_HEADER, shownManager, useChosenManager, useKnownDefault } from "../../lib/manager-choice";
 import { ConfirmedFacts } from "./ConfirmedFacts";
+import { RecordingMinutes } from "./RecordingMinutes";
+import { RecordingDayRecap } from "./RecordingDayRecap";
+import { RecordingAsks } from "./RecordingAsks";
+import { MeetingPrivate, RecordingConversation, useRecordingMeeting } from "./RecordingConversation";
+import { RecordingPhotos } from "./RecordingPhotos";
+import { RecordingLiveView } from "./RecordingLiveView";
+import { namedBy, RecordingRenameDialog } from "./RecordingRename";
+import { RecordingHandoffDialog, RecordingHandoffRow, useRecordingHandoff, type MeetingHandoff } from "./RecordingHandoff";
+import { hasMaterial, meetingRunning } from "../../lib/meeting-thread";
+import { scrollBehavior } from "../../ui/stream/motion";
 import { Relationships } from "./Relationships";
+import { TopicPoints } from "./TopicPoints";
+import { ProjectLessons, projectLessonsDeps } from "./ProjectLessons";
 import { ago, sessionPreview, sessionTitle, shortPath, stateOf, tabLabel } from "../../lib/format";
+import { plainMarkdown } from "../../lib/plain-markdown";
 import {
   agentPreset,
   askPersonaText,
@@ -26,6 +39,7 @@ import {
   shortWhen,
   statusLabel,
   timeline,
+  transcriptLineId,
   type KBDetailResponse,
   type KBEntry,
   type KBMatch,
@@ -34,19 +48,24 @@ import {
 } from "../../lib/kb";
 import { machineWithHub } from "../../lib/mesh";
 import { openPanel } from "../../lib/panel";
-import { href, onLinkClick } from "../../lib/router";
-import { getState, useStore } from "../../lib/store";
+import { href, onLinkClick, type Route } from "../../lib/router";
+import { openedFromHere } from "../../lib/handoff";
+import { conversationRoute } from "../../lib/inbox";
+import { getState, onHubEvent, useStore } from "../../lib/store";
 import type { Session } from "../../lib/types";
 import { Button, Collapse, copyText, cx, IconButton, Loading, StatePill, toast } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
+import { BrandMark } from "../../ui/BrandMark";
+import { connectorBrand } from "../../lib/connectors";
 import { Markdown } from "../../ui/Markdown";
 import { known, remember } from "./cache";
 import { askPersona } from "../../lib/outbox";
 import { openNewAgent } from "../../lib/new-agent";
 import { DayDialog, MessageView, MomentDialog, TagEditor } from "./KBDialogs";
 import { ErrorBox } from "./KBList";
-import { Badges, Card, KBIcon, Marked, MoreRow, onPlainClick, SectionTitle, Tile, TonePill } from "./KBParts";
+import { Empty } from "../session/files/parts";
+import { Badges, Card, importedMeetingOf, importedNotesLabel, KBIcon, Marked, MoreRow, onPlainClick, SectionTitle, Tile, TonePill } from "./KBParts";
 import { t } from "../../i18n";
 
 /** Timeline lines shown before "Show all". */
@@ -82,20 +101,37 @@ type EntryDetailProps = {
 
 export function EntryDetail(props: EntryDetailProps) {
   const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
-  const manager = useKnownDefault();
+  // the current assistant's entry (an address names no assistant: docs/assistant/managers.md "Clients"): a kept pick is
+  // known at once, the default once the roster says which it is
+  const picked = useChosenManager();
+  const knownDefault = useKnownDefault();
+  const manager = picked ?? knownDefault;
   if (!manager || !getToken()) return <Loading />;
-  // Retained detail and editors belong to the requested route and owner, including the default manager.
+  // Retained detail and editors belong to the requested route, owner and assistant: whatever is read and written here
+  // (the tags, confirmed facts, relationships, minutes, a chat's days, a post) names that one assistant, and another
+  // made current opens it again.
   return <OwnedEntryDetail key={JSON.stringify([props.kind, props.id, owner, manager])} {...props} owner={owner} manager={manager} />;
 }
 
 function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack, onOpen, onSaved, owner, manager }: EntryDetailProps & { owner: string; manager: string }) {
   const [token] = useState(getToken);
-  const current = useCallback(() => credentialOwner() === owner && defaultManager() === manager, [owner, manager]);
+  const current = useCallback(() => credentialOwner() === owner && shownManager() === manager, [owner, manager]);
+  const auth = useMemo(() => ({ token, tokenOwner: owner, headers: { [MANAGER_HEADER]: manager } }), [token, owner, manager]);
+  // A project's lessons from finished tasks (#12295): read by the section itself, drawn only when there are some.
+  const lessonsDeps = useMemo(() => projectLessonsDeps(id, auth), [id, auth]);
   const request = useRef(0);
   const [resp, setResp] = useState<KBDetailResponse | null>(null);
   const [error, setError] = useState("");
+  // the hub has no such entry (deleted, renamed, or an old link): said plainly, with nothing to retry
+  const [gone, setGone] = useState(false);
+  // The page's own read (opening, after a save elsewhere on the page, Retry) failed while an earlier detail is shown:
+  // the detail stays and this says it may be out of date. Sections reading it again themselves show their own errors.
+  const [reloadError, setReloadError] = useState("");
   const [retry, setRetry] = useState(0);
   const [editing, setEditing] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  // Hand to Agent (#8852): open, with the failed hand-off tried again when it came from its row.
+  const [handing, setHanding] = useState<{ again?: MeetingHandoff } | null>(null);
   const [asking, setAsking] = useState(false);
   const [allLog, setAllLog] = useState(false);
   const [allMatches, setAllMatches] = useState(false);
@@ -103,34 +139,59 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
   const [showRecent, setShowRecent] = useState(false);
   const [day, setDay] = useState<{ day: string; focus?: number; query?: string } | null>(null);
   const [moment, setMoment] = useState<KBMomentRef | null>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  const [highlighted, setHighlighted] = useState("");
+  const highlightTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(highlightTimer.current), []);
+
+  const jumpToTranscript = (lineId: string) => {
+    const line = document.getElementById(lineId);
+    const page = scroller.current;
+    if (!line || !page?.contains(line)) return;
+    // Only move the detail's scroller, not the Knowledge list or outer app shell.
+    page.scrollTo({ top: page.scrollTop + line.getBoundingClientRect().top - page.getBoundingClientRect().top - page.clientHeight / 3, behavior: scrollBehavior() });
+    line.focus({ preventScroll: true });
+    clearTimeout(highlightTimer.current);
+    setHighlighted(lineId);
+    highlightTimer.current = setTimeout(() => setHighlighted(""), 2000);
+  };
 
   const load = useCallback(async (signal?: AbortSignal) => {
     const version = ++request.current;
     const valid = () => current() && version === request.current && !signal?.aborted;
     try {
-      const r = await api<KBDetailResponse>(`/kb/${enc(kind)}/${enc(id)}${query ? `?q=${enc(query)}` : ""}`, {
-        signal, token, tokenOwner: owner, headers: { [MANAGER_HEADER]: manager },
-      });
+      const r = await api<KBDetailResponse>(`/kb/${enc(kind)}/${enc(id)}${query ? `?q=${enc(query)}` : ""}`, { signal, ...auth });
       if (!valid()) return false;
       // The server canonicalizes source IDs (including recording UUID case); the request owns this response.
       if (r.detail.kind !== kind) throw new Error(t("knowledge-confirmedfacts.entry_changed"));
       remember(r.detail.links ?? []);
       setResp(r);
       setError("");
+      setGone(false);
+      setReloadError("");
       return true;
     } catch (err) {
       if (!valid()) return false;
+      const missing = err instanceof ApiError && err.status === 404;
+      setGone(missing);
       if (!isAbort(err)) setError(errorText(err));
       throw err;
     }
-  }, [kind, id, query, token, owner, manager, current]);
+  }, [kind, id, query, auth, current]);
 
   useEffect(() => {
     setError("");
+    setReloadError("");
     const ac = new AbortController();
-    void load(ac.signal).catch(() => {});
+    void load(ac.signal).catch((err) => {
+      if (!ac.signal.aborted && !isAbort(err)) setReloadError(err instanceof ApiError && err.status === 404 ? t("not-found.kb_gone") : errorText(err));
+    });
     return () => { ac.abort(); request.current++; };
   }, [load, reloadKey, retry]);
+  // The error the page shows (a failed read while the hub was away) is read again once it is back (its hello), as Retry
+  // would. A section's own detail read that failed (a meeting's photos) keeps its own rules for when to read again.
+  const failed = Boolean(resp ? reloadError : error);
+  useEffect(() => (failed ? onHubEvent("hello", () => setRetry((x) => x + 1)) : undefined), [failed]);
 
   const d = resp?.detail;
 
@@ -151,13 +212,49 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
   };
 
   const facts = d ? factsOf(d.kind, d.meta) : null;
+  // A recording that stands for an imported meeting too (#8872): its own notes there, one tap away.
+  const imported = importedMeetingOf(d);
+  const importedBrand = imported ? connectorBrand(imported.source ?? "") : undefined;
   const rec = d ? recordingView(d.kind, d.meta, d.segments) : null;
+  // The meeting conversation (#3862): its private mark, room and follow-up, on a hub that lists meeting_conversation;
+  // its photos too where the hub lists meeting_photos (after a change of the photos the minutes may have lost a deleted
+  // photo's items or be made again: read them, and again on the next poll, reconnect or event if that read fails).
+  const reloadDetail = useCallback(() => load(), [load]);
+  const meeting = useRecordingMeeting(d, rec, auth, current, manager, reloadDetail);
+  // Hand to Agent (#8852): a meeting or note that is over and has something to hand, for someone with an Agent to take
+  // it; its latest hand-off shows at the top of the page whether or not another can be made now.
+  const handoff = useRecordingHandoff(d?.meta);
+  const canHand = !!d && !!rec && !rec.allDay && handoff.hasAgents && !meetingRunning(d.meta, meeting.room) && hasMaterial(d);
   const log = timeline(d?.log);
-  const prof = profile(d?.summary, e.one_line, e.name);
+  // A topic's summary is its points as Markdown (for search and Persona): the page shows the points themselves. An
+  // all-day recording's is its recap's summary, which the recap shows.
+  const prof = d?.kind === "topics" || (rec?.allDay && d?.recap) ? "" : profile(d?.summary, e.one_line, e.name);
   const dirs = dirsOf(d?.meta);
   const recent = d?.kind === "chats" ? parseRecent(d.recent) : [];
   const into = typeof d?.meta?.merged_into === "string" ? d.meta.merged_into : "";
   const moments = d?.moments ?? [];
+
+  // An entry the hub has no such entry for: the shared empty state and the way back, as a page or a personal Agent's
+  // conversation that isn't there (NotFound, AgentsView), not the entry's page with its id, disabled buttons and a red
+  // box (web usability audit item 42). The header names the list it would be in.
+  if (gone && !d)
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <header className="flex h-14 shrink-0 items-center gap-1.5 border-b border-line px-3 sm:px-4">
+          <IconButton icon="sidebar" label={t("knowledge-kbdetail.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
+          <IconButton icon="chevronLeft" label={t("knowledge-kbdetail.back")} onClick={onBack} className="@3xl:hidden" />
+          <span className="min-w-0 flex-1 truncate text-meta font-medium text-ink-2">{isKind(kind) ? kindTitle(kind) : t("app.title_kb")}</span>
+        </header>
+        <div className="flex min-h-0 flex-1 flex-col pb-[10vh]" role="status">
+          <Empty
+            icon="book"
+            title={t("not-found.kb_title")}
+            detail={t("not-found.kb_detail")}
+            action={<Button tone="secondary" icon="arrowLeft" onClick={onBack}>{t("knowledge-kbdetail.back")}</Button>}
+          />
+        </div>
+      </div>
+    );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -171,7 +268,7 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
         </Button>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-[720px] px-4 pt-6 pb-20 sm:px-8">
           {/* Header: what it is at a glance, and the way out (handing it to Persona). */}
           <div>
@@ -196,6 +293,18 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
               <Button tone="accent" icon="spark" busy={asking} disabled={!d} onClick={ask} title={t("knowledge-kbdetail.ask_title")}>
                 {t("knowledge-kbdetail.ask")}
               </Button>
+              {/* A meeting or note (#8877): renamed here, kept over the phone's next upload. Not an all-day recording,
+                  named by its day. */}
+              {kind === "recordings" && d && !rec?.allDay && (
+                <Button tone="secondary" icon="pencil" onClick={() => setRenaming(true)}>
+                  {t("knowledge-kbdetail.rename")}
+                </Button>
+              )}
+              {canHand && (
+                <Button tone="secondary" icon="send" onClick={() => setHanding({})} testId="handoff-open">
+                  {t("knowledge-handoff.open_dialog")}
+                </Button>
+              )}
               {kind === "projects" && (
                 <Button
                   tone="secondary"
@@ -215,14 +324,20 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
               <Loading />
             </div>
           )}
-          {error && !d && (
+          {(d ? reloadError : error) && (
             <div className="mt-6">
-              <ErrorBox text={error} onRetry={() => setRetry((x) => x + 1)} />
+              <ErrorBox text={d ? reloadError : error} onRetry={() => setRetry((x) => x + 1)} />
             </div>
           )}
 
           {d && (
             <div className="mt-7 flex flex-col gap-6" style={{ animation: "fade-in 200ms ease-out both" }}>
+              {rec && handoff.latest && (
+                <RecordingHandoffRow
+                  handoff={handoff.latest}
+                  onRetry={canHand ? () => setHanding({ again: handoff.latest ?? undefined }) : undefined}
+                />
+              )}
               {facts && (
                 <section>
                   <Card>
@@ -241,8 +356,50 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
                   </Card>
                 </section>
               )}
+              {imported && (
+                <section>
+                  <Card>
+                    <button type="button" onClick={() => openPanel({ kind: "link", url: imported.url, title: importedNotesLabel(imported.source) })} className="flex w-full items-center gap-2 whitespace-nowrap px-4 py-2.5 text-left text-meta font-medium text-accent-ink hover:bg-hover">
+                      {importedBrand ? <BrandMark brand={importedBrand} size={16} fit="badge" /> : <Icon name="external" size={14} />}
+                      {importedNotesLabel(imported.source)}
+                    </button>
+                  </Card>
+                </section>
+              )}
 
-              {rec && <RecordingFacts rec={rec} />}
+              {rec && <RecordingFacts rec={rec} roomMeeting={meeting.roomMeeting} />}
+              {rec && <MeetingPrivate meeting={meeting} />}
+              {/* An all-day recording (#4741) has a recap instead of minutes. */}
+              {rec && (rec.allDay ? <RecordingDayRecap
+                detail={d}
+                rec={rec}
+                auth={auth}
+                current={current}
+                refresh={load}
+                onSaved={onSaved}
+                onJump={jumpToTranscript}
+                onOpen={onOpen}
+              /> : <RecordingMinutes
+                detail={d}
+                rec={rec}
+                auth={auth}
+                current={current}
+                refresh={load}
+                onSaved={onSaved}
+                onJump={jumpToTranscript}
+                photos={meeting.photos}
+              />)}
+              {/* While a room meeting records (phase 2): its topics and newest live lines, above its conversation. */}
+              {rec && <RecordingLiveView rec={rec} meeting={meeting} />}
+              {rec && <RecordingConversation detail={d} rec={rec} meeting={meeting} auth={auth} current={current} manager={manager} />}
+              {/* A room meeting's questions are in its thread; a #2981 meeting's stay here. */}
+              {rec && !meeting.roomMeeting && <RecordingAsks
+                detail={d}
+                rec={rec}
+                auth={{ token, tokenOwner: owner, headers: { [MANAGER_HEADER]: manager } }}
+                current={current}
+              />}
+              {rec && <RecordingPhotos rec={rec} photos={meeting.photos} highlighted={highlighted} />}
 
               {query && resp?.matches && (
                 <Matches
@@ -290,15 +447,19 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
                 </section>
               )}
 
+              {d.kind === "projects" && <ProjectLessons key={id} deps={lessonsDeps} current={current} />}
+
               {isKind(kind) && <ConfirmedFacts
                 kind={kind}
                 id={id}
                 value={typeof d.meta?.pinned === "string" ? d.meta.pinned : ""}
-                auth={{ token, tokenOwner: owner, headers: { [MANAGER_HEADER]: manager } }}
+                auth={auth}
                 current={current}
                 refresh={load}
                 onSaved={onSaved}
               />}
+
+              {d.kind === "topics" && <TopicPoints detail={d} onOpen={onOpen} />}
 
               {prof && (
                 <section>
@@ -358,7 +519,7 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
               <Relationships
                 detail={d}
                 name={e.name}
-                auth={{ token, tokenOwner: owner, headers: { [MANAGER_HEADER]: manager } }}
+                auth={auth}
                 current={current}
                 onOpen={onOpen}
                 onRefreshed={(r) => {
@@ -373,7 +534,7 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
 
               {dirs.length > 0 && <Dirs dirs={dirs} />}
 
-              {rec && <Transcript rec={rec} query={query} />}
+              {rec && <Transcript rec={rec} query={query} highlighted={highlighted} />}
 
               {recent.length > 0 && (
                 <section>
@@ -427,9 +588,35 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
         </div>
       </div>
 
-      {d && <TagEditor entry={e} open={editing} onClose={() => setEditing(false)} onSaved={onSaved} />}
-      {d?.kind === "chats" && <DayDialog chat={d.id} chatName={e.name} day={day?.day ?? null} focus={day?.focus} query={day?.query} onClose={() => setDay(null)} />}
-      <MomentDialog moment={moment} onClose={() => setMoment(null)} />
+      {d && <TagEditor entry={e} auth={auth} open={editing} onClose={() => setEditing(false)} onSaved={onSaved} />}
+      {handing && d && rec && (
+        <RecordingHandoffDialog
+          id={d.id}
+          hasTranscript={!rec.trimmedAt && rec.lines.some((l) => !l.bookmark)}
+          auth={auth}
+          again={handing.again}
+          onClose={() => setHanding(null)}
+          onDone={(h) => {
+            handoff.setMade(h);
+            void load().catch(() => {});
+          }}
+        />
+      )}
+      {renaming && d && (
+        <RecordingRenameDialog
+          id={id}
+          name={e.name}
+          source={namedBy(d.meta)}
+          auth={auth}
+          onClose={() => setRenaming(false)}
+          onDone={() => {
+            void load().catch(() => {});
+            onSaved();
+          }}
+        />
+      )}
+      {d?.kind === "chats" && <DayDialog chat={d.id} chatName={e.name} auth={auth} day={day?.day ?? null} focus={day?.focus} query={day?.query} onClose={() => setDay(null)} />}
+      <MomentDialog moment={moment} auth={auth} onClose={() => setMoment(null)} />
     </div>
   );
 }
@@ -492,11 +679,12 @@ function Agents({ agents }: { agents: Session[] }) {
       <SectionTitle title={t("knowledge-kbdetail.agents")} count={live.length} />
       <Card>
         {live.map((s) => {
+          // a drill-down: Back and the sidebar stay with this project (#12055)
           const to = { name: "session" as const, mid: s.machine_id, sid: s.session_id };
           const st = stateOf(s);
-          const preview = sessionPreview(s);
+          const preview = plainMarkdown(sessionPreview(s));
           return (
-            <a key={`${s.machine_id}/${s.session_id}`} href={href(to)} onClick={(ev) => onLinkClick(ev, to)} className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-hover">
+            <a key={`${s.machine_id}/${s.session_id}`} href={href(to)} onClick={(ev) => onLinkClick(ev, to, openedFromHere())} className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-hover">
               <span className="flex w-3 shrink-0 justify-center">
                 <StatusMark state={st} />
               </span>
@@ -516,13 +704,20 @@ function Agents({ agents }: { agents: Session[] }) {
   );
 }
 
-/** A recording's when, how long, where it was made; and whether its transcript is still coming. */
-function RecordingFacts({ rec }: { rec: RecordingView }) {
+/** A recording's when, how long, where it was made; and whether its transcript is still coming. A room meeting (#3862) is
+ *  attended by its own room, which its Conversation section shows, not by a session named here. */
+function RecordingFacts({ rec, roomMeeting }: { rec: RecordingView; roomMeeting: boolean }) {
   const rows: [string, string][] = [];
-  if (rec.startedAt) rows.push([t("knowledge-kbdetail.recording_started"), formatAt(rec.startedAt)]);
+  // An all-day recording says so, with its day (and part, past the first), and its times on its own clock.
+  if (rec.allDay) {
+    const date = rec.allDay.day ? dayTitle(rec.allDay.day) : "";
+    rows.push([t("knowledge-kbdetail.recording_all_day"), rec.allDay.part > 1 ? t("knowledge-kbdetail.recording_day_part", { date, part: rec.allDay.part }) : date]);
+  }
+  if (rec.startedAt) rows.push([t("knowledge-kbdetail.recording_started"), formatAt(rec.startedAt, undefined, rec.tz)]);
   if (rec.duration) rows.push([t("knowledge-kbdetail.recording_duration"), rec.duration]);
   rows.push([t("knowledge-kbdetail.recording_device"), rec.device]);
   if (rec.language) rows.push([t("knowledge-kbdetail.recording_language"), rec.language]);
+  if (rec.attendance) rows.push([t("knowledge-kbdetail.recording_persona"), t(rec.attendance === "participant" ? "knowledge-kbdetail.recording_participant" : "knowledge-kbdetail.recording_listener")]);
   return (
     <section>
       <Card>
@@ -532,22 +727,55 @@ function RecordingFacts({ rec }: { rec: RecordingView }) {
             <span className="whitespace-nowrap text-ink tabular-nums">{v}</span>
           </div>
         ))}
+        {rec.attendance && !roomMeeting && (
+          <div className="flex items-center gap-3 px-4 py-2.5 text-[13px]">
+            <span className="flex-1 whitespace-nowrap text-ink-2">{t("knowledge-kbdetail.recording_attending")}</span>
+            <AttendingSession session={rec.attendingSession} />
+          </div>
+        )}
       </Card>
       {rec.partial && <p className="mt-1.5 px-1 text-[11.5px] leading-relaxed text-ink-3">{t("knowledge-kbdetail.recording_partial")}</p>}
     </section>
   );
 }
 
+/** The session attending a meeting, opening its chat: a Persona conversation, an Agent, or the main chat when none was
+ *  named (docs/assistant/meeting-minutes.md "Attendance fields"). */
+function AttendingSession({ session }: { session?: RecordingView["attendingSession"] }) {
+  const sessions = useStore((s) => s.sessions);
+  const assistant = useStore((s) => s.assistant);
+  const machines = useStore((s) => s.machines);
+  let to: Route | null = null;
+  let label = t("knowledge-kbdetail.recording_main_chat");
+  if (session) {
+    const { machineId: mid, sessionId: sid } = session;
+    const row = (sessions[mid] ?? []).find((x) => x.session_id === sid)
+      ?? (assistant?.machine_id === mid ? assistant.conversations.find((c) => c.session_id === sid) : undefined);
+    to = conversationRoute(mid, sid, sessions, assistant);
+    label = row ? sessionTitle(row) : t("knowledge-kbdetail.recording_attending_on", { machine: machineWithHub(mid, machines) });
+  } else if (assistant?.main) {
+    to = { name: "persona", sid: assistant.main };
+  }
+  if (!to) return <span className="min-w-0 truncate text-ink">{label}</span>;
+  const route = to;
+  return (
+    <a href={href(route)} onClick={(ev) => onLinkClick(ev, route)} title={label} className="min-w-0 truncate font-medium text-accent-ink hover:underline">
+      {label}
+    </a>
+  );
+}
+
 /** The whole transcript, a line per segment at its clock time; bookmarks inline. */
-function Transcript({ rec, query }: { rec: RecordingView; query?: string }) {
+function Transcript({ rec, query, highlighted }: { rec: RecordingView; query?: string; highlighted: string }) {
   return (
     <section>
       <SectionTitle title={t("knowledge-kbdetail.transcript")} count={rec.lines.filter((l) => !l.bookmark).length} />
       <Card>
-        {!rec.lines.length && <p className="px-4 py-2.5 text-[12.5px] text-ink-3">{t("knowledge-kbdetail.transcript_empty")}</p>}
+        {/* Trimmed: the bookmarks (in its metadata) are all that is left of it. */}
+        {(rec.trimmedAt || !rec.lines.length) && <p className="px-4 py-2.5 text-[12.5px] text-ink-3">{t(rec.trimmedAt ? "knowledge-kbdetail.transcript_expired" : "knowledge-kbdetail.transcript_empty")}</p>}
         <ol className="px-4 py-1.5">
           {rec.lines.map((l, i) => (
-            <li key={i} className="flex gap-3 py-1.5 text-[13px] leading-relaxed">
+            <li key={i} id={transcriptLineId(l.seconds, l.bookmark)} tabIndex={-1} className={cx("flex gap-3 rounded-control py-1.5 text-[13px] leading-relaxed transition-colors", highlighted === transcriptLineId(l.seconds, l.bookmark) && "bg-accent-tint")}>
               <span className={cx("w-[60px] shrink-0 pt-px text-[11.5px] tabular-nums", l.bookmark ? "font-semibold text-accent-ink" : "text-ink-3")}>{l.clock}</span>
               {l.bookmark ? (
                 <span className="min-w-0 flex-1 font-medium text-accent-ink">

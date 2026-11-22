@@ -2,6 +2,9 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"maps"
 	"net/url"
 	"slices"
 	"strconv"
@@ -13,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
+	"golang.org/x/net/http/httpguts"
 )
 
 // ---- the app's API ----
@@ -31,7 +35,10 @@ type launcherInput struct {
 	CustomModelDescription string   `json:"custom_model_description"`
 	Args                   []string `json:"args"`
 	APIKey                 *string  `json:"api_key"` // nil or "" on an update keeps the key
-	Auth                   string   `json:"auth"`    // api_key (x-api-key, the default) or bearer (Authorization: Bearer)
+	// APIKeyReference is a reference to a provider extension's secret in place of the key (launcher_secrets.go); nil
+	// or "" keeps the key, and a key given later replaces it.
+	APIKeyReference *string `json:"api_key_reference"`
+	Auth            string  `json:"auth"` // api_key (x-api-key, the default) or bearer (Authorization: Bearer)
 	// Preset is the provider it is added from (GET /api/v1/launchers/presets): what is left empty is filled in, the
 	// name too (POST only).
 	Preset string `json:"preset,omitempty"`
@@ -57,6 +64,40 @@ type launcherInput struct {
 	CompactWindow *int                   `json:"compact_window"`
 	MaxContext    *int                   `json:"max_context"`
 	Effort        *string                `json:"effort"`
+	// ViaMachine (kind api): the computer that sends its requests (models_via.go); nil keeps it, "" this manager.
+	ViaMachine *string `json:"via_machine"`
+
+	// The device scope (models_launchers_scope.go); left out keeps what is stored.
+	scopeInput
+
+	// keyRefSealed and machineRefsSealed are the references above, checked and sealed (sealKeyReferences).
+	keyRefSealed      string
+	machineRefsSealed map[string]string
+	// modelsNamed: for each of Models, whether the body named any of reportedKeys for it (false or null too), as the
+	// web does and older apps never do (keepReported).
+	modelsNamed []bool
+}
+
+// UnmarshalJSON decodes the body as usual and notes which models name a field of a gateway's report (modelsNamed).
+func (in *launcherInput) UnmarshalJSON(b []byte) error {
+	type plain launcherInput
+	if err := json.Unmarshal(b, (*plain)(in)); err != nil {
+		return err
+	}
+	var raw struct {
+		Models []map[string]json.RawMessage `json:"models"`
+	}
+	in.modelsNamed = nil
+	if json.Unmarshal(b, &raw) == nil {
+		for _, m := range raw.Models {
+			named := false // the keys as encoding/json matches them, in any case
+			for k := range m {
+				named = named || slices.ContainsFunc(reportedKeys, func(r string) bool { return strings.EqualFold(k, r) })
+			}
+			in.modelsNamed = append(in.modelsNamed, named)
+		}
+	}
+	return nil
 }
 
 // checkEffort: a thinking level Claude Code takes (CLAUDE_CODE_EFFORT_LEVEL), or none. whose is the error's key
@@ -80,6 +121,14 @@ func checkGateway(raw string) error {
 	return nil
 }
 
+// reservedHeaders are credentials or protocol fields owned by the request builders. User-Agent remains intentionally
+// configurable; all other arbitrary HTTP field names follow the standard token and value rules.
+var reservedHeaders = map[string]bool{
+	"host": true, "content-length": true, "content-type": true, "authorization": true, "x-api-key": true,
+	"anthropic-version": true, "accept": true, "accept-encoding": true, "connection": true, "transfer-encoding": true,
+	"proxy-authorization": true, "trailer": true, "upgrade": true,
+}
+
 // checkHeaders: one "Name: value" a line (ANTHROPIC_CUSTOM_HEADERS); the error never quotes a value.
 func checkHeaders(raw string) error {
 	for i, line := range strings.Split(raw, "\n") {
@@ -87,13 +136,20 @@ func checkHeaders(raw string) error {
 		if line == "" {
 			continue
 		}
-		name, _, ok := strings.Cut(line, ":")
-		if !ok || strings.TrimSpace(name) == "" || strings.ContainsAny(strings.TrimSpace(name), " \t") {
+		name, value, ok := strings.Cut(line, ":")
+		name, value = strings.TrimSpace(name), strings.TrimSpace(value)
+		if !ok || !httpguts.ValidHeaderFieldName(name) || !httpguts.ValidHeaderFieldValue(value) {
 			return i18n.Err("assistant-models_launchers.err_header_line", i18n.Args{"line": i + 1})
+		}
+		if reservedHeaders[strings.ToLower(name)] {
+			return i18n.Err("assistant-models_launchers.err_header_reserved", i18n.Args{"name": name})
 		}
 	}
 	return nil
 }
+
+// envLimit is how many NAME=value lines a provider's env takes (checkEnv).
+const envLimit = 50
 
 // checkEnv: one NAME=value a line ("export " before it is fine), NAME a shell variable's name; a line starting with #
 // is a comment. The rules of the node's envLine (node/launcherenv.go) and the web's envProblem. The error never quotes
@@ -110,7 +166,7 @@ func checkEnv(raw string) error {
 		if !ok || !envName.MatchString(strings.TrimSpace(name)) || strings.ContainsRune(line, 0) {
 			return i18n.Err("assistant-models_launchers.err_env_line", i18n.Args{"line": i + 1})
 		}
-		if lines > 50 {
+		if lines > envLimit {
 			return i18n.Err("assistant-models_launchers.err_env_limit")
 		}
 	}
@@ -135,6 +191,9 @@ func (in launcherInput) checkProvider() error {
 			seen[id] = true
 			if m.ContextWindow < 0 {
 				return i18n.Err("assistant-models_launchers.err_model_context_negative", i18n.Args{"model": id})
+			}
+			if m.MaxOutputTokens < 0 {
+				return i18n.Err("assistant-models_launchers.err_model_output_negative", i18n.Args{"model": id})
 			}
 			for _, e := range m.Efforts {
 				if e == "" {
@@ -207,9 +266,9 @@ func (in launcherInput) applyProvider(s *storedLauncher) {
 	}
 	if in.Models != nil {
 		var models []proto.ProviderModel
-		for _, m := range *in.Models {
+		for i, m := range *in.Models {
 			m.ID, m.Name = strings.TrimSpace(m.ID), strings.TrimSpace(m.Name)
-			models = append(models, m)
+			models = append(models, keepReported(m, s.Models, i < len(in.modelsNamed) && in.modelsNamed[i]))
 		}
 		s.Models = models
 	}
@@ -226,9 +285,19 @@ func (in launcherInput) applyProvider(s *storedLauncher) {
 	if in.SubagentForce != nil {
 		s.SubagentForce = *in.SubagentForce
 	}
+	// thinking levels in the words this provider's agent or API takes, kept with the models or not: the kind or agent
+	// may have changed
+	vocab := providerEffortVocab(s.Kind, s.AgentType())
+	s.Models = slices.Clone(s.Models) // an update's are the stored record's until now
+	for i := range s.Models {
+		s.Models[i] = settleSavedEfforts(s.Models[i], vocab)
+	}
 }
 
 var errNoPreset = i18n.Err("assistant-models_launchers.err_no_preset")
+
+// maxDisplayName is how long a provider's display name may be, in characters (err_display_name).
+const maxDisplayName = 64
 
 // gatewayHost is the host of a provider's Base URL, lower case; "" without one.
 func gatewayHost(baseURL string) string {
@@ -246,6 +315,9 @@ func onlyHost(list, host string) bool {
 }
 
 func (in launcherInput) check() error {
+	if proto.IsExternalLauncher(in.Name) {
+		return i18n.Err("external-adapter.purpose_unsupported")
+	}
 	if in.Kind != "" && in.Kind != "api" && in.Kind != "launcher" {
 		return i18n.Err("assistant-models_launchers.err_kind")
 	}
@@ -264,6 +336,14 @@ func (in launcherInput) check() error {
 	if in.Auth != "" && in.Auth != "api_key" && in.Auth != "bearer" {
 		return i18n.Err("assistant-models_launchers.err_auth")
 	}
+	if keyGiven(in.APIKey) && keyGiven(in.APIKeyReference) {
+		return i18n.Err("assistant-models_launchers.err_key_value_or_reference")
+	}
+	for m, ref := range in.MachineKeyReferences {
+		if keyGiven(ref) && keyGiven(in.MachineKeys[m]) {
+			return i18n.Err("assistant-models_launchers.err_key_value_or_reference")
+		}
+	}
 	if in.Kind == "api" && (len(in.Args) != 0 || in.SmallModel != "" || in.SubagentModel != "" || in.CustomModel != "") {
 		return i18n.Err("assistant-models_launchers.err_api_launch_fields")
 	}
@@ -279,7 +359,7 @@ func (in launcherInput) check() error {
 		return i18n.Err("assistant-models_launchers.err_name")
 	}
 	if in.DisplayName != nil {
-		if d := strings.TrimSpace(*in.DisplayName); utf8.RuneCountInString(d) > 64 || strings.IndexFunc(d, unicode.IsControl) >= 0 {
+		if d := strings.TrimSpace(*in.DisplayName); utf8.RuneCountInString(d) > maxDisplayName || strings.IndexFunc(d, unicode.IsControl) >= 0 {
 			return i18n.Err("assistant-models_launchers.err_display_name")
 		}
 	}
@@ -307,12 +387,13 @@ var (
 	errAPITransport       = i18n.Err("assistant-models_launchers.err_api_transport")
 	errChatTransport      = i18n.Err("assistant-models_launchers.err_chat_transport")
 	errChatLaunchSettings = i18n.Err("assistant-models_launchers.err_chat_launch_settings")
+	errRuntimeHeaders     = i18n.Err("assistant-models_launchers.err_runtime_headers")
 )
 
-// checkAPITransport rejects settings the manager's direct calls cannot honor. Launcher
-// transport settings remain available to the node; an empty kind is a legacy launcher.
-func checkAPITransport(kind, api, proxy, noProxy string, hasHeaders bool) error {
-	if !hasHeaders && strings.TrimSpace(proxy) == "" && strings.TrimSpace(noProxy) == "" {
+// checkAPITransport rejects proxy settings the manager's direct calls cannot honor. Custom headers are carried by the
+// same direct client on test, discovery and inference. Launcher transport settings remain available to the node.
+func checkAPITransport(kind, api, proxy, noProxy string, _ bool) error {
+	if strings.TrimSpace(proxy) == "" && strings.TrimSpace(noProxy) == "" {
 		return nil
 	}
 	if api == "chat" {
@@ -324,10 +405,41 @@ func checkAPITransport(kind, api, proxy, noProxy string, hasHeaders bool) error 
 	return nil
 }
 
+// checkVia: only a direct API connection sends through a computer, and only through one of this manager's: another
+// manager's machines are not its to call (hub ownership.go).
+func (s *Service) checkVia(in launcherInput) error {
+	id := ""
+	if in.ViaMachine != nil {
+		id = strings.TrimSpace(*in.ViaMachine)
+	}
+	if id == "" {
+		return nil
+	}
+	if in.Kind != "api" {
+		return i18n.Err("assistant-models_launchers.err_via_kind")
+	}
+	if s.devs == nil || !s.devs.Has(id) {
+		return errViaMachine(id)
+	}
+	return nil
+}
+
+func errViaMachine(id string) error {
+	return i18n.Err("assistant-models_launchers.err_via_machine", i18n.Args{"machine": strconv.Quote(id)})
+}
+
 // saveLauncher stores in (over old on an update) and tells the nodes.
 func (s *Service) saveLauncher(ctx context.Context, in launcherInput, old *storedLauncher) (storedLauncher, error) {
+	if proto.IsExternalLauncher(in.Name) {
+		return storedLauncher{}, i18n.Err("external-adapter.purpose_unsupported")
+	}
 	s.models.mu.Lock()
-	defer s.models.mu.Unlock()
+	locked := true
+	defer func() {
+		if locked {
+			s.models.mu.Unlock()
+		}
+	}()
 	list, err := s.readStoredLaunchers(ctx)
 	if err != nil {
 		return storedLauncher{}, err
@@ -382,6 +494,8 @@ func (s *Service) saveLauncher(ctx context.Context, in launcherInput, old *store
 	case in.Agent != "":
 		l.Agent = in.Agent
 	} // no agent in the request (an app without it): an update keeps what is stored
+	// Stored as the agent reaches it (the address Test connection called): a pasted ".../v1" would run as /v1/v1/messages.
+	l.BaseURL = l.LaunchBaseURL()
 	l.Args = in.Args
 	if in.Preset != "" {
 		l.Preset = in.Preset
@@ -404,7 +518,16 @@ func (s *Service) saveLauncher(ctx context.Context, in launcherInput, old *store
 		}
 		l.KeySealed = sealed
 	}
+	if in.keyRefSealed != "" {
+		l.KeySealed = in.keyRefSealed
+	}
 	in.applyProvider(&l)
+	if in.ViaMachine != nil {
+		l.ViaMachine = strings.TrimSpace(*in.ViaMachine)
+	}
+	if l.Kind != "api" {
+		l.ViaMachine = "" // only a direct API connection's requests are the manager's to send
+	}
 	// A bypass list that is the gateway's host alone (iOS's Proxy › No Proxy) follows the gateway to a new address: the
 	// web form and an import send it back as it was, and the old host would leave the new gateway on the proxy (#6238).
 	if old != nil && l.BaseURL != old.BaseURL && onlyHost(l.NoProxy, gatewayHost(old.BaseURL)) {
@@ -420,6 +543,9 @@ func (s *Service) saveLauncher(ctx context.Context, in launcherInput, old *store
 			l.HeadersSealed = sealed
 		}
 	}
+	if l.Kind != "api" && l.HeadersSealed != "" && !l.CustomHeadersSupported() {
+		return storedLauncher{}, errRuntimeHeaders
+	}
 	if in.Env != nil { // left out keeps it, "" clears it
 		l.EnvSealed = ""
 		if env := strings.TrimSpace(*in.Env); env != "" {
@@ -431,17 +557,49 @@ func (s *Service) saveLauncher(ctx context.Context, in launcherInput, old *store
 		}
 	}
 	if l.API == "chat" && (l.EnvSealed != "" || l.TimeoutMS != 0 || l.CompactWindow != 0 || l.MaxContext != 0 ||
-		l.Effort != "" || l.OpusModel != "" || l.SonnetModel != "" || l.HaikuModel != "" || l.FableModel != "" || l.SubagentForce) {
+		l.OpusModel != "" || l.SonnetModel != "" || l.HaikuModel != "" || l.FableModel != "" || l.SubagentForce) {
 		return storedLauncher{}, errChatLaunchSettings
 	}
+	if err := in.applyScope(&l, old == nil, len(in.Assign) > 0); err != nil {
+		return storedLauncher{}, err
+	}
+	keys, err := s.readMachineKeys(ctx)
+	if err != nil {
+		return storedLauncher{}, err
+	}
+	newKeys, _, err := s.withMachineKeys(keys, l.Name, in.MachineKeys, in.MachineKeyReferences, in.machineRefsSealed)
+	if err != nil {
+		return storedLauncher{}, err
+	}
 	l.APIKey, l.Headers, l.HasHeaders, l.Env, l.HasEnv = "", "", false, "", false // only ever stored sealed
+	l.Withheld, l.Rev = false, ""
+	var migrated migratedTierAliases
+	if old != nil && l.API == "chat" {
+		// This save can change the fallback provider. Clone so old still points at the pre-save list.
+		candidate := slices.Clone(list)
+		if i := slices.IndexFunc(candidate, func(x storedLauncher) bool { return x.Name == l.Name }); i >= 0 {
+			candidate[i] = l
+		} else {
+			candidate = append(candidate, l)
+		}
+		migrated, err = s.migrateTierAliases(withManagedSnapshot(ctx, candidate), *old, &l)
+		if err != nil {
+			return storedLauncher{}, err
+		}
+	}
 	if i := slices.IndexFunc(list, func(x storedLauncher) bool { return x.Name == l.Name }); i >= 0 {
 		list[i] = l
 	} else {
 		list = append(list, l)
 	}
-	if err := s.storeManagedLaunchers(ctx, list); err != nil {
+	if err := s.storeManagedWithKeys(ctx, list, keys, newKeys, migrated.settings); err != nil {
 		return l, err
+	}
+	if migrated.profileChanged {
+		s.models.mu.Unlock()
+		locked = false
+		s.ProfileChanged(ctx)
+		s.profileEvent(ctx, migrated.active)
 	}
 	return l, nil
 }
@@ -450,14 +608,72 @@ func (s *Service) saveLauncher(ctx context.Context, in launcherInput, old *store
 // node credentials can be opened. An unrelated corrupt credential defers publication without discarding
 // readable records or preventing repair. A post-commit read failure cannot clear the nodes' providers.
 func (s *Service) storeManagedLaunchers(ctx context.Context, list []storedLauncher) error {
-	nodes, publicationErr := s.nodeLaunchers(list)
-	if err := s.putSetting(ctx, launchersManagedKey, list); err != nil {
+	return s.storeManagedAnd(ctx, list, nil)
+}
+
+// errNoSettingsBatch: the store writes one setting at a time, so storeManagedAnd wrote nothing.
+var errNoSettingsBatch = errors.New("the store cannot write several settings in one transaction")
+
+// storeManagedAnd is storeManagedLaunchers that also writes more (other settings) in the same transaction: all of it
+// or nothing. A store that cannot is errNoSettingsBatch, nothing written.
+func (s *Service) storeManagedAnd(ctx context.Context, list []storedLauncher, more map[string]any) error {
+	keys, err := s.readMachineKeys(ctx)
+	if err != nil {
 		return err
+	}
+	// a provider's keys for single computers go with it
+	kept := slices.DeleteFunc(slices.Clone(keys), func(k machineKey) bool {
+		return !slices.ContainsFunc(list, func(l storedLauncher) bool { return l.Name == k.Launcher })
+	})
+	return s.storeManagedWithKeys(ctx, list, keys, kept, more)
+}
+
+// storeManagedWithKeys is storeManagedAnd with the computers' keys as they are to be (old: as read).
+func (s *Service) storeManagedWithKeys(ctx context.Context, list []storedLauncher, old, keys []machineKey, more map[string]any) error {
+	_, publicationErr := s.nodeLaunchers(list)
+	if publicationErr == nil {
+		for _, k := range keys {
+			if _, err := s.openKey(k.KeySealed); err != nil {
+				publicationErr = i18n.Err("assistant-models.err_key_decrypt")
+				break
+			}
+		}
+	}
+	if keys == nil {
+		keys = []machineKey{}
+	}
+	if len(more) > 0 {
+		batch, ok := s.store().(interface {
+			PutSettings(context.Context, map[string]any) error
+		})
+		if !ok {
+			return errNoSettingsBatch
+		}
+		writes := maps.Clone(more)
+		writes[launchersManagedKey] = list
+		if !slices.Equal(old, keys) {
+			writes[launchersMachineKeysKey] = keys
+		}
+		if err := batch.PutSettings(ctx, writes); err != nil {
+			return err
+		}
+	} else {
+		if !slices.Equal(old, keys) {
+			if err := s.putSetting(ctx, launchersMachineKeysKey, keys); err != nil {
+				return err
+			}
+		}
+		if err := s.putSetting(ctx, launchersManagedKey, list); err != nil {
+			return err
+		}
 	}
 	if publicationErr != nil {
 		s.logf("launchers: saved providers; node publication deferred: %v", publicationErr)
 		return nil
 	}
-	s.pushNodeLaunchers(ctx, "", nodes)
+	s.pushNodeLaunchers(ctx, "", list, keys)
 	return nil
 }
+
+// keyGiven: a key or reference that is there (nil and blank are not).
+func keyGiven(v *string) bool { return v != nil && strings.TrimSpace(*v) != "" }

@@ -1,14 +1,19 @@
 package assistant
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // The to-do waiting for the owner carries its open ask (#2056): what the briefing's `accept[]` row says of it, so the apps
@@ -97,7 +102,7 @@ func TestTodoListCarriesAConclusionWithoutRecommendation(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitsForReview(t, s, f, todo.ID, "查了，做不了")
-	reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "outcome": "cannot", "reason": "对方接口不对外开放", "link": "https://docs.example.com/api"})
+	judgeConcluded(t, s, todo.ID)
 	ask := listedAsk(t, s, todo.ID)
 	if ask == nil || ask["outcome"] != "cannot" || ask["verdict"] != "⛔ 做不了：对方接口不对外开放" || ask["asked_at"] == nil {
 		t.Fatalf("ask %v", ask)
@@ -124,12 +129,120 @@ func TestTodoAskEndsWhenTheReviewMovesOn(t *testing.T) {
 	}
 }
 
+// Direct completion is the existing user PATCH, not acceptance of the recommendation.
+// It ends a decision even when its agent is already closed, and keeps normal idle cleanup.
+func TestDirectCompletionEndsDecisionWithoutSending(t *testing.T) {
+	for _, tc := range []struct {
+		name, recommend string
+		closed          bool
+	}{
+		{"idle with recommendation", "Use staged rollout", false},
+		{"closed with recommendation", "Use staged rollout", true},
+		{"closed without recommendation", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			todoStores(t, func(t *testing.T, e *todoEnv, database *db.DB) {
+				ctx := context.Background()
+				setSettings(t, e.s, func(v *Settings) { v.Main = "conv1" })
+				todo, err := e.s.createTodo(ctx, "Choose rollout", "Review rollout options", "conv1", "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				c := idleAgent(time.Now().Add(-time.Hour))
+				if tc.closed {
+					c.Status, c.PaneID = proto.StatusOffline, ""
+				}
+				e.f.setSessions("box", c)
+				if err := e.s.linkTodoAgent(ctx, todo.ID, "box", "s1", "Rollout", "/code/app", "claude"); err != nil {
+					t.Fatal(err)
+				}
+				e.s.superviseTodo(ctx, todo.ID, "conv1", nil, 0)
+				if tc.recommend != "" {
+					reviewTask(t, e.s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "Choose a rollout", "recommend": tc.recommend})
+				} else {
+					legacyDecision(t, e.s, todo.ID, "Choose a rollout")
+				}
+				ask := listedAsk(t, e.s, todo.ID)
+				if ask == nil || ask["outcome"] != outcomeDecide {
+					t.Fatalf("no decision waiting: %v", ask)
+				}
+				at := ask["asked_at"].(string)
+				sent := len(sentToAgent(e.f))
+				var response struct{ Todo Todo }
+				if err := json.Unmarshal(e.must("PATCH", "/api/v1/todos/"+todo.ID, `{"done":true}`).Body.Bytes(), &response); err != nil {
+					t.Fatal(err)
+				}
+				if got := response.Todo; got.DoneAt == nil || got.DoneBy != "" || got.DoneReason != "" {
+					t.Fatalf("not a user completion: %+v", got)
+				}
+				if listedAsk(t, e.s, todo.ID) != nil || len(e.s.awaitingAcceptance(ctx)) != 0 {
+					t.Fatal("the completed decision still waits in todos/briefing")
+				}
+				for _, row := range e.s.boardRows(ctx, e.s.botLang(ctx), "", time.Now()) {
+					if row.id == todo.ID {
+						t.Fatal("the completed task is still on the pending board")
+					}
+				}
+				todosTold(t, e.s)
+				if e.todoOf("box", "s1") != "" || !strings.Contains(e.f.eventTypes(), "todos") {
+					t.Fatal("completion did not clear session decoration and notify clients")
+				}
+				if rec := acceptAt(e.s, todo.ID, at); rec.Code != http.StatusConflict {
+					t.Fatalf("late acceptance: %d %s", rec.Code, rec.Body.String())
+				}
+				if database != nil {
+					reloadTodos(t, e.s)
+					if mem, stored := todoDoneBoth(t, e, database, todo.ID); !mem || !stored {
+						t.Fatal("completion did not survive reload")
+					}
+					decisions, err := database.ListTodoDecisions(ctx, todo.ID, true)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, d := range decisions {
+						if d.Source == db.DecisionManual {
+							t.Fatalf("completion took a recommendation: %+v", d)
+						}
+					}
+				}
+				// A later working report must not undo the user's choice, even with a needs_user ledger.
+				e.s.taskWorking(ctx, "box", "s1")
+				if todoNow(e.s, todo.ID).DoneAt == nil {
+					t.Fatal("agent activity reopened the user-completed task")
+				}
+				e.s.closeDoneTaskAgents(ctx, taskCloseRefused{}, doneSeen{})
+				if len(e.f.retires()) != 0 {
+					t.Fatal("completion bypassed the idle grace period")
+				}
+				old := taskCloseIdle
+				taskCloseIdle = 0
+				t.Cleanup(func() { taskCloseIdle = old })
+				e.s.closeDoneTaskAgents(ctx, taskCloseRefused{}, doneSeen{})
+				if got := e.f.retires(); len(got) != map[bool]int{true: 0, false: 1}[tc.closed] {
+					t.Fatalf("idle cleanup: %v", got)
+				}
+				if got := len(sentToAgent(e.f)); got != sent {
+					t.Fatalf("completion/late acceptance sent %d messages (would resume a closed agent)", got-sent)
+				}
+				e.must("PATCH", "/api/v1/todos/"+todo.ID, `{"done":false}`)
+				if listedAsk(t, e.s, todo.ID) != nil {
+					t.Fatal("reopening revived the old decision")
+				}
+				if rec := acceptAt(e.s, todo.ID, at); rec.Code != http.StatusConflict {
+					t.Fatalf("acceptance after reopen: %d %s", rec.Code, rec.Body.String())
+				}
+			})
+		})
+	}
+}
+
 // The apps are told to read the to-dos again when an ask comes up and when it is taken, also when nothing else of the
 // to-do changes with it (a review's own change of the ledger is told before its ask is kept).
 func TestTodoAskChangesTellTheApps(t *testing.T) {
 	s, f, todo, _, _ := conclusionService(t, false)
 	waitsForReview(t, s, f, todo.ID, "查了，做不了")
 	todosEvents := func() int {
+		todosTold(t, s)
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		n := 0
@@ -201,11 +314,74 @@ func TestDecisionPushCarriesTheTodoAndItsRound(t *testing.T) {
 	}
 }
 
-// A decision without a recommended option gets no decide push: there is nothing for OK to take.
+// A decision's push says how it may be answered, as the to-do's view says it (#10465): its ask is the view's own
+// decision, and its lock-screen rule the same, open_only for a step that cannot be undone, answer for a call on
+// priority, with the options the recommended first.
+func TestDecisionPushSaysItsLockscreen(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		review map[string]any
+		want   string
+	}{
+		{"a call on priority", rolloutDecision(), assistantwire.OwnerAskLockscreenAnswer},
+		{"a step that cannot be undone", dropTableDecision(), assistantwire.OwnerAskLockscreenOpenOnly},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f, todo := newSupervisedService(t)
+			waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
+			if _, err := reviewErr(s, todo.ID, tc.review); err != nil {
+				t.Fatal(err)
+			}
+			pushes := decidePushes(t, f)
+			if len(pushes) != 1 {
+				t.Fatalf("%d decide pushes", len(pushes))
+			}
+			td, _ := pushes[0]["todo"].(map[string]any)
+			var own map[string]any
+			view, _ := listedTodos(t, s)[todo.ID]["view"].(map[string]any)
+			asks, _ := view["asks"].([]any)
+			for _, a := range asks {
+				if m, _ := a.(map[string]any); m["kind"] == assistantwire.OwnerAskKindDecision {
+					own = m
+				}
+			}
+			if own == nil || td["ask"] != own["id"] || td["lockscreen"] != tc.want || own["lockscreen"] != tc.want {
+				t.Fatalf("push %v, the view's decision %v", td, own)
+			}
+			var labels []any
+			for _, o := range tc.review["options"].([]map[string]string) {
+				labels = append(labels, o["label"])
+			}
+			if labels[0] != tc.review["recommend"] || !reflect.DeepEqual(td["options"], labels) {
+				t.Fatalf("push options %v, want %v", td["options"], labels)
+			}
+		})
+	}
+}
+
+// legacyDecision leaves task id as a hub from before #3804 could: waiting for the owner (needs_user) on a decision that
+// recommends nothing. task_review refuses to make one now; the ones in the store are still listed and can be ended.
+func legacyDecision(t *testing.T, s *Service, id, reason string) {
+	t.Helper()
+	ctx := context.Background()
+	if _, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
+		v.State = reviewNeedsUser
+		v.Reviews = append(v.Reviews, TaskReview{At: time.Now().UTC(), Verdict: reviewNeedsUser, Note: reason})
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.askConclusion(ctx, todoNow(s, id), conclusionInput{Outcome: outcomeDecide, Reason: reason})
+}
+
+// A decision without a recommended option (one from before #3804) gets no decide push: there is nothing for OK to take.
 func TestDecisionWithoutRecommendationIsNotPushedForOK(t *testing.T) {
 	s, f, todo, _, _ := conclusionService(t, false)
 	waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
-	reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "先灰度还是直接全量"})
+	legacyDecision(t, s, todo.ID, "先灰度还是直接全量")
+	if s.pushDecision(context.Background(), todo.ID) {
+		t.Fatal("a decision that recommends nothing was pushed")
+	}
 	if pushes := decidePushes(t, f); len(pushes) != 0 {
 		t.Fatalf("decide pushes %v", pushes)
 	}
@@ -292,5 +468,171 @@ func TestDecisionOfAMutedConversationIsNotPushed(t *testing.T) {
 	}
 	if listedAsk(t, s, todo.ID) == nil {
 		t.Fatal("no ask on the to-do")
+	}
+}
+
+// How risky answering an ask is (askRisk): open when it cannot be undone or other people will see it, or when Persona
+// would take it at a deadline it cannot undo, also once that deadline was handled; else safe, a Please verify too.
+func TestAskRisk(t *testing.T) {
+	deadline := time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name string
+		a    acceptAsk
+		want string
+	}{
+		{"a call on priority", acceptAsk{Outcome: outcomeDecide, WhyOwner: whyPriority}, assistantwire.OwnerAskRiskSafe},
+		{"taken at a deadline it can undo", acceptAsk{Outcome: outcomeDecide, WhyOwner: whyAcceptance, Deadline: deadline,
+			Reversible: true}, assistantwire.OwnerAskRiskSafe},
+		{"cannot be undone", acceptAsk{Outcome: outcomeDecide, WhyOwner: whyIrreversible}, assistantwire.OwnerAskRiskOpen},
+		{"others will see it", acceptAsk{Outcome: outcomeDecide, WhyOwner: whyVisible, Deadline: deadline, Reversible: true},
+			assistantwire.OwnerAskRiskOpen},
+		{"taken at a deadline it cannot undo", acceptAsk{Outcome: outcomeDecide, WhyOwner: whyPriority, Deadline: deadline},
+			assistantwire.OwnerAskRiskOpen},
+		{"that deadline handled", acceptAsk{Outcome: outcomeDecide, WhyOwner: whyPriority, Deadline: deadline,
+			DueAt: deadline}, assistantwire.OwnerAskRiskOpen},
+		{"a Please verify", acceptAsk{}, assistantwire.OwnerAskRiskSafe},
+	} {
+		if got := askRisk(&tc.a); got != tc.want {
+			t.Errorf("%s: %s, want %s", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The list's ask carries its risk, and the view's own decision reads it, with the lock-screen action that follows: a
+// call on priority is safe, a step that cannot be undone open, and so is one Persona would take at a deadline it
+// cannot undo, also once that deadline was handled and the list no longer shows it.
+func TestTodoListCarriesTheAskRisk(t *testing.T) {
+	atDeadline := func() map[string]any {
+		a := rolloutDecision()
+		a["deadline"], a["reversible"] = "2h", false
+		return a
+	}
+	for _, tc := range []struct {
+		name    string
+		review  map[string]any
+		handled bool
+		want    string
+	}{
+		{"a call on priority", rolloutDecision(), false, assistantwire.OwnerAskRiskSafe},
+		{"a step that cannot be undone", dropTableDecision(), false, assistantwire.OwnerAskRiskOpen},
+		{"taken at a deadline it cannot undo", atDeadline(), false, assistantwire.OwnerAskRiskOpen},
+		{"that deadline handled", atDeadline(), true, assistantwire.OwnerAskRiskOpen},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f, todo := newSupervisedService(t)
+			waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
+			if _, err := reviewErr(s, todo.ID, tc.review); err != nil {
+				t.Fatal(err)
+			}
+			if tc.handled {
+				s.accept.mu.Lock()
+				s.accept.asks[todo.ID].DueAt = time.Now()
+				s.accept.mu.Unlock()
+			}
+			row := listedTodos(t, s)[todo.ID]
+			ask, _ := row["ask"].(map[string]any)
+			if ask == nil || ask["risk"] != tc.want || tc.handled && ask["deadline"] != nil {
+				t.Fatalf("ask %v", ask)
+			}
+			lock := assistantwire.OwnerAskLockscreenAnswer
+			if tc.want == assistantwire.OwnerAskRiskOpen {
+				lock = assistantwire.OwnerAskLockscreenOpenOnly
+			}
+			view, _ := row["view"].(map[string]any)
+			asks, _ := view["asks"].([]any)
+			var own map[string]any
+			for _, a := range asks {
+				if m, _ := a.(map[string]any); m["kind"] == assistantwire.OwnerAskKindDecision {
+					own = m
+				}
+			}
+			if own == nil || own["risk"] != tc.want || own["lockscreen"] != lock {
+				t.Fatalf("the view's decision %v, of %v", own, view)
+			}
+		})
+	}
+}
+
+// The shared To-dos fixtures (spec/fixtures/todo-view, spec/fixtures/todo-counts) list each ask's risk as the manager
+// would (askRisk): the view reads it as listed, so a case could otherwise state a risk the manager never gives and
+// still pass. Every ask a case's input lists, steps included, is checked wherever what it lists tells the answer.
+func TestTodoFixturesListTheManagersRisk(t *testing.T) {
+	type listed struct {
+		Outcome   string     `json:"outcome"`
+		WhyOwner  string     `json:"why_owner"`
+		Recommend string     `json:"recommend"`
+		Deadline  *time.Time `json:"deadline"`
+		Default   string     `json:"default"`
+		Risk      string     `json:"risk"`
+	}
+	// fixtureAsk is an acceptance ask todoAsks lists as l, and whether l says enough to tell its risk: a listed
+	// deadline taken by default can be undone, one never taken though it recommends an option cannot (todoAsks lists
+	// that only then), and with neither a deadline nor a default it had none. A deadline listed without its default (a
+	// fixture's shorthand), or a default of never alone (a handled deadline, or no recommendation), could be either.
+	fixtureAsk := func(l listed) (acceptAsk, bool) {
+		a := acceptAsk{Outcome: l.Outcome, WhyOwner: l.WhyOwner}
+		switch {
+		case neverDefault(l.WhyOwner):
+		case l.Deadline != nil && l.Default == defaultTaken:
+			a.Deadline, a.Reversible = *l.Deadline, true
+		case l.Deadline != nil && l.Default == defaultNever && l.Recommend != "":
+			a.Deadline = *l.Deadline
+		case l.Deadline == nil && l.Default == "":
+		default:
+			return a, false
+		}
+		return a, true
+	}
+	checked := map[string]int{}
+	for _, file := range []string{"todo-view/todo_view.json", "todo-counts/todo_counts.json"} {
+		raw, err := os.ReadFile("../../../spec/fixtures/" + file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Cases []struct {
+				Name  string          `json:"name"`
+				Input json.RawMessage `json:"input"`
+			} `json:"cases"`
+		}
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range doc.Cases {
+			var in struct {
+				Todo  *struct{ Ask *listed }  `json:"todo"`
+				Steps []struct{ Ask *listed } `json:"steps"`
+				Todos []struct{ Ask *listed } `json:"todos"`
+			}
+			if err := json.Unmarshal(c.Input, &in); err != nil {
+				t.Fatalf("%s %s: %v", file, c.Name, err)
+			}
+			asks := []*listed{}
+			if in.Todo != nil {
+				asks = append(asks, in.Todo.Ask)
+			}
+			for _, r := range append(in.Steps, in.Todos...) {
+				asks = append(asks, r.Ask)
+			}
+			for _, l := range asks {
+				if l == nil {
+					continue
+				}
+				a, told := fixtureAsk(*l)
+				if !told {
+					continue
+				}
+				if want := askRisk(&a); l.Risk != want {
+					t.Errorf("%s %s: the ask lists risk %q, the manager gives %q", file, c.Name, l.Risk, want)
+				}
+				checked[c.Name]++
+			}
+		}
+	}
+	for _, name := range []string{"decision_safe_choice", "decision_irreversible_open", "decision_visible_to_others_open",
+		"ranked_list"} {
+		if checked[name] == 0 {
+			t.Errorf("%s: no listed ask was checked", name)
+		}
 	}
 }

@@ -1,6 +1,7 @@
 // The web client's i18n (docs/protocol/i18n.md, docs/web/web.md"Internationalization"). The page runs in one language for its whole life: the
 // catalog loads before any other module (main.tsx), so t() works anywhere, module scope included, and picking another
-// language reloads the page.
+// language reloads the page. In the build, the page waits only for the first screen's part of it (startI18n): every
+// lazy import waits for the rest (vite.config.ts), so the modules that read those keys still find them loaded.
 //
 // The languages are the directories under ./locales: each holds its namespace files and _meta.json (its own name, the language subtags it is picked for). Adding a language is adding a
 // directory; nothing here lists them (docs/protocol/i18n.md "Adding a language").
@@ -89,32 +90,79 @@ export function byLanguage(glob: Record<string, () => Promise<CatalogModule>>): 
   return Object.fromEntries(Object.entries(glob).map(([p, load]) => [dirOf(p), load]));
 }
 
-/** The web client's catalog. The admin UI's own namespaces (admin-*) are not in it: admin/main.tsx adds them. */
-const loaders = byLanguage(import.meta.glob<CatalogModule>("./locales/*/_meta.json", { query: "?catalog=client" }));
+// The web client's catalog, in two parts (web/i18n-catalogs.ts): the keys the first screen reads
+// (startup-namespaces.json: namespaces, and keys of others) and the rest. The admin UI's own namespaces (admin-*) are in neither: admin/main.tsx adds them.
+const startupLoaders = byLanguage(import.meta.glob<CatalogModule>("./locales/*/_meta.json", { query: "?catalog=client-startup" }));
+const restLoaders = byLanguage(import.meta.glob<CatalogModule>("./locales/*/_meta.json", { query: "?catalog=client-rest" }));
+
+/** The rest's load while startI18n's page waits for it (a failed one is dropped, so the next ask tries again). */
+let rest: Promise<void> | undefined;
+/** Whether the rest is in: false only between startI18n and its rest's arrival. */
+let restIn = true;
 
 /**
  * Loads the client catalog of the preferred language (or `forced`, for tests), plus the `extra` catalogs of that
  * language (the admin UI's). Call before importing anything that says t().
  */
-export async function initI18n(forced?: Lang, ...extra: CatalogLoaders[]): Promise<Lang> {
+export function initI18n(forced?: Lang, ...extra: CatalogLoaders[]): Promise<Lang> {
+  return load(forced, [startupLoaders, restLoaders, ...extra], true);
+}
+
+/**
+ * main.tsx's initI18n in the build: waits only for the first screen's part of the client catalog and loads the rest
+ * after it. Every lazy import of the build waits for the rest (i18nRest), so only the first screen's modules can run
+ * before it is in, and the build checks that they name no namespace of it (vite.config.ts).
+ */
+export async function startI18n(forced?: Lang): Promise<Lang> {
+  const selected = await load(forced, [startupLoaders], false);
+  // A failed load is not kept: the next lazy import asks again.
+  void i18nRest()?.catch(() => {});
+  return selected;
+}
+
+async function load(forced: Lang | undefined, parts: CatalogLoaders[], whole: boolean): Promise<Lang> {
   const requested = forced ?? preferredLanguage();
-  const selected = loaders[requested] ? requested : FALLBACK_LANG;
+  const selected = startupLoaders[requested] ? requested : FALLBACK_LANG;
   const call = ++initCalls;
   // t() is synchronous, so its fallbacks must be ready before the page starts. Only the selected language's modules
   // load: each brings the en and zh-Hans entries that t() could fall back to, not those whole catalogs.
-  const modules = await Promise.all([loaders, ...extra].map((l) => l[selected]()));
+  const modules = await Promise.all(parts.map((l) => l[selected]()));
   // A later call took over while this one was loading (#4955): that call's language stands, not this one's.
   if (call !== initCalls) return lang;
-  const next: Record<Lang, Catalog> = { [selected]: {} };
-  for (const module of modules) {
-    Object.assign(next[selected], module.default);
-    for (const [language, entries] of Object.entries(module.fallbacks)) next[language] = Object.assign(next[language] ?? {}, entries);
-  }
-  catalogs = next;
   lang = selected;
+  catalogs = { [lang]: {} };
+  for (const module of modules) merge(module);
+  rest = undefined;
+  restIn = whole;
   if (typeof document !== "undefined") document.documentElement.lang = lang;
   return lang;
 }
+
+function merge(module: CatalogModule) {
+  Object.assign(catalogs[lang] ??= {}, module.default);
+  for (const [language, entries] of Object.entries(module.fallbacks)) catalogs[language] = Object.assign(catalogs[language] ?? {}, entries);
+}
+
+/** Resolves when the whole client catalog is in, or undefined if it already is. The build's lazy imports wait on it. */
+export function i18nRest(): Promise<void> | undefined {
+  if (restIn) return undefined;
+  const call = initCalls;
+  const loading = (rest ??= restLoaders[lang]().then(
+    (module) => {
+      if (call !== initCalls) return;
+      merge(module);
+      restIn = true;
+    },
+    (e: unknown) => {
+      if (rest === loading) rest = undefined;
+      throw e;
+    },
+  ));
+  return loading;
+}
+
+// The name vite.config.ts holdLazyImports calls: the chunks it rewrites cannot import this module.
+(globalThis as { __personaI18nRest?: typeof i18nRest }).__personaI18nRest = i18nRest;
 
 /** Saves the choice; when it changes the language the page reloads in it (no t() result is cached past a reload). */
 export function setLanguagePreference(pref: LangPreference) {
@@ -180,10 +228,28 @@ function lookup(language: Lang, key: string, vars?: Vars): string | undefined {
   return catalog[key];
 }
 
-/** Fills `{name}` placeholders; a missing value leaves the placeholder visible so the gap is obvious. */
+/** Fills `{name}` placeholders; a missing value leaves the placeholder visible so the gap is obvious. A value that ends a
+ *  sentence, filled in right before the text's own punctuation ("（{reason}），", "{error}。"), loses its full stop, so
+ *  the text never reads "。），" or "。。" (#6822). The hub's fill does the same (server/internal/i18n/i18n.go). */
 export function interpolate(text: string, vars?: Vars): string {
   if (!vars) return text;
-  return text.replace(/\{(\w+)\}/g, (m, name: string) => (name in vars ? String(vars[name]) : m));
+  return text.replace(/\{(\w+)\}/g, (m, name: string, at: number) => {
+    if (!(name in vars)) return m;
+    const value = String(vars[name]);
+    return MARK_AFTER.has(text.charAt(at + m.length)) ? withoutFullStop(value) : value;
+  });
+}
+
+/** Punctuation that, right after a placeholder, makes the value's own full stop a second one. */
+const MARK_AFTER = new Set(["）", ")", "，", ",", "。", "．", ".", "：", ":", "；", ";", "、"]);
+const FULL_STOPS = "。．.";
+
+/** value without the full stop it ends with (and space after it); an ellipsis ("...", "。。") keeps its dots. */
+function withoutFullStop(value: string): string {
+  const v = value.trimEnd();
+  const last = v.charAt(v.length - 1);
+  if (!last || !FULL_STOPS.includes(last) || (v.length > 1 && FULL_STOPS.includes(v.charAt(v.length - 2)))) return value;
+  return v.slice(0, -1);
 }
 
 /**
@@ -194,12 +260,23 @@ export function t(key: string, vars?: Vars): string {
   // Each catalog chooses its own plural form before fallback: merging English suffixes into a CJK catalog
   // would shadow that language's unsuffixed entry (count_items vs the English count_items_other).
   const text = lookup(lang, key, vars) ?? lookup(FALLBACK_LANG, key, vars) ?? lookup(SOURCE_LANG, key, vars);
-  return text === undefined ? key : interpolate(text, vars);
+  return text === undefined ? missing(key) : interpolate(text, vars);
+}
+
+/** An unknown key's text: the key. Under test, a key asked for before the rest is in throws instead: in the build,
+ *  its module would have run ahead of the wait for it (startI18n), or the startup part would lack it. */
+function missing(key: string): string {
+  if (import.meta.env.MODE === "test" && !restIn) {
+    throw new Error(`"${key}" was read before the rest of the catalog was in: add it, or its namespace, to src/i18n/startup-namespaces.json`);
+  }
+  return key;
 }
 
 /** Whether the page's catalog has `key` (plural forms count). For text that is optional per language. */
 export function hasKey(key: string): boolean {
-  return [lang, FALLBACK_LANG, SOURCE_LANG].some((l) => key in (catalogs[l] ?? {}) || `${key}_other` in (catalogs[l] ?? {}));
+  const has = [lang, FALLBACK_LANG, SOURCE_LANG].some((l) => key in (catalogs[l] ?? {}) || `${key}_other` in (catalogs[l] ?? {}));
+  if (!has) missing(key);
+  return has;
 }
 
 // Formatting: always Intl with formatLocale(), never hand-built month / day strings.

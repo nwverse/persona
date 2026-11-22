@@ -1,14 +1,23 @@
-Send a message to an agent as the user would type it (answers its question, tells it to continue, gives new instructions). Queued if the agent is working. Only send what the user asked for. An agent that is not running any more (a finished task's agent is closed after a few idle minutes) is resumed first, in the same session with the same machine, directory and launcher, so you can keep working with it. A text of only /exit or /quit closes a running agent and its terminal tab (the session can still be resumed later) and does nothing to one that is not running; a finished task's agent is closed for you, so there is no need to.
+Send what the user asked for to an Agent. A busy Agent may queue it. A stopped Agent needs resume and resume_why when its context is needed. Recorded non-user stops (including quota/capacity errors) allow resume. User, exit or unknown stops need the user's Resume. It must be supervised (give task unless on an open task of yours). A nearly full Agent is compacted first. For unrelated work use agent_start. Unsure: ask_user. An unstarted branch starts on its first message. Only /exit or /quit stops a running Agent and keeps the tab. The owner's controls close another conversation's Agent.
 
-When a dialog holds the agent's terminal the send is refused (dialog_open) with the dialog's first line, and whether it is only a notice that Enter closes ("Enter to continue", no options). Send again with dismiss_notice true to close such a notice first. Confirmations, permissions and pickers are never closed for you: tell the user, or answer them with interaction_answer.
+For dialog_open, retry with dismiss_notice only when Enter alone closes the notice. For permissions and pickers, tell the user or use interaction_answer.
 
-When you hand new work to an agent that runs already (one the user opened, a long-lived one that passes work on), give task from the main conversation: once the text is sent the agent is your supervised task, as agent_supervise makes one (a todo with the text as its notes, the agent on it, done_when, a card in the conversation; 督办 messages, task_review), so the work is tracked instead of only said. Put the criteria in the text too: the agent is told only what the text says. An agent already on one of your tasks takes more of it under the same title (no second task; done_when is updated); a different title is refused, so other work is not filed under that task. An agent on the user's own todo or another conversation's task is refused. Refused means nothing was sent. If the send fails, no task is made. Leave task out for a reply, a nudge or a decision on work it already has.
+Give task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. Omit task for a reply, nudge or decision.
+
+Use `handoff` for an already-stopped to-do you supervise. A node acknowledgement starts its wait for the receiving Agent's result.
+
+`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply.{{template "shared/mcp_language" .}}
 
 ```json
 {
   "type": "object",
   "required": ["machine", "session_id", "text"],
   "properties": {
+    "wait_seconds": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "0/omitted: normal receipt"
+    },
     "machine": {
       "type": "string"
     },
@@ -18,18 +27,44 @@ When you hand new work to an agent that runs already (one the user opened, a lon
     "text": {
       "type": "string"
     },
+    "resume": {
+      "type": "boolean",
+      "description": "resume this stopped agent with its context, text as its first message"
+    },
+    "resume_why": {
+      "type": "string",
+      "description": "shown to the user"
+    },
     "dismiss_notice": {
       "type": "boolean",
       "description": "Press Enter first to close a notice that only says \"Enter to continue\" (no options). Any other dialog still refuses the send."
     },
-    "task": {
+    "attachments": {
+      "type": "array",
+      "maxItems": 8,
+      "items": { "type": "string" },
+      "description": "absolute paths of pictures/files the user gave in this conversation (Claude Code path or app attachment); copied to the agent, appended to its message with mentions updated; others refused"
+    },
+    "handoff": {
       "type": "object",
-      "description": "new work: make it your supervised task first (main conversation only)",
-      "required": ["title"],
+      "required": ["todo_id", "receiving_todo_id", "head", "check", "until"],
+      "additionalProperties": false,
+      "properties": {
+        "todo_id": { "type": "string" },
+        "receiving_todo_id": { "type": "string" },
+        "head": { "type": "string", "description": "Full candidate commit ID" },
+        "check": { "type": "string" },
+        "until": { "type": "string", "description": "Duration or RFC 3339 deadline" }
+      }
+    },
+    "task": {
+      "type": ["object", "null"],
+      "description": "new work: make it your supervised task first (main or a lead); null for a reply",
+      "additionalProperties": false,
       "properties": {
         "title": {
           "type": "string",
-          "description": "the task in a short line (Chinese, under 20 characters)"
+          "description": "{{if eq .Lang "en"}}the task in a short line (English, under 20 characters){{else if eq .Lang "ja"}}短いタスク名（日本語、20文字未満）{{else}}the task in a short line (Chinese, under 20 characters){{end}}"
         },
         "done_when": {
           "type": "array",

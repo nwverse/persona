@@ -25,6 +25,7 @@ import persona.core.contracts.SessionKey
 import persona.core.contracts.api.*
 import persona.core.designsystem.AppFeedback
 import persona.core.designsystem.LocalAppFeedback
+import persona.core.designsystem.feedbackType
 import persona.core.navigation.AppTab
 import persona.core.navigation.Navigator
 
@@ -37,6 +38,8 @@ class AssistantArchiveNavigationTest {
     private val first = Session(machineId = "hub", sessionId = "a", title = "第一个任务")
     private val second = Session(machineId = "hub", sessionId = "b", title = "第二个任务")
     private val navigations = mutableListOf<Any>()
+    private val notices = mutableListOf<Pair<String, persona.core.designsystem.FeedbackStyle>>()
+    private val haptics = mutableListOf<androidx.compose.ui.hapticfeedback.HapticFeedbackType>()
     private val navigator = object : Navigator {
         override fun navigate(key: NavKey) { navigations += key }
         override fun back() { navigations += "back" }
@@ -53,6 +56,14 @@ class AssistantArchiveNavigationTest {
                     return true
                 }
                 override fun notice(message: String) = false
+                override fun notice(message: String, style: persona.core.designsystem.FeedbackStyle): Boolean {
+                    notices += message to style
+                    return true
+                }
+            }, androidx.compose.ui.platform.LocalHapticFeedback provides object : androidx.compose.ui.hapticfeedback.HapticFeedback {
+                override fun performHapticFeedback(hapticFeedbackType: androidx.compose.ui.hapticfeedback.HapticFeedbackType) {
+                    haptics += hapticFeedbackType
+                }
             }) {
                 AssistantScreen(navigator, hub, hub, startConversation = { error("Unexpected creation") },
                     requestedSession = active.key, management = hub, composerService = null,
@@ -76,20 +87,64 @@ class AssistantArchiveNavigationTest {
         archiveFirst()
         rule.onAllNodesWithText(first.title!!).assertCountEquals(0)
         rule.onNodeWithText(second.title!!).assertExists()
+        rule.onNodeWithText("chat:main").assertExists()
         archiveFirst()
         rule.onAllNodesWithText(second.title!!).assertCountEquals(0)
+        rule.onNodeWithText("chat:main").assertExists()
         assertEquals(listOf(first.key, second.key), hub.archived)
         assertTrue(navigations.isEmpty())
     }
 
-    @Test fun archivingTheActiveConversationClearsItsSelectionWithoutClosingTheList() {
+    @Test fun archivingAnotherConversationKeepsTheActiveOne() {
+        val hub = show(first)
+        rule.onAllNodesWithContentDescription("对话操作")[2].performClick()
+        rule.onNodeWithText("归档").performClick()
+        assertEquals(listOf(second.key), hub.archived)
+        rule.onNodeWithText(first.title!!).assertExists()
+        rule.onAllNodesWithText(second.title!!).assertCountEquals(0)
+        rule.onNodeWithText("已归档（1）").assertExists()
+        rule.onNodeWithText("chat:a").assertExists()
+        rule.onAllNodesWithText("chat:main").assertCountEquals(0)
+        assertTrue(navigations.isEmpty())
+    }
+
+    // As iOS (#4209, DESIGN_SYSTEM.md 4.3): a tap on archiving, then "Archived" once the hub has it.
+    @Test fun archivingIsFeltAndSaysArchived() {
+        show()
+        haptics.clear()
+        archiveFirst()
+        rule.runOnIdle {
+            assertTrue(persona.core.designsystem.Haptic.Tap.feedbackType() in haptics)
+            assertEquals(listOf("已归档" to persona.core.designsystem.FeedbackStyle.Success), notices)
+        }
+    }
+
+    // Archiving only hides the row. The open conversation stays put; a later Back still goes to Main.
+    @Test fun archivingTheActiveConversationKeepsItOpenWithoutClosingTheList() {
         val hub = show(first)
         archiveFirst()
         rule.onAllNodesWithText(first.title!!).assertCountEquals(0)
-        archiveFirst()
-        assertEquals(listOf(first.key, second.key), hub.archived)
+        rule.onNodeWithText("已归档（1）").assertExists()
+        assertEquals(listOf(first.key), hub.archived)
+        rule.onNodeWithText("chat:a").assertExists()
+        rule.onAllNodesWithText("chat:main").assertCountEquals(0)
+        rule.runOnIdle { rule.activity.onBackPressedDispatcher.onBackPressed() }
+        rule.onNodeWithText("chat:a").assertExists()
         rule.runOnIdle { rule.activity.onBackPressedDispatcher.onBackPressed() }
         rule.onAllNodesWithText("chat:a").assertCountEquals(0)
+        rule.onNodeWithText("chat:main").assertExists()
+        assertTrue(navigations.isEmpty())
+    }
+
+    @Test fun endingTheActiveConversationStillOpensTheMainOneWithoutClosingTheList() {
+        val hub = show(first)
+        rule.onAllNodesWithContentDescription("对话操作")[1].performClick()
+        rule.onNodeWithText("结束…").performClick()
+        rule.onNodeWithText("结束对话").performClick()
+        assertEquals(listOf(first.key), hub.ended)
+        rule.runOnIdle { rule.activity.onBackPressedDispatcher.onBackPressed() }
+        rule.onAllNodesWithText("chat:a").assertCountEquals(0)
+        rule.onNodeWithText("chat:main").assertExists()
         assertTrue(navigations.isEmpty())
     }
 
@@ -99,6 +154,9 @@ class AssistantArchiveNavigationTest {
         archiveFirst()
         rule.onNodeWithText(first.title!!).assertExists()
         rule.onNodeWithText("归档失败").assertExists()
+        rule.onNodeWithText("chat:a").assertExists()
+        assertTrue(hub.archived.isEmpty())
+        assertTrue(navigations.isEmpty())
         rule.runOnIdle { rule.activity.onBackPressedDispatcher.onBackPressed() }
         rule.onNodeWithText("chat:a").assertExists()
         rule.onNodeWithContentDescription("对话列表").performClick()
@@ -116,20 +174,23 @@ class AssistantArchiveNavigationTest {
     }
 
     private inner class Hub : AssistantRepository, MessageSender, AssistantManagement {
-        override val assistant = MutableStateFlow(AssistantSnapshot(main.key, listOf(main, first, second)))
+        override val assistant = MutableStateFlow(AssistantSnapshot(main.key, listOf(main, first, second), leaders = listOf(first.sessionId, second.sessionId)))
         override val outbox = MutableStateFlow(emptyList<OutboxMessage>())
         val archived = mutableListOf<SessionKey>()
+        val ended = mutableListOf<SessionKey>()
         var fail = false
         override suspend fun archiveConversation(session: SessionKey) {
             check(!fail) { "归档失败" }
             archived += session
         }
+        override suspend fun archivedConversations(): List<Session> =
+            listOf(first, second).filter { it.key in archived }.map { it.copy(archived = true) }
         override suspend fun refresh() {
             assistant.value = assistant.value.copy(conversations = assistant.value.conversations.filter { it.key !in archived })
         }
         override suspend fun warm() = Unit
         override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) = error("Unexpected send")
-        override suspend fun endConversation(session: SessionKey) = error("Unexpected end")
+        override suspend fun endConversation(session: SessionKey) { ended += session }
         override suspend fun tasks(): List<ScheduledTask> = emptyList()
         override suspend fun saveTask(task: ScheduledTask) = error("Unexpected save")
         override suspend fun deleteTask(id: String) = error("Unexpected delete")

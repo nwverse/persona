@@ -20,7 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-// Dialing a peer (docs/server/mesh.md "Dialing"): every paired hub is dialed until there is a link to it, whichever side made
+// Dialing a peer (docs/server/mesh.md "Mesh links"): every paired hub is dialed until there is a link to it, whichever side made
 // it. The hub with the larger hub_id waits a moment before each try so the two rarely connect at once. Candidates are
 // tried as persona-link does: LAN first, then public IPv6, names, public IPv4, one every 300 ms, the first that works
 // wins; the TLS key must be the one pinned at pairing. http:// candidates (mesh.plaintext, peer_plain.go) come after

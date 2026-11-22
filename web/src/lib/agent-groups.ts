@@ -7,8 +7,10 @@ import { stateName } from "./state-labels";
 
 export type AgentGrouping = "repo" | "space" | "state" | "machine" | "todo";
 // "By to-do" leads and is the default for a browser that never picked one (#2812); a grouping picked before stays. The
-// sidebar shows them in this order as segments, and the switch-grouping shortcut goes round them in it. "By machine" is
-// herdr's own layout (machine → workspace → tab, lib/herdr-tree.ts). `short` is the segment's label, `label` the full name.
+// sidebar shows them in this order as segments, the paged list and the complete list alike (#6662), and the
+// switch-grouping shortcut goes round them in it. "By machine" is herdr's own layout (machine → workspace → tab,
+// lib/herdr-tree.ts). `short` is the segment's label, `label` the full name. "By pinned" (#4352) is gone (#6662): the
+// sidebar's 常驻 rows unfold to the same tree, so a picked one reads as By to-do.
 export const AGENT_GROUPINGS: { key: AgentGrouping; label: string; short: string }[] = [
   { key: "todo", label: t("lib-agent-groups.by_todo"), short: t("lib-agent-groups.seg_todo") },
   { key: "machine", label: t("lib-agent-groups.by_machine"), short: t("lib-agent-groups.seg_machine") },
@@ -23,23 +25,28 @@ export function agentGrouping(value: string | null): AgentGrouping {
 }
 
 // the host kinds a pane ref may be prefixed with (keep in step with Kinds in server/internal/host/host.go); herdr's ids go bare and may hold a colon
-const HOST_KINDS = ["orca", "herdr-core", "botmux"];
+const HOST_KINDS = ["orca", "herdr-core", "tern", "rex", "botmux"];
 
-/** The host tool a session lives in, from its pane ref (`botmux:…`, `orca:…`; anything else is herdr's); "" for none. */
-export function sessionHost(s: Session): string {
-  if (!s.pane_id) return "";
-  const kind = s.pane_id.slice(0, s.pane_id.indexOf(":"));
+/** The host tool a pane belongs to, from its ref (`botmux:…`, `orca:…`, `tern:…`; anything else is herdr's); "" for none. */
+export function paneHost(pane: string | undefined): string {
+  if (!pane) return "";
+  const kind = pane.slice(0, pane.indexOf(":"));
   return HOST_KINDS.includes(kind) ? kind : "herdr";
 }
 
+/** The host tool a session lives in, from its pane ref; "" for none. */
+export function sessionHost(s: Session): string {
+  return paneHost(s.pane_id);
+}
+
 /** Where an agent was opened (#2526): "feishu" for a botmux session (a Feishu group's topic), "terminal" for a pane of a
- *  terminal engine (herdr, the Herdr App's and Orca's terminals), "desktop" for a desktop app's own chat (a Codex App
- *  thread, an Orca native chat, a Paseo agent); undefined for the rest (other runtimes, history no host lists), which
- *  carry no mark. */
+ *  terminal engine (herdr, the Herdr App's, Orca's, Tern's and Rex's terminals), "desktop" for a desktop app's own chat (a
+ *  Codex App thread, an Orca native chat, a Paseo agent); undefined for the rest (other runtimes, history no host
+ *  lists), which carry no mark. */
 export type SessionSource = "feishu" | "terminal" | "desktop";
 
 export function sessionSource(s: Session): SessionSource | undefined {
-  if (s.space_kind === "codex_app" || s.host === "paseo" || (s.source_kind === "runtime" && s.source_instance_id === "orca")) return "desktop";
+  if (s.space_kind === "codex_app" || s.host === "paseo" || s.host === "cindy" || s.host === "t3code" || (s.source_kind === "runtime" && s.source_instance_id === "orca")) return "desktop";
   const host = sessionHost(s);
   if (host === "botmux") return "feishu";
   return host ? "terminal" : undefined;
@@ -75,12 +82,13 @@ export interface AgentGroup {
   hint?: string;
 }
 
-export function splitAgentSessions(all: Session[], machines: Machine[]) {
+export function splitAgentSessions(all: Session[], machines: Machine[], keepOffline?: (s: Session) => boolean) {
   const online = new Set(machines.filter((m) => m.online).map((m) => m.id));
   const agents = all.filter((s) => !s.assistant);
-  const live = agents.filter((s) => stateOf(s) !== "offline" && online.has(s.machine_id));
+  const live = agents.filter((s) => (stateOf(s) !== "offline" && online.has(s.machine_id)) || keepOffline?.(s));
+  const listed = new Set(live);
   const recent = agents
-    .filter((s) => stateOf(s) === "offline" || !online.has(s.machine_id))
+    .filter((s) => !listed.has(s))
     .sort((a, b) => byTime(b.updated_at, a.updated_at) || a.machine_id.localeCompare(b.machine_id) || a.session_id.localeCompare(b.session_id))
     .slice(0, 40);
   return { live, recent };
@@ -128,6 +136,13 @@ export function awaitsReply(s: Session, mutes: AgentMutes = NO_MUTES): boolean {
   return stateOf(s) === "idle" && Boolean(s.awaits_reply) && !isMuted(s, mutes);
 }
 
+/** Just finished (#9751, docs/protocol/agent-states.md): seen as far as its state goes, but the hub's triage found its turn
+ *  done before anybody looked, less than three hours ago (`work.just_finished`), and not muted. Such an agent is not
+ *  quiet: it never folds into Idle Spaces. */
+export function justFinished(s: Session, mutes: AgentMutes = NO_MUTES): boolean {
+  return stateOf(s) === "idle" && Boolean(s.work?.just_finished) && !isMuted(s, mutes);
+}
+
 /** What an Awaiting Reply agent asks: what the triage says it waits for (blocked on the user), else the question its last reply
  *  put to the user; "" when neither says. */
 export function replyAsk(s: Session): string {
@@ -136,9 +151,10 @@ export function replyAsk(s: Session): string {
   return s.asks?.trim() ?? "";
 }
 
-/** Nothing to look at: seen (or unknown), not waiting on the hub or itself, and not waiting for the user's reply. */
+/** Nothing to look at: seen (or unknown), not waiting on the hub or itself, not waiting for the user's reply, and not
+ *  just finished. */
 export function isQuiet(s: Session, mutes: AgentMutes = NO_MUTES): boolean {
-  return ["idle", "unknown"].includes(stateOf(s)) && !isWaiting(s) && !awaitsReply(s, mutes);
+  return ["idle", "unknown"].includes(stateOf(s)) && !isWaiting(s) && !awaitsReply(s, mutes) && !justFinished(s, mutes);
 }
 
 function isMuted(s: Session, mutes: AgentMutes): boolean {
@@ -153,11 +169,11 @@ function byDate(a: Session, b: Session): number {
   return byTime(date(b), date(a)) || a.session_id.localeCompare(b.session_id) || a.machine_id.localeCompare(b.machine_id);
 }
 
-// iOS AgentListOrder (#5096): needs you → unread → awaiting reply → working → waiting in the background (#6045) → waiting →
-// muted → seen; needs you always wins,
+// iOS AgentListOrder (#5096): needs you → unread → awaiting reply → working → waiting in the background (#6045) → just
+// finished (#9751) → waiting → muted → seen; needs you always wins,
 // even when a session or its project is muted. "By status" is the only grouping built here ("By machine" is
 // lib/herdr-tree.ts); the argument stays for the callers that name it.
-export function buildAgentGroups(all: Session[], machines: Machine[], _grouping: "state", mutes: AgentMutes = { spaces: [], sessions: [] }): AgentGroup[] {
+export function buildAgentGroups(all: Session[], machines: Machine[], _grouping: "state", mutes: AgentMutes = { spaces: [], sessions: [] }, compareSessions: (a: Session, b: Session) => number = byDate): AgentGroup[] {
   const { live } = splitAgentSessions(all, machines);
   const groups: AgentGroup[] = [
     { key: "state:needs", name: stateName("needs_you"), state: "needs_you", sessions: [] },
@@ -165,6 +181,7 @@ export function buildAgentGroups(all: Session[], machines: Machine[], _grouping:
     { key: "state:reply", name: stateName("awaits_reply"), sessions: [] },
     { key: "state:working", name: stateName("working"), state: "working", sessions: [] },
     { key: "state:bg_waiting", name: stateName("bg_waiting"), state: "working", waiting: true, sessions: [] },
+    { key: "state:just_finished", name: stateName("just_finished"), sessions: [] },
     { key: "state:waiting", name: stateName("waiting"), sessions: [] },
     { key: "state:muted", name: t("lib-agent-groups.state_muted"), sessions: [] },
     { key: "state:idle", name: stateName("idle"), state: "idle", sessions: [], folded: true },
@@ -172,9 +189,10 @@ export function buildAgentGroups(all: Session[], machines: Machine[], _grouping:
   for (const s of live) {
     const state = stateOf(s);
     const waiting = isWaiting(s);
-    const index = state === "needs_you" ? 0 : isMuted(s, mutes) && (state === "working" || state === "unread" || waiting) ? 6
-      : state === "unread" ? 1 : awaitsReply(s, mutes) ? 2 : backgroundWaiting(s) ? 4 : state === "working" ? 3 : waiting ? 5 : 7;
+    const index = state === "needs_you" ? 0 : isMuted(s, mutes) && (state === "working" || state === "unread" || waiting) ? 7
+      : state === "unread" ? 1 : awaitsReply(s, mutes) ? 2 : backgroundWaiting(s) ? 4 : state === "working" ? 3 : waiting ? 6
+      : justFinished(s, mutes) ? 5 : 8;
     groups[index].sessions.push(s);
   }
-  return groups.filter((g) => g.sessions.length).map((g) => ({ ...g, sessions: g.sessions.sort(byDate) }));
+  return groups.filter((g) => g.sessions.length).map((g) => ({ ...g, sessions: g.sessions.sort(compareSessions) }));
 }

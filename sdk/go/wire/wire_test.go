@@ -50,7 +50,7 @@ func TestComponentTypes(t *testing.T) {
 	want := map[string]int{"text": 1, "metric": 1, "progress": 1, "row": 1, "button": 1, "link": 1, "field": 1,
 		"divider": 1, "chart": 2, "stat_grid": 2, "segmented": 2, "markdown": 3, "table": 3, "empty": 3, "loading": 3, "html": 4,
 		"header": 4, "breadcrumb": 4, "file_tree": 4, "code": 4, "diff": 4, "comment_thread": 4, "composer": 4,
-		"image": 6, "grid": 6, "carousel": 6}
+		"image": 6, "grid": 6, "carousel": 6, "graph": 10, "scene": 11}
 	if !reflect.DeepEqual(ComponentSince, want) {
 		t.Errorf("ComponentSince = %v", ComponentSince)
 	}
@@ -102,6 +102,43 @@ func TestValidateMaxPropertiesAndUniqueItems(t *testing.T) {
 	}
 	if err := ValidateJSON("Manifest", []byte(strings.Replace(string(m), `"voice/v","voice/v"`, `"voice/v"`, 1))); err != nil {
 		t.Fatalf("once: %v", err)
+	}
+}
+
+func TestValidateConfiguredNetworkEntryPaths(t *testing.T) {
+	for _, value := range []string{
+		"config:base_url", "config:base_url:http", "config:accounts[].address", "config:accounts[].address:http", "notes.example.com",
+	} {
+		if err := Validate("NetworkEntry", value); err != nil {
+			t.Errorf("%q: %v", value, err)
+		}
+	}
+	for _, value := range []string{
+		"config:accounts[0].address", "config:accounts[].address.extra", "config:accounts[].address:ftp",
+		"config:accounts[].address:http:extra", "config:[].address", "config:accounts[]", "config:accounts[].",
+	} {
+		if err := Validate("NetworkEntry", value); err == nil {
+			t.Errorf("%q: malformed configured network path accepted", value)
+		}
+	}
+}
+
+func TestKBUpdateStatus(t *testing.T) {
+	for _, status := range []string{"", "active", "ignored", "self"} {
+		t.Run(status, func(t *testing.T) {
+			params := KBUpdateParams{Kind: "people", ID: "person", Status: status}
+			if err := Validate("KBUpdateParams", params); err != nil {
+				t.Fatalf("status %q: %v", status, err)
+			}
+			raw, err := json.Marshal(params)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded KBUpdateParams
+			if err := json.Unmarshal(raw, &decoded); err != nil || decoded.Status != status {
+				t.Fatalf("status round trip: %+v, %v", decoded, err)
+			}
+		})
 	}
 }
 

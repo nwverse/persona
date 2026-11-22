@@ -73,6 +73,94 @@ class HttpExtensionManagementTest {
         }
     }
 
+    @Test fun catalogLogosAndPopularityRemainOptionalAndKeepTheHubOrder() = withHub(legacy = false) { server, api ->
+        val timestamp = "2026-11-11T08:00:00Z"
+        val fields = """"icon_url":"https://extensions.example.com/logo.png","downloads":4294967296,"downloads_updated_at":"$timestamp""""
+        server.enqueue(MockResponse().setBody("""{"extensions":[{"id":"popular","name":"Zeta",$fields},{"id":"zero","downloads":0},{"id":"old"}]}"""))
+        val installed = api.listing().extensions
+        server.takeRequest()
+        assertEquals(listOf("popular", "zero", "old"), installed.map { it.id })
+        assertEquals("https://extensions.example.com/logo.png", installed[0].iconUrl)
+        assertEquals(4294967296L, installed[0].downloads)
+        assertEquals(timestamp, installed[0].downloadsUpdatedAt)
+        assertEquals(0L, installed[1].downloads)
+        assertNull(installed[2].downloads)
+        assertNull(installed[2].iconUrl)
+        assertNull(installed[2].downloadsUpdatedAt)
+
+        server.enqueue(MockResponse().setBody("""{"id":"popular",$fields}"""))
+        val detail = api.extension("popular").extension
+        server.takeRequest()
+        assertEquals(installed[0].iconUrl, detail.iconUrl)
+        assertEquals(installed[0].downloads, detail.downloads)
+        assertEquals(timestamp, detail.downloadsUpdatedAt)
+
+        server.enqueue(MockResponse().setBody("""{"markets":[{"id":"m1","downloads_updated_at":"$timestamp"},{"id":"older-market"}],"extensions":[
+            {"id":"popular","name":"Zeta",$fields},{"id":"alpha","name":"Alpha","downloads":12},
+            {"id":"zero","downloads":0},{"id":"old"}]}"""))
+        val catalog = api.catalog()
+        server.takeRequest()
+        assertEquals(listOf("popular", "alpha", "zero", "old"), catalog.extensions.map { it.id })
+        assertEquals(timestamp, catalog.markets[0].downloadsUpdatedAt)
+        assertNull(catalog.markets[1].downloadsUpdatedAt)
+        assertEquals(installed[0].iconUrl, catalog.extensions[0].iconUrl)
+        assertEquals(installed[0].downloads, catalog.extensions[0].downloads)
+        assertEquals(timestamp, catalog.extensions[0].downloadsUpdatedAt)
+        assertEquals(0L, catalog.extensions[2].downloads)
+        assertNull(catalog.extensions[3].downloads)
+
+        server.enqueue(MockResponse().setBody("""{"extensions":[{"id":"old"}]}"""))
+        val old = api.catalog()
+        server.takeRequest()
+        assertTrue(old.markets.isEmpty())
+        assertNull(old.extensions.single().iconUrl)
+        assertNull(old.extensions.single().downloads)
+    }
+
+    @Test fun downloadCountsDecodeAsIntegersWithoutTruncation() = withHub(legacy = false) { server, api ->
+        server.enqueue(MockResponse().setBody("""{"extensions":[{"id":"maximum","downloads":9223372036854775807}]}"""))
+        assertEquals(Long.MAX_VALUE, api.catalog().extensions.single().downloads)
+        server.takeRequest()
+        for (value in listOf("1.5", "9223372036854775808")) {
+            server.enqueue(MockResponse().setBody("""{"extensions":[{"id":"invalid","downloads":$value}]}"""))
+            assertTrue(runCatching { api.catalog() }.exceptionOrNull() is HubFailure)
+            server.takeRequest()
+        }
+    }
+
+    @Test fun savesAnExplicitReferenceAndRemovesAConfirmedHandoffRule() = withHub { server, api ->
+        server.enqueue(MockResponse().setBody(detail))
+        api.setSecretReference("example-notes", "api_key", "op://Dev/Notes/new")
+        server.takeRequest().let {
+            assertEquals("PUT", it.method)
+            assertEquals("/api/v1/plugins/example-notes/-/secrets/api_key", it.path)
+            assertEquals("""{"reference":"op://Dev/Notes/new"}""", it.body.readUtf8())
+        }
+        server.enqueue(MockResponse().setBody(detail))
+        api.removeHandoffRule("example-vault", "0123456789abcdef")
+        server.takeRequest().let {
+            assertEquals("DELETE", it.method)
+            assertEquals("/api/v1/plugins/example-vault/-/handoff-rules/0123456789abcdef", it.path)
+        }
+        assertTrue(runCatching { api.removeHandoffRule("example-vault", "../bad") }.exceptionOrNull() is IllegalArgumentException)
+    }
+
+    @Test fun modernRoutesSaveAReferenceAndRemoveAHandoffRule() = withHub(legacy = false) { server, api ->
+        server.enqueue(MockResponse().setBody(detail))
+        api.setSecretReference("example-notes", "api_key", "op://Dev/Notes/new")
+        server.takeRequest().let {
+            assertEquals("PUT", it.method)
+            assertEquals("/api/v1/extensions/example-notes/-/secrets/api_key", it.path)
+            assertEquals("""{"reference":"op://Dev/Notes/new"}""", it.body.readUtf8())
+        }
+        server.enqueue(MockResponse().setBody(detail))
+        api.removeHandoffRule("example-vault", "0123456789abcdef")
+        server.takeRequest().let {
+            assertEquals("DELETE", it.method)
+            assertEquals("/api/v1/extensions/example-vault/-/handoff-rules/0123456789abcdef", it.path)
+        }
+    }
+
     // What the phone says of itself in every view's context; a fixed one so the bodies are exact.
     private val device = ExtensionUiContext(tz = "Asia/Shanghai", locale = "zh-Hans-CN", platform = "android", uiVersion = 2)
     private val deviceJson = """"tz":"Asia/Shanghai","locale":"zh-Hans-CN","platform":"android","ui_version":2"""
@@ -330,9 +418,23 @@ class HttpExtensionManagementTest {
     @Test fun theDeviceContextIsThePhones() {
         val context = HttpExtensionManagement.deviceContext()
         assertEquals("android", (context.platform).zhAny())
-        assertEquals(6, context.uiVersion)
+        // UI versions 9 and 10 (#9337, #9727): gauge rings and native graph canvases are drawn.
+        assertEquals(10, context.uiVersion)
         assertEquals(java.util.TimeZone.getDefault().id, context.tz)
         assertFalse(context.locale.isNullOrEmpty())
+    }
+
+    // The locale's language is the app's (what Accept-Language says), not the phone's; the region stays the phone's.
+    @Test fun theDeviceContextLocaleFollowsTheAppLanguage() {
+        val before = java.util.Locale.getDefault()
+        try {
+            java.util.Locale.setDefault(java.util.Locale.forLanguageTag("en-US"))
+            persona.core.contracts.ClientLanguage.current = persona.core.contracts.AppLanguage.Ja
+            assertEquals("ja-US", HttpExtensionManagement.deviceContext().locale)
+        } finally {
+            java.util.Locale.setDefault(before)
+            persona.core.contracts.ClientLanguage.current = persona.core.contracts.AppLanguage.En
+        }
     }
 
     // UI version 2's items read; one this app cannot even decode (a newer hub's, a field of another type) is left out
@@ -509,5 +611,43 @@ class HttpExtensionManagementTest {
         assertEquals("扩展开着时这台 Mac 不会自动锁屏。", (field.confirm).zhAny())
         assertEquals("machines", (d.nodeMachines).zhAny())
         assertEquals("running", (d.extension.nodes!!.single().state).zhAny())
+    }
+
+    @Test fun extensionUiCallsUseAReadTimeoutBeyondTheHubsUiTimeout() = runBlocking {
+        MockWebServer().use { server ->
+            val http = OkHttpClient.Builder().retryOnConnectionFailure(false).build()
+            val timeouts = mutableListOf<Pair<String, Long?>>()
+            val api = HttpExtensionManagement({ path, method, body, timeout ->
+                timeouts += path to timeout
+                http.newCall(Request.Builder().url(server.url(path)).method(method, body).build()).execute()
+            }, device = { device }, legacy = false)
+
+            server.enqueue(MockResponse().setBody("""{"extensions":[],"can_install":false,"markets":false}"""))
+            api.listing()
+            server.takeRequest()
+
+            server.enqueue(MockResponse().setBody("""{"view":{"title":"Markets","sections":[]}}"""))
+            assertEquals("Markets", api.renderUi("example-markets", "watchlist").title)
+            server.takeRequest()
+
+            server.enqueue(MockResponse().setBody("""{"view":{"title":"Markets","sections":[]}}"""))
+            api.uiAction("example-markets", "watchlist", "refresh")
+            server.takeRequest()
+
+            server.enqueue(MockResponse().setBody("""{"view":{"title":"Subscriptions","sections":[]}}"""))
+            api.renderUi(persona.core.contracts.api.SUBSCRIPTIONS_UI, "pages")
+            server.takeRequest()
+
+            assertTrue(HttpExtensionManagement.UI_READ_TIMEOUT_SECONDS >= 30L)
+            assertEquals(
+                listOf(
+                    "/api/v1/extensions" to null,
+                    "/api/v1/extensions/example-markets/-/ui/watchlist" to HttpExtensionManagement.UI_READ_TIMEOUT_SECONDS,
+                    "/api/v1/extensions/example-markets/-/ui/watchlist" to HttpExtensionManagement.UI_READ_TIMEOUT_SECONDS,
+                    "/api/v1/subscriptions/-/ui" to HttpExtensionManagement.UI_READ_TIMEOUT_SECONDS,
+                ),
+                timeouts,
+            )
+        }
     }
 }

@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // renameWorktree targets a listed host container, including one with no Agents.
@@ -18,6 +20,12 @@ func (n *Node) renameWorktree(ctx context.Context, kind, workspace, name string)
 	name = strings.Join(strings.Fields(name), " ")
 	if workspace == "" || name == "" || utf8.RuneCountInString(name) > maxLabel {
 		return fmt.Errorf("worktree and a name of 1 to %d characters are required", maxLabel)
+	}
+	if rt, runtime, err := n.worktreeRuntime(ctx, kind); runtime { // an engine runtime's workspace: its title
+		if err != nil {
+			return err
+		}
+		return n.runtimeRenameWorkspace(ctx, rt, workspace, name)
 	}
 	h, err := n.hostOfKind(kind)
 	if err != nil {
@@ -47,14 +55,19 @@ func (n *Node) renameWorktree(ctx context.Context, kind, workspace, name string)
 	return fmt.Errorf("the selected worktree is no longer available")
 }
 
-// renameSpace renames a herdr workspace (what the phone calls a space) and returns the name it shows now: a named herdr
-// session's with the session in front (sessionLabel, #2196), which the hub keys pins and to-do links by.
+// renameSpace renames a workspace (what the phone calls a space) in the host it is in (spaceOrganizer) and returns the
+// name it shows now: a named herdr session's with the session in front (sessionLabel, #2196), which the hub keys pins
+// and to-do links by. An engine runtime's space (Paseo's project, by its id or one of its workspaces') is renamed in the
+// runtime (runtimeworkspaces_manage.go).
 func (n *Node) renameSpace(ctx context.Context, workspaceID, name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if workspaceID == "" || name == "" {
 		return "", fmt.Errorf("workspace and name are required")
 	}
-	org, err := hostCap[host.Organizer](n) // space ids carry no host kind yet: the engine's
+	if h, space := n.runtimeSpace(workspaceID); h != nil {
+		return n.runtimeRenameSpace(ctx, h, space, name)
+	}
+	org, err := n.spaceOrganizer(ctx, workspaceID)
 	if err != nil {
 		return "", err
 	}
@@ -67,6 +80,47 @@ func (n *Node) renameSpace(ctx context.Context, workspaceID, name string) (strin
 		}
 	}
 	return name, nil
+}
+
+// spaceOrganizer is the host a space is in. Space ids carry no host kind: with one host that renames and is the default
+// engine, its own (as always); with several (a set, herdr and Tern say), or when the default engine is no terminal host
+// (Paseo beside herdr), the first that lists the space, the default host first, else the default host's. With the
+// default engine no terminal host, a space no host lists is no space of this machine's terminals.
+func (n *Node) spaceOrganizer(ctx context.Context, space string) (host.Organizer, error) {
+	var hs []host.Host
+	for _, h := range n.hosts.All() {
+		_, org := h.(host.Organizer)
+		_, lists := h.(host.SpaceLister)
+		if org && lists {
+			hs = append(hs, h)
+		}
+	}
+	def := n.defaultKind()
+	terminal := n.hosts.Get(def) != nil // the default engine is one of the terminal hosts
+	if len(hs) > 1 || len(hs) == 1 && !terminal {
+		slices.SortStableFunc(hs, func(a, b host.Host) int {
+			return boolRank(b.Kind() == def) - boolRank(a.Kind() == def)
+		})
+		for _, h := range hs {
+			spaces, err := h.(host.SpaceLister).Spaces(ctx)
+			if err == nil && slices.ContainsFunc(spaces, func(s host.Space) bool { return s.ID == space }) {
+				return h.(host.Organizer), nil
+			}
+		}
+	}
+	if !terminal && def != "" {
+		// in the request's language by its code (the hub words it: rpc-errors.space_gone)
+		return nil, refusal("space_gone", i18n.T(i18n.Default, "rpc-errors.space_gone"), nil)
+	}
+	return hostCap[host.Organizer](n)
+}
+
+// boolRank orders true before false.
+func boolRank(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // renameSession renames the herdr tab a session runs in and / or the Claude session itself. A live claude gets
@@ -124,6 +178,32 @@ func (n *Node) renameSession(ctx context.Context, id string, tab, title *string)
 		return n.retitle(id, t)
 	}
 	return nil
+}
+
+// renameObservedTab rechecks the host label before applying an automatic name based on a potentially stale inventory.
+func (n *Node) renameObservedTab(ctx context.Context, id, tab, expected, name string) error {
+	a, live := n.agent(id)
+	if !live || tab == "" || a.TabID != tab {
+		return fmt.Errorf("the session's tab changed")
+	}
+	h, _, err := n.paneHost(a.PaneID)
+	if err != nil {
+		return err
+	}
+	org, ok := h.(host.Organizer)
+	if !ok || h.Kind() != host.Herdr && h.Kind() != host.HerdrCore {
+		return unsupported(h)
+	}
+	layout, err := h.Snapshot(ctx)
+	if err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(layout.Slots, func(slot host.Slot) bool {
+		return slot.ID == tab && strings.TrimSpace(slot.Label) == expected
+	}) {
+		return fmt.Errorf("the tab name changed")
+	}
+	return org.RenameSlot(ctx, tab, name)
 }
 
 // titleRetry is how often a title given before its conversation's transcript existed looks for it again, titleWait how

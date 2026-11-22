@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/identity"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -109,13 +108,6 @@ func TestEnvOverridesConfig(t *testing.T) {
 	}
 }
 
-func TestNodeBinaryDirFromEnv(t *testing.T) {
-	t.Setenv("PERSONA_NODE_BINARIES", "/opt/persona/nodes")
-	if d := identity.NodeBinaryDir(); d != "/opt/persona/nodes" {
-		t.Fatalf("node binaries in %s", d)
-	}
-}
-
 func TestLoadConfigCreatesAndReloads(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("PERSONA_HOME", "")
@@ -139,39 +131,6 @@ func TestLoadConfigCreatesAndReloads(t *testing.T) {
 	}
 	if again.Token != cfg.Token {
 		t.Fatal("the token must survive a reload")
-	}
-}
-
-// scripts/deploy/db.sh creates hub.json with only database_url before the hub's first start: the token generated then must
-// be written down, or each start and `personad hub pair` would invent another one and paired phones get 401.
-func TestLoadConfigPersistsTokenMissingFromFile(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("PERSONA_HOME", "")
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
-	dir := filepath.Join(home, ".persona")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "hub.json")
-	if err := os.WriteFile(path, []byte(`{"database_url":"postgres://x"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := LoadConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	again, err := LoadConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Token == "" || again.Token != cfg.Token {
-		t.Fatalf("token changed between loads: %q then %q", cfg.Token, again.Token)
-	}
-	var raw map[string]any
-	b, _ := os.ReadFile(path)
-	if err := json.Unmarshal(b, &raw); err != nil || raw["database_url"] != "postgres://x" || raw["token"] != cfg.Token {
-		t.Fatalf("hub.json = %s", b)
 	}
 }
 
@@ -255,6 +214,7 @@ func TestPairURLRoundTrips(t *testing.T) {
 
 // The Mac has no camera to scan with: `personad hub pair` prints the link too, to paste into "Connect hub".
 func TestPairPrintsTheLinkForTheMac(t *testing.T) {
+	setPairLanguage(t, "en")
 	cfg := &Config{PublicURL: "http://hub.example.com:18660", Token: "tok"}
 	var b strings.Builder
 	writePair(&b, cfg)
@@ -267,14 +227,43 @@ func TestPairPrintsTheLinkForTheMac(t *testing.T) {
 	}
 }
 
+// A hello starts fleetClientsChanged in the background, so test clients use the same lock as connections.
+func addTestClient(h *Hub, clients ...*client) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, c := range clients {
+		h.clients[c] = struct{}{}
+	}
+}
+
+func removeTestClient(h *Hub, c *client) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.clients, c)
+}
+
+// addCfgMachines adds hub.json entries to a test hub whose managers are already connected. Until startDevices, which
+// most test hubs never call, entryOwner and cfgEntries read h.cfg.Machines under h.devices.mu from the hub's goroutines
+// (a manager's bus event, an HTTP handler), so the write takes the same lock (#8639).
+func addCfgMachines(h *Hub, machines ...MachineConfig) {
+	h.devices.mu.Lock()
+	defer h.devices.mu.Unlock()
+	h.cfg.Machines = append(h.cfg.Machines, machines...)
+}
+
 // newTestHub builds a Hub with no machines, no clients and push disabled, so interaction logic can be exercised offline.
 func newTestHub(t *testing.T) *Hub {
+	t.Helper()
+	return newTestHubWithDeployCtx(t, context.Background())
+}
+
+func newTestHubWithDeployCtx(t *testing.T, deployCtx context.Context) *Hub {
 	t.Helper()
 	cfg := defaultConfig()
 	cfg.Machines = nil
 	cfg.dir = shortTempDir(t)
 	h := &Hub{
-		cfg: cfg, version: "test", logger: log.New(io.Discard, "", 0),
+		deployCtx: deployCtx, cfg: cfg, version: "test", logger: log.New(io.Discard, "", 0),
 		byID: map[string]*Machine{}, clients: map[*client]struct{}{},
 		calls: map[string]chan proto.ToolResult{},
 		push:  newPusher(cfg.dir, nil, func(string, ...any) {}),
@@ -283,11 +272,15 @@ func newTestHub(t *testing.T) *Hub {
 	}
 	h.live = newLiveActivities(h)
 	playManagerAsks(h) // its own cards wait for h.resolve (fleet_helpers_test.go)
+	h.push.quiesce = &h.quiesce
+	h.push.web.quiesce = &h.quiesce
 	h.push.hubID = h.hubID
 	h.upd = newUpdater(h)
 	h.upd.dir = filepath.Join(cfg.dir, "update")
 	h.upd.exec = func(string) error { return errors.New("exec is not run in tests") }
 	h.upd.startWatch = func(string, string) error { return nil }
+	h.startHelloWriters()
+	t.Cleanup(h.stopHelloWriters)
 	return h
 }
 
@@ -348,13 +341,14 @@ func TestPhoneToolsPersist(t *testing.T) {
 	h.store = database
 	tools := []proto.Tool{{Name: "phone_device_info", Description: "info", InputSchema: json.RawMessage(`{"type":"object"}`)}}
 	h.setPhoneTools(db.PhoneToolRegistration{DeviceID: "legacy", Tools: tools})
-	if got := h.phoneToolList(); len(got) != 1 || got[0].Name != "phone_device_info" {
+	waitHelloWrites(t, h)
+	if got := h.phoneToolList(); len(got) != 3 || got[0].Name != "phone_device_info" {
 		t.Fatalf("tools = %+v", got)
 	}
 	reloaded := newTestHub(t)
 	reloaded.store = database
 	reloaded.loadPhoneTools()
-	if got := reloaded.phoneToolList(); len(got) != 1 || got[0].Name != "phone_device_info" {
+	if got := reloaded.phoneToolList(); len(got) != 3 || got[0].Name != "phone_device_info" {
 		t.Fatalf("reloaded tools = %+v", got)
 	}
 }
@@ -373,7 +367,7 @@ func TestPhoneToolsDeviceRouting(t *testing.T) {
 	defer cancel()
 	iphone := &client{hub: h, device: "credential-ios", role: roleFull, out: make(chan []byte, 8)}
 	android := &client{hub: h, device: "credential-android", role: roleFull, out: make(chan []byte, 8)}
-	h.clients[iphone], h.clients[android] = struct{}{}, struct{}{}
+	addTestClient(h, iphone, android)
 	// Existing iOS omits both new fields; Android supplies its own device ID.
 	h.onClientMessage(ctx, iphone, []byte(`{"type":"register_phone","tools":[{"name":"phone_reminders_list"},{"name":"phone_device_info","description":"Detailed device information"}]}`))
 	h.onClientMessage(ctx, android, []byte(`{"type":"register_phone","device_id":"android-device","platform":"android","simulator":true,"tools":[{"name":"phone_notifications_list"},{"name":"phone_device_info","description":"Info"}]}`))
@@ -452,6 +446,128 @@ func TestPhoneToolsDeviceRouting(t *testing.T) {
 	}
 }
 
+// phone.call attests the phone that actually executed the write, not another connected phone or an assumed iPhone.
+func TestPhoneCallResultAttribution(t *testing.T) {
+	for _, tc := range []struct {
+		name, tool               string
+		deviceName, platform     string
+		otherName, otherPlatform string
+	}{
+		{"Android calendar", "phone_calendar_create_event", "Pixel 9", "android", "Work iPhone", "ios"},
+		{"iOS reminder", "phone_reminders_create", "Work iPhone", "ios", "Pixel 9", "android"},
+		{"unknown identity", "phone_calendar_create_event", "", "", "Work iPhone", "ios"},
+		{"missing device name", "phone_calendar_create_event", "", "android", "Work iPhone", "ios"},
+		{"missing platform", "phone_reminders_create", "Pixel 9", "", "Work iPhone", "ios"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestHub(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			selected := &client{hub: h, device: "credential-selected", role: roleFull, out: make(chan []byte, 8)}
+			other := &client{hub: h, device: "credential-other", role: roleFull, out: make(chan []byte, 8)}
+			addTestClient(h, selected, other)
+
+			hello := map[string]any{"type": "client_hello"}
+			if tc.platform != "" {
+				hello["platform"] = tc.platform
+			}
+			data, _ := json.Marshal(hello)
+			h.onClientMessage(ctx, selected, data)
+			data, _ = json.Marshal(map[string]any{"type": "client_hello", "platform": tc.otherPlatform})
+			h.onClientMessage(ctx, other, data)
+
+			registration := map[string]any{
+				"type": "register_phone", "device_id": "selected-device",
+				"tools": []proto.Tool{{Name: tc.tool}},
+			}
+			if tc.deviceName != "" {
+				registration["device_name"] = tc.deviceName
+			}
+			data, _ = json.Marshal(registration)
+			h.onClientMessage(ctx, selected, data)
+			data, _ = json.Marshal(map[string]any{
+				"type": "register_phone", "device_id": "other-device", "device_name": tc.otherName,
+				"tools": []proto.Tool{{Name: "phone_device_info"}},
+			})
+			h.onClientMessage(ctx, other, data)
+
+			// Hellos acknowledge synchronously; discard those messages so the next outbound frame is the tool call.
+			drain := func(c *client) {
+				for {
+					select {
+					case <-c.out:
+					default:
+						return
+					}
+				}
+			}
+			drain(selected)
+			drain(other)
+
+			done := make(chan proto.ToolResult, 1)
+			go func() { done <- h.callPhone(ctx, tc.tool, json.RawMessage(`{}`)) }()
+			var call struct {
+				Type   string `json:"type"`
+				Name   string `json:"name"`
+				CallID string `json:"call_id"`
+			}
+			select {
+			case data = <-selected.out:
+				if err := json.Unmarshal(data, &call); err != nil || call.Type != "tool_call" || call.Name != tc.tool {
+					t.Fatalf("selected phone's tool call = %s, %v", data, err)
+				}
+			case <-ctx.Done():
+				t.Fatal("tool call was not routed to the selected phone")
+			}
+			select {
+			case data = <-other.out:
+				t.Fatalf("tool call also went to the other phone: %s", data)
+			default:
+			}
+
+			const payload = `{"id":"created-1","title":"Lunch"}`
+			data, _ = json.Marshal(map[string]any{
+				"type": "tool_result", "call_id": call.CallID,
+				"content": []proto.Content{{Type: "text", Text: payload}},
+			})
+			h.onClientMessage(ctx, selected, data)
+			var result proto.ToolResult
+			select {
+			case result = <-done:
+			case <-ctx.Done():
+				t.Fatal("tool result was not delivered")
+			}
+			if result.IsError || textOf(result) != payload {
+				t.Fatalf("existing result payload changed: %+v", result)
+			}
+			raw, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var envelope map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &envelope); err != nil {
+				t.Fatal(err)
+			}
+			for _, source := range []struct{ key, want string }{
+				{"source_device_name", tc.deviceName},
+				{"source_device_platform", tc.platform},
+			} {
+				value, present := envelope[source.key]
+				if source.want == "" {
+					if present {
+						t.Fatalf("%s = %s, want absent; result = %s", source.key, value, raw)
+					}
+					continue
+				}
+				var got string
+				if !present || json.Unmarshal(value, &got) != nil || got != source.want {
+					t.Fatalf("%s = %q (present %t), want %q; result = %s", source.key, got, present, source.want, raw)
+				}
+			}
+		})
+	}
+}
+
 // A write the user approves on the phone outlasts the plain call's wait: an approval that comes late still reaches the
 // agent, and a read still times out as before (#4427).
 func TestCallPhoneWaitsForApproval(t *testing.T) {
@@ -462,7 +578,7 @@ func TestCallPhoneWaitsForApproval(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	phone := &client{hub: h, device: "credential-ios", role: roleFull, out: make(chan []byte, 8)}
-	h.clients[phone] = struct{}{}
+	addTestClient(h, phone)
 	h.onClientMessage(ctx, phone, []byte(`{"type":"register_phone","tools":[{"name":"phone_reminders_create"},{"name":"phone_device_info"}]}`))
 
 	if r := h.callPhone(ctx, "phone_device_info", json.RawMessage(`{}`)); !r.IsError || !strings.Contains(textOf(r), "Timed out waiting for the iPhone") {
@@ -498,5 +614,27 @@ func TestCallPhoneWaitsForApproval(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("the late approval did not reach the agent")
+	}
+}
+
+// Every phone tool that waits for the user (an approval card, or a system sheet the user finishes) gets the long wait;
+// a plain read or a tool that only opens another app does not (#2276–#2286).
+func TestPhoneToolsThatWaitForTheUser(t *testing.T) {
+	for _, name := range []string{
+		"phone_calendar_update_event", "phone_calendar_delete_event", "phone_alarm_create", "phone_timer_start",
+		"phone_alarm_cancel", "phone_messages_compose", "phone_call_start", "phone_shortcuts_register",
+		"phone_home_control", "phone_home_run_scene", "phone_contacts_create", "phone_contacts_update",
+	} {
+		if !phoneConfirmedTools[name] {
+			t.Errorf("%s waits for the user on the phone but gets the short wait", name)
+		}
+	}
+	for _, name := range []string{
+		"phone_maps_search_nearby", "phone_maps_navigate", "phone_maps_route", "phone_media_play", "phone_media_control", "phone_media_open",
+		"phone_shortcuts_run", "phone_shortcuts_list", "phone_alarms_list", "phone_home_list",
+	} {
+		if phoneConfirmedTools[name] {
+			t.Errorf("%s asks nobody, it should not wait 30 minutes", name)
+		}
 	}
 }

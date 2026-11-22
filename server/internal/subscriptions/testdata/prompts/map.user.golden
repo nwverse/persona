@@ -1,0 +1,7 @@
+App: example
+Source: Notices
+Tool: list_notices: List notices
+Arguments: {"since":"{{since}}","limit":25}
+Its answer, cut:
+
+{"items":[{"at":"2026-11-10T01:00:00Z","from":{"name":"Office"},"id":"n1","text":"Made-up notice text","title":"Notice 1"},{"at":"2026-11-10T02:00:00Z","from":{"name":"Office"},"id":"n2","text":"Made-up notice text","title":"Notice 2"},{"at":"2026-11-10T03:00:00Z","from":{"name":"Office"},"id":"n3","text":"Made-up notice text","title":"Notice 3"}],"next":null}

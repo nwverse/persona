@@ -82,7 +82,7 @@ class SettingsParityShotsTest {
         override suspend fun check(name: String, machine: String?) =
             LauncherCheckAnswer(machine, LauncherCheck(ok = machine != "mac", model = "example-max", answer = "OK", millis = 840,
                 error = "gateway answered 401".takeIf { machine == "mac" }))
-        override suspend fun importPreview(machine: String) = listOf(
+        override suspend fun importPreview(machine: String, alias: String?) = listOf(
             ImportedProvider("proxy", "https://proxy.example.com", "example-max", hasKey = true, aliases = listOf("cc_work", "cc_fast")),
             ImportedProvider("team", "https://gateway.example.com/v1", "example-pro", hasKey = true, aliases = listOf("cc_team"), existing = "team"),
         )
@@ -95,6 +95,8 @@ class SettingsParityShotsTest {
         override suspend fun setClaudeSetting(machineId: String, key: String, value: kotlinx.serialization.json.JsonElement) = claudeSettings(machineId)
         override suspend fun codexSettings(machineId: String) = emptyList<ClaudeSetting>()
         override suspend fun setCodexSetting(machineId: String, key: String, value: kotlinx.serialization.json.JsonElement) = emptyList<ClaudeSetting>()
+        override suspend fun agySettings(machineId: String) = emptyList<ClaudeSetting>()
+        override suspend fun setAgySetting(machineId: String, key: String, value: kotlinx.serialization.json.JsonElement) = emptyList<ClaudeSetting>()
         override suspend fun claudeDirs(machineId: String) = ClaudeDirsState(
             dirs = listOf(
                 ClaudeDir("/home/me/.claude", isDefault = true, source = "default", running = 2, sessions = 48),

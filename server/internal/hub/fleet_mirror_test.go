@@ -41,6 +41,7 @@ func (d *mirrorDevices) Event(string, json.RawMessage) bool     { return false }
 func (d *mirrorDevices) Handler(next http.Handler) http.Handler { return next }
 func (d *mirrorDevices) Has(string) bool                        { return false } // node calls go through the hub, as before
 func (d *mirrorDevices) SetKeep(map[string][]string)            {}
+func (d *mirrorDevices) Watched(string, string) bool            { return false } // no suggestions in these tests
 
 func (d *mirrorDevices) CallNode(ctx context.Context, id, method string, params json.RawMessage) (json.RawMessage, error) {
 	m := d.h.localMachine(id)
@@ -63,6 +64,22 @@ func (d *mirrorDevices) List() []devices.Summary {
 	return out
 }
 
+func (d *mirrorDevices) Summary(id string) (devices.Summary, bool) {
+	canon := d.Canonical(id)
+	for _, s := range d.List() {
+		if s.ID == canon {
+			return s, true
+		}
+	}
+	return devices.Summary{}, false
+}
+
+// Shown: a test machine's list is always its node's, and none is shown as before.
+func (d *mirrorDevices) Shown(id string) (devices.Shown, bool) {
+	_, ok := d.Summary(id)
+	return devices.Shown{Listed: ok}, ok
+}
+
 func (d *mirrorDevices) MachineResources(string) (*proto.Machine, *proto.MetricSample, *bool) {
 	return nil, nil, nil
 }
@@ -72,6 +89,11 @@ func (d *mirrorDevices) Canonical(id string) string {
 		return m.cfg.ID
 	}
 	return id
+}
+
+func (d *mirrorDevices) AppendSessions(dst []proto.Session, id string) ([]proto.Session, bool) {
+	list, ok := d.Sessions(id)
+	return append(dst, list...), ok
 }
 
 func (d *mirrorDevices) Sessions(id string) ([]proto.Session, bool) {
@@ -116,7 +138,20 @@ func (d *mirrorDevices) Usage() assistantwire.UsageSummary {
 	return assistantwire.UsageSummary{Machines: []assistantwire.MachineUsage{}}
 }
 
+func (d *mirrorDevices) CapacitySnapshot(context.Context) proto.CapacitySnapshot {
+	return proto.CapacitySnapshot{}
+}
+
+func (d *mirrorDevices) GatewayRetryAt(string, string, time.Time) time.Time { return time.Time{} }
+
 func (d *mirrorDevices) SetAttention(link.Attention) {}
+
+func (d *mirrorDevices) LinkRang(context.Context, string, time.Duration) bool { return false }
+func (d *mirrorDevices) HeldMessages(string, i18n.Lang) map[string][]proto.UndeliveredMessage {
+	return nil
+}
+func (d *mirrorDevices) HeldRetry(context.Context, string, string) (bool, error)  { return false, nil }
+func (d *mirrorDevices) HeldDelete(context.Context, string, string) (bool, error) { return false, nil }
 
 // mirrors are the tests' hubs' mirror devices.
 var mirrors sync.Map // *Hub → *mirrorDevices
@@ -178,6 +213,7 @@ func editSessions(m *Machine, edit func([]proto.Session) []proto.Session) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sessions = edit(m.sessions)
+	m.raws, m.rawsOf = nil, keptList{} // edited in place maybe: no longer what the manager's bytes gave
 }
 
 // nodeAsks is a node's request on m as the manager takes it (devices.Options.Answer): the assistant's own, then the

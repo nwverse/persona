@@ -26,14 +26,13 @@ import (
 // machineEntriesKey is the hub's own (hub_settings).
 const machineEntriesKey = "hub.machine_entries"
 
-const (
-	// machineEntriesDelay gathers a burst of reports into one write.
-	machineEntriesDelay = time.Second
-	// machineEntriesSeenEvery: while reports come, when the machines were last seen is written at least this often;
-	// every change of an entry is written within machineEntriesDelay, and a machine connected as a write goes is seen
-	// then (the hub's stop writes last). A hub that crashed shows them last seen as of the last write.
-	machineEntriesSeenEvery = 10 * time.Minute
-)
+// machineEntriesDelay gathers a burst of reports into one write (var for tests).
+var machineEntriesDelay = time.Second
+
+// machineEntriesSeenEvery: while reports come, when the machines were last seen is written at least this often;
+// every change of an entry is written within machineEntriesDelay, and a machine connected as a write goes is seen
+// then (the hub's stop writes last). A hub that crashed shows them last seen as of the last write.
+const machineEntriesSeenEvery = 10 * time.Minute
 
 // reportedMachines is what is kept: by manager, by machine.
 type reportedMachines map[string]map[string]reportedEntry
@@ -50,21 +49,28 @@ type reportedEntry struct {
 }
 
 // loadMachineEntries reads what the managers last reported (startDevices). Unreadable: nothing until they report, and
-// it is read again before the next write, which would otherwise drop the managers that did not report since.
-func (h *Hub) loadMachineEntries(ctx context.Context) {
+// it is read again before the next write, which would otherwise drop the managers that did not report since. A failed
+// read also leaves reportedRead false: an earlier partial/degraded snapshot is not safe to write back.
+func (h *Hub) loadMachineEntries(ctx context.Context) error {
+	d := &h.devices
+	d.reportedSave.Lock()
+	defer d.reportedSave.Unlock()
 	if h.store == nil {
-		return
+		return nil
 	}
 	kept, err := h.readMachineEntries(ctx)
 	if err != nil {
 		h.logf("machines: what the managers last reported: %v", err)
-		return
+		d.mu.Lock()
+		d.reportedRead = false
+		d.mu.Unlock()
+		return err
 	}
-	d := &h.devices
 	d.mu.Lock()
 	d.mergeReportedLocked(kept)
 	d.reportedRead = true
 	d.mu.Unlock()
+	return nil
 }
 
 // readMachineEntries is what the setting holds, without the machines the hub hands no manager now and the managers the
@@ -428,13 +434,32 @@ func (h *Hub) saveMachineEntries(ctx context.Context) {
 	d := &h.devices
 	d.reportedSave.Lock()
 	defer d.reportedSave.Unlock()
+	// A handover can time out while a background write holds the lock. Do not start another write when it is released.
+	if ctx.Err() != nil {
+		return
+	}
 	h.writeMachineEntries(ctx)
 }
 
 // writeMachineEntries is saveMachineEntries with d.reportedSave held.
 func (h *Hub) writeMachineEntries(ctx context.Context) {
 	d := &h.devices
+	if !h.quiesce.beginOrDefer(func() {
+		d.mu.Lock()
+		d.reportedDeferred = true
+		d.mu.Unlock()
+	}) {
+		return
+	}
+	defer h.quiesce.end()
 	d.mu.Lock()
+	if !d.keptRead {
+		// An entries read with the kept list unknown filtered those machines out. Never write that partial map back;
+		// the trust loop or the next kept-list recovery schedules the write after both records are known.
+		d.reportedSaved = time.Now()
+		d.mu.Unlock()
+		return
+	}
 	read := d.reportedRead
 	d.mu.Unlock()
 	if !read {
@@ -491,4 +516,27 @@ func (h *Hub) writeMachineEntries(ctx context.Context) {
 	d.mu.Lock()
 	d.reportedSaved = time.Now()
 	d.mu.Unlock()
+}
+
+// resumeMachineEntries writes machine entries whose save was deferred by a
+// snapshot's pause (quiesce.go).
+func (h *Hub) resumeMachineEntries() {
+	if h.store == nil {
+		return
+	}
+	d := &h.devices
+	d.mu.Lock()
+	deferred := d.reportedDeferred
+	d.reportedDeferred = false
+	d.mu.Unlock()
+	if !deferred {
+		return
+	}
+	h.nodeWorkers.Add(1)
+	go func() {
+		defer h.nodeWorkers.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		h.saveMachineEntries(ctx)
+	}()
 }

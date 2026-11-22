@@ -4,8 +4,9 @@
 // old starts it without; a hub without ultracode shows nothing. To-do cards, lines and rows carry the Agent list row's mark.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PlanTask, TaskPlan } from "../../lib/feed";
+import { loadPages } from "../../lib/lazy-page";
 import type { Todo } from "../../lib/todos";
 import type { Session } from "../../lib/types";
 
@@ -16,8 +17,9 @@ vi.mock("../../lib/feed", async (orig) => ({
 }));
 
 const { getState } = await import("../../lib/store");
-const { PlanCard, TaskCard, TaskLine } = await import("./Tasks");
+const { PlanCard } = await import("./Tasks");
 const { TodosView } = await import("../Todos");
+beforeAll(() => loadPages(), 60_000);
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -136,6 +138,16 @@ describe("ultracode on the plan card", () => {
     expect(sent()?.[0]?.ultracode).toBe(false);
   });
 
+  it("keeps an omitted permission omitted when starting from the lazy plan editor", async () => {
+    const proposed = plan([task(), task({ permission: "default" })]);
+    await render(<PlanCard plan={proposed} />);
+    await click(byText("改一下")[0]);
+    await click(startInDialog());
+    expect(startPlan.mock.calls[0]?.[0]).toBe(proposed);
+    expect(sent()?.[0]).not.toHaveProperty("permission");
+    expect(sent()?.[1]).toHaveProperty("permission", "default");
+  });
+
   it("does not count the card's own choice as a change to throw away in 改一下", async () => {
     const ask = vi.spyOn(window, "confirm").mockReturnValue(false);
     await render(<PlanCard plan={plan([task()])} />);
@@ -154,21 +166,6 @@ describe("ultracode on to-dos", () => {
     agents: [{ machine_id: "m1", session_id: "s1", linked_at: new Date().toISOString() }], ...o,
   });
   const marks = () => document.querySelectorAll("[data-ultracode-mark]").length;
-
-  it("puts the mark on the task card while its agent runs with it, not once it is off", async () => {
-    seed({ todos: [todo()], sessions: { m1: [session({ ultracode: true })] } });
-    await render(<TaskCard todoId="t1" conversation="c1" />);
-    expect(marks()).toBe(1);
-    await act(async () => seed({ sessions: { m1: [session({ ultracode: false })] } }));
-    await render(<TaskCard todoId="t1" conversation="c1" />);
-    expect(marks()).toBe(0);
-  });
-
-  it("puts the mark on another day's folded task line too", async () => {
-    seed({ todos: [todo()], sessions: { m1: [session({ ultracode: true })] } });
-    await render(<TaskLine todoId="t1" />);
-    expect(marks()).toBe(1);
-  });
 
   it("puts the mark on the to-do's row on the to-dos page", async () => {
     seed({ todos: [todo()], todosLoaded: true, sessions: { m1: [session({ ultracode: true })] } });

@@ -23,7 +23,19 @@ import (
 // declares, take the methods *db.DB serves of them, and look at the SQL those methods (and the db functions they
 // call) run.
 
-var createTableRE = regexp.MustCompile(`(?i)CREATE TABLE (?:IF NOT EXISTS )?([a-z_]+)`)
+var createTableRE = regexp.MustCompile(`(?i)CREATE TABLE (?:IF NOT EXISTS )?([a-z_][a-z0-9_]*)`)
+
+// extractCreateTables returns sorted, unique lowercase table names declared by CREATE TABLE statements in sql.
+func extractCreateTables(sql string) []string {
+	var out []string
+	for _, m := range createTableRE.FindAllStringSubmatch(sql, -1) {
+		if tb := strings.ToLower(m[1]); !slices.Contains(out, tb) {
+			out = append(out, tb)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
 
 // setTables are the tables migrations/<part> makes.
 func setTables(t *testing.T, part string) []string {
@@ -38,8 +50,8 @@ func setTables(t *testing.T, part string) []string {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, m := range createTableRE.FindAllStringSubmatch(string(b), -1) {
-			if tb := strings.ToLower(m[1]); !slices.Contains(out, tb) {
+		for _, tb := range extractCreateTables(string(b)) {
+			if !slices.Contains(out, tb) {
 				out = append(out, tb)
 			}
 		}
@@ -48,11 +60,14 @@ func setTables(t *testing.T, part string) []string {
 	return out
 }
 
-// dbFuncs are internal/db's functions and *DB's methods by name, each with the string literals in its body and the
-// names it calls.
+// dbFuncs are internal/db's functions and *DB's methods by name, each with the string literals in its body, the
+// names it calls and the names it reads; and the package's constants as "const." and their name, each with the
+// string literals of its value and the names it reads. So SQL kept in a constant (insertMetricSQL) counts for the
+// functions that use it.
 type dbFunc struct {
 	strs  []string
 	calls []string
+	names []string
 }
 
 func dbFuncs(t *testing.T) map[string]dbFunc {
@@ -60,6 +75,30 @@ func dbFuncs(t *testing.T) map[string]dbFunc {
 	files, err := filepath.Glob(filepath.Join("..", "db", "*.go"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	scan := func(node ast.Node) dbFunc {
+		var fn dbFunc
+		ast.Inspect(node, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.BasicLit:
+				if n.Kind == token.STRING {
+					if s, err := strconv.Unquote(n.Value); err == nil {
+						fn.strs = append(fn.strs, s)
+					}
+				}
+			case *ast.Ident:
+				fn.names = append(fn.names, n.Name)
+			case *ast.CallExpr:
+				switch c := n.Fun.(type) {
+				case *ast.Ident:
+					fn.calls = append(fn.calls, c.Name)
+				case *ast.SelectorExpr:
+					fn.calls = append(fn.calls, c.Sel.Name)
+				}
+			}
+			return true
+		})
+		return fn
 	}
 	out := map[string]dbFunc{}
 	fset := token.NewFileSet()
@@ -72,40 +111,36 @@ func dbFuncs(t *testing.T) map[string]dbFunc {
 			t.Fatal(err)
 		}
 		for _, decl := range f.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Body == nil {
-				continue
-			}
-			var fn dbFunc
-			ast.Inspect(fd.Body, func(n ast.Node) bool {
-				switch n := n.(type) {
-				case *ast.BasicLit:
-					if n.Kind == token.STRING {
-						if s, err := strconv.Unquote(n.Value); err == nil {
-							fn.strs = append(fn.strs, s)
+			switch decl := decl.(type) {
+			case *ast.FuncDecl:
+				if decl.Body == nil {
+					continue
+				}
+				key := decl.Name.Name
+				if decl.Recv != nil {
+					key = "DB." + key
+				}
+				out[key] = scan(decl.Body)
+			case *ast.GenDecl:
+				if decl.Tok != token.CONST {
+					continue
+				}
+				for _, spec := range decl.Specs {
+					vs := spec.(*ast.ValueSpec)
+					for i, id := range vs.Names {
+						if i < len(vs.Values) {
+							out["const."+id.Name] = scan(vs.Values[i])
 						}
 					}
-				case *ast.CallExpr:
-					switch c := n.Fun.(type) {
-					case *ast.Ident:
-						fn.calls = append(fn.calls, c.Name)
-					case *ast.SelectorExpr:
-						fn.calls = append(fn.calls, c.Sel.Name)
-					}
 				}
-				return true
-			})
-			key := fd.Name.Name
-			if fd.Recv != nil {
-				key = "DB." + key
 			}
-			out[key] = fn
 		}
 	}
 	return out
 }
 
-// tablesTouched are the tables of all the SQL method m of *DB runs, the db functions it calls included.
+// tablesTouched are the tables of all the SQL method m of *DB runs, the db functions it calls and the constants they
+// read included.
 func tablesTouched(funcs map[string]dbFunc, m string, all []string) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -131,6 +166,9 @@ func tablesTouched(funcs map[string]dbFunc, m string, all []string) []string {
 		for _, c := range fn.calls {
 			walk("DB." + c)
 			walk(c)
+		}
+		for _, n := range fn.names {
+			walk("const." + n)
 		}
 	}
 	walk("DB." + m)
@@ -181,11 +219,60 @@ func storeMethods(t *testing.T, dir string) []string {
 	return out
 }
 
+// Regression test for #12846 / #12833: table names with digits (such as a2a_tasks) must be parsed intact rather than
+// truncated at the first digit into single-letter names that cause false positives on SQL aliases or English words.
+func TestCreateTableREParsesDigitTableNames(t *testing.T) {
+	sql := `
+		CREATE TABLE a2a_tasks (id text PRIMARY KEY);
+		CREATE TABLE IF NOT EXISTS v2_items_3 (id int);
+		create table OAuth2_Tokens (id text);
+		CREATE TABLE a2a_tasks (id text);
+	`
+	got := extractCreateTables(sql)
+	want := []string{"a2a_tasks", "oauth2_tokens", "v2_items_3"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("extractCreateTables() = %v, want %v", got, want)
+	}
+
+	managerTables := setTables(t, "manager")
+	if !slices.Contains(managerTables, "a2a_tasks") {
+		t.Fatalf("manager tables %v do not contain a2a_tasks", managerTables)
+	}
+	if slices.Contains(managerTables, "a") {
+		t.Fatalf("manager tables %v contain truncated single-letter table name \"a\"", managerTables)
+	}
+
+	funcs := map[string]dbFunc{
+		"DB.HubQueryWithAliasA": {
+			strs: []string{
+				"SELECT 1 FROM share_machine_authorities a WHERE a.id = $1",
+				"phone write arguments must be a JSON object of at most 64 KiB",
+			},
+		},
+		"DB.ManagerQueryA2ATasks": {
+			strs: []string{
+				"SELECT id FROM a2a_tasks WHERE state = $1",
+			},
+		},
+	}
+	all := append([]string{"share_machine_authorities"}, got...)
+	if touched := tablesTouched(funcs, "HubQueryWithAliasA", all); !slices.Equal(touched, []string{"share_machine_authorities"}) {
+		t.Fatalf("HubQueryWithAliasA touched %v, want [share_machine_authorities]", touched)
+	}
+	if touched := tablesTouched(funcs, "ManagerQueryA2ATasks", all); !slices.Equal(touched, []string{"a2a_tasks"}) {
+		t.Fatalf("ManagerQueryA2ATasks touched %v, want [a2a_tasks]", touched)
+	}
+}
+
 // The hub's store touches only the hub's tables; the managers' stores only the manager's.
 func TestStoresTouchTheirOwnTables(t *testing.T) {
 	hubTables, managerTables := setTables(t, "hub"), setTables(t, "manager")
 	all := append(slices.Clone(hubTables), managerTables...)
 	funcs := dbFuncs(t)
+	// InsertMetric's SQL is a constant (insertMetricSQL): a scan that misses constants sees no table at all.
+	if got := tablesTouched(funcs, "InsertMetric", all); !slices.Equal(got, []string{"machine_metrics"}) {
+		t.Fatalf("InsertMetric touches %v, want [machine_metrics]: the scan misses SQL kept in a constant", got)
+	}
 	for _, side := range []struct {
 		dirs   []string
 		tables []string

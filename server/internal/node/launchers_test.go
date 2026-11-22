@@ -48,7 +48,7 @@ func asNodeIn(t *testing.T, dir, defs, script string) string {
 func listFrom(t *testing.T, defs string) []proto.Launcher {
 	t.Helper()
 	list, _, _, _ := mergeLaunchers(asNode(t, defs, launcherScript))
-	return list
+	return withoutInstalledWorkAgents(list)
 }
 
 func fixture(t *testing.T, name string) string {
@@ -133,6 +133,7 @@ func TestHelperAndAliasesTogether(t *testing.T) {
 // No helper, no alias that starts claude: plain claude, as before.
 func TestNoLaunchersMeansClaude(t *testing.T) {
 	list := listFrom(t, `alias ll="ls -l"`)
+	list = withoutInstalledWorkAgents(list)
 	if len(list) != 1 || list[0].Name != "claude" {
 		t.Fatalf("got %v", list)
 	}
@@ -154,8 +155,20 @@ func TestCodexOnTheMachineIsALauncher(t *testing.T) {
 		t.Fatal(err)
 	}
 	list, codex, _, _ := mergeLaunchers(asNodeIn(t, home, `alias ll="ls -l"`, launcherScript))
+	list = withoutInstalledWorkAgents(list)
 	if len(list) != 2 || list[0].Name != "claude" || list[1].Name != "codex" || list[1].Agent != "codex" || len(codex["codex"]) != 1 {
 		t.Fatalf("got %v, codex %v", list, codex)
+	}
+}
+
+func TestCodexLauncherAliasProvenance(t *testing.T) {
+	plain := launcherBegin + "\x1d\x1d/usr/local/bin/codex\n" + launcherEnd
+	if names := codexAliasNames(plain); len(names) != 0 {
+		t.Fatalf("plain Codex aliases = %v, want none", names)
+	}
+	noOpAlias := launcherBegin + "\x1dcodex\x1fcodex\x1f\x1e\x1d/usr/local/bin/codex\n" + launcherEnd
+	if names := codexAliasNames(noOpAlias); !names["codex"] {
+		t.Fatalf("configured no-op Codex alias lost its provenance: %v", names)
 	}
 }
 
@@ -204,5 +217,62 @@ func TestRedactAliasDefinition(t *testing.T) {
 	}
 	if got := redactSecrets(`ANTHROPIC_AUTH_TOKEN=sk-fake-aaaaaaaaaaaaaaaaaaaa claude`); strings.Contains(got, "aaaaaaaa") {
 		t.Fatalf("redacted: %s", got)
+	}
+}
+
+// withoutInstalledWorkAgents drops pi, cursor and agy. The launcher script lists them whenever the program is
+// installed, and this machine may have one; the assertions here are about the rc file, not those programs.
+func withoutInstalledWorkAgents(list []proto.Launcher) []proto.Launcher {
+	out := make([]proto.Launcher, 0, len(list))
+	for _, l := range list {
+		if l.Name == "pi" || l.Name == "cursor" || l.Name == "agy" {
+			continue
+		}
+		out = append(out, l)
+	}
+	return out
+}
+
+// pi, the Cursor CLI and the Antigravity CLI on PATH are launchers of their own, after the Claude and Codex ones.
+func TestWorkAgentsOnPathAreLaunchers(t *testing.T) {
+	parts := []string{"", "", "", "", "", "/usr/bin/pi", "", "/usr/local/bin/agy", "", ""}
+	list, _, _, _ := mergeLaunchers(launcherBegin + strings.Join(parts, "\x1d") + launcherEnd)
+	var got []string
+	for _, l := range list {
+		got = append(got, l.Name+"="+l.Agent)
+	}
+	want := []string{"claude=", "pi=pi", "agy=agy"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("launchers %v, want %v", got, want)
+	}
+}
+
+// A launcher that names no model has no model on the wire either. The Chinese display placeholder older nodes sent is
+// not a model ID; an explicit Codex alias model stays exactly as the alias wrote it.
+func TestMergeLaunchersLeavesLauncherDefaultModelsEmpty(t *testing.T) {
+	rec := func(words ...string) string { return strings.Join(words, "\x1f") + "\x1f\x1e" }
+	parts := []string{"", rec("cx-plain", "codex") + rec("cx-explicit", "codex", "--model", "gpt-explicit"),
+		"/usr/bin/codex", "/usr/bin/traex", "/usr/bin/omp", "/usr/bin/pi", "/usr/bin/cursor-agent", "/usr/bin/agy", "", ""}
+	list, _, _, _ := mergeLaunchers(launcherBegin + strings.Join(parts, "\x1d") + launcherEnd)
+	models := byName(list)
+	for _, name := range []string{"claude", "codex", "cx-plain", "traex", "omp", "pi", "cursor", "agy"} {
+		if l := models[name]; l.Name != name || l.Model != "" {
+			t.Errorf("%s: model %q, want no explicit model (launcher %+v)", name, l.Model, l)
+		}
+	}
+	if got := models["cx-explicit"].Model; got != "gpt-explicit" {
+		t.Errorf("explicit model = %q, want gpt-explicit", got)
+	}
+	if l := models[traexAgent]; l.Agent != traexAgent || l.DisplayName != "TRAE CLI" {
+		t.Errorf("TRAE CLI launcher kind or display name changed: %+v", l)
+	}
+}
+
+func TestAliasLauncherEnvironmentReset(t *testing.T) {
+	words := []string{"export", "ANTHROPIC_BASE_URL=https://old.example.com", ";",
+		"ANTHROPIC_MODEL=old", "env", "-i", "claude", "--model", "explicit"}
+	got, _, ok := aliasLauncher(words)
+	if !ok || got.BaseURL != "" || got.Model != "explicit" {
+		t.Errorf("launcher after environment reset: %+v, found=%t", got, ok)
 	}
 }

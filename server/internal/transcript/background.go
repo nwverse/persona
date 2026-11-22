@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"cmp"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -25,7 +26,13 @@ var (
 	wfNameRe   = lazyre.New("\\bname:\\s*['\"`]([^'\"`\\n]+)['\"`]")
 	expiresRe  = lazyre.New(`expires in (\d+)(ms|s|m|h)\b`)
 	wakeInRe   = lazyre.New(`Next wakeup scheduled for [^(]*\(in (\d+)s\)`)
-	bgMovedRe  = lazyre.New(`moved to the background \(ID: ([A-Za-z0-9_-]+)\)`) // a foreground command that timed out
+	// A foreground command moved to the background, timed out ("Command did not complete within its 120s timeout and
+	// was moved to the background (ID: b1). …") or by hand ("Command was manually backgrounded by user with ID:
+	// bmk9rnfdz. Output is being written to: …"). Claude Code starts a line with the notice, alone or after the output
+	// so far; the same words inside a line are the output quoting them (grep hits, a numbered Read, a test table), and
+	// taking those for a launch kept a finished session Working for a day (#9091).
+	bgMovedRe  = lazyre.New(`(?m)^Command\b[^\n]*?moved to the background \(ID: ([A-Za-z0-9_-]+)\)`)
+	bgManualRe = lazyre.New(`(?m)^Command\b[^\n]*?manually backgrounded by user with ID:?[ \t]*([A-Za-z0-9_-]+)`)
 	bgOutputRe = lazyre.New(`Output is being written to:\s*(\S+?)\.?(?:\s|$)`)
 )
 
@@ -71,10 +78,15 @@ func (m *Meta) trackBackground(toolUseID, name string, raw json.RawMessage, ts t
 		}
 	case "Bash":
 		if !in.Background {
+			if m.fgBash == nil {
+				m.fgBash = map[string]proto.BackgroundTask{}
+			}
+			m.fgBash[toolUseID] = proto.BackgroundTask{Kind: "shell", Command: in.Command, Description: in.Description, StartedAt: ts}
 			return
 		}
 		m.pend(toolUseID, proto.BackgroundTask{Kind: "shell", Command: in.Command, Description: in.Description, StartedAt: ts})
 	case "Agent", "Task":
+		m.rememberAgentCall(toolUseID, in.Description)
 		// Whether it went to the background shows in the result ("Async agent launched").
 		m.pend(toolUseID, proto.BackgroundTask{Kind: "agent", Description: in.Description, StartedAt: ts})
 	case "Monitor":
@@ -89,9 +101,34 @@ func (m *Meta) trackBackground(toolUseID, name string, raw json.RawMessage, ts t
 		}
 		m.pend(toolUseID, proto.BackgroundTask{Kind: "workflow", Description: name, StartedAt: ts})
 	case "TaskStop", "KillShell", "KillBash":
-		m.removeBackground(in.TaskID + in.ShellID)
-		m.workflowEnded(in.TaskID+in.ShellID, proto.WorkflowKilled, ts)
+		// The call is only a request. Its result decides whether the task actually stopped.
+		m.pend(toolUseID, proto.BackgroundTask{ID: in.TaskID + in.ShellID, Kind: "stop"})
 	}
+}
+
+// manualBackground is bgManualRe's match in a tool result, nil without one; the cheap check first keeps the regexp
+// off every other result (TestToolUseResultNotCopied counts what parsing a line allocates).
+func manualBackground(result string) []string {
+	if !strings.Contains(result, "manually backgrounded") {
+		return nil
+	}
+	return bgManualRe.FindStringSubmatch(result)
+}
+
+// LaunchedBackgroundID is the id of the background task a tool result says its call started (a backgrounded command,
+// an async agent, a workflow, a Monitor, a command moved or sent to the background), "" for any other result. The id is
+// read whole, so "bash_1" is not the id of a result that started "bash_12".
+func LaunchedBackgroundID(result string) string {
+	if mm := manualBackground(result); mm != nil {
+		return mm[1]
+	}
+	if mm := bgIDRe.FindStringSubmatch(result); mm != nil {
+		return mm[1]
+	}
+	if mm := bgMovedRe.FindStringSubmatch(result); mm != nil {
+		return mm[1]
+	}
+	return ""
 }
 
 // onceCron reports a cron expression pinned to one date ("33 17 21 10 *": day of month and month both fixed).
@@ -110,6 +147,18 @@ func (m *Meta) pend(toolUseID string, t proto.BackgroundTask) {
 		m.bgPending = map[string]proto.BackgroundTask{}
 	}
 	m.bgPending[toolUseID] = t
+	m.noteBackgroundPending()
+}
+
+// BackgroundPending is the ids of background tool calls still waiting for their result, for readers that skip lines:
+// a Stop result names only its call's id, not the tool. Callers must not change it.
+func (m *Meta) BackgroundPending() [][]byte { return m.bgPendingIDs }
+
+func (m *Meta) noteBackgroundPending() {
+	m.bgPendingIDs = nil // a new slice: a copy of the Meta may hold the old one
+	for id := range m.bgPending {
+		m.bgPendingIDs = append(m.bgPendingIDs, []byte(id))
+	}
 }
 
 func (m *Meta) backgroundStarted(toolUseID, result string, isError bool, ts time.Time) {
@@ -125,11 +174,32 @@ func (m *Meta) backgroundStarted(toolUseID, result string, isError bool, ts time
 				l.Ticks = m.Loop.Ticks
 			}
 			l.Ticks++
-			m.Loop = &l
+			loop := l
+			m.Loop = &loop
 		}
 		return
 	}
+	if mm := manualBackground(result); mm != nil && !isError {
+		// Its call is known when every line is read; the node's scan for background work reads only the lines that
+		// name it (node/bgscan.go), so there it is the id alone.
+		f := m.fgBash[toolUseID]
+		delete(m.fgBash, toolUseID)
+		f.Kind, f.ID, f.OutputFile = "shell", mm[1], outputFile(result)
+		if f.StartedAt.IsZero() {
+			f.StartedAt = ts
+		}
+		m.removeBackground(f.ID)
+		m.Background = append(m.Background, f)
+		return
+	}
+	delete(m.fgBash, toolUseID)
 	t, ok := m.bgPending[toolUseID]
+	if !ok && !isError && workflowLaunch(result) {
+		// A workflow's launch whose call was not read: the node's background scan skips lines over 64 KiB
+		// (node/bgscan.go), and a call with its script inline is as long as the script (#6003). The result names the
+		// task, the run and the script file, whose meta block has the name and phases.
+		t, ok = proto.BackgroundTask{Kind: "workflow"}, true
+	}
 	if !ok {
 		if mv := bgMovedRe.FindStringSubmatch(result); mv != nil && !isError {
 			m.removeBackground(mv[1])
@@ -139,6 +209,14 @@ func (m *Meta) backgroundStarted(toolUseID, result string, isError bool, ts time
 		return
 	}
 	delete(m.bgPending, toolUseID)
+	m.noteBackgroundPending()
+	if t.Kind == "stop" {
+		if !isError {
+			m.finishBackground(t.ID, "stopped", nil, "", ts)
+			m.workflowEnded(t.ID, proto.WorkflowKilled, ts)
+		}
+		return
+	}
 	match := bgIDRe.FindStringSubmatch(result)
 	if isError || match == nil {
 		return // ran in the foreground after all, or failed to start
@@ -163,8 +241,20 @@ func (m *Meta) backgroundStarted(toolUseID, result string, isError bool, ts time
 	m.Background = append(m.Background, t)
 }
 
+// wfLaunched starts the Workflow tool's result.
+const wfLaunched = "Workflow launched in background. Task ID:"
+
+// workflowLaunch reports a Workflow tool's result: its first words, and the run it names. A result that only quotes
+// one (a command printing a transcript, a search) does not start with them.
+func workflowLaunch(result string) bool {
+	return strings.HasPrefix(result, wfLaunched) && (wfRunRe.MatchString(result) || wfDirRe.MatchString(result))
+}
+
 // workflowsKept: how many workflow runs a session's Meta remembers.
 const workflowsKept = 8
+
+// backgroundEndedKept bounds retained shell / Monitor outcomes independently of running tasks.
+const backgroundEndedKept = 8
 
 func (m *Meta) workflowStarted(t *proto.BackgroundTask, toolUseID, result string) {
 	w := proto.Workflow{TaskID: t.ID, Name: t.Description, Status: proto.WorkflowRunning, Running: true, StartedAt: t.StartedAt,
@@ -188,7 +278,7 @@ func (m *Meta) workflowStarted(t *proto.BackgroundTask, toolUseID, result string
 	}
 	t.RunID = w.RunID
 	if t.Description == "" {
-		t.Description = cmpOr(w.Name, w.Summary)
+		t.Description = cmp.Or(w.Name, w.Summary)
 	}
 	for i, o := range m.Workflows {
 		if o.TaskID == w.TaskID {
@@ -214,6 +304,7 @@ func (m *Meta) workflowEnded(id, status string, ts time.Time) {
 		}
 		switch status {
 		case proto.WorkflowFailed, proto.WorkflowKilled:
+			status = strings.Clone(status) // a piece of the notification, which it would keep whole
 		case "stopped":
 			status = proto.WorkflowKilled
 		default:
@@ -232,13 +323,6 @@ func scriptName(path string) string {
 	return base
 }
 
-func cmpOr(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
-}
-
 func outputFile(result string) string {
 	if o := bgOutputRe.FindStringSubmatch(result); o != nil {
 		return o[1]
@@ -247,12 +331,62 @@ func outputFile(result string) string {
 }
 
 func (m *Meta) taskFinished(notification string, ts time.Time) {
+	n, _ := taskNote(notification)
+	if n.Kind == "agent" && !agentTerminal(n.Status) {
+		return
+	}
+	if n.Status == "event" {
+		for i := range m.Background {
+			if m.Background[i].ID == n.TaskID && n.OutputFile != "" {
+				m.Background[i].OutputFile = n.OutputFile
+			}
+		}
+		return
+	}
 	if id := firstTag(notification, "task-id"); id != "" {
-		m.removeBackground(id)
-		m.workflowEnded(id, firstTag(notification, "status"), ts)
+		m.finishBackground(id, n.Status, n.ExitCode, n.OutputFile, ts)
+		m.workflowEnded(id, n.Status, ts)
 	}
 }
 
+// finishBackground moves a shell / Monitor to bounded outcome history. Agents and workflows keep their own histories.
+func (m *Meta) finishBackground(id, status string, exitCode *int, output string, ts time.Time) {
+	for i, t := range m.Background {
+		if t.ID != id {
+			continue
+		}
+		m.Background = append(m.Background[:i:i], m.Background[i+1:]...)
+		m.removeBackgroundEnded(id)
+		if t.Kind != "shell" && t.Kind != "monitor" {
+			return
+		}
+		t.Status, t.EndedAt, t.ExitCode = strings.Clone(status), &ts, exitCode
+		if output != "" {
+			t.OutputFile = output
+		}
+		m.BackgroundEnded = append(m.BackgroundEnded, t)
+		if n := len(m.BackgroundEnded) - backgroundEndedKept; n > 0 {
+			m.BackgroundEnded = append([]proto.BackgroundTask(nil), m.BackgroundEnded[n:]...)
+		}
+		return
+	}
+	// A stop result can precede the terminal notification. Add its details without moving the first end time.
+	for i := range m.BackgroundEnded {
+		t := &m.BackgroundEnded[i]
+		if t.ID != id {
+			continue
+		}
+		if output != "" {
+			t.OutputFile = output
+		}
+		if exitCode != nil {
+			t.ExitCode = exitCode
+		}
+		return
+	}
+}
+
+// A reused task id supersedes both its running entry and any retained outcome.
 func (m *Meta) removeBackground(id string) {
 	if id == "" {
 		return
@@ -260,6 +394,16 @@ func (m *Meta) removeBackground(id string) {
 	for i, t := range m.Background {
 		if t.ID == id {
 			m.Background = append(m.Background[:i:i], m.Background[i+1:]...)
+			break
+		}
+	}
+	m.removeBackgroundEnded(id)
+}
+
+func (m *Meta) removeBackgroundEnded(id string) {
+	for i, t := range m.BackgroundEnded {
+		if t.ID == id {
+			m.BackgroundEnded = append(m.BackgroundEnded[:i:i], m.BackgroundEnded[i+1:]...)
 			return
 		}
 	}
@@ -269,7 +413,7 @@ func (m *Meta) removeBackground(id string) {
 // started a new turn (ones absorbed mid-turn come as queued_command attachments instead).
 func markWake(items []proto.Item) {
 	for i := range items {
-		if items[i].Kind == proto.KindNotice {
+		if items[i].Kind == proto.KindNotice || items[i].Kind == proto.KindToolResult && items[i].Task != nil {
 			items[i].Wake = true
 		}
 	}

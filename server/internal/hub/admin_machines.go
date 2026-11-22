@@ -42,15 +42,17 @@ type adminMachine struct {
 	Proxy        string             `json:"proxy,omitempty"`   // service: the socks5 proxy it is dialed through
 	HubID        string             `json:"hub_id,omitempty"`  // the hub it is reached through now
 	Paths        []pathInfo         `json:"paths,omitempty"`   // every way to it (devices/paths.go)
+	// LinkSwitch: switching it from ssh to Persona Link, as its manager says (link_switch.go).
+	LinkSwitch *proto.MachineLinkSwitch `json:"link_switch,omitempty"`
 	// State: active (running), pending_add (in hub.json, connects after a restart), pending_remove (gone from
-	// hub.json, still running until the restart).
+	// hub.json, still running until the restart). One its manager keeps is out of hub.json and active (machines_kept.go).
 	State string `json:"state"`
 }
 
 func adminMachineFrom(m proto.Machine, state string) adminMachine {
 	a := adminMachine{ID: m.ID, Name: m.Name, Kind: m.Kind, Icon: m.Icon, SSHHost: m.SSHHost, Online: m.Online, Error: m.Error,
 		Transport: m.Transport, NodeVersion: m.NodeVersion, NodeMismatch: m.NodeMismatch, OS: m.OS, Link: m.Link,
-		Tailcat: m.Tailcat, State: state}
+		Tailcat: m.Tailcat, LinkSwitch: m.LinkSwitch, State: state}
 	if !m.LastSeen.IsZero() {
 		at := m.LastSeen
 		a.LastSeen = &at
@@ -72,7 +74,9 @@ func (h *Hub) adminMachines() []adminMachine {
 		listed[m.ID] = true
 		state := "active"
 		mm := h.localMachine(m.ID)
-		if disk != nil && !onDisk[m.ID] && (mm == nil || !mm.derived) {
+		// Gone from hub.json: removed there, until the restart. Not one its manager keeps, which left hub.json for
+		// that manager's own list (machines_kept.go), nor one only a member hub has.
+		if disk != nil && !onDisk[m.ID] && h.keptBy(m.ID) == "" && (mm == nil || !mm.derived) {
 			state = "pending_remove"
 		}
 		a := adminMachineFrom(m, state)
@@ -212,6 +216,14 @@ func (h *Hub) adminMachineRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("DELETE /api/v1/admin/machines/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		// Not while it switches (its manager runs the switch, and undoes it on failure), and no switch begins until
+		// this is done (link_switch.go).
+		release, err := h.holdLinkSwitch(r.Context(), id)
+		if err != nil {
+			writeAddMachineErr(w, err)
+			return
+		}
+		defer release()
 		// One waiting to be confirmed goes as rejecting it does: its pending row and place too (machine_trust.go).
 		if h.machinePending(id) {
 			switch err := h.rejectMachine(r.Context(), id, "admin", "remove"); {

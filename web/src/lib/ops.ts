@@ -3,7 +3,7 @@
 // answering 502/503/504) is sent again with the same id when the socket is back, or after a short wait, for up to a
 // minute before the caller shows its failure; while the socket is down too (the hub redeploying) for as long as the
 // page tells it as a restart (#4174).
-import { api, ApiError } from "./api";
+import { api, isTransient } from "./api";
 import { RESTARTING_MS } from "./connection";
 import { isUUID, uuid } from "./format";
 import { isOpen, onHubEvent } from "./store";
@@ -14,13 +14,7 @@ export const OP_RETRY_MS = 60_000;
 /** How long it keeps trying while the socket is down as well: a hub that is away, not one that answers badly. */
 export const OP_OFFLINE_MS = RESTARTING_MS;
 
-/** Whether the request may not have reached a running hub: fetch failed, or something in front of it answered 502/503/504. */
-export function isTransient(e: unknown): boolean {
-  if (e instanceof TypeError) return true; // fetch: the connection failed (an abort is a DOMException)
-  // the hub's own errors carry a code or say what was delivered (a machine offline, a node timing out): those are
-  // answers, not gaps
-  return e instanceof ApiError && [502, 503, 504].includes(e.status) && (!e.isJson || (!e.code && e.body.delivered === undefined));
-}
+export { isTransient };
 
 /** The wait before attempt `n` (1-based): 0.5 s, 1 s, 2 s, then every 4 s. */
 export function opDelay(n: number): number {
@@ -82,6 +76,7 @@ export async function untilDelivered<T>(run: () => Promise<T>, clock: RetryClock
 export function apiOp<T>(path: string, init: Parameters<typeof api>[1] & { opId?: string } = {}, clock?: RetryClock): Promise<T> {
   const { opId = uuid(), ...rest } = init;
   return untilDelivered(() => {
+    if (rest.isAuthContextCurrent && !rest.isAuthContextCurrent()) throw new DOMException("Retired operation", "AbortError");
     const headers = new Headers(rest.headers);
     // an id made before #1651 (a message still in the outbox) is no UUID: the hub would refuse it; client_msg_id
     // still keeps a message from going twice

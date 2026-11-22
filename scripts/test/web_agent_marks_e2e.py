@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """End-to-end check of the agent marks (#3391): the mark of each agent's program before its state dot in the sidebar's
-rows, the session header, the /terminal tree, the palette's results and the launcher picker; a lettered tile for an
-agent with no mark of its own; a </> badge on the mark of one run from the command line, none on the desktop app's
-(#6390). Light / dark x wide / 390 px.
+rows, the session header, the /terminal tree, the palette's results and New agent's model panel (#5104: each launcher's
+rows and the pill); a lettered tile for an agent with no mark of its own; a </> badge on the mark of one run from the
+command line, none on the desktop app's (#6390). Light / dark x wide / 390 px.
 
 Needs the fake hub with one agent of each kind, a web page against it and Playwright for Python:
 
@@ -14,6 +14,7 @@ Prints one line per check and a verdict; exits 1 on the first failure. --shots s
 """
 import argparse
 import os
+import re
 import sys
 
 from playwright.sync_api import expect, sync_playwright
@@ -22,16 +23,21 @@ from playwright.sync_api import expect, sync_playwright
 AGENTS = {
     "整理发布说明": ("claude", "Claude Code（命令行版）"),
     "修复订单列表的 N+1 查询": ("codex", "Codex（桌面版）"),
-    "重构解析器的错误处理": ("opencode", "OpenCode"),
-    "给导出脚本加上进度条": ("pi", "Pi"),
+    "重构解析器的错误处理": ("opencode", "opencode"),
+    "给导出脚本加上进度条": ("pi", "pi"),
     "Gemini CLI": ("gemini", "Gemini CLI"),
     "补全设置页的单元测试": ("cursor", "Cursor"),
-    "TRAEX 的一个会话": ("letter", "TRAEX"),
+    "TRAE CLI 的一个会话": ("letter", "TRAE CLI"),
     "amp 的一个会话": ("letter", "amp"),
-    "TRAE CLI 的一个会话": ("trae", "TRAE（命令行版）"),
+    "TRAE 的一个会话": ("trae", "TRAE（命令行版）"),
+    "Grok": ("grok", "Grok"),
+    "Antigravity CLI": ("agy", "Antigravity CLI"),
+    "DeepSeek Harness": ("dsh", "DSH"),
+    "Kimi CLI": ("kimi", "Kimi"),
+    "GitHub Copilot": ("copilot", "GitHub Copilot"),
 }
-TEMPLATES = ("codex", "opencode", "pi", "gemini", "cursor", "trae")
-CLI = ("整理发布说明", "TRAE CLI 的一个会话")  # the ones the mock runs from the command line (#6390)
+TEMPLATES = ("codex", "opencode", "pi", "gemini", "cursor", "trae", "grok", "agy", "dsh", "kimi", "copilot")
+CLI = ("整理发布说明", "TRAE 的一个会话")  # the ones the mock runs from the command line (#6390)
 
 
 def ok(msg):
@@ -73,16 +79,16 @@ def check_sidebar(page, theme, where):
         r, g, b = [int(v) for v in rgb[rgb.index("(") + 1:rgb.index(")")].split(",")[:3]]
         lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255
         assert (lum < 0.5) == (theme == "light"), (kind, rgb, theme)
-    letters = rows["TRAEX 的一个会话"].locator("[data-agent-mark=letter]").inner_text()
+    letters = rows["TRAE CLI 的一个会话"].locator("[data-agent-mark=letter]").inner_text()
     assert letters == "T", letters
-    ok(f"{where} {theme}: {len(AGENTS)} rows, each mark named, 14 px, before its dot, one color follows the theme, letters for TRAEX and amp, </> on the command line's")
+    ok(f"{where} {theme}: {len(AGENTS)} rows, each mark named, 14 px, before its dot, one color follows the theme, letters for TRAE CLI and amp, </> on the command line's")
 
 
 def settle(page):
     page.wait_for_timeout(500)
 
 
-def run(browser, base, token, shots, channel_note):
+def run(browser, base, token, shots, session_marks_only):
     for width, height, touch in ((1280, 900, False), (390, 844, True)):
         where = "wide" if width > 600 else "390"
         for theme in ("light", "dark"):
@@ -106,17 +112,29 @@ def run(browser, base, token, shots, channel_note):
             # the session header
             page.goto(base + "/s/server/marks-codex")
             header = page.locator("header").first
-            expect(header.locator("[data-agent-mark=codex]")).to_have_attribute("aria-label", "Codex（桌面版）")
-            expect(header.locator('[role="img"][aria-label="Codex（桌面版）"]')).to_have_count(1)
+            expect(header.locator("[data-agent-mark=codex]")).to_have_attribute("data-agent-surface", "desktop")
+            expect(header.locator('[data-agent-device]')).to_have_attribute("aria-label", re.compile("Codex.*桌面版"))
             expect(header.locator("[data-agent-badge]")).to_have_count(0)
             page.wait_for_timeout(600)
             box = header.locator("[data-agent-mark]").bounding_box()
-            assert round(box["width"]) == 16, box
+            assert round(box["width"]) == 14, box
             ok(f"{where} {theme}: the session header names Codex, its desktop app, without a badge")
             if shots:
                 page.screenshot(path=os.path.join(shots, f"header-{where}-{theme}.png"), clip={"x": 0, "y": 0, "width": width, "height": 70})
 
-            if width > 600:
+            page.goto(base + "/s/server/marks-traex")
+            expect(header.locator("[data-agent-mark=letter]")).to_be_visible()
+            expect(header.locator("[data-agent-device]")).to_have_attribute("aria-label", re.compile(r"^TRAE CLI\b"))
+            if shots:
+                page.screenshot(path=os.path.join(shots, f"traecli-{where}-{theme}.png"), clip={"x": 0, "y": 0, "width": width, "height": 70})
+
+            page.goto(base + "/s/server/marks-grok")
+            expect(header.locator("[data-agent-mark=grok]")).to_be_visible()
+            expect(header.locator("[data-agent-device]")).to_have_attribute("aria-label", re.compile("Grok"))
+            if shots:
+                page.screenshot(path=os.path.join(shots, f"grok-{where}-{theme}.png"))
+
+            if width > 600 and not session_marks_only:
                 # the /terminal tree: an agent's pane has its mark, a plain shell none
                 page.goto(base + "/terminal")
                 tree = page.locator("main")
@@ -147,12 +165,20 @@ def run(browser, base, token, shots, channel_note):
                     dialog.screenshot(path=os.path.join(shots, f"palette-{where}-{theme}.png"))
                 page.keyboard.press("Escape")
 
-                # the launcher picker
+                # the launcher picker: New agent's model panel (#5104; it was a row of launcher chips), one group per
+                # launcher whose rows carry the mark of the agent it starts, and the pill the one that runs
                 page.locator('aside button[aria-label="新建 Agent"]').first.click()
-                page.wait_for_timeout(1000)
-                picker = page.locator('[role="dialog"]').last
-                expect(picker.locator("button[aria-pressed] [data-agent-mark]").first).to_be_visible()
-                kinds = picker.locator("button[aria-pressed] [data-agent-mark]").evaluate_all("els => els.map(e => e.dataset.agentMark)")
+                dialog = page.get_by_role("dialog", name="新建 Agent", exact=True)
+                pill = dialog.locator('[data-testid="new-agent-model"] [data-model-pill]')
+                expect(pill).to_have_attribute("data-model-pill", "ready")
+                expect(pill).to_be_enabled()
+                expect(pill.locator('[data-pill-engine] [data-agent-mark="claude"]')).to_have_count(1)
+                pill.click()
+                picker = page.locator("[data-model-panel]")
+                expect(picker).to_be_visible()
+                expect(picker.locator('[role="status"]')).to_have_count(0)  # every launcher's list read
+                kinds = picker.locator('[data-panel-section="provider"]').evaluate_all(
+                    "els => els.map(s => s.querySelector('[data-panel-row] [data-row-setup] [data-agent-mark]')?.dataset.agentMark)")
                 assert kinds == ["claude", "claude", "codex"], kinds
                 ok(f"{where} {theme}: the launcher picker shows the agent each launcher starts: {kinds}")
                 if shots:
@@ -166,13 +192,14 @@ def main():
     ap.add_argument("--shots")
     ap.add_argument("--token", default="mock")
     ap.add_argument("--channel")
+    ap.add_argument("--session-marks-only", action="store_true", help="check the sidebar and chat headers")
     a = ap.parse_args()
     if a.shots:
         os.makedirs(a.shots, exist_ok=True)
     with sync_playwright() as p:
         browser = p.chromium.launch(channel=a.channel) if a.channel else p.chromium.launch()
         try:
-            run(browser, a.base.rstrip("/"), a.token, a.shots, a.channel)
+            run(browser, a.base.rstrip("/"), a.token, a.shots, a.session_marks_only)
         finally:
             browser.close()
     print("PASS web agent marks e2e")

@@ -24,6 +24,13 @@ type messageReceipts struct {
 	Source string               `json:"source"`
 	Chat   string               `json:"chat"`
 	IDs    map[string]time.Time `json:"ids"`
+	// Lines binds a receipt to the rendered speaker and body, without keeping another copy of the text.
+	Lines map[string]messageReceiptLine `json:"lines,omitempty"`
+}
+
+type messageReceiptLine struct {
+	Hash string `json:"hash"`
+	Mine bool   `json:"mine"`
 }
 
 // An intent is installed before any day, receipt or metadata is replaced. Repeating
@@ -107,6 +114,7 @@ func (s *Store) ingestState(source string, sc SourceChat, cut time.Time) (*Chat,
 			_, err := os.Stat(s.path(KindChat, id, "messages", at.In(zone).Format("2006-01-02")+".md"))
 			if os.IsNotExist(err) {
 				delete(r.IDs, key)
+				delete(r.Lines, key)
 			}
 		}
 	}
@@ -132,6 +140,39 @@ func (s *Store) recoverIngest(id string) error {
 	s.lockArchive()
 	defer s.unlockArchive()
 	return s.recoverIngestLocked(id)
+}
+
+// SettleIngest completes a previously installed intent for a source chat.
+// A caller holding a source commit reservation must settle failed writes before
+// releasing that reservation, because recovery itself can publish messages.
+func (s *Store) SettleIngest(source, chat string) error {
+	if s.ReadOnly() {
+		return ErrReadOnly
+	}
+	id := ChatID(source, chat)
+	recovered := false
+	err := func() error {
+		s.ingestMu.Lock()
+		defer s.ingestMu.Unlock()
+		s.chatMu.Lock()
+		defer s.chatMu.Unlock()
+		if _, err := os.Stat(s.path(KindChat, id, ingestJournal)); err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if err := s.recoverIngest(id); err != nil {
+			return err
+		}
+		recovered = true
+		return nil
+	}()
+	if err == nil && recovered {
+		s.notify(KindChat, id, "messages")
+		s.notify(KindChat, id, "metadata")
+	}
+	return err
 }
 
 func (s *Store) recoverIngestLocked(id string) error {
@@ -325,6 +366,7 @@ func (s *Store) pruneReceipts(id, cut string, zone *time.Location) error {
 			_, err := os.Stat(s.path(KindChat, id, "messages", at.In(zone).Format("2006-01-02")+".md"))
 			if errors.Is(err, os.ErrNotExist) {
 				delete(r.IDs, key)
+				delete(r.Lines, key)
 				changed = true
 			}
 		}

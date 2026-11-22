@@ -7,13 +7,14 @@ import { api, enc, errorText, isAbort } from "../../../lib/api";
 import { t } from "../../../i18n";
 import { entryPayload, ENTRY_DRAG_TYPE } from "../../../lib/entry-drag";
 import { FILE_THUMB_FEATURE, markThumbFailed, thumbFailed, thumbSlots, thumbSrc } from "../../../lib/file-thumbs";
-import { gitMark, thumbable, type FsEntry, type FsListing, type GitStatus } from "../../../lib/files";
+import { thumbable, type FsEntry, type FsListing, type GitStatus } from "../../../lib/files";
+import { markFor } from "../../../lib/git-marks";
 import { expandedKey, listingCache, readExpanded, toggleExpanded, treeRows, visibleDirs, withExpanded, writeExpanded, type Listed, type TreeRow } from "../../../lib/files-tree";
 import { hubHas, useStore } from "../../../lib/store";
 import { useFsLive } from "../../../lib/use-fs-live";
-import { Button, copyText, cx, IconButton, Loading, Spinner } from "../../../ui/atoms";
+import { Button, cx, Loading, Spinner } from "../../../ui/atoms";
 import { Icon } from "../../../ui/icons";
-import { RowCheck, rowClick, rowFrameProps, RowMore, type OpTarget, type RowOps } from "./FileOps";
+import { RowCheck, rowClick, RowEnd, rowFrameProps, type OpTarget, type RowOps } from "./FileOps";
 import { Empty, FileGlyph, GitBadge, GitDot } from "./parts";
 
 export function FilesTree({
@@ -201,7 +202,8 @@ function Row({
     );
   }
   const e = r.entry;
-  const mark = gitMark(git, r.path, e.dir);
+  // a lookup in the status's index, not a scan of every changed file per row (lib/git-marks.ts)
+  const mark = markFor(git, r.path, e.dir);
   const hidden = e.name.startsWith(".");
   const x: OpTarget = { path: r.path, name: e.name, dir: e.dir };
   const open = () => (e.dir ? onToggle(r.path) : onOpenFile(r.path));
@@ -237,11 +239,7 @@ function Row({
         <span className="flex-1" />
         {mark && (e.dir ? <GitDot letter={mark} /> : <GitBadge letter={mark} />)}
       </button>
-      {/* hover devices only: on a touch screen it would be an invisible target at the row's end */}
-      <span className="hidden items-center pr-2 opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100 [@media(hover:hover)]:flex">
-        <IconButton icon="copy" label={t("files-tree.copyPath")} onClick={() => copyText(r.path)} size={26} iconSize={13} />
-        <RowMore ops={ops} x={x} open={open} />
-      </span>
+      <RowEnd ops={ops} x={x} open={open} />
     </div>
   );
 }

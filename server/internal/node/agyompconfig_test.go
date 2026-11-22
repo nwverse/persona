@@ -1,10 +1,47 @@
 package node
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 )
+
+func TestAgyLegacyPermissionModeWritesNativeAuto(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", home)
+	path := filepath.Join(home, "settings.json")
+	initial := `{"agentMode":"bypassPermissions","toolPermission":"always-proceed","custom":{"keep":true}}`
+	if err := os.WriteFile(path, []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n := &Node{home: home}
+	if err := n.setAgySetting("agentMode", "bypassPermissions"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["agentMode"] != "auto" || got["toolPermission"] != "always-proceed" || got["custom"].(map[string]any)["keep"] != true {
+		t.Fatalf("unexpected native settings: %s", data)
+	}
+	settings, err := n.getAgySettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, setting := range settings {
+		if setting.Key == "agentMode" && (slices.Contains(setting.Options, "bypassPermissions") || setting.Value != "auto") {
+			t.Fatalf("unsupported native mode offered: %+v", setting)
+		}
+	}
+}
 
 func TestAgySettingsReadWrite(t *testing.T) {
 	home := t.TempDir()
@@ -147,4 +184,47 @@ func stringContains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func TestAgyModelSettingsUseNativeCatalog(t *testing.T) {
+	n, _ := runtimeNode(t)
+	hello := paseoEngineHello()
+	hello["runtime"], hello["agent"], hello["launcher"] = "agy", "agy", "agy"
+	hello["launchers"] = []map[string]any{{"name": "agy", "agent": "agy", "models": []map[string]any{{"id": "future-model", "name": "Future Model"}}}}
+	_ = dialRuntime(t, n, hello)
+	if err := n.setAgySetting("model", "existing-model"); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := n.getAgySettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, setting := range settings {
+		if setting.Key == "model" && (setting.Type != "enum" || len(setting.Options) != 2 || setting.Options[0] != "Future Model" || setting.Options[1] != "existing-model" || setting.Default != "") {
+			t.Fatalf("native model options: %+v", setting)
+		}
+	}
+}
+
+func TestOmpYAMLCommentedHeaderAndWideIndent(t *testing.T) {
+	in := "computer: # desktop control\n  enabled: true # on\ntheme:\n    dark: titanium\n    light: paper\n"
+	v := yamlSimpleParse(in)
+	if v["computer.enabled"] != true || v["theme.dark"] != "titanium" || v["theme.light"] != "paper" {
+		t.Fatalf("%#v", v)
+	}
+	got := yamlSimpleSet(in, "computer.enabled", false)
+	if want := "computer: # desktop control\n  enabled: false\ntheme:\n    dark: titanium\n    light: paper\n"; got != want {
+		t.Fatalf("a commented header is the section, not a reason to add a second one:\ngot\n%s\nwant\n%s", got, want)
+	}
+	got = yamlSimpleSet(in, "theme.dark", "carbon")
+	if want := "computer: # desktop control\n  enabled: true # on\ntheme:\n    dark: carbon\n    light: paper\n"; got != want {
+		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+	got = yamlSimpleSet(in, "theme.contrast", "high")
+	if want := "computer: # desktop control\n  enabled: true # on\ntheme:\n    dark: titanium\n    light: paper\n    contrast: high\n"; got != want {
+		t.Fatalf("a new key follows the section's indent:\ngot\n%s\nwant\n%s", got, want)
+	}
+	if n := strings.Count(yamlSimpleSet(in, "computer.enabled", true), "computer:"); n != 1 {
+		t.Fatalf("duplicate computer: section (%d)", n)
+	}
 }

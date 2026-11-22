@@ -33,9 +33,14 @@ enum LauncherName {
         var readiness: () -> AssistantReadiness? = { nil }
         /// A readiness read here (the one-message try) for the rest of the app.
         var landReadiness: (AssistantReadiness) -> Void = { _ in }
+        /// The hub's computers (the scope's checklist and its per-computer keys).
+        var machines: () -> [Machine] = { [] }
         @MainActor static var live: Deps {
-            .init(api: { AppModel.shared.api }, features: { AppModel.shared.hubFeatures },
-                  readiness: { AppModel.shared.readiness.current }, landReadiness: { AppModel.shared.readiness.land($0) })
+            let app = AppModel.shared
+            let scope = AssistantSettingsRequestScope(app)
+            return .init(api: { scope.api(app) }, features: { app.hubFeatures },
+                         readiness: { app.readiness.current }, landReadiness: { app.readiness.land($0) },
+                         machines: { scope.machines(app) })
         }
     }
 
@@ -47,7 +52,7 @@ enum LauncherName {
         return r.step("claude")?.state == "ok"
     }
 
-    /// The hub's feature for built-in presets, a name it makes up, `display_name` and `assign` (docs/integrations/launchers.md「内置预设」).
+    /// The hub's feature for built-in presets, a name it makes up, `display_name` and `assign` (docs/integrations/launchers.md「Built-in presets」).
     static let presetsFeature = "builtin_presets"
     /// The uses a provider added in the wizard takes over while they are still at their default (docs/assistant/onboarding.md 5.4).
     static let assignPurposes = ["assistant", "agent.new"]
@@ -82,12 +87,16 @@ enum LauncherName {
     }
 
     let existing: LauncherView?
+    /// The import draft this new wizard opened with (#5428), kept to preserve its connection type and fields on Save.
+    private(set) var imported: ProviderImportProvider?
     var kind: Kind = .custom
     var name = ""
     var baseURL = ""
     /// api_key (x-api-key) | bearer.
     var auth = "api_key"
     var apiKey = ""
+    /// The key field takes a secret provider's reference (docs/extensions/secret-providers.md "Launcher keys").
+    var apiKeyByReference = false
     /// Typed headers, "Name: value" a line. Empty keeps what the hub has unless `clearHeaders`.
     var headers = ""
     /// Clear Headers: the stored headers go when saved.
@@ -120,6 +129,11 @@ enum LauncherName {
     var timeoutMS = ""
     var compactWindow = ""
     var maxContext = ""
+    /// Send Through (an existing direct API connection, #4775): the computer whose node sends its requests, "" the hub.
+    var viaMachine = ""
+    /// Where it runs and when its key travels (#2333, `ProviderComputersPage`): a stored provider's as it opened, else
+    /// the hub's defaults. Only fields that differ from what it opened with are sent (`ProviderScopeForm.fields`).
+    var scope = ProviderScopeForm()
 
     private(set) var testing = false
     private(set) var test: LauncherProbeResult?
@@ -142,6 +156,7 @@ enum LauncherName {
         didSet {
             guard presetID != oldValue else { return }
             presetKey = ""
+            presetKeyByReference = false // as the web's form starts over
             presetName = ""
             presetDisplayName = ""
             presetModel = preset?.defaultModel ?? ""
@@ -150,6 +165,8 @@ enum LauncherName {
         }
     }
     var presetKey = ""
+    /// The preset's key field takes a secret provider's reference.
+    var presetKeyByReference = false
     /// Empty: the hub names it after the provider.
     var presetName = ""
     /// Empty: the hub uses the preset's (「智谱 GLM」); any language.
@@ -174,11 +191,11 @@ enum LauncherName {
     var presetsFlow: Bool { isNew && deps.features().contains(Self.presetsFeature) }
     var preset: LauncherPreset? { presets.first { $0.id == presetID } }
     /// "Where to get a model": the built-in providers that say where to sign up.
-    var signupPresets: [LauncherPreset] { presets.filter { $0.isBuiltin && $0.signup != nil } }
+    var signupPresets: [LauncherPreset] { presets.filter { $0.isBuiltin && $0.runsClaude && $0.signup != nil } }
     var presetNameProblem: String? { LauncherName.problem(presetName) }
     private var trimmedKey: String { presetKey.trimmingCharacters(in: .whitespacesAndNewlines) }
     /// A key long enough to be worth testing on its own: a test costs a request, so not on every keystroke.
-    var keyTestable: Bool { (preset?.testable ?? false) && trimmedKey.count >= 8 }
+    var keyTestable: Bool { (preset?.testable ?? false) && !presetKeyByReference && trimmedKey.count >= 8 }
     /// The key test says the provider does not serve this region (#4482): no key will work here, only another
     /// provider, so the wizard offers that instead of testing again (#4526).
     var regionBlocked: Bool { keyTest.map { !$0.ok && $0.code == "region_blocked" } ?? false }
@@ -186,7 +203,7 @@ enum LauncherName {
     /// says the region is blocked (#4526); the user can still turn it on.
     var assign: Bool { assignChoice ?? (!Self.claudeCodeWorks(deps.readiness()) && !regionBlocked) }
     var canSavePreset: Bool {
-        preset != nil && !trimmedKey.isEmpty && presetNameProblem == nil && !keyTesting && !saving
+        preset != nil && !trimmedKey.isEmpty && presetNameProblem == nil && scopeProblem == nil && !keyTesting && !saving
     }
 
     init(existing: LauncherView? = nil, deps: Deps = .live) {
@@ -194,10 +211,12 @@ enum LauncherName {
         self.deps = deps
         guard let e = existing else { return }
         name = e.name
+        viaMachine = e.viaMachine ?? ""
         let url = e.baseURL ?? ""
         kind = url.trimmingCharacters(in: CharacterSet(charactersIn: "/ ")) == Self.anthropicURL ? .anthropic : .custom
         baseURL = kind == .custom ? url : ""
         auth = e.bearerAuth ? "bearer" : "api_key"
+        apiKeyByReference = e.keyReference != nil
         models = e.models ?? []
         defaultModel = e.model ?? ""
         if !defaultModel.isEmpty, !models.contains(where: { $0.id == defaultModel }) { models.insert(ProviderModel(id: defaultModel), at: 0) }
@@ -216,10 +235,92 @@ enum LauncherName {
         timeoutMS = Self.number(e.timeoutMS)
         compactWindow = Self.number(e.compactWindow)
         maxContext = Self.number(e.maxContext)
+        if let s = ProviderScopeForm(view: e) { scope = s }
     }
+
+    /// A provider draft from an import link (#5428), pre-filled as if typed: still a new provider, so Save adds rather
+    /// than edits and nothing is stored until then. Mirrors `init(existing:)`.
+    func applyImport(_ p: ProviderImportProvider) {
+        imported = p
+        name = Self.importID(p)
+        let url = p.baseURL ?? ""
+        kind = url.trimmingCharacters(in: CharacterSet(charactersIn: "/ ")) == Self.anthropicURL ? .anthropic : .custom
+        baseURL = kind == .custom ? url : ""
+        auth = p.auth == "bearer" ? "bearer" : "api_key"
+        apiKey = p.apiKey ?? ""
+        models = p.models ?? []
+        defaultModel = p.model ?? ""
+        if !defaultModel.isEmpty, !models.contains(where: { $0.id == defaultModel }) { models.insert(ProviderModel(id: defaultModel), at: 0) }
+        opusModel = p.opusModel ?? ""
+        sonnetModel = p.sonnetModel ?? ""
+        haikuModel = p.haikuModel ?? ""
+        fableModel = p.fableModel ?? ""
+        smallModel = p.smallModel ?? ""
+        subagentModel = p.subagentModel ?? ""
+        subagentForce = p.subagentForce ?? false
+        effort = p.effort ?? ""
+        proxy = p.proxy ?? ""
+        noProxy = p.noProxy ?? ""
+        proxyMode = Self.proxyMode(proxy: proxy, noProxy: noProxy, gateway: gatewayHost)
+        if proxyMode == .direct { noProxy = "" }
+        timeoutMS = Self.number(p.timeoutMS)
+        compactWindow = Self.number(p.compactWindow)
+        maxContext = Self.number(p.maxContext)
+        headers = p.headers ?? ""
+        env = p.env ?? ""
+    }
+
+    /// Only the user's chosen part of a paste is applied to an existing provider's edit form.
+    func applyPaste(_ draft: ProviderImportDraft, action: ProviderPasteAction) {
+        switch action {
+        case .add:
+            applyImport(draft.provider)
+            if defaultModel.isEmpty { defaultModel = models.first?.id ?? "" }
+        case .merge:
+            var ids = Set(models.map(\.id))
+            models += draft.modelsToAdd.filter { ids.insert($0.id).inserted }
+        case .replaceKey:
+            apiKeyByReference = false
+            apiKey = draft.provider.apiKey ?? ""
+        }
+    }
+
+    /// A new provider's startup id from an import draft (#5428): the draft's own id when it has one, else one made
+    /// from its display name (a cindy link names only a display name), satisfying the wizard's name rule.
+    private static func importID(_ p: ProviderImportProvider) -> String {
+        if let n = p.name?.trimmingCharacters(in: .whitespaces), !n.isEmpty, LauncherName.problem(n) == nil { return n }
+        var id = "", dash = false
+        for c in (p.displayName ?? p.name ?? "").lowercased() {
+            if c.isASCII, c.isLetter || c.isNumber || c == "_" || c == "-" { id.append(c); dash = false }
+            else if !dash { id.append("-"); dash = true }
+        }
+        id = id.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        if id.isEmpty, let host = URL(string: p.baseURL ?? "")?.host() {
+            id = host.split(separator: ".").first.map(String.init) ?? ""
+        }
+        if id.isEmpty { id = "provider" }
+        if let f = id.first, !(f.isLetter || f == "_") { id = "p" + id }
+        if LauncherName.problem(id) != nil { id = "p-" + id }
+        return id
+    }
+
+    /// The Computers row is offered: a stored provider whose hub returned its scope, a new one when the hub takes scopes
+    /// (`launcher_scope`). An older hub sees the wizard as it was, and nothing of the scope is sent.
+    var scopeShown: Bool {
+        if let e = existing { return e.share != nil }
+        return deps.features().contains(ProviderScopeForm.feature)
+    }
+
+    /// Selected Computers with none ticked: the hub would refuse it, so Save waits.
+    var scopeProblem: String? { scopeShown ? scope.problem : nil }
 
     var isNew: Bool { existing == nil }
     var hasStoredKey: Bool { existing?.hasKey == true }
+    /// The hub takes a provider's key as a secret provider's reference (`launcher_secret_references`).
+    var keyReferences: Bool { deps.features().contains("launcher_secret_references") }
+    /// A reference is typed that is not saved yet: Test Connection and Get Model List wait for the save, which checks that
+    /// it resolves; a probe would hand its value to the address in the request. Once saved, the provider is probed by name.
+    var referencePending: Bool { apiKeyByReference && !key.isEmpty }
     var hasStoredHeaders: Bool { existing?.hasHeaders == true && !clearHeaders }
     var hasStoredEnv: Bool { existing?.hasEnv == true && !clearEnv }
 
@@ -252,9 +353,9 @@ enum LauncherName {
     /// The model Test Connection asks for: the default, else the first picked or listed.
     var testModel: String { [defaultModel, models.first?.id ?? "", discovered.first?.id ?? ""].first { !$0.isEmpty } ?? "" }
 
-    var canTest: Bool { connectionReady && !testModel.isEmpty && !testing }
+    var canTest: Bool { connectionReady && !testModel.isEmpty && !testing && !referencePending }
 
-    var canSave: Bool { connectionReady && models.contains { $0.id == defaultModel } && proxyProblem == nil && !saving }
+    var canSave: Bool { connectionReady && models.contains { $0.id == defaultModel } && proxyProblem == nil && scopeProblem == nil && !saving }
 
     /// What the models step lists: the picked ones, then the rest of what the gateway serves.
     var choices: [ProviderModel] {
@@ -290,9 +391,19 @@ enum LauncherName {
 
     func model(_ id: String) -> ProviderModel? { models.first { $0.id == id } ?? discovered.first { $0.id == id } }
 
+    /// A direct API connection: what the hub calls itself, so it can send through a computer.
+    var providerKind: String { existing?.kind ?? imported?.kind ?? "launcher" }
+    var providerAgent: String? { existing?.agent ?? imported?.agent }
+    var isAPI: Bool { providerKind == "api" }
+    /// Send Through's choices: the hub's computers, and the stored one even when the hub no longer lists it.
+    var viaChoices: [(id: String, name: String)] {
+        let list = deps.machines().map { (id: $0.id, name: $0.name) }
+        return viaMachine.isEmpty || list.contains(where: { $0.id == viaMachine }) ? list : list + [(id: viaMachine, name: viaMachine)]
+    }
+
     private var probe: LauncherProbe {
-        LauncherProbe(name: existing?.name, baseURL: address, auth: authMode, apiKey: key.isEmpty ? nil : key,
-                      headers: headersValue, model: testModel.isEmpty ? nil : testModel)
+        LauncherProbe(name: existing?.name, baseURL: address, auth: authMode, apiKey: key.isEmpty || apiKeyByReference ? nil : key,
+                      headers: headersValue, model: testModel.isEmpty ? nil : testModel, viaMachine: isAPI ? viaMachine : nil)
     }
 
     func runTest() async {
@@ -307,7 +418,7 @@ enum LauncherName {
     }
 
     func discover() async {
-        guard connectionReady, !discovering, let api = deps.api() else { return }
+        guard connectionReady, !referencePending, !discovering, let api = deps.api() else { return }
         discovering = true
         defer { discovering = false; discoveredOnce = true }
         do {
@@ -376,14 +487,20 @@ enum LauncherName {
         let e = existing
         let t = { (s: String) in s.trimmingCharacters(in: .whitespaces) }
         let (proxyValue, noProxyValue) = proxyValues
-        return LauncherInput(name: trimmedName, baseURL: address, model: defaultModel, smallModel: t(smallModel), subagentModel: t(subagentModel),
-                             customModel: e?.customModel ?? "", customModelName: e?.customModelName ?? "",
-                             customModelDescription: e?.customModelDescription ?? "", args: e?.args ?? [],
-                             apiKey: key.isEmpty ? nil : key, kind: e?.kind ?? "launcher", api: "messages", auth: authMode,
+        var input = LauncherInput(name: trimmedName, baseURL: address, model: defaultModel, smallModel: t(smallModel), subagentModel: t(subagentModel),
+                             customModel: e?.customModel ?? imported?.customModel ?? "", customModelName: e?.customModelName ?? imported?.customModelName ?? "",
+                             customModelDescription: e?.customModelDescription ?? imported?.customModelDescription ?? "", args: e?.args ?? imported?.args ?? [],
+                             apiKey: key.isEmpty || apiKeyByReference ? nil : key, kind: providerKind, api: e?.api ?? imported?.api ?? "messages", auth: authMode,
                              models: models, opusModel: t(opusModel), sonnetModel: t(sonnetModel), haikuModel: t(haikuModel),
                              fableModel: t(fableModel), subagentForce: subagentForce, headers: headersValue, env: envValue, proxy: proxyValue,
                              noProxy: noProxyValue, timeoutMS: Int(t(timeoutMS)) ?? 0, compactWindow: Int(t(compactWindow)) ?? 0,
                              maxContext: Int(t(maxContext)) ?? 0, effort: t(effort))
+        if apiKeyByReference, !key.isEmpty { input.apiKeyReference = key }
+        if isNew, let displayName = imported?.displayName, !displayName.isEmpty { input.displayName = displayName }
+        if isNew { input.agent = imported?.agent }
+        if scopeShown { scope.apply(to: &input, old: e, machines: deps.machines(), kind: input.kind ?? "launcher") }
+        if isAPI, viaMachine != (e?.viaMachine ?? "") { input.viaMachine = viaMachine }
+        return input
     }
 
     /// Saves the provider; false (with `error`) when the hub refused it.
@@ -420,7 +537,8 @@ enum LauncherName {
     /// What the key test sends for a preset: the key, how the gateway takes it and the preset; the model only when another than
     /// the default was picked (the hub fills in the address and its default model).
     var keyProbe: LauncherProbe? {
-        guard let p = preset else { return nil }
+        // A reference is checked by the save: sent as the key, its value would go to the preset's address.
+        guard let p = preset, !presetKeyByReference else { return nil }
         let m = presetModel.trimmingCharacters(in: .whitespaces)
         return LauncherProbe(name: nil, baseURL: nil, auth: p.auth ?? "api_key", apiKey: trimmedKey, headers: nil,
                              model: m.isEmpty || m == p.defaultModel ? nil : m, preset: p.id)
@@ -458,11 +576,15 @@ enum LauncherName {
     var presetInput: LauncherInput? {
         guard let p = preset else { return nil }
         let m = presetModel.trimmingCharacters(in: .whitespaces)
-        return LauncherInput(name: presetName.trimmingCharacters(in: .whitespaces), baseURL: "", model: m == p.defaultModel ? "" : m,
-                             smallModel: "", subagentModel: "", customModel: "", customModelName: "", customModelDescription: "",
-                             args: [], apiKey: trimmedKey, preset: p.id,
-                             displayName: presetDisplayName.trimmingCharacters(in: .whitespaces),
-                             assign: assign ? Self.assignPurposes : nil)
+        let assigning = p.runsClaude && assign
+        var input = LauncherInput(name: presetName.trimmingCharacters(in: .whitespaces), baseURL: "", model: m == p.defaultModel ? "" : m,
+                                  smallModel: "", subagentModel: "", customModel: "", customModelName: "", customModelDescription: "",
+                                  args: [], apiKey: presetKeyByReference ? nil : trimmedKey,
+                                  apiKeyReference: presetKeyByReference ? trimmedKey : nil, preset: p.id,
+                                  displayName: presetDisplayName.trimmingCharacters(in: .whitespaces),
+                                  assign: assigning ? Self.assignPurposes : nil)
+        if scopeShown { scope.apply(to: &input, old: nil, machines: deps.machines(), assign: assigning, kind: p.kind) }
+        return input
     }
 
     /// Adds the preset's provider; false (with `error`) when the hub refused it.

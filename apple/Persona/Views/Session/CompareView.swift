@@ -16,7 +16,7 @@ extension APIClient {
     }
 }
 
-/// Which two versions of a changed file to compare (docs/apple/ios.md「对比」): an unstaged change is the index against the
+/// Which two versions of a changed file to compare (docs/apple/ios.md「Compare」): an unstaged change is the index against the
 /// working tree, a staged one HEAD against the index, a commit's file its parent against the commit.
 nonisolated struct CompareVersions: Hashable, Sendable {
     /// A revision for `git/blob`, or nil for the working tree's file.

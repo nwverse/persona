@@ -3,28 +3,36 @@
 // kept in one module-level list so the sidebar's badge and the page share it. Pulled on first use, again on `inbox`
 // pushes and on (re)connect. Marking done applies at once and is sent in the background; a failure puts it back.
 //
-// The pure parts (filters, sections, labels, the "Hand to AI" message, Feishu message parts) are plain functions so the
-// tests can run them without a DOM.
+// The pure parts (filters, sections, labels, the "Hand to AI" message) are plain functions so the tests can run them
+// without a DOM.
 
-import { itemHeaders, otherManager, sameManager } from "./manager-choice";
-import { formatDate, t } from "../i18n";
+import { itemHeaders, otherManager, sameManager, stampedHeaders } from "./manager-choice";
+import { scoped, useScope } from "./current-assistant";
+import { t } from "../i18n";
 import { useEffect, useRef, useSyncExternalStore } from "react";
-import { api, ApiError, enc, errorText, getToken } from "./api";
-import { BASE } from "./base";
+import { api, ApiError, enc, errorText } from "./api";
 import type { AgentMutes } from "./agent-groups";
-import { connectorOpenTitle } from "./connectors";
+import { agentName } from "./agent-kind";
+import { connectorOpenTitle } from "./connector-profiles";
 import { contextBody } from "./context-body";
-import { larkPath } from "./lark-accounts";
-import { baseName } from "./format";
 import type { Route } from "./router";
 import { isResumed } from "./reconnect";
 import { sameValue } from "./stable-lines";
 import { onHubEvent } from "./store";
-import type { AssistantInfo, Interaction, Session } from "./types";
+import type { Interaction, Session } from "./types";
 import { toast } from "../ui/atoms";
 import { byTime } from "./times";
+import { homeKey } from "./folded-rows";
 import { inFolderFilter } from "./inbox-folders";
-import { actedText, actOnSuggestion, statusOf, type ChainEntry, type InboxHandling, type InboxRelated, type InboxStatus, type InboxSuggestion, type SuggestionAction } from "./inbox-events";
+import { actedText, actOnSuggestion, statusOf, type ChainEntry, type InboxHandling, type InboxRelated, type InboxStatus, type InboxSuggestion, type InboxSuggestionAttempt, type SuggestionAction } from "./inbox-events";
+import type { MailAccount } from "./mail";
+
+// Not the Inbox's: re-exported from their own modules until their importers import them from there (#11538).
+export { withToken } from "./media-url";
+export { shortTime } from "./format";
+export { conversationRoute } from "./conversation-page";
+export { comparePosition, mergeMessages, type LarkMention, type LarkMessage, type LarkPage, type LarkPart } from "./lark-messages";
+export type { MailAccount };
 
 // ── wire types (docs/protocol/protocol.md "Inbox API") ─────────
 
@@ -66,6 +74,8 @@ export interface InboxDoc {
 }
 
 export interface InboxAgent {
+  /** The business task this event is about; distinct from its draft-processing session. */
+  todo_id?: string;
   state: string; // skipped | queued | running | drafted | failed
   task?: string;
   reason?: string;
@@ -75,6 +85,19 @@ export interface InboxAgent {
   note?: string;
   error?: string;
   changes?: DocChange[];
+}
+
+/** Deterministic PR/Issue auto-forwarding metadata persisted on an Inbox item (#12492). */
+export interface InboxTodoForward {
+  todo_id: string;
+  todo_title?: string;
+  canonical_url?: string;
+  match_kind?: "pull_request" | "issue" | string;
+  status: "forwarded" | "queued" | "resumed" | "fallback" | "failed" | string;
+  machine_id?: string;
+  session_id?: string;
+  reason?: string;
+  forwarded_at?: string;
 }
 
 export interface InboxItem {
@@ -87,14 +110,20 @@ export interface InboxItem {
   account: string;
   account_name: string;
   title: string;
+  /** Where the matter happens: a group's name, the other person of a direct chat, or a repository. */
+  where?: string;
   sender?: string;
   avatar?: string;
+  avatar_url?: string;
   preview: string;
   count: number;
   started_at?: string;
   updated_at?: string;
   tier?: string;
   summary?: string;
+  /** An assistant row's text as Markdown, its line breaks kept (#9041): the detail draws it; `summary` and `preview`
+   *  are the same words without the marks. Older hubs leave it out. */
+  body?: string;
   reason?: string;
   read?: boolean;
   done_at?: string | null;
@@ -106,7 +135,7 @@ export interface InboxItem {
     /** The Lark gateway account the chat is in; `ol_account` only when that is not the hub's own (docs/extensions/feishu.md "Multiple accounts"). */
     account_id?: number; ol_account?: number;
   };
-  mail?: { account_id: string; mailbox: string; uids: number[]; message_id?: string; from?: { name?: string; email?: string }; direct?: boolean; thread?: string };
+  mail?: { account_id: string; mailbox?: string; uids: number[]; message_id?: string; from?: { name?: string; email?: string }; direct?: boolean; thread?: string };
   doc?: InboxDoc;
   moment?: { post_id: string; notice?: string; reply_to?: string; my_post?: boolean; post_text?: string };
   /** A connector's thread (GitHub…): `source` is the connector's id, `account_name` its name. */
@@ -114,9 +143,11 @@ export interface InboxItem {
   /** Only in GET /inbox/{id}: the conversation as text. */
   context?: string;
   agent?: InboxAgent;
+  /** Deterministic PR/Issue auto-forward status and linked to-do metadata (#12492). */
+  todo_forward?: InboxTodoForward;
   /** New foreign mail translated by the hub as it came in (for a device whose Settings › Translation asks), by target language. */
   translations?: Record<string, { subject: string; preview: string }>;
-  /** What it grew out of (docs/assistant/inbox.md "Threads of origin"): another item, a todo or an agent session ("<machine>/<session>"). */
+  /** What it grew out of (docs/assistant/inbox.md "Relationships: parents and children"): another item, a todo or an agent session ("<machine>/<session>"). */
   parent?: InboxParent;
   /** The folder path it is filed under ("work/alerts/engine"; docs/assistant/inbox.md "Folders"); absent: unfiled. `folder_by`
    *  says who filed it: the model, or the user (then the model leaves it alone). */
@@ -124,17 +155,25 @@ export interface InboxItem {
   folder_by?: "model" | "user";
   /** What it can be muted by (docs/assistant/inbox.md "Muting"): its repository, chat or sender in its source. */
   mutes?: InboxMuteOption[];
-  // ── events (docs/assistant/inbox.md "Events, handling chain, suggestions"; lib/inbox-events.ts): absent from an older hub ──
+  // ── events (docs/assistant/inbox.md "Events and handling chain"; lib/inbox-events.ts): absent from an older hub ──
   /** The section of an open item; absent: by `tier` as before. */
   status?: InboxStatus;
+  /** What or whom it waits on, the next step, and when to look again. */
+  follow?: { who?: string; next?: string; check_at?: string };
+  /** The manager's state key; apps translate it with the shared table in spec/fixtures/inbox/now.json. */
+  now?: string;
   /** Urgent: stays in "Needs you" while the AI prepares a suggestion. */
   urgent?: boolean;
   /** Summary by the manager: background, progress, where it is stuck. */
   recap?: string;
   handling?: InboxHandling;
   suggestion?: InboxSuggestion;
+  /** Authoritative reply outcomes retained by the server, including superseded suggestion versions. */
+  suggestion_attempts?: InboxSuggestionAttempt[];
   /** Handling chain, oldest first. */
   chain?: ChainEntry[];
+  /** The rows merged into this one by hand (the hub hides them; #6480). */
+  merged_from?: { id: string; source: string; account_name?: string; title?: string }[];
   related?: InboxRelated[];
   /** The conversations it was handed to with "Hand to AI" (POST /inbox/{id}/handoff), oldest first: they may write back to it. */
   handoffs?: InboxHandoff[];
@@ -164,33 +203,6 @@ export interface InboxMute extends InboxMuteOption {
   manager?: string;
 }
 
-/** The menu's words for a mute option (iOS MuteOption.title). */
-export function muteTitle(o: Pick<InboxMuteOption, "tag">): string {
-  return t(o.tag === "repo" ? "lib-inbox.mute_repo" : o.tag === "chat" ? "lib-inbox.mute_chat" : "lib-inbox.mute_sender");
-}
-
-/** The name under the menu's words, on one line: a repository without its owner (example-repo). */
-export function muteShortName(o: InboxMuteOption): string {
-  return o.tag === "repo" ? o.name.split("/").pop() || o.name : o.name;
-}
-
-/** What kind of thing a mute is, for people: "Repository" / "Chat" / "Sender". */
-export function muteTagName(tag: string): string {
-  return t(tag === "repo" ? "lib-inbox.mute_tag_repo" : tag === "chat" ? "lib-inbox.mute_tag_chat" : "lib-inbox.mute_tag_sender");
-}
-
-/** The "Muted" list's second line: the source's name, then "Repository" / "Chat" / "Sender". */
-export function muteLine(m: InboxMute): string {
-  return [m.source_name || m.source, muteTagName(m.tag)].join(" · ");
-}
-
-/** The mutes, newest first (iOS InboxMutesView). */
-export function sortMutes(list: InboxMute[]): InboxMute[] {
-  // By time, not by string: RFC3339Nano drops trailing zeros, so "…:05Z" and "…:05.1Z" compare the wrong way.
-  const ts = (m: InboxMute) => (m.created_at ? Date.parse(m.created_at) || 0 : 0);
-  return [...list].sort((a, b) => ts(b) - ts(a));
-}
-
 export type InboxParentKind = "inbox" | "todo" | "session";
 export interface InboxParent { kind: InboxParentKind; id: string; by?: "continues" | "connector" | "user" }
 
@@ -203,25 +215,11 @@ export interface InboxTree {
   children: InboxItem[];
 }
 
-/** `manager`: whose inbox the node is in (an item's, docs/assistant/managers.md "Clients"); none: the default's. */
-export function fetchInboxTree(kind: InboxParentKind, id: string, manager?: string): Promise<InboxTree> {
-  const path = kind === "session" ? id.split("/").map(enc).join("/") : enc(id).replace(/%3A/gi, ":");
-  return api<InboxTree>(`/inbox/tree/${kind}/${path}`, { headers: itemHeaders(manager) });
-}
-
 /** The route of an inbox item: its id, and its manager when that is another than the default (two managers may list
  *  the same id). */
 export function itemRoute(it: { id: string; manager?: string }): Extract<Route, { name: "inbox" }> {
   const other = otherManager(it.manager);
   return other ? { name: "inbox", id: it.id, manager: other } : { name: "inbox", id: it.id };
-}
-
-/** Where a node of a line opens; `manager`: whose line it is (its items are that manager's too). */
-export function parentRoute(p: InboxParent, manager?: string): Route | undefined {
-  if (p.kind === "inbox") return itemRoute({ id: p.id, manager });
-  if (p.kind === "todo") return { name: "todos", id: p.id };
-  const i = p.id.indexOf("/");
-  return i > 0 && i < p.id.length - 1 ? { name: "session", mid: p.id.slice(0, i), sid: p.id.slice(i + 1) } : undefined;
 }
 
 export interface InboxConnector {
@@ -235,13 +233,11 @@ export interface InboxConnector {
   /** Where a reply goes and who sees it. */
   reply_to?: string;
   can_reply?: boolean;
+  /** The thread's picture as the hub's avatars route serves it (`ItemAvatar`, docs/protocol/protocol.md "Avatars"): the
+   *  other person of a private chat, a group's own. Apart from the item's `avatar` (Feishu's). Without one (an older
+   *  hub, a connector that sends none), the initial. */
+  avatar_url?: string;
   rule_tier?: string;
-}
-
-export interface MailAccount {
-  id: string;
-  name?: string;
-  email: string;
 }
 
 // ── one item ─────────────────────────────────────────────
@@ -269,15 +265,16 @@ export function isLark(it: InboxItem): boolean {
   return it.source === "lark";
 }
 
+/** Lark in the filter chips and source groups: the Lark gateway's items and lark-cli's ("Lark · my messages") are one
+ *  "Lark", so the list never shows two Lark sources side by side. */
+export function isLarkSource(it: InboxItem): boolean {
+  return isLark(it) || it.source === "larkcli";
+}
+
 /** The thread as people write it (example-org/example-repo#12), undefined when it is only an id. */
 export function connectorReference(it: InboxItem): string | undefined {
   const t = it.connector?.thread;
   return t && t.includes("#") ? t : undefined;
-}
-
-/** Whether "AI draft reply" applies: a connector's thread only when the hub can answer it (a CI run cannot). */
-export function canDraft(it: InboxItem): boolean {
-  return !it.connector || !!it.connector.can_reply;
 }
 
 /** The button that opens a connector item's `open_url`, where the user answers it. */
@@ -295,11 +292,12 @@ export function tightCJK(text: string): string {
   return text.replace(/(?<=\p{Script=Han}) (?=\p{Script=Han})/gu, "");
 }
 
-/** A connector item's `open_url` as the browser opens it; an sms: one carries the AI twin's draft as its body. */
+/** A connector item's `open_url` as the browser opens it; an sms: one carries the reply as its body (the kept edit, or
+ *  the AI twin's draft). */
 export function openURL(it: InboxItem): string | undefined {
   const raw = it.connector?.open_url;
   if (!raw) return undefined;
-  const draft = agentDraft(it);
+  const draft = unsentReplies.get(itemKey(it)) ?? agentDraft(it);
   return raw.startsWith("sms:") && draft ? `${raw}&body=${encodeURIComponent(draft)}` : raw;
 }
 
@@ -346,6 +344,7 @@ export function docTypeName(type?: string): string {
 /** Who wrote what: the row's line under the summary (or its second line before triage); `preview` is the hub's
  * translation of a foreign mail's when it is shown. */
 export function fromLine(it: InboxItem, preview?: string): string {
+  if (it.source === "assistant") return it.preview; // the assistant's own row: the tag already says who, so no "Assistant:" prefix
   if (it.doc) return `${docTypeName(it.doc.type)} · ${it.preview}`; // the preview names who: "<name> mentioned you"
   if (it.moment) return t("lib-inbox.sender_line", { sender: it.sender ?? "", text: it.preview });
   if (it.connector) {
@@ -359,38 +358,28 @@ export function fromLine(it: InboxItem, preview?: string): string {
   return t("lib-inbox.sender_line", { sender: it.sender, text: it.preview });
 }
 
-/** Where it came from, for the detail page's subtitle. */
-export function sourceLine(it: InboxItem): string {
-  if (it.doc) return [docTypeName(it.doc.type), it.preview].filter(Boolean).join(" · ");
-  if (it.moment) return it.moment.my_post ? t("lib-inbox.moments_my_post") : t("lib-inbox.moments");
-  if (it.connector) return [it.account_name || it.source, connectorReference(it)].filter(Boolean).join(" · ");
-  // Lark · <name> while the hub reads more than one Feishu account
-  // i18n-ignore: the hub names its Lark accounts "Lark · <name>" in Chinese
-  if (isLark(it)) return [it.account_name?.startsWith("飞书 · ") ? it.account_name : t("lib-inbox.lark"), it.lark?.is_group ? t("lib-inbox.kind_group") : it.kind === "bot" ? t("lib-inbox.kind_bot") : t("lib-inbox.kind_dm")].join(" · ");
-  const from = it.mail?.from;
-  return [it.account_name, from?.name && from.email ? `${from.name} <${from.email}>` : from?.email || it.sender].filter(Boolean).join(" · ");
+/** The mail's IMAP folder. The default inbox needs no label. */
+export function sourceMailbox(it: InboxItem): string | undefined {
+  const mailbox = it.mail?.mailbox;
+  return mailbox && mailbox.toLowerCase() !== "inbox" ? mailbox : undefined;
 }
 
 export function agentDraft(it: InboxItem): string | undefined {
   return it.agent?.state === "drafted" && it.agent.draft ? it.agent.draft : undefined;
 }
 
+/** A proposed status move's key: its row and field. */
+export const docChangeKey = (c: DocChange) => `${c.ref}|${c.field}`;
+
+/** The AI twin's proposed status moves the user left ticked (`dropped`: the unticked ones' docChangeKey): what goes
+ *  with the reply. */
+export function keptChanges(it: InboxItem, dropped: readonly string[]): DocChange[] {
+  const changes = agentDraft(it) ? it.agent?.changes ?? [] : [];
+  return dropped.length ? changes.filter((c) => !dropped.includes(docChangeKey(c))) : changes;
+}
+
 export function agentWorking(it: InboxItem): boolean {
   return it.agent?.state === "queued" || it.agent?.state === "running";
-}
-
-/** The AI twin's proposed status move as a line ("Status: In progress → Done · write the doc", in Chinese). */
-export function docChangeLine(change: DocChange, doc?: InboxDoc): string {
-  const row = doc?.rows?.find((r) => r.ref === change.ref);
-  const st = row?.status?.find((s) => s.field === change.field);
-  if (!row || !st) return change.value;
-  return t("lib-inbox.doc_change", { field: st.name, from: st.value || t("lib-inbox.not_set"), to: change.value, row: row.title });
-}
-
-/** The part of an address before the @ (chips stay short), unless that alone says nothing ("c@…"). */
-export function mailShort(email: string): string {
-  const name = email.split("@")[0] ?? email;
-  return name.length >= 3 ? name : email;
 }
 
 /** Item ids are `lark:<feed>:<pos>` / `mail:<acc>:<thread>:<uid>`: the colons stay as they are in the path. */
@@ -412,28 +401,6 @@ export function sameItem(a: { id: string; manager?: string }, b: { id: string; m
 /** The header naming an item's manager on a request about it (none for the default's). */
 export const itemRequest = (it: { manager?: string }) => itemHeaders(it.manager);
 
-/** Media under /api/ for an <img>: the token goes in the query (an <img> can't send a header), and the path under the
- * sub-path the page is served at (lib/base.ts). */
-export function withToken(url: string | undefined, token = getToken(), base = BASE): string | undefined {
-  if (!url) return undefined;
-  if (!url.startsWith("/api/")) return url;
-  return `${base}${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
-}
-
-/** 18:20 today, "Yesterday", "Wed" within the week, "Oct 28" this year, else 2025-10-28 (LarkTime.short). */
-export function shortTime(iso?: string, now = new Date()): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime()) || d.getFullYear() < 2000) return "";
-  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const days = Math.round((day(now) - day(d)) / 86400_000);
-  if (days <= 0) return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  if (days === 1) return t("lib-inbox.yesterday");
-  if (now.getTime() - d.getTime() < 6 * 86400_000) return formatDate(d, { weekday: "short" });
-  if (d.getFullYear() === now.getFullYear()) return formatDate(d, { month: "short", day: "numeric" });
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
 // ── filters and sections ─────────────────────────────────
 
 /** source: "" all, "feishu", a mail account id or a connector's id; kind: "" all, mention, dm, group, mail, agent;
@@ -449,6 +416,8 @@ export const KIND_FILTERS: { key: string; label: string }[] = [
   { key: "mention", label: AT_ME },
   { key: "dm", label: t("lib-inbox.kind_dm") },
   { key: "group", label: t("lib-inbox.kind_group") },
+  { key: "bot", label: t("lib-inbox.kind_bot") },
+  { key: "doc", label: t("lib-inbox.filter_doc") },
   { key: "mail", label: t("lib-inbox.kind_mail") },
   { key: "agent", label: "Agent" },
 ];
@@ -459,15 +428,15 @@ function hasText(fields: (string | undefined)[], query: string): boolean {
 }
 
 export function matches(it: InboxItem, f: InboxFilter): boolean {
-  if (f.source === "feishu" && !isLark(it)) return false;
+  if (f.source === "feishu" && !isLarkSource(it)) return false;
   if (f.source && f.source !== "feishu" && it.account !== f.source && it.mail?.account_id !== f.source) return false;
   if (f.kind === "agent") return false; // only the waiting agents
   if (f.folder && !inFolderFilter(it, f.folder)) return false;
   if (f.kind) {
-    const ok = it.kind === f.kind || (f.kind === "group" && it.kind === "bot") || (f.kind === "mention" && (it.kind === "doc" || (it.kind === "moment" && kindLabel(it) === AT_ME)));
+    const ok = it.kind === f.kind || (f.kind === "mention" && (it.kind === "doc" || (it.kind === "moment" && kindLabel(it) === AT_ME)));
     if (!ok) return false;
   }
-  return hasText([it.title, it.sender, it.preview, it.summary], f.query);
+  return hasText([it.title, it.sender, it.preview, it.summary, it.where], f.query);
 }
 
 const byUpdated = (a: InboxItem, b: InboxItem) => byTime(b.updated_at, a.updated_at) || a.id.localeCompare(b.id);
@@ -492,15 +461,15 @@ export function sections(items: InboxItem[], f: InboxFilter): InboxSections {
   return out;
 }
 
-/** The sidebar badge: open items that need the user. */
+/** The sidebar badge: unread open items in Needs you; reading never completes them. */
 export function badgeCount(items: InboxItem[]): number {
-  return items.filter((it) => !isDone(it) && statusOf(it) === "action").length;
+  return items.filter((it) => !isDone(it) && !it.read && statusOf(it) === "action").length;
 }
 
 /** The connectors with items in the list (GitHub…), one filter chip each, in the order they first come. */
 export function connectorSources(items: InboxItem[]): { id: string; name: string }[] {
   const seen = new Map<string, string>();
-  for (const it of items) if (it.connector && !seen.has(it.account)) seen.set(it.account, it.account_name || it.source);
+  for (const it of items) if (it.connector && !isLarkSource(it) && !seen.has(it.account)) seen.set(it.account, it.account_name || it.source);
   return [...seen].map(([id, name]) => ({ id, name }));
 }
 
@@ -514,8 +483,11 @@ export function mailAccounts(accounts: MailAccount[], items: InboxItem[]): MailA
 
 // ── agents waiting on the user (they head "Needs you") ────────
 
-/** Muted: the agent itself, or its space unless the agent was turned back on there (the hub's rule). */
+/** Muted: the agent itself, or its space unless the agent was turned back on there (the hub's rule). A child session's
+ *  card goes by its parent's (#5120): the child has no row of its own to mute it from, and the switcher's count
+ *  (lib/manager-attention.ts) mutes it the same way. */
 export function interactionMuted(ix: Interaction, sessions: Record<string, Session[]>, mutes: AgentMutes): boolean {
+  if (ix.folded_under) return interactionMuted({ ...ix, session_id: ix.folded_under, folded_under: undefined }, sessions, mutes);
   const key = `${ix.machine_id}/${ix.session_id}`;
   if (mutes.sessions.includes(key)) return true;
   if (mutes.allowed?.includes(key)) return false;
@@ -523,10 +495,11 @@ export function interactionMuted(ix: Interaction, sessions: Record<string, Sessi
   return Boolean(space && mutes.spaces.includes(`${ix.machine_id}/${space}`));
 }
 
-/** What it waits for: "Claude is asking you", "Plan waiting for your approval"…; Persona's ask_user and other agents by name. */
+/** What it waits for: "Claude is asking you", "Plan waiting for your approval"…; Persona's ask_user and other agents by
+ *  name: the card's own name for an agent the app doesn't know (a Paseo provider's label, "Grok", #8142), never its id. */
 export function interactionTitle(ix: Interaction): string {
   if (ix.tool_name === "ask_user") return t("lib-inbox.ix_persona_asks");
-  const name = ix.agent === "codex" ? "Codex" : ix.agent === "traex" ? "TRAEX" : ix.agent && ix.agent !== "claude" ? ix.agent : "";
+  const name = ix.agent && ix.agent !== "claude" ? agentName(ix.agent, ix.agent_label) : "";
   if (name && ix.kind === "question") return t("lib-inbox.ix_named_asks", { name });
   if (name && ix.kind === "permission") return t("lib-inbox.ix_named_permission", { name });
   if (ix.kind === "elicitation") return ix.elicitation?.mode === "url" ? t("lib-inbox.ix_elicitation_url") : t("lib-inbox.ix_elicitation_form");
@@ -541,7 +514,7 @@ export function interactionAsk(ix: Interaction): string {
     case "question":
       return ix.questions?.[0]?.question || ix.summary || "";
     case "permission":
-      return ix.summary || str(input?.description) || str(input?.command) || ix.tool_name || "";
+      return ix.summary || str(input?.description) || str(input?.command) || ix.tool_title || ix.tool_name || "";
     case "screen":
       return ix.dialog?.question || ix.summary || "";
     case "elicitation":
@@ -551,27 +524,24 @@ export function interactionAsk(ix: Interaction): string {
   }
 }
 
-export function interactionAgentTitle(ix: Interaction): string {
-  return ix.session_title?.trim() || baseName(ix.cwd) || "Agent";
-}
-
 export function waitingAgents(interactions: Interaction[], sessions: Record<string, Session[]>, mutes: AgentMutes, f: InboxFilter): Interaction[] {
   if (f.source || f.folder || (f.kind && f.kind !== "agent")) return [];
-  return interactions
+  const shown = interactions
     .filter((ix) => !interactionMuted(ix, sessions, mutes) && hasText([ix.session_title, ix.summary, interactionTitle(ix), interactionAsk(ix)], f.query))
     .sort((a, b) => byTime(a.created_at, b.created_at) || a.id.localeCompare(b.id));
+  return withChildCardsUnderParents(shown);
 }
 
-/** A conversation's page: the assistant's are in Persona (/persona/<sid>), an agent's is /s/<machine>/<sid>. */
-export function conversationRoute(mid: string, sid: string, sessions: Record<string, Session[]>, assistant: AssistantInfo | null): Route {
-  const s = (sessions[mid] ?? []).find((x) => x.session_id === sid);
-  const isAssistant = s?.assistant || (assistant?.machine_id === mid && assistant.conversations.some((c) => c.session_id === sid));
-  return isAssistant ? { name: "persona", sid } : { name: "session", mid, sid };
+/** A child session's cards come with its parent's (#5120), where the parent's oldest card (or its first child card) is;
+ *  the rest keep their order. The same list when no card is a child's. */
+function withChildCardsUnderParents(cards: Interaction[]): Interaction[] {
+  if (!cards.some((ix) => ix.folded_under)) return cards;
+  const homes = new Set(cards.filter((ix) => ix.folded_under).map(homeKey));
+  const group = (ix: Interaction) => (ix.session_id && homes.has(homeKey(ix)) ? homeKey(ix) : `card:${ix.id}`);
+  const at = new Map<string, number>();
+  for (const ix of cards) if (!at.has(group(ix))) at.set(group(ix), at.size);
+  return [...cards].sort((a, b) => at.get(group(a))! - at.get(group(b))!);
 }
-
-// ── Hand to AI ───────────────────────────────────────────
-
-export const HANDOFF_PRESETS = [t("lib-inbox.handoff_summarize"), t("lib-inbox.handoff_research"), t("lib-inbox.handoff_handle")];
 
 function escAttr(s: string) {
   return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -582,164 +552,25 @@ export function contextXML(kind: string, title: string, url: string, text: strin
   return `<persona-context kind="${kind}" title="${escAttr(title)}" url="${escAttr(url)}">\n${contextBody(text)}\n</persona-context>`;
 }
 
-/** The item as context the chat shows as a chip, then what to do with it (InboxHandOffSheet.message). */
-export function handOffMessage(it: InboxItem, ask: string): string {
-  const title = `${it.connector ? it.account_name || it.source : isLark(it) ? t("lib-inbox.lark") : t("lib-inbox.kind_mail")} · ${it.title}`;
-  let text = it.context?.trim() ? it.context : [it.sender ?? "", it.preview].filter(Boolean).join(t("lib-inbox.sender_separator"));
-  if (it.lark) {
-    const ol = it.lark.ol_account;
-    const account = ol ? t("lib-inbox.handoff_lark_account", { account: ol }) : "";
-    text += `\n\n${t("lib-inbox.handoff_lark", { feed: it.lark.feed_id, account })}`;
-  }
-  if (it.connector?.url) text += `\n\n${t("lib-inbox.handoff_connector", { name: it.account_name || it.source, url: it.connector.url })}`;
-  const uid = it.mail?.uids[it.mail.uids.length - 1];
-  if (it.mail && uid !== undefined) text += `\n\n${t("lib-inbox.handoff_mail", { account: it.mail.account_id, mailbox: it.mail.mailbox, uid })}`;
-  return `${contextXML("context", title, "", text)}\n\n${ask.trim() || HANDOFF_PRESETS[0]}`;
-}
-
 /** "Hand to AI" to Persona's main conversation (docs/assistant/inbox.md "Item actions"): the item's manager sends text there
  *  after a block naming the item, or starts the conversation with it, and the conversation may write back to the item.
  *  The same clientID again sends nothing more. Resolves to the conversation it went to. */
-export async function handOffToMain(item: InboxItem, text: string, clientID: string): Promise<InboxHandoff> {
-  const r = await api<{ session: InboxHandoff }>(`${itemPath(item.id)}/handoff`, { method: "POST", json: { text, client_id: clientID }, headers: itemRequest(item) });
-  return r.session;
-}
+const pendingHandoffs = new Map<string, Promise<InboxHandoff>>();
 
-// ── Feishu messages (docs/protocol/protocol.md "Lark API") ──────
-
-export interface LarkPart {
-  kind: string;
-  text?: string;
-  url?: string;
-  refId?: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface LarkMessage {
-  id: string;
-  position: string;
-  sender_id?: string;
-  sender_name?: string;
-  sender_avatar?: string;
-  sender_type?: string;
-  is_mine?: boolean;
-  type?: string;
-  text?: string;
-  created_at?: string;
-  recalled?: boolean;
-  /** The Lark gateway kept a recalled message's content (lark-display.ts): shown only with "Keep recalled messages" on, still marked "Recalled". */
-  retained?: boolean;
-  edited?: boolean;
-  /** An edited message's earlier versions, oldest first (lark-display.ts, shown with "Edit history" on). */
-  edit_history?: { edited_at: string; text: string; parts?: LarkPart[]; olk?: unknown }[];
-  reply_count?: number;
-  thread_reply_count?: number;
-  at_me?: boolean;
-  /** Read state (others' messages) and Feishu's unread badge at this message: what the read report carries. */
-  is_read?: boolean;
-  badge_count?: number;
-  parts?: LarkPart[];
-  reply_to?: { id?: string; sender_name?: string; text?: string; recalled?: boolean; retained?: boolean };
-  sending?: boolean;
-  failed?: boolean;
-  client_id?: string;
-  /** The Lark gateway's capabilities as the hub passes them on: whether a Pin may be added / removed (lark-pins.ts). */
-  can_pin?: boolean;
-  can_unpin?: boolean;
-  deleted?: boolean;
-  local_state?: string;
-  /** The thread a message is in; "root", "reply" or "" (a plain message). */
-  thread_id?: string;
-  thread_kind?: string;
-  /** An encrypted message's public face is in text / parts already; its presence marks it encrypted. */
-  olk?: unknown;
-  /** Reactions under it (lib/lark-chat.ts): the key, how many, whether one is mine, who. */
-  reactions?: { key: string; count: number; mine?: boolean; users?: string[] }[];
-}
-
-export interface LarkPage {
-  messages: LarkMessage[];
-  has_older?: boolean;
-  has_newer?: boolean;
-  older_cursor?: string;
-  newer_cursor?: string;
-  /** A topic group: the messages are its topics' first messages (the hub finds out without being told). */
-  topic?: boolean;
-}
-
-/** Oldest first by position (numeric when both are), one copy per id: a later page wins. */
-export function mergeMessages(have: LarkMessage[], batch: LarkMessage[]): LarkMessage[] {
-  // the hub's copy of a message this page sent replaces its local one (same client_id), which may still be waiting
-  const echoed = new Set(batch.flatMap((m) => (m.client_id && !m.id.startsWith("temp-") ? [m.client_id] : [])));
-  const byId = new Map(have.filter((m) => !(m.id.startsWith("temp-") && m.client_id && echoed.has(m.client_id))).map((m) => [m.id, m]));
-  for (const m of batch) byId.set(m.id, m);
-  return [...byId.values()].sort((a, b) => comparePosition(a.position, b.position));
-}
-
-export function comparePosition(a: string, b: string): number {
-  const x = Number(a), y = Number(b);
-  if (Number.isFinite(x) && Number.isFinite(y)) return x - y;
-  return a.localeCompare(b);
-}
-
-/** Inline parts flow in one paragraph; the others (pictures, files, code, cards, system lines) stand alone. */
-export function isInlinePart(p: LarkPart): boolean {
-  switch (p.kind) {
-    case "text":
-      return !p.metadata?.markdown && !p.metadata?.system;
-    case "at":
-    case "link":
-    case "docs":
-    case "table":
-      return true;
-    case "emotion":
-      return !p.url;
-    default:
-      return false;
-  }
-}
-
-/** Parts in runs: consecutive inline ones together, each block part on its own. */
-export function partRuns(parts: LarkPart[]): { inline: boolean; parts: LarkPart[] }[] {
-  const out: { inline: boolean; parts: LarkPart[] }[] = [];
-  for (const p of parts) {
-    const inline = isInlinePart(p);
-    const last = out[out.length - 1];
-    if (inline && last?.inline) last.parts.push(p);
-    else out.push({ inline, parts: [p] });
-  }
-  return out;
-}
-
-/** Bracketed-name-style text (like `[Smile]` in Chinese) for an emoji key without its picture. */
-export function emojiLabel(key: string, text?: string): string {
-  if (text) return text;
-  let k = key.replace(/^Lark_Emoji_/, "");
-  const us = k.lastIndexOf("_");
-  if (us > 0) k = k.slice(0, us);
-  return `[${k}]`;
-}
-
-const CARD_SKIP = new Set(["button", "action", "overflow", "select_static", "select_person", "date_picker", "picker_time", "picker_datetime", "hr", "img"]);
-
-/** A card simplified to its title and lines of text (no buttons: the page only reads). */
-export function cardText(meta: Record<string, unknown> | undefined): { title: string; lines: string[] } {
-  if (!meta) return { title: "", lines: [] };
-  const str = (v: unknown): string => (typeof v === "string" ? v : v && typeof v === "object" && typeof (v as { content?: unknown }).content === "string" ? (v as { content: string }).content : "");
-  const header = meta.header as Record<string, unknown> | undefined;
-  const title = str(meta.title) || str(header?.title) || "";
-  const lines: string[] = [];
-  const walk = (node: unknown) => {
-    if (Array.isArray(node)) return node.forEach(walk);
-    if (!node || typeof node !== "object") return;
-    const o = node as Record<string, unknown>;
-    if (typeof o.tag === "string" && CARD_SKIP.has(o.tag)) return;
-    const own = str(o.text) || (typeof o.content === "string" ? o.content : "");
-    if (own.trim()) lines.push(own.trim());
-    for (const [k, v] of Object.entries(o)) if (k !== "text" && k !== "content" && v && typeof v === "object") walk(v);
-  };
-  walk(meta.elements ?? (meta.body as Record<string, unknown> | undefined)?.elements ?? meta.body);
-  return { title, lines: lines.filter((l, i) => l !== title && l !== lines[i - 1]) };
+export function handOffToMain(item: InboxItem, text: string, clientID: string, reusePending = false): Promise<InboxHandoff> {
+  const snapshot = suggestionSnapshot(item);
+  const observed = state.uncertainReplies;
+  const key = JSON.stringify([itemKey(snapshot), text, reusePending ? true : clientID]);
+  const pending = pendingHandoffs.get(key);
+  if (pending) return pending;
+  const request = api<{ session: InboxHandoff; item?: InboxItem }>(`${itemPath(item.id)}/handoff`, {
+    method: "POST", json: { text, client_id: clientID, ...(reusePending ? { reuse_pending: true } : {}) }, headers: itemRequest(item),
+  }).then((r) => {
+    if (r.item?.id === item.id) reconcileSuggestionItem(snapshot, r.item, observed);
+    return r.session;
+  }).finally(() => { if (pendingHandoffs.get(key) === request) pendingHandoffs.delete(key); });
+  pendingHandoffs.set(key, request);
+  return request;
 }
 
 // ── Moments ──────────────────────────────────────────────
@@ -770,12 +601,6 @@ export interface MomentComment {
   createTime?: number;
   replyUserName?: string;
   reactionCount?: number;
-}
-
-/** A post / comment's text, emoji as `[key]`. */
-export function momentText(c?: MomentContent): string {
-  if (!c?.segments?.length) return c?.text ?? "";
-  return c.segments.map((s) => (s.kind === "emoji" ? emojiLabel(s.key ?? s.emojiKey ?? "", s.text) : s.text ?? "")).join("");
 }
 
 // ── triage: the new items held back from the list (#1773) ───
@@ -814,9 +639,6 @@ export const TRIAGE_REASONS: Record<string, string> = {
   behind: t("lib-inbox.triage_behind"),
 };
 
-/** The model settings "Set up" opens: inbox triage, the purpose that sorts the inbox. */
-export const TRIAGE_SETTINGS = "/settings?tab=model-config&purpose=inbox.triage";
-
 /**
  * The banner over the list while new items wait for triage; null when none wait, triage is ok, or the hub is older.
  * One source waiting names it ("3 Lark messages waiting to be sorted: …"), several do not; the reason is the hub's, else the
@@ -834,22 +656,6 @@ export function triageBanner(tr: InboxTriage | null | undefined): { text: string
   return { text, configure: tr.state === "unconfigured" };
 }
 
-/**
- * The quiet notice over the list naming the sources the hub could not read this round (#1849): one line per source with a
- * `read_error`, "name: the hub's read_reason" (the hub's own fallback words when it gives none), so a list that is behind
- * does not look complete. Empty when every source was read, or from an older hub. Apart from the triage banner: a source
- * can be unread while triage is ok and nothing waits. The same lines as Android (InboxTriageText.unread).
- */
-export function triageUnread(tr: InboxTriage | null | undefined): string[] {
-  if (!tr || typeof tr !== "object" || !Array.isArray(tr.sources)) return [];
-  return tr.sources
-    .filter((x) => x && typeof x.read_error === "string" && x.read_error.trim())
-    .map((x) => t("lib-inbox.read_failed_line", {
-      name: (x.name ?? "").trim() || x.source || "",
-      reason: (x.read_reason ?? "").trim() || t("lib-inbox.read_failed"),
-    }));
-}
-
 // ── the list, shared by the page and the sidebar badge ───
 
 interface InboxState {
@@ -861,14 +667,86 @@ interface InboxState {
   error: string;
   /** Items whose reply is being sent (the row shows a spinner, a second tap does nothing). */
   sending: string[];
+  /** A confirmation whose result/readback is unavailable. Only matching server receipts can clear this local safety hint. */
+  uncertainReplies: Record<string, InboxSuggestionAttempt>;
   /** Status moves being written, by "<item>|<row>|<field>". */
   moving: string[];
+  /** Done items older than the list's few days, from the hub's history (GET /api/v1/inbox/done, #2200), newest first. */
+  history: InboxItem[];
+  /** The managers ("" for the only one) with more history to give, or not asked yet. */
+  historyMore: string[];
+  historyLoading: boolean;
+  /** Why a manager's last page didn't come, by manager ("" for the only one); an offline one has none (it is asked again later). */
+  historyError: Record<string, string>;
+  /** Each manager's done items per calendar day in this device's zone ("YYYY-MM-DD" → count; GET /api/v1/inbox/done/days,
+   *  #2967), by manager ("" for the only one). null: its hub has no day counts, and Done pages the history from the newest
+   *  as before; missing: not known yet (or the manager was offline). */
+  doneDays: Record<string, Record<string, number> | null>;
+  /** Done groups loading a page of their own (#2969), by "<manager>|<group key>". */
+  groupLoading: string[];
+  /** Done groups whose items have all come, by "<manager>|<group key>": a page of theirs reached the group's start. */
+  groupComplete: string[];
+  /** Items a route names being read from the hub (loadRoutedItem), by "<manager>\u0000<id>". */
+  routing: string[];
 }
 
-let state: InboxState = { items: [], triage: null, loaded: false, loading: false, error: "", sending: [], moving: [] };
+const EMPTY: InboxState = { items: [], triage: null, loaded: false, loading: false, error: "", sending: [], uncertainReplies: {}, moving: [], history: [], historyMore: [""], historyLoading: false, historyError: {}, doneDays: {}, groupLoading: [], groupComplete: [], routing: [] };
+let state: InboxState = EMPTY;
 const listeners = new Set<() => void>();
-/** Unsent reply edits and accepted generations, by item (itemKey); send clears them and a failure restores its text. */
-export const unsentReplies = new Map<string, string>();
+/** A Map that tells its watchers when it changes. The unsent replies live outside InboxState: a keystroke in the draft
+ *  dialog redraws only the card of that item (useUnsentReply), not every list and badge reading the inbox. */
+class WatchedMap<V> extends Map<string, V> {
+  readonly #watchers = new Set<() => void>();
+  /** Subscribes to every change; returns the unsubscribe (useSyncExternalStore's subscribe). */
+  readonly watch = (l: () => void) => {
+    this.#watchers.add(l);
+    return () => {
+      this.#watchers.delete(l);
+    };
+  };
+  override set(key: string, value: V): this {
+    super.set(key, value);
+    this.#watchers.forEach((l) => l());
+    return this;
+  }
+  override delete(key: string): boolean {
+    const had = super.delete(key);
+    if (had) this.#watchers.forEach((l) => l());
+    return had;
+  }
+  override clear() {
+    if (!this.size) return;
+    super.clear();
+    this.#watchers.forEach((l) => l());
+  }
+}
+
+/** Unsent reply edits and accepted generations, by item (itemKey): the draft dialog keeps them when it closes without
+ *  Cancel and the item's draft card shows and sends them. Send clears them and a failure restores its text. */
+export const unsentReplies = new WatchedMap<string>();
+/** The proposed status moves the user unticked in the draft dialog, by item (itemKey), as docChangeKey; kept, cleared
+ *  and restored with the item's text. */
+export const droppedChanges = new WatchedMap<readonly string[]>();
+
+/** Keeps the item's unticked proposed changes (none: forgets them). */
+export function keepDropped(key: string, dropped: readonly string[]) {
+  if (dropped.length) droppedChanges.set(key, dropped);
+  else droppedChanges.delete(key);
+}
+
+const NONE: readonly string[] = [];
+
+/** The item's kept reply edit (undefined: none, the AI twin's draft stands); redraws when it changes. */
+export function useUnsentReply(key: string): string | undefined {
+  const read = () => unsentReplies.get(key);
+  return useSyncExternalStore(unsentReplies.watch, read, read);
+}
+
+/** The item's unticked proposed changes (docChangeKey); redraws when they change. */
+export function useDroppedChanges(key: string): readonly string[] {
+  const read = () => droppedChanges.get(key) ?? NONE;
+  return useSyncExternalStore(droppedChanges.watch, read, read);
+}
 
 // Every request about an item names its manager where it is made (itemRequest): two managers may list the same id, so
 // nothing is looked up by path.
@@ -900,6 +778,17 @@ function keepStamp(fresh: InboxItem, before: InboxItem): InboxItem {
  *  unstamped: `manager` says whose (the item's the request was about); none: the default's. */
 export function replaceItem(item: InboxItem, manager?: string) {
   if (item?.id) patchItem({ id: item.id, manager: item.manager ?? manager }, (before) => keepStamp(item, before));
+}
+
+/** Rows the hub changed or took out of the list (a merge, a to-do): its copies replace ours (`manager` says whose answer it is:
+ *  the default's answers carry no stamp), and `gone` ids leave the list (a merged row's members are hidden by the hub). */
+export function applyInboxChange(changed: InboxItem[], gone: string[], manager?: string) {
+  const fresh = new Map(changed.map((it) => [it.id, it]));
+  const out = new Set(gone);
+  const same = (it: InboxItem) => sameManager(it.manager, manager);
+  set({
+    items: withPending(state.items.filter((it) => !(same(it) && out.has(it.id))).map((it) => (same(it) && fresh.has(it.id) ? keepStamp(fresh.get(it.id)!, it) : it))),
+  });
 }
 
 /** A done / open mark still being sent: what the item shows until the hub answers. A mute's mark also carries its
@@ -988,6 +877,16 @@ let started = false;
 let inFlight: Promise<void> | null = null;
 let again = false;
 
+/** The hub's last list as it came (before the marks were laid over it) and what names it: its cursor, so a reload asks
+ * only for what changed since (docs/protocol/protocol.md "Inbox delta"), and its validator, sent as If-None-Match: a
+ * 304 says the list is still this one ("Inbox validator"). Memory only: a page's first list is whole. */
+let lastList: { etag: string; cursor: string; items: InboxItem[]; triage: InboxTriage | null } | null = null;
+/** What a reload sends before it has a validator: a tag no list has, which asks the hub for its own. */
+const NO_LIST_TAG = 'W/"i1-"';
+/** Until when reloads ask without `since`: an answer had no cursor (an older hub or manager, or one that failed), so the
+ * validator does the work, and deltas are tried again ten minutes later. */
+let deltasOff = 0;
+
 function start() {
   if (started) return;
   started = true;
@@ -1023,8 +922,31 @@ export function reloadInbox(): Promise<void> {
         again = false;
         const seq = beginList();
         try {
-          const r = await api<{ items?: InboxItem[]; triage?: InboxTriage }>("/inbox?sources=all");
-          set({ items: keepSameItems(state.items, withPending(r.items ?? [], seq)), triage: r.triage ?? null, loaded: true, error: "" });
+          let status = 0;
+          let etag = "";
+          const held = lastList;
+          const observed = state.uncertainReplies;
+          // "0" until a list is held: one no list has, so the hub answers the whole list and its cursor
+          const since = Date.now() < deltasOff ? "" : held?.cursor || "0";
+          // If-None-Match too: a hub that knows no `since` still answers a list it has with a 304
+          const r = await api<{ items?: InboxItem[]; triage?: InboxTriage; cursor?: string; delta?: boolean; removed?: { id: string; manager?: string }[] }>(`/inbox?sources=all${since && `&since=${enc(since)}`}`, {
+            headers: { "If-None-Match": held?.etag || NO_LIST_TAG },
+            onResponse: (headers, code) => {
+              status = code;
+              etag = headers?.get("ETag") ?? "";
+            },
+          });
+          // 304: the list is still the one kept, and the marks are laid over it again as over any list of this seq
+          let list = held;
+          if (status !== 304) {
+            const cursor = r.cursor ?? "";
+            if (since && !cursor) deltasOff = Date.now() + 600_000;
+            // a delta answers only the cursor sent, so the list it changes is the one held
+            list = { etag, cursor, items: r.delta && held ? applyInboxDelta(held.items, r.items ?? [], r.removed ?? []) : r.items ?? [], triage: r.triage ?? null };
+            lastList = etag || cursor ? list : null;
+          }
+          if (list) set({ items: keepSameItems(state.items, withPending(list.items, seq)), triage: list.triage, loaded: true, error: "",
+            uncertainReplies: replyHintsAfterRead(status === 304 ? [] : r.items ?? [], observed) });
         } finally {
           endList(seq);
         }
@@ -1039,13 +961,33 @@ export function reloadInbox(): Promise<void> {
   return inFlight;
 }
 
-/** "Refresh": the hub collects Feishu and mail now, then lists. */
+/** `held` with a delta applied (docs/protocol/protocol.md "Inbox delta"): changed items in place, new ones in, removed
+ *  ones out, in the hub's order (each manager's items together, the managers as they came; newest first, then by id). */
+export function applyInboxDelta(held: InboxItem[], changed: InboxItem[], removed: { id: string; manager?: string }[]): InboxItem[] {
+  const gone = new Set(removed.map(itemKey));
+  const fresh = new Map(changed.map((it) => [itemKey(it), it]));
+  const out = held.filter((it) => !gone.has(itemKey(it))).map((it) => {
+    const k = itemKey(it);
+    const now = fresh.get(k) ?? it;
+    fresh.delete(k);
+    return now;
+  });
+  out.push(...fresh.values());
+  const managers = new Map<string | undefined, number>();
+  for (const it of out) if (!managers.has(it.manager)) managers.set(it.manager, managers.size);
+  return out.sort((a, b) => managers.get(a.manager)! - managers.get(b.manager)! || byTime(b.updated_at, a.updated_at) || (a.id < b.id ? -1 : +(a.id > b.id)));
+}
+
+/** "Refresh": the hub collects Feishu and mail now, then lists. Its whole list has no cursor: what is held stays, so the
+ * next reload's delta is still from the list its cursor names. */
 export async function refreshInbox(): Promise<void> {
   set({ loading: true });
   const seq = beginList();
+  const observed = state.uncertainReplies;
   try {
     const r = await api<{ items?: InboxItem[]; triage?: InboxTriage }>("/inbox/refresh?sources=all", { method: "POST" });
-    set({ items: keepSameItems(state.items, withPending(r.items ?? [], seq)), triage: r.triage ?? null, loaded: true, error: "" });
+    set({ items: keepSameItems(state.items, withPending(r.items ?? [], seq)), triage: r.triage ?? null, loaded: true, error: "",
+      uncertainReplies: replyHintsAfterRead(r.items ?? [], observed) });
   } catch (e) {
     toast(t("lib-inbox.refresh_failed", { error: errorText(e) }), "error");
   } finally {
@@ -1058,7 +1000,7 @@ export async function refreshInbox(): Promise<void> {
 /** Marks an item done or open; resolves to whether the hub took it. */
 export async function setDone(item: InboxItem, done: boolean): Promise<boolean> {
   const before = listed(item);
-  if (!before) return false;
+  if (!before) return done ? false : reopenFromHistory(item);
   const key = itemKey(before);
   const mark: DoneMark = { done_at: done ? new Date().toISOString() : null, done_by: done ? "user" : null };
   putMark(key, mark);
@@ -1074,6 +1016,187 @@ export async function setDone(item: InboxItem, done: boolean): Promise<boolean> 
     settleMark(key, mark, false);
     undoMarks(new Map([[key, before]]));
     toast(t(done ? "lib-inbox.done_failed" : "lib-inbox.undone_failed", { error: errorText(e) }), "error");
+    return false;
+  }
+}
+
+// ── Done's history (#2200) ───
+
+/** Where a manager's next page of done history starts: (done_at, id) of the last item it gave. */
+type DoneCursor = { before: string; before_id: string };
+/** Each manager's next page ("" for the only one): undefined not asked yet, null at its end or on a hub without it. */
+const historyNext = new Map<string, DoneCursor | null>();
+
+/**
+ * One more page of done items from each manager that has more (the list holds only the last few days), appended to
+ * `history` newest first, each stamped with its manager. A hub without the history (404 / 405) has nothing more: Done
+ * then shows what the list holds. `managers`: the managers' ids, or [undefined] for one.
+ */
+export async function loadOlderDone(managers: (string | undefined)[]): Promise<void> {
+  const asks = managers.filter((m) => historyNext.get(m ?? "") !== null);
+  if (state.historyLoading || !asks.length) return;
+  set({ historyLoading: true });
+  const pages = await Promise.allSettled(asks.map(async (m) => {
+    const cur = historyNext.get(m ?? "");
+    const q = new URLSearchParams({ sources: "all", limit: "100" });
+    if (cur) {
+      q.set("before", cur.before);
+      q.set("before_id", cur.before_id);
+    }
+    try {
+      const r = await api<{ items?: InboxItem[]; next?: DoneCursor }>(`/inbox/done?${q}`, { headers: itemHeaders(m) });
+      historyNext.set(m ?? "", r.next ?? null);
+      return (r.items ?? []).map((it) => (m && !it.manager ? { ...it, manager: m } : it));
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 404 || e.status === 405)) {
+        historyNext.set(m ?? "", null);
+        return [];
+      }
+      throw e;
+    }
+  }));
+  const got = pages.flatMap((p) => (p.status === "fulfilled" ? p.value : []));
+  const errors: Record<string, string> = { ...state.historyError };
+  pages.forEach((p, i) => {
+    const m = asks[i] ?? "";
+    // a manager offline (503) or gone (404) is asked again next time, without a word: its Done is what the list has
+    const quiet = p.status === "rejected" && p.reason instanceof ApiError && (p.reason.status === 503 || p.reason.status === 404);
+    if (p.status === "rejected" && !quiet) errors[m] = errorText(p.reason);
+    else delete errors[m];
+  });
+  const seen = new Set(state.history.map(itemKey));
+  set({
+    history: [...state.history, ...got.filter((it) => !seen.has(itemKey(it)))],
+    historyMore: managers.map((m) => m ?? "").filter((m) => historyNext.get(m) !== null),
+    historyLoading: false,
+    historyError: errors,
+  });
+}
+
+/** Where each Done group's next page starts, once one of its pages has come and the group isn't complete. */
+const groupNext = new Map<string, DoneCursor>();
+
+/**
+ * Each manager's done items per day (GET /api/v1/inbox/done/days, #2967) in this device's zone, so Done lists every
+ * day's group with its count before any of its items load. A hub without them (404 / 405, or 400 for a zone it doesn't
+ * know) gets null: Done pages its history from the newest, as before. An offline manager stays unknown and is asked
+ * again next time. Returns the managers that have no counts.
+ */
+export async function loadDoneDays(managers: (string | undefined)[]): Promise<(string | undefined)[]> {
+  const q = new URLSearchParams({ tz: Intl.DateTimeFormat().resolvedOptions().timeZone, sources: "all" });
+  const got = await Promise.allSettled(managers.map(async (m) => {
+    try {
+      const r = await api<{ days?: { day: string; count: number }[] }>(`/inbox/done/days?${q}`, { headers: itemHeaders(m) });
+      return Object.fromEntries((r.days ?? []).map((d) => [d.day, d.count]));
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 404 || e.status === 405 || e.status === 400)) return null;
+      throw e;
+    }
+  }));
+  const doneDays = { ...state.doneDays };
+  got.forEach((p, i) => {
+    if (p.status === "fulfilled") doneDays[managers[i] ?? ""] = p.value;
+  });
+  set({ doneDays });
+  return managers.filter((m) => doneDays[m ?? ""] === null);
+}
+
+/**
+ * One page of a Done group's own items (#2969): from the group's end (`before` alone is a moment: the items done before
+ * it), then from where its last page ended. The group is complete when a page reaches its start or the history ends.
+ * The items join `history`; those of older groups a page also brings stay there for theirs.
+ */
+export async function loadDoneGroup(manager: string | undefined, key: string, range: { start: number; end: number }): Promise<void> {
+  const id = `${manager ?? ""}|${key}`;
+  if (state.groupLoading.includes(id) || state.groupComplete.includes(id)) return;
+  set({ groupLoading: [...state.groupLoading, id] });
+  const q = new URLSearchParams({ sources: "all", limit: "100" });
+  const cur = groupNext.get(id) ?? pastListed(manager, range);
+  if (cur) {
+    q.set("before", cur.before);
+    q.set("before_id", cur.before_id);
+  } else if (Number.isFinite(range.end)) q.set("before", new Date(range.end).toISOString());
+  const m = manager ?? "";
+  try {
+    const r = await api<{ items?: InboxItem[]; next?: DoneCursor }>(`/inbox/done?${q}`, { headers: itemHeaders(manager) });
+    const got = (r.items ?? []).map((it) => (manager && !it.manager ? { ...it, manager } : it));
+    const last = got.at(-1)?.done_at;
+    const complete = !r.next || !last || Date.parse(last) < range.start;
+    if (complete) groupNext.delete(id);
+    else groupNext.set(id, r.next!);
+    const seen = new Set(state.history.map(itemKey));
+    const { [m]: _, ...errors } = state.historyError;
+    set({
+      history: [...state.history, ...got.filter((it) => !seen.has(itemKey(it)))],
+      groupLoading: state.groupLoading.filter((x) => x !== id),
+      groupComplete: complete ? [...state.groupComplete, id] : state.groupComplete,
+      historyError: errors,
+    });
+  } catch (e) {
+    // a manager offline (503) or gone (404) is asked again when the group opens again, without a word
+    const quiet = e instanceof ApiError && (e.status === 503 || e.status === 404);
+    set({ groupLoading: state.groupLoading.filter((x) => x !== id), historyError: quiet ? state.historyError : { ...state.historyError, [m]: errorText(e) } });
+  }
+}
+
+/**
+ * Where a group's first page starts when the list already holds its newest done items: just past the oldest one the
+ * list holds of that manager, if it falls in the group. The list's done items are the newest of the history (every
+ * open item and the newest 200 done within three days, #5549), so a page from the group's end would bring only rows
+ * the list has, and its Show older would seem to do nothing.
+ */
+function pastListed(manager: string | undefined, range: { start: number; end: number }): DoneCursor | undefined {
+  // the history's order is done_at, then id, both descending; a mark of this app's is not the hub's done_at
+  let oldest: InboxItem | undefined;
+  let at = Infinity;
+  for (const it of state.items) {
+    if (!it.done_at || !sameManager(it.manager, manager) || pendingDone.has(itemKey(it))) continue;
+    const t = Date.parse(it.done_at);
+    if (t < at || (t === at && oldest && it.id < oldest.id)) [oldest, at] = [it, t];
+  }
+  return oldest && at >= range.start && at < range.end ? { before: oldest.done_at!, before_id: oldest.id } : undefined;
+}
+
+/** Done as the list shows it: the list's done items, then the history's it doesn't have (the list's copy is newer). */
+export function doneWithHistory(done: InboxItem[], history: InboxItem[], f: InboxFilter): InboxItem[] {
+  const listedKeys = new Set(done.map(itemKey));
+  const older = history.filter((it) => isDone(it) && matches(it, f) && !listedKeys.has(itemKey(it)));
+  return older.length ? [...done, ...older].sort(byDoneAt) : done;
+}
+
+/** The routes asked for an item neither the list nor the loaded history had (loadRoutedItem): each once. */
+const routesAsked = new Set<string>();
+
+/**
+ * An item a route names that neither the list nor the loaded history has, such as a link to one done past what the
+ * list carries (only the newest done items, #5549): the hub's copy joins `history`, where the route finds it. Asked
+ * once per item; an open one comes with the list, and one the hub doesn't have stays gone. `routing` holds it meanwhile.
+ */
+export function loadRoutedItem(id: string, manager: string | undefined): void {
+  const key = `${manager ?? ""}\u0000${id}`;
+  if (routesAsked.has(key)) return;
+  routesAsked.add(key);
+  set({ routing: [...state.routing, key] });
+  void api<InboxItem>(itemPath(id), { headers: itemHeaders(manager) })
+    .then((r) => {
+      const it = r?.id === id && isDone(r) ? (manager && !r.manager ? { ...r, manager } : r) : undefined;
+      if (it && !state.history.some((x) => sameItem(x, it)) && !listed(it)) set({ history: [...state.history, it] });
+    })
+    .catch(() => undefined)
+    .finally(() => set({ routing: state.routing.filter((x) => x !== key) }));
+}
+
+/** Move back on an item only the history has (done before the list's days): the hub takes it back into its list. */
+async function reopenFromHistory(item: InboxItem): Promise<boolean> {
+  const old = state.history.find((x) => sameItem(x, item));
+  if (!old) return false;
+  try {
+    await api<InboxItem>(`${itemPath(item.id)}/done`, { method: "POST", json: { done: false }, headers: itemHeaders(old.manager) });
+    set({ history: state.history.filter((x) => !sameItem(x, item)) });
+    void reloadInbox();
+    return true;
+  } catch (e) {
+    toast(t("lib-inbox.undone_failed", { error: errorText(e) }), "error");
     return false;
   }
 }
@@ -1124,18 +1247,6 @@ export async function muteItem(item: InboxItem, o: InboxMuteOption): Promise<voi
   }
 }
 
-/** What the user muted, in every source (GET /api/v1/inbox/mutes), newest first. `manager`: whose mutes (each manager
- *  keeps its own; stamped on each); none: the default's. */
-export async function listInboxMutes(manager?: string): Promise<InboxMute[]> {
-  const r = await api<{ mutes?: InboxMute[] }>("/inbox/mutes", { headers: itemHeaders(manager) });
-  return sortMutes((r.mutes ?? []).map((m) => (manager ? { ...m, manager } : m)));
-}
-
-/** "Unmute" (`mute`'s manager's): only what comes in later comes back. */
-export function unmuteInbox(mute: Pick<InboxMute, "id" | "manager">): Promise<unknown> {
-  return api(`/inbox/mutes/${enc(mute.id)}`, { method: "DELETE", headers: itemHeaders(mute.manager) });
-}
-
 /** A policy's tier (docs/assistant/inbox.md "Policies"): "" leaves the tier to triage. */
 export type PolicyTier = "" | "action" | "fyi" | "noise";
 /** What a policy does with the AI twin: "first" hands it over first (even when not Needs you), "never" keeps it away; "" as configured. */
@@ -1154,65 +1265,19 @@ export interface InboxPolicy extends InboxMuteOption {
   manager?: string;
 }
 
-/** The tags a policy can name, the most specific first: a sender's policy beats its chat's (the hub's rule). */
-const POLICY_TAGS = ["sender", "chat", "repo"];
-
-/** The policy that applies to an item, as the hub picks it: the same source, one of its mute options, sender before chat before repository. */
-export function policyFor(it: InboxItem, policies: InboxPolicy[]): InboxPolicy | undefined {
-  let best: InboxPolicy | undefined;
-  let rank = POLICY_TAGS.length;
-  for (const o of it.mutes ?? []) {
-    const r = POLICY_TAGS.indexOf(o.tag);
-    if (r < 0 || r >= rank) continue;
-    const p = policies.find((x) => x.source === it.source && x.tag === o.tag && x.value === o.value);
-    if (p) [best, rank] = [p, r];
-  }
-  return best;
-}
-
-/** The menu's words for setting a policy on an option: "Rule for this repository / chat / sender…". */
-export function policyMenuTitle(o: Pick<InboxMuteOption, "tag">): string {
-  return t(o.tag === "repo" ? "lib-inbox.policy_repo" : o.tag === "chat" ? "lib-inbox.policy_chat" : "lib-inbox.policy_sender");
-}
-
-/** A policy tier's words: "Always Needs you" / "FYI" / "Collapsed"; "" is "Leave to triage". */
-export function policyTierName(tier: PolicyTier): string {
-  return t(tier === "action" ? "lib-inbox.policy_tier_action" : tier === "fyi" ? "lib-inbox.policy_tier_fyi" : tier === "noise" ? "lib-inbox.policy_tier_noise" : "lib-inbox.policy_tier_none");
-}
-
-/** A policy twin's words: "AI twin first" / "AI twin never"; "" is "As set". */
-export function policyTwinName(twin: PolicyTwin): string {
-  return t(twin === "first" ? "lib-inbox.policy_twin_first" : twin === "never" ? "lib-inbox.policy_twin_never" : "lib-inbox.policy_twin_none");
-}
-
-/** What a policy does, for people: "Always Needs you · AI twin first", one part when it sets one. */
-export function policySummary(p: Pick<InboxPolicy, "tier" | "twin">): string {
-  const parts: string[] = [];
-  if (p.tier) parts.push(policyTierName(p.tier));
-  if (p.twin) parts.push(policyTwinName(p.twin));
-  return parts.join(" · ");
-}
-
 /** Whether a policy's tier reaches an item at once (the hub's rule): the same thing, open, triaged, not being handled,
  *  and the same manager's (each manager keeps its own rules). */
 function policyReaches(source: string, o: InboxMuteOption, it: InboxItem, manager: { manager?: string }): boolean {
   return muteCovers(source, o, it, manager) && Boolean(it.tier) && statusOf(it) !== "working";
 }
 
-/** The policies, newest first. `manager`: whose rules (stamped on each); none: the default's. */
-export async function listInboxPolicies(manager?: string): Promise<InboxPolicy[]> {
-  const r = await api<{ policies?: InboxPolicy[] }>("/inbox/policies", { headers: itemHeaders(manager) });
-  const ts = (p: InboxPolicy) => (p.created_at ? Date.parse(p.created_at) || 0 : 0);
-  return [...(r.policies ?? [])].map((p) => (manager ? { ...p, manager } : p)).sort((a, b) => ts(b) - ts(a));
-}
-
 /**
  * Set the policy of what an item has under an option's tag (POST /api/v1/inbox/policies), or change it (PATCH, with
  * `id`): the open items it covers take its tier at once ("Your rule: <name>"); the hub does the same and the next
  * push confirms it; a failure puts them back. Setting neither part removes the policy. Resolves to the policy, or null
- * when the hub refused.
+ * when the hub refused. `stamped`: name `manager` even when it is the default (a rule a list read from each manager).
  */
-export async function saveInboxPolicy(target: { item?: InboxItem; option: InboxMuteOption; source: string; id?: string; manager?: string }, tier: PolicyTier, twin: PolicyTwin): Promise<InboxPolicy | null> {
+export async function saveInboxPolicy(target: { item?: InboxItem; option: InboxMuteOption; source: string; id?: string; manager?: string; stamped?: boolean }, tier: PolicyTier, twin: PolicyTwin): Promise<InboxPolicy | null> {
   const { option: o, source } = target;
   // the rule is the manager's whose item (or rule) it is: it reaches that manager's items only
   const owner = { manager: target.manager ?? target.item?.manager };
@@ -1220,7 +1285,7 @@ export async function saveInboxPolicy(target: { item?: InboxItem; option: InboxM
   const reason = t("lib-inbox.policy_reason", { name: o.name });
   const statusFor = (it: InboxItem) => (it.status && it.status !== "working" ? tier || it.status : it.status);
   set({ items: state.items.map((it) => (before.has(itemKey(it)) && it.tier !== tier ? { ...it, tier, status: statusFor(it), reason, urgent: tier === "action" ? it.urgent : false } : it)) });
-  const headers = itemHeaders(owner.manager);
+  const headers = target.stamped ? stampedHeaders(owner.manager) : itemHeaders(owner.manager);
   try {
     const r = target.id
       ? await api<{ policy: InboxPolicy }>(`/inbox/policies/${enc(target.id)}`, { method: "PATCH", json: { tier, twin }, headers })
@@ -1234,11 +1299,6 @@ export async function saveInboxPolicy(target: { item?: InboxItem; option: InboxM
   }
 }
 
-/** Remove a policy (`policy`'s manager's): items keep the tier it gave until new content is triaged again. */
-export function removeInboxPolicy(policy: Pick<InboxPolicy, "id" | "manager">): Promise<unknown> {
-  return api(`/inbox/policies/${enc(policy.id)}`, { method: "DELETE", headers: itemHeaders(policy.manager) });
-}
-
 /** What a bulk action does (POST /api/v1/inbox/bulk): `dismiss` is Clean up all (done_by=dismissed), `done` files a section
  * (Mark all as seen / Clear all), `reopen` is Move back (their Undo). */
 export type BulkAction = "done" | "dismiss" | "reopen";
@@ -1246,9 +1306,6 @@ export type BulkAction = "done" | "dismiss" | "reopen";
 /** What a bulk request did: the items it moved as the hub has them now, the ones already so, and the ones it left
  * (`changed`: new messages since the list; `missing`: gone from the hub). */
 export type BulkResult = { changed: InboxItem[]; unchanged: string[]; skipped: { id: string; reason: string; manager?: string }[] };
-
-/** From this many items on, Clean up all asks first ("Will clean up N items"); fewer go at once, with Undo on the toast. */
-export const BULK_CONFIRM_AT = 10;
 
 /** The toast after a bulk request. */
 export function bulkMessage(action: BulkAction | boolean, r: BulkResult): string {
@@ -1259,18 +1316,6 @@ export function bulkMessage(action: BulkAction | boolean, r: BulkResult): string
     ? t(a === "reopen" ? "lib-inbox.bulk_undone_none" : "lib-inbox.bulk_done_none")
     : t(a === "reopen" ? "lib-inbox.bulk_undone" : a === "dismiss" ? "lib-inbox.bulk_cleaned" : "lib-inbox.bulk_done", { count: moved });
   return fresh ? t("lib-inbox.bulk_fresh", { head, count: fresh }) : head;
-}
-
-/** What Clean up all covers, for its label: the filters' names and the search, or All. */
-export function bulkScope(filters: string[], query: string, count: number): string {
-  return count ? t("lib-inbox.scope_count", { scope: bulkScopeName(filters, query), count }) : t("lib-inbox.scope_none");
-}
-
-/** The filters' names and the search, or "All": what a bulk action covers, without the count. */
-export function bulkScopeName(filters: string[], query: string): string {
-  const parts = filters.filter(Boolean);
-  if (query.trim()) parts.push(t("lib-inbox.scope_search", { query: query.trim() }));
-  return parts.length ? parts.join(" · ") : t("lib-inbox.scope_all");
 }
 
 /** What the managers answered, put together, and the items of those that did not answer (with why). */
@@ -1332,8 +1377,10 @@ export async function setAllDone(items: InboxItem[], action: BulkAction | boolea
   const a: BulkAction = action === true ? "done" : action === false ? "reopen" : action;
   const done = a !== "reopen";
   const seen = new Set<string>();
+  // Undo reopens what the hub said it moved, listed or not: the list carries only the newest done items (#5549), so
+  // after a large Clean up all most of them are no longer in it.
   const targets = items
-    .map((it) => listed(it))
+    .map((it) => listed(it) ?? (!done && !undoable ? it : undefined))
     .filter((it): it is InboxItem => !!it && isDone(it) !== done && !seen.has(itemKey(it)) && !!seen.add(itemKey(it)));
   if (!targets.length) return;
   const before = new Map(targets.map((it) => [itemKey(it), it]));
@@ -1365,7 +1412,8 @@ export async function setAllDone(items: InboxItem[], action: BulkAction | boolea
 }
 
 /** "Send": the hub replies in the chat / by mail / in the document (moving the rows' status in `changes` first) and
- * files the item as done. Filed at once; a failure puts the item back and keeps the text for the draft dialog. */
+ * files the item as done. Filed at once; a failure puts the item back and keeps the text and the unticked changes for
+ * the draft card and dialog. */
 export async function sendReply(item: InboxItem, text: string, changes: DocChange[] = []): Promise<boolean> {
   const key = itemKey(item);
   if (state.sending.includes(key)) return false;
@@ -1376,7 +1424,9 @@ export async function sendReply(item: InboxItem, text: string, changes: DocChang
   // (Also for an item the list does not have yet: a list that left before the send must not bring it in open.)
   putMark(key, mark);
   patchItem(item, (it) => ({ ...it, ...mark }));
+  const dropped = droppedChanges.get(key);
   unsentReplies.delete(key);
+  droppedChanges.delete(key);
   try {
     const r = await api<InboxItem>(`${itemPath(item.id)}/reply`, { method: "POST", json: { text, changes: changes.length ? changes : undefined }, headers: itemRequest(item) });
     const hub = r?.id === item.id ? keepStamp(r, item) : undefined;
@@ -1388,6 +1438,7 @@ export async function sendReply(item: InboxItem, text: string, changes: DocChang
     settleMark(key, mark, false);
     undoMarks(new Map([[key, before ?? item]]));
     if (text) unsentReplies.set(key, text);
+    if (dropped) droppedChanges.set(key, dropped);
     toast(t("lib-inbox.reply_failed", { error: errorText(e) }), "error");
     return false;
   } finally {
@@ -1395,25 +1446,89 @@ export async function sendReply(item: InboxItem, text: string, changes: DocChang
   }
 }
 
-/** "Send" / "Start" / "Got it" / "Confirm", "Reject", "Say something" on the item's suggestion: the hub's item replaces ours. A suggestion that
- * changed meanwhile is not run: "Suggestion updated" and the item as it is now. Resolves to whether it went through. */
-export async function suggestionAct(item: InboxItem, action: SuggestionAction, text?: string): Promise<boolean> {
-  const s = item.suggestion;
-  const key = itemKey(item);
-  if (!s || state.sending.includes(key)) return false;
+/** Identity of a local confirmation whose delivery could not be read back. */
+export function uncertainReplyKey(item: InboxItem, version: number, conversation = item.suggestion?.conversation?.session_id ?? ""): string {
+  return JSON.stringify([itemKey(item), version, conversation]);
+}
+
+function suggestionSnapshot(item: InboxItem): InboxItem {
+  return listed(item) ?? state.history.find((x) => sameItem(x, item)) ?? item;
+}
+
+/** Only receipts returned by this read clear hints it already knew about; held delta rows are not fresh receipts. */
+function replyHintsAfterRead(items: InboxItem[], observed: InboxState["uncertainReplies"]): InboxState["uncertainReplies"] {
+  const hints = { ...state.uncertainReplies };
+  for (const item of items) for (const a of item.suggestion_attempts ?? []) {
+    const key = uncertainReplyKey(item, a.version, a.conversation?.session_id ?? "");
+    if (hints[key] === observed[key]) delete hints[key];
+  }
+  return hints;
+}
+
+/** Keep a store update that arrived during this request; only merge its reply receipts into that current item. */
+function reconcileSuggestionItem(ref: InboxItem, fresh: InboxItem, observed = state.uncertainReplies): boolean {
+  if (fresh.id !== ref.id || fresh.manager && !sameManager(fresh.manager, ref.manager)) return false;
+  const before = listed(ref) ?? state.history.find((x) => sameItem(x, ref));
+  const attempts = new Map<number, InboxSuggestionAttempt>();
+  for (const a of before?.suggestion_attempts ?? []) attempts.set(a.version, a);
+  for (const a of fresh.suggestion_attempts ?? []) {
+    const old = attempts.get(a.version);
+    if (old && (Date.parse(old.at) > Date.parse(a.at) || old.status === "sent" || old.status === "unknown" && a.status === "failed")) continue;
+    attempts.set(a.version, a);
+  }
+  const latest = (it: InboxItem | undefined) => Math.max(it?.suggestion?.version ?? 0, ...(it?.suggestion_attempts ?? []).map((a) => a.version));
+  const kept = before && (before !== ref || latest(before) > Math.max(latest(fresh), ref.suggestion?.version ?? 0)) ? before : fresh;
+  // Match the server's existing bounded handling-chain history; missing older receipts stay unknown to the UI.
+  const receipts = [...attempts.values()].sort((a, b) => a.version - b.version).slice(-50);
+  const next = { ...kept, ...(receipts.length ? { suggestion_attempts: receipts } : {}) };
+  const uncertain = replyHintsAfterRead([keepStamp(fresh, ref)], observed);
+  const replace = (it: InboxItem) => sameItem(it, ref) ? keepStamp(next, it) : it;
+  set({ items: state.items.map(replace), history: state.history.map(replace), uncertainReplies: uncertain });
+  return true;
+}
+
+async function readSuggestionItem(item: InboxItem): Promise<void> {
+  const snapshot = suggestionSnapshot(item);
+  const observed = state.uncertainReplies;
+  try {
+    const fresh = await api<InboxItem>(itemPath(item.id), { headers: itemRequest(item) });
+    reconcileSuggestionItem(snapshot, fresh, observed);
+  } catch { /* The local uncertain hint stays; a failed GET cannot authorize another send. */ }
+}
+
+/** Run only the displayed suggestion version; reconcile its outcome with updates received while it was in flight. */
+export async function suggestionAct(item: InboxItem, action: SuggestionAction, text?: string, due?: string, expectedVersion = item.suggestion?.version): Promise<boolean> {
+  const current = suggestionSnapshot(item);
+  const s = current.suggestion;
+  const key = itemKey(current);
+  if (!s || s.version !== expectedVersion || state.sending.includes(key)) return false;
+  const attempt = current.suggestion_attempts?.find((a) => a.version === s.version);
+  const confirmation = action === "confirm" && s.kind === "reply" && !s.handback;
+  const uncertainKey = uncertainReplyKey(current, s.version);
+  if (confirmation && (state.uncertainReplies[uncertainKey] || attempt && (attempt.status !== "failed" || !attempt.retryable))) return false;
+  // A stale editor must not silently confirm different words from the frozen attempt.
+  if (confirmation && attempt && text !== undefined && text !== attempt.text) return false;
+  const sentText = attempt?.text ?? text ?? s.text;
   set({ sending: [...state.sending, key] });
   try {
-    const r = await actOnSuggestion(itemPath(item.id), s.version, action, text, undefined, item.manager);
+    // A Retry confirms the frozen server payload; it never submits the current editor's draft as a new send.
+    const r = await actOnSuggestion(itemPath(current.id), s.version, action, confirmation && attempt ? undefined : text, undefined, current.manager, due);
     if (r.ok) {
-      if (r.item?.id === item.id) replaceItem(r.item, item.manager);
+      if (r.item?.id === current.id) reconcileSuggestionItem(current, r.item);
       toast(actedText(s, action), "ok");
       return true;
     }
     if (r.stale) {
-      if (r.item) replaceItem(r.item, item.manager);
+      if (r.item) reconcileSuggestionItem(current, r.item);
       else void reloadInbox();
       toast(r.error, "info");
     } else {
+      if (confirmation) {
+        set({ uncertainReplies: { ...state.uncertainReplies, [uncertainKey]: {
+          version: s.version, status: "unknown", retryable: false, text: sentText, at: new Date().toISOString(), conversation: s.conversation,
+        } } });
+        if (!r.item || !reconcileSuggestionItem(current, r.item)) await readSuggestionItem(current);
+      }
       if (r.code === "inbox_item_done") void reloadInbox();
       toast(t("lib-inbox.suggestion_failed", { error: r.error }), "error");
     }
@@ -1480,63 +1595,28 @@ export function useInbox<T>(select: (s: InboxState) => T): T {
   return useSyncExternalStore(subscribe, read, read);
 }
 
-/** How many unhandled "Needs you" items the inbox has (the sidebar's badge). */
+/** How many unread open items the inbox has (the sidebar's badge). */
 export function useInboxBadge(): number {
-  return useInbox((s) => badgeCount(s.items));
+  // the current assistant's, with several (docs/assistant/managers.md "Clients")
+  const scope = useScope();
+  return useInbox((s) => badgeCount(scoped(s.items, scope)));
 }
 
 /** Tests only: back to an empty, unstarted list. */
 export function resetInboxForTests() {
-  state = { items: [], triage: null, loaded: false, loading: false, error: "", sending: [], moving: [] };
+  state = EMPTY;
+  historyNext.clear();
+  groupNext.clear();
+  routesAsked.clear();
   started = false;
   inFlight = null;
   again = false;
+  lastList = null;
+  deltasOff = 0;
   pendingDone.clear();
   listsOut.clear();
   listSeq = 0;
   unsentReplies.clear();
-}
-
-/** Someone a sent message @s: Feishu notifies them; the text holds their `@name` ("Everyone" is `user_id` "all"). */
-export interface LarkMention {
-  user_id: string;
-  name: string;
-}
-
-const mentionList = (mentions?: LarkMention[]) => (mentions?.length ? mentions.map((m) => ({ user_id: m.user_id, name: m.name })) : undefined);
-
-/** Sends a message to a Feishu conversation via the native hub API, as account `ol` (undefined: the hub's own). */
-export async function sendLarkMessage(feed: string, text: string, clientID?: string, ol?: number, mentions?: LarkMention[], manager?: string): Promise<{ message_id?: string }> {
-  return api<{ message_id?: string }>(larkPath(`/lark/conversations/${enc(feed)}/messages`, ol, manager), {
-    method: "POST",
-    json: { text, client_id: clientID, mentions: mentionList(mentions) },
-    token: getToken(),
-  });
-}
-
-/** Replies to a Feishu message (either quoted in chat or in its topic thread). */
-export async function replyLarkMessage(
-  messageID: string,
-  text: string,
-  thread = false,
-  clientID?: string,
-  ol?: number,
-  mentions?: LarkMention[],
-  manager?: string,
-): Promise<{ message_id?: string }> {
-  return api<{ message_id?: string }>(larkPath(`/lark/messages/${enc(messageID)}/replies`, ol, manager), {
-    method: "POST",
-    json: { text, thread, client_id: clientID, mentions: mentionList(mentions) },
-    token: getToken(),
-  });
-}
-
-/** Computes the next position string for an optimistic LarkMessage in the list. */
-export function nextLarkPosition(messages: LarkMessage[]): string {
-  let max = 0;
-  for (const m of messages) {
-    const n = Number(m.position);
-    if (Number.isFinite(n) && n > max) max = n;
-  }
-  return String(max > 0 ? max + 1 : Date.now());
+  droppedChanges.clear();
+  pendingHandoffs.clear();
 }

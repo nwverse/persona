@@ -2,14 +2,38 @@ package persona.feature.machines
 
 import persona.core.contracts.*
 import persona.core.contracts.api.*
+import persona.core.domain.sort.AgentSession
+import persona.core.domain.sort.buildAgentList
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.*
 import org.junit.Assert.*
 import org.junit.Test
+import java.util.Locale
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class MachinesTest {
+    @Test fun loadPerCoreMatchesTheWebRoundingAndOmitsMissingReadings() {
+        val languages = listOf(Locale.ENGLISH, Locale.SIMPLIFIED_CHINESE, Locale.JAPANESE)
+        for (language in languages) {
+            assertEquals("1.4", MetricFormat.loadPerCore(loadPerCore(5.6, 4)!!, language))
+            assertEquals("1.3", MetricFormat.loadPerCore(loadPerCore(10.0, 8)!!, language))
+            assertEquals("1.1", MetricFormat.loadPerCore(loadPerCore(23.0, 20)!!, language))
+            assertEquals("0.0", MetricFormat.loadPerCore(loadPerCore(0.0, 4)!!, language))
+        }
+        for (load in listOf(null, -1.0, Double.NaN, Double.POSITIVE_INFINITY)) assertNull(loadPerCore(load, 4))
+        for (cores in listOf(null, 0, -1)) assertNull(loadPerCore(5.6, cores))
+    }
+
+    @Test fun loadAlertThresholdsUseTheUnroundedReading() {
+        fun loadAlerts(load: Double, cores: Int?) = alerts(MetricSample(0, load = load), cores)
+        assertTrue(loadAlerts(3.99, 4).isEmpty())
+        assertEquals(listOf(MetricAlert(R.string.machines_alert_load, false)), loadAlerts(4.0, 4))
+        assertEquals(listOf(MetricAlert(R.string.machines_alert_load, false)), loadAlerts(7.99, 4))
+        assertEquals(listOf(MetricAlert(R.string.machines_alert_load, true)), loadAlerts(8.0, 4))
+        assertTrue(loadAlerts(8.0, null).isEmpty())
+    }
+
     @Test fun bytesPickTheUnitAfterRounding() {
         val en = java.util.Locale.ENGLISH
         assertEquals("1,023.0 B", MetricFormat.bytes(1023, en))
@@ -20,6 +44,24 @@ class MachinesTest {
         assertEquals("1.0 GB/s", MetricFormat.rate(1023.97 * 1024 * 1024, en))
         assertEquals("16.0 GB", MetricFormat.bytes(16L shl 30, en))
         assertEquals("2,048.0 TB", MetricFormat.bytes(2048.0 * (1L shl 40), en))
+    }
+
+    /** A lead with agents it created (#4494): the card counts what the Agents list counts for the computer. */
+    @Test fun theCardCountsTheSessionsTheAgentsListCounts() {
+        fun runtime(id: String, parent: String? = null, state: String = "working") = Session("machine", id, state = state,
+            status = if (state == "needs_you") "blocked" else state, sourceKind = "runtime", agent = "claude",
+            isSubagent = parent != null, parentSessionId = parent)
+        val codexSubagent = Session("machine", "thread", state = "working", status = "working", sourceKind = "codex_app_server",
+            agent = "codex", parentThreadId = "parent-thread")
+        val sessions = listOf(runtime("lead"), runtime("review", "lead"), runtime("check", "lead"), runtime("deploy", "lead", "needs_you"),
+            codexSubagent, Session("machine", "plain", state = "working", status = "working"))
+        assertEquals(listOf("deploy", "lead", "plain"), machineSessions(sessions, "machine").map { it.sessionId }.sorted())
+        val list = buildAgentList(sessions.map(::AgentSession), listOf(Machine("machine", online = true)))
+        val counted = machineSessions(sessions, "machine")
+        val computer = list.machines.single()
+        assertEquals(computer.sessionCount, counted.size)
+        assertEquals(computer.stateCounts[AgentState.Working], counted.count { it.agentState == AgentState.Working })
+        assertEquals(computer.stateCounts[AgentState.NeedsYou], counted.count { it.agentState == AgentState.NeedsYou })
     }
 
     @Test fun historyPreservesGapsAndPollingStopsWithThePage() = runTest {

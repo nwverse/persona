@@ -1,79 +1,146 @@
-// The session header's model name and thin context bar (#2430): `opus 5.5 ▬▬ 61%`, the tooltip "61% context left"
-// ("39% used" with Settings › Appearance › Show context as used). Always shown in a wide header, like Moshi's session header (the user asked to follow
-// Moshi); "Show details in Agent rows" only gates the sidebar rows' second line. Where the header is narrower than 800px (a phone, a side panel
-// open beside the chat) the header hides it so the title fits (#3532, #3670). Where the header is 1000px or wider the number
-// says what it is ("Context 61% left", #3668); between 800 and 1000px it stays the bare share so the title keeps its room. The tooltip
-// adds what happens when the window fills and, once close, what to do about it. A tablet has no hover, so a click (a tap)
-// opens the same words as a popover, with the token count (#4054). Where the header is 680–800px wide (an iPad in landscape
-// with the sidebar open, #4443) it is `compact`: the bare share alone, coloured as it fills, opening the same popover.
-import { useEffect } from "react";
-import { contextHeaderLabel, contextHint, contextLabel, contextNotes, contextShown, contextTier, contextTooltip, contextUsage, modelShort, useContextAsUsed, type ContextTier } from "../../lib/context-usage";
-import { cx, EASE, Menu, useMenu } from "../../ui/atoms";
-import type { Session } from "../../lib/types";
+// A session's context & usage meter (#2430, moved from the header to the usage row under the composer in #5056,
+// enabled for Assistant chats with lazy Session Insights popover in #12541): shows context window share when known
+// (or compact cumulative token count when only Item.Usage is available), and opens the lazy Session Insights popover
+// on click. "Show details in Agent rows" does not gate it. Nothing renders while both window and token usage are unknown.
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { t } from "../../i18n";
+import { contextHint, contextLabel, contextTier, contextTooltip, contextUsage, type ContextTier } from "../../lib/context-usage";
+import { bareModel } from "../../lib/model-change";
+import { compactTokens } from "../../lib/tokens";
+import { cx, EASE } from "../../ui/atoms";
+import type { Item, Session } from "../../lib/types";
+
+const SessionInsightsPopover = lazy(() => import("./SessionInsightsPopover").then((m) => ({ default: m.SessionInsightsPopover })));
 
 const TIER_BAR: Record<ContextTier, string> = { ok: "bg-accent", warn: "bg-orange", danger: "bg-orange" };
 const TIER_TEXT: Record<ContextTier, string> = { ok: "", warn: "font-medium text-orange", danger: "font-medium text-orange" };
 
-export function ContextMeter({ session, compact = false }: { session: Session; compact?: boolean }) {
-  const asUsed = useContextAsUsed();
-  const info = useMenu();
-  const model = modelShort(session.model);
-  const usage = contextUsage(session);
-  const known = usage !== null;
-  // the window went unknown (a /clear) while it was open: close it, or it would come back by itself on the next reply
-  useEffect(() => {
-    if (!known) info.close();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only a change of `known` closes it
-  }, [known]);
-  if (!model && !usage) return null;
-  if (compact && !usage) return null; // the model alone is not worth the title's room
-  const tier = usage ? contextTier(usage) : "ok";
-  const tip = usage ? contextTooltip(usage, asUsed) : undefined;
-  const title = [[model, tip].filter(Boolean).join(" · "), usage ? contextHint(usage) : ""].filter(Boolean).join("\n");
-  const look = "flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11.5px] text-ink-3";
-  if (!usage) {
-    return (
-      <div className={look} title={title}>
-        <span className="max-w-28 truncate">{model}</span>
-      </div>
-    );
+const positive = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
+
+/** Lightweight cumulative token total from loaded items, matching aggregateSessionTokens' per-field maxima for
+ *  deduplicated `(id, bareModel, fast)` subagent reports so the L1 pill and lazy popover never disagree. */
+function sessionTokenTotal(items?: readonly Item[]): number {
+  if (!items?.length) return 0;
+  let sum = 0;
+  const reports = new Map<string, { inp: number; out: number; read: number; write: number }>();
+  for (const it of items) {
+    for (const list of [it.usage, it.fold?.usage]) {
+      if (!list?.length) continue;
+      for (const u of list) {
+        const inp = positive(u.in);
+        const out = positive(u.out);
+        const read = positive(u.cache_read);
+        const write = positive(u.cache_write);
+        if (inp + out + read + write === 0) continue;
+        if (u.id) {
+          const model = u.model ? bareModel(u.model) : "";
+          const key = `${u.id}\n${model}\n${u.fast ? 1 : 0}`;
+          const prev = reports.get(key);
+          if (prev) {
+            prev.inp = Math.max(prev.inp, inp);
+            prev.out = Math.max(prev.out, out);
+            prev.read = Math.max(prev.read, read);
+            prev.write = Math.max(prev.write, write);
+          } else {
+            reports.set(key, { inp, out, read, write });
+          }
+        } else {
+          sum += inp + out + read + write;
+        }
+      }
+    }
   }
+  for (const r of reports.values()) sum += r.inp + r.out + r.read + r.write;
+  return sum;
+}
+
+/** True when any loaded item carries positive token usage. */
+export function hasSessionTokenUsage(items?: readonly Item[]): boolean {
+  if (!items?.length) return false;
+  for (const it of items) {
+    for (const list of [it.usage, it.fold?.usage]) {
+      if (!list?.length) continue;
+      for (const u of list) {
+        if (positive(u.in) + positive(u.out) + positive(u.cache_read) + positive(u.cache_write) > 0) return true;
+      }
+    }
+  }
+  return false;
+}
+
+export interface ContextMeterProps {
+  session: Session;
+  compact?: boolean;
+  items?: readonly Item[];
+  assistant?: boolean;
+  onCompact?: () => boolean | void | Promise<boolean | void | unknown>;
+  compactBlocked?: boolean;
+}
+
+export function ContextMeter({ session, compact = false, items, assistant, onCompact, compactBlocked }: ContextMeterProps) {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const close = useCallback(() => setOpen(false), []);
+  const usage = contextUsage(session);
+  const tokenTotal = useMemo(() => (usage ? 0 : sessionTokenTotal(items)), [usage, items]);
+  const known = usage !== null || tokenTotal > 0;
+  // close if the window and usage go unknown (e.g. a /clear) while open
+  useEffect(() => {
+    if (!known) setOpen(false);
+  }, [known]);
+  if (!known) return null;
+
+  const tier = usage ? contextTier(usage) : "ok";
+  const tip = usage ? contextTooltip(usage) : t("chat-runningstatusbar.token_count", { tokens: compactTokens(tokenTotal) });
+  const description = usage ? contextHint(usage) : undefined;
+  const title = usage ? [tip, contextHint(usage)].join("\n") : tip;
+
   return (
     <>
       <button
+        ref={buttonRef}
         type="button"
-        onClick={info.open}
+        onClick={() => setOpen((was) => !was)}
         aria-haspopup="dialog"
-        aria-expanded={Boolean(info.anchor)}
-        // the visible words are in the name ("Context 61% left", or the bare "61%" in a narrower header; the compact one says
-        // "Context 61% left" around its bare share) and the explanation
-        // is the description, open or not; the tooltip goes while the popover shows the same words
-        aria-label={[compact ? "" : model, contextHeaderLabel(usage, asUsed)].filter(Boolean).join(" · ")}
-        aria-description={contextHint(usage)}
-        title={info.anchor ? undefined : title}
-        className={cx(look, "touch-hit -mx-1.5 rounded-chip px-1.5 transition-colors", info.anchor && "bg-hover")}
+        aria-expanded={open}
+        aria-label={tip}
+        aria-description={description}
+        title={open ? undefined : title}
+        className={cx("touch-hit -mx-1.5 flex shrink-0 items-center gap-1.5 rounded-chip px-1.5 text-submeta whitespace-nowrap text-ink-3 transition-colors", open && "bg-hover")}
       >
-        {compact ? (
-          <span className={cx("tabular-nums", TIER_TEXT[tier])}>{contextLabel(usage, asUsed)}</span>
-        ) : (
+        {usage ? (
           <>
-            {model && <span className="max-w-28 truncate">{model}</span>}
-            <span
-              className="block h-1 w-10 overflow-hidden rounded-full bg-hover-2"
-              role="progressbar"
-              aria-label={tip}
-              aria-valuenow={contextShown(usage, asUsed)}
-              aria-valuemin={0}
-              aria-valuemax={100}
-            >
-              <span className={cx("block h-full rounded-full transition-[width] duration-300", TIER_BAR[tier])} style={{ width: `${contextShown(usage, asUsed)}%`, transitionTimingFunction: EASE }} />
-            </span>
-            <span className={cx("tabular-nums @min-[1000px]:hidden", TIER_TEXT[tier])}>{contextLabel(usage, asUsed)}</span>
-            <span className={cx("hidden tabular-nums @min-[1000px]:inline", TIER_TEXT[tier])}>{contextHeaderLabel(usage, asUsed)}</span>
+            {!compact && (
+              <span
+                className="block h-1 w-10 overflow-hidden rounded-full bg-hover-2"
+                role="progressbar"
+                aria-label={tip}
+                aria-valuenow={usage.used}
+                aria-valuemin={0}
+                aria-valuemax={100}
+              >
+                <span className={cx("block h-full rounded-full motion-safe:transition-[width] motion-safe:duration-300", TIER_BAR[tier])} style={{ width: `${usage.used}%`, transitionTimingFunction: EASE }} />
+              </span>
+            )}
+            <span className={cx("tabular-nums", TIER_TEXT[tier])}>{contextLabel(usage)}</span>
           </>
+        ) : (
+          <span className="tabular-nums" data-context-tokens>{tip}</span>
         )}
       </button>
-      {info.anchor && <Menu anchor={info.anchor} onClose={info.close} align="right" width={300} items={contextNotes(usage, asUsed)} />}
+      {open && (
+        <Suspense fallback={null}>
+          <SessionInsightsPopover
+            anchor={buttonRef}
+            session={session}
+            items={items}
+            assistant={assistant}
+            onCompact={onCompact}
+            compactBlocked={compactBlocked}
+            onClose={close}
+          />
+        </Suspense>
+      )}
     </>
   );
 }

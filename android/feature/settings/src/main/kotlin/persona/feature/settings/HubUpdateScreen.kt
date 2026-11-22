@@ -1,7 +1,5 @@
 package persona.feature.settings
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.res.Resources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.layout.Arrangement
@@ -12,13 +10,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.navigation3.runtime.NavKey
@@ -62,43 +60,39 @@ internal fun HubUpdateContent(
     val scope = rememberCoroutineScope()
     val resources = LocalResources.current
     var confirmNow by remember { mutableStateOf(false) }
-    val s = state.status
-    JListPage(title = stringResource(R.string.settings_hub_update_title), onBack = onBack, refreshing = state.checking && s != null,
+    val loadable = state.loadable(state.error?.text())
+    // The failed check or update is the list's first row: a list scrolled below it keeps its own first row in view, so show it.
+    val listState = rememberLazyListState()
+    LaunchedEffect(state.actionError) { if (state.actionError != null) listState.animateScrollToItem(0) }
+    JListPage(title = stringResource(R.string.settings_hub_update_title), onBack = onBack, state = listState, refreshing = loadable.isRefreshing,
         onRefresh = model?.let { m -> { scope.launch { m.check() } } }) {
-        when {
-            state.unsupported -> item("unsupported") { JNotice(stringResource(R.string.settings_hub_update_unsupported), Modifier.padding(top = Tokens.Space.m)) }
-            s != null -> {
-                state.actionError?.let { item("action-error") { JInlineStatus(it.text(), Modifier.padding(top = Tokens.Space.m), tone = InlineTone.Failed) } }
-                // Told once that it updates itself (the hub forgets the line once seen or once auto-update was chosen).
-                if (s.autoNotice) item("auto-notice") {
-                    // Like the web's line: "Turn off" turns auto-update off, "Got it" only hides this (both tell the hub it was seen).
-                    JCard(Modifier.padding(top = Tokens.Space.m)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                            JIcon(PhIcons.Info, null, tint = PersonaTheme.palette.accent, decorative = true)
-                            Text(stringResource(R.string.settings_hub_update_auto_notice), Modifier.weight(1f), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink)
-                            JButton(stringResource(R.string.settings_hub_update_turn_off), { model?.let { m -> scope.launch { m.setAuto(false) } } }, kind = JButtonKind.Quiet, size = JButtonSize.Small, enabled = !state.sending)
-                            JButton(stringResource(R.string.settings_hub_update_got_it), { model?.let { m -> scope.launch { m.noticeSeen() } } }, kind = JButtonKind.Quiet, size = JButtonSize.Small, enabled = !state.sending)
-                        }
+        if (state.unsupported) item("unsupported") { JNotice(stringResource(R.string.settings_hub_update_unsupported), Modifier.padding(top = Tokens.Space.m)) }
+        else jLoadableContent(loadable, onRetry = model?.let { m -> { scope.launch { m.load() } } }) { s ->
+            state.actionError?.let { item("action-error") { JInlineStatus(it.text(), Modifier.padding(top = Tokens.Space.m), tone = InlineTone.Failed) } }
+            // Told once that it updates itself (the hub forgets the line once seen or once auto-update was chosen).
+            if (s.autoNotice) item("auto-notice") {
+                // Like the web's line: "Turn off" turns auto-update off, "Got it" only hides this (both tell the hub it was seen).
+                JCard(Modifier.padding(top = Tokens.Space.m)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                        JIcon(PhIcons.Info, null, tint = PersonaTheme.palette.accent, decorative = true)
+                        Text(stringResource(R.string.settings_hub_update_auto_notice), Modifier.weight(1f), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink)
+                        JButton(stringResource(R.string.settings_hub_update_turn_off), { model?.let { m -> scope.launch { m.setAuto(false) } } }, kind = JButtonKind.Quiet, size = JButtonSize.Small, enabled = !state.sending)
+                        JButton(stringResource(R.string.settings_hub_update_got_it), { model?.let { m -> scope.launch { m.noticeSeen() } } }, kind = JButtonKind.Quiet, size = JButtonSize.Small, enabled = !state.sending)
                     }
                 }
-                version(s, state, resources, onCheck = { model?.let { m -> scope.launch { m.check() } } })
-                update(s, state, resources, onUpdate = { model?.let { m -> scope.launch { m.update(now = false) } } }, onNow = { confirmNow = true })
-                if (s.canUpdate) item("auto") {
-                    Column {
-                        JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.xl)) {
-                            JSwitchRow(stringResource(R.string.settings_hub_update_auto), s.auto, { on -> model?.let { m -> scope.launch { m.setAuto(on) } } }, enabled = !state.sending)
-                        }
-                        Note(stringResource(R.string.settings_hub_update_auto_footer))
+            }
+            version(s, state, resources, onCheck = { model?.let { m -> scope.launch { m.check() } } })
+            update(s, state, resources, onUpdate = { model?.let { m -> scope.launch { m.update(now = false) } } }, onNow = { confirmNow = true })
+            if (s.canUpdate) item("auto") {
+                Column {
+                    JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.section)) {
+                        JSwitchRow(stringResource(R.string.settings_hub_update_auto), s.auto, { on -> model?.let { m -> scope.launch { m.setAuto(on) } } }, enabled = !state.sending)
                     }
+                    Note(stringResource(R.string.settings_hub_update_auto_footer))
                 }
-                nodes(machines, onMachine)
-                if (state.history.isNotEmpty()) history(state.history)
             }
-            state.error != null -> item("error") {
-                JNotice(state.error.text(), Modifier.padding(top = Tokens.Space.m), status = Status.NeedsYou,
-                    actionLabel = stringResource(R.string.settings_hub_update_retry), onAction = model?.let { m -> { scope.launch { m.load() } } })
-            }
-            else -> item("loading") { JLoading() }
+            nodes(machines, onMachine)
+            if (state.history.isNotEmpty()) history(state.history)
         }
     }
     if (confirmNow) JDialog(
@@ -194,20 +188,14 @@ private fun Progress(s: HubUpdateStatus, onNow: () -> Unit) {
 /** A Docker hub updates by a new image: what to run where, each command with a copy button. */
 @Composable
 private fun DockerRows(s: HubUpdateStatus) {
-    val context = LocalContext.current
     val (headline, steps) = HubUpdateText.dockerSteps(s, LocalResources.current)
-    val clipLabel = stringResource(R.string.settings_hub_update_clip_label)
-    val copied = stringResource(R.string.settings_hub_update_copied)
-    val feedback = LocalAppFeedback.current
+    val copy = rememberCopy()
     headline?.let { Text(it, Modifier.padding(horizontal = rowPadding), style = PersonaTheme.type.bodyStrong, color = PersonaTheme.palette.ink, maxLines = 1) }
     steps.forEach { step ->
         Text(step.text, Modifier.padding(horizontal = rowPadding), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink2)
         JGroupItem(GroupPosition.Single) {
             JRow(trailing = {
-                JIconButton(PhIcons.Copy, stringResource(R.string.settings_hub_update_copy), {
-                    context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText(clipLabel, step.copy))
-                    feedback?.notice(copied)
-                })
+                JIconButton(PhIcons.Copy, stringResource(R.string.settings_hub_update_copy), { copy(step.copy, null) })
             }) {
                 Text(step.copy, style = PersonaTheme.type.codeSmall, color = PersonaTheme.palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }

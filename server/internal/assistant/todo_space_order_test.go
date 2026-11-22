@@ -67,7 +67,7 @@ func (*workspaceStore) ListTodoSources(context.Context) (map[string]db.TodoSourc
 func (st *workspaceStore) removeAgents(todo, key string) {
 	st.agents = slices.DeleteFunc(st.agents, func(a db.TodoAgentRow) bool { return a.TodoID == todo && a.Source == "space" && a.Via == key })
 }
-func (st *workspaceStore) LinkTodoSpace(_ context.Context, todo, mid, space string, at time.Time) (string, error) {
+func (st *workspaceStore) LinkTodoSpace(_ context.Context, todo, mid, space string, at time.Time, _ db.KeptLinks) (string, error) {
 	st.mu.Lock()
 	if st.fail != nil {
 		err := st.fail
@@ -87,7 +87,7 @@ func (st *workspaceStore) LinkTodoSpace(_ context.Context, todo, mid, space stri
 	}
 	return old, nil
 }
-func (st *workspaceStore) UnlinkTodoSpace(_ context.Context, todo, mid, space string) error {
+func (st *workspaceStore) UnlinkTodoSpace(_ context.Context, todo, mid, space string, _ db.KeptLinks) error {
 	st.mu.Lock()
 	if st.fail != nil {
 		err := st.fail
@@ -286,7 +286,7 @@ func TestTodoWorkspaceSupersededFanout(t *testing.T) {
 					a, b = e.create("Task A").ID, e.create("Task B").ID
 				}
 				h := &workspaceSessionHub{fakeHub: e.f, entered: make(chan struct{}), release: make(chan struct{})}
-				e.s.hub = h
+				setHub(e.s, h)
 				e.f.setSessions("machine", proto.Session{SessionID: "existing", SpaceName: "work", Status: proto.StatusWorking})
 				var once sync.Once
 				defer once.Do(func() { close(h.release) })
@@ -403,7 +403,7 @@ func (st *workspaceStore) DeleteTodo(_ context.Context, todo string) error {
 	st.agents = slices.DeleteFunc(st.agents, func(row db.TodoAgentRow) bool { return row.TodoID == todo })
 	return nil
 }
-func (st *workspaceStore) RenameTodoSpace(_ context.Context, mid, old, newName string) (bool, error) {
+func (st *workspaceStore) RenameTodoSpace(_ context.Context, mid, old, newName string, _ db.KeptLinks) (bool, error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	oldKey, newKey := spaceKey(mid, old), spaceKey(mid, newName)
@@ -535,8 +535,8 @@ type workspaceCommitGate struct {
 	first              atomic.Bool
 }
 
-func (st *workspaceCommitGate) LinkTodoSpace(ctx context.Context, todo, mid, space string, at time.Time) (string, error) {
-	old, err := st.todoStore.LinkTodoSpace(ctx, todo, mid, space, at)
+func (st *workspaceCommitGate) LinkTodoSpace(ctx context.Context, todo, mid, space string, at time.Time, keep db.KeptLinks) (string, error) {
+	old, err := st.todoStore.LinkTodoSpace(ctx, todo, mid, space, at, keep)
 	if err == nil && st.first.CompareAndSwap(false, true) {
 		close(st.committed)
 		<-st.release

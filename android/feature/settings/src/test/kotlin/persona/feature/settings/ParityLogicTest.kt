@@ -15,6 +15,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import persona.core.contracts.PaseoAgent
 import persona.core.contracts.api.ClaudeDir
 import persona.core.contracts.api.ClaudeDirsState
 import persona.core.contracts.api.HubLauncher
@@ -74,6 +75,14 @@ class ParityLogicTest {
         assertEquals(listOf("cc_old"), all.hidden.map { it.name })
         assertEquals(listOf("team"), ProviderGroups.of(launchers, "GATEWAY.example").managed.map { it.name })
         assertEquals(listOf("cc_work"), ProviderGroups.of(launchers, "laptop") { if (it == "mac") "Laptop" else it }.zshrc.map { it.name })
+        val traeCli = HubLauncher("traex", agent = "traex")
+        val paseoTraeCli = HubLauncher("traecli", agent = PaseoAgent)
+        val customTraeCli = HubLauncher("trae-cli", agent = PaseoAgent, displayName = "Team CLI")
+        val withTraeCli = launchers + listOf(traeCli, paseoTraeCli, customTraeCli)
+        assertEquals(listOf(traeCli, paseoTraeCli), ProviderGroups.of(withTraeCli, "TRAE CLI").zshrc)
+        assertEquals(listOf(traeCli), ProviderGroups.of(withTraeCli, "traex").zshrc)
+        assertEquals(listOf(customTraeCli), ProviderGroups.of(withTraeCli, "Team CLI").zshrc)
+        assertEquals("TRAE CLI", harnessName("trae-cli"))
         assertTrue(ProviderGroups.of(launchers, "nothing").isEmpty)
         assertEquals("gateway.example.com", providerHost("https://gateway.example.com/v1"))
         assertNull(providerHost(""))
@@ -81,6 +90,7 @@ class ParityLogicTest {
 
     private class Fake(var fail: Boolean = false) : ProviderSetup {
         val calls = mutableListOf<String>()
+        val previews = mutableListOf<Pair<String, String?>>()
         var list = listOf(
             HubLauncher("team", source = "persona"),
             HubLauncher("cc_work", source = "zshrc"),
@@ -90,8 +100,8 @@ class ParityLogicTest {
         override suspend fun launchers() = list
         override suspend fun remove(name: String) { calls += "remove $name"; if (fail) error("refused") }
         override suspend fun restore(name: String) { calls += "restore $name"; if (fail) error("refused") }
-        override suspend fun importPreview(machine: String) = listOf(ImportedProvider("a"), ImportedProvider("b"))
-        override suspend fun import(machine: String, providers: List<String>) = LauncherImportResult(created = providers).also { calls += "import $machine $providers" }
+        override suspend fun importPreview(machine: String, alias: String?) = listOf(ImportedProvider("a"), ImportedProvider("b")).also { previews += machine to alias }
+        override suspend fun import(machine: String, providers: List<String>, alias: String?) = LauncherImportResult(created = providers).also { calls += "import $machine $providers" + (alias?.let { " $it" }.orEmpty()) }
     }
 
     @Test fun providersHideRestoreDeleteMoveAtOnceAndComeBackOnFailure() = runBlocking {
@@ -127,6 +137,18 @@ class ParityLogicTest {
         assertEquals(listOf("import mac [b]"), api.calls)
     }
 
+    @Test fun oneFoundAliasStaysSelectedOnPreviewAndImport() = runBlocking {
+        val api = Fake()
+        val model = ProviderImportModel(api)
+        model.choose("mac", "cc work")
+        model.load()
+        model.runImport()
+        assertEquals(listOf("mac" to "cc work"), api.previews)
+        assertEquals(listOf("import mac [a, b] cc work"), api.calls)
+        model.restart()
+        assertEquals("cc work", model.state.value.alias)
+    }
+
     @Test fun checksRunOnEveryMachineAtOnceAndEachRowFillsInOnItsOwn() = runBlocking {
         val answers = mapOf("a" to CompletableDeferred<LauncherCheck>(), "b" to CompletableDeferred<LauncherCheck>())
         val started = mutableListOf<String?>()
@@ -151,7 +173,7 @@ class ParityLogicTest {
 
     @Test fun importFromAnOutdatedMachineSaysToRedeployIt() = runBlocking {
         fun model(failure: Exception) = ProviderImportModel(object : ProviderSetup by Fake() {
-            override suspend fun importPreview(machine: String): List<ImportedProvider> = throw failure
+            override suspend fun importPreview(machine: String, alias: String?): List<ImportedProvider> = throw failure
         }).apply { choose("mac") }
         val outdated = model(HubFailure(HubError.Server, "too old", status = 409, code = "node_outdated"))
         outdated.load()

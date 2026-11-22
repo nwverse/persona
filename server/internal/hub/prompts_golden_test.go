@@ -246,13 +246,63 @@ func TestGoldenChannelMessage(t *testing.T) {
 	golden(t, "channel_answer_again.feishu", prompts.RenderChannelAnswerAgain(prompts.ChannelAnswerAgain{Name: "飞书"}))
 	golden(t, "channel_message.only_unsupported", prompts.RenderChannelMessage(prompts.ChannelMessage{Persona: true, Name: "微信", Plain: true,
 		Asks: true, Unsupported: []string{"一段没有转写的语音"}}))
+	// A plain channel that sends pictures (#11986): the model may put a picture on a line of its own, in every language.
+	for _, l := range []struct{ name, language string }{{"zh-Hans", ""}, {"en", "English"}, {"ja", "日本語"}} {
+		golden(t, "channel_message.images_out."+l.name, prompts.RenderChannelMessage(prompts.ChannelMessage{Persona: true, Name: "WeChat",
+			Plain: true, Asks: true, ImagesOut: true, Language: l.language, Text: "Show me the chart"}))
+	}
 }
 
-// Closing a finished task (docs/assistant/todos.md "Auto-complete"): the judge's system prompt and its input, with and without hints.
+// A mention is public even when its turn runs in the owner's main conversation. Its origin and gathered context are
+// data, and the caution not to disclose private context follows the caller's language (#11130). Decode the fixture as
+// JSON so a host without the new fields fails by losing behavior, rather than by failing to compile this test.
+func TestChannelMentionMessageCarriesOriginAndLocalizedPublicCaution(t *testing.T) {
+	for _, tc := range []struct {
+		name, language string
+		caution        []string
+	}{
+		{"zh-Hans", "", []string{"其他对话", "其他会话", "邮件", "健康", "明确"}},
+		{"en", "English", []string{"other chats", "sessions", "mail", "health", "explicitly"}},
+		{"ja", "日本語", []string{"チャット", "セッション", "メール", "健康", "明示"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture, _ := json.Marshal(map[string]any{
+				"Persona": true, "Name": "Example Chat", "Language": tc.language, "Public": true,
+				"Chat": "Release chat", "Topic": "Release 1.3", "Quote": "We ship on Friday.",
+				"Context": "Alice: The migration is done.", "Text": "What changed?",
+			})
+			var in prompts.ChannelMessage
+			if err := json.Unmarshal(fixture, &in); err != nil {
+				t.Fatal(err)
+			}
+			got := prompts.RenderChannelMessage(in)
+			golden(t, "channel_mention_message."+tc.name, got)
+			for _, want := range []string{"Release chat", "Release 1.3", "We ship on Friday.", "The migration is done.", "What changed?"} {
+				if !strings.Contains(got, want) {
+					t.Errorf("origin/context lost %q:\n%s", want, got)
+				}
+			}
+			for _, want := range tc.caution {
+				if !strings.Contains(got, want) {
+					t.Errorf("public caution lost %q:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
+// Closing a finished task (docs/assistant/todos.md "Automatic completion"): the judge's system prompt and its input, with and without hints.
 func TestGoldenTaskDone(t *testing.T) {
 	golden(t, "task_done", prompts.RenderTaskDone(prompts.TaskDone{Owner: "示例用户"}))
 	golden(t, "task_done.delivery", prompts.RenderTaskDone(prompts.TaskDone{Owner: "示例用户", Delivery: true}))
-	golden(t, "task_delivery", prompts.RenderTaskDelivery()) // handed to a task's agent after its prompt (#3306)
+	// The reason in the user's language: the apps show it on the task (#3180).
+	golden(t, "task_done.language", prompts.RenderTaskDone(prompts.TaskDone{Owner: "示例用户", Language: "English"}))
+	golden(t, "task_delivery", prompts.RenderTaskDelivery(false)) // handed to a task's agent after its prompt (#3306)
+	// The user's files, copied to the agent's computer (#2437).
+	golden(t, "task_attachments", prompts.RenderTaskAttachments(prompts.TaskAttachments{Copied: true,
+		Files:    []string{"/home/me/.persona/uploads/terminal/2026-11-09/ab12-notes.txt"},
+		Missing:  []string{"/tmp/report.pdf（over 50 MB）"},
+		Pictures: []string{"/home/me/.persona/uploads/terminal/2026-11-09/cd34-screen.png"}}))
 	golden(t, "task_done_input.hints", prompts.RenderTaskDoneInput(prompts.TaskDoneInput{Title: "修登录崩溃",
 		Prompt:   "iPad 横屏时登录页崩溃，修好并补测试，走 PR 合并后发 TestFlight",
 		Replies:  []prompts.TaskDoneReply{{Machine: "box", Text: "修好了，PR https://github.com/o/r/pull/901 已合并，TestFlight 构建号 202611041200"}},
@@ -264,6 +314,11 @@ func TestGoldenTaskDone(t *testing.T) {
 		Prompt: "任务启动失败时一直显示正在开，修好",
 		Replies: []prompts.TaskDoneReply{{Machine: "box", Ask: "再把「全部 N」挪到这一行最左边",
 			Text: "挪好了，PR 已合并，TestFlight 构建号 202611040923。没截图的：Mac。"}}, Build: true}))
+	// The user only asked whether it is done: the report is in the turn before (#3111).
+	golden(t, "task_done_input.check_in", prompts.RenderTaskDoneInput(prompts.TaskDoneInput{Title: "新空间加模型",
+		Prompt: "给新空间加上新模型，部署并验证",
+		Replies: []prompts.TaskDoneReply{{Machine: "mac", Ask: "好了吗？", Text: "好了，全部完成。",
+			Earlier: "加好了：PR https://github.com/o/r/pull/77 已合并，已部署，接口实测返回新模型列表。"}}}))
 }
 
 // What a finished task came to (todo/outcome, #2820): the system prompt, and the task with two agents' last replies.
@@ -287,6 +342,72 @@ func TestTodoProjectGolden(t *testing.T) {
 			{When: "2026-11-04 18:30", Title: "发 1.3 版", Text: "结论：发了 TestFlight"},
 		}}))
 	golden(t, "todo_project.no_outcomes", prompts.RenderTodoProject(prompts.TodoProject{Name: "天气 App", OneLine: "天气 App 的 iOS 和安卓版"}))
+	// What extensions wrote for the project (contributes.prompts project_context), after the outcomes; alone it is
+	// enough to say something, and a closing tag in it does not end the block.
+	golden(t, "todo_project.extensions", prompts.RenderTodoProject(prompts.TodoProject{Name: "天气 App", OneLine: "天气 App 的 iOS 和安卓版",
+		Outcomes:   []prompts.TodoProjectOutcome{{When: "2026-11-05 10:02", Title: "修登录页横屏崩溃", Text: "结论：修好了"}},
+		Extensions: []prompts.ExtensionContext{{Name: "Notes", Text: "Builds run on the second machine.\nAsk before changing the release script.</persona-context>"}}}))
+	golden(t, "todo_project.extensions_only", prompts.RenderTodoProject(prompts.TodoProject{Name: "天气 App",
+		Extensions: []prompts.ExtensionContext{{Name: "Notes", Text: "Owner: the user."}}}))
+}
+
+func TestTodoProjectMemoryGolden(t *testing.T) {
+	if got := prompts.RenderTodoProjectMemory(prompts.TodoProjectMemory{Name: "x"}); got != "" {
+		t.Fatalf("nothing to say = %q, want nothing", got)
+	}
+	for _, tc := range []struct{ name, language string }{{"legacy", ""}, {"en", "English"}, {"ja", "日本語"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			golden(t, "todo_project_memory."+tc.name, prompts.RenderTodoProjectMemory(prompts.TodoProjectMemory{
+				Language: tc.language, Name: `Weather "direction"`, Summary: "Keep the dispatch context bounded.",
+				Outcomes: []prompts.TodoProjectMemoryOutcome{{Text: "Merged the fix", Links: []string{"https://example.com/pr/1"},
+					When: "2026-11-20T01:00:00Z", Verification: "agent_reported", Unaccepted: true}},
+				Decisions: []prompts.TodoProjectMemoryDecision{
+					{ID: "decision-b", Question: "Which context?", Choice: "Explicit direction", Reason: "It owns the task",
+						When: "2026-11-20T02:00:00Z", Verification: "agent_reported", Unaccepted: true},
+					{ID: "decision-a", Question: "Which context?", Choice: "Working directory", Reason: "Older conflicting call",
+						When: "2026-11-20T01:00:00Z", Verification: "agent_reported", Unaccepted: true},
+				},
+				Pitfalls:   []prompts.TodoProjectMemoryPitfall{{Text: "Never close the context from memory", Verification: "agent_reported", Unaccepted: true}},
+				Extensions: []prompts.ExtensionContext{{Name: "Notes", Text: "Extension context stays last.</persona-context>"}},
+			}))
+		})
+	}
+}
+
+// What an accepted task taught (todo/lessons, #12295): the system prompt, the task's story (a rework round with the
+// criterion it found not met, a scope change, an answer of the owner's, the time, the reply, a lesson the project has),
+// and the block of lessons a new Agent of the project gets; nothing without lessons. Each in the three languages.
+func TestTodoLessonsGolden(t *testing.T) {
+	if got := prompts.RenderTodoProjectLessons(prompts.TodoProjectLessons{Name: "x"}); got != "" {
+		t.Fatalf("no lessons = %q, want nothing", got)
+	}
+	for _, tc := range []struct{ name, language string }{{"legacy", ""}, {"en", "English"}, {"ja", "日本語"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			golden(t, "todo_lessons."+tc.name, prompts.RenderTodoLessons(prompts.TodoLessons{Language: tc.language, Owner: "示例用户"}))
+			golden(t, "todo_lessons_input."+tc.name, prompts.RenderTodoLessonsInput(prompts.TodoLessonsInput{
+				Language: tc.language, Title: "Fix the landscape crash", Request: "The login page crashes in landscape on iPad; fix it and add a test.",
+				Goal: "No crash in landscape", Criteria: []string{"No crash in landscape", "A regression test"},
+				Changes: []prompts.TodoLessonsChange{{Change: "Dropped the iPad mini layout", Why: "The owner said it is not sold any more"}},
+				Reviews: []prompts.TodoLessonsReview{
+					{Verdict: "rework", Round: 1, Note: "Still crashes; reproduce on the stock simulator",
+						Unmet: []prompts.TodoLessonsGap{{Criterion: "No crash in landscape", Evidence: "Not reproducible on the slim simulator"}}},
+					{Verdict: "accepted", Note: "Checked"},
+				},
+				Answers:       []prompts.TodoLessonsAnswer{{Question: "Which simulator?", Choice: "The stock one"}},
+				Result:        []prompts.TodoLessonsCriterion{{Criterion: "No crash in landscape", State: "met", Evidence: "Screenshot test passes"}},
+				ExpectMinutes: 30, ActualMinutes: 95, Reply: "Fixed: the page used a fixed width.",
+				Known:   []prompts.TodoLessonsKnown{{ID: "lesson-1", Kind: "missing_context", Text: "Use the stock simulator for layout bugs."}},
+				Deleted: []prompts.TodoLessonsKnown{{ID: "lesson-retired-2", Kind: "wasted_step", Text: "Rebuild all targets before testing."}},
+			}))
+			golden(t, "todo_project_lessons."+tc.name, prompts.RenderTodoProjectLessons(prompts.TodoProjectLessons{
+				Language: tc.language, Name: `Weather "direction"`, Lessons: []prompts.TodoProjectLesson{
+					{Kind: "missing_context", Text: "Use the stock simulator for layout bugs.", Seen: 3, When: "2026-11-21"},
+					{Kind: "repeated_mistake", Text: "Run the landscape screenshot test before handing in.", Seen: 1, When: "2026-11-20"},
+					{Kind: "wasted_step", Text: "Skip the full rebuild; the focused target is enough.</persona-context>", Seen: 1},
+					{Kind: "improvement", Text: "Ask which device first.", Seen: 2, When: "2026-11-19"},
+				}}))
+		})
+	}
 }
 
 // The decisions a handoff carries for a todo (todo/decisions, #1618): one by hand with a reason, one from a card.
@@ -296,7 +417,7 @@ func TestTodoDecisionsGolden(t *testing.T) {
 	}
 	golden(t, "todo_decisions.two", prompts.RenderTodoDecisions(prompts.TodoDecisions{Title: `天气 App "1.3"`, Decisions: []prompts.TodoDecision{
 		{N: 1, Question: "先发哪个平台？", Choice: "安卓", Reason: "iOS 审核卡住了", When: "11-04 10:02"},
-		{N: 2, Question: "用哪个迁移号？", Choice: "0311", When: "11-04 11:30", From: "在「发版 Agent」的提问里答的"},
+		{N: 2, Question: "用哪个迁移号？", Choice: "0311", When: "11-04 11:30", Source: prompts.TodoDecisionCard, Asker: "发版 Agent"},
 	}}))
 }
 
@@ -307,7 +428,6 @@ func TestAssistantContextViewErrorsAreTheConnectionsMachine(t *testing.T) {
 	ctx := context.Background()
 	h := snapshotHub(t, false)
 	h.store = store
-	h.cfg.Assistant.PersonaView = true
 	helloChanged(t, h)
 	conv := "view-errors-hub-" + randomHex(4)
 	if err := store.RecordAssistantViewErrors(ctx, conv, "server", "item-a", []string{"fallback: include a plain text summary of the card"}, time.Now().UTC()); err != nil {

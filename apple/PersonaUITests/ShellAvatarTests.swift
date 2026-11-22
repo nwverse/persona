@@ -1,6 +1,6 @@
 import XCTest
 
-/// The shell's top-left button is the persona's face (docs/apple/ios.md「新外壳」): it opens the drawer on Assistant and on Agents,
+/// The shell's top-left button is the persona's face (docs/apple/ios.md「New shell」): it opens the drawer on Assistant and on Agents,
 /// and carries the inbox's dot while the inbox has something for the user (Demo Mode's has).
 /// The empty-inbox case needs scripts/mock/mock_hub.py started with
 /// MOCK_INBOX=empty (PERSONA_EMPTY_INBOX_HUB).

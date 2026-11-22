@@ -1,5 +1,5 @@
 // Package devicewire is what the hub and the manager that carries the user's computers say to each other over the
-// bus about them (docs/protocol/protocol.md "Computers (devices.*)", docs/server/machines.md "Who connects the computers"): the manager (internal/devices, in
+// bus about them (docs/protocol/protocol.md "Computers (devices.*)", docs/server/machines.md "Who connects to computers"): the manager (internal/devices, in
 // `personad assistant`) connects every computer — the local node, ssh, tailcat, Persona Link in both modes, the ones
 // reached through another hub of the mesh — and holds what is known of each; the hub never dials or accepts a
 // computer. It hands the manager hub.json's machines as defaults, relays the apps' calls and streams to it, and keeps
@@ -13,6 +13,10 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+// LegacyTaskExecution is an internal assistant.send hint for unconfigured scheduled turns.
+// The devices manager consumes it against the connected node's handshake before dispatch.
+const LegacyTaskExecution = "task_execution_legacy"
+
 // Manager → hub.
 const (
 	// EventState {machines: [State], absorbed: {entry id: machine id}, entries: [Entry]}: every machine as the manager
@@ -21,6 +25,11 @@ const (
 	EventState = "devices.state"
 	// EventNode {machine_id, event, params}: one of a node's one-way events, as it came, in the order they came.
 	EventNode = "devices.event"
+	// EventDesktops Desktops: the manager's computers whose Persona Link says the user is at them now, all of them, on
+	// every presence the Persona Links say (once a minute while active), after a devices.state when it changed, and in
+	// full after each handshake. Apart from devices.state, whose every change goes to the apps as their machine list.
+	// Older hubs ignore it.
+	EventDesktops = "devices.desktops"
 	// MethodRequest {machine_id, method, params, request} → the hub's answer to a node's request the hub answers
 	// (interaction.create, assistant.lark, mcp.tools, mcp.call).
 	MethodRequest = "devices.request"
@@ -65,6 +74,9 @@ const (
 	// MethodCall {machine_id, method, params, timeout_ms?} → the node's result: the apps' and the hub's calls to a
 	// machine's node. session.watch / session.unwatch also tell the manager what to watch again after a reconnect.
 	MethodCall = "devices.call"
+	// MethodFileCall has NodeCall's params too, but only for a long file.copy / file.zip whose caller may cancel it.
+	// Keeping it separate leaves ordinary devices.call completion semantics unchanged when an HTTP client disconnects.
+	MethodFileCall = "devices.file_call"
 	// EventNotify {machine_id, event, params}: a one-way event to a node (terminal input, a port's bytes).
 	EventNotify = "devices.notify"
 	// EventConfig Config: what the hub hands the manager changed (an entry added on the admin page, the mesh, the
@@ -95,7 +107,18 @@ const (
 	MethodMachinesPut    = "devices.machines.put"
 	MethodMachinesRemove = "devices.machines.remove"
 	MethodMachinesGet    = "devices.machines.get"
+	// MethodEngineGet MachineRef → MachineEngine, MethodEnginePut MachineEngine → {}: a machine's engine choice as the
+	// manager keeps it in its own settings (Choice nil: never chosen). A move reads it from the manager the machine
+	// leaves and puts it in the one it goes to, so a change of owner does not change the engine (#3611).
+	MethodEngineGet = "devices.engine.get"
+	MethodEnginePut = "devices.engine.put"
 )
+
+// MachineEngine is one machine's engine choice (devices.engine.get's answer, devices.engine.put's params).
+type MachineEngine struct {
+	MachineID string              `json:"machine_id"`
+	Choice    *proto.EngineChoice `json:"choice,omitempty"`
+}
 
 // CodeNotOwnList: the manager does not keep its own list of computers (the hub did not hand it MachinesOwn, or its
 // list was not taken over as its own): the hub edits hub.json for it instead.
@@ -153,6 +176,9 @@ type Accept struct {
 // Config is what the hub hands the manager: the defaults of what the manager carries, as the hub's hello has them
 // (manager.hello's answer, field devices) and devices.config again whenever they change.
 type Config struct {
+	ShareRoutingHandle []byte                    `json:"share_routing_handle,omitempty"`
+	SharePublicOrigin  string                    `json:"share_public_origin,omitempty"`
+	ShareAuthorities   map[string]ShareAuthority `json:"share_authorities,omitempty"`
 	// AutoUpdateNodes is an explicit opt-in; older hubs omit it and leave nodes unchanged.
 	AutoUpdateNodes bool `json:"auto_update_nodes,omitempty"`
 	// Machines are hub.json's machines (and those the admin page added since), each the JSON hub.json has.
@@ -190,6 +216,9 @@ type Config struct {
 	// PendingUnknown: the hub could not read which machines wait (its database did not answer); until a handover
 	// without it, the manager treats every machine as not confirmed yet.
 	PendingUnknown bool `json:"pending_unknown,omitempty"`
+	// LinkSwitch: this hub answers devices.link_switch.* (link_switch.go) and takes Persona Link now (its TLS port or
+	// an https public_url); an older hub, or one no Persona Link can reach, leaves it out and no switch is offered.
+	LinkSwitch bool `json:"link_switch,omitempty"`
 }
 
 // LinkEndpoint is one address Persona Link may use (internal/link.Endpoint).
@@ -198,7 +227,7 @@ type LinkEndpoint struct {
 	Kind string `json:"kind"`
 }
 
-// Mesh is what the manager needs of the mesh group (docs/server/mesh.md "Several ways"): whether this hub leaves its computers to
+// Mesh is what the manager needs of the mesh group (docs/server/mesh.md "Multiple paths to one computer"): whether this hub leaves its computers to
 // the center, and the members' computers the center reaches through them.
 type Mesh struct {
 	// Member: this hub is a member; its computers are connected by the center (through it), not from here.
@@ -239,6 +268,10 @@ type RecMachine struct {
 
 // State is one machine as the manager has it.
 type State struct {
+	// TransportFor is an owning manager's retained transport identity. The hub
+	// validates the referenced computer belongs to that manager; it never resolves
+	// sessions or stores business mappings itself.
+	TransportFor string `json:"transport_for,omitempty"`
 	// Machine is what the apps get, but for what the hub adds (system, computer, browser).
 	Machine proto.Machine `json:"machine"`
 	// Config is the machine's entry: hub.json's, or a member's (a derived machine), as the hub gave it.
@@ -254,6 +287,26 @@ type State struct {
 	// Paths are its ways, for the admin page.
 	Paths []PathInfo `json:"paths,omitempty"`
 }
+
+// Desktops is EventDesktops' params.
+type Desktops struct {
+	Desktops []Desktop `json:"desktops"`
+}
+
+// Desktop is a computer whose Persona Link says the user is at it (docs/operations/link.md "Presence"); the hub counts
+// it as a desktop for "Phone Muted" for TTLMS from when it takes this, on its own clock (at most DesktopTTLMax), while
+// Notifies holds.
+type Desktop struct {
+	MachineID string `json:"machine_id"`
+	// Since: when this run of presence began, on the manager's clock: only for the apps to show.
+	Since    time.Time `json:"since"`
+	TTLMS    int64     `json:"ttl_ms"`
+	Notifies bool      `json:"notifies"`
+}
+
+// DesktopTTLMax caps a desktop's TTL, twice Persona Link's presence TTL (link.PresenceTTL): however a manager counts,
+// no presence keeps phones quiet longer without being said again.
+const DesktopTTLMax = 4 * time.Minute
 
 // PathInfo is a path as the admin page and the machine list show it.
 type PathInfo struct {
@@ -289,15 +342,75 @@ type NodeEvent struct {
 
 // NodeCall is devices.call's and devices.request's params.
 type NodeCall struct {
-	MachineID string          `json:"machine_id"`
-	Method    string          `json:"method"`
-	Params    json.RawMessage `json:"params,omitempty"`
+	Caller     *Caller         `json:"caller,omitempty"`
+	Submission *Submission     `json:"submission,omitempty"`
+	Authority  *ShareAuthority `json:"share_authority,omitempty"`
+	MachineID  string          `json:"machine_id"`
+	Method     string          `json:"method"`
+	Params     json.RawMessage `json:"params,omitempty"`
+	// StreamVersion is an offer for port.dial. The manager passes it into the node's params.
+	StreamVersion int `json:"stream_version,omitempty"`
 	// TimeoutMS bounds the call on the manager's side too, a little before the caller gives up: the manager's
 	// CodeDeadline answer comes back in time.
 	TimeoutMS int64 `json:"timeout_ms,omitempty"`
 	// Request is devices.request's key, the manager's (EventRequestEnd names it).
 	Request string `json:"request,omitempty"`
+	// Fallback (a connection's calls only): sent instead when the node answers unknown method, a node from before
+	// Method (launchers.catalog falls back to launchers.managed).
+	Fallback *NodeCall `json:"fallback,omitempty"`
+	// Actor says who asked for a session.modes call the manager keeps a record of (#10297): display only, never
+	// trusted for access (the hub checked the request already). Nil from an older hub and on every other call.
+	Actor *Actor `json:"actor,omitempty"`
+	// Hold (session.send only, #10661): the owner's message to an Agent may be held when it cannot go now. When the
+	// node is not connected, so nothing was written, or older held messages of the same session wait, the manager keeps
+	// this call as it came (caller and submission with it) and sends it once the node is back, answering CodeHeld
+	// instead of machine_offline. Nil from an older hub and on every other call; an older manager ignores it.
+	Hold *Hold `json:"hold,omitempty"`
+	// Ordered (session.send only, #10661): the owner's message to an Agent from a person's device, which must not go
+	// ahead of messages held for that Agent. Set whether or not Hold is: a message from an app that does not draw held
+	// messages (no Hold) is refused, nothing written, while older ones of its session are held, instead of overtaking
+	// them (codeHeldAhead, delivered none). Nil from an older hub; an older manager ignores it.
+	Ordered bool `json:"ordered,omitempty"`
 }
+
+const (
+	MethodPortDial = "port.dial"
+	// PortStreamHalfCloseV1 supports directional EOF on forwarded TCP streams.
+	PortStreamHalfCloseV1 = 1
+)
+
+// PortDial opens a stream to a port on the node. The hub offers StreamVersion only for an endpoint with CloseWrite.
+type PortDial struct {
+	ID            string `json:"id"`
+	Port          int    `json:"port"`
+	KeepAwake     bool   `json:"keep_awake,omitempty"` // keep a watched screen awake
+	Pair          string `json:"pair,omitempty"`       // ties a screen stream to screen.dial
+	Link          bool   `json:"link,omitempty"`       // use screen session framing
+	Attach        bool   `json:"attach,omitempty"`     // rejoin a live screen session
+	StreamVersion int    `json:"stream_version,omitempty"`
+}
+
+// PortDialReply confirms the stream version or the use of screen session framing.
+type PortDialReply struct {
+	Link          int `json:"link,omitempty"`
+	StreamVersion int `json:"stream_version,omitempty"`
+}
+
+// Hold is NodeCall.Hold.
+type Hold struct {
+	// Lang is the language of the words in CodeHeld's answer (the request's).
+	Lang string `json:"lang,omitempty"`
+}
+
+// HeldAnswer is CodeHeld's data: the held message as the session's row shows it.
+type HeldAnswer struct {
+	Delivered   string                    `json:"delivered"` // "later"
+	Undelivered *proto.UndeliveredMessage `json:"undelivered,omitempty"`
+}
+
+// Actor is display-only provenance for NodeCall and plan decisions: a device, hub token, extension, or internal
+// assistant. It is shared with the node contract so a plan reports the actor supplied by its manager.
+type Actor = proto.ModeActor
 
 // RequestEnd is devices.request_end's params.
 type RequestEnd struct {
@@ -338,6 +451,17 @@ type PairConnector struct {
 // Routes are the apps' routes on machines the manager answers itself (the hub relays them as http.request, as the
 // assistant's): its own settings of each machine and what only it can do.
 var Routes = []string{
+	"GET /api/v1/sessions/{mid}/{sid}/skills",
+	"GET /api/v1/sessions/{mid}/{sid}/mode-changes",
+	// The answer to a start's startup question, from a full device (#10365, internal/devices start_continue.go).
+	"POST /api/v1/sessions/{mid}/{sid}/start/continue",
+	// Retry and Delete on a message held for an Agent while its computer was away (#10661, internal/devices held.go),
+	// from a full device.
+	HeldOutboxRoute,
+	"POST /api/v1/sessions/{mid}/{sid}/held/{msg}/retry",
+	"DELETE /api/v1/sessions/{mid}/{sid}/held/{msg}",
+	"GET /api/v1/machines/{mid}/codex/{sid}/takeover",
+	"POST /api/v1/machines/{mid}/codex/{sid}/takeover",
 	"POST /api/v1/machines/{mid}/reconnect",
 	"PUT /api/v1/machines/{mid}/engine",
 	"GET /api/v1/machines/{mid}/herdr",
@@ -348,19 +472,50 @@ var Routes = []string{
 	"GET /api/v1/machines/{mid}/health/reports",
 	"DELETE /api/v1/machines/{mid}/health/reports/{name}",
 	"POST /api/v1/machines/{mid}/deploy",
+	// Switching an ssh computer to Persona Link (#10662, internal/devices link_switch.go); the admin page's twin is
+	// the hub's POST /api/v1/admin/machines/{mid}/link-switch, relayed to the same handler.
+	"POST /api/v1/machines/{mid}/link-switch",
+	// A computer's diagnosis and cache cleanup (#8037, internal/devices diagnosis.go).
+	"GET /api/v1/machines/{mid}/diagnosis",
+	"POST /api/v1/machines/{mid}/cleanup",
 	"GET /api/v1/machines/{mid}/claude-dirs",
 	"PUT /api/v1/machines/{mid}/claude-dirs/blocked",
+	// Hidden Agent folders, beside the blocked Claude config folders (internal/devices agentdirs.go).
+	"GET /api/v1/machines/{mid}/agent-dirs/hidden",
+	"PUT /api/v1/machines/{mid}/agent-dirs/hidden",
 	"GET /api/v1/machines/{mid}/claude-live-replies",
 	"PUT /api/v1/machines/{mid}/claude-live-replies",
+	// Sharing the machine's clipboard with the phone (#3064, internal/devices clipboard.go).
+	"GET /api/v1/machines/{mid}/clipboard",
+	"PUT /api/v1/machines/{mid}/clipboard",
+	"GET /api/v1/machines/{mid}/clipboard/settings",
+	"PUT /api/v1/machines/{mid}/clipboard/settings",
+	// The file transfer switch (#3065, internal/devices transfer_settings.go).
+	"GET /api/v1/machines/{mid}/file-transfer/settings",
+	"PUT /api/v1/machines/{mid}/file-transfer/settings",
+	// Pollable copy / zip progress (#6113, internal/devices fileoperation.go).
+	"GET /api/v1/machines/{mid}/files/operations/{oid}",
+}
+
+// TransferRoutes are computer to computer file transfers (internal/devices transfer.go, docs/protocol/file-transfer.md),
+// relayed the same way: a POST to the manager of its source computer (from.machine in the body), GET and DELETE to the
+// one the request names (?manager=, as the transfer's events say), else the default.
+var TransferRoutes = []string{
+	"POST /api/v1/files/transfer",
+	"GET /api/v1/files/transfer/{id}",
+	"DELETE /api/v1/files/transfer/{id}",
 }
 
 // MetricsRoutes are the machines' monitoring's routes (internal/devices metrics.go), relayed the same way: every
-// machine's latest sample and its last hour, one machine's history, the token usage (all, and one machine's range).
+// machine's latest sample and its last hour, one machine's history, the token usage (all, one machine's range, and
+// the history: the days, the last days by the hour).
 var MetricsRoutes = []string{
 	"GET /api/v1/metrics",
 	"GET /api/v1/machines/{id}/metrics",
 	"GET /api/v1/machines/{id}/usage",
 	"GET /api/v1/usage",
+	"GET /api/v1/usage/days",
+	"GET /api/v1/usage/hours",
 }
 
 // UsageRoutes are the subscription usage windows' routes (internal/devices usagewindows.go, docs/server/usage-windows.md),
@@ -386,4 +541,10 @@ const (
 	CodeMachineOffline = "machine_offline" // its node is not connected
 	CodeNodeClosed     = "node_closed"     // the connection to its node dropped during the call
 	CodeDeadline       = "deadline"        // the call's time ran out with the node on it (it may have done it)
+	// CodeHandoffRefused: secret.stage, or a session.start with a secret_ticket, asked by the hub or another manager:
+	// only the manager that connects the computer makes a hand-off, after its own card (docs/extensions/secret-providers.md).
+	CodeHandoffRefused = "handoff_refused"
+	// CodeHeld: a session.send with Hold was not sent now but held to be sent when the node is back (#10661); its data
+	// is a HeldAnswer. Nothing was written to the node.
+	CodeHeld = "held"
 )

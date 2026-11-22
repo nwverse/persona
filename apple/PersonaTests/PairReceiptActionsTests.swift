@@ -3,7 +3,7 @@ import Testing
 import UserNotifications
 @testable import Persona
 
-/// Pairing receipts (#4199, docs/protocol/protocol.md「电脑的配对码」): the hub's payloads, the buttons, the requests they send,
+/// Pairing receipts (#4199, docs/protocol/protocol.md「Computer pairing codes」): the hub's payloads, the buttons, the requests they send,
 /// and what the user is told.
 struct PairReceiptActionsTests {
     /// The payloads as the hub sends them (server/internal/hub/pair_receipt_push_test.go), in userInfo form.

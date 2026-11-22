@@ -7,10 +7,11 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { api, ApiError, errorText } from "../../lib/api";
 import {
   chatHeadline, checkLabel, githubStateLabel, isChatThread, isGitHubThread, labelColor, loadThread, mediaLine, mediaURL, mergeNewest, mergeOlder,
-  reachMessage, replyInThread, reviewLabel, startsGroup, type ThreadChat, type ThreadMedia, type ThreadMessage, type ThreadPage,
+  reachMessage, replyInThread, reviewLabel, startsGroup, type ThreadChat, type ThreadMedia, type ThreadMessage, type ThreadPage, type ThreadPerson,
 } from "../../lib/connectors";
 import { connectorReference, itemPath, itemRequest, shortTime, tightCJK, withToken, type InboxItem } from "../../lib/inbox";
-import { defaultManager, useItemManager, withManager } from "../../lib/manager-choice";
+import { atNewest } from "../../lib/lark-history";
+import { defaultManager, ItemManager, useItemManager, withManager } from "../../lib/manager-choice";
 import { openLink } from "../../lib/links";
 import { t } from "../../i18n";
 import { Button, cx, Loading, Spinner, toast } from "../../ui/atoms";
@@ -18,7 +19,9 @@ import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
 import { ImageViewer } from "../chat/ImageViewer";
 import { scrollBehavior } from "../../ui/stream/motion";
-import { Monogram } from "./InboxParts";
+import { Monogram, useFollowEnd } from "./InboxParts";
+import { LarkInboxContent } from "./LarkInboxContent";
+import { ConnectorReadNotice, ConnectorReplyTarget, conversationFailure, type ConversationFailure } from "./ConnectorReadNotice";
 
 /** A link the system handles (sms:, tg://) goes to it; a web page opens in a tab. */
 export function openSystem(url: string) {
@@ -28,7 +31,7 @@ export function openSystem(url: string) {
 
 const clock = (iso: string) => {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "" : `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return Number.isNaN(d.getTime()) || d.getFullYear() < 1900 ? "" : `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 };
 
 export function ConnectorBody({ item }: { item: InboxItem }) {
@@ -36,14 +39,15 @@ export function ConnectorBody({ item }: { item: InboxItem }) {
   const shown = useItemManager();
   const manager = item.manager ?? shown;
   const ownerKey = JSON.stringify([manager || defaultManager(), item.id, item.source, item.connector?.thread ?? ""]);
-  return <ConnectorThreadBody key={ownerKey} item={item} manager={manager} />;
+  return <ItemManager.Provider value={manager}><ConnectorThreadBody key={ownerKey} item={item} manager={manager} /></ItemManager.Provider>;
 }
 
 function ConnectorThreadBody({ item, manager }: { item: InboxItem; manager?: string }) {
   const id = item.source;
   const thread = item.connector?.thread ?? "";
   const [page, setPage] = useState<ThreadPage | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
+  const [failure, setFailure] = useState<ConversationFailure | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [older, setOlder] = useState(false);
   // Apply responses synchronously so a history continuation sees a replaced window even in one React batch.
   const currentPage = useRef<ThreadPage | null>(null);
@@ -75,11 +79,14 @@ function ConnectorThreadBody({ item, manager }: { item: InboxItem; manager?: str
       currentPage.current = next;
       setPage(next);
       setFailure(null);
+      setLoaded(true);
     } catch (e) {
       if (!current()) return;
       // Said over the text only when it is worth saying (a rate limit, the connector unavailable); a thread that
-      // simply has no page of its own (a CI run) falls back quietly. "" is failed, null still loading.
-      setFailure(e instanceof ApiError && (e.status === 429 || e.status === 409) ? errorText(e) : "");
+      // simply has no page of its own (a CI run; a subscription's item, which an older manager answers with 404
+      // `no connector`, #5537) falls back quietly; a source without conversations is noted, the rest said.
+      setFailure(e instanceof ApiError && e.status === 404 ? null : conversationFailure(e));
+      setLoaded(true);
     }
   }, [id, thread, manager]);
   // Again when the item moves (a new message came in).
@@ -159,18 +166,21 @@ function ConnectorThreadBody({ item, manager }: { item: InboxItem; manager?: str
     return true;
   };
 
-  if (!page && failure === null) return <div className="p-5"><Loading label={t("inbox-connectorthread.loading", { name: item.account_name || id })} /></div>;
-  if (!page || (!isChatThread(page.chat) && !isGitHubThread(page.chat))) return <ConnectorText item={item} problem={page ? undefined : failure || undefined} />;
-  // Drafts, quotes and pending-send state belong to this manager's item and thread.
+  if (!page && !loaded) return <div className="p-5"><Loading label={t("inbox-connectorthread.loading", { name: item.account_name || id })} /></div>;
+  if (!page || (!isChatThread(page.chat) && !isGitHubThread(page.chat) && !(id === "larkcli" && !page.chat.kind))) return <><ConnectorReplyTarget item={item} /><ConnectorText item={item} problem={failure || undefined} onRetry={() => void load()} /></>;
   const composerKey = JSON.stringify([manager || defaultManager(), item.id, id, thread]);
-  return isGitHubThread(page.chat)
-    ? <GitHubThread key={composerKey} id={id} item={item} page={page} older={older} onOlder={() => void loadOlder()} onSend={send} />
-    : <ChatThread key={composerKey} id={id} page={page} older={older} onOlder={() => void loadOlder()} onReach={reach} onSend={send} />;
+  return <>
+    <ConnectorReplyTarget item={item} page={page} />
+    {failure && <div className="shrink-0 px-4 py-2"><ConnectorReadNotice failure={failure} onRetry={() => void load()} /></div>}
+    {isGitHubThread(page.chat)
+      ? <GitHubThread key={composerKey} id={id} item={item} page={page} older={older} onOlder={() => void loadOlder()} onSend={send} />
+      : <ChatThread key={composerKey} id={id} page={{ ...page, chat: { ...page.chat, name: page.chat.name || item.title } }} older={older} onOlder={() => void loadOlder()} onReach={reach} onSend={send} />}
+  </>;
 }
 
 // ── what the hub collected (no thread page) ──────────────
 
-function ConnectorText({ item, problem }: { item: InboxItem; problem?: string }) {
+function ConnectorText({ item, problem, onRetry }: { item: InboxItem; problem?: ConversationFailure; onRetry: () => void }) {
   const [context, setContext] = useState<string | null>(null);
   const [failure, setFailure] = useState("");
   const c = item.connector;
@@ -189,28 +199,32 @@ function ConnectorText({ item, problem }: { item: InboxItem; problem?: string })
         {(c?.url || (c?.reply_to && c.can_reply)) && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             {c?.url && (
-              <Button tone="secondary" icon="external" onClick={() => openLink(c.url!, item.title)}>
-                {tightCJK(t("inbox-connectorthread.open_in", { name: item.account_name || item.source }))}
+              <Button tone="secondary" icon="external" onClick={() => openLink(c.url!, item.title, item.manager)}>
+                {item.source === "assistant" ? t("inbox-connectorthread.open_chat") : tightCJK(t("inbox-connectorthread.open_in", { name: item.account_name || item.source }))}
               </Button>
             )}
-            {c?.reply_to && c.can_reply && <p className="min-w-0 text-[12px] text-ink-3">{t("inbox-connectorthread.reply_goes", { how: c.reply_to })}</p>}
+            {item.source !== "larkcli" && c?.reply_to && c.can_reply && <p className="min-w-0 text-[12px] text-ink-3">{t("inbox-connectorthread.reply_goes", { how: c.reply_to })}</p>}
           </div>
         )}
-        {problem && (
-          <p className="flex items-start gap-2 rounded-[10px] bg-inset px-3 py-2 text-[12px] text-ink-2 shadow-hairline">
-            <Icon name="info" size={13} className="mt-0.5 shrink-0 text-ink-3" />
-            <span className="min-w-0 break-words">{t("inbox-connectorthread.thread_failed", { error: problem })}</span>
-          </p>
-        )}
-        <p className="text-[12px] font-medium text-ink-3">{t("inbox-connectorthread.content")}</p>
-        {context === null && !failure ? <Loading /> : failure ? (
+        {problem && <ConnectorReadNotice failure={problem} onRetry={onRetry} />}
+        {!onlyTitleAndSummary(item, context) && <p className="text-[12px] font-medium text-ink-3">{t("inbox-connectorthread.content")}</p>}
+        {onlyTitleAndSummary(item, context) ? null : context === null && !failure ? <Loading /> : failure ? (
           <p className="text-[12.5px] text-red">{t("inbox-connectorthread.content_failed", { error: failure })}</p>
         ) : (
-          <div className="text-[13px] leading-relaxed break-words whitespace-pre-wrap text-ink select-text">{context || item.preview}</div>
+          <div className="text-[13px] leading-relaxed break-words whitespace-pre-wrap text-ink select-text">{context || item.preview || t("inbox-connectorthread.no_collected_content")}</div>
         )}
       </div>
     </div>
   );
+}
+
+/** The assistant's own row whose text is only its title and summary (or its Markdown `body`), already shown above: no
+ *  Content section. */
+function onlyTitleAndSummary(item: InboxItem, context: string | null): boolean {
+  if (item.source !== "assistant" || !item.summary) return false;
+  const flat = (s: string) => s.replace(/\s+/g, " ").trim();
+  const text = flat(context ?? item.preview ?? "");
+  return text === "" || [item.summary, item.body].some((s) => !!s && (text === flat(`${item.title} ${s}`) || text === flat(s)));
 }
 
 // ── the answer box ───────────────────────────────────────
@@ -323,13 +337,22 @@ function ChatThread({ id, page, older, onOlder, onReach, onSend }: {
   const last = page.messages[page.messages.length - 1]?.id;
   const group = page.chat.kind !== "dm";
   const headline = chatHeadline(page.chat);
+  // Where the last scroll left the list (atNewest), and whether a quote's jump holds it.
+  const atEnd = useRef(true);
+  const away = useRef(false);
   // At the newest message on open and when one comes in (an older page leaves the scroll where it was).
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    atEnd.current = true;
   }, [last]);
+  // At its newest message the list keeps it in view (the keyboard, a longer answer, a picture loading); a quote's jump
+  // and an older page asked for are left alone.
+  useFollowEnd(scroller, () => atEnd.current && !away.current);
   // To the quoted message once it is drawn: centred, without the smooth scroll when the user asks for less motion.
   useEffect(() => {
+    away.current = flash !== null;
     if (!flash) return;
     const row = [...(scroller.current?.querySelectorAll<HTMLElement>("[data-mid]") ?? [])].find((el) => el.dataset.mid === flash.id);
     row?.scrollIntoView?.({ block: "center", behavior: scrollBehavior() });
@@ -344,9 +367,15 @@ function ChatThread({ id, page, older, onOlder, onReach, onSend }: {
   return (
     <div className="flex h-full min-h-0 flex-col">
       {headline && <p className="shrink-0 truncate border-b border-line px-4 py-1.5 text-center text-[12px] text-ink-3 tabular-nums">{headline}</p>}
-      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={scroller} onScroll={(e) => {
+        atEnd.current = atNewest(e.currentTarget);
+      }} className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[760px] px-3 py-3 sm:px-5">
-          {page.before && <OlderButton busy={older} onClick={onOlder} />}
+          {page.before && <OlderButton busy={older} onClick={() => {
+            // asking for older messages leaves the end, even in a thread short enough to show it
+            atEnd.current = false;
+            onOlder();
+          }} />}
           {!page.messages.length && <p className="py-10 text-center text-[12.5px] text-ink-3">{t("inbox-connectorthread.empty")}</p>}
           {page.messages.map((m, i) => (
             <Bubble key={m.id} id={id} m={m} head={startsGroup(m, page.messages[i - 1])} group={group} lit={flash?.id === m.id}
@@ -372,18 +401,23 @@ function Bubble({ id, m, head, group, lit, onQuote, onReply }: {
   onQuote?: () => void;
   onReply?: () => void;
 }) {
-  if (m.event) return <p data-mid={m.id} className="px-2 py-2 text-center text-[11.5px] text-ink-3">{m.text}</p>;
+  if (m.event) return <p data-mid={m.id} className="px-2 py-2 text-center text-[11.5px] text-ink-3">{m.text || t("inbox-connectorthread.message_unavailable")}</p>;
   const mine = !!m.mine;
+  // The content component validates the full envelope once; layout only needs a candidate check.
+  const larkCard = id === "larkcli" && /^\s*<card(?:\s|>)/.test(m.text || "");
   const pictures = (m.media ?? []).filter((x) => (x.kind === "image" || x.kind === "sticker" || x.kind === "video") && (x.ref || x.thumb));
   const others = (m.media ?? []).filter((x) => !pictures.includes(x));
   const bare = !m.text && !m.reply_to && !others.length; // only pictures: no bubble around them
   return (
-    <div data-mid={m.id} className={cx("group/msg flex items-start gap-2 rounded-[16px] motion-safe:transition-colors motion-safe:duration-300", head ? "mt-2.5" : "mt-0.5", mine && "flex-row-reverse", lit && "bg-accent-tint")}>
-      {!mine && <span className="w-8 shrink-0">{head && <Monogram name={m.sender.name} size={32} src={m.sender.avatar ? mediaURL(id, m.sender.avatar) : undefined} />}</span>}
-      <div className={cx("flex min-w-0 max-w-[78%] flex-col", mine ? "items-end" : "items-start")}>
-        {head && group && !mine && <span className="mb-0.5 px-1 text-[11.5px] font-medium text-ink-2">{m.sender.name}</span>}
+    <div data-mid={m.id} className={cx("group/msg flex items-start gap-2 rounded-[16px] motion-safe:transition-colors motion-safe:duration-300", head || larkCard ? "mt-2.5" : "mt-0.5", mine && "flex-row-reverse", lit && "bg-accent-tint")}>
+      {!mine && <span className="w-8 shrink-0">{(head || larkCard) && <Monogram name={m.sender.name} size={32} avatarURL={m.sender.avatar_url} src={m.sender.avatar ? mediaURL(id, m.sender.avatar) : undefined} />}</span>}
+      <div className={cx("flex min-w-0 flex-col", larkCard ? "w-full max-w-full" : "max-w-[78%]", mine ? "items-end" : "items-start")}>
+        {(head || larkCard) && (group || id === "larkcli") && !mine && <span className="mb-0.5 px-1 text-[11.5px] font-medium text-ink-2">{m.sender.name || t("inbox-connectorthread.unknown_sender")}</span>}
         {pictures.map((x, i) => <Picture key={i} id={id} media={x} />)}
-        {!bare && (
+        {larkCard ? <div className="w-full min-w-0">
+          {m.reply_to && <button type="button" onClick={onQuote} className="mb-2 block w-full truncate border-l-2 border-line-strong pl-2 text-left text-xs text-ink-3" aria-label={t("inbox-connectorthread.quote_jump", { text: m.reply_to.text || t("inbox-connectorthread.a_message") })}>{m.reply_to.from || m.reply_to.text || t("inbox-connectorthread.a_message")}</button>}
+          <LarkInboxContent key={m.id} text={m.text!} markdown />
+        </div> : !bare && (
           <div className={cx("rounded-[16px] px-3 py-1.5 text-[13px] leading-relaxed break-words", mine ? "bg-user-bubble text-ink" : "bg-surface text-ink shadow-card", pictures.length > 0 && "mt-1")}>
             {m.reply_to && (() => {
               const quote = `${m.reply_to.from ? t("inbox-connectorthread.quoted_sender", { name: m.reply_to.from }) : ""}${m.reply_to.text || t("inbox-connectorthread.a_message")}`;
@@ -401,14 +435,14 @@ function Bubble({ id, m, head, group, lit, onQuote, onReply }: {
                 <span className="truncate">{mediaLine(x)}</span>
               </p>
             ))}
-            {m.text && <span className="whitespace-pre-wrap select-text">{m.text}</span>}
+            {m.text && (id === "larkcli" ? <LarkInboxContent key={m.id} text={m.text} markdown={m.format === "markdown"} /> : m.format === "markdown" ? <Markdown text={m.text} small askImages /> : <span className="whitespace-pre-wrap select-text">{m.text}</span>)}
           </div>
         )}
         <span className="mt-0.5 flex items-center gap-1.5 px-1 text-[10.5px] text-ink-3 tabular-nums">
           {clock(m.at)}
           {m.edited && <span>{t("inbox-connectorthread.edited")}</span>}
           {onReply && (
-            <button type="button" onClick={onReply} className="flex items-center gap-0.5 whitespace-nowrap rounded text-ink-3 opacity-0 hover:text-ink focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-accent group-hover/msg:opacity-100 group-focus-within/msg:opacity-100">
+            <button type="button" onClick={onReply} className="touch-hit flex items-center gap-0.5 whitespace-nowrap rounded text-ink-3 opacity-0 hover:text-ink focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-accent group-hover/msg:opacity-100 group-focus-within/msg:opacity-100 [@media(hover:none)]:opacity-100">
               <Icon name="quote" size={10} />
               {t("inbox-connectorthread.reply")}
             </button>
@@ -485,7 +519,7 @@ function GitHubThread({ id, item, page, older, onOlder, onSend }: {
           <GitHubHeader chat={chat} reference={ref} />
           {chat.body && (
             <Card id={id} who={chat.author} at={undefined} title={t("inbox-connectorthread.description_by", { name: chat.author?.name ?? "" })}>
-              <Markdown text={chat.body} small />
+              <Markdown text={chat.body} small askImages />
             </Card>
           )}
           {page.before && <div className="mt-3"><OlderButton busy={older} onClick={onOlder} /></div>}
@@ -545,7 +579,7 @@ function GitHubHeader({ chat, reference }: { chat: ThreadChat; reference: string
 
 function Card({ id, who, at, title, tone, url, children }: {
   id: string;
-  who?: { name: string; avatar?: string };
+  who?: ThreadPerson;
   at?: string;
   title: React.ReactNode;
   tone?: string;
@@ -554,7 +588,7 @@ function Card({ id, who, at, title, tone, url, children }: {
 }) {
   return (
     <div className="flex gap-2.5">
-      <Monogram name={who?.name ?? "?"} size={28} src={who?.avatar ? mediaURL(id, who.avatar) : undefined} />
+      <Monogram name={who?.name ?? "?"} size={28} avatarURL={who?.avatar_url} src={who?.avatar ? mediaURL(id, who.avatar) : undefined} />
       <div className="min-w-0 flex-1 overflow-hidden rounded-[12px] bg-surface shadow-card">
         <div className="flex min-w-0 items-center gap-2 border-b border-line bg-inset px-3 py-1.5 text-[12px]">
           <span className={cx("min-w-0 truncate font-medium", tone ?? "text-ink")}>{title}</span>
@@ -585,7 +619,7 @@ function TimelineEntry({ id, m }: { id: string; m: ThreadMessage }) {
     );
   }
   if (m.kind === "check" && m.check) return <CheckRow check={m.check} at={m.at} />;
-  const text = m.text ? (m.format === "markdown" ? <Markdown text={m.text} small /> : <p className="whitespace-pre-wrap">{m.text}</p>) : null;
+  const text = m.text ? (m.format === "markdown" ? <Markdown text={m.text} small askImages /> : <p className="whitespace-pre-wrap">{m.text}</p>) : null;
   if (m.kind === "review") {
     return (
       <Card id={id} who={m.sender} at={m.at} url={m.url} tone={REVIEW_TONE[m.review ?? ""]} title={`${m.sender.name} ${reviewLabel(m.review)}`}>

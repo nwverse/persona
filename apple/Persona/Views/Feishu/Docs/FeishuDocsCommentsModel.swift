@@ -52,7 +52,7 @@ extension APIClient: FeishuDocsCommentsAPI {
     private static func segment(_ s: String) -> String { s.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(["/"])) ?? s }
 }
 
-/// A document's comment threads and what the user is writing (MVVM, docs/apple/ios.md「逻辑层的选型」): loading them, Send to
+/// A document's comment threads and what the user is writing (MVVM, docs/apple/ios.md「Data flow」): loading them, Send to
 /// where `target` says, resolving and reopening. After a write the threads are read again: what Feishu made of it
 /// (the reply's id, a resolved thread moving tabs) shows as Feishu has it.
 @Observable @MainActor

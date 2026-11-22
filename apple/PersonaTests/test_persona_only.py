@@ -10,6 +10,7 @@ from pathlib import Path
 import plistlib
 import re
 import shlex
+import subprocess
 import unittest
 import xml.etree.ElementTree as ET
 
@@ -17,6 +18,43 @@ import yaml
 
 
 APPLE = Path(__file__).resolve().parents[1]
+_APPLE_FILES = None
+
+TEST_ONLY_TARGET_EXCEPTIONS = {
+    "AboutVersionAccessibilityHost":
+        "Standalone test process for the shared About row accessibility tree; never embedded in Persona (#11150).",
+    "AboutVersionAccessibilityUITests":
+        "UI tests for the standalone About row accessibility host, not the production app (#11150).",
+}
+TEST_ONLY_SCHEME_EXCEPTIONS = {
+    "AboutVersionAccessibilityHost": "Runs only the standalone About row accessibility UI tests (#11150).",
+    "AboutVersionVisualTests": "Builds PersonaTests without PersonaUITests for About row visual comparisons (#11150).",
+    "PersonaOfflineUnitTests": "Builds and runs offline PersonaTests without PersonaUITests (#12474).",
+}
+
+
+def is_allowed_product_name(name, exceptions):
+    return name.startswith("Persona") or name in exceptions
+
+
+def apple_files():
+    """The repository's files under apple/: tracked, or new and not ignored (#7026).
+
+    Build output (DerivedData under apple/build/), local generated projects and other files git ignores are not the
+    repository's, so they are never checked, wherever a checkout puts them. Without git (an unpacked archive) every file
+    is checked, as before.
+    """
+    global _APPLE_FILES
+    if _APPLE_FILES is None:
+        try:
+            listed = subprocess.run(
+                ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "."],
+                cwd=APPLE, capture_output=True, check=True).stdout.decode("utf-8").split("\0")
+            paths = [APPLE / name for name in dict.fromkeys(listed) if name]
+            _APPLE_FILES = sorted(path for path in paths if path.is_file() or path.is_symlink())
+        except (OSError, subprocess.CalledProcessError):
+            _APPLE_FILES = sorted(path for path in APPLE.rglob("*") if path.is_file() or path.is_symlink())
+    return _APPLE_FILES
 
 
 def unique_pairs(pairs):
@@ -46,13 +84,106 @@ def source(path):
     return (APPLE / path).read_text(encoding="utf-8")
 
 
+def widget_source_for_platform(platform):
+    output = []
+    branches = []
+    active = True
+    for line in source("Shared/ExtensionSystemWidget.swift").splitlines():
+        directive = line.strip()
+        if directive.startswith(("#if ", "#elseif ")):
+            expression = directive.split(" ", 1)[1]
+            predicates = re.findall(r"(!?)os\((\w+)\)", expression)
+            if not predicates:
+                raise ValueError(f"unsupported widget condition: {expression}")
+            matches = any((platform == name) != bool(negated) for negated, name in predicates)
+            if directive.startswith("#if "):
+                branches.append([active, matches])
+            else:
+                parent, matched = branches[-1]
+                matches = matches and not matched
+                branches[-1] = [parent, matched or matches]
+            active = branches[-1][0] and matches
+        elif directive == "#else":
+            active = branches[-1][0] and not branches[-1][1]
+            branches[-1][1] = True
+        elif directive == "#endif":
+            active = branches.pop()[0]
+        elif active:
+            output.append(line)
+    if branches:
+        raise ValueError("unclosed widget condition")
+    return "\n".join(output)
+
+
 class PersonaOnlyTests(unittest.TestCase):
+    def test_vision_widgets_embed_read_only_bundle_with_shared_storage(self):
+        targets = yaml.safe_load(source("project.yml"))["targets"]
+        self.assertIn("PersonaVisionWidgets", targets)
+        app = targets["PersonaVision"]
+        widget = targets["PersonaVisionWidgets"]
+        self.assertIn({"target": "PersonaVisionWidgets"}, app["dependencies"])
+        self.assertEqual(widget["platform"], "visionOS")
+        self.assertEqual(widget["type"], "app-extension")
+        settings = widget["settings"]["base"]
+        self.assertEqual(settings["PRODUCT_BUNDLE_IDENTIFIER"], "$(PERSONA_BUNDLE_ID).liveactivity")
+        self.assertEqual(settings["PRODUCT_MODULE_NAME"], "PersonaWidgets")
+        self.assertEqual(settings["PRODUCT_NAME"], "PersonaWidgets")
+        self.assertIn("WIDGET_EXTENSION", settings["SWIFT_ACTIVE_COMPILATION_CONDITIONS"])
+        self.assertNotIn("TARGETED_DEVICE_FAMILY", settings)
+        # The watch widgets' shared sources, less the watch face's own (the Milk Frog, All-Day Recording), which visionOS does not draw.
+        watch_face = {"Shared/WatchPetSnapshot.swift", "Shared/Recording/AllDaySnapshot.swift", "Shared/Design/WatchFaceTokens.swift"}
+        shared = {item["path"] for item in targets["PersonaWatchWidgets"]["sources"] if item["path"].startswith("Shared/")}
+        watch_pet = {"Shared/WatchPetSnapshot.swift", "Shared/Recording/AllDaySnapshot.swift", "Shared/Design/WatchFaceTokens.swift"}
+        self.assertTrue(watch_pet.issubset(shared))
+        vision_sources = {item["path"] for item in widget["sources"]}
+        self.assertTrue(watch_pet.isdisjoint(vision_sources))
+        self.assertEqual(vision_sources, (shared - watch_pet) | {"PersonaVisionWidgets"})
+        for target in (app, widget):
+            self.assertEqual(target["entitlements"]["properties"]["com.apple.security.application-groups"], ["$(PERSONA_APP_GROUP)"])
+            self.assertEqual(target["info"]["properties"]["PersonaAppGroup"], "$(PERSONA_APP_GROUP)")
+            entitlements = plistlib.loads((APPLE / target["entitlements"]["path"]).read_bytes())
+            self.assertEqual(entitlements["com.apple.security.application-groups"], ["$(PERSONA_APP_GROUP)"])
+            info = plistlib.loads((APPLE / target["info"]["path"]).read_bytes())
+            self.assertEqual(info["PersonaAppGroup"], "$(PERSONA_APP_GROUP)")
+        info = widget["info"]["properties"]
+        self.assertEqual(info["NSExtension"]["NSExtensionPointIdentifier"], "com.apple.widgetkit-extension")
+        bundle = source("PersonaVisionWidgets/PersonaVisionWidgetsBundle.swift")
+        self.assertIn("LanguageStore.shared.follow(LanguageStore.shared.groupResolved)", bundle)
+        self.assertIn("var body: some Widget { ExtensionSystemWidget() }", bundle)
+        self.assertNotIn("ActivityConfiguration", bundle)
+        self.assertNotIn("ControlWidget", bundle)
+
+    def test_vision_widgets_use_only_visionos_26_families(self):
+        vision = widget_source_for_platform("visionOS")
+        self.assertIn("struct ExtensionSystemWidget: Widget", vision)
+        self.assertIn("[.systemSmall, .systemMedium, .systemLarge]", vision)
+        self.assertNotRegex(vision, r"\.accessory(?:Circular|Inline|Rectangular)")
+        for platform in ("iOS", "watchOS"):
+            supported = widget_source_for_platform(platform)
+            self.assertIn(".accessoryCircular", supported)
+            self.assertIn(".accessoryInline", supported)
+        self.assertNotIn(".systemSmall", widget_source_for_platform("watchOS"))
+
+    def test_vision_widget_sync_and_invalidation_are_enabled(self):
+        sync = source("Shared/ExtensionSurfaceSync.swift")
+        self.assertEqual(sync.count("#if os(iOS) || os(watchOS) || os(visionOS)"), 4)
+        app = source("Persona/App/PersonaApp.swift")
+        self.assertRegex(app, r'#if os\(iOS\) \|\| os\(visionOS\)\s+if let widget = info\["extension_widget"\]')
+        model = source("Persona/App/AppModel.swift")
+        self.assertRegex(model, r"#if os\(iOS\) \|\| os\(visionOS\)\s+ExtensionWidgetReconciliation.invalidate")
+        vision = widget_source_for_platform("visionOS")
+        self.assertIn('Open Persona to sync extension capabilities.', vision)
+        self.assertNotIn('Open Persona on iPhone to sync extension capabilities.', vision)
+        catalog = json.loads(source("Shared/Localization/Localizable.xcstrings"))
+        localizations = catalog["strings"]["Open Persona to sync extension capabilities."]["localizations"]
+        self.assertTrue({"en", "zh-Hans", "ja"}.issubset(localizations))
+
     def test_retired_native_identifiers_are_confined_to_one_compatibility_source(self):
         # The user-approved exception is one physical compatibility source, never a global relaxation.
         migration = APPLE / "Shared/NativeStateMigration.swift"
         former = "jar" + "vis"
         allowed = {migration.resolve()}
-        for path in APPLE.rglob("*.swift"):
+        for path in (path for path in apple_files() if path.suffix == ".swift"):
             if former in path.read_text(encoding="utf-8").lower():
                 self.assertIn(path.resolve(), allowed, path.relative_to(APPLE))
         text = migration.read_text(encoding="utf-8")
@@ -64,9 +195,10 @@ class PersonaOnlyTests(unittest.TestCase):
             self.assertEqual(controls.count(f"Self.configuration(kind: LegacyNames.{stable})"), 1)
         for interim in ["persona.control.ask", "persona.control.agents"]:
             self.assertEqual(controls.count(f'configuration(kind: "{interim}")'), 1)
+        self.assertEqual(controls.count('Self.configuration(kind: "persona.control.dictate")'), 1)
         bundle = source("PersonaWidgets/PersonaWidgetsBundle.swift")
-        for widget in ["AskPersonaControl", "PersonaAgentsControl", "CompatibleAssistantControl", "CompatibleAgentsControl",
-                       "FleetLiveActivity", "CompatibleFleetLiveActivity"]:
+        for widget in ["AskPersonaControl", "PersonaAgentsControl", "DictatePersonaControl", "CompatibleAssistantControl",
+                       "CompatibleAgentsControl", "FleetLiveActivity", "CompatibleFleetLiveActivity"]:
             self.assertEqual(len(re.findall(rf"\b{widget}\(\)", bundle)), 1)
 
     def test_duplicate_key_guards_reject_silent_overwrites(self):
@@ -76,7 +208,7 @@ class PersonaOnlyTests(unittest.TestCase):
             check_yaml_keys(yaml.compose("schemes:\n  Persona: {}\n  Persona: {}\n"))
 
     def test_yaml_has_unique_keys_and_build_conditions(self):
-        for path in sorted(APPLE.rglob("*")):
+        for path in apple_files():
             if path.suffix not in {".yml", ".yaml"}:
                 continue
             with self.subTest(path=path.relative_to(APPLE)):
@@ -93,36 +225,76 @@ class PersonaOnlyTests(unittest.TestCase):
     def test_project_uses_only_persona_targets_and_schemes(self):
         project = yaml.safe_load(source("project.yml"))
         self.assertEqual(project["name"], "Persona")
-        self.assertEqual(set(project["schemes"]), {"Persona", "PersonaMac", "PersonaWatch", "PersonaVision", "PersonaMacExtensionUI"})
+        canonical_schemes = {"Persona", "PersonaWatch", "PersonaVision"}
+        self.assertEqual(set(project["schemes"]), {*canonical_schemes, *TEST_ONLY_SCHEME_EXCEPTIONS})
         targets = project["targets"]
         for name, target in targets.items():
             with self.subTest(target=name):
-                self.assertTrue(name.startswith("Persona"))
+                self.assertTrue(is_allowed_product_name(name, TEST_ONLY_TARGET_EXCEPTIONS))
                 for dependency in target.get("dependencies", []):
                     if "target" in dependency:
                         self.assertIn(dependency["target"], targets)
                 for item in target["sources"]:
                     self.assertTrue((APPLE / item["path"]).exists(), item["path"])
-        for scheme in project["schemes"].values():
-            self.assertTrue(set(scheme["build"]["targets"]).issubset(targets))
+        for name, scheme in project["schemes"].items():
+            with self.subTest(scheme=name):
+                self.assertTrue(is_allowed_product_name(name, TEST_ONLY_SCHEME_EXCEPTIONS))
+                self.assertTrue(set(scheme["build"]["targets"]).issubset(targets))
         modules = {
-            "Persona": "Persona", "PersonaMac": "Persona", "PersonaVision": "Persona", "PersonaWatch": "Persona",
-            "PersonaWidgets": "PersonaWidgets", "PersonaNotify": "PersonaNotify", "PersonaMacNotify": "PersonaNotify", "PersonaVisionNotify": "PersonaNotify",
+            "Persona": "Persona", "PersonaVision": "Persona", "PersonaWatch": "Persona",
+            "PersonaWidgets": "PersonaWidgets", "PersonaNotify": "PersonaNotify", "PersonaVisionNotify": "PersonaNotify",
             "PersonaShare": "PersonaShare", "PersonaVisionShare": "PersonaShare",
-            "PersonaWatchWidgets": "PersonaWatchWidgets",
+            "PersonaWatchWidgets": "PersonaWatchWidgets", "PersonaVisionWidgets": "PersonaWidgets",
         }
         for target, module in modules.items():
             self.assertEqual(targets[target]["settings"]["base"]["PRODUCT_MODULE_NAME"], module)
         self.assertIn("*.py", targets["PersonaTests"]["sources"][0]["excludes"])
-        for path in APPLE.glob("*.xcodeproj"):
+        projects = {APPLE / path.relative_to(APPLE).parts[0] for path in apple_files()
+                    if path.relative_to(APPLE).parts[0].endswith(".xcodeproj")}
+        for path in sorted(projects):
             self.assertEqual(path.name, "Persona.xcodeproj")
             self.assertFalse(path.is_symlink(), "project aliases must not return")
 
+    def test_about_version_test_only_exceptions_are_narrow_and_reasoned(self):
+        expected_targets = {"AboutVersionAccessibilityHost", "AboutVersionAccessibilityUITests"}
+        expected_schemes = {"AboutVersionAccessibilityHost", "AboutVersionVisualTests", "PersonaOfflineUnitTests"}
+        for exceptions, expected in ((TEST_ONLY_TARGET_EXCEPTIONS, expected_targets),
+                                     (TEST_ONLY_SCHEME_EXCEPTIONS, expected_schemes)):
+            self.assertEqual(set(exceptions), expected)
+            for name, reason in exceptions.items():
+                with self.subTest(name=name):
+                    self.assertIsInstance(reason, str)
+                    self.assertTrue(reason.strip(), "a test-only exception needs a deliberate reason")
+        for exceptions, expected in ((TEST_ONLY_TARGET_EXCEPTIONS, expected_targets),
+                                     (TEST_ONLY_SCHEME_EXCEPTIONS, expected_schemes)):
+            for name in expected:
+                with self.subTest(registered=name):
+                    self.assertTrue(is_allowed_product_name(name, exceptions))
+            with self.subTest(unregistered="AboutVersionUnregisteredTests"):
+                self.assertFalse(is_allowed_product_name("AboutVersionUnregisteredTests", exceptions))
+        self.assertTrue(is_allowed_product_name("Persona", {}))
+
+    def test_about_version_test_targets_and_schemes_keep_their_wiring(self):
+        project = yaml.safe_load(source("project.yml"))
+        targets = project["targets"]
+        schemes = project["schemes"]
+        ui_tests = targets["AboutVersionAccessibilityUITests"]
+        self.assertIn({"target": "AboutVersionAccessibilityHost"}, ui_tests["dependencies"])
+        self.assertEqual(ui_tests["settings"]["base"]["TEST_TARGET_NAME"], "AboutVersionAccessibilityHost")
+        accessibility = schemes["AboutVersionAccessibilityHost"]
+        self.assertEqual(accessibility["build"]["targets"], {
+            "AboutVersionAccessibilityHost": "all",
+            "AboutVersionAccessibilityUITests": ["test"],
+        })
+        self.assertEqual(accessibility["test"]["targets"], ["AboutVersionAccessibilityUITests"])
+        visual = schemes["AboutVersionVisualTests"]
+        self.assertEqual(visual["build"]["targets"], {"Persona": "all", "PersonaTests": ["test"]})
+        self.assertEqual(visual["test"]["targets"], ["PersonaTests"])
+
     def test_plists_have_unique_keys_and_exact_compatible_url_schemes(self):
         registered = set()
-        expected = {"Persona/Resources/Info.plist", "Mac/Resources/Info.plist",
-                    "Vision/Resources/Info.plist", "PersonaLink/Info.plist", "PersonaWatch/Info.plist"}
-        for path in sorted(APPLE.rglob("*")):
+        expected = {"Persona/Resources/Info.plist", "Vision/Resources/Info.plist", "PersonaWatch/Info.plist"}
+        for path in apple_files():
             if path.suffix not in {".plist", ".entitlements"}:
                 continue
             relative = path.relative_to(APPLE).as_posix()
@@ -140,7 +312,7 @@ class PersonaOnlyTests(unittest.TestCase):
                     registered.add(relative)
         self.assertEqual(registered, expected)
         project = yaml.safe_load(source("project.yml"))
-        for target in ["Persona", "PersonaMac", "PersonaVision"]:
+        for target in ["Persona", "PersonaVision"]:
             settings = project["targets"][target]
             properties = settings["info"]["properties"]
             self.assertEqual(len(properties["CFBundleURLTypes"]), 1)
@@ -201,7 +373,7 @@ class PersonaOnlyTests(unittest.TestCase):
         self.assertNotIn("try IntentSupport.client", intent)
 
     def test_json_and_string_catalogs_have_unique_keys(self):
-        for path in sorted(APPLE.rglob("*")):
+        for path in apple_files():
             if path.suffix in {".json", ".xcstrings"}:
                 with self.subTest(path=path.relative_to(APPLE)):
                     json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_pairs)
@@ -209,6 +381,27 @@ class PersonaOnlyTests(unittest.TestCase):
         localized = catalog["strings"]["Persona"]["localizations"]
         for language in ["en", "zh-Hans", "ja"]:
             self.assertEqual(localized[language]["stringUnit"]["value"], "Persona")
+
+    def test_agent_preset_strings_have_all_native_languages(self):
+        # #2225: New Agent's Preset row and the plan card's "Preset <name>" chip.
+        catalog = json.loads(source("Shared/Localization/Localizable.xcstrings"))
+        for key in ["Preset", "Preset %@"]:
+            with self.subTest(key=key):
+                localizations = catalog["strings"].get(key, {}).get("localizations", {})
+                for language in ["en", "zh-Hans", "ja"]:
+                    with self.subTest(language=language):
+                        value = localizations.get(language, {}).get("stringUnit", {}).get("value", "")
+                        self.assertTrue(value.strip(), f"{key} needs {language}")
+
+    def test_agent_preset_native_docs_keep_the_start_contract_unchanged(self):
+        profiles = (APPLE.parent / "docs/assistant/model-profiles.md").read_text(encoding="utf-8")
+        section = profiles.split("## Agent presets (tiers)", 1)[1].split("## Edit and add profiles", 1)[0]
+        self.assertIn("iOS/Mac", section, "document the native New Agent and plan-card behavior")
+        self.assertNotIn("iOS, Mac and Android are open in #2225", section)
+        protocol = (APPLE.parent / "docs/protocol/protocol.md").read_text(encoding="utf-8")
+        start = next(line for line in protocol.splitlines() if line.startswith("| POST | `/api/v1/sessions` |"))
+        request = start.split("→", 1)[0]
+        self.assertNotIn('"tier"', request, "Agent presets resolve to launcher/model/effort before POST /sessions")
 
     def test_brand_and_avatar_symbols_do_not_collide(self):
         icons = source("Shared/Design/Icons.swift")
@@ -222,9 +415,9 @@ class PersonaOnlyTests(unittest.TestCase):
         self.assertIn('static let persona = "sparkle"', icons)
         self.assertIn("symbol: Theme.Icon.avatar", source("Persona/Views/Settings/AppearanceSettingsView.swift"))
         launch = source("PersonaUITests/UITestStyle.swift")
-        self.assertEqual(len(re.findall(r"\bfunc launchPersona\(\)", launch)), 1)
-        self.assertNotRegex(launch, r"func launchPersona\(\)\s*\{\s*launchPersona\(\)")
-        wire = source("Shared/Generated/ExtensionWire.swift")
+        self.assertEqual(len(re.findall(r"\bfunc launchPersona\(", launch)), 1)
+        self.assertNotRegex(launch, r"func launchPersona\([^)]*\)\s*\{\s*launchPersona\(")
+        wire = source("Packages/PersonaWire/Sources/PersonaWire/ExtensionWire.swift")
         look = re.search(r"enum ExtensionBuiltinLook\s*\{([^}]+)\}", wire).group(1)
         names = re.findall(r"static let (\w+)\s*=", look)
         self.assertEqual(len(names), len(set(names)))
@@ -275,32 +468,25 @@ class PersonaOnlyTests(unittest.TestCase):
         for path in ["Shared/WatchText.swift", "Persona/Views/Chat/VideoAttach.swift"]:
             self.assertIn("HubNaming.filePattern", source(path))
 
-    def test_link_paths_and_helpers_share_compatible_names_without_duplicates(self):
-        paths = source("PersonaLink/Sources/PersonaLink/LinkStatePaths.swift")
-        self.assertIn('environment["PERSONA_HOME"] ?? environment[previousHomeKey] ?? ""', paths)
-        self.assertIn('LegacyNames.product.uppercased() + "_HOME"', paths)
-        self.assertIn('home.appendingPathComponent(".persona", isDirectory: true)', paths)
-        self.assertIn('home.appendingPathComponent("." + LegacyNames.product, isDirectory: true)', paths)
-        self.assertIn("lstat(previous.path, &old)", paths)
-        self.assertIn("a.st_dev == b.st_dev, a.st_ino == b.st_ino", paths)
-        self.assertNotIn("moveItem(", paths)
-        self.assertNotIn("removeItem(", paths)
-        helper = source("PersonaLink/Sources/PersonaLink/LinkModel.swift")
-        self.assertEqual(helper.count('environment["PERSONA_HOME"] = stateURL.path'), 1)
-        self.assertIn('LegacyNames.product.uppercased() + "_HOME"', helper)
+    def test_link_package_and_clients_share_compatible_names_without_duplicates(self):
+        # The retired menu bar's data-directory and pairing code is archived with its UI (#6770). The independent
+        # launchd service and fixed Electron command bridge keep the connector in the shared PERSONA_HOME.
+        package = source("PersonaLink/Package.swift")
+        self.assertIn('name: "PersonaScreen"', package)
+        self.assertIn('path: "Sources/PersonaScreen"', package)
+        self.assertNotIn('path: "Sources/PersonaLink"', package)
+        service = APPLE.parent / "server/cmd/persona-link/service_mac.go"
+        self.assertIn('<key>PERSONA_HOME</key>', service.read_text())
         route = source("Shared/HubPageLink.swift")
         self.assertIn('case "persona", LegacyNames.conversationPath:', route)
-        for path in ["Shared/APIClient.swift", "Shared/ExtensionSystemLink.swift", "Mac/App/MacOpenURL.swift"]:
+        for path in ["Shared/APIClient.swift", "Shared/ExtensionSystemLink.swift"]:
             self.assertIn("HubNaming.accepts(scheme:", source(path))
         self.assertIn('["persona", LegacyNames.urlScheme].contains(url.scheme?.lowercased() ?? "")',
                       source("LiveActivity/PersonaActivityAttributes.swift"))
-        self.assertIn('static let schemes: Set<String> = ["persona", LegacyNames.product]',
-                      source("PersonaLink/Sources/PersonaLink/PairLink.swift"))
         self.assertIn('case "persona", LegacyNames.urlScheme:', source("Persona/Views/Chat/AssistantHTMLCard.swift"))
-        compatibility = APPLE / "PersonaLink/Sources/PersonaLink/NativeCompatibility.swift"
-        self.assertTrue(compatibility.is_symlink())
-        self.assertEqual(compatibility.resolve(), (APPLE / "Shared/NativeStateMigration.swift").resolve())
-        for path in APPLE.rglob("*.swift"):
+        self.assertFalse((APPLE / "PersonaLink/Sources/PersonaLink").exists())
+        self.assertFalse((APPLE / "PersonaLink/Tests/PersonaLinkTests").exists())
+        for path in (path for path in apple_files() if path.suffix == ".swift"):
             with self.subTest(path=path.relative_to(APPLE)):
                 text = path.read_text(encoding="utf-8")
                 self.assertNotRegex(text, r'"persona"\s*,\s*"persona"')

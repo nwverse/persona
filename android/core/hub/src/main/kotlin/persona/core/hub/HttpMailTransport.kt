@@ -31,7 +31,7 @@ class HttpMailTransport(
     private fun checkScope() { if (!isCurrent()) throw CancellationException("Pairing changed") }
     private suspend fun request(url: HttpUrl, body: JsonObject? = null): JsonObject {
         checkScope()
-        val request = Request.Builder().url(url).header("Authorization", "Bearer $token").apply {
+        val request = Request.Builder().url(url.withRequestManager()).header("Authorization", "Bearer $token").apply {
             body?.let { post(it.toString().toRequestBody("application/json".toMediaType())) }
         }.build()
         return http.newCall(request).awaitResponse().use {
@@ -92,7 +92,7 @@ class HttpMailTransport(
         checkScope()
         val target = url("api", "v1", "mail", "messages", ref.accountId, uid.toString(), "attachments", attachmentId)
             .newBuilder().addQueryParameter("mailbox", ref.mailbox).build()
-        val request = Request.Builder().url(target).header("Authorization", "Bearer $token")
+        val request = Request.Builder().url(target.withRequestManager()).header("Authorization", "Bearer $token")
             .header("Accept-Encoding", "identity").apply { if (offset > 0) header("Range", "bytes=$offset-") }.build()
         http.newCall(request).awaitResponse().use { response ->
             checkScope()

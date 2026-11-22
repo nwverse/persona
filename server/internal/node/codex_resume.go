@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -15,10 +16,11 @@ import (
 
 // Resuming a Codex thread nothing runs, from the phone (#5220): a message to it, or a resume (session.start with
 // resume), brings it back in a new tab of the engine with `codex resume <id>` (resumeCodex, retire.go). One Persona
-// started comes back with the launcher, directory and model it ran with; one started elsewhere (`codex` in a terminal,
-// since closed) lists as a Codex history row and comes back in the directory its rollout names, through the launcher
-// the caller picked when that one runs Codex, else plain codex. Afterwards it is Persona's like any other: retired and
-// resumed again the same way.
+// started comes back with the launcher, directory, model and effort it ran with (an effort Codex's config already runs
+// is left out of the words, as at the start); one started elsewhere (`codex` in a terminal, since closed) lists as a
+// Codex history row and comes back in the directory its rollout names, through the launcher the caller picked when
+// that one runs Codex, else plain codex. Afterwards it is Persona's like any other: retired and resumed again the same
+// way.
 //
 // Only a thread nothing has open: no app-server owns it (codex_remote.go: sends go there), no process holds its
 // rollout (a Codex CLI still running it, the Codex App's own app-server: a second writer would fork it), not the
@@ -35,18 +37,24 @@ const codexResumeHold = 2 * time.Minute
 var codexResumes sync.Map
 
 // codexResumable: thread id is a Codex history row that may be resumed in a terminal of this machine's engine.
-func (n *Node) codexResumable(id string) bool {
+func (n *Node) codexResumable(ctx context.Context, id string) bool {
+	return n.codexResumableIn(ctx, id, nil)
+}
+
+// codexResumableIn is codexResumable within a list pass (codexListPass).
+func (n *Node) codexResumableIn(ctx context.Context, id string, pass *codexListPass) bool {
 	src, ok := n.codexSource(id)
-	if !ok || src.path == "" || src.thread != id || n.codexBlocked(id) || n.isAssistantSession(id) || n.ownedAssistantSource(src.thread) {
+	if !ok || src.path == "" || src.thread != id || n.codexBlocked(id) || n.isAssistantSessionIn(id, pass) || n.ownedAssistantSource(src.thread) {
 		return false
 	}
 	if _, live := n.agent(id); live {
 		return false
 	}
-	if _, runtime := engineRuntimes[n.engine()]; runtime || n.engine() == proto.EngineOrca {
+	kind := n.startKind(n.withResumeHost(ctx, id))
+	if _, runtime := engineRuntimes[kind]; runtime || kind == proto.EngineOrca {
 		return false
 	}
-	if _, err := hostCap[host.Launcher](n); err != nil {
+	if _, err := hostCapFor[host.Launcher](n, kind); err != nil {
 		return false
 	}
 	n.codices.mu.Lock()
@@ -91,6 +99,13 @@ func (n *Node) codexRemoteConnecting(home string) bool {
 // list's holders come from a scan up to 30 seconds old (discoverCodex): a Codex opened on the computer since, or a
 // resume still starting, would be a second writer of the thread.
 func (n *Node) codexHeldNow(path string) bool {
+	open, complete := n.codexOpenNow(path, false)
+	return open || !complete
+}
+
+// codexOpenNow says whether a Codex process has the rollout at path open right now (cliOnly: a Codex CLI, not an
+// app-server, which keeps a thread it has loaded), and whether every process could be listed and read (complete).
+func (n *Node) codexOpenNow(path string, cliOnly bool) (open, complete bool) {
 	n.codices.mu.Lock()
 	scan, checked := n.codices.scan, n.codices.checked
 	n.codices.mu.Unlock()
@@ -102,20 +117,21 @@ func (n *Node) codexHeldNow(path string) bool {
 	case scan != nil:
 		procs = scan()
 	default:
-		return false
+		return false, true
 	}
-	open, read := scanOpenRollouts(procs)
-	if !listed || !read {
-		return true
+	if cliOnly {
+		procs = slices.DeleteFunc(procs, func(p codexProcess) bool { return p.endpoint != "" })
 	}
-	for _, paths := range open {
+	rollouts, read := scanOpenRollouts(procs)
+	complete = listed && read
+	for _, paths := range rollouts {
 		for _, p := range paths {
 			if filepath.Base(p) == filepath.Base(path) {
-				return true
+				return true, complete
 			}
 		}
 	}
-	return false
+	return false, complete
 }
 
 // codexResumeLauncher is the launcher a thread started outside Persona is resumed with: the caller's when it runs
@@ -206,7 +222,7 @@ func (n *Node) resumeCodexSession(ctx context.Context, id, launcher, prompt, mod
 		return n.sessionFor(id, a), nil
 	}
 	st, mine := n.state.get(id)
-	if !n.codexResumable(id) && (n.externalCodex(id) || !mine || st.Launcher == "" || st.Cwd == "") {
+	if !n.codexResumable(ctx, id) && (n.externalCodex(id) || !mine || st.Launcher == "" || st.Cwd == "") {
 		return nil, refusal(codexResumeRefused, "这个 Codex 会话正被别的程序打开，或不是在终端里开的：请在电脑上恢复（codex resume）。", nil)
 	}
 	if err := n.resumeCodexThread(ctx, id, launcher, prompt, nil, mode); err != nil {

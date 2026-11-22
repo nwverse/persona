@@ -107,3 +107,64 @@ func TestIsPhysicalCached(t *testing.T) {
 		t.Fatal("not looked up again after the clock went back")
 	}
 }
+
+// nicBytes is one /proc/net/dev row: an interface's received and sent bytes.
+type nicBytes struct {
+	name   string
+	rx, tx uint64
+}
+
+// netDev is parseNetDev of /proc/net/dev text with these rows, every other column 0.
+func netDev(nics ...nicBytes) map[string][2]uint64 {
+	var b bytes.Buffer
+	b.WriteString("Inter-|   Receive                                                |  Transmit\n")
+	b.WriteString(" face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n")
+	for _, n := range nics {
+		fmt.Fprintf(&b, "%6s: %d 0 0 0 0 0 0 0 %d 0 0 0 0 0 0 0\n", n.name, n.rx, n.tx)
+	}
+	return parseNetDev(b.Bytes())
+}
+
+// rateText shows a rate pointer's value in a failure message.
+func rateText(p *float64) string {
+	if p == nil {
+		return "nil"
+	}
+	return fmt.Sprint(*p)
+}
+
+// In a container's own network namespace /sys calls every interface virtual: eth0 still counts, lo does not.
+func TestNetSampleInAContainer(t *testing.T) {
+	c := linuxCollector{lookup: func(string) bool { return false }}
+	t0 := time.Unix(1000, 0)
+	c.netSample(netDev(nicBytes{"lo", 5000, 5000}, nicBytes{"eth0", 1000, 500}), t0)
+	rx, tx := c.netSample(netDev(nicBytes{"lo", 905000, 905000}, nicBytes{"eth0", 21000, 1500}), t0.Add(10*time.Second))
+	if rx == nil || tx == nil || *rx != 2000 || *tx != 100 {
+		t.Fatalf("container rates %s %s, want eth0's 2000 and 100", rateText(rx), rateText(tx))
+	}
+
+	// With a physical interface the names do not count: eth1 here is a veth end that only /sys knows is virtual.
+	c = linuxCollector{lookup: func(name string) bool { return name == "ens5" }}
+	c.netSample(netDev(nicBytes{"ens5", 1000, 500}, nicBytes{"eth1", 1000, 500}), t0)
+	rx, tx = c.netSample(netDev(nicBytes{"ens5", 21000, 1500}, nicBytes{"eth1", 901000, 900500}), t0.Add(10*time.Second))
+	if rx == nil || tx == nil || *rx != 2000 || *tx != 100 {
+		t.Fatalf("host rates %s %s, want ens5's 2000 and 100", rateText(rx), rateText(tx))
+	}
+}
+
+// A NIC handed back to the host brings its bytes since boot: that sample has no rate instead of a spike.
+func TestNetSampleInterfaceSetChanges(t *testing.T) {
+	c := linuxCollector{lookup: func(name string) bool { return name != "lo" }}
+	t0 := time.Unix(1000, 0)
+	if rx, _ := c.netSample(netDev(nicBytes{"lo", 10, 10}, nicBytes{"eth0", 1000, 500}), t0); rx != nil {
+		t.Fatalf("first sample rate %s", rateText(rx))
+	}
+	rx, tx := c.netSample(netDev(nicBytes{"eth0", 21000, 1500}, nicBytes{"eth1", 5e12, 5e12}), t0.Add(10*time.Second))
+	if rx != nil || tx != nil {
+		t.Fatalf("rates %s %s across a new interface, want none", rateText(rx), rateText(tx))
+	}
+	rx, tx = c.netSample(netDev(nicBytes{"eth0", 41000, 2500}, nicBytes{"eth1", 5e12 + 20000, 5e12}), t0.Add(20*time.Second))
+	if rx == nil || tx == nil || *rx != 4000 || *tx != 100 {
+		t.Fatalf("rates %s %s after it, want 4000 and 100", rateText(rx), rateText(tx))
+	}
+}

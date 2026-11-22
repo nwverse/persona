@@ -213,7 +213,7 @@ func TestCenterUnreachable(t *testing.T) {
 }
 
 // The headers a hub opens a node stream with mean nothing from outside: a request that carries them is still an app's,
-// and without a credential a member answers it 401 like any other (docs/server/mesh.md "Security boundary").
+// and without a credential a member answers it 401 like any other (docs/server/mesh.md "Security boundaries").
 func TestCenterMemberDropsNodeStreamHeaders(t *testing.T) {
 	box := newMeshNode("uid-box", "box", "s1")
 	lap := newMeshNode("uid-lap", "lap", "s2")
@@ -602,7 +602,7 @@ func newFakeConnector(t *testing.T, node *meshNode) *fakeConnector {
 		t.Fatal(err)
 	}
 	leaf, _ := x509.ParseCertificate(der)
-	fc := &fakeConnector{t: t, node: node, fp: spkiPin(leaf), code: "code-" + randomHex(4)}
+	fc := &fakeConnector{t: t, node: node, fp: link.Pin(leaf), code: "code-" + randomHex(4)}
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}},
 		NextProtos: []string{"http/1.1"}})
 	if err != nil {

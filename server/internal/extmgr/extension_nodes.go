@@ -6,6 +6,7 @@ package extmgr
 // machine that is away: it is brought in line when it is back. The node runs them (node/plugins.go).
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/extension/host"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -173,6 +175,54 @@ type ExtensionNodeView struct {
 	Error     string `json:"error,omitempty"`
 }
 
+// ExtensionNodeStatusView summarizes a node program's state across the machines it runs on, so the apps can show one
+// aggregated line ("Running on 2 machines") without re-deriving the rule from the per-machine rows. Abnormal counts
+// the states that need the user's attention: error, missing, lease_expired and outdated (an unknown state counts too).
+type ExtensionNodeStatusView struct {
+	Total    int `json:"total"`
+	Running  int `json:"running"`
+	Starting int `json:"starting"`
+	Stopped  int `json:"stopped"`
+	Offline  int `json:"offline"`
+	Abnormal int `json:"abnormal"`
+}
+
+// nodeStatus aggregates how the plugin's program is across its machines. Its status follows the same vocabulary as
+// ExtensionView.Status: running while at least one machine runs it, error when none run and one is abnormal, starting
+// when one is starting, stopped otherwise. ok is false without a machine row, in which case the hub's own process
+// status stands.
+func nodeStatus(nodes []ExtensionNodeView) (status string, summary ExtensionNodeStatusView, ok bool) {
+	if len(nodes) == 0 {
+		return "", ExtensionNodeStatusView{}, false
+	}
+	summary.Total = len(nodes)
+	for _, n := range nodes {
+		switch n.State {
+		case "running":
+			summary.Running++
+		case "starting":
+			summary.Starting++
+		case "stopped":
+			summary.Stopped++
+		case extensionNodeOffline:
+			summary.Offline++
+		default: // error, missing, lease_expired, outdated and anything newer this build does not know
+			summary.Abnormal++
+		}
+	}
+	switch {
+	case summary.Running > 0:
+		status = host.StateRunning
+	case summary.Abnormal > 0:
+		status = host.StateError
+	case summary.Starting > 0:
+		status = host.StateStarting
+	default:
+		status = host.StateStopped
+	}
+	return status, summary, true
+}
+
 // views are plugin id's programs on machines, by machine id.
 func (pn *extensionNodes) views(pluginID string) []ExtensionNodeView {
 	pn.mu.Lock()
@@ -249,27 +299,73 @@ func (ps *extensions) nodePackage(p *extension.Extension, platform string) (node
 	return pkg, nil
 }
 
+const nodePackageChunkBytes = 32 << 10
+
+type nodePackageFailure struct {
+	retryAt time.Time
+	err     error
+}
+
+func (m *Machine) nodePackageRetryDue() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	due := false
+	for prog, failure := range m.nodePackageFailures {
+		if !time.Now().Before(failure.retryAt) {
+			delete(m.nodePackageFailures, prog)
+			due = true
+		}
+	}
+	return due
+}
+
 // putNodePackage sends pkg to m unless it has it.
-func putNodePackage(ctx context.Context, m *Machine, prog proto.PluginNodeProgram, pkg nodePackage) error {
+func putNodePackage(ctx context.Context, m *Machine, prog proto.PluginNodeProgram, pkg nodePackage) (retErr error) {
 	var have proto.PluginNodeHave
 	if err := m.call(ctx, "plugin.node.have", prog, &have); err != nil {
 		return err
 	}
 	if have.Have {
+		m.mu.Lock()
+		delete(m.nodePackageFailures, prog)
+		m.mu.Unlock()
 		return nil
+	}
+	m.mu.Lock()
+	for key, failure := range m.nodePackageFailures {
+		if !time.Now().Before(failure.retryAt) {
+			delete(m.nodePackageFailures, key)
+		}
+	}
+	failure, delayed := m.nodePackageFailures[prog]
+	m.mu.Unlock()
+	if delayed {
+		return failure.err
 	}
 	f, err := os.Open(pkg.file)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
+	defer func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if retErr == nil {
+			delete(m.nodePackageFailures, prog)
+			return
+		}
+		if m.nodePackageFailures == nil {
+			m.nodePackageFailures = make(map[proto.PluginNodeProgram]nodePackageFailure)
+		}
+		m.nodePackageFailures[prog] = nodePackageFailure{retryAt: time.Now().Add(extensionLeaseEvery), err: retErr}
+	}()
 	var begun struct {
 		UploadID string `json:"upload_id"`
 	}
 	if err := m.call(ctx, "plugin.node.put.begin", proto.PluginNodePutBegin{PluginNodeProgram: prog, Size: pkg.size}, &begun); err != nil {
 		return err
 	}
-	buf := make([]byte, proto.UploadChunkBytes)
+	buf := make([]byte, nodePackageChunkBytes)
 	var off int64
 	for {
 		n, rerr := f.Read(buf)
@@ -289,15 +385,24 @@ func putNodePackage(ctx context.Context, m *Machine, prog proto.PluginNodeProgra
 // nodeInit is the initialize p's program on a computer gets: the configuration, and only the secrets its manifest
 // sends to computers (node.secrets); no hub token (no hub_api on computers, plan "Decisions").
 func (ps *extensions) nodeInit(ctx context.Context, p *extension.Extension) (json.RawMessage, error) {
-	all, err := ps.reg.Secrets(ctx, p.Record.ID)
+	live := ps.reg.SnapshotExact(p.Record.ID)
+	stored, err := ps.reg.Secrets(ctx, p.Record.ID)
 	if err != nil {
 		return nil, err
 	}
-	secrets := map[string]string{}
+	selected := map[string]string{}
 	for _, name := range p.Manifest.Node.Secrets {
-		if v, ok := all[name]; ok {
-			secrets[name] = v
+		if live != nil && live.IsLiveEntrySecret(name) {
+			continue // entry secrets are hub-only, even if a fixed declaration has the same flat name
 		}
+		if v, ok := stored[name]; ok {
+			selected[name] = v
+		}
+	}
+	// Resolve only values the node can receive. An unavailable hub-only entry reference must not block node startup.
+	secrets, err := ps.resolveStored(ctx, p.Record.ID, selected)
+	if err != nil {
+		return nil, err
 	}
 	params := extension.InitializeParams{Hub: extension.HubInfo{ExtensionPoints: extension.PointVersions(), Capabilities: extension.HubCapabilities()},
 		Extension: extension.ExtensionInfo{ID: p.Record.ID, Version: p.Record.Version}, Config: ps.reg.Config(p), Secrets: secrets,
@@ -334,6 +439,11 @@ func (ps *extensions) nodeIdentityCurrent(id string, revision int64) bool {
 // checkRenameNodeCapabilities runs before the source guard takes its market lock.
 // A configured legacy/offline node must not leave the old run active after the
 // public identity commits, or require a destructive old-wire sync to retire it.
+// A picked machine ID that is not one of the hub's computers (removed, or left
+// from before the hub moved) is skipped: the fleet lists offline computers too,
+// so no node with that ID can connect, and if one is added again under it,
+// syncExtensionNodes never sends an old node a destructive sync (#2510).
+// The refusal names the computers to bring online or update.
 func (h *Manager) checkRenameNodeCapabilities(ctx context.Context, p *extension.Extension) error {
 	if p == nil {
 		return i18n.Err("extension-identity.invalid")
@@ -341,21 +451,49 @@ func (h *Manager) checkRenameNodeCapabilities(ctx context.Context, p *extension.
 	if !p.Record.Enabled || p.Manifest.NodeProgram() == nil {
 		return nil
 	}
+	var unreachable, outdated machineList
 	for _, id := range h.extensions.nodeMachines(p) {
 		m := h.machineByID(id)
-		if m == nil || !m.isOnline() {
-			return i18n.Err("extension-identity.node_required")
+		if m == nil {
+			h.logf("extension %s: %s in its computers is not one of the hub's computers; the identity change skips it", p.Record.ID, id)
+			continue
+		}
+		m.mu.Lock()
+		name := cmp.Or(m.name(), m.cfg.ID)
+		m.mu.Unlock()
+		if !m.isOnline() {
+			unreachable = append(unreachable, name)
+			continue
 		}
 		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		var capability proto.PluginNodeIdentityReply
 		err := m.call(probeCtx, "plugin.node.identity", proto.PluginNodeIdentityRequest{}, &capability)
 		cancel()
-		if err != nil || !capability.Supported {
-			return i18n.Err("extension-identity.node_required")
+		switch {
+		case err == nil && capability.Supported:
+		case err == nil || nodeOutdated(err):
+			outdated = append(outdated, name)
+		default: // timed out or dropped: not known to be old
+			unreachable = append(unreachable, name)
 		}
+	}
+	if len(unreachable) > 0 {
+		return i18n.Err("extension-identity.node_unreachable", i18n.Args{"machines": unreachable, "count": len(unreachable)})
+	}
+	if len(outdated) > 0 {
+		return i18n.Err("extension-identity.node_outdated", i18n.Args{"machines": outdated})
 	}
 	return nil
 }
+
+// machineList is computers named in a message, listed the way its language lists things.
+type machineList []string
+
+func (l machineList) Text(lang i18n.Lang) string {
+	return strings.Join(l, i18n.T(lang, "extension-identity.list_separator"))
+}
+
+func (l machineList) Error() string { return l.Text(i18n.Default) }
 
 func commitNodeIdentities(ctx context.Context, m *Machine, slots []proto.PluginNodeIdentity) error {
 	var supported proto.PluginNodeIdentityReply
@@ -383,10 +521,10 @@ func (ps *extensions) nodeSnapshotCurrent(all []*extension.Extension) bool {
 }
 
 // syncExtensionNodes makes m run what it should of plugins' programs, and nothing else.
-func (h *Manager) syncExtensionNodes(ctx context.Context, m *Machine) {
+func (h *Manager) syncExtensionNodes(ctx context.Context, m *Machine) error {
 	ps := h.extensions
 	if ps == nil || ps.reg == nil {
-		return
+		return nil
 	}
 	l := ps.nodes.lock(m.cfg.ID)
 	l.Lock()
@@ -401,7 +539,7 @@ func (h *Manager) syncExtensionNodes(ctx context.Context, m *Machine) {
 	var capability proto.PluginNodeIdentityReply
 	if online {
 		if err := m.call(ctx, "plugin.node.identity", proto.PluginNodeIdentityRequest{}, &capability); err != nil && !nodeOutdated(err) {
-			return
+			return nil
 		}
 	}
 	identityAware := capability.Supported
@@ -423,7 +561,7 @@ func (h *Manager) syncExtensionNodes(ctx context.Context, m *Machine) {
 		}
 	}
 	if !ps.nodeSnapshotCurrent(all) {
-		return
+		return nil
 	}
 	if online && len(slots) > 0 {
 		if err := commitNodeIdentities(ctx, m, slots); err != nil {
@@ -432,7 +570,7 @@ func (h *Manager) syncExtensionNodes(ctx context.Context, m *Machine) {
 					ps.keepNodeState(p.Record.ID, p.Record.Version, m.cfg.ID, proto.PluginNodeState{ID: p.Record.ID, Version: p.Record.Version, Revision: extensionNodeRevision(p), State: extensionNodeOutdated, Error: i18n.T(h.contextLang(ctx), "extension-identity.node_required")})
 				}
 			}
-			return // Never send a destructive old-node sync or create a second data directory.
+			return nil // Never send a destructive old-node sync or create a second data directory.
 		}
 	}
 	for _, p := range all {
@@ -444,19 +582,21 @@ func (h *Manager) syncExtensionNodes(ctx context.Context, m *Machine) {
 		}
 	}
 	if !online {
-		return
+		return nil
 	}
 	if programs == nil {
 		programs = []proto.PluginNodeProgram{}
 	}
 	if !ps.nodeSnapshotCurrent(all) {
-		return
+		return nil
 	}
 	var states proto.PluginNodeStates
 	if err := m.call(ctx, "plugin.node.sync", proto.PluginNodeSync{Revision: syncRevision, Programs: programs, Installed: installed, InstalledSlots: slots, Identity: identityAware}, &states); err != nil &&
 		!nodeOutdated(err) {
 		h.logf("[%s] plugins' programs: %v", m.cfg.ID, err)
+		return err
 	}
+	return nil
 }
 
 // syncExtensionNode brings plugin p's program on m in line with p as the sync read it from the registry, and records
@@ -584,6 +724,9 @@ func (h *Manager) extensionLeaseLoop(ctx context.Context) {
 				h.logf("[%s] plugins' leases: %v", m.cfg.ID, err)
 			}
 			cancel()
+			if m.nodePackageRetryDue() {
+				go h.syncExtensionNodes(ctx, m)
+			}
 		}
 	}
 }
@@ -659,16 +802,18 @@ func (h *Manager) serveNodeExtensionHTTP(w http.ResponseWriter, r *http.Request)
 		p = h.extensions.reg.Get(id)
 	}
 	m := h.machineByID(mid)
-	if p == nil || p.Manifest.NodeProgram() == nil || !p.Manifest.Node.HTTP || m == nil || !h.extensions.nodeRunsOn(r.Context(), p, m) {
+	prefix := "/api/v1/extensions/" + requestedID + "/-/machines/" + mid
+	// /transcription/ is the manager's only, on a computer too (transcription.go).
+	if p == nil || p.Manifest.NodeProgram() == nil || !p.Manifest.Node.HTTP || m == nil || transcriptionPath(strings.TrimPrefix(r.URL.Path, prefix)) ||
+		!h.extensions.nodeRunsOn(r.Context(), p, m) {
 		writeErrCode(w, http.StatusNotFound, "not_found", fmt.Errorf("plugin %s serves nothing on machine %s", id, mid))
 		return
 	}
 	if !m.isOnline() {
-		writeErrCode(w, http.StatusConflict, extensionNodeOffline, i18n.Err("hub-extension_nodes.offline", i18n.Args{"name": m.cfg.Name}))
+		writeErrCode(w, http.StatusConflict, extensionNodeOffline, i18n.Err("hub-extension_nodes.offline", i18n.Args{"name": m.name()}))
 		return
 	}
 	id = p.Record.ID // Owner aliases route to the exact current node program.
-	prefix := "/api/v1/extensions/" + requestedID + "/-/machines/" + mid
 	dial := func(ctx context.Context, _, _ string) (net.Conn, error) { return dialNodeExtension(ctx, m, id) }
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -695,10 +840,10 @@ func (h *Manager) serveNodeExtensionHTTP(w http.ResponseWriter, r *http.Request)
 			w.Header().Set("Cache-Control", "no-store")
 			var re *rpc.Error
 			if errors.As(err, &re) && re.Code == "not_running" {
-				writeErrCode(w, http.StatusBadGateway, "not_running", fmt.Errorf("plugin %s is not running on %s", id, m.cfg.Name))
+				writeErrCode(w, http.StatusBadGateway, "not_running", fmt.Errorf("plugin %s is not running on %s", id, m.name()))
 				return
 			}
-			writeErr(w, http.StatusBadGateway, fmt.Errorf("plugin %s is not answering on %s: %w", id, m.cfg.Name, err))
+			writeErr(w, http.StatusBadGateway, fmt.Errorf("plugin %s is not answering on %s: %w", id, m.name(), err))
 		},
 	}
 	w.Header().Del("Cache-Control")
@@ -711,7 +856,7 @@ func (h *Manager) serveNodeExtensionHTTP(w http.ResponseWriter, r *http.Request)
 func dialNodeExtension(ctx context.Context, m *Machine, id string) (net.Conn, error) {
 	mux := m.portStreams()
 	if mux == nil {
-		return nil, fmt.Errorf("%s: %w", m.cfg.Name, errOffline)
+		return nil, fmt.Errorf("%s: %w", m.name(), errOffline)
 	}
 	if mux.Len() >= maxPortStreams {
 		return nil, errors.New("too many connections to this machine")

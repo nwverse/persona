@@ -1,34 +1,44 @@
 import XCTest
 
 /// Recordings go to the knowledge base, not the composer (#3235, docs/apple/recording.md): a made-up transcribed recording
-/// shows under Knowledge › Recordings, reaches the hub's `/api/v1/recordings` by itself, and deleting it there deletes it on the
-/// hub; no composer's + menu offers a recording any more. Needs its own mock hub (PERSONA_MOCK_HUB), fresh per run:
+/// waits on the Meetings page while only the phone has it, reaches the hub's `/api/v1/recordings` by itself and then leaves
+/// the page for Knowledge's one Meetings list (#8731), where its own page opens and deleting it deletes it on the hub; no
+/// composer's + menu offers a recording any more. Needs its own mock hub (PERSONA_MOCK_HUB), fresh per run:
 /// the hub keeps the delete's tombstone. TEST_RUNNER_PERSONA_SHOTS=<dir> saves the list, the recording and the + menu there
 /// (PERSONA_SHOTS_APPEARANCE names the simulator's appearance in the file).
 final class RecordingKnowledgeUITests: XCTestCase {
     private let sample = "00000000-0000-0000-0000-000000000001"
+    private let swipeSample = "00000000-0000-0000-0000-000000000004"
 
     @MainActor func testRecordingSyncsToTheKnowledgeBaseAndDeletes() throws {
         let hub = try mockHub()
         let app = XCUIApplication()
-        app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-openAssistantPage", "knowledge",
-                               "-showKnowledgeKind", "recordings", "-showRecordingSample", "YES"]
+        app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-openShellPage", "recordings", "-showRecordingSample", "YES"]
         app.launchPinned()
-        let row = app.buttons["recording-row"].firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 15), app.debugDescription)
+        let all = app.buttons["recordings-all-meetings"].firstMatch
+        XCTAssertTrue(all.waitForExistence(timeout: 15), app.debugDescription)
         // Uploaded with no tap: text and timestamps, no audio.
         XCTAssertTrue(wait(10) { try self.stored(hub)?.contains("下周整理一次进展") == true }, "录音没有同步到 hub")
         let body = try stored(hub) ?? ""
         XCTAssertTrue(body.contains("\"start\": 28"), body)
         XCTAssertFalse(body.contains(".m4a"), body)
-        XCTAssertTrue(wait(10) { row.label.contains("已同步到知识库") || app.staticTexts["已同步到知识库"].exists }, row.label)
-        try shot(app, "list")
+        // Synced whole, it leaves the Meetings page: Knowledge's Meetings list is its place now (#8731).
+        XCTAssertTrue(wait(10) { !app.buttons["recording-row"].exists }, app.debugDescription)
+        try shot(app, "page")
         // The hub's knowledge base lists it.
         let list = try String(decoding: Data(contentsOf: URL(string: hub + "/api/v1/kb/recordings")!), as: UTF8.self)
         XCTAssertTrue(list.contains(sample), list)
+        all.tap()
+        let row = app.buttons["kb.recording"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(app.buttons["kb.kind.meetings"].isSelected, app.debugDescription)
+        XCTAssertFalse(app.buttons["kb.kind.recordings"].exists, "知识库还有「录音」胶囊")
+        try shot(app, "list")
 
         let putsBefore = try puts(hub)
         row.tap()
+        // The made-up recording has no meeting (a note to the hub too), so it opens its recording's page (#8731 V3: a
+        // meeting would open after the meeting).
         let delete = app.buttons["recording-delete"]
         XCTAssertTrue(delete.waitForExistence(timeout: 8), app.debugDescription)
         try shot(app, "detail")
@@ -41,7 +51,47 @@ final class RecordingKnowledgeUITests: XCTestCase {
         sleep(2) // back on the list: nothing puts it back or uploads it again
         XCTAssertTrue(try deleted(hub))
         XCTAssertEqual(try puts(hub), putsBefore, "删除后又上传了")
-        XCTAssertTrue(wait(5) { !app.buttons["recording-row"].exists }, app.debugDescription)
+        XCTAssertTrue(wait(5) { !app.buttons["kb.recording"].exists }, app.debugDescription)
+    }
+
+    /// A recording in Knowledge's Meetings list deletes with a left swipe (#4938, #8731): Delete asks first, then it is gone on the hub and from the list,
+    /// and nothing uploads it again. A second sample id: the hub keeps the first sample's tombstone from the test above.
+    @MainActor func testRecordingDeletesWithASwipe() throws {
+        let hub = try mockHub()
+        let app = XCUIApplication()
+        app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-openShellPage", "recordings", "-showRecordingSample", "second"]
+        app.launchPinned()
+        let all = app.buttons["recordings-all-meetings"].firstMatch
+        XCTAssertTrue(all.waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertTrue(wait(10) { try self.stored(hub, swipeSample)?.contains("下周整理一次进展") == true }, "录音没有同步到 hub")
+        all.tap()
+        let row = app.buttons["kb.recording"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), app.debugDescription)
+        let putsBefore = try puts(hub)
+        row.swipeLeft()
+        let delete = app.buttons["kb.recording.delete"].firstMatch
+        XCTAssertTrue(delete.waitForExistence(timeout: 5), app.debugDescription)
+        try shot(app, "swipe-delete")
+        // Dismissed without Delete (the dialog has no Cancel button: a tap outside it): nothing is deleted.
+        delete.tap()
+        let confirm = app.buttons["删除"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
+        try shot(app, "swipe-confirm")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.97)).tap()
+        XCTAssertTrue(wait(5) { !confirm.exists }, app.debugDescription)
+        XCTAssertTrue(row.exists)
+        XCTAssertFalse(try deleted(hub, swipeSample))
+        // Confirm: deleted on the hub, gone from the list, not uploaded again.
+        row.swipeLeft()
+        XCTAssertTrue(delete.waitForExistence(timeout: 5), app.debugDescription)
+        delete.tap()
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
+        confirm.tap()
+        XCTAssertTrue(wait(10) { try self.deleted(hub, swipeSample) }, "删除没有同步到 hub")
+        XCTAssertTrue(wait(5) { !app.buttons["kb.recording"].exists }, app.debugDescription)
+        sleep(2)
+        XCTAssertTrue(try deleted(hub, swipeSample))
+        XCTAssertEqual(try puts(hub), putsBefore, "删除后又上传了")
     }
 
     @MainActor func testComposerMenuHasNoRecording() throws {
@@ -84,8 +134,8 @@ final class RecordingKnowledgeUITests: XCTestCase {
     }
 
     /// The sample's stored body as JSON text (nil: not there).
-    private func stored(_ hub: String) throws -> String? {
-        guard let body = (try mock(hub)["recordings"] as? [String: Any])?[sample] else { return nil }
+    private func stored(_ hub: String, _ id: String? = nil) throws -> String? {
+        guard let body = (try mock(hub)["recordings"] as? [String: Any])?[id ?? sample] else { return nil }
         return String(decoding: try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]), as: UTF8.self)
             .replacingOccurrences(of: ":", with: ": ")
     }
@@ -95,9 +145,9 @@ final class RecordingKnowledgeUITests: XCTestCase {
         try mock(hub)["puts"] as? Int ?? -1
     }
 
-    private func deleted(_ hub: String) throws -> Bool {
-        let gone = (try mock(hub)["deleted"] as? [String])?.contains(sample) == true
-        let body = try stored(hub)
+    private func deleted(_ hub: String, _ id: String? = nil) throws -> Bool {
+        let gone = (try mock(hub)["deleted"] as? [String])?.contains(id ?? sample) == true
+        let body = try stored(hub, id)
         return gone && body == nil
     }
 

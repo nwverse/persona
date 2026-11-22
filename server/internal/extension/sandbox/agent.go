@@ -2,10 +2,9 @@ package sandbox
 
 // The agent sandbox (docs/server/agent-sandbox.md, #5357): the coding agents Persona starts on a machine whose data
 // directory holds keys (the assistant's Claude, a managed launcher, a Codex started from the phone) run under
-// sandbox-exec with everything allowed but the data directory's secrets. Its shape is the opposite of Darwin()'s for an
-// extension: the network, the home directory, git, ssh and the compilers stay as they are, and only the key files,
-// the credential files and the sockets that hand out the hub's power are closed. macOS only for now; on Linux it
-// says it is not supported yet.
+// sandbox-exec on macOS or bubblewrap on Linux with everything allowed but the data directory's secrets. Its shape is
+// the opposite of the extension sandbox: the network, the home directory, git, ssh and the compilers stay as they are,
+// and only the key files, the credential files and the sockets that hand out the hub's power are closed.
 
 import (
 	"context"
@@ -25,8 +24,11 @@ import (
 )
 
 // AgentEnv is set in the environment of a process started in the agent sandbox: a launcher it runs (`personad
-// launch`) is in it already and must not wrap itself again (a second sandbox-exec inside fails, rc 71).
+// launch`) is in it already and must not wrap itself again (nested sandbox-exec and user namespaces can fail).
 const AgentEnv = "PERSONA_AGENT_SANDBOXED"
+
+// AgentExecCommand is the node binary's internal entry point for finishing a Linux agent sandbox before exec.
+const AgentExecCommand = "agent-sandbox-exec"
 
 // AgentOnFile in the data directory turns the agent sandbox on for this machine (docs/server/agent-sandbox.md "Turning it
 // on"). An agent in the sandbox cannot remove it.
@@ -37,14 +39,24 @@ const (
 	AgentOff         = "off"         // the switch is off
 	AgentActive      = "active"      // wrapped (or already inside the sandbox)
 	AgentSkipped     = "skipped"     // on, but this start is not wrapped: Why says why
-	AgentUnsupported = "unsupported" // this system has no agent sandbox yet (Linux)
-	AgentUnavailable = "unavailable" // sandbox-exec is missing or will not take the rules
+	AgentUnsupported = "unsupported" // this system has no agent sandbox (not macOS or Linux)
+	AgentUnavailable = "unavailable" // sandbox-exec or bwrap is missing or will not take the rules
 )
 
-// AgentStatus is what happened to one agent start.
+// AgentStatus is what happened to one agent start. Reason is additive metadata for newly persisted records; old
+// readers ignore it, and records written before it retain their original Why bytes when displayed in any language.
 type AgentStatus struct {
-	State string `json:"state"`
-	Why   string `json:"why,omitempty"`
+	State  string        `json:"state"`
+	Why    string        `json:"why,omitempty"`
+	Reason *StatusReason `json:"reason,omitempty"`
+}
+
+// WhyIn renders a Persona-owned reason in lang. Legacy and external diagnostics have no metadata and stay verbatim.
+func (s AgentStatus) WhyIn(lang i18n.Lang) string { return statusWhy(lang, s.Why, s.Reason) }
+
+func agentStatusReason(state, key string, args i18n.Args) AgentStatus {
+	reason := NewStatusReason(key, args)
+	return AgentStatus{State: state, Why: reason.Error(), Reason: reason}
 }
 
 // AgentPlan is one agent start in the sandbox.
@@ -58,66 +70,114 @@ type AgentPlan struct {
 	// LauncherSettings are the files under launcher-settings/ this start passes to its agent (--settings): readable,
 	// the rest of the folder not.
 	LauncherSettings []string
-	// Inner says why the agent's own sandbox would clash with this one ("" when it has none): sandbox-exec cannot be
-	// nested, so such a start is not wrapped.
-	Inner string
-	// Probe is what this machine can do (nil: AgentProbe); Check tries a profile (nil: sandbox-exec runs true under it).
+	// Inner says why the agent's own sandbox would clash with this one ("" when it has none): nested sandboxes can
+	// fail, so such a start is not wrapped. InnerReason is Persona's structured form; external callers may keep Inner
+	// as an opaque string. When both are set, InnerReason supplies both the canonical Why and its localized rendering.
+	Inner       string
+	InnerReason *StatusReason
+	// Probe is what this machine can do (nil: AgentProbe); Check tries a profile (nil: the platform's sandbox runs
+	// true under it). On Linux the profile is an opaque NUL-separated bwrap command prefix; callers must not parse it.
 	Probe func() Support
 	Check func(profile string) error
 }
 
-// AgentProbe is what this machine can do for the agent sandbox: Probe on macOS; elsewhere only the system, without
-// trying bwrap (the agent sandbox has no Linux form yet).
+// AgentProbe is what this machine can do for the agent sandbox: Probe on macOS, a real default-allow bwrap command on
+// Linux; elsewhere only the system.
 func AgentProbe() Support {
-	if runtime.GOOS != "darwin" {
+	switch runtime.GOOS {
+	case "darwin":
+		return Probe()
+	case "linux":
+		return linuxAgentProbe()
+	default:
 		return Support{OS: runtime.GOOS}
 	}
-	return Probe()
 }
 
 // AgentSupport says whether this machine can run agents in the sandbox: AgentActive when it can.
 func AgentSupport(sup Support) AgentStatus {
-	switch {
-	case sup.OS != "darwin":
-		return AgentStatus{AgentUnsupported, i18n.T(i18n.Default, "extension-sandbox.agent_unsupported", i18n.Args{"os": sup.OS})}
-	case !sup.SandboxExec:
-		return AgentStatus{AgentUnavailable, sup.Why}
+	switch sup.OS {
+	case "darwin":
+		if !sup.SandboxExec {
+			return AgentStatus{State: AgentUnavailable, Why: sup.Why, Reason: sup.Reason}
+		}
+	case "linux":
+		if sup.Bwrap == "" {
+			return AgentStatus{State: AgentUnavailable, Why: sup.Why, Reason: sup.Reason}
+		}
+	default:
+		return agentStatusReason(AgentUnsupported, "extension-sandbox.agent_unsupported", i18n.Args{"os": sup.OS})
 	}
 	return AgentStatus{State: AgentActive}
 }
 
+// RunAgentExec finishes the Linux alias mounts and execs the command after "--". Other platforms return an error.
+func RunAgentExec(args []string) error { return runAgentExec(args) }
+
 // WrapAgent runs argv (argv[0] the program, a path or a name on PATH) in the agent sandbox when it can: the new
-// command line starts with sandbox-exec, and env gains AgentEnv. When it cannot, argv and env come back as they
-// are and the status says why, so the agent starts all the same.
+// command line starts with sandbox-exec or bwrap, and env gains AgentEnv. When it cannot, argv and env come back as
+// they are and the status says why, so the agent starts all the same. Neither platform creates a pid namespace: macOS
+// execs the agent at the same pid, while Linux's bwrap supervisor remains the agent's direct parent in the host pid
+// namespace, so both pids stay visible to the node.
 func WrapAgent(plan AgentPlan, argv, env []string) ([]string, []string, AgentStatus) {
 	if envValue(env, AgentEnv) == "1" {
-		return argv, env, AgentStatus{AgentActive, i18n.T(i18n.Default, "extension-sandbox.agent_nested", nil)}
+		return argv, env, agentStatusReason(AgentActive, "extension-sandbox.agent_nested", nil)
 	}
 	if len(argv) == 0 {
-		return argv, env, AgentStatus{AgentSkipped, i18n.T(i18n.Default, "extension-sandbox.agent_no_command", nil)}
+		return argv, env, agentStatusReason(AgentSkipped, "extension-sandbox.agent_no_command", nil)
 	}
 	probe := plan.Probe
 	if probe == nil {
 		probe = AgentProbe
 	}
-	if st := AgentSupport(probe()); st.State != AgentActive {
+	sup := probe()
+	if st := AgentSupport(sup); st.State != AgentActive {
 		return argv, env, st
 	}
+	if plan.InnerReason != nil {
+		return argv, env, AgentStatus{State: AgentSkipped, Why: plan.InnerReason.Error(), Reason: plan.InnerReason}
+	}
 	if plan.Inner != "" {
-		return argv, env, AgentStatus{AgentSkipped, plan.Inner}
+		return argv, env, AgentStatus{State: AgentSkipped, Why: plan.Inner}
 	}
-	profile, err := DarwinAgent(plan)
-	if err != nil {
-		return argv, env, AgentStatus{AgentSkipped, err.Error()}
-	}
+
+	var profile string
+	var prefix []string
+	var wrapped []string
+	var err error
 	check := plan.Check
-	if check == nil {
-		check = checkAgentProfile
+	if sup.OS == "linux" {
+		prefix, err = LinuxAgent(sup.Bwrap, plan)
+		if err == nil {
+			wrapped, err = linuxAgentCommand(prefix, argv)
+		}
+		profile = strings.Join(prefix, "\x00")
+		if check == nil {
+			check = checkLinuxAgentProfile
+		}
+	} else {
+		profile, err = DarwinAgent(plan)
+		prefix = []string{"/usr/bin/sandbox-exec", "-p", profile}
+		wrapped = append(prefix, argv...)
+		if check == nil {
+			check = checkAgentProfile
+		}
+	}
+	if err != nil {
+		st := AgentStatus{State: AgentSkipped, Why: err.Error()}
+		var reason *StatusReason
+		if errors.As(err, &reason) {
+			st.Reason = reason
+		}
+		return argv, env, st
 	}
 	if err := check(profile); err != nil {
-		return argv, env, AgentStatus{AgentUnavailable, i18n.T(i18n.Default, "extension-sandbox.agent_profile_refused", i18n.Args{"err": err.Error()})}
+		key := "extension-sandbox.agent_profile_refused"
+		if sup.OS == "linux" {
+			key = "extension-status.sandbox_bwrap_start"
+		}
+		return argv, env, agentStatusReason(AgentUnavailable, key, i18n.Args{"err": err.Error()})
 	}
-	wrapped := append([]string{"/usr/bin/sandbox-exec", "-p", profile}, argv...)
 	return wrapped, append(withoutKey(env, AgentEnv), AgentEnv+"=1"), AgentStatus{State: AgentActive}
 }
 
@@ -136,7 +196,7 @@ var agentWorkspaces = []string{"assistant", identity.SpaceHealth, "guest"}
 //   - deny reading and writing the data directory's secrets where they are written, at its top (identity's list, as
 //     the node's path guard reads it): the credential files by the start of their name, also with a leading dot (the
 //     temporary file a rewrite renames into place) and anything in a folder by such a name; the key files and their
-//     backups (identity.DataKeyPattern); the secret folders (identity.DataSecretDirs) whole;
+//     backups (identity.DataCredentialPattern); the secret folders (identity.DataSecretDirs) whole;
 //   - deny the folders only Persona's own processes use, whole: managers/ (a manager's manager.json and key),
 //     extensions/run/ and run/ (the extensions' sockets and the hub's edge), and connecting to those sockets and to
 //     plugins/run/'s (a hub's from before #1844);
@@ -173,20 +233,20 @@ func DarwinAgent(plan AgentPlan) (string, error) {
 		}
 	}
 	if len(dirs) == 0 {
-		return "", errors.New(i18n.T(i18n.Default, "extension-sandbox.agent_no_data_dir", nil))
+		return "", NewStatusReason("extension-sandbox.agent_no_data_dir", nil)
 	}
 	for _, d := range dirs {
 		if strings.ContainsAny(d, "\"\n\\") {
-			return "", errors.New(i18n.T(i18n.Default, "extension-sandbox.agent_bad_path", i18n.Args{"dir": d}))
+			return "", NewStatusReason("extension-sandbox.agent_bad_path", i18n.Args{"dir": d})
 		}
 		if home != "" && (d == home || within(home, d)) {
-			return "", errors.New(i18n.T(i18n.Default, "extension-sandbox.agent_home", i18n.Args{"dir": d}))
+			return "", NewStatusReason("extension-sandbox.agent_home", i18n.Args{"dir": d})
 		}
 		if cwd != "" && (cwd == d || within(cwd, d)) {
 			rel, _ := filepath.Rel(d, cwd)
 			first, _, _ := strings.Cut(filepath.ToSlash(rel), "/")
 			if !slices.Contains(agentWorkspaces, first) {
-				return "", errors.New(i18n.T(i18n.Default, "extension-sandbox.agent_cwd_inside", i18n.Args{"cwd": cwd}))
+				return "", NewStatusReason("extension-sandbox.agent_cwd_inside", i18n.Args{"cwd": cwd})
 			}
 		}
 	}
@@ -201,7 +261,7 @@ func DarwinAgent(plan AgentPlan) (string, error) {
 		re := reQuote(d)
 		deny = append(deny,
 			`(regex #"^`+re+`/\.?(`+strings.Join(alt, "|")+`)[^/]*(/.*)?$")`,
-			`(regex #"^`+re+`/[^/]*`+identity.DataKeyPattern+`")`)
+			`(regex #"^`+re+`/[^/]*`+identity.DataCredentialPattern+`")`)
 		for _, sub := range whole {
 			deny = append(deny, `(subpath `+q(d+"/"+sub)+`)`)
 		}
@@ -305,8 +365,8 @@ func withoutKey(env []string, key string) []string {
 	return out
 }
 
-// agentProfiles remembers the profiles sandbox-exec took or refused (a rule it cannot parse would otherwise fail the
-// agent after an exec, with nothing left to fall back to).
+// agentProfiles remembers the Darwin profiles sandbox-exec took or refused (a rule it cannot parse would otherwise fail
+// the agent after an exec, with nothing left to fall back to). Linux deliberately preflights every start instead.
 var agentProfiles sync.Map // profile -> error string ("" took it)
 
 func checkAgentProfile(profile string) error {

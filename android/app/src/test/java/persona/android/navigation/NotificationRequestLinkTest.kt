@@ -15,7 +15,6 @@ import persona.core.navigation.*
 class NotificationRequestLinkTest {
     private fun stacks() = mapOf<AppTab, MutableList<NavKey>>(
         AppTab.Persona to mutableListOf(AssistantRoute), AppTab.Agents to mutableListOf(AgentsRoute),
-        AppTab.Inbox to mutableListOf(InboxRoute), AppTab.Settings to mutableListOf(SettingsRoute),
     )
 
     @Test fun linkCarriesTheRequestAndOpensItWithoutStackingASecondPage() {
@@ -37,6 +36,16 @@ class NotificationRequestLinkTest {
         val link = NotificationRoute.conversation("machine", "session", false)
         assertEquals(null, Uri.parse(link.uri().toString()).getQueryParameter("request"))
         assertEquals(ChatRoute("machine", "session", ConversationKind.Agent), Router().open(notificationRoute(link.uri())!!)!!.key)
+    }
+
+    @Test fun canonicalPageQueriesAreNotNotificationTabs() {
+        val persona = "persona://open/settings?tab=persona"
+        val agents = "persona://open/settings?tab=agents"
+        assertEquals(null, notificationRoute(Uri.parse(persona)))
+        assertEquals(null, notificationRoute(Uri.parse(agents)))
+        assertEquals(SettingsPageRoute(SettingsPage.Persona), Router().parse(RouteInput.DeepLink(persona))?.key)
+        assertEquals(SettingsPageRoute(SettingsPage.AgentSettings), Router().parse(RouteInput.DeepLink(agents))?.key)
+        assertEquals(null, notificationRoute(Uri.parse("persona://open/todos/t-19?tab=agents")))
     }
 
     @Test fun untabbedLinkNamesItsRequestOnceMetadataArrives() {

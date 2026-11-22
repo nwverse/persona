@@ -120,6 +120,9 @@ func (s *meshStore) SaveLiveActivity(context.Context, db.LiveActivity) error   {
 func (s *meshStore) ClaimLiveActivityStart(context.Context, string, string, time.Time, time.Duration, time.Duration) (time.Time, bool, error) {
 	return time.Time{}, false, nil // no persisted activity in this non-push fixture
 }
+func (s *meshStore) HoldLiveActivityStart(context.Context, string, time.Time, time.Duration) (bool, error) {
+	return false, nil
+}
 
 func (s *meshStore) InsertInteraction(_ context.Context, ix proto.Interaction) error {
 	s.mu.Lock()
@@ -297,10 +300,26 @@ func (s *meshStore) PairTokenByHash(context.Context, string) (*db.PairToken, err
 func (s *meshStore) RedeemPairToken(context.Context, string, db.DeviceToken, string) (bool, error) {
 	return false, nil
 }
+
+// MachineLinkInUse is db.DB's without pairing codes (this store keeps none): a live link credential.
+func (s *meshStore) MachineLinkInUse(_ context.Context, machine string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, t := range s.tokens {
+		if t.MachineID == machine && t.Role == roleLink && !s.revoked[t.ID] {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *meshStore) RevokeLinkPair(context.Context, string, string) (string, bool, error) {
+	return "", false, nil
+}
 func (s *meshStore) PutInboxItem(context.Context, string, []byte, time.Time, *time.Time) error {
 	return nil
 }
-func (s *meshStore) InboxItems(context.Context, time.Time) ([][]byte, error) { return nil, nil }
+func (s *meshStore) InboxItems(context.Context, time.Time, func([]byte) error) error { return nil }
 
 func (s *meshStore) Peers(context.Context) ([]db.Peer, error) {
 	s.mu.Lock()
@@ -537,11 +556,16 @@ func (s *meshStore) FeedItem(context.Context, string) (*db.FeedRow, error) { ret
 func (s *meshStore) MarkFeedSent(context.Context, string, string, time.Time, json.RawMessage) ([]db.FeedRow, error) {
 	return nil, nil
 }
-func (s *meshStore) LinkTodoSpace(context.Context, string, string, string, time.Time) (string, error) {
+func (s *meshStore) FeedByRef(context.Context, string, []string, int) ([]db.FeedRow, error) {
+	return nil, nil
+}
+func (s *meshStore) LinkTodoSpace(context.Context, string, string, string, time.Time, db.KeptLinks) (string, error) {
 	return "", nil
 }
-func (s *meshStore) UnlinkTodoSpace(context.Context, string, string, string) error { return nil }
-func (s *meshStore) RenameTodoSpace(context.Context, string, string, string) (bool, error) {
+func (s *meshStore) UnlinkTodoSpace(context.Context, string, string, string, db.KeptLinks) error {
+	return nil
+}
+func (s *meshStore) RenameTodoSpace(context.Context, string, string, string, db.KeptLinks) (bool, error) {
 	return false, nil
 }
 func (s *meshStore) LinkTodoAgent(context.Context, string, string, string, string, string, string, string, time.Time) ([]string, error) {
@@ -570,3 +594,23 @@ func (s *meshStore) InsertTodoDecision(context.Context, db.TodoDecisionRow) (boo
 func (s *meshStore) SetTodoDecisionSupersedes(context.Context, string, string, string, time.Time) (*db.TodoDecisionRow, error) {
 	return nil, db.ErrDecisionNotFound
 }
+
+// Queue tests use Postgres; this unrelated fixture has no durable phone delivery store.
+func (s *meshStore) EnqueuePhoneWrite(context.Context, string, string, json.RawMessage) (*db.PhoneWrite, error) {
+	return nil, errors.New("phone write queue unavailable")
+}
+func (s *meshStore) PhoneWrites(context.Context) ([]db.PhoneWrite, error)  { return nil, nil }
+func (s *meshStore) ClaimPhoneWrite(context.Context, string) (bool, error) { return false, nil }
+func (s *meshStore) FinishPhoneWrite(context.Context, string, string, json.RawMessage) error {
+	return nil
+}
+func (s *meshStore) CancelPhoneWrite(context.Context, string) (*db.PhoneWrite, error) {
+	return nil, nil
+}
+func (s *meshStore) RecoverPhoneWrites(context.Context) error { return nil }
+
+func (s *meshStore) FindQueuedPhoneWrite(context.Context, string, json.RawMessage) (*db.PhoneWrite, error) {
+	return nil, nil
+}
+
+func (s *meshStore) QueuedPhoneWrites(context.Context) ([]db.PhoneWrite, error) { return nil, nil }

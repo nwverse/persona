@@ -1,7 +1,7 @@
 // Per-session listener sets: a chat that goes away leaves no empty set behind, so opening many chats over a page's life
 // does not grow the registry the reconnect handler walks.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { connect, listenSession, reset, sessionListenerKeysForTests, type ItemsEvent } from "./store";
+import { connect, getSession, getState, listenSession, reset, upsertSession, sessionListenerKeysForTests, type ItemsEvent } from "./store";
 
 class FakeSocket {
   static OPEN = 1;
@@ -85,6 +85,20 @@ describe("per-session listeners", () => {
     expect(sessionListenerKeysForTests()).toBe(before);
   });
 
+  it("hands the hub's revs event to each open session's listener, and to no other (#1179)", () => {
+    const s = online();
+    const got: number[] = [], other: number[] = [];
+    const off = listenSession("m", "open", { rev: (r) => got.push(r) });
+    const offOther = listenSession("m2", "open", { rev: (r) => other.push(r) });
+    s.push({ type: "revs", machine_id: "m", revs: { open: 120, closed: 80 } });
+    s.push({ type: "revs", machine_id: "m", revs: { open: "not a rev" } });
+    s.push({ type: "revs", machine_id: "m" });
+    expect(got).toEqual([120]);
+    expect(other).toEqual([]);
+    off();
+    offOther();
+  });
+
   it("a session listened to again after its key went hears its items", () => {
     const s = online();
     listenSession("m", "again", {})();
@@ -98,4 +112,24 @@ describe("per-session listeners", () => {
     s.push({ type: "items", machine_id: "m", session_id: "again", items: [] });
     expect(got).toHaveLength(1);
   });
+});
+
+it("a conversation_deleted event drops its subscription and fences later session/item frames", () => {
+  const socket = online();
+  const row = { machine_id: "m", session_id: "deleted-chat", assistant: true, status: "idle", title: "Private chat", cwd: "" };
+  upsertSession(row);
+  const receive = vi.fn();
+  const off = listenSession("m", "deleted-chat", { items: receive, delta: receive, reconnected: receive });
+  const before = sessionListenerKeysForTests();
+  socket.push({ type: "conversation_deleted", machine_id: "m", session_id: "deleted-chat" });
+  expect(sessionListenerKeysForTests()).toBe(before - 1);
+  socket.push({ type: "session", session: row });
+  socket.push({ type: "sessions", machine_id: "m", sessions: [row] });
+  socket.push({ type: "sessions_delta", machine_id: "m", upsert: [row] });
+  socket.push({ type: "items", machine_id: "m", session_id: "deleted-chat", items: [] });
+  socket.push({ type: "delta", machine_id: "m", session_id: "deleted-chat", text: "late" });
+  expect(receive).not.toHaveBeenCalled();
+  expect(getState().sessions.m).toEqual([]);
+  expect(getSession("m", "deleted-chat")).toMatchObject({ deleted: true, title: "", capabilities: {} });
+  off();
 });

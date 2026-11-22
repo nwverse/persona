@@ -36,6 +36,12 @@ type session struct {
 	Model, Voice, Instructions string
 	InputRate                  int
 	Tools                      []toolDecl
+	// Dictation: an unbound transcription session (dictation.go), with no delegation, voice or tools.
+	// DictationCaptions requests interim user captions; TextOnly requests output_modalities ["text"] until refused.
+	Dictation, DictationCaptions, TextOnly bool
+	// ReadAloud: the session only reads texts aloud (speak.go). The services are told so by Instructions alone; the
+	// fake dialect, which has no voice, answers such a session with a little silence.
+	ReadAloud bool
 }
 
 type toolDecl struct {
@@ -70,12 +76,15 @@ type event struct {
 	args, code       string
 	param, eventID   string
 	rate             int
+	captions         bool // evStarted: the interim-caption extension was granted
 }
 
 func newWire(dialect string) wire {
 	switch dialect {
 	case DialectCodex:
 		return codexWire{}
+	case DialectRealtime:
+		return realtimeWire{}
 	case DialectFake:
 		return fakeWire{}
 	}
@@ -91,10 +100,20 @@ func (liveWire) header() http.Header                { return http.Header{} }
 
 func (liveWire) start(s session) any {
 	audio := map[string]any{"format": map[string]any{"type": "audio/pcm", "rate": s.InputRate}}
-	if s.Voice != "" {
+	if s.Voice != "" && !s.Dictation {
 		audio["output"] = map[string]any{"voice": s.Voice}
 	}
-	sess := map[string]any{"model": s.Model, "audio": audio, "delegation": map[string]any{"type": "client"}}
+	sess := map[string]any{"model": s.Model, "audio": audio}
+	if s.Dictation {
+		if s.DictationCaptions {
+			sess["extensions"] = map[string]any{trCaptionExtension: trCaptionExtensionVersion}
+		}
+		if s.TextOnly {
+			sess["output_modalities"] = []string{"text"}
+		}
+	} else {
+		sess["delegation"] = map[string]any{"type": "client"}
+	}
 	if s.Instructions != "" {
 		sess["instructions"] = s.Instructions
 	}
@@ -145,7 +164,8 @@ func (liveWire) decode(raw []byte) []event {
 		Type    string `json:"type"`
 		Delta   string `json:"delta"`
 		Session struct {
-			Audio struct {
+			Extensions map[string]any `json:"extensions"`
+			Audio      struct {
 				Format struct {
 					Rate int `json:"rate"`
 				} `json:"format"`
@@ -180,7 +200,7 @@ func (liveWire) decode(raw []byte) []event {
 		if rate == 0 {
 			rate = f.Session.Audio.Format.Rate
 		}
-		return []event{{kind: evStarted, rate: rate}}
+		return []event{{kind: evStarted, rate: rate, captions: captionExtensionGranted(f.Session.Extensions)}}
 	case "session.output_audio.delta":
 		pcm, err := base64.StdEncoding.DecodeString(f.Delta)
 		if err != nil || len(pcm) == 0 {
@@ -461,3 +481,137 @@ func chunkBytes(s string, n int) []string {
 }
 
 func utf8RuneStart(b byte) bool { return b&0xC0 != 0x80 }
+
+// realtimeWire is the OpenAI Realtime v2 WebSocket wire (/v1/realtime, gpt-realtime / gpt-realtime-mini).
+type realtimeWire struct{}
+
+func (realtimeWire) url(base, model string) (string, error) { return (codexWire{}).url(base, model) }
+func (realtimeWire) header() http.Header                    { return http.Header{} }
+
+// start is the GA session.update: type is required, the audio formats go under audio.input and audio.output, and the
+// voice only in audio.output (session.audio.format and session.voice are refused as unknown parameters).
+func (realtimeWire) start(s session) any {
+	rate := s.InputRate
+	if rate <= 0 {
+		rate = 24000
+	}
+	format := map[string]any{"type": "audio/pcm", "rate": rate}
+	output := map[string]any{"format": map[string]any{"type": "audio/pcm", "rate": 24000}}
+	if s.Voice != "" {
+		output["voice"] = s.Voice
+	}
+	audio := map[string]any{
+		"input":  map[string]any{"format": format, "transcription": map[string]any{"model": "gpt-4o-mini-transcribe"}},
+		"output": output,
+	}
+	sess := map[string]any{"type": "realtime", "audio": audio}
+	if s.Instructions != "" {
+		sess["instructions"] = s.Instructions
+	}
+	if len(s.Tools) > 0 {
+		sess["tools"] = s.Tools
+	}
+	return map[string]any{"type": "session.update", "session": sess}
+}
+
+func (realtimeWire) audio(pcm []byte) any {
+	return map[string]any{"type": "input_audio_buffer.append", "audio": base64.StdEncoding.EncodeToString(pcm)}
+}
+
+func (realtimeWire) text(s string) any {
+	return map[string]any{
+		"type": "conversation.item.create",
+		"item": map[string]any{
+			"type":    "message",
+			"role":    "user",
+			"content": inputContent(clipRunes(s, commentaryRunes)),
+		},
+	}
+}
+
+func (w realtimeWire) say(s, _ string) []any {
+	return []any{w.text(s), map[string]any{"type": "response.create"}}
+}
+
+func (w realtimeWire) reply(delegation, s string, final bool, _ string) []any {
+	if delegation != "" {
+		item := map[string]any{
+			"type": "conversation.item.create",
+			"item": map[string]any{
+				"type":    "function_call_output",
+				"call_id": delegation,
+				"output":  clipRunes(s, commentaryRunes),
+			},
+		}
+		if final {
+			return []any{item, map[string]any{"type": "response.create"}}
+		}
+		return []any{item}
+	}
+	if final {
+		return w.say(s, "")
+	}
+	return []any{w.text(s)}
+}
+
+func (realtimeWire) acks() bool         { return false }
+func (realtimeWire) close() any         { return map[string]any{"type": "session.close"} }
+func (realtimeWire) outputRate(int) int { return 24000 }
+
+func (realtimeWire) decode(raw []byte) []event {
+	var f struct {
+		Type       string `json:"type"`
+		Delta      string `json:"delta"`
+		Transcript string `json:"transcript"`
+		ResponseID string `json:"response_id"`
+		CallID     string `json:"call_id"`
+		Name       string `json:"name"`
+		Arguments  string `json:"arguments"`
+		Response   struct {
+			ID string `json:"id"`
+		} `json:"response"`
+		Error struct {
+			Message string `json:"message"`
+			Code    string `json:"code"`
+			Param   string `json:"param"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(raw, &f) != nil {
+		return nil
+	}
+	switch f.Type {
+	case "session.created", "session.updated", "session.started":
+		return []event{{kind: evStarted, rate: 24000}}
+	case "response.audio.delta", "response.output_audio.delta":
+		pcm, err := base64.StdEncoding.DecodeString(f.Delta)
+		if err != nil || len(pcm) == 0 {
+			return nil
+		}
+		return []event{{kind: evAudio, audio: pcm}}
+	case "conversation.item.input_audio_transcription.delta":
+		return []event{{kind: evUser, text: f.Delta}}
+	case "conversation.item.input_audio_transcription.completed":
+		return []event{{kind: evUser, text: f.Transcript, replace: true, final: true}}
+	case "response.audio_transcript.delta", "response.output_audio_transcript.delta":
+		return []event{{kind: evAssistant, text: f.Delta, name: "transcript"}}
+	// A response's id is in response.id (response_id is for the events within it).
+	case "response.created":
+		return []event{{kind: evReply, id: firstNonEmpty(f.Response.ID, f.ResponseID)}}
+	case "response.done", "response.completed":
+		return []event{{kind: evTurnEnd, id: firstNonEmpty(f.Response.ID, f.ResponseID)}}
+	// The service's VAD heard the user: it cancels the response under way (interrupt_response), and the app drops
+	// what it has not played of it.
+	case "input_audio_buffer.speech_started":
+		return []event{{kind: evInterrupted}}
+	// A function call is taken from its arguments' done only: response.output_item.done repeats it, and a second
+	// evToolCall would hand the same call over twice.
+	case "response.function_call_arguments.done":
+		if f.CallID == "" || f.Name == "" {
+			return nil
+		}
+		return []event{{kind: evDelegation, id: f.CallID}, {kind: evToolCall, id: f.CallID, callID: f.CallID, name: f.Name, args: f.Arguments}}
+	case "error":
+		return []event{{kind: evError, text: f.Error.Message, code: f.Error.Code, param: f.Error.Param}}
+	}
+	return nil
+}

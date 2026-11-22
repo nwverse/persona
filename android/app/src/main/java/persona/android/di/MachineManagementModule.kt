@@ -9,6 +9,7 @@ import dagger.hilt.components.SingletonComponent
 import persona.core.contracts.GroupKeys
 import persona.core.contracts.HubUpdateEvent
 import persona.core.contracts.ManagersEvent
+import persona.core.contracts.KnowledgeSelectionEvent
 import persona.core.contracts.ExtensionUiEvent
 import persona.core.contracts.ExtensionOperationEvent
 import persona.core.contracts.ExtensionAuthEvent
@@ -23,6 +24,7 @@ import persona.core.hub.HttpHubManagers
 import persona.core.hub.HttpHubSent
 import persona.core.hub.HttpMachineManagement
 import persona.core.hub.HttpAgentTriage
+import persona.core.hub.HttpKnowledgeSelection
 import persona.core.hub.HttpModelConfiguration
 import persona.core.hub.HttpExtensionManagement
 import persona.core.hub.HttpProviderSetup
@@ -32,6 +34,9 @@ import persona.core.hub.OkHttpHubConnection
 import persona.core.hub.extensionStreamBindings
 import android.app.Application
 import persona.android.PersonaApp
+import persona.platform.notify.ExtensionNotificationEnvironment
+import persona.platform.notify.forExtensionNotification
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -39,10 +44,15 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.transform
+import persona.core.domain.secrets.hasEnabledSecretProvider
 import kotlinx.serialization.json.JsonObject
 import javax.inject.Singleton
 
@@ -77,12 +87,55 @@ object MachineManagementModule {
         override suspend fun put(value: TriageSwitches) = HttpAgentTriage(runtime.connection()).put(value)
     }
 
+    /**
+     * Settings › Standing Authorizations: the selected group's hub. The client is that group's own (plain ids);
+     * [SelectedGroupStandingAuthorizations] applies [AssistantManagement.inGroup], and a revoke stays on the hub
+     * that listed the row.
+     */
+    @Provides @Singleton fun standingAuthorizations(stacks: GroupStacks, application: Application): StandingAuthorizationsSource {
+        val scope = (application as PersonaApp).scope
+        val identity = stacks.selected.map { it?.id.orEmpty() }
+            .stateIn(scope, SharingStarted.Eagerly, stacks.selected.value?.id.orEmpty())
+        return SelectedGroupStandingAuthorizations(
+            current = {
+                stacks.selected.value?.let { stack ->
+                    StandingHub(stack.id, stack.names, stack.plainBindings.assistantManagement)
+                }
+            },
+            hubIdentity = identity,
+        )
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Provides @Singleton fun knowledgeSelection(runtime: ConnectionRuntime, application: Application): KnowledgeSelection = object : KnowledgeSelection {
+        private fun api() = HttpKnowledgeSelection(runtime.connection())
+        override val changes: Flow<KnowledgeSelectionChange> = (application as PersonaApp).hub
+            .flatMapLatest { hub ->
+                val events = hub?.connection?.events ?: emptyFlow()
+                AssistantManagerChoice.current.flatMapLatest { choice ->
+                    events.filterIsInstance<KnowledgeSelectionEvent>().filter { choice.owns(it.manager) }
+                        .map { KnowledgeSelectionChange(it.manager) }
+                }
+            }
+        override suspend fun selection() = api().selection()
+        override suspend fun put(document: JsonObject) = api().put(document)
+        override suspend fun <T> withPinnedConnection(block: suspend KnowledgeSelection.() -> T): T =
+            HttpKnowledgeSelection(runtime.connection()).block()
+        override suspend fun candidates(source: String) = api().candidates(source)
+        override suspend fun documents() = api().documents()
+        override suspend fun document(id: String) = api().document(id)
+    }
+
     @Provides @Singleton fun models(runtime: ConnectionRuntime): ModelConfiguration = object : ModelConfiguration {
         private fun api() = HttpModelConfiguration(runtime.connection())
         override suspend fun catalog() = api().catalog()
         override suspend fun purpose(id: String) = api().purpose(id)
         override suspend fun save(purpose: ModelPurpose, draft: ModelConfigurationDraft) = api().save(purpose, draft)
         override suspend fun providerModels(provider: String, refresh: Boolean, machine: String?) = api().providerModels(provider, refresh, machine)
+        override suspend fun profiles() = api().profiles()
+        override suspend fun applyProfile(id: String) = api().applyProfile(id)
+        override suspend fun rollbackProfile() = api().rollbackProfile()
+        override suspend fun saveProfile(id: String, input: ModelProfileSaveInput) = api().saveProfile(id, input)
     }
 
     // The setup checklist's main-conversation steps: the selected group's hub, while its hello says assistant_readiness.
@@ -104,23 +157,39 @@ object MachineManagementModule {
 
     // "Add model provider" from model configuration: the selected group's hub keeps the provider.
     @OptIn(ExperimentalCoroutinesApi::class)
-    @Provides @Singleton fun providers(runtime: ConnectionRuntime, application: Application): ProviderSetup = object : ProviderSetup {
+    @Provides @Singleton fun providers(runtime: ConnectionRuntime, application: Application, extensions: ExtensionManagement): ProviderSetup = object : ProviderSetup {
         private fun api() = HttpProviderSetup(runtime.connection())
+        override fun ownsMachine(id: String) = GroupKeys.namespaceOf(id) == runtime.selected.value?.namespace
         override val builtinPresets: Flow<Boolean> = (application as PersonaApp).hub
             .flatMapLatest { hub -> hub?.connection?.serverFeatures ?: flowOf(emptySet()) }
             .map { BuiltinPresetsFeature in it }.distinctUntilChanged()
+        override val launcherScope: Flow<Boolean> = (application as PersonaApp).hub
+            .flatMapLatest { hub -> hub?.connection?.serverFeatures ?: flowOf(emptySet()) }
+            .map { LauncherScopeFeature in it }.distinctUntilChanged()
+        override val launcherImportParse: Flow<Boolean> = (application as PersonaApp).hub
+            .flatMapLatest { hub -> hub?.connection?.serverFeatures ?: flowOf(emptySet()) }
+            .map { LauncherImportParseFeature in it }.distinctUntilChanged()
+        private val providerChanges = extensions.changes.map { }.onStart { emit(Unit) }
+        override val secretReferencesAvailable: Flow<Boolean> = (application as PersonaApp).hub
+            .flatMapLatest { hub -> hub?.connection?.serverFeatures ?: flowOf(emptySet()) }
+            .map { LauncherSecretReferencesFeature in it }.distinctUntilChanged()
+            .flatMapLatest { supported ->
+                if (!supported) flowOf(false) else providerChanges.mapLatest { hasEnabledSecretProvider(extensions) }
+            }.distinctUntilChanged()
         override suspend fun presets() = api().presets()
         override suspend fun add(provider: NewProvider) = api().add(provider)
         override suspend fun create(provider: NewProvider) = api().create(provider)
         override suspend fun test(probe: ProviderProbe) = api().test(probe)
         override suspend fun discover(probe: ProviderProbe) = api().discover(probe)
+        override suspend fun update(name: String, changes: ProviderUpdate) = api().update(name, changes)
         override suspend fun launchers() = api().launchers()
         override suspend fun launcher(name: String) = api().launcher(name)
         override suspend fun remove(name: String) = api().remove(name)
         override suspend fun restore(name: String) = api().restore(name)
         override suspend fun check(name: String, machine: String?) = api().check(name, machine)
-        override suspend fun importPreview(machine: String) = api().importPreview(machine)
-        override suspend fun import(machine: String, providers: List<String>) = api().import(machine, providers)
+        override suspend fun importPreview(machine: String, alias: String?) = api().importPreview(machine, alias)
+        override suspend fun import(machine: String, providers: List<String>, alias: String?) = api().import(machine, providers, alias)
+        override suspend fun parse(text: String) = api().parse(text)
     }
 
     // Machines › "Add computer" (docs/assistant/onboarding.md 4.2): a new computer on the selected group's hub; a code again, the machine list
@@ -131,9 +200,13 @@ object MachineManagementModule {
             .flatMapLatest { stack -> stack?.connection?.serverFeatures ?: flowOf(emptySet()) }
             .map { MachinesAddFeature in it }.distinctUntilChanged()
         private fun merged(code: ComputerCode, namespace: String?) = code.copy(machine = GroupKeys.machine(code.machine, namespace))
-        override suspend fun add(name: String, os: ComputerOs): ComputerCode {
+        override suspend fun add(name: String, os: ComputerOs): ComputerCode = add(name, os, null)
+        // The manager is named only on the hub the current assistant is of (the roster's, the selected group's): its id
+        // means nothing to another hub.
+        override suspend fun add(name: String, os: ComputerOs, manager: String?): ComputerCode {
             val stack = stacks.selected.value ?: throw HubFailure(HubError.NoNetwork, AppText.get(R.string.app_error_pair_first), retryable = false)
-            return stacks.use(stack.namespace) { merged(HttpComputerPairing(it.connection).add(name, os), it.namespace) }
+            val named = managerNamedFor(manager, persona.core.contracts.api.AssistantManagerChoice.current.value.hubId, stack.connection.http.hubId)
+            return stacks.use(stack.namespace) { merged(HttpComputerPairing(it.connection).add(name, os, named), it.namespace) }
         }
         override suspend fun again(machineId: String) = stacks.use(GroupKeys.namespaceOf(machineId)) {
             merged(HttpComputerPairing(it.connection).again(GroupKeys.raw(machineId)), it.namespace)
@@ -157,6 +230,7 @@ object MachineManagementModule {
         private val features = (application as PersonaApp).hub
             .flatMapLatest { hub -> hub?.connection?.serverFeatures ?: flowOf(emptySet()) }
         override val available: Flow<Boolean> = features.map { "extension_manager" in it || "plugin_manager" in it }.distinctUntilChanged()
+        override val secretReferencesAvailable: Flow<Boolean> = features.map(::supportsExtensionSecretReferences).distinctUntilChanged()
         // Extensions' UI slots (docs/extensions/extensions.md "UI slots") and the badge events of the selected hub.
         override val slotsAvailable: Flow<Boolean> = features.map { "extension_ui_slots" in it || "plugin_ui_slots" in it }.distinctUntilChanged()
         override val nativeStream = runtime.selected.flatMapLatest { group ->
@@ -166,8 +240,20 @@ object MachineManagementModule {
                 "${group.id}:${data.scope.hubId}:${data.scope.pairingGeneration}" to (group.namespace ?: "primary")
             }
         }
+        // A source subscription saved, run or deleted (#2041) draws the subscription pages again, as an invalidate of theirs.
         override val uiEvents: Flow<ExtensionUiEvent> = (application as PersonaApp).hub
-            .flatMapLatest { hub -> hub?.connection?.events ?: emptyFlow() }.filterIsInstance<ExtensionUiEvent>()
+            .flatMapLatest { hub -> hub?.connection?.events ?: emptyFlow() }
+            .mapNotNull { event ->
+                when (event) {
+                    is ExtensionUiEvent -> event
+                    is persona.core.contracts.SubscriptionEvent -> ExtensionUiEvent(persona.core.contracts.api.SUBSCRIPTIONS_UI, invalidate = true)
+                    else -> null
+                }
+            }
+        // Source subscriptions (#2041): entry rows once the hub says they deliver.
+        override val subscriptionsAvailable: Flow<Boolean> = features.map { "source_subscriptions" in it }.distinctUntilChanged()
+        override val inboxSourcesAvailable: Flow<Boolean> = features.map { "inbox_sources" in it }.distinctUntilChanged()
+        override suspend fun subscriptionSummary() = api().subscriptionSummary()
         // A hub without the `extensions` feature (before #1844, or no hello yet) answers under /api/v1/plugins only;
         // a newer one under both.
         private fun api() = runtime.connection().let { HttpExtensionManagement(it, available, legacy = "extensions" !in it.serverFeatures.value) }
@@ -188,13 +274,16 @@ object MachineManagementModule {
             changed { api().setContribution(id, point, contribution, enabled) }
         override suspend fun extensions() = api().extensions()
         override suspend fun extension(id: String) = api().extension(id)
+        override fun adminNetworkUrl(id: String) = runCatching { api().adminNetworkUrl(id) }.getOrNull()
         override suspend fun setEnabled(id: String, enabled: Boolean, cascade: Boolean) = changed { api().setEnabled(id, enabled, cascade) }
         override suspend fun setAutoUpgrade(id: String, auto: Boolean) = changed { api().setAutoUpgrade(id, auto) }
         override suspend fun autoUpgrades() = api().autoUpgrades()
         override suspend fun setAutoUpgrades(auto: Boolean) = changed { api().setAutoUpgrades(auto) }
         override suspend fun setConfig(id: String, config: JsonObject) = api().setConfig(id, config)
         override suspend fun setSecret(id: String, name: String, value: String) = api().setSecret(id, name, value)
+        override suspend fun setSecretReference(id: String, name: String, reference: String) = api().setSecretReference(id, name, reference)
         override suspend fun clearSecret(id: String, name: String) = api().clearSecret(id, name)
+        override suspend fun removeHandoffRule(id: String, rule: String) = api().removeHandoffRule(id, rule)
         override suspend fun listing() = api().listing()
         override suspend fun uiPlaces(placement: String, launcher: String?, machine: String?) = api().uiPlaces(placement, launcher, machine)
         override suspend fun renderUi(extension: String, ui: String, context: ExtensionUiContext?, state: String?) =
@@ -202,6 +291,8 @@ object MachineManagementModule {
         override suspend fun uiAction(
             extension: String, ui: String, action: String, context: ExtensionUiContext?, state: String?, values: Map<String, String>?,
         ) = api().uiAction(extension, ui, action, context, state, values)
+        override fun iconPath(value: String) = runCatching { api().iconPath(value) }.getOrNull()
+        override suspend fun icon(path: String) = api().icon(path)
         override suspend fun markets() = api().markets()
         override suspend fun addMarket(spec: String, token: String?) = api().addMarket(spec, token)
         override suspend fun removeMarket(id: String) = api().removeMarket(id)
@@ -211,10 +302,10 @@ object MachineManagementModule {
         override suspend fun previewFromMarket(market: String, extension: String) = api().previewFromMarket(market, extension)
         override suspend fun install(preview: ExtensionPreview) = changed { api().install(preview) }
         override suspend fun upgrade(id: String, preview: ExtensionPreview) = changed { api().upgrade(id, preview) }
-        override suspend fun uninstall(id: String, keepData: Boolean, cascade: Boolean) = changed { api().uninstall(id, keepData, cascade) }
+        override suspend fun uninstall(id: String, keepData: Boolean, cascade: Boolean, members: Boolean) = changed { api().uninstall(id, keepData, cascade, members) }
         override suspend fun startFromMarket(market: String, extension: String) = api().startFromMarket(market, extension)
         override suspend fun agree(preview: ExtensionPreview, upgradeOf: String?) = api().agree(preview, upgradeOf)
-        override suspend fun startUninstall(id: String, keepData: Boolean, cascade: Boolean) = api().startUninstall(id, keepData, cascade)
+        override suspend fun startUninstall(id: String, keepData: Boolean, cascade: Boolean, members: Boolean) = api().startUninstall(id, keepData, cascade, members)
         override suspend fun operations() = api().operations()
         override suspend fun operation(id: String) = api().operation(id)
         override suspend fun retryOperation(id: String) = api().retryOperation(id)
@@ -227,6 +318,31 @@ object MachineManagementModule {
         override suspend fun authStep(id: String, step: String, values: Map<String, String>) = api().authStep(id, step, values)
         override suspend fun authLogout(id: String) = api().authLogout(id)
     }
+
+    /** Notification actions stay on the exact pairing that delivered them, even if selection changes before the call. */
+    @Provides @Singleton
+    fun extensionNotificationEnvironment(runtime: ConnectionRuntime, extensions: ExtensionManagement): ExtensionNotificationEnvironment =
+        object : ExtensionNotificationEnvironment {
+            override fun currentScope(): ExtensionNotificationScope? {
+                val data = runtime.scopedData.value ?: return null
+                val group = runtime.groups.value.firstOrNull { it.data === data } ?: return null
+                return ExtensionNotificationScope(data.scope.path, group.namespace, ManagerRoster.ASSISTANT_MANAGER)
+            }
+
+            override fun canRouteUnscopedEvents(): Boolean = runtime.groups.value.size == 1
+
+            override fun extensionUi(record: ExtensionNotificationActionRecord): ExtensionUi? {
+                if (currentScope() != record.scope) return null
+                val data = runtime.scopedData.value ?: return null
+                return try {
+                    val connection = runtime.connectionFor(data)
+                    HttpExtensionManagement(connection, extensions.available,
+                        legacy = "extensions" !in connection.serverFeatures.value).forExtensionNotification(record)
+                } catch (_: CancellationException) {
+                    null
+                }
+            }
+        }
 
     // Settings › Hub version (docs/operations/hub-update.md "In the app"): the selected group's hub, following its `hub_update` pushes.
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -252,6 +368,7 @@ object MachineManagementModule {
         override suspend fun newCode(id: String) = api().newCode(id)
         override suspend fun rename(id: String, name: String) = api().rename(id, name)
         override suspend fun makeDefault(id: String) = api().makeDefault(id)
+        override suspend fun setHide(id: String, hide: Boolean) = api().setHide(id, hide)
         override suspend fun delete(id: String) = api().delete(id)
     }
 
@@ -295,6 +412,9 @@ object MachineManagementModule {
         override suspend fun deleteMessagesData() = api().deleteMessagesData()
         override suspend fun messagesChats(before: String?) = api().messagesChats(before)
         override suspend fun messagesThread(chatId: String, before: String?) = api().messagesThread(chatId, before)
+        override suspend fun gitHubAuth() = api().gitHubAuth()
+        override suspend fun setGitHubAuth(machine: String?) = api().setGitHubAuth(machine)
+        override suspend fun setGitHubInboxOptions(options: GitHubInboxOptions) = api().setGitHubInboxOptions(options)
     }
 }
 
@@ -307,3 +427,7 @@ internal fun extensionOperationUpdates(events: Flow<ServerEvent>): Flow<Extensio
     if (event is Hello || event is ManagersEvent) emit(null)
     else if (event is ExtensionOperationEvent) emit(event.operation.copy(manager = pushManager(event.manager)))
 }
+
+/** The manager an add names: only on the hub the current assistant's pick is of ([pickHub]); another hub's roster doesn't know its id. */
+internal fun managerNamedFor(manager: String?, pickHub: String?, requestHub: String?): String? =
+    manager?.takeIf { pickHub == requestHub }

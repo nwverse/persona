@@ -1,28 +1,86 @@
 package prompts
 
+import "encoding/json"
+
+func RenderAgentSessionName() string { return render("agents/session_name", nil) }
+
+// AgentSessionNameInput contains only bounded dialogue, never machine paths or credentials.
+type AgentSessionNameInput struct {
+	First  string
+	Recent string
+}
+
+func RenderAgentSessionNameInput(v AgentSessionNameInput) string {
+	return render("agents/session_name_input", v)
+}
+
+// RenderReadonlyTaskPlanExit keeps a read-only task from requesting writable implementation approval.
+func RenderReadonlyTaskPlanExit() string { return render("agents/readonly_plan_exit", nil) }
+
+// RenderReadonlyTaskConstraint carries a read-only task's limit in its first prompt.
+func RenderReadonlyTaskConstraint(language string) string {
+	return render("agents/readonly_task", struct{ Language string }{language})
+}
+
+type TaskContinuation struct {
+	TodoID   string
+	Readonly bool
+}
+
+func RenderTaskContinuation(t TaskContinuation) string { return render("agents/task_continuation", t) }
+
+// RenderPlanFirstTaskConstraint carries a task's self-planning requirement in its first prompt, for launches whose
+// thinking-effort setting the underlying model does not act on: the prompt is the only lever there.
+func RenderPlanFirstTaskConstraint() string { return render("agents/plan_first_task", nil) }
+
 // AgentTriage is the system prompt that reads a stopped agent's last reply and says where its work stands
 // (agents/triage, docs/assistant/agent-work.md).
 type AgentTriage struct {
-	Owner string // "" is the user
+	Owner    string // "" is the user
+	Language string // Owner language for instructions and generated line; empty preserves Chinese.
 }
 
 func RenderAgentTriage(t AgentTriage) string { return render("agents/triage", t) }
 
 func RenderAgentToolLoop() string { return render("agents/tool_loop", nil) }
 
+// AgentReportLine is the system prompt that paraphrases a supervised task's agent's report in one line for the
+// Progress row (agents/report_line, #3181, docs/assistant/unified-entry.md "Progress tray").
+type AgentReportLine struct {
+	Language string // Owner language for instructions and generated line; empty preserves Chinese.
+	Max      int    // at most this many characters
+}
+
+func RenderAgentReportLine(r AgentReportLine) string { return render("agents/report_line", r) }
+
+// AgentReportLineInput is the report to paraphrase (agents/report_line_input).
+type AgentReportLineInput struct {
+	Language string // Owner language; empty preserves legacy Chinese bytes.
+	Task     string // the task's title
+	Kind     string // progress, question, blocked or done
+	Text     string // the report as the agent wrote it, clipped
+}
+
+func RenderAgentReportLineInput(in AgentReportLineInput) string {
+	return render("agents/report_line_input", in)
+}
+
 // AgentTriageInput is the turn to triage (agents/triage_input).
 type AgentTriageInput struct {
-	Now     string // the user's local time, "2006-01-02 15:04 Mon"
-	Agent   string // its tab / title
-	Machine string
-	Cwd     string
-	Project string // the knowledge base's project for its directory, "" when none
-	Ask     string // what the user asked in this turn, "" when it is not known
-	Reply   string // its last reply, clipped
-	Others  []AgentTriageOther
+	Language string // Owner language; empty preserves legacy Chinese bytes.
+	Now      string // the user's local time, "2006-01-02 15:04 Mon"
+	Agent    string // its tab / title
+	Machine  string
+	Cwd      string
+	Project  string // the knowledge base's project for its directory, "" when none
+	Ask      string // what the user asked in this turn, "" when it is not known
+	Reply    string // its last reply, clipped
+	Others   []AgentTriageOther
+	Answered []AgentAnswerItem // durable question/answer pairs, newest first; not authorization for automatic actions
 	// The risky step the user already said yes to, once what it waits for is over ("" when none): a turn still
 	// waiting for it is no question for the user.
 	ApprovedWait, ApprovedThen string
+	ApprovedByTask             bool // the agent's task authorized it, not the user on a card (#3246)
 }
 
 // AgentTriageOther is another agent working on the same machine: what this one may be waiting for.
@@ -34,24 +92,40 @@ func RenderAgentTriageInput(in AgentTriageInput) string { return render("agents/
 
 // AgentWake is what the hub sends an agent whose wait should be over (agents/wake).
 type AgentWake struct {
+	Language  string // Native language name; empty preserves the legacy Chinese text.
 	Attempt   int
 	Wait      string
 	Then      string
 	Agent     string // the agent it waited for, when it is that one stopping that wakes it
 	AgentLine string // what that agent said last
 	Approved  string // the risky step the user already said yes to, once the wait is over ("" when none)
+	// ApprovedByTask: the agent's task asked for that step, not the user on a card (#3246).
+	ApprovedByTask bool
 }
 
-func RenderAgentWake(w AgentWake) string { return render("agents/wake", w) }
+func RenderAgentWake(w AgentWake) string {
+	// JSON escapes tags and newlines in the wait, keeping the marker on one line.
+	marker, err := json.Marshal(wakeMetadata{Title: w.Wait})
+	if err != nil {
+		panic(err)
+	}
+	return render("agents/wake", struct {
+		AgentWake
+		Marker string
+	}{w, string(marker)})
+}
 
 // RenderAgentLimitContinue is what the manager sends an agent a subscription's usage limit stopped, once the limit has
 // reset and its CLI did not say it goes on by itself (agents/limit_continue, docs/assistant/agent-work.md "Usage limits").
-func RenderAgentLimitContinue() string { return render("agents/limit_continue", nil) }
+func RenderAgentLimitContinue(language string) string {
+	return render("agents/limit_continue", struct{ Language string }{language})
+}
 
 // AgentAnswer is the user's answers to the hub's decision card, sent on to the agent (agents/answer).
 type AgentAnswer struct {
-	Items []AgentAnswerItem
-	// ByAssistant: the assistant answered for the user (docs/assistant/assistant.md "The assistant answers questions first"), Reason says why.
+	Language string // Owner language; empty preserves legacy Chinese bytes.
+	Items    []AgentAnswerItem
+	// ByAssistant: the assistant answered for the user (docs/assistant/assistant.md "Assistant answers questions first"), Reason says why.
 	ByAssistant bool
 	Reason      string
 }
@@ -65,7 +139,8 @@ func RenderAgentAnswer(a AgentAnswer) string { return render("agents/answer", a)
 // AgentAuthRelayed tells an agent an extension authorized the link it stopped at with the user's account
 // (agents/auth_relayed, docs/operations/auth-relay.md).
 type AgentAuthRelayed struct {
-	App string // the app, as the authorization page names it; "" when it was not read
+	Language string // Owner language; empty preserves legacy Chinese bytes.
+	App      string // the app, as the authorization page names it; "" when it was not read
 }
 
 func RenderAgentAuthRelayed(a AgentAuthRelayed) string { return render("agents/auth_relayed", a) }
@@ -91,9 +166,10 @@ type LauncherRepairItem struct {
 func RenderLauncherRepair(r LauncherRepair) string { return render("agents/launcher_repair", r) }
 
 // AgentReanswer is the user's answers to questions the assistant answered for them, sent on to the agent, which went
-// on with the assistant's (agents/reanswer, docs/assistant/assistant.md "The assistant answers questions first").
+// on with the assistant's (agents/reanswer, docs/assistant/assistant.md "Assistant answers questions first").
 type AgentReanswer struct {
-	Items []AgentReanswerItem
+	Language string // Owner language; empty preserves legacy Chinese bytes.
+	Items    []AgentReanswerItem
 }
 
 type AgentReanswerItem struct {
@@ -103,16 +179,23 @@ type AgentReanswerItem struct {
 func RenderAgentReanswer(a AgentReanswer) string { return render("agents/reanswer", a) }
 
 // AgentDelegate is the system prompt that decides whether the assistant answers an agent's question for the user
-// (agents/delegate, docs/assistant/assistant.md "The assistant answers questions first").
+// (agents/delegate, docs/assistant/assistant.md "Assistant answers questions first").
 type AgentDelegate struct {
-	Owner string // "" is the user
-	Rules string // the user's own rules, trimmed: manager.json agents.delegate.rules
+	Language string // Owner language; empty preserves legacy Chinese bytes.
+	Owner    string // "" is the user
+	Rules    string // the user's own rules, trimmed: manager.json agents.delegate.rules
 }
 
-func RenderAgentDelegate(d AgentDelegate) string { return render("agents/delegate", d) }
+func RenderAgentDelegate(d AgentDelegate) string {
+	if d.Language == "zh-Hans" || d.Language == "简体中文" {
+		d.Language = ""
+	}
+	return render("agents/delegate", d)
+}
 
 // AgentDelegateInput is the question to decide on and what is known around it (agents/delegate_input).
 type AgentDelegateInput struct {
+	Language  string // Owner language; empty preserves legacy Chinese bytes.
 	Now       string // the user's local time, "2006-01-02 15:04 Mon"
 	Agent     string
 	Machine   string
@@ -154,3 +237,114 @@ type AgentReview struct {
 }
 
 func RenderAgentReview(r AgentReview) string { return render("agents/review", r) }
+
+// DispatchTask is the first message of an agent another agent started on this computer (agents/dispatch_task,
+// assistant/dispatch.go): who handed it the task, and that its last reply is what goes back.
+type DispatchTask struct {
+	From        string // the calling agent's tab / title, "" when it is not known
+	FromMachine string // the calling agent's computer, by name
+	Prompt      string
+}
+
+func RenderDispatchTask(t DispatchTask) string { return render("agents/dispatch_task", t) }
+
+type A2AMessage struct {
+	ID, Sender, State, Text string
+	Language                string
+	Request                 bool
+}
+
+func RenderA2AMessage(t A2AMessage) string { return render("agents/a2a_message", t) }
+
+// TaskSuccessor is the first message of an agent Persona starts for a task whose agents have all stopped (#4754): who
+// worked on it before and its last reply, then the user's message on the task (agents/task_successor).
+type TaskSuccessor struct {
+	Previous   string // the stopped agent's tab / title
+	PreviousID string // its session id
+	LastReply  string // its last reply, clipped; "" when there is none
+	Files      string // the hand-over rule (agents/task_files), before the user's text
+	Text       string
+}
+
+func RenderTaskSuccessor(t TaskSuccessor) string { return render("agents/task_successor", t) }
+
+// TaskLeader is what the task leader's note knows of how its Agent reaches its tools.
+type TaskLeader struct {
+	// Terminal: the assignment's verified entry is the terminal one (TaskHandoff.Terminal), named in the handoff note
+	// before this one; the note then says how task_plan and task_review run through it (#12136). False keeps the text
+	// an Agent with the Persona MCP gets.
+	Terminal bool
+}
+
+// RenderTaskLeader is what follows the prompt of a task whose agent is a task leader (agents/task_leader, #3656): that it
+// can hand direct workers to task_plan and how their reports reach it.
+func RenderTaskLeader(l TaskLeader) string { return render("agents/task_leader", l) }
+
+// RenderTaskWorker is what follows the prompt of a worker a task leader handed out (agents/task_worker).
+func RenderTaskWorker() string { return render("agents/task_worker", struct{}{}) }
+
+// RenderTaskFiles is the hand-over rule every task's prompt carries (agents/task_files, #10511): a file the user
+// should get is named by its absolute path, never pasted as text. It is always asked for, unlike the closeout form,
+// which depends on a switch. language is the user's language by its own name; empty keeps the original Chinese.
+func RenderTaskFiles(language string) string {
+	return render("agents/task_files", struct{ Language string }{language})
+}
+
+func RenderWorkspaceRepositories(rows, language string) string {
+	return render("agents/workspace_repositories", struct{ Rows, Language string }{rows, language})
+}
+
+// TaskHandoff describes the scoped entries the assignment's actual launcher can use.
+type TaskHandoff struct {
+	Language   string // the caller's reply language; empty keeps the existing default
+	MCP        bool   // the selected launcher has the existing scoped Persona MCP tools
+	Executable string // a verified node executable, encoded as a JSON string, never shell code
+}
+
+// Terminal: the entry rendered is the terminal one (`personad tool` through the verified Executable), not the MCP
+// tools, which win when both are known (agents/task_handoff).
+func (h TaskHandoff) Terminal() bool { return !h.MCP && h.Executable != "" }
+
+func RenderTaskHandoff(h TaskHandoff) string { return render("agents/task_handoff", h) }
+
+// RenderWorkerSupervise is the supervision message a task leader's agent gets about its workers (agents/worker_supervise,
+// assistant/task_leader.go): what each task of its own needs, from the same entries a conversation's message lists.
+func RenderWorkerSupervise(entries []SuperviseEntry) string {
+	return render("agents/worker_supervise", struct{ Entries []SuperviseEntry }{entries})
+}
+
+// AgentCloseoutRequired is what an agent is told when its stop is held for a missing closeout (#3612).
+type AgentCloseoutRequired struct {
+	Form     string // the closeout's form (closeout.Example)
+	Language string // the user's language, for the sentences inside it
+}
+
+func RenderAgentCloseoutRequired(c AgentCloseoutRequired) string {
+	return render("agents/closeout_required", c)
+}
+
+// AgentCloseoutAsk is the status question to an agent nobody supervises whose turn did work and ended without a
+// closeout (#3616): the same form and rules (agents/closeout_rules), about work already done.
+type AgentCloseoutAsk struct {
+	Form     string // the closeout's form (closeout.Example)
+	Language string // the user's language, for the sentences inside it
+}
+
+func RenderAgentCloseoutAsk(c AgentCloseoutAsk) string {
+	return render("agents/closeout_ask", c)
+}
+
+// AgentCloseoutBrief tells an agent the closeout's form before it works, so its turn does not cost a held stop
+// (agents/closeout_brief): after a task's prompt, or as a session's starting context.
+type AgentCloseoutBrief struct {
+	Form     string // the closeout's form (closeout.Example)
+	Language string // the user's language, for the sentences inside it
+	// AfterDelivery: the same block carries the task delivery disposition and responsible party.
+	AfterDelivery bool
+	// Session: it is a session's starting context, not part of a task's prompt: it says whose words these are.
+	Session bool
+}
+
+func RenderAgentCloseoutBrief(c AgentCloseoutBrief) string {
+	return render("agents/closeout_brief", c)
+}

@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,12 +37,121 @@ func open(t testing.TB) *DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(d.Close)
-	// Union of the integration branch's list and master's TruncateForTest: TruncateForTest alone
-	// does not clear lock_tests, client_ops, pair_tokens or device_sessions.
-	if _, err := d.pool.Exec(context.Background(), `TRUNCATE push_device_retirements, lock_tests, client_ops, devices, device_tokens, pair_tokens, device_sessions, live_activities, phone_tools, node_sessions, mail_accounts, interactions, settings, inbox_items, kb_entities, connector_secrets, machine_systems, machine_metrics, machine_usage, sent_messages, todos, todo_agents, assistant_always, sent_as_user CASCADE`); err != nil {
+	openCascade.once.Do(func() { openCascade.tables, openCascade.err = cascadeOfOpenTables(d) })
+	if openCascade.err != nil {
+		t.Fatal(openCascade.err)
+	}
+	if err := d.truncateNonEmpty(context.Background(), openCascade.tables); err != nil {
 		t.Fatal(err)
 	}
 	return d
+}
+
+// openTables are what open clears (with what refers to them): the union of the integration branch's list and master's
+// TruncateForTest. TruncateForTest alone does not clear lock_tests, client_ops, pair_tokens or device_sessions.
+var openTables = []string{"push_device_retirements", "lock_tests", "client_ops", "devices", "device_tokens", "pair_tokens",
+	"device_sessions", "live_activities", "phone_tools", "node_sessions", "mail_accounts", "interactions", "settings",
+	"inbox_items", "kb_entities", "connector_secrets", "machine_systems", "machine_metrics", "machine_usage",
+	"sent_messages", "todos", "todo_agents", "assistant_always", "sent_as_user", "hub_push_sent", "urgent_calls", "model_usage",
+	"conversation_histories", "assistant_conversation_spaces", "logical_conversations", "conversation_segment_closures", "conversation_prepared_candidates"}
+
+// open empties what TRUNCATE openTables CASCADE did, a table only the cascade reaches included, and leaves a table
+// that had no row in that cascade its files: it truncates only what has a row.
+func TestOpenTruncatesOnlyTablesWithRows(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	if !slices.Contains(openCascade.tables, "todo_decisions") || slices.Contains(openTables, "todo_decisions") {
+		t.Fatalf("todo_decisions is not a table only the cascade reaches: %v", openCascade.tables)
+	}
+	if _, err := d.pool.Exec(ctx, `INSERT INTO todos (id, title) VALUES ('t1', 'x');
+		INSERT INTO todo_decisions (id, todo_id, question, choice, created_at) VALUES ('d1', 't1', 'q', 'c', now())`); err != nil {
+		t.Fatal(err)
+	}
+	file := func(table string) uint32 {
+		t.Helper()
+		var n uint32
+		if err := d.pool.QueryRow(ctx, `SELECT relfilenode FROM pg_class WHERE oid = to_regclass($1)`, table).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	devices := file("devices")
+	d = open(t)
+	var rows int
+	if err := d.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM todos) + (SELECT count(*) FROM todo_decisions)`).Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("%d rows left, %v", rows, err)
+	}
+	if file("devices") != devices {
+		t.Fatal("an empty table was truncated")
+	}
+}
+
+// openCascade is what TRUNCATE openTables CASCADE empties, worked out by the first open: each open migrates the same
+// database to the same tables.
+var openCascade struct {
+	once   sync.Once
+	tables []string
+	err    error
+}
+
+// cascadeOfOpenTables is openCascade's tables. Each of openTables must be there: TRUNCATE naming a table the database
+// lacks fails, and truncateCascade alone would leave a renamed or dropped one out without a word.
+func cascadeOfOpenTables(d *DB) ([]string, error) {
+	tables, err := d.truncateCascade(context.Background(), openTables)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range openTables {
+		if !slices.Contains(tables, name) {
+			return nil, fmt.Errorf("open clears %s, which the migrated database does not have", name)
+		}
+	}
+	return tables, nil
+}
+
+// templates are the databases migratedDatabase copies: one per sets, migrated once per test binary.
+var templates = struct {
+	sync.Mutex
+	dbs map[Sets]string
+}{dbs: map[Sets]string{}}
+
+// migratedDatabase is a new database next to the test one with sets' migrations applied, dropped afterwards: a copy
+// of a template this binary migrated once (dbtest.Template), equal to a fresh migration but for the applied_at of its
+// schema_migrations rows. A test of a database at an older state starts from freshDatabase instead.
+func migratedDatabase(t *testing.T, sets Sets) string {
+	t.Helper()
+	base := os.Getenv(dbtest.Env)
+	if base == "" {
+		t.Skip(dbtest.Env + " not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	templates.Lock()
+	tpl, ok := templates.dbs[sets]
+	if !ok {
+		url, err := dbtest.Template(ctx, base)
+		if err != nil {
+			templates.Unlock()
+			t.Fatal(err)
+		}
+		d, err := Open(ctx, url, sets)
+		if err != nil {
+			templates.Unlock()
+			t.Fatal(err)
+		}
+		d.Close()
+		tpl = DatabaseName(url)
+		templates.dbs[sets] = tpl
+	}
+	templates.Unlock()
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	name := "persona_split_t_" + hex.EncodeToString(b)
+	url, err := dbtest.Clone(ctx, base, tpl, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { dropDatabase(base, name) })
+	return url
 }
 
 func TestLiveActivityStartBudget(t *testing.T) {
@@ -142,6 +253,206 @@ func TestLiveActivityStartBudget(t *testing.T) {
 		t.Fatalf("budget FK cleanup: n=%d err=%v", n, err)
 	}
 	t.Log("two independent pools: 20 concurrent attempts, one claim; renewal retained budget; failed save rolled back")
+}
+
+// The hold on the next push-start after one the phone has not answered (#7641): counted from the claim, seen by the
+// other blue-green process, and back to the cooldown when lifted.
+func TestLiveActivityStartHold(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	at := time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
+	const cooldown, maxAge = 10 * time.Minute, 8 * time.Hour
+	if err := d.UpsertDevice(ctx, Device{DeviceID: "phone"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SaveLiveActivity(ctx, LiveActivity{DeviceID: "phone", PushToStartToken: "start"}); err != nil {
+		t.Fatal(err)
+	}
+	other, err := Open(ctx, os.Getenv("PERSONA_TEST_DATABASE_URL"), AllSets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	// hold is HoldLiveActivityStart for the start claimed at asOf, and says whether the deadline moved.
+	hold := func(pool *DB, device string, asOf time.Time, d time.Duration) bool {
+		t.Helper()
+		changed, err := pool.HoldLiveActivityStart(ctx, device, asOf, d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return changed
+	}
+	// Nothing claimed yet: nothing to hold, and no row appears.
+	if hold(d, "phone", at, maxAge) {
+		t.Fatal("a hold without a claim changed something")
+	}
+	if _, claimed, err := d.ClaimLiveActivityStart(ctx, "phone", "start", at, cooldown, maxAge); err != nil || !claimed {
+		t.Fatalf("first claim: %v %v", claimed, err)
+	}
+	if !hold(d, "phone", at, maxAge) {
+		t.Fatal("the hold of the claimed start was not applied")
+	}
+	if hold(other, "phone", at, maxAge) {
+		t.Fatal("the same hold again reported a change")
+	}
+	due, claimed, err := other.ClaimLiveActivityStart(ctx, "phone", "start", at.Add(cooldown), cooldown, maxAge)
+	if err != nil || claimed || !due.Equal(at.Add(maxAge)) {
+		t.Fatalf("held start claimed by the other pool: due=%s claimed=%v err=%v", due, claimed, err)
+	}
+	due, claimed, err = other.ClaimLiveActivityStart(ctx, "phone", "start", at.Add(maxAge-time.Microsecond), cooldown, maxAge)
+	if err != nil || claimed || !due.Equal(at.Add(maxAge)) {
+		t.Fatalf("held start claimed before the hold ended: due=%s claimed=%v err=%v", due, claimed, err)
+	}
+	// The phone answered a minute after the start: the cooldown from that claim again, which has passed.
+	if !hold(other, "phone", at.Add(time.Minute), cooldown) {
+		t.Fatal("the phone's answer did not lift the hold")
+	}
+	second := at.Add(cooldown)
+	if _, claimed, err = d.ClaimLiveActivityStart(ctx, "phone", "start", second, cooldown, maxAge); err != nil || !claimed {
+		t.Fatalf("claim after the hold was lifted: %v %v", claimed, err)
+	}
+	// Held again and never answered: the hold ends by itself, counted from the second claim.
+	if !hold(d, "phone", second, maxAge) {
+		t.Fatal("the hold of the second start was not applied")
+	}
+	if _, claimed, err = d.ClaimLiveActivityStart(ctx, "phone", "start", second.Add(maxAge), cooldown, maxAge); err != nil || !claimed {
+		t.Fatalf("claim when the hold ended: %v %v", claimed, err)
+	}
+	if hold(d, "missing", second, maxAge) {
+		t.Fatal("a hold for an unknown device changed something")
+	}
+}
+
+// A hold, a refusal or an answer is about the start it followed, named by the time that start was claimed at (#7641
+// review): arriving after the device's next start was claimed, it leaves that start's deadline as it is. Before the
+// fix the late lift of start A put start B back on the cooldown (a second card beside B's), and A's late hold kept a
+// refused B back for fleetMaxAge.
+func TestLiveActivityStartHoldLeavesNewerClaim(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	at := time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
+	const cooldown, maxAge = 10 * time.Minute, 8 * time.Hour
+	if err := d.UpsertDevice(ctx, Device{DeviceID: "phone"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SaveLiveActivity(ctx, LiveActivity{DeviceID: "phone", PushToStartToken: "start"}); err != nil {
+		t.Fatal(err)
+	}
+	// Two pools: the two blue-green processes, as in TestLiveActivityStartBudget.
+	other, err := Open(ctx, os.Getenv("PERSONA_TEST_DATABASE_URL"), AllSets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	deadline := func() (claimedAt, next time.Time) {
+		t.Helper()
+		if err := d.pool.QueryRow(ctx, `SELECT claimed_at, next_start_at FROM live_activity_start_budget WHERE device_id = 'phone'`).Scan(&claimedAt, &next); err != nil {
+			t.Fatal(err)
+		}
+		return claimedAt, next
+	}
+	// late sends what start A's flush, its refusal and an answer from before B still had on their way.
+	a, answered := at.Add(123456*time.Nanosecond), at.Add(time.Minute) // A's claim keeps microseconds: 123 of them
+	late := func(pool *DB, what string, wantNext time.Time) {
+		t.Helper()
+		for _, w := range []struct {
+			name string
+			asOf time.Time
+			hold time.Duration
+		}{
+			{"A's hold", a, maxAge},
+			{"A's lift", a, cooldown},
+			{"an answer from before B", answered, cooldown},
+			{"an answer a microsecond before B", a.Truncate(time.Microsecond).Add(cooldown - time.Microsecond), cooldown},
+		} {
+			changed, err := pool.HoldLiveActivityStart(ctx, "phone", w.asOf, w.hold)
+			if err != nil || changed {
+				t.Fatalf("%s: %s arriving late: changed=%v err=%v, want no change", what, w.name, changed, err)
+			}
+			if _, next := deadline(); !next.Equal(wantNext) {
+				t.Fatalf("%s: %s arriving late moved B's next start to %s, want %s", what, w.name, next, wantNext)
+			}
+		}
+	}
+
+	// Start A: claimed, held, then lifted by the phone's answer.
+	if _, claimed, err := d.ClaimLiveActivityStart(ctx, "phone", "start", a, cooldown, maxAge); err != nil || !claimed {
+		t.Fatalf("claim A: %v %v", claimed, err)
+	}
+	if changed, err := d.HoldLiveActivityStart(ctx, "phone", a, maxAge); err != nil || !changed {
+		t.Fatalf("A's own hold: changed=%v err=%v", changed, err)
+	}
+	if changed, err := d.HoldLiveActivityStart(ctx, "phone", answered, cooldown); err != nil || !changed {
+		t.Fatalf("the answer to A: changed=%v err=%v", changed, err)
+	}
+	// Start B, claimed by the other process as soon as A's cooldown is over, so the two claims are as close as two can
+	// be. A claim at the time of the last one is refused whatever the deadline says: claimed_at names one claim.
+	b := a.Truncate(time.Microsecond).Add(cooldown)
+	if _, claimed, err := other.ClaimLiveActivityStart(ctx, "phone", "start", b, cooldown, maxAge); err != nil || !claimed {
+		t.Fatalf("claim B: %v %v", claimed, err)
+	}
+	if claimedAt, _ := deadline(); !claimedAt.Equal(b) {
+		t.Fatalf("B claimed at %s, want %s", claimedAt, b)
+	}
+	if changed, err := other.HoldLiveActivityStart(ctx, "phone", b, 0); err != nil || !changed {
+		t.Fatalf("B's deadline set to its claim: changed=%v err=%v", changed, err)
+	}
+	if due, claimed, err := d.ClaimLiveActivityStart(ctx, "phone", "start", b, cooldown, maxAge); err != nil || claimed {
+		t.Fatalf("a second claim at B's own time: due=%s claimed=%v err=%v", due, claimed, err)
+	}
+	if changed, err := other.HoldLiveActivityStart(ctx, "phone", b, cooldown); err != nil || !changed {
+		t.Fatalf("B's cooldown put back: changed=%v err=%v", changed, err)
+	}
+
+	// B is on its cooldown (its hold has not been written yet): A's late hold must not keep it back for maxAge.
+	late(d, "B on its cooldown", b.Add(cooldown))
+	// B is held: A's late lift must not put it back on the cooldown.
+	if changed, err := other.HoldLiveActivityStart(ctx, "phone", b, maxAge); err != nil || !changed {
+		t.Fatalf("B's own hold: changed=%v err=%v", changed, err)
+	}
+	late(other, "B held", b.Add(maxAge))
+
+	// The same from both processes at once, with B's own refusal and B's own hold among them: whatever the order, only
+	// B's writes land, and the last of them decides.
+	if changed, err := d.HoldLiveActivityStart(ctx, "phone", b, cooldown); err != nil || !changed {
+		t.Fatalf("B's refusal: changed=%v err=%v", changed, err)
+	}
+	var wg sync.WaitGroup
+	for i := range 40 {
+		pool := d
+		if i%2 == 1 {
+			pool = other
+		}
+		asOf, dur := a, maxAge
+		switch i % 4 {
+		case 1:
+			dur = cooldown
+		case 2:
+			asOf, dur = answered, cooldown
+		case 3:
+			asOf = b.Add(-time.Microsecond)
+		}
+		wg.Go(func() {
+			if changed, err := pool.HoldLiveActivityStart(ctx, "phone", asOf, dur); err != nil || changed {
+				t.Errorf("a late write as of %s for %s: changed=%v err=%v, want no change", asOf, dur, changed, err)
+			}
+		})
+	}
+	wg.Go(func() {
+		if changed, err := other.HoldLiveActivityStart(ctx, "phone", b, maxAge); err != nil || !changed {
+			t.Errorf("B's own hold among the late writes: changed=%v err=%v", changed, err)
+		}
+	})
+	wg.Wait()
+	if claimedAt, next := deadline(); !claimedAt.Equal(b) || !next.Equal(b.Add(maxAge)) {
+		t.Fatalf("after 40 late writes from two pools: claimed_at=%s next_start_at=%s, want %s and %s", claimedAt, next, b, b.Add(maxAge))
+	}
+	// B's own answer still lifts it.
+	if changed, err := d.HoldLiveActivityStart(ctx, "phone", b.Add(time.Second), cooldown); err != nil || !changed {
+		t.Fatalf("the answer to B: changed=%v err=%v", changed, err)
+	}
+	if _, next := deadline(); !next.Equal(b.Add(cooldown)) {
+		t.Fatalf("after B's answer: next_start_at=%s, want %s", next, b.Add(cooldown))
+	}
+	t.Log("claim A, claim B, then A's hold, A's lift and an older answer late (alone and 40 at once from two pools): B's deadline never moved")
 }
 
 func TestLiveActivityStartParentLockOrder(t *testing.T) {
@@ -348,11 +659,13 @@ func TestDevices(t *testing.T) {
 	if err := d.UpsertDevice(ctx, Device{DeviceID: "a", Name: "iPhone", APNSToken: "t1"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.UpsertDevice(ctx, Device{DeviceID: "a", Name: "iPhone", APNSToken: "t2", PushKey: "pk", RelayURL: "https://relay.example/relay", RelayGrant: "g", Credential: "dev_1", RelayError: "403 topic not served", Features: []string{"withdraw"}}); err != nil {
+	if err := d.UpsertDevice(ctx, Device{DeviceID: "a", Name: "iPhone", APNSToken: "t2", PushKey: "pk", RelayURL: "https://relay.example/relay", RelayGrant: "g", Credential: "dev_1", RelayError: "403 topic not served", Features: []string{"withdraw"},
+		VoIPToken: "v1", VoIPGrant: "vg", VoIPError: "none yet"}); err != nil {
 		t.Fatal(err)
 	}
 	list, err := d.Devices(ctx)
-	if err != nil || len(list) != 1 || list[0].APNSToken != "t2" || list[0].PushKey != "pk" || list[0].RelayURL != "https://relay.example/relay" || list[0].RelayGrant != "g" || list[0].Credential != "dev_1" || list[0].RelayError != "403 topic not served" || !slices.Equal(list[0].Features, []string{"withdraw"}) {
+	if err != nil || len(list) != 1 || list[0].APNSToken != "t2" || list[0].PushKey != "pk" || list[0].RelayURL != "https://relay.example/relay" || list[0].RelayGrant != "g" || list[0].Credential != "dev_1" || list[0].RelayError != "403 topic not served" || !slices.Equal(list[0].Features, []string{"withdraw"}) ||
+		list[0].VoIPToken != "v1" || list[0].VoIPGrant != "vg" || list[0].VoIPError != "none yet" {
 		t.Fatalf("devices = %+v, %v", list, err)
 	}
 	if err := d.DeleteDevice(ctx, "a"); err != nil {
@@ -569,6 +882,34 @@ func TestNodeSessions(t *testing.T) {
 	}
 }
 
+// Origin is authorization state needed by node-owned recovery before the manager can re-attest a continuation.
+// Keep it in the existing node_model JSON through a real write/read cycle; no schema migration is involved.
+func TestNodeSessionOriginRoundTrip(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	if err := d.PutNodeSession(ctx, "server", "inbox-recovery", NodeSession{Launcher: "claude", Cwd: "/x", Origin: "inbox", OriginKnown: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.PutNodeSession(ctx, "server", "ordinary", NodeSession{Launcher: "claude", Cwd: "/x", OriginKnown: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.PutNodeSession(ctx, "server", "legacy", NodeSession{Launcher: "claude", Cwd: "/x"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.NodeSessions(ctx, "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["inbox-recovery"].Origin != "inbox" || !got["inbox-recovery"].OriginKnown {
+		t.Fatalf("reloaded Inbox origin decision=%+v, want known inbox", got["inbox-recovery"])
+	}
+	if got["ordinary"].Origin != "" || !got["ordinary"].OriginKnown {
+		t.Fatalf("reloaded ordinary origin decision=%+v, want explicitly known", got["ordinary"])
+	}
+	if got["legacy"].OriginKnown {
+		t.Fatal("pre-upgrade record without an origin decision became known")
+	}
+}
+
 // state.load reaches node_sessions through node_sessions_started, so it reads only the 60-day window instead of every
 // session the machine ever had, both planned for its machine and as the generic plan a cached statement may switch to.
 func TestNodeSessionsStartedIndexed(t *testing.T) {
@@ -602,6 +943,29 @@ func TestNodeSessionsStartedIndexed(t *testing.T) {
 		if plan := strings.Join(lines, "\n"); !strings.Contains(plan, "node_sessions_started") || strings.Contains(plan, "node_sessions_pkey") {
 			t.Fatalf("%s: NodeSessions does not use node_sessions_started:\n%s", mode, plan)
 		}
+	}
+}
+
+// A guest conversation keeps its tools and kind across a node's restart (state.put, then state.load): a meeting's
+// room resumed after it still runs as a room.
+func TestNodeSessionsGuest(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	room := NodeSession{Launcher: "claude", Cwd: "/home/me/.persona/guest-meeting/r1", Guest: []string{"meeting_lines", "meeting_earlier"}, GuestKind: "meeting"}
+	if err := d.PutNodeSession(ctx, "server", "room", room); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.PutNodeSession(ctx, "server", "plain", NodeSession{Launcher: "claude", Cwd: "/x"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.NodeSessions(ctx, "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := got["room"]; !slices.Equal(r.Guest, room.Guest) || r.GuestKind != "meeting" {
+		t.Fatalf("room = %+v", r)
+	}
+	if p := got["plain"]; p.Guest != nil || p.GuestKind != "" {
+		t.Fatalf("plain = %+v", p)
 	}
 }
 
@@ -687,6 +1051,35 @@ func TestMailAccountsReplace(t *testing.T) {
 	}
 }
 
+// An ask_user that let go of its turn (assistant/ask_release.go, #7392) is marked resumable while it is pending: a
+// restart then keeps it, as it keeps one asked with wait false. One that ended or never was is not marked.
+func TestMarkInteractionResumableKeepsTheCardAcrossARestart(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	at := time.Now()
+	for _, id := range []string{"ixheld", "ixended", "ixkept"} {
+		if err := d.InsertInteraction(ctx, proto.Interaction{ID: id, MachineID: "server", SessionID: "s", Kind: proto.IxQuestion,
+			ToolName: "ask_user", CreatedAt: at, ExpiresAt: at.Add(time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.FinishInteraction(ctx, "ixended", "resolved", &proto.Resolution{Answers: map[string]string{"q": "a"}}); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]bool{"ixheld": true, "ixended": false, "nope": false} {
+		if ok, err := d.MarkInteractionResumable(ctx, id); err != nil || ok != want {
+			t.Fatalf("mark %s: %v, %v; want %v", id, ok, err, want)
+		}
+	}
+	kept, cancelled, err := d.ExpireStaleInteractions(ctx)
+	if err != nil || len(kept) != 1 || kept[0].ID != "ixheld" || !kept[0].Resumable || kept[0].ToolName != "ask_user" ||
+		len(kept[0].Questions) != 0 {
+		t.Fatalf("kept %+v, %v", kept, err)
+	}
+	if !slices.Equal(cancelled, []string{"ixkept"}) {
+		t.Fatalf("cancelled %v: only the one never marked", cancelled)
+	}
+}
+
 func TestInteractions(t *testing.T) {
 	d, ctx := open(t), context.Background()
 	ix := proto.Interaction{ID: "ix1", MachineID: "server", SessionID: "s", Kind: proto.IxQuestion, CreatedAt: time.Now()}
@@ -709,9 +1102,13 @@ func TestInteractions(t *testing.T) {
 		Work: proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser, InteractionID: "work_1"}}); err != nil {
 		t.Fatal(err)
 	}
-	kept, err := d.ExpireStaleInteractions(ctx)
+	kept, cancelled, err := d.ExpireStaleInteractions(ctx)
 	if err != nil || len(kept) != 1 || kept[0].ID != "ix3" || !kept[0].Resumable {
 		t.Fatalf("kept %+v, %v", kept, err)
+	}
+	// The ones it cancelled come back by id: the apps are told they are over (#4568).
+	if slices.Sort(cancelled); !slices.Equal(cancelled, []string{"ix2", "ix4"}) {
+		t.Fatalf("cancelled %v", cancelled)
 	}
 	recs, err := d.Interactions(ctx, "server", "s", 10)
 	if err != nil || len(recs) != 5 {
@@ -757,7 +1154,7 @@ func TestLoopInteractionRestart(t *testing.T) {
 		var value any
 		_, _ = d.TakeSetting(ctx, "agents.tool_loops", &value)
 	}()
-	if _, err := d.ExpireStaleInteractions(ctx); err != nil {
+	if _, _, err := d.ExpireStaleInteractions(ctx); err != nil {
 		t.Fatal(err)
 	}
 	for id, want := range map[string]string{"tool_loop_kept": "pending", "tool_loop_expiring": "pending", "tool_loop_orphan": "cancelled"} {
@@ -809,6 +1206,43 @@ func TestPendingInteractionsIndexed(t *testing.T) {
 
 // Each combination of filters returns the same rows the single OR statement did: newest first, limited, and a
 // session alone matches that session id on every machine.
+// LateAnswer records answers given after a card expired: one question at a time, added up, the status kept; a card
+// that did not expire is never written over, nor is the expiry's own dismissal kept beside an answer.
+func TestLateAnswer(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	at := time.Now().UTC()
+	for _, id := range []string{"ix_expired", "ix_pending"} {
+		if err := d.InsertInteraction(ctx, proto.Interaction{ID: id, MachineID: "m1", SessionID: "s1", Kind: proto.IxQuestion, CreatedAt: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.FinishInteraction(ctx, "ix_expired", "expired", &proto.Resolution{Dismiss: true, Reason: proto.DismissedExpired}); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []map[string]string{{"Q1": "A"}, {"Q2": "B"}} {
+		if ok, err := d.LateAnswer(ctx, "ix_expired", a, "", ""); err != nil || !ok {
+			t.Fatalf("late answer %v: %v %v", a, ok, err)
+		}
+	}
+	status, res, err := d.InteractionOutcome(ctx, "ix_expired")
+	if err != nil || status != "expired" || res == nil || !res.Late || res.Dismiss || res.Reason != "" || res.AnsweredBy != "" ||
+		res.Answers["Q1"] != "A" || res.Answers["Q2"] != "B" {
+		t.Fatalf("expired card: %s %+v %v", status, res, err)
+	}
+	if ok, err := d.LateAnswer(ctx, "ix_expired", map[string]string{"Q1": "C"}, proto.AnsweredByDefault, "deadline"); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if _, res, _ := d.InteractionOutcome(ctx, "ix_expired"); res.AnsweredBy != proto.AnsweredByDefault || res.Reason != "deadline" || res.Answers["Q1"] != "C" || res.Answers["Q2"] != "B" {
+		t.Fatalf("default: %+v", res)
+	}
+	if ok, err := d.LateAnswer(ctx, "ix_pending", map[string]string{"Q1": "A"}, "", ""); err != nil || ok {
+		t.Fatalf("pending card written: %v %v", ok, err)
+	}
+	if status, res, _ := d.InteractionOutcome(ctx, "ix_pending"); status != "pending" || res != nil {
+		t.Fatalf("pending card: %s %+v", status, res)
+	}
+}
+
 func TestInteractionsFilters(t *testing.T) {
 	d, ctx := open(t), context.Background()
 	base := time.Now().Add(-time.Hour).UTC()
@@ -846,6 +1280,66 @@ func TestInteractionsFilters(t *testing.T) {
 			if strings.Join(got, ",") != strings.Join(want, ",") {
 				t.Fatalf("Interactions(%q, %q, %d) = %v, want %v", c.machine, c.session, c.limit, got, want)
 			}
+		}
+	}
+}
+
+// InteractionsPage pages the history back by time: since, kind and a cursor of (created_at, id), so rows of the same
+// time are neither skipped nor read twice across pages, and a full page names the next one's cursor.
+func TestInteractionsPage(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	base := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	for i := range 9 {
+		kind := proto.IxQuestion
+		if i == 4 {
+			kind = proto.IxPermission
+		}
+		at := base.Add(time.Duration(i/3) * time.Minute) // three rows each minute
+		if err := d.InsertInteraction(ctx, proto.Interaction{ID: fmt.Sprintf("ix%d", i), MachineID: "m1", SessionID: "s1",
+			Kind: kind, CreatedAt: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var pages []string
+	q := InteractionQuery{Kind: proto.IxQuestion, Since: base, Limit: 3}
+	for range 10 {
+		page, err := d.InteractionsPage(ctx, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, r := range page.Records {
+			ids = append(ids, r.Interaction.ID)
+		}
+		pages = append(pages, strings.Join(ids, ","))
+		if page.NextBefore == nil {
+			break
+		}
+		q.Before, q.BeforeID = *page.NextBefore, page.NextBeforeID
+	}
+	if got := strings.Join(pages, " | "); got != "ix8,ix7,ix6 | ix5,ix3,ix2 | ix1,ix0" {
+		t.Fatalf("pages %q", got)
+	}
+	// since leaves the older rows out; before without an id is strictly before; no filter is every row.
+	for _, c := range []struct {
+		q    InteractionQuery
+		want string
+	}{
+		{InteractionQuery{Since: base.Add(2 * time.Minute)}, "ix8,ix7,ix6"},
+		{InteractionQuery{Before: base.Add(time.Minute), Machine: "m1", Session: "s1"}, "ix2,ix1,ix0"},
+		{InteractionQuery{Kind: proto.IxPermission}, "ix4"},
+		{InteractionQuery{Session: "nope", Since: base}, ""},
+	} {
+		page, err := d.InteractionsPage(ctx, c.q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, r := range page.Records {
+			ids = append(ids, r.Interaction.ID)
+		}
+		if got := strings.Join(ids, ","); got != c.want || page.NextBefore != nil {
+			t.Errorf("%+v: %s (next %v), want %s", c.q, got, page.NextBefore, c.want)
 		}
 	}
 }
@@ -1026,12 +1520,12 @@ func TestInboxItems(t *testing.T) {
 	if err := d.PutInboxItem(ctx, "old", []byte(`{"id":"old"}`), old, &old); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := d.InboxItems(ctx, now.Add(-8*24*time.Hour))
+	rows, err := inboxData(d, now.Add(-8*24*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(rows) != 1 {
-		t.Fatalf("rows = %d, want the old done item gone", len(rows))
+		t.Fatalf("rows = %d, want the old done item left out", len(rows))
 	}
 	var it struct {
 		Count int `json:"count"`
@@ -1040,11 +1534,11 @@ func TestInboxItems(t *testing.T) {
 		t.Fatalf("row = %s", rows[0])
 	}
 	// Deleted for good: a source taken back.
-	_ = d.PutInboxItem(ctx, "imessage:1", []byte(`{"id":"imessage:1"}`), now, nil)
-	if err := d.DeleteInboxItems(ctx, []string{"imessage:1"}); err != nil {
-		t.Fatal(err)
+	_ = d.PutInboxItem(ctx, "imessage:1", []byte(`{"id":"imessage:1","source":"imessage"}`), now, nil)
+	if gone, err := d.DeleteInboxSource(ctx, "imessage", nil); err != nil || len(gone) != 1 || gone[0] != "imessage:1" {
+		t.Fatalf("delete the source: %v %v", gone, err)
 	}
-	if rows, _ := d.InboxItems(ctx, now.Add(-8*24*time.Hour)); len(rows) != 1 {
+	if rows, _ := inboxData(d, now.Add(-8*24*time.Hour)); len(rows) != 1 {
 		t.Fatalf("rows after delete = %d", len(rows))
 	}
 }
@@ -1399,6 +1893,23 @@ func TestSentEcho(t *testing.T) {
 	_, _ = d.pool.Exec(ctx, `UPDATE sent_messages SET created_at = now() - interval '2 days' WHERE client_msg_id = 'm2'`)
 	if got, _ := d.Echoes(ctx, "box"); len(got) != 1 {
 		t.Fatalf("a send older than a day was handed back: %s", got)
+	}
+}
+
+func TestA2AEchoRestoresWithoutAppSend(t *testing.T) {
+	d, ctx := open(t), t.Context()
+	id := proto.A2ADeliveryPrefix + "task-1"
+	receipt := func(line string) json.RawMessage {
+		return json.RawMessage(fmt.Sprintf(`{"session_id":"child","client_msg_id":%q,"line":%q,"source":{"kind":"conversation","conversation_id":"parent"}}`, id, line))
+	}
+	for _, entry := range []json.RawMessage{receipt(""), receipt("first"), receipt("")} {
+		if err := d.RecordEcho(ctx, id, "box", entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	restored, err := d.Echoes(ctx, "box")
+	if err != nil || len(restored) != 1 || !strings.Contains(string(restored[0]), `"line": "first"`) || !strings.Contains(string(restored[0]), `"conversation_id": "parent"`) {
+		t.Fatalf("restored A2A receipts: %s %v", restored, err)
 	}
 }
 

@@ -8,7 +8,8 @@
     <string name="designsystem_feedback_launcher_missing">That computer can\'t find this model. It may have been removed.</string>
     <string name="designsystem_feedback_not_logged_in">Claude Code on that computer isn\'t signed in yet.</string>
     <string name="designsystem_feedback_auth_failed">The model\'s key is wrong or has expired.</string>
-    <string name="designsystem_feedback_assistant_restarting">The assistant is restarting. It\'ll be back in a few seconds.</string>
+    <string name="designsystem_feedback_assistant_restarting">The assistant is offline or restarting. Try again shortly.</string>
+    <string name="designsystem_feedback_provider_out_of_scope">This model provider isn\'t set to run on that computer. Change where it runs in Settings › Model providers.</string>
     <string name="designsystem_readiness_one_more_step">One more step</string>
     <string name="designsystem_readiness_action_add_computer">Add a computer</string>
     <string name="designsystem_readiness_action_confirm_computer">It\'s my computer</string>
@@ -40,7 +41,7 @@
     <string name="designsystem_readiness_help_install_body">On %1$s, open Terminal, paste this line and press Return:</string>
     <string name="designsystem_readiness_help_install_after">Come back here once it\'s installed; this updates shortly after.</string>
     <string name="designsystem_readiness_help_login_title">Sign in to Claude Code</string>
-    <string name="designsystem_readiness_help_login_body">On %1$s, open Terminal, type this word, press Return and sign in once in the browser:</string>
+    <string name="designsystem_readiness_help_login_body">Persona runs the Claude Code CLI on %1$s, and the Claude desktop app\'s sign-in doesn\'t count for it. Open Terminal there, run this command and sign in once in the browser:</string>
     <string name="designsystem_readiness_help_login_after">When you\'re signed in, come back and send a message.</string>
     <string name="designsystem_readiness_help_what_title">What Persona can do</string>
     <string name="designsystem_readiness_help_what_body">Persona is your personal assistant. With a computer and a model connected, it can:</string>

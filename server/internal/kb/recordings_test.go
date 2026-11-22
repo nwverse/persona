@@ -10,7 +10,10 @@ import (
 	"time"
 )
 
-const recID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+const (
+	recID  = "0f8fad5b-d9cb-469f-a165-70867728950e"
+	recID2 = "1a2b3c4d-0000-4000-8000-000000000002"
+)
 
 func recUpload(rev int64, start time.Time, complete bool, texts ...string) RecordingUpload {
 	u := RecordingUpload{Revision: rev, StartedAt: start, Duration: float64(10 * len(texts)), Language: "zh-CN", Device: "phone", Complete: complete}
@@ -30,11 +33,11 @@ func TestRecordingIdempotentAndOrdered(t *testing.T) {
 	start := now.Add(-time.Hour)
 	// Upper case is the same recording.
 	for range 2 { // a replay changes nothing
-		if st, err := e.PutRecording(strings.ToUpper(recID), recUpload(2, start, false, "第一段", "第二段"), now); err != nil || st != RecordingStored {
+		if st, err := e.PutRecording(strings.ToUpper(recID), recUpload(2, start, false, "第一段", "第二段"), now); err != nil || st.Status != RecordingStored {
 			t.Fatalf("put: %v %v", st, err)
 		}
 	}
-	if st, _ := e.PutRecording(recID, recUpload(1, start, false, "旧的"), now); st != RecordingStale {
+	if st, _ := e.PutRecording(recID, recUpload(1, start, false, "旧的"), now); st.Status != RecordingStale {
 		t.Fatalf("an older revision: %v, want stale", st)
 	}
 	if ids := e.Store.IDs(KindRecording); len(ids) != 1 || ids[0] != recID {
@@ -106,7 +109,7 @@ func TestRecordingPartialThenComplete(t *testing.T) {
 	if err != nil || len(d.Segments) != 2 || !strings.Contains(d.Summary, "周会") || !strings.Contains(d.Recent, "[书签] 灰度时间") {
 		t.Fatalf("get %+v %v", d, err)
 	}
-	if l := e.List(KindRecording, ""); len(l) != 1 || l[0].Name != "周会" || l[0].Extra != "phone" {
+	if l := e.List(KindRecording, ""); len(l) != 1 || l[0].Name != "周会" || l[0].Extra != "phone" || l[0].RecordingKind != RecordingNote {
 		t.Fatalf("list %+v", l)
 	}
 	// Re-transcribed (another language): summarized again.
@@ -180,7 +183,7 @@ func TestRecordingRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Past the retention: not stored at all.
-	if st, _ := e.PutRecording("33333333-3333-4333-8333-333333333333", recUpload(1, now.AddDate(0, 0, -15), true, "太旧"), now); st != RecordingExpired {
+	if st, _ := e.PutRecording("33333333-3333-4333-8333-333333333333", recUpload(1, now.AddDate(0, 0, -15), true, "太旧"), now); st.Status != RecordingExpired {
 		t.Fatalf("an old upload: %v, want expired", st)
 	}
 	_, _ = e.DeleteRecording("44444444-4444-4444-8444-444444444444", now.AddDate(0, 0, -9))
@@ -227,8 +230,8 @@ func TestRecordingRetentionDST(t *testing.T) {
 						if expired {
 							want = RecordingExpired
 						}
-						if status, err := e.PutRecording(recID, recUpload(1, start, false, "boundary"), now); err != nil || status != want {
-							t.Fatalf("upload: %s, %v; want %s", status, err, want)
+						if status, err := e.PutRecording(recID, recUpload(1, start, false, "boundary"), now); err != nil || status.Status != want {
+							t.Fatalf("upload: %s, %v; want %s", status.Status, err, want)
 						}
 						if _, kept := e.Store.Recording(recID); kept == expired {
 							t.Fatalf("recording kept = %v, expired = %v", kept, expired)
@@ -238,8 +241,8 @@ func TestRecordingRetentionDST(t *testing.T) {
 						e := goldenEngine(t, nil)
 						e.RecordingDaysFunc = func() int { return days }
 						// Seed while fresh so upload expiry cannot hide a pruning bug.
-						if status, err := e.PutRecording(recID, recUpload(1, start, false, "boundary"), start); err != nil || status != RecordingStored {
-							t.Fatalf("seed: %s, %v", status, err)
+						if status, err := e.PutRecording(recID, recUpload(1, start, false, "boundary"), start); err != nil || status.Status != RecordingStored {
+							t.Fatalf("seed: %s, %v", status.Status, err)
 						}
 						const deletedID = "44444444-4444-4444-8444-444444444444"
 						if _, err := e.DeleteRecording(deletedID, start); err != nil {
@@ -262,5 +265,26 @@ func TestRecordingRetentionDST(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// The recordings list says each recording's kind (#8731): the apps' Meetings list marks notes among meetings.
+func TestRecordingListKind(t *testing.T) {
+	e := goldenEngine(t, nil)
+	now := time.Date(2026, 11, 5, 12, 0, 0, 0, goldenZone)
+	meeting := recUpload(1, now.Add(-2*time.Hour), true, "先说发布")
+	meeting.Kind = RecordingMeeting
+	if _, err := e.PutRecording(recID, meeting, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.PutRecording(recID2, recUpload(1, now.Add(-time.Hour), true, "旅行清单"), now); err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[string]string{}
+	for _, x := range e.List(KindRecording, "") {
+		kinds[x.ID] = x.RecordingKind
+	}
+	if kinds[recID] != RecordingMeeting || kinds[recID2] != RecordingNote || len(kinds) != 2 {
+		t.Fatalf("kinds %v", kinds)
 	}
 }
