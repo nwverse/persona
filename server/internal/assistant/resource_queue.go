@@ -461,16 +461,17 @@ func (s *Service) resourceRefresh(ctx context.Context) {
 					if e == nil {
 						_ = json.Unmarshal(raw, &outcome)
 					}
+					// The latest completed result may still belong to a previous same-key run.
+					// Wait for this run's result; a missing result is not completion or cancellation.
+					if outcome == nil || outcome.Run != l.ExternalRef {
+						continue
+					}
 					_, _, _ = s.resourceRows(ctx, d, func(current *[]rq.Lease, _ int64) (rq.Reply, error) {
 						for i := range *current {
 							r := &(*current)[i]
 							if r.ID == l.ID {
-								if outcome != nil {
-									r.State = "released"
-									r.Outcome = outcome
-								} else {
-									r.State = "expired"
-								}
+								r.State = "released"
+								r.Outcome = outcome
 							}
 						}
 						return rq.Reply{}, nil

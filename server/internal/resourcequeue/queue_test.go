@@ -192,3 +192,20 @@ func TestLegacyRunIdentitySurvivesAnEmptyRunningTicket(t *testing.T) {
 		t.Fatal("legacy queue-to-slot transition lost its result identity")
 	}
 }
+
+func TestActiveRunTakesPrecedenceOverPreviousCachedSuccess(t *testing.T) {
+	now := time.Now().UTC()
+	in := Request{Resource: "ci.example", Project: "example", Commit: strings.Repeat("a", 40), Holder: Holder{Machine: "computer-a", Session: "joining"}}
+	key, err := Key(in.Project, in.Commit, in.Groups)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := []Lease{
+		{ID: "previous", Key: key, State: "released", Outcome: &Outcome{Run: "previous-run", Exit: 0, FinishedAt: now.Add(-time.Minute)}},
+		{ID: "current", Key: key, State: "granted", Holder: Holder{Machine: "computer-a", Session: "holder"}},
+	}
+	reply, err := Acquire(&rows, in, now, "new", 3)
+	if err != nil || reply.Status != "joined" || reply.Lease.ID != "current" || len(rows) != 2 {
+		t.Fatalf("did not join the current run: %+v %v", reply, err)
+	}
+}

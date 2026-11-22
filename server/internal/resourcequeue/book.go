@@ -75,7 +75,11 @@ func Acquire(rows *[]Lease, in Request, now time.Time, id string, seq int64) (Re
 			}
 			return Reply{Status: "joined", Lease: l}, nil
 		}
-		if l.State == "released" && CacheOK(l.Outcome, now) {
+	}
+	// A current run takes precedence over retained successful history for the same key.
+	for i := len(*rows) - 1; i >= 0; i-- {
+		l := &(*rows)[i]
+		if l.Key == key && l.State == "released" && CacheOK(l.Outcome, now) {
 			return Reply{Status: "cached", Lease: l}, nil
 		}
 	}

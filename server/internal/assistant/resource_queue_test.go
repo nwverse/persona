@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -194,5 +195,53 @@ func TestResourceUnknownMirrorDoesNotReserveStaleExternalSlotsForever(t *testing
 	retained := s.resourceMirror(ctx, d.ID)
 	if !retained.Unknown || len(retained.Queue.Running) != 3 {
 		t.Fatal("display history was lost during degraded admission")
+	}
+}
+
+type resourceResultDevices struct {
+	*fakeDevices
+	queue  rq.Snapshot
+	result *rq.Outcome
+}
+
+func (d *resourceResultDevices) CallNode(_ context.Context, _, method string, _ json.RawMessage) (json.RawMessage, error) {
+	if method == "resource.queue" {
+		return json.Marshal(d.queue)
+	}
+	if method == "resource.result" {
+		return json.Marshal(d.result)
+	}
+	return nil, fmt.Errorf("unexpected node method %s", method)
+}
+
+func TestResourceExternalReconciliationWaitsForTheSameRun(t *testing.T) {
+	s, st, d := resourceFixture(t)
+	ctx := t.Context()
+	queue := &rq.Queue{V: 1, Slots: 3, Running: []rq.Job{{Run: "current-run", Slot: 1, Project: "example", Commit: strings.Repeat("b", 40), Groups: []string{"web"}}}, Waiting: []rq.Job{}}
+	if err := st.PutSetting(ctx, resourceMirrorKey(d.ID), rq.Snapshot{ObservedAt: time.Now().UTC(), Queue: queue}); err != nil {
+		t.Fatal(err)
+	}
+	holder := rq.Holder{Machine: "computer-a", Session: "joining-session"}
+	joined, err := s.resourceRequest(ctx, rq.Request{Action: "acquire", Resource: d.ID, Project: "example", Commit: strings.Repeat("b", 40), Groups: []string{"web"}, Holder: holder})
+	if err != nil || joined.Status != "joined" {
+		t.Fatalf("join: %+v %v", joined, err)
+	}
+	queue.Running = []rq.Job{}
+	devs := &resourceResultDevices{fakeDevices: &fakeDevices{}, queue: rq.Snapshot{ObservedAt: time.Now().UTC(), Queue: queue}}
+	s.devs = devs
+	for _, outcome := range []*rq.Outcome{nil, {Run: "previous-run", Exit: 0, FinishedAt: time.Now().UTC()}, {Run: "current-run", Exit: 7, FinishedAt: time.Now().UTC()}} {
+		devs.result = outcome
+		s.resourceRefresh(ctx)
+		reply, err := s.resourceRequest(ctx, rq.Request{Action: "get", Resource: d.ID, ID: joined.Lease.ID, Holder: holder})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if outcome == nil || outcome.Run == "previous-run" {
+			if reply.Status != "granted" || reply.Lease.Outcome != nil {
+				t.Fatalf("settled from a missing or unrelated result: %+v", reply)
+			}
+		} else if reply.Status != "released" || reply.Lease.Outcome.Run != "current-run" || reply.Lease.Outcome.Exit != 7 {
+			t.Fatalf("current run was not settled: %+v", reply)
+		}
 	}
 }
