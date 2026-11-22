@@ -76,7 +76,7 @@ const deliveryKeys: Record<string, string> = {
   merged: "todos.delivery_merged", off: "todos.delivery_off",
 };
 const unblockKeys: Record<string, string> = {
-  user: "todos.unblock_user", agent: "todos.unblock_agent", other: "todos.unblock_other",
+  user: "todos.unblock_user", agent: "todos.unblock_agent", other: "todos.unblock_other", supervisor: "todos.unblock_supervisor",
 };
 
 const labelKey = (keys: Record<string, string>, code: string, fallback: string) => Object.hasOwn(keys, code) ? keys[code] : fallback;

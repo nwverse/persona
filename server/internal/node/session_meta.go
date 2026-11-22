@@ -334,12 +334,12 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 		m.titleSource = "" // a historical custom-title may be outside this bounded read
 	}
 	m.start = start
-	if identity.IsAssistantDir(start) || identity.InHealthSpace(start) || start != "" && identity.IsAssistantDir(m.cwd) {
-		// An assistant or health conversation is where it started: its space, CLAUDE.md, memory and resume project.
+	if identity.IsAssistantDir(start) || identity.InSpace(start) || start != "" && identity.IsAssistantDir(m.cwd) {
+		// An assistant or space conversation is where it started: its space, CLAUDE.md, memory and resume project.
 		// A `cd` into a skill's folder had it listed as an agent there (#2368). The other way round, an agent whose
-		// `cd` landed in an assistant or health directory (one started in the home directory) is not one of their
-		// conversations: listed there at rest, the hub took it for one. An exact assistant or health directory is
-		// only ever where a session started. Health subdirectories also retain their starting directory for privacy.
+		// `cd` landed in an assistant or space directory (one started in the home directory) is not one of their
+		// conversations: listed there at rest, the hub took it for one. An exact assistant or space directory is
+		// only ever where a session started. Space subdirectories also retain their starting directory for privacy.
 		m.cwd = start
 	}
 	m.surface = tm.Surface

@@ -4,6 +4,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { t } from "../i18n";
 import { stateOf } from "../lib/format";
 import { href, type Route } from "../lib/router";
+import { pickMainChat } from "../lib/handoff";
 import { useStore } from "../lib/store";
 import { BREATHING, connStatus, phaseTone } from "../lib/connection";
 import { cx, Menu } from "../ui/atoms";
@@ -77,7 +78,8 @@ export function SidebarRail({ route, onSearch, onNewAgent }: { route: Route; onS
       <a
         key={k}
         href={href(to)}
-        onClick={go(to)}
+        // Main Chat opens the page its conversation kept, as the sidebar's row does (#13164)
+        onClick={go(to, k === "persona" ? () => pickMainChat(active) : undefined)}
         aria-label={label}
         title={title ?? label}
         aria-current={active ? "page" : undefined}

@@ -77,6 +77,10 @@ type sessionState struct {
 	Tasks []string `json:"tasks,omitempty"`
 	// Compaction: the last compaction the user asked for (assistant_compact.go).
 	Compaction *proto.Compaction `json:"compaction,omitempty"`
+	// RecoveryPending survives restarts until an input carrying this checkpoint is delivered.
+	RecoveryPending     string `json:"recovery_pending,omitempty"`
+	RecoveryHookPending bool   `json:"recovery_hook_pending,omitempty"`
+	CompactInstructions string `json:"compact_instructions,omitempty"`
 	// IdleCompaction is the main chat's user-idle clock and unattended compaction latch.
 	IdleCompaction *idleCompactionState `json:"idle_compaction,omitempty"`
 	// Guest: a guest conversation's tools (assistant_guest.go): every process it runs in has no built-in tools and
