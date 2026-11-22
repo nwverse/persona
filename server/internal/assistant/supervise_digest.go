@@ -752,11 +752,11 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 			return prompts.SuperviseEntry{}, false // a member resumed or gained a wake/card while queued
 		}
 		g.Detail, g.Minutes = fresh.Detail, fresh.Minutes
-		if g.BreakerNote != "" {
+		if note := breakerNote(g, answerLanguage(string(s.botLang(ctx)))); note != "" {
 			if g.Detail != "" {
-				g.Detail = g.BreakerNote + "\n" + g.Detail
+				g.Detail = note + "\n" + g.Detail
 			} else {
-				g.Detail = g.BreakerNote
+				g.Detail = note
 			}
 		}
 	case sigNoProgress:
@@ -812,11 +812,11 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	}
 	e := prompts.SuperviseEntry{ID: t.ID, Title: t.Title, Kind: g.Kind, Detail: g.Detail, Minutes: g.Minutes, DoneWhen: v.DoneWhen,
 		Round: v.Round, Link: todoLink(web, t.ID), Quiet: t.Quiet}
-	if g.BreakerNote != "" && g.Kind != sigAllStopped {
+	if note := breakerNote(g, answerLanguage(string(s.botLang(ctx)))); note != "" && g.Kind != sigAllStopped {
 		if e.Detail != "" {
-			e.Detail = g.BreakerNote + "\n" + e.Detail
+			e.Detail = note + "\n" + e.Detail
 		} else {
-			e.Detail = g.BreakerNote
+			e.Detail = note
 		}
 	}
 	if draft != nil {

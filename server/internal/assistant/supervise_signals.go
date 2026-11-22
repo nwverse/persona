@@ -120,9 +120,30 @@ type superviseSignal struct {
 	Inbox *prompts.SuperviseInbox
 	// Optional routine batching keeps these in memory only, after routing and before delivery. They are never part of
 	// a persisted relay payload: once admitted, the existing queue owns delivery.
-	batchTo     string
-	batchUntil  time.Time
-	BreakerNote string `json:"breaker_note,omitempty"` // one-time circuit-breaker fallback note appended in digestEntry
+	batchTo    string
+	batchUntil time.Time
+	// Breaker: why the background supervisor's circuit breaker handed this signal once to the main conversation;
+	// digestEntry puts it above the entry in the digest's language (breakerNote).
+	Breaker *breakerFallback `json:"breaker,omitempty"`
+	// BreakerNote is that fact as finished text, as a signal queued by an older hub carries it: shown as it is.
+	BreakerNote string `json:"breaker_note,omitempty"`
+}
+
+// breakerFallback is what a circuit-breaker fallback note says (prompts.BreakerNote): its kind and their facts.
+type breakerFallback struct {
+	Kind   string `json:"kind"`             // prompts.BreakerAuth or prompts.BreakerAllStopped
+	Tool   string `json:"tool,omitempty"`   // the denied tool (BreakerAuth)
+	Rounds int    `json:"rounds,omitempty"` // no-progress rounds in a row (BreakerAllStopped)
+	Reason string `json:"reason,omitempty"` // why the breaker tripped (BreakerAllStopped)
+}
+
+// breakerNote is g's circuit-breaker fallback note in language (answerLanguage), or "" when it has none.
+func breakerNote(g superviseSignal, language string) string {
+	if b := g.Breaker; b != nil {
+		return prompts.RenderBreakerNote(prompts.BreakerNote{Language: language, Kind: b.Kind, Tool: b.Tool,
+			Rounds: b.Rounds, Reason: b.Reason})
+	}
+	return g.BreakerNote
 }
 
 const (
