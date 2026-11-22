@@ -121,7 +121,7 @@ func (n *Node) sweepCacheWarm(ctx context.Context, now time.Time) {
 			check, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
 			launcher, current, known := n.assistantModelDecision(check, id)
-			if n.executionFingerprint(e.launcher, modelExecution{}) != e.stamp || !known || launcher != e.launcher || current.Model != e.execution.Model || current.Effort != e.execution.Effort || current.Fingerprint != e.execution.Fingerprint {
+			if n.executionFingerprint(e.launcher, modelExecution{}) != e.stamp || !known || launcher != e.launcher || current.Model != e.execution.Model || current.Effort != e.execution.Effort || current.Fingerprint != e.execution.Fingerprint || current.IsMain != e.execution.IsMain || current.Interactive != e.execution.Interactive || current.SupervisionInstructions != e.execution.SupervisionInstructions || assistantOriginToolPolicy(current.Origin) != assistantOriginToolPolicy(e.execution.Origin) {
 				e.proxy.Forget()
 				return
 			}

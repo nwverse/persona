@@ -137,7 +137,7 @@ func TestAssistantCacheProxyScopeAndLauncherPrecedence(t *testing.T) {
 			}
 			if want == 1 {
 				f.fh.mu.Lock()
-				f.fh.model = map[string]any{"launcher": launcher, "model": e.Model, "model_fingerprint": e.Fingerprint, "cache_keepalive": policy}
+				f.fh.model = map[string]any{"launcher": launcher, "model": e.Model, "model_fingerprint": e.Fingerprint, "is_main": e.IsMain, "cache_keepalive": policy}
 				f.fh.mu.Unlock()
 				f.n.sweepCacheWarm(context.Background(), time.Now().Add(110*time.Minute))
 				waitCacheCheck(t, f.n, p.id)
