@@ -145,6 +145,56 @@ func TestPlanCardCarriesTheBrief(t *testing.T) {
 	}
 }
 
+// A rejected takeover scope aborts the adoption: the new card cannot keep the unapproved criterion or a linked Agent.
+func TestRiskyTakeOverScopeAbortsAdoption(t *testing.T) {
+	s, f, asked := briefService(t, "please fix the login crash before Friday")
+	closed := time.Now().UTC()
+	putTodo(s, Todo{ID: "todo_previous", Title: "fix the login crash", Origin: "conv1", DoneAt: &closed,
+		Supervision: &Supervision{Supervisor: "conv1", DoneWhen: []string{"a test covers landscape"}, ExpectMinutes: 30},
+		Agents:      []TodoAgent{{MachineID: "box", SessionID: "agent-old-1"}}})
+	first := todoNow(s, "todo_previous")
+	if _, err := s.ensureTaskBrief(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	f.setSessions("box", proto.Session{SessionID: "agent-old-1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
+		Title: "fix the login crash", Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: time.Now()})
+	f.setItems(
+		proto.Item{ID: "m1", Seq: 1, TS: asked, Role: "user", Kind: proto.KindText, Text: "please fix the login crash before Friday"},
+		proto.Item{ID: "m2", Seq: 2, TS: asked.Add(time.Hour), Role: "user", Kind: proto.KindText,
+			Text: prompts.RenderSupervise(prompts.Supervise{Entries: []prompts.SuperviseEntry{{ID: first.ID, Title: first.Title, Kind: sigOrphaned}}})},
+	)
+	res, err := runJSON(t, s, "conv1", "agent_supervise", map[string]any{
+		"machine": "box", "session_id": "agent-old-1",
+		"done_when": []string{"PR merged to main", "deployed to production and checked"}, "expect_minutes": 5,
+	})
+	if err == nil || !strings.Contains(err.Error(), "only the owner may allow") {
+		t.Fatalf("risky takeover was not refused: %s (%v)", res, err)
+	}
+	if got := todoCount(s); got != 2 {
+		t.Fatalf("todos = %d, want the closed original and aborted card", got)
+	}
+	for _, todo := range s.todosOf(context.Background(), "*") {
+		if todo.ID == first.ID {
+			continue
+		}
+		if len(todo.Agents) != 0 {
+			t.Fatalf("aborted takeover linked an Agent: %+v", todo.Agents)
+		}
+		if todo.Supervision != nil && strings.Contains(strings.Join(todo.Supervision.DoneWhen, "\n"), "deployed to production") {
+			t.Fatalf("aborted takeover kept the unapproved scope: %+v", todo.Supervision)
+		}
+		if todo.DoneAt == nil {
+			t.Fatalf("aborted takeover left an open card: %+v", todo)
+		}
+		if _, linked := s.briefOfTodo(todo.ID); linked {
+			t.Fatalf("aborted takeover stayed on the previous task's brief: %+v", todo)
+		}
+	}
+	if lineage := s.taskLineage(first.ID); len(lineage) != 1 || lineage[0].SupersededBy != "" {
+		t.Fatalf("aborted takeover rewrote the previous task's lineage: %+v", lineage)
+	}
+}
+
 // A task taken over twice still has the owner's original message and date, its criteria, and one lineage; each
 // take-over's prompt is its own, and the review is against the original criteria.
 func TestBriefSurvivesTakeOvers(t *testing.T) {

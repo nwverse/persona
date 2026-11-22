@@ -1083,7 +1083,9 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	}
 	s.toolLoopsChanged(d)
 	s.progressSessions(d, time.Now()) // what the working agents do, for no_progress (supervise_progress.go)
-	s.drainRelays(d.MachineID, d.Sessions)
+	if s.retractConfirmedStartUnknowns(ctx, d.Sessions) {
+		s.drainRelays(d.MachineID, d.Sessions)
+	}
 	s.undeliveredSeen(d)                      // kept owner messages go once their conversation runs again (undelivered.go)
 	s.originsChanged(d.MachineID, d.Sessions) // conversations from before origins were noted (origins.go)
 	// The conversations' spaces, before what may tell an extension of a to-do (conversation_space.go).

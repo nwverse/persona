@@ -39,8 +39,6 @@ import {
   setDecisionSupersedes,
   supersedeCandidates,
   shownDecisions,
-  formatAgentSource,
-  formatTodoContext,
   isLegacySpacesRouteError,
   makeSessionLookup,
   mostUrgentAgent,
@@ -50,6 +48,7 @@ import {
   heldDelivery,
   TODO_TONE_CLASS,
   isAutoDone,
+  isCancelled,
   isOverdue,
   todoDueDay,
   todoDueText,
@@ -81,9 +80,10 @@ import { FoldAllButton } from "../ui/FoldAllButton";
 import { SESSION_LIST_STYLE } from "../ui/list-metrics";
 import { formatDate, t } from "../i18n";
 import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
+import { cancellationReason, formatAgentSource, formatTodoContext } from "../lib/todo-details";
 import { directionTitle, groupsByDirection, useDirectionTree, type Direction } from "../lib/direction-tree";
 import { DirectionCountsText } from "./DirectionMarks";
-import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, countsAsOpen, lastActivity, openMergePRs, supersededFailedStarts, triage, triageTodos, type OwnerNeed, type TriageGroup, type TriageResult, type TriageSection } from "../lib/todo-triage";
+import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, countsAsOpen, lastActivity, openMergePRs, sectionStartsFolded, supersededFailedStarts, triage, triageTodos, type OwnerNeed, type TriageGroup, type TriageResult, type TriageRule, type TriageSection } from "../lib/todo-triage";
 import { orderWaitGroups } from "../lib/task-wait";
 import { viewDrawOn } from "../features/todos/model/view-gates";
 import { drawnFromView, openAsDrawn } from "../features/todos/model/view-triage";
@@ -123,6 +123,7 @@ import { todoUltracode } from "../lib/ultracode";
 import { UltraMark } from "./chat/Ultracode";
 import { boundThread, threadLine, threadName, todoThreadsOn, unbindTodoThread } from "../lib/todo-thread";
 import { setTodoSeen, todoSeenOn } from "../lib/todo-seen";
+import { seenCanFile } from "../lib/todo-details";
 import { retryKey, retryTask, useFeed } from "../lib/feed";
 import { planTaskOf, retryLauncher, retryOnLauncher } from "../lib/start-retry";
 import { dueOn, duePatch, todoRowMenu } from "./todo-row-menu";
@@ -226,6 +227,7 @@ export function TodosView({
   const [deleting, setDeleting] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [showDone, setShowDone] = useState(false);
+  const [showCancelled, setShowCancelled] = useState(false);
   const [showReleased, setShowReleased] = useState(false);
   // The calendar (#2029): the address says which mode and day; a click on its empty axis opens New To-Do due there.
   const calendarOn = view === "calendar";
@@ -334,8 +336,7 @@ export function TodosView({
   );
   // Where the status sections place each to-do the search and the filter leave: its row's section (a merged row takes
   // its most urgent member's), and whether it counts as open (countsAsOpen, the header's Not done, its own reading).
-  // The folders and 常驻 split by the same placement, so their Done fold is the Done section to the to-do and every
-  // grouping says one number for it (audit item 12).
+  // Folders and directions share this placement and one number for it; cancelled stays out of both open and Done (#5732).
   const placed = useMemo(() => {
     const row = new Map<string, TriageSection>();
     const open = new Set<string>();
@@ -348,11 +349,18 @@ export function TodosView({
     return { row, open };
   }, [triaged, fromView]);
   const filteredUncompleted = useSteady(
-    useMemo(() => sortTodos(todos.filter((td) => placed.row.has(td.id) && placed.row.get(td.id) !== "done"), lookup), [todos, placed, lookup]),
+    useMemo(() => sortTodos(todos.filter((td) => {
+      const sec = placed.row.get(td.id);
+      return placed.row.has(td.id) && sec !== "done" && sec !== "cancelled";
+    }), lookup), [todos, placed, lookup]),
     sameList,
   );
   const filteredCompleted = useSteady(
     useMemo(() => sortTodos(todos.filter((td) => placed.row.get(td.id) === "done"), lookup), [todos, placed, lookup]),
+    sameList,
+  );
+  const filteredCancelled = useSteady(
+    useMemo(() => sortTodos(todos.filter((td) => placed.row.get(td.id) === "cancelled"), lookup), [todos, placed, lookup]),
     sameList,
   );
   // open todos under the knowledge-base project they are in (#2581), else the one their agents work in (#2526)
@@ -408,7 +416,7 @@ export function TodosView({
   // (`DirectionTree.todoRows`), so a to-do ticked here moves to Just finished rather than out of the list.
   const directionRest = useMemo(() => {
     if (grouping !== "direction" || !byDirection) return [];
-    return TRIAGE_SECTIONS.filter((sec) => sec !== "done")
+    return TRIAGE_SECTIONS.filter((sec) => sec !== "done" && sec !== "cancelled")
       .map((sec) => ({
         sec,
         groups: sortTriageGroups(
@@ -484,13 +492,13 @@ export function TodosView({
     if (requestMode || !split) return undefined;
     if (byStatus) {
       // the first row of an open section; none rather than one that would unfold a folded section (Shelved, Done)
-      for (const sec of TRIAGE_SECTIONS) if (!FOLDED_SECTIONS.has(sec) && triaged.sections[sec].length) return triaged.sections[sec][0].lead;
+      for (const sec of TRIAGE_SECTIONS) if (!sectionStartsFolded(sec, triaged.sections[sec], tick) && triaged.sections[sec].length) return triaged.sections[sec][0].lead;
       return undefined;
     }
-    // by 常驻: the first row shown (a direction's, else an unfolded status section's below them), else the first completed one
-    if (grouping === "direction") return directionSections[0]?.todos[0] ?? directionRest.find((s) => !FOLDED_SECTIONS.has(s.sec))?.groups[0].lead ?? filteredCompleted[0];
-    return filteredUncompleted[0] ?? filteredCompleted[0];
-  }, [activeId, selectedId, todos, filteredUncompleted, filteredCompleted, byStatus, requestMode, split, triaged, grouping, directionSections, directionRest]);
+    // by 常驻: the first row shown (a direction's, else an unfolded status section's below them), else history
+    if (grouping === "direction") return directionSections[0]?.todos[0] ?? directionRest.find((s) => !FOLDED_SECTIONS.has(s.sec))?.groups[0].lead ?? filteredCompleted[0] ?? filteredCancelled[0];
+    return filteredUncompleted[0] ?? filteredCompleted[0] ?? filteredCancelled[0];
+  }, [activeId, selectedId, todos, filteredUncompleted, filteredCompleted, filteredCancelled, byStatus, requestMode, split, triaged, grouping, directionSections, directionRest]);
 
   // The to-do open beside the calendar: the address's, while it is there.
   const selectedTodo = calendarOn && selectedId ? todos.find((td) => td.id === selectedId) : undefined;
@@ -687,10 +695,9 @@ export function TodosView({
             {(todosLoaded || todos.length > 0) && !(todos.length === 0 && todosError) && (
               // a phone's header has the List | Calendar switch to fit (#2029): the counts stay on wider screens
               <span className="text-[12px] whitespace-nowrap text-ink-3 max-sm:hidden" data-testid="todos-summary">
-                {/* one count in every grouping (audit item 12): open as countsAsOpen counts it (the sidebar's badge, the
-                    open ones that need the owner, #11085), the rest as the sections' titles do (a merged row's members
-                    under its section) */}
-                {t(listFilter === "all" ? "todos.summary_triage" : "todos.summary_filtered", { filter: filterLabel(listFilter), open: triageAll.open, parked: sectionSize(triageAll, "parked"), shelved: sectionSize(triageAll, "shelved"), done: sectionSize(triageAll, "done") })}
+                {/* one count in every grouping (audit item 12): open as countsAsOpen counts it, section counts as their
+                    titles do, with Cancelled always separate from Done (#11085, #5732) */}
+                {t(listFilter === "all" ? "todos.summary_triage" : "todos.summary_filtered", { filter: filterLabel(listFilter), open: triageAll.open, parked: sectionSize(triageAll, "parked"), shelved: sectionSize(triageAll, "shelved"), done: sectionSize(triageAll, "done"), cancelled: sectionSize(triageAll, "cancelled") })}
               </span>
             )}
           </div>
@@ -768,6 +775,7 @@ export function TodosView({
                 open={checksAsOpen(selectedTodo, sectionOf.get(selectedTodo.id))}
                 onToggleDone={(open) => toggleDone(selectedTodo, open)}
                 onOpenHandover={() => openHandover()}
+                onOpenTodo={(id) => navigate(calendarRoute(calendarMode, anchor, id))}
                 onDeleteClick={() => askDelete(selectedTodo.id)}
               />
             </div>
@@ -835,7 +843,7 @@ export function TodosView({
               >
                 {todosError}
               </Empty>
-            ) : filteredUncompleted.length === 0 && filteredCompleted.length === 0 ? (
+            ) : (filteredUncompleted.length === 0 || (grouping === "direction" && directionSections.length === 0 && directionUnlisted === 0 && directionRest.length === 0)) && filteredCompleted.length === 0 && filteredCancelled.length === 0 ? (
               offline && todos.length === 0 ? (
                 <OfflineState offline={offline} ring="ring-surface" className="py-14" />
               ) : search.trim() ? (
@@ -880,8 +888,8 @@ export function TodosView({
                     <TodoTriageSection
                       key={sec}
                       section={sec}
-                      // unfinished to-dos start open, above Just finished; Shelved and Done start folded (#5707)
-                      folded={FOLDED_SECTIONS.has(sec)}
+                      // Fresh accepted, ticked and cancelled outcomes stay visible; older history keeps the folded default.
+                      folded={sectionStartsFolded(sec, triaged.sections[sec], tick)}
                       groups={sortTriageGroups(triaged.sections[sec], listSort)}
                       count={sectionSize(triaged, sec)}
                       views={views}
@@ -979,6 +987,26 @@ export function TodosView({
                     )}
                   </div>
                 )}
+                {/* Cancelled Fold: its own outcome and reason, never inside Completed (#5732) */}
+                {filteredCancelled.length > 0 && (
+                  <div className="mt-2 border-t border-line/60 pt-2" data-testid="todos-cancelled-fold">
+                    <button
+                      type="button"
+                      onClick={() => setShowCancelled((v) => !v)}
+                      className="flex h-8 w-full items-center justify-between rounded-control px-2.5 text-xs text-ink-3 transition-colors hover:bg-hover hover:text-ink-2"
+                    >
+                      <span>{t("todos.cancelled_section", { count: filteredCancelled.length })}</span>
+                      <Icon name="chevron" size={12} className={cx("transition-transform duration-200", showCancelled ? "rotate-180" : "")} />
+                    </button>
+                    {showCancelled && (
+                      <div className="flex flex-col gap-1 pt-1">
+                        {filteredCancelled.map((todo) => (
+                          <TodoListItem key={todo.id} todo={todo} view={views.get(todo.id)!} selected={activeTodo?.id === todo.id} onSelect={openFromList} onToggleDone={toggleDone} onMenu={openRowMenu} />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
               )
             )}
@@ -1021,6 +1049,7 @@ export function TodosView({
               open={checksAsOpen(activeTodo, sectionOf.get(activeTodo.id))}
               onToggleDone={(open) => toggleDone(activeTodo, open)}
               onOpenHandover={() => openHandover()}
+              onOpenTodo={openFromList}
               onDeleteClick={() => askDelete(activeTodo.id)}
             />
           ) : (
@@ -1340,12 +1369,17 @@ const SECTION_TONE: Record<TriageSection, string> = {
   other: "text-ink-2",
   shelved: "text-ink-3",
   done: "text-ink-3",
+  cancelled: "text-ink-3",
 };
 
-/** A section's title: the three that are agent states take the state names (lib/state-labels.ts). */
-function sectionTitle(section: TriageSection): string {
+/** A section's title: agent states share the state names; only a section made entirely of unaccepted deliveries uses
+ *  the awaiting-review wording. */
+function sectionTitle(section: TriageSection, rules: readonly TriageRule[]): string {
   if (section === "waiting") return stateName("needs_you");
   if (section === "working") return stateName("working");
+  if (section === "just_done" && rules.length > 0 && rules.every((rule) => rule === "finished_unseen")) {
+    return t("todos.section_awaiting_review");
+  }
   if (section === "just_done") return stateName("just_finished");
   return t(`todos.section_${section}`);
 }
@@ -1382,11 +1416,12 @@ const TodoTriageSection = memo(function TodoTriageSection({
 }) {
   const holds = groups.some((g) => g.members.some((m) => m.id === selectedId));
   const [folded, toggle] = useFolded(`todos-section:${section}`, foldedFirst, { follow: true, holds });
+  const title = sectionTitle(section, groups.flatMap((g) => [...g.triage.values()].map((t) => t.rule)));
   return (
     <section className="mt-1 first:mt-0" data-testid="todo-section" data-section={section} data-count={groups.length} data-todos={count}>
       <button type="button" aria-expanded={!folded} onClick={toggle} className="flex h-8 w-full min-w-0 items-center gap-1.5 rounded-control px-2 text-left text-[12px] hover:bg-hover">
         <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 opacity-60 transition-transform" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
-        <span className={cx("min-w-0 flex-1 truncate font-semibold whitespace-nowrap", SECTION_TONE[section])}>{sectionTitle(section)}</span>
+        <span className={cx("min-w-0 flex-1 truncate font-semibold whitespace-nowrap", SECTION_TONE[section])}>{title}</span>
         {folded && <OwnerMarkCount count={ownerCount(groups.flatMap((g) => g.members), views)} />}
         <span className="shrink-0 text-[11px] text-ink-3 tabular-nums">{count}</span>
       </button>
@@ -1796,7 +1831,7 @@ const TodoListItem = memo(function TodoListItem({
           ) : !responsible ? (
             <span className="truncate text-ink-3">· {t("todos.not_handed")}</span>
           ) : null)}
-          {(section ?? view.section) === "just_done" && onSeen ? (
+          {(section ?? view.section) === "just_done" && seenCanFile(todo) && onSeen ? (
             <span className="ml-auto flex shrink-0 items-center gap-1.5">
               {!todo.done_at && <ReviewBadge todo={todo} />}
               <SeenButton onClick={() => onSeen(todo.id)} />
@@ -1816,7 +1851,10 @@ const TodoListItem = memo(function TodoListItem({
         {/* Why its agent did not start, while it waits on the owner (DESIGN_SYSTEM 5.6: what failed, in red) */}
         {failedOpen && <div className="mt-1 truncate text-[11.5px] text-red" data-testid="todo-start-failed">{t("todos.start_failed", { error: todo.start_error ?? "" })}</div>}
 
-        {/* Why the hub closed it */}
+        {/* Why it was cancelled, or why the legacy hub auto-closed it */}
+        {isCancelled(todo) && cancellationReason(todo) && (
+          <div className="mt-1 truncate text-xs text-ink-3" data-testid="todo-cancelled-reason">{cancellationReason(todo)}</div>
+        )}
         {isAutoDone(todo) && todo.done_reason && (
           <div className="mt-1 truncate text-[11.5px] text-ink-3">{todo.done_reason}</div>
         )}
@@ -1852,10 +1890,10 @@ const TodoListItem = memo(function TodoListItem({
   );
 });
 
-/** Got it on a Just finished row (#5707): files it under Done at once. A small capsule at the end of the status line,
- *  under the time (#6578), so the row is as tall as any other: its 20 px hang over the 18 px line (the negative margin
- *  keeps them out of the line's height), and `touch-hit` gives a finger 44 px. Its press stays its own and never opens
- *  the row. */
+/** Got it on an ordinary, unsupervised Delivered · awaiting review row (#5707): files it under Done at once. A small
+ * capsule at the end of the status line, under the time (#6578), so the row is as tall as any other: its 20 px hang
+ * over the 18 px line (the negative margin keeps them out of the line's height), and `touch-hit` gives a finger 44 px.
+ * Its press stays its own and never opens the row. Supervised work and unaccepted deliveries get no such receipt. */
 function SeenButton({ onClick }: { onClick: () => void }) {
   return (
     <button
@@ -2337,6 +2375,7 @@ function TodoDetail({
   open,
   onToggleDone,
   onOpenHandover,
+  onOpenTodo,
   onDeleteClick,
 }: {
   todo: Todo;
@@ -2353,6 +2392,7 @@ function TodoDetail({
   /** Closes it when `open`, reopens it otherwise: the row's checkbox. */
   onToggleDone: (open: boolean) => void;
   onOpenHandover: () => void;
+  onOpenTodo: (id: string) => void;
   onDeleteClick: () => void;
 }) {
   const title = useTodoField({
@@ -2525,6 +2565,11 @@ function TodoDetail({
         <span className="text-ink-3">·</span>
         <span>{t("todos.created_at", { time: clock(todo.created_at) })}</span>
       </div>
+      {isCancelled(todo) && cancellationReason(todo) && (
+        <p className="mt-2 text-xs leading-[1.6] text-ink-3" data-testid="todo-detail-cancelled-reason">
+          {t("todos.cancelled_reason", { reason: cancellationReason(todo) })}
+        </p>
+      )}
       {failedStart && (
         <p className="mt-2 text-meta leading-[1.6] text-red" data-testid="todo-detail-start-failed">
           {t("todos.start_failed", { error: todo.start_error ?? "" })}
@@ -2553,7 +2598,7 @@ function TodoDetail({
       <ReviewChecklist todo={todo} lookup={lookup} />
       {todo.brief && (
         <Suspense fallback={null}>
-          <TaskBriefHistory todo={todo} />
+          <TaskBriefHistory todo={todo} onOpenTodo={onOpenTodo} />
         </Suspense>
       )}
       <LatestReport todo={todo} />
