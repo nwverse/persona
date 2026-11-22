@@ -10,6 +10,7 @@ import { clientKeys, i18nCatalogs, startupEntries } from "./i18n-catalogs";
 import { pageTokensPlugin } from "./page-tokens";
 import { thirdPartyLicenses } from "./third-party-licenses";
 import { compatBootstrap } from "./compat-bootstrap";
+import { testWorkers } from "./test-scheduling";
 
 // `npm run dev` talks to a hub through Vite's proxy: PERSONA_HUB_URL (eval "$(python3 ../scripts/persona_config.py env)").
 const environment = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env ?? {};
@@ -257,7 +258,7 @@ export default defineConfig({
   // Tests run in zh-Hans, the source language, so their expectations read like the interface (src/i18n/test-setup.ts).
   // Node 25+ has its own localStorage, undefined without --localstorage-file, and it hides jsdom's: turn it off.
   // A node_modules that isn't what package-lock.json pins stops the run before any test (scripts/installed-deps.mjs, #4776).
-  test: { globalSetup: ["scripts/installed-deps.mjs"], setupFiles: ["src/i18n/test-setup.ts"], execArgv: ["--no-experimental-webstorage"] },
+  test: { globalSetup: ["scripts/installed-deps.mjs"], setupFiles: ["src/i18n/test-setup.ts"], execArgv: ["--no-experimental-webstorage"], maxWorkers: testWorkers() },
   build: {
     target: "es2022",
     sourcemap: false,
