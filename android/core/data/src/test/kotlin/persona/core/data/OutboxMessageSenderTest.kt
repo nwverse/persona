@@ -538,7 +538,7 @@ class OutboxMessageSenderTest {
 
         val automatic = async(Dispatchers.Default + SupervisorJob()) { sender.retry("visible") }
         withContext(Dispatchers.Default) { automaticStarted.await() }
-        sender.recordComposerDelivery("visible", ComposerDelivery(DeliveryState.Sending), "manual-operation", null)
+        sender.beginComposerRetry("visible", "manual-operation")
         assertEquals("manual-operation", store.entries.value.single().operationId)
         automaticFinished.complete(Unit)
         automatic.join()
