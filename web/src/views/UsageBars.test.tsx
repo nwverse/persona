@@ -328,4 +328,24 @@ describe("provider cards with a reset timeline (#13173)", () => {
     expect(html).toContain("保护线在 95%");
     expect(renderToStaticMarkup(<UsagePopover accounts={[account("b", 10, 20)]} now={NOW} />)).not.toContain("data-protect");
   });
+  it("renders usage bars and popover typography with named text tokens instead of hard-coded pixel classes (#13211)", () => {
+    const a = account("a", 40, 65, {
+      provider: "claude",
+      name: "Work Claude",
+      plan: "Max",
+      sources: ["Relay"],
+      problem: "unreachable",
+    });
+    a.windows[1].protect_percent = 90;
+    a.windows.push({ label: "7d", window_minutes: 10080, used_percent: 50, resets_at: iso(30 * H), model: "Sonnet" });
+    const stripHtml = renderToStaticMarkup(<UsageBars accounts={[a, balanceAccount("ds", "12.34")]} now={NOW} />);
+    const popoverHtml = renderToStaticMarkup(<UsagePopover accounts={[a, balanceAccount("ds", "12.34")]} now={NOW} />);
+    const arbitraryPxFont = /text-\[(?:length:)?\d+(?:\.\d+)?px\]/;
+    expect(stripHtml).not.toMatch(arbitraryPxFont);
+    expect(popoverHtml).not.toMatch(arbitraryPxFont);
+    expect(stripHtml).toContain("text-submeta");
+    expect(popoverHtml).toContain("text-meta");
+    expect(popoverHtml).toContain("text-label");
+    expect(popoverHtml).toContain("text-submeta");
+  });
 });
