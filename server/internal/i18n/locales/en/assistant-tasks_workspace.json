@@ -9,6 +9,8 @@
   "engine_path": "The workspace engine returned no absolute checkout path; no agent was started",
   "engine_checkout": "The workspace engine did not confirm the requested branch and checkout; no agent was started",
   "busy": "Workspace is occupied by task {id} ({title}); wait for it to finish or choose a new workspace (machine {machine}, path {path})",
+  "queued": "Queued behind task {id} ({title}) on {machine} ({path}); will start automatically when it finishes",
+  "queued_after": "Queued for {path} on {machine}; waiting for prerequisite task(s) {blockers}",
   "machine_local": "The task workspace was prepared on {from}; it cannot move to {to}",
   "create": "The new task workspace was not made; no agent was started",
   "no_commits": "The repository at {path} on {machine} has no commits yet, so a new task workspace cannot be made from it; commit once or choose an existing workspace. No agent was started",

@@ -1151,6 +1151,15 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
   one home of those requests, not a second home, and counts what the switch and tabs count (`agentsWaiting`). **The usage
   strip** (`SidebarUsageStrip`): the two fullest subscription accounts as name, percent and `UsageMeter`, the web
   sidebar's foot (#2432); a tap opens Machines. Separate stays the default and pixel-identical.
+  **Usage details** (#13173, web `UsagePopover`): one card per provider (`border-line`, `rounded-control`, 10 px padding) with the
+  provider's name (13 px semibold `--ink`), the account count and the newest sample age (11 px `--ink-3`); every account inside,
+  soonest 7d reset first, each with a `5h` and a `7d` row (bar with pace tick, percent, reset text). Under the accounts, **one
+  reset timeline per card**: a shared axis (45% of the width for the first day, 55% for days 1-7), a row per account in the
+  same order, a teal (`--hue-teal`) 5h capsule over a blue (`--hue-blue`) 7d capsule from the `--ink` now line to the reset, a
+  hollow end dot (`--surface` fill) and the time left (9.5 px semibold, white inside the capsule past 80% of the width). A
+  window's `protect_percent`, when the hub sends it, adds a 2 px `--orange` notch on its bar, a 9 px "protect N%" flag and a
+  hatched `--orange` zone to 100%. Colors and sizes are existing tokens; iOS and Android follow the same rule with their own
+  tokens (`docs/server/usage-windows.md`, "Provider cards and the reset timeline").
 - Android (#6378) offers the same **Separate** and **Merged** values under **Settings › Appearance › Sidebar**.
   Separate is the Android default at every width. Merged uses the current left drawer and the regular window's
   existing beside or overlay policy. Main conversation stays above the scrollable Pages, Persona Chats and Agents.

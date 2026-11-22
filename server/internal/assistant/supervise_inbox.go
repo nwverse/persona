@@ -58,30 +58,51 @@ func (s *Service) superviseInbox(ctx context.Context, items []*InboxItem, linked
 	}
 	b.mu.Unlock()
 	type recipient struct {
-		task             Todo
-		active, accepted bool
+		task                        Todo
+		active, accepted, needsUser bool
 	}
 	tasks := map[string]recipient{}
 	for _, id := range todos {
 		if _, seen := tasks[id]; !seen && id != "" {
 			t, _ := s.todoNow(id)
-			tasks[id] = recipient{task: t, active: s.inboxSignalHolds(t), accepted: taskAcceptedForFeedback(t) && !s.agentSupervised(t)}
+			tasks[id] = recipient{
+				task:      t,
+				active:    s.inboxSignalHolds(t),
+				accepted:  taskAcceptedForFeedback(t) && !s.agentSupervised(t),
+				needsUser: needsUserWakeEligible(t) && !s.agentSupervised(t),
+			}
 		}
 	}
+	type needsUserInboxWake struct {
+		task Todo
+		sig  superviseSignal
+	}
 	var out []superviseSignal
+	var needsUserOut []needsUserInboxWake
 	b.mu.Lock()
 	for i, it := range items {
 		r := tasks[todos[i]]
 		afterAcceptance := r.accepted && acceptedPRFeedback(r.task, inboxOpenPR(it))
-		if it.Agent == nil || it.Agent.TodoID != todos[i] || !afterAcceptance && !r.active {
+		if it.Agent == nil || it.Agent.TodoID != todos[i] || !afterAcceptance && !r.active && !r.needsUser {
 			continue // relinked meanwhile, or its task cannot hear it: the messages wait, uncounted
 		}
 		if g, ok := inboxSignalOf(it, linked[it]); ok {
+			if r.needsUser && !afterAcceptance {
+				needsUserOut = append(needsUserOut, needsUserInboxWake{task: r.task, sig: g})
+				continue
+			}
 			g.Inbox.AfterAcceptance = afterAcceptance
 			out = append(out, g)
 		}
 	}
 	b.mu.Unlock()
+	for _, w := range needsUserOut {
+		if w.sig.Inbox == nil {
+			continue
+		}
+		source, summary := formatInboxExternalInfo(*w.sig.Inbox)
+		s.emitNeedsUserExternalInfo(ctx, w.task, source, summary, "inbox:"+w.sig.Key)
+	}
 	for _, g := range out {
 		if g.Inbox.AfterAcceptance || g.Inbox.URL == "" || !s.taskHasAgent(g.Todo) {
 			s.signal(g)

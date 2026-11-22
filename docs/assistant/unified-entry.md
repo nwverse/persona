@@ -58,6 +58,7 @@ The prototype is the UI and interaction standard; compare screen by screen durin
 | `"new"` | Create a checkout through the machine's existing herdr/Orca workspace engine |
 | `{"new":{"branch":"task/fix-login"}}` | Create through that engine, with an explicit branch |
 | `{"existing":"/code/app"}` | Reuse an existing directory (`~/…` is expanded on the selected machine) |
+| `{"existing":"/code/app","queue":true}` | Reuse an existing directory, queueing FIFO behind an occupying task instead of failing |
 | `{"existing":"ws_…"}` | Select a workspace from that machine's catalog; node-local and board-qualified IDs are accepted |
 | `"none"` | Create no workspace; run at `cwd` (the default for read-only/non-Git tasks) |
 
@@ -72,6 +73,7 @@ A repository nobody has committed to (no ref names a commit) has nothing to chec
 with code `worktree_no_commits` (#5548): an inferred `new` then uses the free directory as `existing`, and an occupied one
 is refused with a message naming the task that holds it; an explicit `new` fails saying the repository has no commits.
 An explicit `workspace` overrides inference. When a caller knows a particular checkout, it should name it with `existing`.
+When an explicit `existing` workspace is occupied by another open task and the caller either sets `workspace.queue: true` or names that occupying task in `after`, the hub parks the task in a durable workspace queue (`TaskQueue` with key `workspace_occupied`) instead of failing into a start-error card (#13142). When the occupying task completes, is accepted/cancelled, or otherwise releases the workspace, the hub deterministically dequeues and auto-starts the next FIFO waiter on that `(machine, workspace)` whose `after` prerequisites are satisfied, without polling timers. Without `queue: true` or a matching `after` prerequisite, occupancy still refuses immediately naming the occupying task.
 For an explicit `new.branch`, admission first asks the node whether that branch already has a checkout in the same repository.
 It reuses that checkout only after a successful clean-tree check, complete live-Agent inventory, and the hub's unfinished-task
 ownership check. Dirty, occupied, changed or unverifiable checkouts are refused with their path and known owner; nothing is forced.
