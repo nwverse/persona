@@ -15,9 +15,10 @@ a null write decided before any check; Undo putting back exactly the entry the s
 and filing time included, without its row; On Its Own without the row for a session already filed, every other write
 needing its row; the background supervisor refused; a listed session filed with its row's title. A write that
 changes the book pushes `directions`, as the hub publishes on a change.
-With MOCK_DIRECTION_SESSIONS on, the second manager (工作) has a conversation of its own. It reaches the app's sidebar
-only with the paged session list (MOCK_SESSIONS_LIST=1), so DirectionScreensUITests' "manager" off case runs on a
-second mock started that way (PERSONA_OFF_MANAGER_HUB).
+With MOCK_DIRECTION_SESSIONS on, GET /api/v1/assistant gives the second manager (工作) a conversation of its own. The
+app does not show it on 工作's page (before #11516 and after), so DirectionScreensUITests' "manager" off case compares
+that page's Main Chat row instead; the case runs on a second mock started with MOCK_SESSIONS_LIST=1 as well
+(PERSONA_OFF_MANAGER_HUB).
 
 GET /mock/direction_sessions?… changes how it answers from now on (each optional; GET /mock/reset puts all back):
   routes=missing|on       the routes answer 404 without their codes / as above
@@ -367,7 +368,7 @@ def register(d):
         hub.ENDED_LEADERS.clear()
 
     def other_assistant(h, req):
-        """The second manager (工作) with a conversation of its own, so its page has a chat's menu to compare."""
+        """The second manager (工作) with a conversation of its own (the app does not show it on 工作's page)."""
         other = hub.assistant_for_manager(h)
         if other is None or other[1] != 200 or req.query.get("space") or (h.headers.get("X-Persona-Manager") or "") != "m-3fa21c":
             return False

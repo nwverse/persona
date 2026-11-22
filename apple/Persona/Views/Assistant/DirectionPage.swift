@@ -492,9 +492,10 @@ private struct DirectionAddedRow: View {
                 StatusDot(state: DirectionPageLogic.dot(standing))
                     .padding(.top, Theme.Space.xs)
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                    // The word beside the title while the title keeps half the row, the title cut on its line; only
-                    // a word that would leave it less goes under it (`BesideOrUnder`, DESIGN_SYSTEM 6.2). By measured
-                    // widths, so a long title never stacks the row, and rows keep one height as In Progress's do.
+                    // The word beside the title while the title keeps half the row or all it needs, the title cut on
+                    // its one line; a word that would leave it less goes under it (`BesideOrUnder`, DESIGN_SYSTEM 6.2).
+                    // By measured widths, so a long title never wraps the row, but a word wider than half the row sits
+                    // beside a short title and under a long one.
                     BesideOrUnder(alignment: .firstTextBaseline) {
                         Text(title).font(Theme.Font.secondary).foregroundStyle(Color.primary).lineLimit(1)
                         if let word { standingText(word, standing) }
