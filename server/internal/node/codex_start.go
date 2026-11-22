@@ -207,6 +207,7 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	if execution.Source.Role == "" {
 		execution.Source.Role = "task_agent"
 	}
+	execution.Source.Session = "" // a fresh Codex thread has no Persona session ID yet
 	waiting := strings.TrimSpace(prompt) == ""
 	if waiting {
 		prompt = ""
