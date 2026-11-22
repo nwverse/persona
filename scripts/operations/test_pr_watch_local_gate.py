@@ -78,15 +78,25 @@ class LocalGateTests(unittest.TestCase):
         watcher = object.__new__(pr_watch.Watcher)
         watcher.dry_run = False
         watcher.log = Mock()
-        config = {"name": "nwverse/persona", "checkout": ".", "merge": True}
         pr = {"number": 7, "title": "fix: example", "headRefOid": HEAD, "baseRefOid": BASE}
-        with patch.object(pr_watch, "require_local_gate") as gate, \
-             patch.object(pr_watch, "run", return_value=Mock(returncode=0)) as merge, \
-             patch.object(pr_watch, "pr_snapshot", return_value={"state": "MERGED"}):
-            self.assertTrue(watcher.merge(config, pr))
-            gate.assert_called_once()
-            self.assertIn(HEAD, merge.call_args.args[0])
-            self.assertIn(BASE, merge.call_args.args[0])
+        for repo in ("nwverse/persona", "NWVERSE/Persona"):
+            config = {"name": repo, "checkout": ".", "merge": True}
+            with self.subTest(repo=repo), patch.object(pr_watch, "require_local_gate") as gate, \
+                 patch.object(pr_watch, "run", return_value=Mock(returncode=0)) as merge, \
+                 patch.object(pr_watch, "pr_snapshot", return_value={"state": "MERGED"}):
+                self.assertTrue(watcher.merge(config, pr))
+                gate.assert_called_once_with(repo, HEAD, BASE)
+                self.assertIn(HEAD, merge.call_args.args[0])
+                self.assertIn(BASE, merge.call_args.args[0])
+
+    def test_repository_alias_keeps_the_wrapper_as_file_lock_owner(self):
+        import threading
+        watcher = object.__new__(pr_watch.Watcher)
+        watcher.merge_locks_guard = threading.Lock()
+        watcher.merge_locks = {}
+        with patch.object(pr_watch.pr_watch_merge, "merge_lock", side_effect=AssertionError("wrapper owns the lock")):
+            with watcher.merging("NWVERSE/Persona"):
+                pass
 
 
 if __name__ == "__main__":

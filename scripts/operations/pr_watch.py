@@ -408,7 +408,7 @@ class Watcher:
         with self.merge_locks_guard:
             lock = self.merge_locks.setdefault(repo, threading.Lock())
         with lock:
-            if repo == repository("nwverse/persona"):
+            if repo.casefold() == repository("nwverse/persona"):
                 yield
             else:
                 with pr_watch_merge.merge_lock(self.repositories[repo]["checkout"]):
@@ -656,7 +656,7 @@ class Watcher:
         if self.dry_run or not config["merge"]:
             self.log("%s#%s passed; merge disabled" % (repo, number))
             return False
-        if repo == repository("nwverse/persona"):
+        if repo.casefold() == repository("nwverse/persona"):
             require_local_gate(repo, pr["headRefOid"], pr["baseRefOid"])
             # merge-pr.sh owns the shared lock for this path. Acquiring it in
             # another process while self.merging() holds it would deadlock.
