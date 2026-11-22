@@ -29,7 +29,7 @@ var mainOnlySignals = []string{sigFailed, sigStarted, sigEscalated, sigLeaderStu
 // every kind but mainOnlySignals.
 var backgroundSignals = []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigTimedOut, sigAllStopped, sigInterrupted,
 	sigPRConflict, sigDraftPR, sigReport, sigOrphaned, sigAsk, sigDecide, sigDecisionReply, sigRecheck, sigUndecidable,
-	sigOwnerCannot, sigParkedDue, sigParkDecided, sigInbox, sigOverdue, sigCheck}
+	sigOwnerCannot, sigParkedDue, sigParkedSummary, sigParkDecided, sigInbox, sigOverdue, sigCheck}
 
 // roundConnectorTools are the round's tools that come with the Lark extension (lark_search) or the lark-cli connector
 // (larkcli_search) rather than the assistant's own list.

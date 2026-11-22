@@ -2231,6 +2231,9 @@ if os.environ.get("MOCK_RECENT") == "1":
 # /api/v1/assistant lists them in `leaders`; GET /api/v1/assistant/leaders names each direction (#3695), and the web
 # sidebar shows them first among the Persona chats as the "Directions" group under those names, on any browser.
 MOCK_LEADERS = []
+# Directions ended (unpinned) in this run, by POST …/end or /mock/direction_sessions?ended=: still known for filing
+# (409 direction_ended, their chats leader conversations), their single read has `ended_at`; …/make takes one back.
+ENDED_LEADERS = set()
 MOCK_DIRECTION_NAMES = {}
 # A direction's notes (#10086, assistant/direction_notes.go): the first leader has some, PUT …/directions/{id}/notes keeps them.
 MOCK_DIRECTION_NOTES = {}
@@ -8406,6 +8409,15 @@ if os.environ.get("MOCK_MODEL_CHANGE") == "1":
         + _by("claude-sonnet-5-5", tool("Edit", {"file_path": "/Users/me/code/recipes/src/search.ts", "old_string": "return hits",
                                                "new_string": "return hits.sort(byTime)"}, "ok", 60 * 26))
         + [it("assistant", "text", 60 * 26, text="排好了：用时短的菜谱排在前面，同样用时的按收藏数。", model="claude-sonnet-5-5")]
+    )
+    # A separate chat for the negative UI case: an alias and snapshot are still Sonnet, and an older reply has no model.
+    ITEMS[OC_IDLE] = (
+        [it("user", "text", 60 * 8, text="先检查缓存配置")]
+        + [it("assistant", "text", 60 * 7, text="缓存配置正常。", model="claude-sonnet-4-5")]
+        + [it("user", "text", 60 * 6, text="再确认一次")]
+        + [it("assistant", "text", 60 * 5, text="结果仍然正常。", model="us.anthropic.claude-sonnet-4-5-20250929-v1:0")]
+        + [it("user", "text", 60 * 4, text="旧节点也检查一下")]
+        + [it("assistant", "text", 60 * 3, text="旧节点没有记录回答模型。")]
     )
 if MOCK_CLOSEOUT:  # each agent's last reply ends with the raw closeout block (the not-done one is only the block)
     for _sid, _ask, _cmd in ((CLOSEOUT_DONE, "报表导出一到 50 万行就超时，修一下", "go test ./export/..."),
@@ -28668,12 +28680,15 @@ class H(BaseHTTPRequestHandler):
             lead, op = p.split("/")[5], p.split("/")[6]
             if lead not in {c["session_id"] for c in ASSISTANT}: return self.send_json({"error": "not a Persona conversation"}, 409)
             if op == "make":
+                ENDED_LEADERS.discard(lead)
                 if lead not in MOCK_LEADERS:
                     MOCK_LEADERS.append(lead)
                     MOCK_DIRECTION_NAMES.setdefault(lead, next((c.get("title", "") for c in ASSISTANT if c["session_id"] == lead), ""))
                 return self.send_json({"leader": {"id": lead, "name": MOCK_DIRECTION_NAMES.get(lead, "")}})
             ended = lead in MOCK_LEADERS
-            if ended: MOCK_LEADERS.remove(lead)
+            if ended:
+                MOCK_LEADERS.remove(lead)
+                ENDED_LEADERS.add(lead)
             return self.send_json({"ended": ended})
         if p == "/api/v1/pins" and self.command == "PUT":  # the hub keeps them (the reply is what it kept)
             body = json.loads(self.last_body or b"{}")

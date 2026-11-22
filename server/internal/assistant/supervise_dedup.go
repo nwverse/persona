@@ -19,7 +19,7 @@ type superviseFingerprint struct {
 	Hash      string    `json:"hash"`
 	At        time.Time `json:"at"`
 	Permanent bool      `json:"permanent,omitempty"`
-	// Todo keeps inactivity and unhandled-event fingerprints until the task closes.
+	// Todo bounds inactivity, daily-summary and unhandled-event fingerprints by the task's lifetime.
 	// Other non-permanent kinds retain the short semantic-deduplication window.
 	Todo string `json:"todo,omitempty"`
 }
@@ -30,6 +30,11 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 		key, _ := json.Marshal([]string{g.Todo, g.Kind})
 		sum := sha256.Sum256([]byte(g.Key))
 		return string(key), hex.EncodeToString(sum[:])
+	}
+	if g.Kind == sigParkedSummary {
+		key, _ := json.Marshal([]string{g.Todo, g.Kind, g.To})
+		day, _, _ := strings.Cut(g.Key, "|")
+		return string(key), day // replacement parks and wording cannot produce a second summary that day
 	}
 	if g.Kind == sigPRConflict || g.Kind == sigDraftPR {
 		// Keep every task/PR/head independently, including a head that returns after another one.
@@ -164,8 +169,9 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 			b.resuming[id] = struct{}{}
 			pending = append(pending, id)
 		}
-		fingerprint := superviseFingerprint{Hash: hash, At: now.UTC(), Permanent: signals[i].Kind == sigPRConflict || signals[i].Kind == sigDraftPR}
-		if signals[i].Kind == sigAllStopped || keptUntilChange(signals[i]) {
+		fingerprint := superviseFingerprint{Hash: hash, At: now.UTC(), Permanent: signals[i].Kind == sigPRConflict ||
+			signals[i].Kind == sigDraftPR || signals[i].Kind == sigParkedSummary}
+		if signals[i].Kind == sigAllStopped || signals[i].Kind == sigParkedSummary || keptUntilChange(signals[i]) {
 			fingerprint.Todo = signals[i].Todo
 		}
 		if g := signals[i]; g.Kind == sigTodoReady || g.externalPRReview() || g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
@@ -257,7 +263,15 @@ func (s *Service) pruneAllStoppedDedup(ctx context.Context) {
 	var remove []string
 	s.todos.mu.RLock()
 	for key, seen := range b.dedup {
-		if task := s.todos.todos[seen.Todo]; seen.Todo != "" && s.todos.loaded && (task == nil || task.DoneAt != nil) {
+		todo := seen.Todo
+		if todo == "" && seen.Permanent {
+			// Older daily summaries omitted Todo; only their exact key shape supplies the missing binding.
+			var parts []string
+			if json.Unmarshal([]byte(key), &parts) == nil && len(parts) == 3 && parts[1] == sigParkedSummary {
+				todo = parts[0]
+			}
+		}
+		if task := s.todos.todos[todo]; todo != "" && s.todos.loaded && (task == nil || task.DoneAt != nil) {
 			remove = append(remove, key)
 		}
 	}

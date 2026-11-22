@@ -72,7 +72,7 @@ import { ListError } from "../ui/ListError";
 import { SESSION_LIST_STYLE } from "../ui/list-metrics";
 import { RUNTIME_AGENTS_PATH, supportsPagedAgents, runtimeActiveAt, runtimeAgents, runtimeIdentity, runtimeNeedsYou, runtimeOrder, runtimeParentIdentity, runtimePlace, runtimeRemoval } from "../lib/runtime-list";
 import { SESSIONS_CATALOG_FEATURE, SESSIONS_JUST_FINISHED_FEATURE, SESSIONS_QUICK_FILTERS_FEATURE, SESSIONS_TODO_FEATURE, type GroupDimension, type TodoNames } from "../lib/session-groups";
-import { type ListCounts, type ListFilters } from "../lib/session-list";
+import { SESSIONS_LIST_FEATURE, type ListCounts, type ListFilters } from "../lib/session-list";
 import { heldCounts } from "../lib/seen-outbox";
 import { NoComputers, useAddComputer } from "./machines/AddComputerEntry";
 import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, holdsRow, morePagesMenu, type NavPage, type NodeMenuFn, pageIconStyle, pageLabel, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup, GroupFoldButton, useActiveKey, useGo, useNavPages } from "./SidebarParts";
@@ -862,6 +862,8 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   }, [ownIds, sidebarMachines]);
   const rowOrder = useMemo(() => machineSessionOrder(machines), [machines]);
   const { sessions: every, loaded, error: listError } = useFullAgentSessions();
+  const summaryAgents = useAgentSessions();
+  const pagedTransport = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
   const allLaunches = useStore((s) => s.launches);
   const launches = useMemo(() => Object.values(allLaunches).filter((launch) => launch.phase !== "ready"), [allLaunches]);
   // A session whose launch is still actively starting/sending is already listed under "Starting": keep it out of the
@@ -873,8 +875,12 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     }
     return keys;
   }, [launches]);
-  const agents = useMemo(() => every.filter((s) => isSidebarAgent(s) && (!inFlightLaunchKeys.size || !inFlightLaunchKeys.has(`${s.machine_id}\u0000${s.session_id}`))), [every, inFlightLaunchKeys]);
+  const [agents, previewAgents] = useMemo(() => {
+    const visible = (rows: Session[]) => rows.filter((s) => isSidebarAgent(s) && (!inFlightLaunchKeys.size || !inFlightLaunchKeys.has(`${s.machine_id}\u0000${s.session_id}`)));
+    return [visible(every), pagedTransport ? visible(summaryAgents) : []];
+  }, [every, summaryAgents, pagedTransport, inFlightLaunchKeys]);
   const all = useScoped(agents);
+  const previewAll = useScoped(previewAgents);
   const mutes = useStore((s) => s.mutes);
   const pins = useStore((s) => s.pins);
   const interactions = useStore((s) => s.interactions);
@@ -916,6 +922,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const [kept, setKept] = useState<ReadonlySet<string>>(() => new Set());
   const botmuxHidden = useBotmuxHidden();
   const listed = useMemo(() => withoutBotmux(all, botmuxHidden), [all, botmuxHidden]);
+  const previewListed = useMemo(() => [...withoutBotmux(previewAll, botmuxHidden)].sort(rowOrder), [previewAll, botmuxHidden, rowOrder]);
   const facets = useMemo(() => buildAgentFacets(listed, machines, pins), [listed, machines, pins]);
   const dimActive = hasActiveDimensionFilters(dimFilters);
   const clock = useNow(60_000, dimActive);
@@ -962,6 +969,9 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   // the todos puts every agent under No to-do for a moment, then moves them under their todos (#2812); the chat list's
   // rows are drawn at once
   const todosPending = !chatList && shownGrouping === "todo" && !todosLoaded;
+  // The first summary page can orient the owner while the complete baseline is read. By to-do still waits for its
+  // grouping input; neutral rows never invent provisional groups or counts, and the complete tree replaces them at once.
+  const loadingPreview = !loaded && !todosPending && !chatList && !filtered && !hubUnreachable && !listError && previewListed.length > 0;
   // Keep showing progress until the grouping inputs and session list are ready. On an older hub the socket's rows
   // can already be shown while the first GET /sessions is still in flight (#2812).
   const listNote = hubUnreachable ? <p className="px-2 py-1 text-xs leading-normal text-ink-3">{t("sidebar.agents_offline")}</p>
@@ -1155,7 +1165,14 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
         {launches.map((launch) => <NavRow key={launch.id} k={`s:${launch.machineId}/${launch.id}`} reg={reg} hover={hover} active={activeKey === `s:${launch.machineId}/${launch.id}`} to={{ name: "session", mid: launch.machineId, sid: launch.id }} go={go} icon={launch.phase === "failed" ? "retry" : "agent"} agent={launch.phase === "failed" ? undefined : launchDisplayEngine(launch)} label={launch.text || baseName(launch.cwd) || t("sidebar.launch_untitled")} hint={launch.phase === "failed" ? t("sidebar.launch_failed") : t("sidebar.launch_background")} />)}
       </Section>}
 
-      {listNote ?? (chatList ? (
+      {loadingPreview ? <>
+        {listNote}
+        <div data-agents-preview className="mt-1 flex flex-col gap-px">
+          <WindowedRows items={previewListed} holds={(s) => rowKey(s) === activeKey} render={(s) => (
+            <SessionRow key={s.session_id} s={s} k={`s:${s.machine_id}/${s.session_id}`} reg={reg} hover={hover} active={activeKey === `s:${s.machine_id}/${s.session_id}`} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} onMenu={onRowMenu} />
+          )} />
+        </div>
+      </> : listNote ?? (chatList ? (
         <div className="mt-1 flex flex-col gap-1" data-testid="agent-chatlist-section">
           <WindowedRows items={chatListUnpinned} holds={(s) => rowKey(s) === activeKey} render={(s) => {
             const key = `s:${s.machine_id}/${s.session_id}`;

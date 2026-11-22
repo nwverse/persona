@@ -1101,6 +1101,7 @@ struct ChatView: View {
         builder.childSessions = Dictionary(uniqueKeysWithValues: kids.map { ($0.sessionID, $0) })
         builder.historyComplete = store.loadedOnce && !store.hasMore
         var lines = builder.build(Self.debugTrim(blocks), live: key.live, streaming: key.streaming)
+        lines = ModelChanges.mark(lines)
         #if os(iOS)
         // An Agent's long finished answers as several rows: one row many screens tall stuttered whenever it was on
         // screen (#4970). Persona's own conversation keeps its boxed answers whole.
@@ -1594,6 +1595,8 @@ struct ChatView: View {
         case .placeMap(let result): PlaceMapCard(result: result)
         case .day(let date): DayLine(date: date)
         case .modeChange(_, let change): ModeChangeLine(change: change, session: session)
+        case .modelChange(_, let from, let to):
+            if let names = line.modelNames { ModelChangeDivider(names: names, rawFrom: from, rawTo: to) }
         case .apiError(_, let info, _) where turnErrorCard(line, raw: info.raw) != nil:
             turnErrorCard(line, raw: info.raw)
         case .apiError(let item, let info, let count):
@@ -7778,6 +7781,12 @@ struct ChatLine: Identifiable {
     /// A scheduled task's or a follow-up's input in the main conversation while background rounds fold: its source
     /// block shows the one-line notice, never the prompt (`ChatLines.hidesPrompt`).
     var hidesPrompt = false
+    /// Friendly names computed by the model-change factory, never by a row's body.
+    var modelNames: (from: String, to: String)?
+    /// The first visible line of a photo-only or wake exchange (`ChatLines.flatLines`).
+    var startsExchange = false
+    /// A child revealed from a folded supervision/background round; still not a visible reply for model comparison.
+    var inFoldedRound = false
 
     indirect enum Content {
         /// One compact header for the entire quiet round; children are flattened only when it is opened. `source`: the
@@ -7817,6 +7826,8 @@ struct ChatLine: Identifiable {
         /// A permission mode change the hub recorded, at the end of the exchange it happened in (#10297,
         /// `ChatLines.mergeModeChanges`); `id` from its time and kind.
         case modeChange(id: String, change: APIClient.ModeChange)
+        /// The reply models on either side of a visible exchange boundary (#5055, `ModelChanges.mark`).
+        case modelChange(id: String, from: String, to: String)
 
         var id: String {
             switch self {
@@ -7839,6 +7850,7 @@ struct ChatLine: Identifiable {
             case .viewed(let id, _): id
             case .answerPart(let item, _, let index, _): index == 0 ? item.id : item.id + "/part-\(index)"
             case .modeChange(let id, _): id
+            case .modelChange(let id, _, _): id
             }
         }
     }
@@ -7882,6 +7894,11 @@ struct ChatLine: Identifiable {
     static func placeMap(_ result: PlaceMapResult) -> Self { Self(.placeMap(result)) }
     static func day(_ date: Date) -> Self { Self(.day(date)) }
     static func modeChange(id: String, _ change: APIClient.ModeChange) -> Self { Self(.modeChange(id: id, change: change)) }
+    static func modelChange(id: String, from: String, to: String) -> Self {
+        var line = Self(.modelChange(id: id, from: from, to: to))
+        line.modelNames = (replyModelName(from), replyModelName(to))
+        return line
+    }
     static func viewed(id: String, images: [ViewedImage]) -> Self { Self(.viewed(id: id, images: images)) }
     static func answerPart(item: Item, part: AnswerParts.Part, index: Int, count: Int) -> Self {
         Self(.answerPart(item: item, part: part, index: index, count: count))

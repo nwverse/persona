@@ -2199,7 +2199,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       />}
       {isMain && !embedded && <MainRuntimeSlot sid={sid} />}
       {!embedded && banner}
-      {backPage && (cameFrom ? <Suspense fallback={null}><HandoffBack from={cameFrom} onDismiss={() => setCameFrom(null)} /></Suspense> : cameFrom === undefined ? <Suspense fallback={null}><InboxBack key={`${mid}/${sid}`} mid={mid} sid={sid} session={session} /></Suspense> : null)}
+      {backPage && (cameFrom ? <Suspense fallback={null}><HandoffBack onDismiss={() => setCameFrom(null)} /></Suspense> : cameFrom === undefined ? <Suspense fallback={null}><InboxBack key={`${mid}/${sid}`} mid={mid} sid={sid} session={session} /></Suspense> : null)}
       {/* a known session keeps its chat: a failed background read is retried quietly (runtime-session.ts) */}
       {archivedHere ? <ArchivedNotice session={archivedHere} /> : notFound ? <Suspense fallback={null}><LazyNotFoundNotice assistant={Boolean(assistant)} retry={retryDetail} /></Suspense> : noDetails && <SessionDetailNotice error={detail.error} retry={retryDetail} />}
 

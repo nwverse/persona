@@ -770,6 +770,11 @@ func (n *Node) hubSupportsPersonaContracts() bool { return n.hubPersonaContracts
 
 func (n *Node) handle(ctx context.Context, method string, params json.RawMessage) (result any, resultErr error) {
 	if n.reload != nil {
+		if method == "assistant.send" || method == "assistant.warm" {
+			if err := n.reload.enterHeadless(); err != nil {
+				return nil, err
+			}
+		}
 		done, err := n.reload.enter()
 		if err != nil {
 			return nil, err // explicitly not started: the manager can retry on the replacement
@@ -1553,6 +1558,13 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		_ = json.Unmarshal(params, &a)
 		return n.resolveWorkspace(p.Path, a.Terminal)
 	case "sessions.list":
+		var handoff struct {
+			UpdateHandoff *bool `json:"update_handoff"`
+		}
+		_ = json.Unmarshal(params, &handoff)
+		if handoff.UpdateHandoff != nil {
+			n.reload.SetHeadlessPaused(*handoff.UpdateHandoff)
+		}
 		n.configured()          // a hub that lists without engine.use keeps herdr (engine.go)
 		n.useBotmux(true, true) // and one that lists without saying botmux keeps it, as before (hostbotmux.go)
 		n.sent.answering(ctx)   // the manager may take this list as its own: the next push goes whatever it is
