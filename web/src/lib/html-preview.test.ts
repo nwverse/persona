@@ -11,17 +11,15 @@ describe("HTML preview policy", () => {
     expect(cspFor({ scripts: true, network: false })).toContain("script-src 'unsafe-inline'");
     expect(cspFor({ scripts: true, network: false })).toContain("default-src 'none'"); // inline scripts, still no network
     expect(cspFor({ scripts: false, network: true })).toBe("");
-    for (const p of [off, { scripts: true, network: true }]) expect(sandboxFor(p)).not.toContain("allow-same-origin");
   });
 
-  it("makes only an offline, script-free selection frame same-origin", () => {
-    const off = { scripts: false, network: false };
-    expect(sandboxFor(off, true)).toContain("allow-same-origin");
-    expect(sandboxFor(off, true)).not.toMatch(/allow-scripts|allow-forms/);
-    for (const policy of [{ scripts: true, network: false }, { scripts: false, network: true }, { scripts: true, network: true }]) {
-      expect(sandboxFor(policy, true)).not.toContain("allow-same-origin");
-    }
-    expect(previewDocument("<p>selection</p>", off)).toContain("script-src 'none'; form-action 'none'");
+  it.each([
+    { scripts: false, network: false },
+    { scripts: true, network: false },
+    { scripts: false, network: true },
+    { scripts: true, network: true },
+  ])("keeps rendered HTML opaque with scripts=$scripts and network=$network", (policy) => {
+    expect(sandboxFor(policy)).not.toContain("allow-same-origin");
   });
 
   it("puts the policy first, after the doctype", () => {

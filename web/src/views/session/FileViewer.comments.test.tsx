@@ -24,16 +24,26 @@ const HIDDEN_TAIL = "hiddenSourceBeyondTheDisplayedLine";
 const FILES = {
   markdown: { name: "notes.md", mime: "text/markdown", text: "# Review notes\n\nCheck the example." },
   source: { name: "example.ts", mime: "text/plain", text: `const before = 0;\n  const first = 42;\n  const second = 7;\n${DISPLAYED_LINE}${HIDDEN_TAIL}` },
-  html: { name: "page.html", mime: "text/html", text: "<!doctype html><h2>Rendered chart</h2>" },
+  html: { name: "page.html", mime: "text/html", text: "<!doctype html>\n<h2>Rendered chart</h2>" },
+  paged: { name: "paged.ts", mime: "text/plain", text: "const loaded = 1;\n" },
 };
-type Kind = keyof typeof FILES;
+const NEXT_PAGE = "const next = 2;";
+type Kind = Exclude<keyof typeof FILES, "paged">;
 
 vi.mock("../../lib/api", async (original) => ({
   ...(await original<typeof import("../../lib/api")>()),
   api: vi.fn(async (route: string) => {
-    const path = new URL(route, "https://hub.invalid").searchParams.get("path");
+    const params = new URL(route, "https://hub.invalid").searchParams;
+    const path = params.get("path");
     const file = Object.values(FILES).find(({ name }) => path === `${CWD}/${name}`);
     if (!file) throw new Error(`Unexpected request ${route}`);
+    if (file === FILES.paged) {
+      const size = file.text.length + NEXT_PAGE.length;
+      const base = { ...file, path, size, is_dir: false };
+      return params.has("offset")
+        ? { ...base, text: NEXT_PAGE, truncated: false }
+        : { ...base, next: file.text.length, truncated: true };
+    }
     return { ...file, path, size: file.text.length, is_dir: false, truncated: false };
   }),
 }));
@@ -69,7 +79,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function show(kind: Kind) {
+async function show(kind: keyof typeof FILES) {
   const path = `${CWD}/${FILES[kind].name}`;
   await act(async () => root.render(
     <>
@@ -92,19 +102,6 @@ function select(start: Node, from: number, end: Node, to: number) {
   });
 }
 
-/** jsdom gives srcdoc an empty about:blank document. Chromium checks the real frame separately. */
-function htmlText() {
-  const iframe = frame()!;
-  expect(iframe.getAttribute("sandbox")).toContain("allow-same-origin");
-  expect(iframe.getAttribute("sandbox")).not.toContain("allow-scripts");
-  expect(iframe.srcdoc).toContain("default-src 'none'");
-  const doc = iframe.contentDocument!;
-  Object.defineProperty(doc, "URL", { value: "about:srcdoc" });
-  doc.body.innerHTML = "<h2>Rendered chart</h2>";
-  act(() => iframe.dispatchEvent(new Event("load")));
-  return doc.querySelector("h2")!.firstChild!;
-}
-
 function textAt(el: Element, offset: number) {
   const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -116,6 +113,7 @@ function textAt(el: Element, offset: number) {
 }
 
 const sourceText = (line: number) => host.querySelector(`[data-line="${line}"] [data-file-code-text]`)!;
+const buttonNamed = (name: string) => [...host.querySelectorAll("button")].find((button) => button.textContent === name)!;
 
 async function waitForPill() {
   for (let i = 0; i < 8 && !pill(); i++) await act(async () => { await new Promise((done) => setTimeout(done, 5)); });
@@ -127,8 +125,14 @@ async function pick(kind: Kind) {
     const a = textAt(sourceText(2), 2);
     const b = textAt(sourceText(3), 14);
     select(a.node, a.offset, b.node, b.offset);
+  } else if (kind === "html") {
+    act(() => buttonNamed(t("session-files-fileview.mode_source")).click());
+    expect(frame()).toBeNull();
+    const a = textAt(sourceText(2), 4);
+    const b = textAt(sourceText(2), 18);
+    select(a.node, a.offset, b.node, b.offset);
   } else {
-    const heading = kind === "html" ? htmlText() : host.querySelector("[data-testid=file-markdown] h1")!.firstChild!;
+    const heading = host.querySelector("[data-testid=file-markdown] h1")!.firstChild!;
     select(heading, 0, heading, (heading as Text).length);
   }
   await waitForPill();
@@ -156,7 +160,7 @@ async function send() {
 const QUOTED_LINES: Record<Kind, string[]> = {
   markdown: ["> Review notes", "File: /work/notes.md"],
   source: ["> const first = 42;", ">   const second", "File: /work/example.ts:2-3"],
-  html: ["> Rendered chart", "File: /work/page.html"],
+  html: ["> Rendered chart", "File: /work/page.html:2"],
 };
 
 function expected(kind: Kind, n: number, note: string) {
@@ -166,14 +170,7 @@ function expected(kind: Kind, n: number, note: string) {
 describe("selection comments from the Agent's file panel", () => {
   it.each(["markdown", "source", "html"] as const)("sends the selection and location from the %s preview", async (kind) => {
     await pick(kind);
-    act(() => {
-      if (kind === "html") {
-        const doc = frame()!.contentDocument!;
-        doc.body.dispatchEvent(new doc.defaultView!.KeyboardEvent("keydown", { key: "c", bubbles: true, cancelable: true }));
-      } else {
-        pill()!.click();
-      }
-    });
+    act(() => pill()!.click());
     expect(pill()).toBeNull();
     writeNote(1, "Clarify this passage.");
     expect(await send()).toBe(expected(kind, 1, "Clarify this passage."));
@@ -191,19 +188,53 @@ describe("selection comments from the Agent's file panel", () => {
     expect(splitQuotes(text)!.quotes.map((block) => parseCommentBlock(block)?.comment?.file)).toEqual([
       { location: "/work/notes.md" },
       { location: "/work/example.ts:2-3" },
-      { location: "/work/page.html" },
+      { location: "/work/page.html:2" },
     ]);
   });
 
-  it("discards the selectable frame when scripts are enabled", async () => {
-    await pick("html");
+  it("keeps rendered HTML isolated and does not offer a comment for a frame selection", async () => {
+    await show("html");
     const before = frame()!;
-    const scripts = [...host.querySelectorAll("button")].find((b) => b.textContent === t("session-files-htmlpreview.scripts"))!;
-    act(() => scripts.click());
+    expect(before.getAttribute("sandbox")).not.toMatch(/allow-same-origin|allow-scripts/);
+    expect(before.srcdoc).toContain("script-src 'none'");
+    // jsdom does not enforce the iframe sandbox or populate srcdoc.
+    const doc = before.contentDocument!;
+    Object.defineProperty(doc, "URL", { value: "about:srcdoc" });
+    const heading = doc.body.appendChild(doc.createTextNode("Rendered chart"));
+    act(() => before.dispatchEvent(new Event("load")));
+    select(heading, 0, heading, heading.length);
+    await waitForPill();
+    expect(pill()).toBeNull();
+    act(() => buttonNamed(t("session-files-htmlpreview.scripts")).click());
     expect(pill()).toBeNull();
     expect(frame()).not.toBe(before);
     expect(frame()!.getAttribute("sandbox")).toContain("allow-scripts");
     expect(frame()!.getAttribute("sandbox")).not.toContain("allow-same-origin");
+  });
+
+  it.each(["load button", "after the loaded rows"] as const)("rejects paged source selection ending at %s", async (boundary) => {
+    await show("paged");
+    const load = buttonNamed(t("session-files-fileview.load_more"));
+    const start = textAt(sourceText(1), 0);
+    const rowsAndControls = load.parentElement!.parentElement!;
+    const end = boundary === "load button" ? textAt(load, 2) : { node: rowsAndControls, offset: rowsAndControls.childNodes.length };
+    select(start.node, start.offset, end.node, end.offset);
+    await waitForPill();
+    expect(pill()).toBeNull();
+    expect(sourceText(2)).toBeNull();
+    expect(sent).not.toHaveBeenCalled();
+
+    await act(async () => load.click());
+    const first = textAt(sourceText(1), 0);
+    const last = textAt(sourceText(2), NEXT_PAGE.length);
+    select(first.node, first.offset, last.node, last.offset);
+    await waitForPill();
+    expect(pill()).not.toBeNull();
+    act(() => pill()!.click());
+    writeNote(1, "Check both lines.");
+    expect(splitQuotes(await send())!.quotes.map(parseCommentBlock)).toMatchObject([
+      { text: FILES.paged.text + NEXT_PAGE, comment: { file: { location: "/work/paged.ts:1-2" } } },
+    ]);
   });
 
   it.each([
@@ -237,5 +268,30 @@ describe("selection comments from the Agent's file panel", () => {
     select(marker, 2, marker, 6);
     await waitForPill();
     expect(pill()).toBeNull();
+  });
+
+  it.each(["start", "end"] as const)("rejects a source selection with its %s inside the gutter", async (edge) => {
+    await show("source");
+    const gutter = host.querySelector(edge === "start" ? '[data-gutter="1"] span' : '[data-gutter="3"] span')!.firstChild!;
+    const code = textAt(sourceText(2), 7);
+    if (edge === "start") select(gutter, 0, code.node, code.offset);
+    else select(code.node, code.offset, gutter, 1);
+    await waitForPill();
+    expect(pill()).toBeNull();
+  });
+
+  it.each(["row", "text"] as const)("omits the first row when selection starts after its code (%s boundary)", async (boundary) => {
+    await show("source");
+    const row = sourceText(1).parentElement!;
+    const first = boundary === "row" ? { node: row, offset: row.childNodes.length } : textAt(sourceText(1), "const before = 0;".length);
+    const last = textAt(sourceText(2), "  const first = 42;".length);
+    select(first.node, first.offset, last.node, last.offset);
+    await waitForPill();
+    expect(pill()).not.toBeNull();
+    act(() => pill()!.click());
+    writeNote(1, "Check this line.");
+    expect(splitQuotes(await send())!.quotes.map(parseCommentBlock)).toMatchObject([
+      { text: "  const first = 42;", comment: { file: { location: "/work/example.ts:2" } } },
+    ]);
   });
 });

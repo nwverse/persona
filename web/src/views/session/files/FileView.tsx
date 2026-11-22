@@ -401,7 +401,7 @@ export function FileView({
           <Loading label={t("session-files-fileview.reading_size", { size: bytes(f.size) })} />
         </div>
       ) : (
-        <HtmlPreview html={doc.text} title={f.name} mid={mid} path={f.path} comment={comment} />
+        <HtmlPreview html={doc.text} title={f.name} mid={mid} path={f.path} />
       );
   } else if (kind === "notebook" && mode === "rendered" && !notebook?.error && !(doc.next > 0 && !wantAll)) {
     body = notebook?.nb ? (
