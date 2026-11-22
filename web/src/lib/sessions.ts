@@ -10,6 +10,7 @@ import { heldLaunchRows, observeLaunchRows } from "./launch-handoff";
 import { cardSessionRow, getState, onHubEvent, subscribe, useStore } from "./store";
 import { SESSIONS_LIST_FEATURE } from "./session-list";
 import { runtimeAgents, runtimeSessions, supportsPagedAgents } from "./runtime-list";
+import { heldCounts, heldRows } from "./seen-outbox";
 import type { Interaction, Session } from "./types";
 
 /** #8578: a directory-hidden session's pending cards leave the card lists and counts (Needs you, the sidebar, the Inbox,
@@ -178,6 +179,17 @@ export function useFullAgentSessions(on = true): FullAgentSessions {
 }
 
 function useCompleteAgentSessions(on: boolean): FullAgentSessions {
+  const full = useHubCompleteAgentSessions(on);
+  // the agents seen on this page that the complete list's last read still has Unread: seen in every reader of it (the
+  // row, the quick filters' counts, the groups' unread counts) at once, not when it is read again (lib/seen-outbox.ts)
+  const marks = useStore((s) => s.seen);
+  return useMemo(() => {
+    const sessions = heldRows(full.sessions, marks, Date.now());
+    return sessions === full.sessions ? full : { ...full, sessions };
+  }, [full, marks]);
+}
+
+function useHubCompleteAgentSessions(on: boolean): FullAgentSessions {
   const by = useStore((s) => s.sessions);
   const launches = useStore((s) => s.launches);
   const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
@@ -242,6 +254,8 @@ export function othersWaiting(badge: number, open: Session | undefined, quietCou
 }
 
 const scopedAgentCounts = () => runtimeAgents.getSnapshot().counts;
+const scopedAgentRows = () => runtimeAgents.getSnapshot().rows;
+const listedRows = () => runtimeSessions.getSnapshot().rows;
 
 export function useCounts() {
   const all = useAgentSessions();
@@ -254,7 +268,15 @@ export function useCounts() {
     aggregate: s.sessionCounts,
   }));
   const scoped = useSyncExternalStore(runtimeAgents.subscribe, scopedAgentCounts, scopedAgentCounts);
-  const counts = pagedAgents ? scoped : aggregate;
+  // the rows read with those counts: an agent seen on this page that they still have Unread is not counted so
+  // (lib/seen-outbox.ts heldCounts), however long the list takes to read again
+  const agentRows = useSyncExternalStore(runtimeAgents.subscribe, scopedAgentRows, scopedAgentRows);
+  const rows = useSyncExternalStore(runtimeSessions.subscribe, listedRows, listedRows);
+  const marks = useStore((s) => s.seen);
+  const read = pagedAgents ? scoped : aggregate;
+  // only where a page's counts come with its rows (sessions_page_counts): two reads' rows and counts could disagree
+  const coupled = (pagedAgents ? runtimeAgents : runtimeSessions).usesPageCounts();
+  const counts = useMemo(() => read && coupled ? heldCounts(read, pagedAgents ? agentRows : rows, marks, Date.now()) : read, [read, coupled, pagedAgents, agentRows, rows, marks]);
   return useMemo(() => {
     if (!bounded || !counts) return { ...stateCounts(all, allInteractions, grading), interactions, quietCounted: false };
     const needs = counts.state.needs_you ?? 0;
