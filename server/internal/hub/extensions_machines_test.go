@@ -6,11 +6,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -21,6 +23,7 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/link"
@@ -29,15 +32,60 @@ import (
 
 type memPairTrustStore struct {
 	*pairStore
-	trustMu sync.Mutex
-	pending map[string]db.PendingMachine
+	managerStore
+	trustMu  sync.Mutex
+	pending  map[string]db.PendingMachine
+	settings map[string]json.RawMessage
 }
 
 func newMemPairTrustStore() *memPairTrustStore {
 	return &memPairTrustStore{
 		pairStore: newPairStore(),
 		pending:   map[string]db.PendingMachine{},
+		settings:  map[string]json.RawMessage{},
 	}
+}
+
+func (s *memPairTrustStore) BusIdentities(context.Context) ([]db.BusIdentity, error) {
+	return []db.BusIdentity{
+		{ID: assistantwire.AssistantID, Name: assistantwire.AssistantID, Role: bus.RoleManager},
+		{ID: "m-alpha", Name: "m-alpha", Role: bus.RoleManager},
+		{ID: "m-beta", Name: "m-beta", Role: bus.RoleManager},
+	}, nil
+}
+
+func (s *memPairTrustStore) BusIdentityByID(_ context.Context, id string) (*db.BusIdentity, error) {
+	switch id {
+	case assistantwire.AssistantID, "m-alpha", "m-beta":
+		return &db.BusIdentity{ID: id, Name: id, Role: bus.RoleManager}, nil
+	default:
+		return nil, nil
+	}
+}
+
+func (s *memPairTrustStore) PendingManagerInstalls(context.Context) ([]db.ManagerInstallCode, error) {
+	return nil, nil
+}
+
+func (s *memPairTrustStore) Setting(_ context.Context, key string, out any) (bool, error) {
+	s.trustMu.Lock()
+	defer s.trustMu.Unlock()
+	raw, ok := s.settings[key]
+	if !ok {
+		return false, nil
+	}
+	return true, json.Unmarshal(raw, out)
+}
+
+func (s *memPairTrustStore) PutSetting(_ context.Context, key string, v any) error {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	s.trustMu.Lock()
+	defer s.trustMu.Unlock()
+	s.settings[key] = raw
+	return nil
 }
 
 func (s *memPairTrustStore) PendingMachines(context.Context) ([]db.PendingMachine, error) {
@@ -274,10 +322,18 @@ func TestHubExtensionMachinesManagerBoundaryAndConcurrency(t *testing.T) {
 	store := newMemPairTrustStore()
 	h := newTestHub(t)
 	h.store = store
+	h.bus.idents = store
 	h.cfg.Security.TrustedCIDRs = []string{"127.0.0.0/8", "::1/128"}
 	h.devices.entries = append([]MachineConfig(nil), h.cfg.Machines...)
 	h.devices.started = true
 	h.trust.pending = map[string]time.Time{}
+	rawCfg, err := json.Marshal(h.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(h.cfg.dir, "hub.json"), rawCfg, 0600); err != nil {
+		t.Fatal(err)
+	}
 
 	tlsSrv := httptest.NewTLSServer(h.routes())
 	t.Cleanup(tlsSrv.Close)
@@ -289,35 +345,29 @@ func TestHubExtensionMachinesManagerBoundaryAndConcurrency(t *testing.T) {
 	h.cfg.Public.TLSListen = u.Host
 	h.cfg.PublicURL = tlsSrv.URL
 
-	// Manager A creates a pending machine with explicit ID.
+	// Manager A creates two pending machines: one with explicit ID, one named for slug collision checks.
 	pairA, err := h.hubMachinesPairLink(context.Background(), "m-alpha", "personal-agent-club",
 		json.RawMessage(`{"machine_id":"pac-alpha-1","name":"Alpha Node","os":"linux"}`))
 	if err != nil {
 		t.Fatalf("manager A pair_link: %v", err)
 	}
-	if pairA.MachineID != "pac-alpha-1" {
-		t.Fatalf("unexpected machine_id: %+v", pairA)
+	if pairA.MachineID != "pac-alpha-1" || h.entryOwner("pac-alpha-1") != "m-alpha" {
+		t.Fatalf("unexpected machine_id/owner: %+v owner=%q", pairA, h.entryOwner("pac-alpha-1"))
 	}
-	// Mark manager A as owner in kept map (or move) so entryOwner returns m-alpha.
-	h.devices.mu.Lock()
-	if h.devices.kept == nil {
-		h.devices.kept = map[string]string{}
+	namedA, err := h.hubMachinesPairLink(context.Background(), "m-alpha", "personal-agent-club",
+		json.RawMessage(`{"name":"Alpha Named","os":"linux"}`))
+	if err != nil {
+		t.Fatalf("manager A named pair_link: %v", err)
 	}
-	h.devices.kept["pac-alpha-1"] = "m-alpha"
-	h.devices.mu.Unlock()
-	// Remove from cfg/entries so entryOwner consults kept, simulating a manager-scoped machine.
-	h.mu.Lock()
-	h.cfg.Machines = nil
-	h.mu.Unlock()
-	h.devices.mu.Lock()
-	h.devices.entries = nil
-	h.devices.mu.Unlock()
+	if namedA.MachineID != "alpha-named" || h.entryOwner("alpha-named") != "m-alpha" {
+		t.Fatalf("unexpected named pair_link: %+v owner=%q", namedA, h.entryOwner("alpha-named"))
+	}
 
-	// Manager B must be refused on both re-pairing (add==nil) and reusable (add!=nil) paths.
+	// Manager B must be refused on re-pairing, overwrite-with-add, and same-name slug reuse paths.
 	for _, req := range []string{
 		`{"machine_id":"pac-alpha-1"}`,
 		`{"machine_id":"pac-alpha-1","name":"Hijacked","os":"linux"}`,
-		`{"name":"Alpha Node","os":"linux"}`,
+		`{"name":"Alpha Named","os":"linux"}`,
 	} {
 		_, err := h.hubMachinesPairLink(context.Background(), "m-beta", "other-ext", json.RawMessage(req))
 		var re *rpc.Error
@@ -340,23 +390,29 @@ func TestHubExtensionMachinesManagerBoundaryAndConcurrency(t *testing.T) {
 		t.Fatalf("machines.status by m-alpha: st=%+v err=%v", stA, err)
 	}
 
-	// Concurrent pair_link additions under -race select distinct IDs without racing.
-	const workers = 6
+	// Clear pending quota from the boundary checks so the concurrency burst can exercise up to maxPendingComputers.
+	for _, id := range []string{"pac-alpha-1", "alpha-named"} {
+		_, _ = store.ConfirmMachine(context.Background(), id)
+		h.setPendingLocal(id, time.Time{}, false)
+	}
+
+	// Concurrent pair_link additions with distinct names under -race select distinct IDs without racing.
+	const workers = maxPendingComputers
 	var wg sync.WaitGroup
 	ids := make(chan string, workers)
 	errs := make(chan error, workers)
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
-		go func() {
+		go func(idx int) {
 			defer wg.Done()
-			res, err := h.hubMachinesPairLink(context.Background(), "m-alpha", "personal-agent-club",
-				json.RawMessage(`{"name":"Concurrent Box","os":"linux"}`))
+			req := fmt.Sprintf(`{"name":"Concurrent Box %d","os":"linux"}`, idx)
+			res, err := h.hubMachinesPairLink(context.Background(), "m-alpha", "personal-agent-club", json.RawMessage(req))
 			if err != nil {
 				errs <- err
 				return
 			}
 			ids <- res.MachineID
-		}()
+		}(i)
 	}
 	wg.Wait()
 	close(ids)
@@ -364,7 +420,42 @@ func TestHubExtensionMachinesManagerBoundaryAndConcurrency(t *testing.T) {
 	for err := range errs {
 		t.Fatalf("concurrent pair_link error: %v", err)
 	}
-	if len(ids) != workers {
-		t.Fatalf("got %d results, want %d", len(ids), workers)
+	seenIDs := map[string]bool{}
+	for id := range ids {
+		seenIDs[id] = true
+		_, _ = store.ConfirmMachine(context.Background(), id)
+		h.setPendingLocal(id, time.Time{}, false)
+	}
+	if len(seenIDs) != workers {
+		t.Fatalf("got %d unique IDs, want %d: %v", len(seenIDs), workers, seenIDs)
+	}
+
+	// Concurrent same-name pending requests converge onto a single machine ID instead of creating duplicates.
+	const sameWorkers = 4
+	sameIDs := make(chan string, sameWorkers)
+	sameErrs := make(chan error, sameWorkers)
+	for i := 0; i < sameWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res, err := h.hubMachinesPairLink(context.Background(), "m-alpha", "personal-agent-club",
+				json.RawMessage(`{"name":"Shared Pending Box","os":"linux"}`))
+			if err != nil {
+				sameErrs <- err
+				return
+			}
+			sameIDs <- res.MachineID
+		}()
+	}
+	wg.Wait()
+	close(sameIDs)
+	close(sameErrs)
+	for err := range sameErrs {
+		t.Fatalf("same-name concurrent pair_link error: %v", err)
+	}
+	for id := range sameIDs {
+		if id != "shared-pending-box" {
+			t.Fatalf("same-name concurrent pair_link created unexpected id %q, want shared-pending-box", id)
+		}
 	}
 }

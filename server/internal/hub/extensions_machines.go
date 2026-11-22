@@ -35,6 +35,10 @@ func (h *Hub) hubMachinesPairLink(ctx context.Context, from, extID string, raw j
 	}
 	machineID := strings.TrimSpace(p.MachineID)
 	name := strings.TrimSpace(p.Name)
+	caller := from
+	if caller == "" {
+		caller = devicesOwner
+	}
 	var add *machineAddRequest
 	var existingMachine string
 	if machineID != "" && h.knownEntry(machineID) != nil && name == "" && p.OS == "" && p.Icon == "" {
@@ -53,18 +57,18 @@ func (h *Hub) hubMachinesPairLink(ctx context.Context, from, extID string, raw j
 	}
 	actor := "extension:" + extID
 	h.machineAdd.Lock()
-	if machineID != "" && h.knownEntry(machineID) != nil && from != "" && h.entryOwner(machineID) != from {
+	if machineID != "" && h.knownEntry(machineID) != nil && h.entryOwner(machineID) != caller {
 		h.machineAdd.Unlock()
 		return wire.MachinesPairLinkResult{}, &rpc.Error{Code: codeOtherManager, Message: errOtherManager.Error()}
 	}
-	if machineID == "" && add != nil && name != "" && from != "" {
+	if machineID == "" && add != nil && name != "" {
 		base := machineSlug(name, p.OS)
 		for n := 1; ; n++ {
 			cand := base
 			if n > 1 {
 				cand = base + "-" + strconv.Itoa(n)
 			}
-			if mc := h.knownEntry(cand); mc != nil && mc.Name == name && mc.Kind == kindLink && h.machinePending(cand) && h.neverConnected(cand) && h.entryOwner(cand) != from {
+			if mc := h.knownEntry(cand); mc != nil && mc.Name == name && mc.Kind == kindLink && h.machinePending(cand) && h.neverConnected(cand) && h.entryOwner(cand) != caller {
 				h.machineAdd.Unlock()
 				return wire.MachinesPairLinkResult{}, &rpc.Error{Code: codeOtherManager, Message: errOtherManager.Error()}
 			}
@@ -116,7 +120,11 @@ func (h *Hub) hubMachinesStatus(from string, raw json.RawMessage) (wire.Machines
 	if id == "" {
 		return wire.MachinesStatusResult{}, &rpc.Error{Code: "invalid_params", Message: "machine_id is required"}
 	}
-	if from != "" && h.knownEntry(id) != nil && h.entryOwner(id) != from {
+	caller := from
+	if caller == "" {
+		caller = devicesOwner
+	}
+	if h.knownEntry(id) != nil && h.entryOwner(id) != caller {
 		return wire.MachinesStatusResult{}, &rpc.Error{Code: codeOtherManager, Message: errOtherManager.Error()}
 	}
 	res := wire.MachinesStatusResult{
@@ -134,7 +142,7 @@ func (h *Hub) hubMachinesStatus(from string, raw json.RawMessage) (wire.Machines
 		if m.ID != id {
 			continue
 		}
-		if from != "" && h.entryOwner(m.ID) != from {
+		if h.entryOwner(m.ID) != caller {
 			continue
 		}
 		res.Exists = true
