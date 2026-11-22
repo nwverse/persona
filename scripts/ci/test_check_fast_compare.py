@@ -187,6 +187,8 @@ class RerunLineTests(HelperTestCase):
         go = ["go", "test", "./..."]
         for argv, expected in ((go, go), ([*RUNNER, *go], go), (["python3", "-I", "x/go_test_partitioned.py", *go], go),
                                (["../scripts/test/go_test_partitioned.py", *go], go),
+                               (["env", "GOOS=windows", "GOARCH=amd64", "go", "vet", "./..."], ["go", "vet", "./..."]),
+                               (["env", "GOOS=windows", "python3", "x.py"], None), (["env"], None),
                                (["python3", "scripts/privacy_check.py"], None), (["python3", "-m", "unittest"], None),
                                (["python3", "go_test_partitioned.py"], None), (["npm", "test"], None), ([], None)):
             with self.subTest(argv=argv):
@@ -354,6 +356,62 @@ class CompareTests(HelperTestCase):
         checkout = compare.WorkingTree(self.root)
         command.compare(checkout, runner, compare.Timeouts(300, 120), lambda subject, output: "a log")
         self.assertEqual([(300, "go")], [(timeout, slot) for _, _, timeout, slot in runner.calls])
+
+    def test_a_go_command_env_runs_reruns_whole_with_its_environment(self):
+        # check-fast's Windows vet (#12894): its rerun keeps GOOS, and it reruns at the base in a go slot under the go
+        # timeout. A go test env runs stays whole too, since narrowing it to named tests would drop the environment.
+        vet = ["env", "GOOS=windows", "GOARCH=amd64", "go", "vet", "-ldflags=", "./internal/foo/..."]
+        windows = self.step("FAIL", "server", "vet: x.go:3:2: undefined: syscall.Kill\n", *vet)
+        named = self.step("FAIL", "server", GO_HEAD, "env", "GOOS=windows", "go", "test", "-count=1", "./...")
+        self.assertEqual(["(cd server && env GOOS=windows GOARCH=amd64 go vet -ldflags= ./internal/foo/...)",
+                          "(cd server && env GOOS=windows go test -count=1 ./...)"],
+                         compare.rerun_lines([windows, named], self.root))
+        command = compare.Command("server", vet, "GOOS=windows go vet ./internal/foo/...", root=self.root)
+        runner = FakeRunner(lambda argv, cwd: (1, "vet: x.go:3:2: undefined: syscall.Kill\n"))
+        command.compare(compare.WorkingTree(self.root), runner, compare.Timeouts(300, 120), lambda subject, out: "a log")
+        self.assertEqual([(vet, 300, "go")], [(argv, timeout, slot) for argv, _, timeout, slot in runner.calls])
+
+    def fresh_package_vet(self, *packages):
+        """check-fast's Windows vet of packages, one of which, internal/fresh, this change adds (#12894)."""
+        (self.root / "server/internal/fresh").mkdir()
+        argv = ("env", "GOOS=windows", "GOARCH=amd64", "go", "vet", "-ldflags=", *packages)
+        output = "# " + MODULE + "/internal/fresh\nvet: internal/fresh/stop.go:7:17: undefined: syscall.Kill\n"
+        return argv, self.step("FAIL", "server", output, *argv, description="GOOS=windows go vet")
+
+    def test_a_go_command_of_only_packages_the_base_lacks_is_not_compared(self):
+        # go fails on a pattern whose directory is missing (lstat ...: no such file or directory) before it vets
+        # anything, so that exit code says nothing about main: the package is new, as a named test's can be.
+        _, step = self.fresh_package_vet("./internal/fresh/...")
+        runner = FakeRunner(lambda argv, cwd: (1, "pattern ./internal/fresh/...: lstat ./internal/fresh/: no such "
+                                                  "file or directory\n"), files=("server/internal/assistant/a.go",))
+        counts = self.comparison([step], runner).compare()
+        self.assertIn("UNKNOWN  GOOS=windows go vet: not compared: bbbbbbbbbb (merge base with origin/main) has no "
+                      "server/internal/fresh", self.lines())
+        self.assertEqual((0, 0, 1), (counts["ALREADY"], counts["NEW"], counts["UNKNOWN"]))
+        self.assertEqual([], runner.commands())
+
+    def test_a_go_command_reruns_at_the_base_without_the_packages_it_lacks(self):
+        # Beside a group the base has, the new package is left out there, and the whole command reruns here.
+        argv, step = self.fresh_package_vet("./internal/assistant/...", "./internal/fresh/...")
+        runner = FakeRunner(lambda argv, cwd: (0, "") if "base" in cwd.parts else (1, step.output),
+                            files=("server/internal/assistant/a.go",))
+        counts = self.comparison([step], runner).compare()
+        self.assertIn("NEW      GOOS=windows go vet: passes at bbbbbbbbbb (merge base with origin/main) and fails again "
+                      "when rerun here on its own, so likely caused by this change", self.lines())
+        self.assertEqual(1, counts["NEW"])
+        self.assertEqual([(list(argv[:-1]), "base"), (list(argv), "work")],
+                         [(argv, "base" if "base" in cwd.parts else "work") for argv, cwd, _, _ in runner.calls
+                          if argv[0] == "env"])
+
+    def test_a_go_command_that_fails_at_the_base_without_the_packages_it_lacks_says_so(self):
+        argv, step = self.fresh_package_vet("./internal/assistant/...", "./internal/fresh/...")
+        runner = FakeRunner(lambda argv, cwd: (1, "vet: internal/assistant/a.go:3:2: undefined: syscall.Kill\n"),
+                            files=("server/internal/assistant/a.go",))
+        self.comparison([step], runner).compare()
+        self.assertIn("ALREADY  GOOS=windows go vet: also fails at bbbbbbbbbb (merge base with origin/main) (rerun there "
+                      "without server/internal/fresh, which it does not have); 2 line(s) of its output here are not in "
+                      "the base's, so this change may add to it, the first: # " + MODULE + "/internal/fresh",
+                      self.lines())
 
     def test_a_command_narrows_to_itself_or_nothing(self):
         command = compare.Command(".", ["python3", "x.py"], "python3 x.py", root=self.root)

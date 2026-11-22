@@ -114,6 +114,10 @@ type sessionState struct {
 	// extension's resume of a conversation its computer does not list passes on such a record alone, with no transcript
 	// (resumeOutsideHealth, #10941).
 	EngineRuntime string `json:"engine_runtime,omitempty"`
+	// RoundForkOf names the base background supervisor session when a supervision round's process forked a separate
+	// Claude session id (assistant_round.go). Forked round branches inherit assistant identity and stay hidden from
+	// the ordinary Agents list across node restarts.
+	RoundForkOf string `json:"round_fork_of,omitempty"`
 }
 
 func newState() *stateFile { return &stateFile{Sessions: map[string]sessionState{}} }

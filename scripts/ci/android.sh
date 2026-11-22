@@ -140,10 +140,12 @@ run_check() {
 if [[ $LANE == full || $LANE == lint-build-test-0 ]]; then
   cd "$ROOT"
   run_check 'Refract About Version regeneration' python3 -I scripts/app/refract_about_version.py check --download
+  run_check 'Refract About Build regeneration' python3 -I scripts/app/refract_about_build.py check --download
   cd "$ROOT/scripts/ci"
   run_check 'Android shard coverage tests' python3 -B test_android_shards.py
   cd "$ROOT/scripts/app"
   run_check 'Refract About Version checker tests' python3 -B test_refract_about_version.py
+  run_check 'Refract About Build checker tests' python3 -B test_refract_about_build.py
   run_check 'translation checker tests' python3 -B test_android_i18n_check.py
   run_check 'token checker tests' python3 -B test_android_token_baseline.py
   run_check 'motion checker tests' python3 -B test_android_motion_baseline.py

@@ -200,7 +200,7 @@ func TestRequestPrerequisitesUnconfirmedStartNeverReplays(t *testing.T) {
 	requestTestIdle(t, env.s)
 	loaded, err := env.s.loadPlan(ctx, plan.ID)
 	if err != nil || loaded.Tasks[0].Queue == nil || !loaded.Tasks[0].Queue.Claimed || len(taskStartMachines(env.f)) != 1 {
-		t.Fatalf("unconfirmed launch: loaded=%+v error=%v starts=%v", loaded, err, taskStartMachines(env.f))
+		t.Fatalf("unconfirmed launch: loaded=%+v queue=%+v error=%v starts=%v", loaded, loaded.Tasks[0].Queue, err, taskStartMachines(env.f))
 	}
 	env.s = newServiceOn(t, env.f, database)
 	if err := env.s.recoverTaskStarts(ctx, time.Now().UTC()); err != nil {

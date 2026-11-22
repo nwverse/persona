@@ -134,11 +134,12 @@ class ShellLaneTests(unittest.TestCase):
                           'if [[ "$1 $2 $3" == "target list --installed" ]]; then printf \'aarch64-linux-android\\nx86_64-linux-android\\n\'; fi\n')
         rustup.chmod(0o700)
         (self.root / "scripts/ci/test_android_shards.py").write_text("pass\n")
-        for name in ("test_refract_about_version.py", "test_android_i18n_check.py", "test_android_token_baseline.py",
+        for name in ("test_refract_about_version.py", "test_refract_about_build.py", "test_android_i18n_check.py", "test_android_token_baseline.py",
                      "test_android_motion_baseline.py", "test_android_slot_order.py", "android_i18n_check.py",
                      "android_token_baseline.py", "android_motion_baseline.py", "android_slot_order.py"):
             (self.root / "scripts/app" / name).write_text("pass\n")
         (self.root / "scripts/app/refract_about_version.py").write_text("pass\n")  # pinned About Version regeneration (#9694)
+        (self.root / "scripts/app/refract_about_build.py").write_text("pass\n")  # independent Build probe (#13001)
         (self.root / "scripts/assets").mkdir()
         (self.root / "scripts/assets/gen_tokens.py").write_text("pass\n")  # the generated-tokens check (#4209)
         (self.root / "scripts/assets/gen_icon_meanings.py").write_text("pass\n")  # the icon meanings check (#4209)
@@ -177,6 +178,8 @@ class ShellLaneTests(unittest.TestCase):
                 self.assertNotIn("--profile", arguments)
                 self.assertEqual("translation checker tests" in result.stdout, lane in ("full", "lint-build-test-0"))
                 self.assertEqual("Refract About Version checker tests" in result.stdout,
+                                 lane in ("full", "lint-build-test-0"))
+                self.assertEqual("Refract About Build checker tests" in result.stdout,
                                  lane in ("full", "lint-build-test-0"))
                 # Motion ratchet + its unit tests run in the same lint/build lane as the token checks (#9897).
                 lintish = lane in ("full", "lint-build-test-0")

@@ -98,6 +98,8 @@ nonisolated enum AssistantEntries {
         /// here, not by a card in the chat (#8237). Not open work: its count is its rows. Until #10922 only the unseen
         /// ones were listed, as a group under In Progress that went as soon as one was opened.
         var finished: [Finished] = []
+        /// To-do IDs with no Agent up whose dispatch is still in flight (#7552). Their status and open rank stay notStarted.
+        var starting: Set<String> = []
     }
 
     /// A task's status, failed too when only its plan says the start failed (a hub from before #1077): the web's
@@ -107,6 +109,17 @@ nonisolated enum AssistantEntries {
         guard st == .notStarted, todo.agents.isEmpty, let plan = todo.planID.flatMap({ plans[$0] }),
               let error = plan.tasks.first(where: { $0.todoID == todo.id })?.error, !error.isEmpty else { return st }
         return .failed
+    }
+
+    /// Whether an Agent is being started for a to-do with none up yet (#7552): the web's `startInFlight`.
+    static func startInFlight(_ todo: TodoItem, plans: [String: TaskPlan]) -> Bool {
+        if todo.doneAt != nil || todo.failedToStart { return false }
+        if todo.agents.isEmpty, let plan = todo.planID.flatMap({ plans[$0] }),
+           let error = plan.tasks.first(where: { $0.todoID == todo.id })?.error, !error.isEmpty { return false }
+        if todo.planID != nil { return true }
+        return plans.values.contains { plan in
+            plan.state != .dismissed && plan.tasks.contains { $0.todoID == todo.id && ($0.error ?? "").isEmpty }
+        }
     }
 
     static func todoStatus(_ todo: TodoItem, lookup: TodosLogic.SessionLookup?) -> Status {
@@ -153,8 +166,26 @@ nonisolated enum AssistantEntries {
 
     /// It waits for the user's review while nothing of it runs or asks (the web's `awaitsReview`): rank 2.
     static func rank(_ todo: TodoItem, _ status: Status) -> Double {
+        // TaskState has no interrupted / usage-limit cases: keep the raw status's rest semantics instead of letting
+        // their display-only follow-up mapping reclassify an active error as accepted or awaiting review (#5732).
         let resting = status == .followUp || status == .unread || status == .notStarted
-        return resting && (todo.reviewState == .pendingReview || openAsk(todo) != nil) ? 2 : status.rank
+        if resting || status == .usageLimit, todo.acceptedAtRest(status.taskState) { return 8 }
+        if todo.waitsForOwner { return 0 }
+        if resting, todo.deliveredAwaitingReview(status.taskState) { return 2 }
+        return status.rank
+    }
+
+    /// Whether a Finished row is new. Seen clears that marker without filing a delivery that still awaits review (#5732).
+    static func showsJustFinished(_ todo: TodoItem, _ triage: TodoTriage, now: Date) -> Bool {
+        let completedAt: Date?
+        switch triage.rule {
+        case .closed: completedAt = todo.doneAt
+        case .accepted: completedAt = todo.supervision?.latestReview?.at
+        case .finishedUnseen: completedAt = TodoTriageLogic.finishedAt(todo, triage)
+        default: completedAt = nil
+        }
+        guard let completedAt else { return false }
+        return now.timeIntervalSince(completedAt) < 24 * 3600 && (todo.seenAt.map { $0 < completedAt } ?? true)
     }
 
     /// How long a task's review is its supervisor's alone (docs/assistant/unified-entry.md "Needs you and In progress"):
@@ -170,12 +201,14 @@ nonisolated enum AssistantEntries {
         return now.timeIntervalSince(since) < reviewOverdueAfter
     }
 
-    /// The task waits for the user's decision or review (the web's `taskAwaitsDecision`): an open ask (a decided one only
-    /// while the task is open), or its supervisor's `needs_user` on an open task, or a `pending_review` that is the
-    /// owner's: one waiting an hour or more, or one the hub gives no start for. A younger review is its supervisor's.
+    /// The task waits for the user's decision or review (the web's `taskAwaitsDecision`): an open task's ask, or its
+    /// supervisor's `needs_user` on an open task, or a `pending_review` that is the owner's: one waiting an hour or more,
+    /// or one the hub gives no start for. A younger review is its supervisor's. A finished task never waits, whatever ask
+    /// it still carries: the hub's To-dos triage files it with the finished ones, and its row here has nothing to answer
+    /// (`TodoItem.openAsk` is nil once it is done), so it would keep the badge up for good (#12974).
     static func awaitsDecision(_ todo: TodoItem, now: Date) -> Bool {
-        if let ask = openAsk(todo) { return !(todo.doneAt != nil && ask.outcome == "decide") }
         guard todo.doneAt == nil else { return false }
+        if openAsk(todo) != nil { return true }
         let state = todo.supervision?.state
         return state == "user_check" || state == "needs_user" || (state == "pending_review" && !supervisorReviewing(todo, now: now))
     }
@@ -248,6 +281,7 @@ nonisolated enum AssistantEntries {
         var folded = Set<String>()
         var asking: [(row: Row, first: Date?)] = []
         var deciding: [Ranked] = [], open: [Ranked] = [], shelved: [Ranked] = [], finished: [Finished] = []
+        var starting: Set<String> = []
         // failed starts whose work finished in a related to-do: closed, as the To-dos page has them (#3713)
         let superseded = TodoTriageLogic.supersededFailedStarts(todos)
         for todo in todos {
@@ -259,6 +293,7 @@ nonisolated enum AssistantEntries {
             var mine = todo
             mine.agents = own
             let status = own.count < active.count ? withNeeds(all, own: todoStatus(mine, lookup: lookup)) : all
+            if status == .notStarted && Self.startInFlight(todo, plans: plans) { starting.insert(todo.id) }
             let asks = own.flatMap { asksOf[pair($0.machineID, $0.sessionID)] ?? [] }
             let row = Row.task(id: todo.id, status: status, agents: active.count)
             let listed = { folded.formUnion(active.map { pair($0.machineID, $0.sessionID) }) }
@@ -286,7 +321,7 @@ nonisolated enum AssistantEntries {
             else if triage.section == .justDone || triage.section == .done, status != .failed, !(todo.origin ?? "").isEmpty {
                 let ended = TodoTriageLogic.finishedAt(todo, triage)
                 if ended > .distantPast, now.timeIntervalSince(ended) < TodoTriageLogic.justDone {
-                    finished.append(Finished(row: row, fresh: triage.section == .justDone, at: ended))
+                    finished.append(Finished(row: row, fresh: showsJustFinished(todo, triage, now: now), at: ended))
                 }
             }
         }
@@ -327,7 +362,8 @@ nonisolated enum AssistantEntries {
                       running: stable(open, newest).map(\.row) + running,
                       shelved: stable(shelved, newest).map(\.row),
                       // newest finished first; the same moment by id, so every client lists them in one order (the web's)
-                      finished: finished.sorted { a, b in a.at != b.at ? a.at > b.at : a.row.id < b.row.id })
+                      finished: finished.sorted { a, b in a.at != b.at ? a.at > b.at : a.row.id < b.row.id },
+                      starting: starting)
     }
 }
 
@@ -363,6 +399,8 @@ nonisolated struct ActionTrayContent: Equatable, Sendable {
 
     var needsYou: [Row] = []
     var running: [Row] = []
+    /// The not-started to-dos whose dispatch is still in flight; computed with the split, not again in each row's body.
+    var starting: Set<String> = []
     /// Folded under In Progress, not counted.
     var shelved: [AssistantEntries.Row] = []
     /// The Finished tray's rows, newest finished first (`AssistantEntries.Result.finished`).
@@ -376,6 +414,7 @@ nonisolated struct ActionTrayContent: Equatable, Sendable {
     init(_ entries: AssistantEntries.Result, asks: [Ask] = []) {
         needsYou = asks.map(Row.ask) + entries.needsYou.map(Row.entry)
         running = entries.running.map(Row.entry)
+        starting = entries.starting
         shelved = entries.shelved
         finished = entries.finished
     }
@@ -666,12 +705,12 @@ struct AssistantActionBar: View {
                                         .accessibilityAddTraits(.isHeader)
                                         .accessibilityIdentifier("action-tray.group")
                                 }
-                                ForEach(group.rows) { row($0) }
+                                ForEach(group.rows) { row($0, starting: content.starting) }
                             }
                         } else if tray == .finished {
                             ForEach(content.finished) { finishedRow($0) }
                         } else {
-                            ForEach(rows) { row($0) }
+                            ForEach(rows) { row($0, starting: content.starting) }
                         }
                         if tray == .running, !content.shelved.isEmpty { shelvedLine(content.shelved.count) }
                     }
@@ -706,7 +745,7 @@ struct AssistantActionBar: View {
         .accessibilityIdentifier("action-tray.\(tray.rawValue)")
     }
 
-    @ViewBuilder private func row(_ row: ActionTrayContent.Row) -> some View {
+    @ViewBuilder private func row(_ row: ActionTrayContent.Row, starting: Set<String>) -> some View {
         switch row {
         case .ask(let ask):
             // The card itself is right below the bar: the row closes the tray to show it.
@@ -720,7 +759,7 @@ struct AssistantActionBar: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("action-tray.ask")
         case .entry(let entry):
-            self.entry(entry)
+            self.entry(entry, starting: starting)
         }
     }
 
@@ -783,11 +822,12 @@ struct AssistantActionBar: View {
         .id(id)
     }
 
-    @ViewBuilder private func entry(_ row: AssistantEntries.Row) -> some View {
+    @ViewBuilder private func entry(_ row: AssistantEntries.Row, starting: Set<String>) -> some View {
         switch row {
         case .task(let id, let status, let agents):
             if let todo = store.todos[id] {
                 let state = status.taskState
+                let isStarting = starting.contains(id)
                 let activity = AssistantTrayActivity(sessions: store.sessions(todo))
                 if let ask = todo.openAsk, todo.doneAt == nil {
                     // an owner decision or a to-do to verify: folded to a line, opened it is its Accept row, or the answerable
@@ -806,8 +846,8 @@ struct AssistantActionBar: View {
                             store.detailTask = id
                         } label: {
                             line(title: todo.title,
-                                 detail: activity.isActive && status == .waiting ? StateName.working.text : detail(todo, status: status, agents: agents),
-                                 tint: tint(status), subtitle: subtitle(todo, status: status, lead: lead, activity: activity),
+                                 detail: activity.isActive && status == .waiting ? StateName.working.text : detail(todo, status: status, agents: agents, starting: isStarting),
+                                 tint: tint(status), subtitle: subtitle(todo, status: status, lead: lead, activity: activity, starting: isStarting),
                                  subtitleTint: status == .failed || status == .interrupted ? Theme.danger : nil,
                                  subtitleLines: TurnErrorReason.invalid(lead) ? nil : 1,
                                  trail: .open, activity: activity) {
@@ -823,8 +863,11 @@ struct AssistantActionBar: View {
                                 } else if status == .interrupted {
                                     ThemedIcon(Theme.Icon.infoFilled).font(Theme.Font.labelStrong).foregroundStyle(Theme.danger)
                                         .accessibilityIdentifier("action-tray.interrupted-mark")
-                                } else if status == .notStarted {
+                                } else if status == .notStarted, isStarting {
                                     StartingMark().accessibilityIdentifier("action-tray.starting-mark")
+                                } else if status == .notStarted {
+                                    StatusDot(state: .offline, size: Theme.Size.dotL)
+                                        .accessibilityIdentifier("action-tray.not-started-mark")
                                 } else {
                                     TaskMark(state: state)
                                 }
@@ -899,9 +942,10 @@ struct AssistantActionBar: View {
 
     /// A task row's words: its status, what a waiting task waits for (#3274), the review it waits for when its status
     /// does not say, and how many agents it has when more than one (they are listed in its details, never as rows).
-    private func detail(_ todo: TodoItem, status: AssistantEntries.Status, agents: Int) -> String {
+    private func detail(_ todo: TodoItem, status: AssistantEntries.Status, agents: Int, starting: Bool) -> String {
         let review = todo.reviewState
         let resting = status == .followUp || status == .unread || status == .notStarted
+        let label = status == .notStarted && !starting ? status.taskState.todoLabel : status.taskState.label
         var parts: [String]
         if status == .interrupted, TurnErrorReason.invalid(store.leadSession(todo)) {
             parts = [String(localized: "Invalid conversation")]
@@ -909,8 +953,8 @@ struct AssistantActionBar: View {
         else if status == .interrupted { parts = [String(localized: "Interrupted [Chat Layout]")] }
         else if status == .usageLimit { parts = [String(localized: "Usage Limit")] }
         else if AssistantEntries.saysSupervisorReview(todo, status: status, now: .now) { parts = [ReviewBadge.supervisorReview] }
-        else if resting, review == .pendingReview || review == .needsUser { parts = [todo.reviewBadge?.label ?? status.taskState.label] }
-        else { parts = [status.taskState.label] }
+        else if resting, review == .pendingReview || review == .needsUser { parts = [todo.reviewBadge?.label ?? label] }
+        else { parts = [label] }
         if status == .waiting, let waits = store.waitLine(todo) { parts.append(waits) }
         if agents > 1 { parts.append(String(localized: "\(agents) agents")) }
         return parts.joined(separator: " · ")
@@ -929,7 +973,7 @@ struct AssistantActionBar: View {
 
     /// The row's second line (docs/design/task-cards.md §3.2): why a stopped task stopped and when it goes on, what a
     /// starting one is doing, what a waiting one waits for, else its last words; nil when there is nothing to add.
-    private func subtitle(_ todo: TodoItem, status: AssistantEntries.Status, lead: Session?, activity: AssistantTrayActivity) -> String? {
+    private func subtitle(_ todo: TodoItem, status: AssistantEntries.Status, lead: Session?, activity: AssistantTrayActivity, starting: Bool) -> String? {
         func one(_ text: String?) -> String? {
             let t = Fmt.plain(text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             return t.isEmpty ? nil : t
@@ -942,7 +986,7 @@ struct AssistantActionBar: View {
         case .interrupted:
             return one(TurnErrorReason.of(lead) ?? lead?.turnError)
         case .notStarted:
-            return String(localized: "Starting the agent")
+            return starting ? String(localized: "Starting the agent") : nil
         case .failed:
             // in plain words; the raw error is the task's details' (#8237)
             return store.startFailure(todo).map(StartFailureWords.rowLine)
@@ -1037,7 +1081,7 @@ struct AssistantActionBar: View {
         guard AppModel.shared.hubFeatures.contains(TodoSeen.feature) else { return }
         // the task's own Agents, as the row has them: the bar never reads every session (AllSessionsReadersTests)
         let t = TodoTriageLogic.triage(todo, lookup: TodosLogic.makeSessionLookup(store.sessions(todo)), now: .now)
-        guard t.section == .justDone else { return }
+        guard AssistantEntries.showsJustFinished(todo, t, now: .now) else { return }
         Task { try? await TodoStore.shared.setSeen(id: todo.id, true, after: t.last) }
     }
 
