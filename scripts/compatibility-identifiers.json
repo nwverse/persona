@@ -583,6 +583,14 @@
       "path_tokens": [],
       "external_refs": []
     },
+    "integrations/paseo/lib/mcp.js": {
+      "reason": "Read-only fallback for the legacy MCP server key in an existing generated configuration; the A2A server always uses the Persona name.",
+      "tokens": [
+        "out.jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
     "integrations/paseo/test/bridge.test.js": {
       "reason": "Baseline regression fixture or exact compatibility assertion for a persisted contract.",
       "tokens": [

@@ -17,7 +17,7 @@ import { SESSIONS_LIST_CHANGES_FEATURE, SESSIONS_LIST_FEATURE, type ListCounts }
 import { SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
 import { SESSIONS_SIDE_FOLD_FEATURE, setSideFold } from "./side-fold";
 import { applySessionDelta, SESSIONS_DELTA_FEATURE, sessionRefreshed, sessionSnapshot } from "./sessions-delta";
-import { dueMarks, heldRows, liveMarks, markOver, newMark, nextDue, seenCopy, unansweredMarks, unseen, type SeenMark, type SeenMarks } from "./seen-outbox";
+import { dueMarks, heldRows, liveMarks, newMark, nextDue, seenCopy, settleMarks, unansweredMarks, unseen, type SeenMark, type SeenMarks } from "./seen-outbox";
 import { probeEdge } from "./edge-auth";
 import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, credentialOwner, sessionPath } from "./api";
 import { helloDeviceId } from "./device-id";
@@ -213,26 +213,16 @@ registerLaunchRowObserver((rows) => {
   if (launches !== state.launches) set({ launches });
 });
 
-/** Rows whose seen mark still waits for the hub are shown seen, whichever way they came in (a push, a page of the
- *  list, an HTTP answer); marks the hub's rows show recorded, or no longer about this turn, go (lib/seen-outbox.ts). */
+/** Rows whose seen mark still holds them are shown seen, whichever way they came in (a push, a page of the list, an
+ *  HTTP answer). A mark the hub's rows show recorded settles (it holds only rows read before, for SEEN_SETTLE_MS: the
+ *  sidebar's own list may not have read since); one whose agent moved on (a new turn, work, a question) goes
+ *  (lib/seen-outbox.ts). */
 function holdSeen(next: State, patch: Partial<State>): State {
   if (!Object.keys(next.seen).length || !("sessions" in patch || "sessionSummaries" in patch || "assistant" in patch || "seen" in patch)) return next;
   const now = Date.now();
   let marks = liveMarks(next.seen, now);
-  const over: string[] = [];
-  const settle = (rows: Session[]) => {
-    for (const s of rows) {
-      const id = runtimeIdentity(s);
-      if (marks[id] && markOver(s, marks[id], now)) over.push(id);
-    }
-  };
-  Object.values(next.sessions).forEach(settle);
-  settle(next.sessionSummaries);
-  if (over.length) {
-    const kept: Record<string, SeenMark> = { ...marks };
-    for (const id of over) delete kept[id];
-    marks = kept;
-  }
+  for (const rows of Object.values(next.sessions)) marks = settleMarks(rows, marks, now);
+  marks = settleMarks(next.sessionSummaries, marks, now);
   const sessions: Record<string, Session[]> = {};
   let changed = false;
   for (const [mid, rows] of Object.entries(next.sessions)) {

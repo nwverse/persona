@@ -46,6 +46,29 @@
         }
       }
     },
+    "Card Height [Question Card]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Card Height"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "カードの高さ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "卡片高度"
+          }
+        }
+      }
+    },
     "Check Status" : {
       "localizations": {
         "en": {
@@ -486,6 +509,29 @@
         }
       }
     },
+    "Swipe up or down to make the card taller or shorter. Double-tap for the tallest or the default." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Swipe up or down to make the card taller or shorter. Double-tap for the tallest or the default."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上下にスワイプするとカードを高くしたり低くしたりできます。ダブルタップで最大とデフォルトの高さを切り替えます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上下轻扫可以把卡片调高或调低。轻点两下在最高和默认高度之间切换。"
+          }
+        }
+      }
+    },
     "Switch to Persona Link…" : {
       "localizations": {
         "en": {
@@ -882,6 +928,28 @@
         }
       }
     },
+    "%@ timer [Alarms Page]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ timer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@のタイマー"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@计时器"
+          }
+        }
+      }
+    },
     "agentDirs.action" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1020,6 +1088,336 @@
         }
       }
     },
+    "Alarms [Alarms Page]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alarms"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アラーム"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "闹钟"
+          }
+        }
+      }
+    },
+    "Alarms and timers Persona sets for you show up here. Only Persona's are listed: the ones in the Clock app aren't." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alarms and timers Persona sets for you show up here. Only Persona's are listed: the ones in the Clock app aren't."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona が設定したアラームとタイマーがここに表示されます。表示されるのは Persona のものだけで、時計 App のものは表示されません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 为你设定的闹钟和计时器会显示在这里。这里只显示 Persona 设定的，时钟 App 里的看不到。"
+          }
+        }
+      }
+    },
+    "Allow Alarms" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow Alarms"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アラームを許可"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许使用闹钟"
+          }
+        }
+      }
+    },
+    "Allow Persona to use alarms, and the alarms and timers it sets for you show up here. They ring even in silent mode or Focus." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow Persona to use alarms, and the alarms and timers it sets for you show up here. They ring even in silent mode or Focus."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona にアラームの使用を許可すると、設定したアラームとタイマーがここに表示されます。消音モードや集中モード中でも鳴ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许 Persona 使用闹钟后，它为你设定的闹钟和计时器会显示在这里。即使在静音或专注模式下也会响铃。"
+          }
+        }
+      }
+    },
+    "Couldn't delete “%@”. Try again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't delete “%@”. Try again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”を削除できませんでした。もう一度お試しください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法删除“%@”，请重试。"
+          }
+        }
+      }
+    },
+    "Couldn't pause “%@”. Try again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't pause “%@”. Try again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”を一時停止できませんでした。もう一度お試しください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法暂停“%@”，请重试。"
+          }
+        }
+      }
+    },
+    "Couldn't resume “%@”. Try again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't resume “%@”. Try again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”を再開できませんでした。もう一度お試しください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法继续“%@”，请重试。"
+          }
+        }
+      }
+    },
+    "Counting Down [Alarms Page]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Counting Down"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "カウントダウン中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "倒计时中"
+          }
+        }
+      }
+    },
+    "Delete Alarm" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete Alarm"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アラームを削除"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除闹钟"
+          }
+        }
+      }
+    },
+    "Delete Timer" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete Timer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タイマーを削除"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除计时器"
+          }
+        }
+      }
+    },
+    "No Access to Alarms" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Access to Alarms"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アラームを使用できません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法使用闹钟"
+          }
+        }
+      }
+    },
+    "No Alarms or Timers" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Alarms or Timers"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アラームやタイマーはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有闹钟或计时器"
+          }
+        }
+      }
+    },
+    "Once [Alarms Page]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Once"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1回のみ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "单次"
+          }
+        }
+      }
+    },
+    "Only alarms and timers Persona set are listed here; the ones in the Clock app aren't." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only alarms and timers Persona set are listed here; the ones in the Clock app aren't."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ここには Persona が設定したアラームとタイマーだけが表示されます。時計 App のものは表示されません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这里只列出 Persona 设定的闹钟和计时器，时钟 App 里的看不到。"
+          }
+        }
+      }
+    },
+    "Persona can't show or change its alarms and timers until you allow it to use alarms in Settings." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona can't show or change its alarms and timers until you allow it to use alarms in Settings."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定で Persona にアラームの使用を許可するまで、Persona は設定したアラームとタイマーを表示したり変更したりできません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在“设置”中允许 Persona 使用闹钟后，它才能显示和更改它设定的闹钟和计时器。"
+          }
+        }
+      }
+    },
     "Primary Device" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1039,6 +1437,116 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "主设备"
+          }
+        }
+      }
+    },
+    "Ringing [Alarms Page]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ringing"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "鳴っています"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在响铃"
+          }
+        }
+      }
+    },
+    "Scheduled [Alarms Page]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scheduled"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定済み"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已设定"
+          }
+        }
+      }
+    },
+    "settings.search.alarms" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "alarm timer clock wake up countdown"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アラーム タイマー 時計 目覚まし カウントダウン"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "闹钟 计时器 定时器 时钟 叫醒 倒计时"
+          }
+        }
+      }
+    },
+    "The timer stops and won't ring." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The timer stops and won't ring."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タイマーは止まり、鳴りません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "计时器会停止，不会响铃。"
+          }
+        }
+      }
+    },
+    "This alarm won't ring again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This alarm won't ring again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このアラームは今後鳴りません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个闹钟不会再响。"
           }
         }
       }
@@ -2095,6 +2603,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "识别出的供应商"
+          }
+        }
+      }
+    },
+    "Timers [Alarms Page]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Timers"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タイマー"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "计时器"
           }
         }
       }
@@ -30790,6 +31320,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "助手"
+          }
+        }
+      }
+    },
+    "Assistants on %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Assistants on %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ のアシスタント"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 上的助手"
           }
         }
       }

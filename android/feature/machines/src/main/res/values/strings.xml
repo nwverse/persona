@@ -58,6 +58,8 @@
     <string name="machines_metric_rx">Download</string>
     <string name="machines_metric_tx">Upload</string>
     <string name="machines_metric_load">Load</string>
+    <string name="machines_load_per_core">%1$s per core</string>
+    <string name="machines_load_definition">Load is the number of threads running or waiting for a CPU, averaged over a minute (Linux also counts threads waiting for the disk). It isn\'t a percentage: above 1 per core, some threads are waiting. On a Mac, work at background priority may run on only some of the cores, so threads can wait while CPU stays low.</string>
     <string name="machines_metric_disk">Disk</string>
     <string name="machines_metric_swap">Swap</string>
     <string name="machines_metric_battery">Battery</string>
