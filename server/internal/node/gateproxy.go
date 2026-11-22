@@ -314,10 +314,14 @@ func (p *gateProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g := cfg.Gates[gi]
-	up, err := url.Parse(g.Env[g.BaseEnv])
-	if err != nil || up.Host == "" || up.Scheme != "http" && up.Scheme != "https" {
-		gateRefuse(w, http.StatusServiceUnavailable, command+" 没有可用的接口地址（扩展没给，或者给的不对）。")
-		return
+	var up *url.URL
+	if !g.Relay { // a relayed gate's API is the extension's socket at the manager (gate.relay, #12904)
+		var err error
+		up, err = url.Parse(g.Env[g.BaseEnv])
+		if err != nil || up.Host == "" || up.Scheme != "http" && up.Scheme != "https" {
+			gateRefuse(w, http.StatusServiceUnavailable, command+" 没有可用的接口地址（扩展没给，或者给的不对）。")
+			return
+		}
 	}
 	restPath, err := url.PathUnescape("/" + rest)
 	if err != nil {
@@ -389,6 +393,10 @@ func (p *gateProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			p.reportSent(n, proto.LarkSent{Command: command, Method: c.Method, Path: c.Path, SessionID: session, LetThrough: through}, body, isJSON, sw.reply)
 		}
 	}()
+	if g.Relay {
+		p.relay(r.Context(), n, sw, r, command, restPath, g.Headers)
+		return
+	}
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			out := pr.Out
