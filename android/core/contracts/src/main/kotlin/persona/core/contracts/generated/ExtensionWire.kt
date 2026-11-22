@@ -1167,6 +1167,11 @@ data class ExtensionChannelCapabilities(
     @SerialName("max_text") val maxText: Int? = null,
     val asks: String? = null,
     val push: Boolean? = null,
+    /**
+     * It only replies to incoming messages or triggers and cannot send unsolicited proactive messages without
+     * reply_to; testing checks connectivity instead of calling channel.send.
+     */
+    @SerialName("reply_only") val replyOnly: Boolean? = null,
     val typing: Boolean? = null,
     val progress: Boolean? = null,
     val threads: Boolean? = null,

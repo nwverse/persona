@@ -100,12 +100,13 @@ export function entryStatus(todo: Todo, lookup: SessionLookup, plans: Record<str
   return st === "not_started" && startFailure(todo, plans) ? "failed" : st;
 }
 
-/** The task waits for the user's decision: an open ask (a decided one only while the task is open), or its supervisor's
- *  `needs_user` on an open task. A `pending_review` is its supervisor's to do, however long it has waited (#8678). */
+/** The task waits for the user's decision: an open task's ask, or its supervisor's `needs_user` on an open task. A
+ *  finished task never does, whatever ask it still carries: the hub's To-dos triage files it with the finished ones
+ *  and the tray has nothing to answer, so it would keep the badge up for good (#12974). A `pending_review` is its
+ *  supervisor's to do, however long it has waited (#8678). */
 export function taskAwaitsDecision(todo: Todo): boolean {
-  const ask = openAsk(todo);
-  if (ask) return !(todo.done_at && ask.outcome === "decide");
   if (todo.done_at) return false;
+  if (openAsk(todo)) return true;
   return todo.supervision?.state === "needs_user" || todo.supervision?.state === "user_check";
 }
 

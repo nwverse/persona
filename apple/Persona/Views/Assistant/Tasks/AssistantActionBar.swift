@@ -201,12 +201,14 @@ nonisolated enum AssistantEntries {
         return now.timeIntervalSince(since) < reviewOverdueAfter
     }
 
-    /// The task waits for the user's decision or review (the web's `taskAwaitsDecision`): an open ask (a decided one only
-    /// while the task is open), or its supervisor's `needs_user` on an open task, or a `pending_review` that is the
-    /// owner's: one waiting an hour or more, or one the hub gives no start for. A younger review is its supervisor's.
+    /// The task waits for the user's decision or review (the web's `taskAwaitsDecision`): an open task's ask, or its
+    /// supervisor's `needs_user` on an open task, or a `pending_review` that is the owner's: one waiting an hour or more,
+    /// or one the hub gives no start for. A younger review is its supervisor's. A finished task never waits, whatever ask
+    /// it still carries: the hub's To-dos triage files it with the finished ones, and its row here has nothing to answer
+    /// (`TodoItem.openAsk` is nil once it is done), so it would keep the badge up for good (#12974).
     static func awaitsDecision(_ todo: TodoItem, now: Date) -> Bool {
-        if let ask = openAsk(todo) { return !(todo.doneAt != nil && ask.outcome == "decide") }
         guard todo.doneAt == nil else { return false }
+        if openAsk(todo) != nil { return true }
         let state = todo.supervision?.state
         return state == "user_check" || state == "needs_user" || (state == "pending_review" && !supervisorReviewing(todo, now: now))
     }

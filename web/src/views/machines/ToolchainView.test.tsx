@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
-// Regression test for review #6004294744 (comment 4651711398): the Toolchain view is strictly opt-in on click,
-// never persisted in localStorage, and never auto-restored on subsequent visits to Machines.
+// The Toolchain view follows Machines view persistence: localStorage restores it and selecting it stores the choice.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -68,8 +67,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("Machines toolchain view opt-in persistence", () => {
-  it("never restores toolchain from storage and does not persist it when selected", async () => {
+describe("Machines toolchain view persistence", () => {
+  it("restores toolchain from storage and persists it when selected", async () => {
     const requested: string[] = [];
     vi.stubGlobal(
       "fetch",
@@ -97,14 +96,15 @@ describe("Machines toolchain view opt-in persistence", () => {
       }),
     );
 
-    // Pre-seed storage with "toolchain": Machines must ignore it and default to Cards without probing.
+    // Pre-seed storage with "toolchain": Machines restores it and probes the toolchain.
     storage.set("persona.machines.view", "toolchain");
 
     act(() => root.render(<Machines onToggleSidebar={() => {}} />));
-    await waitUntil(() => requested.some((u) => u.includes("/metrics")));
+    await act(async () => { await vi.dynamicImportSettled(); });
+    await waitUntil(() => requested.some((u) => u.includes("/api/v1/machines/dev-box/toolchain")));
 
-    expect(requested.some((u) => u.includes("/toolchain"))).toBe(false);
-    expect(host.querySelector('[data-testid="toolchain-panel"]')).toBeNull();
+    expect(requested.some((u) => u.includes("/toolchain"))).toBe(true);
+    expect(host.querySelector('[data-testid="toolchain-panel"]')).not.toBeNull();
 
     // Selecting Capabilities persists "capabilities".
     const capBtn = [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Capabilities");
@@ -113,13 +113,15 @@ describe("Machines toolchain view opt-in persistence", () => {
     await waitUntil(() => storage.get("persona.machines.view") === "capabilities");
     expect(storage.get("persona.machines.view")).toBe("capabilities");
 
-    // Clicking Toolchain triggers the probe on demand, but leaves storage at "capabilities".
+    // Clicking Toolchain triggers a fresh probe and persists the selection.
+    requested.length = 0;
     const tcBtn = [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Toolchain");
     expect(tcBtn).toBeTruthy();
     act(() => tcBtn!.click());
+    await act(async () => { await vi.dynamicImportSettled(); });
     await waitUntil(() => requested.some((u) => u.includes("/api/v1/machines/dev-box/toolchain")));
 
     expect(requested.some((u) => u.includes("/api/v1/machines/dev-box/toolchain"))).toBe(true);
-    expect(storage.get("persona.machines.view")).toBe("capabilities");
+    expect(storage.get("persona.machines.view")).toBe("toolchain");
   });
 });

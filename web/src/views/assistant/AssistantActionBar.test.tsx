@@ -708,9 +708,9 @@ describe("Assistant Needs you / In progress trays", () => {
     // an open ask (please verify) during a review is the owner's too
     act(() => putTodo(reviewed("2026-11-10T08:50:00Z", { ask: { outcome: "done", verdict: "Please check that the login page loads.", asked_at: at } })));
     expect(entries().map((button) => button.textContent)).toEqual([`${label.needs}1`, `${label.running}1`]);
-    // accepted: closed, in no entry
+    // accepted: closed, uncounted and under Finished, though its please-verify ask is still on it (#12974)
     act(() => putTodo(reviewed(undefined, { done_at: at, supervision: { supervisor: conversation, state: "accepted", updated_at: at, reviews: [] } })));
-    expect(entries().map((button) => button.textContent)).toEqual([label.needs, `${label.running}1`]);
+    expect(entries().map((button) => button.textContent)).toEqual([label.needs, `${label.running}1`, `${label.finished}1`]);
   });
 
   it("puts a task waiting on the user and a draft in Needs you only, without sending anything", async () => {

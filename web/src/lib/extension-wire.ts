@@ -830,6 +830,11 @@ export interface ChannelCapabilities {
   max_text?: number;
   asks?: string;
   push?: boolean;
+  /**
+   * It only replies to incoming messages or triggers and cannot send unsolicited proactive messages without reply_to;
+   * testing checks connectivity instead of calling channel.send.
+   */
+  reply_only?: boolean;
   typing?: boolean;
   progress?: boolean;
   threads?: boolean;

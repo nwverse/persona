@@ -3551,6 +3551,142 @@
         "running": [],
         "shelved": []
       }
+    },
+    {
+      "name": "finished_tasks_with_leftover_asks_in_neither",
+      "description": "An ask makes a task the owner's only while the task is open, as the hub's To-dos triage has it (#12974). A task its supervisor's accepting review closed, whose \"please verify\" ask was left on it (t-verified), is under Finished like any other task that finished in the last day, not in Needs you; so is a closed task that still carries a decision or a cannot ask (t-old-decision is older than a day, t-cannot was made by hand: in no entry). Only the open task's decision (t-open-decision) waits on the owner. A withdrawn plan (p-withdrawn) is not a row; the open one (p-open) is. Every Needs you row is one the tray lists, so its count is these rows.",
+      "source": [
+        "web/src/lib/assistant-entries.ts taskAwaitsDecision",
+        "android/core/domain/src/main/kotlin/persona/core/domain/tasks/AssistantEntries.kt awaitsDecision",
+        "apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift AssistantEntries.awaitsDecision",
+        "server/internal/assistant/todo_triage.go ruleOwnerDecides",
+        "issue #12974"
+      ],
+      "derived": true,
+      "input": {
+        "conversation": "main-chat",
+        "main": "main-chat",
+        "now": "2026-11-10T12:00:00Z",
+        "todos": [
+          {
+            "id": "t-verified",
+            "title": "Ship the export fix",
+            "origin": "main-chat",
+            "created_at": "2026-11-09T08:00:00Z",
+            "updated_at": "2026-11-10T10:00:03Z",
+            "agents": [],
+            "done_at": "2026-11-10T10:00:00Z",
+            "done_by": "review",
+            "supervision": {
+              "supervisor": "main-chat",
+              "state": "accepted",
+              "reviews": [
+                {
+                  "verdict": "accepted",
+                  "note": "All criteria met",
+                  "at": "2026-11-10T10:00:00Z"
+                }
+              ]
+            },
+            "ask": {
+              "verdict": "Done: deployed, please verify",
+              "asked_at": "2026-11-10T10:00:03Z",
+              "risk": "safe"
+            }
+          },
+          {
+            "id": "t-old-decision",
+            "title": "Pick the backup window",
+            "origin": "main-chat",
+            "created_at": "2026-11-07T08:00:00Z",
+            "updated_at": "2026-11-08T08:00:00Z",
+            "agents": [],
+            "done_at": "2026-11-08T08:00:00Z",
+            "ask": {
+              "verdict": "Night or morning?",
+              "asked_at": "2026-11-07T09:00:00Z",
+              "outcome": "decide"
+            }
+          },
+          {
+            "id": "t-cannot",
+            "title": "Renew the certificate",
+            "created_at": "2026-11-10T07:00:00Z",
+            "updated_at": "2026-11-10T09:00:00Z",
+            "agents": [],
+            "done_at": "2026-11-10T09:00:00Z",
+            "ask": {
+              "verdict": "Cannot do it without the registrar login",
+              "asked_at": "2026-11-10T08:00:00Z",
+              "outcome": "cannot"
+            }
+          },
+          {
+            "id": "t-open-decision",
+            "title": "Choose the alert channel",
+            "origin": "main-chat",
+            "created_at": "2026-11-10T07:00:00Z",
+            "updated_at": "2026-11-10T11:00:00Z",
+            "agents": [],
+            "supervision": {
+              "supervisor": "main-chat",
+              "state": "needs_user"
+            },
+            "ask": {
+              "verdict": "Chat or mail?",
+              "asked_at": "2026-11-10T11:00:00Z",
+              "outcome": "decide"
+            }
+          }
+        ],
+        "sessions": [],
+        "interactions": [],
+        "plans": {
+          "p-open": {
+            "id": "p-open",
+            "conversation": "main-chat",
+            "state": "open",
+            "created_at": "2026-11-10T11:30:00Z",
+            "tasks": [
+              {
+                "title": "Rotate the logs",
+                "prompt": "Rotate them",
+                "cwd": "/home/user/project",
+                "machine": "mac"
+              }
+            ]
+          },
+          "p-withdrawn": {
+            "id": "p-withdrawn",
+            "conversation": "main-chat",
+            "state": "dismissed",
+            "created_at": "2026-11-10T09:30:00Z",
+            "tasks": [
+              {
+                "title": "Compare the two indexers",
+                "prompt": "Compare them",
+                "cwd": "/home/user/project",
+                "machine": "mac"
+              }
+            ]
+          }
+        },
+        "feed": []
+      },
+      "expected": {
+        "needs_you": [
+          "plan:p-open",
+          "task:t-open-decision"
+        ],
+        "running": [],
+        "shelved": [],
+        "finished": [
+          "task:t-verified"
+        ],
+        "finished_new": [
+          "task:t-verified"
+        ]
+      }
     }
   ]
 }
