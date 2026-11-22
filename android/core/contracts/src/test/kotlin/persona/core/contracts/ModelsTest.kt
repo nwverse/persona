@@ -81,6 +81,16 @@ class ModelsTest {
         assertEquals(java.time.Instant.parse("2026-10-31T05:58:40.205893083Z"), parseTime("2026-10-31T13:58:40.205893083+08:00"))
         assertEquals(java.time.Instant.parse("2026-10-31T05:58:40.205893083Z"), parseTime("2026-10-31T05:58:40.205893083Z"))
         assertNull(parseTime("not a time"))
+        // Fast-path edge cases: negative & sub-hour offsets, leap years, non-leap Feb 29, lowercase t/z, fractional lengths, 2000 boundary.
+        assertEquals(java.time.Instant.parse("2024-02-29T23:59:59Z"), parseTime("2024-02-29T23:59:59Z"))
+        assertEquals(java.time.Instant.parse("2000-02-29T00:00:00Z"), parseTime("2000-02-29t00:00:00z"))
+        assertNull(parseTime("2025-02-29T00:00:00Z"))
+        assertNull(parseTime("2100-02-29T00:00:00Z"))
+        assertEquals(java.time.Instant.parse("2026-11-02T14:00:00.123456Z"), parseTime("2026-11-02T08:30:00.123456-05:30"))
+        assertEquals(java.time.Instant.parse("2000-01-01T00:00:00Z"), parseTime("2000-01-01T08:00:00+08:00"))
+        assertNull(parseTime("2000-01-01T07:59:59+08:00"))
+        assertNull(parseTime("2026-13-02T08:30:00Z"))
+        assertNull(parseTime("2026-11-02T08:30:00+25:00"))
     }
 
     @Test fun resolutionOmitsUnsetFields() {
