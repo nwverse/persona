@@ -175,14 +175,10 @@ func TestBotLoadLiveCLIProfileRecovery(t *testing.T) {
 			t.Errorf("recovered CLI invocation used the wrong profile: %q", line)
 		}
 	}
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if c := currentRecoveryCLI(w.h); c != nil && c.Profile() == "other" {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Error("live connector cache did not refresh to the saved profile")
+	eventually(t, time.Second, "live connector cache to refresh to the saved profile", func() bool {
+		c := currentRecoveryCLI(w.h)
+		return c != nil && c.Profile() == "other"
+	})
 }
 
 func TestBotLoadCLIRecoveryPreservesConnectorSettings(t *testing.T) {
