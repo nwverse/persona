@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -754,7 +755,8 @@ func TestCodexRemoteSlowReadsTimeOutAlone(t *testing.T) {
 }
 
 // A refresh whose own time runs out stops asking: threads not read in time keep their last copy and are not backed off
-// as slow, while those whose own read timed out are.
+// as slow, while those whose own read timed out are. Reads go out never read first (readOrder): the nine new threads
+// in list order, then the known one, read when the connection came up.
 func TestCodexRemoteRefreshBudgetStopsReads(t *testing.T) {
 	n := remoteTestNode(t)
 	logs := &syncBuffer{}
@@ -774,23 +776,27 @@ func TestCodexRemoteRefreshBudgetStopsReads(t *testing.T) {
 		f.slowRead[raw] = true
 	}
 	f.mu.Unlock()
+	order := slices.Concat(slow[1:], slow[:1])
 
+	before := f.readCounts()
 	if err := c.refresh(); err != nil {
 		t.Fatal(err)
 	}
+	after := f.readCounts()
 	c.mu.Lock()
 	_, kept := c.threads[remoteRaw]
+	_, knownBackedOff := c.slow[remoteRaw]
 	backedOff := len(c.slow)
-	_, first := c.slow[remoteRaw]
+	_, first := c.slow[order[0]]
 	c.mu.Unlock()
-	if !kept {
-		t.Fatal("a known thread was dropped")
+	if !kept || knownBackedOff {
+		t.Fatalf("known thread not read in time: kept %v, backed off %v", kept, knownBackedOff)
 	}
 	if backedOff != codexReadWorkers || !first {
 		t.Fatalf("%d threads backed off (first %v), want the %d whose own read timed out", backedOff, first, codexReadWorkers)
 	}
-	for _, raw := range slow[2*codexReadWorkers:] {
-		if got := f.readCount(raw); got != 0 {
+	for _, raw := range order[2*codexReadWorkers:] {
+		if got := after[raw] - before[raw]; got != 0 {
 			t.Fatalf("%s asked %d times after the refresh ran out of time", raw, got)
 		}
 	}
