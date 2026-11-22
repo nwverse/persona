@@ -58,7 +58,7 @@ func attendeeVerdict(sess proto.Session, f attendeeFacts) string {
 	}
 	if sess.Assistant {
 		switch {
-		case spaceOf(sess) == SpaceHealth, slices.Contains(attendeeNeverOrigins, sess.Origin), sess.OpenedBy != "", f.guest:
+		case spaceOf(sess) != "", slices.Contains(attendeeNeverOrigins, sess.Origin), sess.OpenedBy != "", f.guest:
 			return attendeeNotAllowed
 		case f.unknown:
 			return attendeeUnavailable

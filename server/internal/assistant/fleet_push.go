@@ -342,13 +342,14 @@ func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings)
 		return
 	}
 	place := s.pushPlace(machine, sess)
-	head, text := doneAlert(s.lang(context.Background()), sess)
+	redact := s.trackPolicy(context.Background(), spaceOf(sess)).Redact
+	head, text := doneAlertIn(s.lang(context.Background()), sess, redact)
 	if report && strings.HasPrefix(head, "⚠️") && s.briefOf(id) != nil {
 		return // the scheduled-run watcher sends the one fixed-facts fallback, not this model error
 	}
 	// A routine with facts says the counts it worked out (briefing.go) when it ended normally and asks nothing: a question
-	// is what the owner acts on, and a health conversation says only that there is news.
-	if !strings.HasPrefix(head, "⚠️") && !strings.HasPrefix(head, "⏳") && !sess.AwaitsReply && spaceOf(sess) != SpaceHealth {
+	// is what the owner acts on, and a conversation of a space that redacts says only that there is news.
+	if !strings.HasPrefix(head, "⚠️") && !strings.HasPrefix(head, "⏳") && !sess.AwaitsReply && !redact {
 		if counts := s.briefPush(id, s.lang(context.Background()), report); counts != "" {
 			text = counts
 		}
@@ -452,9 +453,15 @@ func pushTitle(sess proto.Session) string {
 	return title
 }
 
-// doneAlert is the title and body of the push for sess's finished turn, in l.
+// doneAlert is the title and body of the push for sess's finished turn, in l, a conversation of any space redacted
+// (fail closed: no registry here).
 func doneAlert(l i18n.Lang, sess proto.Session) (head, text string) {
-	if spaceOf(sess) == SpaceHealth { // the lock screen hears there is news, not what it is, nor the conversation's title
+	return doneAlertIn(l, sess, spaceOf(sess) != "")
+}
+
+// doneAlertIn is doneAlert with whether sess's space redacts (redact) decided by the caller.
+func doneAlertIn(l i18n.Lang, sess proto.Session, redact bool) (head, text string) {
+	if redact { // the lock screen hears there is news, not what it is, nor the conversation's title
 		return i18n.T(l, "push.health_title"), i18n.T(l, "push.health_body")
 	}
 	title := pushTitle(sess)

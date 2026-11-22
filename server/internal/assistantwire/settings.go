@@ -67,7 +67,9 @@ const CodeDeliveryUnknown = "delivery_unknown"
 // (docs/protocol/protocol.md "hub ↔ node"), passed through by the hub's device.call like the others.
 const (
 	DeviceAssistantDirectory = "assistant.directory" // {path} -> {cwd}; validates an existing directory without writes
-	// DeviceAssistantPrepare: {dir, claude_md, work_guide_md?, connectors, clis, plugin_skills} → {cwd, plugin_skills_need}.
+	// DeviceAssistantPrepare: {dir, claude_md, work_guide_md?, connectors, clis, plugin_skills, deny_dirs?} → {cwd,
+	// plugin_skills_need}. deny_dirs: [{dir, track}], the track directories the assistant's other conversations' Read
+	// and Edit are denied (nodeproto.DenyDirs).
 	DeviceAssistantPrepare   = "assistant.prepare"
 	DeviceAssistantExecution = "assistant.execution" // {session_id} → proto.AssistantExecution
 	// DeviceAssistantGuestPrepare: {dir, claude_md} → {cwd}: a guest conversation's directory (assistant/guest.go), only

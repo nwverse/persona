@@ -8,6 +8,19 @@ import (
 	rq "github.com/nwverse/persona/server/internal/resourcequeue"
 )
 
+func init() {
+	nodeRPC("resource.queue", (*Node).resourceQueue)
+	nodeRPC("resource.result", (*Node).resourceResult)
+}
+
+func (n *Node) resourceQueue(ctx context.Context, raw json.RawMessage) (any, error) {
+	return n.resourceRead(ctx, "resource.queue", raw)
+}
+
+func (n *Node) resourceResult(ctx context.Context, raw json.RawMessage) (any, error) {
+	return n.resourceRead(ctx, "resource.result", raw)
+}
+
 func (n *Node) resourceRead(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 	var in struct {
 		Mirror  rq.Mirror `json:"mirror"`
