@@ -1,5 +1,10 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## Detached approvals and hub-owned device methods (#12918)
+
+- When a prepared or detachable `PreToolUse` approval releases its hook with `approval.WaitingText` or `approval.ClarifyingText`, Claude Code writes that message into the transcript as an ordinary `tool_result` carrying the original `tool_use_id`. Transcript reconciliation for terminal-answered permissions (`syncPlanInteractions`) must skip `p.prepared != nil` and non-final approval tool results, or the retained 24-hour card is dismissed as `answered_by=terminal` a second later.
+- Methods in `assistantwire.HubDeviceMethods` (`interactions.list`, `sessions.list`, `session.get`) never exist on nodes. Answer them in both `localFleetDeviceCall` and `hub.deviceCallFrom` for concrete machine IDs as well as `DeviceAll`, and never mask a missing manager/hub branch by injecting `f.nodes[DeviceInteractionsList]` in tests.
+
 ## A one-start speed must not become a resume default (#11141)
 
 - Codex's per-start `service_tier` belongs only in the initial argv; validate it against the selected model's catalog rather than trusting Codex to refuse an unadvertised tier.
