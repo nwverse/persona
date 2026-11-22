@@ -256,6 +256,14 @@ func TestInboxStartUsesOnlyItsOwnPermissionOverride(t *testing.T) {
 		t.Fatalf("configured Inbox start params=%v session mode=%q", inboxStart, sess.PermissionMode)
 	}
 
+	// A legacy record can contain a mode this build does not know. The manager must normalize it before assistant.send;
+	// otherwise the node's generic mode validation rejects it before the Inbox-specific default fallback can run.
+	setModel(t, h.Service, purposeAgent, ModelBinding{Provider: "launcher.claude", PermissionMode: "future-mode"})
+	inboxStart, sess = start(StartParams{Text: "Investigate with an unknown saved mode", Purpose: purposeAgent, Origin: OriginInbox})
+	if inboxStart["permission_mode"] != proto.ModeDefault || sess.PermissionMode != proto.ModeDefault {
+		t.Fatalf("unknown saved mode start params=%v session mode=%q, want default", inboxStart, sess.PermissionMode)
+	}
+
 	// Clearing the override restores default rather than inheriting Agents' bypass.
 	setModel(t, h.Service, purposeAgent, ModelBinding{Provider: "launcher.claude"})
 	inboxStart, sess = start(StartParams{Text: "Investigate after reset", Purpose: purposeAgent, Origin: OriginInbox})

@@ -461,15 +461,17 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	return sess, nil
 }
 
-// inboxPermissionMode reads only the AI twin's own record. Plan and modes the resolved launcher cannot run return to
-// default: Plan rejects the Persona MCP calls that investigation and inbox_suggest require before their allowlist runs.
+// inboxPermissionMode reads only the AI twin's own record. Plan, unknown values and modes the resolved launcher cannot
+// run return to default: Plan rejects the Persona MCP calls that investigation and inbox_suggest require before their
+// allowlist runs, and an unknown value must be normalized before the node's generic mode validation.
 func (s *Service) inboxPermissionMode(ctx context.Context, machine, used string) (string, error) {
 	record, err := s.modelRecord(ctx, purposeAgent)
 	if err != nil {
 		return "", i18n.Err("assistant-models.err_read_config", i18n.Args{"error": err.Error()})
 	}
 	mode := cmp.Or(record.Binding.PermissionMode, proto.ModeDefault)
-	if mode == proto.ModePlan || !s.startPermissionModeSupported(ctx, machine, used, mode) {
+	if mode == proto.ModePlan || !slices.Contains(proto.PermissionModes, mode) ||
+		!s.startPermissionModeSupported(ctx, machine, used, mode) {
 		mode = proto.ModeDefault
 	}
 	return mode, nil
