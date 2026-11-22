@@ -36,6 +36,16 @@ func TestConversationSpaces(t *testing.T) {
 	if got, err := d.ConversationSpaces(ctx, []string{"plain"}); err != nil || !maps.Equal(got, map[string]string{"plain": ""}) {
 		t.Fatalf("plain = %v, %v", got, err)
 	}
+	// Any space other than the assistant's own stays once noted, and one noted in the assistant's own moves to it; in
+	// one call the first such space named wins (the manager puts the strictest first).
+	note(ConversationSpace{"server", "spaced", ""}, ConversationSpace{"server", "two", "qa-private"}, ConversationSpace{"server", "two", "qa-open"},
+		ConversationSpace{"server", "two", ""})
+	note(ConversationSpace{"server", "spaced", "qa-open"})
+	note(ConversationSpace{"server", "spaced", "health"}, ConversationSpace{"server", "two", ""})
+	if got, err := d.ConversationSpaces(ctx, []string{"spaced", "two"}); err != nil ||
+		!maps.Equal(got, map[string]string{"spaced": "qa-open", "two": "qa-private"}) {
+		t.Fatalf("other spaces = %v, %v", got, err)
+	}
 	if got, err := d.ConversationSpaces(ctx, nil); err != nil || len(got) != 0 {
 		t.Fatalf("none asked = %v, %v", got, err)
 	}
@@ -66,4 +76,22 @@ func TestConversationSpaces(t *testing.T) {
 			t.Errorf("%s: batch %s, one by one %s (%v, %v)", id, raw, one, found, err)
 		}
 	}
+}
+
+// The registry (#13104): the migration registers the health space, built-in, with the health template.
+func TestSpacesRegistersHealth(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	list, err := d.Spaces(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range list {
+		if s.Slug == "health" {
+			if !s.Builtin || s.Template != "health" || s.ArchivedAt != nil {
+				t.Fatalf("health = %+v", s)
+			}
+			return
+		}
+	}
+	t.Fatalf("no health row in %+v", list)
 }

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/compat"
@@ -153,40 +154,80 @@ func IsAssistantDirOf(path, id string) bool {
 	return isStateDir(path, AssistantDirName(id)) || isStateDir(path, HealthDirName(id))
 }
 
-// SpaceOf is the space of an assistant directory: SpaceHealth for a health space's, "" for the assistant's own.
-func SpaceOf(path string) string {
+// SpacesDirName is the name in the state directory of manager id's spaces directory, where its spaces other than the
+// health space keep their directories (spaces/<slug>, docs/assistant/health.md): "spaces", or "spaces-<id>".
+func SpacesDirName(id string) string { return managerDirName("spaces", id) }
+
+// reservedSpaceSlugs name what a space must not be mistaken for: the main space, the built-in health space (registered
+// by the manager, never created), the assistant's directory, a guest, the spaces directory itself.
+var reservedSpaceSlugs = []string{"main", SpaceHealth, "assistant", "guest", "spaces"}
+
+// ValidSpaceSlug: slug can name a new space: a lowercase letter, then 1 to 31 lowercase letters, digits or dashes,
+// and none of the reserved names.
+func ValidSpaceSlug(slug string) bool {
+	if slices.Contains(reservedSpaceSlugs, slug) || len(slug) < 2 || len(slug) > 32 || slug[0] < 'a' || slug[0] > 'z' {
+		return false
+	}
+	for _, r := range slug[1:] {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+// spaceDirSlug is the space whose directory path is exactly, of any manager: SpaceHealth for a health space's
+// (health, health-<id>), the slug for one in a spaces directory (spaces/<slug>, spaces-<id>/<slug>), "" for any other.
+func spaceDirSlug(path string) string {
 	if isManagerStateDir(path, SpaceHealth) {
 		return SpaceHealth
+	}
+	p := filepath.Clean(NodePath(path))
+	slug, parent := filepath.Base(p), filepath.Dir(p)
+	if ValidSpaceSlug(slug) && isManagerStateDir(parent, "spaces") {
+		return slug
 	}
 	return ""
 }
 
-// InHealthSpace: path is a health space's directory, of any manager, or a directory inside one. A conversation's
-// directory is where it started; a hook's or a card's is where the model's last `cd` left its shell (#2368), which
-// may be a subfolder of it (health/reports). This is for hiding and confirming only, where counting a subfolder as
-// the space can only hide or ask more: it never decides what a conversation is (SpaceOf and IsAssistantDirOf stay
-// exact). A path part named health elsewhere (assistant/.claude/skills/health, /tmp/health) is not one.
-func InHealthSpace(path string) bool {
+// SpaceOf is the space of an assistant directory: its slug for a space's (SpaceHealth for a health space's), "" for
+// the assistant's own and any other.
+func SpaceOf(path string) string { return spaceDirSlug(path) }
+
+// SpaceAt is the space whose directory path is, of any manager, or is inside: "" for none. A conversation's directory
+// is where it started; a hook's or a card's is where the model's last `cd` left its shell (#2368), which may be a
+// subfolder of it (health/reports). This is for hiding and confirming only, where counting a subfolder as the space
+// can only hide or ask more: it never decides what a conversation is (SpaceOf and IsAssistantDirOf stay exact). A path
+// part named health elsewhere (assistant/.claude/skills/health, /tmp/health) is not one.
+func SpaceAt(path string) string {
 	if path == "" {
-		return false
+		return ""
 	}
 	for p := filepath.Clean(NodePath(path)); ; {
-		if isManagerStateDir(p, SpaceHealth) {
-			return true
+		if slug := spaceDirSlug(p); slug != "" {
+			return slug
 		}
 		parent := filepath.Dir(p)
 		if parent == p {
-			return false
+			return ""
 		}
 		p = parent
 	}
 }
 
+// InSpace: path is a space's directory, of any manager, or a directory inside one (SpaceAt). A process that cannot
+// read the manager's registry (the hub, a node) treats every such space as private.
+func InSpace(path string) bool { return SpaceAt(path) != "" }
+
+// InHealthSpace: path is a health space's directory, of any manager, or a directory inside one (SpaceAt). Hiding and
+// confirming go by InSpace or the space's policy; this tells the health space's own features (its reports) apart.
+func InHealthSpace(path string) bool { return SpaceAt(path) == SpaceHealth }
+
 // CardCwd is the directory a card (an interaction) of a conversation is placed in: the conversation's own directory
 // home, where it started, rather than where the hook ran (here, after the model's `cd`s). A hook directory inside a
-// health space a home outside it does not have wins, so a mix-up can only hide more. "" home: here.
+// space a home outside it does not have wins, so a mix-up can only hide more. "" home: here.
 func CardCwd(home, here string) string {
-	if home == "" || InHealthSpace(here) && !InHealthSpace(home) {
+	if home == "" || InSpace(here) && !InSpace(home) {
 		return here
 	}
 	return home
