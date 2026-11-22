@@ -212,7 +212,9 @@ private fun PersonaRootContent(
                             persona.core.designsystem.LocalViewBlocks provides persona.feature.settings.PersonaViewBlocks.blocks,
                         ) {
                             SavedPromptsHost(displayed.savedPromptsConnection) {
-                                PersonaShell(displayed, openNavigation, services.copy(connection = displayed.connection, sessions = displayed.sessions, demo = displayed.demo != null), remember(shell) { AppShellHost(shell) })
+                                StarredMessagesHost(displayed.savedPromptsConnection) {
+                                    PersonaShell(displayed, openNavigation, services.copy(connection = displayed.connection, sessions = displayed.sessions, demo = displayed.demo != null), remember(shell) { AppShellHost(shell) })
+                                }
                             }
                         }
                     }
@@ -375,8 +377,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     // With several hub groups paired the Persona menu's heading ends with the selected group's name, as on iOS.
     val hubGroups by session.groups.groups.collectAsStateWithLifecycle()
     val preferences by session.preferences.snapshots.collectAsStateWithLifecycle(AgentsPreferencesSnapshot())
-    val todos by (session.tasks?.todos ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())).collectAsStateWithLifecycle()
-    val todosSupported by (session.tasks?.todosSupported ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsStateWithLifecycle()
+    val todos by (session.tasks?.todos ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyList()) }).collectAsStateWithLifecycle()
+    val todosSupported by (session.tasks?.todosSupported ?: remember { kotlinx.coroutines.flow.MutableStateFlow(false) }).collectAsStateWithLifecycle()
     // Every page shows the current assistant (docs/assistant/managers.md "Clients"): the counts beside them are its too.
     val currentAssistant = persona.core.designsystem.currentAssistant()
     val counts = remember(currentAssistant, sessions, preferences.mutes) { ShellCounts(currentAssistant, sessions, preferences.mutes) }
@@ -718,6 +720,17 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         val demoBadge = if (session.demo != null) stringResource(R.string.app_demo_badge) else null
         val items = navigationItems(badges)
         val extensionPages = slotsState?.navPages.orEmpty()
+        val starredState = persona.feature.chat.LocalStarredMessagesStore.current?.state?.collectAsStateWithLifecycle()?.value
+        val starredPages = starredState?.count?.let { count ->
+            listOf(
+                NavItem(
+                    "starred",
+                    stringResource(persona.feature.assistant.R.string.assistant_starred_title),
+                    PersonaIcons.pluginStar,
+                    badge = count,
+                ),
+            )
+        }.orEmpty()
         val messagePages = if (showLarkMessages) listOf(
             NavItem(
                 "messages",
@@ -725,7 +738,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                 PersonaIcons.messagesApp,
             ),
         ) else emptyList()
-        val sidebarPages = messagePages + listOfNotNull(
+        val sidebarPages = starredPages + messagePages + listOfNotNull(
             NavItem("machines", stringResource(R.string.app_machines), PhIcons.Desktop).takeIf { !merged || session.metrics != null },
         ) +
             extensionPages.map { page ->
@@ -910,6 +923,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                         pages = sidebarPages,
                         onPage = { key ->
                             when {
+                                key == "starred" -> sidebarDestination(persona.core.navigation.StarredMessagesRoute)
                                 key == "messages" && showLarkMessages -> sidebarDestination(LarkMessagesRoute)
                                 key == "machines" -> sidebarDestination(MachinesRoute)
                                 else -> extensionPages.firstOrNull { extensionRailKey(it.extension, it.id) == key }?.let { page ->
@@ -936,7 +950,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                                     settingsSheetStack.add(SettingsRoute)
                                     settingsSheetStack.add(SettingsPageRoute(SettingsPage.Managers))
                                     settingsOpened = true
-                                }, headModifier = head, trailing = trailing, fallback = fallback)
+                                }, headModifier = head, hubs = session.groups.takeUnless { services.demo },
+                                trailing = trailing, fallback = fallback)
                         },
                         // Regular window: Search opens over the whole window as the open iPhone Duo (#9171).
                         fullWindowSearch = regular || merged,

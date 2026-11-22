@@ -203,7 +203,7 @@ class InboxHandOffRepositoryTest {
             // Join the repository owner's real IO work too; the test scheduler alone does not drain Dispatchers.IO.
             backgroundScope.coroutineContext[Job]!!.cancelAndJoin()
             AssistantManagerChoice.reset()
-            runCatching { directory.deleteRecursively() }
+            val _ = runCatching { directory.deleteRecursively() }
         }
     }
 
@@ -239,7 +239,7 @@ class InboxHandOffRepositoryTest {
         } finally {
             advanceUntilIdle()
             backgroundScope.coroutineContext[Job]!!.cancelAndJoin()
-            runCatching { directory.deleteRecursively() }
+            val _ = runCatching { directory.deleteRecursively() }
         }
     }
 

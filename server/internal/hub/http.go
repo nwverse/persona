@@ -618,6 +618,9 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 		return
 	}
 	res.Items = cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), h.requestWants(r, featureMarkdownCloseout), localizedItems(h.requestLang(r), h.withInjected(res.Items)))
+	// Allow binding a pending live Hub TTFT on latest-page / incremental reads while keeping historical pages read-only.
+	allowBind := atoi(q.Get("before_seq")) == 0 && atoi(q.Get("through_seq")) == 0
+	h.ttft.annotate(m.cfg.ID, r.PathValue("sid"), res.Items, allowBind)
 	if q.Get("lazy_images") == "1" {
 		res.Items = proto.WithoutImageData(res.Items)
 	}
@@ -866,7 +869,7 @@ type sessionStartRequest struct {
 
 func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	var p sessionStartRequest
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, proto.MessageBodyLimit)) // a first message with its pictures
 	if err == nil {
 		err = json.Unmarshal(body, &p)
 	}
@@ -885,6 +888,9 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	if p.WorkSession && (p.Launcher == "" || p.AgentType == "" || strings.TrimSpace(p.Cwd) == "" ||
 		p.ResumeSessionID != "" || p.TodoID != "" || p.WorkspaceID != "" || p.Host != "") {
 		writeErrCode(w, http.StatusBadRequest, "work_target_required", errors.New("Choose a computer, project folder, harness and launcher for the new session."))
+		return
+	}
+	if apierr.ImagesOverLimit(w, proto.HubImageLimits.For(p.AgentType), len(p.Images)) {
 		return
 	}
 	if !handoff {

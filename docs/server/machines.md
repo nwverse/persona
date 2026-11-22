@@ -504,6 +504,37 @@ automatically, while a new explicit confirmation may follow the hub's unchanged 
 advanced-detail card; its expected-disconnect guard also suppresses the ordinary offline explanation and Reconnect while the switch
 runs (#10671).
 
+## Opt-in machine-ops skill and read-only ops CLI / MCP (#13053)
+
+**Audience:** power users and coding Agents troubleshooting a machine's local health. Everyday Assistant conversations remain untouched unless the user explicitly opts in: neither the default Assistant system prompt nor the default `personad mcp` tool list changes (`TestPromptSizeRatchet` and `TestGoldenMCPTools` stay unchanged).
+
+| Part | Code |
+| --- | --- |
+| Read-only local facade over the five diagnostic domains | `server/internal/node/machine_ops.go` |
+| Read-only ops CLI and on-demand stdio MCP server (`personad ops` / `persona-node ops`) | `server/internal/machineops/` (`ops.go`, `cli.go`, `mcp.go`) |
+| Opt-in built-in skill (`persona-machine-ops`) and managed installer | `server/internal/assistantskills/builtin/persona-machine-ops/` (`SKILL.md`, `ops.sh`, `references/*.md`), `server/internal/assistantskills/embed.go` |
+
+### Read-only domains covered (#12349–#12353)
+
+Both `personad ops <subcommand>` (also available on `persona-node ops`) and the on-demand stdio MCP server `personad ops mcp` expose strictly the same eight read-only operations:
+
+| Domain | CLI subcommand | MCP tool (`personad ops mcp`) | Underlying collector |
+| --- | --- | --- | --- |
+| Storage mounts (#12349) | `ops storage` | `machine_ops_storage` | `server/internal/node/machine_storage.go` (`statfs` only) |
+| Storage hotspots (#12349) | `ops hotspots [--timeout-ms N] [--max-depth N]` | `machine_ops_storage_hotspots` | `server/internal/node/machine_storage.go` (allowlisted categories, bounded walk) |
+| Toolchain profile (#12350) | `ops toolchain [--refresh]` | `machine_ops_toolchain` | `server/internal/node/machine_toolchain.go` (redacted env, 60 s cache) |
+| Network and proxy (#12351) | `ops network` | `machine_ops_network` | `server/internal/node/machine_network.go` (fixed targets, redacted proxy credentials) |
+| Listening ports (#12352) | `ops ports [--protocol tcp\|udp]` | `machine_ops_ports` | `server/internal/node/machine_procs.go` (redacted command lines) |
+| Running processes (#12352) | `ops processes [--sort cpu\|memory\|uptime] [--query TEXT] [--orphan-only] [--limit N]` | `machine_ops_processes` | `server/internal/node/machine_procs.go` (orphan heuristics, protection flags) |
+| Services and containers (#12353) | `ops services` | `machine_ops_services` | `server/internal/node/machine_services.go` (user systemd/launchd + Docker) |
+| Bounded service logs (#12353) | `ops service-logs --kind systemd\|launchd\|docker --id <id> [--lines N]` | `machine_ops_service_logs` | `server/internal/node/machine_services.go` (validated ID, `[1, 500]` lines, 64 KiB cap) |
+
+### Opt-in and safety boundaries
+
+- **Opt-in skill installation:** `persona-machine-ops` is off by default (`Selection{MachineOps: false}`, omitted from `ForAgents`). Install or inspect it explicitly with `personad ops skill install [--dir <skills-dir>]`, `personad ops skill status`, and `personad ops skill uninstall`. By default it installs into `~/.persona/skills/persona-machine-ops` (visible in Settings › Skills) and tracks a managed digest so user-authored or locally edited skills are never overwritten or removed.
+- **Zero default prompt overhead:** `personad ops mcp` is a standalone stdio MCP server (`serverInfo.name = "persona-machine-ops"`) started only on demand by sessions that explicitly attach it. Default `personad mcp` and `CLAUDE.md` / `AGENTS.md` add zero tools and zero prompt bytes.
+- **Read-only boundary:** Mutating machine operations (`machine.storage.cleanup`, `machine.process.kill`, `machine.service_action`) and human-only Web UI file management (`#12354` / `#12403`) are never exposed on `node.MachineOps`, `personad ops`, or `personad ops mcp`.
+
 ## API
 
 See `docs/protocol/protocol.md`: `GET /api/v1/metrics` (Machines), `GET /api/v1/machines/{id}/metrics?range=1h|6h|24h` (detail), `GET /api/v1/machines/{id}/usage?range=1h|24h|7d` (token usage), `GET /api/v1/usage/days` and `GET /api/v1/usage/hours` (token usage history),

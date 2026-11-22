@@ -141,10 +141,9 @@ of entry goes through the same design. The central lists keep the entries they h
   - A domain inside package `assistant` calls a package-level function from an `init()` in its own file:
     `registerRoutes(name, (*Service).xRoutes)`, `registerTools(after, …)` or `registerLoop(name, (*Service).xLoop)`.
     `New` adds them to the same registry before the modules register.
-- **One of each**: there is one duplicate check, a panic in `New`, which every test that builds a `Service` runs. Tool
-  placement is computed once, at the end of `New`. There is one route table and one list of loops. Route order means
-  nothing (`TestRoutesAreTheWireOnes` sorts, and `http.ServeMux` ignores it). The tools keep the order
-  `server/internal/hub/testdata/prompts/mcp_tools/assistant.index.golden` pins.
+- **One of each**: there is one route table and one list of loops, and tool placement is computed once, at the end of
+  `New`. Route order means nothing (`TestRoutesAreTheWireOnes` sorts, and `http.ServeMux` ignores it). The tools keep
+  the order `server/internal/hub/testdata/prompts/mcp_tools/assistant.index.golden` pins.
 - **When each part lands**:
   1. the kernel, with `saved` (S1);
   2. the Inbox's routes, bus methods, hooks and snapshot part (S4);
@@ -166,10 +165,14 @@ file. The append comes after the literal, which stays first and unchanged:
   have run (`server/internal/assistant/hub.go`), and `TestRoutesAreTheWireOnes` keeps it equal to what the assistant
   serves.
 - **`proto.Features`**: `func init() { Features = append(Features, FeatureX) }` in `proto/features_<domain>.go`, beside
-  the flag's constant, and `scripts/test/test_doc_wire.py` reads the appends too. Not on `main` yet (#7891).
+  the flag's constant. Go runs the init()s after the literal is set, file by file in name order, so the hello and
+  `/health` list the literal's flags, then each domain file's. `server/internal/proto/features_test.go` holds the
+  package to that one form of append, and `scripts/test/test_doc_wire.py` reads the appends too.
 - **`extwire.RouteScopes`**: `addRouteScopes(…)` from an `init()` in `extwire/<domain>_scopes.go`, which panics on a key
-  that is already there. `server/internal/hub/testdata/route_scopes.txt` stays one sorted golden. Not on `main` yet: it
-  comes with the Inbox's scopes (step S6 of the Inbox plan).
+  that is already there, on a key that is no route pattern and on an empty scope, so a bad entry stops every program
+  that imports `extwire` at start-up. `extwire/inbox_scopes.go` does this for the Inbox's routes (step S6 of the Inbox
+  plan), and archguard's `TestCentralListsGainNoInboxEntry` keeps them there.
+  `server/internal/hub/testdata/route_scopes.txt` stays one sorted golden, the permission list a reviewer reads.
 
 The hub's bus handlers already work this way: `handleBus("notify.request", (*Hub).busNotifyRequest)` runs from an
 `init()` beside the handler, and a method registered twice panics (`server/internal/hub/bus.go`). A domain's feature
@@ -178,15 +181,28 @@ flags and methods are documented in its domain's protocol doc: `docs/protocol/pr
 
 ### The node's method table
 
-The node gets a table of the same shape, its own because the node may not import the manager's packages. Not on `main`
-yet (#7891, #1267).
+The node has a table of the same shape, its own because the node may not import the manager's packages
+(`server/internal/node/node_methods.go`).
 
-- **Which methods**: the table maps exact method names, and only for methods that are not bound to a session. It is
-  consulted in `Node.handle`, where `sessions.history` is handed to its domain's handler today
-  (`server/internal/node/sessions_history.go`).
-- **What stays in the switch**: methods bound to a session (`session.*`, `terminal.*`, `assistant.send`, `codex.answer`,
-  …). The shared decode, alias resolution and refusals run before them, and a table entry would skip those. The table
-  refuses these names when the node starts.
+- **Registering**: a method that is not bound to a session registers from an `init()` in its domain's own file,
+  `func init() { nodeRPC(proto.MethodMachinePorts, (*Node).machinePorts) }`. `nodeRPC` decodes each call's params into
+  the handler's own type once: fields the type does not have are ignored, empty params leave it zero, and params that
+  do not decode are answered `bad <method> params`. A handler that takes `json.RawMessage` is handed the params
+  themselves, because `secret.run` and `model.run` clear them after reading.
+- **Where it is consulted**: in `Node.handleMethod`, after the delivery aliases and before the shared parameter
+  struct, where `sessions.history` was first handed to its domain's handler (`server/internal/node/sessions_history.go`).
+- **Validated on entry**: each `nodeRPC` call is checked where it is made, and an invalid one panics when the node
+  starts, at the `init()` that made it. The table refuses an empty name, a nil handler, a name registered twice, a
+  name under a prefix `handleMethod` hands to a dispatcher of its own (`assistant.segment.`, `git.backend.`,
+  `node.update.`, `task.workspace.`, `plugin.node.`), a delivery alias (`session.source_send`,
+  `session.owner_interrupt`, `codex.owner_answer`) and a session-bound name. No flag closes the table after start-up:
+  nothing registers later, and a call only reads it.
+- **What stays in the switch**: methods bound to a session (`session.*`, `terminal.*`, `assistant.send`,
+  `assistant.answer_again`, `assistant.permissions.reset`, `codex.answer`). The shared decode, alias resolution, the
+  Codex thread mapping and the identity-conflict refusal run before them, and a table entry would skip all of them.
+- **No new label**: `handleMethod` takes no new label for a method the table may hold (the `node_handle_method` row
+  under "Frozen central lists"). The labels it has stay, and move into the table only while no open PR edits their
+  lines.
 
 ### Prompts
 
@@ -206,8 +222,12 @@ A central list with a seam takes no new name. `server/internal/archguard/central
   freeze is on names, not lines. These files hold names, never counts (they are not count ratchets,
   `docs/operations/testing.md` "Count ratchets").
 - **Frozen today**:
+  - the labels of `Node.handleMethod` for the methods the node's method table may hold, by their source text
+    (`"node.info"`, `proto.MethodMachineToolchain`), and the prefixes it routes on as `prefix "plugin.node."`;
   - the `assistantwire.Routes` literal, by each entry's source text (`"GET /api/v1/todos"`, `"GET " + StarredImportPath`);
-  - the top-level declarations of `prompts/assistant.go`, a method as `Type.Method`.
+  - the top-level declarations of `prompts/assistant.go`, a method as `Type.Method`;
+  - the `proto.Features` literal, by each entry's source text (`"locale"`, `FeatureTodoSendState`);
+  - the keys of the `extwire.RouteScopes` literal in `extwire/scopes.go`, by their source text (`"GET /api/v1/kb/{kind}"`).
 
   Each later seam's PR adds its own list's row. That PR shows a planted entry failing and a registered one passing.
 - **Pending names**: `python3 scripts/test/name_freezes.py pending` lists the names that open PRs add, read from their

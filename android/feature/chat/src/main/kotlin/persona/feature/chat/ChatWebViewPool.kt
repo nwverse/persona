@@ -292,7 +292,7 @@ internal class ChatWebViewPool(
             override fun getDefaultVideoPoster(): Bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
             override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
                 if (view == null || closed || page.gone || active !== page) {
-                    runCatching { callback?.onCustomViewHidden() }
+                    val _ = runCatching { callback?.onCustomViewHidden() }
                     return
                 }
                 page.showCustomView(view, callback)
@@ -440,7 +440,7 @@ internal open class ChatSelectionWebView(context: Context) : WebView(context) {
         customView = null
         customViewCallback = null
         (current?.parent as? ViewGroup)?.removeView(current)
-        runCatching { callback?.onCustomViewHidden() }
+        val _ = runCatching { callback?.onCustomViewHidden() }
         return true
     }
 

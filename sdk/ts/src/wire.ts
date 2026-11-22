@@ -830,6 +830,11 @@ export interface ChannelCapabilities {
   max_text?: number;
   asks?: string;
   push?: boolean;
+  /**
+   * It only replies to incoming messages or triggers and cannot send unsolicited proactive messages without reply_to;
+   * testing checks connectivity instead of calling channel.send.
+   */
+  reply_only?: boolean;
   typing?: boolean;
   progress?: boolean;
   threads?: boolean;
@@ -1471,6 +1476,51 @@ export interface SecretsResolveParams {
  */
 export interface SecretsResolveResult {
   value: string;
+}
+
+/**
+ * A public field name/type; never a value or source path.
+ */
+export interface SecretStoreField {
+  name: string;
+  type: string;
+}
+
+/**
+ * The canonical public target approved on the secret storage card.
+ */
+export interface SecretStoreTarget {
+  operation: string;
+  vault: string;
+  item?: string;
+  title?: string;
+  category?: string;
+  fields: SecretStoreField[];
+}
+
+/**
+ * secrets.store: describe metadata, prepare an expiring node HPKE key after explicit approval, commit one encrypted
+ * payload.
+ */
+export interface SecretStoreParams {
+  contribution?: string;
+  phase: string;
+  target: SecretStoreTarget;
+  machine: string;
+  session: string;
+  key_id?: string;
+  sealed?: string;
+}
+
+/**
+ * Metadata and a recipient key, or references of written fields. Never values.
+ */
+export interface SecretStoreResult {
+  target: SecretStoreTarget;
+  vault_name?: string;
+  key?: string;
+  key_id?: string;
+  references?: Record<string, string>;
 }
 
 /**
@@ -2187,7 +2237,10 @@ export const SCENE_SHAPE_KINDS = ["box", "cylinder", "prism"] as const;
 
 /**
  * A box (UI version 11): at yaw 0, size[0] along +x and size[1] along +y. round rounds its corners seen from above
- * (at most half the smaller size); the app bevels its upright edges no more than half its height.
+ * (at most half the smaller size); the app bevels its upright edges no more than half its height. wall says the box
+ * is a wall, for an app's cutaway (#13036): the outer walls between the camera and the rooms are drawn low (a wall
+ * with a floor on the camera's side, between two rooms, keeps its height), what stands in one is cut to that height,
+ * and what stands tall in front of one is drawn see-through; an app without a cutaway draws it as any box.
  */
 export interface SceneBox {
   kind: "box";
@@ -2199,6 +2252,7 @@ export interface SceneBox {
   top: number;
   color?: string;
   material?: SceneMaterial;
+  wall?: boolean;
 }
 
 /**
@@ -4228,6 +4282,8 @@ export interface ConnectorInboxThing {
   /** Marks the newest move: a different last adds to the open item. */
   last?: string;
   url?: string;
+  /** The observed lifecycle of a GitHub pull request: open, closed or merged. */
+  thread_state?: string;
   /** A link the system opens instead (sms:…). */
   open_url?: string;
   /** Where a reply goes and who sees it. */
@@ -5636,16 +5692,28 @@ export interface TodoEventThread {
 }
 
 /**
+ * An external responsible party on a to-do that is not a Persona-started agent: a long-running session or a person,
+ * with optional machine_id and session_id hints.
+ */
+export interface TodoEventResponsible {
+  kind: string;
+  name: string;
+  machine_id?: string;
+  session_id?: string;
+}
+
+/**
  * event.todo.changed: a to-do was created or deleted, or its title, whether it is done (or failed to start), its
- * supervisor, or the thread it is bound to changed. Changes within about a second of each other are told once, as the
- * to-do is at the end of them. title, thread and done are as after the change (the last ones for a deleted to-do);
- * thread is left out when the to-do has none, done unless the to-do is done (closed, or its task failed to start).
- * supervisor is the conversation that supervises it (the main conversation or a leader, see leaders.schema.json),
- * left out when none does; a change of supervisor (the task moved to another leader) sends it too. kind is concern
- * for something the owner raised in the main conversation and wants an answer to; such a to-do is done only once its
- * outcome was reported to the owner (an event.todo.decision of source reported comes with it), never on its own; kind
- * is left out for a to-do or a task and never changes. Notes, agents and decisions changing do not send it (decisions
- * have event.todo.decision). Read the to-do again if it matters.
+ * supervisor, the thread it is bound to, or its external responsible party changed. Changes within about a second of
+ * each other are told once, as the to-do is at the end of them. title, thread, done and responsible are as after the
+ * change (the last ones for a deleted to-do); thread and responsible are left out when the to-do has none, done
+ * unless the to-do is done (closed, or its task failed to start). supervisor is the conversation that supervises it
+ * (the main conversation or a leader, see leaders.schema.json), left out when none does; a change of supervisor (the
+ * task moved to another leader) sends it too. kind is concern for something the owner raised in the main conversation
+ * and wants an answer to; such a to-do is done only once its outcome was reported to the owner (an
+ * event.todo.decision of source reported comes with it), never on its own; kind is left out for a to-do or a task and
+ * never changes. Notes, agents and decisions changing do not send it (decisions have event.todo.decision). Read the
+ * to-do again if it matters.
  */
 export interface TodoChangedEvent {
   id: string;
@@ -5654,6 +5722,7 @@ export interface TodoChangedEvent {
   done?: boolean;
   supervisor?: string;
   kind?: string;
+  responsible?: TodoEventResponsible;
   what: string;
 }
 
@@ -6069,6 +6138,50 @@ export interface AssistantDataItem {
 
 export interface AssistantDataStatusResult {
   items: AssistantDataItem[];
+}
+
+/**
+ * browser.machines (browser.run): list computers that have a browser backend enabled.
+ */
+export interface BrowserMachinesParams {
+  /** Optional backend filter (e.g. ego, cdp). Empty returns all backends. */
+  backend?: string;
+}
+
+export interface BrowserMachine {
+  machine_id: string;
+  name: string;
+  /** Browser backend identifier (e.g. ego, cdp). */
+  backend: string;
+  online: boolean;
+  ready: boolean;
+}
+
+export interface BrowserMachinesResult {
+  machines: BrowserMachine[];
+}
+
+/**
+ * browser.run (browser.run): run a script inside an extension-isolated browser task space (ext-<extensionID>-<slot>)
+ * on machine_id.
+ */
+export interface BrowserRunParams {
+  machine_id: string;
+  /** Browser backend to use (default: ego). */
+  backend?: string;
+  /** Logical slot name scoped to this extension (e.g. pac-muse). */
+  slot: string;
+  /** Async JS script body executed inside the isolated task space. */
+  script: string;
+  timeout_ms?: number;
+}
+
+export interface BrowserRunResult {
+  backend: string;
+  /** Raw output / JSON payload returned by the browser backend. */
+  output: string;
+  /** Script error message, if any. */
+  error?: string;
 }
 
 export interface StorageEmptyParams {
@@ -6886,6 +6999,8 @@ export const CALLS: Record<string, Call> = {
   "assistant.messages": { from: "program", params: "AssistantMessagesParams", result: "AssistantMessagesResult" },
   "assistant.memory": { from: "program", params: "AssistantMemoryParams", result: "AssistantMemoryResult" },
   "assistant.data_status": { from: "program", params: "AssistantDataStatusParams", result: "AssistantDataStatusResult" },
+  "browser.machines": { from: "program", params: "BrowserMachinesParams", result: "BrowserMachinesResult" },
+  "browser.run": { from: "program", params: "BrowserRunParams", result: "BrowserRunResult" },
   "storage.request": { from: "program", params: "StorageEmptyParams", result: "StorageRequestResult" },
   "storage.get": { from: "program", params: "StorageKeyParams", result: "StorageEntry" },
   "storage.list": { from: "program", params: "StorageListParams", result: "StorageListResult" },

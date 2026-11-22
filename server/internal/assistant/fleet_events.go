@@ -168,6 +168,15 @@ func (s *Service) nodeRequest(ctx context.Context, machine, method string, param
 		}
 		out, err := s.ext.RecordNodeSent(ctx, machine, params)
 		return out, true, err
+	case proto.MethodGateRelay: // a relayed command gate's call, for the extension's socket here (#12904)
+		r, ok := s.ext.(interface {
+			RelayGate(ctx context.Context, machine string, params json.RawMessage) (any, error)
+		})
+		if !ok {
+			return nil, true, errors.New("gate.relay: no extensions here to relay to")
+		}
+		out, err := r.RelayGate(ctx, machine, params)
+		return out, true, err
 	case proto.MethodMailAttachment: // mail_save_attachment's bytes for the node that saves them (fleet_tools.go)
 		var p proto.MailAttachmentRequest
 		if err := json.Unmarshal(params, &p); err != nil {

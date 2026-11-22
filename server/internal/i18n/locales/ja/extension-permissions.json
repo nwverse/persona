@@ -70,6 +70,7 @@
   "scope_agents_control": "エージェントを操作（作成、送信、中断、質問への回答、承認）",
   "scope_agents_permission_mode": "自分で始めた会話の権限モードを変更",
   "scope_machines_read": "コンピューターの接続状態と負荷を表示",
+  "scope_browser_run": "ペアリング済みコンピューターのブラウザー隔離空間でスクリプトを実行",
   "scope_notify": "デバイスに通知を送信",
   "scope_assistant_ask": "Persona の会話を開始して会話の動きを読み取り",
   "scope_assistant_read": "Persona との会話を読み取り（あなたのメッセージとその返信）",

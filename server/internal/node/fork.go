@@ -102,8 +102,15 @@ func (n *Node) fork(ctx context.Context, id, at string) (string, error) {
 		return "", refusal("fork_turn_running", "这一轮还没做完，等它停下再分支", nil)
 	}
 	if st, ok := n.state.get(id); ok { // resumed with what the original ran on: launcher, directory, model
-		// A guest conversation's branch is one too (assistant_guest.go).
-		n.state.put(newID, sessionState{Launcher: st.Launcher, Cwd: st.Cwd, Model: st.Model, ModelFingerprint: st.ModelFingerprint, ModelEffort: st.ModelEffort, Guest: st.Guest})
+		// A guest conversation's branch is one too (assistant_guest.go); an assistant branch keeps its origin/profile metadata.
+		next := sessionState{Launcher: st.Launcher, Cwd: st.Cwd, Model: st.Model, ModelFingerprint: st.ModelFingerprint, ModelEffort: st.ModelEffort, Guest: st.Guest}
+		if identity.IsAssistantDir(st.Cwd) || n.isAssistantSession(id) {
+			next.Origin, next.OriginKnown = st.Origin, st.OriginKnown
+			next.SupervisionInstructions = st.SupervisionInstructions
+			next.ConfigDir = st.ConfigDir
+			next.FollowsSetting = st.FollowsSetting
+		}
+		n.state.put(newID, next)
 	}
 	n.forkMade(newID, dst)
 	return newID, nil
