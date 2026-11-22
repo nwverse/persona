@@ -163,6 +163,53 @@ describe("L3 per-step attribution on expanded step cards (#13054)", () => {
     expect(bar.querySelector("[data-step-ttft]")?.textContent).toContain("TTFT 190 ms");
   });
 
+  it("keeps hook order stable when ThinkingRow transitions between empty/whitespace and non-empty text", async () => {
+    const base: Item = {
+      id: "th-stream#0",
+      seq: 1,
+      role: "assistant",
+      kind: "thinking",
+      text: "",
+      ttft_ms: 140,
+      usage: [{ model: "claude-opus-4-5", in: 300, out: 700 }],
+    };
+
+    // Start empty -> whitespace -> non-empty -> empty -> non-empty again on the same component instance.
+    await act(async () => {
+      root.render(<ThinkingRow item={base} />);
+    });
+    expect(host.querySelector('[data-thinking="words"]')).toBeNull();
+
+    await act(async () => {
+      root.render(<ThinkingRow item={{ ...base, text: "   \n\t  " }} />);
+    });
+    expect(host.querySelector('[data-thinking="words"]')).toBeNull();
+
+    await act(async () => {
+      root.render(<ThinkingRow item={{ ...base, text: "Streamed thought line 1\nStreamed thought line 2" }} />);
+    });
+    const rowBtn = host.querySelector<HTMLElement>('[role="button"]')!;
+    expect(rowBtn).not.toBeNull();
+    await act(async () => {
+      rowBtn.click();
+    });
+    expect(host.querySelector("[data-step-tokens]")?.textContent).toContain("1.0k tok");
+    expect(host.querySelector("[data-step-ttft]")?.textContent).toContain("TTFT 140 ms");
+
+    // Transition back to empty/whitespace (e.g. page merge) without violating Rules of Hooks.
+    await act(async () => {
+      root.render(<ThinkingRow item={{ ...base, text: "   " }} />);
+    });
+    expect(host.querySelector('[data-thinking="words"]')).toBeNull();
+
+    // Transition back to non-empty again.
+    await act(async () => {
+      root.render(<ThinkingRow item={{ ...base, text: "Recovered line 1\nRecovered line 2" }} />);
+    });
+    expect(host.querySelector('[data-thinking="words"]')).not.toBeNull();
+    expect(host.querySelector("[data-step-tokens]")?.textContent).toContain("1.0k tok");
+  });
+
   it("shows L3 token and duration badges inside an expanded SubagentCard", async () => {
     const use: Item = {
       id: "ag1#0",

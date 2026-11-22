@@ -40,6 +40,8 @@ export function ThinkingRow({ item, scope = "" }: { item: Item; scope?: string }
   // tokenized once: what it draws and its hover text
   const tokens = useMemo(() => tokenizeThinkingText(open ? raw : words), [open, raw, words]);
   const title = useMemo(() => (open ? undefined : thinkingPlainText(tokens)), [open, tokens]);
+  const hasTelemetry = Boolean(item.usage?.length || (typeof item.ttft_ms === "number" && item.ttft_ms >= 0));
+  const stepItems = useMemo(() => [item], [item]);
   // a search hit in its words (search-reveal.ts): it opens
   useReveal(scope, words ? [item.id] : NONE, () => {
     if (open) return;
@@ -58,8 +60,6 @@ export function ThinkingRow({ item, scope = "" }: { item: Item; scope?: string }
     e.preventDefault();
     setOpen((o) => !o);
   };
-  const hasTelemetry = Boolean(item.usage?.length || (typeof item.ttft_ms === "number" && item.ttft_ms >= 0));
-  const stepItems = useMemo(() => [item], [item]);
   return (
     <div className="flex min-w-0 flex-col" data-thinking="words" data-items={item.id}>
       <div
