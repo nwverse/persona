@@ -562,6 +562,11 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 			return fmt.Errorf("%s %w", codexStartError, err)
 		}
 	}
+	if agent == "codex" {
+		cwd, _ := os.Getwd()
+		home, _ := os.UserHomeDir()
+		argv, env = codexModelSource(argv, env, cwd, home)
+	}
 	exe, argv, env, _ = launchExec(agent, exe, argv, env)
 	if agent == "codex" {
 		if err := codexStartCommandLine(argv); err != nil {

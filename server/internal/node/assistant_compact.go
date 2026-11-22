@@ -89,7 +89,7 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 		// A guest (a meeting's room too) starts as on any resume: spawnClaude reads its tools and kind from its record
 		// (no built-in tools, strict MCP config, project setting sources, its own settings and profile), and
 		// spawnAssistant refuses one whose launcher runs another agent by now.
-		execution := modelExecution{Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, IsMain: st.IsMain, MainCompactWindow: st.MainCompactWindow, ConfigDir: st.ConfigDir, SupervisionInstructions: st.SupervisionInstructions, Origin: st.Origin, OriginKnown: st.OriginKnown}
+		execution := modelExecution{Source: st.ModelSource, Model: st.Model, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint, IsMain: st.IsMain, MainCompactWindow: st.MainCompactWindow, ConfigDir: st.ConfigDir, SupervisionInstructions: st.SupervisionInstructions, Origin: st.Origin, OriginKnown: st.OriginKnown}
 		resolved, current, _ := n.assistantModelDecision(ctx, id)
 		if current.OriginKnown {
 			execution.Origin, execution.OriginKnown = current.Origin, true
