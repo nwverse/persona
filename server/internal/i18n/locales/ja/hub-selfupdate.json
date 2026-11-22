@@ -35,6 +35,7 @@
   "reason_not_confirmed": "新しいバージョンが3分以内に確認されませんでした",
   "err_program_unreplaced": "バージョン{version}には{platform}用の{program}がありませんが、{service}がそれを実行しています。インストールすると{program}が古いバージョンのまま残ります。{program}を含むリリースを待ってください",
   "err_development_config": "hub.jsonのバックアップ用の書き込み停止・再開コマンドは両方設定するか、両方空にしてhub内蔵の停止を使ってください。",
+  "err_development_external_quiesce": "このスナップショットには、hub内蔵の停止では止められない追加データベース・追加ディレクトリ・別のローカルマネージャーが含まれます。hub.jsonでバックアップの停止・再開コマンドを両方設定してください。",
   "err_development_topology": "開発版の更新にはhub内蔵の子プロセス型アシスタントが必要です。独立したアシスタントのコンピューターは元の更新経路を使用してください。",
   "err_development_platform": "開発版の更新にはLinuxまたはmacOSのhubが必要です。",
   "err_development_quiesce": "バックアップのためにhubの書き込みを停止できませんでした：{error}",

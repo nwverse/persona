@@ -243,7 +243,7 @@ func (n *Node) isAssistantSessionIn(id string, pass *codexListPass) bool {
 	_, ok := n.procs[id]
 	a := n.agents[id]
 	n.mu.Unlock()
-	if ok || n.externalStarts.has(id) {
+	if ok || n.externalStarts.has(id) || n.isRoundFork(id) {
 		return true
 	}
 	// A real host pane is stronger evidence than a working directory: users may resume a terminal session there.
@@ -517,21 +517,23 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		if startTier != "" {
 			return "", serviceTierRefusal(ctx, "assistant_service_tier_unsupported")
 		}
-		if refs, err := assistantskills.References(text); err != nil || len(refs) != 0 {
-			return "", skillSelectionError(assistantskills.ErrReference)
-		}
 		if execution.ConfigDir != "" {
 			return "", errors.New(assistantwire.ConfigDirClaudeOnly)
 		}
 		if id != "" && (onRuntime == nil || !runs) && !(runs && launcher == "") { // another kind of agent than its own
 			return "", errors.New("换到另一种 Agent 需要新建对话")
 		}
+		skillCwd := n.runtimeAssistantCwd(id, cwd, st)
+		selected, err := n.selectedSkills(ctx, id, skillCwd, rl, text, execution)
+		if err != nil {
+			return "", err
+		}
 		eff := effort
 		if eff == "" {
 			eff = execution.Effort
 		}
 		superviseRoundFrom(ctx).set(roundKept, roundWhyUnsupported) // a runtime keeps its own context (assistant_round.go)
-		return n.assistantSendRuntime(ctx, onRuntime, id, cwd, rl, text, images, mode, execution.Public, execution.Strict, execution.Model, eff, policy)
+		return n.assistantSendRuntime(ctx, onRuntime, id, cwd, rl, text, images, mode, execution.Public, execution.Strict, selected, execution.Model, eff, policy)
 	}
 	if len(options) == 0 || (execution.Fingerprint == "" && execution.Model == "") {
 		if launcher == "" || launcher == st.Launcher {
@@ -1050,8 +1052,12 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return "", externalAdapterError(ctx, ctx.Err())
 		}
 		if werr == nil {
+			sentAt := time.Now()
 			werr = p.writeInput(in) // a new id each attempt: a process that died may have written the last one down
 			if werr == nil {
+				if !wasBusy {
+					n.ttft.arm(id, sentAt, "")
+				}
 				n.commitModelChoice(id, execution)
 			}
 			timing.mark("input_written", werr == nil)
@@ -1178,19 +1184,22 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 		}
 		p.printed()
 		var ev struct {
-			Type     string                   `json:"type"`
-			Subtype  string                   `json:"subtype"`
-			Tasks    json.RawMessage          `json:"tasks"`
-			Tools    []string                 `json:"tools"`
-			Version  string                   `json:"claude_code_version"`
-			Response assistantControlResponse `json:"response"`
-			Command  string                   `json:"command_uuid"` // command_lifecycle: the user message it is about
-			State    string                   `json:"state"`        // and what became of it (assistant_queue.go)
-			Event    struct {
+			Type      string                   `json:"type"`
+			Subtype   string                   `json:"subtype"`
+			SessionID string                   `json:"session_id"`
+			Tasks     json.RawMessage          `json:"tasks"`
+			Tools     []string                 `json:"tools"`
+			Version   string                   `json:"claude_code_version"`
+			Response  assistantControlResponse `json:"response"`
+			Command   string                   `json:"command_uuid"` // command_lifecycle: the user message it is about
+			State     string                   `json:"state"`        // and what became of it (assistant_queue.go)
+			Event     struct {
 				Type  string `json:"type"`
 				Delta struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
+					Type        string `json:"type"`
+					Text        string `json:"text"`
+					Thinking    string `json:"thinking"`
+					PartialJSON string `json:"partial_json"`
 				} `json:"delta"`
 				Message struct {
 					ID    string `json:"id"`
@@ -1214,6 +1223,9 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 		if json.Unmarshal(line, &ev) != nil {
 			p.invalidateUpdateTasks()
 			continue
+		}
+		if p.round && ev.SessionID != "" && ev.SessionID != p.id && validID(ev.SessionID) {
+			n.noteRoundFork(ev.SessionID, p.id)
 		}
 		switch {
 		case p.round:
@@ -1257,6 +1269,7 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 					n.toolsAtStart(p.id, ev.Tools)
 				}
 				if resumed {
+					n.ttft.arm(p.id, time.Now(), "")
 					n.notifySessionsSoon()
 				}
 				continue
@@ -1291,6 +1304,9 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 		case "control_response":
 			p.controlResponse(ev.Response)
 		case "command_lifecycle":
+			if ev.State == "started" {
+				n.ttft.arm(p.id, time.Now(), ev.Command)
+			}
 			if p.commandLifecycle(ev.Command, ev.State) {
 				n.notifySessionsSoon() // the queue strip shows it, or no longer
 			}
@@ -1349,6 +1365,9 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 					n.emitDelta(p.id, "")
 				}
 			case "content_block_delta":
+				if ev.Event.Delta.Text != "" || ev.Event.Delta.Thinking != "" || ev.Event.Delta.PartialJSON != "" {
+					n.ttft.firstToken(p.id, time.Now(), "")
+				}
 				if ev.Event.Delta.Type != "text_delta" {
 					continue
 				}
@@ -1368,6 +1387,7 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 				n.emitDelta(p.id, text)
 			}
 		case "result":
+			n.ttft.clearPending(p.id)
 			var kinds []string
 			if ev.IsError {
 				kinds = n.claudeResultKinds(p.id)

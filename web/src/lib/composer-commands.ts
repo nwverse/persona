@@ -77,3 +77,18 @@ export function rankCommands<C extends { word: string; desc: string }>(all: read
     .slice(0, limit)
     .map((e) => e.c);
 }
+
+/** Whether a "/" query should also search the active skill catalog; bare "/" stays command-only. */
+export function hasSlashSkillQuery(query: string | null | undefined): boolean {
+  return Boolean(query?.trim());
+}
+
+/** Rank matching skills for a non-empty "/" keyword query; bare "/" returns no skills. */
+export function rankSlashSkills<S extends { name: string; description?: string }>(skills: readonly S[], query: string): S[] {
+  if (!hasSlashSkillQuery(query) || !skills.length) return [];
+  return rankCommands(
+    skills.map((skill) => ({ word: skill.name, desc: skill.description ?? "", skill })),
+    query,
+    skills.length,
+  ).map((entry) => entry.skill);
+}

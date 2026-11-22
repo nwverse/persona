@@ -239,6 +239,11 @@ type todoBook struct {
 	// remindWake wakes remindLoop when the todos change (todo_plan.go).
 	remindOnce sync.Once
 	remindWake chan struct{}
+
+	// readyWakes persists idempotent todo_ready wake markers per open dependent to-do (todo_after_ready.go).
+	readyWakeMu      sync.Mutex
+	readyWakes       map[string]todoReadyWakeMarker
+	readyWakesLoaded bool
 }
 
 // spaceKey computes the unified space key string ("machineID/space").
@@ -2008,6 +2013,7 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 	s.todoRowSet(ctx, doneKeys)
 	if row.DoneAt != nil {
 		s.goRecordTaskOutcome(before, *row.DoneAt) // what the task came to (todo_outcome.go, #2820)
+		s.evaluateTodoAfterDependents(ctx, id)
 	}
 	return ok, nil
 }
@@ -2065,6 +2071,7 @@ func (s *Service) reopenFailedTodo(ctx context.Context, id string) (Todo, bool, 
 	if applied {
 		s.todoRowSet(ctx, doneKeys)
 	}
+	s.resetTodoReadyWake(ctx, id)
 	return out, true, nil
 }
 
