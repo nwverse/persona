@@ -54,6 +54,31 @@ describe('antigravity transcript and tool mapping', () => {
     assert.equal(cleanUserText(raw), 'Hello world')
   })
 
+  it('projects native context resources without hiding ordinary user labels', () => {
+    const user = 'Please reply OK.\nKeep this second line.'
+    const label = 'Content of persona-context:///snapshot.txt:\n'
+    const context = '<persona-context>Attached context with /compact</persona-context>'
+    const cases = [
+      ['native first request', `<USER_REQUEST>\n${label}${context}${user}\n</USER_REQUEST>\n<ADDITIONAL_METADATA>clock</ADDITIONAL_METADATA>`, user],
+      ['unwrapped resource', label + context + user, user],
+      ['another Persona URI', 'Content of persona-context:///other.txt:\r\n' + context + user, user],
+      ['successive resources', label + context + '\n' + label + context + user, user],
+      ['no prefix', user, user],
+      ['literal label', label + user, label + user],
+      ['other URI', 'Content of file:///snapshot.txt:\n' + context + user, 'Content of file:///snapshot.txt:\n' + user],
+      ['similar scheme', 'Content of persona-context-extra:///snapshot.txt:\n' + context + user, 'Content of persona-context-extra:///snapshot.txt:\n' + user],
+      ['quoted label', 'Example:\n' + label + user, 'Example:\n' + label + user],
+      ['incomplete envelope', label + '<persona-context>unfinished', label + '<persona-context>unfinished'],
+    ]
+    for (const [name, content, expected] of cases) {
+      const steps = [{ step_index: 0, type: 'USER_INPUT', source: 'USER_EXPLICIT', content }]
+      const { items } = stepsToItems(steps)
+      assert.equal(items[0].text, expected, name)
+      assert.equal(items[0].role, 'user', name)
+      assert.equal(steps[0].content, content, 'native content stays unchanged')
+    }
+  })
+
   it('maps tool names and inputs to Persona conventions', () => {
     assert.equal(mapToolName('run_command'), 'Bash')
     assert.deepEqual(mapToolInput('run_command', { CommandLine: 'npm test', toolSummary: 'Run tests' }), {

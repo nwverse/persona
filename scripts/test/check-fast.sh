@@ -504,13 +504,20 @@ job_sdk_ts() {
   in_dir sdk/ts step "$TIMEOUT_OTHER" "sdk/ts: bun test" bun test
 }
 
+# Every Go group runs through the partitioned runner, inside the same timeout (#12765). For a ./<dir>/... that covers
+# internal/assistant, whose serial run alone outgrew the budget, it runs that package's tests in go_partitions.py's
+# partitions beside the other packages, and for ./... both partitioned packages' as test-server.sh does; any other
+# group it execs exactly as given (internal/node/... too: its TestMain splits it). Without python3 (an --all run,
+# already failing for it) go test runs directly.
+GO_RUNNER=../scripts/test/go_test_partitioned.py  # from server/
 job_go() {  # $1 = a package dir (internal/foo, cmd/bar, plugins/baz) or ALL for ./...
   [ "$HAVE_GO" -eq 1 ] || skip "go not found"
   JOB_SLOT=go
-  local _pattern _label _inner
+  local _pattern _label _inner _go=(go)
   if [ "$1" = ALL ]; then _pattern=./...; _label="go test ./..."; else _pattern="./$1/..."; _label="go test ./$1/..."; fi
   _inner=$((TIMEOUT_GO_TEST - 10)); [ "$_inner" -lt 5 ] && _inner=5
-  in_dir server step "$TIMEOUT_GO_TEST" "$_label" go test -count=1 -timeout "${_inner}s" "$_pattern"
+  [ "$HAVE_PY" -eq 1 ] && _go=(python3 -B "$GO_RUNNER" go)
+  in_dir server step "$TIMEOUT_GO_TEST" "$_label" "${_go[@]}" test -count=1 -timeout "${_inner}s" "$_pattern"
 }
 
 # The server's repo-wide guards: tests that read other packages' source, go list output, the migrations or sdk/go, so
@@ -636,7 +643,8 @@ job_migration_freeze() {
 }
 
 # job_sleep_ratchet counts fixed time.Sleep calls in Go tests. In diff mode the base is the merge-base check-fast
-# already resolved (so --base agrees); --all resolves the default branch itself.
+# already resolved (so --base agrees), which also holds each changed file to its count there. --all is a full-tree run:
+# counts are held to the baseline only, and the ratchet resolves the default branch itself for its never-raise check.
 job_sleep_ratchet() {
   [ "$HAVE_PY" -eq 1 ] || skip "python3 not found"
   if [ "$ALL" -eq 1 ]; then

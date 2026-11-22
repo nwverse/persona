@@ -723,7 +723,7 @@ func TestWaitForAccountTurnEndsWithTheContext(t *testing.T) {
 	held, release := make(chan struct{}), make(chan struct{})
 	holder := make(chan error, 1)
 	go func() {
-		holder <- s.withConn(ctx, a, func(*imapclient.Client) error {
+		holder <- s.withConn(ctx, a, "test", func(*imapclient.Client) error {
 			close(held)
 			<-release
 			return nil
@@ -737,7 +737,7 @@ func TestWaitForAccountTurnEndsWithTheContext(t *testing.T) {
 	defer cancel()
 	var ran atomic.Bool
 	start := time.Now()
-	err := s.withConn(short, a, func(*imapclient.Client) error { ran.Store(true); return nil })
+	err := s.withConn(short, a, "test", func(*imapclient.Client) error { ran.Store(true); return nil })
 	waited := time.Since(start)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("waiting caller: %v, want context.DeadlineExceeded", err)
@@ -759,7 +759,7 @@ func TestWaitForAccountTurnEndsWithTheContext(t *testing.T) {
 	if err := <-holder; err != nil {
 		t.Fatalf("holder: %v", err)
 	}
-	if err := s.withConn(ctx, a, func(*imapclient.Client) error { return nil }); err != nil {
+	if err := s.withConn(ctx, a, "test", func(*imapclient.Client) error { return nil }); err != nil {
 		t.Fatalf("after the holder: %v", err)
 	}
 	s.mu.Lock()

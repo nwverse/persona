@@ -342,6 +342,10 @@ func agyContextEndNames() string {
 	return strings.Join(alt, "|")
 }
 
+// Antigravity writes embedded ACP resources into USER_INPUT.content. Require the complete
+// leading Persona envelope so a quoted label or another URI scheme keeps its text.
+var agyContextResource = lazyre.New(`(?s)^(?:Content of persona-context://[^\r\n]*:\r?\n<persona-context>.*?</persona-context>` + agySpace + `*)+`)
+
 var agyTrimSpace = lazyre.New(`^` + agySpace + `+|` + agySpace + `+$`)
 
 var agyInterruptedError = lazyre.New(`(?is)^(?:api error:\s*)?the stream was interrupted\.?(?:\s+please continue\b.*)?$`)
@@ -362,7 +366,7 @@ func agyUserText(text string) string {
 		text = m[1]
 	}
 	for {
-		clean := agyContextEnd.ReplaceAllString(agySnapshot.ReplaceAllString(text, ""), "")
+		clean := agyContextEnd.ReplaceAllString(agySnapshot.ReplaceAllString(agyContextResource.ReplaceAllString(text, ""), ""), "")
 		if clean == text {
 			return agyTrimSpace.ReplaceAllString(text, "")
 		}
