@@ -153,7 +153,7 @@ func TestScheduledConfigurationFailureIsNotRetried(t *testing.T) {
 				}
 				s.runDue(t.Context(), time.Now().Add(time.Second))
 				synctest.Wait()
-				time.Sleep(2 * s.runRetry) // Virtual time: prove the automatic retry was not armed.
+				time.Sleep(2 * s.runRetry) // sleep-ok: advances synctest's virtual clock beyond the retry deadline
 				synctest.Wait()
 				runs := waitRuns(t, s, 1)
 				if len(runs) != 1 || runs[0].Status != runFailed || runs[0].Retried || runs[0].SessionID != "" || f.sent() != 0 {
@@ -178,7 +178,7 @@ func TestScheduledTransientFailureStillRetries(t *testing.T) {
 		setTasks(s, Task{ID: "report", Prompt: "Report", Repeat: repeatOnce, Enabled: true, At: time.Now()})
 		s.runDue(context.Background(), time.Now().Add(time.Second))
 		synctest.Wait()
-		time.Sleep(2 * s.runRetry) // Virtual time advances the one permitted transient retry.
+		time.Sleep(2 * s.runRetry) // sleep-ok: advances synctest's virtual clock through the permitted retry
 		synctest.Wait()
 		runs := waitRuns(t, s, 2)
 		if len(runs) != 2 || !runs[1].Retried || slices.ContainsFunc(runs, func(r ScheduleRun) bool { return r.Error != failure }) {
