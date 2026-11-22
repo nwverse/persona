@@ -133,6 +133,14 @@ TABLE = (
     (
         (("AGENTS.md", "CLAUDE.md"), ("scripts/test/test_agents_md.py",)),
     ),
+    # The name freezes (docs/server/architecture.md "Registering a domain's entries", #12844): test_name_freezes.py
+    # runs the archguard test that reads the central lists' names and their files, and mock_hub_switches.py takes its
+    # list format and the open PRs' heads from name_freezes.py.
+    (
+        (("server/internal/archguard/central_lists_test.go", "server/internal/archguard/testdata/central_lists/*"),
+         ("scripts/test/test_name_freezes.py",)),
+        (("scripts/test/name_freezes.py",), ("scripts/mock/test_mock_hub.py",)),
+    ),
     # Most section names test_doc_sections.py checks sit in code comments under its SOURCE_DIRS (about a second).
     (
         (("server/*", "web/src/*", "web/e2e/*", "scripts/*", "sdk/*", "apple/*", "android/*", "integrations/*",

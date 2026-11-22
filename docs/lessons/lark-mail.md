@@ -128,6 +128,7 @@ Review follow-up: the optional projection isn't a required field for a whole pag
 
 ## Lark Open Platform bots (`docs/extensions/bots.md`)
 
+- A settings setter must return a failed write before reporting success or recording an audit. Restore only its own previous field while holding the same settings lock; this preserves an unset default and other successful saves. A fake store must reject the intended write, since one settings request can make several separate commits (#12666).
 - Inbound rich-text `code_block.text` can itself be a Markdown document (#12667). When flattening it for the bot's model context, use a backtick wrapper longer than every run in the body; a fixed three-backtick wrapper lets a literal fence become a closing delimiter and can turn following post nodes into code. Verify synthetic events through the public event/content parsers and check the resulting Markdown AST, alongside exact ordinary-output and adjacent-media controls. This is separate from escaping or folding outbound answer cards.
 
 - With card JSON 2.0, **one unknown extra field rejects the whole card** (1.0 ignores it): 2.0 has no `action` module and no `note` (lay buttons out horizontally with `column_set` + `flex_mode: flow`,
@@ -157,6 +158,13 @@ Review follow-up: the optional projection isn't a required field for a whole pag
 
 - Temporary picked copies in Application Support aren't cleaned up automatically by the system; after the process restarts, clean up old UUID directories first, then start new picks. Cleanup runs only once and shares a lock with picking, and must not delete copies the current process just created or the separate persistent media directory.
 - The timeout for streaming uploads includes the phone's upload time, so give the phone and the hub the same budget based on file size; the Lark gateway's pending / failed local messages must not become ordinary sent bubbles even after they're removed from the local outbox.
+
+## Feishu bot token refresh after transient retries
+
+Track the one forced tenant-token refresh separately from the request attempt index: a retryable 503 or 429 can precede
+an expired-token rejection. The refresh still consumes the existing attempt budget and must stop after one refresh;
+an expiry on the final attempt returns that expiry. A confirmed auth rejection permits replay of a UUID-less POST,
+while a transport/read failure or server error still stops it. Keep the original payload and UUID across keyed retries.
 
 ## Message Tweaks and account settings
 

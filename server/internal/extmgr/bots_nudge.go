@@ -32,18 +32,24 @@ func botMinutesValue(raw json.RawMessage, max int, rangeKey string) (*int, error
 
 // setNudgeAfter keeps nudge_after (PUT /api/v1/bots/feishu): the minutes a card waits before the assistant nudges
 // under it once, 0 off (docs/extensions/bots.md "Nudging a card nobody answered"). The range is checked by the caller.
-func (h *Manager) setNudgeAfter(ctx context.Context, minutes int) {
+func (h *Manager) setNudgeAfter(ctx context.Context, minutes int) error {
 	b := &h.bots
 	b.mu.Lock()
-	if h.loadBotsLocked(ctx) != nil {
+	if err := h.loadBotsLocked(ctx); err != nil {
 		b.mu.Unlock()
-		return
+		return err
 	}
+	previous := b.set.NudgeAfter
 	changed := b.set.nudgeAfter() != minutes
 	b.set.NudgeAfter = &minutes
-	h.saveBotSettingsLocked()
+	if err := h.saveBotSettingsLocked(); err != nil {
+		b.set.NudgeAfter = previous
+		b.mu.Unlock()
+		return err
+	}
 	b.mu.Unlock()
 	if changed {
 		h.auditBot(ctx, botRecord{auditBotNudgeAfter, map[string]any{"minutes": minutes}})
 	}
+	return nil
 }
