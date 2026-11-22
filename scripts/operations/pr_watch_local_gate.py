@@ -37,7 +37,7 @@ def require_local_gate(repo, head, base, read=None):
         if not isinstance(login, str) or not re.fullmatch(r"[A-Za-z0-9_-]+(?:\[bot\])?", login):
             raise ValueError("invalid status author")
         permission = read(["api", "repos/%s/collaborators/%s/permission" % (repo, login)])
-        if permission.get("permission") not in ("admin", "maintain", "write"):
+        if not isinstance(permission, dict) or permission.get("permission") not in ("admin", "maintain", "write"):
             raise LocalGateError("Local gate: attestation author is not a repository writer; not merged")
         return latest
     except LocalGateError:

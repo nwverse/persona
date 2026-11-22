@@ -12,7 +12,6 @@ import (
 
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -244,7 +243,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	// The last look, on the machine it will really start on (a retry, a remedy, a recovered start and a flexible task moved
 	// by the health check all pass here): a task leader never starts on a work-trust computer.
-	if identity.IsAssistantDir(t.Cwd) {
+	if assistantWorkspace(m, t.Cwd) {
 		return "", "", i18n.Err("rpc-errors.agent_assistant_workspace")
 	}
 	if err := s.leaderOnWorkMachine(t, m); err != nil {

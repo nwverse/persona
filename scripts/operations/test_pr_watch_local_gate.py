@@ -1,5 +1,4 @@
 """Local gate status trust, freshness and automatic-merge regression tests."""
-import copy
 from pathlib import Path
 import sys
 import tempfile
