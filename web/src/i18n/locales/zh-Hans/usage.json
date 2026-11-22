@@ -36,5 +36,10 @@
   "balance_unreachable": "暂时连不上 DeepSeek",
   "balance_unreachable_kept": "暂时连不上 DeepSeek，显示的是上次的余额",
   "balance_failed": "读取余额失败",
-  "balance_failed_kept": "读取余额失败，显示的是上次的金额"
+  "balance_failed_kept": "读取余额失败，显示的是上次的金额",
+  "provider_accounts": "{count} 个账号",
+  "timeline_now": "现在",
+  "timeline_title": "额度重置时间线",
+  "protect_flag": "保护 {percent}%",
+  "protect_label": "保护线在 {percent}%"
 }
