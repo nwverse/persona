@@ -23,6 +23,7 @@ import (
 type extensionTrustStore interface {
 	ExtensionTrusts(ctx context.Context) (map[string]db.ExtensionTrust, error)
 	SetExtensionTrust(ctx context.Context, extension, trust string, cats []string, by string) error
+	ForgetExtensionTrust(ctx context.Context, extension string) error
 }
 
 var _ extensionTrustStore = (*db.DB)(nil)
@@ -84,6 +85,20 @@ func (s *Service) extensionOwners(ctx context.Context) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// forgetExtensionTrust drops what the user let extension ext read: it was removed (assistant.extension_trust_forget),
+// and the hub learns the owners again.
+func (s *Service) forgetExtensionTrust(ctx context.Context, ext string) error {
+	st, ok := s.store().(extensionTrustStore)
+	if !ok || ext == "" {
+		return nil
+	}
+	if err := st.ForgetExtensionTrust(ctx, ext); err != nil {
+		return err
+	}
+	s.publish(context.WithoutCancel(ctx))
+	return nil
 }
 
 // trackUse is what everything from track space carries at least (trackFloor), for a decision made by track.

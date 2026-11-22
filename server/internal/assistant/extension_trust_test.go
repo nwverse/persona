@@ -43,6 +43,13 @@ func (st *trustMemStore) SetExtensionTrust(_ context.Context, ext, trust string,
 	return nil
 }
 
+func (st *trustMemStore) ForgetExtensionTrust(_ context.Context, ext string) error {
+	st.tmu.Lock()
+	defer st.tmu.Unlock()
+	delete(st.trusts, ext)
+	return nil
+}
+
 // trustService is conversationsService's assistant (its own conversations, a guest's, the health space's) on a store
 // that keeps extension trusts and information categories.
 func trustService(t *testing.T) (*Service, *trustMemStore) {
@@ -122,6 +129,15 @@ func TestExtensionTrustDecidesReads(t *testing.T) {
 	}
 	if !s.extensionHides(ctx, SpaceHealth) || s.extensionHides(ctx, "") {
 		t.Fatal("a read with no extension named is not a third party's with no grant")
+	}
+
+	// A removed extension's trust goes with it: installed again, it starts as a third party's.
+	var none map[string]any
+	if err := askConversations(t, s, assistantwire.MethodExtensionTrustForget, `{"extension":"qa-memory"}`, &none); err != nil {
+		t.Fatal(err)
+	}
+	if _, kept := st.trusts["qa-memory"]; kept || !s.extensionHides(s.withExtensionReader(ctx, "qa-memory"), SpaceHealth) {
+		t.Fatal("a removed extension is still the user's own")
 	}
 }
 

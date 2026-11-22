@@ -45,6 +45,12 @@ func TestExtensionTrust(t *testing.T) {
 	if o := got()["qa-other"]; len(o.Categories) != 0 {
 		t.Errorf("grants taken away: %+v", o)
 	}
+	if err := d.ForgetExtensionTrust(ctx, "qa-memory"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got()["qa-memory"]; ok {
+		t.Error("a removed extension's trust is kept")
+	}
 	if err := d.SetExtensionTrust(ctx, "", "owner", nil, "user"); err == nil {
 		t.Error("no extension")
 	}
