@@ -363,12 +363,14 @@ later without sending.
 
 - An unrecoverable conversation error overrides a runtime's generic transient kind and any upstream status.
   Account-sealed native compaction is `turn_error_code: compaction_sealed`, `turn_error_kind: unrecoverable`:
-  the context belongs to another account, so the conversation is invalid. Clients explain the reason and direct
-  the owner to a new conversation instead of offering Continue. The manager neither schedules another retry nor
-  sends a retry queued before the cause was recognized. Adding permanent causes extends
+  the context belongs to another account, so the conversation is invalid. The wire kind or code is sufficient even
+  when the raw error text is unrecognized: every task row uses the same invalid label and full reason, directs the
+  owner to a new conversation and omits Continue. The manager neither schedules another retry nor
+  sends a retry queued before the cause was recognized, including the timed-out continuation path. Adding permanent causes extends
   `proto.UnrecoverableTurnErrorCode` and the clients' error parsers, with positive and negative regression cases.
-- An old interrupted participant does not override another participant that is working or waiting to resume.
-  Interrupted task rows stay out of Needs you when the task is parked or closed. Archive visibility still follows
+- An old interrupted participant does not override another participant that is working or waiting to resume, including
+  a participant waiting on agent/external/transient work without background activity. Interrupted task rows stay out
+  of Needs you when the task is parked or closed. Archive visibility still follows
   new activity; it is not a substitute for the task-state filter.
 - On by default and independent of the main switch (`transient_retry`, #3208): it is a rule, with no triage model call. With the main switch off, only
   turns that a transient error ended are followed (`workActive`), and the lists show only the continuation on its way (`transientPending`); everything else stays as without triage.

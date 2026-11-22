@@ -50,8 +50,21 @@ export interface MessagePage {
   nextCursor?: string;
 }
 
+export interface AgentOutboxEntry {
+  clientId: string;
+  sessionId?: string;
+  preview?: string;
+  length?: number;
+  origin?: string;
+  status: string;
+  error?: string;
+  attempts?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface SendResult {
-  outbox: { clientId: string; status: string; error?: string };
+  outbox: AgentOutboxEntry;
   duplicate: boolean;
   upstream?: AgentMessage;
 }
@@ -88,6 +101,11 @@ export function fetchMessages(id: string, cursor?: string, limit = 50) {
   const q = new URLSearchParams({ limit: String(limit) });
   if (cursor) q.set("cursor", cursor);
   return api<MessagePage>(`${agentPath(id)}/messages?${q}`).then((p) => ({ ...p, messages: p.messages ?? [] }));
+}
+
+export function fetchAgentOutbox(id: string, limit = 100) {
+  const q = new URLSearchParams({ session_id: id, limit: String(limit) });
+  return api<{ outbox: AgentOutboxEntry[] | null }>(`/agents/outbox?${q}`).then((r) => ({ ...r, outbox: r.outbox ?? [] }));
 }
 
 export function sendMessage(id: string, clientId: string, text: string) {
@@ -211,9 +229,13 @@ export const messageText = (m: AgentMessage) => m.blocks.filter((b) => b.type ==
 export interface Outgoing {
   clientId: string;
   text: string;
+  /** When the message was first typed; a same-id retry keeps it. */
   at: number;
+  /** The local or hub status change, whichever this entry last reconciled. */
+  updatedAt: number;
   status: "sending" | "sent" | "failed";
   error?: string;
+  attempts?: number;
 }
 
 // Persisted messages lose the clientId (externalId changes from local:<clientId>), so a local bubble is dropped once
