@@ -103,23 +103,31 @@ func (s *Service) feishuMessage(ev feishubot.MessageEvent, st FeishuStatus, acti
 	if !content.Forward && len(content.Media) == 0 && noReplyCommand(content.Text) && s.chatNoReply(ctx, ev) {
 		return // "don't report back" for a to-do taken in this chat with no topic to say it in (todo_source.go)
 	}
-	if _, _, isCommand := parseBotCommand(content.Text); isCommand && !content.Forward && len(content.Media) == 0 {
+	var target botTarget
+	if cmd, _, isCommand := parseBotCommand(content.Text); isCommand && !content.Forward && len(content.Media) == 0 {
 		handled, rest := s.botCommand(ctx, st.Features, msg.MessageID, content.Text, msg.RootID, msg.ParentID)
 		if handled {
 			return
 		}
 		content.Text = rest
+		if cmd == "/new" || cmd == "/新对话" {
+			// The first message explicitly starts a conversation, even when replying to an old card.
+			// Keep the reply metadata for quoted context, but do not answer or route by that card.
+			target = botTarget{Kind: targetPersona}
+		}
 	}
-	if !content.Forward && s.acceptReply(ctx, msg.MessageID, content.Text, len(content.Media) > 0, msg.ParentID, msg.RootID) {
-		return // about a "Please verify" card (acceptance_reply.go)
+	if target.Kind == "" {
+		if !content.Forward && s.acceptReply(ctx, msg.MessageID, content.Text, len(content.Media) > 0, msg.ParentID, msg.RootID) {
+			return // about a "Please verify" card (acceptance_reply.go)
+		}
+		if !content.Forward && len(content.Media) == 0 && s.botApproveOwnerAction(ctx, ev, content.Text, action) {
+			return // an exact direct reply to an owner-action proposal (owner_action_reply.go)
+		}
+		if !content.Forward && len(content.Media) == 0 && s.botAnswerQuestion(ctx, msg.MessageID, content.Text, action, msg.RootID, msg.ParentID) {
+			return // the answer to the card waiting in this topic (feishu_text_answer.go)
+		}
+		target = s.botTargetFor(msg.RootID, msg.ParentID)
 	}
-	if !content.Forward && len(content.Media) == 0 && s.botApproveOwnerAction(ctx, ev, content.Text, action) {
-		return // an exact direct reply to an owner-action proposal (owner_action_reply.go)
-	}
-	if !content.Forward && len(content.Media) == 0 && s.botAnswerQuestion(ctx, msg.MessageID, content.Text, action, msg.RootID, msg.ParentID) {
-		return // the answer to the card waiting in this topic (feishu_text_answer.go)
-	}
-	target := s.botTargetFor(msg.RootID, msg.ParentID)
 	if err := botAllowed(s.botLang(ctx), st.Features, target); err != nil {
 		s.botNote(ctx, msg.MessageID, err.Error())
 		return

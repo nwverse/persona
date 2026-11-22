@@ -1351,3 +1351,20 @@ func RenderTodoDirection(d DirectionNotes) string {
 	}
 	return render("todo/direction", d)
 }
+
+// SegmentHandoff continues the same logical conversation on a new engine.
+type SegmentHandoff struct {
+	Language string
+	Summary  string
+	Recent   []HandoffTurn
+	Text     string
+	Partial  bool
+}
+
+func RenderSegmentHandoff(h SegmentHandoff) string { return render("assistant/segment_handoff", h) }
+
+// RenderSegmentSummary accepts the established language display names as well as BCP 47 codes.
+// Empty and Chinese retain the original default bytes; Japanese and English are the other supported branches.
+func RenderSegmentSummary(language string) string {
+	return render("assistant/segment_summary", struct{ Language string }{Language: language})
+}

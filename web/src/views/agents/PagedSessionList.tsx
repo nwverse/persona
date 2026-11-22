@@ -5,7 +5,7 @@ import { t } from "../../i18n";
 import { api, errorText } from "../../lib/api";
 import { onShownHint } from "../../lib/shown-hints";
 import { filterQuery, SessionList, type ListCounts, type ListFilters } from "../../lib/session-list";
-import { groupMachines, type GroupDimension, type SessionGroup, type SessionPlace, type TodoNames } from "../../lib/session-groups";
+import { groupMachines, JUST_FINISHED_KEY, type GroupDimension, type SessionGroup, type SessionPlace, type TodoNames } from "../../lib/session-groups";
 import { SESSION_LIST_METRICS, SESSION_LIST_STYLE } from "../../ui/list-metrics";
 import { SearchField } from "../../ui/SearchField";
 import { STATE_LABEL } from "../../lib/state-labels";
@@ -73,6 +73,10 @@ export interface PagedSessionListProps<T> {
   /** The words a failed read of the list's rows or groups is said in, given its reason (the reason alone by default): the
    *  sidebar's says it could not read the Agents list, as its complete list does. */
   failureText?: (reason: string) => string;
+  /** The hub's counts of this list's scope as the page shows them, given rows read in that scope: the sidebar's leaves
+   *  out of Unread an agent seen on this page that those rows, and so the counts read with them, still have Unread
+   *  (lib/seen-outbox.ts heldCounts). The chips' numbers and By state's sections follow it. */
+  holdCounts?: (counts: ListCounts, rows: readonly T[]) => ListCounts;
 }
 
 export interface PagedGrouping<T> {
@@ -116,7 +120,7 @@ export function scrollParent(el: HTMLElement | null): HTMLElement | null {
   return null;
 }
 
-export function PagedSessionList<T>({ root, path, identity, compare, removeIdentity, event, renderRow, personal = false, label, machineOrder, catalog = false, justFinished = false, placeOf, activeAt, needsYou, isOpen, parentOf, excludeIdentities, grouping, failureText = sameText }: PagedSessionListProps<T>) {
+export function PagedSessionList<T>({ root, path, identity, compare, removeIdentity, event, renderRow, personal = false, label, machineOrder, catalog = false, justFinished = false, placeOf, activeAt, needsYou, isOpen, parentOf, excludeIdentities, grouping, failureText = sameText, holdCounts }: PagedSessionListProps<T>) {
   const [query, setQuery] = useState("");
   const [typed, setTyped] = useState("");
   // the sidebar's groupings take ⌘K's words (#6589); every other list its own field's, once typing pauses
@@ -270,7 +274,29 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     else void root.retry().catch(() => {});
   }, [facetScoped, root]);
   const grouped = useSessionGroups({ dimension, catalog: cataloged, countsPath, scope: groupScope, facets, facetQuery, facetsError: facetsFailure, retryFacets, waiting: sections ? scopeNeeds : 0, event, todos: grouping?.todos, justFinished, machineOrder });
-  const allGroups = grouped.groups;
+  // The scope's counts as the page shows them (holdCounts): only against the rows the same answer brought (the root's,
+  // or the filtered list's own page, on a hub that sends a page's counts with it), so a newer count is never taken for
+  // an older row's or the other way round. Counts read on their own (a scope only the hub can count, such as hidden
+  // botmux sessions in a grouping) are the hub's: they are read again on every hint, the one after the hub records a
+  // seen too.
+  const coupled = !root.usesPageCounts() ? undefined
+    : scopeQuery === "counts=1" ? (rootPage.counts ? { counts: rootPage.counts, rows: rootPage.rows } : undefined)
+    : scopeFromFacets && facetsFromList && page.counts ? { counts: page.counts, rows: page.rows } : undefined;
+  const coupledCounts = coupled?.counts, coupledRows = coupled?.rows;
+  const held = useMemo(() => (coupledCounts && coupledRows && holdCounts ? holdCounts(coupledCounts, coupledRows) : undefined),
+    [coupledCounts, coupledRows, holdCounts]);
+  const shownCounts = held && held !== coupledCounts ? held : scopeCounts;
+  // By state drawn from those same counts (no chip narrows the groups): the sections the held agents left (Unread, Just
+  // finished) are smaller, Seen larger
+  const chipless = !Object.keys(filters).some((key) => (CHIP_KEYS as readonly string[]).includes(key));
+  const allGroups = useMemo(() => {
+    const groups = grouped.groups;
+    if (!groups || dimension !== "state" || !chipless || !held || !coupledCounts || held === coupledCounts) return groups;
+    const unread = (coupledCounts.state.unread ?? 0) - (held.state.unread ?? 0);
+    const finished = (coupledCounts.just_finished ?? 0) - (held.just_finished ?? 0);
+    const less = (key: string) => (key === "unread" ? unread : key === JUST_FINISHED_KEY ? finished : key === "idle" ? -(unread + finished) : 0);
+    return groups.map((g) => (less(g.key) ? { ...g, count: Math.max(0, g.count - less(g.key)) } : g));
+  }, [grouped.groups, dimension, chipless, held, coupledCounts]);
   // the picked group follows what the hub says of it now (a project gains a directory); gone from the scope, it stays picked
   useEffect(() => {
     if (!picked || !allGroups) return;
@@ -390,13 +416,13 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     return () => parent.removeEventListener("scroll", scroll);
   }, [list, getScrollElement, sections, hasMore, page.loadingMore, page.error, margin, totalSize]);
 
-  const stateTotals = scopeCounts?.state ?? {};
+  const stateTotals = shownCounts?.state ?? {};
   // the quick filters' numbers, as the complete list counts them: Working without the ones waiting in the background
   const quickCounts = useMemo((): FilterCounts | undefined => {
-    if (!scopeCounts) return undefined;
-    const by = scopeCounts.state ?? {}, waiting = scopeCounts.background_waiting ?? 0, origin = scopeCounts.pane_source ?? {};
+    if (!shownCounts) return undefined;
+    const by = shownCounts.state ?? {}, waiting = shownCounts.background_waiting ?? 0, origin = shownCounts.pane_source ?? {};
     return { needs: by.needs_you ?? 0, unread: by.unread ?? 0, working: Math.max(0, (by.working ?? 0) - waiting), bg_waiting: waiting, feishu: origin.feishu ?? 0, terminal: origin.terminal ?? 0 };
-  }, [scopeCounts]);
+  }, [shownCounts]);
   const onQuickCounts = quick?.onCounts;
   useEffect(() => { onQuickCounts?.(quickCounts); }, [onQuickCounts, quickCounts]);
   // the fixed group order: the menu lists a bounded number of them, and the picked one whatever its place

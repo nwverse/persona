@@ -62,6 +62,8 @@ export interface ListCounts {
   background_waiting?: number;
   /** How many of `state.idle` are Just finished (#9751, `sessions_just_finished`); absent when none. */
   just_finished?: number;
+  /** How many of `state.needs_you` only wait on held non-interrupting cards (P1/P2) for push grading. */
+  held_needs?: number;
   revision: string;
 }
 export interface ListPage<T> {
@@ -119,7 +121,7 @@ export interface SessionListOptions<T> {
  *  the one it reaches, and the rows changed in between as `[machine_id, session_id]`. */
 export interface ListChangeHint { revision?: unknown; since?: unknown; changed?: unknown }
 
-type PreparedDelta<T> = { overlay: Map<string, T | null>; changes: Map<string, T | null>; added?: Set<string>; revision: string; total: number };
+type PreparedDelta<T> = { overlay: Map<string, T | null>; changes: Map<string, T | null>; added?: Set<string>; revision: string; total: number; counts?: ListCounts };
 type Work = { generation: number; load: boolean; more: boolean; kind: "load" | "more" | null; promise?: Promise<void> };
 class Rebaseline extends Error {}
 
@@ -410,10 +412,13 @@ export class SessionList<T> {
     }
   }
 
-  /** The counts that came with a page (`with_counts`), or the separate read when they did not. */
-  private async pageCountsOrRead(generation: number, page: ListPage<T>): Promise<void> {
-    if (validCounts(page.counts)) this.publish({ counts: page.counts });
-    else await this.readCounts(generation);
+  /** The counts that came with a page (`with_counts`), to be published with the page's rows: rows and counts read
+   *  together are shown together, so nothing on screen counts one read's rows by another's (lib/seen-outbox.ts
+   *  heldCounts compares them). The separate read when they did not come, published when it answers. */
+  private async pageCountsOrRead(generation: number, page: ListPage<T>): Promise<ListCounts | undefined> {
+    if (validCounts(page.counts)) return page.counts;
+    await this.readCounts(generation);
+    return undefined;
   }
 
   private async refresh(generation: number, retry = true): Promise<void> {
@@ -443,7 +448,7 @@ export class SessionList<T> {
   private async readFirst(generation: number, withCounts = false): Promise<void> {
     const page = await this.page(generation, withCounts ? { with_counts: "1" } : {});
     if (!page || !this.current(generation)) return;
-    if (withCounts) await this.pageCountsOrRead(generation, page);
+    const counts = withCounts ? await this.pageCountsOrRead(generation, page) : undefined;
     if (!this.current(generation)) return;
     this.frozen = new Map(page.sessions.map((row) => [this.identity(row), row]));
     this.overlay = new Map();
@@ -451,7 +456,7 @@ export class SessionList<T> {
     this.cursor = page.has_more ? page.next_cursor : undefined;
     this.frozenRevision = page.revision;
     this.checkpoint = page.revision;
-    this.publish({ rows: this.visible(true), loaded: true, supported: this.snapshot.supported !== false, total: page.total, hasMore: !!this.cursor });
+    this.publish({ rows: this.visible(true), loaded: true, supported: this.snapshot.supported !== false, total: page.total, hasMore: !!this.cursor, ...(counts ? { counts } : {}) });
   }
 
   private async readDelta(generation: number, withCounts = false): Promise<PreparedDelta<T> | null> {
@@ -463,12 +468,13 @@ export class SessionList<T> {
     let target = since;
     let first = true;
     let total = this.snapshot.total;
+    let counts: ListCounts | undefined;
     const cursors = new Set<string>();
     do {
       const page = await this.page(generation, { since, ...(cursor ? { cursor } : {}), ...(first && withCounts ? { with_counts: "1" } : {}) });
       if (!page || !this.current(generation)) return null;
       if (first && withCounts) {
-        await this.pageCountsOrRead(generation, page);
+        counts = await this.pageCountsOrRead(generation, page);
         if (!this.current(generation)) return null;
       }
       if (!first && target !== page.revision) throw new Error(t("paged-agents.inconsistent_delta"));
@@ -494,7 +500,7 @@ export class SessionList<T> {
       if (cursor && cursors.has(cursor)) throw new Error(t("paged-agents.repeated_cursor"));
       if (cursor) cursors.add(cursor);
     } while (cursor);
-    return { overlay, changes, added, revision: target, total };
+    return { overlay, changes, added, revision: target, total, counts };
   }
 
   private commitDelta(generation: number, delta: PreparedDelta<T>): void {
@@ -503,7 +509,7 @@ export class SessionList<T> {
     this.overlay = delta.overlay;
     this.checkpoint = delta.revision;
     const rows = this.visible(false, delta.added);
-    this.publish({ rows, total: delta.total, hasMore: !!this.cursor || this.candidateCount() > this.prefixSize });
+    this.publish({ rows, total: delta.total, hasMore: !!this.cursor || this.candidateCount() > this.prefixSize, ...(delta.counts ? { counts: delta.counts } : {}) });
     // Publishing may synchronously reset/switch the list through onRows or a subscriber.
     if (!this.current(generation) || !this.onDelta) return;
     const upsert: T[] = [];
