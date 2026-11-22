@@ -54,9 +54,15 @@ iOS 27 a cryptex, as Xcode installs it there). A phone drops the personalized im
 iOS 27 phone keeps the cryptex across a restart is not verified, and either way the node mounts it again as below. The guided setup's **Prepare**
 (`StartPrepare`, a background job like pairing, `POST /api/v1/machines/{mid}/iphone/prepare`) mounts it through the session (`mount_ddi`,
 [iphone-bridge.md](iphone-bridge.md)); an image already there, Xcode's included, counts as mounted. Right after a mount the session reads
-`device_info` again, so the phone's status says it is ready at once instead of at the next health check (#12171).
+`device_info` again, so the phone's status says it is ready at once instead of at the next health check (#12171); after a cryptex install
+that session can't list the new services, its `device_info` answers `disconnected`, and the link that follows a few seconds later says it.
 Done, the record keeps `auto_prepare`: the owner allowed this computer to mount it again by itself, and from then on a link that comes up
-with `ddi_mounted: false` (after the restart) mounts it in the background, once per link, a failure only logged. Every mount asks Apple's
+with `ddi_mounted: false` (after the restart) mounts it in the background, a failure only logged. A failure that can clear by itself (the
+phone locked; no answer in time, which comes back as `uncertain` when the request had been sent; Apple's signing server unreachable) is
+tried again at the link's next health check, about every minute or two, and a phone that stays locked is logged once. Trying a mount
+again is safe: `mount_ddi` first looks whether the image is there, and then does nothing; any other failure waits for the next link (#12556). Before that it was once per link,
+so a link that came up while the phone was locked left it without the image, and the guided setup showing it getting ready, until the
+link happened to restart. Every mount asks Apple's
 signing server for the phone's ticket, which carries the phone's chip ID (ECID); the app says so before the first Prepare. The image comes
 from this computer (Xcode's folder or `PERSONA_IPHONE_DDI_DIR`; the status's `ddi_present` says whether it is there); without it
 Prepare fails with `ddi_missing`, whose note says to install Xcode on that Mac (the owner's call on #8199: a Mac with Xcode for now). Forgetting the phone drops

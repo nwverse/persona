@@ -499,6 +499,7 @@ class OutboxMessageSenderTest {
         val sending = ComposerDelivery(DeliveryState.Sending)
         val sent = ComposerDelivery(DeliveryState.Sent)
         sender.recordComposerDelivery("visible", sending, "first")
+        assertEquals("the live attempt is bound to its own operation", "first", store.entries.value.single().operationId)
         sender.recordComposerDelivery("visible", ComposerDelivery(DeliveryState.Refused), "first", MessageTransportResult.NotSent)
         sender.recordComposerDelivery("visible", sending, "second")
         sender.recordComposerDelivery("visible", sent, "first", MessageTransportResult.Accepted)

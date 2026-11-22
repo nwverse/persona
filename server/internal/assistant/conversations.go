@@ -16,12 +16,10 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
-	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // The assistant manages its own conversations (docs/assistant/assistant.md "Managing its own conversations", the user's ask on 2026-11-01):
@@ -159,6 +157,9 @@ func (s *Service) setArchived(ctx context.Context, machine, id string, on bool, 
 	b.mu.Unlock()
 	if err != nil {
 		return false, err
+	}
+	if on {
+		_ = s.call(ctx, machine, "assistant.cache_clear", map[string]any{"session_id": id}, nil)
 	}
 	s.publish(ctx) // the apps get the list with the flag now
 	return true, nil
@@ -753,7 +754,7 @@ func (s *Service) queuedRelays() (map[string][]string, bool) {
 	}
 	for id, q := range b.st.Queue {
 		for _, msg := range q {
-			if msg.Tool == noticeTool || msg.Tool == askAnswerTool || msg.Tool == spawnNoticeTool || msg.Tool == taskEndTool || msg.Tool == relayRefusedTool { // a quiet task's notice (quiet.go), a question's answer (ask_todo.go): its title is enough
+			if msg.Tool == noticeTool || msg.Tool == askAnswerTool || msg.Tool == spawnNoticeTool || msg.Tool == taskEndTool || msg.Tool == prFollowupTool || msg.Tool == relayRefusedTool { // a quiet task's notice (quiet.go), a question's answer (ask_todo.go): its title is enough
 				out[id] = append(out[id], msg.FromTitle+"的通知")
 				continue
 			}
@@ -786,8 +787,7 @@ func (msg relayMsg) source() *proto.MessageSource {
 // notice (quiet.go) is its own text, and the work it starts is not a hop of any chain.
 func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg relayMsg) error {
 	if msg.Tool == superviseTool && s.runtimeWithoutSupervisionPolicy(ctx, machine, to) {
-		return &rpc.Error{Code: assistantwire.CodeSupervisionRuntime,
-			Message: i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_runtime")}
+		return s.supervisionRuntimeRefusal(ctx, machine)
 	}
 	text := relayDeliveryText(msg)
 	source, onceID := msg.source(), relayMsgID(to, msg)
@@ -850,7 +850,7 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 // relayDeliveryText is what a relayed message says in the conversation: a notice, a supervision message and an answer
 // are their own text; a message from another conversation says where it comes from.
 func relayDeliveryText(msg relayMsg) string {
-	if msg.Tool == noticeTool || msg.Tool == superviseTool || msg.Tool == askAnswerTool || msg.Tool == spawnNoticeTool || msg.Tool == taskEndTool ||
+	if msg.Tool == noticeTool || msg.Tool == superviseTool || msg.Tool == askAnswerTool || msg.Tool == spawnNoticeTool || msg.Tool == taskEndTool || msg.Tool == prFollowupTool ||
 		msg.Tool == chatReplyTool || msg.Tool == relayRefusedTool {
 		return msg.Text
 	}
@@ -863,8 +863,8 @@ func (s *Service) relayDelivered(ctx context.Context, to string, msg relayMsg) {
 	if msg.Tool == superviseTool {
 		return
 	}
-	if msg.Tool == taskEndTool || msg.Tool == relayRefusedTool {
-		return // a record for the conversation that planned the task, or sent the message: no hop of any chain, no push of its own
+	if msg.Tool == taskEndTool || msg.Tool == prFollowupTool || msg.Tool == relayRefusedTool {
+		return // a record for the conversation that planned the task (or a closed task's PR follow-up): no hop of any chain, no push of its own
 	}
 	if msg.Tool == chatReplyTool {
 		s.chatReplyDelivered(to, msg) // others' words: no hop of any chain; the next one about that chat waits its gap

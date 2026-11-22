@@ -56,6 +56,7 @@ func (s *Service) botCardAction(ctx context.Context, a *feishubot.CardAction, ac
 				result, err = s.chooseOption(ctx, a.Str("id"), "", opt)
 			}
 			ask.Chosen = opt
+			ask.OptionTaken = result.taken && err == nil // this successful click, not an ambiguous legacy choice
 			if opt == ask.Recommend {
 				ask.Chosen = "" // the recommended one: taken as OK takes it
 			}
@@ -169,10 +170,10 @@ func (s *Service) botCardAction(ctx context.Context, a *feishubot.CardAction, ac
 	case "ib": // an Inbox button of the workbench's /inbox card
 		return s.workbenchInboxAction(ctx, a)
 	case "stop":
-		// The progress card's Stop button: the run's own conversation, carried in the button when the card was built.
+		// A progress card may outlive its run when its final edit was refused.
 		f, _ := s.feishuFeatures(ctx)
 		t := botTarget{Kind: a.Str("k"), MachineID: a.Str("m"), SessionID: a.Str("s")}
-		out := s.stopConversation(ctx, f, t)
+		out := s.stopProgressCard(ctx, f, t, a.Context.MessageID)
 		return toast(out.kind, out.message)
 	}
 	return toast("info", i18n.T(l, "assistant-feishu_cards.card_expired"))
