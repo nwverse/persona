@@ -456,37 +456,91 @@ func TestExtensionSandboxDefault(t *testing.T) {
 	}
 }
 
-// With a sandbox on and none on the machine, it runs as it is but pointed at the proxy, and says why.
+// Missing binaries and denied namespace/mount probes must stop the program, not merely set proxy variables.
 func TestExtensionSandboxMissing(t *testing.T) {
+	for _, why := range []string{"This machine has no bwrap (bubblewrap)", "bwrap cannot set up the sandbox mounts: operation not permitted"} {
+		t.Run(why, func(t *testing.T) {
+			old := sandboxProbe
+			sandboxProbe = func() sandbox.Support { return sandbox.Support{OS: "linux", Why: why} }
+			t.Cleanup(func() { sandboxProbe = old })
+			h, _ := extensionTestHub(t)
+			ps := h.extensions
+			ps.sandboxes.noDefault = false
+			mux := h.routes()
+			master := h.cfg.Token
+			code, pv := call(t, mux, "POST", "/api/v1/extensions/-/preview", master, `{"source": "dir:`+boxedPackage(t)+`"}`)
+			if code != 200 {
+				t.Fatalf("preview: %d %v", code, pv)
+			}
+			code, d := call(t, mux, "POST", "/api/v1/extensions/-/install", master,
+				fmt.Sprintf(`{"preview_id": %q, "permissions_digest": %q}`, pv["preview_id"], pv["permissions_digest"]))
+			if code != 200 {
+				t.Fatalf("install: %d %v", code, d)
+			}
+			hp := ps.get("boxed")
+			if hp == nil || hp.proc != nil || hp.status != host.StateError || !strings.Contains(hp.err, "bwrap") {
+				t.Fatalf("required isolation did not prevent process creation: %+v", hp)
+			}
+			if ps.sandboxes.proxyIfStarted() != nil {
+				t.Fatal("an unavailable sandbox started a proxy")
+			}
+			// The details endpoint is shared by the extension page and personad extension show.
+			code, d = call(t, mux, "GET", "/api/v1/extensions/boxed/-/", master, "")
+			sb, _ := d["sandbox"].(map[string]any)
+			if code != 200 || d["status"] != host.StateError || d["error"] == "" ||
+				sb["enabled"] != true || sb["default"] != true || sb["active"] != false ||
+				!strings.Contains(fmt.Sprint(sb["why"]), "bwrap") || !strings.Contains(fmt.Sprint(d["warnings"]), "bwrap") {
+				t.Fatalf("the refusal and its cause must be visible: %d %v", code, d)
+			}
+			// Retrying apply must not create an unsandboxed process either.
+			ps.apply(t.Context(), "boxed")
+			if hp := ps.get("boxed"); hp == nil || hp.proc != nil || hp.status != host.StateError {
+				t.Fatalf("retry bypassed isolation: %+v", hp)
+			}
+		})
+	}
+}
+
+func TestExtensionSandboxMissingOfficialExemption(t *testing.T) {
+	h, _ := extensionTestHub(t)
+	// TestMain disables the public market; use a locally verified official-key fixture.
+	key := newMarketKey(t)
+	useOfficialMarket(t, "github:example/plugins", key.text)
+	oldKeys := officialMarketKeys
+	officialMarketKeys = []string{keyIDOf(key.text)}
+	t.Cleanup(func() { officialMarketKeys = oldKeys })
 	old := sandboxProbe
 	sandboxProbe = func() sandbox.Support {
-		return sandbox.Support{OS: "linux", Why: "机器上没有 bwrap（bubblewrap）"}
+		t.Fatal("an exempt extension must not depend on sandbox support")
+		return sandbox.Support{}
 	}
 	t.Cleanup(func() { sandboxProbe = old })
-	h, _ := extensionTestHub(t)
 	ps := h.extensions
 	ps.sandboxes.noDefault = false
-	p := &extension.Extension{Record: extension.Record{ID: "notes", Source: extension.SourceInstalled, Origin: "dir:/x",
-		Granted: extension.Permissions{Network: []string{"api.example.com"}}},
+	ms := h.marketsState()
+	ms.mu.Lock()
+	ms.loaded = true
+	ms.byID = map[string]*marketState{"official": {rec: extension.MarketRecord{
+		ID: "official", Spec: extension.Official.Spec,
+		Signature: extension.MarketSignature{State: extension.SigSigned, KeyID: keyIDOf(extension.Official.SigningKey)},
+	}}}
+	ms.mu.Unlock()
+	p := &extension.Extension{Record: extension.Record{ID: "notes", Source: extension.SourceInstalled,
+		Origin: "market:official/notes", MarketKey: extension.Official.SigningKey},
 		Manifest: &extension.Manifest{ID: "notes", Runtime: &extension.Runtime{}}}
-	p.Full = p.Manifest
-	st := ps.sandboxOf(context.Background(), p)
-	if !st.Enabled || st.Active || !strings.Contains(st.Why, "bwrap") {
-		t.Fatalf("%+v", st)
+	st := ps.sandboxOf(t.Context(), p)
+	if st.Enabled || st.Default || !st.Trusted {
+		t.Fatalf("verified official extension lost its exemption: %+v", st)
 	}
-	s := host.Spec{StartEnv: func() []string { return []string{"PERSONA_HUB_URL=http://127.0.0.1:1"} }}
-	if err := ps.confine(context.Background(), p, &hubExtension{}, &s); err != nil {
-		t.Fatal(err)
+	spec := host.Spec{}
+	if err := ps.confine(t.Context(), p, &hubExtension{}, &spec); err != nil || spec.Wrap != nil {
+		t.Fatalf("official program was blocked or wrapped: %v", err)
 	}
-	if s.Wrap != nil {
-		t.Fatal("wrapped without a sandbox")
-	}
-	env := strings.Join(s.StartEnv(), " ")
-	if !strings.Contains(env, "HTTPS_PROXY=http://ext:") || !strings.Contains(env, "PERSONA_HUB_URL=http://127.0.0.1:1") {
-		t.Fatalf("env %s", env)
-	}
-	if v := ps.view(context.Background(), p); v.Sandbox == nil || !strings.Contains(strings.Join(v.Warnings, " "), "bwrap") {
-		t.Fatalf("view %+v", v)
+	// An owner who explicitly requires isolation for official code still gets fail-closed behavior.
+	sandboxProbe = func() sandbox.Support { return sandbox.Support{OS: "linux", Why: "no bwrap"} }
+	ps.sandboxes.settings.On = map[string]bool{"notes": true}
+	if err := ps.confine(t.Context(), p, &hubExtension{}, &spec); err == nil {
+		t.Fatal("an explicit sandbox choice was bypassed for official code")
 	}
 }
 

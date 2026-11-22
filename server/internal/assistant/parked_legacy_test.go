@@ -90,7 +90,10 @@ func TestLegacyOwnerPriorityMovesToNeedsYouAndRestates(t *testing.T) {
 		t.Fatal(err)
 	}
 	pushes, sends := len(f.pushed()), len(sentToAgent(f))
-	s.superviseWatch(ctx, time.Now())
+	parked := todoNow(s, task.ID).Supervision
+	watched := time.Now()
+	s.superviseWatch(ctx, watched)
+	wokeBy := wakeBound(watched)
 	cur := requireLegacyNeedsYou(t, s, task.ID)
 	if cur.Supervision.Supervisor != task.Supervision.Supervisor || !reflect.DeepEqual(cur.Supervision.Waits, waits) {
 		t.Fatal("migration changed the supervisor or the independent owner wait")
@@ -98,7 +101,8 @@ func TestLegacyOwnerPriorityMovesToNeedsYouAndRestates(t *testing.T) {
 	if len(cur.Supervision.Reviews) != 1 || cur.Supervision.Reviews[0].RestateAt.IsZero() {
 		t.Fatalf("missing persisted restatement or invented another review: %+v", cur.Supervision.Reviews)
 	}
-	after := cur.Supervision.Reviews[0]
+	// Moving the park to Needs you ends it: the only history change besides the restatement is park_ended_at.
+	after := requireParkEnded(t, parked, cur.Supervision.Reviews, wokeBy)[0]
 	after.RestateAt = before.RestateAt
 	if !reflect.DeepEqual(before, after) {
 		t.Fatalf("migration rewrote the original wait/history: before %+v, after %+v", before, after)

@@ -8,6 +8,7 @@
   "offline": "This computer is offline. Bring it online to probe its toolchain.",
   "no_machines": "No computers available.",
   "unavailable_old_node": "This computer's node does not support toolchain profiling yet. Update the node to view its environment.",
+  "unavailable_old_hub": "This hub does not support toolchain profiling yet. Update the hub to view a computer's environment.",
   "unavailable_forbidden": "Viewing a computer's toolchain profile requires full device access.",
   "error_load": "Could not load toolchain profile: {error}",
   "meta_cached": "Cached ({seconds}s TTL)",

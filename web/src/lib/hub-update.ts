@@ -24,6 +24,7 @@ export interface HubUpdateStatus {
     /** The snapshot folder in effect, the recommended one, and how many are kept. */
     backup_directory?: string;
     backup_default_directory?: string;
+    backup_directory_is_default?: boolean;
     backup_retain?: number;
     /** The hub pauses its own writers instead of running hub.json hooks. */
     builtin_quiesce?: boolean;

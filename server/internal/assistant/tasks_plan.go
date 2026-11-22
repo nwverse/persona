@@ -363,7 +363,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	case supervisor == "":
 	case supervisor != sessionID && supervisor != cfg.Main:
 		fmt.Fprintf(&b, " Leader conversation %s supervises them: their supervision messages go there, and it reviews them with task_review.", supervisor)
-	case background && s.isBackground(ctx, sessionID):
+	case background && s.isBackgroundSession(ctx, sessionID):
 		b.WriteString(" You follow them up as the background supervisor: a supervision message comes when one needs you (review it with task_review).")
 	case background && s.isMain(ctx, sessionID):
 		b.WriteString(" The background supervisor follows them up: their supervision messages go to it and it reviews them with " +
