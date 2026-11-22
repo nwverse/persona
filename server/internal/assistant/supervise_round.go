@@ -96,7 +96,7 @@ var roundToolsWithheld = map[string]string{
 	"task_start_screen": "failed and started go to the main conversation, and only it remedies a start (remedyTool)",
 	"task_start_keys":   "failed and started go to the main conversation, and only it remedies a start (remedyTool)",
 	"task_retry":        "failed and started go to the main conversation, and only it retries a start (toolTaskRetry)",
-	"agent_supervise":   "only the main conversation adopts an agent opened outside supervision (toolAgentSupervise)",
+	"agent_supervise":   "only the main conversation and a direction's lead adopt an agent opened outside supervision (toolAgentSupervise)",
 	"todo_create":       "a direction's own work: the background supervisor is not a direction and records no to-dos",
 	"todo_complete":     "a direction's own work: the background supervisor is not a direction and records no to-dos",
 	"leader_progress":   "a direction's own work: only a leader conversation reports progress (toolLeaderProgress)",

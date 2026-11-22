@@ -250,11 +250,10 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		}
 	}
 	// A direction's lead that a hand-over of the owner's quoted words went into (#11699): the words may have reached the
-	// wrong lead, so until the owner writes there, "the user asked for this" is no Start for writable work it plans.
+	// wrong lead, so until the owner writes there, "the user asked for this" is no Start for writable work it plans
+	// outside the kinds the owner already let this lead start (heldOutsideOwnKinds, #12953).
 	if scope == nil && slices.ContainsFunc(a.Tasks, func(t PlanTask) bool { return t.UserRequested }) && s.handedOver(sessionID) {
-		for i := range a.Tasks {
-			a.Tasks[i].UserRequested = false
-		}
+		s.heldOutsideOwnKinds(ctx, sessionID, a.Tasks)
 	}
 	var round Task
 	var inRound bool
