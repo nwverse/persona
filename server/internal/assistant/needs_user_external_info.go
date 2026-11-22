@@ -127,36 +127,46 @@ func (s *Service) needsUserExternalInfoEntry(ctx context.Context, t Todo, source
 	}
 }
 
+// hasOpenNeedsUserAsk reports whether t currently has an unanswered owner decision card.
+func (s *Service) hasOpenNeedsUserAsk(t Todo) bool {
+	a, ok := s.askCopy(t.ID)
+	return ok && decideAsk(&a) && a.AcceptedAt.IsZero() && !acceptAskStale(&a, t)
+}
+
 // maybeWakeNeedsUserForPR checks newly observed PR status facts for an open task in reviewNeedsUser and emits
 // idempotent wakes for meaningful external updates (merged, closed, approved, changes_requested, CI transitions,
-// conflicts) without touching the pending needs_user card.
-func (s *Service) maybeWakeNeedsUserForPR(ctx context.Context, t Todo, prev *TodoPRStatus, status TodoPRStatus) {
+// conflicts) without touching the pending needs_user card. Returns true when a merged PR was owned by an open
+// needs_user ask card so applyPRStatus does not double-emit sigPRMerged for the same merge (#13100, #13112).
+func (s *Service) maybeWakeNeedsUserForPR(ctx context.Context, t Todo, prev *TodoPRStatus, status TodoPRStatus) bool {
 	if !needsUserWakeEligible(t) {
-		return
+		return false
 	}
 	normURL := cmp.Or(triageNormalizePRURL(status.URL), strings.TrimSpace(status.URL))
 	if normURL == "" {
-		return
+		return false
 	}
 	headPart := cmp.Or(strings.TrimSpace(status.HeadOID), "nohead")
 
 	switch status.State {
 	case "merged":
+		if !s.hasOpenNeedsUserAsk(t) {
+			return false
+		}
 		if prev == nil || prev.State != "merged" {
 			summary := fmt.Sprintf("PR %s was merged.", status.URL)
 			s.emitNeedsUserExternalInfo(ctx, t, status.URL, summary, "pr:"+normURL+":merged")
 		}
-		return
+		return true
 	case "closed":
 		if prev == nil || prev.State != "closed" {
 			summary := fmt.Sprintf("PR %s was closed without merging.", status.URL)
 			s.emitNeedsUserExternalInfo(ctx, t, status.URL, summary, "pr:"+normURL+":closed")
 		}
-		return
+		return false
 	}
 
 	if status.State != "open" {
-		return
+		return false
 	}
 
 	if status.Review == "approved" {
@@ -210,6 +220,7 @@ func (s *Service) maybeWakeNeedsUserForPR(ctx context.Context, t Todo, prev *Tod
 		summary := fmt.Sprintf("PR %s CI checks changed from %s to %s.", status.URL, cmp.Or(prev.Checks, "none"), status.Checks)
 		s.emitNeedsUserExternalInfo(ctx, t, status.URL, summary, "pr:"+normURL+":checks:"+status.Checks+"@"+headPart)
 	}
+	return false
 }
 
 // formatInboxExternalInfo builds a concise (source, summary) pair for an Inbox item waking a needs_user task.

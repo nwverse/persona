@@ -612,8 +612,11 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 	s.todos.mu.Unlock()
 	b.stageWriting.Unlock()
 	s.todosChanged(ctx)
+	parkWoke := false
+	preStage := t.Stage
+	needsUserMergeHandled := false
 	if needsUserWakeEligible(t) {
-		s.maybeWakeNeedsUserForPR(ctx, t, prevPR, status)
+		needsUserMergeHandled = s.maybeWakeNeedsUserForPR(ctx, t, prevPR, status)
 	} else {
 		if status.State == "open" && status.Draft && status.Own && status.HeadOID != "" && t.Supervision != nil {
 			s.signal(superviseSignal{Todo: t.ID, Kind: sigDraftPR, PRURL: status.URL, Key: status.URL + "@" + status.HeadOID})
@@ -661,6 +664,7 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 				return err
 			}
 			if changed {
+				parkWoke = true
 				detail := "PR " + status.State + ": " + status.URL
 				if reviewChange {
 					detail = "PR changes requested: " + status.URL
@@ -673,6 +677,11 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 		s.setTaskStageOn(ctx, t.ID, "merge", "", "", false, status.URL)
 	}
 	if strings.EqualFold(status.State, "merged") {
+		if parkWoke || needsUserMergeHandled {
+			s.prMergeWakeTold(ctx, []superviseSignal{{Todo: t.ID, Kind: sigPRMerged, PRURL: status.URL, Key: prMergeSignalKey(status.URL)}})
+		} else {
+			s.maybeEmitUnparkedPRMerged(ctx, t.ID, status.URL, held, parkWoke, wasOpen, preStage)
+		}
 		s.evaluateTodoAfterDependents(ctx, t.ID)
 	}
 	return nil

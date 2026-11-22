@@ -81,7 +81,7 @@ class InboxReportedShotsTest {
         val nodes = rule.onAllNodesWithText(REPORTED_SHOTS_ORIGINAL, useUnmergedTree = true).fetchSemanticsNodes()
         assertEquals("$context: the original must appear exactly once", 1, nodes.size)
         val layouts = mutableListOf<TextLayoutResult>()
-        nodes.single().config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
+        val _ = nodes.single().config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
         return layouts.single()
     }
 

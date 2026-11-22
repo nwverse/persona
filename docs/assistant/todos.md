@@ -1727,6 +1727,24 @@ an enabled engine on that computer. The Manager prepares a missing checkout,
 persists the all-ready result, claims the workspace and checks that the to-do
 and operation still permit a start. A retry reuses the same ready checkout.
 
+To dispatch directly into a multi-repository `container` workspace from
+`task_plan`, pass `"workspace":{"container":{"selected_repo_ids":["repo_web","repo_api"]}}`
+(with optional `operation_id` and `host`, and no `cwd` required). Plan creation
+and card preview stay metadata-only: the Manager validates the saved repository
+IDs (from the repository catalog or already bound to `todo_id`) and resolves the
+container root and per-repository subdirectories via `workspace.naming.resolve`
+without writing to disk. When the plan starts, a new to-do atomically binds the
+selected repositories (`CreateTodoWithRepositories`), an existing `todo_id`
+merges any newly selected catalog repositories while preserving its existing
+associations and links, and admission reuses `ensureBackendWorkspacePlan` and
+`PrepareBackendWorkspace` (`workspacenaming` and `task_workspaces`) to save the
+immutable `container` naming plan, prepare all selected repositories, acquire
+the launch use lock and start the session at the container root. Pass
+`"workspace":{"container":{"operation_id":"op_example"}}` with `todo_id` to
+launch directly into an existing saved or prepared `container` workspace (a
+non-container `root` plan is rejected). Legacy `new`, `existing` and `none`
+single-repository policies and defaults are unchanged.
+
 For an owner starting a to-do directly, including one created by hand, use
 `POST /api/v1/todos/{id}/backend-workspace/start`. Send `operation_id`,
 a stable `start_id` for this launch, and optional `host`, `launcher` and
