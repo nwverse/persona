@@ -1,0 +1,16 @@
+{
+  "toggle": "Fill in fields before inserting",
+  "syntax_hint": "Add fields such as {syntax}. Repeating a field uses the same value each time.",
+  "fill_title": "Fill saved prompt",
+  "fill_hint": "Fill in all fields to insert this prompt into your draft.",
+  "insert": "Insert",
+  "invalid_syntax": "Check the template fields and braces.",
+  "no_fields": "Add at least one template field.",
+  "too_many_fields": "Use at most 8 different fields.",
+  "too_many_slots": "Use at most 64 field placeholders.",
+  "source_too_long": "The template must be 8,000 characters or fewer.",
+  "value_too_long": "Use 2,000 characters or fewer for {field}.",
+  "output_too_long": "The filled prompt must be 32,000 characters or fewer.",
+  "unsupported": "This assistant can no longer save prompt templates. Reload and try again.",
+  "scope_changed": "The assistant or connection changed. Close this editor and open it again."
+}

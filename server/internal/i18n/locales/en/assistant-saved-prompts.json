@@ -6,5 +6,7 @@
   "err_text": "A prompt needs some text, at most {max} characters.",
   "err_too_many": "You can save at most {max} prompts.",
   "err_order": "The saved prompts changed on another device. Reload the list and try again.",
-  "err_name_taken": "There is already a prompt called “/{name}”."
+  "err_name_taken": "There is already a prompt called “/{name}”.",
+  "err_template_invalid": "Use 1 to 8 valid fields, with at most 64 placeholders. Escape literal double braces with a backslash.",
+  "err_template_unavailable": "This assistant cannot store fillable prompt templates."
 }

@@ -1,0 +1,16 @@
+{
+  "toggle": "插入前填写字段",
+  "syntax_hint": "可添加 {syntax} 这样的字段。同名字段会使用同一个值。",
+  "fill_title": "填写已保存的提示词",
+  "fill_hint": "填写所有字段后，即可将提示词插入草稿。",
+  "insert": "插入",
+  "invalid_syntax": "请检查模板的字段名称和花括号。",
+  "no_fields": "请至少添加一个模板字段。",
+  "too_many_fields": "最多可使用 8 个不同的字段。",
+  "too_many_slots": "字段占位符最多可出现 64 次。",
+  "source_too_long": "模板不能超过 8,000 个字符。",
+  "value_too_long": "{field} 不能超过 2,000 个字符。",
+  "output_too_long": "填好的提示词不能超过 32,000 个字符。",
+  "unsupported": "当前助理已无法保存提示词模板。请重新加载后再试。",
+  "scope_changed": "助理或连接已更改。请关闭此编辑器后重新打开。"
+}

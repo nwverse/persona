@@ -33,7 +33,7 @@ vi.mock("../../lib/router", async (orig) => {
 
 const { ModelPanel } = await import("./ModelPanel");
 const { Dialog } = await import("../atoms");
-const { onOverlayEntry, overlayDepth } = await import("../../lib/back-close");
+const { afterBack, onOverlayEntry, overlayDepth } = await import("../../lib/back-close");
 const { initI18n } = await import("../../i18n");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -141,19 +141,22 @@ describe("Back with the model panel open (#11442)", () => {
   });
 
   it("closed from the page (Esc, a press outside), takes its entry back off", async () => {
+    const closeAndWait = async (close: () => void) => {
+      await act(async () => {
+        const popped = new Promise<boolean>((resolve) => afterBack(resolve, 3_000));
+        close();
+        expect(await popped).toBe(true);
+      });
+      expect(panel()).toBeNull();
+      expect(onOverlayEntry()).toBe(false);
+    };
     await mount();
-    act(() => void dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
-    expect(panel()).toBeNull();
-    await settle();
-    expect(onOverlayEntry()).toBe(false);
+    await closeAndWait(() => dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
 
     act(() => root.render(<></>));
     await mount();
     expect(onOverlayEntry()).toBe(true);
-    act(() => void document.body.dispatchEvent(new Event("pointerdown", { bubbles: true })));
-    expect(panel()).toBeNull();
-    await settle();
-    expect(onOverlayEntry()).toBe(false);
+    await closeAndWait(() => document.body.dispatchEvent(new Event("pointerdown", { bubbles: true })));
   });
 
   it("in New Agent's sheet, a pick closes only the panel; the next Back closes the sheet", async () => {

@@ -29,6 +29,11 @@ type promptStore interface {
 	PutSetting(ctx context.Context, key string, value any) error
 }
 
+type templatePromptStore interface {
+	promptStore
+	PutSettings(context.Context, map[string]any) error
+}
+
 // PromptsKey is where the prompts are kept, in the order the "/" list shows them.
 const PromptsKey = "assistant.saved_prompts"
 
@@ -47,12 +52,25 @@ type Prompt struct {
 	Text      string    `json:"text"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	Template  bool      `json:"template,omitempty"` // response only; stored separately from the legacy list
 }
 
 // savedPromptInput is a prompt as the apps send it.
 type savedPromptInput struct {
-	Name string `json:"name"`
-	Text string `json:"text"`
+	Name     string          `json:"name"`
+	Text     string          `json:"text"`
+	Template json.RawMessage `json:"template"`
+}
+
+func (in savedPromptInput) templateChoice() (*bool, error) {
+	if in.Template == nil {
+		return nil, nil
+	}
+	var choice *bool
+	if err := json.Unmarshal(in.Template, &choice); err != nil || choice == nil {
+		return nil, errPromptTemplateInvalid
+	}
+	return choice, nil
 }
 
 // promptBook serializes the changes: each reads the list, changes it and writes it back.
@@ -105,46 +123,80 @@ func (in savedPromptInput) prompt() (Prompt, error) {
 // sameSavedPromptName: two names are the same prompt's, case aside (the "/" list matches without it).
 func sameSavedPromptName(a, b string) bool { return strings.EqualFold(a, b) }
 
-// savedPrompts are the saved prompts, in the "/" list's order.
-func (b *promptBook) prompts(ctx context.Context) ([]Prompt, error) {
-	st, ok := b.h.Store().(promptStore)
-	if !ok {
-		return nil, errSavedPromptsStore
-	}
+// readSavedPrompts joins the legacy list to template metadata only when the
+// store can commit the two together. The caller holds the prompt book's mutex.
+func readSavedPrompts(ctx context.Context, st promptStore) ([]Prompt, promptTemplateFlags, error) {
 	var prompts []Prompt
 	if _, err := st.Setting(ctx, PromptsKey, &prompts); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return prompts, nil
+	var flags promptTemplateFlags
+	if _, ok := st.(templatePromptStore); ok {
+		if _, err := st.Setting(ctx, PromptTemplatesKey, &flags); err != nil {
+			return nil, nil, err
+		}
+		if flags == nil {
+			flags = promptTemplateFlags{}
+		}
+	}
+	for i := range prompts {
+		prompts[i].Template = flags.enabled(prompts[i])
+	}
+	return prompts, flags, nil
 }
 
-// changeSavedPrompts runs change on the saved prompts and keeps what it returns, one change at a time; the apps are told
-// (event assistant_saved_prompts), so another open page reads the list again.
-func (b *promptBook) change(ctx context.Context, change func([]Prompt) ([]Prompt, error)) ([]Prompt, error) {
+func (b *promptBook) prompts(ctx context.Context) ([]Prompt, bool, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	prompts, err := b.prompts(ctx)
-	if err != nil {
-		return nil, err
-	}
-	next, err := change(slices.Clone(prompts))
-	if err != nil {
-		return nil, err
-	}
 	st, ok := b.h.Store().(promptStore)
 	if !ok {
-		return nil, errSavedPromptsStore
+		return nil, false, errSavedPromptsStore
 	}
-	if err := st.PutSetting(ctx, PromptsKey, next); err != nil {
-		return nil, err
+	prompts, flags, err := readSavedPrompts(ctx, st)
+	return prompts, flags != nil, err
+}
+
+// changeSavedPrompts reads and writes each change under the lock. Template
+// metadata is held outside the legacy row so an older manager can still edit
+// it; compatible stores save the two settings in one transaction.
+func (b *promptBook) change(ctx context.Context, change func([]Prompt, promptTemplateFlags) ([]Prompt, error)) ([]Prompt, bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	st, ok := b.h.Store().(promptStore)
+	if !ok {
+		return nil, false, errSavedPromptsStore
+	}
+	prompts, flags, err := readSavedPrompts(ctx, st)
+	if err != nil {
+		return nil, false, err
+	}
+	next, err := change(slices.Clone(prompts), flags)
+	if err != nil {
+		return nil, false, err
+	}
+	if batch, ok := st.(templatePromptStore); ok {
+		rows := slices.Clone(next)
+		keptFlags := promptTemplateFlags{}
+		for i := range rows {
+			rows[i].Template = false
+			if hash, ok := flags[rows[i].ID]; ok {
+				keptFlags[rows[i].ID] = hash
+			}
+		}
+		err = batch.PutSettings(ctx, map[string]any{PromptsKey: rows, PromptTemplatesKey: keptFlags})
+	} else {
+		err = st.PutSetting(ctx, PromptsKey, next)
+	}
+	if err != nil {
+		return nil, false, err
 	}
 	b.h.Event(ctx, map[string]any{"type": "assistant_saved_prompts"})
-	return next, nil
+	return next, flags != nil, nil
 }
 
 // addSavedPrompt adds p at the end of the list; a prompt of the same name is an error.
-func (b *promptBook) add(ctx context.Context, p Prompt) (Prompt, error) {
-	_, err := b.change(ctx, func(prompts []Prompt) ([]Prompt, error) {
+func (b *promptBook) add(ctx context.Context, p Prompt, template *bool) (Prompt, bool, error) {
+	_, supportsTemplates, err := b.change(ctx, func(prompts []Prompt, flags promptTemplateFlags) ([]Prompt, error) {
 		if slices.ContainsFunc(prompts, func(x Prompt) bool { return sameSavedPromptName(x.Name, p.Name) }) {
 			return nil, savedPromptNameTaken(p.Name)
 		}
@@ -153,9 +205,12 @@ func (b *promptBook) add(ctx context.Context, p Prompt) (Prompt, error) {
 		}
 		now := time.Now().UTC()
 		p.ID, p.CreatedAt, p.UpdatedAt = newSavedPromptID(prompts, now), now, now
+		if err := flags.apply(&p, false, template); err != nil {
+			return nil, err
+		}
 		return append(prompts, p), nil
 	})
-	return p, err
+	return p, supportsTemplates, err
 }
 
 // newSavedPromptID is an id no prompt in prompts has: the time, moved on past one taken (a clock as coarse as a
@@ -171,8 +226,8 @@ func newSavedPromptID(prompts []Prompt, now time.Time) string {
 
 // updateSavedPrompt changes prompt id's name and text, keeping its place in the list; a name another prompt has is an
 // error.
-func (b *promptBook) update(ctx context.Context, id string, p Prompt) (Prompt, error) {
-	_, err := b.change(ctx, func(prompts []Prompt) ([]Prompt, error) {
+func (b *promptBook) update(ctx context.Context, id string, p Prompt, template *bool) (Prompt, bool, error) {
+	_, supportsTemplates, err := b.change(ctx, func(prompts []Prompt, flags promptTemplateFlags) ([]Prompt, error) {
 		i := slices.IndexFunc(prompts, func(x Prompt) bool { return x.ID == id })
 		if i < 0 {
 			return nil, errSavedPromptGone
@@ -181,15 +236,19 @@ func (b *promptBook) update(ctx context.Context, id string, p Prompt) (Prompt, e
 			return nil, savedPromptNameTaken(p.Name)
 		}
 		p.ID, p.CreatedAt, p.UpdatedAt = id, prompts[i].CreatedAt, time.Now().UTC()
+		if err := flags.apply(&p, prompts[i].Template, template); err != nil {
+			return nil, err
+		}
 		prompts[i] = p
 		return prompts, nil
 	})
-	return p, err
+	return p, supportsTemplates, err
 }
 
 // deleteSavedPrompt removes prompt id; one that is not there is not an error (deleting twice is fine).
 func (b *promptBook) delete(ctx context.Context, id string) error {
-	_, err := b.change(ctx, func(prompts []Prompt) ([]Prompt, error) {
+	_, _, err := b.change(ctx, func(prompts []Prompt, flags promptTemplateFlags) ([]Prompt, error) {
+		delete(flags, id)
 		return slices.DeleteFunc(prompts, func(x Prompt) bool { return x.ID == id }), nil
 	})
 	return err
@@ -198,7 +257,7 @@ func (b *promptBook) delete(ctx context.Context, id string) error {
 // orderSavedPrompts puts the prompts in the order of ids, which must name each saved prompt once: a list that changed
 // since the page read it (one added, deleted, or named twice) is refused, and the page reads it again.
 func (b *promptBook) order(ctx context.Context, ids []string) ([]Prompt, error) {
-	return b.change(ctx, func(prompts []Prompt) ([]Prompt, error) {
+	next, _, err := b.change(ctx, func(prompts []Prompt, _ promptTemplateFlags) ([]Prompt, error) {
 		if len(ids) != len(prompts) {
 			return nil, errSavedPromptOrder
 		}
@@ -217,13 +276,14 @@ func (b *promptBook) order(ctx context.Context, ids []string) ([]Prompt, error) 
 		}
 		return out, nil
 	})
+	return next, err
 }
 
 // writeSavedPromptError answers a failed read or change of the prompts with its status.
 func writeSavedPromptError(w http.ResponseWriter, err error) {
 	var msg *i18n.Message
 	switch {
-	case errors.Is(err, errSavedPromptsStore):
+	case errors.Is(err, errSavedPromptsStore), errors.Is(err, errPromptTemplateUnavailable):
 		apierr.Write(w, http.StatusServiceUnavailable, err)
 	case errors.Is(err, errSavedPromptGone):
 		apierr.Write(w, http.StatusNotFound, err)
@@ -244,14 +304,26 @@ func listedSavedPrompts(prompts []Prompt) map[string]any {
 	return map[string]any{"prompts": prompts}
 }
 
+func writtenSavedPrompt(prompt Prompt, supportsTemplates bool) map[string]any {
+	res := map[string]any{"prompt": prompt}
+	if supportsTemplates {
+		res["template_version"] = promptTemplateVersion
+	}
+	return res
+}
+
 func (b *promptBook) routes() {
 	b.h.Handle("GET /api/v1/assistant/saved-prompts", func(w http.ResponseWriter, r *http.Request) {
-		prompts, err := b.prompts(r.Context())
+		prompts, supportsTemplates, err := b.prompts(r.Context())
 		if err != nil {
 			writeSavedPromptError(w, err)
 			return
 		}
-		apierr.WriteJSON(w, listedSavedPrompts(prompts))
+		list := listedSavedPrompts(prompts)
+		if supportsTemplates {
+			list["template_version"] = promptTemplateVersion
+		}
+		apierr.WriteJSON(w, list)
 	})
 	// writable: a device that may change the prompts; false when it answered 403.
 	writable := func(w http.ResponseWriter, r *http.Request) bool {
@@ -262,33 +334,38 @@ func (b *promptBook) routes() {
 		return true
 	}
 	// readPrompt is the prompt in the request's body; false when it answered an error.
-	readPrompt := func(w http.ResponseWriter, r *http.Request) (Prompt, bool) {
+	readPrompt := func(w http.ResponseWriter, r *http.Request) (Prompt, *bool, bool) {
 		if !writable(w, r) {
-			return Prompt{}, false
+			return Prompt{}, nil, false
 		}
 		var in savedPromptInput
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&in); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
-			return Prompt{}, false
+			return Prompt{}, nil, false
 		}
 		p, err := in.prompt()
 		if err != nil {
 			writeSavedPromptError(w, err)
-			return Prompt{}, false
+			return Prompt{}, nil, false
 		}
-		return p, true
+		template, err := in.templateChoice()
+		if err != nil {
+			writeSavedPromptError(w, err)
+			return Prompt{}, nil, false
+		}
+		return p, template, true
 	}
 	b.h.Handle("POST /api/v1/assistant/saved-prompts", func(w http.ResponseWriter, r *http.Request) {
-		p, ok := readPrompt(w, r)
+		p, template, ok := readPrompt(w, r)
 		if !ok {
 			return
 		}
-		p, err := b.add(r.Context(), p)
+		p, supportsTemplates, err := b.add(r.Context(), p, template)
 		if err != nil {
 			writeSavedPromptError(w, err)
 			return
 		}
-		apierr.WriteJSON(w, map[string]any{"prompt": p})
+		apierr.WriteJSON(w, writtenSavedPrompt(p, supportsTemplates))
 	})
 	b.h.Handle("PUT /api/v1/assistant/saved-prompts/order", func(w http.ResponseWriter, r *http.Request) {
 		if !writable(w, r) {
@@ -309,16 +386,16 @@ func (b *promptBook) routes() {
 		apierr.WriteJSON(w, listedSavedPrompts(prompts))
 	})
 	b.h.Handle("PUT /api/v1/assistant/saved-prompts/{id}", func(w http.ResponseWriter, r *http.Request) {
-		p, ok := readPrompt(w, r)
+		p, template, ok := readPrompt(w, r)
 		if !ok {
 			return
 		}
-		p, err := b.update(r.Context(), r.PathValue("id"), p)
+		p, supportsTemplates, err := b.update(r.Context(), r.PathValue("id"), p, template)
 		if err != nil {
 			writeSavedPromptError(w, err)
 			return
 		}
-		apierr.WriteJSON(w, map[string]any{"prompt": p})
+		apierr.WriteJSON(w, writtenSavedPrompt(p, supportsTemplates))
 	})
 	b.h.Handle("DELETE /api/v1/assistant/saved-prompts/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !writable(w, r) {

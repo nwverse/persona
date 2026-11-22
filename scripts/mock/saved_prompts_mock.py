@@ -10,8 +10,8 @@ import uuid
 
 import mock_domains
 
-HELP = ("MOCK_SAVED_PROMPTS=1|old  Settings › Saved Prompts and every chat's / list: three saved prompts (1), or an "
-        "assistant from before them, its routes answering 404 (old) (#7329)")
+HELP = ("MOCK_SAVED_PROMPTS=1|templates|old  Settings › Saved Prompts: three ordinary prompts (1), a manager "
+        "with template editing (templates), or an assistant from before saved prompts (old, 404)")
 HUB = None  # mock_hub.py's globals (mock_domains.Hub), from register
 
 
@@ -39,6 +39,19 @@ def push_saved_prompts():
             pass
 
 
+def template_response():
+    return {"template_version": 1} if os.environ.get("MOCK_SAVED_PROMPTS") == "templates" else {}
+
+
+def apply_template_flag(prompt, body, version):
+    if not version or "template" not in body:
+        return
+    if body["template"] is True:
+        prompt["template"] = True
+    else:
+        prompt.pop("template", None)
+
+
 def save_saved_prompt(body, pid):
     """Adds a saved prompt (pid None) or changes prompt pid, as the manager does: (answer, status)."""
     name = str(body.get("name") or "").strip().removeprefix("/")
@@ -50,19 +63,22 @@ def save_saved_prompt(body, pid):
     if any(x["name"].lower() == name.lower() and x["id"] != pid for x in SAVED_PROMPTS):
         return {"error": f"There is already a prompt called “/{name}”."}, 409
     now = ago()
+    version = template_response()
     if pid:
         for x in SAVED_PROMPTS:
             if x["id"] == pid:
                 x.update(name=name, text=text, updated_at=now)
+                apply_template_flag(x, body, version)
                 push_saved_prompts()
-                return {"prompt": x}, 200
+                return {"prompt": x, **version}, 200
         return {"error": "That saved prompt is gone."}, 404
     if len(SAVED_PROMPTS) >= 100:
         return {"error": "You can save at most 100 prompts."}, 400
     prompt = {"id": f"sp{uuid.uuid4().hex[:8]}", "name": name, "text": text, "created_at": now, "updated_at": now}
+    apply_template_flag(prompt, body, version)
     SAVED_PROMPTS.append(prompt)
     push_saved_prompts()
-    return {"prompt": prompt}, 200
+    return {"prompt": prompt, **version}, 200
 
 
 def saved_prompts_route(h, p, method):
@@ -73,7 +89,7 @@ def saved_prompts_route(h, p, method):
     if os.environ.get("MOCK_SAVED_PROMPTS") == "old":
         h.send_json({"error": "not found"}, 404)
     elif p == base and method == "GET":
-        h.send_json({"prompts": SAVED_PROMPTS})
+        h.send_json({"prompts": SAVED_PROMPTS, **template_response()})
     elif p == base and method == "POST":
         h.send_json(*save_saved_prompt(json.loads(h.last_body or b"{}"), None))
     elif p == base + "/order" and method == "PUT":
@@ -116,5 +132,5 @@ def register(d):
          "created_at": ago(days=2), "updated_at": ago(days=1)},
         {"id": "sp3", "name": "standup", "text": "Write today's standup from my commits and merged PRs:\n- done\n- next\n- blocked",
          "created_at": ago(hours=5), "updated_at": ago(hours=5)},
-    ] if os.environ.get("MOCK_SAVED_PROMPTS") == "1" else []
+    ] if os.environ.get("MOCK_SAVED_PROMPTS") in ("1", "templates") else []
     d.route(mock_domains.METHODS, r"/api/v1/assistant/saved-prompts(/.*)?", route)

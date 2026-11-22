@@ -10,6 +10,7 @@ import {
   SAVED_PROMPT_NAME_MAX,
   SAVED_PROMPT_TEXT_MAX,
   SAVED_PROMPTS_MAX,
+  captureSavedPromptScope,
   saveSavedPrompt,
   savedPromptName,
   savedPromptNameProblem,
@@ -18,7 +19,8 @@ import {
   useSavedPrompts,
   type SavedPrompt,
 } from "../../lib/saved-prompts";
-import { Button, cx, Dialog, toast } from "../../ui/atoms";
+import { parseSavedPromptTemplate } from "../../lib/saved-prompt-template";
+import { Button, cx, Dialog, Switch, toast } from "../../ui/atoms";
 import { settingsInputClass } from "./SettingsParts";
 
 const text = (key: string, vars?: Record<string, string | number>) => t(`chat-savedprompts.${key}`, vars);
@@ -28,22 +30,30 @@ const areaClass =
 
 /** `editing`: the prompt changed, null for a new one; `from`: the words of the message it is saved from (its name is
  *  suggested from them until the user types one). */
-export function SavedPromptDialog({ open, editing, from, onClose }: {
+export function SavedPromptDialog({ open, editing, from, scope, onClose }: {
   open: boolean;
   editing: SavedPrompt | null;
   from?: string;
+  scope?: () => boolean;
   onClose: () => void;
 }) {
   const list = useSavedPrompts();
+  const [isCurrent] = useState(() => scope ?? captureSavedPromptScope());
   const [typedName, setTypedName] = useState<string | null>(editing ? editing.name : null);
   const [body, setBody] = useState(editing?.text ?? from?.trim() ?? "");
+  const [template, setTemplate] = useState(editing?.template === true);
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const ids = { name: useId(), nameNote: useId(), text: useId(), textNote: useId() };
+  const ids = { name: useId(), nameNote: useId(), text: useId(), textNote: useId(), syntax: useId() };
   const name = typedName ?? (from ? suggestedSavedPromptName(from, list.prompts) : "");
   const nameProblem = savedPromptNameProblem(name, list.prompts, editing?.id ?? null);
-  const textProblem = savedPromptTextProblem(body);
+  const problem = template ? parseSavedPromptTemplate(body.trim()).problem : undefined;
+  const textProblem = savedPromptTextProblem(body) || (problem ? t(`prompt-template.${problem}`) : "");
+  const templateAvailable = list.templateVersion === 1;
+  const scopeChanged = !isCurrent();
+  const modeChanged = template !== (editing?.template === true);
+  const templateUnavailable = (template || modeChanged) && !templateAvailable;
   const full = !editing && list.status === "ready" && list.prompts.length >= SAVED_PROMPTS_MAX;
   const unsupported = list.status === "unsupported";
   // a rule shows once there is something to check or Save was pressed; a name another prompt has, at once
@@ -53,11 +63,12 @@ export function SavedPromptDialog({ open, editing, from, onClose }: {
 
   const save = async () => {
     setTried(true);
-    if (nameProblem || textProblem || busy || full || unsupported) return;
+    if (nameProblem || textProblem || busy || full || unsupported || templateUnavailable || !isCurrent()) return;
     setBusy(true);
     setError("");
     try {
-      const p = await saveSavedPrompt(editing?.id ?? null, { name, text: body });
+      const p = await saveSavedPrompt(editing?.id ?? null, { name, text: body, template: modeChanged ? template : undefined });
+      if (!isCurrent()) return;
       toast(text(editing ? "changed" : "saved", { name: p.name }), "ok");
       onClose();
     } catch (e) {
@@ -76,7 +87,7 @@ export function SavedPromptDialog({ open, editing, from, onClose }: {
       footer={
         <>
           <Button disabled={busy} onClick={onClose}>{t("common.cancel")}</Button>
-          <Button tone="primary" busy={busy} disabled={busy || full || unsupported} onClick={() => void save()} testId="saved-prompt-save">
+          <Button tone="primary" busy={busy} disabled={busy || full || unsupported || scopeChanged || templateUnavailable} onClick={() => void save()} testId="saved-prompt-save">
             {text("save")}
           </Button>
         </>
@@ -90,13 +101,15 @@ export function SavedPromptDialog({ open, editing, from, onClose }: {
         }}
         onKeyDown={(e) => {
           // ⌘/Ctrl-Return saves from the text too, where Return makes a new line
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+          if (!e.nativeEvent.isComposing && e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
             void save();
           }
         }}
       >
         {unsupported && <p role="alert" className="text-label leading-relaxed text-orange">{t("settings-savedprompts.unsupported")}</p>}
+        {scopeChanged && <p role="alert" className="text-label leading-relaxed text-orange">{t("prompt-template.scope_changed")}</p>}
+        {!scopeChanged && templateUnavailable && <p role="alert" className="text-label leading-relaxed text-orange">{t("prompt-template.unsupported")}</p>}
         {full && <p role="alert" className="text-label leading-relaxed text-orange">{text("full", { max: SAVED_PROMPTS_MAX })}</p>}
         <div>
           <label htmlFor={ids.name} className="block text-xs text-ink-2">{text("name")}</label>
@@ -137,7 +150,7 @@ export function SavedPromptDialog({ open, editing, from, onClose }: {
             disabled={busy}
             autoFocus={Boolean(from)}
             aria-invalid={showText ? true : undefined}
-            aria-describedby={ids.textNote}
+            aria-describedby={template && templateAvailable ? `${ids.textNote} ${ids.syntax}` : ids.textNote}
             data-testid="saved-prompt-text"
             onChange={(e) => {
               setBody(e.target.value);
@@ -149,6 +162,18 @@ export function SavedPromptDialog({ open, editing, from, onClose }: {
             {length > SAVED_PROMPT_TEXT_MAX * 0.8 && <span className="shrink-0 tabular-nums">{text("count", { n: length, max: SAVED_PROMPT_TEXT_MAX })}</span>}
           </p>
         </div>
+        {templateAvailable && !scopeChanged && (
+          <div className="flex min-h-11 items-center justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-label font-medium text-ink">{t("prompt-template.toggle")}</p>
+              {template && <p id={ids.syntax} className="mt-1 break-words text-xs leading-snug text-ink-3">
+                {t("prompt-template.syntax_hint", { syntax: "{{field}}" })}
+              </p>}
+            </div>
+            <Switch on={template} label={t("prompt-template.toggle")} describedBy={template ? ids.syntax : undefined}
+              disabled={busy} onChange={(on) => { setTemplate(on); setError(""); }} />
+          </div>
+        )}
         {error && <p role="alert" className="text-xs text-red">{error}</p>}
       </form>
     </Dialog>
@@ -157,7 +182,8 @@ export function SavedPromptDialog({ open, editing, from, onClose }: {
 
 /** "Save as Prompt…" (a message of yours, MessageActions): the editor over the page, filled with the message's words,
  *  gone once it closed. */
-export function openSavedPromptDialog(words: string) {
+export function openSavedPromptDialog(words: string, scope = captureSavedPromptScope()) {
+  if (!scope()) return;
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
@@ -171,7 +197,7 @@ export function openSavedPromptDialog(words: string) {
       }, 400); // after the dialog's exit
       return () => clearTimeout(gone);
     }, [open]);
-    return <SavedPromptDialog open={open} editing={null} from={words} onClose={() => setOpen(false)} />;
+    return <SavedPromptDialog open={open} editing={null} from={words} scope={scope} onClose={() => setOpen(false)} />;
   }
   root.render(<Host />);
 }

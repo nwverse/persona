@@ -11,9 +11,13 @@
 //   (cd web && PERSONA_HUB_URL=http://127.0.0.1:18797 npx vite --host 127.0.0.1 --port 5797 --strictPort &)
 //   node web/e2e/saved-prompts.mjs http://127.0.0.1:5797 --hub http://127.0.0.1:18797 [--shots <dir>] [--channel msedge | --executable <chromium>]
 //
+// For the template-specific flow (#12115) use MOCK_SAVED_PROMPTS=templates and add --templates.
+// MOCK_SAVED_PROMPTS=1 with --legacy-templates checks the fallback on a manager with ordinary prompts only.
+//
 // Runs wide (1440×900) and phone width (390×844, touch), light and dark, in English; --shots saves the settings page, the
 // editor, the "/" list and Save as Prompt of each. Prints one line per check and a verdict; exits 1 on a failure and after
 // six minutes. Every request outside the two loopback servers is refused; what it adds it deletes again.
+import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
@@ -26,10 +30,13 @@ const flag = (name) => {
 const base = (args[0] ?? "").replace(/\/$/, "");
 const hub = (flag("--hub") ?? "").replace(/\/$/, "");
 const shots = flag("--shots");
+const templates = args.includes("--templates");
+const legacyTemplates = args.includes("--legacy-templates");
+const largeText = args.includes("--large-text");
 const executable = flag("--executable");
 const channel = flag("--channel") ?? "chrome";
 if (!base || !hub) {
-  console.error("usage: node web/e2e/saved-prompts.mjs <web URL> --hub <mock hub URL> [--shots <dir>] [--channel msedge | --executable <chromium>]");
+  console.error("usage: node web/e2e/saved-prompts.mjs <web URL> --hub <mock hub URL> [--templates | --legacy-templates] [--large-text] [--shots <dir>] [--channel msedge | --executable <chromium>]");
   process.exit(2);
 }
 for (const url of [base, hub]) {
@@ -71,10 +78,11 @@ async function open(browser, theme, phone) {
     const origin = new URL(route.request().url()).origin;
     return [new URL(base).origin, new URL(hub).origin].includes(origin) ? route.continue() : route.abort();
   });
-  await ctx.addInitScript((theme) => {
+  await ctx.addInitScript(({ theme, largeText }) => {
     localStorage.setItem("persona.language", "en");
     localStorage.setItem("persona.theme", theme);
-  }, theme);
+    if (largeText) localStorage.setItem("persona.text-size", "large");
+  }, { theme, largeText });
   const page = await ctx.newPage();
   page.setDefaultTimeout(15000);
   const errors = [];
@@ -200,16 +208,84 @@ async function tidy(page, where, name) {
   ok(`${where}: the row is deleted once confirmed`);
 }
 
+
+async function templateFlow(page, where, name, phone) {
+  await go(page, "/settings?tab=prompts");
+  await page.locator('[data-testid="saved-prompt-add"]').click();
+  const editor = page.getByRole("dialog", { name: "New Saved Prompt" });
+  await editor.locator('[data-testid="saved-prompt-name"]').fill(name);
+  const source = editor.locator('[data-testid="saved-prompt-text"]');
+  const toggle = editor.getByRole("switch", { name: "Fill in fields before inserting" });
+  const template = "Review {{repository}} for {{question}}. Include {{repository}} in the title.";
+  if (legacyTemplates) {
+    assert.equal(await toggle.count(), 0);
+    await source.fill(template);
+  } else {
+    await toggle.click();
+    await source.fill("Review {{repository");
+    await editor.locator('[data-testid="saved-prompt-save"]').click();
+    await editor.waitFor();
+    assert.equal(await source.getAttribute("aria-invalid"), "true");
+    await source.fill(template);
+    await shot(page, `${where}-template-editor`);
+  }
+  await editor.locator('[data-testid="saved-prompt-save"]').click();
+  await editor.waitFor({ state: "hidden" });
+  await page.locator(`[data-saved-prompt="${name}"]`).waitFor();
+  const saved = (await get("/api/v1/assistant/saved-prompts")).prompts.find((row) => row.name === name);
+  assert.equal(saved.text, template);
+  assert.equal(saved.template, legacyTemplates ? undefined : true);
+
+  await go(page, "/");
+  const box = page.locator("main textarea").last();
+  await box.click();
+  await box.fill(`/${name}`);
+  const option = page.locator("[data-slash-palette] [role=option]").filter({ hasText: name });
+  await option.waitFor();
+  if (phone) await option.tap();
+  else await box.press("Enter");
+  if (legacyTemplates) {
+    assert.equal(await box.inputValue(), template);
+    assert.equal(await page.getByRole("dialog", { name: "Fill saved prompt" }).count(), 0);
+  } else {
+    const fill = page.getByRole("dialog", { name: "Fill saved prompt" });
+    const repo = fill.getByLabel("repository", { exact: true });
+    await repo.fill("discarded");
+    await fill.getByRole("button", { name: "Cancel", exact: true }).click();
+    await fill.waitFor({ state: "hidden" });
+    assert.equal(await box.inputValue(), `/${name}`);
+    await box.fill("");
+    await box.fill(`/${name}`);
+    await option.waitFor();
+    if (phone) await option.tap();
+    else await box.press("Enter");
+    assert.equal(await repo.inputValue(), "");
+    const insert = fill.getByRole("button", { name: "Insert", exact: true });
+    assert.ok(await insert.isDisabled());
+    await repo.fill("persona");
+    await fill.getByLabel("question", { exact: true }).fill("any literal {{repository}} markers");
+    await shot(page, `${where}-template-fill`);
+    await insert.click();
+    await fill.waitFor({ state: "hidden" });
+    assert.equal(await box.inputValue(), "Review persona for any literal {{repository}} markers. Include persona in the title.");
+  }
+  await box.fill("");
+  ok(`${where}: ${legacyTemplates ? "plain-only manager preserves editable literal text" : "template validation, cancellation and unsent insertion"}`);
+}
+
 const browser = await chromium.launch(executable ? { executablePath: executable } : { channel });
 try {
-  for (const phone of [false, true]) {
-    for (const theme of ["light", "dark"]) {
-      const where = `${phone ? "phone" : "wide"}-${theme}`;
+  for (const phone of legacyTemplates ? [false] : [false, true]) {
+    for (const theme of legacyTemplates ? ["light"] : ["light", "dark"]) {
+      const where = `${phone ? "phone" : "wide"}-${theme}${largeText ? "-large" : ""}`;
       const name = `summary-${Date.now().toString(36).slice(-4)}`;
       const { ctx, page, errors } = await open(browser, theme, phone);
-      await settings(page, where, name);
-      await slash(page, where, name);
-      await fromMessage(page, ctx, where, phone);
+      if (templates || legacyTemplates) await templateFlow(page, where, name, phone);
+      else {
+        await settings(page, where, name);
+        await slash(page, where, name);
+        await fromMessage(page, ctx, where, phone);
+      }
       await tidy(page, where, name);
       if (errors.length) fail(`${where}: page errors: ${errors.join(" | ")}`);
       await ctx.close();
@@ -218,5 +294,7 @@ try {
 } finally {
   await browser.close();
 }
-console.log("PASS saved prompts: settings, editor, the / list and Save as Prompt, wide and phone, light and dark");
+console.log(templates || legacyTemplates
+  ? "PASS saved prompt templates"
+  : "PASS saved prompts: settings, editor, the / list and Save as Prompt, wide and phone, light and dark");
 process.exit(0);
