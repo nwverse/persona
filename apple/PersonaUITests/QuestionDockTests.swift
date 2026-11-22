@@ -2,7 +2,7 @@ import XCTest
 
 /// The assistant's To Decide entry and its pager (#12831): the conversation's own card and its tasks' questions and
 /// approvals are one card at a time over the composer, the entry first in the row of entries.
-/// - order: the conversation's own card, then the tasks' oldest first; "1 / 4", ‹ ›, a sideways swipe;
+/// - order: the conversation's own card, then the tasks' oldest first; "1 / 5", ‹ ›, a sideways swipe;
 /// - a tool approval and a question read off a terminal grey Skip and say why; the conversation's own question keeps Skip;
 /// - Collapse folds the pager into the entry and the entry opens it on the same card;
 /// - answering a card moves on to the next, the entry's count goes down;
@@ -67,7 +67,7 @@ final class QuestionDockTests: XCTestCase {
     @MainActor private var dock: XCUIElement { app.otherElements["question-dock"].firstMatch }
     @MainActor private var entry: XCUIElement { app.buttons["action-bar.to-decide"].firstMatch }
 
-    /// Waits for the pager to say `want` ("2 / 4").
+    /// Waits for the pager to say `want` ("2 / 5").
     @MainActor private func expectPosition(_ want: String, _ step: String, file: StaticString = #filePath, line: UInt = #line) {
         let label = app.staticTexts["question-dock.position"].firstMatch
         var ok = label.waitForExistence(timeout: 5)
@@ -78,7 +78,8 @@ final class QuestionDockTests: XCTestCase {
     }
 
     /// The pager in order, light and dark: the conversation's own question (Skip available), the task's question, the
-    /// task's tool approval and the question read off the blog's terminal (Skip greyed, with why), ‹ › and a swipe.
+    /// task's tool approval and the question read off the blog's terminal (Skip greyed, with why), the
+    /// network tests' build approval last; ‹ › and a swipe.
     @MainActor func testThePagerHoldsEveryCardInOrder() throws {
         let hub = try hub()
         continueAfterFailure = true
@@ -88,8 +89,8 @@ final class QuestionDockTests: XCTestCase {
             dismissIconAlert()
             settle(2)
             XCTAssertTrue(entry.exists, "no To Decide entry (\(look))")
-            XCTAssertTrue(entry.label.contains("4"), "the entry says \(entry.label), not 4 (\(look))")
-            expectPosition("1 / 4", "first (\(look))")
+            XCTAssertTrue(entry.label.contains("5"), "the entry says \(entry.label), not 5 (\(look))")
+            expectPosition("1 / 5", "first (\(look))")
             XCTAssertTrue(text("构建卡在打包").exists, "the first card is not the conversation's own question (\(look))")
             XCTAssertTrue(dock.buttons["question-skip"].firstMatch.exists, "the conversation's own question lost its Skip (\(look))")
             XCTAssertFalse(app.scrollViews["pending-cards"].exists, "the old stack is still drawn under the entries (\(look))")
@@ -97,30 +98,35 @@ final class QuestionDockTests: XCTestCase {
             shot("own-\(look)")
 
             app.buttons["question-dock.next"].tap()
-            expectPosition("2 / 4", "next (\(look))")
+            expectPosition("2 / 5", "next (\(look))")
             XCTAssertTrue(text("网络层的测试用哪个框架").waitForExistence(timeout: 3), "the second card is not the task's question (\(look))")
             XCTAssertTrue(dock.staticTexts["补齐网络层的单元测试"].exists, "the task's question does not say its task (\(look))")
             shot("task-\(look)")
 
             app.buttons["question-dock.next"].tap()
-            expectPosition("3 / 4", "permission (\(look))")
+            expectPosition("3 / 5", "permission (\(look))")
             XCTAssertTrue(dock.buttons["question-skip-unavailable"].exists, "the approval's Skip is not greyed (\(look))")
             XCTAssertFalse(dock.buttons["question-skip-unavailable"].isEnabled, "the approval's Skip can be tapped (\(look))")
             XCTAssertTrue(dock.staticTexts["interaction-no-skip"].exists, "the approval does not say why it can't be skipped (\(look))")
             shot("permission-\(look)")
 
             app.buttons["question-dock.next"].tap()
-            expectPosition("4 / 4", "terminal (\(look))")
+            expectPosition("4 / 5", "terminal (\(look))")
             XCTAssertTrue(text("旧文章的固定链接").waitForExistence(timeout: 3), "the last card is not the terminal's question (\(look))")
             XCTAssertTrue(dock.staticTexts["interaction-no-skip"].exists, "the terminal's question does not say why (\(look))")
-            XCTAssertFalse(app.buttons["question-dock.next"].isEnabled, "› on the last card (\(look))")
             shot("terminal-\(look)")
+            // The network tests' build approval (MOCK_AGENTS), the newest, last.
+            app.buttons["question-dock.next"].tap()
+            expectPosition("5 / 5", "last (\(look))")
+            XCTAssertFalse(app.buttons["question-dock.next"].isEnabled, "› on the last card (\(look))")
+            app.buttons["question-dock.previous"].tap()
+            expectPosition("4 / 5", "back to the terminal (\(look))")
 
             // A sideways swipe goes back one.
             let card = dock.staticTexts["interaction-no-skip"].firstMatch
             card.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
                 .press(forDuration: 0.05, thenDragTo: card.coordinate(withNormalizedOffset: CGVector(dx: 1.8, dy: 0.5)))
-            expectPosition("3 / 4", "swiped back (\(look))")
+            expectPosition("3 / 5", "swiped back (\(look))")
             app.terminate()
         }
     }
@@ -133,22 +139,22 @@ final class QuestionDockTests: XCTestCase {
         dismissIconAlert()
         settle(2)
         app.buttons["question-dock.next"].tap()
-        expectPosition("2 / 4", "next")
+        expectPosition("2 / 5", "next")
 
         app.buttons["question-dock.collapse"].firstMatch.tap()
         settle()
         XCTAssertFalse(dock.exists, "collapsed, the pager is still drawn")
-        XCTAssertTrue(entry.exists && entry.label.contains("4"), "collapsed, the entry says \(entry.label)")
+        XCTAssertTrue(entry.exists && entry.label.contains("5"), "collapsed, the entry says \(entry.label)")
         shot("collapsed-dark")
         entry.tap()
         XCTAssertTrue(dock.waitForExistence(timeout: 3), "the entry did not open the pager")
-        expectPosition("2 / 4", "opened again")
+        expectPosition("2 / 5", "opened again")
 
-        // Answer the task's question: the approval takes its place, three left.
+        // Answer the task's question: the approval takes its place, four left.
         text("XCTest").tap()
-        expectPosition("2 / 3", "answered")
+        expectPosition("2 / 4", "answered")
         XCTAssertTrue(dock.buttons["question-skip-unavailable"].waitForExistence(timeout: 3), "after the answer, not on the approval")
-        XCTAssertTrue(entry.label.contains("3"), "after the answer the entry says \(entry.label)")
+        XCTAssertTrue(entry.label.contains("4"), "after the answer the entry says \(entry.label)")
         shot("answered-dark")
     }
 
@@ -161,7 +167,7 @@ final class QuestionDockTests: XCTestCase {
         dismissIconAlert()
         settle(2)
         app.buttons["question-dock.next"].tap()
-        expectPosition("2 / 4", "next")
+        expectPosition("2 / 5", "next")
         app.buttons["action-bar.needs-you"].firstMatch.tap()
         settle()
         XCTAssertTrue(app.otherElements["action-tray.needs-you"].exists, "no Needs You tray")
@@ -170,7 +176,7 @@ final class QuestionDockTests: XCTestCase {
         XCTAssertTrue(ask.exists, "no row for the conversation's own card")
         ask.tap()
         XCTAssertTrue(dock.waitForExistence(timeout: 3), "the row did not open the pager")
-        expectPosition("1 / 4", "the row's card")
+        expectPosition("1 / 5", "the row's card")
         XCTAssertFalse(app.otherElements["action-tray.needs-you"].exists, "the tray stayed open")
     }
 

@@ -10330,7 +10330,8 @@ if os.environ.get("MOCK_SCREEN_DIALOG"):
 
 # MOCK_DOCK=1 (#12831, with MOCK_TASKS): two more of the main conversation's tasks wait for the owner, so its To Decide
 # pager has several kinds: the widget fix asks to run a command (a tool approval) and the blog migration asks a question
-# read off its terminal (a screen card with no tool use id). /mock/reset puts both back unanswered.
+# read off its terminal (a screen card with no tool use id). /mock/reset puts both back unanswered, and the network
+# tests' question.
 DOCK_INTERACTIONS = []
 if os.environ.get("MOCK_DOCK") == "1":
     DOCK_INTERACTIONS = [
@@ -10347,6 +10348,8 @@ if os.environ.get("MOCK_DOCK") == "1":
              {"key": "2", "label": "换成新格式并加跳转", "keys": ["2"]}]}},
     ]
     INTERACTIONS.extend(copy.deepcopy(DOCK_INTERACTIONS))
+    # The network tests' question too: a test answers it in the pager, the next starts with it again.
+    DOCK_INTERACTIONS += [copy.deepcopy(x) for x in INTERACTIONS if x["id"] == "ix_tests"]
 
 # MOCK_SCREEN_DANGER=before|after: Claude Code 2.1.322's safety check on a command (bypass mode, #5265 / #5266) with
 # its countdown, on the review agent. "before": as a hub before #5265 read it at a narrow width (the command missing,

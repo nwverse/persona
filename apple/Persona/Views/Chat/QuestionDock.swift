@@ -6,6 +6,32 @@ import SwiftUI
 // question was a card above the entries and the conversation's own cards a stack under them, with the wrap-up chips in
 // between: with several Agents asking they piled up row after row in the middle of the footer.
 
+/// A question card's page, picks and typed answers while its form is not drawn (#12831): the pager draws one card at a
+/// time and none while collapsed. In memory only, a few dozen at most; a card's form takes its own back when drawn again.
+@MainActor final class QuestionFormMemory {
+    static let shared = QuestionFormMemory()
+    struct Kept {
+        var picks: [String: Set<String>]
+        var other: [String: String]
+        var page: Int
+        var reviewing: Bool
+    }
+    private var kept: [String: Kept] = [:]
+    private var order: [String] = []
+
+    func keep(_ id: String, _ value: Kept) {
+        guard !value.picks.values.allSatisfy(\.isEmpty) || value.other.values.contains(where: { !$0.isEmpty }) || value.page > 0 else {
+            kept[id] = nil
+            return
+        }
+        if kept[id] == nil { order.append(id) }
+        kept[id] = value
+        while order.count > 40 { kept[order.removeFirst()] = nil }
+    }
+
+    func take(_ id: String) -> Kept? { kept[id] }
+}
+
 /// The pager's rules, apart from the views: the order, which card is shown, whether it is folded away and its Skip.
 nonisolated enum QuestionDockLogic {
     struct Item: Equatable, Sendable {
@@ -150,10 +176,9 @@ struct QuestionDock: View {
     var body: some View {
         let cards = Self.cards(own: own, conversation: conversation)
         let ids = cards.map(\.id)
-        if let at = QuestionDockLogic.shown(ids, current: state.current, index: state.index) {
-            let open = inCall || state.showing(ids)
+        if let at = QuestionDockLogic.shown(ids, current: state.current, index: state.index), inCall || state.showing(ids) {
             let card = cards[at]
-            let resize = open ? resize(card.id) : nil
+            let resize = resize(card.id)
             let cap = cap(resize)
             let keyboard = keyboardRoom
             let nav = ids.count > 1 ? navHeight + Theme.Space.xs : 0
@@ -165,44 +190,21 @@ struct QuestionDock: View {
                             if abs(h - navHeight) >= 1 { navHeight = h }
                         }
                 }
-                // Every card stays mounted, the others at no height: a card keeps its page, its picks and what is typed
-                // into it while the owner pages through the others or collapses the pager, as a folded card does (#9392).
-                ZStack(alignment: .top) {
-                    ForEach(cards) { c in
-                        let on = open && c.id == card.id
-                        VStack(alignment: .leading, spacing: Theme.Space.s) {
-                            InteractionPanel(interaction: c.interaction, from: c.from)
-                                .disabled(!c.enabled)
-                                .environment(\.cardLocalOnly, c.localOnly)
-                                .chatMark("chat.card." + c.id)
-                            if let blocked = c.blocked { CardBlockedLine(block: blocked, key: c.interaction.sessionKey) }
-                        }
-                        .environment(\.cardResize, on ? resize : nil)
-                        .frame(height: on ? nil : 0, alignment: .top)
-                        .clipped()
-                        .opacity(on ? 1 : 0)
-                        .allowsHitTesting(on)
-                        .accessibilityHidden(!on)
-                        .zIndex(on ? 1 : 0)
-                    }
-                }
+                // One card drawn at a time: a question's page, picks and typed answers wait in `QuestionFormMemory` while
+                // the owner pages through the others or collapses the pager. (Every card kept mounted at no height showed
+                // the hidden ones' buttons to VoiceOver.)
+                page(card, resize: resize, ids: ids)
+                    .id(card.id)
+                    .transition(.opacity)
                 .environment(\.cardRoom, containerLength)
                 .environment(\.cardArea, area)
                 .environment(\.cardFits, keyboard ? area - Theme.Space.l : 0)
                 .environment(\.cardTakesArea, true)
-                .environment(\.cardDock, CardDock { collapse(ids) })
-                .simultaneousGesture(swipe(at: at, ids: ids), isEnabled: open && ids.count > 1)
+                .simultaneousGesture(swipe(at: at, ids: ids), isEnabled: ids.count > 1)
             }
-            // Collapsed into the entry, at no height and out of the way (the cards in it keep their state); the footer's
-            // spacing under it given back, so a collapsed pager leaves no gap over the entries.
-            .frame(height: open ? nil : 0, alignment: .top)
-            .clipped()
-            .opacity(open ? 1 : 0)
-            .allowsHitTesting(open)
-            .padding(.bottom, open ? Theme.Space.flush : -Theme.Space.m)
-            .accessibilityHidden(!open)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("question-dock")
+            .transition(.move(edge: .bottom).combined(with: .opacity))
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
                 shown = h
                 if abs(room.taskShown - h) >= 1 { room.taskShown = h }
@@ -222,6 +224,20 @@ struct QuestionDock: View {
                     .hidden()
             }
         }
+    }
+
+    /// The pager's card.
+    private func page(_ c: DockCard, resize: CardResize?, ids: [String]) -> some View {
+        let dock = CardDock(collapse: { collapse(ids) })
+        return VStack(alignment: .leading, spacing: Theme.Space.s) {
+            InteractionPanel(interaction: c.interaction, from: c.from)
+                .disabled(!c.enabled)
+                .environment(\.cardLocalOnly, c.localOnly)
+                .chatMark("chat.card." + c.id)
+            if let blocked = c.blocked { CardBlockedLine(block: blocked, key: c.interaction.sessionKey) }
+        }
+        .environment(\.cardResize, resize)
+        .environment(\.cardDock, dock)
     }
 
     /// The dots, "2 / 5" and ‹ ›.

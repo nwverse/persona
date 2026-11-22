@@ -2036,8 +2036,8 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   does the same). Answering a card moves on to the one that takes its place; a card that comes in never takes the pager
   away from the one shown. The card's title row keeps View in Chat, Skip and the fold, whose chevron (and a tap on the row)
   collapses the pager into the entry: it stays collapsed while a card the owner put away still waits, the entry saying
-  "+N" for what came since, and opens again for a fresh round. Collapsed or paged away, every card stays mounted at no
-  height, so a card keeps its page, picks and typed text. Skip is not unified yet: in the pager a question read off a
+  "+N" for what came since, and opens again for a fresh round. One card is drawn at a time; a question card paged
+  away or collapsed keeps its page, picks and typed answers on the device (`QuestionFormMemory`) and starts there again. Skip is not unified yet: in the pager a question read off a
   terminal, a tool approval and a plan approval show it greyed with one line in `cautionText` saying why and what to use
   ("Reply in Chat Instead", Deny, send it back); every other card keeps the rule below (Skip where the request can be
   cancelled). A Needs You row for the conversation's own card closes the tray and opens the pager on that card; the

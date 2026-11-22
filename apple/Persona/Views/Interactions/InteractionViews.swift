@@ -730,7 +730,21 @@ struct QuestionForm: View {
     private var skipInHeader: Bool { canSkip && headerTakesSkip }
 
     var body: some View {
-        if AppStyle.current.usesBeautifulUI { BUIQuestionForm(interaction: interaction) } else { plainLayout }
+        if AppStyle.current.usesBeautifulUI { BUIQuestionForm(interaction: interaction) } else {
+            plainLayout
+                // Its page, picks and typed answers outlive the view (#12831): the assistant's pager draws one card at a
+                // time and none while collapsed, and a card paged back to or opened again starts where it was.
+                .onAppear {
+                    guard let kept = QuestionFormMemory.shared.take(interaction.uid) else { return }
+                    picks = kept.picks
+                    other = kept.other
+                    page = min(kept.page, max(questions.count - 1, 0))
+                    reviewing = kept.reviewing
+                }
+                .onDisappear {
+                    QuestionFormMemory.shared.keep(interaction.uid, .init(picks: picks, other: other, page: page, reviewing: reviewing))
+                }
+        }
     }
 
     /// The options (or the review) scroll; Previous / Next / Submit are outside that scroll and stay in the panel.
