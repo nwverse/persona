@@ -272,3 +272,21 @@ func TestGoldenLogicalSegmentHandoff(t *testing.T) {
 		golden(t, "segment_handoff_"+language, prompts.RenderSegmentHandoff(prompts.SegmentHandoff{Language: language, Summary: "Earlier work", Recent: []prompts.HandoffTurn{{Role: "user", Text: "Continue the same task"}}, Partial: true, Text: "Next message"}))
 	}
 }
+
+func TestGoldenLogicalSegmentSummary(t *testing.T) {
+	for _, language := range []string{"en", "zh-Hans", "ja"} {
+		golden(t, "segment_summary_"+language, prompts.RenderSegmentSummary(language))
+	}
+	// The caller supplies answerLanguage's display names, and empty retains the historical Chinese bytes.
+	for _, tc := range []struct{ language, golden string }{{"", "zh-Hans"}, {"Chinese", "zh-Hans"}, {"English", "en"}, {"Japanese", "ja"}} {
+		got := prompts.RenderSegmentSummary(tc.language)
+		path := filepath.Join("testdata", "prompts", "segment_summary_"+tc.golden+".golden")
+		want, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != string(want) {
+			t.Errorf("language %q does not preserve the %s rendering", tc.language, tc.golden)
+		}
+	}
+}

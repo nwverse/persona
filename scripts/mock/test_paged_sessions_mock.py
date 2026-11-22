@@ -32,6 +32,16 @@ class PagedSessionsMockTests(unittest.TestCase):
             self.assertNotIn("sessions_lookup", hub.features())
             self.assertEqual(self.read(summary=1, limit=2), full)
 
+    def test_page_counts_ride_on_the_page_only_when_switched_on(self):
+        # MOCK_PAGE_COUNTS=1: with_counts=1 brings what counts=1 with the same filters answers (sessions_page_counts)
+        with patch.object(hub, "PAGE_COUNTS", True):
+            self.assertIn("sessions_page_counts", hub.features())
+            page = self.read(summary=1, limit=2, state="unread", with_counts=1)
+            self.assertEqual(page["counts"], self.read(counts=1, state="unread"))
+            self.assertEqual({k: v for k, v in page.items() if k != "counts"}, self.read(summary=1, limit=2, state="unread"))
+        self.assertNotIn("sessions_page_counts", hub.features())
+        self.assertNotIn("counts", self.read(summary=1, limit=2, with_counts=1))
+
     def test_paged_rows_counts_and_exact_lookup_use_the_same_collection(self):
         full = self.read()["sessions"]
         counts = self.read(counts=1)

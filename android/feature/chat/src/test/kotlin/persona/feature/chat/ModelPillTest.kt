@@ -43,6 +43,7 @@ import persona.core.designsystem.AgentMarkKind
 import persona.core.designsystem.AgentMarkSpec
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.LocalHubFeatures
+import persona.core.designsystem.JLoadable
 import persona.core.designsystem.ModelPillWidth
 import persona.core.designsystem.PersonaTheme
 import persona.core.domain.models.AgentModelPanel
