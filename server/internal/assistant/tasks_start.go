@@ -215,7 +215,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			// Persist the approved edges, including edges inherited from a reused to-do.
 			t.After = cleanIDs(slices.Concat(t.After, todo.After))
 			t.Queue = s.prerequisiteQueue(ctx, *t, s.requestBlockers(ctx, *t))
-		} else if t.Workspace != nil && t.Workspace.Mode == workspaceExisting && !t.WorkspaceInferred && t.WorkspaceResolved != nil {
+		} else if t.Workspace != nil && t.Workspace.Mode == workspaceExisting && (!t.WorkspaceInferred || t.Workspace.Queue) && t.WorkspaceResolved != nil {
 			effMachine := s.effectiveBoardMachine(t.Machine)
 			wsPath := t.WorkspaceResolved.Path
 			wsKey := effMachine + "\x00" + s.taskDirKey(ctx, t.Machine)(wsPath)
@@ -276,7 +276,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 	for i := range p.Tasks {
 		task := p.Tasks[i]
 		if task.TodoID == "" || task.Error != "" || task.Queue != nil || task.Workspace == nil ||
-			task.Workspace.Mode != workspaceExisting || task.WorkspaceInferred || task.WorkspaceResolved == nil {
+			task.Workspace.Mode != workspaceExisting || (task.WorkspaceInferred && !task.Workspace.Queue) || task.WorkspaceResolved == nil {
 			continue
 		}
 		effMachine := s.effectiveBoardMachine(task.Machine)

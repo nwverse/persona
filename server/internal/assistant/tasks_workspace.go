@@ -201,7 +201,16 @@ func (s *Service) resolveTaskWorkspace(ctx context.Context, t *PlanTask) error {
 	t.cwdStatus, t.cwdStatusOf = nil, "" // never an answer about a folder an earlier resolve asked of
 	if t.Workspace == nil || t.WorkspaceInferred {
 		mode := workspaceNone
+		queueExisting := false
 		if !t.Readonly {
+			if repoIDs := s.inferredSharedBranchContainerRepos(ctx, *t); len(repoIDs) >= 2 {
+				t.Workspace = &TaskWorkspace{
+					Mode:      workspaceContainer,
+					Container: &ContainerWorkspaceSelection{SelectedRepoIDs: repoIDs},
+				}
+				t.WorkspaceInferred = true
+				return s.resolveContainerTask(ctx, t)
+			}
 			var st proto.WorktreeStatus
 			if err := s.call(ctx, t.Machine, "worktree.status", map[string]any{"cwd": t.Cwd}, &st); err != nil {
 				return fmt.Errorf("%s: %w", i18n.T(s.lang(ctx), "assistant-tasks_workspace.infer", i18n.Args{"machine": t.Machine}), err)
@@ -218,7 +227,10 @@ func (s *Service) resolveTaskWorkspace(ctx context.Context, t *PlanTask) error {
 					return i18n.ErrEnglish("assistant-tasks_workspace.unavailable", i18n.Args{"path": t.Cwd})
 				}
 				sourceCwd, owner = source.Cwd, s.taskWorkspaceOwner(ctx, t.Machine, source.Cwd, firstNonEmpty(t.TodoID, t.ReuseTodo), false)
-				if s.taskWorkspacePreference(ctx) == preferNew || owner != nil {
+				if s.resolvedTaskWorkflow(ctx, *t) == repository.TaskWorkflowSharedBranch {
+					mode = workspaceExisting
+					queueExisting = true
+				} else if s.taskWorkspacePreference(ctx) == preferNew || owner != nil {
 					mode = workspaceNew
 				}
 			}
@@ -226,6 +238,7 @@ func (s *Service) resolveTaskWorkspace(ctx context.Context, t *PlanTask) error {
 		t.Workspace = &TaskWorkspace{Mode: mode}
 		if mode == workspaceExisting {
 			t.Workspace.Existing = t.Cwd
+			t.Workspace.Queue = queueExisting
 		}
 		t.WorkspaceInferred = true
 	}
