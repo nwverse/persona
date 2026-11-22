@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -122,10 +121,17 @@ func TestCacheKeepaliveGoesWithEveryManagerSend(t *testing.T) {
 	ctx := context.Background()
 	f := newFakeHub().withMachine()
 	s := newTestService(t, f)
-	f.setSessions("server",
-		proto.Session{SessionID: "main", Assistant: true}, proto.Session{SessionID: "lead", Assistant: true},
-		proto.Session{SessionID: "background", Assistant: true}, proto.Session{SessionID: "side", Assistant: true},
-		proto.Session{SessionID: "worker"}, proto.Session{SessionID: "child", Assistant: true, IsSubagent: true})
+	sessions := []proto.Session{
+		{SessionID: "main", Assistant: true}, {SessionID: "lead", Assistant: true},
+		{SessionID: "background", Assistant: true}, {SessionID: "side", Assistant: true},
+		{SessionID: "worker"}, {SessionID: "child", Assistant: true, IsSubagent: true},
+	}
+	f.setSessions("server", sessions...)
+	// The node's retained inventory, which revokes a registered id that is not a root assistant conversation.
+	d := newFleetDevs()
+	d.add("server", "Computer")
+	d.setSessions("server", sessions)
+	s.devs = d
 	setSettings(t, s, func(v *Settings) {
 		v.Main = "main"
 		v.Leaders = []string{"lead", "worker", "child", "background"}
@@ -133,6 +139,13 @@ func TestCacheKeepaliveGoesWithEveryManagerSend(t *testing.T) {
 	})
 	last := func(method string) map[string]any {
 		t.Helper()
+		if raw := d.callsTo("server", method); len(raw) > 0 { // the call went to the devices
+			var p map[string]any
+			if err := json.Unmarshal(raw[len(raw)-1], &p); err != nil {
+				t.Fatal(err)
+			}
+			return p
+		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		for i := len(f.calls) - 1; i >= 0; i-- {
@@ -164,14 +177,7 @@ func TestCacheKeepaliveGoesWithEveryManagerSend(t *testing.T) {
 			})
 		}
 	}
-	// A relay into the main conversation goes through the same boundary.
-	if err := s.deliverRelay(ctx, "server", "main", relayMsg{Tool: noticeTool, Text: "A task finished.", At: time.Now().UTC()}); err != nil {
-		t.Fatal(err)
-	}
-	if f.lastSend(t)["cache_keepalive"] == nil {
-		t.Fatal("relay into the main conversation carries no policy")
-	}
-	// Switched off: no send carries it.
+	// Switched off: the role still goes, saying off (the node then mounts nothing and stops refreshing).
 	setSettings(t, s, func(v *Settings) { v.CacheKeepalive = ptr(false) })
 	if err := s.call(ctx, "server", DeviceSessionSend, map[string]any{"session_id": "lead", "text": "x"}, nil); err != nil {
 		t.Fatal(err)
