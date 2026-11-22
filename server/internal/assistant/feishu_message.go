@@ -426,6 +426,9 @@ func (s *Service) botQuote(ctx context.Context, id string, lang i18n.Lang) (*pro
 		return nil, nil
 	}
 	it := items[0]
+	if it.Deleted {
+		return nil, nil
+	}
 	c := feishubot.ParseContent(it.MsgType, it.Body.Content, it.MentionList())
 	who := "Persona"
 	if it.Sender.SenderType == "user" {

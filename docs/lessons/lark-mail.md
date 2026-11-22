@@ -178,6 +178,17 @@ an expired-token rejection. The refresh still consumes the existing attempt budg
 an expiry on the final attempt returns that expiry. A confirmed auth rejection permits replay of a UUID-less POST,
 while a transport/read failure or server error still stops it. Keep the original payload and UUID across keyed retries.
 
+## Feishu bot concurrent token refresh
+
+- Keep the tenant-token cache mutex out of HTTP exchanges (#12681). Concurrent calls share a per-client
+  completion signal and select their own context cancellation while waiting. Check the in-flight exchange
+  before a locally valid cached token: the API may already have rejected that token, and spending a final
+  attempt on it loses the request. On wake, recheck the current exchange and cache under the mutex rather
+  than returning a saved token that another refresh may have superseded. A successful cache generation
+  satisfies waiting refresh requests; after failure, surviving callers fetch with their own contexts.
+  Gate both initial and forced token exchanges in loopback tests, including final attempts and delayed wakes.
+  This coordination preserves credential/domain isolation, retry budgets and unkeyed-write replay rules.
+
 ## Message Tweaks and account settings
 
 A PUT of the whole local settings overwrites fields that the web or another client just changed. The phone changes the two display switches only through a restricted PATCH that carries the old values; unknown results are reread first and never retried automatically. The hub returns the user ID of the actually selected account, and must not substitute another primary user from the account list. The identity check before and after can reject a response from a switched account, but it isn't a database transaction spanning sign-in operations.
