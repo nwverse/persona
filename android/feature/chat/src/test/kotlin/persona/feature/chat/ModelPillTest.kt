@@ -410,7 +410,7 @@ class ModelPillTest {
                 }
             }
         }
-        rule.waitUntil(5_000) { hub.launcherListReads >= 1 } // the config is read, but the picker is never drawn
+        rule.waitUntil(5_000) { hub.launcherListRefreshes.isNotEmpty() } // the shared catalog is read, but no picker is drawn
         rule.onNodeWithTag("model-pill").assertDoesNotExist()
         assertTrue("nothing is written for a conversation without a pick", hub.asked.isEmpty())
     }
