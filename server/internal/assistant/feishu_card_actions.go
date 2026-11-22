@@ -56,6 +56,7 @@ func (s *Service) botCardAction(ctx context.Context, a *feishubot.CardAction, ac
 				result, err = s.chooseOption(ctx, a.Str("id"), "", opt)
 			}
 			ask.Chosen = opt
+			ask.OptionTaken = result.taken && err == nil // this successful click, not an ambiguous legacy choice
 			if opt == ask.Recommend {
 				ask.Chosen = "" // the recommended one: taken as OK takes it
 			}

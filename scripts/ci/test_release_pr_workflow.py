@@ -128,6 +128,22 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 self.assertEqual(failed.returncode, 37)
                 self.assertIn("unverified artifacts are diagnostic only", failed.stderr)
 
+    def test_android_release_reuses_exact_source_shards_before_signing(self):
+        workflow = (ROOT / ".github/workflows/android-test.yml").read_text()
+        release = PR.read_text()
+        self.assertIn("required: true", workflow)
+        self.assertEqual(yaml.load((ROOT / ".github/workflows/ci.yml").read_text(), Loader=yaml.BaseLoader)["jobs"]["android"]["with"]["commit"], "${{ github.sha }}")
+        self.assertIn("ref: ${{ inputs.commit || github.sha }}", workflow)
+        self.assertIn("lane: [lint-build-test-0, test-1]", workflow)
+        self.assertIn("android-source-receipt-${{ inputs.commit || github.sha }}-${{ matrix.lane }}", workflow)
+        self.assertIn("JOB_STATUS: ${{ job.status }}", workflow)
+        self.assertIn("uses: ./.github/workflows/android-test.yml", release)
+        self.assertIn("commit: ${{ needs.plan.outputs.commit }}", release)
+        self.assertIn("pattern: android-source-receipt-${{ needs.plan.outputs.commit }}-*", release)
+        self.assertIn("--release-only", release)
+        self.assertIn("Android test evidence belongs to another commit", release)
+        self.assertEqual(self.pr["jobs"]["android"]["needs"], ["plan", "android-tests"])
+
     def test_windows_requires_native_execution_and_authenticode(self):
         text = PR.read_text()
         for program in ("persona-link", "personad", "persona-node"):

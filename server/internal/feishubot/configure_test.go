@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -90,6 +91,32 @@ func TestAutoConfigureSetsScopesEventsAndLongConnection(t *testing.T) {
 	}
 	if len(event["add_events"].([]any)) != len(configureEvents) {
 		t.Fatalf("add_events = %v, want %v", event["add_events"], configureEvents)
+	}
+}
+
+func TestAutoConfigureSubscribesToWelcomeWithoutRemovingExistingEvents(t *testing.T) {
+	noBackoff(t)
+	c, _, _ := configureSrv(t, func(in map[string]any) (int, string) {
+		event := in["event"].(map[string]any)
+		var added []string
+		for _, v := range event["add_events"].([]any) {
+			added = append(added, v.(string))
+		}
+		for _, want := range []string{
+			"im.message.receive_v1", "card.action.trigger", "p2p_chat_create", "im.message.recalled_v1",
+			"im.chat.access_event.bot_p2p_chat_entered_v1",
+		} {
+			if !slices.Contains(added, want) {
+				t.Errorf("add_events = %v, missing %q", added, want)
+			}
+		}
+		if _, ok := event["remove_events"]; ok {
+			t.Error("config must preserve the app's existing event subscriptions")
+		}
+		return 0, ""
+	}, ok0)
+	if rep := c.AutoConfigure(t.Context()); !rep.Configured || !rep.Published {
+		t.Fatalf("report = %+v", rep)
 	}
 }
 

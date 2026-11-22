@@ -82,11 +82,15 @@ func (rt *historyRuntime) page(_ string, raw json.RawMessage) (any, error) {
 		"has_more": hasMore, "more_after": more}, nil
 }
 
-func historyFixture(t *testing.T) (*Service, *fakeHub, *db.DB, *historyRuntime) {
+func historyFixture(t *testing.T, logs ...func(string, ...any)) (*Service, *fakeHub, *db.DB, *historyRuntime) {
 	t.Helper()
 	database := todoTestDB(t)
+	logf := testLogf(t)
+	if len(logs) > 0 {
+		logf = logs[0]
+	}
 	f := newFakeHub().withMachine()
-	s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return database }, Logf: testLogf(t)}))
+	s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return database }, Logf: logf}))
 	setSettings(t, s, func(cfg *Settings) { cfg.Main = "main-chat"; cfg.Leaders = []string{"lead-chat"} })
 	for _, id := range []string{"main-chat", "lead-chat", "side-chat", "coding-agent"} {
 		f.known[id] = true

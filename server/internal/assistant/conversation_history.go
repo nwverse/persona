@@ -51,6 +51,10 @@ func (s *Service) historyDB(ctx context.Context) conversationHistoryStore {
 	if st == nil {
 		return nil
 	}
+	if ctx.Value(logicalSourceKey{}) != nil {
+		durable, _ := st.(conversationHistoryStore)
+		return durable
+	}
 	var setting struct {
 		Enabled *bool `json:"enabled"`
 	}
@@ -68,7 +72,7 @@ func (s *Service) historySource(ctx context.Context, machine, method string, par
 
 func (s *Service) historySession(ctx context.Context, machine, sid string) (proto.Session, bool) {
 	if s.devs != nil {
-		if c, ok := s.nodeSession(machine, sid); ok {
+		if c, ok := s.physicalDevices().Session(machine, sid); ok {
 			if m, exists := s.fleetMachine(machine); exists {
 				c.Assistant = m.isAssistant(c)
 			}
@@ -607,6 +611,14 @@ func (s *Service) historySignal(machine, event string, raw json.RawMessage) {
 	default:
 		return
 	}
+	expanded := make([]searchKey, 0, len(keys))
+	for _, k := range keys {
+		for _, alias := range s.physicalAliases(k.machine) {
+			expanded = append(expanded, searchKey{alias, k.session})
+		}
+	}
+	keys = expanded
+
 	s.history.mu.Lock()
 	if s.history.changes == nil {
 		s.history.changes = map[searchKey]uint64{}
@@ -629,8 +641,15 @@ func (s *Service) historyLoop(ctx context.Context) {
 	wake := s.history.wake
 	s.history.mu.Unlock()
 	for {
+		s.logicalSweep(ctx)
 		if st := s.historyDB(ctx); st != nil {
 			s.historySweep(ctx, st)
+		} else if st, ok := s.store().(conversationHistoryStore); ok {
+			rows, _, err := s.logicalIndex()
+			if err == nil && len(rows) > 0 {
+				syncCtx := context.WithValue(context.WithValue(ctx, logicalSourceKey{}, true), logicalHistoryOnlyKey{}, true)
+				s.historySweep(syncCtx, st)
+			}
 		}
 		timer := time.NewTimer(5 * time.Second)
 		select {
@@ -656,6 +675,19 @@ func (s *Service) historySweep(ctx context.Context, st conversationHistoryStore)
 			continue
 		}
 		list, err := s.sessions(ctx, machine.ID)
+		if physical := s.physicalDevices(); physical != nil {
+			var known bool
+			list, known = physical.Sessions(machine.ID)
+			if !known {
+				continue
+			}
+			if m, ok := s.fleetMachine(machine.ID); ok {
+				for i := range list {
+					list[i].Assistant = m.isAssistant(list[i])
+				}
+			}
+			err = nil
+		}
 		if err != nil {
 			continue
 		}
@@ -666,8 +698,35 @@ func (s *Service) historySweep(ctx context.Context, st conversationHistoryStore)
 			if !c.Assistant || c.PaneID != "" || c.IsDeleted() {
 				continue
 			}
-			if err := s.historySync(ctx, st, machine.ID, c); err != nil && !errors.Is(err, db.ErrConversationHistoryChanged) && ctx.Err() == nil {
-				k := searchKey{machine.ID, c.SessionID}
+			source := machine.ID
+			root, lookupErr := func() (*db.LogicalConversation, error) {
+				if logical, ok := s.store().(logicalConversationStore); ok {
+					return s.physicalLogicalConversation(ctx, logical, source, c.SessionID)
+				}
+				return nil, nil
+			}()
+			if lookupErr != nil {
+				continue
+			}
+			if ctx.Value(logicalHistoryOnlyKey{}) != nil && root == nil {
+				continue
+			}
+			if root != nil {
+				// Retired sources remain readable for frozen history, but their tails do
+				// not revise the logical generation. Keep their original durable keys.
+				matches := 0
+				for _, seg := range root.Segments {
+					if seg.SessionID == c.SessionID && s.physicalSameMachine(seg.MachineID, source) {
+						source = seg.MachineID
+						matches++
+					}
+				}
+				if matches != 1 {
+					continue
+				}
+			}
+			if err := s.historySync(ctx, st, source, c); err != nil && !errors.Is(err, db.ErrConversationHistoryChanged) && ctx.Err() == nil {
+				k := searchKey{source, c.SessionID}
 				s.history.mu.Lock()
 				if s.history.retry == nil {
 					s.history.retry = map[searchKey]historyRetry{}
@@ -736,6 +795,15 @@ func (s *Service) historySync(ctx context.Context, st conversationHistoryStore, 
 		}
 		if err := s.historyRemember(ctx, st, machine, c.SessionID, h, p, page, revision); err != nil {
 			return err
+		}
+		if logical, ok := s.store().(logicalConversationStore); ok {
+			if err := logical.ObserveConversationSource(ctx, machine, c.SessionID, page.History); err != nil {
+				return err
+			}
+			if err := logical.ObserveConversationRevision(ctx, machine, c.SessionID, c.Rev); err != nil {
+				return err
+			}
+			s.logicalChanged()
 		}
 		advanced := intValue(page.ToSeq)
 		for _, it := range page.Items {
