@@ -161,13 +161,25 @@ namespace, where it receives namespace-local capabilities, never host `CAP_SYS_A
 standard Docker profile, so use the supplied profile only for the hub.
 
 Docker's default AppArmor policy denies mounts even inside a nested user namespace.
-The supplied service selects `apparmor=unconfined` for this reason; SELinux and host
-kernel restrictions still apply. Hosts must allow unprivileged user namespaces
+The base service keeps the host's default AppArmor policy. On an AppArmor host,
+install the supplied narrower profile before enabling the optional Compose override
+(see below). SELinux and host kernel restrictions still apply. Hosts must allow unprivileged user namespaces
 (`user.max_user_namespaces` must be nonzero, and on hosts with
-`kernel.unprivileged_userns_clone`, it must be enabled). An administrator managing
-AppArmor may instead supply a reviewed profile permitting nested user namespace and
-mount setup. Do not work around a denied probe by adding host `SYS_ADMIN` or enabling
-privileged mode. Without the needed host support, required extensions remain stopped.
+`kernel.unprivileged_userns_clone`, it must be enabled). Do not work around a denied probe by adding host `SYS_ADMIN`,
+selecting `apparmor=unconfined` or enabling privileged mode. Without the needed host support, required extensions remain stopped.
+
+Check `docker info --format '{{json .SecurityOptions}}'` on a host you administer.
+When it lists AppArmor, copy `persona-hub.apparmor` and `compose.apparmor.yaml` from
+`deploy/docker/` beside the base Compose file. With AppArmor 4.x userspace installed,
+load the profile on the host with `sudo apparmor_parser -r persona-hub.apparmor`, then
+use `docker compose -f compose.yaml -f compose.apparmor.yaml up -d`. It retains Docker's
+proc/sys write denials, signal/ptrace peer restrictions and obsolete socket-family
+denials, adding user namespaces, tmpfs/proc/devpts mounts, bind mounts, propagation
+changes, remounts and pivot_root. It does not permit arbitrary filesystem mounts.
+These permissions remain gated by the non-root hub's kernel capabilities. Hosts
+without AppArmor use only the base file; an image update alone cannot alter the host's
+security configuration. An older compose file on an AppArmor host may therefore need
+the documented profile/override before required extensions can run.
 
 `server-other` CI runs the real extension filesystem/network isolation test as the
 non-root image user in a disposable container built from the same runtime stage,

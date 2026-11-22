@@ -15,7 +15,6 @@ services:
     security_opt:
       - no-new-privileges:true
       - seccomp=./extension-seccomp.json
-      - apparmor=unconfined
     depends_on:
       postgres:
         condition: service_healthy

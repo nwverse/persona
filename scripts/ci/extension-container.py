@@ -29,6 +29,16 @@ def main():
             run(["docker", "build", "--target", "sandbox-runtime", "--iidfile", str(directory / "image"), "."],
                 120, cwd=ROOT)
             image = (directory / "image").read_text().strip()
+            # Parse the optional host policy in a disposable userspace; never load host LSM policy.
+            policy = directory / "persona-hub.apparmor"
+            policy.write_text((ROOT / "deploy/docker/persona-hub.apparmor").read_text())
+            run(["docker", "run", "--rm", "--name", container + "-policy",
+                 "--mount", "type=bind,src=" + str(directory) + ",dst=/probe,readonly", image,
+                 "/bin/sh", "-ec", "apk add --no-cache apparmor && apparmor_parser -Q -K /probe/persona-hub.apparmor"], 120)
+            security = run(["docker", "info", "--format", "{{json .SecurityOptions}}"], 15,
+                           capture_output=True, text=True)
+            apparmor = ["--security-opt=apparmor=persona-hub"] if "apparmor" in security.stdout.lower() else []
+            print("AppArmor: named host profile required" if apparmor else "AppArmor: disabled on this test host; profile syntax checked", flush=True)
             checks = {
                 "sandbox": ["TestLinuxSandboxForReal"],
                 "extmgr": ["TestExtensionSandbox", "TestExtensionSandboxMissing", "TestExtensionSandboxMissingOfficialExemption"],
@@ -42,7 +52,7 @@ def main():
             result = run(["docker", "run", "--rm", "--name", container, "--network=none", "--cap-drop=ALL", "--user=1000:1000",
                           "--security-opt=no-new-privileges:true",
                           "--security-opt=seccomp=" + str(ROOT / "deploy/docker/extension-seccomp.json"),
-                          "--security-opt=apparmor=unconfined",
+                          *apparmor,
                           "--mount", "type=bind,src=" + str(directory) + ",dst=/probe,readonly",
                           "--env=HOME=/home/persona", image, "/bin/sh", "-ec",
                           'test "$(id -u)" != 0; '
@@ -59,7 +69,7 @@ def main():
                 raise RuntimeError("real container isolation skipped a required check")
             print("Extension container isolation: PASS (non-root, no capabilities, real filesystem/network isolation)")
         finally:
-            subprocess.run(["docker", "rm", "-f", container], timeout=30, check=False, capture_output=True)
+            subprocess.run(["docker", "rm", "-f", container, container + "-policy"], timeout=30, check=False, capture_output=True)
             if image:
                 subprocess.run(["docker", "image", "rm", image], timeout=30, check=False)
 
