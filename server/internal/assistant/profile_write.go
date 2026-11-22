@@ -439,7 +439,7 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	s.settingsChanged(ctx)
 	// Revoke already captured requests as part of a policy edit. Forwarding stays
 	// available; only a subsequent genuine request can rearm the snapshot.
-	if in.CacheKeepalive != nil || in.CacheKeepaliveMinutes != nil || in.CacheKeepaliveMax != nil {
+	if (in.CacheKeepalive != nil || in.CacheKeepaliveMinutes != nil || in.CacheKeepaliveMax != nil) && cacheKeepaliveOf(before) != cacheKeepaliveOf(s.settings(ctx)) {
 		clearCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
 		for _, ref := range s.cacheKeepaliveRefs(ctx, before) {
