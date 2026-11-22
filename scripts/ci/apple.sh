@@ -1,13 +1,13 @@
 #!/bin/bash
 # Public, local-runnable Apple checks. Requires XcodeGen, Python 3 and rsync.
 # The default lane uses macOS 26 and Xcode 26.0.x; ios18 uses the 18.6 simulator.
-# Usage: scripts/ci/apple.sh [all|ios|ios18|packages|ios-build|ios-focused]
+# Usage: scripts/ci/apple.sh [all|ios|ios18|packages|ios-build|ios-focused|ios-regressions|ios-ipad-diagnostic]
 # Cache CI_SPM_CACHE (default ~/Library/Caches/persona-ci/spm); keep the printed
 # output directory's *.xcresult bundles when investigating failures.
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 LANE="${1:-all}"
-case "$LANE" in all|ios|ios18|packages|ios-build|ios-focused) ;; *) printf 'Usage: %s [all|ios|ios18|packages|ios-build|ios-focused]\n' "$0" >&2; exit 2 ;; esac
+case "$LANE" in all|ios|ios18|packages|ios-build|ios-focused|ios-regressions|ios-ipad-diagnostic) ;; *) printf 'Usage: %s [all|ios|ios18|packages|ios-build|ios-focused|ios-regressions|ios-ipad-diagnostic]\n' "$0" >&2; exit 2 ;; esac
 [ "$#" -le 1 ] || { printf 'apple-ci: too many arguments\n' >&2; exit 2; }
 [ "$(uname -s)" = Darwin ] || { printf 'apple-ci: FAIL requires macOS with Xcode\n' >&2; exit 1; }
 for tool in python3 xcodebuild xcrun xcodegen rsync git; do
@@ -83,8 +83,12 @@ cleanup() {
   if [ "$code" -ne 0 ]; then
     # Capture simulator state before cleanup; only allowlisted logs and xcresult
     # bundles leave the disposable output, never synthetic/private config or keys.
+    local scope=all
+    if [ "$LANE" = ios-ipad-diagnostic ]; then
+      scope=regular
+    fi
     ci_run 'Collect Apple failure diagnostics' 180 python3 "$CI_ROOT/scripts/ci/apple_diagnostics.py" \
-      "$OUTPUT" "$DIAGNOSTICS" || printf 'apple-ci: failure diagnostics could not be collected\n' >&2
+      "$OUTPUT" "$DIAGNOSTICS" --scope "$scope" || printf 'apple-ci: failure diagnostics could not be collected\n' >&2
   fi
   cleanup_device "$SIM" "$SIM_NAME" "$SIM_STARTED"
   cleanup_device "$REGULAR_SIM" "$REGULAR_SIM_NAME" "$REGULAR_SIM_STARTED"
@@ -163,6 +167,9 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then
   # Real loopback sshd and mock hub, with temporary keys: exercise tunnel recovery before the app builds (#11671).
   ci_run 'PersonaSSH native tunnel integration tests' 900 env PERSONA_SSH_TRACE="$OUTPUT/native-ssh-trace.log" xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaSSH" --scratch-path "$SPM/PersonaSSH"
   ci_run 'PersonaCore strict-concurrency tests and C-binding fixture replay' 900 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaCore" --scratch-path "$SPM/PersonaCore" -Xswiftc -warnings-as-errors
+  # The wire layer every app target links, the watch and widgets included (#7895). -warnings-as-errors on the command line
+  # also applies to a package's dependencies, so PersonaWire builds without warnings for the packages built on it (#12734).
+  ci_run 'PersonaWire unit tests' 300 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaWire" --scratch-path "$SPM/PersonaWire" -Xswiftc -warnings-as-errors
   ci_run 'PersonaKit unit tests' 900 xcrun swift test --package-path "$SOURCE/apple/Packages/PersonaKit" --scratch-path "$SPM/PersonaKit"
   # The live screen's video wire and capture decisions (#3954): PersonaScreenCore, all Persona Link's helper is built from
   # (#7927), and PersonaScreenKit, the iOS app's side on top of it (route session, quality tiers).
@@ -184,7 +191,7 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then
   ci_run 'Isolation lint unit tests' 900 xcrun swift test -c release --disable-testable-imports --package-path "$SPM/IsolationLint/package" --scratch-path "$SPM/IsolationLint/build"
   ci_run 'Blocking calls on the main actor (isolation lint)' 300 "$SPM/IsolationLint/build/release/isolation-lint" --root "$SOURCE" --baseline "$SOURCE/scripts/test/apple_isolation_baseline.json"
 fi
-if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ]; then
+if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE" = ios-focused ] || [ "$LANE" = ios-regressions ] || [ "$LANE" = ios-ipad-diagnostic ]; then
   for sdk in iphoneos iphonesimulator watchos watchsimulator; do
     ci_run "Require $sdk SDK" 60 xcrun --sdk "$sdk" --show-sdk-version
   done
@@ -266,7 +273,7 @@ if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then
   # #11289's real .regular foreground scene cannot run on this lane's iPhone.
   # It is neither skipped nor replaced with an overridden trait: a separate
   # real-iPad test-without-building lane below runs the unchanged pixel test.
-  if [ "$LANE" = ios-focused ]; then
+  if [ "$LANE" = ios-focused ] || [ "$LANE" = ios-ipad-diagnostic ]; then
   # Explicit diagnostic suites after the same build/readiness gates as ios.
   # The ordinary lane below is unchanged and keeps every selection/assertion.
   IOS_UNIT_SELECTION=(-only-testing:PersonaTests/PageSearchableTests
@@ -280,6 +287,11 @@ else
   IOS_UNIT_SELECTION=("${IOS_EXCLUSIONS[@]}" -only-testing:PersonaTests
     -skip-testing:PersonaTests/AboutVersionRegularVisualTests
     -skip-testing:PersonaTests/AssistantHTMLCardTests -skip-testing:PersonaTests/AssistantHTMLSecurityTests)
+fi
+  if [ "$LANE" = ios-regressions ]; then
+  # Run only the two remaining regressions after the shared build/readiness gates.
+  IOS_UNIT_SELECTION=(-only-testing:PersonaTests/MainPagesStackTests
+    -only-testing:PersonaTests/PhoneSystemToolsTests)
 fi
   # A generic destination must retain the host's single runnable architecture.
   ci_run 'Build iOS offline unit tests' "$BUILD_SECONDS" bash -c '
@@ -394,10 +406,14 @@ fi
   fi
   test_batch ios-unit 'iOS offline unit and design/token tests' "$UNIT_SECONDS" "${IOS_TESTS[@]}" "${IOS_UNIT_SELECTION[@]}" \
     -resultBundlePath "$OUTPUT/ios-unit.xcresult" test-without-building
-  if [ "$LANE" = ios-focused ]; then
+  if [ "$LANE" = ios-focused ] || [ "$LANE" = ios-ipad-diagnostic ]; then
     result ios-unit "$SIM" PageSearchableTests StarredMessagesTests LauncherModelChoiceTests OmpNewAgentTests PaseoPermissionModesTests PaseoProvidersTests AboutVersionCompactVisualTests
-  else
+  elif [ "$LANE" != ios-regressions ]; then
     result ios-unit "$SIM" TypeScaleTests IconVocabularyTests TokenRatchetTests StyleSpecTests
+  fi
+  if [ "$LANE" = ios-regressions ]; then
+    result ios-unit "$SIM" MainPagesStackTests PhoneSystemToolsTests
+    exit "$IOS_FAILED"
   fi
   if [ "$LANE" != ios-focused ]; then
   test_batch ios-html-card 'iOS HTML card tests (separate batch)' 600 "${IOS_TESTS[@]}" \
@@ -439,7 +455,7 @@ fi
       --record "$OUTPUT/regular-readiness-context.json" --udid "$REGULAR_SIM" --bundle-id "$CI_BUNDLE_ID"
     ci_run 'Verify hosted regular iPad test readiness' 900 bash -c '
       set -euo pipefail
-      checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; shift 8
+      checker="$1"; bundle="$2"; log="$3"; watch_log="$4"; udid="$5"; ci_root="$6"; bundle_id="$7"; output="$8"; diagnostics="$9"; lane="${10}"; shift 10
       mkdir -p "$watch_log"
       printf "%s\n" "observer incomplete; bounded unavailable final evidence only; no launch cause established" > "$watch_log/observer.status.pending"
       mv "$watch_log/observer.status.pending" "$watch_log/observer.status.txt"
@@ -475,6 +491,10 @@ fi
           kill -KILL "-$watcher" 2>/dev/null || kill -KILL "$watcher" 2>/dev/null || true
         fi
         wait "$watcher" || true
+        if [ "$lane" = ios-ipad-diagnostic ]; then
+          timeout --kill-after=5s 180s python3 "$ci_root/scripts/ci/apple_diagnostics.py" \
+            "$output" "$diagnostics" --scope regular || true
+        fi
         exit "$code"
       }
       trap stop_watcher EXIT TERM INT
@@ -484,8 +504,13 @@ fi
       } 2>&1 | tee "$log"
     ' -- "$CI_ROOT/scripts/ci/apple_result.py" "$OUTPUT/ios-regular-readiness.xcresult" \
       "$OUTPUT/regular-readiness.log" "$OUTPUT/diagnostics/live-regular-readiness" "$REGULAR_SIM" \
-      "$CI_ROOT" "$CI_BUNDLE_ID" "$OUTPUT" "${IOS_COMMON[@]}" \
+      "$CI_ROOT" "$CI_BUNDLE_ID" "$OUTPUT" "$DIAGNOSTICS" "$LANE" "${IOS_COMMON[@]}" \
       -destination "platform=iOS Simulator,id=$REGULAR_SIM" -destination-timeout 120
+    if [ "$LANE" = ios-ipad-diagnostic ]; then
+      # A deliberate app-host diagnostic stops after its own strict probe and
+      # observer cleanup; it neither runs nor substitutes for the visual suite.
+      exit 0
+    fi
     mkdir -p "$OUTPUT/regular-shots"
     TEST_RUNNER_PERSONA_SHOTS="$OUTPUT/regular-shots" \
       ci_run 'iOS regular-width About visual test on real iPad' 600 "${IOS_COMMON[@]}" \

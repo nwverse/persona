@@ -318,3 +318,20 @@ func TestReadAnswerKey(t *testing.T) {
 		seen[k] = true
 	}
 }
+
+// The manager forwards the original post, so the assistant must preserve the same at/text boundary on reparse.
+func TestFeishuReadAdjacentPostMention(t *testing.T) {
+	for _, space := range []string{"", " "} {
+		t.Run("separator="+space, func(t *testing.T) {
+			e := readEnv(t)
+			ev := readEvent("om_post_read", "", "")
+			ev.Message.MessageType = "post"
+			ev.Message.Content = `{"title":"","content":[[{"tag":"at","user_id":"@_user_1","user_name":""},{"tag":"text","text":"` + space + `/read summarize the alerts"}]]}`
+			e.read(ev)
+			got := handoffs(e.f)
+			if len(got) != 1 || !strings.Contains(got[0].text, "summarize the alerts") {
+				t.Fatalf("handoffs %+v; want the post's read request", got)
+			}
+		})
+	}
+}

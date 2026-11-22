@@ -6,25 +6,34 @@ numbers (an extension point's version) drift when the code moves on. This reads 
 and checks:
 
   (a) every key of managerMessageTypes and hubMessageTypes (server/internal/hub/bus_broadcast.go) has a row in the
-      server -> client table under protocol.md "WebSocket /api/v1/ws";
+      server -> client table under protocol.md "WebSocket /api/v1/ws", or in a "Server → client:" table of a doc
+      split from protocol.md;
   (b) every case of the switch on msg.Type in onClientMessage (server/internal/hub/http.go) has a row in its
-      client -> server table;
+      client -> server table, or in a "Client → server:" table of a doc split from protocol.md;
   (c) every feature in proto.Features, and every one the hub's features() appends
       (server/internal/hub/extensions_link.go; an h.method()... spread is followed into that method's returns), is
-      named in protocol.md "Health check and feature flags";
+      named in protocol.md "Health check and feature flags", or in a section of a doc split from protocol.md whose
+      heading ends with "feature flags";
   (d) every extension point in extension.Points has a row `| `x` (version N)` in extensions.md "Extension points",
       N its Version, and the manifest schema's $defs.Contributes lists the same points;
   (e) every property of the schema's $defs.Manifest has a row in the field table of extensions.md's manifest section.
 
 Only the code-to-docs direction is checked: a doc row for something the code no longer has (or that an extension
 declares, such as `lark`) is left to the reader.
+
+A doc split from protocol.md is one that took sections out of it, says so in a moved-from line, and may hand some on
+in turn (test_doc_paths.py, DocMoves). protocol.md keeps its two sections and their tables either way.
 """
 from pathlib import Path
 import json
 import re
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import test_doc_paths  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -241,6 +250,28 @@ def table_after(lines, marker):
     return rows[2:]
 
 
+def tables_after(lines, marker):
+    """The body rows of every table that follows a line starting with marker."""
+    return [row for number, line in enumerate(lines) if line.startswith(marker)
+            for row in table_after(lines[number:], marker)]
+
+
+def sections_ending(markdown, suffix):
+    """The lines under every heading whose text ends with suffix, case ignored, each up to the next heading of the same
+    or a higher level."""
+    lines, out = markdown.splitlines(), []
+    for number, line in enumerate(lines):
+        match = re.match(r"(#+) (.*)$", line)
+        if match and match.group(2).strip().lower().endswith(suffix):
+            out += section("\n".join(lines[number:]), match.group(2).strip())
+    return out
+
+
+def split_docs(doc):
+    """The docs that took sections out of doc (a moved-from line), and those that took sections out of them in turn."""
+    return test_doc_paths.DocMoves.read(ROOT).split_from(doc)
+
+
 def first_cell_names(rows):
     """Every backticked name in the first cell of rows (`a` / `b`, `c`)."""
     return {name for row in rows for name in BACKTICKED.findall(cells(row)[0])}
@@ -261,9 +292,25 @@ def websocket_types():
 
 
 def documented_websocket_types():
+    """The first cells of protocol.md's two tables under "WebSocket /api/v1/ws", and of every "Server → client:" and
+    "Client → server:" table of a doc split from it."""
     lines = section(read(PROTOCOL_DOC), "WebSocket `/api/v1/ws`")
-    return (first_cell_names(table_after(lines, "Server → client:")),
-            first_cell_names(table_after(lines, "Client → server:")))
+    to_clients = first_cell_names(table_after(lines, "Server → client:"))
+    from_clients = first_cell_names(table_after(lines, "Client → server:"))
+    for doc in split_docs(PROTOCOL_DOC):
+        lines = read(doc).splitlines()
+        to_clients |= first_cell_names(tables_after(lines, "Server → client:"))
+        from_clients |= first_cell_names(tables_after(lines, "Client → server:"))
+    return to_clients, from_clients
+
+
+def documented_features():
+    """The names in protocol.md "Health check and feature flags", and in each "... feature flags" section of a doc
+    split from it."""
+    documented = backticked(section(read(PROTOCOL_DOC), "Health check and feature flags"))
+    for doc in split_docs(PROTOCOL_DOC):
+        documented |= backticked(sections_ending(read(doc), "feature flags"))
+    return documented
 
 
 def features():
@@ -411,6 +458,39 @@ class ParserTests(unittest.TestCase):
     def test_missing(self):
         self.assertEqual(["b", "c"], missing({"a", "c", "b"}, {"a", "d"}))
 
+    def test_docs_split_from_protocol_add_their_rows_and_feature_flags(self):
+        protocol = ("# Protocol\n\n## Health check and feature flags\n\n`tls`\n\n## WebSocket `/api/v1/ws`\n\n"
+                    "Server → client:\n\n| type | Fields |\n| --- | --- |\n| `hello` | |\n\n"
+                    "Client → server:\n\n| type | Fields |\n| --- | --- |\n| `ping` | |\n\n## Engines\n")
+        split = ("# Inbox API\n\n## Inbox feature flags\n\n`inbox_v2`\n\n### Rows\n\n`inbox_rows`\n\n"
+                 "## Pushes\n\n`not_a_feature`\n\nServer → client:\n\n| type | Fields |\n| --- | --- |\n"
+                 "| `inbox` / `inbox_item` | `not_a_type` |\n\nClient → server:\n\n| type | Fields |\n| --- | --- |\n"
+                 "| `inbox_read` | |\n\n### More\n\nServer → client:\n\n| type |\n| --- |\n| `inbox_more` |\n")
+        with tempfile.TemporaryDirectory(prefix="doc-wire-split-") as directory:
+            root = Path(directory)
+            test_doc_paths.write_tree(root, {
+                PROTOCOL_DOC: protocol,
+                "docs/protocol/inbox-api.md": "<!-- moved-from: docs/protocol/protocol.md -->\n" + split,
+                # Took sections out of inbox-api.md in turn.
+                "docs/protocol/inbox-rows.md": ("<!-- moved-from: docs/protocol/inbox-api.md -->\n# Rows\n\n"
+                                                "Server → client:\n\n| type |\n| --- |\n| `inbox_row` |\n"),
+                # No moved-from line: its tables are not protocol.md's.
+                "docs/protocol/other.md": split.replace("inbox", "other"),
+            })
+            test_doc_paths.git_repository(root)
+            with patch(__name__ + ".ROOT", root):
+                self.assertEqual(({"hello", "inbox", "inbox_item", "inbox_more", "inbox_row"}, {"ping", "inbox_read"}),
+                                 documented_websocket_types())
+                self.assertEqual({"tls", "inbox_v2", "inbox_rows"}, documented_features())
+                (root / "docs/protocol/inbox-api.md").write_text(split)
+                self.assertEqual(({"hello"}, {"ping"}), documented_websocket_types())
+                self.assertEqual({"tls"}, documented_features())
+                # protocol.md keeps its own sections: a split doc does not stand in for them.
+                (root / PROTOCOL_DOC).write_text("# Protocol\n\n## Engines\n")
+                for read_docs in (documented_websocket_types, documented_features):
+                    with self.assertRaises(AssertionError):
+                        read_docs()
+
 
 class DocWireTests(unittest.TestCase):
     maxDiff = None
@@ -427,6 +507,7 @@ class DocWireTests(unittest.TestCase):
                          {"Server → client": missing(to_clients, documented_to_clients),
                           "Client → server": missing(from_clients, documented_from_clients)},
                          f"message types without a row in the tables of {PROTOCOL_DOC} \"WebSocket /api/v1/ws\" "
+                         "or of a doc split from it "
                          "(Server → client: hub/bus_broadcast.go managerMessageTypes and hubMessageTypes; "
                          "Client → server: the msg.Type cases of hub/http.go onClientMessage)")
 
@@ -434,10 +515,10 @@ class DocWireTests(unittest.TestCase):
         have = features()
         self.assertTrue({"tls", "client_hello", "persona_contracts_v1", "sessions_list", "assistant_views",
                          "agent_session_archives", "agent_session_archive_close"} <= have, sorted(have))
-        documented = backticked(section(read(PROTOCOL_DOC), "Health check and feature flags"))
-        self.assertEqual([], missing(have, documented),
+        self.assertEqual([], missing(have, documented_features()),
                          f"features in the hub's hello and /health not named in {PROTOCOL_DOC} "
-                         "\"Health check and feature flags\" (proto.Features, hub/extensions_link.go features())")
+                         "\"Health check and feature flags\" or in a \"... feature flags\" section of a doc split "
+                         "from it (proto.Features, hub/extensions_link.go features())")
 
     def test_extension_points_are_documented(self):
         have = points()

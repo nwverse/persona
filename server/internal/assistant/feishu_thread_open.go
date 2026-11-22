@@ -50,11 +50,13 @@ func openingWords(ev feishubot.MessageEvent, content feishubot.Content) string {
 	case "text":
 		text = feishubot.ParseContent(m.MessageType, m.Content, nil).Text // with the @_user_N keys still in it
 	case "post":
-		text = content.Text
+		text = content.StripLeadingMentions(m.Mentions, nil)
 	default:
 		return ""
 	}
-	text = trimOpeningMentions(text, m.Mentions, unicode.IsSpace)
+	if m.MessageType == "text" {
+		text = trimOpeningMentions(text, m.Mentions, unicode.IsSpace)
+	}
 	for _, mn := range m.Mentions {
 		if mn.Key != "" && mn.Name != "" {
 			// A whole key: "@_user_1" is not the start of "@_user_10".

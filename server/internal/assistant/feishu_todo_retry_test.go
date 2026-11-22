@@ -307,7 +307,7 @@ func TestFeishuTodoReminderRetryAuthority(t *testing.T) {
 					if changed && change == "generation" {
 						paired = paired.Add(time.Second)
 					}
-					return FeishuStatus{Ready: true, Owner: owner, PairedAt: paired, Features: FeishuFeatures{Pushes: true, Workbench: true}}, nil
+					return FeishuStatus{Ready: true, Owner: owner, PairedAt: paired, PublicURL: "https://hub.example.com", Features: FeishuFeatures{Pushes: true, Workbench: true}}, nil
 				})
 				companion := func() {
 					s.fbot.mu.Lock()
@@ -373,8 +373,17 @@ func TestFeishuTodoReminderRetryAuthority(t *testing.T) {
 					}
 					for _, p := range posts {
 						card := p["card"].(string)
-						if strings.Contains(card, todo.Title) || strings.Contains(card, todo.Notes) {
-							t.Fatal("health reminder exposed original notes after disconnect")
+						raw, err := json.Marshal(p)
+						if err != nil {
+							t.Fatal(err)
+						}
+						for _, forbidden := range []string{todo.Title, todo.Notes, todo.ID, "/todos/"} {
+							if strings.Contains(string(raw), forbidden) {
+								t.Fatalf("private reminder payload contains %q", forbidden)
+							}
+						}
+						if card == "" {
+							t.Fatal("missing generic reminder card")
 						}
 					}
 					if change == "health disconnected" && posts[0]["card"] != posts[1]["card"] {

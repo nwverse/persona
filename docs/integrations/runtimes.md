@@ -31,7 +31,21 @@ The runtime doesn't need to know where the hub is, open ports or authenticate (a
 
 A runtime that can't reach the local socket (it's a long-running service: another system user, in a container, on another machine) connects the other way round and is called a **daemon** (`docs/integrations/daemons.md`):
 it opens a WebSocket endpoint and node connects to it per `~/.persona/daemons.json`, with a token. Once connected it speaks the same protocol, and the SDK driver doesn't change a line
-(`createRuntime(driver, {listen: {port, token}})`). The name comes from config and session ids are namespaced, so a daemon can't touch other sessions on the machine, and it has no `mcp.*`.
+(`createRuntime(driver, {listen: {port, token}})`). The name comes from config and session ids are namespaced.
+The daemon's config can enroll it in [A2A](a2a.md) for its own sessions.
+
+For [A2A](a2a.md) tools, use `rt.tools({sessionId})` and
+`rt.callTool({name, args, session_id: sessionId})` with the executing Agent's
+session ID. The node checks runtime ownership before a call. A local runtime
+that configures a provider's stdio MCP server can request a ticket with
+`rt.a2aMcpToken(sessionId)`. Pass it as `PERSONA_A2A_TOKEN`, alongside
+`PERSONA_SESSION_ID`, to a private `personad mcp` process. The ticket grants
+that provider A2A tools for its own session and should stay in its MCP environment.
+
+A runtime that releases idle sessions and can safely wake them with an
+ordinary send may set `capabilities.a2a_wake_on_send` on those rows. The
+node passes `a2a_wake_on_send: true` to `send` when delivering a task update
+through that path. Decline if the session was manually stopped or archived.
 
 ## What to implement
 
@@ -468,11 +482,38 @@ end to end in `integrations/dsh/e2e/assistant.mjs`.
 | DSH (`dsh`, configurable) | `integrations/dsh`: a Cordis plugin for `dsh web`; companion process `companion.mjs` (`dsh-files`) for when DSH isn't running | `docs/integrations/dsh.md` |
 | pi (`pi-<pid>`, `pi-web`, `pi-files`) | `integrations/pi`: pi extension (one connection per pi process) + pi-web companion process | `docs/integrations/pi.md` |
 | omp (`omp-<pid>`) | `integrations/omp`: the pi host under omp's identity (agent and name `omp`); no companion and no auto-update | `docs/integrations/omp.md` |
-| opencode (`opencode` / `opencode-<pid>`) | `integrations/opencode`: standalone ACP companion (`companion.mjs`, `start`, `models`, `modes`, `assistant: true` with loopback HTTP MCP proxy, reads 1.x & 2.x `opencode.db`) and opencode server plugin (`index.js`, one connection per `opencode serve` process, merges with herdr TUI panes) | `docs/integrations/opencode.md` |
+| opencode (`opencode` / `opencode-<pid>`) | `integrations/opencode`: embedded `persona-opencode-runtime` ACP companion (`companion.mjs`, auto-supervised by `personad` via `server/internal/node/opencodebridge.go` when `opencode` is installed and no external companion or `opencode serve` plugin is connected; `start`, `models`, `modes`, `assistant: true` with loopback HTTP MCP proxy, lazy/idle ACP cleanup, reads 1.x & 2.x `opencode.db`) and opencode server plugin (`index.js`, one connection per `opencode serve` process, merges with herdr TUI panes) | `docs/integrations/opencode.md` |
 | Grok CLI (`grok-chat`) | `integrations/grok/companion.mjs`: optional standalone ACP companion with assistant tools, permission hooks, native renaming and restart recovery; also lists conversations started in a terminal (read-only while the terminal holds them) | `integrations/grok/README.md` |
 | Antigravity CLI (`antigravity`) | `integrations/antigravity/companion.mjs`: companion process; reads CLI transcripts and runs terminal-less Agent and assistant sessions through `agy acp` | "Antigravity CLI" below |
 | Managed Agents (`managed-agents`, configurable) | `integrations/managed-agents/companion.mjs`: standalone companion for Volcengine Ark Managed Agents and compatible endpoints (cloud or self-hosted, the user's own key); reads sessions over the REST API, sends, interrupts, starts, and answers tool confirmations and question / plan tools on the phone; `--listen` makes it a daemon | `docs/integrations/managed-agents.md` |
 | echo (example) | `integrations/runtime-sdk/examples/echo-runtime.mjs` (with `--listen <port>` it's a daemon) | "Minimal example" in this doc, `docs/integrations/daemons.md` |
+
+### Separate task follow-up instructions
+
+Assistant support and supervision support are independent. A launcher may run an ordinary
+Assistant chat without an authoritative instruction channel; its tasks then use the existing
+compatible-supervisor fallback. Launcher inventory exposes `supervision_policy` only on the
+runtime's primary Assistant launcher after its verification succeeds. An absent capability
+never grants supervision. Inventory is descriptive; the execution path checks again before sending.
+
+| Engine / path | Separate supervision instruction channel |
+| --- | --- |
+| Claude Code / Messages | Node-owned appended system instructions |
+| Codex app-server | Node-owned developer instructions |
+| Antigravity CLI | Isolated worker policy directory; fake runtime tests only |
+| OpenCode ACP companion | Isolated worker; pinned-version startup verification of process instructions, preferring ACP append when advertised |
+| OpenCode plugin | No isolated instruction channel; supervision refused |
+| DSH / Grok | No verified separate channel; supervision refused |
+| Cursor ACP / TRAE ACP | No verified channel or per-session MCP identity contract; supervision refused |
+| Cursor SDK | Optional separate runtime under evaluation; no capability is advertised until account and permission contracts pass |
+| pi / omp / other runtimes | Only an explicitly advertised, verified runtime channel permits supervision; unknown capability is refused |
+
+Refusals list the compatible launchers in the destination computer's inventory, without
+starting a provider or assuming that Claude/Codex are installed. An unreadable/empty inventory
+says that none was detected. `assistant_supervision_account` distinguishes an engine whose
+system instructions are supported but not enabled for the current account; runtimes must use
+that code only after an authoritative account rejection, never infer it from a generic failure.
+Its translated explanation asks the owner to enable the account feature with the engine provider.
 
 ### Antigravity Desktop (macOS, experimental)
 
@@ -489,6 +530,13 @@ Handle approvals there as well. The desktop and CLI companions can run together.
 with `--desktop-dir` or the Persona runtime socket with `--socket`. The desktop RPC is private and version dependent.
 
 ### Antigravity CLI
+
+Assistant context remains an ACP embedded text resource followed by the user's separate text block (#12435).
+Antigravity exports that resource as a leading `Content of persona-context:///snapshot.txt:` line and context XML
+inside `USER_INPUT.content`. Both the companion and pane history readers remove the complete leading Persona resource
+envelope before projecting user text (#12813). Bare labels, other URI schemes and ordinary quoted text retain their
+existing behavior. History format versions invalidate cached items from before this cleanup; native exports and ACP
+payloads are unchanged.
 
 The session's `last_text` preview contains assistant response text after the latest explicit user input. A new user
 input clears the previous reply preview, including input with no visible text. Thinking and tool records leave it empty
@@ -588,7 +636,8 @@ on success, failure or timeout. Completed probe workspaces stay out of the user 
 The runtime bounds native calls to a 75-second budget, followed by bounded session cleanup. Older runtimes keep the
 node's shell check. Shell and managed launchers keep their own execution context.
 
-A chat gets Persona's MCP server once, named `persona`, through ACP `mcpServers`. `agy` defers the tools over its
+A chat gets Persona's MCP server, named `persona`, through ACP `mcpServers`. Regular Agent chats can also get
+`persona_a2a` with a session-scoped ticket. `agy` defers the tools over its
 declaration budget, largest first, and has no `call_mcp_tool` for servers passed through ACP, so an assistant chat's
 server runs behind `integrations/antigravity/mcp-proxy.mjs`, which adds a small `persona_call` tool that calls any
 Persona tool by name (#7333). The proxy declares only the tools larger than `persona_call`, so it is always the smallest
@@ -696,3 +745,19 @@ Don't put host pane information in the runtime id: panes are matched on node's s
 
 Platforms built on DSH that don't run `dsh web` (multi-tenant, running DSH in containers) implement the same protocol on the platform side and connect as a daemon (`docs/integrations/daemons.md`),
 reusing the SDK and `integrations/dsh/lib/map.js` directly, with no code added on the Persona side.
+
+### Assistant admission evidence (#11936)
+
+`TestCodexAndPiAssistantConversationRoles` exercises manager admission and actual
+fake-node delivery for `codex` and `pi`, each with `main`,
+`background_supervisor`, `direction_supervisor`, and `scheduled_task` subtests.
+Supervisor inputs carry the exact manager policy; scheduled runs resume the same
+conversation and retain their execution binding. The managed Codex launcher and
+the policy-capable pi-web companion use the contracts merged in #12569
+(`7085c82a1f`). Pi's runtime hook contract is also covered by
+`assistant policy/context and tool authority are isolated to the actual pi session`
+in `integrations/pi/test/assistant.test.js`. Tests use fake runtimes/models.
+
+Unproven supervision channels (plugin paths, DSH, Grok, Cursor ACP and TRAE)
+remain refused as required by the adopted isolation review. Their refusal does
+not imply that Codex or a verified pi companion is ineligible.
