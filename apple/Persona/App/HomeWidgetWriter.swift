@@ -55,19 +55,21 @@ final class HomeWidgetWriter {
     private var toldHub: Bool?
 
     /// Tells the hub whether any of the widgets is on this device's screens (`widgets` in its prefs), when that changed
-    /// since it last told it: the hub wakes the app for them while it is not open (#5721). From the foreground.
-    func tellHub() {
+    /// since it last told it. A cold background wake also obtains the configurations: its process has no in-memory
+    /// installed list yet (#5721).
+    func tellHub(forceRefresh: Bool = false) {
         guard let api = AppModel.shared.api, !api.config.isDemo else { return }
         let kinds = Set(HomeKind.allCases.map(\.widgetKind))
         let byName = Dictionary(uniqueKeysWithValues: HomeKind.allCases.map { ($0.widgetKind, $0) })
-        WidgetCenter.shared.getCurrentConfigurations { result in
+        WidgetCenter.shared.getCurrentConfigurations { @Sendable result in
             guard case .success(let infos) = result else { return }
             let has = infos.contains { kinds.contains($0.kind) }
             let shown = Set(infos.compactMap { byName[$0.kind] })
             Task { @MainActor in
+                await HomeWidgetData.shared.restore()
                 let placementChanged = HomeWidgetData.shared.installed != shown
                 HomeWidgetData.shared.installed = shown
-                HomeWidgetData.shared.refresh(forceIntake: placementChanged)
+                HomeWidgetData.shared.refresh(forceIntake: forceRefresh || placementChanged)
                 let writer = HomeWidgetWriter.shared
                 guard writer.toldHub != has else { return }
                 do {

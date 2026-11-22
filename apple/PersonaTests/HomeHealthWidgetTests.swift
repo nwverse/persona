@@ -8,7 +8,50 @@ import WidgetKit
 extension HomeWidgetTests {
     private func widgetDeps(api: @escaping () -> APIClient? = { nil }, supported: @escaping () -> Bool = { true }) -> HomeWidgetData.HealthDeps {
         .init(api: api, supportsIntake: supported, healthAllowed: { false }, activityPermission: { .unavailable },
-              activity: { nil }, now: { HomeSamples.now }, changed: {})
+              activity: { nil }, now: { HomeSamples.now }, changed: {}, snapshot: { nil })
+    }
+
+    @Test func aColdLockedReadKeepsTheSnapshotAndAnEmptyReadStillClearsIt() async {
+        var deps = widgetDeps()
+        var restores = 0
+        var empty = false
+        deps.snapshot = { restores += 1; return HomeSamples.busy() }
+        deps.healthAllowed = { true }
+        deps.activityPermission = { .unnecessary }
+        deps.activity = {
+            if empty { return nil }
+            throw URLError(.dataNotAllowed)
+        }
+        let data = HomeWidgetData(healthDeps: deps)
+        data.installed = [.healthToday]
+        await data.readActivity()
+        #expect(data.activity?.move == 320 && restores == 1)
+        empty = true
+        await data.readActivity()
+        #expect(data.activity == nil)
+        await data.restore()
+        #expect(data.activity == nil && restores == 1, "a cleared value must not be revived by restoring again")
+    }
+
+    @Test func coldIntakeCacheBelongsToItsHubAndIgnoresTheSelectedManager() async {
+        let first = FakeHub(), second = FakeHub(url: "https://second.fake.invalid")
+        var cached = HomeSamples.busy()
+        cached.intake?.scope = HomeWidgetData.scope(first.client)
+        var deps = widgetDeps(api: { first.client.showing("another-manager") })
+        deps.snapshot = { cached }
+        let same = HomeWidgetData(healthDeps: deps)
+        await same.restore()
+        #expect(same.intake?.water.today == 1250)
+        first.on("GET", "/api/v1/assistant/health/intake") { _ in throw URLError(.notConnectedToInternet) }
+        same.installed = [.water]
+        same.intakeChanged()
+        await waitForWidget { first.requests.count == 1 }
+        #expect(same.intake?.water.today == 1250, "a cold failed HTTP read retains this hub's cached amount")
+        deps.api = { second.client }
+        let other = HomeWidgetData(healthDeps: deps)
+        await other.restore()
+        #expect(other.intake == nil)
+        #expect(other.activity?.move == 320, "phone Health readings do not belong to a hub")
     }
 
     private func waitForWidget(_ ready: () -> Bool) async {

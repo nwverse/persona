@@ -496,7 +496,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let group = AppModel.shared.pushGroup(info)
         AppModel.shared.wakeLinks(group)
         #if os(iOS)
-        HomeWidgetData.shared.refresh(forceIntake: true) // a widget wake also reads intake changed elsewhere
+        Task {
+            await HomeWidgetData.shared.restore()
+            HomeWidgetWriter.shared.tellHub(forceRefresh: true) // a cold wake obtains the installed widget kinds
+        }
         #endif
         nonisolated(unsafe) let done = completionHandler
         DispatchQueue.main.asyncAfter(deadline: .now() + 25) {

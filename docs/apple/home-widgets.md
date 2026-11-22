@@ -194,6 +194,12 @@ stores the hub's date, IANA time zone (UTC stays UTC), next day boundary, totals
 timeline adds that boundary; its next entry clears today's totals while keeping goals and historical bars, even when
 the phone's date differs. A missing `health_intake` hello feature shows Update the hub, never a fabricated zero.
 
+A cold widget wake first obtains the installed configurations from WidgetCenter and restores the last snapshot off
+the main actor. Health and Activity survive a locked-store failure; intake restores only when its opaque hub scope
+matches the currently paired hub. The scope hashes the hub address and group, never a token. A successful empty Activity
+read clears the cached value and a later restore cannot revive it. Older snapshots without a scope remain readable,
+but their intake is not restored into a different process until a fresh read establishes its hub.
+
 The app reads intake only for a placed Water, Protein or Today's Health widget, every 15 minutes when refreshed, at
 once after a local accepted write or a default-manager `health_intake` event, and on a hub widget wake. Reads in flight
 coalesce invalidations and read again after a change. The existing hub wake mechanism coalesces remote changes to about

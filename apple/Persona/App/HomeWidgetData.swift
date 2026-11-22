@@ -1,6 +1,7 @@
 #if os(iOS)
 import EventKit
 import Foundation
+import CryptoKit
 
 /// What the widgets show that the app reads on its own rather than from the hub's live state: today's calendar events,
 /// Health's numbers, the subscription windows and today's tokens by the hour (docs/apple/home-widgets.md「What each
@@ -19,20 +20,54 @@ final class HomeWidgetData {
         var activity: () async throws -> HealthActivityReading?
         var now: () -> Date
         var changed: () -> Void
+        var snapshot: () async -> HomeSnapshot?
 
         static var live: Self {
             .init(api: { AppModel.shared.api }, supportsIntake: { AppModel.shared.hubFeatures.contains(HealthIntake.feature) },
                   healthAllowed: { HealthAccess.cachedStatus() == .granted },
                   activityPermission: { try await HealthActivityReader.permission() },
                   activity: { try await HealthActivityReader.today() }, now: { .now },
-                  changed: { HomeWidgetWriter.shared.flush() })
+                  changed: { HomeWidgetWriter.shared.flush() },
+                  snapshot: { await Task.detached { HomeSnapshotStore.shared.read() }.value })
         }
     }
 
     private let healthDeps: HealthDeps
     init(healthDeps: HealthDeps = .live) { self.healthDeps = healthDeps }
+    private var restored = false
+    private var restoring: Task<HomeSnapshot?, Never>?
 
-    /// The kinds on this device's screens (`WidgetCenter`'s configurations, read from the foreground); nil before the
+    /// A cold widget wake must keep the last successful Health read when the phone's database is locked. Intake
+    /// restores only for this hub, so changing hubs can never expose the previous hub's amounts.
+    func restore() async {
+        guard !restored else { return }
+        let read: Task<HomeSnapshot?, Never>
+        if let restoring { read = restoring }
+        else {
+            let source = healthDeps.snapshot
+            read = Task { await source() }
+            restoring = read
+        }
+        let saved = await read.value
+        guard !restored else { return }
+        restored = true
+        restoring = nil
+        guard let saved, saved.version == HomeSnapshot.version else { return }
+        if health == nil { health = saved.health }
+        if activity == nil { activity = saved.activity }
+        if intake == nil, let api = healthDeps.api()?.manager(nil), saved.intake?.scope == Self.scope(api) {
+            intake = saved.intake
+            intakeScope = api
+        }
+    }
+
+    /// The default manager's hub identity, independent of a selected manager and without tokens or other secrets.
+    static func scope(_ api: APIClient) -> String {
+        SHA256.hash(data: Data((api.config.url.absoluteString + "\n" + api.group).utf8))
+            .map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The kinds on this device's screens (`WidgetCenter`'s configurations, also obtained on a cold wake); nil before the
     /// first read; new health reads wait until the configurations are known.
     var installed: Set<HomeKind>?
 
@@ -124,6 +159,7 @@ final class HomeWidgetData {
     /// Today's steps against the week before, last night's sleep, the resting heart rate and active energy, when the
     /// user let Persona read Health (`HealthAccess`). A query that fails (Health is locked with the phone) keeps the last.
     private func readHealth() async {
+        await restore()
         guard HealthAccess.cachedStatus() == .granted else {
             if health != nil { health = nil; HomeWidgetWriter.shared.schedule() }
             return
@@ -164,6 +200,7 @@ final class HomeWidgetData {
         if let confirmed, let captured {
             intakeScope = captured.manager(nil)
             intake = HomeIntakeClock.confirmedSnapshot(confirmed, now: healthDeps.now())
+            intake?.scope = Self.scope(captured)
             healthDeps.changed()
         }
         readAt[.water] = healthDeps.now()
@@ -179,6 +216,7 @@ final class HomeWidgetData {
     }
 
     private func readIntake() async {
+        await restore()
         guard let api = healthDeps.api()?.manager(nil) else { return }
         if !api.sameSettingsScope(as: intakeScope) {
             intakeScope = api
@@ -195,7 +233,8 @@ final class HomeWidgetData {
             let value = try await api.healthIntake()
             guard revision == intakeRevision, api.sameSettingsScope(as: healthDeps.api()?.manager(nil)),
                   healthDeps.supportsIntake() else { return }
-            let saved = HomeIntakeClock.snapshot(value, now: healthDeps.now())
+            var saved = HomeIntakeClock.snapshot(value, now: healthDeps.now())
+            saved.scope = Self.scope(api)
             guard saved != intake else { return }
             let zoneChanged = saved.zone != intake?.zone
             intake = saved
@@ -213,6 +252,7 @@ final class HomeWidgetData {
     /// Only an installed Today's Health widget reads Activity, and only after Health was enabled in the app. This
     /// read-only reader never requests authorization; failure (including a locked database) preserves the last value.
     func readActivity() async {
+        await restore()
         guard !activityReading else { return }
         guard installed?.contains(.healthToday) == true, healthDeps.healthAllowed() else {
             if activity != nil { activity = nil; healthDeps.changed() }
