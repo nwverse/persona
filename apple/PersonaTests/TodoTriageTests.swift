@@ -118,11 +118,11 @@ struct TodoTriageTests {
         #expect(at(old).section == .done && at(old).rule == .closed)
         let seen = todo("concern", done: 1, kind: "concern") { $0.doneBy = "reported"; $0.seenAt = ago(0.5) }
         #expect(at(seen).section == .done && at(seen).rule == .closed)
-        #expect(TodoSection.justDone.title == String(localized: "Just Finished"))
+        #expect(TodoSection.justDone.title == StateName.justFinished.text)
     }
 
     @Test func justFinishedTitleReservesAwaitingReviewForFinishedUnseen() {
-        let justFinished = String(localized: "Just Finished")
+        let justFinished = StateName.justFinished.text
         let awaiting = String(localized: "Delivered · Awaiting Review [To-do Sections]")
         #expect(TodoSection.justDone.title(rules: [.finishedUnseen]) == awaiting)
         #expect(TodoSection.justDone.title(rules: [.finishedUnseen, .finishedUnseen]) == awaiting)
