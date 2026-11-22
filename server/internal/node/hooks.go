@@ -264,7 +264,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 			session = n.canonicalAssistantSession(session)
 		}
 		sid := n.mcpCaller(req.Name, session, req.Pane, assistant)
-		if assistantwire.IsA2ATool(req.Name) {
+		if assistantwire.IsA2ATool(req.Name) || req.Name == "secret_store" {
 			sid, assistant = n.a2aCaller(c, req, sid)
 			if sid == "" {
 				resp = proto.TextResult("A2A requires a verified local session", true)
