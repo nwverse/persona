@@ -10,14 +10,9 @@ import (
 // Advance preserves the external runner's hard locks: expired clients never imply a remote job was killed.
 func Advance(rows []Lease, capacity, external int, now time.Time) {
 	held := external
+	Expire(rows, now)
 	for i := range rows {
 		l := &rows[i]
-		if l.State == "granted" && (!now.Before(l.HeartbeatUntil) || !now.Before(l.HoldUntil)) {
-			l.State = "expired"
-		}
-		if l.State == "queued" && !now.Before(l.WaitUntil) {
-			l.State = "timeout"
-		}
 		if l.State == "granted" {
 			held++
 		}
@@ -58,6 +53,9 @@ func Acquire(rows *[]Lease, in Request, now time.Time, id string, seq int64) (Re
 	}
 	for i := range *rows {
 		l := &(*rows)[i]
+		if in.ID != "" && l.ID == in.ID && l.Key != key {
+			return Reply{}, errors.New("request ID already belongs to another key")
+		}
 		if l.Key != key {
 			continue
 		}
@@ -140,4 +138,16 @@ func Mutate(rows []Lease, in Request, now time.Time) (Reply, error) {
 		return Reply{Status: l.State, Lease: l}, nil
 	}
 	return Reply{}, errors.New("lease not found")
+}
+
+func Expire(rows []Lease, now time.Time) {
+	for i := range rows {
+		l := &rows[i]
+		if l.State == "granted" && (!now.Before(l.HeartbeatUntil) || !now.Before(l.HoldUntil)) {
+			l.State = "expired"
+		}
+		if l.State == "queued" && !now.Before(l.WaitUntil) {
+			l.State = "timeout"
+		}
+	}
 }

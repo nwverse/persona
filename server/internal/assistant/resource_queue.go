@@ -93,6 +93,7 @@ func (s *Service) resourceRows(ctx context.Context, d rq.Definition, fn func(*[]
 			return err
 		}
 		now := time.Now().UTC()
+		rq.Expire(leases, now)
 		// External tickets also participate in dedupe, including submissions made by older clients.
 		if !snap.Unknown && snap.Queue != nil && now.Sub(snap.ObservedAt) < 30*time.Second {
 			for _, list := range [][]rq.Job{snap.Queue.Running, snap.Queue.Waiting} {
@@ -378,6 +379,9 @@ func (s *Service) resourceRefresh(ctx context.Context) {
 			}
 		}
 		cancel()
+		if s.store() != nil {
+			_ = s.store().PutSetting(ctx, resourceMirrorKey(d.ID), snap)
+		}
 		if s.store() != nil && s.devs != nil && !snap.Unknown && snap.Queue != nil {
 			_, rows, e := s.resourceRows(ctx, d, nil)
 			if e == nil {
