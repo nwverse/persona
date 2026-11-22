@@ -664,6 +664,7 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 		s.setTaskStageOn(ctx, t.ID, "merge", "", "", false, status.URL)
 	}
 	if strings.EqualFold(status.State, "merged") {
+		s.drainWorkspaceQueuesForPrereq(ctx, t.ID)
 		s.evaluateTodoAfterDependents(ctx, t.ID)
 	}
 	return nil

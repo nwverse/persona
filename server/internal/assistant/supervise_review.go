@@ -708,6 +708,9 @@ func (s *Service) reviewDoneTodo(ctx context.Context, id, reason string, accepte
 			if cur, ok := s.todoNow(id); ok {
 				s.createPRFollowups(ctx, cur)
 			}
+		}
+		s.onTodoWorkspaceReleased(ctx, before, accepted)
+		if accepted && row.DoneAt != nil {
 			s.evaluateTodoAfterDependents(ctx, id)
 		}
 		if t, now := s.todoNow(id); ok && now {

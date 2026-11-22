@@ -223,7 +223,7 @@ func (s *Service) checkTodoAfterReady(ctx context.Context, candidate Todo) ([]pr
 	if len(afterIDs) == 0 {
 		return nil, false, nil
 	}
-	if todoHasActiveAgent(candidate) || s.requestStartPending(ctx, candidate) {
+	if todoHasActiveAgent(candidate) || s.requestStartPending(ctx, candidate) || s.workspaceQueuePending(ctx, candidate) {
 		return nil, false, nil
 	}
 
