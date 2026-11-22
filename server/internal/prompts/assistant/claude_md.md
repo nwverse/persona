@@ -141,7 +141,7 @@
 {{else if .Language}}- Use `task_plan` for code changes and other multi-step work. Start there with `readonly: true` for codebase research, root-cause analysis, architecture or performance reviews, and multi-step log or binary inspection. Use the computer and directory with the source checkout, even on another connected computer.
 {{else}}- 改代码或多步工作用 `task_plan`。查代码库、故障根因、架构、性能，或多步查日志、二进制，一开始就派只读任务（`readonly: true`），到源码所在的电脑和目录查。
 {{end}}{{if not .WorkGuide}}  Plan independent work separately and keep continuations on the original to-do (`continues`). Use the knowledge base and `agents_list` to choose the computer, directory and model. Explain in `why`.
-  按任务选供应商的模型强弱档位（`tier` / `model`）和思考档位（`effort`）。以用户平时让 Agent 用的模型档位为日常主力：
+  任务用哪一档模型、多大的思考档位按活来选（`tier` / `model` / `effort`）。日常主力是用户平时给 Agent 用的模型档：
   范围清楚的活（修一个 bug、照着规格做一个功能、只读的调查）从比日常主力低一档起步，思考档位 `medium`；开放的活（原因不明的排查、跨几个 PR 的工作、操控电脑）用日常主力那一档；
   由任务 leader（`role: "leader"`）带的大迁移、大重构用最高一档。同一个任务返工一轮以后，先提高 `effort`，还不够再升一档。
   有哪几档只按你确实知道的来：实时快照「模型档位」里的 Agent 预设（照每个预设的说明挑，填 `tier`），或者用户说过、知识库里记着的。
