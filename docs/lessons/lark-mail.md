@@ -2,6 +2,14 @@
 
 Pitfalls, odd behavior and the trade-offs made at the time (originally in `CLAUDE.md`; index in `docs/lessons/README.md`). Put new lessons in the matching section; if none fits, start a new one.
 
+## Bot HTTP rejections with JSON bodies
+
+A gateway can reject a bot request with valid JSON that omits Feishu's `code`, or even contains `code: 0` (#12643).
+An integer's zero value is not evidence of HTTP success. After existing transient-status and business-code handling,
+reject remaining non-2xx responses before decoding output or returning nil for an operation without output. Report
+the operation and HTTP status without copying gateway details into the error; test through a real client and a local
+fake gateway after a successful token exchange, including idempotency-aware retries and normal 2xx controls.
+
 ## Lark system events are not new conversation requests
 
 A new message ID and timestamp do not establish new human activity (#9789). Consume system events and unidentified senders without creating or updating Inbox things, including the direct-chat sweep and history promotion path. Keep real attachments and independently authored bot notifications. When fetching conversation history for triage, retain timestamps and distinguish the incoming batch from background: an empty system event otherwise disappears from flattened context and makes an old request look current. An already collected follow-up remains background; promoting an unindexed follow-up must not rewind Last when another group of the same chat is processed in the same round.
@@ -120,12 +128,15 @@ Review follow-up: the optional projection isn't a required field for a whole pag
 
 ## Lark Open Platform bots (`docs/extensions/bots.md`)
 
+- Inbound rich-text `code_block.text` can itself be a Markdown document (#12667). When flattening it for the bot's model context, use a backtick wrapper longer than every run in the body; a fixed three-backtick wrapper lets a literal fence become a closing delimiter and can turn following post nodes into code. Verify synthetic events through the public event/content parsers and check the resulting Markdown AST, alongside exact ordinary-output and adjacent-media controls. This is separate from escaping or folding outbound answer cards.
+
 - With card JSON 2.0, **one unknown extra field rejects the whole card** (1.0 ignores it): 2.0 has no `action` module and no `note` (lay buttons out horizontally with `column_set` + `flex_mode: flow`,
   small text with `div` + `text_size: notation`), and button callbacks go in `behaviors`; a new card returned from a card callback must also be 2.0, otherwise you get 200830. Before writing, check every field against the 2.0 component docs.
 - 1.0's Markdown doesn't support headings, tables or quotes, so a model answer dropped straight in shows raw symbols; use 2.0. Cards treat things like `<at>` and `<font>` as their own tags: escape `<` in the body first.
 - The docs for card link buttons only mention http(s) and AppLink; don't put a custom scheme (`persona://`) there, or the whole card may be rejected.
 - Long-connection events must be acknowledged within 3 seconds, or Lark redelivers the same event: do the processing in the background and de-duplicate by message_id.
 - A message sent to a chat that's busy queues behind the current turn: the end of that turn isn't its answer; find this message in the transcript and take the answer after it (`botRun.Probe`).
+- Redacting a health reminder means checking the whole outgoing card, including summary, header, fallback and button behaviors: a detail URL still identifies the private to-do when its visible title and notes are generic (#12694). Exercise the production reminder entry with a public example base and synthetic IDs, and keep ordinary navigation and reply-context controls. Gate reminder navigation with its existing privacy decision; shared URL and button helpers also serve explicitly requested navigation.
 
 - The Lark gateway's 201 receipt for a file send may contain only `fileKey/name/size`; `messageId` is optional, so don't report a sent file as failed because of it and invite a resend. In image JSON, the slashes in base64 may also all be escaped; the HTTP body limit must cover this legal encoding, while the actual image size is still limited to 7.5 MiB after decoding.
 - Unsent attachments are user data: put the private copies made after picking in Application Support, excluded from backup; not in tmp/uploads or tmp/lark-drafts, which clearing the cache deletes.
