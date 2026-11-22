@@ -81,7 +81,7 @@ func (s *Service) threadMessage(ctx context.Context, ev feishubot.MessageEvent, 
 	if !bound && s.openTopicIfAsked(ctx, ev, st, content, topic) {
 		return // a topic bound to nothing that starts one, or "/ai …" in one: a to-do is opened (feishu_thread_open.go)
 	}
-	if bound && !content.Forward && noReplyCommand(openingWords(ev, content)) { // after the bot's @, which a group that only sends what @s the bot starts every message with
+	if bound && !content.Forward && noReplyCommand(openingCommandWords(ev, content)) { // after the bot's @, which a group that only sends what @s the bot starts every message with
 		// "Don't report back": a command of its own, also for a todo that is done and not yet reported, and never passed on
 		// as words (todo_source.go).
 		s.threadNoReply(ctx, ev, t, topic)
@@ -93,7 +93,7 @@ func (s *Service) threadMessage(ctx context.Context, ev feishubot.MessageEvent, 
 			key = "assistant-feishu.thread_done"
 		}
 		// "/ai" for a to-do that is done is asked for in so many words: it is answered each time, not once in ten minutes.
-		if _, asked := aiCommand(openingWords(ev, content)); bound && asked || s.threadHintDue(msg.ChatID+"/"+msg.ThreadID) {
+		if _, asked := aiCommand(openingCommandWords(ev, content)); bound && asked || s.threadHintDue(msg.ChatID+"/"+msg.ThreadID) {
 			s.botNoteTo(ctx, to, msg.MessageID, i18n.T(l, key))
 		}
 		return

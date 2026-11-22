@@ -255,6 +255,20 @@ nonisolated enum TodosLogic {
         return { mid, sid in immutableMap["\(mid)/\(sid)"] }
     }
 
+    /// The Agent a task card names (#10904): the working one, else the one that moved last; nil while no row is known.
+    /// A deleted row is absent from the lookup, like one the app has not read. Released Agents are not the task's any more.
+    public static func taskLeadAgent(_ todo: TodoItem, lookup: SessionLookup) -> Session? {
+        func movedAt(_ session: Session) -> Date { max(session.updatedAt ?? .distantPast, session.stateSince ?? .distantPast) }
+        var lead: Session?
+        for agent in todo.agents where agent.releasedAt == nil {
+            guard let candidate = lookup(agent.machineID, agent.sessionID) else { continue }
+            guard let current = lead else { lead = candidate; continue }
+            let working = candidate.state == .working, leadWorking = current.state == .working
+            if working != leadWorking ? working : movedAt(candidate) > movedAt(current) { lead = candidate }
+        }
+        return lead
+    }
+
     /**
      * TodoItem status, first match wins:
      * 1. Done: the user marked it done (done_at != nil)
