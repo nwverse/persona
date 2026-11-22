@@ -587,13 +587,12 @@ final class TodoStore {
     }
 
     /// A new to-do is the current assistant's (or `owner`'s): its manager is named, and the answer stamped with it.
-    /// `project`: made in that knowledge-base project, in the same write (one write: a retry never makes a second).
-    func create(title: String, notes: String? = nil, due: APIClient.TodoPlanChange.Due? = nil, project: String? = nil,
-                owner: Owner = .current, api injected: APIClient? = nil) async throws -> TodoItem {
+    func create(title: String, notes: String? = nil, due: APIClient.TodoPlanChange.Due? = nil, owner: Owner = .current,
+                api injected: APIClient? = nil) async throws -> TodoItem {
         let made = manager(of: owner)
         guard let api = (injected ?? AppModel.shared.api)?.manager(managers.naming(made)) else { throw APIError(status: 0, message: String(localized: "Not connected to a hub [Todo Store 04f822]")) }
         let targetGeneration = generation
-        let created = try await stamped(api.createTodo(title: title, notes: notes, due: due, project: project), as: made)
+        let created = try await stamped(api.createTodo(title: title, notes: notes, due: due), as: made)
         guard generation == targetGeneration else { return created }
         mutationRevision += 1
         var updated = todos
@@ -836,8 +835,9 @@ final class TodoStore {
             guard generation == targetGeneration else { return nil }
             mutationRevision += 1
             apply(todos.filter { $0.id != id })
-        case .create(let title, let notes):
-            let res = try await stamped(api.createTodo(title: title, notes: notes, opID: opID), as: stamp)
+        case .create(let title, let notes, let dueAt, let dueDate, let project):
+            let res = try await stamped(api.createTodo(title: title, notes: notes, dueAt: dueAt, dueDate: dueDate, project: project,
+                                                       opID: opID), as: stamp)
             // Before its row is put in: the one recount that follows sees the hub's row and no longer the drawn one.
             answered(.init(created: res.id, read: readsBegun))
             guard generation == targetGeneration else { return res.id }

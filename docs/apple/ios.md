@@ -2209,9 +2209,13 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   A place's bar and Needs you header count its rows (`TodoCountsSource.counts(of:)`, less the answers given on the
   device), never held, and every place but All To-dos says what needs the owner outside it (`TodosListModel.hiddenNeeds`,
   kept, so other numbers moving redraw nothing). The place's rows are worked out once per change for its numbers and
-  its layout. A project with nothing open, closed to-dos only too, has its own empty state (`placeIsEmpty`), whose New
-  To-Do is the calendar's sheet without a date (`TodoQuickAddSheet(project:name:)`), the project set in the one create
-  (`TodoStore.create(project:)`). A pick in the sidebar opens To-dos on the place at its root (`TodoWorkspace.open`,
+  its layout. A project with nothing open, closed to-dos only too, has its own empty state (`placeIsEmpty`). New To-Do
+  starts in the place shown (`TodosListModel.capture`): due today on Today, on Upcoming on the day its sheet asks for
+  (tomorrow, or a day heading's), in a project in it. The list's New To-Do, a day heading's + and an empty project's own
+  all open `TodoNewSheet` with that default, which goes in the outbox's one create (`TodoOutbox.Write.create`'s due date
+  or moment and project; an entry kept on disk before these reads as none), so the row the list draws while it is saved
+  is in the place and counted there (`TodoCountsSource.applying` files it with its project, `TodosPlaces.holds` sees its
+  due date). A pick in the sidebar opens To-dos on the place at its root (`TodoWorkspace.open`,
   taken once by `AssistantView.show` as `fresh`). The To-dos row itself (`TodoWorkspace.pickRow`) is All To-dos where
   To-dos is the place in front and otherwise reopens it as it was left: the host decides, from its own state
   (`TodoWorkspace.opening(inFront:)`: the shell's `ShellPlaces.current`, the Sidebar layout's root, the classic page),

@@ -144,6 +144,38 @@ final class TodosV1PlacesTests: XCTestCase {
         XCTAssertFalse(days.firstMatch.exists, "no day headings")
     }
 
+    /// New To-Do on Today says the to-do is due today and makes it there: listed in Today at once, and still there once
+    /// the hub has it under its own id. The mock is put back after, so the other tests' Today is as before.
+    @MainActor func testANewToDoStartsInTheTodayItIsMadeIn() throws {
+        let hub = try hub
+        let reset = try XCTUnwrap(URL(string: hub + "/mock/reset"))
+        addTeardownBlock {
+            var request = URLRequest(url: reset)
+            request.setValue("Bearer mock", forHTTPHeaderField: "Authorization")
+            _ = try? await URLSession.shared.data(for: request)
+        }
+        try launch(hub, ["-openTodoPlace", "today", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"])
+        let new = element("todos.new")
+        XCTAssertTrue(new.waitForExistence(timeout: 60), "no New To-Do:\n\(app.debugDescription)")
+        new.tap()
+        let title = element("todos.new.title")
+        XCTAssertTrue(title.waitForExistence(timeout: 10), "no New To-Do sheet:\n\(app.debugDescription)")
+        XCTAssertTrue(element("todos.new.due").exists, "Today's sheet says when it is due:\n\(app.debugDescription)")
+        title.typeText("Water the ferns")
+        // A fresh simulator's keyboard first shows its own tip, a system button with no identifier: its English word.
+        let tip = app.buttons["Continue"]
+        if tip.waitForExistence(timeout: 2) { tip.tap() }
+        element("todos.new.add").tap()
+        let rows = { (prefix: String) in
+            self.app.descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS 'Water the ferns'", "todos.row." + prefix))
+                .firstMatch
+        }
+        XCTAssertTrue(rows("").waitForExistence(timeout: 10), "listed in Today at once:\n\(app.debugDescription)")
+        XCTAssertTrue(rows("todo_").waitForExistence(timeout: 20), "still in Today once the hub has it:\n\(app.debugDescription)")
+        XCTAssertTrue(element("todos.places.hiddenNeeds").exists, "still Today, with what needs the owner elsewhere")
+    }
+
     // MARK: Frames
 
     /// The app again with `args`, on its list or Upcoming's calendar.
@@ -179,7 +211,7 @@ final class TodosV1PlacesTests: XCTestCase {
     }
 
     /// The frames this step draws, for the review (no checks beyond reaching them): `~drawer`, `~menu`, `~today`,
-    /// `~kyoto`, and Upcoming as a list and as a calendar.
+    /// `~kyoto`, Upcoming as a list and as a calendar, and New To-Do's sheet on Today and in a project.
     @MainActor func testFrames() throws {
         guard env["PERSONA_TODOS_FRAMES"] == "1", let hub = env["PERSONA_TODOS_HUB"], let dir = env["PERSONA_SHOTS"] else {
             throw XCTSkip("PERSONA_TODOS_FRAMES=1 with PERSONA_TODOS_HUB and PERSONA_SHOTS")
@@ -223,6 +255,15 @@ final class TodosV1PlacesTests: XCTestCase {
             try relaunch(["-openTodoPlace", "upcoming", "-todos.v1.upcomingCalendar", "YES", "-todos.calendar.mode", "week"])
             _ = element("todo.calendar.title").waitForExistence(timeout: 10)
             shot("~upcoming-calendar")
+        }
+        // New To-Do in a place: the sheet says where the to-do starts (Today's Due row, the project under the title).
+        for (frame, place) in [("~new-today", "today"), ("~new-kyoto", "project:kyoto")] where wants(frame) {
+            try relaunch(["-openTodoPlace", place, "-todos.v1.upcomingCalendar", "NO"])
+            element("todos.new").tap()
+            _ = element("todos.new.title").waitForExistence(timeout: 10)
+            let tip = app.buttons["Continue"]
+            if tip.waitForExistence(timeout: 2) { tip.tap() }
+            shot(frame)
         }
         if wants("~all-projects") {
             try relaunch(["-openTodoPlace", "all"])

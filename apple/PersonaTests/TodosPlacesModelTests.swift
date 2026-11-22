@@ -244,13 +244,15 @@ struct TodosPlacesModelTests {
 
     // MARK: Against a hub
 
-    private static let list = TodoViewJSON.list([
+    private static let rows = [
         TodoViewJSON.row("t01", extra: #""project":"kyoto""#, view: TodoViewJSON.view(TodoListSection.needsYou, asks: ["a1"])),
         TodoViewJSON.row("t02", extra: #""project":"weather""#, view: TodoViewJSON.view(TodoListSection.needsYou, rank: 1, asks: ["a2"])),
         TodoViewJSON.row("t03", extra: #""project":"weather""#, view: TodoViewJSON.view(TodoListSection.working)),
         TodoViewJSON.row("t11", extra: #""due_date":"2026-11-20""#, view: TodoViewJSON.view(TodoListSection.todo, line: "rest")),
-    ], counts: TodoViewJSON.counts(needsYou: 2, inProgress: 1, open: 4,
-                                   sections: [TodoListSection.needsYou: 2, TodoListSection.working: 1, TodoListSection.todo: 1]))
+    ]
+
+    private static let list = TodoViewJSON.list(rows, counts: TodoViewJSON.counts(needsYou: 2, inProgress: 1, open: 4,
+        sections: [TodoListSection.needsYou: 2, TodoListSection.working: 1, TodoListSection.todo: 1]))
 
     private static let placesJSON = #"""
     {"places":[{"id":"all","kind":"all","title":"","needs_you":2},{"id":"today","kind":"today","title":"","needs_you":0},
@@ -268,10 +270,30 @@ struct TodosPlacesModelTests {
         TodosPlacesModel(deps: .init(store: store, workspace: workspace, projects: { [] }))
     }
 
-    private func listModel(_ store: TodoStore, hub: FakeHub) -> TodosListModel {
-        TodosListModel(deps: TodosListDeps(store: store, outbox: TodosListModelTests.outbox(store, hub: hub), api: { hub.client },
-                                           now: { Self.now }, calendar: { Self.calendar }, projects: { [] },
-                                           toast: { _ in }, show: { _ in }))
+    private func listModel(_ store: TodoStore, hub: FakeHub, outbox: TodoOutbox? = nil) -> TodosListModel {
+        TodosListModel(deps: TodosListDeps(store: store, outbox: outbox ?? TodosListModelTests.outbox(store, hub: hub),
+                                           api: { hub.client }, now: { Self.now }, calendar: { Self.calendar }, projects: { [] },
+                                           toast: { _ in }, show: { _ in }, undoWindow: .seconds(60)))
+    }
+
+    /// A store whose rows and numbers follow an outbox of the test's own (`TodoStore.V1.pending`), as the app's follow
+    /// `TodoOutbox.shared`.
+    private func storeWithOutbox(_ hub: FakeHub) async -> (TodoStore, TodoOutbox) {
+        let box = PlacesTestOutbox()
+        var v1 = TodoStore.V1.on(api: hub.client)
+        v1.pending = { box.outbox?.pending ?? [:] }
+        v1.answered = { box.outbox?.hubAnswered(read: $0) }
+        let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, v1: v1)
+        let outbox = TodosListModelTests.outbox(store, hub: hub)
+        await outbox.ready()
+        box.outbox = outbox
+        return (store, outbox)
+    }
+
+    /// The body of the latest `POST /api/v1/todos`.
+    private func created(_ hub: FakeHub) throws -> [String: Any] {
+        let body = try #require(hub.sent("POST", "/api/v1/todos").last?.body)
+        return try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
     }
 
     @Test func aHubWithPlacesListsThem() async throws {
@@ -387,19 +409,124 @@ struct TodosPlacesModelTests {
         #expect(!list.placeIsEmpty)
     }
 
-    /// A to-do made in a project's place is put in it by the one write that makes it (a retry after a failure never
-    /// makes a second).
-    @Test func aToDoMadeInAProjectIsMadeInIt() async throws {
+    /// Where New To-Do starts in each place (proposal 3.3, "Capture default"): nowhere in particular in All To-dos, due
+    /// today on Today, on Upcoming tomorrow or the day whose heading's + was tapped, in a project in it.
+    @Test func eachPlaceSaysWhereANewToDoStarts() {
+        let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, v1: .on())
+        defer { store.forget() }
+        let list = listModel(store, hub: FakeHub())
+        let today = Self.calendar.startOfDay(for: Self.now)
+        let friday = Self.calendar.date(byAdding: .day, value: 2, to: today)!
+        #expect(list.capture() == TodoCapture())
+        list.place = .today
+        #expect(list.capture() == TodoCapture(day: today))
+        list.place = .upcoming
+        #expect(list.capture() == TodoCapture(day: Self.calendar.date(byAdding: .day, value: 1, to: today)))
+        #expect(list.capture(on: friday.addingTimeInterval(3600)) == TodoCapture(day: friday), "the heading's day")
+        list.place = .project("kyoto")
+        #expect(list.capture() == TodoCapture(project: "kyoto"))
+    }
+
+    /// A to-do made in Today or in a project is listed there at once ("Saving…"), sent with its due date or its project
+    /// in the one write that makes it, and stays there once the hub has it.
+    @Test func aToDoMadeInAPlaceShowsThereAtOnceAndStays() async throws {
         let hub = FakeHub()
-        hub.on("POST", "/api/v1/todos", json: #"{"todo":{"id":"n1","title":"Book the ryokan","project":"kyoto"}}"#)
+        hub.on("GET", "/api/v1/todos", json: Self.list)
+        hub.on("GET", "/api/v1/todos/places", json: Self.placesJSON)
+        let (store, outbox) = await storeWithOutbox(hub)
+        defer { store.forget() }
+        let list = listModel(store, hub: hub, outbox: outbox)
+        list.start()
+        await store.refresh(api: hub.client)
+        try await waitForPlacesTest { list.ready && list.hasRows }
+        let today = Self.day(0)
+        let made: [(place: TodoPlaceRef, id: String, title: String, due: String?, project: String?)] = [
+            (.today, "n1", "Renew passport", today, nil),
+            (.project("kyoto"), "n2", "Book the ryokan", nil, "kyoto"),
+        ]
+        let listed = PlacesTestRows()
+        for (n, new) in made.enumerated() {
+            list.place = new.place
+            let release = PlacesTestRelease()
+            hub.onAsync("POST", "/api/v1/todos") { _ in
+                await release.wait()
+                let extra = new.due.map { #""due_date":"\#($0)""# } ?? #""project":"\#(new.project ?? "")""#
+                listed.rows.append(TodoViewJSON.row(new.id, title: new.title, extra: extra,
+                                                    view: TodoViewJSON.view(TodoListSection.todo, line: "rest")))
+                hub.on("GET", "/api/v1/todos", json: TodoViewJSON.list(listed.rows + Self.rows))
+                return Data(#"{"todo":{"id":"\#(new.id)","title":"\#(new.title)",\#(extra)}}"#.utf8)
+            }
+            let before = list.groups.flatMap(\.keys)
+            #expect(list.create(title: new.title, notes: nil, due: new.due.map { .day($0) }, project: new.project))
+            try await waitForPlacesTest { list.groups.flatMap(\.keys).count == before.count + 1 }
+            let drawn = try #require(list.groups.flatMap(\.keys).first { !before.contains($0) })
+            #expect(list.row(drawn)?.content.saving == true && list.row(drawn)?.content.title == new.title, "\(new.place.id): at once")
+            try await waitForPlacesTest { hub.sent("POST", "/api/v1/todos").count == n + 1 }
+            let body = try created(hub)
+            #expect(body["due_date"] as? String == new.due && body["project"] as? String == new.project, "\(new.place.id): \(body)")
+            release.go()
+            try await waitForPlacesTest { outbox.entries.isEmpty }
+            #expect(list.groups.flatMap(\.keys).contains("/" + new.id), "\(new.place.id): the hub's row, still there")
+            #expect(!list.groups.flatMap(\.keys).contains(drawn))
+        }
+    }
+
+    /// The list's writes inside a place move its rows, its numbers, the sidebar's part of N and the notice at once, each
+    /// by one: Someday on a Today row that needs the owner, a delete in a project; and back when they are undone.
+    @Test func writesInAPlaceMoveEveryNumberOnce() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/todos", json: TodoViewJSON.list([
+            TodoViewJSON.row("t01", extra: #""project":"kyoto""#, view: TodoViewJSON.view(TodoListSection.needsYou, asks: ["a1"])),
+            TodoViewJSON.row("t02", extra: #""project":"weather","due_date":"\#(Self.day(0))""#,
+                             view: TodoViewJSON.view(TodoListSection.needsYou, rank: 1, asks: ["a2"])),
+            TodoViewJSON.row("t03", extra: #""project":"weather""#, view: TodoViewJSON.view(TodoListSection.working)),
+        ], counts: TodoViewJSON.counts(needsYou: 2, inProgress: 1, open: 3,
+                                       sections: [TodoListSection.needsYou: 2, TodoListSection.working: 1])))
+        hub.on("GET", "/api/v1/todos/places", json: Self.placesJSON)
+        let (store, outbox) = await storeWithOutbox(hub)
+        defer { store.forget() }
+        let list = listModel(store, hub: hub, outbox: outbox)
+        list.start()
+        await store.refresh(api: hub.client)
+        try await waitForPlacesTest { list.ready && store.countsSource.places.count == 5 }
+        let part = { (slug: String) in store.countsSource.places.first { $0.id == "project:" + slug }?.needsYou }
+
+        list.place = .today
+        #expect(list.groups.flatMap(\.keys) == ["/t02"] && list.needsYou == 1 && list.hiddenNeeds == 1)
+        list.someday("/t02")
+        try await waitForPlacesTest { list.isEmpty }
+        #expect(store.countsSource.needsYou == 1 && part("weather") == 0 && part("kyoto") == 1, "off N and its project once")
+        #expect(list.needsYou == 0 && list.hiddenNeeds == 1, "Kyoto trip's still needs the owner elsewhere")
+        list.undo(try #require(outbox.entries.last?.id), of: .someday(true))
+        try await waitForPlacesTest { !list.isEmpty }
+        #expect(store.countsSource.needsYou == 2 && part("weather") == 1 && list.hiddenNeeds == 1)
+
+        list.place = .project("kyoto")
+        #expect(list.needsYou == 1 && list.hiddenNeeds == 1)
+        list.delete("/t01")
+        try await waitForPlacesTest { list.isEmpty }
+        #expect(store.countsSource.needsYou == 1 && part("kyoto") == 0 && part("weather") == 1, "its bar and its part together")
+        #expect(list.needsYou == 0 && list.hiddenNeeds == 1)
+        list.undo(try #require(outbox.entries.last?.id), of: .delete)
+        try await waitForPlacesTest { !list.isEmpty }
+        #expect(store.countsSource.needsYou == 2 && part("kyoto") == 1 && list.needsYou == 1)
+        #expect(hub.sent("DELETE", "/api/v1/todos/t01").isEmpty && hub.sent("PUT", "/api/v1/todos/t02/someday").isEmpty)
+    }
+
+    /// A list made on Upcoming counts what needs the owner elsewhere once it starts, whatever the page draws first: its
+    /// calendar says it too.
+    @Test func upcomingCountsWhatNeedsYouElsewhereOnceStarted() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/todos", json: Self.list)
+        hub.on("GET", "/api/v1/todos/places", json: Self.placesJSON)
         let store = store(hub)
         defer { store.forget() }
-        let made = try await store.create(title: "Book the ryokan", project: "kyoto", api: hub.client)
-        #expect(made.project == "kyoto")
-        let sent = hub.sent("POST", "/api/v1/todos")
-        #expect(sent.count == 1 && hub.requests.allSatisfy { $0.method != "PATCH" })
-        let body = try JSONSerialization.jsonObject(with: try #require(sent.first?.body)) as? [String: Any]
-        #expect(body?["project"] as? String == "kyoto" && body?["due_date"] == nil)
+        let list = listModel(store, hub: hub)
+        list.place = .upcoming
+        await store.refresh(api: hub.client)
+        #expect(list.hiddenNeeds == 0, "not started: nothing read")
+        list.start()
+        #expect(list.hiddenNeeds == 2, "both are outside Upcoming")
     }
 
     /// Two assistants: the places' projects are the current one's, each part counted from its own rows.
@@ -440,6 +567,25 @@ struct TodosPlacesModelTests {
 /// Whether the test's hub lists its places.
 @MainActor private final class PlacesTestFlag {
     var on = true
+}
+
+/// The rows the test's hub lists besides its fixed ones: the to-dos it made.
+@MainActor private final class PlacesTestRows {
+    var rows: [String] = []
+}
+
+/// The outbox the store's numbers follow, made after the store it writes through.
+@MainActor @Observable private final class PlacesTestOutbox {
+    var outbox: TodoOutbox?
+}
+
+/// Holds a fake hub's answer until the test lets it go.
+@MainActor private final class PlacesTestRelease {
+    private var released = false
+    func go() { released = true }
+    func wait() async {
+        for _ in 0..<500 where !released { try? await Task.sleep(for: .milliseconds(10)) }
+    }
 }
 
 /// Waits (up to 5 s) for something the store does.

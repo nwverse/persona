@@ -440,6 +440,24 @@ struct TodoOutboxTests {
         #expect(TodoOutbox.outcome(URLError(.networkConnectionLost), of: .create(title: "A", notes: nil)) == .unknown)
         #expect(TodoOutbox.outcome(URLError(.timedOut), of: .create(title: "A", notes: nil)) == .unknown)
     }
+
+    /// A new to-do kept on disk before a write carried the place it was made in (#10465) still loads, made nowhere in
+    /// particular; one made in a place keeps its due date and project through the file, and its drawn row has them.
+    @Test func aNewToDoKeptBeforePlacesStillLoads() throws {
+        let decode = { (json: String) in try JSONDecoder().decode(TodoOutbox.Write.self, from: Data(json.utf8)) }
+        #expect(try decode(#"{"create":{"title":"Buy stamps","notes":"at the post office"}}"#)
+            == .create(title: "Buy stamps", notes: "at the post office"))
+        #expect(try decode(#"{"create":{"title":"Buy stamps"}}"#) == .create(title: "Buy stamps", notes: nil))
+        let at = Date(timeIntervalSince1970: 1_795_000_000)
+        let placed = TodoOutbox.Write.create(title: "Renew passport", notes: nil, dueAt: at, project: "kyoto")
+        let entry = TodoOutbox.Entry(id: UUID(), hub: "g", todo: TodoOutbox.newID(), manager: nil, write: placed, made: at, due: at)
+        let kept = try JSONDecoder().decode(TodoOutbox.Entry.self, from: JSONEncoder().encode(entry))
+        #expect(kept == entry)
+        #expect(kept.newItem?.dueAt == at && kept.newItem?.dueDate == nil && kept.newItem?.project == "kyoto")
+        let day = TodoOutbox.Write.create(title: "Renew passport", notes: nil, dueDate: "2026-11-18")
+        #expect(TodoOutbox.Entry(id: UUID(), hub: "g", todo: "new-1", manager: nil, write: day, made: at, due: at).newItem?.dueDate
+            == "2026-11-18")
+    }
 }
 
 /// Waits (up to 5 s) for something the outbox does.

@@ -33,8 +33,10 @@ final class TodoOutbox {
         case someday(Bool)
         /// `DELETE …/todos/{id}`.
         case delete
-        /// `POST /api/v1/todos`, under the to-do's own id here (`newID`) until the hub answers with its own.
-        case create(title: String, notes: String?)
+        /// `POST /api/v1/todos`, under the to-do's own id here (`newID`) until the hub answers with its own. Made in a
+        /// To-dos place, it starts there in the same write (#10465, proposal 3.3 "Capture default"): due on a day or at
+        /// a moment, or in a knowledge-base project. A write kept on disk before these existed reads as none of them.
+        case create(title: String, notes: String?, dueAt: Date? = nil, dueDate: String? = nil, project: String? = nil)
 
         /// The write that takes this one back once the hub has it; none for a delete.
         func reverse() -> Write? {
@@ -85,10 +87,12 @@ final class TodoOutbox {
         /// A new to-do's id on the hub, once it answered: the list has its own row for it then.
         var created: String?
 
-        /// A new to-do as the list draws it until the hub has it.
+        /// A new to-do as the list draws it until the hub has it: with its due date and project, so the place it was
+        /// made in holds it at once (`TodosPlaces.holds`), and its project's place counts it.
         var newItem: TodoItem? {
-            guard case .create(let title, let notes) = write, created == nil else { return nil }
-            return TodoItem(id: todo, title: title, notes: notes, createdAt: made, updatedAt: made, manager: manager)
+            guard case .create(let title, let notes, let dueAt, let dueDate, let project) = write, created == nil else { return nil }
+            return TodoItem(id: todo, title: title, notes: notes, createdAt: made, updatedAt: made, dueAt: dueAt, dueDate: dueDate,
+                            manager: manager, project: project)
         }
     }
 
@@ -157,7 +161,7 @@ final class TodoOutbox {
                      Haptics.error()
                      // A new to-do the hub turned down: what was typed comes back in its sheet (Edit).
                      var edit: Toast.Action?
-                     if case .create(let title, let notes) = entry.write {
+                     if case .create(let title, let notes, _, _, _) = entry.write {
                          edit = Toast.Action(title: String(localized: "Edit")) { TodoOutbox.shared.edit(title: title, notes: notes) }
                      }
                      AppModel.shared.toast = Toast(message, style: .error, action: edit)
@@ -572,7 +576,7 @@ final class TodoOutbox {
         var claimed = Set(entries.compactMap(\.created)).union(landed.values.compactMap(\.created))
         var changed = false
         for entry in entries where entry.unsure && entry.hub == hub {
-            guard case .create(let title, let notes) = entry.write else { continue }
+            guard case .create(let title, let notes, _, _, _) = entry.write else { continue }
             let since = entry.made.addingTimeInterval(-Self.clockSlack)
             let until = entry.made.addingTimeInterval(Self.clockSlack + Self.relayWait)
             if let row = rows.first(where: { row in

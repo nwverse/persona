@@ -22,6 +22,17 @@ struct TodosListDeps {
     var assistive: @MainActor () -> Bool = { false }
 }
 
+/// Where a to-do made with New To-Do starts (#10465; proposal 3.3, "Capture default"; DESIGN_SYSTEM 3.5 "To-dos
+/// places"): the place it was made in holds it from the tap on.
+nonisolated struct TodoCapture: Equatable, Identifiable, Sendable {
+    /// The day it is due on, all day unless the owner gives it a time in the sheet; nil asks for no date.
+    var day: Date?
+    /// The knowledge-base project it is made in, by slug.
+    var project: String?
+
+    var id: String { "\(day?.timeIntervalSince1970 ?? -1)|\(project ?? "")" }
+}
+
 /// The V1 To-dos list (#10465; docs/design/proposals/todos-redesign.md 3.3, 3.4; DESIGN_SYSTEM 3.4 "To-dos list"): the
 /// current assistant's rows as the hub files them (`TodoStore.countsSource.filed`, the rows its numbers are counted
 /// from), drawn in sections for the bar's choice, the grouping and the sort.
@@ -300,16 +311,39 @@ final class TodosListModel {
         held(.delete, row, said: String(localized: "Deleted [To-dos Toast]"))
     }
 
-    /// New To-Do: listed at once, first in To do ("Saving…"), and sent now; Undo deletes it again. false: nothing to add,
-    /// or no hub.
+    /// Where New To-Do starts in the place shown (proposal 3.3, "Capture default"): in All To-dos, nowhere in
+    /// particular; on Today, due today; on Upcoming, on a day its sheet asks for, tomorrow unless a day heading's + gave
+    /// `day`; in a project, in it.
+    func capture(on day: Date? = nil) -> TodoCapture {
+        let calendar = deps.calendar()
+        if let day { return TodoCapture(day: calendar.startOfDay(for: day), project: place.project) }
+        let today = calendar.startOfDay(for: deps.now())
+        switch place.id {
+        case TodoPlaceKind.allValue: return TodoCapture()
+        case TodoPlaceKind.today: return TodoCapture(day: today)
+        case TodoPlaceKind.upcoming: return TodoCapture(day: calendar.date(byAdding: .day, value: 1, to: today) ?? today)
+        default: return TodoCapture(project: place.project)
+        }
+    }
+
+    /// New To-Do: listed at once ("Saving…"), first in To do and in the place it was made in (due `due`, in `project`,
+    /// as its `capture` said), and sent now with them in the one write; Undo deletes it again. false: nothing to add, or
+    /// no hub.
     @discardableResult
-    func create(title: String, notes: String?) -> Bool {
+    func create(title: String, notes: String?, due: APIClient.TodoPlanChange.Due? = nil, project: String? = nil) -> Bool {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let notes = notes?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return false }
         let made = deps.store.manager(of: .current)
-        guard let entry = deps.outbox.add(.create(title: title, notes: notes?.isEmpty == false ? notes : nil),
-                                          todo: TodoOutbox.newID(), manager: made) else { return false }
+        var dueAt: Date?, dueDate: String?
+        switch due {
+        case .some(.at(let at)): dueAt = at
+        case .some(.day(let day)): dueDate = day
+        case .some(.none), nil: break
+        }
+        let write = TodoOutbox.Write.create(title: title, notes: notes?.isEmpty == false ? notes : nil, dueAt: dueAt, dueDate: dueDate,
+                                            project: project?.isEmpty == false ? project : nil)
+        guard let entry = deps.outbox.add(write, todo: TodoOutbox.newID(), manager: made) else { return false }
         Haptics.tap()
         toast(String(localized: "Added [To-dos Toast]"), undo: entry.id, of: entry.write)
         return true

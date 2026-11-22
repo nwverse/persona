@@ -19,9 +19,10 @@ extension TodosListDeps {
 /// plain To do rows exist. It shows one place (`TodosPlacesModel`, DESIGN_SYSTEM 3.5 "To-dos places"), picked in the
 /// sidebar or from its title's menu: Upcoming by day, with its calendar a ⋯ away; every place but All To-dos says what
 /// needs the owner elsewhere. A row ticks, swipes (Done, Someday) and has a long-press menu (`TodoRowActions`); New To-Do
-/// floats at the foot; the writes wait out their Undo on the device (`TodoOutbox`). While the hub is out of reach the
-/// list is the one last read, under one line that says so. Rows open today's to-do page until the to-do's own page
-/// arrives. iOS only: visionOS keeps today's To-dos.
+/// floats at the foot and starts the to-do in the place shown (`TodosListModel.capture`), as Upcoming's day headings and
+/// an empty project's own New To-Do do; the writes wait out their Undo on the device (`TodoOutbox`). While the hub is
+/// out of reach the list is the one last read, under one line that says so. Rows open today's to-do page until the
+/// to-do's own page arrives. iOS only: visionOS keeps today's To-dos.
 struct TodoListView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.shownTree) private var shownTree
@@ -35,8 +36,9 @@ struct TodoListView: View {
     /// made or another place is picked. A list kept in its navigation stack keeps its own place when a to-do pushed over
     /// it pops.
     @State private var placedIn: String?
-    /// New To-Do's sheet (the row's confirmations and Date… are the model's, presented from their row).
-    @State private var creating = false
+    /// New To-Do's sheet, with where it starts (the row's confirmations and Date… are the model's, presented from
+    /// their row).
+    @State private var creating: TodoCapture?
     private let workspace = TodoWorkspace.shared
     /// The places: the title's menu, and the place the list shows (`model.place`) and its name, which the page takes
     /// from them only when they change (`TodoPlaceFollower`), so a place's number changing redraws nothing here (P5).
@@ -45,10 +47,6 @@ struct TodoListView: View {
     /// Upcoming drawn as a calendar (⋯ › Show as Calendar), kept on the device.
     @StoredValue("todos.v1.upcomingCalendar") private var upcomingCalendar = false
     @State private var allProjects = false
-    /// A new to-do from a day heading's + on Upcoming, due that day.
-    @State private var addingDay: TodoCalendarSlot?
-    /// A new to-do from a project's empty state, made in it.
-    @State private var newInProject: TodoPlaceRef?
     /// A to-do opened from Upcoming's calendar.
     @State private var pushedTodo: TodoDetailRoute?
 
@@ -80,6 +78,14 @@ struct TodoListView: View {
                 if placeTitle != title { placeTitle = title }
             }
         }
+        // The model follows the store from the page's first appearance, whichever it draws: Upcoming's calendar says
+        // what needs the owner elsewhere (`hiddenNeeds`) from the model too. The list says when it is in sight (its hold).
+        .onAppear {
+            model.grouping = grouping
+            model.sort = sort
+            model.place = places.current
+            model.start()
+        }
         .detailTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .pageToolbar {
@@ -89,12 +95,14 @@ struct TodoListView: View {
                              set: { model.dating = $0?.key })) { target in
             TodoDueSheet(item: target.item) { due in model.setDue(target.key, to: due) }
         }
-        .sheet(isPresented: $creating) {
+        .sheet(item: $creating) { capture in
             // A new to-do the hub turned down comes back with what it said (its toast's Edit).
-            TodoNewSheet(draft: model.draft) { title, notes in model.create(title: title, notes: notes) }
-                .onAppear { model.tookDraft() }
+            TodoNewSheet(draft: model.draft, capture: capture, projectName: capture.project == nil ? nil : title) {
+                model.create(title: $0, notes: $1, due: $2, project: capture.project)
+            }
+            .onAppear { model.tookDraft() }
         }
-        .onChange(of: model.draft) { _, draft in if draft != nil { creating = true } }
+        .onChange(of: model.draft) { _, draft in if draft != nil { creating = model.capture() } }
         .onChange(of: grouping) { _, g in model.grouping = g }
         .onChange(of: sort) { _, s in model.sort = s }
         // Each minute while the page is in front, and as it comes back to the front: the rows' times, and what the clock
@@ -109,8 +117,6 @@ struct TodoListView: View {
         .task(id: app.assistantSwitches) { await TodoProjects.shared.load(app.api?.currentAssistantSettings()) }
         .task { await model.refresh() }
         .navigationDestination(item: $pushedTodo) { r in TodoDetailView(todoID: r.id) }
-        .sheet(item: $addingDay) { slot in TodoQuickAddSheet(slot: slot) }
-        .sheet(item: $newInProject) { place in TodoQuickAddSheet(project: place.project ?? "", name: places.title(place)) }
         .sheet(isPresented: $allProjects) {
             TodoAllProjectsSheet(places: places) { place in
                 allProjects = false
@@ -151,7 +157,7 @@ struct TodoListView: View {
             }
             .refreshable { await model.refresh() }
             .floatingFooter(over: Theme.pageBackground) {
-                if model.ready { TodoNewPill { creating = true } }
+                if model.ready { TodoNewPill { creating = model.capture() } }
             }
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentInsets.top } action: { _, top in sight.covered = top }
             .onScrollPhaseChange { old, phase in
@@ -162,13 +168,7 @@ struct TodoListView: View {
                     workspace.rested(model.place.id, at: top, shown: shownHere)
                 }
             }
-            .onAppear {
-                model.grouping = grouping
-                model.sort = sort
-                model.place = places.current
-                model.start()
-                model.hold.set(.outOfSight, false)
-            }
+            .onAppear { model.hold.set(.outOfSight, false) }
             .onDisappear { model.hold.set(.outOfSight, true) }
             // Back where the place's list last rested, once its rows are laid out: only for a page made anew (another
             // page opened in between) or another place picked, never when a to-do pushed over it pops. A place picked
@@ -202,7 +202,7 @@ struct TodoListView: View {
     private var title: String { placeTitle ?? String(localized: "All To-dos [To-dos List]") }
 
     private static let barRow = "todos.bar.row"
-    static let offlineRow = "todos.offline.row"
+    fileprivate static let offlineRow = "todos.offline.row"
     private static let noticeRow = "todos.places.notice"
 
     /// The list's first row: the bar where it is a row (iOS 18), the line that says the hub is out of reach, the place's
@@ -236,7 +236,7 @@ struct TodoListView: View {
                     }
                 } header: {
                     if model.place == .upcoming {
-                        TodoUpcomingHeader(group: group) { addingDay = TodoCalendarSlot(day: $0, time: nil) }
+                        TodoUpcomingHeader(group: group) { creating = model.capture(on: $0) }
                     } else if let title = group.title {
                         TodosSectionHeader(model: model, group: group, title: title)
                     }
@@ -294,7 +294,7 @@ struct TodoListView: View {
             AssistantOfflineNotice(manager: offline)
         } else if model.placeIsEmpty {
             TodoPlaceEmptyState(place: model.place, title: title, comingUp: model.comingUp,
-                                show: { places.show($0) }, capture: { newInProject = model.place })
+                                show: { places.show($0) }, capture: { creating = model.capture() })
         } else {
             switch model.choice {
             case .all:

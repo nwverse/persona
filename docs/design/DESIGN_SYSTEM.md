@@ -937,7 +937,7 @@ The web Agent conversation header's **Session overview** list button toggles a p
   - **New To-Do** floats at the list's foot (`floatingFooter`), the Theme Color's pill as wide as its words. Its sheet
     (a title, notes with the mic, Add) closes at once: the new to-do is first in To do, its line "Saving…", until the
     hub has it, with "Added · Undo". One the hub turns down is said in a toast whose **Edit** opens the sheet again
-    with what was typed.
+    with what was typed. In a place other than All To-dos the sheet starts the to-do there (3.5, "To-dos places").
   - **Writes wait on the device** (`TodoOutbox`): kept on disk with their op id from the tap, sent when their window ends
     (a reopen, Remove from Someday and a new to-do at once; Remove from Someday inside Someday's own window takes it
     back and sends nothing), every one at once when the app leaves the foreground, and again after the hub answers a
@@ -1085,11 +1085,16 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
   - **What needs the owner elsewhere**: every place but All To-dos keeps one `NoticeBanner` line in the needs tone, "2
     more need you, not in Today · Show All", above its list or its calendar, while to-dos outside it need the owner
     (3.4 "Sessions that need the user").
+  - **New To-Do starts in the place it is made in** (proposal 3.3, "Capture default"): All To-dos, nowhere in
+    particular; Today, due today; Upcoming, on a date its sheet asks for (tomorrow, or the day whose heading's + was
+    tapped); a project, in it. The list's New To-Do (3.4), a day heading's + and an empty project's action open the same
+    sheet, which says the default ("In Kyoto trip" under the title, or a Due row with All Day that the owner can change)
+    and sends it in the one write that makes the to-do. The new row is listed in the place at once ("Saving…"), counted
+    there, and stays once the hub has it.
   - **Empty states**: Today, "Nothing for today." with "3 coming up this week" (Upcoming's next seven days) to Upcoming,
     drawn as the empty state's one action; Upcoming, "Nothing scheduled."; a project with nothing open (closed to-dos
-    only, too), "Nothing open in Kyoto trip." with New To-Do in Kyoto trip, the calendar's New To-Do sheet without a
-    date, the project set in the same write. A day heading's + makes a to-do due that day. The list's own New To-Do
-    (3.4) does not take the place's default yet: starting it in the place it is made in is a later step of #10465.
+    only, too), "Nothing open in Kyoto trip." with New To-Do in Kyoto trip. Until the list's foot toolbar takes New
+    To-Do's place (#10465's next list step), the floating New To-Do sits under these actions, a second filled capsule.
 - A page's top-leading button follows how the page was reached, not what it is (#8603, `docs/design/sidebar-navigation.md` section 6): a page picked in a sidebar or list is a root and shows the button that opens the sidebar (the main conversation's `Theme.Icon.sidebar`, "Show Sidebar"; the persona's face in a phone's drawer; under side bars the side column's first item, where a sub-page has Back, #11636), never a ‹; a page opened from inside another shows ‹, which goes back to it. The same Agent's chat is a root picked in the sidebar and a drill-down opened from a waiting Agent on the main conversation or in Inbox, a task's card, a Brief card, a to-do, a knowledge project or a meeting (#9971, #12006): it never moves the sidebar's selection.
 - **A presented page leaves at its top-leading corner** (#9653, the owner 11-17): a sheet, a full-screen cover or a self-drawn layer over a page puts its way out at the top leading edge, an ✕ (`SheetClose`, 3.6); a pushed page keeps its ‹ there. The trailing edge holds only the page's own actions: its ⋯ menu and its confirming action. An edit sheet's ✕ leaves without saving and its ✓ saves, as iOS 26's Calendar and Reminders lay it out; Save, a Done that saves and Add become that ✓, and a verb that says more (Send, Connect, Install, Commit) stays a word in the same place. A page that only shows things has no Done: its ✕ closes it. Not covered: a question sheet whose Cancel sits under its answer in the content (Close and Delete Agent, consent sheets), the system's own sheets (share, camera, document scanner), and a medium-detent peek with a drag indicator and no bar. Web and desktop dialogs keep their ✕ at the top trailing corner, the convention there; Android follows in #9661.
 - Regular width: system tab view and split navigation; the same sidebar in a column. On iOS in the Separate layout (#4206) each tab shows its part of the one sidebar's column (Persona's: the main conversation, the pages, its chats; the Agents tab's: the Agents list), with the same head (its fold at the trailing end), foot, width and color, and the system's tab bar on the iPad; on the open iPhone Duo the upright switch stands in its place (below, #4231). On iOS (#4206) the column has one width (400 pt on the iPad, 320 pt on the open Duo) and lies beside the page where the page keeps at least `Theme.Size.splitPageMin` (400 pt, a large phone's screen), over it elsewhere (the open Duo and an iPad mini, upright); turned to over, a column that was out goes away, and turned back it comes back as it was left beside the page. On iOS, selecting or reselecting Agents follows the same list-first rule, leaving the split's detail empty until an Agent is explicitly opened. Agent sidebar links use the bound detail path, not a separate implicit split selection, so clearing navigation also clears a row-opened detail without rebuilding the list. Cold-launch and width-change restoration remain separate from explicit tab selection.

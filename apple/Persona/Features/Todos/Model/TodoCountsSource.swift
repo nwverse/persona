@@ -156,8 +156,8 @@ final class TodoCountsSource {
         } else {
             next = TodoCountsFallback.counts(filed)
         }
-        // A project's part of N is counted from `filed`, which has the writes still here already (`places`): only the
-        // answers given here are taken from it.
+        // A project's part of N is counted from `filed` (`places`), which has the writes still here applied already
+        // (`applying`, above): only the answers given here are taken from it, so no write comes off it twice.
         let awayByProject = lessAnswered(&next, filed)
         if next != counts { counts = next }
         if next.needsYou != needsYou { needsYou = next.needsYou }
