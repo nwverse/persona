@@ -162,6 +162,7 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 // Both the user's request and idle-aware delivery use the same completion reporting.
 func (n *Node) compactAssistantProc(ctx context.Context, p *assistantProc) error {
 	id := p.id
+	n.forgetCacheWarm(id)
 	p.mu.Lock()
 	p.compacting, p.compacted, p.manual = true, true, true
 	p.lastActive = time.Now()

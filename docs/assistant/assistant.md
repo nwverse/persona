@@ -2691,3 +2691,96 @@ database size, WAL or backups. Phase 2 introduces logical conversations with sev
 Deleting an assistant conversation deletes its message rows, coverage, compaction summary and references in the
 same transaction as its deletion marker. Concurrent or late ingestion cannot recreate deleted content, and a read
 that overlaps deletion discards its response before returning it.
+
+## Logical assistant conversations
+
+A conversation keeps its public machine/session identity, task origins and supervision role while its execution
+moves between engines. The manager stores physical segments, source generations and frozen physical line ranges in
+Postgres. Integer transcript cursors compose those ranges; only later segments namespace item IDs. Reads, full/image
+references, live events, subscriptions, reconnect backlog, inventory and the derived search index use that same
+logical projection. Retired tails remain physical history and never shift later offsets.
+
+When configured device entries for one computer are absorbed into another entry, authenticated callbacks resolve
+through the current physical fleet aliases. Durable segment/history keys and the public conversation identity stay
+unchanged. Conflicting roots fail closed; absorbed aliases cannot reveal private segments or bypass deletion markers.
+Provider scopes still compare physical computers, independently of retained public transport identities.
+
+The explicit `assistant_segments` operation is separate from ordinary model picks. It prepares an empty execution
+session, freezes the source, and activates the target through a database epoch comparison. Pending approvals or active
+work make a switch retryably busy. Permission mode carries over; unknown engines and unsupported supervision policy
+are refused before preparation. The first queued input carries policy and handoff together, with the original client
+message ID. Source compaction summaries take priority; the fallback uses the manager's existing model chain and waits
+through provider pauses. Bounded or incomplete history is marked partial.
+
+The source stays recoverable until the target accepts its first turn. A definite refusal restores the source at a
+new epoch, invalidates the abandoned target's history projection and releases the unsent queue there; an ambiguous
+start/send requires a positive receipt and is never blindly
+repeated. Retired callers lose manager tool authority immediately. Physical approval/timer work must settle before
+activation; the node's retirement latch prevents recovery and idle-compaction work on that segment. Closure is retried
+when offline nodes reconnect. Deleting a conversation cascades through segment history and queue content, retaining
+only deletion markers and minimal offline closure identities.
+
+`GET/PUT /api/v1/assistant/segments` controls **new switches**, enabled by default. Disabling it keeps segment routing,
+reads and recovery running. A manager binary from before segment routing is **not a safe downgrade after a switch**:
+it could resume the retired first segment and fork the conversation. Roll back with a segment-aware manager and the
+switch setting disabled. The phase-1 history-read setting does not disable logical routing.
+
+Logical-segment queue retention: an accepted input keeps its client ID, SHA-256
+content digest, delivery state and ordering metadata; its duplicate payload and
+transport provenance are removed after the receipt commits. A rejected first
+input that rollback requeues keeps its payload until the restored source accepts
+it. Ambiguous deliveries retain their content for positive-receipt reconciliation.
+Terminal switch records discard their handoff summary. Deleting the logical chat
+cascades to receipts, segments, inputs and switch context. Physical device aliases
+are locked together during first adoption, preventing concurrent managers from
+creating two logical roots for the same physical chat.
+
+## Idle cache keepalive (#12786)
+
+Settings > Assistant > Keep idle chats ready is on by default. Only the main
+conversation and ids registered in `assistant.leaders` may refresh a provider
+cache. Background supervision, ordinary conversations, workers and subagents are
+excluded. Native Claude-family launchers are supported; Codex and other runtimes
+are not supported yet. The default interval is 55 minutes (1–55), with at most 24
+consecutive requests (1–144). Genuine input resets the count. Turning the switch
+off stops refreshes without breaking an already proxied conversation.
+
+The node resolves the launcher's original endpoint using its existing configuration
+resolution, then places a loopback `ANTHROPIC_BASE_URL` in that process's environment
+and final settings env. Policy or launcher settings that override it simply bypass
+the proxy and cannot produce refreshes. Ordinary API requests and streamed replies
+are forwarded without changing payload bytes. Provider errors are returned as-is;
+transport failures return a generic 502 without logging upstream error text.
+
+Only a successful request with a reported cache read/write and exclusively one-hour
+cache declarations can be retained. Mixed TTL requests
+are skipped to avoid rewriting an expired five-minute history behind a cache hit on
+the system prefix.
+The provider response's message id must also appear on the CLI's root `message_start`;
+a child Agent's `parent_tool_use_id` never confirms a snapshot. This prevents warming
+an inherited subagent request. Request bodies and necessary headers stay in memory,
+never in a transcript or log. Idle CLI release does not discard the snapshot; explicit
+close, archive, compaction, role removal, or changed model/launcher does. Before
+refreshing, the node rechecks the manager's current role, policy and execution.
+Missing authorization stops refreshes. Compaction requires a subsequent genuine input
+to rearm capture. A restarted node starts empty.
+
+Refreshes replay the captured bytes with only top-level `max_tokens` and `stream`
+changed, preserving whitespace and every tools/system/messages/thinking/cache_control
+byte. No prompt is sent to the CLI, no output is executed, and no conversation,
+notification or supervision event is emitted. Disabled or adaptive thinking uses
+`max_tokens: 1`. Manual thinking keeps the exact budget and uses `budget_tokens + 1`:
+a 32,768-token budget can therefore spend up to **32,769 output tokens per refresh**,
+or **786,456 across 24 refreshes**. This is an upper bound, not an observed charge.
+Unknown or unsupported request shapes are skipped. No retry is made after a refresh
+error or a response without a positive cache read; a genuine request must rearm it.
+
+Refresh requests carry `X-Persona-Request-Kind: cache-keepalive`. The node log contains
+only `cache_keepalive`, session id, UTC time, and cache-read/cache-creation/output token
+counts. The TTL clock starts at provider request start. Expired snapshots are never
+refreshed. Linux fake-upstream tests prove transport and isolation; actual provider
+cache hits require post-deployment gateway usage evidence and are not inferred from
+those tests. No gateway changes or deployment are part of this feature.
+
+Provider references: [prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
+and [manual thinking constraints](https://platform.claude.com/docs/en/build-with-claude/extended-thinking).

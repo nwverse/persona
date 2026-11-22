@@ -129,15 +129,21 @@ Sub-agents (child sessions with non-empty `parent_id`) are not listed as separat
 
 On the computer that runs opencode (it must be in the hub's machine list, and node must be able to start).
 
-### Option A: Standalone ACP companion (recommended for starting Agents & Assistant without `opencode serve`)
+### Option A: Automatic built-in supervision or standalone ACP companion (recommended for starting Agents & Assistant without `opencode serve`)
 
-Requires Node 22+ and `opencode` on `PATH` (or `PERSONA_OPENCODE_BIN` / `--bin`):
+When `personad node` runs (`--attach` or `--stdio`), `opencode` is installed (`PERSONA_OPENCODE_BIN`, `OPENCODE_BIN`, `PATH`, `~/.local/bin/opencode`, `~/.opencode/bin/opencode`, or standard install directories), Node.js 22.5+ (`node:sqlite`) is available, and no external `opencode` companion or active `opencode serve` plugin (`opencode-<pid>`) is connected on `runtime.sock`, the node automatically unpacks the embedded `persona-opencode-runtime` package to `~/.persona/runtime-packages/persona-opencode-runtime/<sha256>/` and supervises `opencode/companion.mjs` (`--socket`, `--bin`, `--no-update`, `--parent-stdin`, `--instance`, `server/internal/node/opencodebridge.go`).
+
+- The built-in companion does not spawn `opencode acp` at startup and reclaims an idle `opencode acp` child after 5 minutes of inactivity, transparently reloading the session on the next turn.
+- Whenever an external `opencode` companion or an active `opencode serve` plugin connects, the built-in supervisor drains active calls (up to 5 seconds), yields cleanly, and resumes automatically after it disconnects.
+- Set `PERSONA_BUILTIN_OPENCODE=0` to disable automatic built-in supervision on a machine.
+
+You can also run the companion manually from the repository root (requires Node 22+ and `opencode` on `PATH` or `PERSONA_OPENCODE_BIN` / `--bin`):
 
 ```sh
 node <Persona repo>/integrations/opencode/companion.mjs
 ```
 
-Options (strictly validated; unknown flags exit with an error): `--bin <path>` (alias `--opencode-bin`), `--db <path>`, `--socket <path>`, `--config-dir <dir>`, `--launcher <name>`, `--name <label>` (alias `--display-name`), `--model <provider/model>`, `--runtime <id>`, `--instance <id>`, `--no-assistant`, `--parent-stdin`.
+Options (strictly validated; unknown flags exit with an error): `--bin <path>` (alias `--opencode-bin`), `--db <path>`, `--socket <path>`, `--config-dir <dir>`, `--launcher <name>`, `--name <label>` (alias `--display-name`), `--model <provider/model>`, `--runtime <id>`, `--instance <id>`, `--no-assistant`, `--no-update`, `--parent-stdin`.
 
 ### Option B: opencode server plugin (for `opencode serve` and herdr TUI sessions)
 
@@ -162,7 +168,7 @@ Both Option A and Option B can run at the same time on the same machine.
 | `maxSessions` | `80` | Maximum list length |
 | `socket` | `~/.persona/runtime.sock` | node's runtime socket; `PERSONA_RUNTIME_SOCKET` also works |
 
-Environment variables: `PERSONA_OPENCODE_BIN` (alias `OPENCODE_BIN`; companion `opencode` binary path), `PERSONA_OPENCODE_DB` (location of `opencode.db`), `PERSONA_OPENCODE_DEBUG=1` (debug logs to stderr).
+Environment variables: `PERSONA_OPENCODE_BIN` (alias `OPENCODE_BIN`; companion `opencode` binary path), `PERSONA_OPENCODE_DB` (location of `opencode.db`), `PERSONA_BUILTIN_OPENCODE` (`0`/`false` disables automatic built-in supervision by `personad`), `PERSONA_OPENCODE_DEBUG=1` (debug logs to stderr).
 
 ## Token usage
 
@@ -175,7 +181,7 @@ The node meters opencode's token usage from its database (the same file this run
 - **Plugin `session.start` requires opencode v2 plugin APIs** (`ctx.session.create`, `ctx.mcp.add`): on opencode 1.x servers, use the standalone ACP companion (`companion.mjs`) to start new Agents and Assistant chats.
 - **Tool calls in the plugin** only appear in the chat once the step ends (see "seq" above); in the ACP companion they stream as `tool_call` / `tool_call_update` arrive.
 - **Questions (`form.created`)** in the plugin cannot be answered on the phone and are handed back to the terminal.
-- **Auto-update bundling** (bundling the package into `personad` via `runtimepkg.Packages`, as pi does) is not done yet; `opencode` runs directly from the checkout.
+- **Built-in bundling**: `persona-opencode-runtime` is embedded into `personad` via `server/internal/runtimepkg` (`go generate ./internal/runtimepkg`) and auto-supervised by `server/internal/node/opencodebridge.go`; manual `install.mjs` plugin shims for `opencode serve` still load from their configured path.
 
 ## Pitfalls
 
@@ -193,9 +199,9 @@ The node meters opencode's token usage from its database (the same file this run
   - `test/mcp.test.js`: loopback HTTP MCP proxy Bearer auth, route isolation, `allocate` + `bind`, `tools/list`, `tools/call` (text + image), `extractShellGates` / `matchShellGate` (shell operators, quotes, escapes, paths, `sh -c`, `eval`, command substitution, long prefixes).
   - `test/map.test.js`: tool names & inputs, user/assistant items, hidden attribute-less `<persona-context>` vs visible `<persona-context kind="forward">`, 1.x `v1SessionItems` / `v1ImageOf`, `acpPermissionCard`.
   - `test/opencode.test.js`: v2 plugin listing, pagination, blob images, streaming, permissions, subagents, `hello` capabilities (with `readonly` and without `supervision_policy`), `launchers.models`, `session.start` (Agent & Assistant), multi-Assistant dynamic MCP routing & cleanup on `forget`, `memory_dir` relative path enforcement, `plan`, `acceptEdits`, effort-only `modes`, command gates, fail-closed `supervision_instructions`.
-  - `test/companion.test.js`: standalone ACP companion `hello` (conditional `supervision_policy` after a pinned startup probe), CLI flag & env parsing (`parseCompanionArgs`, `buildAcpEnv`), 1.x/2.x DB `offline` listing + blob images + `session/load` resume + `client_msg_id` reconciliation, `launchers.models`, Agent `session.start` + default model preservation + model switch without `configOptions` + effort switching + live thinking/tool streaming + permissions (`acceptEdits`, `plan` across ACP restart) + `modes` + `rename` + `close` + `interrupt`, Assistant `session.start` + end-to-end HTTP MCP round-trip + context hiding + `memory_dir` + `plan` (`readonly_unsupported`) + unclipped raw command gates + fail-closed `supervision_instructions`.
+  - `test/companion.test.js`: standalone ACP companion `hello` (conditional `supervision_policy` after a pinned startup probe), CLI flag & env parsing (`parseCompanionArgs` including `--instance`, `--no-update`, `--parent-stdin`, `buildAcpEnv`), `--parent-stdin` clean exit on parent pipe close, lazy/idle `opencode acp` child reclamation & reload, 1.x/2.x DB `offline` listing + blob images + `session/load` resume + `client_msg_id` reconciliation, `launchers.models`, Agent `session.start` + default model preservation + model switch without `configOptions` + effort switching + live thinking/tool streaming + permissions (`acceptEdits`, `plan` across ACP restart) + `modes` + `rename` + `close` + `interrupt`, Assistant `session.start` + end-to-end HTTP MCP round-trip + context hiding + `memory_dir` + `plan` (`readonly_unsupported`) + unclipped raw command gates + fail-closed `supervision_instructions`.
   - `test/install.test.js`: shim installation and uninstall.
-- node: `server/internal/node/opencode_test.go` and `server/internal/node/runtimes_test.go`: herdr TUI merge (including `permission_mode`, `effort`, `efforts`, `launcher`), per-process `opencode-<pid>` `modes`/`model`/`AgentLabel` capabilities, blocked state, plugin-less & unknown-agent terminal rows, `launchers.list` (`Assistant: true`) & `launchers.models` & `session.start` alongside herdr merge, and Assistant `assistant.send` + MCP authorization + fail-closed `assistant_supervision_runtime` without `caps.supervision_policy`.
+- node & runtimepkg: `server/internal/node/opencode_test.go`, `server/internal/node/opencodebridge_test.go`, `server/internal/node/runtimes_test.go`, and `server/internal/runtimepkg/runtimepkg_test.go` / `dist_budget_test.go`: embedded `persona-opencode-runtime` packaging & budget, automatic discovery (`PERSONA_OPENCODE_BIN`, `OPENCODE_BIN`, `PATH`, `~/.local/bin/opencode`), built-in supervision & yield to external companion or `opencode serve` plugin, herdr TUI merge (including `permission_mode`, `effort`, `efforts`, `launcher`), per-process `opencode-<pid>` `modes`/`model`/`AgentLabel` capabilities, blocked state, plugin-less & unknown-agent terminal rows, `launchers.list` (`Assistant: true`) & `launchers.models` & `session.start` alongside herdr merge, and Assistant `assistant.send` + MCP authorization + fail-closed `assistant_supervision_runtime` without `caps.supervision_policy`.
 - Pinned native ACP contract: the runtimes CI lane installs integrity-verified OpenCode 1.19.6 on Linux x64, with an isolated home and fake local model. It characterizes same-process MCP replacement, verifies separate-process identities, and records process-cold/warm first-token latency and RSS without a performance threshold. The native policy contract checks system precedence, preservation of workspace/project instructions, isolation, compaction and demotion. Fake-process tests cover leases, capacity, crash/card cleanup, resume, policy rollback and plugin ambiguity. No provider credentials or real model calls are used.
 - End to end (v2 server plugin): `PERSONAD=<personad> node integrations/opencode/e2e/run.mjs` (previously verified 16/16 against opencode 2.0.32).
 - Web: fake hub with `MOCK_OPENCODE=1` + `scripts/test/web_opencode_e2e.py`.

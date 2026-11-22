@@ -38,19 +38,21 @@ const maxLoginErrLen = 300
 
 // noteLogin records how connecting to the account went. A refused login marks it broken with the reason; a working
 // connection marks it healthy again; anything else (a timeout, the network) leaves it as it was. Kept in memory only:
-// after a restart the account shows healthy until its next read fails again, a few minutes at most.
-func (s *Service) noteLogin(id string, err error) {
+// after a restart the account shows healthy until its next read fails again, a few minutes at most. It reports
+// whether the record changed (a refusal that starts or says something new, a refused account working again).
+func (s *Service) noteLogin(id string, err error) bool {
 	if err != nil && !loginRefused(err) {
-		return
+		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err == nil {
+		_, had := s.loginErr[id]
 		delete(s.loginErr, id)
-		return
+		return had
 	}
 	if _, ok := s.accts[id]; !ok {
-		return // deleted meanwhile
+		return false // deleted meanwhile
 	}
 	msg := []rune(err.Error())
 	if len(msg) > maxLoginErrLen {
@@ -59,7 +61,9 @@ func (s *Service) noteLogin(id string, err error) {
 	if s.loginErr == nil {
 		s.loginErr = make(map[string]string)
 	}
+	before, had := s.loginErr[id]
 	s.loginErr[id] = string(msg)
+	return !had || before != string(msg)
 }
 
 // withHealthLocked is a's public copy with the last login's outcome as its status. The caller holds s.mu.

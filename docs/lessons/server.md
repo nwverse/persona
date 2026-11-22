@@ -1,5 +1,18 @@
 # Lessons: hub / node and networking
 
+## An IMAP retry that replays the step that ended the connection fails the same way (2026-11-22, #12808)
+
+go-imap/v2 completes a command when its tagged answer arrives, before it reads on. A server that hangs up right after
+answering (QQ Mail does after a keyword `UID SEARCH`) leaves the command a success and fails the *next* one: the reader
+has already closed the connection, so over TLS the write returns a bare `net.ErrClosed` ("use of closed network
+connection"). Retrying the whole operation on a new login sends the search again, and the server ends that connection
+too: two QQ accounts' `mail_search` failed on every try with `fetch: use of closed network connection`, and nothing
+was logged. What a try already got (the search's UIDs) has to survive into the retry, so the retry only does what
+failed (`listOne` in `server/internal/mail/imap_list.go`). Tell a dead connection by `Client.State() ==
+ConnStateLogout`: the reader sets it before it fails the waiting commands, so a command that failed sees it already,
+and `Client.Close()` then returns the reader's own error, the reason to log. A proxy that closes after a chosen tagged
+answer reproduces it (`server/internal/mail/closed_conn_test.go`).
+
 ## Under a full-tunnel VPN the default route's address is the tunnel's (#11125)
 
 A UDP "connect" towards a far address reports the source address of the route it would take, the usual way to find
