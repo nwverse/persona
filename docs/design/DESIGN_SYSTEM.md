@@ -2033,7 +2033,7 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   待选择, `QuestionDockEntry`) first in the row of entries, drawn as they are (`DockCapsule`, the needs-you tone; the
   selected look while the pager is open). One card at a time, the conversation's own first and then the tasks' oldest
   first; over it, while there are two or more, the dots (a window of seven), "2 / 5" and ‹ › (a sideways swipe on the card
-  does the same). Answering a card moves on to the one that takes its place; a card that comes in never takes the pager
+  does the same; on a phone the card keeps that drag from the drawer and the Assistant | Agents strip, `SwipePageMark`). Answering a card moves on to the one that takes its place; a card that comes in never takes the pager
   away from the one shown. The card's title row keeps View in Chat, Skip and the fold, whose chevron (and a tap on the row)
   collapses the pager into the entry: it stays collapsed while a card the owner put away still waits, the entry saying
   "+N" for what came since, and opens again for a fresh round. One card is drawn at a time; a question card paged
