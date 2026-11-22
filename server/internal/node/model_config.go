@@ -61,6 +61,9 @@ type modelExecution struct {
 	// OriginKnown distinguishes a manager's explicit ordinary (empty-origin) decision from a pre-upgrade record whose
 	// origin is unknown. It is likewise authorization metadata and never changes the execution fingerprint.
 	OriginKnown bool `json:"-"`
+	// InboxPermissionMode is the manager-only AI-twin choice, carried separately from caller-controlled mode. It is
+	// per-send authorization metadata, never a model fingerprint or a persisted process setting.
+	InboxPermissionMode string `json:"-"`
 	// OriginDecisionRequired marks the RPC and autonomous-resume entries that must fail closed on a legacy unknown
 	// origin. Trusted in-process model plumbing may carry an existing execution without setting this per-entry gate.
 	OriginDecisionRequired bool `json:"-"`
@@ -243,13 +246,14 @@ func (n *Node) assistantModelDecision(ctx context.Context, id string) (string, m
 		External                *proto.ExternalExecution      `json:"external"`
 		Origin                  string                        `json:"origin"`
 		OriginKnown             bool                          `json:"origin_known"`
+		InboxPermissionMode     string                        `json:"inbox_permission_mode"`
 		SupervisionInstructions *string                       `json:"supervision_instructions"`
 		ClaudeInteractive       bool                          `json:"claude_interactive"` // #10058: a send's own flag, here for starts no send makes
 	}
 	if n.peer == nil || n.peer.Call(ctx, "assistant.model", map[string]any{"session_id": id}, &res) != nil {
 		return "", modelExecution{}, false
 	}
-	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: n.externalRuntime(id, res.Launcher, res.Runtime), IsMain: res.IsMain, CacheKeepalive: res.CacheKeepalive, MainCompactWindow: res.MainCompact, External: res.External, Origin: res.Origin, OriginKnown: res.OriginKnown, Interactive: res.ClaudeInteractive}).withSupervision(res.SupervisionInstructions), true
+	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: n.externalRuntime(id, res.Launcher, res.Runtime), IsMain: res.IsMain, CacheKeepalive: res.CacheKeepalive, MainCompactWindow: res.MainCompact, External: res.External, Origin: res.Origin, OriginKnown: res.OriginKnown, InboxPermissionMode: res.InboxPermissionMode, Interactive: res.ClaudeInteractive}).withSupervision(res.SupervisionInstructions), true
 }
 
 // strictProtectedExecution identifies owner-facing conversations without changing worker/task retry policy.

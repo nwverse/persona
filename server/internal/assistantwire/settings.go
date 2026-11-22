@@ -54,6 +54,11 @@ const (
 	MethodKeepUndelivered = "assistant.keep_undelivered"
 )
 
+// InboxPermissionModeParam is manager-only authorization metadata on assistant.send, session.send and
+// assistant.model. It carries the AI twin's own saved mode separately from the caller-controlled permission_mode.
+// Older nodes ignore it and retain their default clamp; newer nodes never treat its absence as permission to bypass.
+const InboxPermissionModeParam = "inbox_permission_mode"
+
 // CodeUndeliveredAhead: SendParams refuses the owner's message because older ones to the same conversation are kept
 // undelivered (MethodKeepUndelivered): the hub keeps this one behind them instead of sending it first.
 const CodeUndeliveredAhead = "undelivered_ahead"

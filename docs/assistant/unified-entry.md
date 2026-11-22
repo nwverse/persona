@@ -1264,6 +1264,11 @@ content, not memory: memory stays one for every conversation (#9440), and a less
 goes into its notes. What accepted tasks teach by themselves (with "Learn from finished tasks" on) is kept apart, in the
 direction's project, and never written into the notes (`docs/assistant/todos.md` "Lessons from accepted tasks").
 
+On the web, the same settings group has **Direction and new-chat permissions**, a link to the existing
+`default_permission_mode` control. Directions and new assistant conversations share that default; changing it affects
+new conversations, not a running chat's saved mode. Settings search indexes both the Direction notes and permission
+labels, so either name reaches the control.
+
 The assistant uses the same record through `persona_settings`: `list` exposes each current direction as
 `direction.<id>.prompt` with its name, and `get` returns the complete notes to any assistant conversation. Only the main
 conversation may `set` one. A string replaces the whole notes; `{"old":"one exact unique fragment","new":"replacement"}`

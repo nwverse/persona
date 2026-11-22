@@ -102,6 +102,8 @@ tests, rather than inferring runtime from `Sleep` inside fake-clock tests, and e
 PR watcher's report, still says what failed (`scripts/ci/server-shards.py`). The full scripts suite splits complete sorted discovery
 across two independently isolated jobs, scheduled one at a time; each has its own synthetic HOME and mock ports.
 
+The Web suite's default file-worker count is `min(8, max(availableParallelism() - 1, 1))` (`web/test-scheduling.ts`, #12458). Vitest otherwise starts one fork per host CPU; under a CPU quota that can leave dozens of processes initializing isolated module graphs at once. On main `c866b5a377`, Node 24.22.3 under a four-CPU quota and 8 GiB memory limit, the complete suite took 79.06 seconds with two concurrency-sensitive assertion failures at the default 63 workers, 448.08 seconds with three workers, and 175.31 seconds with eight workers. Eight preserved all 1,542 files / 17,295 assertions (one skip in each count) and reduced CPU time from 2,301.7 to 1,660.4 seconds. The cap does not remove or reuse isolated test environments, and explicit project or command-line `maxWorkers` settings still override it for diagnosis. Measure wall time, test counts and failures together when changing it; the 600-second Web test deadline stays unchanged.
+
 **Why tests stay uncached.** check-fast, the CI shards, `scripts/test/test-server.sh` and the bounded runner's
 commands below all pass `-count=1`, so no Go test result comes from Go's test cache; the build cache still serves
 compilation. The test cache reuses a result while the test binary, its flags and the environment variables and files

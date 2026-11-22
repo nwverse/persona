@@ -373,6 +373,10 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 		if p.Kind != "launcher" {
 			return i18n.Err("assistant-models.err_permission_mode_launcher_only")
 		}
+		if p.ID == purposeAgent && b.PermissionMode == proto.ModePlan {
+			// Plan rejects the Persona MCP allowlist before investigation and inbox_suggest can run.
+			return i18n.Err("assistant-models.err_permission_mode_unsupported")
+		}
 		if !slices.Contains(proto.PermissionModes, b.PermissionMode) {
 			return i18n.Err("assistant-models.err_permission_mode_unsupported")
 		}
