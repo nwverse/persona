@@ -60,7 +60,7 @@ export function Login({ onDone, error: linkError = "" }: { onDone: () => void; e
     }
   };
 
-  const field = "flex h-10 items-center gap-2 rounded-control bg-inset px-3 shadow-hairline focus-within:shadow-[0_0_0_1px_var(--line-strong)]";
+  const field = "flex min-h-11 items-center gap-2 rounded-control bg-inset px-3 shadow-hairline focus-within:shadow-[0_0_0_1px_var(--line-strong)]";
   const input = "min-w-0 flex-1 bg-transparent font-mono text-meta text-ink outline-none placeholder:font-sans placeholder:text-ink-3";
 
   if (passwordMode) return <div><Suspense fallback={<Spinner />}><PasswordLogin onDone={onDone} error={linkError} /></Suspense><button type="button" onClick={() => setPasswordMode(false)} className="mx-auto mb-6 block text-ink-2">{t("login.password_pairing")}</button></div>;
@@ -68,64 +68,51 @@ export function Login({ onDone, error: linkError = "" }: { onDone: () => void; e
   return (
     <div className="flex min-h-full items-center justify-center bg-page px-5 py-16">
       <div className="w-full max-w-[380px]" style={{ animation: "fade-up 450ms cubic-bezier(0.23,1,0.32,1) both" }}>
-        <div className="mb-6 flex flex-col items-center gap-3 text-center">
+        <header className="mb-5 flex items-center gap-3">
           <AppMark size={44} radius={12} className="shadow-raised" />
-          <div>
-            <h1 className="text-[18px] font-semibold tracking-tight text-ink">{t("login.title")}</h1>
-            <p className="mt-1 text-[13px] leading-relaxed text-ink-2">{t("login.subtitle")}</p>
-          </div>
+          <h1 id="login-title" className="text-xl font-semibold tracking-tight text-ink">{t("login.title")}</h1>
+        </header>
+
+        <div className="rounded-card bg-surface shadow-card">
+          <form onSubmit={submit("link")} aria-labelledby="login-title" className="space-y-2 p-3">
+            <label className={field}>
+              <Icon name="link" size={14} className="text-ink-3" />
+              <input
+                autoFocus
+                type="text"
+                value={link}
+                onChange={(e) => {
+                  setLink(e.target.value);
+                  setError("");
+                }}
+                placeholder={t("login.link_placeholder")}
+                aria-label={t("login.link_placeholder")}
+                aria-describedby="login-link-error"
+                autoComplete="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                className={input}
+              />
+            </label>
+            <Button type="submit" tone="primary" disabled={!link.trim() || busy !== ""} className="min-h-11 w-full">
+              {busy === "link" ? <Spinner /> : t("login.sign_in")}
+            </Button>
+            <p id="login-link-error" className={`empty:hidden ${formError}`} role="alert">{error}</p>
+          </form>
+          <details className="group border-t border-line">
+            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-2 rounded-control px-4 text-meta text-ink-2 hover:bg-hover [&::-webkit-details-marker]:hidden">
+              {t("login.get_link")}
+              <Icon name="chevronRight" size={14} className="group-open:rotate-90" />
+            </summary>
+            <ol className="list-decimal space-y-2 pb-2 pl-9 pr-4 text-meta leading-relaxed text-ink-2">
+              <li>{tRich("login.phone_step_open", { path: <strong className="font-medium text-ink">{t("login.phone_path")}</strong> })}</li>
+              <li>{t("login.phone_step_copy")}</li>
+            </ol>
+            <p className="px-4 pb-4 text-meta leading-relaxed text-ink-2">{t("login.phone_step_scan")}</p>
+          </details>
         </div>
 
-        <section className="rounded-card bg-surface p-4 shadow-card" aria-labelledby="login-phone">
-          <h2 id="login-phone" className="text-[13.5px] font-semibold text-ink">
-            {t("login.phone_title")}
-          </h2>
-          <ol className="mt-2.5 space-y-2 text-[12.5px] leading-relaxed text-ink-2">
-            {[
-              tRich("login.phone_step_open", { path: <span className="font-medium text-ink">{t("login.phone_path")}</span> }),
-              t("login.phone_step_scan"),
-              t("login.phone_step_copy"),
-            ].map((step, i) => (
-              <li key={i} className="flex gap-2.5">
-                <span aria-hidden className="mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-field text-[11px] font-semibold text-ink-2 shadow-hairline">
-                  {i + 1}
-                </span>
-                <span className="min-w-0">{step}</span>
-              </li>
-            ))}
-          </ol>
-        </section>
-
-        <form onSubmit={submit("link")} className="mt-3 rounded-card bg-surface p-1.5 shadow-card">
-          <label className={field}>
-            <Icon name="link" size={14} className="text-ink-3" />
-            <input
-              autoFocus
-              type="text"
-              value={link}
-              onChange={(e) => {
-                setLink(e.target.value);
-                setError("");
-              }}
-              placeholder={t("login.link_placeholder")}
-              aria-label={t("login.link_placeholder")}
-              autoComplete="off"
-              autoCapitalize="off"
-              spellCheck={false}
-              className={input}
-            />
-          </label>
-          <Button type="submit" tone="primary" disabled={!link.trim() || busy !== ""} className="mt-1.5 h-9 w-full">
-            {busy === "link" ? <Spinner /> : t("login.sign_in")}
-          </Button>
-        </form>
-
-        <p className={`mt-3 min-h-5 ${formError}`} role="alert">
-          {error}
-        </p>
-        <p className="text-center text-[11.5px] leading-relaxed text-ink-3">{t("login.credential_note")}</p>
-
-        <div className="mt-5 flex flex-col gap-1">
+        <div className="mt-4 divide-y divide-line">
           {/* A code is made only once this is opened, by someone who means to scan it (#10291). */}
           <Disclosure open={qrOpen} onToggle={() => setQrOpen((v) => !v)} label={t("login.qr_open")} id="login-qr">
             {qrOpen && <div className="px-1 pb-2"><BrowserLoginQR onDone={onDone} /></div>}
@@ -138,7 +125,7 @@ export function Login({ onDone, error: linkError = "" }: { onDone: () => void; e
             </div>
           </Disclosure>
           <Disclosure open={advanced} onToggle={() => setAdvanced((v) => !v)} label={t("login.advanced")} id="login-advanced">
-            <form onSubmit={submit("master")} className="px-3 pb-2">
+            <form onSubmit={submit("master")} aria-label={t("login.connect")} className="px-3 pb-2">
               <p className="flex items-start gap-1.5 text-[12px] leading-relaxed text-ink-2">
                 <Icon name="warning" size={13} className="mt-0.5 shrink-0 text-orange" />
                 <span>{t("login.master_warning")}</span>
@@ -165,7 +152,7 @@ export function Login({ onDone, error: linkError = "" }: { onDone: () => void; e
                     className={input}
                   />
                 </label>
-                <Button type="submit" tone="secondary" disabled={!master.trim() || busy !== ""} className="mt-1.5 h-9 w-full">
+                <Button type="submit" tone="secondary" disabled={!master.trim() || busy !== ""} className="mt-1.5 min-h-11 w-full">
                   {busy === "master" ? <Spinner /> : t("login.connect")}
                 </Button>
               </div>
@@ -175,6 +162,7 @@ export function Login({ onDone, error: linkError = "" }: { onDone: () => void; e
             </form>
           </Disclosure>
         </div>
+        <p className="mt-5 px-3 text-meta leading-relaxed text-ink-3">{t("login.credential_note")}</p>
         <OtherHubs />
       </div>
     </div>
@@ -190,10 +178,10 @@ function Disclosure({ open, onToggle, label, id, children }: { open: boolean; on
         onClick={onToggle}
         aria-expanded={open}
         aria-controls={id}
-        className="flex h-8 w-full items-center gap-1.5 whitespace-nowrap rounded-control px-3 text-left text-[12.5px] text-ink-2 transition-colors hover:bg-hover hover:text-ink"
+        className="flex min-h-11 w-full items-center justify-between gap-2 rounded-control px-3 text-left text-[12.5px] text-ink-2 transition-colors hover:bg-hover hover:text-ink"
       >
-        <Icon name="chevronRight" size={12} className={cx("shrink-0 text-ink-3 transition-transform duration-200", open && "rotate-90")} />
-        <span className="truncate">{label}</span>
+        <span>{label}</span>
+        <Icon name="chevronRight" size={14} className={cx("shrink-0 text-ink-3 transition-transform duration-200", open && "rotate-90")} />
       </button>
       <div id={id}>
         <Collapse open={open}>{children}</Collapse>
