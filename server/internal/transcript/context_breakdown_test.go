@@ -306,7 +306,35 @@ func TestObserveSkippedUserLineMixedImagesAndText(t *testing.T) {
 		t.Fatalf("plain text mentioning base64 was capped: got %d, want >= %d", mMention.ContextStats.ConversationBytes, len(mentionText)-512)
 	}
 
-	// 5. Sidechain line is ignored.
+	// 5. Pure-image tool_result (no text): ToolOutputBytes increments by imageTokenBytesEstimate
+	// and ConversationBytes remains 0, regardless of key order or truncation after the image block.
+	for name, line := range map[string]string{
+		"type_before_content": `{"type":"user","uuid":"u5","timestamp":"2026-11-21T10:00:04Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu2","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + b64 + `"}}]}]}}`,
+		"type_after_content":  `{"type":"user","uuid":"u6","timestamp":"2026-11-21T10:00:05Z","message":{"role":"user","content":[{"content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + b64 + `"}}],"tool_use_id":"tu3","type":"tool_result"}]}}`,
+		"truncated_after_img": `{"type":"user","uuid":"u7","timestamp":"2026-11-21T10:00:06Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu4","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + b64 + `"}}`,
+	} {
+		var mPureTool Meta
+		mPureTool.ObserveSkippedUserLine([]byte(line))
+		if mPureTool.ContextStats.ToolOutputBytes != imageTokenBytesEstimate {
+			t.Fatalf("%s: ToolOutputBytes = %d, want %d", name, mPureTool.ContextStats.ToolOutputBytes, imageTokenBytesEstimate)
+		}
+		if mPureTool.ContextStats.ConversationBytes != 0 {
+			t.Fatalf("%s: ConversationBytes = %d, want 0", name, mPureTool.ContextStats.ConversationBytes)
+		}
+	}
+
+	// 6. Sibling tool_result image and conversation image in the same skipped user line are attributed separately.
+	var mSibling Meta
+	siblingLine := `{"type":"user","uuid":"u8","timestamp":"2026-11-21T10:00:07Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu5","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + b64 + `"}}]},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + b64 + `"}}]}}`
+	mSibling.ObserveSkippedUserLine([]byte(siblingLine))
+	if mSibling.ContextStats.ToolOutputBytes != imageTokenBytesEstimate {
+		t.Fatalf("sibling ToolOutputBytes = %d, want %d", mSibling.ContextStats.ToolOutputBytes, imageTokenBytesEstimate)
+	}
+	if mSibling.ContextStats.ConversationBytes != imageTokenBytesEstimate {
+		t.Fatalf("sibling ConversationBytes = %d, want %d", mSibling.ContextStats.ConversationBytes, imageTokenBytesEstimate)
+	}
+
+	// 7. Sidechain line is ignored.
 	var mSide Meta
 	mSide.ObserveSkippedUserLine([]byte(`{"type":"user","isSidechain":true,"message":{"role":"user","content":"` + bigText + `"}}`))
 	if !mSide.ContextStats.Empty() {

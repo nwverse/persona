@@ -155,6 +155,14 @@ func scanSkippedBase64Images(line []byte) (removedBytes, convImages, toolImages 
 	depth := 0
 	extraDepth := 0
 	tokens := 0
+	hasToolAncestor := func(d int) bool {
+		for j := d - 1; j >= 0; j-- {
+			if stack[j].isToolResult {
+				return true
+			}
+		}
+		return false
+	}
 
 	for i := 0; i < len(line); i++ {
 		switch line[i] {
@@ -242,7 +250,7 @@ func scanSkippedBase64Images(line []byte) (removedBytes, convImages, toolImages 
 				imgs++
 			}
 			if imgs > 0 {
-				if fr.isToolResult {
+				if fr.isToolResult || hasToolAncestor(depth) {
 					toolImages += imgs
 				} else if depth > 0 {
 					stack[depth-1].pendingImages += imgs
@@ -261,7 +269,9 @@ func scanSkippedBase64Images(line []byte) (removedBytes, convImages, toolImages 
 			depth--
 			fr := stack[depth]
 			if fr.pendingImages > 0 {
-				if depth > 0 {
+				if hasToolAncestor(depth) {
+					toolImages += fr.pendingImages
+				} else if depth > 0 {
 					stack[depth-1].pendingImages += fr.pendingImages
 				} else {
 					convImages += fr.pendingImages
