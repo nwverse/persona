@@ -27,6 +27,16 @@ type AssistantExtensionRead struct {
 	Params    json.RawMessage `json:"params,omitempty"`
 }
 
+// MethodExtensionTrustForget is ExtensionTrustForget → {}: an extension was removed, and what the user let it read
+// goes with it (installed again, under the same id or not, it starts as a third party's with no grant). An older
+// assistant answers "unknown method".
+const MethodExtensionTrustForget = "assistant.extension_trust_forget"
+
+// ExtensionTrustForget is assistant.extension_trust_forget's params.
+type ExtensionTrustForget struct {
+	Extension string `json:"extension"`
+}
+
 // Trust an extension has (ExtensionTrust.Trust).
 const (
 	// ExtensionTrustOwner: the user's own extension (such as their memory extension) reads everything.

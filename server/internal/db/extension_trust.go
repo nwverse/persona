@@ -52,6 +52,15 @@ func (d *DB) ExtensionTrusts(ctx context.Context) (map[string]ExtensionTrust, er
 	return out, rows.Err()
 }
 
+// ForgetExtensionTrust drops extension's trust and grants (it was removed).
+func (d *DB) ForgetExtensionTrust(ctx context.Context, extension string) error {
+	if _, err := d.pool.Exec(ctx, `DELETE FROM assistant_extension_grants WHERE extension_id = $1`, extension); err != nil {
+		return err
+	}
+	_, err := d.pool.Exec(ctx, `DELETE FROM assistant_extension_trust WHERE extension_id = $1`, extension)
+	return err
+}
+
 // SetExtensionTrust keeps extension's trust and replaces its granted categories with cats, as by says (the user).
 func (d *DB) SetExtensionTrust(ctx context.Context, extension, trust string, cats []string, by string) error {
 	if extension == "" {

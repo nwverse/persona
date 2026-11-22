@@ -44,6 +44,12 @@ var slashCommandRe = lazyre.New(`^/[A-Za-z][\w:-]*(\s[^\n]*)?$`)
 // conversationsRequest answers assistant.conversations and assistant.messages; false for any other method.
 func (s *Service) conversationsRequest(ctx context.Context, method string, params json.RawMessage) (any, bool, error) {
 	switch method {
+	case assistantwire.MethodExtensionTrustForget: // an extension was removed (extension_trust.go)
+		var p assistantwire.ExtensionTrustForget
+		if err := strictParams(method, params, &p); err != nil {
+			return nil, true, err
+		}
+		return map[string]any{}, true, s.forgetExtensionTrust(ctx, p.Extension)
 	case assistantwire.MethodAssistantExtensionRead: // one of them for an extension the extension manager names
 		var e assistantwire.AssistantExtensionRead
 		if err := strictParams(method, params, &e); err != nil {
