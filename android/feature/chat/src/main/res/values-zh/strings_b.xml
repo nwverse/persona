@@ -280,6 +280,8 @@
     <string name="chat_source_unknown">来源</string>
     <string name="chat_source_expand">展开</string>
     <string name="chat_source_collapse">收起</string>
+    <string name="chat_bubble_show_more">展开</string>
+    <string name="chat_bubble_show_less">收起</string>
     <string name="chat_card_height_label">卡片高度</string>
     <string name="chat_card_height_toggle">在最高和默认高度之间切换</string>
     <string name="chat_card_height_taller">调高卡片</string>

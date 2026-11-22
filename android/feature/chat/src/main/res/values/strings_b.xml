@@ -287,6 +287,8 @@
     <string name="chat_source_unknown">Source</string>
     <string name="chat_source_expand">Show more</string>
     <string name="chat_source_collapse">Show less</string>
+    <string name="chat_bubble_show_more">Show more</string>
+    <string name="chat_bubble_show_less">Show less</string>
     <string name="chat_card_height_label">Card height</string>
     <string name="chat_card_height_toggle">Toggle tallest or default height</string>
     <string name="chat_card_height_taller">Make card taller</string>
