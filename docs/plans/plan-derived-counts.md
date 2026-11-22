@@ -1,9 +1,9 @@
 # Plan: the counts people see, computed once in the managers and relayed by the hub (#11679)
 
-**Status: decided 2026-11-22 in #10613 (section 6; one case of D11 awaits the owner's confirmation); steps 1 to 4 have
-landed.** It is the Stage C item "Derived counts computed on the hub and shipped as generated view types" of #10613.
-#5974 owns what each count means; this plan covers where each count is computed and how it reaches the clients. Each
-step becomes its own issue and PR. A step that changes a number people see is marked **visible**, applies a named
+**Status: decided 2026-11-22 (section 6 is the record; one case of D11 stays open until the owner confirms it); steps 1
+to 4 have landed.** It is the Stage C item "Derived counts computed on the hub and shipped as generated view types" of
+#10613. #5974 owns what each count means; this plan covers where each count is computed and how it reaches the clients.
+Each step becomes its own issue and PR. A step that changes a number people see is marked **visible**, applies a named
 decision (section 6) and carries the principles self-check. **Who it serves:** everyone: Assistant users see one number
 for each name on every screen and device, Agents users can trust that badge, list and Lock Screen agree, and nothing new
 is drawn.
@@ -96,7 +96,7 @@ Paths in the server rows are under `server/internal`. Every row was checked at e
 
 - **A new pure package**, server/internal/assistant/fleetcount (D15), shaped like `assistant/todo/projection`: it takes
   proto values as read-only input and returns records, so its tests run on their own (1.5 s against 118 s for package
-  assistant when measured for #10613), though check-fast gains nothing, since package assistant imports it. Each agents
+  assistant in a developer's own run), though check-fast gains nothing, since package assistant imports it. Each agents
   count is one function over the inputs fleetInputsInto already builds, and the Live Activity and Persona Link call it;
   the roster's Inbox count stays a function over the Inbox items' status(), as tellInboxNeedsYou computes it today.
 - **Each count has an id and a one-line definition** in a new doc, docs/protocol/counts.md (principle 3). An id starts
@@ -399,9 +399,10 @@ decision.
 
 ## 6. Decisions
 
-Decided 2026-11-22 in #10613: the owner approved the recommended answers to D1 to D16 and to two questions the review
-added, D17 and D18, except one case of D11 whose evidence was wrong: routed terminal questions, which stay counted until
-the owner confirms it. Each is recorded here in short; the evidence and the options weighed are in #10613. D1, D6 to D9,
+Decided 2026-11-22: the owner approved the recommended answers to D1 to D16 and to two questions new with the approval,
+D17 and D18, except one case of D11 whose evidence was wrong: routed terminal questions, which stay counted, and open
+here, until the owner confirms them. This section is the record of those answers (#12843), each written in short; the
+options D1 to D16 weighed are in the open list it held before #12843, in this file's history. D1, D6 to D9,
 D11 and D16 settle what a count includes, the questions #5974 and the To-dos proposals hold; the others are this plan's
 own: which count each surface draws, its scope, and how views travel and are drawn. The ones that change what people see
 are also in `docs/design/DECISIONS.md` (11-22). A decision is reopened only by a new line here that says what changed.
@@ -409,13 +410,13 @@ Section 6.2 says what the decisions change in the steps, and 6.3 which docs chan
 
 ### 6.1 The decided list
 
-- **D1** The one Agents rule (#5974). *Decided 2026-11-22 in #10613:* `spec/fixtures/needs-you`'s badge rule
+- **D1** The one Agents rule (#5974). *Decided 2026-11-22:* `spec/fixtures/needs-you`'s badge rule
   (`badge_rows`) counts every surface named "Agents that need you", the switchers' agents part included. Its other homes
   are `docs/design/DESIGN_SYSTEM.md` 4.8, the 11-10 entry "Needs You counts sessions" in `docs/design/DECISIONS.md` and
   `docs/protocol/protocol.md` ("Agent directory visibility"); `docs/assistant/managers.md` ("Counts") writes the
   switcher's rule and is not its source. #12645's rule joins the fixture: a `mirror_of` copy counts nowhere. With one
   assistant and nothing muted, quiet, hidden or sessionless, no number changes.
-- **D2** Scope of the numbers seen outside one assistant's pages. *Decided 2026-11-22 in #10613:* the whole hub. The iOS
+- **D2** Scope of the numbers seen outside one assistant's pages. *Decided 2026-11-22:* the whole hub. The iOS
   app icon and the Home widgets change; the web's title and favicon, the desktop Dock and island, the watch, Siri and
   the To-dos widget already count every assistant. Persona Link stays per computer. The Live Activity stays on the
   default manager, a stated exception: merging FleetState across managers would be hub arithmetic (section 1's lesson),
@@ -423,48 +424,48 @@ Section 6.2 says what the decisions change in the steps, and 6.3 which docs chan
   the merge done in a manager. The icon adds one value per assistant, `persona_cards + agents_needs_you + inbox_unread`,
   which D1, D7 and D9 make that assistant's tab badges added up and its switcher count; never AppModel's
   `assistantWaiting`, which mixes three units.
-- **D3** Persona Link's muted agents. *Decided 2026-11-22 in #10613:* listed but not counted in `needs_you`. Cards on no
+- **D3** Persona Link's muted agents. *Decided 2026-11-22:* listed but not counted in `needs_you`. Cards on no
   session are counted (D1) and listed with an empty route, so a consumer opens the app; counted items come first, so
   `more` is counted overflow. Nothing draws Link's number today (`desktop/src/link-contract.cts` passes on neither
   `needs_you` nor its items), so nobody sees a change.
-- **D4** The Live Activity's headline. *Decided 2026-11-22 in #10613:* `agents_needs_you` plus each Persona conversation
+- **D4** The Live Activity's headline. *Decided 2026-11-22:* `agents_needs_you` plus each Persona conversation
   with a standing card, counted once per conversation as today; FleetState keeps its shape (no part field). Cards on no
   session are counted and listed as `card:<id>` items: older apps open `persona://open` for them (`FleetLink.url` falls
   back when an id has no `/`), and Allow / Deny still work through the interaction id. Held cards follow D11, the scope
   D2. `docs/apple/live-activity.md` writes down the two differences left against the app icon: quiet tasks' questions,
   and one count per conversation rather than per card.
-- **D5** The `surfaces` map. *Decided 2026-11-22 in #10613:* no map. Each client names the ids it draws, and
+- **D5** The `surfaces` map. *Decided 2026-11-22:* no map. Each client names the ids it draws, and
   `spec/fixtures/counts/surfaces.json` with its guard stays the one table: a `{surface: id}` map carries neither a scope
   nor a sum (the app icon draws three ids). Under D7 both Inbox ids stay ones clients know, so no remap is pending.
   Reopened only for a decided remap that must reach every device at once; the field would then be a pure optional
   addition.
-- **D6** The Agents section header and filter against the badge. *Decided 2026-11-22 in #10613:* the header and the
+- **D6** The Agents section header and filter against the badge. *Decided 2026-11-22:* the header and the
   filter count the badge's rows, as `docs/design/DESIGN_SYSTEM.md` 3.8 and 4.8 and the To-dos proposal's 3.7 already
   say; today the fixture's own case draws "Needs you 2" over five rows (principle 4). The rows the count leaves out stay
   listed inside the Needs you section, open by default, in uncounted groups named for why, in words the apps already
   use: **Muted**, and **Assistant is looking** for quiet tasks' agents and held cards (D11). Not "Can wait", which
   To-dos uses for what the owner can answer later.
-- **D7** The Inbox unit. *Decided 2026-11-22 in #10613:* unread action items for the iOS face dot and every switcher's
+- **D7** The Inbox unit. *Decided 2026-11-22:* unread action items for the iOS face dot and every switcher's
   Inbox part (web, iOS, Android), so an assistant's switcher count is its tab badges added up. The face dot says
   "Something in the Inbox needs you" and opens a sidebar whose Inbox row counts unread, so after reading, the dot stays
   while the row is empty. The Inbox widget keeps Need You (open action items, read or not): its label, dots and empty
   text say that unit (`docs/apple/home-widgets.md`, "What each number counts"), as the Inbox page's Needs you section
   does. The roster keeps `inbox_needs_you` for old apps.
-- **D8** The To-dos badge. *Decided 2026-11-22 in #10613:* N, the owner's decision 4 (a) in
+- **D8** The To-dos badge. *Decided 2026-11-22:* N, the owner's decision 4 (a) in
   `docs/design/proposals/todos-redesign.md`: open to-dos whose phase is needs_you, each once, per manager
   (`todos_needs_you`, from the list's Counts()), the number of the composer's To-dos group, the To-dos Needs you section
   and the widget (principle 4). It narrows #11085 (what waits on the owner): personal to-dos no Agent was ever on (the
   phase table's To do) leave the badge; counting them would be one row of the hub's phase table, not a client rule. The
   To-dos widget's number moves from due today or overdue to N, while it still lists Today. Each client switches when it
   draws the hub's phases; until then the web keeps `ownerBadge`.
-- **D9** The Persona tab, the app icon and the switchers' Persona part. *Decided 2026-11-22 in #10613:* `persona_cards`
+- **D9** The Persona tab, the app icon and the switchers' Persona part. *Decided 2026-11-22:* `persona_cards`
   counts the cards on Persona conversations and on quiet tasks' agents (a quiet task's question is the main
   conversation's to tell), one each; muted, directory-hidden and held (D11) cards and `mirror_of` copies are left out.
   Android's Persona tab takes this iOS rule; today it counts a quiet task's question on no tab. The icon stays the sum
   of the tabs (`docs/design/DESIGN_SYSTEM.md` 3.8, 11-12 in `docs/design/DECISIONS.md`), and every switcher's Persona
   part reads `persona_cards`. Moving the tab to the composer's Needs you is left to #5974. The Live Activity's Persona
   part (D4) is not `persona_cards`, and the docs say so.
-- **D10** Mixed support on one hub. *Decided 2026-11-22 in #10613:* per surface, views are drawn only while no manager
+- **D10** Mixed support on one hub. *Decided 2026-11-22:* per surface, views are drawn only while no manager
   in its scope is absent. The hub always lists `counts_view`, a constant in features()' static list (hub features reach
   clients only in the hello, so a gated list would flip the rule on every redeploy), and each roster entry carries
   `counts_view: true` only while that manager is connected and capable. A manager is absent when the hello lacks the
@@ -472,23 +473,24 @@ Section 6.2 says what the decisions change in the steps, and 6.3 which docs chan
   after a disconnect, is not absence (D13). An assistant's surface depends on its own manager, a whole-hub surface on
   every manager, each hub on its own. The kill switch is the manager's capability: reverting step 7a sends every client
   to the fallback.
-- **D11** Delegating and supervisor-held cards. *Decided 2026-11-22 in #10613, routed terminal questions excepted:*
+- **D11** Delegating and supervisor-held cards. *Decided 2026-11-22, routed terminal questions excepted:*
   held: listed and answerable under Assistant is looking (D6), and left out of every count until first handed to the
   owner, as `docs/design/DESIGN_SYSTEM.md` 4.8 ("A question the assistant sees first"),
   `docs/assistant/unified-entry.md` ("Asks go to the supervisor first") and north-star's `supervisor_held` already treat
   them. The state path follows: a session whose only pending cards are held is not counted; agentState itself does not
   change. *Unconfirmed: routed terminal questions.* A parsed terminal question from an agent of a supervised task goes
   to its supervising conversation with or without leaders (askLadder in `server/internal/assistant/ask_route.go`), so
-  default installs see it. The owner approved D11 on #10613's evidence that such a question moves up to the owner after
-  `askHoldFor` (5 minutes). That evidence was wrong when it was taken: since #11254, already on main at e4308ecc23 where
-  #10613 read its facts, askTick skips terminal questions, so one stays with its supervisor until an explicit
-  `ask_escalate`, with no time limit. Held, it would leave a supervised task's blocked terminal Agent on no badge
-  anywhere for as long as that lasts, where iOS and Android count it today. Until the owner confirms this case in
-  #10613, a routed terminal question (a `delegating` card of kind `screen`) is not a held card for any count, and
-  neither is the terminal dialog behind it: the fixture PR before step 5 pins it counted, and step 5 gives it no held
-  Why. A confirmation, or a decided bound on the hold, is a new line here; the state path then also leaves out a session
-  whose needs_you comes only from a terminal dialog with a held screen card.
-- **D12** Numbers outside the running app. *Decided 2026-11-22 in #10613:* never a plain `aps.badge` (the relay's alert
+  default installs see it. The owner approved D11 on the evidence it was put with: that such a question moves up to the
+  owner after `askHoldFor` (5 minutes). That evidence was wrong when it was taken: since #11254, already on main at
+  e4308ecc23 where this plan read its facts, askTick skips terminal questions, so one stays with its supervisor until an
+  explicit `ask_escalate`, with no time limit. Held, it would leave a supervised task's blocked terminal Agent on no
+  badge anywhere for as long as that lasts, where iOS and Android count it today. The case stays open here, and the
+  fixture PR before step 5 puts it to the owner. Until the owner confirms it, a routed terminal question (a `delegating`
+  card of kind `screen`) is not a held card for any count, and neither is the terminal dialog behind it: that fixture
+  PR pins it counted, and step 5 gives it no held Why. A confirmation, or a decided bound on the hold, is a new line
+  here; the state path then also leaves out a session whose needs_you comes only from a terminal dialog with a held
+  screen card.
+- **D12** Numbers outside the running app. *Decided 2026-11-22:* never a plain `aps.badge` (the relay's alert
   template carries none, and one push group's badge would overwrite the others' share); Android sets no notification
   number; the watch reads no views (`answerReads` unchanged; the phone fills WatchSummary from views at step 9). Numbers
   outside the app travel in sealed or direct alert and withdraw pushes, only to devices that register the `badge_counts`
@@ -496,31 +498,31 @@ Section 6.2 says what the decisions change in the steps, and 6.3 which docs chan
   an optional top-level `totals: {<id>: n}` that the hub copies raw, so it never decodes `counts`. The push member is
   defined after D9 and D2 are built; its first version sets the badge only on devices with one push group, and
   PersonaNotify gets no App Group.
-- **D13** A disconnected manager, and `view: null`. *Decided 2026-11-22 in #10613:* the last view per hub and manager is
+- **D13** A disconnected manager, and `view: null`. *Decided 2026-11-22:* the last view per hub and manager is
   kept, persisted, and drawn as it is, with no new look; a new epoch replaces it. `view: null`, going offline and a hub
   restart keep it, so a restart or a blue-green switch stays invisible and unknown never shows as zero; stale is a data
   state for diagnostics (`as_of` feeds `count_skew`). The view is dropped only when the roster no longer lists the
   manager, at sign-out, or on D10's explicit absence; every client, web storage and desktop included, clears persisted
   views at sign-out, as they carry machine and session ids.
-- **D14** The fallback window before step 13. *Decided 2026-11-22 in #10613:* conditions, not dates. The floor is the
+- **D14** The fallback window before step 13. *Decided 2026-11-22:* conditions, not dates. The floor is the
   first stable release with steps 7a and 7b, recorded when it ships; `proto.Protocol` is not bumped. Step 13 waits until
   the floor has been stable for 90 days, the client has drawn views in a released build for 30 days, `count_skew` is 0
   and `counts_shadow` clean for 30 days on opt-in devices the step-13 issue names (two or more per client), and
   `count_fallback` is 0 for 14 days for the reasons step 13 removes (an old hub, an old manager online); managers
   offline that never sent a view are reported apart. An absent manager leaves its surfaces without a number and the
   switcher marks it, never a sum that silently leaves it out. `count_skew` stays for good.
-- **D15** The package's name and home. *Decided 2026-11-22 in #10613:* server/internal/assistant/fleetcount, holding
+- **D15** The package's name and home. *Decided 2026-11-22:* server/internal/assistant/fleetcount, holding
   only the agents' and cards' count rules; "attention" already names Link's rule and fixture, the web's signals and the
   To-dos proposal's composer payload. It is listed `deterministic encapsulated` in the domain-package list
-  (server/internal/archguard/testdata/domain.txt, which #10613's tooling adds) rather than pinned by a test of its own;
-  its shape is in 6.2, step 5. It gives check-fast nothing, since package assistant imports it; a developer's own run of
-  its tests took 1.5 s against 118 s for package assistant when measured for #10613.
-- **D16** The direction tree's `needs_you`. *Decided 2026-11-22 in #10613:* never a view id: the tree already computes
+  (server/internal/archguard/testdata/domain.txt, which a later tooling PR adds) rather than pinned by a test of its
+  own; its shape is in 6.2, step 5. It gives check-fast nothing, since package assistant imports it; a developer's own
+  run of its tests took 1.5 s against 118 s for package assistant.
+- **D16** The direction tree's `needs_you`. *Decided 2026-11-22:* never a view id: the tree already computes
   its counts once in the manager and every client draws them as sent (`server/internal/assistant/direction_tree.go`). It
   converges in place in the To-dos rework PR that moves the tree onto the projection's phase; that PR adds a test that
   the directions' `needs_you` add up to TodoCounts' and states the tree's one exception: a worker task nested under its
   leader's Agent is not counted on its own. Open PRs there: #11821 and #12557, both drafts.
-- **D17** The desktop and web number outside the window (added in #10613). *Decided 2026-11-22 in #10613, with low
+- **D17** The desktop and web number outside the window (new with the approval). *Decided 2026-11-22, with low
   confidence:* the Electron Dock and taskbar badge, the browser tab's title and the favicon keep one number between them
   (today `useCounts().badge`, the Agents count, in `web/src/lib/attention-signals.ts`), and it becomes the app icon's
   sum from `docs/design/DESIGN_SYSTEM.md` 3.8 and 11-12: `persona_cards + agents_needs_you + inbox_unread`, for the
@@ -529,7 +531,7 @@ Section 6.2 says what the decisions change in the steps, and 6.3 which docs chan
   replaces the native Mac app whose Dock 3.8 defines. The alternative stays on record: only the Dock and taskbar take
   the sum, the title and favicon stay Agents-only, and 3.8 gets a sentence saying so. Reopened, in favour of the
   alternative, if step 10's review or people's reports find the summed number misleading in a browser tab.
-- **D18** Count ids when a definition changes (added in #10613). *Decided 2026-11-22 in #10613:* an id names a meaning
+- **D18** Count ids when a definition changes (new with the approval). *Decided 2026-11-22:* an id names a meaning
   on screen ("agents that need you"). A decided refinement keeps its id (D1's mirror rule, D3, D4, D11):
   docs/protocol/counts.md records the change and the manager build that applies it, and skew during a rollout is
   accepted, since the built-in manager updates with the hub and diagnostics name an external manager's build. A change
@@ -541,7 +543,8 @@ Section 6.2 says what the decisions change in the steps, and 6.3 which docs chan
 - **Before step 5**, one PR: the needs-you fixture records the decided definitions: `expected.header` equals the badge's
   rows (D6), held cards count nowhere while a routed terminal question still counts, in a case of its own (D11), and a
   `mirror_of` copy counts nowhere once #12645 lands (D1). Its README allows a decided definition change, which each
-  fallback's replay keeps at today's value behind a mark.
+  fallback's replay keeps at today's value behind a mark. Its PR puts D11's open case to the owner: confirm it, or bound
+  the hold.
 - **Client fixes before views**, each its own PR, with the UI self-check in light and dark where it is drawn:
   - Android, after #12645 or rebased on it: it reads `hidden_by_directory` into its Session contract and drops those
     sessions where sessions enter its lists, before grouping and counts (D1). That removes the fixture's one
@@ -568,7 +571,7 @@ Section 6.2 says what the decisions change in the steps, and 6.3 which docs chan
   visiblePendingCards. The quiet and directory-hidden exclusion predicate is exported and applied by the fixture replay;
   fleetInputsInto adopts it only after #10564, #10593, #10599 and #10920 close, since they rewrite its quiet line.
   foldSidesIn and workingSince stay until step 11. archguard gets a names-only movedClusters row and no contracts.txt
-  entry; the benchmark of 60 agents and 12 cards keeps its allocations (12 allocs/op in #10613's scratch run).
+  entry; the benchmark of 60 agents and 12 cards keeps its allocations (12 allocs/op in a scratch run).
 - **Step 6** has no `surfaces` map (D5) and an optional top-level `totals` (D12); `held` carries the muted and held
   reasons (D11). Quiet rows reach the view only at section 3.2's cost, so until then a client draws them from its own
   list. docs/protocol/counts.md records each refinement with the manager build that applies it (D18).
