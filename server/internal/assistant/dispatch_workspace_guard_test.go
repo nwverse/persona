@@ -6,12 +6,14 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/compat"
+
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 func TestDispatchRefusesAssistantWorkspace(t *testing.T) {
 	for _, tool := range []string{"task_plan", "agent_start"} {
-		for _, cwd := range []string{"~/.persona/assistant", "~/.jarvis/assistant", "/home/me/.persona/assistant/.", "/home/me/.jarvis/assistant/../assistant", "/home/me/.persona/assistant-m-abc", "/state/assistant", "/state/assistant-m-abc"} {
+		for _, cwd := range []string{"~/.persona/assistant", "~/" + compat.StateDir + "/assistant", "/home/me/.persona/assistant/.", "/home/me/" + compat.StateDir + "/assistant/../assistant", "/home/me/.persona/assistant-m-abc", "/state/assistant", "/state/assistant-m-abc"} {
 			t.Run(tool+cwd, func(t *testing.T) {
 				s, f := newTaskService(t)
 				f.devices = []Device{{ID: "box", Home: "/home/me", DataDir: "/state", Online: true, Reachable: true}}

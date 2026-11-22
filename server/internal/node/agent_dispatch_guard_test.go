@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/compat"
 )
 
 func TestAgentDirectoryGuardResolvesAliases(t *testing.T) {
@@ -20,7 +22,7 @@ func TestAgentDirectoryGuardResolvesAliases(t *testing.T) {
 		t.Fatal(err)
 	}
 	n := &Node{home: home, dir: state}
-	for _, cwd := range []string{assistant, alias, "~/.persona/assistant", "~/.jarvis/assistant", assistant + "/../assistant"} {
+	for _, cwd := range []string{assistant, alias, "~/.persona/assistant", "~/" + compat.StateDir + "/assistant", assistant + "/../assistant"} {
 		if err := n.guardAgentDirectory(context.Background(), cwd); rpcCode(err) != "agent_assistant_workspace" {
 			t.Errorf("%s: expected workspace refusal, got %v", cwd, err)
 		}
