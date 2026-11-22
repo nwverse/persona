@@ -217,7 +217,7 @@ class AssistantForwardPhotosTest {
         }
         try {
             waitMain { composerState.attachments.size == 2 && composerState.ready }
-        } catch (timeout: androidx.compose.ui.test.ComposeTimeoutException) {
+        } catch (timeout: Throwable) {
             throw AssertionError("forward-photo-state: ${composerState.attachments.map { "${it.name}:${it.uploadState}:path=${it.path}:error=${it.error}" }}; uploads=${composer.uploads}", timeout)
         }
         rule.onNodeWithContentDescription("Photo 1", useUnmergedTree = true).assertExists()
