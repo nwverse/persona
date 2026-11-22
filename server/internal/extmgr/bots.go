@@ -163,6 +163,9 @@ type botHub struct {
 	// (bots_register.go); both replaced in tests.
 	registrar *feishubot.Registrar
 	regDomain func(region string) string
+	// bindGate serializes Feishu binding, including registration network calls, independently of mu.
+	// A channel lets a waiting client's context cancel without waiting for the current bind.
+	bindGate chan struct{}
 }
 
 func (b *botHub) clock() time.Time {
@@ -532,7 +535,10 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 			}
 		}
 		if nudge != nil {
-			h.setNudgeAfter(r.Context(), *nudge)
+			if err := h.setNudgeAfter(r.Context(), *nudge); err != nil {
+				writeErr(w, http.StatusInternalServerError, i18n.Err("hub-bots.nudge_save_failed"))
+				return
+			}
 		}
 		if reportDelay != nil || in.SourceReportFullReply != nil {
 			if err := h.setSourceReportSettings(r.Context(), reportDelay, in.SourceReportFullReply); err != nil {
@@ -623,6 +629,18 @@ func (h *Manager) testFeishuBot(ctx context.Context) error {
 
 // updateBot applies the app's changes; new credentials are tried (the bot's info) before they are saved.
 func (h *Manager) updateBot(ctx context.Context, enabled *bool, appID, secret, domain *string, features *BotFeatures) error {
+	if appID != nil || secret != nil || domain != nil {
+		release, err := h.acquireFeishuBind(ctx)
+		if err != nil {
+			return err
+		}
+		defer release()
+	}
+	return h.applyBotUpdate(ctx, enabled, appID, secret, domain, features, false)
+}
+
+// applyBotUpdate requires the bind gate for credential updates. Only registration's own finish preserves its session.
+func (h *Manager) applyBotUpdate(ctx context.Context, enabled *bool, appID, secret, domain *string, features *BotFeatures, preserveRegistration bool) error {
 	b := &h.bots
 	b.mu.Lock()
 	h.loadBotsLocked(ctx)
@@ -676,10 +694,21 @@ func (h *Manager) updateBot(ctx context.Context, enabled *bool, appID, secret, d
 	b.mu.Lock()
 	// Onto the settings as they are now: the credentials were checked over the network meanwhile, and a pairing may
 	// have come in.
+	if creds && ctx.Err() != nil {
+		b.mu.Unlock()
+		return ctx.Err()
+	}
 	cur := &b.set
+	var previous FeishuBotSettings
+	if creds {
+		previous = cur.copy()
+	}
 	var records []botRecord
 	if creds {
 		if credsChanged {
+			if !preserveRegistration {
+				cur.Registration, cur.RegistrationDeviceEnc, cur.RegistrationSecretEnc = nil, "", ""
+			}
 			d := map[string]any{"app_id": next.AppID}
 			if next.Domain != "" {
 				d["domain"] = next.Domain
@@ -708,7 +737,11 @@ func (h *Manager) updateBot(ctx context.Context, enabled *bool, appID, secret, d
 		}
 		cur.Features = *features
 	}
-	h.saveBotSettingsLocked()
+	if err := h.saveBotSettingsLocked(); err != nil && creds {
+		b.set = previous
+		b.mu.Unlock()
+		return err
+	}
 	b.mu.Unlock()
 	h.auditBot(ctx, records...)
 	if reconnect {
