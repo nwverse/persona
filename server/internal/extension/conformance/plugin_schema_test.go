@@ -162,6 +162,11 @@ var goTypes = map[string]any{
 	"RepoPRStatusParams": wire.RepoPRStatusParams{},
 	"RepoPRStatusResult": wire.RepoPRStatusResult{},
 
+	"MachinesPairLinkParams": wire.MachinesPairLinkParams{},
+	"MachinesPairLinkResult": wire.MachinesPairLinkResult{},
+	"MachinesStatusParams":   wire.MachinesStatusParams{},
+	"MachinesStatusResult":   wire.MachinesStatusResult{},
+
 	// Storage params are the actual manager-engine decoder types. Dynamic result
 	// objects are validated against these wire DTOs before committing/acknowledging.
 	"StorageEmptyParams":       struct{}{},

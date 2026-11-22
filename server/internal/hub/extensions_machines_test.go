@@ -150,10 +150,10 @@ func startAuthConnectProxy(t *testing.T, wantUser, wantPass string) (*httptest.S
 }
 
 // TestHubExtensionMachinesPairLinkThroughProxyE2E exercises the full extension takeover path without external Postgres:
-//   1. Extension calls machines.pair_link via hub bus -> pending kind:link machine + persona://link?...
-//   2. Extension calls machines.status -> exists=true, pending=true, online=false.
-//   3. Real persona-link (link.Pair) pairs with the hub through an authenticated HTTP CONNECT egress proxy.
-//   4. Confirmed machines are refused with not_pending on re-pair.
+//  1. Extension calls machines.pair_link via hub bus -> pending kind:link machine + persona://link?...
+//  2. Extension calls machines.status -> exists=true, pending=true, online=false.
+//  3. Real persona-link (link.Pair) pairs with the hub through an authenticated HTTP CONNECT egress proxy.
+//  4. Confirmed machines are refused with not_pending on re-pair.
 func TestHubExtensionMachinesPairLinkThroughProxyE2E(t *testing.T) {
 	store := newMemPairTrustStore()
 	h := newTestHub(t)
