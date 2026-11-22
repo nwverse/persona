@@ -171,7 +171,7 @@ func (d *Store) SetTodoRepositoryLinks(ctx context.Context, id, repoID string, i
 				if err != nil {
 					return err
 				}
-				repository.PreserveLinkTitles(row.Links, links)
+				repository.PreserveLinkTitles(row.Links, links, in.Links)
 				cur.Repositories[index].Links = links
 				cur.Revision++
 				out = cur
@@ -179,6 +179,49 @@ func (d *Store) SetTodoRepositoryLinks(ctx context.Context, id, repoID string, i
 			}
 		}
 		return repository.Problem("not_found")
+	})
+	return out, err
+}
+
+// SetTodoRepositoryLinkRole rewrites the role of a single link (matched by canonical URL) inside one transaction, so
+// the automatic gate downgrade can never clobber a concurrent edit made to another link.
+func (d *Store) SetTodoRepositoryLinkRole(ctx context.Context, id, canonicalURL, role string) (repository.TaskSet, error) {
+	normalized, perr := repository.NormalizeLinkRole(role)
+	if perr != "" {
+		return repository.TaskSet{}, perr
+	}
+	var out repository.TaskSet
+	err := d.Transaction(ctx, func(tx pgx.Tx) error {
+		cur, err := ReadTodoRepositoriesTx(ctx, tx, id, nil)
+		if err != nil {
+			return err
+		}
+		// Stored delivery links keep the empty value (see NormalizeLink); compare and write that representation so
+		// re-applying delivery to an already-delivery link is a no-op instead of bumping the revision every gate pass.
+		storedRole := ""
+		if normalized == repository.LinkRoleReference {
+			storedRole = normalized
+		}
+		changed := false
+		for ri := range cur.Repositories {
+			for li := range cur.Repositories[ri].Links {
+				if cur.Repositories[ri].Links[li].CanonicalURL == canonicalURL &&
+					cur.Repositories[ri].Links[li].Role != storedRole {
+					cur.Repositories[ri].Links[li].Role = storedRole
+					changed = true
+				}
+			}
+		}
+		if !changed {
+			out = cur
+			return nil
+		}
+		if cur.Revision >= repository.MaxRevision {
+			return repository.Problem("limit")
+		}
+		cur.Revision++
+		out = cur
+		return writeTodoRepositoriesTx(ctx, tx, cur)
 	})
 	return out, err
 }
@@ -246,7 +289,7 @@ func (d *Store) ImportTodoRepositoryLinkDetails(ctx context.Context, id string, 
 			}
 			canonical = append(canonical, link.CanonicalURL)
 			if source == "explicit" || !slices.Contains(seen, link.CanonicalURL) {
-				pending = append(pending, repository.LinkInput{URL: link.CanonicalURL, Title: link.Title, Resolved: in.Resolved})
+				pending = append(pending, repository.LinkInput{URL: link.CanonicalURL, Title: link.Title, Role: in.Role, Resolved: in.Resolved})
 			}
 		}
 		if len(pending) == 0 {

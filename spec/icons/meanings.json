@@ -429,6 +429,10 @@
       "sf": "music.note",
       "phosphor": "music-note"
     },
+    "muted": {
+      "sf": "bell.slash.fill",
+      "phosphor": "prohibit"
+    },
     "newConversation": {
       "sf": "plus.bubble",
       "phosphor": "chat-circle-dots"

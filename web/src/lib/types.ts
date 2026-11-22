@@ -949,6 +949,8 @@ export interface Interaction {
   /** The assistant is deciding whether it may answer this question for the user (docs/assistant/assistant.md "Assistant
    *  answers questions first"): nothing was pushed yet, and an answer given here wins. The same card comes again without it. */
   delegating?: boolean;
+  /** Hub push-grading urgency ("P0" | "P1" | "P2"): absent defaults to P0. */
+  push_level?: "P0" | "P1" | "P2" | (string & {});
   /** What the assistant filled in when it left the question to the user. */
   delegate?: Delegate;
   /** A rule the hub suggests on a question a supervisor passed up, once the owner gave the same answer three times
@@ -971,6 +973,9 @@ export interface Delegate {
 
 export interface Launcher {
   name: string;
+  /** A verified separate runtime channel, independent of ordinary Assistant support. */
+  supervision_policy?: boolean;
+  assistant?: boolean;
   /** A Persona-managed provider's name for people, any language (#5029), or a runtime's name for a provider it runs
    *  (Paseo's label, "Grok", #8261); absent for an rc alias or from an older hub. Show it through lib/provider-names.ts. */
   display_name?: string;

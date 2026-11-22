@@ -26,7 +26,6 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Base64
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.first
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -150,12 +149,9 @@ class AssistantForwardPhotosTest {
         val files = Files()
         val composer = Composer()
         val composerState = persona.feature.chat.ChatComposerState()
-        val uploaded = kotlinx.coroutines.CompletableDeferred<Unit>()
         val upload: persona.feature.chat.ComposerAttachmentUpload = { service, session, attachment, onStaged ->
             onStaged(attachment.size ?: 0)
-            service.upload(session, attachment.name, File(attachment.name)).also {
-                if (composer.uploads.size == 2) uploaded.complete(Unit)
-            }
+            service.upload(session, attachment.name, File(attachment.name))
         }
         val hub = Hub()
         var home by mutableStateOf(false)
@@ -219,11 +215,10 @@ class AssistantForwardPhotosTest {
             org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
             condition()
         }
-        kotlinx.coroutines.runBlocking {
-            uploaded.await()
-            kotlinx.coroutines.withTimeout(10_000) {
-                androidx.compose.runtime.snapshotFlow { composerState.ready }.first { it }
-            }
+        try {
+            waitMain { composerState.attachments.size == 2 && composerState.ready }
+        } catch (timeout: Throwable) {
+            throw AssertionError("forward-photo-state: ${composerState.attachments.map { "${it.name}:${it.uploadState}:path=${it.path}:error=${it.error}" }}; uploads=${composer.uploads}", timeout)
         }
         rule.onNodeWithContentDescription("Photo 1", useUnmergedTree = true).assertExists()
         rule.onNodeWithContentDescription("Photo 2", useUnmergedTree = true).assertExists()

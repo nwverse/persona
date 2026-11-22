@@ -113,6 +113,8 @@ type fakeHub struct {
 	liveEvents     []map[string]any // the meeting_live events as sent
 	snaps          []Snapshot
 
+	sessionsContextCheck bool // sessions.list rejects an expired caller context, as a real RPC does
+
 	// Agents a task starts (session.start a1, a2…) and what was sent to them; a machine offline, a node refusing.
 	starts       []map[string]any
 	agentSent    []map[string]any
@@ -131,10 +133,13 @@ type fakeHub struct {
 	judged       int                       // the done judge's calls to the model
 	judge        string                    // what they answer ("": an error)
 	judgeFails   int                       // the done judge's next calls that fail before f.judge answers
+	judgeDelay   time.Duration             // how long the done judge waits before answering (its caller can time out)
 	judgeAsked   []string                  // what the done judge was given (its input)
 	judgeBy      func(input string) string // when set, what the done judge answers to its input (instead of f.judge)
 	outcome      string                    // what the outcome model answers (todo_outcome.go; "": an error)
 	outcomeAsked []modelCall
+	lessons      string // what the lessons model answers (task_lessons.go; "": an error)
+	lessonsAsked []modelCall
 	retired      []string         // the session ids of session.retire and of session.stop with retire (the done and idle passes)
 	retireArgs   []map[string]any // what each of those calls asked
 	stopped      []string         // session.stop's session ids without retire (a cancelled task's agent)
@@ -263,6 +268,14 @@ func listHooked(ctx context.Context) context.Context {
 }
 
 func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Method == DeviceSessionsList {
+		f.mu.Lock()
+		check := f.sessionsContextCheck
+		f.mu.Unlock()
+		if check && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+	}
 	if p.Method == DeviceSessionGet {
 		f.mu.Lock()
 		hook := f.beforeSessionGet
@@ -1510,10 +1523,13 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 		case strings.Contains(in.System, "给一件做完的任务记结论"): // the outcome of a finished task (todo_outcome.go)
 			f.outcomeAsked = append(f.outcomeAsked, modelCall{in.System, user})
 			reply, fail = f.outcome, f.outcome == ""
+		case strings.Contains(in.System, `{"lessons":[`): // the lessons of an accepted task (task_lessons.go), in any language
+			f.lessonsAsked = append(f.lessonsAsked, modelCall{in.System, user})
+			reply, fail = f.lessons, f.lessons == ""
 		case strings.HasSuffix(strings.TrimSpace(in.System), jsonOnly):
 			f.judged++
 			f.judgeAsked = append(f.judgeAsked, user)
-			reply, fail = f.judge, f.judge == ""
+			reply, fail, delay = f.judge, f.judge == "", f.judgeDelay
 			if f.judgeBy != nil {
 				reply = f.judgeBy(user)
 				fail = reply == ""

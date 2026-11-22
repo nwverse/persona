@@ -73,6 +73,18 @@ describe("按仓库分组的树", () => {
     ]);
   });
 
+  it("names a linked tree whose folder has the repository's name after the folder holding it (#12800)", () => {
+    const tree = onMachineA([
+      session("main", "/code/app", { repo_root: "/code/app" }),
+      session("codex", "/home/me/.codex/worktrees/fix-login/app", { repo_root: "/code/app" }),
+      session("codex-2", "/home/me/.codex/worktrees/fix-login-2/app", { repo_root: "/code/app" }),
+      session("branch", "/home/me/.codex/worktrees/fix-ui/app", { repo_root: "/code/app", branch: "ui-polish" }),
+      session("sibling", "/code/app-feature", { repo_root: "/code/app" }),
+    ]);
+    // the main checkout keeps the repository's name, a branch still wins, and a folder named otherwise keeps its name
+    expect(worktrees(tree[0]!)).toEqual(["app*", "app-feature", "fix-login", "fix-login-2", "ui-polish"]);
+  });
+
   it("先给主工作树，再按名字给工作树", () => {
     const all = [
       session("main", "/code/app"),
