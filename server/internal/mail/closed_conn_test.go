@@ -216,10 +216,14 @@ func TestEndedCachedConnectionIsReplacedWithoutATry(t *testing.T) {
 	cached := s.conns["acc_test"]
 	s.mu.Unlock()
 	proxy.endAll()
-	for deadline := time.Now().Add(5 * time.Second); !ended(cached.c); time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the client never saw its connection end")
-		}
+	// go-imap closes Closed() once its reader stopped, after it moved the client to the logout state.
+	select {
+	case <-cached.c.Closed():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the client never saw its connection end")
+	}
+	if !ended(cached.c) {
+		t.Fatal("the reader stopped but the client is not in the logout state")
 	}
 
 	if _, err := s.GetMessage(ctx, "acc_test", uint32(uid), "INBOX"); err != nil {
