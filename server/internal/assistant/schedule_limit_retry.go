@@ -171,8 +171,8 @@ func (s *Service) recoverScheduledLimitRetry(ctx context.Context, w delayedWait)
 		}
 		sc.mu.Unlock()
 	}
-	if space == SpaceHealth {
-		name, _ = healthNotice(s.lang(ctx))
+	if space != "" && s.trackPolicy(ctx, space).Redact {
+		name, _ = spaceNotice(s.lang(ctx))
 	}
 	if !streak {
 		s.push(ctx, Notification{Subtitle: retry.MachineName, DeviceID: run.MachineID, SessionID: run.SessionID,

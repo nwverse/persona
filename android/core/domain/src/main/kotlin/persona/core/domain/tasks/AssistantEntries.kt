@@ -96,20 +96,23 @@ const val REVIEW_OVERDUE_MS = 60 * 60 * 1000L
 /**
  * The task waits for its supervisor's review, which is not the owner's to do yet: open, in `pending_review` for less than
  * [REVIEW_OVERDUE_MS] at [now] (epoch ms). False past that, and when the hub does not say since when (an older hub): the
- * review is then the owner's, as it was. An open ask or an asking Agent is the owner's whatever this says.
+ * review is then the owner's, as it was. An open ask or an asking Agent is the owner's whatever this says. An owner hold
+ * its Agent reported that the supervisor has not read yet (`unblock` supervisor, #13191) is the supervisor's however old.
  */
 fun Todo.supervisorReviewing(now: Long): Boolean {
+    if (hold?.unblock == HoldUnblock.Supervisor) return true // an owner hold its supervisor reads first (#13191)
     if (isDone || supervision?.state != "pending_review") return false
     val since = parseTime(supervision?.pendingSince)?.toEpochMilli() ?: return false
     return now - since < REVIEW_OVERDUE_MS
 }
 
-/** The task waits for the user's decision or review: an open ask (a decided one only while the task is open), or its
- *  supervisor's `needs_user` on an open task, or a `pending_review` that is the owner's: one waiting an hour or more at
- *  [now], or one the hub gives no start for ([supervisorReviewing]). A younger review is its supervisor's to do. */
+/** The task waits for the user's decision or review: an open task's ask, or its supervisor's `needs_user` on an open
+ *  task, or a `pending_review` that is the owner's: one waiting an hour or more at [now], or one the hub gives no start
+ *  for ([supervisorReviewing]). A younger review is its supervisor's to do. A finished task never waits, whatever ask
+ *  it still carries: the hub's To-dos triage files it with the finished ones (#12974). */
 fun Todo.awaitsDecision(now: Long): Boolean {
-    openAsk?.let { return !(isDone && it.outcome == "decide") }
     if (isDone) return false
+    if (openAsk != null) return true
     return supervision?.state == "user_check" || supervision?.state == "needs_user" || (supervision?.state == "pending_review" && !supervisorReviewing(now))
 }
 
@@ -130,15 +133,19 @@ fun Todo.decisionDismissed(): Boolean {
     return at == decisionRound()
 }
 
-/** The web's `todoRank` (what the user must act on first), on the triage status. */
+/** The web's `todoRank` (what the user must act on first), on the triage status and its display state. */
 private fun Todo.entryRank(status: TriageStatus): Int {
-    if ((supervision?.state == "pending_review" || openAsk != null) && status in RESTING) return 20
+    if (waitsForOwner()) return 0
+    if (kind != "concern" && !isDone && acceptanceStands && (status in RESTING || status == TriageStatus.UsageLimit)) return 80
+    val reviewRequired = supervision?.state == "pending_review" || openAsk != null || (kind != "concern" && delivery?.state == "live")
+    if (reviewRequired && status in RESTING) return 20
     return when (status) {
         TriageStatus.NeedsYou -> 0
         TriageStatus.Interrupted -> 10
         TriageStatus.UsageLimit -> 15
         TriageStatus.Failed -> 30
         TriageStatus.Working -> 40
+        TriageStatus.Waiting -> 45
         TriageStatus.NotStarted -> 50
         TriageStatus.Unread -> 60
         TriageStatus.FollowUp -> 70
@@ -220,7 +227,7 @@ fun assistantEntries(
                 val ended = todo.finishedAt(placed)
                 if ((placed.section == TriageSection.JustDone || placed.section == TriageSection.Done) &&
                     status != TriageStatus.Failed && !todo.origin.isNullOrBlank() && ended > 0 && now - ended < JUST_DONE_MS) {
-                    finished += FinishedEntry(todo, status, fresh = placed.section == TriageSection.JustDone, at = ended)
+                    finished += FinishedEntry(todo, status, fresh = todo.showsJustFinished(placed, now), at = ended)
                 }
                 continue
             }

@@ -38,6 +38,7 @@ func (t *Todo) setPlan(row db.TodoRow) {
 	t.InboxItem = row.InboxItem
 	t.PartOf, t.After = row.PartOf, slices.Clone(row.After)
 	t.RequireAcceptedAfter = row.RequireAcceptedAfter
+	t.Responsible = cloneResponsible(row.Responsible)
 }
 
 // keepPlan writes t's plan, project and the owner's marks (seen, restored, Someday) into row: a row made in memory for a
@@ -55,6 +56,7 @@ func (t *Todo) keepPlan(row *db.TodoRow) {
 	row.InboxItem = t.InboxItem
 	row.PartOf, row.After = t.PartOf, slices.Clone(t.After)
 	row.RequireAcceptedAfter = t.RequireAcceptedAfter
+	row.Responsible = cloneResponsible(t.Responsible)
 }
 
 // todoRowOf is todo t as a row (what memory has of it; the store-less PATCH changes it).
@@ -213,7 +215,12 @@ func (s *Service) createDirectionTodo(ctx context.Context, leader, title, notes 
 	if err != nil {
 		return Todo{}, err
 	}
-	s.superviseTodo(ctx, t.ID, leader, nil, 0)
+	if err := s.superviseTodo(ctx, t.ID, leader, nil, 0); err != nil {
+		if rerr := s.removeTodo(context.WithoutCancel(ctx), t.ID); rerr != nil {
+			s.logf("todo %s: take back after supervision failure: %v", t.ID, rerr)
+		}
+		return Todo{}, err
+	}
 	if cur, ok := s.todoNow(t.ID); ok {
 		t = cur
 	}
@@ -306,6 +313,17 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		// still has the agents that were working on it.
 		s.goRecordTaskOutcome(cur, *row.DoneAt)
 		s.askTodoClosed(context.WithoutCancel(ctx), id, row.Title) // a question's to-do closed unanswered (ask_todo.go)
+		maySatisfyAfter := row.StartError == "" && row.DoneBy != db.DoneByCancelled
+		s.onTodoWorkspaceReleased(ctx, cur, maySatisfyAfter)
+		if maySatisfyAfter {
+			s.evaluateTodoAfterDependents(ctx, id)
+			s.evaluateParentCloseoutForChild(ctx, id)
+		}
+	}
+	if reopening && row.DoneAt == nil && (cur.DoneAt != nil || e.RestartWork ||
+		row.ReopenedAt != nil && (cur.ReopenedAt == nil || !row.ReopenedAt.Equal(*cur.ReopenedAt))) {
+		s.resetTodoReadyWake(ctx, id)
+		s.resetParentCloseoutWake(ctx, id)
 	}
 	return out, nil
 }
@@ -323,6 +341,7 @@ func (s *Service) deleteTodo(ctx context.Context, id string) error {
 		return err
 	}
 	s.askTodoClosed(context.WithoutCancel(ctx), id, cur.Title) // a question's to-do deleted unanswered (ask_todo.go)
+	s.onTodoWorkspaceReleased(ctx, cur, false)
 	return nil
 }
 
@@ -438,16 +457,18 @@ func (s *Service) remind(ctx context.Context, id string, at, now time.Time) {
 		SessionID: set.Main, Title: channelTitle, Body: channelBody, Level: assistantwire.LevelP0,
 		RelatedKey: "todo-remind:" + id + "@" + at.UTC().Format(time.RFC3339)})
 	// Only the Feishu copy gets the full notes, to-do deep link and reply context. Ordinary phone and other-channel
-	// copies keep their existing short text; a health task's content stays behind the generic notice on every copy.
+	// copies keep their existing short text; the content of a task from a space that redacts stays behind the generic
+	// notice on every copy.
 	go s.feishuTodoReminder(set.MachineID, set.Main, larkTitle, larkBody, todo)
 	go s.channelPush(set.MachineID, set.Main, channelTitle, channelBody)
 	s.logf("todo %s: reminded (due %s)", id, at.Format(time.RFC3339))
 }
 
-// reminderChannelText applies the health space's outbound rule to phone and channel copies; ordinary text is unchanged.
+// reminderChannelText applies the outbound rule of a space that redacts to phone and channel copies; ordinary text is
+// unchanged.
 func (s *Service) reminderChannelText(ctx context.Context, t Todo, title, body string) (string, string) {
-	if s.todoInHealth(ctx, t) {
-		return healthNotice(s.lang(ctx))
+	if s.todoPolicy(ctx, t).Redact {
+		return spaceNotice(s.lang(ctx))
 	}
 	return title, body
 }

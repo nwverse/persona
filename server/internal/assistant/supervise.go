@@ -176,14 +176,20 @@ type TaskReview struct {
 	HoldReleased    bool      `json:"hold_released,omitempty"`
 	// Handoff is an internal wait recorded after session.send was acknowledged.
 	Handoff *taskHandoff `json:"handoff,omitempty"`
+	// SupersededReason records the supervisor's natural-language reason when this task_review superseded an earlier
+	// pending needs_user decision without fabricating an owner selection (#13112).
+	SupersededReason string `json:"superseded_reason,omitempty"`
 }
 
 // OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on the owner's decision:
-// when it was judged and the judge's reason.
+// when it was judged and the judge's reason. PushPending marks a new, still-undelivered push; NotifiedAt records its
+// success. Legacy waits have neither and are not replayed on upgrade.
 type OwnerWait struct {
-	Work   time.Time `json:"work"`
-	At     time.Time `json:"at"`
-	Reason string    `json:"reason,omitempty"`
+	Work        time.Time  `json:"work"`
+	At          time.Time  `json:"at"`
+	Reason      string     `json:"reason,omitempty"`
+	PushPending bool       `json:"push_pending,omitempty"`
+	NotifiedAt  *time.Time `json:"notified_at,omitempty"`
 }
 
 type ReviewCheck struct {
@@ -405,8 +411,9 @@ func cleanDoneWhen(list []string) []string {
 	return out
 }
 
-// superviseTodo makes todo id a supervised task of conversation supervisor.
-func (s *Service) superviseTodo(ctx context.Context, id, supervisor string, doneWhen []string, expect int) {
+// superviseTodo makes todo id a supervised task of conversation supervisor. A persistence failure leaves its in-memory
+// ledger untouched; callers that must not start untracked work check the returned error.
+func (s *Service) superviseTodo(ctx context.Context, id, supervisor string, doneWhen []string, expect int) error {
 	_, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
 		v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, cleanDoneWhen(doneWhen), max(0, min(expect, 24*60))
 		return true
@@ -414,6 +421,7 @@ func (s *Service) superviseTodo(ctx context.Context, id, supervisor string, done
 	if err != nil {
 		s.logf("task %s: supervision: %v", id, err)
 	}
+	return err
 }
 
 // startSupervisionRound: a plan's task took todo id over to start a new Agent on it (task_plan continues, or its
@@ -430,11 +438,18 @@ func (s *Service) startSupervisionRound(ctx context.Context, id string) {
 		return
 	}
 	if _, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
-		if v.State != reviewAccepted && v.State != reviewCancelled {
-			return false
+		changed := false
+		if v.State == reviewAccepted || v.State == reviewCancelled {
+			v.State, v.Round, v.StalledReworkRounds, v.Waits = "", 0, 0, nil
+			changed = true
 		}
-		v.State, v.Round, v.StalledReworkRounds, v.Waits = "", 0, 0, nil
-		return true
+		// A new Agent round is distinct evidence even when a scope already cleared the terminal state, so there is no
+		// database field left to change. This process-local epoch still prevents a failed takeover restoring acceptance.
+		if s.supervise.roundEpochs == nil {
+			s.supervise.roundEpochs = map[string]uint64{}
+		}
+		s.supervise.roundEpochs[id]++
+		return changed
 	}); err != nil {
 		s.logf("task %s: new supervision round: %v", id, err)
 	}
@@ -462,14 +477,35 @@ func (s *Service) updateSupervision(ctx context.Context, id string, change func(
 
 // updateSupervisionAt is updateSupervision at the caller's supervision-pass time.
 func (s *Service) updateSupervisionAt(ctx context.Context, id string, now time.Time, change func(*Supervision) bool) (Supervision, bool, error) {
+	return s.updateSupervisionGuardedAt(ctx, id, now, nil, change)
+}
+
+// updateSupervisionGuarded is updateSupervision with a current-todo guard evaluated in the same write boundary.
+func (s *Service) updateSupervisionGuarded(ctx context.Context, id string, guard func(Todo) bool, change func(*Supervision) bool) (Supervision, bool, error) {
+	return s.updateSupervisionGuardedAt(ctx, id, time.Now().UTC(), guard, change)
+}
+
+// updateSupervisionGuardedAt preserves both the caller's supervision-pass time and the guarded write boundary.
+func (s *Service) updateSupervisionGuardedAt(ctx context.Context, id string, now time.Time, guard func(Todo) bool, change func(*Supervision) bool) (Supervision, bool, error) {
+	if guard != nil {
+		// Match editTodo's write boundary. The guard, stored receipt and in-memory mirror are one admission relative
+		// to a user close; taking writeMu first would invert the todos.writing → writeMu order used by other writers.
+		s.todos.writing.Lock()
+		defer s.todos.writing.Unlock()
+	}
 	b := &s.supervise
 	b.writeMu.Lock()
 	defer b.writeMu.Unlock()
-	return s.updateSupervisionLockedAt(ctx, id, now, change)
+	return s.updateSupervisionGuardedLockedAt(ctx, id, now, guard, change)
 }
 
 // updateSupervisionLockedAt is updateSupervisionAt with supervise.writeMu already held.
 func (s *Service) updateSupervisionLockedAt(ctx context.Context, id string, now time.Time, change func(*Supervision) bool) (Supervision, bool, error) {
+	return s.updateSupervisionGuardedLockedAt(ctx, id, now, nil, change)
+}
+
+// updateSupervisionGuardedLockedAt is the guarded form with supervise.writeMu already held.
+func (s *Service) updateSupervisionGuardedLockedAt(ctx context.Context, id string, now time.Time, guard func(Todo) bool, change func(*Supervision) bool) (Supervision, bool, error) {
 	t, ok := s.todoNow(id)
 	if !ok {
 		return Supervision{}, false, db.ErrTodoNotFound
@@ -477,6 +513,9 @@ func (s *Service) updateSupervisionLockedAt(ctx context.Context, id string, now 
 	v := t.Supervision.clone()
 	if v == nil {
 		v = (&Supervision{}).clone()
+	}
+	if guard != nil && !guard(t) {
+		return *v, false, nil
 	}
 	before := v.State
 	var parkedAt time.Time
@@ -556,10 +595,10 @@ func taskHealth(t Todo, agents []proto.Session, now time.Time) (string, int) {
 		return "待你验收", 0 // i18n-ignore: the snapshot is the assistant's prompt
 	case reviewNeedsUser:
 		if triageReviewState(t) == reviewNeedsUser {
-			return "等你决定", 0
+			return "等你处理", 0
 		}
 	case reviewPending:
-		return "待验收", 1
+		return "已交付·待看", 1
 	case reviewAccepted:
 		return "已验收", 8
 	case reviewCancelled:
@@ -577,6 +616,14 @@ func taskHealth(t Todo, agents []proto.Session, now time.Time) (string, int) {
 	}
 	if v.Waits != nil { // the judge found it stopped on the owner's decision (#1277): not to be accepted as done
 		return "停下等用户拍板，别直接验收", 0 // i18n-ignore: the snapshot is the assistant's prompt
+	}
+	if snapshotDoneRule(t, agents, nil, nil, now, now.Location()) == ruleAccepted {
+		// v.state masks an accepted review after reopening; acceptanceStands inside the shared triage rule still holds
+		// until a newer review. Reopened accepted work is normal, not a second delivery awaiting review (#5732).
+		return "正常", 5 // i18n-ignore: the snapshot is the assistant's prompt
+	}
+	if deliveryAwaitsReview(t, agents) {
+		return "已交付·待看", 1 // i18n-ignore: the snapshot is the assistant's prompt
 	}
 	for _, c := range agents {
 		if c.State == proto.StateNeedsYou || c.PendingInteractions > 0 {

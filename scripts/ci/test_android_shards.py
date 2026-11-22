@@ -111,6 +111,7 @@ class ShardTests(unittest.TestCase):
         self.assertEqual(set(cached_paths), {"~/.m2/repository/org/robolectric/android-all",
                                             "~/.m2/repository/org/robolectric/android-all-instrumented"})
         self.assertNotIn("continue-on-error", workflow)
+        self.assertIn("timeout-minutes: 90", workflow)
 
 
 class ShellLaneTests(unittest.TestCase):

@@ -75,6 +75,8 @@ type quickMeta struct {
 	// (transcript.Meta; Session.ContextTokens / ContextWindow, #2430). Carried over from the last read when the tail
 	// holds no reply (one huge line can fill it).
 	contextTokens, contextWindow int
+	contextStats                 transcript.ContextStats
+	contextFullWindow            bool
 	contextRestartRecommended    bool
 	// turnClosed: the tail ends with a turn finished (transcript.Meta.TurnClosed): a Codex rollout's, a Claude
 	// transcript's (turn_duration, an interrupt)
@@ -332,12 +334,12 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 		m.titleSource = "" // a historical custom-title may be outside this bounded read
 	}
 	m.start = start
-	if identity.IsAssistantDir(start) || identity.InHealthSpace(start) || start != "" && identity.IsAssistantDir(m.cwd) {
-		// An assistant or health conversation is where it started: its space, CLAUDE.md, memory and resume project.
+	if identity.IsAssistantDir(start) || identity.InSpace(start) || start != "" && identity.IsAssistantDir(m.cwd) {
+		// An assistant or space conversation is where it started: its space, CLAUDE.md, memory and resume project.
 		// A `cd` into a skill's folder had it listed as an agent there (#2368). The other way round, an agent whose
-		// `cd` landed in an assistant or health directory (one started in the home directory) is not one of their
-		// conversations: listed there at rest, the hub took it for one. An exact assistant or health directory is
-		// only ever where a session started. Health subdirectories also retain their starting directory for privacy.
+		// `cd` landed in an assistant or space directory (one started in the home directory) is not one of their
+		// conversations: listed there at rest, the hub took it for one. An exact assistant or space directory is
+		// only ever where a session started. Space subdirectories also retain their starting directory for privacy.
 		m.cwd = start
 	}
 	m.surface = tm.Surface
@@ -409,9 +411,14 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	}
 	m.version, m.versionAt, m.ultracode, m.ultracodeAt = tm.Version, tm.VersionAt, tm.Ultracode, tm.UltracodeAt
 	m.contextTokens, m.contextWindow = tm.ContextTokens, tm.ContextWindow
+	m.contextStats = tm.ContextStats
+	m.contextFullWindow = off == 0 || tm.ContextStats.CompactedInWindow
 	if m.contextTokens == 0 && !tm.ContextCompacted && prev.size > 0 && prev.size <= st.Size() {
 		// No reply in the tail: the last read's stands, unless the tail compacted it away (unknown until a reply, #9207).
 		m.contextTokens, m.contextWindow = prev.contextTokens, prev.contextWindow
+	}
+	if m.contextTokens > 0 && m.contextStats.Empty() && !tm.ContextCompacted && prev.size > 0 && prev.size <= st.Size() {
+		m.contextStats, m.contextFullWindow = prev.contextStats, prev.contextFullWindow
 	}
 	return m
 }
@@ -492,6 +499,7 @@ func quickLine(line []byte, tm *transcript.Meta, tail *transcript.Tail) {
 	// summary or a meta line: no prompt (Claude Code compacts on its own while idle, and its 17 KB summary read as one
 	// left the session working for hours, #5967); the parser reads them as what they are.
 	if bytes.Contains(line, []byte(`"type":"user"`)) && len(line) > 8<<10 && !notAPrompt(line) {
+		tm.ObserveSkippedUserLine(line)
 		ts := lineTime(line)
 		if ts.After(tm.LastActivity) {
 			tm.LastActivity = ts

@@ -164,8 +164,8 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		if p := n.transcriptPath(id); p != "" {
 			if st, err := os.Stat(p); err == nil {
 				m := n.meta(p, st)
-				if identity.InHealthSpace(m.cwd) {
-					s.Space = identity.SpaceHealth
+				if sp := identity.SpaceAt(m.cwd); sp != "" {
+					s.Space = sp
 				}
 				rolloutPath = p
 				textAt = m.lastTextAt
@@ -391,7 +391,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			n.observedRunning(s.SessionID)
 			n.noteGatewayRunning(s)
 		}
-		if earlier[s.SessionID] || !n.sessionScopeAllows(s.Cwd) {
+		if earlier[s.SessionID] || n.isRoundFork(s.SessionID) || !n.sessionScopeAllows(s.Cwd) {
 			continue
 		}
 		if n.listBlocked(s.SessionID, s.Cwd) {
@@ -495,6 +495,7 @@ func (n *Node) decorateState(s *proto.Session, managesModel bool) (sessionState,
 	if ok {
 		s.StartedByPersona = true
 		s.Launcher = st.Launcher
+		s.SetCreationID(st.CreationID)
 		s.OffLauncher = n.offLauncher(s.SessionID) // its claude not started by Persona's command (offlauncher.go)
 		if st.TaskExecution {
 			classifyTaskTurnFailure(s)
@@ -503,10 +504,10 @@ func (n *Node) decorateState(s *proto.Session, managesModel bool) (sessionState,
 			model := st.Model
 			s.RequestedModel = &model
 		}
-		// A row without a pane is listed where its record says it started, when that is an assistant or health
+		// A row without a pane is listed where its record says it started, when that is an assistant or space
 		// directory: not where a `cd` in its transcript left it (#2368). A pane's directory is its host's.
-		if identity.InHealthSpace(st.Cwd) {
-			s.Space = identity.SpaceHealth
+		if sp := identity.SpaceAt(st.Cwd); sp != "" {
+			s.Space = sp
 		}
 		if s.Cwd == "" || s.PaneID == "" && identity.IsAssistantDir(st.Cwd) {
 			s.Cwd = st.Cwd

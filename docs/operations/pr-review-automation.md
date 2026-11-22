@@ -2,7 +2,7 @@
 
 This maintainer-side service watches explicitly configured GitHub repositories, performs an independent semantic code review, runs the configured lightweight or repository checks, and can squash-merge a passing exact head. It is not part of the Persona hub, does not add an Assistant or Agents UI, and does not change hosted CI or repository rulesets.
 
-**Main verification is a separate responsibility.** The Persona and Persona Extensions maintainer queues use `semantic_only`: they do not repeat full build/vet, cross-platform or full-test suites on every PR. New `main` commits are checked and repaired by `main-verify-fix-loop` (`docs/operations/main-verification.md`), not by this PR watcher. Other repositories retain their configured full-verification profiles.
+**Local-runner evidence is required before an automatic merge of this repository.** The watcher may use `semantic_only` for its own verification, but a repository writer must separately attest the dedicated runner result on the exact PR head (see below). Post-merge `main` verification by `main-verify-fix-loop` (`docs/operations/main-verification.md`) is an additional check. Other repositories retain their configured full-verification profiles.
 
 The implementation is `scripts/operations/pr_watch.py`. It replaces a local focused-test-only watcher whose comments explicitly disclaimed semantic review. A pre-existing GitHub comment or review is **not** a verification credential: only this service's versioned record for `(repository, PR number, head SHA)` can satisfy its own gates. The sole exception is the opt-in `respect_human_reviews` policy described below, which accepts only a real human user's review on the exact head as an alternative *semantic* evidence source and leaves every other gate intact.
 
@@ -21,6 +21,35 @@ Every new, open, non-draft PR head goes through independent gates. A PR whose ti
 New commits invalidate all previous results. Duplicate comments are suppressed per head: publication history is kept by head, outside the evidence record that a moved base replaces, so re-reviewing an unchanged head after `main` moves publishes a head's findings once and afterwards only a P0 at a new path and line, posting that P0 alone, and posts the success review once (#11738, #12302). Merge failures use bounded exponential backoff; an unchanged conflict may use a bounded repair round instead of waiting forever for a new head. A contributor branch is only changed by the explicit maintainer-authorized repair flow: a normal main-merge or repair commit, never a force-push. A fork is never written; a continuation PR is used instead. Each watcher's state is private, so before reviewing or repairing a fork PR the watcher looks on GitHub for an open or merged `fix: continue #N verification repair` PR that already contains the fork's current head, whoever published it, and leaves the fork to that continuation instead of opening another (#10881). A fork head pushed later gets a fresh review. Other people's review threads are never resolved automatically.
 
 Before publishing a fork continuation, the watcher checks GitHub again. It matches continuation references in the title or body and reuses an open continuation that contains the current fork head, or one merged after the fork head commit's committer timestamp. The watcher saves either lookup's result against the fork head SHA, so a restart or an advance of the base branch does not restart repair for the same fork head.
+
+
+### Dedicated local-runner merge evidence
+
+Automatic merges of this repository additionally require the latest GitHub commit status with context
+`persona/local-gate` on the exact PR head. The status must be `success`, created by a user who currently has
+repository write, maintain or admin permission. A human review, hosted check, cached semantic pass or the
+privacy merge wrapper cannot substitute for this evidence. Missing, pending, failed, unreadable or malformed
+statuses block merging with a stored diagnostic and a deduplicated PR comment. A newer failure supersedes an
+older success. This guard is mandatory even for `semantic_only` verification and merge retries.
+
+The maintainer or trusted local-runner adapter publishes this attestation **only after** collecting a completed
+run from the dedicated runner, checking its full `COMMIT` against the PR head, and recording the selected shards
+and sanitized result in the PR. Use description `EXIT_CODE=0` for a successful run. If existing failures remain,
+run the same shards on the fixed base with the same environment, compare concrete failure identities, record both
+runs and the comparison in the PR, and use `BASE=<full current base SHA> NEW_FAILURES=0`. A changed base invalidates
+that exception. A timeout, interrupted SSH connection, missing shard or unclassified failure is not a pass.
+Never publish raw runner logs, machine names, private paths or addresses to GitHub.
+
+For example, after validating and recording a successful runner result, publish its status with:
+
+```sh
+gh api --method POST "repos/<owner>/<repo>/statuses/<full head SHA>" \
+  -f context=persona/local-gate -f state=success -f description='EXIT_CODE=0'
+```
+
+The status is a repository writer's attestation of local-runner evidence, not an independently executed hosted
+check. The watcher reads it directly from GitHub immediately before invoking the exact-head merge wrapper; it
+never manufactures this status from its own lightweight checks. Other repositories retain their configured gates.
 
 ## Closing PRs after a week without progress
 

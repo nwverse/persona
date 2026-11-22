@@ -243,6 +243,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	// The last look, on the machine it will really start on (a retry, a remedy, a recovered start and a flexible task moved
 	// by the health check all pass here): a task leader never starts on a work-trust computer.
+	if assistantWorkspace(m, t.Cwd) {
+		return "", "", i18n.Err("rpc-errors.agent_assistant_workspace")
+	}
 	if err := s.leaderOnWorkMachine(t, m); err != nil {
 		return "", "", err
 	}
@@ -401,9 +404,10 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		rules = append(rules, brief)
 	}
 	// The project background, and the decisions of the todo and its continuation ancestors (a task started again may
-	// have some), follow the assignment; they remain user context, never framework policy.
-	supervisor := s.taskSupervisorOf(t)
-	background := s.projectHandoffContextForTodo(ctx, m.ID, t.Cwd, supervisor, s.todoForPlanContext(t))
+	// have some), follow the assignment; they remain user context, never framework policy. Direction notes are prompt
+	// context, separate from the main supervision ledger (#10623, #5732).
+	direction := s.taskDirectionOf(ctx, t)
+	background := s.projectHandoffContextForTodo(ctx, m.ID, t.Cwd, direction, s.todoForPlanContext(t))
 	var repoPaths []string
 	if t.backendWorkspace() {
 		for _, repo := range t.WorkspaceResolved.Repositories {
@@ -411,7 +415,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 				continue
 			}
 			repoPaths = append(repoPaths, repo.AbsolutePath)
-			if info := s.projectHandoffContext(ctx, m.ID, repo.AbsolutePath, supervisor); info != "" {
+			if info := s.projectHandoffContext(ctx, m.ID, repo.AbsolutePath, direction); info != "" {
 				background = strings.TrimSpace(background + "\n\n" + repo.AbsolutePath + "\n" + info)
 			}
 		}

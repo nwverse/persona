@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/identity"
 )
 
 // The assistant's own conversations are denied the health space's directory and its Claude project directory, for
@@ -106,5 +108,39 @@ func TestHealthDenyRulesEveryManager(t *testing.T) {
 		if slices.ContainsFunc(rules, func(r string) bool { return strings.Contains(r, "/"+filepath.Base(c.cwd)+"/") }) {
 			t.Fatalf("%s: its own space denied: %q", c.cwd, rules)
 		}
+	}
+}
+
+// The tracks a manager names (assistant.prepare deny_dirs, #13104) are denied like the health space, except to a
+// conversation in that track, and a conversation in one is told as that track's; a name outside the state directory
+// or with a bad slug is dropped; a later list from the same directory replaces the earlier one.
+func TestDenyDirs(t *testing.T) {
+	n, home := testNode(t)
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Cleanup(func() { identity.SetTrackDirs(".persona/assistant", nil) })
+	assistant := filepath.Join(home, ".persona", "assistant")
+	finance := filepath.Join(home, ".persona", "tracks", "qa-finance")
+	n.setDenyDirs(".persona/assistant", []denyDir{{".persona/tracks/qa-finance", "qa-finance"}, {"../elsewhere", "qa-x"}, {"/etc", "qa-y"},
+		{".persona", "qa-z"}, {".persona/tracks/BAD", "BAD"}})
+	if got := namedDenyDirs(); !slices.Equal(got, []string{finance}) {
+		t.Fatalf("kept %q, want only %s", got, finance)
+	}
+	if got := identity.SpaceAt(filepath.Join(finance, "notes")); got != "qa-finance" {
+		t.Fatalf("a folder in the track is told as %q", got)
+	}
+	if rules := n.healthDenyRules(assistant); !slices.Contains(rules, "Read(/"+finance+"/**)") || !slices.Contains(rules, "Edit(/"+finance+"/**)") {
+		t.Fatalf("the assistant's conversation may read the track: %q", rules)
+	}
+	if rules := n.healthDenyRules(finance); slices.ContainsFunc(rules, func(r string) bool { return strings.Contains(r, "qa-finance") }) {
+		t.Fatalf("a conversation of the track is denied its own: %q", rules)
+	}
+	n.setDenyDirs(".persona/assistant", []denyDir{})
+	if rules := n.healthDenyRules(assistant); slices.ContainsFunc(rules, func(r string) bool { return strings.Contains(r, "qa-finance") }) {
+		t.Fatalf("an emptied list still denies: %q", rules)
+	}
+	// What is named is forgotten; the default layout (tracks/<slug>) is still told by its shape (identity.SpaceAt).
+	if got := identity.TrackDirs(); len(got) != 0 {
+		t.Fatalf("an emptied list still names %v", got)
 	}
 }

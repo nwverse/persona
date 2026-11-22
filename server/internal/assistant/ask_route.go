@@ -186,7 +186,7 @@ func (s *Service) askLadder(ctx context.Context, ix proto.Interaction) (ladder [
 		lead, _ = s.supervisorAboveTask(ctx, t)
 	}
 	if ix.Kind == proto.IxScreen {
-		if s.ixInHealth(ctx, ix) || s.todoInHealth(ctx, t) {
+		if s.ixPolicy(ctx, ix).ConfirmOutbound || s.todoPolicy(ctx, t).ConfirmOutbound {
 			return nil, "", "", false
 		}
 		if lead == "" || lead == cfg.Main {

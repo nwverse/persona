@@ -6,7 +6,7 @@
 // remembered per card: what it was asked, what it reported (a long report folds), its last tool and its output file.
 // A background subagent's call returns at once with a launch receipt, which is not its result: the card runs until its
 // report comes back as a notice.
-import { memo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { t } from "../../i18n";
 import { agentSummary, isLaunchReceipt, modelChipLabel, subagentCardKey, subagentEnded, subagentFor, subagentTitle } from "../../lib/tasks";
 import { compactTokens } from "../../lib/tokens";
@@ -19,6 +19,7 @@ import { useChatContext } from "./chat-context";
 import { useExpanded } from "./expanded";
 import { isHandbackText } from "./FoldedReport";
 import { useFullText } from "./FullText";
+import { StepTelemetry } from "./StepTelemetry";
 import { ModelChip, RunningFor, TaskCard } from "./TaskCard";
 
 /** A one-line piece of a call's input: whitespace runs as one space, at most `max` characters (never half of one). */
@@ -64,10 +65,16 @@ export const SubagentCard = memo(function SubagentCard({ step, status, mid, sid,
   const prompt = typeof inp.prompt === "string" ? inp.prompt : "";
   const title = compactText(description || (meta ? subagentTitle(meta) : "") || prompt, 96) || t("chat-subagentcard.untitled_task");
   const notes = use.tool_use_id ? tasks.notes.get(use.tool_use_id) : undefined;
-  const reports = use.tool_use_id ? tasks.reports.get(use.tool_use_id) ?? [] : [];
+  const reportsList = use.tool_use_id ? tasks.reports.get(use.tool_use_id) : undefined;
+  const reports = reportsList ?? [];
   const start = tsMs(meta?.started_at) ?? tsMs(use.ts) ?? undefined;
   const end = running ? undefined : subagentEnded(result, meta);
+  const tookMs = start !== undefined && end !== undefined && end > start ? end - start : null;
   const took = start !== undefined && end !== undefined && end >= start ? workDuration(end - start) : "";
+  const stepItems = useMemo(
+    () => Array.from(new Map([use, result, ...(reportsList ?? [])].filter((it): it is Item => Boolean(it)).map((it) => [it.id, it])).values()),
+    [use, result, reportsList],
+  );
   // the Persona chat's own calls: what ran it is Persona itself, not a tool its reader works with
   const m = subagentMeta(meta, took, lineStyle === "assistant" ? undefined : (harness ?? agentName("claude")));
   const parts = [
@@ -93,6 +100,7 @@ export const SubagentCard = memo(function SubagentCard({ step, status, mid, sid,
     >
       <Collapse open={open} lazy>
         <div className="mt-2 border-l-2 border-tool-rail pl-3 text-[13px] leading-5 text-ink-2" data-subagent-details>
+          <StepTelemetry items={stepItems} durationMs={tookMs} className="mb-1.5" />
           {(prompt || description) && <p className="mb-1" data-subagent-prompt>{compactText(prompt || description, 260)}</p>}
           <SubagentResult item={resultItem(result, reports)} fallback={running ? "" : reportOf(result, notes) || agentSummary(result, meta)} mid={mid} sid={sid} />
           {meta?.last_tool?.name && <p className="text-[12px] leading-4 text-ink-3" data-subagent-last-tool>{t("chat-subagentcard.last_tool", { tool: meta.last_tool.name })}</p>}

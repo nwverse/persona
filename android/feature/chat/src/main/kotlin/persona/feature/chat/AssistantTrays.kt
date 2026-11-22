@@ -60,8 +60,8 @@ import persona.core.domain.tasks.orphanedLine
 import persona.core.domain.tasks.TasksStore
 import persona.core.domain.tasks.assistantEntries
 import persona.core.domain.tasks.finishedSummary
+import persona.core.domain.tasks.showsJustFinished
 import persona.core.domain.tasks.triage
-import persona.core.domain.tasks.TriageSection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import persona.core.domain.tasks.HeldPushItem
@@ -838,7 +838,7 @@ private fun FinishedRow(entry: FinishedEntry, host: AssistantTaskHost, feed: Lis
         if (entry.fresh && host.tasks.features?.value?.contains("todo_seen") == true) scope.launch {
             try {
                 val placed = todo.triage({ sessions[it] }, System.currentTimeMillis())
-                if (placed.section == TriageSection.JustDone) host.tasks.setTodoSeen(todo.id, true, after = placed.last)
+                if (todo.showsJustFinished(placed, System.currentTimeMillis())) host.tasks.setTodoSeen(todo.id, true, after = placed.last)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Throwable) {

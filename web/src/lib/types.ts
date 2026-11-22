@@ -323,6 +323,8 @@ export interface Session {
   context_tokens?: number;
   context_restart_recommended?: boolean;
   context_window?: number;
+  /** Structured context window occupancy split with exact/estimated honesty marker (proto.ContextBreakdown, #12542). */
+  context_breakdown?: ContextBreakdown;
   /** The levels `effort` may be set to when they are not Claude Code's: a Codex thread driven through its app-server (only its effort changes; docs/protocol/protocol.md). */
   efforts?: string[];
   /** Native Codex speed. Absent while the current setting is unknown. */
@@ -498,6 +500,18 @@ export interface Session {
   runtime_fallback?: string;
   /** The last compaction the user asked for in an assistant conversation (POST …/compact, #1727). */
   compaction?: Compaction;
+}
+
+/** Structured context window occupancy split with exact/estimated honesty marker (proto.ContextBreakdown, #12542).
+ *  Omitted categories are unavailable; explicit 0 means genuinely zero. */
+export interface ContextBreakdown {
+  source: "exact" | "estimated";
+  system_and_rules?: number;
+  tools_and_mcp?: number;
+  conversation?: number;
+  tool_outputs?: number;
+  free?: number;
+  auto_compact_threshold?: number;
 }
 
 /** A compaction the user asked for (proto.Compaction): running, done or failed (`error` says why). */
@@ -729,6 +743,9 @@ export interface Item {
    *  a Claude Code request's on its first item, a Codex turn's total on its turn_duration item, a finished subagent's on
    *  its result or notice. Absent from older nodes. lib/turn-usage.ts sums an exchange's into its usage. */
   usage?: TokenUsage[];
+  /** Observed time-to-first-token in milliseconds during live streaming execution (proto.Item.TTFTMS, #12542).
+   *  Absent when not observed (e.g. historical replays); 0 is a valid observed value. */
+  ttft_ms?: number;
   /** A message Persona typed in for the model (a task's notice, a scheduled run…), not by you (lib/injected.ts). */
   injected?: Injected;
   /** Display provenance, independent of the model-facing role. Unknown kinds remain non-user sources. */

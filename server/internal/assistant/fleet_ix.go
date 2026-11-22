@@ -260,7 +260,7 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 		}
 	}
 	inAssistant := s.ixInAssistant(ctx, ix)
-	ix = nodeCard(ix, s.fleetStore() != nil, s.ixInHealth(ctx, ix), inAssistant)
+	ix = nodeCard(ix, s.fleetStore() != nil, s.ixPolicy(ctx, ix).ConfirmOutbound, inAssistant)
 	if ix.Kind == proto.IxPermission {
 		l := s.lang(ctx)
 		ix.ToolTitle = personaToolTitle(l, ix.ToolName, ix.ToolInput)
@@ -1233,16 +1233,16 @@ const maxAlwaysKeys = 32
 // nodeCard is a node's card as the apps get it. On an assistant conversation (assistant) only the manager keeps
 // Always (its agent is given no session rule): honored when the manager will remember the keys the card names
 // (remembering is a conversation's store), not when it names keys it will not (too many, a card with fields, no store),
-// names none (a gated command confirmed whole: nothing narrower to keep, #9075) or is a health conversation's
-// (confirmed each time). Any other node card keeps the apps' own rule (an Agents session's agent keeps it itself). A
+// names none (a gated command confirmed whole: nothing narrower to keep, #9075) or is a card of a space that confirms
+// (confirms: confirmed each time). Any other node card keeps the apps' own rule (an Agents session's agent keeps it itself). A
 // node names no tool for people, and has no say in either: only the manager does, on its own cards and on a node's
 // card for one of Persona's own MCP tools (personaToolTitle).
-func nodeCard(ix proto.Interaction, remembers, health, assistant bool) proto.Interaction {
+func nodeCard(ix proto.Interaction, remembers, confirms, assistant bool) proto.Interaction {
 	ix.AlwaysHonored, ix.ToolTitle, ix.ToolNameTitle = nil, "", ""
-	if ix.Kind != proto.IxPermission || ix.SessionID == "" || (len(ix.AlwaysKeys) == 0 && !health && !assistant) {
+	if ix.Kind != proto.IxPermission || ix.SessionID == "" || (len(ix.AlwaysKeys) == 0 && !confirms && !assistant) {
 		return ix
 	}
-	kept := remembers && !health && alwaysCard(ix)
+	kept := remembers && !confirms && alwaysCard(ix)
 	ix.AlwaysHonored = &kept
 	return ix
 }

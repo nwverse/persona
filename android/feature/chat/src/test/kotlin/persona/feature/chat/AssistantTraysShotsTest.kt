@@ -511,6 +511,7 @@ class AssistantTraysShotsTest {
         fixture.sessionRows.value = fixture.sessionRows.value + stopped
         fixture.returnedTodos = todoRows + Todo("task-d", stopped.title, origin = "main", agents = listOf(TodoAgent(stopped.machineId, stopped.sessionId)),
             prUrl = "https://github.com/example/project/pull/57",
+            prStatus = TodoPRStatus(url = "https://github.com/example/project/pull/57", state = "open", checkedAt = Instant.now().toString()),
             check = TodoCheck("waiting", "Waiting for CI to finish", "2026-11-01T10:00:00Z", "2026-11-01T09:00:00Z"))
         fixture.tasks.reloadTodos()
         fixture.requests.value = emptyList(); fixture.drafts.value = emptyList()
@@ -915,7 +916,11 @@ class AssistantTraysShotsTest {
     private fun completedConclusion(outcome: String) {
         val fixture = Fixture()
         val ask = TodoAsk(outcome = outcome, verdict = "Please acknowledge the completed conclusion.", askedAt = "2026-11-01T09:00:00Z")
-        fixture.returnedTodos = listOf(todoRows.first().copy(ask = ask, doneAt = "2026-11-01T09:00:00Z"))
+        // The work is delivered but not accepted yet, so the task stays open. A done_at row belongs in Finished
+        // and never carries a review action (#12977), so this scenario must not mark it completed prematurely.
+        fixture.returnedTodos = listOf(todoRows.first().copy(ask = ask))
+        // This decision, not a different task's permission, owns the row under test.
+        fixture.requests.value = listOf(planRequest, question)
         fixture.tasks.reloadTodos()
         rule.mainClock.autoAdvance = false
         rule.setContent { PersonaTheme(reduceMotion = true) {
@@ -924,6 +929,7 @@ class AssistantTraysShotsTest {
         } }
         settle()
         rule.onNodeWithTag("assistant-entry-needs").performClick(); settle()
+        rule.waitUntil(15_000) { rule.onAllNodesWithTag("assistant-review-todo:task-a", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithTag("assistant-review-todo:task-a").performScrollTo().performClick(); settle()
         rule.mainClock.advanceTimeBy(1_500); settle()
         rule.onNode(hasText(ask.verdict) and hasAnyAncestor(isDialog())).assertIsDisplayed()

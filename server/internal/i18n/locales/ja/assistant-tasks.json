@@ -73,6 +73,8 @@
   "interrupt_summary": "{agent} · {machine} を止める",
   "resume_note": "{agent} · {machine} を再開しました（同じセッション、これまでの文脈のまま）：{why}",
   "start_remedy_notice": "開始できませんでした：「{title}」。{reason}",
+  "task_needs_user_title": "「{name}」で対応が必要です",
+  "task_needs_user_title_health": "タスクで対応が必要です",
   "admission_no_metrics": "このコンピューターはリソース指標をまだ報告していません。",
   "admission_stale": "このコンピューターのリソース指標が古くなっています。",
   "admission_no_cores": "このコンピューターのコア数が報告されていません。",
