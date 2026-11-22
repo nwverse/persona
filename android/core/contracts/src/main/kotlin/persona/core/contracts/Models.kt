@@ -48,11 +48,103 @@ val JsonCodec = Json {
  */
 fun parseTime(s: String?): Instant? {
     if (s.isNullOrEmpty()) return null
+    val fast = parseRfc3339Fast(s)
+    if (fast != ParseTimeFallback) return fast
     val instant = runCatching { OffsetDateTime.parse(s).toInstant() }.recoverCatching { Instant.parse(s) }.getOrNull()
     return instant?.takeUnless { it.isBefore(EarliestTime) }
 }
 
 private val EarliestTime: Instant = Instant.parse("2000-01-01T00:00:00Z")
+private const val EARLIEST_EPOCH_SEC: Long = 946_684_800L // 2000-01-01T00:00:00Z
+private val ParseTimeFallback: Instant = Instant.MIN
+
+/**
+ * Zero-allocation fast path for standard RFC 3339 timestamps (`YYYY-MM-DDTHH:MM:SS[.nanos](Z|±HH:MM)`).
+ * Returns [ParseTimeFallback] for non-standard inputs so the caller falls back to `java.time`.
+ */
+private fun parseRfc3339Fast(s: String): Instant? {
+    val len = s.length
+    if (len < 20) return ParseTimeFallback
+    if (s[4] != '-' || s[7] != '-' || (s[10] != 'T' && s[10] != 't') || s[13] != ':' || s[16] != ':') {
+        return ParseTimeFallback
+    }
+    val year = parseDigits(s, 0, 4)
+    val month = parseDigits(s, 5, 2)
+    val day = parseDigits(s, 8, 2)
+    val hour = parseDigits(s, 11, 2)
+    val minute = parseDigits(s, 14, 2)
+    val second = parseDigits(s, 17, 2)
+    if (year < 0 || month !in 1..12 || day < 1 || hour !in 0..23 || minute !in 0..59 || second !in 0..59) {
+        return ParseTimeFallback
+    }
+    if (day > daysInMonth(year, month)) return ParseTimeFallback
+
+    var idx = 19
+    var nano = 0
+    if (idx < len && s[idx] == '.') {
+        idx++
+        val fracStart = idx
+        var mult = 100_000_000
+        while (idx < len) {
+            val d = s[idx] - '0'
+            if (d !in 0..9) break
+            if (mult == 0) return ParseTimeFallback // >9 fractional digits: fallback
+            nano += d * mult
+            mult /= 10
+            idx++
+        }
+        if (idx == fracStart) return ParseTimeFallback
+    }
+    if (idx >= len) return ParseTimeFallback
+
+    val offsetSec: Int
+    val tz = s[idx]
+    if ((tz == 'Z' || tz == 'z') && idx + 1 == len) {
+        offsetSec = 0
+    } else if ((tz == '+' || tz == '-') && idx + 6 == len && s[idx + 3] == ':') {
+        val offH = parseDigits(s, idx + 1, 2)
+        val offM = parseDigits(s, idx + 4, 2)
+        if (offH !in 0..18 || offM !in 0..59) return ParseTimeFallback
+        val total = offH * 3600 + offM * 60
+        if (total > 18 * 3600) return ParseTimeFallback
+        offsetSec = if (tz == '+') total else -total
+    } else {
+        return ParseTimeFallback
+    }
+
+    val epochDays = daysFromCivil(year, month, day)
+    val epochSec = epochDays * 86_400L + hour * 3600L + minute * 60L + second - offsetSec
+    if (epochSec < EARLIEST_EPOCH_SEC) return null
+    return Instant.ofEpochSecond(epochSec, nano.toLong())
+}
+
+private fun parseDigits(s: String, start: Int, count: Int): Int {
+    var acc = 0
+    for (i in start until start + count) {
+        val d = s[i] - '0'
+        if (d !in 0..9) return -1
+        acc = acc * 10 + d
+    }
+    return acc
+}
+
+private fun daysInMonth(year: Int, month: Int): Int = when (month) {
+    1, 3, 5, 7, 8, 10, 12 -> 31
+    4, 6, 9, 11 -> 30
+    2 -> if ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0) 29 else 28
+    else -> 0
+}
+
+/** Howard Hinnant's exact civil-date-to-Unix-epoch-days algorithm. */
+private fun daysFromCivil(year: Int, month: Int, day: Int): Long {
+    val y = (if (month <= 2) year - 1 else year).toLong()
+    val era = (if (y >= 0) y else y - 399) / 400
+    val yoe = y - era * 400
+    val mp = month + (if (month > 2) -3 else 9)
+    val doy = (153L * mp + 2) / 5 + day - 1
+    val doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+    return era * 146_097L + doe - 719_468L
+}
 
 @KeepGeneratedSerializer
 @Serializable(with = MachineSerializer::class)
