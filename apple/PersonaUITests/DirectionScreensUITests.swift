@@ -8,8 +8,8 @@ import XCTest
 /// PERSONA_SHOT_LANG names (en by default); SHOT_DIR keeps the screenshots, SHOT_SUFFIX names the run (appearance,
 /// text size, device). The simulator's appearance and text size are the run's (`xcrun simctl ui`). The off walk's
 /// "manager" case (PERSONA_OFF_CASE=manager) runs on a second mock started with MOCK_SESSIONS_LIST=1 as well
-/// (PERSONA_OFF_MANAGER_HUB); the other manager's own conversation does not reach its page there either, so that
-/// case compares the page's Main Chat row.
+/// (PERSONA_OFF_MANAGER_HUB), the setup its main-vs-branch pairs were taken with; the paged list brings nothing to the
+/// other manager's page, whose own conversation does not reach it, so that case compares the page's Main Chat row.
 /// PERSONA_SHOT_NAV pins the layout (`sidebar`, `separate`; `auto` leaves the app's default).
 final class DirectionScreensUITests: XCTestCase {
     private var hub: String!
@@ -573,8 +573,9 @@ final class DirectionScreensUITests: XCTestCase {
         guard let off = ProcessInfo.processInfo.environment["PERSONA_OFF_CASE"], !off.isEmpty else {
             throw XCTSkip("PERSONA_OFF_CASE=none|feature|manager|missing")
         }
-        // That case runs against a mock with MOCK_SESSIONS_LIST=1 too (PERSONA_OFF_MANAGER_HUB). 工作's own chat there
-        // does not reach its page either: the conversation compared below is its Main Chat row.
+        // That case runs against a mock with MOCK_SESSIONS_LIST=1 too (PERSONA_OFF_MANAGER_HUB), the setup its pairs
+        // with main were taken with. 工作's own chat does not reach its page there either: the conversation compared
+        // below is its Main Chat row.
         if off == "manager" {
             guard let paged = ProcessInfo.processInfo.environment["PERSONA_OFF_MANAGER_HUB"], !paged.isEmpty else {
                 XCTFail("PERSONA_OFF_MANAGER_HUB: the manager case needs a mock with MOCK_LEADERS=1 "

@@ -261,10 +261,14 @@ final class DirectionRowsUITests: XCTestCase {
         XCTAssertTrue(rowCounts.hasPrefix("等你"), "the row says what waits on you: \(rowCounts)")
         let header = app.descendants(matching: .any)["direction-page-in-progress"].firstMatch.label
         XCTAssertTrue(header.contains(rowCounts), "the page says the same: \(header) / \(rowCounts)")
-        // ‹ goes back to the lead conversation, not to the drawer
+        // ‹ goes back to the lead conversation, not to the drawer; an iPad's sidebar column stays beside it.
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(page.waitForNonExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["sidebar-direction-all"].isHittable, "back at the conversation, the drawer closed")
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            XCTAssertTrue(app.buttons["sidebar-direction-all"].isHittable, "back at the conversation, the column still there")
+        } else {
+            XCTAssertFalse(app.buttons["sidebar-direction-all"].isHittable, "back at the conversation, the drawer closed")
+        }
     }
 
     @MainActor func testMoveToThenUndoRestoresTheBook() throws {

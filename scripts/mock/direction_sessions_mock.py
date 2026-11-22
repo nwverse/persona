@@ -17,8 +17,9 @@ needing its row; the background supervisor refused; a listed session filed with 
 changes the book pushes `directions`, as the hub publishes on a change.
 With MOCK_DIRECTION_SESSIONS on, GET /api/v1/assistant gives the second manager (工作) a conversation of its own. The
 app does not show it on 工作's page (before #11516 and after), so DirectionScreensUITests' "manager" off case compares
-that page's Main Chat row instead; the case runs on a second mock started with MOCK_SESSIONS_LIST=1 as well
-(PERSONA_OFF_MANAGER_HUB).
+that page's Main Chat row instead. The case runs on a second mock started with MOCK_SESSIONS_LIST=1 as well
+(PERSONA_OFF_MANAGER_HUB): the paged list brings nothing to that page, but it is the setup the case's main-vs-branch
+pairs were taken with.
 
 GET /mock/direction_sessions?… changes how it answers from now on (each optional; GET /mock/reset puts all back):
   routes=missing|on       the routes answer 404 without their codes / as above
