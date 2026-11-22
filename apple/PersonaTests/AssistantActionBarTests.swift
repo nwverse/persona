@@ -37,6 +37,13 @@ struct AssistantActionBarTests {
         return decode(s)
     }
 
+    private func errorSession(_ id: String, kind: String? = nil) -> Session {
+        var s = session(id, "idle")
+        s.turnError = "model failed"
+        s.turnErrorKind = kind
+        return s
+    }
+
     private func ask(_ id: String, session: String, at: Double = 3) -> Interaction {
         decode(["id": id, "machine_id": "mac", "session_id": session, "kind": "question", "created_at": iso(at),
                 "questions": [["question": "Which one?", "options": [["label": "A"], ["label": "B"]]]]])
@@ -260,6 +267,65 @@ struct AssistantActionBarTests {
         #expect(split([opened], [session("b", "idle")]).finished.map { [$0.id, "\($0.fresh)"] } == [["task:newer", "false"]])
         // another conversation lists only the finished work it handed out
         #expect(split([newer], [session("b", "idle")], conversation: "side").finished.isEmpty)
+    }
+
+    /// Seeing an unaccepted delivery clears only Finished's new marker; it stays open and awaiting review (#5732).
+    @Test func seenAwaitingReviewStaysOpenButIsNotNewInFinished() {
+        var delivered = todo("delivered")
+        delivered.delivery = .init(state: "live", at: now - 2 * 3600)
+        let unseen = TodoTriageLogic.triage(delivered, lookup: nil, now: now)
+        #expect(unseen.section == .justDone && unseen.rule == .finishedUnseen)
+        #expect(AssistantEntries.showsJustFinished(delivered, unseen, now: now))
+
+        delivered.seenAt = now
+        let seen = TodoTriageLogic.triage(delivered, lookup: nil, now: now)
+        #expect(seen.section == .justDone && seen.rule == .finishedUnseen)
+        #expect(!AssistantEntries.showsJustFinished(delivered, seen, now: now))
+    }
+
+    /// Interruptions keep their own urgency even on an accepted or review-pending task; usage limits remain at rest for
+    /// acceptance, but do not masquerade as an ordinary awaiting-review follow-up (#5732).
+    @Test func activeErrorsKeepTheirRankAcrossReviewStates() {
+        var accepted = todo("accepted", agent: "a", supervision: "accepted")
+        accepted.supervision?.reviews = [.init(verdict: "accepted")]
+        let pending = todo("pending", agent: "p", supervision: "pending_review")
+        let interruptedA = errorSession("a"), interruptedP = errorSession("p")
+        let limitedA = errorSession("a", kind: "usage_limit"), limitedP = errorSession("p", kind: "usage_limit")
+        let interruptedAccepted = AssistantEntries.todoStatus(accepted, lookup: { _, _ in interruptedA })
+        #expect(interruptedAccepted == .interrupted)
+        #expect(AssistantEntries.rank(accepted, interruptedAccepted) == 1)
+        let interruptedPending = AssistantEntries.todoStatus(pending, lookup: { _, _ in interruptedP })
+        #expect(interruptedPending == .interrupted)
+        #expect(AssistantEntries.rank(pending, interruptedPending) == 1)
+        let limitedAccepted = AssistantEntries.todoStatus(accepted, lookup: { _, _ in limitedA })
+        #expect(limitedAccepted == .usageLimit)
+        #expect(AssistantEntries.rank(accepted, limitedAccepted) == 8)
+        let limitedPending = AssistantEntries.todoStatus(pending, lookup: { _, _ in limitedP })
+        #expect(limitedPending == .usageLimit)
+        #expect(AssistantEntries.rank(pending, limitedPending) == 1.5)
+    }
+
+    @Test(arguments: ["decide", "cannot"])
+    func acceptedOwnerDecisionKeepsNeedsYouRank(outcome: String) {
+        var accepted = todo("accepted", agent: "a", supervision: "accepted",
+                            ask: ["verdict": "Choose the rollout", "asked_at": iso(2), "outcome": outcome])
+        accepted.supervision?.reviews = [.init(verdict: "accepted")]
+        #expect(accepted.waitsForOwner)
+        #expect(AssistantEntries.rank(accepted, .followUp) == 0)
+        let result = split([accepted], [session("a", "idle")])
+        #expect(ids(result.needsYou) == ["task:accepted"])
+        #expect(result.running.isEmpty)
+    }
+
+    @Test(arguments: ["decide", "cannot"])
+    func acceptedDismissedOwnerDecisionRestoresAcceptedRank(outcome: String) {
+        var accepted = todo("accepted", agent: "a", supervision: "accepted",
+                            ask: ["verdict": "Choose the rollout", "asked_at": iso(2), "outcome": outcome])
+        accepted.supervision?.reviews = [.init(verdict: "accepted")]
+        accepted.decisionReview = DecisionReview(reviewAt: iso(2), dismissalID: "dismiss-current-round")
+        #expect(accepted.decisionDismissed)
+        #expect(!accepted.waitsForOwner)
+        #expect(AssistantEntries.rank(accepted, .followUp) == 8)
     }
 
     private func plan(_ id: String, _ state: TaskPlan.State, tasks: Int, at: Double) -> TaskPlan {

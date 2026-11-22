@@ -89,7 +89,7 @@ class HubSessionsRepository(
     init {
         scope.launch {
             for (request in persistRequests) {
-                runCatching { lock.withLock { persist() } }
+                val _ = runCatching { lock.withLock { persist() } }
                 delay(PERSIST_MILLIS)
             }
         }
