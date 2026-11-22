@@ -3167,3 +3167,7 @@ proxy. Container images must carry bubblewrap and allow its nested user namespac
 and mounts; test the actual runtime stage as a non-root user with no outer
 capabilities. Merely finding `bwrap` on PATH or skipping an unavailable real test
 is not evidence of isolation.
+
+## Shared runner mirrors
+
+- Versioned queue output can retain incomplete entries during a rolling upgrade. Preserve empty ticket, tag and commit fields as unknown; do not reject the whole snapshot or deduplicate an empty commit. Track an external lease by its stable run name when present: a legacy waiting ticket may be absent once that same run enters a slot. Keep the original ticket for display. A v1 result with null exit and empty run/finish time means no known result, not exit zero. Cover both transitions with scrubbed fixtures.

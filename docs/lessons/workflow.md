@@ -346,3 +346,5 @@ Apple builds, where a cold build costs the most:
 - After merging `main`, `cannot find 'persona_core_…'` means the Rust core's XCFramework is stale: run
   `native/app-core/scripts/build-apple.sh` first. If `ContinuityFixture` reports a wrong `fold_id` argument, delete the old
   `PersonaCore*.swiftmodule` at the root of `Build/Products/<config>/` in DerivedData.
+
+- Finish static review, generated tool snapshots and fixture corrections before queuing expensive shared-runner verification. A dedupe key prevents repeated submissions of one commit/group set; it cannot coalesce a series of intermediate commits. While a run waits, collect further fixes into one candidate instead of queuing each edit. Reuse an earlier shard result only when its relevant source is unchanged, and record the exact candidate and baseline commits in the PR.
