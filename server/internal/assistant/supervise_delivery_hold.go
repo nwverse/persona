@@ -28,6 +28,9 @@ func (s *Service) deliveryHoldSignal(ctx context.Context, t Todo, now time.Time)
 	if c := currentDelivery(t); c == nil || c.Unblock != unblockSupervisor {
 		return superviseSignal{}, false
 	}
+	if s.reporterStopped(ctx, t.Origin) {
+		return superviseSignal{}, false // signal would drop it under /stop (#3308): keep it untold until the user speaks
+	}
 	if !s.markDeliveryHoldTold(ctx, t.ID, d.At, now) {
 		return superviseSignal{}, false
 	}

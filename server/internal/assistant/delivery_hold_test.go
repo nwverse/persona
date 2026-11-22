@@ -148,3 +148,29 @@ func TestDeliveryHoldAfterNeedsUserIsTheOwners(t *testing.T) {
 		t.Fatalf("an owner's hold went to the supervisor: %v", got)
 	}
 }
+
+// A hold that comes due while its conversation is stopped (/stop, #3308) is not marked told, since nothing is queued
+// then: once the user speaks again it reaches the supervisor.
+func TestDeliveryHoldUnderStopWaitsForTheUser(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	ctx := context.Background()
+	s.markReporter(ctx, "box", todo.Origin)
+	s.setReporterStopped(ctx, todo.Origin, "app")
+	s.setTaskDelivery(ctx, todo.ID, TodoDelivery{State: deliveryPR, Gate: "等用户批授权卡实发验收", Unblock: unblockUser,
+		At: time.Now().Add(-2 * deliveryHoldSettle).UTC()})
+	s.superviseWatch(ctx, time.Now())
+	if !todoNow(s, todo.ID).Delivery.SupervisorTold.IsZero() {
+		t.Fatal("marked told while stopped, though nothing was queued")
+	}
+	s.setReporterStopped(ctx, todo.Origin, "")
+	before := len(f.notices())
+	s.superviseWatch(ctx, time.Now().Add(time.Hour))
+	waitFor(t, "the delivery hold message after /stop is lifted", func() bool {
+		for _, n := range f.notices()[before:] {
+			if strings.Contains(n, "signal=delivery_hold") {
+				return true
+			}
+		}
+		return false
+	})
+}
