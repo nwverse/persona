@@ -59,7 +59,7 @@ Use `handoff` for an already-stopped to-do you supervise. A node acknowledgement
     },
     "task": {
       "type": ["object", "null"],
-      "description": "new work: make it your supervised task first (main conversation only); null for a reply",
+      "description": "new work: make it your supervised task first (main or a lead); null for a reply",
       "additionalProperties": false,
       "properties": {
         "title": {
