@@ -436,3 +436,65 @@ func TestOpencodeAssistantAndSupervisionBoundary(t *testing.T) {
 		t.Fatalf("unexpected hub MCP calls: tools=%d calls=%d", len(calls.tools), len(calls.calls))
 	}
 }
+
+// Per-process opencode plugins (`opencode-<pid>`) keep modes/model capabilities and AgentLabel, and mergeOpencodeRow
+// carries permission_mode, effort, efforts, and launcher onto merged herdr rows.
+func TestOpencodePluginModesAndMergeParity(t *testing.T) {
+	n, f, _, rh := piHerdrNode(t)
+	rt := dialRuntimeAt(t, rh.path, map[string]any{
+		"runtime": "opencode-7777",
+		"agent":   "opencode",
+		"name":    "opencode",
+		"caps": map[string]any{
+			"send": true, "interrupt": true, "modes": true, "model": true, "readonly": true,
+		},
+	})
+	_ = rt.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{
+		{
+			"session_id":      "ses_oc_standalone_1",
+			"status":          "done",
+			"title":           "Standalone plugin chat",
+			"cwd":             "/w",
+			"model":           "opencode-go/claude-sonnet-4-6",
+			"permission_mode": "plan",
+			"effort":          "high",
+			"efforts":         []string{"low", "high"},
+			"launcher":        "opencode",
+		},
+		{
+			"session_id":      ocSID,
+			"status":          "working",
+			"title":           "Merged herdr chat",
+			"cwd":             "/w",
+			"model":           "opencode-go/claude-sonnet-4-6",
+			"permission_mode": "acceptEdits",
+			"effort":          "medium",
+			"efforts":         []string{"low", "medium", "high"},
+			"launcher":        "opencode",
+		},
+	}})
+	waitFor(t, "plugin rows listed", func() bool {
+		return rh.reg.ownerOf("ses_oc_standalone_1") != nil && rh.reg.ownerOf(ocSID) != nil
+	})
+	seedAgents(t, n, f, ocPaneAgent("w1:p9", "/w", ocSID, proto.StatusWorking))
+
+	all := listSessions(t, n)
+	standalone := onlyRow(t, all, "ses_oc_standalone_1")
+	if standalone.AgentLabel != "opencode" {
+		t.Fatalf("standalone AgentLabel = %q, want opencode", standalone.AgentLabel)
+	}
+	if standalone.Capabilities == nil || standalone.Capabilities.Modes == nil || !*standalone.Capabilities.Modes {
+		t.Fatalf("standalone Modes capability missing: %+v", standalone.Capabilities)
+	}
+	if standalone.Capabilities.Model == nil || !*standalone.Capabilities.Model {
+		t.Fatalf("standalone Model capability missing: %+v", standalone.Capabilities)
+	}
+	if standalone.PermissionMode != "plan" || standalone.Effort != "high" || len(standalone.Efforts) != 2 {
+		t.Fatalf("standalone mode/effort mismatch: %+v", standalone)
+	}
+
+	merged := onlyRow(t, all, ocSID)
+	if merged.PermissionMode != "acceptEdits" || merged.Effort != "medium" || len(merged.Efforts) != 3 || merged.Launcher != "opencode" {
+		t.Fatalf("merged herdr row missing mode/effort/launcher: %+v", merged)
+	}
+}

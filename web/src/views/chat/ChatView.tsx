@@ -705,6 +705,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const skillManager = useStore((s) => session?.manager ?? s.machines.find((m) => m.id === mid)?.manager) ?? shownManager;
   const skillEnvironment = JSON.stringify([session?.launcher, session?.model_pick, session?.pending_switch, session?.source_kind, assistantLauncher]);
   const mention = useMemo(() => ({ cwd: session?.cwd, self: draftKey, files: () => chatFiles(items.current), workspaces: Boolean(assistant),
+    repositories: assistant ? skillManager : undefined,
     skills: { manager: skillManager, session: sid, launcher: assistant ? skillLauncher : undefined, environment: skillEnvironment, agent: !assistant },
   }), [session?.cwd, skillManager, draftKey, assistant, sid, skillLauncher, skillEnvironment]);
 
@@ -816,22 +817,41 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   }, [stopGlide]);
   // something came in since the reader left the end: the pill says "New messages"
   const [newSince, setNewSince] = useState(false);
+  const sessionKey = `${mid}/${sid}`;
+  const readingAnchor = useRef<{ session: string; line: string; offset: number } | null>(null);
+  const captureReadingAnchor = useCallback((el: HTMLDivElement | null) => {
+    if (!el || atEnd.current) {
+      readingAnchor.current = null;
+      return;
+    }
+    const v = firstLineInView(el);
+    if (v.line) readingAnchor.current = { session: sessionKey, line: v.line, offset: v.offset };
+  }, [sessionKey]);
   const follow = useCallback((on: boolean) => {
     atEnd.current = on;
     setAway(!on);
     if (on) {
       setNewSince(false);
       landing.current = null;
+      readingAnchor.current = null;
+    } else {
+      captureReadingAnchor(scroller.current);
     }
-  }, []);
+  }, [captureReadingAnchor]);
   const lastTop = useRef(0);
   const dragging = useRef(false);
   const firstLiveSeq = earlier.liveItems[0]?.seq ?? Infinity;
   const liveFront = useRef(firstLiveSeq);
   liveFront.current = firstLiveSeq;
-  const historyScope = `${mid}/${sid}/${tr.history ?? ""}`;
+  const historyScope = `${sessionKey}/${tr.history ?? ""}`;
   const historyScopeNow = useRef(historyScope);
   historyScopeNow.current = historyScope;
+  const settledHistory = useRef<{ session: string; history: string; replaceEpoch: number }>({
+    session: sessionKey,
+    history: tr.history ?? "",
+    replaceEpoch: tr.replaceEpoch ?? 0,
+  });
+  const suppressAutoEarlier = useRef(false);
   type HistoryScrollAnchor = {
     el: HTMLDivElement; scope: string; front: ReturnType<typeof visibleHistoryFront>;
     h: number; top: number; readers: number; pages: Set<symbol>;
@@ -877,6 +897,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   useEffect(() => {
     lastTop.current = 0;
     before.current = null;
+    readingAnchor.current = null;
+    suppressAutoEarlier.current = false;
     if (kept.current.back) {
       if (kept.current.place) follow(false); // still waiting for its line: not pulled to the end meanwhile
       return;
@@ -907,9 +929,43 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     if (!el) return;
     const { projectedLivePage, projectedOtherPage } = earlier;
     projectedPages.current = [projectedLivePage, projectedOtherPage];
+    const prevHistory = settledHistory.current;
+    const nextHistory = tr.history ?? "";
+    const nextReplaceEpoch = tr.replaceEpoch ?? 0;
+    const historyRewritten = prevHistory.session === sessionKey && (
+      (prevHistory.history !== "" && nextHistory !== "" && prevHistory.history !== nextHistory) ||
+      nextReplaceEpoch !== prevHistory.replaceEpoch
+    );
+    settledHistory.current = { session: sessionKey, history: nextHistory, replaceEpoch: nextReplaceEpoch };
     let saved = before.current;
     if (saved && (saved.el !== el || saved.scope !== historyScope)) {
       before.current = saved = null;
+    }
+    if (historyRewritten) {
+      before.current = saved = null;
+      suppressAutoEarlier.current = true;
+      if (atEnd.current || first.current) {
+        el.scrollTop = el.scrollHeight;
+        lastTop.current = el.scrollTop;
+        if (tr.items.length) first.current = false;
+      } else {
+        const savedAnchor = readingAnchor.current?.session === sessionKey ? readingAnchor.current : null;
+        const escapedLine = savedAnchor ? (typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(savedAnchor.line) : savedAnchor.line.replace(/["\\]/g, "\\$&")) : "";
+        const anchorRow = savedAnchor && el.querySelector(`[data-line="${escapedLine}"]`)?.firstElementChild;
+        if (savedAnchor && anchorRow) {
+          el.scrollTop += anchorRow.getBoundingClientRect().top - el.getBoundingClientRect().top - savedAnchor.offset;
+          lastTop.current = el.scrollTop;
+          land(anchorRow, savedAnchor.offset);
+        } else {
+          // The replacement page no longer contains the previous anchor (e.g. shortened to latest turns or rewound).
+          // Settle cleanly at the end so a browser-clamped scrollTop (< 300) cannot trigger cascading upward paging.
+          follow(true);
+          el.scrollTop = el.scrollHeight;
+          lastTop.current = el.scrollTop;
+          if (tr.items.length) first.current = false;
+        }
+      }
+      return;
     }
     if (saved) {
       const front = visibleHistoryFront(el, firstLiveSeq);
@@ -941,6 +997,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     if (atEnd.current || first.current) {
       el.scrollTop = el.scrollHeight;
       if (tr.items.length) first.current = false;
+    } else if (!saved && (!readingAnchor.current || readingAnchor.current.session !== sessionKey)) {
+      captureReadingAnchor(el);
     }
     // Live updates below the viewport can change the height while a history page is held.
     // Record that change without spending the anchor needed for the eventual prepend.
@@ -948,7 +1006,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       saved.h = el.scrollHeight;
       saved.top = el.scrollTop;
     }
-  }, [tr.items, earlier.stretches, earlier.projectedLivePage, earlier.projectedOtherPage, pending, outbox, tr.streaming, interactions.length, historyScope, firstLiveSeq]);
+  }, [tr.items, earlier.stretches, earlier.projectedLivePage, earlier.projectedOtherPage, pending, outbox, tr.streaming, interactions.length, historyScope, firstLiveSeq, sessionKey, tr.history, tr.replaceEpoch, follow, land, captureReadingAnchor]);
 
   // A card that unfolds (#1124): following holds off for UNFOLD_PAUSE while the clicked row stays where it was on
   // screen (anchoredScroll), then picks up again if the end is still near; a long card opened at the end stays put to
@@ -966,6 +1024,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     };
     const readerMoves = () => {
       moved = true;
+      suppressAutoEarlier.current = false;
       drop();
       stopGlide();
       landing.current = null;
@@ -977,6 +1036,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       clearTimeout(resume);
       const was = atEnd.current;
       atEnd.current = false;
+      captureReadingAnchor(sc);
       moved = false;
       // A disclosure below its contents anchors the card, not the button that moves down when it opens.
       const row = el.closest("[data-disclosure-anchor]") ?? el;
@@ -997,7 +1057,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       sc.removeEventListener("click", onClick, true);
       for (const ev of ["wheel", "touchstart", "keydown", "pointerdown"]) sc.removeEventListener(ev, readerMoves);
     };
-  }, [follow, scrollEl, stopGlide]);
+  }, [follow, scrollEl, stopGlide, captureReadingAnchor]);
 
   // content that grows by itself (images loading, a live group's steps) keeps the end in view; a held row stays put.
   // A ResizeObserver runs after layout and before paint, so the offset moves in the same frame as the height. The view
@@ -1105,7 +1165,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
 
   const loadEarlierNearTop = () => {
     const el = scroller.current;
-    if (!el || el.scrollTop >= 300 || !earlier.hasMore || earlier.loadingEarlier || first.current) return;
+    if (!el || el.scrollTop >= 300 || !earlier.hasMore || earlier.loadingEarlier || first.current || suppressAutoEarlier.current) return;
     void loadWithScrollAnchor(earlier.loadEarlier);
   };
 
@@ -1117,10 +1177,12 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
     const delta = el.scrollTop - lastTop.current;
     lastTop.current = el.scrollTop;
+    if (delta < 0) suppressAutoEarlier.current = false;
     holdLanding(600);
     if (atEnd.current) {
       if (leavesOnScrollbarDrag({ dragging: dragging.current, delta })) follow(false);
     } else if (!anchor.current && !jumping.current && followsAgain({ gap, delta })) follow(true);
+    captureReadingAnchor(el);
     if (!first.current && !atEnd.current && el.scrollTop < 300) revealLoadedInputs();
     loadEarlierNearTop();
   };
@@ -1666,6 +1728,24 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   }, [linkedChild, session, tr.loading, tr.loadingEarlier, tr.hasMore, detail.loading, kids.loaded, childRows, places, mid, sid, jump]);
   // what runs its subagents: its own agent (a Paseo provider's subagent cards say "Grok", #8142)
   const harness = session && !assistant ? sessionAgentName(session) : undefined;
+  // Streaming makes the turn live again, but an Agent's existing wait / subagent bar stays as it was while the answer
+  // streams. Only the new command line is withheld there; in a quiet turn the four-kind order decides the bar.
+  const wait = streaming && !outgoing && !awaiting ? backgroundWaitLine(session) : backgroundState?.kind === "waiting" ? backgroundState.line : null;
+  const subtasks = streaming ? waitingOnSubagents(session, subagents) && !outgoing && !awaiting : backgroundState?.kind === "subtasks";
+  const command = backgroundState?.kind === "command" ? backgroundState.line : null;
+  // In a Persona conversation the message stream already carries the turn's state for its whole life — the sending /
+  // preparing feedback while the message is on its way, then the live work line ("Working…", spinner and clock) once the
+  // hub accepts it — so the dock never repeats the foreground turn (#6230). The dock bar stays only for work that outlives
+  // the turn (a background workflow, subagent, wait or working command: `backgroundOnly`, where the stream shows only
+  // quiet fold rows) and, unchanged, for Agent chats, whose dock keeps the full cindy status bar. Gating on the foreground/background
+  // phase (not on the live line being mounted) keeps the bar out even while a transcript loads or a state push is in flight.
+  // A Persona chat on either route — the Persona tab's prop, or on the generic /s route the session's own assistant
+  // flag — so the dock never repeats its foreground turn (#6230). Background work keeps the bar either way.
+  const dockBarShown = !(assistant || session?.assistant) || backgroundOnly;
+  const runningWorking = state === "working" || awaiting || streaming;
+  // When the dock bar renders this foreground turn's own status and elapsed timer, suppress the duplicate in-stream
+  // elapsed timer (and empty non-expandable live row) so only one Working… timer ticks on screen (#12380).
+  const dockTurnClock = Boolean(session && dockBarShown && runningWorking && !backgroundOnly && !wait && !subtasks && !command);
   const ctx = useMemo<ChatContextValue>(
     () => ({ tasks, subagents: assistant ? NO_SUBAGENTS : (subagents ?? NO_SUBAGENTS), scope: `${mid}/${sid}:`, jumpToCall: jump, workflowCalls: wfCalls, lineStyle, harness, opening: openingId && openingOrigin ? { id: openingId, origin: openingOrigin, opened_by: openingBy, manager: openingManager } : undefined, closeoutSegment: closeoutSegment?.id, children: places, embedded }),
     [tasks, subagents, assistant, mid, sid, jump, wfCalls, lineStyle, harness, openingId, openingOrigin, openingBy, openingManager, closeoutSegment, places, embedded],
@@ -1980,23 +2060,9 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   ) : null;
   // Persona's own chats too (#3654), and from the moment the message is in, not from the hub's next push
   const background = useMemo(() => backgroundLine(session), [session]);
-  // Streaming makes the turn live again, but an Agent's existing wait / subagent bar stays as it was while the answer
-  // streams. Only the new command line is withheld there; in a quiet turn the four-kind order decides the bar.
-  const wait = streaming && !outgoing && !awaiting ? backgroundWaitLine(session) : backgroundState?.kind === "waiting" ? backgroundState.line : null;
-  const subtasks = streaming ? waitingOnSubagents(session, subagents) && !outgoing && !awaiting : backgroundState?.kind === "subtasks";
-  const command = backgroundState?.kind === "command" ? backgroundState.line : null;
   // ✓ Done only for a turn that finished: one waiting on you, stopped or cut off by an error keeps its last words
   const done = turnDone(state, session, lastLine, tr.items);
-  // In a Persona conversation the message stream already carries the turn's state for its whole life — the sending /
-  // preparing feedback while the message is on its way, then the live work line ("Working…", spinner and clock) once the
-  // hub accepts it — so the dock never repeats the foreground turn (#6230). The dock bar stays only for work that outlives
-  // the turn (a background workflow, subagent, wait or working command: `backgroundOnly`, where the stream shows only
-  // quiet fold rows) and, unchanged, for Agent chats, whose dock keeps the full cindy status bar. Gating on the foreground/background
-  // phase (not on the live line being mounted) keeps the bar out even while a transcript loads or a state push is in flight.
-  // A Persona chat on either route — the Persona tab's prop, or on the generic /s route the session's own assistant
-  // flag — so the dock never repeats its foreground turn (#6230). Background work keeps the bar either way.
-  const dockBarShown = !(assistant || session?.assistant) || backgroundOnly;
-  const running = session && dockBarShown ? <RunningStatusBar mid={mid} sid={sid} working={state === "working" || awaiting || streaming} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={!backgroundState || backgroundState.kind === "workflow" ? background : null} wait={wait} subtasks={subtasks} command={command} /> : null;
+  const running = session && dockBarShown ? <RunningStatusBar mid={mid} sid={sid} working={runningWorking} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={!backgroundState || backgroundState.kind === "workflow" ? background : null} wait={wait} subtasks={subtasks} command={command} /> : null;
   // at the top of the composer's card, as cindy's pending queue (#5327); a phone on its side keeps it to one line beside
   // the run's status. The same element while nothing in it changes: the composer is memoized.
   const hasQueue = queued.length > 0;
@@ -2218,6 +2284,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                         assistant={assistant}
                         offscreen={offscreen(d.line)}
                         busy={d.line.id === busySegment || undefined}
+                        dockTurnClock={("live" in d.line && d.line.live && dockTurnClock) || undefined}
                       />
                     ),
                   ])
@@ -2241,6 +2308,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
                   assistant={assistant}
                   offscreen={offscreen(row.line)}
                   busy={row.line.id === busySegment || undefined}
+                  dockTurnClock={("live" in row.line && row.line.live && dockTurnClock) || undefined}
                 />
               )])}
               </CardConversation.Provider>

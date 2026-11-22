@@ -155,6 +155,7 @@ private class RoutedAssistantManagement(
     override suspend fun assistantLaunchers(machineId: String) = api().assistantLaunchers(machineId)
     override suspend fun assistantLauncherList(machineId: String) = api().assistantLauncherList(machineId)
     override suspend fun assistantLauncherList(machineId: String, refresh: Boolean) = api().assistantLauncherList(machineId, refresh)
+    override suspend fun mainAssistantLauncherList(machineId: String, refresh: Boolean) = api().mainAssistantLauncherList(machineId, refresh)
     override suspend fun launcherModels(machineId: String, launcher: String) = api().launcherModels(machineId, launcher)
     override suspend fun setModelPick(session: SessionKey, pick: persona.core.contracts.ModelPick) = api().setModelPick(session, pick)
     override suspend fun clearModelPick(session: SessionKey) = api().clearModelPick(session)

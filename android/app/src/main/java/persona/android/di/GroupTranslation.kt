@@ -239,6 +239,7 @@ internal fun MachineManagement.inGroup(names: GroupNames): MachineManagement {
         override suspend fun launcherQuota(machineId: String, name: String, refresh: Boolean) =
             source.launcherQuota(names.rawMachine(machineId), name, refresh).let { a -> a.copy(machine = a.machine?.takeIf { it.isNotBlank() }?.let(names::machineId)) }
         override suspend fun reconnect(machineId: String) = source.reconnect(names.rawMachine(machineId))
+        override suspend fun startLinkSwitch(machineId: String) = source.startLinkSwitch(names.rawMachine(machineId))
         override suspend fun rename(machineId: String, name: String) = source.rename(names.rawMachine(machineId), name)
         override suspend fun deploy(machineId: String) = source.deploy(names.rawMachine(machineId))
         override suspend fun herdr(machineId: String) = source.herdr(names.rawMachine(machineId))
@@ -293,6 +294,8 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
         override suspend fun assistantLauncherList(machineId: String) = source.assistantLauncherList(names.rawMachine(machineId))
         override suspend fun assistantLauncherList(machineId: String, refresh: Boolean) =
             source.assistantLauncherList(names.rawMachine(machineId), refresh)
+        override suspend fun mainAssistantLauncherList(machineId: String, refresh: Boolean) =
+            source.mainAssistantLauncherList(names.rawMachine(machineId), refresh)
         override suspend fun launcherModels(machineId: String, launcher: String) = source.launcherModels(names.rawMachine(machineId), launcher)
         override suspend fun setModelPick(session: SessionKey, pick: persona.core.contracts.ModelPick) = source.setModelPick(names.raw(session), pick)
         override suspend fun clearModelPick(session: SessionKey) = source.clearModelPick(names.raw(session))

@@ -453,6 +453,29 @@ func TestHeldEscalationIsNotReEscalatable(t *testing.T) {
 	if got := e.cardPushes("ix1"); len(got) != 1 || got[0] != assistantwire.LevelP1 {
 		t.Fatalf("the rejected re-escalation pushed: %v", got)
 	}
+	if shown := e.lastShown("ix1"); shown.PushLevel != assistantwire.LevelP1 {
+		t.Fatalf("held escalation interaction push_level = %q, want %q", shown.PushLevel, assistantwire.LevelP1)
+	}
+	e.s.fleet.mu.Lock()
+	storedLevel := e.s.fleet.interactions["ix1"].ix.PushLevel
+	e.s.fleet.mu.Unlock()
+	if storedLevel != assistantwire.LevelP1 {
+		t.Fatalf("stored pending interaction push_level = %q, want %q", storedLevel, assistantwire.LevelP1)
+	}
+
+	// An urgent P0 escalation stamps P0 on the Interaction as well.
+	e.raise(askPermission("ix2", "worker-1"))
+	e.noticeWith("lead1", "interaction_id=ix2")
+	if _, err := runJSON(t, e.s, "lead1", "ask_escalate", map[string]any{"todo_id": e.todo.ID, "reason": "urgent", "p0": true}); err != nil {
+		t.Fatalf("P0 escalation: %v", err)
+	}
+	waitFor(t, "P0 interaction shown", func() bool {
+		ix, ok := e.shown("ix2")
+		return ok && !ix.Delegating
+	})
+	if shown := e.lastShown("ix2"); shown.PushLevel != assistantwire.LevelP0 {
+		t.Fatalf("P0 escalation interaction push_level = %q, want %q", shown.PushLevel, assistantwire.LevelP0)
+	}
 }
 
 // With the switch off the same turn still posts its progress card (as before).

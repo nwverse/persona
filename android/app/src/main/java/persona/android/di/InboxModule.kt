@@ -64,7 +64,7 @@ class InboxDataOwner @Inject constructor(
         val handOffInbox: persona.feature.inbox.InboxRepository,
         val assistant: AssistantConversations, val mail: StateFlow<MailTransport?>,
         val composers: ReplyComposers, val handOffBars: InboxHandOffBars, val reading: LarkReadingStore, val names: GroupNames,
-        val conversations: InboxConversations)
+        val conversations: InboxConversations, val larkMessages: LarkMessagesRepository)
     // The inbox and Persona are the selected group's (docs/android/android.md "Multiple hubs"): its own transports speak its plain
     // ids, which are moved into the merged lists' ids on the way out. Agent requests in the inbox stay merged.
     private val current = runtime.scopedData.mapLatest { data ->
@@ -154,7 +154,8 @@ class InboxDataOwner @Inject constructor(
             val composers = ReplyComposers(wrapped, data.coroutineScope)
             val handOffBars = InboxHandOffBars(data.coroutineScope, app.resources, handOffInbox)
             Repositories(data, wrapped, handOffInbox, checkNotNull(persona), mail,
-                composers, handOffBars, reading, names, InboxConversations(wrapped, data.scope.path, data.coroutineScope, composers))
+                composers, handOffBars, reading, names, InboxConversations(wrapped, data.scope.path, data.coroutineScope, composers),
+                RealLarkMessagesRepository(data.scope.path, transport))
         }?.await()
     }.stateIn(app.scope, SharingStarted.Eagerly, null)
 
@@ -200,6 +201,7 @@ class InboxDataOwner @Inject constructor(
     val inbox: persona.feature.inbox.InboxRepository = object : persona.feature.inbox.InboxRepository, InboxHandOffBarOwner {
         override val supportsThreadOutbox = true
         override val conversationInbox = observe<InboxConversations?>(null) { flowOf(it.conversations) }
+        override val larkMessages = observe<LarkMessagesRepository?>(null) { flowOf(it.larkMessages) }
         override val messageReads = observe(emptySet<InboxMessageRead>()) { it.inbox.messageReads }
         override val replyComposers = observe<ReplyComposers?>(null) { flowOf(it.composers) }
         override val handOffBars = observe<InboxHandOffBars?>(null) { flowOf(it.handOffBars) }

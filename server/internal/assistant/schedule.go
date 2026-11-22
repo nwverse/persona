@@ -1524,6 +1524,7 @@ func weekdayText(ds []int) string {
 // knowledge base.
 func (s *Service) Run(ctx context.Context) {
 	s.running.Store(&ctx)
+	go s.a2aLoop(ctx)
 	go s.transcriptionReadyLoop(ctx)
 	recoverCtx, cancel := context.WithTimeout(ctx, taskFailTimeout)
 	if err := s.recoverTaskStarts(recoverCtx, s.tasks.recoverBefore); err != nil {
@@ -2065,6 +2066,8 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	if err != nil {
 		return s.failTaskRun(ctx, t, run, err, false)
 	}
+	s.logf("task %s resolved execution: retried=%t launcher=%q model=%q effort=%q task_model=%t task_effort=%t", t.ID, retried,
+		ex.Launcher, ex.Model, ex.Effort, model.override.Model != "", model.override.Effort != "")
 	here, launcher := ex.MachineID, ex.Launcher
 	ex.LegacyCompatible = legacyExecution && !proto.IsExternalLauncher(launcher)
 	t.PermissionMode = ex.PermissionMode
@@ -2200,14 +2203,16 @@ func (s *Service) oneOffFailed(ctx context.Context, t Task, run ScheduleRun) {
 // nothing else, the follow-up the user counted on was gone without a word (#5030). The user is told, as a run whose turn
 // failed is (watchScheduledRun), and it is tried once more after runRetryDelay, as the task is then (deleted: not). A
 // failed retry is told too, and not tried again. A repeating task runs again at its next time and has its streak notice
-// (#4658); Run now is answered in the app.
-func (s *Service) oneOffNotStarted(ctx context.Context, t Task, run ScheduleRun) {
+// (#4658); Run now is answered in the app. Deterministic configuration refusals keep the failure notice but do not
+// retry the unchanged parameters automatically.
+func (s *Service) oneOffNotStarted(ctx context.Context, t Task, run ScheduleRun, cause error) {
+	retry := !taskConfigurationRefusal(cause)
 	if t.Facts || t.Report {
-		s.briefNotStarted(ctx, t, run)
+		s.briefNotStarted(ctx, t, run, retry)
 		return
 	}
 	s.oneOffFailed(ctx, t, run)
-	if t.Repeat != repeatOnce || run.Manual || run.Retried {
+	if !retry || t.Repeat != repeatOnce || run.Manual || run.Retried {
 		return
 	}
 	delay := runRetryDelay
