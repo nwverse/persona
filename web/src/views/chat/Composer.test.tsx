@@ -909,7 +909,7 @@ describe("the / palette", () => {
     expect(palette()).toBeNull();
   });
 
-  it("keeps command rows and picks usable while the assistant skill chunk is pending and after it fails", async () => {
+  it("keeps bare / off the skill chunk and keeps command rows usable while the keyword skill chunk is pending and after it fails", async () => {
     const chunk = { calls: 0, fail: (_error: Error) => {} };
     const held = new Promise<void>((_, reject) => { chunk.fail = reject; });
     void held.catch(() => {}); // every consumer still receives the rejection
@@ -934,6 +934,10 @@ describe("the / palette", () => {
         />);
       });
       typeInto("/");
+      await vi.waitFor(() => expect(rows()).toEqual(["alpha", "beta"]));
+      expect(chunk.calls).toBe(0);
+
+      typeInto("/a");
       await vi.waitFor(() => expect(chunk.calls).toBe(1));
       await vi.waitFor(() => expect(rows()).toEqual(["alpha", "beta"]));
       key("ArrowDown");
@@ -942,7 +946,7 @@ describe("the / palette", () => {
       await vi.waitFor(() => expect(box().value).toBe("/beta"));
       expect(palette()).toBeNull();
 
-      typeInto("/");
+      typeInto("/a");
       await vi.waitFor(() => expect(rows()).toEqual(["alpha", "beta"]));
       await act(async () => {
         chunk.fail(new Error("stale assistant chunk"));

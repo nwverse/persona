@@ -44,7 +44,7 @@ import type { PlanMode } from "./PermissionPicker";
 import { useSendHistory } from "./useSendHistory";
 import { isModelCommand, requestModelPicker } from "../../lib/model-switch";
 import { isPermissionsCommand, permissionsCommand, PERMISSIONS_COMMAND, requestPermissionPicker } from "../../lib/permissions-command";
-import { rankCommands } from "../../lib/composer-commands";
+import { hasSlashSkillQuery, rankCommands } from "../../lib/composer-commands";
 import { escapeCancelsEdit, escapeCountsForEdit, upStartsEdit, type EditLastBox } from "../../lib/edit-last-key";
 import { t } from "../../i18n";
 import type { VoiceOffer } from "./voice/VoiceParts";
@@ -575,10 +575,11 @@ export const Composer = memo(function Composer({
   const query = dismissed ? null : parseSlash(draft);
   // A /loop draft gets a line under the box saying what it will do (only where the menu offers /loop: Claude agents).
   const loop = commands.some((c) => c.text === LOOP_TEXT) ? loopHint(draft) : null;
-  // the "/" palette opens on a lone "/word" wherever there are commands or this chat can offer skills
+  // Keep bare "/" focused on commands; a non-empty "/<keyword>" also matches against the active skill catalog.
+  const slashSkillActive = Boolean(mention?.skills) && hasSlashSkillQuery(query);
   // A menu already open stays through a composition; none opens in the middle of one (it would cover the candidates).
   const menusShown = useRef({ slash: false, at: false });
-  const slashOpen = query !== null && (allCommands.length > 0 || !!mention?.skills) && (!ime.composing || menusShown.current.slash);
+  const slashOpen = query !== null && (allCommands.length > 0 || slashSkillActive) && (!ime.composing || menusShown.current.slash);
   const closeSlash = useCallback(() => setDismissed(true), []);
   const rows = useMemo(() => (slashOpen ? rankCommands(allCommands, query) : []), [slashOpen, query, allCommands]);
   useEffect(() => setActive(0), [query]);
@@ -950,7 +951,7 @@ export const Composer = memo(function Composer({
     >
       {slashOpen && (
         <Suspense fallback={null}>
-          {mention?.skills ? (
+          {slashSkillActive ? (
             <OverlayBoundary open onClose={closeSlash} fallback={commandPalette()}>
               <Suspense fallback={commandPalette()}>
                 <SlashSkillEntry {...slashProps} />
@@ -1053,7 +1054,9 @@ export const Composer = memo(function Composer({
             onFocusChange?.(false);
           }}
           onChange={(e) => {
-            setDraft(e.target.value);
+            const next = e.target.value;
+            if (parseSlash(next) !== query) setActive(0);
+            setDraft(next);
             setDismissed(false);
             setCaret(e.target.selectionStart);
           }}

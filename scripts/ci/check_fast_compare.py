@@ -16,7 +16,8 @@ what failed in it:
                    each partition's printed whole, so it is read the same way (#12765)
   python -m unittest
                    the failing test ids (FAIL: and ERROR: lines; setUpClass names its class)
-  anything else    the command itself, a guard: the privacy scan, a ratchet, a typecheck, a checker script
+  anything else    the command itself, a guard: the privacy scan, a ratchet, gofmt, go vet (the Windows one
+                   through env, which it keeps), a typecheck, a checker script
 
 rerun prints the command that reruns just that, one line per failing package, suite or command of job <n>, for the
 summary's "rerun:" lines. A timed-out step reruns whole.
@@ -41,7 +42,10 @@ then one line that counts them. The rules are the PR watcher's (main_failure_com
 scripts/operations/pr_watch_repair.py): only named tests are compared, and a test whose files the change edits is not
 attributed. Like the watcher's, the comparison is by name: ALREADY says the same test fails at the base, not that it
 fails the same way. A guard's command is compared by its exit code, and the lines of its output the base's does not
-have are named, since the change may add to a failure main already has. This file does not import the watcher: it runs where
+have are named, since the change may add to a failure main already has. A go command's package patterns whose
+directory a commit does not have (./internal/<new>/..., a package the change adds) are left out of its rerun there,
+since go fails on such a pattern before it checks anything; a command left with none of its patterns is UNKNOWN, as a
+named test whose package the base does not have is. This file does not import the watcher: it runs where
 check-fast runs, with no watcher configuration. It decides nothing from hosted CI, whose runs are hours old.
 
 Go tests rerun with -count=1, as every go test of check-fast's does, and in a go slot (scripts/heavy_slot.py, as
@@ -78,8 +82,14 @@ GO_RUNNER = "go_test_partitioned.py"
 
 
 def go_command(argv):
-    """The go command argv runs: argv itself for go, the one it hands the partitioned runner, or None for another."""
+    """The go command argv runs: argv itself for go, the one it hands the partitioned runner, the one env runs after
+    its assignments (check-fast's Windows vet: env GOOS=windows GOARCH=amd64 go vet ..., #12894), or None for another."""
     rest = list(argv)
+    if rest[:1] and posixpath.basename(rest[0]) == "env":
+        rest = rest[1:]
+        while rest and "=" in rest[0] and not rest[0].startswith("-"):
+            rest = rest[1:]
+        return rest if rest[:1] == ["go"] else None
     if rest[:1] and posixpath.basename(rest[0]).startswith("python"):
         rest = rest[1:]
         while rest and rest[0].startswith("-"):  # the interpreter's own flags (-B, -I)
@@ -89,6 +99,17 @@ def go_command(argv):
     if rest[:1] and posixpath.basename(rest[0]) == GO_RUNNER:
         rest = rest[1:]
     return rest if rest[:1] == ["go"] else None
+
+
+def package_directory(pattern):
+    """The directory a relative go package pattern reads, relative to where go runs (./internal/foo/... is
+    internal/foo, ./... is .), or None for an argument that is not one (a flag, an import path)."""
+    if not (pattern in (".", "..") or pattern.startswith(("./", "../"))):
+        return None
+    wildcard = pattern.find("...")
+    if wildcard >= 0:
+        pattern = posixpath.dirname(pattern[:wildcard])
+    return posixpath.normpath(pattern)
 
 
 class CompareError(Exception):
@@ -411,12 +432,33 @@ class Command(Failure):
         paths = set(self.paths())
         return [path for path in changed if path in paths]
 
+    def packages(self, checkout):
+        """(kept, missing): the indexes in argv of the go command's relative package patterns that name a directory
+        in this working tree, split by whether checkout has that directory too. Both are empty for another command."""
+        command = go_command(self.argv)
+        if command is None:
+            return [], []
+        offset = len(self.argv) - len(command)
+        kept, missing = [], []
+        for index, argument in enumerate(command[2:], offset + 2):
+            directory = package_directory(argument)
+            if directory is None or not (self.root / self.directory / directory).is_dir():
+                continue  # a flag's value that is a file (-coverprofile ./c.out), or a pattern go fails on here too
+            (kept if checkout.within(self.directory).joinpath(directory).is_dir() else missing).append(index)
+        return kept, missing
+
     def compare(self, checkout, run, timeouts, log):
         at = checkout.commit
         subject = self.description
         if not checkout.within(self.directory).is_dir():
             return [Verdict("UNKNOWN", subject, "not compared: %s has no %s" % (at, self.directory))]
-        argv = [argument.replace(str(self.root), str(checkout.path)) for argument in self.argv]
+        kept, missing = self.packages(checkout)
+        absent = [posixpath.normpath(posixpath.join(self.directory, package_directory(self.argv[index])))
+                  for index in missing]
+        if missing and not kept:
+            return [Verdict("UNKNOWN", subject, "not compared: %s has no %s" % (at, ", ".join(absent)))]
+        argv = [argument.replace(str(self.root), str(checkout.path)) for index, argument in enumerate(self.argv)
+                if index not in missing]
         go = go_command(argv) is not None
         code, output = run(argv, cwd=checkout.within(self.directory), timeout=timeouts.go if go else timeouts.other,
                            slot="go" if go else None)
@@ -426,6 +468,8 @@ class Command(Failure):
         if code == 0:
             return [Verdict("NEW", subject, "passes at %s, so likely caused by this change" % at)]
         text = "also fails at %s" % at
+        if absent:
+            text += " (rerun there without %s, which it does not have)" % ", ".join(absent)
         base_lines = set(output_lines(output, checkout.path))
         extra = [line for line in output_lines(self.output, self.root) if line not in base_lines]
         if extra:
@@ -511,7 +555,8 @@ class Step:
         if self.status != "FAIL":
             return [self.whole(root, "it timed out here")]
         argv = self.argv
-        if (go_command(argv) or [])[:2] == ["go", "test"]:
+        # A go test that env runs reruns whole: the named tests' reruns would lose its environment.
+        if (go_command(argv) or [])[:2] == ["go", "test"] and posixpath.basename(argv[0]) != "env":
             return self.go_failures(root)
         modules = unittest_modules(argv)
         if modules is not None:
