@@ -81,7 +81,7 @@ const msg = (id: string, seq: number, role: "user" | "assistant", text: string, 
 const failedTurn = [msg("u1", 1, "user", "接着把命名改完"), msg("e1", 2, "assistant", OVERLOADED)];
 
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } });
-let bodies: { client_msg_id: string; text: string }[];
+let bodies: { client_msg_id: string; text: string; images?: { mime: string; data: string }[] }[];
 let compactCalls: string[];
 let reply: () => Response;
 let host: HTMLDivElement;
@@ -348,5 +348,122 @@ describe("image-limit Compact and send again (#13045)", () => {
     expect(banner()!.textContent).toContain("这个对话里的图片太多或太大，超出了模型限制。");
     expect(banner()!.querySelector('[data-testid="compact-and-resend"]')).toBeNull();
     expect(button(banner(), "重试")).toBeUndefined();
+  });
+
+  it("preserves inline images and rich context/file tags when compacting and resending", async () => {
+    captured.features = ["assistant_compact"];
+    captured.session = { ...IDLE, assistant: true, turn_error_code: "images_too_large" };
+    const richPrompt = '<persona-context kind="edit" title="Doc">line 1</persona-context>\n<persona-file kind="file" path="/tmp/a.pdf" name="a.pdf"/>\n[Image #1] 帮我看看这张图';
+    transcript.items = [
+      msg("u1#0", 1, "user", richPrompt),
+      { id: "u1#1", seq: 1, role: "user", kind: "image", image: { mime: "image/png", data: "UE5H" }, ts: "2026-11-12T08:00:00Z" } as Item,
+      msg("e1", 2, "assistant", TOO_LARGE),
+    ];
+    await draw(true);
+    act(() => banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]')!.click());
+    await flush();
+    expect(compactCalls).toHaveLength(1);
+
+    captured.session = { ...captured.session, compaction: { state: "done", started_at: "2026-11-22T12:00:00Z", finished_at: "2026-11-22T12:00:05Z" } };
+    act(() => upsertSession(captured.session!));
+    await flush();
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0].text).toMatch(/<(?:persona|jarvis)-context kind="edit" title="Doc">line 1<\/(?:persona|jarvis)-context>/);
+    expect(bodies[0].text).toMatch(/<(?:persona|jarvis)-file kind="file" path="\/tmp\/a\.pdf" name="a\.pdf"\/>/);
+    expect(bodies[0].text).toContain("帮我看看这张图");
+    expect(bodies[0].images).toEqual([{ mime: "image/png", data: "UE5H" }]);
+  });
+
+  it("withholds automatic resend when image bytes are unrecoverable and aborts before compaction if lazy image fetch fails", async () => {
+    // Statically unrecoverable image-only message (no data, no lazy): button hidden.
+    captured.features = ["assistant_compact"];
+    captured.session = { ...IDLE, assistant: true, turn_error_code: "images_too_large" };
+    transcript.items = [
+      { id: "u1", seq: 1, role: "user", kind: "image", ts: "2026-11-12T08:00:00Z" } as Item,
+      msg("e1", 2, "assistant", TOO_LARGE),
+    ];
+    await draw(true);
+    expect(banner()!.querySelector('[data-testid="compact-and-resend"]')).toBeNull();
+
+    // Lazy image fetch returns 404 -> aborts BEFORE calling POST .../compact and shows error toast.
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/image")) return Promise.resolve(new Response(null, { status: 404 }));
+      if (url.endsWith("/compact") && init?.method === "POST") {
+        compactCalls.push(url);
+        return Promise.resolve(json({ ok: true }));
+      }
+      if (!url.endsWith("/messages") || !init?.body) return Promise.resolve(json({}));
+      bodies.push(JSON.parse(String(init.body)));
+      return Promise.resolve(reply());
+    }));
+    transcript.items = [
+      msg("u2#0", 1, "user", "看看这张截图"),
+      { id: "u2#1", seq: 1, role: "user", kind: "image", image: { mime: "image/png", lazy: true }, ts: "2026-11-12T08:00:00Z" } as Item,
+      msg("e2", 2, "assistant", TOO_LARGE),
+    ];
+    await draw(true);
+    act(() => banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]')!.click());
+    await flush();
+    expect(compactCalls).toEqual([]);
+    expect(bodies).toEqual([]);
+    expect(vi.mocked(toast)).toHaveBeenCalled();
+  });
+
+  it("resends a failed slash-command user turn verbatim instead of walking to an earlier prompt", async () => {
+    captured.session = { ...IDLE, agent: "claude", turn_error_code: "images_too_large" };
+    transcript.items = [
+      msg("u0", 1, "user", "更早的无关消息"),
+      msg("a0", 2, "assistant", "好的"),
+      msg("u1", 3, "user", "/clear"),
+      msg("e1", 4, "assistant", TOO_LARGE),
+    ];
+    await draw(false);
+    act(() => banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]')!.click());
+    await flush();
+    expect(bodies.map((b) => b.text)).toEqual(["/compact"]);
+
+    captured.session = { ...captured.session, status: "working", state: "working" };
+    act(() => upsertSession(captured.session!));
+    await draw(false);
+    transcript.items = [
+      ...transcript.items,
+      { id: "c1", seq: 5, role: "assistant", kind: "notice", compact: { trigger: "manual" }, text: "上下文已压缩", ts: "2026-11-22T12:00:05Z" } as Item,
+    ];
+    captured.session = { ...captured.session, status: "idle", state: "idle", turn_error_code: undefined };
+    act(() => upsertSession(captured.session!));
+    await draw(false);
+    expect(bodies.map((b) => b.text)).toEqual(["/compact", "/clear"]);
+  });
+
+  it("does not resend on terminal Claude Code if an older boundary is paged in while idle or if /compact fails with an API error", async () => {
+    captured.session = { ...IDLE, agent: "claude", turn_error_code: "images_too_large" };
+    transcript.items = [msg("u1", 10, "user", "看看这些界面差异"), msg("e1", 11, "assistant", TOO_LARGE)];
+    await draw(false);
+    act(() => banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]')!.click());
+    await flush();
+    expect(bodies.map((b) => b.text)).toEqual(["/compact"]);
+
+    // Older boundary paged in while still idle -> must NOT trigger resend.
+    transcript.items = [
+      { id: "c0", seq: 3, role: "assistant", kind: "notice", compact: { trigger: "auto" }, text: "上下文已压缩", ts: "2026-11-22T11:00:00Z" } as Item,
+      ...transcript.items,
+    ];
+    await draw(false);
+    expect(bodies.map((b) => b.text)).toEqual(["/compact"]);
+
+    // Terminal works, then emits both a boundary and an API error -> must fail without resending.
+    captured.session = { ...captured.session, status: "working", state: "working" };
+    act(() => upsertSession(captured.session!));
+    await draw(false);
+    transcript.items = [
+      ...transcript.items,
+      { id: "c1", seq: 12, role: "assistant", kind: "notice", compact: { trigger: "manual" }, text: "上下文已压缩", ts: "2026-11-22T12:00:05Z" } as Item,
+      msg("e2", 13, "assistant", "API Error: 500 compact failed"),
+    ];
+    captured.session = { ...captured.session, status: "idle", state: "idle" };
+    act(() => upsertSession(captured.session!));
+    await draw(false);
+    expect(bodies.map((b) => b.text)).toEqual(["/compact"]);
   });
 });

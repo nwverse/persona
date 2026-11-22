@@ -3,12 +3,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { IMAGE_LIMIT_CODE, imageLimitError, parseAPIError, retryable } from "./api-errors";
 import {
+  canResendFailedTurn,
   compactResendSupport,
-  countCompactions,
-  failedMessageToResend,
-  hasAPIErrorAfter,
+  failedTurnToResend,
+  hasPostCommandBoundary,
+  hasPostCommandError,
+  resolveFailedTurnPayload,
+  snapshotTerminalCompaction,
   waitForAssistantCompaction,
   waitForTerminalCompaction,
+  watchTerminalCompaction,
+  type OutgoingPayload,
 } from "./compact-resend";
 import { dropSession, upsertSession } from "./store";
 import { chatLines } from "./turns";
@@ -80,13 +85,13 @@ describe("compactResendSupport", () => {
   });
 });
 
-describe("failedMessageToResend", () => {
-  const msg = (id: string, seq: number, role: "user" | "assistant", text: string): Item => ({
-    id, seq, role, kind: "text", text, ts: "2026-11-22T12:00:00Z",
+describe("failedTurnToResend & resolveFailedTurnPayload", () => {
+  const err = "Request too large (max 32MB). Accumulated images and attachments pushed the request over the limit.";
+  const msg = (id: string, seq: number, role: "user" | "assistant", text: string, extra: Partial<Item> = {}): Item => ({
+    id, seq, role, kind: "text", text, ts: "2026-11-22T12:00:00Z", ...extra,
   });
 
-  it("returns the failed turn's user message text, skipping folded retry-only messages", () => {
-    const err = "Request too large (max 32MB). Accumulated images and attachments pushed the request over the limit.";
+  it("returns the failed turn's user message, skipping folded bare retry-only turns", async () => {
     const lines = chatLines([
       msg("u1", 1, "user", "Compare these two screenshots"),
       msg("e1", 2, "assistant", err),
@@ -95,17 +100,172 @@ describe("failedMessageToResend", () => {
     ]);
     const tail = lines[lines.length - 1];
     expect(tail.kind).toBe("apiError");
-    expect(failedMessageToResend(lines, tail.id, "Continue")).toBe("Compare these two screenshots");
+    const candidate = failedTurnToResend(lines, tail.id);
+    expect(canResendFailedTurn(candidate)).toBe(true);
+    expect(await resolveFailedTurnPayload(candidate, "box", "s1")).toEqual({
+      ok: true,
+      payload: { text: "Compare these two screenshots", images: [] },
+    });
   });
 
-  it("falls back when the failed turn has no plain user text", () => {
-    const err = "API Error: an image in the conversation could not be processed and was removed.";
+  it("preserves rich user content (contexts, files, attached_images, pasted_content) and inline/lazy images", async () => {
+    const rawWithRich = [
+      "<persona-context>\nrealtime hub snapshot\n</persona-context>",
+      '<persona-context kind="edit" title="Spec" url="https://example.com/spec">quoted line</persona-context>',
+      '<persona-file kind="file" path="/tmp/report.pdf" name="report.pdf"/>',
+      "<attached_images>\n/tmp/photo1.png\n</attached_images>",
+      "[Image #1] Check this diff",
+    ].join("\n");
     const lines = chatLines([
-      { id: "u1", seq: 1, role: "user", kind: "image", ts: "2026-11-22T12:00:00Z" } as Item,
+      msg("u1#0", 1, "user", rawWithRich),
+      { id: "u1#1", seq: 1, role: "user", kind: "image", image: { mime: "image/png", data: "QUJD" }, ts: "2026-11-22T12:00:00Z" } as Item,
+      { id: "u1#2", seq: 1, role: "user", kind: "image", image: { mime: "image/jpeg", lazy: true }, ts: "2026-11-22T12:00:00Z" } as Item,
       msg("e1", 2, "assistant", err),
     ]);
     const tail = lines[lines.length - 1];
-    expect(failedMessageToResend(lines, tail.id, "Continue")).toBe("Continue");
+    const candidate = failedTurnToResend(lines, tail.id);
+    expect(canResendFailedTurn(candidate)).toBe(true);
+    const fetchImage = vi.fn().mockResolvedValue({ mime: "image/jpeg", data: "WFlZ" });
+    const resolved = await resolveFailedTurnPayload(candidate, "box", "s1", { fetchImage });
+    expect(fetchImage).toHaveBeenCalledTimes(1);
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) {
+      expect(resolved.payload.images).toEqual([
+        { mime: "image/png", data: "QUJD" },
+        { mime: "image/jpeg", data: "WFlZ" },
+      ]);
+      expect(resolved.payload.text).toContain('<persona-context kind="edit" title="Spec" url="https://example.com/spec">quoted line</persona-context>');
+      expect(resolved.payload.text).toContain('<persona-file kind="file" path="/tmp/report.pdf" name="report.pdf"/>');
+      expect(resolved.payload.text).toContain("<attached_images>\n/tmp/photo1.png\n</attached_images>");
+      expect(resolved.payload.text).toContain("Check this diff");
+      expect(resolved.payload.text).not.toContain("realtime hub snapshot");
+      expect(resolved.payload.text).not.toContain("[Image #1]");
+    }
+  });
+
+  it("reuses captured outgoing payload verbatim (including images) without refetching", async () => {
+    const captured = new Map<string, OutgoingPayload>([
+      ["cid-1", { text: '<persona-file kind="video" path="/tmp/a.mov"/>Look here', images: [{ mime: "image/png", data: "U0hPVA==" }] }],
+    ]);
+    const lines = chatLines([
+      msg("u1#0", 1, "user", "Look here", { client_msg_id: "cid-1" }),
+      { id: "u1#1", seq: 1, role: "user", kind: "image", client_msg_id: "cid-1", image: { mime: "image/png", lazy: true }, ts: "2026-11-22T12:00:00Z" } as Item,
+      msg("e1", 2, "assistant", err),
+    ]);
+    const tail = lines[lines.length - 1];
+    const candidate = failedTurnToResend(lines, tail.id, { captured });
+    expect(canResendFailedTurn(candidate)).toBe(true);
+    const fetchImage = vi.fn();
+    expect(await resolveFailedTurnPayload(candidate, "box", "s1", { fetchImage })).toEqual({
+      ok: true,
+      payload: { text: '<persona-file kind="video" path="/tmp/a.mov"/>Look here', images: [{ mime: "image/png", data: "U0hPVA==" }] },
+    });
+    expect(fetchImage).not.toHaveBeenCalled();
+  });
+
+  it("recovers image-only messages with inline or lazy bytes instead of degrading to Continue", async () => {
+    const lines = chatLines([
+      { id: "u1", seq: 1, role: "user", kind: "image", image: { mime: "image/png", data: "SU1H" }, ts: "2026-11-22T12:00:00Z" } as Item,
+      msg("e1", 2, "assistant", "API Error: an image in the conversation could not be processed and was removed."),
+    ]);
+    const tail = lines[lines.length - 1];
+    const candidate = failedTurnToResend(lines, tail.id);
+    expect(canResendFailedTurn(candidate)).toBe(true);
+    expect(await resolveFailedTurnPayload(candidate, "box", "s1")).toEqual({
+      ok: true,
+      payload: { text: "", images: [{ mime: "image/png", data: "SU1H" }] },
+    });
+  });
+
+  it("withholds automatic resend when image bytes are statically unrecoverable or lazy fetch fails", async () => {
+    // Missing both inline data and lazy flag: statically unrecoverable.
+    const unrecoverableLines = chatLines([
+      { id: "u1", seq: 1, role: "user", kind: "image", ts: "2026-11-22T12:00:00Z" } as Item,
+      msg("e1", 2, "assistant", err),
+    ]);
+    const tail1 = unrecoverableLines[unrecoverableLines.length - 1];
+    const cand1 = failedTurnToResend(unrecoverableLines, tail1.id);
+    expect(canResendFailedTurn(cand1)).toBe(false);
+    expect(await resolveFailedTurnPayload(cand1, "box", "s1")).toEqual({ ok: false, reason: "images_unavailable" });
+
+    // Lazy image fetch returns null: fails cleanly rather than dropping the image.
+    const lazyLines = chatLines([
+      msg("u2#0", 1, "user", "Explain this screenshot"),
+      { id: "u2#1", seq: 1, role: "user", kind: "image", image: { mime: "image/png", lazy: true }, ts: "2026-11-22T12:00:00Z" } as Item,
+      msg("e2", 2, "assistant", err),
+    ]);
+    const tail2 = lazyLines[lazyLines.length - 1];
+    const cand2 = failedTurnToResend(lazyLines, tail2.id);
+    expect(canResendFailedTurn(cand2)).toBe(true);
+    expect(await resolveFailedTurnPayload(cand2, "box", "s1", { fetchImage: async () => null })).toEqual({
+      ok: false,
+      reason: "images_unavailable",
+    });
+  });
+
+  it("fetches full text when a user text item is truncated and aborts if full text is unavailable", async () => {
+    const lines = chatLines([
+      msg("u1", 1, "user", "short preview...", { full_size: 40_000 }),
+      msg("e1", 2, "assistant", err),
+    ]);
+    const tail = lines[lines.length - 1];
+    const candidate = failedTurnToResend(lines, tail.id);
+    expect(canResendFailedTurn(candidate)).toBe(true);
+
+    const ok = await resolveFailedTurnPayload(candidate, "box", "s1", {
+      fetchFullItem: async () => msg("u1", 1, "user", "complete original prompt text"),
+    });
+    expect(ok).toEqual({ ok: true, payload: { text: "complete original prompt text", images: [] } });
+
+    const fail = await resolveFailedTurnPayload(candidate, "box", "s1", {
+      fetchFullItem: async () => { throw new Error("offline"); },
+    });
+    expect(fail).toEqual({ ok: false, reason: "text_unavailable" });
+  });
+
+  it("preserves user slash commands (including /clear and manual /compact) instead of walking into earlier history", async () => {
+    for (const cmd of ["/clear", "/review", "/compact"]) {
+      const lines = chatLines([
+        msg("u0", 1, "user", "Older unrelated prompt"),
+        msg("a0", 2, "assistant", "Done."),
+        msg("u1", 3, "user", cmd, { client_msg_id: "user-cmd" }),
+        msg("e1", 4, "assistant", err),
+      ]);
+      const tail = lines[lines.length - 1];
+      const candidate = failedTurnToResend(lines, tail.id, { internalCompactIds: new Set(["other-internal"]) });
+      expect(canResendFailedTurn(candidate)).toBe(true);
+      expect(await resolveFailedTurnPayload(candidate, "box", "s1")).toEqual({
+        ok: true,
+        payload: { text: cmd, images: [] },
+      });
+    }
+  });
+
+  it("skips only internal recovery /compact commands tracked by client_msg_id", async () => {
+    const lines = chatLines([
+      msg("u1", 1, "user", "Compare these two screenshots"),
+      msg("e1", 2, "assistant", err),
+      msg("u2", 3, "user", "/compact", { client_msg_id: "internal-compact-1" }),
+      msg("e2", 4, "assistant", err),
+    ]);
+    const tail = lines[lines.length - 1];
+    const candidate = failedTurnToResend(lines, tail.id, { internalCompactIds: new Set(["internal-compact-1"]) });
+    expect(await resolveFailedTurnPayload(candidate, "box", "s1")).toEqual({
+      ok: true,
+      payload: { text: "Compare these two screenshots", images: [] },
+    });
+  });
+
+  it("does not walk past an injected message into an older unrelated user prompt", () => {
+    const lines = chatLines([
+      msg("u0", 1, "user", "Old user prompt"),
+      msg("a0", 2, "assistant", "Done."),
+      msg("u1", 3, "user", "Scheduled patrol", { injected: { kind: "followup", state: "daily", line: "Scheduled patrol" } }),
+      msg("e1", 4, "assistant", err),
+    ]);
+    const tail = lines[lines.length - 1];
+    expect(failedTurnToResend(lines, tail.id)).toBeNull();
+    expect(canResendFailedTurn(failedTurnToResend(lines, tail.id))).toBe(false);
   });
 });
 
@@ -138,18 +298,19 @@ describe("waitForAssistantCompaction", () => {
   });
 });
 
-describe("waitForTerminalCompaction", () => {
-  it("resolves done when a compaction boundary lands and the terminal returns to idle", async () => {
-    let curItems: Item[] = [{ id: "e1", seq: 2, role: "assistant", kind: "text", text: "Request too large (max 32MB)." }];
+describe("waitForTerminalCompaction / watchTerminalCompaction", () => {
+  it("resolves done only after working -> post-command boundary (seq > afterSeq) -> idle", async () => {
+    let curItems: Item[] = [{ id: "e1", seq: 10, role: "assistant", kind: "text", text: "Request too large (max 32MB)." }];
     const listeners = new Set<() => void>();
     const notify = () => listeners.forEach((fn) => fn());
-    upsertSession(baseSession({ status: "working", state: "working" }));
+    upsertSession(baseSession({ status: "idle", state: "idle" }));
 
     const ctl = new AbortController();
-    const pending = waitForTerminalCompaction(
+    const snapshot = snapshotTerminalCompaction(curItems, "cmd-1");
+    const watcher = watchTerminalCompaction(
       "box",
       "s1",
-      { compactions: countCompactions(curItems), lastItemId: "e1" },
+      snapshot,
       () => curItems,
       (fn) => {
         listeners.add(fn);
@@ -160,23 +321,80 @@ describe("waitForTerminalCompaction", () => {
       50,
     );
 
-    curItems = [...curItems, { id: "c1", seq: 3, role: "assistant", kind: "notice", compact: { trigger: "manual" }, text: "上下文已压缩" }];
+    // Even if working arrives before markDelivered (in-flight HTTP), the watcher records it cleanly.
+    upsertSession(baseSession({ status: "working", state: "working" }));
+    watcher.markDelivered();
+    curItems = [
+      ...curItems,
+      { id: "c1", seq: 11, role: "assistant", kind: "notice", compact: { trigger: "manual" }, text: "上下文已压缩" },
+    ];
+    expect(hasPostCommandBoundary(curItems, snapshot)).toBe(true);
     notify();
     upsertSession(baseSession({ status: "idle", state: "idle" }));
-    expect(await pending).toBe("done");
+    expect(await watcher.promise).toBe("done");
   });
 
-  it("resolves failed if an API error appears after /compact", async () => {
-    let curItems: Item[] = [{ id: "e1", seq: 2, role: "assistant", kind: "text", text: "Request too large (max 32MB)." }];
+  it("does NOT resolve done when older compaction boundary is exposed by paging or without sawWorking", async () => {
+    let curItems: Item[] = [{ id: "e1", seq: 10, role: "assistant", kind: "text", text: "Request too large (max 32MB)." }];
+    const listeners = new Set<() => void>();
+    const notify = () => listeners.forEach((fn) => fn());
+    upsertSession(baseSession({ status: "idle", state: "idle" }));
+
+    const ctl = new AbortController();
+    const snapshot = snapshotTerminalCompaction(curItems, "cmd-1");
+    let outcome: string | undefined;
+    const pending = waitForTerminalCompaction(
+      "box",
+      "s1",
+      snapshot,
+      () => curItems,
+      (fn) => {
+        listeners.add(fn);
+        return () => listeners.delete(fn);
+      },
+      ctl.signal,
+      5_000,
+      30,
+    ).then((v) => {
+      outcome = v;
+      return v;
+    });
+
+    // Older paged boundary (seq <= afterSeq): ignored.
+    curItems = [
+      { id: "old-c0", seq: 4, role: "assistant", kind: "notice", compact: { trigger: "auto" }, text: "上下文已压缩" },
+      ...curItems,
+    ];
+    expect(hasPostCommandBoundary(curItems, snapshot)).toBe(false);
+    notify();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(outcome).toBeUndefined();
+
+    // Even a new-seq boundary while still idle without ever transitioning through working must NOT resolve done.
+    curItems = [
+      ...curItems,
+      { id: "c1", seq: 11, role: "assistant", kind: "notice", compact: { trigger: "manual" }, text: "上下文已压缩" },
+    ];
+    notify();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(outcome).toBeUndefined();
+
+    ctl.abort();
+    expect(await pending).toBe("cancelled");
+  });
+
+  it("resolves failed if an API error appears after /compact, even if a boundary also appeared", async () => {
+    let curItems: Item[] = [{ id: "e1", seq: 10, role: "assistant", kind: "text", text: "Request too large (max 32MB)." }];
     const listeners = new Set<() => void>();
     const notify = () => listeners.forEach((fn) => fn());
     upsertSession(baseSession({ status: "working", state: "working" }));
 
     const ctl = new AbortController();
+    const snapshot = snapshotTerminalCompaction(curItems, "cmd-1");
     const pending = waitForTerminalCompaction(
       "box",
       "s1",
-      { compactions: 0, lastItemId: "e1" },
+      snapshot,
       () => curItems,
       (fn) => {
         listeners.add(fn);
@@ -187,20 +405,25 @@ describe("waitForTerminalCompaction", () => {
       50,
     );
 
-    curItems = [...curItems, { id: "e2", seq: 3, role: "assistant", kind: "text", text: "API Error: 500 internal error" }];
-    expect(hasAPIErrorAfter(curItems, "e1")).toBe(true);
+    // Boundary + post-command API error: must fail rather than declaring done.
+    curItems = [
+      ...curItems,
+      { id: "c1", seq: 11, role: "assistant", kind: "notice", compact: { trigger: "manual" }, text: "上下文已压缩" },
+      { id: "e2", seq: 12, role: "assistant", kind: "text", text: "API Error: 500 internal error" },
+    ];
+    expect(hasPostCommandError(curItems, snapshot)).toBe(true);
     notify();
     expect(await pending).toBe("failed");
   });
 
-  it("resolves failed if the terminal returns to idle without compacting", async () => {
-    const curItems: Item[] = [{ id: "e1", seq: 2, role: "assistant", kind: "text", text: "Request too large (max 32MB)." }];
+  it("resolves failed if the terminal returns to idle after working without a post-command boundary", async () => {
+    const curItems: Item[] = [{ id: "e1", seq: 10, role: "assistant", kind: "text", text: "Request too large (max 32MB)." }];
     upsertSession(baseSession({ status: "working", state: "working" }));
     const ctl = new AbortController();
     const pending = waitForTerminalCompaction(
       "box",
       "s1",
-      { compactions: 0, lastItemId: "e1" },
+      snapshotTerminalCompaction(curItems, "cmd-1"),
       () => curItems,
       () => () => {},
       ctl.signal,
