@@ -14,6 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func writeTaskExecutionError(w http.ResponseWriter, err error) {
@@ -160,6 +161,9 @@ func (s *Service) taskExecution(ctx context.Context, t Task, validate bool, bind
 			Cwd string `json:"cwd"`
 		}
 		if err := s.call(ctx, machine, assistantwire.DeviceAssistantDirectory, map[string]any{"path": ex.Cwd}, &result); err != nil {
+			if errors.Is(err, rpc.ErrNotSent) && strings.Contains(err.Error(), "task_execution_wait_timeout") {
+				return ex, err
+			}
 			return ex, i18n.Err("assistant-schedule.execution_directory", i18n.Args{"error": err.Error()})
 		}
 		if result.Cwd == "" {

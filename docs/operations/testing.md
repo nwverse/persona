@@ -417,8 +417,12 @@ example configs and services) and both watcher skills under `.claude/skills/`. T
   with the config's Xcode and in an `xcode` slot as `sim.sh` builds:
   `(eval "$(python3 scripts/persona_config.py env)" && python3 scripts/heavy_slot.py run --kind xcode -- xcodebuild -project apple/Persona.xcodeproj -scheme PersonaWatch -destination 'generic/platform=watchOS Simulator' -derivedDataPath build/DerivedData build)`.
 - **The commit stamp is Release only.** "Stamp the commit" (`apple/project.yml`, the iPhone and Vision apps) does nothing
-  in Debug: a Debug build's Settings › About › Build says Unknown, its Developing Persona package
-  (`docs/operations/developing-persona.md`) has an empty `commit`, and a build with nothing changed writes no Info.plist
+  in Debug. A Debug iPhone build gets "Stamp the debug build info" instead (#12926, `scripts/app/stamp_debug_build_info.sh`):
+  the `PersonaBuildInfo` dictionary (commit, branch, dirty, build time, build machine, Xcode, Swift, configuration) that
+  Settings › About › Build (`3518b00185-dirty · 11-22 15:00`) and its Debug Info section read through `BuildInfo`. It
+  writes only when the code was linked again (`Persona.debug.dylib`), the Info.plist was written again or HEAD moved
+  since its marker, and never fails a build (no git: Unknown). `PERSONA_BUILD_MACHINE` names the build machine for
+  captures shown in public. A build with nothing changed writes no Info.plist
   and signs nothing again, unless the opt-in Siri calls (`apple/siri-calls.yml`) or Meta glasses
   (`apple/meta-wearables.yml`) include is on: their build phases rewrite the built Info.plist on every build, so the app
   is signed again each time. Every Release build, and so every TestFlight build, is stamped as before; a Debug build that

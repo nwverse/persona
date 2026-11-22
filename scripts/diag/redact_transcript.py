@@ -260,7 +260,7 @@ def main():
                         e = json.loads(line)
                     except ValueError:
                         continue
-                    if isinstance(e, dict) and e.get("type") in args.skip_type:
+                    if not isinstance(e, dict) or e.get("type") in args.skip_type:
                         continue
                     out.write(json.dumps(r.obj(e), ensure_ascii=False, separators=(",", ":")) + "\n")
                     n += 1
