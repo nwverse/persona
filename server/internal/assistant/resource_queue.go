@@ -62,6 +62,7 @@ func (s *Service) resourceRows(ctx context.Context, d rq.Definition, fn func(*[]
 	}
 	var reply rq.Reply
 	var leases []rq.Lease
+	originalBodies := map[string]string{}
 	snap := s.resourceMirror(ctx, d.ID)
 	err := st.Transaction(ctx, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "resource:"+d.ID); err != nil {
@@ -83,6 +84,12 @@ func (s *Service) resourceRows(ctx context.Context, d rq.Definition, fn func(*[]
 				return err
 			}
 			leases = append(leases, l)
+			canonical, e := json.Marshal(l)
+			if e != nil {
+				rows.Close()
+				return e
+			}
+			originalBodies[l.ID] = string(canonical)
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
@@ -98,8 +105,9 @@ func (s *Service) resourceRows(ctx context.Context, d rq.Definition, fn func(*[]
 		}
 		now := time.Now().UTC()
 		rq.Expire(leases, now)
+		freshMirror := !snap.Unknown && snap.Queue != nil && now.Sub(snap.ObservedAt) < 30*time.Second
 		// External tickets also participate in dedupe, including submissions made by older clients.
-		if !snap.Unknown && snap.Queue != nil && now.Sub(snap.ObservedAt) < 30*time.Second {
+		if freshMirror {
 			for _, list := range [][]rq.Job{snap.Queue.Running, snap.Queue.Waiting} {
 				for _, job := range list {
 					key, e := rq.Key(job.Project, job.Commit, job.Groups)
@@ -120,8 +128,8 @@ func (s *Service) resourceRows(ctx context.Context, d rq.Definition, fn func(*[]
 								} else {
 									l.State = "queued"
 								}
-								l.HeartbeatUntil = now.Add(90 * time.Second)
-								l.HoldUntil = now.Add(time.Hour)
+								l.HeartbeatUntil = snap.ObservedAt.Add(90 * time.Second)
+								l.HoldUntil = snap.ObservedAt.Add(time.Hour)
 							}
 							break
 						}
@@ -142,7 +150,7 @@ func (s *Service) resourceRows(ctx context.Context, d rq.Definition, fn func(*[]
 			}
 		}
 		external := 0
-		if snap.Queue != nil {
+		if freshMirror {
 			for _, j := range snap.Queue.Running {
 				found := false
 				for _, l := range leases {
@@ -193,18 +201,29 @@ func (s *Service) resourceRows(ctx context.Context, d rq.Definition, fn func(*[]
 				}
 			}
 		}
+		// Status polling does not rewrite unchanged leases or their retained result logs.
+		updates := map[string][]byte{}
+		for _, l := range leases {
+			body, e := json.Marshal(l)
+			if e != nil {
+				return e
+			}
+			if originalBodies[l.ID] != string(body) {
+				updates[l.ID] = body
+			}
+		}
 		// Expire old active rows before inserting replacements, preserving the partial unique index.
 		for _, l := range leases {
-			if l.State != "queued" && l.State != "granted" {
+			if updates[l.ID] != nil && originalBodies[l.ID] != "" && l.State != "queued" && l.State != "granted" {
 				if _, err := tx.Exec(ctx, `UPDATE resource_leases SET state=$2 WHERE id=$1`, l.ID, l.State); err != nil {
 					return err
 				}
 			}
 		}
 		for _, l := range leases {
-			body, err := json.Marshal(l)
-			if err != nil {
-				return err
+			body, changed := updates[l.ID]
+			if !changed {
+				continue
 			}
 			if tag, e := tx.Exec(ctx, `INSERT INTO resource_leases(id,resource,seq,state,dedupe_key,body) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET state=EXCLUDED.state,body=EXCLUDED.body,updated_at=CASE WHEN resource_leases.body IS DISTINCT FROM EXCLUDED.body THEN now() ELSE resource_leases.updated_at END WHERE resource_leases.resource=EXCLUDED.resource AND resource_leases.dedupe_key=EXCLUDED.dedupe_key`, l.ID, d.ID, l.Seq, l.State, l.Key, body); e != nil {
 				return e

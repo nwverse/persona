@@ -157,3 +157,42 @@ func TestResourceFencingTokensFollowGrantOrderUnderPriority(t *testing.T) {
 		}
 	}
 }
+
+func TestResourceUnchangedStatusDoesNotRewriteLeases(t *testing.T) {
+	s, st, d := resourceFixture(t)
+	ctx := t.Context()
+	first, err := s.resourceRequest(ctx, rq.Request{Action: "acquire", Resource: d.ID, Project: "example", Commit: strings.Repeat("a", 40), Holder: rq.Holder{Machine: "computer-a", Session: "one"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before, after string
+	if err := st.QueryRow(ctx, `SELECT xmin::text FROM resource_leases WHERE id=$1`, first.Lease.ID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.resourceStatus(ctx, d.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.QueryRow(ctx, `SELECT xmin::text FROM resource_leases WHERE id=$1`, first.Lease.ID).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatal("unchanged status polling created another lease row version")
+	}
+}
+
+func TestResourceUnknownMirrorDoesNotReserveStaleExternalSlotsForever(t *testing.T) {
+	s, st, d := resourceFixture(t)
+	ctx := t.Context()
+	snapshot := rq.Snapshot{Unknown: true, ObservedAt: time.Now().Add(-2 * time.Minute), Queue: &rq.Queue{V: 1, Slots: 3, Running: []rq.Job{{Slot: 1}, {Slot: 2}, {Slot: 3}}, Waiting: []rq.Job{}}}
+	if err := st.PutSetting(ctx, resourceMirrorKey(d.ID), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.resourceRequest(ctx, rq.Request{Action: "acquire", Resource: d.ID, Project: "example", Commit: strings.Repeat("a", 40), Holder: rq.Holder{Machine: "computer-a", Session: "one"}})
+	if err != nil || first.Status != "granted" {
+		t.Fatalf("stale occupancy blocked the external runner fallback: %+v %v", first, err)
+	}
+	retained := s.resourceMirror(ctx, d.ID)
+	if !retained.Unknown || len(retained.Queue.Running) != 3 {
+		t.Fatal("display history was lost during degraded admission")
+	}
+}
