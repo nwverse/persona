@@ -13,9 +13,9 @@ import (
 // run in, with a directory of its own. The main space ("") is the assistant's own directory and is no entry; the
 // health space is the built-in entry. Every decision on how a space's information is used (the lock screen and
 // channels, extensions, the knowledge base, handing it out, the other conversations' file tools) reads the space's
-// SpacePolicy, never the space's name. How each use is graded per space is still being designed; until then every
-// space other than the main one, registered or not, gets the strictest policy: the health space's, as "when unsure,
-// treat it as health" always did.
+// SpacePolicy, never the space's name. Information is to be used by its categories and the scene it goes to (a
+// usage decision that replaces SpacePolicy); until then every space other than the main one, registered or not, gets
+// the strictest policy: the health space's, as "when unsure, treat it as health" always did.
 
 // SpacePolicy is how a space's information may be used, one switch a use.
 type SpacePolicy struct {
@@ -47,6 +47,9 @@ func (p SpacePolicy) strictness() int {
 // strictPolicy turns every use rule on: the health space's.
 var strictPolicy = SpacePolicy{Redact: true, HideFromExtensions: true, NoKBWrite: true, ConfirmOutbound: true, DenyMainRead: true}
 
+// categoryHealth is the health information category, the health space's default.
+const categoryHealth = "health"
+
 // Space templates: the instructions a space's conversations get.
 const (
 	spaceTemplateSpace  = "space"
@@ -59,7 +62,10 @@ type spaceEntry struct {
 	Title       string
 	Icon        string
 	Description string
-	Template    string
+	// DefaultCategories are the information categories everything produced in the space carries at least (the
+	// tagging default); the health space's is health.
+	DefaultCategories []string
+	Template          string
 	// DirName is the space's directory in the state directory; the built-in health space's is the manager's
 	// (identity.HealthDirName), whatever the row says.
 	DirName  string
@@ -71,7 +77,7 @@ type spaceEntry struct {
 // builtinSpaces are the spaces every manager has whatever its store holds: the health space, with the health
 // template, in the manager's health directory.
 func (s *Service) builtinSpaces() []spaceEntry {
-	return []spaceEntry{{Slug: SpaceHealth, Template: spaceTemplateHealth,
+	return []spaceEntry{{Slug: SpaceHealth, DefaultCategories: []string{categoryHealth}, Template: spaceTemplateHealth,
 		DirName: identity.HealthDirName(s.id), Builtin: true, Revision: 1}}
 }
 
@@ -120,7 +126,7 @@ func (s *Service) spaces(ctx context.Context) []spaceEntry {
 			continue // the built-in ones are the manager's
 		}
 		list = append(list, spaceEntry{Slug: row.Slug, Title: row.Title, Icon: row.Icon, Description: row.Description,
-			Template: row.Template, DirName: row.DirName,
+			DefaultCategories: row.DefaultCategories, Template: row.Template, DirName: row.DirName,
 			Archived: row.ArchivedAt != nil, Revision: row.Revision})
 	}
 	r.list, r.at = list, time.Now()

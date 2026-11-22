@@ -78,7 +78,7 @@ func TestConversationSpaces(t *testing.T) {
 	}
 }
 
-// The registry (#13104): the migration registers the health space, built-in, with the health template.
+// The registry (#13104): the migration registers the health space, built-in, with the health template and the health category by default.
 func TestSpacesRegistersHealth(t *testing.T) {
 	d, ctx := open(t), context.Background()
 	list, err := d.Spaces(ctx)
@@ -87,7 +87,7 @@ func TestSpacesRegistersHealth(t *testing.T) {
 	}
 	for _, s := range list {
 		if s.Slug == "health" {
-			if !s.Builtin || s.Template != "health" || s.ArchivedAt != nil {
+			if !s.Builtin || s.Template != "health" || s.ArchivedAt != nil || len(s.DefaultCategories) != 1 || s.DefaultCategories[0] != "health" {
 				t.Fatalf("health = %+v", s)
 			}
 			return
