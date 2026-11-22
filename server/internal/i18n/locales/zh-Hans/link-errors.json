@@ -1,4 +1,5 @@
 {
+  "access_token_invalid": "请输入 HTTPS 源地址和非空的服务令牌。",
   "kind_lan": "内网",
   "kind_ipv6": "公网 IPv6",
   "kind_name": "域名",

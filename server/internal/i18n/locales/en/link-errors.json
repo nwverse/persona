@@ -1,4 +1,5 @@
 {
+  "access_token_invalid": "Enter an HTTPS origin and a nonempty service token.",
   "kind_lan": "LAN",
   "kind_ipv6": "Public IPv6",
   "kind_name": "Domain",

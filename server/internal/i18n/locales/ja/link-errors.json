@@ -1,4 +1,5 @@
 {
+  "access_token_invalid": "HTTPS オリジンと空でないサービス・トークンを入力してください。",
   "kind_lan": "LAN",
   "kind_ipv6": "パブリックIPv6",
   "kind_name": "ドメイン",

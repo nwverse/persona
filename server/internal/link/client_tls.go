@@ -129,7 +129,11 @@ func hubClient(c *Config, p *url.URL, onConn func(net.Conn)) *http.Client {
 	if p != nil {
 		dial = proxyDial(p, onConn)
 	}
-	return tlsClient(hubTLSConfig(c), dial)
+	client := tlsClient(hubTLSConfig(c), dial)
+	if a := c.CloudflareAccess; a != nil && c.SystemTrust() && a.valid() {
+		client.Transport = &accessTransport{client.Transport.(*http.Transport), *a}
+	}
+	return client
 }
 
 // trustOf is Status.Trust for c.

@@ -321,6 +321,25 @@ location /<prefix>/ {
 obtain this computer's link credentials and connect hub streams to its resident node. This is the same as accessing the web app in a browser: better than plaintext, weaker than pinning. The proxy-to-hub hop is plaintext and must be on a trusted network (same machine or LAN).
 Prefer the hub's own TLS and fingerprint when possible; when hub TLS is enabled, pairing links always carry `fp` and won't use system trust.
 
+## Cloudflare Access for active Link
+
+Use the HTTPS reverse-proxy pairing described above (system certificate trust).
+Before pairing, create a Cloudflare Access service token for this computer and include it
+in a Service Auth policy for the hub hostname. Use a separate token for each Mac.
+Supply the following JSON through a protected file or a secret manager on standard input:
+
+```json
+{"origin":"https://persona.example.com","client_id":"<client ID>","client_secret":"<client secret>"}
+```
+
+Run `persona-link cloudflare-access --stdin < /path/to/private-token.json`, then pair normally.
+Link stores the token in its existing private link.json. It adds the Access headers on pairing,
+health probes, control connections and Agent streams only for that HTTPS origin, including
+its port. SSH tunnels and pinned direct connections keep their existing authentication.
+To rotate, repeat the command with the replacement token and restart the connector.
+To remove the local credential, use `persona-link cloudflare-access --off` and restart;
+revoke the token in Cloudflare to invalidate it at the gateway.
+
 ## Outbound proxy
 
 A computer that reaches the internet only through an HTTP(S) proxy (common on company networks) can still use active mode: persona-link reaches the hub with an HTTP `CONNECT` through that proxy (#10659). Passive mode, the hub and the manager are unchanged.

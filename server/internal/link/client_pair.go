@@ -90,6 +90,7 @@ func PairWithSSH(ctx context.Context, raw, machine, name, path string, ssh *SSH,
 		return nil, err
 	}
 	if existing, err := Read(path); err == nil {
+		c.CloudflareAccess = existing.CloudflareAccess
 		c.Proxy = existing.Proxy // set before pairing (persona-link proxy, pair --proxy): pairing goes through it too
 	}
 	if c.Machine != "" && machine != "" && machine != c.Machine {
@@ -226,6 +227,7 @@ func PairWithSSH(ctx context.Context, raw, machine, name, path string, ssh *SSH,
 		keep := c
 		keep.Endpoints = append(manual, c.Endpoints...)
 		keep.SSH = cloneSSH(c.SSH)
+		keep.CloudflareAccess = old.CloudflareAccess
 		keep.Proxy = old.Proxy // the computer's network setting, not the pairing's
 		// Pairing with a hub's link means dialing it; what passive mode had stays for switching back.
 		keep.Mode, keep.Passive = ModeActive, old.Passive
