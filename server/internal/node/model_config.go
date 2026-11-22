@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // modelExecution is non-secret per-turn execution metadata supplied by the hub.
@@ -35,8 +37,9 @@ type modelExecution struct {
 	// Runtime preserves an external request's raw value for admission only. Ordinary conversations always use the CLI.
 	Runtime string `json:"-"`
 	// StartupContext belongs to the current external send only and is cleared before recording a process model.
-	StartupContext context.Context `json:"-"`
-	IsMain         bool            `json:",omitempty"`
+	StartupContext context.Context               `json:"-"`
+	CacheKeepalive *assistantwire.CacheKeepalive `json:",omitempty"`
+	IsMain         bool                          `json:",omitempty"`
 	// FollowsSetting: a leader/background supervisor conversation the manager sends with the main chat's model
 	// setting (#7824). With IsMain it identifies conversations that must keep their configured model;
 	// worker Agent conversations have neither flag.
@@ -105,14 +108,62 @@ func withSupervisionDelivery(ctx context.Context, src *proto.MessageSource) cont
 // conversation) goes through without the policy rather than shutting that conversation's owner out.
 func (n *Node) runtimePolicyDropped(ctx context.Context, id string) error {
 	if ctx.Value(supervisionDeliveryKey{}) == true {
-		return supervisionRuntimeRefusal(ctx)
+		return n.supervisionRuntimeRefusal(ctx)
 	}
 	n.logf("assistant %s: runs on a runtime, which has no channel for supervision policy: sending the message without it", short(id))
 	return nil
 }
 
-func supervisionRuntimeRefusal(ctx context.Context) error {
-	return refusal(assistantwire.CodeSupervisionRuntime, i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_runtime"), nil)
+func (n *Node) supervisionRuntimeRefusal(ctx context.Context) error {
+	// Use an existing inventory only. A refusal must not start engines or shell discovery.
+	launcherCache.Lock()
+	list := append([]proto.Launcher(nil), launcherCache.list...)
+	launcherCache.Unlock()
+	if n.runtimes != nil {
+		list = n.runtimes.withShell(n.runtimes.launchers(), list)
+	}
+	list = append(list, n.managedInferLaunchers()...)
+	names := proto.SupervisionLauncherNames(list)
+	return refusal(assistantwire.CodeSupervisionRuntime, i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_runtime",
+		supervisionNamesArgs(i18n.From(ctx), names)), map[string]any{"launchers": names})
+}
+
+// Preserve the runtime's delivery evidence. A coded refusal alone does not prove
+// that an unknown or older runtime sent nothing.
+func (n *Node) localizeSupervisionRefusal(ctx context.Context, err error) error {
+	var re *rpc.Error
+	if !errors.As(err, &re) {
+		return err
+	}
+	if re.Code == assistantwire.CodeSupervisionAccount {
+		copy := *re
+		copy.Message = i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_account")
+		return &copy
+	}
+	if re.Code != assistantwire.CodeSupervisionRuntime {
+		return err
+	}
+	localized := n.supervisionRuntimeRefusal(ctx).(*rpc.Error)
+	var data map[string]any
+	if len(re.Data) > 0 && json.Unmarshal(re.Data, &data) != nil {
+		return err
+	}
+	if data == nil {
+		data = map[string]any{}
+	}
+	var inventory map[string]any
+	_ = json.Unmarshal(localized.Data, &inventory)
+	data["launchers"] = inventory["launchers"]
+	localized.Data, _ = json.Marshal(data)
+	return localized
+}
+
+func supervisionNamesArgs(lang i18n.Lang, names []string) i18n.Args {
+	label := strings.Join(names, ", ")
+	if label == "" {
+		label = i18n.T(lang, "rpc-errors.assistant_supervision_none")
+	}
+	return i18n.Args{"launchers": label}
 }
 
 // check refuses a model that is not a model id (proto.ValidModelID, #1644) before anything runs; the error's text is
@@ -181,23 +232,24 @@ func (n *Node) assistantModel(ctx context.Context, id string) (string, modelExec
 // hub and an unavailable answer all leave a pre-upgrade record unknown and must not start it with ordinary tools.
 func (n *Node) assistantModelDecision(ctx context.Context, id string) (string, modelExecution, bool) {
 	var res struct {
-		Launcher                string                   `json:"launcher"`
-		Model                   string                   `json:"model"`
-		Effort                  string                   `json:"effort"`
-		ModelFingerprint        string                   `json:"model_fingerprint"`
-		Runtime                 string                   `json:"runtime"`
-		IsMain                  bool                     `json:"is_main"`
-		MainCompact             int                      `json:"main_compact_window"`
-		External                *proto.ExternalExecution `json:"external"`
-		Origin                  string                   `json:"origin"`
-		OriginKnown             bool                     `json:"origin_known"`
-		SupervisionInstructions *string                  `json:"supervision_instructions"`
-		ClaudeInteractive       bool                     `json:"claude_interactive"` // #10058: a send's own flag, here for starts no send makes
+		Launcher                string                        `json:"launcher"`
+		Model                   string                        `json:"model"`
+		Effort                  string                        `json:"effort"`
+		ModelFingerprint        string                        `json:"model_fingerprint"`
+		Runtime                 string                        `json:"runtime"`
+		CacheKeepalive          *assistantwire.CacheKeepalive `json:"cache_keepalive"`
+		IsMain                  bool                          `json:"is_main"`
+		MainCompact             int                           `json:"main_compact_window"`
+		External                *proto.ExternalExecution      `json:"external"`
+		Origin                  string                        `json:"origin"`
+		OriginKnown             bool                          `json:"origin_known"`
+		SupervisionInstructions *string                       `json:"supervision_instructions"`
+		ClaudeInteractive       bool                          `json:"claude_interactive"` // #10058: a send's own flag, here for starts no send makes
 	}
 	if n.peer == nil || n.peer.Call(ctx, "assistant.model", map[string]any{"session_id": id}, &res) != nil {
 		return "", modelExecution{}, false
 	}
-	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: n.externalRuntime(id, res.Launcher, res.Runtime), IsMain: res.IsMain, MainCompactWindow: res.MainCompact, External: res.External, Origin: res.Origin, OriginKnown: res.OriginKnown, Interactive: res.ClaudeInteractive}).withSupervision(res.SupervisionInstructions), true
+	return res.Launcher, (modelExecution{Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: n.externalRuntime(id, res.Launcher, res.Runtime), IsMain: res.IsMain, CacheKeepalive: res.CacheKeepalive, MainCompactWindow: res.MainCompact, External: res.External, Origin: res.Origin, OriginKnown: res.OriginKnown, Interactive: res.ClaudeInteractive}).withSupervision(res.SupervisionInstructions), true
 }
 
 // strictProtectedExecution identifies owner-facing conversations without changing worker/task retry policy.

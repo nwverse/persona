@@ -133,17 +133,23 @@ func sendTimingOf(ctx context.Context) *sendTiming {
 
 func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 	started := time.Now()
-	p, ok := optionalObject(w, r, 32<<20)
+	p, ok := optionalObject(w, r, proto.MessageBodyLimit)
 	if !ok {
 		return
 	}
-	if id, _ := p["client_msg_id"].(string); strings.HasPrefix(id, assistantwire.FirstMessageIDPrefix) {
+	if id, _ := p["client_msg_id"].(string); strings.HasPrefix(id, assistantwire.FirstMessageIDPrefix) || strings.HasPrefix(id, proto.A2ADeliveryPrefix) {
 		// The manager's own, for a conversation's first message (assistant start.go humanStart): never an app's, so no
 		// later message carries one (and passes for that first message). Refused before anything else is done with it.
 		writeErrCode(w, http.StatusBadRequest, "client_msg_id_reserved", i18n.Err("hub-send.reserved_id"))
 		return
 	}
 	sid := r.PathValue("sid")
+	// The pictures this message carries, never those before it in the conversation (#12973).
+	if images, _ := p["images"].([]any); len(images) > 0 {
+		if row, _ := m.session(sid); apierr.ImagesOverLimit(w, proto.HubImageLimits.For(row.Agent), len(images)) {
+			return
+		}
+	}
 	if terminalAgentSend(r.Context()) {
 		if _, ok := h.terminalAgentTarget(m, sid); !ok {
 			h.refuseTerminalAgent(w, r)

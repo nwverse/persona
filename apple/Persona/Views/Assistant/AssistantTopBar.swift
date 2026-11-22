@@ -557,17 +557,10 @@ struct AssistantTopBar: View {
     private var cwd: String { AssistantCopyText.cwd(key, in: model) }
 
     @ViewBuilder private func menuItems(_ link: ConnectionStatus.Phase) -> some View {
-        if model.isMultiHub, let current = model.hub?.group {
-            // Several groups of hubs: each has its own Persona (docs/protocol/multi-hub.md「Terminology」); pick whose.
-            Section("hub") {
-                Picker("hub", selection: Binding(get: { current }, set: { model.selectHub($0) })) {
-                    ForEach(model.groupIDs, id: \.self) { g in
-                        Label(model.groupName(g), systemImage: Theme.Icon.hubGroup).tag(g)
-                    }
-                }
-            }
-        }
+        // Only this conversation's things: the hub is picked in the sidebar's assistant switcher, with its assistants (#12594).
         Section(menuTitle) {
+            // A leader conversation's first item: the page of everything under its direction (#11516).
+            DirectionPageMenuItem(key: key)
             // The Agent SDK could not run here (#2455): it says so, and why.
             if session?.runtimeFallback?.isEmpty == false,
                let r = AssistantRuntime.status(runtime: session?.runtime, fallback: session?.runtimeFallback) {

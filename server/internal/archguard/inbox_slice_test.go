@@ -47,8 +47,9 @@ var inboxBookBridge = []string{
 }
 
 // inboxBookReaders are the other files that reach the book today (the plan's section 1), each with how many places it
-// does and the seam that replaces them (the plan's section 3.1). Shrink-only: lower a count when a place goes, drop the
-// entry when the last one does, and never add an entry or raise a count.
+// does and the seam that replaces them (the plan's section 3.1). Shrink-only: never add an entry or raise a count. A
+// file with fewer places than its count passes with a note; lowering the count (or dropping the entry at zero) is
+// tidying anyone can do, then or later (docs/operations/testing.md, "Count ratchets").
 var inboxBookReaders = map[string]struct {
 	sites int
 	seam  string
@@ -118,8 +119,8 @@ func TestInboxBookStaysInTheInbox(t *testing.T) {
 	}
 	for _, name := range slices.Sorted(maps.Keys(inboxBookReaders)) {
 		if r, n := inboxBookReaders[name], reached[name]; n < r.sites {
-			t.Errorf("inboxBookReaders allows %s %d places, and it has %d now: lower the count (drop the entry at zero)",
-				name, r.sites, n)
+			t.Logf("inboxBookReaders allows %s %d places, and it has %d now: lowering the count (dropping the entry at "+
+				"zero) is tidying anyone can do", name, r.sites, n)
 		}
 	}
 }

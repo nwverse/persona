@@ -10,16 +10,22 @@ import { toast } from "../../ui/atoms";
 import { Composer, type Outgoing } from "./Composer";
 import { onPermissionPicker } from "../../lib/permissions-command";
 import { t } from "../../i18n";
+import { setPublishedImageLimits } from "../../lib/image-limits";
 
-// imagePayload decodes on a canvas, which jsdom has not: each read waits on a promise the test settles
-const reads: ((p: { mime: string; data: string }) => void)[] = [];
+// a picture is scaled on a canvas (lib/image-scale.ts), which jsdom has not: each read waits on a promise the test
+// settles, with the picture as the message carries it or null for one the page cannot read
+const reads: ((p: { mime: string; data: string } | null) => void)[] = [];
 // a file upload (lib/composer-files.ts) waits on a promise the test settles too, with the path the machine stored it at
 const uploads: ((path: string) => void)[] = [];
 const failures: ((e: Error) => void)[] = [];
-vi.mock("../../lib/attachments", async (orig) => ({
-  ...(await orig<typeof import("../../lib/attachments")>()),
-  imagePayload: () => new Promise<{ mime: string; data: string }>((resolve) => reads.push(resolve)),
+vi.mock("../../lib/image-scale", () => ({
+  fitPicture: () => new Promise<{ mime: string; data: string } | null>((resolve) => reads.push(resolve)),
 }));
+/** Settles the `i`th read once it has started (the scaling module is imported first). */
+const settle = async (i: number, p: { mime: string; data: string } | null = { mime: "image/png", data: btoa("png") }) => {
+  for (let n = 0; n < 200 && !reads[i]; n++) await act(async () => void (await new Promise((ok) => setTimeout(ok, 2))));
+  await act(async () => reads[i](p));
+};
 vi.mock("../../lib/file-ops", () => ({
   uploadAttachment: (_mid: string, file: File) =>
     new Promise((resolve, reject) => {
@@ -238,7 +244,7 @@ describe("Composer image object URLs", () => {
     render("a");
     await pickFile(new File(["png"], "b.png", { type: "image/png" }));
     render("b");
-    await act(async () => reads[0]({ mime: "image/png", data: btoa("png") }));
+    await settle(0);
     expect(create).toHaveBeenCalledTimes(1);
     expect(revoke).toHaveBeenCalledWith("blob:test/1");
     expect(trayImages()).toBe(0);
@@ -248,7 +254,7 @@ describe("Composer image object URLs", () => {
     render("a");
     await pickFile(new File(["png"], "b.png", { type: "image/png" }));
     act(() => root.unmount());
-    await act(async () => reads[0]({ mime: "image/png", data: btoa("png") }));
+    await settle(0);
     expect(revoke).toHaveBeenCalledWith("blob:test/1");
     root = createRoot(host);
   });
@@ -328,12 +334,64 @@ describe("Composer files", () => {
   });
 });
 
-// At most 4 pictures a message, as on iOS / Android.
-describe("Composer image cap", () => {
-  it("turns away a fifth picture from the chat", () => {
+// The pictures a message holds are the hub's (hello's image_limits, #12973): past them a picture goes as a file to the
+// session's computer, with a word on which limit it was, and is turned away where there is no computer.
+describe("Composer image limits", () => {
+  const MiB = 1024 * 1024;
+  const hub = (l: Partial<{ request_bytes: number; per_message: number }>) =>
+    setPublishedImageLimits({ request_bytes: 32 * MiB, image_bytes: 3_750_000, max_side: 1600, per_message: 4, ...l });
+  const tiles = () => Array.from(host.querySelectorAll<HTMLElement>("[data-testid=composer-files] > span"));
+  const renderOn = (draftKey: string) => act(() => root.render(<Composer draftKey={draftKey} machineId="m1" placeholder="" onSend={async () => true} />));
+  beforeEach(() => {
+    hub({});
+    vi.mocked(toast).mockClear();
+  });
+  afterEach(() => {
+    setPublishedImageLimits(undefined);
+    renderOn("a");
+    tiles().forEach((t) => act(() => t.querySelector<HTMLButtonElement>("button[data-remove]")!.click()));
+  });
+
+  it("turns away a picture past the hub's count where there is no computer", async () => {
     render("a");
     for (let i = 0; i < 5; i++) putImage("a");
+    await act(async () => {}); // the word comes once the tick's pictures are in
     expect(trayImages()).toBe(4);
+    expect(toast).toHaveBeenCalledWith(t("chat-composer.too_many_images", { max: 4 }), "error");
+  });
+
+  it("sends a picture past the hub's count to the session's computer as a file", async () => {
+    renderOn("a");
+    for (let i = 0; i < 6; i++) putImage("a");
+    expect(trayImages()).toBe(4);
+    await until(() => expect(uploads).toHaveLength(2));
+    expect(tiles()).toHaveLength(2);
+    expect(toast).toHaveBeenCalledTimes(1); // one word for the two of the same tick
+    expect(toast).toHaveBeenCalledWith(t("chat-composer.images_as_files", { max: 4, count: 2 }));
+  });
+
+  it("holds 20 pictures with a hub that publishes none", () => {
+    setPublishedImageLimits(undefined);
+    render("a");
+    for (let i = 0; i < 21; i++) putImage("a");
+    expect(trayImages()).toBe(20);
+  });
+
+  it("sends a picture past the body's room as a file", async () => {
+    hub({ request_bytes: MiB + 10 }); // 10 characters of base64 left beside the words
+    renderOn("a");
+    for (let i = 0; i < 3; i++) putImage("a"); // 4 characters each
+    expect(trayImages()).toBe(2);
+    await until(() => expect(uploads).toHaveLength(1));
+    expect(toast).toHaveBeenCalledWith(t("chat-composer.images_bytes_as_files", { count: 1 }));
+  });
+
+  it("sends a picked picture the page cannot read as a file", async () => {
+    renderOn("a");
+    await pickFile(new File(["heic"], "IMG_0001.HEIC", { type: "image/heic" }));
+    await settle(0, null);
+    await until(() => expect(uploads).toHaveLength(1));
+    expect(trayImages()).toBe(0);
   });
 
   it("reads only the pictures that fit when several are picked", async () => {
@@ -346,9 +404,8 @@ describe("Composer image cap", () => {
       input.dispatchEvent(new Event("change", { bubbles: true }));
     });
     // one read at a time: settle each so the next starts
-    for (let i = 0; i < 3; i++) {
-      await act(async () => reads[i]?.({ mime: "image/png", data: btoa("png") }));
-    }
+    for (let i = 0; i < 3; i++) await settle(i);
+    await act(async () => {});
     expect(reads.length).toBe(3);
     expect(trayImages()).toBe(4);
   });
@@ -369,8 +426,8 @@ describe("Composer image cap", () => {
     putImage("a");
     await pickFile(new File(["x"], "p1.png", { type: "image/png" }));
     await pickFile(new File(["x"], "p2.png", { type: "image/png" }));
+    await settle(0);
     expect(reads.length).toBe(1); // the second is turned away while the first is read
-    await act(async () => reads[0]({ mime: "image/png", data: btoa("png") }));
     expect(trayImages()).toBe(4);
   });
 });

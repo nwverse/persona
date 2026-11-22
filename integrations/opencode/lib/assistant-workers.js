@@ -26,7 +26,7 @@ export function createAssistantWorkers({ create, busy, retiring, limit = 8, idle
       try { await worker.acp?.stop() } finally { workers.delete(worker) }
     }
   }
-  async function reserve() {
+  async function reserve(seed) {
     if (stopped) throw new RpcError('OpenCode companion is stopping', 'runtime_away')
     if (workers.size >= limit) {
       const oldest = [...workers].filter(available).sort((a, b) => a.usedAt - b.usedAt)[0]
@@ -35,7 +35,7 @@ export function createAssistantWorkers({ create, busy, retiring, limit = 8, idle
     }
     const worker = { acp: null, session: null, leases: 1, retiring: false, usedAt: now() }
     workers.add(worker)
-    try { worker.acp = await create(worker) } catch (err) { workers.delete(worker); throw err }
+    try { worker.acp = await create(worker, seed) } catch (err) { workers.delete(worker); throw err }
     return worker
   }
   function bind(worker, session) {
@@ -48,13 +48,13 @@ export function createAssistantWorkers({ create, busy, retiring, limit = 8, idle
   }
   return {
     workers,
-    reserve: () => serial(reserve),
+    reserve: (seed) => serial(() => reserve(seed)),
     bind,
     acquire: (session) => serial(async () => {
       if (stopped) throw new RpcError('OpenCode companion is stopping', 'runtime_away')
       const existing = sessions.get(session.id)
       if (existing && !existing.retiring) { existing.leases++; return existing }
-      const worker = await reserve()
+      const worker = await reserve(session)
       try { bind(worker, session); return worker } catch (err) { await retire(worker); throw err }
     }),
     release(worker) { worker.leases = Math.max(0, worker.leases - 1); worker.usedAt = now() },

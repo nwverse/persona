@@ -1133,7 +1133,8 @@ func (s *Service) continueTask(ctx context.Context, cur Todo) (json.RawMessage, 
 	if cut.SessionID == "" {
 		return s.todoView(ctx, cur.ID)
 	}
-	if proto.UnrecoverableTurnErrorCode(cut.TurnError) != "" || cut.TurnErrorKind == proto.TurnErrorUnrecoverable {
+	if proto.UnrecoverableTurnErrorCode(cut.TurnError) != "" || cut.TurnErrorKind == proto.TurnErrorUnrecoverable ||
+		cut.TurnErrorCode == proto.TurnErrorCompactionSealed {
 		return nil, i18n.Err("assistant-agents_work.conversation_invalid")
 	}
 	at := s.cutRow(cut) // the turn picked, by the identity it shows by: every check below goes by it

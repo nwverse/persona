@@ -144,6 +144,8 @@ type Meta struct {
 	// ContextCompacted: a compaction came after the latest reply, so the context is not known (ContextTokens 0) until
 	// the next one; the size before it no longer stands (#9207).
 	ContextCompacted bool
+	restartContext   contextRestart
+	restartCodex     tokenuse.CodexTotal
 	// ContextWindow is the model's context window when the transcript says it (a Codex rollout's token_count carries
 	// model_context_window); 0 for Claude Code, whose transcripts do not (node/contextwindow.go knows by model id).
 	ContextWindow    int
@@ -296,34 +298,33 @@ type Meta struct {
 	Updated      time.Time
 }
 
-// ObserveNamingMetadata reads title provenance, generated usage and Codex turn settings during an existing incremental scan.
+// ObserveNamingMetadata reads title provenance, usage and Codex turn settings during an existing incremental scan.
 // It never decodes message content (which can contain large screenshots or tool output).
 func (m *Meta) ObserveNamingMetadata(line []byte) {
 	if !bytes.Contains(line, []byte(`"custom-title"`)) && !bytes.Contains(line, []byte(`"ai-title"`)) &&
-		!bytes.Contains(line, []byte(`"output_tokens"`)) && !bytes.Contains(line, []byte(`"turn_context"`)) {
+		!bytes.Contains(line, []byte(`"usage"`)) && !bytes.Contains(line, []byte(`"turn_context"`)) &&
+		!bytes.Contains(line, []byte(`"compact_boundary"`)) && !bytes.Contains(line, []byte(`"compacted"`)) &&
+		!bytes.Contains(line, []byte(`"context_compacted"`)) && !bytes.Contains(line, []byte(`"token_count"`)) {
 		return
 	}
 	var e struct {
 		Type        string    `json:"type"`
+		Subtype     string    `json:"subtype"`
 		Timestamp   time.Time `json:"timestamp"`
 		CustomTitle string    `json:"customTitle"`
 		AITitle     string    `json:"aiTitle"`
 		IsSidechain bool      `json:"isSidechain"`
+		APIError    bool      `json:"isApiErrorMessage"`
 		Message     *struct {
-			ID    string `json:"id"`
-			Usage *struct {
-				OutputTokens int `json:"output_tokens"`
-			} `json:"usage"`
+			ID    string                `json:"id"`
+			Model string                `json:"model"`
+			Usage *tokenuse.ClaudeUsage `json:"usage"`
 		} `json:"message"`
 		Payload struct {
-			Type   string `json:"type"`
-			Model  string `json:"model"`
-			Effort string `json:"effort"`
-			Info   *struct {
-				Total struct {
-					OutputTokens int `json:"output_tokens"`
-				} `json:"total_token_usage"`
-			} `json:"info"`
+			Type   string              `json:"type"`
+			Model  string              `json:"model"`
+			Effort string              `json:"effort"`
+			Info   *tokenuse.CodexInfo `json:"info"`
 		} `json:"payload"`
 	}
 	if json.Unmarshal(line, &e) != nil {
@@ -347,11 +348,30 @@ func (m *Meta) ObserveNamingMetadata(line []byte) {
 		}
 	case "assistant":
 		if !e.IsSidechain && e.Message != nil && e.Message.Usage != nil {
-			m.observeOutput(e.Message.ID, e.Message.Usage.OutputTokens)
+			m.observeOutput(e.Message.ID, int(e.Message.Usage.OutputTokens))
+			t, _, ok := tokenuse.ClaudeTokens(e.Message.Model, e.Message.Usage, e.APIError)
+			tokens := t.Input + t.CacheRead + t.CacheWrite
+			if ok && e.Message.ID != "" && tokens > 0 && tokens <= MaxContextTokens {
+				m.restartContext.observe(e.Message.ID, tokens)
+			}
 		}
+	case "system":
+		if e.Subtype == "compact_boundary" && !e.IsSidechain {
+			m.restartContext.compact()
+		}
+	case "compacted":
+		m.restartContext.compact()
 	case "event_msg":
-		if e.Payload.Type == "token_count" && e.Payload.Info != nil {
-			m.OutputTokens = e.Payload.Info.Total.OutputTokens
+		switch e.Payload.Type {
+		case "context_compacted":
+			m.restartContext.compact()
+		case "token_count":
+			if info := e.Payload.Info; info != nil {
+				m.OutputTokens = int(info.Total.Output)
+				if m.restartCodex.Grew(info.Total.Total) && info.Last.Input > 0 && info.Last.Input <= MaxContextTokens {
+					m.restartContext.observe("", info.Last.Input)
+				}
+			}
 		}
 	}
 }

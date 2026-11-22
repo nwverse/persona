@@ -10,13 +10,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -116,6 +116,13 @@ func (t *serviceTailBuffer) Bytes() []byte {
 
 func (t *serviceTailBuffer) Truncated() bool {
 	return t.truncated
+}
+
+// The machine page's services and containers. Each handler decodes its own params, answering bad_request.
+func init() {
+	nodeRPC(proto.MethodMachineServices, (*Node).machineServices)
+	nodeRPC(proto.MethodMachineServiceLogs, (*Node).machineServiceLogs)
+	nodeRPC(proto.MethodMachineServiceAction, (*Node).machineServiceAction)
 }
 
 func (n *Node) machineServices(ctx context.Context, _ json.RawMessage) (any, error) {
@@ -479,7 +486,7 @@ func parseLaunchdList(output string, userLabels map[string]bool) []proto.Machine
 	return items
 }
 
-var plistLogPathRe = regexp.MustCompile(`(?s)<key>(?:StandardErrorPath|StandardOutPath)</key>\s*<string>([^<]+)</string>`)
+var plistLogPathRe = lazyre.New(`(?s)<key>(?:StandardErrorPath|StandardOutPath)</key>\s*<string>([^<]+)</string>`)
 
 func (r *machineServiceRunner) launchdLogs(ctx context.Context, label string, lines int) (proto.MachineServiceLogsResult, error) {
 	res := proto.MachineServiceLogsResult{

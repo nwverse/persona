@@ -3,8 +3,10 @@ import { agentId } from "./agent-kind";
 import { isEcho, type Seen } from "./echo";
 import { ApiError, errorText, isAbort, isTransient, sessionPath } from "./api";
 import { parseUserText } from "./turns";
-import { imagePayload, quotePath, releaseAttachments, sendFile, type LocalAttachment } from "./attachments";
+import { quotePath, releaseAttachments, sendFile, type LocalAttachment } from "./attachments";
+import { imageLimitsFor, MAX_PICTURE_SOURCE, pictureRoom } from "./image-limits";
 import { uuid } from "./format";
+import { toast } from "../ui/atoms";
 import { launchHasFirstTurn } from "./launch-handoff";
 import { apiOp } from "./ops";
 import { currentPlatform, modName, type Platform } from "./shortcuts";
@@ -202,9 +204,23 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
       update({ phase: "uploading" });
       const paths: string[] = [];
       const images: { mime: string; data: string }[] = [];
+      // the pictures go scaled down as in a chat's box, held to the hub's limits (#12973); the ones past them, and any
+      // the page cannot read, go to the computer as files with the others
+      const limits = imageLimitsFor(launch.agentType && agentId(launch.agentType));
+      const spilled = { count: 0, bytes: 0 };
       for (const att of launch.attachments) {
-        if (att.mime.startsWith("image/")) {
-          images.push(await imagePayload(att.file));
+        let image: { mime: string; data: string } | null = null;
+        if (att.mime.startsWith("image/") && images.length >= limits.per_message) spilled.count++;
+        else if (att.mime.startsWith("image/") && att.file.size <= MAX_PICTURE_SOURCE) {
+          const { fitPicture } = await import("./image-scale");
+          image = await fitPicture(att.file, limits);
+          if (image && pictureRoom(images.map((i) => i.data.length), image.data.length, limits) !== "ok") {
+            image = null;
+            spilled.bytes++;
+          }
+        }
+        if (image) {
+          images.push(image);
         } else {
           let path = launch.uploaded[att.id];
           if (!path) {
@@ -214,6 +230,8 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
           paths.push(quotePath(path));
         }
       }
+      if (spilled.count) toast(t("chat-composer.images_as_files", { max: limits.per_message, count: spilled.count }));
+      if (spilled.bytes) toast(t("chat-composer.images_bytes_as_files", { count: spilled.bytes }));
       update({ outgoing: { text: [launch.text, ...paths].filter(Boolean).join("\n"), images } });
     }
     if (!getState().launches[id]) return;
