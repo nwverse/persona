@@ -144,7 +144,11 @@ func (s *Service) heldOutsideOwnKinds(ctx context.Context, lead string, tasks []
 		}
 		if own == nil {
 			own = map[string]bool{}
-			for _, p := range s.conversationPlans(ctx, lead) {
+			plans, err := s.conversationPlans(ctx, lead)
+			if err != nil {
+				s.logf("lead %s: its started plans: %v", short(lead), err) // read nothing: a place is new to the lead
+			}
+			for _, p := range plans {
 				if p.State != planStarted {
 					continue
 				}

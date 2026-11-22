@@ -308,7 +308,11 @@ func TestALeadStartsTheOwnersRelayedWordsAtOnce(t *testing.T) {
 		t.Fatal("the lead's plan on the owner's relayed words waits for Start")
 	}
 	var started *TaskPlan
-	for _, p := range d.s.conversationPlans(context.Background(), d.leaderID) {
+	plans, err := d.s.conversationPlans(context.Background(), d.leaderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range plans {
 		if p.State == planStarted {
 			started = p
 		}
