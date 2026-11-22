@@ -161,3 +161,21 @@ func TestSensitiveTextOutsideHealth(t *testing.T) {
 		t.Fatalf("declined agent_send: %s, sent %v", out, f.agentSent)
 	}
 }
+
+// A connector call says where it comes from (#13246): the conversation's track ("main" for the main track), its
+// kind, and its categories as a whole; none for a conversation the manager cannot place.
+func TestConnectorCallContext(t *testing.T) {
+	ctx := context.Background()
+	s, _, _ := infoUseService(t)
+	main := s.connectorCallContext(ctx, "qa-main")
+	if main.Track != "main" || main.TrackKind != "" || main.Categories == nil || len(main.Categories) != 0 {
+		t.Errorf("main: %+v", main)
+	}
+	fin := s.connectorCallContext(ctx, "qa-finance-1")
+	if fin.Track != "qa-finance" || fin.TrackKind != trackKindSpace || len(fin.Categories) != 1 || fin.Categories[0] != categoryFinance {
+		t.Errorf("finance track: %+v", fin)
+	}
+	if got := s.connectorCallContext(ctx, "qa-nowhere"); got.Track != "" || got.Categories != nil {
+		t.Errorf("a conversation the manager cannot place: %+v", got)
+	}
+}
