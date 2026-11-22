@@ -221,6 +221,10 @@ func (c *Client) callBody(ctx context.Context, op, method, path string, payload 
 					// The per-chat limit is waited out only on a POST that gets here idempotent: a send or reply with a uuid,
 					// which lands once. A card update that meets it is its caller's to slow down (it sends a newer card).
 					retry = env.Code == codeRateLimited || env.Code == codeChatRateLimited && method == http.MethodPost
+				case resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices:
+					// A gateway's JSON may omit code or report zero despite rejecting the request.
+					// Keep its body out of the error and never decode it as a successful receipt.
+					lastErr = fmt.Errorf("feishu %s: HTTP %d", op, resp.StatusCode)
 				case out == nil:
 					return nil
 				case len(env.Data) > 0 && string(env.Data) != "null":

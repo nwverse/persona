@@ -363,7 +363,18 @@ func writeNodes(b *strings.Builder, nodes []richNode, mentions []Mention, post *
 				b.WriteString("[视频]")
 			}
 		case "code_block":
-			fmt.Fprintf(b, "\n```%s\n%s\n```\n", strings.ToLower(n.Language), strings.TrimRight(n.Text, "\n"))
+			// A literal fence in a Markdown document must stay inside this code block.
+			fenceLen, run := 3, 0
+			for i := 0; i < len(n.Text); i++ {
+				if n.Text[i] == '`' {
+					run++
+					fenceLen = max(fenceLen, run+1)
+				} else {
+					run = 0
+				}
+			}
+			fence := strings.Repeat("`", fenceLen)
+			fmt.Fprintf(b, "\n%s%s\n%s\n%s\n", fence, strings.ToLower(n.Language), strings.TrimRight(n.Text, "\n"), fence)
 		case "emotion":
 			b.WriteString("[" + n.Emoji + "]")
 		case "hr":
