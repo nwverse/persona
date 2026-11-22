@@ -65,9 +65,10 @@
 # samples, route scopes and size budgets (#12842).
 # It also runs go vet, in a job of its own (job_go_vet, #12894): go vet -ldflags= ./... over the whole server module,
 # then GOOS=windows GOARCH=amd64 go vet -ldflags= on each changed package group, or on ./... for a change outside every
-# group (go.mod, a file directly in server/plugins/, sdk/go), as CI's server lane vets for Linux and Windows. Being its
-# own job, a vet that runs past its timeout on a cold build cache is that job's TIMEOUT and cannot hide a FAIL of the
-# guard job's contract tests. A changed .go file under server/ or sdk/go/ runs scripts/ci/gofmt.py on the changed .go
+# group (go.mod, a file directly in server/plugins/, sdk/go), as CI's server lane vets for Linux and Windows. A group
+# with no package that builds for Windows (internal/fleetsoak, cmd/password-wasm) is left out of the Windows step, as
+# CI's ./... passes over it, and the PASS line names it. Being its own job, a vet that runs past its timeout on a cold
+# build cache is that job's TIMEOUT and cannot hide a FAIL of the guard job's contract tests. A changed .go file under server/ or sdk/go/ runs scripts/ci/gofmt.py on the changed .go
 # files (job_go_fmt; --all checks both trees whole, as CI's Go formatting step does), a job that takes no go slot: it
 # compiles nothing, so it reports in seconds even while every go slot is busy.
 # scripts/privacy_check.py runs on every invocation that has changes (it is a seconds-long local scan, no network).
@@ -307,7 +308,8 @@ arr_has() {
 }
 
 # step runs one command under a timeout; a timeout classifies the whole job and stops it.
-# JOB_HINT (set by the job body) is appended to the TIMEOUT detail; each job appends its steps to one log.
+# JOB_HINT (set by the job body) is appended to the TIMEOUT detail; each job appends its steps to one log. JOB_NOTE (set
+# by the job body, outside in_dir's subshell) is shown on the job's PASS line: what a passing job left out, and why.
 step() {
   local _seconds=$1 _desc=$2
   shift 2
@@ -452,7 +454,7 @@ launch_all() {
       _rc=$?
       if [ ! -s "$JOB_STATUS" ]; then
         if [ "$_rc" -eq 0 ]; then
-          printf 'PASS\t0\t%s\t\n' "$SECONDS" > "$JOB_STATUS"
+          printf 'PASS\t0\t%s\t%s\n' "$SECONDS" "${JOB_NOTE:-}" > "$JOB_STATUS"
         else
           printf 'FAIL\t%s\t%s\texit %s\n' "$_rc" "$SECONDS" "$_rc" > "$JOB_STATUS"
         fi
@@ -597,21 +599,44 @@ job_go_fmt() {  # $1 = ALL for the whole of server/ and sdk/go/, else GO_FMT_FIL
 # . for the whole module; --all: the whole module), the second step also when the first failed, so one run names every
 # finding (#12894). -ldflags= clears a link flag GOFLAGS may carry and keeps the rest, as scripts/ci/server.sh does. The
 # Windows step names its environment through env, so its rerun line and --compare-main's rerun at the base keep it.
+# A group with no package that builds for Windows (every file of internal/fleetsoak is //go:build unix, of
+# cmd/password-wasm js && wasm), or whose directory is gone, is left out of the Windows step: given only such groups,
+# go vet says "no packages to vet" (or that the directory does not exist) and exits 1, where CI's ./... passes over
+# them. With no group left, the step does not run. The PASS line names each group left out (JOB_NOTE).
 job_go_vet() {  # $1 = ALL for the whole module on both platforms, else GO_VET_GROUPS
   [ "$HAVE_GO" -eq 1 ] || skip "go not found"
   JOB_SLOT=go
-  local _rc=0 _g _windows=()
+  local _rc=0 _g _windows=() _none=()
+  in_dir server step "$TIMEOUT_GO_TEST" "go vet ./..." go vet -ldflags= ./... || _rc=$?
   if [ "$1" = ALL ] || arr_has . ${GO_VET_GROUPS[@]+"${GO_VET_GROUPS[@]}"}; then
     _windows=(./...)
   else
-    for _g in ${GO_VET_GROUPS[@]+"${GO_VET_GROUPS[@]}"}; do _windows+=("./$_g/..."); done
+    for _g in ${GO_VET_GROUPS[@]+"${GO_VET_GROUPS[@]}"}; do
+      if [ ! -d "server/$_g" ] || no_windows_package "./$_g/..."; then
+        _none+=("./$_g/...")
+      else
+        _windows+=("./$_g/...")
+      fi
+    done
   fi
-  in_dir server step "$TIMEOUT_GO_TEST" "go vet ./..." go vet -ldflags= ./... || _rc=$?
+  if [ "${#_none[@]}" -gt 0 ]; then
+    JOB_NOTE="windows vet left out ${_none[*]}: no package there builds for windows"
+    echo "$JOB_NOTE"
+  fi
   if [ "${#_windows[@]}" -gt 0 ]; then
     in_dir server step "$TIMEOUT_GO_TEST" "GOOS=windows go vet ${_windows[*]}" \
       env GOOS=windows GOARCH=amd64 go vet -ldflags= "${_windows[@]}" || _rc=$?
   fi
   return "$_rc"
+}
+
+# no_windows_package <pattern> is true when go list, run in server/ for GOOS=windows, lists nothing for the pattern and
+# says it matched no packages. Any other answer, an error or a timeout included, is false: the group is vetted, and vet
+# reports what is wrong. go list compiles nothing, so it runs outside the go slot.
+no_windows_package() {
+  local _out
+  _out=$(cd server && "$TIMEOUT_BIN" -k 5s "$TIMEOUT_OTHER" env GOOS=windows GOARCH=amd64 go list "$1" 2>&1) || return 1
+  [ "$_out" = "go: warning: \"$1\" matched no packages" ]
 }
 
 job_go_build() {
@@ -1481,7 +1506,7 @@ for _i in "${!JOB_NAME[@]}"; do
   # The log's tail is a command's output, which need not be UTF-8: macOS sed stops at the first byte that is not
   # ("illegal byte sequence") in a UTF-8 locale, so it runs with LC_ALL=C.
   case "$_kind" in
-    PASS) echo "PASS     ${JOB_NAME[$_i]} (${_seconds}s$_waited)"; N_PASS=$((N_PASS+1)) ;;
+    PASS) echo "PASS     ${JOB_NAME[$_i]} (${_seconds}s$_waited${_detail:+; $_detail})"; N_PASS=$((N_PASS+1)) ;;
     SKIP) echo "SKIP     ${JOB_NAME[$_i]}: $_detail"; N_SKIP=$((N_SKIP+1)) ;;
     FAIL)
       echo "FAIL     ${JOB_NAME[$_i]} (${_seconds}s$_waited, $_detail); log: ${JOB_LOG[$_i]}"

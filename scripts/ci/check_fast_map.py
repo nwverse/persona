@@ -60,7 +60,8 @@ CHECKS = {
     "go-fmt": "python3 scripts/ci/gofmt.py on each changed .go file under server/ and sdk/go/ (the trees CI's Go "
               "formatting step covers), all in one job that takes no go slot (#12894)",
     "go-vet": "go vet -ldflags= ./... in server/, and GOOS=windows GOARCH=amd64 go vet -ldflags= of the path's package "
-              "group, or of ./... for a server or sdk/go path outside every group, in one job of its own (#12894)",
+              "group, or of ./... for a server or sdk/go path outside every group, in one job of its own (#12894); a "
+              "group with no package that builds for Windows, or that is gone, is left out of the Windows step",
     "sdk-go": "go test ./... in the sdk/go module",
     "android": "scripts/app/android_i18n_check.py, the slot order, token and motion baselines, and four of their "
                "unittests (no Gradle)",

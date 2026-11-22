@@ -343,6 +343,49 @@ class CheckFastServerInputsTests(unittest.TestCase):
                 self.assertEqual(["server|vet -ldflags= ./...", "server|GOOS=windows vet -ldflags= ./..."],
                                  self.vet_calls(), out)
 
+    def test_a_group_with_no_windows_package_is_left_out_of_the_windows_vet(self):
+        # Every file of server/internal/fleetsoak is //go:build unix and server/cmd/password-wasm is js && wasm: given
+        # only such groups, GOOS=windows go vet says "no packages to vet" and exits 1, where CI's ./... passes over them.
+        # This go says so too, and its go list answers as the real one does for such a group. A group is left out only
+        # on that answer: a go list that fails, or lists nothing without the warning, leaves the group in.
+        (self.go_log.parent / "go").write_text(
+            FAKE_GO + 'case "$GOOS $*" in\n'
+            '  "windows list ./internal/unixonly/...") echo \'go: warning: "./internal/unixonly/..." matched no packages\' >&2'
+            ' ;;\n'
+            '  "windows list ./internal/broken/...") echo "internal/broken/x.go:1:1: expected package" >&2; exit 1 ;;\n'
+            '  "windows vet "*./internal/unixonly/...*) echo "no packages to vet" >&2; exit 1 ;;\n'
+            'esac\n')
+        left_out = "windows vet left out ./internal/unixonly/...: no package there builds for windows"
+        for path in ("server/internal/unixonly/soak.go", "server/internal/foo/x.go", "server/internal/broken/x.go"):
+            self.write(path, "//go:build unix\n\npackage x\n")
+        out, _ = self.check_fast()
+        self.assertIn("PASS     server go vet (", out)
+        self.assertIn("; " + left_out + ")", out)
+        self.assertEqual(["server|vet -ldflags= ./...",
+                          "server|GOOS=windows vet -ldflags= ./internal/broken/... ./internal/foo/..."], self.vet_calls())
+        # With no group left, the Windows step does not run, and the job still passes.
+        self.git("checkout", "-q", "base", "--", ".")
+        self.git("clean", "-fdq")
+        self.go_log.unlink()
+        self.write("server/internal/unixonly/soak.go", "//go:build unix\n\npackage soak\n")
+        out, _ = self.check_fast()
+        self.assertIn("PASS     server go vet (", out)
+        self.assertIn(left_out, out)
+        self.assertEqual(["server|vet -ldflags= ./..."], self.vet_calls())
+
+    def test_a_removed_group_is_left_out_of_the_windows_vet(self):
+        # The group's directory is gone: go vet of ./internal/bar/... fails on the missing directory alone. The other
+        # changed group is still vetted for Windows.
+        (self.repo / "server/internal/bar/bar_test.go").unlink()
+        (self.repo / "server/internal/bar").rmdir()
+        self.write("server/internal/foo/x.go", "package foo\n")
+        out, _ = self.check_fast()
+        self.assertIn("PASS     server go vet (", out)
+        self.assertIn("; windows vet left out ./internal/bar/...: no package there builds for windows)", out)
+        self.assertEqual(["server|vet -ldflags= ./...", "server|GOOS=windows vet -ldflags= ./internal/foo/..."],
+                         self.vet_calls())
+        self.assertNotIn("server|GOOS=windows list ./internal/bar/...", self.go_calls())
+
     def test_an_unformatted_file_fails_the_gofmt_job_alone(self):
         self.write("server/internal/foo/x.go", "package foo\n\n// " + UNFORMATTED + "\n")
         self.write("server/internal/foo/y.go", "package foo\n")
@@ -433,8 +476,9 @@ class CheckFastServerInputsTests(unittest.TestCase):
         out, _ = self.check_fast()
         self.assertIn("PASS     server go test ./internal/assistant/...", out)
         self.assertIn("PASS     server go test ./internal/node/...", out)
-        calls = [call for call in self.go_calls()
-                 if call not in self.guard_calls() + self.vet_calls() and "|build " not in call]
+        # The vet job's go list of each group for Windows is its own; only the go test calls are counted here.
+        calls = [call for call in self.go_calls() if call not in self.guard_calls() + self.vet_calls()
+                 and "|build " not in call and "|GOOS=windows list " not in call]
         self.assertEqual(sorted([
             "server|list ./internal/assistant/...",
             "server|test -list .* ./internal/assistant",
