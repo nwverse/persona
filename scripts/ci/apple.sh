@@ -37,6 +37,7 @@ OUTPUT=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/persona-apple-ci.XXXXXX")
 DIAGNOSTICS="${CI_APPLE_DIAGNOSTICS:-$OUTPUT/diagnostics}"
 SOURCE="$OUTPUT/source"
 PROJECT="$SOURCE/apple/Persona.xcodeproj"
+OFFLINE_PROJECT="$SOURCE/apple/PersonaOfflineUnitTests.xcodeproj"
 SPM="${CI_SPM_CACHE:-$HOME/Library/Caches/persona-ci/spm}"
 mkdir -p "$SOURCE" "$SPM"
 SPM=$(cd "$SPM" && pwd)
@@ -256,7 +257,8 @@ if [ "$LANE" != packages ] && [ "$LANE" != ios-build ]; then
     BUILD_SECONDS=1800
     UNIT_SECONDS=1800
   fi
-  IOS_COMMON=("${XCODE[@]}" -scheme PersonaOfflineUnitTests -derivedDataPath "$OUTPUT/ios-tests" \
+  IOS_COMMON=(xcodebuild -project "$OFFLINE_PROJECT" -configuration Debug \
+    -clonedSourcePackagesDirPath "$SPM/SourcePackages" -scheme PersonaOfflineUnitTests -derivedDataPath "$OUTPUT/ios-tests" \
     -parallel-testing-enabled NO -disableAutomaticPackageResolution "${TEST_SIGNING[@]}")
   # Explicit fixture-only exclusions, not evidence of those integrations passing.
   # Swift Testing method selectors include (); without it disabled integration
@@ -295,6 +297,19 @@ fi
   IOS_UNIT_SELECTION=(-only-testing:PersonaTests/MainPagesStackTests
     -only-testing:PersonaTests/PhoneSystemToolsTests)
 fi
+  # The same real Persona test host and all of PersonaTests, but no second
+  # compilation of the embedded Watch/Share targets already covered by the
+  # device build. Resolve the ordinary project once, then remove only targets
+  # the offline test host cannot reach. The default/UI/About projects are whole.
+  ci_run 'Generate iPhone-only offline unit-test project' 120 bash -c '
+    set -euo pipefail
+    spec="$1"; output="$2"
+    xcodegen dump --spec "$spec" --type json > "$output/Persona.whole.json"
+    python3 "$3" "$output/Persona.whole.json" "$output/PersonaOfflineUnitTests.json"
+  ' -- "$SOURCE/apple/project.yml" "$OUTPUT" "$CI_ROOT/scripts/ci/apple_offline_project.py"
+  ci_run 'Generate offline unit-test Xcode project' 120 xcodegen generate \
+    --spec "$OUTPUT/PersonaOfflineUnitTests.json" --project-root "$SOURCE/apple" \
+    --project "$SOURCE/apple"
   # A generic destination must retain the host's single runnable architecture.
   ci_run 'Build iOS offline unit tests' "$BUILD_SECONDS" bash -c '
     set -euo pipefail

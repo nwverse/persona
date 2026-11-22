@@ -187,7 +187,7 @@ func (n *Node) scanOffline() []proto.Session {
 			title, cwd = cmp.Or(title, about.title), cmp.Or(cwd, about.cwd)
 		}
 		cwd = n.assistantHome(id, cwd)
-		if c.count == assistants && !identity.IsAssistantDir(cwd) && !identity.InHealthSpace(cwd) {
+		if c.count == assistants && !identity.IsAssistantDir(cwd) && !identity.InSpace(cwd) {
 			base := filepath.Base(filepath.Dir(c.path))
 			if dir := n.assistantDirOfProject(base); dir != "" {
 				cwd = dir
@@ -317,13 +317,13 @@ func (n *Node) assistantDirOfProject(base string) string {
 }
 
 // assistantHome is the directory session id is listed in at rest: the directory its node record says it started in,
-// when that is an assistant or health directory (the unresolved path its running process and resumes use), else cwd
+// when that is an assistant or space directory (the unresolved path its running process and resumes use), else cwd
 // (what its transcript says: where an assistant conversation started, an agent's latest directory, #2368).
 func (n *Node) assistantHome(id, cwd string) string {
 	if n.state == nil {
 		return cwd
 	}
-	if st, ok := n.state.get(id); ok && (identity.IsAssistantDir(st.Cwd) || identity.InHealthSpace(st.Cwd)) {
+	if st, ok := n.state.get(id); ok && (identity.IsAssistantDir(st.Cwd) || identity.InSpace(st.Cwd)) {
 		return st.Cwd
 	}
 	return cwd
