@@ -610,6 +610,16 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || sessionSend) && p["is_main"] == true {
 		p["idle_compaction"] = s.idleCompactionPolicy(ctx)
 	}
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || sessionSend) {
+		// Every manager-owned send into an existing conversation attests the cache refresh role here, not only those
+		// through sendModel: a leader's supervision digest, a relay, an A2A delivery or an Inbox continuation can be
+		// what starts the process, and the node mounts the refresh proxy only at a start (#12786). A new conversation's
+		// start (no id yet) keeps what start put; whatever a caller set for an existing one is replaced.
+		if id, _ := p["session_id"].(string); id != "" {
+			cfg := s.settings(ctx)
+			s.putCacheKeepalive(ctx, device, id, cfg.Main == id && cfg.mainRouteMachine() == device, p)
+		}
+	}
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || sessionSend) {
 		// The window the main conversation is held to (main_compact_window.go), as sendModel puts it: a start, a relay,
 		// an internal message and the spare warmed for its next start carry it with is_main, or the node starts it again
@@ -663,13 +673,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		return beforeNodeWrite(method, err)
 	}
 	p := DeviceCall{Device: device, Method: nodeMethod(method, params), Params: raw}
-	res, ok, err := s.logicalCall(ctx, device, p.Method, p.Params)
-	if !ok {
-		res, ok, err = s.localFleetDeviceCall(ctx, p)
-	} // what the hub answered before the nodes' events were the manager's
-	if !ok {
-		res, err = s.hub.DeviceCall(ctx, p)
-	}
+	res, err := s.callDevice(ctx, p)
 	// Not taken: refused before anything was typed, or it never reached the computer (relay_refusal.go).
 	taken = err == nil || !sendNotTaken(err)
 	if taskRoot != "" && (method == DeviceSessionSend || method == deviceTaskStart) {

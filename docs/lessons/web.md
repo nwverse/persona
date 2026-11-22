@@ -1517,3 +1517,12 @@ A foreground dock timer flag in `ChatContext` invalidates every historical excha
 even through memoized rows. Carry it as a prop only on live transcript lines (including live children of an opened
 background round). Compare message-action renders for starting and ending separately against different history
 lengths, and retain the single-timer tests for Agent and Persona chats.
+
+## Same-address history replacements need a route snapshot change (#12055)
+
+`history.replaceState` can change a drill-down's origin while leaving its URL unchanged. Calling the router's listeners is
+not enough when `useRoute` snapshots only `location.pathname + location.search`: React sees the same snapshot and keeps the
+old sidebar highlight. Snapshot a router revision that advances on every actual navigation, including same-address replace,
+and test the visible row as well as the cleared `handoff` state. A component that copied that origin into `useState` still
+keeps the old way-back strip, so read the current entry when the revision changes. Keep an explicit sidebar reselection as
+a replace, not a push, so it cannot add a duplicate history entry.

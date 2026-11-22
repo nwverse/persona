@@ -5628,6 +5628,46 @@ type AssistantDataStatusResult struct {
 	Items []AssistantDataItem `json:"items"`
 }
 
+// BrowserMachinesParams: browser.machines (browser.run): list computers that have a browser backend enabled.
+type BrowserMachinesParams struct {
+	// Optional backend filter (e.g. ego, cdp). Empty returns all backends.
+	Backend string `json:"backend,omitempty"`
+}
+
+type BrowserMachine struct {
+	MachineID string `json:"machine_id"`
+	Name      string `json:"name"`
+	// Browser backend identifier (e.g. ego, cdp).
+	Backend string `json:"backend"`
+	Online  bool   `json:"online"`
+	Ready   bool   `json:"ready"`
+}
+
+type BrowserMachinesResult struct {
+	Machines []BrowserMachine `json:"machines"`
+}
+
+// BrowserRunParams: browser.run (browser.run): run a script inside an extension-isolated browser task space
+// (ext-<extensionID>-<slot>) on machine_id.
+type BrowserRunParams struct {
+	MachineID string `json:"machine_id"`
+	// Browser backend to use (default: ego).
+	Backend string `json:"backend,omitempty"`
+	// Logical slot name scoped to this extension (e.g. pac-muse).
+	Slot string `json:"slot"`
+	// Async JS script body executed inside the isolated task space.
+	Script    string `json:"script"`
+	TimeoutMs int    `json:"timeout_ms,omitempty"`
+}
+
+type BrowserRunResult struct {
+	Backend string `json:"backend"`
+	// Raw output / JSON payload returned by the browser backend.
+	Output string `json:"output"`
+	// Script error message, if any.
+	Error string `json:"error,omitempty"`
+}
+
 type StorageEmptyParams struct {
 }
 
@@ -7390,6 +7430,11 @@ var newDef = map[string]func() any{
 	"AssistantDataStatusParams":     func() any { return new(AssistantDataStatusParams) },
 	"AssistantDataItem":             func() any { return new(AssistantDataItem) },
 	"AssistantDataStatusResult":     func() any { return new(AssistantDataStatusResult) },
+	"BrowserMachinesParams":         func() any { return new(BrowserMachinesParams) },
+	"BrowserMachine":                func() any { return new(BrowserMachine) },
+	"BrowserMachinesResult":         func() any { return new(BrowserMachinesResult) },
+	"BrowserRunParams":              func() any { return new(BrowserRunParams) },
+	"BrowserRunResult":              func() any { return new(BrowserRunResult) },
 	"StorageEmptyParams":            func() any { return new(StorageEmptyParams) },
 	"StorageRequestResult":          func() any { return new(StorageRequestResult) },
 	"StorageKeyParams":              func() any { return new(StorageKeyParams) },
@@ -7530,6 +7575,8 @@ var Calls = map[string]Call{
 	"assistant.messages":             {Name: "assistant.messages", From: "program", Params: "AssistantMessagesParams", Result: "AssistantMessagesResult"},
 	"assistant.memory":               {Name: "assistant.memory", From: "program", Params: "AssistantMemoryParams", Result: "AssistantMemoryResult"},
 	"assistant.data_status":          {Name: "assistant.data_status", From: "program", Params: "AssistantDataStatusParams", Result: "AssistantDataStatusResult"},
+	"browser.machines":               {Name: "browser.machines", From: "program", Params: "BrowserMachinesParams", Result: "BrowserMachinesResult"},
+	"browser.run":                    {Name: "browser.run", From: "program", Params: "BrowserRunParams", Result: "BrowserRunResult"},
 	"storage.request":                {Name: "storage.request", From: "program", Params: "StorageEmptyParams", Result: "StorageRequestResult"},
 	"storage.get":                    {Name: "storage.get", From: "program", Params: "StorageKeyParams", Result: "StorageEntry"},
 	"storage.list":                   {Name: "storage.list", From: "program", Params: "StorageListParams", Result: "StorageListResult"},

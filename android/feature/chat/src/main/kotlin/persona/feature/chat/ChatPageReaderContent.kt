@@ -114,6 +114,7 @@ internal fun ChatPageReaderContent(
     turnLauncher: String?,
     earlierEngines: EarlierEnginePresentation?,
     onReadEarlierText: (SessionKey, Item) -> Unit,
+    hasPendingCards: Boolean = false,
 ) {
     val horizontalPadding = pagePadding
     val res = LocalResources.current
@@ -152,7 +153,7 @@ internal fun ChatPageReaderContent(
             },
             navigation = {
                 ChatPageReaderNavigation(horizontalPadding, showJump, lines, contentPlans, renderStyle, list,
-                    planSheet, sheetPlan, glass, agentChat, scope, timeline, timelineVersion, currentItems,
+                    planSheet, sheetPlan, glass, agentChat, hasPendingCards, scope, timeline, timelineVersion, currentItems,
                     chatList, snapshot.items, newestVisibleItem, readThrough, deferCount)
             },
         ) { listBottomInset ->
@@ -287,6 +288,7 @@ private fun ChatPageReaderNavigation(
     sheetPlan: MutableState<LinePlan?>,
     glass: Boolean,
     agentChat: Boolean,
+    hasPendingCards: Boolean,
     scope: kotlinx.coroutines.CoroutineScope,
     timeline: ChatTimeline,
     timelineVersion: MutableState<Int>,
@@ -297,31 +299,44 @@ private fun ChatPageReaderNavigation(
     readThrough: Item?,
     deferCount: Boolean,
 ) {
-    // A plan outside the viewport is still reachable from the conversation's footer.
+    // A plan outside the viewport (or inside a folded Glass work line, matching iOS ChatPlan.latest) stays reachable
+    // from the conversation's footer.
     val anchor = remember(lines, contentPlans, renderStyle) { latestPlanLine(lines, contentPlans) }
-    val planOut by remember(anchor) { derivedStateOf {
-        anchor != null && list.layoutInfo.totalItemsCount > 0 &&
-            list.layoutInfo.visibleItemsInfo.none { it.key == anchor.lineId }
+    val opensSheet = glass && agentChat
+    val glassPlan = remember(items, opensSheet) { if (opensSheet) latestChatPlan(items) else null }
+    val planOut by remember(anchor, glassPlan, opensSheet) { derivedStateOf {
+        if (opensSheet) {
+            glassPlan != null && list.layoutInfo.totalItemsCount > 0 && (
+                anchor == null || anchor.plan.id != glassPlan.id ||
+                    list.layoutInfo.visibleItemsInfo.none { it.key == anchor.lineId }
+            )
+        } else {
+            anchor != null && list.layoutInfo.totalItemsCount > 0 &&
+                list.layoutInfo.visibleItemsInfo.none { it.key == anchor.lineId }
+        }
     } }
+    val activePlan = if (opensSheet) glassPlan else anchor?.plan
+    val showPlanPill = activePlan != null && planOut && (!opensSheet || !hasPendingCards)
     // An open sheet keeps the last plan if its work line folds away.
-    if (planSheet.value && anchor != null) SideEffect { sheetPlan.value = anchor.plan }
-    if (showJump || planOut) Row(
+    if (planSheet.value && activePlan != null) SideEffect { sheetPlan.value = activePlan }
+    if (showJump || showPlanPill) Row(
         Modifier.fillMaxWidth().padding(horizontal = horizontalPadding).padding(bottom = Tokens.Space.s),
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            if (anchor != null && planOut) {
-                val progress = remember(anchor.plan.todos) { planProgress(anchor.plan.todos) }
-                val opensSheet = glass && agentChat
+            if (showPlanPill && activePlan != null) {
+                val progress = remember(activePlan.todos) { planProgress(activePlan.todos) }
                 PlanPill(progress.step, progress.total, progress.done, onClick = {
-                    if (opensSheet) { sheetPlan.value = anchor.plan; planSheet.value = true }
-                    else scope.launch {
-                        timeline.freeze(currentItems()); timelineVersion.value++
-                        chatList.scrollToRecord(anchor.lineId)
+                    if (opensSheet) { sheetPlan.value = activePlan; planSheet.value = true }
+                    else anchor?.let { target ->
+                        scope.launch {
+                            timeline.freeze(currentItems()); timelineVersion.value++
+                            chatList.scrollToRecord(target.lineId)
+                        }
                     }
                 }, modifier = Modifier.heightIn(min = Tokens.MinTouch.android),
-                    spoken = if (opensSheet) planStepText(LocalResources.current, anchor.plan.todos) else null,
+                    spoken = if (opensSheet) planStepText(LocalResources.current, activePlan.todos) else null,
                     onClickLabel = if (opensSheet) stringResource(R.string.chat_plan_pill_opens) else null)
             }
         }

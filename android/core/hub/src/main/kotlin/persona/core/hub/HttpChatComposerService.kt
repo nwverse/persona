@@ -33,6 +33,8 @@ class HttpChatComposerService internal constructor(
     private val request: suspend (String, RequestBody, Map<String, String>) -> Response,
     /** This hub's current features; empty before the first hello, when attachment retention is still worth trying. */
     private val features: () -> Set<String> = { emptySet() },
+    /** Claim a refusal retry's operation before any request reaches the hub. */
+    private val onRetryStart: suspend (String, String) -> Unit = { _, _ -> },
     /** A refusal retry's delivery, operation id, and actual transport result (null until a final response). */
     private val onRetryDelivery: suspend (String, ComposerDelivery, String, MessageTransportResult?) -> Unit = { _, _, _, _ -> },
     private val onPairingExpired: () -> Unit = {},
@@ -42,6 +44,7 @@ class HttpChatComposerService internal constructor(
         hubScope: HubScope, transport: MessageTransport, connection: OkHttpHubConnection, token: String,
         onRetryDelivery: suspend (String, ComposerDelivery, String, MessageTransportResult?) -> Unit,
         onPairingExpired: () -> Unit,
+        onRetryStart: suspend (String, String) -> Unit = { _, _ -> },
         isCurrent: () -> Boolean = { true },
         onHeld: suspend (SessionKey, HeldAgentMessage) -> Unit = { _, _ -> },
     ) :
@@ -64,7 +67,7 @@ class HttpChatComposerService internal constructor(
                         throw HubFailure(HubError.Transport, "Route changed before receipt")
                     }
                 }
-        }, { connection.serverFeatures.value }, onRetryDelivery, onPairingExpired, onHeld)
+        }, { connection.serverFeatures.value }, onRetryStart, onRetryDelivery, onPairingExpired, onHeld)
 
     override val deliveries = MutableStateFlow<Map<String, ComposerDelivery>>(emptyMap())
     private val refused = mutableMapOf<String, MessageRequest>()
@@ -158,6 +161,7 @@ class HttpChatComposerService internal constructor(
         // The refused id is spent: the hub answers it again from its first try (the 409, or op_id_reused once
         // clear_draft is added), so the retry goes under a new one, as on iOS.
         val retry = original.copy(clearDraft = clearable, opId = UUID.randomUUID().toString())
+        onRetryStart(clientMessageId, retry.opId)
         onRetryDelivery(clientMessageId, ComposerDelivery(DeliveryState.Sending), retry.opId, null)
         record(original, ComposerDelivery(DeliveryState.Sending))
         val result = try { sendLocked(retry) }

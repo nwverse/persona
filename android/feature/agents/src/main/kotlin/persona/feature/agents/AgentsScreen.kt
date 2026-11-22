@@ -158,9 +158,9 @@ internal fun AgentsScreen(
     val refreshing by model.refreshing.collectAsStateWithLifecycle()
     val notice by model.notice.collectAsStateWithLifecycle()
     val hubNotice by model.hubNotice.collectAsStateWithLifecycle()
-    val herdrStates by (model.herdr?.states ?: kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, HerdrState>())).collectAsStateWithLifecycle()
-    val startingHerdr by (model.herdr?.starting ?: kotlinx.coroutines.flow.MutableStateFlow(emptySet<String>())).collectAsStateWithLifecycle()
-    val herdrFailures by (model.herdr?.failures ?: kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, HerdrFailure>())).collectAsStateWithLifecycle()
+    val herdrStates by (model.herdr?.states ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, HerdrState>()) }).collectAsStateWithLifecycle()
+    val startingHerdr by (model.herdr?.starting ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptySet<String>()) }).collectAsStateWithLifecycle()
+    val herdrFailures by (model.herdr?.failures ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, HerdrFailure>()) }).collectAsStateWithLifecycle()
     val operations by model.operationState.collectAsStateWithLifecycle()
     val archives = model.archives
     val archiveState by (archives?.state ?: remember { kotlinx.coroutines.flow.MutableStateFlow(AgentArchiveSnapshot()) }).collectAsStateWithLifecycle()
@@ -173,10 +173,10 @@ internal fun AgentsScreen(
     var confirmRead by remember { mutableStateOf<List<AgentSession>?>(null) }
     /** A project being put on a to-do ("Link to to-do…"): its machine and its name as the hub keys it. */
     var pickingTodoForSpace by remember { mutableStateOf<Pair<String, String>?>(null) }
-    val todos by (model.tasks?.todos ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())).collectAsStateWithLifecycle()
+    val todos by (model.tasks?.todos ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyList()) }).collectAsStateWithLifecycle()
     val sessionsByKey = remember(page.sessions) { page.sessions.associateBy { it.key } }
     // By To-do only when the hub has to-dos, as iOS offers it (`DevGrouping.offered(supportsTodos:)`, #4338 A5).
-    val todosSupported by (model.tasks?.todosSupported ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsStateWithLifecycle()
+    val todosSupported by (model.tasks?.todosSupported ?: remember { kotlinx.coroutines.flow.MutableStateFlow(false) }).collectAsStateWithLifecycle()
     // "By pinned" only from a hub with the direction tree (#4352), or while it is the one chosen.
     val groupings = offeredGroupings(todosSupported, page.directionsAvailable || page.preferences.grouping == AgentGrouping.Direction)
     // A fallback for when no app feedback is provided (previews, tests): the page's own toast, as the root's.
@@ -190,8 +190,9 @@ internal fun AgentsScreen(
     var menu by remember { mutableStateOf(false) }
     var searchVisible by rememberSaveable { mutableStateOf(false) }
     val homeChrome = sidebar != null || LocalHomeChrome.current != null
+    val isGlass = PersonaTheme.style == AppStyle.Glass
     val layout = LocalWindowLayout.current
-    val optionsInSelectedTab = homeChrome && PersonaTheme.style == AppStyle.Glass && !layout.expanded && !layout.tabletop &&
+    val optionsInSelectedTab = homeChrome && isGlass && !layout.expanded && !layout.tabletop &&
         connection == ConnectionState.Online
     val firstPageIncomplete = !page.loaded && page.list.groups.isEmpty()
     var newAgent by rememberSaveable { mutableStateOf(false) }
@@ -561,27 +562,65 @@ internal fun AgentsScreen(
             }
             if (page.preferences.range != AgentRange.History && needsYou.isNotEmpty()) {
                 item(NeedsYouListKey) {
-                    JSectionHeader(stringResource(persona.core.designsystem.R.string.designsystem_core_state_needs_you), count = needsYou.size)
+                    JSectionHeader(
+                        stringResource(persona.core.designsystem.R.string.designsystem_core_state_needs_you),
+                        count = needsYou.size,
+                        countTone = Status.NeedsYou.takeIf { isGlass },
+                    )
                 }
-                for (row in needsYou) {
-                    val owner = sessionsByKey[row.key] ?: everySession.firstOrNull { it.key == row.key }.takeIf { sidebar != null }
-                    if (row.cards.isEmpty()) {
-                        // Waiting in its terminal with no card read: a row of its own that opens the session, as iOS's
-                        // Terminal Needs You row (its session row stays in the list below).
-                        if (owner != null || sidebar != null) item("needs-you:${row.id}") {
-                            JRow(stringResource(persona.core.designsystem.R.string.designsystem_decision_screen),
-                                subtitle = owner?.let {
-                                    if (sidebar == null) it.title.takeIf(String::isNotBlank) ?: it.sessionId else it.displayTitle
-                                },
-                                leadingIcon = persona.core.designsystem.icons.PersonaIcons.terminal,
-                                value = names[row.key.machineId], onClick = {
-                                    if (owner != null) openRow(owner.listSession(page.preferences)) else open(row.key)
-                                })
+                if (isGlass) {
+                    val glassItems = flattenGlassNeedsYou(
+                        rows = needsYou,
+                        ownerOf = { row -> sessionsByKey[row.key] ?: everySession.firstOrNull { it.key == row.key }.takeIf { sidebar != null } },
+                        machineOf = { id -> names[id] },
+                        includeOwnerlessWaiting = sidebar != null,
+                    )
+                    itemsIndexed(glassItems, key = { _, entry -> entry.itemKey }) { index, entry ->
+                        JGroupItem(GroupPosition.of(index, glassItems.size), grouped = true) {
+                            when (entry) {
+                                is GlassNeedsYouItem.Waiting -> GlassNeedsYouWaitingRow(
+                                    owner = entry.owner,
+                                    machine = entry.machine,
+                                    sidebar = sidebar != null,
+                                    onClick = {
+                                        if (entry.owner != null) openRow(entry.owner.listSession(page.preferences)) else open(entry.row.key)
+                                    },
+                                )
+                                is GlassNeedsYouItem.Card -> GlassNeedsYouCardRow(
+                                    request = entry.request,
+                                    machine = entry.machine,
+                                    now = now,
+                                    online = reachable(entry.request),
+                                    delivery = delivery[entry.request.id],
+                                    showsPlace = entry.showsPlace,
+                                    onOpen = { requestDetail = entry.request },
+                                    onAnswer = model::answer,
+                                    approvable = entry.owner?.canApprove ?: true,
+                                )
+                            }
                         }
-                    } else items(row.cards, key = { "request:${it.id}" }) { request ->
-                        RequestCard(request, names[request.machineId], metadata, now, reachable(request),
-                            delivery[request.id], { requestDetail = request }, model::answer,
-                            space = owner?.spaceName?.takeIf { it.isNotBlank() }, approvable = owner?.canApprove ?: true)
+                    }
+                } else {
+                    for (row in needsYou) {
+                        val owner = sessionsByKey[row.key] ?: everySession.firstOrNull { it.key == row.key }.takeIf { sidebar != null }
+                        if (row.cards.isEmpty()) {
+                            // Waiting in its terminal with no card read: a row of its own that opens the session, as iOS's
+                            // Terminal Needs You row (its session row stays in the list below).
+                            if (owner != null || sidebar != null) item("needs-you:${row.id}") {
+                                JRow(stringResource(persona.core.designsystem.R.string.designsystem_decision_screen),
+                                    subtitle = owner?.let {
+                                        if (sidebar == null) it.title.takeIf(String::isNotBlank) ?: it.sessionId else it.displayTitle
+                                    },
+                                    leadingIcon = persona.core.designsystem.icons.PersonaIcons.terminal,
+                                    value = names[row.key.machineId], onClick = {
+                                        if (owner != null) openRow(owner.listSession(page.preferences)) else open(row.key)
+                                    })
+                            }
+                        } else items(row.cards, key = { "request:${it.id}" }) { request ->
+                            RequestCard(request, names[request.machineId], metadata, now, reachable(request),
+                                delivery[request.id], { requestDetail = request }, model::answer,
+                                space = owner?.spaceName?.takeIf { it.isNotBlank() }, approvable = owner?.canApprove ?: true)
+                        }
                     }
                 }
             }
