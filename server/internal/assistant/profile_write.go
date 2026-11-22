@@ -130,7 +130,7 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.CacheKeepaliveMinutes != nil && (*in.CacheKeepaliveMinutes < 1 || *in.CacheKeepaliveMinutes > 55) || in.CacheKeepaliveMax != nil && (*in.CacheKeepaliveMax < 1 || *in.CacheKeepaliveMax > 144) {
-		apierr.Write(w, http.StatusBadRequest, errors.New("cache_keepalive_minutes must be 1–55; cache_keepalive_max must be 1–144"))
+		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_cache_keepalive"))
 		return
 	}
 	if m := in.IdleAutoCompactMinutes; m != nil && (*m < minIdleAutoCompactMinutes || *m > maxIdleAutoCompactMinutes) {
