@@ -280,6 +280,8 @@
     <string name="chat_source_unknown">送信元</string>
     <string name="chat_source_expand">もっと見る</string>
     <string name="chat_source_collapse">折りたたむ</string>
+    <string name="chat_bubble_show_more">展開</string>
+    <string name="chat_bubble_show_less">折りたたむ</string>
     <string name="chat_injected_open_task">タスクを開く</string>
     <string name="chat_injected_view_request">タスクの依頼内容を見る</string>
     <string name="chat_read_only_history">過去のセッションは閲覧のみです。先にこのセッションを再開してください</string>
