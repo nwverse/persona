@@ -222,6 +222,11 @@ func (s *Service) toolTaskScope(ctx context.Context, self string, args json.RawM
 	if supervisor != self && !(s.isMain(ctx, self) && !s.isLeader(ctx, supervisor)) && !s.backgroundSupervises(ctx, self, t) {
 		return "", fmt.Errorf("task %s is supervised by another conversation: only its supervisor changes its scope", t.ID)
 	}
+	// A card-less owner wait must not be pushed further out by an estimate extension or scope change (#12648); the
+	// refusal happens before the brief is written.
+	if err := s.cardlessOwnerWaitGuard(ctx, t); err != nil {
+		return "", err
+	}
 	c := scopeChange{By: self, Change: a.Change, Why: a.Why, Expect: a.ExpectMinutes}
 	if a.DoneWhen != nil {
 		c.DoneWhen = cleanDoneWhen(*a.DoneWhen)
