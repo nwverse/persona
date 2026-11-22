@@ -364,16 +364,11 @@ func (s *Service) agentDoneHead(ctx context.Context, machine, session, head stri
 // ("" when there is no such break).
 func leadAndRest(md string, n int) (lead, rest string) {
 	lines := strings.Split(md, "\n")
-	runes, fence := 0, ""
+	runes := 0
+	fence := feishubot.NewCodeFence(md)
 	for i, line := range lines {
 		t := strings.TrimSpace(line)
-		if fence != "" {
-			if strings.HasPrefix(t, fence) {
-				fence = ""
-			}
-		} else if strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
-			fence = t[:3]
-		} else if t == "" && runes >= n && i < len(lines)-1 {
+		if !fence.Next() && t == "" && runes >= n && i < len(lines)-1 {
 			if r := strings.TrimSpace(strings.Join(lines[i+1:], "\n")); r != "" {
 				return strings.TrimSpace(strings.Join(lines[:i], "\n")), r
 			}

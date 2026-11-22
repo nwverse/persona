@@ -425,7 +425,6 @@ func (c *Card) Raw() *CardPayload { return &CardPayload{Type: "raw", Data: c} }
 // --- Markdown ---
 
 var (
-	fenceRe  = lazyre.New("(?s)```.*?(?:```|$)|~~~.*?(?:~~~|$)")
 	inlineRe = lazyre.New("`[^`\n]+`")
 	// A list item's line: its indentation, its marker ("- ", "* ", "+ ", "1. ", "1) ") and what follows it.
 	listItemRe = lazyre.New(`^([ \t]*)(?:[-*+]|\d{1,9}[.)])[ \t]+\S`)
@@ -436,13 +435,18 @@ var (
 // (<https://…>, <mailto:…>) becomes a card link first; and a list is nested the way cards nest it (listIndent). The
 // assistant's persona-card charts are written as numbers first (PersonaCards).
 func CardMarkdown(s string) string {
-	s = listIndent(PersonaCards(s))
+	s = PersonaCards(s)
+	fence := NewCodeFence(s)
+	s = listIndent(s)
 	var b strings.Builder
-	last := 0
-	for _, loc := range fenceRe.FindAllStringIndex(s, -1) {
-		b.WriteString(cardProse(s[last:loc[0]]))
-		b.WriteString(s[loc[0]:loc[1]])
-		last = loc[1]
+	last, at := 0, 0
+	for _, line := range strings.SplitAfter(s, "\n") {
+		if fence.Next() {
+			b.WriteString(cardProse(s[last:at]))
+			b.WriteString(line)
+			last = at + len(line)
+		}
+		at += len(line)
 	}
 	b.WriteString(cardProse(s[last:]))
 	return b.String()
@@ -460,20 +464,17 @@ func CardMarkdown(s string) string {
 func listIndent(s string) string {
 	lines := strings.Split(s, "\n")
 	var levels []int // the indent width of each open nesting level, outermost first
-	fence := ""
+	fence := NewCodeFence(s)
 	for i, line := range lines {
 		t := strings.TrimSpace(line)
-		if fence != "" { // inside code: as written
-			if strings.HasPrefix(t, fence) && strings.Trim(t, fence[:1]) == "" {
-				fence = ""
-			}
-			continue
-		}
-		if f := fenceMarker(t); f != "" {
-			fence = f
+		inCode := fence.Next()
+		if inCode && !fence.opening { // code, including an indented closing lookalike: as written
 			continue
 		}
 		m := listItemRe.FindStringSubmatchIndex(line)
+		if inCode && m == nil {
+			continue
+		}
 		if m == nil {
 			if t != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
 				levels = levels[:0] // a paragraph at the left margin ends the list
@@ -504,6 +505,46 @@ func listIndent(s string) string {
 }
 
 func cardProse(s string) string {
+	// The former fence matcher also protected complete inline runs of three or
+	// more backticks. Match their whole delimiter before applying the existing
+	// single-backtick handling, so an inner shorter run cannot expose code tags.
+	var b strings.Builder
+	last, at := 0, 0
+	for at < len(s) {
+		if s[at] != '`' {
+			at++
+			continue
+		}
+		start := at
+		for at < len(s) && s[at] == '`' {
+			at++
+		}
+		n := at - start
+		if n < 3 {
+			continue
+		}
+		for end := at; end < len(s) && s[end] != '\n'; {
+			if s[end] != '`' {
+				end++
+				continue
+			}
+			close := end
+			for end < len(s) && s[end] == '`' {
+				end++
+			}
+			if end-close == n {
+				b.WriteString(cardProseSingle(s[last:start]))
+				b.WriteString(s[start:end])
+				last, at = end, end
+				break
+			}
+		}
+	}
+	b.WriteString(cardProseSingle(s[last:]))
+	return b.String()
+}
+
+func cardProseSingle(s string) string {
 	var b strings.Builder
 	last := 0
 	for _, loc := range inlineRe.FindAllStringIndex(s, -1) {
