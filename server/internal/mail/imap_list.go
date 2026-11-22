@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -263,21 +264,35 @@ func headerMatch(env *imap.Envelope, terms []string) bool {
 
 // listOne pages one mailbox of one account.
 func (s *Service) listOne(ctx context.Context, a *MailAccount, mailbox string, limit int, beforeUID uint32, query string) (*ListResult, error) {
+	op := "list " + mailbox
+	if query != "" {
+		op = "search " + mailbox
+	}
 	var out *ListResult
-	err := s.withConnAt(ctx, a, func(c *imapclient.Client, deadline time.Time) error {
+	// What a try's search found, for a retry on a new login: a server that ends the connection right after it answers
+	// a search (seen with QQ Mail) would end the retry's too if it searched again, so the retry only fetches, as long
+	// as the mailbox's UIDs still mean the same messages (UIDVALIDITY).
+	var (
+		found    *uidSearch
+		validity uint32
+	)
+	err := s.withConnAt(ctx, a, op, func(c *imapclient.Client, deadline time.Time) error {
 		out = nil
 		// When the operation began, connecting included (a cold login to a slow server takes seconds), and not again
 		// on a retry: the page's time counts from here. A sooner context deadline makes it earlier, which is safe.
 		started := deadline.Add(-networkTimeout)
 		sel, err := c.Select(mailbox, &imap.SelectOptions{ReadOnly: true}).Wait()
 		if err != nil {
-			return fmt.Errorf("select %s: %w", mailbox, err)
+			return failedAt("select "+mailbox, err)
 		}
-		found, err := s.searchUIDs(ctx, c, a, mailbox, beforeUID, query, limit+1, started)
-		if err != nil {
-			return fmt.Errorf("search: %w", err)
+		if found == nil || validity != sel.UIDValidity {
+			f, err := s.searchUIDs(ctx, c, a, mailbox, beforeUID, query, limit+1, started)
+			if err != nil {
+				return failedAt("search", err)
+			}
+			found, validity = &f, sel.UIDValidity
 		}
-		uids := found.uids
+		uids := slices.Clone(found.uids) // sorted newest first below: the kept search stays ascending
 		res := &ListResult{Messages: []MailSummary{}, HeadersOnly: found.headersOnly, UIDValidity: sel.UIDValidity}
 		switch {
 		case len(uids) > limit:
@@ -317,7 +332,7 @@ func (s *Service) listOne(ctx context.Context, a *MailAccount, mailbox string, l
 				},
 			}).Collect()
 			if err != nil {
-				return fmt.Errorf("fetch: %w", err)
+				return failedAt("fetch", err)
 			}
 			for _, m := range msgs {
 				res.Messages = append(res.Messages, s.summaryFrom(a, mailbox, m))

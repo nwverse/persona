@@ -123,7 +123,9 @@ const (
 	// FeishuMessages: {message_id} → {items: [feishubot.Item]}: a message read back (a quote; a merged forward with
 	// the messages in it).
 	FeishuMessages = "feishu.messages"
-	// FeishuResource: {message_id, key, kind} → {data, mime}: an image of a message the bot received (at most 3 MB).
+	// FeishuResource: {message_id, key, kind, machine_id, as_file?} → {data, mime} for an image at most 3 MiB,
+	// or {path, mime, name} saved on the machine from the same download (over 3 MiB or as_file),
+	// or {too_large: true, name} above the 50 MiB file limit. Save failures carry CodeFeishuSave.
 	FeishuResource = "feishu.resource"
 	// FeishuSave: {message_id, key, kind, name, machine_id} → {path}: a file (or a large image) of a message saved on
 	// a machine (its temp directory, like the apps' uploads), at most 50 MB.

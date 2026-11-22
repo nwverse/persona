@@ -1,5 +1,15 @@
 # Lessons: Android
 
+## A delayed settings GET must not undo an acknowledged PUT (#12680)
+
+A pull-to-refresh can remain pending while a settings switch is saved. Protecting the credential form alone does not
+protect the hub status: an older GET can still restore the previous switch value or replace a save's error. In the Lark
+bot model, reserve each read's sequence and save generation before suspension; invalidate earlier reads when saving
+starts, and ignore reads begun during a save. Keep loading ownership separate so an older completion cannot stop a
+newer refresh's indicator. A fresh read after success, failure or cancellation must still work. Test the causal order
+with `CompletableDeferred` in the real model's fake API, including both response orders and exact PUT counts; do not
+infer the race from network timing or disable the switch for the whole refresh.
+
 ## A false pairing snapshot can mean restoration is still pending (#4055)
 
 Removing a main-thread restore changes more than the first suspend call. A `StateFlow<Boolean>` whose initial value is

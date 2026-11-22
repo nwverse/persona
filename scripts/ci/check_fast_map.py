@@ -53,8 +53,10 @@ CHECKS = {
     "go-package": "go test ./<top>/<name>/... in server/ for server/internal/<name>, server/cmd/<name> or "
                   "server/plugins/<name>, the path's package group",
     "server-build": "go build ./... in server/: a server change no package group covers",
-    "go-guards": "the server's repo-wide guard tests (GO_GUARD_PKGS, GO_GUARD_TESTS in check-fast.sh): they read "
-                 "other packages' source, go list output, the migrations or sdk/go (#1936)",
+    "go-guards": "the server's repo-wide guard and contract tests (GO_GUARD_PKGS, GO_GUARD_TEST_PKGS, GO_GUARD_TESTS "
+                 "in check-fast.sh): they read other packages' source, go list output, the migrations or sdk/go "
+                 "(#1936), scan the module for text and prompts (i18n, prompts), check what each program links, or pin "
+                 "what other packages render, such as the prompt and MCP goldens and the wire samples (#12842)",
     "sdk-go": "go test ./... in the sdk/go module",
     "android": "scripts/app/android_i18n_check.py, the slot order, token and motion baselines, and four of their "
                "unittests (no Gradle)",
@@ -131,6 +133,14 @@ TABLE = (
     (
         (("AGENTS.md", "CLAUDE.md"), ("scripts/test/test_agents_md.py",)),
     ),
+    # The name freezes (docs/server/architecture.md "Registering a domain's entries", #12844): test_name_freezes.py
+    # runs the archguard test that reads the central lists' names and their files, and mock_hub_switches.py takes its
+    # list format and the open PRs' heads from name_freezes.py.
+    (
+        (("server/internal/archguard/central_lists_test.go", "server/internal/archguard/testdata/central_lists/*"),
+         ("scripts/test/test_name_freezes.py",)),
+        (("scripts/test/name_freezes.py",), ("scripts/mock/test_mock_hub.py",)),
+    ),
     # Most section names test_doc_sections.py checks sit in code comments under its SOURCE_DIRS (about a second).
     (
         (("server/*", "web/src/*", "web/e2e/*", "scripts/*", "sdk/*", "apple/*", "android/*", "integrations/*",
@@ -173,8 +183,9 @@ TABLE = (
     # scripts/hooks into their temp repositories and run the hooks there (the latter also scripts/gen/deno_adapter.sh);
     # check_bundle_privacy.py imports privacy_check; test_merge_pr_sh.py copies privacy_check.py into its temp
     # repositories, where merge-pr.sh runs it, and checks that pr_watch_merge.py's merge lock excludes merge-pr.sh's.
-    # It copies changed_ratchets.py and the two ratchets it imports there too (#7977); test_changed_ratchets.py imports
-    # them. test_ci.py and test_check_fast_inputs.py run server.sh and check-fast.sh with go_trimpath.sh, which composes
+    # It copies changed_ratchets.py and the two ratchets it imports there too (#7977), with ratchet_base.py, which
+    # they and the prompt-language ratchet import (#12785); test_changed_ratchets.py imports them, and the ratchets'
+    # own suites load ratchet_base.py through them (test_prompt_language_ratchet.py copies both). test_ci.py and test_check_fast_inputs.py run server.sh and check-fast.sh with go_trimpath.sh, which composes
     # their GOFLAGS; test_check_fast_inputs.py runs check-fast.sh with heavy_slot.py too, and test_android_sh.py runs
     # android.sh with it (#11250). check-fast.sh's tests are three files (#11017): its own name picks
     # test_check_fast.py, and the other two, which import its fixtures, come along. They copy check_fast_compare.py,
@@ -189,6 +200,10 @@ TABLE = (
          ("scripts/test/test_merge_pr_sh.py",)),
         (("scripts/ci/sleep_ratchet.py", "scripts/ci/web_font_ratchet.py"),
          ("scripts/ci/test_changed_ratchets.py", "scripts/test/test_merge_pr_sh.py")),
+        (("scripts/ci/ratchet_base.py",),
+         ("scripts/ci/test_changed_ratchets.py", "scripts/test/test_merge_pr_sh.py", "scripts/ci/test_sleep_ratchet.py",
+          "scripts/ci/test_web_font_ratchet.py", "scripts/test/test_prompt_language_ratchet.py")),
+        (("scripts/ci/prompt_language_ratchet.py",), ("scripts/test/test_prompt_language_ratchet.py",)),
         (("scripts/test/go_trimpath.sh",), ("scripts/ci/test_ci.py", "scripts/test/test_check_fast_inputs.py")),
         (("scripts/heavy_slot.py",), ("scripts/test/test_check_fast_inputs.py", "scripts/test/test_android_sh.py")),
         (("scripts/check-fast.sh", "scripts/test/check-fast.sh", "scripts/test/test_check_fast.py"),

@@ -65,7 +65,7 @@ func (s *Service) Mailboxes(ctx context.Context, id string) ([]Mailbox, error) {
 	}
 	statusOpts := &imap.StatusOptions{NumMessages: true, NumUnseen: true}
 	var out []Mailbox
-	err = s.withConn(ctx, a, func(c *imapclient.Client) error {
+	err = s.withConn(ctx, a, "mailboxes", func(c *imapclient.Client) error {
 		out = nil
 		data, err := c.List("", "*", listOptions(c.Caps(), statusOpts)).Collect()
 		if err != nil {

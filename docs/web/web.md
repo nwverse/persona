@@ -514,7 +514,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   - **By repo** (following Orca's "Projects" sidebar): the bar's **Repo** takes the complete list on a paging hub too (its worktree level needs every session, #6662); choosing it is remembered. `src/lib/workspace-catalog.ts` reads `/workspaces` independently of the board setting. The catalog is partitioned by credential generation and explicit default manager; stale reads cannot replace a new partition. A visible page re-reads it every 60 s (`CATALOG_POLL_MS`, as Apple, #4685 / #5168): each read asks every online computer live, worktrees change rarely, and creating, renaming or removing one here refreshes it at once (`refreshWorkspaceCatalog`), as does coming back into view. Hidden pages stop polling, unchanged reads share their objects, and failed discovery retains the last successful inventory.
     Catalog-backed rows retain empty workspaces, empty ancestors and folder containers. Project ownership and parent placement are independent: a same-machine, same-host child may appear beneath a parent from another project while keeping its own project metadata. Missing parents and cycles remain visible at the top level. Exact runtime workspace IDs and host bindings determine Agent placement; only unbound Agents may use an unambiguous deepest directory match. Compatibility `session-directory` rows never authorize host actions. Worktree and project totals count real Agents once; pinned Agents remain direct title-navigation candidates without duplicate rows or counts. Active filters hide unrelated empty workspaces but retain matching descendants' ancestors.
     A worktree disclosure folds its contents; its title opens the first direct Agent, including a pinned one, or selects an empty workspace. Selecting a workspace from another navigation surface reveals its ancestors without opening its own contents. Selection and fold identity survive rename and never carry into another credential or manager. The **N children** chip separately folds descendants; its status counts summarize direct child subtrees with Agents. Main checkouts keep their home marker and sort first.
-    When discovery is unsupported, the existing session-only projection remains available. Host-reported `worktree`, `repo_root` and `branch` determine Git placement. A tree is labelled with its branch, else its folder (the main checkout: the repository's); when the host place names its sessions carry (`slot_name` without a `slot_id`: a Paseo workspace's title) agree on one, a linked tree takes that name instead, with the branch kept in its tooltip and its key still its path (#4497). The main checkout and Orca's trees keep their names. Trees are ordered by the name they show, then by their key (two workspaces can have one title). Older Orca sessions teach exact `<project id>::<worktree path>` identities and same-project parent edges; other sources may join known paths on complete directory segments, except below `.worktrees/`, `.claude/worktrees/` and `.herdr/worktrees/`. Without verified placement, the existing path inference supplies repo/worktree grouping. This fallback cannot recover empty catalog entries or cross-project parent relationships.
+    When discovery is unsupported, the existing session-only projection remains available. Host-reported `worktree`, `repo_root` and `branch` determine Git placement. A tree is labelled with its branch, else its folder (the main checkout: the repository's). A linked tree whose folder carries the repository's name goes by the folder holding it instead, as in the Codex app's `~/.codex/worktrees/<name>/<repository>` (#12800). When the host place names its sessions carry (`slot_name` without a `slot_id`: a Paseo workspace's title) agree on one, a linked tree takes that name instead, with the branch kept in its tooltip and its key still its path (#4497). The main checkout and Orca's trees keep their names. Trees are ordered by the name they show, then by their key (two workspaces can have one title). Older Orca sessions teach exact `<project id>::<worktree path>` identities and same-project parent edges; other sources may join known paths on complete directory segments, except below `.worktrees/`, `.claude/worktrees/` and `.herdr/worktrees/`. Without verified placement, the existing path inference supplies repo/worktree grouping. This fallback cannot recover empty catalog entries or cross-project parent relationships.
   - **By project** keeps the original herdr order (machine → workspace → tab); quiet spaces go into **Idle Spaces**. Spaces with a loop, background work or running subagents are never folded away.
   - **By status** matches iOS `AgentListOrder`: needs you → done, not seen → awaiting your reply → working → waiting in the background → just finished → waiting to wake → muted → seen; only non-empty groups are shown, and seen is folded by default.
     **Just finished** (#9751, `justFinished` in `lib/agent-groups.ts`): a turn the hub's triage found done before anybody looked, for three hours (`work.just_finished`, `../protocol/agent-states.md` "Just finished"); it is not quiet, so its space stays out of **Idle Spaces** and the idle folds; its row draws a plain unread-green dot, says "Just finished" and keeps the ✓ conclusion line; opening it or Mark all as seen takes it out at once (`lib/seen-outbox.ts`). The paged list by status draws the same section on a hub with `sessions_just_finished` (`state=idle&just_finished=1`, open by default, Seen's number without it, `lib/session-groups.ts`); in the other paged groupings its row keeps its stable herdr place, with the same mark.
@@ -2400,6 +2400,11 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   each with the models its agent lists in its own /model menu (`GET …/launchers/{name}/models`, the list **New agent**
   uses). The pill reads the session's own list once (for the model's name); the panel, on each opening, shows the lists
   read before at once and reads every list again behind them, the session's own first, at most three at a time.
+  A Persona chat's pill (and the main chat's other-agent notice) reads the computer's `?purpose=assistant` launchers,
+  and Main chat's or the background supervisor's default, again when a push moves the conversation's `rev` (#6542), so
+  a hub-side change reaches a page left open. `rev` moves with every write to the transcript, so a move while the
+  conversation works waits for the turn to end and is read once then; a move while it isn't working reads at once
+  (`useRevisionReread`, #12776).
 - **Quota and prices** (#5056): the opening also reads each launcher's existing `GET /launchers/{name}/quota?machine=<mid>`
   answer without `refresh=1`, so the hub's one-minute cache absorbs repeated openings and an unsupported gateway draws
   nothing. A launcher summary shows the tightest weekly window's remaining percentage and bar and the reset
@@ -2416,8 +2421,10 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   Follow model configuration stays first where supported. Below it are up to three distinct saved setups, favorites
   first then recent, labeled with launcher and model and preserving their saved effort/speed; a pick is one action.
   Every launcher has a disclosure row in one scrollable list: full name, Agent kind, known default model, model count
-  (catalog entries except the synthetic New Agent Default row), Current/configured Default, known weekly quota and
-  supplied health or unavailable reason. Only the current launcher starts expanded; with no current launcher all start
+  (catalog entries except the synthetic New Agent Default row, a model's thinking levels counted once), Current/configured
+  Default, known weekly quota and supplied health or unavailable reason. The launcher the chat runs on keeps its name,
+  "Current", quota and reason, but not the "Agent kind · model · N models" line: its model is already on the pill, in the
+  header and lit in its list (#12315). A row's name has a tooltip only when it is cut short. Only the current launcher starts expanded; with no current launcher all start
   collapsed. A collapsed launcher takes two actions to pick a model, an expanded one one. There is no separate rail,
   eight-row cutoff or More launchers bucket. The existing model rows, family folds, setup controls and selection gates
   are reused. Unknown model defaults use the existing Default model wording, not an inferred first model.
@@ -2425,6 +2432,34 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   launcher, including on phones and when a long model ID wraps. Selecting a matching launcher clears search and opens
   its models. Typed-ID selection sends exactly its named launcher. Clearing search restores the disclosure state.
   Existing model-ID disclosure on touch screens and clipped names remains, alongside the launcher in search results.
+- **One row per model, its thinking levels inside** (#12315, `lib/model-panel.ts` `variantGroups`): Antigravity lists
+  each thinking level as a model of its own (`gemini-4-neon-high`, "Gemini 4 Neon (High)"; the node marks each with
+  `default_effort`, its ID's last word, and `efforts`, the levels listed). Two levels or more of one model are one row,
+  named without the level ("Gemini 4 Neon"), placed where the list names its first level, counted once and with one
+  family entry. The row stands for one level, shown at its trailing edge: the one that runs, else the one a switch waits
+  for, else the one last chosen for it, else Medium (agy names no default), else the list's first. The effort control (the
+  columns' right column, the single column's flyout slider) lists the levels, none marked Recommended, and picks another:
+  on the model that runs it is a pick of that level's model, on any other row it changes which level the row stands for
+  (kept like a customization, under the model's ID without its level; Reset goes back to the default level). A pick sends
+  that level's own model ID, never a second effort beside it, as an Agent's
+  pick of one always did (`lib/session-panel.ts` `pickPlan`); the model that runs keeps what runs. A model with one level
+  listed, an ID typed by hand and saved setups (favorites, Recent) stay as they are; a search folds only the levels it
+  finds. Why: a launcher with seven models showed 27 rows and said "27 models" (the user's ask, 2026-11-21).
+- **Three columns on a wide screen** (#12315, `web/src/ui/model-panel/Columns.tsx`; T3 Code's composer picker the
+  reference): at 768 px and wider the panel is 640 px of three columns under the search. Left: every launcher by its own
+  name (the same name as everywhere else, `lib/provider-names.ts`), its mark, a dot on the one the chat runs on, its
+  weekly quota, and an ⓘ with the reason in its tooltip when it can't take a pick here; Recent and favorites first when
+  there are any. Middle: the chosen launcher's models, one line each (no effort word, a check on the model that runs, a
+  description only in the tooltip), with the family folds; a launcher that can't take a pick says why once, above its
+  models, instead of a line under every such launcher. Right: the thinking efforts of the model picked here (else the one
+  that runs), the one it runs at checked and its default marked Recommended. A footer holds that model's extras: Standard /
+  Fast where it has a priority speed, Claude Code's ultracode on the model that runs where the caller offers it, then
+  Configure models. A click on a model or an effort applies at once and the panel stays open; a click outside or Esc
+  closes it, and Recent records the last setup applied. A model opens at the effort last chosen for it here, else its
+  own default: the effort running now no longer carries over to another model. The flyout keeps engines, price and
+  Reset. Narrower screens keep the single launcher-first column, where a folded launcher's reason is an ⓘ and tooltip
+  too. Why: picking a model and then its effort took several opens of the panel and a hover-only flyout, and the same
+  cross-engine sentence was repeated under every launcher (the user's ask, 2026-11-21).
 - **Families and earlier versions** (`lib/model-families.ts`): a provider group (and Recommended, after the model that
   runs) keeps each model family together under its name in small type: Claude Fable, Opus, Sonnet and Haiku (in that
   order, by capability), a GPT line per variant ("GPT Sol", "GPT Terra"), a Gemini tier ("Gemini Pro", "Gemini Flash";
@@ -2964,7 +2999,7 @@ Conventions (languages, fallback, glossary) are in [i18n.md](../protocol/i18n.md
 - **With the hub**: every request sends `Accept-Language` (`lib/api.ts`), and a WebSocket first sends `client_hello.locale` on connect (`lib/store.ts`); the hub uses it for the language of error messages, pushes, and the assistant's answers ([protocol.md](../protocol/protocol.md)).
 - **Checks** (`src/i18n/catalog.test.ts`): all discovered languages have valid metadata and matching namespaces, keys, and placeholders; every `_one` has an `_other`; "Persona" is not translated. Every key in `t("…")` in the code exists, and when the second argument is an object literal (or omitted) it must supply every placeholder that key's text uses (calls with spreads, computed property names, or a passed variable are skipped). Every catalog key is used: some string in the code equals it (or its plural base), or it starts with the fixed head of a template literal or with a literal passed to a local wrapper that appends a suffix.
   The client strings contain no `admin-*`, the two together are exactly all strings, and `admin-*` keys are only used under `src/admin/`.
-  Hardcoded Chinese (strings, JSX text; comments and tests don't count) can only decrease per file, with the baseline in `src/i18n/hardcoded-baseline.json`; after reducing it, rerecord with `UPDATE_I18N_BASELINE=1 npx vitest run src/i18n/catalog.test.ts`.
+  Hardcoded Chinese (strings, JSX text; comments and tests don't count) can only decrease per file, with the baseline in `src/i18n/hardcoded-baseline.json`; a file below its record passes with a note, and `UPDATE_I18N_BASELINE=1 npx vitest run src/i18n/catalog.test.ts` records the lower counts (tidying anyone can do; it never raises one; `docs/operations/testing.md`, "Count ratchets").
   Chinese that must stay (it has to match text someone else wrote, such as parsing hub / Lark output) gets an `i18n-ignore` comment on that line or the line above.
 - **Tests**: vitest's `setupFiles` loads zh-Hans first (both client and admin strings), so existing tests keep asserting in Chinese.
 - **Key pitfalls**: keys ending in `_zero` / `_one` / `_two` / `_few` / `_many` / `_other` are treated as plural forms (write `doc_cloud`, not `doc_other`).
