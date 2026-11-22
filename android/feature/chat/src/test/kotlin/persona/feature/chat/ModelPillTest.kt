@@ -195,6 +195,8 @@ class ModelPillTest {
         var launcherListReads = 0
             private set
         override suspend fun config() = AssistantConfig(machineId = "box", launcher = "claude", main = "main")
+        override suspend fun mainAssistantLauncherList(machineId: String, refresh: Boolean): AssistantLaunchers =
+            assistantLauncherList(machineId, refresh)
         override suspend fun assistantLauncherList(machineId: String): AssistantLaunchers {
             launcherListReads++
             return AssistantLaunchers(
