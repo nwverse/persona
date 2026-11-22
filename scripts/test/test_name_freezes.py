@@ -84,7 +84,8 @@ class FormatTests(unittest.TestCase):
 
     def test_the_committed_lists_read_cleanly(self):
         paths = sorted(LISTS.glob("*.txt"))
-        self.assertEqual([p.name for p in paths], ["assistantwire_routes.txt", "prompts_assistant.txt"])
+        self.assertEqual([p.name for p in paths], ["assistantwire_routes.txt", "prompts_assistant.txt",
+                                                   "proto_features.txt"])
         for path in paths:
             with self.subTest(path=path.name):
                 text = path.read_text()
@@ -196,7 +197,9 @@ class GoNamesTests(unittest.TestCase):
             ("assistantwire_routes", "server/internal/assistantwire/bus.go",
              "server/internal/archguard/testdata/central_lists/assistantwire_routes.txt"),
             ("prompts_assistant", "server/internal/prompts/assistant.go",
-             "server/internal/archguard/testdata/central_lists/prompts_assistant.txt")])
+             "server/internal/archguard/testdata/central_lists/prompts_assistant.txt"),
+            ("proto_features", "server/internal/proto/proto.go",
+             "server/internal/archguard/testdata/central_lists/proto_features.txt")])
         listed = {e.name for e in name_freezes.CENTRAL.read((ROOT / lists[0].file).read_text())[0]}
         now = names[("assistantwire_routes", "now")]
         self.assertGreater(len(now), 100)

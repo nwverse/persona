@@ -166,7 +166,9 @@ file. The append comes after the literal, which stays first and unchanged:
   have run (`server/internal/assistant/hub.go`), and `TestRoutesAreTheWireOnes` keeps it equal to what the assistant
   serves.
 - **`proto.Features`**: `func init() { Features = append(Features, FeatureX) }` in `proto/features_<domain>.go`, beside
-  the flag's constant, and `scripts/test/test_doc_wire.py` reads the appends too. Not on `main` yet (#7891).
+  the flag's constant. Go runs the init()s after the literal is set, file by file in name order, so the hello and
+  `/health` list the literal's flags, then each domain file's. `server/internal/proto/features_test.go` holds the
+  package to that one form of append, and `scripts/test/test_doc_wire.py` reads the appends too.
 - **`extwire.RouteScopes`**: `addRouteScopes(…)` from an `init()` in `extwire/<domain>_scopes.go`, which panics on a key
   that is already there. `server/internal/hub/testdata/route_scopes.txt` stays one sorted golden. Not on `main` yet: it
   comes with the Inbox's scopes (step S6 of the Inbox plan).
@@ -207,7 +209,8 @@ A central list with a seam takes no new name. `server/internal/archguard/central
   `docs/operations/testing.md` "Count ratchets").
 - **Frozen today**:
   - the `assistantwire.Routes` literal, by each entry's source text (`"GET /api/v1/todos"`, `"GET " + StarredImportPath`);
-  - the top-level declarations of `prompts/assistant.go`, a method as `Type.Method`.
+  - the top-level declarations of `prompts/assistant.go`, a method as `Type.Method`;
+  - the `proto.Features` literal, by each entry's source text (`"locale"`, `FeatureTodoSendState`).
 
   Each later seam's PR adds its own list's row. That PR shows a planted entry failing and a registered one passing.
 - **Pending names**: `python3 scripts/test/name_freezes.py pending` lists the names that open PRs add, read from their

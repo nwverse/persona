@@ -57,6 +57,14 @@ var centralLists = []centralList{
 		seam: "give a new prompt's types and Render function a file of their own, prompts/assistant_<topic>.go, " +
 			"as assistant_answer_again.go does",
 	},
+	{
+		id:     "proto_features",
+		source: "internal/proto/proto.go",
+		what:   "entry of the Features literal",
+		names:  literalEntries("Features"),
+		seam: "append a new feature flag from an init() in its domain's own file, proto/features_<domain>.go, beside " +
+			"the flag's constant: func init() { Features = append(Features, FeatureX) }",
+	},
 }
 
 func (l centralList) file() string { return "testdata/central_lists/" + l.id + ".txt" }
@@ -302,7 +310,7 @@ func TestCentralListNames(t *testing.T) {
 // The freeze's own behaviour, on planted sources: a new name fails with where it goes instead, a removed one is a
 // notice, a pending one passes before and after its PR merges, and the list's format is checked.
 func TestCentralListFreeze(t *testing.T) {
-	routes, prompts := centralLists[0], centralLists[1]
+	routes, prompts, features := centralLists[0], centralLists[1], centralLists[2]
 	const bus = `package assistantwire
 
 const P = "/api/v1/p"
@@ -338,8 +346,20 @@ func (s Snapshot) Up() int { return 0 }
 
 func (b *B[T]) Down() int { return 0 }
 `
+	const flags = `package proto
+
+const FeatureB = "b"
+
+var Features = []string{
+	nodeproto.A, // a comment
+	"a", FeatureB,
+}
+
+func init() { Features = append(Features, FeatureAppended) }
+`
 	const routesList = "# a header\n\"GET \" + P\n\"GET /api/v1/a\"\n\"POST /api/v1/c\"\n\"PUT /api/v1/b\"\n"
 	const promptsList = "A\nB\nB.Down\nC\nRenderA\nSnapshot\nSnapshot.Up\nv\n"
+	const flagsList = "\"a\"\nFeatureB\nnodeproto.A\n"
 
 	check := func(l centralList, src, list string) ([]string, []string) {
 		t.Helper()
@@ -349,7 +369,7 @@ func (b *B[T]) Down() int { return 0 }
 		}
 		return failures, notices
 	}
-	const routeSeam, promptSeam = "assistantwire/<domain>.go", "prompts/assistant_<topic>.go"
+	const routeSeam, promptSeam, flagSeam = "assistantwire/<domain>.go", "prompts/assistant_<topic>.go", "proto/features_<domain>.go"
 	for _, c := range []struct {
 		l          centralList
 		src, list  string
@@ -361,6 +381,9 @@ func (b *B[T]) Down() int { return 0 }
 		{prompts, prompt, promptsList, "func init() {}\n", "func RenderPlanted() string { return \"\" }\n", "RenderPlanted", promptSeam},
 		{prompts, prompt, promptsList, "func init() {}\n", "func (s Snapshot) Planted() int { return 0 }\n", "Snapshot.Planted", promptSeam},
 		{prompts, prompt, promptsList, "func init() {}\n", "type Planted struct{}\n", "Planted", promptSeam},
+		// A flag appended from an init() is no entry of the literal, so the unplanted source passes with one.
+		{features, flags, flagsList, "var Features = []string{\n", "\t\"planted\",\n", `"planted"`, flagSeam},
+		{features, flags, flagsList, "\"a\", FeatureB,\n", "\tFeaturePlanted,\n", "FeaturePlanted", flagSeam},
 	} {
 		if failures, notices := check(c.l, c.src, c.list); len(failures)+len(notices) != 0 {
 			t.Errorf("%s: unplanted source reports %q, %q", c.l.id, failures, notices)
