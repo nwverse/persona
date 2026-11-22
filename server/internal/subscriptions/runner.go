@@ -355,7 +355,9 @@ func (s *Service) execute(ctx context.Context, sub Subscription, asked bool, sta
 		if pl.snapHash != sub.SnapshotHash {
 			it := *pl.snapshot
 			it.SubscriptionID = sub.ID
-			items, seen = append(items, it), append(seen, Seen{UID: it.UID, ContentHash: pl.snapHash})
+			// SnapshotHash is a snapshot's dedup, and the lease already serializes pulls: a seen key would make the
+			// commit's claim drop a snapshot that returns to an earlier value (#13122).
+			items = append(items, it)
 			next.SnapshotHash = pl.snapHash
 		}
 	} else {
