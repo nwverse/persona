@@ -59,8 +59,9 @@ uses Persona. Registered app identities (bundle IDs, App Groups, keychain groups
 - **Quality bar**: a top App Store app. Check every changed screen (watch included) in a simulator screenshot, dark and light, through
   DEBUG launch arguments + `xcrun simctl io <udid> screenshot`, and actually look at it; compiling is not enough (`docs/operations/testing.md`).
 - **Screenshots go in the PR, never in the repository**: review evidence (light / dark, before / after, UI test captures) is shown in the
-  PR body or a comment, not committed to `main`, docs included (`docs/operations/collaboration.md`, "Screenshots in PRs"). Only generated
-  README / store images (`docs/assets/`) and app resources are committed. `scripts/test/test_no_committed_screenshots.py` blocks new ones.
+  PR body or a comment, not committed to `main`, docs included, and never pushed on a branch of their own (`artifacts/*`, `pr-assets/*`:
+  every clone fetches them; `docs/operations/collaboration.md`, "Screenshots in PRs"). Only generated README / store images
+  (`docs/assets/`) and app resources are committed. `scripts/test/test_no_committed_screenshots.py` blocks new ones.
 
 ### Public repository
 
@@ -298,6 +299,7 @@ Every maintained doc under `docs/` (lessons excluded) must be listed here.
 
 | Area | Docs |
 | --- | --- |
+| Agent-to-Agent communication | `docs/integrations/a2a.md` session addresses, durable delivery, and the A2A JSON-RPC interface |
 | Super rules | `docs/SUPER_RULES.md` highest-priority rules and prior administrator approval for changes |
 | Start | `docs/README.md` navigation · `docs/operations/getting-started.md` setup without a terminal · `docs/assistant/onboarding.md` new-user onboarding · `docs/operations/config.md` config.json and hub.json · `docs/operations/collaboration.md` claims, PRs, templates · `docs/protocol/i18n.md` localization |
 | Feature map | `docs/feature-map.md` source-verified capabilities, public entries, implementation, test and deployment evidence, gaps and maintenance protocol |

@@ -1078,7 +1078,8 @@ enum AssistantSidebarPart {
     /// the Pages heading: its head and the main conversation start there too, so the marks of the head, the main row and
     /// the places stand on one line (#4206). nil until the list is laid out. Written only through `placeRows(at:)`.
     private(set) var rowsLeading: CGFloat?
-    @ObservationIgnored private var rowsLeadingEchoes = LayoutEchoGuard()
+    /// Lazy: made by the first row-layout measurement, not when the view creates its `@State` model (P3).
+    @ObservationIgnored private lazy var rowsLeadingEchoes = LayoutEchoGuard()
 
     /// A new measure of where the rows start. It is read back by the head and the main row, so a measure that only swings
     /// back to the one before (the list moved by the write it caused) is not written again: the iPhone Duo grown from split

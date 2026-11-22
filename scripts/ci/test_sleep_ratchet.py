@@ -241,13 +241,13 @@ class GitTests(unittest.TestCase):
     def git(self, *args):
         subprocess.run(["git", "-C", str(self.repo), *args], check=True, capture_output=True, timeout=30)
 
-    def _capture(self, args):
+    def _capture(self, args, root=None):
         from io import StringIO
         out, err = StringIO(), StringIO()
         stdout, stderr = sys.stdout, sys.stderr
         try:
             sys.stdout, sys.stderr = out, err
-            code = sleep_ratchet.main(["--root", str(self.repo), *args])
+            code = sleep_ratchet.main(["--root", str(root or self.repo), *args])
         finally:
             sys.stdout, sys.stderr = stdout, stderr
         return code, out.getvalue() + err.getvalue()
@@ -333,6 +333,32 @@ class GitTests(unittest.TestCase):
         self.assertEqual(1, code, err)
         self.assertEqual(1, err.count("baseline raises"))
         self.assertIn("HEAD and ", err)
+
+    def test_a_base_baseline_that_cannot_be_fetched_is_an_error_not_absence(self):
+        # CI's guards checkout is blobless (#12753): a branch that changed the baseline has the base's copy fetched
+        # on first read. A failed fetch must fail the check, not read as "no baseline at the base" and pass.
+        self.git("checkout", "-q", "-b", "raise")
+        self.write(SERVER, source(2))
+        self.write(sleep_ratchet.BASELINE_REL, sleep_ratchet.render({SERVER: 2}))
+        self.git("commit", "-q", "-am", "raise")
+        work = Path(tempfile.mkdtemp(prefix="sleep-ratchet-blobless-"))
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(work)], check=True)
+        origin = work / "origin.git"
+        self.git("clone", "-q", "--bare", str(self.repo), str(origin))
+        subprocess.run(["git", "-C", str(origin), "symbolic-ref", "HEAD", "refs/heads/main"], check=True, timeout=30)
+        subprocess.run(["git", "-C", str(origin), "config", "uploadpack.allowFilter", "true"], check=True, timeout=30)
+        clone = work / "clone"
+        subprocess.run(["git", "clone", "-q", "--filter=blob:none", "--branch", "raise", origin.as_uri(), str(clone)],
+                       check=True, capture_output=True, timeout=60)
+        subprocess.run(["git", "-C", str(clone), "remote", "set-url", "origin", (work / "gone.git").as_uri()],
+                       check=True, timeout=30)
+        code, err = self._capture([], clone)
+        self.assertEqual(2, code, err)
+        self.assertIn("cannot read", err)
+        subprocess.run(["git", "-C", str(clone), "remote", "set-url", "origin", origin.as_uri()], check=True, timeout=30)
+        code, err = self._capture([], clone)
+        self.assertEqual(1, code, err)
+        self.assertIn("baseline raises", err)
 
     def test_a_git_timeout_is_a_one_line_error(self):
         real = subprocess.run
